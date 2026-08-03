@@ -8,8 +8,14 @@
 // `StdOp` graphs (so they get register allocation, frames and the whole backend for free), installed
 // on demand from `RuntimeUsage`. It DIVERGES from `String` in the one place `Array` must: a String's
 // `element_size` is a compile-time constant 1, an Array's is a RUNTIME field (`element_size@24`) — the
-// first runtime-polymorphic element size in shv2 — so every helper reads it out of the record and moves
-// exactly that many bytes per element. A single set of helpers therefore serves every element type.
+// first runtime-polymorphic element size in shv2 — so every helper reads it out of the record and strides
+// by exactly what it says. A single set of helpers therefore serves every element type.
+//
+// ⭐⭐ **AND WHAT IT SAYS IS NOT ALWAYS A NUMBER OF BYTES.** `element_size@24` is SIGNED: positive is a byte
+// stride, NEGATIVE is `-(bits per element)` for a SUB-BYTE-PACKED element (`Array with bool` is -1, an
+// `Array with int(0 to 3)` is -2). Every stride, length and address derivation in this file therefore goes
+// through the packed-aware helpers rather than multiplying — see **SUB-BYTE BIT-PACKED ELEMENTS** below,
+// which owns that arithmetic and states which parts of it are branchless and why.
 //
 // ⚠ THE ARRAY IS TWO ALLOCATIONS, not one: the 48-byte record (`__mm_alloc`, a managed box with the MM
 // header + refcount before it) and a SEPARATE external element buffer (`buffer@0` → a raw `__mm_alloc`'d
@@ -55,15 +61,20 @@ export let ArrRecordBytes = 48 as ByteCount
 // `__mm_alloc`, so `__arr_create` never writes them — the same zeroing contract `__mm_alloc` relies on.
 export let TrivialElementDestroy = 0 as ParsedInt
 
-// --- Byte-string literal (`b"…"`, P1.7 slice 2) ---
+// --- Constant array literals over an immortal `.rdata` blob (P1.7 slice 2; generalized at
+// `ranged-int-bit-packing`) ---
 //
-// A `b"…"` literal is the Array analogue of a String literal: a HEAP 48-byte record over an IMMORTAL
-// `.rdata` byte blob. Its `capacity@16` is `RdataBufferCapacity` — the shared encoding's negative value
-// for "this buffer is not the record's to write or to release" — written by the byte-string literal
-// lowering (`LowerMaxonToStd`) and read by `emitBufferNotOwned` alone, never compared against.
-// `element_size@24` is 1 (a byte is one byte, so the blob is byte-packed and `.get(i)` strides by 1). The
-// record is a real `__mm_alloc` box so the value is a first-class owned `Array with Byte` the ownership
-// model drops through `__arr_decref` — which, on that capacity, frees the record and skips the blob.
+// A CONSTANT array literal is the Array analogue of a String literal: a HEAP 48-byte record over an
+// IMMORTAL `.rdata` blob. Its `capacity@16` is `RdataBufferCapacity` — the shared encoding's negative value
+// for "this buffer is not the record's to write or to release" — written by `LowerMaxonToStd.
+// lowerConstArrayLiteral` and read by `emitBufferNotOwned` alone, never compared against. The record is a
+// real `__mm_alloc` box so the value is a first-class owned array the ownership model drops through
+// `__arr_decref` — which, on that capacity, frees the record and skips the blob.
+//
+// ⭐ **TWO PRODUCERS SHARE IT, AND THEY DIFFER ONLY IN THE TWO STAMPS.** A `b"…"` byte string passes
+// `element_size@24` 1 and a length in bytes; a PACKED literal (`[0 as Q, 1 as Q, …]`) passes a NEGATIVE bit
+// width and a length in ELEMENTS, over a blob of `ceil(count·bits/8)` bytes. The constant below is the
+// former's stamp, and the reason it is checked rather than assumed is the paragraph after it.
 //
 // ⭐ **IT IS THE SAME 1 `ProgramSignatures.arrayElementSize` GIVES AN `Array with Byte`, AND THAT IS NOW
 // CHECKED RATHER THAN HOPED FOR.** A `Byte = int(0 to u8.max)` element is one byte wide by the ranged-alias
@@ -246,6 +257,15 @@ export let ArrGetUncheckedName = b"__arr_get_unchecked"
 export let ArrSetName = b"__arr_set"
 export let ArrCountName = b"__arr_count"
 export let ArrCapacityName = b"__arr_capacity"
+
+// ⭐⭐ **`__arr_element_size(arr) -> element_size@24` — THE RECORD'S OWN STRIDE, HANDED TO THE PROGRAM
+// (`arr.managed.elementSize()`).** It reads the field and nothing else, exactly as `__arr_count` reads
+// `length@8`, and it is the ONE way a program can observe an array's REPRESENTATION.
+//
+// ⚠ **THE VALUE IS SIGNED, AND THAT IS WHAT THE SPECS PIN.** A positive answer is a byte stride, a negative
+// one is `-(bits per element)` — so `ranged-int-bit-packing` reads `-2` off an `Array with int(0 to 3)` and
+// `-1` off an `Array with bool`, and `boundary-16-is-byte` reads `1`. The field is stored as a full machine
+// word, so the two's-complement negative comes back as one and needs no decoding here.
 export let ArrIsEmptyName = b"__arr_is_empty"
 export let ArrReserveName = b"__arr_reserve"
 export let ArrResizeName = b"__arr_resize"
@@ -335,6 +355,7 @@ export let ArrSetByteName = b"__arr_set_byte"
 //     `__arr_set`'s.
 export let ArrMemGrowName = b"__arr_mem_grow"
 export let ArrByteAtName = b"__arr_byte_at"
+export let ArrElementSizeName = b"__arr_element_size"
 
 // ⭐⭐ **`__arr_mem_append` — THE BUFFER'S `append`, AND WHY IT IS NOT `__arr_append` (R4.4).** The corpus
 // writes `try a.append(b) otherwise …` (`specs/managed-memory-builtin.md:append`), so on the buffer surface
@@ -454,6 +475,12 @@ export let DropTypeParamName = b"__drop_type_param"
 
 // Internal helpers the public ones call: `__arr_grown_cap` is the policy, `__arr_grow` reallocs to fit,
 // `__arr_cow_detach` gives the record a private writable buffer before any in-place write (P1.7 COW slice A).
+// ⭐ The two ELEMENT-RANGE helpers packing made runtime functions rather than emitted-inline loops — see
+// `buildArrMoveElems` for the register-pressure measurement that forced the split, and for why the four
+// mutators that used to inline a byte `memmove` now call one function instead.
+export let ArrMoveElemsName = b"__arr_move_elems"
+export let ArrZeroElemsName = b"__arr_zero_elems"
+
 let ArrGrownCapName = b"__arr_grown_cap"
 let ArrGrowName = b"__arr_grow"
 let ArrCowDetachName = b"__arr_cow_detach"
@@ -622,10 +649,6 @@ export function arrayAccessorSourceMethodName(callee ByteArray) returns ByteArra
 	panic("arrayAccessorSourceMethodName: no source-method arm for '{String.from(callee)}'. EITHER it is not a throwing `Array` accessor — this map is asked ONLY behind `isThrowingArrayAccessorCallee` — OR that predicate gained a name and this map did not, in which case add an arm answering the parser's own method constant. `verifyThrowingAccessorsMatchPredicate` asks this for every accessor `installArrayRuntime` installs, so the second case fails at INSTALL and never in front of a user")
 end 'arrayAccessorSourceMethodName'
 
-// A byte width used to shift a byte into (or out of) its position in a little-endian element word. `i*8`
-// is the bit offset of element byte `i`; `BitsPerByte` names the 8.
-let BitsPerByte = 8 as ParsedInt
-
 // Install the array runtime into the lowered Std module — ALL of it, when the program touches any array.
 // Golden-neutral: `__`-prefixed functions are excluded from the spec goldens (`isRuntimeFunction`), so an
 // all-or-nothing install costs nothing in the fragments and needs no per-helper dependency tracking; the
@@ -675,6 +698,8 @@ export function installArrayRuntime(module StdModule, usage RuntimeUsage)
 	// now emits `__mm_incref` too (the `try … otherwise` phi reconciliation) in programs that touch no
 	// array, so its install can no longer live behind `usesArray` alone — see that function's note.
 	// `usesArray` implies `usesHeap` (`isArrayRuntimeCallee`), so `installMmRuntime` has already run.
+	buildArrMoveElems(module)
+	buildArrZeroElems(module)
 	buildArrCowDetach(module)
 	buildArrGrownCap(module)
 	buildArrGrow(module)
@@ -685,6 +710,7 @@ export function installArrayRuntime(module StdModule, usage RuntimeUsage)
 	buildArrSet(module)
 	buildArrCount(module)
 	buildArrCapacity(module)
+	buildArrElementSize(module)
 	buildArrIsEmpty(module)
 	buildArrReserve(module)
 	buildArrResize(module)
@@ -1076,9 +1102,9 @@ end 'emitLoadElem'
 // treated as an empty slot and THROWS `indexOutOfBounds`, routing the caller's `try … otherwise` to its
 // fallback. A TRIVIAL element's 0 is a genuine value (not empty), so the null-check is gated on the destructor
 // and never fires for a trivial array — its ok-return is unchanged.
-function emitLoadElemAndOkReturn(module StdModule, func IrFunction, cur IrBlock, record ValueId, addr ValueId, size ValueId, ids ValueMinter)
+function emitLoadElemAndOkReturn(module StdModule, func IrFunction, cur IrBlock, record ValueId, buffer ValueId, index ValueId, es ValueId, ids ValueMinter)
 	var checkDtor = module.addBlock(func, label: b"gchkdtor")
-	let value = emitLoadElem(module, func: func, cur: cur, exit: checkDtor, addr: addr, size: size, ids: ids)
+	let value = emitLoadElemAt(module, func: func, cur: cur, exit: checkDtor, buffer: buffer, index: index, es: es, ids: ids)
 
 	var checkNull = module.addBlock(func, label: b"gchknull")
 	var ok = module.addBlock(func, label: b"gok")
@@ -1110,10 +1136,497 @@ function emitCowDetach(module StdModule, block IrBlock, arr ValueId, ids ValueMi
 end 'emitCowDetach'
 
 // The element slot ADDRESS `buffer + index·elementSize` — the byte where element `index` starts.
+//
+// ⚠⚠ **BYTE-STRIDED ELEMENTS ONLY.** A sub-byte-packed element has no address of its own (8, 4 or 2 of them
+// share a byte), so a packed record must never reach this — see `emitFieldPlacement`, which is the packed
+// world's answer to the same question and which is what every ELEMENT accessor goes through.
+//
+// ⚠ **EVERY CALLER CLEARS IT, AND THERE ARE THREE WAYS OF CLEARING IT — a reader checking a NEW call site
+// has to name which one.** (Found in review of the packing rung, where this note said "the two callers left
+// here are the managed-element walks" and there were nine.)
+//
+//   1. **INSIDE AN `es >= 0` ARM** the caller itself branched on — `emitStoreElemAt`'s byte arm and the byte
+//      arms of `__arr_move_elems` / `__arr_zero_elems`. The guard is three lines above the call.
+//   2. **A MANAGED ELEMENT**, which is never packed by construction
+//      (`ProgramSignatures.arrayElementPackedBits` answers `NotSubBytePacked` for it before it reads
+//      anything else) — the destroy walk, the deep-clone walk, and the `_managed` slice/append the parser
+//      routes a managed element to instead of the trivial path.
+//   3. **A CALLER WHOSE `elementSize` IS A COMPILE-TIME 1** — `emitViewRecordHead` reached from
+//      `StringRuntime.__str_bytes_view`. Its OTHER caller, `emitArrayView`, is case 1.
+//
+// A call site that fits none of the three is a bug, not a fourth case.
 function emitSlotAddr(module StdModule, block IrBlock, buffer ValueId, index ValueId, elementSize ValueId, ids ValueMinter) returns ValueId
 	let offset = emitBin(module, block: block, a: index, b: elementSize, opcode: StdBinOpcode.mul, ids: ids)
 	return emitBin(module, block: block, a: buffer, b: offset, opcode: StdBinOpcode.add, ids: ids)
 end 'emitSlotAddr'
+
+// ============================================================================================
+// SUB-BYTE BIT-PACKED ELEMENTS
+// ============================================================================================
+//
+// ⭐⭐ **`element_size@24` IS SIGNED, AND EVERYTHING BELOW IS THE CONSEQUENCE.** A POSITIVE stamp is a byte
+// stride; a NEGATIVE one is `-(bits per element)`, so an `Array with bool` reads `-1`, an `Array with
+// int(0 to 3)` reads `-2` and a nibble reads `-4` (`LayoutDescriptor.elementStrideOf` owns the encoding and
+// `ProgramSignatures.arrayElementSize` is its sole producer). The packed widths all DIVIDE a byte, so a
+// field never straddles one — which is the single property that makes every read one `load_u8`.
+//
+// ⭐⭐ **THE STRIDE IS A RUNTIME FIELD, SO THIS IS RUNTIME ARITHMETIC AND NOT A COMPILE-TIME CHOICE.** One
+// compiled `__arr_get` serves every array in the program, packed or not — the same reason the file's header
+// gives for reading `element_size@24` out of the record at all. So the packed/byte split cannot be an `if`
+// in the COMPILER; it has to survive into the emitted code. Two shapes do that, and which one each helper
+// uses is a deliberate choice rather than a habit:
+//
+//   • **BRANCHLESS, where the byte case falls out of the packed formula as a special case.** `emitElementBits`
+//     turns either stamp into a bit width, and every length and address derivation below is then ONE formula
+//     that is exactly the old byte arithmetic when the width is a multiple of 8. This is most of them, and it
+//     is why the byte-strided paths kept their instruction counts.
+//   • **BRANCHED, where the two genuinely differ in what MEMORY they touch.** Only the element STORE and the
+//     range moves are here: a sub-byte write is a read-modify-write of one shared byte, and making the byte
+//     path pay for that read would put a redundant load on the hottest array write in every program.
+
+// The bits in a machine word, the shift that turns a bit position into a byte index (`>> 3` is `/ 8`), and
+// its companion mask (`& 7` is `mod 8`). Named because the three appear together in every derivation below
+// and a bare `64`/`3`/`7` beside a bit width reads as one of the widths.
+//
+// ⚠ **TWO OF THE THREE ARE DERIVED, NOT TRANSCRIBED.** A word's bits and a byte's high bit index are
+// RELATIONS over `BitsPerByte` and `MachineWordBytes` — both of which this rung single-homed one tier down
+// in `LayoutDescriptor` — and writing `64` and `7` here would be two more copies of numbers that already
+// have an owner. `emitBitsToBytes` below spells the same 7 as `BitsPerByte - 1`, so a literal here would
+// have put both spellings of one relation inside one file.
+//
+// ⭐ `BitPosToByteShift` stays a named LITERAL: it is `log2(BitsPerByte)`, and there is no arithmetic
+// spelling of a logarithm here to derive it from. Naming it is the whole of what can be done about it.
+let MachineWordBits = BitsPerByte * (MachineWordBytes as ParsedInt)
+let BitPosToByteShift = 3 as ParsedInt
+let BitPosWithinByteMask = BitsPerByte - 1
+
+// Every bit set — the `-1` the mask derivations start from. `(1 << bits) - 1` is the obvious spelling of a
+// width mask and is WRONG at the top of the range: `1 << 64` is undefined, and on x64 the shift count is
+// masked to 6 bits so it yields `1`, making a machine-word element's mask ZERO. `-1 >>logical (64 - bits)`
+// is correct for every width from 1 to 64 and needs no special case.
+let AllBitsSet = 0 - 1 as ParsedInt
+
+// ⭐ **THE BIT WIDTH OF ONE ELEMENT, FROM EITHER LADDER, BRANCHLESS** — `-es` when the stamp is negative,
+// `es · 8` when it is positive. It is the join that lets every derivation below be one formula: a byte
+// stride of 8 becomes 64 bits, a stride of 1 becomes 8 bits, and a packed `-2` becomes 2.
+//
+// The sign mask `m = es >>arithmetic 63` is all-ones for a packed stamp and zero otherwise, so
+// `(-es & m) | ((es << 3) & ~m)` selects one arm without a branch. It costs six ALU ops with no memory
+// traffic and no control flow, which is why the byte paths can afford to be routed through it.
+function emitElementBits(module StdModule, block IrBlock, es ValueId, ids ValueMinter) returns ValueId
+	let signShift = emitConst(module, block: block, value: MachineWordBits - 1, ids: ids)
+	let signMask = emitBin(module, block: block, a: es, b: signShift, opcode: StdBinOpcode.shr, ids: ids)
+	let allOnes = emitConst(module, block: block, value: AllBitsSet, ids: ids)
+	let keepByteArm = emitBin(module, block: block, a: signMask, b: allOnes, opcode: StdBinOpcode.bitXor, ids: ids)
+
+	let zero = emitConst(module, block: block, value: 0, ids: ids)
+	let packedBits = emitBin(module, block: block, a: zero, b: es, opcode: StdBinOpcode.sub, ids: ids)
+	let toBits = emitConst(module, block: block, value: BitPosToByteShift, ids: ids)
+	let byteBits = emitBin(module, block: block, a: es, b: toBits, opcode: StdBinOpcode.shl, ids: ids)
+
+	let packedArm = emitBin(module, block: block, a: packedBits, b: signMask, opcode: StdBinOpcode.bitAnd, ids: ids)
+	let byteArm = emitBin(module, block: block, a: byteBits, b: keepByteArm, opcode: StdBinOpcode.bitAnd, ids: ids)
+	return emitBin(module, block: block, a: packedArm, b: byteArm, opcode: StdBinOpcode.bitOr, ids: ids)
+end 'emitElementBits'
+
+// `ceil(totalBits / 8)` — the bytes a run of that many bits occupies. Split from the two callers below
+// because both need it and one of them (`emitReallocateToCapacity`) has already computed the bit total for
+// its own overflow check and must not compute it twice.
+function emitBitsToBytes(module StdModule, block IrBlock, totalBits ValueId, ids ValueMinter) returns ValueId
+	let roundUp = emitConst(module, block: block, value: BitsPerByte - 1, ids: ids)
+	let raised = emitBin(module, block: block, a: totalBits, b: roundUp, opcode: StdBinOpcode.add, ids: ids)
+	let toBytes = emitConst(module, block: block, value: BitPosToByteShift, ids: ids)
+	return emitBin(module, block: block, a: raised, b: toBytes, opcode: StdBinOpcode.shrLogical, ids: ids)
+end 'emitBitsToBytes'
+
+// ⭐⭐ **THE BUFFER BYTE LENGTH OF `count` ELEMENTS — the ONE replacement for every `count · element_size`
+// ANYWHERE**, and the runtime twin of the compile-time `LayoutDescriptor.elementsByteLen`. A packed run
+// is `ceil(count·bits / 8)`; a byte-strided one comes out of the identical formula as exactly `count · es`,
+// because `count · es · 8` bits rounded up to whole bytes IS `count · es`. Every allocation size, every
+// copy length and every zero-fill extent goes through here, so no site can be left multiplying a NEGATIVE
+// stride by a count and asking the allocator for a wrapped size.
+//
+// ⚠ **IT IS EXPORTED BECAUSE THE FORMULA ESCAPED THIS FILE ONCE.** `ManagedFileRuntime.emitArrayByteExtent`
+// converts the same `element_size@24` for `__mf_read`/`__mf_write`, and a byte-only copy there would hand a
+// NEGATIVE extent to the OS length argument, where DWORD truncation turns it into an enormous unsigned
+// count. That site is unreachable with a packed record today — the front end gates both callers on
+// `isBytePackedArrayInstance` — but the guard is stated in two other files and nothing at the arithmetic
+// says so, which is precisely the shape that stops being true one rung later.
+export function emitElementByteLen(module StdModule, block IrBlock, count ValueId, es ValueId, ids ValueMinter) returns ValueId
+	let bits = emitElementBits(module, block: block, es: es, ids: ids)
+	let totalBits = emitBin(module, block: block, a: count, b: bits, opcode: StdBinOpcode.mul, ids: ids)
+	return emitBitsToBytes(module, block: block, totalBits: totalBits, ids: ids)
+end 'emitElementByteLen'
+
+// ⭐ **WHERE ELEMENT `index` LIVES, AS THE FOUR NUMBERS EVERY ACCESS NEEDS.** Held together in a value
+// because they are one derivation with four results and the load, the store and the moves each want all
+// four — spelling them out at each site would be the same six-line derivation written four times, which is
+// exactly how one of the four comes to be computed differently from the others.
+type PackedElementPlacement
+	// Buffer-relative byte where the field's first (and, when packed, only) byte sits.
+	export var byteOffset as ValueId
+	// Bits to shift the loaded word right by to bring the field to bit 0. Always 0 for a byte-strided
+	// element, because its bit position is a multiple of 8.
+	export var shiftBits as ValueId
+	// `(1 << bits) - 1`, computed as `-1 >>logical (64 - bits)` so the machine-word width is not a special
+	// case. All ones for a byte-strided 8-byte element, which is what makes the mask a no-op there.
+	export var widthMask as ValueId
+	// How many BYTES the field touches: 1 for every packed width (they divide a byte, so a field cannot
+	// straddle), and exactly `element_size` for a byte-strided element.
+	export var byteSpan as ValueId
+
+	export static function create(byteOffset ValueId, shiftBits ValueId, widthMask ValueId, byteSpan ValueId) returns PackedElementPlacement
+		return Self{byteOffset: byteOffset, shiftBits: shiftBits, widthMask: widthMask, byteSpan: byteSpan}
+	end 'create'
+end 'PackedElementPlacement'
+
+// ⭐⭐ **THE ADDRESS DERIVATION BOTH LADDERS SHARE, BRANCHLESS.** `bitPos = index · bits`, then the byte it
+// starts in, the offset within that byte, the width mask and the byte span. For a byte-strided element
+// `bits` is a multiple of 8, so `shiftBits` is 0, `byteSpan` is `element_size` and `widthMask` is all-ones:
+// the four collapse into precisely the old `buffer + index·es`, read `es` bytes, no shift, no mask. That is
+// not a coincidence to be preserved by hand — it is what makes ONE formula honest for both.
+function emitFieldPlacement(module StdModule, block IrBlock, index ValueId, es ValueId, ids ValueMinter) returns PackedElementPlacement
+	let bits = emitElementBits(module, block: block, es: es, ids: ids)
+	let bitPos = emitBin(module, block: block, a: index, b: bits, opcode: StdBinOpcode.mul, ids: ids)
+
+	let toBytes = emitConst(module, block: block, value: BitPosToByteShift, ids: ids)
+	let byteOffset = emitBin(module, block: block, a: bitPos, b: toBytes, opcode: StdBinOpcode.shrLogical, ids: ids)
+	let withinByte = emitConst(module, block: block, value: BitPosWithinByteMask, ids: ids)
+	let shiftBits = emitBin(module, block: block, a: bitPos, b: withinByte, opcode: StdBinOpcode.bitAnd, ids: ids)
+
+	let wordBits = emitConst(module, block: block, value: MachineWordBits, ids: ids)
+	let spareBits = emitBin(module, block: block, a: wordBits, b: bits, opcode: StdBinOpcode.sub, ids: ids)
+	let allOnes = emitConst(module, block: block, value: AllBitsSet, ids: ids)
+	let widthMask = emitBin(module, block: block, a: allOnes, b: spareBits, opcode: StdBinOpcode.shrLogical, ids: ids)
+
+	let spanBits = emitBin(module, block: block, a: shiftBits, b: bits, opcode: StdBinOpcode.add, ids: ids)
+	let byteSpan = emitBitsToBytes(module, block: block, totalBits: spanBits, ids: ids)
+
+	return PackedElementPlacement.create(byteOffset, shiftBits: shiftBits, widthMask: widthMask, byteSpan: byteSpan)
+end 'emitFieldPlacement'
+
+// ⭐⭐ **READ ELEMENT `index` OUT OF `buffer` — THE ONE ELEMENT LOAD, PACKED OR NOT.** Every read accessor
+// (`get`, `get_unchecked`, `first`, `last`, `pop`, `remove`) goes through here, replacing the
+// `emitSlotAddr` + `emitLoadElem` pair each used to spell for itself.
+//
+// It is BRANCHLESS: the same byte loop `emitLoadElem` already was, over the field's `byteSpan` rather than
+// a whole element, followed by a shift and a mask that are a no-op for a byte-strided element (`shiftBits`
+// 0, `widthMask` all-ones). So a machine-word array pays three ALU ops and reads exactly the bytes it read
+// before — no extra memory traffic, no branch to mispredict on the hottest read in the language.
+//
+// ⭐ The value is ZERO-EXTENDED, which is what `LayoutDescriptor.rangedAliasPackedBits`'s `low == 0` rule
+// relies on: the mask leaves exactly the field's bits and nothing above them, so a zero-based range's value
+// survives the round trip unchanged.
+//
+// `exit` is caller-owned and passed IN (the `emitLoadElem` shape). The returned value is defined in a join
+// block whose only successor is `exit`, so it dominates `exit` and needs no block argument there.
+function emitLoadElemAt(module StdModule, func IrFunction, cur IrBlock, exit IrBlock, buffer ValueId, index ValueId, es ValueId, ids ValueMinter) returns ValueId
+	let placement = emitFieldPlacement(module, block: cur, index: index, es: es, ids: ids)
+	let addr = emitBin(module, block: cur, a: buffer, b: placement.byteOffset, opcode: StdBinOpcode.add, ids: ids)
+
+	var extract = module.addBlock(func, label: b"ldxtr")
+	let raw = emitLoadElem(module, func: func, cur: cur, exit: extract, addr: addr, size: placement.byteSpan, ids: ids)
+	let shifted = emitBin(module, block: extract, a: raw, b: placement.shiftBits, opcode: StdBinOpcode.shrLogical, ids: ids)
+	let value = emitBin(module, block: extract, a: shifted, b: placement.widthMask, opcode: StdBinOpcode.bitAnd, ids: ids)
+	module.setTerminator(extract, op: StdOp.branch(exit.id))
+
+	return value
+end 'emitLoadElemAt'
+
+// ⭐⭐ **WRITE `value` INTO ELEMENT `index` — THE ONE ELEMENT STORE, AND THE FILE'S ONE PACKED/BYTE
+// BRANCH.** Every write accessor (`push`, `set`, `insert`, and the vacating erase) goes through here.
+//
+// ⚠⚠ **THIS ONE IS BRANCHED WHERE THE LOAD IS NOT, AND THE REASON IS MEMORY TRAFFIC RATHER THAN TASTE.** A
+// sub-byte field must PRESERVE the neighbours sharing its byte, so its write is a read-modify-write; a
+// byte-strided element owns every byte it touches and simply overwrites them. A unified formula exists —
+// `(old & ~(mask << shift)) | ((value & mask) << shift)` is correct for both, because a byte-strided
+// element's `~(mask << shift)` is zero — but it would make every `push` into an `Array with int` LOAD its
+// eight destination bytes before storing them, on the hottest array write there is, to compute a value that
+// is provably discarded. One compare and one branch is the cheaper honesty.
+//
+// Threads `cur` and returns the join both arms reach.
+function emitStoreElemAt(module StdModule, func IrFunction, cur IrBlock, buffer ValueId, index ValueId, value ValueId, es ValueId, ids ValueMinter) returns IrBlock
+	var packedArm = module.addBlock(func, label: b"stpk")
+	var byteArm = module.addBlock(func, label: b"stby")
+	let join = module.addBlock(func, label: b"stjoin")
+
+	let zero = emitConst(module, block: cur, value: 0, ids: ids)
+	let isPacked = emitCmp(module, block: cur, a: es, b: zero, pred: StdCmpPred.lt, ids: ids)
+	module.setTerminator(cur, op: StdOp.condBranch(isPacked, thenBlockId: packedArm.id, elseBlockId: byteArm.id))
+
+	// packedArm: the shared straight-line read-modify-write of the one byte this field lives in.
+	emitPackedFieldStore(module, block: packedArm, buffer: buffer, index: index, value: value, es: es, ids: ids)
+	module.setTerminator(packedArm, op: StdOp.branch(join.id))
+
+	// byteArm: unchanged from before packing existed — the element owns its bytes outright.
+	let slot = emitSlotAddr(module, block: byteArm, buffer: buffer, index: index, elementSize: es, ids: ids)
+	var afterByteStore = emitStoreElem(module, func: func, cur: byteArm, addr: slot, value: value, size: es, ids: ids)
+	module.setTerminator(afterByteStore, op: StdOp.branch(join.id))
+
+	return join
+end 'emitStoreElemAt'
+
+// ⭐⭐ **A PACKED FIELD READ, STRAIGHT-LINE** — for the callers that already KNOW the element is packed
+// (the emitted move and zero loops below), where the branchless unified load would emit a byte LOOP and a
+// second packed/byte test that is provably not taken. `byteSpan` is 1 for every packed width, so a packed
+// read is one `load_u8`, a shift and a mask, with no blocks at all — which is what keeps those loop bodies
+// straight-line and their register pressure inside the pool.
+//
+// PRECONDITION: `es < 0`. Nothing checks it, because the two callers reach here only from an `es < 0` arm.
+function emitPackedFieldLoad(module StdModule, block IrBlock, buffer ValueId, index ValueId, es ValueId, ids ValueMinter) returns ValueId
+	let placement = emitFieldPlacement(module, block: block, index: index, es: es, ids: ids)
+	let addr = emitBin(module, block: block, a: buffer, b: placement.byteOffset, opcode: StdBinOpcode.add, ids: ids)
+	let raw = ids.mint()
+	module.appendOp(block, op: StdOp.loadIndirect(raw, addrId: addr, offset: 0, valueType: StdType.u8))
+	let shifted = emitBin(module, block: block, a: raw, b: placement.shiftBits, opcode: StdBinOpcode.shrLogical, ids: ids)
+	return emitBin(module, block: block, a: shifted, b: placement.widthMask, opcode: StdBinOpcode.bitAnd, ids: ids)
+end 'emitPackedFieldLoad'
+
+// ⭐⭐ **A PACKED FIELD WRITE, STRAIGHT-LINE** — the read-modify-write of the one byte this field shares
+// with its neighbours: clear the field's bits, OR the narrowed value into place, store the byte back. The
+// load half's twin, with the same precondition and for the same reason.
+function emitPackedFieldStore(module StdModule, block IrBlock, buffer ValueId, index ValueId, value ValueId, es ValueId, ids ValueMinter)
+	let placement = emitFieldPlacement(module, block: block, index: index, es: es, ids: ids)
+	let addr = emitBin(module, block: block, a: buffer, b: placement.byteOffset, opcode: StdBinOpcode.add, ids: ids)
+	let old = ids.mint()
+	module.appendOp(block, op: StdOp.loadIndirect(old, addrId: addr, offset: 0, valueType: StdType.u8))
+	let fieldMask = emitBin(module, block: block, a: placement.widthMask, b: placement.shiftBits, opcode: StdBinOpcode.shl, ids: ids)
+	let allOnes = emitConst(module, block: block, value: AllBitsSet, ids: ids)
+	let keepMask = emitBin(module, block: block, a: fieldMask, b: allOnes, opcode: StdBinOpcode.bitXor, ids: ids)
+	let kept = emitBin(module, block: block, a: old, b: keepMask, opcode: StdBinOpcode.bitAnd, ids: ids)
+	let narrowed = emitBin(module, block: block, a: value, b: placement.widthMask, opcode: StdBinOpcode.bitAnd, ids: ids)
+	let placed = emitBin(module, block: block, a: narrowed, b: placement.shiftBits, opcode: StdBinOpcode.shl, ids: ids)
+	let merged = emitBin(module, block: block, a: kept, b: placed, opcode: StdBinOpcode.bitOr, ids: ids)
+	module.appendOp(block, op: StdOp.storeIndirect(addr, offset: 0, valueId: merged, valueType: StdType.u8))
+end 'emitPackedFieldStore'
+
+// ⭐⭐ **`__arr_move_elems(destBuf, destIdx, srcBuf, srcIdx, count, es)` — MOVE A RUN OF ELEMENTS, AND THE
+// ONE REPLACEMENT FOR EVERY BYTE `memmove` THIS FILE USED TO SCALE BY `element_size`.** `insert` shifts its
+// tail UP one slot, `remove` shifts it DOWN one, `append` copies a whole source past a destination's live
+// end, and a packed slice materializes its window; all four are this call.
+//
+// ⚠⚠ **IT IS A RUNTIME FUNCTION AND NOT AN EMITTED-INLINE HELPER, AND THAT IS A MEASURED CONSTRAINT RATHER
+// THAN A PREFERENCE.** Inlined at its four sites, the packed loop carried its CALLER's live values on top of
+// its own — a slice holds `newRec`, `newBuf`, `srcBuffer`, `start`, `sliceLen` and `es` across it — and the
+// register allocator refused the result outright: `RegisterPressureDiagnostic` E5001, on 260 spec cases at
+// once. ⚠ **And E5001 is unfixable from inside a COMPILER-EMITTED function**: its whole contract is to name
+// the user values to delete, so in a synthesized body it does not merely report badly, it PANICS (RULE 3 —
+// no blocking value has a source span there). A call caps the live set at the six arguments. It also
+// collapses four inlined copies of one loop into one, which is the reason that would have applied anyway.
+//
+// ⚠ **THE OVERLAP DIRECTION IS DERIVED ONCE, NOT DECLARED FOUR TIMES.** A shift UP within one buffer must
+// run from the top down or it overwrites what it has not read; a shift DOWN, or a copy between distinct
+// buffers, must not. That is exactly `memmove`'s own rule — `destBuf == srcBuf and destIdx > srcIdx` — and
+// deriving it here rather than taking a `backward` flag from each caller means no caller can state it
+// wrongly. It is computed ABOVE the packed/byte split and both arms read the one answer.
+//
+// ⚠ **THE PACKED ARM MOVES ELEMENTS, NOT BYTES, AND THAT IS THE WHOLE POINT.** `bool-bit-packing`'s
+// `literal-remove` case states the failure it prevents: a byte-scaled shift of a 1-bit element is a shift by
+// `-1` BYTES, which leaves the removed element in place while the length is decremented. A run of packed
+// elements starting at an arbitrary index has no byte alignment to blit on, so the packed arm reads and
+// writes one field at a time.
+function buildArrMoveElems(module StdModule)
+	var func = IrFunction.createFromStd(ArrMoveElemsName, returnType: StdReturnType.void, paramCount: 6, paramTypes: sixI64Params(), returnLine: 0)
+	var ids = ValueMinter.create(6)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var sameBuf = module.addBlock(func, label: b"mvsame")
+	var otherBuf = module.addBlock(func, label: b"mvother")
+	var direction = module.addBlock(func, label: b"mvdir")
+	var packedArm = module.addBlock(func, label: b"mvpack")
+	var byteArm = module.addBlock(func, label: b"mvbyte")
+	var packedTop = module.addBlock(func, label: b"mvpacktop")
+	var packedBottom = module.addBlock(func, label: b"mvpackbot")
+	var byteTop = module.addBlock(func, label: b"mvbytetop")
+	var byteBottom = module.addBlock(func, label: b"mvbytebot")
+	let done = module.addBlock(func, label: b"done")
+
+	emitParams(module, block: entry, count: 6)
+	let destBuffer = 0 as ValueId
+	let destIndex = 1 as ValueId
+	let srcBuffer = 2 as ValueId
+	let srcIndex = 3 as ValueId
+	let count = 4 as ValueId
+	let es = 5 as ValueId
+
+	// ⭐⭐ **THE DIRECTION IS DECIDED ONCE, ABOVE THE PACKED/BYTE SPLIT, AND BOTH ARMS READ THE ONE ANSWER.**
+	// It used to be asked twice — over ELEMENT INDICES in the packed arm (which has no addresses to compare)
+	// and over ADDRESSES in the byte arm — which is one correctness rule written down twice, in a function
+	// where getting it wrong in either copy silently overwrites data that has not been read yet. Deciding it
+	// on the indices serves both: the byte arm's addresses are a monotonic function of its index
+	// (`buffer + index·es`), so the index test answers the address question exactly.
+	//
+	// `destBuf == srcBuf and destIdx > srcIdx` is `memmove`'s own rule. DISTINCT buffers cannot overlap
+	// (each is its own allocation), so they take the forward arm, which is the cheaper order.
+	//
+	// ⚠ The two arms each PLAIN-branch into `direction` carrying their answer, rather than the `entry`
+	// condBranch carrying one: a block argument is supplied on a plain branch edge in this file, and a value
+	// passed into a block must be defined in the PREDECESSOR — `otherBuf`'s constant therefore lives in
+	// `otherBuf` and not in the join it feeds.
+	let fromTheTop = ids.mint()
+	direction.blockArgs.push(IrBlockArg.create(fromTheTop, argType: StdType.i64))
+
+	let sameBuffer = emitCmp(module, block: entry, a: destBuffer, b: srcBuffer, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(sameBuffer, thenBlockId: sameBuf.id, elseBlockId: otherBuf.id))
+
+	let overlapsUpward = emitCmp(module, block: sameBuf, a: destIndex, b: srcIndex, pred: StdCmpPred.gt, ids: ids)
+	module.setTerminator(sameBuf, op: StdOp.branch(direction.id))
+	sameBuf.branchEdges.push(BranchEdge.create(direction.id, argIds: argsOf(overlapsUpward)))
+
+	// Distinct buffers cannot overlap — each is its own allocation — so the forward order is always safe.
+	let forwardIsSafe = emitConst(module, block: otherBuf, value: 0, ids: ids)
+	module.setTerminator(otherBuf, op: StdOp.branch(direction.id))
+	otherBuf.branchEdges.push(BranchEdge.create(direction.id, argIds: argsOf(forwardIsSafe)))
+
+	let zero = emitConst(module, block: direction, value: 0, ids: ids)
+	let isPacked = emitCmp(module, block: direction, a: es, b: zero, pred: StdCmpPred.lt, ids: ids)
+	module.setTerminator(direction, op: StdOp.condBranch(isPacked, thenBlockId: packedArm.id, elseBlockId: byteArm.id))
+
+	// packedArm: one field at a time, from whichever end the shared answer names.
+	let packedGoesDown = emitCmp(module, block: packedArm, a: fromTheTop, b: zero, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(packedArm, op: StdOp.condBranch(packedGoesDown, thenBlockId: packedBottom.id, elseBlockId: packedTop.id))
+
+	var afterTop = emitPackedElementMove(module, func: func, cur: packedTop, destBuffer: destBuffer, destIndex: destIndex, srcBuffer: srcBuffer, srcIndex: srcIndex, count: count, es: es, fromTheTop: true, ids: ids)
+	module.setTerminator(afterTop, op: StdOp.branch(done.id))
+	var afterBottom = emitPackedElementMove(module, func: func, cur: packedBottom, destBuffer: destBuffer, destIndex: destIndex, srcBuffer: srcBuffer, srcIndex: srcIndex, count: count, es: es, fromTheTop: false, ids: ids)
+	module.setTerminator(afterBottom, op: StdOp.branch(done.id))
+
+	// byteArm: the blit the two copy helpers already are, over addresses derived the way they always were,
+	// in the direction the ONE test above chose.
+	let destAddr = emitSlotAddr(module, block: byteArm, buffer: destBuffer, index: destIndex, elementSize: es, ids: ids)
+	let srcAddr = emitSlotAddr(module, block: byteArm, buffer: srcBuffer, index: srcIndex, elementSize: es, ids: ids)
+	let byteCount = emitElementByteLen(module, block: byteArm, count: count, es: es, ids: ids)
+	let byteGoesDown = emitCmp(module, block: byteArm, a: fromTheTop, b: zero, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(byteArm, op: StdOp.condBranch(byteGoesDown, thenBlockId: byteBottom.id, elseBlockId: byteTop.id))
+
+	var afterByteTop = emitBackwardCopy(module, func: func, cur: byteTop, dest: destAddr, src: srcAddr, byteCount: byteCount, ids: ids)
+	module.setTerminator(afterByteTop, op: StdOp.branch(done.id))
+	var afterByteBottom = emitForwardCopy(module, func: func, cur: byteBottom, dest: destAddr, src: srcAddr, byteCount: byteCount, ids: ids)
+	module.setTerminator(afterByteBottom, op: StdOp.branch(done.id))
+
+	module.setTerminator(done, op: StdOp.retVoid)
+	module.functions.push(func)
+end 'buildArrMoveElems'
+
+// One direction of the packed move: `count` iterations of read-one-field, write-one-field. `i` counts
+// `0..count` in both directions and the FROM-THE-TOP arm turns it into `count - 1 - i` when it addresses, so
+// one loop shape serves both and the direction is arithmetic rather than a second loop.
+function emitPackedElementMove(module StdModule, func IrFunction, cur IrBlock, destBuffer ValueId, destIndex ValueId, srcBuffer ValueId, srcIndex ValueId, count ValueId, es ValueId, fromTheTop bool, ids ValueMinter) returns IrBlock
+	var header = module.addBlock(func, label: b"pmvh")
+	var body = module.addBlock(func, label: b"pmvb")
+	let done = module.addBlock(func, label: b"pmvd")
+
+	let zero = emitConst(module, block: cur, value: 0, ids: ids)
+	module.setTerminator(cur, op: StdOp.branch(header.id))
+
+	let i = ids.mint()
+	header.blockArgs.push(IrBlockArg.create(i, argType: StdType.i64))
+	cur.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(zero)))
+	let atEnd = emitCmp(module, block: header, a: i, b: count, pred: StdCmpPred.ge, ids: ids)
+	module.setTerminator(header, op: StdOp.condBranch(atEnd, thenBlockId: done.id, elseBlockId: body.id))
+
+	var step = i
+	if fromTheTop 'highestElementFirst'
+		let lastOffset = emitBin(module, block: body, a: count, b: emitConst(module, block: body, value: 1, ids: ids), opcode: StdBinOpcode.sub, ids: ids)
+		step = emitBin(module, block: body, a: lastOffset, b: i, opcode: StdBinOpcode.sub, ids: ids)
+	end 'highestElementFirst'
+
+	let readAt = emitBin(module, block: body, a: srcIndex, b: step, opcode: StdBinOpcode.add, ids: ids)
+	let value = emitPackedFieldLoad(module, block: body, buffer: srcBuffer, index: readAt, es: es, ids: ids)
+	let writeAt = emitBin(module, block: body, a: destIndex, b: step, opcode: StdBinOpcode.add, ids: ids)
+	emitPackedFieldStore(module, block: body, buffer: destBuffer, index: writeAt, value: value, es: es, ids: ids)
+
+	let one = emitConst(module, block: body, value: 1, ids: ids)
+	let iNext = emitBin(module, block: body, a: i, b: one, opcode: StdBinOpcode.add, ids: ids)
+	module.setTerminator(body, op: StdOp.branch(header.id))
+	body.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(iNext)))
+
+	return done
+end 'emitPackedElementMove'
+
+// ⭐⭐ **`__arr_zero_elems(buffer, start, count, es)` — ERASE ELEMENTS `[start, start + count)`**, the
+// capacity-slot invariant's eraser on either ladder, and a runtime function for `__arr_move_elems`'s reason.
+//
+// A byte-strided run is a plain fill of `count · es` bytes. A packed one CANNOT be, because the first and
+// last bytes of the run are SHARED with elements outside it — clearing them would erase live neighbours — so
+// the packed arm writes zero through the field store, one element at a time.
+function buildArrZeroElems(module StdModule)
+	var func = IrFunction.createFromStd(ArrZeroElemsName, returnType: StdReturnType.void, paramCount: 4, paramTypes: fourI64Params(), returnLine: 0)
+	var ids = ValueMinter.create(4)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var packedArm = module.addBlock(func, label: b"zrpack")
+	var byteArm = module.addBlock(func, label: b"zrbyte")
+	let done = module.addBlock(func, label: b"done")
+
+	emitParams(module, block: entry, count: 4)
+	let buffer = 0 as ValueId
+	let start = 1 as ValueId
+	let count = 2 as ValueId
+	let es = 3 as ValueId
+
+	let zero = emitConst(module, block: entry, value: 0, ids: ids)
+	let isPacked = emitCmp(module, block: entry, a: es, b: zero, pred: StdCmpPred.lt, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(isPacked, thenBlockId: packedArm.id, elseBlockId: byteArm.id))
+
+	var afterPacked = emitPackedElementZero(module, func: func, cur: packedArm, buffer: buffer, start: start, count: count, es: es, ids: ids)
+	module.setTerminator(afterPacked, op: StdOp.branch(done.id))
+
+	let startAddr = emitSlotAddr(module, block: byteArm, buffer: buffer, index: start, elementSize: es, ids: ids)
+	let byteCount = emitElementByteLen(module, block: byteArm, count: count, es: es, ids: ids)
+	var afterByte = emitFillRange(module, func: func, cur: byteArm, dest: startAddr, byteCount: byteCount, fillValue: 0, ids: ids)
+	module.setTerminator(afterByte, op: StdOp.branch(done.id))
+
+	module.setTerminator(done, op: StdOp.retVoid)
+	module.functions.push(func)
+end 'buildArrZeroElems'
+
+// The packed arm of the erase: `count` iterations of write-zero-into-one-field.
+function emitPackedElementZero(module StdModule, func IrFunction, cur IrBlock, buffer ValueId, start ValueId, count ValueId, es ValueId, ids ValueMinter) returns IrBlock
+	var header = module.addBlock(func, label: b"pzh")
+	var body = module.addBlock(func, label: b"pzb")
+	let done = module.addBlock(func, label: b"pzd")
+
+	let zero = emitConst(module, block: cur, value: 0, ids: ids)
+	module.setTerminator(cur, op: StdOp.branch(header.id))
+
+	let i = ids.mint()
+	header.blockArgs.push(IrBlockArg.create(i, argType: StdType.i64))
+	cur.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(zero)))
+	let atEnd = emitCmp(module, block: header, a: i, b: count, pred: StdCmpPred.ge, ids: ids)
+	module.setTerminator(header, op: StdOp.condBranch(atEnd, thenBlockId: done.id, elseBlockId: body.id))
+
+	let at = emitBin(module, block: body, a: start, b: i, opcode: StdBinOpcode.add, ids: ids)
+	let blank = emitConst(module, block: body, value: 0, ids: ids)
+	emitPackedFieldStore(module, block: body, buffer: buffer, index: at, value: blank, es: es, ids: ids)
+
+	let one = emitConst(module, block: body, value: 1, ids: ids)
+	let iNext = emitBin(module, block: body, a: i, b: one, opcode: StdBinOpcode.add, ids: ids)
+	module.setTerminator(body, op: StdOp.branch(header.id))
+	body.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(iNext)))
+
+	return done
+end 'emitPackedElementZero'
+
+// Call `__arr_move_elems`. The callee is void, so the minted result is unread; it exists because a `call` op
+// always defines a value — the shape `emitCowDetach` already uses.
+function emitMoveElems(module StdModule, block IrBlock, destBuffer ValueId, destIndex ValueId, srcBuffer ValueId, srcIndex ValueId, count ValueId, es ValueId, ids ValueMinter)
+	var args = ValueIdArray.create()
+	args.push(destBuffer)
+	args.push(destIndex)
+	args.push(srcBuffer)
+	args.push(srcIndex)
+	args.push(count)
+	args.push(es)
+	let moved = ids.mint()
+	module.appendOp(block, op: StdOp.call(moved, callee: ArrMoveElemsName, args: args))
+end 'emitMoveElems'
+
+// Call `__arr_zero_elems`, for its sibling's reason.
+function emitZeroElems(module StdModule, block IrBlock, buffer ValueId, start ValueId, count ValueId, es ValueId, ids ValueMinter)
+	let zeroed = ids.mint()
+	module.appendOp(block, op: StdOp.call(zeroed, callee: ArrZeroElemsName, args: fourArgs(buffer, second: start, third: count, fourth: es)))
+end 'emitZeroElems'
 
 // `value < 0` — the SIGNED-negative test. ⚠ shv2's `StdCmpPred` has NO unsigned compare, so a negative user
 // index slips past every at-or-over-length bounds test (`index >= length` / `end > length`): signed, `-1 >= 3`
@@ -1201,19 +1714,73 @@ end 'emitOobReturn'
 // 3b-vi-b). `exit` is caller-owned (passed IN, the `emitLoadElem` shape): the new record is minted in `cur`, which
 // dominates `exit`, so it is live there for the caller's `ret`/`errorReturn`. Threads `cur` and returns the
 // new record value.
+// ⚠⚠ **A SUB-BYTE-PACKED ELEMENT CANNOT BE VIEWED, AND IT IS THE REPRESENTATION THAT FORBIDS IT — DO NOT
+// "RESTORE" THE FAST PATH HERE.** A view is a record whose `buffer@0` points INTO the parent's bytes at
+// `base + start·element_size`, so the whole mechanism rests on an element having a byte ADDRESS. Element 1
+// of a 1-bit array lives at bit 1 of byte 0; there is no pointer that names it, and the record has no field
+// to keep a bit offset in. So a packed slice MATERIALIZES: a fresh private buffer of `ceil(len·bits/8)`
+// bytes with the window's fields written from bit 0. O(n) in elements where the shared path is O(1), on the
+// one element kind that has no alternative.
+//
+// ⚠ It is deliberately NOT conditioned on `start·bits` happening to land on a byte boundary — which would
+// let `clone` (always `start == 0`) and every eighth `slice` keep the O(1) path. That fast path is real, and
+// taking it would give ONE value kind two representations decided by a RUNTIME property of an argument: a
+// packed array would sometimes own its buffer and sometimes share it, and every COW, drop and detach path
+// would have to be right about both for a saving no caller can ask for. One representation per element kind.
 function emitArrayView(module StdModule, func IrFunction, cur IrBlock, exit IrBlock, srcRecord ValueId, start ValueId, sliceLen ValueId, ids ValueMinter) returns ValueId
-	var baseJoin = module.addBlock(func, label: b"vwbase")
+	var packedArm = module.addBlock(func, label: b"vwpack")
+	var shareArm = module.addBlock(func, label: b"vwshare")
 
 	let es = emitLoadField(module, block: cur, record: srcRecord, offset: ArrElementSizeOffset, ids: ids)
 	let dtor = emitLoadField(module, block: cur, record: srcRecord, offset: ArrElementDestroyOffset, ids: ids)
 	let srcBuffer = emitLoadField(module, block: cur, record: srcRecord, offset: ArrBufferOffset, ids: ids)
-	let newRec = emitViewRecordHead(module, block: cur, srcBuffer: srcBuffer, start: start, sliceLen: sliceLen, elementSize: es, elementDestroy: dtor, ids: ids)
+	let zero = emitConst(module, block: cur, value: 0, ids: ids)
+	let isPacked = emitCmp(module, block: cur, a: es, b: zero, pred: StdCmpPred.lt, ids: ids)
+	module.setTerminator(cur, op: StdOp.condBranch(isPacked, thenBlockId: packedArm.id, elseBlockId: shareArm.id))
 
-	let base = emitOwedAllocationBase(module, func: func, cur: cur, join: baseJoin, record: srcRecord, slots: arrayBufferSlots(), ids: ids)
-	emitViewRecordTail(module, func: func, cur: baseJoin, exit: exit, view: newRec, base: base, ids: ids)
+	// The two arms build DIFFERENT records, so the result joins on `exit` as a block argument rather than
+	// being a value one arm happens to dominate.
+	let result = ids.mint()
+	exit.blockArgs.push(IrBlockArg.create(result, argType: StdType.i64))
 
-	return newRec
+	emitPackedWindowCopy(module, cur: packedArm, exit: exit, srcBuffer: srcBuffer, start: start, sliceLen: sliceLen, es: es, elementDestroy: dtor, ids: ids)
+
+	var baseJoin = module.addBlock(func, label: b"vwbase")
+	var shareDone = module.addBlock(func, label: b"vwshared")
+	let newRec = emitViewRecordHead(module, block: shareArm, srcBuffer: srcBuffer, start: start, sliceLen: sliceLen, elementSize: es, elementDestroy: dtor, ids: ids)
+	let base = emitOwedAllocationBase(module, func: func, cur: shareArm, join: baseJoin, record: srcRecord, slots: arrayBufferSlots(), ids: ids)
+	emitViewRecordTail(module, func: func, cur: baseJoin, exit: shareDone, view: newRec, base: base, ids: ids)
+	module.setTerminator(shareDone, op: StdOp.branch(exit.id))
+	shareDone.branchEdges.push(BranchEdge.create(exit.id, argIds: argsOf(newRec)))
+
+	return result
 end 'emitArrayView'
+
+// The packed arm of a slice: a fresh OWNED record over a freshly packed private buffer holding the window's
+// elements from bit 0. It owes no allocation (`parent@32` stays at `__arr_create`'s zero) because it shares
+// nothing — which is the whole difference from the view beside it, and why its `capacity@16` is a real
+// capacity rather than the `ViewBufferCapacity` sentinel.
+//
+// The element-by-element copy is `__arr_move_elems`, which takes its own packed arm here: the source window
+// starts at an arbitrary bit and the destination at bit 0, so there is no alignment to blit on even in
+// principle. Terminates in a branch to `exit` carrying the new record.
+function emitPackedWindowCopy(module StdModule, cur IrBlock, exit IrBlock, srcBuffer ValueId, start ValueId, sliceLen ValueId, es ValueId, elementDestroy ValueId, ids ValueMinter)
+	let newRec = ids.mint()
+	module.appendOp(cur, op: StdOp.call(newRec, callee: ArrCreateName, args: twoArgs(es, second: elementDestroy)))
+
+	let byteLen = emitElementByteLen(module, block: cur, count: sliceLen, es: es, ids: ids)
+	let bufferDtor = emitConst(module, block: cur, value: TrivialElementDestroy, ids: ids)
+	let newBuf = ids.mint()
+	module.appendOp(cur, op: StdOp.call(newBuf, callee: MmAllocName, args: twoArgs(byteLen, second: bufferDtor)))
+	emitStoreField(module, block: cur, record: newRec, offset: ArrBufferOffset, value: newBuf)
+	emitStoreField(module, block: cur, record: newRec, offset: ArrLengthOffset, value: sliceLen)
+	emitStoreField(module, block: cur, record: newRec, offset: ArrCapacityOffset, value: sliceLen)
+
+	let destStart = emitConst(module, block: cur, value: 0, ids: ids)
+	emitMoveElems(module, block: cur, destBuffer: newBuf, destIndex: destStart, srcBuffer: srcBuffer, srcIndex: start, count: sliceLen, es: es, ids: ids)
+	module.setTerminator(cur, op: StdOp.branch(exit.id))
+	cur.branchEdges.push(BranchEdge.create(exit.id, argIds: argsOf(newRec)))
+end 'emitPackedWindowCopy'
 
 // ⭐⭐ **THE FIRST HALF OF A VIEW: MINT THE RECORD AND FILL EVERY SLOT BUT `parent@32`.** Split out of
 // `emitArrayView` because a view's SOURCE need not be an Array record: `StringRuntime.__str_bytes_view`
@@ -1366,7 +1933,7 @@ function buildArrCowDetach(module StdModule)
 	// baseJoin: allocate a private buffer sized to the live bytes and copy them across.
 	let length = emitLoadField(module, block: baseJoin, record: arr, offset: ArrLengthOffset, ids: ids)
 	let es = emitLoadField(module, block: baseJoin, record: arr, offset: ArrElementSizeOffset, ids: ids)
-	let liveBytes = emitBin(module, block: baseJoin, a: length, b: es, opcode: StdBinOpcode.mul, ids: ids)
+	let liveBytes = emitElementByteLen(module, block: baseJoin, count: length, es: es, ids: ids)
 	let bufferDtor = emitConst(module, block: baseJoin, value: TrivialElementDestroy, ids: ids)
 	let newBuf = ids.mint()
 	module.appendOp(baseJoin, op: StdOp.call(newBuf, callee: MmAllocName, args: twoArgs(liveBytes, second: bufferDtor)))
@@ -1514,14 +2081,20 @@ end 'buildArrGrow'
 function emitReallocateToCapacity(module StdModule, func IrFunction, cur IrBlock, arr ValueId, newCap ValueId, onByteOverflow IrBlock, ids ValueMinter) returns IrBlock
 	var alloc = module.addBlock(func, label: b"alloc")
 
-	// Verify `newCap·es` does not overflow the byte count — a wrapped small value would under-allocate and
-	// let the next write run off the buffer (a heap overflow). `es >= 1` (`__arr_create` diverges on a 0
-	// element size), so the round-trip division is safe and equals `newCap` exactly when the multiply did
-	// not wrap.
+	// Verify `newCap·bits` does not overflow — a wrapped small value would under-allocate and let the next
+	// write run off the buffer (a heap overflow).
+	//
+	// ⚠ **THE CHECK IS ON THE BIT TOTAL AND NOT ON THE BYTE TOTAL, WHICH IS WHERE THE MULTIPLY ACTUALLY IS.**
+	// `emitElementByteLen` rounds a bit count DOWN to a byte count, so a wrap detected only after the rounding
+	// could not be told from a legitimate size. `emitElementBits` never answers 0 — `__arr_create` diverges on a
+	// zero element size, so the stamp is at least 1 bit packed or 8 bits byte-strided — which keeps the
+	// round-trip division safe and makes it equal `newCap` exactly when the multiply did not wrap.
 	let es = emitLoadField(module, block: cur, record: arr, offset: ArrElementSizeOffset, ids: ids)
-	let newBytes = emitBin(module, block: cur, a: newCap, b: es, opcode: StdBinOpcode.mul, ids: ids)
+	let bits = emitElementBits(module, block: cur, es: es, ids: ids)
+	let newBits = emitBin(module, block: cur, a: newCap, b: bits, opcode: StdBinOpcode.mul, ids: ids)
+	let newBytes = emitBitsToBytes(module, block: cur, totalBits: newBits, ids: ids)
 	let roundTrip = ids.mint()
-	module.appendOp(cur, op: StdOp.div(roundTrip, lhs: newBytes, rhs: es))
+	module.appendOp(cur, op: StdOp.div(roundTrip, lhs: newBits, rhs: bits))
 	let overflowed = emitCmp(module, block: cur, a: roundTrip, b: newCap, pred: StdCmpPred.ne, ids: ids)
 	module.setTerminator(cur, op: StdOp.condBranch(overflowed, thenBlockId: onByteOverflow.id, elseBlockId: alloc.id))
 
@@ -1533,7 +2106,7 @@ function emitReallocateToCapacity(module StdModule, func IrFunction, cur IrBlock
 	module.appendOp(alloc, op: StdOp.call(newBuf, callee: MmAllocName, args: twoArgs(newBytes, second: zeroDtor)))
 	let oldBuf = emitLoadField(module, block: alloc, record: arr, offset: ArrBufferOffset, ids: ids)
 	let oldLen = emitLoadField(module, block: alloc, record: arr, offset: ArrLengthOffset, ids: ids)
-	let oldBytes = emitBin(module, block: alloc, a: oldLen, b: es, opcode: StdBinOpcode.mul, ids: ids)
+	let oldBytes = emitElementByteLen(module, block: alloc, count: oldLen, es: es, ids: ids)
 	var afterCopy = emitForwardCopy(module, func: func, cur: alloc, dest: newBuf, src: oldBuf, byteCount: oldBytes, ids: ids)
 
 	// afterCopy: release the OLD buffer if there was one, then publish the new one. It needs no "is this
@@ -1606,8 +2179,7 @@ function buildArrPush(module StdModule)
 	// Reload buffer AFTER grow (it may have replaced it); `length`/`es` are unchanged by a grow.
 	let buffer = emitLoadField(module, block: entry, record: arr, offset: ArrBufferOffset, ids: ids)
 	let es = emitLoadField(module, block: entry, record: arr, offset: ArrElementSizeOffset, ids: ids)
-	let slot = emitSlotAddr(module, block: entry, buffer: buffer, index: length, elementSize: es, ids: ids)
-	var afterStore = emitStoreElem(module, func: func, cur: entry, addr: slot, value: value, size: es, ids: ids)
+	var afterStore = emitStoreElemAt(module, func: func, cur: entry, buffer: buffer, index: length, value: value, es: es, ids: ids)
 
 	let newLen = emitBin(module, block: afterStore, a: length, b: one, opcode: StdBinOpcode.add, ids: ids)
 	emitStoreField(module, block: afterStore, record: arr, offset: ArrLengthOffset, value: newLen)
@@ -1637,8 +2209,7 @@ function buildArrGet(module StdModule)
 
 	let buffer = emitLoadField(module, block: load, record: arr, offset: ArrBufferOffset, ids: ids)
 	let es = emitLoadField(module, block: load, record: arr, offset: ArrElementSizeOffset, ids: ids)
-	let slot = emitSlotAddr(module, block: load, buffer: buffer, index: index, elementSize: es, ids: ids)
-	emitLoadElemAndOkReturn(module, func: func, cur: load, record: arr, addr: slot, size: es, ids: ids)
+	emitLoadElemAndOkReturn(module, func: func, cur: load, record: arr, buffer: buffer, index: index, es: es, ids: ids)
 
 	module.functions.push(func)
 end 'buildArrGet'
@@ -1662,8 +2233,7 @@ function buildArrGetUnchecked(module StdModule)
 
 	let buffer = emitLoadField(module, block: entry, record: arr, offset: ArrBufferOffset, ids: ids)
 	let es = emitLoadField(module, block: entry, record: arr, offset: ArrElementSizeOffset, ids: ids)
-	let slot = emitSlotAddr(module, block: entry, buffer: buffer, index: index, elementSize: es, ids: ids)
-	let value = emitLoadElem(module, func: func, cur: entry, exit: done, addr: slot, size: es, ids: ids)
+	let value = emitLoadElemAt(module, func: func, cur: entry, exit: done, buffer: buffer, index: index, es: es, ids: ids)
 	module.setTerminator(done, op: StdOp.ret(value))
 
 	module.functions.push(func)
@@ -1733,8 +2303,7 @@ function emitElementStoreAndOkReturn(module StdModule, func IrFunction, store Ir
 	let one = emitConst(module, block: store, value: 1, ids: ids)
 	let indexPlusOne = emitBin(module, block: store, a: index, b: one, opcode: StdBinOpcode.add, ids: ids)
 	var doStore = emitDestroyRangeIfManaged(module, func: func, cur: store, record: arr, buffer: buffer, start: index, stop: indexPlusOne, elementSize: es, ids: ids)
-	let slot = emitSlotAddr(module, block: doStore, buffer: buffer, index: index, elementSize: es, ids: ids)
-	var afterStore = emitStoreElem(module, func: func, cur: doStore, addr: slot, value: value, size: es, ids: ids)
+	var afterStore = emitStoreElemAt(module, func: func, cur: doStore, buffer: buffer, index: index, value: value, es: es, ids: ids)
 	let okVal = emitConst(module, block: afterStore, value: 0, ids: ids)
 	emitOkReturn(module, block: afterStore, value: okVal, ids: ids)
 end 'emitElementStoreAndOkReturn'
@@ -1784,6 +2353,17 @@ function buildArrCount(module StdModule)
 	module.setTerminator(entry, op: StdOp.ret(length))
 	module.functions.push(func)
 end 'buildArrCount'
+
+// `__arr_element_size(arr) -> element_size@24`, signed — see `ArrElementSizeName`.
+function buildArrElementSize(module StdModule)
+	var func = IrFunction.createFromStd(ArrElementSizeName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+	var entry = module.addBlock(func, label: b"entry")
+	emitParams(module, block: entry, count: 1)
+	let elementSize = emitLoadField(module, block: entry, record: 0 as ValueId, offset: ArrElementSizeOffset, ids: ids)
+	module.setTerminator(entry, op: StdOp.ret(elementSize))
+	module.functions.push(func)
+end 'buildArrElementSize'
 
 // `__arr_capacity(arr) -> capacity`.
 function buildArrCapacity(module StdModule)
@@ -1873,12 +2453,9 @@ function buildArrResize(module StdModule)
 	// tail `[n, oldLen)`, so each managed element there must be destroyed or it leaks; the destroy MUST precede the
 	// zero-fill (a zeroed slot is a NULL the walk would skip). A trivial-element array skips straight to the zero.
 	var afterDestroy = emitDestroyRangeIfManaged(module, func: func, cur: doZero, record: arr, buffer: buffer, start: n, stop: oldLen, elementSize: es, ids: ids)
-	let startOff = emitBin(module, block: afterDestroy, a: n, b: es, opcode: StdBinOpcode.mul, ids: ids)
-	let endOff = emitBin(module, block: afterDestroy, a: oldLen, b: es, opcode: StdBinOpcode.mul, ids: ids)
-	let zeroBytes = emitBin(module, block: afterDestroy, a: endOff, b: startOff, opcode: StdBinOpcode.sub, ids: ids)
-	let startAddr = emitBin(module, block: afterDestroy, a: buffer, b: startOff, opcode: StdBinOpcode.add, ids: ids)
-	var afterZero = emitFillRange(module, func: func, cur: afterDestroy, dest: startAddr, byteCount: zeroBytes, fillValue: 0, ids: ids)
-	module.setTerminator(afterZero, op: StdOp.branch(setLen.id))
+	let vacatedCount = emitBin(module, block: afterDestroy, a: oldLen, b: n, opcode: StdBinOpcode.sub, ids: ids)
+	emitZeroElems(module, block: afterDestroy, buffer: buffer, start: n, count: vacatedCount, es: es, ids: ids)
+	module.setTerminator(afterDestroy, op: StdOp.branch(setLen.id))
 
 	emitStoreField(module, block: setLen, record: arr, offset: ArrLengthOffset, value: n)
 	module.setTerminator(setLen, op: StdOp.retVoid)
@@ -1907,7 +2484,8 @@ function buildArrFirst(module StdModule)
 
 	let buffer = emitLoadField(module, block: load, record: arr, offset: ArrBufferOffset, ids: ids)
 	let es = emitLoadField(module, block: load, record: arr, offset: ArrElementSizeOffset, ids: ids)
-	emitLoadElemAndOkReturn(module, func: func, cur: load, record: arr, addr: buffer, size: es, ids: ids)
+	let firstIdx = emitConst(module, block: load, value: 0, ids: ids)
+	emitLoadElemAndOkReturn(module, func: func, cur: load, record: arr, buffer: buffer, index: firstIdx, es: es, ids: ids)
 
 	module.functions.push(func)
 end 'buildArrFirst'
@@ -1935,8 +2513,7 @@ function buildArrLast(module StdModule)
 	let lastIdx = emitBin(module, block: load, a: length, b: one, opcode: StdBinOpcode.sub, ids: ids)
 	let buffer = emitLoadField(module, block: load, record: arr, offset: ArrBufferOffset, ids: ids)
 	let es = emitLoadField(module, block: load, record: arr, offset: ArrElementSizeOffset, ids: ids)
-	let slot = emitSlotAddr(module, block: load, buffer: buffer, index: lastIdx, elementSize: es, ids: ids)
-	emitLoadElemAndOkReturn(module, func: func, cur: load, record: arr, addr: slot, size: es, ids: ids)
+	emitLoadElemAndOkReturn(module, func: func, cur: load, record: arr, buffer: buffer, index: lastIdx, es: es, ids: ids)
 
 	module.functions.push(func)
 end 'buildArrLast'
@@ -1968,12 +2545,11 @@ function buildArrPop(module StdModule)
 	let lastIdx = emitBin(module, block: pop, a: length, b: one, opcode: StdBinOpcode.sub, ids: ids)
 	let buffer = emitLoadField(module, block: pop, record: arr, offset: ArrBufferOffset, ids: ids)
 	let es = emitLoadField(module, block: pop, record: arr, offset: ArrElementSizeOffset, ids: ids)
-	let slot = emitSlotAddr(module, block: pop, buffer: buffer, index: lastIdx, elementSize: es, ids: ids)
 	var afterLoad = module.addBlock(func, label: b"poploaded")
-	let value = emitLoadElem(module, func: func, cur: pop, exit: afterLoad, addr: slot, size: es, ids: ids)
-	var afterZero = emitFillRange(module, func: func, cur: afterLoad, dest: slot, byteCount: es, fillValue: 0, ids: ids)
-	emitStoreField(module, block: afterZero, record: arr, offset: ArrLengthOffset, value: lastIdx)
-	emitOkReturn(module, block: afterZero, value: value, ids: ids)
+	let value = emitLoadElemAt(module, func: func, cur: pop, exit: afterLoad, buffer: buffer, index: lastIdx, es: es, ids: ids)
+	emitZeroElems(module, block: afterLoad, buffer: buffer, start: lastIdx, count: one, es: es, ids: ids)
+	emitStoreField(module, block: afterLoad, record: arr, offset: ArrLengthOffset, value: lastIdx)
+	emitOkReturn(module, block: afterLoad, value: value, ids: ids)
 
 	module.functions.push(func)
 end 'buildArrPop'
@@ -1999,11 +2575,10 @@ function buildArrClear(module StdModule)
 	// zero-fill (a zeroed slot is a NULL the walk would skip). A trivial-element array skips straight to the zero.
 	let start = emitConst(module, block: entry, value: 0, ids: ids)
 	var afterDestroy = emitDestroyRangeIfManaged(module, func: func, cur: entry, record: arr, buffer: buffer, start: start, stop: length, elementSize: es, ids: ids)
-	let byteCount = emitBin(module, block: afterDestroy, a: length, b: es, opcode: StdBinOpcode.mul, ids: ids)
-	var afterZero = emitFillRange(module, func: func, cur: afterDestroy, dest: buffer, byteCount: byteCount, fillValue: 0, ids: ids)
-	let zero = emitConst(module, block: afterZero, value: 0, ids: ids)
-	emitStoreField(module, block: afterZero, record: arr, offset: ArrLengthOffset, value: zero)
-	module.setTerminator(afterZero, op: StdOp.retVoid)
+	emitZeroElems(module, block: afterDestroy, buffer: buffer, start: start, count: length, es: es, ids: ids)
+	let zero = emitConst(module, block: afterDestroy, value: 0, ids: ids)
+	emitStoreField(module, block: afterDestroy, record: arr, offset: ArrLengthOffset, value: zero)
+	module.setTerminator(afterDestroy, op: StdOp.retVoid)
 
 	module.functions.push(func)
 end 'buildArrClear'
@@ -2063,12 +2638,10 @@ function buildArrInsert(module StdModule)
 	module.appendOp(afterClamp, op: StdOp.call(grown, callee: ArrGrowName, args: twoArgs(arr, second: required)))
 	let es = emitLoadField(module, block: afterClamp, record: arr, offset: ArrElementSizeOffset, ids: ids)
 	let buffer = emitLoadField(module, block: afterClamp, record: arr, offset: ArrBufferOffset, ids: ids)
-	let slot = emitSlotAddr(module, block: afterClamp, buffer: buffer, index: clamped, elementSize: es, ids: ids)
-	let destAddr = emitBin(module, block: afterClamp, a: slot, b: es, opcode: StdBinOpcode.add, ids: ids)
+	let openedAt = emitBin(module, block: afterClamp, a: clamped, b: one, opcode: StdBinOpcode.add, ids: ids)
 	let moveCount = emitBin(module, block: afterClamp, a: length, b: clamped, opcode: StdBinOpcode.sub, ids: ids)
-	let moveBytes = emitBin(module, block: afterClamp, a: moveCount, b: es, opcode: StdBinOpcode.mul, ids: ids)
-	var afterShift = emitBackwardCopy(module, func: func, cur: afterClamp, dest: destAddr, src: slot, byteCount: moveBytes, ids: ids)
-	var afterStore = emitStoreElem(module, func: func, cur: afterShift, addr: slot, value: value, size: es, ids: ids)
+	emitMoveElems(module, block: afterClamp, destBuffer: buffer, destIndex: openedAt, srcBuffer: buffer, srcIndex: clamped, count: moveCount, es: es, ids: ids)
+	var afterStore = emitStoreElemAt(module, func: func, cur: afterClamp, buffer: buffer, index: clamped, value: value, es: es, ids: ids)
 	let newLen = emitBin(module, block: afterStore, a: length, b: one, opcode: StdBinOpcode.add, ids: ids)
 	emitStoreField(module, block: afterStore, record: arr, offset: ArrLengthOffset, value: newLen)
 	module.setTerminator(afterStore, op: StdOp.retVoid)
@@ -2101,24 +2674,20 @@ function buildArrRemove(module StdModule)
 	emitCowDetach(module, block: remove, arr: arr, ids: ids)
 	let es = emitLoadField(module, block: remove, record: arr, offset: ArrElementSizeOffset, ids: ids)
 	let buffer = emitLoadField(module, block: remove, record: arr, offset: ArrBufferOffset, ids: ids)
-	let slot = emitSlotAddr(module, block: remove, buffer: buffer, index: index, elementSize: es, ids: ids)
 	var afterLoad = module.addBlock(func, label: b"rmloaded")
-	let value = emitLoadElem(module, func: func, cur: remove, exit: afterLoad, addr: slot, size: es, ids: ids)
+	let value = emitLoadElemAt(module, func: func, cur: remove, exit: afterLoad, buffer: buffer, index: index, es: es, ids: ids)
 
-	// afterLoad: shift `[index+1, length)` down one slot into `slot`.
-	let srcAddr = emitBin(module, block: afterLoad, a: slot, b: es, opcode: StdBinOpcode.add, ids: ids)
+	// afterLoad: shift `[index+1, length)` down one element onto `index`.
 	let one = emitConst(module, block: afterLoad, value: 1, ids: ids)
 	let idxPlusOne = emitBin(module, block: afterLoad, a: index, b: one, opcode: StdBinOpcode.add, ids: ids)
 	let remaining = emitBin(module, block: afterLoad, a: length, b: idxPlusOne, opcode: StdBinOpcode.sub, ids: ids)
-	let moveBytes = emitBin(module, block: afterLoad, a: remaining, b: es, opcode: StdBinOpcode.mul, ids: ids)
-	var afterShift = emitForwardCopy(module, func: func, cur: afterLoad, dest: slot, src: srcAddr, byteCount: moveBytes, ids: ids)
+	emitMoveElems(module, block: afterLoad, destBuffer: buffer, destIndex: index, srcBuffer: buffer, srcIndex: idxPlusOne, count: remaining, es: es, ids: ids)
 
-	// afterShift: length--, then zero the now-unused last slot.
-	let newLen = emitBin(module, block: afterShift, a: length, b: one, opcode: StdBinOpcode.sub, ids: ids)
-	emitStoreField(module, block: afterShift, record: arr, offset: ArrLengthOffset, value: newLen)
-	let vacAddr = emitSlotAddr(module, block: afterShift, buffer: buffer, index: newLen, elementSize: es, ids: ids)
-	var afterZero = emitFillRange(module, func: func, cur: afterShift, dest: vacAddr, byteCount: es, fillValue: 0, ids: ids)
-	emitOkReturn(module, block: afterZero, value: value, ids: ids)
+	// length--, then erase the now-unused last element.
+	let newLen = emitBin(module, block: afterLoad, a: length, b: one, opcode: StdBinOpcode.sub, ids: ids)
+	emitStoreField(module, block: afterLoad, record: arr, offset: ArrLengthOffset, value: newLen)
+	emitZeroElems(module, block: afterLoad, buffer: buffer, start: newLen, count: one, es: es, ids: ids)
+	emitOkReturn(module, block: afterLoad, value: value, ids: ids)
 
 	module.functions.push(func)
 end 'buildArrRemove'
@@ -2234,12 +2803,11 @@ function buildArrAppend(module StdModule)
 	let es = emitLoadField(module, block: append, record: dest, offset: ArrElementSizeOffset, ids: ids)
 	let destBuffer = emitLoadField(module, block: append, record: dest, offset: ArrBufferOffset, ids: ids)
 	let srcBuffer = emitLoadField(module, block: append, record: src, offset: ArrBufferOffset, ids: ids)
-	let destAddr = emitSlotAddr(module, block: append, buffer: destBuffer, index: destLen, elementSize: es, ids: ids)
-	let byteCount = emitBin(module, block: append, a: srcLen, b: es, opcode: StdBinOpcode.mul, ids: ids)
-	var afterCopy = emitForwardCopy(module, func: func, cur: append, dest: destAddr, src: srcBuffer, byteCount: byteCount, ids: ids)
+	let srcStart = emitConst(module, block: append, value: 0, ids: ids)
+	emitMoveElems(module, block: append, destBuffer: destBuffer, destIndex: destLen, srcBuffer: srcBuffer, srcIndex: srcStart, count: srcLen, es: es, ids: ids)
 
-	emitStoreField(module, block: afterCopy, record: dest, offset: ArrLengthOffset, value: newLen)
-	module.setTerminator(afterCopy, op: StdOp.retVoid)
+	emitStoreField(module, block: append, record: dest, offset: ArrLengthOffset, value: newLen)
+	module.setTerminator(append, op: StdOp.retVoid)
 
 	module.functions.push(func)
 end 'buildArrAppend'
@@ -2396,12 +2964,9 @@ function buildArrSetLength(module StdModule)
 	let es = emitLoadField(module, block: doZero, record: arr, offset: ArrElementSizeOffset, ids: ids)
 	let buffer = emitLoadField(module, block: doZero, record: arr, offset: ArrBufferOffset, ids: ids)
 	var afterDestroy = emitDestroyRangeIfManaged(module, func: func, cur: doZero, record: arr, buffer: buffer, start: n, stop: oldLen, elementSize: es, ids: ids)
-	let startOff = emitBin(module, block: afterDestroy, a: n, b: es, opcode: StdBinOpcode.mul, ids: ids)
-	let endOff = emitBin(module, block: afterDestroy, a: oldLen, b: es, opcode: StdBinOpcode.mul, ids: ids)
-	let zeroBytes = emitBin(module, block: afterDestroy, a: endOff, b: startOff, opcode: StdBinOpcode.sub, ids: ids)
-	let startAddr = emitBin(module, block: afterDestroy, a: buffer, b: startOff, opcode: StdBinOpcode.add, ids: ids)
-	var afterZero = emitFillRange(module, func: func, cur: afterDestroy, dest: startAddr, byteCount: zeroBytes, fillValue: 0, ids: ids)
-	module.setTerminator(afterZero, op: StdOp.branch(setLen.id))
+	let vacatedCount = emitBin(module, block: afterDestroy, a: oldLen, b: n, opcode: StdBinOpcode.sub, ids: ids)
+	emitZeroElems(module, block: afterDestroy, buffer: buffer, start: n, count: vacatedCount, es: es, ids: ids)
+	module.setTerminator(afterDestroy, op: StdOp.branch(setLen.id))
 
 	emitStoreField(module, block: setLen, record: arr, offset: ArrLengthOffset, value: n)
 	let nothing = emitConst(module, block: setLen, value: 0, ids: ids)
@@ -2552,7 +3117,7 @@ function emitBufferAccessGuard(module StdModule, func IrFunction, block IrBlock,
 	var limit = declaredLimit
 	if addressesBytes 'byteAddressed'
 		let es = emitLoadField(module, block: checkHigh, record: arr, offset: ArrElementSizeOffset, ids: ids)
-		limit = emitBin(module, block: checkHigh, a: declaredLimit, b: es, opcode: StdBinOpcode.mul, ids: ids)
+		limit = emitElementByteLen(module, block: checkHigh, count: declaredLimit, es: es, ids: ids)
 	end 'byteAddressed'
 
 	let pastEnd = emitCmp(module, block: checkHigh, a: offset, b: limit, pred: StdCmpPred.ge, ids: ids)
@@ -2664,8 +3229,8 @@ end 'buildArrMemAppend'
 // length, after which the comparison is against a real capacity.
 //
 // ⚠ **IT RUNS NO ELEMENT DESTRUCTORS AND ZERO-FILLS NOTHING.** A grow only ever ADDS slots, so nothing
-// leaves the live range; the added slots come zeroed, because `emitReallocateToCapacity` copies exactly
-// `length·es` bytes into a fresh `__mm_alloc` (which is zeroed). Destructors run on a SHRINK
+// leaves the live range; the added slots come zeroed, because `emitReallocateToCapacity` copies exactly the
+// live elements' own bytes (`emitElementByteLen(length, es)`) into a fresh `__mm_alloc` (which is zeroed). Destructors run on a SHRINK
 // (`__arr_set_length`, `__arr_clear`) and nowhere else.
 function buildArrMemGrow(module StdModule)
 	var func = IrFunction.createFromStd(ArrMemGrowName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params(), returnLine: 0, throwsTypeName: managedMemoryThrows())

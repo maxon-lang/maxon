@@ -601,6 +601,39 @@ end 'main'
 error E2026: specs/fragments/match-simple/error.match-not-exhaustive.test:7:2: match is not exhaustive: add a 'default' arm
 ```
 
+<!-- test: error.match-duplicate-bool-pattern -->
+
+⚠ **shv2-authored — not a `/specs` case.** Added with sub-byte bit-packing, which widened the
+duplicate-pattern recorder to bools as a side effect: a repeated `true` arm was **silently dead code**
+before and is now refused, which is the existing overlap rule finally reaching the one pattern kind it
+had been skipping.
+
+⭐ **The point of the case is the SPELLING, not the refusal.** A bool arm folds to `BoolTrueValue`/
+`BoolFalseValue`, so the first version of this diagnostic named `'1'` for a pattern the source writes as
+`true` — a message quoting a number that appears nowhere in the program. Its siblings do not do that
+(`enum-match-exhaustive` pins *"overlapping pattern in match: `'medium'` is already covered"*), and this
+case is what stops it regressing to the folded value. Keyed on the TOKEN rather than the value's type,
+because the question is about spelling: `-1` is two tokens, so a token-text rule has to leave every other
+pattern kind on the folded constant, and this case pins only the arm that changed.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function pick(b bool) returns Integer
+	return match b 'p'
+		true gives 1
+		false gives 2
+		true gives 3
+	end 'p'
+end 'pick'
+
+function main() returns ExitCode
+	return pick(true) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2027: specs/fragments/match-simple/error.match-duplicate-bool-pattern.test:8:3: duplicate pattern in match: 'true'
+```
+
 <!-- disabled-test: match-arm-field-assignment -->
 <!-- a FIELD STORE THROUGH A STRUCT PARAMETER (`state State`, so `state.flag = true` is E2013 "cannot assign to immutable variable"). NOT break-in-match, which this case now clears: measured on the fixed compiler, and reproduced with no `match` anywhere. ⚠ THE DIVERGENCE IS THE PARAMETER FORM ONLY, coordinator-measured against the oracle on BOTH shapes: `function scan(state State)` + `state.flag = true` is E2013 in shv2 and COMPILES AND RUNS (exit 0) in the bootstrap, whereas `let s = State.make()` + `s.flag = true` is E2013 in BOTH — shv2 is right about `let` and wrong about parameters. So the fix is NOT "let a field store through any immutable binding": a param BORROWS by default (PLAN.md, user ruling 2026-07-18) and a borrow's pointee fields are writable, while a `let` binding's are not. Its own rung. -->
 A match arm body may be a dotted field assignment (`state.flag = true`), not

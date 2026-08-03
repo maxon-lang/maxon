@@ -121,6 +121,130 @@ export function rangedAliasStorageBytes(low ParsedInt, high ParsedInt) returns B
 	return MachineWordBytes
 end 'rangedAliasStorageBytes'
 
+// ⭐ **THE WIDTH OF A SUB-BYTE-PACKED ELEMENT, IN BITS** — 1, 2 or 4, the widths that DIVIDE a byte so a
+// field never straddles one. `NotSubBytePacked` is the answer "this element is a byte or wider; ask
+// `rangedAliasStorageBytes`", and it is 0 rather than a throw because it is a complete answer for every
+// element that is not narrow — the overwhelming majority.
+export typealias PackedBitWidth = int(0 to 4)
+export let NotSubBytePacked = 0 as PackedBitWidth
+
+// ⭐⭐ **THE SUB-BYTE PACKED WIDTH OF A RANGED-INT ALIAS — the ladder above CONTINUED BELOW ONE BYTE**, and
+// the single producer of a packed element stride. `int(0 to 1)` ⇒ 1 bit; `int(0 to 3)` ⇒ 2; `int(0 to 15)`
+// ⇒ 4; `int(0 to 16)` and everything wider ⇒ `NotSubBytePacked`, so a byte is where the two ladders meet.
+// The thresholds are exactly "the position of `high`'s highest set bit, rounded up to a width dividing 8".
+//
+// ⚠⚠ **THE `low != 0` REFUSAL IS `rangedAliasStorageBytes`'s OWN ARGUMENT ONE RUNG NARROWER, NOT A SECOND
+// DECISION.** That ladder keeps the machine word for a negative lower bound because the shared element load
+// ZERO-EXTENDS, and it carries the measurement (`int(-5 to 5)` storing `-5` reads back `251`). A packed read
+// is that same zero-extending load with a shift and a mask on it, so it inherits the limit unchanged — and
+// it is STRICTER, because a non-zero lower bound would additionally need an OFFSET applied on both sides to
+// map the range onto its bits, and the record has nowhere to keep one. A zero-based range needs neither:
+// the value IS its bit pattern, so the masked read is exactly the value. `int(1 to 3)` therefore stays
+// byte-strided, and that is a spec'd behaviour (`ranged-int-bit-packing.nonzero-lower-not-packed`).
+//
+// ⚠ `high` rides as the raw 64-bit pattern (`RangedTypeAlias`'s header), so a `u64.max` upper bound arrives
+// NEGATIVE — tested ahead of the ladder for the identical reason the width ladder tests it there.
+export function rangedAliasPackedBits(low ParsedInt, high ParsedInt) returns PackedBitWidth
+	if low != 0 or high < 0 'onlyAZeroBasedRangeMapsOntoItsBits'
+		return NotSubBytePacked
+	end 'onlyAZeroBasedRangeMapsOntoItsBits'
+
+	if high <= 1 'oneBit'
+		return 1
+	end 'oneBit'
+
+	if high <= 3 'twoBits'
+		return 2
+	end 'twoBits'
+
+	if high <= 15 'fourBits'
+		return 4
+	end 'fourBits'
+
+	return NotSubBytePacked
+end 'rangedAliasPackedBits'
+
+// ⭐⭐ **`element_size@24`, AND WHY ONE FIELD CARRIES TWO LADDERS.** The record has ONE stride slot and the
+// runtime helpers read it once, so the two ladders above have to arrive as one number: a POSITIVE value is a
+// byte stride, a NEGATIVE one is `-(bits per element)`. `0` is unset (`__arr_create` diverges on it), which
+// is what leaves the sign free to mean this.
+//
+// ⚠ **THE ENCODING IS NOT shv2's TO CHOOSE** — `specs/ranged-int-bit-packing.md` and `specs/bool-bit-packing.md`
+// both state it, and `arr.managed.elementSize()` hands the raw field to a program that then compares it
+// against `-1`/`-2`/`-4`. It is a language-visible fact, not an implementation detail.
+export typealias ElementStride = int(-4 to 8)
+
+// Join the two ladders into the one stamp. The SOLE arithmetic that turns "how wide is this element" into
+// the number stored at `element_size@24`, so no producer of that field can spell the encoding differently
+// from another (`ProgramSignatures.arrayElementSize` is the sole producer of the ANSWER; this is the sole
+// producer of its FORM).
+export function elementStrideOf(packedBits PackedBitWidth, storageBytes ByteOffset) returns ElementStride
+	if packedBits != NotSubBytePacked 'subBytePacked'
+		return 0 - packedBits
+	end 'subBytePacked'
+
+	return storageBytes as ElementStride
+end 'elementStrideOf'
+
+// ⭐ **THE BUFFER BYTE LENGTH `count` ELEMENTS OF THIS STRIDE NEED — the COMPILE-TIME twin of the runtime
+// `ArrayRuntime.emitElementByteLen`, and they must agree to the byte.** A packed element is measured in BITS
+// and rounded up to a whole byte (`ceil(count·bits/8)`); a byte-strided one is `count · stride`. The compiler
+// needs it wherever it sizes a buffer for a known element count without a record to read — the constant array
+// literal's `.rdata` blob — and a second, byte-only spelling there would size a packed blob as though its
+// negative stride were a byte width.
+export function elementsByteLen(count ParsedInt, stride ElementStride) returns ParsedInt
+	if stride < 0 'subBytePacked'
+		let bits = count * (0 - stride)
+		return (bits + (BitsPerByte - 1)) / BitsPerByte
+	end 'subBytePacked'
+
+	return count * stride
+end 'elementsByteLen'
+
+// ⭐ **THE BITS IN A BYTE — ONE DECLARATION FOR BOTH ENDS OF THE PACKED ARITHMETIC.** Named rather than an
+// `8` beside a `4` and a `1`, none of which mean the same thing.
+//
+// ⚠ **IT IS EXPORTED BECAUSE `ArrayRuntime` COUNTS THE SAME BITS**, and briefly did so from a second private
+// `let` of its own (found in review of this rung). That is the shape this file exists to remove: the
+// compile-time `elementsByteLen` above and the emitted `emitElementByteLen` are documented as having to
+// agree TO THE BYTE, and two declarations of the divisor is exactly how they would come not to. It lives
+// here rather than in the runtime because the layout tier is the lower of the two.
+export let BitsPerByte = 8 as ParsedInt
+
+// ⭐⭐ **THE BIT IMAGE OF A RUN OF CONSTANT ELEMENTS — LSB-FIRST WITHIN EACH BYTE.** Element `i` occupies
+// bits `[i·bits, i·bits + bits)` counted from bit 0 of byte 0, so the FIRST element sits in the LOW bits of
+// the first byte. `[0, 1, 2, 3]` at 2 bits is therefore `0b11_10_01_00` = **228** — the single byte
+// `ranged-int-bit-packing.static-2bit-cast-packed` pins, and a claim about the ORDER that no round-tripped
+// value could make (every bit order reads the same values back out through its own accessors).
+//
+// ⚠⚠ **IT MUST AGREE WITH `ArrayRuntime.emitFieldPlacement` TO THE BIT.** This is where a constant array is
+// WRITTEN and that is where every array is READ, and between them they are the only two statements of this
+// layout — a program builds its literal here and then reads it with the ordinary `get`. The two are kept
+// honest by the spec pins rather than by a shared expression, because one is compile-time arithmetic over
+// `ParsedInt` and the other is emitted IR, and there is no tier they could share.
+//
+// The buffer is exactly `elementsByteLen` long, so a trailing partial byte keeps its unused high bits zero —
+// which is what makes the pinned `u8[] 33, 243, 8` a complete description of the blob rather than a prefix.
+export function packConstantElements(values ParsedIntArray, packedBits PackedBitWidth) returns ByteArray
+	var out = ByteArray.create()
+	out.resize(elementsByteLen(values.count() as ParsedInt, stride: 0 - packedBits) as ElementCount)
+
+	let fieldMask = (1 shl packedBits) - 1
+	for i in 0 upto values.count() 'eachElement'
+		let value = try values.get(i) otherwise panic("packConstantElements: values.get({i}) failed inside its own upto bound")
+		let bitPos = (i as ParsedInt) * packedBits
+		let byteIndex = (bitPos / BitsPerByte) as ElementIndex
+		let shift = bitPos mod BitsPerByte
+		let occupied = try out.get(byteIndex) otherwise panic("packConstantElements: byte {byteIndex} is past a buffer sized to hold every element — `elementsByteLen` and this walk disagree about the layout")
+		// A packed width DIVIDES a byte, so `shift + packedBits <= 8` and the shifted field never leaves the
+		// byte it starts in. The `and 0xFF` states that rather than relying on it: it is the one line where a
+		// straddle would silently corrupt the next element instead of failing.
+		try out.set(byteIndex, value: (occupied or ((value and fieldMask) shl shift)) and 0xFF) otherwise panic("packConstantElements: byte {byteIndex} was readable a line ago and is not writable now")
+	end 'eachElement'
+
+	return out
+end 'packConstantElements'
+
 // The smallest value ANY slot holds, whatever its width: zero, because the shared element load
 // ZERO-EXTENDS (`ArrayRuntime.emitLoadElem` — one compiled byte loop with no signedness in the record to
 // consult). Named beside the maximum below so a reader stating a slot's value set states both ends from one

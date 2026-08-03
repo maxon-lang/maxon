@@ -45,5 +45,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:6:13: Unsupported: `Character` member 'codepoint' — shv2 provides bytes/byteLength/asciiValue; `codepoint`/`codepoints`/`compare`/`hash`/`clone` and the static `fromCodepoint` have no consumer in the corpus
+error E2015: <fragment>:6:13: Unsupported: `Character` member 'codepoint' — shv2 provides bytes/byteLength/asciiValue; that list IS the surface, so nothing else is served here
 ```

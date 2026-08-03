@@ -21,9 +21,9 @@
 // other compiler-synthesized function in shv2 (`installMmRuntime`, `installStringRuntime`, the destructor
 // cascades) is built as already-lowered `StdOp`s and appended AFTER the pipeline. These two are not,
 // because what they have to build is a LITERAL'S RECORD, and `LowerMaxonToStd` already knows how to build
-// one from a single op: `stringLiteral` becomes the rdata blob + record + fixup, and `byteStringLiteral`
+// one from a single op: `stringLiteral` becomes the rdata blob + record + fixup, and `constArrayLiteral`
 // becomes the ten-op owned-`Array`-over-immortal-blob sequence. Emitting Maxon ops costs six op
-// constructions and reuses both; emitting Std ops would be a SECOND copy of `lowerByteStringLiteral`,
+// constructions and reuses both; emitting Std ops would be a SECOND copy of `lowerConstArrayLiteral`,
 // which is the duplication this compiler pays for hardest. So the price is the one thing a Maxon-tier
 // function has to carry that a Std-tier one does not — its dense per-value type columns — and
 // `SynthesizedFunction` below is that price, paid once.
@@ -105,7 +105,7 @@ end 'buildModuleInit'
 //     is the `(box) -> newBox` dual of the `__str_decref` the cleanup drops it with, so the pair balances
 //     by construction.
 //   • a **byte string** literal ALREADY materializes as an owned heap 48-byte `Array` record over an
-//     immortal `.rdata` blob (`lowerByteStringLiteral`), which is precisely what the slot must hold — so
+//     immortal `.rdata` blob (`lowerConstArrayLiteral`), which is precisely what the slot must hold — so
 //     there is nothing to clone. Its first receiver-writing method detaches the buffer off `.rdata`
 //     (`byte-string-literal.push-grows-off-rdata`), which is what makes a MUTABLE byte-string global work.
 //   • an **array** literal has no literal record at all (P1.7 slice 2b): the record is BUILT here, exactly
@@ -134,7 +134,7 @@ end 'clonedStringRecord'
 // record the slot must hold.
 function ownedByteStringRecord(fn SynthesizedFunction, bytes ByteArray, valueType MaxonType, range SourceRange) returns ValueId
 	let record = fn.mintOfType(valueType)
-	fn.emit(MaxonOp.byteStringLiteral(record, bytes: bytes), range: range)
+	fn.emit(MaxonOp.constArrayLiteral(record, elementSize: ByteStringElementSize, elementCount: bytes.count() as ParsedInt, bytes: bytes), range: range)
 	return record
 end 'ownedByteStringRecord'
 

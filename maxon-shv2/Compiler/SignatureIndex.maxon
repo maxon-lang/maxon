@@ -583,7 +583,7 @@ export union ManagedGlobalInitializer
 	// `__arr_push` per element. `elementSize` and `elementDestroy` are what `__arr_create` stamps into
 	// `element_size@24` / `element_destroy@40`, resolved HERE (where the instance registry is) rather than
 	// re-derived by the synthesis — the same discipline `dropCallee` above follows.
-	arrayRecord(elements ConstArrayElementArray, elementSize ByteOffset, elementDestroy ArrayElementDestroy)
+	arrayRecord(elements ConstArrayElementArray, elementSize ElementStride, elementDestroy ArrayElementDestroy)
 end 'ManagedGlobalInitializer'
 
 // ⭐ **THE `element_destroy@40` STAMP AN ARRAY RECORD IS BORN WITH** — the ADDRESS of the element's drop
@@ -1867,6 +1867,13 @@ export let MapErrorKeyAlreadyExistsCaseName = b"keyAlreadyExists"
 // its `sizeof` is the 48-byte record — and the drop walk / accessors move exactly that pointer.
 let ManagedArrayElementBytes = 8 as ByteOffset
 
+// ⭐ **A `bool` ELEMENT IS ONE BIT** — the width `Array with bool` packs at, and the only element whose
+// packed width is not read off a declared range (`bool` is a TAG, not a ranged alias, so it has no `low`/
+// `high` for `rangedAliasPackedBits` to read). It is a named constant rather than a `1` inside
+// `arrayElementPackedBits` because a bare 1 there sits beside the `2` and `4` that ladder hands back and
+// reads as one of that ladder's rungs, which it is not: those are derived from bounds, this is definitional.
+let BooleanPackedBits = 1 as PackedBitWidth
+
 // ⭐ **THE STORAGE WIDTH OF A `named` ARRAY ELEMENT NO FILE DECLARES AS A RANGED ALIAS** — the MISS arm of
 // `trivialElementStorageBytes`'s registry probe. It is a function and not a bare fallback because a miss
 // means TWO different things, and only one of them is the machine word:
@@ -2005,16 +2012,29 @@ end 'inclusiveRangeContains'
 // loader's, not a byte's declared domain. `rawByteWriteSlotDomainMessage` already renders the slot's value
 // set from `SlotUnsignedMin`, so with the byte's constant here the PREDICATE and the SENTENCE describing it
 // were two facts that happened to agree — the exact shape this rung exists to remove.
-function rangeHoldsEverySlotValue(low ParsedInt, high ParsedInt, slotBytes ByteOffset) returns bool
-	if slotBytes == (ByteStringElementSize as ByteOffset) 'aByteSlot'
+//
+// ⚠⚠ **A SUB-BYTE-PACKED SLOT ANSWERS NO, AND THAT IS THE ONLY HONEST ANSWER RATHER THAN A CONSERVATIVE
+// ONE.** This predicate's caller is admitting RAW BYTES into a declared element (`setByte`, and the byte
+// boundary), and a packed element has no byte of its own to admit them into — 8, 4 or 2 of its fields SHARE
+// one byte, so a byte write lands across several elements at once and the question "does this element's
+// range hold every value of its slot" has no true answer, not merely an unknown one. It is tested first
+// because every arm below reads `slotBytes` as a WIDTH, and a negative stride is a bit count.
+function rangeHoldsEverySlotValue(low ParsedInt, high ParsedInt, slotBytes ElementStride) returns bool
+	if slotBytes < 0 'aSubByteFieldSharesItsByteWithItsNeighbours'
+		return false
+	end 'aSubByteFieldSharesItsByteWithItsNeighbours'
+
+	// Past the guard the stride is a genuine byte width (1/2/4/8), which is what the ladder below reads.
+	let bytes = slotBytes as ByteOffset
+	if bytes == (ByteStringElementSize as ByteOffset) 'aByteSlot'
 		return rangeHoldsEveryByte(low, high: high)
 	end 'aByteSlot'
 
-	if slotBytes == MachineWordBytes 'theWholeWord'
-		return (low == BareIntegerElementLow and high == BareIntegerElementHigh) or (low == SlotUnsignedMin and high == slotUnsignedMax(slotBytes))
+	if bytes == MachineWordBytes 'theWholeWord'
+		return (low == BareIntegerElementLow and high == BareIntegerElementHigh) or (low == SlotUnsignedMin and high == slotUnsignedMax(bytes))
 	end 'theWholeWord'
 
-	return low == SlotUnsignedMin and high >= slotUnsignedMax(slotBytes)
+	return low == SlotUnsignedMin and high >= slotUnsignedMax(bytes)
 end 'rangeHoldsEverySlotValue'
 
 // ⭐⭐ **THE ELEMENT OF EVERY COMPILER-SYNTHESIZED BYTE BUFFER — AND WHY IT IS NOT `Byte`.**
@@ -2433,6 +2453,7 @@ export let ManagedMemorySetByteMethod = b"setByte"
 export let ManagedMemoryLengthMethod = b"length"
 export let ManagedMemoryGrowMethod = b"grow"
 export let ManagedMemoryByteAtMethod = b"byteAt"
+export let ManagedMemoryElementSizeMethod = b"elementSize"
 
 // ⭐ **THE `Array` SPELLINGS A SOURCE-METHOD MAP HAS TO NAME (D12, completed by D11c).** Every one of these
 // was a PARSER constant, file-private in `Parser.maxon`, and each moved here the moment a runtime family's
@@ -7747,13 +7768,65 @@ export type ProgramSignatures
 	// storage rules above diverge from `sizeof`: a `String` element's slot is 8 where its `sizeof` is the
 	// 48-byte record, and a `Byte` element's slot is 1 where `sizeof(Byte)` is a machine word. Sharing one
 	// door forced one answer on two questions — see `typeLogicalByteSize`, which is the other.
-	export function arrayElementSize(id GenericInstanceId) returns ByteOffset
+	//
+	// ⚠⚠ **ITS ANSWER IS SIGNED, BECAUSE `element_size@24` CARRIES TWO LADDERS IN ONE FIELD** — a positive
+	// byte stride, or a NEGATIVE sub-byte bit width (`elementStrideOf`, which owns the encoding). Every
+	// caller of this function wants the stamp and not the unpacked byte width, which is what keeps it one
+	// function: the two create sites stamp it, `isBytePackedArrayInstance` asks `== 1` and must answer NO
+	// for a packed element, `arrayElementIsMachineWord` asks `== 8`, the append same-shape test compares
+	// two of them, and the raw-byte doors have to refuse a slot that is not byte-addressable at all. A
+	// second "unpacked byte width" accessor beside this one would be a second producer of a stride, which
+	// is the shape this function's own name exists to prevent.
+	export function arrayElementSize(id GenericInstanceId) returns ElementStride
 		if self.containerElementIsManaged(id) 'managed'
-			return ManagedArrayElementBytes
+			return ManagedArrayElementBytes as ElementStride
 		end 'managed'
 
-		return self.trivialElementStorageBytes(self.containerElementType(id))
+		let element = self.containerElementType(id)
+		return elementStrideOf(self.arrayElementPackedBits(id), storageBytes: self.trivialElementStorageBytes(element))
 	end 'arrayElementSize'
+
+	// ⭐⭐ **IS THIS INSTANCE'S ELEMENT SUB-BYTE PACKED, AND HOW WIDE — THE ONE HOME OF THE PACKING RULE.**
+	// `NotSubBytePacked` for every element a byte or wider. The stamp above is derived from it, and so is
+	// every runtime decision downstream, so "does this array pack?" is asked here or not at all.
+	//
+	// The three arms are the whole rule:
+	//   • a MANAGED element is an 8-byte pointer to a heap box — there is nothing to narrow, and the drop
+	//     walk addresses each slot;
+	//   • `bool` is the 1-bit case, and it is an ARM of this classifier rather than a mechanism beside it.
+	//     That is what `specs/bool-bit-packing.md` and `specs/ranged-int-bit-packing.md` mean by "the same
+	//     machinery extends to any non-negative ranged-integer typealias": there is one packed runtime, and
+	//     `bool` reaches it by being `bits == 1`;
+	//   • a `named` element is a ranged alias, answered whole-program (`packedBitsInEveryFile`) for the
+	//     reason its byte twin is: the instance is interned on the NAME, so it has ONE stride.
+	// Every other trivial tag — `integer`, `float`, `ExitCode`, a function pointer — is a byte or wider.
+	//
+	// ⭐ **shv2 DECIDES THIS AT `__arr_create`, NOT AT FIRST `grow`, AND LEAVES `LayoutDescriptor`'s
+	// `bit1=bitPacked` FLAG RESERVED — a deliberate departure from v1.** v1 must stamp the packed width out
+	// of the layout descriptor when the buffer is first grown, because its packing decision is made in a
+	// LAYOUT pass over generic instances (`BuildLayoutDescriptors.computeLayoutDescriptor`) and the create
+	// site cannot see it. shv2's create sites already hold the CONCRETE instance — the parser mints it
+	// (`Parser.emitArrayCreateOp`) and the global initializer resolves it off the same registry
+	// (`arrayRecordInitializer`) — so the answer is available one tier earlier, at the only two places a
+	// record is born. Deciding it there means the record is never briefly unpacked, no descriptor is read at
+	// run time, and there is no second stamp site for the two to disagree at.
+	export function arrayElementPackedBits(id GenericInstanceId) returns PackedBitWidth
+		if self.containerElementIsManaged(id) 'managed'
+			return NotSubBytePacked
+		end 'managed'
+
+		let element = self.containerElementType(id)
+		let tag = maxonTypeTag(element)
+		if tag == ValueTypeTag.boolean 'theOneBitCase'
+			return BooleanPackedBits
+		end 'theOneBitCase'
+
+		if tag != ValueTypeTag.named 'notARangedAlias'
+			return NotSubBytePacked
+		end 'notARangedAlias'
+
+		return self.typeAliases.packedBitsInEveryFile(self.nameOfId(typeNameIdOf(element)))
+	end 'arrayElementPackedBits'
 
 	// ⭐ **DOES INSTANCE `id`'s ELEMENT STRIDE A FULL MACHINE WORD** — the question a door asks when it reads a
 	// buffer ONE WORD PER SLOT and so cannot walk a byte-PACKED element (`Parser.parseListFromConstruction`,

@@ -721,7 +721,7 @@ type MaxonToStdLowering
 			// ⭐⭐ **A STDLIB FUNCTION NO PATH FROM `main` REACHES HAS NO BODY LOWERED, AND THE REASON IS THE
 			// WHITELIST'S BYTE-NEUTRALITY INVARIANT** (`StdlibLoader`: "adding a module changes NOTHING for a
 			// program that does not use it"). This pass is PRE-ELIMINATION, and lowering a body REGISTERS
-			// `.rdata`: `lowerStringLiteral` mints a blob + a record, `lowerByteStringLiteral` mints a blob,
+			// `.rdata`: `lowerStringLiteral` mints a blob + a record, `lowerConstArrayLiteral` mints a blob,
 			// and `ensureWitnessTable`/`ensureLayoutDescriptor` mint a labelled payload. Dead-function
 			// elimination prunes FUNCTIONS, never `.rdata`, so every one of those SURVIVES its own function —
 			// and `GlobalDataTable.nextStringId` is ONE counter shared by every rdata prefix, so a surviving
@@ -889,7 +889,7 @@ type MaxonToStdLowering
 			// parser folds every CONCRETE sizeof to a literal, so this op only ever carries a typeParameter.
 			sizeofType(result, targetType) then self.lowerSizeofType(result, targetType: targetType, dstBlock: dstBlock)
 			// P1.7 slice 2: a `b"…"` literal — an owned heap `Array with Byte` record over an immortal rdata blob.
-			byteStringLiteral(result, bytes) then self.lowerByteStringLiteral(result, bytes: bytes, dstBlock: dstBlock)
+			constArrayLiteral(result, elementSize, elementCount, bytes) then self.lowerConstArrayLiteral(result, elementSize: elementSize, elementCount: elementCount, bytes: bytes, dstBlock: dstBlock)
 			// The dense-match jump table is ALWAYS a block terminator, never a body op — see `lowerTerminator`.
 			switch then panic("lowerMaxonToStd: a `switch` op appeared as a body op (parser bug — the jump table is always a block terminator)")
 			// A constrained-type-parameter dispatch (P1.7a slice 2a) — materialize/forward the witness address
@@ -933,7 +933,7 @@ type MaxonToStdLowering
 			indirectCall then panic("lowerMaxonToStd: an `indirectCall` op appeared as a block terminator (parser bug — an indirect call is a value-producing body op, never a terminator)")
 			asyncCall to tryAwait then panic("lowerMaxonToStd: an async/await op appeared as a block terminator (parser bug — `async`/`await`/`try await` are value-producing body ops, never terminators)")
 			sizeofType then panic("lowerMaxonToStd: a `sizeofType` op appeared as a block terminator (parser bug — sizeof is a value-producing body op, never a terminator)")
-			byteStringLiteral then panic("lowerMaxonToStd: a `byteStringLiteral` op appeared as a block terminator (parser bug — a byte-string literal is a value-producing body op, never a terminator)")
+			constArrayLiteral then panic("lowerMaxonToStd: a `constArrayLiteral` op appeared as a block terminator (parser bug — a constant array literal is a value-producing body op, never a terminator)")
 			witnessDispatch to witnessTryDispatch then panic("lowerMaxonToStd: a `witnessDispatch` op appeared as a block terminator (parser bug — a witness dispatch is a value-producing body op, never a terminator)")
 			panicAbortValue then panic("lowerMaxonToStd: a `panicAbortValue` op appeared as a block terminator (parser bug — like `panicAbort` it is a body op followed by a dead return terminator)")
 		end 'lower'
@@ -970,17 +970,23 @@ type MaxonToStdLowering
 		self.stdModule.appendOp(dstBlock, op: StdOp.rdataAddr(result, label: recordLabel.toByteArray()))
 	end 'lowerStringLiteral'
 
-	// ⭐ **A `b"…"` BYTE-STRING LITERAL (P1.7 slice 2)** — the Array analogue of `lowerStringLiteral`, and it
-	// DIVERGES from it in exactly one place: a String literal is a FULLY rdata record (immortal, never
-	// dropped), while a byte-string is a first-class OWNED `Array with Byte` — so the RECORD is `__mm_alloc`'d
-	// (giving it the MM header + refcount the ownership model drops through `__arr_decref`) while only the
-	// element BUFFER stays in immortal `.rdata`. `capacity@16` is the negative rdata sentinel `__arr_decref`
-	// reads to skip freeing that buffer; `element_size@24` is 1 so the byte-packed blob strides one byte per
-	// element. `bytes` is already Latin-1-decoded (`Parser.decodeByteStringLiteral`), so this is pure emission.
+	// ⭐ **A CONSTANT ARRAY LITERAL OVER AN IMMORTAL `.rdata` BLOB** — the Array analogue of
+	// `lowerStringLiteral`, and it DIVERGES from it in exactly one place: a String literal is a FULLY rdata
+	// record (immortal, never dropped), while this is a first-class OWNED array — so the RECORD is
+	// `__mm_alloc`'d (giving it the MM header + refcount the ownership model drops through `__arr_decref`)
+	// while only the element BUFFER stays in immortal `.rdata`. `capacity@16` is the negative rdata sentinel
+	// `__arr_decref` reads to skip freeing that buffer. `bytes` is pure payload by the time it arrives — a
+	// `b"…"` is already Latin-1-decoded (`Parser.decodeByteStringLiteral`) and a packed literal is already
+	// bit-packed (`Parser.packConstantElements`) — so this is emission and nothing else.
+	//
+	// ⭐ **`element_size@24` AND `length@8` ARE THE OP'S, NOT THIS FUNCTION'S**, which is what lets one
+	// emission serve both producers: a `b"…"` passes 1 and its byte count, a PACKED literal passes a NEGATIVE
+	// bit width and its ELEMENT count — a number that is no longer `bytes.count()`, because four 2-bit
+	// elements share one byte. Hardcoding either here is what would fork this into two lowerings.
 	//
 	// Only the FOUR non-zero fields are stamped: `parent@32` and `element_destroy@40` come pre-zeroed from
 	// `__mm_alloc`'s zeroing contract (the same one `__arr_create` relies on to leave them unwritten).
-	function lowerByteStringLiteral(result ValueId, bytes ByteArray, dstBlock IrBlock)
+	function lowerConstArrayLiteral(result ValueId, elementSize ParsedInt, elementCount ParsedInt, bytes ByteArray, dstBlock IrBlock)
 		let blobLabel = registerByteArrayLiteralBlob(self.globalData, bytes: bytes)
 
 		// result = __mm_alloc(ArrRecordBytes, 0) — the owned heap 48-byte record (MM header + refcount before it).
@@ -996,29 +1002,32 @@ type MaxonToStdLowering
 		// buffer@0 = &blob (immortal `.rdata`, materialized by a RIP-relative lea — never freed).
 		let blobAddr = self.mintStdValueId()
 		self.stdModule.appendOp(dstBlock, op: StdOp.rdataAddr(blobAddr, label: blobLabel.toByteArray()))
-		self.emitByteStringField(result, offset: ArrBufferOffset, value: blobAddr, dstBlock: dstBlock)
+		self.emitConstArrayField(result, offset: ArrBufferOffset, value: blobAddr, dstBlock: dstBlock)
 
-		// length@8 = the byte count.
+		// length@8 = the ELEMENT count, which equals the byte count only when an element is a byte.
 		let lengthId = self.mintStdValueId()
-		self.stdModule.appendOp(dstBlock, op: StdOp.const(lengthId, value: bytes.count() as ParsedInt, valueType: StdType.i64))
-		self.emitByteStringField(result, offset: ArrLengthOffset, value: lengthId, dstBlock: dstBlock)
+		self.stdModule.appendOp(dstBlock, op: StdOp.const(lengthId, value: elementCount, valueType: StdType.i64))
+		self.emitConstArrayField(result, offset: ArrLengthOffset, value: lengthId, dstBlock: dstBlock)
 
 		// capacity@16 = the rdata sentinel (< 0) — tells `__arr_decref` the buffer is immortal.
 		let capacityId = self.mintStdValueId()
 		self.stdModule.appendOp(dstBlock, op: StdOp.const(capacityId, value: RdataBufferCapacity, valueType: StdType.i64))
-		self.emitByteStringField(result, offset: ArrCapacityOffset, value: capacityId, dstBlock: dstBlock)
+		self.emitConstArrayField(result, offset: ArrCapacityOffset, value: capacityId, dstBlock: dstBlock)
 
-		// element_size@24 = 1 (a byte is one byte, so the blob is byte-packed and `.get(i)` strides by 1).
+		// element_size@24 — 1 for a `b"…"` (a byte is one byte, so `.get(i)` strides by 1), a NEGATIVE bit
+		// width for a packed literal (`.get(i)` then reads its field out of a byte it shares).
 		let elementSizeId = self.mintStdValueId()
-		self.stdModule.appendOp(dstBlock, op: StdOp.const(elementSizeId, value: ByteStringElementSize, valueType: StdType.i64))
-		self.emitByteStringField(result, offset: ArrElementSizeOffset, value: elementSizeId, dstBlock: dstBlock)
-	end 'lowerByteStringLiteral'
+		self.stdModule.appendOp(dstBlock, op: StdOp.const(elementSizeId, value: elementSize, valueType: StdType.i64))
+		self.emitConstArrayField(result, offset: ArrElementSizeOffset, value: elementSizeId, dstBlock: dstBlock)
+	end 'lowerConstArrayLiteral'
 
-	// Store `value` into the byte-string record's `offset` field (an 8-byte slot). The one store shape the
-	// four field stamps share, so the record layout is written in one place.
-	function emitByteStringField(record ValueId, offset ByteOffset, value ValueId, dstBlock IrBlock)
+	// Store `value` into the constant array record's `offset` field (an 8-byte slot). The one store shape the
+	// four field stamps share, so the record layout is written in one place. Named for the RECORD rather than
+	// for the `b"…"` literal that was once its only producer: a PACKED array literal stamps the same four
+	// fields through it, and two of the four now carry a value a byte string never had.
+	function emitConstArrayField(record ValueId, offset ByteOffset, value ValueId, dstBlock IrBlock)
 		self.stdModule.appendOp(dstBlock, op: StdOp.storeIndirect(record, offset: offset, valueId: value, valueType: StdType.i64))
-	end 'emitByteStringField'
+	end 'emitConstArrayField'
 
 	// Emit one `StdOp.param` per parameter at the function's ENTRY block, before any
 	// body op. Parameter `i` is ValueId `i` (the ids the parser reserved), of the

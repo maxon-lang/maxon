@@ -240,7 +240,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:3:17: Unsupported: `String` static 'create' — the reference provides from/init; `fromOwnedBytes` is deliberately not exported — trusting arbitrary bytes is not a promise the stdlib lets any caller make — and there is no `from(codepoints)` at all
+error E2015: <fragment>:3:17: Unsupported: `String` static 'create' — the reference provides from/init; that list IS the surface, so nothing else is served here
 ```
 
 <!-- test: error.codepoint-is-a-compiler-owned-type-name -->

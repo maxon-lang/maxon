@@ -1025,18 +1025,32 @@ export union MaxonOp
 	// Its `OpCategory.plain` (it stands alone, matched by variant — like `stringLiteral`) is metadata
 	// independent of this tail position.
 	//
-	// A `b"…"` literal — an `Array with Byte` whose bytes are a compile-time constant. `bytes` is the
-	// DECODED Latin-1 payload (`Parser.decodeByteStringLiteral`: escapes resolved, each source codepoint
-	// mapped to one byte, a codepoint above 0xFF already rejected E1004). It lowers to a heap 48-byte
-	// Array record (`__mm_alloc`) whose `buffer@0` points at the bytes in immortal `.rdata` and whose
-	// `capacity@16` is the rdata sentinel `-2` (the buffer is never freed) — the Array analogue of a
-	// String literal's immortal blob, but with an owned heap RECORD so the value is a first-class owned
-	// `Array with Byte` the ownership model drops through `__arr_decref` (which skips the rdata buffer on
-	// the `capacity < 0` sentinel). `result` is the record pointer. Category `plain` (stands alone).
-	byteStringLiteral(result ValueId, bytes ByteArray) = MaxonOpMeta{category: OpCategory.plain}
+	// ⭐⭐ **A CONSTANT ARRAY WHOSE BUFFER IS AN IMMORTAL `.rdata` BLOB.** It lowers to a heap 48-byte Array
+	// record (`__mm_alloc`) whose `buffer@0` points at `bytes` in `.rdata` and whose `capacity@16` is the
+	// rdata sentinel `-2` (the buffer is never freed) — the Array analogue of a String literal's immortal
+	// blob, but with an owned heap RECORD so the value is a first-class owned array the ownership model drops
+	// through `__arr_decref` (which skips the rdata buffer on the `capacity < 0` sentinel). `result` is the
+	// record pointer. Category `plain` (stands alone).
+	//
+	// ⭐ **TWO PRODUCERS, ONE OP, AND THE SECOND IS WHY IT CARRIES ITS STAMPS.** It was `byteStringLiteral`,
+	// serving `b"…"` alone with `element_size` and `length` HARDCODED to 1 and `bytes.count()`. A packed
+	// constant array literal (`[0 as Q, 1 as Q, 2 as Q, 3 as Q]`, `ranged-int-bit-packing`) is the identical
+	// record over an identical immortal blob and differs in exactly those two numbers — its blob is
+	// `ceil(count·bits/8)` bytes and its stride is a NEGATIVE bit width — so the honest fix was to let the op
+	// carry them rather than to grow a second lowering that would drift from this one. A `b"…"` passes 1 and
+	// `bytes.count()` and emits byte-for-byte what it always did.
+	//
+	// ⚠ `bytes` stays the TAIL field, and that is deliberate: the two stamps are appended BEFORE it, not
+	// after, so the union variant's only managed Array field keeps the slot it had (the tail-slot trap
+	// `indirectCall` documents).
+	//
+	// ⚠ For a `b"…"` the payload is the DECODED Latin-1 text (`Parser.decodeByteStringLiteral`: escapes
+	// resolved, each source codepoint mapped to one byte, a codepoint above 0xFF already rejected E1004).
+	// For a packed literal it is the LSB-first bit image `Parser.packConstantElements` lays down.
+	constArrayLiteral(result ValueId, elementSize ParsedInt, elementCount ParsedInt, bytes ByteArray) = MaxonOpMeta{category: OpCategory.plain}
 	// --- P1.1b slice 2: the DENSE-match jump table ---
 	//
-	// ⚠ APPENDED AT THE END OF THE UNION, past `byteStringLiteral`, per the band-append invariant: a
+	// ⚠ APPENDED AT THE END OF THE UNION, past `constArrayLiteral`, per the band-append invariant: a
 	// mid-union insert is silently swallowed by any range arm (`literal to storeIndirect`, the category
 	// ranges). Its `OpCategory.plain` is metadata independent of this tail position — like the other
 	// terminators (`ret`/`condBranch`/`branch`), the Maxon-tier `OpCategory` classifies call/effect shape,
@@ -1230,7 +1244,7 @@ export function maxonOpCalleeKind(op MaxonOp) returns MaxonCalleeKind
 		await gives MaxonCalleeKind.noCallee
 		tryAwait gives MaxonCalleeKind.noCallee
 		sizeofType gives MaxonCalleeKind.noCallee
-		byteStringLiteral gives MaxonCalleeKind.noCallee
+		constArrayLiteral gives MaxonCalleeKind.noCallee
 		switch gives MaxonCalleeKind.noCallee
 		witnessDispatch gives MaxonCalleeKind.noCallee
 		witnessTryDispatch gives MaxonCalleeKind.noCallee

@@ -595,7 +595,7 @@ export union ParseError implements Error
 	// alias, so there is no `low`/`high` pair every subject has — only a NAME, which for a ranged element
 	// carries its declared range beside it. The renderer cannot choose between those two shapes, because the
 	// choice needs the signatures; `builtinArgumentType`'s `got:` is the same split for the same reason.
-	rawByteWriteSlotDomain(member String, elementDisplay String, slotBytes ByteOffset, line LineNumber, column ColumnNumber)
+	rawByteWriteSlotDomain(member String, elementDisplay String, slotBytes ElementStride, line LineNumber, column ColumnNumber)
 	// --- The struct arms (P1.0r) ---
 	//
 	// A struct literal (`Point{…}`) written outside the type's OWN methods. Renders as E3076,
@@ -746,7 +746,8 @@ export union ParseError implements Error
 	// default: the language will not silently do nothing for an unmatched value.
 	matchNotExhaustive(subject String, line LineNumber, column ColumnNumber)
 	// Two arms test the same single value (`1 then … 1 then …`). Renders as **E2027**, positioned at
-	// the duplicate pattern. `pattern` is the value as written, for the message.
+	// the duplicate pattern. `pattern` is the pattern AS THE SOURCE SPELLS IT — which for a `bool` arm is
+	// not the folded value it compares as (`duplicatePatternDisplay` carries that measurement).
 	matchDuplicatePattern(pattern String, line LineNumber, column ColumnNumber)
 	// A pattern whose type cannot be compared to the scrutinee's — a `"string"` pattern on an `int`
 	// scrutinee, say. Renders as **E2028**, positioned at the pattern. Both type names ride along
@@ -1081,7 +1082,7 @@ function asyncCalleeIfMatch(op MaxonOp, promise ValueId) returns AsyncCalleeLook
 		asyncCall(result, callee, _, _, _, _, _) gives foundCalleeIfEqual(result, callee: callee, promise: promise)
 		await to tryAwait gives AsyncCalleeLookup.none
 		sizeofType gives AsyncCalleeLookup.none
-		byteStringLiteral gives AsyncCalleeLookup.none
+		constArrayLiteral gives AsyncCalleeLookup.none
 		switch gives AsyncCalleeLookup.none
 		witnessDispatch to witnessTryDispatch gives AsyncCalleeLookup.none
 		panicAbortValue gives AsyncCalleeLookup.none
@@ -2235,6 +2236,20 @@ export let TrivialDestructor = 0 as ParsedInt
 // and the folding one at top level (`evalConstArrayLiteral`, P1.7 slice 2b). Two copies would let the same
 // mistake be described two ways depending on where it was written.
 let MixedArrayLiteralElementsMessage = "an array literal with mixed element types — every element must have the same type as the first"
+
+// ⭐ **ONE `, e` STEP OF AN ARRAY LITERAL — the parsed element and where its FIRST TOKEN was.** The pair
+// travels together because its two consumers each need both and for the same reason: the value is what gets
+// pushed (or collected), and the start index is what `moveElementIntoContainer` reads to decide whether the
+// element was a bare local to poison. Returned as one value rather than left at the two call sites, so the
+// element rule and the newline rule have ONE home — see `parseArrayLiteralTailElement`.
+type ArrayLiteralElement
+	export var value as ValueId
+	export var start as TokenIndex
+
+	export static function create(value ValueId, start TokenIndex) returns ArrayLiteralElement
+		return Self{value: value, start: start}
+	end 'create'
+end 'ArrayLiteralElement'
 
 // ⚠ **THE EMPTY LITERAL IS REFUSED IN BOTH POSITIONS AND THE ADVICE DIFFERS, so this text is deliberately
 // NOT shared with `parseArrayLiteral`'s.** The defect is identical — `[]` carries no element to infer a
@@ -3486,19 +3501,19 @@ end 'arrayMethodMutatesReceiver'
 // it is provided. The pairing cannot be verified at install time (an arm is a control-flow position, not an
 // entry in a table something can enumerate), so the check sits at the one moment it is observable.
 //
-// ⚠ **`elementSize`, `remove`, `swap`, `shiftLeft`/`shiftRight` and the cstring/cursor members are ABSENT
-// ON PURPOSE, and the refusal says so.** Every one is a real `__ManagedMemory` member in both references
-// (bootstrap `2-Parser.cs:1481-1516`, v1 `LowerMaxonToStd.maxon:1618-1660`) and none is BUILT here — the
-// only caller of `remove`/`swap`/`shiftRight`/`elementSize` anywhere is `stdlib/Array.maxon`, which is not
-// a whitelisted module and which shv2 cannot compile at all, and the cstring family takes a type shv2 has
-// no producer for. Each arrives with the rung that builds it, and that rung adds its line HERE.
+// ⚠ **`remove`, `swap`, `shiftLeft`/`shiftRight` and the cstring/cursor members are ABSENT ON PURPOSE.**
+// Every one is a real `__ManagedMemory` member in both references (bootstrap `2-Parser.cs:1481-1516`, v1
+// `LowerMaxonToStd.maxon:1618-1660`) and none is BUILT here — the only caller of `remove`/`swap`/`shiftRight`
+// anywhere is `stdlib/Array.maxon`, which is not a whitelisted module and which shv2 cannot compile at all,
+// and the cstring family takes a type shv2 has no producer for. Each arrives with the rung that builds it,
+// and **that rung adds its line HERE and has nothing else to remember.**
 //
-// ⚠⚠ **AND THAT RUNG MUST STRIKE THE NAME FROM THE REFUSAL'S `are not built` CLAUSE IN THE SAME EDIT.** Only
-// the ROSTER half of that sentence is derived; the `are not built` half is still a LITERAL in the message
-// (the gate below, and again in `parseManagedMemoryStaticCall` for the statics). Add `remove` here and forget
-// it there, and one sentence says `R4.4 provides …/remove` and `remove … is not built` — D11b's own bug, in
-// the message D11b made authoritative. It is a literal rather than a rendered list because rendering it would
-// reword 34 committed goldens; that is a cleanup, not a reason the obligation is optional.
+// ⭐⭐ **THAT LAST CLAUSE USED TO BE FALSE, AND `elementSize` IS WHAT PROVED IT.** The refusal carried a
+// hand-written `are not built` tail LISTING these names, so a rung had a standing obligation to strike its
+// name from a second place in the same edit — and when `ranged-int-bit-packing` built `elementSize`, that
+// tail would have claimed a member the roster right above it now provides, across 21 committed pins. The
+// tail is gone (`rosterRefusalSentence`, which carries the measurement): the roster IS the claim, so adding a
+// name here is the whole edit and cannot leave a sentence contradicting itself.
 function bufferSurfaceMemberNames() returns ByteArrayArray
 	var names = ByteArrayArray.create()
 	names.push(ManagedMemoryLengthMethod)
@@ -3508,6 +3523,7 @@ function bufferSurfaceMemberNames() returns ByteArrayArray
 	names.push(ManagedMemorySetLengthMethod)
 	names.push(ManagedMemorySetByteMethod)
 	names.push(ManagedMemoryByteAtMethod)
+	names.push(ManagedMemoryElementSizeMethod)
 	names.push(ManagedMemoryGrowMethod)
 	names.push(AppendMethod)
 	names.push(SliceMethod)
@@ -3536,9 +3552,9 @@ end 'bufferSurfaceMemberNames'
 // `count` is the `Array`'s spelling of what the buffer calls `length`; the two share an emission and NEVER
 // a surface.
 //
-// ⚠ **AND THE NAMES NEITHER SURFACE HAS** — `map`/`contains`/… — are the refusal's "arrive later" tail. A
-// rung that builds one adds its line HERE and strikes it from that tail in the same edit, which is the
-// obligation `bufferSurfaceMemberNames`'s own `are not built` clause carries.
+// ⚠ **AND THE NAMES NEITHER SURFACE HAS** — `map`/`contains`/… — are simply not on this list, which is the
+// whole of what the refusal now claims. A rung that builds one adds its line HERE and has nothing else to
+// remember; see `rosterRefusalSentence` for why the refusal stopped enumerating them.
 function arraySurfaceMemberNames() returns ByteArrayArray
 	var names = ByteArrayArray.create()
 	names.push(ManagedMemoryFieldName)
@@ -3587,11 +3603,14 @@ end 'arraySurfaceMemberNames'
 // through `builtinConformerMethod`, so a name it can supply must be a name this gate admits — one list
 // serving the gate, the message and the drift panic at once.
 //
-// ⚠⚠ **AND THE RUNG THAT BUILDS ONE OF THE ABSENT NAMES ADDS ITS LINE HERE AND STRIKES IT FROM THE
-// REFUSAL'S TAIL CLAUSE IN THE SAME EDIT** — `bufferSurfaceMemberNames`' obligation, verbatim, for the same
-// reason: only the ROSTER half of that sentence is derived. `indexBefore` waits on a BACKWARD UAX#29
-// segmenter, `charAt` on `makeCharFromBytes`, and `graphemes` has no consumer yet; add one here and forget it
-// there, and one sentence will both provide a member and call it unbuilt.
+// ⚠ **THE RUNG THAT BUILDS ONE OF THE ABSENT NAMES ADDS ITS LINE HERE AND HAS NOTHING ELSE TO REMEMBER.**
+// `indexBefore` waits on a BACKWARD UAX#29 segmenter, `charAt` on `makeCharFromBytes`, and `graphemes` has no
+// consumer yet — facts worth recording, and recorded HERE rather than in the refusal, which no longer
+// enumerates what it lacks (`rosterRefusalSentence`).
+//
+// ⚠ `addressableBytes` and `byteAtOrPanic` ARE built and ARE on this roster; what they are not is callable
+// from outside `stdlib/`, which is a different gate's rule and is refused by that gate with its own sentence.
+// The roster refusal used to say so too, which is how one fact came to be maintained in two places.
 //
 // ⚠⚠ **AND THAT IS THE THIRD TIME THIS SENTENCE WAS WRONG — the first two are recorded above, and this one
 // was WRONG ABOUT WHY RATHER THAN ABOUT WHAT.** It named `charAt`/`indexAfter`/`indexBefore` as one group
@@ -3677,11 +3696,10 @@ end 'stringIndexSurfaceMemberNames'
 // added `init(managed)` beside `from(bytes)`) — the very edit that made the spec case asserting the COUNT
 // false, as its own header records.
 //
-// ⚠ **NOTHING IS ABSENT FROM IT THAT SHV2 OWES.** Unlike the five surfaces above, whose tails name members a
-// later rung builds, this list is COMPLETE against `stdlib/String.maxon:114,119`: `fromOwnedBytes` is
-// unexported by the reference itself and `from(codepoints)` does not exist there. So a rung adds a line here
-// only if the REFERENCE gains a static — and then it strikes the matching phrase from the tail clause in
-// `surfaceRosterRefusal`, which is `bufferSurfaceMemberNames`' obligation and holds identically here.
+// ⚠ **NOTHING IS ABSENT FROM IT THAT SHV2 OWES.** Unlike the five surfaces above, whose rosters a later rung
+// extends, this list is COMPLETE against `stdlib/String.maxon:114,119`: `fromOwnedBytes` is unexported by the
+// reference itself and `from(codepoints)` does not exist there. So a rung adds a line here only if the
+// REFERENCE gains a static.
 function stringStaticMemberNames() returns ByteArrayArray
 	var names = ByteArrayArray.create()
 	names.push(FromMethod)
@@ -3785,8 +3803,28 @@ end 'rosterList'
 // mistake about a VALUE, so a reader told *"`String` member 'create'"* after writing `String.create()` is
 // being pointed at the instance door — the very mis-aim the surface key exists to stop, arriving one word
 // later. Five surfaces pass `member` and mean it; the sixth would be lying with it.
-function rosterRefusalSentence(typeName ByteArray, member ByteArray, roster ByteArrayArray, noun String, provider String, absentClause String) returns String
-	return "`{String.from(typeName)}` {noun} '{String.from(member)}' — {provider} provides {rosterList(roster)}; {absentClause}"
+//
+// ⚠⚠ **IT NO LONGER ASSERTS WHAT IS ABSENT, AND THAT IS THE POINT OF THIS SHAPE.** Each surface used to pass
+// an `absentClause` — a HAND-WRITTEN list of the members it does not have, with a reason for each. Half of
+// this sentence was therefore derived from the roster the dispatch actually gates on, and half was a literal
+// that no gate could check. **The derived half cannot rot; the literal half rots the moment anyone builds one
+// of the things it says is missing** — and it rots INVISIBLY, because the sentence still reads as though it
+// were authoritative. MEASURED at the moment it happened: building `elementSize` (`ranged-int-bit-packing`)
+// made the buffer's clause claim a member the very next line served, across **21 committed `maxoncstderr`
+// pins and 66 fragments**, and the roster's own header had to carry a standing instruction to strike the name
+// by hand in the same edit. An obligation a reviewer has to remember is a rule the code should enforce.
+//
+// ⇒ **THE ROSTER IS THE WHOLE CLAIM.** The gate admits EXACTLY the names on it (`bufferSurfaceMemberNames`
+// and its four siblings, each verified against its own dispatch arms by `rosterDriftMessage`'s panic), so
+// "nothing else is served here" is not a second fact to keep true — it is what the list already says, and it
+// stays true for free as the surface grows.
+//
+// ⚠ It deliberately does NOT hint at what might exist elsewhere. `create` being a STATIC and
+// `addressableBytes` being STDLIB-ONLY are real facts, but they are facts about OTHER doors, and a door's own
+// refusal is the wrong place to describe them: each is owned by the gate that enforces it, where it can be
+// checked. A blanket sentence naming them here is how they came to be maintained in two places at once.
+function rosterRefusalSentence(typeName ByteArray, member ByteArray, roster ByteArrayArray, noun String, provider String) returns String
+	return "`{String.from(typeName)}` {noun} '{String.from(member)}' — {provider} provides {rosterList(roster)}; that list IS the surface, so nothing else is served here"
 end 'rosterRefusalSentence'
 
 // The two nouns `surfaceRosterRefusal` names a surface's entries by — a VALUE's members, and a TYPE's
@@ -3820,11 +3858,10 @@ end 'rosterDriftMessage'
 // which sentence answers — because a roster must answer for the type it is shown about: a reader handed the
 // `Array` list for a `__ManagedMemory` receiver is sent to the wrong question entirely.
 //
-// ⚠ Each surface supplies only the three things that genuinely differ — the TYPE it answers for, WHO
-// provides the roster, and the trailing clause naming what is deliberately ABSENT. That trailing clause is
-// the one half of each sentence still hand-written, and it carries the obligation the roster functions above
-// state: a rung that adds a member adds its line to the roster and strikes the name from the tail HERE, in
-// the same edit.
+// ⚠ Each surface supplies only the TWO things that genuinely differ — the TYPE it answers for and WHO
+// provides the roster. It used to supply a third, a trailing clause naming what was deliberately ABSENT, and
+// that clause was the one half of each sentence no gate could check; `rosterRefusalSentence` carries what
+// building `elementSize` measured about it.
 //
 // ⚠⚠ **IT IS KEYED ON `MemberSurface`, WHICH IS THE POINT OF THAT ENUM AND WAS HALF-DONE (found in review,
 // A2q).** A2q introduced the enum as "the memo's key, the builder's selector and the refusal's subject at
@@ -3834,30 +3871,30 @@ end 'rosterDriftMessage'
 // down. One home, one key, one `if`-chain that a sixth surface cannot silently fall through.
 function surfaceRosterRefusal(surface MemberSurface, member ByteArray, roster ByteArrayArray) returns String
 	if surface == MemberSurface.buffer 'bufferSurface'
-		return rosterRefusalSentence(ManagedMemoryTypeName, member: member, roster: roster, noun: SurfaceMemberNoun, provider: "R4.4", absentClause: "`elementSize`/`remove`/`swap`/`shiftLeft`/`shiftRight` and the cstring/cursor members (`toCString`, `fromCString`, `createCursor`, `makeCharFromBytes`) are not built — no spec reaches them, and the cstring family needs a `cstring` type shv2 has no producer for")
+		return rosterRefusalSentence(ManagedMemoryTypeName, member: member, roster: roster, noun: SurfaceMemberNoun, provider: "R4.4")
 	end 'bufferSurface'
 
 	if surface == MemberSurface.array 'arraySurface'
-		return rosterRefusalSentence(ArrayBuiltinBaseName, member: member, roster: roster, noun: SurfaceMemberNoun, provider: "P1.7", absentClause: "`create` is a STATIC factory (`Array.create(…)`), not a member; the rest (map/contains/…) arrive later")
+		return rosterRefusalSentence(ArrayBuiltinBaseName, member: member, roster: roster, noun: SurfaceMemberNoun, provider: "P1.7")
 	end 'arraySurface'
 
 	if surface == MemberSurface.string 'stringSurface'
-		return rosterRefusalSentence(StringConformerName, member: member, roster: roster, noun: SurfaceMemberNoun, provider: "shv2", absentClause: "`{String.from(StringAddressableBytesMethod)}` and `{String.from(StringByteAtOrPanicMethod)}` are STDLIB-ONLY (a file under `stdlib/` alone may call them); `indexBefore` needs a BACKWARD UAX#29 segmenter (`findGraphemeStart`), `charAt` needs `makeCharFromBytes`, and `graphemes` has no consumer yet")
+		return rosterRefusalSentence(StringConformerName, member: member, roster: roster, noun: SurfaceMemberNoun, provider: "shv2")
 	end 'stringSurface'
 
 	if surface == MemberSurface.character 'characterSurface'
-		return rosterRefusalSentence(CharacterConformerName, member: member, roster: roster, noun: SurfaceMemberNoun, provider: "shv2", absentClause: "`codepoint`/`codepoints`/`compare`/`hash`/`clone` and the static `fromCodepoint` have no consumer in the corpus")
+		return rosterRefusalSentence(CharacterConformerName, member: member, roster: roster, noun: SurfaceMemberNoun, provider: "shv2")
 	end 'characterSurface'
 
 	if surface == MemberSurface.stringIndex 'stringIndexSurface'
-		return rosterRefusalSentence(StringIndexTypeName, member: member, roster: roster, noun: SurfaceMemberNoun, provider: "shv2", absentClause: "the reference's `equals`/`compare` are reached through `==`/`<` instead, and of the other consumers of an index `String.charAt` needs `makeCharFromBytes` and `String.indexBefore` a BACKWARD UAX#29 segmenter (`String.indexAfter` is built)")
+		return rosterRefusalSentence(StringIndexTypeName, member: member, roster: roster, noun: SurfaceMemberNoun, provider: "shv2")
 	end 'stringIndexSurface'
 
 	// ⚠ The provider is THE REFERENCE and not a rung, because this roster is not a subset it grows towards:
 	// `stdlib/String.maxon` exports exactly these two and shv2 serves both. So the tail names what the
 	// REFERENCE withholds rather than what shv2 has yet to build — the one surface here where those differ.
 	if surface == MemberSurface.stringStatic 'stringStaticSurface'
-		return rosterRefusalSentence(StringConformerName, member: member, roster: roster, noun: SurfaceStaticNoun, provider: "the reference", absentClause: "`fromOwnedBytes` is deliberately not exported — trusting arbitrary bytes is not a promise the stdlib lets any caller make — and there is no `{String.from(FromMethod)}(codepoints)` at all")
+		return rosterRefusalSentence(StringConformerName, member: member, roster: roster, noun: SurfaceStaticNoun, provider: "the reference")
 	end 'stringStaticSurface'
 
 	panic("surfaceRosterRefusal: no refusal sentence for a `MemberSurface` this function does not cover — a surface added to the enum without one, which every gate reading it would then refuse with another type's roster")
@@ -4531,7 +4568,7 @@ end 'requireByteCodepoint'
 // reads back **44**. One producer refused and its twin accepted was the defect; the message is shared so
 // that stays impossible to re-create.
 //
-// `LowerMaxonToStd.lowerByteStringLiteral` lays the blob out one byte per element and stamps
+// `LowerMaxonToStd.lowerConstArrayLiteral` lays the blob out one byte per element and stamps
 // `element_size@24 = ByteStringElementSize` to match it; every OTHER `Array with Byte` record — `.create()`,
 // a global's `__arr_create`, a `clone`/`slice` of either — is stamped from `ProgramSignatures.arrayElementSize`,
 // which sizes the element from `Byte`'s DECLARED range. The two agree for the canonical `int(0 to u8.max)`
@@ -5169,7 +5206,26 @@ typealias ValueInstanceAliasMap = Map with (ValueId, TypeNameId)
 // result, an expression — `rhsWasBareLocalReference` is the same question the move-poison asks, and it is
 // asked of the same token range) means the value has no other name to corrupt. The cost is a FALSE
 // NEGATIVE — `let x = t as Byte` for a bare local `t` records nothing, so a later `x as Byte` goes
-// unreported — and a missing diagnostic is the safe direction where a false rejection is not.
+// unreported.
+//
+// ⚠⚠ **"A MISSING DIAGNOSTIC IS THE SAFE DIRECTION" WAS THIS MAP'S WHOLE SAFETY ARGUMENT, AND IT HELD ONLY
+// WHILE E3010 WAS ITS ONLY READER. IT NO LONGER IS** (found in review of `ranged-int-bit-packing`).
+// `arrayLiteralInstanceFor` now reads it to decide an array literal's ELEMENT TYPE, which decides the
+// record's `element_size@24` — so the false negative is no longer a diagnostic that does not fire, it is a
+// REPRESENTATION. MEASURED on this tree, with `typealias N = int(0 to 15)`:
+//
+//   • `[7 as N, 3 as N]`      ⇒ `Array with N`,   `elementSize()` = **-4** (packed)
+//   • `[v as N, w as N]`      ⇒ `Array with int`, `elementSize()` = **8**  (both operands bare locals)
+//   • `[v as N, 3 as N]`      ⇒ **E2015 "mixed element types"**, on a literal whose two elements are
+//                               written with the SAME type — and which compiled before this rung
+//
+// ⇒ **A SECOND READER NEEDS A SECOND ARGUMENT, AND THIS ONE DOES NOT HAVE IT.** The fix is not here: a
+// no-op cast whose source is a bare local has no distinct ValueId to carry the alias, so the alias must be
+// given one — a fourth `applyCast` re-tag predicate beside `castChangesTheShiftFill` /
+// `castChangesTheDivisionProof` ("the target alias PACKS and the source's does not"), which mints through
+// `emitRetaggedCastValue` exactly as those two do and propagates the parser's constant view across the
+// mint. That is a change to `applyCast`'s contract with corpus-wide golden reach (`int(0 to 5)`,
+// `int(0 to 7)` and `int(0 to 10)` all pack), so it is filed here rather than smuggled into a review commit.
 //
 // ⚠ **THE RULE, NOT A ROSTER: a float-alias value is recorded when it is a CALL RESULT, and is not
 // recorded anywhere else.** Every other producer of one erases the alias by the same lift and goes
@@ -16121,7 +16177,7 @@ export type Parser
 			literal to asyncCall gives try self.rejectTryTarget(tryTok)
 			tryAwait gives try self.rejectTryTarget(tryTok)
 			sizeofType gives try self.rejectTryTarget(tryTok)
-			byteStringLiteral gives try self.rejectTryTarget(tryTok)
+			constArrayLiteral gives try self.rejectTryTarget(tryTok)
 			switch gives try self.rejectTryTarget(tryTok)
 			// A throwing WITNESS dispatch (`try self.item.digest()`, P1.7a slice 2b-v) — rewritten into the
 			// dual-register `witnessTryDispatch` defining the error flag, exactly as `call` becomes `tryCall`.
@@ -22395,10 +22451,36 @@ export type Parser
 	// linear scan reported — in O(1) rather than O(seen).
 	function recordDuplicateInt(value ParsedInt, seenValues SeenPatternValues, patternTok Token) throws ParseError
 		if seenValues.contains(value) 'duplicate'
-			throw ParseError.matchDuplicatePattern("{value}", line: patternTok.line, column: patternTok.column)
+			throw ParseError.matchDuplicatePattern(duplicatePatternDisplay(patternTok, value: value), line: patternTok.line, column: patternTok.column)
 		end 'duplicate'
 		seenValues.insert(value)
 	end 'recordDuplicateInt'
+
+	// ⭐ **HOW A DUPLICATE PATTERN IS NAMED — THE SOURCE SPELLING, WHICH IS NOT ALWAYS THE FOLDED VALUE.**
+	// A `bool` pattern folds to `BoolTrueValue`/`BoolFalseValue` — 1 and 0 — so a message built from the
+	// value alone reported *duplicate pattern in match: '1'* for an arm the programmer wrote as `true`.
+	// Every sibling in this family names what was WRITTEN (`enum-match-exhaustive.md` pins *"overlapping
+	// pattern in match: 'medium'"*), and `tokenDisplayText`'s own header already states the rule this broke:
+	// a diagnostic must not *"quietly name the offending token something the source never wrote"*. It is
+	// reached through that one function rather than spelling `true`/`false` here, so the two words come from
+	// the same table the LEXER matches on (`TokenKind` is string-backed, its `rawValue` IS the display text).
+	//
+	// ⚠ **IT IS KEYED ON THE PATTERN TOKEN, NOT ON THE VALUE'S TYPE, AND EVERY OTHER PATTERN KIND KEEPS THE
+	// FOLDED VALUE DELIBERATELY.** A negative literal is TWO tokens (`-` then `1`), so a token's own text
+	// would name `1` for a `-1` pattern — the folded value is the honest answer there and the token is the
+	// honest answer here. Only the two spellings the fold DESTROYS are redirected.
+	//
+	// ⚠ The interval-plan caller cannot reach the bool arm: a `bool` pattern is a single value and never a
+	// RANGE, so its `startTok` is never a `true`/`false` keyword. One function serves both callers anyway,
+	// because which spelling a pattern deserves is a property of the pattern and not of the path that found
+	// it duplicated.
+	function duplicatePatternDisplay(patternTok Token, value ParsedInt) returns String
+		if patternTok.kind == TokenKind.true or patternTok.kind == TokenKind.false 'aBoolArmIsSpelledNotNumbered'
+			return tokenDisplayText(patternTok)
+		end 'aBoolArmIsSpelledNotNumbered'
+
+		return "{value}"
+	end 'duplicatePatternDisplay'
 
 	// Does `tok` name an open range bound (`min` / `max`) — an identifier whose text is the marker?
 	// `min`/`max` lex as identifiers (they are not keywords), and appear only in a range, so their
@@ -24809,20 +24891,23 @@ export type Parser
 		// ⭐ **A CAST THAT CHANGES WHAT THE VALUE'S TYPE SAYS IS A CONVERSION, NOT A RE-TAG.** It yields a
 		// DISTINCT result value of the target type and leaves the SOURCE untouched, because the source
 		// binding stays usable under its own identity: `let b = aTag as WB.Idx` must not corrupt `aTag`
-		// (still `WA.Idx`), and `let w = x as Word` must not make `x` unsigned. THREE things a target can
+		// (still `WA.Idx`), and `let w = x as Word` must not make `x` unsigned. FOUR things a target can
 		// say, and each has its own predicate rather than one blurred test — a nominal IDENTITY (P1.6-C),
-		// a SHIFT FILL, and (A1) whether a DIVISION by the value can fail — because they are answered from
-		// different registries and none implies the others. Everything else is the representational no-op
-		// below, with no new value and no new op.
-		if self.castConvertsPerInstance(value, targetType: targetType) or self.castChangesTheShiftFill(value, targetAlias: targetAlias) or self.castChangesTheDivisionProof(value, targetAlias: targetAlias) 'retaggingCast'
+		// a SHIFT FILL, (A1) whether a DIVISION by the value can fail, and (`ranged-int-bit-packing`) how
+		// the value would be STORED as an array element — because they are answered from different
+		// registries and none implies the others. Everything else is the representational no-op below,
+		// with no new value and no new op.
+		if self.castConvertsPerInstance(value, targetType: targetType) or self.castChangesTheShiftFill(value, targetAlias: targetAlias) or self.castChangesTheDivisionProof(value, targetAlias: targetAlias) or self.castChangesTheElementPacking(value, targetAlias: targetAlias) 'retaggingCast'
 			return self.finishCast(self.emitRetaggedCastValue(value, targetType: targetType, asTok: asTok), source: value, targetAlias: targetAlias, sourceIsBareLocal: sourceIsBareLocal)
 		end 'retaggingCast'
 
 		return self.finishCast(value, source: value, targetAlias: targetAlias, sourceIsBareLocal: sourceIsBareLocal)
 	end 'applyCast'
 
-	// ⭐ **THE CAST'S RESULT DENOTES THE TARGET ALIAS — recorded on the result, and read by NOTHING but
-	// E3010.** It emits no op and moves no bit: `ValueDeclaredAliasMap` exists precisely so that knowing
+	// ⭐ **THE CAST'S RESULT DENOTES THE TARGET ALIAS — recorded on the result, and read by E3010 and by
+	// `arrayLiteralInstanceFor`** (the second reader arrived with `ranged-int-bit-packing`; see
+	// `ValueDeclaredAliasMap` for what the withhold below costs it, which is NOT a missing diagnostic).
+	// It emits no op and moves no bit: `ValueDeclaredAliasMap` exists precisely so that knowing
 	// `let b = 42 as Byte` makes `b` a `Byte` costs no instruction, where minting a value to carry it would
 	// have cost one at every ranged cast in the corpus.
 	//
@@ -25043,6 +25128,44 @@ export type Parser
 			undeclared gives false
 		end 'a'
 	end 'castChangesTheDivisionProof'
+
+	// ⭐⭐ **DOES THIS `as` CHANGE HOW THE VALUE WOULD BE STORED AS AN ARRAY ELEMENT — a byte-strided slot
+	// for a SUB-BYTE-PACKED field, or back?** The fourth thing a cast target can say, and the newest
+	// (`ranged-int-bit-packing`). An `Array with T` literal types its element off the values it is given, so
+	// a cast that moves an element between the two ladders has to be visible ON THE VALUE.
+	//
+	// ⚠⚠ **WITHOUT IT THE SAME WRITTEN TYPE PRODUCED THREE DIFFERENT ANSWERS — MEASURED, and one of them
+	// REFUSED A LEGAL PROGRAM.** The alternative was to read the alias out of `ValueDeclaredAliasMap`, and
+	// that map cannot answer this: `finishCast` deliberately WITHHOLDS the entry when the result IS the
+	// source and the source is a bare local (one value under two names — see that map's header). So the
+	// alias survived a cast of a LITERAL and vanished on a cast of a LOCAL, for `N = int(0 to 15)`:
+	//   • `[7 as N, 3 as N]`  →  `Array with N`,   element_size **-4**
+	//   • `[v as N, w as N]`  →  `Array with int`, element_size **8**
+	//   • `[v as N, 3 as N]`  →  **E2015 "mixed element types"** — on a literal whose two elements are
+	//     written with the SAME type, so the refusal is of a legal program and its message is false.
+	// Minting settles all three at once, because the result then carries the alias in its own TAG and the
+	// element type is read off the VALUE rather than off a record a sharing rule may withhold. ⭐ It is also
+	// what keeps `ValueDeclaredAliasMap` to the ONE reader its safety argument assumes: a missing entry there
+	// is again only a missing E3010, never a silently different representation.
+	//
+	// ⚠ It asks the SOURCE as well as the target, so it fires only where the answer would actually move —
+	// a cast between two aliases that pack identically stays the no-op it always was.
+	function castChangesTheElementPacking(value ValueId, targetAlias DeclaredAlias) returns bool
+		return match targetAlias 'a'
+			declared(alias) gives rangedAliasPackedBits(alias.low, high: alias.high) != self.elementPackingOfValue(value)
+			undeclared gives false
+		end 'a'
+	end 'castChangesTheElementPacking'
+
+	// The packed width the value ALREADY carries — the source half of the question above. A value with no
+	// declared ranged alias (a bare `int`, a call result, a parameter typed `int`) is byte-strided, which is
+	// `NotSubBytePacked`, so a cast to a packing alias is a genuine move between the two ladders.
+	function elementPackingOfValue(value ValueId) returns PackedBitWidth
+		return match self.declaredAliasOfValue(value) 'a'
+			declared(alias) gives rangedAliasPackedBits(alias.low, high: alias.high)
+			undeclared gives NotSubBytePacked
+		end 'a'
+	end 'elementPackingOfValue'
 
 	// The half of the question above that is about the ALIAS, split out exactly as
 	// `aliasChangesTheShiftFill` is and for the same reason: the arms read as the sentences they are.
@@ -26646,8 +26769,8 @@ export type Parser
 
 	// ⭐ **`b"hello"`, `b""`, `b"\xc0"`, `b"À"` — a BYTE-STRING LITERAL in operand position (P1.7 slice 2).**
 	// It decodes to a raw byte sequence (escapes resolved, one Latin-1 byte per source codepoint) and
-	// materializes as an OWNED `Array with Byte` value: a `byteStringLiteral` op that lowers to a heap 48-byte
-	// Array record over an IMMORTAL rdata blob (see `LowerMaxonToStd.lowerByteStringLiteral`). Its value type
+	// materializes as an OWNED `Array with Byte` value: a `constArrayLiteral` op that lowers to a heap 48-byte
+	// Array record over an IMMORTAL rdata blob (see `LowerMaxonToStd.lowerConstArrayLiteral`). Its value type
 	// is pinned to the concrete `Array with Byte` gid so `.count()`/`.get()` dispatch through a real generic
 	// instance — a bare `named(Array)` would trip the generics machinery. Enrolled as an owned temp so a
 	// scope-exit / statement-end drop (`__arr_decref`) frees the record (the rdata buffer is left alone).
@@ -26661,7 +26784,7 @@ export type Parser
 		return try self.emitByteStringLiteralValue(bytes, range: SourceRange.ofToken(tok))
 	end 'parseByteStringLiteral'
 
-	// Append a `byteStringLiteral` op carrying the DECODED bytes; return the owned `Array with Byte`
+	// Append a `constArrayLiteral` op carrying the DECODED bytes at a one-byte stride; return the owned `Array with Byte`
 	// ValueId it defines. `emitStringLiteral`'s twin, and split out for its reason: a second caller
 	// already holds decoded bytes — a use of a top-level managed constant (`emitManagedConstant`), whose
 	// bytes were decoded once by the declaration sweep. One emit site, so the value's TYPE (the concrete
@@ -26672,7 +26795,7 @@ export type Parser
 
 		let giid = self.signatures.internArrayByteInstance(self.filePath)
 		let result = self.mintValue(ValueTypeTag.genericInstance, nameId: giid)
-		self.artifact.emitOp(self.currentBlock, op: MaxonOp.byteStringLiteral(result, bytes: bytes), range: range)
+		self.artifact.emitOp(self.currentBlock, op: MaxonOp.constArrayLiteral(result, elementSize: ByteStringElementSize, elementCount: bytes.count() as ParsedInt, bytes: bytes), range: range)
 		self.trackOwnedTemp(result)
 		return result
 	end 'emitByteStringLiteralValue'
@@ -26747,7 +26870,7 @@ export type Parser
 	// instance its own `elementSize` picked, which is the same requirement seen from the other side: the
 	// refusal must be about the type the result will WEAR, not about a fresh derivation of it.
 	function requireBytePackedRecordStridesLikeThisFilesByte(giid GenericInstanceId, producer BytePackedProducer, line LineNumber, column ColumnNumber) throws ParseError
-		let declaredStride = self.signatures.arrayElementSize(giid) as ParsedInt
+		let declaredStride = self.signatures.arrayElementSize(giid)
 		if declaredStride == ByteStringElementSize 'thisFilesByteIsOneByte'
 			return
 		end 'thisFilesByteIsOneByte'
@@ -31029,11 +31152,98 @@ export type Parser
 		let firstStart = self.pos
 		let first = try self.parseExpression(func, block: self.currentBlock)
 		let giid = try self.arrayLiteralInstanceFor(first, elemTok: firstTok)
+
+		// ⭐⭐ **A SUB-BYTE-PACKED ELEMENT COLLECTS ITS ELEMENTS BEFORE IT BUILDS ANYTHING**, because if they
+		// are all constants the whole literal is ONE `.rdata` blob and there is no record to push into. The
+		// element's packedness is settled by the FIRST element alone — it is what fixes `giid` — so the
+		// decision is available here, one line before the create this path would otherwise emit.
+		if self.signatures.arrayElementPackedBits(giid) != NotSubBytePacked 'aPackedElement'
+			return try self.parsePackedArrayLiteralBody(func, first: first, firstStart: firstStart, giid: giid, range: range)
+		end 'aPackedElement'
+
 		let arr = self.emitArrayCreateOp(giid, range: range)
 		try self.pushArrayLiteralElement(arr, elem: first, giid: giid, valueStart: firstStart, range: range)
 
 		return try self.finishArrayLiteral(func, arr: arr, giid: giid, range: range)
 	end 'parseArrayLiteral'
+
+	// ⭐⭐ **A PACKED LITERAL'S BODY — COLLECTED FIRST, EMITTED ONCE.** Every element is parsed and held, and
+	// only at the `]` is it known whether they are ALL compile-time constants:
+	//
+	//   • **all constant** ⇒ ONE `constArrayLiteral` op over a bit-packed immortal `.rdata` blob. This is
+	//     what `ranged-int-bit-packing`'s three ```RequiredRdata cases pin BYTE-FOR-BYTE — `[0 as Q, 1 as Q,
+	//     2 as Q, 3 as Q]` at 2 bits is the single byte `0b11_10_01_00` — which is a claim about the bit
+	//     ORDER and the `ceil(count·bits/8)` sizing that no round-tripped value could make.
+	//   • **any element non-constant** ⇒ the ordinary `__arr_create` + one `__arr_push` per element, over the
+	//     values already parsed. `specs/bool-bit-packing.md` requires both spellings to reach the identical
+	//     representation ("whether built from a constant literal, a NON-CONSTANT literal, or dynamically"),
+	//     and they do: the stride is `arrayElementSize`'s single answer either way.
+	//
+	// ⚠ **THE FALL-BACK COSTS NOTHING IT DID NOT ALREADY COST**, which is why collecting is safe: the values
+	// it pushes are the very `ValueId`s parsing produced, in order, so nothing is parsed twice and no op is
+	// wasted. What the CONSTANT arm leaves behind is the elements' own `const` materializations, now unused —
+	// dead values the blob makes redundant, which the backend drops on the floor because nothing reads them.
+	//
+	// ⚠ Only a PACKED element reaches here, and a packed element is TRIVIAL by construction
+	// (`arrayElementPackedBits` answers `NotSubBytePacked` for every managed element first), so there is no
+	// managed move-in to preserve — which is what makes holding the elements across the `]` legitimate at all.
+	function parsePackedArrayLiteralBody(func IrFunction, first ValueId, firstStart TokenIndex, giid GenericInstanceId, range SourceRange) returns ValueId throws ParseError
+		var values = ValueIdArray.create()
+		var starts = TokenIndexColumn.create()
+		values.push(first)
+		starts.push(firstStart)
+
+		self.skipNewlines()
+		while self.at(TokenKind.comma) 'moreElements'
+			let parsed = try self.parseArrayLiteralTailElement(func, giid: giid)
+			values.push(parsed.value)
+			starts.push(parsed.start)
+			self.skipNewlines()
+		end 'moreElements'
+		try self.consume(TokenKind.rightBracket)
+
+		if self.everyElementIsAKnownConstant(values) 'aConstantBlob'
+			return self.emitPackedArrayBlob(values, giid: giid, range: range)
+		end 'aConstantBlob'
+
+		let arr = self.emitArrayCreateOp(giid, range: range)
+		for i in 0 upto values.count() 'eachElement'
+			let elem = try values.get(i) otherwise panic("parsePackedArrayLiteralBody: values.get({i}) failed inside its own upto bound")
+			let elemStart = try starts.get(i) otherwise panic("parsePackedArrayLiteralBody: starts.get({i}) failed — it is pushed in lockstep with values")
+			try self.pushArrayLiteralElement(arr, elem: elem, giid: giid, valueStart: elemStart, range: range)
+		end 'eachElement'
+
+		self.trackOwnedTemp(arr)
+		return arr
+	end 'parsePackedArrayLiteralBody'
+
+	// Does the compiler hold every one of these values as an integer constant — the question that decides
+	// whether a packed literal becomes a blob or a run of pushes. A `bool` element's `true`/`false` folds to
+	// 1/0 through the same constant table, which is why one predicate serves both element kinds.
+	function everyElementIsAKnownConstant(values ValueIdArray) returns bool
+		for elem in values 'each'
+			if not self.constIsKnown(elem) 'notAConstant'
+				return false
+			end 'notAConstant'
+		end 'each'
+
+		return true
+	end 'everyElementIsAKnownConstant'
+
+	// ⭐ **PACK THE CONSTANTS AND EMIT THE ONE OP.** Precondition: `everyElementIsAKnownConstant(values)` and
+	// the instance's element is packed — both settled by the sole caller.
+	function emitPackedArrayBlob(values ValueIdArray, giid GenericInstanceId, range SourceRange) returns ValueId
+		var constants = ParsedIntArray.create()
+		for elem in values 'each'
+			constants.push(self.constOf(elem))
+		end 'each'
+
+		let stride = self.signatures.arrayElementSize(giid)
+		let result = self.mintValue(ValueTypeTag.genericInstance, nameId: giid)
+		self.artifact.emitOp(self.currentBlock, op: MaxonOp.constArrayLiteral(result, elementSize: stride, elementCount: constants.count() as ParsedInt, bytes: packConstantElements(constants, packedBits: self.signatures.arrayElementPackedBits(giid))), range: range)
+		self.trackOwnedTemp(result)
+		return result
+	end 'emitPackedArrayBlob'
 
 	// The int-array-literal body (`[10, 20, 30]`) — the record is created FIRST (the element type is `integer`,
 	// which the caller's guard has already settled from the token), then each element is parsed and pushed.
@@ -31063,13 +31273,8 @@ export type Parser
 	function finishArrayLiteral(func IrFunction, arr ValueId, giid GenericInstanceId, range SourceRange) returns ValueId throws ParseError
 		self.skipNewlines()
 		while self.at(TokenKind.comma) 'moreElements'
-			try self.consume(TokenKind.comma)
-			self.skipNewlines()
-			let elemTok = self.current()
-			let elemStart = self.pos
-			let elem = try self.parseExpression(func, block: self.currentBlock)
-			try self.requireArrayLiteralElementMatches(elem, giid: giid, elemTok: elemTok)
-			try self.pushArrayLiteralElement(arr, elem: elem, giid: giid, valueStart: elemStart, range: range)
+			let parsed = try self.parseArrayLiteralTailElement(func, giid: giid)
+			try self.pushArrayLiteralElement(arr, elem: parsed.value, giid: giid, valueStart: parsed.start, range: range)
 			self.skipNewlines()
 		end 'moreElements'
 		try self.consume(TokenKind.rightBracket)
@@ -31077,6 +31282,29 @@ export type Parser
 		self.trackOwnedTemp(arr)
 		return arr
 	end 'finishArrayLiteral'
+
+	// ⭐⭐ **THE `, e` STEP ITSELF — the comma, the newline that may precede the element, the element, and the
+	// type match against the literal's instance.** The ONE home of the element rule, shared by the two tails
+	// above and below: `finishArrayLiteral` PUSHES what it gets, `parsePackedArrayLiteralBody` COLLECTS it.
+	//
+	// ⚠⚠ **THE TRAILING `skipNewlines()` IS DELIBERATELY THE CALLER'S AND MUST STAY THERE.** It has to run
+	// AFTER `pushArrayLiteralElement`, because `moveElementIntoContainer` reads `[valueStart, self.pos)` to
+	// decide whether the element was a bare local — a skip before the push widens that window past a
+	// single-identifier element and silently mis-decides a managed element's move-in. That is the one line of
+	// this loop the two tails genuinely have to spell for themselves, and it is why this helper stops where
+	// it does. (Found in review: the packed tail arrived as a second verbatim copy of the whole loop, in a
+	// function whose own header says it exists so "the two entry paths cannot drift on the element rule, on
+	// where a newline may fall, or on when the array becomes a tracked temp".)
+	function parseArrayLiteralTailElement(func IrFunction, giid GenericInstanceId) returns ArrayLiteralElement throws ParseError
+		try self.consume(TokenKind.comma)
+		self.skipNewlines()
+		let elemTok = self.current()
+		let elemStart = self.pos
+		let elem = try self.parseExpression(func, block: self.currentBlock)
+		try self.requireArrayLiteralElementMatches(elem, giid: giid, elemTok: elemTok)
+
+		return ArrayLiteralElement.create(elem, start: elemStart)
+	end 'parseArrayLiteralTailElement'
 
 	// Push one already-parsed array-literal element, moving a managed element in (the array owns it; a trivial
 	// element passes through) — `moveElementIntoContainer` off the value's start position so a bare local is poisoned.
@@ -31105,6 +31333,14 @@ export type Parser
 	// this rung. What it says about dictionary-passing is true of a declared generic's `T` and was never true
 	// of a builtin container's element, which lives in a buffer at a known stride; retiring it is a decision
 	// for whoever owns that spec file, not a side effect of this one.
+	//
+	// ⭐ **A CAST TO A PACKING ALIAS ARRIVES HERE AS A `named` TAG, AND THAT IS WHY THIS DOOR NEEDS NO ARM
+	// OF ITS OWN FOR IT.** `[0 as Q, 1 as Q, 2 as Q, 3 as Q]` is an `Array with Q`, not an `Array with int`
+	// — and it reaches the `aggregate` arm below unchanged, because `applyCast.castChangesTheElementPacking`
+	// MINTS a `named`-tagged result for a cast that moves an element between the byte and sub-byte ladders.
+	// Reading the tag is therefore complete. ⚠ Asking `castSourceAlias` here instead was tried and is WRONG:
+	// that record is withheld for a bare-local source, so it answered differently for `[7 as N, …]` and
+	// `[v as N, …]` — the measurement is on that predicate.
 	function arrayLiteralInstanceFor(elem ValueId, elemTok Token) returns GenericInstanceId throws ParseError
 		let tag = self.tagOf(elem)
 		if tag == ValueTypeTag.integer 'int'
@@ -31140,7 +31376,7 @@ export type Parser
 		if self.signatures.containerElementIsOpaque(giid) 'opaque'
 			return self.emitOpaqueArrayCreateOp(giid, range: range)
 		end 'opaque'
-		let sizeVal = self.emitLiteral(self.signatures.arrayElementSize(giid) as ParsedInt, valueType: MaxonType.integer, range: range)
+		let sizeVal = self.emitLiteral(self.signatures.arrayElementSize(giid), valueType: MaxonType.integer, range: range)
 		let destroyVal = self.arrayElementDestroyValue(giid, range: range)
 		return self.emitRuntimeCall(ArrCreateName, args: pairArgs(sizeVal, second: destroyVal), resultTag: ValueTypeTag.genericInstance, resultNameId: giid, range: range)
 	end 'emitArrayCreateOp'
@@ -33064,6 +33300,18 @@ export type Parser
 			try self.consumeEmptyArgList()
 			return self.emitRuntimeCall(ArrCapacityName, args: singletonArgs(arr), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
 		end 'capacity'
+		// ⭐ **`elementSize()` — THE BUFFER'S STRIDE, AND THE ONE MEMBER THAT REPORTS A REPRESENTATION**
+		// (`specs/ranged-int-bit-packing.md`, `specs/bool-bit-packing.md`). It is on the BUFFER surface only,
+		// like `length`/`byteAt`: `Array` has no such spelling in either reference, and a program reaches it
+		// through `arr.managed.elementSize()`.
+		//
+		// ⚠ The result is a plain `int` and NOT the element's own type: it is a negative bit width for a
+		// packed element, which no element's declared range admits, and the specs compare it against `-1`/
+		// `-2`/`-4` as ordinary integers.
+		if isManagedMemory and methodTok.value.equals(ManagedMemoryElementSizeMethod) 'elementSize'
+			try self.consumeEmptyArgList()
+			return self.emitRuntimeCall(ArrElementSizeName, args: singletonArgs(arr), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
+		end 'elementSize'
 		if methodTok.value.equals(IsEmptyMethod) 'isEmpty'
 			try self.consumeEmptyArgList()
 			return self.emitRuntimeCall(ArrIsEmptyName, args: singletonArgs(arr), resultTag: ValueTypeTag.boolean, resultNameId: UnnamedTypeId, range: range)
@@ -36146,7 +36394,7 @@ export type Parser
 	//     program shares ONE record, materialized once, never allocated and never freed. This is exactly
 	//     "materialized once, shared by every read, immortal", reached with no new mechanism at all.
 	//   • a **byte string** literal is an owned `Array with Byte` RECORD over an immortal `.rdata` BLOB
-	//     (`lowerByteStringLiteral`). The payload is still materialized once and shared — the blob dedupes
+	//     (`lowerConstArrayLiteral`). The payload is still materialized once and shared — the blob dedupes
 	//     by bytes — but the 48-byte record is heap and per-read, because an Array is a MUTABLE container
 	//     whose record its own methods rewrite (a `push` detaches the buffer by writing `buffer@0`,
 	//     `capacity@16` and `length@8`), and a `.rdata` record cannot be written. Making the RECORD
@@ -39967,10 +40215,19 @@ export type Parser
 		// two IEEE patterns as integers. That danger is gone rather than tolerated — a float's slot is
 		// stamped `float`, `constIsKnown` answers only for `integer`, and `foldIntBinOp` is reachable
 		// only through it. See `ConstPayloadDomain`.
+		//
+		// ⭐ **A `bool` LITERAL IS RECORDED TOO, IN THE INTEGER DOMAIN, AND IT IS THE SAME FACT RATHER THAN A
+		// WIDENING OF ONE.** `true`/`false` materialize as `BoolTrueValue`/`BoolFalseValue` — 1 and 0 — and the
+		// file already relies on that identity ("the BITWISE fold of two bools is already the LOGICAL answer",
+		// `foldIntBinOp`'s note). What the exclusion cost was measurable: a CONSTANT `[true, false, true,
+		// false]` could not be recognised as constant at all, so `bool-bit-packing`'s constant literal could
+		// not become the packed `.rdata` blob its spec pins, purely because the parser declined to write down a
+		// value it had in hand. The FLOAT split is untouched and is the one this gate was built for — an IEEE
+		// pattern must never reach `foldIntBinOp`.
 		let tag = maxonTypeTag(valueType)
-		if tagIsInteger(tag) 'integer'
+		if tagIsInteger(tag) or tagIsBool(tag) 'integerDomain'
 			self.recordConst(result, folded: value)
-		end 'integer' else if tagIsFloat(tag) 'float'
+		end 'integerDomain' else if tagIsFloat(tag) 'float'
 			self.recordFloatConst(result, bits: value)
 		end 'float'
 

@@ -461,15 +461,27 @@ function emitOpenHandleOrThrow(module StdModule, func IrFunction, entry IrBlock,
 	return emitLiveHandleOrClosedThrow(module, func: func, entry: entry, join: join, record: box, handleOffset: ManagedFileHandleOffset, closedSentinel: ManagedFileClosedHandle, closedFlag: ManagedFileClosedFlag, ids: ids)
 end 'emitOpenHandleOrThrow'
 
-// The BYTE capacity/length of an `Array` record: its element count times `element_size@24`. Both the read's
-// bound check and the write's length go through it, so the "an Array counts ELEMENTS and a file counts
-// BYTES" conversion is written once. (The bootstrap compares a byte count against an ELEMENT capacity,
-// which is right only for the element size 1 its corpus always passes; this is the same answer there and
-// the correct one everywhere else.)
+// The BYTE capacity/length of an `Array` record: the bytes its element count occupies at `element_size@24`.
+// Both the read's bound check and the write's length go through it, so the "an Array counts ELEMENTS and a
+// file counts BYTES" conversion is written once. (The bootstrap compares a byte count against an ELEMENT
+// capacity, which is right only for the element size 1 its corpus always passes; this is the same answer
+// there and the correct one everywhere else.)
+//
+// ⚠⚠ **THE CONVERSION IS `ArrayRuntime.emitElementByteLen` AND NOT A MULTIPLY, BECAUSE `element_size@24` IS
+// SIGNED.** A sub-byte-packed element stamps a NEGATIVE bit width, so `count · es` is a negative extent —
+// and this one does not merely compute a wrong number, it becomes `osReadFile`/`osWriteFile`'s LENGTH, where
+// DWORD truncation reads it as an enormous unsigned count.
+//
+// ⚠ **NO PACKED RECORD CAN REACH HERE TODAY, AND THAT IS EXACTLY WHY THIS SITE ASKS RATHER THAN ASSUMES.**
+// Both callers are gated by `Parser.requireManagedMemoryValue` → `valueIsByteArray` →
+// `ProgramSignatures.isBytePackedArrayInstance`, which is `element_size == 1` and so false for every packed
+// stride. That is a real guarantee — and it lives in two OTHER files, where nothing points at this
+// arithmetic. Asking the shared formula costs one call, is byte-identical for every positive stride, and
+// does not depend on a front-end predicate staying exactly as strict as it is now.
 function emitArrayByteExtent(module StdModule, block IrBlock, arrRec ValueId, offset ByteOffset, ids ValueMinter) returns ValueId
 	let count = emitLoadField(module, block: block, record: arrRec, offset: offset, ids: ids)
 	let es = emitLoadField(module, block: block, record: arrRec, offset: ArrElementSizeOffset, ids: ids)
-	return emitBin(module, block: block, a: count, b: es, opcode: StdBinOpcode.mul, ids: ids)
+	return emitElementByteLen(module, block: block, count: count, es: es, ids: ids)
 end 'emitArrayByteExtent'
 
 // ⭐ **WHICH OPEN A BUILDER EMITS.** A bare bool at `buildManagedFileOpen` would be a magic value at both
@@ -678,8 +690,8 @@ end 'buildManagedFileRead'
 // `__mf_write(box, arrRec) -> (bytesWritten, flag)` — write the WHOLE live buffer.
 //
 // ⚠ There is no length PARAMETER, and that is the reference's signature rather than a simplification: the
-// method writes `managed`'s live extent, so the byte count is `length@8 * element_size@24` read off the
-// record. A caller that wants fewer bytes calls `setLength` first, which is exactly what
+// method writes `managed`'s live extent, so the byte count is what `length@8` elements occupy at
+// `element_size@24` (`emitArrayByteExtent`), read off the record. A caller that wants fewer bytes calls `setLength` first, which is exactly what
 // `managed-file.write-and-read` does on the read side.
 function buildManagedFileWrite(module StdModule)
 	var func = IrFunction.createFromStd(ManagedFileWriteName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0, throwsTypeName: managedFileThrows())

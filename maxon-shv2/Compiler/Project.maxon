@@ -671,6 +671,13 @@ let sharedEmptyContestedDeclarations = RangedAliasByDeclaringFile.create()
 // why the answer must be a fold over every declaration rather than a probe of one.
 typealias AliasStorageBytesMap = Map with (ByteArray, ByteOffset)
 
+// One name ⇒ the WIDEST sub-byte packed width any file's declaration of it needs, or `NotSubBytePacked` if
+// any of them is a byte or wider. The map above's twin, folded by the same single writer in the same call,
+// because they answer one question — "how much room does this name's element need?" — on either side of the
+// byte boundary. See `packedBitsInEveryFile` for why the fold is a MAX and why a byte beats every packed
+// width.
+typealias AliasPackedBitsMap = Map with (ByteArray, PackedBitWidth)
+
 // The names more than one FILE declares -> every declaration of each, by declaring file. Empty for
 // a program where no name is declared twice, which is nearly every program — see `RangedAliasRegistry`.
 typealias MultiplyDeclaredAliasMap = Map with (ByteArray, RangedAliasByDeclaringFile)
@@ -994,6 +1001,10 @@ export type RangedAliasRegistry
 	// often than it is written. A width is asked once per array op site and once per `sizeof`; it is
 	// written once per `typealias` declaration in the program.
 	var storageBytes as AliasStorageBytesMap
+	// ⭐ The widest `rangedAliasPackedBits` any declaration of a name needs — the index above's twin below
+	// the byte boundary, written by the same single writer in the same call, so the two halves of one
+	// element's width are never maintained by two rules that can come to cover different declarations.
+	var packedBits as AliasPackedBitsMap
 	// ⭐ **THE DECLARATIONS SOME FILE MADE NAMEABLE FROM ANY FILE** — `export`ed or compiler-supplied.
 	// A second derived index over the same declarations, maintained by the same single writer, for the
 	// reason `multiplyDeclared` is one: it answers a question `lookup` structurally cannot, because
@@ -1040,7 +1051,7 @@ export type RangedAliasRegistry
 	// hashing it would invalidate every parse memo in the project to record a constant.
 	export static function create() returns RangedAliasRegistry
 		requireExitCodeRangeMatchesItsWidth()
-		var registry = Self{byName: RangedTypeAliasMap.create(), multiplyDeclared: MultiplyDeclaredAliasMap.create(), storageBytes: AliasStorageBytesMap.create(), nameable: NameableAliasMap.create(), rangeContested: sharedEmptyRangeContests}
+		var registry = Self{byName: RangedTypeAliasMap.create(), multiplyDeclared: MultiplyDeclaredAliasMap.create(), storageBytes: AliasStorageBytesMap.create(), packedBits: AliasPackedBitsMap.create(), nameable: NameableAliasMap.create(), rangeContested: sharedEmptyRangeContests}
 		_ = registry.record(builtinStdlibAlias(CodepointTypeName, low: CodepointAliasLow, high: CodepointAliasHigh, declPathText: CodepointAliasDeclPath))
 		_ = registry.record(builtinStdlibAlias(ElementCountAliasName, low: ElementCountAliasLow, high: ElementCountAliasHigh, declPathText: ElementCountAliasDeclPath))
 		return registry
@@ -1050,7 +1061,7 @@ export type RangedAliasRegistry
 	// earlier declaration of the name shares — the one place that decides it, so the conflict test and
 	// the insert sit on one structure and cannot come to disagree about which declarations conflict.
 	export function record(alias RangedTypeAlias) returns AliasRecordOutcome
-		self.widenStorageBytesFor(alias)
+		self.widenElementWidthFor(alias)
 
 		// Recorded here, ABOVE the first-declaration early return below, so every declaration passes
 		// through it exactly once whatever else the name goes on to do.
@@ -1357,31 +1368,95 @@ export type RangedAliasRegistry
 		return try self.storageBytes.get(name)
 	end 'storageBytesInEveryFile'
 
+	// ⭐ **THE SUB-BYTE PACKED WIDTH THAT HOLDS EVERY FILE'S DECLARATION OF `name`** — the door above's
+	// twin below the byte boundary, and file-less for the identical reason: a generic instance is interned
+	// on the NAME, so `Array with Q` is ONE instance with ONE `element_size@24` however many files declare
+	// `Q`, and an answer that varied by reader would let one file's record stride 2 bits while another's
+	// strode a byte.
+	//
+	// ⚠ **IT DOES NOT THROW, AND THE MISS IS AN ANSWER RATHER THAN A GAP.** A name no file declares as a
+	// ranged alias is an enum, a boxed union's ordinal, or the `Byte` a `b"…"` literal mints for itself —
+	// and NOT ONE OF THEM PACKS. So `NotSubBytePacked` is complete and correct for the whole miss arm,
+	// where the width door has to throw because its miss splits two ways
+	// (`ProgramSignatures.undeclaredNamedElementStorageBytes`).
+	//
+	// ⭐⭐ **THAT IS ALSO WHERE ENUMS ARE EXCLUDED, AND IT COSTS NOTHING TO STATE.** v1 needs an explicit
+	// `project.enumTypes.contains(name)` guard in its classifier, because its enums DO register an ordinal
+	// range beside the typealiases and would otherwise pack a 3-case enum into 2 bits — which
+	// `enum-narrow-storage` forbids. shv2's enums are not in this registry at all, so they miss here and
+	// the exclusion is structural rather than a rule someone has to remember to keep.
+	export function packedBitsInEveryFile(name ByteArray) returns PackedBitWidth
+		return try self.packedBits.get(name) otherwise NotSubBytePacked
+	end 'packedBitsInEveryFile'
+
 	// ⭐ **DOES ANY FILE DECLARE `name` AS A RANGED ALIAS AT ALL? (A4c)** The door above's `throws` channel as
 	// a plain bool, for the one reader that wants whether a declaration EXISTS and never what it says:
 	// `ProgramSignatures.elementIsAByteNoFileDeclares` is asking whether an element's slot comes from
 	// `undeclaredNamedElementStorageBytes` — the miss arm — and therefore has no declared range for a raw byte
 	// to fall outside of. It reads the SAME index for the same reason `storageBytesInEveryFile` does:
-	// `widenStorageBytesFor` is that index's only writer and runs on every declaration before any branching,
-	// so "present here" and "some file declares it" are one fact.
+	// `widenElementWidthFor` is the only entry that writes it and runs on every declaration before any
+	// branching, so "present here" and "some file declares it" are one fact.
 	export function anyFileDeclares(name ByteArray) returns bool
 		return self.storageBytes.contains(name)
 	end 'anyFileDeclares'
 
-	// Fold one declaration's width into the running max for its name. The ONLY writer of `storageBytes`,
-	// called by `record` before any of its own branching, so the index covers every declaration whatever
-	// that branching concludes about contest or conflict.
-	function widenStorageBytesFor(alias RangedTypeAlias)
-		let width = rangedAliasStorageBytes(alias.low, high: alias.high)
-		let widest = try self.storageBytes.get(alias.name) otherwise 'firstDeclarationOfThisName'
-			self.storageBytes.upsert(alias.name, value: width)
+	// Fold one declaration's width into the running max for its name — BOTH halves of it, above and below
+	// the byte boundary. The ONLY writer of `storageBytes` and of `packedBits`, called by `record` before
+	// any of its own branching, so both indices cover every declaration whatever that branching concludes
+	// about contest or conflict.
+	//
+	// ⚠ **THE TWO FOLDS ARE ONE CALL BECAUSE THEY ARE ONE FACT.** A name's element width is a single answer
+	// that happens to be spelled in bytes above the boundary and in bits below it; folding one here and the
+	// other anywhere else would be two writers over the same declarations, free to cover different ones.
+	//
+	// ⚠ **THE FIRST DECLARATION IS WRITTEN IN ONE PLACE FOR BOTH INDICES, AND THAT IS WHAT MAKES THEM
+	// LOCKSTEP.** `packedBits` has an entry for exactly the names `storageBytes` has one for, because this
+	// is the only writer of either and it seeds both on the same event. The two `widen*` helpers below are
+	// therefore only ever asked about a name that is already present — which is why each may `panic` on a
+	// miss rather than quietly seeding a second time, and why they read as the two halves of one fold
+	// instead of one inline arm and one helper.
+	function widenElementWidthFor(alias RangedTypeAlias)
+		if not self.storageBytes.contains(alias.name) 'firstDeclarationOfThisName'
+			self.storageBytes.upsert(alias.name, value: rangedAliasStorageBytes(alias.low, high: alias.high))
+			self.packedBits.upsert(alias.name, value: rangedAliasPackedBits(alias.low, high: alias.high))
 			return
 		end 'firstDeclarationOfThisName'
+
+		self.widenStorageBytesFor(alias)
+		self.widenPackedBitsFor(alias)
+	end 'widenElementWidthFor'
+
+	// The BYTE half of the fold, for the second and later declarations of a name: the widest slot any of
+	// them needs, so no file's range is ever truncated by another file's width.
+	function widenStorageBytesFor(alias RangedTypeAlias)
+		let width = rangedAliasStorageBytes(alias.low, high: alias.high)
+		let widest = try self.storageBytes.get(alias.name) otherwise panic("RangedAliasRegistry.widenStorageBytesFor: '{String.from(alias.name)}' has a later declaration and no first one — `widenElementWidthFor` seeds both indices together, so a miss here means something else wrote one of them")
 
 		if width > widest 'wider'
 			self.storageBytes.upsert(alias.name, value: width)
 		end 'wider'
 	end 'widenStorageBytesFor'
+
+	// The PACKED half of the fold, for the second and later declarations of a name.
+	//
+	// ⚠ **A BYTE BEATS EVERY PACKED WIDTH, WHICH IS WHY `NotSubBytePacked` IS ABSORBING RATHER THAN
+	// SMALLEST.** It is the same "widest wins" rule the byte fold above applies, read on the correct
+	// ladder: a byte-strided slot holds every value a 4-bit field holds, so a name one file declares
+	// `int(0 to 3)` and another `int(0 to 100)` must stride a BYTE — and `NotSubBytePacked` is 0, which
+	// a naive `>` would treat as the narrowest answer and pack the name at 2 bits, truncating the file
+	// that meant 100. Reached only when a name has a second declaration, which is nearly no name.
+	function widenPackedBitsFor(alias RangedTypeAlias)
+		let bits = rangedAliasPackedBits(alias.low, high: alias.high)
+		let sofar = try self.packedBits.get(alias.name) otherwise panic("RangedAliasRegistry.widenPackedBitsFor: '{String.from(alias.name)}' has a byte width and no packed one — the two indices are seeded together by `widenElementWidthFor` and cannot disagree about which names they hold")
+
+		if sofar == NotSubBytePacked 'alreadyAByteOrWider'
+			return
+		end 'alreadyAByteOrWider'
+
+		if bits == NotSubBytePacked or bits > sofar 'wider'
+			self.packedBits.upsert(alias.name, value: bits)
+		end 'wider'
+	end 'widenPackedBitsFor'
 
 	// ⭐⭐ **CAN A VALUE OF `name` HOLD EVERY BYTE — 0 THROUGH 255 — WHICHEVER FILE'S DECLARATION YOU READ?**
 	// The THIRD file-less door, and it is one for the SAME reason `storageBytesInEveryFile` is: the answer is

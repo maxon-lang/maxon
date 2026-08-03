@@ -784,7 +784,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:4:8: Unsupported: `Array` member 'setLength' — P1.7 provides managed/get/set/first/last/pop/remove/slice/count/capacity/isEmpty/clone/push/reserve/resize/clear/insert/append; `create` is a STATIC factory (`Array.create(…)`), not a member; the rest (map/contains/…) arrive later
+error E2015: <fragment>:4:8: Unsupported: `Array` member 'setLength' — P1.7 provides managed/get/set/first/last/pop/remove/slice/count/capacity/isEmpty/clone/push/reserve/resize/clear/insert/append; that list IS the surface, so nothing else is served here
 ```
 
 <!-- test: buffer-of-a-slice-is-a-buffer-and-detaches-before-it-writes -->
@@ -899,7 +899,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:7:8: Unsupported: `Array` member 'setLength' — P1.7 provides managed/get/set/first/last/pop/remove/slice/count/capacity/isEmpty/clone/push/reserve/resize/clear/insert/append; `create` is a STATIC factory (`Array.create(…)`), not a member; the rest (map/contains/…) arrive later
+error E2015: <fragment>:7:8: Unsupported: `Array` member 'setLength' — P1.7 provides managed/get/set/first/last/pop/remove/slice/count/capacity/isEmpty/clone/push/reserve/resize/clear/insert/append; that list IS the surface, so nothing else is served here
 ```
 
 ### An element size shv2 has no element TYPE for is refused, not silently truncated
@@ -954,7 +954,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:10:12: Unsupported: `Array` member 'setByte' — P1.7 provides managed/get/set/first/last/pop/remove/slice/count/capacity/isEmpty/clone/push/reserve/resize/clear/insert/append; `create` is a STATIC factory (`Array.create(…)`), not a member; the rest (map/contains/…) arrive later
+error E2015: <fragment>:10:12: Unsupported: `Array` member 'setByte' — P1.7 provides managed/get/set/first/last/pop/remove/slice/count/capacity/isEmpty/clone/push/reserve/resize/clear/insert/append; that list IS the surface, so nothing else is served here
 ```
 
 ### R4.6 — the buffer's `set` is bounded by CAPACITY, and the `Array`'s is not
@@ -1587,7 +1587,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:4:5: Unsupported: `__ManagedMemory` member 'push' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/grow/append/slice/clear; `elementSize`/`remove`/`swap`/`shiftLeft`/`shiftRight` and the cstring/cursor members (`toCString`, `fromCString`, `createCursor`, `makeCharFromBytes`) are not built — no spec reaches them, and the cstring family needs a `cstring` type shv2 has no producer for
+error E2015: <fragment>:4:5: Unsupported: `__ManagedMemory` member 'push' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/elementSize/grow/append/slice/clear; that list IS the surface, so nothing else is served here
 ```
 
 <!-- test: error.buffer-has-no-push-in-value-position -->
@@ -1605,7 +1605,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:4:13: Unsupported: `__ManagedMemory` member 'push' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/grow/append/slice/clear; `elementSize`/`remove`/`swap`/`shiftLeft`/`shiftRight` and the cstring/cursor members (`toCString`, `fromCString`, `createCursor`, `makeCharFromBytes`) are not built — no spec reaches them, and the cstring family needs a `cstring` type shv2 has no producer for
+error E2015: <fragment>:4:13: Unsupported: `__ManagedMemory` member 'push' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/elementSize/grow/append/slice/clear; that list IS the surface, so nothing else is served here
 ```
 
 <!-- test: error.buffer-has-no-remove -->
@@ -1621,7 +1621,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:4:9: Unsupported: `__ManagedMemory` member 'remove' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/grow/append/slice/clear; `elementSize`/`remove`/`swap`/`shiftLeft`/`shiftRight` and the cstring/cursor members (`toCString`, `fromCString`, `createCursor`, `makeCharFromBytes`) are not built — no spec reaches them, and the cstring family needs a `cstring` type shv2 has no producer for
+error E2015: <fragment>:4:9: Unsupported: `__ManagedMemory` member 'remove' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/elementSize/grow/append/slice/clear; that list IS the surface, so nothing else is served here
 ```
 
 <!-- test: error.buffer-has-no-count -->
@@ -1638,7 +1638,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:4:13: Unsupported: `__ManagedMemory` member 'count' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/grow/append/slice/clear; `elementSize`/`remove`/`swap`/`shiftLeft`/`shiftRight` and the cstring/cursor members (`toCString`, `fromCString`, `createCursor`, `makeCharFromBytes`) are not built — no spec reaches them, and the cstring family needs a `cstring` type shv2 has no producer for
+error E2015: <fragment>:4:13: Unsupported: `__ManagedMemory` member 'count' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/elementSize/grow/append/slice/clear; that list IS the surface, so nothing else is served here
 ```
 
 <!-- test: error.buffer-has-no-managed-field -->
@@ -1655,24 +1655,29 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:4:9: Unsupported: `__ManagedMemory` member 'managed' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/grow/append/slice/clear; `elementSize`/`remove`/`swap`/`shiftLeft`/`shiftRight` and the cstring/cursor members (`toCString`, `fromCString`, `createCursor`, `makeCharFromBytes`) are not built — no spec reaches them, and the cstring family needs a `cstring` type shv2 has no producer for
+error E2015: <fragment>:4:9: Unsupported: `__ManagedMemory` member 'managed' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/elementSize/grow/append/slice/clear; that list IS the surface, so nothing else is served here
 ```
 
-<!-- test: error.buffer-has-no-element-size -->
+<!-- test: buffer-reports-its-element-size -->
 
-⚠ **THE CONTROL FOR THE OTHER HALF OF THE SENTENCE.** `elementSize` is a real `__ManagedMemory` member in
-both references and it is genuinely NOT BUILT here, so it was already refused — by falling all the way
-past the arms. It must keep the same message now that the gate answers first, or the roster's "are not
-built" clause would be reachable only for names nothing has ever declared.
+⚠ **THIS CASE USED TO BE `error.buffer-has-no-element-size`, AND IT WAS THE CONTROL FOR A HALF-SENTENCE
+THAT NO LONGER EXISTS.** It refused `elementSize` and existed to prove the roster's *"are not built"*
+clause stayed reachable for a name the references really do provide. Sub-byte bit-packing built the
+member — the packed stride is read through exactly this door — and the same change deleted the absent
+clause outright, because a hand-written list of what is MISSING rots the moment anyone builds one of its
+entries (this one was quoted verbatim by 21 expectations when it went).
+
+So it is **converted, not deleted**: the door is the same, the assertion is inverted, and what it now
+pins is that a directly-created buffer reports the stride it was created with — the byte-strided answer,
+where `ranged-int-bit-packing` pins the negative packed widths through `Array.managed`.
 ```maxon
 function main() returns ExitCode
 	let mm = try __ManagedMemory.create(4, elementSize: 1) otherwise return 1
-	let x = mm.elementSize()
-	return 0
+	return mm.elementSize() as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E2015: <fragment>:4:13: Unsupported: `__ManagedMemory` member 'elementSize' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/grow/append/slice/clear; `elementSize`/`remove`/`swap`/`shiftLeft`/`shiftRight` and the cstring/cursor members (`toCString`, `fromCString`, `createCursor`, `makeCharFromBytes`) are not built — no spec reaches them, and the cstring family needs a `cstring` type shv2 has no producer for
+```exitcode
+1
 ```
 
 <!-- test: error.buffer-has-no-pop -->
@@ -1688,7 +1693,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:4:17: Unsupported: `__ManagedMemory` member 'pop' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/grow/append/slice/clear; `elementSize`/`remove`/`swap`/`shiftLeft`/`shiftRight` and the cstring/cursor members (`toCString`, `fromCString`, `createCursor`, `makeCharFromBytes`) are not built — no spec reaches them, and the cstring family needs a `cstring` type shv2 has no producer for
+error E2015: <fragment>:4:17: Unsupported: `__ManagedMemory` member 'pop' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/elementSize/grow/append/slice/clear; that list IS the surface, so nothing else is served here
 ```
 
 <!-- test: error.buffer-has-no-first -->
@@ -1700,7 +1705,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:4:17: Unsupported: `__ManagedMemory` member 'first' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/grow/append/slice/clear; `elementSize`/`remove`/`swap`/`shiftLeft`/`shiftRight` and the cstring/cursor members (`toCString`, `fromCString`, `createCursor`, `makeCharFromBytes`) are not built — no spec reaches them, and the cstring family needs a `cstring` type shv2 has no producer for
+error E2015: <fragment>:4:17: Unsupported: `__ManagedMemory` member 'first' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/elementSize/grow/append/slice/clear; that list IS the surface, so nothing else is served here
 ```
 
 <!-- test: error.buffer-has-no-last -->
@@ -1712,7 +1717,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:4:17: Unsupported: `__ManagedMemory` member 'last' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/grow/append/slice/clear; `elementSize`/`remove`/`swap`/`shiftLeft`/`shiftRight` and the cstring/cursor members (`toCString`, `fromCString`, `createCursor`, `makeCharFromBytes`) are not built — no spec reaches them, and the cstring family needs a `cstring` type shv2 has no producer for
+error E2015: <fragment>:4:17: Unsupported: `__ManagedMemory` member 'last' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/elementSize/grow/append/slice/clear; that list IS the surface, so nothing else is served here
 ```
 
 <!-- test: error.buffer-has-no-insert -->
@@ -1731,7 +1736,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:4:9: Unsupported: `__ManagedMemory` member 'insert' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/grow/append/slice/clear; `elementSize`/`remove`/`swap`/`shiftLeft`/`shiftRight` and the cstring/cursor members (`toCString`, `fromCString`, `createCursor`, `makeCharFromBytes`) are not built — no spec reaches them, and the cstring family needs a `cstring` type shv2 has no producer for
+error E2015: <fragment>:4:9: Unsupported: `__ManagedMemory` member 'insert' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/elementSize/grow/append/slice/clear; that list IS the surface, so nothing else is served here
 ```
 
 <!-- test: error.buffer-has-no-reserve -->
@@ -1748,7 +1753,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:4:5: Unsupported: `__ManagedMemory` member 'reserve' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/grow/append/slice/clear; `elementSize`/`remove`/`swap`/`shiftLeft`/`shiftRight` and the cstring/cursor members (`toCString`, `fromCString`, `createCursor`, `makeCharFromBytes`) are not built — no spec reaches them, and the cstring family needs a `cstring` type shv2 has no producer for
+error E2015: <fragment>:4:5: Unsupported: `__ManagedMemory` member 'reserve' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/elementSize/grow/append/slice/clear; that list IS the surface, so nothing else is served here
 ```
 
 <!-- test: error.buffer-has-no-resize -->
@@ -1765,7 +1770,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:4:5: Unsupported: `__ManagedMemory` member 'resize' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/grow/append/slice/clear; `elementSize`/`remove`/`swap`/`shiftLeft`/`shiftRight` and the cstring/cursor members (`toCString`, `fromCString`, `createCursor`, `makeCharFromBytes`) are not built — no spec reaches them, and the cstring family needs a `cstring` type shv2 has no producer for
+error E2015: <fragment>:4:5: Unsupported: `__ManagedMemory` member 'resize' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/elementSize/grow/append/slice/clear; that list IS the surface, so nothing else is served here
 ```
 
 <!-- test: error.buffer-has-no-is-empty -->
@@ -1777,7 +1782,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:4:13: Unsupported: `__ManagedMemory` member 'isEmpty' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/grow/append/slice/clear; `elementSize`/`remove`/`swap`/`shiftLeft`/`shiftRight` and the cstring/cursor members (`toCString`, `fromCString`, `createCursor`, `makeCharFromBytes`) are not built — no spec reaches them, and the cstring family needs a `cstring` type shv2 has no producer for
+error E2015: <fragment>:4:13: Unsupported: `__ManagedMemory` member 'isEmpty' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/elementSize/grow/append/slice/clear; that list IS the surface, so nothing else is served here
 ```
 
 <!-- test: error.buffer-has-no-clone -->
@@ -1793,7 +1798,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:4:13: Unsupported: `__ManagedMemory` member 'clone' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/grow/append/slice/clear; `elementSize`/`remove`/`swap`/`shiftLeft`/`shiftRight` and the cstring/cursor members (`toCString`, `fromCString`, `createCursor`, `makeCharFromBytes`) are not built — no spec reaches them, and the cstring family needs a `cstring` type shv2 has no producer for
+error E2015: <fragment>:4:13: Unsupported: `__ManagedMemory` member 'clone' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/elementSize/grow/append/slice/clear; that list IS the surface, so nothing else is served here
 ```
 
 <!-- test: error.buffer-of-a-slice-has-no-array-members-either -->
@@ -1812,7 +1817,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:6:15: Unsupported: `__ManagedMemory` member 'count' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/grow/append/slice/clear; `elementSize`/`remove`/`swap`/`shiftLeft`/`shiftRight` and the cstring/cursor members (`toCString`, `fromCString`, `createCursor`, `makeCharFromBytes`) are not built — no spec reaches them, and the cstring family needs a `cstring` type shv2 has no producer for
+error E2015: <fragment>:6:15: Unsupported: `__ManagedMemory` member 'count' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/elementSize/grow/append/slice/clear; that list IS the surface, so nothing else is served here
 ```
 
 <!-- test: array-members-still-work-through-a-managed-field-hop -->
@@ -1873,7 +1878,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:3:12: Unsupported: `__ManagedMemory` member 'count' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/grow/append/slice/clear; `elementSize`/`remove`/`swap`/`shiftLeft`/`shiftRight` and the cstring/cursor members (`toCString`, `fromCString`, `createCursor`, `makeCharFromBytes`) are not built — no spec reaches them, and the cstring family needs a `cstring` type shv2 has no producer for
+error E2015: <fragment>:3:12: Unsupported: `__ManagedMemory` member 'count' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/elementSize/grow/append/slice/clear; that list IS the surface, so nothing else is served here
 ```
 
 <!-- test: declared-parameter-serves-the-roster -->
@@ -1912,7 +1917,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:8:11: Unsupported: `__ManagedMemory` member 'count' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/grow/append/slice/clear; `elementSize`/`remove`/`swap`/`shiftLeft`/`shiftRight` and the cstring/cursor members (`toCString`, `fromCString`, `createCursor`, `makeCharFromBytes`) are not built — no spec reaches them, and the cstring family needs a `cstring` type shv2 has no producer for
+error E2015: <fragment>:8:11: Unsupported: `__ManagedMemory` member 'count' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/elementSize/grow/append/slice/clear; that list IS the surface, so nothing else is served here
 ```
 
 <!-- test: declared-return-type-serves-the-roster -->
@@ -1955,7 +1960,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:12:15: Unsupported: `__ManagedMemory` member 'count' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/grow/append/slice/clear; `elementSize`/`remove`/`swap`/`shiftLeft`/`shiftRight` and the cstring/cursor members (`toCString`, `fromCString`, `createCursor`, `makeCharFromBytes`) are not built — no spec reaches them, and the cstring family needs a `cstring` type shv2 has no producer for
+error E2015: <fragment>:12:15: Unsupported: `__ManagedMemory` member 'count' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/elementSize/grow/append/slice/clear; that list IS the surface, so nothing else is served here
 ```
 
 <!-- test: declared-field-serves-the-roster -->
@@ -2047,7 +2052,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:8:13: Unsupported: `Array` member 'create' — P1.7 provides managed/get/set/first/last/pop/remove/slice/count/capacity/isEmpty/clone/push/reserve/resize/clear/insert/append; `create` is a STATIC factory (`Array.create(…)`), not a member; the rest (map/contains/…) arrive later
+error E2015: <fragment>:8:13: Unsupported: `Array` member 'create' — P1.7 provides managed/get/set/first/last/pop/remove/slice/count/capacity/isEmpty/clone/push/reserve/resize/clear/insert/append; that list IS the surface, so nothing else is served here
 ```
 
 ### A2m — the buffer surface rides a SLOT, so a tuple element and an array element carry it
@@ -2219,7 +2224,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:10:13: Unsupported: `__ManagedMemory` member 'count' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/grow/append/slice/clear; `elementSize`/`remove`/`swap`/`shiftLeft`/`shiftRight` and the cstring/cursor members (`toCString`, `fromCString`, `createCursor`, `makeCharFromBytes`) are not built — no spec reaches them, and the cstring family needs a `cstring` type shv2 has no producer for
+error E2015: <fragment>:10:13: Unsupported: `__ManagedMemory` member 'count' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/elementSize/grow/append/slice/clear; that list IS the surface, so nothing else is served here
 ```
 
 <!-- test: error.array-element-has-the-buffer-surface -->
@@ -2236,7 +2241,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:8:11: Unsupported: `__ManagedMemory` member 'count' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/grow/append/slice/clear; `elementSize`/`remove`/`swap`/`shiftLeft`/`shiftRight` and the cstring/cursor members (`toCString`, `fromCString`, `createCursor`, `makeCharFromBytes`) are not built — no spec reaches them, and the cstring family needs a `cstring` type shv2 has no producer for
+error E2015: <fragment>:8:11: Unsupported: `__ManagedMemory` member 'count' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/elementSize/grow/append/slice/clear; that list IS the surface, so nothing else is served here
 ```
 
 <!-- test: error.a-tuple-of-byte-arrays-keeps-the-array-surface -->
@@ -2261,7 +2266,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:12:13: Unsupported: `Array` member 'length' — P1.7 provides managed/get/set/first/last/pop/remove/slice/count/capacity/isEmpty/clone/push/reserve/resize/clear/insert/append; `create` is a STATIC factory (`Array.create(…)`), not a member; the rest (map/contains/…) arrive later
+error E2015: <fragment>:12:13: Unsupported: `Array` member 'length' — P1.7 provides managed/get/set/first/last/pop/remove/slice/count/capacity/isEmpty/clone/push/reserve/resize/clear/insert/append; that list IS the surface, so nothing else is served here
 ```
 
 <!-- test: a-tuple-of-byte-arrays-still-serves-count -->
@@ -2304,7 +2309,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:10:11: Unsupported: `Array` member 'length' — P1.7 provides managed/get/set/first/last/pop/remove/slice/count/capacity/isEmpty/clone/push/reserve/resize/clear/insert/append; `create` is a STATIC factory (`Array.create(…)`), not a member; the rest (map/contains/…) arrive later
+error E2015: <fragment>:10:11: Unsupported: `Array` member 'length' — P1.7 provides managed/get/set/first/last/pop/remove/slice/count/capacity/isEmpty/clone/push/reserve/resize/clear/insert/append; that list IS the surface, so nothing else is served here
 ```
 
 <!-- test: an-array-of-byte-arrays-still-serves-count -->
@@ -2361,7 +2366,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:21:14: Unsupported: `Array` member 'length' — P1.7 provides managed/get/set/first/last/pop/remove/slice/count/capacity/isEmpty/clone/push/reserve/resize/clear/insert/append; `create` is a STATIC factory (`Array.create(…)`), not a member; the rest (map/contains/…) arrive later
+error E2015: <fragment>:21:14: Unsupported: `Array` member 'length' — P1.7 provides managed/get/set/first/last/pop/remove/slice/count/capacity/isEmpty/clone/push/reserve/resize/clear/insert/append; that list IS the surface, so nothing else is served here
 ```
 
 ### A2m pins — four behaviours that were already RIGHT and had nothing holding them there
@@ -2406,7 +2411,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:10:18: Unsupported: `Array` member 'length' — P1.7 provides managed/get/set/first/last/pop/remove/slice/count/capacity/isEmpty/clone/push/reserve/resize/clear/insert/append; `create` is a STATIC factory (`Array.create(…)`), not a member; the rest (map/contains/…) arrive later
+error E2015: <fragment>:10:18: Unsupported: `Array` member 'length' — P1.7 provides managed/get/set/first/last/pop/remove/slice/count/capacity/isEmpty/clone/push/reserve/resize/clear/insert/append; that list IS the surface, so nothing else is served here
 ```
 
 <!-- test: managed-field-as-a-value-binds-serves-the-roster-and-drops-once -->
@@ -2469,7 +2474,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:9:27: Unsupported: `Array` member 'length' — P1.7 provides managed/get/set/first/last/pop/remove/slice/count/capacity/isEmpty/clone/push/reserve/resize/clear/insert/append; `create` is a STATIC factory (`Array.create(…)`), not a member; the rest (map/contains/…) arrive later
+error E2015: <fragment>:9:27: Unsupported: `Array` member 'length' — P1.7 provides managed/get/set/first/last/pop/remove/slice/count/capacity/isEmpty/clone/push/reserve/resize/clear/insert/append; that list IS the surface, so nothing else is served here
 ```
 
 <!-- test: managed-field-on-a-value-receiver-binds-and-serves-the-roster -->
@@ -2790,7 +2795,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:12:15: Unsupported: `Array` member 'length' — P1.7 provides managed/get/set/first/last/pop/remove/slice/count/capacity/isEmpty/clone/push/reserve/resize/clear/insert/append; `create` is a STATIC factory (`Array.create(…)`), not a member; the rest (map/contains/…) arrive later
+error E2015: <fragment>:12:15: Unsupported: `Array` member 'length' — P1.7 provides managed/get/set/first/last/pop/remove/slice/count/capacity/isEmpty/clone/push/reserve/resize/clear/insert/append; that list IS the surface, so nothing else is served here
 ```
 
 <!-- test: a-nested-tuple-of-byte-arrays-still-serves-count -->
@@ -2863,7 +2868,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:9:11: Unsupported: `Array` member 'length' — P1.7 provides managed/get/set/first/last/pop/remove/slice/count/capacity/isEmpty/clone/push/reserve/resize/clear/insert/append; `create` is a STATIC factory (`Array.create(…)`), not a member; the rest (map/contains/…) arrive later
+error E2015: <fragment>:9:11: Unsupported: `Array` member 'length' — P1.7 provides managed/get/set/first/last/pop/remove/slice/count/capacity/isEmpty/clone/push/reserve/resize/clear/insert/append; that list IS the surface, so nothing else is served here
 ```
 
 <!-- test: a-tuple-slot-of-byte-arrays-still-serves-count -->
@@ -3034,7 +3039,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:20:12: Unsupported: `Array` member 'length' — P1.7 provides managed/get/set/first/last/pop/remove/slice/count/capacity/isEmpty/clone/push/reserve/resize/clear/insert/append; `create` is a STATIC factory (`Array.create(…)`), not a member; the rest (map/contains/…) arrive later
+error E2015: <fragment>:20:12: Unsupported: `Array` member 'length' — P1.7 provides managed/get/set/first/last/pop/remove/slice/count/capacity/isEmpty/clone/push/reserve/resize/clear/insert/append; that list IS the surface, so nothing else is served here
 ```
 
 <!-- test: error.a-sibling-files-alias-in-a-tuple-slot-is-refused-alias-file-last -->
@@ -3065,7 +3070,7 @@ export function seed(x BufArray) returns Int
 end 'seed'
 ```
 ```maxoncstderr
-error E2015: <fragment>:12:12: Unsupported: `Array` member 'length' — P1.7 provides managed/get/set/first/last/pop/remove/slice/count/capacity/isEmpty/clone/push/reserve/resize/clear/insert/append; `create` is a STATIC factory (`Array.create(…)`), not a member; the rest (map/contains/…) arrive later
+error E2015: <fragment>:12:12: Unsupported: `Array` member 'length' — P1.7 provides managed/get/set/first/last/pop/remove/slice/count/capacity/isEmpty/clone/push/reserve/resize/clear/insert/append; that list IS the surface, so nothing else is served here
 ```
 
 ### A2m — probing the tree walk: depth, sibling order, and width
@@ -3138,7 +3143,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:12:15: Unsupported: `Array` member 'length' — P1.7 provides managed/get/set/first/last/pop/remove/slice/count/capacity/isEmpty/clone/push/reserve/resize/clear/insert/append; `create` is a STATIC factory (`Array.create(…)`), not a member; the rest (map/contains/…) arrive later
+error E2015: <fragment>:12:15: Unsupported: `Array` member 'length' — P1.7 provides managed/get/set/first/last/pop/remove/slice/count/capacity/isEmpty/clone/push/reserve/resize/clear/insert/append; that list IS the surface, so nothing else is served here
 ```
 
 <!-- test: a-seventy-element-tuple-carries-its-last-slots-surface -->

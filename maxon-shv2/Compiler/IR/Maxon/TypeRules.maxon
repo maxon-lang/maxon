@@ -1389,8 +1389,20 @@ end 'rawByteFillNarrowElementMessage'
 // `formatRangeDisplay` the element's own half uses, which is what makes `int(0 to 65535)` beside
 // `int(0 to 1000)` the whole argument. That renderer is also the ONE party that knows a raw `-1` upper means
 // `u64.max`, which the machine-word rung is: printed straight it read *"every value 0 to -1"*.
-export function rawByteWriteSlotDomainMessage(member String, elementDisplay String, slotBytes ByteOffset) returns String
-	let slotValueSet = formatRangeDisplay(SlotUnsignedMin, high: slotUnsignedMax(slotBytes), isFloat: false)
+//
+// ⚠⚠ **A SUB-BYTE-PACKED ELEMENT GETS THE OTHER HALF OF THE SENTENCE, AND IT IS A DIFFERENT FACT RATHER
+// THAN A NARROWER ONE.** Every clause above presumes the element HAS a byte of its own to be measured
+// against. A packed element does not — 8, 4 or 2 of them share one byte — so there is no slot value set to
+// render (`slotUnsignedMax` would be asked for the value set of `-1` bytes and rightly panics), and "the
+// element does not admit all of them" is not what is wrong: a raw byte write would land on the element AND
+// on its NEIGHBOURS. Same code, because the construct refused and the cure offered are identical; different
+// reason, because stating the byte-slot one here would be false.
+export function rawByteWriteSlotDomainMessage(member String, elementDisplay String, slotBytes ElementStride) returns String
+	if slotBytes < 0 'aSubByteFieldSharesItsByteWithItsNeighbours'
+		return "'{member}' writes a RAW BYTE at a byte OFFSET, and the element {elementDisplay} is SUB-BYTE PACKED at {0 - slotBytes} bit(s) — it has no byte of its own, so one raw byte spans this element and the several after it. Store through the `Array` surface's `set`, which writes one element's bits and range-checks the value against it"
+	end 'aSubByteFieldSharesItsByteWithItsNeighbours'
+
+	let slotValueSet = formatRangeDisplay(SlotUnsignedMin, high: slotUnsignedMax(slotBytes as ByteOffset), isFloat: false)
 
 	return "'{member}' writes a RAW BYTE at a byte OFFSET, so what the element's own accessors read back is any bit pattern of its {slotBytes}-byte slot — every value of {slotValueSet}. The element {elementDisplay} does not admit all of them. Widen the element's declared range to cover its whole slot, or store through the `Array` surface's `set`, which range-checks each value against the element"
 end 'rawByteWriteSlotDomainMessage'

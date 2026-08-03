@@ -978,7 +978,7 @@ function opEscapesValue(op MaxonOp, subject EscapeScanSubject, func IrFunction, 
 		asyncCall(_, callee, args, _, _, _, _) then return directCallArgEscapes(callee, args: args, subject: subject, func: func, funcSignatures: funcSignatures)
 		await to tryAwait then break 'op'
 		sizeofType then break 'op'
-		byteStringLiteral then break 'op'
+		constArrayLiteral then break 'op'
 		// The jump table branches on its index — it persists no value, so it escapes nothing.
 		switch then break 'op'
 		// ⭐ A WITNESS DISPATCH IS A CALL WITH NO CALLEE NAME, so it escapes for BOTH subjects — see
@@ -1033,7 +1033,7 @@ function terminatorEscapesValue(term MaxonOp, subject EscapeScanSubject, func Ir
 		ret(returned) then return isTrackedValue(returned, subject: subject, func: func)
 		retVoid to tryAwait then break 'term'
 		sizeofType then break 'term'
-		byteStringLiteral then break 'term'
+		constArrayLiteral then break 'term'
 		// The jump table is a branch terminator — it escapes nothing (only `ret` of the value does).
 		switch then break 'term'
 		// A witness dispatch is a body op, never a terminator — it escapes nothing here (P1.7a slice 2a).
@@ -1258,7 +1258,7 @@ function collectMutationEdgesAt(project Project, op MaxonOp, func IrFunction, ca
 		asyncCall then break 'op'
 		await to tryAwait then break 'op'
 		sizeofType then break 'op'
-		byteStringLiteral then break 'op'
+		constArrayLiteral then break 'op'
 		switch then break 'op'
 		witnessDispatch to witnessTryDispatch then break 'op'
 		// A panic calls no user function, so it carries no mutation edge.
@@ -1424,7 +1424,7 @@ function functionHasAwait(func IrFunction, module MaxonModule) returns bool
 				asyncCall then break 'op'
 				await to tryAwait then return true
 				sizeofType then break 'op'
-				byteStringLiteral then break 'op'
+				constArrayLiteral then break 'op'
 				switch then break 'op'
 				witnessDispatch to witnessTryDispatch then break 'op'
 				panicAbortValue then break 'op'
@@ -1463,7 +1463,7 @@ function collectAwaitSites(func IrFunction, module MaxonModule) returns AwaitSit
 				// is a property of the green thread, not of whether the error is caught — so it is an await site.
 				tryAwait(_, _, promise) then sites.push(AwaitSite.create(block, pos: pos, promise: promise))
 				sizeofType then break 'op'
-				byteStringLiteral then break 'op'
+				constArrayLiteral then break 'op'
 				switch then break 'op'
 				witnessDispatch to witnessTryDispatch then break 'op'
 				panicAbortValue then break 'op'
@@ -1586,7 +1586,7 @@ function classifyOpForPromise(op MaxonOp, promise ValueId) returns OpAwaitRole
 		// A `try await` of the tracked promise is a re-await exactly as a plain `await` is.
 		tryAwait(_, _, awaited) then return roleIfEqual(awaited, promise: promise, role: OpAwaitRole.reawaitOf)
 		sizeofType then break 'op'
-		byteStringLiteral then break 'op'
+		constArrayLiteral then break 'op'
 		// The jump table reads an integer index, never a promise handle — unrelated to any await.
 		switch then break 'op'
 		witnessDispatch to witnessTryDispatch then break 'op'
@@ -1618,7 +1618,7 @@ function collectAwaitSuccessors(module MaxonModule, block IrBlock, into BlockIdA
 		branch(targetBlockId) then into.push(targetBlockId)
 		globalAddr to tryAwait then break 'term'
 		sizeofType then break 'term'
-		byteStringLiteral then break 'term'
+		constArrayLiteral then break 'term'
 		// A jump table's successors are its distinct case targets plus the default — enumerated for the
 		// await-CFG walk exactly as `collectBlockSuccessorIds` does at the Target tier (deduped: a range/`or`
 		// arm fills several slots with one block, but the CFG has one edge to it).
@@ -1725,7 +1725,7 @@ function checkCalls(project Project, module MaxonModule, signatures ProgramSigna
 					// (E3057 plain-await, E3059 propagate mismatch) is checked by the parser at the await/try token.
 					await to tryAwait then break 'op'
 					sizeofType then break 'op'
-					byteStringLiteral then break 'op'
+					constArrayLiteral then break 'op'
 					switch then break 'op'
 					// A witness dispatch has no callee NAME to resolve — the parser already resolved the interface
 					// method against the type's `where` constraints (`findWitnessDispatchCandidates`), so there is nothing

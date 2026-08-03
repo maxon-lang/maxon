@@ -668,7 +668,7 @@ function classifyRuntimeCall(op MaxonOp, usage RuntimeUsage, funcSignatures Func
 		// `sizeof(T)` lowers to a plain `loadIndirect` of the layout descriptor — it names no runtime callee
 		// and pulls in no runtime floor (the descriptor is pure `.rdata`), so it records no usage (P1.6-B1).
 		sizeofType then break 'op'
-		byteStringLiteral then recordByteStringUsage(usage)
+		constArrayLiteral then recordConstArrayLiteralUsage(usage)
 		// The jump table names no runtime callee and pulls in no runtime floor — a bare indexed branch.
 		switch then break 'op'
 		// A witness dispatch names no runtime callee and pulls in no runtime floor — the fused call reads a
@@ -687,13 +687,15 @@ function recordGtUsage(usage RuntimeUsage)
 	usage.usesHeap = true
 end 'recordGtUsage'
 
-// A `b"…"` byte-string literal turns on both the Array runtime and the heap under it — the same pair any
-// `__arr_*` call declares (`recordCallUsage`'s array arm), because the literal IS an owned Array record
-// (`__mm_alloc`) whose `.count()`/`.get()`/drop go through the array runtime.
-function recordByteStringUsage(usage RuntimeUsage)
+// A CONSTANT array literal over an immortal `.rdata` blob — a `b"…"` byte string, or a packed
+// `[0 as Q, …]` — turns on both the Array runtime and the heap under it, the same pair any `__arr_*` call
+// declares (`recordCallUsage`'s array arm), because the literal IS an owned Array record (`__mm_alloc`)
+// whose `.count()`/`.get()`/drop go through the array runtime. Both producers of `constArrayLiteral` need
+// exactly this pair, which is why one recorder still serves the op after it stopped being byte-string-only.
+function recordConstArrayLiteralUsage(usage RuntimeUsage)
 	usage.usesArray = true
 	usage.usesHeap = true
-end 'recordByteStringUsage'
+end 'recordConstArrayLiteralUsage'
 
 // A `functionRef` whose target is a COMPILER-EMITTED callee is an array element destructor's address stamped
 // into `element_destroy@40` (P1.7 slice 3) — its target must be installed exactly as a direct `call` to it

@@ -166,14 +166,52 @@ export function parseTypedSectionValues(block String) returns ByteArray throws T
 		let valueStart = try line.indexAfter(sepIdx) otherwise throw TypedValueError.missingValue(line)
 		let valueText = line.slice(valueStart, endIndex: line.endIndex()).trim()
 
-		// The WIDTH first, so an unknown type is reported as one rather than as whatever its value
-		// failed to parse as.
-		let byteCount = try typedValueByteCount(typeName)
-		appendLittleEndian(out, value: try parseTypedValueBits(typeName, text: valueText), byteCount: byteCount)
+		// ⭐ **AN `[]` SUFFIX MAKES THE LINE A COMMA-SEPARATED RUN OF THAT TYPE** — `u8[] 33, 243, 8` is
+		// three bytes, laid down in order. It is a suffix on the existing type rather than a separate
+		// spelling so the element width, the value parse and the little-endian append are the SAME three
+		// functions a scalar line uses; the only thing an array adds is how many times they run.
+		//
+		// ⭐ **IT ARRIVED WITH `ranged-int-bit-packing`, WHICH IS WHAT THIS FILE'S HEADER SAID IT WAS
+		// WAITING FOR.** The reference parses `i64[]` and shv2 deliberately did not, on the recorded
+		// argument that an array global needed P1.7. A packed array literal's `.rdata` blob is now a RUN OF
+		// BYTES with no scalar spelling at all — `[0 as Q, 1 as Q, 2 as Q, 3 as Q]` at 2 bits is the single
+		// byte `0b11_10_01_00` — and pinning it byte-for-byte is the only way a spec can prove the bit
+		// ORDER and the `ceil(count·bits/8)` sizing rather than merely the values that read back out.
+		let elementType = arrayElementTypeName(typeName)
+		let byteCount = try typedValueByteCount(elementType)
+		if elementType == typeName 'oneScalarValue'
+			appendLittleEndian(out, value: try parseTypedValueBits(typeName, text: valueText), byteCount: byteCount)
+			continue
+		end 'oneScalarValue'
+
+		for rawElement in valueText.split(TypedValueArraySeparator) 'eachElement'
+			let element = rawElement.trim()
+			if element.isEmpty() 'trailingSeparator'
+				continue
+			end 'trailingSeparator'
+
+			appendLittleEndian(out, value: try parseTypedValueBits(elementType, text: element), byteCount: byteCount)
+		end 'eachElement'
 	end 'eachLine'
 
 	return out
 end 'parseTypedSectionValues'
+
+// What separates the elements of an array line, and what marks a type name as one. Named together
+// because they are one notation and a reader deciding whether `u8[] 1, 2` is an array reads both.
+let TypedValueArraySuffix = "[]"
+let TypedValueArraySeparator = ","
+
+// The ELEMENT type a line's type name describes — `u8` for `u8[]`, and the name itself for a scalar.
+// Returning the name unchanged for a scalar is what lets the caller tell the two apart with one
+// comparison instead of a second `endsWith` test that could disagree with this one.
+function arrayElementTypeName(typeName String) returns String
+	if not typeName.endsWith(TypedValueArraySuffix) 'aScalar'
+		return typeName
+	end 'aScalar'
+
+	return typeName.slice(typeName.startIndex(), length: typeName.count() - TypedValueArraySuffix.count())
+end 'arrayElementTypeName'
 
 // The type name whose value is a FLOAT literal rather than an integer one. Named because two
 // places ask it — the width and the parse — and they must agree.
@@ -204,6 +242,13 @@ function typedValueByteCount(typeName String) returns ByteCount throws TypedValu
 	if typeName == "i8" 'i8'
 		return 1
 	end 'i8'
+	// `u8` exists for the ARRAY form alone (`u8[]`): a packed `.rdata` blob is a run of unsigned bytes, and
+	// a spec writing `243` means the byte 243 rather than the `i8` that value overflows. The width is the
+	// same 1 either way — `appendLittleEndian` masks to the byte — so what the name buys is a spelling a
+	// spec author can write without lying about the sign.
+	if typeName == "u8" 'u8'
+		return 1
+	end 'u8'
 	if typeName == "i16" 'i16'
 		return 2
 	end 'i16'
