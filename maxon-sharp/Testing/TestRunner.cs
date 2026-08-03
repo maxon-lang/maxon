@@ -388,9 +388,33 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
   /// <item><c>--update-required</c> — the one door a change comes through, and deliberately one you
   ///   have to open, because the diff IS the review.</item>
   /// </list>
+  ///
+  /// ⚖ BOTH DOORS ARE SHUT ON A CROSS-OS RUN (see <see cref="GoldenMintHost"/>), and the FIRST-RUN one
+  /// is why the rule is asked here as well as at the flag: it needs no flag at all. A test with no
+  /// committed golden yet mints one on any run that passes, and under a foreign OS a compiler-error
+  /// case passes without ever launching a binary — the same unvalidated golden `--update-required`
+  /// is refused for, arriving without it. (`--update-required` itself cannot reach this method
+  /// cross-OS: <c>Program.RunSpecTests</c> refuses it before the runner is constructed.)
+  ///
+  /// ⚠ MEASURED, so that this guard is not read as covering more than it does: no cross-OS run
+  /// currently gets this far. `spec-test --target=x64-windows` on an arm64-macOS host ABORTS at the
+  /// first test binary it tries to launch — `Process.Start` throws <c>Win32Exception (13)</c> on a
+  /// worker thread and an unhandled exception there ends the process (exit 134, a stack trace). That
+  /// is a separate defect, reported against this row rather than fixed inside it, because closing it
+  /// properly means either withdrawing cross-OS runs outright or plumbing a launch-failure outcome
+  /// through every <see cref="ProcessRunResult"/> caller. This guard is what stands between that fix
+  /// and a run that silently mints goldens nothing executed.
   /// </summary>
   private string? CheckFragmentGolden(string fragmentPath, string content, FragmentTally tally) {
     if (!File.Exists(fragmentPath) || _updateRequired) {
+      if (GoldenMintHost.RefusalFor(_target) is { } refusal) {
+        // Into the errors bag rather than the test's own verdict: the test itself did what it was
+        // asked, and what failed is that this run could neither compare nor write its golden — which
+        // is exactly what that bag reports, and why it makes the run's exit non-zero.
+        tally.Errors.Add($"{fragmentPath}: refusing to mint a golden — {refusal}");
+        return null;
+      }
+
       File.WriteAllText(fragmentPath, content);
       tally.CountWritten();
       return null;

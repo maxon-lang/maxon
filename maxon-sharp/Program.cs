@@ -30,6 +30,7 @@ class Program {
       "batch-rewriter-test" => BatchRewriterTests.RunAll(),
       "mxdbg-selftest" => Debug.MxdbgSelfTest.Run(),
       "stdlib-target-selftest" => Compiler.StdlibTargetSelfTest.Run(),
+      "golden-mint-selftest" => Testing.GoldenMintHostSelfTest.Run(),
       "debug" => RunDebug(args[1..]),
       "coverage" => CoverageCommand.Run(args[1..]),
       "profile" => ProfileCommand.Run(args[1..]),
@@ -1242,6 +1243,17 @@ class Program {
       } else if (arg == "--network") {
         includeNetwork = true;
       }
+    }
+
+    // ⚖ THE MINT DOOR, refused before anything is compiled, run or written (user ruling, 2026-08-02 —
+    // see GoldenMintHost). `--update-required` is the only flag that rewrites goldens the tree already
+    // has, and it also drives `TestRunner.UpdateRequiredInSpecFiles`, which regenerates the
+    // `RequiredIR:<target>` and `maxoncstderr` blocks INSIDE `specs/*.md` from compile output alone —
+    // the one mint in this compiler that no run ever validates. Refusing at the flag is what covers it;
+    // there is no second check down there, because the flag is its only way in.
+    if (updateRequired && Testing.GoldenMintHost.RefusalFor(target) is { } mintRefusal) {
+      Console.Error.WriteLine($"error: {TargetFlag}{target.Triple} cannot be minted here — {mintRefusal}");
+      return TreeLock.NothingRanExitCode;
     }
 
     var projectDir = FindProjectRoot();

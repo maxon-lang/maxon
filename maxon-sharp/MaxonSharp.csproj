@@ -144,4 +144,18 @@
     <Exec Command="&quot;$(ProjectDir)../bin/$(AssemblyName)$(_ExeExt)&quot; stdlib-target-selftest" />
   </Target>
 
+  <!-- THE FOURTH GUARD, and the third guard's twin: that one says the cross-compile is CORRECT, this
+       one says its output may not be COMMITTED as a golden. A golden is worth what validated it, and
+       the only thing that validates one here is the test having RUN — which a foreign-OS binary cannot
+       do on this host, because `maxon-sharp` launches every test with Process.Start and owns no runner,
+       emulator or VM. Like the third guard there is nothing for a spec case to catch: the corpus is
+       only ever run natively, so the refusing arm is never taken on any machine that runs it.
+
+       It costs one process launch and compiles nothing - the rule is a pure function of the host and
+       the requested target. Chained AFTER the stdlib check, so the four guards stay a defined sequence
+       rather than two of them sharing an anchor. -->
+  <Target Name="CheckGoldenMintHost" AfterTargets="CheckStdlibTargetCache">
+    <Exec Command="&quot;$(ProjectDir)../bin/$(AssemblyName)$(_ExeExt)&quot; golden-mint-selftest" />
+  </Target>
+
 </Project>
