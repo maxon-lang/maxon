@@ -709,17 +709,13 @@ public static partial class MaxonToStandardConversion {
 						if (isUnsigned) AddToStringResult(EmitU64ToString(stdVal, block, varTypes));
 						else AddToStringResult(EmitI64ToString(stdVal, block, varTypes));
 					}
-				} else if (exprValue is MaxonFloat && valueMap[exprValue] is StdF32 f32ForStr) {
-					var promote = new StdF32ToF64Op(f32ForStr);
-					block.AddOp(promote);
-					if (FormatSpec != null) AddToStringResult(EmitF64ToStringFormatted(promote.Result, FormatSpec, block, varTypes, result));
-					else AddToStringResult(EmitF64ToString(promote.Result, block, varTypes));
-				} else if (exprValue is MaxonFloat) {
-					if (FormatSpec != null) AddToStringResult(EmitF64ToStringFormatted((StdF64)valueMap[exprValue], FormatSpec, block, varTypes, result));
-					else AddToStringResult(EmitF64ToString((StdF64)valueMap[exprValue], block, varTypes));
 				} else if (exprValue is MaxonBool) {
 					AddToStringResult(EmitBoolToString((StdBool)valueMap[exprValue], block, varTypes));
 				} else {
+					// A FLOAT never reaches here: `Parser.RewriteFloatPartAsStdlibText` turned every float
+					// part — including a float-backed enum's raw value — into a `__float_toString` call
+					// while the Maxon IR was still being built, so it arrives as the StdHeapPtr of a
+					// String. See that method for why the rewrite cannot live at this level.
 					throw new InvalidOperationException(
 					  $"String {rdataPrefix}: unsupported expression type {exprValue.GetType().Name} for value %{exprValue.Id}");
 				}
@@ -737,11 +733,10 @@ public static partial class MaxonToStandardConversion {
 	  Dictionary<MaxonValue, StdValue> valueMap) {
 		if (isLiteral || exprValue == null) return null;
 		if (valueMap.TryGetValue(exprValue, out var v) && v is StdHeapPtr) return null;
-		if (formatSpec != null && exprValue is MaxonInteger or MaxonByte or MaxonShort or MaxonFloat)
+		if (formatSpec != null && exprValue is MaxonInteger or MaxonByte or MaxonShort)
 			return ToStringFormattedMaxBytes;
 		return exprValue switch {
 			MaxonInteger or MaxonByte or MaxonShort => I64ToStringMaxBytes,
-			MaxonFloat => F64ToStringMaxBytes,
 			MaxonBool => BoolToStringMaxBytes,
 			_ => null,
 		};
@@ -766,22 +761,13 @@ public static partial class MaxonToStandardConversion {
 			return isUnsigned ? EmitU64ToString(stdVal, block, varTypes, destBuffer).Length
 							  : EmitI64ToString(stdVal, block, varTypes, destBuffer).Length;
 		}
-		if (exprValue is MaxonFloat && valueMap[exprValue] is StdF32 f32) {
-			var promote = new StdF32ToF64Op(f32);
-			block.AddOp(promote);
-			return formatSpec != null ? EmitF64ToStringFormatted(promote.Result, formatSpec, block, varTypes, result, destBuffer).Length
-									  : EmitF64ToString(promote.Result, block, varTypes, destBuffer).Length;
-		}
-		if (exprValue is MaxonFloat)
-			return formatSpec != null ? EmitF64ToStringFormatted((StdF64)valueMap[exprValue], formatSpec, block, varTypes, result, destBuffer).Length
-									  : EmitF64ToString((StdF64)valueMap[exprValue], block, varTypes, destBuffer).Length;
 		return EmitBoolToString((StdBool)valueMap[exprValue], block, varTypes, destBuffer).Length;
 	}
 
 	/// <summary>
 	/// <summary>
 	/// Allocates a buffer, calls a runtime conversion function, and returns (buffer, length).
-	/// Used by EmitI64ToString, EmitF64ToString, and EmitBoolToString.
+	/// Used by EmitI64ToString, EmitU64ToString, and EmitBoolToString.
 	/// Also returns the buffer variable name for cleanup after use.
 	/// </summary>
 	private static (StdI64 Buffer, StdI64 Length, string BufVarName) EmitRuntimeToString(
@@ -820,7 +806,6 @@ public static partial class MaxonToStandardConversion {
 	// when a `n.toString()` is fused into a String record (see TryEmitSingleNumericToStringInline).
 	private const int I64ToStringMaxBytes = 21;   // "-9223372036854775808"
 	private const int U64ToStringMaxBytes = 21;   // "18446744073709551615"
-	private const int F64ToStringMaxBytes = 32;
 	private const int BoolToStringMaxBytes = 6;   // "false"
 	private const int ToStringFormattedMaxBytes = 72;
 
@@ -831,10 +816,6 @@ public static partial class MaxonToStandardConversion {
 	private static (StdI64 Buffer, StdI64 Length, string BufVarName) EmitU64ToString(
 	  StdValue intValue, IrBlock<StandardOp> block, Dictionary<string, string> varTypes, StdI64? destBuffer = null) =>
 	  EmitRuntimeToString(intValue, "maxon_u64_to_string", U64ToStringMaxBytes, block, varTypes, destBuffer);
-
-	private static (StdI64 Buffer, StdI64 Length, string BufVarName) EmitF64ToString(
-	  StdF64 floatValue, IrBlock<StandardOp> block, Dictionary<string, string> varTypes, StdI64? destBuffer = null) =>
-	  EmitRuntimeToString(floatValue, "maxon_f64_to_string", F64ToStringMaxBytes, block, varTypes, destBuffer);
 
 	/// <summary>
 	/// Allocates a buffer, emits the format spec as rdata, calls a formatted runtime conversion function,
@@ -898,11 +879,6 @@ public static partial class MaxonToStandardConversion {
 	  Dictionary<string, string> varTypes, IrModule<StandardOp> result, StdI64? destBuffer = null) =>
 	  EmitRuntimeToStringFormatted(intValue, "maxon_u64_to_string_fmt", ToStringFormattedMaxBytes, formatSpec, block, varTypes, result, destBuffer);
 
-	private static (StdI64 Buffer, StdI64 Length, string BufVarName) EmitF64ToStringFormatted(
-	  StdValue floatValue, string formatSpec, IrBlock<StandardOp> block,
-	  Dictionary<string, string> varTypes, IrModule<StandardOp> result, StdI64? destBuffer = null) =>
-	  EmitRuntimeToStringFormatted(floatValue, "maxon_f64_to_string_fmt", ToStringFormattedMaxBytes, formatSpec, block, varTypes, result, destBuffer);
-
 	/// <summary>
 	/// Handles interpolation of struct values. For String/Character types (which have buffer/length
 	/// fields), reads those directly. For Stringable types, calls the toString() method and uses
@@ -964,8 +940,12 @@ public static partial class MaxonToStandardConversion {
 			return (r.Buffer, r.Length, null);
 		}
 
+		// A FLOAT-backed enum never arrives: `Parser.RewriteFloatPartAsStdlibText` reads its raw value
+		// and renders that through stdlib, so it reaches interpolation as a String. Saying so here keeps
+		// it from silently falling into the integer arm below and casting an StdF64 to an StdI64.
 		if (backingIrType == IrType.F64) {
-			return EmitF64ToString((StdF64)stdValue, block, varTypes);
+			throw new InvalidOperationException(
+			  $"String interpolation: float-backed enum '{enumType.Name}' should have been rewritten to a __float_toString call in the parser");
 		}
 
 		// Enums with explicit backing values interpolate as their raw value;

@@ -18510,6 +18510,21 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     return result;
   }
 
+  /// `stdlib/Builtins.maxon`'s float renderers — the ONE spelling of a float in an emitted program.
+  /// Named here because `RewriteFloatPartAsStdlibText` mints the call by name and the stdlib exports
+  /// them by name; a rename that missed one would surface as a compile error inside the interpolation
+  /// of an unrelated program.
+  private const string FloatToStringStdlibFunction = "__float_toString";
+  private const string FloatToStringPaddedStdlibFunction = "__float_toStringPadded";
+  private const string FloatToStringFixedStdlibFunction = "__float_toStringFixed";
+
+  /// The widest field and the deepest precision `stdlib/Builtins.maxon`'s `PadWidth` and
+  /// `DecimalPrecision` accept. The spec is parsed HERE and the bounds are held THERE, so a spec past
+  /// one is refused with a diagnostic instead of reaching a converter that cannot hold it. (The
+  /// hand-emitted routine this replaces had no bound at all: `"{f:200}"` wrote 200 bytes into a
+  /// 72-byte scratch buffer.)
+  private const long MaxFloatFormatField = uint.MaxValue;
+
   private MaxonStruct EmitStringLiteralWithInterpolation(Token token) {
     var stringTypeName = FindTypeImplementingInterface("BuiltinStringLiteral") ?? throw new CompileError(ErrorCode.ParserExpectedExpression,
         "No type implements BuiltinStringLiteral (String type not found in stdlib)",
@@ -18599,6 +18614,9 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
         }
 
         var (exprValue, _exprKind) = ParseInterpolationExpressionWithKind(exprText, token.Line, token.Column + 1 + exprStart);
+
+        exprValue = RewriteFloatPartAsStdlibText(exprValue, ref formatSpec, stringTypeName, token);
+
         var exprOptimalType = GetOptimalType(exprValue);
 
         // Non-String structs need a toString call
@@ -18629,10 +18647,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
           _currentBlock!.AddOp(callOp);
           InvalidateCachedSelfFields();
 
-          var tempName = $"__interp_tostr_{callOp.Result!.Id}";
-          var assignOp = new MaxonAssignOp(tempName, callOp.Result, true, false, resultKind ?? MaxonValueKind.Struct);
-          _currentBlock!.AddOp(assignOp);
-          _variables.Declare(tempName, resultKind ?? MaxonValueKind.Struct, false, callOp.Result, _currentBlock!, OwnershipFlags.IsTemp | OwnershipFlags.CallReturn, structTypeName: resultStructTypeName);
+          DeclareInterpolationToStringTemp(callOp.Result!, resultKind ?? MaxonValueKind.Struct, resultStructTypeName);
           exprValue = callOp.Result;
         }
 
@@ -18648,6 +18663,118 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     }
 
     return parts;
+  }
+
+  /// <summary>
+  /// Binds a `toString`-style call's result to a temp. The call hands back an OWNED String that the
+  /// interpolation only reads, so the temp is what gives the ownership machinery a name to release —
+  /// without it the String leaks.
+  /// </summary>
+  private void DeclareInterpolationToStringTemp(MaxonValue result, MaxonValueKind resultKind, string? resultStructTypeName) {
+    var tempName = $"__interp_tostr_{result.Id}";
+    _currentBlock!.AddOp(new MaxonAssignOp(tempName, result, true, false, resultKind));
+    _variables.Declare(tempName, resultKind, false, result, _currentBlock!,
+      OwnershipFlags.IsTemp | OwnershipFlags.CallReturn, structTypeName: resultStructTypeName);
+  }
+
+  /// <summary>
+  /// Rewrites a float interpolation part into a call to `stdlib/Builtins.maxon`'s `__float_toString`.
+  ///
+  /// ⭐ A FLOAT'S TEXT IS THE LANGUAGE'S, NOT A TARGET RUNTIME'S. The hand-emitted
+  /// `maxon_f64_to_string` this replaces converted through an i64 integer part and a fixed six-decimal
+  /// fraction, so it answered `9223372036854775807.999999` for `f64.max`, `0.0` for the least
+  /// subnormal, `0.333333` for `0.3333333333333333` and `0.0` for `-0.0` — four wrong answers with one
+  /// cause, and TWO hand-written instruction streams (x64 and arm64) that no mechanism could keep in
+  /// step. `__float_toString` is shortest-round-trip: the digits are found by asking the exact reader
+  /// whether each candidate reads back, so the printer cannot drift from the parser.
+  ///
+  /// ⚠ THE REWRITE HAS TO HAPPEN HERE, IN THE PARSER, and not in the Maxon→Standard lowering where the
+  /// old runtime call was emitted: `DeadFunctionElimination` runs BEFORE that lowering, so a call
+  /// minted there would name a stdlib function the pipeline had already dropped. Emitting a real
+  /// `MaxonCallOp` while the Maxon IR is still being built is also what roots it. `int.fromString`'s
+  /// token rewrite (`TryRewritePrimitiveStaticMethod`) reaches stdlib the same way.
+  /// </summary>
+  private MaxonValue RewriteFloatPartAsStdlibText(MaxonValue exprValue, ref string? formatSpec, string stringTypeName, Token token) {
+    MaxonValue floatValue;
+    if (exprValue is MaxonFloat) {
+      floatValue = exprValue;
+    } else if (exprValue is MaxonEnum enumValue
+               && _typeRegistry.TryGetValue(enumValue.TypeName, out var enumTypeDef)
+               && enumTypeDef is IrEnumType enumType && enumType.BackingType == IrType.F64) {
+      // A float-backed enum interpolates as its raw value, and that value is a float like any other:
+      // reading it here is what keeps ONE renderer answering for every float in the language.
+      var rawValueOp = new MaxonEnumRawValueOp(exprValue, enumValue.TypeName, MaxonValueKind.Float);
+      _currentBlock!.AddOp(rawValueOp);
+      floatValue = rawValueOp.Result;
+    } else {
+      return exprValue;
+    }
+
+    var callArgs = new List<MaxonValue> { floatValue };
+    string calleeName;
+    if (formatSpec == null) {
+      calleeName = FloatToStringStdlibFunction;
+    } else {
+      var (width, zeroFill, precision) = ParseFloatFormatSpec(formatSpec, token);
+      calleeName = precision == null ? FloatToStringPaddedStdlibFunction : FloatToStringFixedStdlibFunction;
+      if (precision != null) callArgs.Add(EmitInterpolationLiteral(new MaxonLiteralOp(precision.Value)));
+      callArgs.Add(EmitInterpolationLiteral(new MaxonLiteralOp(width)));
+      callArgs.Add(EmitInterpolationLiteral(new MaxonLiteralOp(zeroFill)));
+      formatSpec = null;
+    }
+
+    var callee = ResolveFunctionOverloads(calleeName).SingleOrDefault()
+      ?? throw new CompileError(ErrorCode.SemanticUndefinedFunction,
+          $"String interpolation of a float needs '{calleeName}' from stdlib/Builtins.maxon",
+          token.Line, token.Column);
+
+    var callOp = new MaxonCallOp(callee.Name, callArgs, MaxonValueKind.Struct, stringTypeName);
+    _currentBlock!.AddOp(callOp);
+    InvalidateCachedSelfFields();
+    DeclareInterpolationToStringTemp(callOp.Result!, MaxonValueKind.Struct, stringTypeName);
+
+    return callOp.Result!;
+  }
+
+  private MaxonValue EmitInterpolationLiteral(MaxonLiteralOp literal) {
+    _currentBlock!.AddOp(literal);
+    return literal.Result;
+  }
+
+  /// <summary>
+  /// Splits a float format spec into the three constants the stdlib renderers take.
+  ///
+  /// The grammar is `[0][width][.precision]` — a leading `0` selects a zero fill, and anything past
+  /// the digits is ignored, both exactly as the hand-emitted runtime routine read it. A precision is
+  /// absent rather than defaulted: `"{x:8}"` is the LANGUAGE's own spelling right-aligned, and giving
+  /// it a default number of decimals is what made a width silently change the digits.
+  /// </summary>
+  private (long Width, bool ZeroFill, long? Precision) ParseFloatFormatSpec(string formatSpec, Token token) {
+    var pos = 0;
+
+    // A leading '0' is the FILL only when something follows it: `"{x:0}"` is a zero-wide field, and
+    // `"{x:0.2}"` is two decimals rather than a zero fill.
+    var zeroFill = formatSpec.Length > 1 && formatSpec[0] == '0' && formatSpec[1] != '.';
+    if (zeroFill) pos = 1;
+
+    var width = ReadFloatFormatNumber(formatSpec, ref pos, token);
+    if (pos >= formatSpec.Length || formatSpec[pos] != '.') return (width, zeroFill, null);
+
+    pos++;
+    return (width, zeroFill, ReadFloatFormatNumber(formatSpec, ref pos, token));
+  }
+
+  private long ReadFloatFormatNumber(string formatSpec, ref int pos, Token token) {
+    long value = 0;
+    for (; pos < formatSpec.Length && char.IsAsciiDigit(formatSpec[pos]); pos++) {
+      value = value * 10 + (formatSpec[pos] - '0');
+      if (value > MaxFloatFormatField)
+        throw new CompileError(ErrorCode.ParserLiteralOverflow,
+            $"A width or precision in format specifier '{formatSpec}' is larger than {MaxFloatFormatField}",
+            token.Line, token.Column);
+    }
+
+    return value;
   }
 
   /// Returns the resolved value and its value kind (needed to distinguish signed vs unsigned in interpolation).

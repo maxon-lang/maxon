@@ -50,6 +50,23 @@ print("Pi: {3.14159}\n")  // "Pi: 3.14159"
 print("Active: {true}\n")  // "Active: true"
 ```
 
+### How a Float is Spelled
+
+A float interpolates as the **shortest decimal that reads back as the same double** — the fewest digits
+that identify the value uniquely, as Python 3, JavaScript, Rust, Go, Swift, Java and .NET Core all
+print it. Three consequences the goldens across this corpus depend on:
+
+- **Always a fractional part, and never an exponent.** `100.0`, not `100`; the least subnormal spells
+  out in full rather than as `4.9e-324`. A printed float is always text Maxon can read back as a float.
+- **`-0.0` keeps its sign**, because it is a distinct double from `0.0`.
+- **Every digit is significant.** A value that is not exactly 2 can never print as `2.0`, and a value
+  that IS 2 can never print as `1.999999`. (The fixed-six-decimal printer this replaced did both:
+  `log10(100.0)` is `1.9999999999999996` and it printed `1.999999`, while `f64.max` saturated an i64
+  and printed `9223372036854775807.999999`.)
+
+An infinity prints `inf` / `-inf` and a NaN prints `nan`, unsigned — none of the three has a literal
+that could read back, so the spelling is only about being unmistakable.
+
 ### Negative Numbers
 
 Unary operators work inside interpolation:
@@ -326,6 +343,55 @@ end 'main'
 ```
 ```stdout
 Value: 2.5
+```
+
+### Extreme Magnitudes
+
+`f64.max` and the least subnormal are the two ends of the shortest-round-trip rule, and they are the
+two the fixed-six-decimal printer this replaced could not express at all: it converted through an i64
+integer part, so `f64.max` saturated and printed `9223372036854775807.999999`, and the subnormal
+underflowed to `0.0`. Fixed notation costs some zeros and buys a value that can always be read back.
+
+<!-- test: float-extreme-magnitudes -->
+```maxon
+function main() returns ExitCode
+	print("{1.7976931348623157e308}\n")
+	print("{4.9e-324}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+179769313486231570000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000.0
+0.000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000005
+```
+
+### Signed Zero and Full Significance
+
+`-0.0` is a different double from `0.0` and prints with its sign. A value that needs all 17
+significant digits gets all 17: `0.1 + 0.2` is not `0.3`, and printing it as `0.3` would say it was.
+
+<!-- test: float-signed-zero-and-significance -->
+```maxon
+function main() returns ExitCode
+	let negativeZero = -0.0
+	print("{negativeZero}\n")
+	print("{0.0}\n")
+	print("{0.1 + 0.2}\n")
+	print("{1.0 / 3.0}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+-0.0
+0.0
+0.30000000000000004
+0.3333333333333333
 ```
 
 ### Negative Float

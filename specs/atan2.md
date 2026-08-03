@@ -75,7 +75,7 @@ end 'main'
 0
 ```
 ```stdout
-1.570796
+1.5707963267948966
 ```
 
 <!-- test: atan2.negative-x-axis -->
@@ -97,7 +97,7 @@ end 'main'
 0
 ```
 ```stdout
-3.141593
+3.141592653589793
 ```
 
 <!-- test: atan2.negative-y-axis -->
@@ -119,7 +119,7 @@ end 'main'
 0
 ```
 ```stdout
--1.570796
+-1.5707963267948966
 ```
 
 <!-- test: atan2.first-quadrant -->

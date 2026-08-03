@@ -1,31 +1,23 @@
-// Test: float-format-precision
+// Test: float-extreme-magnitudes
 function main() returns ExitCode
-	let f = 3.14159
-	print("{f:.2}\n")
-	print("{f:.4}\n")
-	let g = 2.0
-	print("{g:.3}\n")
+	print("{1.7976931348623157e308}\n")
+	print("{4.9e-324}\n")
 	return 0
 end 'main'
 ---
 ExitCode: 0
 Stdout: ```
-3.14
-3.1416
-2.000
+179769313486231570000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000.0
+0.000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000005
 ```
 ---
 // CompiledIR
 module {
   func @main() -> u8 {
   entry:
-    arm64.prologue stack_size=608
-    arm64.fldr d0, [__float_3.14159]
-    arm64.fstr d0, [x29, #-224]
-    arm64.mov x0, #2
-    arm64.mov x1, #0
-    arm64.mov x2, #0
-    arm64.bl stdlib.__float_toStringFixed
+    arm64.prologue stack_size=400
+    arm64.fldr d0, [__float_1.7976931348623157E+308]
+    arm64.bl stdlib.__float_toString
     arm64.str x0, [x29, #-8]
     arm64.ldr x0, [x29, #-8]
     arm64.ldr x1, [x0, #0]
@@ -39,10 +31,10 @@ module {
     arm64.add x9, x7, x8
     arm64.adrp_add_func x10, __destruct_String
     arm64.mov x11, x10
-    arm64.str x1, [x29, #-232]
-    arm64.str x3, [x29, #-240]
-    arm64.str x5, [x29, #-248]
-    arm64.str x7, [x29, #-256]
+    arm64.str x1, [x29, #-152]
+    arm64.str x3, [x29, #-160]
+    arm64.str x5, [x29, #-168]
+    arm64.str x7, [x29, #-176]
     arm64.mov x0, x9
     arm64.mov x1, x11
     arm64.mov x2, #3
@@ -54,13 +46,13 @@ module {
     arm64.mov x0, #0
     arm64.str x0, [x29, #-24]
     arm64.str x15, [x29, #-32]
-    arm64.ldr x0, [x29, #-256]
+    arm64.ldr x0, [x29, #-176]
     arm64.str x0, [x29, #-40]
-    arm64.ldr x0, [x29, #-232]
+    arm64.ldr x0, [x29, #-152]
     arm64.str x0, [x29, #-48]
-    arm64.ldr x0, [x29, #-240]
+    arm64.ldr x0, [x29, #-160]
     arm64.str x0, [x29, #-56]
-    arm64.ldr x0, [x29, #-248]
+    arm64.ldr x0, [x29, #-168]
     arm64.str x0, [x29, #-64]
     arm64.mov x0, #1
     arm64.str x0, [x29, #-72]
@@ -69,8 +61,8 @@ module {
     arm64.add x2, x0, x1
     arm64.ldr x0, [x29, #-48]
     arm64.ldr x1, [x29, #-56]
-    arm64.str x2, [x29, #-264]
-    arm64.ldr x0, [x29, #-264]
+    arm64.str x2, [x29, #-184]
+    arm64.ldr x0, [x29, #-184]
     arm64.ldr x1, [x29, #-48]
     arm64.ldr x2, [x29, #-56]
     arm64.memcpy
@@ -83,8 +75,8 @@ module {
     arm64.add x2, x0, x1
     arm64.ldr x0, [x29, #-64]
     arm64.ldr x1, [x29, #-72]
-    arm64.str x2, [x29, #-272]
-    arm64.ldr x0, [x29, #-272]
+    arm64.str x2, [x29, #-192]
+    arm64.ldr x0, [x29, #-192]
     arm64.ldr x1, [x29, #-64]
     arm64.ldr x2, [x29, #-72]
     arm64.memcpy
@@ -114,11 +106,9 @@ module {
     arm64.bl mm_incref
     arm64.ldr x0, [x29, #-16]
     arm64.bl stdlib.print
-    arm64.fldr d0, [x29, #-224]
-    arm64.mov x0, #4
-    arm64.mov x1, #0
-    arm64.mov x2, #0
-    arm64.bl stdlib.__float_toStringFixed
+    arm64.fldr d1, [__float_5E-324]
+    arm64.fmov d0, d1
+    arm64.bl stdlib.__float_toString
     arm64.str x0, [x29, #-80]
     arm64.ldr x0, [x29, #-80]
     arm64.ldr x1, [x0, #0]
@@ -132,10 +122,10 @@ module {
     arm64.add x6, x4, x5
     arm64.adrp_add_func x5, __destruct_String
     arm64.mov x7, x5
-    arm64.str x1, [x29, #-280]
-    arm64.str x2, [x29, #-288]
-    arm64.str x3, [x29, #-296]
-    arm64.str x4, [x29, #-304]
+    arm64.str x1, [x29, #-200]
+    arm64.str x2, [x29, #-208]
+    arm64.str x3, [x29, #-216]
+    arm64.str x4, [x29, #-224]
     arm64.mov x0, x6
     arm64.mov x1, x7
     arm64.mov x2, #3
@@ -147,13 +137,13 @@ module {
     arm64.mov x0, #0
     arm64.str x0, [x29, #-96]
     arm64.str x2, [x29, #-104]
-    arm64.ldr x0, [x29, #-304]
+    arm64.ldr x0, [x29, #-224]
     arm64.str x0, [x29, #-112]
-    arm64.ldr x0, [x29, #-280]
+    arm64.ldr x0, [x29, #-200]
     arm64.str x0, [x29, #-120]
-    arm64.ldr x0, [x29, #-288]
+    arm64.ldr x0, [x29, #-208]
     arm64.str x0, [x29, #-128]
-    arm64.ldr x0, [x29, #-296]
+    arm64.ldr x0, [x29, #-216]
     arm64.str x0, [x29, #-136]
     arm64.mov x0, #1
     arm64.str x0, [x29, #-144]
@@ -162,8 +152,8 @@ module {
     arm64.add x2, x0, x1
     arm64.ldr x0, [x29, #-120]
     arm64.ldr x1, [x29, #-128]
-    arm64.str x2, [x29, #-312]
-    arm64.ldr x0, [x29, #-312]
+    arm64.str x2, [x29, #-232]
+    arm64.ldr x0, [x29, #-232]
     arm64.ldr x1, [x29, #-120]
     arm64.ldr x2, [x29, #-128]
     arm64.memcpy
@@ -176,8 +166,8 @@ module {
     arm64.add x2, x0, x1
     arm64.ldr x0, [x29, #-136]
     arm64.ldr x1, [x29, #-144]
-    arm64.str x2, [x29, #-320]
-    arm64.ldr x0, [x29, #-320]
+    arm64.str x2, [x29, #-240]
+    arm64.ldr x0, [x29, #-240]
     arm64.ldr x1, [x29, #-136]
     arm64.ldr x2, [x29, #-144]
     arm64.memcpy
@@ -207,132 +197,28 @@ module {
     arm64.bl mm_incref
     arm64.ldr x0, [x29, #-88]
     arm64.bl stdlib.print
-    arm64.fldr d1, [__float_2]
-    arm64.fmov d0, d1
-    arm64.mov x0, #3
-    arm64.mov x1, #0
-    arm64.mov x2, #0
-    arm64.bl stdlib.__float_toStringFixed
-    arm64.str x0, [x29, #-152]
-    arm64.ldr x0, [x29, #-152]
-    arm64.ldr x1, [x0, #0]
-    arm64.ldr x0, [x29, #-152]
-    arm64.ldr x2, [x0, #8]
-    arm64.adrp_add_rdata x0, __interp_lit_7
-    arm64.mov x3, x0
-    arm64.mov x0, #1
-    arm64.add x4, x2, x0
-    arm64.mov x5, #49
-    arm64.add x6, x4, x5
-    arm64.adrp_add_func x5, __destruct_String
-    arm64.mov x7, x5
-    arm64.str x1, [x29, #-328]
-    arm64.str x2, [x29, #-336]
-    arm64.str x3, [x29, #-344]
-    arm64.str x4, [x29, #-352]
-    arm64.mov x0, x6
-    arm64.mov x1, x7
-    arm64.mov x2, #3
-    arm64.bl mm_alloc
-    arm64.str x0, [x29, #-160]
-    arm64.mov x0, #48
-    arm64.ldr x1, [x29, #-160]
-    arm64.add x2, x1, x0
-    arm64.mov x0, #0
-    arm64.str x0, [x29, #-168]
-    arm64.str x2, [x29, #-176]
-    arm64.ldr x0, [x29, #-352]
-    arm64.str x0, [x29, #-184]
-    arm64.ldr x0, [x29, #-328]
-    arm64.str x0, [x29, #-192]
-    arm64.ldr x0, [x29, #-336]
-    arm64.str x0, [x29, #-200]
-    arm64.ldr x0, [x29, #-344]
-    arm64.str x0, [x29, #-208]
-    arm64.mov x0, #1
-    arm64.str x0, [x29, #-216]
-    arm64.ldr x0, [x29, #-176]
-    arm64.ldr x1, [x29, #-168]
-    arm64.add x2, x0, x1
-    arm64.ldr x0, [x29, #-192]
-    arm64.ldr x1, [x29, #-200]
-    arm64.str x2, [x29, #-360]
-    arm64.ldr x0, [x29, #-360]
-    arm64.ldr x1, [x29, #-192]
-    arm64.ldr x2, [x29, #-200]
-    arm64.memcpy
-    arm64.ldr x0, [x29, #-168]
-    arm64.ldr x1, [x29, #-200]
-    arm64.add x2, x0, x1
-    arm64.str x2, [x29, #-168]
-    arm64.ldr x0, [x29, #-176]
-    arm64.ldr x1, [x29, #-168]
-    arm64.add x2, x0, x1
-    arm64.ldr x0, [x29, #-208]
-    arm64.ldr x1, [x29, #-216]
-    arm64.str x2, [x29, #-368]
-    arm64.ldr x0, [x29, #-368]
-    arm64.ldr x1, [x29, #-208]
-    arm64.ldr x2, [x29, #-216]
-    arm64.memcpy
-    arm64.ldr x0, [x29, #-176]
-    arm64.ldr x1, [x29, #-184]
-    arm64.add x2, x0, x1
-    arm64.mov x0, #0
-    arm64.strb x0, [x2, #0]
-    arm64.ldr x0, [x29, #-176]
-    arm64.ldr x1, [x29, #-184]
-    arm64.mov x2, #1
-    arm64.mov x3, #-3
-    arm64.ldr x4, [x29, #-160]
-    arm64.str x0, [x4, #0]
-    arm64.ldr x0, [x29, #-160]
-    arm64.str x1, [x0, #8]
-    arm64.ldr x0, [x29, #-160]
-    arm64.str x1, [x0, #16]
-    arm64.ldr x0, [x29, #-160]
-    arm64.str x2, [x0, #24]
-    arm64.ldr x0, [x29, #-160]
-    arm64.str x3, [x0, #32]
-    arm64.mov x0, #0
-    arm64.ldr x1, [x29, #-160]
-    arm64.str x0, [x1, #40]
-    arm64.ldr x0, [x29, #-160]
-    arm64.bl mm_incref
-    arm64.ldr x0, [x29, #-160]
-    arm64.bl stdlib.print
-    arm64.ldr x0, [x29, #-160]
-    arm64.cmp x0, #0
-    arm64.b.eq main.__skip_guarded_223
-    arm64.bl mm_decref
-    arm64.label main.__skip_guarded_223
-    arm64.ldr x0, [x29, #-152]
-    arm64.cmp x0, #0
-    arm64.b.eq main.__skip_guarded_225
-    arm64.bl mm_decref
-    arm64.label main.__skip_guarded_225
     arm64.ldr x0, [x29, #-88]
     arm64.cmp x0, #0
-    arm64.b.eq main.__skip_guarded_227
+    arm64.b.eq main.__skip_guarded_144
     arm64.bl mm_decref
-    arm64.label main.__skip_guarded_227
+    arm64.label main.__skip_guarded_144
     arm64.ldr x0, [x29, #-80]
     arm64.cmp x0, #0
-    arm64.b.eq main.__skip_guarded_229
+    arm64.b.eq main.__skip_guarded_146
     arm64.bl mm_decref
-    arm64.label main.__skip_guarded_229
+    arm64.label main.__skip_guarded_146
     arm64.ldr x0, [x29, #-16]
     arm64.cmp x0, #0
-    arm64.b.eq main.__skip_guarded_231
+    arm64.b.eq main.__skip_guarded_148
     arm64.bl mm_decref
-    arm64.label main.__skip_guarded_231
+    arm64.label main.__skip_guarded_148
     arm64.ldr x0, [x29, #-8]
     arm64.cmp x0, #0
-    arm64.b.eq main.__skip_guarded_233
+    arm64.b.eq main.__skip_guarded_150
     arm64.bl mm_decref
-    arm64.label main.__skip_guarded_233
+    arm64.label main.__skip_guarded_150
     arm64.mov x0, #0
-    arm64.epilogue stack_size=608
+    arm64.epilogue stack_size=400
     arm64.ret
   }
 }

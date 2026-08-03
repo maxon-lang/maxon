@@ -1070,7 +1070,7 @@ end '__bigTrimLeadingZeroLimbs'
 
 // The TEXT of a digit string. Each entry is a value 0..9, so interpolating it IS its character — no
 // ASCII arithmetic, and no `String.from`, which requires the program's own `Array with Byte` (see
-// `DigitString`). The quadratic append is `__zeros`', and bounded by the same figure: a rendered float
+// `DigitString`). The quadratic append is `__repeatedText`', and bounded by the same figure: a rendered float
 // is at most a few hundred characters.
 function __digitText(digits DigitString) returns String
 	var text = ""
@@ -1355,6 +1355,15 @@ let __ScientificExponentMinDigits = 2
 // are kept out here rather than decided once inside. What is decided once is the only part that is not
 // a matter of spelling: WHICH DIGITS.
 function __float_shortestDigits(magnitude ParsedInt) returns __ScaledDigits
+	let exact = __float_exactDigits(magnitude)
+	return __shortestRoundTrip(exact.digits, scale: exact.scale, target: magnitude)
+end '__float_shortestDigits'
+
+// The EXACT decimal expansion of `magnitude` — every digit the double really is, before any question
+// of how many to KEEP. The shortest-round-trip search shortens it from the front; `"{x:.N}"` cuts it
+// at a fixed place instead. Both cuts have to be made against the exact digits, so the expansion is
+// computed once, here, rather than inside whichever of them happens to want it.
+function __float_exactDigits(magnitude ParsedInt) returns __ScaledDigits
 	let exponentField = (magnitude shr __SignificandFieldBits) and __ExponentFieldMask
 	let fraction = magnitude and __SignificandFieldMask
 
@@ -1379,8 +1388,8 @@ function __float_shortestDigits(magnitude ParsedInt) returns __ScaledDigits
 	// value = 0.<exactDigits> × 10^scale. Trailing zeros carry no information and are dropped, which
 	// leaves `scale` untouched (it counts from the FRONT).
 	let scale = exactDigits.count() + pointExponent
-	return __shortestRoundTrip(__withoutTrailingZeros(exactDigits), scale: scale, target: magnitude)
-end '__float_shortestDigits'
+	return __ScaledDigits.create(__withoutTrailingZeros(exactDigits), scale: scale)
+end '__float_exactDigits'
 
 // The decimal text of the double `bits` encodes: the shortest string that reads back as the same
 // double, in the notation the bootstrap uses. Finite values only — see `__InfiniteExponentField`.
@@ -1507,6 +1516,15 @@ function __roundsUp(digits DigitString, kept DigitCount) returns bool
 		end 'aboveHalfway'
 	end 'restOfTail'
 
+	// ⭐ `kept` REACHES ZERO through `"{x:.N}"`, where every digit can sit below the last place kept
+	// (`0.05` at one decimal). There is no last kept digit then, and the prefix an exact half would
+	// round towards is a single implied `0` — even, so the half rounds DOWN, exactly as `0.5` at zero
+	// decimals gives `0`. The shortest-round-trip search never asks with `kept` below 1, which is why
+	// this arm did not exist and why reading `digits.get(-1)` would have been its answer.
+	if kept == 0 'nothingKept'
+		return false
+	end 'nothingKept'
+
 	let lastKept = try digits.get(kept - 1) otherwise panic("__roundsUp: kept >= 1 but get({kept - 1}) failed")
 	return lastKept mod 2 == 1
 end '__roundsUp'
@@ -1537,27 +1555,20 @@ function __scientificDisplay(digits DigitString, scale DecimalPointScale) return
 	let rest = "" if digits.count() == 1 else ".{__digitText(__digitSlice(digits, start: 1, endIndex: digits.count()))}"
 	let exponent = scale - 1
 	let exponentSign = "-" if exponent < 0 else "+"
-	return "{lead}{rest}E{exponentSign}{__paddedExponent(exponent if exponent >= 0 else -exponent)}"
+	let exponentText = "{exponent if exponent >= 0 else -exponent}"
+	let paddedExponent = __leftPadded(exponentText, width: __ScientificExponentMinDigits, fill: __ZeroDigitText)
+	return "{lead}{rest}E{exponentSign}{paddedExponent}"
 end '__scientificDisplay'
-
-// The exponent's magnitude, left-padded with zeros to `__ScientificExponentMinDigits`.
-function __paddedExponent(magnitude DecimalScaleExponent) returns String
-	var text = "{magnitude}"
-	while text.count() < __ScientificExponentMinDigits 'pad'
-		text = "0{text}"
-	end 'pad'
-	return text
-end '__paddedExponent'
 
 // Ordinary decimal notation: the point sits `scale` digits in, with zeros filling whichever side is
 // short.
 function __fixedDisplay(digits DigitString, scale DecimalPointScale) returns String
 	if scale <= 0 'leadingZeros'
-		return "0.{__zeros(-scale)}{__digitText(digits)}"
+		return "0.{__repeatedText(__ZeroDigitText, count: -scale)}{__digitText(digits)}"
 	end 'leadingZeros'
 
 	if scale >= digits.count() 'trailingZeros'
-		return "{__digitText(digits)}{__zeros(scale - digits.count())}"
+		return "{__digitText(digits)}{__repeatedText(__ZeroDigitText, count: scale - digits.count())}"
 	end 'trailingZeros'
 
 	return "{__digitText(__digitSlice(digits, start: 0, endIndex: scale))}.{__digitText(__digitSlice(digits, start: scale, endIndex: digits.count()))}"
@@ -1569,13 +1580,32 @@ function __digitSlice(digits DigitString, start DigitCount, endIndex DigitCount)
 	return try digits.slice(start, endIndex: endIndex) otherwise panic("__digitSlice: [{start}, {endIndex}) is not inside a {digits.count()}-digit string — the caller's bound is wrong")
 end '__digitSlice'
 
-function __zeros(count DigitCount) returns String
+// How many times a fill unit is repeated: a run of zeros inside a number, or the padding of a
+// right-aligned field. Both are "this text, `count` times", so they share one loop.
+typealias RepeatCount = int(0 to u64.max)
+
+// The fill of a run of zeros — inside a fixed-notation float, inside a scientific exponent, and in
+// front of a `"{x:08}"` field. One spelling, so a change of representation cannot reach three of them
+// and miss the fourth.
+let __ZeroDigitText = "0"
+
+function __repeatedText(unit String, count RepeatCount) returns String
 	var text = ""
 	for _ in 0 upto count 'each'
-		text = "{text}0"
+		text = "{text}{unit}"
 	end 'each'
 	return text
-end '__zeros'
+end '__repeatedText'
+
+// `text` right-aligned in a `width`-wide field. A width is a MINIMUM: text already at or past it is
+// returned untouched, never truncated — a number silently shortened to fit a column is a wrong answer
+// wearing the right shape.
+function __leftPadded(text String, width RepeatCount, fill String) returns String
+	if text.count() >= width 'wideEnough'
+		return text
+	end 'wideEnough'
+	return "{__repeatedText(fill, count: width - text.count())}{text}"
+end '__leftPadded'
 
 // --- `__float_toString`: MAXON's own spelling of a float, for `"{x}"` in an emitted program ---
 
@@ -1599,32 +1629,58 @@ let __FloatFractionSuffix = ".0"
 let __InfinityText = "inf"
 let __NotANumberText = "nan"
 
+let __NegativeSignText = "-"
+
 // The Maxon spelling of `value`: the shortest decimal that reads back as the same double, always with
 // a decimal point, never in exponent notation. THE entry point `"{x}"` lowers to for a float part
-// (`Parser.materializeInterpExpr`).
+// (shv2's `Parser.materializeInterpExpr`; the bootstrap's `RewriteFloatPartAsStdlibText`).
 export function __float_toString(value ParsedFloat) returns String
 	let bits = __Builtins.floatToBits(value)
-	let negative = bits < 0
-	let magnitude = bits and __FloatMagnitudeMask
-	let sign = "-" if negative else ""
+	return "{__floatSignText(bits)}{__floatMagnitudeText(bits and __FloatMagnitudeMask)}"
+end '__float_toString'
 
-	let exponentField = (magnitude shr __SignificandFieldBits) and __ExponentFieldMask
-	if exponentField == __InfiniteExponentField 'notFinite'
-		if (magnitude and __SignificandFieldMask) != 0 'isNan'
-			return __NotANumberText
-		end 'isNan'
-		return "{sign}{__InfinityText}"
+// ⭐ **THE SIGN AND THE MAGNITUDE ARE SPLIT BECAUSE A FIELD HAS TO GET BETWEEN THEM.** `"{x:08}"` pads
+// with zeros AFTER the sign, so the padded and fixed-precision spellings need the two halves apart —
+// and re-deriving "is this negative?" at those call sites would be a second copy of a decision this
+// function already makes, free to disagree with it about a NaN.
+function __floatSignText(bits ParsedInt) returns String
+	if bits >= 0 'positive'
+		return ""
+	end 'positive'
+
+	// NaN carries no sign: the sign bit of a NaN is not a property of the value, and printing it would
+	// suggest an ordering NaN has not got.
+	if __floatIsNan(bits and __FloatMagnitudeMask) 'unsigned'
+		return ""
+	end 'unsigned'
+
+	return __NegativeSignText
+end '__floatSignText'
+
+// Everything `__float_toString` writes after the sign, for a magnitude whose sign bit is already clear.
+function __floatMagnitudeText(magnitude ParsedInt) returns String
+	if __floatIsNotFinite(magnitude) 'notFinite'
+		return __NotANumberText if __floatIsNan(magnitude) else __InfinityText
 	end 'notFinite'
 
-	// `-0.0` keeps its sign: it is a distinct double, and `"{0.0 - 0.0}"` printing `0.0` while
-	// `"{-0.0}"` printed the same thing would hide the one bit that tells them apart.
+	// `-0.0` keeps its sign — the caller's `__floatSignText` supplies it — because it is a distinct
+	// double, and `"{0.0 - 0.0}"` printing `0.0` while `"{-0.0}"` printed the same thing would hide the
+	// one bit that tells them apart.
 	if magnitude == 0 'zero'
-		return "{sign}0{__FloatFractionSuffix}"
+		return "0{__FloatFractionSuffix}"
 	end 'zero'
 
 	let shortest = __float_shortestDigits(magnitude)
-	return "{sign}{__float_fixedText(shortest.digits, scale: shortest.scale)}"
-end '__float_toString'
+	return __float_fixedText(shortest.digits, scale: shortest.scale)
+end '__floatMagnitudeText'
+
+function __floatIsNotFinite(magnitude ParsedInt) returns bool
+	return ((magnitude shr __SignificandFieldBits) and __ExponentFieldMask) == __InfiniteExponentField
+end '__floatIsNotFinite'
+
+function __floatIsNan(magnitude ParsedInt) returns bool
+	return __floatIsNotFinite(magnitude) and (magnitude and __SignificandFieldMask) != 0
+end '__floatIsNan'
 
 // `__fixedDisplay` with the forced fractional part. It writes a decimal point only where the digits
 // straddle one, so a whole number comes back without one and needs the suffix; every other shape
@@ -1635,3 +1691,103 @@ function __float_fixedText(digits DigitString, scale DecimalPointScale) returns 
 	end 'wholeNumber'
 	return __fixedDisplay(digits, scale: scale)
 end '__float_fixedText'
+
+// --- `"{x:8}"`, `"{x:08}"`, `"{x:8.2}"`: A FIELD AND A PRECISION, over the SAME digits ---
+
+// ⭐ **A FORMAT SPEC IS NOT A SECOND RENDERER, AND TREATING IT AS ONE IS WHAT WENT WRONG.** The
+// bootstrap answered `"{x}"` from `__float_toString` and `"{x:8}"` from a hand-emitted routine that
+// converted through an i64 integer part, so one double printed two different numbers depending on
+// whether a width was asked for. Everything below cuts or pads the digits `__float_exactDigits`
+// already found; nothing here re-derives them.
+//
+// The width, the fill and the precision are compile-time constants the PARSER lifts out of the spec,
+// so nothing here reads text.
+typealias PadWidth = int(0 to u32.max)
+typealias DecimalPrecision = int(0 to u32.max)
+
+let __SpaceFillText = " "
+
+export function __float_toStringPadded(value ParsedFloat, width PadWidth, zeroFill bool) returns String
+	let bits = __Builtins.floatToBits(value)
+	return __floatFieldText(__floatSignText(bits), magnitude: __floatMagnitudeText(bits and __FloatMagnitudeMask), width: width, zeroFill: zeroFill)
+end '__float_toStringPadded'
+
+// `value` written with EXACTLY `precision` digits after the point, in a `width`-wide field.
+export function __float_toStringFixed(value ParsedFloat, precision DecimalPrecision, width PadWidth, zeroFill bool) returns String
+	let bits = __Builtins.floatToBits(value)
+	let magnitude = bits and __FloatMagnitudeMask
+	let sign = __floatSignText(bits)
+
+	// An infinity and a NaN have no decimal places to give, so a precision cannot change what they say.
+	if __floatIsNotFinite(magnitude) 'notFinite'
+		return __floatFieldText(sign, magnitude: __floatMagnitudeText(magnitude), width: width, zeroFill: zeroFill)
+	end 'notFinite'
+
+	let rounded = __float_roundedToDecimals(magnitude, precision: precision)
+	return __floatFieldText(sign, magnitude: __fixedPrecisionText(rounded, precision: precision), width: width, zeroFill: zeroFill)
+end '__float_toStringFixed'
+
+// ⚠ **ZERO FILL GOES AFTER THE SIGN — `-0003.14`, not `000-3.14`.** Zeros in front of a `-` read as the
+// leading digits of a POSITIVE number, which is the one thing a numeric field must never say. (The
+// bootstrap's hand-emitted float formatter wrote `000-3.14` while its INTEGER formatter already wrote
+// `-00042`, so the two disagreed with each other about one question.) A space fill has no such hazard
+// and simply sits in front of the whole thing.
+function __floatFieldText(sign String, magnitude String, width PadWidth, zeroFill bool) returns String
+	if not zeroFill 'spaceFill'
+		return __leftPadded("{sign}{magnitude}", width: width, fill: __SpaceFillText)
+	end 'spaceFill'
+
+	// The sign occupies columns of the field that the magnitude's zeros must not claim as well.
+	let magnitudeWidth = width - sign.count() if width >= sign.count() else 0
+	return "{sign}{__leftPadded(magnitude, width: magnitudeWidth, fill: __ZeroDigitText)}"
+end '__floatFieldText'
+
+// `magnitude`'s exact expansion correctly rounded to `precision` decimal places, round-half-EVEN — the
+// same rule the shortest-round-trip search cuts with, so the two cuts cannot disagree about a tie.
+function __float_roundedToDecimals(magnitude ParsedInt, precision DecimalPrecision) returns __ScaledDigits
+	if magnitude == 0 'zero'
+		return __zeroScaledDigits()
+	end 'zero'
+
+	let exact = __float_exactDigits(magnitude)
+	// `value = 0.<digits> × 10^scale`, so the last place kept is `scale + precision` digits in.
+	let cut = exact.scale + precision
+
+	if cut < 0 'belowEveryPlace'
+		return __zeroScaledDigits()
+	end 'belowEveryPlace'
+
+	if cut == 0 'atTheLastPlace'
+		// Every digit sits below the last place kept, so the value either rounds away entirely or up to
+		// one unit in that place — `0.06` at one decimal is `0.1`, `0.04` is `0.0`.
+		if __roundsUp(exact.digits, kept: 0) 'roundsToOneUnit'
+			return __ScaledDigits.create(__singleDigit(1), scale: exact.scale + 1)
+		end 'roundsToOneUnit'
+		return __zeroScaledDigits()
+	end 'atTheLastPlace'
+
+	return __roundedToLength(exact.digits, kept: cut, scale: exact.scale)
+end '__float_roundedToDecimals'
+
+// Zero, scaled so `__fixedPrecisionText` finds its one digit entirely LEFT of the point — which is
+// where the `0` of `0.00` belongs, and what makes a zero-precision zero print `0` rather than `00`.
+function __zeroScaledDigits() returns __ScaledDigits
+	return __ScaledDigits.create(__singleDigit(0), scale: 1)
+end '__zeroScaledDigits'
+
+// `rounded` written with exactly `precision` places after the point. The rounding above already put
+// the last significant digit at or before that place, so `__fixedDisplay` writes AT MOST `precision`
+// of them and this only makes up the difference in zeros — and supplies the point itself when the
+// digits stop at or before it.
+function __fixedPrecisionText(rounded __ScaledDigits, precision DecimalPrecision) returns String
+	let written = __fixedDisplay(rounded.digits, scale: rounded.scale)
+	if rounded.scale >= rounded.digits.count() 'noFractionWritten'
+		if precision == 0 'wholeNumber'
+			return written
+		end 'wholeNumber'
+		return "{written}.{__repeatedText(__ZeroDigitText, count: precision)}"
+	end 'noFractionWritten'
+
+	let placesWritten = rounded.digits.count() - rounded.scale
+	return "{written}{__repeatedText(__ZeroDigitText, count: precision - placesWritten)}"
+end '__fixedPrecisionText'
