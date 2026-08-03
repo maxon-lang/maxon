@@ -656,7 +656,7 @@ end 'main'
 205
 ```
 
-<!-- disabled-test: enum-ordinal-argument -->
+<!-- test: enum-ordinal-argument -->
 <!-- ENUM PROPERTIES — `k.ordinal`; see `enum-property-argument`. -->
 `.ordinal` is an integer, so the same shape of access on the same value selects
 the OTHER overload. Declared with `String` first, so a resolver that fell back to

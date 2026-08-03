@@ -1155,6 +1155,14 @@ export function immutableMutatingCallMessage(blamed String, paramName String, fu
 	return "cannot pass '{blamed}' to function that mutates parameter '{paramName}' (in {functionName})"
 end 'immutableMutatingCallMessage'
 
+// ⭐ **WHAT SEPARATES AN UNNUMBERED ENUM'S TAG FROM ITS ORDINAL — nothing, and this constant IS that
+// claim.** `Parser.parseEnumOrdinal` reaches its emit only on `EnumLayout.tagsAreDeclarationIndices`,
+// which proves `caseTags[i] == i` for every case; the offset the accessor then adds is therefore zero by
+// PROOF rather than by luck. It is named so the `+ 0` in the emit reads as the identity it was shown to
+// be, instead of as a literal a reader has to re-derive — and so the day a tag→index mapping lands, the
+// thing that changes is this expression and not a bare `0` nobody can search for.
+let EnumOrdinalTagOffset = 0 as ParsedInt
+
 // Every type NAME one file writes in a type position (P1.9). See `Parser.usedTypeNames`.
 export typealias UsedTypeNameSet = Set with ByteArray
 
@@ -27268,6 +27276,15 @@ export type Parser
 		// returning the same `parseFieldAccess()` call, whose tests were also the two `methodCallsAt` spells out
 		// for the statement door. See `baseNamesAValueInScope` — it is where the shadowing rule now lives, and
 		// where `Self` is excluded from it.
+		// `s.ordinal` on an enum-typed binding — asked BEFORE the field arm and never instead of it. The two
+		// are disjoint by the member name, and the order is what matters: an enum binding reaching
+		// `parseFieldAccess` is refused by `requireStructBase` (a declared enum erases to `integer`, so it
+		// has no struct layout to find), which is the E2015 this arm exists to route past. See
+		// `enumOrdinalFieldAt`.
+		if self.enumOrdinalFieldAt(self.pos) 'enumOrdinal'
+			return try self.parseEnumOrdinal()
+		end 'enumOrdinal'
+
 		if self.baseNamesAValueInScope(self.current()) 'valueBase'
 			return try self.parseFieldAccess()
 		end 'valueBase'
@@ -39348,6 +39365,100 @@ export type Parser
 
 		return self.typeIsArrayInstance(self.scope.getInfo(baseName).varType)
 	end 'arrayManagedFieldAt'
+
+	// ⭐⭐ **`<enumBinding> . ordinal` — THE ENUM ACCESSOR DOOR, and it needs a predicate of its own for
+	// `arrayManagedFieldAt`'s reason exactly.**
+	//
+	// `.ordinal` is a FIELD read: no parentheses, so `methodCallsAt` (which requires a `(` at +3) declines
+	// it and the expression dispatcher falls through to the field path — where an enum-typed binding is
+	// refused, because `TypeResolution` erases a declared `enum` to `integer` and `requireStructBase` finds
+	// no struct. That is the E2015 the corpus reported: *"a field access on 's', which is declared 'int' and
+	// not a struct type"*. It is pure routing; nothing about the access is ill-formed.
+	//
+	// ⭐ **THE ENUM IS READ OFF THE VALUE, NOT OFF THE DECLARED TYPE, AND THAT IS THE WHOLE TRICK.**
+	// `enumMatchFor` already answers "which enum does this value belong to?" from the value's `named(X)`
+	// TAG, which the parser stamps and no later pass rewrites — which is why `match s` works on the very
+	// binding whose `varType` reads `integer`. This asks the identical question through the identical door,
+	// so the accessor and the `match` can never come to disagree about what `s` is.
+	//
+	// ⚠ **IT IS NARROW ON PURPOSE, exactly as the `.managed` predicate is.** The member must be `ordinal`
+	// — every other member of an enum keeps `requireStructBase`'s refusal, which is still the true answer
+	// for `.name`/`.rawValue` (a different mechanism; see `EnumOrdinalMemberName`). And the base must be a
+	// binding in THIS function's scope: a captured or top-level enum's `.ordinal` stays refused rather than
+	// reaching a door built for a local's `boundValue`.
+	function enumOrdinalFieldAt(index TokenIndex) returns bool
+		if not tokenCanBeAName(self.tokenAt(index)) 'notABase'
+			return false
+		end 'notABase'
+		if self.kindAt(index + 1) != TokenKind.dot or not self.tokenAt(index + 2).value.equals(EnumOrdinalMemberName) 'notTheOrdinalMember'
+			return false
+		end 'notTheOrdinalMember'
+
+		let baseName = self.baseBindingName(self.tokenAt(index))
+		if not self.scope.contains(baseName) 'notALocalBinding'
+			return false
+		end 'notALocalBinding'
+
+		// The tag test FIRST, for `valueIsUnion`'s stated reason: `enumMatchFor` returns a `DeclaredEnum`,
+		// a union VALUE that heap-allocates even for its `undeclared` case, and this predicate is asked of
+		// every `<name>.<name>` in the program. A value can only belong to an enum if its tag is `named`,
+		// and that test is a scalar column read that allocates nothing.
+		let boundValue = self.scope.getInfo(baseName).boundValue
+		if self.tagOf(boundValue) != ValueTypeTag.named 'notAnEnumValue'
+			return false
+		end 'notAnEnumValue'
+
+		return enumMatchIsDeclared(self.enumMatchFor(boundValue))
+	end 'enumOrdinalFieldAt'
+
+	// ⭐ **`s.ordinal` — THE CASE'S DECLARATION INDEX, WHICH FOR AN UNNUMBERED ENUM IS THE VALUE ITSELF.**
+	// Guarded by `enumOrdinalFieldAt`, so the base is a local binding whose value belongs to a declared
+	// enum; this consumes `<base> . ordinal` and answers.
+	//
+	// ⭐⭐ **IT IS SPELLED `<enum> + 0`, AND THAT IS THE MEANING RATHER THAN A TRICK FOR PRODUCING IT.**
+	// An enum value IS its tag (`parseEnumLiteral`), so under this function's guard the ordinal and the
+	// value are the same 64 bits — and `s + 0` is already a legal Maxon expression whose result the
+	// language types `integer` (`TypeRules.arithResultTag`, a `named` operand being `TypeClass.numeric`).
+	// So the accessor emits exactly the IR the equivalent source expression does, and gets its result type
+	// from the one rule that types every other arithmetic result rather than from an assertion here.
+	//
+	// ⚠ **THE FRESH VALUE IS THE POINT, AND HANDING BACK THE RECEIVER'S OWN `ValueId` WAS MEASURED WRONG.**
+	// It looks free — same bits, no instruction — but the receiver's value is tagged `named(LocalStatus)`,
+	// and that tag is what E3005 reads: `return s.ordinal` from a `returns Integer` function reported
+	// *"Cannot return 'LocalStatus' from function declared to return 'int'"*. The tag is not decoration; it
+	// is the value's source type, and an ordinal is not of the enum's type. `retypeValue` is not the fix
+	// either — it rewrites the columns IN PLACE, and this value is a BINDING's, so retyping it would break
+	// the `match s` two lines later. (`s as Integer` does not help for the same reason: shv2's `as` inside
+	// one numeric domain leaves the tag alone, so it is refused identically.)
+	//
+	// ⚠ **A RENUMBERED ENUM IS REFUSED, NOT ANSWERED WRONG.** `enum Code { ok = 5 }` has ordinal 0 and tag
+	// 5, and reading the value would answer 5 — a silent wrong answer, which is the one outcome forbidden
+	// here. The mapping it needs is a runtime tag→index dispatch; the refusal carries what is missing, in
+	// the same `unsupported` idiom every other scoped mechanism in this parser reports with.
+	//
+	// It takes no `IrFunction`: the emitters it calls append to `self.currentBlock`, exactly as the
+	// `.managed` field door's do. A parameter kept for symmetry would be an unused one (E3012).
+	function parseEnumOrdinal() returns ValueId throws ParseError
+		let baseTok = try self.consumeChainBaseToken()
+		try self.consume(TokenKind.dot)
+		let memberTok = try self.consumeMemberNameToken()
+
+		let baseBinding = self.scope.getInfo(self.baseBindingName(baseTok))
+
+		// The base is a USE of the binding, so it takes the same liveness/move guard every other read of a
+		// name takes — a moved-from enum binding is dead here exactly as it is at `requireStructBase`.
+		try self.requireBindingLive(baseBinding, nameTok: baseTok)
+
+		let layout = requireEnumLayout(self.enumMatchFor(baseBinding.boundValue))
+		if not layout.tagsAreDeclarationIndices() 'renumberedCases'
+			throw ParseError.unsupported("'.{String.from(memberTok.value)}' on '{String.from(layout.name)}', whose cases declare explicit raw values — an ordinal is the DECLARATION INDEX and not the value, so reading it needs a runtime tag-to-index mapping; it arrives with the rung that lands the `.rawValue`/`.name` accessors", line: memberTok.line, column: memberTok.column)
+		end 'renumberedCases'
+
+		let range = SourceRange.between(baseTok, last: memberTok)
+		let zero = self.emitLiteral(EnumOrdinalTagOffset, valueType: MaxonType.integer, range: range)
+
+		return try self.emitBinOp(baseBinding.boundValue, rhs: zero, op: MaxonBinOp.add, opTok: memberTok)
+	end 'parseEnumOrdinal'
 
 	// ⭐ **`<arrayBinding> . managed . <member>(` — the CHAINED spelling, for the two positions where a bare
 	// `arr.managed` denotes nothing a program can want.** A STATEMENT of it would build a buffer reference and

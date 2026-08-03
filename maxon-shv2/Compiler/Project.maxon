@@ -2552,6 +2552,17 @@ end 'builtinErrorConformance'
 // tag, or the float bits), matched by an i64 compare, so an enum needs no float register class and
 // no second code path. (`.rawValue` — the accessor that would decode the bits back to a float — is
 // a later rung.)
+
+// ⭐ **THE ONE ENUM ACCESSOR shv2 READS — `s.ordinal`, a case's DECLARATION INDEX.** Spelled beside the
+// layout because the layout is what answers it (`tagsAreDeclarationIndices`), and named rather than
+// inlined at `Parser.enumOrdinalFieldAt` so the member's spelling and the rule that decides it cannot
+// come apart.
+//
+// ⚠ Its two siblings `.name` and `.rawValue` are NOT here and are not implemented: both need the
+// BACKING VALUE (a case's string/char/float), which is a different mechanism and the one
+// `specs-shv2/enum-full.md`'s two shelved cases are waiting on. `.ordinal` needs no backing at all.
+export let EnumOrdinalMemberName = b"ordinal"
+
 export type EnumLayout
 	export var name as ByteArray
 	// `union U` vs `enum E`. The lowering is identical; this bit only chooses the word a diagnostic
@@ -2684,6 +2695,28 @@ export type EnumLayout
 	export function tagOfIndex(index CaseIndex) returns ParsedInt
 		return try self.caseTags.get(index) otherwise panic("EnumLayout.tagOfIndex: caseTags.get OOB at {index} for `{self.kindWord()} {String.from(self.name)}`, which declares {self.caseCount()} cases")
 	end 'tagOfIndex'
+
+	// ⭐ **IS EVERY CASE'S TAG ITS OWN DECLARATION INDEX?** — the question `.ordinal` turns on, and the
+	// only shape of enum for which the ordinal is READABLE OFF THE VALUE.
+	//
+	// An enum value at runtime IS its tag (`parseEnumLiteral`), while `.ordinal` is defined as the
+	// DECLARATION INDEX — the bootstrap answers `2` for the third case however it is numbered. The two
+	// coincide for an enum that numbers nothing (`idle`/`running`/`done` ⇒ tags 0,1,2), and they do not
+	// for one that does (`ok = 5` ⇒ tag 5 at index 0). Where they coincide the accessor is the value
+	// itself and costs no instruction; where they do not it needs a tag→index mapping at runtime, which
+	// is `Parser.parseEnumOrdinal`'s stated refusal rather than a wrong answer.
+	//
+	// A FLOAT-backed enum answers false unless its bit patterns happen to be 0,1,2,… — which no float
+	// backing produces — so the refusal covers it without naming it.
+	export function tagsAreDeclarationIndices() returns bool
+		for i in 0 upto self.caseTags.count() 'each'
+			let tag = try self.caseTags.get(i) otherwise panic("EnumLayout.tagsAreDeclarationIndices: caseTags.get OOB at {i} for `{self.kindWord()} {String.from(self.name)}`, which declares {self.caseCount()} cases")
+			if tag != i 'renumbered'
+				return false
+			end 'renumbered'
+		end 'each'
+		return true
+	end 'tagsAreDeclarationIndices'
 
 	// The declaration index of the case named `wanted`, or `caseCount()` when no case carries that
 	// name. A linear scan for `StructLayout.indexOfField`'s reason: case counts are tiny.
