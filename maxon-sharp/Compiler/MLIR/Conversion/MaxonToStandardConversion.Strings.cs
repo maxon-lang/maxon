@@ -722,7 +722,7 @@ public static partial class MaxonToStandardConversion {
 		// StdHeapPtr and the line above has declined it — no formatted budget is reachable here.
 		if (valueMap.TryGetValue(exprValue, out var v) && v is StdHeapPtr) return null;
 		return exprValue switch {
-			MaxonInteger or MaxonByte or MaxonShort => I64ToStringMaxBytes,
+			MaxonInteger or MaxonByte or MaxonShort => DecimalToStringMaxBytes,
 			MaxonBool => BoolToStringMaxBytes,
 			_ => null,
 		};
@@ -782,8 +782,13 @@ public static partial class MaxonToStandardConversion {
 
 	// Max decimal-text byte budgets for each runtime conversion, reused as the inline reservation
 	// when a `n.toString()` is fused into a String record (see TryEmitSingleNumericToStringInline).
-	private const int I64ToStringMaxBytes = 21;   // "-9223372036854775808"
-	private const int U64ToStringMaxBytes = 21;   // "18446744073709551615"
+	//
+	// ⚠ ONE BUDGET SERVES BOTH DECIMAL ROUTINES, and it is one fact rather than two that happen to be
+	// equal: `maxon_i64_to_string` and `maxon_u64_to_string` write at most 20 characters — 20 digits
+	// (`18446744073709551615`) or 19 and a sign (`-9223372036854775808`) — plus a NUL, and BOTH
+	// emitters fill the same buffer backwards from `buffer + 20` on both targets. Spelled twice, a
+	// budget lowered on one copy would silently overrun a buffer the routine still fills to 20.
+	private const int DecimalToStringMaxBytes = 21;
 	private const int BoolToStringMaxBytes = 6;   // "false"
 
 	/// The ONE lowering of an UNFORMATTED integer part: widen to i64, then the signed or the unsigned
@@ -815,11 +820,11 @@ public static partial class MaxonToStandardConversion {
 
 	private static (StdI64 Buffer, StdI64 Length, string BufVarName) EmitI64ToString(
 	  StdValue intValue, IrBlock<StandardOp> block, Dictionary<string, string> varTypes, StdI64? destBuffer = null) =>
-	  EmitRuntimeToString(intValue, "maxon_i64_to_string", I64ToStringMaxBytes, block, varTypes, destBuffer);
+	  EmitRuntimeToString(intValue, "maxon_i64_to_string", DecimalToStringMaxBytes, block, varTypes, destBuffer);
 
 	private static (StdI64 Buffer, StdI64 Length, string BufVarName) EmitU64ToString(
 	  StdValue intValue, IrBlock<StandardOp> block, Dictionary<string, string> varTypes, StdI64? destBuffer = null) =>
-	  EmitRuntimeToString(intValue, "maxon_u64_to_string", U64ToStringMaxBytes, block, varTypes, destBuffer);
+	  EmitRuntimeToString(intValue, "maxon_u64_to_string", DecimalToStringMaxBytes, block, varTypes, destBuffer);
 
 	/// <summary>
 	/// Handles interpolation of struct values. For String/Character types (which have buffer/length

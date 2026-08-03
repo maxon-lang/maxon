@@ -34,8 +34,8 @@ public partial class X86CodeEmitter {
     EmitMaxonPanic();
     EmitMaxonPanicPrintFrame();
     EmitMaxonFaultBacktrace();
-    EmitMaxonI64ToString();
-    EmitMaxonU64ToString();
+    EmitMaxonIntegerToString("maxon_i64_to_string", "rt_i64str", signed: true);
+    EmitMaxonIntegerToString("maxon_u64_to_string", "rt_u64str", signed: false);
     EmitMaxonBoolToString();
     EmitMaxonCommandLineCount();
     EmitMaxonCommandLineArg();
@@ -862,52 +862,64 @@ public partial class X86CodeEmitter {
   }
 
   /// <summary>
-  /// maxon_i64_to_string(value_in_rcx, buffer_ptr_in_rdx) -> length_in_rax
-  /// Converts a signed 64-bit integer to its decimal string representation.
-  /// Writes into caller-provided buffer (must be >= 21 bytes). Returns byte count.
-  /// Stack: [rbp-8]=value, [rbp-16]=buffer, [rbp-24]=write_pos
+  /// maxon_i64_to_string / maxon_u64_to_string (value_in_rcx, buffer_ptr_in_rdx) -> length_in_rax.
+  /// Decimal, into a caller-provided buffer of at least 21 bytes — the whole i64/u64 range plus a
+  /// sign — so this conversion is bounded BY CONSTRUCTION and no input can overrun it.
+  /// Stack: [rbp-8]=value, [rbp-16]=buffer, [rbp-24]=is_negative then length.
+  ///
+  /// ⚠ ONE C# METHOD EMITS BOTH, for the reason the arm64 emitter's twin records: the two differ ONLY
+  /// in whether the sign is peeled off, and spelling them separately is what lets them drift. On arm64
+  /// the drift had already happened — `maxon_u64_to_string` was a bare `B maxon_i64_to_string`, so an
+  /// `int(0 to u64.max)` with bit 63 set printed `18446744073709551615` here and `-1` there, one
+  /// program with two answers decided by the target. Nothing made these two copies agree either.
+  ///
+  /// The digit loop is an unsigned DIV either way. Negating i64.min leaves i64.min, and reading THAT
+  /// as unsigned is exactly 2^63 = |i64.min|, so the signed path needs no special case for it.
   /// </summary>
-  private void EmitMaxonI64ToString() {
-    EmitRuntimeFunctionStart("maxon_i64_to_string", 2);
+  private void EmitMaxonIntegerToString(string name, string labelPrefix, bool signed) {
+    EmitRuntimeFunctionStart(name, 2);
 
     // Special case: value == 0
     EmitBytes(0x48, 0x85, 0xC9); // TEST rcx, rcx
-    EmitJcc("nz", "rt_i64str_not_zero");
+    EmitJcc("nz", $"{labelPrefix}_not_zero");
     // Write '0' to buffer[0], null to buffer[1]
     EmitBytes(0xC6, 0x02, 0x30); // MOV byte [rdx], '0'
     EmitBytes(0xC6, 0x42, 0x01, 0x00); // MOV byte [rdx+1], 0
     EmitMovRegImm(X86Register.Rax, 1);
-    EmitJmp("rt_i64str_epilogue");
+    EmitJmp($"{labelPrefix}_epilogue");
 
-    // not_zero: check for negative
-    DefineLabel("rt_i64str_not_zero");
-    // R8 = 0 (is_negative flag)
-    EmitBytes(0x4D, 0x31, 0xC0); // XOR r8, r8
-    // TEST rcx, rcx / JS negative
-    EmitBytes(0x48, 0x85, 0xC9); // TEST rcx, rcx
-    EmitJcc("ns", "rt_i64str_positive");
-    // Negate: rcx = -rcx
-    EmitBytes(0x48, 0xF7, 0xD9); // NEG rcx
-    EmitMovMemReg(-0x08, X86Register.Rcx, 8); // update stored value
-    // R8 = 1 (is_negative)
-    EmitMovRegImm(X86Register.R8, 1);
+    DefineLabel($"{labelPrefix}_not_zero");
 
-    // positive: R9 = buffer + 20 (write position, work backwards from end)
-    DefineLabel("rt_i64str_positive");
+    // An unsigned reading has no sign to peel: bit 63 is a VALUE bit, not a minus.
+    if (signed) {
+      // R8 = 0 (is_negative flag)
+      EmitBytes(0x4D, 0x31, 0xC0); // XOR r8, r8
+      // TEST rcx, rcx / JS negative
+      EmitBytes(0x48, 0x85, 0xC9); // TEST rcx, rcx
+      EmitJcc("ns", $"{labelPrefix}_positive");
+      // Negate: rcx = -rcx
+      EmitBytes(0x48, 0xF7, 0xD9); // NEG rcx
+      EmitMovMemReg(-0x08, X86Register.Rcx, 8); // update stored value
+      // R8 = 1 (is_negative)
+      EmitMovRegImm(X86Register.R8, 1);
+
+      DefineLabel($"{labelPrefix}_positive");
+    }
+
+    // R9 = buffer + 20 (write position, work backwards from end)
     EmitMovRegReg(X86Register.R9, X86Register.Rdx); // R9 = buffer
     EmitAddRegImm(X86Register.R9, 20); // R9 = buffer + 20
     EmitBytes(0x41, 0xC6, 0x01, 0x00); // MOV byte [r9], 0 (null terminator)
 
     // Save is_negative flag to stack
-    EmitMovMemReg(-0x18, X86Register.R8, 8); // [rbp-24] = is_negative
+    if (signed) EmitMovMemReg(-0x18, X86Register.R8, 8); // [rbp-24] = is_negative
 
     // digit_loop: divide rcx by 10, write remainder as digit
-    DefineLabel("rt_i64str_digit_loop");
+    DefineLabel($"{labelPrefix}_digit_loop");
     EmitBytes(0x49, 0xFF, 0xC9); // DEC r9 (move write position back)
-    // RAX = value (for IDIV), RDX:RAX = sign-extended value
     EmitMovRegMem(X86Register.Rax, -0x08, 8); // RAX = value
     EmitMovRegImm(X86Register.Rcx, 10);
-    // Zero RDX before DIV (unsigned division since we already handled sign)
+    // Zero RDX before DIV (unsigned division — any sign was peeled off above)
     EmitBytes(0x48, 0x31, 0xD2); // XOR rdx, rdx
     EmitBytes(0x48, 0xF7, 0xF1); // DIV rcx (RAX = quotient, RDX = remainder)
     EmitMovMemReg(-0x08, X86Register.Rax, 8); // store quotient back
@@ -917,18 +929,20 @@ public partial class X86CodeEmitter {
     EmitBytes(0x41, 0x88, 0x11); // MOV byte [r9], dl
     // Check if quotient is zero
     EmitBytes(0x48, 0x83, 0x7D, 0xF8, 0x00); // CMP qword [rbp-8], 0
-    EmitJcc("nz", "rt_i64str_digit_loop");
+    EmitJcc("nz", $"{labelPrefix}_digit_loop");
 
-    // If negative, prepend '-'
-    EmitMovRegMem(X86Register.R8, -0x18, 8); // R8 = is_negative
-    EmitBytes(0x4D, 0x85, 0xC0); // TEST r8, r8
-    EmitJcc("z", "rt_i64str_no_sign");
-    EmitBytes(0x49, 0xFF, 0xC9); // DEC r9
-    EmitBytes(0x41, 0xC6, 0x01, 0x2D); // MOV byte [r9], '-'
+    if (signed) {
+      // If negative, prepend '-'
+      EmitMovRegMem(X86Register.R8, -0x18, 8); // R8 = is_negative
+      EmitBytes(0x4D, 0x85, 0xC0); // TEST r8, r8
+      EmitJcc("z", $"{labelPrefix}_no_sign");
+      EmitBytes(0x49, 0xFF, 0xC9); // DEC r9
+      EmitBytes(0x41, 0xC6, 0x01, 0x2D); // MOV byte [r9], '-'
 
-    // no_sign: copy from R9 to buffer start, compute length
-    DefineLabel("rt_i64str_no_sign");
-    // Length = (buffer + 20) - R9
+      DefineLabel($"{labelPrefix}_no_sign");
+    }
+
+    // Copy from R9 to buffer start, compute length. Length = (buffer + 20) - R9
     EmitMovRegMem(X86Register.Rax, -0x10, 8); // RAX = buffer
     EmitAddRegImm(X86Register.Rax, 20);
     EmitBytes(0x4C, 0x29, 0xC8); // SUB rax, r9 => RAX = length
@@ -950,79 +964,7 @@ public partial class X86CodeEmitter {
     // Return length
     EmitMovRegMem(X86Register.Rax, -0x18, 8);
 
-    DefineLabel("rt_i64str_epilogue");
-    EmitRuntimeFunctionEnd();
-  }
-
-  /// <summary>
-  /// maxon_u64_to_string(value_in_rcx, buffer_ptr_in_rdx) -> length_in_rax
-  /// Converts an unsigned 64-bit integer to its decimal string representation.
-  /// Writes into caller-provided buffer (must be >= 21 bytes). Returns byte count.
-  /// Same algorithm as i64_to_string but without sign handling.
-  /// Stack: [rbp-8]=value, [rbp-16]=buffer
-  /// </summary>
-  private void EmitMaxonU64ToString() {
-    EmitRuntimeFunctionStart("maxon_u64_to_string", 2);
-
-    // Special case: value == 0
-    EmitBytes(0x48, 0x85, 0xC9); // TEST rcx, rcx
-    EmitJcc("nz", "rt_u64str_not_zero");
-    // Write '0' to buffer[0], null to buffer[1]
-    EmitBytes(0xC6, 0x02, 0x30); // MOV byte [rdx], '0'
-    EmitBytes(0xC6, 0x42, 0x01, 0x00); // MOV byte [rdx+1], 0
-    EmitMovRegImm(X86Register.Rax, 1);
-    EmitJmp("rt_u64str_epilogue");
-
-    // not_zero: no sign check needed for unsigned
-    DefineLabel("rt_u64str_not_zero");
-
-    // R9 = buffer + 20 (write position, work backwards from end)
-    EmitMovRegReg(X86Register.R9, X86Register.Rdx); // R9 = buffer
-    EmitAddRegImm(X86Register.R9, 20); // R9 = buffer + 20
-    EmitBytes(0x41, 0xC6, 0x01, 0x00); // MOV byte [r9], 0 (null terminator)
-
-    // digit_loop: divide rcx by 10, write remainder as digit
-    DefineLabel("rt_u64str_digit_loop");
-    EmitBytes(0x49, 0xFF, 0xC9); // DEC r9 (move write position back)
-    // RAX = value (for DIV)
-    EmitMovRegMem(X86Register.Rax, -0x08, 8); // RAX = value
-    EmitMovRegImm(X86Register.Rcx, 10);
-    // Zero RDX before unsigned DIV
-    EmitBytes(0x48, 0x31, 0xD2); // XOR rdx, rdx
-    EmitBytes(0x48, 0xF7, 0xF1); // DIV rcx (RAX = quotient, RDX = remainder)
-    EmitMovMemReg(-0x08, X86Register.Rax, 8); // store quotient back
-    // Convert remainder to ASCII digit: RDX + '0'
-    EmitAddRegImm(X86Register.Rdx, 0x30); // RDX += '0'
-    // Write digit: MOV byte [r9], dl
-    EmitBytes(0x41, 0x88, 0x11); // MOV byte [r9], dl
-    // Check if quotient is zero
-    EmitBytes(0x48, 0x83, 0x7D, 0xF8, 0x00); // CMP qword [rbp-8], 0
-    EmitJcc("nz", "rt_u64str_digit_loop");
-
-    // No sign prefix needed — copy from R9 to buffer start, compute length
-    // Length = (buffer + 20) - R9
-    EmitMovRegMem(X86Register.Rax, -0x10, 8); // RAX = buffer
-    EmitAddRegImm(X86Register.Rax, 20);
-    EmitBytes(0x4C, 0x29, 0xC8); // SUB rax, r9 => RAX = length
-
-    // Copy the digits from R9 to buffer start
-    // RSI = R9 (src), RDI = buffer (dst), RCX = length
-    EmitMovMemReg(-0x18, X86Register.Rax, 8); // save length to [rbp-24]
-    EmitBytes(0x4C, 0x89, 0xCE); // MOV rsi, r9
-    EmitMovRegMem(X86Register.Rdi, -0x10, 8); // RDI = buffer
-    EmitMovRegMem(X86Register.Rcx, -0x18, 8); // RCX = length
-    EmitBytes(0xF3, 0xA4); // REP MOVSB
-
-    // Null-terminate at buffer[length]
-    EmitMovRegMem(X86Register.Rax, -0x10, 8); // RAX = buffer
-    EmitMovRegMem(X86Register.Rcx, -0x18, 8); // RCX = length
-    EmitBytes(0x48, 0x01, 0xC8); // ADD rax, rcx
-    EmitBytes(0xC6, 0x00, 0x00); // MOV byte [rax], 0
-
-    // Return length
-    EmitMovRegMem(X86Register.Rax, -0x18, 8);
-
-    DefineLabel("rt_u64str_epilogue");
+    DefineLabel($"{labelPrefix}_epilogue");
     EmitRuntimeFunctionEnd();
   }
 

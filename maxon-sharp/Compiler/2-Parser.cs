@@ -18740,17 +18740,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       formatSpec = null;
     }
 
-    var callee = ResolveFunctionOverloads(calleeName).SingleOrDefault()
-      ?? throw new CompileError(ErrorCode.SemanticUndefinedFunction,
-          $"String interpolation of a float needs '{calleeName}' from stdlib/Builtins.maxon",
-          token.Line, token.Column);
-
-    var callOp = new MaxonCallOp(callee.Name, callArgs, MaxonValueKind.Struct, stringTypeName);
-    _currentBlock!.AddOp(callOp);
-    InvalidateCachedSelfFields();
-    DeclareInterpolationToStringTemp(callOp.Result!, MaxonValueKind.Struct, stringTypeName);
-
-    return callOp.Result!;
+    return EmitStdlibTextCall(calleeName, callArgs, "a float", stringTypeName, token);
   }
 
   private MaxonValue EmitInterpolationLiteral(MaxonLiteralOp literal) {
@@ -18815,9 +18805,25 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     };
     formatSpec = null;
 
-    var callee = ResolveFunctionOverloads(IntToStringFormattedStdlibFunction).SingleOrDefault()
+    return EmitStdlibTextCall(IntToStringFormattedStdlibFunction, callArgs, "a formatted integer", stringTypeName, token);
+  }
+
+  /// <summary>
+  /// Mints the call that renders one interpolation part through `stdlib/Builtins.maxon`, and roots its
+  /// result so the ownership machinery releases the String it hands back.
+  ///
+  /// ⚠ ONE SPELLING FOR BOTH NUMERIC FAMILIES. The float rewrite and the integer rewrite choose a
+  /// different callee and hand over different arguments; every step after that — resolve, mint, drop
+  /// the cached `self` fields the call may have invalidated, root the result — is the SAME protocol.
+  /// Written twice, a step added to one copy and not the other is a leak or a use-after-free at
+  /// RUNTIME rather than a compile error, and `DeclareInterpolationToStringTemp`'s own header records
+  /// that forgetting it is exactly how the String leaks.
+  /// </summary>
+  private MaxonValue EmitStdlibTextCall(
+      string calleeName, List<MaxonValue> callArgs, string renderedWhat, string stringTypeName, Token token) {
+    var callee = ResolveFunctionOverloads(calleeName).SingleOrDefault()
       ?? throw new CompileError(ErrorCode.SemanticUndefinedFunction,
-          $"String interpolation of a formatted integer needs '{IntToStringFormattedStdlibFunction}' from stdlib/Builtins.maxon",
+          $"String interpolation of {renderedWhat} needs '{calleeName}' from stdlib/Builtins.maxon",
           token.Line, token.Column);
 
     var callOp = new MaxonCallOp(callee.Name, callArgs, MaxonValueKind.Struct, stringTypeName);
