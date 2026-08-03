@@ -1,0 +1,18 @@
+// Test: a-narrow-byte-refuses-a-synthesized-buffer-appended-to-it
+typealias Byte = int(0 to 100)
+typealias Bytes = Array with Byte
+
+function takes(b Bytes) returns ExitCode
+	return (try b.get(0) otherwise 0) as ExitCode
+end 'takes'
+
+function main() returns ExitCode
+	var b = Bytes.create()
+	b.push(1)
+	let cwd = try __ManagedDirectory.currentPath() otherwise return 1
+	b.append(cwd)
+	return takes(b)
+end 'main'
+---
+CompilerError:
+error E3005: <fragment>:13:11: argument type mismatch for 'other': expected 'Array_Byte$0_100', got 'Array___ManagedByte'

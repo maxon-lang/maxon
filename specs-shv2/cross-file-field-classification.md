@@ -17,8 +17,10 @@ field is the same managed heap the drop cascade frees.
 Two mechanisms read that answer and they must agree:
 
 - the struct's `__destruct_<T>` **drop cascade**, which frees every managed field, and
-- `postfix-member-walk.md`'s refusal of a **managed field read out of a TEMPORARY**, whose whole
-  soundness argument is that "the box frees it at drop" and "the read borrows it" are one answer.
+- `temporary-borrow-lifetime.md`'s promotion of the **box a managed field is read out of**, whose
+  whole soundness argument is that "the box frees it at drop" and "the read borrows it" are one
+  answer. A box classified SCALAR is not held, so its field's borrow dangles; a box classified
+  MANAGED when it is not would be held for nothing.
 
 ### Why the file boundary could change the answer at all
 
@@ -37,11 +39,19 @@ Both directions were measured, and both are wrong answers rather than mere over-
 
 - a **scalar** cross-file alias field (and a payload-free `enum` field) classified MANAGED, so a
   legal read off a temporary was refused with `E2015`;
-- a **boxed-union** field classified SCALAR, so the read was **admitted** — the exact use-after-free
-  `postfix-member-walk.md` exists to refuse. The accepted program hung.
+- a **boxed-union** field classified SCALAR, so the read was **admitted** onto a box nothing kept
+  alive. The accepted program hung.
 
-The cases below pin both directions, and pin the controls that prove the fix reaches the
-classification rather than the guard.
+⚠ **THE OBSERVABLE MOVED WHEN A3h LANDED, AND THE FACT UNDER TEST DID NOT.** These cases were
+written against the `E2015` refusal a managed field read out of a temporary used to earn. ⚖ The user
+ruling of 2026-08-01 replaced that refusal with the LIFETIME EXTENSION (`temporary-borrow-lifetime.md`),
+so the managed arm now COMPILES and RUNS — and it runs correctly only if the classifier says
+"managed", because that answer is what decides whether the box is held. Each case below therefore
+reads its field back and returns it: a misclassification is `0x3F3F…` or a hang, exactly as before,
+and the direction each one pins is unchanged.
+
+The cases pin both directions, and pin the controls that prove the fix reaches the classification
+rather than the door that asks it.
 
 ## Tests
 
@@ -367,10 +377,11 @@ end 'main'
 42
 ```
 
-<!-- test: error.crossfile-string-field-read-out-of-a-temporary -->
-⭐ **THE GUARD MUST STILL FIRE.** A `String` field declared in a sibling file, read off a call
-result, is the use-after-free `postfix-member-walk.md` refuses — and a fix that reached the guard
-rather than the classifier would let it through.
+<!-- test: crossfile-string-field-read-out-of-a-temporary -->
+⭐ **THE CLASSIFIER MUST STILL SAY MANAGED.** A `String` field declared in a sibling file, read off a
+call result: the box is held to the scope's exit because the field is managed, so the read is of live
+text. Classified SCALAR the box would die at the statement's end and `byteLength()` would read freed
+memory — which is what a fix that reached the DOOR rather than the classifier would produce.
 ```maxon
 // --- file: box.maxon
 export type Box
@@ -387,13 +398,13 @@ function main() returns ExitCode
 	return s.byteLength()
 end 'main'
 ```
-```maxoncstderr
-error E2015: <fragment>:13:28: Unsupported: reading the managed field 'name' out of a TEMPORARY `Box` — a field read is a BORROW and the value the `.` is applied to is owned by this statement alone, so the heap this would hand back is freed at the statement's end (measured: a use-after-free, silent). Bind the receiver to a name first and read the field off THAT, which borrows from a box outliving the read; keeping a temporary alive for a borrow taken out of it is the ownership rung's. A SCALAR field is copied rather than borrowed and needs none of this
+```exitcode
+5
 ```
 
-<!-- test: error.crossfile-struct-field-read-out-of-a-temporary -->
-⭐ **THE GUARD MUST STILL FIRE**, for the shape that returned the freed-memory fill byte
-`0x3F3F3F3F` as the program's answer when it was let through in one file.
+<!-- test: crossfile-struct-field-read-out-of-a-temporary -->
+⭐ **THE CLASSIFIER MUST STILL SAY MANAGED**, for the shape that returned the freed-memory fill byte
+`0x3F3F3F3F` as the program's answer when the box was not held.
 ```maxon
 // --- file: inner.maxon
 typealias Wide = int(i64.min to i64.max)
@@ -425,16 +436,16 @@ function main() returns ExitCode
 	return i.get()
 end 'main'
 ```
-```maxoncstderr
-error E2015: <fragment>:28:36: Unsupported: reading the managed field 'inner' out of a TEMPORARY `Outer` — a field read is a BORROW and the value the `.` is applied to is owned by this statement alone, so the heap this would hand back is freed at the statement's end (measured: a use-after-free, silent). Bind the receiver to a name first and read the field off THAT, which borrows from a box outliving the read; keeping a temporary alive for a borrow taken out of it is the ownership rung's. A SCALAR field is copied rather than borrowed and needs none of this
+```exitcode
+3
 ```
 
-<!-- test: error.crossfile-boxed-union-field-read-out-of-a-temporary -->
-⭐⭐ **THE CASE THAT WAS ADMITTED, and the reason this is a use-after-free rung and not a
-false-rejection one.** A payload-bearing `union` field is a managed heap box, and across files it
-classified SCALAR — so this program COMPILED and then hung on the freed box. The four padding
+<!-- test: crossfile-boxed-union-field-read-out-of-a-temporary -->
+⭐⭐ **THE CASE THAT WAS ADMITTED ONTO A DEAD BOX, and the reason this is a use-after-free rung and
+not a false-rejection one.** A payload-bearing `union` field is a managed heap box, and across files
+it classified SCALAR — so this program compiled with the box unheld and hung on it. The four padding
 aliases are what land the reading file's `Shape` id on a scalar name in the program-wide table:
-measured, the refusal held at 0–3 padding aliases and the program was ADMITTED from 4 upwards. A
+measured, the classification held at 0–3 padding aliases and flipped from 4 upwards. A
 classification that changes at the fourth unrelated `typealias` is the defect stated as a test.
 ```maxon
 // --- file: shape.maxon
@@ -467,7 +478,7 @@ typealias P2 = int(0 to 5)
 typealias P3 = int(0 to 5)
 typealias P4 = int(0 to 5)
 
-function pad(a P1, b P2, c P3, d P4) returns P1
+function pad(a P1, _ P2, _ P3, _ P4) returns P1
 	return a
 end 'pad'
 
@@ -479,13 +490,13 @@ function main() returns ExitCode
 	end 'check'
 end 'main'
 ```
-```maxoncstderr
-error E2015: <fragment>:37:24: Unsupported: reading the managed field 'shape' out of a TEMPORARY `Holder` — a field read is a BORROW and the value the `.` is applied to is owned by this statement alone, so the heap this would hand back is freed at the statement's end (measured: a use-after-free, silent). Bind the receiver to a name first and read the field off THAT, which borrows from a box outliving the read; keeping a temporary alive for a borrow taken out of it is the ownership rung's. A SCALAR field is copied rather than borrowed and needs none of this
+```exitcode
+5
 ```
 
-<!-- test: error.crossfile-array-field-read-out-of-a-temporary -->
-⭐ **THE GUARD MUST STILL FIRE** for an `Array` field — a generic-instance alias declared in a
-sibling file, whose record and buffer the box owns.
+<!-- test: crossfile-array-field-read-out-of-a-temporary -->
+⭐ **THE CLASSIFIER MUST STILL SAY MANAGED** for an `Array` field — a generic-instance alias declared
+in a sibling file, whose record and buffer the box owns.
 ```maxon
 // --- file: bag.maxon
 typealias Integer = int(i64.min to i64.max)
@@ -507,13 +518,13 @@ function main() returns ExitCode
 	return try xs.get(0) otherwise 0
 end 'main'
 ```
-```maxoncstderr
-error E2015: <fragment>:18:22: Unsupported: reading the managed field 'items' out of a TEMPORARY `Bag` — a field read is a BORROW and the value the `.` is applied to is owned by this statement alone, so the heap this would hand back is freed at the statement's end (measured: a use-after-free, silent). Bind the receiver to a name first and read the field off THAT, which borrows from a box outliving the read; keeping a temporary alive for a borrow taken out of it is the ownership rung's. A SCALAR field is copied rather than borrowed and needs none of this
+```exitcode
+1
 ```
 
-<!-- test: error.crossfile-array-element-alias-in-a-third-file -->
-⭐ **THE GUARD MUST STILL FIRE** when the `Array` instance alias and its ELEMENT alias are declared
-in different files again — three files between the element's range and the read.
+<!-- test: crossfile-array-element-alias-in-a-third-file -->
+⭐ **THE CLASSIFIER MUST STILL SAY MANAGED** when the `Array` instance alias and its ELEMENT alias
+are declared in different files again — three files between the element's range and the read.
 ```maxon
 // --- file: elem.maxon
 typealias Integer = int(i64.min to i64.max)
@@ -542,8 +553,8 @@ function main() returns ExitCode
 	return try xs.get(0) otherwise 0
 end 'main'
 ```
-```maxoncstderr
-error E2015: <fragment>:25:22: Unsupported: reading the managed field 'items' out of a TEMPORARY `Bag` — a field read is a BORROW and the value the `.` is applied to is owned by this statement alone, so the heap this would hand back is freed at the statement's end (measured: a use-after-free, silent). Bind the receiver to a name first and read the field off THAT, which borrows from a box outliving the read; keeping a temporary alive for a borrow taken out of it is the ownership rung's. A SCALAR field is copied rather than borrowed and needs none of this
+```exitcode
+7
 ```
 
 <!-- test: crossfile-ranged-alias-union-payload-drop-cascade -->
@@ -676,11 +687,11 @@ end 'main'
 7
 ```
 
-<!-- test: error.crossfile-generic-instance-managed-field-off-a-temporary -->
-⭐ **THE GUARD'S OTHER ARM MUST STILL REFUSE.** `Holder with String`'s `item` is a managed heap
-pointer the box frees at drop, so reading it off a temporary is the same use-after-free the struct
-arm refuses. Measured stable at 0–7 padding aliases in the reading file, which is what shows the
-instance arm never depended on the interning order the struct arm did.
+<!-- test: crossfile-generic-instance-managed-field-off-a-temporary -->
+⭐ **THE CLASSIFIER'S OTHER ARM.** `Holder with String`'s `item` is a managed heap pointer the box
+frees at drop, so the box is held exactly as the struct arm's is. Measured stable at 0–7 padding
+aliases in the reading file, which is what shows the instance arm never depended on the interning
+order the struct arm did.
 ```maxon
 // --- file: holder.maxon
 export type Holder uses T
@@ -700,6 +711,6 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E2015: <fragment>:15:36: Unsupported: reading the managed field 'item' out of a TEMPORARY `Holder` — a field read is a BORROW and the value the `.` is applied to is owned by this statement alone, so the heap this would hand back is freed at the statement's end (measured: a use-after-free, silent). Bind the receiver to a name first and read the field off THAT, which borrows from a box outliving the read; keeping a temporary alive for a borrow taken out of it is the ownership rung's. A SCALAR field is copied rather than borrowed and needs none of this
+```stdout
+hello
 ```

@@ -434,11 +434,11 @@ its `+1` and drops what the read points at **at the box's own scope exit**. Ever
 the language rests on that, and it holds because a box is reached through a NAME that outlives the
 read.
 
-⚠ **A receiver bound to no name breaks it, and this rung is the first door that can hand one over.**
-`Box.make("hello")` is enrolled as a statement-scoped owned temporary; the statement's pending drops
-free it at the semicolon. A MANAGED field read out of it therefore hands back a pointer into freed
-memory the moment the result outlives the statement. Measured, before the refusal below existed,
-on every managed field kind — each of them a program the C# oracle runs and prints:
+⚠ **A receiver bound to no name broke it, and this rung was the first door that could hand one over.**
+`Box.make("hello")` was enrolled as a STATEMENT-scoped owned temporary; the statement's pending drops
+freed it at the semicolon. A MANAGED field read out of it therefore handed back a pointer into freed
+memory the moment the result outlived the statement. Measured, on every managed field kind — each of
+them a program the C# oracle runs and prints:
 
 | written | shv2 |
 |---|---|
@@ -447,15 +447,18 @@ on every managed field kind — each of them a program the C# oracle runs and pr
 | `let i = Outer.make(Inner.make(3)).inner` (struct field) | exit **0x3F3F3F3F** — the freed-fill byte read back as user data: a **wrong answer with no crash** |
 | `let s = makePair().1` (tuple element) | **0xC0000005**, no diagnostic |
 
-It is **refused**, for the reason the struct-typed self-field base is
-(`self-field-struct-typed.md`): keeping a temporary alive for a borrow taken out of it is an
-ownership ruling, and a mechanism shipped without one is the `mintPhi` trap. A **SCALAR** field is
-copied rather than borrowed, so `Leaf.make(4).tally` above is untouched — the gate is the managed
-classifier, not the temporary.
+⚖ **THE RULING CAME, AND IT WAS TO EXTEND THE TEMPORARY'S LIFETIME (A3h, 2026-08-01).** It used to
+be **refused**, and the refusal's own message named the rung that would lift it — *"keeping a
+temporary alive for a borrow taken out of it is the ownership rung's"*. That rung landed: the box is
+now promoted to a nameless owned binding of the enclosing scope (`giveTemporaryScopeLifetime`), so it
+is freed once at the frame's exit, after every read of what was borrowed out of it. The full argument,
+and the array-element half of the same fact, is `temporary-borrow-lifetime.md`. A **SCALAR** field is
+copied rather than borrowed, so `Leaf.make(4).tally` above needs none of this — the gate is the
+managed classifier, not the temporary.
 
-<!-- test: error.managed-field-read-out-of-a-temporary -->
-A `String` field read out of a call result. The refusal is positioned at the MEMBER, which is the
-part that cannot be done.
+<!-- test: managed-field-read-out-of-a-temporary -->
+A `String` field read out of a call result: the box lives to the scope's exit, so the text is live
+when it is read.
 ```maxon
 
 type Box
@@ -471,14 +474,14 @@ function main() returns ExitCode
 	return s.byteLength()
 end 'main'
 ```
-```maxoncstderr
-error E2015: <fragment>:12:28: Unsupported: reading the managed field 'name' out of a TEMPORARY `Box` — a field read is a BORROW and the value the `.` is applied to is owned by this statement alone, so the heap this would hand back is freed at the statement's end (measured: a use-after-free, silent). Bind the receiver to a name first and read the field off THAT, which borrows from a box outliving the read; keeping a temporary alive for a borrow taken out of it is the ownership rung's. A SCALAR field is copied rather than borrowed and needs none of this
+```exitcode
+5
 ```
 
-<!-- test: error.struct-field-read-out-of-a-temporary -->
+<!-- test: struct-field-read-out-of-a-temporary -->
 ⭐ **The one of the four that a suite of exit codes would never have caught**: a STRUCT field read
 out of a temporary did not crash, it returned `0x3F3F3F3F` — the freed-memory fill byte — as the
-program's answer.
+program's answer. It answers **3** now, and a temporary freed early would still answer the poison.
 ```maxon
 
 typealias Wide = int(i64.min to i64.max)
@@ -508,15 +511,13 @@ function main() returns ExitCode
 	return i.get()
 end 'main'
 ```
-```maxoncstderr
-error E2015: <fragment>:26:36: Unsupported: reading the managed field 'inner' out of a TEMPORARY `Outer` — a field read is a BORROW and the value the `.` is applied to is owned by this statement alone, so the heap this would hand back is freed at the statement's end (measured: a use-after-free, silent). Bind the receiver to a name first and read the field off THAT, which borrows from a box outliving the read; keeping a temporary alive for a borrow taken out of it is the ownership rung's. A SCALAR field is copied rather than borrowed and needs none of this
+```exitcode
+3
 ```
 
-<!-- test: error.tuple-element-read-out-of-a-temporary -->
+<!-- test: tuple-element-read-out-of-a-temporary -->
 A TUPLE needs no arm of its own — it is a synthesized struct, so its positional member rides the
-same layout and the same classifier. The member is named `_1` because `memberNameTokenAt` has
-already rewritten `.1`, which is why the suggestion says "read the field off the binding" rather
-than spelling an access back that the language would not accept.
+same layout, the same classifier and the same promotion.
 ```maxon
 
 typealias Wide = int(i64.min to i64.max)
@@ -531,8 +532,8 @@ function main() returns ExitCode
 	return s.byteLength()
 end 'main'
 ```
-```maxoncstderr
-error E2015: <fragment>:11:21: Unsupported: reading the managed field '_1' out of a TEMPORARY `__Tuple2.int.String` — a field read is a BORROW and the value the `.` is applied to is owned by this statement alone, so the heap this would hand back is freed at the statement's end (measured: a use-after-free, silent). Bind the receiver to a name first and read the field off THAT, which borrows from a box outliving the read; keeping a temporary alive for a borrow taken out of it is the ownership rung's. A SCALAR field is copied rather than borrowed and needs none of this
+```exitcode
+5
 ```
 
 <!-- test: managed-field-read-off-a-binding-is-unaffected -->

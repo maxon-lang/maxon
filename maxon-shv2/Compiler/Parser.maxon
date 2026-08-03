@@ -4765,17 +4765,26 @@ end 'MoveMark'
 // records and the moves `b` records. Its one use is the inline-conditional's TRUE path: the true arm's
 // own moves (`a`), plus the unconditionally-evaluated condition's (`b`), which parse in the opposite
 // order to how they run (`parseTernaryExpression`). Both marks are positional over the SAME owned-binding
-// stack — its height is stable across a ternary, since an expression declares no binding — so the union is
-// per-position. Values are identical between the two (an expression reassigns no binding's value), so
-// either's serve.
+// stack, so the union is per-position. Values are identical over the shared prefix (an expression
+// reassigns no binding's value), so `b`'s serve — and `b`'s alone carry the tail below.
+//
+// ⚠ **`a` MAY BE SHORTER THAN `b`, AND THAT IS A REAL SHAPE RATHER THAN A TOLERANCE (A3h).** The comment
+// here used to read *"its height is stable across a ternary, since an expression declares no binding"*,
+// which was true only while nothing but a `let` could enrol an owned binding. A CONDITION can now enrol
+// one — `giveTemporaryScopeLifetime` holds a temporary a borrow was taken out of, and the condition runs
+// UNCONDITIONALLY, so its enrolment must outlive the whole ternary rather than be dropped with an arm.
+// The true arm's mark is captured before the condition parses and is therefore a strict PREFIX of the
+// condition's. Every position the arm cannot have seen is `b`'s alone: the binding did not exist while
+// the arm ran, so the arm cannot have moved out of it. `a` LONGER than `b` is still a break — that would
+// mean an arm's own binding survived past its exit — and still panics.
 function orMoveMarks(a MoveMark, b MoveMark) returns MoveMark
-	if a.moved.count() != b.moved.count() 'drifted'
-		panic("orMoveMarks: mark heights {a.moved.count()} and {b.moved.count()} differ — the owned-binding stack moved between captures")
+	if a.moved.count() > b.moved.count() 'drifted'
+		panic("orMoveMarks: mark height {a.moved.count()} exceeds {b.moved.count()} — an arm's own owned bindings must be popped at its exit, so the earlier mark can only ever be a prefix of the later one")
 	end 'drifted'
 	var moved = BoolArray.create()
-	for i in 0 upto a.moved.count() 'each'
-		let am = try a.moved.get(i) otherwise panic("orMoveMarks: a.moved.get OOB at {i}")
+	for i in 0 upto b.moved.count() 'each'
 		let bm = try b.moved.get(i) otherwise panic("orMoveMarks: b.moved.get OOB at {i}")
+		let am = (try a.moved.get(i) otherwise panic("orMoveMarks: a.moved.get OOB at {i}, below its own count")) if i < a.moved.count() else false
 		moved.push(am or bm)
 	end 'each'
 	return MoveMark.create(moved, values: b.values)
@@ -5286,6 +5295,13 @@ typealias LoopContextArray = Array with LoopContext
 // `__` prefix is what says so anyway, since `requireUnreservedName` bars every declaration from that
 // space. It exists only so `emitScopeDrops` — which drops BINDINGS — reaches the record.
 let IterationSourceBindingName = b"__for_source"
+
+// The same kind of unnameable internal binding, for the temporary a BORROW was taken out of — an
+// element read off a container (`emitContainerElementAccessor`) or a managed field read off a box
+// (`keepFieldSourceAliveForItsRead`). Both go through `giveTemporaryScopeLifetime`, so the two share
+// one name for one reason: the record is held to the scope's exit because something still points
+// INTO it.
+let BorrowSourceBindingName = b"__borrow_source"
 
 // The value a match arm produces, if any: `none` for a `then` (statement) arm, `value` for a
 // `gives` (expression) arm. A union rather than a `ValueId` plus a bool — for the reason
@@ -17325,6 +17341,36 @@ export type Parser
 		return false
 	end 'pendingTempsContain'
 
+	// ⭐⭐ **MOVE A TEMPORARY'S DROP FROM THE STATEMENT TO THE ENCLOSING SCOPE — the ONE promotion, and the
+	// answer to every "this value is still being pointed into after the statement ends" question the parser
+	// asks (A3h).** An UNCONSUMED owned temporary is freed by `drainPendingTemps` at the statement's tail; a
+	// value some longer-lived thing still reaches must instead be freed at the scope frame's exit, and the
+	// mechanism for that is already the ordinary one — a nameless entry in `ownedBindings`, which every exit
+	// drops through (`emitScopeDrops` for a `return`/`throw` and for the frame's own end, the loop floor for a
+	// `break`/`continue`). Exactly once on every path, which is what a hand-placed decref could not promise.
+	//
+	// ⚠ **THE GATE IS `pendingTempsContain`, NOT `valueIsOwnedHeap`, AND THE DIFFERENCE IS A DOUBLE FREE.** A
+	// value a BINDING already owns is owned-heap too, and enrolling it a second time emits two decrefs of one
+	// record (measured at the `for … in` site: `for x in arr` over a `var arr` segfaulted). The pending list is
+	// precisely the owned values NO binding owns (`pendingTempsContain`), which is the question being asked —
+	// so a non-temporary source is a silent, correct no-op and every caller may ask unconditionally.
+	//
+	// ⚠ **FIVE CALLERS, AND IT WAS WRITTEN OUT THREE TIMES BEFORE THIS RUNG NEEDED THE FOURTH AND FIFTH.** The
+	// `for … in` source, the temporary `match` scrutinee, the escaping instance-method feed argument, a
+	// container an element BORROW was taken out of, and a box a managed FIELD was read out of are one fact —
+	// *"something outlives this statement and points into this record"* — and a sixth copy of the two-line
+	// remove-and-enrol is how one of them would come to do only half of it. `name` is inert (the binding is
+	// never installed in a `Scope`, so no source line can name it) and each caller states its own, so a dump
+	// of `ownedBindings` still says WHY each nameless entry is there.
+	function giveTemporaryScopeLifetime(value ValueId, name ByteArray)
+		if not self.pendingTempsContain(value) 'notATemporary'
+			return
+		end 'notATemporary'
+
+		self.removeFromPendingTemps(value)
+		self.ownedBindings.push(VarInfo.createValueBinding(name, varType: self.typeOf(value), mutable: false, boundValue: value))
+	end 'giveTemporaryScopeLifetime'
+
 	// The value a binding holds has been MOVED OUT — a `return` hands its box to the caller — so the
 	// binding must leave `ownedBindings`, else `emitScopeDrops` would decref a box the callee no longer
 	// owns (a double-free with the caller's own drop). Keyed on the bound VALUE rather than on position:
@@ -17792,8 +17838,9 @@ export type Parser
 	// register allocator reports, several passes later, as "a use dominates its def"):
 	//   • `parseIfStatement` / `parseWhileStatement` — the condition, in its exit block before the branch;
 	//   • `parseMatchCommon` — the scrutinee before the first test, and each ARM at its own exit
-	//     (`finishArmValues`);
-	//   • `parseTernaryExpression` — the condition, and each of the two arms;
+	//     (`finishArmExit`, which releases the arm's SCOPE-lifetime records in the same block and by the same
+	//     rule);
+	//   • `parseTernaryExpression` — the condition, and each of the two arms (`finishArmExit` again);
 	//   • `emitShortCircuit` — the right-hand side, which runs on one path only;
 	//   • `desugarTry` — the odd one out, and deliberately: its fork temporaries belong to the ENCLOSING
 	//     statement and are still live past the fork, so they are released once per EDGE rather than swept
@@ -18647,6 +18694,7 @@ export type Parser
 		// where the branch — and the exit's incoming edge — belong. The header stays the
 		// loop's entry, so nothing about `continue` or the back edge changes.
 		let condTempFloor = self.pendingTempDrops.count()
+		let condOwnedFloor = self.ownedBindings.count()
 		let cond = try self.parseBoolCondition(func, block: header, kwTok: whileTok)
 		var condExit = self.currentBlock
 
@@ -18657,6 +18705,17 @@ export type Parser
 		// allocations — a leak that grows with the trip count. The `if` reasoning applies unchanged for the
 		// two edges: `condExit` dominates both the body and the exit.
 		self.drainPendingTemps(condTempFloor, anchor: whileTok)
+
+		// ⭐⭐ **AND A SCOPE-LIFETIME TEMPORARY THE CONDITION HELD COMES BACK PER ITERATION TOO (A3h) — the one
+		// place the `if` reasoning does NOT carry over.** An `if` condition runs ONCE and dominates everything
+		// after it, so a container `giveTemporaryScopeLifetime` held for a borrow may legitimately live to the
+		// frame's exit. A `while` condition runs on every trip and rebuilds that container each time, while the
+		// enrolment records ONE `ValueId` and drops it ONCE — so the frame's exit would free the LAST trip's
+		// record and leak all the others. MEASURED as exit **101** on
+		// `while n < (try make().get(0) otherwise …).count()`, which is the leak gate catching exactly the
+		// direction this rung's risk inverts to. The borrow cannot escape the condition (it is a `bool`), so
+		// releasing here is sound as well as necessary — the short-circuit rhs's argument, one construct out.
+		self.dropArmScopedOwned(condOwnedFloor, exitBlock: condExit, anchor: whileTok)
 
 		let loopLabelTok = try self.consume(TokenKind.charLiteral)
 
@@ -18902,11 +18961,9 @@ export type Parser
 			// DOUBLE FREE: `var arr = IntArray.create()` is an owned VALUE whose drop a binding already
 			// owes, so adopting it here too emitted two `__arr_decref`s into the exit block (measured —
 			// `for-in-iteration` segfaulted). The pending list is exactly the owned values NO binding
-			// owns (see `pendingTempsContain`), which is the question being asked.
-			if self.pendingTempsContain(source) 'ownSourceTemp'
-				self.removeFromPendingTemps(source)
-				self.ownedBindings.push(VarInfo.createValueBinding(IterationSourceBindingName, varType: self.typeOf(source), mutable: false, boundValue: source))
-			end 'ownSourceTemp'
+			// owns (see `pendingTempsContain`), which is the question being asked — and it is asked
+			// inside `giveTemporaryScopeLifetime`, the ONE door this promotion has.
+			self.giveTemporaryScopeLifetime(source, name: IterationSourceBindingName)
 		end 'collectionSource'
 
 		// Every OTHER temporary the source expression built — an interpolation handed to a factory call
@@ -20873,9 +20930,11 @@ export type Parser
 		// `__destruct_<U>` cascade, null-guarding any slot a binding arm moved out. An ALREADY-BOUND
 		// scrutinee (`let m = …; match m`) is already in `ownedBindings` (never in the pending list), so it
 		// is left alone — a second enrolment would double-drop the one box.
-		if scrutOwned and self.pendingTempsContain(scrut) 'enrollTempScrutinee'
-			self.ownedBindings.push(VarInfo.createValueBinding(EmptySourceText, varType: self.typeOf(scrut), mutable: false, boundValue: scrut))
-			self.removeFromPendingTemps(scrut)
+		// The `scrutOwned` half stays HERE rather than moving into the shared door: the pending list also
+		// carries an `async` spawn's PROMISE (`emitAsyncCall` enrols one directly), which owns a green thread
+		// rather than heap and must not be re-homed as an owned heap binding by a `match` on it.
+		if scrutOwned 'enrollTempScrutinee'
+			self.giveTemporaryScopeLifetime(scrut, name: EmptySourceText)
 		end 'enrollTempScrutinee'
 
 		// ⭐ **AND THE SCRUTINEE EXPRESSION'S OTHER TEMPORARIES DIE HERE, BEFORE THE FIRST CASE TEST.** The
@@ -20985,9 +21044,14 @@ export type Parser
 						throw ParseError.matchDefaultEnumMustThrow(layout.kindWord(), typeName: String.from(layout.name), line: defTok.line, column: defTok.column)
 					end 'enumPlainDefault'
 					let defaultTempFloor = self.pendingTempDrops.count()
-					let defaultArmBody = try self.parseArmBody(func, bodyBlock: defaultBody, isExpression: isExpression, carried: carried)
-					// The catch-all arm settles its give and its temporaries exactly as a pattern arm does.
-					try self.finishArmValues(defaultArmBody, tempFloor: defaultTempFloor, isExpression: isExpression, anchor: matchTok)
+					// ⚠ The catch-all arm had NO owned floor at all until A3h, so a scope-lifetime record it
+					// enrolled — today a `giveTemporaryScopeLifetime` temporary, and a managed payload binding
+					// the day a `default` can bind one — accumulated into the enclosing scope and was decref'd
+					// in the continuation, on every OTHER arm's path too. It settles exactly as a pattern arm
+					// does now, through the one door.
+					let defaultOwnedFloor = self.ownedBindings.count()
+					var defaultArmBody = try self.parseArmBody(func, bodyBlock: defaultBody, isExpression: isExpression, carried: carried)
+					defaultArmBody.give = try self.finishArmExit(defaultArmBody.give, tempFloor: defaultTempFloor, ownedFloor: defaultOwnedFloor, exitBlock: defaultArmBody.exitBlock, anchor: matchTok)
 					// `default` is the last arm, so a fall-through has no next arm to reach — it simply
 					// continues to the merge. So the test is "did control leave?", not `reachesMerge`.
 					if not defaultArmBody.exitBlock.isTerminated() 'defaultReaches'
@@ -21084,20 +21148,19 @@ export type Parser
 				end 'openArmBindings'
 
 				let armTempFloor = self.pendingTempDrops.count()
-				let armBody = try self.parseArmBody(func, bodyBlock: bodyBlock, isExpression: isExpression, carried: carried)
+				var armBody = try self.parseArmBody(func, bodyBlock: bodyBlock, isExpression: isExpression, carried: carried)
 
 				if hasPayloadBindings 'closeArmBindings'
 					self.scope.popScope()
 				end 'closeArmBindings'
 
 				// An expression arm's OWNED give value escapes to the result phi, so move it out of its owner
-				// BEFORE `dropArmScopedOwned` — else a `text(s) gives s` arm would drop the payload it is
-				// handing back (a use-after-free), and an owned-interpolation give would be double-freed by
-				// the post-match drain. A gives arm always reaches the merge (an expression cannot terminate
-				// its block), so the transfer is unconditional for `isExpression`. The arm's abandoned
-				// TEMPORARIES leave by the same door and into the same exit block — see `finishArmValues`.
-				try self.finishArmValues(armBody, tempFloor: armTempFloor, isExpression: isExpression, anchor: patternTok)
-				self.dropArmScopedOwned(armOwnedFloor, exitBlock: armBody.exitBlock, anchor: patternTok)
+				// BEFORE the arm's records are released — else a `text(s) gives s` arm would drop the payload
+				// it is handing back (a use-after-free), and an owned-interpolation give would be double-freed
+				// by the post-match drain. A BORROWED give out of one of those records is laundered instead,
+				// and a give may therefore come back as a different SSA name — see `finishArmExit`, which is
+				// the one door all three of an arm's exit obligations go through.
+				armBody.give = try self.finishArmExit(armBody.give, tempFloor: armTempFloor, ownedFloor: armOwnedFloor, exitBlock: armBody.exitBlock, anchor: patternTok)
 
 				if armBody.fellThrough 'fellThrough'
 					prevFallthrough = true
@@ -21760,16 +21823,105 @@ export type Parser
 	// Inert for a `then` arm: its body is a STATEMENT, and the statement tail already released the whole list
 	// on its own edge, leaving nothing above the floor. It is the `gives` arm of a match EXPRESSION — which
 	// parses an expression and so has no statement tail — that this exists for.
-	function finishArmValues(armBody MatchArmBody, tempFloor TempDropMark, isExpression bool, anchor Token) throws ParseError
-		if isExpression 'transferGive'
-			try self.transferGiveToPhi(self.giveValueOf(armBody.give), anchor: anchor)
-		end 'transferGive'
+	//
+	// ⭐⭐ **EVERYTHING A FORK ARM OWES AS CONTROL LEAVES IT, IN THE ONE ORDER THAT IS SOUND** — shared by a
+	// `match` arm and a ternary arm, which used to spell the first two steps separately and the third not at
+	// all. Three steps, and the order is the whole content:
+	//
+	//   1. SETTLE THE GIVE — the value escaping to the result phi leaves its owner, or, when it is a BORROW
+	//      into something this arm is about to release, is given a reference of its own (`settleArmGive`).
+	//   2. RELEASE THE ARM'S ABANDONED TEMPORARIES, in the arm's OWN exit block — the only block their
+	//      definitions dominate. An arm runs on one edge, so a release after the merge would free a value the
+	//      other arms never built.
+	//   3. RELEASE THE ARM'S SCOPE-LIFETIME RECORDS — its managed payload bindings, and (A3h) any temporary
+	//      `giveTemporaryScopeLifetime` held for a borrow taken out of it — by the same rule and into the same
+	//      block.
+	//
+	// Step 1 MUST precede steps 2 and 3: an escaping value released by either sweep is a use-after-free
+	// (`text(s) gives s` would drop the payload it is handing back), and a borrow laundered AFTER its source
+	// is released increfs freed memory.
+	//
+	// It takes and returns a `MatchGiveValue` rather than a `ValueId` plus a flag, because a STATEMENT arm
+	// genuinely carries no value and the union is what says so — and the caller must take the answer BACK: a
+	// laundered give is a FRESH SSA name, and the merge (`resolveGivesOwnership`) has to join the value the
+	// arm really hands over rather than the borrow it started from.
+	// The union an arm hands back: the one it ARRIVED with, unless the settlement really produced a different
+	// SSA name.
+	//
+	// ⚠ **NOT TIDINESS — A MEASURED ALLOCATION.** `MatchGiveValue` carries a payload and is therefore a heap
+	// box, so rebuilding one per arm unconditionally cost **+1,060 allocations at rung 5 of the scale ladder**
+	// against a like-for-like base build — one box per `match`/ternary arm in the program, and the whole of this
+	// rung's movement in that column. Reusing brings it back to Δ0. Almost no arm launders, so almost every arm
+	// hands back the union it arrived with.
+	function armGiveUnion(arrived MatchGiveValue, settled ValueId) returns MatchGiveValue
+		return arrived if settled == self.giveValueOf(arrived) else MatchGiveValue.value(settled)
+	end 'armGiveUnion'
+
+	function finishArmExit(give MatchGiveValue, tempFloor TempDropMark, ownedFloor BindingMark, exitBlock IrBlock, anchor Token) returns MatchGiveValue throws ParseError
+		var settled = give
+		match give 'g'
+			none then settled = give
+			value(v) then settled = self.armGiveUnion(give, settled: try self.settleArmGive(v, ownedFloor: ownedFloor, exitBlock: exitBlock, anchor: anchor))
+		end 'g'
 
 		let resumeBlock = self.currentBlock
-		self.currentBlock = armBody.exitBlock
+		self.currentBlock = exitBlock
 		self.drainPendingTemps(tempFloor, anchor: anchor)
 		self.currentBlock = resumeBlock
-	end 'finishArmValues'
+
+		self.dropArmScopedOwned(ownedFloor, exitBlock: exitBlock, anchor: anchor)
+		return settled
+	end 'finishArmExit'
+
+	// ⭐⭐ **A BORROW MAY NOT LEAVE AN ARM THAT IS ABOUT TO FREE WHAT IT POINTS INTO (A3h).** Everything in
+	// `ownedBindings` above this arm's floor dies at the arm's exit — its managed payload bindings, and the
+	// temporaries `giveTemporaryScopeLifetime` held for borrows taken inside the arm — so a give that is
+	// still a BORROW when the arm holds any of them may point into one of them, and the merge would read
+	// freed memory. It is given a reference of its own instead, through the SAME `promoteBorrowedMergeEdge`
+	// the merge's own uniform-ownership promotion uses (`promoteBorrowedGive`); the phi then owns on this
+	// edge, `resolveGivesOwnership` sees an owned arm and promotes the others to match, and the count
+	// balances exactly as it does when an arm gives a fresh box.
+	//
+	// **MEASURED, both constructs, both reading `0x3F3F3F3F3F3F3F3F`:** `match p 'k' first gives
+	// makeA().name second gives makeB().name end 'k'` and its ternary twin `makeA().name if t else
+	// makeB().name` — two BORROW arms, so nothing else made the phi owned and nothing laundered them. The
+	// oracle answers 5 and 2.
+	//
+	// ⚠ **THE HEIGHT TEST IS THE SET ITSELF, WHICH IS WHY THIS NEEDS NO PROVENANCE COLUMN.** The question is
+	// *"can this borrow point into anything this arm is about to release?"*, and the arm's own owned-binding
+	// tail IS that set. A borrow out of an OUTER binding is laundered too, and that is balanced rather than
+	// wasteful: the incref is released by the phi's single drop.
+	//
+	// ⛔ **EXCEPT FOR A READ OF AN IMMUTABLE GLOBAL, WHERE LAUNDERING IS THE ONE THING FORBIDDEN — and
+	// omitting this clause NARROWED THE LANGUAGE, measured.** `match w 'k' held(h) gives A nothing gives B`
+	// over a `let`-declared top-level array compiled and answered 1 before this rung and was refused after it:
+	// the arm's managed payload binding `h` put the height above the floor, so the give was sent to
+	// `promoteBorrowedMergeEdge`, whose aggregate arm exists precisely to REFUSE an incref of a record the
+	// language calls immutable. It is not an exemption bolted on to dodge that refusal — it is the predicate
+	// stated correctly: a give read out of MODULE storage borrows from a record that outlives every scope, so
+	// it demonstrably cannot point into anything an arm releases and there is nothing here to launder.
+	//
+	// An arm holding NOTHING (the overwhelming majority) settles exactly as before, through
+	// `transferGiveToPhi` — a no-op for a borrowed or scalar give.
+	function settleArmGive(give ValueId, ownedFloor BindingMark, exitBlock IrBlock, anchor Token) returns ValueId throws ParseError
+		if self.giveBorrowsIntoDyingRecords(give, ownedFloor: ownedFloor) 'borrowIntoDyingRecords'
+			return try self.promoteBorrowedMergeEdge(give, edgeBlock: exitBlock, anchor: anchor)
+		end 'borrowIntoDyingRecords'
+
+		try self.transferGiveToPhi(give, anchor: anchor)
+		return give
+	end 'settleArmGive'
+
+	// The four clauses of `settleArmGive`'s question, named so the sentence above is the code: the arm holds
+	// records that die at its exit, the give is a MANAGED pointer (a scalar borrows nothing), it does not
+	// already own a reference of its own, and it is not a read of module storage that outlives every scope.
+	function giveBorrowsIntoDyingRecords(give ValueId, ownedFloor BindingMark) returns bool
+		if self.ownedBindings.count() == ownedFloor 'armHoldsNothing'
+			return false
+		end 'armHoldsNothing'
+
+		return self.valueIsManagedHeap(give) and not self.valueIsOwnedHeap(give) and not self.immutableGlobalReads.contains(give)
+	end 'giveBorrowsIntoDyingRecords'
 
 	function transferGiveToPhi(give ValueId, anchor Token) throws ParseError
 		if not self.valueIsOwnedHeap(give) 'borrowed'
@@ -23495,15 +23647,21 @@ export type Parser
 		// it while the value below parses belongs to what may turn out to be a ternary's TRUE ARM, and is
 		// released inside that arm rather than on the unconditional path (see `parseTernaryExpression`).
 		let markTempCount = self.pendingTempDrops.count()
+		// ⭐ **AND THE OWNED-BINDING HEIGHT AT THE SAME INSTANT (A3h).** An expression declares no `let`, but it
+		// can now ENROL an owned binding: `giveTemporaryScopeLifetime` holds a temporary a borrow was taken out
+		// of, so `(try make().get(0) otherwise d) if t else d` leaves one behind. It belongs to what may turn
+		// out to be the TRUE ARM and must be dropped inside that arm — the mirror of `markTempCount`, for the
+		// list whose entries drop at a SCOPE exit rather than a statement's.
+		let markOwnedCount = self.ownedBindings.count()
 		var preMoveMark = self.emptyMoveMark
-		if self.ownedBindings.count() > 0 'ownedInScope'
+		if markOwnedCount > 0 'ownedInScope'
 			preMoveMark = self.captureMoveMark()
 		end 'ownedInScope'
 
 		let value = try self.parseBinary(func, minPrec: OrPrecedence)
 
 		if self.at(TokenKind.if) 'ternary'
-			return try self.parseTernaryExpression(func, trueValue: value, startBlock: block, markOpRefCount: markOpRefCount, markBlockRefCount: markBlockRefCount, markTempCount: markTempCount, preMoveMark: preMoveMark)
+			return try self.parseTernaryExpression(func, trueValue: value, startBlock: block, markOpRefCount: markOpRefCount, markBlockRefCount: markBlockRefCount, markTempCount: markTempCount, markOwnedCount: markOwnedCount, preMoveMark: preMoveMark)
 		end 'ternary'
 
 		return value
@@ -23530,7 +23688,7 @@ export type Parser
 	// environment (the same merge hazard the match `gives` arm and the `otherwise` fallback are refused for),
 	// so it is rejected E3099 at the `if` — the shared anchor for both arms, where each reference compiler
 	// anchors it.
-	function parseTernaryExpression(func IrFunction, trueValue ValueId, startBlock IrBlock, markOpRefCount ElementCount, markBlockRefCount ElementCount, markTempCount TempDropMark, preMoveMark MoveMark) returns ValueId throws ParseError
+	function parseTernaryExpression(func IrFunction, trueValue ValueId, startBlock IrBlock, markOpRefCount ElementCount, markBlockRefCount ElementCount, markTempCount TempDropMark, markOwnedCount BindingMark, preMoveMark MoveMark) returns ValueId throws ParseError
 		let ifTok = try self.consume(TokenKind.if)
 
 		// The E3099 refusal for a capturing closure in EITHER arm — the route-specific prefix over the
@@ -23544,21 +23702,24 @@ export type Parser
 		// arm's own exit block when it grew control flow (a short-circuit, a nested ternary, a match).
 		let armExit = self.currentBlock
 
-		// The true arm's owned give leaves its owner (so the merge, not the arm, drops it) — done now, so the
-		// transfer's own poison is captured into the true arm's move state below.
-		try self.transferGiveToPhi(trueValue, anchor: ifTok)
-
-		// ⭐ **THE TRUE ARM'S TEMPORARIES ARE RELEASED WHILE THE ARM IS STILL DETACHABLE, AND TRAVEL WITH IT.**
+		// ⭐ **THE TRUE ARM SETTLES EVERYTHING WHILE IT IS STILL DETACHABLE, AND ITS DROPS TRAVEL WITH IT.**
 		// The arm was parsed onto the unconditional path before the `if` revealed the form, so its temporaries
 		// (`[1,2].count() if c else …` builds one) are enrolled as though they were the enclosing statement's —
 		// and after the relocation below the arm runs on ONE edge, where a release on the unconditional path
-		// would free a value the false path never built. Emitting the release HERE, before the ops are
-		// collected, puts it in the tail of `startBlock` that `relocatedOpRefs` sweeps into `trueBranch` (or,
-		// for an arm that grew control flow, into the arm's own inner exit block, which is relocated too). So
-		// the drop rides the SAME relocation the arm does and needs no second mechanism to follow it.
-		// `transferGiveToPhi` above has already taken an owned give out of the list, so the arm's VALUE is
-		// never released here — only what it built and abandoned.
-		self.drainPendingTemps(markTempCount, anchor: ifTok)
+		// would free a value the false path never built. Settling HERE, before the ops are collected, puts the
+		// releases in the tail of `startBlock` that `relocatedOpRefs` sweeps into `trueBranch` (or, for an arm
+		// that grew control flow, into the arm's own inner exit block, which is relocated too). So they ride
+		// the SAME relocation the arm does and need no second mechanism to follow them. It is also before
+		// `captureMoveMark` below, so the give transfer's own poison is captured into the true arm's move state.
+		//
+		// ⭐⭐ **THE OWNED-BINDING RELEASE IS THE PART THE TERNARY NEVER HAD (A3h).** Every other fork region has
+		// had `dropArmScopedOwned` all along: an `if`/`else` branch, a `try`'s `otherwise` handler, a `catch`
+		// handler and every `match` arm. A ternary arm could not enrol an owned binding while only a `let`
+		// could, so the gap was invisible — and `giveTemporaryScopeLifetime` closes that: a temporary a BORROW
+		// was taken out of inside this arm is enrolled here, and left to the enclosing scope it would be
+		// decref'd on the path that never built it (MEASURED as the `restoreMoveMark` height panic one screen
+		// down, which is the same fact caught by the bookkeeping instead of by the register allocator).
+		let settledTrue = try self.finishArmExit(MatchGiveValue.value(trueValue), tempFloor: markTempCount, ownedFloor: markOwnedCount, exitBlock: armExit, anchor: ifTok)
 
 		// ⭐ **THE CONDITION RUNS FIRST AT RUNTIME, THOUGH IT PARSES SECOND.** The true arm was parsed before
 		// the `if` revealed the form, so any binding it MOVED (an owned value into a struct field, say) is
@@ -23642,14 +23803,18 @@ export type Parser
 		// post-condition move state (`condBase`, the current live state), never the true arm's moves. A full
 		// `parseExpression` — a chained `… else b if c2 else d` right-associates here.
 		var falseBranch = self.newBlock(func, label: b"ternaryfalse", line: ifTok.line)
+		// The FALSE arm's owned floor is the height AFTER the condition, not `markOwnedCount`: the condition
+		// runs unconditionally, so a temporary IT holds for a borrow belongs to the enclosing scope and must
+		// survive both arms. The true arm's floor is the pre-condition height for exactly the same reason read
+		// the other way — it parsed before the condition existed.
+		let falseArmOwnedCount = self.ownedBindings.count()
 		let falseValue = try self.parseExpression(func, block: falseBranch)
 		try self.rejectEscapingClosure(falseValue, message: armEscapeMessage, tok: ifTok)
 		let falseExit = self.currentBlock
-		try self.transferGiveToPhi(falseValue, anchor: ifTok)
 
-		// The false arm's own temporaries, released in ITS exit block — the mirror of the true arm's, and for
-		// the same reason: the arm runs on one edge only. `currentBlock` is `falseExit` here.
-		self.drainPendingTemps(markTempCount, anchor: ifTok)
+		// The false arm settles in ITS exit block — the mirror of the true arm's, through the same door and
+		// for the same reason: the arm runs on one edge only.
+		let settledFalse = try self.finishArmExit(MatchGiveValue.value(falseValue), tempFloor: markTempCount, ownedFloor: falseArmOwnedCount, exitBlock: falseExit, anchor: ifTok)
 
 		let falseMoveMark = self.captureMoveMark()
 
@@ -23659,8 +23824,8 @@ export type Parser
 		// `condExit` is still open when the merge's per-arm reconciliation runs.
 		let carried = VarInfoArray.create()
 		var reachingArms = MatchArmExitArray.create()
-		reachingArms.push(MatchArmExit.create(trueExit, exitVals: ValueIdArray.create(), give: MatchGiveValue.value(trueValue), moveMark: trueMoveMark))
-		reachingArms.push(MatchArmExit.create(falseExit, exitVals: ValueIdArray.create(), give: MatchGiveValue.value(falseValue), moveMark: falseMoveMark))
+		reachingArms.push(MatchArmExit.create(trueExit, exitVals: ValueIdArray.create(), give: settledTrue, moveMark: trueMoveMark))
+		reachingArms.push(MatchArmExit.create(falseExit, exitVals: ValueIdArray.create(), give: settledFalse, moveMark: falseMoveMark))
 		let outcome = try self.finalizeMatchMerge(func, matchTok: ifTok, carried: carried, reachingArms: reachingArms, construct: MergeConstruct.ternary)
 
 		self.emitCondBranch(condExit, cond: cond, thenId: trueBranch.id, elseId: falseBranch.id, ifTok: ifTok)
@@ -24007,6 +24172,13 @@ export type Parser
 		let rhsBlock = self.newBlock(func, label: shortCircuitLabel(takesRhsWhenTrue), line: opTok.line)
 		self.currentBlock = rhsBlock
 		let rhsTempFloor = self.pendingTempDrops.count()
+		// ⭐ **AND THE OWNED-BINDING HEIGHT — the twin floor, for the list whose entries drop at a SCOPE exit
+		// (A3h).** The `for`/`match`/ternary reason, one construct over: `giveTemporaryScopeLifetime` holds the
+		// container a borrow was taken out of, and `a or (try make().get(0) otherwise d).count() == 3` takes
+		// one INSIDE the rhs. Left to the enclosing scope, that record's decref would run on the path that
+		// short-circuited past its definition — MEASURED as the allocator's `seedInUse: a use dominates its
+		// def`, the same complaint the pending-temp drain below was written for.
+		let rhsOwnedFloor = self.ownedBindings.count()
 		let rhsValue = try self.parseBinary(func, minPrec: rhsMinPrec)
 		// NOT `rhsBlock`: the rhs may itself have short-circuited (`a or b or c`), leaving
 		// control in a merge block of its own. That is the block the value is defined in, and
@@ -24022,6 +24194,11 @@ export type Parser
 		// is the only place the release can go. A bool operand is never owned heap, so `rhsValue` itself is
 		// never in this list and cannot be released out from under the merge phi.
 		self.drainPendingTemps(rhsTempFloor, anchor: opTok)
+
+		// The same argument for the rhs's own SCOPE-lifetime holds, in the same block. The merge phi is a
+		// BOOL, so no borrow can leave the rhs through it — which is why the record a borrow was taken out of
+		// may be released here rather than laundered on the way out, unlike a ternary arm's give.
+		self.dropArmScopedOwned(rhsOwnedFloor, exitBlock: rhsEnd, anchor: opTok)
 
 		// The SHORT-CIRCUIT half of the same rule `emitBinOp` enforces — ASKED, not restated
 		// (see `requireBinOpOperands`). The left operand is already known to be a bool: that is
@@ -28815,7 +28992,7 @@ export type Parser
 			if maxonTypeTag(self.signatures.fieldTypeOf(base.layout, index: fieldIndex, into: self.artifact.typeNames)) == ValueTypeTag.function or not callFollows 'fieldRead'
 				self.advance()
 				try self.requireFieldAccessible(base.layout, index: fieldIndex, fieldTok: memberTok)
-				try self.requireFieldOutlivesItsRead(base, index: fieldIndex, memberTok: memberTok)
+				self.keepFieldSourceAliveForItsRead(base, index: fieldIndex)
 				return self.emitFieldLoad(base.box, layout: base.layout, index: fieldIndex, range: SourceRange.between(baseTok, last: memberTok))
 			end 'fieldRead'
 		end 'fieldMember'
@@ -28838,16 +29015,15 @@ export type Parser
 		return result
 	end 'dispatchMethodOnBase'
 
-	// ⚠⚠ **A MANAGED FIELD MAY NOT BE READ OUT OF A TEMPORARY — the read is a BORROW, and the box that owns
-	// what it borrows dies at the end of THIS statement.** `emitFieldLoad`'s header states the invariant the
-	// borrow rests on in full: *"the read is a BORROW … so the box keeps its +1 and drops the value at ITS
-	// scope exit; a `let s = b.value` re-reads a live pointer and is never double-dropped."* A box bound to
-	// NO NAME has no scope exit later than the statement — `trackOwnedTemp` enrolled it, the statement's
-	// pending drops free it — so any result that outlives the statement is a pointer into freed memory. The
-	// invariant did not change; this rung is the first door that can hand it a box the invariant is false of.
+	// ⚠⚠ **A MANAGED FIELD READ OUT OF A TEMPORARY HOLDS THAT TEMPORARY TO THE SCOPE'S EXIT — the read is a
+	// BORROW, and the box that owns what it borrows would otherwise die at the end of THIS statement.**
+	// `emitFieldLoad`'s header states the invariant the borrow rests on in full: *"the read is a BORROW … so
+	// the box keeps its +1 and drops the value at ITS scope exit; a `let s = b.value` re-reads a live pointer
+	// and is never double-dropped."* A box bound to NO NAME had no scope exit later than the statement —
+	// `trackOwnedTemp` enrolled it, the statement's pending drops freed it — so any result that outlived the
+	// statement was a pointer into freed memory.
 	//
-	// **MEASURED on this rung's own new door, all four managed field kinds, every one of them a program the
-	// C# oracle RUNS:**
+	// **MEASURED, all four managed field kinds, every one of them a program the C# oracle RUNS:**
 	//   • `let s = Box.make("hello").name`          — String field:  **0xC0000005**, no diagnostic anywhere
 	//   • `let o = Box.make().ops` then `o.get(0)`  — Array field:   **0xC0000005**, no diagnostic anywhere
 	//   • `let i = Outer.make(Inner.make(3)).inner` — struct field:  exit **0x3F3F3F3F** — the freed-memory
@@ -28856,18 +29032,22 @@ export type Parser
 	//   • `let s = makePair().1`                    — tuple element: **0xC0000005** (a tuple is a synthesized
 	//     struct, so it needs no arm of its own — that is the point of it being one)
 	//
-	// It REFUSES rather than loading, for the reason the struct-typed self-field base two functions up is
-	// refused: keeping a temporary alive for a borrow taken out of it is an OWNERSHIP ruling, and a
-	// mechanism shipped without one is the `mintPhi` trap. Binding the receiver first (`let b = …` then
-	// `b.name`) is the spelling that already works, and is what the message says.
+	// ⭐⭐ **IT USED TO REFUSE, AND THE REFUSAL'S OWN MESSAGE NAMED THE RUNG THAT WOULD LIFT IT** — *"keeping a
+	// temporary alive for a borrow taken out of it is the ownership rung's"*. ⚖ That is A3h, and the USER
+	// RULING of 2026-08-01 is EXTEND THE TEMPORARY'S LIFETIME, so the refusal is gone and the box is promoted
+	// to a scope-lifetime binding instead (`giveTemporaryScopeLifetime`). It is the SAME promotion, through the
+	// SAME door, that a container an ELEMENT borrow came out of now gets: the two were one fact refused in one
+	// place and miscompiled in the other, which is exactly why they must not have two cures.
 	//
 	// A SCALAR field is COPIED, not borrowed, so it is untouched — which is exactly what keeps
-	// `postfix.field-read-on-a-call-result` (`Leaf.make(4).tally`) green, and what makes the gate the
+	// `postfix.field-read-on-a-call-result` (`Leaf.make(4).tally`) paying nothing, and what makes the gate the
 	// managed classifier and not the temporary.
-	function requireFieldOutlivesItsRead(base StructBase, index FieldIndex, memberTok Token) throws ParseError
+	function keepFieldSourceAliveForItsRead(base StructBase, index FieldIndex)
 		// A box owned by a NAME — a local, a parameter, `self`, a captured env slot — or a borrow of one
-		// outlives the statement, and the read is the ordinary borrow every field chain already is. Only an
-		// UNCONSUMED owned temporary is the dying case, which is precisely what this list holds.
+		// already outlives the statement, and the read is the ordinary borrow every field chain already is.
+		// Only an UNCONSUMED owned temporary needs promoting, which `giveTemporaryScopeLifetime` asks for
+		// itself; this early return is the COST gate, keeping the managed classification below off the hot
+		// path of every field read in a program.
 		if not self.pendingTempsContain(base.box) 'boxOutlivesTheStatement'
 			return
 		end 'boxOutlivesTheStatement'
@@ -28876,7 +29056,7 @@ export type Parser
 		// INSTANCE must SUBSTITUTE its opaque arguments before it can answer (an `Element` field is managed
 		// for `Box with String` and inert for `Box with Int`); a plain struct field is `structFieldIsManaged`,
 		// which is literally the per-field predicate `__destruct_<T>`'s cascade loops over. "The box frees it
-		// at drop" and "the read borrows it" are then one answer and cannot come apart — a field this refusal
+		// at drop" and "the read borrows it" are then one answer and cannot come apart — a field this gate
 		// let through while the destructor freed it would be exactly the crash above, wearing a guard.
 		//
 		// ⚠ **IT ASKS THE STRUCT AND THE INDEX, NOT A TYPE, AND THAT IS THE FIX FOR A MEASURED CROSS-FILE
@@ -28894,12 +29074,8 @@ export type Parser
 			return
 		end 'scalarFieldIsCopiedNotBorrowed'
 
-		// ⚠ The member is named from `memberTok`, which for a TUPLE's positional access has already been
-		// rewritten (`memberNameTokenAt`: `.1` ⇒ `_1`) — so the suggestion says "read it off the binding"
-		// and does NOT spell the access back, because `b._1` is not a spelling the language accepts and
-		// advice a user cannot type is worse than none.
-		throw ParseError.unsupported("reading the managed field '{String.from(memberTok.value)}' out of a TEMPORARY `{String.from(base.layout.name)}` — a field read is a BORROW and the value the `.` is applied to is owned by this statement alone, so the heap this would hand back is freed at the statement's end (measured: a use-after-free, silent). Bind the receiver to a name first and read the field off THAT, which borrows from a box outliving the read; keeping a temporary alive for a borrow taken out of it is the ownership rung's. A SCALAR field is copied rather than borrowed and needs none of this", line: memberTok.line, column: memberTok.column)
-	end 'requireFieldOutlivesItsRead'
+		self.giveTemporaryScopeLifetime(base.box, name: BorrowSourceBindingName)
+	end 'keepFieldSourceAliveForItsRead'
 
 	// ⭐ **THE CONCRETE INSTANCE A METHOD'S RECEIVER SUPPLIES TO THE CALLER-SIDE CONSUME (P1.7 slice 3b-iii).**
 	// A `genericInstance` receiver (`sc` of type `Container with String`) knows its instance gid at the call
@@ -33064,6 +33240,37 @@ export type Parser
 		if owned 'moveOut'
 			self.trackOwnedTemp(result)
 		end 'moveOut' else 'borrowsInPlace'
+			// ⭐⭐ **A CONTAINER THE STATEMENT ALONE OWNS IS HELD TO THE SCOPE'S EXIT, BECAUSE THE ELEMENT JUST
+			// HANDED OUT POINTS INTO IT (A3h).** ⚖ USER RULING, 2026-08-01: extend the TEMPORARY's lifetime.
+			// `let n = try make().get(0) otherwise …` used to free `make()`'s array at the statement's end
+			// (`drainPendingTemps`, or `desugarTry`'s per-edge fork drop) while `n` still named an element
+			// inside it — measured **`4557430888798830399`** = `0x3F3F3F3F3F3F3F3F`, `__mm_free`'s poison byte
+			// read back as a `count()`. **A WRONG ANSWER in every channel this project has**: not a crash, not
+			// a refusal, and no leak (the free is legitimate), so the suite was green over it for as long as it
+			// existed and only a hand-probe found it.
+			//
+			// ⭐ It is stated HERE, at the ONE door every element borrow leaves through, rather than at the
+			// five arms that reach it — the same argument `markElementReadSurface` makes one line up. So `get`,
+			// `first`, `last`, the `for … in` element read and the list's two accessors are covered by one line
+			// and a sixth arm cannot miss it.
+			//
+			// ⚠ **IT IS THE BASE THAT IS PROMOTED, NOT THE ELEMENT THAT IS RETAINED** — the ruling's other
+			// half. Retaining here would make `get` mean two different things depending on the RECEIVER's
+			// provenance, which is exactly the shape the roster family has already cost this project three
+			// rungs. Both references extend the lifetime instead: v1 as a per-value liveness EXTENSION over SSA
+			// (`StdLiveness.maxon:236-267`, "interior-borrow liveness extension (the UAF fix)" — `baseOf[result]
+			// = receiver`, every read of a borrow counting as a read of its base), the bootstrap by retaining on
+			// STORE, which is its universal discipline and not one shv2 shares. shv2 has no liveness pass at
+			// drop-insertion time (it emits drops at parse), so it takes the coarser SCOPE, which is the
+			// direction v1's own note calls safe: *"the worst case is a slightly-later decref … never an early
+			// free."*
+			//
+			// A TRIVIAL concrete element returned from the arm above and never reaches here, so the promotion
+			// costs nothing for the `Array with Integer` case that borrows nothing. An OPAQUE element does reach
+			// here and is promoted: the shared body cannot know whether the instantiation's element owns heap,
+			// and holding the container is inert for a trivial one and necessary for a managed one.
+			self.giveTemporaryScopeLifetime(container, name: BorrowSourceBindingName)
+
 			if not borrowSubjectName.isEmpty() and self.signatures.containerElementIsManaged(giid) 'borrowsANamedSourcesElement'
 				self.mintPendingBorrow(func, subjectName: borrowSubjectName, borrowValue: result, range: range)
 			end 'borrowsANamedSourcesElement'
@@ -38793,10 +39000,11 @@ export type Parser
 	//   • An INSTANCE-METHOD feed (`self.items.push(item)`, `self.saved = next` — the slice-3b mechanism) moves
 	//     the argument into durable storage the CALLEE owns. A trivial `Array with T` element the array does not
 	//     per-element drop is still a BORROW the caller keeps; a borrowed TEMPORARY of it is otherwise freed at
-	//     statement end while the array points at it, so it is materialized as a hidden scope-local (a nameless
-	//     owned binding, as a temporary `match` scrutinee is) to move its drop to scope exit. (A shared-body
-	//     REASSIGN feed of a co-owned trivial struct is rejected up front at `emitOpaqueFieldReassign`, so it
-	//     never reaches this materialization.)
+	//     statement end while the array points at it, so it is given a SCOPE lifetime
+	//     (`giveTemporaryScopeLifetime` — the same door a temporary `match` scrutinee and a borrowed-out-of
+	//     container go through); reverse drop order then frees the element after the container that borrowed it.
+	//     (A shared-body REASSIGN feed of a co-owned trivial struct is rejected up front at
+	//     `emitOpaqueFieldReassign`, so it never reaches this promotion.)
 	function handleEscapingBorrowFeed(info ParamConsumeInfo, position ParamCount, argValue ValueId, anchor Token)
 		if not info.typeParamFeedOf(position).isFeed() 'notEscapingFeed'
 			return
@@ -38807,22 +39015,8 @@ export type Parser
 			end 'coOwnedAggregate'
 			return
 		end 'constructorFeed'
-		self.materializeEscapingBorrowTemp(argValue)
+		self.giveTemporaryScopeLifetime(argValue, name: EmptySourceText)
 	end 'handleEscapingBorrowFeed'
-
-	// Give a borrowed instance-method-feed TEMPORARY a scope lifetime (see `handleEscapingBorrowFeed`): the
-	// callee borrows it into durable storage (a trivial `Array with T` element) the container outlives, so a
-	// statement-end drop would dangle. Enrolling it as a nameless owned binding moves its drop to scope exit;
-	// reverse drop order frees the element after the container that borrowed it. A NON-temporary source (a named
-	// binding) already drops at its own scope and needs nothing.
-	function materializeEscapingBorrowTemp(argValue ValueId)
-		if not self.pendingTempsContain(argValue) 'notTemporary'
-			return
-		end 'notTemporary'
-
-		self.removeFromPendingTemps(argValue)
-		self.ownedBindings.push(VarInfo.createValueBinding(EmptySourceText, varType: self.typeOf(argValue), mutable: false, boundValue: argValue))
-	end 'materializeEscapingBorrowTemp'
 
 	// Does the concrete instance's argument at parameter `position`'s type-parameter feed own managed heap
 	// (P1.6-B2)? Only a generic-alias constructor carries an instance; only a fed parameter has a position; a

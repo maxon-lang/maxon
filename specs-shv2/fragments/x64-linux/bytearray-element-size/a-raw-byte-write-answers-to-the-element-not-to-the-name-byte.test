@@ -1,0 +1,17 @@
+// Test: a-raw-byte-write-answers-to-the-element-not-to-the-name-byte
+typealias Small = int(0 to 100)
+typealias Smalls = Array with Small
+
+function takes(b Smalls) returns ExitCode
+	return (try b.get(0) otherwise 0) as ExitCode
+end 'takes'
+
+function main() returns ExitCode
+	var a = Smalls.create()
+	a.push(1)
+	try a.managed.setByte(0, 223) otherwise return 3
+	return takes(a)
+end 'main'
+---
+CompilerError:
+error E3117: <fragment>:12:16: 'setByte' stores RAW bytes into an element declared 'Small' (int(0 to 100)), which does not hold every byte value 0 to 255 — widen the element's declared range to store raw bytes through it
