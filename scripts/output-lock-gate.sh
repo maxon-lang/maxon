@@ -63,12 +63,11 @@ set -u
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT" || exit 2
 
-case "$(uname -s)" in
-	MINGW*|MSYS*|CYGWIN*) EXE_EXT=".exe"; HOST_IS_WINDOWS=1 ;;
-	*)                    EXE_EXT="";     HOST_IS_WINDOWS=0 ;;
-esac
+# shellcheck source=lib/host-binaries.sh
+. "$REPO_ROOT/scripts/lib/host-binaries.sh" || { echo "cannot source scripts/lib/host-binaries.sh" >&2; exit 2; }
+EXE_EXT="$MAXON_EXE_EXT"; HOST_IS_WINDOWS="$MAXON_HOST_IS_WINDOWS"
 
-SHV2="./maxon-shv2/.maxon/maxon-shv2${EXE_EXT}"
+SHV2="$(maxon_shv2_path .)"
 WORK="temp/output-lock-gate"
 
 # ⚠ THE LOCKED DIRECTORY HOLDS THE BUILD OUTPUT AND NOTHING ELSE, and that separation is what makes

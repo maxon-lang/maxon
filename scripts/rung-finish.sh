@@ -183,8 +183,8 @@ ok "PLAN.md carries uncommitted detail ($(git diff --numstat -- maxon-shv2/PLAN.
 OTHER_DIRTY="$(git status --porcelain | grep -v ' maxon-shv2/PLAN\.md$' | head -5)"
 [ -z "$OTHER_DIRTY" ] || { echo "$OTHER_DIRTY"; warn "other files are dirty in the main checkout; they will be stashed and restored, NOT committed"; }
 
-SHV2="$WORKTREE/maxon-shv2/.maxon/maxon-shv2.exe"
-BOOTSTRAP="$WORKTREE/bin/maxon.exe"
+SHV2="$(maxon_shv2_path "$WORKTREE")"
+BOOTSTRAP="$(maxon_bootstrap_path "$WORKTREE")"
 [ -x "$BOOTSTRAP" ] || die "no bootstrap in the worktree ($BOOTSTRAP) — bin/ is gitignored; copy it in"
 
 # ─────────────────────────────────────────────────────────────────────────────────────────────────
@@ -222,13 +222,13 @@ step "3/9  Build"
 # ─────────────────────────────────────────────────────────────────────────────────────────────────
 build_tree() {                       # build_tree <tree> <tag> [force-bootstrap] — bootstrap, then shv2
   local tree="$1" tag="$2" force="${3:-0}"
-  if [ "$force" = "1" ] || [ -n "$(find "$tree/maxon-sharp" -name '*.cs' -newer "$tree/bin/maxon.exe" -print -quit 2>/dev/null)" ]; then
+  if [ "$force" = "1" ] || [ -n "$(find "$tree/maxon-sharp" -name '*.cs' -newer "$(maxon_bootstrap_path "$tree")" -print -quit 2>/dev/null)" ]; then
     echo "  [$tag] bootstrap is stale — rebuilding it first (it BUILDS shv2, so a stale one emits an"
     echo "        shv2 that does not match its own sources)"
     ( cd "$tree/maxon-sharp" && dotnet build --nologo -v q ) > "$LOGDIR/rung-$tag-bootstrap.log" 2>&1 \
       || { tail -30 "$LOGDIR/rung-$tag-bootstrap.log"; die "[$tag] bootstrap build FAILED"; }
   fi
-  ( cd "$tree" && ./bin/maxon.exe build maxon-shv2 ) > "$LOGDIR/rung-$tag-build.log" 2>&1 \
+  ( cd "$tree" && "$(maxon_bootstrap_path .)" build maxon-shv2 ) > "$LOGDIR/rung-$tag-build.log" 2>&1 \
     || { tail -30 "$LOGDIR/rung-$tag-build.log"; die "[$tag] shv2 build FAILED — see $LOGDIR/rung-$tag-build.log"; }
   # A build that succeeds while printing warnings is not a green build (Code Quality: zero warnings).
   local warns
@@ -323,7 +323,7 @@ else
   #   maxon-sharp/, borrowing the tip's means building BASE sources with the CHANGED bootstrap, and the
   #   drift delta would measure nothing at all. Force the base to build its own in exactly that case.
   build_tree "$BASE_TREE" "base" "$RUN_CSHARP"
-  run_suite "$BASE_TREE" "$BASE_TREE/maxon-shv2/.maxon/maxon-shv2.exe" "$LOGDIR/rung-base-suite.log"
+  run_suite "$BASE_TREE" "$(maxon_shv2_path "$BASE_TREE")" "$LOGDIR/rung-base-suite.log"
   BASE_DRIFT="$DRIFT"; BASE_PASSED="$PASSED"; BASE_FAILED="$FAILED"
   cleanup_base
   printf '%s %s %s\n' "$BASE_DRIFT" "$BASE_PASSED" "$BASE_FAILED" > "$BASE_CACHE"
@@ -378,7 +378,7 @@ fi
 if [ "$RUN_CSHARP" = "1" ]; then
   echo "  running the C# bootstrap suite…"
   CS_LOG="$LOGDIR/rung-csharp-suite.log"
-  ( cd "$WORKTREE" && ./bin/maxon.exe spec-test ) > "$CS_LOG" 2>&1
+  ( cd "$WORKTREE" && "$(maxon_bootstrap_path .)" spec-test ) > "$CS_LOG" 2>&1
   CS_EXIT=$?
   CS_FAILED="$(grep -c '\[FAIL\]' "$CS_LOG")"
   [ "$CS_EXIT" = "0" ] && [ "$CS_FAILED" = "0" ] || {
@@ -518,7 +518,7 @@ else
 
     git pull --rebase --quiet || die "rebase after a rejected push FAILED — resolve by hand"
     build_tree "$REPO" "merged"
-    run_suite "$REPO" "$REPO/maxon-shv2/.maxon/maxon-shv2.exe" "$LOGDIR/rung-merged-suite.log"
+    run_suite "$REPO" "$(maxon_shv2_path "$REPO")" "$LOGDIR/rung-merged-suite.log"
     [ "$SUITE_EXIT" != "101" ] || die "MEMORY LEAK after rebasing onto the new upstream"
     [ "$FAILED" = "0" ] || { grep -n '^FAIL' "$LOGDIR/rung-merged-suite.log" | head -20
       die "your rung and the new upstream do NOT compose: $PASSED passed, $FAILED failed.

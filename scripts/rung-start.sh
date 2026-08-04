@@ -48,6 +48,8 @@ readonly MAX_PUSH_ATTEMPTS=3
 
 # shellcheck source=lib/plan-board.sh
 . "$REPO/scripts/lib/plan-board.sh" || { echo "cannot source scripts/lib/plan-board.sh" >&2; exit 1; }
+# shellcheck source=lib/host-binaries.sh
+. "$REPO/scripts/lib/host-binaries.sh" || { echo "cannot source scripts/lib/host-binaries.sh" >&2; exit 1; }
 
 BATCH=""; SLUG=""; MESSAGE=""; DRY_RUN=0; NO_PUSH=0; WAVE=0; BATCH_ROW_ONLY=0; NO_BUILD=0
 
@@ -298,11 +300,11 @@ step "6/6  Build the worktree"
 #   main, the tree's binary read 71 FAILED where a 13 s rebuild read 1922/0.
 if [ "$NO_BUILD" = "1" ]; then
   warn "--no-build: the worktree has NO shv2 binary. Build before you gate anything."
-elif [ ! -x "$WORKTREE/bin/maxon.exe" ]; then
+elif [ ! -x "$(maxon_bootstrap_path "$WORKTREE")" ]; then
   warn "no bootstrap in the worktree — skipping the shv2 build"
 else
   echo "  building shv2 in the worktree…"
-  ( cd "$WORKTREE" && ./bin/maxon.exe build maxon-shv2 ) > "$LOGDIR/rung-start-build.log" 2>&1 \
+  ( cd "$WORKTREE" && "$(maxon_bootstrap_path .)" build maxon-shv2 ) > "$LOGDIR/rung-start-build.log" 2>&1 \
     || { tail -30 "$LOGDIR/rung-start-build.log"; die "shv2 build FAILED in the worktree — see $LOGDIR/rung-start-build.log"; }
   ok "shv2 built"
 fi

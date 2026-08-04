@@ -119,18 +119,15 @@ for arg in "$@"; do
 	esac
 done
 
-IS_WINDOWS=0
-case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) IS_WINDOWS=1 ;; esac
+# shellcheck source=lib/host-binaries.sh
+. "$(dirname "${BASH_SOURCE[0]}")/lib/host-binaries.sh" || { echo "cannot source scripts/lib/host-binaries.sh" >&2; exit 2; }
+IS_WINDOWS="$MAXON_HOST_IS_WINDOWS"
 
-if [ "$IS_WINDOWS" = 1 ]; then
-	MAXON="./bin/maxon.exe"
-	SHV2="./maxon-shv2/.maxon/maxon-shv2.exe"
-	WASMTIME="./vendor/wasmtime/wasmtime.exe"
-else
-	MAXON="./bin/maxon"
-	SHV2="./maxon-shv2/.maxon/maxon-shv2"
-	WASMTIME="./vendor/wasmtime/wasmtime"
-fi
+MAXON="$(maxon_bootstrap_path .)"
+SHV2="$(maxon_shv2_path .)"
+# ⚠ On a Mac the extensionless `wasmtime` beside `wasmtime.exe` is the Mach-O one, so this is the same
+#   host-suffix fact and not a coincidence of naming.
+WASMTIME="./vendor/wasmtime/wasmtime${MAXON_EXE_EXT}"
 
 SPEC_FILTER=()
 [ -n "$FILTER" ] && SPEC_FILTER+=("--filter=$FILTER")

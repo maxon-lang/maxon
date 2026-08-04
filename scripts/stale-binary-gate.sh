@@ -83,12 +83,11 @@ set -u
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT" || exit 2
 
-case "$(uname -s)" in
-	MINGW*|MSYS*|CYGWIN*) EXE_EXT=".exe" ;;
-	*)                    EXE_EXT="" ;;
-esac
+# shellcheck source=lib/host-binaries.sh
+. "$REPO_ROOT/scripts/lib/host-binaries.sh" || { echo "cannot source scripts/lib/host-binaries.sh" >&2; exit 2; }
+EXE_EXT="$MAXON_EXE_EXT"
 
-SHV2="./maxon-shv2/.maxon/maxon-shv2${EXE_EXT}"
+SHV2="$(maxon_shv2_path .)"
 WORK="temp/stale-binary-gate"
 
 # The exit code the harness returns when it refuses. Distinct from 1 (a suite that RAN and had
