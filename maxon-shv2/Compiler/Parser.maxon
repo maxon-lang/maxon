@@ -1045,17 +1045,21 @@ end 'ParseError'
 // in a program where each comes from a DIFFERENT file, E3062 first
 // (`export-keyword/error.non-exported-typealias-cross-file`).
 //
-// ⚠ **THAT ORDER CANNOT BE HAD FROM PER-FILE REPORTING.** A file's diagnostics are reported as that
-// file is parsed, so their order is the order the SOURCE WALK visited the files — the order
-// `Compiler.listedInWalkOrder` DEFINES rather than reads off the filesystem, and which puts
-// `main.maxon` before `types.maxon`. The pinned program declares the alias in `types.maxon` and
-// misuses it in `main.maxon`, so per-file reporting emits them backwards, and it would do so as a
-// property of two FILENAMES rather than of the program.
+// ⚠ **THAT ORDER CANNOT BE HAD FROM PER-FILE REPORTING, AND THE REASON IS STRONGER THAN THIS
+// PARAGRAPH USED TO CLAIM.** A file's diagnostics are reported as that file is parsed, so their order
+// is the order the SOURCE WALK found the files — and `Compiler.collectMaxonSources` pushes whatever
+// `Directory.list` hands it, **which is the FILESYSTEM's order and not any order at all**. The pinned
+// program declares the alias in `types.maxon` and misuses it in `main.maxon`, so per-file reporting
+// emits them in whichever order the OS enumerated two FILENAMES in, which is not a property of the
+// program and is not the same answer on two machines.
 //
-// ⛔ This paragraph used to cite that alphabetical order as a MEASUREMENT ("measured 2026-07-28:
-// `main.maxon` before `types.maxon`, in both compilers"). It was measured on NTFS, which sorts its
-// directory index, and written down as the walk's contract — which it was not, on any other
-// filesystem. A5a made it one.
+// ⛔ **THIS PARAGRAPH USED TO CALL THAT ORDER ALPHABETICAL, AND CITE A MEASUREMENT FOR IT** —
+// *"measured 2026-07-28: `main.maxon` before `types.maxon`, in both compilers"*. It was measured on
+// NTFS, which keeps its directory index sorted, and written down as the walk's CONTRACT; APFS returns
+// hash order and the claim is false there. **The walk is deliberately NOT sorted** — a canonical input
+// order does not remove an order dependence, it makes one reliably hidden (user ruling 2026-07-24, in
+// `StdlibLoader.maxon`'s header) — so the correct reading is that this order was never available to
+// depend on, which is exactly why the deferral below exists.
 //
 // ⇒ Both are recorded here instead and reported by `TypeResolution.reportDeferredNameDiagnostics`,
 // which drains the unused list and then the hidden list — so the order is a property of WHAT the

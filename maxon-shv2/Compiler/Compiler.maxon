@@ -880,9 +880,6 @@ end 'loadSourceDirectory'
 // walk registers every path it is given, while the stdlib loader filters first and records what it
 // kept.
 //
-// ⚠ **THE ORDER IT COLLECTS IN IS STATED, NOT OBSERVED** — see `listedInWalkOrder`. Both walks go
-// through it for the same reason they go through this function.
-//
 // ⚠ IT RETURNS THE DIRECTORIES IT LISTED, WHICH IS A FACT ONLY THE WALK HOLDS. The files it found are
 // in `into`, and the parents of those files are NOT the same set: an EMPTY directory is walked, costs
 // a `Directory.list`, and contributes no path anybody outside can see. `scale-test` reports both
@@ -891,166 +888,25 @@ end 'loadSourceDirectory'
 // the recursion rather than re-derived by a second traversal because a second traversal would be free
 // to disagree the moment this one grows an exclusion.
 export function collectMaxonSources(dir FilePath, into MaxonSourcePathArray) returns DirectoryWalkCount throws CompileError
-	let entries = try listedInWalkOrder(dir)
+	let entries = try Directory.list(dir) otherwise throw CompileError.directoryNotFound(dir)
 
 	// `dir` itself was listed, so a leaf directory answers 1 and never 0.
 	var walked = 1 as DirectoryWalkCount
 
 	for entry in entries 'each'
-		if Directory.isDirectory(entry.path) 'isSubdir'
-			let below = try collectMaxonSources(entry.path, into: into)
+		if Directory.isDirectory(entry) 'isSubdir'
+			let below = try collectMaxonSources(entry, into: into)
 			walked = walked + below
 		end 'isSubdir' else 'isFile'
-			let name = entry.path.filename()
+			let name = entry.filename()
 			if name != BuildManifestName and name.endsWith(MaxonSourceExtension) 'isSource'
-				into.push(entry.path)
+				into.push(entry)
 			end 'isSource'
 		end 'isFile'
 	end 'each'
 
 	return walked
 end 'collectMaxonSources'
-
-// ⭐⭐ **THE WALK'S ORDER IS THE WALK'S TO STATE — NOT THE FILESYSTEM'S TO REVEAL.**
-//
-// `Directory.list` answers with what the OS hands back, and the OSes do not agree: NTFS keeps its
-// directory index sorted, APFS returns hash order. Everything downstream of a source walk is
-// order-sensitive — FIRST-WINS name resolution, which of two identical declarations a duplicate
-// diagnostic BLAMES, and the sequence per-file diagnostics come out in — so consuming that answer raw
-// makes a compiler's verdict a property of the filesystem the checkout happens to sit on, in a compiler
-// whose thesis is that an answer is a property of the PROGRAM. (MEASURED: `global-file-private-same-name`'s
-// `error.exported-global-in-two-directories` blamed `beta` on NTFS and `alpha` on APFS, from one source.)
-//
-// The order is stated PER DIRECTORY, over the whole listing at once, with the depth-first recursion
-// left exactly as it was — which is the shape NTFS was already handing over, and so the shape every
-// committed expectation in the corpus was minted under. (`comparePathBytes` states the order itself,
-// and states why it is the one it is.) Sorting FILES and DIRECTORIES in separate passes would be no
-// less deterministic and would agree with nothing THIS walk ever produced.
-//
-// ⛔⛔ **AND THE BOOTSTRAP'S WALK DOES EXACTLY THAT, DELIBERATELY. THE TWO COMPILERS DEFINE DIFFERENT
-// ORDERS, AND THIS IS THE HALF OF THAT FACT THAT LIVES HERE.**
-// `maxon-sharp/Compiler/SourceCollector.MaxonFilesInWalkOrder` walks a directory's matching FILES and
-// only then its SUBDIRECTORIES, breadth-first — the shape `Directory.GetFiles(.., AllDirectories)`
-// was already handing IT over. So for a tree with a top-level `z.maxon` beside an `a/b.maxon`, this
-// walk yields `a/b.maxon` first and the bootstrap yields `z.maxon` first, and FIRST-WINS name
-// resolution therefore blames a different duplicate in the two compilers.
-//
-// ⚠ **THAT IS A CHOICE, NOT AN OVERSIGHT, AND IT IS NOT FREE.** Each side reproduces the enumeration
-// ITS OWN corpus of committed expectations was minted under (`specs-shv2/` here, `specs/` there);
-// unifying them would move goldens on one side for no behavioural gain, since the two suites never
-// compare answers with each other. What it costs is that "which file wins" is not portable between
-// the compilers — so a program relying on it is relying on which compiler built it, and a spec that
-// pins a first-wins outcome cannot be shared between the suites. ⇒ **If the two suites are ever
-// merged, or a spec has to hold in both, THIS is the fact to settle first.**
-//
-// ⚠ **`stdlib`'s `Directory.list` is deliberately NOT the place for this.** Its contract is "what the
-// OS says", which is the honest answer to the question it is asked. Defining an order is the
-// COMPILER's contract, and this is the one function both of a compile's walks go through.
-function listedInWalkOrder(dir FilePath) returns WalkEntryArray throws CompileError
-	let entries = try Directory.list(dir) otherwise throw CompileError.directoryNotFound(dir)
-
-	var ordered = WalkEntryArray.create()
-	for entry in entries 'decorate'
-		ordered.push(WalkEntry.create(entry))
-	end 'decorate'
-
-	ordered.sort(function(x WalkEntry, y WalkEntry) gives comparePathBytes(x.pathBytes, right: y.pathBytes))
-
-	return ordered
-end 'listedInWalkOrder'
-
-// One listed directory entry, paired with the bytes that decide where it sits in the walk's order.
-//
-// ⚠ **THE BYTES ARE MATERIALIZED ONCE PER ENTRY, NOT ONCE PER COMPARISON**, which is the whole reason
-// this type exists instead of a comparator taking two `FilePath`s. `String` has no `Comparable`
-// conformance, and its byte accessors are `module`-visible within `stdlib/`, so the only ordering a
-// compiler file can spell goes through `toByteArray()` — a COPY. Inside a comparator that is n log n
-// copies per directory; decorated once it is n.
-//
-// v1 paid the n log n version and could afford to (`stringLexLess`,
-// `maxon-selfhosted/Compiler/Project.maxon:2281`, driven from an O(n²) selection sort over the whole
-// flattened tree): its sort was only ever pointed at `stdlib/`, a few dozen files. shv2's runs on every
-// user tree the compiler is handed, including a `scale-test` rung directory whose entry count DOUBLES
-// per rung — so a walk that allocated n log n would have put a bend in `phase:load` for nothing.
-type WalkEntry
-	export let path as FilePath
-	export let pathBytes as ByteArray
-
-	export static function create(path FilePath) returns WalkEntry
-		return Self{path: path, pathBytes: path.path.toByteArray()}
-	end 'create'
-end 'WalkEntry'
-
-typealias WalkEntryArray = Array with WalkEntry
-
-// ⭐⭐ **THE ORDER IS NTFS'S: UPPERCASE-FOLDED FIRST, EXACT BYTES ONLY TO BREAK A TIE.**
-//
-// NTFS sorts its directory index by an UPPERCASE-MAPPED comparison, so `app/` precedes `Point/` there
-// while a raw byte order puts `Point` first (`P` is 80, `a` is 97). That is not a detail to shrug at:
-// the corpus's expectations were all minted under NTFS, and two of them
-// (`namespace-qualified-resolution/error.contested-free-function-in-a-directory-named-after-a-type` and
-// `…-collides-with-a-fieldless-method`) turn on a `Point/` declaration being the LOSER precisely because
-// `app/` was read first. MEASURED: a raw byte order re-blamed both of them.
-//
-// ⚠ **FOLDING TO UPPERCASE IS NOT INTERCHANGEABLE WITH FOLDING TO LOWERCASE.** The six bytes between
-// `Z` and `a` (`[ \ ] ^ _` and the backtick) land on opposite sides of a letter under the two folds, and
-// `_` is an everyday filename byte — `scale-test`'s own corpus writes `z_main.maxon` beside
-// `b_funcs_0.maxon`.
-//
-// The exact-byte comparison survives as the TIEBREAK so this is still a TOTAL order: on a case-sensitive
-// filesystem `A.maxon` and `a.maxon` can coexist, and a comparator that called them equal would hand the
-// choice straight back to the enumeration this whole mechanism exists to stop trusting.
-//
-// Ported from v1's `stringLexLess` (`maxon-selfhosted/Compiler/Project.maxon:2281`) — its loop and its
-// prefix rule — with the `bool` turned into an `Ordering` (an "is less" predicate cannot say EQUAL, and
-// a comparator must) and the fold added, which v1 had no reason to need: its sort was only ever pointed
-// at `stdlib/`, whose filenames are all one case.
-function comparePathBytes(left ByteArray, right ByteArray) returns Ordering
-	let leftLength = left.count()
-	let rightLength = right.count()
-	let shared = leftLength if leftLength < rightLength else rightLength
-
-	// The first difference the fold HIDES, kept in case nothing the fold shows ever differs.
-	var exact = Ordering.equalTo
-
-	for i in 0 upto shared 'eachByte'
-		let x = try left.get(i) otherwise panic("comparePathBytes: {i} is below both byte counts by construction")
-		let y = try right.get(i) otherwise panic("comparePathBytes: {i} is below both byte counts by construction")
-		let foldedX = foldAsciiCase(x)
-		let foldedY = foldAsciiCase(y)
-
-		if foldedX != foldedY 'differ'
-			return Ordering.lessThan if foldedX < foldedY else Ordering.greaterThan
-		end 'differ'
-
-		if x != y and exact == Ordering.equalTo 'firstHiddenDifference'
-			exact = Ordering.lessThan if x < y else Ordering.greaterThan
-		end 'firstHiddenDifference'
-	end 'eachByte'
-
-	if leftLength != rightLength 'prefix'
-		// One path is a strict prefix of the other, so the shorter one sorts first.
-		return Ordering.lessThan if leftLength < rightLength else Ordering.greaterThan
-	end 'prefix'
-
-	return exact
-end 'comparePathBytes'
-
-// One ASCII lowercase byte as its uppercase; every other byte unchanged — NTFS's `$UpCase` mapping over
-// the range every path in this project actually uses.
-function foldAsciiCase(b Byte) returns Byte
-	if b < AsciiLowercaseFirst or b > AsciiLowercaseLast 'notLowercase'
-		return b
-	end 'notLowercase'
-
-	return b - AsciiLowercaseToUppercase
-end 'foldAsciiCase'
-
-// Where the ASCII lowercase run sits and how far it is from the uppercase one — one fact, so the three
-// are named together rather than spelled as bare 97/122/32 at the only place that folds a byte.
-let AsciiLowercaseFirst = 97
-let AsciiLowercaseLast = 122
-let AsciiLowercaseToUppercase = 32
 
 // Read one source file and register its content with the query system. Exported so stdlib modules
 // are loaded through the identical read+register path a user file takes.
