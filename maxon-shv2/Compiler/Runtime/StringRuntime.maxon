@@ -240,11 +240,13 @@ export let StrByteAtOrPanicName = b"__str_byte_at_or_panic"
 // SemanticCheck's E3057 reject both read `GtRuntime.isThrowingRuntimeCallee`, which composes this.
 //
 // ⚠ It ships WITHOUT an install-time drift guard, and `GraphemeRuntime.isThrowingCharacterRuntimeCallee`'s
-// three conditions are why — all three hold here. There is exactly ONE member; this predicate and
-// `buildStrByteRead`'s `throws` stamp key on the SAME `StrByteAtName` constant rather than on copied literals;
-// and `runtimeCalleeSourceMethod` answers it from `ByteAtMethod` directly rather than through a map that
-// could lose an arm. A SECOND throwing `__str_` callee makes this an `or`, and at that same edit it needs the
-// guard `installStringIndexRuntime` grew the moment its family stopped being built by one builder.
+// three conditions are why — all three hold here. There is exactly ONE member; `buildStrByteRead` DERIVES the
+// `throws` stamp it emits by ASKING THIS PREDICATE, so the stamp and the parser's `try` requirement are one
+// statement rather than two that agree today (they were two until the slice-8 review, which measured the
+// divergence green over the whole corpus — see `buildStrByteRead`); and `runtimeCalleeSourceMethod` answers it
+// from `ByteAtMethod` directly rather than through a map that could lose an arm. A SECOND throwing `__str_`
+// callee makes this an `or`, and at that same edit it needs the guard `installStringIndexRuntime` grew the
+// moment its family stopped being built by one builder.
 export function isThrowingStringRuntimeCallee(callee ByteArray) returns bool
 	return callee.equals(StrByteAtName)
 end 'isThrowingStringRuntimeCallee'
@@ -1347,10 +1349,10 @@ export function installStringRuntime(module StdModule, usage RuntimeUsage)
 		buildStrBytesView(module)
 	end 'strbytesview'
 	if usage.usesStrByteAt 'strbyteat'
-		buildStrByteRead(module, name: StrByteAtName, throwing: true)
+		buildStrByteRead(module, name: StrByteAtName)
 	end 'strbyteat'
 	if usage.usesStrByteAtOrPanic 'strbyteatorpanic'
-		buildStrByteRead(module, name: StrByteAtOrPanicName, throwing: false)
+		buildStrByteRead(module, name: StrByteAtOrPanicName)
 	end 'strbyteatorpanic'
 end 'installStringRuntime'
 
@@ -2766,8 +2768,25 @@ end 'emitStringBytesAllocation'
 // ⚠ The read goes through `buffer@0` with NO detach and NO ownership, right for the identical reason
 // `__arr_byte_at` gives: a read does not write, so an `.rdata` blob, an inline String's bytes and a viewed
 // buffer are all perfectly good things to read THROUGH.
-function buildStrByteRead(module StdModule, name ByteArray, throwing bool)
-	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0, throwsTypeName: byteReadThrows(throwing))
+function buildStrByteRead(module StdModule, name ByteArray)
+	// ⭐⭐ **WHICH EXIT THIS BUILD GETS IS DERIVED FROM THE NAME, NOT PASSED BESIDE IT (review, BATCH2
+	// slice 8).** It arrived as a `throwing bool` argument, which made "`__str_byte_at` throws and
+	// `__str_byte_at_or_panic` does not" a fact written in TWO places — here at the two install sites, and
+	// again in `isThrowingStringRuntimeCallee`, which is what the parser's E3055 accept and SemanticCheck's
+	// E3057 reject read. Nothing made the two agree.
+	//
+	// ⛔ **MEASURED at the review**: building `StrByteAtName` with `throwing: false` — the stamp gone while
+	// the predicate still claims it throws — left **all 13 `stdlib-whitelist` cases GREEN**, every corpus
+	// byte walker included. A `tryCall` onto a callee that returns through the single-register ABI reads an
+	// error flag nothing wrote; the suite is green because no committed input reaches an out-of-range index,
+	// which is precisely the shape of divergence a test cannot be relied on to catch.
+	//
+	// ⇒ The predicate is now the ONE statement, and the divergence is no longer expressible: an install site
+	// supplies a name and gets that name's exit.
+	let throwing = isThrowingStringRuntimeCallee(name)
+	let throwsClause = managedMemoryThrows() if throwing else ThrowsClause.none
+
+	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0, throwsTypeName: throwsClause)
 	var ids = ValueMinter.create(2)
 
 	var entry = module.addBlock(func, label: b"entry")
@@ -2797,16 +2816,6 @@ function buildStrByteRead(module StdModule, name ByteArray, throwing bool)
 
 	module.functions.push(func)
 end 'buildStrByteRead'
-
-// The `throws` clause the builder above stamps, which is the WHOLE of what the two entry points disagree
-// about at the signature. Spelled here rather than at the two install sites so the stamp and
-// `isThrowingStringRuntimeCallee` cannot come to name different functions.
-function byteReadThrows(throwing bool) returns ThrowsClause
-	if throwing 'stamped'
-		return managedMemoryThrows()
-	end 'stamped'
-	return ThrowsClause.none
-end 'byteReadThrows'
 
 // ⭐ **`__str_split(self, delim, arr)` — the stdlib's `split` (`:557-587`), filling a CALLER-CREATED array.**
 // The `Array with String` is built by the PARSER through `emitArrayCreateOp`, the one array-creation door, so

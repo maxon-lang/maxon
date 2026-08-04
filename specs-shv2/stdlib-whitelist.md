@@ -643,3 +643,37 @@ end 'main'
 4 4
 1 1
 ```
+
+⚠⚠ **`hasSingleByteGraphemes()` IS ANSWERED A CONSTANT `false`, AND THREE CORPUS FUNCTIONS READ IT —
+THE CASE ABOVE DRIVES ONE OF THEM (slice-8 review).** shv2's String record carries `isAscii@40`, the
+WEAKER fact, so serving it would count `"\r\n"` as two clusters; `false` declines the shortcut and hands
+every input to the walk, which is the definition. That is only sound if it is sound at EVERY reading
+site, and `countGraphemes` is one of three — `byteIndexToGraphemeIndex` and `graphemeOffsetToBytePos`
+each carry their own shortcut, with their own boundary arithmetic (`byteIdx >= len`, `count > 0`,
+`startBytePos < len`) that the walk has to reproduce.
+
+The case below is the other two, on both sides of the divide: an ASCII string, where the REFERENCE takes
+its fast path and shv2 walks, and a CR+LF one, where neither does. MEASURED against the reference on the
+identical program — byte-for-byte the same three lines — so this is an agreement between two compilers
+rather than a transcription of shv2's answer. A failure here means the walk and the shortcut have come
+apart, which is what the constant `false` exists to make impossible.
+
+<!-- test: stdlib-whitelist.declining-the-single-byte-shortcut-agrees-with-taking-it -->
+```maxon
+function main() returns ExitCode
+	let a = "abcdef"
+	print("{byteIndexToGraphemeIndex(a, byteIdx: 3)} {graphemeOffsetToBytePos(a, startBytePos: 2, count: 2)} {findGraphemeStart(a, beforePos: 4)}\n")
+	let c = "a\r\nb"
+	print("{byteIndexToGraphemeIndex(c, byteIdx: 3)} {graphemeOffsetToBytePos(c, startBytePos: 0, count: 2)}\n")
+	print("{byteIndexToGraphemeIndex(a, byteIdx: 99)} {graphemeOffsetToBytePos(a, startBytePos: 1, count: 99)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+3 4 3
+2 3
+6 6
+```
