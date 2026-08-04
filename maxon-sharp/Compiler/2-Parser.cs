@@ -5140,9 +5140,18 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   ///
   /// By name rather than by IrType identity because the same instance is asked about from parsers
   /// holding different objects for one type: a pre-registered placeholder in the declaration phase,
-  /// the real ranged type later. Name is what the existing alias search compares too, so the index
-  /// and the search cannot disagree about what "the same instance" means. Ordered so the key does
-  /// not depend on the order a substitution dictionary happens to enumerate in.
+  /// the real ranged type later. Ordered so the key does not depend on the order a substitution
+  /// dictionary happens to enumerate in.
+  ///
+  /// ⭐ THIS IS THE ONLY SPELLING OF "the same generic instance" ON THIS PATH, and it has to stay
+  /// that way. Three sites ask the question — the declaration index's key, the already-registered
+  /// test in TryRegisterDeclaredAlias, and the parser-local reuse scan in RegisterConcreteTypeAlias
+  /// — and they must agree, because the whole fix rests on the index and the search identifying the
+  /// same instance. Each carried its own hand-written comparison until this was consolidated; two of
+  /// them were the identical count-plus-per-parameter-name loop written twice. A divergence between
+  /// them is not a compile error at either site: it either adopts a declared name for an instance
+  /// that is NOT the one in hand (a wrong answer, silently) or re-mints a structural name beside a
+  /// declared one, which is the defect this index exists to close.
   /// </summary>
   private static string GenericAliasInstanceKey(string sourceName, Dictionary<string, IrType> substitution) {
     var args = substitution.Select(kv => $"{kv.Key}={kv.Value.Name}").ToList();
@@ -5185,14 +5194,17 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   /// has not been scanned yet. Returns false only when it is already being registered further up
   /// this same call, in which case the caller falls back to minting the structural name rather than
   /// recursing forever through a pair of mutually-referential declarations.
+  ///
+  /// <paramref name="instanceKey"/> is the caller's already-computed GenericAliasInstanceKey for
+  /// <paramref name="substitution"/>, passed in rather than recomputed so the "is the registered
+  /// type already this instance?" test below cannot drift from the index lookup that chose
+  /// <paramref name="declared"/> in the first place.
   /// </summary>
   private bool TryRegisterDeclaredAlias(DeclaredGenericAlias declared, string sourceName,
-      IrStructType sourceStruct, Dictionary<string, IrType> substitution) {
+      IrStructType sourceStruct, Dictionary<string, IrType> substitution, string instanceKey) {
     if (_typeRegistry.TryGetValue(declared.Name, out var registered)
         && registered is IrStructType registeredStruct
-        && registeredStruct.TypeParams.Count == substitution.Count
-        && substitution.All(kv => registeredStruct.TypeParams.TryGetValue(kv.Key, out var bound)
-            && bound.Name == kv.Value.Name)) {
+        && GenericAliasInstanceKey(sourceName, registeredStruct.TypeParams) == instanceKey) {
       _typeAliasSources.TryAdd(declared.Name, sourceName);
       return true;
     }
@@ -5282,15 +5294,17 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       // every order. The scan stays for the instances nothing declares a name for, where the
       // structural name minted for an EARLIER alias is the one to reuse.
       string? existingAliasName = null;
+      // The instance in hand, spelled once (see GenericAliasInstanceKey) and reused by every party
+      // below that has to decide whether some other name already denotes it.
+      var instanceKey = GenericAliasInstanceKey(fieldAliasSource, localSub);
 
       if (_currentModule != null
-          && _currentModule.DeclaredGenericAliases.TryGetValue(
-              GenericAliasInstanceKey(fieldAliasSource, localSub), out var declared)
+          && _currentModule.DeclaredGenericAliases.TryGetValue(instanceKey, out var declared)
           && declared.Name != aliasName
           // Same visibility rule the scan below is subject to: this parser's table only ever holds
           // aliases this file may see, and the index — being whole-project — holds the rest too.
           && IsTypeVisibleAcrossFiles(_currentModule, declared.Name, _sourceFilePath)
-          && TryRegisterDeclaredAlias(declared, fieldAliasSource, fieldSourceStruct, localSub))
+          && TryRegisterDeclaredAlias(declared, fieldAliasSource, fieldSourceStruct, localSub, instanceKey))
         existingAliasName = declared.Name;
 
       if (existingAliasName == null) {
@@ -5298,12 +5312,10 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
           if (existSource != fieldAliasSource) continue;
           if (!_typeRegistry.TryGetValue(existName, out var existType)) continue;
           if (existType is not IrStructType existStruct) continue;
-          if (existStruct.TypeParams.Count != localSub.Count) continue;
-          bool paramsMatch = true;
-          foreach (var (pn, pt) in localSub) {
-            if (!existStruct.TypeParams.TryGetValue(pn, out var et) || et.Name != pt.Name) { paramsMatch = false; break; }
-          }
-          if (paramsMatch) { existingAliasName = existName; break; }
+          if (GenericAliasInstanceKey(existSource, existStruct.TypeParams) != instanceKey) continue;
+
+          existingAliasName = existName;
+          break;
         }
       }
 

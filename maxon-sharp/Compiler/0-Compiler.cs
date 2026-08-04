@@ -673,8 +673,13 @@ public class Compiler {
     //
     // Per-file errors are deliberately not collected. The specialize phase immediately below walks
     // the same declarations with the same parser and reports them there, with the file marked failed;
-    // reporting here as well would duplicate every typealias diagnostic in the compilation. A file
-    // that throws here simply contributes nothing to the index — and cannot, since it will not build.
+    // reporting here as well would duplicate every typealias diagnostic in the compilation.
+    //
+    // A file that throws contributes the declarations it reached before throwing — a PREFIX of its
+    // aliases, not nothing — and that prefix cannot reach a successful compilation: the specialize
+    // phase re-walks the same file, records the same error, and CompileSources returns before the
+    // full parse whenever any error was collected. So a half-indexed file is always a failed build,
+    // never a build that quietly resolved an instance name from half a file.
     sw?.Restart();
     foreach (var source in sources) {
       try {
