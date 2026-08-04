@@ -1,0 +1,89 @@
+// Test: past-the-24-bit-split
+function base(p int) returns int
+	return p
+end 'base'
+
+function main() returns ExitCode
+	let x = base(1000)
+	let addFirst = x + 16777216
+	if addFirst != 16778216 'addFirst'
+		return 31
+	end 'addFirst'
+	let subFirst = x - 16777216
+	if subFirst != -16776216 'subFirst'
+		return 32
+	end 'subFirst'
+	let addWide = x + 1000000007
+	if addWide != 1000001007 'addWide'
+		return 33
+	end 'addWide'
+	let subWide = x - 1000000007
+	if subWide != -999999007 'subWide'
+		return 34
+	end 'subWide'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+func @base {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegReg r8, rcx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rcx, 1000
+    x64.callDirect base
+    x64.leaRegRegImm32 rax, r8, 16777216
+    x64.cmpRegImm32 rax, 16778216
+    x64.jcc notEqual, addFirst
+    x64.jmp ifcont
+  addFirst:
+    x64.movRegImm32 r8, 31
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.leaRegRegImm32 rax, r8, -16777216
+    x64.cmpRegImm32 rax, -16776216
+    x64.jcc notEqual, subFirst
+    x64.jmp ifcont
+  subFirst:
+    x64.movRegImm32 r8, 32
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.leaRegRegImm32 rax, r8, 1000000007
+    x64.cmpRegImm32 rax, 1000001007
+    x64.jcc notEqual, addWide
+    x64.jmp ifcont
+  addWide:
+    x64.movRegImm32 r8, 33
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.leaRegRegImm32 rax, r8, -1000000007
+    x64.cmpRegImm32 rax, -999999007
+    x64.jcc notEqual, subWide
+    x64.jmp ifcont
+  subWide:
+    x64.movRegImm32 r8, 34
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
