@@ -1,0 +1,88 @@
+// Test: past-the-24-bit-split
+function base(p int) returns int
+	return p
+end 'base'
+
+function main() returns ExitCode
+	let x = base(1000)
+	let addFirst = x + 16777216
+	if addFirst != 16778216 'addFirst'
+		return 31
+	end 'addFirst'
+	let subFirst = x - 16777216
+	if subFirst != -16776216 'subFirst'
+		return 32
+	end 'subFirst'
+	let addWide = x + 1000000007
+	if addWide != 1000001007 'addWide'
+		return 33
+	end 'addWide'
+	let subWide = x - 1000000007
+	if subWide != -999999007 'subWide'
+		return 34
+	end 'subWide'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+func @base {
+  entry:
+    arm64.prologue 16
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 1000
+    arm64.bl base
+    arm64.movImm x16, 16777216
+    arm64.add x1, x0, x16
+    arm64.cmp x1, 16778216
+    arm64.cset x1, ne
+    arm64.cbnz x1, addFirst
+    arm64.b ifcont
+  addFirst:
+    arm64.movImm x0, 31
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.movImm x16, 16777216
+    arm64.sub x1, x0, x16
+    arm64.cmp x1, -16776216
+    arm64.cset x1, ne
+    arm64.cbnz x1, subFirst
+    arm64.b ifcont
+  subFirst:
+    arm64.movImm x0, 32
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.movImm x16, 1000000007
+    arm64.add x1, x0, x16
+    arm64.cmp x1, 1000001007
+    arm64.cset x1, ne
+    arm64.cbnz x1, addWide
+    arm64.b ifcont
+  addWide:
+    arm64.movImm x0, 33
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.movImm x16, 1000000007
+    arm64.sub x0, x0, x16
+    arm64.cmp x0, -999999007
+    arm64.cset x0, ne
+    arm64.cbnz x0, subWide
+    arm64.b ifcont
+  subWide:
+    arm64.movImm x0, 34
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}

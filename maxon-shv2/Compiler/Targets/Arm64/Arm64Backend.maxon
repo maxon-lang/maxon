@@ -306,9 +306,12 @@ let Arm64OpFcselD = 0x1E600C00
 // x64 has no `xchg xmm` and swaps XMMs with a triple-xorpd).
 let Arm64OpEorVec8b = 0x2E201C00
 
-// The largest frame either stack-split helper encodes (24-bit, two imm12 fields) — past it a frame
-// is not encodable at all and the split panics rather than truncate.
-let Arm64StackSplitMax = 0xFFFFFF
+// The largest immediate `arm64EmitAddSubImmWide`'s hi/lo split encodes — 24 bits, as two imm12 fields.
+// It bounds BOTH of that helper's callers, and they answer an over-large value differently: the ALU
+// add/sub-immediate has a REGISTER form to fall back to, so its isel asks `arm64ImmIsEncodableAddSub`
+// and never selects the immediate form for a wider constant; a FRAME past this has no encodable form
+// at all (SP cannot be a shifted-register operand), so the split panics rather than truncate.
+let Arm64AddSubImmWideMax = 0xFFFFFF
 
 // The reach of a `b`/`bl` (imm26 scaled by 4 = ±128 MiB) and of a `b.cond`/`cbz`/`cbnz` (imm19 scaled
 // by 4 = ±1 MiB), as byte counts. Guarded on resolution so an out-of-range branch is a loud link
@@ -561,13 +564,31 @@ function arm64EmitAddSubImm12(code ByteArray, opcode MachineWord, rd MachineWord
 	emitArm64Insn(code, insn: opcode or shBit or ((imm12 and Arm64ImmMask) shl Arm64ImmShift) or (rn shl Arm64RnShift) or rd)
 end 'arm64EmitAddSubImm12'
 
+// Whether a signed `Imm32` has an ADD/SUB-immediate form at all — i.e. whether its MAGNITUDE fits the
+// 24 bits the hi/lo split below encodes. The MAGNITUDE is the question because `arm64EmitAddImmSigned`
+// turns a negative immediate into a SUB of its magnitude (and vice versa), so `+ -1000000007` is as
+// inencodable as `- 1000000007`.
+//
+// The ISEL asks this to choose the `#imm` form vs materialising the constant into a register: it is the
+// SAME ceiling `arm64EmitAddSubImmWide` enforces, so the two can never disagree (one fact, one home —
+// the encoder's), exactly as `arm64ImmIsEncodableLogical` pairs with `arm64EncodeLogicalImm`. It has to
+// be asked at all because the constant fold that produces these immediates is TARGET-NEUTRAL and sized
+// for x64's `lea [base ± imm32]`, which carries the whole `Imm32` domain verbatim; AArch64's reaches
+// 24 bits.
+export function arm64ImmIsEncodableAddSub(imm Imm32) returns bool
+	if imm >= 0 'nonNeg'
+		return imm <= Arm64AddSubImmWideMax
+	end 'nonNeg'
+	return 0 - imm <= Arm64AddSubImmWideMax
+end 'arm64ImmIsEncodableAddSub'
+
 // ADD/SUB Rd, Rn, #imm for an immediate that may exceed the 12-bit field: a plain 12-bit form
 // silently truncates any value ≥ 0x1000, corrupting a large stack-slot address or frame size (M1
 // trap). Splits into a high (<<12) and low part; `rd` doubles as the running accumulator, so it is
 // safe even when `rd == rn`. `opcode` selects ADD (`Arm64OpAddImm`) or SUB (`Arm64OpSubImm`).
 function arm64EmitAddSubImmWide(code ByteArray, opcode MachineWord, rd MachineWord, rn MachineWord, imm MachineWord)
-	if imm > Arm64StackSplitMax 'tooLarge'
-		panic("arm64EmitAddSubImmWide: immediate {imm} exceeds the 24-bit encodable range")
+	if imm > Arm64AddSubImmWideMax 'tooLarge'
+		panic("arm64EmitAddSubImmWide: immediate {imm} exceeds the {Arm64AddSubImmWideMax} the hi/lo imm12 split reaches — an ALU immediate this wide is the ISEL's obligation (it asks `arm64ImmIsEncodableAddSub` and materialises the constant into a register: StdToArm64Conversion.lowerAddSubImm), and a FRAME this large has no encodable form at all")
 	end 'tooLarge'
 	let high = (imm shr 12) and Arm64ImmMask
 	let low = imm and Arm64ImmMask

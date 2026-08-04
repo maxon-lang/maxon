@@ -88,11 +88,12 @@ end 'mmapAnonPrivateFlags'
 let WriteStdoutFd = 0x1  // fd = 1 (STDOUT_FILENO).
 
 // The IP scratch register the isel materialises an immediate into when no immediate op-form fits:
-// a multiplier (arm64 has no multiply-by-immediate), or a non-bitmask logical immediate (AArch64
-// `and`/`or`/`xor` #imm encode only rotated bitmasks). `movz x16, imm` then a register op follows.
-// x16/x17 are the platform IP scratch registers — free to clobber for exactly this, and NOT in the
-// allocatable pool, so no value is ever coloured into one and the two-op lifetime here can conflict
-// with nothing.
+// a multiplier (arm64 has no multiply-by-immediate), a non-bitmask logical immediate (AArch64
+// `and`/`or`/`xor` #imm encode only rotated bitmasks), or an add/sub immediate past 24 bits (the
+// imm12 field, optionally shifted by 12, reaches no further). `movz x16, imm` then a register op
+// follows. x16/x17 are the platform IP scratch registers — free to clobber for exactly this, and NOT
+// in the allocatable pool, so no value is ever coloured into one and the two-op lifetime here can
+// conflict with nothing.
 let Arm64Scratch = Arm64Register.x16
 
 // The bitmask the LOGICAL `not` flips: a bool lives in the 0/1 domain, so complementing it is
@@ -757,14 +758,20 @@ type StdToArm64Lowering
 
 	// Lower a `binOpImm` (constant right operand) to its arm64 immediate form. arm64's immediate ALU
 	// ops are 3-address (dest independent of src), so plain defs — unlike x64's two-address imm forms.
-	// `mul` is the exception: arm64 has NO multiply-by-immediate, so the multiplier is materialised into
-	// the IP scratch (x16) and a register `mul` follows.
+	//
+	// ⚠ AN IMMEDIATE OPERAND IS NOT AUTOMATICALLY AN IMMEDIATE FORM HERE. `foldConstOperands` is
+	// TARGET-NEUTRAL and its per-opcode rule is sized for x64, where every direct-immediate form carries
+	// a verbatim signed 32-bit field; AArch64's fields are narrower and stranger — 24 bits for add/sub,
+	// rotated bitmasks only for the logicals, and none at all for `mul`. So `add`/`sub` and the logicals
+	// ASK their encoder's own predicate before selecting the `#imm` form, `mul` never has one to select,
+	// and all three fall back the same way: materialise the constant into the IP scratch, use the
+	// register form.
 	function lowerBinOpImm(resultId ValueId, lhs ValueId, imm Imm32, opcode StdBinOpcode, dstRef BlockRef)
 		let dest = TargetVReg.virtual(resultId)
 		let src = TargetVReg.virtual(lhs)
 		match opcode 'op'
-			add then self.emit(dstRef, op: TargetOp.arm64AddImm(dest, src: src, imm: imm))
-			sub then self.emit(dstRef, op: TargetOp.arm64SubImm(dest, src: src, imm: imm))
+			add then self.lowerAddSubImm(dest, src: src, imm: imm, isSub: false, dstRef: dstRef)
+			sub then self.lowerAddSubImm(dest, src: src, imm: imm, isSub: true, dstRef: dstRef)
 			mul then self.lowerMulImm(dest, src: src, imm: imm, dstRef: dstRef)
 			bitAnd to bitXor then self.lowerLogicalImm(dest, src: src, imm: imm, opcode: opcode, dstRef: dstRef)
 			shl to shrLogical then self.lowerShiftImm(dest, src: src, imm: imm, instr: arm64ShiftInstrOf(opcode), dstRef: dstRef)
@@ -772,12 +779,41 @@ type StdToArm64Lowering
 		end 'op'
 	end 'lowerBinOpImm'
 
-	// `dest = src * imm` — arm64 has no `mul` immediate form, so materialise the multiplier into the IP
-	// scratch x16 (a physical def of a non-allocatable register, so it forbids nothing and collides with
-	// nothing) and do a register `mul`. The two ops are adjacent, so x16 is live only between them.
-	function lowerMulImm(dest TargetVReg, src TargetVReg, imm Imm32, dstRef BlockRef)
+	// Materialise `imm` into the IP scratch and hand back the register naming it — the step every "no
+	// immediate form fits" fallback in this file shares. The materialisation and the op that reads it
+	// are emitted adjacently, so x16 is live only between them; see `Arm64Scratch` for why it is free
+	// to take at all (a physical def of a non-allocatable register forbids nothing and collides with
+	// nothing).
+	function materialiseIntoScratch(imm Imm32, dstRef BlockRef) returns TargetVReg
 		let scratch = arm64PhysReg(Arm64Scratch)
 		self.emit(dstRef, op: TargetOp.arm64MovImm(scratch, value: imm))
+		return scratch
+	end 'materialiseIntoScratch'
+
+	// `dest = src + imm` / `dest = src - imm`. The AArch64 ADD/SUB-immediate form is a 12-bit field with
+	// an optional left-shift by 12, so it reaches 24 bits' worth of value and NOTHING between there and
+	// the `Imm32` ceiling the shared fold hands us. A constant past that reach has no immediate form at
+	// all and takes the register one instead. `arm64ImmIsEncodableAddSub` is the ENCODER's own ceiling,
+	// so this choice can never disagree with what it will encode.
+	//
+	// ⚠ THE BAND IS DECIDED BY THE MAGNITUDE, NOT THE VALUE: a negative literal on the ADD side becomes
+	// a SUB of its magnitude (and vice versa), so `x + -1000000007` is as inencodable as
+	// `x - 1000000007`. The materialised constant is the immediate's full 64-bit two's complement, which
+	// is what keeps the register form's answer identical to the immediate form's on both signs.
+	function lowerAddSubImm(dest TargetVReg, src TargetVReg, imm Imm32, isSub bool, dstRef BlockRef)
+		if arm64ImmIsEncodableAddSub(imm) 'fits'
+			self.emit(dstRef, op: TargetOp.arm64SubImm(dest, src: src, imm: imm) if isSub else TargetOp.arm64AddImm(dest, src: src, imm: imm))
+			return
+		end 'fits'
+
+		let scratch = self.materialiseIntoScratch(imm, dstRef: dstRef)
+		self.emit(dstRef, op: TargetOp.arm64Sub(dest, lhs: src, rhs: scratch) if isSub else TargetOp.arm64Add(dest, lhs: src, rhs: scratch))
+	end 'lowerAddSubImm'
+
+	// `dest = src * imm` — arm64 has no `mul` immediate form at all, so the multiplier is always
+	// materialised and a register `mul` follows.
+	function lowerMulImm(dest TargetVReg, src TargetVReg, imm Imm32, dstRef BlockRef)
+		let scratch = self.materialiseIntoScratch(imm, dstRef: dstRef)
 		self.emit(dstRef, op: TargetOp.arm64Mul(dest, lhs: src, rhs: scratch))
 	end 'lowerMulImm'
 
@@ -785,7 +821,8 @@ type StdToArm64Lowering
 	// rotated-bitmask patterns, so a value that is not one (e.g. `10` = 0b1010) cannot use the immediate
 	// form — the ENCODER would refuse it. `arm64ImmIsEncodableLogical` is the encoder's own predicate,
 	// so this choice can never disagree with what it will encode. A non-bitmask immediate is materialised
-	// into the IP scratch (x16, exactly as `lowerMulImm`) and the register form is used.
+	// into the IP scratch (x16, exactly as `lowerAddSubImm` and `lowerMulImm`) and the register form is
+	// used.
 	function lowerLogicalImm(dest TargetVReg, src TargetVReg, imm Imm32, opcode StdBinOpcode, dstRef BlockRef)
 		if arm64ImmIsEncodableLogical(imm) 'bitmask'
 			match opcode 'imm'
@@ -796,8 +833,8 @@ type StdToArm64Lowering
 			end 'imm'
 			return
 		end 'bitmask'
-		let scratch = arm64PhysReg(Arm64Scratch)
-		self.emit(dstRef, op: TargetOp.arm64MovImm(scratch, value: imm))
+
+		let scratch = self.materialiseIntoScratch(imm, dstRef: dstRef)
 		match opcode 'reg'
 			bitAnd then self.emit(dstRef, op: TargetOp.arm64And(dest, lhs: src, rhs: scratch))
 			bitOr then self.emit(dstRef, op: TargetOp.arm64Orr(dest, lhs: src, rhs: scratch))

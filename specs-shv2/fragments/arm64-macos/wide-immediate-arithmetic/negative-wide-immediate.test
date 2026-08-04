@@ -1,0 +1,104 @@
+// Test: negative-wide-immediate
+function base(p int) returns int
+	return p
+end 'base'
+
+function main() returns ExitCode
+	let x = base(1000)
+	let addNeg = x + -1000000007
+	if addNeg != -999999007 'addNeg'
+		return 41
+	end 'addNeg'
+	let subNeg = x - -1000000007
+	if subNeg != 1000001007 'subNeg'
+		return 42
+	end 'subNeg'
+	let addMax = x + 2147483647
+	if addMax != 2147484647 'addMax'
+		return 43
+	end 'addMax'
+	let subMax = x - 2147483647
+	if subMax != -2147482647 'subMax'
+		return 44
+	end 'subMax'
+	let addMin = x + -2147483648
+	if addMin != -2147482648 'addMin'
+		return 45
+	end 'addMin'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+func @base {
+  entry:
+    arm64.prologue 16
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 1000
+    arm64.bl base
+    arm64.movImm x16, -1000000007
+    arm64.add x1, x0, x16
+    arm64.cmp x1, -999999007
+    arm64.cset x1, ne
+    arm64.cbnz x1, addNeg
+    arm64.b ifcont
+  addNeg:
+    arm64.movImm x0, 41
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.movImm x16, -1000000007
+    arm64.sub x1, x0, x16
+    arm64.cmp x1, 1000001007
+    arm64.cset x1, ne
+    arm64.cbnz x1, subNeg
+    arm64.b ifcont
+  subNeg:
+    arm64.movImm x0, 42
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.movImm x16, 2147483647
+    arm64.add x1, x0, x16
+    arm64.movImm x2, 2147484647
+    arm64.cmp x1, x2
+    arm64.cset x1, ne
+    arm64.cbnz x1, addMax
+    arm64.b ifcont
+  addMax:
+    arm64.movImm x0, 43
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.movImm x16, 2147483647
+    arm64.sub x1, x0, x16
+    arm64.cmp x1, -2147482647
+    arm64.cset x1, ne
+    arm64.cbnz x1, subMax
+    arm64.b ifcont
+  subMax:
+    arm64.movImm x0, 44
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.movImm x16, -2147483648
+    arm64.add x0, x0, x16
+    arm64.cmp x0, -2147482648
+    arm64.cset x0, ne
+    arm64.cbnz x0, addMin
+    arm64.b ifcont
+  addMin:
+    arm64.movImm x0, 45
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}

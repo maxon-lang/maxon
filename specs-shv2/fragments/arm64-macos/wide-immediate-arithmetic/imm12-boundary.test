@@ -1,0 +1,84 @@
+// Test: imm12-boundary
+function base(p int) returns int
+	return p
+end 'base'
+
+function main() returns ExitCode
+	let x = base(1000)
+	let addLo = x + 4095
+	if addLo != 5095 'addLo'
+		return 11
+	end 'addLo'
+	let subLo = x - 4095
+	if subLo != -3095 'subLo'
+		return 12
+	end 'subLo'
+	let addHi = x + 4096
+	if addHi != 5096 'addHi'
+		return 13
+	end 'addHi'
+	let subHi = x - 4096
+	if subHi != -3096 'subHi'
+		return 14
+	end 'subHi'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+func @base {
+  entry:
+    arm64.prologue 16
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 1000
+    arm64.bl base
+    arm64.add x1, x0, 4095
+    arm64.cmp x1, 5095
+    arm64.cset x1, ne
+    arm64.cbnz x1, addLo
+    arm64.b ifcont
+  addLo:
+    arm64.movImm x0, 11
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.sub x1, x0, 4095
+    arm64.cmp x1, -3095
+    arm64.cset x1, ne
+    arm64.cbnz x1, subLo
+    arm64.b ifcont
+  subLo:
+    arm64.movImm x0, 12
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.add x1, x0, 4096
+    arm64.cmp x1, 5096
+    arm64.cset x1, ne
+    arm64.cbnz x1, addHi
+    arm64.b ifcont
+  addHi:
+    arm64.movImm x0, 13
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.sub x0, x0, 4096
+    arm64.cmp x0, -3096
+    arm64.cset x0, ne
+    arm64.cbnz x0, subHi
+    arm64.b ifcont
+  subHi:
+    arm64.movImm x0, 14
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}
