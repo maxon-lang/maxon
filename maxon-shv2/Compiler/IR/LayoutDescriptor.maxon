@@ -350,7 +350,12 @@ export function primitiveTypeTagName(tag ValueTypeTag) returns String
 		typeParameter then panic("primitiveTypeTagName: a `typeParameter` is never a concrete instance's argument, so it never reaches a descriptor label")
 		unresolved then panic("primitiveTypeTagName: an `unresolved` type reached descriptor labelling — TypeResolution should have eliminated it")
 		void then panic("primitiveTypeTagName: `void` is not a value type and names no descriptor")
-		interfaceRef then panic("primitiveTypeTagName: an interface type is never a generic instance's argument — a container of existentials is refused at the front end (`Parser.checkGenericArgType`), because an element slot is 8 bytes and a fat pointer is 16, so the witness half would have nowhere to live")
+		// ⚠ **THIS SENTENCE USED TO NAME ONE DOOR AND IT WAS THE WRONG SHAPE OF CLAIM.** It said an interface
+		// type is refused by `Parser.checkGenericArgType` — true of a generic ARGUMENT and false of the other
+		// ways a type reaches a slot, which is exactly why nobody guarded the one that did not: a TUPLE
+		// element is interned through `internTupleType` and reached this panic on a program the front end had
+		// accepted. Stating the RULE rather than one of its enforcers is what makes the assertion honest.
+		interfaceRef then panic("primitiveTypeTagName: an interface type reached descriptor labelling. An existential is a 16-byte fat pointer `(value, witness)` and every slot named here is one machine word, so the front end refuses an interface-typed slot at each of the positions `Parser.DeclaredStoragePosition` enumerates — a generic argument, a tuple element, a struct field, a union payload, a return, and the three parameter kinds. Reaching here means a NINTH way to write a type into a slot exists and does not ask `requireStorableDeclaredType`")
 	end 'name'
 end 'primitiveTypeTagName'
 

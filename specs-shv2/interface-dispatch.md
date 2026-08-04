@@ -1227,7 +1227,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3121: specs/fragments/interface-dispatch/error.float-cannot-be-held-at-an-interface.test:9:9: Cannot pass a `float` as '_', which is declared at the interface type 'Comparable': a value held at an interface travels as a fat pointer whose value half is a general-purpose machine word, and a float travels in a floating-point register, so it has no way through. This is the same limit `float` has as a generic type argument (E2062). Wrap the float in a type that implements 'Comparable', or take the parameter as a `float`
+error E3121: specs/fragments/interface-dispatch/error.float-cannot-be-held-at-an-interface.test:9:9: Cannot pass a `float` as '_', which is declared at the interface type 'Comparable': a value held at an interface type is a two-word fat pointer `(value, witness)` whose value half is a general-purpose machine word, and a float travels in a floating-point register, so it has no way through. This is the same limit `float` has as a generic type argument (E2062). Wrap the float in a type that implements 'Comparable', or take the parameter as a `float`
 ```
 
 <!-- test: error.existentials-cannot-be-compared -->
@@ -1565,7 +1565,7 @@ end 'main'
 ```
 
 <!-- test: error.interface-typed-function-type-parameter -->
-⭐⭐ **THE SEVENTH AND LAST INTERFACE-TYPED POSITION, AND THIS RUNG IS WHAT MADE IT REACHABLE.** At the
+⭐⭐ **A SEVENTH INTERFACE-TYPED POSITION, AND THIS RUNG IS WHAT MADE IT REACHABLE.** (It was not the last: a TUPLE ELEMENT was an eighth, reached by a route no field/parameter/return reader owns — see `error.interface-typed-tuple-element`. The count is deliberately not written down in the compiler either; `DeclaredStoragePosition` is the count.) At the
 merge base an interface name in a parameter position was E3011 — existentials did not exist — so the
 shape only became writable when this rung landed them. It has never worked:
 **MEASURED, exit 139 (SEGFAULT) on x64-windows and a PANIC in the wasm backend**, given a proper
@@ -1667,4 +1667,208 @@ end 'main'
 ```
 ```exitcode
 42
+```
+
+<!-- test: error.interface-typed-tuple-element -->
+⭐⭐ **THE EIGHTH INTERFACE-TYPED POSITION, AND THE ONE THAT REACHED THE BACKEND.** A tuple type is
+interned as a SYNTHESIZED STRUCT, so its element list is read by `parseTupleTypeReference` — a third
+route, belonging to no field, parameter or return reader — and it asked no door at all. The
+`interfaceRef` travelled into `internTupleType` → `mangleTypeArg` and **PANICKED** in
+`LayoutDescriptor.primitiveTypeTagName`.
+⚠ **The panic asserted something FALSE**, and that is why nobody guarded this: it said an interface
+type is refused at the front end by `checkGenericArgType` — true of a generic ARGUMENT and of nothing
+else. A tuple element is not a generic argument. The assertion now states the RULE rather than one of
+its enforcers, and says that reaching it means a further way to write a type into a slot exists.
+**MEASURED: the merge base answered `E3011 Unknown type 'Shape'` (existentials did not exist, so the
+shape was unreachable by construction); this rung made it writable and it panicked.**
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Shape
+	function area() returns Integer
+end 'Shape'
+
+type Sq implements Shape
+	let s as Integer
+
+	function area() returns Integer
+		return self.s
+	end 'area'
+
+	static function create(s Integer) returns Self
+		return Self{s: s}
+	end 'create'
+end 'Sq'
+
+typealias Pair = (Shape, Integer)
+
+function take(p Pair) returns Integer
+	return p.1
+end 'take'
+
+function main() returns ExitCode
+	return 0 as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: specs/fragments/interface-dispatch/error.interface-typed-tuple-element.test:20:19: Unsupported: a tuple element declared at the interface type 'Shape' — a value held at an interface type is a two-word fat pointer `(value, witness)`, and a tuple is a synthesized struct, so an element is a field slot: one machine word. Declare the element at a concrete type, or pass the interface alongside the tuple as a PARAMETER of a named function, which carries its witness as an adjacent argument
+```
+
+<!-- test: error.interface-typed-tuple-element-in-a-parameter -->
+The SECOND of the three spellings that reach `parseTupleTypeReference` — an inline tuple type in a
+parameter position, with no `typealias` in sight. **MEASURED: merge base `E3011`, and a PANIC here
+before the door was asked.** Pinned separately because each spelling reaches the element loop by a
+different caller, and a guard placed at the `typealias` alone would have closed only one.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Shape
+	function area() returns Integer
+end 'Shape'
+
+type Sq implements Shape
+	let s as Integer
+
+	function area() returns Integer
+		return self.s
+	end 'area'
+
+	static function create(s Integer) returns Self
+		return Self{s: s}
+	end 'create'
+end 'Sq'
+
+function take(p (Shape, Integer)) returns Integer
+	return p.1
+end 'take'
+
+function main() returns ExitCode
+	return 0 as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: specs/fragments/interface-dispatch/error.interface-typed-tuple-element-in-a-parameter.test:20:18: Unsupported: a tuple element declared at the interface type 'Shape' — a value held at an interface type is a two-word fat pointer `(value, witness)`, and a tuple is a synthesized struct, so an element is a field slot: one machine word. Declare the element at a concrete type, or pass the interface alongside the tuple as a PARAMETER of a named function, which carries its witness as an adjacent argument
+```
+
+<!-- test: error.interface-typed-tuple-element-in-a-return -->
+The THIRD spelling. It is the one the merge base handled DIFFERENTLY from the other two — `E3005`
+rather than `E3011` — which is worth pinning because it shows the three reach the element loop by
+genuinely different paths rather than being one shape written three ways.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Shape
+	function area() returns Integer
+end 'Shape'
+
+type Sq implements Shape
+	let s as Integer
+
+	function area() returns Integer
+		return self.s
+	end 'area'
+
+	static function create(s Integer) returns Self
+		return Self{s: s}
+	end 'create'
+end 'Sq'
+
+function make() returns (Shape, Integer)
+	return (Sq.create(1), 2)
+end 'make'
+
+function main() returns ExitCode
+	return 0 as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: specs/fragments/interface-dispatch/error.interface-typed-tuple-element-in-a-return.test:20:26: Unsupported: a tuple element declared at the interface type 'Shape' — a value held at an interface type is a two-word fat pointer `(value, witness)`, and a tuple is a synthesized struct, so an element is a field slot: one machine word. Declare the element at a concrete type, or pass the interface alongside the tuple as a PARAMETER of a named function, which carries its witness as an adjacent argument
+```
+
+<!-- test: interface-dispatch.tuples-over-concrete-types-still-compile -->
+The FALSE-REJECT CONTROL for the three above: a tuple whose elements are CONCRETE still interns,
+still holds a conformer, and still answers. Only an interface-typed element loses its second word.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Shape
+	function area() returns Integer
+end 'Shape'
+
+type Sq implements Shape
+	let s as Integer
+
+	function area() returns Integer
+		return self.s
+	end 'area'
+
+	static function create(s Integer) returns Self
+		return Self{s: s}
+	end 'create'
+end 'Sq'
+
+typealias Pair = (Sq, Integer)
+
+function take(p Pair) returns Integer
+	return p.0.area() + p.1
+end 'take'
+
+function main() returns ExitCode
+	return take((Sq.create(11), 31)) as ExitCode
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: error.interface-typed-requirement-return -->
+⭐⭐ **THE RETURN HALF OF THE REQUIREMENT POSITION, WHICH COMPILED AND LINKED.** `parseInterfaceMethod`
+reads its return through `parseOptionalReturnType` and never asked the door, so the declared type
+degraded silently to the machine word — **MEASURED on the merge base: the program COMPILED**, and the
+first dispatch on the result reported the misdirecting `a member access 'area' on a 'int' value`.
+⚠ It is not a ninth position: it is a second call site of the SAME `returnType` arm a declared
+function's return already used. It is noted-then-thrown rather than thrown in place, for the reason
+the parameter half is — the reader is shared with a tolerant whole-program fold.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Shape
+	function area() returns Integer
+end 'Shape'
+
+interface Maker
+	function make() returns Shape
+end 'Maker'
+
+function main() returns ExitCode
+	return 0 as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: specs/fragments/interface-dispatch/error.interface-typed-requirement-return.test:9:18: Unsupported: a function's return type declared at the interface type 'Shape' — a value held at an interface type is a two-word fat pointer `(value, witness)`, and a return hands back one register, plus a second only for a throwing call's error flag — an interface-returning ABI is a distinct slice. Declare it at a concrete type, or take the interface as a PARAMETER of a plain function, which carries its witness as an adjacent argument
+```
+
+<!-- test: error.interface-typed-function-type-return -->
+The other unguarded return: a FUNCTION TYPE's. `readFunctionTypeAlias` read it with a bare
+`parseTypeReference`, so it degraded the same way. Also the same `returnType` arm, gated on the same
+`recordSignature` flag its parameter half uses so the tolerant sweep cannot veto.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Shape
+	function area() returns Integer
+end 'Shape'
+
+typealias MakeFn = function(Integer) returns Shape
+
+function apply(f MakeFn) returns Integer
+	return f(1).area()
+end 'apply'
+
+function main() returns ExitCode
+	return 0 as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: specs/fragments/interface-dispatch/error.interface-typed-function-type-return.test:8:38: Unsupported: a function's return type declared at the interface type 'Shape' — a value held at an interface type is a two-word fat pointer `(value, witness)`, and a return hands back one register, plus a second only for a throwing call's error flag — an interface-returning ABI is a distinct slice. Declare it at a concrete type, or take the interface as a PARAMETER of a plain function, which carries its witness as an adjacent argument
 ```

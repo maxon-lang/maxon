@@ -2180,5 +2180,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3120: specs/fragments/associated-types/error.associated-type-bound-to-an-interface.test:24:6: 'Runner' binds 'Taker's associated type 'Element' to the interface type 'Shape', and 'Element' reaches the calling convention of a requirement this program DISPATCHES. A value held at an interface is a two-word fat pointer `(value, witness)`, and a witness call carries one machine word per argument and one per result — so the second word is dropped and the impl reads a witness that was never passed. Bind the associated type to a concrete type
+error E3120: specs/fragments/associated-types/error.associated-type-bound-to-an-interface.test:24:6: 'Runner' binds 'Taker's associated type 'Element' to the interface type 'Shape', and 'Element' reaches the calling convention of a requirement this program DISPATCHES — a value held at an interface type is a two-word fat pointer `(value, witness)`, and a witness call carries one machine word per argument and one per result — so the second word is dropped and the impl reads a witness that was never passed. Bind the associated type to a concrete type
 ```

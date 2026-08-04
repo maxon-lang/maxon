@@ -1,0 +1,29 @@
+// Test: error.interface-typed-tuple-element-in-a-parameter
+typealias Integer = int(i64.min to i64.max)
+
+interface Shape
+	function area() returns Integer
+end 'Shape'
+
+type Sq implements Shape
+	let s as Integer
+
+	function area() returns Integer
+		return self.s
+	end 'area'
+
+	static function create(s Integer) returns Self
+		return Self{s: s}
+	end 'create'
+end 'Sq'
+
+function take(p (Shape, Integer)) returns Integer
+	return p.1
+end 'take'
+
+function main() returns ExitCode
+	return 0 as ExitCode
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:20:18: Unsupported: a tuple element declared at the interface type 'Shape' — a value held at an interface type is a two-word fat pointer `(value, witness)`, and a tuple is a synthesized struct, so an element is a field slot: one machine word. Declare the element at a concrete type, or pass the interface alongside the tuple as a PARAMETER of a named function, which carries its witness as an adjacent argument
