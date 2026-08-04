@@ -884,16 +884,19 @@ export function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 	if callee.equals(DropExistentialName) 'dropexistential'
 		usage.usesDropExistential = true
 	end 'dropexistential'
-	// The existential's CO-OWNERSHIP (P1.7a-existentials slice 2). Unlike its drop twin it DOES declare
-	// transitive needs: its body calls `__mm_incref` under the witness gate, and that call lives in a Std body
-	// this Maxon-module scan cannot see. ⚠ `usesHeap` rides with `usesIncref` because `__mm_incref` is built
-	// by `installMmRuntime`, which is ALL-OR-NOTHING under that bit — the `__mf_*` arm's arrangement. The cost
-	// falls only on a program that co-owns an existential whose conformer might own no record at all (an `int`
-	// held at an interface), which is the one shape that could otherwise reach a `call __mm_incref` with no
-	// allocator behind it: MEASURED as `resolveCallFixups: call to unknown function '__mm_incref'`.
+	// The existential's CO-OWNERSHIP (P1.7a-existentials slice 2). Its body names NO callee — since slice 2b it
+	// `callIndirect`s the witness's `retainFunc@16`, exactly as its drop twin `callIndirect`s `destroyFunc@8` —
+	// so what it reaches is declared by the RELOCATIONS that fill those words (`noteRelocatedFunctionUsage`),
+	// not here. It used to declare `usesIncref` for a hardcoded `__mm_incref` that no longer exists.
+	// ⚠ **`usesHeap` STILL RIDES, AND IT IS THE ONE BIT THE RELOCATION SCAN CANNOT SUPPLY**: that scan runs
+	// after `globalData.layOut`, so a program whose heap is first declared there PANICS
+	// (`noteRelocatedFunctionUsage`'s `heapArrivedTooLate` gate) with a `.data` image short by the allocator's
+	// globals. Every non-zero ownership word names a heap callee (`__str_clone`/`__str_decref`/`__mm_retain`/a
+	// `__destruct_<T>`), so a program that emits this entry may need the allocator whether or not its own
+	// source ever allocates — `widen("abc")` is exactly that program, and it is why the bit is taken here
+	// rather than inferred later.
 	if callee.equals(RetainExistentialName) 'retainexistential'
 		usage.usesRetainExistential = true
-		usage.usesIncref = true
 		usage.usesHeap = true
 	end 'retainexistential'
 	// A managed-payload union's scope-exit drop (`__destruct_<U>`). It frees the box (`__mm_free` — heap)

@@ -1476,6 +1476,94 @@ end 'main'
 11
 ```
 
+<!-- test: literal-conformer-widened-to-an-owning-existential -->
+⭐⭐ **A `String` LITERAL WIDENED TO AN INTERFACE IS AN IMMORTAL `.rdata` RECORD, AND CO-OWNING ONE MUST
+COPY RATHER THAN INCREF.** shv2 has no `MmImmortalRefcount` sentinel: the invariant is that an immortal
+record NEVER reaches a refcount write, upheld at the borrow→own boundary by COPYING
+(`Parser.promoteBorrowedToOwned` routes a byte record to `promoteToOwnedString`, a fresh heap record, and
+only a non-text aggregate to the incref). The existential path had no such split — `__retain_existential`
+called `__mm_incref` whatever the conformer was, which on an `.rdata` record is a read-modify-write of
+READ-ONLY memory. **MEASURED before the retain word existed: this program printed `A` and died with a
+Segmentation fault (exit 139); `B` never printed.** The witness table's `retainFunc@16` is what splits it —
+`__str_clone` for a byte-record conformer (an independently-droppable fresh heap record, which is what
+launders the literal), `__mm_retain` for an aggregate, 0 for a scalar.
+```maxon
+function widen(h Hashable) returns Hashable
+	return h
+end 'widen'
+
+function main() returns ExitCode
+	print("A")
+	_ = widen("abc")
+	print("B")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+AB
+```
+
+<!-- test: literal-conformer-dispatched-and-dropped -->
+The literal-conformer retain above, carried all the way through: the widened existential is BOUND, so a
+scope-exit `__drop_existential` releases exactly the record the retain handed back — and it must be the
+CLONE, not the literal, or the drop decrefs `.rdata`. The clone is a real `String` record, so the dispatch
+through the witness table answers the same hash the heap spelling of the same five bytes does, and the leak
+gate (exit 101) is what proves the extra reference was released exactly once.
+```maxon
+function widen(h Hashable) returns Hashable
+	return h
+end 'widen'
+
+function main() returns ExitCode
+	let n = 1
+	let heap = widen("ab{n}cd")
+	let literal = widen("ab1cd")
+	print("heap={heap.hash()} literal={literal.hash()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+heap=252765120 literal=252765120
+```
+
+<!-- test: literal-conformer-stored-in-a-holder-field -->
+The same laundering one call boundary out: a `String` literal widened into a CONSUMED argument reaches
+durable storage — an interface-typed field, which outlives the frame and whose destructor releases the
+value half through the witness. `coOwnBorrowedForConsume` must therefore hand the container the retain's
+RESULT rather than the borrow it was given; storing the original would put the immortal literal in a slot
+`__destruct_Holder` later drops.
+```maxon
+type Holder
+	export var h as Hashable
+
+	static function create(h Hashable) returns Self
+		return Self{h: h}
+	end 'create'
+end 'Holder'
+
+function hold(h Hashable) returns Holder
+	return Holder.create(h)
+end 'hold'
+
+function main() returns ExitCode
+	let box = hold("ab1cd")
+	print("held={box.h.hash()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+held=252765120
+```
+
 <!-- test: interface-param-checked-divide-survives-specialization -->
 ### A possibly-zero divide in an interface-param function survives specialization
 An interface-parameter function is CLONED per concrete argument type (monomorphization's

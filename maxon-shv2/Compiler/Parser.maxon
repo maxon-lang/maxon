@@ -18697,27 +18697,43 @@ export type Parser
 	function retainBorrowedAggregate(source ValueId, range SourceRange) returns ValueId
 		let retained = self.emitRetainCall(source, range: range)
 		self.markValueOwnsHeap(retained)
-		// ⭐ **AN EXISTENTIAL'S FRESH NAME KEEPS THE SOURCE'S WITNESS (P1.7a-existentials slice 2).** The retain
-		// raises a refcount and changes nothing else, so the co-owner is the SAME conformer — but it is a
-		// different ValueId, and the witness column is keyed by ValueId, so the pairing has to be carried or the
-		// first dispatch on the result panics in `witnessOfValue`. The `tagOf(source)` above is what makes this
-		// the right place: the result is an existential exactly when the source was.
-		if self.tagOf(source) == ValueTypeTag.interfaceRef 'existential'
-			self.pairInterfaceWitness(retained, witness: self.witnessOfValue(source))
-		end 'existential'
+		self.carryInterfaceWitness(retained, from: source)
 		return retained
 	end 'retainBorrowedAggregate'
 
-	// ⭐⭐ **WHICH RETAIN A BORROWED AGGREGATE TAKES — and an EXISTENTIAL takes a DIFFERENT one, because its
-	// value half may not be a pointer at all (P1.7a-existentials slice 2).** `int` and `bool` conform
-	// intrinsically and are held at an interface as their RAW VALUE in a general-purpose register — which is
-	// exactly what makes them representable there where a `float` is not (E3121). So the incref has to be
-	// gated on the same witness word the DROP is gated on, and `__retain_existential(witness, value)` is that
-	// gate; a plain `__mm_retain` would write through `<the integer> - 24 + 16`.
+	// ⭐ **AN EXISTENTIAL'S FRESH NAME KEEPS THE SOURCE'S WITNESS (P1.7a-existentials slice 2).** A retain
+	// takes a second owner of the conformer's record — or, for a byte record, a CLONE of it — and in neither
+	// case does the conformer change, so the co-owner dispatches through the same table. But it is a different
+	// ValueId, and the witness column is keyed by ValueId, so the pairing has to be carried or the first
+	// dispatch on the result panics in `witnessOfValue`. A non-existential source has no witness half and
+	// pairs nothing, which is what lets the two retain doors share this step.
 	//
-	// **MEASURED with the ungated form**: `use(h Comparable)` called with `7`, then `var v = h`, died with
-	// **0xC0000005** where the same program answers 11 on a compiler that only BORROWED. Both entries return
-	// the pointer, so the caller's fresh-SSA-name property is identical either way.
+	// ⚠ Single-sourced because `retainBorrowedAggregate` and `coOwnBorrowedForConsume` are two callers of ONE
+	// retain and only the first of them used to handle the result at all — the second discarded it, so this
+	// step existed once and looked like a property of that door rather than of the retain.
+	function carryInterfaceWitness(retained ValueId, from ValueId)
+		if self.tagOf(from) != ValueTypeTag.interfaceRef 'notAnExistential'
+			return
+		end 'notAnExistential'
+
+		self.pairInterfaceWitness(retained, witness: self.witnessOfValue(from))
+	end 'carryInterfaceWitness'
+
+	// ⭐⭐ **WHICH RETAIN A BORROWED AGGREGATE TAKES — and an EXISTENTIAL takes a DIFFERENT one, because a
+	// CONCRETE type's protocol is a compile-time fact and a conformer's is not (P1.7a-existentials slice 2).**
+	// `__mm_retain` is the answer for exactly one shape: a heap aggregate whose alias is observable. A
+	// conformer may be neither — `int`/`bool` conform intrinsically and are held at an interface as their RAW
+	// VALUE (which is what makes them representable there where a `float` is not, E3121), and a `String`
+	// literal is an IMMORTAL `.rdata` record that must be COPIED rather than increfed. So the existential arm
+	// dispatches through the witness's `retainFunc@16` — `__retain_existential(witness, value)` — which is the
+	// same three-way choice `promoteBorrowedToOwned` makes statically, deferred to run time.
+	//
+	// **BOTH SHORTCUTS WERE MEASURED AS 0xC0000005**: a plain `__mm_retain` on `use(h Comparable)` called with
+	// `7`, writing through `<the integer> - 24 + 16` where the program answers 11; and a hardcoded incref
+	// under the gate on `widen("abc")`, writing into read-only `.rdata`.
+	//
+	// ⚠ Both entries return a value the caller must USE — but only `__mm_retain` is guaranteed to hand back
+	// what it was given, so a caller may never substitute the source for the result.
 	function emitRetainCall(source ValueId, range SourceRange) returns ValueId
 		if self.tagOf(source) == ValueTypeTag.interfaceRef 'existential'
 			return self.emitRetainExistentialCall(source, range: range)
@@ -18727,10 +18743,10 @@ export type Parser
 	end 'emitRetainCall'
 
 	// ⭐ **THE ONE `__retain_existential` CALL**, so its argument ORDER — the witness first, matching
-	// `__drop_existential` — is spelled once. Its two callers want different halves of it: the `var`
-	// promotion (`emitRetainCall`) needs the returned FRESH id, the consuming-position co-ownership
-	// (`coOwnBorrowedForConsume`) needs only the incref and discards it. The result carries the SOURCE's exact
-	// type so a caller that binds it holds the same existential.
+	// `__drop_existential` — is spelled once. BOTH callers want the same half of it, the returned id: the
+	// entry dispatches through the witness's `retainFunc@16`, which for a byte-record conformer is a
+	// `__str_clone` handing back a DIFFERENT record, so the co-owner is what came out and never what went in.
+	// The result carries the SOURCE's exact type so a caller that binds it holds the same existential.
 	function emitRetainExistentialCall(source ValueId, range SourceRange) returns ValueId
 		return self.emitRuntimeCall(RetainExistentialName, args: pairArgs(self.witnessOfValue(source), second: source), resultTag: self.tagOf(source), resultNameId: self.valueNameId(source), range: range)
 	end 'emitRetainExistentialCall'
@@ -18761,23 +18777,28 @@ export type Parser
 	// co-ownership shv2 already sanctions for a slice view, a `try … otherwise` phi reconciliation and a
 	// borrowed aggregate bound into a `var` — generalized to the one position that was still refused.
 	//
-	// ⚠ **IT IS NOT `retainBorrowedAggregate`, AND THE DIFFERENCE IS THE FRESH NAME.** That door mints a new
-	// ValueId because a BINDING will own the result and must not alias the source's id. Here the new owner is a
-	// SLOT in another record: nothing in this frame binds the result, so a fresh id would buy nothing and would
-	// have to carry the witness column and the surface marks across for no reader. The value passes through
-	// unchanged, borrowed exactly as it was, and this frame still drops nothing.
+	// ⚠ **IT IS NOT `retainBorrowedAggregate`, AND THE DIFFERENCE IS WHAT OWNS THE RESULT.** That door marks
+	// its result owned because a BINDING will drop it at scope exit; here the new owner is a SLOT in another
+	// record, so this frame marks nothing and drops nothing — the container's destructor releases exactly the
+	// reference taken here.
+	//
+	// ⚠⚠ **BUT THE RESULT IS STILL WHAT THE CALLER MUST STORE, AND DISCARDING IT WAS A MEASURED ACCESS
+	// VIOLATION.** The struct/union arm below hands back the same box (`__mm_incref` is void and an aggregate
+	// must stay one record), and the existential arm used to do the same on the reasoning that a fresh id
+	// "would buy nothing". It buys the whole correctness of a byte-record conformer: `__retain_existential`
+	// dispatches through the witness's `retainFunc@16`, which for a `String`/`Character` is a `__str_clone`
+	// handing back a DIFFERENT, independently-droppable record. Returning the source instead put an immortal
+	// `.rdata` literal into durable storage AND leaked the clone — MEASURED as `widen("abc")` printing `A` and
+	// dying with 0xC0000005.
 	//
 	// ⚠ **AND IT IS NOT A MOVE.** The source is deliberately NOT poisoned: co-ownership is what makes
 	// `Holder.create(p)` twice legal in one body, where a move would make the second an E3102 and a single
 	// transferred `+1` a double free at the second destructor.
 	function coOwnBorrowedForConsume(value ValueId, range SourceRange) returns ValueId
 		if self.tagOf(value) == ValueTypeTag.interfaceRef 'existential'
-			// The witness-gated incref, for `emitRetainExistentialCall`'s measured reason: a scalar conformer's
-			// value half is not a pointer. Its returned id is DISCARDED rather than replacing the argument —
-			// the caller wants the borrow's own name, and the reference this took is owned by the box the value
-			// is handed to, not by any binding in this frame.
-			_ = self.emitRetainExistentialCall(value, range: range)
-			return value
+			let retained = self.emitRetainExistentialCall(value, range: range)
+			self.carryInterfaceWitness(retained, from: value)
+			return retained
 		end 'existential'
 
 		self.emitIncref(value, range: range)
@@ -29738,10 +29759,12 @@ export type Parser
 	//     POISONED (E3102 on later use), an owned temporary is removed from the pending drops. No incref, no
 	//     copy.
 	//   • a BORROWED struct/union/existential value (a borrowed param, a borrowed field read, a non-consumed
-	//     argument) has NO clone, so it is CO-OWNED instead — the box takes its own `__mm_incref` reference
-	//     and the borrow's owner is untouched (`coOwnBorrowedForConsume`, the transitive-consume ruling of
+	//     argument) has NO STATIC clone, so it is CO-OWNED instead — the box takes its own reference and the
+	//     borrow's owner is untouched (`coOwnBorrowedForConsume`, the transitive-consume ruling of
 	//     2026-08-04). (A String is the one managed kind with a promote, so a borrowed String takes a real
-	//     copy rather than a second reference.)
+	//     copy rather than a second reference — and an EXISTENTIAL whose conformer IS a String takes that same
+	//     copy at run time, through its witness, which is why `coOwnBorrowedForConsume` answers with a value
+	//     rather than with the one it was handed.)
 	function moveInPayload(class PayloadClass, arg ValueId, argBareLocal bool, anchor Token, range SourceRange) returns ValueId throws ParseError
 		if not payloadClassIsManaged(class) 'scalar'
 			return arg
@@ -29753,8 +29776,9 @@ export type Parser
 	// factored out so a struct field / union payload (`moveInPayload`) and an ARRAY element (P1.7 slice 3,
 	// `moveElementIntoContainer`) share the ONE transfer rule and cannot drift on it. A borrowed String is promoted
 	// to an owned copy (a fresh temp de-listed); an owned managed value is transferred (bare local poisoned,
-	// temp de-listed); a borrowed struct/union/existential is CO-OWNED (no clone — an `__mm_incref` instead).
-	// Precondition: the value is managed.
+	// temp de-listed); a borrowed struct/union/existential is CO-OWNED (`coOwnBorrowedForConsume`, which for
+	// an existential answers with the reference it TOOK — that may be a fresh record). Precondition: the value
+	// is managed.
 	function moveManagedValueInto(arg ValueId, argBareLocal bool, isString bool, anchor Token, range SourceRange) returns ValueId throws ParseError
 		// ⭐⭐ **A TUPLE IS COPIED HERE, NOT MOVED — BECAUSE A TUPLE IS A VALUE (P1.10).** A struct is refused
 		// below when it is borrowed and MOVED when it is owned, and both are right for a struct: it has
@@ -29793,6 +29817,8 @@ export type Parser
 				// is untouched and this frame poisons nothing, so the `transferOwnedInto` below is skipped
 				// deliberately rather than fallen past. `coOwnBorrowedForConsume` states the rule in full, and
 				// its ARGUMENT twin (`transferConsumedArg`) answers the same question one call boundary out.
+				// ⚠ Its RESULT is what is stored, never `arg`: an EXISTENTIAL's reference is taken through the
+				// witness and a byte-record conformer's protocol there is a COPY, so the two can differ.
 				return self.coOwnBorrowedForConsume(arg, range: range)
 			end 'borrowedManaged'
 		end 'structOrUnion'
@@ -41648,8 +41674,10 @@ export type Parser
 	// STRING (a long rdata literal, or a borrowed String parameter/field) has a cheap owning copy, so it is
 	// PROMOTED into a fresh owned record the callee can move into its field — exactly as a DIRECT struct-field /
 	// union-payload move-in does (`moveManagedValueInto`) — and THAT copy is returned to replace the borrowed
-	// arg. A borrowed STRUCT/UNION/EXISTENTIAL has no clone and becomes a SECOND OWNER instead
-	// (`coOwnBorrowedForConsume`) — the transitive-consume case, and what it is answered with.
+	// arg. A borrowed STRUCT/UNION/EXISTENTIAL has no STATIC clone and becomes a SECOND OWNER instead
+	// (`coOwnBorrowedForConsume`) — the transitive-consume case, and what it is answered with. Its RESULT
+	// replaces the argument too: an existential's reference is taken through the witness, and a byte-record
+	// conformer's protocol there is the same COPY the concrete arm above takes.
 	function transferConsumedArg(argValue ValueId, anchor Token) returns ValueId throws ParseError
 		// ⭐ AN OPAQUE OWNED type-parameter binding forwarded to a consuming sibling feed position (P1.7 slice
 		// 3b-v): the callee takes ownership, so MOVE it — poison the source binding so a second use is E3102 and

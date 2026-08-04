@@ -1441,19 +1441,12 @@ type MaxonToStdLowering
 		blob.growFilled((WitnessTableHeaderBytes + WitnessSlotBytes * methodCount) as ElementCount, value: 0)
 		_ = self.globalData.registerRdataConstantLabeled(label, bytes: blob)
 
-		// ⭐ **`destroyFunc@8` — HOW AN OWNED EXISTENTIAL OF THIS CONFORMER IS RELEASED (P1.7a-existentials
-		// slice 2).** Patched with the SAME `funcAbs64InRdata` reloc the method slots take. An EMPTY answer
-		// leaves the zero-fill in place, which is the encoding `__drop_existential` reads as "nothing to
-		// drop" — an `int`/`bool`/`float` conformer, whose value half is not a pointer at all.
-		//
-		// ⚠ **THE SYMBOL IS INSTALLED BECAUSE THIS RELOCATION EXISTS, NOT BECAUSE SOMETHING PREDICTED IT**:
-		// `MmRuntime.noteRelocatedFunctionUsage` roots every `.rdata` slot's callee after lowering, so the
-		// relocated set and the installed set are one list rather than two that agree. See there for what a
-		// pre-pipeline prediction cost when it was tried.
-		let destroyCallee = self.signatures.existentialDestroyCallee(typeName)
-		if not destroyCallee.isEmpty() 'conformerOwnsARecord'
-			self.globalData.recordFuncAbs64InRdata(destroyCallee, rdataLabel: label, offsetInLabel: WitnessDestroyFuncOffset)
-		end 'conformerOwnsARecord'
+		// ⭐ **`destroyFunc@8` — HOW AN OWNED EXISTENTIAL OF THIS CONFORMER IS RELEASED — and `retainFunc@16`,
+		// HOW A SECOND OWNER OF ONE IS TAKEN (P1.7a-existentials slices 2 and 2b).** Both are derived from
+		// `existentialOwnershipProtocol`'s single answer, so they are non-zero together and cannot disagree
+		// about a conformer.
+		self.stampWitnessOwnershipWord(self.signatures.existentialDestroyCallee(typeName), label: label, offsetInLabel: WitnessDestroyFuncOffset)
+		self.stampWitnessOwnershipWord(self.signatures.existentialRetainCallee(typeName), label: label, offsetInLabel: WitnessRetainFuncOffset)
 
 		for i in 0 upto methodCount 'eachMethod'
 			let slot = try slots.get(i) otherwise panic("ensureWitnessTable: slots.get OOB at {i} below count {methodCount}")
@@ -1465,6 +1458,24 @@ type MaxonToStdLowering
 
 		return label
 	end 'ensureWitnessTable'
+
+	// Stamp one of the witness header's two OWNERSHIP words with the `funcAbs64InRdata` reloc the method slots
+	// take. An EMPTY callee leaves the zero-fill in place, which is the encoding both runtime entries read as
+	// "nothing to do" — an `int`/`bool`/`float` conformer, whose value half is not a pointer at all.
+	//
+	// ⚠ **THE SYMBOL IS INSTALLED BECAUSE THIS RELOCATION EXISTS, NOT BECAUSE SOMETHING PREDICTED IT**:
+	// `MmRuntime.noteRelocatedFunctionUsage` roots every `.rdata` slot's callee after lowering, so the
+	// relocated set and the installed set are one list rather than two that agree. See there for what a
+	// pre-pipeline prediction cost when it was tried. It is ONE function rather than two spellings because the
+	// empty test IS the encoding, and a second copy of it is where the retain word would come to be stamped
+	// on a rule the drop word had already stopped using.
+	function stampWitnessOwnershipWord(callee ByteArray, label String, offsetInLabel ByteOffset)
+		if callee.isEmpty() 'conformerOwnsNothing'
+			return
+		end 'conformerOwnsNothing'
+
+		self.globalData.recordFuncAbs64InRdata(callee, rdataLabel: label, offsetInLabel: offsetInLabel)
+	end 'stampWitnessOwnershipWord'
 
 	// ⭐⭐ **THE SYMBOL A WITNESS SLOT POINTS AT IS THE MEMBER `checkConformance` ACCEPTED — NOT A SECOND JOIN
 	// OF THE SAME TWO NAMES (R10).** This site used to mint `qualifiedMethodName(typeName, method.name)` for

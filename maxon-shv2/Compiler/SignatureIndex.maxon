@@ -1078,6 +1078,31 @@ export union PayloadClass
 	existential
 end 'PayloadClass'
 
+// ⭐⭐ **HOW A CONFORMER'S VALUE HALF IS OWNED AND RELEASED — ONE DECISION, TWO WITNESS WORDS
+// (P1.7a-existentials slice 2b).** The witness table carries a `destroyFunc@8` and a `retainFunc@16`, and
+// both are derived from THIS answer (`ProgramSignatures.existentialOwnershipProtocol`) rather than each
+// re-deciding "is this conformer managed, and how". A second independent derivation is exactly how the two
+// words would come to disagree about a conformer — a table whose drop frees a record its retain never took.
+//
+// ⚠ **THE THREE CASES ARE THREE DIFFERENT PROTOCOLS, NOT THREE DEGREES OF ONE.** A byte record COPIES on
+// co-ownership and an aggregate CO-OWNS, and the split is not a preference: a `String` LITERAL is a wholly
+// immortal `.rdata` record, so an incref of one is a write to read-only memory (see
+// `IrInterface.WitnessRetainFuncOffset` for the measured access violation). It is the same split
+// `Parser.promoteBorrowedToOwned` makes for a CONCRETE String, reached here through a witness because the
+// conformer is a run-time fact.
+export union ExistentialOwnershipProtocol
+	// The value half is not a pointer at all — an `int`/`bool` conforming intrinsically
+	// (`isIntrinsicBuiltinConformance`). BOTH words stay 0, and both runtime entries are inert on it.
+	none
+	// A `String`/`Character` fused byte record: released by `__str_decref`, co-owned by COPYING
+	// (`__str_clone`), which is what an immortal literal source requires.
+	byteRecord
+	// A struct/union/generic-instance box: released by its own `__destruct_<T>`/`__mm_decref`, co-owned by
+	// `__mm_retain` — an aggregate has no cheap owning copy and its alias is observable, so it must stay the
+	// same box.
+	aggregate
+end 'ExistentialOwnershipProtocol'
+
 // Classify a union payload field's storage and ownership. `typeNames` resolves a `named` field's id to
 // a NAME; pass the interner the LAYOUT's ids live in — the file-local artifact interner at the
 // construct/extract sites, `project.typeNames` at the destructor-synthesis site. Every lookup
@@ -1272,8 +1297,12 @@ export function payloadClassIsString(class PayloadClass) returns bool
 		floatPayload gives false
 		nestedUnion gives false
 		// An existential's value half is a conformer's record, which may or may not BE a String — that is
-		// exactly the fact only its witness knows, and the reason its drop is `__drop_existential`. `false`
-		// here selects the aggregate protocol (co-own, never copy), which is right whatever the conformer is.
+		// exactly the fact only its witness knows, and the reason its drop is `__drop_existential` and its
+		// co-ownership `__retain_existential`. `false` here does NOT mean "the aggregate protocol applies":
+		// for a byte-record conformer the protocol is COPY, never co-own (`ExistentialOwnershipProtocol`), and
+		// this reader's earlier claim that co-owning "is right whatever the conformer is" was measurably false
+		// — it is an incref of read-only `.rdata` for a literal. `false` means only "do not take the STATIC
+		// String route", which is right because the choice belongs to the witness at run time.
 		existential gives false
 		undeclaredName gives false
 	end 'c'
@@ -11030,6 +11059,26 @@ export type ProgramSignatures
 	//
 	// The struct and index are preconditions, not cases — every caller reached here through a `structOf`
 	// that answered `declared`, and `index` is one `indexOfField` handed out.
+	// ⭐⭐ **WHICH OWNERSHIP PROTOCOL CONFORMER `typeName`'s VALUE HALF TAKES — the ONE decision both witness
+	// ownership words are derived from** (P1.7a-existentials slice 2b). See `ExistentialOwnershipProtocol` for
+	// why it is one decision rather than two agreeing ones.
+	//
+	// ⚠ **THE BYTE-RECORD BUILTINS ARE ASKED FIRST BECAUSE NO REGISTRY HOLDS THEM.** A `String` or `Character`
+	// widened to `Hashable`/`Equatable` is an intrinsic conformance (`isIntrinsicBuiltinConformance`) declared by
+	// no file, so `declaredFormOf` answers nothing for it and the managed test below would call the one managed
+	// thing in the language unmanaged — a leaked record for every existential-typed String field. `int`, `float`
+	// and `bool` fall through to `none`, which is right: their value half is not a pointer at all.
+	export function existentialOwnershipProtocol(typeName ByteArray) returns ExistentialOwnershipProtocol
+		if typeName.equals(StringConformerName) or typeName.equals(CharacterConformerName) 'byteRecord'
+			return ExistentialOwnershipProtocol.byteRecord
+		end 'byteRecord'
+		if not self.declaredNameIsManaged(typeName) 'ownsNothing'
+			return ExistentialOwnershipProtocol.none
+		end 'ownsNothing'
+
+		return ExistentialOwnershipProtocol.aggregate
+	end 'existentialOwnershipProtocol'
+
 	// ⭐⭐ **WHAT A WITNESS TABLE'S `destroyFunc@8` HOLDS FOR CONFORMER `typeName` — or EMPTY when the
 	// conformer owns nothing droppable, which the table records as the 0 `__drop_existential` treats as inert**
 	// (P1.7a-existentials slice 2). ONE answer, read by the site that STAMPS the reloc
@@ -11037,24 +11086,28 @@ export type ProgramSignatures
 	// so the symbol a table names and the symbol the pipeline installs cannot come apart — the arrangement
 	// `managedOpaqueArrayElementDropCallee` already has for the layout descriptor's `destroyFunc@40`.
 	//
-	// ⚠ **THE BYTE-RECORD BUILTINS ARE ASKED FIRST BECAUSE NO REGISTRY HOLDS THEM.** A `String` or `Character`
-	// widened to `Hashable`/`Equatable` is an intrinsic conformance (`isIntrinsicBuiltinConformance`) declared by
-	// no file, so `declaredFormOf` answers nothing for it and the managed test below would call the one managed
-	// thing in the language unmanaged — a leaked record for every existential-typed String field. `int`, `float`
-	// and `bool` fall through to EMPTY, which is right: their value half is not a pointer at all.
-	//
 	// ⚠ **EMPTY IS NOT A SENTINEL RETURN, IT IS THE ANSWER** — "this conformer has no destructor" is a real
 	// state of the world with a real encoding in the table (the zero word), and both callers act on it as such.
 	export function existentialDestroyCallee(typeName ByteArray) returns ByteArray
-		if typeName.equals(StringConformerName) or typeName.equals(CharacterConformerName) 'byteRecord'
-			return StrDecrefName
-		end 'byteRecord'
-		if not self.declaredNameIsManaged(typeName) 'ownsNothingDroppable'
-			return EmptySourceText
-		end 'ownsNothingDroppable'
-
-		return managedNameDropCallee(self, declaredName: self.denotedAggregateName(typeName))
+		match self.existentialOwnershipProtocol(typeName) 'protocol'
+			byteRecord then return StrDecrefName
+			aggregate then return managedNameDropCallee(self, declaredName: self.denotedAggregateName(typeName))
+			none then return EmptySourceText
+		end 'protocol'
 	end 'existentialDestroyCallee'
+
+	// ⭐⭐ **WHAT A WITNESS TABLE'S `retainFunc@16` HOLDS FOR CONFORMER `typeName`** (P1.7a-existentials slice
+	// 2b) — the exact dual of the destroy callee above, off the SAME protocol answer, so the two words are
+	// non-zero together by construction. `__str_clone` COPIES (the only protocol an immortal `.rdata` literal
+	// admits, see `IrInterface.WitnessRetainFuncOffset`); `__mm_retain` increfs and hands the pointer back;
+	// EMPTY leaves the zero word `__retain_existential` treats as inert.
+	export function existentialRetainCallee(typeName ByteArray) returns ByteArray
+		match self.existentialOwnershipProtocol(typeName) 'protocol'
+			byteRecord then return StrCloneName
+			aggregate then return MmRetainName
+			none then return EmptySourceText
+		end 'protocol'
+	end 'existentialRetainCallee'
 
 	// Is struct field `index` declared at an INTERFACE type — the two-slot fat pointer whose drop is
 	// `__drop_existential` rather than a statically named callee (P1.7a-existentials slice 2)? Asked through

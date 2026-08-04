@@ -50,7 +50,7 @@ export typealias WitnessSlotIndex = int(0 to u16.max)
 export typealias WitnessMethodIndex = int(0 to u16.max)
 
 // ⭐ **WITNESS-TABLE BYTE LAYOUT** (P1.7a slice 2a), following v1's `WitnessTable`: a header of
-// `methodCount@0`, `destroyFunc@8`, `flags@16` (0), then `methods[N]@24` — one 8-byte function pointer per
+// `methodCount@0`, `destroyFunc@8`, `retainFunc@16`, then `methods[N]@24` — one 8-byte function pointer per
 // requirement of the interface's TRANSITIVE list, each stamped by a `funcAbs64InRdata` relocation. The fused
 // `witnessCall` reads method `i` from `[witnessAddr + WitnessTableHeaderBytes + WitnessSlotBytes*i]`, so
 // the emitter (the blob) and every reader (the x64, arm64 and wasm lowerings) must share these two
@@ -62,7 +62,8 @@ export typealias WitnessMethodIndex = int(0 to u16.max)
 // code did not implement: `ensureWitnessTable` built its slots from `iface.methods` alone, so an
 // `extends`-inherited requirement had no slot in any table and the resolver refused the call outright.)
 // P1.7a-existentials slice 2 spends the dead word on the fact an existential genuinely cannot carry any
-// other way — see `WitnessDestroyFuncOffset`.
+// other way — see `WitnessDestroyFuncOffset`. **SLOT 16 WAS v1's `flags`, dead in exactly the same way**,
+// and it is spent on that fact's INVERSE — see `WitnessRetainFuncOffset`.
 export let WitnessTableHeaderBytes = 24 as ByteOffset
 export let WitnessSlotBytes = 8 as ByteOffset
 
@@ -77,6 +78,23 @@ export let WitnessSlotBytes = 8 as ByteOffset
 // (`LowerMaxonToStd.ensureLayoutDescriptor`): a plain `type Marker implements Tagged` that is never a
 // generic argument has no descriptor at all, and an owned interface FIELD of it still has to be dropped.
 export let WitnessDestroyFuncOffset = 8 as ByteOffset
+
+// ⭐⭐ **HOW A FAT POINTER TAKES A SECOND OWNER OF ITS OWN VALUE HALF (P1.7a-existentials slice 2b)** — the
+// conformer's `__str_clone` / `__mm_retain`, or **0** when the conformer owns nothing (an `int`/`bool`
+// widened to an interface). `__retain_existential(witness, value) -> value` reads this word, null-guards it
+// and `callIndirect`s it, RETURNING WHAT IT HANDS BACK — the destroy word's exact inverse, and stamped from
+// the same one answer (`ProgramSignatures.existentialOwnershipProtocol`) so the two can never disagree about
+// a conformer.
+//
+// ⚠⚠ **IT IS NOT ONE CALLEE, AND ASSUMING IT WAS WAS A MEASURED ACCESS VIOLATION.** A `String` LITERAL is a
+// wholly IMMORTAL `.rdata` record and shv2 deliberately has no `MmImmortalRefcount` sentinel — the invariant
+// (`Parser.emitManagedConstant`, `StringRuntime.stringBufferSlots`) is that such a record never reaches a
+// refcount write at all, upheld everywhere else by COPYING at the borrow→own boundary
+// (`Parser.promoteBorrowedToOwned` routes a byte record to `promoteToOwnedString` and only an aggregate to
+// the incref). So a byte-record conformer's protocol is COPY, never co-own: `__str_clone` hands back a fresh
+// OWNED heap record, which is what launders the literal. MEASURED with one hardcoded `__mm_incref`:
+// `widen("abc")` printed `A` and died with 0xC0000005 writing into `.rdata`.
+export let WitnessRetainFuncOffset = 16 as ByteOffset
 
 // ⭐ **WHAT A VALUE HELD AT ITS INTERFACE TYPE OCCUPIES — TWO MACHINE WORDS (P1.7a-existentials slice 1).**
 // The value half and the witness half, and the second word is a `__witness_<Type>.<Iface>` address and
