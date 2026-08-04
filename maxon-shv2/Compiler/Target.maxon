@@ -89,3 +89,18 @@ export function executableExtension(t Target) returns String
 		wasi gives ".wasm"
 	end 'os'
 end 'executableExtension'
+
+// ⭐ **THE SUFFIX OF A BINARY THIS PROCESS CAN SPAWN — the HOST's, not a target's, and it lives HERE
+// because two files in `Testing/` were spelling it themselves.** `ScalePerType` had a file-private
+// `hostExeSuffix()` and `ScaleTestRunner.runRung` wrote the pair out inline; each carried a comment
+// asserting the OTHER pair of readers already had a wrapper, and both comments named `SpecTestRunner`,
+// which has never had one — it asks `executableExtension(effectiveTarget)`, the TARGET's extension,
+// which is a different question and the reason a cross-target build's exe is named correctly.
+//
+// ⚠ **THE DISTINCTION IS THE WHOLE POINT, so the name says HOST out loud.** `executableExtension(t)`
+// answers "what will a build for `t` produce?"; this answers "what can I `runProcess`?". A harness
+// that cross-compiles reaches for the first and spawns through the second, and the day the two are
+// confused is the day a `x64-windows` cross-build on a POSIX host is looked for without its `.exe`.
+export function hostExecutableExtension() returns String
+	return executableExtension(detectHostTarget())
+end 'hostExecutableExtension'

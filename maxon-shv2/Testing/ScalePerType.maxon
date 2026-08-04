@@ -322,7 +322,7 @@ end 'buildFailureReason'
 // be built by the bootstrap — shv2 cannot compile itself — so its absence is a clean SKIP with a
 // reason, never a crash.
 function findBootstrapCompiler() returns FilePath throws ScaleError
-	let relative = try FilePath.from("bin/maxon{hostExeSuffix()}") otherwise throw ScaleError.reason("the bootstrap path is not a valid relative path")
+	let relative = try FilePath.from("bin/maxon{hostExecutableExtension()}") otherwise throw ScaleError.reason("the bootstrap path is not a valid relative path")
 	let candidate = Directory.currentPath().join(relative)
 	if not File.exists(candidate) 'missing'
 		throw ScaleError.reason("the C# bootstrap is not at {candidate.toString()}, and only it can build a --mm-trace compiler. Build it first (`dotnet build` in maxon-sharp), and run scale-test from the repo root.")
@@ -338,14 +338,18 @@ function findBuiltExe(traceDir FilePath) returns FilePath throws ScaleError
 	let outDir = traceDir.join(outDirName)
 
 	let entries = try Directory.list(outDir) otherwise throw ScaleError.reason("the --mm-trace build produced no {outDir.toString()} directory")
+
+	// Asked ONCE. It was four calls in this loop, two of them re-asking the same question inside one
+	// condition, and each answer is a fresh `String` the host's target model rebuilds per entry.
+	let suffix = hostExecutableExtension()
 	for entry in entries 'each'
 		if Directory.isDirectory(entry) 'skipCache'
 			continue
 		end 'skipCache'
-		if entry.filename().endsWith(hostExeSuffix()) and not hostExeSuffix().isEmpty() 'isExe'
+		if not suffix.isEmpty() and entry.filename().endsWith(suffix) 'isExe'
 			return entry
 		end 'isExe'
-		if hostExeSuffix().isEmpty() and not entry.filename().contains(".") 'isPosixExe'
+		if suffix.isEmpty() and not entry.filename().contains(".") 'isPosixExe'
 			return entry
 		end 'isPosixExe'
 	end 'each'
@@ -467,12 +471,6 @@ function isIgnoredDir(dir FilePath) returns bool
 	let marker = try FilePath.from(MaxonIgnoreFileName) otherwise panic("isIgnoredDir: '{MaxonIgnoreFileName}' must be a valid path component")
 	return File.exists(dir.join(marker))
 end 'isIgnoredDir'
-
-// The host's executable suffix, via the compiler's OWN target model rather than a second
-// `#if os(Windows)`. `SpecTestRunner` reaches for exactly this pair.
-function hostExeSuffix() returns String
-	return executableExtension(detectHostTarget())
-end 'hostExeSuffix'
 
 // The root arrives as an argument rather than being rebuilt from `CorpusRelativeRoot`, which this file
 // did at all three places it needed a corpus path. That is a DUPLICATION removal and nothing more.

@@ -61,12 +61,14 @@ export union CompileError implements Error
 	directoryNotFound(path FilePath)
 	noSourceFiles(root FilePath)
 	readError(path FilePath)
-	// A `build` naming several paths whose members share no directory — on Windows, two absolute
-	// paths on different drives. `Compiler.commonAncestorOf` derives the project ROOT from exactly
-	// that shared directory (and `Queries.namespaceAnchorFor` measures every file's namespace from
-	// the root), so there is no anchor such a build could be given: it is refused rather than rooted
-	// somewhere arbitrary. Carries both ends of the disagreement, because naming only one of them
-	// leaves the reader to guess which pair failed to meet.
+	// A `build` naming several paths this compiler cannot root — either they genuinely share no
+	// directory (two absolute paths on different Windows drives), or their common directory is a
+	// FILESYSTEM ROOT, which no `FilePath` can hold: `parent` cuts the separator off, so the step past
+	// the top yields `"C:"` / `""` rather than `"C:\"` / `"/"`. `Compiler.commonAncestorOf` derives the
+	// project ROOT from that shared directory (and `Queries.namespaceAnchorFor` measures every file's
+	// namespace from the root), so both causes leave the build with no anchor it could be given: it is
+	// refused rather than rooted at a string `isAbsolute` disowns. Carries both ends of the
+	// disagreement, because naming only one of them leaves the reader to guess which pair failed to meet.
 	noCommonRoot(first FilePath, other FilePath)
 	// The compiler could not locate its `stdlib/` directory by walking up from its own
 	// executable (see StdlibSource.locateStdlibDir). Every compile loads stdlib source and every

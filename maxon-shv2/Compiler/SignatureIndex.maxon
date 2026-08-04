@@ -11192,12 +11192,6 @@ export type ProgramSignatures
 		return self.declaredNameIsManaged(self.denotedAggregateName(foreignNameOf(from, id: typeNameIdOf(fieldType))))
 	end 'typeIsManaged'
 
-	// Does a slot declared with the bare NAME `name` own droppable heap — the name half of `typeIsManaged`,
-	// over the ONE name→FORM answer (`declaredFormOf`) so a new form cannot read managed at one door and
-	// scalar here.
-	//
-	// A name no registry holds is not managed: it is E3011's subject, and a slot the front end refuses owns
-	// nothing to drop. Allocation-free throughout, which is `typeIsManaged`'s standing obligation.
 	// Is `name` the CANONICAL rendering of an interned generic instance? The registry is keyed by the
 	// instance's structural KEY and its canonical NAME is derived, so the reverse direction needs an index of
 	// its own — `canonicalInstanceNameIndex`, whose header carries the measurement of the quadratic the walk
@@ -11241,6 +11235,26 @@ export type ProgramSignatures
 		end 'form'
 	end 'declaredNameIsFatPointer'
 
+	// Does a slot declared with the bare NAME `name` own droppable heap — the name half of `typeIsManaged`,
+	// over the ONE name→FORM answer (`declaredFormOf`) so a new form cannot read managed at one door and
+	// scalar here.
+	//
+	// A name no registry holds is not managed: it is E3011's subject, and a slot the front end refuses owns
+	// nothing to drop.
+	//
+	// ⚠ **ALLOCATION-FREE PER ASK, WHICH IS `typeIsManaged`'S STANDING OBLIGATION — but AMORTIZED, not
+	// literal, and the difference is worth one sentence.** `isCanonicalInstanceName` below tops up
+	// `canonicalInstanceNameIndex` before it probes, and topping up allocates: one `Set` entry, plus
+	// whatever `canonicalInstanceName` mints, per instance interned since the last ask. That is bounded by
+	// the instance COUNT over the whole compile rather than by the number of asks, and `deriveInstanceNames`
+	// has already driven it to completion before the parse — the fan-out this obligation exists for — so
+	// every ask on the hot path is genuinely a probe. What it is NOT is the old literal guarantee, and this
+	// says so rather than leaving a reader to discover an allocation under a comment promising none. (The
+	// walk it replaced honoured the letter no better: it minted a `GenericInstanceIdArray` per instance, on
+	// EVERY ask — see `CanonicalInstanceNameSet` for that quadratic's measurement.)
+	//
+	// ⛔ THIS HEADER SAT ABOVE `isCanonicalInstanceName`, forty lines from the function it describes, and a
+	// reader arriving at either found the other one's contract. Moved to its statement (BATCH10 review).
 	export function declaredNameIsManaged(name ByteArray) returns bool
 		// ⚠ **A GENERIC INSTANCE ARRIVES AS ITS CANONICAL NAME AT SOME DOORS, AND NO REGISTRY IS KEYED BY
 		// THAT.** `genericAliases` holds the ALIAS (`IntBox`); `renderDeclaredTypeName` renders an instance as

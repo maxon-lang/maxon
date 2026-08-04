@@ -779,10 +779,41 @@ end 'loadSourceFiles'
 // ⚠ **THE COMPARISON IS BETWEEN RESOLVED SPELLINGS, because `isInside` compares TEXT** — the same
 // trap `Queries.isStdlibSourceFile` records: an absolute path and a relative one naming one file are
 // two different strings, and a root that misses its own members would narrow all the way to the drive.
+//
+// ⛔⛔ **AND WHEN IT DOES NARROW ALL THE WAY TO THE DRIVE, IT REFUSES — because `FilePath.parent()`
+// CANNOT EXPRESS A FILESYSTEM ROOT, so the step past the top yields a string that is not a directory
+// and not even absolute** (BATCH10 review). `lastSepPlusOne` returns the index AFTER the separator and
+// `parent` slices `(0, that - 1)`, so on Windows `parent("C:\\a")` is **`"C:"`** — two bytes, which
+// `isAbsolute` denies (its drive arm needs `len >= 3` with a separator at byte 2) — and on POSIX
+// `parent("/a")` is **`""`**.
+//
+// MEASURED on this tree before the guard below: `maxon-shv2 build C:\a C:\b` answered
+// `error: no source files under C:`. That `"C:"` was becoming `Project.rootPath`, and because
+// `isAbsolute` says it is RELATIVE every downstream `.resolve(cwd)` — `namespaceAnchorFor`,
+// `rootIsUnderStdlibDirectory` — joined it onto the working directory as `<cwd>\C:`. The namespace
+// happened to come back right through `deriveModuleDirectory`'s not-under-root fallback, which is luck
+// and not a mechanism: the value handed downstream named a drive where a directory was promised.
+//
+// ⇒ **The narrowing stops where the path stops being ABSOLUTE**, which is the one property that marks
+// having walked off the top, and the same test answers for both spellings (`"C:"` and `""`). The two
+// platforms now agree: POSIX already refused here — `isInside("")` is false, so it narrowed once more
+// and `parent("")` threw — and Windows silently did not.
+//
+// ⚠ **THE RESIDUAL IS THAT A ROOT-ROOTED BUILD IS REFUSED RATHER THAN ROOTED, and it is REFUSED
+// rather than left wrong on purpose.** `C:\` really is the common directory of `C:\a\x` and `C:\b\y`,
+// so the honest answer is that root — but no `FilePath` in this tree can hold it, since `parent` cuts
+// the separator off and nothing reconstructs it. Modelling filesystem roots is `stdlib/FilePath`'s to
+// do and touches every path consumer; until it happens, a loud refusal naming both ends beats a
+// `Project.rootPath` that `isAbsolute` disowns. Nothing in the harness reaches this: a spec case's
+// paths are all under its own `testDir` (`SpecTestRunner.stageSourceFiles` names it last), and every
+// other caller passes exactly one path.
 export function commonAncestorOf(paths MaxonSourcePathArray) returns FilePath throws CompileError
 	let first = try paths.get(0) otherwise panic("commonAncestorOf: an empty path list — `Main.runBuild` refuses a `build` with no positional argument before any of this runs, and every other caller names exactly one path")
 	let cwd = Directory.currentPath()
 
+	// Absolute by construction — `resolve` returns the path itself when it is already absolute and
+	// joins it onto the cwd otherwise, and `Directory.currentPath()` is absolute. That is what makes
+	// "stopped being absolute" below mean "walked off the top" rather than "was never rooted".
 	var resolvedRoot = first.resolve(cwd)
 	var narrowed = false
 	for path in paths 'each'
@@ -790,7 +821,12 @@ export function commonAncestorOf(paths MaxonSourcePathArray) returns FilePath th
 		while not resolved.isInside(resolvedRoot) 'narrow'
 			// Monotone, so the paths already checked stay inside: `resolvedRoot` only ever becomes an
 			// ancestor of what it was, and each of them was inside it.
-			resolvedRoot = try resolvedRoot.parent() otherwise throw CompileError.noCommonRoot(first, other: path)
+			let candidate = try resolvedRoot.parent() otherwise throw CompileError.noCommonRoot(first, other: path)
+			if not candidate.isAbsolute() 'walkedOffTheTop'
+				throw CompileError.noCommonRoot(first, other: path)
+			end 'walkedOffTheTop'
+
+			resolvedRoot = candidate
 			narrowed = true
 		end 'narrow'
 	end 'each'

@@ -78,6 +78,41 @@ let ClosingCellParts = 2
 // defect with more claimants.
 let DuplicateRowThreshold = 2
 
+// ⛔⛔ **HOW MANY ANCHORED TABLES THE BOARD MUST STILL HAVE, because `rows.isEmpty()` ONLY CATCHES
+// TOTAL BLINDNESS AND THE LIKELY EDIT IS PARTIAL** (BATCH10 review). This file's header argues that a
+// format change lands as two failures rather than one silent green, and that argument holds for the
+// anchor disappearing EVERYWHERE. It does not hold for ONE of the two tables: rename the BATCH table's
+// last column, or add a column after it, and this check still reads the BOARD's rows, still finds them
+// non-empty, and reports a CLEAN board while no longer looking at the batch ids at all — which is
+// precisely the "a blind uniqueness check calls every id unique" failure the empty guard exists for,
+// arrived at halfway. `plan-board.sh` does not cover the gap either: its cache is still non-empty from
+// the surviving table, so it does not `die`, and the loss only surfaces the day somebody claims one of
+// the ids that vanished.
+//
+// ⇒ The count is checked, not just the rows. TWO because the two tables are ONE namespace — the
+// `sharedAcrossTablesDocument` fixture is about exactly that — and a board that legitimately grows a
+// THIRD anchored table still passes, while one that silently loses one does not.
+let MinimumBoardTables = 2
+
+// A count of anchored tables in one document. Its own name rather than a bare count, because the whole
+// point of the constant above is that this number means "how much of the namespace was in view".
+typealias BoardTableCount = int(0 to u64.max)
+
+// What one scan of a board document yields: its rows, and HOW MANY anchored tables they came out of.
+//
+// The two travel together because they are one walk's answer. A separate `boardTableCount(text)` would
+// be a SECOND reader of the format this file already argues carefully about having a second reader of —
+// and the two could then disagree about where a table opens, which is the one thing neither is allowed
+// to be wrong about alone.
+type BoardScan
+	export let rows as BoardRowArray
+	export let tables as BoardTableCount
+
+	static function create(rows BoardRowArray, tables BoardTableCount) returns BoardScan
+		return Self{rows: rows, tables: tables}
+	end 'create'
+end 'BoardScan'
+
 // How deep each list sits under the sentence that introduces it — one depth per nesting, never one
 // constant standing for two (see `IndentedReport`'s header). An item under the panic's headline; a
 // detail under the item that owns it.
@@ -120,10 +155,17 @@ export function requireBoardIdsUnique()
 	let path = try FilePath.from(BoardRelativePath) otherwise panic("BoardIndex: '{BoardRelativePath}' is not a valid path")
 	let text = try File.readText(path) otherwise panic("BoardIndex: could not read {BoardRelativePath} — it carries the SLICE BOARD every parallel agent files and claims a row on. Run the suite from the repo root.")
 
-	let rows = boardRows(text)
+	let scan = scanBoard(text)
+	let rows = scan.rows
 	if rows.isEmpty() 'readNothing'
 		panic("BoardIndex: read ZERO rows out of {BoardRelativePath}'s board tables. A board table's header ends with a '{ClaimedColumnHeading}' column and its rows carry a bold id in the first cell — reading none of them is this check GOING BLIND rather than the board being clean, and a blind uniqueness check calls every id unique. scripts/lib/plan-board.sh refuses the same way ('found no board table'), and the question is the same one: has the board's column layout changed?")
 	end 'readNothing'
+
+	// ⚠ Asked SEPARATELY from the emptiness above, because it is a different failure: that one is this
+	// check seeing nothing, this one is it seeing only PART of one namespace and reporting on the whole.
+	if scan.tables < MinimumBoardTables 'partlyBlind'
+		panic("BoardIndex: found {scan.tables} anchored table(s) in {BoardRelativePath}, and the board is {MinimumBoardTables} — the BATCHES table and the BOARD, which share ONE id namespace. Rows were still read, so this check would have reported a CLEAN board while no longer looking at one table's ids at all. A board table's header ends with a '{ClaimedColumnHeading}' column: one of them no longer does, or a column was added after it. Fix the header, or if the board genuinely has fewer tables now, MinimumBoardTables is the line that says so.")
+	end 'partlyBlind'
 
 	let duplicates = duplicateIdReports(rows, source: BoardRelativePath)
 	if duplicates.isEmpty() 'everyIdDeclaredOnce'
@@ -187,8 +229,9 @@ end 'rowsDeclaring'
 //
 // A SEAM that takes TEXT and gives back values, so the fixtures below can hand it a whole document
 // without anything reading or writing a file — `ScaleHistorySelfTest`'s shape and its reason.
-function boardRows(text String) returns BoardRowArray
+function scanBoard(text String) returns BoardScan
 	var rows = BoardRowArray.create()
+	var tables = 0 as BoardTableCount
 	var inBoardTable = false
 	var lineNumber = 0 as BoardLineNumber
 
@@ -200,6 +243,10 @@ function boardRows(text String) returns BoardRowArray
 		// the second header arrives while no table is open — but a header IS a `|` line, and asking the row
 		// rules first would read it as a row of whatever table was open.
 		if isBoardTableHeader(line) 'opensATable'
+			// Counted HERE, at the anchor, so the number means "tables whose header still matches" — the
+			// question `MinimumBoardTables` asks. Counting tables that produced rows would answer a
+			// different one and would call an empty-but-anchored table missing.
+			tables = tables + 1
 			inBoardTable = true
 			continue
 		end 'opensATable'
@@ -222,8 +269,8 @@ function boardRows(text String) returns BoardRowArray
 		end 'row'
 	end 'eachLine'
 
-	return rows
-end 'boardRows'
+	return BoardScan.create(rows, tables: tables)
+end 'scanBoard'
 
 // Is this line the HEADER of a board table — the anchor the whole check is scoped by?
 function isBoardTableHeader(line String) returns bool
@@ -328,8 +375,17 @@ end 'requireScannerSeesWhatItMust'
 //   · the struck row and the empty-id continuation row ABSENT — the un-bolded first cell.
 //   · the LINE NUMBERS — a scanner one line out of true still finds every id and still reports a clean
 //     board, and would send a reader to the wrong line the day it did not.
+//   · the TABLE COUNT — the control holds FIVE tables of which exactly two are anchored, so a counter
+//     that counted tables rather than ANCHORED ones reads 5 here and would then satisfy
+//     `MinimumBoardTables` on a board that had lost both of its real ones. The live check can only
+//     refuse when the count is too LOW, so over-counting is the direction nothing else would catch.
 function requireControlReadsBack()
-	let rows = boardRows(controlDocument())
+	let scan = scanBoard(controlDocument())
+	let rows = scan.rows
+
+	if scan.tables != MinimumBoardTables 'wrongTableCount'
+		panic("BoardIndex: the CONTROL fixture board carries exactly {MinimumBoardTables} ANCHORED tables among the five it declares, and this scanner counted {scan.tables}. The live check refuses a board with too few, so a scanner that over-counts would pass a PLAN.md whose real board tables had both stopped matching the anchor.")
+	end 'wrongTableCount'
 
 	var actual = StringArray.create()
 	for row in rows 'eachRow'
@@ -384,7 +440,7 @@ end 'sameList'
 // state the live refusal exists for: an anchor that stops matching reads ZERO rows, which is what
 // `requireBoardIdsUnique` turns into a panic rather than into a clean bill of health.
 function requireUnanchoredTableIsInvisible()
-	let rows = boardRows(unanchoredTableDocument())
+	let rows = scanBoard(unanchoredTableDocument()).rows
 	if rows.isEmpty() 'invisible'
 		return
 	end 'invisible'
@@ -468,9 +524,9 @@ typealias BoardFixtureArray = Array with BoardFixture
 function duplicateFixtures() returns BoardFixtureArray
 	var fixtures = BoardFixtureArray.create()
 
-	fixtures.push(BoardFixture.create("the DOTTED id declared twice in one board table", expected: ["'R4.7'", "{FixtureSource}:5", "{FixtureSource}:7"], reported: duplicateIdReports(boardRows(dottedIdTwiceDocument()), source: FixtureSource)))
+	fixtures.push(BoardFixture.create("the DOTTED id declared twice in one board table", expected: ["'R4.7'", "{FixtureSource}:5", "{FixtureSource}:7"], reported: duplicateIdReports(scanBoard(dottedIdTwiceDocument()).rows, source: FixtureSource)))
 
-	fixtures.push(BoardFixture.create("the id shared by the BATCH table and the BOARD", expected: ["'X6'", "{FixtureSource}:5", "{FixtureSource}:9"], reported: duplicateIdReports(boardRows(sharedAcrossTablesDocument()), source: FixtureSource)))
+	fixtures.push(BoardFixture.create("the id shared by the BATCH table and the BOARD", expected: ["'X6'", "{FixtureSource}:5", "{FixtureSource}:9"], reported: duplicateIdReports(scanBoard(sharedAcrossTablesDocument()).rows, source: FixtureSource)))
 
 	return fixtures
 end 'duplicateFixtures'

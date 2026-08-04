@@ -682,13 +682,15 @@ end 'compileRung'
 // The witnesses themselves are `ScaleCorpus`'s (`driverWitnessTail`); this end only has to spawn the
 // binary and insist on `CorpusOkExit`.
 //
-// ⚠ The host's executable suffix comes from the compiler's OWN target model rather than a second
-// `#if os(Windows)` — and it is spelled INLINE rather than behind a `hostExeSuffix()` of this file's own.
-// `ScalePerType` and `SpecTestRunner` already carry one such wrapper each over exactly this pair of
-// calls; a third would be the duplication this project keeps naming, and at one call site the wrapper
-// would be a thin one besides.
+// ⚠ The host's executable suffix comes from `Target.hostExecutableExtension` — the compiler's OWN
+// target model, spelled once for the whole tree. It was written out here as
+// `executableExtension(detectHostTarget())` behind a comment saying `ScalePerType` and `SpecTestRunner`
+// each already had a wrapper so a third would be duplication. **`SpecTestRunner` never had one** — it
+// asks `executableExtension(effectiveTarget)`, which is the TARGET's extension and a different
+// question — so the count was two spellings, not three, and the reason for keeping them apart was a
+// claim about a function that does not exist (BATCH10 review).
 function runRung(outputBase FilePath, rung ScaleRung) throws ScaleError
-	let executable = try FilePath.from("{outputBase.toString()}{executableExtension(detectHostTarget())}") otherwise throw ScaleError.reason("rung {rung.index}'s output path is not a valid executable path")
+	let executable = try FilePath.from("{outputBase.toString()}{hostExecutableExtension()}") otherwise throw ScaleError.reason("rung {rung.index}'s output path is not a valid executable path")
 
 	let run = try runProcess(Executable.path(executable), argv: StringArray.create(), workingDirectory: inheritedWorkingDir()) otherwise (e) 'spawnFailed'
 		throw ScaleError.reason("rung {rung.index} compiled but its binary {executable.toString()} could not be started: {e.displayReason()}")

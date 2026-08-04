@@ -2778,10 +2778,28 @@ function shiftCoverageSource() returns String
 	//
 	// ⭐ THE OPERAND'S VALUE NOW MATTERS AFTER ALL — NOT TO THE CODEGEN, BUT TO THE ANSWER. Each call is
 	// witnessed against the same shift this generator wrote, applied to the pinned seed with the same
-	// operators. The paragraph above is still true of what is MEASURED; what is now also true is that a
-	// shift which saturated where it should have wrapped, or filled with sign where it should have filled
-	// with zero, changes one of these six numbers. That fill disagreement is precisely the defect this
-	// block was added for (`const=0` vs `dyn=-4294967296`), and until now nothing here could have caught it.
+	// operators. The paragraph above is still true of what is MEASURED.
+	//
+	// ⛔⛔ **BUT THE FILL IS NOT AMONG WHAT THESE SIX WITNESS, AND THIS COMMENT CLAIMED IT WAS** (BATCH10
+	// review). It said a shift "which filled with sign where it should have filled with zero changes one of
+	// these six numbers", naming the `const=0` vs `dyn=-4294967296` defect — and then said, four lines
+	// down, that the seed is non-negative and small so the logical and arithmetic forms AGREE on it. Both
+	// cannot be true, and it is the second one: with the seed at 19, arithmetic and logical `shr` answer
+	// identically on every operand here, so **no fill disagreement is representable in this block.**
+	//
+	// ⚠ **WORSE, FOUR OF THE SIX ARE DEGENERATE AT THIS SEED, AND THE EMITTED CORPUS SHOWS IT.** `19 shr 60`
+	// is 0 and `19 shr 19` is 0, so `neutralizeText` appends NOTHING to the wide-const, wide-dyn and
+	// signed-const sites — read `rung0/h_shifts.maxon` and they are bare `acc = acc + scaleShift…(a)`. Each
+	// asserts only *"the callee returned zero"*, which is what a `shr` hard-answering 0 also does. The
+	// fourth, `scaleShiftDyn`, is `(v shl c) shr c` with ONE `c`: a defect moving both operands together —
+	// both counts masked to 3 bits rather than 6 — is exactly cancelled. Only the two INLINE sites
+	// (`a shl 3`, `a shr 2`) carry non-zero expectations, and both counts are constants the folder sees.
+	//
+	// ⇒ **What this block genuinely witnesses today is that four shift callees are reached and return the
+	// right small number; it does NOT witness the fill, and it cannot while the operand is a small
+	// non-negative seed.** Making it discriminating needs an operand with a high bit set — a different
+	// emitted program, so a different ladder — which is why the correction here is to the CLAIM and the
+	// widening is left to be scheduled rather than smuggled into a review.
 	//
 	// ⚠ The seed is NON-NEGATIVE and far below 2^60, which is why the wide (logical) and signed
 	// (arithmetic) forms agree on it and why the round trip below recovers its operand — the check on the

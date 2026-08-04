@@ -615,7 +615,12 @@ export function reportCompileError(e CompileError)
 		fileNotFound(p) then printError("error: file not found: {p}\n")
 		directoryNotFound(p) then printError("error: directory not found: {p}\n")
 		noSourceFiles(r) then printError("error: no source files under {r}\n")
-		noCommonRoot(first, other) then printError("error: {first} and {other} share no directory, so this build has no project root\n")
+		// NOT "share no directory": that is true of two drives and FALSE of two top-level directories on
+		// one, whose common directory is the drive root — a directory `FilePath` cannot hold, because
+		// `parent` cuts the separator off (see `Compiler.commonAncestorOf`). The sentence names what the
+		// compiler can and cannot do rather than asserting something about the filesystem that is wrong
+		// half the time, and the remedy works for both causes.
+		noCommonRoot(first, other) then printError("error: {first} and {other} have no common directory this build can be rooted at. Name a directory they are both under as one of the paths, or build them separately\n")
 		readError(p) then printError("error: could not read {p}\n")
 		stdlibNotFound then printError("error: could not locate the stdlib/ directory (every compile loads stdlib source)\n")
 		compileError then break 'report'
@@ -729,7 +734,7 @@ export type MaxonArgs
 	// load-bearing — `Compiler.loadSourceFiles` registers sources in exactly this order, which is how
 	// a caller states which of two sibling files declares first without the loader ever sorting (see
 	// that function, and `StdlibLoader`'s no-sort ruling). Every other command takes at most one and
-	// `refusedExtraPositional` says so; before A3m the parser kept the first and dropped the rest
+	// `refusedPositionalBeyond` says so; before A3m the parser kept the first and dropped the rest
 	// here, silently, without even setting `badOption`.
 	export let paths as SourcePathSpellingArray
 	export let outputOverride as String
@@ -814,7 +819,7 @@ export type MaxonArgs
 	// The one positional a command that takes at most one was given, or "" when there was none —
 	// the same "empty means absent" convention every other optional field here uses
 	// (`outputOverride`, `filter`, `compilerPath`). A SECOND positional never reaches this: the
-	// commands that read it call `refusedExtraPositional` first, so empty cannot mean two things.
+	// commands that read it call `refusedPositionalBeyond` first, so empty cannot mean two things.
 	export function solePositional() returns String
 		return try self.paths.get(0) otherwise ""
 	end 'solePositional'
