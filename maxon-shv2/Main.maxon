@@ -192,26 +192,54 @@ end 'runBuild'
 // A FILE build takes nothing either, for the same reason from the other end: it writes beside the file
 // it was handed, which is a scratch directory whenever it matters.
 //
-// ⚠ And so does a build that named SEVERAL paths: its output name comes from the first SOURCE FILE
-// (`Compiler.resolveOutputPath`), never from `<project>/.maxon/`, so it writes nothing this lock
-// protects. The test above is on the count rather than on the derived project root for that reason —
-// the root of `build a/x.maxon a/y.maxon` IS a directory, and locking the checkout for it would take
-// a tree-level lock for a build that touches nothing tree-level.
+// ⛔⛔ **A `count() != 1` BYPASS SAT HERE AND IT WAS A3m'S OWN REGRESSION** (BATCH10 review). Before
+// A3m `build` took ONE path and silently dropped the rest, so a multi-path build did not exist and
+// `count() > 1` was unreachable; A3m made it real and the guard was not widened with it. The bypass
+// said a build naming several paths "writes nothing this lock protects, because its output name comes
+// from the first SOURCE FILE rather than from `<project>/.maxon/`" — and `resolveOutputPath` derives a
+// DIRECTORY build's name from the first registered source file too, by the same line of the same
+// function. A fact both shapes share cannot be what tells them apart. `build maxon-shv2/Compiler
+// maxon-shv2/Testing` wrote into the checkout with no lock at all.
+//
+// ⇒ **THE RULE IS THE ONE `TreeLock`'s HEADER ALREADY STATES, ASKED OF THE PROJECT ROOT INSTEAD OF OF
+// THE ARGUMENT LIST**: the lock covers the checkout *"containing the path the command writes into"*,
+// and *"a `-o` build writes where the CALLER said and takes nothing"*. So there are exactly two
+// questions, and neither is how many paths were typed:
+//
+//   · **Did the caller say where the output goes?** That is `-o`, and it is now asked FIRST and of
+//     every shape. It is the whole reason the suite's thousands of nested `build … -o …` compiles are
+//     a non-event inside a run that already holds the lock.
+//   · **Otherwise the output is DERIVED — into WHAT?** `resolveOutputPath` writes beside the input
+//     when the root is an existing FILE, and beside the first registered source otherwise. So the
+//     question is whether the project ROOT is a directory, i.e. whether this build lands in a TREE or
+//     beside one named file.
+//
+// ⚠ **AND THE ROOT IS ASKED OF `commonAncestorOf`, THE SAME FUNCTION `loadProject` ROOTS THE PROJECT
+// AT.** Not a second derivation: the lock and the compile cannot disagree about which tree is being
+// written because there is one answer to that. It also makes the single-path case provably unmoved —
+// `commonAncestorOf` returns its argument untouched when nothing narrows, so `build <file>` and
+// `build <directory>` reach the identical test they always did.
+//
+// A root with no `stdlib/` above it takes no lock regardless: `acquireTreeLock` answers that itself
+// (`maxon-shv2 build /tmp/scratch.maxon` has nothing shared to guard), which is why there is no
+// separate scratch-path arm here.
 function acquireBuildTreeLock(inputPaths MaxonSourcePathArray, outputOverride String) returns ExitCode
-	if inputPaths.count() != 1 'severalPathsAreNotAProjectBuild'
-		return 0
-	end 'severalPathsAreNotAProjectBuild'
-
-	let inputPath = try inputPaths.get(0) otherwise panic("acquireBuildTreeLock: count is exactly 1 on this line, so index 0 exists")
-	if not Directory.isDirectory(inputPath) 'singleFileBuild'
-		return 0
-	end 'singleFileBuild'
-
 	if not outputOverride.isEmpty() 'callerOwnsTheOutput'
 		return 0
 	end 'callerOwnsTheOutput'
 
-	return acquireTreeLock(inputPath)
+	// A list with no common root is refused by the compile moments later, with a message naming both
+	// ends (`CompileError.noCommonRoot`). Taking no lock is right for it: there is no one tree it
+	// writes into, which is the very thing that makes it unbuildable.
+	let root = try commonAncestorOf(inputPaths) otherwise 'noTreeToLock'
+		return 0
+	end 'noTreeToLock'
+
+	if not Directory.isDirectory(root) 'writesBesideOneNamedFile'
+		return 0
+	end 'writesBesideOneNamedFile'
+
+	return acquireTreeLock(root)
 end 'acquireBuildTreeLock'
 
 // The build itself, split out so `runBuild` has ONE exit through which the tree lock is released.

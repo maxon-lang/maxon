@@ -2744,10 +2744,15 @@ function shiftCoverageSource() returns String
 	out.append("typealias ScaleSigned = int(i64.min to i64.max)\n")
 	out.append("\n")
 
-	// Dynamic count, signed operand: the guarded shl then shr.
-	out.append("function scaleShiftDyn(v ScaleSigned, c ScaleSigned) returns int\n")
+	// Dynamic counts, signed operand: the guarded shl then shr.
+	//
+	// ⛔ **TWO COUNTS, AND THEY MUST STAY TWO.** It was `shl c` then `shr c` — one count on both sides,
+	// so it computed a ROUND TRIP and any defect that moved BOTH shifts by the same amount (both counts
+	// masked to 3 bits instead of 6, say) cancelled exactly and the witness read clean. A relational
+	// assertion cannot catch a bug that moves both of its operands, which is what a single `c` made this.
+	out.append("function scaleShiftDyn(v ScaleSigned, c ScaleSigned, d ScaleSigned) returns int\n")
 	out.append("\tlet x = v shl c\n")
-	out.append("\treturn x shr c\n")
+	out.append("\treturn x shr d\n")
 	out.append("end 'scaleShiftDyn'\n")
 	out.append("\n")
 
@@ -2804,42 +2809,108 @@ function shiftCoverageSource() returns String
 	// ⚠ The seed is NON-NEGATIVE and far below 2^60, which is why the wide (logical) and signed
 	// (arithmetic) forms agree on it and why the round trip below recovers its operand — the check on the
 	// next line is what keeps that true if the seed ever moves.
-	let dynamicCount = corpusSeedValue() and ShiftCountMask
-	if corpusSeedValue() < 0 or dynamicCount + ShiftRoundTripHeadroom >= ShiftCountMask 'seedOutOfShiftRange'
-		panic("ScaleCorpus.shiftCoverageSource: a seed of {corpusSeedValue()} shifted left by {dynamicCount} does not survive the round trip back — this block's witnesses assume a small non-negative seed")
+	let firstCount = corpusSeedValue() and ShiftCountMask
+	let secondCount = (corpusSeedValue() shr ShiftSecondCountShift) and ShiftSecondCountMask
+	let highOperand = corpusSeedValue() - ShiftHighBitOffset
+
+	// The three properties every expectation below is derived under, checked rather than assumed — the
+	// seed is one `let` away from moving, and each of these fails SILENTLY if it does (see the header:
+	// this block shipped once with three sites whose expectations were all zero).
+	if corpusSeedValue() < 0 or corpusSeedValue() >= ShiftHighBitOffset 'seedOutOfShiftRange'
+		panic("ScaleCorpus.shiftCoverageSource: the seed is {corpusSeedValue()}, and this block needs it non-negative AND below {ShiftHighBitOffset} so that `a - {ShiftHighBitOffset}` is NEGATIVE — bit 63 set is the whole reason the logical and arithmetic fills answer differently here")
 	end 'seedOutOfShiftRange'
+	if firstCount == secondCount 'countsWouldCancel'
+		panic("ScaleCorpus.shiftCoverageSource: both dynamic shift counts derive to {firstCount}, so `shl c` then `shr d` is a round trip again and a defect moving both shifts together cancels exactly — the two counts must be independent")
+	end 'countsWouldCancel'
 
 	out.append(witnessedDriverHeader(ShiftsDriver))
-	out.append("\tacc = acc + scaleShiftWideConst(a){neutralizeText(corpusSeedValue() shr ShiftWideConstantCount)}\n")
+
+	// ⭐ **THE OPERAND WITH BIT 63 SET, AND IT IS THE POINT OF THE WHOLE BLOCK.** Every i64 below zero
+	// has its top bit set, so `a - {ShiftHighBitOffset}` is the shortest opaque way to get one; it stays
+	// opaque because `a` is (shv2 has no interprocedural constant propagation), and the generator knows
+	// its value because the seed is pinned. Fed to BOTH constant-count callees below, whose bodies are
+	// identical but for the operand's declared RANGE — so `scaleShiftWideConst` must answer 15 and
+	// `scaleShiftSignedConst` must answer -1, and a compiler that picked one fill for both is caught by
+	// whichever it got wrong. On the old non-negative `a` the two agreed and neither could be wrong.
+	out.append("\tlet hi = a - {ShiftHighBitOffset}\n")
+
+	// Two INDEPENDENT dynamic counts — see `scaleShiftDyn`. Both are runtime values derived from the
+	// opaque seed, so neither folds, and they are DIFFERENT so the shl/shr pair cannot cancel.
+	out.append("\tlet c1 = a and {ShiftCountMask}\n")
+	out.append("\tlet c2 = (a shr {ShiftSecondCountShift}) and {ShiftSecondCountMask}\n")
+
+	out.append("\tacc = acc + scaleShiftWideConst(hi){neutralizeText(logicalShr(highOperand, count: ShiftWideConstantCount))}\n")
 	out.append(accProbe("\t"))
-	out.append("\tacc = acc + scaleShiftWideDyn(a, c: a and {ShiftCountMask}){neutralizeText(corpusSeedValue() shr dynamicCount)}\n")
+	out.append("\tacc = acc + scaleShiftWideDyn(hi, c: c1){neutralizeText(logicalShr(highOperand, count: firstCount))}\n")
 	out.append(accProbe("\t"))
-	out.append("\tacc = acc + scaleShiftSignedConst(a){neutralizeText(corpusSeedValue() shr ShiftSignedConstantCount)}\n")
+	out.append("\tacc = acc + scaleShiftSignedConst(hi){neutralizeText(highOperand shr ShiftSignedConstantCount)}\n")
 	out.append(accProbe("\t"))
-	out.append("\tacc = acc + scaleShiftDyn(a, c: a and {ShiftCountMask}){neutralizeText((corpusSeedValue() shl dynamicCount) shr dynamicCount)}\n")
+	out.append("\tacc = acc + scaleShiftDyn(hi, c: c1, d: c2){neutralizeText((highOperand shl firstCount) shr secondCount)}\n")
 	out.append(accProbe("\t"))
 	out.append("\tacc = acc + (a shl {ShiftInlineLeftCount}){neutralizeText(corpusSeedValue() shl ShiftInlineLeftCount)}\n")
 	out.append(accProbe("\t"))
-	out.append("\tacc = acc + (a shr {ShiftInlineRightCount}){neutralizeText(corpusSeedValue() shr ShiftInlineRightCount)}\n")
+	// The inline right shift takes the high-bit operand too, so the ARITHMETIC fill is witnessed at an
+	// inline site as well as through a callee — the two reach different codegen (`binOpImm` vs a call).
+	out.append("\tacc = acc + (hi shr {ShiftInlineRightCount}){neutralizeText(highOperand shr ShiftInlineRightCount)}\n")
 	out.append(accProbe("\t"))
 	out.append(accWitnessTail(ShiftsDriver))
 	return out.build()
 end 'shiftCoverageSource'
 
-// The four shift counts this block writes, and the headroom the round-trip check needs. Each is a bare
-// literal in two programs at once — the emitted shift, and the tracker's reading of it.
+// ⭐⭐ **ZERO-FILL `shr`, COMPUTED WITHOUT AN UNSIGNED TYPE — the generator's half of the fill witness.**
+// The emitted program gets its logical fill from the operand's declared RANGE (`ScaleWide`'s low bound
+// is 0, which is what makes `shr` zero-fill). This must predict that answer WITHOUT asking the same
+// question the same way, or the witness would be a relational assertion over one mechanism: a fill
+// defect would move the prediction and the prediction's subject together, and cancel.
+//
+// So it is stated as arithmetic instead: shift, then MASK OFF the sign bits the arithmetic fill dragged
+// in. `(x shr n) and ((1 shl (64 - n)) - 1)` — the surviving bits of a 64-bit logical shift are exactly
+// the low `64 - n`. VERIFIED against the compiler for both counts this block uses: at `hi = -81` it
+// answers 15 for n=60 and 35,184,372,088,831 for n=19, which is what `scaleShiftWideConst` and
+// `scaleShiftWideDyn` return.
+//
+// ⚠ A cast — `(x as ScaleWide) shr n` — was the obvious spelling and is the wrong one twice over: it
+// asks the fill question through the very mechanism under test, and a negative value cast into a
+// `0 to u64.max` alias is a range violation rather than a reinterpretation.
+function logicalShr(value TrackedValue, count TrackedValue) returns TrackedValue
+	if count <= 0 or count >= TrackedValueBits 'countOutOfRange'
+		panic("ScaleCorpus.logicalShr: a count of {count} has no 64-bit logical form here — the mask `(1 shl (64 - count)) - 1` is only a mask for a count strictly inside (0, {TrackedValueBits})")
+	end 'countOutOfRange'
+
+	let surviving = (1 shl (TrackedValueBits - count)) - 1
+	return (value shr count) and surviving
+end 'logicalShr'
+
+// The width the mask above is taken over. Named because it is a property of `TrackedValue`'s i64
+// representation and not a free choice — change the tracked width and the mask is wrong, silently.
+let TrackedValueBits = 64
+
+// The four shift counts this block writes. Each is a bare literal in two programs at once — the emitted
+// shift, and the tracker's reading of it.
 //
 // The two constant counts are 60 because a 64-bit value shifted right by 60 is what makes the FILL
-// visible: a zero fill answers 0 for a small operand and a sign fill answers -1 for a negative one.
+// visible, and they are DELIBERATELY EQUAL: `scaleShiftWideConst` and `scaleShiftSignedConst` are then
+// the same body over the same count, differing in the operand's declared RANGE alone, so the pair is a
+// controlled experiment on the fill and on nothing else. At `hi = -81` they must answer 15 and -1.
 let ShiftWideConstantCount = 60
 let ShiftSignedConstantCount = 60
 let ShiftInlineLeftCount = 3
 let ShiftInlineRightCount = 2
 
-// How many bits above the dynamic count the seed must leave free for `(v shl c) shr c` to give `v` back.
-// The seed is 19 — five bits — so this is generous; it exists so a raised seed fails here rather than in
-// a rung binary's exit code.
-let ShiftRoundTripHeadroom = 8
+// How the SECOND dynamic count is taken off the seed. It only has to be independent of `a and 63` and
+// stay a runtime value; shifting first and masking narrower is the cheapest way to get both. At seed 19
+// it gives 4 against the first count's 19, and `shiftCoverageSource` refuses if they ever coincide.
+let ShiftSecondCountShift = 2
+let ShiftSecondCountMask = 7
+
+// What is subtracted from the opaque seed to build an operand with BIT 63 SET. Any negative i64 has it,
+// so the only requirement is that the result is below zero — which is what the seed guard enforces, and
+// why this is larger than the seed rather than any particular bit pattern.
+//
+// ⚠ It replaced `ShiftRoundTripHeadroom`, which existed so that `(v shl c) shr c` returned `v`. That
+// round trip is gone on purpose: returning `v` is precisely the property that let a defect moving both
+// shifts cancel, so there is no longer a round trip to leave headroom for.
+let ShiftHighBitOffset = 100
 
 // The remaining SCALAR coverage shapes, and the one aggregate shape whose COUNT is not interesting.
 // Fixed-size, like `shiftCoverageSource` and for the same reason: a codegen change to any of these must
