@@ -1,0 +1,89 @@
+// Test: imm12-boundary
+function base(p int) returns int
+	return p
+end 'base'
+
+function main() returns ExitCode
+	let x = base(1000)
+	let addLo = x + 4095
+	if addLo != 5095 'addLo'
+		return 11
+	end 'addLo'
+	let subLo = x - 4095
+	if subLo != -3095 'subLo'
+		return 12
+	end 'subLo'
+	let addHi = x + 4096
+	if addHi != 5096 'addHi'
+		return 13
+	end 'addHi'
+	let subHi = x - 4096
+	if subHi != -3096 'subHi'
+		return 14
+	end 'subHi'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+func @base {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegReg r8, rcx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rcx, 1000
+    x64.callDirect base
+    x64.leaRegRegImm32 rax, r8, 4095
+    x64.cmpRegImm32 rax, 5095
+    x64.jcc notEqual, addLo
+    x64.jmp ifcont
+  addLo:
+    x64.movRegImm32 r8, 11
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.leaRegRegImm32 rax, r8, -4095
+    x64.cmpRegImm32 rax, -3095
+    x64.jcc notEqual, subLo
+    x64.jmp ifcont
+  subLo:
+    x64.movRegImm32 r8, 12
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.leaRegRegImm32 rax, r8, 4096
+    x64.cmpRegImm32 rax, 5096
+    x64.jcc notEqual, addHi
+    x64.jmp ifcont
+  addHi:
+    x64.movRegImm32 r8, 13
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.leaRegRegImm32 rax, r8, -4096
+    x64.cmpRegImm32 rax, -3096
+    x64.jcc notEqual, subHi
+    x64.jmp ifcont
+  subHi:
+    x64.movRegImm32 r8, 14
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

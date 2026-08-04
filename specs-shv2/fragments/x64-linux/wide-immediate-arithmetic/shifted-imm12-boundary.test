@@ -1,0 +1,89 @@
+// Test: shifted-imm12-boundary
+function base(p int) returns int
+	return p
+end 'base'
+
+function main() returns ExitCode
+	let x = base(1000)
+	let addShifted = x + 16773120
+	if addShifted != 16774120 'addShifted'
+		return 21
+	end 'addShifted'
+	let subShifted = x - 16773120
+	if subShifted != -16772120 'subShifted'
+		return 22
+	end 'subShifted'
+	let addPair = x + 16777215
+	if addPair != 16778215 'addPair'
+		return 23
+	end 'addPair'
+	let subPair = x - 16777215
+	if subPair != -16776215 'subPair'
+		return 24
+	end 'subPair'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+func @base {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegReg r8, rcx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rcx, 1000
+    x64.callDirect base
+    x64.leaRegRegImm32 rax, r8, 16773120
+    x64.cmpRegImm32 rax, 16774120
+    x64.jcc notEqual, addShifted
+    x64.jmp ifcont
+  addShifted:
+    x64.movRegImm32 r8, 21
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.leaRegRegImm32 rax, r8, -16773120
+    x64.cmpRegImm32 rax, -16772120
+    x64.jcc notEqual, subShifted
+    x64.jmp ifcont
+  subShifted:
+    x64.movRegImm32 r8, 22
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.leaRegRegImm32 rax, r8, 16777215
+    x64.cmpRegImm32 rax, 16778215
+    x64.jcc notEqual, addPair
+    x64.jmp ifcont
+  addPair:
+    x64.movRegImm32 r8, 23
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.leaRegRegImm32 rax, r8, -16777215
+    x64.cmpRegImm32 rax, -16776215
+    x64.jcc notEqual, subPair
+    x64.jmp ifcont
+  subPair:
+    x64.movRegImm32 r8, 24
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

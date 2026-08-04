@@ -1,0 +1,203 @@
+// Test: stdlib-whitelist.unicode-is-whitespace-from-the-whitelist
+function main() returns ExitCode
+	if Unicode.isWhitespace(32) 'space'
+		print("space\n")
+	end 'space'
+	if Unicode.isWhitespace(12288) 'ideographic'
+		print("ideographic\n")
+	end 'ideographic'
+	if Unicode.isWhitespace(65) 'letter'
+		print("letter\n")
+	end 'letter'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rcx, 32
+    x64.callDirect Unicode.isWhitespace
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, space
+    x64.jmp ifcont
+  space:
+    x64.leaRegRdata rcx, [rip + __str_rec_1]
+    x64.callDirect __print_string
+    x64.jmp ifcont
+  ifcont:
+    x64.movRegImm32 rcx, 12288
+    x64.callDirect Unicode.isWhitespace
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, ideographic
+    x64.jmp ifcont
+  ideographic:
+    x64.leaRegRdata rcx, [rip + __str_rec_3]
+    x64.callDirect __print_string
+    x64.jmp ifcont
+  ifcont:
+    x64.movRegImm32 rcx, 65
+    x64.callDirect Unicode.isWhitespace
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, letter
+    x64.jmp ifcont
+  letter:
+    x64.leaRegRdata rcx, [rip + __str_rec_5]
+    x64.callDirect __print_string
+    x64.jmp ifcont
+  ifcont:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Unicode.isWhitespace {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.cmpRegImm32 rcx, 1114111
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_6]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.cmpRegImm32 rcx, 9
+    x64.movRegImm32 rax, 0
+    x64.jcc greaterEqual, andrhs
+    x64.jmp critsplit
+  andrhs:
+    x64.cmpRegImm32 rcx, 13
+    x64.setccReg lessEqual, rax
+    x64.jmp scmerge
+  critsplit:
+    x64.jmp scmerge
+  scmerge:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, ascii_control_ws
+    x64.jmp ifcont
+  ascii_control_ws:
+    x64.movRegImm32 r8, 1
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.cmpRegImm32 rcx, 32
+    x64.jcc equal, space
+    x64.jmp ifcont
+  space:
+    x64.movRegImm32 r8, 1
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.cmpRegImm32 rcx, 133
+    x64.jcc equal, nel
+    x64.jmp ifcont
+  nel:
+    x64.movRegImm32 r8, 1
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.cmpRegImm32 rcx, 160
+    x64.jcc equal, nbsp
+    x64.jmp ifcont
+  nbsp:
+    x64.movRegImm32 r8, 1
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.cmpRegImm32 rcx, 5760
+    x64.jcc equal, ogham
+    x64.jmp ifcont
+  ogham:
+    x64.movRegImm32 r8, 1
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.cmpRegImm32 rcx, 8192
+    x64.movRegImm32 rax, 0
+    x64.jcc greaterEqual, andrhs
+    x64.jmp critsplit
+  andrhs:
+    x64.cmpRegImm32 rcx, 8202
+    x64.setccReg lessEqual, rax
+    x64.jmp scmerge
+  critsplit:
+    x64.jmp scmerge
+  scmerge:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, general_punctuation_spaces
+    x64.jmp ifcont
+  general_punctuation_spaces:
+    x64.movRegImm32 r8, 1
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.cmpRegImm32 rcx, 8232
+    x64.jcc equal, line_sep
+    x64.jmp ifcont
+  line_sep:
+    x64.movRegImm32 r8, 1
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.cmpRegImm32 rcx, 8233
+    x64.jcc equal, para_sep
+    x64.jmp ifcont
+  para_sep:
+    x64.movRegImm32 r8, 1
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.cmpRegImm32 rcx, 8239
+    x64.jcc equal, nnbsp
+    x64.jmp ifcont
+  nnbsp:
+    x64.movRegImm32 r8, 1
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.cmpRegImm32 rcx, 8287
+    x64.jcc equal, mmsp
+    x64.jmp ifcont
+  mmsp:
+    x64.movRegImm32 r8, 1
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.cmpRegImm32 rcx, 12288
+    x64.jcc equal, ideographic
+    x64.jmp ifcont
+  ideographic:
+    x64.movRegImm32 r8, 1
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
