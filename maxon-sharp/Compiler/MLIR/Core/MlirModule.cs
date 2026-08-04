@@ -34,6 +34,16 @@ public record TypeAliasInfo(string SourceTypeName, Dictionary<string, IrType>? T
 
 }
 
+// One top-level generic typealias, as the whole-project declaration pass sees it, indexed by the
+// INSTANCE it names (see IrModule.DeclaredGenericAliases). Visibility AND the declaring file travel
+// with it because a foreign file's parser may be the one that first registers the alias, and the
+// record it publishes has to describe THAT declaration rather than its own: a narrower record stops
+// SeedFromModule seeding the alias, and a record naming the borrowing file makes that file look like
+// the declarer, at which point its own PreScan files the alias as file-private and every other file
+// loses the type outright (measured: 45 files, `Unknown type: ValueIdArray`).
+public record DeclaredGenericAlias(string Name, bool IsExported, bool IsModuleVisible, bool IsStdlib,
+    string? SourceFilePath);
+
 // Metadata for constant array literals that can be placed in .rdata
 public record ConstantArrayLiteralInfo(string RdataLabel, long[] Values, bool IsMutable, int ElementSize, bool IsBitPacked = false);
 
@@ -360,6 +370,20 @@ public class IrModule<TOp> where TOp : IPrintableOp {
   // Type alias tracking: aliasName -> TypeAliasInfo (sourceTypeName + typeParams)
   public Dictionary<string, TypeAliasInfo> TypeAliasSources { get; } = [];
 
+  // Every top-level generic typealias the compilation unit DECLARES, keyed by the generic INSTANCE
+  // it names (Parser.GenericAliasInstanceKey: source type plus type arguments by name). Filled
+  // whole-project by Compiler's declaration pass BEFORE any file specializes anything, which is the
+  // whole point of it: RegisterConcreteTypeAlias has to mint a name for a field whose type is a
+  // generic instance, and asking "does the project already call this instance something?" against
+  // the aliases registered SO FAR answers from the order the filesystem handed over the files. That
+  // is how `Array_ValueId` came to be emitted beside the `ValueIdArray` declared one file later —
+  // ~90 duplicated functions across 13 instances, with which name won decided by readdir order.
+  //
+  // Written once per compilation unit, straight into this module (never through Merge, which only
+  // ever carries a full parse's output). Clone copies it because the parsed-stdlib module is cached
+  // and a project compile must inherit stdlib's DECLARATIONS while sharing none of its objects.
+  public Dictionary<string, DeclaredGenericAlias> DeclaredGenericAliases { get; } = [];
+
   // Reverse index: sourceTypeName -> aliases for that source. Hot during
   // monomorphization (TypeSubstitution.FindConcreteAlias used to scan every
   // alias linearly). Lazily (re)built when TypeAliasSources.Count differs from
@@ -623,6 +647,7 @@ public class IrModule<TOp> where TOp : IPrintableOp {
     foreach (var (k, v) in TypeDefs) clone.TypeDefs[k] = typeCopier.Copy(v)!;
     foreach (var (k, v) in FunctionDefaults) clone.FunctionDefaults[k] = v;
     foreach (var (k, v) in TypeAliasSources) clone.TypeAliasSources[k] = CopyAliasInfo(v, typeCopier);
+    foreach (var (k, v) in DeclaredGenericAliases) clone.DeclaredGenericAliases[k] = v;
     foreach (var (k, v) in ConstantArrayLiterals) clone.ConstantArrayLiterals[k] = v;
     foreach (var (k, v) in InterfaceAssociatedTypes) clone.InterfaceAssociatedTypes[k] = v;
     foreach (var (k, v) in PrimitiveConformances) clone.PrimitiveConformances[k] = [.. v];

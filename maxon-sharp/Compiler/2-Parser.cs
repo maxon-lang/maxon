@@ -4,6 +4,24 @@ using MaxonSharp.Compiler.Ir.Dialects;
 
 namespace MaxonSharp.Compiler;
 
+/// <summary>
+/// Which whole-project walk over a file's top-level typealiases is running. The three are ordered,
+/// and the first exists because the other two cannot answer a question about the WHOLE project from
+/// inside a per-file loop: a specialization that has to name a generic instance must be able to ask
+/// whether the project already names it, and asking the aliases registered so far answers from the
+/// order the filesystem handed over the sources.
+/// </summary>
+public enum TypeAliasScanPhase {
+  /// Read every file's declarations into IrModule.DeclaredGenericAliases and register nothing.
+  Declarations,
+  /// Specialize each declared alias against its source struct. Runs before PreScan, so a source
+  /// struct declared in this compilation unit still has no fields — hence Respecialize.
+  Specialize,
+  /// Re-specialize once PreScan has filled every source struct in, replacing the entries the
+  /// Specialize phase froze against an empty struct.
+  Respecialize,
+}
+
 public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bool isStdlib = false, string? sourceFilePath = null, string targetOs = "Windows", string targetArch = "x64", bool testing = false, string? rootPath = null, Dictionary<string, object>? foreignPerspectiveCache = null, IReadOnlySet<string>? compilerOwnedDeclarations = null) {
   private List<Token> _tokens = tokens;
   private readonly bool _isStdlib = isStdlib;
@@ -333,10 +351,18 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   private readonly HashSet<string> _moduleVisibleTypes = [];
   private readonly HashSet<string> _moduleVisibleTypeAliases = [];
   private readonly HashSet<string> _localTypeAliases = [];
-  // Set when PreScanTypeAliasesOnly is running as a re-scan (second pass) to
+  // Which pass over this file's top-level typealiases is running (see TypeAliasScanPhase).
+  private TypeAliasScanPhase _typeAliasScanPhase = TypeAliasScanPhase.Specialize;
+  // Set when PreScanTypeAliasesOnly is running as a re-scan (third pass) to
   // force CopyTypeAliasesToModule to overwrite entries for aliases this parser
   // locally (re-)declared, even though SeedFromModule marked them as seeded.
   private bool _isRescanningTypeAliases;
+  // Declared aliases this parser is registering on behalf of the file that declares them, to stop a
+  // mutually-referential pair of declarations recursing forever through TryRegisterDeclaredAlias.
+  private readonly HashSet<string> _registeringDeclaredAliases = [];
+  // Aliases this parser registered on behalf of ANOTHER file's declaration -> that file. The module's
+  // record for an alias has to name its declarer, not whoever happened to need it first.
+  private readonly Dictionary<string, string> _borrowedAliasOwners = [];
   private readonly Dictionary<string, string> _typeAliasOwners = [];  // typealias name -> owning type name
   private readonly HashSet<string> _seededTypeAliases = [];
   private readonly HashSet<string> _seededStdlibTypeAliases = [];
@@ -1165,12 +1191,14 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   /// regardless of file order (e.g., global variable initializers using cross-file enums).
   /// Skips typealiases nested inside type/interface/extension blocks.
   /// </summary>
-  public void PreScanTypeAliasesOnly(IrModule<MaxonOp> targetModule, bool rescan = false) {
+  public void PreScanTypeAliasesOnly(IrModule<MaxonOp> targetModule,
+      TypeAliasScanPhase phase = TypeAliasScanPhase.Specialize) {
     _currentModule = targetModule;
     _skipWhereValidation = true;
     EnsureManagedMemoryType();
     SeedFromModule(seedModule, targetModule);
-    _isRescanningTypeAliases = rescan;
+    _typeAliasScanPhase = phase;
+    _isRescanningTypeAliases = phase == TypeAliasScanPhase.Respecialize;
     PreRegisterTypeAliasPlaceholdersAtThisLevel();
 
     while (!IsAtEnd() && Current().Type != TokenType.Eof) {
@@ -1199,19 +1227,28 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       // here, skip past the offending block, and keep walking the file so
       // valid declarations still register.
       try {
-        if (Check(TokenType.Union)) {
+        // The declaration phase SKIPS enums and unions rather than pre-scanning them, because it has
+        // to leave the module exactly as it found it: PreScanEnum registers the enum's METHODS into
+        // the module, with signatures resolved against a registry this phase deliberately leaves
+        // incomplete, and a first-wins registration of one of those freezes the wrong return type
+        // whole-program. Nothing is lost — a typealias's type ARGUMENTS are compared by name, and
+        // every enum name is already whole-program from PreRegisterTypeNames.
+        bool preScanDataDeclarations = _typeAliasScanPhase != TypeAliasScanPhase.Declarations;
+
+        if (preScanDataDeclarations && Check(TokenType.Union)) {
           PreScanEnum(targetModule, isExported, isModuleVisible, isUnion: true);
           SkipNewlines();
           continue;
         }
-        if (Check(TokenType.Enum)) {
+        if (preScanDataDeclarations && Check(TokenType.Enum)) {
           PreScanEnum(targetModule, isExported, isModuleVisible);
           SkipNewlines();
           continue;
         }
 
         if (Check(TokenType.Type) || Check(TokenType.Interface)
-            || Check(TokenType.Extension) || Check(TokenType.Function) || CheckTestKeyword()) {
+            || Check(TokenType.Extension) || Check(TokenType.Function) || CheckTestKeyword()
+            || Check(TokenType.Union) || Check(TokenType.Enum)) {
           // The body kind has to travel with the skip here for the same reason it does in
           // WalkTopLevelValueDecls, and the consequence of it not doing so was measured: an
           // `interface`'s requirement signatures each incremented the depth with no `end` to match,
@@ -1242,6 +1279,12 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
         SkipNewlines();
       }
     }
+
+    // The declaration phase publishes NOTHING but the index it was run to collect. Everything it
+    // registered here is a by-product of reading the declarations — necessarily incomplete, since no
+    // source struct has its fields yet — and writing it would seed the specialize phase with entries
+    // CopyTypeAliasesToModule then declines to overwrite.
+    if (_typeAliasScanPhase == TypeAliasScanPhase.Declarations) return;
 
     CopyTypeAliasesToModule(targetModule);
 
@@ -1653,6 +1696,17 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
           ? new Dictionary<string, IrType>(ut.TypeParams) : null;
       bool isExported = _exportedTypeAliases.Contains(aliasName);
       bool isModuleVisible = _moduleVisibleTypeAliases.Contains(aliasName);
+      // Whose declaration this record describes. Normally this file's; for an alias this parser
+      // registered on behalf of another file's declaration (TryRegisterDeclaredAlias) it is that
+      // file's, because every visibility question — the rank guard below, SeedFromModule, and the
+      // file-private marking in CopyStateToModule — is asked against it. Naming this file instead
+      // makes it the apparent declarer of a foreign alias, and its own PreScan then marks that alias
+      // file-private, which takes the type away from every OTHER file (measured: 45 of them).
+      // A name this file DECLARES is this file's, even if it also borrowed a same-named declaration
+      // from elsewhere — two files may legally declare one file-private name for one instance.
+      var declaringFilePath = !isLocallyDeclared
+          && _borrowedAliasOwners.TryGetValue(aliasName, out var borrowedFrom)
+        ? borrowedFrom : _sourceFilePath;
       _typeAliasOwners.TryGetValue(aliasName, out var ownerTypeName);
       // Preserve existing OwnerTypeName if this parser doesn't know it (seeded alias)
       if (ownerTypeName == null && module.TypeAliasSources.TryGetValue(aliasName, out var existingInfo))
@@ -1669,14 +1723,14 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       // widest declaration owns the record; equal ranks keep the later write, leaving two exported
       // declarations of a name to the namespace-qualification path (AmbiguousTypeNames).
       if (module.TypeAliasSources.TryGetValue(aliasName, out var ownerInfo)
-          && ownerInfo.SourceFilePath != _sourceFilePath
+          && ownerInfo.SourceFilePath != declaringFilePath
           && AliasVisibilityRank(ownerInfo) > AliasVisibilityRank(isExported, isModuleVisible, _isStdlib))
         continue;
 
       module.TypeAliasSources[aliasName] = new TypeAliasInfo(sourceTypeName, typeParams,
-          isExported, _isStdlib, _sourceFilePath, ownerTypeName, isModuleVisible);
-      if (_sourceFilePath != null)
-        module.TypeDefSourceFiles[aliasName] = _sourceFilePath;
+          isExported, _isStdlib, declaringFilePath, ownerTypeName, isModuleVisible);
+      if (declaringFilePath != null)
+        module.TypeDefSourceFiles[aliasName] = declaringFilePath;
 
       // Visibility marks WIDEN, never narrow. The two name-keyed sets can only ever describe one
       // declaration of a name, so when a wider declaration of it appears — an `export typealias`
@@ -5045,6 +5099,15 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
 
       ValidateWhereConstraints(sourceStruct, substitution2, sourceName, aliasNameToken);
 
+      // The declaration phase is asking only WHICH INSTANCE this alias names, whole-project, so that
+      // the specialize phase below can never mint a structural name for an instance the project
+      // already has a name for. Specializing here would be worse than useless: it runs before
+      // PreScan, so the source struct's fields are whatever the previous compilation unit left.
+      if (_typeAliasScanPhase == TypeAliasScanPhase.Declarations) {
+        RecordDeclaredGenericAlias(aliasName, sourceName, substitution2, isExported, isModuleVisible);
+        return;
+      }
+
       RegisterConcreteTypeAlias(aliasName, sourceName, sourceStruct, substitution2,
         constParams.Count > 0 ? constParams : null,
         isExtensionAlias: _inExtensionConformanceLoop);
@@ -5066,6 +5129,91 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       if (st.TypeParams.Values.Any(t => t is IrTypeParameterType)) return false;
       if (st.Fields.Any(f => f.Type is IrTypeParameterType)) return false;
     }
+    return true;
+  }
+
+  /// <summary>
+  /// The generic INSTANCE a type name denotes: its source type plus its type arguments BY NAME.
+  /// Two spellings of one instance — a declared <c>ValueIdArray</c> and the structural
+  /// <c>Array_ValueId</c> the field-alias mint would otherwise invent — produce the same key, which
+  /// is what lets the declaration index answer "does this project already name this?" in O(1).
+  ///
+  /// By name rather than by IrType identity because the same instance is asked about from parsers
+  /// holding different objects for one type: a pre-registered placeholder in the declaration phase,
+  /// the real ranged type later. Name is what the existing alias search compares too, so the index
+  /// and the search cannot disagree about what "the same instance" means. Ordered so the key does
+  /// not depend on the order a substitution dictionary happens to enumerate in.
+  /// </summary>
+  private static string GenericAliasInstanceKey(string sourceName, Dictionary<string, IrType> substitution) {
+    var args = substitution.Select(kv => $"{kv.Key}={kv.Value.Name}").ToList();
+    args.Sort(StringComparer.Ordinal);
+    return $"{sourceName}<{string.Join(",", args)}>";
+  }
+
+  /// <summary>
+  /// Records that this file declares <paramref name="aliasName"/> for one generic instance, into the
+  /// whole-project index the specialize phase consults.
+  /// </summary>
+  private void RecordDeclaredGenericAlias(string aliasName, string sourceName,
+      Dictionary<string, IrType> substitution, bool isExported, bool isModuleVisible) {
+    var index = _currentModule!.DeclaredGenericAliases;
+    var key = GenericAliasInstanceKey(sourceName, substitution);
+    var declaration = new DeclaredGenericAlias(aliasName, isExported, isModuleVisible, _isStdlib, _sourceFilePath);
+
+    if (!index.TryGetValue(key, out var incumbent)) {
+      index[key] = declaration;
+      return;
+    }
+
+    // Two declarations naming ONE instance. The index holds a single name per instance, so the
+    // choice has to be made by a rule that cannot depend on the order the files were read in —
+    // otherwise this index reproduces the very defect it exists to close. stdlib outranks a project
+    // declaration (it is compiled first and every project already resolves against it); within one
+    // rank the ordinal-smallest name wins.
+    if (incumbent.IsStdlib != _isStdlib) {
+      if (_isStdlib) index[key] = declaration;
+      return;
+    }
+
+    if (string.CompareOrdinal(aliasName, incumbent.Name) < 0)
+      index[key] = declaration;
+  }
+
+  /// <summary>
+  /// Makes <paramref name="declared"/> — the name this compilation unit declares for exactly the
+  /// instance in hand — usable from this parser, registering it here when the file that declares it
+  /// has not been scanned yet. Returns false only when it is already being registered further up
+  /// this same call, in which case the caller falls back to minting the structural name rather than
+  /// recursing forever through a pair of mutually-referential declarations.
+  /// </summary>
+  private bool TryRegisterDeclaredAlias(DeclaredGenericAlias declared, string sourceName,
+      IrStructType sourceStruct, Dictionary<string, IrType> substitution) {
+    if (_typeRegistry.TryGetValue(declared.Name, out var registered)
+        && registered is IrStructType registeredStruct
+        && registeredStruct.TypeParams.Count == substitution.Count
+        && substitution.All(kv => registeredStruct.TypeParams.TryGetValue(kv.Key, out var bound)
+            && bound.Name == kv.Value.Name)) {
+      _typeAliasSources.TryAdd(declared.Name, sourceName);
+      return true;
+    }
+
+    if (!_registeringDeclaredAliases.Add(declared.Name)) return false;
+
+    try {
+      // The declaration's IDENTITY travels with it — its visibility and its declaring file — because
+      // what this parser is registering is somebody else's declaration. CopyTypeAliasesToModule reads
+      // all three, and getting either wrong is the same class of bug in two directions: too narrow a
+      // visibility un-seeds the alias, and claiming the file makes this parser the apparent declarer,
+      // whereupon its own PreScan marks the alias file-private and every other file loses the type.
+      if (declared.SourceFilePath != null && declared.SourceFilePath != _sourceFilePath)
+        _borrowedAliasOwners[declared.Name] = declared.SourceFilePath;
+      if (declared.IsExported) _exportedTypeAliases.Add(declared.Name);
+      if (declared.IsModuleVisible) _moduleVisibleTypeAliases.Add(declared.Name);
+      RegisterConcreteTypeAlias(declared.Name, sourceName, sourceStruct, substitution);
+    } finally {
+      _registeringDeclaredAliases.Remove(declared.Name);
+    }
+
     return true;
   }
 
@@ -5121,20 +5269,42 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       if (!_typeRegistry.TryGetValue(fieldAliasSource, out var fieldSourceType)) continue;
       if (fieldSourceType is not IrStructType fieldSourceStruct) continue;
 
-      // Before creating a new auto-alias, check if an existing user-defined alias
-      // with the same source type and type params already exists (e.g., StringArray
-      // for Array with String). Reuse it to avoid duplicate types with split methods.
+      // Before creating a new auto-alias, check whether the project already NAMES this instance
+      // (e.g. StringArray for Array with String) and reuse that name — two names for one instance
+      // means two identical families of methods emitted under different names.
+      //
+      // The whole-project declaration index is asked FIRST, and that ordering is the fix this rung
+      // exists for. The scan below it can only see the aliases registered SO FAR, so a declared name
+      // living in a file the compiler had not read yet was invisible and a structural name got
+      // minted beside it — `Array_ValueId` next to `ValueIdArray`, 13 instances and ~90 duplicated
+      // functions, with which name won decided by the order the filesystem enumerated the sources.
+      // The index is complete before any file specializes anything, so it answers the same way in
+      // every order. The scan stays for the instances nothing declares a name for, where the
+      // structural name minted for an EARLIER alias is the one to reuse.
       string? existingAliasName = null;
-      foreach (var (existName, existSource) in _typeAliasSources) {
-        if (existSource != fieldAliasSource) continue;
-        if (!_typeRegistry.TryGetValue(existName, out var existType)) continue;
-        if (existType is not IrStructType existStruct) continue;
-        if (existStruct.TypeParams.Count != localSub.Count) continue;
-        bool paramsMatch = true;
-        foreach (var (pn, pt) in localSub) {
-          if (!existStruct.TypeParams.TryGetValue(pn, out var et) || et.Name != pt.Name) { paramsMatch = false; break; }
+
+      if (_currentModule != null
+          && _currentModule.DeclaredGenericAliases.TryGetValue(
+              GenericAliasInstanceKey(fieldAliasSource, localSub), out var declared)
+          && declared.Name != aliasName
+          // Same visibility rule the scan below is subject to: this parser's table only ever holds
+          // aliases this file may see, and the index — being whole-project — holds the rest too.
+          && IsTypeVisibleAcrossFiles(_currentModule, declared.Name, _sourceFilePath)
+          && TryRegisterDeclaredAlias(declared, fieldAliasSource, fieldSourceStruct, localSub))
+        existingAliasName = declared.Name;
+
+      if (existingAliasName == null) {
+        foreach (var (existName, existSource) in _typeAliasSources) {
+          if (existSource != fieldAliasSource) continue;
+          if (!_typeRegistry.TryGetValue(existName, out var existType)) continue;
+          if (existType is not IrStructType existStruct) continue;
+          if (existStruct.TypeParams.Count != localSub.Count) continue;
+          bool paramsMatch = true;
+          foreach (var (pn, pt) in localSub) {
+            if (!existStruct.TypeParams.TryGetValue(pn, out var et) || et.Name != pt.Name) { paramsMatch = false; break; }
+          }
+          if (paramsMatch) { existingAliasName = existName; break; }
         }
-        if (paramsMatch) { existingAliasName = existName; break; }
       }
 
       if (existingAliasName != null) {

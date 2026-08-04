@@ -617,9 +617,9 @@ public class Compiler {
     // (not static) so a reused module — e.g. the LSP's cached stdlib module — never serves a stale set.
     var foreignPerspectiveCache = new Dictionary<string, object>();
 
-    // Per-source token cache. The same file is walked by up to 5 passes
-    // (PreRegisterTypeNames, PreScanTypeAliasesOnly, PreScan, RescanExtensions,
-    // PreScanTypeAliasesOnly again, Parse). Each pass previously re-lexed from
+    // Per-source token cache. The same file is walked by up to 7 passes
+    // (PreRegisterTypeNames, PreScanTypeAliasesOnly x3 — declarations, specialize, respecialize —
+    // PreScanTopLevelConstantDecls, PreScan, RescanExtensions, Parse). Each pass previously re-lexed from
     // scratch; caching cuts that to one lex per file. Parsers mutate tokens
     // only during full parse (Self-type rewrite, primitive-static method
     // rewrite), which is the last pass, so the shared list is safe across
@@ -659,6 +659,32 @@ public class Compiler {
     foreach (var source in sources)
       PreRegisterTypeNames(module, source, TokensFor(source), isStdLib);
     if (sw != null) StageTimer.Record(timings!, "preRegTypes", sw.ElapsedMilliseconds);
+
+    // Collect every file's top-level generic typealias DECLARATIONS before any file specializes one,
+    // so that "does this project already have a name for this generic instance?" is answered from
+    // the whole program rather than from the files read so far. Without it, RegisterConcreteTypeAlias
+    // mints a structural name (`Array_ValueId`) for a field whose instance is declared one file later
+    // (`ValueIdArray`), and both families of methods get emitted — which name won being decided by
+    // the filesystem's enumeration order, sorted on NTFS and hash-ordered on APFS.
+    //
+    // This is the same whole-project two-step preScanConstDecls below is, for the same reason, and it
+    // has to run FIRST for its own: classifying an alias needs its source type's `uses` clause, which
+    // PreRegisterTypeNames has just settled whole-program, and nothing more.
+    //
+    // Per-file errors are deliberately not collected. The specialize phase immediately below walks
+    // the same declarations with the same parser and reports them there, with the file marked failed;
+    // reporting here as well would duplicate every typealias diagnostic in the compilation. A file
+    // that throws here simply contributes nothing to the index — and cannot, since it will not build.
+    sw?.Restart();
+    foreach (var source in sources) {
+      try {
+        var parser = NewParser(TokensFor(source), module, source, isStdLib, parserOs, parserArch);
+        parser.PreScanTypeAliasesOnly(module, TypeAliasScanPhase.Declarations);
+      } catch (CompileError) {
+        // See above: the specialize phase reports it.
+      }
+    }
+    if (sw != null) StageTimer.Record(timings!, "preScanAliasDecls", sw.ElapsedMilliseconds);
 
     // Pre-scan top-level typealiases from all sources so cross-file typealias
     // references resolve regardless of file processing order
@@ -789,7 +815,7 @@ public class Compiler {
       try {
         var tokens = TokensFor(source);
         var parser = NewParser(tokens, module, source, isStdLib, parserOs, parserArch);
-        parser.PreScanTypeAliasesOnly(module, rescan: true);
+        parser.PreScanTypeAliasesOnly(module, TypeAliasScanPhase.Respecialize);
       } catch (CompileError ex) {
         ex.FilePath ??= source.Path;
         errors.Add(ex);
