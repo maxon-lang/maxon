@@ -100,7 +100,7 @@ end 'verifyWarmRebuild'
 // then discarded. Determinism compares two of these; each MUST own its Project so
 // the two share no mutable module object (the mutate-the-memo trap in the header).
 function compileColdOnce(inputPath FilePath, target Target) returns CodeResult throws CompileError
-	var project = try loadProject(inputPath, target: target)
+	var project = try loadProject([inputPath], target: target)
 	return try compileToCodeResult(project)
 end 'compileColdOnce'
 
@@ -182,7 +182,7 @@ function verifyCacheHit(inputPath FilePath, target Target) returns bool throws C
 	// between them (never resolveTypes/the backend) so the memoized module is never
 	// mutated (see the mutate-the-memo trap in this file's header). This check therefore
 	// never reaches the allocator at all.
-	var project = try loadProject(inputPath, target: target)
+	var project = try loadProject([inputPath], target: target)
 	let fileCount = project.db.sourcePaths.count()
 
 	// Whole-program memo: the first call is a cold MISS, the second a cache HIT.
@@ -375,7 +375,7 @@ let MinFilesForInvalidation = 2 as QueryCount
 // that knows it is vacuous and reports green. **A gate you cannot see fail is not a gate.**
 // It now FAILS, and says what to point it at.
 function verifyInvalidation(inputPath FilePath, target Target) returns bool throws CompileError
-	var project = try loadProject(inputPath, target: target)
+	var project = try loadProject([inputPath], target: target)
 	let fileCount = project.db.sourcePaths.count()
 
 	if fileCount < MinFilesForInvalidation 'cannotProve'

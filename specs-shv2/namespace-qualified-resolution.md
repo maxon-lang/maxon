@@ -724,21 +724,16 @@ program died on `E2015: a field access on 'p', which is declared 'int' and not a
 a line that was correct. The refile now declines a key another declaration owns
 (`ProgramSignatures.refileContestedFreeFunction`), so the call types correctly and this is the only
 diagnostic any variant produces.
+
+⚠ **`app/main.maxon` IS DECLARED FIRST, AND THAT IS THE ASSERTION, NOT A LAYOUT PREFERENCE (A3m).**
+`commitFuncSignatures` reports the SECOND declaration to claim a key, so which of the two colliders the
+refusal points at is decided by the order the files are compiled in — and until A3m that order came from
+raw `Directory.list`, i.e. from the staging directory's on-disk state. This pair pinned `Point/`'s free
+function without being able to ask for it: on a host whose walk ran the other way the identical program
+would have blamed the METHOD, and told its author to rename a directory the method knows nothing about.
+Declaring the type's file first states the order that makes the refusal name the declaration its advice
+is about.
 ```maxon
-// --- file: Point/p.maxon
-typealias Integer = int(0 to 125)
-
-export function create() returns Integer
-	return 3
-end 'create'
-
-// --- file: other/o.maxon
-typealias Integer = int(0 to 125)
-
-export function create() returns Integer
-	return 5
-end 'create'
-
 // --- file: app/main.maxon
 typealias Integer = int(0 to 125)
 
@@ -754,20 +749,7 @@ function main() returns ExitCode
 	let p = Point.create()
 	return p.x
 end 'main'
-```
-```maxoncstderr
-error E3006: Point/specs/fragments/namespace-qualified-resolution/error.contested-free-function-in-a-directory-named-after-a-type.test:5:17: duplicate definition of function 'Point.create' — a free function of that bare name is declared in more than one DIRECTORY, so each is registered under its directory-qualified spelling, and that spelling is already the mangled name of a method. Rename the directory, or rename the function
-```
 
-
-<!-- test: error.contested-free-function-collides-with-a-fieldless-method -->
-**THE VARIANT WITH NO WITNESS.** The case above only ever produced a visible symptom because the
-caller touched a FIELD. Here the method returns a plain `Integer`, so nothing downstream would ever
-have noticed which of the two `Point.create`s it reached — this is the shape that would have to be a
-silent wrong answer if the duplicate check were the thing at fault. It is not: `commitFuncSignatures`
-sees both declarations claim one key whatever they return, and refuses. Pinned so that the claim
-"nothing downstream notices" is tested rather than assumed.
-```maxon
 // --- file: Point/p.maxon
 typealias Integer = int(0 to 125)
 
@@ -781,7 +763,29 @@ typealias Integer = int(0 to 125)
 export function create() returns Integer
 	return 5
 end 'create'
+```
+```maxoncstderr
+error E3006: Point/specs/fragments/namespace-qualified-resolution/error.contested-free-function-in-a-directory-named-after-a-type.test:21:17: duplicate definition of function 'Point.create' — a free function of that bare name is declared in more than one DIRECTORY, so each is registered under its directory-qualified spelling, and that spelling is already the mangled name of a method. Rename the directory, or rename the function
+```
 
+
+<!-- test: error.contested-free-function-collides-with-a-fieldless-method -->
+**THE VARIANT WITH NO WITNESS.** The case above only ever produced a visible symptom because the
+caller touched a FIELD. Here the method returns a plain `Integer`, so nothing downstream would ever
+have noticed which of the two `Point.create`s it reached — this is the shape that would have to be a
+silent wrong answer if the duplicate check were the thing at fault. It is not: `commitFuncSignatures`
+sees both declarations claim one key whatever they return, and refuses. Pinned so that the claim
+"nothing downstream notices" is tested rather than assumed.
+
+⚠ **`app/main.maxon` IS DECLARED FIRST, AND THAT IS THE ASSERTION, NOT A LAYOUT PREFERENCE (A3m).**
+`commitFuncSignatures` reports the SECOND declaration to claim a key, so which of the two colliders the
+refusal points at is decided by the order the files are compiled in — and until A3m that order came from
+raw `Directory.list`, i.e. from the staging directory's on-disk state. This pair pinned `Point/`'s free
+function without being able to ask for it: on a host whose walk ran the other way the identical program
+would have blamed the METHOD, and told its author to rename a directory the method knows nothing about.
+Declaring the type's file first states the order that makes the refusal name the declaration its advice
+is about.
+```maxon
 // --- file: app/main.maxon
 typealias Integer = int(0 to 125)
 
@@ -796,9 +800,23 @@ end 'Point'
 function main() returns ExitCode
 	return Point.create()
 end 'main'
+
+// --- file: Point/p.maxon
+typealias Integer = int(0 to 125)
+
+export function create() returns Integer
+	return 3
+end 'create'
+
+// --- file: other/o.maxon
+typealias Integer = int(0 to 125)
+
+export function create() returns Integer
+	return 5
+end 'create'
 ```
 ```maxoncstderr
-error E3006: Point/specs/fragments/namespace-qualified-resolution/error.contested-free-function-collides-with-a-fieldless-method.test:5:17: duplicate definition of function 'Point.create' — a free function of that bare name is declared in more than one DIRECTORY, so each is registered under its directory-qualified spelling, and that spelling is already the mangled name of a method. Rename the directory, or rename the function
+error E3006: Point/specs/fragments/namespace-qualified-resolution/error.contested-free-function-collides-with-a-fieldless-method.test:20:17: duplicate definition of function 'Point.create' — a free function of that bare name is declared in more than one DIRECTORY, so each is registered under its directory-qualified spelling, and that spelling is already the mangled name of a method. Rename the directory, or rename the function
 ```
 
 

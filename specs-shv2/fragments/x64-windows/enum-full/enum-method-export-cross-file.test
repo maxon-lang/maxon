@@ -23,28 +23,6 @@ end 'main'
 ---
 ExitCode: 1
 ---
-func @main {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.movRegImm32 rcx, 0
-    x64.callDirect Signal.isOn
-    x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, check
-    x64.jmp ifcont
-  check:
-    x64.movRegImm32 r8, 1
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-  ifcont:
-    x64.movRegImm32 r8, 0
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-}
-
 func @Signal.isOn {
   entry:
     x64.pushReg rbp
@@ -66,4 +44,26 @@ func @Signal.isOn {
     x64.popReg rbp
     x64.ret
   matchdead:
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rcx, 0
+    x64.callDirect Signal.isOn
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, check
+    x64.jmp ifcont
+  check:
+    x64.movRegImm32 r8, 1
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
 }

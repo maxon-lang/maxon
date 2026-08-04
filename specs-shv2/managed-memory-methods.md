@@ -2928,13 +2928,19 @@ the identical program with its two files renamed, was refused E2015. A member ro
 file is walked first is a wrong answer in one of the two orders, whichever one it is, and no diagnostic
 reports which one you got.
 
-⚠⚠ **AND THE `aaa-`/`zzz-` NAMES BELOW EXPRESS AN INTENT; THEY DO NOT PIN THE WALK.** Nothing in a spec
-can, and that is a RULING rather than a gap: the compiler walks `Directory.list`'s raw order and
-deliberately does not sort, because a canonical input order would hide an order dependence instead of
-surfacing it (`Compiler.collectMaxonSources`; the ruling and its measurements are in `StdlibLoader`'s
-header, user ruling 2026-07-24). So a FIRST/LAST label here says which order its author was aiming at, and
-the pair's real content is that the two halves differ in their text — whichever order the host serves, the
-program must answer the same. Read every `ALIAS FILE FIRST` below as *"the half named for that order"*.
+⚠⚠ **THE DECLARED FILE ORDER IS THE COMPILED ORDER (A3m) — WHICH IS WHAT LETS A PAIR MEAN TWO ORDERS
+RATHER THAN ONE ORDER TWICE.** It was not always. Until A3m `build` took a single path, the loader walked
+whatever raw `Directory.list` handed back, and the walk order was therefore a property of the STAGING
+DIRECTORY's on-disk state — so both halves of a pair like this one got whichever order the host happened
+to serve, and the pair was two tickets in one lottery. The `aaa-`/`zzz-` names these cases used to carry
+were a bet on that ticket and are gone: what a half declares FIRST is now what the compiler compiles
+first, stated by the order its `// --- file:` sections appear in and handed to the compiler as an ordered
+argument list (`SpecTestRunner.stageSourceFiles`).
+
+⚠ **THE LOADER STILL DOES NOT SORT, AND THAT RULING IS UNTOUCHED** (`StdlibLoader`'s header, user ruling
+2026-07-24). The cure is the opposite of a sort: a canonical order chosen by the LOADER would HIDE an
+order dependence, while an order STATED by the caller surfaces one — which is the entire reason each of
+these programs is written twice.
 
 ⚠ **THE ROOT AND A SLOT ANSWER DIFFERENTLY, AND THE FIRST TWO CASES ARE WHY THAT IS NOT AN INCONSISTENCY.**
 A ROOT position — `var bufs as BufArray` — is repaired at the read door: `ProgramSignatures.fieldSurfaceOf`
@@ -2951,7 +2957,7 @@ time this file is swept the alias is registered and the field type has already r
 `genericInstance` — the read-door derivation cannot fire, and the declaration's own token bit is what carries
 it.
 ```maxon
-// --- file: aaa-alias.maxon
+// --- file: alias.maxon
 typealias Int = int(i64.min to i64.max)
 typealias BufArray = Array with __ManagedMemory
 
@@ -2959,7 +2965,7 @@ export function seed(x BufArray) returns Int
 	return x.count() as Int
 end 'seed'
 
-// --- file: zzz-main.maxon
+// --- file: main.maxon
 type Holder
 	export var bufs as BufArray
 
@@ -2982,12 +2988,12 @@ end 'main'
 
 <!-- test: a-sibling-files-array-of-buffers-alias-serves-the-roster-either-order -->
 
-⭐ **THE ROOT, ALIAS FILE LAST — the identical program, the two files renamed.** Now the alias is NOT yet
+⭐ **THE ROOT, ALIAS FILE LAST — the identical program, its two files declared the other way round.** Now the alias is NOT yet
 registered when the holder is swept, so the field type stays `named("BufArray")` and it is the read-door
 DERIVATION that carries the surface. Both halves are pinned because either one alone leaves one order wrong,
 and this pair is what caught a review fix that had suppressed the first half.
 ```maxon
-// --- file: aaa-main.maxon
+// --- file: main.maxon
 type Holder
 	export var bufs as BufArray
 
@@ -3004,7 +3010,7 @@ function main() returns ExitCode
 	return (m.length() + seed(BufArray.create())) as ExitCode
 end 'main'
 
-// --- file: zzz-alias.maxon
+// --- file: alias.maxon
 typealias Int = int(i64.min to i64.max)
 typealias BufArray = Array with __ManagedMemory
 
@@ -3019,14 +3025,14 @@ end 'seed'
 <!-- test: error.a-sibling-files-alias-in-a-tuple-slot-is-refused-alias-file-first -->
 
 ⭐⭐ **THE HEADLINE REGRESSION CASE. This program COMPILED AND RAN before the fix** — `make().0` served the
-buffer's roster because the walk reached the alias file first, which is a property of the staging directory
-and not of the two names (see this section's header). A RETURN clause is read by
+buffer's roster because the alias file was compiled first — which this half now DECLARES rather than hoping
+the staging directory serves it (see this section's header). A RETURN clause is read by
 the tolerant declaration SWEEP as well as by the real parse, and the sweep's copy is the one the whole-program
 index stores; asked there, a slot's element bit answers how far the sweep had got. It is refused now, in this
 order and in the next case's, which is the accepted gap (a tuple slot spelled with an array-of-buffers alias
 works at the PARAMETER door only) rather than a coin toss between the gap and the feature.
 ```maxon
-// --- file: aaa-alias.maxon
+// --- file: alias.maxon
 typealias Int = int(i64.min to i64.max)
 typealias BufArray = Array with __ManagedMemory
 
@@ -3034,7 +3040,7 @@ export function seed(x BufArray) returns Int
 	return x.count() as Int
 end 'seed'
 
-// --- file: zzz-main.maxon
+// --- file: main.maxon
 function make() returns (BufArray, Int)
 	var a = BufArray.create()
 	a.push("hello".toByteArray())
@@ -3053,11 +3059,11 @@ error E2015: <fragment>:20:12: Unsupported: `Array` member 'length' — P1.7 pro
 
 <!-- test: error.a-sibling-files-alias-in-a-tuple-slot-is-refused-alias-file-last -->
 
-⚠ **THE OTHER ORDER — the identical program, the two files renamed.** It was already refused before the fix;
+⚠ **THE OTHER ORDER — the identical program, its two files declared the other way round.** It was already refused before the fix;
 it is kept because a pair is what makes "order-independent" a claim a test can fail, and half a pair is just
 the answer that happened to be right.
 ```maxon
-// --- file: aaa-main.maxon
+// --- file: main.maxon
 function make() returns (BufArray, Int)
 	var a = BufArray.create()
 	a.push("hello".toByteArray())
@@ -3070,7 +3076,7 @@ function main() returns ExitCode
 	return (m.length() + seed(BufArray.create())) as ExitCode
 end 'main'
 
-// --- file: zzz-alias.maxon
+// --- file: alias.maxon
 typealias Int = int(i64.min to i64.max)
 typealias BufArray = Array with __ManagedMemory
 

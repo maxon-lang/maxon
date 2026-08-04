@@ -931,12 +931,14 @@ when the alias file was walked first and refusing it when it was walked last:
 | `some(v Pair)` union payload | ran | `E3011 Unknown type 'Pair'` |
 | `var p as Pair`'s DROP | ran | leaked — the field was dropped by nobody, exit 101 |
 
-⚠ **THE PAIR BELOW RENAMES THE TWO FILES, IT DOES NOT PIN THE WALK.** Nothing in a spec can pin it: the
-loader walks whatever `Directory.list` hands back and deliberately does not sort (`StdlibLoader`'s header,
-user ruling 2026-07-24), and that answer is a property of the staging directory's on-disk state, not of the
-names — MEASURED, the first case here was the REFUSED one while the same two files copied into a fresh
-directory refused the second. So the pair is a two-ticket lottery on a program that must not care, and the
-fix is what makes it not care; writing it once would have been a bet on the ticket that happened to win.
+⚠ **THE PAIR BELOW DECLARES ITS TWO FILES IN THE TWO ORDERS, AND SINCE A3m THAT IS WHAT IT GETS.** It was
+not always: the loader walked whatever `Directory.list` handed back and deliberately does not sort
+(`StdlibLoader`'s header, user ruling 2026-07-24), and that answer was a property of the staging
+directory's on-disk state, not of the file names — MEASURED, the first case here was the REFUSED one while
+the same two files copied into a fresh directory refused the second. So the pair was a two-ticket lottery
+on a program that must not care. `build` now takes an ORDERED list of paths and the runner names each
+case's files in the order the case declares them, so each half below really does compile in its own order
+— and the loader still sorts nothing, because a sort would hide the dependence rather than surface it.
 
 A `named` that the sweep left under an alias spelling is repaired at the READ door — a declared slot's type
 (`ProgramSignatures.declaredSlotType`), a call result (`Parser.resolveNamedAlias`), and the four classifiers
@@ -959,12 +961,12 @@ cascade must reach it), a method return, a free-function return, a tuple SLOT, a
 union payload. The alias file declares nothing but aliases, so the two cases emit the same functions and
 their goldens must read alike. Returns 2 + 4 + 6 + 8 + 10 + 12 + 14 + 16 = 72.
 ```maxon
-// --- file: aaa-alias.maxon
+// --- file: alias.maxon
 export typealias Int = int(i64.min to i64.max)
 export typealias Pair = (Int, Int)
 export typealias PairArray = Array with Pair
 
-// --- file: zzz-main.maxon
+// --- file: main.maxon
 type Holder
 	export var p as Pair
 
@@ -1010,11 +1012,12 @@ end 'main'
 
 <!-- test: sibling-files-tuple-alias-in-every-declared-position-either-order -->
 
-⭐ **THE IDENTICAL PROGRAM, THE TWO FILES RENAMED.** Before A3e one of this pair was five separate
-refusals of the program the other compiled and ran — which one depended on the staging directory. Both
-halves are kept because half a pair is just the ticket that happened to win.
+⭐ **THE IDENTICAL PROGRAM, ITS TWO FILES DECLARED THE OTHER WAY ROUND.** Before A3e one of this pair was
+five separate refusals of the program the other compiled and ran — which one depended on the staging
+directory. Both halves are kept because half a pair is just the ticket that happened to win; since A3m
+neither half is a ticket at all.
 ```maxon
-// --- file: aaa-main.maxon
+// --- file: main.maxon
 type Holder
 	export var p as Pair
 
@@ -1054,7 +1057,7 @@ function main() returns ExitCode
 	return (h.p.0 + h.p.1 + h.pair().0 + h.pair().1 + make().0 + n.0.0 + e.0 + sv) as ExitCode
 end 'main'
 
-// --- file: zzz-alias.maxon
+// --- file: alias.maxon
 export typealias Int = int(i64.min to i64.max)
 export typealias Pair = (Int, Int)
 export typealias PairArray = Array with Pair

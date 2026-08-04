@@ -10,7 +10,7 @@
 // printed to stderr, so the exact `error EXXXX: ...` lines the spec compares
 // against reach the user.
 
-// Compile the file or directory `inputPath` for `target`, returning the path of
+// Compile the files and/or directories `inputPaths` for `target`, returning the path of
 // the produced executable. `outputOverride` (the `-o`/`--output` value, empty
 // when unset) wins over the derived output name. `emitIr` (the `--emit-ir` flag)
 // additionally writes the lowered Target IR beside the exe as `<output>.ir`, and
@@ -33,11 +33,12 @@
 // Every phase timed below and in the passes/backend is a disjoint sub-interval of the
 // wall time measured here, so they sum to at most the total, and whatever they leave
 // over is printed as `unattributed` rather than absorbed — see CompileTimings.
-export function compile(inputPath FilePath, target Target, outputOverride String = "", emitIr bool = false, metricsPath String = "", runtimeIrNames RuntimeFunctionNameArray) returns FilePath throws CompileError
-	// Every trace event this compile emits is attributed to this unit. Derived from the input
-	// path — the same value `Project.create` derives from the root it is handed below — so the
-	// pre-project `load` bracket and everything after it agree on which compile they are.
-	let unit = traceUnitOf(inputPath)
+export function compile(inputPaths MaxonSourcePathArray, target Target, outputOverride String = "", emitIr bool = false, metricsPath String = "", runtimeIrNames RuntimeFunctionNameArray) returns FilePath throws CompileError
+	// Every trace event this compile emits is attributed to this unit. Derived from the project ROOT
+	// — through the same `commonAncestorOf` the project itself is rooted at below, rather than from a
+	// second reading of the command line — so the pre-project `load` bracket and everything after it
+	// agree on which compile they are.
+	let unit = traceUnitOf(try commonAncestorOf(inputPaths))
 	setTraceUnit(unit)
 
 	// ⭐⭐ **THE ONE PLACE A FAILED COMPILE CLOSES WHAT IT LEFT OPEN (A1v).** Four stages inside phase
@@ -55,7 +56,7 @@ export function compile(inputPath FilePath, target Target, outputOverride String
 	// `verifyWarmRebuild` drives `compileToCodeResult` directly and so does not pass through here. It needs
 	// no drain of its own for the reason this function's header already gives for the TOTAL: it is the only
 	// other whole-build entry, and a throw out of it ends the process with nothing left to mis-nest.
-	return try compileMeasured(inputPath, target: target, outputOverride: outputOverride, emitIr: emitIr, metricsPath: metricsPath, runtimeIrNames: runtimeIrNames, unit: unit) otherwise (e) 'compileFailed'
+	return try compileMeasured(inputPaths, target: target, outputOverride: outputOverride, emitIr: emitIr, metricsPath: metricsPath, runtimeIrNames: runtimeIrNames, unit: unit) otherwise (e) 'compileFailed'
 		closeOpenPhaseSpans(unit)
 		throw e
 	end 'compileFailed'
@@ -64,12 +65,12 @@ end 'compile'
 // The build itself, from the whole-compile probe to the timing report — everything `compile` measures. It
 // is a separate function for the single reason its caller states: one failure path to hang the trace-span
 // drain on, rather than one per `try` in this body.
-function compileMeasured(inputPath FilePath, target Target, outputOverride String, emitIr bool, metricsPath String, runtimeIrNames RuntimeFunctionNameArray, unit TraceUnit) returns FilePath throws CompileError
+function compileMeasured(inputPaths MaxonSourcePathArray, target Target, outputOverride String, emitIr bool, metricsPath String, runtimeIrNames RuntimeFunctionNameArray, unit TraceUnit) returns FilePath throws CompileError
 	let whole = PhaseProbe.begin(compilePhaseName(CompilePhase.load), unit: unit)
 
 	// Loading starts the instant the compile does, so `whole` is also the `load` phase's
 	// probe — a second set of reads here would sample the same instant.
-	var project = try loadProject(inputPath, target: target)
+	var project = try loadProject(inputPaths, target: target)
 	recordPhase(project, phase: CompilePhase.load, probe: whole)
 
 	// ⭐ RESOLVED BEFORE THE PIPELINE, AND THAT ORDER IS THE WHOLE POINT: the previous build's
@@ -232,20 +233,20 @@ function writeTargetIr(codeResult CodeResult, outputPath FilePath, runtimeIrName
 	logInfo(LogCategory.compiler, message: function() gives "Wrote Target IR to {irPath}")
 end 'writeTargetIr'
 
-// Create a project rooted at `inputPath` and register every source file under it
-// with the query database — the shared "load" step before the pipeline runs.
+// Create a project rooted at `inputPaths`' common ancestor and register every source file the
+// caller named with the query database — the shared "load" step before the pipeline runs.
 // Factored out so `build` and the warm-rebuild gate load a project identically
 // (the gate compiles the same input into several independent fresh projects).
 //
 // File/IO errors (`fileNotFound`, `noSourceFiles`, `readError`) carry NO
 // diagnostics and propagate straight to the caller, which prints a specific
 // message. `loadSourceFiles` is what raises them.
-export function loadProject(inputPath FilePath, target Target) returns Project throws CompileError
+export function loadProject(inputPaths MaxonSourcePathArray, target Target) returns Project throws CompileError
 	// The checkout's `stdlib/` is found BEFORE the project exists, because the project carries it to
 	// the loader below. Nothing after the load asks where `stdlib/` is — a later pass asks about a
 	// FUNCTION (`isStdlibFunction`), which is answered from a set the loader already built.
-	var project = createProject(inputPath, target: target, stdlibDir: try locateStdlibDir())
-	try loadSourceFiles(project, path: project.rootPath)
+	var project = createProject(try commonAncestorOf(inputPaths), target: target, stdlibDir: try locateStdlibDir())
+	try loadSourceFiles(project, paths: inputPaths)
 	// AFTER the user's own sources — so a directory build's output name still derives from a user
 	// file (not from a stdlib module), and an empty user project still fails with `noSourceFiles`
 	// above rather than compiling only stdlib.
@@ -723,24 +724,83 @@ end 'compileToCodeResult'
 
 // --- Source loading ---
 
-// Register every source file under `path` with the query database. A single
-// `.maxon` file loads directly; a directory loads every `.maxon` file beneath
-// it (except `build.maxon`). Throws when the path does not exist or yields no
-// sources. (v1's `.maxonignore` support + `.test`-fragment stripping grow back
-// when the spec runner needs them.)
-function loadSourceFiles(project Project, path FilePath) throws CompileError
-	if File.exists(path) 'isFile'
-		try loadOneSourceFile(project, path: path)
-	end 'isFile' else if Directory.exists(path) 'isDir'
-		try loadSourceDirectory(project, dir: path)
-	end 'isDir' else 'notFound'
-		throw CompileError.fileNotFound(path)
-	end 'notFound'
+// ⭐⭐ **REGISTER EVERY SOURCE THE CALLER NAMED, IN THE ORDER THE CALLER NAMED IT (A3m).** A single
+// `.maxon` file loads directly; a directory loads every `.maxon` file beneath it (except
+// `build.maxon`). Throws when a path does not exist or the whole list yields no sources. (v1's
+// `.maxonignore` support + `.test`-fragment stripping grow back when the spec runner needs them.)
+//
+// ⚠⚠ **THE ORDER IS THE CALLER'S INPUT, AND IT IS NEVER A POLICY THIS LOADER APPLIES — SO NOTHING
+// HERE SORTS, AND NOTHING BELOW IT SORTS EITHER.** That is exactly the shape `StdlibLoader`'s header
+// asks for (user ruling 2026-07-24): a canonical input order imposed by the loader would HIDE an
+// order dependence instead of surfacing it, so *"where an ORDER genuinely matters it is canonicalized
+// at the point of emission … never by constraining what the loader was handed"*. Before A3m a
+// multi-file build had no way to STATE an order at all — `build` kept the first positional and
+// silently dropped the rest — so the answer came from raw `Directory.list`, i.e. from the staging
+// directory's on-disk state. Five `-either-order` spec pairs were written to pin BOTH walk orders of
+// one program and could pin neither: whichever order the host served, both halves got it, and the
+// pair was two tickets in one lottery (`specs-shv2/tuples.md`, `managed-memory-methods.md`,
+// `cross-file-signatures.md`).
+//
+// ⚠ A path named twice — directly and again through a directory that contains it — is registered
+// ONCE, at its FIRST position. That is not a rule this function applies: `fileChanged` upserts by
+// path and pushes onto `sourcePaths` only for a path it has not seen, so re-registering identical
+// content is a no-op all the way down. It is what makes `build a.maxon b.maxon <theirDirectory>`
+// mean "these two first, then whatever else is under there" — the form the spec runner uses to state
+// a case's declared file order while keeping the project rooted at the case's own directory.
+function loadSourceFiles(project Project, paths MaxonSourcePathArray) throws CompileError
+	for path in paths 'eachNamed'
+		if File.exists(path) 'isFile'
+			try loadOneSourceFile(project, path: path)
+		end 'isFile' else if Directory.exists(path) 'isDir'
+			try loadSourceDirectory(project, dir: path)
+		end 'isDir' else 'notFound'
+			throw CompileError.fileNotFound(path)
+		end 'notFound'
+	end 'eachNamed'
 
 	if project.db.sourcePaths.count() == 0 'noFiles'
-		throw CompileError.noSourceFiles(path)
+		throw CompileError.noSourceFiles(project.rootPath)
 	end 'noFiles'
 end 'loadSourceFiles'
+
+// ⭐⭐ **THE PROJECT ROOT OF A BUILD THAT NAMED SEVERAL PATHS — the ONE directory every one of them
+// lies under.** It is what `Project.rootPath` becomes, and through it what
+// `Queries.namespaceAnchorFor` measures every file's MODULE DIRECTORY from (N1), so getting it wrong
+// re-anchors namespaces silently rather than failing.
+//
+// ⚠ **ONE PATH IS ITS OWN ANCESTOR, and that identity is why nothing moves for the builds that
+// existed before A3m.** The narrowing loop's first comparison is `first` against itself, which
+// `isInside` answers true for, so a lone `build <file>` or `build <directory>` keeps the root it has
+// always had — the spelling the caller TYPED, unresolved. Every downstream reader resolves it against
+// the cwd for itself (`namespaceAnchorFor`, `rootIsUnderStdlibDirectory`), and `resolveOutputPath`
+// derives a default output name from it, so resolving it here would silently rewrite that name for
+// every single-file build in the tree.
+//
+// ⚠ **THE COMPARISON IS BETWEEN RESOLVED SPELLINGS, because `isInside` compares TEXT** — the same
+// trap `Queries.isStdlibSourceFile` records: an absolute path and a relative one naming one file are
+// two different strings, and a root that misses its own members would narrow all the way to the drive.
+export function commonAncestorOf(paths MaxonSourcePathArray) returns FilePath throws CompileError
+	let first = try paths.get(0) otherwise panic("commonAncestorOf: an empty path list — `Main.runBuild` refuses a `build` with no positional argument before any of this runs, and every other caller names exactly one path")
+	let cwd = Directory.currentPath()
+
+	var resolvedRoot = first.resolve(cwd)
+	var narrowed = false
+	for path in paths 'each'
+		let resolved = path.resolve(cwd)
+		while not resolved.isInside(resolvedRoot) 'narrow'
+			// Monotone, so the paths already checked stay inside: `resolvedRoot` only ever becomes an
+			// ancestor of what it was, and each of them was inside it.
+			resolvedRoot = try resolvedRoot.parent() otherwise throw CompileError.noCommonRoot(first, other: path)
+			narrowed = true
+		end 'narrow'
+	end 'each'
+
+	if narrowed 'severalPaths'
+		return resolvedRoot
+	end 'severalPaths'
+
+	return first
+end 'commonAncestorOf'
 
 // Load every Maxon source file under `dir`.
 function loadSourceDirectory(project Project, dir FilePath) throws CompileError
@@ -838,8 +898,9 @@ let IrFileExtension = ".ir"
 
 // Resolve the output executable path: an explicit `-o` override wins; otherwise
 // the output is the input's base name with the platform executable extension
-// (single-file build → next to the source; directory build → the first source
-// file's base name). Deriving a directory build's name from a `build.maxon`
+// (single-file build → next to the source; every other shape — a directory, or
+// several paths at once — → the FIRST registered source file's base name, which
+// for a list is the first path the caller named). Deriving a directory build's name from a `build.maxon`
 // `build("...")` manifest grows at M2, when directory builds become the norm;
 // the M1 verification gate is a single-file build (`basic.maxon` → `basic.exe`).
 function resolveOutputPath(project Project, outputOverride String) returns FilePath throws CompileError

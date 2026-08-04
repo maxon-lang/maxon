@@ -223,14 +223,15 @@ generic-alias arm carried a comment claiming the declaration sweep never reached
 is "used only as a call BASE … never as a swept value type". Both halves were false: the sweep reads
 declared TYPES through that same routine, and this program spells `IntArray` at a struct FIELD, a METHOD
 return and a FREE-FUNCTION return — three positions the sweep records and the whole-program index stores.
-The names aim the alias file at the FIRST walk position; nothing in a spec can pin that, and the twin below
-says why and covers the other aim.
+This half DECLARES the alias file first and the twin below declares it last — and since A3m the declared
+order is the compiled order, so the two halves cover the two orders between them instead of both getting
+whichever one the host's directory walk happened to serve.
 ```maxon
-// --- file: aaa-alias.maxon
+// --- file: alias.maxon
 export typealias Int = int(i64.min to i64.max)
 export typealias IntArray = Array with Int
 
-// --- file: zzz-main.maxon
+// --- file: main.maxon
 type Holder
 	export var nums as IntArray
 
@@ -266,14 +267,14 @@ end 'main'
 ```
 
 <!-- test: cross-file-generic-alias-is-a-swept-value-type-either-order -->
-⭐ **THE SAME PROGRAM WITH THE TWO FILES RENAMED, so the alias file is walked LAST.** Whether the arm fires
-during the sweep is decided by the filesystem walk's order, which `StdlibLoader` deliberately leaves
-unsorted. The arm is now gated on `ProgramSignatures.allFilesFolded`, so it fires in neither order and the
+⭐ **THE SAME PROGRAM WITH THE TWO FILES DECLARED THE OTHER WAY ROUND, so the alias file is compiled LAST.**
+Whether the arm fires during the sweep is decided by the order the files are registered in — which the
+CALLER states and the loader never sorts (A3m; `StdlibLoader`'s header for the no-sort ruling). The arm is now gated on `ProgramSignatures.allFilesFolded`, so it fires in neither order and the
 sweep records `named("IntArray")` for both — repaired identically at every read door. The alias file
 declares nothing but aliases, so the two cases' emitted IR is the SAME text: a golden that drifts apart is
 the order dependence coming back.
 ```maxon
-// --- file: aaa-main.maxon
+// --- file: main.maxon
 type Holder
 	export var nums as IntArray
 
@@ -304,7 +305,7 @@ function main() returns ExitCode
 	return (x + y + z) as ExitCode
 end 'main'
 
-// --- file: zzz-alias.maxon
+// --- file: alias.maxon
 export typealias Int = int(i64.min to i64.max)
 export typealias IntArray = Array with Int
 ```
@@ -316,15 +317,15 @@ export typealias IntArray = Array with Int
 ⭐ **THE FUNCTION-ALIAS ARM IS THE SAME SHAPE (A3e).** `functionTypeAliases` is folded per FILE, so a
 function alias declared in a sibling file walked earlier is registered while a later file is still being
 swept — the arm's own comment claimed the registry "returns `undeclared`" throughout the sweep, which is
-true only within one file. The names aim the alias file at the FIRST walk position and its twin below swaps
-them; which one the host actually serves is not something a spec can pin (see
+true only within one file. This half declares the alias file FIRST and its twin below declares it
+last; since A3m that is what the compiler compiles, so the pair covers both orders (see
 `cross-file-generic-alias-is-a-swept-value-type-either-order` above).
 ```maxon
-// --- file: aaa-alias.maxon
+// --- file: alias.maxon
 export typealias Int = int(i64.min to i64.max)
 export typealias UnaryOp = function(Int) returns Int
 
-// --- file: zzz-main.maxon
+// --- file: main.maxon
 function twice(n Int) returns Int
 	return n * 2
 end 'twice'
@@ -352,10 +353,10 @@ end 'main'
 ```
 
 <!-- test: cross-file-function-alias-is-a-swept-value-type-either-order -->
-⭐ **THE SAME PROGRAM WITH THE TWO FILES RENAMED.** Same gate, same reason, and the same golden-drift
+⭐ **THE SAME PROGRAM WITH THE TWO FILES DECLARED THE OTHER WAY ROUND.** Same gate, same reason, and the same golden-drift
 tripwire: the alias file declares nothing but aliases, so this case's IR must read identically to its twin.
 ```maxon
-// --- file: aaa-main.maxon
+// --- file: main.maxon
 function twice(n Int) returns Int
 	return n * 2
 end 'twice'
@@ -378,7 +379,7 @@ function main() returns ExitCode
 	return (h.op(7) + f(14)) as ExitCode
 end 'main'
 
-// --- file: zzz-alias.maxon
+// --- file: alias.maxon
 export typealias Int = int(i64.min to i64.max)
 export typealias UnaryOp = function(Int) returns Int
 ```

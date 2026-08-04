@@ -942,8 +942,19 @@ typealias FragmentPathMappingArray = Array with FragmentPathMapping
 //     names each file and each file's OWN line numbers, and both must be translated back onto the
 //     merged fragment before anything is compared or committed.
 type StagedTest
-	// What `build` is pointed at: the fragment file, or the test's source directory.
-	export let buildTarget as FilePath
+	// ⭐⭐ **WHAT `build` IS POINTED AT — a LIST, because the ORDER is part of what a multi-file case
+	// SAYS (A3m).** One entry for a single-file test: the fragment. For a multi-file test, one entry
+	// per `// --- file:` section in DECLARATION order, followed by the test's source directory.
+	//
+	// ⚠ **THE TRAILING DIRECTORY IS WHAT ROOTS THE PROJECT, AND IT IS NOT REDUNDANT.**
+	// `Compiler.commonAncestorOf` derives `Project.rootPath` from the paths it is handed, and
+	// `Queries.namespaceAnchorFor` measures every file's NAMESPACE from that root (N1). A case whose
+	// every `// --- file:` sits under one subdirectory — `app/main.maxon`, `app/helper.maxon` — has
+	// `<testDir>/app` as its files' common ancestor, so naming only the files would silently re-anchor
+	// both into the root module and change what the case MEANS. Naming the directory last pins the
+	// root at `<testDir>` for every shape, and costs nothing: staging wrote exactly the declared
+	// files, and `Compiler.loadSourceFiles` registers a path it has already seen zero more times.
+	export let buildTargets as FilePathArray
 	// ⭐ WHICH BINARY COMPILES IT — the compiler under test, or, for a `// --- stdlib-overlay:` case,
 	// this test's private COPY of it (see `stageStdlibOverlay`). It rides on the staging rather than
 	// being threaded from the caller because the overlay is what chooses it, and staging is where the
@@ -955,8 +966,8 @@ type StagedTest
 	// What was written, so it can be removed afterwards.
 	export let writtenFiles as FilePathArray
 
-	static function create(buildTarget FilePath, compilerExe FilePath, paths FragmentPathMappingArray, writtenFiles FilePathArray) returns StagedTest
-		return Self{buildTarget: buildTarget, compilerExe: compilerExe, paths: paths, writtenFiles: writtenFiles}
+	static function create(buildTargets FilePathArray, compilerExe FilePath, paths FragmentPathMappingArray, writtenFiles FilePathArray) returns StagedTest
+		return Self{buildTargets: buildTargets, compilerExe: compilerExe, paths: paths, writtenFiles: writtenFiles}
 	end 'create'
 end 'StagedTest'
 
@@ -1014,7 +1025,11 @@ function runStagedTest(test SpecTest, specName String, staged StagedTest, exeBas
 
 	var compileArgv = StringArray.create()
 	compileArgv.push(BuildSubcommand)
-	compileArgv.push(staged.buildTarget.toString())
+	// In order: a multi-file case's whole point is that the compiler registers its files in the order
+	// the case declared them (see `StagedTest.buildTargets`).
+	for buildTarget in staged.buildTargets 'eachSource'
+		compileArgv.push(buildTarget.toString())
+	end 'eachSource'
 	compileArgv.push(OutputFlag)
 	compileArgv.push(exeBase.toString())
 	// The cumulative-CPU indicator's only input. It costs the compile one small file write, and
@@ -1170,10 +1185,23 @@ function stageTest(tempDir FilePath, test SpecTest, compilerExe FilePath) return
 	var written = FilePathArray.create()
 	written.push(fragmentPath)
 
-	return StagingResult.staged(StagedTest.create(fragmentPath, compilerExe: compilerExe, paths: paths, writtenFiles: written))
+	var buildTargets = FilePathArray.create()
+	buildTargets.push(fragmentPath)
+
+	return StagingResult.staged(StagedTest.create(buildTargets, compilerExe: compilerExe, paths: paths, writtenFiles: written))
 end 'stageTest'
 
-// A MULTI-file test: one directory, one file per `// --- file:` section, compiled as a project.
+// A MULTI-file test: one directory, one file per `// --- file:` section, compiled as a project — and
+// the build NAMES those files, in the order the case declared them, ahead of the directory itself.
+//
+// ⭐⭐ **THE DECLARED ORDER IS THE COMPILED ORDER (A3m), AND NOTHING NEW SAYS SO.** The `// --- file:`
+// sections were already ordered and already staged in that order; the only thing missing was a way to
+// TELL the compiler, which `build <file>... <dir>` now is. Five `-either-order` spec pairs exist to pin
+// a program's answer in BOTH sibling-file orders and could pin neither: `build` took one path, the
+// loader walked raw `Directory.list`, and the order was therefore a property of the staging directory's
+// on-disk state rather than of the case. Both halves of every such pair got whichever order the host
+// served — two tickets in one lottery. See `StagedTest.buildTargets` for why the directory still rides
+// along at the end.
 //
 // The directory is RECONSTRUCTED, never inherited. A `.maxon` left behind by an earlier version of
 // this test would join the build silently and change what the test MEANS — and "the instrument died
@@ -1189,6 +1217,9 @@ function stageSourceFiles(tempDir FilePath, test SpecTest, compilerExe FilePath)
 
 	var paths = FragmentPathMappingArray.create()
 	var written = FilePathArray.create()
+	// Separate from `written` on purpose: an overlay appends its own files to that list below, and a
+	// case's private stdlib is not one of the units the program is built FROM.
+	var buildTargets = FilePathArray.create()
 
 	for file in test.sourceFiles 'eachFile'
 		if not isSafeRelativeName(file.name) 'unsafeName'
@@ -1209,6 +1240,7 @@ function stageSourceFiles(tempDir FilePath, test SpecTest, compilerExe FilePath)
 
 		paths.push(FragmentPathMapping.create(path.toString(), lineOffset: file.mergedLineOffset, sourceDirPrefix: sourceDirPrefixOf(file.name)))
 		written.push(path)
+		buildTargets.push(path)
 	end 'eachFile'
 
 	var compiler = compilerExe
@@ -1218,7 +1250,11 @@ function stageSourceFiles(tempDir FilePath, test SpecTest, compilerExe FilePath)
 		end 'overlayFailed'
 	end 'hasStdlibOverlay'
 
-	return StagingResult.staged(StagedTest.create(testDir, compilerExe: compiler, paths: paths, writtenFiles: written))
+	// LAST, so every file above is registered before the walk reaches it and the walk finds nothing
+	// new — the directory is here to fix the project ROOT, not to contribute a unit.
+	buildTargets.push(testDir)
+
+	return StagingResult.staged(StagedTest.create(buildTargets, compilerExe: compiler, paths: paths, writtenFiles: written))
 end 'stageSourceFiles'
 
 // Why a `// --- stdlib-overlay:` case could not be staged. A one-arm union implementing `Error` — the

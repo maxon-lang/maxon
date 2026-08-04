@@ -30,6 +30,18 @@ func @alpha.shout {
     x64.ret
 }
 
+func @beta.shout {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.leaRegRdata rcx, [rip + __str_rec_3]
+    x64.callDirect __print_string
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
 func @main {
   entry:
     x64.pushReg rbp
@@ -38,18 +50,6 @@ func @main {
     x64.callDirect alpha.shout
     x64.callDirect beta.shout
     x64.movRegImm32 r8, 0
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-}
-
-func @beta.shout {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.leaRegRdata rcx, [rip + __str_rec_3]
-    x64.callDirect __print_string
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
