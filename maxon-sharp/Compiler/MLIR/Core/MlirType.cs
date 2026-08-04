@@ -543,6 +543,19 @@ public class IrRangedPrimitiveType : IrType {
 
   public bool IsFloatBased => BaseType.IsFloat;
 
+  /// ⭐ THE one place `upto`'s EXCLUSIVE upper becomes the largest value an integer range ADMITS.
+  ///
+  /// ⚠ It was spelled out at twelve call sites, and the doc block on `Parser.DeclaredIntRange` already
+  /// names why that is the dangerous kind of copy: nothing made the twelve agree, a change reaching
+  /// some and not the rest is a range wrongly widened or narrowed by exactly one, and every symptom of
+  /// that — a bound check that admits one value too many, a divisor cleared of a hazard it has, a
+  /// division narrowed one bit too far — is a wrong answer or a fault at run time and a compile error
+  /// nowhere.
+  ///
+  /// UNSIGNED readers cast the result: `(ulong)InclusiveIntUpper` is bit-identical to the
+  /// `(ulong)IntUpper - 1` they used to write, because both wrap in the same two's-complement width.
+  public long InclusiveIntUpper => UpperInclusive ? IntUpper : IntUpper - 1;
+
   /// True when the range is entirely non-negative — derived from OptimalType.
   public new bool IsUnsigned => OptimalType.IsUnsigned;
 
@@ -580,13 +593,10 @@ public class IrRangedPrimitiveType : IrType {
       return FloatLower >= other.FloatLower && thisUpper <= otherUpper;
     } else if (IntLower >= 0 && other.IntLower >= 0) {
       // Both unsigned: compare as unsigned
-      var thisUpper = UpperInclusive ? (ulong)IntUpper : (ulong)IntUpper - 1;
-      var otherUpper = other.UpperInclusive ? (ulong)other.IntUpper : (ulong)other.IntUpper - 1;
-      return (ulong)IntLower >= (ulong)other.IntLower && thisUpper <= otherUpper;
+      return (ulong)IntLower >= (ulong)other.IntLower
+        && (ulong)InclusiveIntUpper <= (ulong)other.InclusiveIntUpper;
     } else {
-      var thisUpper = UpperInclusive ? IntUpper : IntUpper - 1;
-      var otherUpper = other.UpperInclusive ? other.IntUpper : other.IntUpper - 1;
-      return IntLower >= other.IntLower && thisUpper <= otherUpper;
+      return IntLower >= other.IntLower && InclusiveIntUpper <= other.InclusiveIntUpper;
     }
   }
 
@@ -612,17 +622,13 @@ public class IrRangedPrimitiveType : IrType {
         // Full range means ALL possible bit patterns of the base type are covered.
         // Both signed (i64.min to i64.max) and unsigned (0 to u64.max) cover all i64 bits.
         if (BaseType == I64) {
-          var effectiveUpper = UpperInclusive ? IntUpper : IntUpper - 1;
           // Signed full range
-          if (IntLower <= long.MinValue && effectiveUpper >= long.MaxValue) return true;
+          if (IntLower <= long.MinValue && InclusiveIntUpper >= long.MaxValue) return true;
           // Unsigned full range: 0 to u64.max (-1 as signed) covers all bit patterns
-          if (IntLower == 0 && (ulong)effectiveUpper >= ulong.MaxValue) return true;
+          if (IntLower == 0 && (ulong)InclusiveIntUpper >= ulong.MaxValue) return true;
           return false;
         }
-        if (BaseType == I8) {
-          var effectiveUpper = UpperInclusive ? IntUpper : IntUpper - 1;
-          return IntLower <= 0 && effectiveUpper >= 255;
-        }
+        if (BaseType == I8) return IntLower <= 0 && InclusiveIntUpper >= 255;
         return false;
       }
     }

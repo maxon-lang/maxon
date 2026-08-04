@@ -6207,11 +6207,10 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
           ErrorCode.SemanticTypeMismatch, $"Cannot cast non-integer value to '{ranged.Name}'", asToken.Line, asToken.Column);
         bool outOfRange;
         if (ranged.IntLower >= 0) {
-          var upperLimit = ranged.UpperInclusive ? (ulong)ranged.IntUpper : (ulong)ranged.IntUpper - 1;
-          outOfRange = (ulong)numericVal < (ulong)ranged.IntLower || (ulong)numericVal > upperLimit;
+          outOfRange = (ulong)numericVal < (ulong)ranged.IntLower
+            || (ulong)numericVal > (ulong)ranged.InclusiveIntUpper;
         } else {
-          var upperLimit = ranged.UpperInclusive ? ranged.IntUpper : ranged.IntUpper - 1;
-          outOfRange = numericVal < ranged.IntLower || numericVal > upperLimit;
+          outOfRange = numericVal < ranged.IntLower || numericVal > ranged.InclusiveIntUpper;
         }
         if (outOfRange) {
           throw new CompileError(ErrorCode.SemanticTypeMismatch,
@@ -10330,8 +10329,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       var litOp = _currentBlock!.Operations.OfType<MaxonLiteralOp>().LastOrDefault();
       if (litOp != null) {
         var val = litOp.IntValue;
-        var upper = rangedRetType.UpperInclusive ? rangedRetType.IntUpper : rangedRetType.IntUpper - 1;
-        if (val < rangedRetType.IntLower || val > upper) {
+        if (val < rangedRetType.IntLower || val > rangedRetType.InclusiveIntUpper) {
           throw new CompileError(ErrorCode.SemanticTypeMismatch,
             $"otherwise value {val} is outside the range of '{rangedRetType.Name}' ({rangedRetType.FormatRange()})",
             tryToken.Line, tryToken.Column);
@@ -19809,12 +19807,11 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   /// </summary>
   private static bool IntegerOutOfRange(long candidate, IrRangedPrimitiveType rangedType) {
     if (rangedType.IntLower >= 0) {
-      var upperLimit = rangedType.UpperInclusive ? (ulong)rangedType.IntUpper : (ulong)rangedType.IntUpper - 1;
-      return (ulong)candidate < (ulong)rangedType.IntLower || (ulong)candidate > upperLimit;
+      return (ulong)candidate < (ulong)rangedType.IntLower
+        || (ulong)candidate > (ulong)rangedType.InclusiveIntUpper;
     }
 
-    var signedUpper = rangedType.UpperInclusive ? rangedType.IntUpper : rangedType.IntUpper - 1;
-    return candidate < rangedType.IntLower || candidate > signedUpper;
+    return candidate < rangedType.IntLower || candidate > rangedType.InclusiveIntUpper;
   }
 
   /// ⭐⭐ Does an INTEGER range's upper bound need a runtime compare? The runtime half of
@@ -24684,12 +24681,12 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       return folded.Value == OverflowingDivisorPattern;
 
     if (DeclaredIntRange(divisorExpr, divisor) is { } range) {
-      // A NON-NEGATIVE low bound makes the range unsigned, and a stored upper below 0 is then the
-      // wrapped `u64.max` region — which admits the `-1` BIT PATTERN even though no value it
-      // describes is negative. Only a real (non-wrapped) upper lets such a range clear the hazard.
-      // A NEGATIVE low bound reads signed throughout: the range clears `-1` iff it stops below it.
+      // A NON-NEGATIVE low bound makes the range unsigned, and the wrapped region above `i64.max`
+      // admits the `-1` BIT PATTERN even though no value it describes is negative — so the hazard is
+      // exactly <see cref="IsAboveSignedMax"/>, asked of the divisor. A NEGATIVE low bound reads
+      // signed throughout: the range clears `-1` iff it stops below it.
       return range.Low >= 0
-        ? range.InclusiveUpper < 0
+        ? IsAboveSignedMax(range)
         : range.InclusiveUpper >= OverflowingDivisorPattern;
     }
 
@@ -24804,7 +24801,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
         || rangedType is not IrRangedPrimitiveType rpt || rpt.IsFloatBased)
       return null;
 
-    return (rpt.IntLower, rpt.UpperInclusive ? rpt.IntUpper : rpt.IntUpper - 1);
+    return (rpt.IntLower, rpt.InclusiveIntUpper);
   }
 
   /// The integer values an operand can hold, as (low, INCLUSIVE upper): what its ranged typealias
@@ -24871,6 +24868,13 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
 
   /// A range that admits values past `i64.max` — non-negative, so read unsigned, with an upper whose
   /// stored `long` has gone negative. No signed reading can hold it.
+  ///
+  /// ⚠ Testing only the UPPER is complete, and that rests on a check made elsewhere: a range whose
+  /// LOW wraps past `i64.max` is REFUSED at declaration (E3005, "Integer range cannot span both
+  /// negative values and above i64.max"), so `Low < 0` always means a genuinely negative bound and
+  /// never a wrapped one. Were that refusal ever relaxed, this predicate — and the signed arm of
+  /// <see cref="UnionIntRange"/> that trusts it — would silently read `int(u64.max-7 to u64.max)` as
+  /// the signed `-8 to -1` and narrow a division to `i8`.
   private static bool IsAboveSignedMax((long Low, long InclusiveUpper) range) =>
     range.Low >= 0 && range.InclusiveUpper < 0;
 
