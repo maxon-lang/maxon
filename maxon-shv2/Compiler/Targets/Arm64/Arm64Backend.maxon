@@ -107,11 +107,21 @@ let Arm64XzrField = 31
 let Arm64OpAddImm = 0x91000000
 let Arm64OpSubImm = 0xD1000000
 let Arm64ImmShift = 10
-let Arm64ImmMask = 0xFFF
+
+// The WIDTH of the imm12 field. It is TWO facts in one number and they cannot be allowed to drift: how
+// many bits the field holds, and how far the `sh` bit below shifts it — so the mask and the hi/lo split's
+// shift are both derived from it rather than each written as a literal.
+let Arm64Imm12FieldBits = 12
+let Arm64ImmMask = (1 shl Arm64Imm12FieldBits) - 1
 
 // The `sh` bit (22): a set `sh` shifts the 12-bit immediate left by 12, extending ADD/SUB-immediate
 // reach to a full 24-bit frame/offset in a hi/lo split.
 let Arm64ImmShiftHiBit = 0x400000
+
+// The largest value the SHIFTED imm12 field alone carries — `0xFFF000`. Derived from the plain field
+// rather than written out, because the two are one fact seen at two shifts: widen `Arm64ImmMask` and a
+// derived ceiling follows while a literal silently would not.
+let Arm64ShiftedImm12Max = Arm64ImmMask shl Arm64Imm12FieldBits
 
 // The bitmask-immediate logical ops (AND/ORR/EOR #bimm). N:immr:imms occupy bits 22:10.
 let Arm64OpAndImm = 0x92000000
@@ -145,9 +155,21 @@ let Arm64MoveWideImm16Shift = 5
 let Arm64HalfwordBits = 16
 let Arm64HalfwordMask = 0xFFFF
 
-// --- Compare (SUBS/ANDS into XZR) ---
+// --- Compare (SUBS/ADDS into XZR) ---
 let Arm64OpCmpReg = 0xEB00001F
-let Arm64OpCmpImm = 0xF100001F
+
+// `CMP Xn, #imm` IS `SUBS XZR, Xn, #imm` and `CMN Xn, #imm` IS `ADDS XZR, Xn, #imm` — so the two are
+// named as what they encode and go through the SAME `arm64EmitAddSubImm12` field builder every other
+// immediate form uses, with XZR in the Rd field. (The register compare above keeps its baked-in `1F`:
+// it is a 2-register form with no field builder to share.)
+//
+// ⭐ CMN IS WHY A NEGATIVE COMPARE-IMMEDIATE HAS A FORM AT ALL. `x − (−m)` IS `x + m`: the same 64-bit
+// result, so the same NZCV — including the carry the UNSIGNED conditions read, since subtracting `K`
+// computes `x + not K + 1` and for `K = −m` that is `x + m` with the identical carry out. Without it a
+// comparison against `-1` costs a FOUR-instruction movz/movk ladder (all four halfwords of the two's
+// complement are live) plus a register compare.
+let Arm64OpSubsImm = 0xF1000000
+let Arm64OpAddsImm = 0xB1000000
 
 // CSET Xd, cond = CSINC Xd, XZR, XZR, invert(cond). The condition field is at bit 12; CSET inverts
 // the condition it is given (the true value comes from the +1 of XZR).
@@ -208,6 +230,11 @@ let Arm64OpStrB = 0x39000000
 export let Arm64OpLdrB = 0x39400000
 let Arm64LoadStoreImm12Shift = 10
 let Arm64LoadStoreImm12Mask = 0xFFF
+
+// An `LDRB`/`STRB` transfers one byte, so its imm12 field counts bytes — the scale that makes the byte
+// forms an ordinary case of the scaled builder (`arm64AccessScale`) rather than a hand-written second
+// range check that could come to disagree with the ISEL's predicate.
+let Arm64ByteAccessScale = 1
 
 // Unscaled signed-offset forms (STUR/LDUR, simm9 at bit 12, ±256). Below the 256-byte threshold a
 // spill/reload uses these; at or above it the scaled form is MANDATORY — STUR's 9-bit field silently
@@ -306,12 +333,13 @@ let Arm64OpFcselD = 0x1E600C00
 // x64 has no `xchg xmm` and swaps XMMs with a triple-xorpd).
 let Arm64OpEorVec8b = 0x2E201C00
 
-// The largest immediate `arm64EmitAddSubImmWide`'s hi/lo split encodes — 24 bits, as two imm12 fields.
-// It bounds BOTH of that helper's callers, and they answer an over-large value differently: the ALU
-// add/sub-immediate has a REGISTER form to fall back to, so its isel asks `arm64ImmIsEncodableAddSub`
-// and never selects the immediate form for a wider constant; a FRAME past this has no encodable form
-// at all (SP cannot be a shifted-register operand), so the split panics rather than truncate.
-let Arm64AddSubImmWideMax = 0xFFFFFF
+// The largest immediate `arm64EmitAddSubImmWide`'s hi/lo split encodes — 24 bits, as two imm12 fields,
+// which is exactly the two fields above OR'd together. It bounds BOTH of that helper's callers, and they
+// answer an over-large value differently: the ALU add/sub-immediate has a REGISTER form to fall back to,
+// so its isel asks `arm64ImmIsEncodableAddSub` and never selects the immediate form for a wider constant;
+// a FRAME past this has no encodable form at all (SP cannot be a shifted-register operand), so the split
+// panics rather than truncate.
+let Arm64AddSubImmWideMax = Arm64ShiftedImm12Max or Arm64ImmMask
 
 // The reach of a `b`/`bl` (imm26 scaled by 4 = ±128 MiB) and of a `b.cond`/`cbz`/`cbnz` (imm19 scaled
 // by 4 = ±1 MiB), as byte counts. Guarded on resolution so an out-of-range branch is a loud link
@@ -595,6 +623,31 @@ function arm64AddSubImmMagnitude(imm Imm32) returns MachineWord
 	return 0 - imm
 end 'arm64AddSubImmMagnitude'
 
+// Whether a magnitude fits ONE imm12 field — plain, or shifted left by 12 with an empty low half.
+//
+// ⚠ A STRICTLY SMALLER BAND THAN `arm64ImmIsEncodableAddSub`'s, and the difference is the whole reason
+// this is a separate question. That one admits the hi/lo PAIR `arm64EmitAddSubImmWide` splits a 24-bit
+// magnitude into; a COMPARE cannot use a pair, because the flags it exists to set would then describe
+// only the second half of the subtraction. So `x + 16777215` has an immediate form and
+// `x == 16777215` does not.
+function arm64MagnitudeFitsOneImm12(magnitude MachineWord) returns bool
+	if magnitude <= Arm64ImmMask 'plainField'
+		return true
+	end 'plainField'
+	return (magnitude and Arm64ImmMask) == 0 and magnitude <= Arm64ShiftedImm12Max
+end 'arm64MagnitudeFitsOneImm12'
+
+// Whether a signed `Imm32` has a COMPARE-immediate form at all. The MAGNITUDE decides, because the SIGN
+// rides the OPCODE here exactly as it does on add/sub — a negative compare-immediate is a `cmn` of its
+// magnitude — so `arm64AddSubImmMagnitude` answers for both.
+//
+// The ISEL asks this to choose `cmp #imm` vs materialising the constant into a register: it is the SAME
+// band `arm64EmitCmpImm` enforces, so the two can never disagree (one fact, one home — the encoder's),
+// exactly as `arm64ImmIsEncodableAddSub` and `arm64ImmIsEncodableLogical` pair with their encoders.
+export function arm64ImmIsEncodableCmp(imm Imm32) returns bool
+	return arm64MagnitudeFitsOneImm12(arm64AddSubImmMagnitude(imm))
+end 'arm64ImmIsEncodableCmp'
+
 // ADD/SUB Rd, Rn, #imm for an immediate that may exceed the 12-bit field: a plain 12-bit form
 // silently truncates any value ≥ 0x1000, corrupting a large stack-slot address or frame size (M1
 // trap). Splits into a high (<<12) and low part; `rd` doubles as the running accumulator, so it is
@@ -603,7 +656,7 @@ function arm64EmitAddSubImmWide(code ByteArray, opcode MachineWord, rd MachineWo
 	if imm > Arm64AddSubImmWideMax 'tooLarge'
 		panic("arm64EmitAddSubImmWide: immediate {imm} exceeds the {Arm64AddSubImmWideMax} the hi/lo imm12 split reaches — an ALU immediate this wide is the ISEL's obligation (it asks `arm64ImmIsEncodableAddSub` and materialises the constant into a register: StdToArm64Conversion.lowerAddSubImm), and a FRAME this large has no encodable form at all")
 	end 'tooLarge'
-	let high = (imm shr 12) and Arm64ImmMask
+	let high = (imm shr Arm64Imm12FieldBits) and Arm64ImmMask
 	let low = imm and Arm64ImmMask
 	if high == 0 'smallImm'
 		arm64EmitAddSubImm12(code, opcode: opcode, rd: rd, rn: rn, imm12: low, shiftHi: false)
@@ -672,17 +725,24 @@ export function arm64EmitCmpReg(code ByteArray, rn MachineWord, rm MachineWord)
 	emitArm64Insn(code, insn: Arm64OpCmpReg or (rm shl Arm64RmShift) or (rn shl Arm64RnShift))
 end 'arm64EmitCmpReg'
 
-// CMP Xn, #imm. The immediate is 12-bit unsigned; a value outside [0, 4095] (a large or negative
-// literal) is materialised into the IP scratch and compared as a register — AArch64 has no wider
-// CMP-immediate, so this is the only correct form (a masked 12-bit truncation would compare the
-// wrong constant).
+// `CMP Xn, #imm` / `CMN Xn, #imm` — the compare-immediate, in whichever of the two single-field shapes
+// its magnitude takes: the plain imm12, or the imm12 shifted left by 12 when the low half is empty.
+//
+// A magnitude with NO single-field form is the ISEL's obligation (`StdToArm64Conversion.lowerCmpImm`
+// asks `arm64ImmIsEncodableCmp` and materialises the constant into the IP scratch, comparing
+// register-to-register), so this PANICS rather than truncate — a masked field would compare against a
+// different constant with nothing anywhere to notice. The materialisation used to live HERE, invisible
+// to the register allocator and the liveness model that must see every write of x16.
 export function arm64EmitCmpImm(code ByteArray, rn MachineWord, imm Imm32)
-	if imm >= 0 and imm <= Arm64ImmMask 'fits'
-		emitArm64Insn(code, insn: Arm64OpCmpImm or ((imm as MachineWord) shl Arm64ImmShift) or (rn shl Arm64RnShift))
-		return
-	end 'fits'
-	arm64EmitMovImm(code, rd: Arm64Ip0, value: imm32ToWord(imm))
-	arm64EmitCmpReg(code, rn: rn, rm: Arm64Ip0)
+	let magnitude = arm64AddSubImmMagnitude(imm)
+	if not arm64MagnitudeFitsOneImm12(magnitude) 'noForm'
+		panic("arm64EmitCmpImm: compare immediate {imm} fits neither the plain imm12 field nor the shifted one, and a compare has no hi/lo split to fall back on — the ISEL must materialise it into a register and compare register-to-register (StdToArm64Conversion.lowerCmpImm)")
+	end 'noForm'
+
+	let shiftHi = magnitude > Arm64ImmMask
+	let field = (magnitude shr Arm64Imm12FieldBits) if shiftHi else magnitude
+	let opcode = Arm64OpAddsImm if imm < 0 else Arm64OpSubsImm
+	arm64EmitAddSubImm12(code, opcode: opcode, rd: Arm64XzrField, rn: rn, imm12: field, shiftHi: shiftHi)
 end 'arm64EmitCmpImm'
 
 // A signed `Imm32` as its 64-bit two's-complement pattern — the value `movz`/`movk` must materialise
@@ -792,64 +852,100 @@ export function arm64EmitScaledMem(code ByteArray, opcode MachineWord, rt Machin
 end 'arm64EmitScaledMem'
 
 // The scaled imm12 field of a load/store: `byteOffset / scale`, asserting scale-alignment and range.
+//
+// Both panics are ASSERTIONS OF THE ISEL'S OBLIGATION, not reachable diagnostics: a data access whose
+// offset has no scaled form is folded into the IP scratch upstream (`StdToArm64Conversion.addressFor`
+// asks `arm64DispHasScaledForm`, and addresses `[scratch + 0]` when the answer is no), so what arrives
+// here always fits. Masking either condition away would read or WRITE THE WRONG FIELD with nothing
+// anywhere to notice — which is why they stay panics rather than becoming clamps.
+//
+// The alignment arm has no reachable caller today and that is a property of the LAYOUT, not luck: every
+// 64-bit access offset in this compiler is slot-derived (`Project.FieldSlotBytes` = 8, `UnionTagBytes` =
+// 8, `IrInterface.InterfaceWitnessHalfOffset` = 8, the layout-descriptor columns) and every 8-byte
+// multiple divides 8, while a byte access has scale 1 and divides everything. It is the assertion that
+// stays true only while that holds.
 function arm64ScaledImm12(byteOffset MachineWord, scale MachineWord) returns MachineWord
 	// `scale` is a load/store access width (1/2/4/8), always non-zero; cast so the divide and
 	// remainder are provably safe (integer `/`/`mod` throw for a possibly-zero divisor).
 	let s = scale as NonZeroWord
 	if byteOffset mod s != 0 'unaligned'
-		panic("arm64 emitter: load/store byte offset {byteOffset} is not {scale}-aligned — the scaled imm12 form cannot encode it")
+		panic("arm64 emitter: load/store byte offset {byteOffset} is not {scale}-aligned — the scaled imm12 form cannot encode it, and the ISEL must have folded it into a scratch base (StdToArm64Conversion.addressFor)")
 	end 'unaligned'
 	let scaled = byteOffset / s
 	if scaled > Arm64LoadStoreImm12Mask 'tooLarge'
-		panic("arm64 emitter: load/store offset {byteOffset} (scaled {scaled}) exceeds the 12-bit unsigned field")
+		panic("arm64 emitter: load/store offset {byteOffset} (scaled {scaled}) exceeds the 12-bit unsigned field — the ISEL must have folded it into a scratch base (StdToArm64Conversion.addressFor)")
 	end 'tooLarge'
 	return scaled
 end 'arm64ScaledImm12'
+
+// The byte-offset SCALE of a `[base + disp]` data access at this width: `LDRB`/`STRB` scale by 1, the
+// 64-bit forms by 8. The ONE place the two widths' scales are named — the ISEL's "does this offset have
+// a direct form" predicate and the encoders below both read it, so the reach they agree on is one fact.
+function arm64AccessScale(width X64AccessWidth) returns MachineWord
+	let scale = match width 'w'
+		byte gives Arm64ByteAccessScale
+		word64 gives SpillSlotBytes
+	end 'w'
+	return scale
+end 'arm64AccessScale'
+
+// Whether a `[base + disp]` data access at this width has a DIRECT scaled form — the offset is
+// non-negative, scale-aligned, and its scaled value fits the 12-bit field. That reaches 4095 bytes for a
+// byte access and 32760 for a 64-bit one, and NOTHING between there and the `Imm32` a Std
+// `loadIndirect`/`storeIndirect` offset carries (`StdLoweringShared.memoryDisplacement` is sized for
+// x64's `[base + disp32]`, which takes the whole domain verbatim).
+//
+// The ISEL asks this to choose the direct form vs folding `base + offset` into the IP scratch: it is the
+// SAME question `arm64ScaledImm12` enforces, asked once, so the two can never disagree.
+export function arm64DispHasScaledForm(disp Imm32, width X64AccessWidth) returns bool
+	if disp < 0 'negative'
+		return false
+	end 'negative'
+
+	let scale = arm64AccessScale(width) as NonZeroWord
+	let byteOffset = disp as MachineWord
+	return byteOffset mod scale == 0 and byteOffset / scale <= Arm64LoadStoreImm12Mask
+end 'arm64DispHasScaledForm'
 
 // A `[base + disp]` load at the op's width (the data-section access forms). A `word64` load moves
 // through a GPR ldr or an FP ldr per the dest's class (an f64 global is 64 bits either way); a `byte`
 // load is LDRB (zero-extending — a bool must arrive zero-extended, or the upper bits are garbage) and
 // GPR-only.
+//
+// Both widths go through the SAME scaled-field builder, at their own scale: a byte access is the scaled
+// form with scale 1, so its 0..4095 reach is `arm64ScaledImm12`'s range check rather than a second
+// hand-written one that could come to disagree with the ISEL's predicate.
 function arm64EmitDataLoad(code ByteArray, dest TargetVReg, base MachineWord, disp Imm32, width X64AccessWidth)
+	let byteOffset = arm64NonNegDisp(disp)
 	match width 'w'
-		byte then emitArm64Insn(code, insn: Arm64OpLdrB or ((arm64ByteDisp(disp)) shl Arm64LoadStoreImm12Shift) or (base shl Arm64RnShift) or arm64GprField(dest))
-		word64 then arm64EmitWord64Load(code, dest: dest, base: base, disp: disp)
+		byte then arm64EmitScaledMem(code, opcode: Arm64OpLdrB, rt: arm64GprField(dest), baseReg: base, byteOffset: byteOffset, scale: arm64AccessScale(width))
+		word64 then arm64EmitWord64Load(code, dest: dest, base: base, byteOffset: byteOffset)
 	end 'w'
 end 'arm64EmitDataLoad'
 
 function arm64EmitDataStore(code ByteArray, base MachineWord, disp Imm32, src TargetVReg, width X64AccessWidth)
+	let byteOffset = arm64NonNegDisp(disp)
 	match width 'w'
-		byte then emitArm64Insn(code, insn: Arm64OpStrB or ((arm64ByteDisp(disp)) shl Arm64LoadStoreImm12Shift) or (base shl Arm64RnShift) or arm64GprField(src))
-		word64 then arm64EmitWord64Store(code, base: base, disp: disp, src: src)
+		byte then arm64EmitScaledMem(code, opcode: Arm64OpStrB, rt: arm64GprField(src), baseReg: base, byteOffset: byteOffset, scale: arm64AccessScale(width))
+		word64 then arm64EmitWord64Store(code, base: base, byteOffset: byteOffset, src: src)
 	end 'w'
 end 'arm64EmitDataStore'
 
-// The unscaled 12-bit displacement of a byte load/store — LDRB/STRB scale by 1. A negative or
-// oversized displacement is an ISel bug (a data field offset is small and non-negative).
-function arm64ByteDisp(disp Imm32) returns MachineWord
-	if disp < 0 or (disp as MachineWord) > Arm64LoadStoreImm12Mask 'outOfRange'
-		panic("arm64 emitter: byte load/store displacement {disp} out of the 0..4095 range LDRB/STRB encodes")
-	end 'outOfRange'
-	return disp as MachineWord
-end 'arm64ByteDisp'
-
-// A 64-bit `[base + disp]` load, class-dispatched: GPR through LDR Xt, SIMD through LDR Dt. `disp` is
-// scaled by 8 (both widths are 8 bytes).
-function arm64EmitWord64Load(code ByteArray, dest TargetVReg, base MachineWord, disp Imm32)
-	let byteOff = arm64NonNegDisp(disp)
+// A 64-bit `[base + byteOffset]` load, class-dispatched: GPR through LDR Xt, SIMD through LDR Dt. The
+// offset is scaled by 8 (both widths are 8 bytes).
+function arm64EmitWord64Load(code ByteArray, dest TargetVReg, base MachineWord, byteOffset MachineWord)
 	if arm64VRegIsGpr(dest) 'gpr'
-		arm64EmitScaledMem(code, opcode: Arm64OpLdrX, rt: arm64GprField(dest), baseReg: base, byteOffset: byteOff, scale: SpillSlotBytes)
+		arm64EmitScaledMem(code, opcode: Arm64OpLdrX, rt: arm64GprField(dest), baseReg: base, byteOffset: byteOffset, scale: SpillSlotBytes)
 	end 'gpr' else 'fp'
-		arm64EmitScaledMem(code, opcode: Arm64OpLdrD, rt: arm64FpField(dest), baseReg: base, byteOffset: byteOff, scale: SpillSlotBytes)
+		arm64EmitScaledMem(code, opcode: Arm64OpLdrD, rt: arm64FpField(dest), baseReg: base, byteOffset: byteOffset, scale: SpillSlotBytes)
 	end 'fp'
 end 'arm64EmitWord64Load'
 
-function arm64EmitWord64Store(code ByteArray, base MachineWord, disp Imm32, src TargetVReg)
-	let byteOff = arm64NonNegDisp(disp)
+function arm64EmitWord64Store(code ByteArray, base MachineWord, byteOffset MachineWord, src TargetVReg)
 	if arm64VRegIsGpr(src) 'gpr'
-		arm64EmitScaledMem(code, opcode: Arm64OpStrX, rt: arm64GprField(src), baseReg: base, byteOffset: byteOff, scale: SpillSlotBytes)
+		arm64EmitScaledMem(code, opcode: Arm64OpStrX, rt: arm64GprField(src), baseReg: base, byteOffset: byteOffset, scale: SpillSlotBytes)
 	end 'gpr' else 'fp'
-		arm64EmitScaledMem(code, opcode: Arm64OpStrD, rt: arm64FpField(src), baseReg: base, byteOffset: byteOff, scale: SpillSlotBytes)
+		arm64EmitScaledMem(code, opcode: Arm64OpStrD, rt: arm64FpField(src), baseReg: base, byteOffset: byteOffset, scale: SpillSlotBytes)
 	end 'fp'
 end 'arm64EmitWord64Store'
 
@@ -1270,7 +1366,7 @@ end 'arm64EmitEpilogue'
 // exists rather than reusing `storeBaseDispReg`: SP has no `RegNum` and so cannot be a `TargetVReg`.
 // Class-dispatched on the SOURCE like every other 64-bit store, so a float argument stores through `STR Dt`.
 function arm64EmitStoreOutgoingArg(code ByteArray, slot SpillSlot, srcReg TargetVReg)
-	arm64EmitWord64Store(code, base: Arm64SpBaseField, disp: (slot * SpillSlotBytes) as Imm32, src: srcReg)
+	arm64EmitWord64Store(code, base: Arm64SpBaseField, byteOffset: slot * SpillSlotBytes, src: srcReg)
 end 'arm64EmitStoreOutgoingArg'
 
 // STP x29, x30, [sp, #-frameSize]! (pre-indexed). imm7 is signed, scaled by 8.

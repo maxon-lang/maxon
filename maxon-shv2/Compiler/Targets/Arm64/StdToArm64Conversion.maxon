@@ -113,6 +113,19 @@ let Arm64DoubleBytes = 8 as ByteCount
 // The width is not ISA-specific; only the encoder that turns `byte`/`word64` into `ldrb`/`ldr` (vs
 // `movzx`/`mov`) is. `lowerLoadIndirect` / `lowerStoreIndirect` call them.
 
+// The `[base + disp]` pair a data access finally addresses through, once the selector has decided
+// whether the offset has a direct addressing form on this ISA (`StdToArm64Conversion.addressFor`). It
+// is either the access's own base and offset, or the IP scratch holding `base + offset` and a `disp` of
+// zero — and it is a PAIR rather than two returns because the two only ever mean anything together.
+type Arm64MemOperand
+	export var base as TargetVReg
+	export var disp as Imm32
+
+	static function create(base TargetVReg, disp Imm32) returns Arm64MemOperand
+		return Self{base: base, disp: disp}
+	end 'create'
+end 'Arm64MemOperand'
+
 // A physical arm64 operand, from an `Arm64Register`. The arm64 lowering names its fixed ABI registers
 // (x0, d0, x16, …) as `Arm64Register`s; this maps one to its neutral `RegNum` — the number the unified
 // vreg carries — in ONE place. The `.rawValue` is bound to a local FIRST, deliberately, exactly as
@@ -466,7 +479,7 @@ type StdToArm64Lowering
 			cmp(resultId, lhs, rhs, pred, operandType) then self.lowerCmp(resultId, lhs: lhs, rhs: rhs, pred: pred, operandType: operandType, dstRef: dstRef)
 			// The immediate forms' `operandType` (X5) is a WIDTH, and every integer instruction this
 			// backend selects is the 64-bit `X`-register form whatever the Std type says (`Arm64OpAddImm`
-			// 0x91…, `Arm64OpSubImm` 0xD1…, `Arm64OpCmpImm` 0xF1…, `Arm64OpMul` 0x9B…, `Arm64OpSdiv`
+			// 0x91…, `Arm64OpSubImm` 0xD1…, `Arm64OpSubsImm` (the `cmp` alias) 0xF1…, `Arm64OpMul` 0x9B…, `Arm64OpSdiv`
 			// 0x9AC…, every one with `sf` set) — so `binOpImm` drops it for the reason the x64 arm states,
 			// not overlooked.
 			//
@@ -843,12 +856,41 @@ type StdToArm64Lowering
 		end 'reg'
 	end 'lowerLogicalImm'
 
+	// The `[base + disp]` operand a data access finally addresses through — the selector's answer to
+	// "does this offset have a direct addressing form here, and if not, what does".
+	//
+	// ⚠ AArch64's scaled load/store field is a 12-bit count of ACCESS UNITS, so its reach depends on the
+	// WIDTH: 4095 bytes for an `LDRB`/`STRB`, 32760 for the 64-bit forms — and NOTHING between there and
+	// the `Imm32` `memoryDisplacement` hands us, which is sized for x64's `[base + disp32]`. Every field
+	// occupies one 8-byte slot, so those ceilings fall at the 512th and the 4096th declared field of a
+	// struct, and a program that declares more is a program a generator writes.
+	//
+	// When no direct form exists the address is folded into the IP scratch and the access addresses
+	// `[scratch + 0]`. The fold goes through `lowerAddSubImm` rather than a second copy of the same
+	// choice: an offset inside the add/sub band becomes one `add x16, base, #imm` (or the hi/lo pair),
+	// and a wider one the `movz`/`movk` ladder that arm already owns — so the folded form's reach IS the
+	// arithmetic band, stated once, and cannot come to disagree with it.
+	function addressFor(base TargetVReg, offset ByteOffset, width X64AccessWidth, dstRef BlockRef) returns Arm64MemOperand
+		let disp = memoryDisplacement(offset)
+		if arm64DispHasScaledForm(disp, width: width) 'direct'
+			return Arm64MemOperand.create(base, disp: disp)
+		end 'direct'
+
+		let scratch = arm64PhysReg(Arm64Scratch)
+		self.lowerAddSubImm(scratch, src: base, imm: disp, isSub: false, dstRef: dstRef)
+		return Arm64MemOperand.create(scratch, disp: 0)
+	end 'addressFor'
+
 	function lowerLoadIndirect(resultId ValueId, addrId ValueId, offset ByteOffset, valueType StdType, dstRef BlockRef)
-		self.emit(dstRef, op: TargetOp.loadRegBaseDisp(TargetVReg.virtual(resultId), base: TargetVReg.virtual(addrId), disp: memoryDisplacement(offset), width: accessWidthFor(valueType)))
+		let width = accessWidthFor(valueType)
+		let mem = self.addressFor(TargetVReg.virtual(addrId), offset: offset, width: width, dstRef: dstRef)
+		self.emit(dstRef, op: TargetOp.loadRegBaseDisp(TargetVReg.virtual(resultId), base: mem.base, disp: mem.disp, width: width))
 	end 'lowerLoadIndirect'
 
 	function lowerStoreIndirect(addrId ValueId, offset ByteOffset, valueId ValueId, valueType StdType, dstRef BlockRef)
-		self.emit(dstRef, op: TargetOp.storeBaseDispReg(TargetVReg.virtual(addrId), disp: memoryDisplacement(offset), src: TargetVReg.virtual(valueId), width: accessWidthFor(valueType)))
+		let width = accessWidthFor(valueType)
+		let mem = self.addressFor(TargetVReg.virtual(addrId), offset: offset, width: width, dstRef: dstRef)
+		self.emit(dstRef, op: TargetOp.storeBaseDispReg(mem.base, disp: mem.disp, src: TargetVReg.virtual(valueId), width: width))
 	end 'lowerStoreIndirect'
 
 	// Lower a Std `div`/`mod` to `sdiv`/`udiv` (+ `msub` for the remainder). NO zero-divisor guard: AArch64
@@ -898,8 +940,26 @@ type StdToArm64Lowering
 	// `isFloat: false`. The derived answer is that same `false`, by that same guard; what changes is that
 	// it can no longer be a stale copy of it. `lowerCmp` next door already reads its `operandType` this
 	// way, and the pair now spells the question once.
+	//
+	// ⚠ AND AN IMMEDIATE OPERAND IS NOT AUTOMATICALLY AN IMMEDIATE FORM, for `lowerBinOpImm`'s reason at
+	// a NARROWER band. A compare-immediate is one imm12 field, plain or shifted by 12 — it cannot use the
+	// hi/lo PAIR `+`/`-` split into, because the flags it exists to set would describe only the second
+	// half of the subtraction. So `x + 16777215` has an immediate form and `x == 16777215` does not, and
+	// the selector asks `arm64ImmIsEncodableCmp` — the ENCODER's own band — before selecting one.
+	//
+	// The fallback is the materialisation every other "no immediate form fits" arm in this file uses. It
+	// used to happen inside `arm64EmitCmpImm`, i.e. AFTER register allocation, where a write of x16 is
+	// invisible to the allocator, to the liveness model and to the emitted IR — safe only because nothing
+	// happened to place such an op between an ISel-minted `movz`/consumer pair, which nothing checked.
 	function lowerCmpImm(resultId ValueId, lhs ValueId, imm Imm32, pred StdCmpPred, operandType StdType, dstRef BlockRef)
-		self.emit(dstRef, op: TargetOp.arm64CmpImm(TargetVReg.virtual(lhs), imm: imm))
+		let lhsReg = TargetVReg.virtual(lhs)
+		if arm64ImmIsEncodableCmp(imm) 'fits'
+			self.emit(dstRef, op: TargetOp.arm64CmpImm(lhsReg, imm: imm))
+		end 'fits' else 'materialise'
+			let scratch = self.materialiseIntoScratch(imm, dstRef: dstRef)
+			self.emit(dstRef, op: TargetOp.arm64Cmp(lhsReg, rhs: scratch))
+		end 'materialise'
+
 		self.emit(dstRef, op: TargetOp.arm64Cset(TargetVReg.virtual(resultId), cond: arm64CondForPred(pred, isFloat: stdTypeIsFloat(operandType))))
 	end 'lowerCmpImm'
 
@@ -1064,7 +1124,13 @@ type StdToArm64Lowering
 	function emitWitnessCallSequence(witnessAddr ValueId, methodIndex WitnessMethodIndex, args ValueIdArray, argFloatMask ArgFloatMask, dstRef BlockRef)
 		self.emitArgMovesByFloatMask(args, argFloatMask: argFloatMask, dstRef: dstRef)
 		let callee = arm64PhysReg(Arm64Scratch)
-		self.emit(dstRef, op: TargetOp.loadRegBaseDisp(callee, base: TargetVReg.virtual(witnessAddr), disp: memoryDisplacement(witnessMethodSlotOffset(methodIndex)), width: X64AccessWidth.word64))
+		// Through `addressFor` like every other data access, so the slot offset's addressability is ASKED
+		// rather than assumed: an interface past 4092 methods puts its later slots outside the scaled field,
+		// and a second un-asked spelling here is exactly how a wrong-field read gets written down twice. The
+		// fold's scratch is x16 — the register the callee is about to land in — which is why it is safe: the
+		// `add` and the `ldr` that consumes it stay adjacent, and the load overwrites its own address.
+		let slot = self.addressFor(TargetVReg.virtual(witnessAddr), offset: witnessMethodSlotOffset(methodIndex), width: X64AccessWidth.word64, dstRef: dstRef)
+		self.emit(dstRef, op: TargetOp.loadRegBaseDisp(callee, base: slot.base, disp: slot.disp, width: X64AccessWidth.word64))
 		self.emit(dstRef, op: TargetOp.arm64BranchLinkReg(callee))
 	end 'emitWitnessCallSequence'
 

@@ -1,0 +1,164 @@
+// Test: cmp-negative-immediates
+typealias Val = int(i64.min to i64.max)
+
+function base(p Val) returns Val
+	return p
+end 'base'
+
+function main() returns ExitCode
+	let x = base(-4096)
+	if x == -1 'eqMinusOne'
+		return 41
+	end 'eqMinusOne'
+	if not (x < -1) 'ltMinusOne'
+		return 42
+	end 'ltMinusOne'
+	if not (x < -4095) 'ltPlainField'
+		return 43
+	end 'ltPlainField'
+	if not (x == -4096) 'eqShifted'
+		return 44
+	end 'eqShifted'
+	if not (x > -16773120) 'gtShiftedTop'
+		return 45
+	end 'gtShiftedTop'
+	if not (x > -65535) 'gtNoForm'
+		return 46
+	end 'gtNoForm'
+	if x == -65535 'eqNoForm'
+		return 47
+	end 'eqNoForm'
+	if not (x > -2147483648) 'gtMin'
+		return 48
+	end 'gtMin'
+	let y = base(-16773120)
+	if not (y == -16773120) 'eqShiftedTop'
+		return 49
+	end 'eqShiftedTop'
+	if not (y < -4096) 'ltShifted'
+		return 50
+	end 'ltShifted'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+func @base {
+  entry:
+    arm64.prologue 16
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, -4096
+    arm64.bl base
+    arm64.cmp x0, -1
+    arm64.cset x1, eq
+    arm64.cbnz x1, eqMinusOne
+    arm64.b ifcont
+  eqMinusOne:
+    arm64.movImm x0, 41
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.cmp x0, -1
+    arm64.cset x1, lt
+    arm64.eor x1, x1, 1
+    arm64.cbnz x1, ltMinusOne
+    arm64.b ifcont
+  ltMinusOne:
+    arm64.movImm x0, 42
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.cmp x0, -4095
+    arm64.cset x1, lt
+    arm64.eor x1, x1, 1
+    arm64.cbnz x1, ltPlainField
+    arm64.b ifcont
+  ltPlainField:
+    arm64.movImm x0, 43
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.cmp x0, -4096
+    arm64.cset x1, eq
+    arm64.eor x1, x1, 1
+    arm64.cbnz x1, eqShifted
+    arm64.b ifcont
+  eqShifted:
+    arm64.movImm x0, 44
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.cmp x0, -16773120
+    arm64.cset x1, gt
+    arm64.eor x1, x1, 1
+    arm64.cbnz x1, gtShiftedTop
+    arm64.b ifcont
+  gtShiftedTop:
+    arm64.movImm x0, 45
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.movImm x16, -65535
+    arm64.cmp x0, x16
+    arm64.cset x1, gt
+    arm64.eor x1, x1, 1
+    arm64.cbnz x1, gtNoForm
+    arm64.b ifcont
+  gtNoForm:
+    arm64.movImm x0, 46
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.movImm x16, -65535
+    arm64.cmp x0, x16
+    arm64.cset x1, eq
+    arm64.cbnz x1, eqNoForm
+    arm64.b ifcont
+  eqNoForm:
+    arm64.movImm x0, 47
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.movImm x16, -2147483648
+    arm64.cmp x0, x16
+    arm64.cset x0, gt
+    arm64.eor x0, x0, 1
+    arm64.cbnz x0, gtMin
+    arm64.b ifcont
+  gtMin:
+    arm64.movImm x0, 48
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, -16773120
+    arm64.bl base
+    arm64.cmp x0, -16773120
+    arm64.cset x1, eq
+    arm64.eor x1, x1, 1
+    arm64.cbnz x1, eqShiftedTop
+    arm64.b ifcont
+  eqShiftedTop:
+    arm64.movImm x0, 49
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.cmp x0, -4096
+    arm64.cset x0, lt
+    arm64.eor x0, x0, 1
+    arm64.cbnz x0, ltShifted
+    arm64.b ifcont
+  ltShifted:
+    arm64.movImm x0, 50
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}
