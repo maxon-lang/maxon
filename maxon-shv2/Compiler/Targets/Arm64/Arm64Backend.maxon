@@ -908,7 +908,7 @@ end 'arm64EmitScaledMem'
 // out at both doors instead, the predicate could come to admit exactly what the encoder then panics on,
 // which is the defect A5e exists to have removed rather than relocated. It is the pairing
 // `arm64MagnitudeFitsOneImm12` gives the compare immediate one screen up.
-export function arm64ByteOffsetFitsScaledImm12(byteOffset MachineWord, scale NonZeroWord) returns bool
+function arm64ByteOffsetFitsScaledImm12(byteOffset MachineWord, scale NonZeroWord) returns bool
 	return byteOffset mod scale == 0 and byteOffset / scale <= Arm64LoadStoreImm12Mask
 end 'arm64ByteOffsetFitsScaledImm12'
 
@@ -919,6 +919,10 @@ end 'arm64ByteOffsetFitsScaledImm12'
 // incoming stack argument (`Arm64PrologueEpilogue.resolveArm64IncomingArgs`) — cannot come to disagree
 // about where the cut falls. Both then hand the base to `arm64EmitAddSubImmWide`, whose 24-bit ceiling is
 // the ONLY ceiling either has, and which no frame the prologue can open reaches.
+//
+// The cut at 4096 BYTES serves every access width, not just the 64-bit one: the residue is at most 4095
+// bytes and inherits the offset's alignment, so at scale 1 it is 4095 units and at any wider scale fewer —
+// inside the 12-bit field either way. A narrow-width frame access (P1.9) therefore needs no second split.
 export function arm64WideFrameScratchBase(byteOffset MachineWord) returns MachineWord
 	return (byteOffset shr Arm64Imm12FieldBits) shl Arm64Imm12FieldBits
 end 'arm64WideFrameScratchBase'
@@ -1439,8 +1443,26 @@ end 'arm64EmitEpilogue'
 // SP is base field 31 here (not XZR — the M1 trap this file's header names), which is exactly why the op
 // exists rather than reusing `storeBaseDispReg`: SP has no `RegNum` and so cannot be a `TargetVReg`.
 // Class-dispatched on the SOURCE like every other 64-bit store, so a float argument stores through `STR Dt`.
+//
+// ⚠ THE THIRD DOOR ONTO THE SCALED FIELD, AND THE ONLY ONE THAT IS UNREACHABLE — asserted here rather
+// than left to `arm64ScaledImm12`, WHOSE MESSAGE WOULD BE FALSE OF THIS CALLER. That panic tells a reader
+// "the ISEL must have folded it into a scratch base (StdToArm64Conversion.addressFor)", which is true of a
+// DATA access and false of this one: an outgoing argument addresses SP, not a value's base, and no isel
+// fold exists or could. Sending a reader to that file would send them to the wrong one.
+//
+// It cannot fire, and not narrowly: the region is at most `arm64OutgoingArgRegionBytes()` = 448 bytes, i.e.
+// 56 of the field's 4095 units, because the LANGUAGE refuses a signature past `MaxAbiArgs` before any of
+// this runs. What would fire it is raising that ceiling past 4096 argument slots — at which point the
+// answer is the x17 fold the FRAME slots take (`arm64EmitWideFrameSlot`) rewritten SP-relative, and not
+// this panic. It is the SP twin of the imm7 and imm12 assertions the two frame ops below make about the
+// same region, and all three quote the one derivation instead of restating its number.
 function arm64EmitStoreOutgoingArg(code ByteArray, slot SpillSlot, srcReg TargetVReg)
-	arm64EmitWord64Store(code, base: Arm64SpBaseField, byteOffset: slot * SpillSlotBytes, src: srcReg)
+	let byteOffset = slot * SpillSlotBytes
+	if not arm64ByteOffsetFitsScaledImm12(byteOffset, scale: SpillSlotBytes as NonZeroWord) 'unencodable'
+		panic("arm64EmitStoreOutgoingArg: outgoing argument slot {slot} sits at byte {byteOffset} of this frame's argument region, past the {Arm64LoadStoreImm12Mask} 8-byte units the scaled STR field reaches — the region can hold at most {arm64OutgoingArgRegionBytes()} bytes while `MaxAbiArgs` caps a signature, so reaching this means that ceiling was raised past 4096 argument slots, and the fix is `arm64EmitWideFrameSlot`'s x17 fold rewritten against SP rather than a wider field")
+	end 'unencodable'
+
+	arm64EmitWord64Store(code, base: Arm64SpBaseField, byteOffset: byteOffset, src: srcReg)
 end 'arm64EmitStoreOutgoingArg'
 
 // STP x29, x30, [sp, #-frameSize]! (pre-indexed). imm7 is signed, scaled by 8.
@@ -1463,8 +1485,8 @@ end 'arm64EmitLdpPostIndex'
 // BELOW sp and the epilogue would reload x30 from there, returning to whatever the outgoing-argument
 // region happened to hold. `offset` was a literal 0 until stack arguments made it the outgoing-argument
 // size, so this became reachable arithmetic rather than a constant — and the ceiling that keeps it in
-// range (`(MaxAbiArgs - arm64RegisterArgCapacity()) * 8` = 448 ≤ 504) lives in two other files. Assert it
-// where it is relied on rather than inferring it three files away.
+// range is `arm64OutgoingArgRegionBytes()` (448 today) ≤ `Arm64FramePairIndexMax`, a fact derived in
+// another file entirely. Assert it where it is RELIED ON rather than inferring it three files away.
 function arm64EmitFrameRecordPair(code ByteArray, opcode MachineWord, offset MachineWord)
 	if offset > Arm64FramePairIndexMax 'unencodable'
 		panic("arm64EmitFrameRecordPair: frame-record offset {offset} exceeds the {Arm64FramePairIndexMax}-byte reach of the signed STP/LDP imm7 — the outgoing stack-argument region has outgrown it, and a masked immediate would place the frame record below sp")
@@ -1481,9 +1503,9 @@ end 'arm64EmitFrameRecordPair'
 // ⚠ THE 12-BIT FIELD IS CHECKED, NOT ASSUMED. `arm64EmitAddSubImm12` masks, so an offset past 0xFFF would
 // be SILENTLY TRUNCATED and x29 would point into the middle of the outgoing-argument region — every spill,
 // every callee-saved save and every incoming stack argument then addressed off a wrong frame pointer, with
-// no diagnostic anywhere. The offset is the outgoing-argument region, so today it is at most
-// `(MaxAbiArgs - arm64RegisterArgCapacity()) * 8` = 448 and cannot reach the field; that is a conclusion
-// about THREE numbers in three files, not a property of this one, so it is asserted where it is relied on.
+// no diagnostic anywhere. The offset IS the outgoing-argument region, so today it is at most
+// `arm64OutgoingArgRegionBytes()` = 448 and cannot reach the field; that is a conclusion about numbers in
+// other files, not a property of this one, so it is asserted where it is relied on.
 // (`arm64EmitAddSubImmWide` exists for exactly this trap on the frame-size path.)
 function arm64EmitAddFpFromSp(code ByteArray, offset StackSize)
 	if offset > Arm64ImmMask 'unencodable'

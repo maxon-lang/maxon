@@ -171,6 +171,26 @@ function arm64RegisterArgCapacity() returns RegisterArgCapacity
 	return arm64ArgRegisters.count() as RegisterArgCapacity
 end 'arm64RegisterArgCapacity'
 
+// The largest the OUTGOING STACK-ARGUMENT REGION can ever be on this target: every argument past its
+// file's register capacity, at one 8-byte slot each. 448 bytes today.
+//
+// ⭐ THE ONE HOME OF THAT DERIVATION. THREE arm64 encoder fields are relied on to hold this region — the
+// frame record's signed STP/LDP imm7 (504 bytes), `add x29, sp, #imm`'s 12-bit field (4095), and the
+// outgoing store's SCALED imm12 (4095 units = 32760 bytes) — and each of the three used to re-derive
+// `448` in its own prose. One fact written three times is the bug this project keeps naming, so it is
+// COMPUTED here and quoted by each assertion: raising `MaxAbiArgs` moves all three at once instead of
+// leaving three comments claiming a number that has stopped being true.
+//
+// The ceiling is the LANGUAGE's rather than this target's, and it is DIAGNOSED rather than assumed —
+// `Parser.requireAbiParamCount` refuses a signature past `MaxAbiArgs` (E2015, pinned by
+// `stack-arguments/argument-slots-are-capped-and-the-cap-is-stated`), so no program can present a wider
+// region. It is also the WORST case, not a per-call figure: a call splits its arguments between the two
+// files and EACH file passes `capacity` of them in registers, so a real region is at most this and
+// usually far less.
+export function arm64OutgoingArgRegionBytes() returns StackSize
+	return ((MaxAbiArgs - arm64RegisterArgCapacity()) as StackSize) * SpillSlotBytes
+end 'arm64OutgoingArgRegionBytes'
+
 // The physical register integer argument slot `index` occupies. A slot past the file means the placement
 // rule said "register" where the file has none, so it is a compiler-invariant break here, not a user error:
 // every caller tests `abiArgIsOnStack` first.

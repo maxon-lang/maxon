@@ -149,22 +149,32 @@ end 'resolveArm64IncomingArgs'
 // — so no later pass can splice anything between the `add` and the load. A new IR pass placed after this
 // one breaks that, and would have to give this fold a register of its own or run before the prologue.
 function resolveOneArm64IncomingArg(module TargetModule, opIdx OpIndex, at BlockOpPos, dest TargetVReg, byteOffset StackSize, foldPositions BlockOpPosArray, foldOps OpIndexArray)
-	if arm64ByteOffsetFitsScaledImm12(byteOffset, scale: SpillSlotBytes as NonZeroWord) 'direct'
-		arm64SetIncomingArgLoad(module, opIdx: opIdx, dest: dest, base: Arm64FramePointerRegNum, disp: byteOffset)
+	// ⚠ THE FIT QUESTION AND THE OP MINTED FROM IT MUST BE ASKED AT ONE ACCESS WIDTH, so the width is read
+	// ONCE and both take it. `arm64DispHasScaledForm` is the SAME door the isel asks of a data access, and
+	// it derives the scale from this very value (`arm64AccessScale`) — so the predicate and the encoder that
+	// later asserts on it cannot come to disagree. Asked instead with a hard-coded scale of 8, the two would
+	// agree only for as long as `arm64LoadIncomingArg` has no width field, and P1.9's narrow integer widths
+	// are precisely where that stops being true: a `byte`-width argument's field counts BYTES, reaching 4095
+	// rather than 32760, and the predicate would then admit exactly what the encoder panics on.
+	let width = X64AccessWidth.word64
+	let disp = byteOffset as Imm32
+	if arm64DispHasScaledForm(disp, width: width) 'direct'
+		arm64SetIncomingArgLoad(module, opIdx: opIdx, dest: dest, base: Arm64FramePointerRegNum, disp: disp, width: width)
 		return
 	end 'direct'
 
 	let scratchBase = arm64WideFrameScratchBase(byteOffset)
+	let residue = (byteOffset - scratchBase) as Imm32
 	foldPositions.push(at)
 	foldOps.push(module.ops.count())
 	module.ops.push(TargetOp.arm64AddImm(arm64PhysVReg(Arm64Ip1RegNum), src: arm64PhysVReg(Arm64FramePointerRegNum), imm: scratchBase as Imm32))
-	arm64SetIncomingArgLoad(module, opIdx: opIdx, dest: dest, base: Arm64Ip1RegNum, disp: byteOffset - scratchBase)
+	arm64SetIncomingArgLoad(module, opIdx: opIdx, dest: dest, base: Arm64Ip1RegNum, disp: residue, width: width)
 end 'resolveOneArm64IncomingArg'
 
 // Overwrite `opIdx` with the resolved incoming-argument load. Both the direct and the folded arm land
-// here so the op's shape — a `word64` `[base + disp]` load — is spelled once.
-function arm64SetIncomingArgLoad(module TargetModule, opIdx OpIndex, dest TargetVReg, base RegNum, disp StackSize)
-	try module.ops.set(opIdx, value: TargetOp.loadRegBaseDisp(dest, base: arm64PhysVReg(base), disp: disp as Imm32, width: X64AccessWidth.word64)) otherwise panic("resolveArm64IncomingArgs: ops.set OOB at {opIdx}")
+// here so the op's shape — a `[base + disp]` load at the caller's width — is spelled once.
+function arm64SetIncomingArgLoad(module TargetModule, opIdx OpIndex, dest TargetVReg, base RegNum, disp Imm32, width X64AccessWidth)
+	try module.ops.set(opIdx, value: TargetOp.loadRegBaseDisp(dest, base: arm64PhysVReg(base), disp: disp, width: width)) otherwise panic("resolveArm64IncomingArgs: ops.set OOB at {opIdx}")
 end 'arm64SetIncomingArgLoad'
 
 // Prepend, to the entry block: the frame-open `arm64Prologue`, then a `storeSlotReg` saving each used
