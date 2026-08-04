@@ -5717,6 +5717,12 @@ enum DeclaredStoragePosition
 	// band-append rule the `containerElement` arm's own note relies on.
 	closureParameter
 	interfaceRequirementParameter
+	// ⭐ A FUNCTION TYPE's parameter (`typealias ShapeFn = function(Shape) returns Integer`). It shares its
+	// reason with `closureParameter` — both are called through the uniform function-VALUE ABI — and the two
+	// share ONE clause through `functionValueAbiRoom`/`functionValueAbiRemedy` rather than a range arm,
+	// because appending at the END (which the band-append rule requires) puts `interfaceRequirementParameter`
+	// between them and a range would silently swallow it.
+	functionTypeParameter
 end 'DeclaredStoragePosition'
 
 // ⭐⭐ **THE ONE SENTENCE EVERY INTERFACE-TYPED-POSITION REFUSAL IS BUILT FROM.** Six declared places have
@@ -5737,10 +5743,19 @@ end 'interfaceStoragePositionMessage'
 function storagePositionRemedy(position DeclaredStoragePosition) returns String
 	match position 'which'
 		structField to containerElement then return "Declare it at a concrete type, or take the interface as a PARAMETER of a plain function, which carries its witness as an adjacent argument"
-		closureParameter then return "Declare the parameter at a concrete type, or take the interface on a named function, whose signature reserves the adjacent slot"
+		closureParameter then return functionValueAbiRemedy()
 		interfaceRequirementParameter then return "Declare the parameter at a concrete type, or declare the requirement over a type parameter the interface constrains"
+		functionTypeParameter then return functionValueAbiRemedy()
 	end 'which'
 end 'storagePositionRemedy'
+
+// What to do about either function-VALUE position. It names a DIRECT call on a named function, which is
+// the one parameter position that genuinely reserves the adjacent slot (MEASURED: 31 on both targets) —
+// this family's remedies are per position precisely so that none of them points somewhere with the same
+// problem.
+function functionValueAbiRemedy() returns String
+	return "Declare the parameter at a concrete type, or pass the interface to a named function DIRECTLY, whose signature reserves the adjacent slot"
+end 'functionValueAbiRemedy'
 
 // WHAT is being declared, for the refusal's sentence. Rendered on the FAILURE path only.
 function storagePositionSubject(position DeclaredStoragePosition) returns String
@@ -5751,6 +5766,7 @@ function storagePositionSubject(position DeclaredStoragePosition) returns String
 		containerElement then return "a container's element type"
 		closureParameter then return "a closure parameter"
 		interfaceRequirementParameter then return "an interface requirement's parameter"
+		functionTypeParameter then return "a function type's parameter"
 	end 'which'
 end 'storagePositionSubject'
 
@@ -5767,7 +5783,7 @@ function storagePositionRoom(position DeclaredStoragePosition) returns String
 		// `typealias` and then thrown away, and what the author saw was *"E3005: cannot assign 'struct' to
 		// variable 'push' of type 'int'"* eighteen lines further down.
 		containerElement then return "an element slot is one machine word"
-		closureParameter then return "a closure is called through the uniform `(userargs, env)` indirect ABI, which carries one machine word per argument and reserves no adjacent slot for the witness half"
+		closureParameter then return functionValueAbiRoom()
 		// ⚠ MEASURED on every shape and on BOTH compilers, before this arm existed: a proper CONFORMER
 		// actual segfaulted (exit 139) on x64 and trapped on wasm, and so did an `int` and a `float`; through
 		// an existential receiver, through a `where T is` body and through a throwing requirement alike. With
@@ -5775,8 +5791,19 @@ function storagePositionRoom(position DeclaredStoragePosition) returns String
 		// is simply dropped) while wasm still trapped on the call itself — which is what says the formal is
 		// unrepresentable rather than merely unchecked.
 		interfaceRequirementParameter then return "a witness call carries one machine word per argument, so the witness half is dropped and the impl dispatches through whatever the next slot happens to hold"
+		// ⚠ MEASURED, and it is the SAME failure the closure arm above records because it is the same ABI:
+		// `typealias ShapeFn = function(Shape) returns Integer` passed a conformer SEGFAULTED (exit 139) on
+		// x64 and PANICKED the wasm backend. The value reaching the call is a `__fnref_` thunk or a lifted
+		// closure, and both are the uniform shape.
+		functionTypeParameter then return functionValueAbiRoom()
 	end 'which'
 end 'storagePositionRoom'
+
+// The reason the two function-VALUE positions share — written once, and read by both arms rather than by a
+// range arm (see `functionTypeParameter` for why a range cannot span them).
+function functionValueAbiRoom() returns String
+	return "a function value is called through the uniform `(userargs, env)` indirect ABI, which carries one machine word per argument and reserves no adjacent slot for the witness half"
+end 'functionValueAbiRoom'
 
 // ⭐ **WHICH VALUE-MERGE CONSTRUCT `finalizeMatchMerge` is finishing (P1.5 #80).** The three share ONE
 // merge — the phi, the give-agreement rules, the ownership normalisation — but they must NOT share their
@@ -11277,8 +11304,14 @@ export type Parser
 		var declaredParams = FunctionAliasParamArray.create()
 		if not self.at(TokenKind.rightParen) 'params'
 			while true 'paramLoop'
+				let paramAnchor = self.tokenAt(self.pos)
 				let paramType = try self.readFunctionTypeParam()
 				if recordSignature 'collectParam'
+					// ⭐ REFUSED HERE, and `recordSignature` is what keeps the tolerant declaration sweep out of it: the
+					// sweep passes `false` and must never veto, exactly as it must not for the six sibling positions.
+					// This is the ONLY place a function type's parameter list is parsed — an inline `function(...)` in a
+					// parameter position is E2010 — so one call site covers the position.
+					try self.requireStorableDeclaredType(paramType, position: DeclaredStoragePosition.functionTypeParameter, line: paramAnchor.line, column: paramAnchor.column)
 					paramTypes.push(paramType)
 					declaredParams.push(FunctionAliasParam.create(maxonTypeTag(paramType), typeName: self.functionAliasTypeName(paramType)))
 				end 'collectParam'

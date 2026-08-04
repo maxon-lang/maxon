@@ -1,6 +1,5 @@
 // Test: error.closure-parameter-at-an-interface-type
 typealias Integer = int(i64.min to i64.max)
-typealias ShapeFn = function(Shape) returns Integer
 
 interface Shape
 	function area() returns Integer
@@ -18,13 +17,10 @@ type Sq implements Shape
 	end 'create'
 end 'Sq'
 
-function apply(f ShapeFn, v Shape) returns Integer
-	return f(v)
-end 'apply'
-
 function main() returns ExitCode
-	return apply(function(t Shape) gives t.area(), v: Sq.create(7)) as ExitCode
+	let f = function(t Shape) gives t.area()
+	return f(Sq.create(7)) as ExitCode
 end 'main'
 ---
 CompilerError:
-error E2015: <fragment>:26:24: Unsupported: a closure parameter declared at the interface type 'Shape' — a value held at an interface type is a two-word fat pointer `(value, witness)`, and a closure is called through the uniform `(userargs, env)` indirect ABI, which carries one machine word per argument and reserves no adjacent slot for the witness half. Declare the parameter at a concrete type, or take the interface on a named function, whose signature reserves the adjacent slot
+error E2015: <fragment>:21:19: Unsupported: a closure parameter declared at the interface type 'Shape' — a value held at an interface type is a two-word fat pointer `(value, witness)`, and a function value is called through the uniform `(userargs, env)` indirect ABI, which carries one machine word per argument and reserves no adjacent slot for the witness half. Declare the parameter at a concrete type, or pass the interface to a named function DIRECTLY, whose signature reserves the adjacent slot

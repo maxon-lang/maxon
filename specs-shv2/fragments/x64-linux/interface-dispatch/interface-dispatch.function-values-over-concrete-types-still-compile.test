@@ -1,0 +1,204 @@
+// Test: interface-dispatch.function-values-over-concrete-types-still-compile
+typealias Integer = int(i64.min to i64.max)
+
+interface Shape
+	function area() returns Integer
+end 'Shape'
+
+type Sq implements Shape
+	let s as Integer
+
+	function area() returns Integer
+		return self.s
+	end 'area'
+
+	static function create(s Integer) returns Self
+		return Self{s: s}
+	end 'create'
+end 'Sq'
+
+typealias SqFn = function(Sq) returns Integer
+
+function measure(v Sq) returns Integer
+	return v.area()
+end 'measure'
+
+function apply(f SqFn, v Sq) returns Integer
+	return f(v)
+end 'apply'
+
+type Holder
+	let f as SqFn
+
+	static function create(f SqFn) returns Self
+		return Self{f: f}
+	end 'create'
+
+	export function run(v Sq) returns Integer
+		return self.f(v)
+	end 'run'
+end 'Holder'
+
+function main() returns ExitCode
+	return (apply(measure, v: Sq.create(31)) + Holder.create(measure).run(Sq.create(11))) as ExitCode
+end 'main'
+---
+ExitCode: 42
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @Sq.area {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.loadRegBaseDisp.word64 r8, [rcx + 0]
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Sq.create {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @measure {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.callDirect Sq.area
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @apply {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.movRegReg rcx, rdx
+    x64.movRegReg rdx, rax
+    x64.callReg rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Holder.create {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Holder.run {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.loadRegBaseDisp.word64 rbx, [rcx + 0]
+    x64.movRegImm32 rax, 0
+    x64.movRegReg rcx, rdx
+    x64.movRegReg rdx, rax
+    x64.callReg rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.prologue 32
+    x64.leaRegFunc rbx, [rip + __fnref_measure]
+    x64.movRegImm32 rcx, 31
+    x64.callDirect Sq.create
+    x64.movRegReg r12, r8
+    x64.movRegImm32 rax, 0
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
+    x64.callDirect apply
+    x64.movRegReg rbx, r8
+    x64.leaRegFunc rcx, [rip + __fnref_measure]
+    x64.movRegImm32 rdx, 0
+    x64.callDirect Holder.create
+    x64.movRegReg r13, r8
+    x64.movRegImm32 rcx, 11
+    x64.callDirect Sq.create
+    x64.movRegReg r14, r8
+    x64.movRegReg rcx, r13
+    x64.movRegReg rdx, r14
+    x64.callDirect Holder.run
+    x64.leaRegRegReg rbx, rbx, r8
+    x64.cmpRegImm32 rbx, 0
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg rbx, rax
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.movRegReg rcx, r14
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, r13
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_decref
+    x64.movRegReg r8, rbx
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

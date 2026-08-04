@@ -1286,17 +1286,19 @@ panic at Parser.maxon: Parser.witnessOfValue: value v0 is typed as an interface 
 paired with it — every producer of an existential must call `pairInterfaceWitness`
 ```
 A value held at an interface is a two-word fat pointer `(value, witness)`, and the witness half travels
-as an ADJACENT HIDDEN ARGUMENT that only a declared function's signature reserves. A lifted closure's
+as an ADJACENT HIDDEN ARGUMENT that only a named function's signature reserves. A lifted closure's
 parameters are bound by a different door than a function's, and that door paired no witness — so the
 first use of the parameter asked for a half that was never there.
-**MEASURED identically on the tip and on the control, so it is not a regression — it is the fourth
-producer of an existential that round 3 turned into positioned refusals and missed**, because a
-closure's parameters are parsed somewhere else. Refused rather than paired: a closure is called through
-the uniform `(userargs, env)` indirect ABI, which carries one machine word per argument and has nowhere
-to put a second.
+**MEASURED identically on the tip and on the control, so it is not a regression** — it is one of the
+seven interface-typed positions, and the one a round of this rung missed because a closure's parameters
+are parsed somewhere else.
+⚠ The closure is bound to a LOCAL rather than passed at a declared function type, and that is
+deliberate: `typealias ShapeFn = function(Shape) returns Integer` is itself refused now
+(`error.interface-typed-function-type-parameter`), and it is refused EARLIER — so routing this case
+through one would test that rule instead of this one. A local binding is the shape that still reaches
+the closure's own parameter list.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
-typealias ShapeFn = function(Shape) returns Integer
 
 interface Shape
 	function area() returns Integer
@@ -1314,16 +1316,13 @@ type Sq implements Shape
 	end 'create'
 end 'Sq'
 
-function apply(f ShapeFn, v Shape) returns Integer
-	return f(v)
-end 'apply'
-
 function main() returns ExitCode
-	return apply(function(t Shape) gives t.area(), v: Sq.create(7)) as ExitCode
+	let f = function(t Shape) gives t.area()
+	return f(Sq.create(7)) as ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: specs/fragments/interface-dispatch/error.closure-parameter-at-an-interface-type.test:26:24: Unsupported: a closure parameter declared at the interface type 'Shape' — a value held at an interface type is a two-word fat pointer `(value, witness)`, and a closure is called through the uniform `(userargs, env)` indirect ABI, which carries one machine word per argument and reserves no adjacent slot for the witness half. Declare the parameter at a concrete type, or take the interface on a named function, whose signature reserves the adjacent slot
+error E2015: specs/fragments/interface-dispatch/error.closure-parameter-at-an-interface-type.test:21:19: Unsupported: a closure parameter declared at the interface type 'Shape' — a value held at an interface type is a two-word fat pointer `(value, witness)`, and a function value is called through the uniform `(userargs, env)` indirect ABI, which carries one machine word per argument and reserves no adjacent slot for the witness half. Declare the parameter at a concrete type, or pass the interface to a named function DIRECTLY, whose signature reserves the adjacent slot
 ```
 
 <!-- test: error.interface-typed-requirement-parameter -->
@@ -1559,6 +1558,111 @@ end 'Helper'
 
 function main() returns ExitCode
 	return (takeShape(Sq.create(11), base: 20) - Holder.create(20).measure(Sq.create(11)) + Helper.measure(Sq.create(11), base: 31)) as ExitCode
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: error.interface-typed-function-type-parameter -->
+⭐⭐ **THE SEVENTH AND LAST INTERFACE-TYPED POSITION, AND THIS RUNG IS WHAT MADE IT REACHABLE.** At the
+merge base an interface name in a parameter position was E3011 — existentials did not exist — so the
+shape only became writable when this rung landed them. It has never worked:
+**MEASURED, exit 139 (SEGFAULT) on x64-windows and a PANIC in the wasm backend**, given a proper
+conformer.
+The reason is the closure parameter's, exactly: a function VALUE is called through the uniform
+`(userargs, env)` indirect ABI, which carries one machine word per argument, so the fat pointer's
+witness half has nowhere to travel. The value reaching the call is a `__fnref_` thunk or a lifted
+closure and both are that shape — which is why the two positions share one clause rather than
+spelling it twice.
+⚠ It is refused at the `typealias`, not at the call, so a CLOSURE assigned to such a type is refused
+here too — earlier than the closure-parameter rule would have caught it, and pointing at the
+declaration the author would change.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Shape
+	function area() returns Integer
+end 'Shape'
+
+type Sq implements Shape
+	let s as Integer
+
+	function area() returns Integer
+		return self.s
+	end 'area'
+
+	static function create(s Integer) returns Self
+		return Self{s: s}
+	end 'create'
+end 'Sq'
+
+typealias ShapeFn = function(Shape) returns Integer
+
+function measure(c Shape) returns Integer
+	return c.area()
+end 'measure'
+
+function apply(f ShapeFn, v Shape) returns Integer
+	return f(v)
+end 'apply'
+
+function main() returns ExitCode
+	return apply(measure, v: Sq.create(31)) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: specs/fragments/interface-dispatch/error.interface-typed-function-type-parameter.test:20:30: Unsupported: a function type's parameter declared at the interface type 'Shape' — a value held at an interface type is a two-word fat pointer `(value, witness)`, and a function value is called through the uniform `(userargs, env)` indirect ABI, which carries one machine word per argument and reserves no adjacent slot for the witness half. Declare the parameter at a concrete type, or pass the interface to a named function DIRECTLY, whose signature reserves the adjacent slot
+```
+
+<!-- test: interface-dispatch.function-values-over-concrete-types-still-compile -->
+The FALSE-REJECT CONTROL for the case above. A function type whose parameter is a CONCRETE type is
+untouched, and so is a function value stored in a struct FIELD and called back out of it — the two
+shapes closest to the refused one. Only an interface-typed parameter loses its second word; nothing
+about function values in general changed. `31 + 11`.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Shape
+	function area() returns Integer
+end 'Shape'
+
+type Sq implements Shape
+	let s as Integer
+
+	function area() returns Integer
+		return self.s
+	end 'area'
+
+	static function create(s Integer) returns Self
+		return Self{s: s}
+	end 'create'
+end 'Sq'
+
+typealias SqFn = function(Sq) returns Integer
+
+function measure(v Sq) returns Integer
+	return v.area()
+end 'measure'
+
+function apply(f SqFn, v Sq) returns Integer
+	return f(v)
+end 'apply'
+
+type Holder
+	let f as SqFn
+
+	static function create(f SqFn) returns Self
+		return Self{f: f}
+	end 'create'
+
+	export function run(v Sq) returns Integer
+		return self.f(v)
+	end 'run'
+end 'Holder'
+
+function main() returns ExitCode
+	return (apply(measure, v: Sq.create(31)) + Holder.create(measure).run(Sq.create(11))) as ExitCode
 end 'main'
 ```
 ```exitcode
