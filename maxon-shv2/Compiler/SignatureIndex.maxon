@@ -10984,10 +10984,19 @@ export type ProgramSignatures
 			// classifier) is the rest of the answer rather than a recovery path.
 			enumType then throw MapError.keyNotFound
 			unionType then throw MapError.keyNotFound
-			// An interface name cannot reach a SLOT today — `export var g as Greeter` is
-			// `E3011 Unknown type 'Greeter'` before this door is asked, because existentials are unbuilt.
-			// The arm is written rather than ranged in with its neighbours so that the rung that lands a
-			// fat-pointer slot type has to come here and say what one denotes.
+			// ⛔⛔ **THIS ARM MUST STAY A `throw`, AND THE RUNG THAT LANDED FAT-POINTER SLOTS IS WHY**
+			// (P1.7a-existentials slice 2). Its predecessor invited the opposite — *"the rung that lands a
+			// fat-pointer slot type has to come here and say what one denotes"* — and re-tagging here is
+			// exactly the wrong answer, because THIS DOOR IS A READ AND THE SLOT COUNT IS DECIDED IN THE
+			// COLUMN. An interface-typed field is re-tagged ONCE, by `normalizeSweptInterfaceTypes`, which
+			// goes through `StructLayout.retypeField` and so rebuilds the two-slot prefix sum with it.
+			// Answering `MaxonType.interfaceRef` here instead would hand `Parser.emitFieldLoad` an
+			// `interfaceRef` for a field the layout budgeted ONE slot for: the witness load at
+			// `offset + InterfaceWitnessHalfOffset` would read the NEXT field, and every later field's offset
+			// would be one slot short — a wrong answer at run time with no compile error anywhere.
+			//
+			// Its `functionAlias`/`genericAlias` siblings below DO re-tag, and are safe for the one reason
+			// this arm is not: neither changes a field's slot count.
 			interfaceType then throw MapError.keyNotFound
 			// ⭐ A RANGED alias splits, and it is the ONLY arm that does: the FORM is one declaration
 			// (`typealias X = <primitive>(range)`, which is why `TypeDeclKind` holds one case for both,

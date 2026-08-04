@@ -186,12 +186,21 @@ end 'remapMaxonReturnType'
 // own the array they are folding: rebuilding the record would allocate a second layout per declared
 // type to hold data neither caller keeps. The struct's NAME needs no remap — it is a `ByteArray`,
 // and names travel (see SignatureIndex's header on the id problem).
+//
+// ⚠ **THE HAND-OFF IS `StructLayout.replaceFieldTypes` AND NOT A BARE ASSIGNMENT, BECAUSE THE LAYOUT NOW
+// CACHES GEOMETRY DERIVED FROM THIS COLUMN** (`fieldOffsets`/`slotBytes`, the two-slot prefix sum of
+// P1.7a-existentials slice 2). This function is the THIRD writer of `fieldTypes` — the header over those
+// columns asserted there were only two — and it wrote the column without rebuilding them. It was harmless
+// only because `remapMaxonType` is TAG-PRESERVING in every arm, which is a property of the function above
+// that nothing here states and nothing checks; a single arm that changed a tag would move a field's slot
+// count and every later field in that struct would read one slot short, silently. Handing the column back
+// through the type that owns it is what makes the rebuild unmissable rather than remembered.
 export function remapStructLayoutFieldTypes(layout StructLayout, remap TypeNameRemap)
 	var remapped = MaxonTypeArray.create()
 	for fieldType in layout.fieldTypes 'each'
 		remapped.push(remapMaxonType(fieldType, remap: remap))
 	end 'each'
-	layout.fieldTypes = remapped
+	layout.replaceFieldTypes(remapped)
 end 'remapStructLayoutFieldTypes'
 
 // Rewrite a declared union/enum's PAYLOAD field types through a remap, IN PLACE — the enum twin of

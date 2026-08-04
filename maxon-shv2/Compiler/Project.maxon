@@ -2310,9 +2310,17 @@ let FieldSlotBytes = 8 as ByteOffset
 // field's drop dispatches through, so there is nowhere else it could go. The offset a field read/write
 // adds to reach the witness half is `IrInterface.InterfaceWitnessHalfOffset`, stated there beside the
 // table it points at.
+//
+// ⚠ **THE `2` IS DERIVED AND NOT WRITTEN DOWN, BECAUSE IT IS THE SAME NUMBER `sizeof(<Interface>)` ANSWERS.**
+// It shipped as a bare literal under a comment in `LayoutDescriptor.primitiveTypeByteSize` claiming
+// *"`sizeof(Iface)` and a struct field's carve-out both read this number, so it is stated once here"* — which
+// was false the moment it was written: that reader returned `InterfaceValueBytes` and this one returned `2`,
+// two independent statements of one width with a comment asserting there was one. Widen a fat pointer (a
+// third header word) and a derived carve-out follows while a literal silently does not, which is a field
+// offset that lands mid-value.
 function fieldSlotCount(declaredType MaxonType) returns ByteOffset
 	if maxonTypeTag(declaredType) == ValueTypeTag.interfaceRef 'existential'
-		return 2
+		return InterfaceValueBytes / FieldSlotBytes
 	end 'existential'
 	return 1
 end 'fieldSlotCount'
@@ -2438,16 +2446,23 @@ export type StructLayout
 	// and so cannot be asked whether `BufArray` holds buffers.
 	export var fieldDeclaredSurfaces as DeclaredSurfaceArray
 	// ⭐ **THE DERIVED SLOT GEOMETRY — the PREFIX SUM over `fieldSlotCount` (P1.7a-existentials slice 2), and
-	// the box size that same sum ends at.** Two DERIVED columns, so they are written by exactly the two
-	// routines that can change what they are derived FROM (`addField` appends one, `retypeField` rebuilds
-	// them), and read by `offsetOfField`/`sizeBytes` in O(1).
+	// the box size that same sum ends at.** Two DERIVED columns, read by `offsetOfField`/`sizeBytes` in O(1).
 	//
 	// ⚠ **THEY ARE CACHED RATHER THAN COMPUTED ON DEMAND, AND THAT IS A COST DECISION.** `offsetOfField` is
 	// asked once per field ACCESS the program writes — one of the hottest questions in the parser — and a
 	// prefix sum computed there would walk `fieldTypes` up to `index` on every one of them, turning a
-	// constant into a per-access walk of the declaring type's field list. The invariant that keeps the cache
-	// honest is the same one `addField` already carries: there are only two writers of `fieldTypes`, and both
-	// are here.
+	// constant into a per-access walk of the declaring type's field list.
+	//
+	// ⚠⚠ **WHAT KEEPS THE CACHE HONEST IS THAT EVERY WRITER OF `fieldTypes` IS A METHOD OF THIS TYPE — and
+	// when the columns landed that was ASSERTED rather than true.** The assertion read *"there are only two
+	// writers of `fieldTypes`, and both are here"*; there were THREE. `TypeNameInterner.remapStructLayoutFieldTypes`
+	// replaced the whole column from OUTSIDE the type and rebuilt nothing, so the offsets survived only
+	// because `remapMaxonType` happens to be TAG-PRESERVING — a property of a function in another file that
+	// nothing stated and nothing checked. One arm there that changed a tag (canonicalizing a tuple-alias
+	// `named` to a `structRef`, which this codebase already does elsewhere) and every field after an
+	// interface field would silently read the witness half, with no compile error anywhere. That third
+	// writer now goes through `replaceFieldTypes` below, so the sentence is structural instead of hopeful:
+	// `addField` appends one term, `retypeField` and `replaceFieldTypes` rebuild, and there is no fourth door.
 	export var fieldOffsets as ByteOffsetArray
 	// The total the prefix sum ends at — the box's payload bytes for a type with at least one field. NOT
 	// `sizeBytes()`, which floors an EMPTY struct at one slot; see there for why that floor exists.
@@ -2552,6 +2567,24 @@ export type StructLayout
 		try self.fieldTypes.set(index, value: declaredType) otherwise panic("StructLayout.retypeField: fieldTypes.set OOB at {index} for `type {String.from(self.name)}`, which declares {self.fieldCount()} — the caller walks `0 upto fieldCount()`")
 		self.rebuildSlotGeometry()
 	end 'retypeField'
+
+	// ⭐ **REPLACE THE WHOLE DECLARED-TYPE COLUMN — the merge's door, and the reason it is a METHOD.**
+	// `TypeNameInterner.remapStructLayoutFieldTypes` rewrites every field type through an id remap when a
+	// file's layouts are folded into a bigger table, and it used to assign `layout.fieldTypes` directly from
+	// outside this type, leaving the derived geometry stale. Nothing about a remap FORBIDS a tag change — it
+	// only happens not to make one today — so the rebuild belongs on this side of the boundary, where the
+	// columns are, rather than resting on a caller remembering. See `fieldOffsets`.
+	//
+	// The length is a precondition, not a case: a remap rewrites one column in place and pushes exactly what
+	// it read, so a short one is a broken remap rather than a program this could report on.
+	export function replaceFieldTypes(types MaxonTypeArray)
+		if types.count() != self.fieldTypes.count() 'lengthChanged'
+			panic("StructLayout.replaceFieldTypes: `type {String.from(self.name)}` declares {self.fieldCount()} field(s) and the replacement column holds a different number — a remap rewrites one column in place and cannot change its length")
+		end 'lengthChanged'
+
+		self.fieldTypes = types
+		self.rebuildSlotGeometry()
+	end 'replaceFieldTypes'
 
 	// Recompute `fieldOffsets`/`slotBytes` from `fieldTypes` — the prefix sum, stated ONCE (`addField`
 	// extends it by one term rather than restating it).

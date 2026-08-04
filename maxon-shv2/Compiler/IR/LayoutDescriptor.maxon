@@ -324,8 +324,11 @@ export function primitiveTypeByteSize(tag ValueTypeTag) returns ByteOffset
 		unresolved then panic("primitiveTypeByteSize: an `unresolved` type reached sizeof — TypeResolution should have eliminated it or SemanticCheck rejected the reference")
 		void then panic("primitiveTypeByteSize: `void` is not a value type and has no size")
 		// ⭐ AN EXISTENTIAL IS THE ONE TAG WHOSE STORAGE IS NOT ONE MACHINE WORD — it is the fat pointer
-		// `{value, witness}`, two adjacent words (see MaxonType's `interfaceRef` arm). `sizeof(Iface)` and a
-		// struct field's carve-out both read this number, so it is stated once here.
+		// `{value, witness}`, two adjacent words (see MaxonType's `interfaceRef` arm). `sizeof(Iface)` answers
+		// it here and a struct field's two-slot carve-out DIVIDES it by the slot size
+		// (`Project.fieldSlotCount`), so both readers move together off the one constant. ⚠ That sentence
+		// used to claim they already did while the carve-out was a literal `2`; it is true now because the
+		// division landed, not because it was asserted.
 		interfaceRef then return InterfaceValueBytes
 	end 'size'
 end 'primitiveTypeByteSize'
