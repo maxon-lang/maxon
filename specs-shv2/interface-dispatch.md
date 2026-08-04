@@ -1323,5 +1323,244 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: specs/fragments/interface-dispatch/error.closure-parameter-at-an-interface-type.test:26:24: Unsupported: a closure parameter 't' declared at the interface type 'Shape' — a value held at an interface is a two-word fat pointer `(value, witness)`, and its witness half travels as an adjacent hidden argument that only a declared function's signature reserves. A closure is called through the uniform `(userargs, env)` indirect ABI, which carries one machine word per argument. Declare the parameter at a concrete type, or take the interface in a named function
+error E2015: specs/fragments/interface-dispatch/error.closure-parameter-at-an-interface-type.test:26:24: Unsupported: a closure parameter declared at the interface type 'Shape' — a value held at an interface type is a two-word fat pointer `(value, witness)`, and a closure is called through the uniform `(userargs, env)` indirect ABI, which carries one machine word per argument and reserves no adjacent slot for the witness half. Declare the parameter at a concrete type, or take the interface on a named function, whose signature reserves the adjacent slot
+```
+
+<!-- test: error.interface-typed-requirement-parameter -->
+⭐⭐ **AN INTERFACE-TYPED PARAMETER ON A REQUIREMENT WAS THE ONE POSITION THAT STILL COMPILED, AND IT
+NEVER WORKED.** Five declared places already refused an existential for the same reason — a struct
+field, a union payload, a return type, a container element and a closure parameter — because a value
+held at an interface is a two-word fat pointer and each of those has room for one word. A witness
+call has room for one word too, and this position was missed.
+**MEASURED on the CONTROL, so this is a completion rather than a new restriction: exit 139 (SEGFAULT)
+on x64-windows and a trap on wasm — with a proper CONFORMER actual**, not merely with a mistyped one.
+The isolating measurement: with the parameter present but never dispatched on, x64 answered CORRECTLY
+(the value half arrives, the witness half is simply dropped) while wasm still trapped on the call
+itself — which is what says the formal is unrepresentable rather than unchecked.
+⚠ Refused at the DECLARATION, where the author has something to change, and not at the dispatch — the
+rule the four storage positions already state. The refusal is NOTED by the shared interface reader and
+thrown only on the real-parse path, because that reader's other caller is the tolerant whole-program
+fold, which swallows a `ParseError` and would silently drop the interface from the index.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Shape
+	function area() returns Integer
+end 'Shape'
+
+type Sq implements Shape
+	let s as Integer
+
+	function area() returns Integer
+		return self.s
+	end 'area'
+
+	static function create(s Integer) returns Self
+		return Self{s: s}
+	end 'create'
+end 'Sq'
+
+interface Runner
+	function run(c Shape) returns Integer
+end 'Runner'
+
+type R implements Runner
+	let base as Integer
+
+	function run(c Shape) returns Integer
+		return self.base + c.area()
+	end 'run'
+
+	static function create(base Integer) returns Self
+		return Self{base: base}
+	end 'create'
+end 'R'
+
+function useIt(r Runner) returns Integer
+	return r.run(Sq.create(11))
+end 'useIt'
+
+function main() returns ExitCode
+	return useIt(R.create(20)) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: specs/fragments/interface-dispatch/error.interface-typed-requirement-parameter.test:21:15: Unsupported: an interface requirement's parameter declared at the interface type 'Shape' — a value held at an interface type is a two-word fat pointer `(value, witness)`, and a witness call carries one machine word per argument, so the witness half is dropped and the impl dispatches through whatever the next slot happens to hold. Declare the parameter at a concrete type, or declare the requirement over a type parameter the interface constrains
+```
+
+<!-- test: error.interface-typed-requirement-parameter-through-a-type-parameter -->
+The SECOND dispatch door. The requirement is refused at its declaration, so it does not matter which
+receiver reaches it — but both doors collapsed the formal identically before the refusal existed
+(**MEASURED: 139 on x64, trap on wasm, through a `where T is` body exactly as through an existential**),
+and a refusal placed at either dispatch site instead of at the declaration would have closed only one.
+This case is what proves the declaration is the right place.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Shape
+	function area() returns Integer
+end 'Shape'
+
+type Sq implements Shape
+	let s as Integer
+
+	function area() returns Integer
+		return self.s
+	end 'area'
+
+	static function create(s Integer) returns Self
+		return Self{s: s}
+	end 'create'
+end 'Sq'
+
+interface Runner
+	function run(c Shape) returns Integer
+end 'Runner'
+
+type R implements Runner
+	let base as Integer
+
+	function run(c Shape) returns Integer
+		return self.base + c.area()
+	end 'run'
+
+	static function create(base Integer) returns Self
+		return Self{base: base}
+	end 'create'
+end 'R'
+
+type Box uses T where T is Runner
+	let item as T
+
+	export function go() returns Integer
+		return self.item.run(Sq.create(11))
+	end 'go'
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+end 'Box'
+
+typealias RBox = Box with R
+
+function main() returns ExitCode
+	return RBox.create(R.create(20)).go() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: specs/fragments/interface-dispatch/error.interface-typed-requirement-parameter-through-a-type-parameter.test:21:15: Unsupported: an interface requirement's parameter declared at the interface type 'Shape' — a value held at an interface type is a two-word fat pointer `(value, witness)`, and a witness call carries one machine word per argument, so the witness half is dropped and the impl dispatches through whatever the next slot happens to hold. Declare the parameter at a concrete type, or declare the requirement over a type parameter the interface constrains
+```
+
+<!-- test: error.interface-typed-parameter-on-a-throwing-requirement -->
+The THIRD door: a throwing requirement lowers to `witnessTryCall`, a different Std op with its own
+argument marshalling, and it collapsed the formal identically (**MEASURED: 139 on x64, trap on wasm**).
+Pinned because a refusal wired into the non-throwing dispatch alone would leave exactly this shape live,
+which is the split that has cost this rung two rounds already.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Shape
+	function area() returns Integer
+end 'Shape'
+
+type Sq implements Shape
+	let s as Integer
+
+	function area() returns Integer
+		return self.s
+	end 'area'
+
+	static function create(s Integer) returns Self
+		return Self{s: s}
+	end 'create'
+end 'Sq'
+
+enum RunError implements Error
+	tooSmall
+end 'RunError'
+
+interface Runner
+	function run(c Shape) returns Integer throws RunError
+end 'Runner'
+
+type R implements Runner
+	let base as Integer
+
+	function run(c Shape) returns Integer throws RunError
+		if self.base < 5 'small'
+			throw RunError.tooSmall
+		end 'small'
+		return self.base + c.area()
+	end 'run'
+
+	static function create(base Integer) returns Self
+		return Self{base: base}
+	end 'create'
+end 'R'
+
+function useIt(r Runner) returns Integer
+	return try r.run(Sq.create(11)) otherwise 55
+end 'useIt'
+
+function main() returns ExitCode
+	return useIt(R.create(20)) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: specs/fragments/interface-dispatch/error.interface-typed-parameter-on-a-throwing-requirement.test:25:15: Unsupported: an interface requirement's parameter declared at the interface type 'Shape' — a value held at an interface type is a two-word fat pointer `(value, witness)`, and a witness call carries one machine word per argument, so the witness half is dropped and the impl dispatches through whatever the next slot happens to hold. Declare the parameter at a concrete type, or declare the requirement over a type parameter the interface constrains
+```
+
+<!-- test: interface-dispatch.interface-parameter-on-a-plain-function-still-compiles -->
+⭐⭐ **THE FALSE-REJECT CONTROL, AND THE SHARPEST ONE IN THIS CHANGE.** A plain function's parameter is
+the position that DOES have room — its signature reserves an adjacent hidden argument for the witness
+half — so it must keep compiling and answering correctly while the requirement's parameter is refused.
+The two are one token apart in the source and one `DeclaredStoragePosition` apart in the compiler.
+MEASURED against the control, unchanged: `20 + 11`.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Shape
+	function area() returns Integer
+end 'Shape'
+
+type Sq implements Shape
+	let s as Integer
+
+	function area() returns Integer
+		return self.s
+	end 'area'
+
+	static function create(s Integer) returns Self
+		return Self{s: s}
+	end 'create'
+end 'Sq'
+
+function takeShape(c Shape, base Integer) returns Integer
+	return base + c.area()
+end 'takeShape'
+
+type Holder
+	let base as Integer
+
+	function measure(c Shape) returns Integer
+		return self.base + c.area()
+	end 'measure'
+
+	static function create(base Integer) returns Self
+		return Self{base: base}
+	end 'create'
+end 'Holder'
+
+type Helper
+	static function measure(c Shape, base Integer) returns Integer
+		return base + c.area()
+	end 'measure'
+end 'Helper'
+
+function main() returns ExitCode
+	return (takeShape(Sq.create(11), base: 20) - Holder.create(20).measure(Sq.create(11)) + Helper.measure(Sq.create(11), base: 31)) as ExitCode
+end 'main'
+```
+```exitcode
+42
 ```

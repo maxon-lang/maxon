@@ -5710,7 +5710,37 @@ enum DeclaredStoragePosition
 	unionPayload
 	returnType
 	containerElement
+	// ⭐ The two PARAMETER positions, which the four above deliberately exclude — a plain function's
+	// parameter IS the position with room, and it stays legal. These two are the ones whose ABI has no
+	// adjacent slot to give: a lifted closure is called through the uniform `(userargs, env)` indirect
+	// shape, and an interface REQUIREMENT is called through a witness slot. Appended at the END, per the
+	// band-append rule the `containerElement` arm's own note relies on.
+	closureParameter
+	interfaceRequirementParameter
 end 'DeclaredStoragePosition'
+
+// ⭐⭐ **THE ONE SENTENCE EVERY INTERFACE-TYPED-POSITION REFUSAL IS BUILT FROM.** Six declared places have
+// no room for an existential's second word, and each says so with the same three parts: WHAT is being
+// declared, WHERE the second word has nowhere to go, and WHAT TO DO. Written once here rather than spelled
+// per site — the closure arm briefly was spelled per site, which is the fifth copy this rung then removed.
+//
+// ⚠ **THE REMEDY IS PER POSITION, AND IT USED TO BE SHARED AND WRONG.** The four storage positions all
+// closed with *"or take the interface as a PARAMETER, which carries its witness as an adjacent argument"* —
+// true of a plain function (MEASURED: an interface parameter there answers 31 on both targets) and FALSE of
+// the two positions added here, whose whole problem is that their ABI reserves no such slot. Sent to a
+// requirement's parameter, that advice walked the reader straight into a segfault.
+function interfaceStoragePositionMessage(position DeclaredStoragePosition, interfaceName ByteArray) returns String
+	return "{storagePositionSubject(position)} declared at the interface type '{String.from(interfaceName)}' — a value held at an interface type is a two-word fat pointer `(value, witness)`, and {storagePositionRoom(position)}. {storagePositionRemedy(position)}"
+end 'interfaceStoragePositionMessage'
+
+// WHAT TO DO, per position — see `interfaceStoragePositionMessage` for why this is not one shared clause.
+function storagePositionRemedy(position DeclaredStoragePosition) returns String
+	match position 'which'
+		structField to containerElement then return "Declare it at a concrete type, or take the interface as a PARAMETER of a plain function, which carries its witness as an adjacent argument"
+		closureParameter then return "Declare the parameter at a concrete type, or take the interface on a named function, whose signature reserves the adjacent slot"
+		interfaceRequirementParameter then return "Declare the parameter at a concrete type, or declare the requirement over a type parameter the interface constrains"
+	end 'which'
+end 'storagePositionRemedy'
 
 // WHAT is being declared, for the refusal's sentence. Rendered on the FAILURE path only.
 function storagePositionSubject(position DeclaredStoragePosition) returns String
@@ -5719,6 +5749,8 @@ function storagePositionSubject(position DeclaredStoragePosition) returns String
 		unionPayload then return "a union case payload"
 		returnType then return "a function's return type"
 		containerElement then return "a container's element type"
+		closureParameter then return "a closure parameter"
+		interfaceRequirementParameter then return "an interface requirement's parameter"
 	end 'which'
 end 'storagePositionSubject'
 
@@ -5735,6 +5767,14 @@ function storagePositionRoom(position DeclaredStoragePosition) returns String
 		// `typealias` and then thrown away, and what the author saw was *"E3005: cannot assign 'struct' to
 		// variable 'push' of type 'int'"* eighteen lines further down.
 		containerElement then return "an element slot is one machine word"
+		closureParameter then return "a closure is called through the uniform `(userargs, env)` indirect ABI, which carries one machine word per argument and reserves no adjacent slot for the witness half"
+		// ⚠ MEASURED on every shape and on BOTH compilers, before this arm existed: a proper CONFORMER
+		// actual segfaulted (exit 139) on x64 and trapped on wasm, and so did an `int` and a `float`; through
+		// an existential receiver, through a `where T is` body and through a throwing requirement alike. With
+		// the parameter never dispatched on, x64 answered CORRECTLY (the value half arrives, the witness half
+		// is simply dropped) while wasm still trapped on the call itself — which is what says the formal is
+		// unrepresentable rather than merely unchecked.
+		interfaceRequirementParameter then return "a witness call carries one machine word per argument, so the witness half is dropped and the impl dispatches through whatever the next slot happens to hold"
 	end 'which'
 end 'storagePositionRoom'
 
@@ -6585,6 +6625,12 @@ export type Parser
 	// the instant it emits, and the rewrite runs on the op in the last opRef slot — but a future emit path that
 	// forgot to record would otherwise mis-type an `(e)` binding silently.
 	var lastWitnessDispatchIndex as OpIndex
+	// ⭐ The interface-typed REQUIREMENT PARAMETER the shared reader last saw, held for the real parse to
+	// refuse — see `requireNoInterfaceTypedRequirementParam` for why the reader may not throw. An empty name
+	// means none seen, which is a real absence rather than a sentinel: an interface name is never empty.
+	var pendingRequirementParamInterface as ByteArray
+	var pendingRequirementParamLine as LineNumber
+	var pendingRequirementParamColumn as ColumnNumber
 	var lastWitnessDispatchName as ByteArray
 	var lastWitnessDispatchThrows as ThrowsClause
 	// ⭐ The BARE MEMBER NAMES of the INNER ranged typealiases declared in the type currently being parsed
@@ -6953,6 +6999,9 @@ export type Parser
 			currentWitnessParamCount: 0,
 			witnessSlotsByInterface: sharedEmptyWitnessSlots,
 			lastWitnessDispatchIndex: 0,
+			pendingRequirementParamInterface: EmptySourceText,
+			pendingRequirementParamLine: 0,
+			pendingRequirementParamColumn: 0,
 			lastWitnessDispatchName: EmptySourceText,
 			lastWitnessDispatchThrows: ThrowsClause.none,
 			enclosingInnerAliases: sharedEmptyInnerAliases,
@@ -9734,7 +9783,14 @@ export type Parser
 	// one "not declared" reject at a dispatch — both on a build that is already failing.
 	export function foldInterfaceDeclarationInto(index ProgramSignatures, tokenPos TokenIndex)
 		self.pos = tokenPos
-		let iface = try self.readInterfaceDeclaration() otherwise return
+		let iface = try self.readInterfaceDeclaration() otherwise 'malformed'
+			self.clearPendingRequirementParam()
+			return
+		end 'malformed'
+		// The reader may have NOTED an interface-typed requirement parameter. The fold does not refuse — the
+		// real parse does, with a position — so the note is dropped rather than carried into the next
+		// declaration this same reader folds.
+		self.clearPendingRequirementParam()
 		index.recordInterfaceDeclaration(iface)
 	end 'foldInterfaceDeclarationInto'
 
@@ -10022,7 +10078,7 @@ export type Parser
 		let declaredSurface = self.declaredSurfaceAt(self.pos, slotElementsFromAliases: false)
 		let typeTok = self.current()
 		let fieldType = try self.parseTypeReference()
-		try self.requireStorableDeclaredType(fieldType, position: DeclaredStoragePosition.structField, anchor: typeTok)
+		try self.requireStorableDeclaredType(fieldType, position: DeclaredStoragePosition.structField, line: typeTok.line, column: typeTok.column)
 
 		if not self.at(TokenKind.equals) 'noDefault'
 			layout.addField(nameTok.value, declaredType: fieldType, mutable: mutable, tier: visibility, defaultValue: FieldDefault.none, declaredSurface: declaredSurface)
@@ -10961,7 +11017,7 @@ export type Parser
 
 		let argTok = self.current()
 		let argType = try self.parseTypeReference()
-		try self.requireStorableDeclaredType(argType, position: DeclaredStoragePosition.containerElement, anchor: argTok)
+		try self.requireStorableDeclaredType(argType, position: DeclaredStoragePosition.containerElement, line: argTok.line, column: argTok.column)
 		self.checkGenericArgType(argType, argTok: argTok, inlineElement: inlineElement)
 		nodes.push(GenericArgNode.leaf(argType))
 	end 'parseGenericArgNode'
@@ -11578,8 +11634,61 @@ export type Parser
 	// The READING is `readInterfaceDeclaration`'s, shared with the declaration sweep's second pass; what this
 	// arm owns is the artifact, which the sweep has none of. See that function for why the two are split.
 	function parseInterfaceDeclaration() throws ParseError
-		self.artifact.recordInterface(try self.readInterfaceDeclaration())
+		let iface = try self.readInterfaceDeclaration()
+		try self.requireNoInterfaceTypedRequirementParam()
+		self.artifact.recordInterface(iface)
 	end 'parseInterfaceDeclaration'
+
+	// ⭐⭐ **THE REFUSAL IS RECORDED BY THE SHARED READER AND THROWN ONLY HERE, AND THAT SPLIT IS FORCED.**
+	// `readInterfaceDeclaration` has TWO callers: this one, the real parse, and `foldInterfaceDeclarationInto`,
+	// which is TOLERANT — it swallows a `ParseError` and records nothing. Throwing from inside the reader would
+	// therefore drop the interface out of the whole-program index whenever the fold reached it, and the fold
+	// runs with `allFilesFolded` already set, so `parseTypeReference` CAN mint an `interfaceRef` there for any
+	// interface folded earlier. The result would be order-dependent: the same program would lose a declaration
+	// or not depending on which interface was declared first. So the reader notes and this throws.
+	//
+	// The message is `requireStorableDeclaredType`'s, through the same `DeclaredStoragePosition` door the five
+	// other interface-typed positions use — see `interfaceStoragePositionMessage`.
+	function requireNoInterfaceTypedRequirementParam() throws ParseError
+		if self.pendingRequirementParamInterface.count() == 0 'noneSeen'
+			return
+		end 'noneSeen'
+
+		let interfaceName = self.pendingRequirementParamInterface
+		let line = self.pendingRequirementParamLine
+		let column = self.pendingRequirementParamColumn
+		self.clearPendingRequirementParam()
+		throw ParseError.unsupported(interfaceStoragePositionMessage(DeclaredStoragePosition.interfaceRequirementParameter, interfaceName: interfaceName), line: line, column: column)
+	end 'requireNoInterfaceTypedRequirementParam'
+
+	// Note the FIRST interface-typed parameter of a requirement, for the real parse to refuse. Only the first:
+	// one refusal per declaration is what the author acts on, and the four sibling positions report one too.
+	function noteInterfaceTypedRequirementParam(paramTypes MaxonTypeArray, paramRanges SourceRangeArray)
+		if self.pendingRequirementParamInterface.count() != 0 'alreadyNoted'
+			return
+		end 'alreadyNoted'
+
+		for i in 0 upto paramTypes.count() 'eachParam'
+			let paramType = try paramTypes.get(i) otherwise panic("noteInterfaceTypedRequirementParam: paramTypes.get OOB at {i} below count {paramTypes.count()}")
+			if maxonTypeTag(paramType) != ValueTypeTag.interfaceRef 'notAnExistential'
+				continue
+			end 'notAnExistential'
+
+			let anchor = try paramRanges.get(i) otherwise panic("noteInterfaceTypedRequirementParam: paramRanges.get OOB at {i} — the two columns are filled in lockstep by `parseFunctionParameters`")
+			self.pendingRequirementParamInterface = self.internedName(typeNameIdOf(paramType))
+			self.pendingRequirementParamLine = anchor.line
+			self.pendingRequirementParamColumn = anchor.column
+			return
+		end 'eachParam'
+	end 'noteInterfaceTypedRequirementParam'
+
+	// The fold's counterpart to the throw above: it must leave no record behind for the NEXT declaration this
+	// same reader parses to inherit.
+	function clearPendingRequirementParam()
+		self.pendingRequirementParamInterface = EmptySourceText
+		self.pendingRequirementParamLine = 0
+		self.pendingRequirementParamColumn = 0
+	end 'clearPendingRequirementParam'
 
 	// ⭐ **THE ONE READER OF AN `interface` DECLARATION (R8)** — cursor AT the `interface` keyword, landing past
 	// the closing `end`. TWO parties build an `IrInterface` and they must build the SAME one: the real parse,
@@ -11735,6 +11844,8 @@ export type Parser
 		try self.consume(TokenKind.leftParen)
 		try self.parseFunctionParameters(paramNames, paramTypes: paramTypes, paramRanges: paramRanges, paramSurfaces: paramSurfaces, owner: ParamDefaultOwner.interfaceRequirement)
 		try self.consume(TokenKind.rightParen)
+		// NOTED, not thrown — see `requireNoInterfaceTypedRequirementParam` for why this reader may not refuse.
+		self.noteInterfaceTypedRequirementParam(paramTypes, paramRanges: paramRanges)
 
 		let returnType = try self.parseOptionalReturnType()
 		// ⭐ **THE `throws E` CLAUSE IS RECORDED, NOT DISCARDED (P1.7a slice 2b-v).** It decides which ABI a
@@ -12257,7 +12368,7 @@ export type Parser
 			try self.requireUnreservedName(nameTok)
 			let typeTok = self.current()
 			let fieldType = try self.parseTypeReference()
-			try self.requireStorableDeclaredType(fieldType, position: DeclaredStoragePosition.unionPayload, anchor: typeTok)
+			try self.requireStorableDeclaredType(fieldType, position: DeclaredStoragePosition.unionPayload, line: typeTok.line, column: typeTok.column)
 			fields.push(PayloadField.create(nameTok.value, declaredType: fieldType))
 
 			if not self.at(TokenKind.comma) 'endFields'
@@ -12518,7 +12629,7 @@ export type Parser
 		// the line that has to change. See `requireStorableDeclaredType`.
 		match returnType 'declaredReturn'
 			void then break 'declaredReturn'
-			value(inner) then try self.requireStorableDeclaredType(inner, position: DeclaredStoragePosition.returnType, anchor: nameTok)
+			value(inner) then try self.requireStorableDeclaredType(inner, position: DeclaredStoragePosition.returnType, line: nameTok.line, column: nameTok.column)
 		end 'declaredReturn'
 
 		if needsLayoutParam and not takesReceiver and not self.returnsEnclosingType(returnType) 'staticLayoutNeedsSelfReturn'
@@ -15426,12 +15537,12 @@ export type Parser
 	// `parseTypeReference` cannot mint an `interfaceRef` at all (its arm is gated on `allFilesFolded`, and
 	// the interface registry is not filled until the sweep ends), so a swept declaration is a bare `named`
 	// and never reaches the throw. The real parse reports it.
-	function requireStorableDeclaredType(declared MaxonType, position DeclaredStoragePosition, anchor Token) throws ParseError
+	function requireStorableDeclaredType(declared MaxonType, position DeclaredStoragePosition, line LineNumber, column ColumnNumber) throws ParseError
 		if maxonTypeTag(declared) != ValueTypeTag.interfaceRef 'notAnExistential'
 			return
 		end 'notAnExistential'
 
-		throw ParseError.unsupported("{storagePositionSubject(position)} declared at the interface type '{String.from(self.internedName(typeNameIdOf(declared)))}' — a value held at an interface type is a two-word fat pointer `(value, witness)`, and {storagePositionRoom(position)}. Declare it at a concrete type, or take the interface as a PARAMETER, which carries its witness as an adjacent argument", line: anchor.line, column: anchor.column)
+		throw ParseError.unsupported(interfaceStoragePositionMessage(position, interfaceName: self.internedName(typeNameIdOf(declared))), line: line, column: column)
 	end 'requireStorableDeclaredType'
 
 	// The interned NAME behind a `named`/`structRef` id, from THIS file's interner — where every id a
@@ -38067,19 +38178,15 @@ export type Parser
 	// adapted to shv2's field set (its `currentFunc`/`inClosure`/`closureOuterScope` become the swapped
 	// per-function columns plus the `closureCaptureScopes` stack, and the `funcCount()`-keyed ValueOrigin
 	// needs the `currentFuncIndex` re-stamp that v1's index model did not).
-	// The refusal `parseClosureExpression` states in full. Positioned on the PARAMETER, which is what the
-	// author would change, and reported through `unsupported` — the same code and shape the three sibling
-	// existential-position refusals use (a struct field, a return, a container element).
-	function requireNoInterfaceClosureParam(paramNames ByteArrayArray, paramTypes MaxonTypeArray, paramRanges SourceRangeArray) throws ParseError
+	// A closure parameter declared at an interface type, refused through the SAME door the four storage
+	// positions come through rather than with a message of its own — which is what it briefly had, and which
+	// would have been the fifth spelling of one sentence. Positioned on the PARAMETER, the line an author
+	// changes.
+	function requireNoInterfaceClosureParam(paramTypes MaxonTypeArray, paramRanges SourceRangeArray) throws ParseError
 		for i in 0 upto paramTypes.count() 'eachParam'
-			let paramType = try paramTypes.get(i) otherwise panic("requireNoInterfaceClosureParam: paramTypes.get OOB at {i} below count {paramTypes.count()}")
-			if maxonTypeTag(paramType) != ValueTypeTag.interfaceRef 'notAnExistential'
-				continue
-			end 'notAnExistential'
-
 			let anchor = try paramRanges.get(i) otherwise panic("requireNoInterfaceClosureParam: paramRanges.get OOB at {i} — the two columns are filled in lockstep by `parseFunctionParameters`")
-			let paramName = try paramNames.get(i) otherwise panic("requireNoInterfaceClosureParam: paramNames.get OOB at {i} — the two columns are filled in lockstep by `parseFunctionParameters`")
-			throw ParseError.unsupported("a closure parameter '{String.from(paramName)}' declared at the interface type '{String.from(interfaceNameOfType(paramType, typeNames: self.artifact.typeNames))}' — a value held at an interface is a two-word fat pointer `(value, witness)`, and its witness half travels as an adjacent hidden argument that only a declared function's signature reserves. A closure is called through the uniform `(userargs, env)` indirect ABI, which carries one machine word per argument. Declare the parameter at a concrete type, or take the interface in a named function", line: anchor.line, column: anchor.column)
+			let paramType = try paramTypes.get(i) otherwise panic("requireNoInterfaceClosureParam: paramTypes.get OOB at {i} below count {paramTypes.count()}")
+			try self.requireStorableDeclaredType(paramType, position: DeclaredStoragePosition.closureParameter, line: anchor.line, column: anchor.column)
 		end 'eachParam'
 	end 'requireNoInterfaceClosureParam'
 
@@ -38116,7 +38223,7 @@ export type Parser
 		// because a closure's parameters are parsed by a different door than a function's. Refused rather than
 		// paired: the uniform `(userargs, env)` indirect ABI carries one machine word per argument, so a fat
 		// pointer would need a second slot the shape has nowhere to put.
-		try self.requireNoInterfaceClosureParam(paramNames, paramTypes: paramTypes, paramRanges: paramRanges)
+		try self.requireNoInterfaceClosureParam(paramTypes, paramRanges: paramRanges)
 		// The lifted closure's ABI count is its own parameters PLUS the trailing `__env` slot reserved below —
 		// so the ceiling is asked of `+ 1`. Asked HERE rather than in the shared `parseFunctionParameters` for
 		// the reason `requireAbiParamCount`'s header gives: only the caller knows how many hidden slots its own
