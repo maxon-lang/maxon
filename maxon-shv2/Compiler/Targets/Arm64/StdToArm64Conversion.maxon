@@ -87,13 +87,30 @@ end 'mmapAnonPrivateFlags'
 // GetStdHandle+WriteFile: no handle call, no bytes-written out-param, no stack args.
 let WriteStdoutFd = 0x1  // fd = 1 (STDOUT_FILENO).
 
-// The IP scratch register the isel materialises an immediate into when no immediate op-form fits:
-// a multiplier (arm64 has no multiply-by-immediate), a non-bitmask logical immediate (AArch64
-// `and`/`or`/`xor` #imm encode only rotated bitmasks), or an add/sub immediate past 24 bits (the
-// imm12 field, optionally shifted by 12, reaches no further). `movz x16, imm` then a register op
-// follows. x16/x17 are the platform IP scratch registers — free to clobber for exactly this, and NOT
-// in the allocatable pool, so no value is ever coloured into one and the two-op lifetime here can
-// conflict with nothing.
+// The IP scratch register the isel materialises an immediate — or a folded `base + offset` address —
+// into when no immediate op-form fits: a multiplier (arm64 has no multiply-by-immediate), a non-bitmask
+// logical immediate (AArch64 `and`/`or`/`xor` #imm encode only rotated bitmasks), an add/sub immediate
+// past 24 bits (the imm12 field, optionally shifted by 12, reaches no further), a compare immediate past
+// ONE of those fields, or a load/store displacement past the scaled imm12 (`addressFor`). `movz x16, imm`
+// (or `add x16, base, #off`) then the op that reads it follows. x16/x17 are the platform IP scratch
+// registers — free to clobber for exactly this, and NOT in the allocatable pool, so no VALUE is ever
+// coloured into one.
+//
+// ⚠⚠ **THE PRODUCER AND ITS CONSUMER ARE EMITTED ADJACENTLY AND DO NOT STAY ADJACENT, SO "ADJACENT" IS
+// NOT THE SAFETY ARGUMENT.** MEASURED: `wide-field-offsets/byte-field-past-the-imm12`'s own golden shows
+// a rematerialised constant spliced BETWEEN the fold and the store it addresses through —
+// `arm64.add x16, x0, 4096` · `arm64.movImm x1, 0` · `arm64.storeBaseDispReg.byte [x16 + 0], x1`. The
+// splitter inserts reloads, spill stores and rematerialised constants wherever a value's use needs one,
+// and a use of the CONSUMER is such a site.
+//
+// What actually makes the scheme safe is that **NOTHING A POST-ISEL PASS SPLICES IN WRITES x16**: a
+// spill or reload is a frame-slot form off SP (`arm64EmitFrameSlot`), a remat is `arm64MovImm` into an
+// ALLOCATABLE register, and SSA destruction's `movRegReg`/`xchgRegReg` go on EDGES — at a block's end or
+// in a split block — never between two ops of one lowering. ⇒ **a new post-ISEL splice that can touch
+// x16, or an encoder-tier op that clobbers it, breaks every pair in this file.** Two such encoder-tier
+// clobbers already exist undeclared (`arm64FpLoadRdata`, `xchgRegReg`'s GPR swap) and are safe only
+// because neither is ever SPLICED between a pair — `arm64JumpTable` declares the same clobber as
+// `implicitDefs: 0x30000` and is the shape the other two should take.
 let Arm64Scratch = Arm64Register.x16
 
 // The bitmask the LOGICAL `not` flips: a bool lives in the 0/1 domain, so complementing it is
@@ -794,9 +811,8 @@ type StdToArm64Lowering
 
 	// Materialise `imm` into the IP scratch and hand back the register naming it — the step every "no
 	// immediate form fits" fallback in this file shares. The materialisation and the op that reads it
-	// are emitted adjacently, so x16 is live only between them; see `Arm64Scratch` for why it is free
-	// to take at all (a physical def of a non-allocatable register forbids nothing and collides with
-	// nothing).
+	// are emitted adjacently; see `Arm64Scratch` for why that is NOT the invariant the scheme rests on
+	// (the splitter splices between them, measured) and for what actually is.
 	function materialiseIntoScratch(imm Imm32, dstRef BlockRef) returns TargetVReg
 		let scratch = arm64PhysReg(Arm64Scratch)
 		self.emit(dstRef, op: TargetOp.arm64MovImm(scratch, value: imm))
@@ -861,9 +877,11 @@ type StdToArm64Lowering
 	//
 	// ⚠ AArch64's scaled load/store field is a 12-bit count of ACCESS UNITS, so its reach depends on the
 	// WIDTH: 4095 bytes for an `LDRB`/`STRB`, 32760 for the 64-bit forms — and NOTHING between there and
-	// the `Imm32` `memoryDisplacement` hands us, which is sized for x64's `[base + disp32]`. Every field
-	// occupies one 8-byte slot, so those ceilings fall at the 512th and the 4096th declared field of a
-	// struct, and a program that declares more is a program a generator writes.
+	// the `Imm32` `memoryDisplacement` hands us, which is sized for x64's `[base + disp32]`. A field
+	// occupies `Project.fieldSlotCount` 8-byte slots — ONE for every declared type but an INTERFACE one,
+	// which takes two (the 16-byte fat pointer) — so those ceilings fall at the 512th and the 4096th SLOT,
+	// which is the 512th/4096th ordinary field or the 256th/2048th existential one. A program that
+	// declares that many is a program a generator writes.
 	//
 	// When no direct form exists the address is folded into the IP scratch and the access addresses
 	// `[scratch + 0]`. The fold goes through `lowerAddSubImm` rather than a second copy of the same
@@ -907,7 +925,8 @@ type StdToArm64Lowering
 	// the subtraction and the multiply are two's-complement identical, so only the quotient's instruction
 	// differs. The quotient is an intermediate the isel cannot mint a fresh virtual for (the parser owns
 	// the value space), so it goes through the IP scratch x16: `sdiv x16, lhs, divisor; msub dest, x16,
-	// divisor, lhs`. x16 is non-allocatable and live only across these two adjacent ops.
+	// divisor, lhs`. x16 is non-allocatable, so no value is coloured into it across the pair — see
+	// `Arm64Scratch` for why "adjacent" is not the argument and what is.
 	function lowerDivMod(resultId ValueId, lhs ValueId, rhs ValueId, isRemainder bool, signedness DivideSignedness, dstRef BlockRef)
 		let divisor = TargetVReg.virtual(rhs)
 		let dest = TargetVReg.virtual(resultId)

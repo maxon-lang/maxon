@@ -23,11 +23,12 @@ depends on the WIDTH of the access:
 | `bool` (and any other byte-wide field) | `LDRB`/`STRB` | 1 | **4095** |
 | `Integer`, `float`, a reference — every 8-byte field | `LDR`/`STR` (X or D) | 8 | **32760** |
 
-Every field occupies one 8-byte slot whatever its declared type (`Project.FieldSlotBytes`),
-so those two ceilings fall at the **512th** and the **4096th** declared field. A struct
-with more fields than that is not exotic — a generated schema binding or a flag table
-reaches it — and until the instruction selector asked, the 4097th field's store PANICKED
-in the encoder:
+A field occupies `Project.fieldSlotCount` 8-byte slots — **one** for every declared type
+but an **interface**-typed one, which takes two (the 16-byte fat pointer) — so those two
+ceilings fall at the **512th** and the **4096th** SLOT: the 512th/4096th ordinary field,
+or the 256th/2048th existential one. A struct that reaches them is not exotic — a
+generated schema binding or a flag table does — and until the instruction selector asked,
+the 4097th field's store PANICKED in the encoder:
 
 ```
 panic: arm64 emitter: load/store offset 32768 (scaled 4096) exceeds the 12-bit unsigned field
@@ -625,8 +626,11 @@ must still hold the `0` their declarations default them to.
 
 ⚠ Constructing this type stores every one of its 4104 fields, so this case is the
 expensive one in the suite — that cost is the price of reaching an offset a 12-bit scaled
-field cannot hold, and there is no smaller program that does: a field occupies one slot
-whatever its type, so the 4096th field IS the boundary.
+field cannot hold. **Fewer DECLARATIONS can reach it**: an interface-typed field takes two
+slots, so 2049 of those cross 32760 as well. It would not be a cheaper case, because the
+cost here is one store per SLOT and an existential field stores both of its halves — the
+same ~4100 stores from half the source. This shape is kept for being the one whose
+declared field number IS its slot number, which is what makes the boundary readable.
 ```maxon
 typealias Slot = int(0 to 1000000)
 

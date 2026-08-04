@@ -851,31 +851,40 @@ export function arm64EmitScaledMem(code ByteArray, opcode MachineWord, rt Machin
 	emitArm64Insn(code, insn: opcode or (arm64ScaledImm12(byteOffset, scale: scale) shl Arm64LoadStoreImm12Shift) or (baseReg shl Arm64RnShift) or rt)
 end 'arm64EmitScaledMem'
 
+// Whether `byteOffset` has a scaled imm12 form at this access `scale`: scale-aligned, and the scaled
+// count inside the 12-bit field.
+//
+// ⭐ THE ONE STATEMENT OF THAT RULE. The ISEL's question (`arm64DispHasScaledForm`) and the encoder's
+// assertion that it was asked (`arm64ScaledImm12`) both read it, so widening the reach — a narrow-width
+// access at scale 2 or 4, the unscaled signed form for a negative offset — moves both at once. Written
+// out at both doors instead, the predicate could come to admit exactly what the encoder then panics on,
+// which is the defect A5e exists to have removed rather than relocated. It is the pairing
+// `arm64MagnitudeFitsOneImm12` gives the compare immediate one screen up.
+function arm64ByteOffsetFitsScaledImm12(byteOffset MachineWord, scale NonZeroWord) returns bool
+	return byteOffset mod scale == 0 and byteOffset / scale <= Arm64LoadStoreImm12Mask
+end 'arm64ByteOffsetFitsScaledImm12'
+
 // The scaled imm12 field of a load/store: `byteOffset / scale`, asserting scale-alignment and range.
 //
-// Both panics are ASSERTIONS OF THE ISEL'S OBLIGATION, not reachable diagnostics: a data access whose
+// The panic is an ASSERTION OF THE ISEL'S OBLIGATION, not a reachable diagnostic: a data access whose
 // offset has no scaled form is folded into the IP scratch upstream (`StdToArm64Conversion.addressFor`
 // asks `arm64DispHasScaledForm`, and addresses `[scratch + 0]` when the answer is no), so what arrives
 // here always fits. Masking either condition away would read or WRITE THE WRONG FIELD with nothing
-// anywhere to notice — which is why they stay panics rather than becoming clamps.
+// anywhere to notice — which is why it stays a panic rather than becoming a clamp.
 //
-// The alignment arm has no reachable caller today and that is a property of the LAYOUT, not luck: every
-// 64-bit access offset in this compiler is slot-derived (`Project.FieldSlotBytes` = 8, `UnionTagBytes` =
-// 8, `IrInterface.InterfaceWitnessHalfOffset` = 8, the layout-descriptor columns) and every 8-byte
-// multiple divides 8, while a byte access has scale 1 and divides everything. It is the assertion that
-// stays true only while that holds.
+// The alignment half has no reachable caller today and that is a property of the LAYOUT, not luck: every
+// 64-bit access offset in this compiler is slot-derived (`Project.FieldSlotBytes` = 8 per slot,
+// `UnionTagBytes` = 8, `IrInterface.InterfaceWitnessHalfOffset` = 8, the layout-descriptor columns) and
+// every 8-byte multiple divides 8, while a byte access has scale 1 and divides everything. It is the
+// assertion that stays true only while that holds.
 function arm64ScaledImm12(byteOffset MachineWord, scale MachineWord) returns MachineWord
 	// `scale` is a load/store access width (1/2/4/8), always non-zero; cast so the divide and
 	// remainder are provably safe (integer `/`/`mod` throw for a possibly-zero divisor).
 	let s = scale as NonZeroWord
-	if byteOffset mod s != 0 'unaligned'
-		panic("arm64 emitter: load/store byte offset {byteOffset} is not {scale}-aligned — the scaled imm12 form cannot encode it, and the ISEL must have folded it into a scratch base (StdToArm64Conversion.addressFor)")
-	end 'unaligned'
-	let scaled = byteOffset / s
-	if scaled > Arm64LoadStoreImm12Mask 'tooLarge'
-		panic("arm64 emitter: load/store offset {byteOffset} (scaled {scaled}) exceeds the 12-bit unsigned field — the ISEL must have folded it into a scratch base (StdToArm64Conversion.addressFor)")
-	end 'tooLarge'
-	return scaled
+	if not arm64ByteOffsetFitsScaledImm12(byteOffset, scale: s) 'noScaledForm'
+		panic("arm64 emitter: load/store byte offset {byteOffset} has no {scale}-scaled imm12 form — it is either not {scale}-aligned or its scaled count exceeds the 12-bit unsigned field — and the ISEL must have folded it into a scratch base (StdToArm64Conversion.addressFor)")
+	end 'noScaledForm'
+	return byteOffset / s
 end 'arm64ScaledImm12'
 
 // The byte-offset SCALE of a `[base + disp]` data access at this width: `LDRB`/`STRB` scale by 1, the
@@ -895,16 +904,20 @@ end 'arm64AccessScale'
 // `loadIndirect`/`storeIndirect` offset carries (`StdLoweringShared.memoryDisplacement` is sized for
 // x64's `[base + disp32]`, which takes the whole domain verbatim).
 //
-// The ISEL asks this to choose the direct form vs folding `base + offset` into the IP scratch: it is the
-// SAME question `arm64ScaledImm12` enforces, asked once, so the two can never disagree.
+// The ISEL asks this to choose the direct form vs folding `base + offset` into the IP scratch. It reads
+// `arm64ByteOffsetFitsScaledImm12` — the SAME predicate `arm64ScaledImm12` asserts on — so the two cannot
+// disagree, rather than merely agreeing today because the same rule was typed twice.
+//
+// The negative arm is the one condition that is this door's alone: `memoryDisplacement` narrows an
+// UNSIGNED `ByteOffset`, so nothing produces one today, and a future signed displacement gets the scratch
+// fold (an `add` of a negative immediate is a `sub` of its magnitude) rather than the STUR/LDUR simm9
+// form this predicate does not model.
 export function arm64DispHasScaledForm(disp Imm32, width X64AccessWidth) returns bool
 	if disp < 0 'negative'
 		return false
 	end 'negative'
 
-	let scale = arm64AccessScale(width) as NonZeroWord
-	let byteOffset = disp as MachineWord
-	return byteOffset mod scale == 0 and byteOffset / scale <= Arm64LoadStoreImm12Mask
+	return arm64ByteOffsetFitsScaledImm12(disp as MachineWord, scale: arm64AccessScale(width) as NonZeroWord)
 end 'arm64DispHasScaledForm'
 
 // A `[base + disp]` load at the op's width (the data-section access forms). A `word64` load moves

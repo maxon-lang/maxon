@@ -674,6 +674,18 @@ end 'callerSavedMask'
 // allocated a heap `RegisterFile` per colouring decision. The ORDERED lists (`calleeSavedOrder`,
 // `calleeSavedXmmOrder`) are what the prologue and the GT context switch walk, and
 // `assertCalleeSavedListsMatchMasks` holds those lists and these two masks to one another.
+//
+// ⚠ **THIS IS X64'S, AND ITS NAME DOES NOT SAY SO EITHER** — the exact hazard A5c repaired in its
+// caller-saved twin, which is now file-private. This one cannot be: `Testing/ScaleCorpus`'s
+// `floatsLivePerSpillLoop` reads it to size the float-spill knob, and that reader is x64-specific IN ITS
+// OWN TEXT (`classRegisterMask(RegClass.xmm, file: x64RegisterFile())` on the same line), so it names the
+// ISA it means. That is the bar for reaching this from outside, and the only caller that clears it.
+//
+// There is deliberately no `calleeSavedMaskFor(target)`: the callee-saved half is `pool ∖ callerSaved`
+// wherever the ALLOCATOR wants it (that is how `chooseRegister`'s confined-pool figure is computed since
+// A5c), and a second target dispatch would be a second place for an ISA to be assumed. A TARGET-NEUTRAL
+// caller must never reach for this — that is precisely how the colorer came to ask x64's volatility on
+// every ISA.
 export function calleeSavedMask() returns RegMask
 	var mask = 0 as RegMask
 	mask = mask or regMaskOf(X64Register.rbx)
@@ -1282,7 +1294,7 @@ function chooseRegister(v ValueId, classPool RegMask, callerSaved RegMask, block
 		// wrong pass entirely. No amount of spilling can free a register from a file the pool does not
 		// offer, so this is a MISSING POOL, diagnosed apart from a genuine over-pool point.
 		if classPool == 0 'noPoolForThisClass'
-			panic("chooseRegister: value {v} is a {liveness.classOf(v).name} value but the allocatable pool offers NO register of that file (pool mask {classPool}). This is not pressure and no split can relieve it — the {liveness.classOf(v).name} pool is simply not enabled. A file becomes allocatable by having its registers in `callerSavedMask` and/or `calleeSavedMask` (whose union IS the pool, and which `assertCalleeSavedListsMatchMasks` proves partition the file); `TargetDialect.callDirect`'s `implicitDefs` must equal the caller-saved half, or a value would silently survive a call in a register the callee clobbers.")
+			panic("chooseRegister: value {v} is a {liveness.classOf(v).name} value but the allocatable pool offers NO register of that file (pool mask {classPool}). This is not pressure and no split can relieve it — the {liveness.classOf(v).name} pool is simply not enabled. A file becomes allocatable by having its registers in this TARGET's `allocatablePool` arm (on x64 that pool is `callerSavedMask` u `calleeSavedMask`, which `assertCalleeSavedListsMatchMasks` proves partition the file; arm64 spells its own); the call ops' `implicitDefs` must equal that target's caller-saved half — `callerSavedMaskFor`, held equal by `assertCallClobberConsistent` — or a value would silently survive a call in a register the callee clobbers.")
 		end 'noPoolForThisClass'
 		// ⚠ THE MESSAGE MUST NAME A CHECK THAT STILL EXISTS. It used to blame `analyzePressure`'s
 		// "reduced-pool check, `pool ∖ op.implicitDefs`" — a check Hall's condition SUBSUMED and deleted
