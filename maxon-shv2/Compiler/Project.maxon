@@ -3748,6 +3748,22 @@ export typealias PendingFunctionTypeDoorArray = Array with PendingFunctionTypeDo
 // compiled on every target and READ AN ARGUMENT NOBODY PASSED (see E3122's registry entry for the
 // measurement, and `Parser.requireElementTransform` for the rule).
 //
+// ⛔⛔ **DO NOT READ THE DOOR LIST ABOVE AS A CENSUS OF FUNCTION-VALUE POSITIONS. IT IS NOT ONE, AND AT
+// LEAST ONE DECLARED POSITION REACHES NO DOOR AT ALL.** A union PAYLOAD declared with a function alias is
+// bound through `Parser.requireScalarPayloadArg`, whose only gate is `checkDeclaredType`, and `function`
+// into `function` answers `ok` on the TAG alone — no `recordFunctionTypeDoor`, no shape compare, no arity.
+// MEASURED 2026-08-04, the same two measurements that justify E3122, on a two-parameter function stored in
+// a one-parameter payload and called through it: arm64-macOS prints `v=7` (the second argument is the
+// leftover slot) and `wasm32-wasi` traps with the identical *"indirect call type mismatch"*. It is the SAME
+// defect at a position this record does not cover, it is PRE-EXISTING rather than this rung's, and it is
+// filed for its own rung rather than widened into here.
+//
+// Two further positions are reported UNVERIFIED alongside it and want the same probe before anyone trusts
+// them either: a witness-dispatched interface ARGUMENT (`Parser.dispatchWitnessMethod`, which checks arity
+// and labels but is reported to compare no argument TYPES at all) and a generic type PARAMETER bound to a
+// function type (`SemanticCheck.checkTypeParameterArgsAt`, where the `function` tag is reported to skip
+// both the nominal and the scalar half).
+//
 // It is a SEPARATE record from `PendingFunctionTypeDoor` and not a sixth arm of it, because the two carry
 // different facts. That one names a declared function TYPE and its whole shape must agree; this one has no
 // declared type to name — `function(Element) returns Element` is a contract the compiler owns, whose return
