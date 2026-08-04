@@ -241,7 +241,7 @@ export let StrByteAtOrPanicName = b"__str_byte_at_or_panic"
 //
 // ⚠ It ships WITHOUT an install-time drift guard, and `GraphemeRuntime.isThrowingCharacterRuntimeCallee`'s
 // three conditions are why — all three hold here. There is exactly ONE member; this predicate and
-// `buildStrByteAt`'s `throws` stamp key on the SAME `StrByteAtName` constant rather than on copied literals;
+// `buildStrByteRead`'s `throws` stamp key on the SAME `StrByteAtName` constant rather than on copied literals;
 // and `runtimeCalleeSourceMethod` answers it from `ByteAtMethod` directly rather than through a map that
 // could lose an arm. A SECOND throwing `__str_` callee makes this an `or`, and at that same edit it needs the
 // guard `installStringIndexRuntime` grew the moment its family stopped being built by one builder.
@@ -1347,10 +1347,10 @@ export function installStringRuntime(module StdModule, usage RuntimeUsage)
 		buildStrBytesView(module)
 	end 'strbytesview'
 	if usage.usesStrByteAt 'strbyteat'
-		buildStrByteAt(module)
+		buildStrByteRead(module, name: StrByteAtName, throwing: true)
 	end 'strbyteat'
 	if usage.usesStrByteAtOrPanic 'strbyteatorpanic'
-		buildStrByteAtOrPanic(module)
+		buildStrByteRead(module, name: StrByteAtOrPanicName, throwing: false)
 	end 'strbyteatorpanic'
 end 'installStringRuntime'
 
@@ -2738,35 +2738,36 @@ function emitStringBytesAllocation(module StdModule, func IrFunction, cur IrBloc
 	return base
 end 'emitStringBytesAllocation'
 
-// ⭐ **`__str_byte_at(str, index) -> (byte, flag)` — ONE BOUNDS-CHECKED BYTE READ THAT THROWS.** The corpus's
-// `byteAt` (`stdlib/String.maxon:266-268`) is `try managed.byteAt(index)`, and its own doc says why the
-// failure leaves through the call rather than through the process: *"the bounds contract stays the CALLER's
-// to state"*. Every stdlib byte walker outside `String.maxon` reaches a String's bytes through here.
+// ⭐⭐ **`byteAt` AND `byteAtOrPanic` ARE ONE BOUNDS-CHECKED BYTE READ WITH TWO FAILURE EXITS — ONE GRAPH,
+// AND THE EXIT IS THE ONLY PARAMETER.** The corpus says so at the declarations themselves: `byteAtOrPanic`
+// (`stdlib/String.maxon:281-283`) IS `try byteAt(index) otherwise panic(…)`, i.e. the same read wearing the
+// other exit. Two transcriptions would be two chances to get the bound wrong, and the bound is where every
+// signed range check in this compiler has been caught missing.
 //
-// ⚠ **IT THROWS `__ManagedMemoryError`, NOT `StringError`, AND THAT IS THE CORPUS'S DECLARED SIGNATURE.**
-// The reference inlines the method to the `managed.byteAt` it forwards to, so a `StringError` here would be
-// a signature the emitted code does not honour — the corpus states that argument at the declaration itself.
-// It is why this shares `ArrayRuntime`'s `MemoryInvalidByteRangeFlag` rather than minting a second exit.
+//   * `__str_byte_at(str, index) -> (byte, flag)` THROWS `__ManagedMemoryError.invalidByteRange`, which is
+//     what `stdlib/String.maxon:266-268` declares and what its doc argues for — *"the bounds contract stays
+//     the CALLER's to state"*. Every stdlib byte walker outside `String.maxon` reads bytes through it.
+//   * `__str_byte_at_or_panic(str, index) -> byte` ABORTS. Its 17 corpus call sites read bytes inside NESTED
+//     CONDITIONS (`if trimmed.byteAtOrPanic(pos) == 47`), a position a `try` cannot occupy, so the failure
+//     has to leave through the process; `RuntimeAbort.stringByteAtOutOfRange` is the same CLASS of answer the
+//     oracle gives (the process ends), not the same message.
 //
-// ⚠ **IT IS A SEPARATE FUNCTION FROM `__str_byte_at_or_panic` AND NOT AN ALIAS OF `__arr_byte_at`**, and
-// both halves of that are about the FAILURE EXIT, which is the axis these functions differ on. Against the
-// panicking twin below: a `throws` stamp is what makes a caller write `try`, and stamping one function for
-// both would make all 17 `byteAtOrPanic` sites `tryCall` a failure that never returns. Against
-// `__arr_byte_at`: the bytes it would read are the same (`buffer@0`, `length@8`, no detach, no ownership),
-// but `managedMemorySourceMethodName` maps CALLEE → source method and has NO receiver, so routing here
-// through the buffer family would tell an author who forgot a `try` about `__ManagedMemory.byteAt` — the
-// right E3057 naming a construct their program does not contain, which is exactly the D12 defect this tree
-// has already paid for once.
+// ⚠ **THEY STAY TWO EMITTED FUNCTIONS, and the `throws` stamp is why.** That stamp is what makes a caller
+// write `try` (`isThrowingStringRuntimeCallee` → E3055 accept, E3057 reject); one stamped function serving
+// both would make all 17 panicking sites `tryCall` a failure that never returns, and one unstamped function
+// serving both would silently drop the error flag at the throwing sites.
 //
-// The range test is `ArrayRuntime.emitIndexOutOfRange`, the one home of "reject this index" — shared with the
-// twin below for the reason stated there: the negative half is the one every signed bounds check in this
-// compiler has been caught missing, so it is written once.
+// ⚠ **AND NEITHER IS AN ALIAS OF `__arr_byte_at`, THOUGH THE BYTES IT READS ARE THE SAME** (`buffer@0`,
+// `length@8`, no detach, no ownership). `managedMemorySourceMethodName` maps CALLEE → source method and has
+// NO receiver, so routing a String read through the buffer family would tell an author who forgot a `try`
+// about `__ManagedMemory.byteAt` — the right E3057 naming a construct their program does not contain, the
+// D12 defect this tree has already paid for once.
 //
-// ⚠ It reads through `buffer@0` with NO detach and NO ownership, which is right for the identical reason
+// ⚠ The read goes through `buffer@0` with NO detach and NO ownership, right for the identical reason
 // `__arr_byte_at` gives: a read does not write, so an `.rdata` blob, an inline String's bytes and a viewed
 // buffer are all perfectly good things to read THROUGH.
-function buildStrByteAt(module StdModule)
-	var func = IrFunction.createFromStd(StrByteAtName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0, throwsTypeName: managedMemoryThrows())
+function buildStrByteRead(module StdModule, name ByteArray, throwing bool)
+	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0, throwsTypeName: byteReadThrows(throwing))
 	var ids = ValueMinter.create(2)
 
 	var entry = module.addBlock(func, label: b"entry")
@@ -2781,51 +2782,31 @@ function buildStrByteAt(module StdModule)
 	let outOfRange = emitIndexOutOfRange(module, block: entry, index: index, length: length, ids: ids)
 	module.setTerminator(entry, op: StdOp.condBranch(outOfRange, thenBlockId: bad.id, elseBlockId: load.id))
 
-	emitMemoryThrow(module, block: bad, flag: MemoryInvalidByteRangeFlag, ids: ids)
-
 	let buffer = emitLoadField(module, block: load, record: record, offset: StringBufferOffset, ids: ids)
-	emitOkReturn(module, block: load, value: emitLoadByteIndexed(module, block: load, base: buffer, index: index, ids: ids), ids: ids)
+	let byteValue = emitLoadByteIndexed(module, block: load, base: buffer, index: index, ids: ids)
+
+	// The two exits, and the SUCCESS path differs with them: a throwing callee returns through the
+	// dual-register `errorReturn` ABI, so its ok-path has a flag to clear that the plain one has no room for.
+	if throwing 'throwsOnBadIndex'
+		emitMemoryThrow(module, block: bad, flag: MemoryInvalidByteRangeFlag, ids: ids)
+		emitOkReturn(module, block: load, value: byteValue, ids: ids)
+	end 'throwsOnBadIndex' else 'abortsOnBadIndex'
+		emitRuntimeAbort(module, func: func, block: bad, abort: RuntimeAbort.stringByteAtOutOfRange, ids: ids)
+		module.setTerminator(load, op: StdOp.ret(byteValue))
+	end 'abortsOnBadIndex'
 
 	module.functions.push(func)
-end 'buildStrByteAt'
+end 'buildStrByteRead'
 
-// ⭐ **`__str_byte_at_or_panic(str, index) -> byte` — ONE BOUNDS-CHECKED BYTE READ THAT ABORTS RATHER THAN
-// THROWS.** The corpus's `byteAtOrPanic` (`stdlib/String.maxon:281-283`) is `try byteAt(index) otherwise
-// panic(…)`, and its whole reason for existing is stated there: its callers read bytes inside NESTED
-// CONDITIONS (`if trimmed.byteAtOrPanic(pos) == 47`), a position a `try` cannot occupy. So the failure has to
-// leave through the process rather than through the call, and `RuntimeAbort.stringByteAtOutOfRange` is that
-// exit — the same CLASS of answer the oracle gives (the process ends), not the same message.
-//
-// The range test is `ArrayRuntime.emitIndexOutOfRange`, the one home of "reject this index", rather than a
-// second `>= length` beside a second `< 0`: the negative half is the one every signed bounds check in this
-// compiler has been caught missing, and it is written once.
-//
-// ⚠ It reads through `buffer@0` with NO detach and NO ownership, which is right for the identical reason
-// `__arr_byte_at` gives: a read does not write, so an `.rdata` blob, an inline String's bytes and a viewed
-// buffer are all perfectly good things to read THROUGH.
-function buildStrByteAtOrPanic(module StdModule)
-	var func = IrFunction.createFromStd(StrByteAtOrPanicName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
-	var ids = ValueMinter.create(2)
-
-	var entry = module.addBlock(func, label: b"entry")
-	var bad = module.addBlock(func, label: b"oob")
-	var load = module.addBlock(func, label: b"load")
-
-	emitParams(module, block: entry, count: 2)
-	let record = 0 as ValueId
-	let index = 1 as ValueId
-
-	let length = emitLoadField(module, block: entry, record: record, offset: StringLengthOffset, ids: ids)
-	let outOfRange = emitIndexOutOfRange(module, block: entry, index: index, length: length, ids: ids)
-	module.setTerminator(entry, op: StdOp.condBranch(outOfRange, thenBlockId: bad.id, elseBlockId: load.id))
-
-	emitRuntimeAbort(module, func: func, block: bad, abort: RuntimeAbort.stringByteAtOutOfRange, ids: ids)
-
-	let buffer = emitLoadField(module, block: load, record: record, offset: StringBufferOffset, ids: ids)
-	module.setTerminator(load, op: StdOp.ret(emitLoadByteIndexed(module, block: load, base: buffer, index: index, ids: ids)))
-
-	module.functions.push(func)
-end 'buildStrByteAtOrPanic'
+// The `throws` clause the builder above stamps, which is the WHOLE of what the two entry points disagree
+// about at the signature. Spelled here rather than at the two install sites so the stamp and
+// `isThrowingStringRuntimeCallee` cannot come to name different functions.
+function byteReadThrows(throwing bool) returns ThrowsClause
+	if throwing 'stamped'
+		return managedMemoryThrows()
+	end 'stamped'
+	return ThrowsClause.none
+end 'byteReadThrows'
 
 // ⭐ **`__str_split(self, delim, arr)` — the stdlib's `split` (`:557-587`), filling a CALLER-CREATED array.**
 // The `Array with String` is built by the PARSER through `emitArrayCreateOp`, the one array-creation door, so
