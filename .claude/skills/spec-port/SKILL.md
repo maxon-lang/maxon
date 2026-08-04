@@ -429,13 +429,12 @@ you re-derive each tick. **You still do §6's review yourself, first** — the s
 
 ```bash
 scripts/spec-port-finish.sh --spec <name> --outcome PORTED --cases 30/30 \
-    --note-file temp/note.md --message-file temp/commit-msg.txt \
-    [--build-cost-note-file temp/bc-note.md]      # required iff compiler source changed
+    --note-file temp/note.md --message-file temp/commit-msg.txt
 ```
 
-You write the PROSE (the log note, the commit message, the cost-log note); it measures every NUMBER and
-refuses to invent one. What it does, in order: **rebase → rebuild (bootstrap too, if stale) → full
-suite → gates → write the log rows → commit → push.**
+You write the PROSE (the log note and the commit message); it measures every NUMBER and refuses to
+invent one. What it does, in order: **rebase → rebuild (bootstrap too, if stale) → full suite → gates
+→ write both log rows → commit → push.**
 
 - **The rebase comes FIRST**, so the suite runs on the tree that will actually be pushed. A rebase after
   testing means pushing something nobody tested.
@@ -449,11 +448,21 @@ suite → gates → write the log rows → commit → push.**
 It re-execs itself from a gitignored copy in `temp/` before touching anything, because it stashes the
 working tree and bash reads a script incrementally — stashing its own bytes mid-run fails weirdly.
 
-**If compiler source changed, add a row to `maxon-shv2/build-cost-log.md`** — build seconds, exe bytes,
-suite seconds + test count. Its three numbers all fall out of the build and the full-suite run this
-battery just did, so it costs nothing but the row. It is a trend, not a gate: **size is exact, the two
-times carry a measured ~5% noise band, and a movement inside it is not a datapoint.** See
-`.claude/CLAUDE.md`, which makes this binding for *any* compiler change, not just a tick of this loop.
+**If compiler source changed, the script adds a row to `maxon-shv2/build-cost-log.md`** — date, parent
+sha, build seconds, exe bytes, suite seconds, compile CPU, test count. **You write nothing: the row is
+seven columns and every one of them is measured.** The reasoning goes in the commit message. It is a
+trend, not a gate: **exe bytes is exact, the two times carry a measured ~5% noise band, and a movement
+inside it is not a datapoint.**
+
+⚠ **The key is the PARENT, not the tick itself — a commit cannot contain its own hash.** The row names
+the base the tick was built on, which is known before committing and which `--amend` cannot invalidate
+(a rejected push rebases the tick, and the script re-points the row at the new parent and amends).
+`main` is linear, so the change a row measures is that parent's one child:
+`git log --ancestry-path --reverse <parent>..main | head -1`.
+
+⚠ **This log is `/spec-port`'s and nothing else's** (user ruling, `bdfd3ea63`), and its header says so.
+A rung or slice agent does not hand-write rows into it — a hand-written row is a number nobody measured
+and it looks exactly like one that was.
 
 ⚠ **The full suite is the gate, not the filtered run.** A front-end change that fixes your spec and
 breaks four others reads green under `--filter`.

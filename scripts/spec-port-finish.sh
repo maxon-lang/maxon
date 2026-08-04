@@ -30,14 +30,23 @@
 #
 # USAGE
 #   scripts/spec-port-finish.sh --spec <name> --outcome PORTED --cases <N>/<N> \
-#       --note-file <f> --message-file <f> [--build-cost-note-file <f>] [--dry-run] [--no-push]
+#       --note-file <f> --message-file <f> [--dry-run] [--no-push]
 #
 #   --note-file            prose for the docs/spec-port-log.md row's `note` column. The measured
 #                          `Suite <before> → <after>` sentence is appended by the script.
 #   --message-file         the full git commit message.
-#   --build-cost-note-file prose for the maxon-shv2/build-cost-log.md row. REQUIRED when compiler
-#                          source changed; refused when it did not (the row would be noise).
 #   --dry-run              run every gate, write nothing, commit nothing. Use it to check a tick.
+#
+# ⭐ THE BUILD-COST ROW IS ALL NUMBERS AND TAKES NO PROSE. `maxon-shv2/build-cost-log.md` is a date,
+#   the PARENT commit's short sha, and five measured numbers (user ruling 2026-08-03, when the prose
+#   column had grown to paragraphs per row and the file was 141 KB of it). The reasoning belongs in
+#   the commit message. So there is no note file to write: the row is emitted automatically whenever
+#   compiler source changed, and refused when it did not.
+#
+# ⭐ WHY THE PARENT AND NOT THE COMMIT ITSELF: a commit cannot contain its own hash. The row measures
+#   the tree that BECOMES this commit, and names the base it was measured against — which is knowable
+#   before committing, and which `--amend` does not disturb. `main` is linear, so the change a row
+#   measures is that parent's one child:  git log --ancestry-path --reverse <parent>..main | head -1
 #
 set -o pipefail
 
@@ -69,8 +78,8 @@ readonly SPEC_LOG="$REPO/docs/spec-port-log.md"
 readonly COST_LOG="$REPO/maxon-shv2/build-cost-log.md"
 readonly MAX_PUSH_ATTEMPTS=3
 
-SPEC=""; OUTCOME=""; CASES=""; NOTE_FILE=""; MSG_FILE=""; COST_NOTE_FILE=""
-DRY_RUN=0; NO_PUSH=0; STASHED=0
+SPEC=""; OUTCOME=""; CASES=""; NOTE_FILE=""; MSG_FILE=""
+DRY_RUN=0; NO_PUSH=0; STASHED=0; COST_ROW=""
 
 die()  { printf '\n\033[31m✗ %s\033[0m\n' "$*" >&2; exit 1; }
 ok()   { printf '\033[32m✓\033[0m %s\n' "$*"; }
@@ -99,7 +108,6 @@ while [ $# -gt 0 ]; do
     --cases)                CASES="$2";          shift 2 ;;
     --note-file)            NOTE_FILE="$2";      shift 2 ;;
     --message-file)         MSG_FILE="$2";       shift 2 ;;
-    --build-cost-note-file) COST_NOTE_FILE="$2"; shift 2 ;;
     --dry-run)              DRY_RUN=1;           shift   ;;
     --no-push)              NO_PUSH=1;           shift   ;;
     -h|--help)              sed -n '2,45p' "${BASH_SOURCE[0]}"; exit 0 ;;
@@ -271,20 +279,14 @@ if [ -n "$(git status --porcelain -- 'maxon-shv2/Compiler' 'maxon-sharp' 'stdlib
   COMPILER_CHANGED=1
 fi
 
-if [ "$COMPILER_CHANGED" = "1" ] && [ -z "$COST_NOTE_FILE" ]; then
-  die "compiler source changed, so maxon-shv2/build-cost-log.md needs a row — pass --build-cost-note-file.
-     Its three numbers already fall out of this run: build ${BUILD_S}s, exe $EXE_BYTES, code ${CODE_BYTES:-?}, suite ${SUITE_S}s, tests $TOTAL."
-fi
-if [ "$COMPILER_CHANGED" = "0" ] && [ -n "$COST_NOTE_FILE" ]; then
-  die "--build-cost-note-file was given but no compiler source changed — that row would be noise"
-fi
-[ -z "$COST_NOTE_FILE" ] || [ -f "$COST_NOTE_FILE" ] || die "--build-cost-note-file does not exist: $COST_NOTE_FILE"
-
-# Refuse to write a cost row with a fabricated size. `code bytes` is EXACT and bit-reproducible, which
-# is the whole reason the log trusts it over the two wall-clock times — a 0 standing in for "not
-# measured" would be indistinguishable from a real reading.
-if [ -n "$COST_NOTE_FILE" ] && [ -z "$CODE_BYTES" ]; then
-  die "a cost row was asked for, but this build did no work so there is no 'code bytes' measurement.
+# Refuse to write a cost row from a build that did no work. `exe bytes` comes from `stat` and so reads
+# back a number whatever happened — including the PREVIOUS tick's binary, which is a wrong answer that
+# looks exactly like a right one. `code bytes` comes from the build's own report and is therefore
+# EMPTY when nothing was compiled, which makes it the detector even though the log no longer carries
+# it as a column.
+if [ "$COMPILER_CHANGED" = "1" ] && [ -z "$CODE_BYTES" ]; then
+  die "compiler source changed, so this tick owes a build-cost row — but this build did no work, so
+     '$BUILD_S s' and 'exe $EXE_BYTES' describe the binary the LAST tick left behind.
      Force a real build and re-run:  rm -f '$SHV2' && $0 <same args>"
 fi
 
@@ -292,16 +294,18 @@ TODAY="$(date +%Y-%m-%d)"
 NOTE="$(tr '\n' ' ' < "$NOTE_FILE" | sed 's/  */ /g; s/^ //; s/ $//; s/|/\\|/g')"
 SPEC_ROW="| $SPEC | $TODAY | $OUTCOME | $CASES | $NOTE Suite $TOTAL/$FAILED after this tick. |"
 
-if [ -n "$COST_NOTE_FILE" ]; then
-  COST_NOTE="$(tr '\n' ' ' < "$COST_NOTE_FILE" | sed 's/  */ /g; s/^ //; s/ $//; s/|/\\|/g')"
+# HEAD is still the PARENT here — the tick's own commit does not exist until the next step, which is
+# exactly why the row is keyed by the parent rather than by itself.
+if [ "$COMPILER_CHANGED" = "1" ]; then
   CPU_E9="$(awk "BEGIN{printf \"%.1f\", ${CPU_TICKS:-0}/1000000000}")"
-  COST_ROW="| $TODAY | \`spec-port: $SPEC\` | $COST_NOTE | $BUILD_S | $(commafy "$EXE_BYTES") | $(commafy "${CODE_BYTES:-0}") | $SUITE_S | ${CPU_E9}e9 | $TOTAL |"
+  COST_PARENT="$(git rev-parse --short HEAD)"
+  COST_ROW="| $TODAY | \`$COST_PARENT\` | $BUILD_S | $(commafy "$EXE_BYTES") | $SUITE_S | ${CPU_E9}e9 | $TOTAL |"
 fi
 
 if [ "$DRY_RUN" = "1" ]; then
   warn "DRY RUN — writing nothing. The rows would be:"
   echo; echo "  $SPEC_ROW"
-  [ -z "$COST_NOTE_FILE" ] || { echo; echo "  $COST_ROW"; }
+  [ -z "$COST_ROW" ] || { echo; echo "  $COST_ROW"; }
   echo
   ok "all gates passed"
   printf '\n\033[32m✓ DRY RUN CLEAN\033[0m — re-run without --dry-run to write, commit and push.\n'
@@ -311,30 +315,11 @@ fi
 printf '%s\n' "$SPEC_ROW" >> "$SPEC_LOG"
 ok "appended a row to docs/spec-port-log.md"
 
-if [ -n "$COST_NOTE_FILE" ]; then
-  # ⚠ THIS FILE HAS MORE THAN ONE TABLE. A parallel agent's merge duplicated it, and the second copy
-  # carries the OLDER 8-column schema (no `compile cpu`). The row goes in the FIRST table, whose header
-  # names that column — appending at EOF would silently file a 9-column row under an 8-column header.
-  SECOND_HEADER="$(grep -n '^| date | commit | change |' "$COST_LOG" | sed -n 2p | cut -d: -f1)"
-  if [ -n "$SECOND_HEADER" ]; then
-    INSERT_AFTER=$(( SECOND_HEADER - 1 ))
-    while [ "$INSERT_AFTER" -gt 1 ] && [ -z "$(sed -n "${INSERT_AFTER}p" "$COST_LOG" | grep '^|')" ]; do
-      INSERT_AFTER=$(( INSERT_AFTER - 1 ))          # skip blank lines between the tables
-    done
-  else
-    INSERT_AFTER="$(grep -n '^| [0-9]\{4\}-[0-9][0-9]-' "$COST_LOG" | tail -1 | cut -d: -f1)"
-  fi
-  [ -n "$INSERT_AFTER" ] || die "cannot locate a table row in $COST_LOG — add the row by hand"
-
-  # ⚠ THE ROW ARRIVES VIA `ENVIRON`, NOT `awk -v`. `-v` runs ESCAPE PROCESSING over the value it
-  # assigns, so a note mentioning `\xNN` or `\uNNNN` lands in the log as `xNN` / `uNNNN` — the
-  # backslash silently eaten, with only an `awk: warning:` on stderr to say so. `ENVIRON` does no
-  # such processing. (Caught 2026-08-02 by the `lexer-parser-robustness` tick, whose note is ABOUT
-  # hex escapes: `docs/spec-port-log.md` got the backslashes because `$SPEC_ROW` is written with
-  # `printf '%s\n'`, and the cost row lost them. One fact, two mechanisms, one of them lossy.)
-  COST_ROW="$COST_ROW" awk -v n="$INSERT_AFTER" 'NR==n{print; print ENVIRON["COST_ROW"]; next} {print}' "$COST_LOG" > "$COST_LOG.tmp" \
-    && mv "$COST_LOG.tmp" "$COST_LOG" || die "failed to write $COST_LOG"
-  ok "inserted a row into maxon-shv2/build-cost-log.md after line $INSERT_AFTER"
+if [ -n "$COST_ROW" ]; then
+  printf '%s\n' "$COST_ROW" >> "$COST_LOG" || die "failed to write $COST_LOG"
+  ok "appended a build-cost row against parent $COST_PARENT"
+else
+  echo "  no compiler source changed — no build-cost row (that row would be noise)"
 fi
 
 # ─────────────────────────────────────────────────────────────────────────────────────────────────
@@ -348,6 +333,7 @@ ok "committed $(git log --oneline -1)"
 
 if [ "$NO_PUSH" = "1" ]; then
   printf '\n\033[32m✓ COMMITTED (--no-push)\033[0m — push it yourself when ready.\n'
+  [ -z "$COST_ROW" ] || warn "the build-cost row names parent $COST_PARENT — if you REBASE before pushing, re-point it"
   exit 0
 fi
 
@@ -368,6 +354,23 @@ while : ; do
   attempt=$(( attempt + 1 ))
 
   git pull --rebase --quiet || die "rebase after a rejected push FAILED — resolve by hand"
+
+  # ⚠ THE REBASE MOVED THE PARENT, SO THE COST ROW NOW NAMES A COMMIT THIS TICK NO LONGER SITS ON.
+  # It is still a real commit, which is what makes the staleness silent — the row would read as a
+  # measurement against a base that was never built. Re-point it and amend. (`--amend` is safe here
+  # precisely because the row names the PARENT: unlike the commit's own sha, amending cannot
+  # invalidate it.)
+  if [ -n "$COST_ROW" ]; then
+    NEW_PARENT="$(git rev-parse --short HEAD~1)"
+    if [ "$NEW_PARENT" != "$COST_PARENT" ]; then
+      sed -i "\$s/\`$COST_PARENT\`/\`$NEW_PARENT\`/" "$COST_LOG" || die "failed to re-point the cost row"
+      grep -q "$NEW_PARENT" <(tail -1 "$COST_LOG") || die "cost row did not take the new parent $NEW_PARENT — fix $COST_LOG by hand"
+      COST_PARENT="$NEW_PARENT"
+      git add "$COST_LOG" && git commit --quiet --amend --no-edit || die "amending the re-pointed cost row failed"
+      ok "cost row re-pointed at the new parent $NEW_PARENT"
+    fi
+  fi
+
   "$BOOTSTRAP" build maxon-shv2 > "$LOGDIR/finish-build.log" 2>&1 \
     || { tail -30 "$LOGDIR/finish-build.log"; die "shv2 build FAILED after the rebase"; }
   "$SHV2" spec-test > "$SUITE_LOG" 2>&1
