@@ -1609,6 +1609,27 @@ E3121 SemanticFloatWidenedToExistential
 	doc value half to carry a float's bit pattern -- a bitcast at the widening and at every use -- which is a
 	doc representation change and not a check.
 
+E3122 SemanticTransformArityMismatch
+	shv2 transformArityMismatch
+	doc A function value bound as a container `map`'s transform declares a different number of parameters
+	doc than the position calls it with. `map`'s transform is `function(Element) returns Element`
+	doc (`stdlib/Interfaces.maxon:189`), so it takes exactly ONE parameter -- the container's own element --
+	doc and the runtime walk calls it with exactly one argument plus the uniform `__env` slot.
+	doc USER RULING 2026-08-04, and a DELIBERATE divergence from the reference bootstrap, which accepts the
+	doc shape: a transform declaring a further parameter reads a value nobody passed. MEASURED --
+	doc `nums.map(function(a Integer, b Integer) gives b)` prints `sum=0` on arm64-macOS, `b` being whatever
+	doc the second argument slot held, while on `wasm32-wasi` the program does not run at all: `call_indirect`
+	doc type-checks the callee's signature and `__arr_map` traps with "indirect call type mismatch". One
+	doc target of four could see it, which is what makes the shape undefined rather than unspecified.
+	doc NOT E3036, which states that "a call passes a different number of arguments than the callee declares
+	doc parameters": there is NO call at this span. The author bound a function VALUE to a position, and the
+	doc call that would go wrong is one the compiler makes inside `__arr_map`, over a source line the author
+	doc never wrote -- so E3036's sentence would be false about the program in front of them.
+	doc NOT E3005 either, which is what the four DECLARED function-typed places (a cast, a `return`, an
+	doc assignment, an ordinary function-typed argument) earn when their whole SHAPE disagrees. This position
+	doc deliberately requires less: the transform's parameter TYPES are not checked here, so "the two function
+	doc types must agree" would be false as a statement of what this position demands.
+
 E4001 IrUnsupportedExpression
 	csharp IrUnsupportedExpression
 	doc The IR builder met an expression form it cannot lower.

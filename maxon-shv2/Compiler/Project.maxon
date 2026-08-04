@@ -3739,6 +3739,47 @@ end 'PendingFunctionTypeDoor'
 
 export typealias PendingFunctionTypeDoorArray = Array with PendingFunctionTypeDoor
 
+// ⭐⭐ **A FUNCTION VALUE BOUND AT A COMPILER-OWNED POSITION WHOSE CONTRACT FIXES ITS ARITY (E3122).** The
+// container `map`'s transform is the one such position: `map` is not an `Iterable` extension in shv2 but a
+// hand-synthesized builtin (`Parser.parseContainerMap`), so its transform meets no DECLARED function type
+// and passes through none of the five doors that already compare two function shapes — the four
+// `PendingFunctionTypeDoor` sites and `SemanticCheck.checkOneArgType`'s function-argument arm. Until this
+// record existed nothing checked it at all, and `nums.map(function(a Integer, b Integer) gives a + b)`
+// compiled on every target and READ AN ARGUMENT NOBODY PASSED (see E3122's registry entry for the
+// measurement, and `Parser.requireElementTransform` for the rule).
+//
+// It is a SEPARATE record from `PendingFunctionTypeDoor` and not a sixth arm of it, because the two carry
+// different facts. That one names a declared function TYPE and its whole shape must agree; this one has no
+// declared type to name — `function(Element) returns Element` is a contract the compiler owns, whose return
+// half is already decided in the parser by a NOMINAL rule `functionShapesAgree` cannot express
+// (`Parser.elementTransformAnswersElement`) and whose parameter types this rung deliberately leaves
+// unchecked. So what is left to compare whole-program is exactly the arity, and that is what this says.
+//
+// It is RECORDED rather than checked in place for `PendingFunctionTypeDoor`'s reason, and it is the reason
+// the check cannot be a closure-literal rule: a function value's own parameter list lives in the
+// whole-program `funcSignatures`/`functionAliasShapes`, which the parser does not have. `nums.map(twoArg)`
+// carries no closure at all, and its `twoArg` may be declared in another file.
+export type PendingTransformArity
+	// The governing name of the function value that arrived — a lifted closure, a declared function, or a
+	// function alias. Interner-free, exactly as `PendingFunctionTypeDoor.gotName`: a key into
+	// `funcSignatures`/`functionAliasShapes`, resolved by `TypeResolution.requireFunctionShapeOf`.
+	export var gotName as ByteArray
+	// The arity the position calls with. A field rather than the literal 1 so the rule and the sentence
+	// cannot come to disagree, and so a future `filter` can record its own.
+	export var expectedArity as ParamCount
+	// The container method whose contract states it, as the source spells it (`map`).
+	export var methodName as ByteArray
+	export var line as LineNumber
+	export var column as ColumnNumber
+	export var filePath as FilePath
+
+	export static function create(gotName ByteArray, expectedArity ParamCount, methodName ByteArray, line LineNumber, column ColumnNumber, filePath FilePath) returns PendingTransformArity
+		return Self{gotName: gotName, expectedArity: expectedArity, methodName: methodName, line: line, column: column, filePath: filePath}
+	end 'create'
+end 'PendingTransformArity'
+
+export typealias PendingTransformArityArray = Array with PendingTransformArity
+
 // The outcome of slotting a call's arguments to its callee's parameter positions.
 // `ordered` carries the arg SSA values in DECLARATION order (label reordering applied);
 // every other arm is a call error the caller renders as a positioned diagnostic. This
@@ -3953,6 +3994,10 @@ export type Project
 	// resolved — the one thing that keeps it out of `checkValueMergeSignatures`' pre-resolution sweep. Reset
 	// with the other push-merge targets so a warm rebuild does not double it.
 	export var pendingFunctionTypeDoors as PendingFunctionTypeDoorArray
+	// ⭐ Recorded container-`map` transforms awaiting whole-program arity agreement (see
+	// PendingTransformArity). Filled and drained exactly as `pendingFunctionTypeDoors` above, and after
+	// resolution for the same reason: a lifted closure's signature is not in the registry until merge.
+	export var pendingTransformArities as PendingTransformArityArray
 	// ⭐ THE TWO DEFERRED NAME DIAGNOSTIC LISTS (P1.9) — E3062 candidates and hidden `as` targets,
 	// appended per file by `mergeArtifact` and drained, in this order, by
 	// `TypeResolution.reportDeferredNameDiagnostics`. `DeferredNameDiagnostic` carries the argument for
@@ -4088,6 +4133,7 @@ export type Project
 			hiddenTypeNameDiagnostics: DeferredNameDiagnosticArray.create(),
 			collidedTypeNames: CollidedTypeNameSet.create(),
 			pendingFunctionTypeDoors: PendingFunctionTypeDoorArray.create(),
+			pendingTransformArities: PendingTransformArityArray.create(),
 			typeAliases: RangedAliasRegistry.create(),
 			typeNameDecls: TypeNameRegistry.create(),
 			rangeChecks: RangeCheckPlanMap.create(),

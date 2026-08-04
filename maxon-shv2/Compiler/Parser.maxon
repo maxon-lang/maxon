@@ -3497,9 +3497,17 @@ let InsertMethod = b"insert"
 let CloneMethod = b"clone"
 let CountMethod = b"count"
 let IsEmptyMethod = b"isEmpty"
+
 // `map(transform)` — the element-wise transform BOTH an `Array` and a `Set` serve, so it belongs in this
 // shared block for the block's own reason: one spelling, two dispatchers.
 let MapMethod = b"map"
+
+// ⭐ **HOW MANY PARAMETERS A TRANSFORM DECLARES — `function(Element) returns Element`, so ONE (E3122).** It
+// is the SOURCE-level count, and deliberately not the ABI one: the walk calls the transform with the element
+// plus the uniform `__env` slot (`ArrayRuntime.emitMappedElementPush`), and that slot is the compiler's, not
+// the program's. `requireElementTransform` records it and `SemanticCheck.checkTransformArities` compares
+// against it, so the rule and its sentence read one number.
+let ElementTransformArity = 1 as ParamCount
 
 // `Map.upsert(key, value: v)` — insert-or-replace. It joins the shared block rather than sitting in
 // `MapRuntime.maxon` for the reason the `Set` five did: a method-name SPELLING belongs where the parser
@@ -32242,11 +32250,23 @@ export type Parser
 	// carries the `named` tag where the element carries `integer`, and refusing that pair would reject
 	// `[1,2,3].map(function(x Integer) gives x * 2)`, which is the construct itself.
 	//
-	// ⚠ **THE TRANSFORM'S ARITY IS NOT CHECKED, AND NOTHING IN shv2 CHECKS ONE.** A function value's arity is
-	// not recoverable at parse time — a lifted closure's signature is file-local and reaches neither the
-	// whole-program index nor a per-file map (`closureReturns` records only its RETURN) — and the language's
-	// other function-value call site, `parseIndirectCall`, checks none either. A `map`-only arity gate would
-	// be a second, narrower rule than the one the language actually has.
+	// ⭐⭐ **AND IT MUST DECLARE EXACTLY ONE PARAMETER (E3122) — RECORDED HERE, DECIDED WHOLE-PROGRAM.** The
+	// third half of the same declaration, and the one the parser cannot answer: a function value's parameter
+	// list lives in `funcSignatures`/`functionAliasShapes`, which are not assembled until merge, and a lifted
+	// closure's is file-local until then (`closureReturns` records only its RETURN). So this records the
+	// value's governing NAME and `SemanticCheck.checkTransformArities` compares. See PendingTransformArity —
+	// including why it is not a sixth `PendingFunctionTypeDoor` arm.
+	//
+	// ⚠ **IT IS RECORDED FOR THE VALUE, NOT FOR A CLOSURE LITERAL, AND THAT IS THE WHOLE POINT.**
+	// `nums.map(twoArg)` has no closure in it — the arity belongs to a function that may be declared in
+	// another file — so a rule keyed on the closure parse could not see the shape at all. This header once
+	// said the arity "is not checked, and nothing in shv2 checks one"; that was true and it let a program
+	// through that READS AN ARGUMENT NOBODY PASSED. The walk calls the transform with one element plus the
+	// uniform `__env` slot, so a second parameter is whatever that slot held: MEASURED at `sum=0` on
+	// arm64-macOS, and a `wasm32-wasi` trap ("indirect call type mismatch") because `call_indirect`
+	// type-checks the signature the other three targets merely assume. Refusing it DIVERGES from the
+	// reference bootstrap, which accepts the shape — user ruling 2026-08-04, on the ground that agreeing
+	// about an undefined program is not agreement.
 	function requireElementTransform(transform ValueId, elementType MaxonType, argTok Token) throws ParseError
 		let declared = maxonTypeTag(elementType)
 		if self.tagOf(transform) != ValueTypeTag.function 'notAFunction'
@@ -32257,6 +32277,8 @@ export type Parser
 		if not self.elementTransformAnswersElement(returned, elementType: elementType) 'wrongElementType'
 			throw ParseError.unsupported("`{String.from(MapMethod)}`'s transform answers {articledTypeTagName(maxonTypeTag(returned))} value where the container's element is {articledTypeTagName(declared)} — shv2's `{String.from(MapMethod)}` is element-type-PRESERVING (`stdlib/Interfaces.maxon:187` declares it `function(Element) returns Element`), so a transform to another type is a later slice", line: argTok.line, column: argTok.column)
 		end 'wrongElementType'
+
+		self.artifact.recordTransformArity(PendingTransformArity.create(self.internedName(self.valueNameId(transform)), expectedArity: ElementTransformArity, methodName: MapMethod, line: argTok.line, column: argTok.column, filePath: self.filePath))
 	end 'requireElementTransform'
 
 	// ⭐⭐ **DOES THE TRANSFORM ANSWER THE CONTAINER'S OWN ELEMENT TYPE — the element-PRESERVATION test, which

@@ -1,7 +1,7 @@
 ---
 feature: closure-param-type-inference
 status: experimental
-keywords: [closure, map, parameters, inference, diagnostics, E2003]
+keywords: [closure, map, parameters, inference, arity, diagnostics, E2003, E3122]
 category: diagnostics
 ---
 
@@ -18,13 +18,29 @@ parameter has no second position to be typed from — and nothing to infer it by
 inference pass. It is refused as un-inferrable (**E2003**), with the reference bootstrap's own wording,
 positioned at the parameter's name.
 
-The rule is keyed on INFERENCE, not on arity. A closure that declares every parameter's type is not this
-diagnostic's business: shv2 does not check a function value's arity at an indirect call — for a closure
-literal or for a named function — and the reference bootstrap does not either, so a transform written
-`function(a Integer, b Integer)` is accepted by both and answers the same value. That is a separate hole
-in a separate mechanism; refusing it here would make shv2 diverge from the reference in the other
-direction. What IS refused is the parameter no position can type, which is exactly what the reference
-refuses.
+**The ARITY is a second rule standing beside the first (E3122), and it is not a closure rule.** A
+transform's arity is 1 by the very declaration the hint is read from, so a transform of any other arity is
+refused where the function VALUE is bound — whatever produced it. Three shapes reach that position and all
+three are refused: a closure literal that types every parameter, a closure that declares none, and a bare
+reference to a NAMED function of the wrong shape. The last has no closure literal to look at, which is why
+the check cannot live in the closure parse: it is decided whole-program, at the binding site, off the
+value's own governing signature.
+
+⚠ **THIS DIVERGES FROM THE REFERENCE BOOTSTRAP, DELIBERATELY (user ruling 2026-08-04).** The bootstrap
+accepts `nums.map(function(a Integer, b Integer) gives a + b)`, and so did shv2 — both printing `sum=6`.
+Both were reading an argument nobody passed. `map` calls its transform with ONE element plus the uniform
+`__env` slot, so `b` is whatever the second argument slot happened to hold: change the body to `gives b`
+and arm64-macOS prints `sum=0`, a value that is luck rather than an answer. On `wasm32-wasi` the same
+program does not run at all — `call_indirect` type-checks the callee's signature, so `__arr_map` traps with
+*"indirect call type mismatch"*. One target of four could see it, which is what makes the shape undefined
+rather than merely unspecified, and agreeing with the reference about an undefined program is not
+agreement worth keeping.
+
+The two rules stay separate because they refuse different things. E2003 is about a parameter no position
+can TYPE and fires in the parser at the parameter's name; E3122 is about how MANY parameters there are and
+fires after merge, at the argument. A transform's parameter TYPES are still unchecked at this position —
+`nums.map(function(a String) gives 1)` over an int array is accepted — which is a separate hole in the same
+mechanism and a wider question than the arity ruling settled.
 
 ⚠ **A shape this file exists to keep out.** Accepted, the untyped `b` typed itself from the same hint as
 `a`, and the closure lifted with three ABI slots `(a, b, __env)`; the array runtime's `callIndirect`
@@ -54,10 +70,13 @@ end 'main'
 sum=60
 ```
 
-<!-- test: a-fully-typed-transform-is-not-this-diagnostics-business -->
-Every parameter declares its type, so nothing is inferred and nothing is refused — measured identical on
-the reference bootstrap, which also accepts it and also prints `sum=6`. This case is what keeps the fix
-inference-keyed: an arity check here would be a false rejection and a divergence from the reference.
+<!-- test: error-a-fully-typed-transform-of-the-wrong-arity-is-still-refused -->
+Nothing is INFERRED here — every parameter declares its type — so E2003 has nothing to say and the arity
+rule is what refuses it. This case used to be pinned as accepted with `sum=6`, on the reference bootstrap's
+agreement; the agreement was two compilers reading the same uninitialised second argument. `wasm32-wasi`
+does not read it — its `call_indirect` type-checks the signature and traps — and on arm64-macOS a body of
+`gives b` prints `sum=0`, the second argument slot's leftovers. The anchor is the argument, not a
+parameter: the value is what disagrees with the position.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -72,8 +91,46 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```stdout
-sum=6
+```maxoncstderr
+error E3122: <fragment>:6:21: `map` calls its transform with 1 argument(s) — the container's own element — but this transform declares 2 parameter(s); a transform is `function(Element) returns Element`
+```
+
+<!-- test: error-a-transform-that-declares-no-parameter-is-refused-too -->
+The UNDER-arity half, and the reason the rule is stated as an equality rather than a ceiling. A
+zero-parameter transform is handed the element anyway and simply ignores it, which reads harmless and is
+the same undefined call: `wasm32-wasi` traps on it exactly as it traps on the over-arity shape.
+```maxon
+
+function main() returns ExitCode
+	let nums = [1, 2, 3]
+	let out = nums.map(function() gives 7)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3122: <fragment>:5:21: `map` calls its transform with 1 argument(s) — the container's own element — but this transform declares 0 parameter(s); a transform is `function(Element) returns Element`
+```
+
+<!-- test: error-a-named-function-of-the-wrong-arity-is-refused-at-the-argument -->
+⭐ **The shape a closure-literal check structurally cannot see.** There is no closure here at all — a bare
+reference to a function declared elsewhere — so the arity is not a fact the parse of this line holds. It is
+pinned so a later refactor cannot quietly narrow the rule back to closure literals and keep the suite
+green.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function twoArg(a Integer, b Integer) returns Integer
+	return a + b
+end 'twoArg'
+
+function main() returns ExitCode
+	let nums = [1, 2, 3]
+	let out = nums.map(twoArg)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3122: <fragment>:10:21: `map` calls its transform with 1 argument(s) — the container's own element — but this transform declares 2 parameter(s); a transform is `function(Element) returns Element`
 ```
 
 <!-- test: error-a-second-untyped-closure-parameter-is-uninferrable -->

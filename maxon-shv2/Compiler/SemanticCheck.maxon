@@ -63,6 +63,10 @@ export function semanticCheck(project Project, module MaxonModule, signatures Pr
 	// happened when that check drains. After `checkCalls` so a program with both a bad argument and a bad
 	// cast reports the argument first, in the order the reader meets them.
 	checkFunctionTypeDoors(project)
+	// The container-`map` transforms the parser recorded (`PendingTransformArity`), beside the doors above
+	// and for their reason: a function value's parameter list is whole-program, and a lifted closure's does
+	// not reach the registry until merge.
+	checkTransformArities(project)
 	// E3070: a collection mutated while an element borrowed out of it is still live. The facts are the
 	// PARSER's (a binding exists nowhere else in shv2), and this is the first point that holds the
 	// whole-program `mutationSummary` its call-argument half asks — which is why it runs here rather than in
@@ -2230,6 +2234,37 @@ function checkOneFunctionTypeDoor(project Project, door PendingFunctionTypeDoor)
 	let code = ErrorCode.semanticUnsafeCast if door.door == FunctionTypeDoor.cast else ErrorCode.typeMismatch
 	reportPositioned(project, code: code, message: "function type mismatch {functionTypeDoorSite(door)}: expected '{expected}', got '{actual}'", line: door.line, column: door.column, filePath: door.filePath)
 end 'checkOneFunctionTypeDoor'
+
+// ⭐ **DRAIN THE `map` TRANSFORMS — the ARITY half of the same relationship, at the one position whose
+// function type the COMPILER owns rather than a declaration.** Each entry is a function value bound as a
+// container `map`'s transform; the position calls it with exactly one element, and until this drained
+// nothing compared that against what the value declares. See `PendingTransformArity` and
+// `Parser.requireElementTransform`.
+function checkTransformArities(project Project)
+	for transform in project.pendingTransformArities 'eachTransform'
+		checkOneTransformArity(project, transform: transform)
+	end 'eachTransform'
+end 'checkTransformArities'
+
+// One transform. The governing name resolves for the same reason a door's does — a `function` tag is minted
+// only from a declared function, a lifted closure or a function alias, and `requireFunctionShapeOf` reads
+// all three.
+//
+// ⚠ **ONLY THE ARITY IS COMPARED, DELIBERATELY.** The RETURN half is already decided, in the parser, by a
+// NOMINAL rule `functionShapesAgree` cannot express (`Parser.elementTransformAnswersElement`: two structs
+// both `structRef` are not the same element), so asking the whole shape here would either duplicate that
+// rule or contradict it. The PARAMETER TYPES are the hole this rung did not close — `nums.map(function(a
+// String) gives 1)` over an int array is still accepted — which is a wider question than the arity ruling
+// settled and is filed rather than half-answered here.
+function checkOneTransformArity(project Project, transform PendingTransformArity)
+	let got = requireFunctionShapeOf(functionTypeRegistryOf(project), name: transform.gotName, side: "transform").paramTypes.count()
+	if got == transform.expectedArity 'agree'
+		return
+	end 'agree'
+
+	let method = String.from(transform.methodName)
+	reportPositioned(project, code: ErrorCode.transformArityMismatch, message: "`{method}` calls its transform with {transform.expectedArity} argument(s) — the container's own element — but this transform declares {got} parameter(s); a transform is `function(Element) returns Element`", line: transform.line, column: transform.column, filePath: transform.filePath)
+end 'checkOneTransformArity'
 
 // Where the door was, as the diagnostic says it. An assignment names its place (`assigning to variable
 // 'g'`); a cast and a `return` are the construct itself and name nothing, which is why the record's

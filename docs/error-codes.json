@@ -1,6 +1,6 @@
 {
   "generatedFrom": "docs/error-codes.txt",
-  "sourceHash": "0c4a0666bdb3c289",
+  "sourceHash": "4549caabd7210c6d",
   "note": "GENERATED. Do not edit. Run `maxon error-codes generate`. A reader MUST hash generatedFrom's bytes (FNV-1a 64, hex) and refuse to answer unless it equals sourceHash.",
   "compilers": ["csharp", "selfhosted", "shv2"],
   "codes": [
@@ -1380,6 +1380,15 @@
       "stage": "semantic",
       "doc": "A `float` value is passed where an INTERFACE type is declared, so it would have to be boxed into an\nexistential's fat pointer.\nThat pointer's value half is a general-purpose MACHINE WORD -- it is what a dispatch hands the impl as\nits receiver, and every conformer's `self` is read out of an integer register. A float lives in a\nfloating-point register, so widening one means a cross-register-file move that no `TargetOp` performs:\na move's two ends are colored into one file by construction, and the two converts and the `movqGprXmm`\nbitcast are each their own op.\nMEASURED before the rule: `use(c Comparable, other Comparable)` called with `2.5` compiled all the way\nto the x64 emitter and PANICKED there -- `a register-to-register move from xmm0 to rcx crosses register\nfiles` -- with no source position and no way for the author to see what in the program caused it.\nIt is the same fact E2062 states for a type ARGUMENT (`a type parameter is an opaque 8-byte\ngeneral-purpose slot under shv2's dictionary-passing, and a float value travels in a floating-point\nregister, so it has no way through`), one widening position over: dictionary passing gives a type\nparameter and an existential the same opaque slot, so it gives them the same limit. Closing it needs the\nvalue half to carry a float's bit pattern -- a bitcast at the widening and at every use -- which is a\nrepresentation change and not a check.",
       "emittedBy": {"shv2": "floatWidenedToExistential"},
+      "notEmittedBy": ["csharp", "selfhosted"]
+    },
+    {
+      "code": 3122,
+      "tag": "E3122",
+      "name": "SemanticTransformArityMismatch",
+      "stage": "semantic",
+      "doc": "A function value bound as a container `map`'s transform declares a different number of parameters\nthan the position calls it with. `map`'s transform is `function(Element) returns Element`\n(`stdlib/Interfaces.maxon:189`), so it takes exactly ONE parameter -- the container's own element --\nand the runtime walk calls it with exactly one argument plus the uniform `__env` slot.\nUSER RULING 2026-08-04, and a DELIBERATE divergence from the reference bootstrap, which accepts the\nshape: a transform declaring a further parameter reads a value nobody passed. MEASURED --\n`nums.map(function(a Integer, b Integer) gives b)` prints `sum=0` on arm64-macOS, `b` being whatever\nthe second argument slot held, while on `wasm32-wasi` the program does not run at all: `call_indirect`\ntype-checks the callee's signature and `__arr_map` traps with \"indirect call type mismatch\". One\ntarget of four could see it, which is what makes the shape undefined rather than unspecified.\nNOT E3036, which states that \"a call passes a different number of arguments than the callee declares\nparameters\": there is NO call at this span. The author bound a function VALUE to a position, and the\ncall that would go wrong is one the compiler makes inside `__arr_map`, over a source line the author\nnever wrote -- so E3036's sentence would be false about the program in front of them.\nNOT E3005 either, which is what the four DECLARED function-typed places (a cast, a `return`, an\nassignment, an ordinary function-typed argument) earn when their whole SHAPE disagrees. This position\ndeliberately requires less: the transform's parameter TYPES are not checked here, so \"the two function\ntypes must agree\" would be false as a statement of what this position demands.",
+      "emittedBy": {"shv2": "transformArityMismatch"},
       "notEmittedBy": ["csharp", "selfhosted"]
     },
     {

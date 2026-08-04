@@ -872,6 +872,25 @@ export enum ErrorCode
 	// value half to carry a float's bit pattern -- a bitcast at the widening and at every use -- which is a
 	// representation change and not a check.
 	floatWidenedToExistential = "E3121"
+	// A function value bound as a container `map`'s transform declares a different number of parameters
+	// than the position calls it with. `map`'s transform is `function(Element) returns Element`
+	// (`stdlib/Interfaces.maxon:189`), so it takes exactly ONE parameter -- the container's own element --
+	// and the runtime walk calls it with exactly one argument plus the uniform `__env` slot.
+	// USER RULING 2026-08-04, and a DELIBERATE divergence from the reference bootstrap, which accepts the
+	// shape: a transform declaring a further parameter reads a value nobody passed. MEASURED --
+	// `nums.map(function(a Integer, b Integer) gives b)` prints `sum=0` on arm64-macOS, `b` being whatever
+	// the second argument slot held, while on `wasm32-wasi` the program does not run at all: `call_indirect`
+	// type-checks the callee's signature and `__arr_map` traps with "indirect call type mismatch". One
+	// target of four could see it, which is what makes the shape undefined rather than unspecified.
+	// NOT E3036, which states that "a call passes a different number of arguments than the callee declares
+	// parameters": there is NO call at this span. The author bound a function VALUE to a position, and the
+	// call that would go wrong is one the compiler makes inside `__arr_map`, over a source line the author
+	// never wrote -- so E3036's sentence would be false about the program in front of them.
+	// NOT E3005 either, which is what the four DECLARED function-typed places (a cast, a `return`, an
+	// assignment, an ordinary function-typed argument) earn when their whole SHAPE disagrees. This position
+	// deliberately requires less: the transform's parameter TYPES are not checked here, so "the two function
+	// types must agree" would be false as a statement of what this position demands.
+	transformArityMismatch = "E3122"
 
 	// A field access could not be lowered: the base is not a struct, or the field has no slot.
 	invalidFieldAccess = "E4006"
