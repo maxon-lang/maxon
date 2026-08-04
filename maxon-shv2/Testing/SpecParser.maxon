@@ -249,6 +249,28 @@ let FenceClose = "```"
 export let FileMarker = "// --- file:"
 let FragmentHeaderLines = 1 as LineIndex
 
+// ⭐⭐ **THE STDLIB-OVERLAY MARKER — how a case reaches a rule that only `<stdlibDir>/Builtins.maxon`
+// can trip.** Its value is a path RELATIVE TO `stdlib/`, and the section's text is written at the TOP
+// of the runner's private copy of that file (`SpecTestRunner.stageStdlibOverlay`, which states the
+// isolation argument and why the position is a contract rather than a detail).
+//
+// It exists because three of `reserved-double-underscore.md`'s own findings were recorded as SHELL
+// TRANSCRIPTS: every route to E4015 through `FunctionNameIndex` needs a declaration carrying the
+// reserved `__` prefix, exactly one FILE may write one, and a spec fragment can never be that file.
+// A finding a suite cannot re-run is a check that cannot fail.
+export let StdlibOverlayMarker = "// --- stdlib-overlay:"
+
+// The prefix BOTH section markers share, and therefore the shape a MISSPELLED one has. A line that
+// opens with it and matches neither marker is refused rather than kept as source — without that,
+// `// --- stblib-overlay: Builtins.maxon` is just a comment, the overlay silently never happens, and
+// the case reports PASS for a program that was never staged.
+//
+// It is a third literal rather than a slice of `FileMarker`, because slicing needs a hardcoded length
+// — a magic number standing in for the very prefix it was meant to stop repeating. What keeps the
+// three in step is a CHECK, not a derivation: `splitSourceSections` refuses to run if either marker
+// stops starting with it.
+let SectionMarkerPrefix = "// --- "
+
 // What would let a `// --- file:` marker escape the temp directory it is written into: a `.`/`..`
 // segment, a rooted name, or a Windows drive letter. Checked at the write
 // (SpecTestRunner.isSafeRelativeName), named here beside the marker they qualify.
@@ -365,10 +387,13 @@ export union SpecExpectation
 	compilerError(text String)
 end 'SpecExpectation'
 
-// One FILE of a multi-file test — the `// --- file: <name>` sections of one ```maxon block.
+// One named SECTION of a ```maxon block — a `// --- file: <name>` file of a multi-file test, or a
+// `// --- stdlib-overlay: <name>` overlay. ONE type for both, because they carry the same three facts
+// and the runner applies `mergedLineOffset` to them identically; what differs is only WHERE the text
+// is written, which is the array a section lands in.
 export type SpecSourceFile
-	// The path from the marker, RELATIVE (`app/main.maxon`). Written under the test's own scratch
-	// directory, subdirectories and all.
+	// The path from the marker, RELATIVE (`app/main.maxon`) — to the test's own scratch directory for
+	// a file, to the staged `stdlib/` for an overlay. Written there, subdirectories and all.
 	export let name as String
 	// The file's own text, trimmed — exactly what is written to disk and compiled.
 	export let source as String
@@ -412,6 +437,10 @@ export type SpecTest
 	// sentinel — it is the literal count of file markers in the block, and "no markers" is exactly
 	// what a single-file test is.
 	export let sourceFiles as SpecSourceFileArray
+	// The `// --- stdlib-overlay:` sections, or EMPTY for every test that compiles against the
+	// checkout's own `stdlib/` — which is all but a handful. Empty is the literal count of overlay
+	// markers, not a sentinel, exactly as `sourceFiles` is.
+	export let stdlibOverlays as SpecSourceFileArray
 	// The `targetToString` forms this test is restricted to (a `<!-- targets: … -->` marker), or EMPTY
 	// for the ordinary test that runs on every target. The runner SKIPS a test whose non-empty list
 	// omits the host target (`SpecTestRunner.selectedByTarget`) — the same treatment a draft or
@@ -431,7 +460,8 @@ export type SpecTest
 	// The split is derived HERE, from the very source that will be compiled, so a test can never
 	// exist with a file list that disagrees with its text.
 	export static function create(name String, source String, expectation SpecExpectation, targets TargetKeyArray, runtimeNames RuntimeFunctionNameArray, programArgs ProgramArgArray) returns SpecTest
-		return Self{name: name, source: source, expectation: expectation, sourceFiles: splitSourceFiles(source), targets: targets, runtimeNames: runtimeNames, programArgs: programArgs}
+		let sections = splitSourceSections(name, source: source)
+		return Self{name: name, source: source, expectation: expectation, sourceFiles: sections.files, stdlibOverlays: sections.stdlibOverlays, targets: targets, runtimeNames: runtimeNames, programArgs: programArgs}
 	end 'create'
 
 	// True when this test's block declares `// --- file:` sections — i.e. it compiles as a
@@ -891,8 +921,20 @@ function resolveStdout(targetStdout SpecStdout, portable SpecStdout) returns Spe
 	end 'qualified'
 end 'resolveStdout'
 
-// Split a ```maxon block into its `// --- file:` sections. EMPTY when the block has no marker —
-// the ordinary single-file test, which is most of them.
+// The two section lists one ```maxon block yields. A record rather than two calls over the same text:
+// the scan is one pass and the two answers come out of the same walk, so a second walk would be a
+// second thing free to disagree about where a section ends.
+type SpecSourceSections
+	export let files as SpecSourceFileArray
+	export let stdlibOverlays as SpecSourceFileArray
+
+	static function create(files SpecSourceFileArray, stdlibOverlays SpecSourceFileArray) returns SpecSourceSections
+		return Self{files: files, stdlibOverlays: stdlibOverlays}
+	end 'create'
+end 'SpecSourceSections'
+
+// Split a ```maxon block into its `// --- file:` and `// --- stdlib-overlay:` sections. BOTH lists are
+// EMPTY when the block has no marker — the ordinary single-file test, which is most of them.
 //
 // A faithful port of the C# reference's `SplitMultiFileSource` (`SpecParser.cs:273`), including
 // the two things about it that are easy to get subtly different and would silently misreport a
@@ -903,47 +945,84 @@ end 'resolveStdout'
 //     marker — not from its first non-blank line. Both compilers therefore agree on what line a
 //     multi-file diagnostic sits on, which is the only property that matters here, and it is what
 //     makes a `/specs` expectation portable byte-for-byte.
-function splitSourceFiles(source String) returns SpecSourceFileArray
+//
+// ⚠ The overlay marker is shv2's own and the reference has no counterpart, so it takes the SAME
+// offset arithmetic rather than a second one: an overlay's text is written at the top of the staged
+// copy, so its own line 1 is that file's line 1, which is exactly the relation a `// --- file:`
+// section's staged file already has.
+function splitSourceSections(testName String, source String) returns SpecSourceSections
+	if not FileMarker.startsWith(SectionMarkerPrefix) or not StdlibOverlayMarker.startsWith(SectionMarkerPrefix) 'markersDrifted'
+		panic("SpecParser.splitSourceSections: '{FileMarker}' and '{StdlibOverlayMarker}' must both begin with '{SectionMarkerPrefix}', because the misspelled-marker refusal below recognizes a candidate by that prefix alone. One of them was renamed and the guard now admits a shape neither marker has")
+	end 'markersDrifted'
+
 	var files = SpecSourceFileArray.create()
+	var overlays = SpecSourceFileArray.create()
 	let lines = source.split("\n")
 	let lineCount = lines.count()
 
 	var name = ""
 	var body = ""
+	var isOverlay = false
 	var haveMarker = false
 	var offset = 0 as LineIndex
 
 	for i in 0 upto lineCount 'eachLine'
-		let line = try lines.get(i) otherwise panic("SpecParser.splitSourceFiles: index {i} >= lineCount {lineCount} despite the upto bound")
+		let line = try lines.get(i) otherwise panic("SpecParser.splitSourceSections: index {i} >= lineCount {lineCount} despite the upto bound")
 
-		if not line.startsWith(FileMarker) 'notAMarker'
-			if haveMarker 'insideAFile'
+		let opensFile = line.startsWith(FileMarker)
+		if not opensFile and not line.startsWith(StdlibOverlayMarker) 'notAMarker'
+			// ⭐ A line WEARING the marker shape but matching neither is a typo, and the failure mode of
+			// letting it through is silence: it becomes a comment inside whichever section precedes it,
+			// the section it meant to open never exists, and the case then reports on a program the
+			// author did not write. Refused where the shape is recognized.
+			if line.startsWith(SectionMarkerPrefix) 'misspelledMarker'
+				panic("SpecParser: test '{testName}' carries the line '{line.trim()}', which has the shape of a section marker but is neither '{FileMarker}' nor '{StdlibOverlayMarker}'. A marker the parser does not recognize is kept as SOURCE, so the section it names is never staged and the case checks a program nobody wrote — fix the spelling, or write the line as ordinary source without the '{SectionMarkerPrefix}' opening")
+			end 'misspelledMarker'
+
+			if haveMarker 'insideASection'
 				body = "{body}\n{line}"
-			end 'insideAFile'
+			end 'insideASection'
 			continue
 		end 'notAMarker'
 
 		if haveMarker 'flushPrevious'
-			files.push(SpecSourceFile.create(name, source: body.trim(), mergedLineOffset: offset))
+			pushSection(files, overlays: overlays, isOverlay: isOverlay, name: name, body: body, offset: offset)
 		end 'flushPrevious'
 
-		name = valueAfterKey(line, key: FileMarker)
+		isOverlay = not opensFile
+		name = valueAfterKey(line, key: FileMarker if opensFile else StdlibOverlayMarker)
 		body = ""
 		haveMarker = true
-		// This file's first line is the one AFTER the marker: 0-based block index `i + 1`, which is
+		// This section's first line is the one AFTER the marker: 0-based block index `i + 1`, which is
 		// block LINE NUMBER `i + 2`, which is fragment line number `i + 2 + FragmentHeaderLines - 1`.
-		// The file's own line 1 must land there, so the offset added to a per-file line is that minus
-		// one. (Checked against the corpus: `export-keyword`'s `error.non-exported-function-cross-file`
-		// expects `:11:9`, and this yields exactly 11.)
+		// The section's own line 1 must land there, so the offset added to a per-section line is that
+		// minus one. (Checked against the corpus: `export-keyword`'s
+		// `error.non-exported-function-cross-file` expects `:11:9`, and this yields exactly 11.)
 		offset = i + FragmentHeaderLines + 1
 	end 'eachLine'
 
 	if haveMarker 'flushLast'
-		files.push(SpecSourceFile.create(name, source: body.trim(), mergedLineOffset: offset))
+		pushSection(files, overlays: overlays, isOverlay: isOverlay, name: name, body: body, offset: offset)
 	end 'flushLast'
 
-	return files
-end 'splitSourceFiles'
+	if overlays.count() > 0 and files.count() == 0 'overlayWithoutAFile'
+		panic("SpecParser: test '{testName}' declares a '{StdlibOverlayMarker}' section but no '{FileMarker}' section. An overlay says what the compile's STDLIB is, never what it COMPILES, so there would be no program — and the block's own text cannot stand in for one, since it carries the marker lines themselves. Add the '{FileMarker}' section that holds the program")
+	end 'overlayWithoutAFile'
+
+	return SpecSourceSections.create(files, stdlibOverlays: overlays)
+end 'splitSourceSections'
+
+// File the section just closed into the list its marker chose. Split out because the scan closes a
+// section in two places — at the next marker and at end of block — and the two must agree about which
+// list, which trimming and which offset a section gets.
+function pushSection(files SpecSourceFileArray, overlays SpecSourceFileArray, isOverlay bool, name String, body String, offset LineIndex)
+	let section = SpecSourceFile.create(name, source: body.trim(), mergedLineOffset: offset)
+	if isOverlay 'toOverlays'
+		overlays.push(section)
+	end 'toOverlays' else 'toFiles'
+		files.push(section)
+	end 'toFiles'
+end 'pushSection'
 
 // The VALUE of an HTML-comment marker line: the text between the first ": " and the trailing
 // " -->", trimmed — i.e. NAME out of `<!-- test: NAME -->`, or the target list out of

@@ -2925,8 +2925,16 @@ alias arrives from a SIBLING file.
 
 ⚠ **MEASURED, REVIEW OF A2m** — before the fix below, the third case here COMPILED AND RAN while the fourth,
 the identical program with its two files renamed, was refused E2015. A member roster that depends on which
-file sorts first is a wrong answer in one of the two orders, whichever one it is, and no diagnostic reports
-which one you got.
+file is walked first is a wrong answer in one of the two orders, whichever one it is, and no diagnostic
+reports which one you got.
+
+⚠⚠ **AND THE `aaa-`/`zzz-` NAMES BELOW EXPRESS AN INTENT; THEY DO NOT PIN THE WALK.** Nothing in a spec
+can, and that is a RULING rather than a gap: the compiler walks `Directory.list`'s raw order and
+deliberately does not sort, because a canonical input order would hide an order dependence instead of
+surfacing it (`Compiler.collectMaxonSources`; the ruling and its measurements are in `StdlibLoader`'s
+header, user ruling 2026-07-24). So a FIRST/LAST label here says which order its author was aiming at, and
+the pair's real content is that the two halves differ in their text — whichever order the host serves, the
+program must answer the same. Read every `ALIAS FILE FIRST` below as *"the half named for that order"*.
 
 ⚠ **THE ROOT AND A SLOT ANSWER DIFFERENTLY, AND THE FIRST TWO CASES ARE WHY THAT IS NOT AN INCONSISTENCY.**
 A ROOT position — `var bufs as BufArray` — is repaired at the read door: `ProgramSignatures.fieldSurfaceOf`
@@ -3011,7 +3019,8 @@ end 'seed'
 <!-- test: error.a-sibling-files-alias-in-a-tuple-slot-is-refused-alias-file-first -->
 
 ⭐⭐ **THE HEADLINE REGRESSION CASE. This program COMPILED AND RAN before the fix** — `make().0` served the
-buffer's roster purely because `aaa-alias.maxon` sorts ahead of `zzz-main.maxon`. A RETURN clause is read by
+buffer's roster because the walk reached the alias file first, which is a property of the staging directory
+and not of the two names (see this section's header). A RETURN clause is read by
 the tolerant declaration SWEEP as well as by the real parse, and the sweep's copy is the one the whole-program
 index stores; asked there, a slot's element bit answers how far the sweep had got. It is refused now, in this
 order and in the next case's, which is the accepted gap (a tuple slot spelled with an array-of-buffers alias

@@ -64,6 +64,15 @@ let RunWorkingSubdirName = "temp"
 // source and the exe SIBLINGS on every host; it never reaches a golden (every compiled path is
 // normalized to `<fragment>`), so the committed x64 fragments are byte-unchanged.
 let MultiFileSourceDirSuffix = ".src"
+
+// A `// --- stdlib-overlay:` case's private checkout hangs off `<tempDir>/<name>.stdlib`, a SIBLING of
+// the `.src` directory and never a child of it: `Compiler.collectMaxonSources` recurses into every
+// subdirectory of what it is pointed at, so a copy of the whole stdlib placed under `.src` would be
+// compiled INTO the test's own program. It is a sibling of `exeBase` too, for `MultiFileSourceDirSuffix`'s
+// reason — a distinct suffix is what keeps the source, the exe and this from landing on one path on a
+// host whose `executableExtension` is empty.
+let StdlibOverlayDirSuffix = ".stdlib"
+
 let DraftStatus = "draft"
 let BuildSubcommand = "build"
 let OutputFlag = "-o"
@@ -935,13 +944,19 @@ typealias FragmentPathMappingArray = Array with FragmentPathMapping
 type StagedTest
 	// What `build` is pointed at: the fragment file, or the test's source directory.
 	export let buildTarget as FilePath
+	// ⭐ WHICH BINARY COMPILES IT — the compiler under test, or, for a `// --- stdlib-overlay:` case,
+	// this test's private COPY of it (see `stageStdlibOverlay`). It rides on the staging rather than
+	// being threaded from the caller because the overlay is what chooses it, and staging is where the
+	// overlay happens: a caller that passed its own would silently compile against the checkout's
+	// `stdlib/` and the case would report on a program that was never staged.
+	export let compilerExe as FilePath
 	// Every path the compiler may name, with the offset that maps it onto the fragment.
 	export let paths as FragmentPathMappingArray
 	// What was written, so it can be removed afterwards.
 	export let writtenFiles as FilePathArray
 
-	static function create(buildTarget FilePath, paths FragmentPathMappingArray, writtenFiles FilePathArray) returns StagedTest
-		return Self{buildTarget: buildTarget, paths: paths, writtenFiles: writtenFiles}
+	static function create(buildTarget FilePath, compilerExe FilePath, paths FragmentPathMappingArray, writtenFiles FilePathArray) returns StagedTest
+		return Self{buildTarget: buildTarget, compilerExe: compilerExe, paths: paths, writtenFiles: writtenFiles}
 	end 'create'
 end 'StagedTest'
 
@@ -981,16 +996,20 @@ function runOneTest(compilerExe FilePath, test SpecTest, specName String, tempDi
 	// well-formed file from the wrong test panics nothing. Pre-existing for `.ir`, inherited here.
 	let metricsPath = exePath.changeExtension(MetricsFileExtension)
 
-	match stageTest(tempDir, test: test) 'staging'
+	match stageTest(tempDir, test: test, compilerExe: compilerExe) 'staging'
 		failed(reason) then return TestRun.notCompiled(reason)
-		staged(s) then return runStagedTest(compilerExe, test: test, specName: specName, staged: s, exeBase: exeBase, exePath: exePath, irPath: irPath, metricsPath: metricsPath, runWorkingDir: runWorkingDir, fragmentDir: fragmentDir, updateRequired: updateRequired, effectiveTarget: effectiveTarget)
+		staged(s) then return runStagedTest(test, specName: specName, staged: s, exeBase: exeBase, exePath: exePath, irPath: irPath, metricsPath: metricsPath, runWorkingDir: runWorkingDir, fragmentDir: fragmentDir, updateRequired: updateRequired, effectiveTarget: effectiveTarget)
 	end 'staging'
 end 'runOneTest'
 
 // Compile a test whose source is already on disk, check its behaviour, then check its golden.
 // Split out of `runOneTest` only because staging can FAIL, and a union's arms are the honest way to
 // say so — the two functions are one story read top to bottom.
-function runStagedTest(compilerExe FilePath, test SpecTest, specName String, staged StagedTest, exeBase FilePath, exePath FilePath, irPath FilePath, metricsPath FilePath, runWorkingDir FilePath, fragmentDir FilePath, updateRequired bool, effectiveTarget Target) returns TestRun
+//
+// ⚠ It takes NO `compilerExe`: staging decides which binary compiles this test (`StagedTest.compilerExe`),
+// because a `// --- stdlib-overlay:` case is compiled by its own copy. A parameter here as well would be a
+// second answer to that question, and the wrong one would silently compile against the checkout's stdlib.
+function runStagedTest(test SpecTest, specName String, staged StagedTest, exeBase FilePath, exePath FilePath, irPath FilePath, metricsPath FilePath, runWorkingDir FilePath, fragmentDir FilePath, updateRequired bool, effectiveTarget Target) returns TestRun
 	let pinnable = emitsTargetIr(effectiveTarget)
 
 	var compileArgv = StringArray.create()
@@ -1023,7 +1042,7 @@ function runStagedTest(compilerExe FilePath, test SpecTest, specName String, sta
 	// applies the same rule to the exe and the IR sidecar for the same reason).
 	try File.delete(metricsPath) otherwise ignore
 
-	let compile = try runProcess(Executable.path(compilerExe), argv: compileArgv, workingDirectory: inheritedWorkingDir()) otherwise (e) 'compileSpawnFailed'
+	let compile = try runProcess(Executable.path(staged.compilerExe), argv: compileArgv, workingDirectory: inheritedWorkingDir()) otherwise (e) 'compileSpawnFailed'
 		cleanup(staged, exePath: exePath, irPath: irPath, metricsPath: metricsPath)
 		return TestRun.notCompiled("compiler spawn failed: {e.displayReason()}")
 	end 'compileSpawnFailed'
@@ -1130,11 +1149,14 @@ end 'joinRuntimeNames'
 
 // Write `test`'s source to disk and describe how the compiler's diagnostics map back onto the
 // merged fragment. THE one place a test's source reaches the filesystem.
-function stageTest(tempDir FilePath, test SpecTest) returns StagingResult
+function stageTest(tempDir FilePath, test SpecTest, compilerExe FilePath) returns StagingResult
 	if test.isMultiFile() 'multiFile'
-		return stageSourceFiles(tempDir, test: test)
+		return stageSourceFiles(tempDir, test: test, compilerExe: compilerExe)
 	end 'multiFile'
 
+	// A `// --- stdlib-overlay:` section cannot reach this branch: `SpecParser.splitSourceSections`
+	// refuses a case that declares one without a `// --- file:` section, because an overlay says what
+	// the compile's STDLIB is and never what it compiles.
 	let fragmentPath = tempDir.join("{test.name}{MaxonFragmentExtension}")
 	if not writeFragment(fragmentPath, test: test) 'writeFailed'
 		return StagingResult.failed("could not write fragment {fragmentPath.toString()}")
@@ -1148,7 +1170,7 @@ function stageTest(tempDir FilePath, test SpecTest) returns StagingResult
 	var written = FilePathArray.create()
 	written.push(fragmentPath)
 
-	return StagingResult.staged(StagedTest.create(fragmentPath, paths: paths, writtenFiles: written))
+	return StagingResult.staged(StagedTest.create(fragmentPath, compilerExe: compilerExe, paths: paths, writtenFiles: written))
 end 'stageTest'
 
 // A MULTI-file test: one directory, one file per `// --- file:` section, compiled as a project.
@@ -1157,7 +1179,7 @@ end 'stageTest'
 // this test would join the build silently and change what the test MEANS — and "the instrument died
 // on its own leftovers" is a failure this project has already had twice (OPEN.md #6). Whatever this
 // run did not write, this run removes.
-function stageSourceFiles(tempDir FilePath, test SpecTest) returns StagingResult
+function stageSourceFiles(tempDir FilePath, test SpecTest, compilerExe FilePath) returns StagingResult
 	// `.src`-suffixed so it never equals `exeBase` (`<tempDir>/<name>`) — see MultiFileSourceDirSuffix.
 	let testDir = tempDir.join("{test.name}{MultiFileSourceDirSuffix}")
 	if not Directory.create(testDir) 'noTestDir'
@@ -1189,8 +1211,160 @@ function stageSourceFiles(tempDir FilePath, test SpecTest) returns StagingResult
 		written.push(path)
 	end 'eachFile'
 
-	return StagingResult.staged(StagedTest.create(testDir, paths: paths, writtenFiles: written))
+	var compiler = compilerExe
+	if test.stdlibOverlays.count() > 0 'hasStdlibOverlay'
+		compiler = try stageStdlibOverlay(tempDir, test: test, compilerExe: compilerExe, paths: paths, written: written) otherwise (e) 'overlayFailed'
+			return StagingResult.failed(overlayErrorText(e))
+		end 'overlayFailed'
+	end 'hasStdlibOverlay'
+
+	return StagingResult.staged(StagedTest.create(testDir, compilerExe: compiler, paths: paths, writtenFiles: written))
 end 'stageSourceFiles'
+
+// Why a `// --- stdlib-overlay:` case could not be staged. A one-arm union implementing `Error` — the
+// shape `ScaleError` already uses next door — so the staging steps below read as a `try` chain and every
+// failure carries its own sentence rather than a boolean the caller has to explain.
+union OverlayError implements Error
+	refused(reason String)
+end 'OverlayError'
+
+// The sentence a refusal carries, for the one caller that turns it back into a `StagingResult`.
+// `scaleErrorText`'s shape, for the same reason: a union arm is how the reason travels, and unwrapping
+// it belongs at the boundary rather than at every `throw`.
+function overlayErrorText(error OverlayError) returns String
+	return match error 'e'
+		refused(reason) gives reason
+	end 'e'
+end 'overlayErrorText'
+
+// ⭐⭐ **A CASE'S PRIVATE STDLIB — the fixture that makes `<stdlibDir>/Builtins.maxon`'s OWN rules
+// testable, and the reason it has to exist rather than being a spec someone forgot to write.**
+//
+// Three of the compiler's refusals can only be reached by a DECLARATION carrying the reserved `__`
+// prefix, and exactly one file in a compile may write one — `<stdlibDir>/Builtins.maxon`, matched by
+// IDENTITY (`Queries.declaresCompilerInternalNames`). A spec fragment is a throwaway file in a scratch
+// directory, so it can never BE that file, and the corpus's own negative controls are what prove it
+// cannot fake it by taking the basename. Those findings were therefore recorded as SHELL TRANSCRIPTS in
+// `specs-shv2/reserved-double-underscore.md` — three checks that could not fail.
+//
+// ⭐ **THE LEVER IS `StdlibSource.locateStdlibDir`: A COMPILER FINDS ITS `stdlib/` BY WALKING UP FROM
+// ITS OWN EXECUTABLE.** So a COPY of the compiler, placed in a directory that has its own `stdlib/`,
+// loads that one — no flag, no environment variable, and no change to the compiler at all. The copied
+// tree is this test's own, so the checkout's `stdlib/` is never written to and nothing outside this
+// directory can observe the overlay.
+//
+// ⚠ **ISOLATION, in a suite that runs 12 workers over ONE tree.** The overlay root is
+// `<tempDir>/<test.name>.stdlib`, and every term of that is already private: `tempDir` is per SPEC
+// (`specTempDirFor`), one worker owns a spec for its whole duration, and a spec's tests run strictly
+// sequentially inside it. Two cases cannot share the path even in one spec, because the test's own name
+// is in it. It is PURGED before it is written for `stageSourceFiles`' reason — a file a killed run left
+// behind would otherwise join a later compile — and every byte it writes is recorded in `written`, so
+// `cleanup` removes it.
+//
+// ⚠ **THE SOURCE OF THE COPY IS THE COMPILER UNDER TEST'S OWN `stdlib/`, NOT THIS PROCESS'S.** They are
+// the same directory in every in-tree run and are not required to be: `--compiler=<path>` names some
+// other binary, and copying THIS harness's stdlib into a tree that other binary then loads would build
+// the case against a library its compiler was never written for.
+function stageStdlibOverlay(tempDir FilePath, test SpecTest, compilerExe FilePath, paths FragmentPathMappingArray, written FilePathArray) returns FilePath throws OverlayError
+	let exeUnderTest = compilerExe.resolve(Directory.currentPath())
+	let exeDir = try exeUnderTest.parent() otherwise throw OverlayError.refused("could not derive a directory for the compiler under test {exeUnderTest.toString()}")
+	let sourceStdlib = try stdlibDirAbove(exeDir) otherwise throw OverlayError.refused("no {StdlibDirName}/ above the compiler under test {exeUnderTest.toString()}, so there is nothing for '{StdlibOverlayMarker}' to overlay")
+
+	let overlayRoot = tempDir.join("{test.name}{StdlibOverlayDirSuffix}")
+	if not Directory.create(overlayRoot) 'noRoot'
+		throw OverlayError.refused("could not create stdlib-overlay directory {overlayRoot.toString()}")
+	end 'noRoot'
+	purgeSourceFiles(overlayRoot)
+
+	// Interpolated so the argument is a committed `String` — see `specTempRootDir` for why a bare
+	// module-`let` constant is ambiguous between `join`'s two overloads.
+	let stagedStdlib = overlayRoot.join("{StdlibDirName}")
+	try copyStdlibSources(sourceStdlib, into: stagedStdlib, written: written)
+	try applyOverlaySections(test, stagedStdlib: stagedStdlib, sourceStdlib: sourceStdlib, paths: paths)
+
+	// The copy is spawned, so on a POSIX host it needs the execute bit the original has —
+	// `FilePermission.normal` would produce a file the runner then fails to start, which reads as a
+	// compiler crash rather than as a staging bug.
+	let stagedExe = overlayRoot.join(exeUnderTest.filename())
+	let image = try File.readBinary(exeUnderTest) otherwise throw OverlayError.refused("could not read the compiler under test {exeUnderTest.toString()} to copy it beside the overlaid {StdlibDirName}/")
+	try File.writeBinary(stagedExe, content: image, mode: FilePermission.executable) otherwise throw OverlayError.refused("could not write {stagedExe.toString()}")
+	written.push(stagedExe)
+
+	return stagedExe
+end 'stageStdlibOverlay'
+
+// Copy every file the compiler would LOAD from `from` into `into`, preserving the tree.
+//
+// ⚠ **THE SET OF FILES IS ASKED OF `Compiler.collectMaxonSources`, WHICH IS THE COMPILER'S OWN ANSWER
+// TO "WHAT IS A SOURCE UNDER A DIRECTORY?"** A copy built from a second rule here — every `.maxon`,
+// say — would drift the day that walk grows a clause (`.maxonignore` is already named as its next
+// one), and the drift would show up as a case compiling against a library subtly unlike the one the
+// same compiler loads everywhere else.
+function copyStdlibSources(from FilePath, into FilePath, written FilePathArray) throws OverlayError
+	var sources = MaxonSourcePathArray.create()
+	_ = try collectMaxonSources(from, into: sources) otherwise throw OverlayError.refused("could not walk {from.toString()} to copy it for a '{StdlibOverlayMarker}' case")
+
+	for source in sources 'eachSource'
+		let relative = try source.relativeTo(from) otherwise throw OverlayError.refused("{source.toString()} is not under {from.toString()}, though that walk is what found it")
+
+		let destination = into.join(relative)
+		let parent = try destination.parent() otherwise throw OverlayError.refused("could not derive a directory for {destination.toString()}")
+		if not Directory.create(parent) 'noSubdir'
+			throw OverlayError.refused("could not create directory {parent.toString()}")
+		end 'noSubdir'
+
+		let content = try File.readText(source) otherwise throw OverlayError.refused("could not read {source.toString()}")
+		try File.writeText(destination, content: content) otherwise throw OverlayError.refused("could not write {destination.toString()}")
+		written.push(destination)
+	end 'eachSource'
+end 'copyStdlibSources'
+
+// Write each `// --- stdlib-overlay:` section into the copy of the file it names, and record where the
+// compiler's diagnostics about it map back to.
+//
+// ⭐ **THE SECTION GOES AT THE TOP OF THE FILE, AND THAT IS A POSITION CONTRACT.** A diagnostic in an
+// overlay has to name a line a reader can find in the spec, and the only line number that does not move
+// when the real `Builtins.maxon` gains or loses a line above is one counted from the file's START. At
+// the top, the section's own line 1 is the staged file's line 1 — exactly the relation a `// --- file:`
+// section's staged file already has — so ONE `mergedLineOffset` rule covers both and the expectation is
+// written `<fragment>:<line in the merged block>` like every other. Appending would have made every such
+// expectation a hostage to the length of a file the case does not control.
+//
+// It is legitimate for shv2 because `queryProgramSignatures` sweeps every file's declarations before any
+// file is parsed, so where in a module a declaration sits decides nothing.
+function applyOverlaySections(test SpecTest, stagedStdlib FilePath, sourceStdlib FilePath, paths FragmentPathMappingArray) throws OverlayError
+	var overlaid = OverlaidNameSet.create()
+
+	for overlay in test.stdlibOverlays 'eachOverlay'
+		if not isSafeRelativeName(overlay.name) 'unsafeName'
+			throw OverlayError.refused("'{StdlibOverlayMarker}' names '{overlay.name}': a '.' or '..' segment escapes the staged {StdlibDirName}/")
+		end 'unsafeName'
+
+		// Compared in the corpus's own forward-slash spelling for `sourceDirPrefixOf`'s reason: which
+		// separator a spec wrote is not a claim about the host that runs it.
+		let key = overlay.name.replace(WindowsPathSeparator, with: PathSeparator)
+		if overlaid.contains(key) 'namedTwice'
+			throw OverlayError.refused("two '{StdlibOverlayMarker}' sections both name '{overlay.name}'. The second would be written above the first, so neither section's line numbers would be the ones its expectation was written against — merge them into one section")
+		end 'namedTwice'
+		overlaid.insert(key)
+
+		let relative = try FilePath.from(key) otherwise throw OverlayError.refused("'{StdlibOverlayMarker}' names '{overlay.name}', which is not a valid relative path")
+
+		let destination = stagedStdlib.join(relative)
+		if not File.exists(destination) 'namesNoModule'
+			throw OverlayError.refused("'{StdlibOverlayMarker}' names '{overlay.name}', which is not a file the compiler loads from {sourceStdlib.toString()} — an overlay over a file nothing reads would change nothing and the case would pass having tested nothing")
+		end 'namesNoModule'
+
+		let original = try File.readText(destination) otherwise throw OverlayError.refused("could not read the staged {destination.toString()}")
+		try File.writeText(destination, content: "{overlay.source}\n{original}") otherwise throw OverlayError.refused("could not write the overlaid {destination.toString()}")
+
+		paths.push(FragmentPathMapping.create(destination.toString(), lineOffset: overlay.mergedLineOffset, sourceDirPrefix: sourceDirPrefixOf(overlay.name)))
+	end 'eachOverlay'
+end 'applyOverlaySections'
+
+// The overlay names already written, so a second section naming one file is REFUSED rather than
+// silently stacked on top of the first. A Set because membership is the only question.
+typealias OverlaidNameSet = Set with String
 
 // Remove every FILE under `dir`, depth-first. The stdlib has no directory-remove, so empty
 // subdirectories survive — which is harmless, because only a `.maxon` file can join a build.

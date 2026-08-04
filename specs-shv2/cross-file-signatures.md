@@ -223,7 +223,8 @@ generic-alias arm carried a comment claiming the declaration sweep never reached
 is "used only as a call BASE … never as a swept value type". Both halves were false: the sweep reads
 declared TYPES through that same routine, and this program spells `IntArray` at a struct FIELD, a METHOD
 return and a FREE-FUNCTION return — three positions the sweep records and the whole-program index stores.
-The alias file is walked FIRST here, so the sweep's `isGenericAlias` finds it.
+The names aim the alias file at the FIRST walk position; nothing in a spec can pin that, and the twin below
+says why and covers the other aim.
 ```maxon
 // --- file: aaa-alias.maxon
 export typealias Int = int(i64.min to i64.max)
@@ -315,7 +316,9 @@ export typealias IntArray = Array with Int
 ⭐ **THE FUNCTION-ALIAS ARM IS THE SAME SHAPE (A3e).** `functionTypeAliases` is folded per FILE, so a
 function alias declared in a sibling file walked earlier is registered while a later file is still being
 swept — the arm's own comment claimed the registry "returns `undeclared`" throughout the sweep, which is
-true only within one file. The alias file is walked FIRST here; its twin below swaps them.
+true only within one file. The names aim the alias file at the FIRST walk position and its twin below swaps
+them; which one the host actually serves is not something a spec can pin (see
+`cross-file-generic-alias-is-a-swept-value-type-either-order` above).
 ```maxon
 // --- file: aaa-alias.maxon
 export typealias Int = int(i64.min to i64.max)
