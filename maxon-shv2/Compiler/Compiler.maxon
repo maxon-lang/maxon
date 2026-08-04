@@ -348,6 +348,11 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 
 	recordPhase(project, phase: CompilePhase.checkDeclarations, probe: declCheckProbe)
 
+	// The ordinal guards' bracket, OUTSIDE the well-formedness gate below, so the phase reports on
+	// every compile: a row that vanished for a failing program would be indistinguishable from a
+	// phase that cost nothing.
+	let ordinalProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.verifyOrdinals)
+
 	// ⭐⭐ **THE SEVEN BUILTIN-ERROR ORDINAL CLAIMS — ALL OF THEM, HERE, AND NOT SCATTERED ACROSS THE
 	// RUNTIME INSTALLERS THAT TRANSCRIBE THEM (A1s).**
 	//
@@ -371,10 +376,6 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// addition to that module: one E3058 followed by two E4016s about a module the compile plainly HAD.
 	// It is the refusal `checkTypeSymbolNamespace` and `checkGenericAliasCycles` above make, for the same
 	// reason: a check whose inputs are half-built cannot produce a verdict worth reading.
-	// The bracket sits OUTSIDE the well-formedness gate, so the phase reports on every compile: a row
-	// that vanished for a failing program would be indistinguishable from a phase that cost nothing.
-	let ordinalProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.verifyOrdinals)
-
 	if not projectHasErrors(project) 'wellFormedSoFar'
 		verifyManagedFileOrdinals(project)
 		verifyManagedDirectoryOrdinals(project)
@@ -392,6 +393,16 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	end 'wellFormedSoFar'
 
 	recordPhase(project, phase: CompilePhase.verifyOrdinals, probe: ordinalProbe)
+
+	// ⚠ **THE ONE QUERY REACHED FROM INSIDE THIS BRACKET IS A MEMO HIT, AND IF IT EVER IS NOT, THIS
+	// COMPILE IS ALREADY FAILING.** `deriveStdlibFacts` below reads each stdlib file's parse artifact
+	// back through `queryParseOps`, which opens the `parse` phase — but only on a MISS, and every
+	// stdlib file was parsed and cached by `queryAllModule` above. The single way to reach a miss here
+	// is a stdlib file whose parse FAILED (a failed parse is never cached), and that compile throws at
+	// the pipeline's error gate before anything stamps a total or reads a table. So the nesting the
+	// disjointness contract forbids cannot be observed; it is stated because the next reader deserves
+	// to know it was checked rather than assumed.
+	let needsProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.deriveRuntimeNeeds)
 
 	// ⭐ THE HEAP IS CARRIED ONLY BY PROGRAMS THAT REACH IT (P1.0r). A `return 42` program
 	// allocates nothing, so it gets no allocator, no `.data` slots and no leak check — and its
@@ -432,16 +443,6 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// opens every managed global with a `globalAddr` of that global's own slot, so a liveness scan run
 	// after the synthesis would find every global keeping itself alive — the answer would be "everything
 	// is live", silently and always.
-	// ⚠ **THE ONE QUERY REACHED FROM INSIDE THIS BRACKET IS A MEMO HIT, AND IF IT EVER IS NOT, THIS
-	// COMPILE IS ALREADY FAILING.** `deriveStdlibFacts` reads each stdlib file's parse artifact back
-	// through `queryParseOps`, which opens the `parse` phase — but only on a MISS, and every stdlib
-	// file was parsed and cached by `queryAllModule` above. The single way to reach a miss here is a
-	// stdlib file whose parse FAILED (a failed parse is never cached), and that compile throws at the
-	// pipeline's error gate before anything stamps a total or reads a table. So the nesting the
-	// disjointness contract forbids cannot be observed; it is stated because the next reader deserves
-	// to know it was checked rather than assumed.
-	let needsProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.deriveRuntimeNeeds)
-
 	let liveGlobals = liveGlobalLabels(module, storedGlobals: signatures.storedGlobalCount)
 	// It answers whether the program has any managed global at all, which is the single bit the entry stubs
 	// gate their two calls on. A program with none builds nothing and is byte-identical to before this rung.
@@ -534,17 +535,16 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 		try refuseCompile(project)
 	end 'pipelineFailed'
 
+	// ONE bracket over every install below, not one per installer: each is a slice of a single runtime
+	// floor gated on its own usage bit, and the question a reader has is what CARRYING THE RUNTIME cost
+	// this program (see `CompilePhase.installRuntime`).
+	let runtimeInstallProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.installRuntime)
+
 	// AFTER the pipeline: the runtime is already lowered Std, so it must not be re-lowered, and it
 	// is deliberately not exposed to the Std optimization passes — it is hand-built at the tier
 	// they run on, and `foldConstOperands` would only re-derive folds it already has. It still
 	// flows through the WHOLE backend (ISel, register allocation, frames), which is the entire
 	// argument for building it as `StdOp`s rather than as bytes.
-	//
-	// ONE bracket over all of them, not one per installer: each is a slice of a single runtime floor
-	// gated on its own usage bit, and the question a reader has is what CARRYING THE RUNTIME cost
-	// this program (see `CompilePhase.installRuntime`).
-	let runtimeInstallProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.installRuntime)
-
 	if usage.usesHeap 'installMm'
 		installMmRuntime(pipeline.stdModule, usage: usage)
 	end 'installMm'

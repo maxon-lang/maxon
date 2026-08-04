@@ -229,12 +229,13 @@ export type PassPipeline
 		// `var` because the passes below STORE it (the lowering keeps it as a field), and a binding handed to a
 		// storage-writing parameter must be mutable (E3019).
 		//
-		// ⚠ **IT USED TO BE BILLED TO `phase:semanticCheck`, AND THEN TO NOTHING AT ALL.** That is a real
-		// movement in a bit-exact column, so here is its size, MEASURED (A2l review, 2026-07-31, by
-		// temporarily billing this one statement to the always-empty `emitIr` slot and reading the scale
-		// corpus): **rung 0 — 47 allocations / 36 frees / 16,936 bytes; rung 5 — 79 / 68 / 263,336**, i.e.
-		// ×1.68 in allocations across a 32× ladder (it is the MAP's geometric buffer growth, not a per-entry
-		// cost), 0.15% of `semanticCheck`'s own 53,345 and 0.0005% of the compile.
+		// ⚠ **IT USED TO BE BILLED TO `phase:semanticCheck`, AND THEN TO NOTHING AT ALL.** Its SIZE is no
+		// longer written down here, because it is now a row: `phase:pipelineNameIndex` in `--metrics`, read
+		// off the compile being asked about instead of remembered from one. What is worth keeping is the
+		// SHAPE, which a single row cannot show — MEASURED at A2l's review (2026-07-31, by temporarily
+		// billing this statement to the always-empty `emitIr` slot and reading the scale corpus): rung 0 at
+		// 47 allocations, rung 5 at 79, i.e. **×1.68 across a 32× ladder**. That is the MAP's geometric
+		// buffer growth rather than a per-entry cost, which is why it does not track the program.
 		//
 		// **It cannot go inside the existing bracket, so it has one of its own.** `dispatch` opens one bracket
 		// PER PASS, while this must exist before the loop and is read by TWO of them, so billing it to either
