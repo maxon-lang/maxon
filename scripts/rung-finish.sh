@@ -83,6 +83,15 @@ readonly MAX_PUSH_ATTEMPTS=3
 # shellcheck source=lib/plan-board.sh
 . "$REPO/scripts/lib/plan-board.sh" || { echo "cannot source scripts/lib/plan-board.sh" >&2; exit 1; }
 
+# shellcheck source=lib/host-binaries.sh
+# ⛔ THIS FILE IS THE ONE `host-binaries.sh` WAS WRITTEN FOR, AND IT WAS THE ONE THAT DID NOT SOURCE IT.
+#    Its header names this script by name — "seven hard-coded `.exe` paths, so on this host not one
+#    gate in the battery could run at all" — and the commit that moved those seven onto the helpers
+#    added the `.` line to `rung-start.sh` and not here. Every call then resolved to the empty string,
+#    so step 1 died with `no bootstrap in the worktree ()` on EVERY host including the one it was
+#    developed on. Nothing caught it because nothing runs this script except a rung finishing.
+. "$REPO/scripts/lib/host-binaries.sh" || { echo "cannot source scripts/lib/host-binaries.sh" >&2; exit 1; }
+
 BATCH=""; MSG_FILE=""; CODEGEN_NOTE=""; NO_LADDER=""; BRANCH=""; RUN_CSHARP=0
 NO_CROSS=""; DRY_RUN=0; NO_PUSH=0; KEEP_WORKTREE=0; STASHED=0
 
