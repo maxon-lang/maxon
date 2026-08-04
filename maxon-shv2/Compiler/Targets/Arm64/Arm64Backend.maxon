@@ -50,7 +50,14 @@ let Arm64Ip0 = 16
 // x17 — the second intra-procedure-call scratch register (IP1), outside the arm64 allocatable pool. The
 // jump table holds the table base then the computed target address in it; x16 (Arm64Ip0) holds the case
 // count then the loaded slot entry. Both are declared clobbered by `arm64JumpTable`'s implicitDefs.
+//
+// It is ALSO the base a frame reference past the scaled load/store field folds into — deliberately not
+// x16, which the isel mints spliceable producer/consumer pairs in (`arm64EmitWideFrameSlot` carries that
+// argument). EXPORTED as a `RegNum` twin for the same reason `Arm64FramePointerRegNum` is: the prologue
+// pass builds a real `add x17, x29, #hi` op for a wide incoming stack argument, and a second literal 17
+// over there would be this fact written down twice.
 let Arm64Ip1 = 17
+export let Arm64Ip1RegNum = Arm64Ip1 as RegNum
 
 // A 3-register data-processing instruction `op Rd, Rn, Rm` — the shape ADD/SUB/MUL/AND/ORR/… share.
 export function emitArm64Rrr(code ByteArray, opcode MachineWord, rd MachineWord, rn MachineWord, rm MachineWord)
@@ -826,24 +833,65 @@ end 'arm64EmitVectorEor'
 
 // The `[x29 + disp]` displacement of a colored spill slot. x29 points at the saved frame record, and
 // the spill/callee-save area opens at `+16` (past the saved x29/x30 pair); every slot is 8 bytes.
-// The ONE place the arm64 frame-slot arithmetic is spelled, shared by the allocator's spills and the
-// prologue pass's callee-save slots (they address the same frame the same way).
-function arm64SlotDisplacement(slot SpillSlot) returns MachineWord
+// The ONE place the arm64 frame-slot arithmetic is spelled, shared by the allocator's spills, the
+// prologue pass's callee-save slots and the hand-assembled runtime chunks' locals
+// (`Arm64PanicRuntime.slotOffset`) — all three address the same frame the same way.
+export function arm64SlotDisplacement(slot SpillSlot) returns MachineWord
 	return Arm64FrameRecordBytes + slot * SpillSlotBytes
 end 'arm64SlotDisplacement'
 
 // Access a frame slot at `[x29 + byteOffset]`. Below 256 bytes an unscaled STUR/LDUR encodes the
 // offset directly; at or above it the SCALED form is MANDATORY (the unscaled simm9 truncates ≥ 256 —
-// M1 trap). Offsets here are positive and 8-aligned, so the scaled form always fits. `unscaledOp` /
-// `scaledOp` select the GPR (STUR·STR / LDUR·LDR X) or FP (·D) opcode pair — the class-agnostic slot
-// store and reload each pass their own.
+// M1 trap). `unscaledOp` / `scaledOp` select the GPR (STUR·STR / LDUR·LDR X) or FP (·D) opcode pair —
+// the class-agnostic slot store and reload each pass their own.
+//
+// ⚠ THE SCALED FORM DOES NOT REACH THE WHOLE FRAME, AND THIS DOOR IS THE ONLY PLACE THAT CAN KNOW IT.
+// The 12-bit field counts ACCESS UNITS, so an 8-byte slot reaches `4095 * 8 = 32760` bytes off x29 and
+// not one further — i.e. slot 4093 is the last with a direct form. A frame with more slots than that is
+// an ordinary consequence of enough simultaneously-live values (`wide-spill-frames.md` reaches it with
+// 4111), so the third arm is a REACHABLE case, not a defensive one, and it folds the address into the
+// IP1 scratch instead (`arm64EmitWideFrameSlot`).
 function arm64EmitFrameSlot(code ByteArray, rt MachineWord, byteOffset MachineWord, unscaledOp MachineWord, scaledOp MachineWord)
 	if byteOffset < Arm64UnscaledSpillThreshold 'unscaled'
 		emitArm64Insn(code, insn: unscaledOp or ((byteOffset and Arm64UnscaledImm9Mask) shl Arm64UnscaledImm9Shift) or (Arm64Fp shl Arm64RnShift) or rt)
-	end 'unscaled' else 'scaled'
+	end 'unscaled' else if arm64ByteOffsetFitsScaledImm12(byteOffset, scale: SpillSlotBytes as NonZeroWord) 'scaled'
 		arm64EmitScaledMem(code, opcode: scaledOp, rt: rt, baseReg: Arm64Fp, byteOffset: byteOffset, scale: SpillSlotBytes)
-	end 'scaled'
+	end 'scaled' else 'wide'
+		arm64EmitWideFrameSlot(code, rt: rt, byteOffset: byteOffset, scaledOp: scaledOp)
+	end 'wide'
 end 'arm64EmitFrameSlot'
+
+// A frame slot past the scaled field's reach: `add x17, x29, #hi, lsl #12` puts a 4 KiB-aligned base
+// within reach of the slot into the IP1 scratch, and the access carries the REMAINDER — at most 4095
+// bytes, so always inside the 12-bit field — off it. Two instructions for any frame the prologue can
+// open, and the `add` is always a single one (its low imm12 half is zero by construction).
+//
+// ⭐⭐ **WHY x17 AND NOT x16, WHICH THE REST OF THIS BACKEND USES FOR EXACTLY THIS.** A spill or a reload
+// is an op a POST-ISEL pass SPLICES INTO A BLOCK, and the isel mints `x16` producer/consumer PAIRS that
+// those same passes demonstrably splice between (MEASURED: 16 straddled pairs of 1,144 — see
+// `StdToArm64Conversion.Arm64Scratch`, whose header is the full argument). An encoder-tier `x16`
+// materialisation HERE would therefore land inside a pending `add x16, base, #off` → `ldr [x16]` fold and
+// destroy its address. x17 is the one scratch that cannot be straddled: it is likewise outside the
+// allocatable pool, so no VALUE is ever coloured into it, and its ONLY other writer in this backend is
+// `arm64EmitJumpTable`, which produces AND consumes it inside a single terminator's encoding — there is
+// no x17 pair spanning two ops for anything to be spliced between. ⇒ **a future isel that mints an x17
+// producer/consumer pair breaks this**, exactly as an x16 one would; the two scratches are not
+// interchangeable, and which one is spliceable is the whole distinction.
+//
+// The scratch is NOT declared on `storeSlotReg`/`loadRegSlot`'s `implicitDefs`, and cannot be: those are
+// SHARED x64+arm64 union arms, and `RegNum` 17 is x64's `xmm1`. It needs no declaration for the same
+// reason `arm64JumpTable`'s is documentation only — x17 is not allocatable, so there is nothing for the
+// allocator to keep out of it.
+//
+// A displacement past the 24 bits the hi/lo split reaches has no form here, and `arm64EmitAddSubImmWide`
+// panics on it rather than truncating — correctly, and unreachably: a slot displacement never exceeds the
+// frame, and `arm64EmitStackAlloc` cannot open a frame that large either (it goes through the SAME split,
+// and the prologue is emitted before any slot access).
+function arm64EmitWideFrameSlot(code ByteArray, rt MachineWord, byteOffset MachineWord, scaledOp MachineWord)
+	let scratchBase = arm64WideFrameScratchBase(byteOffset)
+	arm64EmitAddSubImmWide(code, opcode: Arm64OpAddImm, rd: Arm64Ip1, rn: Arm64Fp, imm: scratchBase)
+	arm64EmitScaledMem(code, opcode: scaledOp, rt: rt, baseReg: Arm64Ip1, byteOffset: byteOffset - scratchBase, scale: SpillSlotBytes)
+end 'arm64EmitWideFrameSlot'
 
 // A scaled unsigned-offset load/store `op Rt, [Xn, #imm12*scale]`. The offset must be scale-aligned
 // and fit the 12-bit field — a spill/callee-save or data-field offset always is; a violation is a bug.
@@ -860,17 +908,30 @@ end 'arm64EmitScaledMem'
 // out at both doors instead, the predicate could come to admit exactly what the encoder then panics on,
 // which is the defect A5e exists to have removed rather than relocated. It is the pairing
 // `arm64MagnitudeFitsOneImm12` gives the compare immediate one screen up.
-function arm64ByteOffsetFitsScaledImm12(byteOffset MachineWord, scale NonZeroWord) returns bool
+export function arm64ByteOffsetFitsScaledImm12(byteOffset MachineWord, scale NonZeroWord) returns bool
 	return byteOffset mod scale == 0 and byteOffset / scale <= Arm64LoadStoreImm12Mask
 end 'arm64ByteOffsetFitsScaledImm12'
 
+// The 4 KiB-aligned part of a frame displacement past the scaled field: the base an `add`'s SHIFTED
+// imm12 puts into the IP1 scratch in ONE instruction, leaving a remainder of at most 4095 bytes that the
+// access's own 12-bit field then carries. The ONE statement of that split, so the two doors that fold a
+// wide frame address — the encoder's spill/reload (`arm64EmitWideFrameSlot`) and the prologue pass's
+// incoming stack argument (`Arm64PrologueEpilogue.resolveArm64IncomingArgs`) — cannot come to disagree
+// about where the cut falls. Both then hand the base to `arm64EmitAddSubImmWide`, whose 24-bit ceiling is
+// the ONLY ceiling either has, and which no frame the prologue can open reaches.
+export function arm64WideFrameScratchBase(byteOffset MachineWord) returns MachineWord
+	return (byteOffset shr Arm64Imm12FieldBits) shl Arm64Imm12FieldBits
+end 'arm64WideFrameScratchBase'
+
 // The scaled imm12 field of a load/store: `byteOffset / scale`, asserting scale-alignment and range.
 //
-// The panic is an ASSERTION OF THE ISEL'S OBLIGATION, not a reachable diagnostic: a data access whose
-// offset has no scaled form is folded into the IP scratch upstream (`StdToArm64Conversion.addressFor`
-// asks `arm64DispHasScaledForm`, and addresses `[scratch + 0]` when the answer is no), so what arrives
-// here always fits. Masking either condition away would read or WRITE THE WRONG FIELD with nothing
-// anywhere to notice — which is why it stays a panic rather than becoming a clamp.
+// The panic is an ASSERTION OF ITS CALLER'S OBLIGATION, not a reachable diagnostic, and there are two
+// callers who owe it. A DATA access whose offset has no scaled form is folded into the IP scratch
+// upstream (`StdToArm64Conversion.addressFor` asks `arm64DispHasScaledForm`, and addresses
+// `[scratch + 0]` when the answer is no); a FRAME-SLOT access past the field is folded HERE, by
+// `arm64EmitWideFrameSlot` — the slot number does not exist until register allocation, so the isel has
+// nothing to fold. Either way what arrives fits. Masking either condition away would read or WRITE THE
+// WRONG FIELD with nothing anywhere to notice — which is why it stays a panic rather than becoming a clamp.
 //
 // The alignment half has no reachable caller today and that is a property of the LAYOUT, not luck: every
 // 64-bit access offset in this compiler is slot-derived (`Project.FieldSlotBytes` = 8 per slot,

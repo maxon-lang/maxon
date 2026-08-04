@@ -104,13 +104,19 @@ let WriteStdoutFd = 0x1  // fd = 1 (STDOUT_FILENO).
 // and a use of the CONSUMER is such a site.
 //
 // What actually makes the scheme safe is that **NOTHING A POST-ISEL PASS SPLICES IN WRITES x16**: a
-// spill or reload is a frame-slot form off SP (`arm64EmitFrameSlot`), a remat is `arm64MovImm` into an
-// ALLOCATABLE register, and SSA destruction's `movRegReg`/`xchgRegReg` go on EDGES — at a block's end or
-// in a split block — never between two ops of one lowering. ⇒ **a new post-ISEL splice that can touch
-// x16, or an encoder-tier op that clobbers it, breaks every pair in this file.** Two such encoder-tier
-// clobbers already exist undeclared (`arm64FpLoadRdata`, `xchgRegReg`'s GPR swap) and are safe only
-// because neither is ever SPLICED between a pair — `arm64JumpTable` declares the same clobber as
-// `implicitDefs: 0x30000` and is the shape the other two should take.
+// spill or reload is a frame-slot form off x29 (`arm64EmitFrameSlot`) — and where the frame outgrows the
+// scaled field it folds its address into **x17**, deliberately not x16, for exactly this reason
+// (`arm64EmitWideFrameSlot` carries that argument in full); a remat is `arm64MovImm` into an ALLOCATABLE
+// register; and SSA destruction's `movRegReg`/`xchgRegReg` go on EDGES — at a block's end or in a split
+// block — never between two ops of one lowering. ⇒ **a new post-ISEL splice that can touch x16 breaks
+// every pair in this file**, and the fix for such a splice is to give it x17, which no pair spans.
+//
+// The two ENCODER-TIER x16 clobbers (`arm64FpLoadRdata`, `xchgRegReg`'s GPR swap) are a different
+// question and are safe for a different reason: neither is spliced by anything, so neither can land
+// between a pair. `arm64FpLoadRdata` is ISEL-emitted (and NOT rematerializable —
+// `SplitLiveRanges.opIsConstMaterialization` answers false for it, so the splitter re-emits `arm64MovImm`
+// and never it), and `xchgRegReg` is spliced only AFTER coloring, on an edge. Declaring either clobber
+// would buy nothing, because x16 is not allocatable — see each op's note in `TargetDialect`.
 let Arm64Scratch = Arm64Register.x16
 
 // The bitmask the LOGICAL `not` flips: a bool lives in the 0/1 domain, so complementing it is

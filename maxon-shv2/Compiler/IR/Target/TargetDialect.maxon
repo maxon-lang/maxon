@@ -485,6 +485,18 @@ export union TargetOp
 	// rule the colorer relies on — legal precisely because the allocator never sees
 	// it (it is spliced in AFTER coloring, so it is invisible to liveness/coloring).
 	// `xchg` does NOT set flags. Appended at the END of the reg-operand ALU band.
+	//
+	// ⚠ ARM64 ENCODES IT THROUGH x16 (AArch64 has no `xchg`, so a GPR pair swaps in three moves through
+	// the IP scratch), AND `implicitDefs` MUST STAY 0 — it is not an omission and it is not fixable here.
+	// This is a SHARED x64+arm64 arm: `RegNum` 16 is arm64's `x16` but x64's `xmm0`, so a mask naming it
+	// would hand x64 a fact that is not x64's — the exact tier violation the arm64/x64 split exists to
+	// prevent. On x64 it lowers to a real `xchg` with no scratch at all, where 0 is simply correct.
+	//
+	// Nothing reads the field for this op in any case, and that is ASSERTED rather than assumed:
+	// `targetOpOperands` PANICS on `xchgRegReg` ("a POST-COLORING physical op … must never reach the
+	// operand model"), so liveness, the splitter and the colorer cannot see one. It is spliced in on an
+	// EDGE after coloring, which is also why its x16 write cannot land between one of the isel's `x16`
+	// producer/consumer pairs (see `StdToArm64Conversion.Arm64Scratch`).
 	xchgRegReg(a TargetVReg, b TargetVReg) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
 	// Direct near call to a named function (`call rel32`). The concat step
 	// resolves `targetName` to the callee's `.text` placement as a rel32
@@ -1109,6 +1121,22 @@ export union TargetOp
 	arm64Fabs(dest TargetVReg, src TargetVReg) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
 	// `ldr d, [pc-rel rdata]` — load an f64 constant from `.rdata` via the ADRP+LDR pair. One plain
 	// def reading no allocatable register; the float twin of `leaRdata`. isMemory (a load).
+	//
+	// ⚠ ITS ENCODER WRITES x16 (the ADRP+ADD lands the constant's address there), AND `implicitDefs` IS
+	// STILL 0 — DELIBERATELY, not by omission. `implicitDefs` exists to tell the ALLOCATOR which registers
+	// it must keep a live value out of, and x16 is outside arm64's allocatable pool, so there is no value
+	// to keep out: declaring 0x10000 would reserve nothing (`arm64JumpTable`'s own note below says as much
+	// of the same two bits). What it WOULD do is make `SplitLiveRanges.opIsFixedRegisterPoint` answer true
+	// at every f64-literal load — a tie-break in the splitter's peak ranking — i.e. pay in spill decisions
+	// for a guarantee it does not buy.
+	//
+	// The hazard a mask cannot express, and which is the real question, is whether this op can be SPLICED
+	// between one of the isel's `x16` producer/consumer pairs (see `StdToArm64Conversion.Arm64Scratch`).
+	// It cannot: it is ISEL-emitted, so it is already in the stream those pairs are minted into, and it is
+	// not rematerializable — `SplitLiveRanges.opIsConstMaterialization` answers false for it, so the
+	// splitter spills and reloads an f64 constant rather than re-emitting this op. A pass that ever DOES
+	// splice one is what would break the scheme, and no mask here would have caught it; the wide-frame
+	// fold's answer to that same problem is to use x17, which no pair spans.
 	arm64FpLoadRdata(dest TargetVReg, label ByteArray) = TargetOpMeta{isMemory: true, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
 	// A GOT-indirect libSystem import call (`adrp x16, GOTPAGE; ldr x16, [x16, GOTOFF]; blr x16`) — the
 	// macOS twin of x64's `iatCall`, used by the arm64 isel to lower `osAllocPages`→`mmap` and

@@ -114,13 +114,14 @@ type Arm64RuntimeAsm
 	end 'placeLabel'
 
 	// The `[x29 + off]` byte offset of local slot `index`. arm64 slots grow UPWARD from the frame
-	// record (unlike x64's, which grow down from rbp), which is the same `[x29 + 16 + slot*8]`
-	// arithmetic `arm64SlotDisplacement` gives the allocator's spills.
+	// record (unlike x64's, which grow down from rbp), so a runtime chunk's local is at the SAME
+	// displacement the allocator's spills are — read from `arm64SlotDisplacement` rather than respelled,
+	// which is what keeps a future change to the frame layout from moving one and not the other.
 	export function slotOffset(index StackSize) returns MachineWord
 		if index >= self.slotCount 'outOfFrame'
 			panic("Arm64RuntimeAsm.slotOffset: slot {index} is outside the {self.slotCount} this frame reserved — `beginFunction` was asked for too few slots")
 		end 'outOfFrame'
-		return Arm64FrameRecordBytes + index * SpillSlotBytes
+		return arm64SlotDisplacement(index)
 	end 'slotOffset'
 end 'Arm64RuntimeAsm'
 

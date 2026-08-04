@@ -98,22 +98,74 @@ end 'insertArm64FrameForFunction'
 //
 // ⚠ REWRITES IN PLACE, at the SAME `module.ops` index. `block.opRefs` entries are indices into that array,
 // so appending a replacement instead would leave every reference naming the unrewritten op.
+//
+// ⚠ THE DISPLACEMENT IS THE WHOLE FRAME PLUS THE ARGUMENT REGION, SO IT OUTRUNS THE SCALED FIELD SOONER
+// THAN A SPILL SLOT DOES — and it is `frameSize` that decides, not the argument's own position. A function
+// with more than eight arguments of a file and a frame past 32760 bytes reaches it; both halves are
+// ordinary (`wide-spill-frames/wide-incoming-argument-past-the-scaled-imm12`). This pass is therefore the
+// SECOND door that folds a wide frame address, and it folds the same way the encoder's spill/reload does
+// — `arm64WideFrameScratchBase` into the IP1 scratch — because the alternative is a `loadRegBaseDisp` the
+// encoder can only panic on (`arm64ScaledImm12` asserts its caller already folded; the isel could not
+// have, since it does not know the frame size).
 function resolveArm64IncomingArgs(module TargetModule, func IrFunction, frameSize StackSize, outgoingArgSize StackSize)
-	let incomingBase = (frameSize - outgoingArgSize) as Imm32
+	let incomingBase = frameSize - outgoingArgSize
+	// The `add x17, x29, #hi` folds this pass has to splice in, in ASCENDING block position. Collected
+	// per block and spliced ONCE, because `insertOpRef` shifts a suffix of `opRefs` on every call — the
+	// same reason the splitter batches its reloads. Reused across blocks rather than reallocated.
+	var foldPositions = BlockOpPosArray.create()
+	var foldOps = OpIndexArray.create()
+
 	for blockRef in func.blockRefs 'eachBlock'
-		let block = try module.blocks.get(blockRef) otherwise panic("resolveArm64IncomingArgs: blockRef from func.blockRefs not in module.blocks")
-		for opIdx in block.opRefs 'eachOp'
+		var block = try module.blocks.get(blockRef) otherwise panic("resolveArm64IncomingArgs: blockRef from func.blockRefs not in module.blocks")
+		foldPositions.clear()
+		foldOps.clear()
+
+		for pos in 0 upto block.opRefs.count() 'eachOp'
+			let opIdx = try block.opRefs.get(pos) otherwise panic("resolveArm64IncomingArgs: opRefs.get OOB at {pos}")
 			let op = try module.ops.get(opIdx) otherwise panic("resolveArm64IncomingArgs: opIdx {opIdx} not in module.ops")
 			match op 'o'
-				arm64LoadIncomingArg(dest, slot) then try module.ops.set(opIdx, value: TargetOp.loadRegBaseDisp(dest, base: arm64PhysVReg(Arm64FramePointerRegNum), disp: incomingBase + ((slot * SpillSlotBytes) as Imm32), width: X64AccessWidth.word64)) otherwise panic("resolveArm64IncomingArgs: ops.set OOB at {opIdx}")
+				arm64LoadIncomingArg(dest, slot) then resolveOneArm64IncomingArg(module, opIdx: opIdx, at: pos, dest: dest, byteOffset: incomingBase + slot * SpillSlotBytes, foldPositions: foldPositions, foldOps: foldOps)
 				prologue to callMem then break 'o'
 				arm64StoreOutgoingArg then break 'o'
 				// Both bit reinterpretations are already concrete — each names two registers and no frame fact.
 				arm64FmovGprFp to arm64FmovFpGpr then break 'o'
 			end 'o'
 		end 'eachOp'
+
+		spliceOpRefs(block, positions: foldPositions, opIdxs: foldOps, from: 0, to: foldOps.count())
 	end 'eachBlock'
 end 'resolveArm64IncomingArgs'
+
+// Rewrite ONE `arm64LoadIncomingArg` in place into the `[x29 + byteOffset]` load it means, recording an
+// address fold in the batch when the displacement has no scaled form.
+//
+// The fold is `add x17, x29, #hi, lsl #12` immediately before the load, which then carries the remainder
+// in its own 12-bit field — the IR-tier twin of `arm64EmitWideFrameSlot`, sharing its split so the two
+// cannot disagree. x17 rather than x16 for the reason that helper states in full: x16 is the register the
+// isel mints spliceable producer/consumer pairs in, and this pass is a splicer.
+//
+// ⚠ THIS MINTS THE ONE x17 PAIR THAT SPANS TWO OPS, AND IT IS SAFE ONLY BECAUSE NOTHING RUNS AFTER IT.
+// `insertArm64PrologueEpilogue` is the LAST IR pass in `buildArm64Backend` — encoding follows it directly
+// — so no later pass can splice anything between the `add` and the load. A new IR pass placed after this
+// one breaks that, and would have to give this fold a register of its own or run before the prologue.
+function resolveOneArm64IncomingArg(module TargetModule, opIdx OpIndex, at BlockOpPos, dest TargetVReg, byteOffset StackSize, foldPositions BlockOpPosArray, foldOps OpIndexArray)
+	if arm64ByteOffsetFitsScaledImm12(byteOffset, scale: SpillSlotBytes as NonZeroWord) 'direct'
+		arm64SetIncomingArgLoad(module, opIdx: opIdx, dest: dest, base: Arm64FramePointerRegNum, disp: byteOffset)
+		return
+	end 'direct'
+
+	let scratchBase = arm64WideFrameScratchBase(byteOffset)
+	foldPositions.push(at)
+	foldOps.push(module.ops.count())
+	module.ops.push(TargetOp.arm64AddImm(arm64PhysVReg(Arm64Ip1RegNum), src: arm64PhysVReg(Arm64FramePointerRegNum), imm: scratchBase as Imm32))
+	arm64SetIncomingArgLoad(module, opIdx: opIdx, dest: dest, base: Arm64Ip1RegNum, disp: byteOffset - scratchBase)
+end 'resolveOneArm64IncomingArg'
+
+// Overwrite `opIdx` with the resolved incoming-argument load. Both the direct and the folded arm land
+// here so the op's shape — a `word64` `[base + disp]` load — is spelled once.
+function arm64SetIncomingArgLoad(module TargetModule, opIdx OpIndex, dest TargetVReg, base RegNum, disp StackSize)
+	try module.ops.set(opIdx, value: TargetOp.loadRegBaseDisp(dest, base: arm64PhysVReg(base), disp: disp as Imm32, width: X64AccessWidth.word64)) otherwise panic("resolveArm64IncomingArgs: ops.set OOB at {opIdx}")
+end 'arm64SetIncomingArgLoad'
 
 // Prepend, to the entry block: the frame-open `arm64Prologue`, then a `storeSlotReg` saving each used
 // callee-saved register to its dedicated slot. Built by prepending each save and the prologue LAST
