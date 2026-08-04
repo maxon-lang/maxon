@@ -324,7 +324,16 @@ export let AdvanceMethodName = b"advance"
 // lowerings do NOT name them — they read the method off the protocol `builtinInterface` synthesizes
 // (`requireBuiltinInterface`), so the method searched for and its result type stay one fact.
 export let CompareMethodName = b"compare"
-let CloneMethodName = b"clone"
+
+// ⚠ **`clone` IS EXPORTED FOR THE OPPOSITE REASON TO THE THREE ABOVE: NO `<type>.clone` SYMBOL EXISTS, AND
+// THE TOKEN IS STILL WHAT EVERY `clone` DOOR MATCHES ON.** `Cloneable.clone` is declared here
+// (`builtinInterface`) and advertised here (`builtinConformerLoweredMethodNames`); the primitive lowering,
+// the `String` surface and the `Array` surface each serve it, and only the last two copy anything.
+// It held these same bytes a SECOND time as `Parser.CloneMethod` until the primitive lowering arrived and
+// would have made the advertisement and the arm read different constants — the one-fact-written-twice
+// `Parser`'s own shared-method block is written against, across the file boundary that block cannot see.
+export let CloneMethodName = b"clone"
+
 let FormatParamName = b"format"
 let OtherParamName = b"other"
 export let HashValueTypeName = b"HashValue"
@@ -1702,20 +1711,43 @@ export function builtinConformerMethodNameList(typeName ByteArray) returns ByteA
 	return names
 end 'builtinConformerMethodNameList'
 
-// ⭐ **EVERYTHING A DIRECT `<value>.<name>(…)` DISPATCH ON A BUILTIN CONFORMER RESOLVES, as a diagnostic
-// prints it** — "`hash`, `equals`, `compare`, `toString`". Joined from the list above rather than walked a
-// second time, for the reason stated there, plus `toString`, which that list structurally cannot carry.
+// ⭐ **THE METHODS `Parser.dispatchBuiltinConformanceMethod` LOWERS INSTEAD OF CALLING** — the arms that sit
+// AHEAD of the conformance lookup, each because the reference's body is one expression and shv2 has no
+// `extension` mechanism to hang it on: `toString` is the conversion `"{x}"` already performs
+// (`stdlib/PrimitiveExtensions.maxon`'s `return "{self}"`), and `clone` on a value type is the IDENTITY
+// (that same file's three `return self` bodies). Neither emits a call, so neither owes a symbol.
 //
-// ⚠ **`toString` IS APPENDED HERE AND NOT PUSHED INTO `builtinConformerMethodNameList`, and the two are
-// different questions rather than two spellings of one.** That list answers *"which INTRINSIC CONFORMANCE
-// methods does this type supply?"* — every entry names an installed `<type>.<method>` impl a witness slot
-// can be stamped with. `toString` names none: `Parser.dispatchBuiltinConformanceMethod` LOWERS it to the
-// very conversion `"{x}"` lowers to, so there is no symbol and none is needed. Pushing it into the
-// conformance list would also be read by `Parser.stringSurfaceMemberNames`, which GATES the `String`
-// dispatcher on that list — admitting `s.toString()` at the gate and then finding no supplier behind it.
+// ⚠⚠ **THESE ARE APPENDED TO THE ADVERTISEMENT AND NOT PUSHED INTO `builtinConformerMethodNameList`, and
+// the two are different questions rather than two spellings of one.** That list answers *"which INTRINSIC
+// CONFORMANCE methods does this type supply?"* — every entry names an installed `<type>.<method>` impl a
+// witness slot can be stamped with, and a lowering names none. Pushing one in would also be read by
+// `Parser.stringSurfaceMemberNames`, which GATES the `String` dispatcher on that list — admitting the name
+// at the gate and then finding no supplier behind it.
+//
+// ⇒ **AND THAT IS WHY `Stringable` AND `Cloneable` ARE BOTH DELIBERATELY ABSENT FROM
+// `isIntrinsicBuiltinConformance`** (see its header): that predicate is the WITNESS-TABLE answer, so
+// admitting either would make `where T is Stringable`/`is Cloneable` typecheck against a slot nothing can
+// fill — a link-time panic in place of today's clean refusal. The language-level conformance is real; the
+// dictionary-passing one is not built, and the two are kept apart on purpose.
+//
+// It is a LIST rather than two appended lines so that the advertisement and the arms grow together: a third
+// lowering joins here and is named by the refusal in the same edit.
+function builtinConformerLoweredMethodNames() returns ByteArrayArray
+	var names = ByteArrayArray.create()
+	names.push(ToStringMethodName)
+	names.push(CloneMethodName)
+	return names
+end 'builtinConformerLoweredMethodNames'
+
+// ⭐ **EVERYTHING A DIRECT `<value>.<name>(…)` DISPATCH ON A BUILTIN CONFORMER RESOLVES, as a diagnostic
+// prints it** — "`hash`, `equals`, `compare`, `toString`, `clone`". Joined from the conformance list rather
+// than walked a second time, for the reason stated there, plus the LOWERED names above, which that list
+// structurally cannot carry.
 export function builtinConformerDispatchMethodNames(typeName ByteArray) returns String
 	var names = builtinConformerMethodNameList(typeName)
-	names.push(ToStringMethodName)
+	for loweredName in builtinConformerLoweredMethodNames() 'eachLowered'
+		names.push(loweredName)
+	end 'eachLowered'
 
 	var rendered = ""
 	for methodName in names 'eachMethod'

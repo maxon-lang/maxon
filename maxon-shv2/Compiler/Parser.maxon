@@ -3518,8 +3518,10 @@ let InsertMethod = b"insert"
 // and `Set.count` would answer to different tokens, each dispatcher still compiling.
 //
 // ⚠ `SliceMethod` and `AppendMethod` are among the throwing seven and so live in `SignatureIndex` — see the
-// roster block above, which is where that reason is stated.
-let CloneMethod = b"clone"
+// roster block above, which is where that reason is stated. `clone` left this block for the same kind of
+// reason and the block's own rule: it is `Cloneable`'s method name, `IrInterface` already declares the
+// protocol with it and now advertises it, so the two files held one spelling twice — see
+// `IrInterface.CloneMethodName`, which every dispatcher here reads.
 let CountMethod = b"count"
 let IsEmptyMethod = b"isEmpty"
 
@@ -3711,7 +3713,7 @@ function arraySurfaceMemberNames() returns ByteArrayArray
 	names.push(CountMethod)
 	names.push(ArrayCapacityMethod)
 	names.push(IsEmptyMethod)
-	names.push(CloneMethod)
+	names.push(CloneMethodName)
 	names.push(ArrayPushMethod)
 	names.push(ArrayReserveMethod)
 	names.push(ArrayResizeMethod)
@@ -3810,7 +3812,7 @@ function stringSurfaceMemberNames() returns ByteArrayArray
 	names.push(CodepointViewMethod)
 	names.push(Utf16ViewMethod)
 	names.push(IsEmptyMethod)
-	names.push(CloneMethod)
+	names.push(CloneMethodName)
 	names.push(StringReplaceFirstMethod)
 	names.push(StringStartIndexMethod)
 	names.push(StringEndIndexMethod)
@@ -8799,7 +8801,7 @@ export type Parser
 			return false
 		end 'notMethodCall'
 		let name = self.tokenAt(q).value
-		return name.equals(SliceMethod) or name.equals(CloneMethod) or name.equals(AppendMethod)
+		return name.equals(SliceMethod) or name.equals(CloneMethodName) or name.equals(AppendMethod)
 	end 'arrayCopyMethodAt'
 
 	// ⭐ **THE `self . <field> =` REASSIGNMENT HEAD — ONE token-shape recognizer (P1.7 Finding A).** Both the
@@ -32375,7 +32377,7 @@ export type Parser
 		// `return self`: that hands the caller a second owner of the receiver's box, and the caller's drop
 		// takes the receiver's bytes with it (the reference refuses it for the identical reason at its own
 		// `clone()`, where the note is the Stage 0 bug `let b = a.toLower()` lowercasing `a`).
-		if methodTok.value.equals(CloneMethod) 'clone'
+		if methodTok.value.equals(CloneMethodName) 'clone'
 			try self.consumeEmptyArgList()
 			return self.emitOwnedRuntimeResult(StrCloneName, args: singletonArgs(recv.value), resultTag: ValueTypeTag.string, resultNameId: UnnamedTypeId, range: range)
 		end 'clone'
@@ -34050,31 +34052,101 @@ export type Parser
 		let methodTok = try self.consume(TokenKind.identifier)
 		let typeName = builtinConformerName(conformer)
 
-		// ⭐⭐ **`x.toString()` IS `Stringable`'S METHOD AND IT REACHES NO IMPL — IT IS LOWERED, exactly as
-		// `"{x}"` is** (`specs-shv2/primitive-stringable.md`, whose Notes say "uses the same conversion as
-		// string interpolation" and mean it literally). Both reference compilers say the same thing by
-		// construction: `stdlib/PrimitiveExtensions.maxon` gives `int`/`float`/`bool` an
-		// `extension … implements … Stringable` whose whole body is `return "{self}"`, so a reference's
-		// `x.toString()` is a call frame around one interpolation. shv2 has no `extension` mechanism to hang
-		// that body on, so it emits the body's ONE expression here and skips the frame — which is why this arm
-		// sits AHEAD of the conformance lookup rather than adding a fourth protocol to it.
-		//
-		// ⚠ **AND THAT IS WHY `Stringable` IS DELIBERATELY ABSENT FROM `isIntrinsicBuiltinConformance`.** That
-		// predicate is the WITNESS-TABLE answer: every conformance it admits owes a real `<type>.<method>`
-		// symbol for a slot's reloc to name (see its header). A lowering has no symbol, so admitting
-		// `Stringable` there would make `where T is Stringable` typecheck against a slot nothing can fill —
-		// a link-time panic in place of today's clean refusal. The language-level conformance is real; the
-		// dictionary-passing one is not built, and the two are kept apart on purpose.
+		// ⭐⭐ **THE TWO LOWERED PROTOCOL METHODS COME FIRST, and neither reaches an impl.** Both reference
+		// compilers give `int`/`float`/`bool` these through an `extension … implements …` in
+		// `stdlib/PrimitiveExtensions.maxon` whose whole body is ONE expression; shv2 has no `extension`
+		// mechanism to hang a body on, so it emits that one expression here and skips the frame — which is why
+		// these arms sit AHEAD of the conformance lookup rather than adding protocols to it. They are named
+		// once, beside the refusal that advertises them, in `IrInterface.builtinConformerLoweredMethodNames`,
+		// whose header carries why a lowering is kept out of `isIntrinsicBuiltinConformance`.
+
+		// `x.toString()` is `Stringable`'s method and lowers to exactly what `"{x}"` lowers to
+		// (`specs-shv2/primitive-stringable.md`, whose Notes say "uses the same conversion as string
+		// interpolation" and mean it literally; the reference's body is `return "{self}"`).
 		if methodTok.value.equals(ToStringMethodName) 'stringableLowering'
 			try self.consumeEmptyArgList()
 			return try self.emitValueToString(receiver, exprTok: methodTok, range: SourceRange.between(baseTok, last: methodTok))
 		end 'stringableLowering'
+
+		// ⭐ **`x.clone()` IS `Cloneable`'S METHOD AND ITS LOWERING IS THE IDENTITY** — the reference's three
+		// bodies are literally `return self` (`stdlib/PrimitiveExtensions.maxon:25-27`, `:70-72`, `:98-100`),
+		// because a primitive IS its value: there is nothing to copy that handing back the receiver has not
+		// already done. So the call frame is skipped like `toString`'s, and no `<type>.clone` symbol exists or
+		// is owed.
+		//
+		// ⚠⚠ **HANDING BACK THE RECEIVER IS SOUND HERE AND IS EMPHATICALLY WRONG FOR A MANAGED RECEIVER** —
+		// see `dispatchStringMethod`'s `clone` arm, which calls `__str_clone` precisely because returning the
+		// receiver would hand the caller a second owner of one box. What makes the difference is not this arm's
+		// judgement but WHICH receivers can reach it: `dispatchMethodOnReceiver` routes a `String` receiver to
+		// `dispatchStringMethod` and a `Character` receiver to `dispatchCharacterMethod` several arms above the
+		// builtin-conformer arm, so the only conformers that arrive are the three SCALARS, which own no
+		// storage, are copied by every assignment already, and can no more be aliased by this than `let y = x`
+		// can. ⇒ **admitting a managed conformer to `builtinConformerOfTag` without first giving it its own
+		// dispatcher would make this arm a use-after-free**, which is the same ordering fact that header
+		// already calls load-bearing.
+		if methodTok.value.equals(CloneMethodName) 'cloneableLowering'
+			try self.consumeEmptyArgList()
+			return try self.emitPrimitiveClone(receiver, methodTok: methodTok)
+		end 'cloneableLowering'
 
 		match builtinConformerMethod(typeName, methodName: methodTok.value) 'lookup'
 			supplied(method) then return try self.emitBuiltinConformanceCall(func, receiver: receiver, conformer: conformer, method: method, baseTok: baseTok, methodTok: methodTok)
 			notSupplied then throw ParseError.unsupported("'{String.from(typeName)}' has no method named '{String.from(methodTok.value)}' — a builtin-typed receiver supplies {builtinConformerDispatchMethodNames(typeName)}", line: methodTok.line, column: methodTok.column)
 		end 'lookup'
 	end 'dispatchBuiltinConformanceMethod'
+
+	// ⭐⭐ **THE VALUE `x.clone()` DENOTES — the receiver, EXCEPT THAT IT SHEDS THE RECEIVER'S RANGED
+	// TYPEALIAS, because `Cloneable.clone() returns Self` and `Self` here is the CONFORMER, not the alias
+	// the receiver was written as.**
+	//
+	// ⚠⚠ **MEASURED AGAINST THE ORACLE, BOTH DOMAINS, AND THE ALIAS-PRESERVING READING FAILED THIS SPEC'S
+	// OWN CASE.** The reference conforms `int`/`float`/`bool` through `extension int`/`extension float`/
+	// `extension bool`, so the `Self` those `clone() returns Self` bodies name is the EXTENDED PRIMITIVE —
+	// a `Byte` receiver's clone is an `int`, a `Percent` receiver's is a `float`. Measured on the bootstrap:
+	// `x.clone() as Byte` and `p.clone() as Percent` both COMPILE, where `x as Byte` on the same `x` is
+	// E3010 "unneeded cast" in both compilers alike. `primitive-cloneable/byte.clone` is exactly that
+	// program — `let y = x.clone() as Integer` — and returning the receiver unchanged refused it, on a
+	// diagnostic that was true about shv2's typing and wrong about the language's.
+	//
+	// ⭐ **AND IT IS THE READING SHV2 ALREADY GIVES `Self` IN ARGUMENT POSITION.**
+	// `requireBuiltinConformanceSelfArgs` admits an `equals`/`compare` argument by CONFORMER
+	// (`valueIsConformer`, which collapses `Byte` and `Integer` alike to `int`), never by the alias the
+	// argument was written as. One rule now answers `Self` in both positions.
+	//
+	// ⭐ **NOTHING IS EMITTED UNLESS THE ANSWER WOULD OTHERWISE MOVE** — `applyCast`'s discipline, whose five
+	// mint questions each fire only where a shared value would carry a fact that is not the result's. A
+	// receiver denoting no ranged alias (every `bool`, and the overwhelming majority of `int`s and `float`s:
+	// a literal, a plain binding, a parameter typed `int`) IS the whole answer, so `let x = 42` then
+	// `x.clone()` costs not one instruction — which is what makes this a lowering rather than a call.
+	function emitPrimitiveClone(receiver ValueId, methodTok Token) returns ValueId throws ParseError
+		match self.valueDenotedAlias(receiver) 'denoted'
+			undeclared then return receiver
+			declared(alias) then return try self.emitAliasFreeCopy(receiver, alias: alias, methodTok: methodTok)
+		end 'denoted'
+	end 'emitPrimitiveClone'
+
+	// ⭐ **THE SAME NUMBER UNDER A FRESH SSA IDENTITY THAT DENOTES NO ALIAS.** A fresh ValueId is the ONLY
+	// way to say it: the alias is recorded per VALUE (`ValueDeclaredAliasMap`) and the receiver's entry is
+	// the receiver's, so a result that shares its id shares its alias. `emitBinOp` mints its result
+	// `UnnamedTypeId` at the operator's own domain tag, which is precisely the plain primitive wanted here.
+	//
+	// ⚠⚠ **`v - 0` AND NOT `v + 0`, AND THE DIFFERENCE IS ONLY VISIBLE ON A FLOAT.** `-0.0 + 0.0` is `+0.0`
+	// — a wrong answer for `(-0.0).clone()` — while `-0.0 - 0.0` is `-0.0`. Subtracting the domain's zero is
+	// an EXACT identity on every input of both domains: signed zeroes, subnormals, infinities and NaN all
+	// come back bit-for-bit, and an integer subtract of 0 cannot overflow. (`applyCast`'s int-only retag
+	// emitter uses `+ 0` and is correct there for the same reason it would not be here — no float reaches
+	// it.) `recordBinOpFold` carries a constant receiver's value across, so the parser's const view — which
+	// is what turns a shift COUNT into a compile-time decision — survives the mint.
+	//
+	// The alias itself says which zero, so the domain is read off the very fact that made a copy necessary
+	// rather than off a second classifier: every ranged typealias is an int range or a float range
+	// (`aliasIsFloat`), and there is no third.
+	function emitAliasFreeCopy(receiver ValueId, alias RangedTypeAlias, methodTok Token) returns ValueId throws ParseError
+		let range = SourceRange.ofToken(methodTok)
+		let zero = self.emitLiteral(FloatZeroBits, valueType: MaxonType.float, range: range) if aliasIsFloat(alias) else self.emitLiteral(0, valueType: MaxonType.integer, range: range)
+
+		return try self.emitBinOp(receiver, rhs: zero, op: MaxonBinOp.sub, opTok: methodTok)
+	end 'emitAliasFreeCopy'
 
 	// Parse the argument list and emit the call. The receiver is argument 0 and is BORROWED, so no incref is
 	// emitted here and no drop is owed there, exactly as an instance method's receiver rides. That is a
@@ -36590,7 +36662,7 @@ export type Parser
 			try self.consumeEmptyArgList()
 			return self.emitRuntimeCall(ArrIsEmptyName, args: singletonArgs(arr), resultTag: ValueTypeTag.boolean, resultNameId: UnnamedTypeId, range: range)
 		end 'isEmpty'
-		if methodTok.value.equals(CloneMethod) 'clone'
+		if methodTok.value.equals(CloneMethodName) 'clone'
 			try self.requireArrayCopyMethodSupported(giid, methodTok: methodTok)
 			try self.consumeEmptyArgList()
 			return self.inheritArrayElementSurface(self.emitArrayCloneCall(giid, arr: arr, range: range), source: arr)
