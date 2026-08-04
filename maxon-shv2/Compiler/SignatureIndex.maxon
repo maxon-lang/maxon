@@ -4027,6 +4027,11 @@ end 'FreeFunctionContest'
 // costs one map miss and no allocation on every call the compiler validates. NEVER mutated.
 let sharedEmptyContestedSpellings = ByteArrayArray.create()
 
+// The head of the reserved key a contested ROOT declaration's sweep entries are mirrored under — see
+// `ProgramSignatures.rootDeclarationShadowName`. It joins through `overloadRegistrationName`, so the
+// `#` that makes every synthesized name unspellable is stated in ONE place for all of them.
+let RootDeclarationShadowPrefix = "__rootDecl"
+
 export type ProgramSignatures
 	// Function name -> its declared return type. Last-wins on a duplicate name, exactly as the
 	// project's own `funcReturnTypes` registry is; the duplicate itself is reported by
@@ -5722,18 +5727,41 @@ export type ProgramSignatures
 	// ⚠ **THE BARE ENTRIES ARE COPIED, NOT MOVED, AND THAT IS DELIBERATE.** A bare name whose declarations
 	// all moved must still ANSWER "some declaration binds this name" — that is what lets `SemanticCheck`
 	// report E3095 ("declared, twice, qualify it") where a removal would leave it reporting E3004 ("no such
-	// function"), the blunter and wrong answer. Which of the stale bare entries survives does not matter: the
-	// only call that reads one is a bare call to a contested name, and that call is E3095.
+	// function"), the blunter and wrong answer.
+	//
+	// ⛔⛔ **WHICH OF THE STALE BARE ENTRIES SURVIVES DOES MATTER WHENEVER A CONTESTANT IS AT THE ROOT, AND
+	// THIS COMMENT SAID THE OPPOSITE (BATCH2 slice 6).** It read *"the only call that reads one is a bare
+	// call to a contested name, and that call is E3095"* — true only while every contestant is in a
+	// SUBDIRECTORY. `addContestedSpelling` files no spelling for a root declaration (it has none to offer),
+	// so with one contestant at the root the candidate set can never reach the TWO
+	// `SemanticCheck.reportAmbiguousCrossFileCall` requires: no E3095 is reported, the bare call proceeds,
+	// and `freeCallCallee` routes it to the bare key — which by then holds whichever contestant folded last.
+	// ⇒ **THE BARE KEY IS THE ROOT DECLARATION'S HOME, not a leftover**, which is why the root arm below
+	// mirrors it and every other contestant puts it back. MEASURED against a root declaration's own
+	// signature two lines above the call: `E2004: Function 'pick' does not return a value` on a
+	// value-returning one; `E3034: unknown enum case` on a `try … otherwise (e)` bound to the
+	// subdirectory's error enum; and — worst, because it is a wrong ANSWER and not a diagnostic — a root
+	// declaration with no parameter default silently borrowing the subdirectory's.
 	//
 	// ⚠ **NO HASH MIXING.** Every fact copied here was already mixed into the parse-memo hash under its bare
-	// name by the record function that wrote it, and the qualified key is DERIVED from declarations that hash
-	// already covers — mixing again would make the memo key depend on the copy rather than on the program.
-	// The same holds of the DEFAULT-HELPER rename below: its inputs are this declaration's bare name and its
-	// module directory, both of which already move the hash.
+	// name by the record function that wrote it, and both the qualified key and the root's shadow key are
+	// DERIVED from declarations that hash already covers — mixing again would make the memo key depend on the
+	// copy rather than on the program. The same holds of the DEFAULT-HELPER rename below: its inputs are this
+	// declaration's bare name and its module directory, both of which already move the hash.
 	export function refileContestedFreeFunction(bareName ByteArray, registrationName ByteArray)
-		if registrationName.equals(bareName) 'aRootDeclarationKeepsTheBareKey'
+		// ⭐⭐ **A ROOT DECLARATION HAS NO QUALIFIED KEY TO MOVE TO, SO IT IS MIRRORED INSTEAD.** It keeps the
+		// bare key — that is the rule, not a fallback — and the mirror is what every LATER contestant's fold
+		// restores it from, because the record loops that run between here and there write the bare key too.
+		//
+		// It runs exactly ONCE per contested root declaration, and always at an instant the bare key holds
+		// that declaration's own entries: either from the contest pass of the file that made the name
+		// contested (the root is the INCUMBENT, and the newcomer's own tables are not folded yet), or from
+		// the end of the ROOT file's own fold (the root is a later contestant, and its record loops have just
+		// run). There is no third caller and no fourth moment.
+		if registrationName.equals(bareName) 'aRootDeclarationOwnsTheBareKey'
+			self.copyFreeFunctionSweepEntries(bareName, to: self.rootDeclarationShadowName(bareName))
 			return
-		end 'aRootDeclarationKeepsTheBareKey'
+		end 'aRootDeclarationOwnsTheBareKey'
 
 		self.contestedRegistrationNames.insert(registrationName)
 
@@ -5757,27 +5785,97 @@ export type ProgramSignatures
 		//
 		// It cannot fire for an ordinary contest — `alpha.pick` is a name only `alpha/`'s declaration mints —
 		// so a directory named after no type pays one map probe and keeps every entry.
-		if self.returnTypes.contains(registrationName) 'anotherDeclarationAlreadyOwnsThisKey'
-			return
-		end 'anotherDeclarationAlreadyOwnsThisKey'
+		//
+		// ⚠ **IT IS NO LONGER AN EARLY RETURN**, because the bare key still has to be handed back to the root
+		// declaration below. Declining to TAKE another declaration's key says nothing about whose entries the
+		// key this fold overwrote must end up holding.
+		if not self.returnTypes.contains(registrationName) 'thisKeyIsThisDeclarationsToTake'
+			self.copyFreeFunctionSweepEntries(bareName, to: registrationName)
+			if let defaults = try self.funcParamDefaults.get(bareName) 'hasParameterDefaults'
+				self.renameParamDefaultHelpers(defaults, bareName: bareName, registrationName: registrationName)
+			end 'hasParameterDefaults'
+		end 'thisKeyIsThisDeclarationsToTake'
 
-		if let returnType = try self.returnTypes.get(bareName) 'hasReturnType'
-			self.returnTypes.upsert(registrationName, value: returnType)
-		end 'hasReturnType'
-		if let surface = try self.declaredReturnSurfaces.get(bareName) 'namesTheBufferAlias'
-			self.declaredReturnSurfaces.upsert(registrationName, value: surface)
-		end 'namesTheBufferAlias'
-		if let consumes = try self.funcParamConsumes.get(bareName) 'consumesAParameter'
-			self.funcParamConsumes.upsert(registrationName, value: consumes)
-		end 'consumesAParameter'
-		if let defaults = try self.funcParamDefaults.get(bareName) 'hasParameterDefaults'
-			self.funcParamDefaults.upsert(registrationName, value: defaults)
-			self.renameParamDefaultHelpers(defaults, bareName: bareName, registrationName: registrationName)
-		end 'hasParameterDefaults'
-		if let clause = try self.funcThrows.get(bareName) 'throws'
-			self.funcThrows.upsert(registrationName, value: clause)
-		end 'throws'
+		self.restoreRootDeclarationToBareKey(bareName)
 	end 'refileContestedFreeFunction'
+
+	// ⭐ **THE RESERVED KEY A CONTESTED *ROOT* DECLARATION'S SWEEP ENTRIES ARE MIRRORED UNDER.** The root is
+	// the unqualified namespace, so `freeFunctionRegistrationName` hands a root declaration back the BARE
+	// name — it has no second key of its own, and the one key it has is the one every later contestant's
+	// fold overwrites. This is that second key.
+	//
+	// It is spelled through `overloadRegistrationName` for the reason `paramDefaultHelperName` is: the `#`
+	// separator appears in no source identifier, so the key is UNSPELLABLE — no call can name it, no
+	// directory can mint it, and `freeFunctionRegistrationName` cannot collide with it however a project is
+	// laid out. It shares the five sweep maps rather than taking side tables of its own so that ONE routine
+	// files a declaration's facts and one reads them back; a parallel set of five would be free to disagree
+	// with the five about what a declaration says.
+	function rootDeclarationShadowName(bareName ByteArray) returns ByteArray
+		return overloadRegistrationName(RootDeclarationShadowPrefix.toByteArray(), suffix: bareName)
+	end 'rootDeclarationShadowName'
+
+	// ⭐⭐ **HAND THE BARE KEY BACK TO THE ROOT DECLARATION, after this fold's record loops overwrote it.**
+	// Called at the end of every NON-root contestant's refile, which is the last moment in that file's fold
+	// at which anything writes the bare key.
+	//
+	// A miss on the mirror is the common case and means what it says: no ROOT declaration contests this name,
+	// so every contestant has a qualified key, a bare call to the name is E3095, and which stale entry
+	// survives is genuinely nobody's business — the original premise, now scoped to where it is true.
+	// `returnTypes` is the presence flag because it is the one of the five that is NEVER absent: `record`
+	// writes a return type for every declaration, while the other four record only a positive fact.
+	function restoreRootDeclarationToBareKey(bareName ByteArray)
+		let shadow = self.rootDeclarationShadowName(bareName)
+		if not self.returnTypes.contains(shadow) 'noRootDeclarationContestsThisName'
+			return
+		end 'noRootDeclarationContestsThisName'
+
+		self.clearFreeFunctionSweepEntries(bareName)
+		self.copyFreeFunctionSweepEntries(shadow, to: bareName)
+	end 'restoreRootDeclarationToBareKey'
+
+	// ⭐ **THE FIVE PER-DECLARATION FACTS THE SWEEP FILES UNDER A FUNCTION NAME, COPIED FROM ONE KEY TO
+	// ANOTHER.** They travel together because they are exactly what a CALL SITE reads about a callee whose
+	// declaration it cannot see — `returnTypeOf`, `declaredReturnSurface`, `consumeOf`, `defaultsOf` and
+	// `throwsOf` — so a key holding four of them answers four
+	// questions about one declaration and the fifth about another.
+	//
+	// ⚠ **AN ABSENT FACT IS NOT COPIED, AND ABSENCE IS AN ANSWER IN FOUR OF THE FIVE** ("the plain surface",
+	// "borrows every parameter", "every parameter required", "does not throw"). A caller that needs the
+	// DESTINATION to inherit the source's absences too must therefore `clearFreeFunctionSweepEntries` first —
+	// which is what `restoreRootDeclarationToBareKey` does and what the qualified-key copy deliberately does
+	// not, its destination being a key nothing has written.
+	//
+	// The DEFAULT-HELPER rename is NOT part of this: it renames the helper a declaration's own real parse
+	// synthesizes, which is a property of the destination NAME rather than of the facts, and the mirror
+	// direction must leave those names alone.
+	function copyFreeFunctionSweepEntries(from ByteArray, to ByteArray)
+		if let returnType = try self.returnTypes.get(from) 'hasReturnType'
+			self.returnTypes.upsert(to, value: returnType)
+		end 'hasReturnType'
+		if let surface = try self.declaredReturnSurfaces.get(from) 'namesTheBufferAlias'
+			self.declaredReturnSurfaces.upsert(to, value: surface)
+		end 'namesTheBufferAlias'
+		if let consumes = try self.funcParamConsumes.get(from) 'consumesAParameter'
+			self.funcParamConsumes.upsert(to, value: consumes)
+		end 'consumesAParameter'
+		if let defaults = try self.funcParamDefaults.get(from) 'hasParameterDefaults'
+			self.funcParamDefaults.upsert(to, value: defaults)
+		end 'hasParameterDefaults'
+		if let clause = try self.funcThrows.get(from) 'throws'
+			self.funcThrows.upsert(to, value: clause)
+		end 'throws'
+	end 'copyFreeFunctionSweepEntries'
+
+	// Drop all five, so the copy that follows lands the source's ABSENCES as well as its entries. The
+	// booleans are discarded because a key with no entry is the ordinary case here, not an error: four of
+	// the five are written only by a declaration that has the fact to state.
+	function clearFreeFunctionSweepEntries(name ByteArray)
+		_ = self.returnTypes.remove(name)
+		_ = self.declaredReturnSurfaces.remove(name)
+		_ = self.funcParamConsumes.remove(name)
+		_ = self.funcParamDefaults.remove(name)
+		_ = self.funcThrows.remove(name)
+	end 'clearFreeFunctionSweepEntries'
 
 	// ⭐⭐ **A CONTESTED FUNCTION'S SYNTHESIZED DEFAULT HELPERS ARE RENAMED WITH IT (N1c review), AND THAT IS
 	// CORRECTNESS RATHER THAN TIDINESS.** `Project.paramDefaultHelperName`'s own header rests the mechanism's

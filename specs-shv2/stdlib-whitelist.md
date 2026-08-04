@@ -434,6 +434,37 @@ end 'main'
 mine 41
 ```
 
+⚠⚠ **THE CASE ABOVE IS A POSITIVE CONTROL AND ONE ON ITS OWN IS WORTH NOTHING — IT AGREES WITH
+THE STALE ANSWER.** Its user `sleep` returns nothing and so does `stdlib/Sleep.maxon`'s, so it
+cannot tell "the call reached the user's declaration" from "the call read whichever declaration
+folded last". The case below is the NEGATIVE control, and it is the one that failed: a user `sleep`
+that RETURNS a value against the listed module's VOID one. Selection already picked the user's (its
+`Ms` is what a range refusal named), while the RETURN TYPE came from a bare key the stdlib's fold
+had overwritten, so a legal program was refused `E2004: Function 'sleep' does not return a value` —
+contradicting a signature two lines above it. The rule is the PAIR; see `namespaces.md`'s
+`root-declaration-owns-the-bare-key` cases for the same defect with no stdlib in it at all.
+
+<!-- test: stdlib-whitelist.a-value-returning-user-free-function-outranks-a-void-listed-one -->
+```maxon
+typealias Ms = int(0 to 1000)
+
+function sleep(milliseconds Ms) returns Ms
+	return milliseconds + 7
+end 'sleep'
+
+function main() returns ExitCode
+	let r = sleep(1)
+	print("r={r}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+r=8
+```
+
 The two UAX #29 classifiers are the case that made this a DEFECT rather than a documentation gap.
 They were BARE-NAME BUILTINS in `parseCallNamed`, recognized before any registry is consulted, so a
 user's own `graphemeBreakProperty` compiled and was silently unreachable — measured, shv2 printed

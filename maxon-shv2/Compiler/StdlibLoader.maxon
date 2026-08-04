@@ -126,10 +126,13 @@
 //
 // ⭐ THE COLLISION RULE FOR ADDING AN ENTRY. A listed module must declare no name a user program
 // declares and no builtin type/name.
-//   • FREE-FUNCTION-name collisions — a user `function sleep` against `Sleep.maxon`'s, or two stdlib
-//     modules — are caught LOUDLY by the whole-program duplicate-function check (E3006,
-//     `commitFuncSignatures` in ParseStaging), because a stdlib file merges through the identical path a
-//     user file does. Nothing to add here; `stdlib-whitelist.md` pins it.
+//   • FREE-FUNCTION-name collisions split by WHOSE they are, and this bullet said E3006 for both.
+//     ⚠ **A USER `function sleep` AGAINST `Sleep.maxon`'S IS NOT A COLLISION — THE USER WINS**, because N1
+//     files a contested free function under its module DIRECTORY and `stdlib/` is not the user's root. See
+//     the measured sentence far below, and `stdlib-whitelist.md` for the pinned pair. Two listed modules in
+//     the SAME directory are still the ordinary duplicate (E3006, `commitFuncSignatures` in ParseStaging),
+//     because one directory is one namespace; two in DIFFERENT stdlib directories contest instead, and a
+//     bare call to the name from a user file is then E3095. Either way it is a maintainer's bug in this list.
 //   • ⚠⚠ **TYPE-name collisions against a USER program ARE NO LONGER COLLISIONS — THE USER WINS AND THE
 //     STDLIB DECLARATION MOVES (A1s wave 2).** A user `type`/`enum`/`union`/`interface`/ranged-`typealias`
 //     spelled like a listed module's NOMINAL declaration shadows it: the stdlib one is renamed into the
@@ -180,6 +183,17 @@
 //     rather than a sentence (`stdlib-whitelist.a-user-free-function-outranks-the-listed-modules`), because a
 //     refusal nothing runs is a claim. ⇒ the bare-builtin rule above is unchanged and is the one that bites:
 //     a NAME the chain claims is reached by no declaration at all, user's or stdlib's.
+//     ⛔⛔ **AND THAT FIRST CASE WAS A POSITIVE CONTROL, WHICH ON ITS OWN PINNED NOTHING.** Its user `sleep`
+//     returns nothing and so does `Sleep.maxon`'s, so it could not tell "the call reached the user's
+//     declaration" from "the call read whichever declaration folded last" — and the second was the truth.
+//     MEASURED at slice 6 on the NEGATIVE control: a user `function sleep(m Ms) returns Ms` was refused
+//     `E2004: Function 'sleep' does not return a value`, from the void signature of the module this list
+//     names. The fault was never in this module or in the whitelist — the whole-program sweep files every
+//     declaration under its BARE name first, and a root declaration keeps that key, so the stdlib's fold was
+//     overwriting the user's own signature there. `SignatureIndex.refileContestedFreeFunction` now hands the
+//     bare key back to the root declaration, and `namespaces.md`'s `root-declaration-owns-the-bare-key` cases
+//     pin the same defect with no stdlib in it at all. ⇒ **an entry's user-outranks-it claim needs a case in
+//     which the two declarations DIFFER**; one where they agree is a control that agrees with the bug.
 //     ⚠ **AND CHECK THE ROSTER AT ITS SOURCE — `parseCallNamed`'s bare-name `if` chain — NEVER against a
 //     list written here or in a spec.** This bullet is deliberately not one: nothing makes a prose roster
 //     agree with the chain, and both prose copies of it were already wrong. They named four of the FIFTEEN

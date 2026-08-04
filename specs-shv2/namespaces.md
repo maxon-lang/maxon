@@ -322,3 +322,173 @@ end 'main'
 9
 ```
 
+
+⭐⭐ **A ROOT DECLARATION OWNS THE BARE KEY, AND THE FOUR CASES BELOW ARE WHAT THAT MEANS.** N1c
+qualifies a contested free function's registration name with its module directory — but the root
+has no qualifier, so a root declaration's registration name IS the bare name and a bare call
+reaches it. The whole-program declaration sweep files every declaration under its bare name first
+and re-files a contested one afterwards, so while a contest lasts the bare key is written by every
+contestant in fold order and the LAST one wins.
+
+⛔ **SELECTION AND TYPING THEN READ ONE FACT FROM TWO PLACES AND GOT TWO ANSWERS.** The merge
+registry routed the call to the ROOT's declaration — its parameter types are what a range refusal
+named — while the sweep tables handed the call site whatever the last contestant had written there.
+MEASURED, all three against the root's own declaration two lines above the call: a value-returning
+root function was refused `E2004: Function 'pick' does not return a value`; a `try … otherwise (e)`
+bound `e` to the SUBDIRECTORY's error enum and refused the root's own case as
+`E3034: unknown enum case`; and a root declaration with NO parameter default silently borrowed the
+subdirectory's, so `pick()` ran the root's body on the subdirectory's argument and printed a number
+the program does not contain. A wrong ANSWER, not a diagnostic.
+
+The premise that had made this look safe was written down — *"which of the stale bare entries
+survives does not matter: the only call that reads one is a bare call to a contested name, and that
+call is E3095"* — and it holds only when every contestant is in a SUBDIRECTORY. A root declaration
+contributes no qualified spelling, so the candidate set can never reach the two E3095 requires, no
+ambiguity is reported, and the call proceeds to read the stale entry.
+
+<!-- test: root-declaration-owns-the-bare-key -->
+A root `pick` that RETURNS a value, contested by a subdirectory's VOID `pick` declared after it.
+The bare call is the root's, so it has a value to bind.
+```maxon
+// --- file: main.maxon
+typealias Ms = int(0 to 1000)
+
+function pick(milliseconds Ms) returns Ms
+	return milliseconds + 7
+end 'pick'
+
+function main() returns ExitCode
+	let r = pick(1)
+	print("r={r}\n")
+	return 0
+end 'main'
+
+// --- file: sub/helper.maxon
+typealias Slot = int(0 to 100)
+
+export function pick(slot Slot)
+	print("sub {slot}\n")
+end 'pick'
+```
+```exitcode
+0
+```
+```stdout
+r=8
+```
+
+
+<!-- test: root-declaration-owns-the-bare-key-whatever-the-fold-order -->
+The same program with the SUBDIRECTORY declared first. This is the ordering control: it passed
+while the case above failed, which is precisely what identified the bare key's last-writer-wins as
+the fault rather than the contest itself.
+```maxon
+// --- file: sub/helper.maxon
+typealias Slot = int(0 to 100)
+
+export function pick(slot Slot)
+	print("sub {slot}\n")
+end 'pick'
+
+// --- file: main.maxon
+typealias Ms = int(0 to 1000)
+
+function pick(milliseconds Ms) returns Ms
+	return milliseconds + 7
+end 'pick'
+
+function main() returns ExitCode
+	let r = pick(1)
+	print("r={r}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+r=8
+```
+
+
+<!-- test: root-declaration-owns-the-bare-key-throws-clause -->
+`returnTypes` is not the only table keyed by the bare name. The `throws` clause is what types the
+`(e)` binding of a `try … otherwise`, so a root declaration whose clause was overwritten by a
+subdirectory's bound `e` to the wrong enum and refused the root's own case.
+```maxon
+// --- file: main.maxon
+enum RootError
+	rootBad
+end 'RootError'
+
+typealias Ms = int(0 to 1000)
+
+function pick(milliseconds Ms) returns Ms throws RootError
+	if milliseconds > 500 'tooBig'
+		throw RootError.rootBad
+	end 'tooBig'
+	return milliseconds + 7
+end 'pick'
+
+function main() returns ExitCode
+	let r = try pick(1) otherwise (e) 'failed'
+		match e 'which'
+			rootBad then break 'which'
+		end 'which'
+		return 9
+	end 'failed'
+	print("r={r}\n")
+	return 0
+end 'main'
+
+// --- file: sub/helper.maxon
+enum SubError
+	subBad
+end 'SubError'
+
+typealias Slot = int(0 to 100)
+
+export function pick(slot Slot) returns Slot throws SubError
+	if slot > 50 'tooBig'
+		throw SubError.subBad
+	end 'tooBig'
+	return slot
+end 'pick'
+```
+```exitcode
+0
+```
+```stdout
+r=8
+```
+
+
+<!-- test: error.root-declaration-owns-the-bare-key-parameter-defaults -->
+Parameter defaults are recorded ONLY by a declaration that has one, so a root declaration with no
+default left the bare key holding the SUBDIRECTORY's. `pick()` then compiled, ran the ROOT's body
+on the subdirectory's default and printed `r=97` — a number the program does not contain. The root
+declares one required parameter and omitting it is E3036.
+```maxon
+// --- file: main.maxon
+typealias Ms = int(0 to 1000)
+
+function pick(milliseconds Ms) returns Ms
+	return milliseconds + 7
+end 'pick'
+
+function main() returns ExitCode
+	let r = pick()
+	print("r={r}\n")
+	return 0
+end 'main'
+
+// --- file: sub/helper.maxon
+typealias Slot = int(0 to 100)
+
+export function pick(slot Slot = 90) returns Slot
+	return slot
+end 'pick'
+```
+```maxoncstderr
+error E3036: specs/fragments/namespaces/error.root-declaration-owns-the-bare-key-parameter-defaults.test:10:10: 'pick' expects 1 argument(s) but 0 were provided
+```
