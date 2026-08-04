@@ -1096,8 +1096,8 @@ function recordDefValtype(op StdOp, valtypes WasmValTypeArray, funcNames Functio
 		cmpImm(resultId, _, _, _, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i32)
 		// ⚠ The two ops with NO width of their own. They are computed at machine width and so define
 		// an i64, whatever their operands' storage widths are — `emitDivMod` holds the argument.
-		div(resultId, _, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
-		mod(resultId, _, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
+		div(resultId, _, _, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
+		mod(resultId, _, _, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
 		condBranch then break 'def'
 		branch then break 'def'
 		ret then break 'def'
@@ -1457,8 +1457,8 @@ type WasmFuncEmitter
 			cmp(resultId, lhs, rhs, pred, operandType) then self.emitCmp(resultId, lhs: lhs, rhs: rhs, pred: pred, operandType: operandType)
 			binOpImm(resultId, lhs, imm, opcode, operandType) then self.emitBinOpImm(resultId, lhs: lhs, imm: imm, opcode: opcode, operandType: operandType)
 			cmpImm(resultId, lhs, imm, pred, operandType) then self.emitCmpImm(resultId, lhs: lhs, imm: imm, pred: pred, operandType: operandType)
-			div(resultId, lhs, rhs) then self.emitDivMod(resultId, lhs: lhs, rhs: rhs, isRemainder: false)
-			mod(resultId, lhs, rhs) then self.emitDivMod(resultId, lhs: lhs, rhs: rhs, isRemainder: true)
+			div(resultId, lhs, rhs, signedness) then self.emitDivMod(resultId, lhs: lhs, rhs: rhs, isRemainder: false, signedness: signedness)
+			mod(resultId, lhs, rhs, signedness) then self.emitDivMod(resultId, lhs: lhs, rhs: rhs, isRemainder: true, signedness: signedness)
 			condBranch then panic("emitBodyOp: a `condBranch` is always a terminator, never a body op")
 			branch then panic("emitBodyOp: a `branch` is always a terminator, never a body op")
 			ret(retValId) then self.emitRet(retValId)
@@ -1886,9 +1886,11 @@ type WasmFuncEmitter
 		end 'w'
 	end 'emitCmpPred'
 
-	// Signed integer division / remainder, AT MACHINE WIDTH. wasm traps natively on a zero divisor
-	// and on INT_MIN/-1, matching the intended semantics; the Tier-1 division specs all use non-zero
-	// divisors (CONTRACT §4.7).
+	// Integer division / remainder, AT MACHINE WIDTH, at the signedness the front end decided from
+	// BOTH operands (`DivideSignedness`). wasm traps natively on a zero divisor and — for the SIGNED
+	// pair only — on INT_MIN/-1, matching the intended semantics; the Tier-1 division specs all use
+	// non-zero divisors (CONTRACT §4.7). `i64.div_u`/`i64.rem_u` have no overflow trap at all, which
+	// is the same asymmetry x64's zeroed RDX gives and arm64's `udiv` gives.
 	//
 	// ⭐⭐ **THE ONE OP PAIR WITH NO WIDTH OF ITS OWN, AND THE WIDTH IS NOT `lhs`'s (X5).** It was:
 	// `div`/`mod` carry no `operandType` (x64's `idiv` needs none — every GPR is 64-bit), so the
@@ -1911,12 +1913,21 @@ type WasmFuncEmitter
 	// ⭐ THAT ARGUMENT IS NO LONGER THIS PAIR'S ALONE (X5 review): it is `opComputeValType`, and every
 	// integer op obeys it. `div`/`mod` were merely the two that could not have done otherwise, having
 	// no operand type to be misled by — the ops that HAVE one were being misled by it.
-	function emitDivMod(resultId ValueId, lhs ValueId, rhs ValueId, isRemainder bool)
+	function emitDivMod(resultId ValueId, lhs ValueId, rhs ValueId, isRemainder bool, signedness DivideSignedness)
 		self.pushBinaryOperands(lhs, rhs: rhs, opVt: WasmValType.i64)
+		let unsigned = signedness == DivideSignedness.unsigned
 		if isRemainder 'rem'
-			self.body.i64RemS()
+			if unsigned 'remU'
+				self.body.i64RemU()
+			end 'remU' else 'remS'
+				self.body.i64RemS()
+			end 'remS'
 		end 'rem' else 'div'
-			self.body.i64DivS()
+			if unsigned 'divU'
+				self.body.i64DivU()
+			end 'divU' else 'divS'
+				self.body.i64DivS()
+			end 'divS'
 		end 'div'
 		self.body.localSet(resultId as Wasm32Index)
 	end 'emitDivMod'

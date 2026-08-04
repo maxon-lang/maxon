@@ -229,6 +229,10 @@ export function maxonBinOpToStdOpcode(op MaxonBinOp) returns StdBinOpcode
 		// merely unwritten (`stdBinOpcodeIsFloatOnly`).
 		min then return StdBinOpcode.min
 		max then return StdBinOpcode.max
+		// The UNSIGNED divisions have no `binOp` opcode for the reason `mod` has none, twice over: they
+		// trap, so they need `StdOp.div`/`mod`'s `isPure: false`, and they are integer-only, so there is
+		// no float `binOp` for them to be. `lowerBinOp` routes both directly.
+		divUnsigned to modUnsigned then panic("maxonBinOpToStdOpcode: `{op.rawValue}` lowers to StdOp.div/mod with `DivideSignedness.unsigned` — a trapping op with its own Std variant, not a binOp opcode; lowerBinOp must route it directly")
 	end 'map'
 end 'maxonBinOpToStdOpcode'
 
@@ -1724,7 +1728,7 @@ type MaxonToStdLowering
 		// division kind that can reach a plain `call`, because it is the only one that does not throw; the two
 		// `__checked_*` names arrive through `lowerTryCall` and are refused below if they somehow do not.
 		match divisionKindOf(callee) 'guardedDivision'
-			guardedRemainder then return self.lowerDivisionExpansion(result, expansion: DivisionExpansion.guardedRemainder, args: args, dstBlock: dstBlock)
+			guardedRemainder then return self.lowerDivisionExpansion(result, expansion: DivisionExpansion.guardedRemainder, signedness: divisionCalleeSignedness(callee), args: args, dstBlock: dstBlock)
 			quotient to remainder then panic("lowerRuntimeCall: the THROWING '{String.from(callee)}' reached the plain call path — `isThrowingRuntimeCallee` names it, so `Parser.emitDivOrMod` must have emitted it without the `try` that E3057 requires")
 			notCheckedDivision then break 'guardedDivision'
 		end 'guardedDivision'
@@ -2496,13 +2500,19 @@ type MaxonToStdLowering
 		match op 'op'
 			add to mul then self.appendStdBinOp(result, lhs: lhs, rhs: rhs, op: op, dstBlock: dstBlock)
 			div then self.lowerDivision(result, lhs: lhs, rhs: rhs, dstBlock: dstBlock)
-			mod then self.stdModule.appendOp(dstBlock, op: StdOp.mod(result, lhs: lhs, rhs: rhs))
+			mod then self.stdModule.appendOp(dstBlock, op: StdOp.mod(result, lhs: lhs, rhs: rhs, signedness: DivideSignedness.signed))
 			bitAnd to shrLogical then self.appendStdBinOp(result, lhs: lhs, rhs: rhs, op: op, dstBlock: dstBlock)
 			// `min`/`max` need no `lowerDivision`-style fork the way `div` does: only ONE of the two
 			// divisions is a pure `binOp`, so `/` has to ask its operand type which op it becomes,
 			// while these are float-only outright (`stdBinOpcodeIsFloatOnly`) and the parser has
 			// already promoted both operands. So they take the plain append, like the arith band.
 			min to max then self.appendStdBinOp(result, lhs: lhs, rhs: rhs, op: op, dstBlock: dstBlock)
+			// The UNSIGNED pair takes the same two routes their signed twins take, carrying the one thing
+			// that differs. They need no float fork: `divisionOpcodeFor` mints them only from two
+			// non-negative INTEGER ranges (a ranged float alias carries tag `float`, never `named`), so
+			// there is no unsigned float divide to be, and `lowerDivision`'s fork would have nothing to ask.
+			divUnsigned then self.stdModule.appendOp(dstBlock, op: StdOp.div(result, lhs: lhs, rhs: rhs, signedness: DivideSignedness.unsigned))
+			modUnsigned then self.stdModule.appendOp(dstBlock, op: StdOp.mod(result, lhs: lhs, rhs: rhs, signedness: DivideSignedness.unsigned))
 		end 'op'
 	end 'lowerBinOp'
 
@@ -2522,7 +2532,7 @@ type MaxonToStdLowering
 			return
 		end 'float'
 
-		self.stdModule.appendOp(dstBlock, op: StdOp.div(result, lhs: lhs, rhs: rhs))
+		self.stdModule.appendOp(dstBlock, op: StdOp.div(result, lhs: lhs, rhs: rhs, signedness: DivideSignedness.signed))
 	end 'lowerDivision'
 
 	// Append the `StdOp.binOp` a non-trapping Maxon binary operator lowers to. The one
@@ -2742,8 +2752,8 @@ type MaxonToStdLowering
 		// (E3055) and reaches the expansion through `lowerRuntimeCall` instead. Answering it here would mean a
 		// `tryCall` whose error flag nothing ever sets.
 		match divisionKindOf(callee) 'checkedDivision'
-			quotient then return self.lowerDivisionExpansion(result, expansion: DivisionExpansion.checkedQuotient(errorFlag), args: args, dstBlock: dstBlock)
-			remainder then return self.lowerDivisionExpansion(result, expansion: DivisionExpansion.checkedRemainder(errorFlag), args: args, dstBlock: dstBlock)
+			quotient then return self.lowerDivisionExpansion(result, expansion: DivisionExpansion.checkedQuotient(errorFlag), signedness: divisionCalleeSignedness(callee), args: args, dstBlock: dstBlock)
+			remainder then return self.lowerDivisionExpansion(result, expansion: DivisionExpansion.checkedRemainder(errorFlag), signedness: divisionCalleeSignedness(callee), args: args, dstBlock: dstBlock)
 			guardedRemainder then panic("lowerTryCall: a TOTAL `__guarded_mod` reached the throwing call path — `isThrowingDivisionRuntimeCallee` answers false for it, so `Parser.requireThrowingNamedTryTarget` must have refused the `try` before lowering")
 			notCheckedDivision then break 'checkedDivision'
 		end 'checkedDivision'
@@ -2881,7 +2891,7 @@ type MaxonToStdLowering
 		self.stdModule.appendOp(dstBlock, op: StdOp.cmp(errorFlag, lhs: divisor, rhs: zero, pred: StdCmpPred.eq, operandType: operandType))
 	end 'emitDivisorZeroFlag'
 
-	function lowerDivisionExpansion(result ValueId, expansion DivisionExpansion, args ValueIdArray, dstBlock IrBlock)
+	function lowerDivisionExpansion(result ValueId, expansion DivisionExpansion, signedness DivideSignedness, args ValueIdArray, dstBlock IrBlock)
 		let kind = divisionExpansionKind(expansion)
 
 		let dividend = try args.get(0) otherwise panic("lowerDivisionExpansion: an expanded divide has two arguments — `emitDivOrMod` pushes the dividend first")
@@ -2911,10 +2921,15 @@ type MaxonToStdLowering
 		// ⭐⭐ **THE DIVIDE ITSELF GOES THROUGH `lowerBinOp`, WHICH IS ALREADY THE ONE PLACE THAT DECIDES WHAT
 		// A `/` OR A `mod` BECOMES.** This expansion's job is the GUARD — which operands the divide reads —
 		// and not the OPCODE. Written out here instead, it was a second copy of `lowerDivision`'s float/int
-		// choice and of `lowerBinOp`'s `mod` arm, with nothing making the two agree: add an UNSIGNED
-		// `StdOp.udiv` for an unsigned operand type in `lowerDivision` and a checked unsigned divide would go
-		// on emitting the signed `idiv`, silently, for every divisor the compiler cannot prove non-zero. It
-		// also re-derives `appendStdBinOp`'s purity guard for free rather than sitting beside it.
+		// choice and of `lowerBinOp`'s `mod` arm, with nothing making the two agree. It also re-derives
+		// `appendStdBinOp`'s purity guard for free rather than sitting beside it.
+		//
+		// ⭐ **THAT WARNING NAMED THE EXACT SHAPE X10 THEN LANDED, AND ROUTING THROUGH `lowerBinOp` IS WHY IT
+		// COST NOTHING.** It read: *"add an UNSIGNED divide for an unsigned operand type in `lowerDivision`
+		// and a checked unsigned divide would go on emitting the signed `idiv`, silently, for every divisor
+		// the compiler cannot prove non-zero."* The unsigned divide exists now, and the expansion picks its
+		// opcode from the SAME `divisionOpcodeFor` the bare route does — so the silent divergence the comment
+		// predicted never had a place to occur.
 		//
 		// ⚠ The FLOAT arm hands it the RAW operands and the integer arm the guarded ones, and that asymmetry is
 		// the ISA's, stated once in this function's header: `divsd` cannot fault, so a float divide needs the
@@ -2925,6 +2940,13 @@ type MaxonToStdLowering
 				remainder to guardedRemainder then panic("lowerDivisionExpansion: float `mod` does not exist — `requireBinOpOperands` refuses it, so a float-typed remainder expansion is a parser bug")
 				notCheckedDivision then panic("lowerDivisionExpansion: reached with `notCheckedDivision` — `lowerTryCall` and `lowerRuntimeCall` route only the three division kinds here")
 			end 'floatKind'
+
+			// ⚠ THERE IS NO UNSIGNED FLOAT DIVIDE, and the arm below would emit an INTEGER one over two
+			// IEEE bit patterns rather than fail. `Parser.emitDivOrMod` asks the signedness rule only of
+			// an integer pair, so this is unreachable — which is exactly why it must say so out loud.
+			if signedness == DivideSignedness.unsigned 'unsignedFloat'
+				panic("lowerDivisionExpansion: an UNSIGNED float `/` — `divsd` has no signedness and `Parser.emitDivOrMod` asks the division signedness rule only of an integer operand pair, so the callee name that carried this here was minted for a float divide")
+			end 'unsignedFloat'
 
 			self.lowerBinOp(result, lhs: dividend, rhs: divisor, op: MaxonBinOp.div, dstBlock: dstBlock)
 			return
@@ -2948,7 +2970,10 @@ type MaxonToStdLowering
 			guardedRemainder then break 'divisorGuard'
 		end 'divisorGuard'
 
-		self.lowerBinOp(result, lhs: safeDividend, rhs: safeDivisor, op: divisionOperatorForKind(kind), dstBlock: dstBlock)
+		// ⭐ The KIND says WHICH division and the callee's SIGNEDNESS says at what reading — the two facts
+		// the name carries, rejoined through the same `divisionOpcodeFor` the bare route mints its opcode
+		// with, so an expanded divide and a bare one cannot pick different instructions from one source `/`.
+		self.lowerBinOp(result, lhs: safeDividend, rhs: safeDivisor, op: divisionOpcodeFor(divisionOperatorForKind(kind), unsigned: signedness == DivideSignedness.unsigned), dstBlock: dstBlock)
 	end 'lowerDivisionExpansion'
 
 	// A1's zero guard: the divisor the `idiv` actually reads. See `lowerDivisionExpansion`'s header for why

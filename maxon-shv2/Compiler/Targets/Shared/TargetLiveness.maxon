@@ -1310,7 +1310,7 @@ function opIsCondBranch(op TargetOp) returns bool
 	return match op 'check'
 		prologue to jmp gives false
 		jcc gives true
-		movRegImm to idivReg gives false
+		movRegImm to divideReg gives false
 		pushReg to popReg gives false
 		storeSlotReg to loadRegSlot gives false
 		andRegReg to movqXmmGpr gives false
@@ -1347,7 +1347,7 @@ function terminatorIsUnconditionalBranch(module TargetModule, block IrBlock) ret
 	return match op 'check'
 		prologue to ret gives false
 		jmp gives true
-		jcc to idivReg gives false
+		jcc to divideReg gives false
 		pushReg to popReg gives false
 		storeSlotReg to loadRegSlot gives false
 		andRegReg to movqXmmGpr gives false
@@ -1399,7 +1399,7 @@ function collectBlockSuccessorIds(module TargetModule, block IrBlock, out BlockI
 			ret then break 'termCtrl'
 			prologue to epilogue then panic("collectBlockSuccessorIds: block '{String.from(block.label)}' terminator is a frame op, not a branch/return")
 			jcc then panic("collectBlockSuccessorIds: `jcc` reached as a terminator — it must be a body op paired with a `jmp` terminator")
-			movRegImm to idivReg then panic("collectBlockSuccessorIds: block '{String.from(block.label)}' has a non-terminator op as its terminator")
+			movRegImm to divideReg then panic("collectBlockSuccessorIds: block '{String.from(block.label)}' has a non-terminator op as its terminator")
 			pushReg to popReg then panic("collectBlockSuccessorIds: block '{String.from(block.label)}' has a pushReg/popReg as its terminator — those are post-regalloc body ops")
 			storeSlotReg to loadRegSlot then panic("collectBlockSuccessorIds: block '{String.from(block.label)}' has a spill/reload as its terminator — the splitter inserts them as body ops")
 			andRegReg to movqXmmGpr then panic("collectBlockSuccessorIds: block '{String.from(block.label)}' has a non-terminator op as its terminator")

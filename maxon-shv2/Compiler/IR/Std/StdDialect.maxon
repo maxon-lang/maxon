@@ -84,6 +84,33 @@ export function stdTypeIsFloat(t StdType) returns bool
 	return t.rawValue.isFloat
 end 'stdTypeIsFloat'
 
+// ⭐⭐ **THE SIGNEDNESS A MACHINE DIVIDE RUNS AT — the ONE property of `/`/`mod` that is not derivable
+// from anything at this tier.** The Std tier is TYPELESS about signedness: an i64 here is 64 bits and
+// nothing more, so a pass that met a bare `div` would have no way left to ask which reading was meant.
+// The answer is a FRONT-END fact (`TypeRules`' ⭐⭐ THE DIVISION SIGNEDNESS RULE), decided once from
+// both operands' declared ranges and carried down on the op.
+//
+// ⭐ **A FIELD ON `StdOp.div`/`mod`, NOT TWO MORE VARIANTS — and the reason is the band-append
+// invariant, not brevity.** `shr`/`shrLogical` split into two OPCODES one tier up because the Maxon
+// tier's operator is a bare enum value with nowhere for a flag to live. Here the operation is a
+// VARIANT with fields, so the fact has a natural home — the same home `binOp`'s and `cmpImm`'s
+// `operandType` already has. And appending two variants after `mod` would shift every ordinal past
+// the arith band, where a range arm SPANNING the band boundary (`FoldConstOperands`' `binOpImm to
+// retVoid` is one) would swallow them silently. A field cannot be swallowed.
+//
+// ⭐ It also keeps x64's fixed-register machinery keyed on ONE variant. `idiv` and `div` have the
+// identical RDX:RAX operand contract, so the allocator's `implicitDefs`, the prologue's clobber scan
+// and the splitter each go on seeing one op — a second variant would have had to be added to every
+// one of them, and a miss there is a miscoloured register rather than a compile error.
+export enum DivideSignedness
+	// x64 `idiv`, arm64 `sdiv`, wasm `i64.div_s`/`i64.rem_s`. The reading every division in the
+	// language had before X10, and still the reading for every operand pair that admits a negative.
+	signed
+	// x64 `div` (with RDX ZEROED rather than sign-extended), arm64 `udiv`, wasm `i64.div_u`/`i64.rem_u`.
+	// Reached only when BOTH operands are non-negative and at least one says so by DECLARATION.
+	unsigned
+end 'DivideSignedness'
+
 // ⭐ **DOES `t` OCCUPY LESS THAN THE MACHINE WORD?** The other half of a Std type's ABI class, beside
 // `stdTypeIsFloat`: the float bit picks the register FILE, this one picks the WIDTH. The register targets
 // never ask — every value there rides a whole 64-bit register or an 8-byte stack slot — but wasm's typed
@@ -799,8 +826,10 @@ export union StdOp
 	// (`recordFusableCompare`), which is the same fact written a second time.
 	// See `specs-shv2/comparison-operators.md` `compare-against-a-literal-keeps-the-operand-width`.
 	cmpImm(resultId ValueId, lhs ValueId, imm Imm32, pred StdCmpPred, operandType StdType) = StdOpMeta{category: StdOpCategory.arith, role: OpRole.plain, isPure: true, isUnsupportedInInlineBody: false, isMemory: false, isStore: false, isCall: false, clobbersFlags: true, isCmp: true}
-	// Signed integer division `resultId = lhs / rhs` (quotient), TRUNCATING toward
-	// zero. SPLIT OUT of `binOp` — it does NOT ride the `StdBinOpcode` opcode field —
+	// Integer division `resultId = lhs / rhs` (quotient), TRUNCATING toward
+	// zero, at the signedness `signedness` names (see `DivideSignedness` — the front end decides it
+	// from BOTH operands' declared ranges, because a value's signedness is gone by this tier).
+	// SPLIT OUT of `binOp` — it does NOT ride the `StdBinOpcode` opcode field —
 	// because x64 `idiv` can FAULT (#DE on divide-by-zero and on INT_MIN / -1
 	// overflow), so it declares `isPure: false` (it may NOT be dropped, duplicated, or
 	// reordered when its result is unused), which the shared `binOp` metadata cannot
@@ -809,13 +838,13 @@ export union StdOp
 	// TRAP itself is delivered by the runtime fault handler (a Workstream-R / M6
 	// deliverable), NOT guarded by the compiler. APPENDED at the END of the arith band,
 	// after `cmpImm`, honoring the band-append invariant.
-	div(resultId ValueId, lhs ValueId, rhs ValueId) = StdOpMeta{category: StdOpCategory.arith, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: false, isMemory: false, isStore: false, isCall: false, clobbersFlags: true, isCmp: false}
-	// Signed integer modulo `resultId = lhs mod rhs` (remainder), matching `div`'s
-	// truncation. Same `isPure: false` (idiv faults) + `clobbersFlags: true` profile as
-	// `div` — it is the SAME x64 `idiv` instruction, reading the REMAINDER out of RDX
-	// instead of the quotient out of RAX. APPENDED at the END of the arith band, after
+	div(resultId ValueId, lhs ValueId, rhs ValueId, signedness DivideSignedness) = StdOpMeta{category: StdOpCategory.arith, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: false, isMemory: false, isStore: false, isCall: false, clobbersFlags: true, isCmp: false}
+	// Integer modulo `resultId = lhs mod rhs` (remainder), matching `div`'s
+	// truncation and reading its `signedness` the same way. Same `isPure: false` (idiv faults) +
+	// `clobbersFlags: true` profile as `div` — it is the SAME x64 instruction, reading the REMAINDER
+	// out of RDX instead of the quotient out of RAX. APPENDED at the END of the arith band, after
 	// `div`, honoring the band-append invariant.
-	mod(resultId ValueId, lhs ValueId, rhs ValueId) = StdOpMeta{category: StdOpCategory.arith, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: false, isMemory: false, isStore: false, isCall: false, clobbersFlags: true, isCmp: false}
+	mod(resultId ValueId, lhs ValueId, rhs ValueId, signedness DivideSignedness) = StdOpMeta{category: StdOpCategory.arith, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: false, isMemory: false, isStore: false, isCall: false, clobbersFlags: true, isCmp: false}
 	// --- band: control ---
 	// Two-way conditional branch terminator: transfer to `thenBlockId` if `condId`
 	// (an i1) holds, else to `elseBlockId`. M4's `if` lowers to this. Not pure (a
@@ -1575,8 +1604,8 @@ export function collectStdOpUses(op StdOp, referenced StdValueUseSet)
 		cmp(_, lhs, rhs, _, _) then insertUsePair(referenced, a: lhs, b: rhs)
 		binOpImm(_, lhs, _, _, _) then referenced.insert(lhs)
 		cmpImm(_, lhs, _, _, _) then referenced.insert(lhs)
-		div(_, lhs, rhs) then insertUsePair(referenced, a: lhs, b: rhs)
-		mod(_, lhs, rhs) then insertUsePair(referenced, a: lhs, b: rhs)
+		div(_, lhs, rhs, _) then insertUsePair(referenced, a: lhs, b: rhs)
+		mod(_, lhs, rhs, _) then insertUsePair(referenced, a: lhs, b: rhs)
 		condBranch(condId, _, _) then referenced.insert(condId)
 		branch then break 'u'
 		ret(retValId) then referenced.insert(retValId)
@@ -1755,8 +1784,8 @@ module function remapStdOpUses(op StdOp, subst ValueIdArray) returns StdOp
 		cmp(resultId, lhs, rhs, pred, operandType) gives StdOp.cmp(resultId, lhs: remappedValue(lhs, subst: subst), rhs: remappedValue(rhs, subst: subst), pred: pred, operandType: operandType)
 		binOpImm(resultId, lhs, imm, opcode, operandType) gives StdOp.binOpImm(resultId, lhs: remappedValue(lhs, subst: subst), imm: imm, opcode: opcode, operandType: operandType)
 		cmpImm(resultId, lhs, imm, pred, operandType) gives StdOp.cmpImm(resultId, lhs: remappedValue(lhs, subst: subst), imm: imm, pred: pred, operandType: operandType)
-		div(resultId, lhs, rhs) gives StdOp.div(resultId, lhs: remappedValue(lhs, subst: subst), rhs: remappedValue(rhs, subst: subst))
-		mod(resultId, lhs, rhs) gives StdOp.mod(resultId, lhs: remappedValue(lhs, subst: subst), rhs: remappedValue(rhs, subst: subst))
+		div(resultId, lhs, rhs, signedness) gives StdOp.div(resultId, lhs: remappedValue(lhs, subst: subst), rhs: remappedValue(rhs, subst: subst), signedness: signedness)
+		mod(resultId, lhs, rhs, signedness) gives StdOp.mod(resultId, lhs: remappedValue(lhs, subst: subst), rhs: remappedValue(rhs, subst: subst), signedness: signedness)
 		condBranch(condId, thenBlockId, elseBlockId) gives StdOp.condBranch(remappedValue(condId, subst: subst), thenBlockId: thenBlockId, elseBlockId: elseBlockId)
 		branch gives op
 		ret(retValId) gives StdOp.ret(remappedValue(retValId, subst: subst))

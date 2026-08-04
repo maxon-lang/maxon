@@ -475,6 +475,18 @@ function opIsArm64Band(op TargetOp) returns bool
 	end 'p'
 end 'opIsArm64Band'
 
+// ⭐ **THE ONE OP THAT PRINTS ITS INSTRUCTION RATHER THAN ITS VARIANT NAME**, and deliberately.
+// `TargetOp.divideReg` carries a `DivideSignedness` because `idiv` and `div` share every fact the
+// dialect records about them (see its header) — but they are two DIFFERENT INSTRUCTIONS, and what a
+// golden fragment is for is showing which one was emitted. Printing `divideReg r8` for both would
+// hide exactly the difference X10 exists to make visible.
+function x64DivideOpName(signedness DivideSignedness) returns String
+	return match signedness 's'
+		signed gives "idivReg"
+		unsigned gives "divReg"
+	end 's'
+end 'x64DivideOpName'
+
 // Render one TargetOp as `<mnemonic> <operands>` (the ISA namespace is added by the caller).
 // EXHAUSTIVE over every TargetOp variant — see the file header: no bare `default`, so a new variant is
 // a compile error here, not a silent `??`. `cpu` names the module's ISA so the SHARED ops render their
@@ -503,7 +515,7 @@ function formatTargetOp(op TargetOp, blocks IrBlockArray, cpu CpuArch) returns S
 		callDirect(targetName) gives "callDirect {String.from(targetName)}"
 		iatCall(slotIndex) gives "iatCall {slotIndex}"
 		cqo gives "cqo"
-		idivReg(divisor) gives "idivReg {vregName(divisor)}"
+		divideReg(divisor, signedness) gives "{x64DivideOpName(signedness)} {vregName(divisor)}"
 		pushReg(reg) gives "pushReg {registerName(reg)}"
 		popReg(reg) gives "popReg {registerName(reg)}"
 		storeSlotReg(slot, srcReg) gives "storeSlotReg slot{slot}, {sharedVregName(srcReg, cpu: cpu)}"

@@ -24962,26 +24962,42 @@ export type Parser
 	//                  already rejected the program, and `emitShift` asks it BEFORE this is reached.
 	//                  Answering "signed" costs nothing, because no code is kept.
 	function valueIsUnsigned(value ValueId) returns bool
-		let tag = self.tagOf(value)
-		if tag == ValueTypeTag.exitCode 'exitCode'
+		if self.tagOf(value) == ValueTypeTag.exitCode 'exitCode'
 			return true
 		end 'exitCode'
 
-		if tag != ValueTypeTag.named 'notAnAlias'
-			return false
-		end 'notAnAlias'
-
-		let name = self.internedName(self.valueNameId(value))
-
-		// An alias NO file declares is a user error (E3011, reported by TypeResolution against the
-		// merged registry, which is the authority). It is not this rule's to report — the sweep is
-		// deliberately tolerant — and the program is rejected before anything emitted here can run,
-		// so "signed" is the harmless reading and never a silent wrong answer.
-		return match self.signatures.aliasOf(name, readerFilePath: self.filePath) 'a'
+		return match self.rangedAliasOfValueType(value) 'a'
 			declared(alias) gives rangeIsUnsigned(alias.low)
 			undeclared gives false
 		end 'a'
 	end 'valueIsUnsigned'
+
+	// ⭐ **THE RANGED TYPEALIAS A VALUE'S OWN TYPE NAMES**, read from the tag column — the `named`-tag
+	// half of BOTH signedness rules, factored out so THE SHIFT RULE (`valueIsUnsigned`) and THE DIVISION
+	// SIGNEDNESS RULE (`divisionOperandDomain`) walk to an alias by one route and cannot come to disagree
+	// about which one a value has.
+	//
+	// `exitCode` is deliberately NOT handled here: it is a builtin range (`int(0 to u32.max)`) with no
+	// alias DECLARATION to look up, so each caller places it in its own answer space — the shift rule as
+	// a bool, the division rule as a three-valued domain — and neither has to invent a `RangedTypeAlias`
+	// for it.
+	//
+	// The alias is looked up in the WHOLE-PROGRAM declaration index, never in this file's artifact: an
+	// alias declared in another file is still the same type here, and a file-local table would answer
+	// `undeclared` and emit the wrong instruction. It is order-independent within a file too, which the
+	// artifact table — filled as declarations are parsed — would not be.
+	//
+	// An alias NO file declares is a user error (E3011, reported by TypeResolution against the merged
+	// registry, which is the authority). It is not either rule's to report — the sweep is deliberately
+	// tolerant — and the program is rejected before anything emitted here can run, so both callers'
+	// "signed" reading is harmless and never a silent wrong answer.
+	function rangedAliasOfValueType(value ValueId) returns DeclaredAlias
+		if self.tagOf(value) != ValueTypeTag.named 'notAnAlias'
+			return DeclaredAlias.undeclared
+		end 'notAnAlias'
+
+		return self.signatures.aliasOf(self.internedName(self.valueNameId(value)), readerFilePath: self.filePath)
+	end 'rangedAliasOfValueType'
 
 	// The full `MaxonType` of an SSA value, REBUILT from the two columns. It CONSTRUCTS a
 	// union, so it allocates — which is why it is called only where a `MaxonType` is genuinely
@@ -26585,6 +26601,19 @@ export type Parser
 		let rightTag = self.numberTagOf(divisor)
 		try requireBinOpOperands(op, left: leftTag, right: rightTag, opTok: opTok)
 
+		// ⭐⭐ **THE DIVISION SIGNEDNESS RULE, ASKED ONCE AND THEN CARRIED (X10).** This is the last tier that
+		// CAN ask it: the rule reads each operand's DECLARED ranged type, and an alias name resolves against
+		// the file that is being parsed (`aliasOf(…, readerFilePath:)`) — by the Std tier one module holds
+		// every file's values and there is no reader to resolve against. So the answer is written into the
+		// OPCODE here, exactly as `emitShift` writes the shift's fill into `shrLogical`, and the fold, the
+		// `-1` overflow gate, the expansion's callee and the Std lowering all READ it rather than re-deriving
+		// it. Two readers of one rule reaching two answers is the class of bug this file has already paid for.
+		//
+		// It is asked BEFORE the divide-by-zero proof because the two are independent — a range's SIGN and
+		// its zero are different questions about it — and because the proof's `-1` half is answered in terms
+		// of the opcode this line mints.
+		let divideOp = divisionOpcodeFor(op, unsigned: self.divisionRunsUnsigned(dividend, divisor: divisor, leftTag: leftTag, rightTag: rightTag))
+
 		// ⭐⭐ **ONE PROOF, TWO HAZARDS, THREE ROUTES (A1x).** The verdict is asked ONCE and both of its facts
 		// are read here, because this is the only place that knows which OPERATOR is being emitted — and the
 		// two operators want different halves of it. Reading the zero half alone is precisely how
@@ -26593,10 +26622,17 @@ export type Parser
 		let proof = self.divisorProof(divisor)
 		let zeroVerdict = divisorProofZeroVerdict(proof)
 
-		// A REMAINDER whose divisor is proven non-zero but might still be `-1` is TOTAL and needs a guard, so
-		// it is neither refused, nor thrown from, nor emitted bare — it takes the expansion route below with a
-		// callee of its own. Asked before the zero verdict's `neverZero` arm can send it to the bare emitter.
-		let needsOverflowGuard = op == MaxonBinOp.mod and divisorProofMayBeNegativeOne(proof)
+		// A SIGNED REMAINDER whose divisor is proven non-zero but might still be `-1` is TOTAL and needs a
+		// guard, so it is neither refused, nor thrown from, nor emitted bare — it takes the expansion route
+		// below with a callee of its own. Asked before the zero verdict's `neverZero` arm can send it to the
+		// bare emitter.
+		//
+		// ⚠ **`== MaxonBinOp.mod` NOW MEANS "A SIGNED `mod`", AND THAT IS THE OPCODE DOING ITS JOB** — an
+		// unsigned remainder is `modUnsigned` and is EXCLUDED here on purpose. `idiv`'s `#DE` at `-1` is an
+		// overflow of the SIGNED quotient; read unsigned, `-1` is `u64.max` and `a mod u64.max` is an ordinary
+		// answer (`5`, not `0`). Guarding it would not merely be wasted work — the guard ANSWERS `0` at that
+		// divisor, so it would turn every `a mod u64.max` into a wrong answer.
+		let needsOverflowGuard = divideOp == MaxonBinOp.mod and divisorProofMayBeNegativeOne(proof)
 
 		// ⚠ A provably-zero divisor is refused whatever the other hazard says: `a mod 0` has no answer at all,
 		// so there is nothing for the overflow guard to guard and E3103 is still the whole verdict. Kept an
@@ -26622,7 +26658,7 @@ export type Parser
 		// ⭐ **NEITHER HAZARD OPEN IS THE ONLY ROUTE TO A BARE `idiv`**, and that conjunction is the rung: the
 		// left half alone was A1's rule, and it waved `i64.min mod -1` through.
 		if zeroVerdict == DivisorZeroVerdict.neverZero and not needsOverflowGuard 'noHazardLeftOpen'
-			return self.emitBinOpOverCheckedOperands(dividendNumber, rhs: divisorNumber, op: op, leftTag: leftTag, rightTag: rightTag, opTok: opTok)
+			return self.emitBinOpOverCheckedOperands(dividendNumber, rhs: divisorNumber, op: divideOp, leftTag: leftTag, rightTag: rightTag, opTok: opTok)
 		end 'noHazardLeftOpen'
 
 		// ⭐ **THE PROMOTION IS THE SAME ONE `emitBinOp` OWES, PAID HERE FOR THE SAME REASON.** The Std
@@ -26644,18 +26680,64 @@ export type Parser
 		// the divisor's ZERO hazard only.** A guarded remainder reaching here is `neverZero` by construction —
 		// the bare route above is the only other thing a `neverZero` divisor can take — so it gets the TOTAL
 		// callee and, downstream, no `throws` clause and no E3057.
-		let callee = divisionExpansionCalleeForOp(op, fallible: zeroVerdict == DivisorZeroVerdict.possiblyZero)
-		let resultTag = binOpResultTag(op, left: leftTag, right: rightTag)
+		let callee = divisionExpansionCalleeForOp(divideOp, fallible: zeroVerdict == DivisorZeroVerdict.possiblyZero)
+		let resultTag = binOpResultTag(divideOp, left: leftTag, right: rightTag)
 		let result = self.emitRuntimeCall(callee, args: args, resultTag: resultTag, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(opTok))
 
 		// ⭐ **AN EXPANSION IS STILL A FOLD SITE — see `recordBinOpFold` for the diagnostic that was lost
 		// when it was not.** Asked on BOTH expansion routes and not only the guarded one: a `possiblyZero`
 		// divisor is by definition not a constant, so the fallible route simply never folds, and gating it
 		// would be a second copy of that reasoning rather than a saving.
-		self.recordBinOpFold(result, lhs: dividend, rhs: divisor, op: op, resultTag: resultTag)
+		self.recordBinOpFold(result, lhs: dividend, rhs: divisor, op: divideOp, resultTag: resultTag)
 
 		return result
 	end 'emitDivOrMod'
+
+	// ⭐⭐ **DOES THIS `/` OR `mod` RUN UNSIGNED?** — the parser's half of TypeRules' ⭐⭐ THE DIVISION
+	// SIGNEDNESS RULE: it reads each operand's domain and hands the pair to the rule, which is stated once,
+	// there, over `DivisionOperandDomain` alone.
+	//
+	// The FLOAT gate is not a shortcut. `divsd` has no signedness, a ranged float alias carries tag `float`
+	// rather than `named` (so `divisionOperandDomain` would answer `signed` for it anyway, for the wrong
+	// reason), and the answer must be `false` on this path or `lowerDivisionExpansion` would meet an
+	// unsigned float divide — which it panics on, and rightly. Asked through `operandsAreFloat`, the same
+	// predicate `promotedOperand` uses to decide whether the pair meets in the float domain at all.
+	function divisionRunsUnsigned(dividend ValueId, divisor ValueId, leftTag ValueTypeTag, rightTag ValueTypeTag) returns bool
+		if operandsAreFloat(leftTag, right: rightTag) 'floatDivide'
+			return false
+		end 'floatDivide'
+
+		return divisionOperandsAreUnsigned(self.divisionOperandDomain(dividend), divisor: self.divisionOperandDomain(divisor))
+	end 'divisionRunsUnsigned'
+
+	// ⭐ **WHAT ONE OPERAND SAYS ABOUT THE DIVIDE'S SIGNEDNESS** — the value-level twin of
+	// `valueIsUnsigned`, and three-valued where that one is two-valued, because a division has to tell
+	// "this operand ASKS for an unsigned divide" apart from "this operand merely FITS one".
+	//
+	// ⚠ **A DECLARED RANGE ANSWERS ALONE, BOTH WAYS, AND THE ORDER IS THE RULE.** A value of
+	// `int(-10 to 10)` that happens to hold `3` is an operand whose TYPE admits negatives, so it reads
+	// `signed` and the folded `3` is never consulted: letting the value speak over the declaration would
+	// make `w / a` unsigned on the strength of a NUMBER where the language's answer comes from a TYPE. The
+	// bootstrap reads the same two facts in the same order (`DeclaredIntRange` before `TryFoldIntConst`).
+	//
+	// `exitCode` is `int(0 to u32.max)` — a declared non-negative range with no alias declaration to look
+	// up, placed here exactly as `valueIsUnsigned` places it.
+	function divisionOperandDomain(value ValueId) returns DivisionOperandDomain
+		if self.tagOf(value) == ValueTypeTag.exitCode 'exitCode'
+			return DivisionOperandDomain.declaredNonNegative
+		end 'exitCode'
+
+		match self.rangedAliasOfValueType(value) 'declaredType'
+			declared(alias) then return DivisionOperandDomain.declaredNonNegative if rangeIsUnsigned(alias.low) else DivisionOperandDomain.signed
+			undeclared then break 'declaredType'
+		end 'declaredType'
+
+		if self.constIsKnown(value) and self.constOf(value) >= 0 'fitsWithoutAsking'
+			return DivisionOperandDomain.provablyNonNegative
+		end 'fitsWithoutAsking'
+
+		return DivisionOperandDomain.signed
+	end 'divisionOperandDomain'
 
 	// ⭐⭐ **THE WHOLE DIVIDE-BY-ZERO PROOF, IN ONE WALK.** Asked of the divisor's OWN constant domain, never of
 	// the divide's RESULT kind — which is what lets `1.0 / n` and `n / 2` each be decided by the operand

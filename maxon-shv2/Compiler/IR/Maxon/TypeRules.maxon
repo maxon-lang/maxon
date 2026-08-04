@@ -863,6 +863,8 @@ export function wordOperator(op MaxonBinOp) returns bool
 		// operands' type (both are float-only, and both operands are promoted before the op exists), and
 		// neither has a bool reading to be the other half of a duality.
 		min to max gives false
+		// The unsigned divisions are divisions: arithmetic, with no bool reading, exactly as `div`/`mod`.
+		divUnsigned to modUnsigned gives false
 	end 'k'
 end 'wordOperator'
 
@@ -875,6 +877,8 @@ export function shiftOperator(op MaxonBinOp) returns bool
 		// `min`/`max` take a second operand that is an ordinary number, not a shift DISTANCE — both
 		// sides are values to compare, and both are promoted to float.
 		min to max gives false
+		// A DIVISOR is an ordinary number too, whatever the divide's signedness.
+		divUnsigned to modUnsigned gives false
 	end 'k'
 end 'shiftOperator'
 
@@ -896,8 +900,102 @@ export function divisionOperator(op MaxonBinOp) returns bool
 		// also what lets `emitBinaryMathIntrinsic` reach the bare emitter past `emitBinOp`'s
 		// division panic.
 		min to max gives false
+		// The UNSIGNED pair divides too, and every rule this gate guards is about the DIVISOR, which
+		// signedness does not change: `a / 0` is still E3103 and a possibly-zero divisor still throws.
+		divUnsigned to modUnsigned gives true
 	end 'k'
 end 'divisionOperator'
+
+// ⭐ **DOES THIS DIVISION OPERATOR READ A REMAINDER?** — `mod` and its unsigned twin, against the two
+// quotients. The QUOTIENT/REMAINDER split and the SIGNED/UNSIGNED split are two independent questions
+// about one operator, and every reader wants exactly one of them; asking each through its own
+// predicate is what stops a four-way match being restated at each site with a chance to differ.
+export function divisionReadsRemainder(op MaxonBinOp) returns bool
+	return match op 'k'
+		add to div gives false
+		mod gives true
+		bitAnd to max gives false
+		divUnsigned gives false
+		modUnsigned gives true
+	end 'k'
+end 'divisionReadsRemainder'
+
+// ⭐⭐ **IS THIS DIVISION UNSIGNED?** The opcode already IS the decision — asked once, of BOTH operands,
+// and written into it by `divisionOpcodeFor` — so the fold, the `-1` overflow gate and the Std lowering
+// each read one fact rather than three re-derivations of one rule. `evalShift` reads `shr` vs
+// `shrLogical` the same way and says the same thing about why.
+export function divisionIsUnsigned(op MaxonBinOp) returns bool
+	return match op 'k'
+		add to max gives false
+		divUnsigned to modUnsigned gives true
+	end 'k'
+end 'divisionIsUnsigned'
+
+// ⭐⭐ **WHAT ONE OPERAND OF A `/` OR `mod` SAYS ABOUT THE DIVIDE'S SIGNEDNESS** — three answers, and
+// the middle one is the whole reason this is not a boolean.
+export enum DivisionOperandDomain
+	// A DECLARED ranged type whose every value is non-negative (`rangeIsUnsigned`) — `int(0 to u64.max)`,
+	// `int(1 to 8)`, `ExitCode`. The only answer that ASKS for an unsigned divide.
+	declaredNonNegative
+	// No declared range, but a folded constant that happens to be non-negative. It FITS an unsigned
+	// divide and asks for nothing, which is exactly the distinction that keeps `w / 8` unsigned (`w`
+	// declares it) while `7 / 2` — two constants and no declared type anywhere — stays the signed
+	// divide this compiler already emits, buying no codegen movement for no correctness.
+	provablyNonNegative
+	// Everything else, and they are ONE answer because they license the same instruction: a declared
+	// range admitting negatives, a negative constant, and — the case that reads as "no constraint" and
+	// is not — a value with NO range at all, which means THE WHOLE OF i64.
+	signed
+end 'DivisionOperandDomain'
+
+// ⭐⭐ **THE DIVISION SIGNEDNESS RULE: A `/` OR `mod` RUNS AT A SIGNEDNESS VALID FOR BOTH OPERANDS.**
+//
+// A ranged typealias on ONE operand may not decide the arithmetic done to the OTHER. Every other
+// integer operator survives being told otherwise, because a narrowed integer binop is emitted at 64
+// bits on every backend shv2 has; the divide family is the one whose width and signedness are REAL in
+// the instruction, so it is the one family a one-sided reading reaches.
+//
+// ⚠ **NO RANGED TYPE DOES NOT MEAN "NO CONSTRAINT" — IT MEANS THE WHOLE OF `i64`**, and that is the
+// half `DivisionOperandDomain.signed` exists to state. Reading it as "no constraint" is what let the
+// BOOTSTRAP narrow a 64-bit dividend into a 32-bit divide from the divisor's `int(1 to 8)` (X8), and
+// the mirror of the same question is what left shv2 emitting a SIGNED `idiv` for two operands both
+// declared non-negative: `u64.max / 3` answered 0, because `0xFFFF…FF` read as `-1`.
+//
+// ⭐ **A DECLARED RANGE IS WHAT ASKS FOR THE UNSIGNED DIVIDE; A FOLDED CONSTANT ONLY HAS TO FIT ONE.**
+// Two non-negative constants would license an unsigned divide on their own, and `7 / 2` naming no
+// ranged type anywhere is precisely the division this rule has nothing to say about. This is the
+// bootstrap's rule (`2-Parser.cs`'s `DivisionOptimalType` / `UnionIntRange`, X8) with its WIDTH half
+// dropped, and the drop is a fact about shv2 rather than a simplification: shv2 emits every integer
+// divide at 64 bits — a narrow value sits extended in its register and its own type's range holds it —
+// so the union's WIDTH has nothing to choose and only its SIGNEDNESS does. The two compilers therefore
+// pick the same instruction from the same two ranges.
+export function divisionOperandsAreUnsigned(dividend DivisionOperandDomain, divisor DivisionOperandDomain) returns bool
+	if dividend == DivisionOperandDomain.signed or divisor == DivisionOperandDomain.signed 'eitherAdmitsANegative'
+		return false
+	end 'eitherAdmitsANegative'
+
+	return dividend == DivisionOperandDomain.declaredNonNegative or divisor == DivisionOperandDomain.declaredNonNegative
+end 'divisionOperandsAreUnsigned'
+
+// The opcode a SOURCE `/` or `mod` emits once its signedness is known — the DIVISION twin of
+// `shiftOpcodeFor`, and here for that function's reason: `infixMaxonOp` maps `/` to `MaxonBinOp.div`
+// unconditionally (it has no operands to look at), so this is where a `divUnsigned` is ever born and
+// `Parser.emitDivOrMod` is its only caller.
+export function divisionOpcodeFor(op MaxonBinOp, unsigned bool) returns MaxonBinOp
+	if not unsigned 'keepsTheSignedReading'
+		return op
+	end 'keepsTheSignedReading'
+
+	if op == MaxonBinOp.div 'quotient'
+		return MaxonBinOp.divUnsigned
+	end 'quotient'
+
+	if op == MaxonBinOp.mod 'remainder'
+		return MaxonBinOp.modUnsigned
+	end 'remainder'
+
+	panic("divisionOpcodeFor: {op.rawValue} is not a SOURCE division operator — only `/` and `mod` reach here from `infixMaxonOp`, and the unsigned pair is this function's OUTPUT, never its input")
+end 'divisionOpcodeFor'
 
 // ⭐⭐ **CAN A VALUE OF THIS RANGE BE ZERO?** — the type-level half of the fallible-division rule (A1), and
 // the reason `int(1 to 1000)` is the language's escape hatch from a checked divide. A range excludes 0 iff it
@@ -1671,6 +1769,10 @@ export function foldIntBinOp(op MaxonBinOp, lhs ParsedInt, rhs ParsedInt) return
 		// FoldedInt.notFoldable`). shv2 has no float constant domain at all yet, so there is nothing to
 		// fold INTO.
 		min to max gives FoldedInt.notFoldable
+		// The unsigned divisions fold through the SAME door as their signed twins, which is what keeps
+		// the folder and the emitter agreeing about one operator: `foldIntDivision` reads the opcode's
+		// own signedness rather than being told it a second time.
+		divUnsigned to modUnsigned gives foldIntDivision(op, lhs: lhs, rhs: rhs)
 	end 'o'
 end 'foldIntBinOp'
 
@@ -1690,6 +1792,10 @@ function foldIntDivision(op MaxonBinOp, lhs ParsedInt, rhs ParsedInt) returns Fo
 	if rhs == 0 'noAnswerForEither'
 		return FoldedInt.notFoldable
 	end 'noAnswerForEither'
+
+	if divisionIsUnsigned(op) 'unsignedReading'
+		return foldUnsignedIntDivision(op, lhs: lhs, rhs: rhs)
+	end 'unsignedReading'
 
 	if op == MaxonBinOp.div and lhs == i64.min and rhs == OverflowingDivisorPattern 'unrepresentableQuotient'
 		return FoldedInt.notFoldable
@@ -1713,6 +1819,39 @@ function foldIntDivision(op MaxonBinOp, lhs ParsedInt, rhs ParsedInt) returns Fo
 
 	return FoldedInt.folded(try (lhs mod rhs) otherwise panic("foldIntDivision: divisor was 0 past the zero guard"))
 end 'foldIntDivision'
+
+// ⭐⭐ **THE FOLDER AND THE EMITTER MUST AGREE, AND THIS IS THE HALF THAT IS EASY TO LEAVE OUT.** The
+// same two bit patterns are two different numbers under the two readings, so a signed fold of an
+// operator the backend emits UNSIGNED is a constant that contradicts the instruction beside it:
+// `-1 / 8` is `0` read signed and `2305843009213693951` read unsigned, and the second is what the
+// emitted `div` computes. MEASURED before this existed — `let c = -1 as int(0 to u64.max)` then
+// `c / 8` — and a constant-folded division disagreeing with a runtime one is worse than the bug the
+// signedness rule fixes, because only one of the two answers is ever visible in a given program.
+//
+// ⚠ **NEITHER `i64.min / -1` CASE EXISTS HERE, and that is not an omission.** Read unsigned those two
+// patterns are `2^63 / (2^64 - 1)`, whose quotient is `0` and whose remainder is `2^63` — both
+// perfectly representable — so the signed arm's overflow refusal has nothing to refuse. The hardware
+// agrees on every target: x64's `div` reads a ZEROED RDX so no quotient can overflow, and arm64's
+// `udiv` and wasm's `i64.div_u` have no overflow trap at all.
+//
+// The arithmetic runs in `MachineWord` — `int(0 to u64.max)`, Maxon's unsigned 64-bit type — so the
+// compiler that builds THIS compiler emits for these two lines the same `div` the compiled program
+// will. Both casts are guard-free in both compilers: `rangeIsFull` names the signed-full and the
+// unsigned-full spans as the two that hold every 64-bit pattern, so neither direction can be out of
+// range. (VERIFIED against the bootstrap on this exact idiom: `-1 as int(0 to u64.max)` divided by 3
+// answers 6148914691236517205 and casts back without a check.)
+function foldUnsignedIntDivision(op MaxonBinOp, lhs ParsedInt, rhs ParsedInt) returns FoldedInt
+	let dividend = lhs as MachineWord
+	let divisor = rhs as MachineWord
+
+	// `rhs` is guarded non-zero by the caller, so neither divide can fail; the `otherwise` arms PANIC
+	// rather than fold a wrong answer, exactly as the signed arm's do and for its stated reason.
+	if divisionReadsRemainder(op) 'remainder'
+		return FoldedInt.folded(try (dividend mod divisor) otherwise panic("foldUnsignedIntDivision: divisor was 0 past the zero guard"))
+	end 'remainder'
+
+	return FoldedInt.folded(try (dividend / divisor) otherwise panic("foldUnsignedIntDivision: divisor was 0 past the zero guard"))
+end 'foldUnsignedIntDivision'
 
 // Fold `lhs <op> rhs` over two float BIT PATTERNS with the host's native f64 — the float twin of
 // `foldIntBinOp`, and the ONE place a constant float arithmetic answer is computed. Each operand is
@@ -2055,6 +2194,9 @@ export function binOpResultTag(op MaxonBinOp, left ValueTypeTag, right ValueType
 		add to mod gives arithResultTag(left, right: right)
 		bitAnd to bitXor gives wordOpResultTag(left, right: right)
 		shl to shrLogical gives ValueTypeTag.integer
+		// The unsigned divisions answer exactly what their signed twins answer: signedness selects an
+		// INSTRUCTION, and `arithResultTag` is about the DOMAIN the pair meets in, which is unmoved.
+		divUnsigned to modUnsigned gives arithResultTag(left, right: right)
 		// `min`/`max` PROMOTE exactly as the arithmetic band does, and each reaches this function
 		// having been handed two operands already in the float domain — `Parser.emitBinaryMathIntrinsic`
 		// promotes both before it emits, the way `emitMathIntrinsic` does for the arity-1 intrinsics.
@@ -2141,6 +2283,12 @@ export function operatorIsIntegral(op MaxonBinOp) returns bool
 		// is PROMOTED rather than kept. `false` is therefore the answer that lets a float through, which
 		// is the only kind of operand either ever has.
 		min to max gives false
+		// ⭐ BOTH unsigned divisions are integral, where the signed pair splits: `/` admits a float
+		// because `divsd` exists, but an UNSIGNED `/` is minted only from two non-negative INTEGER
+		// ranges — a ranged float alias carries tag `float`, never `named`, so it can never reach
+		// `divisionOpcodeFor`'s unsigned answer. This is not a rejection the parser needs (the operand
+		// rule has already run by then); it is this predicate telling the truth about the operator.
+		divUnsigned to modUnsigned gives true
 	end 'k'
 end 'operatorIsIntegral'
 

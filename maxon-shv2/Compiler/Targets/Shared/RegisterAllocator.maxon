@@ -877,7 +877,7 @@ function collectOpHints(op TargetOp, hints ColorHints)
 		movReg32Reg32(dst, src) then addCopyHint(dst, src: src, hints: hints)
 		prologue to jcc then break 'hint'
 		movRegImm to movRegImm32 then break 'hint'
-		subRegReg to idivReg then break 'hint'
+		subRegReg to divideReg then break 'hint'
 		pushReg to popReg then break 'hint'
 		storeSlotReg to loadRegSlot then break 'hint'
 		// The bit band carries no COPY hint: none of these ops is a move. Their two-address
@@ -1560,7 +1560,7 @@ export function colorTargetOp(op TargetOp, alloc Allocation) returns TargetOp
 		cmpRegImm32(reg, imm) then return TargetOp.cmpRegImm32(colorVRegWith(reg, alloc: alloc), imm: imm)
 		xchgRegReg to iatCall then return op
 		cqo then return op
-		idivReg(divisor) then return TargetOp.idivReg(colorVRegWith(divisor, alloc: alloc))
+		divideReg(divisor, signedness) then return TargetOp.divideReg(colorVRegWith(divisor, alloc: alloc), signedness: signedness)
 		pushReg to popReg then return op
 		storeSlotReg(slot, srcReg) then return TargetOp.storeSlotReg(slot, srcReg: colorVRegWith(srcReg, alloc: alloc))
 		loadRegSlot(destReg, slot) then return TargetOp.loadRegSlot(colorVRegWith(destReg, alloc: alloc), slot: slot)

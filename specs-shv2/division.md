@@ -437,3 +437,77 @@ r=3
 ```exitcode
 0
 ```
+
+### An UNSIGNED divide keeps every one of the fallible rule's routes (X10)
+
+`specs-shv2/ranged-typealias.md` owns the SIGNEDNESS rule — what makes a `/` unsigned, and that a
+ranged typealias on one operand may not decide the arithmetic done to the other. These own the
+INTERSECTION of that rule with the fallible-division one, which is where the two could have come
+apart: the signedness is decided in the parser and has to survive a desugar that reconstructs the
+whole divide from a CALLEE NAME.
+
+<!-- test: an-unsigned-divide-survives-the-throwing-desugar -->
+An unsigned divisor whose range ADMITS zero — `int(0 to u64.max)` is the whole unsigned domain, so it
+cannot exclude it — takes the THROWING expansion rather than the bare divide. The expansion rebuilds
+the divide from the callee it was handed, so a signedness that did not ride that name would silently
+come back signed here and nowhere else: `u64.max / 3` would answer `0` inside a `try` while answering
+`6148914691236517205` outside one, from one source operator. Both operators, because the remainder
+takes a different callee and a different guard.
+```maxon
+typealias Word = int(0 to u64.max)
+typealias Any64 = int(i64.min to i64.max)
+
+function ident(v Any64) returns Any64
+	return v
+end 'ident'
+
+function main() returns ExitCode
+	let w = ident(0 - 1) as Word
+	let d = ident(3) as Word
+	print("q={try (w / d) otherwise 0}\n")
+	print("r={try (w mod d) otherwise 0}\n")
+	print("z={try (w / (ident(0) as Word)) otherwise 111}\n")
+	return 0
+end 'main'
+```
+```stdout
+q=6148914691236517205
+r=0
+z=111
+```
+```exitcode
+0
+```
+
+<!-- test: an-unsigned-remainder-at-u64-max-is-not-the-overflow-case -->
+⭐⭐ **THE `-1` OVERFLOW GUARD MUST NOT FIRE ON AN UNSIGNED `mod`, AND IT ANSWERS `0` IF IT DOES.** A1x
+gave `mod` a guard because `idiv` raises `#DE` on `i64.min mod -1`, and the guard's answer at that
+divisor is `0` — correct, because `a mod -1` is `0` for every signed `a`. Read UNSIGNED the same bit
+pattern is `u64.max`, and `5 mod u64.max` is **5**: the divisor is simply larger than the dividend.
+So the guard is not merely unnecessary there — applying it is a WRONG ANSWER, which is why an unsigned
+remainder is excluded from it by its OPCODE rather than by a second reading of the operand ranges.
+
+The dividend is a plain literal and the divisor's range excludes 0, so this is a BARE divide: no
+`try`, no error flag, and nothing between the two operands and the instruction.
+```maxon
+typealias NonZeroWord = int(1 to u64.max)
+typealias Any64 = int(i64.min to i64.max)
+
+function ident(v Any64) returns Any64
+	return v
+end 'ident'
+
+function main() returns ExitCode
+	let big = ident(0 - 1) as NonZeroWord
+	print("r={5 mod big}\n")
+	print("q={5 / big}\n")
+	return 0
+end 'main'
+```
+```stdout
+r=5
+q=0
+```
+```exitcode
+0
+```

@@ -225,6 +225,17 @@ function arm64ShiftInstrOf(opcode StdBinOpcode) returns Arm64ShiftInstr
 	end 'o'
 end 'arm64ShiftInstrOf'
 
+// The arm64 divide instruction a `DivideSignedness` names — `sdiv` or `udiv`, which differ in one
+// encoding bit and in nothing else (same 3-address shape, same non-trapping zero-divisor behaviour).
+// Beside `arm64ShiftInstrOf` because it is the same kind of mapping: a front-end signedness fact
+// turned into the one instruction that implements it, in the one place the answer is spelled.
+function arm64DivideOp(dest TargetVReg, lhs TargetVReg, rhs TargetVReg, signedness DivideSignedness) returns TargetOp
+	return match signedness 's'
+		signed gives TargetOp.arm64Sdiv(dest, lhs: lhs, rhs: rhs)
+		unsigned gives TargetOp.arm64Udiv(dest, lhs: lhs, rhs: rhs)
+	end 's'
+end 'arm64DivideOp'
+
 // Assert a float lowering entry really has an f64 (the whole SSE/NEON scalar path is f64: `fadd`,
 // `fcmp`, an 8-byte `.rdata` island). An f32 is 4 bytes and a real gap; nothing produces one.
 function arm64RequireScalarDouble(t StdType, what String)
@@ -464,8 +475,8 @@ type StdToArm64Lowering
 			// already owns and the op now carries.
 			binOpImm(resultId, lhs, imm, opcode, _) then self.lowerBinOpImm(resultId, lhs: lhs, imm: imm, opcode: opcode, dstRef: dstRef)
 			cmpImm(resultId, lhs, imm, pred, operandType) then self.lowerCmpImm(resultId, lhs: lhs, imm: imm, pred: pred, operandType: operandType, dstRef: dstRef)
-			div(resultId, lhs, rhs) then self.lowerDivMod(resultId, lhs: lhs, rhs: rhs, isRemainder: false, dstRef: dstRef)
-			mod(resultId, lhs, rhs) then self.lowerDivMod(resultId, lhs: lhs, rhs: rhs, isRemainder: true, dstRef: dstRef)
+			div(resultId, lhs, rhs, signedness) then self.lowerDivMod(resultId, lhs: lhs, rhs: rhs, isRemainder: false, signedness: signedness, dstRef: dstRef)
+			mod(resultId, lhs, rhs, signedness) then self.lowerDivMod(resultId, lhs: lhs, rhs: rhs, isRemainder: true, signedness: signedness, dstRef: dstRef)
 			param(resultId, index, paramType) then self.lowerParam(resultId, index: index, paramType: paramType, paramFloatMask: paramFloatMask, dstRef: dstRef)
 			call(resultId, callee, args) then self.lowerCall(resultId, callee: callee, args: args, dstRef: dstRef)
 			ret(retValId) then self.lowerReturn(retValId, dstRef: dstRef, returnType: returnType, asTerminator: false)
@@ -803,25 +814,31 @@ type StdToArm64Lowering
 		self.emit(dstRef, op: TargetOp.storeBaseDispReg(TargetVReg.virtual(addrId), disp: memoryDisplacement(offset), src: TargetVReg.virtual(valueId), width: accessWidthFor(valueType)))
 	end 'lowerStoreIndirect'
 
-	// Lower a Std `div`/`mod` to `sdiv` (+ `msub` for the remainder). NO zero-divisor guard: AArch64
+	// Lower a Std `div`/`mod` to `sdiv`/`udiv` (+ `msub` for the remainder). NO zero-divisor guard: AArch64
 	// `sdiv`/`udiv` return 0 on a zero divisor (defined behaviour, unlike x64's `idiv` #DE), and the spec
 	// adopts that — `a / 0` is 0, and the divide/modulo-by-zero tests are gated to x64-windows (see the
 	// file header / safety.md). So the division lowers straight into `dstRef` and never splits the block.
 	//
-	// `mod` is `x − (x/y)*y` via `sdiv` then `msub`. The quotient is an intermediate the isel cannot mint
-	// a fresh virtual for (the parser owns the value space), so it goes through the IP scratch x16:
-	// `sdiv x16, lhs, divisor; msub dest, x16, divisor, lhs`. x16 is non-allocatable and live only across
-	// these two adjacent ops.
-	function lowerDivMod(resultId ValueId, lhs ValueId, rhs ValueId, isRemainder bool, dstRef BlockRef)
+	// ⭐ **THE SIGNEDNESS IS THE OP'S, NOT AN OPERAND'S** (X10, `DivideSignedness`). arm64 was the target
+	// where the SIGNED reading happened to be harmless for the sibling operators — a "32-bit" binop is
+	// emitted at 64 bits here — but a divide's signedness is real on every target, and `udiv` was already
+	// declared, printed, coloured and encoded with only this isel never reaching for it.
+	//
+	// `mod` is `x − (x/y)*y` via the divide then `msub`, and the SAME `msub` serves both signednesses:
+	// the subtraction and the multiply are two's-complement identical, so only the quotient's instruction
+	// differs. The quotient is an intermediate the isel cannot mint a fresh virtual for (the parser owns
+	// the value space), so it goes through the IP scratch x16: `sdiv x16, lhs, divisor; msub dest, x16,
+	// divisor, lhs`. x16 is non-allocatable and live only across these two adjacent ops.
+	function lowerDivMod(resultId ValueId, lhs ValueId, rhs ValueId, isRemainder bool, signedness DivideSignedness, dstRef BlockRef)
 		let divisor = TargetVReg.virtual(rhs)
 		let dest = TargetVReg.virtual(resultId)
 		let lhsReg = TargetVReg.virtual(lhs)
 		if isRemainder 'mod'
 			let quot = arm64PhysReg(Arm64Scratch)
-			self.emit(dstRef, op: TargetOp.arm64Sdiv(quot, lhs: lhsReg, rhs: divisor))
+			self.emit(dstRef, op: arm64DivideOp(quot, lhs: lhsReg, rhs: divisor, signedness: signedness))
 			self.emit(dstRef, op: TargetOp.arm64Msub(dest, mulLhs: quot, mulRhs: divisor, minuend: lhsReg))
 		end 'mod' else 'div'
-			self.emit(dstRef, op: TargetOp.arm64Sdiv(dest, lhs: lhsReg, rhs: divisor))
+			self.emit(dstRef, op: arm64DivideOp(dest, lhs: lhsReg, rhs: divisor, signedness: signedness))
 		end 'div'
 	end 'lowerDivMod'
 

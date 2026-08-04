@@ -99,6 +99,14 @@ let argRegisters = [X64Register.rcx, X64Register.rdx, X64Register.rax, X64Regist
 // one-fact-written-twice bug this file's header warns of.
 export let argFpRegisters = [X64Register.xmm0, X64Register.xmm1, X64Register.xmm2, X64Register.xmm3, X64Register.xmm4, X64Register.xmm5]
 
+// ⭐ **THE HIGH HALF OF AN UNSIGNED DIVIDEND** — RDX, for the group-3 `div` that reads RDX:RAX as a
+// single 128-bit number. Zero, because Maxon's unsigned divide is a 64-bit ÷ 64-bit one: the dividend
+// IS the 64 bits in RAX and there is no high half to supply. Named rather than a bare `0` beside
+// `TargetOp.movRegImm32` because a `0` there reads as an arbitrary constant, and this one is a
+// PRECONDITION of the instruction — with anything else in RDX the quotient can overflow and `div`
+// raises #DE (which is also why the unsigned form, unlike `idiv`, has no overflow case at all).
+let UnsignedDividendHighHalf = 0x0
+
 // The `VirtualAlloc` call shape `lowerOsAllocPages` emits. Named rather than spelled as bare
 // hex at the call site: `0x3000` is unreadable and `MEM_COMMIT|MEM_RESERVE` is the fact.
 //
@@ -1172,8 +1180,8 @@ type StdToX64Lowering
 			// restated `StdType.i64` inside, i.e. the answer written twice.
 			binOpImm(resultId, lhs, imm, opcode, _) then self.lowerBinOpImm(resultId, lhs: lhs, imm: imm, opcode: opcode, dstBlock: dstBlock)
 			cmpImm(resultId, lhs, imm, pred, operandType) then self.lowerCmpImm(resultId, lhs: lhs, imm: imm, pred: pred, operandType: operandType, dstBlock: dstBlock)
-			div(resultId, lhs, rhs) then self.lowerDivMod(resultId, lhs: lhs, rhs: rhs, resultReg: X64Register.rax, dstBlock: dstBlock)
-			mod(resultId, lhs, rhs) then self.lowerDivMod(resultId, lhs: lhs, rhs: rhs, resultReg: X64Register.rdx, dstBlock: dstBlock)
+			div(resultId, lhs, rhs, signedness) then self.lowerDivMod(resultId, lhs: lhs, rhs: rhs, signedness: signedness, resultReg: X64Register.rax, dstBlock: dstBlock)
+			mod(resultId, lhs, rhs, signedness) then self.lowerDivMod(resultId, lhs: lhs, rhs: rhs, signedness: signedness, resultReg: X64Register.rdx, dstBlock: dstBlock)
 			param(resultId, index, paramType) then self.lowerParam(resultId, index: index, paramType: paramType, paramFloatMask: paramFloatMask, dstBlock: dstBlock)
 			call(resultId, callee, args) then self.lowerCall(resultId, callee: callee, args: args, dstBlock: dstBlock)
 			ret(retValId) then self.lowerReturn(retValId, dstBlock: dstBlock, returnType: returnType, asTerminator: false)
@@ -1586,27 +1594,44 @@ type StdToX64Lowering
 		self.targetModule.appendOp(dstBlock, op: TargetOp.storeBaseDispReg(TargetVReg.virtual(addrId), disp: memoryDisplacement(offset), src: TargetVReg.virtual(valueId), width: accessWidthFor(valueType)))
 	end 'lowerStoreIndirect'
 
-	// Lower a Std `div`/`mod` to the x64 `idiv` sequence. x64 `idiv r/m64` divides the
-	// 128-bit RDX:RAX by the divisor, leaving the QUOTIENT in RAX and the REMAINDER in
+	// Lower a Std `div`/`mod` to the x64 divide sequence. Both group-3 divides read the
+	// 128-bit RDX:RAX and divide it by the divisor, leaving the QUOTIENT in RAX and the REMAINDER in
 	// RDX — RAX and RDX are FIXED registers the instruction pins. So the sequence is:
 	//   mov rax, dividend   ; dividend (lhs) into RAX's low half
-	//   cqo                 ; sign-extend RAX into RDX:RAX (fills the high half)
-	//   idiv divisor        ; RDX:RAX / divisor -> quotient in RAX, remainder in RDX
+	//   <fill RDX>          ; the HIGH half — see below, and it is the whole signedness fork
+	//   idiv/div divisor    ; RDX:RAX / divisor -> quotient in RAX, remainder in RDX
 	//   mov result, resultReg ; copy RAX (div) or RDX (mod) out to the result vreg
 	// The divisor stays a VIRTUAL register — the allocator keeps it out of RAX/RDX
-	// (idivReg's implicit RAX/RDX masks forbid it, see TargetLiveness), so it survives
-	// both the `mov rax, dividend` and the `cqo` to be read by the `idiv`. `resultReg`
+	// (divideReg's implicit RAX/RDX masks forbid it, see TargetLiveness), so it survives
+	// both the `mov rax, dividend` and the RDX fill to be read by the divide. `resultReg`
 	// selects which fixed register the answer is read from: RAX for `/` (quotient), RDX
 	// for `mod` (remainder) — the ONLY difference between the two, so they share this one
 	// lowering rather than duplicating the four-op emit.
 	//
-	// idiv TRAPS (#DE) on divide-by-zero and on INT_MIN / -1 overflow. That trap is
-	// delivered by the runtime fault handler (a Workstream-R / M6 deliverable), NOT by a
+	// ⭐⭐ **FILLING RDX IS WHERE THE SIGNEDNESS LIVES ON x64, AND IT IS TWO FACTS, NOT ONE** (X10).
+	// A signed divide sign-EXTENDS RAX into RDX (`cqo`), so a dividend with bit 63 set reads as a
+	// negative number; an unsigned one ZEROES RDX, so the same 64 bits read as a huge magnitude.
+	// Emit `cqo` for an unsigned divide and `u64.max / 3` computes `-1 / 3` = 0. The instruction's
+	// /ext field and this fill must therefore move TOGETHER — which is why one `DivideSignedness`
+	// decides both here rather than each being chosen where it is emitted.
+	//
+	// `mov edx, 0` is the zeroing form, not `xor edx, edx`: the ops this dialect has are a
+	// materialize-a-constant and a three-address `xorRegReg`, and the constant one says what it
+	// means at one byte more. It writes the 32-bit half, which zeroes the whole of RDX (every
+	// 32-bit write to a GPR clears the upper half in long mode).
+	//
+	// A divide TRAPS (#DE) on divide-by-zero, and the SIGNED one also on INT_MIN / -1 overflow —
+	// the unsigned one cannot overflow at all, because a zeroed RDX makes every quotient fit. That
+	// trap is delivered by the runtime fault handler (a Workstream-R / M6 deliverable), NOT by a
 	// compiler guard — so `x / 0` here is correct-but-raw-#DE for now, by design.
-	function lowerDivMod(resultId ValueId, lhs ValueId, rhs ValueId, resultReg X64Register, dstBlock IrBlock)
+	function lowerDivMod(resultId ValueId, lhs ValueId, rhs ValueId, signedness DivideSignedness, resultReg X64Register, dstBlock IrBlock)
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rax), srcReg: TargetVReg.virtual(lhs)))
-		self.targetModule.appendOp(dstBlock, op: TargetOp.cqo)
-		self.targetModule.appendOp(dstBlock, op: TargetOp.idivReg(TargetVReg.virtual(rhs)))
+		if signedness == DivideSignedness.signed 'signExtendIntoRdx'
+			self.targetModule.appendOp(dstBlock, op: TargetOp.cqo)
+		end 'signExtendIntoRdx' else 'zeroRdx'
+			self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rdx), value: UnsignedDividendHighHalf))
+		end 'zeroRdx'
+		self.targetModule.appendOp(dstBlock, op: TargetOp.divideReg(TargetVReg.virtual(rhs), signedness: signedness))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(TargetVReg.virtual(resultId), srcReg: x64PhysReg(resultReg)))
 	end 'lowerDivMod'
 

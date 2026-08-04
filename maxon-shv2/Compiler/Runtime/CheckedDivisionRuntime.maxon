@@ -1,6 +1,6 @@
-// Runtime/CheckedDivisionRuntime.maxon — the EXPANDED DIVISION family (A1, A1x): the three callee names a
-// `/` or `mod` desugars to when the compiler owes it a guard, the error enum the fallible two throw, and the
-// one ordinal they throw it as.
+// Runtime/CheckedDivisionRuntime.maxon — the EXPANDED DIVISION family (A1, A1x, X10): the five callee names
+// a `/` or `mod` desugars to when the compiler owes it a guard, the error enum the fallible four throw, and
+// the one ordinal they throw it as.
 //
 // ⚠ **"CHECKED" IS ABOUT THE GUARD, NOT ABOUT THROWING, and since A1x the family has a member that raises
 // nothing.** `idiv` faults for TWO reasons: a zero divisor (catchable — A1) and an unrepresentable quotient
@@ -21,7 +21,8 @@
 // What the file DOES own is everything a family needs BESIDES a body — and every one of those is a fact
 // some other file has to agree with, which is exactly why they live together in one:
 //
-//   • the three CALLEE NAMES, and the classifier that maps a name back to WHICH division it is;
+//   • the five CALLEE NAMES, and the two classifiers that map a name back to WHICH division it is and at
+//     WHAT SIGNEDNESS;
 //   • the THROWING predicate `isThrowingRuntimeCallee` composes (so `try` is accepted, and a bare divide
 //     is refused with E3057);
 //   • the `throws` CLAUSE `runtimeThrowsClause` answers with (so an `otherwise (e)` binding is typed
@@ -33,14 +34,36 @@
 // four families need a bidirectional install-time guard (`ArrayRuntime.verifyThrowingAccessorsMatchPredicate`)
 // because a name-listing predicate and a set of builders that stamp a `throws` clause are genuinely two
 // copies of one fact, and only a check can hold them together. Here there is nothing to check: the two name
-// CONSTANTS below are the only place any name is WRITTEN, `divisionKindOf` is the only classifier over
-// them, `isThrowingDivisionRuntimeCallee` is DERIVED from `divisionKindThrows`, and `lowerDivisionExpansion`
+// CONSTANTS below are the only place any name is WRITTEN, `divisionKindOf` and `divisionCalleeSignedness`
+// are the only classifiers over them, `isThrowingDivisionRuntimeCallee` is DERIVED from `divisionKindThrows`, and `lowerDivisionExpansion`
 // matches that same kind EXHAUSTIVELY — so a fourth kind cannot be named as throwing without the lowering
 // refusing to compile, and cannot be expanded without being named. A guard over one list would be a check with nothing on
 // the other side of it. (Ordinal drift is a different fact with a different pair of copies, and it DOES get
 // its claim below.)
 let CheckedDivideName = b"__checked_div"
 let CheckedModuloName = b"__checked_mod"
+
+// ⭐⭐ **THE UNSIGNED TWINS (X10), AND WHY THEY ARE NAMES RATHER THAN TWO MORE `CheckedDivisionKind`
+// CASES.** A divide's SIGNEDNESS and its KIND are two independent facts about one operator, and
+// crossing them here would have doubled a union that four exhaustive matches elsewhere are held to —
+// each of which would then have had to answer a question it does not ask. So the KIND stays three
+// cases (what is divided, and whether the compiler owes it a guard) and the signedness is a SECOND
+// question over the same one list of names, answered by `divisionCalleeSignedness` below.
+//
+// The callee name has to carry it because the name is the ONLY channel that survives to the lowering:
+// `lowerTryCall` reconstructs everything it knows about an expanded divide from the callee it was
+// handed. `Parser.emitDivOrMod` decides the signedness (it is the last tier that can — see TypeRules'
+// ⭐⭐ THE DIVISION SIGNEDNESS RULE), and this is where that decision is written down.
+//
+// ⚠ **THERE IS NO `__guarded_mod_unsigned`, AND THAT ABSENCE IS THE RULE WORKING.** The total
+// remainder exists because `idiv` raises `#DE` on `i64.min mod -1`; read UNSIGNED those two patterns
+// are `2^63 mod (2^64 - 1)` = `2^63`, an ordinary answer no hardware refuses (x64's `div` reads a
+// ZEROED RDX, so no quotient can overflow; arm64's `udiv` and wasm's `i64.rem_u` have no overflow trap
+// at all). So an unsigned `mod` has exactly ONE hazard — the zero divisor — and a divisor proven
+// non-zero takes the BARE route, exactly as an unsigned `/` does. `Parser.emitDivOrMod` states the
+// same fact from its end by never asking for the overflow guard on an unsigned remainder.
+let UnsignedCheckedDivideName = b"__checked_div_unsigned"
+let UnsignedCheckedModuloName = b"__checked_mod_unsigned"
 
 // ⭐⭐ **THE THIRD EXPANSION, AND THE ONLY ONE THAT THROWS NOTHING (A1x).** `idiv` raises `#DE` for TWO
 // unrelated reasons and A1 desugared only the first, so a `mod` whose divisor the compiler PROVED
@@ -86,11 +109,11 @@ export union CheckedDivisionKind
 end 'CheckedDivisionKind'
 
 export function divisionKindOf(callee ByteArray) returns CheckedDivisionKind
-	if callee.equals(CheckedDivideName) 'divide'
+	if callee.equals(CheckedDivideName) or callee.equals(UnsignedCheckedDivideName) 'divide'
 		return CheckedDivisionKind.quotient
 	end 'divide'
 
-	if callee.equals(CheckedModuloName) 'modulo'
+	if callee.equals(CheckedModuloName) or callee.equals(UnsignedCheckedModuloName) 'modulo'
 		return CheckedDivisionKind.remainder
 	end 'modulo'
 
@@ -100,6 +123,24 @@ export function divisionKindOf(callee ByteArray) returns CheckedDivisionKind
 
 	return CheckedDivisionKind.notCheckedDivision
 end 'divisionKindOf'
+
+// ⭐ **THE OTHER QUESTION THE ONE NAME LIST ANSWERS (X10)** — beside `divisionKindOf`, not folded into
+// it, because the KIND decides the error channel and the guard while this decides only the
+// INSTRUCTION. Its single caller is `lowerDivisionExpansion`, which hands the answer straight to
+// `divisionOpcodeFor` so that the expanded divide and the bare one pick their signedness through the
+// same function.
+//
+// Every name that is not one of the two unsigned ones is `signed`, including `notCheckedDivision`'s
+// non-division callees — this is asked only of a name already classified as an expanded division, and
+// `signed` is what the whole language emitted before X10, so a name that ever fell through would fall
+// through to the old behaviour rather than to a wrong instruction.
+export function divisionCalleeSignedness(callee ByteArray) returns DivideSignedness
+	if callee.equals(UnsignedCheckedDivideName) or callee.equals(UnsignedCheckedModuloName) 'unsigned'
+		return DivideSignedness.unsigned
+	end 'unsigned'
+
+	return DivideSignedness.signed
+end 'divisionCalleeSignedness'
 
 // ⭐ **DOES THIS KIND READ A REMAINDER?** — the one place the two remainder kinds are treated as one. ONE
 // caller today (`lowerDivisionExpansion`'s overflow-guard gate), so it is a named FACT rather than a saving:
@@ -133,10 +174,7 @@ end 'divisionKindReadsRemainder'
 // unguarded quotient look guarded.
 export function divisionExpansionCalleeForOp(op MaxonBinOp, fallible bool) returns ByteArray
 	if op == MaxonBinOp.div 'divide'
-		if not fallible 'totalQuotient'
-			panic("divisionExpansionCalleeForOp: a TOTAL `/` has no expansion — the quotient's only hazard is a zero divisor, and `i64.min / -1` has no answer to guard toward (specs-shv2/division.md). Only `mod` has a second, answerable hazard.")
-		end 'totalQuotient'
-
+		requireFallibleQuotient(op, fallible: fallible)
 		return CheckedDivideName
 	end 'divide'
 
@@ -144,8 +182,32 @@ export function divisionExpansionCalleeForOp(op MaxonBinOp, fallible bool) retur
 		return CheckedModuloName if fallible else GuardedModuloName
 	end 'modulo'
 
+	if op == MaxonBinOp.divUnsigned 'unsignedDivide'
+		requireFallibleQuotient(op, fallible: fallible)
+		return UnsignedCheckedDivideName
+	end 'unsignedDivide'
+
+	// An unsigned remainder has only the zero hazard (see `UnsignedCheckedModuloName`), so — unlike its
+	// SIGNED twin — a divisor proven non-zero leaves it nothing to expand and it never reaches here.
+	if op == MaxonBinOp.modUnsigned 'unsignedModulo'
+		requireFallibleQuotient(op, fallible: fallible)
+		return UnsignedCheckedModuloName
+	end 'unsignedModulo'
+
 	panic("divisionExpansionCalleeForOp: '{op.rawValue}' is not a division operator — `divisionOperator` is the gate and `emitDivOrMod` its only caller")
 end 'divisionExpansionCalleeForOp'
+
+// The three operators with NOTHING to expand once their divisor is proven non-zero, refused in one
+// place rather than three: the two quotients, whose only hazard IS the zero divisor, and the unsigned
+// remainder, which has no `-1` overflow to guard toward. Returning a checked name for any of them
+// would silently make an unguarded divide look guarded.
+function requireFallibleQuotient(op MaxonBinOp, fallible bool)
+	if fallible 'hasAZeroHazard'
+		return
+	end 'hasAZeroHazard'
+
+	panic("divisionExpansionCalleeForOp: a TOTAL `{op.rawValue}` has no expansion — its only hazard is a zero divisor, and the second hazard `__guarded_mod` exists for (`i64.min mod -1`) is either unanswerable (`i64.min / -1`, specs-shv2/division.md) or absent (an unsigned divide reads a ZEROED high half and cannot overflow). Only a SIGNED `mod` has a second, answerable hazard.")
+end 'requireFallibleQuotient'
 
 // The kind → OPERATOR direction, which closes the cycle the two functions above open (operator → name →
 // kind) and is what lets `lowerDivisionExpansion` hand the divide back to `lowerBinOp` — the ONE place that

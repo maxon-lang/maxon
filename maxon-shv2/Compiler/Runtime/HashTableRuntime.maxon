@@ -704,7 +704,7 @@ function buildHtInsert(module StdModule, family HashTableFamily)
 	let scaled = emitBin(module, block: entry, a: capacity, b: loadNumerator, opcode: StdBinOpcode.mul, ids: ids)
 	let loadDenominator = emitConst(module, block: entry, value: LoadFactorDenominator, ids: ids)
 	let loadLimit = ids.mint()
-	module.appendOp(entry, op: StdOp.div(loadLimit, lhs: scaled, rhs: loadDenominator))
+	module.appendOp(entry, op: StdOp.div(loadLimit, lhs: scaled, rhs: loadDenominator, signedness: DivideSignedness.signed))
 	let needGrow = emitCmp(module, block: entry, a: count, b: loadLimit, pred: StdCmpPred.ge, ids: ids)
 	module.setTerminator(entry, op: StdOp.condBranch(needGrow, thenBlockId: doGrow.id, elseBlockId: setup.id))
 

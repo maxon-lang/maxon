@@ -560,26 +560,35 @@ export union TargetOp
 	// existing `… to iatCall` range arm can SILENTLY swallow it — each such arm instead
 	// fails to compile until it is consciously extended (the band-append invariant).
 	cqo = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0x1, implicitDefs: 0x4}
-	// Signed divide RDX:RAX by `divisor` (`idiv r/m64`, REX.W F7 /7): QUOTIENT → RAX,
-	// REMAINDER → RDX. `divisor` is the ONE explicit virtual USE (any GPR the allocator
-	// keeps out of RAX/RDX). implicitUses = 0x1 (reads RAX — the dividend low half; it
-	// also reads RDX, but that is EXCLUDED from implicitUses because `cqo` — not any
-	// tracked value — is what puts RDX's contents there, so RDX's role is captured
-	// entirely by implicitDefs). implicitDefs = 0x5
+	// Divide RDX:RAX by `divisor` (group-3 `F7 /7` = `idiv` when `signedness` is `signed`,
+	// `F7 /6` = `div` when it is `unsigned`): QUOTIENT → RAX, REMAINDER → RDX. `divisor` is the
+	// ONE explicit virtual USE (any GPR the allocator keeps out of RAX/RDX). implicitUses = 0x1
+	// (reads RAX — the dividend low half; it also reads RDX, but that is EXCLUDED from
+	// implicitUses because the RDX SETUP — `cqo` for the signed form, a zeroing `mov` for the
+	// unsigned one — not any tracked value, is what puts RDX's contents there, so RDX's role is
+	// captured entirely by implicitDefs). implicitDefs = 0x5
 	// (the RAX bit 0x1 OR the RDX bit 0x4 — it WRITES both), which the clobber→forbidden
-	// path uses to keep every value live across the idiv, AND the divisor operand itself,
-	// out of RAX/RDX. idiv TRAPS (#DE) on divide-by-zero and INT_MIN / -1; the trap is a
+	// path uses to keep every value live across the divide, AND the divisor operand itself,
+	// out of RAX/RDX. It TRAPS (#DE) on divide-by-zero, and — the SIGNED form only —
+	// on INT_MIN / -1; the trap is a
 	// runtime-fault-handler concern (Workstream-R / M6), so there is no compiler guard.
-	// idiv leaves EFLAGS UNDEFINED — a "may clobber", which is why `StdOp.div`/`mod`
+	// It leaves EFLAGS UNDEFINED — a "may clobber", which is why `StdOp.div`/`mod`
 	// declare `clobbersFlags: true`. APPENDED at the END of the union, after `cqo`.
-	idivReg(divisor TargetVReg) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0x1, implicitDefs: 0x5}
+	//
+	// ⭐ **ONE OP CARRYING THE SIGNEDNESS, NOT TWO OPS (X10).** `idiv` and `div` share every fact
+	// this union records — the fixed RDX:RAX pair, the implicit masks, the encoding shape — and
+	// differ only in the group-3 extension. A second variant would have had to be added to the
+	// eight `… to divideReg` RANGE ARMS that bracket this one (liveness, the splitter, SSA
+	// destruction, the prologue's clobber scan), and a variant inserted INSIDE such a range is
+	// swallowed silently rather than refused. The field cannot be.
+	divideReg(divisor TargetVReg, signedness DivideSignedness) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0x1, implicitDefs: 0x5}
 	// Push a physical GPR onto the stack (`push r64`, 50+r, +REX.B for r8–r15). POST-
 	// REGALLOC and physical-only: `insertPrologueEpilogue` emits one per callee-saved
 	// register the coloring actually used, at the function's entry, so the callee-saved
 	// convention holds even though the allocator now colors values into rbx/r12–r15. It
 	// carries an `X64Register` directly (never a virtual — it is inserted AFTER coloring,
 	// so it is invisible to liveness/coloring, like `xchgRegReg`). Sets no flags.
-	// APPENDED at the END of the union, after `idivReg`, so no existing `… to idivReg`
+	// APPENDED at the END of the union, after `divideReg`, so no existing `… to divideReg`
 	// range arm can silently swallow it (the band-append invariant — each such arm fails
 	// to compile until consciously extended).
 	pushReg(reg X64Register) = TargetOpMeta{isMemory: true, isStore: true, isCall: false, implicitUses: 0, implicitDefs: 0}
@@ -611,7 +620,7 @@ export union TargetOp
 	// --- P1.0d.2: the BIT band (specs/bitwise-operators.md) ---
 	//
 	// APPENDED AT THE END OF THE UNION, all twelve of them, and that placement is the
-	// point: EVERY range arm over `TargetOp` in the passes (`movRegReg to idivReg`,
+	// point: EVERY range arm over `TargetOp` in the passes (`movRegReg to divideReg`,
 	// `pushReg to loadRegSlot`, `xchgRegReg to iatCall`, …) stops at or before
 	// `loadRegSlot`, so an op inserted anywhere ELSE would be SILENTLY SWALLOWED by one
 	// of them — misclassified in the operand model, the splitter, the colorer and the

@@ -382,6 +382,7 @@ export let Grp2ExtShr = 5  // SHR r/m, count — LOGICAL right shift (zero-filli
 // Group-3 ALU opcode-extension (ModR/M reg field) values (F7 /ext).
 let Grp3ExtNot = 2  // NOT r/m — one's complement (writes NO flags, unlike NEG)
 let Grp3ExtNeg = 3  // NEG r/m
+let Grp3ExtDiv = 6  // DIV r/m — UNSIGNED divide RDX:RAX by r/m (quotient→RAX, remainder→RDX)
 let Grp3ExtIdiv = 7  // IDIV r/m — signed divide RDX:RAX by r/m (quotient→RAX, remainder→RDX)
 
 // 2^32 — used to fold a negative signed 32-bit immediate/displacement into its
@@ -1563,7 +1564,9 @@ function emitTargetOp(op TargetOp, code ByteArray, callFixups CallFixupArray, ia
 		// is correct; a non-GT module has no `__gt_current_gt` global to reference, so it stays a bare `iatCall`.
 		iatCall(slotIndex) then emitGtGatedIatCall(code, iatRelocs: iatRelocs, rdataRelocs: rdataRelocs, slotIndex: slotIndex, usesGt: usesGt)
 		cqo then encodeCqo(code)
-		idivReg(divisor) then encodeGrp3Reg(code, ext: Grp3ExtIdiv, reg: resolveGpr(divisor))
+		// The two group-3 divides differ in the /ext field and in nothing else — same F7 opcode, same
+		// implicit RDX:RAX pair — which is why one op with a signedness field encodes both.
+		divideReg(divisor, signedness) then encodeGrp3Reg(code, ext: Grp3ExtIdiv if signedness == DivideSignedness.signed else Grp3ExtDiv, reg: resolveGpr(divisor))
 		pushReg(reg) then encodePushReg(code, reg: requireClass(reg, class: RegClass.gpr))
 		popReg(reg) then encodePopReg(code, reg: requireClass(reg, class: RegClass.gpr))
 		// CLASS-AGNOSTIC: a spill slot is 8 bytes and an f64 is 8 bytes, so the SAME slot the

@@ -4145,7 +4145,7 @@ function opIsConstMaterialization(module TargetModule, opIdx OpIndex) returns bo
 		movRegImm gives true
 		movRegImm32 gives true
 		prologue to jcc gives false
-		movRegReg to idivReg gives false
+		movRegReg to divideReg gives false
 		pushReg to loadRegSlot gives false
 		// The bit band. None of these is a constant materialization: every one reads at
 		// least one register (or, for `setccReg`, EFLAGS), so re-emitting it at a use site
@@ -5039,7 +5039,7 @@ function substituteValueInOp(op TargetOp, from ValueId, to ValueId) returns Targ
 		cmpRegImm32(reg, imm) then return TargetOp.cmpRegImm32(substituteVReg(reg, from: from, to: to), imm: imm)
 		xchgRegReg to iatCall then return op
 		cqo then return op
-		idivReg(divisor) then return TargetOp.idivReg(substituteVReg(divisor, from: from, to: to))
+		divideReg(divisor, signedness) then return TargetOp.divideReg(substituteVReg(divisor, from: from, to: to), signedness: signedness)
 		pushReg to popReg then return op
 		storeSlotReg(slot, srcReg) then return TargetOp.storeSlotReg(slot, srcReg: substituteVReg(srcReg, from: from, to: to))
 		loadRegSlot(destReg, slot) then return TargetOp.loadRegSlot(substituteVReg(destReg, from: from, to: to), slot: slot)

@@ -616,6 +616,23 @@ end 'MaxonOpMeta'
 // arithmetic band (`add to mod`), the bit band and the shifts, and neither is in any of them. Every
 // `match` over this enum gained an explicit arm when each landed, rather than being swallowed by a
 // range whose comment describes something else.
+//
+// ⭐⭐ **X10 APPENDS THE UNSIGNED DIVISION PAIR, FOR `shrLogical`'s REASON, WORD FOR WORD.**
+// `divUnsigned`/`modUnsigned` are the SAME source operators as `div`/`mod` — `/` and `mod`. Which one
+// the parser emits is decided by BOTH operands' declared ranges and by nothing else (TypeRules' ⭐⭐
+// THE DIVISION SIGNEDNESS RULE): a divide is unsigned when neither operand can be negative and at
+// least one says so by DECLARATION, because Maxon's unsigned type is a ranged alias whose low bound is
+// 0. `infixMaxonOp` never yields either — only `Parser.emitDivOrMod` does, having asked the question.
+//
+// Two opcodes rather than one opcode plus a flag, and here that is FORCED rather than chosen: this is
+// a bare enum value with nowhere for a flag to live. One tier down the operation is a VARIANT with
+// fields, so `StdOp.div`/`mod` carry a `DivideSignedness` instead — same fact, the home each tier's
+// representation actually has.
+//
+// ⚠ **THEY ARE THE ONE FAMILY WHOSE SIGNEDNESS IS REAL IN THE INSTRUCTION.** `+ - * and or xor` are
+// unhurt by taking either reading — a narrowed integer binop is emitted at 64 bits on every backend —
+// and `shr` already carries its own answer. `idiv`/`div`, `sdiv`/`udiv` and `i64.div_s`/`i64.div_u`
+// are three genuinely different instructions, so this is the family a wrong answer reaches.
 export enum MaxonBinOp
 	add
 	sub
@@ -630,6 +647,8 @@ export enum MaxonBinOp
 	shrLogical
 	min
 	max
+	divUnsigned
+	modUnsigned
 end 'MaxonBinOp'
 
 // The unary (prefix) operators the Maxon tier represents. M3 lands `neg` (the
