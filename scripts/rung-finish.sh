@@ -424,7 +424,12 @@ else
      like any other. See $CROSS_LOG. ⚠ If two suites overlapped in one tree, re-run that lane ALONE
      before believing it: a shared .spec-tmp has produced a FALSE RED before. No flag softens a real
      one, and you never turn it green by dropping a target."
-  CROSS_SUMMARY="$(grep -cE '^[[:space:]]*(PASS|FAIL|SKIP|PRIOR)' "$CROSS_LOG" | tr -d ' ') lane rows — see $CROSS_LOG"
+  # ⚠ MATCH THE MATRIX ROWS, NOT EVERY `PASS` IN THE FILE. The first version counted any line starting
+  #   with PASS/FAIL/SKIP/PRIOR and reported "7548 lane rows" on BATCH14 — it had swept up every
+  #   per-test PASS line the three suites print. A number that large is obviously wrong, which is the
+  #   only reason it was harmless; a plausible wrong number in a rung report is not. The matrix rows are
+  #   `<arch>-<os>` followed by a verdict, so anchor on the target name.
+  CROSS_SUMMARY="$(grep -cE '^[a-z0-9_]+-[a-z0-9_]+[[:space:]]+(PASS|FAIL|SKIP|PRIOR)([[:space:]]|$)' "$CROSS_LOG" | tr -d ' ') target lane(s) — see $CROSS_LOG"
   ok "cross-target gate passed (arm64 lanes SKIPPED — remote, UNVERIFIED, and not required)"
 fi
 
@@ -477,7 +482,9 @@ $(row_members "$PLAN" "$BATCH")"
       # A member that is neither claimed nor done was dropped from the batch mid-rung, or never
       # claimed with it. Either way it is not this rung's to close — the coordinator releases it back
       # to ⬜ FREE in the detail rows, and says why.
-      *)    warn "  $id (line $ln) reads '$st' — leaving it alone; say in the detail row why it is not ✅" ;;
+      # ⚠ TRUNCATED: a status cell can be a paragraph. G14's release note ran ~1,500 characters and
+      #   buried the three flips either side of it in the BATCH14 closure output.
+      *)    warn "  $id (line $ln) reads '$(printf '%s' "$st" | cut -c1-60)…' — leaving it alone; say in the detail row why it is not ✅" ;;
     esac
   done <<< "$FLIP"
   ok "board flipped"
