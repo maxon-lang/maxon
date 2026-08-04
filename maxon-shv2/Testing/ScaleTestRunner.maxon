@@ -457,10 +457,17 @@ function measureScaleLadder(args MaxonArgs, corpusRoot FilePath) returns ExitCod
 		touchTreeLock()
 
 		var result = try compileRung(compilerExe, root: corpusRoot, rung: rung) otherwise (error) 'rungFailed'
-			// A rung that would not compile is a broken run, not a slow one: every later rung is a
-			// superset of this one's shapes, so there is nothing left to measure and nothing the rungs
-			// below it can be compared against.
-			return brokenRun("rung {rung.index} FAILED to compile", detail: scaleErrorText(error))
+			// A rung that would not compile — or that compiled and then DISAGREED with the generator about
+			// what it computes — is a broken run, not a slow one: every later rung is a superset of this
+			// one's shapes, so there is nothing left to measure and nothing the rungs below it can be
+			// compared against.
+			//
+			// ⚠ THE HEADLINE SAYS "did not deliver a rung to measure" AND NOT "failed to compile", because
+			// since BATCH10 this arm has two causes and naming only the first was a lie about the second:
+			// a rung that compiles cleanly and then exits with a failed witness reported itself as a
+			// COMPILE failure, with an empty compiler stderr underneath it to prove it had not. The detail
+			// line is where the two are told apart, and it always names which happened.
+			return brokenRun("rung {rung.index} did not deliver a rung to measure", detail: scaleErrorText(error))
 		end 'rungFailed'
 
 		// The repeats. The first compile above is repeat 1, so this loop runs `repeat - 1` more times
@@ -603,12 +610,48 @@ function compileRung(compilerExe FilePath, root FilePath, rung ScaleRung) return
 		throw ScaleError.reason("compiler exited {compile.exitCode}: {compile.stderr.trim()}")
 	end 'compileFailed'
 
+	try runRung(outputBase, rung: rung)
+
 	// A MISSING metrics file is a failed rung, never a rung of zeroes. Zeroes would fit a curve —
 	// a beautifully flat one — and report that the compiler had become infinitely fast.
 	let text = try File.readText(metricsPath) otherwise throw ScaleError.reason("rung {rung.index} produced no metrics file at {metricsPath.toString()}")
 
 	return try parseRungMetrics(text, rung: rung)
 end 'compileRung'
+
+// ⭐⭐ **THE RUNG IS RUN, AND ITS EXIT CODE IS THE ONE THING THIS INSTRUMENT HAS EVER ASSERTED ABOUT
+// WHAT IT COMPILES.** Until BATCH10 `compileRung` wrote an executable and never opened it: `outputBase`
+// was passed to `-o` and never referenced again. So the ladder measured what compiling a program COST
+// and had no opinion whatever on whether that program was correct — and it wasn't. MEASURED on rung 0
+// before this: the accumulator wrapped i64 by the seventh driver, which turned `ownedSiteBlock`'s
+// `if acc > 0` false and SKIPPED every heap-creating site in the corpus, and rung 1 did not terminate.
+// Neither could be seen from a metrics file.
+//
+// ⚠ **THIS IS NOT A GATE AND DOES NOT BECOME ONE.** A wrong exit code is a BROKEN RUN — the same channel
+// a rung that fails to compile already uses, and for the same reason: the instrument did not measure a
+// surprising number, it measured a program that is not the program this generator describes, so there is
+// nothing to read. There is still no verdict about any number here, and `scale-test` still exits 0
+// whatever the numbers say.
+//
+// The witnesses themselves are `ScaleCorpus`'s (`driverWitnessTail`); this end only has to spawn the
+// binary and insist on `CorpusOkExit`.
+//
+// ⚠ The host's executable suffix comes from the compiler's OWN target model rather than a second
+// `#if os(Windows)` — and it is spelled INLINE rather than behind a `hostExeSuffix()` of this file's own.
+// `ScalePerType` and `SpecTestRunner` already carry one such wrapper each over exactly this pair of
+// calls; a third would be the duplication this project keeps naming, and at one call site the wrapper
+// would be a thin one besides.
+function runRung(outputBase FilePath, rung ScaleRung) throws ScaleError
+	let executable = try FilePath.from("{outputBase.toString()}{executableExtension(detectHostTarget())}") otherwise throw ScaleError.reason("rung {rung.index}'s output path is not a valid executable path")
+
+	let run = try runProcess(Executable.path(executable), argv: StringArray.create(), workingDirectory: inheritedWorkingDir()) otherwise (e) 'spawnFailed'
+		throw ScaleError.reason("rung {rung.index} compiled but its binary {executable.toString()} could not be started: {e.displayReason()}")
+	end 'spawnFailed'
+
+	if run.exitCode != CorpusOkExit 'wrongExit'
+		throw ScaleError.reason("rung {rung.index} exited {run.exitCode} where every witness holding is {CorpusOkExit}. Each generated driver hands `main` its argument back only when the construct it emitted computed what ScaleCorpus built it to compute, so this rung's binary DISAGREES with the generator about what its own program does — the numbers this rung produced are about a program that is not the one described. stderr: {run.stderr.trim()}")
+	end 'wrongExit'
+end 'runRung'
 
 // A file in the corpus root. `join` is overloaded on String and FilePath and a bare String constant
 // matches both, so the component is bound to a FilePath first.
@@ -1168,7 +1211,7 @@ export typealias LadderIndex = int(0 to u64.max)
 //
 // The one thing that IS a refusal is being unable to walk at all, which is a BROKEN RUN in the ordinary
 // sense: every rung compile resolves stdlib the same way and would fail the same way, so saying it here
-// beats reporting it as "rung 0 FAILED to compile".
+// beats reporting it as "rung 0 did not deliver a rung to measure".
 function printStdlibWalkCensus() throws ScaleError
 	// The same resolution every spawned rung compile makes — this runner IS the compiler it spawns
 	// (`compilerExe` is its own path), so asking it here asks about the very directory they will load.
