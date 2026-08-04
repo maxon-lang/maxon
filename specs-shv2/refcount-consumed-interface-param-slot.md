@@ -45,18 +45,29 @@ a consuming call, and the slot's single `+1` is dropped exactly once at each
 function exit. This disposes the reference once regardless of how many times the
 unpromoted slot is re-loaded.
 
-This test is restricted to the register-frame targets. On `wasm32-wasi` every
-function shares ONE linear-memory slot region, so an unpromoted slot does not
-persist across the calls in its own body — its content is unrecoverable at scope
-exit — and the slot-owned drop is deliberately disabled there (a pre-existing
-wasm slot-model limitation needing a per-invocation shadow stack). The consumed
-interface param therefore keeps its unfixed behavior on wasm and this test would
-fault there.
+In the self-hosted compiler this test is restricted to the register-frame
+targets. On `wasm32-wasi` every function shares ONE linear-memory slot region, so
+an unpromoted slot does not persist across the calls in its own body — its
+content is unrecoverable at scope exit — and the slot-owned drop is deliberately
+disabled there (a pre-existing wasm slot-model limitation needing a
+per-invocation shadow stack). The consumed interface param therefore keeps its
+unfixed behavior on wasm and this test would fault there.
+
+⚠ **THAT PREMISE IS v1's, AND IT IS FALSE FOR shv2 — MEASURED 2026-08-04, NOT
+INFERRED.** shv2 reaches the same answers by a different route: it is move-only
+and has no `mem2reg`-unpromoted-slot model to lose, so there is no slot whose
+content must survive a call. Both cases were run under the vendored wasmtime and
+return **34** and **22**, the same as every register-frame target. `wasm32-wasi`
+is therefore ON this file's target list here, where upstream `/specs` leaves it
+off — the ONE deliberate divergence from the byte-identical port, recorded here
+because a restriction nobody re-measures is how a lane silently loses coverage.
+(shv2's wasm lane has form for exactly this: `.claude/CLAUDE.md` carried
+"scalar only" for two weeks after it stopped being true.)
 
 ## Tests
 
 <!-- test: pre-loop-borrow-then-loop-consume -->
-<!-- targets: x64-windows, x64-linux, x64-macos, arm64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, x64-linux, x64-macos, arm64-windows, arm64-macos, arm64-linux, wasm32-wasi -->
 A consumed interface param borrowed before a loop and consumed inside it must
 survive the borrow's last use — the owned `+1` is released once at scope exit,
 not at the pre-loop borrow (which would free it before the loop re-reads the
@@ -142,7 +153,7 @@ end 'main'
 ```
 
 <!-- test: straight-line-multiple-consume -->
-<!-- targets: x64-windows, x64-linux, x64-macos, arm64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, x64-linux, x64-macos, arm64-windows, arm64-macos, arm64-linux, wasm32-wasi -->
 A consumed interface param moved into two separate containers must copy its `+1`
 for all but the last consume, so the single owned reference is not transferred
 twice (an over-release at the second destructor).
