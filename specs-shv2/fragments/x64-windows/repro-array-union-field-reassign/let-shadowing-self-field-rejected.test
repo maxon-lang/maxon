@@ -1,0 +1,22 @@
+// Test: let-shadowing-self-field-rejected
+typealias Idx = int(0 to 1024)
+
+type Holder
+		export var value as Idx
+
+		export static function create() returns Self
+				return Self{value: 0}
+		end 'create'
+
+		function compute() returns Idx
+				let value = 42 as Idx
+				return value
+		end 'compute'
+end 'Holder'
+
+function main() returns ExitCode
+		return Holder.create().compute()
+end 'main'
+---
+CompilerError:
+error E3006: <fragment>:12:9: local 'value' shadows self field 'Holder.value' — rename the local to avoid silent type confusion at every read/write keyed on the name
