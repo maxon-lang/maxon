@@ -2199,7 +2199,12 @@ end 'refreshTransientsNaming'
 //  3. the CLOBBERS of every op `w` is live ACROSS — `applyForbidden`'s half.
 function rebuildForbiddenOf(module TargetModule, liveness LivenessResult, pressure PressureIndex, w ValueId, paramCross ParamCrossForbid, dirty BlockSet)
 	let index = liveness.useIndex
-	var mask = paramCross.maskFor(w)
+	// SOURCE 1, the two contributions no block sweep produces: the entry-param cross-forbid, and the
+	// physical registers already established where `w` is DEFINED (`LivenessResult.establishedAtDef`,
+	// restated for the dirty blocks by `refreshAfterSplit` before this runs). Neither is a "what did
+	// this live range cross?" fact, so neither survives the `clearForbidden` below without being
+	// re-applied here.
+	var mask = paramCross.maskFor(w) or liveness.establishedAtDefOf(w)
 
 	// ⚠ AN EDGE USE IS NOT AN OPERAND, and source 2 is about operands — so an edge record is SKIPPED here,
 	// exactly as `applyValueToPressure`, `refreshTransientsNaming` and `collectReindexCandidates` skip
@@ -2807,6 +2812,19 @@ function refreshAfterSplit(module TargetModule, cfg FuncCfg, liveness LivenessRe
 		applyValueToPressure(liveness, pressure: scratch.pressure, v: f, adding: true)
 	end 'eachFresh'
 	refreshSplitTransients(module, liveness: liveness, pressure: scratch.pressure, split: split, sweep: scratch.sweep)
+
+	// WHAT WAS ESTABLISHED-AND-PENDING WHERE EACH DEF NOW SITS, restated for the dirty blocks — the one
+	// register fact that is about a def's POSITION rather than about a live range, so a split that seats
+	// a fresh id between a call's argument pre-moves is exactly what moves it (see
+	// `LivenessResult.establishedAtDef`). It runs BEFORE the masks are rebuilt, because
+	// `rebuildForbiddenOf` reads this column as one of its sources.
+	//
+	// It is per DIRTY BLOCK rather than per fresh id because it is derived by ONE forward walk of a
+	// block — the same walk the whole-function build uses, not a second reading of the same fact — and a
+	// split's fresh ids all live in blocks it dirtied.
+	for k in 0 upto dirty.count() 'eachDirtyBlock'
+		sweepEstablishedRegisters(module, topo: topo, blockLocal: dirty.at(k), establishedAtDef: liveness.establishedAtDef, scratch: scratch.sweep, opFacts: liveness.opFacts)
+	end 'eachDirtyBlock'
 
 	// The three things the dirty-block sweep used to produce, each restated against what actually moved.
 	rebuildForbiddenOf(module, liveness: liveness, pressure: scratch.pressure, w: split.victim, paramCross: paramCross, dirty: dirty)

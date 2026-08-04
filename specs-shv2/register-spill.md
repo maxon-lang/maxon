@@ -152,6 +152,29 @@ The tests below pin the **shape**, not a timing. Doubling the number of call sit
 of stores and slots **unchanged** — two of each, one per local — while the reloads grow with the reads
 that need them, which is the ABI's price and not the allocator's.
 
+### A reload serving a call ARGUMENT must not be born inside the pre-move run
+
+A call's arguments are placed by a run of plain **physical pre-moves** — `mov argReg[0], v0;
+mov argReg[1], v1; …; call` — with no parallel-copy sequencer. Nothing in the compiler marks an
+argument register live from its move to the call, so the allocator keeps the pre-moves apart by
+forbidding each one's destination register to every value live **ACROSS** it. That covers every
+value the lowering can produce, because the lowering emits the run with nothing between its
+members.
+
+**The splitter can put something between them.** A reload is anchored immediately before the
+FIRST use of the run it serves, and that use may be an argument pre-move which is not the call's
+first. The fresh reload value is then DEFINED between two pre-moves: it is live across neither,
+so it is forbidden nothing, and the colorer may hand it an argument register an EARLIER pre-move
+has already loaded. The callee then reads a clobbered argument — a silent wrong answer, with no
+diagnostic and no crash where the mistake was made.
+
+So a splice that DEFINES a value backs up to the head of the physical-register run it would
+otherwise land inside (`definingSplicePosition`). The reload is then live across every pre-move
+it precedes, which is exactly the case the liveness sweep already folds into `forbidden`, and the
+argument registers become unavailable to it by the existing rule rather than by a new one. It
+costs nothing when there is no run to back out of, which is every splice in a program that does
+not spill a call argument.
+
 ### What the RUN proves, and what the GOLDEN proves
 
 Every test below is checked twice, and the two halves prove different things — neither substitutes
@@ -1227,6 +1250,77 @@ end 'main'
 ```
 ```exitcode
 45
+```
+
+<!-- test: a-reload-for-a-later-argument-must-not-clobber-an-earlier-one -->
+A RELOAD BORN BETWEEN TWO ARGUMENT PRE-MOVES. `a` is defined first and read last — as the
+FOURTH argument of `sink4` — so Belady evicts it at the `s` peak and reloads it before its one
+remaining use, which is the pre-move `mov argReg[3], a`. The pre-moves for `c0`/`c1`/`c2` run
+ahead of it and their own values die there, so the registers those three arguments now sit in
+are held by nothing the allocator can see. The reload is live across none of them, is therefore
+forbidden none of them, and took `argReg[0]` — overwriting `c0` after it had been placed.
+
+`sink4` weighs its four arguments by powers of ten so ANY clobber or permutation shows in the
+answer rather than cancelling: `sink4(1, 2, 3, 7) = 1237`, `s = sum(1..28) = 406`, `f(0) = 1643`.
+Measured before the fix on arm64-macOS: exit 99, from `mov x0, c0 / mov x1, c1 / mov x2, c2 /
+ldr x0, [slot] / mov x3, x0 / bl sink4`.
+
+⚠ THE WIDTH IS LOAD-BEARING, for the reason `two-pressure-humps-exhaust-a-positional-gap` gives:
+`a` must be evicted, so the straight-line peak has to exceed the pool of the WIDEST target — 26
+allocatable GPRs on arm64 against x64's 14 — and 28 is the first round number past it.
+```maxon
+function sink4(a int, b int, c int, d int) returns int
+	return a * 1000 + b * 100 + c * 10 + d
+end 'sink4'
+
+function f(p int) returns int
+	let a = p + 7
+	let b1 = p + 1
+	let b2 = p + 2
+	let b3 = p + 3
+	let b4 = p + 4
+	let b5 = p + 5
+	let b6 = p + 6
+	let b7 = p + 7
+	let b8 = p + 8
+	let b9 = p + 9
+	let b10 = p + 10
+	let b11 = p + 11
+	let b12 = p + 12
+	let b13 = p + 13
+	let b14 = p + 14
+	let b15 = p + 15
+	let b16 = p + 16
+	let b17 = p + 17
+	let b18 = p + 18
+	let b19 = p + 19
+	let b20 = p + 20
+	let b21 = p + 21
+	let b22 = p + 22
+	let b23 = p + 23
+	let b24 = p + 24
+	let b25 = p + 25
+	let b26 = p + 26
+	let b27 = p + 27
+	let b28 = p + 28
+	let s = b1 + b2 + b3 + b4 + b5 + b6 + b7 + b8 + b9 + b10 + b11 + b12 + b13 + b14 + b15 + b16 + b17 + b18 + b19 + b20 + b21 + b22 + b23 + b24 + b25 + b26 + b27 + b28
+	let c0 = p + 1
+	let c1 = p + 2
+	let c2 = p + 3
+	let r = sink4(c0, b: c1, c: c2, d: a)
+	return s + r
+end 'f'
+
+function main() returns ExitCode
+	let r = f(0)
+	if r == 1643 'ok'
+		return 0
+	end 'ok'
+	return 99
+end 'main'
+```
+```exitcode
+0
 ```
 
 <!-- test: two-pressure-humps-exhaust-a-positional-gap -->

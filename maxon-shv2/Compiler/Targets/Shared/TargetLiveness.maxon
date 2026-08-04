@@ -634,6 +634,35 @@ export type LivenessResult
 	export var wordsPerRow as BitWordCount
 	export var live as LiveSets
 	export var forbidden as RegMaskColumn
+	// ⛔⛔ THE PHYSICAL REGISTERS ALREADY ESTABLISHED, AND NOT YET DESTROYED, AT EACH VALUE'S DEF —
+	// the ONE register fact that is not "what did this value's live range cross?", and the reason it
+	// needs a column of its own rather than riding `forbidden` alone: `clearForbidden` zeroes that
+	// mask on every victim and every fresh id, and this fact does not change when a live range is cut.
+	//
+	// A call's arguments are placed by a run of plain physical pre-moves (`mov argReg[0], v0; mov
+	// argReg[1], v1; …; call`) with no parallel-copy sequencer, and NOTHING marks an argument register
+	// live from its move to the call. The sweep keeps the run apart by forbidding each pre-move's
+	// destination to every value live ACROSS it — which covers everything the LOWERING can emit,
+	// because the lowering puts nothing between the members of a run (the same fact
+	// `emitArgMovesByFloatMask` states when it emits every outgoing STACK store ahead of every
+	// register move). A SPLIT CAN. A reload is anchored immediately before the first use of the run it
+	// serves and a remat re-emits before each use, and either use may be an argument pre-move that is
+	// not the call's first — so the fresh value is DEFINED between two pre-moves, live across neither,
+	// forbidden neither, and free to take an argument register an EARLIER pre-move already loaded.
+	//
+	// (MEASURED before this column existed: on arm64-macOS every `float.fromString` SIGSEGV'd —
+	// `__float_magnitudeBitsFromText` reloaded a `bool` into x0 between the pre-moves of a four-
+	// argument call and handed the callee that `false` in place of the array it had already put there
+	// for argument 0. The x64 half of the same hole is recorded at `markRunStarts`, which stopped the
+	// splitter from BREAKING a run at a pre-move; a run whose own first use IS one was never covered.)
+	//
+	// ⚠ THE CURE IS NOT TO MOVE THE SPLICE. Backing a defining splice out to the head of the run was
+	// tried and is WRONG: k reloads serving k different arguments all become live at the run head at
+	// once, so the pressure the split was relieving RISES, and the driver re-picks for ever
+	// (MEASURED: `splitLiveRanges: 'main' did not converge after 33938 splits`). A forbid changes no
+	// live range and no pressure, so it cannot do that — and it puts the constraint where the
+	// splitter's own feasibility machinery reads it, rather than only where the colorer does.
+	export var establishedAtDef as RegMaskColumn
 	// Which register FILE each value lives in — dense, by value id. PRODUCED BY THE LOWERING and
 	// handed to the allocator (see `allocateRegisters`); the allocator never derives it.
 	//
@@ -691,8 +720,8 @@ export type LivenessResult
 	// and the memo must be the SAME object across all of them or each pays the derivation again.
 	export var opFacts as OpVariantFacts
 
-	export static function create(cfg FuncCfg, valueCount ValueId, wordsPerRow BitWordCount, live LiveSets, forbidden RegMaskColumn, valueClass ValueClassColumn, registerFile RegisterFile, maxPressure RegCountColumn, livenessMarkSteps EventCount, deadPhis RegCountColumn, blockPressure RegCountColumn, useIndex UseIndex, opFacts OpVariantFacts) returns LivenessResult
-		return Self{cfg: cfg, valueCount: valueCount, wordsPerRow: wordsPerRow, live: live, forbidden: forbidden, valueClass: valueClass, registerFile: registerFile, maxPressure: maxPressure, livenessMarkSteps: livenessMarkSteps, deadPhis: deadPhis, blockPressure: blockPressure, useIndex: useIndex, opFacts: opFacts}
+	export static function create(cfg FuncCfg, valueCount ValueId, wordsPerRow BitWordCount, live LiveSets, forbidden RegMaskColumn, establishedAtDef RegMaskColumn, valueClass ValueClassColumn, registerFile RegisterFile, maxPressure RegCountColumn, livenessMarkSteps EventCount, deadPhis RegCountColumn, blockPressure RegCountColumn, useIndex UseIndex, opFacts OpVariantFacts) returns LivenessResult
+		return Self{cfg: cfg, valueCount: valueCount, wordsPerRow: wordsPerRow, live: live, forbidden: forbidden, establishedAtDef: establishedAtDef, valueClass: valueClass, registerFile: registerFile, maxPressure: maxPressure, livenessMarkSteps: livenessMarkSteps, deadPhis: deadPhis, blockPressure: blockPressure, useIndex: useIndex, opFacts: opFacts}
 	end 'create'
 
 	// The dead block-arg count of local block `local`, for ONE register file.
@@ -772,6 +801,9 @@ export type LivenessResult
 		end 'shrink'
 
 		self.forbidden.growFilled(newValueCount, value: 0)
+		// A fresh id establishes nothing until the dirty-block re-sweep says what was pending where the
+		// split put its def (`sweepEstablishedRegisters`), which runs before its mask is rebuilt.
+		self.establishedAtDef.growFilled(newValueCount, value: 0)
 		self.valueClass.resize(self.valueCount)
 		self.valueClass.growFilled(newValueCount, value: class)
 
@@ -838,6 +870,11 @@ export type LivenessResult
 	end 'clearRowAfterSweep'
 
 	// The register mask value `v` must avoid: the registers an op writes while `v` is live across it.
+	// The physical registers established but not yet destroyed where `v` is DEFINED (see the field).
+	export function establishedAtDefOf(v ValueId) returns RegMask
+		return try self.establishedAtDef.get(v) otherwise panic("LivenessResult.establishedAtDefOf: value {v} out of range (valueCount={self.valueCount})")
+	end 'establishedAtDefOf'
+
 	export function forbiddenOf(v ValueId) returns RegMask
 		return try self.forbidden.get(v) otherwise panic("LivenessResult.forbiddenOf: value {v} out of range (valueCount={self.valueCount})")
 	end 'forbiddenOf'
@@ -951,6 +988,7 @@ export function computeLivenessOn(module TargetModule, cfg FuncCfg, func IrFunct
 	let walk = solveLivenessSsa(cfg.topo, useIndex: useIndex, valueCount: valueCount, marks: marks, touched: touched)
 
 	var forbidden = makeRegMaskColumn(valueCount)
+	var establishedAtDef = makeRegMaskColumn(valueCount)
 	assertClassColumnCovers(valueClass, valueCount: valueCount, func: func)
 	let classRowWidth = RegClassCount
 	var deadPhis = zeroColumn(numBlocks * classRowWidth)
@@ -962,6 +1000,7 @@ export function computeLivenessOn(module TargetModule, cfg FuncCfg, func IrFunct
 	var demand = zeroClassRow()
 	for i in 0 upto numBlocks 'eachBlock'
 		sweepBlockPressure(module, topo: cfg.topo, blockLocal: i, live: walk.live, forbidden: forbidden, classes: valueClass, deadPhis: deadPhis, wordsPerRow: wordsPerRow, scratch: sweep, demandOut: demand, opFacts: opFacts)
+		sweepEstablishedRegisters(module, topo: cfg.topo, blockLocal: i, establishedAtDef: establishedAtDef, scratch: sweep, opFacts: opFacts)
 		for classOrdinal in 0 upto RegClassCount 'eachClass'
 			let class = regClassAt(classOrdinal)
 			try blockPressure.set(classRowIndex(i, class: class), value: classRowGet(demand, class: class)) otherwise panic("computeLivenessOn: blockPressure.set OOB for block {i}")
@@ -971,8 +1010,16 @@ export function computeLivenessOn(module TargetModule, cfg FuncCfg, func IrFunct
 
 	let paramCross = ParamCrossForbid.resolve(module, topo: cfg.topo, paramCount: func.paramCount)
 	paramCross.applyTo(forbidden)
+	// The second contribution that does not come from a live-across sweep, folded in the same place and
+	// for the same reason (`rebuildForbiddenOf` re-applies both by hand when it rebuilds a mask).
+	for v in 0 upto valueCount 'establishedAheadOfTheDef'
+		let established = try establishedAtDef.get(v) otherwise panic("computeLivenessOn: establishedAtDef.get OOB for value {v}")
+		if established != 0 'bornInsideAPendingWindow'
+			try forbidden.set(v, value: (try forbidden.get(v) otherwise panic("computeLivenessOn: forbidden.get OOB for value {v}")) or established) otherwise panic("computeLivenessOn: forbidden.set OOB for value {v}")
+		end 'bornInsideAPendingWindow'
+	end 'establishedAheadOfTheDef'
 
-	return LivenessResult.create(cfg, valueCount: valueCount, wordsPerRow: wordsPerRow, live: walk.live, forbidden: forbidden, valueClass: valueClass, registerFile: file, maxPressure: maxPressure, livenessMarkSteps: walk.markSteps, deadPhis: deadPhis, blockPressure: blockPressure, useIndex: useIndex, opFacts: opFacts)
+	return LivenessResult.create(cfg, valueCount: valueCount, wordsPerRow: wordsPerRow, live: walk.live, forbidden: forbidden, establishedAtDef: establishedAtDef, valueClass: valueClass, registerFile: file, maxPressure: maxPressure, livenessMarkSteps: walk.markSteps, deadPhis: deadPhis, blockPressure: blockPressure, useIndex: useIndex, opFacts: opFacts)
 end 'computeLivenessOn'
 
 // A zeroed per-value register-mask column.
@@ -2869,6 +2916,49 @@ export type PressureSweepScratch
 	end 'widenRow'
 end 'PressureSweepScratch'
 
+// ONE block's FORWARD per-op sweep, filling `establishedAtDef` for every value the block defines: the
+// physical registers written by name ahead of that def and not yet destroyed. See the field for the
+// defect this exists to close and for why the cure is a forbid rather than a different splice point.
+//
+// A register enters the pending set at the op that WRITES IT BY NAME (`physicalDefMask`) and leaves it
+// at the first op that DESTROYS it — its `implicitDefs`, which is the caller-saved half at a call and
+// `RAX|RDX` at an `idiv`. That is the exact lifetime and it needs no list of which ops are "argument
+// placement": a call's clobber mask covers every argument register by construction (the pool's
+// caller-saved half IS `callDirect`'s `implicitDefs`, held so by `assertCallClobberConsistent`), so an
+// argument register is pending from its pre-move to the call it was placed for and no further. It is
+// deliberately NOT ended by an op that merely READS the register (`implicitUses`): `cqo` reads RAX
+// between the dividend move and the `idiv` that consumes it, and ending the window there would leave a
+// value defined in between free to take RAX.
+//
+// ⚠ IT IS ASSIGNED, NOT OR-ED, so re-running it on a block a split dirtied RESTATES that block's
+// answers instead of accumulating stale ones. Nothing a split inserts or removes is a physical def or
+// carries an `implicitDefs` mask (`storeSlotReg` / `loadRegSlot` / a constant materialization all read
+// 0), so the pending set at every PRE-EXISTING def is invariant under a split and only the fresh ids
+// get a new entry — but the sweep does not depend on that being true, because it rewrites the block.
+export function sweepEstablishedRegisters(module TargetModule, topo FuncTopology, blockLocal CfgIndex, establishedAtDef RegMaskColumn, scratch PressureSweepScratch, opFacts OpVariantFacts)
+	let block = blockAt(module, topo: topo, local: blockLocal)
+	var buf = scratch.buf
+	var ordered = scratch.ordered
+
+	ordered.clear()
+	collectBlockOps(block, out: ordered)
+	var pending = 0 as RegMask
+	for opIdx in ordered 'eachOp'
+		let op = try module.ops.get(opIdx) otherwise panic("sweepEstablishedRegisters: op {opIdx} of block {blockLocal} is not in module.ops")
+		targetOpOperands(op, buf: buf)
+		for o in buf 'eachOperand'
+			if operandIsDef(o) and operandIsVirtual(o) 'virtualDef'
+				try establishedAtDef.set(operandValueId(o), value: pending) otherwise panic("sweepEstablishedRegisters: establishedAtDef.set OOB for value {operandValueId(o)}")
+			end 'virtualDef'
+		end 'eachOperand'
+
+		// This op's own physical defs join the pending set AFTER its defs are stated: a value defined by
+		// the very op that establishes a register is not clobbered by it (nothing else writes it in
+		// between), and today no op does both.
+		pending = (pending and not opFacts.implicitDefsOf(op)) or physicalDefMask(buf)
+	end 'eachOp'
+end 'sweepEstablishedRegisters'
+
 // ONE block's backward per-op sweep: track the exact live set at each program point, fold each op's
 // physical/implicit register writes into `forbidden` for every value live ACROSS it, record the
 // block's dead-phi count, and return the block's REGISTER DEMAND (its peak simultaneous live count,
@@ -3165,19 +3255,30 @@ end 'stepBackwardOverOp'
 // `buf` is filled with `op`'s operands as a side effect, which every caller wants anyway.
 export function opClobberMask(op TargetOp, buf OperandList, opFacts OpVariantFacts) returns RegMask
 	targetOpOperands(op, buf: buf)
-	var mask = opFacts.implicitDefsOf(op)
+	return opFacts.implicitDefsOf(op) or physicalDefMask(buf)
+end 'opClobberMask'
+
+// The registers `buf`'s operands write BY NAME rather than by allocation — every PHYSICAL def (a
+// call's `mov argReg[k], v` pre-move, the return move, an `idiv`'s `mov rax, dividend`). It is the
+// operand half of `opClobberMask`, split out because the splitter asks for it ALONE: an op that
+// establishes a named register but clobbers nothing implicitly is exactly the shape a defining
+// splice may not land after (`definingSplicePosition`), and asking `opClobberMask` there would
+// mistake a CALL — whose implicit-def mask is the whole caller-saved half — for one of them.
+//
+// A physical DEF's register number is a target-neutral `RegNum`, NOT an `X64Register`: this SHARED
+// census sees arm64 SIMD arg registers (d1..d7 = 32..38) a multi-float-argument call emits, which
+// the x64 `operandRegister`/`X64Register.fromRawValue` door range-check-panicked on. `regMaskAdd`
+// forms the same clobber bit from the `RegNum` directly — bit-identical for the x64 registers this
+// already handled (an `X64Register.rawValue` IS its `RegNum`).
+export function physicalDefMask(buf OperandList) returns RegMask
+	var mask = 0 as RegMask
 	for o in buf 'physDefs'
 		if operandIsDef(o) and not operandIsVirtual(o) 'physDef'
-			// A physical DEF's register number is a target-neutral `RegNum`, NOT an `X64Register`: this
-			// SHARED census sees arm64 SIMD arg registers (d1..d7 = 32..38) a multi-float-argument call
-			// emits, which the x64 `operandRegister`/`X64Register.fromRawValue` door range-check-panicked
-			// on. `regMaskAdd` forms the same clobber bit from the `RegNum` directly — bit-identical for the
-			// x64 registers this already handled (an `X64Register.rawValue` IS its `RegNum`).
 			mask = regMaskAdd(mask, regNum: operandPhysicalRegNum(o))
 		end 'physDef'
 	end 'physDefs'
 	return mask
-end 'opClobberMask'
+end 'physicalDefMask'
 
 // Add this op's TRANSIENT register demand to `pressureOut`, in the FILE the register belongs to: the
 // registers the colorer holds AT the op that are in NO live set, and which the op-boundary popcounts
