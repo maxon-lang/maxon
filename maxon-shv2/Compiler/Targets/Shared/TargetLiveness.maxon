@@ -2990,9 +2990,18 @@ end 'sweepEstablishedRegisters'
 // colors EVERY block-arg and holds its register for the WHOLE block — a dead phi never appears as an
 // operand, so it never dies and its register is freed only at the block boundary. So the block's true
 // simultaneous demand is `blockMax + (dead-phi count)`. Adding it keeps `maxPressure` equal to the
-// exact χ the colorer needs, so the "coloring cannot fail when maxPressure <= pool" invariant — and the
-// E5001 deficit count — stay sound. The count is RECORDED per block, not just folded into the max: the
-// splitter's peak-finder needs the same number at every op of the block.
+// exact χ the colorer needs, so the FULL-POOL half of the colorer's guarantee — and the E5001 deficit
+// count — stay sound. The count is RECORDED per block, not just folded into the max: the splitter's
+// peak-finder needs the same number at every op of the block.
+//
+// ⚠ THIS PARAGRAPH USED TO NAME A *"coloring cannot fail when maxPressure <= pool"* INVARIANT, AND NO
+// SUCH INVARIANT EXISTS (A5g, 2026-08-04). `maxPressure <= pool` is NECESSARY and not SUFFICIENT: a
+// forbidden set shrinks a value's pool, so the colorer can run out with pressure comfortably under the
+// pool — measured on four programs whose failing points Hall's exact verdict calls FEASIBLE. What this
+// number underwrites is the PIGEONHOLE half only. The confined half is `HallCondition`'s, and the
+// residue neither can prevent — greedy is not exact for list colouring — is repaired by
+// `SplitDriver.repairAtExhaustion` / `repairByEvictingOccupant`. Keeping the old sentence here would be
+// the same one-fact-written-twice this rung corrected in `HallCondition.hallVerdictAt`'s own header.
 export function sweepBlockPressure(module TargetModule, topo FuncTopology, blockLocal CfgIndex, live LiveSets, forbidden RegMaskColumn, classes ValueClassColumn, deadPhis RegCountColumn, wordsPerRow BitWordCount, scratch PressureSweepScratch, demandOut RegCountColumn, opFacts OpVariantFacts)
 	let block = blockAt(module, topo: topo, local: blockLocal)
 	var liveRow = scratch.liveRow
