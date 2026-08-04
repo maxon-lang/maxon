@@ -1122,6 +1122,19 @@ export function encodeJcc(code ByteArray, rel32Fixups ChunkRel32FixupArray, cond
 	writeDword(code, value: 0)
 end 'encodeJcc'
 
+// `jcc rel32` BACKWARD to a byte offset ALREADY EMITTED into this same buffer — the one branch in
+// the backend whose target needs no fixup, because it is not a BLOCK: the stack probe's page walk
+// is emitted as a unit, so the encoder is still holding its own loop label. The displacement still
+// goes through `patchChunkRel32`, so the "measured from the end of the 4-byte field" convention and
+// the ±2 GiB guard are the shared ones rather than a second copy of the arithmetic.
+function encodeJccBackward(code ByteArray, cond X64CondCode, targetOffset CodeOffset)
+	code.push(TwoByteOpcodeEscape)
+	code.push(OpcodeJccRel32Base or (cond.rawValue as MachineWord))
+	let dispOffset = code.count()
+	writeDword(code, value: 0)
+	patchChunkRel32(code, codeOffset: dispOffset, targetOffset: targetOffset, what: PatchSite.x64StackProbeRel32)
+end 'encodeJccBackward'
+
 // --- The dense-match jump table (x64) ---
 
 // The two FIXED scratch registers the jump-table sequence uses. r10 holds the table base then the target
@@ -1337,13 +1350,18 @@ end 'encodeMovRegImm64'
 // ADD (epilogue); the two differ only in the ModR/M opcode-extension. imm8 form
 // when it fits a signed byte, else imm32. Shares the opcode-extension assembly
 // (`encodeModRmExtDirect`) with `neg`; only the trailing immediate width differs.
+//
+// ⚠ THE imm32 IS SIGN-EXTENDED TO 64 BITS, so the widest frame this form can express is
+// `i32.max` — not `u32.max`. Writing the amount through `writeImm32Signed` makes a frame past
+// that a LOUD range panic on the cast; a raw `writeDword` would emit a NEGATIVE immediate and
+// `sub rsp, <negative>` moves rsp UP, handing the function a frame that overlaps its caller's.
 function encodeRspAdjust(code ByteArray, ext MachineWord, amount StackSize)
 	if amount <= i8.max 'imm8'
 		encodeModRmExtDirect(code, opcode: OpcodeGrp1Imm8, ext: ext, rmField: X64Register.rsp)
 		code.push(amount and 0xFF)
 	end 'imm8' else 'imm32'
 		encodeModRmExtDirect(code, opcode: OpcodeGrp1Imm32, ext: ext, rmField: X64Register.rsp)
-		writeDword(code, value: amount)
+		writeImm32Signed(code, value: amount as Imm32)
 	end 'imm32'
 end 'encodeRspAdjust'
 
@@ -1373,14 +1391,108 @@ export function encodePopReg(code ByteArray, reg X64Register)
 	code.push(OpcodePopBase + regLow3(gpr))
 end 'encodePopReg'
 
-// prologue: reserve the frame with `sub rsp, stackSize`. A zero-size frame emits
-// nothing (a frameless function never carries a prologue op, but the guard keeps
-// the encoder total).
-export function encodePrologue(code ByteArray, stackSize StackSize)
+// The bytes a stack grows by when its GUARD PAGE is touched, and therefore the largest frame a
+// single `sub rsp` may open. Windows commits a thread stack ONE PAGE AT A TIME, and only when the
+// guard page itself is accessed: a subtraction that carries rsp PAST the guard page never touches
+// it, so the first write below lands on reserved-but-uncommitted memory and the process dies with
+// 0xC0000005. A frame of exactly one page cannot skip it — the deepest address it reaches is
+// `rsp - 4096`, and the guard page starts no lower than that whatever rsp's offset within its own
+// page — so the walk is needed strictly PAST this size, which is why the test below is `>`.
+//
+// It is the x86-64 page size, an ARCHITECTURE fact about the address translation the OS grows
+// stacks in units of. The PE writer's section alignment happens to be the same number for an
+// entirely unrelated reason; tying the two together would be one constant standing for two facts.
+let StackGuardPageBytes = 4096 as StackSize
+
+// The register the page walk borrows. It must hold no live value AT THE PROLOGUE, which rules out
+// every argument register: the prologue runs before a single incoming argument has been captured.
+// r11 carries no argument in EITHER ABI shv2 emits for (Win64 rcx/rdx/r8/r9, SysV
+// rdi/rsi/rdx/rcx/r8/r9), it is caller-saved in both, and `emitGtStackGuard` — emitted immediately
+// BEFORE this, at the same function entry — already clobbers it, so nothing live can be sitting
+// there. It is the same register the bootstrap's `__chkstk` takes its size in, and for the same
+// reason: that helper originally used RAX and silently destroyed parameter 7 of every function
+// with a frame past a page (`specs-shv2/x64-large-frame-arg7.md`, which is this file's live guard
+// on the choice).
+let StackProbeScratchReg = X64Register.r11
+
+// prologue: reserve the frame. A zero-size frame emits nothing (a frameless function never carries
+// a prologue op, but the guard keeps the encoder total); a frame within one page is a bare
+// `sub rsp, stackSize`; a LARGER one must walk the pages down (see `encodeStackProbe`).
+//
+// `probeScratchIsFree` is the caller's certificate that `StackProbeScratchReg` holds nothing live
+// here. Only a FUNCTION ENTRY can say yes, and only a function entry has an unbounded frame — the
+// hand-assembled runtime chunks call this MID-STREAM with a fixed, page-sized-at-most reservation
+// while r11 carries a live value (the GT trampoline's function pointer, the syscall shim's
+// currentGt, `__gt_morestack`'s gt). The threshold is what keeps those safe, and the certificate
+// is what turns "they are all small" from a comment that ages into a panic that fires.
+export function encodePrologue(code ByteArray, stackSize StackSize, probeScratchIsFree bool)
+	if stackSize > StackGuardPageBytes 'walk'
+		if not probeScratchIsFree 'noScratch'
+			// Bound to a local because the bootstrap's parser rejects a member access on a
+			// module-level `let` inside an interpolation (`{StackProbeScratchReg.name}` is an
+			// E2010 while `{scratch.name}` parses).
+			let scratch = StackProbeScratchReg
+			panic("encodePrologue: a {stackSize}-byte frame is past the {StackGuardPageBytes}-byte guard page, so it must walk the pages down — but this call site did not certify {scratch.name} free, and the walk has no other register to use. Reserve it in page-sized steps, or free a scratch register at that site and certify it.")
+		end 'noScratch'
+
+		encodeStackProbe(code, stackSize: stackSize)
+		return
+	end 'walk'
+
 	if stackSize > 0 'reserve'
 		encodeRspAdjust(code, ext: Grp1ExtSub, amount: stackSize)
 	end 'reserve'
 end 'encodePrologue'
+
+// Open a frame LARGER than one page by touching every page on the way down, so the guard page is
+// hit in order and the OS commits the stack a page at a time:
+//
+//     mov  r11, rsp          ; r11 = the frame's lowest address
+//     sub  r11, stackSize
+//   walk:
+//     sub  rsp, 4096         ; rsp IS the cursor — no second register to find
+//     mov  [rsp], r11        ; TOUCH. The value is irrelevant; the ACCESS is the point
+//     cmp  rsp, r11
+//     ja   walk
+//     mov  rsp, r11          ; land exactly on the frame base
+//
+// ⭐ WHY rsp WALKS rather than a second scratch register (the shape both references use — the
+// bootstrap's `__chkstk` cursors r11 against a limit in r10): a cursor plus a limit is TWO dead
+// registers, and this is emitted INLINE at a function entry where certifying one is already the
+// delicate half. Walking rsp itself needs exactly one, and it pays for itself twice — the final
+// `mov rsp, r11` IS the reservation, so there is no separate `sub rsp, stackSize` to keep in step
+// with the walk.
+//
+// ⚠ The last iteration may touch up to one page BELOW the frame base (the walk overshoots whenever
+// the frame is not a whole number of pages) — the same overshoot the bootstrap's loop makes. It is
+// harmless and it is not the bug this code exists to prevent: at the instant of that store rsp
+// points AT the word being written, so nothing else owns it, and the only consequence is that the
+// OS commits one page the function will not use. Skipping a page costs a fault; touching a spare
+// one costs a page.
+//
+// ⚠ EMITTED ON EVERY x64 OS, NOT ONLY WINDOWS. Linux's default guard gap is 256 pages, so a frame
+// of this size is already safe there and this walk is redundant on that lane — but touching pages
+// you are about to write is never WRONG, the encoder has no target OS in hand (threading one down
+// to the byte layer would be a new fact to keep in step for a sequence that costs nothing), and it
+// is exactly what `-fstack-clash-protection` emits for the same instruction stream. The cost is
+// borne only by a function whose frame is past a page, of which the entire spec corpus has three.
+function encodeStackProbe(code ByteArray, stackSize StackSize)
+	// The frame base, computed exactly as `emitGtStackGuard` computes its projected rsp — one
+	// idiom for "rsp minus a frame", not two. The cast bounds the frame at i32.max, which is the
+	// same bound `sub rsp, imm32` carries.
+	encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: StackProbeScratchReg, src: X64Register.rsp, wide: true)
+	encodeGrp1RegImm32(code, ext: Grp1ExtSub, reg: StackProbeScratchReg, imm: stackSize as Imm32)
+
+	let walkStart = code.count()
+	encodeRspAdjust(code, ext: Grp1ExtSub, amount: StackGuardPageBytes)
+	encodeStoreBaseDispReg(code, base: X64Register.rsp, disp: 0, srcReg: StackProbeScratchReg)
+	encodeRmRegDirect(code, opcode: OpcodeCmpRmReg, dest: X64Register.rsp, src: StackProbeScratchReg, wide: true)
+	// UNSIGNED `ja`: these are addresses, and a stack near the top of the address space would read
+	// as negative under a signed compare.
+	encodeJccBackward(code, cond: X64CondCode.above, targetOffset: walkStart)
+
+	encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: X64Register.rsp, src: StackProbeScratchReg, wide: true)
+end 'encodeStackProbe'
 
 // epilogue: release the frame with `add rsp, stackSize` (mirror of prologue).
 export function encodeEpilogue(code ByteArray, stackSize StackSize)
@@ -1535,7 +1647,14 @@ end 'slotDisplacement'
 // spill/reload slot displacement.
 function emitTargetOp(op TargetOp, code ByteArray, callFixups CallFixupArray, iatRelocs RelocationArray, rdataRelocs RdataRelocationArray, rel32Fixups ChunkRel32FixupArray, jumpTables JumpTablePendingArray, spillBaseDisp StackSize, usesGt bool)
 	match op 'emit'
-		prologue(stackSize) then encodePrologue(code, stackSize: stackSize)
+		// `probeScratchIsFree` is certified here and NOWHERE ELSE. Both minters of this op stand at
+		// a function ENTRY — `insertPrologueAtEntry` (X64PrologueEpilogue) and `prependEntryStub`'s
+		// `mrt_start` (BackendDispatch) — so the only live values are the incoming ARGUMENT
+		// registers, and `StackProbeScratchReg` is not one in either ABI. The GT stack guard
+		// emitted immediately above this already clobbers it, which would be a live bug if
+		// anything held it. This is also the ONLY prologue whose frame is unbounded (`mrt_start`'s
+		// is a fixed 0x20).
+		prologue(stackSize) then encodePrologue(code, stackSize: stackSize, probeScratchIsFree: true)
 		epilogue(stackSize) then encodeEpilogue(code, stackSize: stackSize)
 		ret then code.push(OpcodeRet)
 		jmp(targetBlockId) then encodeJmp(code, rel32Fixups: rel32Fixups, targetBlockId: targetBlockId)

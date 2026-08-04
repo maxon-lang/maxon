@@ -155,7 +155,9 @@ function buildGtContextSwitchChunk() returns FunctionCodeChunk
 	// thread resumes reading it — a silent wrong answer with no crash to find it by. Every other register the
 	// colorer believes survives a call is already saved above, for exactly this reason; Wave 2 added ten more
 	// to that set and this is where they are honoured.
-	encodePrologue(code, stackSize: gtXmmSaveAreaBytes())
+	// One slot per callee-saved XMM — bounded by that list, two orders of magnitude below the guard
+	// page, so this reservation never walks and needs no scratch (see `encodePrologue`).
+	encodePrologue(code, stackSize: gtXmmSaveAreaBytes(), probeScratchIsFree: false)
 	for k in 0 upto calleeSavedXmmOrder.count() 'saveXmm'
 		let reg = try calleeSavedXmmOrder.get(k) otherwise panic("buildGtContextSwitchChunk: save index derived from count is in range")
 		encodeMovsdBaseDispReg(code, base: X64Register.rsp, disp: (k * XmmSaveSlotBytes) as Imm32, srcReg: reg)
@@ -217,8 +219,10 @@ function buildGtTrampolineChunk() returns FunctionCodeChunk
 	encodeLoadRegBaseDisp(code, destReg: GtTrampArgBufReg, base: GtTrampGtReg, disp: GtOffArgBuf as Imm32, wide: true)
 	encodeLoadRegBaseDisp(code, destReg: GtTrampFuncPtrReg, base: GtTrampGtReg, disp: GtOffFuncPtr as Imm32, wide: true)
 
-	// Reserve the user call's shadow space (see the alignment note above).
-	encodePrologue(code, stackSize: ShadowSpaceBytes)
+	// Reserve the user call's shadow space (see the alignment note above). 32 bytes, and r11 is
+	// LIVE across it (it carries the callee's function pointer, called below) — so this must never
+	// be the reservation that walks, and `probeScratchIsFree: false` is what says so.
+	encodePrologue(code, stackSize: ShadowSpaceBytes, probeScratchIsFree: false)
 
 	// Load every argument slot into its ABI argument register. The callee reads only the slots it declared;
 	// the rest are the arg buffer's slab zeros in unread registers. `argRegisterAt` is the ABI's own
@@ -460,7 +464,11 @@ function emitGtShimmedIatCall(code ByteArray, iatRelocs RelocationArray, rdataRe
 	encodeLoadRegBaseDisp(code, destReg: X64Register.rax, base: X64Register.rax, disp: 0, wide: true)
 	encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: X64Register.rsp, src: X64Register.rax, wide: true)
 	encodePushReg(code, reg: ShimGtRspReg)
-	encodePrologue(code, stackSize: reserve)  // sub rsp, reserve — the outgoing-arg frame on the system stack
+	// sub rsp, reserve — the outgoing-arg frame on the system stack. Shadow space plus one import's
+	// stack-argument words (`gtShimStackArgWords`, seven at the widest), so it is well inside one
+	// page; r11 is LIVE across it (currentGt, reloaded from below after the call), hence no
+	// certificate — a shim whose reservation ever reached a page would panic rather than eat it.
+	encodePrologue(code, stackSize: reserve, probeScratchIsFree: false)
 
 	// Copy the N true stack args from the GT frame (`[r10 + 8 + 0x20 + k*8]`, the anchor being 8 below the GT
 	// rsp) to the system stack (`[rsp + 0x20 + k*8]`), so the kernel reads its args from where it runs.
@@ -659,7 +667,9 @@ function buildGtMorestackChunk() returns FunctionCodeChunk
 	for reg in morestackSavedGprOrder 'push'
 		encodePushReg(code, reg: reg)
 	end 'push'
-	encodePrologue(code, stackSize: frameBytes)
+	// Shadow space + one slot per FP argument register — asserted 16-aligned above and far inside a
+	// page. r11 still carries `gt` here (moved to rbx on the next line), so no certificate.
+	encodePrologue(code, stackSize: frameBytes, probeScratchIsFree: false)
 	for k in 0 upto argFpRegisters.count() 'saveXmm'
 		let reg = try argFpRegisters.get(k) otherwise panic("buildGtMorestackChunk: save index derived from count is in range")
 		encodeMovsdBaseDispReg(code, base: X64Register.rsp, disp: gtMorestackXmmSlotDisp(k as RegCount), srcReg: reg)

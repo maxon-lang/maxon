@@ -1,7 +1,7 @@
 ---
 feature: wide-spill-frames
 status: shv2
-keywords: [register-allocator, spill-slot, arm64, imm12, frame, ldr, str, scratch]
+keywords: [register-allocator, spill-slot, arm64, imm12, frame, ldr, str, scratch, x64, guard-page, stack-probe]
 category: register-allocator
 milestone: P1.9
 ---
@@ -20,6 +20,37 @@ x64 has no such ceiling in any reachable range: `[rsp + disp32]` takes a full 32
 byte displacement directly, so `slotDisplacement` is a plain `Imm32` and the only limit it
 acknowledges is `i32.max`. wasm addresses locals by index and has no frame at all. **The
 ceiling is one target's, and it is the emitter that has to know it.**
+
+⚠⚠ **x64 HAS NO ADDRESSING CEILING AND A FRAME CEILING ANYWAY, AND THE TWO ARE NOT THE SAME
+QUESTION.** Reaching a slot is free there; OPENING the frame is not. Windows commits a thread
+stack one page at a time and only when the GUARD PAGE ITSELF is touched, so a `sub rsp, 32808`
+carries rsp eight pages past that page without ever accessing it, and the first write below lands
+on reserved-but-uncommitted memory: `0xC0000005`, at a frame size the arm64 ceiling happens to sit
+near for a completely unrelated reason. The prologue therefore WALKS the pages — `sub rsp, 4096` /
+touch / repeat — for any frame past one page. ⇒ **these two cases were RED on x64-windows for both
+reasons at once**: the arm64 imm12 fix (`A5h`) closed one target's, and the walk closes the
+other's. See `X64Backend.encodeStackProbe`.
+
+**THE THRESHOLD IS "MORE THAN ONE PAGE", AND THE EVIDENCE THAT FIXES IT IS A CASE THAT PASSES.**
+Measured from an emitted PE's optional header: `SizeOfStackReserve` = 1,048,576 (1 MB) and
+`SizeOfStackCommit` = **4096 — exactly one page**. A thread therefore starts with ONE committed
+page and a guard page directly below it, and the guard services exactly ONE page of growth per
+fault. So the question a frame has to answer is not "how big am I" but **"do I LAND ON the guard
+page or step over it"**:
+
+  • `x64-large-frame-arg7`'s frame is **6408 bytes, 1.56 pages** — and it is GREEN, and always has
+    been. It lands one page below the committed region, which is the guard page itself: the fault
+    fires, the handler commits, execution resumes. Nothing was ever wrong with it.
+  • These cases' frame is **32808 bytes, 8.01 pages** — it lands in the NINTH page, far below the
+    guard, in reserved address space with nothing watching it.
+
+⚠ **A 1.56-page frame is not UNCONDITIONALLY safe, and that is exactly why the threshold is one
+page rather than "whatever has passed so far".** Its safety depends on `rsp` sitting near the TOP
+of its committed page; the same function called with `rsp` low in that page reaches past the guard
+and faults. The only bound that holds wherever rsp sits is one page — a frame of exactly 4096
+reaches `rsp - 4096`, which is inside the guard page for every possible rsp — so the comparison is
+**strictly greater than 4096**, and a frame of exactly one page emits no walk at all. The case
+below pins the other side of that line: 4104 bytes, the smallest frame that must walk.
 
 ⚠ **The cure the sibling ceilings took is not available here.** `wide-field-offsets.md`'s
 struct-field displacement is a compile-time constant at instruction selection, so the ISel
@@ -8310,6 +8341,558 @@ end 'wide'
 function main() returns ExitCode
 	let s = wide(1, a1: 2, a2: 3, a3: 4, a4: 5, a5: 6, a6: 7, a7: 8, a8: 9, a9: 10)
 	return 0 if s == 8678321 else 1
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: the-smallest-frame-that-walks-the-guard-pages -->
+`sink(3)` is `4`, so `v0`..`v521` are `5`..`526` and their sum is `138591`. The
+arithmetic is once more not the point: **522 values is the SMALLEST count whose x64 frame
+passes 4096**, and it passes it by 8 bytes — `4104`, one page plus a single word (521
+values reserve `4088` and emit a bare `sub rsp`). It is therefore the tightest REMAINDER
+the page walk can be handed, and the one place an off-by-one in it shows: the walk touches
+`rsp-4096` and then `rsp-8192`, overshooting the frame base by 4088 bytes before landing
+back on it. A walk that landed on its last PROBE rather than on the base would run this
+function on a frame 4088 bytes below its own, and the sum would come back wrong.
+
+The 4094-slot cases above cannot reach this edge — their remainder is 40 bytes of a
+32808-byte frame, eight pages in, where an off-by-one is one iteration among many.
+
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function sink(x Integer) returns Integer
+	return x + 1
+end 'sink'
+
+function main() returns ExitCode
+	let n = sink(3)
+	let v0 = n + 1
+	let v1 = n + 2
+	let v2 = n + 3
+	let v3 = n + 4
+	let v4 = n + 5
+	let v5 = n + 6
+	let v6 = n + 7
+	let v7 = n + 8
+	let v8 = n + 9
+	let v9 = n + 10
+	let v10 = n + 11
+	let v11 = n + 12
+	let v12 = n + 13
+	let v13 = n + 14
+	let v14 = n + 15
+	let v15 = n + 16
+	let v16 = n + 17
+	let v17 = n + 18
+	let v18 = n + 19
+	let v19 = n + 20
+	let v20 = n + 21
+	let v21 = n + 22
+	let v22 = n + 23
+	let v23 = n + 24
+	let v24 = n + 25
+	let v25 = n + 26
+	let v26 = n + 27
+	let v27 = n + 28
+	let v28 = n + 29
+	let v29 = n + 30
+	let v30 = n + 31
+	let v31 = n + 32
+	let v32 = n + 33
+	let v33 = n + 34
+	let v34 = n + 35
+	let v35 = n + 36
+	let v36 = n + 37
+	let v37 = n + 38
+	let v38 = n + 39
+	let v39 = n + 40
+	let v40 = n + 41
+	let v41 = n + 42
+	let v42 = n + 43
+	let v43 = n + 44
+	let v44 = n + 45
+	let v45 = n + 46
+	let v46 = n + 47
+	let v47 = n + 48
+	let v48 = n + 49
+	let v49 = n + 50
+	let v50 = n + 51
+	let v51 = n + 52
+	let v52 = n + 53
+	let v53 = n + 54
+	let v54 = n + 55
+	let v55 = n + 56
+	let v56 = n + 57
+	let v57 = n + 58
+	let v58 = n + 59
+	let v59 = n + 60
+	let v60 = n + 61
+	let v61 = n + 62
+	let v62 = n + 63
+	let v63 = n + 64
+	let v64 = n + 65
+	let v65 = n + 66
+	let v66 = n + 67
+	let v67 = n + 68
+	let v68 = n + 69
+	let v69 = n + 70
+	let v70 = n + 71
+	let v71 = n + 72
+	let v72 = n + 73
+	let v73 = n + 74
+	let v74 = n + 75
+	let v75 = n + 76
+	let v76 = n + 77
+	let v77 = n + 78
+	let v78 = n + 79
+	let v79 = n + 80
+	let v80 = n + 81
+	let v81 = n + 82
+	let v82 = n + 83
+	let v83 = n + 84
+	let v84 = n + 85
+	let v85 = n + 86
+	let v86 = n + 87
+	let v87 = n + 88
+	let v88 = n + 89
+	let v89 = n + 90
+	let v90 = n + 91
+	let v91 = n + 92
+	let v92 = n + 93
+	let v93 = n + 94
+	let v94 = n + 95
+	let v95 = n + 96
+	let v96 = n + 97
+	let v97 = n + 98
+	let v98 = n + 99
+	let v99 = n + 100
+	let v100 = n + 101
+	let v101 = n + 102
+	let v102 = n + 103
+	let v103 = n + 104
+	let v104 = n + 105
+	let v105 = n + 106
+	let v106 = n + 107
+	let v107 = n + 108
+	let v108 = n + 109
+	let v109 = n + 110
+	let v110 = n + 111
+	let v111 = n + 112
+	let v112 = n + 113
+	let v113 = n + 114
+	let v114 = n + 115
+	let v115 = n + 116
+	let v116 = n + 117
+	let v117 = n + 118
+	let v118 = n + 119
+	let v119 = n + 120
+	let v120 = n + 121
+	let v121 = n + 122
+	let v122 = n + 123
+	let v123 = n + 124
+	let v124 = n + 125
+	let v125 = n + 126
+	let v126 = n + 127
+	let v127 = n + 128
+	let v128 = n + 129
+	let v129 = n + 130
+	let v130 = n + 131
+	let v131 = n + 132
+	let v132 = n + 133
+	let v133 = n + 134
+	let v134 = n + 135
+	let v135 = n + 136
+	let v136 = n + 137
+	let v137 = n + 138
+	let v138 = n + 139
+	let v139 = n + 140
+	let v140 = n + 141
+	let v141 = n + 142
+	let v142 = n + 143
+	let v143 = n + 144
+	let v144 = n + 145
+	let v145 = n + 146
+	let v146 = n + 147
+	let v147 = n + 148
+	let v148 = n + 149
+	let v149 = n + 150
+	let v150 = n + 151
+	let v151 = n + 152
+	let v152 = n + 153
+	let v153 = n + 154
+	let v154 = n + 155
+	let v155 = n + 156
+	let v156 = n + 157
+	let v157 = n + 158
+	let v158 = n + 159
+	let v159 = n + 160
+	let v160 = n + 161
+	let v161 = n + 162
+	let v162 = n + 163
+	let v163 = n + 164
+	let v164 = n + 165
+	let v165 = n + 166
+	let v166 = n + 167
+	let v167 = n + 168
+	let v168 = n + 169
+	let v169 = n + 170
+	let v170 = n + 171
+	let v171 = n + 172
+	let v172 = n + 173
+	let v173 = n + 174
+	let v174 = n + 175
+	let v175 = n + 176
+	let v176 = n + 177
+	let v177 = n + 178
+	let v178 = n + 179
+	let v179 = n + 180
+	let v180 = n + 181
+	let v181 = n + 182
+	let v182 = n + 183
+	let v183 = n + 184
+	let v184 = n + 185
+	let v185 = n + 186
+	let v186 = n + 187
+	let v187 = n + 188
+	let v188 = n + 189
+	let v189 = n + 190
+	let v190 = n + 191
+	let v191 = n + 192
+	let v192 = n + 193
+	let v193 = n + 194
+	let v194 = n + 195
+	let v195 = n + 196
+	let v196 = n + 197
+	let v197 = n + 198
+	let v198 = n + 199
+	let v199 = n + 200
+	let v200 = n + 201
+	let v201 = n + 202
+	let v202 = n + 203
+	let v203 = n + 204
+	let v204 = n + 205
+	let v205 = n + 206
+	let v206 = n + 207
+	let v207 = n + 208
+	let v208 = n + 209
+	let v209 = n + 210
+	let v210 = n + 211
+	let v211 = n + 212
+	let v212 = n + 213
+	let v213 = n + 214
+	let v214 = n + 215
+	let v215 = n + 216
+	let v216 = n + 217
+	let v217 = n + 218
+	let v218 = n + 219
+	let v219 = n + 220
+	let v220 = n + 221
+	let v221 = n + 222
+	let v222 = n + 223
+	let v223 = n + 224
+	let v224 = n + 225
+	let v225 = n + 226
+	let v226 = n + 227
+	let v227 = n + 228
+	let v228 = n + 229
+	let v229 = n + 230
+	let v230 = n + 231
+	let v231 = n + 232
+	let v232 = n + 233
+	let v233 = n + 234
+	let v234 = n + 235
+	let v235 = n + 236
+	let v236 = n + 237
+	let v237 = n + 238
+	let v238 = n + 239
+	let v239 = n + 240
+	let v240 = n + 241
+	let v241 = n + 242
+	let v242 = n + 243
+	let v243 = n + 244
+	let v244 = n + 245
+	let v245 = n + 246
+	let v246 = n + 247
+	let v247 = n + 248
+	let v248 = n + 249
+	let v249 = n + 250
+	let v250 = n + 251
+	let v251 = n + 252
+	let v252 = n + 253
+	let v253 = n + 254
+	let v254 = n + 255
+	let v255 = n + 256
+	let v256 = n + 257
+	let v257 = n + 258
+	let v258 = n + 259
+	let v259 = n + 260
+	let v260 = n + 261
+	let v261 = n + 262
+	let v262 = n + 263
+	let v263 = n + 264
+	let v264 = n + 265
+	let v265 = n + 266
+	let v266 = n + 267
+	let v267 = n + 268
+	let v268 = n + 269
+	let v269 = n + 270
+	let v270 = n + 271
+	let v271 = n + 272
+	let v272 = n + 273
+	let v273 = n + 274
+	let v274 = n + 275
+	let v275 = n + 276
+	let v276 = n + 277
+	let v277 = n + 278
+	let v278 = n + 279
+	let v279 = n + 280
+	let v280 = n + 281
+	let v281 = n + 282
+	let v282 = n + 283
+	let v283 = n + 284
+	let v284 = n + 285
+	let v285 = n + 286
+	let v286 = n + 287
+	let v287 = n + 288
+	let v288 = n + 289
+	let v289 = n + 290
+	let v290 = n + 291
+	let v291 = n + 292
+	let v292 = n + 293
+	let v293 = n + 294
+	let v294 = n + 295
+	let v295 = n + 296
+	let v296 = n + 297
+	let v297 = n + 298
+	let v298 = n + 299
+	let v299 = n + 300
+	let v300 = n + 301
+	let v301 = n + 302
+	let v302 = n + 303
+	let v303 = n + 304
+	let v304 = n + 305
+	let v305 = n + 306
+	let v306 = n + 307
+	let v307 = n + 308
+	let v308 = n + 309
+	let v309 = n + 310
+	let v310 = n + 311
+	let v311 = n + 312
+	let v312 = n + 313
+	let v313 = n + 314
+	let v314 = n + 315
+	let v315 = n + 316
+	let v316 = n + 317
+	let v317 = n + 318
+	let v318 = n + 319
+	let v319 = n + 320
+	let v320 = n + 321
+	let v321 = n + 322
+	let v322 = n + 323
+	let v323 = n + 324
+	let v324 = n + 325
+	let v325 = n + 326
+	let v326 = n + 327
+	let v327 = n + 328
+	let v328 = n + 329
+	let v329 = n + 330
+	let v330 = n + 331
+	let v331 = n + 332
+	let v332 = n + 333
+	let v333 = n + 334
+	let v334 = n + 335
+	let v335 = n + 336
+	let v336 = n + 337
+	let v337 = n + 338
+	let v338 = n + 339
+	let v339 = n + 340
+	let v340 = n + 341
+	let v341 = n + 342
+	let v342 = n + 343
+	let v343 = n + 344
+	let v344 = n + 345
+	let v345 = n + 346
+	let v346 = n + 347
+	let v347 = n + 348
+	let v348 = n + 349
+	let v349 = n + 350
+	let v350 = n + 351
+	let v351 = n + 352
+	let v352 = n + 353
+	let v353 = n + 354
+	let v354 = n + 355
+	let v355 = n + 356
+	let v356 = n + 357
+	let v357 = n + 358
+	let v358 = n + 359
+	let v359 = n + 360
+	let v360 = n + 361
+	let v361 = n + 362
+	let v362 = n + 363
+	let v363 = n + 364
+	let v364 = n + 365
+	let v365 = n + 366
+	let v366 = n + 367
+	let v367 = n + 368
+	let v368 = n + 369
+	let v369 = n + 370
+	let v370 = n + 371
+	let v371 = n + 372
+	let v372 = n + 373
+	let v373 = n + 374
+	let v374 = n + 375
+	let v375 = n + 376
+	let v376 = n + 377
+	let v377 = n + 378
+	let v378 = n + 379
+	let v379 = n + 380
+	let v380 = n + 381
+	let v381 = n + 382
+	let v382 = n + 383
+	let v383 = n + 384
+	let v384 = n + 385
+	let v385 = n + 386
+	let v386 = n + 387
+	let v387 = n + 388
+	let v388 = n + 389
+	let v389 = n + 390
+	let v390 = n + 391
+	let v391 = n + 392
+	let v392 = n + 393
+	let v393 = n + 394
+	let v394 = n + 395
+	let v395 = n + 396
+	let v396 = n + 397
+	let v397 = n + 398
+	let v398 = n + 399
+	let v399 = n + 400
+	let v400 = n + 401
+	let v401 = n + 402
+	let v402 = n + 403
+	let v403 = n + 404
+	let v404 = n + 405
+	let v405 = n + 406
+	let v406 = n + 407
+	let v407 = n + 408
+	let v408 = n + 409
+	let v409 = n + 410
+	let v410 = n + 411
+	let v411 = n + 412
+	let v412 = n + 413
+	let v413 = n + 414
+	let v414 = n + 415
+	let v415 = n + 416
+	let v416 = n + 417
+	let v417 = n + 418
+	let v418 = n + 419
+	let v419 = n + 420
+	let v420 = n + 421
+	let v421 = n + 422
+	let v422 = n + 423
+	let v423 = n + 424
+	let v424 = n + 425
+	let v425 = n + 426
+	let v426 = n + 427
+	let v427 = n + 428
+	let v428 = n + 429
+	let v429 = n + 430
+	let v430 = n + 431
+	let v431 = n + 432
+	let v432 = n + 433
+	let v433 = n + 434
+	let v434 = n + 435
+	let v435 = n + 436
+	let v436 = n + 437
+	let v437 = n + 438
+	let v438 = n + 439
+	let v439 = n + 440
+	let v440 = n + 441
+	let v441 = n + 442
+	let v442 = n + 443
+	let v443 = n + 444
+	let v444 = n + 445
+	let v445 = n + 446
+	let v446 = n + 447
+	let v447 = n + 448
+	let v448 = n + 449
+	let v449 = n + 450
+	let v450 = n + 451
+	let v451 = n + 452
+	let v452 = n + 453
+	let v453 = n + 454
+	let v454 = n + 455
+	let v455 = n + 456
+	let v456 = n + 457
+	let v457 = n + 458
+	let v458 = n + 459
+	let v459 = n + 460
+	let v460 = n + 461
+	let v461 = n + 462
+	let v462 = n + 463
+	let v463 = n + 464
+	let v464 = n + 465
+	let v465 = n + 466
+	let v466 = n + 467
+	let v467 = n + 468
+	let v468 = n + 469
+	let v469 = n + 470
+	let v470 = n + 471
+	let v471 = n + 472
+	let v472 = n + 473
+	let v473 = n + 474
+	let v474 = n + 475
+	let v475 = n + 476
+	let v476 = n + 477
+	let v477 = n + 478
+	let v478 = n + 479
+	let v479 = n + 480
+	let v480 = n + 481
+	let v481 = n + 482
+	let v482 = n + 483
+	let v483 = n + 484
+	let v484 = n + 485
+	let v485 = n + 486
+	let v486 = n + 487
+	let v487 = n + 488
+	let v488 = n + 489
+	let v489 = n + 490
+	let v490 = n + 491
+	let v491 = n + 492
+	let v492 = n + 493
+	let v493 = n + 494
+	let v494 = n + 495
+	let v495 = n + 496
+	let v496 = n + 497
+	let v497 = n + 498
+	let v498 = n + 499
+	let v499 = n + 500
+	let v500 = n + 501
+	let v501 = n + 502
+	let v502 = n + 503
+	let v503 = n + 504
+	let v504 = n + 505
+	let v505 = n + 506
+	let v506 = n + 507
+	let v507 = n + 508
+	let v508 = n + 509
+	let v509 = n + 510
+	let v510 = n + 511
+	let v511 = n + 512
+	let v512 = n + 513
+	let v513 = n + 514
+	let v514 = n + 515
+	let v515 = n + 516
+	let v516 = n + 517
+	let v517 = n + 518
+	let v518 = n + 519
+	let v519 = n + 520
+	let v520 = n + 521
+	let v521 = n + 522
+	let s = v0 + v1 + v2 + v3 + v4 + v5 + v6 + v7 + v8 + v9 + v10 + v11 + v12 + v13 + v14 + v15 + v16 + v17 + v18 + v19 + v20 + v21 + v22 + v23 + v24 + v25 + v26 + v27 + v28 + v29 + v30 + v31 + v32 + v33 + v34 + v35 + v36 + v37 + v38 + v39 + v40 + v41 + v42 + v43 + v44 + v45 + v46 + v47 + v48 + v49 + v50 + v51 + v52 + v53 + v54 + v55 + v56 + v57 + v58 + v59 + v60 + v61 + v62 + v63 + v64 + v65 + v66 + v67 + v68 + v69 + v70 + v71 + v72 + v73 + v74 + v75 + v76 + v77 + v78 + v79 + v80 + v81 + v82 + v83 + v84 + v85 + v86 + v87 + v88 + v89 + v90 + v91 + v92 + v93 + v94 + v95 + v96 + v97 + v98 + v99 + v100 + v101 + v102 + v103 + v104 + v105 + v106 + v107 + v108 + v109 + v110 + v111 + v112 + v113 + v114 + v115 + v116 + v117 + v118 + v119 + v120 + v121 + v122 + v123 + v124 + v125 + v126 + v127 + v128 + v129 + v130 + v131 + v132 + v133 + v134 + v135 + v136 + v137 + v138 + v139 + v140 + v141 + v142 + v143 + v144 + v145 + v146 + v147 + v148 + v149 + v150 + v151 + v152 + v153 + v154 + v155 + v156 + v157 + v158 + v159 + v160 + v161 + v162 + v163 + v164 + v165 + v166 + v167 + v168 + v169 + v170 + v171 + v172 + v173 + v174 + v175 + v176 + v177 + v178 + v179 + v180 + v181 + v182 + v183 + v184 + v185 + v186 + v187 + v188 + v189 + v190 + v191 + v192 + v193 + v194 + v195 + v196 + v197 + v198 + v199 + v200 + v201 + v202 + v203 + v204 + v205 + v206 + v207 + v208 + v209 + v210 + v211 + v212 + v213 + v214 + v215 + v216 + v217 + v218 + v219 + v220 + v221 + v222 + v223 + v224 + v225 + v226 + v227 + v228 + v229 + v230 + v231 + v232 + v233 + v234 + v235 + v236 + v237 + v238 + v239 + v240 + v241 + v242 + v243 + v244 + v245 + v246 + v247 + v248 + v249 + v250 + v251 + v252 + v253 + v254 + v255 + v256 + v257 + v258 + v259 + v260 + v261 + v262 + v263 + v264 + v265 + v266 + v267 + v268 + v269 + v270 + v271 + v272 + v273 + v274 + v275 + v276 + v277 + v278 + v279 + v280 + v281 + v282 + v283 + v284 + v285 + v286 + v287 + v288 + v289 + v290 + v291 + v292 + v293 + v294 + v295 + v296 + v297 + v298 + v299 + v300 + v301 + v302 + v303 + v304 + v305 + v306 + v307 + v308 + v309 + v310 + v311 + v312 + v313 + v314 + v315 + v316 + v317 + v318 + v319 + v320 + v321 + v322 + v323 + v324 + v325 + v326 + v327 + v328 + v329 + v330 + v331 + v332 + v333 + v334 + v335 + v336 + v337 + v338 + v339 + v340 + v341 + v342 + v343 + v344 + v345 + v346 + v347 + v348 + v349 + v350 + v351 + v352 + v353 + v354 + v355 + v356 + v357 + v358 + v359 + v360 + v361 + v362 + v363 + v364 + v365 + v366 + v367 + v368 + v369 + v370 + v371 + v372 + v373 + v374 + v375 + v376 + v377 + v378 + v379 + v380 + v381 + v382 + v383 + v384 + v385 + v386 + v387 + v388 + v389 + v390 + v391 + v392 + v393 + v394 + v395 + v396 + v397 + v398 + v399 + v400 + v401 + v402 + v403 + v404 + v405 + v406 + v407 + v408 + v409 + v410 + v411 + v412 + v413 + v414 + v415 + v416 + v417 + v418 + v419 + v420 + v421 + v422 + v423 + v424 + v425 + v426 + v427 + v428 + v429 + v430 + v431 + v432 + v433 + v434 + v435 + v436 + v437 + v438 + v439 + v440 + v441 + v442 + v443 + v444 + v445 + v446 + v447 + v448 + v449 + v450 + v451 + v452 + v453 + v454 + v455 + v456 + v457 + v458 + v459 + v460 + v461 + v462 + v463 + v464 + v465 + v466 + v467 + v468 + v469 + v470 + v471 + v472 + v473 + v474 + v475 + v476 + v477 + v478 + v479 + v480 + v481 + v482 + v483 + v484 + v485 + v486 + v487 + v488 + v489 + v490 + v491 + v492 + v493 + v494 + v495 + v496 + v497 + v498 + v499 + v500 + v501 + v502 + v503 + v504 + v505 + v506 + v507 + v508 + v509 + v510 + v511 + v512 + v513 + v514 + v515 + v516 + v517 + v518 + v519 + v520 + v521
+	return 0 if s == 138591 else 1
 end 'main'
 ```
 ```exitcode

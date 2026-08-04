@@ -235,7 +235,12 @@ type X64RuntimeAsm
 		var code = ByteArray.create()
 		encodePushReg(code, reg: X64Register.rbp)
 		encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: X64Register.rbp, src: X64Register.rsp, wide: true)
-		encodePrologue(code, stackSize: frameBytes)
+		// No certificate: every panic-runtime chunk's frame is a hand-counted handful of slots (the
+		// widest is `mrt_write_hex64`'s 17-byte buffer), so none can reach the guard page. A chunk
+		// that ever wanted a page-sized buffer would panic here rather than emit a frame that
+		// steps over it — and would then have to name a free scratch register, which is a claim
+		// about ITS entry contract that this shared builder cannot make on its behalf.
+		encodePrologue(code, stackSize: frameBytes, probeScratchIsFree: false)
 
 		return Self{
 			code: code,
