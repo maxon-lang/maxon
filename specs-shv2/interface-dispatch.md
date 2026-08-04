@@ -906,6 +906,157 @@ end 'main'
 4
 ```
 
+<!-- test: fields-after-an-existential-read-at-the-right-offset -->
+⭐⭐ **AN INTERFACE-TYPED FIELD TAKES TWO SLOTS, SO EVERY FIELD AFTER IT MOVES — and a layout that counted
+FIELDS rather than SLOTS would put them all one word low, silently.** `StructLayout.offsetOfField` is a
+prefix sum over `fieldSlotCount` (`Project.maxon`), which is what this case exists to observe: `label` sits
+before the fat pointer and `extra` after it, so reading `extra` correctly is only possible if the carve-out
+was counted. `sizeof(Holder)` is **32** — four slots for three fields — where the count-only rule says 24.
+It is also the MIXED cascade: the destructor drops a `String` at `+0` through `__str_decref`, the
+existential at `+8` through `__drop_existential`, and skips the scalar at `+24`, so the leak gate is what
+proves the three offsets and the three drop kinds line up.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Tagged
+	function tag() returns Integer
+end 'Tagged'
+
+type Marker implements Tagged
+	export let s as String
+	let n as Integer
+
+	function tag() returns Integer
+		return n + self.s.byteLength()
+	end 'tag'
+
+	static function create(n Integer) returns Self
+		return Self{s: "abc", n: n}
+	end 'create'
+end 'Marker'
+
+type Holder
+	export let label as String
+	export let t as Tagged
+	export let extra as Integer
+
+	static function create(t Tagged) returns Self
+		return Self{label: "hi", t: t, extra: 5}
+	end 'create'
+end 'Holder'
+
+function callTag(t Tagged) returns Integer
+	return t.tag()
+end 'callTag'
+
+function main() returns ExitCode
+	let h = Holder.create(Marker.create(3))
+	print("size={sizeof(Holder)} label={h.label} extra={h.extra}\n")
+	return callTag(h.t)
+end 'main'
+```
+```exitcode
+6
+```
+```stdout
+size=32 label=hi extra=5
+```
+
+<!-- test: interface-field-on-a-generic-type -->
+A GENERIC type's own interface-typed field survives substitution into the per-instance destructor cascade.
+An interface-typed generic ARGUMENT is refused at the instantiation, so it is easy to read this arm as
+unreachable — it is not: `t` here is the base struct's own field, and substitution leaves it exactly as
+declared, so `__destruct_<instance>` has to drop it through `__drop_existential` while it drops the
+substituted `T` (trivial here) through nothing at all. Two drop KINDS in one cascade, under the leak gate.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntBox = Box with Integer
+
+interface Tagged
+	function tag() returns Integer
+end 'Tagged'
+
+type Marker implements Tagged
+	let n as Integer
+
+	function tag() returns Integer
+		return n
+	end 'tag'
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Marker'
+
+type Box uses T
+	export let t as Tagged
+	export let v as T
+
+	static function create(t Tagged, v T) returns Self
+		return Self{t: t, v: v}
+	end 'create'
+
+	function score() returns Integer
+		return self.t.tag()
+	end 'score'
+end 'Box'
+
+function main() returns ExitCode
+	let b = IntBox.create(Marker.create(8), v: 1)
+	return b.score()
+end 'main'
+```
+```exitcode
+8
+```
+
+<!-- test: interface-field-reassigned -->
+A `var` interface-typed field REASSIGNED: the old fat pointer's value half is released through its OWN
+witness (the conformer it was holding, not the one replacing it) and the new pair is stored over both
+slots. The witness half has to move with the value or the next dispatch would call the OLD conformer's
+method with the NEW conformer's receiver — and under the leak gate an old value released twice, or never,
+fails as loudly as a wrong answer.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Tagged
+	function tag() returns Integer
+end 'Tagged'
+
+type Marker implements Tagged
+	let n as Integer
+
+	function tag() returns Integer
+		return n
+	end 'tag'
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Marker'
+
+type Holder
+	export var t as Tagged
+
+	static function create(t Tagged) returns Self
+		return Self{t: t}
+	end 'create'
+
+	function replace(other Tagged) returns Integer
+		self.t = other
+		return self.t.tag()
+	end 'replace'
+end 'Holder'
+
+function main() returns ExitCode
+	var h = Holder.create(Marker.create(3))
+	return h.replace(Marker.create(9))
+end 'main'
+```
+```exitcode
+9
+```
+
 <!-- test: scalar-conformer-co-owned-into-a-var -->
 ⭐⭐ **AN EXISTENTIAL'S VALUE HALF IS NOT ALWAYS A POINTER, AND CO-OWNING ONE MUST ASK ITS WITNESS FIRST.**
 `int` and `bool` conform intrinsically (`isIntrinsicBuiltinConformance`) and are held at an interface as
