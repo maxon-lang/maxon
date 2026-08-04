@@ -1813,9 +1813,13 @@ type StdToX64Lowering
 		end 'eachRegisterArg'
 	end 'emitArgMovesByFloatMask'
 
-	// Lower a throwing `tryCall`: the arguments and `callDirect` exactly as `lowerCall` (via the shared
+	// Lower a `tryCall` — a call to a callee that uses the SECONDARY RETURN REGISTER: a THROWING one, whose
+	// second word is the error flag, or (since P1.7a slice 2) an INTERFACE-RETURNING one, whose second word is
+	// the WITNESS half of the fat pointer it hands back. Which of the two it is changes nothing here and
+	// nothing in the ABI — same register, same op, `functionUsesSecondaryReturnSlot` is the one predicate that
+	// decides a callee writes it. The arguments and `callDirect` exactly as `lowerCall` (via the shared
 	// `emitCallArgMoves`), then capture BOTH return registers — the primary value from
-	// `callResultRegister(callee)` (**XMM0** for a float-returning callee, else **R8**) and the error flag
+	// `callResultRegister(callee)` (**XMM0** for a float-returning callee, else **R8**) and the second word
 	// from **R10**. The two capture moves are a PARALLEL COPY that SSA destruction resequences through
 	// `sequenceParallelCopy` (see `colorAndDropSelfMoves`): a naive `mov;mov` collapses a value/flag swap
 	// when the allocator colors them cyclically. R10 is caller-saved, not an argument register, and
@@ -1835,8 +1839,10 @@ type StdToX64Lowering
 
 	// Lower the dual-register `errorReturn`: write the primary value to its return register (**XMM0** for a
 	// float return, else **R8** — through the SAME `emitReturnValueMove` the ordinary `ret` uses, so the
-	// float branch is not written twice) and the error flag to **R10**, then the return terminator. This is
-	// the ONE place the second register is written. Both moves are unconditional (even a void throwing
+	// float branch is not written twice) and the SECOND WORD to **R10**, then the return terminator. This is
+	// the ONE place the second register is written — with the error flag for a THROWING function and with the
+	// WITNESS half for an interface-returning one (P1.7a slice 2), a difference this emitter cannot see and
+	// does not need to: `LowerMaxonToStd.secondaryReturnValue` decides which word rides. Both moves are unconditional (even a void throwing
 	// function's caller reads the flag register — for a void return type `emitReturnValueMove` targets R8,
 	// where the family-default zero belongs); the frame epilogue is inserted separately by
 	// `X64PrologueEpilogue`, which recognizes the `ret` terminator this emits exactly as it does an

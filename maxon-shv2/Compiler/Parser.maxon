@@ -5731,7 +5731,6 @@ end 'firstExistentialParam'
 
 enum DeclaredStoragePosition
 	unionPayload
-	returnType
 	containerElement
 	// ⭐ The PARAMETER positions, which the three above deliberately exclude — a plain function's parameter IS
 	// a position with room, and it stays legal. These are the ones whose ABI has no adjacent slot to give:
@@ -5746,10 +5745,33 @@ enum DeclaredStoragePosition
 	// because appending at the END (which the band-append rule requires) puts `interfaceRequirementParameter`
 	// between them and a range would silently swallow it.
 	functionTypeParameter
-	// ⭐ A TUPLE ELEMENT. Reached by a THIRD route the six above do not — a tuple type is interned into a
+	// ⭐ A TUPLE ELEMENT. Reached by a THIRD route the ones above do not — a tuple type is interned into a
 	// synthesized struct, so its element list is parsed by `parseTupleTypeReference` rather than by any
 	// field/parameter/return reader, and it asked no door at all.
 	tupleElement
+	// ⭐⭐ **THE RETURN POSITIONS, WHICH USED TO BE ONE (P1.7a slice 2, the return ABI).** A single `returnType`
+	// arm answered for every return while none of them had an ABI. A DIRECT call now does: a non-throwing
+	// function hands the witness half back in the second return register (`functionUsesSecondaryReturnSlot`),
+	// so the surviving refusals no longer share a reason and can no longer share a clause. Each names the call
+	// shape that cannot read that register.
+	//
+	// A THROWING function's return: the second register is the ONE the error flag already spends. Both
+	// halves want it and there is exactly one, so this is a CONTENTION rather than a missing mechanism —
+	// which is why its remedy is to drop the `throws`, not to move the interface somewhere else.
+	throwingReturnType
+	// A FUNCTION TYPE's return (`typealias MakeFn = function() returns Shape`). Called through
+	// `StdOp.callIndirect`, which carries its whole signature ON THE OP and has room for one result.
+	functionTypeReturnType
+	// An interface REQUIREMENT's return. Dispatched through a witness-table slot, whose signature is rebuilt
+	// from the requirement's rendered return-type NAME (`Parser.interfaceReturnMaxonType`) — a spelling that
+	// cannot denote an interface at all.
+	interfaceRequirementReturnType
+	// ⭐ A FUNCTION VALUE's return, which is the position `functionTypeReturnType` does not cover: that one is
+	// the DECLARED spelling (`typealias MakeFn = function() returns Shape`), and these two routes declare
+	// nothing at all — a closure's return type is INFERRED from its `gives` expression, and `let f = make`
+	// takes a value of whatever `make` returns. Same ABI, same reason, so it shares both clauses; a separate
+	// position only because the subject sentence has to be honest about there being no declaration.
+	functionValueReturnType
 end 'DeclaredStoragePosition'
 
 // ⭐⭐ **THE ONE SENTENCE EVERY INTERFACE-TYPED-POSITION REFUSAL IS BUILT FROM.** Each of the places
@@ -5780,8 +5802,21 @@ function storagePositionRemedy(position DeclaredStoragePosition) returns String
 		interfaceRequirementParameter then return "Declare the parameter at a concrete type, or declare the requirement over a type parameter the interface constrains"
 		functionTypeParameter then return functionValueAbiRemedy()
 		tupleElement then return "Declare the element at a concrete type, or pass the interface alongside the tuple as a PARAMETER of a named function, which carries its witness as an adjacent argument"
+		// The contention's remedy is the only one in this family that does NOT move the interface: the
+		// register exists and a non-throwing function returns the witness in it, so what has to give is the
+		// `throws`.
+		throwingReturnType then return "Declare the function without `throws` — a non-throwing function returns the witness half in that same second register — or return a concrete type and report the error some other way"
+		functionTypeReturnType to functionValueReturnType then return indirectReturnAbiRemedy()
 	end 'which'
 end 'storagePositionRemedy'
+
+// What to do about either INDIRECT return position — a function VALUE's and a witness slot's. They differ in
+// WHICH call op cannot carry the second result (see `storagePositionRoom`) and agree on what to do about it,
+// so the remedy is shared exactly as `functionValueAbiRemedy` is shared by the two parameter positions. It
+// names a DIRECT call, the one return position that genuinely writes the second register.
+function indirectReturnAbiRemedy() returns String
+	return "Declare the return at a concrete type, or hand the interface back from a NAMED function called DIRECTLY, whose second return register carries the witness half"
+end 'indirectReturnAbiRemedy'
 
 // What to do about either function-VALUE position. It names a DIRECT call on a named function, which is
 // the one parameter position that genuinely reserves the adjacent slot (MEASURED: 31 on both targets) —
@@ -5795,12 +5830,15 @@ end 'functionValueAbiRemedy'
 function storagePositionSubject(position DeclaredStoragePosition) returns String
 	match position 'which'
 		unionPayload then return "a union case payload"
-		returnType then return "a function's return type"
 		containerElement then return "a container's element type"
 		closureParameter then return "a closure parameter"
 		interfaceRequirementParameter then return "an interface requirement's parameter"
 		functionTypeParameter then return "a function type's parameter"
 		tupleElement then return "a tuple element"
+		throwingReturnType then return "a THROWING function's return type"
+		functionTypeReturnType then return "a function type's return type"
+		interfaceRequirementReturnType then return "an interface requirement's return type"
+		functionValueReturnType then return "a function value's return type"
 	end 'which'
 end 'storagePositionSubject'
 
@@ -5813,7 +5851,6 @@ function storagePositionRoom(position DeclaredStoragePosition) returns String
 		// cannot — every case shares ONE slot region, so widening a payload widens the box for every case and
 		// a `match` arm would bind the second word of a case that never wrote one.
 		unionPayload then return "a payload slot is one machine word, and unlike a struct field it cannot widen — every case of a union shares one slot region"
-		returnType then return "a return hands back one register, plus a second only for a throwing call's error flag — an interface-returning ABI is a distinct slice"
 		// ⚠ **IT IS REFUSED WHERE THE ARGUMENT IS PARSED AND NOT IN `checkGenericArgType`, which RECORDS.** A
 		// recorded diagnostic is DISCARDED when a later throw aborts the file's parse, and this construct
 		// makes everything downstream meaningless — MEASURED with it recorded: the E2015 was produced at the
@@ -5836,8 +5873,32 @@ function storagePositionRoom(position DeclaredStoragePosition) returns String
 		// A tuple is interned as a SYNTHESIZED STRUCT (`internTupleType`), so its element is a field slot —
 		// the same one machine word `structField` names, reached by a different reader.
 		tupleElement then return "a tuple is a synthesized struct, so an element is a field slot: one machine word"
+		// The CONTENTION, not a gap: a return hands back one register plus a second, and on a throwing
+		// function the error flag already owns that second one (`StdOp.errorReturn` writes exactly the two).
+		// ⚠ v1 hits the identical wall from the other side and SILENTLY SKIPS its return-witness path
+		// (`LowerMaxonToStd.maxon:13545-13567`): it emits the throwing return with a constant-0 flag, so the
+		// witness never leaves the callee and the value degrades to a bare pointer with no diagnostic at all.
+		throwingReturnType then return "a return hands back one register plus a second, but on a throwing function that second register already carries the error flag — there is exactly one of it and both halves want it"
+		// ⚠ The indirect shapes do NOT share one clause, and that is the point: a function value's signature
+		// has one result SLOT, while a requirement's return cannot even be SPELLED as an interface. Two
+		// different absences, so two different sentences.
+		functionTypeReturnType then return functionValueReturnAbiRoom()
+		interfaceRequirementReturnType then return "a requirement is dispatched through a witness-table slot whose signature is rebuilt from the requirement's rendered return-type NAME, a spelling no interface has — so the second register is never read and the witness half is dropped"
+		functionValueReturnType then return functionValueReturnAbiRoom()
 	end 'which'
 end 'storagePositionRoom'
+
+// The reason the two function-VALUE RETURN positions share — the DECLARED spelling and the two inferred
+// routes — written once and read by both arms, exactly as `functionValueAbiRoom` is by their parameter twins
+// (and for that clause's reason: appending at the END puts other positions between them, and a range arm
+// would silently swallow those).
+//
+// ⚠ It is the SAME ABI fact that has refused a THROWING function as a function value since P1.4b
+// (`ParseError.throwingFunctionAsValue`): one call op, one result, and `functionUsesSecondaryReturnSlot`'s
+// two disjuncts both need a second one.
+function functionValueReturnAbiRoom() returns String
+	return "a call through a function value carries its whole signature on the call op (`callIndirect`), where there is room for ONE result — so the second register is never read and the witness half is dropped"
+end 'functionValueReturnAbiRoom'
 
 // The reason the two function-VALUE positions share — written once, and read by both arms rather than by a
 // range arm (see `functionTypeParameter` for why a range cannot span them).
@@ -11378,10 +11439,11 @@ export type Parser
 			let returnsTok = try self.consume(TokenKind.returns)
 			let returnType = try self.parseTypeReference()
 			if recordSignature 'realParse'
-				// The RETURN half of this position, asked of the SAME `returnType` arm a declared function's
-				// return uses — it is the same slot for the same reason, not a ninth position. Gated on
-				// `recordSignature` exactly as the parameter half above is: the sweep may not veto.
-				try self.requireStorableDeclaredType(returnType, position: DeclaredStoragePosition.returnType, line: returnsTok.line, column: returnsTok.column)
+				// The RETURN half of this position, and since the return ABI landed it is its OWN position:
+				// a declared function's return now WRITES the second register, and a call through a function
+				// value cannot read it (`callIndirect` declares one result). Gated on `recordSignature`
+				// exactly as the parameter half above is: the sweep may not veto.
+				try self.requireStorableDeclaredType(returnType, position: DeclaredStoragePosition.functionTypeReturnType, line: returnsTok.line, column: returnsTok.column)
 			end 'realParse'
 			returnTag = maxonTypeTag(returnType)
 			returnTypeName = self.functionAliasTypeName(returnType)
@@ -11942,7 +12004,7 @@ export type Parser
 		// declared type having quietly degraded to the machine word.
 		match returnType 'declaredReturn'
 			void then break 'declaredReturn'
-			value(inner) then self.noteUnstorableRequirementType(inner, position: DeclaredStoragePosition.returnType, line: returnTok.line, column: returnTok.column)
+			value(inner) then self.noteUnstorableRequirementType(inner, position: DeclaredStoragePosition.interfaceRequirementReturnType, line: returnTok.line, column: returnTok.column)
 		end 'declaredReturn'
 		// ⭐ **THE `throws E` CLAUSE IS RECORDED, NOT DISCARDED (P1.7a slice 2b-v).** It decides which ABI a
 		// witness dispatch of this method uses — the dual-register `witnessTryCall` or the single-register
@@ -12721,12 +12783,18 @@ export type Parser
 		// source, so `materializeStaticConstructorLayout` would panic on the non-instance result — reject it here
 		// cleanly, the way a receiverless `sizeof(T)` body is. An instance method sources it from `self`, so this
 		// is gated on `not takesReceiver`.
-		// An interface RETURN TYPE has no register for the witness half — refused at the declaration, which is
-		// the line that has to change. See `requireStorableDeclaredType`.
-		match returnType 'declaredReturn'
-			void then break 'declaredReturn'
-			value(inner) then try self.requireStorableDeclaredType(inner, position: DeclaredStoragePosition.returnType, line: nameTok.line, column: nameTok.column)
-		end 'declaredReturn'
+		// ⭐⭐ **AN INTERFACE RETURN TYPE IS THE SECOND WRITER OF THE ONE SECONDARY RETURN REGISTER (P1.7a
+		// slice 2, the return ABI).** A non-throwing function hands the witness half back in exactly the
+		// register a throwing one spends on the error flag — same register convention, same op shape
+		// (`StdOp.errorReturn` / `StdOp.tryCall`), which is `functionUsesSecondaryReturnSlot`'s whole content.
+		// There is ONE such register, so a function that is BOTH is refused here: no third slot exists, and
+		// the alternative is v1's, which SILENTLY SKIPS its return-witness path and hands back a bare pointer.
+		if throwsClauseIsThrowing(throwsClause) 'theErrorFlagAlreadyOwnsTheSecondRegister'
+			match returnType 'declaredReturn'
+				void then break 'declaredReturn'
+				value(inner) then try self.requireStorableDeclaredType(inner, position: DeclaredStoragePosition.throwingReturnType, line: nameTok.line, column: nameTok.column)
+			end 'declaredReturn'
+		end 'theErrorFlagAlreadyOwnsTheSecondRegister'
 
 		if needsLayoutParam and not takesReceiver and not self.returnsEnclosingType(returnType) 'staticLayoutNeedsSelfReturn'
 			throw ParseError.unsupported("a `static function` that needs the type parameter's layout descriptor — it constructs an opaque type-parameter `Array` (`ElementArray.create()`) or reads `sizeof` of the type parameter — must return `Self` so the caller can source the descriptor from the instance the static builds; a static returning any other type has no descriptor source (build the array or read the size through an instance method on `self`, or return `Self`). Threading a descriptor from a static call site's alias is a later slice", line: nameTok.line, column: nameTok.column)
@@ -15622,10 +15690,13 @@ export type Parser
 	//     and never written. A payload slot is one machine word and, unlike a struct field, cannot widen (every
 	//     case shares one slot region), so a payload bound out of a `match` arm would dispatch through whatever
 	//     the next slot happened to hold.
-	//   • a RETURN TYPE — the witness has no register: shv2 returns one value plus, for a throwing call, one
-	//     error flag. ⚠ v1 hits the identical wall and SILENTLY SKIPS its return-witness path
-	//     (`LowerMaxonToStd.maxon:13545`); shv2 refuses instead, because silence is the one unacceptable
-	//     outcome — and until this line it did neither, it panicked at the first dispatch on the result.
+	//   • the RETURN positions that CANNOT read the second return register, which since the return ABI
+	//     landed are no longer the same case as the one that can. A DIRECT call's return writes it (P1.7a
+	//     slice 2); a THROWING function's is already spending it on the error flag; a function TYPE's and a
+	//     REQUIREMENT's are dispatched through call ops that declare one result. ⚠ v1 hits the identical wall
+	//     on the throwing case and SILENTLY SKIPS its return-witness path (`LowerMaxonToStd.maxon:13545`);
+	//     shv2 refuses instead, because silence is the one unacceptable outcome — and before any of this it
+	//     did neither, it panicked at the first dispatch on the result.
 	//   • a CONTAINER ELEMENT — an element slot is one machine word.
 	//   • the three PARAMETER kinds with no adjacent slot — a closure's and a function TYPE's (the uniform
 	//     `(userargs, env)` indirect ABI) and an interface REQUIREMENT's (a witness call). MEASURED: exit 139
@@ -16182,6 +16253,29 @@ export type Parser
 		let retTag = self.tagOf(retVal)
 		let declaredNameId = maxonReturnTypeNameId(func.maxonReturnType)
 		let declaredTag = self.floatResolvedTag(maxonReturnTypeTag(func.maxonReturnType), nameId: declaredNameId)
+
+		// ⭐⭐ **AN INTERFACE-TYPED RETURN IS A WIDENING POSITION, NOT AN AGREEMENT ONE (P1.7a slice 2, the
+		// return ABI).** It is the SECOND widening position the language has, and it takes exactly the shape
+		// the first one took at a call ARGUMENT (`SemanticCheck.checkOneArgType`): a conforming concrete
+		// value gains its witness half on the way out and leaves as a fat pointer, so `TypeClass.interfaceValue`
+		// deliberately agrees with nothing and BOTH checks below would refuse every legal return — the tag
+		// check on the class, the aggregate-identity check on two nominal names that are never the same name.
+		// It returns rather than falling through for that second reason, exactly as `checkOneArgType` does.
+		//
+		// ⚠ **THE VERDICT IS NOT TAKEN HERE, AND CANNOT BE.** Whether the returned type CONFORMS is
+		// `ConformanceCheck.valueWidensToInterface`, which takes the whole `Project` — and the parser holds
+		// none, because a conformer's `implements` clause is recorded when its OWN file is parsed and the two
+		// files have no ordering. `SemanticCheck.checkOneReturnedValue` asks it whole-program through the
+		// SAME door the argument position asks, so the two widening positions cannot come to disagree about
+		// what conforms — nor about a `float`, which conforms and still has no way into the fat pointer.
+		//
+		// The P1.9 ranged-return site below is not skipped by returning early: it is gated on
+		// `rangeCheckReturnAlias`, which is the declared return type's RANGED-ALIAS name, and an interface is
+		// not one — so it is empty on every path that reaches here.
+		if declaredTag == ValueTypeTag.interfaceRef 'existentialReturn'
+			try self.emitOwnedValueReturn(retVal, anchor: anchor)
+			return
+		end 'existentialReturn'
 
 		// The tag check runs FIRST: a genuine CLASS mismatch (a bool, or a struct, where an int is
 		// declared) keeps its tag-based message, and the aggregate-name check below only NEWLY catches
@@ -38426,9 +38520,27 @@ export type Parser
 	//
 	// The value's type is `function(intern(name))` — the FUNCTION's own name governs its signature, which
 	// is how an indirect call on it (`f(21)`) recovers the return type (`returnTypeOf(name)`).
+	// ⭐ **THE RETURN HALF OF "A FUNCTION VALUE CARRIES ONE RESULT" (P1.7a slice 2)** — asked at the TWO
+	// producers of a function value whose return type nothing declares: a named function referenced by name
+	// (`emitFunctionRef`) and a closure literal, whose return type is INFERRED from its `gives` expression and
+	// settled the moment that expression is parsed. Both are refused at the value's own line rather than at
+	// the call, so the author is shown where the type came from — and both would otherwise reach the SAME
+	// panic, `witnessOfValue` on a `callIndirect` result nothing could pair (MEASURED on both routes).
+	function requireFunctionValueReturnHasRoom(returnType MaxonReturnType, tok Token) throws ParseError
+		match returnType 'declaredReturn'
+			void then break 'declaredReturn'
+			value(inner) then try self.requireStorableDeclaredType(inner, position: DeclaredStoragePosition.functionValueReturnType, line: tok.line, column: tok.column)
+		end 'declaredReturn'
+	end 'requireFunctionValueReturnHasRoom'
+
 	function emitFunctionRef(tok Token) returns ValueId throws ParseError
 		match self.signatures.returnTypeOf(tok.value, into: self.artifact.typeNames) 'callee'
-			declared then break 'callee'
+			// ⭐ **A FUNCTION VALUE CARRIES ONE RESULT, SO A FUNCTION THAT USES THE SECONDARY RETURN SLOT CANNOT
+			// BE ONE** — both disjuncts of `functionUsesSecondaryReturnSlot`, refused here at the one door a
+			// named function becomes a value through. The THROWING half has been refused just below since P1.4b;
+			// the INTERFACE-RETURNING half is the same ABI fact (P1.7a slice 2) and would otherwise reach
+			// `witnessOfValue` with a call result nothing paired — MEASURED, `let f = make` then `f(42)`.
+			declared(returnType) then try self.requireFunctionValueReturnHasRoom(returnType, tok: tok)
 			undeclared then throw ParseError.undefinedVariable(String.from(tok.value), line: tok.line, column: tok.column)
 		end 'callee'
 
@@ -38731,6 +38843,10 @@ export type Parser
 		// return the caller can drop (`closure-capture.string-literal-body`).
 		let bodyValue = try self.parseExpression(lifted, block: entry)
 		let bodyType = self.typeOf(bodyValue)
+		// The closure's return type is settled by the body expression, so this is where it becomes a function
+		// value's return — asked BEFORE the value return is emitted, because `emitOwnedValueReturn`'s drop
+		// drain is what would otherwise reach `witnessOfValue` on it.
+		try self.requireFunctionValueReturnHasRoom(MaxonReturnType.value(bodyType), tok: givesTok)
 		try self.emitOwnedValueReturn(bodyValue, anchor: givesTok)
 
 		// Did the body capture? Snapshot the collected set before it is restored away.
@@ -41587,7 +41703,7 @@ export type Parser
 	// finally a split and not a sentinel.
 	function mintDeclaredCallResult(callee ByteArray, anchor Token, returnType MaxonReturnType, resultUsed bool) returns ValueId throws ParseError
 		match returnType 'r'
-			value(inner) then return self.mintOwnedCallResult(inner)
+			value(inner) then return self.mintDirectCallValueResult(inner)
 			void then break 'r'
 		end 'r'
 
@@ -41603,6 +41719,36 @@ export type Parser
 
 		return self.mintValue(ValueTypeTag.void, nameId: UnnamedTypeId)
 	end 'mintDeclaredCallResult'
+
+	// ⭐⭐ **THE VALUE A DIRECT CALL DEFINES — AND, WHEN THE CALLEE RETURNS AN INTERFACE, THE SECOND VALUE IT
+	// DEFINES TOO (P1.7a slice 2, the return ABI).** An interface-returning callee hands back a fat pointer:
+	// the value half in the primary return register and the WITNESS half in the secondary one — the same
+	// register a throwing callee's error flag rides, and the same two-def op (`StdOp.tryCall`) that captures
+	// it. So the call defines TWO SSA values, and the second is minted HERE rather than at the Std tier for
+	// two reasons the pairing column cannot work without:
+	//
+	//   • **THE PARSER IS THE FIRST READER.** `let p = f.make()` then `p.produce()` resolves its dispatch
+	//     during THIS parse (`witnessOfValue`), and so does passing `p` to an interface parameter, and so
+	//     does the scope-exit `__drop_existential`. A witness minted one tier later would arrive after every
+	//     one of those had already asked for it.
+	//   • **`valueWitnessIds` IS THE MEMO'S OWN ARRAY.** `LowerMaxonToStd` re-points at
+	//     `IrFunction.valueWitnessIds` per function and the merged module is a SHARED memo, so a pairing
+	//     written down there would mutate what every later compile reads (ARCHITECTURE.md, "the memo is
+	//     shared, so nothing may be mutated in place").
+	//
+	// The witness id is therefore RESERVED by the parser and DEFINED by the Std tier — the one value in the
+	// Maxon module with no Maxon op behind it, which is exactly what "the witness rides out of band" means:
+	// it is not an operand of the `call`, it is the call's other result, and `StdOp.tryCall` is where that
+	// becomes a def. It is tagged `integer` for the reason a merge phi's witness half is: it is a machine
+	// address, in the GPR file, and nothing dispatches ON it.
+	function mintDirectCallValueResult(inner MaxonType) returns ValueId
+		let result = self.mintOwnedCallResult(inner)
+		if self.tagOf(result) == ValueTypeTag.interfaceRef 'existentialReturn'
+			self.pairInterfaceWitness(result, witness: self.mintValue(ValueTypeTag.integer, nameId: UnnamedTypeId))
+		end 'existentialReturn'
+
+		return result
+	end 'mintDirectCallValueResult'
 
 	// The SSA value a VALUE-returning callee defines, minted from its declared return type — and ADOPTED
 	// as owned when that type is a heap box. A callee that returns a heap value moves it OUT of itself

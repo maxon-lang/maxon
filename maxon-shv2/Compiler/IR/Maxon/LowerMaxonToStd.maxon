@@ -165,6 +165,41 @@ export function maxonReturnTypeToStdReturnType(ref MaxonReturnType) returns StdR
 	end 'collapse'
 end 'maxonReturnTypeToStdReturnType'
 
+// ⭐⭐ **DOES THIS FUNCTION'S ABI USE THE SECONDARY RETURN SLOT? — THE ONE DEFINITION, AND THERE MUST ONLY
+// EVER BE ONE (P1.7a slice 2, the return ABI).**
+//
+// shv2 returns ONE value in the primary register (R8 / x0 / the wasm result), plus — for some functions — a
+// SECOND machine word in a fixed secondary register (R10 / x9 / a second wasm result). `StdOp.errorReturn`
+// writes that pair and `StdOp.tryCall` captures it; the slot is the same one whichever fact put it there:
+//
+//   • the function THROWS, and the second word is the error flag (P1.4b);
+//   • the function RETURNS AN INTERFACE, and the second word is the WITNESS half of the fat pointer it
+//     hands back. v1 reaches the identical arrangement from the identical constraint —
+//     *"the secondary register (RDX/X1) — normally the error flag — carries the witness-table address
+//     instead. Same register convention, same op shape"* (`LowerMaxonToStd.maxon:13518-13525`).
+//
+// **THE TWO ARE MUTUALLY EXCLUSIVE, BY A REFUSAL RATHER THAN BY LUCK**: there is one register and both want
+// it, so a declaration that is both is E2015 at its `function` line
+// (`DeclaredStoragePosition.throwingReturnType`). That refusal is what lets every reader below treat "uses
+// the slot" as a single bit and still know what is IN it.
+//
+// ⚠ **THREE READERS, AND THEY MUST AGREE OR THE TARGETS DISAGREE ABOUT A FUNCTION'S SHAPE.** The two
+// emitters of a return (`emitRetOrErrorReturn`, `emitRetVoidOrErrorReturn`) decide what the callee WRITES;
+// the wasm signature builder (`funcSignatureResultValTypes`) declares what its TYPE says. The native
+// backends need no third asker — a fixed register is outside the signature — but wasm's is IN it, so a
+// disagreement there is a `call_indirect`/`call` functype mismatch and traps at run time, while on x64 it is
+// a silently dropped word. Spelling the disjunction a second time anywhere is how that drift starts.
+export function functionUsesSecondaryReturnSlot(returnType MaxonReturnType, throws ThrowsClause) returns bool
+	if throwsClauseIsThrowing(throws) 'theErrorFlag'
+		return true
+	end 'theErrorFlag'
+
+	return match returnType 'theWitnessHalf'
+		void gives false
+		value(inner) gives maxonTypeTag(inner) == ValueTypeTag.interfaceRef
+	end 'theWitnessHalf'
+end 'functionUsesSecondaryReturnSlot'
+
 // Map a source-level binary operator to its width/ABI-resolved Std `binOp` opcode.
 // Every NON-TRAPPING operator maps to a `StdBinOpcode` — the arithmetic set
 // (`add`/`sub`/`mul`), the bit set (`bitAnd`/`bitOr`/`bitXor`/`shl`/`shr`), and the FLOAT
@@ -642,22 +677,24 @@ type MaxonToStdLowering
 	var valueClosureEnv as ValueIdArray
 	// The per-value WITNESS-PAIRING column of the function CURRENTLY being lowered
 	// (P1.7a-existentials slice 1) — re-pointed per function like `valueTags`, from the SAME
-	// `IrFunction.valueWitnessIds` the parser published. `witnessForExistentialArg` reads it to FORWARD an
-	// already-existential argument's witness half rather than re-resolving a table that does not exist.
+	// `IrFunction.valueWitnessIds` the parser published. `witnessForExistentialValue` reads it to FORWARD an
+	// already-existential value's witness half rather than re-resolving a table that does not exist, and
+	// `lowerCall` reads it for the WITNESS an interface-returning call defines (the parser reserved that id;
+	// this tier is where `StdOp.tryCall` finally defines it).
 	var valueWitnessIds as ValueIdArray
-	// The PROJECT's type-name interner — every id on a merged signature or an op's type is remapped into it
-	// by `mergeArtifact`, so it is what turns an `interfaceRef` parameter's id back into the interface NAME
-	// the witness label is built from (`interfaceNameOfType`).
-	var typeNames as TypeNameInterner
 	// The per-value NAME column of the function CURRENTLY being lowered — re-pointed per function like
 	// `valueTags`, from `IrFunction.valueNameIds`. For a `genericInstance`-tagged receiver at a `sizeof(T)`
 	// call site it carries the `GenericInstanceId`, which `materializeLayoutArg` resolves to a descriptor.
 	var valueNameIds as TypeNameIdArray
-	// ⭐ The whole-program type-name interner `valueNameIds` indexes into (`project.typeNames`) — copied out
-	// at `create` like every other registry here, because this pass holds no `Project`. It is what turns an
-	// argument's recorded name id back into the declaration `signatures` is keyed by, which is the ONE
-	// question this tier cannot answer from Std types alone: by here a float-backed enum and an `int` are
-	// both `i64` (`argIsFloatBackedEnum`).
+	// ⭐ The whole-program type-name interner (`project.typeNames`), which `valueNameIds` indexes into and
+	// into which `mergeArtifact` remapped every id on a merged signature or op type — copied out at `create`
+	// like every other registry here, because this pass holds no `Project`. Two questions need it, and this
+	// tier can answer neither from Std types alone: it turns an `interfaceRef`'s id back into the interface
+	// NAME a witness label is built from (`interfaceNameOfType`), and an argument's recorded name id back
+	// into the declaration `signatures` is keyed by (by here a float-backed enum and an `int` are both `i64`
+	// — `argIsFloatBackedEnum`).
+	// ⚠ It was DECLARED TWICE, once per question, with the second declaration silently taking the field: one
+	// fact written down twice, in the field list of the pass whose header says not to.
 	var typeNames as TypeNameInterner
 	// The name of the function CURRENTLY being lowered — re-pointed per function, for the diagnostics the
 	// dictionary-passing invariant checks raise (`bindImplicitLayoutParam` / `forwardCallerLayout`).
@@ -689,6 +726,14 @@ type MaxonToStdLowering
 	// for a float return, else a GPR zero) — the identical field `emitReturnValueMove` keys the return
 	// register off, so the throw-edge default and the return register cannot come to disagree.
 	var currentReturnType as StdReturnType
+	// The MAXON return type of the function CURRENTLY being lowered (P1.7a slice 2, the return ABI) —
+	// re-pointed per function like `currentThrows`. It is carried BESIDE the collapsed `currentReturnType`
+	// and not instead of it, because the two answer different questions and only one of them survives the
+	// collapse: `StdReturnType` is `void | value(StdType)`, and an interface collapses to a bare `i64` there
+	// (`valueTagToStdType`), so by the Std tier "does this function hand back a fat pointer?" is no longer a
+	// question its own return type can answer. `emitRetOrErrorReturn` asks it through
+	// `functionUsesSecondaryReturnSlot`, and reads the interface NAME out of it to materialize the witness.
+	var currentMaxonReturnType as MaxonReturnType
 	// The stdlib functions no path from `main` reaches (`StdlibFacts.unreachable`) — the ONE fact `lower`
 	// skips a body on, and the SAME derivation `insertRangeChecks`, `checkCalls` and `scanRuntimeUsage`
 	// read. Copied out of `Project` at `create` like every other registry here (this pass holds no
@@ -715,7 +760,7 @@ type MaxonToStdLowering
 		// pipeline runs, so this is an O(1) cache hit; a fresh FAILURE here is impossible (a signature
 		// error would already have thrown before lowering was scheduled).
 		let signatures = try queryProgramSignatures(project) otherwise panic("MaxonToStdLowering.create: queryProgramSignatures failed inside the lowering pass — it is computed and memoized by compileToCodeResult before the pipeline runs, so it cannot fail fresh here")
-		return Self{maxonModule: maxonModule, stdModule: StdModule.create(), funcSignatures: project.funcSignatures, functionTypes: functionTypeRegistryOf(project), signatures: signatures, funcNames: funcNames, layoutNeedingFuncs: LayoutNeedingFuncSet.create(), layoutDescriptors: LayoutDescriptorRegistry.create(), interfaces: project.interfaces, conformances: project.conformances, witnessSlotMemo: WitnessSlotListMemo.create(), emittedWitnessTables: WitnessTableLabelSet.create(), witnessSlotImpls: project.witnessSlotImpls, globalData: project.globalData, valueTags: ValueTypeTagArray.create(), valueClosureEnv: ValueIdArray.create(), valueWitnessIds: ValueIdArray.create(), typeNames: project.typeNames, valueNameIds: TypeNameIdArray.create(), currentFuncName: EmptySourceText, implicitLayoutValueId: 0, hasImplicitLayout: false, currentWitnessCount: 0, witnessParamBase: 0, currentThrows: ThrowsClause.none, currentReturnType: StdReturnType.void, unreachableStdlib: project.stdlibFacts.unreachable, rangeChecks: project.rangeChecks, rangeSites: RangeSiteWalk.create(), nextValueId: 0}
+		return Self{maxonModule: maxonModule, stdModule: StdModule.create(), funcSignatures: project.funcSignatures, functionTypes: functionTypeRegistryOf(project), signatures: signatures, funcNames: funcNames, layoutNeedingFuncs: LayoutNeedingFuncSet.create(), layoutDescriptors: LayoutDescriptorRegistry.create(), interfaces: project.interfaces, conformances: project.conformances, witnessSlotMemo: WitnessSlotListMemo.create(), emittedWitnessTables: WitnessTableLabelSet.create(), witnessSlotImpls: project.witnessSlotImpls, globalData: project.globalData, valueTags: ValueTypeTagArray.create(), valueClosureEnv: ValueIdArray.create(), valueWitnessIds: ValueIdArray.create(), typeNames: project.typeNames, valueNameIds: TypeNameIdArray.create(), currentFuncName: EmptySourceText, implicitLayoutValueId: 0, hasImplicitLayout: false, currentWitnessCount: 0, witnessParamBase: 0, currentThrows: ThrowsClause.none, currentReturnType: StdReturnType.void, currentMaxonReturnType: MaxonReturnType.void, unreachableStdlib: project.stdlibFacts.unreachable, rangeChecks: project.rangeChecks, rangeSites: RangeSiteWalk.create(), nextValueId: 0}
 	end 'create'
 
 	// The Maxon type TAG a value carries, from the column `lower` pointed at the CURRENT function. The one
@@ -832,6 +877,9 @@ type MaxonToStdLowering
 			// The Std return type was collapsed onto `srcFunc.returnType` in the `transferFuncs` pass above,
 			// so it is final here — read it, don't re-collapse `maxonReturnType`.
 			self.currentReturnType = srcFunc.returnType
+			// The UNCOLLAPSED return type travels with it (P1.7a slice 2): the collapse above erased whether
+			// this function hands back a fat pointer, and `emitRetOrErrorReturn` needs exactly that.
+			self.currentMaxonReturnType = srcFunc.maxonReturnType
 			// The next free ValueId is the count of the dense per-value column the parser handed over.
 			self.nextValueId = srcFunc.valueTags.count()
 			// Point the range-check site walk at THIS function, so the block walk below can hand each of its
@@ -1250,20 +1298,26 @@ type MaxonToStdLowering
 			end 'notExistential'
 
 			let arg = try argIds.get(i) otherwise panic("appendExistentialWitnessArgs: '{String.from(callee)}' declares an interface-typed parameter at position {i} but the call slotted only {argIds.count()} arguments — `slotCallArgs` fills every declared position")
-			out.push(self.witnessForExistentialArg(arg, interfaceName: interfaceNameOfType(paramType, typeNames: self.typeNames), callee: callee, dstBlock: dstBlock))
+			out.push(self.witnessForExistentialValue(arg, interfaceName: interfaceNameOfType(paramType, typeNames: self.typeNames), site: callee, dstBlock: dstBlock))
 		end 'eachParam'
 	end 'appendExistentialWitnessArgs'
 
-	// The witness half to pass for ONE existential argument — the FORWARD/MATERIALIZE split
+	// The witness half for ONE value crossing into an interface-typed position — the FORWARD/MATERIALIZE split
 	// `appendExistentialWitnessArgs` documents, and the same split `materializeWitnessArg` makes for a
 	// constraint witness one mechanism over.
-	function witnessForExistentialArg(arg ValueId, interfaceName ByteArray, callee ByteArray, dstBlock IrBlock) returns ValueId
-		if self.valueTagOf(arg) == ValueTypeTag.interfaceRef 'forwardTheFatPointersOwnWitness'
-			return self.pairedWitnessOf(arg, site: callee)
+	//
+	// ⭐ **IT SERVES BOTH WIDENING POSITIONS, WHICH IS WHY IT NAMES NEITHER (P1.7a slice 2).** An ARGUMENT's
+	// witness travels in an adjacent hidden argument and a RETURN's in the secondary return register, but
+	// WHICH TABLE to name is one question with one answer, and a returned existential must be
+	// indistinguishable downstream from a parameter-borne one. `site` is the name a refusal quotes — the
+	// callee for an argument, the returning function for a return.
+	function witnessForExistentialValue(value ValueId, interfaceName ByteArray, site ByteArray, dstBlock IrBlock) returns ValueId
+		if self.valueTagOf(value) == ValueTypeTag.interfaceRef 'forwardTheFatPointersOwnWitness'
+			return self.pairedWitnessOf(value, site: site)
 		end 'forwardTheFatPointersOwnWitness'
 
-		return self.materializeKeyWitness(self.conformerNameOf(arg), interfaceName: interfaceName, dstBlock: dstBlock)
-	end 'witnessForExistentialArg'
+		return self.materializeKeyWitness(self.conformerNameOf(value), interfaceName: interfaceName, dstBlock: dstBlock)
+	end 'witnessForExistentialValue'
 
 	// The witness the parser paired with an existential VALUE (`IrFunction.valueWitnessIds`). It refuses the
 	// `0` filler rather than passing it: a null table address is a wild jump at the callee's first dispatch,
@@ -1611,12 +1665,38 @@ type MaxonToStdLowering
 
 		let sig = try self.funcSignatures.get(callee) otherwise panic("lowerCall: callee '{String.from(callee)}' has no signature — SemanticCheck must reject an unknown callee before lowering")
 		match slotCallArgs(sig.paramNames, args: args, argLabels: argLabels, argDefaultSlots: argDefaultSlots) 'slot'
-			ordered(argIds) then self.stdModule.appendOp(dstBlock, op: StdOp.call(result, callee: callee, args: self.finalizeCallArgsWithLayout(argIds, sig: sig, callee: callee, result: result, dstBlock: dstBlock)))
+			ordered(argIds) then self.appendDirectCall(result, callee: callee, args: self.finalizeCallArgsWithLayout(argIds, sig: sig, callee: callee, result: result, dstBlock: dstBlock), dstBlock: dstBlock)
 			arityMismatch then panic("lowerCall: arity mismatch for '{String.from(callee)}' reached lowering — SemanticCheck must gate it")
 			unknownLabel then panic("lowerCall: unknown argument label for '{String.from(callee)}' reached lowering — SemanticCheck must gate it")
 			duplicateArg then panic("lowerCall: duplicate argument for '{String.from(callee)}' reached lowering — SemanticCheck must gate it")
 		end 'slot'
 	end 'lowerCall'
+
+	// ⭐⭐ **A DIRECT CALL WHOSE CALLEE RETURNS AN INTERFACE DEFINES TWO VALUES, SO IT IS A `tryCall`
+	// (P1.7a slice 2, the return ABI).** The callee wrote the witness half into the secondary return register
+	// (`functionUsesSecondaryReturnSlot` — the callee's own view of this same fact), and `StdOp.tryCall` is
+	// the op that captures that register. No new Std op and no new backend arm: v1 reaches the identical
+	// arrangement — *"the secondary register — normally the error flag — carries the witness-table address
+	// instead. Same register convention, same op shape"*.
+	//
+	// ⚠ **THE OTHER DISJUNCT NEVER ARRIVES HERE, AND THAT IS WHY THIS TESTS THE RESULT AND NOT THE CALLEE.**
+	// A THROWING callee's call is a `MaxonOp.tryCall` from the parser and is lowered by `lowerTryCall`, so
+	// the only writer of the slot this door can meet is the interface-returning one — and the two are
+	// mutually exclusive anyway (a declaration that is both is E2015). The result's TAG is the parser's own
+	// answer to "does this call hand back a fat pointer?", read from the one type oracle this tier has
+	// (`valueTags`) rather than re-derived from the callee's signature.
+	//
+	// The second def is the ValueId the parser RESERVED and paired with the result
+	// (`Parser.mintDirectCallValueResult`): defining it here is what makes a returned existential
+	// indistinguishable downstream from a parameter-borne one — the same column, the same `pairedWitnessOf`.
+	function appendDirectCall(result ValueId, callee ByteArray, args ValueIdArray, dstBlock IrBlock)
+		if self.valueTagOf(result) == ValueTypeTag.interfaceRef 'existentialReturn'
+			self.stdModule.appendOp(dstBlock, op: StdOp.tryCall(result, errorFlagId: self.pairedWitnessOf(result, site: callee), callee: callee, args: args))
+			return
+		end 'existentialReturn'
+
+		self.stdModule.appendOp(dstBlock, op: StdOp.call(result, callee: callee, args: args))
+	end 'appendDirectCall'
 
 	// Lower a call to an emitted runtime entry point: the arguments pass through VERBATIM.
 	//
@@ -2532,33 +2612,55 @@ type MaxonToStdLowering
 		end 'carry'
 	end 'carryOplessTerminator'
 
-	// Emit the function-return terminator (or, for a mid-block ret, a body op) for a VALUE return. In a
-	// NON-throwing function it is a plain `StdOp.ret`. In a THROWING one it is the dual-register
-	// `errorReturn(retVal, 0)` — the primary value AND a ZERO error flag (no error in flight), so the ABI
-	// is honored on every exit of a throwing function, not just the throw. `asTerminator` toggles
-	// setTerminator (block-final) vs appendOp (the rare mid-block ret).
+	// Emit the function-return terminator (or, for a mid-block ret, a body op) for a VALUE return. A function
+	// that uses NEITHER half of the secondary return slot emits a plain `StdOp.ret`; one that uses it emits
+	// the dual-register `errorReturn(primary, secondary)`. `asTerminator` toggles setTerminator (block-final)
+	// vs appendOp (the rare mid-block ret).
 	//
-	// ⭐ **THIS IS THE ONE PLACE THE ABI DECIDES ret-vs-errorReturn** — from the function's `throws` clause,
-	// not from the token — so the parser's ordinary `ret` needs no knowledge of the error channel.
+	// ⭐ **THIS IS THE ONE PLACE THE ABI DECIDES ret-vs-errorReturn** — from `functionUsesSecondaryReturnSlot`
+	// and never from the token — so the parser's ordinary `ret` needs no knowledge of either channel. The
+	// predicate answers WHETHER; what actually rides is the other half of the same fact, and the two are
+	// mutually exclusive because there is one register (see the predicate):
+	//
+	//   • a THROWING function writes a ZERO error flag, so the ABI is honored on EVERY exit of a throwing
+	//     function and not only on the throw;
+	//   • an INTERFACE-RETURNING one writes the WITNESS half of the fat pointer it is handing back, resolved
+	//     through the very helper an existential ARGUMENT's witness comes through — so a returned existential
+	//     and a passed one name one table, and a value returned as itself (a threaded parameter) FORWARDS its
+	//     own witness rather than re-resolving a `(<Iface>, <Iface>)` table that does not exist.
 	function emitRetOrErrorReturn(retVal ValueId, dstBlock IrBlock, asTerminator bool)
-		if throwsClauseIsThrowing(self.currentThrows) 'throwing'
-			let zeroFlag = self.emitZeroConst(dstBlock)
-			self.emitTerminatorOrBody(dstBlock, op: StdOp.errorReturn(retVal, errorFlagId: zeroFlag), asTerminator: asTerminator)
+		if functionUsesSecondaryReturnSlot(self.currentMaxonReturnType, throws: self.currentThrows) 'secondaryReturnSlot'
+			self.emitTerminatorOrBody(dstBlock, op: StdOp.errorReturn(retVal, errorFlagId: self.secondaryReturnValue(retVal, dstBlock: dstBlock)), asTerminator: asTerminator)
 			return
-		end 'throwing'
+		end 'secondaryReturnSlot'
 		self.emitTerminatorOrBody(dstBlock, op: StdOp.ret(retVal), asTerminator: asTerminator)
 	end 'emitRetOrErrorReturn'
 
-	// The VOID-return counterpart. A non-throwing function returns nothing (`StdOp.retVoid`); a THROWING
-	// one still writes BOTH registers — a family-default `0` primary and a `0` error flag — through
-	// `errorReturn`, because even a void throwing function's caller reads the flag register.
+	// The word this function's return puts in the SECONDARY register — asked only where
+	// `functionUsesSecondaryReturnSlot` already said there is one, so the two disjuncts are the only cases and
+	// a third would be a predicate/emitter disagreement rather than a user error.
+	function secondaryReturnValue(retVal ValueId, dstBlock IrBlock) returns ValueId
+		if throwsClauseIsThrowing(self.currentThrows) 'noErrorInFlight'
+			return self.emitZeroConst(dstBlock)
+		end 'noErrorInFlight'
+
+		match self.currentMaxonReturnType 'declaredReturn'
+			void then panic("secondaryReturnValue: '{String.from(self.currentFuncName)}' uses the secondary return slot, is not throwing, and returns VOID — `functionUsesSecondaryReturnSlot` answers true for a void non-throwing function nowhere")
+			value(inner) then return self.witnessForExistentialValue(retVal, interfaceName: interfaceNameOfType(inner, typeNames: self.typeNames), site: self.currentFuncName, dstBlock: dstBlock)
+		end 'declaredReturn'
+	end 'secondaryReturnValue'
+
+	// The VOID-return counterpart. A function using the secondary slot still writes BOTH registers — a
+	// family-default `0` primary and its secondary word — because even a void throwing function's caller reads
+	// the flag register. Only the THROWING disjunct can reach it: a void return type is not an interface, so
+	// `functionUsesSecondaryReturnSlot` reduces here to exactly the `throws` clause. It is asked through the
+	// predicate anyway, so the rule has one home and not two.
 	function emitRetVoidOrErrorReturn(dstBlock IrBlock, asTerminator bool)
-		if throwsClauseIsThrowing(self.currentThrows) 'throwing'
+		if functionUsesSecondaryReturnSlot(self.currentMaxonReturnType, throws: self.currentThrows) 'secondaryReturnSlot'
 			let defaultVal = self.emitZeroConst(dstBlock)
-			let zeroFlag = self.emitZeroConst(dstBlock)
-			self.emitTerminatorOrBody(dstBlock, op: StdOp.errorReturn(defaultVal, errorFlagId: zeroFlag), asTerminator: asTerminator)
+			self.emitTerminatorOrBody(dstBlock, op: StdOp.errorReturn(defaultVal, errorFlagId: self.secondaryReturnValue(defaultVal, dstBlock: dstBlock)), asTerminator: asTerminator)
 			return
-		end 'throwing'
+		end 'secondaryReturnSlot'
 		self.emitTerminatorOrBody(dstBlock, op: StdOp.retVoid, asTerminator: asTerminator)
 	end 'emitRetVoidOrErrorReturn'
 

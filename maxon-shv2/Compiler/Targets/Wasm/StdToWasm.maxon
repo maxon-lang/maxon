@@ -686,7 +686,7 @@ end 'internIndirectCallTypeFor'
 // cannot disagree on the void case either.
 function internIndirectCallType(map IndirectCallTypeIdxMap, builder WasmModuleBuilder, resultType StdReturnType, argFloatMask ArgFloatMask, argNarrowMask ArgNarrowMask, argCount ParamCount, isThrowing bool)
 	let params = indirectCallParamValTypes(argFloatMask, argNarrowMask: argNarrowMask, argCount: argCount)
-	let results = indirectCallResultValTypes(resultType, isThrowing: isThrowing)
+	let results = indirectCallResultValTypes(resultType, usesSecondarySlot: isThrowing)
 	let typeIdx = builder.internFuncType(params, results: results)
 	map.upsert(encodeFuncType(params, results: results), value: typeIdx)
 end 'internIndirectCallType'
@@ -862,19 +862,35 @@ end 'funcResultValTypes'
 // for. All four doors now ask one table (`TypeResolution.builtinTypeNameTag`); a FIFTH interner-free store of
 // a declared type would re-open it, and the only thing standing between that and a run-time trap is asking the
 // same table. The PARAMETER half reached the same place by a different route — see `indirectCallArgValType`.
-function indirectCallResultValTypes(returnType StdReturnType, isThrowing bool) returns WasmValTypeArray
+// ⚠ The parameter is `usesSecondarySlot` and NOT `isThrowing`, because since P1.7a slice 2 the two are
+// different facts: an interface-returning function declares the second result to carry its WITNESS half, and
+// a throwing one to carry the error flag. The three indirect shapes still answer with `throws` alone — a
+// requirement's and a function type's interface return are both refused at their declaration — while a
+// whole FUNCTION's signature answers with `functionUsesSecondaryReturnSlot`.
+function indirectCallResultValTypes(returnType StdReturnType, usesSecondarySlot bool) returns WasmValTypeArray
 	var results = funcResultValTypes(returnType)
-	if isThrowing 'throwing'
+	if usesSecondarySlot 'aSecondResult'
 		results.push(WasmValType.i64)
-	end 'throwing'
+	end 'aSecondResult'
 	return results
 end 'indirectCallResultValTypes'
 
 // The wasm result signature of a whole FUNCTION — its declaration's view of the door above.
 // `funcResultValTypes` alone still names the PRIMARY result the body's `errorReturn`/`ret` coerce to (see
 // `emitErrorReturn`/`emitRet`); this is the signature-only view.
+//
+// ⭐ **THE SECOND RESULT IS NOT "THE ERROR FLAG", IT IS "THE SECONDARY RETURN SLOT" (P1.7a slice 2).** An
+// interface-returning function writes the witness half into exactly the register/result a throwing one
+// spends on the flag, so the question this signature must answer is `functionUsesSecondaryReturnSlot`'s and
+// not `throwsClauseIsThrowing`'s. ⚠ It is asked HERE through the same one predicate the frontend's return
+// emitters ask, because wasm is the lane where a disagreement is fatal rather than silent: a function whose
+// BODY returns two values under a type declaring one does not validate, and a `call`/`call_indirect` against
+// a functype the target does not have traps. On x64 the same disagreement merely drops a machine word.
+//
+// The parameter is `IrFunction` and both fields it reads survive into the Std module untouched — the SAME
+// object is pushed there by `transferFuncs`, which only ADDS the collapsed `returnType`/`paramTypes`.
 function funcSignatureResultValTypes(func IrFunction) returns WasmValTypeArray
-	return indirectCallResultValTypes(func.returnType, isThrowing: throwsClauseIsThrowing(func.throwsTypeName))
+	return indirectCallResultValTypes(func.returnType, usesSecondarySlot: functionUsesSecondaryReturnSlot(func.maxonReturnType, throws: func.throwsTypeName))
 end 'funcSignatureResultValTypes'
 
 function singletonValTypes(vt WasmValType) returns WasmValTypeArray
@@ -1943,15 +1959,17 @@ type WasmFuncEmitter
 		end 'hasResult'
 	end 'emitCall'
 
-	// A throwing call `resultId = try callee(args…)`: marshal + call exactly as `emitCall`, then capture
-	// the callee's MULTI-VALUE return. A throwing callee's wasm signature is `(params) -> (resultVt, i64)`
-	// (value-returning) or `(params) -> (i64)` (void-returning), so its results sit on the stack with the
-	// i64 error FLAG on TOP. `local.set` pops top-first, so the flag is captured FIRST, then the primary
-	// value — for a void-returning throwing callee the call pushes only the flag, so there is no value to
-	// capture (the index answers with the callee's OWN return type, void-vs-value). The two captures never
-	// need the native backends' parallel-copy resolver: a wasm stack pop targets a distinct local, so
-	// there is no register-cycle to break. A `tryCall` only ever targets a THROWING callee (the parser
-	// rejects a non-throwing `try` via E3055), so the flag is always present.
+	// A call to a callee that uses the SECONDARY RETURN SLOT — `resultId = try callee(args…)`, or since
+	// P1.7a slice 2 an interface-returning `resultId = callee(args…)` whose second word is the WITNESS half.
+	// Marshal + call exactly as `emitCall`, then capture the callee's MULTI-VALUE return. Such a callee's
+	// wasm signature is `(params) -> (resultVt, i64)` (value-returning) or `(params) -> (i64)` (void), so its
+	// results sit on the stack with the i64 SECOND WORD on TOP. `local.set` pops top-first, so that word is
+	// captured FIRST, then the primary value — for a void-returning throwing callee the call pushes only the
+	// second word, so there is no value to capture (the index answers with the callee's OWN return type,
+	// void-vs-value). The two captures never need the native backends' parallel-copy resolver: a wasm stack
+	// pop targets a distinct local, so there is no register-cycle to break. A `tryCall` reaches here only for
+	// a callee whose signature declares the second result — `funcSignatureResultValTypes` and the frontend's
+	// return emitters ask ONE predicate — so it is always present.
 	function emitTryCall(resultId ValueId, errorFlagId ValueId, callee ByteArray, args ValueIdArray)
 		self.emitCallArgsAndCall(callee, args: args)
 
@@ -2020,7 +2038,7 @@ type WasmFuncEmitter
 	// the stack. `what` names the calling emitter so a missing intern reports against the op that has one.
 	function emitIndirectCallOp(resultType StdReturnType, argFloatMask ArgFloatMask, argNarrowMask ArgNarrowMask, argCount ParamCount, isThrowing bool, what String)
 		let params = indirectCallParamValTypes(argFloatMask, argNarrowMask: argNarrowMask, argCount: argCount)
-		let sigKey = encodeFuncType(params, results: indirectCallResultValTypes(resultType, isThrowing: isThrowing))
+		let sigKey = encodeFuncType(params, results: indirectCallResultValTypes(resultType, usesSecondarySlot: isThrowing))
 		let typeIdx = try self.indirectCallTypeIdx.get(sigKey) otherwise panic("{what}: no interned functype for this {argCount}-argument indirect call signature — buildIndirectCallTypeIdxMap missed it")
 		self.body.callIndirect(typeIdx)
 	end 'emitIndirectCallOp'
@@ -2098,10 +2116,11 @@ type WasmFuncEmitter
 		self.body.returnOp()
 	end 'emitRetVoid'
 
-	// The dual-register `errorReturn(retVal, flag)` mapped onto wasm multi-value — the ONLY exit a
-	// THROWING function takes. The frontend routes every return of a throwing function through this op
-	// (a normal return carries a ZERO flag, a `throw` a non-zero one — LowerMaxonToStd.emitRetOrError-
-	// Return / lowerThrowError), so a throwing function never emits a plain `ret`/`retVoid`, and this
+	// The dual-register `errorReturn(retVal, second)` mapped onto wasm multi-value — the ONLY exit a function
+	// using the SECONDARY RETURN SLOT takes. The frontend routes every return of such a function through this
+	// op (a throwing one's normal return carries a ZERO flag and its `throw` a non-zero one; an
+	// interface-returning one carries the WITNESS half — LowerMaxonToStd.emitRetOrErrorReturn /
+	// lowerThrowError), so it never emits a plain `ret`/`retVoid`, and this
 	// is the wasm twin of the native `lowerErrorReturn` (which writes R8 + R10). The signature declares
 	// `(resultVt, i64)` for a value-returning function and `(i64)` for a void one (`funcSignature-
 	// ResultValTypes`), so the stack must hold the value THEN the flag (value-returning) or just the

@@ -1,0 +1,25 @@
+// Test: error.interface-return-of-a-nonconformer
+typealias Integer = int(i64.min to i64.max)
+
+interface Producer
+	function produce() returns Integer
+end 'Producer'
+
+type Gadget
+	let value as Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Gadget'
+
+function make(seed Integer) returns Producer
+	return Gadget.create(seed)
+end 'make'
+
+function main() returns ExitCode
+	return 0 as ExitCode
+end 'main'
+---
+CompilerError:
+error E3005: <fragment>:17:2: return type mismatch in 'make': type 'Gadget' does not implement interface 'Producer'

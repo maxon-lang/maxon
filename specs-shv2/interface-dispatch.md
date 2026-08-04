@@ -512,7 +512,19 @@ end 'main'
 
 
 <!-- test: dispatch-interface-return-type -->
-<!-- SLICE 2 / RETURN ABI: an interface RETURN needs a second return register on a NON-throwing call — the witness half has nowhere to ride. That is new Std ops beside `errorReturn`/`tryCall` plus x64, arm64 and wasm support, which is an ABI change, not the storage-and-threading this slice scoped. ⚠ v1 hits the same wall from the other side: a function that is BOTH interface-returning and throwing is not representable there, and v1 SILENTLY SKIPS its return-witness path (`LowerMaxonToStd.maxon:13545-13567`). shv2 refuses with a positioned diagnostic instead — silence is the one unacceptable outcome. -->
+⭐⭐ **THE RETURN ABI.** An interface RETURN hands back a fat pointer, so it needs a second return
+register on a NON-throwing call — and shv2 already had one. `StdOp.errorReturn`/`StdOp.tryCall` and the
+R10 / x9 / second-wasm-result plumbing behind them exist for the error flag; an interface-returning
+function writes the WITNESS there instead. **Same register convention, same op shape, no new Std op and
+no new backend arm** — which is exactly the arrangement v1 reaches from the identical constraint
+(`LowerMaxonToStd.maxon:13518-13525`). The one gate that moved is the predicate: *does this function use
+the secondary return slot* is now `throws` **OR** *returns an interface*, spelled once in
+`functionUsesSecondaryReturnSlot` and asked by both return emitters and the wasm signature builder.
+
+⚠ There is exactly ONE such register and both halves want it, so a function that is BOTH is refused —
+see `error.interface-returning-function-cannot-throw` below. v1 hits that same wall and SILENTLY SKIPS
+its return-witness path (`LowerMaxonToStd.maxon:13545-13567`), degrading the value to a bare pointer with
+no diagnostic at all; silence is the one unacceptable outcome.
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -557,6 +569,386 @@ end 'main'
 ```
 ```exitcode
 42
+```
+
+
+<!-- test: interface-return-forwards-an-existential-parameter -->
+The FORWARD half of the return witness. The returned value is ALREADY an existential — a parameter
+threaded onward — so the witness half is the one it arrived with (`pairedWitnessOf`), never a table
+re-resolved from its own interface, which would ask for `(Producer, Producer)` and find nothing. The same
+split an existential ARGUMENT makes, through the same one helper.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Producer
+	function produce() returns Integer
+end 'Producer'
+
+type Widget implements Producer
+	let value as Integer
+
+	function produce() returns Integer
+		return value
+	end 'produce'
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Widget'
+
+function passThrough(p Producer) returns Producer
+	return p
+end 'passThrough'
+
+function consume(p Producer) returns Integer
+	return p.produce()
+end 'consume'
+
+function main() returns ExitCode
+	let w = Widget.create(42)
+	let p = passThrough(w)
+	return consume(p) as ExitCode
+end 'main'
+```
+```exitcode
+42
+```
+
+
+<!-- test: interface-return-of-a-field-read -->
+An interface-typed FIELD read handed back through an interface RETURN — slice 2's two halves meeting.
+The value half comes out of the field's first slot and the witness out of the one beside it, and the
+return then puts them in the two registers a caller reads.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Producer
+	function produce() returns Integer
+end 'Producer'
+
+type Widget implements Producer
+	let value as Integer
+
+	function produce() returns Integer
+		return value
+	end 'produce'
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Widget'
+
+type Holder
+	let inner as Producer
+
+	function get() returns Producer
+		return inner
+	end 'get'
+
+	static function create(inner Producer) returns Self
+		return Self{inner: inner}
+	end 'create'
+end 'Holder'
+
+function wrap(p Producer) returns Holder
+	return Holder.create(p)
+end 'wrap'
+
+function main() returns ExitCode
+	let h = wrap(Widget.create(42))
+	let g = h.get()
+	return g.produce() as ExitCode
+end 'main'
+```
+```exitcode
+42
+```
+
+
+<!-- test: interface-return-dispatches-per-conformer -->
+⭐ **THE ANSWER THE ABI IS FOR.** One interface-returning function, two conformers, two different
+`produce` bodies — so the witness that came back in the secondary register is what decides which one
+runs. 10 through `Widget` plus 16×2 through `Gizmo` is 42; a dropped witness cannot produce it, and a
+witness taken from the DECLARED type rather than from the returned value would answer 26 or 52.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Producer
+	function produce() returns Integer
+end 'Producer'
+
+type Widget implements Producer
+	let value as Integer
+
+	function produce() returns Integer
+		return value
+	end 'produce'
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Widget'
+
+type Gizmo implements Producer
+	let value as Integer
+
+	function produce() returns Integer
+		return value * 2
+	end 'produce'
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Gizmo'
+
+function make(flag bool, seed Integer) returns Producer
+	if flag 'whichConformer'
+		return Widget.create(seed)
+	end 'whichConformer'
+
+	return Gizmo.create(seed)
+end 'make'
+
+function consume(p Producer) returns Integer
+	return p.produce()
+end 'consume'
+
+function main() returns ExitCode
+	let a = make(true, seed: 10)
+	let b = make(false, seed: 16)
+	return (consume(a) + consume(b)) as ExitCode
+end 'main'
+```
+```exitcode
+42
+```
+
+
+<!-- test: interface-return-into-a-reassigned-var -->
+A returned existential is OWNED, so the `var` that holds one must DROP what it held before it takes the
+next. The first `make` result is unreachable after the reassignment and its box must be released exactly
+once — a leak or a double free here is an exit 101 or a crash, not a wrong number.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Producer
+	function produce() returns Integer
+end 'Producer'
+
+type Widget implements Producer
+	let value as Integer
+
+	function produce() returns Integer
+		return value
+	end 'produce'
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Widget'
+
+function make(seed Integer) returns Producer
+	return Widget.create(seed)
+end 'make'
+
+function consume(p Producer) returns Integer
+	return p.produce()
+end 'consume'
+
+function main() returns ExitCode
+	var p = make(10)
+	p = make(42)
+	return consume(p) as ExitCode
+end 'main'
+```
+```exitcode
+42
+```
+
+
+<!-- test: error.interface-returning-function-cannot-throw -->
+⛔ **THE ONE SECONDARY REGISTER, CONTESTED.** A throwing function already spends it on the error flag, so
+an interface return has nowhere left to put the witness. ⚠ v1 is representable-by-silence here: it SKIPS
+its return-witness path for exactly this combination (`LowerMaxonToStd.maxon:13545-13567`), emits the
+throwing return with a constant-0 flag and hands back a bare pointer with no diagnostic. This refusal is
+what keeps the E2015 sentence about the second register true.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+enum MakeError
+	broken
+end 'MakeError'
+
+interface Producer
+	function produce() returns Integer
+end 'Producer'
+
+type Widget implements Producer
+	let value as Integer
+
+	function produce() returns Integer
+		return value
+	end 'produce'
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Widget'
+
+function make(seed Integer) returns Producer throws MakeError
+	return Widget.create(seed)
+end 'make'
+
+function main() returns ExitCode
+	return 0 as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: specs/fragments/interface-dispatch/error.interface-returning-function-cannot-throw.test:24:10: Unsupported: a THROWING function's return type declared at the interface type 'Producer' — a value held at an interface type is a two-word fat pointer `(value, witness)`, and a return hands back one register plus a second, but on a throwing function that second register already carries the error flag — there is exactly one of it and both halves want it. Declare the function without `throws` — a non-throwing function returns the witness half in that same second register — or return a concrete type and report the error some other way
+```
+
+
+<!-- test: error.interface-return-of-a-nonconformer -->
+⭐ **THE VERDICT THE PARSER CANNOT TAKE.** A `returns <Interface>` function is a WIDENING position, so the
+parse-time tag check that used to refuse every concrete return is gone — and what replaced it is the
+whole-program conformance door the call ARGUMENT already asked (`SemanticCheck.existentialWideningVerdict`),
+because an `implements` clause is recorded when its own file is parsed and the two files have no ordering.
+Without it a non-conformer reaches `ensureWitnessTable` and PANICS the compiler on a slot no conformance
+filled.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Producer
+	function produce() returns Integer
+end 'Producer'
+
+type Gadget
+	let value as Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Gadget'
+
+function make(seed Integer) returns Producer
+	return Gadget.create(seed)
+end 'make'
+
+function main() returns ExitCode
+	return 0 as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: specs/fragments/interface-dispatch/error.interface-return-of-a-nonconformer.test:17:2: return type mismatch in 'make': type 'Gadget' does not implement interface 'Producer'
+```
+
+
+<!-- test: error.interface-return-of-a-float -->
+A `float` CONFORMS — it declares the intrinsic `Comparable`/`Equatable`/`Hashable` — and still cannot be
+widened, because the fat pointer's value half is a general-purpose machine word and a float travels in a
+floating-point register. That is the argument position's E3121 asked at the return, through the same one
+verdict, so the two widening positions cannot come to disagree about a float.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Ranked
+	function rank() returns Integer
+end 'Ranked'
+
+function pick() returns Ranked
+	return 2.5
+end 'pick'
+
+function main() returns ExitCode
+	return 0 as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3121: specs/fragments/interface-dispatch/error.interface-return-of-a-float.test:9:2: Cannot return a `float` from 'pick', which is declared to return the interface type 'Ranked': a value held at an interface type is a two-word fat pointer `(value, witness)` whose value half is a general-purpose machine word, and a float travels in a floating-point register, so it has no way through. This is the same limit `float` has as a generic type argument (E2062). Wrap the float in a type that implements 'Ranked', or declare the return type as `float`
+```
+
+
+<!-- test: error.function-value-of-an-interface-returning-function -->
+⛔ A DIRECT call reads the secondary return register; a call through a function VALUE does not — its whole
+signature rides on `StdOp.callIndirect`, which has room for one result. So the refusal is at the line that
+makes the VALUE, not at the call: the same ABI fact that has refused a THROWING function as a function
+value since P1.4b. ⚠ MEASURED without it: `witnessOfValue` panicked the compiler on a `callIndirect`
+result nothing could pair.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Producer
+	function produce() returns Integer
+end 'Producer'
+
+type Widget implements Producer
+	let value as Integer
+
+	function produce() returns Integer
+		return value
+	end 'produce'
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Widget'
+
+function make(seed Integer) returns Producer
+	return Widget.create(seed)
+end 'make'
+
+function consume(p Producer) returns Integer
+	return p.produce()
+end 'consume'
+
+function main() returns ExitCode
+	let f = make
+	return consume(f(42)) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: specs/fragments/interface-dispatch/error.function-value-of-an-interface-returning-function.test:29:10: Unsupported: a function value's return type declared at the interface type 'Producer' — a value held at an interface type is a two-word fat pointer `(value, witness)`, and a call through a function value carries its whole signature on the call op (`callIndirect`), where there is room for ONE result — so the second register is never read and the witness half is dropped. Declare the return at a concrete type, or hand the interface back from a NAMED function called DIRECTLY, whose second return register carries the witness half
+```
+
+
+<!-- test: error.closure-returning-an-interface -->
+The other route to the same function value, and the reason the refusal is a POSITION rather than one call
+site: a closure declares no return type at all — it is INFERRED from the `gives` expression — so there was
+nothing for the function-TYPE door to refuse. Refused at the `gives`, the line that decided it.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Producer
+	function produce() returns Integer
+end 'Producer'
+
+type Widget implements Producer
+	let value as Integer
+
+	function produce() returns Integer
+		return value
+	end 'produce'
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Widget'
+
+function make(seed Integer) returns Producer
+	return Widget.create(seed)
+end 'make'
+
+function consume(p Producer) returns Integer
+	return p.produce()
+end 'consume'
+
+function main() returns ExitCode
+	let mk = function() gives make(42)
+	return consume(mk()) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: specs/fragments/interface-dispatch/error.closure-returning-an-interface.test:29:22: Unsupported: a function value's return type declared at the interface type 'Producer' — a value held at an interface type is a two-word fat pointer `(value, witness)`, and a call through a function value carries its whole signature on the call op (`callIndirect`), where there is room for ONE result — so the second register is never read and the witness half is dropped. Declare the return at a concrete type, or hand the interface back from a NAMED function called DIRECTLY, whose second return register carries the witness half
 ```
 
 
@@ -2004,9 +2396,11 @@ end 'main'
 reads its return through `parseOptionalReturnType` and never asked the door, so the declared type
 degraded silently to the machine word — **MEASURED on the merge base: the program COMPILED**, and the
 first dispatch on the result reported the misdirecting `a member access 'area' on a 'int' value`.
-⚠ It is not a ninth position: it is a second call site of the SAME `returnType` arm a declared
-function's return already used. It is noted-then-thrown rather than thrown in place, for the reason
-the parameter half is — the reader is shared with a tolerant whole-program fold.
+⚠ It shared one `returnType` arm with a declared function's return until the RETURN ABI landed, and
+now has its own: a direct call's return WRITES the second register, and a witness slot's signature is
+rebuilt from the requirement's rendered return-type NAME, which no interface has a spelling in. It is
+noted-then-thrown rather than thrown in place, for the reason the parameter half is — the reader is
+shared with a tolerant whole-program fold.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -2023,13 +2417,14 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: specs/fragments/interface-dispatch/error.interface-typed-requirement-return.test:9:18: Unsupported: a function's return type declared at the interface type 'Shape' — a value held at an interface type is a two-word fat pointer `(value, witness)`, and a return hands back one register, plus a second only for a throwing call's error flag — an interface-returning ABI is a distinct slice. Declare it at a concrete type, or take the interface as a PARAMETER of a plain function, which carries its witness as an adjacent argument
+error E2015: specs/fragments/interface-dispatch/error.interface-typed-requirement-return.test:9:18: Unsupported: an interface requirement's return type declared at the interface type 'Shape' — a value held at an interface type is a two-word fat pointer `(value, witness)`, and a requirement is dispatched through a witness-table slot whose signature is rebuilt from the requirement's rendered return-type NAME, a spelling no interface has — so the second register is never read and the witness half is dropped. Declare the return at a concrete type, or hand the interface back from a NAMED function called DIRECTLY, whose second return register carries the witness half
 ```
 
 <!-- test: error.interface-typed-function-type-return -->
 The other unguarded return: a FUNCTION TYPE's. `readFunctionTypeAlias` read it with a bare
-`parseTypeReference`, so it degraded the same way. Also the same `returnType` arm, gated on the same
-`recordSignature` flag its parameter half uses so the tolerant sweep cannot veto.
+`parseTypeReference`, so it degraded the same way. Its own position too since the return ABI landed —
+`StdOp.callIndirect` carries its whole signature ON THE OP and has room for one result — gated on the
+same `recordSignature` flag its parameter half uses so the tolerant sweep cannot veto.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -2048,5 +2443,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: specs/fragments/interface-dispatch/error.interface-typed-function-type-return.test:8:38: Unsupported: a function's return type declared at the interface type 'Shape' — a value held at an interface type is a two-word fat pointer `(value, witness)`, and a return hands back one register, plus a second only for a throwing call's error flag — an interface-returning ABI is a distinct slice. Declare it at a concrete type, or take the interface as a PARAMETER of a plain function, which carries its witness as an adjacent argument
+error E2015: specs/fragments/interface-dispatch/error.interface-typed-function-type-return.test:8:38: Unsupported: a function type's return type declared at the interface type 'Shape' — a value held at an interface type is a two-word fat pointer `(value, witness)`, and a call through a function value carries its whole signature on the call op (`callIndirect`), where there is room for ONE result — so the second register is never read and the witness half is dropped. Declare the return at a concrete type, or hand the interface back from a NAMED function called DIRECTLY, whose second return register carries the witness half
 ```

@@ -55,6 +55,9 @@ export function semanticCheck(project Project, module MaxonModule, signatures Pr
 	// which is now before this pass runs at all (`PassPipeline.run`, A2l) rather than in the middle of it.
 	let mutationSummary = buildParamMutationSummary(project, module: module, funcNames: funcNames)
 	checkCalls(project, module: module, signatures: signatures, funcNames: funcNames, throwsMap: throwsMap, escapeSummary: escapeSummary, mutationSummary: mutationSummary)
+	// The RETURN half of the interface-widening rule (P1.7a slice 2). After `checkCalls` so a program with
+	// both a bad argument and a bad return reports the argument first, in the order the reader meets them.
+	checkReturnedValueTypes(project, module: module)
 	// The function-type doors the parser recorded (`PendingFunctionTypeDoor`). It runs HERE, and not beside
 	// `checkValueMergeSignatures`, for one reason: the shapes are compared RESOLVED, and resolution has not
 	// happened when that check drains. After `checkCalls` so a program with both a bad argument and a bad
@@ -2938,15 +2941,128 @@ export function argTypeMismatchSentence(label String, expected String, got Strin
 end 'argTypeMismatchSentence'
 
 // ⭐ **THE SAME SENTENCE WITH THE ONE TAIL THAT IS NOT AN "EXPECTED/GOT" (P1.7a-existentials slice 1).** A
-// value refused at an interface-typed parameter did not have the WRONG type — `NotRunnable` is exactly the
+// value refused at an interface-typed position did not have the WRONG type — `NotRunnable` is exactly the
 // type the author meant — it failed a RELATION, and naming the relation is what tells them the cure
-// (`implements Runnable`) rather than a type to change. It shares the `argument type mismatch for <label>:`
-// head with its sibling above because the two are one diagnostic from a reader's point of view, and the head
-// is what `argParamLabel`'s direct/indirect split serves. **The wording is the canonical corpus's, verbatim:**
+// (`implements Runnable`) rather than a type to change. **The wording is the canonical corpus's, verbatim:**
 // `specs/interface-dispatch.md`'s `dispatch-nonconforming-error` pins it.
-function nonConformingArgMessage(label String, conformer String, interfaceName String) returns String
-	return "argument type mismatch for {label}: type '{conformer}' does not implement interface '{interfaceName}'"
-end 'nonConformingArgMessage'
+//
+// `what` — the head naming WHICH position is at fault — is the only part that differs, and it is a parameter
+// for the reason the head is shared with `argTypeMismatchSentence` above: one rule DECIDES, so a reader must
+// be told one sentence and not two spellings of it. At the argument position that head is the
+// `argument type mismatch for <label>:` its sibling uses, which is what `argParamLabel`'s direct/indirect
+// split serves; the RETURN position (P1.7a slice 2) names the function instead.
+function nonConformingMessage(what String, conformer String, interfaceName String) returns String
+	return "{what}: type '{conformer}' does not implement interface '{interfaceName}'"
+end 'nonConformingMessage'
+
+// The three answers `existentialWideningVerdict` gives. An enum (a scalar), so asking costs nothing at the
+// two sites that ask; the two refusals are separate arms rather than one `no` because they are refused for
+// unrelated reasons and each site words them differently.
+enum ExistentialWideningVerdict
+	widens
+	floatHasNoValueHalf
+	doesNotConform
+end 'ExistentialWideningVerdict'
+
+// ⭐⭐ **MAY A VALUE OF THIS TYPE CROSS INTO AN INTERFACE-TYPED POSITION? — THE VERDICT, ONCE, FOR BOTH
+// POSITIONS THAT WIDEN.** A call ARGUMENT (`checkOneArgType`) and a `return` into an interface-typed return
+// (`checkOneReturnedValue`, P1.7a slice 2) ask exactly the same two questions in exactly the same order, and
+// they must never come to answer them differently — one gains its witness half in an adjacent hidden argument
+// and the other in the secondary return register, which is a difference of TRANSPORT and of nothing else.
+// Each site words its own sentence, because only the site knows what to call the place.
+//
+// ⭐ **A FLOAT IS REFUSED HERE AND NOT INSIDE THE CONFORMANCE DOOR, AND THAT IS DELIBERATE.** `float`
+// declares the intrinsic `Comparable`/`Equatable`/`Hashable` conformances, so `valueWidensToInterface`
+// answers TRUE and the program is well-typed by every rule these passes otherwise apply. What stops it is
+// REPRESENTATION: the fat pointer's value half is a general-purpose machine word (it is what a dispatch hands
+// the impl as its receiver, read out of an integer register by every conformer), and a float lives in a
+// floating-point register — so the widening is a cross-register-file move that no `TargetOp` performs.
+// MEASURED at the argument position: `use(c Comparable, other Comparable)` called with `2.5` reached the x64
+// emitter and PANICKED there — `a register-to-register move from xmm0 to rcx crosses register files` — with
+// no position and nothing in the message an author could act on. It is E2062's fact one widening position
+// over: dictionary passing gives a type parameter and an existential the SAME opaque slot, so the same limit.
+function existentialWideningVerdict(project Project, valueTag ValueTypeTag, valueNameId TypeNameId, interfaceName ByteArray) returns ExistentialWideningVerdict
+	if valueTag == ValueTypeTag.float 'floatHasNoWayIntoTheFatPointer'
+		return ExistentialWideningVerdict.floatHasNoValueHalf
+	end 'floatHasNoWayIntoTheFatPointer'
+
+	if not valueWidensToInterface(project, signatures: programSignaturesIn(project, asker: "existentialWideningVerdict"), valueType: maxonTypeOfTag(valueTag, nameId: valueNameId), interfaceName: interfaceName) 'doesNotConform'
+		return ExistentialWideningVerdict.doesNotConform
+	end 'doesNotConform'
+
+	return ExistentialWideningVerdict.widens
+end 'existentialWideningVerdict'
+
+// The float refusal's REASON, up to the point where the two positions diverge on what to do instead. Shared
+// for `nonConformingMessage`'s reason, and split exactly where the advice stops being the same advice.
+function floatHasNoValueHalfReason(interfaceName String) returns String
+	return "{ExistentialIsFatPointerReason} whose value half is a general-purpose machine word, and a float travels in a floating-point register, so it has no way through. This is the same limit `float` has as a generic type argument (E2062). Wrap the float in a type that implements '{interfaceName}'"
+end 'floatHasNoValueHalfReason'
+
+// ⭐⭐ **THE `return` HALF OF THE WIDENING RULE (P1.7a slice 2, the return ABI).** A `returns <Interface>`
+// function may hand back a CONFORMING concrete value, which gains its witness half in the secondary return
+// register (`LowerMaxonToStd.emitRetOrErrorReturn`). The parser cannot decide whether it conforms — it holds
+// no `Project`, and a conformer's `implements` clause is recorded when its OWN file is parsed — so it accepts
+// the shape and this pass takes the verdict, through the SAME door the argument position asks.
+//
+// ⚠ **WITHOUT IT A NON-CONFORMER REACHES `ensureWitnessTable` AND PANICS THE COMPILER** in `witnessSlotImpl`,
+// naming a slot no conformance ever filled: the parse-time tag check that used to refuse EVERY concrete
+// return is exactly what this replaces, so nothing else is left standing between the two.
+//
+// The per-function gate is the DECLARED RETURN TYPE, tested before anything walks a body — an
+// interface-returning function is a vanishing fraction of any program, and `liveOpIndices` builds an array
+// per function it is asked about.
+function checkReturnedValueTypes(project Project, module MaxonModule)
+	for func in module.functions 'eachFunc'
+		// A stdlib function no path from `main` reaches is dropped before the back end, so a diagnostic here
+		// would name code the program does not contain — `checkCalls`' gate, for its reason.
+		if project.stdlibFacts.unreachable.contains(func.name) 'notInTheProgram'
+			continue
+		end 'notInTheProgram'
+
+		match func.maxonReturnType 'declaredReturn'
+			void then break 'declaredReturn'
+			value(inner) then checkReturnsAgainstInterface(project, module: module, func: func, declaredReturn: inner)
+		end 'declaredReturn'
+	end 'eachFunc'
+end 'checkReturnedValueTypes'
+
+// Every `return` of one function against its declared interface return type. A `ret` is usually a block
+// TERMINATOR and occasionally a body op (a mid-block return), so the walk is `liveOpIndices` — the single
+// home of the blockRefs → opRefs+terminator descent — rather than a scan of `opRefs` that would miss most of
+// them, or of the append-only `module.ops` that would report against dead ops from an earlier pass.
+function checkReturnsAgainstInterface(project Project, module MaxonModule, func IrFunction, declaredReturn MaxonType)
+	if maxonTypeTag(declaredReturn) != ValueTypeTag.interfaceRef 'notAnExistentialReturn'
+		return
+	end 'notAnExistentialReturn'
+
+	let interfaceName = interfaceNameOfType(declaredReturn, typeNames: project.typeNames)
+	for opIdx in module.liveOpIndices(func) 'eachOp'
+		let op = try module.ops.get(opIdx) otherwise panic("checkReturnsAgainstInterface: opIdx {opIdx} from liveOpIndices not in module.ops")
+		match op 'op'
+			ret(value) then checkOneReturnedValue(project, func: func, value: value, interfaceName: interfaceName, retRange: project.opRanges.get(opIdx))
+			// Every other op — a `retVoid` included, which a value-returning function's parser never emits —
+			// hands nothing back through the return registers. The band range leans on the band-append
+			// invariant: a newly appended op FAILS TO COMPILE here rather than being swept into an ignore arm.
+			call then break 'op'
+			literal then break 'op'
+			retVoid to panicAbortValue then break 'op'
+		end 'op'
+	end 'eachOp'
+end 'checkReturnsAgainstInterface'
+
+// One `return`'s value against the interface its function promised — the verdict shared with the argument
+// position, worded for this one. Anchored on the `return` itself, the line an author would change.
+function checkOneReturnedValue(project Project, func IrFunction, value ValueId, interfaceName ByteArray, retRange SourceRange)
+	let valueTag = try func.valueTags.get(value) otherwise panic("checkOneReturnedValue: value v{value} of function '{String.from(func.name)}' has no recorded type — every SSA value must be minted through Parser.mintValue")
+	let valueNameId = try func.valueNameIds.get(value) otherwise panic("checkOneReturnedValue: value v{value} of function '{String.from(func.name)}' has no recorded type name — the two type columns are minted in lockstep")
+	let displayName = String.from(interfaceName)
+	match existentialWideningVerdict(project, valueTag: valueTag, valueNameId: valueNameId, interfaceName: interfaceName) 'widening'
+		widens then break 'widening'
+		floatHasNoValueHalf then reportPositioned(project, code: ErrorCode.floatWidenedToExistential, message: "Cannot return a `float` from '{String.from(func.name)}', which is declared to return the interface type '{displayName}': {floatHasNoValueHalfReason(displayName)}, or declare the return type as `float`", line: retRange.line, column: retRange.column, filePath: func.sourceFilePath)
+		doesNotConform then reportPositioned(project, code: ErrorCode.typeMismatch, message: nonConformingMessage("return type mismatch in '{String.from(func.name)}'", conformer: aggregateArgDisplay(aggregateNameFor(project, tag: valueTag, nameId: valueNameId), tag: valueTag), interfaceName: displayName), line: retRange.line, column: retRange.column, filePath: func.sourceFilePath)
+	end 'widening'
+end 'checkOneReturnedValue'
 
 // ⭐ **ONE ARGUMENT AGAINST ITS PARAMETER — the rule, stated once for both call shapes.** A DIRECT call
 // reaches it per slotted argument (`checkArgTypes`) and an INDIRECT one per positional argument
@@ -2968,33 +3084,21 @@ function checkOneArgType(project Project, func IrFunction, paramType MaxonType, 
 	// ⭐⭐ **AN INTERFACE-TYPED PARAMETER IS A WIDENING POSITION, NOT AN AGREEMENT ONE
 	// (P1.7a-existentials slice 1).** A conforming concrete value gains a witness half here and becomes a fat
 	// pointer, so `TypeClass.interfaceValue` deliberately agrees with nothing and the tag check below would
-	// refuse every legal call. The verdict is `ConformanceCheck.valueWidensToInterface` — the ONE door all four
-	// widening positions ask — and it is asked WHOLE-PROGRAM rather than at the parse for the reason
-	// `checkLiteralInitConformance` states: a conformer's `implements` clause is recorded when its own file is
-	// parsed, and the two files have no ordering.
+	// refuse every legal call. The verdict is `existentialWideningVerdict` — the ONE door BOTH widening
+	// positions ask (the RETURN is the other since P1.7a slice 2) — and it is asked WHOLE-PROGRAM rather than
+	// at the parse for the reason `checkLiteralInitConformance` states: a conformer's `implements` clause is
+	// recorded when its own file is parsed, and the two files have no ordering.
 	//
 	// It returns rather than falling through: the aggregate-identity rule below compares two NOMINAL names and
 	// would call every conformer a mismatch with its interface.
 	if paramTag == ValueTypeTag.interfaceRef 'existentialParam'
-		// ⭐⭐ **A FLOAT CANNOT BE WIDENED, AND IT CONFORMS — WHICH IS WHY THE REFUSAL IS HERE AND NOT IN THE
-		// WIDENING DOOR'S VERDICT.** `float` declares the intrinsic `Comparable`/`Equatable`/`Hashable`
-		// conformances, so `valueWidensToInterface` answers TRUE and the program is well-typed by every rule
-		// this pass otherwise applies. What stops it is REPRESENTATION: the fat pointer's value half is a
-		// general-purpose machine word (it is what a dispatch hands the impl as its receiver, read out of an
-		// integer register by every conformer), and a float lives in a floating-point register — so the widening
-		// is a cross-register-file move that no `TargetOp` performs.
-		// MEASURED: `use(c Comparable, other Comparable)` called with `2.5` reached the x64 emitter and PANICKED
-		// there — `a register-to-register move from xmm0 to rcx crosses register files` — with no position and
-		// nothing in the message an author could act on. It is E2062's fact one widening position over:
-		// dictionary passing gives a type parameter and an existential the SAME opaque slot, so the same limit.
-		if argTag == ValueTypeTag.float 'floatHasNoWayIntoTheFatPointer'
-			reportPositioned(project, code: ErrorCode.floatWidenedToExistential, message: "Cannot pass a `float` as {argParamLabel(paramName, position: position)}, which is declared at the interface type '{String.from(interfaceNameOfType(paramType, typeNames: project.typeNames))}': {ExistentialIsFatPointerReason} whose value half is a general-purpose machine word, and a float travels in a floating-point register, so it has no way through. This is the same limit `float` has as a generic type argument (E2062). Wrap the float in a type that implements '{String.from(interfaceNameOfType(paramType, typeNames: project.typeNames))}', or take the parameter as a `float`", line: callRange.line, column: callRange.column, filePath: filePath)
-			return
-		end 'floatHasNoWayIntoTheFatPointer'
-
-		if not valueWidensToInterface(project, signatures: programSignaturesIn(project, asker: "checkOneArgType"), valueType: maxonTypeOfTag(argTag, nameId: argNameId), interfaceName: interfaceNameOfType(paramType, typeNames: project.typeNames)) 'doesNotConform'
-			reportPositioned(project, code: ErrorCode.typeMismatch, message: nonConformingArgMessage(argParamLabel(paramName, position: position), conformer: aggregateArgDisplay(aggregateNameFor(project, tag: argTag, nameId: argNameId), tag: argTag), interfaceName: String.from(interfaceNameOfType(paramType, typeNames: project.typeNames))), line: callRange.line, column: callRange.column, filePath: filePath)
-		end 'doesNotConform'
+		let interfaceName = interfaceNameOfType(paramType, typeNames: project.typeNames)
+		let displayName = String.from(interfaceName)
+		match existentialWideningVerdict(project, valueTag: argTag, valueNameId: argNameId, interfaceName: interfaceName) 'widening'
+			widens then break 'widening'
+			floatHasNoValueHalf then reportPositioned(project, code: ErrorCode.floatWidenedToExistential, message: "Cannot pass a `float` as {argParamLabel(paramName, position: position)}, which is declared at the interface type '{displayName}': {floatHasNoValueHalfReason(displayName)}, or take the parameter as a `float`", line: callRange.line, column: callRange.column, filePath: filePath)
+			doesNotConform then reportPositioned(project, code: ErrorCode.typeMismatch, message: nonConformingMessage("argument type mismatch for {argParamLabel(paramName, position: position)}", conformer: aggregateArgDisplay(aggregateNameFor(project, tag: argTag, nameId: argNameId), tag: argTag), interfaceName: displayName), line: callRange.line, column: callRange.column, filePath: filePath)
+		end 'widening'
 		return
 	end 'existentialParam'
 

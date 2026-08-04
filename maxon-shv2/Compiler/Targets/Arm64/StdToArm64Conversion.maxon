@@ -1073,7 +1073,10 @@ type StdToArm64Lowering
 
 	// The arm64 twin of x64's `lowerTryCall` (P1.4b): args + `bl` as `lowerCall`, then capture BOTH return
 	// registers — the primary value from `callResultRegister(callee)` (**d0** for a float-returning callee,
-	// else **x0**) and the error flag from **x9**. The two capture moves are resequenced through the
+	// else **x0**) and the SECOND WORD from **x9**. That word is the error flag for a THROWING callee and the
+	// WITNESS half for an interface-returning one (P1.7a slice 2); the ABI is the same either way, and
+	// `functionUsesSecondaryReturnSlot` is the one predicate that decides a callee writes it. The two capture
+	// moves are resequenced through the
 	// parallel-copy sequencer (`colorAndDropSelfMoves`), exactly as x64's are — the resequencer is
 	// target-agnostic (it reads whatever physical sources the captures name). Emitted consecutively right
 	// after the call so its "call followed by two virtual-dest/physical-src moves" test identifies the pair.
@@ -1086,8 +1089,9 @@ type StdToArm64Lowering
 	end 'lowerTryCall'
 
 	// The arm64 dual-register `errorReturn`: write the value to its return register (**d0** for a float
-	// return, else **x0** — through the SAME `emitReturnValueMove` the ordinary `ret` uses) and the flag to
-	// **x9**, then the return terminator (which `Arm64PrologueEpilogue` recognizes exactly as an ordinary
+	// return, else **x0** — through the SAME `emitReturnValueMove` the ordinary `ret` uses) and the SECOND
+	// WORD to **x9** — the error flag for a THROWING function, the WITNESS half for an interface-returning one
+	// (P1.7a slice 2), a difference this emitter cannot see and does not need to — then the return terminator (which `Arm64PrologueEpilogue` recognizes exactly as an ordinary
 	// return's, since this emits the same `arm64Ret`). Both moves unconditional, mirroring x64's
 	// `lowerErrorReturn`; a void return type targets x0, where the family-default zero belongs.
 	//
