@@ -1035,8 +1035,27 @@ end 'noteDestructorUsage'
 // over their nesting, which is why this is the whole of `noteRelocatedFunctionUsage` and not a second copy of
 // that closure. A slot naming a USER method (`Point.tag`) sets no bit — it is `.text` the DFE roots
 // separately — and costs one prefix test.
+//
+// ⭐⭐ **THE CLOSURE IS RE-ENTERED ONLY IF THIS WALK ACTUALLY PUT A NEW DESTRUCTOR SYMBOL IN THE SET, AND
+// UNGATED IT WAS THIS RUNG'S WHOLE SUPERLINEAR COST.** `noteDestructorUsage` has already run
+// `closeDestructorNeeds` to a FIXPOINT, and that closure derives from exactly one input: the seed set. So a
+// second run over an unchanged seed set re-expands the identical nodes, re-derives the identical symbols and
+// re-sets bits that are already set — the definition of a no-op, at the price of the whole closure.
+//
+// ⚠ **THE PRICE IS NOT LINEAR, WHICH IS WHY A REDUNDANT RUN MATTERED.** One expansion of the drain costs
+// `genericInstanceCount()` allocations (MEASURED on the scale ladder, exactly: 23 / 59 / 203 / 395 per
+// expanded node at rungs 0 / 2 / 4 / 5, against instance registries of 23 / 59 / 203 / 395), so the closure
+// as a whole is O(referenced cascades x instances) — QUADRATIC in program size. Ungated, this line cost
+// +1,458 / +5,406 / +47,084 / +167,161 allocations at those rungs, which was 98% of everything the rung
+// added. The quadratic itself is OLDER than this call site and is reported as measured debt; what belongs
+// here is not paying it twice for nothing.
+//
+// The COUNT is the whole test because `neededDestructors` is insert-only: unchanged count ⟺ unchanged set.
+// A reloc that names a `__destruct_<T>` — the case this function exists for, a witness table's
+// `destroyFunc@8` pointing at a conformer's cascade — grows it and the closure runs exactly as before.
 export function noteRelocatedFunctionUsage(usage RuntimeUsage, project Project, signatures ProgramSignatures)
 	let heapBefore = usage.usesHeap
+	let neededBefore = usage.neededDestructors.count()
 	for reloc in project.globalData.pendingRdataRelocs 'eachRdataSlot'
 		recordCallUsage(reloc.funcName, usage: usage)
 	end 'eachRdataSlot'
@@ -1044,6 +1063,10 @@ export function noteRelocatedFunctionUsage(usage RuntimeUsage, project Project, 
 	if usage.usesHeap and not heapBefore 'heapArrivedTooLate'
 		panic("noteRelocatedFunctionUsage: an `.rdata` slot named a heap callee in a program whose `.data` layout was taken with `usesHeap` false — the runtime globals are laid out before lowering, so the layout is now short by their width. Every relocatable callee releases a heap record, so the program that named one must already have allocated one: a new relocation kind has broken that premise")
 	end 'heapArrivedTooLate'
+
+	if usage.neededDestructors.count() == neededBefore 'nothingNewToCloseOver'
+		return
+	end 'nothingNewToCloseOver'
 
 	closeDestructorNeeds(usage, project: project, signatures: signatures)
 end 'noteRelocatedFunctionUsage'
