@@ -112,8 +112,10 @@ The allocator used to die on exactly this shape (`chooseRegister: no free regist
 coloring would honour a copy hint that handed a **callee-saved** register to a value that did not
 need one, and a value that could live *nowhere else* then found none. Five values needing the five
 scarce registers is a perfect fit — it is only reachable if nothing wastes one. This is the case the
-chordal-exactness argument does NOT cover: with forbidden sets the problem is LIST colouring, and
-greedy is exact only when the scarce class is protected.
+chordal-exactness argument does NOT cover: with forbidden sets the problem is LIST colouring, which is
+NP-hard, so protecting the scarce class is a MITIGATION and not an exactness rule — the residue it
+cannot prevent is repaired by `SplitDriver.repairAtExhaustion`. (`HallCondition.hallVerdictAt`'s
+header carries that argument and is the one place it is made.)
 
 `work(x) = x + 1`, so each loop adds `1+2+3 = 6` to its accumulator over three iterations:
 `a = 1 + 6 = 7`, `b = 1 + 6 = 7`, and `total = 0 + 7 + 7 = 14`.

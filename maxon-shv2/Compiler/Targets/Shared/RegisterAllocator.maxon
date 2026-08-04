@@ -118,8 +118,9 @@ export type Allocation
 	end 'noteHolder'
 
 	// Which value occupies `regNum`. Only meaningful for a register the colorer's in-use mask says is
-	// HELD; there is no "unoccupied" answer, and none is needed — the one caller reads it through that
-	// mask.
+	// HELD; there is no "unoccupied" answer, and none is needed — BOTH callers read it through that mask.
+	// `valuesHoldingRegisters` masks with `held and classPool`; `StuckValues.record` masks with `A(v)`,
+	// which the exhaustion premise `classPool ⊆ held ∪ forbidden(v)` puts inside `held`.
 	export function holderOf(regNum RegNum) returns ValueId
 		return try self.holderOfReg.get(regNum) otherwise panic("Allocation.holderOf: register {regNum} is outside the unified register file")
 	end 'holderOf'
@@ -276,14 +277,10 @@ export type RegAllocStats
 	// store/reload brackets in hot code, and each one is a program that would otherwise have been
 	// a FALSE E5001.
 	export var forcedSpills as EventCount
-	// Values the COLORER could not place, and which `SplitDriver.repairAtExhaustion` then split. These
-	// are not pressure — every one of them sat at a point Hall calls FEASIBLE — so they are counted apart
-	// from `forcedSpills`, which they are also included in (a repair IS a forced bracket). The ratio of
-	// the two is what says whether a program is paying for confinement or for order.
-	// ⭐⭐ THE TWO CURES ARE COUNTED APART, AND THAT IS THE WHOLE REASON THERE ARE TWO COUNTERS. Neither
-	// is pressure — every value they relieve sat at a point Hall calls FEASIBLE — so both are counted
-	// beside `forcedSpills` rather than inside it, and both are also included in it (a repair IS a forced
-	// bracket).
+	// Values the COLORER could not place, split by one of the two cures. ⭐⭐ THE TWO CURES ARE COUNTED
+	// APART, AND THAT IS THE WHOLE REASON THERE ARE TWO COUNTERS. Neither is pressure — every value they
+	// relieve sat at a point Hall calls FEASIBLE — so both are counted beside `forcedSpills` rather than
+	// inside it, and both are also included in it (a repair IS a forced bracket).
 	//
 	// ⚠ `repairedByEviction` IS EXPECTED TO READ ZERO, AND THAT IS WHAT IT IS FOR. Cure (a) runs first
 	// and handles everything the corpus produces, so a single merged counter could never tell a reader
@@ -1176,9 +1173,13 @@ function repairStuckValues(module TargetModule, driver SplitDriver, func IrFunct
 	if repaired == 0 'nothingRepairable'
 		// ⚠ THIS IS A CONTRADICTION, NOT A SHORTFALL. Cure (b) always HAS a candidate — `A(v)` is
 		// non-empty and every register in it is held — so a round can only come away empty if every
-		// candidate was refused, and the sole reason either cure refuses is that the failing op itself
-		// READS the value it would have to cut. An op names at most two virtual registers, so reaching
-		// here needs `A(v)` to consist only of registers held by those two, for EVERY stuck value at once.
+		// candidate was refused, and every refusal means the same thing: EVICTING THAT OCCUPANT WOULD
+		// FREE NOTHING AT THIS POINT. It has three spellings and one cause, all read off the failing op
+		// itself — the op READS `w` (`FailingPoint.readsOccupant`), or the op DEFINES `w` (a co-def of
+		// `v`'s own op, whose span opens one slot after it), or `w`'s last use is at or before the point
+		// (its span closes before it). Each needs `w` to be named by the failing op, an op names at most
+		// two virtual registers, so reaching here needs `A(v)` to consist only of registers held by those
+		// two — for EVERY stuck value at once.
 		panic("repairStuckValues: '{String.from(func.name)}' — the colorer could not place {stuck.count()} value(s) and BOTH cures were refused for every one of them. Taking the first: {driver.describeUnrepairable(stuck.valueAt(0), free: stuck.freeAt(0), occupants: stuck.occupantCountAt(0))}")
 	end 'nothingRepairable'
 
@@ -1548,9 +1549,16 @@ end 'assertColouredInClass'
 // The failure is not a pressure problem and the splitter cannot see it: at the failing point the
 // values FIT (five confined values, five callee-saved registers). It is a COLORING ORDER problem —
 // the place the chordal-exactness argument does not reach. χ = ω is a theorem for the UNCONSTRAINED
-// problem; forbidden sets make this LIST colouring, where greedy is exact only if the scarce
-// callee-saved half is protected. Two sequential loops containing calls were enough to hit it
+// problem; forbidden sets make this LIST colouring, and it is NP-hard —
+// **`HallCondition.hallVerdictAt`'s header carries that argument and is the one place it is made.**
+// Two sequential loops containing calls were enough to hit it
 // (`while-loops.sequential-loops-across-a-call`).
+//
+// ⛔ SO THE VOLATILITY PREFERENCE IS A MITIGATION, NOT AN EXACTNESS RULE, AND THIS HEADER SAID
+// OTHERWISE. It used to end *"where greedy is exact only if the scarce callee-saved half is
+// protected"*, which reads as "protect it and greedy is exact"; A5g measured four programs where the
+// half IS protected and the greedy still loses. What protecting it buys is that the common shape stops
+// reaching `reportExhaustion`; what catches the rest is the repair.
 function chooseRegister(v ValueId, classPool RegMask, callerSaved RegMask, blocked RegMask, dyingRegs RegMask, hints ColorHints, alloc Allocation, liveness LivenessResult, stats RegAllocStats) returns RegNum
 	// The volatility preference is the COPY GROUP's, not `v`'s alone — see `copyGroupBlocked`.
 	let groupBlocked = copyGroupBlocked(v, blocked: blocked, hints: hints, alloc: alloc, liveness: liveness)
@@ -1682,7 +1690,7 @@ function reportExhaustion(v ValueId, working RegMask, classPool RegMask, callerS
 	// instead of aborting at the first, which is the difference between one re-colour and R of them (see
 	// `colorRepairingConfinements` for why that is the whole cost argument).
 	//
-	// TWO things make it safe, and only the first is about the pass's OUTPUT:
+	// THREE things make it safe, and only the first is about the pass's OUTPUT:
 	//
 	//  • The allocation this pass produces is DISCARDED WHOLE. `colorRepairingConfinements` re-colours
 	//    from a fresh `Allocation` whenever the stuck list is non-empty, and the list is non-empty
@@ -1696,6 +1704,18 @@ function reportExhaustion(v ValueId, working RegMask, classPool RegMask, callerS
 	//    register `v` provisionally holds cannot move the verdict between FEASIBLE (record and carry on)
 	//    and OVERFLOW (a hard panic naming the splitter). Were the verdict a function of the assignment,
 	//    one provisional colour could turn a repairable point into a false splitter-bug panic.
+	//  • ⚠⚠ **IT DOES REACH THE REPAIR'S INPUTS, AND THE ARGUMENT HAS TO COVER THAT RATHER THAN STOP AT
+	//    THE VERDICT — this bullet was missing and the list above it said "TWO".** A provisional sits in
+	//    `held` for every LATER def of the pass, so it shrinks a later stuck value's `free` and it can be
+	//    the `holderOf` a register in a later `A(v)`. Both feed a PERMANENT mutation: `free` is
+	//    `findConfiningClobber`'s tier-1 preference, and an occupant is a value cure (b) SPLITS. So a
+	//    stuck value can be evicted on behalf of another stuck value, on the strength of a colour neither
+	//    will keep. That is imprecision, not unsoundness, and each half is bounded by something that does
+	//    not read the provisional: `findConfiningClobber` falls back to tier 2 when `free` misleads it
+	//    (its header says `free` is a preference, not a premise), `repairByEvictingOccupant` re-derives
+	//    "still live across the point" from the LIVENESS rather than from the allocation, every spill it
+	//    then makes is legal in its own right, and Φ falls either way. What the provisional can cost is a
+	//    split nothing needed; what it cannot do is make a wrong one.
 	//
 	// Colouring rather than leaving `v` blank is what keeps every downstream reader of the sweep honest:
 	// `seedInUse`'s "a live-in must be coloured" and `colorOpForward`'s "every use is already coloured"

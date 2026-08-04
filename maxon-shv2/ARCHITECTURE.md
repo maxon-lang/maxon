@@ -1464,8 +1464,18 @@ Three consequences, and they are the reason several things elsewhere in the comp
 > This is what makes live ranges dominance-closed subtrees, hence the interference graph
 > **chordal**, hence dominance-order greedy coloring **exact**: two values interfere iff one is
 > live at the other's def, so each edge is enforced once at its later endpoint, and layout order
-> is a perfect elimination order. After splitting, `maxlive ≤ pool` everywhere by construction, so
-> **the colorer cannot fail** — a coloring failure is a compiler bug and asserts as one.
+> is a perfect elimination order. After splitting, `maxlive ≤ pool` everywhere by construction.
+>
+> ⛔⛔ **THAT IS NOT "THE COLORER CANNOT FAIL", AND THIS RULE SAID IT WAS** (corrected A5g,
+> 2026-08-04, along with the same claim in three compiler sources). Chordal exactness is a theorem
+> for the **unconstrained** problem; forbidden sets make this list colouring, and `maxlive ≤ pool` is
+> then necessary and **not sufficient** — see "Known limits" #0 and
+> `HallCondition.hallVerdictAt`'s header, which is the one place the NP-hardness argument is made.
+> A value the greedy cannot place at a point that Hall's exact verdict calls FEASIBLE is a
+> **confinement**, not a bug: `RegisterAllocator.reportExhaustion` runs that verdict to tell the two
+> apart, and `SplitDriver.repairAtExhaustion` / `repairByEvictingOccupant` relieve it before the
+> function is coloured again. What survives of the old claim is the half that is true and is still
+> asserted: reaching exhaustion with an **OVERFLOW** verdict is a splitter bug and panics as one.
 >
 > The `Reuse` operand model is what makes Rule 1 true at the Target tier: without it,
 > `mov dest,lhs; add dest,rhs` writes `dest` twice and the tier is not SSA.
@@ -2369,16 +2379,24 @@ recurse** — block counts are bounded by the program, not by us. All of them ar
 0. **Chordal exactness does NOT survive precoloring, and this is the one place the theory runs
    out.** `χ = ω` is a theorem for the *unconstrained* problem. Forbidden sets (a value live across
    a call is confined to the 5 callee-saved registers; an `idiv` operand cannot be RAX/RDX) make
-   this **list colouring**, where greedy is exact only if the **scarce class is protected**. It is
-   not a pressure problem and the splitter cannot see it: the values *fit* (five confined values,
-   five callee-saved registers) and yet a greedy order can still fail.
+   this **list colouring**, which is **NP-hard** — `Compiler/Targets/Shared/HallCondition.maxon`'s
+   `hallVerdictAt` header carries that argument and is the one place it is made. It is not a pressure
+   problem and the splitter cannot see it: the values *fit* (five confined values, five callee-saved
+   registers) and yet a greedy order can still fail.
 
    Concretely: biased coloring would honour a copy hint that handed a **callee-saved** register to a
    value that did not need one, and a value that could live nowhere else then found none — the
    colorer died with every register blocked. Two sequential loops containing calls were enough. The
-   guard is `preferredClassMask`: **a hint may never take a register outside a value's preferred
-   class while that class still has one free.** Copy elision is worth a `mov`; it is never worth a
-   register the value cannot otherwise obtain. (`while-loops.sequential-loops-across-a-call`.)
+   mitigation is `preferredVolatilityMask`: **a hint may never take a register outside a value's
+   preferred volatility half while that half still has one free.** Copy elision is worth a `mov`; it
+   is never worth a register the value cannot otherwise obtain.
+   (`while-loops.sequential-loops-across-a-call`.)
+
+   ⛔ **IT IS A MITIGATION, NOT AN EXACTNESS RULE, AND THIS ENTRY USED TO SAY OTHERWISE** — *"greedy
+   is exact only if the scarce class is protected"*, which reads as "protect it and greedy is exact".
+   A5g measured four programs where the half IS protected and the greedy still loses; their failing
+   points come back FEASIBLE from `hallVerdictAt`. See RULE 1 in "The three rules" above for what
+   replaced the invariant that sentence propped up.
 
    **The second half of this class is now CLOSED (`HallCondition.maxon`), and it took a stronger
    test than this entry originally proposed.** The exposure was the same shape at a *different*
