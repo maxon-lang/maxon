@@ -227,7 +227,7 @@ grep -q 'memory leak' "$RUNLOG" && warn "the run mentions a memory leak — read
 printf '\n'
 if [ "$FAILED" -eq 0 ] && [ "$COUNTS_OK" = "1" ] && [ "$TOTAL" -gt 0 ]; then
   printf '\033[32m╔══════════════════════════════════════════════════════════════════════╗\033[0m\n'
-  printf '\033[32m║  %-68s║\033[0m\n' "PASSED on the first run — $SPEC, $PASSED/$TOTAL"
+  printf '\033[32m║  %-68s║\033[0m\n' "PASSED on the first run: $SPEC, $PASSED/$TOTAL"
   printf '\033[32m╚══════════════════════════════════════════════════════════════════════╝\033[0m\n'
   cat <<EOF
 
@@ -246,11 +246,11 @@ fi
 
 printf '\033[33m╔══════════════════════════════════════════════════════════════════════╗\033[0m\n'
 if [ "$TOTAL" -eq 0 ]; then
-  printf '\033[33m║  %-68s║\033[0m\n' "RAN NOTHING — $SPEC. That is the failure this check exists for."
+  printf '\033[33m║  %-68s║\033[0m\n' "RAN NOTHING: $SPEC. That is the failure this check exists for."
 elif [ "$COUNTS_OK" = "0" ] && [ "$FAILED" -eq 0 ]; then
-  printf '\033[33m║  %-68s║\033[0m\n' "GREEN BUT THE COUNTS DISAGREE — $SPEC. Fix the port, not the number."
+  printf '\033[33m║  %-68s║\033[0m\n' "GREEN BUT THE COUNTS DISAGREE: $SPEC. Fix the port, not the number."
 else
-  printf '\033[33m║  %-68s║\033[0m\n' "FAILED on the first run — $SPEC, $FAILED of $TOTAL"
+  printf '\033[33m║  %-68s║\033[0m\n' "FAILED on the first run: $SPEC, $FAILED of $TOTAL"
 fi
 printf '\033[33m╚══════════════════════════════════════════════════════════════════════╝\033[0m\n'
 

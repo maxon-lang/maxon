@@ -46,6 +46,27 @@ gone (§4), so nothing may retire a spec but porting it.
 
 ## 0. Start — no baseline run. There is nothing to measure yet.
 
+### ⇒ RUN `scripts/spec-port-start.sh`. It is §0 through §2, in one pass.
+
+```bash
+scripts/spec-port-start.sh                 # take the next spec off the whitelist
+scripts/spec-port-start.sh --list 5        # just show the queue, change nothing
+scripts/spec-port-start.sh --spec <name>   # take a specific one
+```
+
+Select → build → copy byte-identical → run the filter → run §2's three counts → **print the verdict**,
+which is the fork in the whole process:
+
+- **PASSED** ⇒ **§7b's fast path.** The tick is done; commit and push.
+- **FAILED** ⇒ **§3.** Brief `maxon-spec-implementer`, then land with `spec-port-finish.sh`.
+
+It carries the **permanent skip list** — specs a USER RULING withdrew, which the selector below cannot
+know about and would otherwise re-offer on every tick forever. It leaves a failing spec **in the tree**
+(that copy is the tick's subject; `--revert` takes it back out if you abandon the tick), and it refuses
+to start on a dirty tree, because the suite mints goldens and you could not tell yours from leftovers.
+
+The rest of this section is what the script does and why, for when you need to do it by hand.
+
 **Do NOT open the tick with a full suite run.** It is ~43 s spent on a number the tick does not need:
 **the §8 gate is `failed: 0`, not an arithmetic total** (see the box there). A suite that ends green is
 green whatever it started at, and the check that catches this loop's real failure mode — a spec landing
