@@ -3125,6 +3125,20 @@ export typealias CompiledInstanceNameMap = Map with (GenericInstanceId, ByteArra
 // must not move, while this one exists only to answer "are these two values the same type?".
 export typealias CanonicalInstanceNameMap = Map with (GenericInstanceId, ByteArray)
 
+// ⭐ **THE REVERSE OF `CanonicalInstanceNameMap` — every interned instance's canonical name as a SET, so
+// "is this NAME an instance?" is a probe rather than a walk.** `isCanonicalInstanceName` used to answer it
+// by scanning `0 upto genericInstances.count()`, which its own header justified with *"a program interns a
+// handful of instances"* and *"the two askers are whole-program CHECKS that run once per declared
+// associated type"*. Both premises were true when written and BOTH went stale: `declaredNameIsManaged`
+// then began asking it FIRST, on every name, and that is `typeIsManaged`'s per-FIELD door — so the walk ran
+// once per (field × instance) and minted a fresh `GenericInstanceIdArray` inside `canonicalInstanceName` on
+// every step of it, memo hit or not. **MEASURED on a ladder of N generic instances each holding a managed
+// struct: `phase:deriveRuntimeNeeds` allocated 5,403 / 11,504 / 31,186 / 100,518 at N = 25/50/100/200 —
+// x2.13, x2.71, x3.22 across a DOUBLING knob, fitting `1,814 + 94N + 2.0N²` to the digit, the 2.0 being the
+// array record plus its buffer.** It also broke `declaredNameIsManaged`'s own stated obligation two lines
+// above it — *"Allocation-free throughout, which is `typeIsManaged`'s standing obligation"*.
+typealias CanonicalInstanceNameSet = Set with ByteArray
+
 // ⭐ A tuple name ⇒ its CANONICAL tuple name (P1.10). Keyed by name rather than by an id because a tuple has
 // no id: it IS its name (`ProgramSignatures.tupleCanonicalNames`).
 export typealias TupleCanonicalNameMap = Map with (ByteArray, ByteArray)
@@ -3937,6 +3951,14 @@ export type ProgramSignatures
 	// for the quadratic this removes. Empty for a program that instantiates no generic.
 	var compiledInstanceNames as CompiledInstanceNameMap
 	var canonicalInstanceNames as CanonicalInstanceNameMap
+	// The reverse of `canonicalInstanceNames` — see `CanonicalInstanceNameSet` for the quadratic it removes.
+	// Filled by `indexCanonicalInstanceNames`, which is the ONLY writer, so the set and the watermark below
+	// cannot disagree about which ids are in it.
+	var canonicalInstanceNameIndex as CanonicalInstanceNameSet
+	// How far `canonicalInstanceNameIndex` has been filled: every id BELOW this is in the set. Instances are
+	// append-only, so advancing it is monotone and the total work of keeping the set complete is O(instances)
+	// across the whole compile however often it is asked.
+	var canonicalNamesIndexedThrough as GenericInstanceId
 	// ⭐ Every tuple name this index has seen ⇒ its CANONICAL one (P1.10). A name the DECLARATION SWEEP minted
 	// spells its elements the way the source wrote them (`__Tuple2.Integer.Integer`), because the alias
 	// registry that says what `Integer` means is still being built when the sweep runs; `adoptType` rewrites
@@ -4336,7 +4358,7 @@ export type ProgramSignatures
 	// Every index, empty. Split out of `create` only so the seed stamping above reads as the two steps it
 	// is; this is its one caller.
 	static function freshIndexes() returns ProgramSignatures
-		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleAliases: TupleCanonicalNameMap.create(), sawAggregateArrayLiteral: false, sawListFromConstruction: false, genericAliases: GenericAliasMap.create(), contestedGenericAliases: sharedEmptyGenericAliasContests, multiplyDeclaredGenericAliases: sharedEmptyDisagreeingAliasNames, divergedGenericAliasDecl: AliasCycleResult.none, nameableGenericAliases: sharedEmptyNameableGenericAliases, genericAliasSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceNamesInDeclOrder: builtinInterfaceNames(), interfaceDeclIndexByName: builtinInterfaceDeclIndices(), interfaceDeclSites: InterfaceDeclSiteArray.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcThrows: FuncThrowsMap.create(), funcParamDefaults: ParamDefaultMap.create(), collidingParamDefaults: CollidingParamDefaultNameSet.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), hash: fnvOffsetBasis(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, allFilesFolded: false, rootIsUnderStdlibDirectory: false, constCastTargets: ConstCastTargetSet.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibShadowRenames: StdlibShadowRenameMap.create(), fileModuleDirectories: FileModuleDirectoryMap.create(), namespaceQualifiedFunctions: NamespaceQualifiedFunctionSet.create(), freeFunctionDirectories: FreeFunctionDirectoryMap.create(), contestedFreeFunctions: ContestedFreeFunctionMap.create(), contestedRegistrationNames: ContestedRegistrationNameSet.create()}
+		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), canonicalInstanceNameIndex: CanonicalInstanceNameSet.create(), canonicalNamesIndexedThrough: 0, tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleAliases: TupleCanonicalNameMap.create(), sawAggregateArrayLiteral: false, sawListFromConstruction: false, genericAliases: GenericAliasMap.create(), contestedGenericAliases: sharedEmptyGenericAliasContests, multiplyDeclaredGenericAliases: sharedEmptyDisagreeingAliasNames, divergedGenericAliasDecl: AliasCycleResult.none, nameableGenericAliases: sharedEmptyNameableGenericAliases, genericAliasSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceNamesInDeclOrder: builtinInterfaceNames(), interfaceDeclIndexByName: builtinInterfaceDeclIndices(), interfaceDeclSites: InterfaceDeclSiteArray.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcThrows: FuncThrowsMap.create(), funcParamDefaults: ParamDefaultMap.create(), collidingParamDefaults: CollidingParamDefaultNameSet.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), hash: fnvOffsetBasis(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, allFilesFolded: false, rootIsUnderStdlibDirectory: false, constCastTargets: ConstCastTargetSet.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibShadowRenames: StdlibShadowRenameMap.create(), fileModuleDirectories: FileModuleDirectoryMap.create(), namespaceQualifiedFunctions: NamespaceQualifiedFunctionSet.create(), freeFunctionDirectories: FreeFunctionDirectoryMap.create(), contestedFreeFunctions: ContestedFreeFunctionMap.create(), contestedRegistrationNames: ContestedRegistrationNameSet.create()}
 	end 'freshIndexes'
 
 	// --- MODULE DIRECTORIES and the ONE visibility decision (N1a) ---
@@ -9706,6 +9728,10 @@ export type ProgramSignatures
 			_ = self.mangleGenericInstance(id)
 			_ = self.canonicalInstanceName(id)
 		end 'eachInstance'
+		// The name→instance direction is a THIRD thing the parse can ask and must not have to write (see
+		// `indexCanonicalInstanceNames`), so it is warmed here beside the two forward memos rather than being
+		// left to whichever reader got there first.
+		self.indexCanonicalInstanceNames()
 	end 'deriveInstanceNames'
 
 	// ⭐ **THE NOMINAL IDENTITY OF AN INSTANCE'S SUBSTITUTED TYPE ARGUMENT (P1.7)** — what a parameter
@@ -11172,19 +11198,31 @@ export type ProgramSignatures
 	//
 	// A name no registry holds is not managed: it is E3011's subject, and a slot the front end refuses owns
 	// nothing to drop. Allocation-free throughout, which is `typeIsManaged`'s standing obligation.
-	// Is `name` the CANONICAL rendering of an interned generic instance? The reverse of
-	// `canonicalInstanceName`, which no map holds — the registry is keyed by the instance's structural KEY,
-	// and its canonical NAME is derived. A linear walk is right rather than a fifth index: a program interns a
-	// handful of instances, the name is memoized per id by `canonicalInstanceName` itself, and the two askers
-	// are whole-program CHECKS that run once per declared associated type rather than per op.
+	// Is `name` the CANONICAL rendering of an interned generic instance? The registry is keyed by the
+	// instance's structural KEY and its canonical NAME is derived, so the reverse direction needs an index of
+	// its own — `canonicalInstanceNameIndex`, whose header carries the measurement of the quadratic the walk
+	// this replaces was running. ONE probe now, over a set kept complete by `indexCanonicalInstanceNames`.
 	export function isCanonicalInstanceName(name ByteArray) returns bool
-		for id in 0 upto self.genericInstances.count() 'eachInstance'
-			if self.canonicalInstanceName(id).equals(name) 'thisOne'
-				return true
-			end 'thisOne'
-		end 'eachInstance'
-		return false
+		self.indexCanonicalInstanceNames()
+		return self.canonicalInstanceNameIndex.contains(name)
 	end 'isCanonicalInstanceName'
+
+	// Bring `canonicalInstanceNameIndex` up to date with every instance interned so far — the SOLE writer of
+	// that set and of its watermark, so "which ids are in it" is one fact rather than two.
+	//
+	// ⚠ It normally does NOTHING, and that is what keeps it off the parse's write path. `deriveInstanceNames`
+	// calls it at the one point the declaration sweep is complete, so by the time the parallel parse can ask
+	// `isCanonicalInstanceName` the watermark already stands at `count()` and the loop body never runs — the
+	// same READ-ONLY-during-parse property that function's header describes for the two name memos, extended
+	// to this set. The loop is reached again only for instances interned AFTER the last parse (the builtin
+	// `Array`/`Set` instances minted during lowering), which is single-threaded.
+	function indexCanonicalInstanceNames()
+		while self.canonicalNamesIndexedThrough < self.genericInstances.count() 'eachNewInstance'
+			let id = self.canonicalNamesIndexedThrough
+			self.canonicalInstanceNameIndex.insert(self.canonicalInstanceName(id))
+			self.canonicalNamesIndexedThrough = id + 1
+		end 'eachNewInstance'
+	end 'indexCanonicalInstanceNames'
 
 	// ⭐⭐ **DOES A VALUE OF THIS DECLARED NAME OCCUPY MORE THAN ONE MACHINE WORD?** The WIDTH question, and
 	// it is a different one from `declaredNameIsManaged`'s ownership question — an existential is neither
