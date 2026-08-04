@@ -831,6 +831,27 @@ let ElementCountAliasHigh = U64MaxBound
 let ElementCountAliasName = b"ElementCount"
 let ElementCountAliasDeclPath = "stdlib/Array.maxon"
 
+// ⭐ **`stdlib/String.maxon:12-13`'s `export typealias GraphemeCount = int(0 to u64.max)` and
+// `export typealias BytePos = int(0 to u64.max)`, transcribed (BATCH2 slice 6).** They arrive by exactly the
+// route `Codepoint` did and for the identical reason: they are declared in a module shv2 can never LOAD,
+// because it also declares `type String` and `String` is a name this compiler owns. So the aliases exist in
+// the LANGUAGE and in no registry a reader can probe — and `stdlib/helpers/string/{utf8,hash,grapheme}.maxon`
+// spell every byte position and every cluster count with them, which without this is `E3011 Unknown type
+// 'BytePos'` twenty-two times over.
+//
+// ⚠ They share ONE range because the corpus gives them one — a byte position and a cluster count both span
+// the full unsigned domain there — so the bounds are a single pair of constants rather than two identical
+// pairs free to drift apart. It rides as the wrapped -1 exactly as `ElementCount`'s does.
+//
+// ⚠ `ByteCount`, the third alias those files' header comments name, is deliberately NOT seeded: it is
+// mentioned in a COMMENT in each of them and spelled in no signature (checked at the source). Vocabulary
+// does not ship ahead of its consumer, and the day one arrives it is one line here.
+let StringPositionAliasLow = 0 as ParsedInt
+let StringPositionAliasHigh = U64MaxBound
+let BytePosAliasName = b"BytePos"
+let GraphemeCountAliasName = b"GraphemeCount"
+let StringPositionAliasDeclPath = "stdlib/String.maxon"
+
 // ⭐⭐ **THE DECLARING FILES OF THE ALIASES THE COMPILER SUPPLIES ON THE STDLIB'S BEHALF — the files the
 // SWEEP NEVER VISITS (N1c).** `RangedAliasRegistry.create` seeds `Codepoint` and `ElementCount` as
 // declarations of two real `stdlib/` modules, but it SUPPLIES them rather than parsing them, so
@@ -849,6 +870,9 @@ export function seededStdlibAliasDeclFiles() returns FilePathArray
 	var files = FilePathArray.create()
 	files.push(seedDeclFile(CodepointAliasDeclPath))
 	files.push(seedDeclFile(ElementCountAliasDeclPath))
+	// ONE entry for the two `stdlib/String.maxon` seeds — this list is of FILES, and both come from that one
+	// file. Pushing the same path twice would stamp the same module directory twice.
+	files.push(seedDeclFile(StringPositionAliasDeclPath))
 	return files
 end 'seededStdlibAliasDeclFiles'
 
@@ -1078,6 +1102,8 @@ export type RangedAliasRegistry
 		var registry = Self{byName: RangedTypeAliasMap.create(), multiplyDeclared: MultiplyDeclaredAliasMap.create(), storageBytes: AliasStorageBytesMap.create(), packedBits: AliasPackedBitsMap.create(), nameable: NameableAliasMap.create(), rangeContested: sharedEmptyRangeContests}
 		_ = registry.record(builtinStdlibAlias(CodepointTypeName, low: CodepointAliasLow, high: CodepointAliasHigh, declPathText: CodepointAliasDeclPath))
 		_ = registry.record(builtinStdlibAlias(ElementCountAliasName, low: ElementCountAliasLow, high: ElementCountAliasHigh, declPathText: ElementCountAliasDeclPath))
+		_ = registry.record(builtinStdlibAlias(BytePosAliasName, low: StringPositionAliasLow, high: StringPositionAliasHigh, declPathText: StringPositionAliasDeclPath))
+		_ = registry.record(builtinStdlibAlias(GraphemeCountAliasName, low: StringPositionAliasLow, high: StringPositionAliasHigh, declPathText: StringPositionAliasDeclPath))
 		return registry
 	end 'create'
 

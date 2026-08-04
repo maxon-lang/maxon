@@ -207,23 +207,47 @@ export let StrSplitName = b"__str_split"
 export let StrReplaceFirstName = b"__str_replace_first"
 export let StrFromBytesName = b"__str_from_bytes"
 
-// ⭐⭐ **THE TWO STDLIB-ONLY BYTE DOORS (BATCH2 slice 1) — what `stdlib/URL.maxon` and its helpers actually
-// ask a String for.** Both are `module function` in the corpus (`stdlib/String.maxon:181` and `:281`), so
-// no user program may reach either; the visibility is enforced at the PARSER, on stdlib provenance
+// ⭐⭐ **THE THREE STDLIB-ONLY BYTE DOORS — what `stdlib/`'s own byte walkers actually ask a String for.**
+// All three are `module function` in the corpus (`stdlib/String.maxon:181`, `:266` and `:281`), so no user
+// program may reach any of them; the visibility is enforced at the PARSER, on stdlib provenance
 // (`Parser.requireStdlibOnlyStringMethod`), because shv2 has no `module` keyword.
 //
 //   * `__str_bytes_view(str) -> arrRecord` — `addressableBytes()`. A ZERO-COPY `Array with Byte` VIEW over
 //     the receiver's live bytes: nothing is copied and the cost does not depend on the length. See
 //     `buildStrBytesView` for why it is a fresh record rather than the String pointer retagged.
-//   * `__str_byte_at_or_panic(str, index) -> byte` — `byteAtOrPanic(index)`. One bounds-checked byte read
-//     that ABORTS rather than throws, because its 17 corpus call sites read bytes inside nested conditions
+//   * `__str_byte_at(str, index) -> (byte, flag)` — `byteAt(index)`. One bounds-checked byte read that
+//     THROWS `__ManagedMemoryError.invalidByteRange`, which is what the corpus declares
+//     (`stdlib/String.maxon:266`) and what its own doc argues for: the bounds contract stays the CALLER's
+//     to state. It is the primitive `utf8.maxon`, `hash.maxon` and `grapheme.maxon` walk bytes through.
+//   * `__str_byte_at_or_panic(str, index) -> byte` — `byteAtOrPanic(index)`. The SAME read with the other
+//     failure exit: it ABORTS, because its 17 corpus call sites read bytes inside nested conditions
 //     (`if trimmed.byteAtOrPanic(pos) == 47`) where a `try` cannot go — the reference's own reason for the
 //     method existing (`stdlib/String.maxon:272-283`).
 //
-// Both are `__`-prefixed compiler-internal (no E3004, no signature slotting) and neither is
+// ⚠ **THE LAST TWO ARE TWO FUNCTIONS BECAUSE THEY DIFFER ON THEIR FAILURE EXIT, AND ON NOTHING ELSE.** The
+// load path and the range test are identical and are written once (`emitIndexOutOfRange`); what a `throws`
+// stamp buys is a callee whose caller must write `try`, and a panicking one cannot be given that stamp
+// without making every `byteAtOrPanic` call site a `tryCall` for a failure that never returns.
+//
+// All three are `__`-prefixed compiler-internal (no E3004, no signature slotting) and none is
 // `__mm_`-prefixed, so each declares its own transitive floor in `closeStringMethodNeeds`.
 export let StrBytesViewName = b"__str_bytes_view"
+export let StrByteAtName = b"__str_byte_at"
 export let StrByteAtOrPanicName = b"__str_byte_at_or_panic"
+
+// ⭐ **THE THROWING `String` RUNTIME CALLEES — one, and this file's first.** `__str_byte_at` returns through
+// the dual-register `errorReturn` ABI, so a call to it MUST become a `tryCall`; the parser's E3055 accept and
+// SemanticCheck's E3057 reject both read `GtRuntime.isThrowingRuntimeCallee`, which composes this.
+//
+// ⚠ It ships WITHOUT an install-time drift guard, and `GraphemeRuntime.isThrowingCharacterRuntimeCallee`'s
+// three conditions are why — all three hold here. There is exactly ONE member; this predicate and
+// `buildStrByteAt`'s `throws` stamp key on the SAME `StrByteAtName` constant rather than on copied literals;
+// and `runtimeCalleeSourceMethod` answers it from `ByteAtMethod` directly rather than through a map that
+// could lose an arm. A SECOND throwing `__str_` callee makes this an `or`, and at that same edit it needs the
+// guard `installStringIndexRuntime` grew the moment its family stopped being built by one builder.
+export function isThrowingStringRuntimeCallee(callee ByteArray) returns bool
+	return callee.equals(StrByteAtName)
+end 'isThrowingStringRuntimeCallee'
 
 // ⭐ **`__str_find`/`__str_rfind`'s "no occurrence" answer, and it is a NEGATIVE INDEX rather than a thrown
 // error on purpose.** The stdlib spells both searches `throws StringError.notFound`, and a Std graph CAN
@@ -523,13 +547,16 @@ export type RuntimeUsage
 	// program that only builds a String from bytes must carry neither.
 	export var usesStrReplaceFirst as bool
 	export var usesStrFromBytes as bool
-	// The two stdlib-only byte doors (BATCH2 slice 1), each with its OWN bit under this file's
-	// one-bit-per-entry-point discipline: a program whose stdlib cone reads bytes must not carry the view
-	// builder, and one that takes a byte view must not carry a second bounds check. `usesStrBytesView`
-	// declares `usesArray`/`usesHeap` in `closeStringMethodNeeds` — it calls `__arr_create` and
-	// `__mm_incref` inside its synthesized body, which this Maxon-module scan cannot see.
-	// `usesStrByteAtOrPanic` declares NOTHING: its body loads two words and either reads a byte or exits.
+	// The three stdlib-only byte doors, each with its OWN bit under this file's one-bit-per-entry-point
+	// discipline: a program whose stdlib cone reads bytes must not carry the view builder, and one that takes
+	// a byte view must not carry a bounds check it never reaches. `usesStrBytesView` declares
+	// `usesArray`/`usesHeap` in `closeStringMethodNeeds` — it calls `__arr_create` and `__mm_incref` inside
+	// its synthesized body, which this Maxon-module scan cannot see. `usesStrByteAt` and
+	// `usesStrByteAtOrPanic` declare NOTHING: each body loads two words and then either reads a byte or
+	// leaves. The two byte reads keep SEPARATE bits although their graphs are near-identical, because a
+	// program that only reaches the throwing one must not carry the panicking one's `mrt_panic` call site.
 	export var usesStrBytesView as bool
+	export var usesStrByteAt as bool
 	export var usesStrByteAtOrPanic as bool
 	// The program copies a MANAGED-element array (`__arr_slice_managed`/`__arr_clone_managed`/
 	// `__arr_append_managed`, P1.7 slice 3b-vi-b). Its OWN bit, DECOUPLED from `usesArray`, so a program that
@@ -631,7 +658,7 @@ export type RuntimeUsage
 	export var usesCommandLine as bool
 
 	static function create() returns RuntimeUsage
-		return Self{usesHeap: false, usesGt: false, usesIocp: false, usesStreaming: false, usesPrint: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesBoolToString: false, usesStrAppend: false, usesStrDecref: false, usesArray: false, usesSet: false, usesMap: false, usesList: false, usesDropTypeParam: false, usesDropExistential: false, usesRetainExistential: false, usesIncref: false, usesRetain: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrRangeEq: false, usesStrFind: false, usesStrRFind: false, usesStrStartsWith: false, usesStrEndsWith: false, usesStrContains: false, usesStrMapCase: false, usesStrReplace: false, usesStrSplit: false, usesStrReplaceFirst: false, usesStrFromBytes: false, usesStrBytesView: false, usesStrByteAtOrPanic: false, usesManagedArrayCopy: false, usesOpaqueArrayCopy: false, neededCloners: ClonerSet.create(), usesWallClock: false, usesGbp: false, usesExtPict: false, usesUtf8Decode: false, usesGraphemeBreak: false, usesGraphemeEnd: false, usesGraphemeCount: false, usesCharAt: false, usesCharAsciiValue: false, usesStrToBytes: false, usesStrToCodepoints: false, usesStrToUtf16: false, usesStrIndexMake: false, usesStrIndexEnd: false, usesStrIndexByteToGrapheme: false, usesStrIndexAdvance: false, usesStrIndexFirst: false, usesStrIndexLast: false, usesStrIndexSlice: false, usesStrIndexAfter: false, usesUcdCategory: false, usesCharSetMake: false, usesCharSetDecref: false, usesCharSetContains: false, usesStrTrim: false, usesManagedFile: false, usesManagedDirectory: false, usesCommandLine: false}
+		return Self{usesHeap: false, usesGt: false, usesIocp: false, usesStreaming: false, usesPrint: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesBoolToString: false, usesStrAppend: false, usesStrDecref: false, usesArray: false, usesSet: false, usesMap: false, usesList: false, usesDropTypeParam: false, usesDropExistential: false, usesRetainExistential: false, usesIncref: false, usesRetain: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrRangeEq: false, usesStrFind: false, usesStrRFind: false, usesStrStartsWith: false, usesStrEndsWith: false, usesStrContains: false, usesStrMapCase: false, usesStrReplace: false, usesStrSplit: false, usesStrReplaceFirst: false, usesStrFromBytes: false, usesStrBytesView: false, usesStrByteAt: false, usesStrByteAtOrPanic: false, usesManagedArrayCopy: false, usesOpaqueArrayCopy: false, neededCloners: ClonerSet.create(), usesWallClock: false, usesGbp: false, usesExtPict: false, usesUtf8Decode: false, usesGraphemeBreak: false, usesGraphemeEnd: false, usesGraphemeCount: false, usesCharAt: false, usesCharAsciiValue: false, usesStrToBytes: false, usesStrToCodepoints: false, usesStrToUtf16: false, usesStrIndexMake: false, usesStrIndexEnd: false, usesStrIndexByteToGrapheme: false, usesStrIndexAdvance: false, usesStrIndexFirst: false, usesStrIndexLast: false, usesStrIndexSlice: false, usesStrIndexAfter: false, usesUcdCategory: false, usesCharSetMake: false, usesCharSetDecref: false, usesCharSetContains: false, usesStrTrim: false, usesManagedFile: false, usesManagedDirectory: false, usesCommandLine: false}
 	end 'create'
 end 'RuntimeUsage'
 
@@ -1208,6 +1235,9 @@ function recordStringMethodUsage(callee ByteArray, usage RuntimeUsage)
 	if callee.equals(StrBytesViewName) 'bytesview'
 		usage.usesStrBytesView = true
 	end 'bytesview'
+	if callee.equals(StrByteAtName) 'byteat'
+		usage.usesStrByteAt = true
+	end 'byteat'
 	if callee.equals(StrByteAtOrPanicName) 'byteatorpanic'
 		usage.usesStrByteAtOrPanic = true
 	end 'byteatorpanic'
@@ -1316,6 +1346,9 @@ export function installStringRuntime(module StdModule, usage RuntimeUsage)
 	if usage.usesStrBytesView 'strbytesview'
 		buildStrBytesView(module)
 	end 'strbytesview'
+	if usage.usesStrByteAt 'strbyteat'
+		buildStrByteAt(module)
+	end 'strbyteat'
 	if usage.usesStrByteAtOrPanic 'strbyteatorpanic'
 		buildStrByteAtOrPanic(module)
 	end 'strbyteatorpanic'
@@ -2704,6 +2737,57 @@ function emitStringBytesAllocation(module StdModule, func IrFunction, cur IrBloc
 
 	return base
 end 'emitStringBytesAllocation'
+
+// ⭐ **`__str_byte_at(str, index) -> (byte, flag)` — ONE BOUNDS-CHECKED BYTE READ THAT THROWS.** The corpus's
+// `byteAt` (`stdlib/String.maxon:266-268`) is `try managed.byteAt(index)`, and its own doc says why the
+// failure leaves through the call rather than through the process: *"the bounds contract stays the CALLER's
+// to state"*. Every stdlib byte walker outside `String.maxon` reaches a String's bytes through here.
+//
+// ⚠ **IT THROWS `__ManagedMemoryError`, NOT `StringError`, AND THAT IS THE CORPUS'S DECLARED SIGNATURE.**
+// The reference inlines the method to the `managed.byteAt` it forwards to, so a `StringError` here would be
+// a signature the emitted code does not honour — the corpus states that argument at the declaration itself.
+// It is why this shares `ArrayRuntime`'s `MemoryInvalidByteRangeFlag` rather than minting a second exit.
+//
+// ⚠ **IT IS A SEPARATE FUNCTION FROM `__str_byte_at_or_panic` AND NOT AN ALIAS OF `__arr_byte_at`**, and
+// both halves of that are about the FAILURE EXIT, which is the axis these functions differ on. Against the
+// panicking twin below: a `throws` stamp is what makes a caller write `try`, and stamping one function for
+// both would make all 17 `byteAtOrPanic` sites `tryCall` a failure that never returns. Against
+// `__arr_byte_at`: the bytes it would read are the same (`buffer@0`, `length@8`, no detach, no ownership),
+// but `managedMemorySourceMethodName` maps CALLEE → source method and has NO receiver, so routing here
+// through the buffer family would tell an author who forgot a `try` about `__ManagedMemory.byteAt` — the
+// right E3057 naming a construct their program does not contain, which is exactly the D12 defect this tree
+// has already paid for once.
+//
+// The range test is `ArrayRuntime.emitIndexOutOfRange`, the one home of "reject this index" — shared with the
+// twin below for the reason stated there: the negative half is the one every signed bounds check in this
+// compiler has been caught missing, so it is written once.
+//
+// ⚠ It reads through `buffer@0` with NO detach and NO ownership, which is right for the identical reason
+// `__arr_byte_at` gives: a read does not write, so an `.rdata` blob, an inline String's bytes and a viewed
+// buffer are all perfectly good things to read THROUGH.
+function buildStrByteAt(module StdModule)
+	var func = IrFunction.createFromStd(StrByteAtName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0, throwsTypeName: managedMemoryThrows())
+	var ids = ValueMinter.create(2)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var bad = module.addBlock(func, label: b"oob")
+	var load = module.addBlock(func, label: b"load")
+
+	emitParams(module, block: entry, count: 2)
+	let record = 0 as ValueId
+	let index = 1 as ValueId
+
+	let length = emitLoadField(module, block: entry, record: record, offset: StringLengthOffset, ids: ids)
+	let outOfRange = emitIndexOutOfRange(module, block: entry, index: index, length: length, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(outOfRange, thenBlockId: bad.id, elseBlockId: load.id))
+
+	emitMemoryThrow(module, block: bad, flag: MemoryInvalidByteRangeFlag, ids: ids)
+
+	let buffer = emitLoadField(module, block: load, record: record, offset: StringBufferOffset, ids: ids)
+	emitOkReturn(module, block: load, value: emitLoadByteIndexed(module, block: load, base: buffer, index: index, ids: ids), ids: ids)
+
+	module.functions.push(func)
+end 'buildStrByteAt'
 
 // ⭐ **`__str_byte_at_or_panic(str, index) -> byte` — ONE BOUNDS-CHECKED BYTE READ THAT ABORTS RATHER THAN
 // THROWS.** The corpus's `byteAtOrPanic` (`stdlib/String.maxon:281-283`) is `try byteAt(index) otherwise

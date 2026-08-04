@@ -630,7 +630,7 @@ end 'isThrowingGtRuntimeCallee'
 // changes nothing here: this predicate answers "must a `try` wrap it", which is a property of the OPERATION, and
 // both gates that read it run on the MAXON tier where the callee is still a call.
 export function isThrowingRuntimeCallee(callee ByteArray) returns bool
-	return isThrowingArrayRuntimeCallee(callee) or isThrowingGtRuntimeCallee(callee) or isThrowingStringIndexRuntimeCallee(callee) or isThrowingManagedFileRuntimeCallee(callee) or isThrowingManagedDirectoryRuntimeCallee(callee) or isThrowingCharacterRuntimeCallee(callee) or isThrowingMapRuntimeCallee(callee) or isThrowingListRuntimeCallee(callee) or isThrowingDivisionRuntimeCallee(callee)
+	return isThrowingArrayRuntimeCallee(callee) or isThrowingGtRuntimeCallee(callee) or isThrowingStringIndexRuntimeCallee(callee) or isThrowingManagedFileRuntimeCallee(callee) or isThrowingManagedDirectoryRuntimeCallee(callee) or isThrowingCharacterRuntimeCallee(callee) or isThrowingMapRuntimeCallee(callee) or isThrowingListRuntimeCallee(callee) or isThrowingDivisionRuntimeCallee(callee) or isThrowingStringRuntimeCallee(callee)
 end 'isThrowingRuntimeCallee'
 
 // ⭐ **THE ONE HOME OF "WHICH ERROR TYPE A COMPILER-INTERNAL RUNTIME CALLEE THROWS"** — the composer beside
@@ -673,6 +673,16 @@ export function runtimeThrowsClause(callee ByteArray) returns ThrowsClause
 	if isManagedMemoryRuntimeCallee(callee) 'memoryFamily'
 		return managedMemoryThrows()
 	end 'memoryFamily'
+
+	// ⭐ **THE `String` FAMILY — ONE MEMBER (`__str_byte_at`), AND IT SHARES THE ARM ABOVE'S ERROR TYPE
+	// WITHOUT SHARING ITS PREDICATE.** `String.byteAt` is declared `throws __ManagedMemoryError` by the corpus
+	// (`stdlib/String.maxon:266`) because the reference INLINES it to the `managed.byteAt` it forwards to, so
+	// the two families genuinely raise one enum — while remaining two families, because
+	// `runtimeCalleeSourceMethod` must be able to tell them apart and `isThrowingArrayRuntimeCallee` must not
+	// come to claim a `__str_`-prefixed callee.
+	if isThrowingStringRuntimeCallee(callee) 'stringFamily'
+		return managedMemoryThrows()
+	end 'stringFamily'
 
 	// ⭐ **THE ARRAY FAMILY, ADDED WITH THE CASE THAT NEEDED IT (R4.4)** — precisely as the note above
 	// prescribes. `specs-shv2/array-slots.md` discriminates `ArrayError.emptySlot` from
@@ -841,6 +851,15 @@ export function runtimeCalleeSourceMethod(callee ByteArray) returns RuntimeCalle
 	if isThrowingCharacterRuntimeCallee(callee) 'characterFamily'
 		return RuntimeCalleeSourceMethod.found(CharacterAsciiValueMethod)
 	end 'characterFamily'
+
+	// The `String` family answers from the CONSTANT, exactly as the `Character` family above does and for the
+	// identical reason: its predicate IS `callee.equals(StrByteAtName)`, so a map would be the identity written
+	// as a one-arm dispatcher with an unreachable panic. `ByteAtMethod` is the very byte string
+	// `dispatchStringMethod` matched the source token against — the same one the buffer's `byteAt` is
+	// dispatched on, since ONE spelling serves both surfaces.
+	if isThrowingStringRuntimeCallee(callee) 'stringFamily'
+		return RuntimeCalleeSourceMethod.found(ByteAtMethod)
+	end 'stringFamily'
 
 	// The `Map` family answers through a MAP where the `Character` family above answers from its constant,
 	// and the asymmetry is argued at `MapRuntime.mapSourceMethodName` rather than here: both predicates name

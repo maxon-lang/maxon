@@ -553,6 +553,11 @@ ideographic
 `Build.build(name)` emits the JSON a `build.maxon` hands the compiler. It is the one new entry that
 is neither a byte walk nor a classifier — a `type` with fields, a `static`, and an `Array with
 String` — so what it pins is that a listed module of ordinary shape reaches user code intact.
+
+⚠ The JSON comes out on ONE line, and that is BOTH compilers: `print` writes no trailing newline and
+`emitBuildConfig` supplies none, so the module's per-line `print` calls run together. MEASURED against the
+reference on the identical program — byte-for-byte the same single line — which is what makes this an
+agreement rather than a transcription of shv2's answer.
 ```maxon
 function main() returns ExitCode
 	Build.build("demo")
@@ -563,14 +568,7 @@ end 'main'
 0
 ```
 ```stdout
-{
-  "name": "demo",
-  "output": ".maxon/demo",
-  "sources": [
-  ],
-  "optimize": false,
-  "debug_info": true
-}
+{  "name": "demo",  "output": ".maxon/demo",  "sources": [  ],  "optimize": false,  "debug_info": true}
 ```
 
 ### The corpus segmenter and the synthesized one, side by side

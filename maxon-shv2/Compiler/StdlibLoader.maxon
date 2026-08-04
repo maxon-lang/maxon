@@ -169,7 +169,17 @@
 //     and rung 5 of the scale ladder, and the emitted code of a program that never sleeps is
 //     byte-identical (`codeBytes` equal at all six rungs — DFE prunes the module it does not reach).
 //     ⇒ THE RULE: do not list a module whose function name a bare builtin claims. Retire the builtin
-//     first.
+//     first. ⭐ **APPLIED A SECOND TIME AT BATCH2 slice 6**, to `graphemeBreakProperty` and
+//     `isExtendedPictographic` — the same shape with the same measured wrong answer (`p=0` where the oracle
+//     answers `p=164`), and the entry it unblocked is `helpers/string/grapheme.maxon`.
+//     ⚠⚠ **AND WHAT A LISTED MODULE THEN OWNS, IT DOES *NOT* OWN AGAINST THE USER — the sentence here and in
+//     `specs-shv2/stdlib-whitelist.md` said `E3006` and NEITHER WAS EVER RUN.** MEASURED at slice 6: a user
+//     program declaring its own `function sleep(milliseconds Ms)` compiles clean and ITS body is what runs,
+//     which is also what the reference compiler does. N1's namespaces made the user's declaration outrank the
+//     stdlib's, and the E3006 claim — written when they did not exist — simply aged out. It is now a CASE
+//     rather than a sentence (`stdlib-whitelist.a-user-free-function-outranks-the-listed-modules`), because a
+//     refusal nothing runs is a claim. ⇒ the bare-builtin rule above is unchanged and is the one that bites:
+//     a NAME the chain claims is reached by no declaration at all, user's or stdlib's.
 //     ⚠ **AND CHECK THE ROSTER AT ITS SOURCE — `parseCallNamed`'s bare-name `if` chain — NEVER against a
 //     list written here or in a spec.** This bullet is deliberately not one: nothing makes a prose roster
 //     agree with the chain, and both prose copies of it were already wrong. They named four of the FIFTEEN
@@ -663,6 +673,137 @@ function whitelistedStdlibModules(stdlibDir FilePath) returns MaxonSourcePathSet
 	// them — which is why `specs-shv2/directory.md` carries the same `<!-- targets: x64-windows -->` marker
 	// `file-io.md` documents, and points at that file for the reason.
 	try listWhitelistedModule(stdlibDir, relative: "Directory.maxon", into: listed)
+	// ⭐⭐ **BATCH2 slice 6 — THE THREE BYTE-WALKING `helpers/string/` MODULES, ONE ENTRY IN THREE LINES.**
+	// `utf8.maxon` gives the corpus's own UTF-8 primitives (`utf8ByteLengthAt`, `utf8DecodeAt`, the four byte
+	// classifiers, `utf8EncodeLength`, `utf8IsValidCodepoint`); `hash.maxon` gives `hashString`, the djb2 walk
+	// `Map with (String, V)` will call on every insert; `grapheme.maxon` gives the UAX #29 segmenter WRITTEN IN
+	// MAXON (`countGraphemes`, `findGraphemeEnd`/`findGraphemeStart`, the two classifiers, the index
+	// conversions). `grapheme.maxon` calls the other two, which is why the three are one entry.
+	//
+	// ⚠ **ALL THREE STOPPED AT ONE MISSING METHOD, AND IT WAS THE SAME ONE.** `String.byteAt` — the THROWING
+	// twin of `byteAtOrPanic`, which BATCH2 slice 1 already served — is how every byte walker outside
+	// `stdlib/String.maxon` reaches a String's bytes, and its own doc says why it takes the String rather than
+	// the `__ManagedMemory`: a `__ManagedMemory` parameter would MATERIALIZE a record per call once a small
+	// String becomes a 16-byte value, i.e. one allocation per codepoint decoded. It is now `__str_byte_at`
+	// (`StringRuntime.buildStrByteAt`), stdlib-only at the parser exactly as the other two byte doors are.
+	//
+	// It clears every entry in this file's collision rule, each CHECKED rather than assumed:
+	//   • FREE FUNCTIONS (E3006): these are the first listed modules since `Sleep.maxon` that declare a
+	//     substantial set — nineteen across the three (seven `utf8*`, `hashString`, and grapheme.maxon's
+	//     `findGraphemeEnd`/`findGraphemeStart`/`countGraphemes`/`byteIndexToGraphemeIndex`/
+	//     `graphemeOffsetToBytePos`/`graphemeBreakProperty`/`isExtendedPictographic` plus four file-private
+	//     helpers). Checked against `Parser.parseCallNamed`'s bare-name `if` chain AT THE CHAIN, which is what
+	//     that rule's last bullet insists on: the chain claims `print trunc runProcess spawnReadLine subpSpawn
+	//     subpReadLine subpReadErrLine subpWriteLine subpCloseStdin subpWait subpRelease floor ceil round sqrt
+	//     abs min max`, and no name here is among them. ⚠⚠ **TWO OF THEM WERE, AND THAT IS THIS ENTRY'S WHOLE
+	//     FIRST HALF.** `graphemeBreakProperty` and `isExtendedPictographic` stood in that chain until this
+	//     rung, so listing this module WITHOUT retiring them would have loaded two declarations no call site
+	//     could reach — `Sleep.maxon`'s defect exactly, and this file's rule says so in advance. They are
+	//     retired (see the ✅ block in `Parser.maxon` where they were declared). Against the other listed
+	//     modules there is no overlap either, checked AT THE SOURCE: `helpers/string/utf16.maxon`'s nine are
+	//     all `utf16`-prefixed, `helpers/url/urlHelpers.maxon`'s eight all `url`-prefixed, and `Sleep.maxon`
+	//     declares only `sleep`.
+	//   • ⚠ These modules also CONSUME nothing the chain claims — `grapheme.maxon` calls `utf8DecodeAt` and
+	//     `utf8ByteLengthAt`, which are its sibling's declarations, not builtins. That direction would be
+	//     sound anyway (`Math.pow` consumes `floor`); it is checked because the two halves of the
+	//     bare-builtin rule are different questions.
+	//   • TYPE NAMES: none of the three declares a nominal `type`/`enum`/`union`/`interface` except
+	//     `grapheme.maxon`'s file-private `GraphemeState`, which a user program spelling `GraphemeState` would
+	//     shadow into the reserved space (A1s wave 2). No other listed module declares it.
+	//   • TYPE-NAME-vs-BUILTIN, the one shape still SILENT: `GraphemeState` is on neither
+	//     `TypeResolution.isCompilerOwnedTypeName` nor `builtinTypeNameTag`, and nothing in the compiler
+	//     synthesizes a declaration of it — the SYNTHESIZED segmenter is a set of `__gr_`-prefixed Std bodies
+	//     with no Maxon-level type at all.
+	//   • ⚠ **THE RANGED-TYPEALIAS CLAUSE THAT MOVED A GOLDEN FOR `File.maxon` IS LIVE HERE AND HAD TO BE
+	//     WEIGHED, NOT WAVED.** These modules declare five ranged aliases — `utf8.maxon`'s `RawByte`
+	//     (`int(0 to u8.max)`) and `ByteWidth` (`int(1 to 4)`), `grapheme.maxon`'s `BreakProperty`
+	//     (`int(0 to 13)`), `RegionalIndicatorCount` and `Utf8Byte` (`int(0 to u8.max)`) — every one of them
+	//     file-PRIVATE, which this file's header measured to be irrelevant: a ranged alias joins the
+	//     whole-program folds by NAME whatever its visibility. What decides it is whether the compiler MINTS
+	//     instances over that element, and the name that does is `Byte`: `File.maxon` already declares it
+	//     `int(0 to u8.max)` and none of these five is spelled `Byte`, so no `b"…"` literal's element moves.
+	//     `RawByte`/`Utf8Byte` carry `Byte`'s very FORM under other names, which is the same
+	//     same-form-different-name shape `Clock`'s four `int(0 to u64.max)` aliases have had since that entry.
+	//   • ⚠⚠ **THE "TYPE-PARAMETERIZED BY A USER DECLARATION" CLAUSE IS VACUOUS HERE, AND THAT IS A COUNT
+	//     RATHER THAN A HOPE.** The clause is about a body that passes a `__ManagedMemory` around; these three
+	//     pass NONE — reaching the bytes through `String.byteAt` instead of through `managed` or
+	//     `addressableBytes()` is the corpus's own stated design for exactly these files. Checked as a BUILD
+	//     anyway, which is what that clause demands: a program declaring `typealias Byte = int(0 to 1000)`
+	//     that calls nothing in any of the three compiles and runs clean.
+	//   • The E3112 MEMBER-name rule fires only when a user program actually contests a spelling, so there is
+	//     nothing to clear ahead of time. These are FREE functions with no receiver, so the surface they
+	//     expose to it is just their argument labels (`pos`, `startPos`, `beforePos`, `byteIdx`, `count`,
+	//     `cp`, `s`).
+	//
+	// MEASURED before listing, which is the check this file's rule prescribes: with `__str_byte_at` built,
+	// `maxon-shv2 build stdlib/helpers/string/utf8.maxon` (and `hash.maxon`, and `grapheme.maxon`) each exit 1
+	// with `E3001: No 'main' function found` AND NOTHING ELSE.
+	try listWhitelistedModule(stdlibDir, relative: "helpers/string/utf8.maxon", into: listed)
+	try listWhitelistedModule(stdlibDir, relative: "helpers/string/hash.maxon", into: listed)
+	try listWhitelistedModule(stdlibDir, relative: "helpers/string/grapheme.maxon", into: listed)
+	// ⭐ `stdlib/Unicode.maxon` — `Unicode.isWhitespace(cp)`, the White_Space property as a chain of range
+	// tests over a `Codepoint`. Pure Maxon, no intrinsic, no backend work: the module was ALREADY loadable
+	// before this rung (`maxon-shv2 build stdlib/Unicode.maxon` answered `E3001: No 'main' function found` and
+	// nothing else — the same measurement that acquitted `stdlib/File.maxon` at R4.7), and it is listed here
+	// because nothing had listed it.
+	//
+	// It clears every entry in this file's collision rule, each CHECKED rather than assumed:
+	//   • FREE FUNCTIONS (E3006): it declares NONE — its one function is a `static` of `Unicode` — so the
+	//     whole free-function clause, and with it the SILENT bare-builtin shadow, is vacuous. Checked against
+	//     `Parser.parseCallNamed`'s chain AT THE CHAIN, in both directions: it declares nothing the chain can
+	//     see, and its body calls nothing at all.
+	//   • TYPE NAMES: `Unicode` is a nominal declaration, so a user program spelling it wins and this one
+	//     moves into the reserved space (A1s wave 2). No other listed module declares it, checked AT THE
+	//     SOURCE. ⚠ `helpers/string/utf8.maxon` is the near miss and it is a miss: its names are `RawByte`
+	//     and `ByteWidth`.
+	//   • TYPE-NAME-vs-BUILTIN, the one shape still SILENT: `Unicode` is on neither
+	//     `TypeResolution.isCompilerOwnedTypeName` nor `builtinTypeNameTag`. ⚠ The compiler DOES own a
+	//     unicode-ish surface — `__ucd_category`, the UCD table behind `Character.category` — but that is a
+	//     `__`-reserved RUNTIME callee and not a type name, so the two cannot contest.
+	//   • It declares NO typealias at all, ranged or otherwise, so the clause that moved `File.maxon`'s golden
+	//     has nothing to weigh.
+	//   • The "type-parameterized by a user declaration" clause: its body passes no `__ManagedMemory` and
+	//     names no type but `Codepoint` and `bool`. Checked as a BUILD with the three above.
+	//   • The E3112 MEMBER-name rule: one method name (`isWhitespace`) and one argument label (`cp`).
+	//   • It has NO imports and calls into no other module.
+	try listWhitelistedModule(stdlibDir, relative: "Unicode.maxon", into: listed)
+	// ⭐ `stdlib/Build.maxon` — `Build.build(name)` / `Build.buildWithConfig(config)` and the `BuildConfig`
+	// they emit, which is the JSON a project's `build.maxon` hands the compiler. Also already loadable before
+	// this rung, measured the same way, and listed here for the same reason: nothing had listed it.
+	//
+	// ⚠ It is the one new entry that is neither a byte walk nor a classifier — a `type` with five FIELDS, a
+	// `static` constructor, an `Array with String` and string interpolation — which is why it is worth having:
+	// it is the ordinary shape, and what it pins is that a listed module of ordinary shape reaches user code
+	// intact.
+	//
+	// It clears every entry in this file's collision rule, each CHECKED rather than assumed:
+	//   • FREE FUNCTIONS (E3006): it declares NONE — all four functions are `static`s of `Build` or
+	//     `BuildConfig` — so the free-function clause and its silent bare-builtin shadow are vacuous. Checked
+	//     against `Parser.parseCallNamed`'s chain AT THE CHAIN. ⚠ It CONSUMES one: `emitBuildConfig` calls
+	//     `print` by bare name, which the chain answers. That direction is sound and is what the builtins are
+	//     for — what a bare builtin reserves is a DECLARATION no call site can reach, and there is none here.
+	//   • TYPE NAMES: `Build` and `BuildConfig` are nominal declarations, so a user program spelling either
+	//     wins and these move into the reserved space (A1s wave 2). No other listed module declares either,
+	//     checked AT THE SOURCE.
+	//   • TYPE-NAME-vs-BUILTIN, the one shape still SILENT: neither is on
+	//     `TypeResolution.isCompilerOwnedTypeName` or `builtinTypeNameTag`, and nothing in the compiler
+	//     synthesizes a declaration of either. ⚠ The repo's own `build.maxon` files are BUILD MANIFESTS that
+	//     name this type — which is a use, not a competing declaration.
+	//   • Its two `StringArray = Array with String` aliases are GENERIC-INSTANCE aliases, file-local per alias
+	//     FORM exactly as `CommandLine`'s is, so they reserve nothing and join neither whole-program fold.
+	//     There is no ranged alias here for a `b"…"` literal in an unrelated program to reach.
+	//   • The "type-parameterized by a user declaration" clause: its body passes no `__ManagedMemory`.
+	//     Checked as a BUILD with the four above.
+	//   • ⚠ The E3112 MEMBER-name rule is the one worth stopping on here, because this is the first new entry
+	//     with FIELDS and they are ordinary English words: `name`, `output`, `sources`, `optimize`,
+	//     `debug_info`, plus the method names `build`/`buildWithConfig`/`emitBuildConfig`/`create` and the
+	//     label `config`. Counted against what the listed set ALREADY contests rather than against this
+	//     module's own roster: `create` is `FileInfo.create`'s and `name`/`path`-style labels are `File`'s, so
+	//     the spellings genuinely NEW are `output`, `sources`, `optimize`, `debug_info` and `config`. What the
+	//     rule protects is real — a user `type` spelled like one of them is refused rather than silently
+	//     half-renamed — and it is a CHECK, not something to clear in advance.
+	//   • It has NO imports and calls into no other module.
+	try listWhitelistedModule(stdlibDir, relative: "Build.maxon", into: listed)
 	return listed
 end 'whitelistedStdlibModules'
 

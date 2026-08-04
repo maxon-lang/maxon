@@ -155,6 +155,50 @@ end 'main'
 20
 ```
 
+<!-- test: chained-on-string-literal -->
+A STRING literal receiver, which the array-literal case's own argument always covered and the parser did
+not: a `String` has three throwing methods a program can reach on one (`findFirst`, `findLast`,
+`indexAfter`), and until this case `try "abc".findFirst("b")` was `E2015 … (got 'string literal')` — a
+legal program refused, while the reference compiles it and answers 1.
+```maxon
+function main() returns ExitCode
+	let idx = try "abcb".findFirst("b") otherwise return 9
+	return idx.charIndex() as ExitCode
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: chained-on-interpolated-string-literal -->
+An INTERPOLATED literal receiver is the same arm, and it is the half that has an owned temp to drop: the
+receiver is a heap String rather than an immortal `.rdata` record, and the error edge has to release it
+exactly once. The needle is found at grapheme 3 of `"ab7cb"`.
+```maxon
+function main() returns ExitCode
+	let n = 7
+	let idx = try "ab{n}cb".findLast("b") otherwise return 9
+	return idx.charIndex() as ExitCode
+end 'main'
+```
+```exitcode
+4
+```
+
+<!-- test: chained-on-string-literal-error-edge -->
+The error edge of the same shape, taken: nothing in `"abc"` matches, so `otherwise` runs and the
+interpolated receiver's allocation must not leak (the suite's leak gate is what checks that).
+```maxon
+function main() returns ExitCode
+	let n = 7
+	let idx = try "ab{n}c".findFirst("z") otherwise return 4
+	return idx.charIndex() as ExitCode
+end 'main'
+```
+```exitcode
+4
+```
+
 <!-- test: void-throwing-static-and-instance -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)

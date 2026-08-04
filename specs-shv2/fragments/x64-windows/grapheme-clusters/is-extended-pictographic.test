@@ -28,7 +28,7 @@ func @main {
     x64.pushReg r15
     x64.prologue 88
     x64.movRegImm32 rcx, 128512
-    x64.callDirect __ext_pict
+    x64.callDirect isExtendedPictographic
     x64.cmpRegImm32 r8, 0
     x64.jcc notEqual, c1
     x64.jmp ifcont
@@ -80,7 +80,7 @@ func @main {
     x64.jmp ifcont
   ifcont:
     x64.movRegImm32 rcx, 65
-    x64.callDirect __ext_pict
+    x64.callDirect isExtendedPictographic
     x64.cmpRegImm32 r8, 0
     x64.jcc notEqual, c2
     x64.jmp ifcont
@@ -138,6 +138,172 @@ func @main {
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @isExtendedPictographic {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.cmpRegImm32 rcx, 1114111
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_2]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.cmpRegImm32 rcx, 128512
+    x64.movRegImm32 rax, 0
+    x64.jcc greaterEqual, andrhs
+    x64.jmp critsplit
+  andrhs:
+    x64.cmpRegImm32 rcx, 128591
+    x64.setccReg lessEqual, rax
+    x64.jmp scmerge
+  critsplit:
+    x64.jmp scmerge
+  scmerge:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, emoji_faces
+    x64.jmp ifcont
+  emoji_faces:
+    x64.movRegImm32 r8, 1
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.cmpRegImm32 rcx, 127744
+    x64.movRegImm32 rax, 0
+    x64.jcc greaterEqual, andrhs
+    x64.jmp critsplit
+  andrhs:
+    x64.cmpRegImm32 rcx, 128511
+    x64.setccReg lessEqual, rax
+    x64.jmp scmerge
+  critsplit:
+    x64.jmp scmerge
+  scmerge:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, emoji_symbols
+    x64.jmp ifcont
+  emoji_symbols:
+    x64.movRegImm32 r8, 1
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.cmpRegImm32 rcx, 128640
+    x64.movRegImm32 rax, 0
+    x64.jcc greaterEqual, andrhs
+    x64.jmp critsplit
+  andrhs:
+    x64.cmpRegImm32 rcx, 128767
+    x64.setccReg lessEqual, rax
+    x64.jmp scmerge
+  critsplit:
+    x64.jmp scmerge
+  scmerge:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, emoji_transport
+    x64.jmp ifcont
+  emoji_transport:
+    x64.movRegImm32 r8, 1
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.cmpRegImm32 rcx, 129280
+    x64.movRegImm32 rax, 0
+    x64.jcc greaterEqual, andrhs
+    x64.jmp critsplit
+  andrhs:
+    x64.cmpRegImm32 rcx, 129535
+    x64.setccReg lessEqual, rax
+    x64.jmp scmerge
+  critsplit:
+    x64.jmp scmerge
+  scmerge:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, emoji_supp
+    x64.jmp ifcont
+  emoji_supp:
+    x64.movRegImm32 r8, 1
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.cmpRegImm32 rcx, 129536
+    x64.movRegImm32 rax, 0
+    x64.jcc greaterEqual, andrhs
+    x64.jmp critsplit
+  andrhs:
+    x64.cmpRegImm32 rcx, 130047
+    x64.setccReg lessEqual, rax
+    x64.jmp scmerge
+  critsplit:
+    x64.jmp scmerge
+  scmerge:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, emoji_extra
+    x64.jmp ifcont
+  emoji_extra:
+    x64.movRegImm32 r8, 1
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.cmpRegImm32 rcx, 9728
+    x64.movRegImm32 rax, 0
+    x64.jcc greaterEqual, andrhs
+    x64.jmp critsplit
+  andrhs:
+    x64.cmpRegImm32 rcx, 9983
+    x64.setccReg lessEqual, rax
+    x64.jmp scmerge
+  critsplit:
+    x64.jmp scmerge
+  scmerge:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, misc_symbols
+    x64.jmp ifcont
+  misc_symbols:
+    x64.movRegImm32 r8, 1
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.cmpRegImm32 rcx, 9984
+    x64.movRegImm32 rax, 0
+    x64.jcc greaterEqual, andrhs
+    x64.jmp critsplit
+  andrhs:
+    x64.cmpRegImm32 rcx, 10175
+    x64.setccReg lessEqual, rax
+    x64.jmp scmerge
+  critsplit:
+    x64.jmp scmerge
+  scmerge:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, dingbats
+    x64.jmp ifcont
+  dingbats:
+    x64.movRegImm32 r8, 1
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
     x64.popReg rbp
     x64.ret
 }

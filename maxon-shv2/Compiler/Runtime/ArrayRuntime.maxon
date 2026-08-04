@@ -445,7 +445,7 @@ let MemoryInvalidAllocationOrdinal = 7 as ParsedInt
 let MemoryIndexOutOfBoundsFlag = MemoryIndexOutOfBoundsOrdinal + ErrorFlagOrdinalBias
 let MemoryInvalidLengthFlag = MemoryInvalidLengthOrdinal + ErrorFlagOrdinalBias
 let MemoryInvalidCapacityFlag = MemoryInvalidCapacityOrdinal + ErrorFlagOrdinalBias
-let MemoryInvalidByteRangeFlag = MemoryInvalidByteRangeOrdinal + ErrorFlagOrdinalBias
+export let MemoryInvalidByteRangeFlag = MemoryInvalidByteRangeOrdinal + ErrorFlagOrdinalBias
 let MemoryInvalidAllocationFlag = MemoryInvalidAllocationOrdinal + ErrorFlagOrdinalBias
 
 // ⭐ **THE NAME OF A CONCRETE TYPE'S SYNTHESIZED DEEP-CLONER — `__clone_<TypeName>`** (P1.7 slice 3b-vi-b), the
@@ -636,7 +636,7 @@ export function managedMemorySourceMethodName(callee ByteArray) returns ByteArra
 		return ManagedMemorySetByteMethod
 	end 'setByte'
 	if callee.equals(ArrByteAtName) 'byteAt'
-		return ManagedMemoryByteAtMethod
+		return ByteAtMethod
 	end 'byteAt'
 	if callee.equals(ArrMemGrowName) 'grow'
 		return ManagedMemoryGrowMethod
@@ -3497,7 +3497,11 @@ end 'managedMemoryThrows'
 // One `__ManagedMemoryError` failure exit: no value, this variant's flag — `emitOobReturn`'s twin for the
 // other enum. (A VOID throwing function's value register is never moved, so the 0 is a formality the ABI
 // discards; `emitOkReturn` says the same about its success value.)
-function emitMemoryThrow(module StdModule, block IrBlock, flag ParsedInt, ids ValueMinter)
+//
+// ⚠ EXPORTED because `StringRuntime.buildStrByteAt` raises the very same case — `String.byteAt` is declared
+// `throws __ManagedMemoryError` by the corpus (`stdlib/String.maxon:266`) and forwards to `managed.byteAt`,
+// so the two must not be two spellings of one wire format. It is the FAMILY's exit, not this file's.
+export function emitMemoryThrow(module StdModule, block IrBlock, flag ParsedInt, ids ValueMinter)
 	emitErrorReturn(module, block: block, flag: flag, ids: ids)
 end 'emitMemoryThrow'
 

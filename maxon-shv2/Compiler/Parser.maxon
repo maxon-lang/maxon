@@ -3270,6 +3270,11 @@ end 'declarationOpensAt'
 
 let StringAddressableBytesMethod = b"addressableBytes"
 let StringByteAtOrPanicMethod = b"byteAtOrPanic"
+// The fourth STDLIB-ONLY `String` member (BATCH2 slice 6) — `stdlib/String.maxon:107`, a `module function`
+// reading the private `singleByteGraphemesFlag`. `stdlib/helpers/string/grapheme.maxon` asks it at three
+// sites (`countGraphemes`, `byteIndexToGraphemeIndex`, `graphemeOffsetToBytePos`), each purely as a fast
+// path past the UAX #29 walk. See `dispatchStringMethod`'s arm for what shv2 answers and why.
+let StringHasSingleByteGraphemesMethod = b"hasSingleByteGraphemes"
 
 let StringReplaceFirstMethod = b"replaceFirst"
 let CodepointViewMethod = b"codepoints"
@@ -3280,21 +3285,24 @@ let Utf16ViewMethod = b"utf16"
 // element binds under in a diagnostic. Its own `CharacterBuiltinName = b"Character"` was deleted at the W1
 // review for the reason recorded over `String`'s: one fact, one constant.
 
-// The two BARE FREE FUNCTIONS this rung exposes — the UAX #29 classifiers, which `specs/grapheme-clusters.md`
-// calls directly (`graphemeBreakProperty(65)`, `isExtendedPictographic(128512)`). They join the builtin
-// table in `parseCallNamed` beside `print`/`trunc`/the math intrinsics.
+// ✅ **THE TWO UAX #29 CLASSIFIERS WERE BARE-NAME BUILTINS HERE UNTIL BATCH2 SLICE 6 (2026-08-04), AND THEY
+// ARE RETIRED.** `graphemeBreakProperty` and `isExtendedPictographic` sat in `parseCallNamed`'s bare-name
+// chain, so a CALL to either never reached a declaration of it — and this block's own warning said what that
+// cost: *"a user `function graphemeBreakProperty` would compile and be silently unreachable"*. MEASURED on
+// plain user code before the retirement: shv2 printed `p=0 e=false` where the reference printed
+// `p=164 e=true`, from the same source, with both user functions compiled and neither run.
 //
-// ⚠ **A BARE-NAME BUILTIN RESERVES ITS NAME PROGRAM-WIDE, and that reservation is UNDIAGNOSED** — a user
-// `function graphemeBreakProperty` would compile and be silently unreachable, which is the standing hazard
-// `StdlibLoader`'s header measured for `sleep`. It is accepted here for the reason the classifiers exist at
-// all: shv2 synthesizes the segmenter as a compiler builtin (it reads no stdlib), so there is no
-// declaration for a call to reach instead, and the corpus calls these two by name. The day
-// `stdlib/helpers/string/grapheme.maxon` becomes loadable, these builtins are what must be retired FIRST.
-let GraphemeBreakPropertyBuiltinName = b"graphemeBreakProperty"
-let IsExtendedPictographicBuiltinName = b"isExtendedPictographic"
-
-// Both classifiers take exactly one argument — the codepoint.
-let GraphemeClassifierArity = 1 as ParamCount
+// It was accepted while it stood because there was no declaration for a call to reach instead — the
+// segmenter is synthesized and reads no stdlib. `stdlib/helpers/string/grapheme.maxon` is now LISTED
+// (`StdlibLoader.whitelistedStdlibModules`), which supplies both declarations, so the builtins were what had
+// to go first, exactly as this block instructed and exactly as `sleep`'s went.
+//
+// ⚠ **THE RUNTIME BODIES `__gr_gbp` / `__gr_ext_pict` STAY.** What was retired is the bare-name PARSER DOOR,
+// not the table: the synthesized segmenter behind `String.count()` and grapheme iteration still calls both
+// from inside its own Std bodies, where `StringRuntime.closeGraphemeNeeds` declares the two bits. So a user's
+// `graphemeBreakProperty(cp)` now reaches the corpus declaration while `s.count()` still reaches the
+// synthesized one — two implementations of one table, which
+// `stdlib-whitelist.the-corpus-segmenter-agrees-with-the-synthesized-one` is the differential over.
 
 // ⭐ **THE P1.8 SLICE C BYTE/ASCII METHODS** — the seven `String` methods that need no Unicode character
 // database, no grapheme segmentation and no `StringIndex`. That last one is the LINE, not a coincidence:
@@ -3634,7 +3642,7 @@ function bufferSurfaceMemberNames() returns ByteArrayArray
 	names.push(ArraySetMethod)
 	names.push(ManagedMemorySetLengthMethod)
 	names.push(ManagedMemorySetByteMethod)
-	names.push(ManagedMemoryByteAtMethod)
+	names.push(ByteAtMethod)
 	names.push(ManagedMemoryElementSizeMethod)
 	names.push(ManagedMemoryGrowMethod)
 	names.push(AppendMethod)
@@ -3771,7 +3779,9 @@ function stringSurfaceMemberNames() returns ByteArrayArray
 	names.push(StringTrimStartMethod)
 	names.push(StringTrimEndMethod)
 	names.push(StringAddressableBytesMethod)
+	names.push(ByteAtMethod)
 	names.push(StringByteAtOrPanicMethod)
+	names.push(StringHasSingleByteGraphemesMethod)
 	for conformanceMethod in builtinConformerMethodNameList(StringConformerName) 'eachConformance'
 		names.push(conformanceMethod)
 	end 'eachConformance'
@@ -17304,6 +17314,22 @@ export type Parser
 		if self.at(TokenKind.byteStringLiteral) 'byteStringLiteralTarget'
 			return try self.parseByteStringLiteral()
 		end 'byteStringLiteralTarget'
+		// ⭐ **`try "abc".findFirst("b") otherwise …` — A STRING LITERAL RECEIVER (BATCH2 slice 6), AND THE ARM
+		// THE SENTENCE ABOVE ALREADY ARGUED FOR.** That note says the two literal kinds are enrolled together
+		// because "accepting one and not the other would reject a legal `try b\"…\".get(…)` as 'not a call'" —
+		// and a `String` has THREE throwing methods a program may reach on a literal (`findFirst`, `findLast`,
+		// `indexAfter`), so the same argument had a third case it did not cover. MEASURED before this arm:
+		// `try "abc".findFirst("b") otherwise "abc".startIndex()` is `E2015 … (got 'string literal')` under
+		// shv2 while the reference compiles it and answers 1 — a legal program refused, the OPEN #107 shape
+		// one literal kind over.
+		//
+		// ⚠ It calls `parseStringLiteral`, not `consumeStringLiteralValue`, so an INTERPOLATED receiver
+		// (`try "a{x}".findFirst("b")`) is enrolled too. That result is an OWNED heap String rather than an
+		// immortal rdata one, which needs no special handling here for the array literal's reason: the postfix
+		// chain applies its method to the temp and `desugarTry` drops it once per edge.
+		if self.at(TokenKind.stringLiteral) 'stringLiteralTarget'
+			return try self.parseStringLiteral(func)
+		end 'stringLiteralTarget'
 
 		// ⭐ **`try (a / b) otherwise …` — A PARENTHESIZED EXPRESSION AS THE TRY TARGET (A1).** The only
 		// throwing operation in the language written as an OPERATOR rather than a call, so it is the only one
@@ -31872,11 +31898,45 @@ export type Parser
 		// allocation those live in, so the drop releases one reference and frees nothing the String still
 		// needs (see `StringRuntime.emitStringBytesAllocation`). That is why this goes through
 		// `emitOwnedRuntimeResult` at all: leaving the 48-byte record untracked would leak it.
+		// ⚠ **`byteAt` AND `byteAtOrPanic` ARE ONE READ WITH TWO FAILURE EXITS, AND THE ONLY THING THAT DIFFERS
+		// HERE IS THE CALLEE.** `__str_byte_at` carries a `throws` clause, so `isThrowingRuntimeCallee` makes the
+		// parser ACCEPT a `try` on it (E3055) and SemanticCheck REJECT a bare one (E3057) — neither decided at
+		// this site. `emitRuntimeCall` emits nothing after the call, which is what lets an enclosing `try`
+		// rewrite it (`rewriteLastCallToTryCall`).
+		if methodTok.value.equals(ByteAtMethod) 'byteAt'
+			try self.requireStdlibOnlyStringMethod(methodTok)
+			let index = try self.parseOneBuiltinIntegerArgList(func, paramName: ManagedMemoryIndexParamName, methodTok: methodTok)
+			return self.emitRuntimeCall(StrByteAtName, args: pairArgs(recv.value, second: index), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
+		end 'byteAt'
 		if methodTok.value.equals(StringByteAtOrPanicMethod) 'byteAtOrPanic'
 			try self.requireStdlibOnlyStringMethod(methodTok)
 			let index = try self.parseOneBuiltinIntegerArgList(func, paramName: ManagedMemoryIndexParamName, methodTok: methodTok)
 			return self.emitRuntimeCall(StrByteAtOrPanicName, args: pairArgs(recv.value, second: index), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
 		end 'byteAtOrPanic'
+		// ⚠⚠ **`hasSingleByteGraphemes()` IS ANSWERED `false` OUTRIGHT, AND THAT IS A CONSERVATIVE ANSWER
+		// RATHER THAN A STUB.** The corpus carries a `singleByteGraphemesFlag` field meaning *"every grapheme
+		// is one byte"*; shv2's String record carries `isAscii@40`, which is the WEAKER fact, and its own
+		// declaration says why the two are not interchangeable: **CR+LF is a single cluster under UAX #29
+		// GB3**, so an all-ASCII string is not necessarily one byte per cluster. `stdlib/String.maxon:72-77`
+		// records the corpus paying for exactly that confusion once — *"this field used to say only 'is
+		// ASCII', and ten methods read THAT as 'one byte per character' … all ten split the cluster"*.
+		//
+		// ⇒ Serving `isAscii@40` here would be a SILENT WRONG ANSWER: `countGraphemes` of a CR+LF string
+		// would take the shortcut and return the BYTE length, 2, where every other path in both compilers
+		// says 1. `stdlib-whitelist.the-corpus-segmenter-agrees-with-the-synthesized-one` carries that row.
+		//
+		// ⇒ `false` declines the shortcut, which costs an ANSWER nothing — the corpus is explicit that
+		// `findGraphemeEnd` "stays the only thing that decides where a cluster ends, including for the
+		// strings this flag is false for" — and puts the corpus's three walks on exactly the path shv2's own
+		// synthesized segmenter already takes (`GraphemeRuntime.buildGraphemeCount` has no fast path either).
+		// What it costs is SPEED on long ASCII strings, and buying that back means strengthening the record's
+		// `@40` flag to the corpus's meaning at its literal scan and at all nine of its propagation sites —
+		// a record-semantics rung, not a line here.
+		if methodTok.value.equals(StringHasSingleByteGraphemesMethod) 'hasSingleByteGraphemes'
+			try self.requireStdlibOnlyStringMethod(methodTok)
+			try self.consumeEmptyArgList()
+			return self.emitLiteral(0, valueType: MaxonType.boolean, range: range)
+		end 'hasSingleByteGraphemes'
 
 		// ⭐⭐ **`hash()` AND `equals(other)` ARE NOT STRING METHODS — THEY ARE THE BUILTIN CONFORMANCES, AND
 		// THIS IS THE DIRECT-CALL DOOR ONTO THE IMPLS THAT ALREADY EXIST (BATCH2 slice 2).**
@@ -31912,9 +31972,10 @@ export type Parser
 	end 'dispatchStringMethod'
 
 	// ⭐⭐ **A `module`-VISIBLE STRING METHOD IS `stdlib/`'s ALONE, AND THIS IS THE ONE PLACE THAT SAYS SO.**
-	// `addressableBytes` hands out a live view of a String's bytes and `byteAtOrPanic` reads one without a
-	// catchable failure; the corpus declares BOTH `module function`, so a user program calling either is
-	// refused by the oracle's NOT-EXPORTED diagnostic. shv2 cannot answer with that code — it has no `module`
+	// `addressableBytes` hands out a live view of a String's bytes, `byteAt`/`byteAtOrPanic` read one of them
+	// (the first throwing, the second aborting) and `hasSingleByteGraphemes` reports a private field; the
+	// corpus declares ALL FOUR `module function`, so a user program calling any of them is refused by the
+	// oracle's NOT-EXPORTED diagnostic. shv2 cannot answer with that code — it has no `module`
 	// keyword and no declaration of these to attach a visibility to — so it refuses on the fact it does have:
 	// WHERE the file being parsed physically lives.
 	//
@@ -31941,16 +32002,16 @@ export type Parser
 	// names are ON the roster (`stringSurfaceMemberNames`), so the gate ahead of the arms admits them and
 	// they arrive HERE — which is what makes that distinction observable rather than merely intended.
 	//
-	// ⚠ **THE THREE METHOD NAMES ARE RENDERED FROM THE ARMS' OWN CONSTANTS, NOT TYPED OUT (A2q)**, because
-	// this sentence and the roster's tail clause name the same pair and a rename that reached one would leave
-	// the other confidently wrong. It stays a two-name VISIBILITY sentence rather than becoming a roster: it
+	// ⚠ **THE FOUR METHOD NAMES ARE RENDERED FROM THE ARMS' OWN CONSTANTS, NOT TYPED OUT (A2q)**, because
+	// this sentence and the roster's tail clause name the same members and a rename that reached one would
+	// leave the other confidently wrong. It stays a VISIBILITY sentence rather than becoming a roster: it
 	// answers "who may call this?", not "what is there?", and the two questions have different lists.
 	function requireStdlibOnlyStringMethod(methodTok Token) throws ParseError
 		if self.livesUnderStdlibDirectory 'thestdlibsOwn'
 			return
 		end 'thestdlibsOwn'
 
-		throw ParseError.unsupported("String method '{String.from(methodTok.value)}' — it is STDLIB-ONLY (`module function` in `stdlib/String.maxon`, which the reference compiler refuses to user code as a not-exported error) and this file is not under `stdlib/`. `{String.from(StringAddressableBytesMethod)}` hands out a live view of a String's own bytes and `{String.from(StringByteAtOrPanicMethod)}` reads one with no catchable failure; user code reaches the bytes through `{String.from(StringToByteArrayMethod)}()`, which copies", line: methodTok.line, column: methodTok.column)
+		throw ParseError.unsupported("String method '{String.from(methodTok.value)}' — it is STDLIB-ONLY (`module function` in `stdlib/String.maxon`, which the reference compiler refuses to user code as a not-exported error) and this file is not under `stdlib/`. `{String.from(StringAddressableBytesMethod)}` hands out a live view of a String's own bytes, and `{String.from(ByteAtMethod)}`/`{String.from(StringByteAtOrPanicMethod)}` each read one of them — the first through a catchable failure, the second through none — and `{String.from(StringHasSingleByteGraphemesMethod)}` reports a private flag of the record; user code reaches the bytes through `{String.from(StringToByteArrayMethod)}()`, which copies", line: methodTok.line, column: methodTok.column)
 	end 'requireStdlibOnlyStringMethod'
 
 	// ⭐ **`s.findFirst(n)` / `s.findLast(n)` — the two THROWING searches, which differ ONLY in which runtime
@@ -32625,9 +32686,18 @@ export type Parser
 	// One `int` argument of a signature-checked builtin — `size`, `count`, `elementSize`, a stat buffer's
 	// address, a stat field index, a byte offset, a byte value. Same anchor rule as its `__ManagedMemory`
 	// sibling above, and the same sentence.
+	// ⚠⚠ **THE DOMAIN TEST IS `tagIsIntegral`, NOT `== ValueTypeTag.integer`, AND THE NARROW SPELLING WAS A
+	// FALSE REFUSAL THAT SHIPPED (BATCH2 slice 6).** A value whose static type is a RANGED ALIAS carries the
+	// `named` tag until TypeResolution collapses it — `columnValueTagMatches`'s measured reason — so the narrow
+	// test refused every argument spelled with one. MEASURED on `stdlib/helpers/string/utf8.maxon:102`, whose
+	// `s.byteAt(pos)` has `pos BytePos`: `E3005 argument type mismatch for 'index': expected 'int', got 'int'`,
+	// a refusal that names one type twice because both spellings render to `int` and only the TAG differs. The
+	// retired `emitGraphemeClassifier` had already written this argument down for exactly the same shape
+	// (`graphemeBreakProperty(cp)` with `cp Codepoint`) and was the only door in the compiler that had it; the
+	// fact belongs at the shared argument parser, where all six builtin doors read it.
 	function parseBuiltinIntegerArg(func IrFunction, paramName ByteArray, methodTok Token) returns ValueId throws ParseError
 		let value = try self.parseExpression(func, block: self.currentBlock)
-		if self.tagOf(value) != ValueTypeTag.integer 'notInteger'
+		if not tagIsIntegral(self.tagOf(value)) 'notInteger'
 			throw ParseError.builtinArgumentType(String.from(paramName), expected: typeTagName(ValueTypeTag.integer), got: self.valueDisplayTypeName(value), line: methodTok.line, column: methodTok.column)
 		end 'notInteger'
 		return value
@@ -35859,7 +35929,7 @@ export type Parser
 		// it YIELDS a value, where its `setByte` dual is void and sits with the mutators. Its bound is
 		// `length · element_size` and it throws `invalidByteRange`, both of which live in one place with the
 		// setter's (`ArrayRuntime.emitByteRangeGuard`).
-		if isManagedMemory and methodTok.value.equals(ManagedMemoryByteAtMethod) 'byteAt'
+		if isManagedMemory and methodTok.value.equals(ByteAtMethod) 'byteAt'
 			try self.requireBufferBytesAreNotAPointer(giid, methodTok: methodTok)
 			let index = try self.parseOneBuiltinIntegerArgList(func, paramName: ManagedMemoryIndexParamName, methodTok: methodTok)
 			return self.emitRuntimeCall(ArrByteAtName, args: pairArgs(arr, second: index), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
@@ -41236,18 +41306,6 @@ export type Parser
 		// intrinsic 99.99% of the time. These four `equals` allocate nothing and `scale-test` returns
 		// to bit-for-bit parity with main. (The `flat union` rule in ARCHITECTURE.md is about NESTING
 		// costing a box per level; this is the same accounting one level down.)
-		// ⭐ The two UAX #29 CLASSIFIERS (P1.8 slice B). Recognized by name after their arguments are parsed,
-		// exactly as the math intrinsics above are, and routed straight to the grapheme runtime. Both take
-		// one codepoint; `graphemeBreakProperty` yields the 0..13 property and `isExtendedPictographic` a
-		// bool. See `GraphemeBreakPropertyBuiltinName` for why these are bare builtins rather than
-		// declarations, and what that reserves.
-		if callee.equals(GraphemeBreakPropertyBuiltinName) 'gbpBuiltin'
-			return try self.emitGraphemeClassifier(args, runtimeName: GbpName, builtinName: GraphemeBreakPropertyBuiltinName, resultTag: ValueTypeTag.integer, calleeTok: anchor)
-		end 'gbpBuiltin'
-
-		if callee.equals(IsExtendedPictographicBuiltinName) 'extPictBuiltin'
-			return try self.emitGraphemeClassifier(args, runtimeName: ExtPictName, builtinName: IsExtendedPictographicBuiltinName, resultTag: ValueTypeTag.boolean, calleeTok: anchor)
-		end 'extPictBuiltin'
 
 		// The `__Builtins.*` intrinsic table (see `BuiltinsQualifierPrefix`). Gated behind ONE prefix compare
 		// so a call to anything else pays two bytes and no allocation; an unrecognized member falls through to
@@ -41620,26 +41678,6 @@ export type Parser
 	// It requires exactly one `String` argument and returns VOID, so a call in VALUE position is
 	// rejected exactly as a void user-call is (`mintDeclaredCallResult`'s `voidCallResultUsed`), and at
 	// the same anchor.
-	// ⭐ **BOTH UAX #29 CLASSIFIERS FROM ONE EMITTER** — they differ only in the runtime entry point they
-	// name and the tag of their result, so the arity check, the operand-domain check and the call are
-	// written once. A codepoint is an INTEGER, checked with `tagIsIntegral` rather than
-	// `== ValueTypeTag.integer` for `columnValueTagMatches`'s measured reason: a value whose static type
-	// is a ranged alias carries the `named` tag until TypeResolution collapses it, so the narrow spelling
-	// would falsely refuse `graphemeBreakProperty(cp)` where `cp` is a `Codepoint`-typed parameter.
-	function emitGraphemeClassifier(args ValueIdArray, runtimeName ByteArray, builtinName ByteArray, resultTag ValueTypeTag, calleeTok Token) returns ValueId throws ParseError
-		if args.count() != GraphemeClassifierArity 'arity'
-			throw ParseError.builtinArity(String.from(builtinName), expected: GraphemeClassifierArity, got: args.count(), line: calleeTok.line, column: calleeTok.column)
-		end 'arity'
-
-		let arg = try args.get(0) otherwise panic("emitGraphemeClassifier: args.count() == GraphemeClassifierArity just checked but get(0) failed")
-		let argTag = self.tagOf(arg)
-		if not tagIsIntegral(argTag) 'notACodepoint'
-			throw ParseError.builtinOperandType(String.from(builtinName), required: typeTagName(ValueTypeTag.integer), got: typeTagName(argTag), line: calleeTok.line, column: calleeTok.column)
-		end 'notACodepoint'
-
-		return self.emitRuntimeCall(runtimeName, args: singletonArgs(arg), resultTag: resultTag, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(calleeTok))
-	end 'emitGraphemeClassifier'
-
 	function emitPrint(args ValueIdArray, calleeTok Token, resultUsed bool) returns ValueId throws ParseError
 		if args.count() != PrintArity 'arity'
 			throw ParseError.builtinArity(String.from(PrintBuiltinName), expected: PrintArity, got: args.count(), line: calleeTok.line, column: calleeTok.column)
