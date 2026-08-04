@@ -1,0 +1,157 @@
+// Test: unconstrained-floats-leave-the-callee-saved-half-free
+function fsink(x float) returns float
+	return x + 1.0
+end 'fsink'
+
+function main() returns ExitCode
+	let n = fsink(3.0)
+	let a0 = n + 1.0
+	let a1 = n + 2.0
+	let a2 = n + 3.0
+	let a3 = n + 4.0
+	let a4 = n + 5.0
+	let a5 = n + 6.0
+	let a6 = n + 7.0
+	let a7 = n + 8.0
+	let a8 = n + 9.0
+	let a9 = n + 10.0
+	let b0 = a0 * 2.0
+	let b1 = a1 * 2.0
+	let b2 = a2 * 2.0
+	let b3 = a3 * 2.0
+	let b4 = a4 * 2.0
+	let b5 = a5 * 2.0
+	let b6 = a6 * 2.0
+	let b7 = a7 * 2.0
+	let s = a0 + a1 + a2 + a3 + a4 + a5 + a6 + a7 + a8 + a9
+	let c = fsink(s)
+	let total = b0 + b1 + b2 + b3 + b4 + b5 + b6 + b7 + c
+	return 0 if total == 232.0 else 99
+end 'main'
+---
+ExitCode: 0
+---
+func @fsink {
+  entry:
+    arm64.prologue 16
+    arm64.fpLoadRdata d1, [rdata + __fconst_1]
+    arm64.fadd d0, d0, d1
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 80
+    arm64.storeSlotReg slot7, d15
+    arm64.storeSlotReg slot6, d14
+    arm64.storeSlotReg slot5, d13
+    arm64.storeSlotReg slot4, d12
+    arm64.storeSlotReg slot3, d11
+    arm64.storeSlotReg slot2, d10
+    arm64.storeSlotReg slot1, d9
+    arm64.storeSlotReg slot0, d8
+    arm64.fpLoadRdata d0, [rdata + __fconst_2]
+    arm64.bl fsink
+    arm64.fpLoadRdata d1, [rdata + __fconst_1]
+    arm64.fadd d1, d0, d1
+    arm64.fpLoadRdata d2, [rdata + __fconst_3]
+    arm64.fadd d2, d0, d2
+    arm64.fpLoadRdata d3, [rdata + __fconst_2]
+    arm64.fadd d3, d0, d3
+    arm64.fpLoadRdata d4, [rdata + __fconst_4]
+    arm64.fadd d4, d0, d4
+    arm64.fpLoadRdata d5, [rdata + __fconst_5]
+    arm64.fadd d5, d0, d5
+    arm64.fpLoadRdata d6, [rdata + __fconst_6]
+    arm64.fadd d6, d0, d6
+    arm64.fpLoadRdata d7, [rdata + __fconst_7]
+    arm64.fadd d7, d0, d7
+    arm64.fpLoadRdata d16, [rdata + __fconst_8]
+    arm64.fadd d16, d0, d16
+    arm64.fpLoadRdata d17, [rdata + __fconst_9]
+    arm64.fadd d17, d0, d17
+    arm64.fpLoadRdata d18, [rdata + __fconst_10]
+    arm64.fadd d0, d0, d18
+    arm64.fpLoadRdata d18, [rdata + __fconst_3]
+    arm64.fmul d8, d1, d18
+    arm64.fpLoadRdata d18, [rdata + __fconst_3]
+    arm64.fmul d9, d2, d18
+    arm64.fpLoadRdata d18, [rdata + __fconst_3]
+    arm64.fmul d10, d3, d18
+    arm64.fpLoadRdata d18, [rdata + __fconst_3]
+    arm64.fmul d11, d4, d18
+    arm64.fpLoadRdata d18, [rdata + __fconst_3]
+    arm64.fmul d12, d5, d18
+    arm64.fpLoadRdata d18, [rdata + __fconst_3]
+    arm64.fmul d13, d6, d18
+    arm64.fpLoadRdata d18, [rdata + __fconst_3]
+    arm64.fmul d14, d7, d18
+    arm64.fpLoadRdata d18, [rdata + __fconst_3]
+    arm64.fmul d15, d16, d18
+    arm64.fadd d1, d1, d2
+    arm64.fadd d1, d1, d3
+    arm64.fadd d1, d1, d4
+    arm64.fadd d1, d1, d5
+    arm64.fadd d1, d1, d6
+    arm64.fadd d1, d1, d7
+    arm64.fadd d1, d1, d16
+    arm64.fadd d1, d1, d17
+    arm64.fadd d0, d1, d0
+    arm64.bl fsink
+    arm64.fadd d1, d8, d9
+    arm64.fadd d1, d1, d10
+    arm64.fadd d1, d1, d11
+    arm64.fadd d1, d1, d12
+    arm64.fadd d1, d1, d13
+    arm64.fadd d1, d1, d14
+    arm64.fadd d1, d1, d15
+    arm64.fadd d0, d1, d0
+    arm64.fpLoadRdata d1, [rdata + __fconst_11]
+    arm64.fcmp d0, d1
+    arm64.cset x0, eq
+    arm64.cbnz x0, ternarytrue
+    arm64.b ternaryfalse
+  ternarytrue:
+    arm64.movImm x0, 0
+    arm64.b matchcont
+  ternaryfalse:
+    arm64.movImm x0, 99
+    arm64.b matchcont
+  matchcont:
+    arm64.cmp x0, 0
+    arm64.cset x1, lt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.movImm x1, 4294967295
+    arm64.cmp x0, x1
+    arm64.cset x1, gt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot d8, slot0
+    arm64.loadRegSlot d9, slot1
+    arm64.loadRegSlot d10, slot2
+    arm64.loadRegSlot d11, slot3
+    arm64.loadRegSlot d12, slot4
+    arm64.loadRegSlot d13, slot5
+    arm64.loadRegSlot d14, slot6
+    arm64.loadRegSlot d15, slot7
+    arm64.epilogue 80
+    arm64.ret
+  __rc_ok:
+    arm64.loadRegSlot d8, slot0
+    arm64.loadRegSlot d9, slot1
+    arm64.loadRegSlot d10, slot2
+    arm64.loadRegSlot d11, slot3
+    arm64.loadRegSlot d12, slot4
+    arm64.loadRegSlot d13, slot5
+    arm64.loadRegSlot d14, slot6
+    arm64.loadRegSlot d15, slot7
+    arm64.epilogue 80
+    arm64.ret
+}
