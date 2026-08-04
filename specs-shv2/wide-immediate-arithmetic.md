@@ -51,10 +51,22 @@ form at all — the test would then pin nothing about encoding.
 Materialisation happens after the operands are already values, so the constant needs a
 register that no live value can be sitting in. arm64 reserves x16/x17 (the
 intra-procedure-call scratch registers) for exactly this, and shv2 keeps both OUT of the
-allocatable pool. `under-register-pressure` is the case that would catch a scratch that
-was not actually free: it holds fourteen values live across several wide-immediate adds,
-so a scratch the allocator could hand out would destroy one of them and the sum would be
-wrong.
+allocatable pool.
+
+What makes that safe is not the reservation alone — it is that the `movz`/`movk` and the
+register op that reads it are emitted ADJACENTLY, so x16 is live across exactly one
+instruction boundary and nothing can be scheduled into it. `under-register-pressure` is
+the case that puts that claim under load: it holds **thirty-four** values live, which is
+past the twenty-six GPRs the arm64 pool offers (x0..x15 ∪ x19..x28), so the allocator is
+genuinely spilling and reloading around the materialisations rather than merely having
+room to spare. A spill store or reload placed BETWEEN the `movz`/`movk` and its consumer
+would destroy the constant and the sum would come out wrong rather than the program
+crashing — which is the shape of defect BATCH15's own A5b was (a value written into a
+register another value already held, between a producer and its consumer).
+
+⚠ A case that merely holds a dozen values live pins nothing here: with a twenty-six
+register pool the allocator never approaches exhaustion, so no spill code is emitted at
+all and the adjacency is never tested.
 
 ## Tests
 
@@ -164,8 +176,17 @@ end 'main'
 The sign twin. A negative literal on `+` is a SUB of its magnitude and a negative literal
 on `-` is an ADD of it, so both cross the encoding boundary on the MAGNITUDE — and the
 materialised constant must carry its sign into all 64 bits, not just the low 32. The last
-two checks take the immediate to `i32.max` and `i32.min`, the widest the shared constant
+three checks take the immediate to `i32.max` and `i32.min`, the widest the shared constant
 fold produces.
+
+`i32.min` is the one value where the two SIGNS are not symmetric, and the asymmetry is
+NOT arm64's. `constFitsBinOpImmediate` folds `i32.min` on `add` but excludes it on `sub`,
+because x64 lowers `sub` to a NEGATED displacement and `-(i32.min)` overflows the field —
+so `x + -2147483648` arrives as a `binOpImm` and `x - -2147483648` never does. **The arm64
+selector must not DEPEND on that**: its own predicate reads the magnitude, and
+`0 - i32.min` is past the 24-bit band whichever side asks, so it answers "no immediate
+form" and materialises either way. Both halves are checked here precisely so the answer is
+pinned on both sides of a boundary that lives in another file for another target's reason.
 ```maxon
 function base(p int) returns int
 	return p
@@ -193,6 +214,10 @@ function main() returns ExitCode
 	if addMin != -2147482648 'addMin'
 		return 45
 	end 'addMin'
+	let subMin = x - -2147483648
+	if subMin != 2147484648 'subMin'
+		return 46
+	end 'subMin'
 	return 0
 end 'main'
 ```
@@ -201,12 +226,13 @@ end 'main'
 ```
 
 <!-- test: under-register-pressure -->
-Fourteen values live across four wide-immediate adds. The constants have no immediate
-form, so each one is materialised into a scratch register while every one of those
-fourteen is holding a register of its own — a scratch the allocator could also hand to a
-value would destroy it here, and the sum would be wrong rather than the program crashing.
-`p = 0`: `k1`..`k10` are `1`..`10` (sum 55), and the four wide values are `1000000007`,
-`1000000009`, `2000000011` and `2000000013` (sum `6000000040`). Total `6000000095`.
+Thirty-four values live across four wide-immediate adds. The arm64 pool offers twenty-six
+GPRs, so this function SPILLS: the allocator is inserting stores and reloads in the same
+straight line the four `movz`/`movk` ladders sit in. Each of those constants has no
+immediate form, so it goes through the IP scratch — and anything the allocator placed
+between a ladder and the `add` that reads it would overwrite the constant, giving a WRONG
+SUM rather than a crash. `p = 0`: `k1`..`k30` are `1`..`30` (sum 465), and the four wide
+values are `1000000007`, `1000000009`, `2000000011` and `2000000013` (sum 6000000040). Total 6000000505.
 ```maxon
 function base(p int) returns int
 	return p
@@ -223,16 +249,36 @@ function pressure(p int) returns int
 	let k8 = p + 8
 	let k9 = p + 9
 	let k10 = p + 10
+	let k11 = p + 11
+	let k12 = p + 12
+	let k13 = p + 13
+	let k14 = p + 14
+	let k15 = p + 15
+	let k16 = p + 16
+	let k17 = p + 17
+	let k18 = p + 18
+	let k19 = p + 19
+	let k20 = p + 20
+	let k21 = p + 21
+	let k22 = p + 22
+	let k23 = p + 23
+	let k24 = p + 24
+	let k25 = p + 25
+	let k26 = p + 26
+	let k27 = p + 27
+	let k28 = p + 28
+	let k29 = p + 29
+	let k30 = p + 30
 	let w1 = p + 1000000007
 	let w2 = p + 1000000009
 	let w3 = p + 2000000011
 	let w4 = p + 2000000013
-	return k1 + k2 + k3 + k4 + k5 + k6 + k7 + k8 + k9 + k10 + w1 + w2 + w3 + w4
+	return k1 + k2 + k3 + k4 + k5 + k6 + k7 + k8 + k9 + k10 + k11 + k12 + k13 + k14 + k15 + k16 + k17 + k18 + k19 + k20 + k21 + k22 + k23 + k24 + k25 + k26 + k27 + k28 + k29 + k30 + w1 + w2 + w3 + w4
 end 'pressure'
 
 function main() returns ExitCode
 	let total = pressure(base(0))
-	if total != 6000000095 'total'
+	if total != 6000000505 'total'
 		return 51
 	end 'total'
 	return 0

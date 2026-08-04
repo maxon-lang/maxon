@@ -576,11 +576,24 @@ end 'arm64EmitAddSubImm12'
 // for x64's `lea [base ± imm32]`, which carries the whole `Imm32` domain verbatim; AArch64's reaches
 // 24 bits.
 export function arm64ImmIsEncodableAddSub(imm Imm32) returns bool
-	if imm >= 0 'nonNeg'
-		return imm <= Arm64AddSubImmWideMax
-	end 'nonNeg'
-	return 0 - imm <= Arm64AddSubImmWideMax
+	return arm64AddSubImmMagnitude(imm) <= Arm64AddSubImmWideMax
 end 'arm64ImmIsEncodableAddSub'
+
+// The MAGNITUDE of a signed ADD/SUB immediate — the number the imm12 fields actually carry, because
+// the SIGN rides the OPCODE here rather than the field: a negative literal on the ADD side is a SUB
+// of its magnitude, and vice versa.
+//
+// That rule was written out three times — once in the predicate above and once in each of the two
+// signed emitters below — and the three had to agree on the ARITHMETIC as well as the direction, or
+// the predicate would answer "encodable" for a value the emitter then panics on. It is stated once,
+// so a future change to what "magnitude" means (a wider `Imm32`, a saturating band) moves all three
+// at once instead of leaving a divergence that reads as correct at every site.
+function arm64AddSubImmMagnitude(imm Imm32) returns MachineWord
+	if imm >= 0 'nonNeg'
+		return imm as MachineWord
+	end 'nonNeg'
+	return 0 - imm
+end 'arm64AddSubImmMagnitude'
 
 // ADD/SUB Rd, Rn, #imm for an immediate that may exceed the 12-bit field: a plain 12-bit form
 // silently truncates any value ≥ 0x1000, corrupting a large stack-slot address or frame size (M1
@@ -607,19 +620,11 @@ end 'arm64EmitAddSubImmWide'
 // through the hi/lo split. `rd`/`rn` are independent (arm64's ADD-immediate is 3-address), so this is
 // never a two-address reuse.
 export function arm64EmitAddImmSigned(code ByteArray, rd MachineWord, rn MachineWord, imm Imm32)
-	if imm >= 0 'nonNeg'
-		arm64EmitAddSubImmWide(code, opcode: Arm64OpAddImm, rd: rd, rn: rn, imm: imm)
-		return
-	end 'nonNeg'
-	arm64EmitAddSubImmWide(code, opcode: Arm64OpSubImm, rd: rd, rn: rn, imm: 0 - imm)
+	arm64EmitAddSubImmWide(code, opcode: Arm64OpAddImm if imm >= 0 else Arm64OpSubImm, rd: rd, rn: rn, imm: arm64AddSubImmMagnitude(imm))
 end 'arm64EmitAddImmSigned'
 
 function arm64EmitSubImmSigned(code ByteArray, rd MachineWord, rn MachineWord, imm Imm32)
-	if imm >= 0 'nonNeg'
-		arm64EmitAddSubImmWide(code, opcode: Arm64OpSubImm, rd: rd, rn: rn, imm: imm)
-		return
-	end 'nonNeg'
-	arm64EmitAddSubImmWide(code, opcode: Arm64OpAddImm, rd: rd, rn: rn, imm: 0 - imm)
+	arm64EmitAddSubImmWide(code, opcode: Arm64OpSubImm if imm >= 0 else Arm64OpAddImm, rd: rd, rn: rn, imm: arm64AddSubImmMagnitude(imm))
 end 'arm64EmitSubImmSigned'
 
 // ==========================================================================
