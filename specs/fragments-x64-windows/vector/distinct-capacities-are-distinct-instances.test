@@ -1,0 +1,329 @@
+// Test: distinct-capacities-are-distinct-instances
+typealias Int = int(i64.min to i64.max)
+
+type Holder4 uses Element
+	typealias Slot4 = Vector with 4 Element
+
+	var quad as Slot4
+
+	export static function create() returns Self
+		return Self{quad: Slot4.create()}
+	end 'create'
+
+	export function size() returns Int
+		return quad.count()
+	end 'size'
+end 'Holder4'
+
+type Holder7 uses Element
+	typealias Slot7 = Vector with 7 Element
+
+	var septet as Slot7
+
+	export static function create() returns Self
+		return Self{septet: Slot7.create()}
+	end 'create'
+
+	export function size() returns Int
+		return septet.count()
+	end 'size'
+end 'Holder7'
+
+typealias IntHolder4 = Holder4 with Int
+typealias IntHolder7 = Holder7 with Int
+
+function main() returns ExitCode
+	var a = IntHolder4.create()
+	var b = IntHolder7.create()
+	return a.size() * 10 + b.size()
+end 'main'
+---
+ExitCode: 47
+---
+// CompiledIR
+module {
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=32
+    x64.call IntHolder4.create
+    x64.mov [rbp-8], rax
+    x64.call IntHolder7.create
+    x64.mov [rbp-16], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call IntHolder4.size
+    x64.mov rcx, 10
+    x64.imul rax, rcx
+    x64.mov rdx, [rbp-16]
+    x64.mov [rbp-24], rax
+    x64.mov rcx, [rbp-16]
+    x64.call IntHolder7.size
+    x64.mov rbx, [rbp-24]
+    x64.add rbx, rax
+    x64.xor esi, esi
+    x64.mov edi, 4294967295
+    x64.cmp rbx, rdi
+    x64.jg main.__range_panic_0
+    x64.cmp rbx, rsi
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov rax, [rbp-16]
+    x64.mov [rbp-32], rbx
+    x64.test rax, rax
+    x64.jz __nonnull_skip_0
+    x64.mov rcx, [rbp-16]
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.mov rcx, [rbp-8]
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_1
+    x64.call mm_decref
+    x64.label __nonnull_skip_1
+    x64.mov rax, [rbp-32]
+    x64.epilogue
+    x64.ret
+  }
+  func @IntHolder4.create() -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.call Vector_4_Int.create
+    x64.mov [rbp-8], rax
+    x64.lea_func rax, [__destruct_IntHolder4]
+    x64.mov rcx, rax
+    x64.mov rdx, rcx
+    x64.mov rcx, 8
+    x64.mov r8, 47
+    x64.call mm_alloc
+    x64.mov [rbp-16], rax
+    x64.mov rdx, [rbp-8]
+    x64.mov rbx, [rbp-16]
+    x64.mov [rbx+0], rdx
+    x64.mov rcx, [rbp-8]
+    x64.call mm_incref
+    x64.mov rsi, [rbp-8]
+    x64.test rsi, rsi
+    x64.jz __nonnull_skip_0
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.mov rdi, [rbp-16]
+    x64.mov rcx, [rbp-16]
+    x64.call mm_incref
+    x64.mov rax, [rbp-16]
+    x64.epilogue
+    x64.ret
+  }
+  func @IntHolder4.size(__self_ptr: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rdx, [rax+0]
+    x64.mov [rbp-16], rdx
+    x64.mov rcx, [rbp-16]
+    x64.epilogue
+    x64.jmp Vector_4_Int.count
+  }
+  func @IntHolder7.create() -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.call Vector_7_Int.create
+    x64.mov [rbp-8], rax
+    x64.lea_func rax, [__destruct_IntHolder7]
+    x64.mov rcx, rax
+    x64.mov rdx, rcx
+    x64.mov rcx, 8
+    x64.mov r8, 48
+    x64.call mm_alloc
+    x64.mov [rbp-16], rax
+    x64.mov rdx, [rbp-8]
+    x64.mov rbx, [rbp-16]
+    x64.mov [rbx+0], rdx
+    x64.mov rcx, [rbp-8]
+    x64.call mm_incref
+    x64.mov rsi, [rbp-8]
+    x64.test rsi, rsi
+    x64.jz __nonnull_skip_0
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.mov rdi, [rbp-16]
+    x64.mov rcx, [rbp-16]
+    x64.call mm_incref
+    x64.mov rax, [rbp-16]
+    x64.epilogue
+    x64.ret
+  }
+  func @IntHolder7.size(__self_ptr: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rdx, [rax+0]
+    x64.mov [rbp-16], rdx
+    x64.mov rcx, [rbp-16]
+    x64.epilogue
+    x64.jmp Vector_7_Int.count
+  }
+  func @__destruct_IntHolder4(ptr: i64) {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.mov [rbp-16], rcx
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_0
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.jmp __destruct_IntHolder4.done
+  done:
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_IntHolder7(ptr: i64) {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.mov [rbp-16], rcx
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_0
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.jmp __destruct_IntHolder7.done
+  done:
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct___ManagedMemory_Int(ptr: i64) {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+16]
+    x64.mov rdx, -1
+    x64.cmp rcx, rdx
+    x64.jne __destruct___ManagedMemory_Int.check_owned_0
+  slice_cleanup_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+32]
+    x64.mov [rbp-16], rcx
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_0
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.jmp __destruct___ManagedMemory_Int.skip_buf_0
+  check_owned_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+16]
+    x64.mov rdx, -2
+    x64.cmp rcx, rdx
+    x64.je __destruct___ManagedMemory_Int.skip_buf_0
+  free_buf_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+32]
+    x64.mov rdx, -3
+    x64.cmp rcx, rdx
+    x64.je __destruct___ManagedMemory_Int.skip_buf_0
+  raw_free_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.call mm_raw_free
+    x64.jmp __destruct___ManagedMemory_Int.skip_buf_0
+  skip_buf_0:
+    x64.jmp __destruct___ManagedMemory_Int.done
+  done:
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_Vector_4_Int(ptr: i64) {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+16]
+    x64.mov rdx, -1
+    x64.cmp rcx, rdx
+    x64.jne __destruct_Vector_4_Int.check_owned_0
+  slice_cleanup_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+32]
+    x64.mov [rbp-16], rcx
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_0
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.jmp __destruct_Vector_4_Int.skip_buf_0
+  check_owned_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+16]
+    x64.mov rdx, -2
+    x64.cmp rcx, rdx
+    x64.je __destruct_Vector_4_Int.skip_buf_0
+  free_buf_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+32]
+    x64.mov rdx, -3
+    x64.cmp rcx, rdx
+    x64.je __destruct_Vector_4_Int.skip_buf_0
+  raw_free_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.call mm_raw_free
+    x64.jmp __destruct_Vector_4_Int.skip_buf_0
+  skip_buf_0:
+    x64.jmp __destruct_Vector_4_Int.done
+  done:
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_Vector_7_Int(ptr: i64) {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+16]
+    x64.mov rdx, -1
+    x64.cmp rcx, rdx
+    x64.jne __destruct_Vector_7_Int.check_owned_0
+  slice_cleanup_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+32]
+    x64.mov [rbp-16], rcx
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_0
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.jmp __destruct_Vector_7_Int.skip_buf_0
+  check_owned_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+16]
+    x64.mov rdx, -2
+    x64.cmp rcx, rdx
+    x64.je __destruct_Vector_7_Int.skip_buf_0
+  free_buf_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+32]
+    x64.mov rdx, -3
+    x64.cmp rcx, rdx
+    x64.je __destruct_Vector_7_Int.skip_buf_0
+  raw_free_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.call mm_raw_free
+    x64.jmp __destruct_Vector_7_Int.skip_buf_0
+  skip_buf_0:
+    x64.jmp __destruct_Vector_7_Int.done
+  done:
+    x64.epilogue
+    x64.ret
+  }
+}
+---

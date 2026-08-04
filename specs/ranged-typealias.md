@@ -314,6 +314,154 @@ end 'main'
 3
 ```
 
+### A `/` runs at a width and signedness valid for BOTH operands
+
+⭐ **A RANGED TYPEALIAS ON ONE OPERAND MAY NOT DECIDE THE ARITHMETIC DONE TO THE OTHER.** A ranged
+type is what lets the compiler select a narrower or an unsigned machine operation, and for `+`, `-`,
+`and`, `or` the answer survives taking it from whichever operand happens to carry one — a "32-bit"
+binop is emitted at 64 bits on both backends. `idiv`/`div`/`sdiv`/`udiv` is the one family whose
+width and signedness are REAL, so it is the one family that shortcut could reach.
+
+**No ranged type does not mean "no constraint" — it means "the whole of `i64`".** Reading it as
+"no constraint" is what let the OTHER operand narrow a 64-bit dividend into a 32-bit divide, and read
+a negative one as unsigned.
+
+`stdlib`'s own integer formatter is what found it. It divides a 64-bit pattern by a
+`HalfRadix = int(1 to 8)` — a range chosen so the divisor is provably non-zero, see
+`specs/safety.md` — and got `0xFFFFFFFF / 8`, so `"{u:x}"` printed `1ffffffff` for the same
+`u64.max` that `"{u}"` printed in full.
+
+<!-- test: div-divisor-range-does-not-narrow-the-dividend -->
+#### A narrow divisor does not narrow the dividend
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias HalfRadix = int(1 to 8)
+
+function ident(v Integer) returns Integer
+	return v
+end 'ident'
+
+function quotient(bits Integer, halfRadix HalfRadix) returns Integer
+	// `bits shr 1` carries no ranged type of its own, which is the whole of how the divisor's
+	// `int(1 to 8)` came to supply the division's width.
+	let half = bits shr 1
+	return half / halfRadix
+end 'quotient'
+
+function main() returns ExitCode
+	print("{quotient(ident(i64.max), halfRadix: 8)}\n")
+	return 0
+end 'main'
+```
+```stdout
+576460752303423487
+```
+```exitcode
+0
+```
+
+<!-- test: div-divisor-range-does-not-make-the-divide-unsigned -->
+#### A non-negative divisor range does not make a NEGATIVE dividend unsigned
+`/` truncates toward zero and a remainder takes the DIVIDEND's sign, so `-10 / 3` is `-3` and
+`-10 mod 3` is `-1`. Read unsigned, that same dividend is `18446744073709551606`.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias HalfRadix = int(1 to 8)
+
+function ident(v Integer) returns Integer
+	return v
+end 'ident'
+
+function quotient(bits Integer, halfRadix HalfRadix) returns Integer
+	let half = bits shr 1
+	return half / halfRadix
+end 'quotient'
+
+function remainder(bits Integer, halfRadix HalfRadix) returns Integer
+	let half = bits shr 1
+	return half mod halfRadix
+end 'remainder'
+
+function main() returns ExitCode
+	let n = ident(0 - 20)
+	print("q={quotient(n, halfRadix: 3)} r={remainder(n, halfRadix: 3)}\n")
+	return 0
+end 'main'
+```
+```stdout
+q=-3 r=-1
+```
+```exitcode
+0
+```
+
+<!-- test: div-dividend-range-does-not-make-a-negative-divisor-unsigned -->
+#### The same rule read from the other end — a non-negative DIVIDEND range
+An operand's range bounds ITS operand and nothing else, so the direction the knowledge travels in
+cannot change the answer. Here the dividend is the one with the non-negative range and the divisor
+is the one that would be misread.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Small = int(0 to 255)
+typealias NegativeOnly = int(i64.min to -1)
+
+function ident(v Integer) returns Integer
+	return v
+end 'ident'
+
+function quotient(a Small, b NegativeOnly) returns Integer
+	return a / b
+end 'quotient'
+
+function remainder(a Small, b NegativeOnly) returns Integer
+	return a mod b
+end 'remainder'
+
+function main() returns ExitCode
+	let a = ident(100) as Small
+	let b = ident(0 - 3) as NegativeOnly
+	print("q={quotient(a, b: b)} r={remainder(a, b: b)}\n")
+	return 0
+end 'main'
+```
+```stdout
+q=-33 r=1
+```
+```exitcode
+0
+```
+
+<!-- test: div-both-operands-non-negative-stays-unsigned -->
+#### Two non-negative ranges still buy the UNSIGNED divide
+Answering the width question by giving up on the signedness one would be the same defect wearing a
+fix's clothes. An `int(0 to u64.max)` dividend over a non-negative divisor is an unsigned divide,
+and a value with bit 63 set is what says so: read signed, `u64.max / 8` is `0`.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias MachineWord = int(0 to u64.max)
+typealias HalfRadix = int(1 to 8)
+
+function ident(v Integer) returns Integer
+	return v
+end 'ident'
+
+function quotient(w MachineWord, halfRadix HalfRadix) returns MachineWord
+	return w / halfRadix
+end 'quotient'
+
+function main() returns ExitCode
+	let w = ident(0 - 1) as MachineWord
+	print("{quotient(w, halfRadix: 8)} {w / 8}\n")
+	return 0
+end 'main'
+```
+```stdout
+2305843009213693951 2305843009213693951
+```
+```exitcode
+0
+```
+
 ### Ranged type in struct field
 
 <!-- test: struct-field -->

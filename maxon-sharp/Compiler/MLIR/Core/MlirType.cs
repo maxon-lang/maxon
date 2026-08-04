@@ -548,17 +548,19 @@ public class IrRangedPrimitiveType : IrType {
 
   public override int ElementSize => OptimalType.SizeInBytes;
 
-  /// Pick the smallest x86-64-optimal type that can represent the range.
-  /// Returns unsigned types (U8/U16/U32/U64) when range is non-negative.
-  private static IrType ComputeOptimalIntType(long lower, long upper) {
+  /// ⭐ THE one place an integer range becomes a WIDTH and a SIGNEDNESS. Picks the smallest
+  /// x86-64-optimal type that can represent the range, unsigned (U8/U16/U32/U64) when the range is
+  /// entirely non-negative.
+  ///
+  /// Public because a ranged typealias is not the only thing that has a range: a `/` must run at a
+  /// type representing BOTH its operands, and the parser computes that union's type from here rather
+  /// than growing a second copy of this ladder — see `Parser.DivisionOptimalType`.
+  public static IrType ComputeOptimalIntType(long lower, long upper) {
     if (lower >= 0) {
       // Unsigned path: compare as unsigned to handle u64.max (-1 as signed)
       var u = (ulong)upper;
-      if (u <= 127) return U8;
       if (u <= 255) return U8;
-      if (u <= 32767) return U16;
       if (u <= 65535) return U16;
-      if (u <= 2147483647) return U32;
       if (u <= 4294967295) return U32;
       return U64;
     }

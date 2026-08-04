@@ -15,34 +15,32 @@ module {
   entry:
     x64.prologue stack_size=128
     x64.movsd xmm0, [rip+__float_2.5]
+    x64.call stdlib.__float_toString
+    x64.mov [rbp-8], rax
     x64.lea_rdata rax, [__interp_lit_0]
     x64.mov rcx, rax
     x64.mov rdx, 7
-    x64.mov [rbp-96], rcx
-    x64.movsd [rbp-104], xmm0
-    x64.mov rcx, 32
-    x64.call mm_raw_alloc
-    x64.mov [rbp-8], rax
-    x64.movsd xmm0, [rbp-104]
-    x64.mov rdx, [rbp-8]
-    x64.call maxon_f64_to_string
     x64.mov rbx, [rbp-8]
-    x64.lea_rdata rsi, [__interp_lit_1]
-    x64.mov rdi, rsi
-    x64.mov r8, 1
-    x64.mov r9, 7
-    x64.lea rcx, [r9 + rax]
-    x64.add rcx, r8
-    x64.mov rdx, 49
-    x64.lea rsi, [rcx + rdx]
-    x64.lea_func rdx, [__destruct_String]
-    x64.mov r9, rdx
-    x64.mov [rbp-112], rax
-    x64.mov [rbp-120], rcx
-    x64.mov [rbp-128], rdi
-    x64.mov rcx, rsi
-    x64.mov rdx, r9
-    x64.mov r8, 2
+    x64.mov rsi, [rbx+0]
+    x64.mov rdi, [rbp-8]
+    x64.mov r8, [rdi+8]
+    x64.lea_rdata r9, [__interp_lit_1]
+    x64.mov rax, r9
+    x64.mov rbx, 1
+    x64.lea rdi, [rdx + r8]
+    x64.add rdi, rbx
+    x64.mov r9, 49
+    x64.lea rdx, [rdi + r9]
+    x64.lea_func r9, [__destruct_String]
+    x64.mov rbx, r9
+    x64.mov [rbp-96], rax
+    x64.mov [rbp-104], rcx
+    x64.mov [rbp-112], rsi
+    x64.mov [rbp-120], rdi
+    x64.mov [rbp-128], r8
+    x64.mov rcx, rdx
+    x64.mov rdx, rbx
+    x64.mov r8, 3
     x64.call mm_alloc
     x64.mov [rbp-16], rax
     x64.mov rax, 48
@@ -53,15 +51,15 @@ module {
     x64.mov [rbp-32], rcx
     x64.mov rax, [rbp-120]
     x64.mov [rbp-40], rax
-    x64.mov rax, [rbp-96]
+    x64.mov rax, [rbp-104]
     x64.mov [rbp-48], rax
     x64.mov rax, 7
     x64.mov [rbp-56], rax
-    x64.mov rax, [rbp-8]
-    x64.mov [rbp-64], rax
     x64.mov rax, [rbp-112]
-    x64.mov [rbp-72], rax
+    x64.mov [rbp-64], rax
     x64.mov rax, [rbp-128]
+    x64.mov [rbp-72], rax
+    x64.mov rax, [rbp-96]
     x64.mov [rbp-80], rax
     x64.mov rax, 1
     x64.mov [rbp-88], rax
@@ -105,9 +103,6 @@ module {
     x64.add rax, rcx
     x64.xor ecx, ecx
     x64.mov byte ptr [rax+0], rcxb
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rbp-8]
-    x64.call mm_raw_free
     x64.mov rax, [rbp-32]
     x64.mov rcx, [rbp-40]
     x64.mov rdx, 1
@@ -137,6 +132,12 @@ module {
     x64.mov rcx, [rbp-16]
     x64.call mm_decref
     x64.label __nonnull_skip_0
+    x64.mov rax, [rbp-8]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_1
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref
+    x64.label __nonnull_skip_1
     x64.xor eax, eax
     x64.epilogue
     x64.ret

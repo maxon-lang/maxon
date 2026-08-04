@@ -17081,23 +17081,37 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
           && resolvedOp is not (MaxonBinOperator.Eq or MaxonBinOperator.Ne
             or MaxonBinOperator.Lt or MaxonBinOperator.Gt
             or MaxonBinOperator.Le or MaxonBinOperator.Ge)) {
-        // An ARITHMETIC operator is symmetric — either operand's ranged type describes the result,
-        // so either may supply it. A SHIFT IS NOT: its right operand is a DISTANCE, not a value of
-        // the shifted type, and its ranged type describes neither the result's width nor its
-        // signedness. Falling through to it made `(0-8) shr n` answer -1 for a plain `int` count
-        // and 15 for one declared `int(0 to 63)` — an unsigned optimal type, and the most natural
-        // way there is to declare a shift distance — because `MaxonBinOp.IsUnsigned` then reported
-        // the whole SHIFT as unsigned and both ShiftSemantics readers zero-filled it.
+        // THREE OPERATOR FAMILIES, THREE READINGS, and the differences are all about what an
+        // operand's ranged type is EVIDENCE OF.
         //
-        // The shift asks its own accessor, and the difference is not cosmetic: it reads the
-        // operand's DECLARATION rather than searching for a variable that currently happens to hold
-        // its SSA value. A shift is the one operator whose ANSWER (not merely its width) turns on
-        // this, so it is the one that cannot tolerate the search's blind spots — see
-        // GetShiftOperandOptimalType for the two it has, and for why the symmetric operators keep
-        // the search.
-        optimalType = resolvedOp is MaxonBinOperator.Shl or MaxonBinOperator.Shr
-          ? GetShiftOperandOptimalType(lhs)
-          : GetOptimalType(promotedLhs) ?? GetOptimalType(promotedRhs);
+        //   • `+`, `-`, `*`, `and`, `or`, `xor` take the FIRST ranged type either operand offers.
+        //     The optimal type only ever selects a narrower or unsigned op here, and a narrowed
+        //     integer binop is EMITTED at 64 bits on both backends (x64's EmitMovRegReg always
+        //     writes a 64-bit MOV; arm64 routes StdBinaryI32Op and StdBinaryI64Op through one
+        //     EmitBinaryOp), so the choice cannot change the answer. `GetOptimalType`'s blind spots
+        //     make it answer null — "stay at i64", the wide and conservative reading.
+        //
+        //   • `/` and `mod` may NOT. They are the one family whose width and signedness are REAL in
+        //     the emitted instruction, so they are the one family that shortcut could reach — see
+        //     DivisionOptimalType.
+        //
+        //   • A SHIFT is not symmetric at all: its right operand is a DISTANCE, not a value of the
+        //     shifted type, and its ranged type describes neither the result's width nor its
+        //     signedness. Falling through to it made `(0-8) shr n` answer -1 for a plain `int` count
+        //     and 15 for one declared `int(0 to 63)` — an unsigned optimal type, and the most
+        //     natural way there is to declare a shift distance — because `MaxonBinOp.IsUnsigned`
+        //     then reported the whole SHIFT as unsigned and both ShiftSemantics readers zero-filled
+        //     it. The shift asks its own accessor, and the difference is not cosmetic: it reads the
+        //     operand's DECLARATION rather than searching for a variable that currently happens to
+        //     hold its SSA value. A shift is the one operator whose ANSWER (not merely its width)
+        //     turns on this, so it is the one that cannot tolerate the search's blind spots — see
+        //     GetShiftOperandOptimalType for the two it has.
+        optimalType = resolvedOp switch {
+          MaxonBinOperator.Shl or MaxonBinOperator.Shr => GetShiftOperandOptimalType(lhs),
+          MaxonBinOperator.Div or MaxonBinOperator.Mod =>
+            DivisionOptimalType(lhs, promotedLhs, rhs, promotedRhs),
+          _ => GetOptimalType(promotedLhs) ?? GetOptimalType(promotedRhs),
+        };
       }
       // A shift's right operand is not an ordinary number but a DISTANCE, and Maxon's rule for it
       // (Go's) is deliberately not the hardware's. It gets its own emitter, which owns both the
@@ -24669,7 +24683,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     if (TryFoldIntConst(divisor) is { } folded)
       return folded.Value == OverflowingDivisorPattern;
 
-    if (DivisorIntRange(divisorExpr, divisor) is { } range) {
+    if (DeclaredIntRange(divisorExpr, divisor) is { } range) {
       // A NON-NEGATIVE low bound makes the range unsigned, and a stored upper below 0 is then the
       // wrapped `u64.max` region — which admits the `-1` BIT PATTERN even though no value it
       // describes is negative. Only a real (non-wrapped) upper lets such a range clear the hazard.
@@ -24746,7 +24760,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       if (TryFoldFloatConst(divisor) is { } f)
         return f != 0.0;
 
-      var floatRangedName = DivisorRangedTypeName(divisorExpr, divisor);
+      var floatRangedName = OperandRangedTypeName(divisorExpr, divisor);
       if (floatRangedName != null && _typeRegistry.TryGetValue(floatRangedName, out var floatRanged)
           && floatRanged is IrRangedPrimitiveType frpt && frpt.IsFloatBased) {
         var lo = frpt.FloatLower;
@@ -24760,30 +24774,32 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     if (TryFoldIntConst(divisor) is { } folded)
       return folded.Value != 0;
 
-    if (DivisorIntRange(divisorExpr, divisor) is { } range)
+    if (DeclaredIntRange(divisorExpr, divisor) is { } range)
       return range.Low > 0 || (range.Low < 0 && range.InclusiveUpper < 0);
 
     return false;
   }
 
   /// <summary>
-  /// The divisor's declared INTEGER range as (low, INCLUSIVE upper), or null when the compiler
+  /// An operand's declared INTEGER range as (low, INCLUSIVE upper), or null when the compiler
   /// cannot see one — a value with no ranged typealias, or a float one.
   ///
-  /// ⭐ ONE DECODE, TWO HAZARDS. `idiv` faults for two unrelated reasons and each has its own proof —
-  /// <see cref="DivisorIsProvablyNonZero"/> asks whether 0 is admitted,
-  /// <see cref="DivisorMayBeNegativeOne"/> whether -1 is. Those two CONCLUSIONS genuinely differ
-  /// (`int(1 to 100)` clears -1 and not 0's cousin; `int(i64.min to -2)` clears -1 while admitting
-  /// no zero either), which is why they stay two named questions rather than shv2's single
-  /// `divisorProof` returning both facts. What must NOT be two is the fact they are both reading:
-  /// how to turn a declared range into the largest value it ADMITS.
+  /// ⭐ ONE DECODE, THREE QUESTIONS. `idiv` faults for two unrelated reasons and each has its own
+  /// proof — <see cref="DivisorIsProvablyNonZero"/> asks whether 0 is admitted,
+  /// <see cref="DivisorMayBeNegativeOne"/> whether -1 is — and <see cref="DivisionOptimalType"/>
+  /// asks a third, of BOTH operands rather than only the divisor: which values must the emitted
+  /// instruction be able to hold. Those CONCLUSIONS genuinely differ (`int(1 to 100)` clears -1 and
+  /// not 0's cousin; `int(i64.min to -2)` clears -1 while admitting no zero either), which is why
+  /// they stay separate named questions rather than shv2's single `divisorProof`. What must NOT be
+  /// separate is the fact all three are reading: how to turn a declared range into the largest
+  /// value it ADMITS.
   ///
   /// ⚠ `upto`'s exclusive upper is that fact, and it was written once per hazard. Nothing made the
   /// two agree — and a change reaching one and not the other is a divisor wrongly cleared of a
   /// hazard it has, which is a fault or a masked dividend at run time and a compile error nowhere.
   /// </summary>
-  private (long Low, long InclusiveUpper)? DivisorIntRange(ExprResult divisorExpr, MaxonValue divisor) {
-    var rangedName = DivisorRangedTypeName(divisorExpr, divisor);
+  private (long Low, long InclusiveUpper)? DeclaredIntRange(ExprResult operandExpr, MaxonValue operand) {
+    var rangedName = OperandRangedTypeName(operandExpr, operand);
     if (rangedName == null || !_typeRegistry.TryGetValue(rangedName, out var rangedType)
         || rangedType is not IrRangedPrimitiveType rpt || rpt.IsFloatBased)
       return null;
@@ -24791,19 +24807,87 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     return (rpt.IntLower, rpt.UpperInclusive ? rpt.IntUpper : rpt.IntUpper - 1);
   }
 
+  /// The integer values an operand can hold, as (low, INCLUSIVE upper): what its ranged typealias
+  /// admits, or — for an operand that has no declared range — the one value it folded to. Null when
+  /// the compiler can see NEITHER, which reads as the whole of `i64` and never as "unconstrained".
+  private (long Low, long InclusiveUpper)? OperandIntRange(
+      (long Low, long InclusiveUpper)? declared, MaxonValue operand) =>
+    declared ?? (TryFoldIntConst(operand) is { } folded ? (folded.Value, folded.Value) : null);
+
+  /// <summary>
+  /// ⭐ The width and signedness a `/` or `mod` may run at: the NARROWEST type that represents BOTH
+  /// operands, and null — full-width signed `i64`, what an unranged division already emits — when no
+  /// single type does.
+  ///
+  /// ⚠ **A DIVISION IS NOT SYMMETRIC, AND `??` READ IT AS IF IT WERE.** Every other integer operator
+  /// takes `GetOptimalType(lhs) ?? GetOptimalType(rhs)` and survives it, because a narrowed binop is
+  /// EMITTED at 64 bits on both backends (see the operator families at the `optimalType` assignment).
+  /// `idiv`/`div`/`sdiv`/`udiv` is the one family whose width and signedness are real, so it is the
+  /// one family that shortcut could reach — and **no ranged type does not mean "no constraint", it
+  /// means "the whole of i64"**. Falling through to the other operand therefore narrowed a 64-bit
+  /// dividend into a 32-bit divide and read a negative one as unsigned, in BOTH directions:
+  /// `int(i64.min to i64.max) / int(1 to 8)` became `0xFFFFFFFF / 8`, and
+  /// `int(0 to 255) / int(i64.min to -1)` answered `100 / -3 == 0`.
+  ///
+  /// `stdlib`'s own `__unsignedDigitStep` is what found it — it divides a 64-bit pattern by a
+  /// `HalfRadix = int(1 to 8)`, a range chosen so the divisor is provably non-zero — so `"{u:x}"`
+  /// printed `1ffffffff` for the `u64.max` that `"{u}"` printed in full. It was correct on arm64 and
+  /// wrong on x64, because arm64 has no 32-bit divide to narrow INTO.
+  ///
+  /// ⚠ A DECLARED RANGE IS WHAT ASKS FOR A NARROWER DIVIDE; a folded constant only has to FIT one.
+  /// Two folded constants would license a narrowing on their own — `7 / 2` provably runs at `u8` —
+  /// but a division that names no ranged type anywhere is exactly the one this rule has nothing to
+  /// say about, and narrowing it would be codegen movement bought with no correctness.
+  /// </summary>
+  private IrType? DivisionOptimalType(ExprResult dividendExpr, MaxonValue dividend,
+      ExprResult divisorExpr, MaxonValue divisor) {
+    var declaredDividend = DeclaredIntRange(dividendExpr, dividend);
+    var declaredDivisor = DeclaredIntRange(divisorExpr, divisor);
+    if (declaredDividend is null && declaredDivisor is null) return null;
+
+    if (OperandIntRange(declaredDividend, dividend) is not { } dividendRange) return null;
+    if (OperandIntRange(declaredDivisor, divisor) is not { } divisorRange) return null;
+    if (UnionIntRange(dividendRange, divisorRange) is not { } union) return null;
+
+    return IrRangedPrimitiveType.ComputeOptimalIntType(union.Low, union.InclusiveUpper);
+  }
+
+  /// The two ranges' union, or null when no 64-bit reading holds both. A range whose low bound is
+  /// non-negative reads UNSIGNED and a stored upper below 0 is then the wrapped region above
+  /// `i64.max`; a range with a negative low reads SIGNED throughout. The two readings disagree about
+  /// what one bit pattern means, so a wrapped range and a negative one have no union at all — the
+  /// same decode <see cref="DivisorMayBeNegativeOne"/> makes for the `-1` hazard.
+  private static (long Low, long InclusiveUpper)? UnionIntRange(
+      (long Low, long InclusiveUpper) a, (long Low, long InclusiveUpper) b) {
+    if (a.Low >= 0 && b.Low >= 0) {
+      var upper = (ulong)a.InclusiveUpper >= (ulong)b.InclusiveUpper ? a.InclusiveUpper : b.InclusiveUpper;
+      return (Math.Min(a.Low, b.Low), upper);
+    }
+
+    if (IsAboveSignedMax(a) || IsAboveSignedMax(b)) return null;
+
+    return (Math.Min(a.Low, b.Low), Math.Max(a.InclusiveUpper, b.InclusiveUpper));
+  }
+
+  /// A range that admits values past `i64.max` — non-negative, so read unsigned, with an upper whose
+  /// stored `long` has gone negative. No signed reading can hold it.
+  private static bool IsAboveSignedMax((long Low, long InclusiveUpper) range) =>
+    range.Low >= 0 && range.InclusiveUpper < 0;
+
   /// True for the numeric kinds a float `/` produces — the ones whose divide-by-zero proof reads
   /// <see cref="_floatConstValues"/> and whose lowering emits a float compare and a float divide.
   private static bool IsFloatDivKind(MaxonValueKind kind) =>
     kind is MaxonValueKind.Float or MaxonValueKind.Float32;
 
-  /// The divisor's ranged-typealias name. Read from the DECLARATION when the divisor is a variable
+  /// An operand's ranged-typealias name. Read from the DECLARATION when the operand is a variable
   /// reference (reliable across blocks, and immune to the value-scan blind spots documented on
   /// <see cref="GetShiftOperandOptimalType"/>); otherwise fall back to the value scan. A missed name
-  /// only ever costs a needless `try` (safe over-strictness), never an unsafe bare divide.
-  private string? DivisorRangedTypeName(ExprResult divisorExpr, MaxonValue divisor) =>
-    divisorExpr is ExprResult.VarRef v && RangedOptimalTypeOf(v.Info.StructTypeName) is not null
+  /// only ever costs a needless `try` (safe over-strictness) or a 64-bit signed divide where a
+  /// narrower one would have served — never an unsafe bare divide, and never a narrowed one.
+  private string? OperandRangedTypeName(ExprResult operandExpr, MaxonValue operand) =>
+    operandExpr is ExprResult.VarRef v && RangedOptimalTypeOf(v.Info.StructTypeName) is not null
       ? v.Info.StructTypeName
-      : RangedTypeNameOfValue(divisor);
+      : RangedTypeNameOfValue(operand);
 
   /// A possibly-zero divide is a throwing operation and, like any throwing call, must sit in a `try`
   /// (reusing E3057 — the error TYPE is a synthesized enum, not a new diagnostic code). Inside an
