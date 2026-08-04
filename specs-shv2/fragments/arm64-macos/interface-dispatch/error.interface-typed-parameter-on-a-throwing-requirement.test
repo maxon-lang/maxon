@@ -1,0 +1,52 @@
+// Test: error.interface-typed-parameter-on-a-throwing-requirement
+typealias Integer = int(i64.min to i64.max)
+
+interface Shape
+	function area() returns Integer
+end 'Shape'
+
+type Sq implements Shape
+	let s as Integer
+
+	function area() returns Integer
+		return self.s
+	end 'area'
+
+	static function create(s Integer) returns Self
+		return Self{s: s}
+	end 'create'
+end 'Sq'
+
+enum RunError implements Error
+	tooSmall
+end 'RunError'
+
+interface Runner
+	function run(c Shape) returns Integer throws RunError
+end 'Runner'
+
+type R implements Runner
+	let base as Integer
+
+	function run(c Shape) returns Integer throws RunError
+		if self.base < 5 'small'
+			throw RunError.tooSmall
+		end 'small'
+		return self.base + c.area()
+	end 'run'
+
+	static function create(base Integer) returns Self
+		return Self{base: base}
+	end 'create'
+end 'R'
+
+function useIt(r Runner) returns Integer
+	return try r.run(Sq.create(11)) otherwise 55
+end 'useIt'
+
+function main() returns ExitCode
+	return useIt(R.create(20)) as ExitCode
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:25:15: Unsupported: an interface requirement's parameter declared at the interface type 'Shape' — a value held at an interface type is a two-word fat pointer `(value, witness)`, and a witness call carries one machine word per argument, so the witness half is dropped and the impl dispatches through whatever the next slot happens to hold. Declare the parameter at a concrete type, or declare the requirement over a type parameter the interface constrains
