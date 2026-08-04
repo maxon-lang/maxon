@@ -295,13 +295,29 @@ Stack trace:
 
 ### Joins, and the return sites a guard never reached
 
-⭐⭐ **THESE THREE ARE REGRESSION CASES FOR A MEASURED WRONG ANSWER, NOT NEW SURFACE.** X6 built the
+⭐⭐ **THESE ARE REGRESSION CASES FOR A MEASURED WRONG ANSWER, NOT NEW SURFACE.** X6 built the
 guard and its elision path; the elision is correct wherever the value's own range is already inside the
 declared one. **It is NOT correct at a JOIN whose incoming value is wider than the declared type** — the
-premise the guard stands on is lost at the phi — nor at a `return` inside a `throws` function's `match`
-arm, which never got a guard at all. Found 2026-08-03 by the `G14` review while auditing 604 guards the
-re-mint would otherwise have deleted from the record. ⚠ **`try/otherwise` does NOT lose it** (measured),
-which is why `trycont` is excluded below: the asymmetry is the clue to where the fix belongs.
+premise the guard stands on is lost at the phi — nor at a `return` in a `throws` function, which never
+got a guard at all. Found 2026-08-03 by the `G14` review while auditing 604 guards the re-mint would
+otherwise have deleted from the record.
+
+⚠⚠ **TWO SENTENCES THAT STOOD HERE WERE WRONG, AND BOTH MADE THE DEFECT LOOK SMALLER THAN IT IS (G14
+implementation).** They are corrected rather than deleted, because each one names a probe that was run
+and a conclusion that did not survive a second probe:
+
+  * *"a `return` inside a `throws` function's **`match` arm**"* — the `match` is not the trigger. The
+    terminator is: a throwing function leaves through `errorReturn` rather than `ret`, and the pass
+    resolving a return site recognised only `ret`. **Every ranged `return` in every `throws` function
+    was unguarded**, `match` or no `match`, which
+    `throws-plain-return-is-guarded` below pins in its general form.
+  * *"**`try/otherwise` does NOT lose it** (measured), which is why `trycont` is excluded"* — measured
+    with a LITERAL fallback, which is the one shape that is separately checked at compile time
+    (`requireOtherwiseInRangedReturn` refuses an out-of-range literal and is documented as checking
+    nothing else). Swap the literal for a variable and the merge loses the premise exactly as the other
+    joins do — `try-otherwise-nonliteral-fallback-is-guarded` below. The asymmetry was an artifact of
+    the probe, not a property of `trycont`; `otherwise <literal>` still elides, and that is a fact about
+    the LITERAL rather than about `try`.
 
 <!-- test: join-in-a-gives-arm-is-guarded -->
 <!-- targets: x64-windows -->
@@ -399,4 +415,91 @@ end 'main'
 ```
 ```exitcode
 42
+```
+
+<!-- test: throws-plain-return-is-guarded -->
+<!-- targets: x64-windows -->
+⭐ **THE GENERAL FORM OF THE CASE ABOVE, AND THE ONE THAT NAMES THE REAL TRIGGER.** No `match`, no
+join, no branch — one `return v` in a function whose only distinguishing feature is a `throws` clause.
+It is worth more than its `match` sibling because the sibling could be read as a statement about match
+arms, and this cannot be read as anything but a statement about the terminator: `errorReturn` is what a
+throwing function returns through, and a site resolver that knows only `ret` finds nothing to guard.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+enum MatchError
+	unmatched
+end 'MatchError'
+
+function getValue(v Integer) returns ExitCode throws MatchError
+	return v
+end 'getValue'
+
+function main() returns ExitCode
+	let result = try getValue(-5) otherwise 0
+	print("result={result}")
+	return 7
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at throws-plain-return-is-guarded.test:9: Range check failed: value outside typealias 'ExitCode'
+Stack trace:
+  in getValue
+  in main
+  in mrt_start
+```
+
+<!-- test: try-otherwise-nonliteral-fallback-is-guarded -->
+<!-- targets: x64-windows -->
+⭐ **THE `try` MERGE IS A MERGE LIKE THE OTHERS — the case that retired this section's "`try/otherwise`
+does NOT lose it".** The continuation phi is named off the callee's return type, so it claims `Num`;
+the ok edge earns that claim (the callee guards its own `return`), but a VARIABLE fallback earns
+nothing — only a LITERAL fallback is checked, and only at compile time. `5000` therefore reached a
+`returns Num` caller's `return` wearing `Num`, and the guard was elided on it.
+
+⚠ Its negative control is `in-range-join-still-elides-and-returns` and the whole `otherwise 0` corpus:
+the fix withholds the claim per EDGE, not per construct, so a literal fallback still proves and still
+elides. Both halves are needed — a fix that guarded every `trycont` would pass this case and be wrong.
+```maxon
+typealias Num = int(0 to 1000)
+typealias Integer = int(i64.min to i64.max)
+
+enum E
+	oops
+end 'E'
+
+function mk(b bool) returns Num throws E
+	if b 'bad'
+		throw E.oops
+	end 'bad'
+	return 5
+end 'mk'
+
+function wide(n Integer) returns Integer
+	return n
+end 'wide'
+
+function pick(b bool) returns Num
+	let w = wide(5000)
+	return try mk(b) otherwise w
+end 'pick'
+
+function main() returns ExitCode
+	let v = pick(true)
+	print("v={v}")
+	return 7
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at try-otherwise-nonliteral-fallback-is-guarded.test:22: Range check failed: value outside typealias 'Num'
+Stack trace:
+  in pick
+  in main
+  in mrt_start
 ```

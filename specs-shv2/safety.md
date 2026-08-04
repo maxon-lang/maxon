@@ -937,6 +937,13 @@ it, so both are pinned here — and they were the SAME defect as the array-eleme
 through a door that is supposed to be shut. What remains is not a door at all: it is the EXPOSED slot
 `resize` hands back, which no value ever crossed into.
 
+⚠ **THAT LAST SENTENCE SAID "IT" AND MEANT "ONE OF THEM" — there were TWO producers that are not
+doors, and only one had been enumerated (G14).** The other is a MERGE, which claims the declared type
+of ONE incoming edge while another edge hands it whatever an assignment or a `gives` arm put there;
+it reached the same uncatchable `#DE` and is pinned by
+`error.divide-by-a-loop-carried-merge-is-refused` below. It is now CLOSED — a merge no longer proves a
+range — so `resize`'s slot is once again the only one left, this time counted rather than assumed.
+
 <!-- test: negative-range-cast-guard-fires-before-the-divide -->
 <!-- targets: x64-windows, x64-linux -->
 #### A zero cast into a wholly-negative divisor range is refused at the CAST, not at the `idiv`
@@ -1084,6 +1091,44 @@ panic: integer overflow
 Stack trace:
   in main
   in mrt_start
+```
+
+<!-- test: error.divide-by-a-loop-carried-merge-is-refused -->
+#### ⚠⚠ A MERGE IS THE SECOND PRODUCER THAT IS NOT A DOOR — and the paragraph above had to be amended for it (G14)
+
+**`resize`'s exposed slot is not the only way a ranged binding acquires a value that crossed no
+door.** A `var` declared from a `NonZero` and then REASSIGNED inside a loop merges at the loop header,
+and a merge takes its declared type from ONE incoming edge — here the seed — while the other edge is
+an ASSIGNMENT, which is a door on no tier. So the binding went on claiming `NonZero` while holding
+`0`, `divisorProof` answered `neverZero` off that claim, and `100 / d` compiled to a **bare `idiv`
+that needed no `try` at all**: MEASURED before G14 as `panic: integer divide by zero` — the
+uncatchable `#DE` where the language promises a catchable `DivisionByZero`, which is the very fault
+A1f shut the PARAMETER door to prevent, arriving through a producer nobody had enumerated.
+
+⭐ **IT IS REFUSED AT COMPILE TIME RATHER THAN GUARDED AT RUNTIME, and that is the honest answer here.**
+The cure is not a check on the divide: it is that a merge no longer PROVES a range, so the divisor
+falls to `possiblyZero` — the conservative arm this rule already documents — and the program is exactly
+the `error.divide-without-try` above wearing a loop. The proof is gone because it was never true; the
+`try` the language has always asked for is what replaces it.
+```maxon
+typealias NonZero = int(1 to i64.max)
+
+function seed(n NonZero) returns NonZero
+	return n
+end 'seed'
+
+function main() returns ExitCode
+	var d = seed(1)
+	var i = 0
+	while i < 1 'lp'
+		d = d - 1
+		i = i + 1
+	end 'lp'
+	return 100 / d
+end 'main'
+```
+```maxoncstderr
+error E3057: <fragment>:15:13: throwing division requires try: wrap it as `try (a / b) otherwise …`, or give the divisor a ranged type that excludes 0 (e.g. `int(1 to ...)`) — a bare divide drops the divide-by-zero error
 ```
 
 <!-- disabled-test: force-segfault -->
