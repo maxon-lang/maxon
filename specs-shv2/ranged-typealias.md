@@ -722,6 +722,63 @@ end 'main'
 0
 ```
 
+<!-- test: div-a-cast-to-a-zero-admitting-unsigned-alias-is-still-a-declaration -->
+#### A cast to a non-negative alias that ADMITS ZERO still asks for the unsigned divide
+⭐⭐ **THE OPERAND THAT CANNOT ITSELF BE MISREAD IS THE ONE THAT MISREADS THE OTHER.** `int(0 to 255)`
+cannot reach bit 63, so nothing about *that* operand depends on the reading — but a divide runs at ONE
+signedness for BOTH operands, so an `int(0 to 255)` read as "the whole of `i64`" drags the divide
+signed and the `int(0 to u64.max)` beside it is then read as `-1`.
+
+That matters here because a cast to such an alias is a representational NO-OP: it moves no bits, so it
+mints no value and the operand's type column still says what the SOURCE was. The alias has to be found
+some other way — and both spellings must find it, the cast of a CALL RESULT and the cast of a BARE
+LOCAL, which are recorded differently because the second leaves one value under two names.
+`ExitCode` is `int(0 to u32.max)`, the same shape with a builtin's name, and it is here for that
+reason. **MEASURED before the fix: every line below printed `0`.**
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias MachineWord = int(0 to u64.max)
+typealias Small = int(0 to 255)
+
+function ident(v Integer) returns Integer
+	return v
+end 'ident'
+
+function main() returns ExitCode
+	let w = ident(0 - 1) as MachineWord
+
+	// The operand is a CALL RESULT — a value no binding shares.
+	let s = ident(8) as Small
+	print("q={try (w / s) otherwise 999} r={try (w mod s) otherwise 999}\n")
+
+	// The operand is a BARE LOCAL — `b` and `a` would be one value, so the cast has to mint.
+	let a = ident(8)
+	let b = a as Small
+	print("q={try (w / b) otherwise 999} r={try (w mod b) otherwise 999}\n")
+
+	// ⚠ And `a` itself must be UNTOUCHED by that mint: it is still a plain signed `int`.
+	print("a={ident(0 - 20) / 3}\n")
+
+	let e = ident(8) as ExitCode
+	print("q={try (w / e) otherwise 999}\n")
+	let a2 = ident(8)
+	let e2 = a2 as ExitCode
+	print("q={try (w / e2) otherwise 999}\n")
+
+	return 0
+end 'main'
+```
+```stdout
+q=2305843009213693951 r=7
+q=2305843009213693951 r=7
+a=-6
+q=2305843009213693951
+q=2305843009213693951
+```
+```exitcode
+0
+```
+
 ### Ranged type in struct field
 
 <!-- test: struct-field -->

@@ -15793,9 +15793,44 @@ export type Parser
 	// statement about the same value: `identity(42) as Byte` hands back the call result untouched, and that
 	// result's type column still says `Integer` while the expression now denotes a `Byte`.
 	function valueDenotedAlias(value ValueId) returns DeclaredAlias
-		let aliasId = try self.valueDeclaredAlias.get(value) otherwise return self.provenAliasOfValue(value)
-		return self.declaredAliasOfNameId(aliasId)
+		let recorded = self.recordedCastAlias(value)
+
+		return match recorded 'r'
+			declared gives recorded
+			undeclared gives self.provenAliasOfValue(value)
+		end 'r'
 	end 'valueDenotedAlias'
+
+	// ⭐ **THE ALIAS A CAST RECORDED ON THIS VALUE, OR `undeclared`** — the map read the two denoted-alias
+	// readers share, spelled once. They differ ONLY in what they fall back to when nothing was recorded,
+	// and that difference is the whole of why there are two (see `divisionOperandAlias`); the lookup
+	// itself is one fact and lives in one place.
+	function recordedCastAlias(value ValueId) returns DeclaredAlias
+		let aliasId = try self.valueDeclaredAlias.get(value) otherwise return DeclaredAlias.undeclared
+		return self.declaredAliasOfNameId(aliasId)
+	end 'recordedCastAlias'
+
+	// ⭐⭐ **THE RANGED ALIAS A DIVISION OPERAND'S TYPE NAMES — `valueDenotedAlias` WITH THE OTHER
+	// FALLBACK, AND THE DIFFERENCE IS A MEASURED ONE (X10 review).** Same map, same precedence; where
+	// nothing was recorded this reads the value's DECLARED type (`declaredAliasOfValue`) and not its
+	// PROVEN one.
+	//
+	// ⚠ **A PHI'S DECLARED ALIAS IS WITHHELD FROM THE ZERO PROOF AND MUST NOT BE WITHHELD FROM THE
+	// SIGNEDNESS RULE.** G14's withhold exists because a merge can carry a `0` its declared `NonZero`
+	// never proved, and a wrong `neverZero` is an UNCATCHABLE hardware fault. Signedness has no such
+	// asymmetry: it selects an INSTRUCTION from the type the program WROTE, which is exactly what the
+	// bootstrap oracle reads, and `valueIsUnsigned` — the shift rule, the other half of the same
+	// question — has always read the plain declared type. MEASURED: routing this through
+	// `provenAliasOfValue` turned stdlib's float printer back to `cqo`+`idiv` on a loop-carried
+	// `int(0 to u64.max)`, silently undoing X10 on ten fragments.
+	function divisionOperandAlias(value ValueId) returns DeclaredAlias
+		let recorded = self.recordedCastAlias(value)
+
+		return match recorded 'r'
+			declared gives recorded
+			undeclared gives self.declaredAliasOfValue(value)
+		end 'r'
+	end 'divisionOperandAlias'
 
 	// ⭐⭐ **`declaredAliasOfValue` MINUS THE MERGES NOTHING PROVED — the reader for every question that
 	// spends the alias as a PROOF, as opposed to reading it as the value's DECLARED type (G14).** The type-name
@@ -24966,38 +25001,17 @@ export type Parser
 			return true
 		end 'exitCode'
 
-		return match self.rangedAliasOfValueType(value) 'a'
+		// ⚠ **`declaredAliasOfValue`, NOT A SECOND SPELLING OF IT (X10 review).** X10 landed a private
+		// `rangedAliasOfValueType` here — tag-guard on `named`, then `signatures.aliasOf(internedName(
+		// valueNameId(v)))` — whose header said it existed so the shift rule and the division rule
+		// "cannot come to disagree about which alias a value has". It was the file's THIRD copy of that
+		// walk: `declaredAliasOfValue` had already been it since P1.9, statement for statement. Two
+		// spellings of one lookup are the very thing the header was written against.
+		return match self.declaredAliasOfValue(value) 'a'
 			declared(alias) gives rangeIsUnsigned(alias.low)
 			undeclared gives false
 		end 'a'
 	end 'valueIsUnsigned'
-
-	// ⭐ **THE RANGED TYPEALIAS A VALUE'S OWN TYPE NAMES**, read from the tag column — the `named`-tag
-	// half of BOTH signedness rules, factored out so THE SHIFT RULE (`valueIsUnsigned`) and THE DIVISION
-	// SIGNEDNESS RULE (`divisionOperandDomain`) walk to an alias by one route and cannot come to disagree
-	// about which one a value has.
-	//
-	// `exitCode` is deliberately NOT handled here: it is a builtin range (`int(0 to u32.max)`) with no
-	// alias DECLARATION to look up, so each caller places it in its own answer space — the shift rule as
-	// a bool, the division rule as a three-valued domain — and neither has to invent a `RangedTypeAlias`
-	// for it.
-	//
-	// The alias is looked up in the WHOLE-PROGRAM declaration index, never in this file's artifact: an
-	// alias declared in another file is still the same type here, and a file-local table would answer
-	// `undeclared` and emit the wrong instruction. It is order-independent within a file too, which the
-	// artifact table — filled as declarations are parsed — would not be.
-	//
-	// An alias NO file declares is a user error (E3011, reported by TypeResolution against the merged
-	// registry, which is the authority). It is not either rule's to report — the sweep is deliberately
-	// tolerant — and the program is rejected before anything emitted here can run, so both callers'
-	// "signed" reading is harmless and never a silent wrong answer.
-	function rangedAliasOfValueType(value ValueId) returns DeclaredAlias
-		if self.tagOf(value) != ValueTypeTag.named 'notAnAlias'
-			return DeclaredAlias.undeclared
-		end 'notAnAlias'
-
-		return self.signatures.aliasOf(self.internedName(self.valueNameId(value)), readerFilePath: self.filePath)
-	end 'rangedAliasOfValueType'
 
 	// The full `MaxonType` of an SSA value, REBUILT from the two columns. It CONSTRUCTS a
 	// union, so it allocates — which is why it is called only where a `MaxonType` is genuinely
@@ -26111,13 +26125,13 @@ export type Parser
 		// ⭐ **A CAST THAT CHANGES WHAT THE VALUE'S TYPE SAYS IS A CONVERSION, NOT A RE-TAG.** It yields a
 		// DISTINCT result value of the target type and leaves the SOURCE untouched, because the source
 		// binding stays usable under its own identity: `let b = aTag as WB.Idx` must not corrupt `aTag`
-		// (still `WA.Idx`), and `let w = x as Word` must not make `x` unsigned. FOUR things a target can
+		// (still `WA.Idx`), and `let w = x as Word` must not make `x` unsigned. FIVE things a target can
 		// say, and each has its own predicate rather than one blurred test — a nominal IDENTITY (P1.6-C),
-		// a SHIFT FILL, (A1) whether a DIVISION by the value can fail, and (`ranged-int-bit-packing`) how
-		// the value would be STORED as an array element — because they are answered from different
-		// registries and none implies the others. Everything else is the representational no-op below,
-		// with no new value and no new op.
-		if self.castConvertsPerInstance(value, targetType: targetType) or self.castChangesTheShiftFill(value, targetAlias: targetAlias) or self.castChangesTheDivisionProof(value, targetAlias: targetAlias) or self.castChangesTheElementPacking(value, targetAlias: targetAlias) 'retaggingCast'
+		// a SHIFT FILL, (A1) whether a DIVISION by the value can fail, (X10) at what SIGNEDNESS a division
+		// of the value runs, and (`ranged-int-bit-packing`) how the value would be STORED as an array
+		// element — because they are answered from different registries and none implies the others.
+		// Everything else is the representational no-op below, with no new value and no new op.
+		if self.castConvertsPerInstance(value, targetType: targetType) or self.castChangesTheShiftFill(value, targetAlias: targetAlias) or self.castChangesTheDivisionProof(value, targetAlias: targetAlias) or self.castChangesTheDivisionSignedness(value, targetAlias: targetAlias, sourceIsBareLocal: sourceIsBareLocal) or self.castChangesTheElementPacking(value, targetAlias: targetAlias) 'retaggingCast'
 			return self.finishCast(self.emitRetaggedCastValue(value, targetType: targetType, asTok: asTok), source: value, targetAlias: targetAlias, sourceIsBareLocal: sourceIsBareLocal)
 		end 'retaggingCast'
 
@@ -26378,9 +26392,62 @@ export type Parser
 		end 'a'
 	end 'castChangesTheDivisionProof'
 
+	// ⭐⭐ **DOES THIS int→int `as` CHANGE THE SIGNEDNESS A DIVISION OF THE VALUE RUNS AT, IN THE ONE
+	// SPELLING NO RECORD CAN CARRY? (X10 review)** — the FOURTH of `applyCast`'s five questions, and the
+	// one X10 added a READER for (`divisionOperandDomain`) without adding any writer.
+	//
+	// ⚠⚠ **MEASURED AGAINST THE BOOTSTRAP ORACLE, AND IT WAS A SILENT WRONG ANSWER.** With
+	// `Word = int(0 to u64.max)` holding `u64.max` and a divisor cast to a non-negative alias that
+	// ADMITS ZERO (`int(0 to 255)`, or the builtin `ExitCode`), `try (w / d)` answered **0 here and
+	// 6148914691236517205 there** — the signed reading of `-1 / 8` against the unsigned reading the
+	// oracle picks from the same two declared ranges.
+	//
+	// ⭐ **THE OTHER THREE SPELLINGS NEED NO MINT, AND THAT IS WHY THIS ONE IS NARROW.** A cast of a call
+	// result, of a literal or of another cast's temporary is recorded in `ValueDeclaredAliasMap`, and
+	// `divisionOperandDomain` reads it through `divisionOperandAlias` — no new value, no new op, no
+	// codegen movement anywhere the answer does not actually change. `finishCast` WITHHOLDS that record
+	// for exactly one shape: an operand that was a BARE LOCAL REFERENCE, where the result IS the source
+	// and stamping it would make `a` claim the alias `b` was given. A fresh value is the only identity
+	// that shape can be given, so it is the only shape that mints.
+	//
+	// ⭐ **AND IT COSTS AN EXTRA OP ONLY WHERE A RANGE GUARD IS ALREADY BEING EMITTED.** It fires only
+	// when the source's domain is `signed` — the source declares no non-negative range — against an
+	// unsigned target, which is exactly the containment `rangeCoversRange` cannot prove, so A4f's
+	// elision never applies and the cast emits a runtime guard (or an E3005) regardless. `n as Byte`
+	// off an already-non-negative alias, and `3 as Byte`, stay the byte-for-byte no-ops they were.
+	function castChangesTheDivisionSignedness(value ValueId, targetAlias DeclaredAlias, sourceIsBareLocal bool) returns bool
+		if not sourceIsBareLocal 'theRecordCanCarryIt'
+			return false
+		end 'theRecordCanCarryIt'
+
+		return match targetAlias 'a'
+			declared(alias) gives self.aliasChangesTheDivisionSignedness(value, alias: alias)
+			undeclared gives false
+		end 'a'
+	end 'castChangesTheDivisionSignedness'
+
+	// The half of the question above that is about the ALIAS, split out exactly as its two siblings are.
+	//
+	// ⚠ The float arm is `aliasChangesTheDivisionProof`'s, for its reason: a ranged FLOAT alias's bounds
+	// are f64 BIT PATTERNS, which `rangeIsUnsigned` would read as a signed integer — and a `named`-tagged
+	// float would be given `StdType.i64` and land in a GPR.
+	function aliasChangesTheDivisionSignedness(value ValueId, alias RangedTypeAlias) returns bool
+		if aliasIsFloat(alias) 'floatAlias'
+			return false
+		end 'floatAlias'
+
+		if not rangeIsUnsigned(alias.low) 'targetAdmitsNegatives'
+			return false
+		end 'targetAdmitsNegatives'
+
+		return self.divisionOperandDomain(value) == DivisionOperandDomain.signed
+	end 'aliasChangesTheDivisionSignedness'
+
 	// ⭐⭐ **DOES THIS `as` CHANGE HOW THE VALUE WOULD BE STORED AS AN ARRAY ELEMENT — a byte-strided slot
-	// for a SUB-BYTE-PACKED field, or back?** The fourth thing a cast target can say, and the newest
-	// (`ranged-int-bit-packing`). An `Array with T` literal types its element off the values it is given, so
+	// for a SUB-BYTE-PACKED field, or back?** The FIFTH of `applyCast`'s five questions — it was the
+	// fourth until X10's review inserted the division-SIGNEDNESS one ahead of it, and the count is
+	// stated in `applyCast` alone so the two cannot drift apart again.
+	// An `Array with T` literal types its element off the values it is given, so
 	// a cast that moves an element between the two ladders has to be visible ON THE VALUE.
 	//
 	// ⚠⚠ **WITHOUT IT THE SAME WRITTEN TYPE PRODUCED THREE DIFFERENT ANSWERS — MEASURED, and one of them
@@ -26722,12 +26789,24 @@ export type Parser
 	//
 	// `exitCode` is `int(0 to u32.max)` — a declared non-negative range with no alias declaration to look
 	// up, placed here exactly as `valueIsUnsigned` places it.
+	//
+	// ⚠⚠ **IT READS THE CAST-RECORDED ALIAS AS WELL AS THE TAG COLUMN, AND THAT DIFFERENCE WAS FOUR
+	// SILENT WRONG ANSWERS (X10 review).** A cast to a non-negative alias that ADMITS ZERO —
+	// `int(0 to 255)`, or the builtin `ExitCode` — is deliberately a representational NO-OP
+	// (`applyCast`: it changes neither the shift fill nor the divide-by-zero proof nor the element
+	// packing), so it mints no value and the tag column still says what the SOURCE was. Read from the
+	// tag alone the operand answered `signed`, which dragged the whole divide signed and misread the
+	// OTHER operand: with `Word = int(0 to u64.max)` holding `u64.max`, `try (w / d)` answered **0 here
+	// and 6148914691236517205 in the bootstrap oracle**. `divisionOperandAlias` reads the record the
+	// cast already leaves, and the entry IS a proof — the `as` emits the range guard. The one spelling
+	// no record can carry, a cast of a BARE LOCAL (one value under two names), is what
+	// `castChangesTheDivisionSignedness` mints for.
 	function divisionOperandDomain(value ValueId) returns DivisionOperandDomain
 		if self.tagOf(value) == ValueTypeTag.exitCode 'exitCode'
 			return DivisionOperandDomain.declaredNonNegative
 		end 'exitCode'
 
-		match self.rangedAliasOfValueType(value) 'declaredType'
+		match self.divisionOperandAlias(value) 'declaredType'
 			declared(alias) then return DivisionOperandDomain.declaredNonNegative if rangeIsUnsigned(alias.low) else DivisionOperandDomain.signed
 			undeclared then break 'declaredType'
 		end 'declaredType'
