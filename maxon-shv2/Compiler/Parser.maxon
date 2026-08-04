@@ -1036,6 +1036,15 @@ export union ParseError implements Error
 	// verdict to the position. Both raise sites — a type reference and an `as` cast target — hand it the
 	// same two strings.
 	ambiguousTypeAlias(name String, candidates String, line LineNumber, column ColumnNumber)
+	// ⭐ A CLOSURE PARAMETER PAST THE FIRST, LEFT UNTYPED, IN THE ONE POSITION THAT TYPES ONE — the second
+	// `b` of `nums.map(function(a, b) gives a + b)`. Renders as **E2003** with the reference bootstrap's
+	// exact wording, positioned at the parameter's NAME.
+	//
+	// A container's `map` offers the element type to ONE parameter, because that is the arity its transform
+	// is declared at; a later parameter has no second position to be typed from and nothing to infer it by.
+	// Accepted, it lifted a closure whose ABI has one more slot than the runtime's `callIndirect` passes, and
+	// the extra parameter read the environment pointer as its value — see `ClosureParamTypeHint`.
+	uninferrableClosureParam(paramName String, line LineNumber, column ColumnNumber)
 end 'ParseError'
 
 // ⭐⭐ **ONE PARSER-DETECTED NAME DIAGNOSTIC WHOSE REPORT IS HELD BACK UNTIL EVERY FILE IS PARSED.**
@@ -1396,6 +1405,39 @@ union ParamDefaultOwner
 	closureLiteral
 	interfaceRequirement
 end 'ParamDefaultOwner'
+
+// ⭐⭐ **THE PARAMETER TYPE A CALL POSITION SUPPLIES TO AN UNTYPED CLOSURE LITERAL** — `m.map(function(p)
+// gives p)`, where `p` carries no annotation.
+//
+// ⭐ **shv2 DOES NOT INFER IT; ONE POSITION HANDS IT DOWN, AND THAT IS THE DEPARTURE.** The bootstrap types
+// an omitted closure parameter at TypeResolution from the call-arg slot it lands in — a whole-program answer
+// for a whole-program question. shv2's parser is single-pass and there is exactly ONE position in the
+// language where an argument's parameter type is known BEFORE the argument is parsed: a container's
+// `map`, whose transform is `function(Element) returns Element` by the declaration `map` is read from
+// (`stdlib/Interfaces.maxon:187`). So the element type is passed down rather than solved for, and every
+// other position keeps the clean refusal an omitted type has always been. A general inference pass would be
+// a different mechanism, wanted by no construct the corpus writes today.
+//
+// ⛔⛔ **THE OFFER IS FOR ONE PARAMETER, AND IT IS SPENT BY TAKING IT — the union carries the SPENT state
+// because a re-offered hint is a silent wrong answer.** This header used to assert that a `map` transform
+// takes ONE parameter, so "every omitted type" and "the only one" said the same thing; nothing enforced it,
+// and `parseFunctionParameters` re-offered the same hint on every iteration of its parameter loop. So
+// `nums.map(function(a, b) gives a + b)` typed BOTH parameters as the element, lifted a closure with three
+// ABI slots `(a, b, __env)`, and met a runtime `callIndirect` that passes exactly two — `b` read the env
+// POINTER as its value and `a + b` degraded to `a`. It compiled clean and printed a plausible number, which
+// is the worst shape a defect has; the reference bootstrap refuses the program (E2003). Spending the offer
+// is what makes "one parameter" a rule rather than a comment.
+union ClosureParamTypeHint
+	// The container's element type, on offer to the NEXT parameter this list reads — which is the FIRST one,
+	// since taking it turns the hint into `containerElementTaken`.
+	fromContainerElement(elementType MaxonType)
+	// The offer above, already taken. A LATER parameter left untyped has nothing to be typed from and no
+	// second position that could supply one, so it is refused as un-inferrable (E2003) — distinct from
+	// `none`, whose refusal is about a construct that infers nothing at all.
+	containerElementTaken
+	// No position is offering a type, so an omitted parameter type is a parse error.
+	none
+end 'ClosureParamTypeHint'
 
 // One captured parameter default awaiting its helper's parse (BATCH2 slice 4): the helper's name, the
 // parameter's declared type — which is the helper's declared RETURN type — and the token index of the
@@ -2266,6 +2308,35 @@ export let TrivialDestructor = 0 as ParsedInt
 // and the folding one at top level (`evalConstArrayLiteral`, P1.7 slice 2b). Two copies would let the same
 // mistake be described two ways depending on where it was written.
 let MixedArrayLiteralElementsMessage = "an array literal with mixed element types — every element must have the same type as the first"
+
+// ⭐ **THE NOUNS A BRACKETED LITERAL'S REFUSALS ARE COMPOSED FROM.** `[…]` spells TWO containers — an array,
+// whose one column is its ELEMENT, and a map, whose two are its KEY and its VALUE — and `literalColumnTypeFor`
+// serves all three, so the sentence is assembled from the construct plus the column rather than written out
+// three times.
+//
+// ⚠⚠ **`ArrayLiteralSubject` + `ArrayLiteralColumnNoun` REPRODUCE A PINNED SENTENCE BYTE-FOR-BYTE** —
+// `specs-shv2/character-ownership.md`'s `an-array-literal-element-is-not-a-character` quotes the composed
+// message in a `maxoncstderr` block. Changing either constant rewrites a committed expectation.
+//
+// The two column nouns are the ones `requireHashTableColumnType` / `parseMapColumnValue` / `requireMapColumnTypes`
+// were each spelling as their own bare `"key"` / `"value"` literal — one fact, four writings, which is what
+// naming them here retires.
+let ArrayLiteralSubject = "an array literal"
+let ArrayLiteralColumnNoun = "element"
+let MapLiteralSubject = "a map literal"
+let HashTableKeyColumnNoun = "key"
+let HashTableValueColumnNoun = "value"
+
+// ⭐ **THE `(key, value)` PAIR BOX'S VALUE SLOT, AS A FIELD INDEX** — the `_1` of the synthesized tuple
+// `__map_entries` fills, read by `emitMapEntriesArray` off the interned layout to get its displacement.
+//
+// ⚠ **IT IS 1 IN ITS OWN NUMBERING SPACE, AND SO ARE TWO OTHER CONSTANTS IN TWO OTHER SPACES.** This site
+// used to pass `SignatureIndex.MapValueArgPosition`, which is a `TypeParamId` — the position of `Map`'s
+// value TYPE ARGUMENT, the thing `mapValueType` reads back — and it happened to have the same number. The
+// runtime's own `MapRuntime.PairKeySlotOffset` is a third space again: a byte DISPLACEMENT, which is 0.
+// Describing the pair's layout with an argument position makes a renumber of either space silently move the
+// other's answer, so the layout says which space it is in.
+let MapPairValueFieldIndex = 1 as FieldIndex
 
 // ⭐ **ONE `, e` STEP OF AN ARRAY LITERAL — the parsed element and where its FIRST TOKEN was.** The pair
 // travels together because its two consumers each need both and for the same reason: the value is what gets
@@ -3426,6 +3497,9 @@ let InsertMethod = b"insert"
 let CloneMethod = b"clone"
 let CountMethod = b"count"
 let IsEmptyMethod = b"isEmpty"
+// `map(transform)` — the element-wise transform BOTH an `Array` and a `Set` serve, so it belongs in this
+// shared block for the block's own reason: one spelling, two dispatchers.
+let MapMethod = b"map"
 
 // `Map.upsert(key, value: v)` — insert-or-replace. It joins the shared block rather than sitting in
 // `MapRuntime.maxon` for the reason the `Set` five did: a method-name SPELLING belongs where the parser
@@ -3582,9 +3656,15 @@ end 'bufferSurfaceMemberNames'
 // `count` is the `Array`'s spelling of what the buffer calls `length`; the two share an emission and NEVER
 // a surface.
 //
-// ⚠ **AND THE NAMES NEITHER SURFACE HAS** — `map`/`contains`/… — are simply not on this list, which is the
+// ⚠ **AND THE NAMES NEITHER SURFACE HAS** — `contains`/`filter`/… — are simply not on this list, which is the
 // whole of what the refusal now claims. A rung that builds one adds its line HERE and has nothing else to
 // remember; see `rosterRefusalSentence` for why the refusal stopped enumerating them.
+//
+// ⚠⚠ **`map` ARRIVED BY EXACTLY THAT ROUTE, AND IT MOVED SEVENTEEN COMMITTED EXPECTATIONS WITH IT.** The
+// refusal RENDERS this list, so growing the surface rewrites every `maxoncstderr` block that pinned the
+// sentence — `managed-memory-methods.md` and `void-call-result.md` between them pin it sixteen times about the
+// `Array` surface. That is the derived-message property working as designed (a diagnostic enumerating what
+// the compiler supplies must move when the surface grows), and it is the standing cost of adding a line here.
 function arraySurfaceMemberNames() returns ByteArrayArray
 	var names = ByteArrayArray.create()
 	names.push(ManagedMemoryFieldName)
@@ -3605,6 +3685,7 @@ function arraySurfaceMemberNames() returns ByteArrayArray
 	names.push(ArrayClearMethod)
 	names.push(InsertMethod)
 	names.push(AppendMethod)
+	names.push(MapMethod)
 	return names
 end 'arraySurfaceMemberNames'
 
@@ -3963,10 +4044,16 @@ function listMethodMutatesReceiver(name ByteArray) returns bool
 	return name.equals(AppendMethod) or name.equals(ListPrependMethod) or name.equals(ListRemoveFirstMethod)
 end 'listMethodMutatesReceiver'
 
-// ⭐⭐ **DOES A VALUE'S TAG FIT A HASH-TABLE COLUMN WHOSE DECLARED TYPE IS `declared`?** — THE rule, asked
+// ⭐⭐ **DOES A VALUE'S TAG FIT A CONTAINER SLOT WHOSE DECLARED TYPE IS `declared`?** — THE rule, asked
 // by every container column: a `Set`'s key, a `Map`'s key and a `Map`'s value. The three containers word
 // their refusals differently (each names the type it is), but the RULE must not fork, which is why only the
 // verdict lives here.
+//
+// ⚠ **`map`'s TRANSFORM RETURN TYPE IS THE FOURTH READER, AND IT IS THE SAME QUESTION.** "May this value be
+// stored in a slot declared `declared`?" is what `requireElementTransform` asks of what the transform
+// ANSWERS — the array's element column is the slot, and the ranged-alias measurement below is the very reason
+// (a closure over `typealias Integer = int(…)` returns `named` where the element reads `integer`, and the
+// narrow spelling would refuse `[1,2,3].map(function(x Integer) gives x * 2)` — the construct itself).
 //
 // ⚠ **"IS THIS AN INT?" IS `tagIsIntegral`, NOT `== ValueTypeTag.integer`, AND THE NARROW SPELLING WAS A
 // MEASURED FALSE REFUSAL.** A value whose static type is a RANGED ALIAS carries the `named` tag until
@@ -6808,11 +6895,27 @@ export type Parser
 	var siblingReceivers as SiblingReceiverMap
 	// The type `siblingReceivers` was built for — the memo key. Empty until the first lazy build, and compared
 	// against `enclosingType` so a sibling type reuses nothing stale.
+	//
+	// ⚠⚠ **THE NAME ALONE STOPPED BEING A KEY WHEN AN INTERFACE EXTENSION COULD ENTER A TYPE'S SCOPE FROM
+	// OUTSIDE ITS BODY**, which is why `siblingReceiverScanBody` rides beside it. `extension Pointlike` enters
+	// the scope of `Coord` and walks the EXTENSION's member list; `type Coord` further down the same file
+	// enters the same name and must walk its OWN. Keyed by name alone the second walk is a memo hit on the
+	// first, and a bare sibling call inside `type Coord` would resolve against the extension's method list.
 	var siblingReceiverScanType as ByteArray
+	// The body `siblingReceivers` was built from — the other half of the memo key. A declaration body is
+	// uniquely identified within a file by where it STARTS, which is the fact the name cannot supply.
+	var siblingReceiverScanBody as TokenIndex
 	// The token index at which the enclosing type's body begins (past the header and any `uses` clause) — set by
 	// `parseTypeDeclaration`, and where the lazy `siblingReceiverMap` walk starts. The cursor has long since
 	// moved on by the time a method body's call needs it, so the start must be remembered rather than re-derived.
 	var enclosingTypeBodyStart as TokenIndex
+	// ⭐ **THE INTERFACE WHOSE EXTENSION BODY IS BEING PARSED** — empty everywhere else. An extension body may
+	// call the interface's own REQUIREMENTS as bare sibling calls (`return inc(tag())`), and those methods are
+	// declared on the CONFORMER, in another declaration and possibly another file, so no token walk of this
+	// body can find them. `ensureSiblingReceivers` reads this to add them. It is the interface's requirements
+	// and NOT the conformer's whole method set, deliberately: an extension body may rely on exactly what the
+	// interface guarantees, and nothing a particular conformer happens to also declare.
+	var extensionInterfaceName as ByteArray
 	// A REUSED sink for the REAL parse's generic-instance typealiases (P1.6-A). The whole-program index
 	// records every generic alias in the SWEEP (`foldFile`), so the real parse's `readTypeAliasDeclaration`
 	// has nowhere to fold one and nothing downstream reads it — but the shared reader records into a
@@ -6953,6 +7056,13 @@ export type Parser
 	// closure nested inside a closure detects a capture of any enclosing frame, not just its immediate
 	// parent — which is what stops an outer local silently resolving to a same-named global.
 	var closureCaptureScopes as ScopeArray
+	// ⭐ **THE PARAMETER TYPE THE CURRENT CALL POSITION OFFERS AN UNTYPED CLOSURE LITERAL** — see
+	// `ClosureParamTypeHint`. `none` everywhere except across the one `parseExpression` that reads a
+	// container `map`'s transform argument, and `parseClosureExpression` TAKES it (reads and clears) at
+	// entry, so a closure nested inside the transform's body sees `none` and cannot adopt a type meant for
+	// the outer one. It is deliberately NOT among that function's ~25 saved per-function columns for exactly
+	// that reason: it is consumed before the body parses rather than held across it.
+	var closureParamHint as ClosureParamTypeHint
 	// ⭐ **THE PRE-TERNARY MOVE BASE FOR A CODE PATH WITH NO OWNED BINDINGS (P1.5-A2c).** An inline
 	// conditional `<t> if <c> else <f>` parses its TRUE arm before the `if` reveals the form, so the
 	// pre-arm move state must be snapshotted at the top of EVERY full expression to rewind the FALSE
@@ -7150,7 +7260,9 @@ export type Parser
 			typeDescriptorNeeds: sharedEmptyDescriptorNeeds,
 			siblingReceivers: sharedEmptySiblingReceivers,
 			siblingReceiverScanType: EmptySourceText,
+			siblingReceiverScanBody: 0,
 			enclosingTypeBodyStart: 0,
+			extensionInterfaceName: EmptySourceText,
 			genericAliasScratch: GenericAliasEntryArray.create(),
 			emptyTypeParamPositions: TypeParamIdArray.create(),
 			emptyTypeParams: ByteArrayArray.create(),
@@ -7167,6 +7279,7 @@ export type Parser
 			lastFieldReadOffset: 0,
 			closureReturns: FuncReturnTypeMap.create(),
 			closureCaptureScopes: ScopeArray.create(),
+			closureParamHint: ClosureParamTypeHint.none,
 			emptyMoveMark: MoveMark.create(BoolArray.create(), values: ValueIdArray.create()),
 			isStdlibSource: isStdlibSource,
 			declaresCompilerInternalNames: declaresCompilerInternalNames,
@@ -7295,6 +7408,10 @@ export type Parser
 		// Score, Weight` conformance both resolve whether `Duo` is declared above, below, or in another file.
 		// A POSITION, not the declaration: see `recordScannedInterface`.
 		var interfaceSites = InterfaceDeclSiteArray.create()
+		// ⭐ Interface EXTENSION declaration SITES — one entry per `extension <Interface>`, folded whole-program
+		// so `Queries.foldExtensionDeclarations` can publish each extension method's signature once the set of
+		// CONFORMERS is complete. A POSITION, not the declaration: see `ExtensionDeclSite`.
+		var extensionSites = ExtensionDeclSiteArray.create()
 		// ⭐ Every FREE function's DIRECTORY-QUALIFIED spelling (N1b) — `utils.helper` for a `helper` declared
 		// in `utils/` — so a `utils.helper()` written in another file can be told from a `Type.method` call of
 		// the same token shape. Empty for a root-level file, which is every file in a single-directory program.
@@ -7505,12 +7622,22 @@ export type Parser
 				continue
 			end 'isInterfaceDecl'
 
+			// An `extension` DECLARATION, gated on depth 0 like `type`/`enum`/`interface`. It MUST be consumed
+			// whole here for `recordScannedInterface`'s reason turned inside out: its members ARE full method
+			// bodies, so leaving them to the outer loop would register every one as a FREE function under its
+			// bare name — `count`, not `IntList.count` — poisoning the whole-program return-type table with a
+			// name no call site means.
+			if depth == 0 and self.at(TokenKind.extension) 'isExtensionDecl'
+				self.recordScannedExtension(extensionSites)
+				continue
+			end 'isExtensionDecl'
+
 			depth = self.blockDepthAfter(depth)
 			self.advance()
 		end 'scan'
 		self.pos = resume
 
-		index.foldFile(entries, aliases: aliases, functionAliases: functionAliases, structs: structs, enums: enums, genericAliasEntries: genericAliases, innerAliasEntries: innerAliases, methodInnerAliasParamEntries: methodInnerAliasParams, interfaceSites: interfaceSites, bindings: bindings, paramConsumes: paramConsumes, paramDefaults: paramDefaults, throwsEntries: throwsEntries, freeFunctionNames: freeFunctionNames, moduleDirectory: index.moduleDirectoryOf(self.filePath), fileTypeNames: self.artifact.typeNames, isStdlibSource: self.isStdlibSource)
+		index.foldFile(entries, aliases: aliases, functionAliases: functionAliases, structs: structs, enums: enums, genericAliasEntries: genericAliases, innerAliasEntries: innerAliases, methodInnerAliasParamEntries: methodInnerAliasParams, interfaceSites: interfaceSites, extensionSites: extensionSites, bindings: bindings, paramConsumes: paramConsumes, paramDefaults: paramDefaults, throwsEntries: throwsEntries, freeFunctionNames: freeFunctionNames, moduleDirectory: index.moduleDirectoryOf(self.filePath), fileTypeNames: self.artifact.typeNames, isStdlibSource: self.isStdlibSource)
 
 		// Intern the `Array with integer` literal instance if this file materializes one — after `foldFile`,
 		// so its giid follows the file's named generic instances (a stable, source-path-ordered assignment).
@@ -9760,13 +9887,32 @@ export type Parser
 		// name.
 		let visibility = self.scannedVisibility()
 		let nameTok = try self.readTypeHeader() otherwise return
-		self.enterTypeScope(nameTok, isEnum: false)
+		self.enterTypeScope(nameTok.value, isEnum: false)
 
 		var layout = StructLayout.create(nameTok.value, visibility: visibility, declFilePath: self.filePath)
 		// `uses T` (P1.6-A) — parsed here, in the tolerant sweep, exactly as `parseTypeDeclaration` does
 		// it, so the scanned layout carries the SAME parameter list the real parse reads a field's
 		// `typeParameter(pos)` against. The cursor lands past the clause, at the type body the loop walks.
 		self.openTypeParamScope(layout)
+
+		// ⭐ **`implements I1, I2` — THE NAMES ONLY, AND THAT IS WHY IT IS NOT `parseTypeImplementsClause`.**
+		// The sweep needs this list for exactly one reader: an INTERFACE EXTENSION is expanded onto every type
+		// whose clause names its interface, and that expansion must land in the whole-program signature index
+		// before any file is parsed. The real parse's `parseTypeImplementsClause` records the richer
+		// `ConformanceDecl` (bindings + position) that `checkConformance` verifies from; see
+		// `StructLayout.conformsTo` for why the two records are deliberately not one.
+		//
+		// ⚠ **A `with` BINDING ENDS THE READ, so `implements Container with Score, Other` records `Container`
+		// alone.** Whether that comma opens a second ARGUMENT or a second INTERFACE is the interface's `uses`
+		// ARITY (R7), and the arity is a fact only the COMPLETE index holds — this walk is what builds it. The
+		// consequence is bounded and is a missing extension, never a wrong one: a type may not receive the
+		// extensions of an interface it names after a `with`. Reading it here as a second interface would be
+		// the R7 false reject in the other direction.
+		//
+		// Tolerant like every other read on this walk: a malformed clause records no conformance and leaves
+		// the positioned diagnostic to the real parse. The cursor is left wherever the read stopped, which the
+		// body loop below steps over token by token exactly as it stepped over the whole clause before.
+		layout.recordConformances(try self.readOptionalImplementsClause() otherwise sharedEmptyDeclaredConformances)
 
 		// The cursor now sits at the type body's first token — captured for the transitive array-feed post-pass
 		// (P1.7 slice 3b-iv), which re-walks the body once EVERY method's parameter list is known. `feedStart` marks
@@ -9935,6 +10081,140 @@ export type Parser
 		index.recordInterfaceDeclaration(iface)
 	end 'foldInterfaceDeclarationInto'
 
+	// ⭐ **CONSUME A WHOLE `extension <Interface>` DECLARATION IN THE TOLERANT SWEEP** — the twin of
+	// `recordScannedInterface`, recording a POSITION and nothing else for a reason that is stronger here than
+	// there: an extension's methods are declared on the CONFORMERS of its interface, and a conformer may be
+	// declared in a file this sweep has not reached. See `ExtensionDeclSite`.
+	//
+	// It walks the body itself and MUST: an extension member is a full method with its own `end`, so the
+	// caller's loop would register each under its BARE name as a free function (see the arm that calls this).
+	// The depth counter is `recordScannedType`'s — a named `function` opens a block the caller does not count,
+	// `blockDepthAfter` counts the rest — and the terminator is asked through `closesBlockAt`, never a raw
+	// `TokenKind.end`, because a method may be NAMED `end` (D8).
+	function recordScannedExtension(sites ExtensionDeclSiteArray)
+		// The site is the cursor BEFORE the keyword is consumed, because that is where the two later passes
+		// have to be put back down: both open by consuming `extension`, exactly as the real parse reaches it.
+		// The interface NAME travels with the site so those passes can find the conformers without re-reading
+		// the header first.
+		sites.push(ExtensionDeclSite.create(self.filePath, tokenPos: self.pos, interfaceName: self.identifierNameAt(self.pos + 1)))
+
+		try self.consume(TokenKind.extension) otherwise return
+		self.skipPastBlockEnd()
+	end 'recordScannedExtension'
+
+	// ⭐ **LAND THE CURSOR PAST THE `end` THAT CLOSES THE BLOCK IT IS CURRENTLY INSIDE** — entered anywhere
+	// within exactly one open block, and landing just past that block's own `end` and its optional label.
+	//
+	// FOUR walks need it and they must agree to the token, because they are four answers to "where does this
+	// construct stop?": the tolerant sweep steps over a whole `extension`, the whole-program fold steps over
+	// each of its METHOD BODIES after taking that method's signature, the fold's driver and the REAL parse
+	// step over the whole declaration again after publishing / emitting each conformer's. A second spelling of
+	// the extent is a resume point one token off, which reads the next declaration into this one.
+	//
+	// The depth counter is `recordScannedType`'s: a NAMED `function` opens a block `blockDepthAfter` does not
+	// count (it knows `if`/`while`/`match`), a closure literal is `function(` with no name and no `end`, and a
+	// closer is asked through `closesBlockAt` — never a raw `TokenKind.end` — because a method may be NAMED
+	// `end` (D8). An `extension` keyword is the block opener for its callers' purposes, so they enter with the
+	// cursor just past it; the interface name after it is an identifier, which opens and closes nothing.
+	function skipPastBlockEnd()
+		var depth = 1 as BlockDepth
+		while not self.isEof() 'walk'
+			if self.functionDeclarationAt(self.pos) 'opensAMethod'
+				depth = depth + 1
+				self.advance()
+				continue
+			end 'opensAMethod'
+
+			// The closer test is taken BEFORE the counter moves, because "this token closed the outermost
+			// block" is the conjunction of the two and neither half says it alone.
+			let closes = self.closesBlockAt(self.pos)
+			depth = self.blockDepthAfter(depth)
+			self.advance()
+			if closes and depth == 0 'closesTheOutermost'
+				self.skipOptionalLabel()
+				return
+			end 'closesTheOutermost'
+		end 'walk'
+	end 'skipPastBlockEnd'
+
+	// ⭐⭐ **PUBLISH THE `extension` AT `tokenPos` ONTO EVERY CONFORMER, IN THE WHOLE-PROGRAM INDEX.** The
+	// second half of `recordScannedExtension`, driven by `Queries.foldExtensionDeclarations` once every file
+	// has folded — which is the whole point of the split.
+	//
+	// ⭐ **IT IS THE SAME `recordScannedSignature` A `type`'s OWN METHOD GOES THROUGH, RUN ONCE PER
+	// CONFORMER WITH `enclosingType` SET TO THAT CONFORMER.** So `function count() returns Integer` inside
+	// `extension Countable` publishes exactly what `function count() returns Integer` written inside
+	// `type IntList` would have published, under exactly the name `declaredMethodName` gives it —
+	// `IntList.count`. Nothing downstream learns that extensions exist: a call site types `list.count()`
+	// through the ordinary method door.
+	//
+	// ⚠ **THE CONFORMER LIST AND ITS ORDER ARE `conformersOf`'s, AND THE REAL PARSE WALKS THE IDENTICAL ONE.**
+	// A signature published here with no body emitted there — or the reverse — is a link failure at best and
+	// a call typed against the wrong declaration at worst, so the two halves share one answer rather than each
+	// deriving "which types conform".
+	//
+	// TOLERANT, exactly as every other sweep entry point: a member it cannot read publishes nothing and
+	// leaves the positioned diagnostic to the real parse, which reaches the same tokens moments later.
+	export function foldExtensionDeclarationInto(index ProgramSignatures, site ExtensionDeclSite)
+		var entries = FuncReturnTypeEntryArray.create()
+		var paramConsumes = ParamConsumeEntryArray.create()
+		var paramDefaults = ParamDefaultEntryArray.create()
+		var throwsEntries = ThrowsClauseEntryArray.create()
+		var methodInnerAliasParamOut = MethodInnerAliasParamEntryArray.create()
+		// An extension member is always a METHOD (`enclosingType` is the conformer), so nothing is ever pushed
+		// here — but `recordScannedSignature` writes through the parameter, and passing a shared empty to a
+		// routine that MAY push is how a shared empty stops being empty.
+		var freeFunctionNameOut = ByteArrayArray.create()
+
+		let conformers = index.conformersOf(site.interfaceName)
+		for conformer in conformers 'eachConformer'
+			self.pos = site.tokenPos
+			// It cannot fail — the site was recorded AT this keyword — but the sweep's discipline is that a
+			// read it cannot make publishes nothing rather than throwing, and `break` (not `return`) keeps the
+			// fold below reachable so earlier conformers' entries are not silently dropped along with it.
+			try self.consume(TokenKind.extension) otherwise break
+			// The header's own name token is stepped over rather than re-read: the site already carries it,
+			// and re-deriving it here would be a second reader of one fact.
+			self.advance()
+			self.enterTypeScope(conformer, isEnum: false)
+
+			while not self.isEof() 'members'
+				self.skipNewlines()
+				if self.closesBlockAt(self.pos) 'closesExtension'
+					break
+				end 'closesExtension'
+
+				// The member header is read through the SAME two readers `parseTypeMember` reads it through —
+				// `consumeOptionalVisibility` (so a contextual `module` is recognized identically) and the bare
+				// `static` test — so the sweep and the real parse cannot disagree about which member takes a
+				// receiver. A member neither understands ends the scan for this conformer rather than being
+				// stepped over: half a signature set is worse than none, and the real parse refuses the
+				// declaration with a position moments later.
+				_ = try self.consumeOptionalVisibility() otherwise break
+				if self.at(TokenKind.static) 'staticMember'
+					self.advance()
+				end 'staticMember'
+				if not self.functionDeclarationAt(self.pos) 'notAMethod'
+					break
+				end 'notAMethod'
+
+				self.advance()
+				self.recordScannedSignature(entries, paramConsumes: paramConsumes, paramDefaults: paramDefaults, throwsEntries: throwsEntries, methodInnerAliasParamOut: methodInnerAliasParamOut, freeFunctionNameOut: freeFunctionNameOut)
+				// `recordScannedSignature` leaves the cursor at the method BODY's first token, i.e. inside the
+				// one block the method's own `end` closes — exactly this walk's entry condition.
+				self.skipPastBlockEnd()
+			end 'members'
+
+			self.closeTypeParamScope()
+		end 'eachConformer'
+
+		// Folded through `ProgramSignatures.foldFile` — the SAME door a file's own declarations go through, so
+		// there is one place that decides what a scanned signature means. Everything an extension does not
+		// contribute is passed empty; the type-name interner is this reader's own artifact's, exactly as the
+		// per-file sweep passes its own.
+		index.foldFile(entries, aliases: RangedTypeAliasArray.create(), functionAliases: FunctionTypeAliasArray.create(), structs: StructLayoutArray.create(), enums: EnumLayoutArray.create(), genericAliasEntries: GenericAliasEntryArray.create(), innerAliasEntries: InnerAliasEntryArray.create(), methodInnerAliasParamEntries: methodInnerAliasParamOut, interfaceSites: InterfaceDeclSiteArray.create(), extensionSites: ExtensionDeclSiteArray.create(), bindings: TopLevelDeclArray.create(), paramConsumes: paramConsumes, paramDefaults: paramDefaults, throwsEntries: throwsEntries, freeFunctionNames: freeFunctionNameOut, moduleDirectory: index.moduleDirectoryOf(self.filePath), fileTypeNames: self.artifact.typeNames, isStdlibSource: self.isStdlibSource)
+	end 'foldExtensionDeclarationInto'
+
 	// Cursor is AT `enum`/`union`. Append the enum/union it declares and leave the cursor PAST the
 	// declaration's `end` — `recordScannedType`'s twin.
 	//
@@ -9963,7 +10243,7 @@ export type Parser
 		try self.consume(TokenKind.union if isUnion else TokenKind.enum) otherwise return
 		let nameTok = try self.consume(TokenKind.identifier) otherwise return
 		let conformsTo = try self.readOptionalImplementsClause() otherwise return
-		self.enterTypeScope(nameTok, isEnum: true)
+		self.enterTypeScope(nameTok.value, isEnum: true)
 
 		var layout = EnumLayout.create(nameTok.value, isUnion: isUnion, conformsTo: conformsTo, visibility: visibility, declFilePath: self.filePath, backing: EnumBacking.unresolved)
 		var counter = EnumTagCounter.create()
@@ -10039,8 +10319,11 @@ export type Parser
 	// It also resets the three PER-DECLARATION scopes, for the reason `closeTypeParamScope` restores them:
 	// a sibling declaration's `Idx`, `T` or `where` constraint must not leak into this one. All three point
 	// at their SHARED empty, so entering a scope allocates nothing.
-	function enterTypeScope(nameTok Token, isEnum bool)
-		self.enclosingType = nameTok.value
+	// ⚠ It takes the NAME and not the name TOKEN, because one caller has no token to give: an interface
+	// extension enters the scope of each CONFORMING type in turn, and those names come from the whole-program
+	// conformance relation rather than from any token in the extension's own file.
+	function enterTypeScope(name ByteArray, isEnum bool)
+		self.enclosingType = name
 		self.enclosingTypeIsEnum = isEnum
 		self.enclosingTypeParams = self.emptyTypeParams
 		self.enclosingInnerAliases = sharedEmptyInnerAliases
@@ -10399,8 +10682,8 @@ export type Parser
 	end 'skipBalancedParens'
 
 	// One top-level declaration: an optional `export`, then a `function`, a `typealias` in any of its
-	// three forms, a `type`, an `enum`, a `union`, an `interface`, or a `let`/`var` binding. Everything
-	// else (`extension`, ...) is out of the slice and rejected with a positioned error.
+	// three forms, a `type`, an `enum`, a `union`, an `interface`, an `extension`, or a `let`/`var` binding.
+	// Anything else is rejected with a positioned error.
 	//
 	// ⭐ **`visibility` IS NOW LOAD-BEARING FOR A TYPEALIAS TOO (P1.9), where it used to be read and
 	// dropped.** It decides two things, and neither could be answered without it:
@@ -10451,7 +10734,11 @@ export type Parser
 		end 'isEnumDecl' else if self.at(TokenKind.interface) 'isInterfaceDecl'
 			try self.parseInterfaceDeclaration()
 			self.recordTypeName(nameIndex, kind: TypeDeclKind.interfaceType, visibility: visibility)
-		end 'isInterfaceDecl' else if self.atTopLevelBindingKeyword() 'isBinding'
+		end 'isInterfaceDecl' else if self.at(TokenKind.extension) 'isExtensionDecl'
+			// It mints NO type name, so no `recordTypeName` — an extension names nothing, it adds methods to
+			// types other declarations named. See `parseExtensionDeclaration`.
+			try self.parseExtensionDeclaration()
+		end 'isExtensionDecl' else if self.atTopLevelBindingKeyword() 'isBinding'
 			// The declaration EMITS NOTHING — for a `var` exactly as for a `let`. A constant inlines at
 			// every read; a var's slot is laid down by the backend from the arena
 			// (`ProgramSignatures.declaredGlobals`), and its every read and write is emitted at the USE
@@ -11725,7 +12012,7 @@ export type Parser
 		// (see `recordScannedType`).
 		try self.requireUnreservedName(nameTok)
 		try self.requireTypeNameNotCompilerOwned(nameTok)
-		self.enterTypeScope(nameTok, isEnum: false)
+		self.enterTypeScope(nameTok.value, isEnum: false)
 
 		var layout = StructLayout.create(nameTok.value, visibility: visibility, declFilePath: self.filePath)
 		// `uses T` (P1.6-A) — parsed here so `parseTypeReference` recognizes `T` in the fields and
@@ -11758,14 +12045,10 @@ export type Parser
 		self.enclosingTypeBodyStart = self.pos
 
 		while true 'members'
-			self.skipNewlines()
-			if self.at(TokenKind.end) 'closes'
+			let atEnd = try self.atDeclarationBodyEnd()
+			if atEnd 'closes'
 				break
 			end 'closes'
-			if self.isEof() 'eof'
-				let tok = self.current()
-				throw ParseError.unexpectedEof(tok.line, column: tok.column)
-			end 'eof'
 
 			if self.atStructFieldKeyword() 'isField'
 				try self.readStructFieldInto(layout)
@@ -11781,6 +12064,97 @@ export type Parser
 		self.artifact.recordStructType(layout)
 		self.closeTypeParamScope()
 	end 'parseTypeDeclaration'
+
+	// The member list's TERMINATOR test, shared by a `type` body and an `extension` body: blank lines are
+	// skipped, an `end` closes, and EOF is the unterminated-declaration throw. The two bodies differ only in
+	// what a member may BE — one may declare storage and the other may not — so only the loop BODY is theirs.
+	function atDeclarationBodyEnd() returns bool throws ParseError
+		self.skipNewlines()
+		if self.at(TokenKind.end) 'closes'
+			return true
+		end 'closes'
+
+		if self.isEof() 'eof'
+			let tok = self.current()
+			throw ParseError.unexpectedEof(tok.line, column: tok.column)
+		end 'eof'
+
+		return false
+	end 'atDeclarationBodyEnd'
+
+	// ⭐⭐ **`extension <Interface> … end` — MONOMORPHIZED BY RE-PARSE, ONE PASS PER CONFORMING TYPE.**
+	//
+	// An extension method has ONE source body and must become a CONCRETE method of every type whose
+	// `implements` clause names the interface, because shv2 dispatches statically: `list.count()` is an
+	// ordinary direct call to `IntList.count`, and `IntList.count` has to exist as a function. So the body's
+	// TOKENS are parsed again for each conformer, with `enclosingType` set to that conformer — which is
+	// exactly the state `type IntList`'s own body would have been parsed in. Nothing downstream learns that
+	// extensions exist: `declaredMethodName` names the method `IntList.count`, `enclosingSelfType` types the
+	// receiver `structRef(IntList)`, and the call site resolves through the ordinary method door.
+	//
+	// ⭐⭐ **RE-PARSE RATHER THAN IR-CLONE, AND THAT IS THE DEPARTURE FROM BOTH REFERENCES.** v1 captures the
+	// body once into `project.unresolvedExtensions` and clones the IR per substitution
+	// (`ParseDelta.MonomorphizeExtensions`); the C# bootstrap clones MLIR functions
+	// (`FunctionCloner`). Both then have to hunt down every construct inside the clone whose identity is
+	// per-substitution — which is precisely what the bootstrap's `SpecializeClosureName` +
+	// `ClosureSpecializations` drain exists for, and what v1 panics on with *"closure '_$closure_N'
+	// referenced from a monomorphized extension body"*. Re-parsing has NO clone and therefore no such hunt:
+	// every ValueId, every lifted closure and every temporary is MINTED FRESH by the parser, in the conformer's
+	// own scope. A closure inside `callTag` lifts to `Three.callTag$closure_0` on one pass and
+	// `Seven.callTag$closure_0` on the next — two distinct functions, each with its own `tag()` resolved
+	// against its own receiver — because the lifted name is derived from the ENCLOSING FUNCTION's name, which
+	// is already per-conformer. The substitution-dependent-closure miscompile is unrepresentable rather than
+	// cured. It costs one parse of the body per conformer, which is exactly the code that has to be generated.
+	//
+	// ⚠ **THE BODY IS NOT PARSED AT ALL WHEN NOTHING CONFORMS**, so an extension on an interface no type
+	// implements is unchecked. That is the same bargain a generic body strikes in a monomorphizing compiler,
+	// and the alternative — checking it against a `Self` that has no type — is not available.
+	//
+	// ⚠ The cursor is re-seated from the body start each pass and, at the end, walked past the declaration's
+	// own `end` through `skipPastBlockEnd` — the same walk the sweep used, so the real parse and the sweep
+	// cannot disagree about where this declaration stops. That also makes the zero-conformer case need no arm
+	// of its own.
+	//
+	// An `export`/`module` modifier on the `extension` keyword is consumed by `dispatchTopLevel` and means
+	// nothing here: an extension declares no name to make visible, and each of its METHODS carries its own
+	// visibility exactly as a `type`'s members do (`parseTypeMember`).
+	function parseExtensionDeclaration() throws ParseError
+		try self.consume(TokenKind.extension)
+		let interfaceTok = try self.consume(TokenKind.identifier)
+		let bodyStart = self.pos
+
+		// The conformer list is `conformersOf`'s — the SAME answer, in the SAME order, that
+		// `foldExtensionDeclarationInto` published a signature for. A body emitted here with no signature
+		// published there is a call that cannot be typed; a signature with no body is a link failure.
+		for conformer in self.signatures.conformersOf(interfaceTok.value) 'eachConformer'
+			self.pos = bodyStart
+			self.enterTypeScope(conformer, isEnum: false)
+			// Where the sibling-receiver walk begins for a bare call in these bodies — the EXTENSION's member
+			// list, not the conformer's, because a bare call here may name a sibling extension method. The
+			// interface's own requirements are added to that map by `ensureSiblingReceivers`, which is what
+			// makes `tag()` resolve; see `extensionInterfaceName`.
+			self.enclosingTypeBodyStart = bodyStart
+			self.extensionInterfaceName = interfaceTok.value
+
+			while true 'members'
+				let atEnd = try self.atDeclarationBodyEnd()
+				if atEnd 'closes'
+					break
+				end 'closes'
+
+				// An extension member is a TYPE member — same visibility, same `static`, same `function`.
+				// A `var`/`let` is refused by that reader (E2001 at the keyword), which is the right answer:
+				// an extension adds behaviour, never storage, so there is no layout for a field to join.
+				try self.parseTypeMember()
+			end 'members'
+
+			self.closeTypeParamScope()
+			self.extensionInterfaceName = EmptySourceText
+		end 'eachConformer'
+
+		self.pos = bodyStart
+		self.skipPastBlockEnd()
+	end 'parseExtensionDeclaration'
 
 	// ⭐ **`interface Name [extends …] [uses …] … end` (P1.7a slice 1)** — the FRONT-END half of interfaces,
 	// as the REAL parse reaches it. Its whole effect is the `IrInterface` it puts on this file's artifact, which
@@ -11865,7 +12239,7 @@ export type Parser
 		// An interface is neither a struct nor an enum, and `isEnum: false` is the right answer for the one
 		// thing the kind decides: a `Self` in an interface method's signature is a `structRef`, which is what
 		// `checkConformance` substitutes the CONFORMING type into (and only a `type` may conform at this rung).
-		self.enterTypeScope(nameTok, isEnum: false)
+		self.enterTypeScope(nameTok.value, isEnum: false)
 
 		var extendsInterfaces = ByteArrayArray.create()
 		var associatedTypeNames = ByteArrayArray.create()
@@ -11998,7 +12372,7 @@ export type Parser
 		// would be a second way for the columns to come apart.
 		var paramSurfaces = DeclaredSurfaceArray.create()
 		try self.consume(TokenKind.leftParen)
-		try self.parseFunctionParameters(paramNames, paramTypes: paramTypes, paramRanges: paramRanges, paramSurfaces: paramSurfaces, owner: ParamDefaultOwner.interfaceRequirement)
+		try self.parseFunctionParameters(paramNames, paramTypes: paramTypes, paramRanges: paramRanges, paramSurfaces: paramSurfaces, owner: ParamDefaultOwner.interfaceRequirement, paramTypeHint: ClosureParamTypeHint.none)
 		try self.consume(TokenKind.rightParen)
 		// NOTED, not thrown — see `requireNoUnstorableRequirementType` for why this reader may not refuse.
 		if let existential = try firstExistentialParam(paramTypes, paramRanges: paramRanges) 'existentialParam'
@@ -12327,7 +12701,7 @@ export type Parser
 		try self.requireUnreservedName(nameTok)
 		try self.requireTypeNameNotCompilerOwned(nameTok)
 		let conformsTo = try self.readOptionalImplementsClause()
-		self.enterTypeScope(nameTok, isEnum: true)
+		self.enterTypeScope(nameTok.value, isEnum: true)
 
 		var layout = EnumLayout.create(nameTok.value, isUnion: isUnion, conformsTo: conformsTo, visibility: visibility, declFilePath: self.filePath, backing: EnumBacking.unresolved)
 		var counter = EnumTagCounter.create()
@@ -12729,7 +13103,7 @@ export type Parser
 		end 'receiverParam'
 
 		try self.consume(TokenKind.leftParen)
-		try self.parseFunctionParameters(paramNames, paramTypes: paramTypes, paramRanges: paramRanges, paramSurfaces: paramSurfaces, owner: ParamDefaultOwner.declaredFunction(sourceName))
+		try self.parseFunctionParameters(paramNames, paramTypes: paramTypes, paramRanges: paramRanges, paramSurfaces: paramSurfaces, owner: ParamDefaultOwner.declaredFunction(sourceName), paramTypeHint: ClosureParamTypeHint.none)
 		try self.consume(TokenKind.rightParen)
 
 		// ⭐ **A STRUCT PARAMETER OR RETURN TYPE IS RE-TAGGED `structRef` HERE**, in the real parse where
@@ -13373,10 +13747,14 @@ export type Parser
 	// declaration holds and `parseTypeReference` is about to destroy, captured at the last moment it is
 	// readable and carried alongside the columns it describes. It needs no signature-index entry, because the
 	// only reader is `bindParameters` — and both live inside one `parseFunction`.
-	function parseFunctionParameters(paramNames ByteArrayArray, paramTypes MaxonTypeArray, paramRanges SourceRangeArray, paramSurfaces DeclaredSurfaceArray, owner ParamDefaultOwner) throws ParseError
+	function parseFunctionParameters(paramNames ByteArrayArray, paramTypes MaxonTypeArray, paramRanges SourceRangeArray, paramSurfaces DeclaredSurfaceArray, owner ParamDefaultOwner, paramTypeHint ClosureParamTypeHint) throws ParseError
 		if self.at(TokenKind.rightParen) 'noParams'
 			return
 		end 'noParams'
+
+		// The offer as it stands for the parameter about to be read — the caller's hint for the first one,
+		// `containerElementTaken` for every one after it. See the spend below, beside the type read.
+		var offeredType = paramTypeHint
 
 		while true 'paramLoop'
 			// ⭐ A KEYWORD MAY BE A PARAMETER'S NAME (D8) — `function identity(type Integer)`, the shape
@@ -13391,7 +13769,19 @@ export type Parser
 			// is the REAL parse's alone, the whole-program alias registry is complete, and the answer is
 			// consumed by `bindParameters` in this same pass rather than stored for another one.
 			let declaredSurface = self.declaredSurfaceAt(self.pos, slotElementsFromAliases: true)
-			let paramType = try self.parseTypeReference()
+			let paramType = try self.parameterTypeOrHinted(offeredType, nameTok: nameTok)
+
+			// ⭐ **SPEND THE CALL POSITION'S OFFER — one offer, one parameter** (see `ClosureParamTypeHint`).
+			// Done whether or not THIS parameter took it: a hinted closure that declares its first parameter's
+			// type explicitly has still had the one position that types anything, so `function(a Integer, b)`
+			// is refused exactly as `function(a, b)` is. Only the offer is spent; `none` stays `none`, so an
+			// ordinary function's later untyped parameter keeps the refusal that names the one construct which
+			// does infer.
+			match offeredType 'spendOffer'
+				fromContainerElement then offeredType = ClosureParamTypeHint.containerElementTaken
+				containerElementTaken then break 'spendOffer'
+				none then break 'spendOffer'
+			end 'spendOffer'
 
 			// ⭐ **A DEFAULT VALUE IS CAPTURED, NOT PARSED HERE (BATCH2 slice 4)** — its expression becomes the
 			// whole body of a synthesized nullary helper, parsed at the END of the file by
@@ -13459,6 +13849,34 @@ export type Parser
 			try self.consume(TokenKind.comma)
 		end 'paramLoop'
 	end 'parseFunctionParameters'
+
+	// ⭐ **THE DECLARED TYPE, OR THE ONE THE CALL POSITION SUPPLIED (`function(p) gives …`).** An OMITTED type
+	// is recognized by the parameter list's own punctuation standing where a type would begin — the `,` before
+	// the next parameter or the `)` that closes the list — which is the whole test, and it needs no lookahead:
+	// no type reference starts with either token. `parseTypeReference` used to meet those two and report
+	// "expected a type", which was the correct interim answer while nothing could supply one.
+	//
+	// A hint reaches here only from a container `map`'s transform argument (see `ClosureParamTypeHint`), so
+	// every other omission — including one in a NAMED function's parameter list, which no position types —
+	// still refuses, and says which construct does infer.
+	//
+	// ⭐ The two refusals are different mistakes and say so. `containerElementTaken` means a position DID
+	// supply a type and this parameter is past the one it supplies for — the reference bootstrap's E2003,
+	// worded as the reference words it, because the fix is the same one it names. `none` means no position
+	// supplies anything here, and names the one construct that does.
+	function parameterTypeOrHinted(hint ClosureParamTypeHint, nameTok Token) returns MaxonType throws ParseError
+		if not (self.at(TokenKind.comma) or self.at(TokenKind.rightParen)) 'declaredType'
+			return try self.parseTypeReference()
+		end 'declaredType'
+
+		match hint 'hinted'
+			fromContainerElement(elementType) then return elementType
+			containerElementTaken then throw ParseError.uninferrableClosureParam(String.from(nameTok.value), line: nameTok.line, column: nameTok.column)
+			none then break 'hinted'
+		end 'hinted'
+
+		throw ParseError.unsupported("parameter '{String.from(nameTok.value)}' with no type — shv2 infers an omitted parameter type in exactly one position, a closure passed to a container's `{String.from(MapMethod)}`, whose transform takes the container's own element; every other parameter declares its type", line: nameTok.line, column: nameTok.column)
+	end 'parameterTypeOrHinted'
 
 	// Capture one parameter's `= <default>` for its owning declaration and leave the cursor on the token
 	// that ENDS it (the `,` before the next parameter, or the list's `)`), so the parameter loop resumes
@@ -13931,7 +14349,7 @@ export type Parser
 	// An enum that implements nothing returns the SHARED empty, so the common case allocates nothing.
 	function readOptionalImplementsClause() returns ByteArrayArray throws ParseError
 		if not self.at(TokenKind.implements) 'noImplements'
-			return sharedEmptyEnumConformances
+			return sharedEmptyDeclaredConformances
 		end 'noImplements'
 		try self.consume(TokenKind.implements)
 
@@ -20031,7 +20449,9 @@ export type Parser
 		// calls a side-effecting function is called exactly once.
 		let sourceTempFloor = self.pendingTempDrops.count()
 		let sourceStart = self.pos
-		let source = try self.parseExpression(func, block: block)
+		// `var` for the ONE rewrite a collection source can undergo: a `Map` is replaced by its materialized
+		// entries below, which is what makes every question after this point an ARRAY's question.
+		var source = try self.parseExpression(func, block: block)
 
 		// `to` / `upto` after the first expression is what makes this a RANGE. The operator's token INDEX
 		// is carried (not the `Token` itself — a `var` may not alias an immutable aggregate binding,
@@ -20100,6 +20520,17 @@ export type Parser
 		// binding, exactly as the lock is.
 		var elementBorrowSubject = EmptySourceText
 		if not isRange 'collectionSource'
+			// ⭐⭐ **A `Map` SOURCE BECOMES ITS ENTRIES, AND THEN IT IS AN ARRAY LIKE ANY OTHER.** A map has no
+			// stored element to hand the body — its keys and values live in two parallel buffers — so the
+			// `(key, value)` pair has to be BUILT, one heap box per entry, whatever shape the loop takes.
+			// Materializing them into an `Array with (Key, Value)` right here buys back every answer the array
+			// form already has: the counter, the live length read, the borrowed element, its E3070 subject and
+			// the source's drop. See `MapRuntime.MapEntriesName` for why that beats a fifth `for` form.
+			//
+			// ⚠ It runs BEFORE `lockIterationSource`/`borrowSubjectNameAt`, and both of those still key on
+			// `sourceStart` — the token the USER wrote — so `for pair in m` locks `m` and blames `m`, not the
+			// entries temporary that has no name in the source at all.
+			source = try self.materializeMapIterationSource(source, forTok: forTok)
 			try self.requireIterableSource(source, forTok: forTok)
 			isString = tagIsText(self.tagOf(source))
 			isList = self.signatures.isListInstanceAt(self.tagOf(source), nameId: self.valueNameId(source))
@@ -20401,10 +20832,24 @@ export type Parser
 		return vals
 	end 'loopHeaderArgs'
 
-	// ⭐ **WHAT A `for … in` MAY ITERATE THIS SLICE.** An `Array` instance — the only container whose
-	// element read is a random-access index, which is what the counter lowering requires. Everything
-	// else is a clean E2015 naming the gap rather than a silent acceptance: a String, a byte/codepoint
-	// view, a `Set` and a `Map` each need a cursor protocol shv2 has not built.
+	// ⭐ **A `Map` ITERATION SOURCE IS REPLACED BY ITS ENTRIES; EVERY OTHER SOURCE PASSES THROUGH UNTOUCHED.**
+	// The one rewrite `parseForStatement`'s collection fork performs, and it is a rewrite rather than a fifth
+	// loop form because the result is an `Array with (Key, Value)` — a source the four existing forms already
+	// know everything about. `emitMapEntriesArray`'s header carries the ownership argument; `MapEntriesName`'s
+	// carries the design one.
+	function materializeMapIterationSource(source ValueId, forTok Token) returns ValueId throws ParseError
+		if not self.signatures.isMapInstanceAt(self.tagOf(source), nameId: self.valueNameId(source)) 'notAMap'
+			return source
+		end 'notAMap'
+
+		return try self.emitMapEntriesArray(self.valueNameId(source), map: source, anchor: forTok, range: SourceRange.ofToken(forTok))
+	end 'materializeMapIterationSource'
+
+	// ⭐ **WHAT A `for … in` MAY ITERATE.** An `Array` instance — the only container whose element read is a
+	// random-access index, which is what the counter lowering requires — plus the `Vector` whose record IS an
+	// array's, a `String`'s grapheme clusters, a `List`'s node chain, and a `Map`, which arrives here already
+	// rewritten to the `Array with (Key, Value)` of its entries (`materializeMapIterationSource`). Everything
+	// else is a clean E2015 naming the gap rather than a silent acceptance.
 	function requireIterableSource(source ValueId, forTok Token) throws ParseError
 		if self.signatures.isArrayInstanceAt(self.tagOf(source), nameId: self.valueNameId(source)) 'array'
 			return
@@ -20424,7 +20869,7 @@ export type Parser
 		if self.signatures.isVectorInstanceAt(self.tagOf(source), nameId: self.valueNameId(source)) 'vector'
 			return
 		end 'vector'
-		throw ParseError.unsupported("`for … in` over a `{typeTagName(self.tagOf(source))}` value — shv2 iterates an `Array`, a `{String.from(VectorBuiltinBaseName)}`, a `List`, a `String`'s grapheme clusters, and the counted ranges `<lo> to <hi>` / `<lo> upto <hi>`; byte-view / codepoint / `Set` / `Map` iteration needs a cursor protocol that arrives with the later P1.8 slices", line: forTok.line, column: forTok.column)
+		throw ParseError.unsupported("`for … in` over a `{typeTagName(self.tagOf(source))}` value — shv2 iterates an `Array`, a `{String.from(VectorBuiltinBaseName)}`, a `List`, a `{String.from(MapBuiltinBaseName)}`'s `(key, value)` entries, a `String`'s grapheme clusters, and the counted ranges `<lo> to <hi>` / `<lo> upto <hi>`", line: forTok.line, column: forTok.column)
 	end 'requireIterableSource'
 
 	// ⭐⭐ **WHAT A COUNTED RANGE'S BOUNDS MAY BE — the RANGE form's twin of `requireIterableSource`, and
@@ -31698,17 +32143,165 @@ export type Parser
 		return try self.parseMaterializedView(record, giid: self.signatures.internBuiltinIntegerInstance(ArrayBuiltinBaseName), callee: callee, range: range)
 	end 'parseDecodedView'
 
-	// ⭐ **THE ONE SHAPE ALL THREE VIEWS ARE**: create the array HERE through `emitArrayCreateOp` — the one
-	// array-creation door — hand it to a push-only runtime walk, and enrol the array (not the void call's
-	// result) as the owned temporary. Three methods, one description of what a materialized view IS, so
-	// they cannot come to disagree about who creates the array or who owns it.
+	// ⭐ **THE ONE SHAPE ALL THREE VIEWS ARE** — the argument list, then the shared fill below. Three methods,
+	// one description of what a materialized view IS, so they cannot come to disagree about who creates the
+	// array or who owns it.
 	function parseMaterializedView(record ValueId, giid GenericInstanceId, callee ByteArray, range SourceRange) returns ValueId throws ParseError
 		try self.consumeEmptyArgList()
-		let units = self.emitArrayCreateOp(giid, range: range)
-		_ = self.emitRuntimeCall(callee, args: pairArgs(record, second: units), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
-		self.trackOwnedTemp(units)
-		return units
+		return self.emitMaterializedFill(giid, callee: callee, source: record, extraArgs: ValueIdArray.create(), range: range)
 	end 'parseMaterializedView'
+
+	// ⭐⭐ **A PUSH-ONLY RUNTIME WALK THAT FILLS A CALLER-CREATED ARRAY — the one door, for the three String
+	// views AND for `map`.** Create the array HERE through `emitArrayCreateOp` (the one array-creation door),
+	// hand it to the walk as the SECOND argument, and enrol the ARRAY — not the void call's result — as the
+	// owned temporary.
+	//
+	// ⚠ **`(source, dest, …)` IS THE ARGUMENT ORDER EVERY SUCH RUNTIME ENTRY TAKES, and it is stated once
+	// here.** Four callees now share it (`__str_to_bytes`, `__str_to_codepoints`, `__str_to_utf16`,
+	// `__arr_map`/`__set_map`); a caller that assembled its own list would be free to swap the two records,
+	// which reads as a valid call at every tier and writes into the source at run time.
+	//
+	// ⚠ The result is enrolled owned whatever the element is: `trackOwnedTemp` routes its scope-exit drop by
+	// TAG through `decrefCalleeFor` (`__arr_decref`), which destroys the elements the record's own
+	// `element_destroy@40` stamp names — so a managed-element fill needs nothing extra here.
+	function emitMaterializedFill(giid GenericInstanceId, callee ByteArray, source ValueId, extraArgs ValueIdArray, range SourceRange) returns ValueId
+		let filled = self.emitArrayCreateOp(giid, range: range)
+		var args = pairArgs(source, second: filled)
+		args.append(extraArgs)
+		_ = self.emitRuntimeCall(callee, args: args, resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+		self.trackOwnedTemp(filled)
+		return filled
+	end 'emitMaterializedFill'
+
+	// ⭐⭐ **`container.map(transform)` — THE WHOLE OF `map`, FOR BOTH CONTAINERS THAT SERVE IT.** An `Array`
+	// and a `Set` differ in ONE thing here — which runtime walk reaches the next element — so the callee is a
+	// parameter and nothing else is. The result INSTANCE is the caller's to state because that is the one
+	// place the two genuinely disagree: an array maps to its OWN instance, a `Set with K` to `Array with K`.
+	//
+	// ⭐ **`map` IS A COMPILER-OWNED CONTAINER METHOD, NOT AN `Iterable` EXTENSION, AND THAT IS A DEPARTURE
+	// FROM BOTH REFERENCES.** `stdlib/Interfaces.maxon:187` declares `map`/`filter`/`contains` as an
+	// `export extension Iterable` written in Maxon, and v1 serves `arr.map(f)` by synthesizing that extension
+	// onto the conforming type. shv2 cannot: its containers are hand-synthesized builtins with no
+	// `createIterator` and no `implements` clause (`Parser`'s array dispatch header), it admits neither
+	// `stdlib/Interfaces.maxon` nor `stdlib/Array.maxon` (`StdlibLoader.whitelistedStdlibModules`), and the
+	// extension machinery keys off `conformersOf`, which walks DECLARED types. So `map` joins the surface the
+	// same way `push`/`slice`/`count` did — a roster entry and a dispatch arm — which is what shv2's own
+	// refusal has always said that surface IS. What is taken from the reference is the SEMANTICS, read off
+	// that declaration: a NEW array, in iteration order, one `transform(item)` per element, and
+	// element-type-PRESERVING (`function(Element) returns Element`).
+	function parseContainerMap(func IrFunction, container ValueId, resultGiid GenericInstanceId, callee ByteArray, range SourceRange) returns ValueId throws ParseError
+		// ⭐ **ADOPTED INTO THIS FILE'S INTERNER, because the element type no longer only has its TAG read.**
+		// `containerElementType` answers with the whole-program index's own ids, which was harmless while
+		// `requireElementTransform` was the only consumer — it compares tags. Since the element type also
+		// TYPES an untyped closure parameter (`parseElementTransformArg`'s hint), an id-bearing element (a
+		// `Map`'s `(Key, Value)` pair `structRef`) would reach the file's value columns wearing a foreign id
+		// and PANIC in `internedName` the moment anything asked for its name. MEASURED, on this spec's
+		// `m.map(function(p) gives p)`: `Parser.internedName: type-name id 44 is not in this file's interner`,
+		// through `valueIsCopyableTuple` on the closure's own return.
+		let transform = try self.parseElementTransformArg(func, elementType: self.signatures.adoptType(self.signatures.containerElementType(resultGiid), into: self.artifact.typeNames))
+		// The env travels with the VALUE, through the one door an in-frame indirect call asks
+		// (`emitClosureEnvArg`): a capturing closure's heap block, or a materialized null for a plain function
+		// reference or a non-capturing closure. The runtime's `callIndirect` is the uniform `(elem, __env)`
+		// ABI, so a capturing transform works here for the same reason `f(x)` does.
+		return self.emitMaterializedFill(resultGiid, callee: callee, source: container, extraArgs: pairArgs(transform, second: self.emitClosureEnvArg(transform, range: range)), range: range)
+	end 'parseContainerMap'
+
+	// `( transform )` — `map`'s single positional argument, a FUNCTION VALUE over the container's element.
+	// Parsed as an ordinary expression, so every producer of a function value reaches it: an inline closure
+	// literal, a bare reference to a named function, a function-typed parameter or field.
+	//
+	// ⭐ **IT IS ALSO THE ONE POSITION THAT CAN TYPE AN UNTYPED CLOSURE PARAMETER** — `m.map(function(p)
+	// gives p)`, which `specs-shv2/interface-extensions.md` writes. The transform's parameter IS the
+	// container's element by the declaration `map` is read from (`function(Element) returns Element`), so
+	// there is nothing to infer: the type is already in hand one line above the parse that needs it, and
+	// offering it is a hand-off rather than an inference pass. See `ClosureParamTypeHint`.
+	//
+	// ⚠ The hint is restored on the SUCCESS path only. A `ParseError` out of the argument aborts the file's
+	// parse, so a hint left set can reach no later closure literal — the same reason `parseClosureExpression`
+	// can leave `iterationLockedBindings` unbalanced on its own error path.
+	function parseElementTransformArg(func IrFunction, elementType MaxonType) returns ValueId throws ParseError
+		try self.consume(TokenKind.leftParen)
+		let argTok = self.current()
+		let savedHint = self.closureParamHint
+		self.closureParamHint = ClosureParamTypeHint.fromContainerElement(elementType)
+		let transform = try self.parseExpression(func, block: self.currentBlock)
+		self.closureParamHint = savedHint
+		try self.requireElementTransform(transform, elementType: elementType, argTok: argTok)
+		try self.consume(TokenKind.rightParen)
+		return transform
+	end 'parseElementTransformArg'
+
+	// ⭐ **`map`'s TRANSFORM MUST BE A FUNCTION, AND IT MUST ANSWER THE CONTAINER'S OWN ELEMENT TYPE.** Both
+	// halves are the reference declaration read literally (`function(Element) returns Element`): shv2's `map`
+	// is element-type-PRESERVING, so the result array is the SAME instance the receiver's element names and
+	// there is no second element type for the parser to infer, for `emitArrayCreateOp` to stamp, or for the
+	// runtime's word-shaped `callIndirect` to carry.
+	//
+	// The tag comparison is `columnValueTagMatches` — the container-slot rule, already written for a `Set`'s
+	// key and a `Map`'s two columns — and not `==`, for the reason its header measured: a ranged-int alias
+	// carries the `named` tag where the element carries `integer`, and refusing that pair would reject
+	// `[1,2,3].map(function(x Integer) gives x * 2)`, which is the construct itself.
+	//
+	// ⚠ **THE TRANSFORM'S ARITY IS NOT CHECKED, AND NOTHING IN shv2 CHECKS ONE.** A function value's arity is
+	// not recoverable at parse time — a lifted closure's signature is file-local and reaches neither the
+	// whole-program index nor a per-file map (`closureReturns` records only its RETURN) — and the language's
+	// other function-value call site, `parseIndirectCall`, checks none either. A `map`-only arity gate would
+	// be a second, narrower rule than the one the language actually has.
+	function requireElementTransform(transform ValueId, elementType MaxonType, argTok Token) throws ParseError
+		let declared = maxonTypeTag(elementType)
+		if self.tagOf(transform) != ValueTypeTag.function 'notAFunction'
+			throw ParseError.unsupported("`{String.from(MapMethod)}` takes a transform FUNCTION — `function({typeTagName(declared)}) returns {typeTagName(declared)}` over the container's element — and got {articledTypeTagName(self.tagOf(transform))} value", line: argTok.line, column: argTok.column)
+		end 'notAFunction'
+
+		let returned = try self.elementTransformReturnType(transform, argTok: argTok)
+		if not self.elementTransformAnswersElement(returned, elementType: elementType) 'wrongElementType'
+			throw ParseError.unsupported("`{String.from(MapMethod)}`'s transform answers {articledTypeTagName(maxonTypeTag(returned))} value where the container's element is {articledTypeTagName(declared)} — shv2's `{String.from(MapMethod)}` is element-type-PRESERVING (`stdlib/Interfaces.maxon:187` declares it `function(Element) returns Element`), so a transform to another type is a later slice", line: argTok.line, column: argTok.column)
+		end 'wrongElementType'
+	end 'requireElementTransform'
+
+	// ⭐⭐ **DOES THE TRANSFORM ANSWER THE CONTAINER'S OWN ELEMENT TYPE — the element-PRESERVATION test, which
+	// is TWO different questions depending on what an element is.**
+	//
+	// A scalar / text element is settled by the TAG, through `columnValueTagMatches`, for that predicate's
+	// measured reason: a ranged-int alias carries `named` where the element carries `integer`, and refusing
+	// that pair would reject `[1,2,3].map(function(x Integer) gives x * 2)`, which is the construct itself.
+	//
+	// ⚠ **AN AGGREGATE ELEMENT IS SETTLED BY THE NAME, AND THAT PREDICATE CANNOT ANSWER FOR ONE AT ALL.** It
+	// is the HASH-TABLE COLUMN rule, and its own header records that its last arm is the INT arm and that
+	// `declared` is not confined to the admitted set — so a `structRef` element falls straight through it to
+	// `tagIsIntegral` and reads FALSE. MEASURED on `<map>.map(function(p) gives p)`, whose element is the
+	// entry pair: *"`map`'s transform answers a struct value where the container's element is a struct"*, a
+	// sentence that refutes itself. Widening THAT predicate is the wrong door — a hash-table column may never
+	// be a struct (`requireHashTableColumnType`) — and a tag test would be too WEAK here even if it answered:
+	// `Point` and `Size` are both `structRef`, and PRESERVING the element type means the same type, which
+	// only the name says.
+	//
+	// Both ids are this FILE's, which is what makes the names comparable: `parseContainerMap` adopts the
+	// element into the file interner, and every answer `functionValueReturnType` gives is adopted there too.
+	function elementTransformAnswersElement(returned MaxonType, elementType MaxonType) returns bool
+		let declared = maxonTypeTag(elementType)
+		if not self.signatures.tagMayNameAggregate(declared) 'byTag'
+			return columnValueTagMatches(maxonTypeTag(returned), declared: declared)
+		end 'byTag'
+
+		if not self.signatures.tagMayNameAggregate(maxonTypeTag(returned)) 'answersSomethingElse'
+			return false
+		end 'answersSomethingElse'
+
+		return self.internedName(typeNameIdOf(returned)).equals(self.internedName(typeNameIdOf(elementType)))
+	end 'elementTransformAnswersElement'
+
+	// The value type `transform` answers. A VOID function value is refused HERE rather than reaching the tag
+	// comparison, because "returns nothing" is a different complaint from "returns the wrong thing" and the
+	// container has no element for the void case to be compared against.
+	function elementTransformReturnType(transform ValueId, argTok Token) returns MaxonType throws ParseError
+		match self.functionValueReturnType(transform) 'returned'
+			value(returnType) then return returnType
+			void then break 'returned'
+		end 'returned'
+
+		throw ParseError.unsupported("`{String.from(MapMethod)}`'s transform returns NOTHING — every element must be transformed INTO a value the new array can hold", line: argTok.line, column: argTok.column)
+	end 'elementTransformReturnType'
 
 	// ⭐ **A `Character`'S BUILTIN METHODS (P1.8 slice B)** — the `dispatchStringMethod` twin, and a
 	// separate dispatcher for the reason the two types are separate: a Character has no `append`, no
@@ -32873,6 +33466,19 @@ export type Parser
 		let firstTok = self.current()
 		let firstStart = self.pos
 		let first = try self.parseExpression(func, block: self.currentBlock)
+
+		// ⭐ **A `:` AFTER THE FIRST ELEMENT MAKES THE WHOLE THING A MAP LITERAL** — `["a": 1, "b": 2]`. Both
+		// reference compilers disambiguate at exactly this point and for the same reason v1 states: no bounded
+		// LOOKAHEAD can find the colon, because `[f(a, b): 1]` has a `,` at depth 1 first and `[m.get(k): 1]`
+		// has an arbitrary expression in front of the `:`. So the first element is parsed unconditionally and
+		// the token AFTER it is what decides which container this is.
+		//
+		// ⚠ It sits ahead of `arrayLiteralInstanceFor` because a map literal has NO array instance to mint: the
+		// first element is its first KEY, and the instance it fixes has two columns rather than one.
+		if self.at(TokenKind.colon) 'mapLiteral'
+			return try self.parseMapLiteralBody(func, firstKey: first, firstKeyStart: firstStart, firstKeyTok: firstTok, range: range)
+		end 'mapLiteral'
+
 		let giid = try self.arrayLiteralInstanceFor(first, elemTok: firstTok)
 
 		// ⭐⭐ **A SUB-BYTE-PACKED ELEMENT COLLECTS ITS ELEMENTS BEFORE IT BUILDS ANYTHING**, because if they
@@ -33064,21 +33670,40 @@ export type Parser
 	// that record is withheld for a bare-local source, so it answered differently for `[7 as N, …]` and
 	// `[v as N, …]` — the measurement is on that predicate.
 	function arrayLiteralInstanceFor(elem ValueId, elemTok Token) returns GenericInstanceId throws ParseError
-		let tag = self.tagOf(elem)
+		return self.signatures.builtinInstanceForElement(ArrayBuiltinBaseName, element: try self.literalColumnTypeFor(elem, literalKind: ArrayLiteralSubject, columnNoun: ArrayLiteralColumnNoun, valueTok: elemTok))
+	end 'arrayLiteralInstanceFor'
+
+	// ⭐⭐ **THE TYPE A BRACKETED LITERAL'S VALUE FIXES FOR THE COLUMN IT SITS IN.** An array literal has ONE
+	// such column (its element) and a map literal has TWO (its key and its value), and the question each puts
+	// is identical — *which `MaxonType` does this parsed value name?* — so it is answered here once and the
+	// three callers differ only in the NOUN their refusal uses.
+	//
+	// ⚠ **THE `named`-vs-`structRef` CHOICE IS `builtinInstanceForNamedElement`'s AND MUST STAY THERE**: a
+	// synthesized TUPLE interns as `structRef` where a declared struct/union is `named`, and a second spelling
+	// of that rule is a measured spurious `E3006 duplicate definition of 'Array_<T>'` (see its header). So the
+	// aggregate arm asks it rather than building the `MaxonType` itself.
+	//
+	// ⚠⚠ **THE REFUSAL'S ARRAY SPELLING IS PINNED BYTE-FOR-BYTE by `specs-shv2/character-ownership.md`'s
+	// `an-array-literal-element-is-not-a-character`**, which is why the subject arrives as `<kind> <noun>`
+	// rather than as one reworded sentence: composed from `ArrayLiteralSubject`/`ArrayLiteralColumnNoun` it
+	// reproduces that expectation exactly, and the map literal's two columns get their own nouns without
+	// touching it.
+	function literalColumnTypeFor(value ValueId, literalKind String, columnNoun String, valueTok Token) returns MaxonType throws ParseError
+		let tag = self.tagOf(value)
 		if tag == ValueTypeTag.integer 'int'
-			return self.signatures.internBuiltinIntegerInstance(ArrayBuiltinBaseName)
+			return MaxonType.integer
 		end 'int'
 		if tag == ValueTypeTag.boolean or tagIsFloat(tag) 'scalar'
-			return self.signatures.builtinInstanceForElement(ArrayBuiltinBaseName, element: MaxonType.boolean if tag == ValueTypeTag.boolean else MaxonType.float)
+			return MaxonType.boolean if tag == ValueTypeTag.boolean else MaxonType.float
 		end 'scalar'
 		if tagIsText(tag) 'string'
-			return self.signatures.builtinInstanceForElement(ArrayBuiltinBaseName, element: MaxonType.string)
+			return MaxonType.string
 		end 'string'
-		if tagIsStructRef(tag) or tag == ValueTypeTag.named 'aggregate'
-			return self.signatures.builtinInstanceForNamedElement(ArrayBuiltinBaseName, element: try self.artifact.typeNames.nameOf(self.valueNameId(elem)) otherwise panic("arrayLiteralInstanceFor: a struct/union element's name id is not in this file's interner"))
+		if self.signatures.tagMayNameAggregate(tag) 'aggregate'
+			return self.signatures.namedElementType(self.internedName(self.valueNameId(value)))
 		end 'aggregate'
-		throw ParseError.unsupported("an array literal element of type '{typeTagName(tag)}' — a literal's elements are an integer, a float, a bool, a String, a struct, or a boxed union (a bare `[…]` infers the type from the first element)", line: elemTok.line, column: elemTok.column)
-	end 'arrayLiteralInstanceFor'
+		throw ParseError.unsupported("{literalKind} {columnNoun} of type '{typeTagName(tag)}' — a literal's {columnNoun}s are an integer, a float, a bool, a String, a struct, or a boxed union (a bare `[…]` infers the type from the first {columnNoun})", line: valueTok.line, column: valueTok.column)
+	end 'literalColumnTypeFor'
 
 	// Every element after the first must have the SAME element type — its inferred instance must equal the
 	// first's. A mismatch is an array literal with mixed element types (E2015).
@@ -33337,7 +33962,7 @@ export type Parser
 	// ALIAS token (the type the author wrote is what is inadmissible), the emit spans alias→method.
 	function gateAndEmitContainerCreate(giid GenericInstanceId, aliasTok Token, range SourceRange) returns ValueId throws ParseError
 		if self.signatures.isSetInstance(giid) 'set'
-			try self.requireHashTableColumnType(giid, position: HashTableKeyArgPosition, containerName: "Set", columnNoun: "key", tok: aliasTok)
+			try self.requireHashTableColumnType(giid, position: HashTableKeyArgPosition, containerName: "Set", columnNoun: HashTableKeyColumnNoun, tok: aliasTok)
 			return self.emitSetCreateOp(giid, range: range)
 		end 'set'
 		if self.signatures.isMapInstance(giid) 'map'
@@ -33558,7 +34183,22 @@ export type Parser
 			return set
 		end 'insert'
 
-		throw ParseError.unsupported("`Set` method '{String.from(methodTok.value)}' — P1.7b provides create/insert/contains/remove/count; `from`-construction and iteration are later slices", line: methodTok.line, column: methodTok.column)
+		// ⭐ **`map(transform)` yields an ARRAY, never a set (interface-extensions).** That is the reference
+		// declaration's own answer (`stdlib/Interfaces.maxon:187` returns `Array with Element` for every
+		// `Iterable`), and it is the only one that is honest here: a transform may map two distinct members
+		// onto one value, and a set would silently swallow the duplicate. So the result instance is
+		// `Array with <this set's key>` — the exact inverse of the pair `setInstanceForArrayLiteral` reads
+		// the other way round for `Set from […]`.
+		if methodTok.value.equals(MapMethod) 'map'
+			return try self.parseContainerMap(func, container: set, resultGiid: self.signatures.builtinInstanceForElement(ArrayBuiltinBaseName, element: self.signatures.setKeyType(giid)), callee: SetMapName, range: range)
+		end 'map'
+
+		// ⚠ **`from`-CONSTRUCTION IS NOT A LATER SLICE AND HAS NOT BEEN SINCE P1.7b SLICE B** — this sentence
+		// said it was, for as long as `parseSetFromConstruction` has existed one screen above. A hand-written
+		// roster is what let it rot (the `Array` surface's is DERIVED from `arraySurfaceMemberNames`, so its
+		// list cannot); what is left here is the one clause that is still true, and `for … in` over a `Set`
+		// says so in its own words at `parseForStatement`.
+		throw ParseError.unsupported("`Set` method '{String.from(methodTok.value)}' — shv2 provides create/insert/contains/remove/count/map, plus `Set from […]` construction; `for … in` over a `Set` needs the cursor protocol a later slice brings", line: methodTok.line, column: methodTok.column)
 	end 'dispatchSetMethod'
 
 	// `( key )` — a single positional key argument for `insert`/`contains`/`remove` (P1.7b). The BRACKETS are
@@ -33648,8 +34288,8 @@ export type Parser
 	// BOTH of a map's column types, gated together at the one door a map is born through, so a program can
 	// never build a table whose key is admissible and whose value is not.
 	function requireMapColumnTypes(giid GenericInstanceId, tok Token) throws ParseError
-		try self.requireHashTableColumnType(giid, position: HashTableKeyArgPosition, containerName: "Map", columnNoun: "key", tok: tok)
-		try self.requireHashTableColumnType(giid, position: MapValueArgPosition, containerName: "Map", columnNoun: "value", tok: tok)
+		try self.requireHashTableColumnType(giid, position: HashTableKeyArgPosition, containerName: "Map", columnNoun: HashTableKeyColumnNoun, tok: tok)
+		try self.requireHashTableColumnType(giid, position: MapValueArgPosition, containerName: "Map", columnNoun: HashTableValueColumnNoun, tok: tok)
 	end 'requireMapColumnTypes'
 
 	// Emit `__map_create(keyDrop, valueDrop)` for instance `giid`, yielding the empty map record. The record is
@@ -33661,6 +34301,119 @@ export type Parser
 		let valueDrop = self.columnDestroyValue(self.signatures.mapValueType(giid), range: range)
 		return self.emitRuntimeCall(MapCreateName, args: pairArgs(keyDrop, second: valueDrop), resultTag: ValueTypeTag.genericInstance, resultNameId: giid, range: range)
 	end 'emitMapCreateOp'
+
+	// ⭐⭐ **`[k0: v0, k1: v1, …]` — A MAP LITERAL.** The cursor sits on the `:` after the first key, which
+	// `parseArrayLiteral` has already parsed and handed over. It desugars to `__map_create(keyDrop, valueDrop)`
+	// plus one `__map_upsert` per pair — the SAME two calls a `MapAlias.create()` + `upsert` program emits, so
+	// a literal-built map and a hand-built one are one representation and one instance.
+	//
+	// ⚠ **THE FIRST PAIR FIXES BOTH COLUMNS, so the record cannot be created until both halves are parsed** —
+	// the create stamps the two per-column destructors, and those are read off the column TYPES. That is
+	// `parseArrayLiteral`'s managed path exactly, one column wider.
+	//
+	// ⚠⚠ **EACH HALF OF THE FIRST PAIR MOVES IN THE INSTANT IT IS PARSED, BEFORE THE NEXT FENCING TOKEN IS
+	// CONSUMED.** `rhsWasBareLocalReference` reads `[valueStart, self.pos)` to decide whether a managed column
+	// value is a bare local to POISON (`parseHashTableColumnArg`'s ordering contract), so moving the key in
+	// after the `:` — let alone after the whole value expression — would widen that window across another
+	// expression entirely and silently mis-decide the move. A column's TYPE is settled by the value alone, so
+	// each move-in has everything it needs at that point; only the two-column INSTANCE has to wait.
+	function parseMapLiteralBody(func IrFunction, firstKey ValueId, firstKeyStart TokenIndex, firstKeyTok Token, range SourceRange) returns ValueId throws ParseError
+		let keyType = try self.literalColumnTypeFor(firstKey, literalKind: MapLiteralSubject, columnNoun: HashTableKeyColumnNoun, valueTok: firstKeyTok)
+		let storedKey = try self.moveColumnValueIntoTable(firstKey, columnType: keyType, valueStart: firstKeyStart)
+
+		try self.consume(TokenKind.colon)
+		self.skipNewlines()
+		let firstValueTok = self.current()
+		let firstValueStart = self.pos
+		let firstValue = try self.parseExpression(func, block: self.currentBlock)
+		let valueType = try self.literalColumnTypeFor(firstValue, literalKind: MapLiteralSubject, columnNoun: HashTableValueColumnNoun, valueTok: firstValueTok)
+		let storedValue = try self.moveColumnValueIntoTable(firstValue, columnType: valueType, valueStart: firstValueStart)
+
+		let giid = self.signatures.builtinInstanceForColumns(MapBuiltinBaseName, key: keyType, value: valueType)
+		// The literal is the one door a map can be born through without a `with (K, V)` annotation, so it owes
+		// the same column gate the annotated door owes — asked BEFORE the create, so a refused literal emits no op.
+		try self.requireMapColumnTypes(giid, tok: firstKeyTok)
+
+		let map = self.emitMapCreateOp(giid, range: range)
+		self.emitMapUpsert(map, key: storedKey, value: storedValue, range: range)
+
+		self.skipNewlines()
+		while self.at(TokenKind.comma) 'morePairs'
+			try self.consume(TokenKind.comma)
+			self.skipNewlines()
+			// Every later pair is checked AGAINST the first's columns — the map-literal twin of
+			// `requireArrayLiteralElementMatches` — and rides the ordinary column-argument door, which
+			// characterizes a lone literal, refuses a mismatched tag and moves the value in. A mixed literal is
+			// therefore refused by the same sentence a mismatched `upsert` argument is.
+			let key = try self.parseMapColumnValue(func, giid: giid, position: HashTableKeyArgPosition, columnNoun: HashTableKeyColumnNoun, consume: true)
+			try self.consume(TokenKind.colon)
+			self.skipNewlines()
+			let value = try self.parseMapColumnValue(func, giid: giid, position: MapValueArgPosition, columnNoun: HashTableValueColumnNoun, consume: true)
+			self.emitMapUpsert(map, key: key, value: value, range: range)
+			self.skipNewlines()
+		end 'morePairs'
+		try self.consume(TokenKind.rightBracket)
+
+		self.trackOwnedTemp(map)
+		return map
+	end 'parseMapLiteralBody'
+
+	// The `__map_upsert(map, key, value)` call itself — ONE home, so the `upsert` METHOD and the map LITERAL
+	// cannot come to disagree about the argument order or about the call being void. The key's two hidden
+	// witness-table arguments are appended a tier down (`LowerMaxonToStd.appendSetWitnessArgs`).
+	function emitMapUpsert(map ValueId, key ValueId, value ValueId, range SourceRange)
+		_ = self.emitRuntimeCall(MapUpsertName, args: threeArgs(map, second: key, third: value), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+	end 'emitMapUpsert'
+
+	// ⭐⭐ **A MAP'S ENTRIES AS AN `Array with (Key, Value)` — THE ONE THING BOTH `for … in <map>` AND
+	// `<map>.map(f)` ARE BUILT ON.** A `Map` stores no element: its keys and values sit in two PARALLEL
+	// buffers, so the `(Key, Value)` pair a reader wants does not exist until something builds it. This mints
+	// the pair TYPE (an ordinary synthesized tuple — `internTupleLayout`, so the drop cascade and the layout
+	// registration are the ones every tuple gets), creates the result array, and hands both to the runtime
+	// walk that fills it. See `MapRuntime.MapEntriesName` for why materializing beats a cursor here.
+	//
+	// The four trailing arguments are what the walk cannot derive for itself: a tuple's slots are not
+	// unconditionally two machine words, so the box SIZE and the VALUE slot's displacement are read off the
+	// layout, and each column's `(box) -> newBox` cloner is the one `SignatureIndex.managedFieldCloneStrategy`
+	// names (0 for a trivial column). `emitMaterializedFill` supplies the `(source, dest)` prefix every
+	// push-only runtime walk takes, and enrols the ARRAY as this statement's owned temporary.
+	function emitMapEntriesArray(giid GenericInstanceId, map ValueId, anchor Token, range SourceRange) returns ValueId throws ParseError
+		var pairElements = MaxonTypeArray.create()
+		pairElements.push(self.signatures.mapKeyType(giid))
+		pairElements.push(self.signatures.mapValueType(giid))
+		let pair = try self.internTupleLayout(pairElements, anchor: anchor)
+
+		var walkArgs = ValueIdArray.create()
+		walkArgs.push(self.emitLiteral(pair.sizeBytes() as ParsedInt, valueType: MaxonType.integer, range: range))
+		walkArgs.push(self.emitLiteral(pair.offsetOfField(MapPairValueFieldIndex) as ParsedInt, valueType: MaxonType.integer, range: range))
+		walkArgs.push(try self.columnCloneValue(self.signatures.mapKeyType(giid), anchor: anchor, range: range))
+		walkArgs.push(try self.columnCloneValue(self.signatures.mapValueType(giid), anchor: anchor, range: range))
+
+		return self.emitMaterializedFill(self.signatures.builtinInstanceForNamedElement(ArrayBuiltinBaseName, element: pair.name), callee: MapEntriesName, source: map, extraArgs: walkArgs, range: range)
+	end 'emitMapEntriesArray'
+
+	// ⭐ **THE ADDRESS OF A COLUMN'S DEEP-CLONE CALLEE, OR 0 FOR A TRIVIAL COLUMN — `columnDestroyValue`'s
+	// DUAL**, and it is stamped into a call rather than into a record because only `__map_entries` needs it:
+	// a table OWNS what it stores and therefore always needs a destructor, but it CLONES only when something
+	// asks it for a second owner. Written beside its twin so the drop and the clone of one column are chosen
+	// by one reading of that column's type.
+	//
+	// An unsupported strategy is a positioned refusal rather than a panic: `managedFieldCloneStrategy` answers
+	// `unsupported` for a column shv2 cannot deep-clone, and a `Map` column is gated to int / String /
+	// Character by `requireMapColumnTypes` — so this arm is unreachable through today's doors, and it says so
+	// in the one place that would learn otherwise if a wider column type were ever admitted.
+	function columnCloneValue(columnType MaxonType, anchor Token, range SourceRange) returns ValueId throws ParseError
+		if not self.signatures.slotTypeIsManaged(columnType) 'trivial'
+			return self.emitLiteral(TrivialDestructor, valueType: MaxonType.integer, range: range)
+		end 'trivial'
+
+		match managedFieldCloneStrategy(self.signatures, typeNames: self.artifact.typeNames, fieldType: columnType) 'strategy'
+			direct(callee) then return self.emitRuntimeFuncAddr(callee, range: range)
+			managedArray to unsupported then break 'strategy'
+		end 'strategy'
+
+		throw ParseError.unsupported("iterating a `Map` whose {typeTagName(maxonTypeTag(columnType))} column has no deep clone — every entry is handed out as an owned `(key, value)` pair, so both columns must be cloneable into it", line: anchor.line, column: anchor.column)
+	end 'columnCloneValue'
 
 	// ⭐ **DISPATCH A BUILTIN `Map` METHOD** — cursor on the method NAME, `map` the (borrowed) receiver record.
 	// `count` returns the entry count and `contains` a `bool`; `get` returns the VALUE and THROWS
@@ -33709,27 +34462,38 @@ export type Parser
 			// and of a managed value alike. `ArrayValueLabel` is the same `value:` label the two-argument
 			// `Array` mutators give their value argument — one label, three containers.
 			try self.consume(TokenKind.leftParen)
-			let key = try self.parseMapColumnValue(func, giid: giid, position: HashTableKeyArgPosition, columnNoun: "key", consume: true)
+			let key = try self.parseMapColumnValue(func, giid: giid, position: HashTableKeyArgPosition, columnNoun: HashTableKeyColumnNoun, consume: true)
 			try self.consume(TokenKind.comma)
 			let labelTok = try self.consumeNameToken(NamePosition.declaration)
 			if not labelTok.value.equals(ArrayValueLabel) 'wrongLabel'
 				throw ParseError.unsupported("`Map.upsert` names its second argument '{String.from(ArrayValueLabel)}:' — got '{String.from(labelTok.value)}:'", line: labelTok.line, column: labelTok.column)
 			end 'wrongLabel'
 			try self.consume(TokenKind.colon)
-			let value = try self.parseMapColumnValue(func, giid: giid, position: MapValueArgPosition, columnNoun: "value", consume: true)
+			let value = try self.parseMapColumnValue(func, giid: giid, position: MapValueArgPosition, columnNoun: HashTableValueColumnNoun, consume: true)
 			try self.consume(TokenKind.rightParen)
-			_ = self.emitRuntimeCall(MapUpsertName, args: threeArgs(map, second: key, third: value), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+			self.emitMapUpsert(map, key: key, value: value, range: range)
 			return map
 		end 'upsert'
 
-		throw ParseError.unsupported("`Map` method '{String.from(methodTok.value)}' — shv2 provides create/upsert/contains/get/count; insert/remove, `[k: v]` literals and iteration are later slices", line: methodTok.line, column: methodTok.column)
+		// ⭐ **`map(transform)` YIELDS AN ARRAY OF `(Key, Value)` PAIRS** — `stdlib/Interfaces.maxon:187`'s
+		// `Array with Element` for every `Iterable`, where a `Map`'s Element IS its entry pair. So it is
+		// literally `__arr_map` over `emitMapEntriesArray`'s materialization: the entry walk is the one thing a
+		// `Map` needs that an `Array` does not, and once it has run there is no second `map` to write. The
+		// intermediate entries array is this statement's owned temporary and drops at its end, having handed
+		// each pair a co-owner (the transform's own result) on the way through.
+		if methodTok.value.equals(MapMethod) 'map'
+			let entries = try self.emitMapEntriesArray(giid, map: map, anchor: methodTok, range: range)
+			return try self.parseContainerMap(func, container: entries, resultGiid: self.valueNameId(entries), callee: ArrMapName, range: range)
+		end 'map'
+
+		throw ParseError.unsupported("`Map` method '{String.from(methodTok.value)}' — shv2 provides create/upsert/contains/get/count/map, plus `[k: v, …]` literal construction and `for (key, value) in …` iteration", line: methodTok.line, column: methodTok.column)
 	end 'dispatchMapMethod'
 
 	// `( key )` — the argument list of `contains` / `get`, whose key is BORROWED for the compare (its owned temp
 	// drops at statement end). The `Set` twin is `parseSetKeyArg(consume: false)`.
 	function parseMapKeyArgList(func IrFunction, giid GenericInstanceId) returns ValueId throws ParseError
 		try self.consume(TokenKind.leftParen)
-		let key = try self.parseMapColumnValue(func, giid: giid, position: HashTableKeyArgPosition, columnNoun: "key", consume: false)
+		let key = try self.parseMapColumnValue(func, giid: giid, position: HashTableKeyArgPosition, columnNoun: HashTableKeyColumnNoun, consume: false)
 		try self.consume(TokenKind.rightParen)
 		return key
 	end 'parseMapKeyArgList'
@@ -35117,6 +35881,20 @@ export type Parser
 			try self.consumeEmptyArgList()
 			return self.inheritArrayElementSurface(self.emitArrayCloneCall(giid, arr: arr, range: range), source: arr)
 		end 'clone'
+
+		// ⭐ **`map(transform)` — the element-wise transform (interface-extensions).** It is on the `Array`
+		// roster and NOT the buffer's, so a receiver reaching here is an `Array`; `mm.map(f)` is the roster
+		// refusal, exactly as `mm.push(x)` is.
+		//
+		// ⚠ **IT NEEDS NO `requireArrayCopyMethodSupported` AND MUST NOT ASK FOR ONE.** That gate exists
+		// because `slice`/`clone`/`append` DUPLICATE the source's elements and a managed element has no
+		// byte-blit; `map` duplicates nothing — every element of the result is what the transform ANSWERED,
+		// a fresh value the new record becomes the sole owner of. The result's own element surface is the
+		// transform's business too, so `inheritArrayElementSurface` would be a claim about a value the
+		// receiver never handed on.
+		if methodTok.value.equals(MapMethod) 'map'
+			return try self.parseContainerMap(func, container: arr, resultGiid: giid, callee: ArrMapName, range: range)
+		end 'map'
 
 		// ⭐ **THE VOID MUTATORS — AND EACH REFUSES VALUE POSITION FROM INSIDE ITS OWN ARM
 		// (`requireVoidMethodIsStatement`, whose header carries the D11 measurement).** The refusal used to
@@ -38779,6 +39557,14 @@ export type Parser
 	end 'requireNoInterfaceClosureParam'
 
 	function parseClosureExpression(func IrFunction) returns ValueId throws ParseError
+		// ⭐ **TAKE the call position's parameter-type offer — read it AND clear it (see `closureParamHint`).**
+		// Clearing here is what scopes the offer to THIS literal: a closure nested inside this one's body sees
+		// `none`, so `xs.map(function(x) gives apply(function(y) gives y, to: x))` cannot silently type `y` as
+		// the OUTER container's element. The clear runs one line after the read, with nothing between that can
+		// throw, so the alias discipline the save block below states holds here too.
+		let paramTypeHint = self.closureParamHint
+		self.closureParamHint = ClosureParamTypeHint.none
+
 		let functionTok = try self.consume(TokenKind.function)
 		try self.consume(TokenKind.leftParen)
 
@@ -38787,16 +39573,16 @@ export type Parser
 		// NOT among them and deliberately so: only a caller knows how many hidden slots its own ABI adds, so
 		// each asks `requireAbiParamCount` itself — see that routine's header.) `_` is
 		// a legal identifier the check accepts (the corpus's `function(_ Integer) gives …`). An UNTYPED
-		// parameter (`function(p) gives …`) is a separate feature — its type is inferred from the call-arg
-		// slot at TypeResolution — and the A2a corpus types every one, so `parseTypeReference` rejecting the
-		// `,`/`)` that follows an omitted type is the correct interim refusal.
+		// parameter (`function(p) gives …`) is typed from `paramTypeHint` when the call position supplied one
+		// and refused with a positioned diagnostic when it did not — `parameterTypeOrHinted`, which is where
+		// the one position that supplies one is named.
 		var paramNames = ByteArrayArray.create()
 		var paramTypes = MaxonTypeArray.create()
 		var paramRanges = SourceRangeArray.create()
 		// A closure parameter may spell `__ManagedMemory` exactly as a function's may (A2j) — it reaches the
 		// same `parseFunctionParameters` and the same `bindParameters`, so it needs no separate treatment.
 		var paramSurfaces = DeclaredSurfaceArray.create()
-		try self.parseFunctionParameters(paramNames, paramTypes: paramTypes, paramRanges: paramRanges, paramSurfaces: paramSurfaces, owner: ParamDefaultOwner.closureLiteral)
+		try self.parseFunctionParameters(paramNames, paramTypes: paramTypes, paramRanges: paramRanges, paramSurfaces: paramSurfaces, owner: ParamDefaultOwner.closureLiteral, paramTypeHint: paramTypeHint)
 		try self.consume(TokenKind.rightParen)
 		// A struct parameter is re-tagged `structRef` here, exactly as `parseFunction` does — the whole-program
 		// struct registry is complete in the real parse (see `resolveNamedStruct`).
@@ -40154,7 +40940,7 @@ export type Parser
 	// sibling — turning a bare call to a free `helper()` into `E3004 ... 'Sib.helper'`. Both are legal
 	// programs, refused.
 	function ensureSiblingReceivers()
-		if self.siblingReceiverScanType.equals(self.enclosingType) 'memoHit'
+		if self.siblingReceiverScanType.equals(self.enclosingType) and self.siblingReceiverScanBody == self.enclosingTypeBodyStart 'memoHit'
 			return
 		end 'memoHit'
 
@@ -40202,8 +40988,30 @@ export type Parser
 			q = q + 1
 		end 'walk'
 
+		// ⭐ **AN EXTENSION BODY'S SIBLINGS ARE ITS INTERFACE'S REQUIREMENTS TOO, and no token walk can find
+		// them** — they are declared on the CONFORMER, in another declaration and possibly another file. Added
+		// AFTER the walk so an extension method of the same name as a requirement keeps the walk's answer
+		// (the extension is what this body is, and it is the declaration the author is looking at). Every
+		// requirement takes a receiver: an interface method's `self` is implicit and never declared, and a
+		// `static` requirement is not reachable through `self` at all — so a `static` one is skipped rather
+		// than filed as receiver-less, which would resolve `make()` to a call with no instance to make it on.
+		// The transitive list, so a requirement inherited through `extends` is a sibling exactly as an own one
+		// is (`requirementSlotsOf`, memoized, and the SAME list a witness dispatch resolves against).
+		if not self.extensionInterfaceName.isEmpty() 'inAnExtensionBody'
+			for slot in self.requirementSlotsOf(self.extensionInterfaceName) 'eachRequirement'
+				if slot.method.isStatic 'staticRequirement'
+					continue
+				end 'staticRequirement'
+				if map.contains(slot.method.name) 'shadowedByAnExtensionMethod'
+					continue
+				end 'shadowedByAnExtensionMethod'
+				map.upsert(slot.method.name, value: true)
+			end 'eachRequirement'
+		end 'inAnExtensionBody'
+
 		self.siblingReceivers = map
 		self.siblingReceiverScanType = self.enclosingType
+		self.siblingReceiverScanBody = self.enclosingTypeBodyStart
 	end 'ensureSiblingReceivers'
 
 	// Parse a call expression `callee(args…)` and return the ValueId its result defines. The

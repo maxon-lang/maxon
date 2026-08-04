@@ -315,6 +315,18 @@ export let ArrSliceOpaqueName = b"__arr_slice_opaque"
 export let ArrCloneOpaqueName = b"__arr_clone_opaque"
 export let ArrAppendOpaqueName = b"__arr_append_opaque"
 
+// ⭐ **`__arr_map(src, dest, transform, env)` — `arr.map(f)` (interface-extensions).** It FILLS a caller-created
+// array rather than returning one, which is `__str_to_bytes`'s shape and taken for its reason: the array is built
+// by the PARSER through `emitArrayCreateOp` — the one array-creation door — so a `map` result and a `[…]` literal
+// of the same element cannot disagree about what that array IS, and the parser (not this walk) owns the element
+// size, the `element_destroy@40` stamp and the result's ownership.
+//
+// ⚠ **IT IS NOT A COPY OPERATION, WHICH IS WHY IT IS ABSENT FROM THE THREE BLOCKS ABOVE.** `slice`/`clone`/
+// `append` duplicate the SOURCE's elements and therefore need the trivial / deep-clone / opaque split; `map`
+// stores what the TRANSFORM answered and never duplicates an element, so a managed element needs no cloner
+// here — the transform's result is a fresh owned value and `dest` is its sole owner.
+export let ArrMapName = b"__arr_map"
+
 // ⭐⭐ **THE `__ManagedMemory` MEMBERS R4.2 DELIVERS.** `__ManagedMemory` IS an `Array with Byte` at this
 // rung (`SignatureIndex.ManagedMemoryTypeName`), so its members are array-runtime entries — which is also why
 // they are `__arr_`-prefixed and ride the existing `usesArray` install with no bit of their own.
@@ -759,6 +771,7 @@ export function installArrayRuntime(module StdModule, usage RuntimeUsage)
 	buildArrSlice(module)
 	buildArrClone(module)
 	buildArrAppend(module)
+	buildArrMap(module)
 	buildArrDecref(module)
 	// The `__ManagedMemory` members with a runtime of their own (three from R4.2, three from R4.4, one from
 	// R4.6) — part of the all-or-nothing `usesArray` install for the reason the header gives: `__`-prefixed
@@ -2931,6 +2944,85 @@ function buildArrAppend(module StdModule)
 
 	module.functions.push(func)
 end 'buildArrAppend'
+
+// ⭐⭐ **THE ONE `map` STEP — CALL THE USER'S TRANSFORM ON ONE ELEMENT AND PUSH WHAT IT ANSWERED.** Shared by
+// `__arr_map` and `SetRuntime`'s `__set_map`, which differ ONLY in how they reach the next element (an index
+// walk over `[0, length)` versus an Occupied-slot walk over `[0, capacity)`); everything about what `map`
+// MEANS is here, so the two containers cannot come to disagree about it.
+//
+// ⭐ **THE CALL IS THE UNIFORM `(userargs, env)` INDIRECT ABI, NOT THE ELEMENT-DESTRUCTOR ONE.** A transform is
+// a source-level FUNCTION VALUE — a lifted closure, a `__fnref_` thunk over a named function, or a
+// function-typed parameter — and every one of those is `(elem, __env) -> R` whether or not it captures
+// (`Parser.parseClosureExpression` promotes the `__env` slot unconditionally). So it takes TWO arguments where
+// `emitElementDestructorCall`'s `(i64) -> void` takes one, and the environment the parser threaded
+// (`emitClosureEnvArg`: the closure's own env block, or a materialized null) rides in the second slot. Both
+// masks are 0 for `emitElementDestructorCall`'s reason: one machine word per argument, never a float and
+// never sub-word — which is what confines this rung's `map` to a transform whose element and result are
+// word-shaped, the gate `Parser.requireElementTransform` states in source terms.
+//
+// ⚠ **`dest` OWNS WHAT THE TRANSFORM ANSWERED, AND THE SOURCE ELEMENT IS A BORROW.** `__arr_get_unchecked` /
+// the slot load hand back the container's OWN word — the source keeps owning it, exactly as shv2's `for … in`
+// element read does — while the transform's result is a fresh value `__arr_push` stores into a record the
+// parser stamped with the element's destructor. One owner each, so neither leaks nor double-frees.
+export function emitMappedElementPush(module StdModule, block IrBlock, transform ValueId, env ValueId, elem ValueId, dest ValueId, ids ValueMinter)
+	let mapped = ids.mint()
+	module.appendOp(block, op: StdOp.callIndirect(mapped, calleeReg: transform, resultType: StdReturnType.value(StdType.i64), argFloatMask: 0, argNarrowMask: 0, args: twoArgs(elem, second: env)))
+	let pushed = ids.mint()
+	module.appendOp(block, op: StdOp.call(pushed, callee: ArrPushName, args: twoArgs(dest, second: mapped)))
+end 'emitMappedElementPush'
+
+// `__arr_map(src, dest, transform, env)` — walk `src`'s `[0, length)` in order, apply `transform` to each
+// element and push what it answers into `dest`. `src` is BORROWED and unmodified; `dest` is the caller-created
+// result array (see `ArrMapName` for why the parser makes it).
+//
+// ⭐ **THE ELEMENT READ IS `__arr_get_unchecked`, NOT A RAW SLOT LOAD.** An array's elements are not uniformly
+// machine words — a `b"…"` blob strides 1 byte and a `bool`/ranged-int element is SUB-BYTE PACKED
+// (`arrayElementSize`'s signed stamp) — so the word-slot load `__set_from` uses over a hash table's key column
+// would read a fragment of every packed element. `__arr_get_unchecked` is the one element-size-aware read the
+// `for … in` lowering already goes through, and reusing it is what keeps `for x in arr` and `arr.map(f)`
+// reading the SAME bytes at every stride. Its bounds and empty-slot checks are absent by contract, and this
+// header holds both: `i` is minted here and compared against the array's own live `length@8`.
+//
+// ⚠ **`length` IS LOOP-INVARIANT AND LOADED ONCE, WHICH IS ONLY TRUE BECAUSE `dest` IS FRESH.** The pushes go
+// into a record the parser just created, so nothing in the loop can grow or move `src` — the same argument
+// `__set_from` makes about the array it borrows. `dest` may grow; nothing here caches anything of `dest`.
+function buildArrMap(module StdModule)
+	var func = IrFunction.createFromStd(ArrMapName, returnType: StdReturnType.void, paramCount: 4, paramTypes: fourI64Params(), returnLine: 0)
+	var ids = ValueMinter.create(4)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var header = module.addBlock(func, label: b"loop")
+	var body = module.addBlock(func, label: b"body")
+	var done = module.addBlock(func, label: b"done")
+
+	emitParams(module, block: entry, count: 4)
+	let src = 0 as ValueId
+	let dest = 1 as ValueId
+	let transform = 2 as ValueId
+	let env = 3 as ValueId
+
+	let count = emitLoadField(module, block: entry, record: src, offset: ArrLengthOffset, ids: ids)
+	let scanStart = emitConst(module, block: entry, value: 0, ids: ids)
+	module.setTerminator(entry, op: StdOp.branch(header.id))
+	entry.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(scanStart)))
+
+	let i = ids.mint()
+	header.blockArgs.push(IrBlockArg.create(i, argType: StdType.i64))
+	let atEnd = emitCmp(module, block: header, a: i, b: count, pred: StdCmpPred.ge, ids: ids)
+	module.setTerminator(header, op: StdOp.condBranch(atEnd, thenBlockId: done.id, elseBlockId: body.id))
+
+	let elem = ids.mint()
+	module.appendOp(body, op: StdOp.call(elem, callee: ArrGetUncheckedName, args: twoArgs(src, second: i)))
+	emitMappedElementPush(module, block: body, transform: transform, env: env, elem: elem, dest: dest, ids: ids)
+	let one = emitConst(module, block: body, value: 1, ids: ids)
+	let iNext = emitBin(module, block: body, a: i, b: one, opcode: StdBinOpcode.add, ids: ids)
+	module.setTerminator(body, op: StdOp.branch(header.id))
+	body.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(iNext)))
+
+	module.setTerminator(done, op: StdOp.retVoid)
+
+	module.functions.push(func)
+end 'buildArrMap'
 
 // `__arr_decref(arr)` — an array's drop: the shared refcount RMW, then on the last owner DESTROY each managed
 // element, free the external element buffer (if any) and the record.

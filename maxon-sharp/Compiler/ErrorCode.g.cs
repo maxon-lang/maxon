@@ -41,6 +41,14 @@ public enum ErrorCode {
   /// see. A cast target no declaration binds ANYWHERE is E3011 instead, which
   /// is sharper than the reference's blanket E2003 -- see
   /// specs-shv2/cast-target-type-resolution.md.
+  /// It also covers the shape where NO name is present and none can be
+  /// inferred: a closure parameter past the first in a container `map`'s
+  /// transform (`nums.map(function(a, b) gives a + b)`). That position types
+  /// ONE parameter, by the arity the transform is declared at, so a later
+  /// untyped one has nothing to take a type from -- see
+  /// specs-shv2/closure-param-type-inference.md. An untyped parameter in a
+  /// position that offers nothing at all is E2015 instead, which names the one
+  /// construct that does infer.
   /// </summary>
   ParserExpectedType = 2003,
   /// <summary>

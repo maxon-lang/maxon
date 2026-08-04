@@ -101,7 +101,7 @@ end 'main'
 ```
 
 <!-- disabled-test: closure-capture.map-with-capture -->
-<!-- `Array.map` — not in shv2's synthesized Array method roster, so `map(…)` is the roster refusal (E2015 "`Array` member 'map' — … the rest (map/contains/…) arrive later"). ⚠ This line used to claim E2004 "Function 'map' does not return a value", which was D11 — the void-result refusal sat ahead of the roster and caught every unknown name in value position — recorded here as though it were the design -->
+<!-- `Array.map` NOW EXISTS (interface-extensions tick, 2026-08-04), so the roster refusal this line used to name is gone. What blocks the case now is E3099: the transform is a CAPTURING closure (it reads `level`), and a capturing closure may not be passed to a compiler runtime entry — `__arr_map` is one, and a runtime entry has no signature for the escape summary to be built from. The guard is CONSERVATIVE here (`__arr_map` never stores the env), but relaxing it means giving runtime entries escape summaries, a mechanism no case in this file reached. MEASURED 2026-08-04 by enabling this case: E3099 at 16:23. WARNING - two earlier reasons on this line have already rotted: it first claimed E2004 "Function 'map' does not return a value" (D11, the void-result refusal sitting ahead of the roster), then the roster refusal itself. Derive what BLOCKS it, and re-measure before trusting this line -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)

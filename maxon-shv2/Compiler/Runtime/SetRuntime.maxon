@@ -42,6 +42,20 @@ export let SetDecrefName = b"__set_decref"
 // (parser-reached) entry that `isSetWitnessCallee` threads.
 export let SetFromName = b"__set_from"
 
+// ⭐ **`__set_map(set, dest, transform, env)` — `s.map(f)` (interface-extensions).** The `Set` half of the one
+// `map` shape: walk the table's OCCUPIED slots, apply the transform to each member and push what it answers
+// into the caller-created result array (`ArrayRuntime.emitMappedElementPush` is the shared step, and
+// `ArrMapName`'s header states why the parser creates the array).
+//
+// ⚠ **IT CARRIES NO WITNESSES, which is what keeps it off `isSetWitnessCallee`.** `insert`/`contains`/`remove`/
+// `from` all HASH or COMPARE a key; this walk only reads slots the table has already placed, exactly as
+// `__set_decref`'s teardown walk does.
+//
+// ⚠ **THE ITERATION ORDER IS THE TABLE'S SLOT ORDER, AND THAT IS UNSPECIFIED BY DESIGN.** `specs/
+// interface-extensions.md:stdlib-map-on-set` says so outright ("order may vary but sum is same") and asserts a
+// sum. A set is unordered; making `map` sort would invent an order the language does not promise.
+export let SetMapName = b"__set_map"
+
 // `__set_grow` is INTERNAL — called only by `__set_insert` when the load factor is crossed (and on the first
 // insert, from capacity 0). It reuses the cached hashes, so it needs NO witnesses; kept out of the public
 // name set so no parser path dispatches to it.
@@ -100,6 +114,7 @@ export function installSetRuntime(module StdModule, usage RuntimeUsage)
 	installHashTable(module, family: HashTableFamily.create(SetCreateName, growName: SetGrowName, insertName: SetInsertName, containsName: SetContainsName, countName: SetCountName, decrefName: SetDecrefName, recordBytes: SetRecordBytes, carriesValues: false))
 	buildSetRemove(module)
 	buildSetFrom(module)
+	buildSetMap(module)
 end 'installSetRuntime'
 
 // `__set_remove(set, elem, hashWitness, eqWitness) -> bool` — probe for `elem`; a matching Occupied slot is
@@ -213,3 +228,31 @@ function buildSetFrom(module StdModule)
 
 	module.functions.push(func)
 end 'buildSetFrom'
+
+// `__set_map(set, dest, transform, env)` — see `SetMapName`. `set` is BORROWED (its members are read for the
+// transform, never moved out and never nulled — the exact inverse of `__set_from`, which MOVES a managed key
+// out of its source array); `dest` is the caller-created `Array with <key>` the results are pushed into.
+function buildSetMap(module StdModule)
+	var func = IrFunction.createFromStd(SetMapName, returnType: StdReturnType.void, paramCount: 4, paramTypes: fourI64Params(), returnLine: 0)
+	var ids = ValueMinter.create(4)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var work = module.addBlock(func, label: b"body")
+	var step = module.addBlock(func, label: b"step")
+	let done = module.addBlock(func, label: b"done")
+
+	emitParams(module, block: entry, count: 4)
+	let set = 0 as ValueId
+	let dest = 1 as ValueId
+	let transform = 2 as ValueId
+	let env = 3 as ValueId
+
+	let slot = emitHtOccupiedSlotWalk(module, func: func, cur: entry, table: set, work: work, step: step, done: done, ids: ids)
+	let member = emitHtRecordSlotLoad(module, block: work, table: set, bufferOffset: HtKeysOffset, index: slot, ids: ids)
+	emitMappedElementPush(module, block: work, transform: transform, env: env, elem: member, dest: dest, ids: ids)
+	module.setTerminator(work, op: StdOp.branch(step.id))
+
+	module.setTerminator(done, op: StdOp.retVoid)
+
+	module.functions.push(func)
+end 'buildSetMap'

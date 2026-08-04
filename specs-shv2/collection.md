@@ -228,8 +228,7 @@ end 'main'
 300
 ```
 
-<!-- disabled-test: map-basic-transform -->
-<!-- P1.7a-b map + closures -->
+<!-- test: map-basic-transform -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -264,8 +263,7 @@ end 'main'
 10
 ```
 
-<!-- disabled-test: map-closure-multiply -->
-<!-- P1.7a-b map + closures -->
+<!-- test: map-closure-multiply -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -290,8 +288,7 @@ end 'main'
 12
 ```
 
-<!-- disabled-test: map-closure-square -->
-<!-- P1.7a-b map + closures -->
+<!-- test: map-closure-square -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -319,8 +316,7 @@ end 'main'
 16
 ```
 
-<!-- disabled-test: map-identity-function -->
-<!-- P1.7a-b map + closures -->
+<!-- test: map-identity-function -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -349,8 +345,7 @@ end 'main'
 30
 ```
 
-<!-- disabled-test: map-negate -->
-<!-- P1.7a-b map + closures -->
+<!-- test: map-negate -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -379,8 +374,7 @@ end 'main'
 -3
 ```
 
-<!-- disabled-test: map-single-element -->
-<!-- P1.7a-b map + closures -->
+<!-- test: map-single-element -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 

@@ -2479,6 +2479,21 @@ export type StructLayout
 	// pointer per entry here, index-aligned. It rides the layout (which travels whole-program) for
 	// `typeParamNames`' reason — the E3017 instantiation check reads it straight off `structOf`.
 	export var whereConstraints as WhereConstraintArray
+	// ⭐ **THE INTERFACE NAMES THIS TYPE'S `implements` CLAUSE WRITES, IN SOURCE ORDER** — the twin of
+	// `EnumLayout.conformsTo`, and the fact an INTERFACE EXTENSION is expanded against: `extension Countable`
+	// declares a method on every type whose list holds `Countable`, so this column is the whole-program
+	// relation `foldExtensionDeclarations` and `Parser.parseExtensionDeclaration` both walk.
+	//
+	// ⚠ **IT IS THE DECLARATION SWEEP'S COPY AND IT IS NOT THE CONFORMANCE CHECKER'S.** `ConformanceDecl`
+	// (recorded by the REAL parse, into `project.conformances`) carries the same interface names PLUS their
+	// `with` bindings and the source position an E3015/E3016 lands on — everything a conformance is VERIFIED
+	// from. This column carries the names alone, because it is read at a moment the other record does not yet
+	// exist: an extension's methods must be in the whole-program signature index before ANY file is parsed,
+	// and a `type X implements Countable` may live in a file that has not been parsed yet. Two records of one
+	// relation is exactly this project's signature bug, so the split is stated rather than assumed: this one
+	// is the SWEEP's answer to "which interfaces does this type name?", used only to expand extensions, and
+	// nothing verifies a conformance from it.
+	export var conformsTo as ByteArrayArray
 	// ⭐ **THE DECLARATION'S OWN VISIBILITY (N1a)** — `type Point` vs `module type Point` vs
 	// `export type Point`. Read by `Parser.typeNameVisibleHere`, the door a source-written type NAME in a
 	// dotted primary goes through, and by `Parser.requireFieldAccessible`, which meets it at the first field
@@ -2496,7 +2511,7 @@ export type StructLayout
 	// take the columns, deliberately: handing pre-built parallel arrays across a call boundary is
 	// exactly the shape that lets one arrive short.
 	export static function create(name ByteArray, visibility Visibility, declFilePath FilePath) returns StructLayout
-		return Self{name: name, fieldNames: ByteArrayArray.create(), fieldTypes: MaxonTypeArray.create(), fieldMutable: BoolArray.create(), fieldVisibility: VisibilityArray.create(), fieldDefaults: FieldDefaultArray.create(), fieldDeclaredSurfaces: DeclaredSurfaceArray.create(), fieldOffsets: ByteOffsetArray.create(), slotBytes: 0, typeParamNames: ByteArrayArray.create(), whereConstraints: sharedEmptyWhereConstraints, visibility: visibility, declFilePath: declFilePath}
+		return Self{name: name, fieldNames: ByteArrayArray.create(), fieldTypes: MaxonTypeArray.create(), fieldMutable: BoolArray.create(), fieldVisibility: VisibilityArray.create(), fieldDefaults: FieldDefaultArray.create(), fieldDeclaredSurfaces: DeclaredSurfaceArray.create(), fieldOffsets: ByteOffsetArray.create(), slotBytes: 0, typeParamNames: ByteArrayArray.create(), whereConstraints: sharedEmptyWhereConstraints, conformsTo: sharedEmptyDeclaredConformances, visibility: visibility, declFilePath: declFilePath}
 	end 'create'
 
 	// The layout every COMPILER-SYNTHESIZED type takes: nameable from any file, declared in none. Spelled
@@ -2518,6 +2533,12 @@ export type StructLayout
 	export function recordWhereConstraints(constraints WhereConstraintArray)
 		self.whereConstraints = constraints
 	end 'recordWhereConstraints'
+
+	// Record the interface names the type's `implements` clause writes. Replaces the column wholesale for
+	// `recordTypeParams`' reason — the clause is read as a unit, by the one reader both passes share.
+	export function recordConformances(names ByteArrayArray)
+		self.conformsTo = names
+	end 'recordConformances'
 
 	// The number of `where` constraints (P1.7a slice 2a) — the number of hidden witness parameters an
 	// instance method of this type carries under dictionary-passing. 0 for an unconstrained type.
@@ -2703,8 +2724,8 @@ export typealias PayloadFieldArrayArray = Array with PayloadFieldArray
 export let UnionTagOffset = 0 as ByteOffset
 let UnionTagBytes = 8 as ByteOffset
 
-// The conformance list of an enum/union that declares no `implements` clause — ONE shared empty for the
-// whole compile, following `sharedEmptyInnerAliases` and its family: nearly every enum in the corpus
+// The conformance list of a declaration that writes no `implements` clause — ONE shared empty for the
+// whole compile, following `sharedEmptyInnerAliases` and its family: nearly every declaration in the corpus
 // declares nothing, and a fresh empty array per declaration would be an allocation for a fact that is the
 // absence of one. Read-only; `Parser.readOptionalImplementsClause` builds a real list only for a real clause.
 //
@@ -2712,7 +2733,26 @@ let UnionTagBytes = 8 as ByteOffset
 // It was declared in `Parser.maxon` while the three `builtin…Enum()` seeds below — the other constructors of
 // an `EnumLayout` — could not see it and each spelled `ByteArrayArray.create()` instead. Three spellings of
 // "this enum declares nothing", one of them in the file that owns the field.
-export let sharedEmptyEnumConformances = ByteArrayArray.create()
+//
+// ⚠ It is no longer the ENUM's alone: `StructLayout.conformsTo` (interface extensions) is the same column on
+// the other declaration kind, filled by the same reader, and its absence is the same fact.
+export let sharedEmptyDeclaredConformances = ByteArrayArray.create()
+
+// ⭐ **DOES AN `implements` LIST NAME `interfaceName`? — ONE SCAN, FOR BOTH DECLARATION KINDS.** A `type`'s
+// `StructLayout.conformsTo` and an `enum`/`union`'s `EnumLayout.conformsTo` are the same column on two
+// records, filled by the same reader, and the question asked of them is the same question. It was a method on
+// each — two identical loops — until the `type` half gained the column for interface extensions.
+//
+// Nominal and direct, matching `ConformanceCheck.typeDeclaresInterface`'s model: shv2's conformance is
+// DECLARED, never inferred. A linear scan of a list that holds one entry per name in one clause.
+export function conformanceListDeclares(conformsTo ByteArrayArray, interfaceName ByteArray) returns bool
+	for declaredInterface in conformsTo 'each'
+		if declaredInterface.equals(interfaceName) 'declaresIt'
+			return true
+		end 'declaresIt'
+	end 'each'
+	return false
+end 'conformanceListDeclares'
 
 // ⭐ **WHAT A COMPILER-SYNTHESIZED *ERROR* ENUM DECLARES (A1s wave 2 review).** `implements Error` — the
 // clause the declaration each seed stands in for actually writes, and the fact
@@ -2842,18 +2882,6 @@ export type EnumLayout
 	export static function createCompilerOwned(name ByteArray, conformsTo ByteArrayArray) returns EnumLayout
 		return EnumLayout.create(name, isUnion: false, conformsTo: conformsTo, visibility: Visibility.global, declFilePath: CompilerOwnedDeclFilePath, backing: EnumBacking.integer)
 	end 'createCompilerOwned'
-
-	// Does this enum/union declare `implements interfaceName`? Nominal and direct, matching
-	// `ConformanceCheck.typeDeclaresInterface`'s model for a `type`: shv2's conformance is DECLARED,
-	// never inferred. A linear scan of a list that holds one entry per name in one clause.
-	export function declaresConformanceTo(interfaceName ByteArray) returns bool
-		for declaredInterface in self.conformsTo 'each'
-			if declaredInterface.equals(interfaceName) 'declaresIt'
-				return true
-			end 'declaresIt'
-		end 'each'
-		return false
-	end 'declaresConformanceTo'
 
 	// Append one declared case. THE one writer of all THREE columns, so they cannot drift — a caller
 	// that pushed a name and forgot the payloads would shift every later case's payloads onto the
@@ -3019,7 +3047,7 @@ export typealias EnumLayoutMap = Map with (ByteArray, EnumLayout)
 // user `enum` gets, so every downstream reader (a qualified case value, a `match` scrutinee, TypeResolution's
 // erase-to-`integer`, the aggregate-identity check) sees an ordinary enum and needs no arm of its own.
 export function builtinOrderingEnum() returns EnumLayout
-	var layout = EnumLayout.createCompilerOwned(OrderingTypeName, conformsTo: sharedEmptyEnumConformances)
+	var layout = EnumLayout.createCompilerOwned(OrderingTypeName, conformsTo: sharedEmptyDeclaredConformances)
 	addBuiltinEnumCase(layout, caseName: OrderingLessThanCaseName)
 	addBuiltinEnumCase(layout, caseName: OrderingEqualToCaseName)
 	addBuiltinEnumCase(layout, caseName: OrderingGreaterThanCaseName)

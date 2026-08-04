@@ -278,6 +278,10 @@ export function queryProgramSignatures(project Project) returns ProgramSignature
 	// only `Array with Integer` is that formal), and an instance interned after the warming walk would have its
 	// two name memos derived LAZILY — by the parse, which must only ever read them.
 	try foldInterfaceDeclarations(project, signatures: signatures)
+	// ⭐ And every `extension <Interface>`'s methods, onto every conformer — STRICTLY AFTER the line above,
+	// which is what makes an extension's signatures render types exactly as the real parse will. See
+	// `foldExtensionDeclarations`.
+	try foldExtensionDeclarations(project, signatures: signatures)
 	// ⭐⭐ **AND ONLY NOW CAN A SWEPT `named` BE TOLD FROM AN INTERFACE (P1.7a-existentials slice 1).** The
 	// line above is what fills the interface registry, so every type the sweep recorded BEFORE it — a struct
 	// field, a declared return type — spells an interface annotation as a bare `named`, while the real parse
@@ -317,8 +321,10 @@ function foldOneFileInto(project Project, signatures ProgramSignatures, path Fil
 	// A `Parser` IS the sweeper — same cursor, same `parseOptionalReturnType` — so the sweep and
 	// the real parse cannot drift on what `returns X` means (see `foldDeclaredSignaturesInto`). It
 	// is handed the index it is BUILDING, which is safe because a sweep types no call and so never
-	// reads it; nothing else in the Parser needs a signature.
-	var scanner = Parser.create(tokens, filePath: path, namespace: namespaceForModuleDirectory(moduleDirectory), signatures: signatures, isStdlibSource: isStdlibSource, declaresCompilerInternalNames: declaresCompilerInternalNames(project, path: path), livesUnderStdlibDirectory: livesUnderStdlibDirectory(signatures, isStdlibSource: isStdlibSource))
+	// reads it; nothing else in the Parser needs a signature. Built through `fileReader` like every
+	// other pass's — including its namespace, which is why the module directory is FILED just above and
+	// read back rather than handed straight over: one derivation, one reader.
+	var scanner = fileReader(project, signatures: signatures, path: path, tokens: tokens, isStdlibSource: isStdlibSource)
 	scanner.foldDeclaredSignaturesInto(signatures)
 	recordPhase(project, phase: CompilePhase.signatures, probe: probe)
 end 'foldOneFileInto'
@@ -541,10 +547,7 @@ function foldInterfaceDeclarations(project Project, signatures ProgramSignatures
 	while i < sites.count() 'eachFile'
 		let path = (try sites.get(i) otherwise panic("foldInterfaceDeclarations: sites.get OOB at {i} below count {sites.count()}")).path
 		let tokens = try queryActiveTokens(project, path: path)
-		// ONE classification, read twice: `isStdlibSourceFile` is the four-String-allocation probe its own
-		// header prices, and `livesUnderStdlibDirectory` is a derivation over its answer, not a second one.
-		let isStdlibSource = isStdlibSourceFile(project, path: path)
-		var reader = Parser.create(tokens, filePath: path, namespace: signatures.namespaceOf(path), signatures: signatures, isStdlibSource: isStdlibSource, declaresCompilerInternalNames: declaresCompilerInternalNames(project, path: path), livesUnderStdlibDirectory: livesUnderStdlibDirectory(signatures, isStdlibSource: isStdlibSource))
+		var reader = fileReader(project, signatures: signatures, path: path, tokens: tokens, isStdlibSource: isStdlibSourceFile(project, path: path))
 
 		while i < sites.count() 'eachSiteInFile'
 			let site = try sites.get(i) otherwise panic("foldInterfaceDeclarations: sites.get OOB at {i} below count {sites.count()}")
@@ -557,6 +560,40 @@ function foldInterfaceDeclarations(project Project, signatures ProgramSignatures
 		end 'eachSiteInFile'
 	end 'eachFile'
 end 'foldInterfaceDeclarations'
+
+// ⭐⭐ **PUBLISH EVERY INTERFACE EXTENSION'S METHODS ONTO EVERY CONFORMER — the whole-program half of the
+// mechanism, and the reason the sweep only noted positions.** `extension Countable` declares `count()` on
+// every `type X implements Countable` in the PROGRAM, and a conformer may be declared in a file the sweep
+// reached after the extension. So the expansion waits until `allFilesFolded`, exactly as
+// `foldInterfaceDeclarations` does, and for a sharper version of that pass's reason: there the risk was two
+// spellings of one type, here it is publishing methods for half the conformers.
+//
+// ⚠ **AND IT MUST RUN AFTER `foldInterfaceDeclarations`, NOT MERELY BESIDE IT.** An extension method's
+// signature is read with `parseTypeReference`, whose interface arm is gated on the interface registry being
+// whole — so `returns SomeInterface` in an extension read before that pass would spell a `named` where the
+// real parse spells an `interfaceRef`. That is `InterfaceDeclSite`'s own hazard, one declaration kind over.
+//
+// The sites arrive grouped by file, so the grouping is a WALK — `foldInterfaceDeclarations`' shape, for its
+// reason (one `Parser` per file, not per site).
+function foldExtensionDeclarations(project Project, signatures ProgramSignatures) throws CompileError
+	let sites = signatures.extensionDeclSites
+	var i = 0 as ElementCount
+	while i < sites.count() 'eachFile'
+		let path = (try sites.get(i) otherwise panic("foldExtensionDeclarations: sites.get OOB at {i} below count {sites.count()}")).path
+		let tokens = try queryActiveTokens(project, path: path)
+		var reader = fileReader(project, signatures: signatures, path: path, tokens: tokens, isStdlibSource: isStdlibSourceFile(project, path: path))
+
+		while i < sites.count() 'eachSiteInFile'
+			let site = try sites.get(i) otherwise panic("foldExtensionDeclarations: sites.get OOB at {i} below count {sites.count()}")
+			if not site.path.equals(path) 'nextFile'
+				break
+			end 'nextFile'
+
+			reader.foldExtensionDeclarationInto(signatures, site: site)
+			i = i + 1
+		end 'eachSiteInFile'
+	end 'eachFile'
+end 'foldExtensionDeclarations'
 
 // --- Per-file query: parse into a FileParseArtifact ---
 export function queryParseOps(project Project, path FilePath) returns FileParseArtifact throws CompileError
@@ -589,13 +626,7 @@ export function queryParseOps(project Project, path FilePath) returns FileParseA
 	// proper, the termination assert, and the memo write.
 	let parseProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.parse)
 
-	// The namespace is READ BACK from the index rather than re-derived (N1a): `foldOneFileInto` derived it
-	// once per file, from the anchor only it holds, and a second derivation here would be a second chance to
-	// pick a different anchor for the same file.
-	// ONE classification, read twice — see `foldInterfaceDeclarations` for why the second read is a
-	// derivation over the first and not a second probe.
-	let isStdlibSource = isStdlibSourceFile(project, path: path)
-	var parser = Parser.create(tokens, filePath: path, namespace: signatures.namespaceOf(path), signatures: signatures, isStdlibSource: isStdlibSource, declaresCompilerInternalNames: declaresCompilerInternalNames(project, path: path), livesUnderStdlibDirectory: livesUnderStdlibDirectory(signatures, isStdlibSource: isStdlibSource))
+	var parser = fileReader(project, signatures: signatures, path: path, tokens: tokens, isStdlibSource: isStdlibSourceFile(project, path: path))
 	let errorCountBefore = project.diagnostics.count()
 	let artifact = try parser.parseModule() otherwise (parseErr) 'parseFail'
 		reportParseError(project, path: path, error: parseErr)
@@ -891,6 +922,32 @@ function declaresCompilerInternalNames(project Project, path FilePath) returns b
 	// `StdlibSource.locateStdlibDir` records for `StdlibDirName`.
 	return path.resolve(Directory.currentPath()).equals(project.stdlibDir.join("{CompilerInternalDeclaringModule}"))
 end 'declaresCompilerInternalNames'
+
+// ⭐⭐ **THE ONE CONSTRUCTION OF A FILE'S `Parser` — every pass that reads a file reads it through here.**
+// Four passes build a reader over the same file: the per-file signature sweep (`foldOneFileInto`), the
+// whole-program interface pass, the extension pass, and the real parse. Each needs the same four per-file
+// facts, and written out per pass they were four copies of one derivation.
+//
+// ⚠ **A NEW PARAMETER WOULD HAVE BROKEN ALL FOUR LOUDLY; A CHANGE TO *HOW* A FACT IS DERIVED WOULD NOT.**
+// Three copies updated and one missed classifies the SAME FILE two ways inside one compile — stdlib in the
+// sweep, user code in the parse — with no diagnostic anywhere. That is this project's signature bug, and it
+// had two copies of it before an extension pass added a third.
+//
+// ONE classification, read twice: `isStdlibSourceFile` is the four-String-allocation probe its own header
+// prices, and `livesUnderStdlibDirectory` is a DERIVATION over its answer, not a second probe — which is
+// why the caller hands in the bit rather than this routine asking again per pass (`foldOneFileInto`'s
+// caller already knows it, and paying for it there would be a per-file cost for an answer in hand).
+//
+// The namespace is READ BACK from the index rather than re-derived (N1a): `foldOneFileInto` derives it once
+// per file, from the anchor only it holds, and a second derivation is a second chance to pick a different
+// anchor for the same file.
+//
+// `tokens` is a parameter rather than a `queryActiveTokens` call in here because two callers deliberately
+// fetch them OUTSIDE their phase probe, so that a `signatures` or `parse` phase never absorbs the lexing it
+// depends on. Called with them in hand, this routine cannot re-introduce that.
+function fileReader(project Project, signatures ProgramSignatures, path FilePath, tokens TokenArray, isStdlibSource bool) returns Parser
+	return Parser.create(tokens, filePath: path, namespace: signatures.namespaceOf(path), signatures: signatures, isStdlibSource: isStdlibSource, declaresCompilerInternalNames: declaresCompilerInternalNames(project, path: path), livesUnderStdlibDirectory: livesUnderStdlibDirectory(signatures, isStdlibSource: isStdlibSource))
+end 'fileReader'
 
 // Clear the registries that `mergeArtifact` rebuilds from artifacts, so a
 // queryAllModule miss re-derives them cleanly rather than compounding a prior
@@ -1279,6 +1336,9 @@ function reportParseError(project Project, path FilePath, error ParseError)
 		// the name strip. Inline, this arm was the one that leaked the compiler's mint at the author.
 		otherwiseOutsideRangedReturn(value, aliasName, low, high, line, column) then reportPositioned(project, code: ErrorCode.typeMismatch, message: otherwiseOutOfRangeMessage(value, aliasName: aliasName, low: low, high: high), line: line, column: column, filePath: path)
 		hiddenCastTargetType(line, column) then reportPositioned(project, code: ErrorCode.parserExpectedType, message: HiddenTypeNameMessage, line: line, column: column, filePath: path)
+		// The reference bootstrap's sentence verbatim, under the code it uses for it — the mistake and its
+		// remedy are the same in both compilers, so there is nothing here to word differently.
+		uninferrableClosureParam(paramName, line, column) then reportPositioned(project, code: ErrorCode.parserExpectedType, message: "Cannot infer type for closure parameter '{paramName}'. Add an explicit type annotation.", line: line, column: column, filePath: path)
 	end 'kind'
 end 'reportParseError'
 

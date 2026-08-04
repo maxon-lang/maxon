@@ -381,22 +381,41 @@ function emitHtDestroyColumnIfManaged(module StdModule, func IrFunction, cur IrB
 	return cont
 end 'emitHtDestroyColumnIfManaged'
 
-// The `[0, capacity)` Occupied-slot destroy LOOP of `emitHtDestroyColumnIfManaged` — factored out so the gate
-// (load destructor, test non-zero) and the walk read separately, exactly as `emitElementDestroyRange` splits
-// from its own gate. `drop` is the already-loaded, non-null column destructor. The capacity and the two
-// buffers are loop-invariant (teardown neither grows nor mutates the table), loaded once in `cur` (which
-// dominates the loop), so the loop's live set stays small — a non-probe walk, exactly as `buildArrDecref`'s
-// does. Returns the loop's exit block.
-function emitHtOccupiedDropRange(module StdModule, func IrFunction, cur IrBlock, table ValueId, drop ValueId, bufferOffset ByteOffset, ids ValueMinter) returns IrBlock
-	var header = module.addBlock(func, label: b"htoccdh")
-	var body = module.addBlock(func, label: b"htoccdb")
-	var doDrop = module.addBlock(func, label: b"htoccdd")
-	var step = module.addBlock(func, label: b"htoccds")
-	let done = module.addBlock(func, label: b"htoccdone")
+// ⭐⭐ **THE `[0, capacity)` OCCUPIED-SLOT WALK, EMITTED ONCE FOR EVERY READER OF A LIVE ENTRY.** A hash table
+// has no cursor protocol and no dense element range: its live entries are scattered across the whole capacity
+// behind a `states` column, so "visit each live entry" is a real invariant — read the state word, compare it
+// against `Occupied`, and skip Empty AND Deleted alike. Getting either half of that wrong is a WRONG ANSWER
+// with no diagnostic (a tombstoned slot still holds its stale key bytes), which is exactly why it is written
+// here rather than once per reader.
+//
+// The caller creates `work`, `step` and `done` and receives the live SLOT INDEX; it loads whichever
+// COLUMNS it reads (`emitHtRecordSlotLoad`) into `work`, emits its own per-entry ops there, and terminates
+// `work` with a branch to `step`. Everything else — the counter, the bound, the state test and the
+// increment — belongs to this walk. (The blocks are the caller's for `emitHtLookupProbe`'s reason: a block a
+// caller must be able to name is a parameter, not a return value.)
+//
+// ⭐ **IT HANDS BACK THE SLOT, NOT A COLUMN, BECAUSE A READER MAY WANT BOTH COLUMNS.** It took a
+// `bufferOffset` and loaded that one column while `__map_entries` needs the key AND the value of the same
+// slot — and a walk that can only answer one of them would have had to be run twice, or forked. Which
+// column(s) a live slot means is the reader's question; which slots are live is this walk's, and that is the
+// whole of what it now answers.
+//
+// The capacity and the states buffer are loop-invariant — no reader grows or rehashes the table it is
+// walking — so they are loaded once in `cur`, which dominates the loop. An EMPTY table (capacity 0) exits at
+// the header before the null states pointer is dereferenced, and before any caller's column load runs.
+//
+// ⚠ **A CALLER'S COLUMN BASE IS RE-READ INSIDE `work` RATHER THAN HOISTED, and that is this file's standing
+// register-pressure rule rather than an oversight** (see the ⚠ block in the header): the base is a load off a
+// record that cannot change during the walk, and keeping it OUT of the cross-loop live range is what lets a
+// reader with a wide parameter block — `__map_entries` carries six — walk two columns at once without
+// overrunning the 14-GPR pool. It costs one load per LIVE entry in the three walks that use it, which are the
+// two teardowns and the two `map` fills.
+export function emitHtOccupiedSlotWalk(module StdModule, func IrFunction, cur IrBlock, table ValueId, work IrBlock, step IrBlock, done IrBlock, ids ValueMinter) returns ValueId
+	var header = module.addBlock(func, label: b"htoccwh")
+	var body = module.addBlock(func, label: b"htoccwb")
 
 	let capacity = emitLoadField(module, block: cur, record: table, offset: HtCapacityOffset, ids: ids)
 	let states = emitLoadField(module, block: cur, record: table, offset: HtStatesOffset, ids: ids)
-	let entries = emitLoadField(module, block: cur, record: table, offset: bufferOffset, ids: ids)
 	let scanStart = emitConst(module, block: cur, value: 0, ids: ids)
 	module.setTerminator(cur, op: StdOp.branch(header.id))
 	cur.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(scanStart)))
@@ -407,21 +426,33 @@ function emitHtOccupiedDropRange(module StdModule, func IrFunction, cur IrBlock,
 	let atEnd = emitCmp(module, block: header, a: i, b: capacity, pred: StdCmpPred.ge, ids: ids)
 	module.setTerminator(header, op: StdOp.condBranch(atEnd, thenBlockId: done.id, elseBlockId: body.id))
 
-	// body: an Occupied slot holds a live entry to drop; Empty/Deleted slots hold none.
+	// body: an Occupied slot holds a live entry; Empty/Deleted slots hold none.
 	let state = emitWordSlotLoad(module, block: body, base: states, index: i, ids: ids)
 	let occupiedTag = emitConst(module, block: body, value: HtSlotOccupied, ids: ids)
 	let isOccupied = emitCmp(module, block: body, a: state, b: occupiedTag, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(body, op: StdOp.condBranch(isOccupied, thenBlockId: doDrop.id, elseBlockId: step.id))
-
-	let entry = emitWordSlotLoad(module, block: doDrop, base: entries, index: i, ids: ids)
-	emitElementDestructorCall(module, block: doDrop, destroy: drop, elem: entry, ids: ids)
-	module.setTerminator(doDrop, op: StdOp.branch(step.id))
+	module.setTerminator(body, op: StdOp.condBranch(isOccupied, thenBlockId: work.id, elseBlockId: step.id))
 
 	// step: `i = i + 1`.
 	let one = emitConst(module, block: step, value: 1, ids: ids)
 	let iNext = emitBin(module, block: step, a: i, b: one, opcode: StdBinOpcode.add, ids: ids)
 	module.setTerminator(step, op: StdOp.branch(header.id))
 	step.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(iNext)))
+
+	return i
+end 'emitHtOccupiedSlotWalk'
+
+// The `[0, capacity)` Occupied-slot destroy LOOP of `emitHtDestroyColumnIfManaged` — factored out so the gate
+// (load destructor, test non-zero) and the walk read separately, exactly as `emitElementDestroyRange` splits
+// from its own gate. `drop` is the already-loaded, non-null column destructor. Returns the loop's exit block.
+function emitHtOccupiedDropRange(module StdModule, func IrFunction, cur IrBlock, table ValueId, drop ValueId, bufferOffset ByteOffset, ids ValueMinter) returns IrBlock
+	var doDrop = module.addBlock(func, label: b"htoccdd")
+	var step = module.addBlock(func, label: b"htoccds")
+	let done = module.addBlock(func, label: b"htoccdone")
+
+	let slot = emitHtOccupiedSlotWalk(module, func: func, cur: cur, table: table, work: doDrop, step: step, done: done, ids: ids)
+	let entry = emitHtRecordSlotLoad(module, block: doDrop, table: table, bufferOffset: bufferOffset, index: slot, ids: ids)
+	emitElementDestructorCall(module, block: doDrop, destroy: drop, elem: entry, ids: ids)
+	module.setTerminator(doDrop, op: StdOp.branch(step.id))
 
 	return done
 end 'emitHtOccupiedDropRange'

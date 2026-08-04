@@ -1,0 +1,182 @@
+// Test: cmp-negative-immediates
+typealias Val = int(i64.min to i64.max)
+
+function base(p Val) returns Val
+	return p
+end 'base'
+
+function main() returns ExitCode
+	let x = base(-4096)
+	if x == -1 'eqMinusOne'
+		return 41
+	end 'eqMinusOne'
+	if not (x < -1) 'ltMinusOne'
+		return 42
+	end 'ltMinusOne'
+	if not (x < -4095) 'ltPlainField'
+		return 43
+	end 'ltPlainField'
+	if not (x == -4096) 'eqShifted'
+		return 44
+	end 'eqShifted'
+	if not (x > -16773120) 'gtShiftedTop'
+		return 45
+	end 'gtShiftedTop'
+	if not (x > -65535) 'gtNoForm'
+		return 46
+	end 'gtNoForm'
+	if x == -65535 'eqNoForm'
+		return 47
+	end 'eqNoForm'
+	if not (x > -2147483648) 'gtMin'
+		return 48
+	end 'gtMin'
+	let y = base(-16773120)
+	if not (y == -16773120) 'eqShiftedTop'
+		return 49
+	end 'eqShiftedTop'
+	if not (y < -4096) 'ltShifted'
+		return 50
+	end 'ltShifted'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+func @base {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegReg r8, rcx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm rcx, -4096
+    x64.callDirect base
+    x64.cmpRegImm32 r8, -1
+    x64.jcc equal, eqMinusOne
+    x64.jmp ifcont
+  eqMinusOne:
+    x64.movRegImm32 r8, 41
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.cmpRegImm32 r8, -1
+    x64.setccReg less, rax
+    x64.xorRegImm32 rax, rax, 1
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, ltMinusOne
+    x64.jmp ifcont
+  ltMinusOne:
+    x64.movRegImm32 r8, 42
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.cmpRegImm32 r8, -4095
+    x64.setccReg less, rax
+    x64.xorRegImm32 rax, rax, 1
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, ltPlainField
+    x64.jmp ifcont
+  ltPlainField:
+    x64.movRegImm32 r8, 43
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.cmpRegImm32 r8, -4096
+    x64.setccReg equal, rax
+    x64.xorRegImm32 rax, rax, 1
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, eqShifted
+    x64.jmp ifcont
+  eqShifted:
+    x64.movRegImm32 r8, 44
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.cmpRegImm32 r8, -16773120
+    x64.setccReg greater, rax
+    x64.xorRegImm32 rax, rax, 1
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, gtShiftedTop
+    x64.jmp ifcont
+  gtShiftedTop:
+    x64.movRegImm32 r8, 45
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.cmpRegImm32 r8, -65535
+    x64.setccReg greater, rax
+    x64.xorRegImm32 rax, rax, 1
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, gtNoForm
+    x64.jmp ifcont
+  gtNoForm:
+    x64.movRegImm32 r8, 46
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.cmpRegImm32 r8, -65535
+    x64.jcc equal, eqNoForm
+    x64.jmp ifcont
+  eqNoForm:
+    x64.movRegImm32 r8, 47
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.cmpRegImm32 r8, -2147483648
+    x64.setccReg greater, rax
+    x64.xorRegImm32 rax, rax, 1
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, gtMin
+    x64.jmp ifcont
+  gtMin:
+    x64.movRegImm32 r8, 48
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm rcx, -16773120
+    x64.callDirect base
+    x64.cmpRegImm32 r8, -16773120
+    x64.setccReg equal, rax
+    x64.xorRegImm32 rax, rax, 1
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, eqShiftedTop
+    x64.jmp ifcont
+  eqShiftedTop:
+    x64.movRegImm32 r8, 49
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.cmpRegImm32 r8, -4096
+    x64.setccReg less, rax
+    x64.xorRegImm32 rax, rax, 1
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, ltShifted
+    x64.jmp ifcont
+  ltShifted:
+    x64.movRegImm32 r8, 50
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

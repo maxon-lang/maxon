@@ -214,7 +214,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:8:14: Unsupported: `Array` member 'frobnicate' — P1.7 provides managed/get/set/first/last/pop/remove/slice/count/capacity/isEmpty/clone/push/reserve/resize/clear/insert/append; that list IS the surface, so nothing else is served here
+error E2015: <fragment>:8:14: Unsupported: `Array` member 'frobnicate' — P1.7 provides managed/get/set/first/last/pop/remove/slice/count/capacity/isEmpty/clone/push/reserve/resize/clear/insert/append/map; that list IS the surface, so nothing else is served here
 ```
 
 <!-- test: error.unknown-set-method-in-value-position -->
@@ -231,7 +231,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:8:12: Unsupported: `Set` method 'frobnicate' — P1.7b provides create/insert/contains/remove/count; `from`-construction and iteration are later slices
+error E2015: <fragment>:8:12: Unsupported: `Set` method 'frobnicate' — shv2 provides create/insert/contains/remove/count/map, plus `Set from […]` construction; `for … in` over a `Set` needs the cursor protocol a later slice brings
 ```
 
 <!-- test: error.unknown-buffer-member-in-value-position -->
@@ -264,7 +264,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:8:14: Unsupported: `Array` member 'grow' — P1.7 provides managed/get/set/first/last/pop/remove/slice/count/capacity/isEmpty/clone/push/reserve/resize/clear/insert/append; that list IS the surface, so nothing else is served here
+error E2015: <fragment>:8:14: Unsupported: `Array` member 'grow' — P1.7 provides managed/get/set/first/last/pop/remove/slice/count/capacity/isEmpty/clone/push/reserve/resize/clear/insert/append/map; that list IS the surface, so nothing else is served here
 ```
 
 <!-- test: error.array-void-mutator-in-value-position -->

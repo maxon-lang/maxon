@@ -110,10 +110,25 @@ function enumBackingDiscriminator(backing EnumBacking) returns ContentHash
 	end 'b'
 end 'enumBackingDiscriminator'
 
-// One `implements <Interface>` name on an enum/union declaration (A1s wave 2), mixed per name so a
-// SECOND interface moves the hash rather than being absorbed by the first. Its own discriminator for
-// `DeclShapeStruct`'s reason: the list is a distinct fact from the case list beside it.
-let DeclShapeEnumConformance = 55 as ContentHash
+// One `implements <Interface>` name on a declaration (A1s wave 2), mixed per name so a SECOND interface
+// moves the hash rather than being absorbed by the first. Its own discriminator for `DeclShapeStruct`'s
+// reason: the list is a distinct fact from the case or field list beside it. The KIND it hangs off is
+// already in the hash (`DeclShapeEnum` / `DeclShapeStruct`), so one discriminator serves both.
+let DeclShapeDeclaredConformance = 55 as ContentHash
+
+// ⭐ **THE `implements` LIST'S CONTRIBUTION TO A DECLARATION'S CONTENT HASH — ONE STATEMENT, BOTH KINDS.**
+// The reason the list must ride is the same on each and it is `recordStruct`'s rule: a conformance changes
+// what ANOTHER file compiles to while that file's own bytes never move. For an enum it decides whether a
+// `throws E` conformance is accepted (`ConformanceCheck.requireImplErrorConformsToRequirement`); for a
+// `type` it decides which INTERFACE EXTENSION methods that type has at all, which is a whole set of
+// functions appearing in or vanishing from the program.
+function mixDeclaredConformances(state ContentHash, conformsTo ByteArrayArray) returns ContentHash
+	var out = state
+	for name in conformsTo 'eachConformance'
+		out = mixBytes(mix(out, value: DeclShapeDeclaredConformance), bytes: name)
+	end 'eachConformance'
+	return out
+end 'mixDeclaredConformances'
 
 // The `MaxonType.structRef` arm's discriminator. It is DISTINCT from `TypeShapeNamed`, and that is
 // load-bearing rather than tidy: `named(Point)` and `structRef(Point)` carry the same NAME and mean
@@ -3659,6 +3674,32 @@ end 'InterfaceDeclSite'
 
 export typealias InterfaceDeclSiteArray = Array with InterfaceDeclSite
 
+// ⭐ **WHERE ONE `extension <Interface>` DECLARATION SITS IN ITS FILE'S TOKEN STREAM.** The same
+// "note the position, read the declaration once the program is whole" split `InterfaceDeclSite` makes, and
+// here the second half of it is not an optimization at all — it is the only order that can work. An
+// extension declares its methods on EVERY type whose `implements` clause names the interface, and those
+// types may be declared in files this sweep has not reached; read per-file, an extension would publish
+// methods for the conformers declared ABOVE it and none for the ones below.
+//
+// ⚠ **IT IS ITS OWN TYPE RATHER THAN AN `InterfaceDeclSite` WITH A DIFFERENT MEANING, BECAUSE THE NAME IT
+// CARRIES IS A DIFFERENT KIND OF NAME.** An interface site's `name` is a name the file DECLARES, which is
+// why it travels — the stdlib/user shadow contest is settled before the declaration is read and has to see
+// it. An extension declares no name at all; `interfaceName` is a name it USES, and no contest reads it.
+export type ExtensionDeclSite
+	export var path as FilePath
+	export var tokenPos as TokenIndex
+	// The interface being extended, read by the sweep off the token after the `extension` keyword — the same
+	// token `Parser.readExtensionHeader` consumes. A malformed header carries the empty name, which matches no
+	// conformer and expands nothing; the real parse reports it with a position.
+	export var interfaceName as ByteArray
+
+	export static function create(path FilePath, tokenPos TokenIndex, interfaceName ByteArray) returns ExtensionDeclSite
+		return Self{path: path, tokenPos: tokenPos, interfaceName: interfaceName}
+	end 'create'
+end 'ExtensionDeclSite'
+
+export typealias ExtensionDeclSiteArray = Array with ExtensionDeclSite
+
 // ⭐ **AN INTERFACE'S POSITION IN DECLARATION ORDER — the whole-program, interner-FREE handle a
 // `witnessDispatch` names its requirement's interface by.** See `ProgramSignatures.interfaceNamesInDeclOrder`
 // for why an index and not a name or an interner id. The range is the machine word rather than a tight
@@ -4009,6 +4050,13 @@ export type ProgramSignatures
 	// `fieldTypeOf` re-interns on the way out. It is the second table to need that treatment, and
 	// it needs it for exactly `returnTypes`' reason.
 	var structTypes as StructLayoutMap
+	// ⭐ **EVERY DECLARED `type`'s NAME, IN SWEEP ORDER — the ORDERED key list `structTypes` cannot be.** One
+	// reader: an INTERFACE EXTENSION expands onto every conformer of its interface, and the ORDER it finds
+	// them in is the order the monomorphized methods are emitted in — a fact that reaches the object file.
+	// Walking the map instead would make the emitted function order a property of a hash table's bucket
+	// layout rather than of the program, which is exactly the shape `interfaceNamesInDeclOrder` exists to
+	// avoid one registry over. Written only by `recordStruct`, in the same act as the map entry.
+	var structNamesInDeclOrder as ByteArrayArray
 	// ⭐ Enum/union name -> its declaration, with the CASE ORDER and TAGS the parser needs. THE door
 	// an enum `match` asks through — is `c` an enum? what tag is `red`? which cases does `low to
 	// high` cover? — and here for `structTypes`' reason: the answer is needed at PARSE time and the
@@ -4201,6 +4249,10 @@ export type ProgramSignatures
 	// `InterfaceDeclSite` for why a POSITION and not the declaration. Read once, by
 	// `foldInterfaceDeclarations`, after the last file folds.
 	export var interfaceDeclSites as InterfaceDeclSiteArray
+	// ⭐ Where each `extension <Interface>` declaration sits, as the tolerant sweep passed it — see
+	// `ExtensionDeclSite`. Read once, by `foldExtensionDeclarations`, after the last file folds, because an
+	// extension's methods belong to conformers the per-file sweep has not necessarily met yet.
+	export var extensionDeclSites as ExtensionDeclSiteArray
 	// The interner every `named` id in `returnTypes` belongs to. PRIVATE, and it has to be: an id
 	// may not leave this type. `returnTypeOf` re-interns it into the caller's own table.
 	var typeNames as TypeNameInterner
@@ -4450,7 +4502,7 @@ export type ProgramSignatures
 	// Every index, empty. Split out of `create` only so the seed stamping above reads as the two steps it
 	// is; this is its one caller.
 	static function freshIndexes() returns ProgramSignatures
-		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), canonicalInstanceNameIndex: CanonicalInstanceNameSet.create(), canonicalNamesIndexedThrough: 0, tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleAliases: TupleCanonicalNameMap.create(), sawAggregateArrayLiteral: false, sawListFromConstruction: false, genericAliases: GenericAliasMap.create(), contestedGenericAliases: sharedEmptyGenericAliasContests, multiplyDeclaredGenericAliases: sharedEmptyDisagreeingAliasNames, divergedGenericAliasDecl: AliasCycleResult.none, nameableGenericAliases: sharedEmptyNameableGenericAliases, genericAliasSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceNamesInDeclOrder: builtinInterfaceNames(), interfaceDeclIndexByName: builtinInterfaceDeclIndices(), interfaceDeclSites: InterfaceDeclSiteArray.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcThrows: FuncThrowsMap.create(), funcParamDefaults: ParamDefaultMap.create(), collidingParamDefaults: CollidingParamDefaultNameSet.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), hash: fnvOffsetBasis(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, allFilesFolded: false, rootIsUnderStdlibDirectory: false, constCastTargets: ConstCastTargetSet.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibShadowRenames: StdlibShadowRenameMap.create(), fileModuleDirectories: FileModuleDirectoryMap.create(), namespaceQualifiedFunctions: NamespaceQualifiedFunctionSet.create(), freeFunctionDirectories: FreeFunctionDirectoryMap.create(), contestedFreeFunctions: ContestedFreeFunctionMap.create(), contestedRegistrationNames: ContestedRegistrationNameSet.create()}
+		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), structNamesInDeclOrder: ByteArrayArray.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), canonicalInstanceNameIndex: CanonicalInstanceNameSet.create(), canonicalNamesIndexedThrough: 0, tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleAliases: TupleCanonicalNameMap.create(), sawAggregateArrayLiteral: false, sawListFromConstruction: false, genericAliases: GenericAliasMap.create(), contestedGenericAliases: sharedEmptyGenericAliasContests, multiplyDeclaredGenericAliases: sharedEmptyDisagreeingAliasNames, divergedGenericAliasDecl: AliasCycleResult.none, nameableGenericAliases: sharedEmptyNameableGenericAliases, genericAliasSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceNamesInDeclOrder: builtinInterfaceNames(), interfaceDeclIndexByName: builtinInterfaceDeclIndices(), interfaceDeclSites: InterfaceDeclSiteArray.create(), extensionDeclSites: ExtensionDeclSiteArray.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcThrows: FuncThrowsMap.create(), funcParamDefaults: ParamDefaultMap.create(), collidingParamDefaults: CollidingParamDefaultNameSet.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), hash: fnvOffsetBasis(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, allFilesFolded: false, rootIsUnderStdlibDirectory: false, constCastTargets: ConstCastTargetSet.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibShadowRenames: StdlibShadowRenameMap.create(), fileModuleDirectories: FileModuleDirectoryMap.create(), namespaceQualifiedFunctions: NamespaceQualifiedFunctionSet.create(), freeFunctionDirectories: FreeFunctionDirectoryMap.create(), contestedFreeFunctions: ContestedFreeFunctionMap.create(), contestedRegistrationNames: ContestedRegistrationNameSet.create()}
 	end 'freshIndexes'
 
 	// --- MODULE DIRECTORIES and the ONE visibility decision (N1a) ---
@@ -4680,7 +4732,7 @@ export type ProgramSignatures
 	// machinery `mergeArtifact` uses for the identical job — `TypeNameInterner.foldInto` +
 	// `remapMaxonReturnType`. One mechanism, two callers: a second copy of "reconcile a file's ids
 	// into a bigger table" would be free to disagree with this one about what an id means.
-	export function foldFile(scanned FuncReturnTypeEntryArray, aliases RangedTypeAliasArray, functionAliases FunctionTypeAliasArray, structs StructLayoutArray, enums EnumLayoutArray, genericAliasEntries GenericAliasEntryArray, innerAliasEntries InnerAliasEntryArray, methodInnerAliasParamEntries MethodInnerAliasParamEntryArray, interfaceSites InterfaceDeclSiteArray, bindings TopLevelDeclArray, paramConsumes ParamConsumeEntryArray, paramDefaults ParamDefaultEntryArray, throwsEntries ThrowsClauseEntryArray, freeFunctionNames ByteArrayArray, moduleDirectory String, fileTypeNames TypeNameInterner, isStdlibSource bool)
+	export function foldFile(scanned FuncReturnTypeEntryArray, aliases RangedTypeAliasArray, functionAliases FunctionTypeAliasArray, structs StructLayoutArray, enums EnumLayoutArray, genericAliasEntries GenericAliasEntryArray, innerAliasEntries InnerAliasEntryArray, methodInnerAliasParamEntries MethodInnerAliasParamEntryArray, interfaceSites InterfaceDeclSiteArray, extensionSites ExtensionDeclSiteArray, bindings TopLevelDeclArray, paramConsumes ParamConsumeEntryArray, paramDefaults ParamDefaultEntryArray, throwsEntries ThrowsClauseEntryArray, freeFunctionNames ByteArrayArray, moduleDirectory String, fileTypeNames TypeNameInterner, isStdlibSource bool)
 		// ⭐ **THE USER HALF OF THE SHADOW CONTEST (A1s wave 2)** — recorded from the SAME declaration arrays
 		// the registries below are built from, so "what the user declared" and "what the index holds" are one
 		// walk. Every KIND is noted, not just the four nominal ones: the contest is asymmetric on purpose (see
@@ -4771,6 +4823,13 @@ export type ProgramSignatures
 		for site in interfaceSites 'eachInterfaceSite'
 			self.interfaceDeclSites.push(site)
 		end 'eachInterfaceSite'
+
+		// EXTENSION declaration sites ride beside the interface ones, carry no ids for the same reason, and
+		// are ACCUMULATED for a sharper version of the same one: an extension's methods belong to conformers
+		// that may be declared in a file this sweep has not reached. See `ExtensionDeclSite`.
+		for site in extensionSites 'eachExtensionSite'
+			self.extensionDeclSites.push(site)
+		end 'eachExtensionSite'
 
 		// Bindings — `let` and `var` alike — are RECORDED here and EVALUATED later
 		// (`evaluateInitializers`), and the gap between the two is the whole reason a forward
@@ -5285,6 +5344,13 @@ export type ProgramSignatures
 			return
 		end 'compilerOwned'
 
+		// The declaration-order handle, minted in the SAME act as the map entry — `recordInterfaceDeclaration`'s
+		// discipline, for the reason stated at `structNamesInDeclOrder`. Asked BEFORE the upsert, so a
+		// redeclaration of a name (E3006's business, reported elsewhere) keeps its one position.
+		if not self.structTypes.contains(layout.name) 'firstDeclarationOfThisName'
+			self.structNamesInDeclOrder.push(layout.name)
+		end 'firstDeclarationOfThisName'
+
 		self.structTypes.upsert(layout.name, value: layout)
 
 		var state = mixBytes(mix(self.hash, value: DeclShapeStruct), bytes: layout.name)
@@ -5304,6 +5370,10 @@ export type ProgramSignatures
 			let constraint = try layout.whereConstraints.get(i) otherwise panic("ProgramSignatures.recordStruct: whereConstraints.get OOB at {i}")
 			state = mixBytes(mix(mix(state, value: DeclShapeWhereConstraint), value: constraint.typeParamIndex), bytes: constraint.interfaceName)
 		end 'eachConstraint'
+		// The `implements` list rides too — see `mixDeclaredConformances`. For a `type` it decides which
+		// INTERFACE EXTENSION methods the type has, so adding or removing a name here adds or removes whole
+		// functions from the program while the extension's own file never moves.
+		state = mixDeclaredConformances(state, conformsTo: layout.conformsTo)
 		for i in 0 upto layout.fieldCount() 'eachField'
 			state = self.mixField(state, layout: layout, index: i)
 		end 'eachField'
@@ -5331,14 +5401,9 @@ export type ProgramSignatures
 		upsertDeclaredEnum(self.enumTypes, layout: layout)
 
 		var state = mix(mix(mixBytes(mix(self.hash, value: DeclShapeEnum), bytes: layout.name), value: EnumKindUnion if layout.isUnion else EnumKindEnum), value: enumBackingDiscriminator(layout.backing))
-		// The `implements` list rides for the field list's reason (A1s wave 2): whether `enum E implements
-		// Error` says so decides whether ANOTHER file's `type X implements Parsable` with `throws E` is
-		// ACCEPTED (`ConformanceCheck.requireImplErrorConformsToRequirement`) — so adding or removing the
-		// clause changes what that file compiles to while its own bytes never move, which is exactly the
-		// rule stated at `recordStruct`.
-		for name in layout.conformsTo 'eachConformance'
-			state = mixBytes(mix(state, value: DeclShapeEnumConformance), bytes: name)
-		end 'eachConformance'
+		// The `implements` list rides for the field list's reason (A1s wave 2) — see `mixDeclaredConformances`,
+		// which states it once for both declaration kinds.
+		state = mixDeclaredConformances(state, conformsTo: layout.conformsTo)
 		for i in 0 upto layout.caseCount() 'eachCase'
 			state = self.mixEnumCase(state, layout: layout, index: i)
 		end 'eachCase'
@@ -7003,6 +7068,31 @@ export type ProgramSignatures
 		return DeclaredStruct.declared(layout)
 	end 'structOf'
 
+	// ⭐ **EVERY DECLARED `type` WHOSE `implements` CLAUSE NAMES `interfaceName`, IN DECLARATION ORDER** — the
+	// set an `extension <Interface>` declares its methods on. Asked by BOTH halves of the extension
+	// mechanism, which is why it is here and not at either: `foldExtensionDeclarations` publishes one
+	// SIGNATURE per (conformer, method) and `Parser.parseExtensionDeclaration` emits one BODY per pair, and
+	// the two must walk the identical list in the identical order or a call would type against a signature no
+	// function was emitted for.
+	//
+	// ⚠ **A `type` ONLY.** An `enum`/`union` carries the same `conformsTo` column and is deliberately not
+	// walked here: shv2 has no case where an extension method on an enum is reached, and the omission is a
+	// missing method (E3004 at the call) rather than a wrong one.
+	//
+	// A full walk per extension, not an interface⇒conformers index: a program declares a handful of
+	// extensions, this is asked twice per extension per compile, and the index would be built by every
+	// program that declares none.
+	export function conformersOf(interfaceName ByteArray) returns ByteArrayArray
+		var conformers = ByteArrayArray.create()
+		for name in self.structNamesInDeclOrder 'eachDeclaredType'
+			let layout = try self.structTypes.get(name) otherwise panic("ProgramSignatures.conformersOf: `structNamesInDeclOrder` holds '{String.from(name)}' with no entry in `structTypes` — `recordStruct` writes both in one act")
+			if conformanceListDeclares(layout.conformsTo, interfaceName: interfaceName) 'conforms'
+				conformers.push(name)
+			end 'conforms'
+		end 'eachDeclaredType'
+		return conformers
+	end 'conformersOf'
+
 	// The `where` constraints declared on `typeName` (P1.7a slice 2a), in source order — the witness-slot
 	// order. Empty for a non-generic, unconstrained, or undeclared type. Read by the E3017 instantiation
 	// check (does each concrete argument conform?) and the witness lowering (which interface / concrete type
@@ -7594,7 +7684,7 @@ export type ProgramSignatures
 	// ⚠ `typeIsManaged` deliberately does NOT ask it. Its `structRef` arm has already returned `true` (fused
 	// with `tagIsByteRecord`/`genericInstance`) by the time it tests `named`, so its remaining test is
 	// "is this the ONE tag still undecided?" — a different question that happens to mention the same tags.
-	function tagMayNameAggregate(tag ValueTypeTag) returns bool
+	export function tagMayNameAggregate(tag ValueTypeTag) returns bool
 		return tagIsStructRef(tag) or tag == ValueTypeTag.named
 	end 'tagMayNameAggregate'
 
@@ -7972,6 +8062,15 @@ export type ProgramSignatures
 	export function isMapInstance(id GenericInstanceId) returns bool
 		return self.isMapBaseName(self.genericInstanceBaseName(id))
 	end 'isMapInstance'
+
+	// ⭐ **DOES THIS (tag, id) PAIR DENOTE A `Map with (K, V)`?** — `isArrayInstanceAt`'s twin, and it exists
+	// for that function's measured reason rather than for symmetry: a `TypeNameId` and a `GenericInstanceId`
+	// share one numeric space, so `isMapInstance` handed a plain `named` id can answer TRUE about an instance
+	// the caller never had. Its caller (the `for … in` source rewrite) holds a value's (tag, nameId) pair,
+	// which is exactly the shape that hazard bites.
+	export function isMapInstanceAt(tag ValueTypeTag, nameId TypeNameId) returns bool
+		return tag == ValueTypeTag.genericInstance and self.isMapInstance(nameId)
+	end 'isMapInstanceAt'
 
 	// The KEY type of `Map with (K, V)` — type argument 0, the one the probe hashes and compares.
 	export function mapKeyType(id GenericInstanceId) returns MaxonType
@@ -9285,6 +9384,19 @@ export type ProgramSignatures
 		return self.genericInstances.intern(self.typeNames.intern(baseName), args: args)
 	end 'builtinInstanceForElement'
 
+	// ⭐ **THE TWO-TYPE-ARGUMENT CONTAINER INSTANCE — the `Map` twin of `builtinInstanceForElement`.** A
+	// `["a": 1]` literal fixes BOTH of its columns from its first pair, exactly as a `[…]` literal fixes its
+	// element from its first element, so the same "the parser looks up whichever the source resolves to"
+	// shape needs a door that takes two. The argument ORDER is the instance's identity — `HashTableKeyArgPosition`
+	// then `MapValueArgPosition`, which `mapKeyType`/`mapValueType` read back — so the two are named parameters
+	// rather than an array a caller could fill in the wrong order.
+	export function builtinInstanceForColumns(baseName ByteArray, key MaxonType, value MaxonType) returns GenericInstanceId
+		var args = MaxonTypeArray.create()
+		args.push(key)
+		args.push(value)
+		return self.genericInstances.intern(self.typeNames.intern(baseName), args: args)
+	end 'builtinInstanceForColumns'
+
 	// ⭐⭐ **THE ELEMENT ARG MUST CARRY THE TAG A TYPE REFERENCE TO THAT NAME CARRIES**, because the
 	// instance registry keys on `(tag, id)` while `mangleGenericInstance` reads only the NAME. Two tags for
 	// one type therefore intern as TWO instances that compile to ONE symbol — which
@@ -9298,9 +9410,17 @@ export type ProgramSignatures
 	// nothing to make the two agree. MEASURED: `typealias PairArray = Array with Pair` plus any
 	// `[<identifier>…]` literal in the program was rejected with that spurious E3006 (P1.10 review).
 	export function builtinInstanceForNamedElement(baseName ByteArray, element ByteArray) returns GenericInstanceId
-		let elementId = self.typeNames.intern(element)
-		return self.builtinInstanceForElement(baseName, element: MaxonType.structRef(elementId) if isTupleTypeName(element) else MaxonType.named(elementId))
+		return self.builtinInstanceForElement(baseName, element: self.namedElementType(element))
 	end 'builtinInstanceForNamedElement'
+
+	// The rule above, as the `MaxonType` itself — split out because a container ARGUMENT is not the only thing
+	// that has to obey it: `Parser.literalColumnTypeFor` names the same type for a bracketed literal's column
+	// and would otherwise carry a second copy of the tuple test, which is the exact shape the measured E3006
+	// above came from.
+	export function namedElementType(element ByteArray) returns MaxonType
+		let elementId = self.typeNames.intern(element)
+		return MaxonType.structRef(elementId) if isTupleTypeName(element) else MaxonType.named(elementId)
+	end 'namedElementType'
 
 	// Over-intern `<base> with <T>` for the possible element types of an array literal whose elements the
 	// sweep's tokens cannot name (P1.7 slice 3): a local identifier's type is unknowable there, so
