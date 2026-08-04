@@ -11172,7 +11172,50 @@ export type ProgramSignatures
 	//
 	// A name no registry holds is not managed: it is E3011's subject, and a slot the front end refuses owns
 	// nothing to drop. Allocation-free throughout, which is `typeIsManaged`'s standing obligation.
+	// Is `name` the CANONICAL rendering of an interned generic instance? The reverse of
+	// `canonicalInstanceName`, which no map holds — the registry is keyed by the instance's structural KEY,
+	// and its canonical NAME is derived. A linear walk is right rather than a fifth index: a program interns a
+	// handful of instances, the name is memoized per id by `canonicalInstanceName` itself, and the two askers
+	// are whole-program CHECKS that run once per declared associated type rather than per op.
+	export function isCanonicalInstanceName(name ByteArray) returns bool
+		for id in 0 upto self.genericInstances.count() 'eachInstance'
+			if self.canonicalInstanceName(id).equals(name) 'thisOne'
+				return true
+			end 'thisOne'
+		end 'eachInstance'
+		return false
+	end 'isCanonicalInstanceName'
+
+	// ⭐⭐ **DOES A VALUE OF THIS DECLARED NAME OCCUPY MORE THAN ONE MACHINE WORD?** The WIDTH question, and
+	// it is a different one from `declaredNameIsManaged`'s ownership question — an existential is neither
+	// refcounted nor one word. Exactly one declared form answers yes: an INTERFACE type, whose value is the
+	// 16-byte fat pointer `(value, witness)`.
+	//
+	// ⚠ It exists because that fact was being read off the ownership door, which answers `false` for an
+	// interface and meant E3120 admitted an associated type bound to an interface NAME. MEASURED: the
+	// requirement's impl received one word where the fat pointer's two were passed, and the program
+	// SEGFAULTED (exit 139) on x64 and wasm alike.
+	export function declaredNameIsFatPointer(name ByteArray) returns bool
+		match try self.declaredFormOf(name) otherwise return false 'form'
+			interfaceType then return true
+			structType to unionType then return false
+			rangedAlias to tupleAlias then return false
+		end 'form'
+	end 'declaredNameIsFatPointer'
+
 	export function declaredNameIsManaged(name ByteArray) returns bool
+		// ⚠ **A GENERIC INSTANCE ARRIVES AS ITS CANONICAL NAME AT SOME DOORS, AND NO REGISTRY IS KEYED BY
+		// THAT.** `genericAliases` holds the ALIAS (`IntBox`); `renderDeclaredTypeName` renders an instance as
+		// `canonicalInstanceName` (`Box_Integer`), which `declaredFormOf` matches nothing for — so the walk
+		// below fell straight through to `return false` and called a heap box unmanaged. MEASURED at the E3120
+		// door: `implements Maker with IntBox` and `with IntArr` both compiled and **exited 101**, the leak
+		// gate, on x64 and wasm alike. Asked FIRST because it is the one form whose name the registries cannot
+		// see, and answered `true` for the same reason the `genericAlias` arm below is: an instance is a heap
+		// box — an `Array`'s record and buffer, a `Box`'s box.
+		if self.isCanonicalInstanceName(name) 'aRenderedInstance'
+			return true
+		end 'aRenderedInstance'
+
 		let form = try self.declaredFormOf(name) otherwise return false
 		match form 'form'
 			structType then return true

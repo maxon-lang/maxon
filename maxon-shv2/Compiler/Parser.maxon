@@ -26680,12 +26680,11 @@ export type Parser
 		// types disagree when in fact they agree perfectly and the OPERATION is what has no meaning. Asked
 		// before that message for the same reason `unionNotComparable` is.
 		//
-		// ⚠ BOTH operands, where `comparableOperands`' backstop asks EITHER (`operandsAreInterfaceRef`, the
-		// shape `operandsAreStructRef` keeps). A MIXED pair — an existential against an `int` — really is a
-		// type mismatch, and it already reads as one: `typesAgree` refuses it and the message below names the
-		// two tags, which is the true and more useful answer there. Only a pair that AGREES and still cannot
-		// be compared needs this explanation.
-		if tagIsInterfaceRef(leftTag) and tagIsInterfaceRef(rightTag) 'existentialComparison'
+		// ⚠ The predicate is BOTH-operands, and `comparableOperands` asks the SAME one — it used to be spelled
+		// `or` there and `and` here, two spellings of one fact that agreed only because `typesAgree` runs
+		// first. A MIXED pair (an existential against an `int`) really is a type mismatch and keeps the
+		// message below, which names the two tags.
+		if operandsAreInterfaceRef(leftTag, right: rightTag) 'existentialComparison'
 			throw ParseError.existentialNotComparable(comparisonOpSpelling(op), line: opTok.line, column: opTok.column)
 		end 'existentialComparison'
 
@@ -38068,6 +38067,22 @@ export type Parser
 	// adapted to shv2's field set (its `currentFunc`/`inClosure`/`closureOuterScope` become the swapped
 	// per-function columns plus the `closureCaptureScopes` stack, and the `funcCount()`-keyed ValueOrigin
 	// needs the `currentFuncIndex` re-stamp that v1's index model did not).
+	// The refusal `parseClosureExpression` states in full. Positioned on the PARAMETER, which is what the
+	// author would change, and reported through `unsupported` — the same code and shape the three sibling
+	// existential-position refusals use (a struct field, a return, a container element).
+	function requireNoInterfaceClosureParam(paramNames ByteArrayArray, paramTypes MaxonTypeArray, paramRanges SourceRangeArray) throws ParseError
+		for i in 0 upto paramTypes.count() 'eachParam'
+			let paramType = try paramTypes.get(i) otherwise panic("requireNoInterfaceClosureParam: paramTypes.get OOB at {i} below count {paramTypes.count()}")
+			if maxonTypeTag(paramType) != ValueTypeTag.interfaceRef 'notAnExistential'
+				continue
+			end 'notAnExistential'
+
+			let anchor = try paramRanges.get(i) otherwise panic("requireNoInterfaceClosureParam: paramRanges.get OOB at {i} — the two columns are filled in lockstep by `parseFunctionParameters`")
+			let paramName = try paramNames.get(i) otherwise panic("requireNoInterfaceClosureParam: paramNames.get OOB at {i} — the two columns are filled in lockstep by `parseFunctionParameters`")
+			throw ParseError.unsupported("a closure parameter '{String.from(paramName)}' declared at the interface type '{String.from(interfaceNameOfType(paramType, typeNames: self.artifact.typeNames))}' — a value held at an interface is a two-word fat pointer `(value, witness)`, and its witness half travels as an adjacent hidden argument that only a declared function's signature reserves. A closure is called through the uniform `(userargs, env)` indirect ABI, which carries one machine word per argument. Declare the parameter at a concrete type, or take the interface in a named function", line: anchor.line, column: anchor.column)
+		end 'eachParam'
+	end 'requireNoInterfaceClosureParam'
+
 	function parseClosureExpression(func IrFunction) returns ValueId throws ParseError
 		let functionTok = try self.consume(TokenKind.function)
 		try self.consume(TokenKind.leftParen)
@@ -38091,6 +38106,17 @@ export type Parser
 		// A struct parameter is re-tagged `structRef` here, exactly as `parseFunction` does — the whole-program
 		// struct registry is complete in the real parse (see `resolveNamedStruct`).
 		paramTypes = self.resolveNamedStructAll(paramTypes)
+		// ⭐⭐ **A CLOSURE PARAMETER MAY NOT BE DECLARED AT AN INTERFACE TYPE, AND IT PANICKED THE PARSER**
+		// (P1.7a-existentials slice 1, fourth review round). A value held at an interface is a two-word fat
+		// pointer, and the second word travels as an ADJACENT HIDDEN ARGUMENT that only a real function's
+		// signature reserves. A lifted closure's parameters are bound before any witness is paired, so
+		// `witnessOfValue` found none and PANICKED with no source position at all — measured on
+		// `function(t Shape) gives t.area()`, tip and control alike.
+		// Round 3 turned three sibling producers into positioned refusals and this was the fourth, missed
+		// because a closure's parameters are parsed by a different door than a function's. Refused rather than
+		// paired: the uniform `(userargs, env)` indirect ABI carries one machine word per argument, so a fat
+		// pointer would need a second slot the shape has nowhere to put.
+		try self.requireNoInterfaceClosureParam(paramNames, paramTypes: paramTypes, paramRanges: paramRanges)
 		// The lifted closure's ABI count is its own parameters PLUS the trailing `__env` slot reserved below —
 		// so the ceiling is asked of `+ 1`. Asked HERE rather than in the shared `parseFunctionParameters` for
 		// the reason `requireAbiParamCount`'s header gives: only the caller knows how many hidden slots its own

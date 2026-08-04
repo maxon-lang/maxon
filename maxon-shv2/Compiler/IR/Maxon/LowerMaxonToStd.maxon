@@ -1928,7 +1928,7 @@ type MaxonToStdLowering
 
 		for j in 0 upto formals.count() 'eachFormal'
 			let formalName = try formals.get(j) otherwise panic("witnessFormalTypes: formals.get OOB at {j} below count {formals.count()}")
-			types.push(self.witnessFormalType(formalName, slot: slot))
+			types.push(self.witnessFormalType(formalName, interfaceDeclIndex: interfaceDeclIndex))
 		end 'eachFormal'
 
 		return types
@@ -1944,6 +1944,15 @@ type MaxonToStdLowering
 	// existed. `builtinTypeNameTag`'s own header states the rule that violated — it is valid only at a door
 	// holding a RENDERED type name, never at one asking what a `named` reference DENOTES.
 	//
+	// ⭐⭐ **THE ASSOCIATED TYPE IS RESOLVED AGAINST THE DISPATCHED INTERFACE, NOT THE DECLARING ONE.** Under
+	// `extends`, a requirement projected in from a parent spells the PARENT's `uses` name — but a conformance
+	// writes `implements Derived with X`, so the binding is the CHILD's to give and `implements Base with X`
+	// is not even constructible (E3016). Asking the declaring interface found no conformance at all,
+	// answered `unconformed`, and silently fell back to the machine word for EVERY inherited requirement:
+	// MEASURED, a `float` binding reached through a `Derived` existential answered 31 for 51 on x64 and
+	// trapped on wasm. `ConformanceCheck` walks the same dispatched interface with the same transitive slot
+	// list, so the check and this emission now key on one interface.
+	//
 	// ⭐ **AND AN ASSOCIATED TYPE RESOLVES TO ITS BINDING, NEVER TO THE ACTUAL.** The class is a fact about the
 	// CONFORMER (`implements Taker with float` is what makes the formal an f64), so it comes from
 	// `associatedAbiBindingOf` — the same whole-program fold the E3119 check refuses a disagreement from, so a
@@ -1951,26 +1960,14 @@ type MaxonToStdLowering
 	// ACTUAL's tag instead was this slice's own defect one level down: it is the unresolved `valueTags`
 	// column, it PANICKED `maxonTypeToStdType` outright on a `named` actual, and it cannot see a binding the
 	// actual does not happen to match.
-	function witnessFormalType(formalName ByteArray, slot CollectedInterfaceMethod) returns MaxonType
-		if let position = try self.associatedPositionOf(formalName, interfaceName: slot.sourceInterfaceName) 'aConformerBindsIt'
-			return self.associatedFormalType(slot.sourceInterfaceName, position: position, formalName: formalName)
+	function witnessFormalType(formalName ByteArray, interfaceDeclIndex InterfaceDeclIndex) returns MaxonType
+		let dispatched = self.interfaceAtDeclIndex(interfaceDeclIndex)
+		if let position = try associatedTypePositionOf(dispatched.associatedTypeNames, name: formalName) 'aConformerBindsIt'
+			return self.associatedFormalType(dispatched.name, position: position, formalName: formalName)
 		end 'aConformerBindsIt'
 
 		return renderedTypeNameAbiType(formalName)
 	end 'witnessFormalType'
-
-	// Which `uses` parameter of the DECLARING interface `name` is, if any — asked of the interface that
-	// declared the requirement rather than of the one whose table is being indexed, because under `extends` a
-	// projected requirement spells its PARENT's associated types and the child's `uses` list does not hold
-	// them. A miss PANICS rather than answering "not associated", for `interfaceAtDeclIndex`'s reason: a
-	// requirement whose declaring interface does not resolve could not have been projected into the slot list
-	// this came out of, so it is an invariant break and not a shape to absorb.
-	function associatedPositionOf(name ByteArray, interfaceName ByteArray) returns ElementCount throws MapError
-		match lookupInterface(self.interfaces, name: interfaceName) 'declaringInterface'
-			notFound then panic("associatedPositionOf: the requirement being lowered was declared by interface '{String.from(interfaceName)}', which resolves to nothing in the merged registry — `interfaceWitnessSlots` could not have projected it, so the slot list and the registry disagree")
-			found(iface) then return try associatedTypePositionOf(iface.associatedTypeNames, name: name)
-		end 'declaringInterface'
-	end 'associatedPositionOf'
 
 	// The resolved type of an associated formal — `associatedAbiBindingOf`'s answer, with the two arms this
 	// pass cannot act on turned into the one thing it can. `unconformed` means no type in the program conforms,
@@ -2026,7 +2023,7 @@ type MaxonToStdLowering
 			// A synthesized protocol is in NEITHER map — `lookupInterface` builds it fresh from the same
 			// constants on both sides, so there is no second writer to disagree with and nothing to compare.
 			notFound then return
-			found(parserIface) then requireSameSlotCount(name, parserSlots: interfaceWitnessSlots(self.signatures.interfaceMap(), iface: parserIface), mergedSlots: mergedSlots)
+			found(parserIface) then requireSameSlotNumbering(name, parserSlots: interfaceWitnessSlots(self.signatures.interfaceMap(), iface: parserIface), mergedSlots: mergedSlots)
 		end 'asTheParserSawIt'
 	end 'requireSlotNumberingAgrees'
 

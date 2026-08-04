@@ -1,0 +1,30 @@
+// Test: error.closure-parameter-at-an-interface-type
+typealias Integer = int(i64.min to i64.max)
+typealias ShapeFn = function(Shape) returns Integer
+
+interface Shape
+	function area() returns Integer
+end 'Shape'
+
+type Sq implements Shape
+	let s as Integer
+
+	function area() returns Integer
+		return self.s
+	end 'area'
+
+	static function create(s Integer) returns Self
+		return Self{s: s}
+	end 'create'
+end 'Sq'
+
+function apply(f ShapeFn, v Shape) returns Integer
+	return f(v)
+end 'apply'
+
+function main() returns ExitCode
+	return apply(function(t Shape) gives t.area(), v: Sq.create(7)) as ExitCode
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:26:24: Unsupported: a closure parameter 't' declared at the interface type 'Shape' — a value held at an interface is a two-word fat pointer `(value, witness)`, and its witness half travels as an adjacent hidden argument that only a declared function's signature reserves. A closure is called through the uniform `(userargs, env)` indirect ABI, which carries one machine word per argument. Declare the parameter at a concrete type, or take the interface in a named function

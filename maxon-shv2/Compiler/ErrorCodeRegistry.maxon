@@ -809,8 +809,17 @@ export enum ErrorCode
 	// MEASURED, two conformers of different classes with every call direct ran correctly (51) and must not be
 	// refused. shv2 is whole-program, so which interfaces are dispatched is read off the emitted ops.
 	associatedTypeAbiDisagreement = "E3119"
-	// An associated type is written as the RETURN type of a requirement the program DISPATCHES, and its
-	// conformers bind it to something that is not an UNMANAGED MACHINE WORD.
+	// An associated type reaches the calling convention of a requirement the program DISPATCHES, and its
+	// conformers bind it to something a witness call cannot carry there. TWO clauses, and they fail in
+	// different POSITIONS:
+	// * a FAT POINTER -- an interface-typed binding -- anywhere at all, PARAMETER or return, because a
+	// witness call carries one machine word per argument and one per result, so the second word of the
+	// `(value, witness)` pair is dropped and the impl reads a witness that was never passed. MEASURED:
+	// exit 139 on x64-windows and a trap on wasm, through a PARAMETER, which a return-only rule could
+	// not see. It reached the ABI because the WIDTH question was being read off the OWNERSHIP door
+	// (`declaredNameIsManaged` answers `false` for an interface, which is true and is not the question).
+	// * anything that is not an UNMANAGED MACHINE WORD in the RETURN position specifically.
+	// The rest of this entry is that second clause.
 	// A dispatch's ARGUMENT types are settled where the call is emitted, so an associated PARAMETER is fine:
 	// the lowering resolves the binding and coerces the actual to it. A RESULT is not. Its type flows on into
 	// the program -- which instruction `m.make() + 11` picks, and whether the returned value is OWNED and
@@ -829,6 +838,11 @@ export enum ErrorCode
 	// The conjunct is therefore an UNMANAGED machine word, and what "managed" means is
 	// `ProgramSignatures.declaredNameIsManaged` -- the same answer a struct field's drop routing takes, asked
 	// rather than re-listed so this does not become a fifth cascade over those registries.
+	// ⚠ A GENERIC INSTANCE IS ADMITTED BY NEITHER, AND THAT COST A LEAK. A `Box with Integer` is a machine
+	// word and is managed -- but a conformance records it as the compiler's own CANONICAL name
+	// (`Box_Integer`), which `genericAliases` is not keyed by, so `declaredFormOf` matched nothing and the
+	// ownership door answered `false`. MEASURED: `with IntBox` and `with IntArr` both exited 101 on both
+	// targets. That door answers for canonical instance names now.
 	// It is NARROW: `int`, a ranged typealias and a payload-free enum are admitted, so the shapes that compile
 	// today keep compiling. Closing the refusal needs the binding to reach the PARSER, which is a whole-program
 	// conformance sweep in the declaration index (`interfaceDeclSites`' shape, one declaration kind over).

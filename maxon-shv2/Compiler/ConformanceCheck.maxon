@@ -113,12 +113,12 @@ end 'checkAssociatedTypeAbiAgreement'
 // The two verdicts for ONE associated type of one dispatched interface. Split out so the walk above reads as
 // the three gates it is, and so the ABI-position test is asked once for both refusals.
 function checkOneAssociatedType(project Project, signatures ProgramSignatures, iface IrInterface, name ByteArray, position ElementCount)
-	if not requirementWritesTypeInAbiPosition(iface, name: name) 'reachesNoCallingConvention'
+	if not requirementWritesTypeInAbiPosition(project.interfaces, iface: iface, name: name) 'reachesNoCallingConvention'
 		return
 	end 'reachesNoCallingConvention'
 
 	match associatedAbiBindingOf(project.conformances, interfaceName: iface.name, position: position) 'binding'
-		agreed(conformer, binding, _) then checkAssociatedReturnIsUnmanagedMachineWord(project, signatures: signatures, iface: iface, name: name, conformer: conformer, binding: binding)
+		agreed(conformer, binding, _) then checkAgreedBindingIsCarryable(project, signatures: signatures, iface: iface, name: name, conformer: conformer, binding: binding)
 		unconformed then break 'binding'
 		disagreed(first, firstBinding, second, secondBinding) then reportAssociatedTypeBindingDisagreement(project, iface: iface, name: name, first: first, firstBinding: firstBinding, second: second, secondBinding: secondBinding)
 	end 'binding'
@@ -156,6 +156,19 @@ function noteDispatchedInterface(op MaxonOp, names InterfaceNameSet, signatures 
 	end 'op'
 end 'noteDispatchedInterface'
 
+// The two things a dispatch cannot carry, asked of one agreed binding. They are separate clauses because
+// they fail in different POSITIONS: a fat pointer cannot be carried anywhere at all, while a managed or
+// non-machine-word value is fine as a PARAMETER (the lowering resolves it and coerces the actual) and only
+// breaks as a RESULT, where the front end has to type it.
+function checkAgreedBindingIsCarryable(project Project, signatures ProgramSignatures, iface IrInterface, name ByteArray, conformer ConformanceDecl, binding ByteArray)
+	if signatures.declaredNameIsFatPointer(binding) 'twoWordsThroughAOneWordSlot'
+		reportPositioned(project, code: ErrorCode.associatedTypeReturnNotMachineWord, message: "'{String.from(conformer.typeName)}' binds '{String.from(iface.name)}'s associated type '{String.from(name)}' to the interface type '{String.from(binding)}', and '{String.from(name)}' reaches the calling convention of a requirement this program DISPATCHES. A value held at an interface is a two-word fat pointer `(value, witness)`, and a witness call carries one machine word per argument and one per result — so the second word is dropped and the impl reads a witness that was never passed. Bind the associated type to a concrete type", line: conformer.nameLine, column: conformer.nameColumn, filePath: conformer.filePath)
+		return
+	end 'twoWordsThroughAOneWordSlot'
+
+	checkAssociatedReturnIsUnmanagedMachineWord(project, signatures: signatures, iface: iface, name: name, conformer: conformer, binding: binding)
+end 'checkAgreedBindingIsCarryable'
+
 // ⭐⭐ **REFUSE AN ASSOCIATED RETURN BOUND TO ANYTHING BUT AN UNMANAGED MACHINE WORD (E3120), AND "MACHINE
 // WORD" ALONE WAS THE WRONG PREDICATE.** The parser types a dispatch's result from the interface's own
 // rendered spelling, which names the associated type and can never name what a conformer bound it to — so the
@@ -172,7 +185,7 @@ function checkAssociatedReturnIsUnmanagedMachineWord(project Project, signatures
 		return
 	end 'travelsAsAPlainWord'
 
-	if not requirementReturnsType(iface, name: name) 'notAResultAnywhere'
+	if not requirementReturnsType(project.interfaces, iface: iface, name: name) 'notAResultAnywhere'
 		return
 	end 'notAResultAnywhere'
 
@@ -187,15 +200,22 @@ end 'checkAssociatedReturnIsUnmanagedMachineWord'
 // instance are not. Asking it rather than re-listing the forms is what stops this from becoming the fifth
 // cascade over those registries that function exists to have collapsed.
 //
-// A name no registry declares answers "unmanaged", and that is safe rather than lax: an undeclared type in a
-// conformance is E3011 long before this, so the program is already refused.
+// ⚠ **A NAME NO REGISTRY DECLARES IS NOT AUTOMATICALLY SAFE, AND THIS PARAGRAPH USED TO SAY IT WAS.** The
+// claim was that an undeclared type in a conformance is E3011 long before here. A GENERIC INSTANCE
+// falsifies it: the binding is rendered as the compiler's OWN canonical name (`Box_Integer`), which no
+// registry is keyed by and which no diagnostic ever fires on — measured, it reached here, answered
+// "unmanaged", and the program leaked (exit 101). `declaredNameIsManaged` answers for that rendering now.
 function bindingIsUnmanagedMachineWord(signatures ProgramSignatures, binding ByteArray) returns bool
 	let tag = builtinTypeNameTag(binding)
 	if tag != ValueTypeTag.named 'aBuiltinTypeName'
 		return tag == ValueTypeTag.integer
 	end 'aBuiltinTypeName'
 
-	return not signatures.declaredNameIsManaged(binding)
+	// TWO questions, and they are genuinely different. `declaredNameIsManaged` answers OWNERSHIP — does a
+	// value of this name own a record the program must release. `declaredNameIsFatPointer` answers WIDTH — an
+	// existential is refcount-free and still two words, and reading that off the ownership door is what let
+	// an interface-typed binding through to a SEGFAULT.
+	return not signatures.declaredNameIsManaged(binding) and not signatures.declaredNameIsFatPointer(binding)
 end 'bindingIsUnmanagedMachineWord'
 
 // The E3119 message, anchored on the SECOND conformer — the declaration that introduced the disagreement,
@@ -207,8 +227,8 @@ function reportAssociatedTypeBindingDisagreement(project Project, iface IrInterf
 end 'reportAssociatedTypeBindingDisagreement'
 
 // Does any requirement of `iface` write `name` where it reaches a witness call's calling convention — a
-// PARAMETER or the RETURN? Only the interface's OWN requirements are asked: a parent's are checked when the
-// parent itself is walked, and a parent's associated types are the parent's to constrain.
+// PARAMETER or the RETURN? The list is the TRANSITIVE one a witness table actually holds — see
+// `requirementReturnsType` for the escape that asking only the interface's own requirements opened.
 //
 // ⚠ **A `throws` CLAUSE IS A THIRD POSITION AN ASSOCIATED TYPE CAN REACH, AND IT IS DELIBERATELY NOT ONE OF
 // THESE.** `substituteAssociatedTypes` substitutes into it, so `function next() throws Element` is
@@ -216,25 +236,36 @@ end 'reportAssociatedTypeBindingDisagreement'
 // an enum ordinal in a machine word whatever the clause names, and the clause is compared by NAME
 // (`requireSameErrorType`) rather than lowered. MEASURED green on both targets. If a throwing witness call
 // ever carries the error's own type in its signature, this predicate is where that becomes a third arm.
-function requirementWritesTypeInAbiPosition(iface IrInterface, name ByteArray) returns bool
-	return requirementReturnsType(iface, name: name) or requirementTakesType(iface, name: name)
+function requirementWritesTypeInAbiPosition(interfaces IrInterfaceMap, iface IrInterface, name ByteArray) returns bool
+	return requirementReturnsType(interfaces, iface: iface, name: name) or requirementTakesType(interfaces, iface: iface, name: name)
 end 'requirementWritesTypeInAbiPosition'
 
-// Is `name` the RETURN type of any of `iface`'s own requirements? The half E3120 asks alone — written once
-// here rather than a second time inside that check, which is what let the two scans drift apart.
-function requirementReturnsType(iface IrInterface, name ByteArray) returns bool
-	for method in iface.methods 'eachRequirement'
-		if method.returnTypeName.equals(name) 'inTheResult'
+// Is `name` the RETURN type of any requirement `iface` DISPATCHES — its own AND every one projected in
+// through `extends`? The half E3120 asks alone.
+//
+// ⚠⚠ **`iface.methods` IS THE WRONG LIST, AND ASKING IT WAS AN ESCAPE.** A witness table's slots are the
+// TRANSITIVE requirement list (`interfaceWitnessSlots`), so `interface Derived extends Base` dispatches
+// `Base`'s requirements through `Derived`'s table — and a scan of `Derived.methods` sees nothing write
+// `Element`, returns early, and lets a disagreement through. MEASURED: two conformers of `Derived` binding
+// `Element` to `Integer` and to `float`, dispatched through a `Derived` existential, compiled and answered
+// **31 on x64 where the program computes 51**, while wasm trapped. The same disagreement declared on the
+// CHILD fired correctly, which is what isolated the gap to the projected requirements.
+// Asking `interfaceWitnessSlots` is also the duplication fix: it is the one home of "which requirements does
+// this interface have", with the `visited` set that already handles diamonds and cycles.
+function requirementReturnsType(interfaces IrInterfaceMap, iface IrInterface, name ByteArray) returns bool
+	for slot in interfaceWitnessSlots(interfaces, iface: iface) 'eachRequirement'
+		if slot.method.returnTypeName.equals(name) 'inTheResult'
 			return true
 		end 'inTheResult'
 	end 'eachRequirement'
 	return false
 end 'requirementReturnsType'
 
-// Is `name` a PARAMETER type of any of `iface`'s own requirements? `requirementReturnsType`'s twin.
-function requirementTakesType(iface IrInterface, name ByteArray) returns bool
-	for method in iface.methods 'eachRequirement'
-		for paramTypeName in method.paramTypeNames 'eachFormal'
+// Is `name` a PARAMETER type of any requirement `iface` dispatches? `requirementReturnsType`'s twin, over the
+// same transitive list and for the same reason.
+function requirementTakesType(interfaces IrInterfaceMap, iface IrInterface, name ByteArray) returns bool
+	for slot in interfaceWitnessSlots(interfaces, iface: iface) 'eachRequirement'
+		for paramTypeName in slot.method.paramTypeNames 'eachFormal'
 			if paramTypeName.equals(name) 'inAnArgument'
 				return true
 			end 'inAnArgument'

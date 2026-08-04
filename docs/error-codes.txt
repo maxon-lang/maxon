@@ -1544,8 +1544,17 @@ E3119 SemanticAssociatedTypeAbiDisagreement
 
 E3120 SemanticAssociatedTypeReturnNotMachineWord
 	shv2 associatedTypeReturnNotMachineWord
-	doc An associated type is written as the RETURN type of a requirement the program DISPATCHES, and its
-	doc conformers bind it to something that is not an UNMANAGED MACHINE WORD.
+	doc An associated type reaches the calling convention of a requirement the program DISPATCHES, and its
+	doc conformers bind it to something a witness call cannot carry there. TWO clauses, and they fail in
+	doc different POSITIONS:
+	doc   * a FAT POINTER -- an interface-typed binding -- anywhere at all, PARAMETER or return, because a
+	doc     witness call carries one machine word per argument and one per result, so the second word of the
+	doc     `(value, witness)` pair is dropped and the impl reads a witness that was never passed. MEASURED:
+	doc     exit 139 on x64-windows and a trap on wasm, through a PARAMETER, which a return-only rule could
+	doc     not see. It reached the ABI because the WIDTH question was being read off the OWNERSHIP door
+	doc     (`declaredNameIsManaged` answers `false` for an interface, which is true and is not the question).
+	doc   * anything that is not an UNMANAGED MACHINE WORD in the RETURN position specifically.
+	doc The rest of this entry is that second clause.
 	doc A dispatch's ARGUMENT types are settled where the call is emitted, so an associated PARAMETER is fine:
 	doc the lowering resolves the binding and coerces the actual to it. A RESULT is not. Its type flows on into
 	doc the program -- which instruction `m.make() + 11` picks, and whether the returned value is OWNED and
@@ -1564,6 +1573,11 @@ E3120 SemanticAssociatedTypeReturnNotMachineWord
 	doc The conjunct is therefore an UNMANAGED machine word, and what "managed" means is
 	doc `ProgramSignatures.declaredNameIsManaged` -- the same answer a struct field's drop routing takes, asked
 	doc rather than re-listed so this does not become a fifth cascade over those registries.
+	doc ⚠ A GENERIC INSTANCE IS ADMITTED BY NEITHER, AND THAT COST A LEAK. A `Box with Integer` is a machine
+	doc word and is managed -- but a conformance records it as the compiler's own CANONICAL name
+	doc (`Box_Integer`), which `genericAliases` is not keyed by, so `declaredFormOf` matched nothing and the
+	doc ownership door answered `false`. MEASURED: `with IntBox` and `with IntArr` both exited 101 on both
+	doc targets. That door answers for canonical instance names now.
 	doc It is NARROW: `int`, a ranged typealias and a payload-free enum are admitted, so the shapes that compile
 	doc today keep compiling. Closing the refusal needs the binding to reach the PARSER, which is a whole-program
 	doc conformance sweep in the declaration index (`interfaceDeclSites`' shape, one declaration kind over).

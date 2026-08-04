@@ -1956,3 +1956,229 @@ end 'main'
 ```exitcode
 31
 ```
+
+<!-- test: error.extends-projected-associated-type-disagreement -->
+⭐⭐ **E3119 WAS ESCAPABLE THROUGH `extends`, AND THE ESCAPE WAS A SILENT WRONG ANSWER.** `Base` declares
+`take(e Element)`; `Derived extends Base` redeclares `uses Element`; two conformers of `Derived` bind it
+to `Integer` and to `float`; the dispatch goes through a `Derived` existential.
+**MEASURED before the fix: compiled clean and answered `31` on x64-windows where the program computes
+`51`, while wasm trapped.** Three owners of one fact disagreed — the check scanned only `Derived`'s OWN
+requirements (which write nothing), and the lowering resolved the formal against the DECLARING interface
+`Base`, which no conformance names (`implements Base with X` is unconstructible, E3016), so it answered
+"nothing conforms" and fell back to the machine word for every inherited requirement.
+⇒ Both now use the TRANSITIVE list a witness table actually holds (`interfaceWitnessSlots`) and key on
+the DISPATCHED interface. The same disagreement declared on the CHILD always fired, which is what
+isolated the gap to the projected requirements.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Base uses Element
+	function take(e Element) returns Integer
+end 'Base'
+
+interface Derived extends Base uses Element
+	function extra() returns Integer
+end 'Derived'
+
+type A implements Derived with Integer
+	let base as Integer
+
+	function take(e Integer) returns Integer
+		return base + e
+	end 'take'
+
+	function extra() returns Integer
+		return 1
+	end 'extra'
+
+	static function create(base Integer) returns Self
+		return Self{base: base}
+	end 'create'
+end 'A'
+
+type B implements Derived with float
+	let base as Integer
+
+	function take(e float) returns Integer
+		return base + (20 if e > 19.0 else 0)
+	end 'take'
+
+	function extra() returns Integer
+		return 2
+	end 'extra'
+
+	static function create(base Integer) returns Self
+		return Self{base: base}
+	end 'create'
+end 'B'
+
+function useIt(t Derived) returns Integer
+	return t.take(20) + t.extra()
+end 'useIt'
+
+function main() returns ExitCode
+	return (useIt(A.create(10)) + useIt(B.create(9))) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3119: specs/fragments/associated-types/error.extends-projected-associated-type-disagreement.test:28:6: 'B' binds 'Derived's associated type 'Element' to 'float', but 'A' binds it to 'Integer' — and 'Element' is written as a parameter or return type of a requirement this program DISPATCHES. A witness dispatch is compiled ONCE for every conformer, with no per-conformer specialization, so the shared body would be compiled against one of those two types and hand the other conformer's impl bits it reads as something else. Bind the associated type to the same type in both conformances, or give the two conformers different interfaces
+```
+
+<!-- test: associated-types.extends-projected-associated-type-single-conformer -->
+The FALSE-REJECT CONTROL for the case above, and it is also the second half of a REGRESSION this rung
+introduced and then closed. ONE conformer, binding `Derived`'s `Element` to `float`, with `Base`'s
+`take` projected in through `extends`.
+**MEASURED: the control compiles and answers 31; this rung's previous commit PANICKED the x64 emitter —
+`a register-to-register move from xmm0 to rdx crosses register files`, with no source position, on all
+three targets** — because resolving the formal against the DECLARING interface found no conformance and
+fell back to the machine word while the impl declares an f64. Resolving against the DISPATCHED interface
+is what makes the single-conformer case right and the two-conformer case refusable. `(0 + 20) + 11`.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Base uses Element
+	function take(e Element) returns Integer
+end 'Base'
+
+interface Derived extends Base uses Element
+	function extra() returns Integer
+end 'Derived'
+
+type FloatRunner implements Derived with float
+	let base as Integer
+
+	function take(e float) returns Integer
+		return self.base + (20 if e > 19.0 else 0)
+	end 'take'
+
+	function extra() returns Integer
+		return 11
+	end 'extra'
+
+	static function create(base Integer) returns Self
+		return Self{base: base}
+	end 'create'
+end 'FloatRunner'
+
+function useIt(t Derived) returns Integer
+	return t.take(20.0) + t.extra()
+end 'useIt'
+
+function main() returns ExitCode
+	return useIt(FloatRunner.create(0)) as ExitCode
+end 'main'
+```
+```exitcode
+31
+```
+
+<!-- test: error.associated-return-bound-to-a-generic-instance -->
+⭐⭐ **E3120 ADMITTED A GENERIC INSTANCE AND THE PROGRAM LEAKED.** A `Box with Integer` IS a machine word
+— a pointer — and it is managed. The predicate asked `declaredNameIsManaged`, which answered `false`,
+and the reason is a rendering: a conformance's `with` argument is recorded as the compiler's own
+CANONICAL name (`Box_Integer`), while `genericAliases` is keyed by the ALIAS (`IntBox`) — so
+`declaredFormOf` matched no registry at all and the walk fell through its `otherwise return false`.
+**MEASURED: `with IntBox` and `with IntArr` (an `Array with Integer`) both ran to completion and exited
+101, the leak gate, on x64 and wasm alike.**
+⇒ That door answers for canonical instance names now. It also falsified the claim that an undeclared
+name is safe here because E3011 would have fired — `Box_Integer` is the compiler's own spelling of a
+declared type and no diagnostic fires on it.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Box uses T
+	let v as T
+
+	static function create(v T) returns Self
+		return Self{v: v}
+	end 'create'
+end 'Box'
+
+typealias IntBox = Box with Integer
+
+interface Maker uses Element
+	function make() returns Element
+end 'Maker'
+
+type Runner implements Maker with IntBox
+	let base as IntBox
+
+	function make() returns IntBox
+		return self.base
+	end 'make'
+
+	static function create(base IntBox) returns Self
+		return Self{base: base}
+	end 'create'
+end 'Runner'
+
+function useIt(m Maker) returns Integer
+	return m.make() + 11
+end 'useIt'
+
+function main() returns ExitCode
+	return useIt(Runner.create(IntBox.create(20))) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3120: specs/fragments/associated-types/error.associated-return-bound-to-a-generic-instance.test:18:6: 'Runner' binds 'Maker's associated type 'Element' to 'Box_Integer', and 'Element' is the RETURN type of one of 'Maker's requirements. A dispatch's result type flows on into the code around it — which instruction the arithmetic picks, and whether the value is OWNED and released — and that is chosen while the interface is still only a NAME, because a conformer's binding is not known until every file has parsed. Bind it to an `int`, a ranged typealias or a payload-free enum, or take the value as a PARAMETER instead, where the binding IS resolved
+```
+
+<!-- test: error.associated-type-bound-to-an-interface -->
+⭐⭐ **AN ASSOCIATED TYPE BOUND TO AN INTERFACE NAME SEGFAULTED.** A value held at an interface is a
+two-word fat pointer `(value, witness)`, and a witness call carries ONE machine word per argument — so
+the second word is dropped and the impl reads a witness that was never passed.
+**MEASURED: exit 139 on x64-windows, and a trap on wasm.** It reached the ABI because the width question
+was being read off the OWNERSHIP door: `declaredNameIsManaged`'s `interfaceType` arm answers `false`,
+which is true (an existential owns no record) and is not the question. That arm's own comment said
+*"existentials are unbuilt. When they land, a fat pointer's ownership is that rung's answer to give, and
+this arm is where it says it"* — this is that rung, and the arm had been silently promoted to
+load-bearing by giving it this caller.
+⚠ Refused wherever the associated type reaches the calling convention, PARAMETER as well as return —
+this case's `Element` is a parameter, and the return-only rule could not see it.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Shape
+	function area() returns Integer
+end 'Shape'
+
+type Sq implements Shape
+	let s as Integer
+
+	function area() returns Integer
+		return self.s
+	end 'area'
+
+	static function create(s Integer) returns Self
+		return Self{s: s}
+	end 'create'
+end 'Sq'
+
+interface Taker uses Element
+	function take(e Element) returns Integer
+end 'Taker'
+
+type Runner implements Taker with Shape
+	let base as Integer
+
+	function take(e Shape) returns Integer
+		return self.base + e.area()
+	end 'take'
+
+	static function create(base Integer) returns Self
+		return Self{base: base}
+	end 'create'
+end 'Runner'
+
+function useIt(t Taker) returns Integer
+	return t.take(Sq.create(11))
+end 'useIt'
+
+function main() returns ExitCode
+	return useIt(Runner.create(20)) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3120: specs/fragments/associated-types/error.associated-type-bound-to-an-interface.test:24:6: 'Runner' binds 'Taker's associated type 'Element' to the interface type 'Shape', and 'Element' reaches the calling convention of a requirement this program DISPATCHES. A value held at an interface is a two-word fat pointer `(value, witness)`, and a witness call carries one machine word per argument and one per result — so the second word is dropped and the impl reads a witness that was never passed. Bind the associated type to a concrete type
+```

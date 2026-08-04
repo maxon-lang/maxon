@@ -1,0 +1,45 @@
+// Test: error.associated-type-bound-to-an-interface
+typealias Integer = int(i64.min to i64.max)
+
+interface Shape
+	function area() returns Integer
+end 'Shape'
+
+type Sq implements Shape
+	let s as Integer
+
+	function area() returns Integer
+		return self.s
+	end 'area'
+
+	static function create(s Integer) returns Self
+		return Self{s: s}
+	end 'create'
+end 'Sq'
+
+interface Taker uses Element
+	function take(e Element) returns Integer
+end 'Taker'
+
+type Runner implements Taker with Shape
+	let base as Integer
+
+	function take(e Shape) returns Integer
+		return self.base + e.area()
+	end 'take'
+
+	static function create(base Integer) returns Self
+		return Self{base: base}
+	end 'create'
+end 'Runner'
+
+function useIt(t Taker) returns Integer
+	return t.take(Sq.create(11))
+end 'useIt'
+
+function main() returns ExitCode
+	return useIt(Runner.create(20)) as ExitCode
+end 'main'
+---
+CompilerError:
+error E3120: <fragment>:24:6: 'Runner' binds 'Taker's associated type 'Element' to the interface type 'Shape', and 'Element' reaches the calling convention of a requirement this program DISPATCHES. A value held at an interface is a two-word fat pointer `(value, witness)`, and a witness call carries one machine word per argument and one per result — so the second word is dropped and the impl reads a witness that was never passed. Bind the associated type to a concrete type

@@ -447,17 +447,6 @@ export function associatedTypePositionOf(associatedTypeNames ByteArrayArray, nam
 	throw MapError.keyNotFound
 end 'associatedTypePositionOf'
 
-// ⭐⭐ **WHAT EVERY CONFORMER BINDS ONE ASSOCIATED TYPE TO, REDUCED TO AN ABI CLASS**
-// (P1.7a-existentials slice 1, second review round). An associated type's width and register file are a
-// fact about the CONFORMER: `interface Taker uses Element` says nothing about `Element`, and
-// `implements Taker with float` is what makes the formal an f64. Neither the formal's SPELLING (the
-// interface does not name a type) nor the ACTUAL's parser tag (an unresolved column — the very thing this
-// slice exists to stop reading) can supply it.
-//
-// ⚠ **AND UNDER DICTIONARY PASSING THE ANSWER MUST BE ONE ANSWER.** An interface's method bodies are
-// compiled ONCE for every conformer, so a witness dispatch has exactly one calling convention. Two
-// conformers of different ABI class therefore have no single functype, and this reports that rather than
-// picking — see `E3119`, and `ConformanceCheck.checkAssociatedTypeAbiAgreement` for where it is diagnosed.
 // ⭐⭐ **THE ABI-BEARING TYPE A RENDERED TYPE NAME DENOTES — the one collapse for every place a type is
 // held only as the bytes the source wrote.** `builtinTypeNameTag` answers for the five builtins whose tag
 // carries a width; EVERYTHING else it calls `named`, and a `named` here is not a residue to panic on — it
@@ -508,11 +497,23 @@ end 'AssociatedAbiBinding'
 // A binding is a RENDERED type name (`InterfaceConformance.withArgs`), and comparing those names IS the whole
 // test — no resolution, no class. `declaredType` is resolved only so the LOWERING has the formal's type;
 // `renderedTypeNameAbiType` is that reduction, and it is the caller's business rather than the comparison's.
+// The pre-first-match seed for the fold below. It is never READ — `sawOne` gates every use — and it exists
+// because a `var` must hold something before the walk finds its first conformer. `NoSourceLine`/`NoSourceColumn`
+// and the empty path say "this names nothing" rather than pointing at line 1 of some file.
+function unreadConformanceSeed() returns ConformanceDecl
+	return ConformanceDecl.create(EmptySourceText, interfaces: InterfaceConformanceArray.create(), nameLine: NoSourceLine, nameColumn: NoSourceColumn, filePath: CompilerOwnedDeclFilePath)
+end 'unreadConformanceSeed'
+
+// The position a synthesized declaration reports from — no line and no column, so a reader can tell it from
+// a real one rather than seeing a confident `1:1`.
+let NoSourceLine = 0 as LineNumber
+let NoSourceColumn = 0 as ColumnNumber
+
 export function associatedAbiBindingOf(conformances ConformanceDeclArray, interfaceName ByteArray, position ElementCount) returns AssociatedAbiBinding
 	// The pre-first-match seed. It is never READ — `sawOne` gates every use — and it exists because a `var`
 	// must hold something before the walk finds the first conformer. `CompilerOwnedDeclFilePath` is the empty
 	// path the other synthesized declarations use, so the seed names no file rather than a wrong one.
-	var seenDecl = ConformanceDecl.create(EmptySourceText, interfaces: InterfaceConformanceArray.create(), nameLine: 0, nameColumn: 0, filePath: CompilerOwnedDeclFilePath)
+	var seenDecl = unreadConformanceSeed()
 	var seenBinding = EmptySourceText
 	var sawOne = false
 
@@ -931,19 +932,19 @@ end 'appendInterfaceWitnessSlots'
 // it is the property that must hold — but two lists of equal length whose slots are in different ORDERS
 // satisfy it and still recover a different requirement, and the names are already built and already in hand.
 // A strictly stronger check at the same cost.
-export function requireSameSlotCount(interfaceName ByteArray, parserSlots CollectedInterfaceMethodArray, mergedSlots CollectedInterfaceMethodArray)
+export function requireSameSlotNumbering(interfaceName ByteArray, parserSlots CollectedInterfaceMethodArray, mergedSlots CollectedInterfaceMethodArray)
 	if parserSlots.count() != mergedSlots.count() 'countsDisagree'
-		panic("requireSameSlotCount: interface '{String.from(interfaceName)}' has {parserSlots.count()} witness slots in the signature index a dispatch was numbered against and {mergedSlots.count()} in the merged registry it resolves through — `methodIndex` would recover a different requirement and set the wrong calling convention for the call, on every target and with no diagnostic")
+		panic("requireSameSlotNumbering: interface '{String.from(interfaceName)}' has {parserSlots.count()} witness slots in the signature index a dispatch was numbered against and {mergedSlots.count()} in the merged registry it resolves through — `methodIndex` would recover a different requirement and set the wrong calling convention for the call, on every target and with no diagnostic")
 	end 'countsDisagree'
 
 	for i in 0 upto parserSlots.count() 'eachSlot'
-		let numbered = (try parserSlots.get(i) otherwise panic("requireSameSlotCount: parserSlots.get OOB at {i} below its own count")).method.name
-		let resolved = (try mergedSlots.get(i) otherwise panic("requireSameSlotCount: mergedSlots.get OOB at {i}, which the count check above excludes")).method.name
+		let numbered = (try parserSlots.get(i) otherwise panic("requireSameSlotNumbering: parserSlots.get OOB at {i} below its own count")).method.name
+		let resolved = (try mergedSlots.get(i) otherwise panic("requireSameSlotNumbering: mergedSlots.get OOB at {i}, which the count check above excludes")).method.name
 		if not numbered.equals(resolved) 'slotsDisagree'
-			panic("requireSameSlotCount: interface '{String.from(interfaceName)}' has '{String.from(numbered)}' at witness slot {i} in the signature index a dispatch was numbered against and '{String.from(resolved)}' in the merged registry it resolves through — `methodIndex` recovers a different requirement and sets the wrong calling convention for the call, on every target and with no diagnostic")
+			panic("requireSameSlotNumbering: interface '{String.from(interfaceName)}' has '{String.from(numbered)}' at witness slot {i} in the signature index a dispatch was numbered against and '{String.from(resolved)}' in the merged registry it resolves through — `methodIndex` recovers a different requirement and sets the wrong calling convention for the call, on every target and with no diagnostic")
 		end 'slotsDisagree'
 	end 'eachSlot'
-end 'requireSameSlotCount'
+end 'requireSameSlotNumbering'
 
 // ⭐⭐ **DOES A CONFORMANCE TO `declaredName` SATISFY A REQUIREMENT FOR `wanted`? — CONFORMANCE IS
 // TRANSITIVE THROUGH `extends` (P1.7a-existentials slice 1).** `type Impl implements Derived` with

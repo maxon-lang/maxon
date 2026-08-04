@@ -1206,7 +1206,13 @@ and the `movqGprXmm` bitcast are each their own op.
 `a register-to-register move from xmm0 to rcx crosses register files` — with no source position and
 nothing an author could act on.** It is E2062's fact one widening position over: dictionary passing
 gives a type parameter and an existential the SAME opaque slot, so it gives them the same limit.
-⚠ The parameter is named `_` deliberately. This case is about the ARGUMENT, and an earlier draft used
+⚠ ONE parameter, named `_`, and a second one PROVING the check is per-argument is not expressible today —
+MEASURED, all three ways. A `float` actual is the only thing that reaches E3121, so the parameter must be
+a builtin protocol; those declare only `Self`-typed requirements, which are undispatchable on an
+existential (`requireWitnessSelfArgs`), so the parameter can never be USED; an unused NAMED parameter is
+E3012 and a second `_` cannot be supplied, because arguments after the first must carry a label and `_`
+is not one (E2053). The check itself is written per position (`checkOneArgType` runs once per argument),
+and the day a builtin protocol declares a nullary requirement this case grows its second parameter. This case is about the ARGUMENT, and an earlier draft used
 the two operands of `c < other` to consume them — which is the address-compare shape
 `error.existentials-cannot-be-compared` below refuses, so the program stopped reaching E3121 at all.
 ```maxon
@@ -1271,4 +1277,51 @@ end 'main'
 ```
 ```maxoncstderr
 error E3005: specs/fragments/interface-dispatch/error.existentials-cannot-be-compared.test:23:11: cannot compare values held at an interface type using '==': two values held at one interface may have different dynamic types, and nothing here can prove they match, so the comparison would be answered by the two fat pointers' ADDRESSES rather than by their values. Compare concrete values, or dispatch a requirement the interface declares
+```
+
+<!-- test: error.closure-parameter-at-an-interface-type -->
+⭐⭐ **A CLOSURE PARAMETER DECLARED AT AN INTERFACE TYPE PANICKED THE PARSER, WITH NO POSITION.**
+```text
+panic at Parser.maxon: Parser.witnessOfValue: value v0 is typed as an interface but no witness half is
+paired with it — every producer of an existential must call `pairInterfaceWitness`
+```
+A value held at an interface is a two-word fat pointer `(value, witness)`, and the witness half travels
+as an ADJACENT HIDDEN ARGUMENT that only a declared function's signature reserves. A lifted closure's
+parameters are bound by a different door than a function's, and that door paired no witness — so the
+first use of the parameter asked for a half that was never there.
+**MEASURED identically on the tip and on the control, so it is not a regression — it is the fourth
+producer of an existential that round 3 turned into positioned refusals and missed**, because a
+closure's parameters are parsed somewhere else. Refused rather than paired: a closure is called through
+the uniform `(userargs, env)` indirect ABI, which carries one machine word per argument and has nowhere
+to put a second.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias ShapeFn = function(Shape) returns Integer
+
+interface Shape
+	function area() returns Integer
+end 'Shape'
+
+type Sq implements Shape
+	let s as Integer
+
+	function area() returns Integer
+		return self.s
+	end 'area'
+
+	static function create(s Integer) returns Self
+		return Self{s: s}
+	end 'create'
+end 'Sq'
+
+function apply(f ShapeFn, v Shape) returns Integer
+	return f(v)
+end 'apply'
+
+function main() returns ExitCode
+	return apply(function(t Shape) gives t.area(), v: Sq.create(7)) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: specs/fragments/interface-dispatch/error.closure-parameter-at-an-interface-type.test:26:24: Unsupported: a closure parameter 't' declared at the interface type 'Shape' — a value held at an interface is a two-word fat pointer `(value, witness)`, and its witness half travels as an adjacent hidden argument that only a declared function's signature reserves. A closure is called through the uniform `(userargs, env)` indirect ABI, which carries one machine word per argument. Declare the parameter at a concrete type, or take the interface in a named function
 ```

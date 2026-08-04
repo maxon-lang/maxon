@@ -2028,10 +2028,14 @@ export function tagIsInterfaceRef(tag ValueTypeTag) returns bool
 	return tag == ValueTypeTag.interfaceRef
 end 'tagIsInterfaceRef'
 
-// Either operand held at an interface — `operandsAreStructRef`'s shape, and asked for the same reason: an
-// operator that has no reading for one existential has none for a pair of them either.
+// ⭐ **BOTH operands held at an interface — and BOTH, where `operandsAreStructRef` says EITHER.** The two
+// are not the same shape and the difference is the point: an existential against an `int` is a genuine
+// TYPE MISMATCH and already reads as one, while a PAIR of them agrees perfectly and still cannot be
+// compared. Asking `or` here would work only because `typesAgree` runs first — one fact resting on another
+// function's ordering — and it would give the mixed pair the wrong explanation at the parser's door, which
+// is exactly what it did before this was one predicate rather than two spellings.
 export function operandsAreInterfaceRef(left ValueTypeTag, right ValueTypeTag) returns bool
-	return tagIsInterfaceRef(left) or tagIsInterfaceRef(right)
+	return tagIsInterfaceRef(left) and tagIsInterfaceRef(right)
 end 'operandsAreInterfaceRef'
 
 // ⭐ **WHAT A FLOAT ZERO IS, AS BITS** — IEEE-754 `+0.0`, whose encoding is all 64 bits clear.
