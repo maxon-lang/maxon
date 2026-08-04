@@ -234,7 +234,7 @@ end 'compileAndReport'
 // were already printed by the pipeline).
 function runVerifyWarmRebuild(args MaxonArgs) returns ExitCode
 	let usage = "maxon-shv2 verify-warm-rebuild <file>"
-	if refusedExtraPositional(args, usage: usage) 'tooManyPaths'
+	if refusedPositionalBeyond(args, allowed: 1, usage: usage) 'tooManyPaths'
 		return 1
 	end 'tooManyPaths'
 
@@ -285,7 +285,7 @@ end 'runVerifyWarmRebuild'
 // in-process branch for the single-worker case would be a second implementation of "run the suite",
 // and the two would drift — which is exactly what the worker-count-invariance gate exists to catch.
 function runSpecTest(args MaxonArgs) returns ExitCode
-	if refusedExtraPositional(args, usage: "maxon-shv2 spec-test [dir] [--filter=<pattern>] [--update-required] [--workers=<n>] [--target=<cpu>-<os>] [--compiler=<path>]") 'tooManyPaths'
+	if refusedPositionalBeyond(args, allowed: 1, usage: "maxon-shv2 spec-test [dir] [--filter=<pattern>] [--update-required] [--workers=<n>] [--target=<cpu>-<os>] [--compiler=<path>]") 'tooManyPaths'
 		return 1
 	end 'tooManyPaths'
 
@@ -502,16 +502,27 @@ end 'specDirSpelling'
 // failure a caller can neither see nor recover from. An unrecognized FLAG was already refused there;
 // a second bare word was not, so `spec-test specs-shv2 specs` ran the first directory and said
 // nothing at all about the second.
-function refusedExtraPositional(args MaxonArgs, usage String) returns bool
-	if args.paths.count() <= 1 'atMostOne'
+// ⚠ **`allowed` IS A COUNT AND NOT A BOOL, BECAUSE ONE COMMAND ALLOWS NONE.** `build`, `spec-test` and
+// `verify-warm-rebuild` each read ONE positional and must refuse a second; `scale-test` reads NONE, so
+// for it the FIRST is already the typo — measured, it ran the whole ladder for `scale-test foo` and
+// never mentioned `foo`. A second copy of these two lines under a different predicate is how that
+// message drifts, so the predicate is the parameter and the message stays here.
+//
+// Exported for `Testing/ScaleTestRunner`, which owns `scale-test`'s entry point the way this file owns
+// the other three.
+export function refusedPositionalBeyond(args MaxonArgs, allowed PositionalCount, usage String) returns bool
+	if args.paths.count() <= allowed 'withinBudget'
 		return false
-	end 'atMostOne'
+	end 'withinBudget'
 
-	let extra = try args.paths.get(1) otherwise panic("refusedExtraPositional: the count is greater than 1 on the line above, so index 1 exists")
+	let extra = try args.paths.get(allowed) otherwise panic("refusedPositionalBeyond: the count is greater than {allowed} on the line above, so index {allowed} exists")
 	printError("error: unexpected extra argument: {extra}\n")
 	printError("Usage: {usage}\n")
 	return true
-end 'refusedExtraPositional'
+end 'refusedPositionalBeyond'
+
+// How many positional arguments a command reads. Two today — one, or none.
+typealias PositionalCount = int(0 to 1)
 
 // Raised when `--compiler=<path>` names something that is not there. A THROW rather than a sentinel
 // FilePath: there is no path value that means "no path", and falling back to the running executable

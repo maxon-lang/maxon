@@ -353,21 +353,68 @@ end 'parseRepeatCount'
 // numbers are the reason it matters most: a rung measured against a machine running somebody else's
 // suite is a recorded row of noise, and a recorded row is permanent.
 export function runScaleTest(args MaxonArgs) returns ExitCode
+	if refusedPositionalBeyond(args, allowed: 0, usage: ScaleTestUsage) 'noPositional'
+		return 1
+	end 'noPositional'
+
 	let corpusRoot = try corpusRootPath(args) otherwise 'badCorpus'
 		return brokenRun("the corpus root is not a valid path", detail: "--emit-corpus={args.emitCorpus}")
 	end 'badCorpus'
+
+	// ⭐⭐ **THE `--per-type` TRACE COMPILER IS BUILT HERE, BEFORE THE LOCK, AND THAT ORDER IS THE FIX.**
+	// Only the BOOTSTRAP can build it (shv2 cannot compile itself), and the bootstrap takes this
+	// checkout's tree lock for EVERY directory build — unconditionally, because it has no `-o` and so no
+	// way to say the caller owns the output. That `-o` escape (`Main.acquireBuildTreeLock`) is what makes
+	// every OTHER nested build in this harness a non-event: the rung compiles pass one, the per-type
+	// rung re-compiles pass one, and none of them contend. The trace build is the single exception, and
+	// asking for it from inside the locked run refused it EVERY TIME — the pass has never run since the
+	// lock landed, and it reported that as `SKIPPED` while the run exited 0.
+	//
+	// ⛔ **RE-ENTRANCY WAS THE OTHER CANDIDATE AND IS THE WRONG TRADE HERE.** It would mean a holder
+	// handing its token to a child through the environment and BOTH lock implementations honouring it —
+	// `maxon-sharp/TreeLock.cs`, `Compiler/TreeLock.maxon` and the `TreeLockParity` gate that keeps the
+	// two identical. Three files and a C# build, to add an exception to a safety mechanism, when the
+	// dependency is simply in the wrong order: nothing about building the trace compiler needs the
+	// ladder's lock, because it writes `.scale-tmp/mmtrace-src/.maxon/` and nothing else writes that.
+	//
+	// ⚠ What this does NOT protect is the source COPY, which now happens before the lock is taken. The
+	// build that follows it is covered — the bootstrap child takes the tree lock itself for its whole
+	// duration — so the exposed window is the copy alone, and a second `scale-test` racing it is refused
+	// at the acquire below exactly as it is today. That is the residual, and it is stated rather than
+	// left for a reader to find.
+	var tracer = TracePreparation.notRequested
+	if args.perType 'prepareTracer'
+		let traceExe = try buildTraceCompiler(corpusRoot) otherwise (error) 'tracerFailed'
+			return brokenRun("--per-type was requested and its trace compiler could not be built", detail: scaleErrorText(error))
+		end 'tracerFailed'
+		tracer = TracePreparation.ready(traceExe)
+	end 'prepareTracer'
 
 	let lockExit = acquireTreeLock(corpusRoot)
 	if lockExit != 0 'busyTree'
 		return lockExit
 	end 'busyTree'
 
-	let runExit = measureScaleLadder(args, corpusRoot: corpusRoot)
+	let runExit = measureScaleLadder(args, corpusRoot: corpusRoot, tracer: tracer)
 	releaseTreeLock()
 	return runExit
 end 'runScaleTest'
 
-function measureScaleLadder(args MaxonArgs, corpusRoot FilePath) returns ExitCode
+// `scale-test` reads NO positional argument, so any of them is a typo the run must not swallow — it
+// took several minutes and produced a table about something the caller did not ask for. Spelled with
+// the shared helper rather than a second copy of the message, at the ONE count that differs.
+let ScaleTestUsage = "maxon-shv2 scale-test [--rungs=<n>] [--repeat=<n>] [--per-type] [--note=<text>] [--emit-corpus=<dir>] [--result-json=<path>]"
+
+// Whether `--per-type` was asked for, and if so the compiler that will serve it — built before the
+// lock and carried through the run. A union rather than an empty `FilePath`, because there is no path
+// value meaning "not requested" and a sentinel one would be indistinguishable from a build that
+// silently produced nothing.
+union TracePreparation
+	notRequested
+	ready(exe FilePath)
+end 'TracePreparation'
+
+function measureScaleLadder(args MaxonArgs, corpusRoot FilePath, tracer TracePreparation) returns ExitCode
 	// `--update-required` is GONE from this command, and saying so is worth four lines. It rewrote
 	// committed memory goldens; there are no goldens. It is still a spec-test flag, and the driver
 	// parses the command line before it knows which command is running — so without this it would be
@@ -518,11 +565,10 @@ function measureScaleLadder(args MaxonArgs, corpusRoot FilePath) returns ExitCod
 		end 'recordFailed'
 	end 'record'
 
-	if args.perType 'perTypePass'
-		runPerTypePass(results)
+	return match tracer 'perTypePass'
+		notRequested gives 0
+		ready(traceExe) gives runPerTypePass(results, traceExe: traceExe, corpusRoot: corpusRoot)
 	end 'perTypePass'
-
-	return 0
 end 'measureScaleLadder'
 
 // The ONE way this instrument fails: the RUN broke — it could not measure, or could not deliver what
@@ -533,7 +579,7 @@ end 'measureScaleLadder'
 // NOTHING, while a result document that could not be written measured everything and could not hand
 // it over. This line therefore says "the run", which is true of both, rather than "nothing was
 // measured", which was written for the first and is a lie about the second.
-function brokenRun(what String, detail String) returns ExitCode
+export function brokenRun(what String, detail String) returns ExitCode
 	printError("\nscale-test: BROKEN RUN — {what}.\n")
 	printError("  {detail}\n")
 	printError("  The RUN failed. This is not a verdict about the compiler's numbers. Fix it and re-run.\n")

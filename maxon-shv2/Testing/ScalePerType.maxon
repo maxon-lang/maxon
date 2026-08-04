@@ -215,7 +215,18 @@ end 'TraceTables'
 // different codegen, built from a copy of the sources at a different path, so its counts are close to
 // but not identical with the ones the trend log records. What it is FOR is naming the type — and the
 // function — behind a movement the main run has already shown you.
-export function runPerTypePass(results RungResultArray)
+// ⭐⭐ **IT TAKES THE TRACE COMPILER RATHER THAN BUILDING ONE, AND THAT IS WHERE THE PASS WAS DEAD.**
+// The trace binary can only be built by the BOOTSTRAP, and the bootstrap takes this checkout's tree
+// lock for EVERY directory build — it has no `-o` and so no way to say "the caller owns this output"
+// (`maxon-sharp/Program.cs`, the `A PROJECT BUILD IS TREE-LEVEL` arm). `scale-test` holds that same
+// lock for its whole run, so the child was refused, this pass printed `SKIPPED`, and the run exited 0.
+// It could not have run ONCE since the lock landed. `runScaleTest` now builds the compiler BEFORE it
+// takes the lock and hands it in; see there for why that shape and not re-entrancy.
+//
+// ⚠ AND FAILURE IS NO LONGER A SKIP. A pass that was ASKED for and did not produce its tables did not
+// measure anything, which is what `brokenRun` means everywhere else in this instrument. The exit code
+// is returned rather than swallowed.
+export function runPerTypePass(results RungResultArray, traceExe FilePath, corpusRoot FilePath) returns ExitCode
 	print("\n")
 	print("scale-test: --per-type — tracing WHAT was allocated (second binary).\n")
 
@@ -229,21 +240,16 @@ export function runPerTypePass(results RungResultArray)
 		print("           per-type growth reading, which is what this pass exists to produce.\n")
 	end 'bounded'
 
-	let traceExe = try buildTraceCompiler() otherwise (error) 'noTraceExe'
-		printError("  SKIPPED: {scaleErrorText(error)}\n")
-		return
-	end 'noTraceExe'
-
 	var tables = TraceTables.create(tracedRungs)
 	for rung in 0 upto tracedRungs 'eachRung'
 		print("  tracing rung {rung}...\n")
-		try traceRung(traceExe, rung: rung as RungIndex, tables: tables) otherwise (error) 'traceFailed'
-			printError("  SKIPPED: {scaleErrorText(error)}\n")
-			return
+		try traceRung(traceExe, rung: rung as RungIndex, tables: tables, corpusRoot: corpusRoot) otherwise (error) 'traceFailed'
+			return brokenRun("--per-type was requested and rung {rung} could not be traced", detail: scaleErrorText(error))
 		end 'traceFailed'
 	end 'eachRung'
 
 	reportPerType(tables, results: results, tracedRungs: tracedRungs)
+	return 0
 end 'runPerTypePass'
 
 function perTypeRungCount(results RungResultArray) returns RungCount
@@ -264,10 +270,14 @@ end 'perTypeRungCount'
 // this code is running from. On Windows the OS locks it and the build simply fails; on a platform
 // that permitted it, the suite would have silently replaced the binary under test with a traced one
 // halfway through its own run.
-function buildTraceCompiler() returns FilePath throws ScaleError
+// ⚠ **IT MUST BE CALLED BEFORE `scale-test` TAKES THE TREE LOCK.** The spawn below is a BOOTSTRAP
+// directory build, and the bootstrap locks the checkout for every one of those unconditionally — there
+// is no `-o` on that side to say the caller owns the output, which is the escape every other nested
+// build in this harness uses. Called from inside the locked run it is refused, every time.
+export function buildTraceCompiler(corpusRoot FilePath) returns FilePath throws ScaleError
 	let bootstrap = try findBootstrapCompiler()
 	let sourceDir = try FilePath.from(ShvSourceDirName) otherwise throw ScaleError.reason("'{ShvSourceDirName}' is not a valid path")
-	let traceDir = try corpusChild(TraceSourceDirName)
+	let traceDir = try corpusChild(corpusRoot, name: TraceSourceDirName)
 
 	print("  copying shv2 sources to {traceDir.toString()} and building with --mm-trace...\n")
 	try copyMaxonTree(sourceDir, into: traceDir)
@@ -282,11 +292,31 @@ function buildTraceCompiler() returns FilePath throws ScaleError
 	end 'spawnFailed'
 
 	if build.exitCode != 0 'buildFailed'
-		throw ScaleError.reason("building the --mm-trace compiler failed (exit {build.exitCode}): {build.stderr.trim()}")
+		throw ScaleError.reason("building the --mm-trace compiler failed (exit {build.exitCode}): {buildFailureReason(build)}")
 	end 'buildFailed'
 
 	return try findBuiltExe(traceDir)
 end 'buildTraceCompiler'
+
+// Why the trace build failed, in the words the child actually used.
+//
+// ⚠ **STDERR ALONE IS NOT ENOUGH, AND THE SABOTAGE THAT PROVED THIS PASS NOW REFUSES IS ALSO WHAT
+// FOUND IT.** Handing the bootstrap a flag it does not know makes it print its usage to STDOUT and exit
+// non-zero, so a refusal quoting only `stderr` read `failed (exit 1): ` — loud, correctly refusing, and
+// silent about why. A reason a reader cannot act on is most of the way back to the `SKIPPED` this whole
+// change removes, so the fallback is not decoration.
+function buildFailureReason(build ProcessCapture) returns String
+	let reason = build.stderr.trim()
+	if not reason.isEmpty() 'saidSomethingOnStderr'
+		return reason
+	end 'saidSomethingOnStderr'
+
+	let fallback = build.stdout.trim()
+	if fallback.isEmpty() 'saidNothingAtAll'
+		return "it wrote nothing to stderr or stdout"
+	end 'saidNothingAtAll'
+	return fallback
+end 'buildFailureReason'
 
 // The C# bootstrap, found by walking up from this compiler's own location. The trace binary can only
 // be built by the bootstrap — shv2 cannot compile itself — so its absence is a clean SKIP with a
@@ -444,10 +474,20 @@ function hostExeSuffix() returns String
 	return executableExtension(detectHostTarget())
 end 'hostExeSuffix'
 
-function corpusChild(name String) returns FilePath throws ScaleError
-	let root = try FilePath.from(CorpusRelativeRoot) otherwise throw ScaleError.reason("'{CorpusRelativeRoot}' is not a valid path")
+// The root arrives as an argument rather than being rebuilt from `CorpusRelativeRoot`, which this file
+// did at all three places it needed a corpus path. That is a DUPLICATION removal and nothing more.
+//
+// ⚠ **IT IS NOT A BUG FIX, AND THE FIRST DRAFT OF THIS COMMENT SAID IT WAS.** The obvious reading —
+// "`--emit-corpus=<dir>` moves the rungs and this pass would go looking under `.scale-tmp`" — is
+// WRONG, and it was written here before anyone checked: `measureScaleLadder` returns 0 the moment
+// `--emit-corpus` is set (`scale-test: corpus written to … (--emit-corpus: not compiling)`), before a
+// single rung is compiled and long before this pass is reached. The two flags cannot meet, so the
+// hardcoded root was never once consulted for the wrong directory. Recorded rather than quietly
+// corrected, because a cure named for a defect that does not exist is how the next reader inherits a
+// diagnosis instead of the evidence.
+function corpusChild(corpusRoot FilePath, name String) returns FilePath throws ScaleError
 	let child = try FilePath.from(name) otherwise throw ScaleError.reason("'{name}' is not a valid path component")
-	return root.join(child)
+	return corpusRoot.join(child)
 end 'corpusChild'
 
 // ===========================================================================================
@@ -459,9 +499,8 @@ end 'corpusChild'
 //
 // STREAMED, NOT COLLECTED. Rung 2 emits ~1.7 million trace lines; buffering them would cost more
 // memory than the compile being measured. Each line is folded in and dropped.
-function traceRung(traceExe FilePath, rung RungIndex, tables TraceTables) throws ScaleError
+function traceRung(traceExe FilePath, rung RungIndex, tables TraceTables, corpusRoot FilePath) throws ScaleError
 	let rungDirName = try FilePath.from("{RungDirPrefix}{rung}") otherwise throw ScaleError.reason("rung {rung} has no valid directory name")
-	let corpusRoot = try FilePath.from(CorpusRelativeRoot) otherwise throw ScaleError.reason("'{CorpusRelativeRoot}' is not a valid path")
 	let dir = corpusRoot.join(rungDirName)
 
 	let outName = try FilePath.from("trace{rung}") otherwise throw ScaleError.reason("rung {rung} has no valid output name")
