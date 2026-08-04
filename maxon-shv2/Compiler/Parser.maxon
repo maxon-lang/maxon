@@ -5730,12 +5730,11 @@ function firstExistentialParam(paramTypes MaxonTypeArray, paramRanges SourceRang
 end 'firstExistentialParam'
 
 enum DeclaredStoragePosition
-	structField
 	unionPayload
 	returnType
 	containerElement
-	// ⭐ The PARAMETER positions, which the four above deliberately exclude — a plain function's parameter IS
-	// the position with room, and it stays legal. These are the ones whose ABI has no adjacent slot to give:
+	// ⭐ The PARAMETER positions, which the three above deliberately exclude — a plain function's parameter IS
+	// a position with room, and it stays legal. These are the ones whose ABI has no adjacent slot to give:
 	// a lifted closure and a function TYPE are called through the uniform `(userargs, env)` indirect shape,
 	// and an interface REQUIREMENT is called through a witness slot. Appended at the END, per the band-append
 	// rule the `containerElement` arm's own note relies on.
@@ -5764,7 +5763,7 @@ end 'DeclaredStoragePosition'
 // each true when written and false one commit later. The enum IS the count; a prose copy of it is a
 // second declaration free to rot.
 //
-// ⚠ **THE REMEDY IS PER POSITION, AND IT USED TO BE SHARED AND WRONG.** The four storage positions all
+// ⚠ **THE REMEDY IS PER POSITION, AND IT USED TO BE SHARED AND WRONG.** The storage positions all
 // closed with *"or take the interface as a PARAMETER, which carries its witness as an adjacent argument"* —
 // true of a plain function (MEASURED: an interface parameter there answers 31 on both targets) and FALSE of
 // the two positions added here, whose whole problem is that their ABI reserves no such slot. Sent to a
@@ -5776,7 +5775,7 @@ end 'interfaceStoragePositionMessage'
 // WHAT TO DO, per position — see `interfaceStoragePositionMessage` for why this is not one shared clause.
 function storagePositionRemedy(position DeclaredStoragePosition) returns String
 	match position 'which'
-		structField to containerElement then return "Declare it at a concrete type, or take the interface as a PARAMETER of a plain function, which carries its witness as an adjacent argument"
+		unionPayload to containerElement then return "Declare it at a concrete type, or take the interface as a PARAMETER of a plain function, which carries its witness as an adjacent argument"
 		closureParameter then return functionValueAbiRemedy()
 		interfaceRequirementParameter then return "Declare the parameter at a concrete type, or declare the requirement over a type parameter the interface constrains"
 		functionTypeParameter then return functionValueAbiRemedy()
@@ -5795,7 +5794,6 @@ end 'functionValueAbiRemedy'
 // WHAT is being declared, for the refusal's sentence. Rendered on the FAILURE path only.
 function storagePositionSubject(position DeclaredStoragePosition) returns String
 	match position 'which'
-		structField then return "a struct field"
 		unionPayload then return "a union case payload"
 		returnType then return "a function's return type"
 		containerElement then return "a container's element type"
@@ -5810,8 +5808,11 @@ end 'storagePositionSubject'
 // rather than that something is.
 function storagePositionRoom(position DeclaredStoragePosition) returns String
 	match position 'which'
-		structField then return "a field slot is one machine word (the 16-byte carve-out, and the witness-dispatched destructor an owned interface field would need, arrive with the managed-existential slice)"
-		unionPayload then return "a payload slot is one machine word"
+		// ⚠ **A PAYLOAD SLOT IS ONE MACHINE WORD AND A STRUCT FIELD IS NO LONGER THE SAME CASE**
+		// (P1.7a-existentials slice 2): a struct carves out two slots for a fat-pointer field, which a union
+		// cannot — every case shares ONE slot region, so widening a payload widens the box for every case and
+		// a `match` arm would bind the second word of a case that never wrote one.
+		unionPayload then return "a payload slot is one machine word, and unlike a struct field it cannot widen — every case of a union shares one slot region"
 		returnType then return "a return hands back one register, plus a second only for a throwing call's error flag — an interface-returning ABI is a distinct slice"
 		// ⚠ **IT IS REFUSED WHERE THE ARGUMENT IS PARSED AND NOT IN `checkGenericArgType`, which RECORDS.** A
 		// recorded diagnostic is DISCARDED when a later throw aborts the file's parse, and this construct
@@ -10146,9 +10147,12 @@ export type Parser
 		// Int)` asked there answers *how far the sweep had got*. The field's ROOT keeps asking, because
 		// `ProgramSignatures.fieldSurfaceOf` ORs in the complementary derivation; see `declaredSurfaceAt`.
 		let declaredSurface = self.declaredSurfaceAt(self.pos, slotElementsFromAliases: false)
-		let typeTok = self.current()
+		// ⭐ **A FIELD ASKS NO STORABILITY DOOR, AND THAT IS THE SLICE-2 CHANGE** (P1.7a-existentials). Every
+		// other position `DeclaredStoragePosition` names still lacks room for an existential's second word; a
+		// FIELD now carves out two slots for it (`Project.fieldSlotCount`), so it is the one declared place
+		// with somewhere to put both halves. The annotation's first token went with the call — nothing else
+		// anchored a diagnostic on it.
 		let fieldType = try self.parseTypeReference()
-		try self.requireStorableDeclaredType(fieldType, position: DeclaredStoragePosition.structField, line: typeTok.line, column: typeTok.column)
 
 		if not self.at(TokenKind.equals) 'noDefault'
 			layout.addField(nameTok.value, declaredType: fieldType, mutable: mutable, tier: visibility, defaultValue: FieldDefault.none, declaredSurface: declaredSurface)
@@ -13772,13 +13776,18 @@ export type Parser
 	// same balance the in-frame binding gets, with the two halves in different frames. What genuinely needs
 	// the cross-call consume is a MOVE, where the source must be poisoned so exactly one owner remains
 	// (`moveManagedValueInto`, still a clean refusal for a borrowed aggregate).
+	// ⭐ **AN EXISTENTIAL IS ONE (P1.7a-existentials slice 2).** Its VALUE half is a conformer's record, which
+	// has no cheap owning copy either — a fat pointer cannot be deep-copied without knowing the dynamic type
+	// — so it becomes owned by exactly the same CO-OWNERSHIP the aggregates above use, and `retainBorrowedAggregate`
+	// carries its witness across the retain. Reading it as a trivial scalar is what left a consumed
+	// existential parameter unenrolled (`bindParameters`), so the callee owned a reference nothing dropped.
 	function valueIsNonTextAggregate(value ValueId) returns bool
 		let tag = self.tagOf(value)
 		// A generic INSTANCE (`Sizer with bool`, P1.6-B1) is a heap box exactly like a plain `structRef`: a
 		// pointer to a refcounted record with a baked destructor. It carries the SAME managed-aggregate
 		// obligations — owned, dropped once at scope exit, never handed off borrowed-as-owned — so it joins
 		// the boundary here rather than being read as a trivial scalar and leaked.
-		return tagIsStructRef(tag) or tag == ValueTypeTag.genericInstance or self.valueIsBoxedUnion(value)
+		return tagIsStructRef(tag) or tag == ValueTypeTag.genericInstance or tag == ValueTypeTag.interfaceRef or self.valueIsBoxedUnion(value)
 	end 'valueIsNonTextAggregate'
 
 	// `returns <Type>` or nothing (void). The return type flows to the registry
@@ -15602,15 +15611,17 @@ export type Parser
 	end 'requireAssignable'
 
 	// ⭐⭐ **A DECLARED PLACE THAT CANNOT HOLD A FAT POINTER YET — THE ONE REFUSAL FOR EVERY SUCH PLACE**
-	// (P1.7a-existentials slice 1, grown by its reviews). An existential is TWO machine words, and this slice
-	// supplies the two-word form only where the ABI already had somewhere to put the second one: a PARAMETER of
-	// a NAMED function (an adjacent hidden argument) and a LOCAL (a second SSA value). Every place
-	// `DeclaredStoragePosition` names lacks that room, and each was a COMPILER PANIC, a SEGFAULT or a silently
-	// degraded type on a program the front end accepted until its arm existed — measured, every one:
+	// (P1.7a-existentials slice 1, grown by its reviews). An existential is TWO machine words, and it is
+	// supplied only where there is somewhere to put the second one: a PARAMETER of a NAMED function (an
+	// adjacent hidden argument), a LOCAL (a second SSA value), and — since slice 2 — a STRUCT FIELD (a second
+	// SLOT, `Project.fieldSlotCount`). Every place `DeclaredStoragePosition` names lacks that room, and each
+	// was a COMPILER PANIC, a SEGFAULT or a silently degraded type on a program the front end accepted until
+	// its arm existed — measured, every one:
 	//
-	//   • a STRUCT FIELD and a UNION PAYLOAD — `classifyUnionPayload` panicked naming this very function,
-	//     which had been designed and never written. A slot is one machine word, and a payload bound out of a
-	//     `match` arm would dispatch through whatever the next slot happened to hold.
+	//   • a UNION PAYLOAD — `classifyUnionPayload` panicked naming this very function, which had been designed
+	//     and never written. A payload slot is one machine word and, unlike a struct field, cannot widen (every
+	//     case shares one slot region), so a payload bound out of a `match` arm would dispatch through whatever
+	//     the next slot happened to hold.
 	//   • a RETURN TYPE — the witness has no register: shv2 returns one value plus, for a throwing call, one
 	//     error flag. ⚠ v1 hits the identical wall and SILENTLY SKIPS its return-witness path
 	//     (`LowerMaxonToStd.maxon:13545`); shv2 refuses instead, because silence is the one unacceptable
@@ -15629,7 +15640,7 @@ export type Parser
 	// ⚠ **THE TOLERANT READERS ARE KEPT OUT THREE DIFFERENT WAYS, AND ONLY ONE IS "BY CONSTRUCTION".** This
 	// used to claim the single structural reason for all of them, which stopped being true as the positions
 	// grew:
-	//   • the FIELD/PAYLOAD/ELEMENT readers, by construction — during `foldDeclaredSignaturesInto`
+	//   • the PAYLOAD/ELEMENT readers, by construction — during `foldDeclaredSignaturesInto`
 	//     `parseTypeReference` cannot mint an `interfaceRef` at all (its arm is gated on `allFilesFolded`, and
 	//     the interface registry is not filled until the sweep ends), so a swept declaration is a bare `named`.
 	//   • the FUNCTION-TYPE reader, by a FLAG — `readFunctionTypeAlias`'s `recordSignature`, which the sweep
@@ -17850,7 +17861,18 @@ export type Parser
 	//
 	// ⭐ **THE DROP DISPATCH, DONE STATICALLY** — the parser knows the type at every drop, so there is no
 	// stored destructor pointer and no `callIndirect` (`StringRuntime.buildStrDecref` has the full why).
+	// ⭐ **AND THE ONE DROP THAT IS *NOT* STATIC (P1.7a-existentials slice 2).** An owned existential's
+	// conformer is a run-time fact, so its release takes the witness as a SECOND argument and reads
+	// `destroyFunc@8` out of the table — the only drop in the parser whose callee cannot be chosen from the
+	// value's type alone. It is a separate emit rather than a widened `decrefCalleeFor` because that router
+	// answers a NAME and this needs an argument list; `decrefCalleeFor`'s own `interfaceRef` guard says so
+	// from the other side.
 	function emitDecref(value ValueId, range SourceRange)
+		if self.tagOf(value) == ValueTypeTag.interfaceRef 'existential'
+			_ = self.emitRuntimeCall(DropExistentialName, args: pairArgs(self.witnessOfValue(value), second: value), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+			return
+		end 'existential'
+
 		let callee = self.decrefCalleeFor(value)
 		_ = self.emitRuntimeCall(callee, args: singletonArgs(value), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
 	end 'emitDecref'
@@ -18579,10 +18601,36 @@ export type Parser
 	// enrolling a statement-scoped pending drop: `parseBinding` binds this to the `var`, which drops it at
 	// ITS scope exit through `ownedBindings` — the same door a consumed managed parameter drops through.
 	function retainBorrowedAggregate(source ValueId, range SourceRange) returns ValueId
-		let retained = self.emitRuntimeCall(MmRetainName, args: singletonArgs(source), resultTag: self.tagOf(source), resultNameId: self.valueNameId(source), range: range)
+		let retained = self.emitRetainCall(source, range: range)
 		self.markValueOwnsHeap(retained)
+		// ⭐ **AN EXISTENTIAL'S FRESH NAME KEEPS THE SOURCE'S WITNESS (P1.7a-existentials slice 2).** The retain
+		// raises a refcount and changes nothing else, so the co-owner is the SAME conformer — but it is a
+		// different ValueId, and the witness column is keyed by ValueId, so the pairing has to be carried or the
+		// first dispatch on the result panics in `witnessOfValue`. The `tagOf(source)` above is what makes this
+		// the right place: the result is an existential exactly when the source was.
+		if self.tagOf(source) == ValueTypeTag.interfaceRef 'existential'
+			self.pairInterfaceWitness(retained, witness: self.witnessOfValue(source))
+		end 'existential'
 		return retained
 	end 'retainBorrowedAggregate'
+
+	// ⭐⭐ **WHICH RETAIN A BORROWED AGGREGATE TAKES — and an EXISTENTIAL takes a DIFFERENT one, because its
+	// value half may not be a pointer at all (P1.7a-existentials slice 2).** `int` and `bool` conform
+	// intrinsically and are held at an interface as their RAW VALUE in a general-purpose register — which is
+	// exactly what makes them representable there where a `float` is not (E3121). So the incref has to be
+	// gated on the same witness word the DROP is gated on, and `__retain_existential(witness, value)` is that
+	// gate; a plain `__mm_retain` would write through `<the integer> - 24 + 16`.
+	//
+	// **MEASURED with the ungated form**: `use(h Comparable)` called with `7`, then `var v = h`, died with
+	// **0xC0000005** where the same program answers 11 on a compiler that only BORROWED. Both entries return
+	// the pointer, so the caller's fresh-SSA-name property is identical either way.
+	function emitRetainCall(source ValueId, range SourceRange) returns ValueId
+		if self.tagOf(source) == ValueTypeTag.interfaceRef 'existential'
+			return self.emitRuntimeCall(RetainExistentialName, args: pairArgs(self.witnessOfValue(source), second: source), resultTag: self.tagOf(source), resultNameId: self.valueNameId(source), range: range)
+		end 'existential'
+
+		return self.emitRuntimeCall(MmRetainName, args: singletonArgs(source), resultTag: self.tagOf(source), resultNameId: self.valueNameId(source), range: range)
+	end 'emitRetainCall'
 
 	// ⭐ **BECOME A SECOND OWNER OF `source`'s BOX, AS AN UNBOUND STATEMENT-SCOPED TEMPORARY** — the door for
 	// an expression that hands back a record SOMEBODY ELSE already owes a drop on, and whose own result may be
@@ -18600,6 +18648,39 @@ export type Parser
 	// this door existed they agreed on the ownership pair only by each spelling it out. A third ownership fact
 	// added to one of the two copies would have been a leak or a double free in the other, with nothing to say
 	// so: the surfaces are inverses, but the refcount question they answer is the same question.
+	// ⭐⭐ **TRANSITIVE CONSUME: A BORROWED AGGREGATE REACHING A CONSUMING POSITION TAKES ITS OWN REFERENCE**
+	// (the user ruling, 2026-08-04; P1.7a-existentials slice 2). Both doors that hand a value to durable
+	// storage — a CONSUMED ARGUMENT (`transferConsumedArg`, the callee will store it) and a DIRECT move-in
+	// (`moveManagedValueInto`, this frame stores it) — used to REFUSE a borrowed struct/union/existential with
+	// an `E2015` naming the call-graph fixpoint that would decide it. This is that decision, and it is a
+	// refcount rather than a fixpoint: the storage becomes a second owner, the borrow's own owner is untouched,
+	// and the container's destructor releases exactly the reference taken here. It is the SAME `__mm_incref`
+	// co-ownership shv2 already sanctions for a slice view, a `try … otherwise` phi reconciliation and a
+	// borrowed aggregate bound into a `var` — generalized to the one position that was still refused.
+	//
+	// ⚠ **IT IS NOT `retainBorrowedAggregate`, AND THE DIFFERENCE IS THE FRESH NAME.** That door mints a new
+	// ValueId because a BINDING will own the result and must not alias the source's id. Here the new owner is a
+	// SLOT in another record: nothing in this frame binds the result, so a fresh id would buy nothing and would
+	// have to carry the witness column and the surface marks across for no reader. The value passes through
+	// unchanged, borrowed exactly as it was, and this frame still drops nothing.
+	//
+	// ⚠ **AND IT IS NOT A MOVE.** The source is deliberately NOT poisoned: co-ownership is what makes
+	// `Holder.create(p)` twice legal in one body, where a move would make the second an E3102 and a single
+	// transferred `+1` a double free at the second destructor.
+	function coOwnBorrowedForConsume(value ValueId, range SourceRange) returns ValueId
+		if self.tagOf(value) == ValueTypeTag.interfaceRef 'existential'
+			// The witness-gated incref, for `emitRetainCall`'s measured reason: a scalar conformer's value half
+			// is not a pointer. Its returned id is DISCARDED here rather than replacing the argument — the
+			// caller wants the borrow's own name, and the box it hands the value to owns the reference this
+			// took, not a binding in this frame.
+			_ = self.emitRuntimeCall(RetainExistentialName, args: pairArgs(self.witnessOfValue(value), second: value), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
+			return value
+		end 'existential'
+
+		self.emitIncref(value, range: range)
+		return value
+	end 'coOwnBorrowedForConsume'
+
 	function coOwnAggregateAsTemp(source ValueId, range SourceRange) returns ValueId
 		let owned = self.retainBorrowedAggregate(source, range: range)
 		self.trackOwnedTemp(owned)
@@ -28764,6 +28845,13 @@ export type Parser
 	// move-in the callers perform is a separate decision made downstream.
 	function requireFieldType(layout StructLayout, index FieldIndex, fieldType MaxonType, value ValueId, anchor Token) returns ValueId throws ParseError
 		let class = classifyUnionPayload(self.signatures, typeNames: self.artifact.typeNames, fieldType: fieldType, slotScopeFilePath: layout.declFilePath)
+		// ⭐⭐ **AN INTERFACE-TYPED FIELD ASKS ITS OWN QUESTION (P1.7a-existentials slice 2)** — it is the one
+		// field whose slot has TWO words, so what it admits is decided by which values carry both
+		// (`widenValueIntoExistentialField`), not by the storage-type comparison below. Routed out FIRST
+		// because that comparison would otherwise be asked with a one-word storage type it has no answer for.
+		if payloadClassIsExistential(class) 'existentialField'
+			return try self.widenValueIntoExistentialField(layout, index: index, fieldType: fieldType, value: value, anchor: anchor)
+		end 'existentialField'
 		if payloadClassIsManaged(class) 'managed'
 			try self.requireManagedValueMatches(payloadStorageOf(class), isString: payloadClassIsString(class), value: value, siteName: self.fieldSiteName(layout, index: index), anchor: anchor)
 			return value
@@ -28824,6 +28912,37 @@ export type Parser
 		movedOwningValues.push(value)
 		return false
 	end 'isRepeatedOwningMove'
+
+	// ⭐⭐ **WHAT MAY STAND IN AN INTERFACE-TYPED FIELD (P1.7a-existentials slice 2).** `emitFieldStore` writes
+	// BOTH halves of the fat pointer and reads the witness off the value's own column (`witnessOfValue`), so
+	// every value reaching that store must already carry one. Exactly one kind does: an EXISTENTIAL, which
+	// forwards the witness it was given.
+	//
+	// Same-interface is EXACT, and deliberately not the `extends`-transitive rule: a `Derived` witness
+	// addresses `Derived`'s table, whose slot ORDER is not `Base`'s, so forwarding one into a `Base` slot is a
+	// wrong function pointer rather than a widening (`aggregateNameOf`'s existential arm carries the
+	// measurement). `requireManagedValueMatches` decides that, over the DECLARED interface type — which is why
+	// this door does not restate the comparison.
+	//
+	// ⛔ **A CONCRETE CONFORMER IS REFUSED HERE, AND THE REASON IS A TIER BOUNDARY RATHER THAN A MISSING
+	// WIDTH.** Widening one needs its witness table NAMED at the Maxon tier — the call ARGUMENT never has to,
+	// because lowering reads the CALLEE's declared parameter types and materializes it there
+	// (`appendExistentialWitnessArgs`), and a field store has no callee to read a signature off. Naming it
+	// here would need two things this tier does not have: a Maxon op carrying `(conformer, interface)`, and
+	// the conformance VERDICT — `ConformanceCheck.valueWidensToInterface` takes the whole `Project`, and the
+	// parser writes only into a `FileParseArtifact` (it holds no `Project` at all). Without that verdict a
+	// non-conformer would reach `ensureWitnessTable` and PANIC in `witnessSlotImpl`, which is the one
+	// unacceptable outcome. So it is refused with the position of the value and the workaround the ABI
+	// already supports — pass it through a named function's interface PARAMETER, which is what every widening
+	// in the corpus does.
+	function widenValueIntoExistentialField(layout StructLayout, index FieldIndex, fieldType MaxonType, value ValueId, anchor Token) returns ValueId throws ParseError
+		if self.tagOf(value) != ValueTypeTag.interfaceRef 'aConcreteConformer'
+			throw ParseError.unsupported("storing a value of a CONCRETE type into the interface-typed field '{self.fieldSiteName(layout, index: index)}' — {ExistentialIsFatPointerReason}, and the second word is the address of the conformer's witness table, which only a widening SITE can name. A field store has no callee whose declared parameter types could name it, unlike a call argument. Pass the value to a named function taking the interface as a PARAMETER and store THAT parameter (which arrives already widened), or declare the field at a concrete type", line: anchor.line, column: anchor.column)
+		end 'aConcreteConformer'
+
+		try self.requireManagedValueMatches(fieldType, isString: false, value: value, siteName: self.fieldSiteName(layout, index: index), anchor: anchor)
+		return value
+	end 'widenValueIntoExistentialField'
 
 	// The `<Struct>.<field>` label a managed-field type mismatch names.
 	function fieldSiteName(layout StructLayout, index FieldIndex) returns String
@@ -29515,11 +29634,11 @@ export type Parser
 	//     CONSUMED param — one the analysis enrolled as owned) is transferred: a bare-local reference is
 	//     POISONED (E3102 on later use), an owned temporary is removed from the pending drops. No incref, no
 	//     copy.
-	//   • a BORROWED struct/union value (a borrowed param, a borrowed field read, a non-consumed argument)
-	//     has NO clone, so it cannot be moved into durable storage without the caller keeping a live
-	//     reference the box would dangle behind — that is the cross-call CONSUME the call-graph fixpoint
-	//     owns, deferred here to a clean `E2015` rather than a silent double-free. (A String is the one
-	//     managed kind with a promote, so a borrowed String never reaches this refusal.)
+	//   • a BORROWED struct/union/existential value (a borrowed param, a borrowed field read, a non-consumed
+	//     argument) has NO clone, so it is CO-OWNED instead — the box takes its own `__mm_incref` reference
+	//     and the borrow's owner is untouched (`coOwnBorrowedForConsume`, the transitive-consume ruling of
+	//     2026-08-04). (A String is the one managed kind with a promote, so a borrowed String takes a real
+	//     copy rather than a second reference.)
 	function moveInPayload(class PayloadClass, arg ValueId, argBareLocal bool, anchor Token, range SourceRange) returns ValueId throws ParseError
 		if not payloadClassIsManaged(class) 'scalar'
 			return arg
@@ -29531,7 +29650,8 @@ export type Parser
 	// factored out so a struct field / union payload (`moveInPayload`) and an ARRAY element (P1.7 slice 3,
 	// `moveElementIntoContainer`) share the ONE transfer rule and cannot drift on it. A borrowed String is promoted
 	// to an owned copy (a fresh temp de-listed); an owned managed value is transferred (bare local poisoned,
-	// temp de-listed); a borrowed struct/union is refused (no clone). Precondition: the value is managed.
+	// temp de-listed); a borrowed struct/union/existential is CO-OWNED (no clone — an `__mm_incref` instead).
+	// Precondition: the value is managed.
 	function moveManagedValueInto(arg ValueId, argBareLocal bool, isString bool, anchor Token, range SourceRange) returns ValueId throws ParseError
 		// ⭐⭐ **A TUPLE IS COPIED HERE, NOT MOVED — BECAUSE A TUPLE IS A VALUE (P1.10).** A struct is refused
 		// below when it is borrowed and MOVED when it is owned, and both are right for a struct: it has
@@ -29565,7 +29685,12 @@ export type Parser
 			end 'promoteBorrowed'
 		end 'string' else 'structOrUnion'
 			if not self.valueIsOwnedHeap(arg) 'borrowedManaged'
-				throw ParseError.unsupported("moving a borrowed struct/union value into durable storage (a struct field, a union payload, or an array element) — a struct/union has no `clone`, so ownership must transfer, and a borrowed value's owner keeps a live reference; passing a borrowed parameter at a consuming position is the transitive-consume case handled by the call-graph fixpoint (P1.4a wave 2+)", line: anchor.line, column: anchor.column)
+				// ⭐ **CO-OWNED, NOT MOVED (the transitive-consume ruling, 2026-08-04).** An aggregate has no
+				// clone, so the durable slot becomes a SECOND OWNER of the same record; the borrow's own owner
+				// is untouched and this frame poisons nothing, so the `transferOwnedInto` below is skipped
+				// deliberately rather than fallen past. `coOwnBorrowedForConsume` states the rule in full, and
+				// its ARGUMENT twin (`transferConsumedArg`) answers the same question one call boundary out.
+				return self.coOwnBorrowedForConsume(arg, range: range)
 			end 'borrowedManaged'
 		end 'structOrUnion'
 
@@ -29629,6 +29754,11 @@ export type Parser
 			undeclaredName then break 'c'
 			floatPayload then throw ParseError.unsupported(self.floatPayloadMessage(field, layout: layout), line: posTok.line, column: posTok.column)
 			nestedUnion(storage) then throw ParseError.unsupported(self.nestedUnionPayloadMessage(field, layout: layout, typeName: self.boxedUnionDisplay(storage)), line: posTok.line, column: posTok.column)
+			// An interface-typed PAYLOAD is refused at the DECLARATION (`requireStorableDeclaredType`,
+			// `DeclaredStoragePosition.unionPayload`) — a struct field carves out two slots for a fat pointer
+			// and a payload slot cannot, because every case shares one slot region. So this arm is the
+			// backstop for that refusal, not a second verdict on it (P1.7a-existentials slice 2).
+			existential then panic("requirePayloadLowerable: a union payload is declared at an interface type — `Parser.requireStorableDeclaredType` refuses that at the declaration, so a payload reaching here came through a route that refusal does not cover")
 		end 'c'
 		return class
 	end 'requirePayloadLowerable'
@@ -29659,6 +29789,7 @@ export type Parser
 			undeclaredName then break 'c'
 			floatPayload then panic("requirePayloadArgType: a float payload reached the arg check — requirePayloadLowerable rejects it first")
 			nestedUnion then panic("requirePayloadArgType: a nested-union payload reached the arg check — requirePayloadLowerable rejects it first")
+			existential then panic("requirePayloadArgType: an interface-typed payload reached the arg check — an interface-typed union payload is refused at its DECLARATION (`requireStorableDeclaredType`), and a struct FIELD at one is checked by `requireStructFieldArgType`, never here")
 		end 'c'
 	end 'requirePayloadArgType'
 
@@ -37320,6 +37451,18 @@ export type Parser
 		let offset = layout.offsetOfField(index)
 		let result = self.emitIndirectLoad(declared, box: box, offset: offset, storageType: self.fieldStorageType(declared), range: range)
 
+		// ⭐⭐ **AN INTERFACE-TYPED FIELD READS AS TWO LOADS, AND THE SECOND IS THE WITNESS
+		// (P1.7a-existentials slice 2).** The field's carve-out holds both halves, so the witness comes out of
+		// the box beside the value rather than being re-derived — which is the only thing that can be right:
+		// a fat pointer's dynamic type is a run-time fact, and the box is where the write recorded it. Paired
+		// here rather than at the six doors that reach this mint (`h.t`, a bare `t` in a method, a chain hop,
+		// …) for the reason `markDeclaredSurface` sits here: every one of them funnels through this line, and
+		// a per-door pairing is the enumeration that misses the seventh. Without it, passing `h.t` at an
+		// interface argument position panics in `witnessOfValue` with "no witness paired".
+		if maxonTypeTag(declared) == ValueTypeTag.interfaceRef 'existentialField'
+			self.pairInterfaceWitness(result, witness: self.emitIndirectLoad(MaxonType.integer, box: box, offset: offset + InterfaceWitnessHalfOffset, storageType: MaxonType.integer, range: range))
+		end 'existentialField'
+
 		// ⭐ **RETYPE-OF-T AT A CONCRETE FIELD READ (P1.6-B2).** A `b.value` read on a concrete `Box with String`
 		// loads a field the shared body typed opaque `T` (`typeParameter`). Retype the result to the instance's
 		// SUBSTITUTED concrete argument (`String`) so it is usable as what it actually is — but ONLY the type
@@ -37403,7 +37546,16 @@ export type Parser
 	// silently.
 	function emitFieldStore(box ValueId, layout StructLayout, index FieldIndex, value ValueId, range SourceRange)
 		let declared = self.signatures.fieldTypeOf(layout, index: index, into: self.artifact.typeNames)
-		self.emitIndirectStore(box, offset: layout.offsetOfField(index), value: value, storageType: self.fieldStorageType(declared), range: range)
+		let offset = layout.offsetOfField(index)
+		self.emitIndirectStore(box, offset: offset, value: value, storageType: self.fieldStorageType(declared), range: range)
+
+		// ⭐ **THE WITNESS HALF, STORED BESIDE THE VALUE (P1.7a-existentials slice 2)** — the exact mirror of
+		// `emitFieldLoad`'s second load, at the same offset, and the write that makes the read's answer a fact
+		// about the box rather than a guess. Both the `Self{…}` fill and the assignment statement land here,
+		// so a literal that recorded the conformer and an assignment that did not is unrepresentable.
+		if maxonTypeTag(declared) == ValueTypeTag.interfaceRef 'existentialField'
+			self.emitIndirectStore(box, offset: offset + InterfaceWitnessHalfOffset, value: self.witnessOfValue(value), storageType: MaxonType.integer, range: range)
+		end 'existentialField'
 	end 'emitFieldStore'
 
 	// ⭐ **THE ONE `storeIndirect` EMIT**, the mirror of `emitIndirectLoad` above and true on the same
@@ -37462,14 +37614,16 @@ export type Parser
 			// A CHARACTER field stores a POINTER to the fused byte record, exactly as a String field
 			// does — already concrete, so `maxonTypeToStdType` gives the machine word directly.
 			character then return declared
-			// ⛔ **AN INTERFACE-TYPED SLOT IS REFUSED AT ITS DECLARATION, so this arm is a BACKSTOP and not a
-			// storage decision.** A fat pointer is two machine words and a slot is one;
-			// `Parser.requireStorableDeclaredType` says so at the field, the payload, the return and the
-			// container element, and a CAPTURED interface binding is refused by the capture path's own
-			// E2015. A type reaching here is therefore a route none of those cover, which is a compiler
-			// defect rather than a width to invent — the 16-byte carve-out arrives with the
-			// managed-existential slice.
-			interfaceRef then panic("fieldStorageType: a slot is declared at an interface type — `Parser.requireStorableDeclaredType` refuses every declared place that could hold one, so a type reaching here came through a route that refusal does not cover")
+			// ⭐ **AN INTERFACE-TYPED FIELD ACCESSES ITS VALUE HALF AS ONE MACHINE WORD**
+			// (P1.7a-existentials slice 2). The field occupies TWO slots — `(value@+0, witness@+8)` — but a
+			// `loadIndirect`/`storeIndirect` moves ONE of them, and `emitFieldLoad`/`emitFieldStore` emit two
+			// ops at the two offsets rather than one op of a doubled width. So the width this answers is the
+			// word, exactly as a declared enum/union field's is: `integer`, because `maxonTypeToStdType` panics
+			// on the declared `interfaceRef` the way it panics on a `named`.
+			//
+			// ⚠ A CAPTURED interface binding — this function's other caller, a closure env slot — is still
+			// refused by the capture path's own E2015, so no env slot reaches this arm.
+			interfaceRef then return MaxonType.integer
 			named then break 'kind'
 		end 'kind'
 
@@ -41369,8 +41523,8 @@ export type Parser
 	// STRING (a long rdata literal, or a borrowed String parameter/field) has a cheap owning copy, so it is
 	// PROMOTED into a fresh owned record the callee can move into its field — exactly as a DIRECT struct-field /
 	// union-payload move-in does (`moveManagedValueInto`) — and THAT copy is returned to replace the borrowed
-	// arg. A borrowed STRUCT/UNION has no clone and stays refused (the transitive-consume case the call-graph
-	// fixpoint owns).
+	// arg. A borrowed STRUCT/UNION/EXISTENTIAL has no clone and becomes a SECOND OWNER instead
+	// (`coOwnBorrowedForConsume`) — the transitive-consume case, and what it is answered with.
 	function transferConsumedArg(argValue ValueId, anchor Token) returns ValueId throws ParseError
 		// ⭐ AN OPAQUE OWNED type-parameter binding forwarded to a consuming sibling feed position (P1.7 slice
 		// 3b-v): the callee takes ownership, so MOVE it — poison the source binding so a second use is E3102 and
@@ -41391,7 +41545,7 @@ export type Parser
 				self.removeFromPendingTemps(owned)
 				return owned
 			end 'byteRecord'
-			throw ParseError.unsupported("passing a borrowed struct/union value at a CONSUMING argument position — the callee moves it into durable storage, so ownership must transfer, and a borrowed struct/union has no `clone`, so its owner keeps a live reference the callee's field would dangle behind; forwarding a borrowed aggregate parameter to a consuming callee is the transitive-consume case handled by the call-graph fixpoint (P1.4a wave 2+)", line: anchor.line, column: anchor.column)
+			return self.coOwnBorrowedForConsume(argValue, range: SourceRange.ofToken(anchor))
 		end 'borrowedManaged'
 		try self.poisonMoveSource(argValue, anchor: anchor)
 		self.removeFromPendingTemps(argValue)

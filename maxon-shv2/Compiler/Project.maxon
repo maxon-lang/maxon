@@ -2292,13 +2292,30 @@ export typealias FieldIndex = int(0 to 65535)
 // cases in declaration order.
 export typealias CaseIndex = int(0 to 65535)
 
-// ⭐ **EVERY FIELD OCCUPIES ONE 8-BYTE SLOT, WHATEVER ITS DECLARED TYPE**, and this constant is
-// that decision. It is not an alignment convenience: a struct FIELD of struct type is a POINTER
-// (`valueTagToStdType(structRef)` → i64), so `sizeof(Outer{p Point, n Integer})` is 16 rather than
-// 24 — which is exactly what `specs/sizeof.md` pins, and what makes the layout a function of the
-// field COUNT alone. A packed layout would have to know each field's width, which is a Std-tier
-// fact this Maxon-tier record deliberately does not carry.
+// ⭐ **ONE 8-BYTE SLOT IS WHAT A FIELD OCCUPIES, AND THE LAYOUT COUNTS SLOTS RATHER THAN BYTES.** It is
+// not an alignment convenience: a struct FIELD of struct type is a POINTER (`valueTagToStdType(structRef)`
+// → i64), so `sizeof(Outer{p Point, n Integer})` is 16 rather than 24 — which is exactly what
+// `specs-shv2/sizeof.md` pins.
+//
+// ⚠ **A PACKED layout would have to know each field's WIDTH, and that is still a Std-tier fact this
+// Maxon-tier record deliberately does not carry.** What it DOES carry is each field's SLOT COUNT
+// (`fieldSlotCount` below) — a strictly weaker question, and one the Maxon tier can answer from the
+// declared type alone: *is this declared at an interface type?* Every field but that one takes one slot,
+// so every struct that compiled before the existential slice landed is byte-identical.
 let FieldSlotBytes = 8 as ByteOffset
+
+// ⭐ **AN INTERFACE-TYPED FIELD IS THE ONE FIELD THAT TAKES TWO SLOTS (P1.7a-existentials slice 2).** A
+// value held at its interface type is the 16-byte fat pointer `(value@+0, witness@+8)`
+// (`IrInterface.InterfaceValueBytes`), and BOTH halves live in the box — the witness half is what the
+// field's drop dispatches through, so there is nowhere else it could go. The offset a field read/write
+// adds to reach the witness half is `IrInterface.InterfaceWitnessHalfOffset`, stated there beside the
+// table it points at.
+function fieldSlotCount(declaredType MaxonType) returns ByteOffset
+	if maxonTypeTag(declaredType) == ValueTypeTag.interfaceRef 'existential'
+		return 2
+	end 'existential'
+	return 1
+end 'fieldSlotCount'
 
 // The size of a struct with NO fields. A zero-byte allocation would hand two distinct empty
 // structs the SAME address (the bump allocator advances by nothing), so identity would collapse
@@ -2420,6 +2437,21 @@ export type StructLayout
 	// it: this column is written by the declaration SWEEP, which runs before any generic alias is interned
 	// and so cannot be asked whether `BufArray` holds buffers.
 	export var fieldDeclaredSurfaces as DeclaredSurfaceArray
+	// ⭐ **THE DERIVED SLOT GEOMETRY — the PREFIX SUM over `fieldSlotCount` (P1.7a-existentials slice 2), and
+	// the box size that same sum ends at.** Two DERIVED columns, so they are written by exactly the two
+	// routines that can change what they are derived FROM (`addField` appends one, `retypeField` rebuilds
+	// them), and read by `offsetOfField`/`sizeBytes` in O(1).
+	//
+	// ⚠ **THEY ARE CACHED RATHER THAN COMPUTED ON DEMAND, AND THAT IS A COST DECISION.** `offsetOfField` is
+	// asked once per field ACCESS the program writes — one of the hottest questions in the parser — and a
+	// prefix sum computed there would walk `fieldTypes` up to `index` on every one of them, turning a
+	// constant into a per-access walk of the declaring type's field list. The invariant that keeps the cache
+	// honest is the same one `addField` already carries: there are only two writers of `fieldTypes`, and both
+	// are here.
+	export var fieldOffsets as ByteOffsetArray
+	// The total the prefix sum ends at — the box's payload bytes for a type with at least one field. NOT
+	// `sizeBytes()`, which floors an EMPTY struct at one slot; see there for why that floor exists.
+	export var slotBytes as ByteOffset
 	// The GENERIC TYPE PARAMETERS this type declares (P1.6-A): `uses T` ⇒ `[T]`, `uses A, B` ⇒
 	// `[A, B]`, empty for a non-generic type. Recorded IN DECLARATION ORDER — a `T` in a field/method
 	// type is `typeParameter(POSITION)`, so the order IS the identity, and `Box with X` binds arg 0 to
@@ -2449,7 +2481,7 @@ export type StructLayout
 	// take the columns, deliberately: handing pre-built parallel arrays across a call boundary is
 	// exactly the shape that lets one arrive short.
 	export static function create(name ByteArray, visibility Visibility, declFilePath FilePath) returns StructLayout
-		return Self{name: name, fieldNames: ByteArrayArray.create(), fieldTypes: MaxonTypeArray.create(), fieldMutable: BoolArray.create(), fieldVisibility: VisibilityArray.create(), fieldDefaults: FieldDefaultArray.create(), fieldDeclaredSurfaces: DeclaredSurfaceArray.create(), typeParamNames: ByteArrayArray.create(), whereConstraints: sharedEmptyWhereConstraints, visibility: visibility, declFilePath: declFilePath}
+		return Self{name: name, fieldNames: ByteArrayArray.create(), fieldTypes: MaxonTypeArray.create(), fieldMutable: BoolArray.create(), fieldVisibility: VisibilityArray.create(), fieldDefaults: FieldDefaultArray.create(), fieldDeclaredSurfaces: DeclaredSurfaceArray.create(), fieldOffsets: ByteOffsetArray.create(), slotBytes: 0, typeParamNames: ByteArrayArray.create(), whereConstraints: sharedEmptyWhereConstraints, visibility: visibility, declFilePath: declFilePath}
 	end 'create'
 
 	// The layout every COMPILER-SYNTHESIZED type takes: nameable from any file, declared in none. Spelled
@@ -2493,6 +2525,11 @@ export type StructLayout
 		self.fieldVisibility.push(tier)
 		self.fieldDefaults.push(defaultValue)
 		self.fieldDeclaredSurfaces.push(declaredSurface)
+		// The prefix sum extends by one term: this field starts where the running total stands, and the total
+		// advances by this field's own slot count. Same push, so the derived columns cannot fall out of the
+		// lockstep the header above rests on.
+		self.fieldOffsets.push(self.slotBytes)
+		self.slotBytes = self.slotBytes + fieldSlotCount(declaredType) * FieldSlotBytes
 	end 'addField'
 
 	// ⭐ **REPLACE FIELD `index`'s DECLARED TYPE — the ONE write that is not an append (N3).** The declaration
@@ -2500,13 +2537,34 @@ export type StructLayout
 	// files declare differently carries a name that cannot be resolved until every file has folded. That
 	// resolution happens once, at `ProgramSignatures.resolveRecordedGenericAliasTypes`, and lands here.
 	//
-	// ⚠ It rewrites ONE column, which is why it is not a violation of `addField`'s "one writer" rule: the
-	// columns stay in lockstep because no length changes. It is deliberately not general — there is exactly
-	// one caller, it is named above, and a second reason to retype a recorded field would be a second reason
-	// for two passes to disagree about what a declaration says.
+	// ⚠ It rewrites ONE DECLARED column, which is why it is not a violation of `addField`'s "one writer" rule:
+	// the columns stay in lockstep because no length changes. It is deliberately not general — there is
+	// exactly one caller per reason, each named above, and a third reason to retype a recorded field would be
+	// a third reason for two passes to disagree about what a declaration says.
+	//
+	// ⚠⚠ **AND IT REBUILDS THE DERIVED SLOT GEOMETRY, BECAUSE `normalizeSweptInterfaceTypes` CHANGES A
+	// FIELD'S SLOT COUNT** (P1.7a-existentials slice 2). A swept `named` that denotes an interface is
+	// re-tagged `interfaceRef` HERE, and that field goes from one slot to two — so every later field's offset
+	// and the box's size move with it. Recomputed whole rather than patched from `index` on: this runs once
+	// per retyped field on a program that declares an interface at all, and a partial rebuild would be a
+	// second statement of the prefix sum.
 	export function retypeField(index FieldIndex, declaredType MaxonType)
 		try self.fieldTypes.set(index, value: declaredType) otherwise panic("StructLayout.retypeField: fieldTypes.set OOB at {index} for `type {String.from(self.name)}`, which declares {self.fieldCount()} — the caller walks `0 upto fieldCount()`")
+		self.rebuildSlotGeometry()
 	end 'retypeField'
+
+	// Recompute `fieldOffsets`/`slotBytes` from `fieldTypes` — the prefix sum, stated ONCE (`addField`
+	// extends it by one term rather than restating it).
+	function rebuildSlotGeometry()
+		var offsets = ByteOffsetArray.create()
+		var total = 0 as ByteOffset
+		for i in 0 upto self.fieldTypes.count() 'eachField'
+			offsets.push(total)
+			total = total + fieldSlotCount(try self.fieldTypes.get(i) otherwise panic("StructLayout.rebuildSlotGeometry: fieldTypes.get OOB at {i} for `type {String.from(self.name)}` below its own count")) * FieldSlotBytes
+		end 'eachField'
+		self.fieldOffsets = offsets
+		self.slotBytes = total
+	end 'rebuildSlotGeometry'
 
 	// ⚠ **THE OOB PANIC SENTENCE BELOW IS REPEATED PER COLUMN, AND THE COPY IS FORCED BY THE
 	// LANGUAGE, NOT CHOSEN.** `panic` takes a string LITERAL — `panic(msg)` for any String value,
@@ -2561,9 +2619,10 @@ export type StructLayout
 	end 'indexOfField'
 
 	// The byte displacement of field `index` from the box's PAYLOAD pointer — which is what
-	// `__mm_alloc` returns, so the header is invisible here and the first field sits at 0.
+	// `__mm_alloc` returns, so the header is invisible here and the first field sits at 0. Read straight off
+	// the derived prefix sum; see `fieldOffsets` for why it is a column rather than a computation.
 	export function offsetOfField(index FieldIndex) returns ByteOffset
-		return index * FieldSlotBytes
+		return try self.fieldOffsets.get(index) otherwise panic("StructLayout.offsetOfField: fieldOffsets.get OOB at {index} for `type {String.from(self.name)}`, which declares {self.fieldCount()} — every index handed out came from `indexOfField`")
 	end 'offsetOfField'
 
 	// The payload bytes `__mm_alloc` must be asked for. THE one place the size is computed, so the
@@ -2572,7 +2631,7 @@ export type StructLayout
 		if self.fieldNames.count() == 0 'empty'
 			return EmptyStructBytes
 		end 'empty'
-		return self.fieldNames.count() * FieldSlotBytes
+		return self.slotBytes
 	end 'sizeBytes'
 end 'StructLayout'
 

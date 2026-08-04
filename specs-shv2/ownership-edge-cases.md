@@ -2399,3 +2399,91 @@ end 'main'
 ```stdout
 total=6
 ```
+
+<!-- test: borrowed-aggregate-forwarded-to-a-consuming-callee -->
+⭐⭐ **TRANSITIVE CONSUME: A BORROWED AGGREGATE AT A CONSUMING ARGUMENT POSITION TAKES ITS OWN REFERENCE**
+(the user ruling, 2026-08-04). `Box.create` stores its parameter into a field, so the analysis marks that
+position CONSUMED; `twice`'s own `item` is only ever FORWARDED, so nothing marks it consumed and it stays
+borrowed. Before this rung that pair was refused outright — *"passing a borrowed struct/union value at a
+CONSUMING argument position … the transitive-consume case handled by the call-graph fixpoint"* — and the
+answer is a refcount rather than a fixpoint: each box becomes a second owner, `item` is NOT poisoned (so
+the second `Box.create` and the later `item.n` are both legal), and each box's destructor releases exactly
+the reference its own construction took. Runs under the suite's leak gate, so an over-release or a leak
+fails it.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Item
+	export let n as Integer
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Item'
+
+type Box
+	export let item as Item
+
+	static function create(item Item) returns Self
+		return Self{item: item}
+	end 'create'
+
+	function total() returns Integer
+		return self.item.n
+	end 'total'
+end 'Box'
+
+function twice(item Item) returns Integer
+	var a = Box.create(item)
+	var b = Box.create(item)
+	return a.total() + b.total() + item.n
+end 'twice'
+
+function main() returns ExitCode
+	let item = Item.create(7)
+	return twice(item)
+end 'main'
+```
+```exitcode
+21
+```
+
+<!-- test: borrowed-field-read-moved-into-durable-storage -->
+The DIRECT half of the same rule, one call boundary in: `Self{item: other.item}` moves a value into durable
+storage in THIS frame rather than handing it to a callee that will. `other.item` is a borrowed field read —
+a struct has no `clone`, so the fresh box cannot take sole ownership of it — and the same co-ownership
+answers it, through the same door (`Parser.coOwnBorrowedForConsume`). The two doors were refused by two
+separately-worded `E2015`s and are now one rule, which is what keeps `f(x)` and `Self{f: x}` from
+disagreeing about the same value. The shared `Item` is released once by each holder and freed exactly once.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Item
+	export let n as Integer
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Item'
+
+type Holder
+	export let item as Item
+
+	static function create(item Item) returns Self
+		return Self{item: item}
+	end 'create'
+
+	static function copyOf(other Holder) returns Self
+		return Self{item: other.item}
+	end 'copyOf'
+end 'Holder'
+
+function main() returns ExitCode
+	let a = Holder.create(Item.create(5))
+	let b = Holder.copyOf(a)
+	return a.item.n + b.item.n
+end 'main'
+```
+```exitcode
+10
+```

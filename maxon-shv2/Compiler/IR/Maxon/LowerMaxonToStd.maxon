@@ -1353,7 +1353,7 @@ type MaxonToStdLowering
 	end 'forwardCallerWitness'
 
 	// ⭐ **THE `.rdata` WITNESS-TABLE BLOB for `typeName` conforming to `interfaceName` (P1.7a slice 2a).** The
-	// `24 + 8*methodCount`-byte blob (`methodCount@0`, `parentTablePtr@8`=0, `flags@16`=0, `methods[N]@24`) is
+	// `24 + 8*methodCount`-byte blob (`methodCount@0`, `destroyFunc@8`, `flags@16`=0, `methods[N]@24`) is
 	// registered zero-filled under `__witness_<Type>.<Iface>`; each method slot is stamped by a
 	// `funcAbs64InRdata` relocation whose target is the member `checkConformance` ACCEPTED for that
 	// requirement (`witnessSlotImpl` — NOT a second `<Type>.<method>` join of this pass's own, see R10) with
@@ -1378,7 +1378,7 @@ type MaxonToStdLowering
 		let slots = interfaceWitnessSlots(self.interfaces, iface: iface)
 		let methodCount = slots.count()
 
-		// `methodCount@0`, then zero-fill through the header (`parentTablePtr@8`, `flags@16`) and every method
+		// `methodCount@0`, then zero-fill through the header (`destroyFunc@8`, `flags@16`) and every method
 		// slot — the writer patches the slots via the relocations below. `scalarImage` is the SAME little-endian
 		// serializer the `.data`/`.rdata` images use, so the header word matches every other integer this backend
 		// writes.
@@ -1386,6 +1386,20 @@ type MaxonToStdLowering
 		blob.append(scalarImage(methodCount as ParsedInt, byteCount: WitnessSlotBytes as ByteCount))
 		blob.growFilled((WitnessTableHeaderBytes + WitnessSlotBytes * methodCount) as ElementCount, value: 0)
 		_ = self.globalData.registerRdataConstantLabeled(label, bytes: blob)
+
+		// ⭐ **`destroyFunc@8` — HOW AN OWNED EXISTENTIAL OF THIS CONFORMER IS RELEASED (P1.7a-existentials
+		// slice 2).** Patched with the SAME `funcAbs64InRdata` reloc the method slots take. An EMPTY answer
+		// leaves the zero-fill in place, which is the encoding `__drop_existential` reads as "nothing to
+		// drop" — an `int`/`bool`/`float` conformer, whose value half is not a pointer at all.
+		//
+		// ⚠ **THE SYMBOL IS INSTALLED BECAUSE THIS RELOCATION EXISTS, NOT BECAUSE SOMETHING PREDICTED IT**:
+		// `MmRuntime.noteRelocatedFunctionUsage` roots every `.rdata` slot's callee after lowering, so the
+		// relocated set and the installed set are one list rather than two that agree. See there for what a
+		// pre-pipeline prediction cost when it was tried.
+		let destroyCallee = self.signatures.existentialDestroyCallee(typeName)
+		if not destroyCallee.isEmpty() 'conformerOwnsARecord'
+			self.globalData.recordFuncAbs64InRdata(destroyCallee, rdataLabel: label, offsetInLabel: WitnessDestroyFuncOffset)
+		end 'conformerOwnsARecord'
 
 		for i in 0 upto methodCount 'eachMethod'
 			let slot = try slots.get(i) otherwise panic("ensureWitnessTable: slots.get OOB at {i} below count {methodCount}")

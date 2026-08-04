@@ -450,6 +450,19 @@ export type RuntimeUsage
 	// reads the descriptor's `destroyFunc@40` and `callIndirect`s it (no direct alloc/free), so this bit alone
 	// drives `installDropTypeParamRuntime` and pulls in no transitive floor of its own.
 	export var usesDropTypeParam as bool
+	// The program DROPS a value held at its INTERFACE type (`__drop_existential`, P1.7a-existentials slice
+	// 2) — an owned interface-typed field released by its struct's destructor cascade, or a consumed
+	// existential parameter left live at a scope exit. Its OWN bit for `usesDropTypeParam`'s exact reason,
+	// with the roles reversed: an interface field drops in a program that instantiates no generic, so gating
+	// its install on the descriptor drop's bit would leave THAT call unlinked. Its body only reads the
+	// witness table's `destroyFunc@8` and `callIndirect`s it, so it pulls in no transitive floor of its own.
+	export var usesDropExistential as bool
+	// The program CO-OWNS a value held at its INTERFACE type (`__retain_existential`, P1.7a-existentials
+	// slice 2) — a borrowed existential bound into a `var`, or one forwarded to a consuming position. Its
+	// OWN bit rather than `usesDropExistential`'s, for the reason `usesRetain` is not `usesIncref`'s: the two
+	// have independent callers, so folding either into the other installs an unreachable copy of the unused
+	// one. It DOES imply `__mm_incref`, which its body calls — declared through `recordCallUsage`.
+	export var usesRetainExistential as bool
 	// The program takes a SECOND owner of a heap box (`__mm_incref`). Two producers: the array runtime's
 	// zero-copy slice (a view increfs the parent's element buffer — implied by `usesArray`, since the call
 	// lives in a Std body this scan cannot see), and the PARSER's `try … otherwise` reconciliation, which
@@ -618,7 +631,7 @@ export type RuntimeUsage
 	export var usesCommandLine as bool
 
 	static function create() returns RuntimeUsage
-		return Self{usesHeap: false, usesGt: false, usesIocp: false, usesStreaming: false, usesPrint: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesBoolToString: false, usesStrAppend: false, usesStrDecref: false, usesArray: false, usesSet: false, usesMap: false, usesList: false, usesDropTypeParam: false, usesIncref: false, usesRetain: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrRangeEq: false, usesStrFind: false, usesStrRFind: false, usesStrStartsWith: false, usesStrEndsWith: false, usesStrContains: false, usesStrMapCase: false, usesStrReplace: false, usesStrSplit: false, usesStrReplaceFirst: false, usesStrFromBytes: false, usesStrBytesView: false, usesStrByteAtOrPanic: false, usesManagedArrayCopy: false, usesOpaqueArrayCopy: false, neededCloners: ClonerSet.create(), usesWallClock: false, usesGbp: false, usesExtPict: false, usesUtf8Decode: false, usesGraphemeBreak: false, usesGraphemeEnd: false, usesGraphemeCount: false, usesCharAt: false, usesCharAsciiValue: false, usesStrToBytes: false, usesStrToCodepoints: false, usesStrToUtf16: false, usesStrIndexMake: false, usesStrIndexEnd: false, usesStrIndexByteToGrapheme: false, usesStrIndexAdvance: false, usesStrIndexFirst: false, usesStrIndexLast: false, usesStrIndexSlice: false, usesStrIndexAfter: false, usesUcdCategory: false, usesCharSetMake: false, usesCharSetDecref: false, usesCharSetContains: false, usesStrTrim: false, usesManagedFile: false, usesManagedDirectory: false, usesCommandLine: false}
+		return Self{usesHeap: false, usesGt: false, usesIocp: false, usesStreaming: false, usesPrint: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesBoolToString: false, usesStrAppend: false, usesStrDecref: false, usesArray: false, usesSet: false, usesMap: false, usesList: false, usesDropTypeParam: false, usesDropExistential: false, usesRetainExistential: false, usesIncref: false, usesRetain: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrRangeEq: false, usesStrFind: false, usesStrRFind: false, usesStrStartsWith: false, usesStrEndsWith: false, usesStrContains: false, usesStrMapCase: false, usesStrReplace: false, usesStrSplit: false, usesStrReplaceFirst: false, usesStrFromBytes: false, usesStrBytesView: false, usesStrByteAtOrPanic: false, usesManagedArrayCopy: false, usesOpaqueArrayCopy: false, neededCloners: ClonerSet.create(), usesWallClock: false, usesGbp: false, usesExtPict: false, usesUtf8Decode: false, usesGraphemeBreak: false, usesGraphemeEnd: false, usesGraphemeCount: false, usesCharAt: false, usesCharAsciiValue: false, usesStrToBytes: false, usesStrToCodepoints: false, usesStrToUtf16: false, usesStrIndexMake: false, usesStrIndexEnd: false, usesStrIndexByteToGrapheme: false, usesStrIndexAdvance: false, usesStrIndexFirst: false, usesStrIndexLast: false, usesStrIndexSlice: false, usesStrIndexAfter: false, usesUcdCategory: false, usesCharSetMake: false, usesCharSetDecref: false, usesCharSetContains: false, usesStrTrim: false, usesManagedFile: false, usesManagedDirectory: false, usesCommandLine: false}
 	end 'create'
 end 'RuntimeUsage'
 
@@ -863,6 +876,26 @@ export function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 	if callee.equals(DropTypeParamName) 'droptypeparam'
 		usage.usesDropTypeParam = true
 	end 'droptypeparam'
+	// The existential's drop (P1.7a-existentials slice 2) — the same shape as the line above and for the same
+	// reasons: `__`-prefixed but neither `__mm_`- nor `__arr_`-prefixed, so no arm above sees it, and its body
+	// only reads the witness table's `destroyFunc@8` and `callIndirect`s it, so it declares no other bit.
+	// ⚠ It does NOT set `usesHeap`: a struct DESTRUCTOR's cascade reaches it from a Std body this scan cannot
+	// see, and that destructor's own `__mm_free` already declares the heap (`noteDestructorUsage`).
+	if callee.equals(DropExistentialName) 'dropexistential'
+		usage.usesDropExistential = true
+	end 'dropexistential'
+	// The existential's CO-OWNERSHIP (P1.7a-existentials slice 2). Unlike its drop twin it DOES declare
+	// transitive needs: its body calls `__mm_incref` under the witness gate, and that call lives in a Std body
+	// this Maxon-module scan cannot see. ⚠ `usesHeap` rides with `usesIncref` because `__mm_incref` is built
+	// by `installMmRuntime`, which is ALL-OR-NOTHING under that bit — the `__mf_*` arm's arrangement. The cost
+	// falls only on a program that co-owns an existential whose conformer might own no record at all (an `int`
+	// held at an interface), which is the one shape that could otherwise reach a `call __mm_incref` with no
+	// allocator behind it: MEASURED as `resolveCallFixups: call to unknown function '__mm_incref'`.
+	if callee.equals(RetainExistentialName) 'retainexistential'
+		usage.usesRetainExistential = true
+		usage.usesIncref = true
+		usage.usesHeap = true
+	end 'retainexistential'
 	// A managed-payload union's scope-exit drop (`__destruct_<U>`). It frees the box (`__mm_free` — heap)
 	// and, for a String field, calls `__str_decref` — but those live in the SYNTHESIZED body this scan
 	// cannot see, so the symbol is recorded and its transitive needs are declared by

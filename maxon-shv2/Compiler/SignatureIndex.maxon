@@ -1065,6 +1065,17 @@ export union PayloadClass
 	// A name no file declares — `TypeResolution` reports it as E3011; the caller keeps the op
 	// well-formed for the instant before the pipeline's error gate throws.
 	undeclaredName
+	// ⭐ **A STRUCT FIELD DECLARED AT AN INTERFACE TYPE (P1.7a-existentials slice 2)** — the two-slot fat
+	// pointer. MANAGED (`payloadClassIsManaged`), so the construct MOVES it in and the cascade drops it — but
+	// kept a case DISTINCT from `managed` for `nestedUnion`'s exact reason: the UNION-payload path, whose slot
+	// is one machine word, must still refuse it (`requirePayloadLowerable`), while the STRUCT-field path
+	// carves out two slots and lowers it. Its storage is the VALUE half's machine word; the witness half is
+	// stored beside it by `Parser.emitFieldStore`, which is the only site that knows the field's base offset.
+	//
+	// ⚠ **APPENDED AT THE END, per the band-append rule** — `payloadClassIsManaged`/`payloadClassIsString` are
+	// exhaustive `match`es over this union, so a case inserted mid-list would be silently absorbed by nothing
+	// while a case appended is a compile error at every one of them until it is answered.
+	existential
 end 'PayloadClass'
 
 // Classify a union payload field's storage and ownership. `typeNames` resolves a `named` field's id to
@@ -1122,11 +1133,13 @@ export function classifyUnionPayload(signatures ProgramSignatures, typeNames Typ
 		// not about the type. A Character answering `false` here would take the aggregate path and try to
 		// co-own a record that has no `__mm_retain` owner.
 		character then return PayloadClass.managed(fieldType, isString: true)
-		// An interface-typed union payload is REFUSED at the declaration (`Parser.requireStorableDeclaredType`),
-		// because a payload slot is one machine word and a fat pointer is two — the witness half would have
-		// nowhere to live, and a payload bound out of a `match` arm would dispatch through whatever the next
-		// slot happened to hold. This arm is the backstop for that refusal, not a case to classify.
-		interfaceRef then panic("classifyUnionPayload: a union payload is declared at an interface type — `Parser.requireStorableDeclaredType` refuses that at the declaration, because a payload slot is one machine word and an existential is two")
+		// ⭐ A STRUCT FIELD at an interface type is the two-slot fat pointer (P1.7a-existentials slice 2) — see
+		// `PayloadClass.existential`. A UNION PAYLOAD at one is still refused at the declaration
+		// (`Parser.requireStorableDeclaredType`), because a payload slot IS one machine word — the case list
+		// shares one slot region across every case, so a two-slot payload has nowhere to widen into — and this
+		// classifier serves both, so the refusal lives at the payload's own lowering gate
+		// (`requirePayloadLowerable`) rather than here.
+		interfaceRef then return PayloadClass.existential
 		named then break 'kind'
 	end 'kind'
 
@@ -1226,11 +1239,28 @@ export function payloadClassIsManaged(class PayloadClass) returns bool
 	return match class 'c'
 		managed gives true
 		nestedUnion gives true
+		// An existential owns its conformer's record — see `PayloadClass.existential` and `typeIsManaged`.
+		existential gives true
 		scalar gives false
 		floatPayload gives false
 		undeclaredName gives false
 	end 'c'
 end 'payloadClassIsManaged'
+
+// Is a classified slot an EXISTENTIAL (P1.7a-existentials slice 2) — the two-slot fat pointer, whose
+// admitted values and whose DROP both differ from every other managed kind? Its readers are the field-type
+// door (`Parser.requireFieldType`) and nothing else today; it is a `match` like its two siblings rather than
+// an `is` test so that a case appended to `PayloadClass` fails to compile here.
+export function payloadClassIsExistential(class PayloadClass) returns bool
+	return match class 'c'
+		existential gives true
+		managed gives false
+		nestedUnion gives false
+		scalar gives false
+		floatPayload gives false
+		undeclaredName gives false
+	end 'c'
+end 'payloadClassIsExistential'
 
 // Is a classified payload a STRING (drops through `__str_decref`) rather than a struct (`__mm_decref`)?
 // The single reader of "which managed drop?", so the destructor synthesis and the usesStrDecref gate route
@@ -1241,6 +1271,10 @@ export function payloadClassIsString(class PayloadClass) returns bool
 		scalar gives false
 		floatPayload gives false
 		nestedUnion gives false
+		// An existential's value half is a conformer's record, which may or may not BE a String — that is
+		// exactly the fact only its witness knows, and the reason its drop is `__drop_existential`. `false`
+		// here selects the aggregate protocol (co-own, never copy), which is right whatever the conformer is.
+		existential gives false
 		undeclaredName gives false
 	end 'c'
 end 'payloadClassIsString'
@@ -1258,6 +1292,10 @@ export function payloadStorageOf(class PayloadClass) returns MaxonType
 		scalar(storage) then return storage
 		managed(storage, _) then return storage
 		nestedUnion(storage) then return storage
+		// The VALUE half's machine word. The witness half rides at `+InterfaceWitnessHalfOffset` and is stored
+		// by `Parser.emitFieldStore`, the only site holding the field's base offset — so a `storeIndirect`'s
+		// own width is the one word this answers.
+		existential then return MaxonType.integer
 		undeclaredName then return MaxonType.integer
 		floatPayload then panic("payloadStorageOf: a float payload has no lowerable storage — requirePayloadLowerable rejects it before any store")
 	end 'c'
@@ -1273,6 +1311,9 @@ export function payloadValueTypeOf(class PayloadClass, declared MaxonType) retur
 		scalar then return declared
 		managed(storage, _) then return storage
 		nestedUnion(storage) then return storage
+		// The DECLARED `interfaceRef`, so a loaded existential is recognised as one by every reader that
+		// dispatches on the tag (`witnessOfValue`'s pairing, the argument widening, the drop router).
+		existential then return declared
 		undeclaredName then return declared
 		floatPayload then panic("payloadValueTypeOf: a float payload has no lowerable value type — requirePayloadLowerable rejects it before any load")
 	end 'c'
@@ -1571,6 +1612,16 @@ export function managedFieldDropCallee(signatures ProgramSignatures, typeNames T
 	if tag == ValueTypeTag.genericInstance 'instance'
 		return signatures.genericInstanceBoxDropCallee(typeNameIdOf(fieldType))
 	end 'instance'
+	// ⛔ **AN EXISTENTIAL FIELD HAS NO STATIC DROP CALLEE, AND THAT IS THE WHOLE POINT OF IT**
+	// (P1.7a-existentials slice 2). Its conformer — and so its destructor — is a run-time fact read out of the
+	// witness table, so it is released by the 2-argument `__drop_existential(witness, value)` and never by a
+	// name this 1-argument router could hand back. The cascades ask `structFieldIsExistential` /
+	// `genericInstanceFieldIsExistential` BEFORE this (`FieldDropKind`), so reaching here means a drop site was
+	// added that classifies the field managed and does not ask which KIND of managed it is — which would emit
+	// `<callee>(valueHalf)` and dispatch the wrong conformer's destructor.
+	if tag == ValueTypeTag.interfaceRef 'existential'
+		panic("managedFieldDropCallee: a field declared at an interface type has no statically named drop callee — an existential is released through `__drop_existential(witness, value)` off the witness table's `destroyFunc@8`, so its drop site must route on `FieldDropKind` rather than ask this")
+	end 'existential'
 	if not (tagIsStructRef(tag) or tag == ValueTypeTag.named) 'notManagedRef'
 		panic("managedFieldDropCallee: a field of tag '{typeTagName(tag)}' is not a managed heap reference — every caller classifies the field managed first")
 	end 'notManagedRef'
@@ -1647,10 +1698,12 @@ function managedNameDropCallee(signatures ProgramSignatures, declaredName ByteAr
 		// layout-and-foreign-interner spelling this replaces produced.
 		enumType then return signatures.unionBoxDropCallee(declaredName)
 		unionType then return signatures.unionBoxDropCallee(declaredName)
-		// An interface-typed slot is `E3011 Unknown type` before anything classifies it — existentials are
-		// unbuilt. Written out rather than ranged in with a neighbour so the rung that lands a fat-pointer
-		// slot has to state its drop here.
-		interfaceType then panic("managedNameDropCallee: '{String.from(declaredName)}' is an interface, which no slot can be declared with today (E3011) — the rung that lands existential slots owes this arm a drop")
+		// An INTERFACE NAME reaching a 1-argument drop router is the `managedFieldDropCallee` guard's case one
+		// resolution further down: an existential is released through `__drop_existential(witness, value)`,
+		// which this cannot express. Both type registries tag an interface annotation `interfaceRef` (the real
+		// parse mints it; `normalizeSweptInterfaceTypes` re-tags the sweep's), so a bare `named` interface here
+		// means a THIRD producer of slot types exists that neither does.
+		interfaceType then panic("managedNameDropCallee: '{String.from(declaredName)}' is an interface, and an existential is released through `__drop_existential(witness, value)` rather than by any name this router can return — a slot reaching here carries a bare `named` that neither type registry re-tagged `interfaceRef`")
 		// A ranged alias IS its primitive and a function value is a bare code pointer; neither owns a record,
 		// so neither can have been classified managed. `declaredNameIsManaged` answers `false` for both.
 		rangedAlias then panic("managedNameDropCallee: '{String.from(declaredName)}' is a ranged typealias — a scalar, which `typeIsManaged` never classifies managed")
@@ -1715,6 +1768,16 @@ export function managedFieldCloneStrategy(signatures ProgramSignatures, typeName
 	if tag == ValueTypeTag.genericInstance 'instance'
 		return instanceCloneStrategy(signatures, id: typeNameIdOf(fieldType))
 	end 'instance'
+	// ⛔ **AN EXISTENTIAL IS NOT DEEP-CLONEABLE, AND THE GATE AND THE STRATEGY HAVE TO SAY SO TOGETHER**
+	// (P1.7a-existentials slice 2) — this file's standing rule (see `managedNameCloneStrategy`'s
+	// compiler-owned arm): a name the gate and the strategy disagreed about would admit a clone nobody can
+	// emit. A witness table names a DESTRUCTOR and no cloner, so there is no per-conformer `(box) -> newBox`
+	// to `callIndirect`; `typeSupportsDeepClone` refuses an existential field at the same tier (its
+	// `tagMayNameAggregate` guard), so the front end reports a positioned E2015 rather than reaching a
+	// backend panic.
+	if tag == ValueTypeTag.interfaceRef 'existential'
+		return ManagedCloneStrategy.unsupported
+	end 'existential'
 	if not (tagIsStructRef(tag) or tag == ValueTypeTag.named) 'notManagedRef'
 		panic("managedFieldCloneStrategy: a field of tag '{typeTagName(tag)}' is not a managed heap reference — every caller classifies the field managed first")
 	end 'notManagedRef'
@@ -10419,6 +10482,31 @@ export type ProgramSignatures
 		return managedFieldDropCallee(self, typeNames: self.typeNames, fieldType: self.substituteInstanceFieldType(id, index: index))
 	end 'genericInstanceFieldDropCallee'
 
+	// Is substituted instance field `index` an existential — `structFieldIsExistential`'s instance twin, asked
+	// over the SUBSTITUTED type for `genericInstanceFieldDropCallee`'s reason: the drop KIND and the drop
+	// CALLEE must classify one type. A type ARGUMENT can never be an existential (`checkGenericArgType`
+	// refuses one), so this only ever answers `true` for the base struct's own interface-typed field.
+	export function genericInstanceFieldIsExistential(id GenericInstanceId, index FieldIndex) returns bool
+		return maxonTypeTag(self.substituteInstanceFieldType(id, index: index)) == ValueTypeTag.interfaceRef
+	end 'genericInstanceFieldIsExistential'
+
+	// Does instance `id` own ANY existential field once substituted — the `usesDropExistential` gate for its
+	// cascade, the `genericInstanceHasStringField` twin.
+	export function genericInstanceHasExistentialField(id GenericInstanceId) returns bool
+		// The same no-layout early-out `genericInstanceHasManagedField`/`genericInstanceHasStringField` make,
+		// and asked for the identical reason: `noteDestructorUsage` reaches this for any instance whose
+		// destructor is in the needed set, including one with no base struct at all.
+		if not self.genericInstanceHasBaseLayout(id) 'noFields'
+			return false
+		end 'noFields'
+		for i in 0 upto self.genericInstanceFieldCount(id) 'eachField'
+			if self.genericInstanceFieldIsExistential(id, index: i) 'found'
+				return true
+			end 'found'
+		end 'eachField'
+		return false
+	end 'genericInstanceHasExistentialField'
+
 	// Does instance `id` own ANY managed field once substituted — the gate deciding whether it needs a
 	// `__destruct_<instance>` cascade at all (else its box drop is the trivial `__mm_decref`).
 	export function genericInstanceHasManagedField(id GenericInstanceId) returns bool
@@ -10942,6 +11030,41 @@ export type ProgramSignatures
 	//
 	// The struct and index are preconditions, not cases — every caller reached here through a `structOf`
 	// that answered `declared`, and `index` is one `indexOfField` handed out.
+	// ⭐⭐ **WHAT A WITNESS TABLE'S `destroyFunc@8` HOLDS FOR CONFORMER `typeName` — or EMPTY when the
+	// conformer owns nothing droppable, which the table records as the 0 `__drop_existential` treats as inert**
+	// (P1.7a-existentials slice 2). ONE answer, read by the site that STAMPS the reloc
+	// (`LowerMaxonToStd.ensureWitnessTable`) and by the site that ROOTS its target (`MmRuntime.rootConformerDrops`),
+	// so the symbol a table names and the symbol the pipeline installs cannot come apart — the arrangement
+	// `managedOpaqueArrayElementDropCallee` already has for the layout descriptor's `destroyFunc@40`.
+	//
+	// ⚠ **THE BYTE-RECORD BUILTINS ARE ASKED FIRST BECAUSE NO REGISTRY HOLDS THEM.** A `String` or `Character`
+	// widened to `Hashable`/`Equatable` is an intrinsic conformance (`isIntrinsicBuiltinConformance`) declared by
+	// no file, so `declaredFormOf` answers nothing for it and the managed test below would call the one managed
+	// thing in the language unmanaged — a leaked record for every existential-typed String field. `int`, `float`
+	// and `bool` fall through to EMPTY, which is right: their value half is not a pointer at all.
+	//
+	// ⚠ **EMPTY IS NOT A SENTINEL RETURN, IT IS THE ANSWER** — "this conformer has no destructor" is a real
+	// state of the world with a real encoding in the table (the zero word), and both callers act on it as such.
+	export function existentialDestroyCallee(typeName ByteArray) returns ByteArray
+		if typeName.equals(StringConformerName) or typeName.equals(CharacterConformerName) 'byteRecord'
+			return StrDecrefName
+		end 'byteRecord'
+		if not self.declaredNameIsManaged(typeName) 'ownsNothingDroppable'
+			return EmptySourceText
+		end 'ownsNothingDroppable'
+
+		return managedNameDropCallee(self, declaredName: self.denotedAggregateName(typeName))
+	end 'existentialDestroyCallee'
+
+	// Is struct field `index` declared at an INTERFACE type — the two-slot fat pointer whose drop is
+	// `__drop_existential` rather than a statically named callee (P1.7a-existentials slice 2)? Asked through
+	// the index (not off a caller's own layout) so the destructor cascade, the `usesDropExistential` gate and
+	// the struct-clone refusal all read ONE answer.
+	export function structFieldIsExistential(structName ByteArray, index FieldIndex) returns bool
+		let layout = try self.structTypes.get(structName) otherwise panic("ProgramSignatures.structFieldIsExistential: no `type {String.from(structName)}` is declared — every caller asks `structOf` first")
+		return maxonTypeTag(try layout.fieldTypes.get(index) otherwise panic("ProgramSignatures.structFieldIsExistential: field {index} is out of range for `type {String.from(structName)}`, which declares {layout.fieldCount()} — every index handed out came from `indexOfField`")) == ValueTypeTag.interfaceRef
+	end 'structFieldIsExistential'
+
 	export function structFieldIsManaged(structName ByteArray, index FieldIndex) returns bool
 		let layout = try self.structTypes.get(structName) otherwise panic("ProgramSignatures.structFieldIsManaged: no `type {String.from(structName)}` is declared — every caller asks `structOf` first")
 		let fieldType = try layout.fieldTypes.get(index) otherwise panic("ProgramSignatures.structFieldIsManaged: field {index} is out of range for `type {String.from(structName)}`, which declares {layout.fieldCount()} — every index handed out came from `indexOfField`")
@@ -11180,6 +11303,16 @@ export type ProgramSignatures
 		if tagIsByteRecord(tag) or tagIsStructRef(tag) or tag == ValueTypeTag.genericInstance 'byteRecordStructOrInstance'
 			return true
 		end 'byteRecordStructOrInstance'
+		// ⭐ **AN EXISTENTIAL IS MANAGED, AND IT IS THE ONE MANAGED SLOT WHOSE DESTRUCTOR IS A RUN-TIME FACT**
+		// (P1.7a-existentials slice 2). Its VALUE half is whatever the conformer's record is — a heap box for
+		// every user conformer — so the slot owes exactly one drop, taken through `__drop_existential` off the
+		// witness's `destroyFunc@8` (0 for an `int`/`bool`/`float` conformer, which is what makes a
+		// scalar-conformer existential inert rather than a wild free). Answering `false` here is what leaked
+		// every interface-typed field: `structHasManagedField` skips the type, no cascade is synthesized, and
+		// the conformer is never released.
+		if tag == ValueTypeTag.interfaceRef 'existential'
+			return true
+		end 'existential'
 		if tag != ValueTypeTag.named 'notNamed'
 			return false
 		end 'notNamed'
@@ -11276,10 +11409,11 @@ export type ProgramSignatures
 			// gets a drop there.
 			enumType then return self.declaredEnumIsBoxed(name)
 			unionType then return self.declaredEnumIsBoxed(name)
-			// An interface-typed slot is `E3011 Unknown type` before it reaches here — existentials are
-			// unbuilt. When they land, a fat pointer's ownership is that rung's answer to give, and this arm
-			// is where it says it.
-			interfaceType then return false
+			// ⭐ An interface-typed slot owns its conformer's record (P1.7a-existentials slice 2) — the same
+			// answer `typeIsManaged`'s `interfaceRef` arm gives, which is where the reasoning lives. This arm
+			// is reached by NAME rather than by tag: a conformer name handed to `existentialDestroyCallee`,
+			// and any `named` annotation `normalizeSweptInterfaceTypes` did not re-tag.
+			interfaceType then return true
 			// A ranged int or float alias IS its primitive — a scalar either way.
 			rangedAlias then return false
 			// A function value is a bare code pointer; it owns no record. (A CLOSURE's environment is owned

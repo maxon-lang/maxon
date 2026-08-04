@@ -906,6 +906,33 @@ end 'main'
 4
 ```
 
+<!-- test: scalar-conformer-co-owned-into-a-var -->
+⭐⭐ **AN EXISTENTIAL'S VALUE HALF IS NOT ALWAYS A POINTER, AND CO-OWNING ONE MUST ASK ITS WITNESS FIRST.**
+`int` and `bool` conform intrinsically (`isIntrinsicBuiltinConformance`) and are held at an interface as
+their RAW VALUE in a general-purpose register — that is precisely what makes them representable there
+where a `float` is not (E3121). A `var` bound to a borrowed managed aggregate becomes a SECOND OWNER of it
+(OPEN #40's `__mm_retain`), and P1.7a-existentials slice 2 brought existentials under that rule — so the
+incref has to be gated on the same `destroyFunc@8` word the DROP is gated on, which is 0 for a conformer
+that owns no record. **MEASURED with a plain `__mm_retain` on the value half: this program compiled and
+died with 0xC0000005, writing through `7 - 24 + 16`, where it answers 11 the moment the retain is
+witness-gated.** `__retain_existential` is that gate, and it is the exact inverse of `__drop_existential`:
+a conformer whose drop is inert has an inert retain.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function use(h Comparable) returns Integer
+	var v = h
+	return 11 if true else 12
+end 'use'
+
+function main() returns ExitCode
+	return use(7) as ExitCode
+end 'main'
+```
+```exitcode
+11
+```
+
 <!-- test: interface-param-checked-divide-survives-specialization -->
 ### A possibly-zero divide in an interface-param function survives specialization
 An interface-parameter function is CLONED per concrete argument type (monomorphization's

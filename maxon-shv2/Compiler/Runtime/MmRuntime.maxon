@@ -969,6 +969,11 @@ export function noteDestructorUsage(usage RuntimeUsage, project Project, signatu
 			if signatures.structHasArrayField(layout.name) 'hasArray'
 				usage.usesArray = true
 			end 'hasArray'
+			// The same reasoning for an INTERFACE-typed field (P1.7a-existentials slice 2): the cascade calls
+			// `__drop_existential` inside that synthesized body.
+			if structHasExistentialField(signatures, structName: layout.name) 'hasExistential'
+				usage.usesDropExistential = true
+			end 'hasExistential'
 		end 'referenced'
 	end 'eachStruct'
 
@@ -996,9 +1001,52 @@ export function noteDestructorUsage(usage RuntimeUsage, project Project, signatu
 			if signatures.genericInstanceHasStringField(id) 'hasString'
 				usage.usesStrDecref = true
 			end 'hasString'
+			// The base struct's OWN interface-typed field survives substitution into the instance's cascade
+			// (`instanceFieldDropKind`), so an instance destructor calls `__drop_existential` too.
+			if signatures.genericInstanceHasExistentialField(id) 'hasExistential'
+				usage.usesDropExistential = true
+			end 'hasExistential'
 		end 'referenced'
 	end 'eachInstance'
 end 'noteDestructorUsage'
+
+// ⭐⭐ **ROOT EVERY FUNCTION AN `.rdata` SLOT NAMES, AFTER LOWERING HAS FILLED THEM (P1.7a-existentials
+// slice 2).** A witness table's `destroyFunc@8` and its method slots, and a layout descriptor's
+// `destroyFunc@40`/`copyFunc@48`, are reached through DATA rather than through code: `__drop_existential`
+// loads the word out of `.rdata` at run time and `callIndirect`s it, so nothing the module's call graph can
+// see names it. The writer will bake a `.text` VA for every one of them, so every one must be INSTALLED.
+//
+// ⭐ **THE ROOTED SET IS THE RELOCATED SET, LITERALLY — read off the relocations rather than re-derived from
+// the declarations that produced them.** That is the property `rootManagedOpaqueArrayElementDrops`' header
+// asks for and gets by asking the same predicate; here it is had by construction, which matters because
+// WHICH `(conformer, interface)` pairs get a table is decided during LOWERING and no pre-pipeline walk can
+// know it. The first attempt rooted every DECLARED conformance instead, and every program has the stdlib's
+// (`FilePath` and `URL` conform, reachable or not) — so `var flag = true` grew the three `__slab_*` `.data`
+// globals and five `static-variables/data-section-*` cases read their bool 24 bytes off its true offset.
+//
+// ⚠ **IT MUST RUN AFTER THE PIPELINE AND BEFORE THE INSTALLS, AND THE ONE THING IT CANNOT REACH IS THE
+// `.data` LAYOUT** (`globalData.layOut`, which reads `usesHeap` before lowering). That is sound rather than
+// lucky: every callee an `.rdata` slot can name releases a HEAP record — a `__destruct_<T>`, `__mm_decref`,
+// `__str_decref`, `__arr_decref` — so the program that named it allocated one, and `usesHeap` was already
+// true when the layout was taken. The gate below says so rather than trusting it.
+//
+// Every name goes through `recordCallUsage`, the ONE callee→bit map, so each rooted symbol declares its own
+// transitive floor exactly as a direct call to it would; `closeDestructorNeeds` then closes the cascades
+// over their nesting, which is why this is the whole of `noteRelocatedFunctionUsage` and not a second copy of
+// that closure. A slot naming a USER method (`Point.tag`) sets no bit — it is `.text` the DFE roots
+// separately — and costs one prefix test.
+export function noteRelocatedFunctionUsage(usage RuntimeUsage, project Project, signatures ProgramSignatures)
+	let heapBefore = usage.usesHeap
+	for reloc in project.globalData.pendingRdataRelocs 'eachRdataSlot'
+		recordCallUsage(reloc.funcName, usage: usage)
+	end 'eachRdataSlot'
+
+	if usage.usesHeap and not heapBefore 'heapArrivedTooLate'
+		panic("noteRelocatedFunctionUsage: an `.rdata` slot named a heap callee in a program whose `.data` layout was taken with `usesHeap` false — the runtime globals are laid out before lowering, so the layout is now short by their width. Every relocatable callee releases a heap record, so the program that named one must already have allocated one: a new relocation kind has broken that premise")
+	end 'heapArrivedTooLate'
+
+	closeDestructorNeeds(usage, project: project, signatures: signatures)
+end 'noteRelocatedFunctionUsage'
 
 // ⭐ **INSTALL EVERY MANAGED OPAQUE-`T` `Array` ELEMENT DESTRUCTOR the `funcAbs64InRdata` relocs will bake
 // (P1.7 slice 3b-iii).** `ensureLayoutDescriptor` records ONE reloc per instance for which
@@ -1091,6 +1139,14 @@ function addNestedStructDestructors(usage RuntimeUsage, layout StructLayout, pro
 		if not signatures.structFieldIsManaged(layout.name, index: i) 'scalar'
 			continue
 		end 'scalar'
+		// ⭐ **AN EXISTENTIAL FIELD CONTRIBUTES NO *NESTED* SYMBOL, BECAUSE IT NAMES NONE (P1.7a-existentials
+		// slice 2).** Its drop is `__drop_existential`, which reads the destructor out of the witness table at
+		// run time — so there is no callee here to close the set over. The destructors those tables can name
+		// are rooted whole-program instead, by `rootConformerDrops`, which runs BEFORE this closure so a
+		// conformer that owns a managed field has its own cascade queued and expanded like any other.
+		if signatures.structFieldIsExistential(layout.name, index: i) 'existential'
+			continue
+		end 'existential'
 		insertIfDestructorSymbol(usage, callee: managedStructFieldDropCallee(layout, index: i, project: project, signatures: signatures), work: work)
 	end 'eachField'
 end 'addNestedStructDestructors'
@@ -1134,6 +1190,10 @@ function addNestedInstanceDestructors(usage RuntimeUsage, id GenericInstanceId, 
 		if not signatures.genericInstanceFieldIsManaged(id, index: i) 'scalar'
 			continue
 		end 'scalar'
+		// An existential field names no nested symbol — `addNestedStructDestructors`' arm, for its reason.
+		if signatures.genericInstanceFieldIsExistential(id, index: i) 'existential'
+			continue
+		end 'existential'
 		insertIfDestructorSymbol(usage, callee: signatures.genericInstanceFieldDropCallee(id, index: i), work: work)
 	end 'eachField'
 end 'addNestedInstanceDestructors'
@@ -1267,10 +1327,37 @@ function synthesizeStructDestructor(module StdModule, layout StructLayout, proje
 		if not signatures.structFieldIsManaged(layout.name, index: i) 'scalarField'
 			continue
 		end 'scalarField'
-		drops.push(ManagedFieldDrop.create(layout.offsetOfField(i), callee: managedStructFieldDropCallee(layout, index: i, project: project, signatures: signatures)))
+		drops.push(ManagedFieldDrop.create(layout.offsetOfField(i), kind: structFieldDropKind(layout, index: i, project: project, signatures: signatures)))
 	end 'eachField'
 	emitFieldCascadeDestructor(module, symbolName: destructorSymbol(layout.name), drops: drops)
 end 'synthesizeStructDestructor'
+
+// HOW struct field `index` is released — the `existential` kind for an interface-typed field
+// (P1.7a-existentials slice 2), the statically resolved callee for every other. It is asked HERE, off the
+// declared type, because the alternative is `managedFieldDropCallee` inventing a 1-argument callee for a
+// slot whose destructor is a run-time fact; that function's own `interfaceRef` guard says so from the other
+// side.
+function structFieldDropKind(layout StructLayout, index FieldIndex, project Project, signatures ProgramSignatures) returns FieldDropKind
+	if signatures.structFieldIsExistential(layout.name, index: index) 'fatPointer'
+		return FieldDropKind.existential
+	end 'fatPointer'
+	return FieldDropKind.direct(managedStructFieldDropCallee(layout, index: index, project: project, signatures: signatures))
+end 'structFieldDropKind'
+
+// Does struct `structName` DIRECTLY own an interface-typed field — the `usesDropExistential` gate for its
+// destructor (P1.7a-existentials slice 2). Its cascade drops such a field through `__drop_existential`,
+// which this Maxon-module scan cannot see (it lives in the synthesized body), so this is what turns that
+// runtime on. The `structHasStringField` / `structHasArrayField` twin, asked through the SAME per-field
+// predicate the cascade routes on.
+function structHasExistentialField(signatures ProgramSignatures, structName ByteArray) returns bool
+	let layout = requireDeclaredStruct(signatures, structName: structName, context: "structHasExistentialField")
+	for i in 0 upto layout.fieldCount() 'eachField'
+		if signatures.structFieldIsExistential(structName, index: i) 'found'
+			return true
+		end 'found'
+	end 'eachField'
+	return false
+end 'structHasExistentialField'
 
 // ⭐⭐ **THE PER-INSTANCE DESTRUCTOR CASCADE (P1.6-B2).** A generic instance is a monomorphized base struct
 // that OWNS its managed type arguments (moved in at the concrete call site), so `__destruct_<mangled>` drops
@@ -1287,10 +1374,23 @@ function synthesizeGenericInstanceDestructor(module StdModule, id GenericInstanc
 		if not signatures.genericInstanceFieldIsManaged(id, index: i) 'scalarField'
 			continue
 		end 'scalarField'
-		drops.push(ManagedFieldDrop.create(signatures.genericInstanceFieldOffset(id, index: i), callee: signatures.genericInstanceFieldDropCallee(id, index: i)))
+		drops.push(ManagedFieldDrop.create(signatures.genericInstanceFieldOffset(id, index: i), kind: instanceFieldDropKind(signatures, id: id, index: i)))
 	end 'eachField'
 	emitFieldCascadeDestructor(module, symbolName: destructorSymbol(signatures.mangleGenericInstance(id)), drops: drops)
 end 'synthesizeGenericInstanceDestructor'
+
+// HOW substituted instance field `index` is released — `structFieldDropKind`'s instance twin, asked over the
+// SUBSTITUTED type for the reason `genericInstanceFieldDropCallee` is: the two must classify one type.
+//
+// ⚠ It is not a formality that a type ARGUMENT can never be an existential (`checkGenericArgType` refuses
+// one): the base struct's OWN interface-typed field — `type Box uses T` declaring a `var tag as Tagged`
+// beside its `T` — is in this list too, and substitution leaves it exactly as declared.
+function instanceFieldDropKind(signatures ProgramSignatures, id GenericInstanceId, index FieldIndex) returns FieldDropKind
+	if signatures.genericInstanceFieldIsExistential(id, index: index) 'fatPointer'
+		return FieldDropKind.existential
+	end 'fatPointer'
+	return FieldDropKind.direct(signatures.genericInstanceFieldDropCallee(id, index: index))
+end 'instanceFieldDropKind'
 
 // ⭐ **THE PER-INSTANCE DESTRUCTOR INSTALLER (P1.6-B2)** — the generic-instance twin of
 // `installStructDestructors`: synthesize `__destruct_<mangled>` for every managed instance whose destructor
@@ -1308,15 +1408,29 @@ export function installGenericInstanceDestructors(module StdModule, signatures P
 	end 'each'
 end 'installGenericInstanceDestructors'
 
-// One managed field a TAGLESS box destructor must drop: its byte offset in the box, and the runtime callee
-// that releases it. The struct (P1.4a) and generic-instance (P1.6-B2) cascades each build a list of these
-// and hand it to `emitFieldCascadeDestructor`, so the entry/lower/drop/free skeleton lives in ONE place.
+// ⭐ **HOW ONE MANAGED SLOT IS RELEASED — the two shapes a field drop comes in.** Carried on
+// `ManagedFieldDrop` so the offset and the release travel together and `emitNullGuardedDrop` decides between
+// them ONCE, rather than each cascade builder deciding and then agreeing.
+union FieldDropKind
+	// The ordinary field: one machine word holding a managed pointer, released by a STATICALLY chosen
+	// `(box) -> void` callee — `__str_decref`, `__mm_decref`, `__arr_decref`, a nested `__destruct_<T>`.
+	direct(callee ByteArray)
+	// ⭐ An INTERFACE-TYPED field (P1.7a-existentials slice 2): a two-slot fat pointer whose conformer — and
+	// therefore whose destructor — is a RUN-TIME fact, so no static callee exists to name. The witness half
+	// at `+InterfaceWitnessHalfOffset` is loaded beside the value half and both go to
+	// `__drop_existential(witness, value)`, which reads the table's `destroyFunc@8`.
+	existential
+end 'FieldDropKind'
+
+// One managed field a TAGLESS box destructor must drop: its byte offset in the box, and HOW it is released.
+// The struct (P1.4a) and generic-instance (P1.6-B2) cascades each build a list of these and hand it to
+// `emitFieldCascadeDestructor`, so the entry/lower/drop/free skeleton lives in ONE place.
 type ManagedFieldDrop
 	export let offset as ByteOffset
-	export let callee as ByteArray
+	export let kind as FieldDropKind
 
-	static function create(offset ByteOffset, callee ByteArray) returns ManagedFieldDrop
-		return Self{offset: offset, callee: callee}
+	static function create(offset ByteOffset, kind FieldDropKind) returns ManagedFieldDrop
+		return Self{offset: offset, kind: kind}
 	end 'create'
 end 'ManagedFieldDrop'
 
@@ -1350,7 +1464,7 @@ function emitFieldCascadeDestructor(module StdModule, symbolName ByteArray, drop
 
 	var cur = drop
 	for spec in drops 'eachDrop'
-		cur = emitNullGuardedDrop(module, cur: cur, box: box, offset: spec.offset, callee: spec.callee, ids: ids, func: func)
+		cur = emitNullGuardedDrop(module, cur: cur, box: box, offset: spec.offset, kind: spec.kind, ids: ids, func: func)
 	end 'eachDrop'
 	module.setTerminator(cur, op: StdOp.branch(free.id))
 
@@ -1376,16 +1490,21 @@ function emitManagedFieldDrops(module StdModule, startBlock IrBlock, box ValueId
 			continue
 		end 'scalarField'
 		let callee = managedFieldDropCallee(signatures, typeNames: project.typeNames, fieldType: field.declaredType)
-		cur = emitNullGuardedDrop(module, cur: cur, box: box, offset: layout.payloadSlotOffset(fi), callee: callee, ids: ids, func: func)
+		cur = emitNullGuardedDrop(module, cur: cur, box: box, offset: layout.payloadSlotOffset(fi), kind: FieldDropKind.direct(callee), ids: ids, func: func)
 	end 'eachField'
 	module.setTerminator(cur, op: StdOp.branch(dest.id))
 end 'emitManagedFieldDrops'
 
-// Load the managed pointer at `box + offset`, and if it is non-null call `callee` on it — the one
+// Load the managed pointer at `box + offset`, and if it is non-null release it as `kind` says — the one
 // null-guarded field-drop shape both the union tag-case cascade and the struct cascade emit, so the
 // load/compare/branch geometry lives in ONE place. Returns the CONTINUATION block (where the caller
 // resumes): a moved-out (null) slot skips the drop and falls straight through.
-function emitNullGuardedDrop(module StdModule, cur IrBlock, box ValueId, offset ByteOffset, callee ByteArray, ids ValueMinter, func IrFunction) returns IrBlock
+//
+// ⚠ **THE NULL GUARD IS ON THE VALUE HALF FOR BOTH KINDS**, which is what an existential wants too: a
+// moved-out existential slot is null exactly as a moved-out pointer slot is, and its witness half is then
+// stale rather than merely unread. The witness load therefore sits INSIDE the drop block, where the value
+// is already known live.
+function emitNullGuardedDrop(module StdModule, cur IrBlock, box ValueId, offset ByteOffset, kind FieldDropKind, ids ValueMinter, func IrFunction) returns IrBlock
 	let ptr = ids.mint()
 	module.appendOp(cur, op: StdOp.loadIndirect(ptr, addrId: box, offset: offset, valueType: StdType.i64))
 	let zero = ids.mint()
@@ -1397,11 +1516,24 @@ function emitNullGuardedDrop(module StdModule, cur IrBlock, box ValueId, offset 
 	module.setTerminator(cur, op: StdOp.condBranch(nonNull, thenBlockId: dropBlock.id, elseBlockId: contBlock.id))
 
 	let dropped = ids.mint()
-	module.appendOp(dropBlock, op: StdOp.call(dropped, callee: callee, args: argsOf(ptr)))
+	match kind 'k'
+		direct(callee) then module.appendOp(dropBlock, op: StdOp.call(dropped, callee: callee, args: argsOf(ptr)))
+		existential then emitExistentialFieldDrop(module, block: dropBlock, box: box, offset: offset, value: ptr, dropped: dropped, ids: ids)
+	end 'k'
 	module.setTerminator(dropBlock, op: StdOp.branch(contBlock.id))
 
 	return contBlock
 end 'emitNullGuardedDrop'
+
+// Load the WITNESS half beside an already-live value half and release the pair through
+// `__drop_existential(witness, value)` (P1.7a-existentials slice 2). Its own function because a `match` arm
+// carries one statement and this shape is two; `dropped` is the caller's result slot, so the two kinds mint
+// exactly one apiece.
+function emitExistentialFieldDrop(module StdModule, block IrBlock, box ValueId, offset ByteOffset, value ValueId, dropped ValueId, ids ValueMinter)
+	let witness = ids.mint()
+	module.appendOp(block, op: StdOp.loadIndirect(witness, addrId: box, offset: offset + InterfaceWitnessHalfOffset, valueType: StdType.i64))
+	module.appendOp(block, op: StdOp.call(dropped, callee: DropExistentialName, args: twoArgs(witness, second: value)))
+end 'emitExistentialFieldDrop'
 
 // `__mm_leak_check(exitCode) -> exitCode` — the gate.
 //

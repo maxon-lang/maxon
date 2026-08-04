@@ -49,34 +49,53 @@ export typealias WitnessSlotIndex = int(0 to u16.max)
 // declares a handful of methods, so 16 bits is ample.
 export typealias WitnessMethodIndex = int(0 to u16.max)
 
-// ⭐ **WITNESS-TABLE BYTE LAYOUT** (P1.7a slice 2a), matching v1's `WitnessTable`: a header of
-// `methodCount@0`, `parentTablePtr@8` (always 0 — parent-interface requirements are PROJECTED INTO the
-// child table by `interfaceWitnessSlots`, so there is no runtime chain to follow), `flags@16` (0), then
-// `methods[N]@24` — one 8-byte function pointer per requirement of the interface's TRANSITIVE list, each
-// stamped by a `funcAbs64InRdata` relocation. The fused
+// ⭐ **WITNESS-TABLE BYTE LAYOUT** (P1.7a slice 2a), following v1's `WitnessTable`: a header of
+// `methodCount@0`, `destroyFunc@8`, `flags@16` (0), then `methods[N]@24` — one 8-byte function pointer per
+// requirement of the interface's TRANSITIVE list, each stamped by a `funcAbs64InRdata` relocation. The fused
 // `witnessCall` reads method `i` from `[witnessAddr + WitnessTableHeaderBytes + WitnessSlotBytes*i]`, so
 // the emitter (the blob) and every reader (the x64, arm64 and wasm lowerings) must share these two
 // constants — which is why they are stated once, here, rather than per backend.
 //
-// ⚠ **THE PROJECTION IS WHAT MAKES THE ZERO TRUE, and until R10c it was a DESIGN THE CODE DID NOT
-// IMPLEMENT.** `ensureWitnessTable` built its slots from `iface.methods` alone while this comment claimed
-// the parents were projected in, so `parentTablePtr` was 0 with nothing standing in for it: an
-// `extends`-inherited requirement had no slot in any table, and the resolver that looks one up refused the
-// call outright (`E2015 … no `where` constraint on this type parameter declares a method 'label'`).
+// ⚠ **SLOT 8 WAS v1's `parentTablePtr`, AND IT WAS ALWAYS 0, WITH NO WRITER AND NO READER ANYWHERE IN
+// shv2.** Parent-interface requirements are PROJECTED INTO the child table by `interfaceWitnessSlots`, so
+// there is no runtime chain to follow and never was one to store. (Until R10c even that was a design the
+// code did not implement: `ensureWitnessTable` built its slots from `iface.methods` alone, so an
+// `extends`-inherited requirement had no slot in any table and the resolver refused the call outright.)
+// P1.7a-existentials slice 2 spends the dead word on the fact an existential genuinely cannot carry any
+// other way — see `WitnessDestroyFuncOffset`.
 export let WitnessTableHeaderBytes = 24 as ByteOffset
 export let WitnessSlotBytes = 8 as ByteOffset
+
+// ⭐⭐ **HOW A FAT POINTER DESTROYS ITS OWN VALUE HALF (P1.7a-existentials slice 2)** — the conformer's
+// `__destruct_<T>` / `__mm_decref` / `__str_decref`, or **0** when the conformer owns nothing droppable (an
+// `int`/`bool`/`float` widened to an interface). `__drop_existential(witness, value)` reads this word,
+// null-guards it and `callIndirect`s it — the identical shape `__drop_type_param` reads a layout
+// descriptor's `destroyFunc@40` with, which is why the two share one emitter.
+//
+// ⚠ **THE WITNESS TABLE IS THE ONLY PER-CONFORMER RECORD THAT EXISTS, so this could not reuse
+// `LayoutDescriptor`'s slot.** Descriptors are minted per `GenericInstanceId` alone
+// (`LowerMaxonToStd.ensureLayoutDescriptor`): a plain `type Marker implements Tagged` that is never a
+// generic argument has no descriptor at all, and an owned interface FIELD of it still has to be dropped.
+export let WitnessDestroyFuncOffset = 8 as ByteOffset
 
 // ⭐ **WHAT A VALUE HELD AT ITS INTERFACE TYPE OCCUPIES — TWO MACHINE WORDS (P1.7a-existentials slice 1).**
 // The value half and the witness half, and the second word is a `__witness_<Type>.<Iface>` address and
 // nothing else — which is why the size is stated HERE, beside the table it points at.
 //
-// ⚠ **IT IS A SIZE AND NOT A LAYOUT, because at this slice the two halves are never adjacent in MEMORY.**
-// They are two PARALLEL SCALARS everywhere they occur: a local is two SSA values, a parameter two adjacent
-// ABI parameters. The one position that WOULD need a memory layout — a struct field, at `+0` and `+8` — is
-// refused outright (`Parser.requireStorableDeclaredType`), and its `+8` constant went with the refusal
-// rather than sitting here describing storage nothing writes. Its live reader is `sizeof(<Interface>)`
-// (`primitiveTypeByteSize`), which answers 16.
+// ⚠ **IT IS A SIZE *AND*, SINCE SLICE 2, A MEMORY LAYOUT — but only in the ONE position that stores one.**
+// Everywhere a fat pointer flows it is two PARALLEL SCALARS (a local is two SSA values, a parameter two
+// adjacent ABI parameters), and there the halves are never adjacent in memory at all. A STRUCT FIELD is the
+// exception, and it has to be: the box is what outlives the frame, so both halves live in it, at `+0` and
+// `+8` of the field's own two-slot carve-out (`Project.fieldSlotCount`). Its other live reader is
+// `sizeof(<Interface>)` (`primitiveTypeByteSize`), which answers 16.
 export let InterfaceValueBytes = MachineWordBytes + MachineWordBytes
+
+// The displacement of the WITNESS half from the VALUE half inside a struct field's two-slot carve-out
+// (P1.7a-existentials slice 2). Stated here beside the size it splits, so the field READ
+// (`Parser.emitFieldLoad`), the field WRITE (`Parser.emitFieldStore`) and the field DROP
+// (`MmRuntime.emitNullGuardedDrop`) all reach the second word through one constant — three sites that
+// would otherwise each spell `+8` and be free to drift from the size above.
+export let InterfaceWitnessHalfOffset = MachineWordBytes
 
 // The byte offset of witness-table method slot `index` (P1.7a slice 2a) — `24 + 8*index`. The ONE place
 // the header size and slot stride combine, so the blob's slot layout and the fused call's memory offset

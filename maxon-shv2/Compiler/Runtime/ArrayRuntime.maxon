@@ -473,6 +473,33 @@ end 'isOpaqueArrayCopyCallee'
 // (its move-out / feed drops route through it), so ONE install covers both, exactly once.
 export let DropTypeParamName = b"__drop_type_param"
 
+// ⭐ **THE EXISTENTIAL'S DROP (P1.7a-existentials slice 2).** `__drop_existential(witness, value)` releases
+// the VALUE half of a fat pointer through the destructor its WITNESS table names
+// (`IrInterface.WitnessDestroyFuncOffset`) — the drop an owned interface-typed field or binding takes, whose
+// callee cannot be picked statically because the conformer is a run-time fact.
+//
+// ⚠ **IT IS `__drop_type_param` AT A DIFFERENT OFFSET, AND IT IS BUILT BY THE SAME EMITTER** — see
+// `buildRecordGatedDrop`. Both load a destructor word out of a record the caller hands them, skip a zero one,
+// and `callIndirect` it on one value; a second copy of that shape would be one place for the
+// element-destructor ABI to drift. Homed here beside its twin rather than in `MmRuntime` for that reason: the
+// shared emitter is what decides where it lives.
+export let DropExistentialName = b"__drop_existential"
+
+// ⭐⭐ **THE EXISTENTIAL'S CO-OWNERSHIP (P1.7a-existentials slice 2).** `__retain_existential(witness, value)
+// -> value` takes a SECOND owner of a fat pointer's value half — but ONLY when the witness says there is a
+// record to own (`destroyFunc@8 != 0`), and that gate is the whole reason it exists rather than a bare
+// `__mm_retain`.
+//
+// ⚠⚠ **AN EXISTENTIAL'S VALUE HALF IS NOT ALWAYS A POINTER, AND ASSUMING IT WAS WAS A MEASURED ACCESS
+// VIOLATION.** `int` and `bool` conform intrinsically (`isIntrinsicBuiltinConformance`) and are held at an
+// interface as their RAW VALUE in a general-purpose register — that is exactly what makes them
+// representable there where a `float` is not (E3121). MEASURED with a plain `__mm_retain`:
+// `use(h Comparable)` called with `7`, then `var v = h`, wrote through `7 - 24 + 16` and died with
+// **0xC0000005**, where the same program answers 11 on a compiler that only BORROWED. The same word that
+// decides whether the drop does anything decides whether the retain may, so the two are exact inverses and
+// a scalar conformer is inert in BOTH directions.
+export let RetainExistentialName = b"__retain_existential"
+
 // Internal helpers the public ones call: `__arr_grown_cap` is the policy, `__arr_grow` reallocs to fit,
 // `__arr_cow_detach` gives the record a private writable buffer before any in-place write (P1.7 COW slice A).
 // ⭐ The two ELEMENT-RANGE helpers packing made runtime functions rather than emitted-inline loops — see
@@ -763,8 +790,28 @@ export function installDropTypeParamRuntime(module StdModule, usage RuntimeUsage
 	if not usage.usesDropTypeParam 'noDrop'
 		return
 	end 'noDrop'
-	buildDropTypeParam(module)
+	buildRecordGatedAction(module, symbolName: DropTypeParamName, destroyFuncOffset: LAYOUT_OFFSET_DESTROY_FUNC, action: RecordGatedAction.destroyThroughWord)
 end 'installDropTypeParamRuntime'
+
+// ⭐ **INSTALL `__drop_existential` (P1.7a-existentials slice 2)** — its own bit for
+// `installDropTypeParamRuntime`'s reason: an interface-typed FIELD drops through it in a program that
+// instantiates no generic at all, so gating it on the descriptor drop's bit would leave that call unlinked.
+export function installDropExistentialRuntime(module StdModule, usage RuntimeUsage)
+	if not usage.usesDropExistential 'noDrop'
+		return
+	end 'noDrop'
+	buildRecordGatedAction(module, symbolName: DropExistentialName, destroyFuncOffset: WitnessDestroyFuncOffset, action: RecordGatedAction.destroyThroughWord)
+end 'installDropExistentialRuntime'
+
+// ⭐ **INSTALL `__retain_existential` (P1.7a-existentials slice 2)** — its own bit for
+// `installDropExistentialRuntime`'s reason: a program can co-own a borrowed existential without ever
+// dropping one through a witness, and vice versa.
+export function installRetainExistentialRuntime(module StdModule, usage RuntimeUsage)
+	if not usage.usesRetainExistential 'noRetain'
+		return
+	end 'noRetain'
+	buildRecordGatedAction(module, symbolName: RetainExistentialName, destroyFuncOffset: WitnessDestroyFuncOffset, action: RecordGatedAction.increfValue)
+end 'installRetainExistentialRuntime'
 
 // ⭐ **THE DRIFT GUARD for "which array callee throws".** `isThrowingArrayRuntimeCallee` names a set of
 // `__arr_` entries, and exactly the builders above stamp a throwing clause; those two facts must name the
@@ -815,40 +862,81 @@ function verifyThrowingAccessorsMatchPredicate(module StdModule)
 	end 'eachFunc'
 end 'verifyThrowingAccessorsMatchPredicate'
 
-// ⭐ **`__drop_type_param(descriptor, value)` — THE SINGLE-VALUE ANALOGUE of the managed-element destroy gate
-// (`emitDestroyRangeIfManaged`, P1.7 slice 3b-v).** Load the enclosing instance's layout descriptor
-// `destroyFunc@40` and, when it is non-zero (a MANAGED opaque-`T` instantiation), destroy `value` through it
-// with a `callIndirect`; a TRIVIAL instantiation (`destroyFunc@40 == 0`) is inert. This is how a shared generic
-// body drops a consumed opaque type-parameter binding — a `push`/forward feed parameter left live on some path
-// — whose destructor is not known statically (the same `destroyFunc@40` the array-create stamp
-// `appendOpaqueArrayCreate` reads, so the value is destroyed by exactly the element's own destructor). `value`
-// is a LIVE owner here (a moved-from binding's drop is skipped by `emitScopeDrops`), so unlike the array walk
-// it needs no per-slot null guard.
-function buildDropTypeParam(module StdModule)
-	var func = IrFunction.createFromStd(DropTypeParamName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
+// ⭐ **WHAT A RECORD-GATED ENTRY DOES ONCE THE WORD IS NON-ZERO** — the one thing its three instances
+// differ in. It rides a union rather than a bool because the two also differ in what they RETURN, and a
+// bool plus a second parameter would be one fact spelled twice.
+union RecordGatedAction
+	// DESTROY `value` through the loaded word with a `callIndirect` — `__drop_type_param`,
+	// `__drop_existential`. A void `(i64, i64) -> void`.
+	destroyThroughWord
+	// Take a SECOND owner of `value` (`__mm_incref`) — `__retain_existential`. It hands the pointer BACK
+	// (`(i64, i64) -> i64`), for the reason `__mm_retain` does: the co-owner needs an SSA name distinct from
+	// the borrow's, or a later re-borrow of the source would poison-match it (`Parser.retainBorrowedAggregate`).
+	increfValue
+end 'RecordGatedAction'
+
+// ⭐⭐ **`<symbolName>(record, value)` — THE SINGLE-VALUE ANALOGUE of the managed-element destroy gate
+// (`emitDestroyRangeIfManaged`).** Load a function-pointer word out of `record` at `destroyFuncOffset` and,
+// when it is non-zero, act on `value` as `action` says; a zero word is inert. `value` is a LIVE owner (or a
+// live borrow) at every call site, so unlike the array walk it needs no per-slot null guard.
+//
+// **THREE ENTRIES ARE THIS SHAPE, AND THEY DIFFER IN THE RECORD, THE OFFSET AND THE ACTION:**
+//   • `__drop_type_param(descriptor, value)` (P1.7 slice 3b-v) — a shared generic body dropping a consumed
+//     opaque type-parameter binding (a `push`/forward feed parameter left live on some path). The record is
+//     the enclosing instance's LAYOUT DESCRIPTOR and the word is `destroyFunc@40` — the same word the
+//     array-create stamp `appendOpaqueArrayCreate` reads, so the value is destroyed by exactly the
+//     element's own destructor.
+//   • `__drop_existential(witness, value)` (P1.7a-existentials slice 2) — an owned interface-typed field or
+//     binding dropping the VALUE half of its fat pointer. The record is the conformer's WITNESS TABLE and
+//     the word is `destroyFunc@8`.
+//   • `__retain_existential(witness, value)` (P1.7a-existentials slice 2) — the exact INVERSE of the one
+//     above: the same word decides it, so a conformer whose drop is inert has an inert retain. See
+//     `RetainExistentialName` for the access violation the ungated form measured.
+//
+// All three are "a per-type fact nobody can name statically, read out of a record at run time", so one
+// emitter builds all three: the element-destructor ABI (`emitElementDestructorCall`) and the
+// zero-means-nothing-to-do convention are then stated once and cannot drift between them.
+function buildRecordGatedAction(module StdModule, symbolName ByteArray, destroyFuncOffset ByteOffset, action RecordGatedAction)
+	var func = IrFunction.createFromStd(symbolName, returnType: recordGatedReturnType(action), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
 	var ids = ValueMinter.create(2)
 
 	var entry = module.addBlock(func, label: b"entry")
-	var doDrop = module.addBlock(func, label: b"dodrop")
+	var doAct = module.addBlock(func, label: b"doact")
 	let done = module.addBlock(func, label: b"done")
 
 	emitParams(module, block: entry, count: 2)
-	let descriptor = 0 as ValueId
+	let record = 0 as ValueId
 	let value = 1 as ValueId
 
-	let dtor = ids.mint()
-	module.appendOp(entry, op: StdOp.loadIndirect(dtor, addrId: descriptor, offset: LAYOUT_OFFSET_DESTROY_FUNC, valueType: StdType.i64))
+	let word = ids.mint()
+	module.appendOp(entry, op: StdOp.loadIndirect(word, addrId: record, offset: destroyFuncOffset, valueType: StdType.i64))
 	let zero = emitConst(module, block: entry, value: 0, ids: ids)
-	let hasDtor = emitCmp(module, block: entry, a: dtor, b: zero, pred: StdCmpPred.ne, ids: ids)
-	module.setTerminator(entry, op: StdOp.condBranch(hasDtor, thenBlockId: doDrop.id, elseBlockId: done.id))
+	let hasWord = emitCmp(module, block: entry, a: word, b: zero, pred: StdCmpPred.ne, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(hasWord, thenBlockId: doAct.id, elseBlockId: done.id))
 
-	emitElementDestructorCall(module, block: doDrop, destroy: dtor, elem: value, ids: ids)
-	module.setTerminator(doDrop, op: StdOp.branch(done.id))
+	match action 'act'
+		destroyThroughWord then emitElementDestructorCall(module, block: doAct, destroy: word, elem: value, ids: ids)
+		increfValue then module.appendOp(doAct, op: StdOp.call(ids.mint(), callee: MmIncrefName, args: argsOf(value)))
+	end 'act'
+	module.setTerminator(doAct, op: StdOp.branch(done.id))
 
-	module.setTerminator(done, op: StdOp.retVoid)
+	match action 'ret'
+		destroyThroughWord then module.setTerminator(done, op: StdOp.retVoid)
+		increfValue then module.setTerminator(done, op: StdOp.ret(value))
+	end 'ret'
 
 	module.functions.push(func)
-end 'buildDropTypeParam'
+end 'buildRecordGatedAction'
+
+// The Std return type each action's entry declares — void for a destroy, the pointer for a retain. Split
+// out because `IrFunction.createFromStd` needs it before the body's `match` runs, and one `match` per
+// question keeps the arms exhaustive rather than a bool threaded through two.
+function recordGatedReturnType(action RecordGatedAction) returns StdReturnType
+	return match action 'a'
+		destroyThroughWord gives StdReturnType.void
+		increfValue gives StdReturnType.value(StdType.i64)
+	end 'a'
+end 'recordGatedReturnType'
 
 // --- The byte-loop builders: the runtime-polymorphic element_size lives HERE ---
 //
@@ -982,7 +1070,7 @@ end 'emitElementDestroyRange'
 // callee is a POINTER-taking function whichever destructor is stamped in the slot: `__str_decref`,
 // `__mm_decref`, `__arr_decref` and every synthesized `__destruct_<T>` declare one `i64`. Shared by the array's
 // per-slot destroy walk (`emitElementDestroyRange`), the single-value
-// descriptor-gated drop (`buildDropTypeParam`, P1.7 slice 3b-v), AND `SetRuntime`'s key drop sites (a managed
+// record-gated drops (`buildRecordGatedDrop` — `__drop_type_param` and `__drop_existential`), AND `SetRuntime`'s key drop sites (a managed
 // set's stored key destructor IS its source array's element destructor — same `funcAddr`, same ABI), so the
 // copies cannot drift if that ABI changes. The caller has already loaded `destroy` and confirmed it non-null;
 // this only emits the indirect call.
