@@ -327,7 +327,6 @@ func @main {
     x64.callDirect __gt_spawn
     x64.movRegReg rcx, r8
     x64.callDirect __gt_await
-    x64.storeSlotReg slot52, r8
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
     x64.jmp __rc_chk
@@ -349,6 +348,8 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_ok:
+    x64.leaRegRegImm32 rax, r8, 0
+    x64.storeSlotReg slot52, rax
     x64.movRegReg rcx, r15
     x64.callDirect __gt_promise_drop
     x64.movRegReg rcx, r14
@@ -477,29 +478,6 @@ func @main {
     x64.callDirect __gt_promise_drop
     x64.loadRegSlot rcx, slot0
     x64.callDirect __gt_promise_drop
-    x64.loadRegSlot rax, slot52
-    x64.cmpRegImm32 rax, 0
-    x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
-  __rc_chk:
-    x64.movRegImm32 rax, 4294967295
-    x64.loadRegSlot rcx, slot52
-    x64.cmpRegReg rcx, rax
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_2]
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 520
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  __rc_ok:
     x64.loadRegSlot r8, slot52
     x64.epilogue 520
     x64.popReg r15
