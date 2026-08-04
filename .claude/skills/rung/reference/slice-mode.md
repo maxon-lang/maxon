@@ -63,11 +63,15 @@ point at if the board and reality ever disagree.
 - **If you abandon** — a HALT-AND-ASK, a blocker you cannot clear — **push the row back to `⬜ FREE`
   yourself**, with a one-line note saying what stopped you. A silent abandon is the worst outcome the
   board can produce: it looks exactly like work in progress, forever.
-- **Reclaiming a STALE row** (`🔶` older than ~24 h with no branch on the remote — check with
-  `git ls-remote --heads origin 'slice/<id>-*'`) is allowed, but it is **an edit that gets pushed like
-  any other**: move it to `⬜ FREE`, name the claim you released and why, push, and only then claim it.
-  Never just take it — the previous agent may be mid-rebase, and **two live branches for one row is the
-  one state this board cannot represent.**
+- **Reclaiming a STALE row** (`🔶` whose claim TIMESTAMP is older than ~24 h) is allowed, but it is **an
+  edit that gets pushed like any other**: move it to `⬜ FREE`, name the claim you released and why,
+  push, and only then claim it. Never just take it — the previous agent may be mid-rebase, and **two
+  live branches for one row is the one state this board cannot represent.**
+  > ⛔ **BRANCHES NEVER GO TO ORIGIN** (user rule, 2026-08-04). `rung-start.sh` used to push each
+  > `slice/*` branch, and this bullet used to say a stale row is one with *"no branch on the remote —
+  > check with `git ls-remote --heads origin 'slice/<id>-*'`"*. **That test is now always NO**, for a
+  > live rung and an abandoned one alike, so it cannot distinguish them and must not be used. Only
+  > `main` is ever pushed, by `rung-finish.sh`. Judging staleness is the timestamp plus asking.
 
 ⚠ **A status cell may carry PROSE.** BATCH10's holds a 300-character release note explaining why it was
 given back and what to reclaim it after. `rung-start.sh` REFUSES to claim such a row rather than

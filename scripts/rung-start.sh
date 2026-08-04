@@ -150,11 +150,14 @@ else
   else
     die "row $BATCH is not free — its status cell reads:
        $(printf '%s' "$STATUS" | cut -c1-200)
-     A 🔶 means somebody is on it. If that claim looks STALE (>24 h, and \`git ls-remote --heads origin
-     'slice/$BATCH-*'\` finds no branch), releasing it is allowed — but it is an edit that gets PUSHED
-     like any other: move it to ⬜ FREE naming the claim you released and why, push, and only THEN
-     claim it. Never just take it — the previous agent may be mid-rebase, and two live branches for one
-     row is the one state this board cannot represent."
+     A 🔶 means somebody is on it. If that claim looks STALE, releasing it is allowed — but it is an
+     edit that gets PUSHED like any other: move it to ⬜ FREE naming the claim you released and why,
+     push, and only THEN claim it. Never just take it — the previous agent may be mid-rebase, and two
+     live branches for one row is the one state this board cannot represent.
+     ⚠ JUDGING STALENESS IS NOW A HUMAN CALL. This message used to say 'and \`git ls-remote --heads
+     origin slice/$BATCH-*\` finds no branch', but BRANCHES NEVER GO TO ORIGIN (user rule 2026-08-04),
+     so that query answers NO BRANCH for a live rung and stale alike. Go by the claim TIMESTAMP in the
+     row, and ask. An absent remote branch is evidence of nothing."
   fi
 
   LANES="$(row_lanes "$PLAN" "$BATCH")"
@@ -284,13 +287,17 @@ else
   warn "  ( cd maxon-sharp && dotnet build )  — then copy it in."
 fi
 
-if [ "$WAVE" = "0" ] && [ "$NO_PUSH" = "0" ]; then
-  # An unpushed branch is indistinguishable from an abandoned claim: the row points at a branch name,
-  # and `git ls-remote --heads origin 'slice/<id>-*'` is how another agent checks a claim is alive.
-  git push --quiet --set-upstream origin "$BRANCH" 2>/dev/null \
-    && ok "branch pushed — the claim is now verifiable by ls-remote" \
-    || warn "could not push the branch; push it early yourself (an unpushed branch reads as abandoned)"
-fi
+# ⛔ BRANCHES NEVER GO TO ORIGIN (user rule, 2026-08-04). This step used to
+# `git push --set-upstream origin "$BRANCH"`, so every rung left a `slice/*` ref on the remote.
+# Only `main` is ever pushed — by `rung-finish.sh`, carrying the merge and the board flip together.
+#
+# ⚠ WHAT THIS COSTS, STATED RATHER THAN LEFT TO BE DISCOVERED: a slice branch is now LOCAL to the
+#   clone that made it, so `git ls-remote --heads origin 'slice/<id>-*'` — which this script's own
+#   refusal message and `reference/slice-mode.md` both name as the way to tell a live claim from an
+#   abandoned one — can no longer answer. It will report NO branch for a perfectly live rung. There is
+#   no automatic replacement: judging a stale 🔶 is back to the claim TIMESTAMP in the row plus asking.
+#   Do not read an absent remote branch as evidence of anything.
+ok "branch is LOCAL — branches never go to origin; only main is pushed, by rung-finish.sh"
 
 # ─────────────────────────────────────────────────────────────────────────────────────────────────
 step "6/6  Build the worktree"
