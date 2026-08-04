@@ -326,6 +326,9 @@ git status --short specs-shv2/fragments/     # every one of these gets committed
 It is the one piece of thoroughness this loop keeps, and the order matters: a review that lands after
 the commit is a bug report, while a review that lands before it is a gate.
 
+⚠ **Unless the diff has no compiler source in it** — a spec that passed on its first run leaves nothing
+for a quality pass to read, and that tick lands under **§7b** without this step.
+
 **Still cut, and still deliberate** (the process is expedited on purpose): **no `run_scale_test` ladder
 read, no other targets, no cross-target gate, no re-auditing the implementer's diagnosis yourself, no
 reading the minted goldens.** `/rung`, `/code-review` and the multi-agent cloud review are the deep
@@ -386,7 +389,42 @@ So when the first read shows a spec needs a mechanism that does not exist:
 4. **Take the ruling to the user** if — and only if — you hit a genuine HALT condition (see the end of
    this file). "This is large" is not one.
 
+## ⚡ 7b. THE FAST PATH — a spec that passes on the FIRST run lands IMMEDIATELY
+
+**USER RULING, 2026-08-04. If the copied spec is green on its first filtered run and you changed no
+compiler source, the tick is already done. Commit it and push. Skip §6's review, skip §8's full suite,
+and do NOT run `scripts/spec-port-finish.sh`.**
+
+Everything that battery exists to catch is structurally absent here, and that is the whole argument:
+
+| the step | what it is for | why it cannot apply |
+|---|---|---|
+| §6 reviewer | code quality of the diff | the diff is a spec file and its minted goldens — **zero lines of compiler source**. There is nothing to review. |
+| §8 full suite | a compiler change breaking OTHER specs | no compiler changed. A new `specs-shv2/*.md` is discovered by listing and cannot alter another spec's outcome. |
+| build-cost row | what a compiler change cost | there was no compiler change; the script declines the row itself. |
+| the finish script | rebase → rebuild → suite → gates → logs → commit → push | it is the harness for all of the above. With every gate vacuous it is ~2½ minutes of ceremony over a file copy. |
+
+**What you still do, because these are the checks that catch THIS tick's failure mode:**
+
+1. **§2's three counts** — markers == ran, zero `disabled-test:`, no name spelled both ways.
+   ⭐ **Run them precisely BECAUSE it passed immediately.** A first-run green is the one tick where a
+   silently-dropped case would never be noticed, and that is the thing this whole process exists to catch.
+2. **`diff specs/<name>.md specs-shv2/<name>.md`** — byte-identical, so there are no retractions to justify.
+3. **`git status --short`** — nothing outside this spec and its goldens.
+4. **`git add` every minted golden** (§5), append §9's row by hand, commit, push.
+
+⚠ **Write NO suite figure you did not measure.** The log row's `Suite N/0` sentence is the script's
+measurement; on this path there is none, so the row says so and stops. **Do not carry the previous
+tick's number forward** — a number nobody measured looks exactly like one that was.
+
+⛔ **The moment you touch compiler source, you are off this path** — even one line, even a fix you are
+certain of. Then it is §6 and §8 in full, via the script. The fast path is for ticks where the compiler
+was already right, not for small changes.
+
 ## 8. The gate battery, then land it
+
+**This section is for ticks that CHANGED COMPILER SOURCE.** A spec that passed on its first run with no
+compiler change lands under **§7b** and never reaches here.
 
 Nothing here is optional, and none of it needs permission:
 
@@ -483,7 +521,9 @@ unblocked them.
 ## 9. Close the tick
 
 **`scripts/spec-port-finish.sh` appends this row for you** (§8) — you supply the prose via `--note-file`
-and it fills in the measured suite figure. Write it by hand only if you landed without the script.
+and it fills in the measured suite figure. Write it by hand only if you landed without the script —
+**§7b's fast path is that case**, and there the row carries no suite figure at all, because none was
+measured.
 
 The row's shape (`docs/spec-port-log.md` mirrors `docs/optimization-log.md`'s read-downwards form):
 
