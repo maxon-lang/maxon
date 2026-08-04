@@ -1040,3 +1040,237 @@ end 'main'
 ```exitcode
 31
 ```
+
+<!-- test: confined-reuse-defs-past-the-callee-saved-half -->
+⛔⛔ **THE SAME REUSE-DEF CONFINEMENT AS ABOVE, IN A PROGRAM WITH NOTHING EXOTIC IN IT — AND
+IT REACHES `chooseRegister`'s EXHAUSTION PANIC ON BOTH ISAs.**
+
+Twenty-six ints that cross no call, then eleven `b` values that do. Each `b` is a
+two-address `imul` reuse def whose input is still live, so each holds a register of its own
+at an op where it is in NO live set; all eleven are live across `sink(s)`, which confines
+them to the callee-saved half of the GPR file.
+
+The masks say which half owns it: `FORBIDDEN` is non-empty and covers the caller-saved
+registers, and `HELD` covers everything else — so the point is CONFINED to a subset, not a
+full-pool pigeonhole. **Twenty-four and twelve compiles clean, and so does twenty-two and
+fourteen**, which is the control: adding MORE call-crossing values does not reproduce it.
+The demand this shape creates is not one any popcount over the full pool can see.
+
+`n = 4`, so `a0`..`a25` are `5`..`30` summing to `455`; `c = 456`; `b0`..`b10` are `10`,
+`12`, … `30`, summing to `220`. Total `676`.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function sink(x Integer) returns Integer
+	return x + 1
+end 'sink'
+
+function main() returns ExitCode
+	let n = sink(3)
+	let a0 = n + 1
+	let a1 = n + 2
+	let a2 = n + 3
+	let a3 = n + 4
+	let a4 = n + 5
+	let a5 = n + 6
+	let a6 = n + 7
+	let a7 = n + 8
+	let a8 = n + 9
+	let a9 = n + 10
+	let a10 = n + 11
+	let a11 = n + 12
+	let a12 = n + 13
+	let a13 = n + 14
+	let a14 = n + 15
+	let a15 = n + 16
+	let a16 = n + 17
+	let a17 = n + 18
+	let a18 = n + 19
+	let a19 = n + 20
+	let a20 = n + 21
+	let a21 = n + 22
+	let a22 = n + 23
+	let a23 = n + 24
+	let a24 = n + 25
+	let a25 = n + 26
+	let b0 = a0 * 2
+	let b1 = a1 * 2
+	let b2 = a2 * 2
+	let b3 = a3 * 2
+	let b4 = a4 * 2
+	let b5 = a5 * 2
+	let b6 = a6 * 2
+	let b7 = a7 * 2
+	let b8 = a8 * 2
+	let b9 = a9 * 2
+	let b10 = a10 * 2
+	let s = a0 + a1 + a2 + a3 + a4 + a5 + a6 + a7 + a8 + a9 + a10 + a11 + a12 + a13 + a14 + a15 + a16 + a17 + a18 + a19 + a20 + a21 + a22 + a23 + a24 + a25
+	let c = sink(s)
+	let total = b0 + b1 + b2 + b3 + b4 + b5 + b6 + b7 + b8 + b9 + b10 + c
+	return 0 if total == 676 else 99
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: confined-reuse-defs-past-the-callee-saved-half-float -->
+**THE SIMD TWIN, AND IT IS THE SAME BUG AND NOT A FLOAT ONE.** Thirty-two floats that cross
+no call and eight that do — `mulsd` / `fmul` reuse defs, live across `fsink(s)`, confined to
+the callee-saved vector registers. It reaches the identical panic on both ISAs.
+
+The pair exists because the two register files reach the same wall at different counts, and
+a fix that reads one file's pool size is a fix only one file ever tests.
+
+`n = 4.0`, so `a0`..`a31` are `5.0`..`36.0` summing to `656.0`; `c = 657.0`; `b0`..`b7` are
+`10.0`, `12.0`, … `24.0`, summing to `136.0`. Total `793.0`.
+```maxon
+function fsink(x float) returns float
+	return x + 1.0
+end 'fsink'
+
+function main() returns ExitCode
+	let n = fsink(3.0)
+	let a0 = n + 1.0
+	let a1 = n + 2.0
+	let a2 = n + 3.0
+	let a3 = n + 4.0
+	let a4 = n + 5.0
+	let a5 = n + 6.0
+	let a6 = n + 7.0
+	let a7 = n + 8.0
+	let a8 = n + 9.0
+	let a9 = n + 10.0
+	let a10 = n + 11.0
+	let a11 = n + 12.0
+	let a12 = n + 13.0
+	let a13 = n + 14.0
+	let a14 = n + 15.0
+	let a15 = n + 16.0
+	let a16 = n + 17.0
+	let a17 = n + 18.0
+	let a18 = n + 19.0
+	let a19 = n + 20.0
+	let a20 = n + 21.0
+	let a21 = n + 22.0
+	let a22 = n + 23.0
+	let a23 = n + 24.0
+	let a24 = n + 25.0
+	let a25 = n + 26.0
+	let a26 = n + 27.0
+	let a27 = n + 28.0
+	let a28 = n + 29.0
+	let a29 = n + 30.0
+	let a30 = n + 31.0
+	let a31 = n + 32.0
+	let b0 = a0 * 2.0
+	let b1 = a1 * 2.0
+	let b2 = a2 * 2.0
+	let b3 = a3 * 2.0
+	let b4 = a4 * 2.0
+	let b5 = a5 * 2.0
+	let b6 = a6 * 2.0
+	let b7 = a7 * 2.0
+	let s = a0 + a1 + a2 + a3 + a4 + a5 + a6 + a7 + a8 + a9 + a10 + a11 + a12 + a13 + a14 + a15 + a16 + a17 + a18 + a19 + a20 + a21 + a22 + a23 + a24 + a25 + a26 + a27 + a28 + a29 + a30 + a31
+	let c = fsink(s)
+	let total = b0 + b1 + b2 + b3 + b4 + b5 + b6 + b7 + c
+	return 0 if total == 793.0 else 99
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: confined-reuse-defs-at-x64s-own-scale-float -->
+⭐ **THE SAME DEMAND, TWENTY-FIVE LINES LONG.** x64 has sixteen XMMs of which ten are
+callee-saved, so it reaches the wall at sixteen non-crossing floats and four crossing ones —
+which is the shape this defect was originally reported as. arm64's thirty-two vector
+registers absorb it, so this case is a plain correctness program there; the value of keeping
+it is that it is the SMALLEST program that has ever reached the panic.
+
+**Twenty and twenty-four unconstrained floats both compile clean**, which is the pigeonhole
+control: nineteen live floats already pass x64's pool, so the difference this case makes is
+the confinement and nothing else.
+
+`n = 4.0`, so `a0`..`a15` are `5.0`..`20.0` summing to `200.0`; `c = 201.0`; `b0`..`b3` are
+`10.0`, `12.0`, `14.0`, `16.0`. Total `253.0`.
+```maxon
+function fsink(x float) returns float
+	return x + 1.0
+end 'fsink'
+
+function main() returns ExitCode
+	let n = fsink(3.0)
+	let a0 = n + 1.0
+	let a1 = n + 2.0
+	let a2 = n + 3.0
+	let a3 = n + 4.0
+	let a4 = n + 5.0
+	let a5 = n + 6.0
+	let a6 = n + 7.0
+	let a7 = n + 8.0
+	let a8 = n + 9.0
+	let a9 = n + 10.0
+	let a10 = n + 11.0
+	let a11 = n + 12.0
+	let a12 = n + 13.0
+	let a13 = n + 14.0
+	let a14 = n + 15.0
+	let a15 = n + 16.0
+	let b0 = a0 * 2.0
+	let b1 = a1 * 2.0
+	let b2 = a2 * 2.0
+	let b3 = a3 * 2.0
+	let s = a0 + a1 + a2 + a3 + a4 + a5 + a6 + a7 + a8 + a9 + a10 + a11 + a12 + a13 + a14 + a15
+	let c = fsink(s)
+	let total = b0 + b1 + b2 + b3 + c
+	return 0 if total == 253.0 else 99
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: confined-reuse-defs-at-x64s-own-scale-int -->
+The GPR half of the case above, at the GPR file's own scale: fourteen ints that cross no
+call and four that do, against fourteen allocatable GPRs of which five are callee-saved.
+Twelve and four compiles clean; fourteen and four does not.
+
+`n = 4`, so `a0`..`a13` are `5`..`18` summing to `161`; `c = 162`; `b0`..`b3` are `10`,
+`12`, `14`, `16`. Total `214`.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function sink(x Integer) returns Integer
+	return x + 1
+end 'sink'
+
+function main() returns ExitCode
+	let n = sink(3)
+	let a0 = n + 1
+	let a1 = n + 2
+	let a2 = n + 3
+	let a3 = n + 4
+	let a4 = n + 5
+	let a5 = n + 6
+	let a6 = n + 7
+	let a7 = n + 8
+	let a8 = n + 9
+	let a9 = n + 10
+	let a10 = n + 11
+	let a11 = n + 12
+	let a12 = n + 13
+	let a13 = n + 14
+	let b0 = a0 * 2
+	let b1 = a1 * 2
+	let b2 = a2 * 2
+	let b3 = a3 * 2
+	let s = a0 + a1 + a2 + a3 + a4 + a5 + a6 + a7 + a8 + a9 + a10 + a11 + a12 + a13
+	let c = sink(s)
+	let total = b0 + b1 + b2 + b3 + c
+	return 0 if total == 214 else 99
+end 'main'
+```
+```exitcode
+0
+```
