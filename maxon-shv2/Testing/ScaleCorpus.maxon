@@ -652,12 +652,18 @@ end 'scopedLocalsDecl'
 // The expectation is read straight off `tracked`, which the prelude and the branch loop above have been
 // updating as they emitted — so it is the sum of the values the generated `w`s actually hold, and it
 // costs nothing to derive.
+// ⭐ EACH ACCUMULATOR IS PROBED SEPARATELY, AND A SUM IS NEVER USED TO CHECK ITS OWN ADDENDS. Six values
+// summed into one comparison is six chances for two errors to cancel — the same hole the monotone counter
+// closes between SITES, one level down. The tracker already holds each `w` individually, so probing them
+// apart costs `WorkingLocalsPerFunction` instructions, a CONSTANT, against a knob whose branch count
+// doubles. The `sum` is still built and still checked: it is the epilogue's measured shape.
 function workingLocalsSumAndWitness(driverName String, tracked TrackedValueArray) returns String
 	var out = StringBuilder.create()
 	out.append("\tvar sum = a\n")
 	var expected = corpusSeedValue()
 	for w in 0 upto WorkingLocalsPerFunction 'sum'
 		out.append("\tsum = sum + w{w}\n")
+		out.append(witnessProbe("\t", valueExpr: "w{w}", expected: trackedAt(tracked, slot: w)))
 		expected = expected + trackedAt(tracked, slot: w)
 	end 'sum'
 	out.append(driverWitnessTail(driverName, valueExpr: "sum", expected: expected))
@@ -812,6 +818,48 @@ function witnessExpr(expected TrackedValue) returns String
 	return "a + {offset}"
 end 'witnessExpr'
 
+// ⭐⭐ **THE MONOTONE HALF OF EVERY WITNESS, AND THE REASON IT EXISTS IS MEASURED RATHER THAN IMAGINED.**
+// Subtracting an expectation from a running total is exact and REVERSIBLE — a later site can put it back
+// — and one did: the FIRST sabotage written to prove this rung fails, a broken divisor mask, left every
+// rung still exiting 7, because the driver's map had a two-cycle through the seed and an even site count
+// walked out where it walked in. Pinning the site data to `a` stopped a corrupted total from steering
+// later sites, but two sites failing by equal and opposite deltas would still have summed to nothing.
+//
+// So every expectation is ALSO folded into a counter that can only ever gain bits. `or` is the operator
+// and not a stand-in for one: it has no carry, so no later value can borrow a bit back out, and
+// `wit == 0` holds if and only if EVERY difference ever folded in was zero. Cancellation stops being
+// unlikely and becomes unrepresentable.
+//
+// ⭐⭐ **AND THE CANCELLING CASE WAS BUILT AND RUN, BECAUSE "I COULD NOT CONSTRUCT ONE" IS A STATEMENT
+// ABOUT HOW HARD SOMEBODY LOOKED.** `structCreateInBlock` writes TWO folds against one `create`, so
+// shifting the emitted `y` up by one and the emitted field REWRITE down by one makes the first fold read
+// one too high and the second read one too low — equal, opposite, and at every site. MEASURED on the
+// rung-0 binary with a print in front of the check: **`acc=19`, `wit=1`** — the additive total came out
+// EXACTLY at the seed, so the check this rung shipped with an hour earlier would have passed it, and only
+// the counter refused. That is the third sabotage, and it is the reason the counter exists rather than
+// an argument that it might.
+//
+// ⛔ IT COSTS ONE INSTRUCTION AND NO BRANCH. The probe rides the straight line the fold already sits on,
+// so no knob gains a block, an edge or a phi — which is not a nicety: `deepBlocks` exists to price CFG
+// growth, and a corpus that grew its own CFG to check itself would be measuring the checker.
+function witnessProbe(indent String, valueExpr String, expected TrackedValue) returns String
+	return "{indent}wit = wit or (({valueExpr}) - ({witnessExpr(expected)}))\n"
+end 'witnessProbe'
+
+// The probe every fold site emits: the running total against the seed it is pinned at. One line, written
+// once, because it follows ~40 fold sites and an inverted sign at any of them would arm the very hole
+// this closes.
+function accProbe(indent String) returns String
+	return witnessProbe(indent, valueExpr: "acc", expected: corpusSeedValue())
+end 'accProbe'
+
+// The two accumulators every witnessed driver opens with: the ADDITIVE total, which each site neutralizes
+// back to the seed, and the MONOTONE counter, which each site's difference is ORed into. Two independent
+// failures — one that a later site could in principle undo, and one that nothing can.
+function witnessedDriverHeader(name String) returns String
+	return "{driverHeader(name)}\tvar acc = a\n\tvar wit = 0\n"
+end 'witnessedDriverHeader'
+
 // The tail EVERY driver ends with: hand back the argument UNCHANGED when the body computed what this
 // generator built it to compute, and a value that cannot be the argument when it did not.
 //
@@ -819,9 +867,20 @@ end 'witnessExpr'
 // is what makes every rung terminate and every `ownedSiteBlock` guard true. The failure path is an
 // OFFSET rather than a throw because a rung is a program, not a test: `main` compares the threaded total
 // once, at the end, and a single shifted driver moves it out of the only value that exits 7.
+//
+// The driver's own final value is folded into the counter as one more expectation rather than compared
+// separately, so there is ONE thing to test at the end and it is the one that cannot cancel.
+//
+// ⭐ **`main` NEEDS NO COUNTER OF ITS OWN, AND THAT IS A CONSTRUCTION RATHER THAN AN OPINION.** This tail
+// returns exactly `a` or `a + CorpusWitnessFailedOffset` and nothing else, so the value `main` threads
+// through N drivers is exactly `seed + k * CorpusWitnessFailedOffset` for `k` failures. That equals the
+// seed only at `k = 0` until `k` reaches 2^64 / CorpusWitnessFailedOffset ≈ 1.8e10 drivers, against a top
+// rung that has about a thousand. "The total is the seed" and "no driver failed" are the same statement
+// there; a second accumulator in `main` would double the largest generated file and discriminate nothing.
 function driverWitnessTail(driverName String, valueExpr String, expected TrackedValue) returns String
 	var out = StringBuilder.create()
-	out.append("\tif {valueExpr} == {witnessExpr(expected)} 'witness'\n")
+	out.append(witnessProbe("\t", valueExpr: valueExpr, expected: expected))
+	out.append("\tif wit == 0 'witness'\n")
 	out.append("\t\treturn a\n")
 	out.append("\tend 'witness'\n")
 	out.append("\treturn a + {CorpusWitnessFailedOffset}\n")
@@ -1607,6 +1666,7 @@ function longFunctionSource(ifCount KnobSize, localCount KnobSize) returns Strin
 	var out = StringBuilder.create()
 	out.append("// Generated by ScaleCorpus: the long-function knob — {ifCount} sequential ifs over {WorkingLocalsPerFunction} working locals and {localCount} scope-fillers.\n")
 	out.append(driverHeader(LongIfDriver))
+	out.append("\tvar wit = 0\n")
 	var tracked = TrackedValueArray.create()
 	out.append(scopedLocalsDecl(localCount, tracked: tracked))
 	for i in 0 upto ifCount 'eachIf'
@@ -1643,6 +1703,7 @@ function deepBlocksSource(ifElseCount KnobSize, localCount KnobSize) returns Str
 	var out = StringBuilder.create()
 	out.append("// Generated by ScaleCorpus: the deep-blocks knob — {ifElseCount} if/elses, ~{ifElseCount * 3} blocks, {WorkingLocalsPerFunction} working locals and {localCount} scope-fillers.\n")
 	out.append(driverHeader(DeepBlocksDriver))
+	out.append("\tvar wit = 0\n")
 	var tracked = TrackedValueArray.create()
 	out.append(scopedLocalsDecl(localCount, tracked: tracked))
 	for i in 0 upto ifElseCount 'eachIfElse'
@@ -1728,6 +1789,7 @@ function writeCallChain(dir FilePath, length KnobSize, written StringArray, driv
 		let y = corpusSeedValue() * 2
 		out.append("\n")
 		out.append(driverHeader(linkName))
+		out.append("\tvar wit = 0\n")
 		out.append("\tlet x = a + {i mod 9 + 1}\n")
 		out.append("\tlet y = a * 2\n")
 		out.append("\tlet z = {chainLinkName(i - 1)}(a)\n")
@@ -1763,6 +1825,7 @@ function pressuredLoopsSource(loopCount KnobSize) returns String
 	var out = StringBuilder.create()
 	out.append("// Generated by ScaleCorpus: the pressured-loops knob — {loopCount} loops, {PressuredValuesPerLoop} values live across a call in each.\n")
 	out.append(driverHeader(PressuredDriver))
+	out.append("\tvar wit = 0\n")
 	out.append("\tvar total = a\n")
 	var total = corpusSeedValue()
 
@@ -1848,8 +1911,7 @@ let NestedDriver = "scaleNested"
 function nestedLoopsSource(depth KnobSize) returns String
 	var out = StringBuilder.create()
 	out.append("// Generated by ScaleCorpus: the loop-nest knob — one chain of {depth} loops nested to depth {depth}, all carrying one accumulator.\n")
-	out.append(driverHeader(NestedDriver))
-	out.append("\tvar acc = a\n")
+	out.append(witnessedDriverHeader(NestedDriver))
 
 	// One pass: append each loop's opener, and PREPEND its `end` to a separate string. Prepending is
 	// what puts the closers in innermost-first order (`n{depth-1}` … `n0`) with no reverse index — a
@@ -2012,6 +2074,7 @@ function floatOpsSource(groupCount KnobSize) returns String
 	var out = StringBuilder.create()
 	out.append("// Generated by ScaleCorpus: the float-ops knob — {groupCount} float arith/compare groups over {WorkingFloatsPerFunction} float accumulators.\n")
 	out.append(driverHeader(FloatsDriver))
+	out.append("\tvar wit = 0\n")
 	var tracked = TrackedFloatArray.create()
 	out.append(floatWorkingDecl(tracked))
 
@@ -2097,6 +2160,7 @@ function floatSpillSource(loopCount KnobSize) returns String
 	let floatsPerLoop = floatsLivePerSpillLoop()
 	out.append("// Generated by ScaleCorpus: the float-spill knob — {loopCount} loops, {floatsPerLoop} floats live across a call in each (more than the callee-saved XMM half, so the overflow is a forced spill).\n")
 	out.append(driverHeader(FloatSpillDriver))
+	out.append("\tvar wit = 0\n")
 	out.append("\tvar total = 0.0\n")
 	var total = 0.0
 
@@ -2193,10 +2257,10 @@ function globalConstsSource(constCount KnobSize) returns String
 	end 'eachConst'
 
 	out.append("\n")
-	out.append(driverHeader(GlobalConstsDriver))
-	out.append("\tvar acc = a\n")
+	out.append(witnessedDriverHeader(GlobalConstsDriver))
 	for c in 0 upto constCount 'eachUse'
 		out.append("\tacc = acc + {GlobalConstPrefix}{c}{neutralizeText(trackedAt(values, slot: c))}\n")
+		out.append(accProbe("\t"))
 	end 'eachUse'
 	out.append(accWitnessTail(GlobalConstsDriver))
 	return out.build()
@@ -2239,8 +2303,7 @@ function globalVarsSource(varCount KnobSize) returns String
 	end 'eachVar'
 
 	out.append("\n")
-	out.append(driverHeader(GlobalVarsDriver))
-	out.append("\tvar acc = a\n")
+	out.append(witnessedDriverHeader(GlobalVarsDriver))
 	// The load reads back what the store one line above put there — this global's literal initializer
 	// plus the accumulator — so the fold is neutralized against exactly that. It is the store that is
 	// really under test here: a `storeIndirect` that did not land, or a `loadIndirect` that read the
@@ -2251,6 +2314,7 @@ function globalVarsSource(varCount KnobSize) returns String
 	for v in 0 upto varCount 'eachUse'
 		out.append("\t{GlobalVarPrefix}{v} = {GlobalVarPrefix}{v} + a\n")
 		out.append("\tacc = acc + {GlobalVarPrefix}{v}{neutralizeText(corpusSeedValue() + (v mod GlobalVarSeedModulus))}\n")
+		out.append(accProbe("\t"))
 	end 'eachUse'
 	out.append(accWitnessTail(GlobalVarsDriver))
 	return out.build()
@@ -2446,8 +2510,10 @@ function structCreateInBlock(index KnobSize, typeName String, binding String) re
 	var body = StringBuilder.create()
 	body.append("\t\tvar {binding} = {typeName}.create(a, y: a + {created})\n")
 	body.append("\t\tacc = acc + {binding}.x + {binding}.y{neutralizeText(2 * corpusSeedValue() + created)}\n")
+	body.append(accProbe("\t\t"))
 	body.append("\t\t{binding}.y = a + {rewritten}\n")
 	body.append("\t\tacc = acc + {structReaderName(typeName)}({binding}){neutralizeText(2 * corpusSeedValue() + rewritten)}\n")
+	body.append(accProbe("\t\t"))
 	return ownedSiteBlock("g{index}", body: body.build())
 end 'structCreateInBlock'
 
@@ -2481,8 +2547,7 @@ function structTypesSource(typeCount KnobSize) returns String
 	end 'eachType'
 
 	out.append("\n")
-	out.append(driverHeader(StructTypesDriver))
-	out.append("\tvar acc = a\n")
+	out.append(witnessedDriverHeader(StructTypesDriver))
 	for t in 0 upto typeCount 'eachUse'
 		out.append(structCreateInBlock(t, typeName: "{StructTypePrefix}{t}", binding: "s{t}"))
 	end 'eachUse'
@@ -2510,8 +2575,7 @@ function structAllocsSource(allocCount KnobSize) returns String
 	end 'eachType'
 
 	out.append("\n")
-	out.append(driverHeader(StructAllocsDriver))
-	out.append("\tvar acc = a\n")
+	out.append(witnessedDriverHeader(StructAllocsDriver))
 	for i in 0 upto allocCount 'eachAlloc'
 		out.append(structCreateInBlock(i, typeName: "{AllocTypePrefix}{i mod AllocStructTypeCount}", binding: "p{i}"))
 	end 'eachAlloc'
@@ -2534,8 +2598,7 @@ function intDivideSource(groupCount KnobSize) returns String
 	var out = StringBuilder.create()
 	out.append("// Generated by ScaleCorpus: the int-divide knob — {groupCount} `/` and `mod` groups over an opaque, non-zero divisor.\n")
 	out.append("typealias {ScaleDivisorAlias} = int(1 to {DivisorMask + 1})\n")
-	out.append(driverHeader(DivideDriver))
-	out.append("\tvar acc = a\n")
+	out.append(witnessedDriverHeader(DivideDriver))
 	// The dividend is the pinned accumulator and the divisor is derived from it by a mask this line
 	// wrote, so both the quotient and the remainder are known here — and knowing them SEPARATELY is what
 	// makes this witness see the RAX/RDX split it exists for: a lowering that read the quotient out of
@@ -2545,7 +2608,9 @@ function intDivideSource(groupCount KnobSize) returns String
 		// The CAST is what keeps this the BARE `idiv` knob after A1 — see `DivisorMask`'s second ⚠.
 		out.append("\tlet d{i} = ((a and {DivisorMask}) + 1) as {ScaleDivisorAlias}\n")
 		out.append("\tacc = acc + a / d{i}{neutralizeText(corpusSeedValue() / divisor)}\n")
+		out.append(accProbe("\t"))
 		out.append("\tacc = acc + a mod d{i}{neutralizeText(corpusSeedValue() mod divisor)}\n")
+		out.append(accProbe("\t"))
 	end 'eachGroup'
 	out.append(accWitnessTail(DivideDriver))
 	return out.build()
@@ -2570,8 +2635,7 @@ let CheckedDivideDriver = "scaleCheckedDivide"
 function checkedDivideSource(groupCount KnobSize) returns String
 	var out = StringBuilder.create()
 	out.append("// Generated by ScaleCorpus: the checked-divide knob — {groupCount} throwing `/` and `mod` groups over an opaque, POSSIBLY-ZERO divisor.\n")
-	out.append(driverHeader(CheckedDivideDriver))
-	out.append("\tvar acc = a\n")
+	out.append(witnessedDriverHeader(CheckedDivideDriver))
 	// The same two answers as the bare knob, through the checked door — and the `otherwise` arm is
 	// UNREACHABLE by construction (the mask leaves the divisor in 1..8), so a `try` that took its
 	// fallback would fold 0 where a quotient belongs and this witness would say so. That is the one thing
@@ -2580,7 +2644,9 @@ function checkedDivideSource(groupCount KnobSize) returns String
 	for i in 0 upto groupCount 'eachGroup'
 		out.append("\tlet d{i} = (a and {DivisorMask}) + 1\n")
 		out.append("\tacc = acc + (try (a / d{i}) otherwise 0){neutralizeText(corpusSeedValue() / divisor)}\n")
+		out.append(accProbe("\t"))
 		out.append("\tacc = acc + (try (a mod d{i}) otherwise 0){neutralizeText(corpusSeedValue() mod divisor)}\n")
+		out.append(accProbe("\t"))
 	end 'eachGroup'
 	out.append(accWitnessTail(CheckedDivideDriver))
 	return out.build()
@@ -2632,6 +2698,7 @@ function rangedReturnSource(siteCount KnobSize) returns String
 	// The driver returns a plain `int`, so it contributes no ranged site of its own and the knob stays
 	// exactly `siteCount` — the same reason `genretsites.sh`'s `spread` dispatcher returns the wide alias.
 	out.append(driverHeader(RangedReturnDriver))
+	out.append("\tvar wit = 0\n")
 	out.append("\tlet picked = {RangedReturnPickName}(a)\n")
 	// WHICH site fires is the answer here, and it is known because the sites are `n == 0` … `n == N-1`
 	// against a pinned argument: site `seed` if the knob is wide enough to have one, and otherwise the
@@ -2724,14 +2791,19 @@ function shiftCoverageSource() returns String
 		panic("ScaleCorpus.shiftCoverageSource: a seed of {corpusSeedValue()} shifted left by {dynamicCount} does not survive the round trip back — this block's witnesses assume a small non-negative seed")
 	end 'seedOutOfShiftRange'
 
-	out.append(driverHeader(ShiftsDriver))
-	out.append("\tvar acc = a\n")
+	out.append(witnessedDriverHeader(ShiftsDriver))
 	out.append("\tacc = acc + scaleShiftWideConst(a){neutralizeText(corpusSeedValue() shr ShiftWideConstantCount)}\n")
+	out.append(accProbe("\t"))
 	out.append("\tacc = acc + scaleShiftWideDyn(a, c: a and {ShiftCountMask}){neutralizeText(corpusSeedValue() shr dynamicCount)}\n")
+	out.append(accProbe("\t"))
 	out.append("\tacc = acc + scaleShiftSignedConst(a){neutralizeText(corpusSeedValue() shr ShiftSignedConstantCount)}\n")
+	out.append(accProbe("\t"))
 	out.append("\tacc = acc + scaleShiftDyn(a, c: a and {ShiftCountMask}){neutralizeText((corpusSeedValue() shl dynamicCount) shr dynamicCount)}\n")
+	out.append(accProbe("\t"))
 	out.append("\tacc = acc + (a shl {ShiftInlineLeftCount}){neutralizeText(corpusSeedValue() shl ShiftInlineLeftCount)}\n")
+	out.append(accProbe("\t"))
 	out.append("\tacc = acc + (a shr {ShiftInlineRightCount}){neutralizeText(corpusSeedValue() shr ShiftInlineRightCount)}\n")
+	out.append(accProbe("\t"))
 	out.append(accWitnessTail(ShiftsDriver))
 	return out.build()
 end 'shiftCoverageSource'
@@ -2840,35 +2912,45 @@ function scalarCoverageSource() returns String
 	out.append("\tend 'create'\n")
 	out.append("end '{CoverageOuterName}'\n")
 	out.append("\n")
+	// FILE-PRIVATE, so it spells its own header rather than taking `witnessedDriverHeader`'s exported one
+	// — but it carries the same pair of accumulators and the same tail, because it has TWO expectations
+	// and two is all it takes to cancel. Its caller then expects it to hand back the argument, exactly as
+	// `main` expects of a driver.
 	out.append("function {CoverageNestedName}(a int) returns int\n")
 	out.append("\tvar acc = a\n")
+	out.append("\tvar wit = 0\n")
 	var nested = StringBuilder.create()
 	nested.append("\t\tvar o = {CoverageOuterName}.create({CoverageInnerName}.create(a, y: a + 1))\n")
 	nested.append("\t\to.inner.x = a + {CoverageNestedFieldOffset}\n")
 	// Read back through the loaded box, so the witness is on the WRITE: `o.inner.x` holds what the line
 	// above stored, and a nested field store that landed at the wrong offset moves it.
 	nested.append("\t\tacc = acc + o.inner.x{neutralizeText(corpusSeedValue() + CoverageNestedFieldOffset)}\n")
+	nested.append(accProbe("\t\t"))
 	// `structTypeDecl` emits a per-type READER beside its type, and `deadFunctions` is a REAL pass in
 	// this pipeline — an uncalled one is legitimately deleted, and this file's own rule (see `mainSource`)
 	// is that a generated declaration nothing reaches is a dimension that evaporates silently. So the
 	// inner type's reader is called here, which also puts a struct across a CALL inside the coverage file.
 	nested.append("\t\tvar q = {CoverageInnerName}.create(a, y: a + {CoverageReaderFieldOffset})\n")
 	nested.append("\t\tacc = acc + {structReaderName(CoverageInnerName)}(q){neutralizeText(2 * corpusSeedValue() + CoverageReaderFieldOffset)}\n")
+	nested.append(accProbe("\t\t"))
 	out.append(ownedSiteBlock("nested", body: nested.build()))
-	out.append("\treturn acc\n")
-	out.append("end '{CoverageNestedName}'\n")
+	out.append(accWitnessTail(CoverageNestedName))
 	out.append("\n")
 
 	// The driver threads the opaque seed through every coverage function, and PRINTS — the one `print` in
 	// the whole corpus, which is the whole of what makes the formatted-output path visible here.
-	out.append(driverHeader(CoverageDriver))
-	out.append("\tvar acc = a\n")
+	out.append(witnessedDriverHeader(CoverageDriver))
 	out.append("\tacc = acc + {CoverageBoolName}(a){neutralizeText(coverageBoolValue(corpusSeedValue()))}\n")
+	out.append(accProbe("\t"))
 	out.append("\tacc = acc + {CoverageBitsName}(a){neutralizeText(coverageBitsValue(corpusSeedValue()))}\n")
+	out.append(accProbe("\t"))
 	out.append("\tacc = acc + {CoverageCastName}(a){neutralizeText(corpusSeedValue() and CoverageNarrowUpperBound)}\n")
+	out.append(accProbe("\t"))
 	out.append("\tacc = acc + {CoverageBreakName}(a){neutralizeText(coverageBreakValue(corpusSeedValue()))}\n")
+	out.append(accProbe("\t"))
 	// The nested block pins its own accumulator and hands it back, so this call contributes the seed.
 	out.append("\tacc = acc + {CoverageNestedName}(a){neutralizeText(corpusSeedValue())}\n")
+	out.append(accProbe("\t"))
 	out.append("\tprint(\"scale coverage \{acc\}\\n\")\n")
 	out.append(accWitnessTail(CoverageDriver))
 	return out.build()
@@ -3063,8 +3145,7 @@ function enumTypesSource(typeCount KnobSize) returns String
 	end 'eachType'
 
 	out.append("\n")
-	out.append(driverHeader(EnumTypesDriver))
-	out.append("\tvar acc = a\n")
+	out.append(witnessedDriverHeader(EnumTypesDriver))
 	// ⭐ THE ARMS ARE UNTOUCHED AND THE NEUTRALIZATION SITS AFTER THE `match`, WHICH IS THE POINT. Folding
 	// the expectation into each arm's own constant would make the arm this scrutinee actually selects read
 	// `acc = acc + 0` — a statement the folder can settle, in the one arm whose continuation phi the
@@ -3078,6 +3159,7 @@ function enumTypesSource(typeCount KnobSize) returns String
 		end 'eachArm'
 		out.append("\tend 'em{t}'\n")
 		out.append("\tacc = acc{neutralizeText(enumPickerCase(t) + 1)}\n")
+		out.append(accProbe("\t"))
 	end 'eachUse'
 	out.append(accWitnessTail(EnumTypesDriver))
 	return out.build()
@@ -3151,8 +3233,7 @@ function matchSitesSource(siteCount KnobSize) returns String
 	out.append(enumPickerSource(MatchSparsePickName, enumName: MatchSparseEnumName, casePrefix: MatchSparseCasePrefix, salt: MatchSparseSalt))
 
 	out.append("\n")
-	out.append(driverHeader(MatchSitesDriver))
-	out.append("\tvar acc = a\n")
+	out.append(witnessedDriverHeader(MatchSitesDriver))
 	for i in 0 upto siteCount 'eachSite'
 		match i mod MatchDispatchShapeCount 'shape'
 			0 then out.append(matchDenseStatementSite(i))
@@ -3184,6 +3265,7 @@ function matchDenseStatementSite(index KnobSize) returns String
 	end 'eachArm'
 	out.append("\tend 'ms{index}'\n")
 	out.append("\tacc = acc{neutralizeText((index + enumPickerCase(MatchDenseSalt)) mod 7 + 1)}\n")
+	out.append(accProbe("\t"))
 	return out.build()
 end 'matchDenseStatementSite'
 
@@ -3225,6 +3307,7 @@ function matchExpressionSite(index KnobSize, pickName String, arms String, given
 	out.append(arms)
 	out.append("\tend 'ms{index}'\n")
 	out.append("\tacc = acc + mr{index}{neutralizeText(given)}\n")
+	out.append(accProbe("\t"))
 	return out.build()
 end 'matchExpressionSite'
 
@@ -3249,8 +3332,7 @@ function stringOpsSource(groupCount KnobSize) returns String
 	var out = StringBuilder.create()
 	out.append("// Generated by ScaleCorpus: the string-ops knob — {groupCount} groups of literal + interpolation + append + byteLength + ==.\n")
 	out.append("\n")
-	out.append(driverHeader(StringOpsDriver))
-	out.append("\tvar acc = a\n")
+	out.append(witnessedDriverHeader(StringOpsDriver))
 
 	// ⭐ THE APPEND'S RESULT IS WITNESSED WITHOUT KNOWING THE INTERPOLATION'S WIDTH. `sv{i}` is the literal
 	// followed by `st{i}`, so its byte length is the literal's plus `st{i}`'s — a relation this generator
@@ -3268,6 +3350,7 @@ function stringOpsSource(groupCount KnobSize) returns String
 		body.append("\t\tlet st{i} = \" tail \{a\}\"\n")
 		body.append("\t\tsv{i}.append(st{i})\n")
 		body.append("\t\tacc = acc + sv{i}.byteLength() - st{i}.byteLength(){neutralizeText(literal.byteLength())}\n")
+		body.append(accProbe("\t\t"))
 		body.append("\t\tif sv{i} == \"{literal}\" 'se{i}'\n")
 		body.append("\t\t\tacc = acc + {CorpusWitnessFailedOffset}\n")
 		body.append("\t\tend 'se{i}'\n")
@@ -3294,8 +3377,7 @@ function managedStructTypesSource(typeCount KnobSize) returns String
 	end 'eachType'
 
 	out.append("\n")
-	out.append(driverHeader(ManagedStructsDriver))
-	out.append("\tvar acc = a\n")
+	out.append(witnessedDriverHeader(ManagedStructsDriver))
 	// ⭐ THIS `==` IS THE OTHER WAY ROUND FROM `stringOpsSource`'S: the field holds exactly the literal it
 	// was built with, so the arm MUST be taken, and the compensation sits after the `if` rather than
 	// inside it. A comparison that answered false would skip the `+ 1` and leave the accumulator one
@@ -3305,6 +3387,7 @@ function managedStructTypesSource(typeCount KnobSize) returns String
 		var body = StringBuilder.create()
 		body.append("\t\tlet nv{t} = {ManagedStructPrefix}{t}.create(\"{literal}\", value: a)\n")
 		body.append("\t\tacc = acc + nv{t}.value{neutralizeText(corpusSeedValue())}\n")
+		body.append(accProbe("\t\t"))
 		body.append("\t\tif nv{t}.label == \"{literal}\" 'ml{t}'\n")
 		body.append("\t\t\tacc = acc + 1\n")
 		body.append("\t\tend 'ml{t}'\n")
@@ -3342,8 +3425,7 @@ function arrayOpsSource(groupCount KnobSize) returns String
 	out.append("typealias {ArrayElementAlias} = int(i64.min to i64.max)\n")
 	out.append("typealias {IntArrayAlias} = Array with {ArrayElementAlias}\n")
 	out.append("\n")
-	out.append(driverHeader(ArrayOpsDriver))
-	out.append("\tvar acc = a\n")
+	out.append(witnessedDriverHeader(ArrayOpsDriver))
 
 	for i in 0 upto groupCount 'eachGroup'
 		var grow = StringBuilder.create()
@@ -3355,6 +3437,7 @@ function arrayOpsSource(groupCount KnobSize) returns String
 		// number of `push`es this loop wrote — so both halves of the growth path are known, and the
 		// `otherwise 0` is a fallback a correct `get` never takes.
 		grow.append("\t\tacc = acc + (try ab{i}.get(0) otherwise 0) + ab{i}.count(){neutralizeText(corpusSeedValue() + ArrayGrowPushCount)}\n")
+		grow.append(accProbe("\t\t"))
 		out.append(ownedSiteBlock("ag{i}", body: grow.build()))
 
 		var share = StringBuilder.create()
@@ -3369,6 +3452,7 @@ function arrayOpsSource(groupCount KnobSize) returns String
 		// second number is the one worth having — a `.append` that failed to detach, or detached and lost
 		// the appended half, lands here and nowhere else in the corpus.
 		share.append("\t\tacc = acc + aq{i}.count() + ak{i}.count(){neutralizeText(ArraySliceWidth + 2 * ArraySharePushCount)}\n")
+		share.append(accProbe("\t\t"))
 		out.append(ownedSiteBlock("as{i}", body: share.build()))
 	end 'eachGroup'
 
@@ -3403,8 +3487,7 @@ function managedArrayOpsSource(groupCount KnobSize) returns String
 	out.append(managedFieldTypeDecl(ManagedRowName, managedFieldName: ManagedLabelFieldName, managedTypeName: StringTypeSpelling, valueTypeName: ManagedRowValueAlias))
 	out.append("\ntypealias {ManagedRowArrayAlias} = Array with {ManagedRowName}\n")
 	out.append("\n")
-	out.append(driverHeader(ManagedArrayOpsDriver))
-	out.append("\tvar acc = a\n")
+	out.append(witnessedDriverHeader(ManagedArrayOpsDriver))
 
 	// The `get` is the one worth witnessing here: reading a MANAGED element out of an array owes a RETAIN,
 	// and what comes back must be the literal pushed into slot 0 — so its byte length is this generator's
@@ -3417,12 +3500,14 @@ function managedArrayOpsSource(groupCount KnobSize) returns String
 		strings.append("\t\tms{i}.push(\"managed array element \{a\}\")\n")
 		strings.append("\t\tlet mg{i} = try ms{i}.get(0) otherwise \"\"\n")
 		strings.append("\t\tacc = acc + ms{i}.count() + mg{i}.byteLength(){neutralizeText(ManagedArrayPushCount + element.byteLength())}\n")
+		strings.append(accProbe("\t\t"))
 		out.append(ownedSiteBlock("mq{i}", body: strings.build()))
 
 		var rows = StringBuilder.create()
 		rows.append("\t\tvar mr{i} = {ManagedRowArrayAlias}.create()\n")
 		rows.append("\t\tmr{i}.push({ManagedRowName}.create(\"row element label number {i} for the heap\", value: a))\n")
 		rows.append("\t\tacc = acc + mr{i}.count(){neutralizeText(ManagedRowPushCount)}\n")
+		rows.append(accProbe("\t\t"))
 		out.append(ownedSiteBlock("mw{i}", body: rows.build()))
 	end 'eachGroup'
 
@@ -3478,8 +3563,7 @@ function genericBasesSource(baseCount KnobSize) returns String
 	end 'eachBase'
 
 	out.append("\n")
-	out.append(driverHeader(GenericBasesDriver))
-	out.append("\tvar acc = a\n")
+	out.append(witnessedDriverHeader(GenericBasesDriver))
 	for t in 0 upto baseCount 'eachUse'
 		var body = StringBuilder.create()
 		let arity = t mod GenericBaseArityShapeCount
@@ -3489,9 +3573,11 @@ function genericBasesSource(baseCount KnobSize) returns String
 		if arity == 0 'oneParamUse'
 			body.append("\t\tlet gv{t} = {GenericBaseInstPrefix}{t}.create(a)\n")
 			body.append("\t\tacc = acc + gv{t}.get(){neutralizeText(corpusSeedValue())}\n")
+			body.append(accProbe("\t\t"))
 		end 'oneParamUse' else if arity == 1 'twoParamUse'
 			body.append("\t\tlet gv{t} = {GenericBaseInstPrefix}{t}.create(a, b: a + {t mod 5 + 1})\n")
 			body.append("\t\tacc = acc + gv{t}.firstVal(){neutralizeText(corpusSeedValue())}\n")
+			body.append(accProbe("\t\t"))
 		end 'twoParamUse' else 'noArityUse'
 			panic("genericBasesSource: GenericBaseArityShapeCount is {GenericBaseArityShapeCount} but arity shape {arity} has no USE branch — the declaration loop above and this one realize the same shape set, so both need the branch")
 		end 'noArityUse'
@@ -3546,8 +3632,7 @@ function genericInstancesSource(instanceCount KnobSize) returns String
 	end 'eachInstance'
 
 	out.append("\n")
-	out.append(driverHeader(GenericInstancesDriver))
-	out.append("\tvar acc = a\n")
+	out.append(witnessedDriverHeader(GenericInstancesDriver))
 	for i in 0 upto instanceCount 'eachUse'
 		var body = StringBuilder.create()
 		let shape = i mod GenericInstanceArgShapeCount
@@ -3559,6 +3644,7 @@ function genericInstancesSource(instanceCount KnobSize) returns String
 			// argument can offer — and it travels through an opaque-`T` field read to get here.
 			body.append("\t\tlet xv{i} = {GenericInstancePrefix}{i}.create(a and {GenericInstanceArgMask})\n")
 			body.append("\t\tacc = acc + xv{i}.get(){neutralizeText(corpusSeedValue() and GenericInstanceArgMask)}\n")
+			body.append(accProbe("\t\t"))
 		end 'trivialUse' else if shape == 1 'managedUse'
 			// ⚠ THE MANAGED ARM HAS NO VALUE TO WITNESS, AND SAYS SO RATHER THAN INVENTING ONE. Its `T` is a
 			// struct MOVED into the box, so reading it back through `get()` would consume a value the
@@ -3619,8 +3705,7 @@ function writeNamespacedModules(dir FilePath, moduleCount KnobSize, written Stri
 	var total = 0 as SourceByteCount
 	var consumer = StringBuilder.create()
 	consumer.append("// Generated by ScaleCorpus: the namespace knob's CONSUMER — one qualified reference group per module, written from the ROOT namespace.\n")
-	consumer.append(driverHeader(NamespacesDriver))
-	consumer.append("\tvar acc = a\n")
+	consumer.append(witnessedDriverHeader(NamespacesDriver))
 
 	for m in 0 upto moduleCount 'eachModule'
 		let moduleDir = "{NsModuleDirPrefix}{m}"
@@ -3750,9 +3835,11 @@ function qualifiedReferenceGroup(m KnobSize) returns String
 	// ONE-DOT qualified CALL — `parseQualifiedCall`'s door, which asks the namespace registry with the
 	// `Type.method` name it had already mangled.
 	out.append("\tacc = acc + {moduleNs}{NsQualifierSeparator}{NsHelperPrefix}{m}(a) + (ns{m}a as int){neutralizeText(nsHelperValue(m, argument: corpusSeedValue()) + (corpusSeedValue() and NsAliasMask))}\n")
+	out.append(accProbe("\t"))
 	// TWO-DOT qualified CALL — `parseDottedPrimary`'s own arm, the one that WALKS the token chain and
 	// ASSEMBLES the name before probing.
 	out.append("\tacc = acc + {innerNs}{NsQualifierSeparator}{NsDeepFuncPrefix}{m}(a) + (ns{m}b as int){neutralizeText(nsDeepValue(m, argument: corpusSeedValue()) + (corpusSeedValue() and NsAliasMask))}\n")
+	out.append(accProbe("\t"))
 	// A qualified call as a STATEMENT — the third door, and the one whose absence made a namespaced
 	// module's void function uncallable (`E2015: Unsupported: identifier statement`). Its result is
 	// discarded here exactly as a bare call statement's is.
@@ -3791,8 +3878,7 @@ function writeInterfaceTypes(dir FilePath, count KnobSize, written StringArray, 
 
 		var body = StringBuilder.create()
 		body.append("\n")
-		body.append(driverHeader(driverName))
-		body.append("\tvar acc = a\n")
+		body.append(witnessedDriverHeader(driverName))
 		// This knob's per-file driver is a driver like any other: it hands back its argument once every
 		// dispatch site in its file has witnessed itself, so `main` can thread it with the rest.
 
@@ -3867,6 +3953,7 @@ function interfaceDispatchSite(index KnobSize, typeName String, binding String, 
 	var body = StringBuilder.create()
 	body.append("\t\tlet {binding} = {typeName}.create(a)\n")
 	body.append("\t\tacc = acc + {binding}.{InterfaceProbeMethod}() + {binding}.{InterfaceScaleMethod}({scaleArgument}){neutralizeText(probed + scaled)}\n")
+	body.append(accProbe("\t\t"))
 	return ownedSiteBlock(label, body: body.build())
 end 'interfaceDispatchSite'
 
@@ -3891,8 +3978,7 @@ function ifaceDispatchSource(siteCount KnobSize) returns String
 	end 'eachType'
 
 	out.append("\n")
-	out.append(driverHeader(IfaceDispatchDriver))
-	out.append("\tvar acc = a\n")
+	out.append(witnessedDriverHeader(IfaceDispatchDriver))
 	for i in 0 upto siteCount 'eachSite'
 		out.append(interfaceDispatchSite(i, typeName: "{DispatchConformerPrefix}{i mod IfaceDispatchTypeCount}", binding: "dv{i}", label: "id{i}", salt: i mod IfaceDispatchTypeCount))
 	end 'eachSite'
@@ -3932,9 +4018,12 @@ function bufferValueDoorsBlock(index KnobSize) returns String
 	body.append("\t\tba{index}.push(((a + {index mod 5 + 1}) and {BufferSurfaceByteMask}) as {ByteAliasName})\n")
 	body.append("\t\tlet bm{index} = ba{index}.managed\n")
 	body.append("\t\tacc = acc + bm{index}.length() + {BufferSurfaceReadName}(ba{index}.managed){neutralizeText(2 * published)}\n")
+	body.append(accProbe("\t\t"))
 	body.append("\t\tacc = acc + {BufferSurfaceReturnPrefix}{index}(ba{index}).length() + ba{index}.count(){neutralizeText(2 * published)}\n")
+	body.append(accProbe("\t\t"))
 	body.append("\t\tlet bh{index} = {BufferSurfaceHoldName}.create(ba{index}.managed, value: a)\n")
 	body.append("\t\tacc = acc + bh{index}.{BufferSurfaceHoldFieldName}.length(){neutralizeText(published)}\n")
+	body.append(accProbe("\t\t"))
 	return ownedSiteBlock("bv{index}", body: body.build())
 end 'bufferValueDoorsBlock'
 
@@ -3958,6 +4047,7 @@ function bufferPendingTempBlock(index KnobSize) returns String
 	var body = StringBuilder.create()
 	body.append("\t\tlet bt{index} = \"{payload}\".toByteArray().managed\n")
 	body.append("\t\tacc = acc + bt{index}.length(){neutralizeText(payload.byteLength())}\n")
+	body.append(accProbe("\t\t"))
 	return ownedSiteBlock("bt{index}", body: body.build())
 end 'bufferPendingTempBlock'
 
@@ -3986,6 +4076,7 @@ function bufferStaticAndSliceBlock(index KnobSize) returns String
 	// asserts is now CHECKED rather than merely asserted: a `setLength` that clamped, or a `slice` that
 	// returned the whole buffer, lands here.
 	body.append("\t\tacc = acc + bq{index}.length() + bc{index}.length(){neutralizeText(BufferSurfaceSliceEnd + BufferSurfacePublishedLength)}\n")
+	body.append(accProbe("\t\t"))
 	return ownedSiteBlock("bc{index}", body: body.build())
 end 'bufferStaticAndSliceBlock'
 
@@ -4007,6 +4098,7 @@ function bufferElementReadBlock(index KnobSize) returns String
 	body.append("\t\tbf{index}.push(\"{element}\".toByteArray())\n")
 	body.append("\t\tlet bg{index} = try bf{index}.get(0) otherwise panic(\"scale corpus: index 0 of an array pushed to one line above\")\n")
 	body.append("\t\tacc = acc + bg{index}.length() + bf{index}.count(){neutralizeText(element.byteLength() + BufferElementPushCount)}\n")
+	body.append(accProbe("\t\t"))
 	return ownedSiteBlock("bf{index}", body: body.build())
 end 'bufferElementReadBlock'
 
@@ -4062,8 +4154,7 @@ function bufferSurfacesSource(groupCount KnobSize) returns String
 	end 'eachReturner'
 
 	out.append("\n")
-	out.append(driverHeader(BufferSurfacesDriver))
-	out.append("\tvar acc = a\n")
+	out.append(witnessedDriverHeader(BufferSurfacesDriver))
 	for i in 0 upto groupCount 'eachGroup'
 		out.append(bufferValueDoorsBlock(i))
 		out.append(bufferPendingTempBlock(i))
