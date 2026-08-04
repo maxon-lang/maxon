@@ -446,6 +446,48 @@ function keepsOriginalBeforePeak(scope SplitScope) returns bool
 	end 's'
 end 'keepsOriginalBeforePeak'
 
+// WHERE A SPLIT CUTS — the whole of what the MUTATION needs to know about the point it relieves, and
+// nothing else.
+//
+// A `PressurePeak` is an ANALYSIS RESULT: a population, a Hall witness, a live-before row, a rank. A CUT
+// is three facts — which block, which sequence number, and whether the spill code may land inside a
+// loop. Separating them is what lets the COLORER's repair (`SplitDriver.repairAtExhaustion`) drive the
+// same mutator: it holds a stuck VALUE and the CLOBBER op confining it, and it has run no pressure
+// analysis at all. Handing `spillOneValue` a fabricated `PressurePeak` there would mean inventing a
+// population, a witness and a live row that nothing measured — four lies to satisfy a parameter whose
+// readers use three honest fields.
+// ⚠ THE ONE IN FLIGHT IS MUTATED, NOT RE-MINTED, and the reason is `PeakRank`'s: A `SplitAnchor` IS A
+// HEAP OBJECT, and there is exactly one cut in flight at a time. Minting it where it is USED would be an
+// allocation per split on the pass the scale ladder watches — and two of them, because `chooseVictim`
+// and the mutator each need it. `SplitScratch` holds the one, created once per function.
+type SplitAnchor
+	export var blockLocal as CfgIndex
+	export var seq as OpSeq
+	export var placement as SpillPlacement
+
+	// "No cut yet", which is what `SplitScratch.create` starts with and what no reader ever sees: every
+	// path sets it through one of the two mutators below before anything reads it.
+	static function create() returns SplitAnchor
+		return Self{blockLocal: 0, seq: 0, placement: SpillPlacement.cold}
+	end 'create'
+
+	// Become the cut this PEAK names: its op, and the placement its overflow kind entitles it to.
+	export function takePeak(peak PressurePeak)
+		self.blockLocal = peak.blockLocal
+		self.seq = peak.peakSeq
+		self.placement = placementOf(peak)
+	end 'takePeak'
+
+	// Become a FORCED cut at one op — the colorer's repair, which has no peak. `forced` rather than
+	// derived: the value being cut is CONFINED (that is what made the colorer fail), and a confined
+	// value's only home across the clobber is memory, so the placement is the ABI's and not a choice.
+	export function takeForcedCutAt(cutBlock CfgIndex, pos BlockOpPos)
+		self.blockLocal = cutBlock
+		self.seq = seqAt(cutBlock, pos: pos)
+		self.placement = SpillPlacement.forced
+	end 'takeForcedCutAt'
+end 'SplitAnchor'
+
 // A chosen victim + how to relieve it.
 union SpillChoice
 	// No value crossing the peak can be relieved. At a FULL-POOL peak that is the HOT overflow the
@@ -1426,6 +1468,15 @@ export type PressureIndex
 		return mask
 	end 'clobberOr'
 
+	// The clobber of the ONE op at `slot` — 0 for a free slot. It is the leaf `clobberOr` folds, read one
+	// slot at a time, and it exists because a REPAIR has to name the op that takes a register rather than
+	// the OR over a stretch (`findConfiningClobber`). Reading the seated leaf rather than re-deriving
+	// `opClobberMask` from the op is what keeps "what does this op clobber" a single statement — see
+	// `opClobberMask`, whose header says why that matters.
+	export function clobberAtSlot(slot PressureSlot) returns RegMask
+		return try self.nodeClobber.get(self.slotCount + slot) otherwise panic("PressureIndex.clobberAtSlot: nodeClobber.get OOB at slot {slot}")
+	end 'clobberAtSlot'
+
 	// The sum of every leaf in `[slot, blockEnd]` — `liveBefore` at the op sitting in `slot`.
 	function suffixFrom(blockLocal CfgIndex, slot PressureSlot, class RegClass) returns PressureDelta
 		let top = self.nodeOf(blockLocal)
@@ -2249,8 +2300,8 @@ function implicitTouchOf(module TargetModule, opIdx OpIndex, opFacts OpVariantFa
 	return opFacts.implicitUsesOf(op) or opFacts.implicitDefsOf(op)
 end 'implicitTouchOf'
 
-// The OR of the clobbers of every op of `blockLocal` that `w` is live ACROSS — 0 when `w` is not live
-// there at all.
+// The stretch of `blockLocal`'s slots that `w` is live ACROSS, or `found: false` when it is live across
+// nothing there.
 //
 // THE INTERVAL, and every one of its four endpoints is the same rule the sweep applied op by op:
 //
@@ -2262,15 +2313,32 @@ end 'implicitTouchOf'
 //
 // Free slots carry an empty clobber, so stating the ends in SLOTS rather than positions needs no
 // rounding: an inserted op between two of them contributes nothing either way (see `nodeClobber`).
-function liveAcrossClobbersIn(liveness LivenessResult, pressure PressureIndex, w ValueId, blockLocal CfgIndex) returns RegMask
+//
+// It is stated APART from the OR over it because there are two questions about the same interval — what
+// does the range cross (`liveAcrossClobbersIn`, which rebuilds a forbid mask) and WHICH op does it cross
+// (`findConfiningClobber`, which picks a repair's cut). Derived twice, the mask a value's forbid is
+// built from and the op a repair splits at could disagree about where the range runs, and the repair
+// would cut where nothing was forbidden.
+type LiveAcrossSpan
+	export var found as bool
+	export var lo as PressureSlot
+	export var hi as PressureSlot
+
+	static function create(found bool, lo PressureSlot, hi PressureSlot) returns LiveAcrossSpan
+		return Self{found: found, lo: lo, hi: hi}
+	end 'create'
+end 'LiveAcrossSpan'
+
+function liveAcrossSpanIn(liveness LivenessResult, pressure PressureIndex, w ValueId, blockLocal CfgIndex) returns LiveAcrossSpan
 	let index = liveness.useIndex
 	let live = liveness.live
 	let definedHere = index.defKindOf(w) != ValueDefKind.none and index.defBlockOf(w) == blockLocal
 	let liveOut = liveListHolds(live.liveOut(blockLocal), v: w)
 	let lastUse = lastUsePositionIn(index, w: w, blockLocal: blockLocal)
+	let empty = LiveAcrossSpan.create(false, lo: 0, hi: 0)
 
 	if not (definedHere or liveOut or lastUse.found or liveListHolds(live.liveIn(blockLocal), v: w)) 'notLiveInThisBlockAtAll'
-		return 0
+		return empty
 	end 'notLiveInThisBlockAtAll'
 
 	// A block-arg's def is the block's ENTRY, so it opens where a live-in value does; only an OP def
@@ -2281,18 +2349,28 @@ function liveAcrossClobbersIn(liveness LivenessResult, pressure PressureIndex, w
 	end 'opensAfterItsOwnDef'
 
 	if liveOut 'liveOnEveryExit'
-		return pressure.clobberOr(blockLocal, lo: lo, hi: pressure.exitSlotOf(blockLocal))
+		return LiveAcrossSpan.create(true, lo: lo, hi: pressure.exitSlotOf(blockLocal))
 	end 'liveOnEveryExit'
 	if not lastUse.found 'readNowhereHereAndNotLiveOut'
 		// Defined or live-in but never read here and not carried out: live across nothing.
-		return 0
+		return empty
 	end 'readNowhereHereAndNotLiveOut'
 
 	let lastUseSlot = pressure.slotOfPosition(blockLocal, pos: lastUse.position)
 	if lastUseSlot <= lo 'closesBeforeItOpens'
-		return 0
+		return empty
 	end 'closesBeforeItOpens'
-	return pressure.clobberOr(blockLocal, lo: lo, hi: lastUseSlot - 1)
+	return LiveAcrossSpan.create(true, lo: lo, hi: lastUseSlot - 1)
+end 'liveAcrossSpanIn'
+
+// The OR of the clobbers of every op of `blockLocal` that `w` is live ACROSS — 0 when `w` is not live
+// there at all.
+function liveAcrossClobbersIn(liveness LivenessResult, pressure PressureIndex, w ValueId, blockLocal CfgIndex) returns RegMask
+	let span = liveAcrossSpanIn(liveness, pressure: pressure, w: w, blockLocal: blockLocal)
+	if not span.found 'liveAcrossNothingHere'
+		return 0
+	end 'liveAcrossNothingHere'
+	return pressure.clobberOr(blockLocal, lo: span.lo, hi: span.hi)
 end 'liveAcrossClobbersIn'
 
 // The LAST position `w` is read at in `blockLocal`, or `found: false` when it is read there not at all.
@@ -2469,13 +2547,16 @@ type SplitScratch
 	// per-split allocation term the rest of this type exists to remove.
 	export var runStarts as BoolArray
 	export var splitOperands as OperandList
+	// WHERE THE SPLIT IN FLIGHT CUTS — one object per FUNCTION, re-pointed at each cut. See
+	// `SplitAnchor`, and `PeakRank` for the discipline it follows.
+	export var anchor as SplitAnchor
 	// Has this FUNCTION left full-pool mode? Set from the whole-function analysis and flipped at most
 	// once, by `refreshPeak`, which is where the whole story lives. Like `ReachCache`'s rows and unlike
 	// every buffer above, it CARRIES ACROSS splits — it is a fact about the function, not scratch.
 	export var confinedMode as bool
 
 	static function create(numBlocks CfgIndex) returns SplitScratch
-		return Self{sweep: PressureSweepScratch.create(), seedBuf: ValueIdArray.create(), effPools: EffectivePools.create(), census: RegPoolCensus.create(), censusIds: ValueIdArray.create(), censusWasLive: BoolArray.create(), liveAtOp: ValueIdArray.create(), hall: HallScratch.create(), defLiveAfter: RegCountColumn.create(), usedAtPeak: BitWordArray.create(), candidates: ValueIdArray.create(), reach: ReachCache.create(numBlocks), peakLiveBefore: BitWordArray.create(), tree: PeakTree.create(), pressure: PressureIndex.create(), relayout: PressureRelayoutScratch.create(), dirty: BlockSet.create(), edits: SplitEdits.create(), marks: LivenessMarkScratch.create(), opEffective: zeroClassRow(), exitPopulation: zeroClassRow(), reindexCandidates: DenseColumn.create(), reindexSortBuf: DenseColumn.create(), rank: emptyRank(), runStarts: BoolArray.create(), splitOperands: OperandList.create(), confinedMode: false}
+		return Self{sweep: PressureSweepScratch.create(), seedBuf: ValueIdArray.create(), effPools: EffectivePools.create(), census: RegPoolCensus.create(), censusIds: ValueIdArray.create(), censusWasLive: BoolArray.create(), liveAtOp: ValueIdArray.create(), hall: HallScratch.create(), defLiveAfter: RegCountColumn.create(), usedAtPeak: BitWordArray.create(), candidates: ValueIdArray.create(), reach: ReachCache.create(numBlocks), peakLiveBefore: BitWordArray.create(), tree: PeakTree.create(), pressure: PressureIndex.create(), relayout: PressureRelayoutScratch.create(), dirty: BlockSet.create(), edits: SplitEdits.create(), marks: LivenessMarkScratch.create(), opEffective: zeroClassRow(), exitPopulation: zeroClassRow(), reindexCandidates: DenseColumn.create(), reindexSortBuf: DenseColumn.create(), rank: emptyRank(), runStarts: BoolArray.create(), splitOperands: OperandList.create(), anchor: SplitAnchor.create(), confinedMode: false}
 	end 'create'
 
 	// Size everything the incremental update needs and BUILD the positional pressure index. Deferred
@@ -2494,163 +2575,439 @@ end 'SplitScratch'
 // The driver
 // ==========================================================================
 
-// Split one function's live ranges so the colorer finds every program point within its pool.
-// Mutates the IR (inserts spill/reload/remat ops, rewrites reloaded uses to fresh values) and
-// returns the final liveness (recomputed on the split IR, `maxPressure ≤ pool` guaranteed) so
-// the caller reuses it for coloring. Called by `allocateFunction` BEFORE coloring.
+// ONE FUNCTION'S SPLITTING STATE, held in a type because there are now TWO callers and they run at
+// DIFFERENT TIMES.
 //
-// `throws CompileError` because a HOT overflow — a program point over its pool where NO
-// crossing value is cold-spillable — is E5001 (`raiseRegisterPressure`), not a placeholder
-// panic. `project` (its `opRanges`/`valueOrigins` tables) + `funcIndex` are what the E5001
-// diagnostic maps each blocking Target ValueId back to its source span through.
-export function splitLiveRanges(module TargetModule, func IrFunction, funcIndex FuncIndex, topo FuncTopology, pool RegMask, file RegisterFile, valueClass ValueClassColumn, opFacts OpVariantFacts, stats RegAllocStats, project Project) returns LivenessResult throws CompileError
-	// Fresh-id -> source-value map for the E5001 diagnostic: every reload/remat id the loop
-	// below mints is recorded here so a fresh id in a blocking set resolves to source, not a
-	// Rule-3 panic (see SplitLineage).
-	var lineage = SplitLineage.create()
-	var nextSlot = 0 as SpillSlot
+// Every field below was a local of `splitLiveRanges`, which was right while relief happened exactly
+// once, BEFORE colouring. The colorer's own repair (`repairAtExhaustion`) runs AFTER it, and it must run
+// under the SAME state rather than a second copy — two of these are two of every invariant they carry:
+//
+//  ⭐⭐ **`nextSlot` IS A HIGH-WATER MARK ACROSS EVERY SPLIT THE FUNCTION EVER MAKES.** A repair that
+//     restarted slot numbering would hand a value a slot the pressure splitter had already given to
+//     another; the two stores would alias and one value's spill would silently overwrite the other's.
+//     (v1 keeps `spillBaseOffset` across ALL its spill rounds for exactly this reason —
+//     `maxon-selfhosted/.../RegisterAllocator.maxon:980-986`. Its shape is a reactive spill loop that
+//     shv2 deliberately does not copy; the SLOT trap is the part that is about frames, not about
+//     algorithms, and it applies here unchanged.)
+//  • `lineage` maps every fresh id back to its source for the E5001 diagnostic; a second one loses every
+//    id the first minted.
+//  • `scratch` holds the positional pressure index, the per-block peak tournament, the reachability memo
+//    and every reusable buffer. Rebuilding it per repair is the whole-function cost the incremental
+//    design exists to remove.
+//  • `nextValueId` is the id space itself, and `cfg.valueCount` follows it.
+//
+// `module`, `func`, `stats` and `project` stay ARGUMENTS, as they are everywhere else in this file: they
+// are the compile's, not this function's, and holding them here would be a second name for each.
+export type SplitDriver
+	export var cfg as FuncCfg
+	export var liveness as LivenessResult
+	var scratch as SplitScratch
+	var lineage as SplitLineage
+	var paramCross as ParamCrossForbid
+	var pool as RegMask
+	var file as RegisterFile
+	var nextValueId as ValueId
+	var nextSlot as SpillSlot
+	// Has the incremental machinery been built? See `buildSplitIndex`.
+	var indexBuilt as bool
 
 	// THE CFG IS INVARIANT UNDER SPLITTING, so it is built ONCE and reused by every liveness
-	// recomputation below. A split only ever inserts `storeSlotReg`/`loadRegSlot`/`movRegImm`
-	// BODY ops, rewrites operands, and repoints branch-edge ARGS — it never adds or removes a
-	// block, never changes a `jcc`/`jmp` target, and so cannot change the block set, the
-	// successor/predecessor edges, or the loop depths. Rebuilding it per split re-scanned the
-	// whole function, re-derived both CSR graphs, and re-ran the natural-loop walk once per loop
-	// header — a per-split cost proportional to the function that bought nothing. `valueCount` is
-	// the ONE thing that changes (fresh reload/remat ids), and the driver knows it exactly: every
-	// minted id is materialized by an op it inserts, so `nextValueId` IS what a rescan would find.
+	// recomputation. A split only ever inserts `storeSlotReg`/`loadRegSlot`/`movRegImm` BODY ops,
+	// rewrites operands, and repoints branch-edge ARGS — it never adds or removes a block, never changes
+	// a `jcc`/`jmp` target, and so cannot change the block set, the successor/predecessor edges, or the
+	// loop depths. Rebuilding it per split re-scanned the whole function, re-derived both CSR graphs, and
+	// re-ran the natural-loop walk once per loop header — a per-split cost proportional to the function
+	// that bought nothing. `valueCount` is the ONE thing that changes (fresh reload/remat ids), and the
+	// driver knows it exactly: every minted id is materialized by an op it inserts, so `nextValueId` IS
+	// what a rescan would find.
 	//
-	// The SKELETON is not even built here: `reorderFuncBlocksRpo` just built it (and it is the
-	// caller's `topo` argument), and it has been valid ever since — the reorder is the last pass
-	// that touches the block list. So all that is added on top is the loop depths and the value
-	// count, which the reorder had no use for and therefore never paid for.
-	var cfg = buildFuncCfg(module, func: func, topo: topo)
-	var nextValueId = cfg.valueCount
-	// The ONE liveness build. Everything after it is an incremental repair of the region a split
-	// dirtied (`refreshAfterSplit`) — the whole-function rebuild this used to run per split was the
-	// O(function × splits) quadratic.
-	var liveness = timedLiveness(module, cfg: cfg, func: func, valueClass: valueClass, file: file, opFacts: opFacts, project: project)
-	// One set of working buffers for every iteration below — the sweep and the victim choice allocate
-	// nothing per split (see `SplitScratch`). It is sized off the CFG, which splitting cannot change.
-	var scratch = SplitScratch.create(cfg.topo.numBlocks)
-	// The one contribution to `forbidden` that does not come from a block sweep, so the one the
-	// dirty-region rebuild has to re-apply by hand when the victim is a parameter. Resolved once.
-	let paramCross = ParamCrossForbid.resolve(module, topo: cfg.topo, paramCount: func.paramCount)
-
-	// TERMINATION. Each iteration splits one value at the worst OVER-POOL op: the victim goes to
-	// memory ACROSS that op (dead there), so the op's pressure drops by exactly one, while NO other
-	// op's pressure rises (a store/reload only renames an already-live value over a region it was
-	// live in anyway — it never lifts the function's max pressure). So the potential
-	// Φ = Σ_ops max(0, effectivePressure(op) − reducedPool(op)) — a non-negative integer — STRICTLY
-	// DECREASES every iteration and the loop MUST reach Φ = 0 (no over-pool op → `peak.found` false).
-	// This holds under MULTIPLE splits per lineage too: a reload is itself an ordinary value the next
-	// iteration may split again (via a fresh id), each such split cutting a strictly smaller run of
-	// uses. Φ ≤ Σ_ops effectivePressure(op) ≤ totalOps × (valueCount + 1) bounds the split count, so
-	// this cannot be reached by correct convergence — it converts a hypothetical non-terminating
-	// splitter bug into a loud panic rather than a hang. (`valueCount` grows as fresh reload ids are
-	// minted, but the split count is bounded by the INITIAL Φ, which the initial figures bound.)
-	let iterationBound = liveness.useIndex.opCount * (liveness.valueCount + 1) + RegisterFileSize
-	var iterations = 0 as EventCount
-
-	// `analyzePressure` finds the worst OVER-POOL point — an op whose effective pressure exceeds
-	// its OWN pool (the full pool for a normal op, the reduced `pool ∖ implicitDefs` at a fixed-
-	// register point), with the same reuse-transient + dead-phi corrections `maxPressure` carries
-	// so the peak-finder and this driver agree. `peak.found == false` means NO point overflows —
-	// the colorer will succeed. It runs over the whole function; every re-analysis below re-sweeps only
-	// the blocks the split it followed actually dirtied (`refreshPeak`).
+	// The SKELETON is not even built here: `reorderFuncBlocksRpo` just built it (and it is the caller's
+	// `topo` argument), and it has been valid ever since — the reorder is the last pass that touches the
+	// block list. So all that is added on top is the loop depths and the value count, which the reorder
+	// had no use for and therefore never paid for.
 	//
-	// The FIRST pass does not build the peak tournament, because the overwhelming majority of functions
-	// stop right here — no point overflows, nothing is split, and the incremental machinery is never
-	// needed. Only a function that turns out to split pays the second pass that seeds it.
-	var peak = analyzePressure(module, liveness: liveness, pool: pool, scratch: scratch, intoTree: false)
-	// Has the function left FULL-POOL mode? The whole-function analysis above swept BOTH halves, so the
-	// answer is readable straight off its peak: anything but a full-pool overflow means no op in the
-	// function exceeds its own pool, and by the no-pressure-rise premise none ever will (`refreshPeak`).
-	scratch.confinedMode = not (peak.found and not peak.clobberOnly)
-	if peak.found 'willSplit'
-		scratch.beginSplitting(module, liveness: liveness)
-		peak = analyzePressure(module, liveness: liveness, pool: pool, scratch: scratch, intoTree: true)
-	end 'willSplit'
+	// The ONE liveness build happens here too. Everything after it is an incremental repair of the region
+	// a split dirtied (`refreshAfterSplit`) — the whole-function rebuild this used to run per split was
+	// the O(function × splits) quadratic.
+	export static function create(module TargetModule, func IrFunction, topo FuncTopology, pool RegMask, file RegisterFile, valueClass ValueClassColumn, opFacts OpVariantFacts, project Project) returns SplitDriver
+		var cfg = buildFuncCfg(module, func: func, topo: topo)
+		let liveness = timedLiveness(module, cfg: cfg, func: func, valueClass: valueClass, file: file, opFacts: opFacts, project: project)
+		// The one contribution to `forbidden` that does not come from a block sweep, so the one the
+		// dirty-region rebuild has to re-apply by hand when the victim is a parameter. Resolved once.
+		let paramCross = ParamCrossForbid.resolve(module, topo: cfg.topo, paramCount: func.paramCount)
+		// One set of working buffers for every split — the sweep and the victim choice allocate nothing
+		// per split (see `SplitScratch`). Sized off the CFG, which splitting cannot change.
+		// `lineage` is the fresh-id -> source-value map the E5001 diagnostic chases a blocking reload id
+		// back through (see `SplitLineage`).
+		return Self{cfg: cfg, liveness: liveness, scratch: SplitScratch.create(cfg.topo.numBlocks), lineage: SplitLineage.create(), paramCross: paramCross, pool: pool, file: file, nextValueId: cfg.valueCount, nextSlot: 0, indexBuilt: false}
+	end 'create'
 
-	while peak.found 'relievePressure'
-		if iterations >= iterationBound 'runaway'
-			panic("splitLiveRanges: '{String.from(func.name)}' did not converge after {iterations} splits (peak effective pressure {peak.pressure} still over its pool) — a splitter bug")
-		end 'runaway'
-		iterations = iterations + 1
+	// Build the incremental machinery — the positional pressure index and the per-block peak tournament
+	// `refreshPeak` reads its answers off — and hand back the peak its seeding pass found.
+	//
+	// TWO whole-function walks, so it is deferred until the function turns out to need a split at all
+	// (the overwhelming majority never do) and run at most ONCE. It now has TWO triggers rather than one:
+	// the relief loop's first over-pool point, and a colorer repair on a function that never had one.
+	function buildSplitIndex(module TargetModule) returns PressurePeak
+		if self.indexBuilt 'alreadyBuilt'
+			panic("SplitDriver.buildSplitIndex: the incremental machinery is already built — `beginSplitting` re-sizes and re-fills every column and the tournament seeding is a whole-function sweep, so a second call would be a silent Θ(function) cost. Both callers guard on `indexBuilt`.")
+		end 'alreadyBuilt'
+		self.scratch.beginSplitting(module, liveness: self.liveness)
+		self.indexBuilt = true
+		return analyzePressure(module, liveness: self.liveness, pool: self.pool, scratch: self.scratch, intoTree: true)
+	end 'buildSplitIndex'
 
-		let index = liveness.useIndex
-		let choice = chooseVictim(module, index: index, liveness: liveness, peak: peak, pool: pool, scratch: scratch)
-		// A `none` choice does not come back: at a FULL-pool peak it is the E5001 this design exists to
-		// raise, and at a CONFINED one it is a splitter bug (`noVictimAtPeak`).
-		let victim = try victimAtPeak(choice, project: project, module: module, func: func, funcIndex: funcIndex, liveness: liveness, peak: peak, pool: pool, lineage: lineage)
+	// Split this function's live ranges so the colorer finds every program point within its pool.
+	// Mutates the IR (inserts spill/reload/remat ops, rewrites reloaded uses to fresh values) and leaves
+	// `self.liveness` current on the split IR, `maxPressure ≤ pool` guaranteed.
+	//
+	// `throws CompileError` because a HOT overflow — a program point over its pool where NO crossing
+	// value is cold-spillable — is E5001 (`raiseRegisterPressure`), not a placeholder panic. `project`
+	// (its `opRanges`/`valueOrigins` tables) + `funcIndex` are what the E5001 diagnostic maps each
+	// blocking Target ValueId back to its source span through.
+	export function relievePressure(module TargetModule, func IrFunction, funcIndex FuncIndex, stats RegAllocStats, project Project) throws CompileError
+		var work = self.scratch
+		var funcLiveness = self.liveness
 
-		// EVERYTHING THE INCREMENTAL UPDATE NEEDS FROM THE PRE-SPLIT WORLD, taken before a single op
-		// moves: the victim's live range comes off the live sets it is about to leave, and its use
-		// blocks off the index that is about to be rebuilt.
-		scratch.dirty.clear()
-		scratch.edits.clear()
-		unmarkVictim(cfg.topo, index: index, liveness: liveness, scratch: scratch, victim: victim)
+		// TERMINATION. Each iteration splits one value at the worst OVER-POOL op: the victim goes to
+		// memory ACROSS that op (dead there), so the op's pressure drops by exactly one, while NO other
+		// op's pressure rises (a store/reload only renames an already-live value over a region it was
+		// live in anyway — it never lifts the function's max pressure). So the potential
+		// Φ = Σ_ops max(0, effectivePressure(op) − reducedPool(op)) — a non-negative integer — STRICTLY
+		// DECREASES every iteration and the loop MUST reach Φ = 0 (no over-pool op → `peak.found` false).
+		// This holds under MULTIPLE splits per lineage too: a reload is itself an ordinary value the next
+		// iteration may split again (via a fresh id), each such split cutting a strictly smaller run of
+		// uses. Φ ≤ Σ_ops effectivePressure(op) ≤ totalOps × (valueCount + 1) bounds the split count, so
+		// this cannot be reached by correct convergence — it converts a hypothetical non-terminating
+		// splitter bug into a loud panic rather than a hang. (`valueCount` grows as fresh reload ids are
+		// minted, but the split count is bounded by the INITIAL Φ, which the initial figures bound.)
+		let iterationBound = funcLiveness.useIndex.opCount * (funcLiveness.valueCount + 1) + RegisterFileSize
+		var iterations = 0 as EventCount
 
-		let freshFrom = nextValueId
-		match choice 'act'
-			none then panic("splitLiveRanges: `victimAtPeak` returned for a `none` choice — it must throw")
-			remat(v, scope) then nextValueId = rematerializeConstant(module, index: index, topo: cfg.topo, valueId: v, peakSeq: peak.peakSeq, scope: scope, nextValueId: nextValueId, stats: stats, lineage: lineage, scratch: scratch, opFacts: liveness.opFacts)
-			spill(v, scope) then nextValueId = spillOneValue(module, index: index, cfg: cfg, liveness: liveness, valueId: v, peak: peak, scope: scope, slot: slotForSpillOf(index, valueId: v, nextSlot: nextSlot), pool: pool, nextValueId: nextValueId, stats: stats, lineage: lineage, scratch: scratch)
-		end 'act'
-		// Only a spill of a value memory does NOT already hold consumes a slot: a value relieved again
-		// at a second peak reloads out of the slot it is already resident in (see `slotForSpillOf`), and
-		// so does a RELOAD id relieved in its turn. The index is not rebuilt until `refreshAfterSplit`
-		// below, so `isSlotResident` still answers about the state the choice was made in — the store
-		// this iteration may have just inserted is invisible.
-		match choice 'countSlot'
-			spill(v, _) then nextSlot = nextSlot if index.isSlotResident(v) else nextSlot + 1
-			none to remat then break 'countSlot'
-		end 'countSlot'
+		// `analyzePressure` finds the worst OVER-POOL point — an op whose effective pressure exceeds
+		// its OWN pool (the full pool for a normal op, the reduced `pool ∖ implicitDefs` at a fixed-
+		// register point), with the same reuse-transient + dead-phi corrections `maxPressure` carries
+		// so the peak-finder and this driver agree. `peak.found == false` means NO point overflows —
+		// the colorer will succeed. It runs over the whole function; every re-analysis below re-sweeps only
+		// the blocks the split it followed actually dirtied (`refreshPeak`).
+		//
+		// The FIRST pass does not build the peak tournament, because the overwhelming majority of functions
+		// stop right here — no point overflows, nothing is split, and the incremental machinery is never
+		// needed. Only a function that turns out to split pays the second pass that seeds it.
+		var peak = analyzePressure(module, liveness: funcLiveness, pool: self.pool, scratch: work, intoTree: false)
+		// Has the function left FULL-POOL mode? The whole-function analysis above swept BOTH halves, so the
+		// answer is readable straight off its peak: anything but a full-pool overflow means no op in the
+		// function exceeds its own pool, and by the no-pressure-rise premise none ever will (`refreshPeak`).
+		work.confinedMode = not (peak.found and not peak.clobberOnly)
+		if peak.found 'willSplit'
+			peak = self.buildSplitIndex(module)
+		end 'willSplit'
 
-		// The mutators minted fresh value ids beginning at `freshFrom` and returned the next free
-		// one; every such id is DEFINED by an op they inserted, so it is exactly what a rescan of the
-		// function would report as the new value count. Publishing it on the (reused) CFG is what
-		// re-sizes every value-indexed column.
-		cfg.valueCount = nextValueId
-		let split = SplitValues.create(victim, freshFrom: freshFrom, freshTo: nextValueId)
-		refreshAfterSplit(module, cfg: cfg, liveness: liveness, scratch: scratch, split: split, pool: pool, paramCross: paramCross)
-		peak = refreshPeak(module, liveness: liveness, pool: pool, scratch: scratch)
+		while peak.found 'relieve'
+			if iterations >= iterationBound 'runaway'
+				panic("SplitDriver.relievePressure: '{String.from(func.name)}' did not converge after {iterations} splits (peak effective pressure {peak.pressure} still over its pool) — a splitter bug")
+			end 'runaway'
+			iterations = iterations + 1
 
-		if VerifyIncrementalSplit 'checkAgainstAFullRebuild'
-			verifyIncremental(module, cfg: cfg, func: func, liveness: liveness, peak: peak, scratch: scratch, pool: pool, iterations: iterations)
-		end 'checkAgainstAFullRebuild'
+			let index = funcLiveness.useIndex
+			let choice = chooseVictim(module, index: index, liveness: funcLiveness, peak: peak, pool: self.pool, scratch: work)
+			// A `none` choice does not come back: at a FULL-pool peak it is the E5001 this design exists to
+			// raise, and at a CONFINED one it is a splitter bug (`noVictimAtPeak`).
+			let victim = try victimAtPeak(choice, project: project, module: module, func: func, funcIndex: funcIndex, liveness: funcLiveness, peak: peak, pool: self.pool, lineage: self.lineage)
+
+			// EVERYTHING THE INCREMENTAL UPDATE NEEDS FROM THE PRE-SPLIT WORLD, taken before a single op
+			// moves: the victim's live range comes off the live sets it is about to leave, and its use
+			// blocks off the index that is about to be rebuilt.
+			work.dirty.clear()
+			work.edits.clear()
+			unmarkVictim(self.cfg.topo, index: index, liveness: funcLiveness, scratch: work, victim: victim)
+
+			// `chooseVictim` re-pointed the function's ONE anchor at this peak, and the mutation below cuts
+			// there. Asserted rather than assumed: the two are a few lines apart today, and a reorder that
+			// broke it would split at the PREVIOUS peak — a wrong cut in the right-looking place, not a crash.
+			if work.anchor.seq != peak.peakSeq 'anchorIsNotThisPeaks'
+				panic("SplitDriver.relievePressure: the split anchor is at sequence {work.anchor.seq} but this iteration's peak is at {peak.peakSeq} — `chooseVictim` re-points the function's one anchor and the mutation reads it back, so nothing may run between them that re-points it")
+			end 'anchorIsNotThisPeaks'
+
+			let freshFrom = self.nextValueId
+			match choice 'act'
+				none then panic("SplitDriver.relievePressure: `victimAtPeak` returned for a `none` choice — it must throw")
+				remat(v, scope) then self.nextValueId = rematerializeConstant(module, index: index, topo: self.cfg.topo, valueId: v, peakSeq: peak.peakSeq, scope: scope, nextValueId: self.nextValueId, stats: stats, lineage: self.lineage, scratch: work, opFacts: funcLiveness.opFacts)
+				spill(v, scope) then self.nextValueId = spillOneValue(module, index: index, cfg: self.cfg, liveness: funcLiveness, valueId: v, anchor: work.anchor, scope: scope, slot: slotForSpillOf(index, valueId: v, nextSlot: self.nextSlot), pool: self.pool, nextValueId: self.nextValueId, stats: stats, lineage: self.lineage, scratch: work)
+			end 'act'
+			// Only a spill of a value memory does NOT already hold consumes a slot: a value relieved again
+			// at a second peak reloads out of the slot it is already resident in (see `slotForSpillOf`), and
+			// so does a RELOAD id relieved in its turn. The index is not rebuilt until `refreshAfterSplit`
+			// below, so `isSlotResident` still answers about the state the choice was made in — the store
+			// this iteration may have just inserted is invisible.
+			match choice 'countSlot'
+				spill(v, _) then self.consumeSlotFor(index, victim: v)
+				none to remat then break 'countSlot'
+			end 'countSlot'
+
+			self.commitSplit(module, victim: victim, freshFrom: freshFrom)
+			peak = refreshPeak(module, liveness: funcLiveness, pool: self.pool, scratch: work)
+
+			if VerifyIncrementalSplit 'checkAgainstAFullRebuild'
+				verifyIncremental(module, cfg: self.cfg, func: func, liveness: funcLiveness, peak: peak, scratch: work, pool: self.pool, iterations: iterations)
+			end 'checkAgainstAFullRebuild'
+		end 'relieve'
+
+		// The per-block demands are current (every dirtied block was re-swept); the function's max is the
+		// max over them, taken ONCE here rather than re-folded on every split.
+		funcLiveness.refreshMaxPressure()
+
+		// Post-condition (design Phase 4.6): after splitting, NO program point overflows its pool. The
+		// loop exits precisely on `not peak.found`, which is that guarantee for BOTH the full pool (normal
+		// ops) and every reduced pool (fixed-register points). `liveness.maxPressure` is an INDEPENDENT
+		// cross-check of the full-pool half — it comes from TargetLiveness's backward sweep, a different
+		// computation than `analyzePressure`, and it additionally counts the block-exit boundary the
+		// peak-finder does not visit — so a full-pool overflow the peak-finder somehow missed still fails
+		// here rather than as a colorer panic. (The reduced-pool half has no separate maxPressure analogue;
+		// the loop's `analyzePressure`-based exit is its guarantee.)
+		//
+		// ⚠ IT IS NOT "THE COLORER CANNOT FAIL", AND IT NEVER WAS. Pointwise feasibility does not imply a
+		// GREEDY colouring exists — that is list colouring, and `HallCondition.hallVerdictAt`'s header
+		// carries the counterexample. A value the colorer cannot place on a point this guarantees is a
+		// CONFINEMENT, and `repairAtExhaustion` relieves it.
+		//
+		// PER CLASS, because the files are independent and a mixed figure against a mixed pool is the
+		// comparison that made this guard stop firing at all: with 30 registers nominally available, 15
+		// live ints never trip `15 > 30`, and the colorer panics instead. Each file is checked against
+		// ITS OWN pool.
+		for classOrdinal in 0 upto RegClassCount 'eachClass'
+			let class = regClassAt(classOrdinal)
+			let classPoolSize = classPoolSizeOf(self.pool, class: class, file: self.file)
+			if funcLiveness.maxPressureOf(class) > classPoolSize 'residual'
+				panic("SplitDriver.relievePressure: '{String.from(func.name)}' finished with {class.name} maxPressure {funcLiveness.maxPressureOf(class)} still > the {class.name} pool {classPoolSize} — the splitter's post-condition (every point within its pool, per register file) was violated")
+			end 'residual'
+		end 'eachClass'
 	end 'relievePressure'
 
-	func.stackSize = nextSlot * SpillSlotBytes
+	// The slot a spill of `victim` takes out of the function's supply — none at all when memory already
+	// holds it. Read from the PRE-rebuild index, so it must be called before `commitSplit`.
+	function consumeSlotFor(index UseIndex, victim ValueId)
+		if index.isSlotResident(victim) 'memoryAlreadyHoldsIt'
+			return
+		end 'memoryAlreadyHoldsIt'
+		self.nextSlot = self.nextSlot + 1
+	end 'consumeSlotFor'
 
-	// The per-block demands are current (every dirtied block was re-swept); the function's max is the
-	// max over them, taken ONCE here rather than re-folded on every split.
-	liveness.refreshMaxPressure()
-
-	// Post-condition (design Phase 4.6): after splitting, the colorer CANNOT fail because NO
-	// program point overflows its pool. The loop exits precisely on `not analysis.peak.found`,
-	// which is that guarantee for BOTH the full pool (normal ops) and every reduced pool
-	// (fixed-register points). `liveness.maxPressure` is an INDEPENDENT cross-check of the
-	// full-pool half — it comes from TargetLiveness's backward sweep, a different computation than
-	// `analyzePressure`, and it additionally counts the block-exit boundary the peak-finder does not
-	// visit — so a full-pool overflow the peak-finder somehow missed still fails here rather than as a
-	// colorer panic. (The reduced-pool half has no separate maxPressure analogue; the loop's
-	// `analyzePressure`-based exit is its guarantee.)
+	// ONE split's mutation, committed: the id space the mutators grew, and the incremental repair of
+	// every derived structure. Both callers make the same mutation and owe the same repair, so it is
+	// stated once — written twice, a second caller would be one `growValueSpace` or one
+	// `refreshAfterSplit` short and the failure would be a wrong colour at a call, not a crash.
 	//
-	// PER CLASS, because the files are independent and a mixed figure against a mixed pool is the
-	// comparison that made this guard stop firing at all: with 30 registers nominally available, 15
-	// live ints never trip `15 > 30`, and the colorer panics instead. Each file is checked against
-	// ITS OWN pool.
-	for classOrdinal in 0 upto RegClassCount 'eachClass'
-		let class = regClassAt(classOrdinal)
-		let classPoolSize = classPoolSizeOf(pool, class: class, file: file)
-		if liveness.maxPressureOf(class) > classPoolSize 'residual'
-			panic("splitLiveRanges: '{String.from(func.name)}' finished with {class.name} maxPressure {liveness.maxPressureOf(class)} still > the {class.name} pool {classPoolSize} — the splitter's post-condition (every point within its pool, per register file) was violated")
-		end 'residual'
-	end 'eachClass'
+	// The mutators minted fresh value ids beginning at `freshFrom` and left `self.nextValueId` past the
+	// last; every such id is DEFINED by an op they inserted, so it is exactly what a rescan of the
+	// function would report as the new value count. Publishing it on the (reused) CFG is what re-sizes
+	// every value-indexed column.
+	function commitSplit(module TargetModule, victim ValueId, freshFrom ValueId)
+		self.cfg.valueCount = self.nextValueId
+		let split = SplitValues.create(victim, freshFrom: freshFrom, freshTo: self.nextValueId)
+		refreshAfterSplit(module, cfg: self.cfg, liveness: self.liveness, scratch: self.scratch, split: split, pool: self.pool, paramCross: self.paramCross)
+	end 'commitSplit'
 
-	return liveness
-end 'splitLiveRanges'
+	// ⭐⭐ **RELIEVE ONE VALUE THE COLORER COULD NOT PLACE, BY SPLITTING IT ACROSS A CLOBBER IN ITS OWN
+	// LIVE RANGE.**
+	//
+	// The point is NOT over-pool — `relievePressure` has already driven Φ to 0 and Hall's exact verdict
+	// there is FEASIBLE (`reportExhaustion` runs it). What failed is the COLOURING ORDER: an earlier def
+	// took a register out of `v`'s admissible set while the caller-saved half was momentarily full, and a
+	// colour once given is held for the value's whole range. Greedy is not exact for this constraint
+	// family and no static order can be (list colouring of a chordal graph is NP-hard — see
+	// `HallCondition.hallVerdictAt`).
+	//
+	// So the cure is not a re-ordering and not a recolour: SPLIT THE STUCK VALUE. Its confinement comes
+	// from the clobbers it is live ACROSS, so cutting its range at one of them removes that clobber — and
+	// every clobber after it — from its forbidden mask, which is what puts a free register back in reach.
+	// The bracket that emits is character-for-character the ABI-FORCED store/reload
+	// `specs-shv2/register-pressure.md` already documents as correct, cheap, and permitted at any loop
+	// depth: `SpillPlacement.forced`.
+	//
+	// TERMINATION. Φ = Σ_v (clobber ops `v` is live across) — a non-negative integer — STRICTLY
+	// DECREASES at every repair. The victim's range now ends before the cut, so it crosses strictly fewer
+	// clobbers; the reloads that replace it are born AFTER the cut, so none of them crosses it; the
+	// store and load ops a split inserts clobber nothing themselves; and a split never raises peak
+	// pressure, so `relievePressure`'s own Φ = 0 survives (asserted below). An op that READS `v` is
+	// therefore excluded as a cut — the reload would take over that use and be live across the clobber in
+	// `v`'s place, and Φ would not move.
+	//
+	// Returns false when `v` is live across NO clobber at all: its confinement is then entirely
+	// non-swept (`ParamCrossForbid` / `establishedAtDef`) or comes from an op that names it as an
+	// OPERAND, and there is nothing to cut. That is not a decision this can take alone — see
+	// `repairStuckValues`, which panics only when a whole ROUND can repair nothing.
+	export function repairAtExhaustion(module TargetModule, v ValueId, free RegMask, stats RegAllocStats) returns bool
+		if not self.indexBuilt 'noIncrementalMachineryYet'
+			// A function the relief loop never split has no positional index and no tournament, and the
+			// repair needs both. The peak this seeding sweep finds must be EMPTY: `relievePressure` has
+			// returned, so Φ is 0, and this is that post-condition restated from an independent walk.
+			let residual = self.buildSplitIndex(module)
+			if residual.found 'overPoolPointSurvivedRelief'
+				panic("SplitDriver.repairAtExhaustion: the relief loop returned but a re-analysis finds an over-pool point (pressure {residual.pressure} against witness {residual.witness}) — a stuck value is a CONFINEMENT, which presupposes that every point already fits its pool, so the two analyses disagree about the same IR")
+			end 'overPoolPointSurvivedRelief'
+		end 'noIncrementalMachineryYet'
+
+		var work = self.scratch
+		var funcLiveness = self.liveness
+		let index = funcLiveness.useIndex
+		let classPool = poolOfClass(self.pool, class: funcLiveness.classOf(v), file: funcLiveness.registerFile)
+
+		// `v`'s live REGION, as blocks. `walkValue` in the ADDING direction over a value that is ALREADY
+		// marked is a no-op on the live sets (`LiveSets.addLiveIn`/`addLiveOut` are idempotent) and fills
+		// `touched` with exactly the blocks the value occupies — so the search below is bounded by the
+		// live range rather than by the function, and it reuses THE liveness walk instead of a second
+		// copy of it. It must run BEFORE `unmarkVictim`, whose walk clears the very live sets the span
+		// endpoints are read from.
+		work.dirty.clear()
+		collectVictimRegion(self.cfg.topo, index: index, liveness: funcLiveness, scratch: work, victim: v, adding: true)
+
+		let cut = findConfiningClobber(module, liveness: funcLiveness, scratch: work, v: v, free: free, classPool: classPool)
+		if not cut.found 'nothingToSplitAround'
+			return false
+		end 'nothingToSplitAround'
+
+		// `hasStoreAnchor` never refuses a value the function DEFINES — its header states it, and the
+		// colorer was placing `v`'s def when it got stuck — so this is an assertion, not a branch.
+		if not hasStoreAnchor(index, valueId: v) 'noStoreAnchor'
+			panic("SplitDriver.repairAtExhaustion: value {v} has no store anchor, yet the colorer was allocating its DEF when it ran out of registers. Every value a function defines has an op def or a phi block entry (`buildUseIndex`), so `UseIndex.defKindOf` and the colorer disagree about whether this value exists.")
+		end 'noStoreAnchor'
+
+		var anchor = work.anchor
+		anchor.takeForcedCutAt(cut.blockLocal, pos: cut.pos)
+		// The same scope question `chooseVictim` asks of its own tier-4 victim: the eviction-point split
+		// when it leaves `v` dead across the cut, the full split when a before-cut use is still reachable
+		// from it around a back edge (see `SplitScope`).
+		work.reach.retargetTo(anchor.blockLocal)
+		let scope = splitScopeAt(index, topo: self.cfg.topo, valueId: v, anchor: anchor, reach: work.reach)
+		let slot = slotForSpillOf(index, valueId: v, nextSlot: self.nextSlot)
+
+		work.edits.clear()
+		let freshFrom = self.nextValueId
+		self.consumeSlotFor(index, victim: v)
+		unmarkVictim(self.cfg.topo, index: index, liveness: funcLiveness, scratch: work, victim: v)
+		self.nextValueId = spillOneValue(module, index: index, cfg: self.cfg, liveness: funcLiveness, valueId: v, anchor: anchor, scope: scope, slot: slot, pool: self.pool, nextValueId: self.nextValueId, stats: stats, lineage: self.lineage, scratch: work)
+		self.commitSplit(module, victim: v, freshFrom: freshFrom)
+
+		// A REPAIR MUST NOT CREATE AN OVER-POOL POINT, and by Φ it cannot: a store/reload bracket only
+		// renames an already-live value over a region it was live in anyway. Asserting it is what keeps
+		// this cure from quietly handing `relievePressure`'s post-condition back broken — the colorer
+		// would then fail for the OTHER reason, and the panic would name the wrong owner.
+		let after = refreshPeak(module, liveness: funcLiveness, pool: self.pool, scratch: work)
+		if after.found 'repairRaisedPressure'
+			panic("SplitDriver.repairAtExhaustion: splitting value {v} at block {anchor.blockLocal} left an over-pool point (pressure {after.pressure} against witness {after.witness}, clobberOnly {after.clobberOnly}) — a split cannot raise any op's pressure, so either the store/reload placement or the incremental pressure repair is wrong")
+		end 'repairRaisedPressure'
+
+		stats.stuckValuesRepaired = stats.stuckValuesRepaired + 1
+		return true
+	end 'repairAtExhaustion'
+
+	// The function's per-file maximum, re-folded from the per-block demands a round of repairs moved.
+	//
+	// ⚠ ONCE PER ROUND, NOT ONCE PER REPAIR. It is a fold over EVERY block, so calling it inside
+	// `repairAtExhaustion` would be Θ(repairs × blocks) — the same shape of quadratic the batched repair
+	// loop exists to avoid, bought back one line down. Nothing between the repairs reads it: a split can
+	// only LOWER a demand, so the figure is a valid upper bound throughout the round.
+	export function refreshPressureBounds()
+		self.liveness.refreshMaxPressure()
+	end 'refreshPressureBounds'
+
+	// WHY `v` COULD NOT BE REPAIRED, in the terms of the three things that build a `forbidden` mask —
+	// for the panic `repairStuckValues` raises when a whole round can relieve nothing.
+	export function describeUnrepairable(v ValueId, free RegMask) returns String
+		let established = try self.liveness.establishedAtDef.get(v) otherwise panic("SplitDriver.describeUnrepairable: establishedAtDef.get OOB for value {v}")
+		return "value {v} is allowed none of the free registers {free}: its own file's forbid is {self.liveness.forbiddenOf(v)}, of which {self.paramCross.maskFor(v)} comes from a SIBLING PARAMETER's incoming register (`ParamCrossForbid`) and {established} from registers ESTABLISHED at its def (`establishedAtDef`) — neither is a clobber inside a live range, so no split can remove either. Whatever remains was contributed by an op that names {v} as an OPERAND (`forbidOperandsFromImplicit`), which a split cannot remove either."
+	end 'describeUnrepairable'
+
+	// The frame. `func.stackSize` is fixed HERE — after the relief loop AND after every repair — and
+	// that placement is load-bearing.
+	//
+	// ⭐⭐ It used to be the last line of the splitter, which was right while the splitter made the last
+	// split. A repair consumes a slot AFTER that point, so a frame sized there would have fewer slots
+	// than the code writes: the store would land past the end of the frame, over whatever the callee
+	// saved — SILENT STACK CORRUPTION, not a failure. (v1 avoids it by accumulating in `insertSpillCode`
+	// and computing the frame in a pass that runs after register allocation has fully finished.)
+	export function fixFrameSize(func IrFunction)
+		func.stackSize = self.nextSlot * SpillSlotBytes
+	end 'fixFrameSize'
+end 'SplitDriver'
+
+// The op a REPAIR splits `v` across: one `v` is live ACROSS whose CLOBBER takes a register of `v`'s own
+// file away from it. Split there and `v`'s range ends before it, so that clobber — and every clobber
+// after it — leaves `v`'s forbidden mask.
+//
+// TWO TIERS, and the first is what makes the repair PROGRESS rather than merely legal:
+//
+//  1. a clobber covering a register that was FREE at the failing point. Greedy exhausted, so
+//     `classPool ⊆ held ∪ forbidden(v)`, so `free = classPool ∖ held` is a SUBSET of `forbidden(v)` —
+//     and it is non-empty whenever Hall's verdict there was FEASIBLE (`reportExhaustion` asserts both).
+//     Cutting at the FIRST clobber covering one of those registers puts a provably free register back
+//     into `v`'s allowed set, because no earlier clobber covers it.
+//  2. failing that, the first clobber taking ANY register of `v`'s class pool. `free` is read off a
+//     colouring that an earlier repair in the same round may since have invalidated, so it is a
+//     PREFERENCE, not a premise. What termination needs is only that `v` cross strictly fewer clobbers
+//     afterwards, and both tiers give exactly that.
+//
+// An op that READS `v` is skipped: cutting there rewrites that very use to a reload placed immediately
+// before it, so the RELOAD would be live across the clobber in `v`'s place and Φ would not fall. It is
+// the same exclusion `usesAtPeakOp` makes on `chooseVictim`'s candidate pool, for the same reason.
+//
+// ⚠ IT ASKS `opClobberMask` (through the seated leaf), NOT `opStrandsClass`. That predicate answers the
+// STRONGER question "does this op leave the file NO register at all?", which is what a RUN BREAK turns
+// on (`markRunStarts`) and is false of every call in the GPR file — a call leaves five callee-saved
+// registers, and those five are exactly what a confined value is fighting over. Reusing it here would
+// find no cut on the very programs this repair exists for.
+type ConfiningClobber
+	export var found as bool
+	export var blockLocal as CfgIndex
+	export var pos as BlockOpPos
+
+	static function create(found bool, blockLocal CfgIndex, pos BlockOpPos) returns ConfiningClobber
+		return Self{found: found, blockLocal: blockLocal, pos: pos}
+	end 'create'
+end 'ConfiningClobber'
+
+function findConfiningClobber(module TargetModule, liveness LivenessResult, scratch SplitScratch, v ValueId, free RegMask, classPool RegMask) returns ConfiningClobber
+	var dirty = scratch.dirty
+	var pressure = scratch.pressure
+	var buf = scratch.splitOperands
+	var fallback = ConfiningClobber.create(false, blockLocal: 0, pos: 0)
+
+	// ASCENDING block order, so the first hit in each tier is the EARLIEST cut: the clobbers a cut
+	// removes are the ones at and after it, so cutting early removes the most.
+	dirty.sortAscending()
+	for k in 0 upto dirty.count() 'eachBlock'
+		let blockLocal = dirty.at(k)
+		let span = liveAcrossSpanIn(liveness, pressure: pressure, w: v, blockLocal: blockLocal)
+		if not span.found 'liveAcrossNothingHere'
+			continue
+		end 'liveAcrossNothingHere'
+
+		for slot in span.lo upto span.hi + 1 'eachSlot'
+			if not pressure.slotHoldsOp(slot) 'freeSlot'
+				continue
+			end 'freeSlot'
+			let clobber = pressure.clobberAtSlot(slot)
+			if (clobber and classPool) == 0 'takesNothingFromThisFile'
+				continue
+			end 'takesNothingFromThisFile'
+			let opIdx = pressure.opAtSlot(slot)
+			let op = try module.ops.get(opIdx) otherwise panic("findConfiningClobber: op {opIdx} seated at slot {slot} is not in module.ops")
+			if opUsesValue(op, valueId: v, buf: buf) 'readsTheValueItself'
+				continue
+			end 'readsTheValueItself'
+
+			let hit = ConfiningClobber.create(true, blockLocal: blockLocal, pos: pressure.positionOfSlot(blockLocal, slot: slot))
+			if (clobber and free) != 0 'coversAFreeRegister'
+				return hit
+			end 'coversAFreeRegister'
+			if not fallback.found 'firstConfiningOpAnywhere'
+				fallback = hit
+			end 'firstConfiningOpAnywhere'
+		end 'eachSlot'
+	end 'eachBlock'
+	return fallback
+end 'findConfiningClobber'
 
 // The value the relief will rewrite. A `none` choice does not return: at a FULL-pool peak it is the
 // E5001 the design exists to raise, and at a CONFINED one a splitter bug (`noVictimAtPeak`).
@@ -2692,12 +3049,26 @@ let VerifyIncrementalSplit = false
 // The victim's live range is removed rather than diffed: `LivenessMarkScratch.walkValue` re-derives it
 // by the same per-value walk that laid it down, so it removes exactly the marks that are there.
 function unmarkVictim(topo FuncTopology, index UseIndex, liveness LivenessResult, scratch SplitScratch, victim ValueId)
-	var dirty = scratch.dirty
-
 	// The victim's own contribution to the per-op pressure numbers, WITHDRAWN while the world it was
 	// measured in still stands: it is read off the use thread the mutation is about to rewrite and the
 	// live sets the walk below is about to edit, so it cannot be taken afterwards.
 	applyValueToPressure(liveness, pressure: scratch.pressure, v: victim, adding: false)
+	collectVictimRegion(topo, index: index, liveness: liveness, scratch: scratch, victim: victim, adding: false)
+end 'unmarkVictim'
+
+// Every block `victim` touches, into `scratch.dirty`: its DEF block, every block holding a USE of it,
+// and its whole LIVE RANGE. `adding` is the direction the range walk marks in.
+//
+// TWO CALLERS, and the second is why this is a function rather than three lines inside `unmarkVictim`.
+// `unmarkVictim` calls it with `adding: false`, which removes the marks the marking walk laid down —
+// exactly, because it is the same walk. `SplitDriver.repairAtExhaustion` calls it with `adding: true`
+// on a value that is STILL LIVE, where `LiveSets.addLiveIn`/`addLiveOut`'s idempotence makes the marking
+// a no-op and `touched` is the whole point: it is the region the repair searches for a clobber, and it
+// must be collected while the live sets still hold the value the span endpoints are read from. Spelled
+// twice, one of them would miss the def block, and the repair would search a region the split then
+// dirtied more of.
+function collectVictimRegion(topo FuncTopology, index UseIndex, liveness LivenessResult, scratch SplitScratch, victim ValueId, adding bool)
+	var dirty = scratch.dirty
 
 	// Every block holding a USE of it, plus its DEF block: those hold the ops that name it, so the index
 	// rebuild must re-read them — and they are where its `touchesLoop` / `edgePassed` / `spillStored`
@@ -2713,13 +3084,13 @@ function unmarkVictim(topo FuncTopology, index UseIndex, liveness LivenessResult
 
 	match index.defKindOf(victim) 'kind'
 		opDef to phiDef then dirty.add(index.defBlockOf(victim))
-		none then panic("unmarkVictim: value {victim} has no def site — every victim tier requires one (`hasStoreAnchor`, `isRematerializable`, or a `storeFitsPool` that only a defined value can pass), so `chooseVictim` cannot have offered it")
+		none then panic("collectVictimRegion: value {victim} has no def site — every victim tier requires one (`hasStoreAnchor`, `isRematerializable`, or a `storeFitsPool` that only a defined value can pass), so `chooseVictim` cannot have offered it, and neither can the colorer, which gets stuck at a DEF")
 	end 'kind'
 
 	// Its whole live range: the blocks whose live sets must lose it, AND the blocks its `forbidden` mask
 	// was accumulated over — which the dirty-region sweep rebuilds it from.
-	liveness.livenessMarkSteps = liveness.livenessMarkSteps + scratch.marks.walkValue(topo, index: index, v: victim, live: liveness.live, adding: false, touched: dirty)
-end 'unmarkVictim'
+	liveness.livenessMarkSteps = liveness.livenessMarkSteps + scratch.marks.walkValue(topo, index: index, v: victim, live: liveness.live, adding: adding, touched: dirty)
+end 'collectVictimRegion'
 
 // Bring every derived structure back into agreement with the IR the split just changed — WITHOUT
 // re-reading the function.
@@ -3736,7 +4107,10 @@ function chooseVictim(module TargetModule, index UseIndex, liveness LivenessResu
 	// store anchor is measured against is THAT file's — 14 for an int, 16 for a float, never the 30
 	// the two files hold between them.
 	let poolSize = classPoolSizeOf(pool, class: peak.witnessClass, file: liveness.registerFile)
-	let placement = placementOf(peak)
+	// The cut this peak names, re-pointed on the ONE anchor the function owns. `relievePressure` reads
+	// it back for the mutation, which is the same cut and must not be a second derivation of it.
+	var anchor = scratch.anchor
+	anchor.takePeak(peak)
 	var usedAtPeak = usesAtPeakOp(module, liveness: liveness, peak: peak, scratch: scratch)
 	var candidates = scratch.candidates
 	bitsetCollectRow(peak.liveBefore, base: 0, wordsPerRow: liveness.wordsPerRow, out: candidates)
@@ -3780,13 +4154,13 @@ function chooseVictim(module TargetModule, index UseIndex, liveness LivenessResu
 		end 'notConfinedByThisPeak'
 
 		let nu = nextUseAfterPeak(index, valueId: v, peakSeq: peak.peakSeq)
-		if isRematVictim(module, index: index, topo: topo, valueId: v, peak: peak, reach: reach) 'const'
+		if isRematVictim(module, index: index, topo: topo, valueId: v, anchor: anchor, reach: reach) 'const'
 			bestRemat.offer(v, nextUse: nu)
-		end 'const' else if isSpillVictim(index, liveness: liveness, topo: topo, valueId: v, peak: peak, placement: placement, pressure: scratch.pressure, poolSize: poolSize, reach: reach) 'spillable'
+		end 'const' else if isSpillVictim(index, liveness: liveness, topo: topo, valueId: v, anchor: anchor, pressure: scratch.pressure, poolSize: poolSize, reach: reach) 'spillable'
 			bestSpill.offer(v, nextUse: nu)
-		end 'spillable' else if isFullRematVictim(module, index: index, valueId: v, placement: placement) 'fullConst'
+		end 'spillable' else if isFullRematVictim(module, index: index, valueId: v, placement: anchor.placement) 'fullConst'
 			bestFullRemat.offer(v, nextUse: nu)
-		end 'fullConst' else if isForcedBracketVictim(index, liveness: liveness, valueId: v, placement: placement, pressure: scratch.pressure, poolSize: poolSize) 'bracketable'
+		end 'fullConst' else if isForcedBracketVictim(index, liveness: liveness, valueId: v, placement: anchor.placement, pressure: scratch.pressure, poolSize: poolSize) 'bracketable'
 			bestBracket.offer(v, nextUse: nu)
 		end 'bracketable'
 	end 'eachValue'
@@ -3804,7 +4178,7 @@ function chooseVictim(module TargetModule, index UseIndex, liveness LivenessResu
 		// The scope is resolved for the WINNER alone: `killsValueAtPeak` is the one eligibility question
 		// tier 4 does not need to ask to know the value is relievable (it is relievable either way), so
 		// asking it per candidate would be a walk bought for nothing.
-		return SpillChoice.spill(bestBracket.valueId, scope: splitScopeAt(index, topo: topo, valueId: bestBracket.valueId, peak: peak, reach: reach))
+		return SpillChoice.spill(bestBracket.valueId, scope: splitScopeAt(index, topo: topo, valueId: bestBracket.valueId, anchor: anchor, reach: reach))
 	end 'haveBracket'
 	return SpillChoice.none
 end 'chooseVictim'
@@ -3946,11 +4320,11 @@ end 'usesAtPeakOp'
 // Neither remat tier needs a `hasSpillStore`-style already-done guard, because a rematerializable
 // value is NEVER spilled: at every peak it either takes a remat tier or is refused, and the spill
 // tiers sit behind them in the same `else if` chain. So it never acquires a store to guard against.
-function isRematVictim(module TargetModule, index UseIndex, topo FuncTopology, valueId ValueId, peak PressurePeak, reach ReachCache) returns bool
+function isRematVictim(module TargetModule, index UseIndex, topo FuncTopology, valueId ValueId, anchor SplitAnchor, reach ReachCache) returns bool
 	if not isRematerializable(module, index: index, valueId: valueId) 'notConst'
 		return false
 	end 'notConst'
-	return killsValueAtPeak(index, topo: topo, valueId: valueId, peak: peak, reach: reach)
+	return killsValueAtPeak(index, topo: topo, valueId: valueId, anchor: anchor, reach: reach)
 end 'isRematVictim'
 
 // Is `valueId` a TIER-2 victim — the eviction-point split, the cheapest spill there is? Four
@@ -3976,17 +4350,17 @@ end 'isRematVictim'
 //                          the splitter emits stores that relieve nothing (see `killsValueAtPeak`).
 //                          A value that fails HERE is not un-relievable — at a confined peak the FULL
 //                          split still kills it (tier 4) — it just cannot be relieved this cheaply.
-function isSpillVictim(index UseIndex, liveness LivenessResult, topo FuncTopology, valueId ValueId, peak PressurePeak, placement SpillPlacement, pressure PressureIndex, poolSize RegCount, reach ReachCache) returns bool
+function isSpillVictim(index UseIndex, liveness LivenessResult, topo FuncTopology, valueId ValueId, anchor SplitAnchor, pressure PressureIndex, poolSize RegCount, reach ReachCache) returns bool
 	if index.hasSpillStore(valueId) 'alreadyStored'
 		return false
 	end 'alreadyStored'
-	if not isSpillable(index, valueId: valueId, placement: placement) 'wrongShape'
+	if not isSpillable(index, valueId: valueId, placement: anchor.placement) 'wrongShape'
 		return false
 	end 'wrongShape'
 	if not storeFitsPool(liveness, pressure: pressure, valueId: valueId, poolSize: poolSize) 'noStoreAnchor'
 		return false
 	end 'noStoreAnchor'
-	return killsValueAtPeak(index, topo: topo, valueId: valueId, peak: peak, reach: reach)
+	return killsValueAtPeak(index, topo: topo, valueId: valueId, anchor: anchor, reach: reach)
 end 'isSpillVictim'
 
 // Is `valueId` a TIER-3 victim — a constant the eviction-point split could not kill, but re-emitting
@@ -4051,8 +4425,8 @@ end 'isForcedBracketVictim'
 // The narrowest split scope that leaves `valueId` DEAD across the peak: the eviction-point split when
 // it suffices, the full split when a before-peak use is still reachable from the peak (see
 // `killsValueAtPeak` and `SplitScope`).
-function splitScopeAt(index UseIndex, topo FuncTopology, valueId ValueId, peak PressurePeak, reach ReachCache) returns SplitScope
-	return SplitScope.afterPeakUses if killsValueAtPeak(index, topo: topo, valueId: valueId, peak: peak, reach: reach) else SplitScope.everyUse
+function splitScopeAt(index UseIndex, topo FuncTopology, valueId ValueId, anchor SplitAnchor, reach ReachCache) returns SplitScope
+	return SplitScope.afterPeakUses if killsValueAtPeak(index, topo: topo, valueId: valueId, anchor: anchor, reach: reach) else SplitScope.everyUse
 end 'splitScopeAt'
 
 function isForcedPlacement(placement SpillPlacement) returns bool
@@ -4233,7 +4607,7 @@ end 'opIsConstMaterialization'
 //   `n`   (def outside the loop, used in the header) → header reachable without redef → REFUSED.
 //   `i`   (a header PHI, used in the header)         → header is its own def block    → allowed.
 //   `sum` (a header PHI, used after the call)        → no before-peak use at all      → allowed.
-function killsValueAtPeak(index UseIndex, topo FuncTopology, valueId ValueId, peak PressurePeak, reach ReachCache) returns bool
+function killsValueAtPeak(index UseIndex, topo FuncTopology, valueId ValueId, anchor SplitAnchor, reach ReachCache) returns bool
 	let useSites = index.useCount(valueId)
 	if useSites == 0 'neverUsed'
 		// No use at all, so none before the peak: nothing keeps it live across.
@@ -4241,7 +4615,7 @@ function killsValueAtPeak(index UseIndex, topo FuncTopology, valueId ValueId, pe
 	end 'neverUsed'
 
 	// The thread ascends by sequence, so the FIRST record decides whether any use precedes the peak.
-	if index.useSeqAt(index.firstUseOf(valueId)) >= peak.peakSeq 'allAfter'
+	if index.useSeqAt(index.firstUseOf(valueId)) >= anchor.seq 'allAfter'
 		// Every use follows the peak, so every one becomes a reload. The value is dead across it.
 		return true
 	end 'allAfter'
@@ -4249,7 +4623,7 @@ function killsValueAtPeak(index UseIndex, topo FuncTopology, valueId ValueId, pe
 	let defBlock = index.defBlockOf(valueId)
 	var record = index.firstUseOf(valueId)
 	for _ in 0 upto useSites 'check'
-		if index.useSeqAt(record) < peak.peakSeq and reach.reachableFromPeak(topo, peakBlock: peak.blockLocal, defBlock: defBlock, block: index.useBlockAt(record)) 'notKilled'
+		if index.useSeqAt(record) < anchor.seq and reach.reachableFromPeak(topo, peakBlock: anchor.blockLocal, defBlock: defBlock, block: index.useBlockAt(record)) 'notKilled'
 			return false
 		end 'notKilled'
 		record = index.nextUseOf(record)
@@ -4444,9 +4818,9 @@ end 'markBlocksReachableFromPeak'
 // Nothing below MOVES an op: the insertions are logged and spliced in afterwards (see `SplitEdits`), so
 // every position this reads — including each use record's own, which is half of its sequence number —
 // is stated in the block's pre-split layout throughout.
-function spillOneValue(module TargetModule, index UseIndex, cfg FuncCfg, liveness LivenessResult, valueId ValueId, peak PressurePeak, scope SplitScope, slot SpillSlot, pool RegMask, nextValueId ValueId, stats RegAllocStats, lineage SplitLineage, scratch SplitScratch) returns ValueId
-	let peakSeq = peak.peakSeq
-	let placement = placementOf(peak)
+function spillOneValue(module TargetModule, index UseIndex, cfg FuncCfg, liveness LivenessResult, valueId ValueId, anchor SplitAnchor, scope SplitScope, slot SpillSlot, pool RegMask, nextValueId ValueId, stats RegAllocStats, lineage SplitLineage, scratch SplitScratch) returns ValueId
+	let peakSeq = anchor.seq
+	let placement = anchor.placement
 	let useSites = index.useCount(valueId)
 	let keepsOriginal = keepsOriginalBeforePeak(scope)
 	var edits = scratch.edits

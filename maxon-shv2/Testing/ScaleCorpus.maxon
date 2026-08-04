@@ -258,6 +258,33 @@ let CallChainBase = 8 as KnobSize
 // outlived the bug it named. If this knob bends again, MEASURE which phase, do not read this comment.
 let PressuredLoopsBase = 2 as KnobSize
 
+// ⭐⭐ ONE function, N straight-line groups, each one the shape that makes the **COLORER** — not the
+// splitter — run out of registers, so that `SplitDriver.repairAtExhaustion` runs on this ladder at all.
+//
+// ⚠⚠ **IT EXISTS BECAUSE THE LADDER READ Δ0 FOR THE WHOLE OF THE A5g CURE, AND THAT Δ0 WAS THE
+// INSTRUMENT'S BLIND SPOT RATHER THAN THE COST.** No other knob reaches the colorer's exhaustion path at
+// any rung, so every column — allocations, bytes AND cpu — would have reported "nothing moved" about a
+// mechanism that never ran. That is the failure this file's `floatSpill` knob was caught in at four
+// (a count too small to force a single spill), stated once more in a new file rather than re-learned.
+//
+// THE SHAPE, and every part of it is load-bearing — `specs-shv2/register-pressure.md`'s
+// `confined-reuse-defs-*` cases are the same program written by hand:
+//
+//  • `confinedUnconstrainedInts()` values that cross NO call, DERIVED to be the whole GPR pool. That
+//    count is a THRESHOLD, not a slope, and it is the decisive one: MEASURED, x64 reproduces at 14 and
+//    not at 12, arm64 at 26 and not at 24 — each being that target's own pool size. They fill the
+//    machine, which is what forces the confined values below into the callee-saved half.
+//  • `confinedCrossCallDefs()` products of them, each live ACROSS the second call and so confined to
+//    that same callee-saved half — which the values above have already taken. Hall's exact verdict at
+//    that point is FEASIBLE; the greedy simply cannot get there, and the repair splits one.
+//  • the SUM, which is what keeps every unconstrained value live right up to the call.
+//
+// Groups use FRESH NAMES, so their live ranges do not overlap and peak pressure stays at ONE group's
+// worth however many groups there are — `pressuredLoops`' rule. So repairs are Θ(groups) against a
+// function of size Θ(groups), which is exactly the reading this ladder is for: ×2 per doubling is the
+// BATCHED repair loop, ×4 would be a per-repair re-colour.
+let ConfinedDefsBase = 2 as KnobSize
+
 // ONE function, ONE chain of loops NESTED to depth N — distinct from `pressuredLoops`, which grows
 // loop COUNT at depth 1. Depth is what the loop-phi token pre-scan climbs: `parseWhileStatement`
 // re-derives each loop's extent from the tokens (`blockStatementEndIndex`) and reads its carried set off
@@ -366,6 +393,24 @@ function floatsLivePerSpillLoop() returns KnobSize
 	let calleeSavedXmms = regMaskPopcount(calleeSavedMask() and classRegisterMask(RegClass.xmm, file: x64RegisterFile()))
 	return (calleeSavedXmms as KnobSize) + FloatSpillHeadroom
 end 'floatsLivePerSpillLoop'
+
+// THE `confinedDefs` KNOB'S TWO WIDTHS, both DERIVED from the allocator's own masks for the reason
+// `floatsLivePerSpillLoop` records paying for: a number that is right today and written down here goes
+// stale silently, and a knob that has gone blind that way once will go blind that way again.
+//
+// The unconstrained count is the WHOLE GPR pool — the threshold at which the machine is full at the
+// moment the confined values are born.
+function confinedUnconstrainedInts() returns KnobSize
+	return classPoolSizeOf(x64AllocatablePool(), class: RegClass.gpr, file: x64RegisterFile()) as KnobSize
+end 'confinedUnconstrainedInts'
+
+// The call-crossing count is the width of the CALLEE-SAVED GPR half — the confined set is exactly as
+// wide as the only home it is allowed, which is the competition the repair exists to settle. It is
+// necessarily smaller than `confinedUnconstrainedInts()` (the pool contains its own callee-saved half),
+// which the generator relies on: each product reads one of the unconstrained values.
+function confinedCrossCallDefs() returns KnobSize
+	return regMaskPopcount(calleeSavedMask() and classRegisterMask(RegClass.gpr, file: x64RegisterFile())) as KnobSize
+end 'confinedCrossCallDefs'
 
 // ONE file, N top-level `let` constants — the constant ARENA, the initializer DFS and its memo.
 //
@@ -1309,6 +1354,9 @@ function generateRung(root FilePath, rung RungIndex) returns ScaleRung throws Sc
 	// whose name is known only to the loop that mints the links (see `writeCallChain`).
 	sourceBytes = sourceBytes + try writeCallChain(dir, length: knobAt(CallChainBase, rung: rung), written: written, drivers: drivers)
 	sourceBytes = sourceBytes + try writeRungFile(dir, name: "f_loops", source: pressuredLoopsSource(knobAt(PressuredLoopsBase, rung: rung)), written: written, drivers: drivers, driver: RungDriver.threads(PressuredDriver))
+	// Beside `f_loops` because it is the other half of the same subject — values live across a call —
+	// asked of the COLORER rather than of the splitter. See `ConfinedDefsBase`.
+	sourceBytes = sourceBytes + try writeRungFile(dir, name: "f_confined", source: confinedDefsSource(knobAt(ConfinedDefsBase, rung: rung)), written: written, drivers: drivers, driver: RungDriver.threads(ConfinedDefsDriver))
 	sourceBytes = sourceBytes + try writeRungFile(dir, name: "g_nested", source: nestedLoopsSource(knobAt(LoopNestBase, rung: rung)), written: written, drivers: drivers, driver: RungDriver.threads(NestedDriver))
 	// The two COVERAGE files sit together under `h_`, because that is what they both are: fixed-size
 	// shapes whose PRESENCE matters and whose COUNT does not. They dilute `assertCorpusCompiled`'s
@@ -1867,6 +1915,73 @@ function pressuredLoopsSource(loopCount KnobSize) returns String
 	out.append(driverWitnessTail(PressuredDriver, valueExpr: "total", expected: total))
 	return out.build()
 end 'pressuredLoopsSource'
+
+let ConfinedDefsDriver = "scaleConfinedDefs"
+
+// The `confinedDefs` knob — see `ConfinedDefsBase` for the shape and for why it exists.
+//
+// ⚠ WHY IT IS NOT `pressuredLoopsSource` WITH ANOTHER PARAMETER, though both end in "values live across
+// a call": they provoke DIFFERENT PASSES, and the difference is the whole reason for a second knob.
+// `pressuredLoops` makes the SPLITTER work — its accumulators genuinely outnumber the callee-saved half
+// at a point, so the peak-finder sees an over-pool point and Hall's verdict there is OVERFLOW. Here the
+// verdict at every point is FEASIBLE and the splitter owes nothing; what fails is the greedy's ORDER,
+// and the only pass that runs is the colorer's repair. Merging them would make one knob whose tuning
+// decides which of two passes it measures, and the two must move independently.
+//
+// It is STRAIGHT-LINE, deliberately: a loop would put the confined values on a back edge and turn them
+// into phis, which is `pressuredLoops`' shape again. The confinement here is created by ordinary
+// sequential code, which is the point of the defect it was written for.
+function confinedDefsSource(groupCount KnobSize) returns String
+	var out = StringBuilder.create()
+	// Read ONCE, so the header line and the three emit loops cannot disagree about how many values this
+	// knob is generating — the counts are properties of the target, not of the group they are in.
+	let unconstrained = confinedUnconstrainedInts()
+	let crossing = confinedCrossCallDefs()
+	out.append("// Generated by ScaleCorpus: the confined-defs knob — {groupCount} group(s), each holding {unconstrained} int(s) that cross no call and {crossing} that do.\n")
+	out.append(driverHeader(ConfinedDefsDriver))
+	out.append("\tvar wit = 0\n")
+	out.append("\tvar total = a\n")
+	var total = corpusSeedValue()
+
+	for groupIndex in 0 upto groupCount 'eachGroup'
+		// Fresh names per group, so the groups' live ranges do not overlap and peak pressure stays at one
+		// group's worth however many groups there are — `pressuredLoops`' rule, in straight-line code.
+		out.append("\tlet n{groupIndex} = {OpaqueCalleeName}(a)\n")
+		let base = opaqueCalleeValue(corpusSeedValue())
+
+		// The unconstrained values, and the SUM expression that keeps every one of them live to the call
+		// below. The expression is built as the values are declared, so the two cannot fall out of step.
+		var sumExpr = StringBuilder.create()
+		var sum = 0 as TrackedValue
+		for v in 0 upto unconstrained 'declValues'
+			out.append("\tlet u{groupIndex}_{v} = n{groupIndex} + {v + 1}\n")
+			if v > 0 'notTheFirstTerm'
+				sumExpr.append(" + ")
+			end 'notTheFirstTerm'
+			sumExpr.append("u{groupIndex}_{v}")
+			sum = sum + base + v + 1
+		end 'declValues'
+
+		// The confined half: a product of each of the first `crossing` values, live ACROSS the call below
+		// because `total` reads it after. Each is a two-address `*` whose input is still live, which is
+		// what makes it hold a register of its own at an op it is in no live set of.
+		var productExpr = StringBuilder.create()
+		var products = 0 as TrackedValue
+		for v in 0 upto crossing 'declProducts'
+			out.append("\tlet m{groupIndex}_{v} = u{groupIndex}_{v} * 2\n")
+			productExpr.append(" + m{groupIndex}_{v}")
+			products = products + (base + v + 1) * 2
+		end 'declProducts'
+
+		out.append("\tlet s{groupIndex} = {sumExpr.build()}\n")
+		out.append("\tlet c{groupIndex} = {OpaqueCalleeName}(s{groupIndex})\n")
+		out.append("\ttotal = total{productExpr.build()} + c{groupIndex}\n")
+		total = total + products + opaqueCalleeValue(sum)
+	end 'eachGroup'
+
+	out.append(driverWitnessTail(ConfinedDefsDriver, valueExpr: "total", expected: total))
+	return out.build()
+end 'confinedDefsSource'
 
 // The condition every nested loop tests. Large enough that the loop is not trivially one iteration.
 // The bound is irrelevant to what is MEASURED — only the loop's SHAPE is compiled — but since BATCH10
@@ -4441,6 +4556,11 @@ export function printCorpusManifest()
 	print("      emits. ⚠ THIS ENTRY USED TO CLAIM THE OPPOSITE — that writes were 'P1.1a wave 2 and NOT\n")
 	print("      IMPLEMENTED' and a struct across a call 'P1.4, deferred on the borrow-vs-consume ruling'.\n")
 	print("      Both had shipped, with live spec tests, for ten rungs\n")
+	print("    the COLORER's exhaustion repair — straight-line groups holding the whole GPR pool live and\n")
+	print("      then a callee-saved-confined set on top, so `chooseRegister` runs out of registers at a\n")
+	print("      point whose Hall verdict is FEASIBLE and `SplitDriver.repairAtExhaustion` splits it. It\n")
+	print("      is DISTINCT from the pressured-loops knob, which makes the SPLITTER work instead; before\n")
+	print("      it, that path ran ZERO times at every rung and every column read a confident Delta-0\n")
 	print("    if, if/else, while, and NESTED while (to a doubling depth); `break` out of a loop\n")
 	print("    functions (<=6 params), cross-file merge, chained calls holding values live across them\n")
 	print("    short-circuit `and` and `or` (control flow, not operators), `xor` and `not` over bools,\n")

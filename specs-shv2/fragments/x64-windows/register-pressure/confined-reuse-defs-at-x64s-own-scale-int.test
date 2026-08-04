@@ -1,0 +1,142 @@
+// Test: confined-reuse-defs-at-x64s-own-scale-int
+typealias Integer = int(i64.min to i64.max)
+
+function sink(x Integer) returns Integer
+	return x + 1
+end 'sink'
+
+function main() returns ExitCode
+	let n = sink(3)
+	let a0 = n + 1
+	let a1 = n + 2
+	let a2 = n + 3
+	let a3 = n + 4
+	let a4 = n + 5
+	let a5 = n + 6
+	let a6 = n + 7
+	let a7 = n + 8
+	let a8 = n + 9
+	let a9 = n + 10
+	let a10 = n + 11
+	let a11 = n + 12
+	let a12 = n + 13
+	let a13 = n + 14
+	let b0 = a0 * 2
+	let b1 = a1 * 2
+	let b2 = a2 * 2
+	let b3 = a3 * 2
+	let s = a0 + a1 + a2 + a3 + a4 + a5 + a6 + a7 + a8 + a9 + a10 + a11 + a12 + a13
+	let c = sink(s)
+	let total = b0 + b1 + b2 + b3 + c
+	return 0 if total == 214 else 99
+end 'main'
+---
+ExitCode: 0
+---
+func @sink {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.leaRegRegImm32 r8, rcx, 1
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 72
+    x64.movRegImm32 rcx, 3
+    x64.callDirect sink
+    x64.leaRegRegImm32 rax, r8, 1
+    x64.leaRegRegImm32 rcx, r8, 2
+    x64.leaRegRegImm32 rdx, r8, 3
+    x64.leaRegRegImm32 rsi, r8, 4
+    x64.leaRegRegImm32 rdi, r8, 5
+    x64.leaRegRegImm32 r9, r8, 6
+    x64.leaRegRegImm32 r10, r8, 7
+    x64.leaRegRegImm32 r11, r8, 8
+    x64.leaRegRegImm32 rbx, r8, 9
+    x64.leaRegRegImm32 r12, r8, 10
+    x64.leaRegRegImm32 r13, r8, 11
+    x64.leaRegRegImm32 r14, r8, 12
+    x64.leaRegRegImm32 r15, r8, 13
+    x64.leaRegRegImm32 r8, r8, 14
+    x64.storeSlotReg slot0, r8
+    x64.imulRegRegImm32 r8, rax, 2
+    x64.storeSlotReg slot1, r8
+    x64.imulRegRegImm32 r8, rcx, 2
+    x64.storeSlotReg slot2, r8
+    x64.imulRegRegImm32 r8, rdx, 2
+    x64.storeSlotReg slot3, r8
+    x64.imulRegRegImm32 r8, rsi, 2
+    x64.storeSlotReg slot4, r8
+    x64.leaRegRegReg rax, rax, rcx
+    x64.leaRegRegReg rax, rax, rdx
+    x64.leaRegRegReg rax, rax, rsi
+    x64.leaRegRegReg rax, rax, rdi
+    x64.leaRegRegReg rax, rax, r9
+    x64.leaRegRegReg rax, rax, r10
+    x64.leaRegRegReg rax, rax, r11
+    x64.leaRegRegReg rax, rax, rbx
+    x64.leaRegRegReg rax, rax, r12
+    x64.leaRegRegReg rax, rax, r13
+    x64.leaRegRegReg rax, rax, r14
+    x64.leaRegRegReg rax, rax, r15
+    x64.loadRegSlot rcx, slot0
+    x64.leaRegRegReg rcx, rax, rcx
+    x64.callDirect sink
+    x64.loadRegSlot rax, slot1
+    x64.loadRegSlot rcx, slot2
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot3
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot4
+    x64.leaRegRegReg rax, rax, rcx
+    x64.leaRegRegReg rax, rax, r8
+    x64.cmpRegImm32 rax, 214
+    x64.jcc equal, ternarytrue
+    x64.jmp ternaryfalse
+  ternarytrue:
+    x64.movRegImm32 r8, 0
+    x64.jmp matchcont
+  ternaryfalse:
+    x64.movRegImm32 r8, 99
+    x64.jmp matchcont
+  matchcont:
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r8, rax
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 72
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 72
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

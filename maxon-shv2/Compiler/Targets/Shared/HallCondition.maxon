@@ -543,12 +543,29 @@ end 'HallVerdict'
 // exist yet. Greedy is exact for the UNCONSTRAINED chordal problem; forbidden sets make this LIST
 // colouring, where it is not.
 //
-// ⇒ **THE POINTWISE VERDICT IS STILL THE RIGHT QUESTION FOR THE SPLITTER TO ASK** (colouring the
-// confined values FIRST and the rest afterwards succeeds whenever every point is pointwise feasible),
-// but the colorer does not colour in that order and cannot. The gap is real, it is the colorer's, and
-// `chooseRegister`'s exhaustion panic now RUNS this call to say so rather than blaming the splitter.
-// (Both are read within the value's own register FILE — a class-agnostic pool question is exactly the
-// confusion the volatility rename exists to end.)
+// ⛔⛔ **AND NO STATIC COLOURING ORDER FIXES IT EITHER.** This paragraph used to end *"colouring the
+// confined values FIRST and the rest afterwards succeeds whenever every point is pointwise feasible"*,
+// which is a stated FACT and is FALSE for this compiler's forbid family. It is true only of a TWO-TIER
+// family `{callee-saved, full pool}`, where the confined sets are nested. **What this actually is, is
+// LIST COLOURING of a chordal graph, which is NP-hard** — so there is no order at all, static or
+// otherwise, that is exact and cheap.
+//
+// The counterexample needs three registers and three values: `A = {1,2}`, `A = {1,3}`, `A = {2,3}`.
+// Every Hall subset passes (any two of them have two registers between them, all three have three), a
+// colouring exists, and greedy in the order 2nd/3rd/1st loses — the 2nd takes 1, the 3rd takes 2, and
+// the 1st finds both of its own gone. **That family is REACHABLE, not hypothetical**:
+// `ParamCrossForbid.maskFor` (`TargetLiveness.maxon:3198`) hands every function with three or more
+// parameters exactly `P∖{rdx,r8}`, `P∖{rcx,r8}`, `P∖{rcx,rdx}` — pairwise incomparable, and co-live at
+// entry. This file's own header says the sets are **NOT LAMINAR** five hundred lines above; the deleted
+// claim was that same fact written a second time, with the second copy false.
+//
+// ⇒ **THE POINTWISE VERDICT IS STILL THE RIGHT QUESTION FOR THE SPLITTER TO ASK** — it is exactly
+// "does a colouring EXIST", which is what decides whether the splitter owes a spill — but it does not
+// answer "will the colorer FIND one", and nothing pointwise can. `RegisterAllocator.reportExhaustion`
+// RUNS this call to tell the two apart, and a FEASIBLE verdict there routes to
+// `SplitDriver.repairAtExhaustion`, which splits the stuck value across a clobber in its own live range
+// rather than re-ordering anything. (Both are read within the value's own register FILE — a
+// class-agnostic pool question is exactly the confusion the volatility rename exists to end.)
 export function hallVerdictAt(liveness LivenessResult, live ValueIdArray, pool RegMask, scratch HallScratch) returns HallVerdict
 	let valueCount = live.count()
 	// "No register" / "no value" markers, each one past the last valid index of its side.
