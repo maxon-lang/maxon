@@ -68,6 +68,16 @@ end 'main'
 error E2015: <fragment>:3:15: Unsupported: String method 'byteAtOrPanic' — it is STDLIB-ONLY (`module function` in `stdlib/String.maxon`, which the reference compiler refuses to user code as a not-exported error) and this file is not under `stdlib/`. `addressableBytes` hands out a live view of a String's own bytes and `byteAtOrPanic` reads one with no catchable failure; user code reaches the bytes through `toByteArray()`, which copies
 ```
 
+<!-- test: error.byte-at-is-stdlib-only -->
+```maxon
+function main() returns ExitCode
+	return try "abc".byteAt(0) otherwise 1
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:3:16: Unsupported: String method 'byteAt' — it is STDLIB-ONLY (`module function` in `stdlib/String.maxon`, which the reference compiler refuses to user code as a not-exported error) and this file is not under `stdlib/`. `addressableBytes` hands out a live view of a String's own bytes, and `byteAt`/`byteAtOrPanic` each read one of them — the first through a catchable failure, the second through none; user code reaches the bytes through `toByteArray()`, which copies
+```
+
 <!-- test: error.addressable-bytes-on-a-string-variable-is-stdlib-only -->
 ```maxon
 function main() returns ExitCode

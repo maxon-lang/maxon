@@ -400,3 +400,217 @@ end 'main'
 ```exitcode
 4
 ```
+
+### A user's own declaration outranks a listed module's free function
+
+A listed module's free functions are stdlib's; a user program's are the user's. Where the two spell
+the same name the USER's declaration is what its own call sites reach, which is what the reference
+compiler does (measured: a user `function sleep` compiles there and runs) and what N1's namespaces
+made true here.
+
+⚠ **THE TWO CASES BELOW ARE THE FIRST TO RUN THAT CLAIM**, and running it is what showed the prose
+this section replaced was FALSE. It read *"a user program that declares its own `function sleep` is
+now the ordinary duplicate, `E3006`, naming `stdlib/Sleep.maxon` — loud where it was silent"*, and
+nothing ever compiled such a program: `sleep` is a listed module's free function, a user `function
+sleep` compiles clean, and the user's body is what runs. A refusal nothing runs is a claim.
+
+<!-- test: stdlib-whitelist.a-user-free-function-outranks-the-listed-modules -->
+```maxon
+typealias Ms = int(0 to 1000000)
+
+function sleep(milliseconds Ms)
+	print("mine {milliseconds}\n")
+end 'sleep'
+
+function main() returns ExitCode
+	sleep(41)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+mine 41
+```
+
+The two UAX #29 classifiers are the case that made this a DEFECT rather than a documentation gap.
+They were BARE-NAME BUILTINS in `parseCallNamed`, recognized before any registry is consulted, so a
+user's own `graphemeBreakProperty` compiled and was silently unreachable — measured, shv2 printed
+`p=0 e=false` where the reference printed `p=164 e=true`, from the very same source. Retiring the two
+builtins and listing `stdlib/helpers/string/grapheme.maxon` is what makes the declaration the call
+site reaches the one the program contains.
+
+<!-- test: stdlib-whitelist.a-user-grapheme-classifier-is-the-one-that-runs -->
+```maxon
+typealias Cp = int(0 to 1114111)
+
+function graphemeBreakProperty(cp Cp) returns Cp
+	return cp + 99
+end 'graphemeBreakProperty'
+
+function isExtendedPictographic(cp Cp) returns bool
+	return cp == 65
+end 'isExtendedPictographic'
+
+function main() returns ExitCode
+	let p = graphemeBreakProperty(65)
+	let e = isExtendedPictographic(65)
+	print("p={p} e={e}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+p=164 e=true
+```
+
+### What the five byte-walking modules deliver
+
+`helpers/string/utf8.maxon`, `helpers/string/hash.maxon` and `helpers/string/grapheme.maxon` are one
+entry in three lines — every one of them walks a String's bytes through `String.byteAt`, the
+throwing primitive this rung built, and `grapheme.maxon` calls the other two. `Unicode.maxon` and
+`Build.maxon` need nothing new at all.
+
+An entry's real content is its CALL SITES and not its own parse: `maxon-shv2 build <module>` answering
+`E3001: No 'main' function found` says the module is loadable, never that a program can use it.
+
+<!-- test: stdlib-whitelist.utf8-helpers-from-the-whitelist -->
+```maxon
+function main() returns ExitCode
+	let s = "héllo"
+	print("{utf8ByteLengthAt(s, pos: 0)}\n")
+	print("{utf8ByteLengthAt(s, pos: 1)}\n")
+	print("{utf8DecodeAt(s, pos: 0)}\n")
+	print("{utf8DecodeAt(s, pos: 1)}\n")
+	if utf8IsLead(104) 'lead'
+		print("lead\n")
+	end 'lead'
+	if utf8IsContinuation(169) 'cont'
+		print("cont\n")
+	end 'cont'
+	print("{utf8EncodeLength(233)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1
+2
+104
+233
+lead
+cont
+2
+```
+
+<!-- test: stdlib-whitelist.hash-string-from-the-whitelist -->
+`hashString` is djb2 over the whole string — the hottest byte-walk in the stdlib, and the one
+`Map with (String, V)` will call on every insert. `"a"` is `5381 * 33 + 97`.
+```maxon
+function main() returns ExitCode
+	print("{hashString("a")}\n")
+	print("{hashString("")}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+177670
+5381
+```
+
+<!-- test: stdlib-whitelist.unicode-is-whitespace-from-the-whitelist -->
+```maxon
+function main() returns ExitCode
+	if Unicode.isWhitespace(32) 'space'
+		print("space\n")
+	end 'space'
+	if Unicode.isWhitespace(12288) 'ideographic'
+		print("ideographic\n")
+	end 'ideographic'
+	if Unicode.isWhitespace(65) 'letter'
+		print("letter\n")
+	end 'letter'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+space
+ideographic
+```
+
+<!-- test: stdlib-whitelist.build-config-from-the-whitelist -->
+`Build.build(name)` emits the JSON a `build.maxon` hands the compiler. It is the one new entry that
+is neither a byte walk nor a classifier — a `type` with fields, a `static`, and an `Array with
+String` — so what it pins is that a listed module of ordinary shape reaches user code intact.
+```maxon
+function main() returns ExitCode
+	Build.build("demo")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+{
+  "name": "demo",
+  "output": ".maxon/demo",
+  "sources": [
+  ],
+  "optimize": false,
+  "debug_info": true
+}
+```
+
+### The corpus segmenter and the synthesized one, side by side
+
+⭐ **TWO IMPLEMENTATIONS OF ONE TABLE NOW EXIST, AND THIS IS THE ONLY PLACE THEY ANSWER THE SAME
+QUESTION.** `countGraphemes(s)` is `stdlib/helpers/string/grapheme.maxon`'s own UAX #29 walk, written
+in Maxon over `String.byteAt`; `s.count()` is the segmenter the compiler SYNTHESIZES
+(`GraphemeRuntime`), which reads no stdlib at all. Nothing else in the tree makes them disagree
+observably — `grapheme-clusters.md`'s 21 cases exercise one side or the other, never both on one
+input.
+
+⚠ A failure here is a REAL disagreement between the corpus and the compiler's table, never an
+expectation to adjust.
+
+<!-- test: stdlib-whitelist.the-corpus-segmenter-agrees-with-the-synthesized-one -->
+```maxon
+function report(s String)
+	print("{countGraphemes(s)} {s.count()}\n")
+end 'report'
+
+function main() returns ExitCode
+	report("abc")
+	report("")
+	report("héllo")
+	report("\r\n")
+	report("👨‍💻")
+	report("Hi🎉中")
+	report("🇺🇸")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+3 3
+0 0
+5 5
+1 1
+1 1
+4 4
+1 1
+```

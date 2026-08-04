@@ -181,3 +181,22 @@ end 'main'
 ```RequiredRuntime
 __gt_morestack
 ```
+
+<!-- test: string-byte-at-body -->
+`__str_byte_at` — `String.byteAt`'s body, and the THROWING twin of `__str_byte_at_or_panic` above.
+The two differ on their failure EXIT and on nothing else: this one leaves through the dual-register
+`errorReturn` ABI carrying `__ManagedMemoryError.invalidByteRange`, where the panicking twin calls
+`mrt_panic` and never returns. It is STDLIB-ONLY, so no user program can call it and no exit code can
+reach it; the corpus's `hashString` is what installs it here, and this block is its only gate.
+
+```maxon
+function main() returns ExitCode
+	return hashString("a") mod 7
+end 'main'
+```
+```exitcode
+3
+```
+```RequiredRuntime
+__str_byte_at
+```
