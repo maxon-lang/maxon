@@ -187,6 +187,19 @@ end 'arm64RegisterArgCapacity'
 // region. It is also the WORST case, not a per-call figure: a call splits its arguments between the two
 // files and EACH file passes `capacity` of them in registers, so a real region is at most this and
 // usually far less.
+//
+// ⛔⛔ **THE THREE FIELDS ARE ORDERED, AND ONLY THE SMALLEST CAN EVER FIRE — SO THE HEADROOM ON
+// `MaxAbiArgs` IS SEVEN ARGUMENT SLOTS, NOT FOUR THOUSAND.** The STP/LDP imm7 binds at 504 bytes; the
+// other two sit 8x and 65x further out and are shadowed by it, and the prologue that carries the imm7
+// check is encoded before any body op, so it is always the panic a reader actually sees. MEASURED at the
+// language's own worst case (a 64-argument all-integer call, the widest `requireAbiParamCount` admits):
+// the emitted frame record is `stp x29, x30, [sp, #448]` against a 504-byte reach — **56 bytes of
+// margin, seven slots**. Raise `MaxAbiArgs` to 72 and arm64 stops compiling.
+//
+// ⇒ whoever raises it must move the frame RECORD off the imm7 first (the outgoing region cannot simply
+// grow past 504 while x29 is placed with an STP offset); the wider fields' assertions are backstops
+// behind that one and their advice is not the first thing to do. Recorded here rather than at any of the
+// three, because this is the number a reader who is raising the ceiling comes to find.
 export function arm64OutgoingArgRegionBytes() returns StackSize
 	return ((MaxAbiArgs - arm64RegisterArgCapacity()) as StackSize) * SpillSlotBytes
 end 'arm64OutgoingArgRegionBytes'

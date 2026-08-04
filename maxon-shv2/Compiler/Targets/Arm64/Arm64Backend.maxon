@@ -1452,14 +1452,19 @@ end 'arm64EmitEpilogue'
 //
 // It cannot fire, and not narrowly: the region is at most `arm64OutgoingArgRegionBytes()` = 448 bytes, i.e.
 // 56 of the field's 4095 units, because the LANGUAGE refuses a signature past `MaxAbiArgs` before any of
-// this runs. What would fire it is raising that ceiling past 4096 argument slots — at which point the
-// answer is the x17 fold the FRAME slots take (`arm64EmitWideFrameSlot`) rewritten SP-relative, and not
-// this panic. It is the SP twin of the imm7 and imm12 assertions the two frame ops below make about the
+// this runs. It is the SP twin of the imm7 and imm12 assertions the two frame ops below make about the
 // same region, and all three quote the one derivation instead of restating its number.
+//
+// ⚠ AND IT IS THE LAST OF THE THREE TO FIRE, WHICH MEANS IT NEVER DOES — raising `MaxAbiArgs` does NOT
+// reach this door. `arm64EmitFrameRecordPair`'s signed STP/LDP imm7 binds the SAME region at 504 bytes,
+// 65x sooner, from a prologue that is encoded before any body op; the true headroom is SEVEN argument
+// slots, and `arm64OutgoingArgRegionBytes`'s header carries the measurement and what to do about it.
+// So this message states the field it guards and sends the reader THERE rather than proposing a fix for
+// a door that opens second.
 function arm64EmitStoreOutgoingArg(code ByteArray, slot SpillSlot, srcReg TargetVReg)
 	let byteOffset = slot * SpillSlotBytes
 	if not arm64ByteOffsetFitsScaledImm12(byteOffset, scale: SpillSlotBytes as NonZeroWord) 'unencodable'
-		panic("arm64EmitStoreOutgoingArg: outgoing argument slot {slot} sits at byte {byteOffset} of this frame's argument region, past the {Arm64LoadStoreImm12Mask} 8-byte units the scaled STR field reaches — the region can hold at most {arm64OutgoingArgRegionBytes()} bytes while `MaxAbiArgs` caps a signature, so reaching this means that ceiling was raised past 4096 argument slots, and the fix is `arm64EmitWideFrameSlot`'s x17 fold rewritten against SP rather than a wider field")
+		panic("arm64EmitStoreOutgoingArg: outgoing argument slot {slot} sits at byte {byteOffset} of this frame's argument region, past the {Arm64LoadStoreImm12Mask} 8-byte units the scaled STR field reaches — the region can hold at most {arm64OutgoingArgRegionBytes()} bytes while `MaxAbiArgs` caps a signature. Reaching THIS door before `arm64EmitFrameRecordPair`'s 504-byte STP/LDP imm7, which binds the same region 65x sooner from the prologue, means the frame record no longer rides that field — so read `arm64OutgoingArgRegionBytes`'s header for which ceiling moved, and expect the answer to be `arm64EmitWideFrameSlot`'s x17 fold rewritten against SP")
 	end 'unencodable'
 
 	arm64EmitWord64Store(code, base: Arm64SpBaseField, byteOffset: byteOffset, src: srcReg)
