@@ -525,13 +525,30 @@ end 'HallVerdict'
 // register side is `valueOfReg`'s width, which is that same constant — spelling it as a literal is
 // what left this paragraph claiming 16 across the rung that made it 32.)
 //
-// It answers FEASIBILITY, not the colorer's CHOICE. The colorer is a dominance-order greedy, exact
-// for this constraint family because it prefers caller-saved registers first (so an unconstrained
-// value never takes a callee-saved one while a caller-saved one is free) and because a copy hint may
-// never take a register outside a value's preferred VOLATILITY while that half still has one free
-// (`preferredVolatilityMask`, M5.12). A point this call declares feasible is one the colorer can
-// colour. (Both are read within the value's own register FILE — a class-agnostic pool question is
-// exactly the confusion the volatility rename exists to end.)
+// It answers FEASIBILITY, not the colorer's CHOICE — and ⛔⛔ **FEASIBLE DOES NOT MEAN THE COLORER
+// WILL FIND IT.** This paragraph used to end *"a point this call declares feasible is one the colorer
+// can colour"*, on the strength of `preferredVolatilityMask` (an unconstrained value never takes a
+// callee-saved register while a caller-saved one is free) plus the matching gate on the copy-hint
+// path (M5.12). **That is a LOCAL rule and the claim it was made to support is FALSE.** MEASURED,
+// BATCH17, on four programs that reach `chooseRegister`'s exhaustion panic: the exact verdict at
+// every one of their failing points is FEASIBLE.
+//
+// The counterexample is two ops long once the shape is named. A value `n` is live while the
+// caller-saved half is momentarily FULL, so the unconstrained values defined during that window are
+// forced one by one into the callee-saved half — correctly, by the rule. `n` then DIES, freeing a
+// caller-saved register that no live value can move into (a colour is held for the value's whole
+// range), and a value born after it and confined to the callee-saved half finds every one of them
+// taken. A valid colouring existed all along — `n` in the callee-saved half — and no rule reading
+// only the state at each def could have chosen it, because at `n`'s def the confined value does not
+// exist yet. Greedy is exact for the UNCONSTRAINED chordal problem; forbidden sets make this LIST
+// colouring, where it is not.
+//
+// ⇒ **THE POINTWISE VERDICT IS STILL THE RIGHT QUESTION FOR THE SPLITTER TO ASK** (colouring the
+// confined values FIRST and the rest afterwards succeeds whenever every point is pointwise feasible),
+// but the colorer does not colour in that order and cannot. The gap is real, it is the colorer's, and
+// `chooseRegister`'s exhaustion panic now RUNS this call to say so rather than blaming the splitter.
+// (Both are read within the value's own register FILE — a class-agnostic pool question is exactly the
+// confusion the volatility rename exists to end.)
 export function hallVerdictAt(liveness LivenessResult, live ValueIdArray, pool RegMask, scratch HallScratch) returns HallVerdict
 	let valueCount = live.count()
 	// "No register" / "no value" markers, each one past the last valid index of its side.

@@ -69,9 +69,21 @@ let Uncolored = RegisterFileSize as RegNum
 export type Allocation
 	export var color as RegNumColumn
 	export var valueCount as ValueId
+	// The INVERSE of `color`, for the registers held RIGHT NOW: register number -> the value
+	// occupying it. `colorFunction`'s in-use mask says a register is HELD; only this says by WHOM,
+	// and "by whom" is the whole of the exhaustion diagnostic — without it the panic can only
+	// GUESS which pass owns the failure, and the guess it shipped ("reaching this is a SPLITTER
+	// BUG") was measured false on every program that reaches it (see `chooseRegister`).
+	//
+	// It is EXACT, not a last-writer approximation, because it is refreshed from the live-ins at
+	// every block entry (`seedInUse`) as well as at every def: a register held at any point of a
+	// block is held either by a live-in seeded there or by a def coloured since. A last-writer map
+	// alone would name a sibling block's occupant for a live-in register and hand the diagnostic's
+	// Hall verdict a live set the point does not have.
+	var holderOfReg as ValueIdArray
 
 	export static function create(valueCount ValueId) returns Allocation
-		return Self{color: filledColumn(valueCount, value: Uncolored), valueCount: valueCount}
+		return Self{color: filledColumn(valueCount, value: Uncolored), valueCount: valueCount, holderOfReg: filledColumn(RegisterFileSize, value: 0)}
 	end 'create'
 
 	export function isColored(v ValueId) returns bool
@@ -89,7 +101,21 @@ export type Allocation
 
 	export function assign(v ValueId, regNum RegNum)
 		try self.color.set(v, value: regNum) otherwise panic("Allocation.assign: value {v} out of range")
+		self.noteHolder(v, regNum: regNum)
 	end 'assign'
+
+	// `v` occupies `regNum` from here on. Called at every def (through `assign`) and, for a value
+	// coloured in a dominator, at every block entry it is live into — see `holderOfReg`.
+	export function noteHolder(v ValueId, regNum RegNum)
+		try self.holderOfReg.set(regNum, value: v) otherwise panic("Allocation.noteHolder: register {regNum} is outside the unified register file")
+	end 'noteHolder'
+
+	// Which value occupies `regNum`. Only meaningful for a register the colorer's in-use mask says is
+	// HELD; there is no "unoccupied" answer, and none is needed — the one caller reads it through that
+	// mask.
+	export function holderOf(regNum RegNum) returns ValueId
+		return try self.holderOfReg.get(regNum) otherwise panic("Allocation.holderOf: register {regNum} is outside the unified register file")
+	end 'holderOf'
 end 'Allocation'
 
 // The reuse copy to splice before an op, or `none`. A reuse def coalesced into its
@@ -1157,6 +1183,10 @@ function seedInUse(liveness LivenessResult, local CfgIndex, alloc Allocation, li
 		if not alloc.isColored(v) 'notColored'
 			panic("seedInUse: value {v} is live-in to block {local} but was never colored — a use dominates its def (structured-layout invariant broken)")
 		end 'notColored'
+		// The occupant map is refreshed here, not only at defs: a live-in was coloured in a dominator
+		// and a sibling block may have re-used its register since, so the last writer is not the
+		// current holder (see `Allocation.holderOfReg`).
+		alloc.noteHolder(v, regNum: alloc.regNumOf(v))
 		mask = regMaskAdd(mask, regNum: alloc.regNumOf(v))
 	end 'eachLiveIn'
 	return mask
@@ -1296,21 +1326,71 @@ function chooseRegister(v ValueId, classPool RegMask, callerSaved RegMask, block
 		if classPool == 0 'noPoolForThisClass'
 			panic("chooseRegister: value {v} is a {liveness.classOf(v).name} value but the allocatable pool offers NO register of that file (pool mask {classPool}). This is not pressure and no split can relieve it — the {liveness.classOf(v).name} pool is simply not enabled. A file becomes allocatable by having its registers in this TARGET's `allocatablePool` arm (on x64 that pool is `callerSavedMask` u `calleeSavedMask`, which `assertCalleeSavedListsMatchMasks` proves partition the file; arm64 spells its own); the call ops' `implicitDefs` must equal that target's caller-saved half — `callerSavedMaskFor`, held equal by `assertCallClobberConsistent` — or a value would silently survive a call in a register the callee clobbers.")
 		end 'noPoolForThisClass'
-		// ⚠ THE MESSAGE MUST NAME A CHECK THAT STILL EXISTS. It used to blame `analyzePressure`'s
+		// ⚠⚠ WHICH PASS OWNS THIS IS MEASURED HERE, NOT ASSERTED — AND THE ASSERTION IT REPLACES WAS
+		// FALSE. This message used to state outright that *"reaching this is a SPLITTER BUG, not a
+		// colorer limitation"*, and sent every reader to `RegPoolCensus`/`HallCondition` on the strength
+		// of the two MASKS. The masks cannot carry that: a non-empty FORBIDDEN says the exhausted value
+		// is confined to a subset, which is true of every value live across a call, and says NOTHING
+		// about whether the point over-subscribes that subset. BATCH17 instrumented the four programs
+		// that reach this panic and ran the exact verdict at the failing point of each: all four came
+		// back FEASIBLE — a distinct allowed register existed for every value holding a register there,
+		// and the GREEDY had simply not found it. So the verdict is COMPUTED and the reader is sent to
+		// the half the answer actually implicates.
+		//
+		// It runs the same `hallVerdictAt` the splitter runs, over the point's own OCCUPANTS
+		// (`Allocation.holderOf`) plus the value that could not be coloured — which is exactly the
+		// feasibility question the splitter is supposed to have already answered "yes" to. One
+		// implementation, two callers, so the panic cannot disagree with the pass it names.
+		//
+		// ⚠ THE MESSAGE MUST NAME A CHECK THAT STILL EXISTS. It once blamed `analyzePressure`'s
 		// "reduced-pool check, `pool ∖ op.implicitDefs`" — a check Hall's condition SUBSUMED and deleted
-		// (`HallCondition.maxon`'s header), so it sent every reader of this panic to a pass that no longer
-		// had the code being blamed. It also led with the CONFINED story, which the masks routinely refute:
-		// a `blocked` of `fullRegisterMask()` against the whole `classPool` is plain FULL-POOL pigeonhole
-		// and has nothing to do with the callee-saved subset. So the mask decides which half to read, and
-		// each half names the routine that owns it.
+		// (`HallCondition.maxon`'s header), so it sent every reader to a pass that no longer had the code
+		// being blamed.
 		//
 		// The confined-pool figure is per CLASS, not the whole callee-saved set: since Wave 2 that set
 		// spans both files (5 GPRs + 10 XMMs), and quoting 15 at a colorer that ran out of GPRs would
 		// name a number no value could ever have had.
-		panic("chooseRegister: no free register for value {v} ({liveness.classOf(v).name} pool {classPool}, blocked mask {blocked}, of which HELD {held and classPool} and FORBIDDEN {forbidden and classPool}) — the splitter is supposed to relieve EVERY over-pool point before coloring, which is what makes `colorFunction` unable to fail. Reaching this is a SPLITTER BUG, not a colorer limitation, and THE TWO MASKS SAY WHICH KIND. READ `HELD` AND `FORBIDDEN`, NOT `blocked` — `blocked` is their UNION and cannot tell them apart. If HELD alone covers the whole pool, the point overflowed the FULL pool: that is plain per-file pigeonhole and `analyzeBlockPressure`'s `classRowGet(effective, ...) > classPoolSizeOf(...)` owns it. If FORBIDDEN is non-empty, value {v}'s own `forbidden` set excluded that part of the pool and HELD the rest and the point is CONFINED to a subset (a value live across a call is confined to the {regMaskPopcount(classPool and not callerSaved)} callee-saved {liveness.classOf(v).name} register(s); an idiv reserves RAX/RDX): `RegPoolCensus.screenViolates` plus `HallCondition`'s exact bipartite confirmation own that half. ⚠ AND A REGISTER HELD AT AN OP THAT IS IN NO LIVE SET IS INVISIBLE TO BOTH — a reuse copy and a DEAD DEF are the two, `addOpTransientPressure` is the ONE place either is counted, and a demand it misses is one no popcount over a live set can ever see.")
+		var occupants = valuesHoldingRegisters(held and classPool, alloc: alloc)
+		let situation = "chooseRegister: no free register for value {v} ({liveness.classOf(v).name} pool {classPool}, blocked mask {blocked}, of which HELD {held and classPool} and FORBIDDEN {forbidden and classPool}; {v} is allowed {allowedRegistersOf(liveness, valueId: v, pool: classPool)}, and a value live across a call is confined to the {regMaskPopcount(classPool and not callerSaved)} callee-saved {liveness.classOf(v).name} register(s) while an idiv reserves RAX/RDX)"
+		let occupancy = describeRegisterOccupants(occupants, liveness: liveness, alloc: alloc, classPool: classPool)
+		occupants.push(v)
+
+		match hallVerdictAt(liveness, live: occupants, pool: classPool, scratch: HallScratch.create()) 'verdict'
+			overflow(witness, tight) then panic("{situation} — and Hall's EXACT verdict at this point is OVERFLOW: {tight} of the values here are confined to the witness {witness}, which offers {regMaskPopcount(witness)} register(s), so {tight - regMaskPopcount(witness)} of them must leave. THE SPLITTER LEFT AN OVER-POOL POINT UNRELIEVED — relieving every one of them before coloring is what makes `colorFunction` unable to fail. If the witness IS the whole class pool it is plain per-file pigeonhole and `analyzeBlockPressure`'s `classRowGet(effective, ...) > classPoolSizeOf(...)` owns it; if it is a proper subset, `RegPoolCensus.screenViolates` plus `HallCondition`'s exact confirmation own it. ⚠ AND A REGISTER HELD AT AN OP THAT IS IN NO LIVE SET IS INVISIBLE TO BOTH — a reuse copy and a DEAD DEF are the two, `addOpTransientPressure` and `opConfinedTransient` are the ONE place each is counted, and a demand they miss is one no popcount over a live set can ever see. Occupants:{occupancy}")
+			feasible then break 'verdict'
+		end 'verdict'
+
+		panic("{situation} — but Hall's EXACT verdict over the values occupying this point's registers PLUS {v} is FEASIBLE: every one of them can be given a distinct register it is allowed to take. THE SPLITTER OWED NOTHING HERE AND THE COLORING ORDER IS AT FAULT. An earlier def took a register out of {v}'s admissible set at a moment when one outside it was free or, more usually, when the caller-saved half was momentarily full because of a value that has since died — and a colour, once given, is held for the value's whole range. `preferredVolatilityMask` is the rule that is supposed to prevent this and it is a LOCAL rule: it cannot see a confined value that is not born yet, so the greedy is NOT exact for this constraint family and no reading of `HELD`/`FORBIDDEN` will make it so (see `HallCondition.hallVerdictAt`'s header, which carried the opposite claim). Occupants:{occupancy}")
 	end 'exhausted'
 	return reg
 end 'chooseRegister'
+
+// The values occupying the registers of `mask`, in ascending register order — this program point's
+// own live set as the colorer sees it, which is the value list the exact Hall verdict must run over.
+//
+// Only the exhaustion path calls it, so allocating a fresh list is free: the compile is about to
+// abort. Ascending register order is what makes the listing and the verdict reproducible run to run.
+function valuesHoldingRegisters(mask RegMask, alloc Allocation) returns ValueIdArray
+	var out = ValueIdArray.create()
+	for regNum in 0 upto RegisterFileSize 'eachRegister'
+		if regMaskContains(mask, regNum: regNum) 'occupied'
+			out.push(alloc.holderOf(regNum))
+		end 'occupied'
+	end 'eachRegister'
+	return out
+end 'valuesHoldingRegisters'
+
+// One line per occupied register: which value holds it, and what that value was ALLOWED to hold.
+// That second column is the whole content of the FEASIBLE arm — a reader has to see that the
+// occupants' admissible sets are WIDER than the exhausted value's to see that the order, and not the
+// pressure, is the fault.
+function describeRegisterOccupants(occupants ValueIdArray, liveness LivenessResult, alloc Allocation, classPool RegMask) returns String
+	var text = ""
+	for h in occupants 'eachOccupant'
+		text = "{text}\n    register {alloc.regNumOf(h)} <- value {h}, allowed {allowedRegistersOf(liveness, valueId: h, pool: classPool)}"
+	end 'eachOccupant'
+	return text
+end 'describeRegisterOccupants'
 
 // The register `v`'s copy partner is PINNED to and will therefore take if it is free: the partner's
 // OWN fixed hint, when the partner is not yet colored and is not forbidden that register.
