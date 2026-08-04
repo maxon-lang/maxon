@@ -869,12 +869,8 @@ export type LivenessResult
 		end 'eachPhi'
 	end 'clearRowAfterSweep'
 
-	// The register mask value `v` must avoid: the registers an op writes while `v` is live across it.
-	// The physical registers established but not yet destroyed where `v` is DEFINED (see the field).
-	export function establishedAtDefOf(v ValueId) returns RegMask
-		return try self.establishedAtDef.get(v) otherwise panic("LivenessResult.establishedAtDefOf: value {v} out of range (valueCount={self.valueCount})")
-	end 'establishedAtDefOf'
-
+	// The register mask value `v` must avoid: the registers an op writes while `v` is live across it,
+	// UNIONED with everything `nonSweptForbidOf` contributes.
 	export function forbiddenOf(v ValueId) returns RegMask
 		return try self.forbidden.get(v) otherwise panic("LivenessResult.forbiddenOf: value {v} out of range (valueCount={self.valueCount})")
 	end 'forbiddenOf'
@@ -1009,15 +1005,15 @@ export function computeLivenessOn(module TargetModule, cfg FuncCfg, func IrFunct
 	end 'eachBlock'
 
 	let paramCross = ParamCrossForbid.resolve(module, topo: cfg.topo, paramCount: func.paramCount)
-	paramCross.applyTo(forbidden)
-	// The second contribution that does not come from a live-across sweep, folded in the same place and
-	// for the same reason (`rebuildForbiddenOf` re-applies both by hand when it rebuilds a mask).
-	for v in 0 upto valueCount 'establishedAheadOfTheDef'
-		let established = try establishedAtDef.get(v) otherwise panic("computeLivenessOn: establishedAtDef.get OOB for value {v}")
-		if established != 0 'bornInsideAPendingWindow'
-			try forbidden.set(v, value: (try forbidden.get(v) otherwise panic("computeLivenessOn: forbidden.get OOB for value {v}")) or established) otherwise panic("computeLivenessOn: forbidden.set OOB for value {v}")
-		end 'bornInsideAPendingWindow'
-	end 'establishedAheadOfTheDef'
+
+	// The contributions no block sweep produces, folded in ONE pass through the ONE function that
+	// lists them — the same function the splitter's `rebuildForbiddenOf` asks after it zeroes a mask.
+	for v in 0 upto valueCount 'theContributionsNoSweepMakes'
+		let nonSwept = nonSweptForbidOf(v, paramCross: paramCross, establishedAtDef: establishedAtDef)
+		if nonSwept != 0 'hasOne'
+			try forbidden.set(v, value: (try forbidden.get(v) otherwise panic("computeLivenessOn: forbidden.get OOB for value {v}")) or nonSwept) otherwise panic("computeLivenessOn: forbidden.set OOB for value {v}")
+		end 'hasOne'
+	end 'theContributionsNoSweepMakes'
 
 	return LivenessResult.create(cfg, valueCount: valueCount, wordsPerRow: wordsPerRow, live: walk.live, forbidden: forbidden, establishedAtDef: establishedAtDef, valueClass: valueClass, registerFile: file, maxPressure: maxPressure, livenessMarkSteps: walk.markSteps, deadPhis: deadPhis, blockPressure: blockPressure, useIndex: useIndex, opFacts: opFacts)
 end 'computeLivenessOn'
@@ -2930,6 +2926,20 @@ end 'PressureSweepScratch'
 // between the dividend move and the `idiv` that consumes it, and ending the window there would leave a
 // value defined in between free to take RAX.
 //
+// ⚠⚠ **A BLOCK STARTS WITH NOTHING PENDING, AND THAT IS AN ASSUMPTION ABOUT THE LOWERING, NOT A
+// DERIVATION.** `pending` is seeded to 0 at every block rather than joined over the predecessors,
+// which is correct only while no window ever crosses a block boundary — i.e. while every call's
+// pre-moves sit in the same block as the call they place, which is how both `emitArgMovesByFloatMask`
+// twins (x64's and arm64's) emit a run today, and while a split only ever anchors a reload in the
+// block of the use it serves. Neither is checked here.
+//
+// ⛔ **IF THAT EVER STOPS BEING TRUE, THIS UNDER-FORBIDS — WHICH IS THE ORIGINAL DEFECT, RETURNING
+// SILENTLY.** A joined answer is the sound one, and it is deliberately not paid for: a forward join
+// over predecessors is a second dataflow fixpoint on a path that runs per split, to describe a
+// program shape nothing emits. A lowering that ever splices a block between a pre-move and its call
+// must add the join, not merely re-measure; the symptom would be a wrong ANSWER at one call site, not
+// a failing build.
+//
 // ⚠ IT IS ASSIGNED, NOT OR-ED, so re-running it on a block a split dirtied RESTATES that block's
 // answers instead of accumulating stale ones. Nothing a split inserts or removes is a physical def or
 // carries an `implicitDefs` mask (`storeSlotReg` / `loadRegSlot` / a constant materialization all read
@@ -3179,7 +3189,17 @@ export type ParamCrossForbid
 
 	// The registers `valueId` must avoid because a SIBLING parameter arrives in them — 0 for every
 	// value that is not an entry parameter capture.
+	//
+	// The `allParamRegs == 0` exit is not an optimization of the scan, it is the scan's own answer
+	// stated once instead of `captures` times: `resolve` leaves that union at 0 exactly when there are
+	// fewer than two captures, and with fewer than two the loop below returns `regMaskRemove(0, …)` —
+	// which IS 0 — for every value it could match. It is what keeps this callable per VALUE rather than
+	// only per capture, and `nonSweptForbidOf` is why that matters.
 	export function maskFor(valueId ValueId) returns RegMask
+		if self.allParamRegs == 0 'noSiblingToCross'
+			return 0
+		end 'noSiblingToCross'
+
 		for cap in self.captures 'each'
 			if cap.valueId == valueId 'itsCapture'
 				return regMaskRemove(self.allParamRegs, regNum: cap.incomingReg)
@@ -3187,15 +3207,29 @@ export type ParamCrossForbid
 		end 'each'
 		return 0
 	end 'maskFor'
-
-	// Apply it to every capture — the whole-function pass a fresh liveness build ends with.
-	export function applyTo(forbidden RegMaskColumn)
-		for cap in self.captures 'forbid'
-			let cur = try forbidden.get(cap.valueId) otherwise panic("ParamCrossForbid.applyTo: forbidden.get OOB for value {cap.valueId}")
-			try forbidden.set(cap.valueId, value: cur or self.maskFor(cap.valueId)) otherwise panic("ParamCrossForbid.applyTo: forbidden.set OOB for value {cap.valueId}")
-		end 'forbid'
-	end 'applyTo'
 end 'ParamCrossForbid'
+
+// ⭐⭐ **EVERY CONTRIBUTION TO A VALUE'S `forbidden` THAT IS NOT "WHAT DID ITS LIVE RANGE CROSS?" —
+// THE LIST, IN ONE PLACE.**
+//
+// Two passes must apply it and they run in different worlds: `computeLivenessOn` folds it into a mask
+// the block sweeps have just built, and the splitter's `rebuildForbiddenOf` folds it into a mask it
+// has just ZEROED (`clearForbidden`) and is re-deriving from the blocks the victim is live in. Neither
+// can get it from the other, because neither is a block fact.
+//
+// ⛔ **IT IS ONE FUNCTION BECAUSE A THIRD CONTRIBUTION MUST NOT BE ABLE TO REACH ONE PASS AND NOT THE
+// OTHER.** Spelled twice, adding one and forgetting the other compiles, passes every test whose split
+// count is zero, and shows up as a value coloured into a register something else already owns — a
+// silent wrong answer, at a call, in code the golden gate does not pin. `VerifyIncrementalSplit`
+// catches it and is OFF in a shipping compiler; this makes the question not arise.
+//
+// It is asked per VALUE, so `ParamCrossForbid.maskFor` answers in O(1) for the functions that have no
+// sibling parameters at all and O(captures) — at most one per parameter — for the rest.
+export function nonSweptForbidOf(v ValueId, paramCross ParamCrossForbid, establishedAtDef RegMaskColumn) returns RegMask
+	let established = try establishedAtDef.get(v) otherwise panic("nonSweptForbidOf: establishedAtDef.get OOB for value {v}")
+
+	return paramCross.maskFor(v) or established
+end 'nonSweptForbidOf'
 
 // Process one op backward: fold its register clobbers into `forbidden` for values
 // live across it, then transform `liveRow` from live-after to live-before. Returns the
@@ -3260,10 +3294,14 @@ end 'opClobberMask'
 
 // The registers `buf`'s operands write BY NAME rather than by allocation — every PHYSICAL def (a
 // call's `mov argReg[k], v` pre-move, the return move, an `idiv`'s `mov rax, dividend`). It is the
-// operand half of `opClobberMask`, split out because the splitter asks for it ALONE: an op that
-// establishes a named register but clobbers nothing implicitly is exactly the shape a defining
-// splice may not land after (`definingSplicePosition`), and asking `opClobberMask` there would
-// mistake a CALL — whose implicit-def mask is the whole caller-saved half — for one of them.
+// operand half of `opClobberMask`, split out because `sweepEstablishedRegisters` asks for it ALONE:
+// that sweep OPENS a pending window at a named write and CLOSES it at an implicit def, so the two
+// halves of a clobber mask arrive at opposite ends of the window and cannot be handed over as one
+// number. Asking `opClobberMask` there would open a window on every call — whose implicit-def mask is
+// the entire caller-saved half — for registers that call has just destroyed.
+//
+// ⚠ IT DOES NOT FILL `buf`; `opClobberMask` does, and every other caller must (`targetOpOperands`).
+// The split is what makes that asymmetry possible, so it is stated rather than left to be discovered.
 //
 // A physical DEF's register number is a target-neutral `RegNum`, NOT an `X64Register`: this SHARED
 // census sees arm64 SIMD arg registers (d1..d7 = 32..38) a multi-float-argument call emits, which

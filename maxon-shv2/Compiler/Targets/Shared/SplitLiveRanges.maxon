@@ -2192,19 +2192,17 @@ end 'refreshTransientsNaming'
 //
 // The three sources are exactly the three the sweep had:
 //
-//  1. the CROSS-PARAMETER mask, which comes from no block at all (`ParamCrossForbid`);
+//  1. everything that comes from no block at all (`nonSweptForbidOf`, which OWNS that list);
 //  2. the IMPLICIT registers of every op `w` is an OPERAND of — `forbidOperandsFromImplicit`'s half,
 //     which is about the op's own operands and applies whether or not `w` outlives it (an `idiv`'s
 //     divisor dies at the op and must still stay out of RAX/RDX);
 //  3. the CLOBBERS of every op `w` is live ACROSS — `applyForbidden`'s half.
 function rebuildForbiddenOf(module TargetModule, liveness LivenessResult, pressure PressureIndex, w ValueId, paramCross ParamCrossForbid, dirty BlockSet)
 	let index = liveness.useIndex
-	// SOURCE 1, the two contributions no block sweep produces: the entry-param cross-forbid, and the
-	// physical registers already established where `w` is DEFINED (`LivenessResult.establishedAtDef`,
-	// restated for the dirty blocks by `refreshAfterSplit` before this runs). Neither is a "what did
-	// this live range cross?" fact, so neither survives the `clearForbidden` below without being
-	// re-applied here.
-	var mask = paramCross.maskFor(w) or liveness.establishedAtDefOf(w)
+	// SOURCE 1. Asked of `nonSweptForbidOf` rather than restated here, because `computeLivenessOn` asks
+	// the same question of the same function — see its header for why the two may not be two lists. The
+	// `establishedAtDef` half is restated for the dirty blocks by `refreshAfterSplit` before this runs.
+	var mask = nonSweptForbidOf(w, paramCross: paramCross, establishedAtDef: liveness.establishedAtDef)
 
 	// ⚠ AN EDGE USE IS NOT AN OPERAND, and source 2 is about operands — so an edge record is SKIPPED here,
 	// exactly as `applyValueToPressure`, `refreshTransientsNaming` and `collectReindexCandidates` skip
@@ -4555,14 +4553,23 @@ end 'spillOneValue'
 //    re-picked, and there is no cascade to break. Breaking there would emit a reload per call for
 //    every spilled int in the program and buy nothing — MEASURED at 112 moved goldens, almost all of
 //    them a reload that merely moved from a callee-saved register to a caller-saved one.
-//  • ⚠ AND IT MISCOMPILES. Call arguments are plain physical pre-moves (`mov rcx, a; mov rdx, b;
-//    call`) with no parallel-copy sequencer, and the allocator keeps them apart by forbidding a
+//  • ⚠ AND IT USED TO MISCOMPILE. Call arguments are plain physical pre-moves (`mov rcx, a; mov rdx,
+//    b; call`) with no parallel-copy sequencer, and the allocator kept them apart ONLY by forbidding a
 //    pre-move's register to every value live ACROSS it. A value DEFINED BETWEEN two pre-moves is live
-//    across neither, so it is forbidden nothing and may be coloured into an argument register an
-//    EARLIER pre-move has already loaded. Breaking a GPR run at a pre-move puts a `loadRegSlot`
+//    across neither, so it was forbidden nothing and could be coloured into an argument register an
+//    EARLIER pre-move had already loaded. Breaking a GPR run at a pre-move puts a `loadRegSlot`
 //    exactly there. MEASURED: all nine `streaming-subprocess` tests returned the wrong answer (a
 //    `ReadFile` handed a clobbered argument reads 0 bytes and reports EOF), with the golden gate
 //    silent because the runtime's own IR is not pinned.
+//
+//    ⛔ **THAT HOLE IS NOW CLOSED WHERE IT ACTUALLY WAS, AND THIS TEST IS NO LONGER WHAT STOPS IT.**
+//    `LivenessResult.establishedAtDef` forbids a value the argument registers established ahead of
+//    its def, wherever the def sits, so a `loadRegSlot` spliced between two pre-moves is safe by
+//    construction rather than by never being spliced there. This bullet is kept because the COST
+//    argument above is untouched and still decides the test — 112 moved goldens for reloads that only
+//    changed register — and because a reader who removes it should know which of the two reasons went
+//    away. ⚠ It is NOT a second guard on one invariant: this test decides where a RUN BREAKS; the
+//    forbid decides what a DEF may take. Only the forbid is load-bearing for correctness.
 //
 // So the rule is the one the defect actually states: a value whose allowed set is EMPTY *must* be
 // split again, so a split must never create one. A value that keeps a register might never be

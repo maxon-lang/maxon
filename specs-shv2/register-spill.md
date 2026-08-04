@@ -168,12 +168,20 @@ so it is forbidden nothing, and the colorer may hand it an argument register an 
 has already loaded. The callee then reads a clobbered argument — a silent wrong answer, with no
 diagnostic and no crash where the mistake was made.
 
-So a splice that DEFINES a value backs up to the head of the physical-register run it would
-otherwise land inside (`definingSplicePosition`). The reload is then live across every pre-move
-it precedes, which is exactly the case the liveness sweep already folds into `forbidden`, and the
-argument registers become unavailable to it by the existing rule rather than by a new one. It
-costs nothing when there is no run to back out of, which is every splice in a program that does
-not spill a call argument.
+So the allocator records, for every value, **which physical registers were already established where
+that value is DEFINED** — written by name ahead of its def and not yet destroyed
+(`LivenessResult.establishedAtDef`, filled by `sweepEstablishedRegisters`). A register enters that
+pending set at the op that writes it by name and leaves it at the first op that destroys it, which at
+a call is the call's own clobber mask. The set is folded into the value's `forbidden` mask, so a
+reload born between two pre-moves cannot be coloured into an argument register an earlier pre-move
+already loaded. It costs nothing where no register is pending, which is every def in a program that
+does not spill a call argument.
+
+**The cure is a FORBID, not a different splice point, and the alternative was measured.** Backing a
+defining splice out to the head of the run it would land inside makes *k* reloads serving *k*
+different arguments all live at the run's head at once, so the pressure the split was relieving RISES
+and the driver re-picks for ever (`splitLiveRanges: 'main' did not converge after 33938 splits`). A
+forbid changes no live range and no pressure, so it cannot do that.
 
 ### What the RUN proves, and what the GOLDEN proves
 

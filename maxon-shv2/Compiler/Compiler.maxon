@@ -925,7 +925,23 @@ end 'collectMaxonSources'
 // left exactly as it was — which is the shape NTFS was already handing over, and so the shape every
 // committed expectation in the corpus was minted under. (`comparePathBytes` states the order itself,
 // and states why it is the one it is.) Sorting FILES and DIRECTORIES in separate passes would be no
-// less deterministic and would agree with nothing.
+// less deterministic and would agree with nothing THIS walk ever produced.
+//
+// ⛔⛔ **AND THE BOOTSTRAP'S WALK DOES EXACTLY THAT, DELIBERATELY. THE TWO COMPILERS DEFINE DIFFERENT
+// ORDERS, AND THIS IS THE HALF OF THAT FACT THAT LIVES HERE.**
+// `maxon-sharp/Compiler/SourceCollector.MaxonFilesInWalkOrder` walks a directory's matching FILES and
+// only then its SUBDIRECTORIES, breadth-first — the shape `Directory.GetFiles(.., AllDirectories)`
+// was already handing IT over. So for a tree with a top-level `z.maxon` beside an `a/b.maxon`, this
+// walk yields `a/b.maxon` first and the bootstrap yields `z.maxon` first, and FIRST-WINS name
+// resolution therefore blames a different duplicate in the two compilers.
+//
+// ⚠ **THAT IS A CHOICE, NOT AN OVERSIGHT, AND IT IS NOT FREE.** Each side reproduces the enumeration
+// ITS OWN corpus of committed expectations was minted under (`specs-shv2/` here, `specs/` there);
+// unifying them would move goldens on one side for no behavioural gain, since the two suites never
+// compare answers with each other. What it costs is that "which file wins" is not portable between
+// the compilers — so a program relying on it is relying on which compiler built it, and a spec that
+// pins a first-wins outcome cannot be shared between the suites. ⇒ **If the two suites are ever
+// merged, or a spec has to hold in both, THIS is the fact to settle first.**
 //
 // ⚠ **`stdlib`'s `Directory.list` is deliberately NOT the place for this.** Its contract is "what the
 // OS says", which is the honest answer to the question it is asked. Defining an order is the

@@ -225,6 +225,21 @@ public static class SourceCollector {
   ///
   /// <see cref="SourceOrderEnvVar"/> still reverses the result, and only now means something: a
   /// comparison of two KNOWN orders rather than of one known order and one arbitrary one.
+  ///
+  /// THE TWO COMPILERS DEFINE DIFFERENT ORDERS, DELIBERATELY, AND THIS IS THE HALF OF THAT FACT THAT
+  /// LIVES HERE. shv2's <c>Compiler.listedInWalkOrder</c> sorts each directory's WHOLE listing —
+  /// files and subdirectories together — and recurses depth-first, because that is the shape ITS
+  /// <c>Directory.list</c> loop already had. This one takes a directory's files before any of its
+  /// subdirectories. For a top-level <c>z.maxon</c> beside an <c>a/b.maxon</c> the two disagree
+  /// outright: shv2 reads <c>a/b.maxon</c> first, this reads <c>z.maxon</c> first, and the
+  /// first-file-wins passes named on this class therefore blame a different duplicate.
+  ///
+  /// Each side reproduces the enumeration ITS OWN committed expectations were minted under —
+  /// <c>specs/</c> here, <c>specs-shv2/</c> there — and the two suites never compare answers with
+  /// each other, so unifying would move goldens on one side and buy nothing today. The price is that
+  /// "which file wins" is not portable between the compilers: a spec that pins a first-wins outcome
+  /// cannot be shared between the suites until this is settled. Settle it here and in
+  /// <c>listedInWalkOrder</c> together, or not at all.
   /// </summary>
   private static IEnumerable<string> MaxonFilesInWalkOrder(string directory) {
     var pending = new Queue<string>();

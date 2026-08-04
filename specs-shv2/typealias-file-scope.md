@@ -1016,10 +1016,13 @@ end 'main'
 Every case above pins WHICH of two declarations a message names; this one pins the sequence itself,
 on a program where no declaration contests any other, so nothing but the walk's order can decide it.
 
-`Compiler.listedInWalkOrder` states that order — byte-wise lexicographic over the full path, per
-directory — and the three alias names are deliberately REVERSE-alphabetical against the three
-directory names, so a run that happened to order by anything other than the path could not produce
-this sequence by accident.
+`Compiler.listedInWalkOrder` states that order — per directory, over the whole listing at once, by an
+UPPERCASE-FOLDED comparison of the path bytes with the exact bytes as the tiebreak, which is NTFS's
+own directory-index order and therefore the one every committed expectation in this corpus was minted
+under. (A plain byte order is a different order and not an acceptable substitute: it sorts `Point`
+before `app`, which re-blames two cases in `namespace-qualified-resolution`.) The three alias names
+here are deliberately REVERSE-alphabetical against the three directory names, so a run that happened
+to order by anything other than the path could not produce this sequence by accident.
 
 ⛔ MEASURED before the walk defined its order: `Directory.list` handed back whatever the OS's
 enumeration gave, so this program's three diagnostics came out in one order on NTFS (which keeps a
