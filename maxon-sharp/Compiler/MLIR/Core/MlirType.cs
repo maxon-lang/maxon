@@ -1,3 +1,5 @@
+using System.Globalization;
+
 namespace MaxonSharp.Compiler.Ir.Core;
 
 public class IrType {
@@ -157,7 +159,86 @@ public class IrStructType : IrType {
   // ..."). For interface-alias types we still rely on a single-element
   // invariant; callers that need that element use .First().
   public HashSet<string> ConformingInterfaces { get; }
+
+  /// The one const parameter the language has: the element count of the `with N Type` form.
+  /// Spelled at six sites as a bare literal before it was named here, one of which was a
+  /// key-building site that simply omitted it — see Parser.ConstArgSegments.
+  public const string CapacityConstParamName = "__capacity";
+
+  /// The CONST arguments this instance was applied to, keyed by const parameter name.
+  /// Part of the instance's IDENTITY, exactly as TypeParams is: a `Vector with 3 Int` is a
+  /// different type from a `Vector with 4 Int` (specs/vector.md).
   public Dictionary<string, long> ConstParams { get; }
+
+  /// <summary>
+  /// The CONST arguments of a generic instance, in ordinal order of their parameter names — today
+  /// just the element count of the <c>with N Type</c> form.
+  ///
+  /// ⭐ THE ONE SPELLING OF AN INSTANCE'S CONST ARGUMENTS. Every written form of an instance's
+  /// identity is built from it: <see cref="InstanceKey"/> and every synthesized instance name
+  /// (<see cref="InstanceNameSuffix"/>), in the parser AND in monomorphization. A generic instance
+  /// is its source type, its TYPE arguments AND its const arguments — <c>Vector with 3 Int</c> is a
+  /// different type from <c>Vector with 4 Int</c>, which specs/vector.md states outright — and
+  /// omitting them is never a compile error at any of those sites. It silently gives one instance
+  /// two capacities: a capacity-4 field adopted a declared capacity-3 alias, two capacities of one
+  /// element type minted the SAME structural name, and a 3-vector was accepted for a declared
+  /// 4-vector. It lives here, on the type that OWNS <see cref="ConstParams"/>, because the parser's
+  /// registry and the module's alias table are two tables describing one thing and had drifted.
+  ///
+  /// The VALUES alone are complete, without their parameter names, because every consumer already
+  /// carries the SOURCE TYPE and a source type's const parameter list is fixed by its declaration.
+  ///
+  /// An ABSENT dictionary and an EMPTY one are the same instance and produce the same segments, so
+  /// no caller has to normalize one into the other before asking.
+  /// </summary>
+  public static IEnumerable<string> ConstArgSegments(IReadOnlyDictionary<string, long>? constArgs) =>
+    constArgs is null
+      ? []
+      : constArgs.OrderBy(kv => kv.Key, StringComparer.Ordinal)
+          .Select(kv => kv.Value.ToString(CultureInfo.InvariantCulture));
+
+  /// <summary>
+  /// What distinguishes one instance of a source type from another, as a name fragment: its const
+  /// arguments first, then its type arguments — mirroring the source form <c>Vector with 4 Int</c>,
+  /// and matching the one mint that already spelled a count (ParseFromExpression's
+  /// <c>__Vector_3_Int</c>) so an array literal and a declared alias of the same size agree.
+  /// </summary>
+  public static string InstanceNameSuffix(IReadOnlyDictionary<string, long>? constArgs,
+      IEnumerable<string> paramTypeNames) =>
+    string.Join("_", ConstArgSegments(constArgs).Concat(paramTypeNames));
+
+  /// <summary>
+  /// The generic INSTANCE a type name denotes: its source type plus its type and const arguments BY
+  /// NAME. Two spellings of one instance — a declared <c>ValueIdArray</c> and the structural
+  /// <c>Array_ValueId</c> the field-alias mint would otherwise invent — produce the same key, which
+  /// is what lets the declaration index answer "does this project already name this?" in O(1).
+  ///
+  /// By name rather than by IrType identity because the same instance is asked about from parsers
+  /// holding different objects for one type: a pre-registered placeholder in the declaration phase,
+  /// the real ranged type later. Ordered so the key does not depend on the order a substitution
+  /// dictionary happens to enumerate in.
+  ///
+  /// ⭐ THIS IS THE ONLY SPELLING OF "the same generic instance". Six sites ask the question — the
+  /// declaration index's key, the already-registered test in TryRegisterDeclaredAlias, the
+  /// parser-local reuse scan and the extension-alias reuse guard in RegisterConcreteTypeAlias, the
+  /// return-type search in ResolveStructReturnTypeThroughSelf, and monomorphization's
+  /// TypeSubstitution.FindConcreteAlias — and they must agree, because every one of them decides
+  /// whether to adopt a name or mint one. Each carried its own hand-written comparison until this
+  /// was consolidated; three of them were the same count-plus-per-parameter-name loop written out
+  /// again. A divergence between them is not a compile error at any site: it either adopts a name
+  /// for an instance that is NOT the one in hand (a wrong answer, silently) or mints a name beside
+  /// an existing one, which is the defect this key exists to close.
+  ///
+  /// The const arguments form a SEPARATE group after the <c>|</c> rather than more entries in the
+  /// same list, so a type parameter and a const parameter that happen to share a name cannot produce
+  /// one key between them.
+  /// </summary>
+  public static string InstanceKey(string sourceName, IReadOnlyDictionary<string, IrType> typeArgs,
+      IReadOnlyDictionary<string, long>? constArgs) {
+    var args = typeArgs.Select(kv => $"{kv.Key}={kv.Value.Name}").ToList();
+    args.Sort(StringComparer.Ordinal);
+    return $"{sourceName}<{string.Join(",", args)}|{string.Join(",", ConstArgSegments(constArgs))}>";
+  }
   public Dictionary<string, IrType> TypeParams { get; }
   public bool IsTuple { get; }
   // True when this type represents a typealias of an interface (e.g., typealias ElementIterable = Iterable with Element)
@@ -236,7 +317,7 @@ public class IrStructType : IrType {
 
   /// Whether this type has a fixed-capacity __ManagedMemory buffer small enough to stack-allocate.
   public bool HasStackAllocatableBuffer =>
-    ConstParams.TryGetValue("__capacity", out var capacity)
+    ConstParams.TryGetValue(CapacityConstParamName, out var capacity)
     && TypeParams.TryGetValue("Element", out var elemType)
     && capacity * elemType.ElementSize <= MaxStackAllocBufferBytes;
 

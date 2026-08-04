@@ -11,9 +11,15 @@ public class IrGlobal(string name, IrType type, IrAttribute? initValue = null) {
 
 // Represents a type alias with its source type, type parameter substitutions, and visibility metadata.
 // IsExported and IsModuleVisible are mutually exclusive (enforced at the parser).
+//
+// ConstParams is here for the same reason TypeParams is: this record is the ONLY description of the
+// instance monomorphization has, and TypeSubstitution.FindConcreteAlias decides from it whether a
+// declared alias already names the instance in hand. Without it, `Slot = Vector with 4 Element`
+// specialized to Int matched a declared `Vec3` and every call on the field went to the 3-element
+// family — the parser had already minted the right type, and this table then re-decided it wrongly.
 public record TypeAliasInfo(string SourceTypeName, Dictionary<string, IrType>? TypeParams,
     bool IsExported = false, bool IsStdlib = false, string? SourceFilePath = null, string? OwnerTypeName = null,
-    bool IsModuleVisible = false) {
+    bool IsModuleVisible = false, Dictionary<string, long>? ConstParams = null) {
   /// Checks if a type name refers to __ManagedMemory, either directly or via a type alias.
   public static bool IsManagedMemoryType(string typeName, Dictionary<string, TypeAliasInfo> typeAliasSources) {
     if (typeName == "__ManagedMemory" || typeName.StartsWith("__ManagedMemory_")) return true;
@@ -41,8 +47,11 @@ public record TypeAliasInfo(string SourceTypeName, Dictionary<string, IrType>? T
 // SeedFromModule seeding the alias, and a record naming the borrowing file makes that file look like
 // the declarer, at which point its own PreScan files the alias as file-private and every other file
 // loses the type outright (measured: 45 files, `Unknown type: ValueIdArray`).
+// ConstArgs travels too, because a borrowing parser registers the declaration from THIS record and
+// nothing else: without it a `typealias Vec3 = Vector with 3 Int` re-registered on another file's
+// behalf would come back capacity-less, which is the same instance losing part of its identity.
 public record DeclaredGenericAlias(string Name, bool IsExported, bool IsModuleVisible, bool IsStdlib,
-    string? SourceFilePath);
+    string? SourceFilePath, Dictionary<string, long>? ConstArgs);
 
 // Metadata for constant array literals that can be placed in .rdata
 public record ConstantArrayLiteralInfo(string RdataLabel, long[] Values, bool IsMutable, int ElementSize, bool IsBitPacked = false);
@@ -371,7 +380,7 @@ public class IrModule<TOp> where TOp : IPrintableOp {
   public Dictionary<string, TypeAliasInfo> TypeAliasSources { get; } = [];
 
   // Every top-level generic typealias the compilation unit DECLARES, keyed by the generic INSTANCE
-  // it names (Parser.GenericAliasInstanceKey: source type plus type arguments by name). Filled
+  // it names (IrStructType.InstanceKey: source type plus its type AND const arguments by name). Filled
   // whole-project by Compiler's declaration pass BEFORE any file specializes anything, which is the
   // whole point of it: RegisterConcreteTypeAlias has to mint a name for a field whose type is a
   // generic instance, and asking "does the project already call this instance something?" against

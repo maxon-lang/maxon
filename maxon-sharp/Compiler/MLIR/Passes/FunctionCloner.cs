@@ -1003,7 +1003,7 @@ internal class FunctionCloner {
     if (arrayTag == null && managedIsZeroInit
         && _typeDefs.TryGetValue(resolvedTypeName, out var resolvedDef)
         && resolvedDef is IrStructType resolvedStruct
-        && resolvedStruct.ConstParams.TryGetValue("__capacity", out var capacity)
+        && resolvedStruct.ConstParams.TryGetValue(IrStructType.CapacityConstParamName, out var capacity)
         && resolvedStruct.GetField("managed") != null) {
       // Determine element size from the concrete type
       int elemSize = 8;

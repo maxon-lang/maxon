@@ -1694,6 +1694,9 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
         ? new Dictionary<string, IrType>(st.TypeParams)
         : aliasType is IrEnumType ut && ut.TypeParams != null && ut.TypeParams.Count > 0
           ? new Dictionary<string, IrType>(ut.TypeParams) : null;
+      // Only a struct carries const arguments — an enum has no `with N` form.
+      var constParams = aliasType is IrStructType cst && cst.ConstParams.Count > 0
+        ? new Dictionary<string, long>(cst.ConstParams) : null;
       bool isExported = _exportedTypeAliases.Contains(aliasName);
       bool isModuleVisible = _moduleVisibleTypeAliases.Contains(aliasName);
       // Whose declaration this record describes. Normally this file's; for an alias this parser
@@ -1728,7 +1731,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
         continue;
 
       module.TypeAliasSources[aliasName] = new TypeAliasInfo(sourceTypeName, typeParams,
-          isExported, _isStdlib, declaringFilePath, ownerTypeName, isModuleVisible);
+          isExported, _isStdlib, declaringFilePath, ownerTypeName, isModuleVisible, constParams);
       if (declaringFilePath != null)
         module.TypeDefSourceFiles[aliasName] = declaringFilePath;
 
@@ -5069,7 +5072,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       // "with N Type" const-capacity form: an integer literal prefixes the type args.
       // Only in the unparenthesised form, where it cannot be confused with a tuple.
       if (!Check(TokenType.LeftParen) && Check(TokenType.IntegerLiteral))
-        constParams["__capacity"] = ParseIntegerLiteral(Advance());
+        constParams[IrStructType.CapacityConstParamName] = ParseIntegerLiteral(Advance());
 
       var concreteTypes2 = ParseWithTypeArgs(sourceStruct.AssociatedTypeNames.Count);
 
@@ -5104,12 +5107,11 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       // already has a name for. Specializing here would be worse than useless: it runs before
       // PreScan, so the source struct's fields are whatever the previous compilation unit left.
       if (_typeAliasScanPhase == TypeAliasScanPhase.Declarations) {
-        RecordDeclaredGenericAlias(aliasName, sourceName, substitution2, isExported, isModuleVisible);
+        RecordDeclaredGenericAlias(aliasName, sourceName, substitution2, constParams, isExported, isModuleVisible);
         return;
       }
 
-      RegisterConcreteTypeAlias(aliasName, sourceName, sourceStruct, substitution2,
-        constParams.Count > 0 ? constParams : null,
+      RegisterConcreteTypeAlias(aliasName, sourceName, sourceStruct, substitution2, constParams,
         isExtensionAlias: _inExtensionConformanceLoop);
 
     } finally {
@@ -5133,41 +5135,16 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   }
 
   /// <summary>
-  /// The generic INSTANCE a type name denotes: its source type plus its type arguments BY NAME.
-  /// Two spellings of one instance — a declared <c>ValueIdArray</c> and the structural
-  /// <c>Array_ValueId</c> the field-alias mint would otherwise invent — produce the same key, which
-  /// is what lets the declaration index answer "does this project already name this?" in O(1).
-  ///
-  /// By name rather than by IrType identity because the same instance is asked about from parsers
-  /// holding different objects for one type: a pre-registered placeholder in the declaration phase,
-  /// the real ranged type later. Ordered so the key does not depend on the order a substitution
-  /// dictionary happens to enumerate in.
-  ///
-  /// ⭐ THIS IS THE ONLY SPELLING OF "the same generic instance" ON THIS PATH, and it has to stay
-  /// that way. Three sites ask the question — the declaration index's key, the already-registered
-  /// test in TryRegisterDeclaredAlias, and the parser-local reuse scan in RegisterConcreteTypeAlias
-  /// — and they must agree, because the whole fix rests on the index and the search identifying the
-  /// same instance. Each carried its own hand-written comparison until this was consolidated; two of
-  /// them were the identical count-plus-per-parameter-name loop written twice. A divergence between
-  /// them is not a compile error at either site: it either adopts a declared name for an instance
-  /// that is NOT the one in hand (a wrong answer, silently) or re-mints a structural name beside a
-  /// declared one, which is the defect this index exists to close.
-  /// </summary>
-  private static string GenericAliasInstanceKey(string sourceName, Dictionary<string, IrType> substitution) {
-    var args = substitution.Select(kv => $"{kv.Key}={kv.Value.Name}").ToList();
-    args.Sort(StringComparer.Ordinal);
-    return $"{sourceName}<{string.Join(",", args)}>";
-  }
-
-  /// <summary>
   /// Records that this file declares <paramref name="aliasName"/> for one generic instance, into the
   /// whole-project index the specialize phase consults.
   /// </summary>
   private void RecordDeclaredGenericAlias(string aliasName, string sourceName,
-      Dictionary<string, IrType> substitution, bool isExported, bool isModuleVisible) {
+      Dictionary<string, IrType> substitution, Dictionary<string, long>? constArgs,
+      bool isExported, bool isModuleVisible) {
     var index = _currentModule!.DeclaredGenericAliases;
-    var key = GenericAliasInstanceKey(sourceName, substitution);
-    var declaration = new DeclaredGenericAlias(aliasName, isExported, isModuleVisible, _isStdlib, _sourceFilePath);
+    var key = IrStructType.InstanceKey(sourceName, substitution, constArgs);
+    var declaration = new DeclaredGenericAlias(aliasName, isExported, isModuleVisible, _isStdlib,
+      _sourceFilePath, constArgs);
 
     if (!index.TryGetValue(key, out var incumbent)) {
       index[key] = declaration;
@@ -5195,7 +5172,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   /// this same call, in which case the caller falls back to minting the structural name rather than
   /// recursing forever through a pair of mutually-referential declarations.
   ///
-  /// <paramref name="instanceKey"/> is the caller's already-computed GenericAliasInstanceKey for
+  /// <paramref name="instanceKey"/> is the caller's already-computed IrStructType.InstanceKey for
   /// <paramref name="substitution"/>, passed in rather than recomputed so the "is the registered
   /// type already this instance?" test below cannot drift from the index lookup that chose
   /// <paramref name="declared"/> in the first place.
@@ -5204,7 +5181,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       IrStructType sourceStruct, Dictionary<string, IrType> substitution, string instanceKey) {
     if (_typeRegistry.TryGetValue(declared.Name, out var registered)
         && registered is IrStructType registeredStruct
-        && GenericAliasInstanceKey(sourceName, registeredStruct.TypeParams) == instanceKey) {
+        && IrStructType.InstanceKey(sourceName, registeredStruct.TypeParams, registeredStruct.ConstParams) == instanceKey) {
       _typeAliasSources.TryAdd(declared.Name, sourceName);
       return true;
     }
@@ -5221,7 +5198,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
         _borrowedAliasOwners[declared.Name] = declared.SourceFilePath;
       if (declared.IsExported) _exportedTypeAliases.Add(declared.Name);
       if (declared.IsModuleVisible) _moduleVisibleTypeAliases.Add(declared.Name);
-      RegisterConcreteTypeAlias(declared.Name, sourceName, sourceStruct, substitution);
+      RegisterConcreteTypeAlias(declared.Name, sourceName, sourceStruct, substitution, declared.ConstArgs);
     } finally {
       _registeringDeclaredAliases.Remove(declared.Name);
     }
@@ -5294,9 +5271,16 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       // every order. The scan stays for the instances nothing declares a name for, where the
       // structural name minted for an EARLIER alias is the one to reuse.
       string? existingAliasName = null;
-      // The instance in hand, spelled once (see GenericAliasInstanceKey) and reused by every party
+      // The instance in hand, spelled once (see IrStructType.InstanceKey) and reused by every party
       // below that has to decide whether some other name already denotes it.
-      var instanceKey = GenericAliasInstanceKey(fieldAliasSource, localSub);
+      //
+      // The field alias's CONST arguments are the instance's too, and they are not substituted
+      // through: `typealias Slot = Vector with 4 Element` fixes the capacity at the declaration, so
+      // whatever Element resolves to, this is the capacity-4 instance. Reading them off the field
+      // alias here is what stops a capacity-4 field adopting a declared capacity-3 alias and what
+      // stops two capacities minting the SAME structural name below.
+      var localConstArgs = fieldAliasStruct.ConstParams;
+      var instanceKey = IrStructType.InstanceKey(fieldAliasSource, localSub, localConstArgs);
 
       if (_currentModule != null
           && _currentModule.DeclaredGenericAliases.TryGetValue(instanceKey, out var declared)
@@ -5312,7 +5296,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
           if (existSource != fieldAliasSource) continue;
           if (!_typeRegistry.TryGetValue(existName, out var existType)) continue;
           if (existType is not IrStructType existStruct) continue;
-          if (GenericAliasInstanceKey(existSource, existStruct.TypeParams) != instanceKey) continue;
+          if (IrStructType.InstanceKey(existSource, existStruct.TypeParams, existStruct.ConstParams) != instanceKey) continue;
 
           existingAliasName = existName;
           break;
@@ -5326,9 +5310,9 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
 
       // Create concrete alias, e.g., __ManagedMemory_Pair
       // Recursive calls do NOT pass isExtensionAlias — only top-level extension aliases get mangled
-      var concreteAliasName = $"{fieldAliasSource}_{string.Join("_", localSub.Values.Select(t => t.Name))}";
+      var concreteAliasName = $"{fieldAliasSource}_{IrStructType.InstanceNameSuffix(localConstArgs, localSub.Values.Select(t => t.Name))}";
       if (!_typeRegistry.ContainsKey(concreteAliasName))
-        RegisterConcreteTypeAlias(concreteAliasName, fieldAliasSource, fieldSourceStruct, localSub);
+        RegisterConcreteTypeAlias(concreteAliasName, fieldAliasSource, fieldSourceStruct, localSub, localConstArgs);
       else
         _typeAliasSources.TryAdd(concreteAliasName, fieldAliasSource);
       expandedSub[field.Type.Name] = _typeRegistry[concreteAliasName];
@@ -5339,13 +5323,14 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     // its own entry in _typeAliasSources (instead of all sharing one overwritten entry).
     string effectiveAliasName = aliasName;
     if (isExtensionAlias && substitution.Values.All(IsFullyConcreteType)) {
-      effectiveAliasName = $"__{sourceName}_{string.Join("_", substitution.Values.Select(t => t.Name))}";
-      // Guard against duplicates from different extension paths
+      effectiveAliasName = $"__{sourceName}_{IrStructType.InstanceNameSuffix(constParams, substitution.Values.Select(t => t.Name))}";
+      // Guard against duplicates from different extension paths. The comparison is the instance
+      // key, not a hand-written per-parameter loop: written out it would drop the const arguments
+      // exactly as the name above did, and reuse a capacity-3 registration for a capacity-4 alias.
       if (_typeRegistry.TryGetValue(effectiveAliasName, out IrType? value)
           && value is IrStructType existingStruct
-          && existingStruct.TypeParams.Count == substitution.Count
-          && existingStruct.TypeParams.All(kv =>
-              substitution.TryGetValue(kv.Key, out var sv) && sv.Name == kv.Value.Name)) {
+          && IrStructType.InstanceKey(sourceName, existingStruct.TypeParams, existingStruct.ConstParams)
+             == IrStructType.InstanceKey(sourceName, substitution, constParams)) {
         // Already exists with matching params — just record the mapping
         _extensionAliasToMangled[aliasName] = effectiveAliasName;
         _typeRegistry[aliasName] = value;
@@ -11689,6 +11674,10 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   /// Resolves a type alias to its monomorphized concrete name by combining the base source
   /// type with the alias's type parameter names (e.g., "ENode" -> "__ManagedListNode_Element").
   /// Returns the type name itself if it's not an alias or has no type parameters.
+  ///
+  /// The const arguments are part of that name for the same reason they are part of the instance
+  /// key: this is IsStructTypeCompatible's first test, so leaving them out made `Vec3` and `Vec4`
+  /// resolve to one name and a 3-vector was accepted for a declared 4-vector with no diagnostic.
   private string ResolveConcreteTypeName(string typeName) {
     if (!_typeAliasSources.TryGetValue(typeName, out var source)) return typeName;
     if (!_typeRegistry.TryGetValue(typeName, out var regType)
@@ -11699,7 +11688,8 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     // __Array_i8 (Element=i8) resolve identically. Using BaseType would key Byte
     // on i64 since `int(...)` aliases all share the int base, splitting them from
     // byte-string-literal-emitted Array<i8> instances.
-    return $"{source}_{string.Join("_", regStruct.TypeParams.Values.Select(t => t is IrRangedPrimitiveType rpt ? OptimalRangedTypeName(rpt) : t.Name))}";
+    return $"{source}_{IrStructType.InstanceNameSuffix(regStruct.ConstParams,
+      regStruct.TypeParams.Values.Select(t => t is IrRangedPrimitiveType rpt ? OptimalRangedTypeName(rpt) : t.Name))}";
   }
 
   /// Storage-name canonicalization for ranged primitives: u8 and i8 collapse to
@@ -14959,6 +14949,23 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     if (!_typeRegistry.TryGetValue(typeA, out var typeAEntry) || typeAEntry is not IrStructType structA) return false;
     if (!_typeRegistry.TryGetValue(typeB, out var typeBEntry) || typeBEntry is not IrStructType structB) return false;
     if (structA.TypeParams.Count != structB.TypeParams.Count) return false;
+
+    // TWO SIZES ARE THE SAME TYPE ONLY IF THEY ARE THE SAME SIZE — the same statement the ranged
+    // rule below makes about element WIDTH, one level up about element COUNT. Their storage
+    // differs (a Vec3 is 24 bytes of buffer, a Vec4 32) and so does what `count()` answers, so
+    // passing one where the other is declared is a wrong answer, not a widening.
+    //
+    // ⚠ Deliberately LOOSER than IrStructType.InstanceKey, and this is an assignability question
+    // rather than an identity one — the ranged rule below is looser in the same way, letting a
+    // ranged alias match its own base primitive. An instance that declares NO size makes no claim
+    // about size, so it is compatible with one that does: `IntArray = Array with Int` is the type
+    // of every array literal whatever its length, and `Array from [1, 2, 3]` reaches here as a
+    // capacity-3 instance because the literal's length sizes its initial buffer. Only when BOTH
+    // sides declare a size is a difference a conflict.
+    if (structA.ConstParams.Count > 0 && structB.ConstParams.Count > 0
+        && !IrStructType.ConstArgSegments(structA.ConstParams).SequenceEqual(IrStructType.ConstArgSegments(structB.ConstParams)))
+      return false;
+
     foreach (var (key, valueA) in structA.TypeParams) {
       if (!structB.TypeParams.TryGetValue(key, out var valueB)) return false;
       if (valueA is IrTypeParameterType || valueB is IrTypeParameterType) continue;
@@ -19365,7 +19372,8 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     }
 
     // No existing alias — auto-create one
-    var autoAliasName = MangleConcreteInstanceName(mapSourceTypeName, [keyType.Name, valueType.Name]);
+    // `Map` declares no const parameters, so there are none to carry into the name.
+    var autoAliasName = MangleConcreteInstanceName(mapSourceTypeName, [keyType.Name, valueType.Name], constArgs: null);
     if (!_typeRegistry.ContainsKey(autoAliasName)
         && _typeRegistry.TryGetValue(mapSourceTypeName, out var mapType)
         && mapType is IrStructType mapStruct) {
@@ -19436,9 +19444,15 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   /// This was spelled at five call sites and only ONE of them sanitized, so the same rule gave two
   /// different answers depending on which door minted the instance. That is the shape of defect
   /// this very function's caller was fixed for — one instance under two names — one level down.
+  ///
+  /// The CONST arguments are part of the name for the same reason (see <see cref="ConstArgSegments"/>).
+  /// A source type with no const parameters — every caller today, `Map` among them — passes null and
+  /// gets exactly the name it got before; the parameter is here so the ONE spelling knows the whole
+  /// rule, and so the raw spellings still owed to this consolidation have nothing left to lose.
   /// </summary>
-  private static string MangleConcreteInstanceName(string sourceTypeName, IEnumerable<string> paramTypeNames) =>
-    $"__{sourceTypeName.Replace('.', '_')}_{string.Join("_", paramTypeNames.Select(n => n.Replace('.', '_')))}";
+  private static string MangleConcreteInstanceName(string sourceTypeName, IEnumerable<string> paramTypeNames,
+      IReadOnlyDictionary<string, long>? constArgs) =>
+    $"__{sourceTypeName.Replace('.', '_')}_{IrStructType.InstanceNameSuffix(constArgs, paramTypeNames.Select(n => n.Replace('.', '_')))}";
 
   /// <summary>
   /// Finds the typealias name for Array with the given element type.
@@ -20113,7 +20127,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       // Fixed-capacity type with managed __ManagedMemory field — compiler-synthesised
       // from the __capacity const param (BuiltinArrayLiteral path).
       if (field.Name == "managed" && ResolveBaseTypeName(field.Type.Name) == "__ManagedMemory" &&
-          structType.ConstParams.TryGetValue("__capacity", out var capacity)) {
+          structType.ConstParams.TryGetValue(IrStructType.CapacityConstParamName, out var capacity)) {
         if (!structType.TypeParams.TryGetValue("Element", out var elemType)) {
           throw new CompileError(ErrorCode.SemanticTypeMismatch,
             $"Cannot determine element size for '{structType.Name}': no Element type parameter",
@@ -20352,14 +20366,18 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     if (sourceStruct.AssociatedTypeNames.Count > 0 && elementCount > 0) {
       var elementType = InferArrayLiteralElementType(arrayTag);
 
-      concreteTypeName = $"__{typeName}_{elementCount}_{elementType.Name}";
+      // The literal's length IS this instance's capacity, and it is spelled into the name by the
+      // same rule every other mint uses — this door was the only one that already carried a count,
+      // and it is where that rule's shape (const arguments first) comes from.
+      var literalConstArgs = new Dictionary<string, long> { [IrStructType.CapacityConstParamName] = elementCount };
+
+      concreteTypeName = $"__{typeName}_{IrStructType.InstanceNameSuffix(literalConstArgs, [elementType.Name])}";
       if (!_typeRegistry.ContainsKey(concreteTypeName)) {
         var substitution = new Dictionary<string, IrType>();
         foreach (var assocName in sourceStruct.AssociatedTypeNames) {
           substitution[assocName] = elementType;
         }
-        RegisterConcreteTypeAlias(concreteTypeName, typeName, sourceStruct, substitution,
-          new Dictionary<string, long> { ["__capacity"] = elementCount });
+        RegisterConcreteTypeAlias(concreteTypeName, typeName, sourceStruct, substitution, literalConstArgs);
       }
     }
 
@@ -23049,18 +23067,23 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
           && _typeRegistry.TryGetValue(returnSourceName, out var returnSourceReg)
           && returnSourceReg is IrStructType returnSourceStruct
           && !returnStruct.TypeParams.Values.Any(t => t is IrTypeParameterType)) {
-        // If the return type is already registered with the same concrete type params,
-        // use it directly instead of creating a mangled duplicate.
+        // The return type's CONST arguments are fixed where it was declared and are not substituted
+        // through — a method returning `Vector with 4 Element` returns the capacity-4 instance
+        // whatever Element resolves to — so they travel with the type params into both the
+        // already-registered test and the mint below.
+        var returnConstArgs = returnStruct.ConstParams;
+
+        // If the return type is already registered as the same instance, use it directly instead
+        // of creating a mangled duplicate.
         if (_typeRegistry.TryGetValue(returnStruct.Name, out var existingReg)
             && existingReg is IrStructType existingStruct
-            && existingStruct.TypeParams.Count == returnStruct.TypeParams.Count
-            && existingStruct.TypeParams.All(kv =>
-                returnStruct.TypeParams.TryGetValue(kv.Key, out var rv) && rv.Name == kv.Value.Name)) {
+            && IrStructType.InstanceKey(returnSourceName, existingStruct.TypeParams, existingStruct.ConstParams)
+               == IrStructType.InstanceKey(returnSourceName, returnStruct.TypeParams, returnConstArgs)) {
           return (MaxonValueKind.Struct, returnStruct.Name);
         }
-        var mangledName = $"__{returnSourceName}_{string.Join("_", returnStruct.TypeParams.Values.Select(t => t.Name))}";
+        var mangledName = $"__{returnSourceName}_{IrStructType.InstanceNameSuffix(returnConstArgs, returnStruct.TypeParams.Values.Select(t => t.Name))}";
         if (!_typeRegistry.ContainsKey(mangledName)) {
-          RegisterConcreteTypeAlias(mangledName, returnSourceName, returnSourceStruct, new(returnStruct.TypeParams));
+          RegisterConcreteTypeAlias(mangledName, returnSourceName, returnSourceStruct, new(returnStruct.TypeParams), returnConstArgs);
         }
         return (MaxonValueKind.Struct, mangledName);
       }
@@ -23241,18 +23264,22 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       resolvedReturnParams = filtered;
     }
 
-    // Search for existing alias matching the resolved params
+    // The return type's CONST arguments are fixed where it was declared — a method returning
+    // `Vector with 4 Element` returns the capacity-4 instance whatever Element resolves to — so
+    // they are part of the instance the search and the mint below both ask about. Without them the
+    // search happily returns a declared `Vec3` for a capacity-4 return type.
+    var returnConstArgs = returnStruct.ConstParams;
+    var returnInstanceKey = IrStructType.InstanceKey(returnSourceName, resolvedReturnParams, returnConstArgs);
+
+    // Search for existing alias naming the same instance
     foreach (var (aliasName, aliasSource) in _typeAliasSources) {
       if (aliasSource != returnSourceName) continue;
       if (!_typeRegistry.TryGetValue(aliasName, out var aliasRegType)) continue;
       if (aliasRegType is not IrStructType aliasSt) continue;
-      if (aliasSt.TypeParams.Count != resolvedReturnParams.Count) continue;
       if (aliasSt.TypeParams.Values.Any(t => t is IrTypeParameterType)) continue;
-      bool match = true;
-      foreach (var (pn, pt) in resolvedReturnParams) {
-        if (!aliasSt.TypeParams.TryGetValue(pn, out var ct) || ct.Name != pt.Name) { match = false; break; }
-      }
-      if (match) return aliasName;
+      if (IrStructType.InstanceKey(aliasSource, aliasSt.TypeParams, aliasSt.ConstParams) != returnInstanceKey) continue;
+
+      return aliasName;
     }
 
     // No existing alias — auto-create one.
@@ -23290,9 +23317,9 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
 
     // Auto-create concrete alias for multi-param generic types (e.g., EnumeratedIterator with Source, Element)
     if (returnSourceStruct != null) {
-      var mangledName = $"__{returnSourceName}_{string.Join("_", resolvedReturnParams.Values.Select(t => t.Name))}";
+      var mangledName = $"__{returnSourceName}_{IrStructType.InstanceNameSuffix(returnConstArgs, resolvedReturnParams.Values.Select(t => t.Name))}";
       if (!_typeRegistry.ContainsKey(mangledName)) {
-        RegisterConcreteTypeAlias(mangledName, returnSourceName, returnSourceStruct, new(resolvedReturnParams));
+        RegisterConcreteTypeAlias(mangledName, returnSourceName, returnSourceStruct, new(resolvedReturnParams), returnConstArgs);
       }
       return mangledName;
     }

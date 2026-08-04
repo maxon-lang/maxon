@@ -138,7 +138,10 @@ internal class TypeSubstitution {
             else { allResolved = false; break; }
           }
           if (allResolved && resolvedAssocParams.Count > 0) {
-            var concreteAlias = FindConcreteAlias(module, resolveSourceName, resolvedAssocParams);
+            // The const arguments belong to the ALIAS being specialized when there is one
+            // (`Slot = Vector with 4 Element`), and to the type itself when it is its own source.
+            var concreteAlias = FindConcreteAlias(module, resolveSourceName, resolvedAssocParams,
+              aliasInfo?.ConstParams ?? assocStruct.ConstParams);
             if (concreteAlias != null) {
               map[assocTypeName] = concreteAlias;
             }
@@ -164,7 +167,8 @@ internal class TypeSubstitution {
             else { allResolved = false; break; }
           }
           if (allResolved) {
-            var concreteType = FindConcreteAlias(module, innerInfo.SourceTypeName, resolvedInnerParams);
+            var concreteType = FindConcreteAlias(module, innerInfo.SourceTypeName, resolvedInnerParams,
+              innerInfo.ConstParams);
             if (concreteType != null) {
               map[paramName] = concreteType;
               map[innerAlias.Name] = concreteType;
@@ -295,7 +299,8 @@ internal class TypeSubstitution {
         }
       }
 
-      var concreteInnerType = FindConcreteAlias(module, aliasInfo.SourceTypeName, resolvedParams);
+      var concreteInnerType = FindConcreteAlias(module, aliasInfo.SourceTypeName, resolvedParams,
+        aliasInfo.ConstParams);
       if (concreteInnerType != null) {
         map[innerAliasName] = concreteInnerType;
       }
@@ -324,8 +329,9 @@ internal class TypeSubstitution {
         }
         if (!allResolved || resolvedParams.Count == 0) continue;
 
-        // Find or create a concrete alias
-        var concreteType = FindConcreteAlias(module, refName, resolvedParams);
+        // Find or create a concrete alias. refName is a generic SOURCE type here, not an alias, so
+        // any const arguments it carries are its own.
+        var concreteType = FindConcreteAlias(module, refName, resolvedParams, refStruct.ConstParams);
         if (concreteType != null) {
           map[refName] = concreteType;
         }
@@ -371,24 +377,30 @@ internal class TypeSubstitution {
     }
   }
 
-  /// Searches TypeAliasSources for a concrete alias whose source type matches and whose
-  /// type params match the resolved params exactly. Returns the type definition or null.
-  /// If no matching alias exists and the source type is known, auto-creates one.
+  /// Searches TypeAliasSources for a concrete alias naming the same INSTANCE — the same source
+  /// type, the same type arguments and the same const arguments. Returns the type definition or
+  /// null. If no matching alias exists and the source type is known, auto-creates one.
+  ///
+  /// <paramref name="constArgs"/> comes from the alias being specialized, not from the source type:
+  /// `Slot = Vector with 4 Element` is the capacity-4 instance whatever Element resolves to.
   private static IrType? FindConcreteAlias(
       IrModule<MaxonOp> module,
       string sourceTypeName,
-      Dictionary<string, IrType> resolvedParams) {
+      Dictionary<string, IrType> resolvedParams,
+      Dictionary<string, long>? constArgs) {
+    // Asked as the instance key rather than a per-parameter loop, because a loop written out here
+    // is a second answer to a question the parser already answers — and the two had drifted, this
+    // one silently ignoring capacity and handing a `Vec3` back for a capacity-4 alias.
+    var instanceKey = IrStructType.InstanceKey(sourceTypeName, resolvedParams, constArgs);
+
     // Look up only aliases that match this source — module keeps the reverse
     // index up to date, so this avoids the prior O(TypeAliasSources) scan.
     foreach (var (candidateName, candidateInfo) in module.GetAliasesBySource(sourceTypeName)) {
       if (candidateInfo.TypeParams == null) continue;
       if (candidateInfo.TypeParams.Values.Any(t => t is IrTypeParameterType)) continue;
-      if (candidateInfo.TypeParams.Count != resolvedParams.Count) continue;
-      bool match = true;
-      foreach (var (pn, pt) in resolvedParams) {
-        if (!candidateInfo.TypeParams.TryGetValue(pn, out var ct) || ct.Name != pt.Name) { match = false; break; }
-      }
-      if (match && module.TypeDefs.TryGetValue(candidateName, out var candidateType))
+      if (IrStructType.InstanceKey(sourceTypeName, candidateInfo.TypeParams, candidateInfo.ConstParams) != instanceKey) continue;
+
+      if (module.TypeDefs.TryGetValue(candidateName, out var candidateType))
         return candidateType;
     }
 
@@ -410,8 +422,7 @@ internal class TypeSubstitution {
       }
     }
 
-    var paramSuffix = string.Join("_", resolvedParams.Values.Select(t => t.Name));
-    var autoAliasName = $"__{sourceTypeName}_{paramSuffix}";
+    var autoAliasName = $"__{sourceTypeName}_{IrStructType.InstanceNameSuffix(constArgs, resolvedParams.Values.Select(t => t.Name))}";
     if (module.TypeDefs.TryGetValue(autoAliasName, out IrType? value)) {
       return value;
     }
@@ -426,6 +437,7 @@ internal class TypeSubstitution {
       }
       var newType = new IrStructType(autoAliasName, concreteFields,
         conformingInterfaces: [.. sourceStruct.ConformingInterfaces],
+        constParams: constArgs,
         typeParams: resolvedParams,
         isTuple: sourceStruct.IsTuple);
 
@@ -449,7 +461,7 @@ internal class TypeSubstitution {
       }
 
       module.TypeDefs[autoAliasName] = newType;
-      module.RegisterTypeAlias(autoAliasName, new TypeAliasInfo(sourceTypeName, resolvedParams));
+      module.RegisterTypeAlias(autoAliasName, new TypeAliasInfo(sourceTypeName, resolvedParams, ConstParams: constArgs));
       return newType;
     }
 
@@ -485,7 +497,9 @@ internal class TypeSubstitution {
         [.. sourceEnum.ConformingInterfaces],
         typeParams: resolvedParams) { IsUnion = sourceEnum.IsUnion };
       module.TypeDefs[autoAliasName] = newEnumType;
-      module.RegisterTypeAlias(autoAliasName, new TypeAliasInfo(sourceTypeName, resolvedParams));
+      // An enum has no `with N` form, so constArgs is always null here — carried through anyway so
+      // the record can never describe a different instance from the name minted above.
+      module.RegisterTypeAlias(autoAliasName, new TypeAliasInfo(sourceTypeName, resolvedParams, ConstParams: constArgs));
       return newEnumType;
     }
 
