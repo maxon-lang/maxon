@@ -158,13 +158,32 @@ end 'PhaseCost'
 export typealias DurationNanosArray = Array with DurationNanos
 export typealias CpuTicksArray = Array with CpuTicks
 
-// The phases the compile is attributed to, in EXECUTION order — which is also the
-// order the report prints them, so the table reads as the pipeline runs.
+// The phases the compile is attributed to.
+//
+// ⛔⛔ **APPEND-ONLY. A NEW PHASE GOES AT THE END, AND NO EXISTING MEMBER EVER CHANGES ORDINAL.**
+// `MetricsEmit.metricsText` writes one TSV row per case in this order and
+// `ScaleTestRunner.parseRungMetrics` keys its dense per-phase columns on `ordinal`, so every
+// `.metrics.tsv` ever written — and every trend row derived from one — is indexed by it. A member
+// inserted in the middle silently re-attributes every historical measurement to the wrong phase:
+// a wrong answer under a green suite, which is the failure mode this whole file exists to prevent.
+//
+// ⇒ **THIS LIST IS THEREFORE NO LONGER IN EXECUTION ORDER, AND IT USED TO BE.** The ordinal order
+// is the WIRE order; all three outputs (both report tables and the TSV) print it, so they agree
+// with each other row for row. **The execution order is deliberately not written down here.** A
+// second list would be this project's signature bug — one fact twice — and it would go stale at the
+// first pass that moved; the run itself already answers, because `PhaseProbe.begin` emits a trace
+// span the moment a phase opens, so `maxon monitor --filter=log` prints the true order of a REAL
+// compile rather than a comment's memory of one.
 //
 // Each name matches the function that does the work, so a row points at code:
 //   load             Compiler.loadProject      — discover, read, and hash the sources
+//   prepareOutput    Compiler.compileMeasured  — resolve the output path, clear the last build
 //   lex/signatures/parse/merge
 //                    Queries.*                 — the query spine, timed at the leaves
+//   checkDeclarations … layOutGlobals, installRuntime, synthesizeBodies
+//                    Compiler.compileToCodeResult — the whole-program work either side of the pipeline
+//   pipelineNameIndex
+//                    PassPipeline.run          — the one shared FunctionNameIndex
 //   resolveTypes …   PassPipeline.dispatch     — one arm per PassKind (compilePhaseOfPass)
 //   sugarGate … link BackendDispatch.buildBackend — the backend's fixed sequence
 //   writeExe/emitIr  Compiler.compile          — the object write + the --emit-ir sidecar
@@ -204,6 +223,64 @@ export enum CompilePhase
 	link
 	writeExe
 	emitIr
+
+	// ── EVERYTHING BELOW THIS LINE WAS APPENDED BY A2n, AND IT IS COST THAT WAS ALWAYS PAID.
+	//
+	// A long span of `Compiler.compileToCodeResult` ran inside NO bracket at all. It was never
+	// unmeasured — the whole-compile probe opens before it and closes after — but it landed in
+	// `unattributedCost`, which `ScaleTestRunner.parseRungMetrics` reads and DISCARDS, so no
+	// table could say which of a dozen whole-program passes had grown. MEASURED on the scale
+	// corpus before it was bracketed: rung 0 — 27,506 allocations / 1,617,373 bytes (2.66% /
+	// 2.39% of the compile); rung 5 — 228,231 / 12,097,854 (1.08% / 0.75%).
+	//
+	// ⚠ They are appended rather than slotted in beside the phases they run between, for the
+	// reason this enum's header gives. Nothing here is a NEW cost.
+
+	// `Compiler.compileMeasured`: resolving the output path and deleting the previous build's exe
+	// and `.ir` sidecar. Its own phase and not a slice of `load`, because `load` reads the SOURCES
+	// while this writes to the OUTPUT — billing a `File.delete` to the source loader is exactly the
+	// neighbour-absorption this file exists to prevent.
+	prepareOutput
+	// The whole-program declaration checks that run before the pipeline (`checkValueMergeSignatures`,
+	// `checkConformance`, `checkLiteralInitConformance`, `checkGenericAliasCycles`,
+	// `checkWhereConstraints`, `checkTypeSymbolNamespace`).
+	//
+	// ONE phase rather than six, and that is the grouping rule for every phase below: a reader asks
+	// what CHECKING THE DECLARATIONS cost, never what `checkLiteralInitConformance` alone cost, and a
+	// table of thirty one-call rows answers neither question. Recorded from TWO brackets, because
+	// `queryProgramSignatures` runs between the first check and the other five and owns the
+	// `signatures` phase; `addPhaseCost` accumulates, so two disjoint intervals make one honest row.
+	checkDeclarations
+	// The `verify*Ordinals` block — the builtin-error ordinal claims (`Compiler.compileToCodeResult`).
+	verifyOrdinals
+	// From `liveGlobalLabels` to `collectFnRefThunkTargets`: which globals the program can still name,
+	// the synthesized `__module_init`, the stdlib reachability facts, and the runtime-usage walk with
+	// its destructor/cloner closures. One phase because they are one question asked in six ways —
+	// WHAT DOES THIS PROGRAM NEED — and every install below reads the answer.
+	deriveRuntimeNeeds
+	// Assembling the `.data` slot list from those answers and laying the section out
+	// (`GlobalDataTable.layOut`). Split from `deriveRuntimeNeeds` although it runs in the same breath,
+	// because it is the only step there whose cost is O(globals) rather than O(module).
+	layOutGlobals
+	// `PassPipeline.run`'s ONE shared `FunctionNameIndex`, built before the first pass and read by
+	// three of them.
+	//
+	// ⚠ **NAMED FOR THE PIPELINE, NOT FOR NAME INDEXING, AND THE PRECISION IS THE POINT.** There are
+	// THREE Maxon-tier `FunctionNameIndex.create` calls; a row called `nameIndex` would name one of
+	// them and under-report the mechanism threefold. The other two are inside `checkConformance` and
+	// `deriveStdlibFacts`, so they are billed to `checkDeclarations` and `deriveRuntimeNeeds` — which
+	// is where the cost belongs, since it is those passes' own.
+	pipelineNameIndex
+	// The hand-built runtime library installs (`installMmRuntime` … `installBuiltinConformanceRuntime`),
+	// which run after the pipeline and are already-lowered Std. One phase, not eighteen: they are
+	// bits of ONE runtime floor, each gated on its own usage bit, and what a reader wants is what
+	// carrying the runtime costs this program.
+	installRuntime
+	// The bodies the compiler SYNTHESIZES for this particular program — the per-union, per-struct and
+	// per-instance destructor cascades, the two cloner cascades, and the `__fnref_` env thunks. Its
+	// own phase beside `installRuntime` because the two scale with different things: the runtime is a
+	// fixed library gated on usage bits, while this grows with the program's TYPES.
+	synthesizeBodies
 end 'CompilePhase'
 
 // Per-compile timing state, owned by `Project` (which is already threaded through

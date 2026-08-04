@@ -229,21 +229,28 @@ export type PassPipeline
 		// `var` because the passes below STORE it (the lowering keeps it as a field), and a binding handed to a
 		// storage-writing parameter must be mutable (E3019).
 		//
-		// ⚠ **IT IS OUTSIDE EVERY `PhaseProbe`, SO IT LANDS IN `unattributed` — AND IT USED TO BE BILLED TO
-		// `phase:semanticCheck`.** That is a real movement in a bit-exact column, so here is its size, MEASURED
-		// (A2l review, 2026-07-31, by temporarily billing this one statement to the always-empty `emitIr` slot
-		// and reading the scale corpus): **rung 0 — 47 allocations / 36 frees / 16,936 bytes; rung 5 — 79 / 68 /
-		// 263,336**, i.e. ×1.68 in allocations across a 32× ladder (it is the MAP's geometric buffer growth, not
-		// a per-entry cost), 0.15% of `semanticCheck`'s own 53,345 and 0.0005% of the compile.
+		// ⚠ **IT USED TO BE BILLED TO `phase:semanticCheck`, AND THEN TO NOTHING AT ALL.** That is a real
+		// movement in a bit-exact column, so here is its size, MEASURED (A2l review, 2026-07-31, by
+		// temporarily billing this one statement to the always-empty `emitIr` slot and reading the scale
+		// corpus): **rung 0 — 47 allocations / 36 frees / 16,936 bytes; rung 5 — 79 / 68 / 263,336**, i.e.
+		// ×1.68 in allocations across a 32× ladder (it is the MAP's geometric buffer growth, not a per-entry
+		// cost), 0.15% of `semanticCheck`'s own 53,345 and 0.0005% of the compile.
 		//
-		// **It cannot go inside the existing bracket, and it did not get a phase of its own.** `dispatch` opens
-		// one bracket PER PASS, while this must exist before the loop and is read by TWO of them, so billing it
-		// to either would make that pass's row mean two things — the defect `CompileTimings`' header exists to
-		// prevent. And a `nameIndex` phase would name ONE of the THREE Maxon-tier `FunctionNameIndex.create`
-		// calls: `ConformanceCheck.checkConformance`'s and `deriveStdlibFacts`' have always been unattributed
-		// too, so the row would under-report name indexing threefold. A misleading row is a worse instrument
-		// than a remainder that is printed and reconciled against the total.
+		// **It cannot go inside the existing bracket, so it has one of its own.** `dispatch` opens one bracket
+		// PER PASS, while this must exist before the loop and is read by TWO of them, so billing it to either
+		// would make that pass's row mean two things — the defect `CompileTimings`' header exists to prevent.
+		//
+		// ⭐ **AND THE PHASE IS NAMED `pipelineNameIndex`, NOT `nameIndex`, BECAUSE A ROW MUST NOT CLAIM MORE
+		// THAN IT BRACKETS.** There are THREE Maxon-tier `FunctionNameIndex.create` calls; this is one of
+		// them, and a row spelled `nameIndex` would under-report the mechanism threefold. That objection is
+		// what kept this statement unbracketed until A2n, and it is answered by the NAME rather than by
+		// leaving the cost in a remainder that `ScaleTestRunner` reads and discards. The other two —
+		// `ConformanceCheck.checkConformance`'s and `deriveStdlibFacts`' — are now inside
+		// `CompilePhase.checkDeclarations` and `CompilePhase.deriveRuntimeNeeds`, billed to the passes whose
+		// own cost they are.
+		let nameIndexProbe = PhaseProbe.beginPhase(self.project, phase: CompilePhase.pipelineNameIndex)
 		var funcNames = try FunctionNameIndex.create(self.maxonModule.functions, project: self.project)
+		recordPhase(self.project, phase: CompilePhase.pipelineNameIndex, probe: nameIndexProbe)
 
 		for pass in self.passes 'eachPass'
 			logDebug(LogCategory.ir, message: function() gives "=== Running pass: {passKindToString(pass)} ===")

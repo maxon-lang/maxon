@@ -55,6 +55,11 @@ end 'traceUnitOf'
 // EXHAUSTIVE BY CONSTRUCTION, and that is the point: a new CompilePhase does not compile until it
 // is named here, so a phase can never appear in the timing table and be anonymous in the trace.
 // The two tables are then guaranteed to describe the same set of phases.
+//
+// It also carries a fact no table can: `PhaseProbe.begin` emits a span the instant a phase OPENS, so
+// the BEGIN events of one real compile are the compile's EXECUTION ORDER. That matters now that
+// `CompilePhase` is append-only and its declaration order is the wire order rather than the pipeline's
+// — the order a reader wants is derived from the run instead of written down a second time.
 export function compilePhaseName(phase CompilePhase) returns TraceName
 	let id = match phase 'name'
 		load gives __DebugStream.nameId("load")
@@ -80,6 +85,14 @@ export function compilePhaseName(phase CompilePhase) returns TraceName
 		link gives __DebugStream.nameId("link")
 		writeExe gives __DebugStream.nameId("writeExe")
 		emitIr gives __DebugStream.nameId("emitIr")
+		prepareOutput gives __DebugStream.nameId("prepareOutput")
+		checkDeclarations gives __DebugStream.nameId("checkDeclarations")
+		verifyOrdinals gives __DebugStream.nameId("verifyOrdinals")
+		deriveRuntimeNeeds gives __DebugStream.nameId("deriveRuntimeNeeds")
+		layOutGlobals gives __DebugStream.nameId("layOutGlobals")
+		pipelineNameIndex gives __DebugStream.nameId("pipelineNameIndex")
+		installRuntime gives __DebugStream.nameId("installRuntime")
+		synthesizeBodies gives __DebugStream.nameId("synthesizeBodies")
 	end 'name'
 	return id as TraceName
 end 'compilePhaseName'

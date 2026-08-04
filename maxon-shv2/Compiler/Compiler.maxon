@@ -74,8 +74,14 @@ function compileMeasured(inputPath FilePath, target Target, outputOverride Strin
 
 	// ⭐ RESOLVED BEFORE THE PIPELINE, AND THAT ORDER IS THE WHOLE POINT: the previous build's
 	// artifacts are removed HERE, ahead of every step that can fail. See `discardPreviousOutput`.
+	//
+	// Bracketed as its own phase rather than left in `load`'s: these two touch the OUTPUT, `load`
+	// reads the SOURCES, and a phase that absorbs a neighbour's cost is the defect CompileTimings'
+	// header is about.
+	let outputProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.prepareOutput)
 	let outputPath = try resolveOutputPath(project, outputOverride: outputOverride)
 	try discardPreviousOutput(project, outputPath: outputPath)
+	recordPhase(project, phase: CompilePhase.prepareOutput, probe: outputProbe)
 
 	let codeResult = try compileToCodeResult(project)
 
@@ -270,7 +276,14 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// diagnostic can print the source alias names (`Integer`) that resolution erases to `int`. Any diagnostic
 	// it emits is caught by the pipeline's own error gate below (after `resolveTypes`), exactly as an
 	// accumulated parse diagnostic is.
+	//
+	// ⭐ **THE FIRST OF `checkDeclarations`' TWO BRACKETS, AND THE SPLIT IS FORCED BY THE ORDER.**
+	// `queryProgramSignatures` runs between this check and the other five, and it owns the
+	// `signatures` phase — so one bracket spanning all six would swallow that phase whole and
+	// double-count it. `addPhaseCost` accumulates, so two disjoint intervals report as one row.
+	let mergeCheckProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.checkDeclarations)
 	checkValueMergeSignatures(project)
+	recordPhase(project, phase: CompilePhase.checkDeclarations, probe: mergeCheckProbe)
 
 	// ⭐ **`implements`-CONFORMANCE CHECKING (P1.7a slice 1) — HERE, before the pipeline.** It reads the
 	// still-UNRESOLVED merged signatures so its E3016 message can print the source type spellings
@@ -286,6 +299,9 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// typed by a generic INSTANCE has no identity outside this index (`canonicalInstanceName`), and rendering
 	// one without it spelled `Array with Integer` and `Array with String` as the same word.
 	var signatures = try queryProgramSignatures(project)
+
+	// The second of `checkDeclarations`' two brackets — see the first, above `checkValueMergeSignatures`.
+	let declCheckProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.checkDeclarations)
 
 	checkConformance(project, module: module, signatures: signatures)
 
@@ -330,7 +346,16 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// pipeline's error gate, exactly as an E3017 is.
 	checkTypeSymbolNamespace(project, signatures: signatures)
 
-	// ⭐⭐ **THE SIX BUILTIN-ERROR ORDINAL CLAIMS — ALL OF THEM, HERE, AND NOT IN SIX OTHER PLACES (A1s).**
+	recordPhase(project, phase: CompilePhase.checkDeclarations, probe: declCheckProbe)
+
+	// ⭐⭐ **THE SEVEN BUILTIN-ERROR ORDINAL CLAIMS — ALL OF THEM, HERE, AND NOT SCATTERED ACROSS THE
+	// RUNTIME INSTALLERS THAT TRANSCRIBE THEM (A1s).**
+	//
+	// ⚠ SEVEN FAMILIES, SIX CALLS: `verifyArrayRuntimeOrdinals` claims for BOTH `ArrayError` and
+	// `__ManagedMemoryError` (see its header). This line said SIX while the two comments below already
+	// numbered `StringError` the sixth and `MapError` the seventh — the count and the ordinals in one
+	// block, disagreeing.
+	//
 	// Each family's runtime transcribes its enum's ordinals as literals, and each holds them to the
 	// declaration on every compile (`Project.BuiltinErrorOrdinalCheck` — drift silently reroutes every
 	// handler arm). They used to run from four `install*Runtime` heads plus one free function; three of them
@@ -346,6 +371,10 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// addition to that module: one E3058 followed by two E4016s about a module the compile plainly HAD.
 	// It is the refusal `checkTypeSymbolNamespace` and `checkGenericAliasCycles` above make, for the same
 	// reason: a check whose inputs are half-built cannot produce a verdict worth reading.
+	// The bracket sits OUTSIDE the well-formedness gate, so the phase reports on every compile: a row
+	// that vanished for a failing program would be indistinguishable from a phase that cost nothing.
+	let ordinalProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.verifyOrdinals)
+
 	if not projectHasErrors(project) 'wellFormedSoFar'
 		verifyManagedFileOrdinals(project)
 		verifyManagedDirectoryOrdinals(project)
@@ -361,6 +390,8 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 		// `Project.builtinMapErrorEnum` declares it by POSITION. See `verifyMapErrorOrdinals`.
 		verifyMapErrorOrdinals(project)
 	end 'wellFormedSoFar'
+
+	recordPhase(project, phase: CompilePhase.verifyOrdinals, probe: ordinalProbe)
 
 	// ⭐ THE HEAP IS CARRIED ONLY BY PROGRAMS THAT REACH IT (P1.0r). A `return 42` program
 	// allocates nothing, so it gets no allocator, no `.data` slots and no leak check — and its
@@ -401,6 +432,16 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// opens every managed global with a `globalAddr` of that global's own slot, so a liveness scan run
 	// after the synthesis would find every global keeping itself alive — the answer would be "everything
 	// is live", silently and always.
+	// ⚠ **THE ONE QUERY REACHED FROM INSIDE THIS BRACKET IS A MEMO HIT, AND IF IT EVER IS NOT, THIS
+	// COMPILE IS ALREADY FAILING.** `deriveStdlibFacts` reads each stdlib file's parse artifact back
+	// through `queryParseOps`, which opens the `parse` phase — but only on a MISS, and every stdlib
+	// file was parsed and cached by `queryAllModule` above. The single way to reach a miss here is a
+	// stdlib file whose parse FAILED (a failed parse is never cached), and that compile throws at the
+	// pipeline's error gate before anything stamps a total or reads a table. So the nesting the
+	// disjointness contract forbids cannot be observed; it is stated because the next reader deserves
+	// to know it was checked rather than assumed.
+	let needsProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.deriveRuntimeNeeds)
+
 	let liveGlobals = liveGlobalLabels(module, storedGlobals: signatures.storedGlobalCount)
 	// It answers whether the program has any managed global at all, which is the single bit the entry stubs
 	// gate their two calls on. A program with none builds nothing and is byte-identical to before this rung.
@@ -443,6 +484,11 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// lowers it — and the thunks are installed already-lowered AFTER the pipeline, like the destructor cascades
 	// (P1.5-A2b-2).
 	let fnRefThunkTargets = collectFnRefThunkTargets(module, funcSignatures: project.funcSignatures)
+	recordPhase(project, phase: CompilePhase.deriveRuntimeNeeds, probe: needsProbe)
+
+	// The `.data` slot list assembled from those answers, and the section laid out. Its own phase
+	// because it is the only step in this run whose cost is O(globals) rather than O(module).
+	let layoutProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.layOutGlobals)
 	var declaredGlobals = signatures.declaredGlobals(liveGlobals)
 	if usage.usesHeap 'heapGlobals'
 		for entry in runtimeGlobals() 'each'
@@ -480,6 +526,7 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 		end 'each'
 	end 'clockGlobals'
 	project.globalData.layOut(declaredGlobals)
+	recordPhase(project, phase: CompilePhase.layOutGlobals, probe: layoutProbe)
 
 	var pipeline = PassPipeline.create(project, maxonModule: module, signatures: signatures)
 	pipeline.addPasses(buildDefaultPipeline())
@@ -492,6 +539,12 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// they run on, and `foldConstOperands` would only re-derive folds it already has. It still
 	// flows through the WHOLE backend (ISel, register allocation, frames), which is the entire
 	// argument for building it as `StdOp`s rather than as bytes.
+	//
+	// ONE bracket over all of them, not one per installer: each is a slice of a single runtime floor
+	// gated on its own usage bit, and the question a reader has is what CARRYING THE RUNTIME cost
+	// this program (see `CompilePhase.installRuntime`).
+	let runtimeInstallProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.installRuntime)
+
 	if usage.usesHeap 'installMm'
 		installMmRuntime(pipeline.stdModule, usage: usage)
 	end 'installMm'
@@ -622,6 +675,13 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// the next reader. A pointer at the owner cannot go stale, so this is one.
 	installBuiltinConformanceRuntime(pipeline.stdModule, globalData: project.globalData)
 
+	recordPhase(project, phase: CompilePhase.installRuntime, probe: runtimeInstallProbe)
+
+	// The bodies synthesized for THIS program get their own bracket beside the runtime's: the runtime
+	// above is a fixed library gated on usage bits, while everything below grows with the program's
+	// TYPES, and a single row over both would move for two unrelated reasons.
+	let synthesizeProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.synthesizeBodies)
+
 	// The per-union (P1.3 slice 2) and per-struct (P1.4a wave 2) destructor cascades, installed the same way
 	// and for the same reason: already-lowered Std, appended after the pipeline so they are never
 	// re-optimized. Only the destructors the module actually CALLS — directly or through a nested cascade
@@ -644,6 +704,8 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// (see `fnRefThunkTargets`), installed here already-lowered so they flow through the whole backend and (on
 	// wasm) receive a funcref-table slot at their funcIdx (P1.5-A2b-2).
 	installFnRefThunks(pipeline.stdModule, project: project, targets: fnRefThunkTargets)
+
+	recordPhase(project, phase: CompilePhase.synthesizeBodies, probe: synthesizeProbe)
 
 	// The backend owns its own error gate now, and TWO of its stages use it: the register allocator
 	// reports E5001 (register pressure) onto `project.diagnostics` and throws when a loop genuinely
