@@ -2677,11 +2677,9 @@ export type SplitDriver
 		// DECREASES every iteration and the loop MUST reach Φ = 0 (no over-pool op → `peak.found` false).
 		// This holds under MULTIPLE splits per lineage too: a reload is itself an ordinary value the next
 		// iteration may split again (via a fresh id), each such split cutting a strictly smaller run of
-		// uses. Φ ≤ Σ_ops effectivePressure(op) ≤ totalOps × (valueCount + 1) bounds the split count, so
-		// this cannot be reached by correct convergence — it converts a hypothetical non-terminating
-		// splitter bug into a loud panic rather than a hang. (`valueCount` grows as fresh reload ids are
-		// minted, but the split count is bounded by the INITIAL Φ, which the initial figures bound.)
-		let iterationBound = funcLiveness.useIndex.opCount * (funcLiveness.valueCount + 1) + RegisterFileSize
+		// uses. The bound below is what turns a hypothetical non-terminating splitter bug into a loud
+		// panic rather than a hang.
+		let iterationBound = splitRunawayBound(funcLiveness)
 		var iterations = 0 as EventCount
 
 		// `analyzePressure` finds the worst OVER-POOL point — an op whose effective pressure exceeds
@@ -2715,13 +2713,6 @@ export type SplitDriver
 			// raise, and at a CONFINED one it is a splitter bug (`noVictimAtPeak`).
 			let victim = try victimAtPeak(choice, project: project, module: module, func: func, funcIndex: funcIndex, liveness: funcLiveness, peak: peak, pool: self.pool, lineage: self.lineage)
 
-			// EVERYTHING THE INCREMENTAL UPDATE NEEDS FROM THE PRE-SPLIT WORLD, taken before a single op
-			// moves: the victim's live range comes off the live sets it is about to leave, and its use
-			// blocks off the index that is about to be rebuilt.
-			work.dirty.clear()
-			work.edits.clear()
-			unmarkVictim(self.cfg.topo, index: index, liveness: funcLiveness, scratch: work, victim: victim)
-
 			// `chooseVictim` re-pointed the function's ONE anchor at this peak, and the mutation below cuts
 			// there. Asserted rather than assumed: the two are a few lines apart today, and a reorder that
 			// broke it would split at the PREVIOUS peak — a wrong cut in the right-looking place, not a crash.
@@ -2729,21 +2720,24 @@ export type SplitDriver
 				panic("SplitDriver.relievePressure: the split anchor is at sequence {work.anchor.seq} but this iteration's peak is at {peak.peakSeq} — `chooseVictim` re-points the function's one anchor and the mutation reads it back, so nothing may run between them that re-points it")
 			end 'anchorIsNotThisPeaks'
 
+			// Only a SPILL of a value memory does not already hold consumes a slot: a value relieved again
+			// at a second peak reloads out of the slot it is already resident in (see `slotForSpillOf`), and
+			// so does a RELOAD id relieved in its turn. Read BEFORE `beginSplit`, which is what bumps the
+			// supply, and before the mutation, which is where `isSlotResident` would start answering about
+			// the store this iteration is about to insert.
+			let slot = slotForSpillOf(index, valueId: victim, nextSlot: self.nextSlot)
+			let takesSlot = match choice 'countSlot'
+				none to remat gives false
+				spill gives true
+			end 'countSlot'
+			self.beginSplit(index, victim: victim, takesSlot: takesSlot)
+
 			let freshFrom = self.nextValueId
 			match choice 'act'
 				none then panic("SplitDriver.relievePressure: `victimAtPeak` returned for a `none` choice — it must throw")
 				remat(v, scope) then self.nextValueId = rematerializeConstant(module, index: index, topo: self.cfg.topo, valueId: v, peakSeq: peak.peakSeq, scope: scope, nextValueId: self.nextValueId, stats: stats, lineage: self.lineage, scratch: work, opFacts: funcLiveness.opFacts)
-				spill(v, scope) then self.nextValueId = spillOneValue(module, index: index, cfg: self.cfg, liveness: funcLiveness, valueId: v, anchor: work.anchor, scope: scope, slot: slotForSpillOf(index, valueId: v, nextSlot: self.nextSlot), pool: self.pool, nextValueId: self.nextValueId, stats: stats, lineage: self.lineage, scratch: work)
+				spill(v, scope) then self.nextValueId = spillOneValue(module, index: index, cfg: self.cfg, liveness: funcLiveness, valueId: v, anchor: work.anchor, scope: scope, slot: slot, pool: self.pool, nextValueId: self.nextValueId, stats: stats, lineage: self.lineage, scratch: work)
 			end 'act'
-			// Only a spill of a value memory does NOT already hold consumes a slot: a value relieved again
-			// at a second peak reloads out of the slot it is already resident in (see `slotForSpillOf`), and
-			// so does a RELOAD id relieved in its turn. The index is not rebuilt until `refreshAfterSplit`
-			// below, so `isSlotResident` still answers about the state the choice was made in — the store
-			// this iteration may have just inserted is invisible.
-			match choice 'countSlot'
-				spill(v, _) then self.consumeSlotFor(index, victim: v)
-				none to remat then break 'countSlot'
-			end 'countSlot'
 
 			self.commitSplit(module, victim: victim, freshFrom: freshFrom)
 			peak = refreshPeak(module, liveness: funcLiveness, pool: self.pool, scratch: work)
@@ -2767,9 +2761,8 @@ export type SplitDriver
 		// the loop's `analyzePressure`-based exit is its guarantee.)
 		//
 		// ⚠ IT IS NOT "THE COLORER CANNOT FAIL", AND IT NEVER WAS. Pointwise feasibility does not imply a
-		// GREEDY colouring exists — that is list colouring, and `HallCondition.hallVerdictAt`'s header
-		// carries the counterexample. A value the colorer cannot place on a point this guarantees is a
-		// CONFINEMENT, and `repairAtExhaustion` relieves it.
+		// GREEDY colouring exists — see `HallCondition.hallVerdictAt`. A value the colorer cannot place on
+		// a point this guarantees is a CONFINEMENT, and `repairAtExhaustion` relieves it.
 		//
 		// PER CLASS, because the files are independent and a mixed figure against a mixed pool is the
 		// comparison that made this guard stop firing at all: with 30 registers nominally available, 15
@@ -2793,6 +2786,30 @@ export type SplitDriver
 		self.nextSlot = self.nextSlot + 1
 	end 'consumeSlotFor'
 
+	// ONE split's PROLOGUE — everything the incremental update must take from the PRE-SPLIT world,
+	// before a single op moves. It mirrors `commitSplit`, and it is one function for the same reason:
+	// three callers make the same mutation and owe the same preparation.
+	//
+	// ⛔ IT IS ALSO AN ORDER, NOT JUST A LIST, AND THE ORDER WAS THE DUPLICATION WORTH REMOVING. Written
+	// out at each call site the two copies drifted into two different step orders, which was sound only
+	// because `UseIndex` is not rebuilt until `refreshAfterSplit` — so `isSlotResident` answers the same
+	// before and after the mutation. The day that stops being true, the symptom is TWO VALUES SHARING A
+	// SPILL SLOT: one store silently overwriting the other, no crash, wrong answer.
+	//
+	// `takesSlot` is false for a REMAT, which writes no memory and consumes nothing. The caller decides
+	// it from the relief CHOICE, because that is where the two kinds are already told apart.
+	//
+	// ⚠ `slotForSpillOf` MUST BE READ BEFORE THIS RUNS: this bumps `nextSlot`, and the slot the split
+	// writes into is the value BEFORE the bump.
+	function beginSplit(index UseIndex, victim ValueId, takesSlot bool)
+		self.scratch.dirty.clear()
+		self.scratch.edits.clear()
+		if takesSlot 'aSpillNeedsAHome'
+			self.consumeSlotFor(index, victim: victim)
+		end 'aSpillNeedsAHome'
+		unmarkVictim(self.cfg.topo, index: index, liveness: self.liveness, scratch: self.scratch, victim: victim)
+	end 'beginSplit'
+
 	// ONE split's mutation, committed: the id space the mutators grew, and the incremental repair of
 	// every derived structure. Both callers make the same mutation and owe the same repair, so it is
 	// stated once — written twice, a second caller would be one `growValueSpace` or one
@@ -2808,86 +2825,173 @@ export type SplitDriver
 		refreshAfterSplit(module, cfg: self.cfg, liveness: self.liveness, scratch: self.scratch, split: split, pool: self.pool, paramCross: self.paramCross)
 	end 'commitSplit'
 
-	// ⭐⭐ **RELIEVE ONE VALUE THE COLORER COULD NOT PLACE, BY SPLITTING IT ACROSS A CLOBBER IN ITS OWN
-	// LIVE RANGE.**
+	// ⭐⭐ **THE TWO CURES FOR A VALUE THE COLORER COULD NOT PLACE, AND WHY THERE ARE EXACTLY TWO.**
 	//
-	// The point is NOT over-pool — `relievePressure` has already driven Φ to 0 and Hall's exact verdict
-	// there is FEASIBLE (`reportExhaustion` runs it). What failed is the COLOURING ORDER: an earlier def
-	// took a register out of `v`'s admissible set while the caller-saved half was momentarily full, and a
-	// colour once given is held for the value's whole range. Greedy is not exact for this constraint
-	// family and no static order can be (list colouring of a chordal graph is NP-hard — see
-	// `HallCondition.hallVerdictAt`).
+	// The point is NOT over-pool — `relievePressure` has already driven its Φ to 0 and Hall's exact
+	// verdict there is FEASIBLE (`reportExhaustion` runs it). What failed is the COLOURING ORDER: an
+	// earlier def took a register out of `v`'s admissible set while the caller-saved half was momentarily
+	// full, and a colour once given is held for the value's whole range. Greedy is not exact for this
+	// constraint family and no static order can be — `HallCondition.hallVerdictAt` is where that is
+	// argued, and it is argued in exactly one place on purpose.
 	//
-	// So the cure is not a re-ordering and not a recolour: SPLIT THE STUCK VALUE. Its confinement comes
-	// from the clobbers it is live ACROSS, so cutting its range at one of them removes that clobber — and
-	// every clobber after it — from its forbidden mask, which is what puts a free register back in reach.
-	// The bracket that emits is character-for-character the ABI-FORCED store/reload
-	// `specs-shv2/register-pressure.md` already documents as correct, cheap, and permitted at any loop
-	// depth: `SpillPlacement.forced`.
+	// Exhaustion means `classPool ⊆ held ∪ forbidden(v)`, and reading that ONE fact in its two directions
+	// gives the two cures, which between them are TOTAL:
 	//
-	// TERMINATION. Φ = Σ_v (clobber ops `v` is live across) — a non-negative integer — STRICTLY
-	// DECREASES at every repair. The victim's range now ends before the cut, so it crosses strictly fewer
-	// clobbers; the reloads that replace it are born AFTER the cut, so none of them crosses it; the
-	// store and load ops a split inserts clobber nothing themselves; and a split never raises peak
-	// pressure, so `relievePressure`'s own Φ = 0 survives (asserted below). An op that READS `v` is
-	// therefore excluded as a cut — the reload would take over that use and be live across the clobber in
-	// `v`'s place, and Φ would not move.
+	//  (a) `free = classPool ∖ held` is a subset of `forbidden(v)` — a register is FREE and `v` is merely
+	//      not allowed it. WIDEN `A(v)`: cut `v` across a clobber in its own live range, which removes
+	//      that clobber (and every clobber after it) from its forbidden mask. `repairAtExhaustion`.
+	//  (b) `A(v) = classPool ∖ forbidden(v)` is a subset of `held` — every register `v` IS allowed is
+	//      taken. FREE ONE: cut an OCCUPANT of one of them across `v`'s own def point, so it is dead
+	//      there and `v` can take the register it was allowed all along.
+	//      `repairByEvictingOccupant`.
 	//
-	// Returns false when `v` is live across NO clobber at all: its confinement is then entirely
-	// non-swept (`ParamCrossForbid` / `establishedAtDef`) or comes from an op that names it as an
-	// OPERAND, and there is nothing to cut. That is not a decision this can take alone — see
-	// `repairStuckValues`, which panics only when a whole ROUND can repair nothing.
+	// **(b) always has a candidate**, which is what makes the pair total: `A(v)` cannot be empty (a value
+	// allowed no register cannot be matched, so Hall would have said OVERFLOW), and every register in it
+	// is held by a live value. So "nothing can be done" is not a state this can reach — see
+	// `repairStuckValues`, whose panic now stands only for a contradiction.
+	//
+	// ⭐ **TERMINATION — ONE potential for both cures.** Φ = Σ_v |{ ops `v` is live ACROSS that are not
+	// themselves the `storeSlotReg`/`loadRegSlot` a split SPLICES }|. Two properties make it work:
+	//
+	//  • NO value's count can RISE. The only ops a split adds are spill ops, which this does not count;
+	//    the victim's range only shrinks; and each reload's range is a subset of the victim's old one,
+	//    with the runs pairwise disjoint.
+	//  • The CUT op goes from crossed to un-crossed, so the count FALLS by at least one. The victim's new
+	//    range ends before the cut and every reload is born at a use strictly after it — which is why
+	//    both cures REFUSE a victim the cut op READS: the reload would take over that use and be live
+	//    across the cut in the victim's place, and Φ would not move.
+	//
+	// Cure (a)'s cut is a CLOBBER op, and no spill op clobbers anything, so its cut is always counted.
+	// ⚠ Cure (b)'s cut is the stuck value's own DEF op, which IS a spill op in one shape — a stuck value
+	// that is itself a RELOAD. Φ is then non-increasing rather than strictly decreasing, and the round
+	// bound in `colorRepairingConfinements` is what makes that loud instead of infinite. That is the one
+	// gap in the argument and it is written here rather than left for a reader to find.
+	//
+	// A split also never raises peak pressure, so `relievePressure`'s own Φ = 0 survives every repair —
+	// asserted after each one.
 	export function repairAtExhaustion(module TargetModule, v ValueId, free RegMask, stats RegAllocStats) returns bool
-		if not self.indexBuilt 'noIncrementalMachineryYet'
-			// A function the relief loop never split has no positional index and no tournament, and the
-			// repair needs both. The peak this seeding sweep finds must be EMPTY: `relievePressure` has
-			// returned, so Φ is 0, and this is that post-condition restated from an independent walk.
-			let residual = self.buildSplitIndex(module)
-			if residual.found 'overPoolPointSurvivedRelief'
-				panic("SplitDriver.repairAtExhaustion: the relief loop returned but a re-analysis finds an over-pool point (pressure {residual.pressure} against witness {residual.witness}) — a stuck value is a CONFINEMENT, which presupposes that every point already fits its pool, so the two analyses disagree about the same IR")
-			end 'overPoolPointSurvivedRelief'
-		end 'noIncrementalMachineryYet'
-
 		var work = self.scratch
 		var funcLiveness = self.liveness
 		let index = funcLiveness.useIndex
-		let classPool = poolOfClass(self.pool, class: funcLiveness.classOf(v), file: funcLiveness.registerFile)
+		self.buildSplitIndexOnce(module)
 
 		// `v`'s live REGION, as blocks. `walkValue` in the ADDING direction over a value that is ALREADY
 		// marked is a no-op on the live sets (`LiveSets.addLiveIn`/`addLiveOut` are idempotent) and fills
 		// `touched` with exactly the blocks the value occupies — so the search below is bounded by the
 		// live range rather than by the function, and it reuses THE liveness walk instead of a second
-		// copy of it. It must run BEFORE `unmarkVictim`, whose walk clears the very live sets the span
+		// copy of it. It must run BEFORE `beginSplit`, whose walk clears the very live sets the span
 		// endpoints are read from.
 		work.dirty.clear()
 		collectVictimRegion(self.cfg.topo, index: index, liveness: funcLiveness, scratch: work, victim: v, adding: true)
 
+		let classPool = poolOfClass(self.pool, class: funcLiveness.classOf(v), file: funcLiveness.registerFile)
 		let cut = findConfiningClobber(module, liveness: funcLiveness, scratch: work, v: v, free: free, classPool: classPool)
 		if not cut.found 'nothingToSplitAround'
+			// `v` crosses no clobber that takes a register of its own file, so its confinement is entirely
+			// non-swept (`ParamCrossForbid` / `establishedAtDef`) or comes from an op that names it as an
+			// OPERAND. Cure (a) has nothing to cut; cure (b) still does.
 			return false
 		end 'nothingToSplitAround'
 
-		// `hasStoreAnchor` never refuses a value the function DEFINES — its header states it, and the
-		// colorer was placing `v`'s def when it got stuck — so this is an assertion, not a branch.
-		if not hasStoreAnchor(index, valueId: v) 'noStoreAnchor'
-			panic("SplitDriver.repairAtExhaustion: value {v} has no store anchor, yet the colorer was allocating its DEF when it ran out of registers. Every value a function defines has an op def or a phi block entry (`buildUseIndex`), so `UseIndex.defKindOf` and the colorer disagree about whether this value exists.")
+		work.anchor.takeForcedCutAt(cut.blockLocal, pos: cut.pos)
+		self.applyRepairSplit(module, victim: v, stats: stats)
+		return true
+	end 'repairAtExhaustion'
+
+	// ⭐⭐ **CURE (b): FREE A REGISTER `v` IS ALREADY ALLOWED, by cutting the OCCUPANT of it across `v`'s
+	// own def point.** See `repairAtExhaustion`'s header for why this always has a candidate and for the
+	// shared termination argument.
+	//
+	// The anchor is the FAILING POINT — `v`'s def — because that is the one place the register has to be
+	// free. `w` is live across it (it held a register there), so this is exactly the shape `spillOneValue`
+	// already handles, and afterwards `w` is dead there and `v` takes the register.
+	//
+	// ⚠ **`SpillPlacement.forced`, AND THE JUSTIFICATION IS NARROWER THAN A CLOBBER'S — DO NOT CLAIM THE
+	// ABI FORCES IT, BECAUSE IT DOES NOT.** At a clobber the callee destroys the register and memory is
+	// the only home there is. Here the register is merely TAKEN, and what makes memory the only home is
+	// that the alternative is a compiler panic on a program that fits the machine. That is a good enough
+	// reason and it is a different reason, so it is written down as one — including that it lets the
+	// bracket land inside a loop, which is a cost this cure pays and a clobber's does not.
+	//
+	// ⚠ **WHICH occupant is ARBITRARY, and must stay arbitrary.** `StuckValues` records them in ascending
+	// register order and the caller offers them in that order, so the choice is reproducible run to run;
+	// beyond that it is not a cost model, and it must never grow into an eviction tournament — that is the
+	// search this allocator exists to refuse (`register-pressure.md`). Ranking these by next-use would be
+	// exactly that search, arriving through a back door.
+	//
+	// Returns false when `w` is not usable at that point: the def op READS it (evicting it there frees
+	// nothing — the reload would hold the register at the very op), or `w` is not live across the point at
+	// all because an earlier repair in the same round already moved it. The caller then offers the next
+	// occupant.
+	export function repairByEvictingOccupant(module TargetModule, v ValueId, w ValueId, stats RegAllocStats) returns bool
+		var work = self.scratch
+		var funcLiveness = self.liveness
+		self.buildSplitIndexOnce(module)
+
+		if w == v 'itsOwnOccupant'
+			panic("SplitDriver.repairByEvictingOccupant: value {v} is recorded as the occupant of a register it is ALLOWED, but the register it was given provisionally is drawn from the FREE set and `A(v)` is disjoint from that — so a stuck value can never hold one of its own allowed registers")
+		end 'itsOwnOccupant'
+
+		let point = self.failingPointOf(module, v: v)
+		if point.readsOccupant(module, w: w, scratch: work) 'theDefItselfReadsIt'
+			return false
+		end 'theDefItselfReadsIt'
+
+		// Is `w` still live ACROSS the point? It was when the colouring pass recorded it, but an earlier
+		// repair in this same round may since have cut it. Asked through the SAME span the forbid masks are
+		// rebuilt from, so "live across" has one definition here and there.
+		let span = liveAcrossSpanIn(funcLiveness, pressure: work.pressure, w: w, blockLocal: point.blockLocal)
+		let pointSlot = work.pressure.slotOfPosition(point.blockLocal, pos: point.pos)
+		if not (span.found and span.lo <= pointSlot and pointSlot <= span.hi) 'noLongerLiveAcrossThePoint'
+			return false
+		end 'noLongerLiveAcrossThePoint'
+
+		work.anchor.takeForcedCutAt(point.blockLocal, pos: point.pos)
+		self.applyRepairSplit(module, victim: w, stats: stats)
+		return true
+	end 'repairByEvictingOccupant'
+
+	// The incremental machinery, built on FIRST use. A function the relief loop never split has no
+	// positional index and no tournament, and every repair needs both.
+	function buildSplitIndexOnce(module TargetModule)
+		if self.indexBuilt 'alreadyBuilt'
+			return
+		end 'alreadyBuilt'
+
+		// The peak this seeding sweep finds must be EMPTY: `relievePressure` has returned, so its Φ is 0,
+		// and this is that post-condition restated from an independent walk.
+		let residual = self.buildSplitIndex(module)
+		if residual.found 'overPoolPointSurvivedRelief'
+			panic("SplitDriver.buildSplitIndexOnce: the relief loop returned but a re-analysis finds an over-pool point (pressure {residual.pressure} against witness {residual.witness}) — a stuck value is a CONFINEMENT, which presupposes that every point already fits its pool, so the two analyses disagree about the same IR")
+		end 'overPoolPointSurvivedRelief'
+	end 'buildSplitIndexOnce'
+
+	// ONE repair's mutation, with `scratch.anchor` already pointing at the cut. Both cures make the same
+	// mutation and owe the same preparation and repair, so it is written once — the difference between
+	// them is entirely WHERE they cut and WHOM they cut.
+	function applyRepairSplit(module TargetModule, victim ValueId, stats RegAllocStats)
+		var work = self.scratch
+		var funcLiveness = self.liveness
+		let index = funcLiveness.useIndex
+
+		// `hasStoreAnchor` never refuses a value the function DEFINES — its header states it — so this is
+		// an assertion, not a branch. Both cures reach it: the stuck value was having its DEF coloured, and
+		// an occupant held a register, which only a defined value can.
+		if not hasStoreAnchor(index, valueId: victim) 'noStoreAnchor'
+			panic("SplitDriver.applyRepairSplit: value {victim} has no store anchor, yet the colorer saw it defined or holding a register. Every value a function defines has an op def or a phi block entry (`buildUseIndex`), so `UseIndex.defKindOf` and the colorer disagree about whether this value exists.")
 		end 'noStoreAnchor'
 
-		var anchor = work.anchor
-		anchor.takeForcedCutAt(cut.blockLocal, pos: cut.pos)
 		// The same scope question `chooseVictim` asks of its own tier-4 victim: the eviction-point split
-		// when it leaves `v` dead across the cut, the full split when a before-cut use is still reachable
-		// from it around a back edge (see `SplitScope`).
-		work.reach.retargetTo(anchor.blockLocal)
-		let scope = splitScopeAt(index, topo: self.cfg.topo, valueId: v, anchor: anchor, reach: work.reach)
-		let slot = slotForSpillOf(index, valueId: v, nextSlot: self.nextSlot)
+		// when it leaves the victim dead across the cut, the full split when a before-cut use is still
+		// reachable from it around a back edge (see `SplitScope`).
+		work.reach.retargetTo(work.anchor.blockLocal)
+		let scope = splitScopeAt(index, topo: self.cfg.topo, valueId: victim, anchor: work.anchor, reach: work.reach)
+		let slot = slotForSpillOf(index, valueId: victim, nextSlot: self.nextSlot)
 
-		work.edits.clear()
 		let freshFrom = self.nextValueId
-		self.consumeSlotFor(index, victim: v)
-		unmarkVictim(self.cfg.topo, index: index, liveness: funcLiveness, scratch: work, victim: v)
-		self.nextValueId = spillOneValue(module, index: index, cfg: self.cfg, liveness: funcLiveness, valueId: v, anchor: anchor, scope: scope, slot: slot, pool: self.pool, nextValueId: self.nextValueId, stats: stats, lineage: self.lineage, scratch: work)
-		self.commitSplit(module, victim: v, freshFrom: freshFrom)
+		self.beginSplit(index, victim: victim, takesSlot: true)
+		self.nextValueId = spillOneValue(module, index: index, cfg: self.cfg, liveness: funcLiveness, valueId: victim, anchor: work.anchor, scope: scope, slot: slot, pool: self.pool, nextValueId: self.nextValueId, stats: stats, lineage: self.lineage, scratch: work)
+		self.commitSplit(module, victim: victim, freshFrom: freshFrom)
 
 		// A REPAIR MUST NOT CREATE AN OVER-POOL POINT, and by Φ it cannot: a store/reload bracket only
 		// renames an already-live value over a region it was live in anyway. Asserting it is what keeps
@@ -2895,28 +2999,33 @@ export type SplitDriver
 		// would then fail for the OTHER reason, and the panic would name the wrong owner.
 		let after = refreshPeak(module, liveness: funcLiveness, pool: self.pool, scratch: work)
 		if after.found 'repairRaisedPressure'
-			panic("SplitDriver.repairAtExhaustion: splitting value {v} at block {anchor.blockLocal} left an over-pool point (pressure {after.pressure} against witness {after.witness}, clobberOnly {after.clobberOnly}) — a split cannot raise any op's pressure, so either the store/reload placement or the incremental pressure repair is wrong")
+			panic("SplitDriver.applyRepairSplit: splitting value {victim} at block {work.anchor.blockLocal} left an over-pool point (pressure {after.pressure} against witness {after.witness}, clobberOnly {after.clobberOnly}) — a split cannot raise any op's pressure, so either the store/reload placement or the incremental pressure repair is wrong")
 		end 'repairRaisedPressure'
 
 		stats.stuckValuesRepaired = stats.stuckValuesRepaired + 1
-		return true
-	end 'repairAtExhaustion'
+	end 'applyRepairSplit'
 
-	// The function's per-file maximum, re-folded from the per-block demands a round of repairs moved.
+	// WHERE the colorer gave up on `v` — the program point cure (b) has to free a register AT. A value
+	// with an OP def fails at that op; a BLOCK-ARG fails at its block's ENTRY, where `seedInUse` has just
+	// seeded the live-ins and the phis are being coloured, and where no op reads anything.
 	//
-	// ⚠ ONCE PER ROUND, NOT ONCE PER REPAIR. It is a fold over EVERY block, so calling it inside
-	// `repairAtExhaustion` would be Θ(repairs × blocks) — the same shape of quadratic the batched repair
-	// loop exists to avoid, bought back one line down. Nothing between the repairs reads it: a split can
-	// only LOWER a demand, so the figure is a valid upper bound throughout the round.
-	export function refreshPressureBounds()
-		self.liveness.refreshMaxPressure()
-	end 'refreshPressureBounds'
+	// It mints a small object, on a path that runs only for a value the colorer could not place at all —
+	// the same licence `valuesHoldingRegisters` takes on the diagnostic path, and for the same reason.
+	function failingPointOf(module TargetModule, v ValueId) returns FailingPoint
+		let index = self.liveness.useIndex
+		let defBlock = index.defBlockOf(v)
+		match index.defKindOf(v) 'kind'
+			opDef then return FailingPoint.atOp(defBlock, pos: positionInBlock(blockAt(module, topo: self.cfg.topo, local: defBlock), opIdx: index.requireDefOp(v)), atOpIdx: index.requireDefOp(v))
+			phiDef then return FailingPoint.atBlockEntry(defBlock)
+			none then panic("SplitDriver.failingPointOf: value {v} has no def site, yet the colorer ran out of registers while placing it — every value it colours is defined by an op or is a block-arg")
+		end 'kind'
+	end 'failingPointOf'
 
-	// WHY `v` COULD NOT BE REPAIRED, in the terms of the three things that build a `forbidden` mask —
-	// for the panic `repairStuckValues` raises when a whole round can relieve nothing.
-	export function describeUnrepairable(v ValueId, free RegMask) returns String
+	// WHY a whole ROUND could relieve nothing — for `repairStuckValues`'s panic, which is now the report
+	// of a contradiction rather than of a shortfall. Both cures are named, because both must have failed.
+	export function describeUnrepairable(v ValueId, free RegMask, occupants ColumnLength) returns String
 		let established = try self.liveness.establishedAtDef.get(v) otherwise panic("SplitDriver.describeUnrepairable: establishedAtDef.get OOB for value {v}")
-		return "value {v} is allowed none of the free registers {free}: its own file's forbid is {self.liveness.forbiddenOf(v)}, of which {self.paramCross.maskFor(v)} comes from a SIBLING PARAMETER's incoming register (`ParamCrossForbid`) and {established} from registers ESTABLISHED at its def (`establishedAtDef`) — neither is a clobber inside a live range, so no split can remove either. Whatever remains was contributed by an op that names {v} as an OPERAND (`forbidOperandsFromImplicit`), which a split cannot remove either."
+		return "value {v}: (a) it is live across NO clobber that takes a register of its own file, so there is nothing to cut to widen its allowed set — its forbid is {self.liveness.forbiddenOf(v)}, of which {self.paramCross.maskFor(v)} comes from a SIBLING PARAMETER's incoming register (`ParamCrossForbid`) and {established} from registers ESTABLISHED at its def (`establishedAtDef`), and whatever remains came from an op that names {v} as an OPERAND (`forbidOperandsFromImplicit`) — none of the three is a clobber inside a live range. And (b) all {occupants} occupant(s) of the registers it IS allowed were refused, which happens only when its own def op READS every one of them: a value the op reads is live AT the op, so evicting it frees nothing there. Free registers at the point were {free}."
 	end 'describeUnrepairable'
 
 	// The frame. `func.stackSize` is fixed HERE — after the relief loop AND after every repair — and
@@ -2931,6 +3040,58 @@ export type SplitDriver
 		func.stackSize = self.nextSlot * SpillSlotBytes
 	end 'fixFrameSize'
 end 'SplitDriver'
+
+// THE RUNAWAY BOUND every split loop in the allocator counts against — the splitter's own Φ→0 loop and
+// the colorer's repair rounds alike.
+//
+// It bounds the potential from above: every potential either loop uses is a sum over ops of something
+// no larger than the values live at that op, so `ops × (values + 1)` is above all of them, and each
+// iteration takes at least one off. It is therefore UNREACHABLE by correct convergence — its whole job
+// is to turn a non-terminating bug into a loud panic instead of a hang, so it wants to be generous
+// rather than tight.
+//
+// ⚠ `RegisterFileSize` is added as a FLOOR and is not derived from anything. On a function small enough
+// for the product to be tiny, a legitimate first relief could otherwise sit at the bound; the term costs
+// nothing and keeps the panic away from the smallest programs. It is written down here as a choice
+// rather than left in two call sites as an unexplained constant.
+//
+// (`valueCount` grows as fresh reload ids are minted; the bound is computed ONCE, from the initial
+// figures, because the split count is bounded by the INITIAL potential.)
+export function splitRunawayBound(liveness LivenessResult) returns EventCount
+	return liveness.useIndex.opCount * (liveness.valueCount + 1) + RegisterFileSize
+end 'splitRunawayBound'
+
+// WHERE a colouring failed, in the coordinates a split anchor needs — plus whether an OP sits there at
+// all, which is the one question cure (b) must ask of it. A BLOCK-ARG fails at its block's entry, and a
+// block entry reads nothing: the phi's incoming values are read on the PREDECESSORS' edges, by different
+// values, so no occupant can be excluded there.
+type FailingPoint
+	export var blockLocal as CfgIndex
+	export var pos as BlockOpPos
+	var atAnOp as bool
+	var opIdx as OpIndex
+
+	static function atOp(atBlock CfgIndex, pos BlockOpPos, atOpIdx OpIndex) returns FailingPoint
+		return Self{blockLocal: atBlock, pos: pos, atAnOp: true, opIdx: atOpIdx}
+	end 'atOp'
+
+	static function atBlockEntry(atBlock CfgIndex) returns FailingPoint
+		return Self{blockLocal: atBlock, pos: 0, atAnOp: false, opIdx: 0}
+	end 'atBlockEntry'
+
+	// Does the op at the failing point READ `w`? Evicting such an occupant frees NOTHING there: the value
+	// is live AT the op because the op reads it, so the reload that replaces it holds the register at
+	// exactly the point the register was wanted. It is the same exclusion `usesAtPeakOp` makes on
+	// `chooseVictim`'s candidate pool, and `findConfiningClobber` makes on its cut.
+	export function readsOccupant(module TargetModule, w ValueId, scratch SplitScratch) returns bool
+		if not self.atAnOp 'aBlockEntryReadsNothing'
+			return false
+		end 'aBlockEntryReadsNothing'
+
+		let op = try module.ops.get(self.opIdx) otherwise panic("FailingPoint.readsOccupant: op {self.opIdx} is not in module.ops")
+		return opUsesValue(op, valueId: w, buf: scratch.splitOperands)
+	end 'readsOccupant'
+end 'FailingPoint'
 
 // The op a REPAIR splits `v` across: one `v` is live ACROSS whose CLOBBER takes a register of `v`'s own
 // file away from it. Split there and `v`'s range ends before it, so that clobber — and every clobber

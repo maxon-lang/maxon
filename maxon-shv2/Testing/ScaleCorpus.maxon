@@ -270,10 +270,19 @@ let PressuredLoopsBase = 2 as KnobSize
 // THE SHAPE, and every part of it is load-bearing — `specs-shv2/register-pressure.md`'s
 // `confined-reuse-defs-*` cases are the same program written by hand:
 //
-//  • `confinedUnconstrainedInts()` values that cross NO call, DERIVED to be the whole GPR pool. That
-//    count is a THRESHOLD, not a slope, and it is the decisive one: MEASURED, x64 reproduces at 14 and
-//    not at 12, arm64 at 26 and not at 24 — each being that target's own pool size. They fill the
-//    machine, which is what forces the confined values below into the callee-saved half.
+//  • `confinedUnconstrainedInts()` values that cross NO call, derived to be **x64's** whole GPR pool.
+//    That count is a THRESHOLD, not a slope, and it is the decisive one: MEASURED, x64 reproduces at 14
+//    and not at 12. They fill the machine, which is what forces the confined values below into the
+//    callee-saved half.
+//
+//    ⚠⚠ **THE DERIVATION IS x64's, AND THIS KNOB IS THEREFORE BLIND ON AN arm64 HOST — SAID PLAINLY
+//    RATHER THAN LEFT FOR A READER TO INFER FROM A Δ0.** The corpus is a SOURCE GENERATOR with no target
+//    in hand: `x64AllocatablePool` / `calleeSavedMask` are the only pools reachable from here, which is
+//    the same limitation `floatsLivePerSpillLoop` has and states. arm64's own threshold is RECORDED, not
+//    generated — 26 reproduces and 24 does not, against its 26-register pool — so on an arm64 host this
+//    knob emits 14/5, sits below the threshold, and fires ZERO repairs. Closing that needs the host
+//    target threaded into the generator, which is more than this knob; until then, a Δ0 in the repair
+//    columns on an arm64 ladder is THIS, not a cost.
 //  • `confinedCrossCallDefs()` products of them, each live ACROSS the second call and so confined to
 //    that same callee-saved half — which the values above have already taken. Hall's exact verdict at
 //    that point is FEASIBLE; the greedy simply cannot get there, and the repair splits one.
@@ -394,9 +403,10 @@ function floatsLivePerSpillLoop() returns KnobSize
 	return (calleeSavedXmms as KnobSize) + FloatSpillHeadroom
 end 'floatsLivePerSpillLoop'
 
-// THE `confinedDefs` KNOB'S TWO WIDTHS, both DERIVED from the allocator's own masks for the reason
+// THE `confinedDefs` KNOB'S TWO WIDTHS, both DERIVED from the allocator's own x64 masks for the reason
 // `floatsLivePerSpillLoop` records paying for: a number that is right today and written down here goes
-// stale silently, and a knob that has gone blind that way once will go blind that way again.
+// stale silently, and a knob that has gone blind that way once will go blind that way again. What the
+// derivation does NOT do is follow the HOST — see `ConfinedDefsBase`, which states the consequence.
 //
 // The unconstrained count is the WHOLE GPR pool — the threshold at which the machine is full at the
 // moment the confined values are born.

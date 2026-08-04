@@ -53,15 +53,14 @@
 // reduced pool (`pool ∖ op.implicitDefs`) and splits values live across it, so by the time
 // this colorer runs no point — normal or fixed-register — overflows its pool.
 //
-// ⛔⛔ **THAT IS NOT "COLORING CANNOT FAIL", AND THIS HEADER SAID IT WAS.** Pointwise feasibility says
-// a colouring EXISTS; it does not say the greedy will FIND one. Forbidden sets make this LIST colouring
-// of a chordal graph, which is NP-hard, and no static order is exact — `HallCondition.hallVerdictAt`
-// carries the three-register counterexample and the `ParamCrossForbid` family that reaches it. So the
-// colorer CAN fail on a point that fits, and when it does the value is a CONFINEMENT, not pressure:
+// ⛔⛔ **THAT IS NOT "COLORING CANNOT FAIL", AND THIS HEADER SAID IT WAS.** Pointwise feasibility says a
+// colouring EXISTS; it does not say the greedy will FIND one, and no static order does —
+// **`HallCondition.hallVerdictAt`'s header carries that argument and is the one place it is made.** So
+// the colorer CAN fail on a point that fits, and when it does the value is a CONFINEMENT, not pressure:
 // `reportExhaustion` runs the exact verdict to tell the two apart, records the value, and
-// `colorRepairingConfinements` has `SplitDriver.repairAtExhaustion` split it across a clobber in its own
-// live range before colouring again. What survives of the old claim is the half that is true and is
-// still asserted: reaching exhaustion with an OVERFLOW verdict is a splitter bug.
+// `colorRepairingConfinements` relieves it before colouring again. What survives of the old claim is the
+// half that is true and is still asserted: reaching exhaustion with an OVERFLOW verdict is a splitter
+// bug.
 //
 // A HOT overflow the splitter cannot relieve (a loop whose own working set does not fit) is
 // NOT a panic: it is the E5001 compile error, source-mapped via `ValueOrigin` and rendered by
@@ -917,15 +916,6 @@ function allocateFunction(module TargetModule, func IrFunction, funcIndex FuncIn
 	recordPhaseExcluding(project, phase: RegAllocPhase.splitting, probe: splitProbe, innerPhase: RegAllocPhase.liveness, innerBefore: livenessBefore)
 
 	let liveness = driver.liveness
-	stats.recordLivenessMarkSteps(liveness.livenessMarkSteps)
-	// PER CLASS, so the report names the file that was tight rather than a mixed figure that is no
-	// file's peak. A function with 14 live ints and 14 live floats is at its limit in BOTH files and
-	// over its limit in neither; one number cannot say that.
-	for classOrdinal in 0 upto RegClassCount 'eachClass'
-		let class = regClassAt(classOrdinal)
-		stats.recordPressure(liveness.maxPressureOf(class), class: class, funcName: func.name)
-	end 'eachClass'
-	stats.recordLoopDepth(liveness.cfg.maxLoopDepth())
 
 	// Reuse-def copies the colorer materializes (two-address inputs that outlive their
 	// op) — consumed by the rewrite, which splices them. Populated during coloring.
@@ -937,6 +927,21 @@ function allocateFunction(module TargetModule, func IrFunction, funcIndex FuncIn
 	// `SplitDriver.fixFrameSize`: a repair consumes a spill slot after the splitter has finished, so a
 	// frame sized at the end of splitting would be short by exactly those slots.
 	driver.fixFrameSize(func)
+
+	// ⚠ THE PER-FUNCTION FIGURES ARE READ AFTER THE COLOURING, NOT BEFORE IT, AND THE REPAIR IS WHY. A
+	// repair is a SPLIT: it walks liveness (`livenessMarkSteps`) and it lowers a block's demand
+	// (`maxPressure`). Read before the loop above, the one counter that would show a repair's liveness
+	// cost dropped every one of them, and the pressure was the pre-repair figure. Loop depth is a
+	// property of the CFG, which splitting cannot change, so it reads the same either side.
+	stats.recordLivenessMarkSteps(liveness.livenessMarkSteps)
+	// PER CLASS, so the report names the file that was tight rather than a mixed figure that is no
+	// file's peak. A function with 14 live ints and 14 live floats is at its limit in BOTH files and
+	// over its limit in neither; one number cannot say that.
+	for classOrdinal in 0 upto RegClassCount 'eachClass'
+		let class = regClassAt(classOrdinal)
+		stats.recordPressure(liveness.maxPressureOf(class), class: class, funcName: func.name)
+	end 'eachClass'
+	stats.recordLoopDepth(liveness.cfg.maxLoopDepth())
 
 	let planProbe = PhaseProbe.beginRegAllocPhase(project, phase: RegAllocPhase.ssaDestruction)
 	let plans = buildSsaDestructionPlan(module, alloc: alloc, liveness: liveness, stats: stats)
@@ -962,29 +967,51 @@ function allocateFunction(module TargetModule, func IrFunction, funcIndex FuncIn
 	logEvent(LogCategory.codegen, level: LogLevel.TRACE, name: event, arg0: classRowMax(liveness.maxPressure), arg1: stats.valuesSplit)
 end 'allocateFunction'
 
-// The values ONE colouring pass could not place, each with the registers that were FREE at its failing
-// point.
+// The values ONE colouring pass could not place — and, for each, the two things its failing POINT knew
+// that no later pass can re-derive, because by then the point no longer exists.
 //
-// `free` travels WITH the value because it is a fact about the POINT — `classPool ∖ held` where
-// `chooseRegister` gave up — and the repair that consumes it runs after the whole pass, when that point
-// no longer exists. It is the register the repair aims to give the value back to
-// (`findConfiningClobber`).
+//  • `free` — `classPool ∖ held`, the registers that were free there. Every one of them is a register
+//    `v` is FORBIDDEN (that is what exhaustion means), so it is what the widening cure aims at:
+//    `SplitDriver.repairAtExhaustion` cuts `v` across a clobber that covers one.
+//  • `occupants` — who held each register `v` IS ALLOWED. That set, `A(v) = classPool ∖ forbidden(v)`,
+//    is ENTIRELY HELD for the same reason (`classPool ⊆ held ∪ forbidden(v)`), and it is non-empty on
+//    this path (an empty one cannot be matched, so Hall would have answered OVERFLOW). So there is
+//    always at least one occupant to evict, which is the SECOND cure — see `repairStuckValues`.
+//
+// The occupants are a CSR: one contiguous run per stuck value, in ascending register order, so the
+// choice among them is reproducible run to run.
 type StuckValues
 	var values as ValueIdArray
 	var freeMasks as RegMaskColumn
+	var occupantStart as DenseColumn
+	var occupantCount as DenseColumn
+	var occupants as ValueIdArray
 
 	export static function create() returns StuckValues
-		return Self{values: ValueIdArray.create(), freeMasks: RegMaskColumn.create()}
+		return Self{values: ValueIdArray.create(), freeMasks: RegMaskColumn.create(), occupantStart: DenseColumn.create(), occupantCount: DenseColumn.create(), occupants: ValueIdArray.create()}
 	end 'create'
 
 	export function clear()
 		self.values.clear()
 		self.freeMasks.clear()
+		self.occupantStart.clear()
+		self.occupantCount.clear()
+		self.occupants.clear()
 	end 'clear'
 
-	export function record(v ValueId, free RegMask)
+	// `allowedHeld` is `A(v)`, and every bit in it names a register some LIVE value is holding right now
+	// — which is exactly what makes the eviction cure total. The holders are read here, at the point,
+	// because `Allocation` is discarded with the pass.
+	export function record(v ValueId, free RegMask, allowedHeld RegMask, alloc Allocation)
 		self.values.push(v)
 		self.freeMasks.push(free)
+		self.occupantStart.push(self.occupants.count())
+		for regNum in 0 upto RegisterFileSize 'eachAllowedRegister'
+			if regMaskContains(allowedHeld, regNum: regNum) 'heldByAnOccupant'
+				self.occupants.push(alloc.holderOf(regNum))
+			end 'heldByAnOccupant'
+		end 'eachAllowedRegister'
+		self.occupantCount.push(self.occupants.count() - (try self.occupantStart.get(self.occupantStart.count() - 1) otherwise panic("StuckValues.record: occupantStart.get OOB on the entry just pushed")))
 	end 'record'
 
 	export function count() returns ColumnLength
@@ -998,16 +1025,25 @@ type StuckValues
 	export function freeAt(k ColumnLength) returns RegMask
 		return try self.freeMasks.get(k) otherwise panic("StuckValues.freeAt: no free mask at {k} of {self.freeMasks.count()}")
 	end 'freeAt'
+
+	export function occupantCountAt(k ColumnLength) returns ColumnLength
+		return try self.occupantCount.get(k) otherwise panic("StuckValues.occupantCountAt: no entry at {k} of {self.occupantCount.count()}")
+	end 'occupantCountAt'
+
+	// Occupant `j` of stuck value `k`, in ascending register order.
+	export function occupantAt(k ColumnLength, j ColumnLength) returns ValueId
+		let start = try self.occupantStart.get(k) otherwise panic("StuckValues.occupantAt: no entry at {k} of {self.occupantStart.count()}")
+		return try self.occupants.get(start + j) otherwise panic("StuckValues.occupantAt: occupant {j} of stuck value {k} is past the {self.occupantCountAt(k)} recorded for it")
+	end 'occupantAt'
 end 'StuckValues'
 
 // ⭐⭐ **COLOUR THE FUNCTION, REPAIRING EVERY CONFINEMENT THE GREEDY CANNOT COLOUR AROUND — the A5g
 // cure's outer loop.**
 //
 // The splitter's post-condition is that no program point exceeds its pool, and that is NOT enough to
-// make a greedy colouring exist: forbidden sets make this LIST colouring of a chordal graph, which is
-// NP-hard, and `HallCondition.hallVerdictAt`'s header carries the three-register counterexample. So a
-// value the colorer cannot place is an expected outcome, not a bug — it is relieved by splitting it
-// (`SplitDriver.repairAtExhaustion`) and the function is coloured again.
+// make a GREEDY colouring exist — see `HallCondition.hallVerdictAt`. So a value the colorer cannot place
+// is an expected outcome, not a bug: it is relieved by splitting (`SplitDriver.repairAtExhaustion`) and
+// the function is coloured again.
 //
 // ⚠⚠ **IT BATCHES, AND THAT IS THE WHOLE COST ARGUMENT.** One repair per re-colour is
 // O(repairs × function), and repairs are NOT O(1): `Testing/ScaleCorpus`'s `pressuredLoops` and
@@ -1025,18 +1061,28 @@ end 'StuckValues'
 // converges in ONE round.
 function colorRepairingConfinements(module TargetModule, driver SplitDriver, func IrFunction, pool RegMask, callerSaved RegMask, stats RegAllocStats, reuseCopies ReuseCopyPlan, project Project) returns Allocation
 	var stuck = StuckValues.create()
+
+	// ⚠ THE COUNTERS ONE COLOURING PASS MOVES, SNAPSHOT BEFORE THE FIRST — because a pass that ends with
+	// a stuck value is DISCARDED, and its decisions with it. Left in, the report would claim copies the
+	// rewrite never spliced and hints honoured against an allocation nothing emitted. They are plain
+	// locals rather than a snapshot object: this runs for EVERY function, and a heap object here would be
+	// an allocation per function on the pass the scale ladder watches, to serve the few that repair.
+	let colouredAtEntry = stats.valuesColored
+	let copiesAtEntry = stats.copiesInserted
+	let honouredAtEntry = stats.hintsHonoured
+	let missedAtEntry = stats.hintsMissed
+	let registersAtEntry = stats.registersUsed
+
 	var alloc = colorOnce(module, driver: driver, pool: pool, callerSaved: callerSaved, stats: stats, reuseCopies: reuseCopies, stuck: stuck, project: project)
 
-	// Φ ≤ Σ_ops (values live across that op) ≤ ops × values bounds the total number of repairs, and each
-	// ROUND makes at least one, so it bounds the rounds too. Same shape and same purpose as the
-	// splitter's own `iterationBound`: it cannot be reached by correct convergence, and it converts a
-	// hypothetical non-terminating repair into a loud panic rather than a hang.
-	let roundBound = driver.liveness.useIndex.opCount * (driver.liveness.valueCount + 1) + RegisterFileSize
+	// Each ROUND makes at least one repair (or panics), so the splitter's own runaway bound over the same
+	// potential bounds the rounds too — see `splitRunawayBound`, which both loops now count against.
+	let roundBound = splitRunawayBound(driver.liveness)
 	var rounds = 0 as EventCount
 
 	while stuck.count() > 0 'repairAndRecolour'
 		if rounds >= roundBound 'runaway'
-			panic("colorRepairingConfinements: '{String.from(func.name)}' still has {stuck.count()} value(s) the colorer cannot place after {rounds} repair round(s) — Φ = Σ_v (clobber ops v is live across) strictly decreases at every repair, so this cannot be reached by correct convergence")
+			panic("colorRepairingConfinements: '{String.from(func.name)}' still has {stuck.count()} value(s) the colorer cannot place after {rounds} repair round(s) — the repair potential (see `SplitDriver.repairAtExhaustion`) falls at every repair, so this cannot be reached by correct convergence")
 		end 'runaway'
 		rounds = rounds + 1
 
@@ -1045,6 +1091,13 @@ function colorRepairingConfinements(module TargetModule, driver SplitDriver, fun
 		let repairProbe = PhaseProbe.beginRegAllocPhase(project, phase: RegAllocPhase.splitting)
 		repairStuckValues(module, driver: driver, func: func, stuck: stuck, stats: stats)
 		recordRegAllocPhase(project, phase: RegAllocPhase.splitting, probe: repairProbe)
+
+		// The pass just discarded is UN-COUNTED, so the counters describe the colouring that SURVIVES.
+		stats.valuesColored = colouredAtEntry
+		stats.copiesInserted = copiesAtEntry
+		stats.hintsHonoured = honouredAtEntry
+		stats.hintsMissed = missedAtEntry
+		stats.registersUsed = registersAtEntry
 
 		alloc = colorOnce(module, driver: driver, pool: pool, callerSaved: callerSaved, stats: stats, reuseCopies: reuseCopies, stuck: stuck, project: project)
 	end 'repairAndRecolour'
@@ -1070,28 +1123,60 @@ function colorOnce(module TargetModule, driver SplitDriver, pool RegMask, caller
 	return alloc
 end 'colorOnce'
 
-// Repair every value one colouring pass got stuck on.
+// Repair every value one colouring pass got stuck on, trying BOTH cures at each — see
+// `SplitDriver.repairAtExhaustion`'s header for why there are exactly two and why they are total:
 //
-// A value with no clobber to cut at is NOT fatal on its own — a round that repairs anything at all makes
-// progress, and the re-colour may well place that value once its neighbours have moved. A round that
-// repairs NOTHING is fatal, and it is the one case with no honest fallback: the value's confinement then
-// comes entirely from contributions no split can remove (a sibling parameter's incoming register, the
-// registers established at its def, or an op that names it as an operand), so there is no cut anywhere
-// in the function that would widen its allowed set.
+//  (a) WIDEN the value's allowed set, by cutting it across a clobber in its own live range.
+//  (b) FREE a register it is already allowed, by cutting the OCCUPANT of one across its def point.
+//
+// (a) is tried first because it is the cheaper cure in emitted code — it brackets the value that is
+// actually confined, at the op that confines it, which is the ABI-forced shape the language already
+// documents. (b) evicts a bystander, so it is the fallback.
+//
+// A value neither cure can relieve does not fail the ROUND on its own: a round that repairs anything
+// makes progress, and the re-colour may well place that value once its neighbours have moved.
 function repairStuckValues(module TargetModule, driver SplitDriver, func IrFunction, stuck StuckValues, stats RegAllocStats)
 	var repaired = 0 as EventCount
 	for k in 0 upto stuck.count() 'eachStuckValue'
-		if driver.repairAtExhaustion(module, v: stuck.valueAt(k), free: stuck.freeAt(k), stats: stats) 'split'
+		let v = stuck.valueAt(k)
+		if driver.repairAtExhaustion(module, v: v, free: stuck.freeAt(k), stats: stats) 'widened'
 			repaired = repaired + 1
-		end 'split'
+			continue
+		end 'widened'
+
+		// The occupants are offered in ascending REGISTER order, which is the whole of the choice: it
+		// makes the pick reproducible run to run and it is deliberately not a cost model (see
+		// `repairByEvictingOccupant`). The first one that takes it ends the search.
+		var evicted = false
+		for j in 0 upto stuck.occupantCountAt(k) 'eachOccupant'
+			if evicted 'alreadyFreedOne'
+				continue
+			end 'alreadyFreedOne'
+			if driver.repairByEvictingOccupant(module, v: v, w: stuck.occupantAt(k, j: j), stats: stats) 'freed'
+				evicted = true
+			end 'freed'
+		end 'eachOccupant'
+		if evicted 'freedARegister'
+			repaired = repaired + 1
+		end 'freedARegister'
 	end 'eachStuckValue'
 
 	if repaired == 0 'nothingRepairable'
-		panic("repairStuckValues: '{String.from(func.name)}' — the colorer could not place {stuck.count()} value(s) and NOT ONE of them is live across a clobber whose removal would widen its allowed set. Taking the first: {driver.describeUnrepairable(stuck.valueAt(0), free: stuck.freeAt(0))}")
+		// ⚠ THIS IS A CONTRADICTION, NOT A SHORTFALL. Cure (b) always HAS a candidate — `A(v)` is
+		// non-empty and every register in it is held — so a round can only come away empty if every
+		// candidate was refused, and the sole reason either cure refuses is that the failing op itself
+		// READS the value it would have to cut. An op names at most two virtual registers, so reaching
+		// here needs `A(v)` to consist only of registers held by those two, for EVERY stuck value at once.
+		panic("repairStuckValues: '{String.from(func.name)}' — the colorer could not place {stuck.count()} value(s) and BOTH cures were refused for every one of them. Taking the first: {driver.describeUnrepairable(stuck.valueAt(0), free: stuck.freeAt(0), occupants: stuck.occupantCountAt(0))}")
 	end 'nothingRepairable'
 
-	// ONCE PER ROUND — see `SplitDriver.refreshPressureBounds` for why it is not once per repair.
-	driver.refreshPressureBounds()
+	// The function's per-file maximum, re-folded from the per-block demands this round moved.
+	//
+	// ⚠ ONCE PER ROUND, NOT ONCE PER REPAIR. It is a fold over EVERY block, so inside the loop above it
+	// would be Θ(repairs × blocks) — the same shape of quadratic the batched repair loop exists to avoid,
+	// bought back one line down. Nothing between the repairs reads it: a split can only LOWER a demand,
+	// so the figure is a valid upper bound throughout the round.
+	driver.liveness.refreshMaxPressure()
 end 'repairStuckValues'
 
 // ==========================================================================
@@ -1560,32 +1645,54 @@ function reportExhaustion(v ValueId, working RegMask, classPool RegMask, callerS
 		panic("reportExhaustion: {situation} — Hall's EXACT verdict is FEASIBLE, yet every register of the class pool is HELD: that is {regMaskPopcount(classPool)} occupants plus {v} on {regMaskPopcount(classPool)} registers, which is pigeonhole and could only have come back OVERFLOW. The two answers contradict each other over the same live set, so the colorer's in-use mask and `Allocation.holderOf` have come apart — a register the mask calls HELD must name a live holder, and the occupant map is refreshed at every block entry (`seedInUse`) and every def for exactly that reason. Occupants:{occupancy}")
 	end 'everyRegisterHeldYetFeasible'
 
+	// ⭐⭐ AND THE MIRROR OF IT: EVERY REGISTER `v` IS *ALLOWED* IS HELD, AND THERE IS ALWAYS AT LEAST
+	// ONE. Same premise read the other way — `classPool ⊆ held ∪ forbidden(v)` gives
+	// `A(v) = classPool ∖ forbidden(v) ⊆ held` — and `A(v)` cannot be empty, because a value allowed no
+	// register cannot be matched and `hallVerdictAt` would have answered OVERFLOW. So the point always
+	// offers an OCCUPANT to evict, and that is the second cure (`repairStuckValues`): the two together
+	// are why a stuck value is never un-relievable.
+	let allowedHeld = allowedRegistersOf(liveness, valueId: v, pool: classPool)
+	if allowedHeld == 0 'allowedNothingYetFeasible'
+		panic("reportExhaustion: {situation} — Hall's EXACT verdict is FEASIBLE, yet {v} is allowed NO register of its own file. A value with an empty allowed set cannot be given one, so the matching could not have saturated and the verdict could only have been OVERFLOW. `allowedRegistersOf` and `hallVerdictAt` read the same mask through the same function, so the two cannot disagree unless `forbiddenOf({v})` changed between them. Occupants:{occupancy}")
+	end 'allowedNothingYetFeasible'
+
 	// ⭐⭐ NOT A BUG, AND NOT THE SPLITTER'S: THE COLOURING ORDER. An earlier def took a register out of
 	// `v`'s admissible set at a moment when one outside it was free or, more usually, when the
 	// caller-saved half was momentarily full because of a value that has since died — and a colour, once
 	// given, is held for the value's whole range. `preferredVolatilityMask` is the rule meant to prevent
-	// that and it is a LOCAL rule: it cannot see a confined value that is not born yet. Greedy is exact
-	// for the UNCONSTRAINED chordal problem; forbidden sets make this LIST colouring, where NO static
-	// order is (see `HallCondition.hallVerdictAt`). So `v` is REPORTED, and
-	// `SplitDriver.repairAtExhaustion` splits it across a clobber in its own live range.
-	stuck.record(v, free: free)
+	// that and it is a LOCAL rule: it cannot see a confined value that is not born yet, and no static
+	// order fixes that (`HallCondition.hallVerdictAt`). So `v` is REPORTED, with both of the things its
+	// point knows, and the driver relieves it.
+	stuck.record(v, free: free, allowedHeld: allowedHeld, alloc: alloc)
 
 	// ⚠⚠ A PROVISIONAL COLOUR — the lowest FREE register of `v`'s own file, which `v` is not allowed and
 	// which it will never keep. It exists so that ONE colouring pass can collect EVERY stuck value
 	// instead of aborting at the first, which is the difference between one re-colour and R of them (see
 	// `colorRepairingConfinements` for why that is the whole cost argument).
 	//
-	// It is SAFE because the allocation this pass produces is DISCARDED WHOLE: `colorRepairingConfinements`
-	// re-colours from a fresh `Allocation` whenever the stuck list is non-empty, and the list is non-empty
-	// exactly when a provisional colour was handed out — the two happen on this one line pair and cannot
-	// come apart. Colouring rather than leaving `v` blank is what keeps every downstream reader of the
-	// sweep honest: `seedInUse`'s "a live-in must be coloured" and `colorOpForward`'s "every use is
-	// already coloured" are real dominance assertions, and weakening them permanently to accommodate a
-	// rare path would blind them on every ordinary function.
+	// TWO things make it safe, and only the first is about the pass's OUTPUT:
 	//
-	// It is in `classPool`, so `assertColouredInClass` still holds — the one invariant that is about
-	// legality rather than about quality is not relaxed even for a discarded pass.
+	//  • The allocation this pass produces is DISCARDED WHOLE. `colorRepairingConfinements` re-colours
+	//    from a fresh `Allocation` whenever the stuck list is non-empty, and the list is non-empty
+	//    exactly when a provisional colour was handed out — the two happen on this one line pair and
+	//    cannot come apart.
+	//  • ⭐ **WITHIN the pass, the provisional cannot flip a later value's DIAGNOSIS.** Multiple stuck
+	//    values in one pass is the measured common case (the int fragment carries five slots), and `v`
+	//    now sits in `held` and in `Allocation.holderOf`, so a LATER `reportExhaustion` will hand `v` to
+	//    `hallVerdictAt` as one of its occupants. That is sound only because `hallVerdictAt` takes NO
+	//    `Allocation`: it reads each value's ALLOWED SET, which the provisional does not touch. So which
+	//    register `v` provisionally holds cannot move the verdict between FEASIBLE (record and carry on)
+	//    and OVERFLOW (a hard panic naming the splitter). Were the verdict a function of the assignment,
+	//    one provisional colour could turn a repairable point into a false splitter-bug panic.
+	//
+	// Colouring rather than leaving `v` blank is what keeps every downstream reader of the sweep honest:
+	// `seedInUse`'s "a live-in must be coloured" and `colorOpForward`'s "every use is already coloured"
+	// are real dominance assertions, and weakening them permanently to accommodate a rare path would
+	// blind them on every ordinary function.
 	let provisional = lowestClearRegister(fullRegisterMask() and not free)
+	// CHECKED, not argued: `free` is a subset of `classPool`, so the pick is in `v`'s own file — and this
+	// file's convention is that legality is asserted where it is available, discarded pass or not.
+	assertColouredInClass(v, reg: provisional, class: liveness.classOf(v), file: liveness.registerFile)
 	alloc.assign(v, regNum: provisional)
 	return regMaskAdd(working, regNum: provisional)
 end 'reportExhaustion'
