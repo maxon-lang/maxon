@@ -263,7 +263,20 @@ run_suite() {                        # run_suite <tree> <binary> <log> -> sets P
   PASSED="$(echo "$summary" | awk '{print $1}')"
   FAILED="$(echo "$summary" | awk '{print $3}')"
   # SILENT when nothing drifted, which is the normal case — so "no note" means zero.
-  DRIFT="$(grep -oE 'note: [0-9]+ golden fragment' "$log" | grep -oE '[0-9]+' | tail -1)"
+  #
+  # ⛔ MATCH THE NOTE'S OWN WORDING, NOT JUST ITS SHAPE. The runner prints TWO `note: N golden
+  #   fragment(s) …` blocks, and they count different things: one is DRIFT ("no longer match what the
+  #   compiler emits"), the other is UNTRACKED ("are NOT TRACKED BY GIT"). This used to take the LAST
+  #   number of that shape, which is the untracked one whenever both are present.
+  #
+  #   That is not a rare case — it is the BASE's normal case. The base is a fresh worktree of
+  #   origin/main, so running its suite MINTS a golden for every case the branch added, and those are
+  #   untracked by construction. Measured 2026-08-04: base drift read 291 and untracked read 39, the
+  #   script reported the base at 39, and a rung whose real delta was 4 was accused of a 256-fragment
+  #   codegen change. A gate that reports a number which is not the one it names is worse than no
+  #   gate: it sends you looking for a change that never happened, and it would hide a real one just
+  #   as readily whenever the untracked count happened to be the larger.
+  DRIFT="$(grep -oE 'note: [0-9]+ golden fragment\(s\) no longer match' "$log" | grep -oE '[0-9]+' | tail -1)"
   [ -n "$DRIFT" ] || DRIFT=0
 }
 
