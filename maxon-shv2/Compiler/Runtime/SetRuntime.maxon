@@ -143,7 +143,7 @@ function buildSetRemove(module StdModule)
 	let eqWitness = 3 as ValueId
 
 	emitHtEmptyTableCheck(module, entry: entry, table: set, emptyBlock: emptySet, probeBlock: probe, ids: ids)
-	emitHtReturnConst(module, block: emptySet, value: 0, ids: ids)
+	emitConstReturn(module, block: emptySet, value: PredicateFalse, ids: ids)
 
 	let matchedIndex = emitHtLookupProbe(module, func: func, cur: probe, table: set, key: elem, hashWitness: hashWitness, eqWitness: eqWitness, foundBlock: found, notFoundBlock: notFound, ids: ids)
 
@@ -154,9 +154,9 @@ function buildSetRemove(module StdModule)
 	let storedKey = emitHtRecordSlotLoad(module, block: found, table: set, bufferOffset: HtKeysOffset, index: matchedIndex, ids: ids)
 	var afterKeyDrop = emitHtDropIfManaged(module, func: func, cur: found, table: set, dropOffset: HtKeyDropOffset, value: storedKey, ids: ids)
 	emitHtTombstoneSlot(module, block: afterKeyDrop, table: set, index: matchedIndex, ids: ids)
-	emitHtReturnConst(module, block: afterKeyDrop, value: 1, ids: ids)
+	emitConstReturn(module, block: afterKeyDrop, value: PredicateTrue, ids: ids)
 
-	emitHtReturnConst(module, block: notFound, value: 0, ids: ids)
+	emitConstReturn(module, block: notFound, value: PredicateFalse, ids: ids)
 
 	module.functions.push(func)
 end 'buildSetRemove'

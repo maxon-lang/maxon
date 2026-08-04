@@ -189,13 +189,6 @@ let GraphemeStateRiShift = 1 as ParsedInt
 let GraphemeStateEmojiBit = 1 as ParsedInt
 let GraphemeStateParityBit = 1 as ParsedInt
 
-// The two words a predicate-shaped runtime function returns. Shared by `__ext_pict` and `__gr_break` so
-// one cannot read the other's "true" as its "false" (`StringRuntime`'s `StrPredicateTrue` discipline; not
-// reused from there because these are `i1`-declared graphs in a different file, and importing a private
-// constant to save two lines would couple two runtimes that share nothing else).
-let GraphemeTrue = 1 as ParsedInt
-let GraphemeFalse = 0 as ParsedInt
-
 // ⭐ **THE ENTRY POINTS.** All `__`-prefixed compiler-internal (`isCompilerInternalCallee` — no E3004, no
 // signature slotting) but NOT `__mm_`-prefixed, so none of them widens the heap decision by its prefix;
 // each declares its own transitive floor in `recordCallUsage` exactly as the String family does.
@@ -334,13 +327,13 @@ end 'gbpRowsAfterHangul'
 // same row type and the same emitter rather than growing a second, nearly identical walker.
 function extendedPictographicRows() returns GbpRangeArray
 	var rows = GbpRangeArray.create()
-	rows.push(GbpRange.of(EmojiFacesLow, hi: EmojiFacesHigh, value: GraphemeTrue))
-	rows.push(GbpRange.of(EmojiSymbolsLow, hi: EmojiSymbolsHigh, value: GraphemeTrue))
-	rows.push(GbpRange.of(EmojiTransportLow, hi: EmojiTransportHigh, value: GraphemeTrue))
-	rows.push(GbpRange.of(EmojiSupplementalLow, hi: EmojiSupplementalHigh, value: GraphemeTrue))
-	rows.push(GbpRange.of(EmojiExtraLow, hi: EmojiExtraHigh, value: GraphemeTrue))
-	rows.push(GbpRange.of(MiscSymbolsLow, hi: MiscSymbolsHigh, value: GraphemeTrue))
-	rows.push(GbpRange.of(DingbatsLow, hi: DingbatsHigh, value: GraphemeTrue))
+	rows.push(GbpRange.of(EmojiFacesLow, hi: EmojiFacesHigh, value: PredicateTrue))
+	rows.push(GbpRange.of(EmojiSymbolsLow, hi: EmojiSymbolsHigh, value: PredicateTrue))
+	rows.push(GbpRange.of(EmojiTransportLow, hi: EmojiTransportHigh, value: PredicateTrue))
+	rows.push(GbpRange.of(EmojiSupplementalLow, hi: EmojiSupplementalHigh, value: PredicateTrue))
+	rows.push(GbpRange.of(EmojiExtraLow, hi: EmojiExtraHigh, value: PredicateTrue))
+	rows.push(GbpRange.of(MiscSymbolsLow, hi: MiscSymbolsHigh, value: PredicateTrue))
+	rows.push(GbpRange.of(DingbatsLow, hi: DingbatsHigh, value: PredicateTrue))
 	return rows
 end 'extendedPictographicRows'
 
@@ -414,12 +407,6 @@ function emitRangeTable(module StdModule, func IrFunction, cur IrBlock, cp Value
 	return block
 end 'emitRangeTable'
 
-// Terminate `block` by returning a constant. Every arm of both classifiers ends in one of these, so the
-// shape is written once (`StringRuntime.emitPredicateReturn`'s discipline, for a non-predicate result).
-function emitConstReturn(module StdModule, block IrBlock, value ParsedInt, ids ValueMinter)
-	module.setTerminator(block, op: StdOp.ret(emitConst(module, block: block, value: value, ids: ids)))
-end 'emitConstReturn'
-
 // `__gbp(cp) -> i64` — the Grapheme_Cluster_Break property (`grapheme.maxon:374-453`).
 //
 // The ONE row that is not a plain range is the precomposed Hangul syllable block, which splits LV from LVT
@@ -483,7 +470,7 @@ function buildExtPict(module StdModule)
 	let cp = 0 as ValueId
 
 	var miss = emitRangeTable(module, func: func, cur: entry, cp: cp, rows: extendedPictographicRows(), ids: ids)
-	emitConstReturn(module, block: miss, value: GraphemeFalse, ids: ids)
+	emitConstReturn(module, block: miss, value: PredicateFalse, ids: ids)
 	module.functions.push(func)
 end 'buildExtPict'
 
@@ -774,8 +761,8 @@ function buildGraphemeBreak(module StdModule)
 	// GB999: otherwise, break.
 	module.setTerminator(afterGb12, op: StdOp.branch(doBreak.id))
 
-	emitConstReturn(module, block: noBreak, value: GraphemeFalse, ids: ids)
-	emitConstReturn(module, block: doBreak, value: GraphemeTrue, ids: ids)
+	emitConstReturn(module, block: noBreak, value: PredicateFalse, ids: ids)
+	emitConstReturn(module, block: doBreak, value: PredicateTrue, ids: ids)
 	module.functions.push(func)
 end 'buildGraphemeBreak'
 

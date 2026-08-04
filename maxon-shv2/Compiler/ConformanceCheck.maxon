@@ -388,6 +388,46 @@ export function typeConformsTo(declared DeclaredConformanceMap, interfaces IrInt
 	return typeDeclaresInterface(declared, interfaces: interfaces, typeName: typeName, interfaceName: interfaceName)
 end 'typeConformsTo'
 
+// The verdict on ONE conformer's bindings against ONE conditional extension's `where` clause. A CASE and not
+// a bool, because the failing arm has to carry what the diagnostic names — which constraint, and what the
+// conformer bound the constrained parameter to — and a caller must not be able to reach for those after a
+// `satisfied`.
+export union ExtensionConstraintCheck
+	satisfied
+	unmet(interfaceName ByteArray, bindingName ByteArray)
+end 'ExtensionConstraintCheck'
+
+// What a conformer that binds NOTHING at a constrained position is reported as binding. It reaches the
+// author only through the withheld-method diagnostic, and only on a program `checkOneInterfaceConformance`
+// separately refuses (E3016 names the unbound associated type), so it is a phrase and never a type name.
+let UnboundAssociatedTypePhrase = b"(nothing)"
+
+// ⭐⭐ **DOES `bindings` SATISFY A CONDITIONAL EXTENSION'S `where` CLAUSE? (conditional extensions)** —
+// asked once per (extension, conformer) by `Parser.foldExtensionDeclarationInto`, whose answer decides
+// whether the extension's methods exist on that conformer at all.
+//
+// The constraint's `typeParamIndex` is a position in the extended interface's `uses` list, and `bindings` is
+// the conformer's `implements … with …` arguments in exactly that positional order
+// (`StructLayout.conformanceBindings`), so the pairing is index arithmetic and not a search.
+//
+// ⚠ **THE BINDING IS REDUCED TO ITS CANONICAL CONFORMER NAME BEFORE THE QUESTION IS ASKED** — `Integer`
+// reduces to `int`, which is the name its intrinsic `Equatable`/`Hashable` conformance and its
+// `__witness_int.*` tables are filed under. Asking about the alias spelling instead would withhold
+// `contains` from every `Array with <ranged alias>` in the program, which is the motivating case for the
+// feature.
+export function checkExtensionConstraints(signatures ProgramSignatures, constraints WhereConstraintArray, bindings ByteArrayArray) returns ExtensionConstraintCheck
+	for i in 0 upto constraints.count() 'eachConstraint'
+		let constraint = try constraints.get(i) otherwise panic("checkExtensionConstraints: constraints.get OOB at {i} below count {constraints.count()}")
+		let binding = try bindings.get(constraint.typeParamIndex) otherwise return ExtensionConstraintCheck.unmet(constraint.interfaceName, bindingName: UnboundAssociatedTypePhrase)
+		let conformer = signatures.conformerNameOfDeclaredName(binding).toByteArray()
+		if not typeConformsTo(signatures.sweptConformanceIndex(), interfaces: signatures.interfaceMap(), typeName: conformer, interfaceName: constraint.interfaceName) 'violates'
+			return ExtensionConstraintCheck.unmet(constraint.interfaceName, bindingName: binding)
+		end 'violates'
+	end 'eachConstraint'
+
+	return ExtensionConstraintCheck.satisfied
+end 'checkExtensionConstraints'
+
 // ⭐ **THE DECLARED-CONFORMANCE INDEX, BUILT ONCE PER COMPILE (P1.7a-existentials slice 1).** Three passes
 // now ask "does this type conform?" — the E3017 where-constraint check, the `<Type> from "…"` check, and the
 // EXISTENTIAL widening doors, which ask it once per interface-typed argument, assignment, field store and

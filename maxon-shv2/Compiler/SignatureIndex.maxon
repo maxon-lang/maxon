@@ -116,16 +116,24 @@ end 'enumBackingDiscriminator'
 // already in the hash (`DeclShapeEnum` / `DeclShapeStruct`), so one discriminator serves both.
 let DeclShapeDeclaredConformance = 55 as ContentHash
 
-// ⭐ **THE `implements` LIST'S CONTRIBUTION TO A DECLARATION'S CONTENT HASH — ONE STATEMENT, BOTH KINDS.**
-// The reason the list must ride is the same on each and it is `recordStruct`'s rule: a conformance changes
-// what ANOTHER file compiles to while that file's own bytes never move. For an enum it decides whether a
-// `throws E` conformance is accepted (`ConformanceCheck.requireImplErrorConformsToRequirement`); for a
-// `type` it decides which INTERFACE EXTENSION methods that type has at all, which is a whole set of
-// functions appearing in or vanishing from the program.
-function mixDeclaredConformances(state ContentHash, conformsTo ByteArrayArray) returns ContentHash
+// One `with <TypeArg>` an `implements` clause BINDS (conditional extensions). ⚠ It needs a discriminator of
+// its OWN, and sharing the one above would be a live collision rather than a tidiness point:
+// `implements A, B` and `implements A with B` are two different declarations that both offer the byte
+// sequences `A` then `B` to this mixer, and they decide different things (which extensions apply, versus
+// what the extended interface's associated type is bound to).
+let DeclShapeConformanceBinding = 68 as ContentHash
+
+// ⭐ **THE `implements` LIST'S CONTRIBUTION TO A DECLARATION'S CONTENT HASH — ONE STATEMENT, BOTH KINDS AND
+// BOTH HALVES.** The reason the list must ride is the same on each and it is `recordStruct`'s rule: a
+// conformance changes what ANOTHER file compiles to while that file's own bytes never move. For an enum it
+// decides whether a `throws E` conformance is accepted (`ConformanceCheck.requireImplErrorConformsToRequirement`);
+// for a `type` it decides which INTERFACE EXTENSION methods that type has at all, which is a whole set of
+// functions appearing in or vanishing from the program — and, through the `with` BINDINGS, which of a
+// CONDITIONAL extension's methods survive its `where` clause. `shape` names which half is being mixed.
+function mixDeclaredConformances(state ContentHash, conformsTo ByteArrayArray, shape ContentHash) returns ContentHash
 	var out = state
 	for name in conformsTo 'eachConformance'
-		out = mixBytes(mix(out, value: DeclShapeDeclaredConformance), bytes: name)
+		out = mixBytes(mix(out, value: shape), bytes: name)
 	end 'eachConformance'
 	return out
 end 'mixDeclaredConformances'
@@ -1981,6 +1989,18 @@ let ReservedTypeNamePrefix = b"__"
 // and every `Array`-instance query — one speller, so the two cannot drift. See `isArrayBaseName`.
 export let ArrayBuiltinBaseName = b"Array"
 
+// The name `stdlib/Array.maxon` gives the `Array`'s sole type parameter — `export type Array uses Element`.
+// shv2 declares no such type (the container is compiler-owned and synthesized, which is why
+// `ArrayBuiltinBaseName` exists at all), so a diagnostic that has to SPELL the parameter — the
+// `where Element is Equatable` clause `contains` is withheld under — has nowhere to read it from and writes
+// it here, once.
+export let ArrayElementTypeParamName = b"Element"
+
+// The position of that parameter in the (one-entry) `uses` list — what a `WhereConstraint` about the element
+// indexes, and the same 0 `containerElementType` reads. Named where the parameter it points at is named,
+// rather than as a bare literal at the one refusal that builds a constraint.
+export let ArrayElementTypeParamIndex = 0 as FieldIndex
+
 // The element type name of a `b"…"` byte-string literal's `Array with Byte` instance — the same `Byte`
 // spelling a user's `typealias Byte = int(0 to u8.max)` uses, so a byte-string's gid matches a
 // `ByteArray`-typed value's gid (type identity). A bare `named` reference: the element's own resolution
@@ -2096,6 +2116,30 @@ export let MapErrorTypeName = b"MapError"
 // anyway so that adding `insert` later cannot renumber the case handlers already written against the first.
 export let MapErrorKeyNotFoundCaseName = b"keyNotFound"
 export let MapErrorKeyAlreadyExistsCaseName = b"keyAlreadyExists"
+
+// ⭐⭐ **`IterationError` — WHAT A CURSOR'S `advance()` THROWS (conditional extensions).** Unlike the four
+// error enums above it, the COMPILER never throws this one: it is thrown and caught entirely by USER code
+// (`throw IterationError.exhausted` in an `advance()` body, absorbed by `for … in`'s step block). What the
+// compiler owes is that the NAME resolves, because `stdlib/Interfaces.maxon:28` declares it and the stdlib
+// loader does not list that module — the same provenance `ArrayError`, `StringError` and `MapError` have,
+// and it takes the same unconditional seed in `Project.createEnumRegistry`.
+//
+// ⚠ **THE MODULE IS NOT LISTED, AND ADMITTING IT IS NOT THE ALTERNATIVE.** `stdlib/Interfaces.maxon` also
+// declares `extension Iterable` with `map`/`filter`/`contains`, which — now that extensions parse — would
+// land a second definition of `map` on every conformer beside the compiler-owned `Array.map`/`Set.map`/
+// `Map.map`. Synthesizing the one declaration a program needs is what keeps that module out.
+//
+// It is BARE rather than `__`-prefixed for `MapError`'s stated reason: a user `advance()` writes
+// `throws IterationError` in its own source, so a reserved spelling would make one error type meet itself
+// under two names.
+export let IterationErrorTypeName = b"IterationError"
+
+// The cases of `IterationError`, in `stdlib/Interfaces.maxon:29-30`'s DECLARATION ORDER — positional
+// ordinals, so the order is the contract a user's `match` arms are resolved against. `exhausted` is what an
+// `advance()` past the last element throws; `atStart` belongs to `BidirectionalIterator.retreat()`, and is
+// declared for `MapError`'s reason: a case added later must not renumber handlers already written.
+export let IterationErrorExhaustedCaseName = b"exhausted"
+export let IterationErrorAtStartCaseName = b"atStart"
 
 // The `element_size@24` of a MANAGED-element array (P1.7 slice 3) — a managed element (String / struct /
 // union / instance / nested Array) is a HEAP BOX addressed by a POINTER, so a slot holds the 8-byte pointer,
@@ -3693,17 +3737,126 @@ export typealias InterfaceDeclSiteArray = Array with InterfaceDeclSite
 export type ExtensionDeclSite
 	export var path as FilePath
 	export var tokenPos as TokenIndex
-	// The interface being extended, read by the sweep off the token after the `extension` keyword — the same
-	// token `Parser.readExtensionHeader` consumes. A malformed header carries the empty name, which matches no
-	// conformer and expands nothing; the real parse reports it with a position.
-	export var interfaceName as ByteArray
+	// The name being extended, read by the sweep off the token after the `extension` keyword — the same token
+	// the two later passes consume. It is an INTERFACE name or a declared TYPE name; which one it is cannot be
+	// told here (the index is still being built) and is decided by `extensionTargetOf` once it is whole. A
+	// malformed header carries the empty name, which matches neither and expands nothing; the real parse
+	// reports it with a position.
+	export var targetName as ByteArray
 
-	export static function create(path FilePath, tokenPos TokenIndex, interfaceName ByteArray) returns ExtensionDeclSite
-		return Self{path: path, tokenPos: tokenPos, interfaceName: interfaceName}
+	export static function create(path FilePath, tokenPos TokenIndex, targetName ByteArray) returns ExtensionDeclSite
+		return Self{path: path, tokenPos: tokenPos, targetName: targetName}
 	end 'create'
 end 'ExtensionDeclSite'
 
 export typealias ExtensionDeclSiteArray = Array with ExtensionDeclSite
+
+// ⭐⭐ **THE TWO DOORS INTO THE EXTENSION MECHANISM, told apart once** (conditional extensions). `extension`
+// takes an INTERFACE name or a declared TYPE name, and the difference is not cosmetic — it decides what the
+// conformer set is, what a `where` clause's parameter names mean, and WHEN the constraint can be checked:
+//
+//   • **An INTERFACE extension expands per CONFORMER, and its `where` clause is a COMPILE-TIME FILTER.** The
+//     parameters are the interface's associated types, and each conformer binds them CONCRETELY in its own
+//     `implements … with …` clause, so "does this conformer satisfy the constraint?" has an answer the fold
+//     can take. A conformer that fails is silently skipped, which is what the spec's `constraint-not-met`
+//     case rests on: the method simply does not exist on that type.
+//   • **A TYPE extension expands ONCE, onto the type itself, and its `where` clause is a WITNESS CONSTRAINT.**
+//     The parameters are the type's own `uses` list, which is bound per INSTANTIATION rather than per
+//     conformer — and shv2 shares one compiled body across every instance of a generic type (P1.6-A), so
+//     there is nothing to filter and nothing to specialize. The constraint becomes exactly what a type-level
+//     `where` already is: hidden witness parameters, threaded by the dictionary-passing ABI.
+// ⚠ **THE TWO ARMS CARRY THE SAME PAYLOAD SHAPE AND ARE NOT ONE ARM.** What separates them is not their
+// contents but what a `where` clause MEANS under each — a filter the fold can evaluate, or hidden parameters
+// the ABI must thread — and that is a fact about the arm, not about a field it could carry as a flag.
+export union ExtensionTarget
+	// `paramNames` is the interface's `uses` list — the positions a `WhereConstraint.typeParamIndex` and a
+	// conformer's `StructLayout.conformanceBindings` are both indexed by.
+	interfaceExtension(paramNames ByteArrayArray, conformers ByteArrayArray)
+	// `paramNames` is the type's own `uses` list, and `conformers` is the extended type alone.
+	typeExtension(paramNames ByteArrayArray, conformers ByteArrayArray)
+	// A name that declares neither an interface nor a type. It expands nothing; the real parse reports it with
+	// a position.
+	undeclaredTarget
+end 'ExtensionTarget'
+
+// The declaration whose parameter positions an `extension`'s `where` clause names — an interface's associated
+// types, or a type's `uses` list. Empty for an undeclared target, which makes every `where` clause on one a
+// refusal at `readWhereClause` rather than a silent acceptance.
+export function extensionTargetParamNames(target ExtensionTarget) returns ByteArrayArray
+	match target 'target'
+		interfaceExtension(paramNames, _) then return paramNames
+		typeExtension(paramNames, _) then return paramNames
+		undeclaredTarget then return sharedEmptyDeclaredConformances
+	end 'target'
+end 'extensionTargetParamNames'
+
+// The types an `extension`'s methods are declared ON, in the order BOTH passes must walk them in — see
+// `conformersOf` for why one answer rather than two derivations.
+export function extensionTargetConformers(target ExtensionTarget) returns ByteArrayArray
+	match target 'target'
+		interfaceExtension(_, conformers) then return conformers
+		typeExtension(_, conformers) then return conformers
+		undeclaredTarget then return sharedEmptyDeclaredConformances
+	end 'target'
+end 'extensionTargetConformers'
+
+// ⭐ **AN `extension <Name> [where …]` HEADER, AS BOTH PASSES READ IT** — `Parser.readExtensionHeader`
+// returns it with the cursor left on the body's first token. The two passes must agree about all three of
+// these (which types get methods, under what condition, and where to blame a malformed clause), so they read
+// one header through one reader rather than each taking the parts it happens to need.
+export type ExtensionHeader
+	export let nameTok as Token
+	export let target as ExtensionTarget
+	// Empty for an unconditional `extension` — the whole existing corpus.
+	export let constraints as WhereConstraintArray
+
+	export static function create(nameTok Token, target ExtensionTarget, constraints WhereConstraintArray) returns ExtensionHeader
+		return Self{nameTok: nameTok, target: target, constraints: constraints}
+	end 'create'
+end 'ExtensionHeader'
+
+// ⭐ **ONE CONDITIONAL EXTENSION METHOD WITHHELD FROM ONE CONFORMER, kept so the CALL SITE can say why.**
+// Without it the author of `h.isGreater(…)` is told only that no such method exists, which is true and
+// useless: the method is written, in a file they can see, and what they need to know is the condition it was
+// written under and which of their bindings fails it. Filed by the fold under the qualified method name the
+// call resolves to (`MyHolder.isGreater`), because that is the key the refusal has in hand.
+export type ConditionalExtensionSkip
+	export let typeName as ByteArray
+	export let methodName as ByteArray
+	// The extension's WHOLE `where` clause, rendered as written (`where Item is Comparable`) — the condition,
+	// not merely the part of it that failed. A reader deciding whether to satisfy the constraint or to stop
+	// using the method needs all of it.
+	export let clause as String
+	// The FIRST constraint the conformer fails, and what it binds the constrained parameter to. First rather
+	// than all: one unmet requirement is one edit, and listing the rest would name consequences of the same
+	// gap.
+	export let unmetInterfaceName as ByteArray
+	export let bindingName as ByteArray
+
+	export static function create(typeName ByteArray, methodName ByteArray, clause String, unmetInterfaceName ByteArray, bindingName ByteArray) returns ConditionalExtensionSkip
+		return Self{typeName: typeName, methodName: methodName, clause: clause, unmetInterfaceName: unmetInterfaceName, bindingName: bindingName}
+	end 'create'
+end 'ConditionalExtensionSkip'
+
+export typealias ConditionalExtensionSkipMap = Map with (ByteArray, ConditionalExtensionSkip)
+
+// The witness constraints of an extension method that is NOT its enclosing type's own — see
+// `ExtensionTarget`'s type arm. Keyed by the qualified method name, which is the key both the reservation
+// side (`Parser.witnessParamCountFor`, through the constraints the extension body is parsed under) and the
+// supply side (`LowerMaxonToStd.appendWitnessArgs`) resolve a callee by.
+export typealias ExtensionMethodConstraintMap = Map with (ByteArray, WhereConstraintArray)
+
+// The answer to "was this missing method WITHHELD, or is it simply absent?" — a case rather than an empty
+// record, because the two readings lead to two different diagnostics and a caller must not be able to take
+// the wrong one by forgetting to test a field.
+export union ConditionalExtensionSkipLookup
+	withheld(skip ConditionalExtensionSkip)
+	notWithheld
+end 'ConditionalExtensionSkipLookup'
+
+// The constraint list a callee with no enclosing type carries — none, shared, for
+// `sharedEmptyWhereConstraints`' reason: every free function in the corpus asks and none has one.
+let sharedEmptyMethodWitnessConstraints = WhereConstraintArray.create()
 
 // ⭐ **AN INTERFACE'S POSITION IN DECLARATION ORDER — the whole-program, interner-FREE handle a
 // `witnessDispatch` names its requirement's interface by.** See `ProgramSignatures.interfaceNamesInDeclOrder`
@@ -4263,6 +4416,19 @@ export type ProgramSignatures
 	// `ExtensionDeclSite`. Read once, by `foldExtensionDeclarations`, after the last file folds, because an
 	// extension's methods belong to conformers the per-file sweep has not necessarily met yet.
 	export var extensionDeclSites as ExtensionDeclSiteArray
+	// ⭐ Every (conformer, method) a CONDITIONAL extension was withheld from, under the qualified name a call
+	// to it resolves to — see `ConditionalExtensionSkip`. Written by `foldExtensionDeclarations`, read at the
+	// one door a call to a missing method goes through.
+	var conditionalExtensionSkips as ConditionalExtensionSkipMap
+	// ⭐ The type -> declared-interface index as THIS phase can see it, memoized — see `sweptConformanceIndex`.
+	var sweptConformances as DeclaredConformanceMap
+	// Whether the field above has been built. A FLAG rather than an emptiness test, because a program in which
+	// no type declares a conformance builds a genuinely empty index and must not rebuild it per question.
+	var sweptConformancesBuilt as bool
+	// ⭐ The witness constraints of each TYPE-extension method — see `ExtensionMethodConstraintMap`. Written by
+	// the same fold, in the same act that publishes the method's signature, so a method cannot be published
+	// with one witness count and called with another.
+	var extensionMethodConstraints as ExtensionMethodConstraintMap
 	// The interner every `named` id in `returnTypes` belongs to. PRIVATE, and it has to be: an id
 	// may not leave this type. `returnTypeOf` re-interns it into the caller's own table.
 	var typeNames as TypeNameInterner
@@ -4512,7 +4678,7 @@ export type ProgramSignatures
 	// Every index, empty. Split out of `create` only so the seed stamping above reads as the two steps it
 	// is; this is its one caller.
 	static function freshIndexes() returns ProgramSignatures
-		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), structNamesInDeclOrder: ByteArrayArray.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), canonicalInstanceNameIndex: CanonicalInstanceNameSet.create(), canonicalNamesIndexedThrough: 0, tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleAliases: TupleCanonicalNameMap.create(), sawAggregateArrayLiteral: false, sawListFromConstruction: false, genericAliases: GenericAliasMap.create(), contestedGenericAliases: sharedEmptyGenericAliasContests, multiplyDeclaredGenericAliases: sharedEmptyDisagreeingAliasNames, divergedGenericAliasDecl: AliasCycleResult.none, nameableGenericAliases: sharedEmptyNameableGenericAliases, genericAliasSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceNamesInDeclOrder: builtinInterfaceNames(), interfaceDeclIndexByName: builtinInterfaceDeclIndices(), interfaceDeclSites: InterfaceDeclSiteArray.create(), extensionDeclSites: ExtensionDeclSiteArray.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcThrows: FuncThrowsMap.create(), funcParamDefaults: ParamDefaultMap.create(), collidingParamDefaults: CollidingParamDefaultNameSet.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), hash: fnvOffsetBasis(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, allFilesFolded: false, rootIsUnderStdlibDirectory: false, constCastTargets: ConstCastTargetSet.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibShadowRenames: StdlibShadowRenameMap.create(), fileModuleDirectories: FileModuleDirectoryMap.create(), namespaceQualifiedFunctions: NamespaceQualifiedFunctionSet.create(), freeFunctionDirectories: FreeFunctionDirectoryMap.create(), contestedFreeFunctions: ContestedFreeFunctionMap.create(), contestedRegistrationNames: ContestedRegistrationNameSet.create()}
+		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), structNamesInDeclOrder: ByteArrayArray.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), canonicalInstanceNameIndex: CanonicalInstanceNameSet.create(), canonicalNamesIndexedThrough: 0, tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleAliases: TupleCanonicalNameMap.create(), sawAggregateArrayLiteral: false, sawListFromConstruction: false, genericAliases: GenericAliasMap.create(), contestedGenericAliases: sharedEmptyGenericAliasContests, multiplyDeclaredGenericAliases: sharedEmptyDisagreeingAliasNames, divergedGenericAliasDecl: AliasCycleResult.none, nameableGenericAliases: sharedEmptyNameableGenericAliases, genericAliasSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceNamesInDeclOrder: builtinInterfaceNames(), interfaceDeclIndexByName: builtinInterfaceDeclIndices(), interfaceDeclSites: InterfaceDeclSiteArray.create(), extensionDeclSites: ExtensionDeclSiteArray.create(), conditionalExtensionSkips: ConditionalExtensionSkipMap.create(), sweptConformances: DeclaredConformanceMap.create(), sweptConformancesBuilt: false, extensionMethodConstraints: ExtensionMethodConstraintMap.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcThrows: FuncThrowsMap.create(), funcParamDefaults: ParamDefaultMap.create(), collidingParamDefaults: CollidingParamDefaultNameSet.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), hash: fnvOffsetBasis(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, allFilesFolded: false, rootIsUnderStdlibDirectory: false, constCastTargets: ConstCastTargetSet.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibShadowRenames: StdlibShadowRenameMap.create(), fileModuleDirectories: FileModuleDirectoryMap.create(), namespaceQualifiedFunctions: NamespaceQualifiedFunctionSet.create(), freeFunctionDirectories: FreeFunctionDirectoryMap.create(), contestedFreeFunctions: ContestedFreeFunctionMap.create(), contestedRegistrationNames: ContestedRegistrationNameSet.create()}
 	end 'freshIndexes'
 
 	// --- MODULE DIRECTORIES and the ONE visibility decision (N1a) ---
@@ -5383,7 +5549,12 @@ export type ProgramSignatures
 		// The `implements` list rides too — see `mixDeclaredConformances`. For a `type` it decides which
 		// INTERFACE EXTENSION methods the type has, so adding or removing a name here adds or removes whole
 		// functions from the program while the extension's own file never moves.
-		state = mixDeclaredConformances(state, conformsTo: layout.conformsTo)
+		state = mixDeclaredConformances(state, conformsTo: layout.conformsTo, shape: DeclShapeDeclaredConformance)
+		// And its `with` BINDINGS, for the sharper version of that same reason: they decide whether a
+		// CONDITIONAL extension's methods exist on this type at all (`ConformanceCheck.checkExtensionConstraints`), so
+		// editing `implements Holder with Score` to `with Tally` adds or removes functions from the program
+		// with neither the extension's file nor this type's field list moving.
+		state = mixDeclaredConformances(state, conformsTo: layout.conformanceBindings, shape: DeclShapeConformanceBinding)
 		for i in 0 upto layout.fieldCount() 'eachField'
 			state = self.mixField(state, layout: layout, index: i)
 		end 'eachField'
@@ -5413,7 +5584,7 @@ export type ProgramSignatures
 		var state = mix(mix(mixBytes(mix(self.hash, value: DeclShapeEnum), bytes: layout.name), value: EnumKindUnion if layout.isUnion else EnumKindEnum), value: enumBackingDiscriminator(layout.backing))
 		// The `implements` list rides for the field list's reason (A1s wave 2) — see `mixDeclaredConformances`,
 		// which states it once for both declaration kinds.
-		state = mixDeclaredConformances(state, conformsTo: layout.conformsTo)
+		state = mixDeclaredConformances(state, conformsTo: layout.conformsTo, shape: DeclShapeDeclaredConformance)
 		for i in 0 upto layout.caseCount() 'eachCase'
 			state = self.mixEnumCase(state, layout: layout, index: i)
 		end 'eachCase'
@@ -7101,8 +7272,15 @@ export type ProgramSignatures
 		end 'theTwoIdentitiesAgree'
 
 		// Asked only once the names have already disagreed, so every value that crosses every coercion site
-		// in a compiling program pays nothing for it.
-		return not self.byteBufferBoundaryAdmits(expectedTag, declaredNameId: expectedNameId, gotTag: gotTag, gotNameId: gotNameId)
+		// in a compiling program pays nothing for it. TWO boundaries answer here, and they are disjoint by
+		// construction — one is about a 1-byte record and the other about a machine-word one — so the order
+		// between them decides nothing; they are two arms of the single question *"do these two differently
+		// named instances denote one record?"*, asked where all eight coercion sites already ask it.
+		if self.byteBufferBoundaryAdmits(expectedTag, declaredNameId: expectedNameId, gotTag: gotTag, gotNameId: gotNameId) 'oneByteRecord'
+			return false
+		end 'oneByteRecord'
+
+		return not self.inferredIntElementBoundaryAdmits(expectedTag, declaredNameId: expectedNameId, gotTag: gotTag, gotNameId: gotNameId)
 	end 'aggregatesConflict'
 
 	// The underlying primitive of a qualified alias (base-template OR per-instance) — TypeResolution's
@@ -7196,23 +7374,132 @@ export type ProgramSignatures
 		return conformers
 	end 'conformersOf'
 
+	// ⭐⭐ **THE DECLARED-CONFORMANCE INDEX AS THIS PHASE CAN SEE IT — the same map `ConformanceCheck` builds,
+	// from the only store that exists this early.** `declaredConformanceIndex(project)` reads
+	// `project.conformances`, which the REAL PARSE fills; a CONDITIONAL extension's `where` clause has to be
+	// decided inside `queryProgramSignatures`, before any file is parsed, so this reads the sweep's own column
+	// (`StructLayout.conformsTo`) instead. Two STORES of the declarations, at two moments — but one map type
+	// and one predicate (`typeConformsTo`), so what "conforms" MEANS is stated once.
+	//
+	// Memoized for `declaredConformanceIndex`'s reason: a conditional extension asks it once per conformer per
+	// constraint, and rebuilding per question would be O(questions x declarations).
+	export function sweptConformanceIndex() returns DeclaredConformanceMap
+		if self.sweptConformancesBuilt 'alreadyBuilt'
+			return self.sweptConformances
+		end 'alreadyBuilt'
+
+		var declared = DeclaredConformanceMap.create()
+		for name in self.structNamesInDeclOrder 'eachDeclaredType'
+			let layout = try self.structTypes.get(name) otherwise panic("ProgramSignatures.sweptConformanceIndex: `structNamesInDeclOrder` holds '{String.from(name)}' with no entry in `structTypes` — `recordStruct` writes both in one act")
+			if layout.conformsTo.count() == 0 'declaresNone'
+				continue
+			end 'declaresNone'
+
+			var declaredInterfaces = InterfaceNameSet.create()
+			for interfaceName in layout.conformsTo 'eachInterface'
+				declaredInterfaces.insert(interfaceName)
+			end 'eachInterface'
+			declared.upsert(name, value: declaredInterfaces)
+		end 'eachDeclaredType'
+
+		self.sweptConformances = declared
+		self.sweptConformancesBuilt = true
+		return declared
+	end 'sweptConformanceIndex'
+
+	// ⭐⭐ **WHAT AN `extension <Name>` IS AN EXTENSION *OF* — the one place the two doors part company**
+	// (conditional extensions). Both halves of the mechanism ask it and neither may decide for itself: the
+	// fold publishes signatures against this answer and the real parse emits bodies against it.
+	//
+	// An interface and a type may not share a name (`checkTypeSymbolNamespace`, E3006), so the two arms are
+	// mutually exclusive and the order they are asked in cannot matter. The type arm is asked first only
+	// because `structTypes` is the cheaper lookup.
+	export function extensionTargetOf(targetName ByteArray) returns ExtensionTarget
+		if let layout = try self.structTypes.get(targetName) 'aDeclaredType'
+			var itself = ByteArrayArray.create()
+			itself.push(targetName)
+			return ExtensionTarget.typeExtension(layout.typeParamNames, conformers: itself)
+		end 'aDeclaredType'
+
+		match lookupInterface(self.interfaces, name: targetName) 'iface'
+			found(iface) then return ExtensionTarget.interfaceExtension(iface.associatedTypeNames, conformers: self.conformersOf(targetName))
+			notFound then return ExtensionTarget.undeclaredTarget
+		end 'iface'
+	end 'extensionTargetOf'
+
 	// The `where` constraints declared on `typeName` (P1.7a slice 2a), in source order — the witness-slot
 	// order. Empty for a non-generic, unconstrained, or undeclared type. Read by the E3017 instantiation
 	// check (does each concrete argument conform?) and the witness lowering (which interface / concrete type
 	// each hidden witness parameter carries).
+	//
+	// An undeclared type answers the SHARED empty rather than a fresh one: this sits on the per-call-site path
+	// that decides whether to append witness arguments (`witnessConstraintsOfMethod`), where the answer for
+	// almost every call in a program is "none".
 	export function structWhereConstraints(typeName ByteArray) returns WhereConstraintArray
-		let layout = try self.structTypes.get(typeName) otherwise return WhereConstraintArray.create()
+		let layout = try self.structTypes.get(typeName) otherwise return sharedEmptyMethodWitnessConstraints
 		return layout.whereConstraints
 	end 'structWhereConstraints'
 
-	// The number of `where` constraints on `typeName` (P1.7a slice 2a) — the number of hidden witness
-	// parameters an instance method of the type carries under dictionary-passing. 0 for an unconstrained or
-	// undeclared type. A `Map.contains`-cheap arithmetic answer, so it is safe on the per-call-site path
-	// that decides whether to append witness arguments.
-	export function structWhereConstraintCount(typeName ByteArray) returns FieldIndex
-		let layout = try self.structTypes.get(typeName) otherwise return 0
-		return layout.whereConstraintCount()
-	end 'structWhereConstraintCount'
+	// ⭐⭐ **THE WITNESS CONSTRAINTS THE INSTANCE METHOD `callee` CARRIES — the ONE answer both the reservation
+	// side and the supply side of the dictionary-passing ABI resolve a callee by.** Almost always its
+	// enclosing type's own `where` clause; for a method a CONDITIONAL TYPE EXTENSION contributed, the
+	// EXTENSION's clause instead, because that method is the only one of the type's that carries those
+	// witnesses (`ExtensionTarget`). Asked with the qualified `Type.method` name.
+	//
+	// ⚠ **THE EXTENSION'S CLAUSE REPLACES THE TYPE'S RATHER THAN APPENDING TO IT, and that is not a
+	// simplification** — `Parser.parseExtensionDeclaration` parses the body under the SAME list, formed the
+	// same way, so the slot a dispatch resolves to inside the body and the slot the caller fills are one
+	// numbering by construction. A type-extension method on a type that ALSO declares its own `where` is the
+	// case where the two lists differ — and nothing reconciles them, because nothing has to: exactly ONE of
+	// them is CHOSEN (the extension's), by this function, for every reader of that method's witness slots.
+	export function witnessConstraintsOfMethod(callee ByteArray) returns WhereConstraintArray
+		let extensionConstraints = self.extensionMethodConstraintsOf(callee)
+		if not extensionConstraints.isEmpty() 'anExtensionMethod'
+			return extensionConstraints
+		end 'anExtensionMethod'
+
+		match splitQualifiedName(callee) 'q'
+			notQualified then return sharedEmptyMethodWitnessConstraints
+			parts(typeName, _) then return self.structWhereConstraints(typeName)
+		end 'q'
+	end 'witnessConstraintsOfMethod'
+
+	// ⭐ The constraints `callee` carries that came from a conditional TYPE EXTENSION rather than from its
+	// type's own declaration — empty for every other method. The same map read as above, asked a DIFFERENT
+	// question and separated for a reason: a type's own `where` constraints are validated at the
+	// INSTANTIATION site (E3017, `checkWhereConstraints`), so by the time a call is typed there is nothing
+	// left to check about them. An extension's are validated nowhere — the extension is CONDITIONAL, so an
+	// instance that fails them is perfectly legal and merely does not have the method — which makes the CALL
+	// the only place the question can be asked. See `Parser.requireReceiverSatisfiesExtensionConstraints`.
+	export function extensionMethodConstraintsOf(callee ByteArray) returns WhereConstraintArray
+		let constraints = try self.extensionMethodConstraints.get(callee) otherwise return sharedEmptyMethodWitnessConstraints
+		return constraints
+	end 'extensionMethodConstraintsOf'
+
+	// File the witness constraints of one TYPE-extension method, and the SIGNATURE it was published with, in
+	// one act — see `ExtensionMethodConstraintMap`.
+	export function recordExtensionMethodConstraints(callee ByteArray, constraints WhereConstraintArray)
+		self.extensionMethodConstraints.upsert(callee, value: constraints)
+	end 'recordExtensionMethodConstraints'
+
+	// File one conditional extension method withheld from one conformer — see `ConditionalExtensionSkip`.
+	// FIRST-WINS: two extensions withholding a same-named method from one type leave the first reason, which
+	// is the one whose `where` clause the author reads first going down the file.
+	export function recordConditionalExtensionSkip(callee ByteArray, skip ConditionalExtensionSkip)
+		if self.conditionalExtensionSkips.contains(callee) 'alreadyExplained'
+			return
+		end 'alreadyExplained'
+		self.conditionalExtensionSkips.upsert(callee, value: skip)
+	end 'recordConditionalExtensionSkip'
+
+	// Why `callee` does not exist, when the reason is that a conditional extension withheld it. `none` for
+	// every other missing method, which is the overwhelming majority — an ordinary typo.
+	export function conditionalExtensionSkipOf(callee ByteArray) returns ConditionalExtensionSkipLookup
+		if let skip = try self.conditionalExtensionSkips.get(callee) 'withheld'
+			return ConditionalExtensionSkipLookup.withheld(skip)
+		end 'withheld'
+		return ConditionalExtensionSkipLookup.notWithheld
+	end 'conditionalExtensionSkipOf'
 
 	// Every `Base with Args` instantiation site with its source anchor (P1.7a slice 2a) — the list the E3017
 	// where-constraint check walks. A constraint-free base's sites are cheaply skipped (its `whereConstraints`
@@ -8071,6 +8358,25 @@ export type ProgramSignatures
 		return self.canonicalTupleStructRef(try args.get(0) otherwise panic("ProgramSignatures.containerElementType: `{String.from(self.genericInstanceBaseName(id))}` instance {id} has no type argument — arity (1) was checked at instantiation"))
 	end 'containerElementType'
 
+	// ⭐ **THE CANONICAL CONFORMER NAME OF A CONTAINER'S ELEMENT** — the key its conformance answer
+	// (`ConformanceCheck.typeConformsTo`), its `__witness_<conformer>.<Iface>` table and its
+	// `<conformer>.<method>` impl symbol are all filed under. `Integer` reduces to `int`, a struct keeps its
+	// own name; the reduction is `conformerNameOfType`'s, shared with the hash-table key path, so an
+	// `Array with Integer` and a `Set with Integer` cannot name two different `int` tables.
+	//
+	// ⚠ It goes through `containerElementType` rather than through `conformerTypeArgName(id, position: 0)`,
+	// and that is not a spelling preference: the element accessor CANONICALIZES a tuple `structRef` (see its
+	// header for the unresolved-symbol crash that fix is), and a witness label minted off the un-canonical
+	// spelling would name a table nothing registers.
+	//
+	// Two callers, one question: `Parser.requireArrayContainsAvailable` asks it to decide whether `contains`
+	// exists on this receiver at all, and `LowerMaxonToStd.appendArrayElementWitnessArgs` asks it to name the
+	// table that call dispatches through. Split, the front end could admit a call the lowering then cannot
+	// resolve a symbol for.
+	export function containerElementConformerName(id GenericInstanceId) returns String
+		return self.conformerNameOfType(self.containerElementType(id), idsFrom: self.typeNames)
+	end 'containerElementConformerName'
+
 	// ⭐⭐ **THE DECLARED RANGE OF AN `Array` INSTANCE'S ELEMENT, AS `readerFilePath` RESOLVES IT** — the
 	// BOUNDS twin of `arrayElementSize`, and the question a value being stored INTO the instance has to be
 	// asked (`Parser.requireByteStringBlobFitsItsElement`).
@@ -8533,6 +8839,48 @@ export type ProgramSignatures
 
 		return self.arrayNamedElementName(gotTag, nameId: gotNameId).equals(SynthesizedByteElementName)
 	end 'byteBufferBoundaryAdmits'
+
+	// ⭐⭐ **THE INFERRED-INT-ELEMENT BOUNDARY — the byte door's twin, and the second place two DIFFERENT
+	// `Array` instances denote one record.** `[10, 20, 30]` names no element type: the author wrote three
+	// integers and the compiler picked `Array with integer` for them (`internBuiltinIntegerInstance`). A
+	// declared `typealias Integer = int(i64.min to i64.max)` + `Array with Integer` — the idiom nearly every
+	// spec file in the tree opens with — is a DIFFERENT instance by name, so `IntList.create([10, 20, 30])`
+	// was `E3005 expected 'Array_Integer', got 'Array_int'` on a program the runnable oracle compiles and runs
+	// (MEASURED both ways; the oracle infers the literal's element from the position it sits in).
+	//
+	// ⚠ **THE ARRIVING SIDE IS THE COMPILER'S OWN INFERENCE, AND THAT ASYMMETRY IS THE WHOLE LICENCE.** An
+	// `integer` element is the one element type NO author spelled — every element a user writes arrives
+	// `named`/`structRef`/`string` — so admitting it commits nothing the author decided. Two AUTHOR-written
+	// spellings stay nominal in both directions, exactly as they do at the byte boundary and for the same
+	// reason: shv2 compares declared aggregates by NAME, and this door is about a value that has no name to
+	// compare.
+	//
+	// ⚠ **THE DECLARED SIDE MUST ADD NOTHING TO `int`, AND THAT ONE TEST COVERS BOTH WAYS IT COULD.**
+	// `spansEveryIntInEveryFile` demands the full i64 span, which settles the VALUE SET (no element a literal
+	// can hold is out of range, so nothing goes unchecked) and, as a consequence rather than a second
+	// condition, the SLOT (`rangedAliasStorageBytes` gives the full span the machine word, which is the stride
+	// the arriving record was created with). A narrower alias — `Byte`, `int(0 to 100)` — fails it and keeps
+	// the refusal it has today, which is the right answer: its record would stride differently and its range
+	// would go unchecked.
+	function inferredIntElementBoundaryAdmits(declaredTag ValueTypeTag, declaredNameId TypeNameId, gotTag ValueTypeTag, gotNameId TypeNameId) returns bool
+		if not self.isArrayInstanceAt(gotTag, nameId: gotNameId) 'gotIsNotAnArrayInstance'
+			return false
+		end 'gotIsNotAnArrayInstance'
+
+		if maxonTypeTag(self.containerElementType(gotNameId)) != ValueTypeTag.integer 'gotElementWasNamedByTheAuthor'
+			return false
+		end 'gotElementWasNamedByTheAuthor'
+
+		let declaredElement = self.arrayNamedElementName(declaredTag, nameId: declaredNameId)
+		if declaredElement.isEmpty() 'declaredIsNotAnArrayOverANamedElement'
+			return false
+		end 'declaredIsNotAnArrayOverANamedElement'
+
+		// A name NO file declares as a ranged alias is a struct / union / interface element, which an integer
+		// slot is not — the same `Map.get` channel `rosterElementHoldsEveryByte` reads, with the opposite
+		// default, because here a missing declaration means "not an int alias" rather than "the compiler's own".
+		return try self.typeAliases.spansEveryIntInEveryFile(declaredElement) otherwise false
+	end 'inferredIntElementBoundaryAdmits'
 
 	// The BOUNDS half of the declared side, over a name the roster has already accepted. The registry MISS
 	// arm is the same split `undeclaredNamedElementStorageBytes` makes and for the same reason: the two
@@ -9776,7 +10124,7 @@ export type ProgramSignatures
 	// primitive's name (`Integer` -> `int`), which is what its intrinsic conformance and its `__witness_int.*`
 	// tables are keyed by; every other name is its own conformer. The name half of `canonicalizeRangedAlias`,
 	// split out so the reduction is stated once whether the caller arrived with a type or with a name.
-	function conformerNameOfDeclaredName(name ByteArray) returns String
+	export function conformerNameOfDeclaredName(name ByteArray) returns String
 		if let underlying = try self.aliasUnderlyingInAnyFile(name) 'rangedAlias'
 			return primitiveTypeTagName(maxonTypeTag(underlying))
 		end 'rangedAlias'
@@ -11926,6 +12274,42 @@ export type ProgramSignatures
 	export function declaresCallee(callee ByteArray) returns bool
 		return self.returnTypes.contains(callee)
 	end 'declaresCallee'
+
+	// ⭐⭐ **DOES `typeName` SUPPLY THE CURSOR PROTOCOL A `for … in` OVER A USER TYPE LOWERS TO?**
+	// (conditional extensions) — `current()`, which yields the element the trip is positioned on, and a
+	// THROWING `advance()`, whose throw is how the walk ends. Both must be declared on the type itself:
+	// shv2 dispatches statically, so the loop emits `<typeName>.current` / `<typeName>.advance` as direct
+	// calls and the declarations ARE what makes the loop expressible.
+	//
+	// ⭐⭐ **STRUCTURAL, NOT A CONFORMANCE — and that is a DEPARTURE FROM v1, taken against the runnable
+	// oracle.** v1 requires the source to conform to an interface that itself declares `current` + `advance`
+	// and no `createIterator` (`LowerMaxonToStd.receiverImplementsIteratorShapedInterface`). The C# bootstrap
+	// does not: MEASURED, a bare `type IntList` with the two methods and NO `implements` clause at all
+	// compiles and runs `for item in self` there (exit 60 over `[10, 20, 30]`). An interface requirement here
+	// would therefore be a false REJECT of a program the oracle accepts, and it would buy nothing — the two
+	// direct calls are all the lowering needs, and a conformance cannot make a missing method appear.
+	//
+	// ⚠⚠ **THE `advance()` THROW IS PART OF THE SHAPE, AND SO IS THE ERROR TYPE IT NAMES.** The loop's ONLY
+	// exit is that throw (`Parser.parseForStatement`'s cursor step carries the error flag as the header's
+	// block-arg), so a non-throwing `advance()` would spin forever — and the loop ABSORBS the thrown value
+	// without binding it, which is safe for `IterationError` (compiler-owned, payload-FREE, so the throw
+	// hands over a scalar tag and there is nothing to release) and would LEAK for an error enum carrying a
+	// managed payload. Pinning the clause to `IterationError` is what makes the absorption sound by
+	// construction rather than by a rule somewhere else remembering to check the payload — and it is
+	// verbatim what `stdlib/Interfaces.maxon:145` declares, so it narrows nothing a conforming type writes.
+	export function declaresCursorProtocol(typeName ByteArray) returns bool
+		if not self.declaresCallee(qualifiedMethodName(typeName, methodName: CurrentMethodName)) 'noCurrent'
+			return false
+		end 'noCurrent'
+
+		let advance = qualifiedMethodName(typeName, methodName: AdvanceMethodName)
+		if not self.declaresCallee(advance) 'noAdvance'
+			return false
+		end 'noAdvance'
+
+		let thrown = try throwsClauseName(self.throwsOf(advance)) otherwise return false
+		return thrown.toByteArray().equals(IterationErrorTypeName)
+	end 'declaresCursorProtocol'
 
 	// ⭐⭐ **DOES `written` RESOLVE AS A DIRECTORY-QUALIFIED FREE CALL — THE WHOLE RULE, IN ONE PLACE (N1b)?**
 	// It is asked of the WHOLE assembled dotted name (`utils.helper`, `lib.inner.deepHelper`), never of its

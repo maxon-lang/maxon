@@ -124,8 +124,7 @@ end 'main'
 0
 ```
 
-<!-- disabled-test: default-values.array-default-omitted -->
-<!-- ARRAY LITERAL vs RANGED-ELEMENT INSTANCE, not defaults: an `[...]` int literal is typed `Array_int` and does not unify with `Array with Integer` (`Array_Integer`) at ANY site. MEASURED with the default removed: `function make() returns IntArray  return [10, 20, 12] end` is `E3005: Cannot return 'Array_int' from function declared to return 'Array_Integer'`, and `take([10, 20, 12])` against an `IntArray` parameter is the argument-side twin — both of which the C# bootstrap accepts (exit 42). The default path reaches it through the synthesized helper's own `return`, so it is unlocked by whichever rung teaches an array literal its expected element type. -->
+<!-- test: default-values.array-default-omitted -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
@@ -146,8 +145,7 @@ end 'main'
 42
 ```
 
-<!-- disabled-test: default-values.array-default-provided -->
-<!-- ARRAY LITERAL vs RANGED-ELEMENT INSTANCE, not defaults: an `[...]` int literal is typed `Array_int` and does not unify with `Array with Integer` (`Array_Integer`) at ANY site. MEASURED with the default removed: `function make() returns IntArray  return [10, 20, 12] end` is `E3005: Cannot return 'Array_int' from function declared to return 'Array_Integer'`, and `take([10, 20, 12])` against an `IntArray` parameter is the argument-side twin — both of which the C# bootstrap accepts (exit 42). The default path reaches it through the synthesized helper's own `return`, so it is unlocked by whichever rung teaches an array literal its expected element type. -->
+<!-- test: default-values.array-default-provided -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer

@@ -621,6 +621,17 @@ export union ParseError implements Error
 	// A field access (`p.x`) naming a field the struct does not declare. Renders as E3018,
 	// positioned at the FIELD name — the token that is wrong, not the value it is read from.
 	unknownField(typeName String, fieldName String, line LineNumber, column ColumnNumber)
+	// ⭐ A call to a method a CONDITIONAL extension WITHHELD from this type — `h.isGreater(…)` where
+	// `extension Holder where Item is Comparable` exists but `MyHolder` binds `Item` to a type that does not
+	// implement `Comparable`. Renders as E4006, positioned at the METHOD name.
+	//
+	// ⚠ **IT IS A DIFFERENT DEFECT FROM "no such method", WHICH IS WHY IT IS NOT E3004.** The ordinary
+	// missing-method answer (`SemanticCheck.validateCall`, one pass later) is right about a TYPO and useless
+	// here: the method IS written, in a file the author can open, and what they need is the condition it was
+	// written under and which of their bindings fails it. Nothing but the front end holds that pairing —
+	// `ProgramSignatures.conditionalExtensionSkipOf` is filed by the fold that took the decision — so the
+	// refusal is raised where the pairing is, one stage before the general one it pre-empts.
+	conditionalExtensionWithheld(typeName String, methodName String, clause String, unmetInterfaceName String, bindingName String, line LineNumber, column ColumnNumber)
 	// A struct literal that omits a field the declaration gives no DEFAULT for. Renders as E3086,
 	// positioned at the type name.
 	//
@@ -1318,6 +1329,12 @@ let sharedEmptyTypeParamFeeds = TypeParamFeedArray.create()
 // parse fan-out — exactly the invariant `sharedEmptyDescriptorNeeds`/`sharedEmptyTypeParamFeeds` rely on.
 let sharedEmptyInnerAliases = InnerAliasNameSet.create()
 let sharedEmptyInstanceAliasMap = ValueInstanceAliasMap.create()
+
+// The same anchor for the two ASSOCIATED-TYPE columns an interface-extension body is parsed under
+// (conditional extensions) — see `Parser.extensionAssociatedTypeNames`. Never mutated: an extension pass
+// REPLACES both columns wholesale and the reset points them back here, so one allocation serves every parser
+// and every declaration that is not an interface extension.
+let sharedEmptyExtensionAssociatedTypes = ByteArrayArray.create()
 
 // The same COW anchor for the declared-alias map (`ValueDeclaredAliasMap`), with the same invariant: a
 // function that declares no float-alias value and writes no `as` cast INCREFS this one rather than
@@ -3702,8 +3719,34 @@ function arraySurfaceMemberNames() returns ByteArrayArray
 	names.push(InsertMethod)
 	names.push(AppendMethod)
 	names.push(MapMethod)
+	// ⚠ **`contains` IS ON THE SURFACE UNCONDITIONALLY AND AVAILABLE CONDITIONALLY, and the two answers belong
+	// at different doors (conditional-extensions).** A roster says what the dispatch SERVES; whether THIS
+	// receiver's element satisfies `where Element is Equatable` is `requireArrayContainsAvailable`'s question,
+	// asked at its own span with its own diagnostic (E4006, the same one a user's conditional extension is
+	// withheld with). Leaving the name off for a non-`Equatable` element would be the roster lying about the
+	// surface — the exact shape this list's header records twice already.
+	names.push(ContainsMethod)
 	return names
 end 'arraySurfaceMemberNames'
+
+// ⭐ **THE CLAUSE `Array.contains` IS WITHHELD UNDER, RENDERED RATHER THAN WRITTEN** — `where Element is
+// Equatable`, which is `stdlib/Array.maxon:534`'s own clause. It goes through the SAME renderer a user's
+// `where` clause is spelled back out by (`renderWhereConstraints`), over the SAME interface list the
+// availability check tests and the lowering threads tables for (`arrayElementWitnessInterfaces`), so the
+// sentence a reader is given and the condition they actually failed are one fact. Typed out as a literal it
+// would be the third spelling of that list and the first one nothing checks.
+function arrayContainsWhereClause() returns String
+	let interfaces = arrayElementWitnessInterfaces()
+	var constraints = WhereConstraintArray.create()
+	for i in 0 upto interfaces.count() 'eachConstraint'
+		let interfaceName = try interfaces.get(i) otherwise panic("arrayContainsWhereClause: interfaces.get OOB at {i} below count {interfaces.count()}")
+		constraints.push(WhereConstraint.create(ArrayElementTypeParamIndex, interfaceName: interfaceName))
+	end 'eachConstraint'
+
+	var paramNames = ByteArrayArray.create()
+	paramNames.push(ArrayElementTypeParamName)
+	return renderWhereConstraints(constraints, paramNames: paramNames)
+end 'arrayContainsWhereClause'
 
 // ⭐⭐ **WHICH MEMBERS THE `String` SURFACE HAS (A2q)** — the third roster, and the one whose hand-written
 // predecessor is why the shape exists at all. It carries the identical obligations: the entries are the
@@ -4095,11 +4138,23 @@ function columnValueTagMatches(valueTag ValueTypeTag, declared ValueTypeTag) ret
 	// MEASURED, not assumed.** `requireHashTableColumnType` runs where a container is MATERIALIZED
 	// (`IntSet.create()`), so a method call on an instance this function never created reaches here with any
 	// column type at all: `function add(s BadSet) s.insert(1.0) end` over `typealias BadSet = Set with float`
-	// answers *"`Set with float` requires a float key — got a 'float' value"* today — a nonsense sentence, but
-	// a clean E2015 on a program that is refused either way. A panic on the residual would replace that
-	// refusal with a COMPILER CRASH, and the `insert(1)` spelling of the same program would lose its E2062
-	// (the honest diagnostic, on the type argument) to it. A fourth ADMITTED column type must therefore be
-	// added here as an arm of its own, ahead of this one — and its gate is not what will stop you forgetting.
+	// reaches it with a float column. A panic on the residual would replace that program's refusal with a
+	// COMPILER CRASH, and the `insert(1)` spelling of the same program would lose its E2062 (the honest
+	// diagnostic, on the type argument) to it. So the residual must ANSWER, not crash.
+	//
+	// ⛔ **BUT WHAT IT ANSWERS FOR A FLOAT IS NOW A WRONG REFUSAL, AND THE ARGUMENT THAT USED TO EXCUSE IT IS
+	// RETRACTED.** That argument was *"a nonsense sentence, but on a program that is refused either way"* —
+	// true only while `float` was no container's legal element. The `Array with float` work made a float array
+	// FIRST-CLASS, so `[1.5, 2.5].map(function(v float) gives v * 2.0)` — a program that must COMPILE — comes
+	// down `requireElementTransform` -> `elementTransformAnswersElement` -> here, reads FALSE off this arm and
+	// is refused as *"`map`'s transform answers a float value where the container's element is a float"*: a
+	// sentence that refutes itself, on a legal program. FILED AS ITS OWN RUNG — the fix is a FLOAT arm
+	// (`tagIsFloat(declared)` -> `tagIsFloat(valueTag)`) ahead of this one plus the spec case that pins it,
+	// and it is deliberately NOT carried by the conditional-extensions port, whose `contains` path never
+	// reaches this predicate. Until then this comment states the defect rather than licensing it.
+	//
+	// A fourth ADMITTED HASH-TABLE column type must likewise be added here as an arm of its own, ahead of this
+	// one — and its gate is not what will stop you forgetting.
 	return tagIsIntegral(valueTag)
 end 'columnValueTagMatches'
 
@@ -5486,6 +5541,12 @@ typealias LoopContextArray = Array with LoopContext
 // `__` prefix is what says so anyway, since `requireUnreservedName` bars every declaration from that
 // space. It exists only so `emitScopeDrops` — which drops BINDINGS — reaches the record.
 let IterationSourceBindingName = b"__for_source"
+
+// The name of the internal PER-TRIP binding a cursor loop's `current()` result is re-scoped into
+// (`parseForStatement`'s cursor arm) when that result is an owned temporary. Same reasoning as the source
+// binding one line up — never in a `Scope`, `__`-prefixed so no declaration could collide, and existing only
+// so that the four exits `emitScopeDrops` serves reach the record exactly once each.
+let IterationElementBindingName = b"__for_element"
 
 // The same kind of unnameable internal binding, for the temporary a BORROW was taken out of — an
 // element read off a container (`emitContainerElementAccessor`) or a managed field read off a box
@@ -6934,6 +6995,15 @@ export type Parser
 	// and NOT the conformer's whole method set, deliberately: an extension body may rely on exactly what the
 	// interface guarantees, and nothing a particular conformer happens to also declare.
 	var extensionInterfaceName as ByteArray
+	// ⭐ **THE ASSOCIATED-TYPE SUBSTITUTION AN INTERFACE-EXTENSION BODY IS PARSED UNDER (conditional
+	// extensions)** — the extended interface's `uses` names, and what the CONFORMER this pass is monomorphizing
+	// for binds each of them to. Parallel, positional, and empty everywhere else. `parseTypeReference` reads
+	// them to resolve a written `Element` as the name `Integer`; see the ⚠ there for why they are deliberately
+	// NOT `enclosingTypeParams`. Written by `openExtensionBodyScope`, cleared in lockstep with the other
+	// per-declaration scopes (`enterTypeScope`/`closeTypeParamScope`), and pointing at the shared empty
+	// otherwise, so every declaration that is not an interface extension allocates nothing here.
+	var extensionAssociatedTypeNames as ByteArrayArray
+	var extensionAssociatedTypeBindings as ByteArrayArray
 	// A REUSED sink for the REAL parse's generic-instance typealiases (P1.6-A). The whole-program index
 	// records every generic alias in the SWEEP (`foldFile`), so the real parse's `readTypeAliasDeclaration`
 	// has nowhere to fold one and nothing downstream reads it — but the shared reader records into a
@@ -7281,6 +7351,8 @@ export type Parser
 			siblingReceiverScanBody: 0,
 			enclosingTypeBodyStart: 0,
 			extensionInterfaceName: EmptySourceText,
+			extensionAssociatedTypeNames: sharedEmptyExtensionAssociatedTypes,
+			extensionAssociatedTypeBindings: sharedEmptyExtensionAssociatedTypes,
 			genericAliasScratch: GenericAliasEntryArray.create(),
 			emptyTypeParamPositions: TypeParamIdArray.create(),
 			emptyTypeParams: ByteArrayArray.create(),
@@ -9913,11 +9985,12 @@ export type Parser
 		// `typeParameter(pos)` against. The cursor lands past the clause, at the type body the loop walks.
 		self.openTypeParamScope(layout)
 
-		// ⭐ **`implements I1, I2` — THE NAMES ONLY, AND THAT IS WHY IT IS NOT `parseTypeImplementsClause`.**
-		// The sweep needs this list for exactly one reader: an INTERFACE EXTENSION is expanded onto every type
-		// whose clause names its interface, and that expansion must land in the whole-program signature index
-		// before any file is parsed. The real parse's `parseTypeImplementsClause` records the richer
-		// `ConformanceDecl` (bindings + position) that `checkConformance` verifies from; see
+		// ⭐ **`implements I1, I2 [with …]` — THE NAMES AND THE FINAL `with` BINDINGS, AND THAT IS WHY IT IS
+		// STILL NOT `parseTypeImplementsClause`.** The sweep needs this for exactly one reader: an EXTENSION is
+		// expanded onto every type whose clause names its interface — and, when the extension is CONDITIONAL,
+		// only onto those whose bindings satisfy its `where` clause — and that expansion must land in the
+		// whole-program signature index before any file is parsed. The real parse's `parseTypeImplementsClause`
+		// records the richer `ConformanceDecl` (bindings + POSITION) that `checkConformance` verifies from; see
 		// `StructLayout.conformsTo` for why the two records are deliberately not one.
 		//
 		// ⚠ **A `with` BINDING ENDS THE READ, so `implements Container with Score, Other` records `Container`
@@ -9930,7 +10003,8 @@ export type Parser
 		// Tolerant like every other read on this walk: a malformed clause records no conformance and leaves
 		// the positioned diagnostic to the real parse. The cursor is left wherever the read stopped, which the
 		// body loop below steps over token by token exactly as it stepped over the whole clause before.
-		layout.recordConformances(try self.readOptionalImplementsClause() otherwise sharedEmptyDeclaredConformances)
+		let scannedConformances = try self.readOptionalImplementsClause() otherwise ScannedConformanceClause.declaringNothing()
+		layout.recordConformances(scannedConformances.names, bindings: scannedConformances.bindings)
 
 		// The cursor now sits at the type body's first token — captured for the transitive array-feed post-pass
 		// (P1.7 slice 3b-iv), which re-walks the body once EVERY method's parameter list is known. `feedStart` marks
@@ -10114,7 +10188,7 @@ export type Parser
 		// have to be put back down: both open by consuming `extension`, exactly as the real parse reaches it.
 		// The interface NAME travels with the site so those passes can find the conformers without re-reading
 		// the header first.
-		sites.push(ExtensionDeclSite.create(self.filePath, tokenPos: self.pos, interfaceName: self.identifierNameAt(self.pos + 1)))
+		sites.push(ExtensionDeclSite.create(self.filePath, tokenPos: self.pos, targetName: self.identifierNameAt(self.pos + 1)))
 
 		try self.consume(TokenKind.extension) otherwise return
 		self.skipPastBlockEnd()
@@ -10184,17 +10258,28 @@ export type Parser
 		// routine that MAY push is how a shared empty stops being empty.
 		var freeFunctionNameOut = ByteArrayArray.create()
 
-		let conformers = index.conformersOf(site.interfaceName)
-		for conformer in conformers 'eachConformer'
-			self.pos = site.tokenPos
-			// It cannot fail — the site was recorded AT this keyword — but the sweep's discipline is that a
-			// read it cannot make publishes nothing rather than throwing, and `break` (not `return`) keeps the
-			// fold below reachable so earlier conformers' entries are not silently dropped along with it.
-			try self.consume(TokenKind.extension) otherwise break
-			// The header's own name token is stepped over rather than re-read: the site already carries it,
-			// and re-deriving it here would be a second reader of one fact.
-			self.advance()
+		self.pos = site.tokenPos
+		// It cannot fail — the site was recorded AT this keyword — but the sweep's discipline is that a read it
+		// cannot make publishes nothing rather than throwing.
+		let header = try self.readExtensionHeader() otherwise return
+		// Where each conformer's pass restarts — read ONCE, exactly as `parseExtensionDeclaration` does it, so
+		// the header is not re-parsed per conformer and the two passes agree about where a body begins.
+		let bodyStart = self.pos
+		// The whole `where` clause, rendered ONCE per declaration rather than per withheld method: it is a
+		// property of the extension, and every skip this fold files quotes the same sentence.
+		let clause = renderWhereConstraints(header.constraints, paramNames: extensionTargetParamNames(header.target))
+
+		for conformer in extensionTargetConformers(header.target) 'eachConformer'
+			self.pos = bodyStart
 			self.enterTypeScope(conformer, isEnum: false)
+			self.openExtensionBodyScope(header, conformer: conformer, index: index)
+
+			// ⭐ **THE CONDITIONAL FILTER, TAKEN ONCE PER CONFORMER.** An INTERFACE extension's `where` clause
+			// is checked against what this conformer binds the interface's associated types to; a TYPE
+			// extension's is not checkable here at all (the parameters are bound per INSTANTIATION) and becomes
+			// witness constraints instead — see `ExtensionTarget`. Both answers are pure functions of the
+			// whole-program index, which is what lets `parseExtensionDeclaration` take the identical one.
+			let verdict = self.extensionConformerVerdict(header, conformer: conformer, index: index)
 
 			while not self.isEof() 'members'
 				self.skipNewlines()
@@ -10217,7 +10302,22 @@ export type Parser
 				end 'notAMethod'
 
 				self.advance()
-				self.recordScannedSignature(entries, paramConsumes: paramConsumes, paramDefaults: paramDefaults, throwsEntries: throwsEntries, methodInnerAliasParamOut: methodInnerAliasParamOut, freeFunctionNameOut: freeFunctionNameOut)
+				let methodName = self.current().value
+				// Which witness parameters this method will carry, filed in the same act that publishes its
+				// signature — see `ProgramSignatures.witnessConstraintsOfMethod`. Above the verdict because a
+				// TYPE extension's methods are never withheld (its clause is not a filter), so this is not on
+				// the withheld path at all.
+				self.noteTypeExtensionWitnessConstraints(index, header: header, conformer: conformer, methodName: methodName)
+
+				// ⚠ **A WITHHELD METHOD IS STILL READ, INTO ARRAYS THAT ARE THROWN AWAY.** What must not
+				// happen is that it is PUBLISHED; what must not happen either is that the cursor lands anywhere
+				// but where a published one leaves it, and the only way to guarantee that is to run the same
+				// reader over it. A second, shorter walk of a signature is exactly the resume point one token
+				// off that `skipPastBlockEnd`'s header warns about.
+				match verdict 'verdict'
+					satisfied then self.recordScannedSignature(entries, paramConsumes: paramConsumes, paramDefaults: paramDefaults, throwsEntries: throwsEntries, methodInnerAliasParamOut: methodInnerAliasParamOut, freeFunctionNameOut: freeFunctionNameOut)
+					unmet(unmetInterfaceName, bindingName) then self.foldWithheldExtensionMethod(index, conformer: conformer, methodName: methodName, clause: clause, unmetInterfaceName: unmetInterfaceName, bindingName: bindingName)
+				end 'verdict'
 				// `recordScannedSignature` leaves the cursor at the method BODY's first token, i.e. inside the
 				// one block the method's own `end` closes — exactly this walk's entry condition.
 				self.skipPastBlockEnd()
@@ -10232,6 +10332,136 @@ export type Parser
 		// per-file sweep passes its own.
 		index.foldFile(entries, aliases: RangedTypeAliasArray.create(), functionAliases: FunctionTypeAliasArray.create(), structs: StructLayoutArray.create(), enums: EnumLayoutArray.create(), genericAliasEntries: GenericAliasEntryArray.create(), innerAliasEntries: InnerAliasEntryArray.create(), methodInnerAliasParamEntries: methodInnerAliasParamOut, interfaceSites: InterfaceDeclSiteArray.create(), extensionSites: ExtensionDeclSiteArray.create(), bindings: TopLevelDeclArray.create(), paramConsumes: paramConsumes, paramDefaults: paramDefaults, throwsEntries: throwsEntries, freeFunctionNames: freeFunctionNameOut, moduleDirectory: index.moduleDirectoryOf(self.filePath), fileTypeNames: self.artifact.typeNames, isStdlibSource: self.isStdlibSource)
 	end 'foldExtensionDeclarationInto'
+
+	// ⭐⭐ **`extension <Name> [where <constraints>]` — THE ONE READER OF THE HEADER, for the three passes that
+	// meet it** (conditional extensions). The cursor enters on `extension` and lands on the body's first
+	// token. Every fact the two later passes disagree about at their peril comes out of here: WHICH types get
+	// the methods, under WHAT condition, and the NAME token a malformed clause is blamed on.
+	//
+	// ⚠ **THE `where` CLAUSE'S PARAMETER NAMES ARE THE TARGET'S, AND THE SCOPE IS OPENED BEFORE IT IS READ.**
+	// `readWhereClause` resolves each constrained name to a POSITION in `enclosingTypeParams` and refuses a
+	// name that is not in it — which is exactly the check wanted here, provided the list it checks against is
+	// the extended declaration's (an interface's associated types, a type's `uses` list) and not whatever
+	// declaration the file was last inside. That is why the assignment is here and not at the call sites: a
+	// caller that forgot it would not fail, it would resolve `Element` against a stale list.
+	function readExtensionHeader() returns ExtensionHeader throws ParseError
+		try self.consume(TokenKind.extension)
+		let nameTok = try self.consume(TokenKind.identifier)
+		let target = self.signatures.extensionTargetOf(nameTok.value)
+		self.enclosingTypeParams = extensionTargetParamNames(target)
+
+		if not self.at(TokenKind.where) 'unconditional'
+			return ExtensionHeader.create(nameTok, target: target, constraints: sharedEmptyWhereConstraints)
+		end 'unconditional'
+
+		return ExtensionHeader.create(nameTok, target: target, constraints: try self.readWhereClause())
+	end 'readExtensionHeader'
+
+	// The parser state an extension BODY is read under, for whichever door the extension came through — set
+	// after `enterTypeScope(conformer)`, which deliberately clears every one of these.
+	//
+	// ⚠⚠ **AN INTERFACE EXTENSION'S BODY GETS THE TYPE-PARAMETER FIELDS SET BY NEITHER, AND THAT IS NOT AN
+	// OMISSION.** Its `where` clause names the INTERFACE's associated types, which this body may not refer to
+	// as type PARAMETERS: they are bound concretely per conformer, and installing them in
+	// `enclosingTypeParams` would make a written `Element` resolve to `typeParameter(0)` of the CONFORMER — a
+	// different type, silently. Its constraints are a filter that has already been applied by the time this is
+	// called (`extensionConformerVerdict`), so there is nothing left for the body to dispatch through either.
+	//
+	// ⭐ **WHAT IT GETS INSTEAD IS THE NAME SUBSTITUTION** (conditional extensions), which is available here
+	// for exactly the reason the parameter reading is wrong: this pass is monomorphizing for ONE conformer,
+	// and that conformer's `implements … with …` says what its `Element` IS. See
+	// `Parser.extensionAssociatedTypeNames` and the ⚠ in `parseTypeReference`.
+	function openExtensionBodyScope(header ExtensionHeader, conformer ByteArray, index ProgramSignatures)
+		match header.target 'target'
+			interfaceExtension then break 'target'
+			undeclaredTarget then return
+			// A TYPE extension's body IS inside the extended type's own parameter scope: `function matches(other
+			// Item)` names the type's `uses` parameter, and `item == other` dispatches `Equatable.equals` through
+			// the hidden witness the constraint reserves — the same two mechanisms a `where` clause written on
+			// the `type` itself drives, reached through the same two fields. It installs NO substitution: its
+			// parameters are bound per INSTANTIATION, so there is no single binding to substitute.
+			typeExtension then return self.openTypeExtensionBodyScope(header)
+		end 'target'
+
+		// ⚠ **BOTH COLUMNS OR NEITHER, and the length agreement is the gate.** The interface's associated names
+		// and the conformer's `with` arguments are paired POSITIONALLY, so a conformer that bound the wrong
+		// number of them — an `implements` clause with no `with` at all, or one arity short — has no positional
+		// meaning to offer and gets no substitution. That program is separately refused with a position by
+		// `checkOneInterfaceConformance` (E3016 names the unbound associated type); withholding here just keeps
+		// this door from inventing a pairing to fill the gap, which would resolve `Element` to a neighbour.
+		let associated = extensionTargetParamNames(header.target)
+		let bindings = self.conformerAssociatedBindings(header, conformer: conformer, index: index)
+		if associated.count() != bindings.count() 'noPositionalPairing'
+			return
+		end 'noPositionalPairing'
+
+		self.extensionAssociatedTypeNames = associated
+		self.extensionAssociatedTypeBindings = bindings
+	end 'openExtensionBodyScope'
+
+	// The TYPE-extension half of the door above, split out so the interface half reads as one path rather than
+	// as an early return threaded through a `match` arm.
+	function openTypeExtensionBodyScope(header ExtensionHeader)
+		self.enclosingTypeParams = extensionTargetParamNames(header.target)
+		self.enclosingWhereConstraints = header.constraints
+	end 'openTypeExtensionBodyScope'
+
+	// What `conformer` binds the extended interface's associated types to — the same column
+	// `extensionConformerVerdict` evaluates the `where` clause against (`StructLayout.bindingsForInterface`),
+	// read through one accessor so the CONDITION a method is withheld under and the TYPES its body is parsed
+	// with can never come from two different readings of one `implements` clause.
+	function conformerAssociatedBindings(header ExtensionHeader, conformer ByteArray, index ProgramSignatures) returns ByteArrayArray
+		match index.structOf(conformer) 'conformerLayout'
+			declared(layout) then return layout.bindingsForInterface(header.nameTok.value)
+			undeclared then panic("Parser.conformerAssociatedBindings: conformer '{String.from(conformer)}' came out of `extensionTargetConformers`, which walks the struct registry this lookup misses")
+		end 'conformerLayout'
+	end 'conformerAssociatedBindings'
+
+	// ⭐ **DOES THIS CONFORMER GET THE EXTENSION'S METHODS?** — the conditional filter, stated once for both
+	// passes. See `ExtensionTarget` for why only the interface door has anything to decide.
+	function extensionConformerVerdict(header ExtensionHeader, conformer ByteArray, index ProgramSignatures) returns ExtensionConstraintCheck
+		if header.constraints.isEmpty() 'unconditional'
+			return ExtensionConstraintCheck.satisfied
+		end 'unconditional'
+
+		match header.target 'target'
+			// A TYPE extension's parameters are bound per INSTANTIATION, not per conformer, so there is no
+			// binding here to test: the constraints become witness parameters instead.
+			typeExtension then return ExtensionConstraintCheck.satisfied
+			// An undeclared target has no conformers, so this is unreachable; answering `satisfied` keeps the
+			// arm from being a place a future door could quietly acquire a different rule.
+			undeclaredTarget then return ExtensionConstraintCheck.satisfied
+			interfaceExtension then break 'target'
+		end 'target'
+
+		match index.structOf(conformer) 'conformerLayout'
+			declared(layout) then return checkExtensionConstraints(index, constraints: header.constraints, bindings: layout.bindingsForInterface(header.nameTok.value))
+			undeclared then panic("Parser.extensionConformerVerdict: conformer '{String.from(conformer)}' came out of `extensionTargetConformers`, which walks the struct registry this lookup misses")
+		end 'conformerLayout'
+	end 'extensionConformerVerdict'
+
+	// File the witness constraints a TYPE-extension method carries, under the qualified name a call to it
+	// resolves to. A no-op for every other extension: an interface extension's clause is a filter (its methods
+	// carry no witnesses), and an unconditional extension has no constraints to carry.
+	function noteTypeExtensionWitnessConstraints(index ProgramSignatures, header ExtensionHeader, conformer ByteArray, methodName ByteArray)
+		if header.constraints.isEmpty() 'unconditional'
+			return
+		end 'unconditional'
+
+		match header.target 'target'
+			interfaceExtension then return
+			undeclaredTarget then return
+			typeExtension then index.recordExtensionMethodConstraints(qualifiedMethodName(conformer, methodName: methodName), constraints: header.constraints)
+		end 'target'
+	end 'noteTypeExtensionWitnessConstraints'
+
+	// Read a WITHHELD method's signature into arrays that are discarded, and file why it is missing. The read
+	// is what keeps the cursor where a published method's leaves it (see the call site); the filing is what
+	// lets the call site say something better than "no such method".
+	function foldWithheldExtensionMethod(index ProgramSignatures, conformer ByteArray, methodName ByteArray, clause String, unmetInterfaceName ByteArray, bindingName ByteArray)
+		self.recordScannedSignature(FuncReturnTypeEntryArray.create(), paramConsumes: ParamConsumeEntryArray.create(), paramDefaults: ParamDefaultEntryArray.create(), throwsEntries: ThrowsClauseEntryArray.create(), methodInnerAliasParamOut: MethodInnerAliasParamEntryArray.create(), freeFunctionNameOut: ByteArrayArray.create())
+		index.recordConditionalExtensionSkip(qualifiedMethodName(conformer, methodName: methodName), skip: ConditionalExtensionSkip.create(conformer, methodName: methodName, clause: clause, unmetInterfaceName: unmetInterfaceName, bindingName: bindingName))
+	end 'foldWithheldExtensionMethod'
 
 	// Cursor is AT `enum`/`union`. Append the enum/union it declares and leave the cursor PAST the
 	// declaration's `end` — `recordScannedType`'s twin.
@@ -10260,7 +10490,8 @@ export type Parser
 		let visibility = self.scannedVisibility()
 		try self.consume(TokenKind.union if isUnion else TokenKind.enum) otherwise return
 		let nameTok = try self.consume(TokenKind.identifier) otherwise return
-		let conformsTo = try self.readOptionalImplementsClause() otherwise return
+		let scannedConformances = try self.readOptionalImplementsClause() otherwise return
+		let conformsTo = scannedConformances.names
 		self.enterTypeScope(nameTok.value, isEnum: true)
 
 		var layout = EnumLayout.create(nameTok.value, isUnion: isUnion, conformsTo: conformsTo, visibility: visibility, declFilePath: self.filePath, backing: EnumBacking.unresolved)
@@ -10346,7 +10577,37 @@ export type Parser
 		self.enclosingTypeParams = self.emptyTypeParams
 		self.enclosingInnerAliases = sharedEmptyInnerAliases
 		self.enclosingWhereConstraints = sharedEmptyWhereConstraints
+		self.clearExtensionAssociatedTypes()
 	end 'enterTypeScope'
+
+	// Point both associated-type columns back at the shared empty — the FOURTH per-declaration scope, reset by
+	// the same two doors as the other three. Its own function because both halves must move together: a
+	// bindings list left standing beside a cleared name list is a substitution keyed by position against
+	// nothing, which is exactly the shape that answers for the wrong conformer's binding.
+	function clearExtensionAssociatedTypes()
+		self.extensionAssociatedTypeNames = sharedEmptyExtensionAssociatedTypes
+		self.extensionAssociatedTypeBindings = sharedEmptyExtensionAssociatedTypes
+	end 'clearExtensionAssociatedTypes'
+
+	// ⭐ **WHAT THIS EXTENSION BODY'S CONFORMER BINDS `name` TO, or `name` ITSELF when it is not an associated
+	// type of the extended interface** (conditional extensions). Answering the name unchanged is what lets
+	// `parseTypeReference` ask unconditionally: outside an interface extension the columns are the shared
+	// empty, the loop does not run, and the caller resolves exactly the name the author wrote.
+	//
+	// A linear scan for `typeParamPositionOf`'s reason: an interface declares a handful of associated types,
+	// so a per-parse name→binding map would be a heap object bought to serve one or two lookups.
+	function extensionAssociatedTypeBinding(name ByteArray) returns ByteArray
+		for i in 0 upto self.extensionAssociatedTypeNames.count() 'eachAssociated'
+			let associated = try self.extensionAssociatedTypeNames.get(i) otherwise panic("extensionAssociatedTypeBinding: extensionAssociatedTypeNames.get OOB at {i} below count {self.extensionAssociatedTypeNames.count()}")
+			if not associated.equals(name) 'notThisOne'
+				continue
+			end 'notThisOne'
+
+			return try self.extensionAssociatedTypeBindings.get(i) otherwise panic("extensionAssociatedTypeBinding: the conformer binds nothing at associated-type position {i}, where the interface declares {self.extensionAssociatedTypeNames.count()} — `openExtensionBodyScope` installs the two columns only when their lengths agree")
+		end 'eachAssociated'
+
+		return name
+	end 'extensionAssociatedTypeBinding'
 
 	// ⭐ **OPEN A GENERIC TYPE'S PARAMETER SCOPE (P1.6-A)** — `type Box uses T` / `type Pair uses A, B`.
 	// Called by BOTH `parseTypeDeclaration` and the tolerant sweep `recordScannedType` right after
@@ -10398,6 +10659,10 @@ export type Parser
 		// Restored in lockstep (P1.7a slice 2a) so a dispatch outside a constrained type body resolves against
 		// no stale constraints — and allocates nothing, exactly as `emptyTypeParams` restores.
 		self.enclosingWhereConstraints = sharedEmptyWhereConstraints
+		// Restored in lockstep for the identical reason (conditional extensions): the NEXT conformer's pass
+		// over the same extension body installs its own bindings, and a `Element` left pointing at the previous
+		// conformer's would be a silently wrong type rather than an error.
+		self.clearExtensionAssociatedTypes()
 	end 'closeTypeParamScope'
 
 	// ⭐ **PARSE A `where <T> is <Interface> [and <Interface>]… [, <U> is …]…` CLAUSE (P1.7a slice 2a).** The
@@ -12137,22 +12402,32 @@ export type Parser
 	// nothing here: an extension declares no name to make visible, and each of its METHODS carries its own
 	// visibility exactly as a `type`'s members do (`parseTypeMember`).
 	function parseExtensionDeclaration() throws ParseError
-		try self.consume(TokenKind.extension)
-		let interfaceTok = try self.consume(TokenKind.identifier)
+		let header = try self.readExtensionHeader()
 		let bodyStart = self.pos
 
-		// The conformer list is `conformersOf`'s — the SAME answer, in the SAME order, that
+		// The conformer list and the per-conformer verdict are `readExtensionHeader`'s and
+		// `extensionConformerVerdict`'s — the SAME answers, in the SAME order, that
 		// `foldExtensionDeclarationInto` published a signature for. A body emitted here with no signature
-		// published there is a call that cannot be typed; a signature with no body is a link failure.
-		for conformer in self.signatures.conformersOf(interfaceTok.value) 'eachConformer'
+		// published there is a call that cannot be typed; a signature with no body is a link failure — and a
+		// CONDITIONAL extension adds a third way for the two to disagree, so the filter is one function both
+		// call rather than a rule each applies.
+		for conformer in extensionTargetConformers(header.target) 'eachConformer'
+			match self.extensionConformerVerdict(header, conformer: conformer, index: self.signatures) 'verdict'
+				// A withheld method has no signature, so a body emitted for it would be a function nothing can
+				// call — and its own statements would not type, which is the whole reason the clause exists.
+				unmet then continue
+				satisfied then break 'verdict'
+			end 'verdict'
+
 			self.pos = bodyStart
 			self.enterTypeScope(conformer, isEnum: false)
+			self.openExtensionBodyScope(header, conformer: conformer, index: self.signatures)
 			// Where the sibling-receiver walk begins for a bare call in these bodies — the EXTENSION's member
 			// list, not the conformer's, because a bare call here may name a sibling extension method. The
 			// interface's own requirements are added to that map by `ensureSiblingReceivers`, which is what
 			// makes `tag()` resolve; see `extensionInterfaceName`.
 			self.enclosingTypeBodyStart = bodyStart
-			self.extensionInterfaceName = interfaceTok.value
+			self.extensionInterfaceName = self.extendedInterfaceName(header)
 
 			while true 'members'
 				let atEnd = try self.atDeclarationBodyEnd()
@@ -12173,6 +12448,17 @@ export type Parser
 		self.pos = bodyStart
 		self.skipPastBlockEnd()
 	end 'parseExtensionDeclaration'
+
+	// The interface whose REQUIREMENTS are siblings of this body's methods — see `ensureSiblingReceivers`.
+	// Empty for a TYPE extension, and that is the point: `extension Box` extends a type, whose own members the
+	// sibling walk already finds by reading its body, and there is no requirement list to add.
+	function extendedInterfaceName(header ExtensionHeader) returns ByteArray
+		match header.target 'target'
+			interfaceExtension then return header.nameTok.value
+			typeExtension then return EmptySourceText
+			undeclaredTarget then return EmptySourceText
+		end 'target'
+	end 'extendedInterfaceName'
 
 	// ⭐ **`interface Name [extends …] [uses …] … end` (P1.7a slice 1)** — the FRONT-END half of interfaces,
 	// as the REAL parse reaches it. Its whole effect is the `IrInterface` it puts on this file's artifact, which
@@ -12718,7 +13004,7 @@ export type Parser
 		let nameTok = try self.consume(TokenKind.identifier)
 		try self.requireUnreservedName(nameTok)
 		try self.requireTypeNameNotCompilerOwned(nameTok)
-		let conformsTo = try self.readOptionalImplementsClause()
+		let conformsTo = (try self.readOptionalImplementsClause()).names
 		self.enterTypeScope(nameTok.value, isEnum: true)
 
 		var layout = EnumLayout.create(nameTok.value, isUnion: isUnion, conformsTo: conformsTo, visibility: visibility, declFilePath: self.filePath, backing: EnumBacking.unresolved)
@@ -14365,19 +14651,42 @@ export type Parser
 	//
 	// A COMMA LIST, matching `parseTypeImplementsClause`'s: `enum E implements Error, Debuggable` names two.
 	// An enum that implements nothing returns the SHARED empty, so the common case allocates nothing.
-	function readOptionalImplementsClause() returns ByteArrayArray throws ParseError
+	//
+	// ⭐ **IT ALSO READS THE `with <TypeArgs>` OF THE NAME THAT CARRIES ONE, AND THEN STOPS** (conditional
+	// extensions). The bindings are what a conditional extension's `where` clause is evaluated against
+	// (`StructLayout.conformanceBindings`), and they are read through `parseConformanceWithArgs` — the SAME
+	// reader the real parse's `parseOneConformance` uses — rather than a second walk of the same grammar.
+	//
+	// ⚠ **STOPPING IS THE PRE-EXISTING RULE, NOT A NEW ONE, and reading the arguments does not relax it.**
+	// Whether the comma after `with Score` opens a second ARGUMENT or a second INTERFACE is the interface's
+	// `uses` ARITY (R7), and the arity is a fact only the COMPLETE index holds — this walk is what builds it.
+	// `parseConformanceWithArgs` asks `interfaceUsesArity`, which answers 0 while the index is still being
+	// built, so the sweep reads exactly ONE unparenthesized argument and the comma ends the clause: the same
+	// interface list this recorded before the arguments were read at all. The consequence is bounded and is a
+	// missing extension, never a wrong one.
+	function readOptionalImplementsClause() returns ScannedConformanceClause throws ParseError
 		if not self.at(TokenKind.implements) 'noImplements'
-			return sharedEmptyDeclaredConformances
+			return ScannedConformanceClause.declaringNothing()
 		end 'noImplements'
 		try self.consume(TokenKind.implements)
 
 		var names = ByteArrayArray.create()
-		names.push((try self.consume(TokenKind.identifier)).value)
-		while self.at(TokenKind.comma) 'moreInterfaces'
+		while true 'moreInterfaces'
+			let nameTok = try self.consume(TokenKind.identifier)
+			names.push(nameTok.value)
+
+			if self.at(TokenKind.with) 'bindsAssociatedTypes'
+				try self.consume(TokenKind.with)
+				return ScannedConformanceClause.create(names, bindings: try self.parseConformanceWithArgs(nameTok.value))
+			end 'bindsAssociatedTypes'
+
+			if not self.at(TokenKind.comma) 'lastInterface'
+				break
+			end 'lastInterface'
 			try self.consume(TokenKind.comma)
-			names.push((try self.consume(TokenKind.identifier)).value)
 		end 'moreInterfaces'
-		return names
+
+		return ScannedConformanceClause.create(names, bindings: sharedEmptyDeclaredConformances)
 	end 'readOptionalImplementsClause'
 
 	// A type reference. M1: a bare identifier (a named type like `ExitCode`,
@@ -14425,10 +14734,35 @@ export type Parser
 			// about the same token.
 			let headIndex = self.pos
 			let tok = try self.consume(TokenKind.identifier)
+			// Read before the substitution below, because that substitution is for BARE names only — see it.
+			let qualifierDots = self.dottedChainLengthAt(headIndex)
+
+			// ⭐⭐ **AN INTERFACE EXTENSION'S ASSOCIATED TYPE IS THE CONFORMER'S BINDING FOR IT, SUBSTITUTED
+			// HERE AS A NAME AND RESOLVED BY EVERY ARM BELOW UNCHANGED (conditional extensions).** `extension
+			// HasItems where Element is Equatable` writing `function has(target Element)` is parsed once per
+			// conformer, and `IntList implements HasItems with Integer` binds `Element` to `Integer` — so what
+			// the body means by `Element` is exactly what it would have meant by `Integer`, and the honest way
+			// to say that is to resolve the name the binding names.
+			//
+			// ⚠⚠ **IT IS A NAME SUBSTITUTION AND *NOT* AN ENTRY IN `enclosingTypeParams`, AND THE DIFFERENCE IS
+			// A SILENT WRONG TYPE.** Installing the interface's associated names as type parameters would make
+			// `Element` resolve to `typeParameter(0)` — position 0 of the CONFORMER's own `uses` list, a
+			// different type entirely, and one nothing downstream would question. Substituting the name instead
+			// means the arms below answer for `Integer` / `HashItem` / `NotEq` exactly as they answer for a
+			// hand-written annotation, so an alias stays a ranged alias and a struct stays a struct.
+			//
+			// ⚠ **BARE NAMES ONLY.** A dotted chain's head is a namespace or an instance
+			// (`lib.fmt.Score`, `StrWrapper.Idx`), never an associated type, and rewriting one would retarget a
+			// qualified reference at a name that has nothing to do with it. A TYPE extension installs no
+			// bindings at all (its parameters are per-instantiation, and `enclosingTypeParams` is the right
+			// mechanism there) — see `openExtensionBodyScope`.
+			let name = tok.value if qualifierDots > 0 else self.extensionAssociatedTypeBinding(tok.value)
+
 			// Recorded HERE, above every arm, rather than in the arm that finally decides what the name
 			// denotes: a name written in a type position is a USE whichever way it resolves, and hooking
 			// the arms instead would need one hook per arm and would silently miss the next one added.
-			self.recordTypeNameUse(tok.value)
+			// It records the SUBSTITUTED name, because that is the declaration a use of `Element` keeps alive.
+			self.recordTypeNameUse(name)
 
 			// ⭐ A QUALIFIED PER-INSTANCE ALIAS REFERENCE (P1.6-C) — `StrWrapper.Idx` in a type position. An
 			// identifier followed by `.` and another identifier is `Instance.Member`, the ONE dotted type form,
@@ -14462,7 +14796,6 @@ export type Parser
 			// segments of a namespace are `tokenCanBeAName`'s question in BOTH positions or the mirror is
 			// reachable from one of them only. Pinned by
 			// `namespace-qualified-resolution/keyword-named-directory-segment-resolves-in-both-positions`.
-			let qualifierDots = self.dottedChainLengthAt(headIndex)
 			if qualifierDots > 0 'qualifiedMember'
 				let qualified = self.assembleDottedChainAt(headIndex, dots: qualifierDots)
 
@@ -14481,7 +14814,7 @@ export type Parser
 			// and both the declaration sweep and the real parse answer it identically. It resolves to its
 			// own `MaxonType.string` arm (NEVER `named`), which is what tags a `String` parameter's value
 			// `string` at parse time. See `StringConformerName`.
-			if tok.value.equals(StringConformerName) 'stringBuiltin'
+			if name.equals(StringConformerName) 'stringBuiltin'
 				return MaxonType.string
 			end 'stringBuiltin'
 			// The `Character` BUILTIN (P1.8 slice B) — recognized SYNTACTICALLY, exactly as `String` is
@@ -14489,7 +14822,7 @@ export type Parser
 			// sweep and the real parse answer it the same way. It resolves to its own `MaxonType.character`
 			// arm (NEVER `named`), which is what tags a `Character` parameter's value `character` at parse
 			// time and keeps every `named`-reading rule from treating a record pointer as a ranged int.
-			if tok.value.equals(CharacterConformerName) 'characterBuiltin'
+			if name.equals(CharacterConformerName) 'characterBuiltin'
 				return MaxonType.character
 			end 'characterBuiltin'
 			// The type's own name inside its own body means what `Self` means — for an `enum Toggle`'s
@@ -14497,7 +14830,7 @@ export type Parser
 			// spellings are legal Maxon and they must not resolve differently, because a struct's own name
 			// left `named` would type `create`'s result as an integer and `p.x` would fail against the very
 			// type that declared it.
-			if self.namesEnclosingType(tok.value) 'ownName'
+			if self.namesEnclosingType(name) 'ownName'
 				return try self.enclosingSelfType(tok)
 			end 'ownName'
 
@@ -14508,7 +14841,7 @@ export type Parser
 			// the rules that read `named` treat it as a ranged int, and a `T` is neither numeric nor a
 			// declared type. There is no shadowing question at this slice: a type param name equal to a
 			// declared type name is not in the corpus, and the param wins here (it is the innermost scope).
-			let paramPos = self.typeParamPositionOf(tok.value)
+			let paramPos = self.typeParamPositionOf(name)
 			if paramPos < self.enclosingTypeParams.count() 'typeParam'
 				return MaxonType.typeParameter(paramPos)
 			end 'typeParam'
@@ -14530,8 +14863,8 @@ export type Parser
 			// every WELL-FORMED program. What the gate removes is the one way it could have answered yes: a
 			// SECOND file declaring a type of the same name, which the tolerant sweep folds without complaint
 			// and the real parse rejects later.
-			if self.enclosingInnerAliases.contains(tok.value) 'innerAlias'
-				let qualifiedInner = joinQualifiedName(self.enclosingType, member: tok.value)
+			if self.enclosingInnerAliases.contains(name) 'innerAlias'
+				let qualifiedInner = joinQualifiedName(self.enclosingType, member: name)
 				if self.signatures.allFilesFolded and self.signatures.isGenericAlias(qualifiedInner) 'genericInnerAlias'
 					return MaxonType.genericInstance(self.signatures.genericAliasInstanceFrom(qualifiedInner, readerFilePath: self.filePath))
 				end 'genericInnerAlias'
@@ -14606,22 +14939,22 @@ export type Parser
 			// only needs the ANSWER, and a union return is heap-boxed even for its `notFound` case — measured
 			// at +24,396 allocations in `phase:parse` at the ladder's rung 5, doubling per rung, on a corpus
 			// with no interface in it. See `builtinInterfaceKind`.
-			if self.signatures.allFilesFolded and isInterfaceName(self.signatures.interfaceMap(), name: tok.value) 'wholeProgramInterfaceRegistry'
-				return MaxonType.interfaceRef(self.artifact.typeNames.intern(tok.value))
+			if self.signatures.allFilesFolded and isInterfaceName(self.signatures.interfaceMap(), name: name) 'wholeProgramInterfaceRegistry'
+				return MaxonType.interfaceRef(self.artifact.typeNames.intern(name))
 			end 'wholeProgramInterfaceRegistry'
 
 			if self.signatures.allFilesFolded 'wholeProgramAliasRegistries'
 				// A GENERIC-INSTANCE ALIAS (P1.6-A) — `IntBox` where `typealias IntBox = Box with Integer`.
 				// It resolves to `genericInstance(giid)`, the read-side twin of the function-alias arm below.
-				if self.signatures.isGenericAlias(tok.value) 'genericAlias'
-					return MaxonType.genericInstance(self.signatures.genericAliasInstanceFrom(tok.value, readerFilePath: self.filePath))
+				if self.signatures.isGenericAlias(name) 'genericAlias'
+					return MaxonType.genericInstance(self.signatures.genericAliasInstanceFrom(name, readerFilePath: self.filePath))
 				end 'genericAlias'
 
 				// A FUNCTION typealias name resolves to a `function` type, NEVER a `named` one (P1.5-A1) — so
 				// a param/field/return declared with a function alias carries the `function` tag, which is what
 				// makes a function value assignable to it and an indirect call reach it.
-				if self.signatures.isFunctionAlias(tok.value) 'functionAlias'
-					return MaxonType.function(self.artifact.typeNames.intern(tok.value))
+				if self.signatures.isFunctionAlias(name) 'functionAlias'
+					return MaxonType.function(self.artifact.typeNames.intern(name))
 				end 'functionAlias'
 			end 'wholeProgramAliasRegistries'
 
@@ -14630,14 +14963,14 @@ export type Parser
 			// `Pair`-typed slot and a `(Num, Num)`-typed one the same type. `tupleAliasTarget` canonicalizes,
 			// so a target the SWEEP registered under the source spelling answers under the canonical one.
 			// Ungated, for the reason the block above states.
-			if self.signatures.isTupleAlias(tok.value) 'tupleAlias'
-				return MaxonType.structRef(self.artifact.typeNames.intern(self.signatures.tupleAliasTarget(tok.value)))
+			if self.signatures.isTupleAlias(name) 'tupleAlias'
+				return MaxonType.structRef(self.artifact.typeNames.intern(self.signatures.tupleAliasTarget(name)))
 			end 'tupleAlias'
 
 			// ⭐⭐ **THE LAST ARM IS WHERE A BARE RANGED-ALIAS NAME LANDS, SO IT IS WHERE E3063 IS DECIDED (N1c).**
-			try self.requireUnambiguousTypeName(tok)
+			try self.requireUnambiguousTypeName(name, anchor: tok)
 
-			return MaxonType.named(self.artifact.typeNames.intern(tok.value))
+			return MaxonType.named(self.artifact.typeNames.intern(name))
 		end 'named'
 		if self.at(TokenKind.int) 'primInt'
 			try self.consume(TokenKind.int)
@@ -20546,6 +20879,21 @@ export type Parser
 		// chain the header is walking) and it RECORDS a borrow subject, because the element it hands the body is
 		// a reference into a node the list still owns.
 		var isList = false
+		// ⭐⭐ **A CURSOR-PROTOCOL USER TYPE IS THE FIFTH FORM, AND IT IS THE ONLY ONE THE SOURCE WALKS ITSELF**
+		// (conditional extensions). The other four are compiler-owned records whose traversal this function
+		// BUILDS — an ordinal, a byte position, a node pointer. Here the source supplies it: the body reads
+		// `<T>.current()` and the step calls `<T>.advance()`, both ordinary direct calls, and the header's
+		// block-arg carries `advance`'s ERROR FLAG rather than a position at all. Empty when the source is not
+		// one; the NAME is carried (not a bool) because the two calls need it — see `cursorIterationTypeName`.
+		//
+		// ⭐⭐ **IT IS A DO-WHILE AND THE OTHER FOUR ARE WHILE LOOPS, AND THAT IS THE PROTOCOL'S OWN CONTRACT.**
+		// `stdlib/Interfaces.maxon:130-142`: a live cursor is ALREADY POSITIONED on an element — its constructor
+		// throws `exhausted` for an empty collection rather than producing an empty cursor — and `advance()`
+		// throws when called while positioned on the LAST element, leaving the position unchanged. So the first
+		// element must be yielded BEFORE the first advance, which falls out of seeding the flag to 0 in the
+		// preheader and computing the next flag in the STEP: a while-shaped loop would advance first and drop
+		// element 0. `partial-availability` counting exactly 2 over a 2-element sequence is the arity check on it.
+		var cursorTypeName = EmptySourceText
 		var sourceLock = false
 		// ⭐ **THE E3070 SUBJECT OF THE ELEMENT THIS LOOP WILL BORROW** — resolved HERE, beside the lock and
 		// off the same `sourceStart`, because both are answers about the SOURCE and both must be taken before
@@ -20568,6 +20916,7 @@ export type Parser
 			try self.requireIterableSource(source, forTok: forTok)
 			isString = tagIsText(self.tagOf(source))
 			isList = self.signatures.isListInstanceAt(self.tagOf(source), nameId: self.valueNameId(source))
+			cursorTypeName = self.cursorIterationTypeName(source)
 
 			// ⭐⭐ **THE LOCK IS EVERY COLLECTION FORM'S; ONLY THE BORROW SUBJECT IS THE ARRAY'S.** The
 			// String form shipped without the lock, on the reasoning that a String hands the body a MINTED
@@ -20593,7 +20942,10 @@ export type Parser
 			// track (`attachPendingBorrows` is a no-op on a value that filed no pending borrow).
 			// Recording a subject here would enrol a borrow that does not exist. The list's element IS a
 			// reference into a node the list still owns, so it records one (see the `isList` note above).
-			if not isString 'slotBorrowConcerns'
+			// A CURSOR is exempt for the String's reason and not the List's, even though its source is a
+			// record: the element the body sees is whatever `current()` RETURNS, so its ownership is that
+			// call's answer (`mintCallResult`) and not a borrow this loop took out of a slot it can name.
+			if not isString and cursorTypeName.isEmpty() 'slotBorrowConcerns'
 				elementBorrowSubject = self.borrowSubjectNameAt(sourceStart)
 			end 'slotBorrowConcerns'
 
@@ -20643,10 +20995,13 @@ export type Parser
 
 		// The preheader is `currentBlock`, not `block`: a short-circuit `and`/`or` inside a bound leaves
 		// control in a fresh merge block, and the entry edge belongs on the block control is actually in.
-		// ⭐ **THE HEADER'S CARRIED POSITION, WHICH IS NOT THE SAME KIND OF THING IN ALL FOUR FORMS.** A RANGE
-		// carries the user's own loop variable, an ARRAY and a STRING a compiler-owned index starting at 0, and
-		// a LIST the NODE CURSOR — `__list_head`, which answers 0 on an empty list so the header's first test
-		// exits before the body runs.
+		// ⭐ **THE HEADER'S CARRIED POSITION, WHICH IS NOT THE SAME KIND OF THING IN ALL FIVE FORMS.** A RANGE
+		// carries the user's own loop variable, an ARRAY and a STRING a compiler-owned index starting at 0, a
+		// LIST the NODE CURSOR — `__list_head`, which answers 0 on an empty list so the header's first test
+		// exits before the body runs — and a USER CURSOR the last `advance()`'s ERROR FLAG, seeded 0 (no throw
+		// yet) so its first test always enters the body. The cursor takes the zero-literal arm the counted forms
+		// take, and that coincidence of value is not a coincidence of meaning: 0 is "index 0" for one and "no
+		// error" for the other, and both are what the preheader owes its header.
 		var firstIndex = source
 		if isList 'listCursorStartsAtHead'
 			firstIndex = self.emitRuntimeCall(ListHeadName, args: singletonArgs(source), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(forTok))
@@ -20669,11 +21024,19 @@ export type Parser
 		self.currentBlock = header
 		var bound = limit
 		var testOp = MaxonCmpOp.le if rangeInclusive else MaxonCmpOp.lt
-		if isList 'cursorReachedTheEnd'
+		if isList 'listCursorReachedTheEnd'
 			bound = self.emitLiteral(0, valueType: MaxonType.integer, range: SourceRange.ofToken(forTok))
 			testOp = MaxonCmpOp.ne
-		end 'cursorReachedTheEnd'
-		if not isRange and not isList 'lengthReadLive'
+		end 'listCursorReachedTheEnd'
+		// ⭐ **A USER CURSOR'S TEST IS `flag == 0`** — "the last `advance()` did not throw". It is the List's
+		// test with the sense inverted, and it needs no length read for the same reason: the value the header
+		// carries already IS the end condition. The preheader seeds it 0 (see `firstIndex` below), which is what
+		// makes the FIRST trip unconditional — the do-while this form's header argues for.
+		if not cursorTypeName.isEmpty() 'cursorStillPositioned'
+			bound = self.emitLiteral(0, valueType: MaxonType.integer, range: SourceRange.ofToken(forTok))
+			testOp = MaxonCmpOp.eq
+		end 'cursorStillPositioned'
+		if not isRange and not isList and cursorTypeName.isEmpty() 'lengthReadLive'
 			// ⭐ **THE LENGTH IS RE-READ LIVE IN THE HEADER for a String too** — `length@8` off the record,
 			// the same discipline the array form's live `__arr_count` follows and for the same reason: the
 			// header comparison IS the bounds check that licenses the unchecked read below it.
@@ -20758,10 +21121,24 @@ export type Parser
 		// own test licenses, and both mint the same E3070 borrow against `elementBorrowSubject` — so the
 		// ownership, the type and the borrow are `emitContainerElementAccessor`'s one answer, and the fork is
 		// exactly the callee and its arguments.
-		if not isRange and not isString 'readElement'
+		if not isRange and not isString and cursorTypeName.isEmpty() 'readElement'
 			let elementArgs = singletonArgs(indexPhi) if isList else pairArgs(source, second: indexPhi)
 			loopValue = self.emitContainerElementAccessor(func, callee: ListNodeValueName if isList else ArrGetUncheckedName, container: source, args: elementArgs, giid: self.valueNameId(source), owned: false, borrowSubjectName: elementBorrowSubject, range: SourceRange.ofToken(nameTok))
 		end 'readElement'
+		// ⭐⭐ **A CURSOR'S ELEMENT IS WHATEVER `current()` RETURNS, AND ITS OWNERSHIP IS THAT CALL'S ANSWER —
+		// NOT A THIRD RULE HERE.** The other four forms each needed one: an array/list element is a BORROW the
+		// container keeps, a String's cluster is MINTED and owned by the trip. This one is an ordinary user
+		// call, so `mintCallResult` has already decided — a scalar owns nothing, a managed return is tracked as
+		// an owned pending temporary. All this arm adds is the LIFETIME: a pending temp is dropped at the
+		// STATEMENT's tail, which for a value the body may hold across the whole trip is too early on one path
+		// and (once a `return` inside the body drains the list) a leak on another. `giveTemporaryScopeLifetime`
+		// re-scopes it to the per-trip frame, where all four trip exits already drop to a mark — and it is a
+		// silent no-op on the scalar case, which is why the call is unconditional rather than gated on a
+		// managed-return test that would be a second opinion about what the call minted.
+		if not cursorTypeName.isEmpty() 'readCursorElement'
+			loopValue = try self.emitCursorProtocolCall(cursorTypeName, methodName: CurrentMethodName, source: source, anchor: nameTok, resultUsed: true)
+			self.giveTemporaryScopeLifetime(loopValue, name: IterationElementBindingName)
+		end 'readCursorElement'
 		if not nameTok.value.equals(DiscardBindingName) 'bindLoopVariable'
 			// Declared in the per-trip frame, so it is in scope for the whole body and gone at the loop's
 			// `end`. Immutable: `for-iterator-immutable` pins `item = …` as E2013.
@@ -20829,15 +21206,26 @@ export type Parser
 		// ⭐ **A LIST ADVANCES TO THE NEXT NODE**, read off the cursor the HEADER carries — which dominates the
 		// step, so the read is straight, and which the header has already proved non-null. `__list_node_next`
 		// answers 0 at the tail, and that is the value the header tests on the next trip.
+		//
+		// ⭐⭐ **A USER CURSOR ADVANCES BY CALLING `advance()`, AND ITS ERROR FLAG *IS* THE NEXT CARRIED VALUE.**
+		// The step is exactly where that call belongs: every path that continues the loop — the body's
+		// fall-through and every `continue` — lands here, so the cursor moves exactly once per trip however the
+		// body was left, which is the same argument the step block itself rests on. A throw therefore ends the
+		// loop NORMALLY (the header's next test fails) rather than escaping it, so `has()` need not declare
+		// `throws` to iterate — the contract `stdlib/Interfaces.maxon` states and both references implement.
 		var nextIndex = graphemeEnd
-		if isList 'cursorStep'
-			nextIndex = self.emitRuntimeCall(ListNodeNextName, args: singletonArgs(indexPhi), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(forTok))
-		end 'cursorStep' else 'countedStep'
-			if not isString 'ordinalStep'
-				let one = self.emitLiteral(1, valueType: MaxonType.integer, range: SourceRange.ofToken(forTok))
-				nextIndex = self.emitMachineWordAdd(indexPhi, rhs: one, range: SourceRange.ofToken(forTok))
-			end 'ordinalStep'
-		end 'countedStep'
+		if not cursorTypeName.isEmpty() 'cursorAdvanceStep'
+			nextIndex = try self.emitCursorAdvance(func, cursorTypeName: cursorTypeName, source: source, anchor: forTok)
+		end 'cursorAdvanceStep' else 'builtinSourceStep'
+			if isList 'listNodeStep'
+				nextIndex = self.emitRuntimeCall(ListNodeNextName, args: singletonArgs(indexPhi), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(forTok))
+			end 'listNodeStep' else 'countedStep'
+				if not isString 'ordinalStep'
+					let one = self.emitLiteral(1, valueType: MaxonType.integer, range: SourceRange.ofToken(forTok))
+					nextIndex = self.emitMachineWordAdd(indexPhi, rhs: one, range: SourceRange.ofToken(forTok))
+				end 'ordinalStep'
+			end 'countedStep'
+		end 'builtinSourceStep'
 		self.recordBranchEdge(step, targetId: header.id, argIds: self.loopHeaderArgs(nextIndex, carried: self.edgeArgsFor(phiVars, preLoop: false)))
 		self.emitBranch(step, targetId: header.id)
 
@@ -20853,6 +21241,50 @@ export type Parser
 		self.closeBlock(forMark)
 		return exit
 	end 'parseForStatement'
+
+	// ⭐ **ONE CURSOR-PROTOCOL CALL — `<T>.current(source)` OR `<T>.advance(source)`.** Both are ordinary
+	// direct calls on the source as receiver, differing only in the method name and in whether the result is
+	// used, so they share the argument construction rather than each spelling it: a second copy is how the two
+	// would come to disagree about the receiver's position, which is the one thing a direct method call gets
+	// from its caller and cannot re-derive.
+	//
+	// `CalleeMint.notMinted` because both halves of the name are the AUTHOR'S — the type is one they declared
+	// and the method is one they wrote, joined the way `declaredMethodName` already joined them when the
+	// signature was published. Nothing here is in the reserved space.
+	function emitCursorProtocolCall(cursorTypeName ByteArray, methodName ByteArray, source ValueId, anchor Token, resultUsed bool) returns ValueId throws ParseError
+		// `var` on all three: `emitCall` supplies omitted defaults by PUSHING onto the argument columns
+		// (`fillOmittedArgDefaults`), so they are its output as well as its input. Neither protocol method
+		// declares a parameter, so nothing is ever appended — but the mutability is the signature's, not the
+		// callee's, and E3019 asks about the signature.
+		var args = singletonArgs(source)
+		var argLabels = emptyArgLabels(args)
+		var argRanges = uniformArgRanges(args, range: SourceRange.ofToken(anchor))
+		return try self.emitCall(qualifiedMethodName(cursorTypeName, methodName: methodName), anchor: anchor, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: NoImmutableArgNames, rparenTok: anchor, resultUsed: resultUsed, constructorInstance: ConstructorInstance.none, mint: CalleeMint.notMinted)
+	end 'emitCursorProtocolCall'
+
+	// ⭐⭐ **CALL `advance()` AND HAND BACK ITS ERROR FLAG** — the value a cursor loop's header carries, and
+	// the whole of its termination condition.
+	//
+	// ⚠ **IT GOES THROUGH `rewriteLastCallToTryCall`, THE SAME REWRITE A SOURCE-WRITTEN `try` USES**, rather
+	// than emitting a `tryCall` op directly: that function is where "a call becomes one that also defines an
+	// error flag" is decided, and a second site building the op itself would be a second answer to which
+	// results a `tryCall` defines and in what order. What this does NOT reuse is `desugarTry`, and that is the
+	// whole point of the form — the desugar builds a two-way split plus a handler around ONE statement, where
+	// this flag's split is the LOOP HEADER, one block and a full trip away.
+	//
+	// ⚠ **THE THROWN VALUE IS DISCARDED, AND THAT IS SOUND ONLY BECAUSE OF WHAT MAY BE THROWN.** The loop
+	// binds no error, so nothing releases one; `declaresCursorProtocol` is what makes the thrown type
+	// `IterationError` — compiler-owned and payload-free, hence a scalar tag with nothing to release. That
+	// admission test and this discard are one decision, and the reason it is stated in both places.
+	function emitCursorAdvance(func IrFunction, cursorTypeName ByteArray, source ValueId, anchor Token) returns ValueId throws ParseError
+		// The floor `rewriteLastCallToTryCall` measures "the target's own op" against — see `parseTry`, which
+		// captures it at the same point and for the same reason.
+		let targetOpFloor = self.artifact.module.ops.count()
+		_ = try self.emitCursorProtocolCall(cursorTypeName, methodName: AdvanceMethodName, source: source, anchor: anchor, resultUsed: false)
+		let flag = self.mintValue(ValueTypeTag.integer, nameId: UnnamedTypeId)
+		_ = try self.rewriteLastCallToTryCall(func, flag: flag, tryTok: anchor, targetOpFloor: targetOpFloor)
+		return flag
+	end 'emitCursorAdvance'
 
 	// The block-arg list an edge into a `for` HEADER carries: the index value FIRST (the header's own
 	// block-arg 0 — see `parseForStatement`), then one slot per carried binding. Both edges that name
@@ -20881,9 +21313,10 @@ export type Parser
 
 	// ⭐ **WHAT A `for … in` MAY ITERATE.** An `Array` instance — the only container whose element read is a
 	// random-access index, which is what the counter lowering requires — plus the `Vector` whose record IS an
-	// array's, a `String`'s grapheme clusters, a `List`'s node chain, and a `Map`, which arrives here already
-	// rewritten to the `Array with (Key, Value)` of its entries (`materializeMapIterationSource`). Everything
-	// else is a clean E2015 naming the gap rather than a silent acceptance.
+	// array's, a `String`'s grapheme clusters, a `List`'s node chain, a `Map`, which arrives here already
+	// rewritten to the `Array with (Key, Value)` of its entries (`materializeMapIterationSource`), and any
+	// USER type supplying the cursor protocol (`declaresCursorProtocol`). Everything else is a clean E2015
+	// naming the gap rather than a silent acceptance.
 	function requireIterableSource(source ValueId, forTok Token) throws ParseError
 		if self.signatures.isArrayInstanceAt(self.tagOf(source), nameId: self.valueNameId(source)) 'array'
 			return
@@ -20903,8 +21336,36 @@ export type Parser
 		if self.signatures.isVectorInstanceAt(self.tagOf(source), nameId: self.valueNameId(source)) 'vector'
 			return
 		end 'vector'
-		throw ParseError.unsupported("`for … in` over a `{typeTagName(self.tagOf(source))}` value — shv2 iterates an `Array`, a `{String.from(VectorBuiltinBaseName)}`, a `List`, a `{String.from(MapBuiltinBaseName)}`'s `(key, value)` entries, a `String`'s grapheme clusters, and the counted ranges `<lo> to <hi>` / `<lo> upto <hi>`", line: forTok.line, column: forTok.column)
+		// A USER TYPE walks its own CURSOR (conditional extensions) — the one source here that supplies its
+		// own traversal instead of having one built for it, and the reason this function no longer answers
+		// only for compiler-owned containers. See `parseForStatement`'s cursor arm and
+		// `declaresCursorProtocol`, which is where the two method names live.
+		if self.cursorIterationTypeName(source).count() != 0 'cursor'
+			return
+		end 'cursor'
+		throw ParseError.unsupported("`for … in` over a `{typeTagName(self.tagOf(source))}` value — shv2 iterates an `Array`, a `{String.from(VectorBuiltinBaseName)}`, a `List`, a `{String.from(MapBuiltinBaseName)}`'s `(key, value)` entries, a `String`'s grapheme clusters, the counted ranges `<lo> to <hi>` / `<lo> upto <hi>`, and any type declaring the cursor protocol `{String.from(CurrentMethodName)}()` + `{String.from(AdvanceMethodName)}() throws {String.from(IterationErrorTypeName)}`", line: forTok.line, column: forTok.column)
 	end 'requireIterableSource'
+
+	// ⭐ **THE NAME OF THE STRUCT THIS SOURCE WALKS AS A CURSOR, or EMPTY when it is not one** (conditional
+	// extensions). A name and not a `bool`, because every caller that needs the answer also needs the name:
+	// the loop emits `<name>.current` / `<name>.advance` as direct calls, so a separate lookup would be a
+	// second chance to resolve the receiver's type differently from the admission test.
+	//
+	// ⚠ The tag gate is what keeps the protocol test off every OTHER value in the program: a source that is
+	// not a struct cannot declare a method at all, and `valueTypeName` of one would be a name no struct
+	// registry answers for.
+	function cursorIterationTypeName(source ValueId) returns ByteArray
+		if self.tagOf(source) != ValueTypeTag.structRef 'notAStruct'
+			return EmptySourceText
+		end 'notAStruct'
+
+		let typeName = self.valueTypeName(source)
+		if not self.signatures.declaresCursorProtocol(typeName) 'noProtocol'
+			return EmptySourceText
+		end 'noProtocol'
+
+		return typeName
+	end 'cursorIterationTypeName'
 
 	// ⭐⭐ **WHAT A COUNTED RANGE'S BOUNDS MAY BE — the RANGE form's twin of `requireIterableSource`, and
 	// the rung shipped without it.** A counted range is an INDEX PHI stepped by `emitMachineWordAdd`, a
@@ -26327,17 +26788,22 @@ export type Parser
 	// arm far above and, were it not, `api.Score` is a registry key ONE file declares — so it is not
 	// contested and the candidate set is empty. The qualified spelling is the CURE this diagnostic
 	// prescribes; it cannot also be a case of the disease.
-	function requireUnambiguousTypeName(tok Token) throws ParseError
+	// The NAME is a parameter rather than read off `anchor`, because the two can differ: an extension body's
+	// associated type is substituted to the conformer's binding before any arm resolves it
+	// (`parseTypeReference`), and it is that BINDING whose meaning has to be unambiguous — the author's
+	// `Element` names one thing by construction. `anchor` stays the token a reader is pointed at, which is
+	// still the one they wrote.
+	function requireUnambiguousTypeName(name ByteArray, anchor Token) throws ParseError
 		if not self.signatures.allFilesFolded 'theIndexIsStillBeingBuilt'
 			return
 		end 'theIndexIsStillBeingBuilt'
 
-		let candidates = self.signatures.ambiguousAliasCandidates(tok.value, readerFilePath: self.filePath)
+		let candidates = self.signatures.ambiguousAliasCandidates(name, readerFilePath: self.filePath)
 		if candidates.count() == 0 'exactlyOneMeaning'
 			return
 		end 'exactlyOneMeaning'
 
-		throw ParseError.ambiguousTypeAlias(String.from(tok.value), candidates: renderCandidateList(candidates), line: tok.line, column: tok.column)
+		throw ParseError.ambiguousTypeAlias(String.from(name), candidates: renderCandidateList(candidates), line: anchor.line, column: anchor.column)
 	end 'requireUnambiguousTypeName'
 
 	function everyDeclarationHidden(alias RangedTypeAlias) returns bool
@@ -31547,10 +32013,91 @@ export type Parser
 
 		try self.requireSelfForDescriptorForwarding(base, memberTok: memberTok)
 
-		let result = try self.parseCallNamed(func, callee: qualifiedMethodName(base.layout.name, methodName: memberTok.value), anchor: baseTok, receiver: ReceiverArg.value(base.box, immutableName: base.immutableName, subjectName: base.subjectName), resultUsed: resultUsed, constructorInstance: self.receiverConstructorInstance(base.box), mint: CalleeMint.notMinted)
+		// Built ONCE and threaded into both readers — the withholding guard keys its store by it, and the call
+		// below dispatches on it. Derived twice, it was two string joins and an allocation on EVERY struct
+		// method call in every program, for one name that cannot differ.
+		let callee = qualifiedMethodName(base.layout.name, methodName: memberTok.value)
+		try self.requireMethodNotWithheldByConstraint(base.layout.name, callee: callee, receiver: base.box, memberTok: memberTok)
+
+		let result = try self.parseCallNamed(func, callee: callee, anchor: baseTok, receiver: ReceiverArg.value(base.box, immutableName: base.immutableName, subjectName: base.subjectName), resultUsed: resultUsed, constructorInstance: self.receiverConstructorInstance(base.box), mint: CalleeMint.notMinted)
 		self.retypeInstanceMethodResult(result, receiver: base.box)
 		return result
 	end 'dispatchMethodOnBase'
+
+	// ⭐ **THE CONDITIONAL-EXTENSION REFUSAL, AT THE ONE DOOR EVERY STRUCT METHOD CALL PASSES THROUGH.**
+	// Asked before the callee is built, because the answer is about the NAME and not about the arguments: a
+	// method a `where` clause withheld does not exist for this receiver at any arity.
+	//
+	// A `Map.contains`-cheap probe of a store that is EMPTY in every program declaring no conditional
+	// extension, which is the whole corpus but one spec — so the ordinary method call pays one miss and
+	// allocates nothing: `callee` is the caller's own, which it is about to dispatch on regardless.
+	function requireMethodNotWithheldByConstraint(typeName ByteArray, callee ByteArray, receiver ValueId, memberTok Token) throws ParseError
+		match self.signatures.conditionalExtensionSkipOf(callee) 'skip'
+			notWithheld then break 'skip'
+			withheld(skip) then throw ParseError.conditionalExtensionWithheld(String.from(skip.typeName), methodName: String.from(skip.methodName), clause: skip.clause, unmetInterfaceName: String.from(skip.unmetInterfaceName), bindingName: String.from(skip.bindingName), line: memberTok.line, column: memberTok.column)
+		end 'skip'
+
+		try self.requireReceiverSatisfiesExtensionConstraints(typeName, callee: callee, receiver: receiver, memberTok: memberTok)
+	end 'requireMethodNotWithheldByConstraint'
+
+	// ⭐⭐ **THE OTHER HALF OF THE CONDITIONAL REFUSAL: a TYPE extension's clause is checked at the CALL, per
+	// RECEIVER, because there is nowhere earlier it could be.** shv2 compiles one body per generic type
+	// (P1.6-A), so `extension Box where Item is Equatable` cannot be filtered per instance the way an
+	// interface extension is filtered per conformer — every `Box with X` shares the one `Box.matches`, and
+	// what varies is whether a given receiver may reach it.
+	//
+	// ⚠ **WITHOUT THIS THE PROGRAM DOES NOT FAIL, IT PANICS.** `Box with NotEq` then `.matches(…)` reached
+	// `LowerMaxonToStd.ensureWitnessTable` for `__witness_NotEq.Equatable` and died in `witnessSlotImpl`
+	// ("no conformance selected a member for slot 'NotEq.Equatable.equals'") — measured, in exactly the shape
+	// that panic's own message predicts: a table built for a conformance nothing validated.
+	//
+	// Two receiver shapes, and both are the same question asked of what the call site actually knows:
+	//
+	//   • A CONCRETE generic instance — the type argument is known, so ask whether it conforms. This is the
+	//     `materializeWitnessArg` `concrete` arm's precondition, checked where a position exists.
+	//   • ANYTHING ELSE (the enclosing generic body's own `self`, a value of its type parameter) — the
+	//     argument is opaque and the witness is FORWARDED from the caller's own slots, so the caller must
+	//     carry the SAME constraints in the SAME order. Inside the extension's own body it does, by
+	//     construction (`openExtensionBodyScope` installs that very list); inside a plain method of the same
+	//     type it carries none, and the forward would read a slot that was never reserved.
+	function requireReceiverSatisfiesExtensionConstraints(typeName ByteArray, callee ByteArray, receiver ValueId, memberTok Token) throws ParseError
+		let constraints = self.signatures.extensionMethodConstraintsOf(callee)
+		if constraints.isEmpty() 'notAConditionalTypeExtensionMethod'
+			return
+		end 'notAConditionalTypeExtensionMethod'
+
+		let clause = renderWhereConstraints(constraints, paramNames: self.structTypeParamNames(typeName))
+		if self.tagOf(receiver) != ValueTypeTag.genericInstance 'opaqueReceiver'
+			if whereConstraintsMatch(self.enclosingWhereConstraints, other: constraints) 'callerCarriesThem'
+				return
+			end 'callerCarriesThem'
+
+			throw ParseError.unsupported("'{String.from(typeName)}.{String.from(memberTok.value)}' is a conditional extension method ({clause}), and this receiver's type argument is not known here — the enclosing function carries no witness for that constraint to forward. Call it on a concrete instance, or declare the same `where` clause on the function's own extension", line: memberTok.line, column: memberTok.column)
+		end 'opaqueReceiver'
+
+		let gid = self.valueNameId(receiver)
+		for i in 0 upto constraints.count() 'eachConstraint'
+			let constraint = try constraints.get(i) otherwise panic("requireReceiverSatisfiesExtensionConstraints: constraints.get OOB at {i} below count {constraints.count()}")
+			// The CANONICAL conformer name is what the conformance answer and the `__witness_<conformer>.*`
+			// label are both filed under (`conformerTypeArgName`); the MESSAGE prints the source spelling, which
+			// is `checkOneInstantiation`'s split applied at the other end of the same mechanism.
+			let conformer = self.signatures.conformerTypeArgName(gid, position: constraint.typeParamIndex).toByteArray()
+			if not typeConformsTo(self.signatures.sweptConformanceIndex(), interfaces: self.signatures.interfaceMap(), typeName: conformer, interfaceName: constraint.interfaceName) 'violates'
+				let argName = self.signatures.instanceArgTypeName(gid, position: constraint.typeParamIndex)
+				throw ParseError.conditionalExtensionWithheld(String.from(typeName), methodName: String.from(memberTok.value), clause: clause, unmetInterfaceName: String.from(constraint.interfaceName), bindingName: argName, line: memberTok.line, column: memberTok.column)
+			end 'violates'
+		end 'eachConstraint'
+	end 'requireReceiverSatisfiesExtensionConstraints'
+
+	// The `uses` parameter names of a declared type — the list a `WhereConstraint.typeParamIndex` is a
+	// position in, for rendering a clause back. An undeclared type has none, and a constraint against one is
+	// unreachable: the constraints came off a method published for that very type.
+	function structTypeParamNames(typeName ByteArray) returns ByteArrayArray
+		match self.signatures.structOf(typeName) 'layout'
+			declared(layout) then return layout.typeParamNames
+			undeclared then panic("Parser.structTypeParamNames: '{String.from(typeName)}' carries conditional-extension constraints but is in no struct registry — the constraints were filed under a method of that type")
+		end 'layout'
+	end 'structTypeParamNames'
 
 	// ⚠⚠ **A MANAGED FIELD READ OUT OF A TEMPORARY HOLDS THAT TEMPORARY TO THE SCOPE'S EXIT — the read is a
 	// BORROW, and the box that owns what it borrows would otherwise die at the end of THIS statement.**
@@ -32274,6 +32821,81 @@ export type Parser
 		// ABI, so a capturing transform works here for the same reason `f(x)` does.
 		return self.emitMaterializedFill(resultGiid, callee: callee, source: container, extraArgs: pairArgs(transform, second: self.emitClosureEnvArg(transform, range: range)), range: range)
 	end 'parseContainerMap'
+
+	// ⭐⭐ **`contains(…)` — THE `Array`'s CONDITIONAL EXTENSION, AND THE CONTAINER SURFACE'S FIRST OVERLOAD
+	// SET (conditional-extensions).** `stdlib/Array.maxon:534` declares two methods under one name inside
+	// `export extension Array where Element is Equatable` — `contains(element Element)` (membership) and
+	// `contains(sequence ElementArray)` (contiguous subsequence) — and `[10,20,30,40].contains([20])` takes the
+	// SECOND, which is why the spec's `array-contains` case expects `true` from what reads like a typo.
+	//
+	// ⭐ **THE DISCRIMINATOR IS THE ARGUMENT'S INSTANCE, WHICH IS `ElementArray` READ LITERALLY.** The
+	// reference names the sequence overload's parameter `Array with Element` — the RECEIVER's own type — so
+	// "is this argument the receiver's instance?" is the whole test, and it is the only one that stays
+	// unambiguous when the element is ITSELF an array: for `Array with IntArray` the element is
+	// `Array with Integer` and the sequence is `Array with (Array with Integer)`, two distinct instances.
+	// ⚠ Everything that is NOT that instance goes to the membership overload and is then type-checked as an
+	// ELEMENT, so a wrong argument type is reported by the element door (naming the element type) rather than
+	// by a bespoke "neither overload matched" sentence that would have to name both.
+	//
+	// ⚠ **NOTHING CHANGES OWNER.** Both overloads only COMPARE, so the argument is BORROWED — no
+	// `moveElementIntoContainer`, no poisoned bare local, no promotion of a borrowed String literal. That is
+	// the `Set`'s `contains`/`remove` rule (`parseSetKeyArg`'s `consume: false`), and it is why a temporary
+	// argument (`nums.contains([20])`) is left to the statement's own pending drops.
+	//
+	// ⚠ **THE ELEMENT IS STILL PUT INTO ITS SLOT SHAPE (`containerElementWord`).** A float element lives in a
+	// slot as its 64 BITS, and the runtime reads slots — so the needle has to arrive in the same
+	// representation the haystack's elements are stored in, or the comparison compares a float against a bit
+	// pattern. One door decides that for the write side and for this one.
+	function parseArrayContains(func IrFunction, arr ValueId, giid GenericInstanceId, methodTok Token, range SourceRange) returns ValueId throws ParseError
+		try self.requireArrayContainsAvailable(giid, methodTok: methodTok)
+		try self.consume(TokenKind.leftParen)
+		let argTok = self.current()
+		let argStart = self.pos
+		let parsed = try self.parseExpression(func, block: self.currentBlock)
+		let subsequence = self.tagOf(parsed) == ValueTypeTag.genericInstance and self.valueNameId(parsed) == giid
+
+		var needle = parsed
+		if not subsequence 'membership'
+			needle = self.containerElementWord(try self.requireContainerElementType(giid, value: parsed, valueStart: argStart, methodTok: methodTok), giid: giid, range: SourceRange.ofToken(argTok))
+		end 'membership'
+
+		try self.consume(TokenKind.rightParen)
+		return self.emitRuntimeCall(arrayContainsCallee(subsequence, elementIsFloat: self.containerElementIsFloatWord(giid)), args: pairArgs(arr, second: needle), resultTag: ValueTypeTag.boolean, resultNameId: UnnamedTypeId, range: range)
+	end 'parseArrayContains'
+
+	// ⭐⭐ **DOES THIS RECEIVER'S ELEMENT SATISFY `where Element is Equatable`? — the WITHHOLDING rule, and it
+	// is the SAME question, the same predicate and the same diagnostic a user's own conditional extension
+	// gets.** `ConformanceCheck.typeConformsTo` over `sweptConformanceIndex` is what
+	// `requireReceiverSatisfiesExtensionConstraints` asks of a declared type's extension methods; the only
+	// difference here is that `Array`'s extension is not read from a file — shv2 loads no `stdlib/Array.maxon`
+	// — so the clause is stated by `arrayElementWitnessInterfaces` instead of parsed. E4006 is therefore the
+	// same sentence a reader gets from a `where` clause they wrote themselves.
+	//
+	// ⭐ **THE CONSTRAINT LIST IS READ, NOT WRITTEN — three readers, one list.** The satisfaction test here,
+	// the clause this refusal RENDERS, and the witness tables `LowerMaxonToStd.appendArrayElementWitnessArgs`
+	// threads all walk `arrayElementWitnessInterfaces()`. Split, the front end could admit a constraint the
+	// lowering threads no table for, or refuse under a clause the runtime never asked about.
+	//
+	// ⚠ **AN OPAQUE `T` ELEMENT IS REFUSED, AND IT IS A WITNESS-FORWARDING GAP RATHER THAN A CONFORMANCE
+	// ONE.** Inside a generic body `self.items.contains(x)` has no concrete element to look a table up for,
+	// and the runtime call takes that table as an ordinary argument — so the caller's own witness slot would
+	// have to be forwarded, which needs the enclosing function to carry the SAME constraint
+	// (`requireReceiverSatisfiesExtensionConstraints`'s `callerCarriesThem`). Answering E4006 instead would
+	// claim the element does not conform, which is not what is known: nothing here knows what it binds to.
+	function requireArrayContainsAvailable(giid GenericInstanceId, methodTok Token) throws ParseError
+		if self.signatures.containerElementIsOpaque(giid) 'opaqueElement'
+			throw ParseError.unsupported("'{String.from(ArrayBuiltinBaseName)}.{String.from(methodTok.value)}' is a conditional extension method ({arrayContainsWhereClause()}), and this array's element type is not known here — it is the enclosing generic's own type parameter, and a compiler-owned `{String.from(methodTok.value)}` takes the element's witness table as an argument this body has none to pass. Call it on an array of a concrete element type", line: methodTok.line, column: methodTok.column)
+		end 'opaqueElement'
+
+		let element = self.signatures.containerElementConformerName(giid).toByteArray()
+		let interfaces = arrayElementWitnessInterfaces()
+		for i in 0 upto interfaces.count() 'eachConstraint'
+			let interfaceName = try interfaces.get(i) otherwise panic("requireArrayContainsAvailable: interfaces.get OOB at {i} below count {interfaces.count()}")
+			if not typeConformsTo(self.signatures.sweptConformanceIndex(), interfaces: self.signatures.interfaceMap(), typeName: element, interfaceName: interfaceName) 'violates'
+				throw ParseError.conditionalExtensionWithheld(String.from(ArrayBuiltinBaseName), methodName: String.from(methodTok.value), clause: arrayContainsWhereClause(), unmetInterfaceName: String.from(interfaceName), bindingName: String.from(element), line: methodTok.line, column: methodTok.column)
+			end 'violates'
+		end 'eachConstraint'
+	end 'requireArrayContainsAvailable'
 
 	// `( transform )` — `map`'s single positional argument, a FUNCTION VALUE over the container's element.
 	// Parsed as an ordinary expression, so every producer of a function value reaches it: an inline closure
@@ -35987,6 +36609,18 @@ export type Parser
 		if methodTok.value.equals(MapMethod) 'map'
 			return try self.parseContainerMap(func, container: arr, resultGiid: giid, callee: ArrMapName, range: range)
 		end 'map'
+
+		// ⭐ **`contains(…)` — the CONDITIONAL extension (conditional-extensions).** It sits beside `map`
+		// because both are `stdlib`'s `Array` extensions rather than its core surface, and it is on the
+		// `Array` roster and NOT the buffer's for `map`'s reason: a receiver reaching here is an `Array`, and
+		// `mm.contains(x)` is the roster refusal.
+		//
+		// ⚠ It is the FIRST overload set on any container surface, and the arm is one call because the choice
+		// is made where the argument is parsed — see `parseArrayContains`. It also carries the surface's first
+		// AVAILABILITY rule, which is why the arm cannot be a bare `emitRuntimeCall` the way `count` is.
+		if methodTok.value.equals(ContainsMethod) 'contains'
+			return try self.parseArrayContains(func, arr: arr, giid: giid, methodTok: methodTok, range: range)
+		end 'contains'
 
 		// ⭐ **THE VOID MUTATORS — AND EACH REFUSES VALUE POSITION FROM INSIDE ITS OWN ARM
 		// (`requireVoidMethodIsStatement`, whose header carries the D11 measurement).** The refusal used to

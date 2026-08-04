@@ -108,10 +108,16 @@ let FirstDeletedNone = -1 as ParsedInt
 // `__witness_<key>.Equatable`, and the label it takes an address of must be the label the builtin-conformance
 // table registers under.
 //
-// The witness-table slot index of the SOLE method of `Hashable` (`hash`) and of `Equatable` (`equals`) — each
-// interface declares one method, at decl-order index 0, so the fused `witnessCall` reads its function pointer
-// from `[witnessAddr + 24]` (`witnessMethodSlotOffset(0)`).
-let HtWitnessMethodIndex = 0 as WitnessMethodIndex
+// ⭐ **THE KEY'S TWO CONSTRAINTS, NAMED ONCE — `where Key is Hashable and Equatable`.** The ORDER is the
+// trailing-argument order every witness-carrying hash-table entry declares (`__set_insert(set, elem,
+// hashWitness, eqWitness)`), and `LowerMaxonToStd.withKeyWitnessArgs` threads the tables by walking THIS
+// list — so the constraint a header states and the argument a probe reads are one fact.
+export function hashTableKeyWitnessInterfaces() returns ByteArrayArray
+	var interfaces = ByteArrayArray.create()
+	interfaces.push(HashableInterfaceName)
+	interfaces.push(EquatableInterfaceName)
+	return interfaces
+end 'hashTableKeyWitnessInterfaces'
 
 // ⭐⭐ **ONE HASH-TABLE CONTAINER, DESCRIBED ONCE: its six shared entry-point names, its record size, and
 // whether it carries a value column.** Every shared builder below takes exactly this, so "which table am I
@@ -209,25 +215,9 @@ end 'emitHtMask'
 // trap on wasm if it did not.
 function emitHtKeyHash(module StdModule, block IrBlock, hashWitness ValueId, key ValueId, ids ValueMinter) returns ValueId
 	let hash = ids.mint()
-	module.appendOp(block, op: StdOp.witnessCall(hash, witnessAddr: hashWitness, methodIndex: HtWitnessMethodIndex, resultType: StdReturnType.value(builtinProtocolResultStdType(HashValueTypeName)), argFloatMask: 0, argNarrowMask: 0, args: argsOf(key)))
+	module.appendOp(block, op: StdOp.witnessCall(hash, witnessAddr: hashWitness, methodIndex: BuiltinProtocolSoleMethodIndex, resultType: StdReturnType.value(builtinProtocolResultStdType(HashValueTypeName)), argFloatMask: 0, argNarrowMask: 0, args: argsOf(key)))
 	return hash
 end 'emitHtKeyHash'
-
-// `a.equals(b)` through the `Equatable` witness — `witnessCall(eqWitness, method 0, a, b) -> bool` (0/1). For
-// an int key the slot holds `int.equals`, so this is `a == b`.
-//
-// ⚠ The result type is `builtinProtocolResultStdType`'s and NOT a hand-written `i64`, because this runtime is
-// a THIRD party to a witness slot's signature (beside the dispatch site and the impl) and a slot's signature
-// is checked exactly on wasm — see that function. `bool` here, a machine word for the `hash` above.
-//
-// Both per-argument ABI masks are 0 for `emitHtKeyHash`'s reason, one argument further: `equals(self, other
-// Self)` takes the key type TWICE, and the key types the whitelist admits are all whole machine words. The
-// same "widening the whitelist must come back here" obligation applies to this site.
-function emitHtKeyEquals(module StdModule, block IrBlock, eqWitness ValueId, a ValueId, b ValueId, ids ValueMinter) returns ValueId
-	let equal = ids.mint()
-	module.appendOp(block, op: StdOp.witnessCall(equal, witnessAddr: eqWitness, methodIndex: HtWitnessMethodIndex, resultType: StdReturnType.value(builtinProtocolResultStdType(BoolConformerName)), argFloatMask: 0, argNarrowMask: 0, args: twoArgs(a, second: b)))
-	return equal
-end 'emitHtKeyEquals'
 
 // Terminate `cur` branching to `matchBlock` iff slot `index` holds an entry EQUAL to `key` — the cached hash
 // matches (`hashes[index] == hash`) AND the key compares equal through the Equatable witness — else to
@@ -242,16 +232,12 @@ function emitHtSlotMatchCheck(module StdModule, func IrFunction, cur IrBlock, ta
 	module.setTerminator(cur, op: StdOp.condBranch(hashMatches, thenBlockId: checkEquals.id, elseBlockId: noMatchBlock.id))
 
 	let slotKey = emitHtRecordSlotLoad(module, block: checkEquals, table: table, bufferOffset: HtKeysOffset, index: index, ids: ids)
-	let keyEqual = emitHtKeyEquals(module, block: checkEquals, eqWitness: eqWitness, a: slotKey, b: key, ids: ids)
+	// `operandsAreFloat: false` is the KEY-TYPE WHITELIST speaking: `Set`/`Map` refuse a float key
+	// (`Parser.requireHashTableColumnType`), so every key a probe compares is a whole machine word. Widening
+	// that whitelist must come back here — see `emitEquatableWitnessEquals`.
+	let keyEqual = emitEquatableWitnessEquals(module, block: checkEquals, eqWitness: eqWitness, a: slotKey, b: key, operandsAreFloat: false, ids: ids)
 	module.setTerminator(checkEquals, op: StdOp.condBranch(keyEqual, thenBlockId: matchBlock.id, elseBlockId: noMatchBlock.id))
 end 'emitHtSlotMatchCheck'
-
-// Terminate `block` with `ret <value>` — a bool/int constant result (`contains`/`remove` return 1/0; there is
-// no `setcc` at this tier, so a verdict is a constant-returning block off a fused compare).
-export function emitHtReturnConst(module StdModule, block IrBlock, value ParsedInt, ids ValueMinter)
-	let result = emitConst(module, block: block, value: value, ids: ids)
-	module.setTerminator(block, op: StdOp.ret(result))
-end 'emitHtReturnConst'
 
 // `__mm_free(buffer)` guarded on `buffer != 0` — a table that never grew has null buffers (`create` leaves
 // them zeroed), so the drop and the first-grow's old-buffer release must both skip a null pointer
@@ -871,12 +857,12 @@ function buildHtContains(module StdModule, family HashTableFamily)
 	let eqWitness = 3 as ValueId
 
 	emitHtEmptyTableCheck(module, entry: entry, table: table, emptyBlock: emptyTable, probeBlock: probe, ids: ids)
-	emitHtReturnConst(module, block: emptyTable, value: 0, ids: ids)
+	emitConstReturn(module, block: emptyTable, value: PredicateFalse, ids: ids)
 
 	_ = emitHtLookupProbe(module, func: func, cur: probe, table: table, key: key, hashWitness: hashWitness, eqWitness: eqWitness, foundBlock: found, notFoundBlock: notFound, ids: ids)
 
-	emitHtReturnConst(module, block: found, value: 1, ids: ids)
-	emitHtReturnConst(module, block: notFound, value: 0, ids: ids)
+	emitConstReturn(module, block: found, value: PredicateTrue, ids: ids)
+	emitConstReturn(module, block: notFound, value: PredicateFalse, ids: ids)
 
 	module.functions.push(func)
 end 'buildHtContains'

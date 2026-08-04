@@ -490,6 +490,34 @@ export function emitOkReturn(module StdModule, block IrBlock, value ValueId, ids
 	module.setTerminator(block, op: StdOp.errorReturn(value, errorFlagId: flag))
 end 'emitOkReturn'
 
+// Terminate `block` with `ret <constant>` — the shape EVERY runtime PREDICATE ends in, because there is no
+// `setcc` at this tier: a verdict is a constant-returning block off a fused compare, one block per answer.
+// A predicate therefore returns a CONSTANT from its own block rather than the compare's flag value directly
+// — `buildArrIsEmpty`'s shape, and the one the backend has always been exercised on.
+//
+// ⚠ It was `HashTableRuntime.emitHtReturnConst` while a hash table was its only caller; the `Array`
+// surface's `contains` is the second family to answer a bool this way, and a helper about the STD TIER's
+// lack of a `setcc` is not a hash table's property. It joins the single-op emit helpers here for
+// `emitErrorReturn`'s stated reason. `StringRuntime.emitPredicateReturn` was a byte-identical THIRD copy and
+// `CharacterSetRuntime`/`BuiltinConformanceRuntime` spelled the two statements out longhand — all folded here.
+export function emitConstReturn(module StdModule, block IrBlock, value ParsedInt, ids ValueMinter)
+	let result = emitConst(module, block: block, value: value, ids: ids)
+	module.setTerminator(block, op: StdOp.ret(result))
+end 'emitConstReturn'
+
+// ⭐ **THE TWO WORDS A STD-TIER PREDICATE RETURNS — 1 for yes, 0 for no — WRITTEN DOWN ONCE.** They live
+// beside `emitConstReturn` because they are the same fact it is: with no `setcc` at this tier a bool is a
+// returned CONSTANT, and which constant means true is not a property of any one runtime family.
+//
+// ⚠ **THIS WAS FIVE NAMED PAIRS AND TWO PAIRS OF BARE LITERALS, FOR ONE FACT.** `StrPredicateTrue`/`False`,
+// `GraphemeTrue`/`False`, `EqualsTrue`/`False`, `ContainsFound`/`Missing`, `CharSetContainsTrue`/`False`,
+// and raw `0`/`1` at the hash-table and set `contains` returns. Each copy carried the same argument — that a
+// caller must not read one function's "true" as another's "false" — while being the very thing that could
+// make them disagree. The per-family pairs declined to share only because the HELPER was not shared either;
+// now that it is, the constants ride the same base layer every runtime family already depends on.
+export let PredicateTrue = 1 as ParsedInt
+export let PredicateFalse = 0 as ParsedInt
+
 // ⭐ **THE ONE BYTE-GRANULAR FILL LOOP.** Overwrite `byteCount` bytes at `dest` with the low byte of
 // `fillValue`, one byte at a time (fill widths are not all 8-multiples — a `b"hi"` buffer is 2 bytes, a
 // `pop`'s vacated slot is one ranged element). `byteCount == 0` exits on the first compare, writing nothing.

@@ -1540,6 +1540,35 @@ export type RangedAliasRegistry
 	//
 	// `throws` is `Map.get`'s own channel: a name NO file declares is not a ranged alias at all, and what
 	// the compiler's own two byte elements are worth is the caller's to state, not this index's to invent.
+	// ⭐⭐ **IS `name` A PURE SECOND NAME FOR `int` — the WHOLE i64 span, whichever file's declaration you
+	// read?** The `holdsEveryByte` twin one bar up, and its reader is the inferred-int-element boundary
+	// (`ProgramSignatures.inferredIntElementBoundaryAdmits`): an array a bare `[10, 20, 30]` built carries the
+	// compiler's own `integer` element, and it may cross into a declared `Array with <alias>` exactly when
+	// that alias adds NOTHING to `int` — no narrower value set to check, and (a consequence, not a second
+	// condition) no narrower slot, since `rangedAliasStorageBytes` gives the full span the machine word.
+	//
+	// ⚠ **THE BAR IS BOTH ENDS EXACTLY, NOT "WIDE ENOUGH".** A range is compared as the RAW 64-bit pattern
+	// (`RangedTypeAlias`'s header), so a `high` above `i64.max` is indistinguishable from a negative one —
+	// `typealias Big = int(0 to u64.max)` would read as spanning everything while refusing every negative
+	// element a literal may hold. Demanding the exact pair is the only reading those bits support, and it is
+	// also the only one under which the crossing is observationally free.
+	//
+	// ⚠ Asked only after two aggregate names have already DISAGREED — a rejected program's path — so the walk
+	// over one name's declarations costs every compiling program nothing, exactly as its twin does.
+	export function spansEveryIntInEveryFile(name ByteArray) returns bool throws MapError
+		if let byFile = try self.multiplyDeclared.get(name) 'declaredByMoreThanOneFile'
+			for (_, alias) in byFile 'eachDeclaringFile'
+				if not rangeSpansEveryInt(alias.low, high: alias.high) 'thisFilesDeclarationDoesNot'
+					return false
+				end 'thisFilesDeclarationDoesNot'
+			end 'eachDeclaringFile'
+			return true
+		end 'declaredByMoreThanOneFile'
+
+		let sole = try self.byName.get(name)
+		return rangeSpansEveryInt(sole.low, high: sole.high)
+	end 'spansEveryIntInEveryFile'
+
 	export function holdsEveryByteInEveryFile(name ByteArray) returns bool throws MapError
 		if let byFile = try self.multiplyDeclared.get(name) 'declaredByMoreThanOneFile'
 			for (_, alias) in byFile 'eachDeclaringFile'
@@ -1761,6 +1790,15 @@ end 'holdsRange'
 export function rangeHoldsEveryByte(low ParsedInt, high ParsedInt) returns bool
 	return low == ByteValueSetLow and high >= ByteValueSetHigh
 end 'rangeHoldsEveryByte'
+
+// ⭐ **DOES THIS RANGE SPAN EVERY `int` — i.e. is the alias declaring it a pure second NAME for `int`?**
+// EXACT on both ends, for the reason `spansEveryIntInEveryFile` states: the bounds are raw 64-bit patterns,
+// so anything looser reads a bound above `i64.max` as one below zero. `I64MinBound`/`I64MaxBound` are the
+// very constants `Parser.parseInt` enforces, so what "every int" means here cannot drift from what the lexer
+// admits.
+export function rangeSpansEveryInt(low ParsedInt, high ParsedInt) returns bool
+	return low == I64MinBound and high == I64MaxBound
+end 'rangeSpansEveryInt'
 
 // ⭐ **WHAT A BYTE'S VALUE SET IS, WRITTEN DOWN ONCE.** The test above measures a DECLARED element against
 // these two bounds; `ProgramSignatures.elementIntegerValueRange` hands the same two out as the value set the
@@ -2422,6 +2460,54 @@ end 'WhereConstraint'
 
 export typealias WhereConstraintArray = Array with WhereConstraint
 
+// Do two constraint lists name the same constraints in the same ORDER? The order is what makes this the
+// right question rather than set equality: the list IS the witness-slot numbering, so two lists agree only
+// if slot `i` of one carries what slot `i` of the other does — which is exactly the premise a forwarded
+// witness rests on (`LowerMaxonToStd.forwardCallerWitness`).
+export function whereConstraintsMatch(constraints WhereConstraintArray, other WhereConstraintArray) returns bool
+	if constraints.count() != other.count() 'differentLength'
+		return false
+	end 'differentLength'
+
+	for i in 0 upto constraints.count() 'eachConstraint'
+		let mine = try constraints.get(i) otherwise panic("whereConstraintsMatch: constraints.get OOB at {i} below count {constraints.count()}")
+		let theirs = try other.get(i) otherwise panic("whereConstraintsMatch: other.get OOB at {i} below count {other.count()}")
+		if mine.typeParamIndex != theirs.typeParamIndex or not mine.interfaceName.equals(theirs.interfaceName) 'differs'
+			return false
+		end 'differs'
+	end 'eachConstraint'
+
+	return true
+end 'whereConstraintsMatch'
+
+// ⭐ **RENDER A CONSTRAINT LIST BACK TO THE CLAUSE THE AUTHOR WROTE** — `where T is A and B, U is C`. The
+// flattening `readWhereClause` performs is LOSSLESS in source order (one entry per (param, interface) pair,
+// params in the order they were written), so regrouping the consecutive run that shares a `typeParamIndex`
+// reproduces the conjunction and the comma list exactly. Written once because a diagnostic that names the
+// condition a conditional extension was withheld under has to name the WHOLE condition, and re-spelling the
+// grammar at the message site is how a `where` form grows a second, stale renderer.
+//
+// `paramNames` is the declaration the indices are positions in — a type's `uses` list, or an interface's
+// associated-type names.
+export function renderWhereConstraints(constraints WhereConstraintArray, paramNames ByteArrayArray) returns String
+	var text = "where "
+	var previousParam = 0 as FieldIndex
+	for i in 0 upto constraints.count() 'eachConstraint'
+		let constraint = try constraints.get(i) otherwise panic("renderWhereConstraints: constraints.get OOB at {i} below count {constraints.count()}")
+		if i == 0 or constraint.typeParamIndex != previousParam 'newParam'
+			let separator = "" if i == 0 else ", "
+			let paramName = try paramNames.get(constraint.typeParamIndex) otherwise panic("renderWhereConstraints: a constraint names parameter position {constraint.typeParamIndex}, outside the declaration's own list of {paramNames.count()} — `readWhereClause` rejects a name that is not in it")
+			text = "{text}{separator}{String.from(paramName)} is {String.from(constraint.interfaceName)}"
+		end 'newParam' else 'sameParam'
+			text = "{text} and {String.from(constraint.interfaceName)}"
+		end 'sameParam'
+
+		previousParam = constraint.typeParamIndex
+	end 'eachConstraint'
+
+	return text
+end 'renderWhereConstraints'
+
 // The SHARED EMPTY `whereConstraints` a StructLayout holds until a `where` clause is recorded (P1.7a slice
 // 2a) — an unconstrained (or non-generic) type, which is every type on the scale corpus. `recordWhereConstraints`
 // REPLACES the field wholesale (copy-on-write), and it is never mutated in place, so one allocation serves
@@ -2520,6 +2606,17 @@ export type StructLayout
 	// is the SWEEP's answer to "which interfaces does this type name?", used only to expand extensions, and
 	// nothing verifies a conformance from it.
 	export var conformsTo as ByteArrayArray
+	// ⭐ **THE `with <TypeArgs>` BOUND BY THE FINAL NAME IN `conformsTo`** — the associated-type bindings a
+	// CONDITIONAL extension's `where` clause is evaluated against: `extension Holder where Item is Comparable`
+	// asks what each conformer binds `Item` to, and that is the fact this column carries. Positional —
+	// `conformanceBindings[i]` binds the interface's associated type at position `i`, which is the position a
+	// `WhereConstraint.typeParamIndex` names. Empty when the clause wrote no `with`.
+	//
+	// ⚠ **THE FINAL NAME IS THE ONLY ONE THAT CAN CARRY BINDINGS, and that is structural rather than a
+	// convention this column hopes for.** `readOptionalImplementsClause` STOPS the interface list at the
+	// first `with` — see its header for why — so one clause contributes at most one bindings list, and it
+	// belongs to the last name recorded.
+	export var conformanceBindings as ByteArrayArray
 	// ⭐ **THE DECLARATION'S OWN VISIBILITY (N1a)** — `type Point` vs `module type Point` vs
 	// `export type Point`. Read by `Parser.typeNameVisibleHere`, the door a source-written type NAME in a
 	// dotted primary goes through, and by `Parser.requireFieldAccessible`, which meets it at the first field
@@ -2537,7 +2634,7 @@ export type StructLayout
 	// take the columns, deliberately: handing pre-built parallel arrays across a call boundary is
 	// exactly the shape that lets one arrive short.
 	export static function create(name ByteArray, visibility Visibility, declFilePath FilePath) returns StructLayout
-		return Self{name: name, fieldNames: ByteArrayArray.create(), fieldTypes: MaxonTypeArray.create(), fieldMutable: BoolArray.create(), fieldVisibility: VisibilityArray.create(), fieldDefaults: FieldDefaultArray.create(), fieldDeclaredSurfaces: DeclaredSurfaceArray.create(), fieldOffsets: ByteOffsetArray.create(), slotBytes: 0, typeParamNames: ByteArrayArray.create(), whereConstraints: sharedEmptyWhereConstraints, conformsTo: sharedEmptyDeclaredConformances, visibility: visibility, declFilePath: declFilePath}
+		return Self{name: name, fieldNames: ByteArrayArray.create(), fieldTypes: MaxonTypeArray.create(), fieldMutable: BoolArray.create(), fieldVisibility: VisibilityArray.create(), fieldDefaults: FieldDefaultArray.create(), fieldDeclaredSurfaces: DeclaredSurfaceArray.create(), fieldOffsets: ByteOffsetArray.create(), slotBytes: 0, typeParamNames: ByteArrayArray.create(), whereConstraints: sharedEmptyWhereConstraints, conformsTo: sharedEmptyDeclaredConformances, conformanceBindings: sharedEmptyDeclaredConformances, visibility: visibility, declFilePath: declFilePath}
 	end 'create'
 
 	// The layout every COMPILER-SYNTHESIZED type takes: nameable from any file, declared in none. Spelled
@@ -2560,11 +2657,30 @@ export type StructLayout
 		self.whereConstraints = constraints
 	end 'recordWhereConstraints'
 
-	// Record the interface names the type's `implements` clause writes. Replaces the column wholesale for
-	// `recordTypeParams`' reason — the clause is read as a unit, by the one reader both passes share.
-	export function recordConformances(names ByteArrayArray)
+	// Record the interface names the type's `implements` clause writes, and the `with` arguments its final
+	// name binds. Replaces both columns wholesale for `recordTypeParams`' reason — the clause is read as a
+	// unit, by the one reader both passes share — and takes them TOGETHER because they are one read: a
+	// bindings list recorded without the name it belongs to indexes nothing.
+	export function recordConformances(names ByteArrayArray, bindings ByteArrayArray)
 		self.conformsTo = names
+		self.conformanceBindings = bindings
 	end 'recordConformances'
+
+	// What this type binds `interfaceName`'s associated types to, or an empty list when it does not name that
+	// interface last (see `conformanceBindings`). The pairing is checked rather than assumed: a caller that
+	// asked about the wrong interface must get "no bindings", never the neighbour's.
+	export function bindingsForInterface(interfaceName ByteArray) returns ByteArrayArray
+		if self.conformsTo.count() == 0 'declaresNone'
+			return sharedEmptyDeclaredConformances
+		end 'declaresNone'
+
+		let last = try self.conformsTo.get(self.conformsTo.count() - 1) otherwise panic("StructLayout.bindingsForInterface: conformsTo.get OOB at {self.conformsTo.count() - 1} on a list of {self.conformsTo.count()}")
+		if not last.equals(interfaceName) 'boundToAnother'
+			return sharedEmptyDeclaredConformances
+		end 'boundToAnother'
+
+		return self.conformanceBindings
+	end 'bindingsForInterface'
 
 	// The number of `where` constraints (P1.7a slice 2a) — the number of hidden witness parameters an
 	// instance method of this type carries under dictionary-passing. 0 for an unconstrained type.
@@ -2763,6 +2879,26 @@ let UnionTagBytes = 8 as ByteOffset
 // ⚠ It is no longer the ENUM's alone: `StructLayout.conformsTo` (interface extensions) is the same column on
 // the other declaration kind, filled by the same reader, and its absence is the same fact.
 export let sharedEmptyDeclaredConformances = ByteArrayArray.create()
+
+// ⭐ **WHAT ONE `implements` CLAUSE CONTRIBUTES: the interface NAMES, and the `with` arguments the last of
+// them binds.** `Parser.readOptionalImplementsClause` returns the pair rather than the names alone because
+// they are one read — see `StructLayout.conformanceBindings` for why only the last name can carry bindings —
+// and a bindings list handed over without the names it is positional against indexes nothing. An
+// `enum`/`union` takes the names half and ignores the other: it has no conditional extension to evaluate.
+export type ScannedConformanceClause
+	export let names as ByteArrayArray
+	export let bindings as ByteArrayArray
+
+	export static function create(names ByteArrayArray, bindings ByteArrayArray) returns ScannedConformanceClause
+		return Self{names: names, bindings: bindings}
+	end 'create'
+
+	// A declaration with no `implements` clause at all — both halves the shared empty, so the common case
+	// allocates nothing.
+	export static function declaringNothing() returns ScannedConformanceClause
+		return Self{names: sharedEmptyDeclaredConformances, bindings: sharedEmptyDeclaredConformances}
+	end 'declaringNothing'
+end 'ScannedConformanceClause'
 
 // ⭐ **DOES AN `implements` LIST NAME `interfaceName`? — ONE SCAN, FOR BOTH DECLARATION KINDS.** A `type`'s
 // `StructLayout.conformsTo` and an `enum`/`union`'s `EnumLayout.conformsTo` are the same column on two
@@ -3160,6 +3296,21 @@ export function builtinMapErrorEnum() returns EnumLayout
 	return layout
 end 'builtinMapErrorEnum'
 
+// ⭐ **THE COMPILER-OWNED `IterationError`** — what a cursor's `advance()` throws, and the ONE builtin error
+// enum the compiler never throws itself: `for … in` over a cursor absorbs the flag without naming the case,
+// so every `throw`/`match` of it is the user's. Registered under the BARE name
+// `SignatureIndex.IterationErrorTypeName`; that constant carries the argument for the bare spelling and for
+// why `stdlib/Interfaces.maxon` is synthesized from rather than loaded.
+//
+// Its provenance is `ArrayError`'s, `StringError`'s and `MapError`'s exactly, so it takes the same
+// UNCONDITIONAL seed for the same stated reason.
+export function builtinIterationErrorEnum() returns EnumLayout
+	var layout = EnumLayout.createCompilerOwned(IterationErrorTypeName, conformsTo: builtinErrorConformance())
+	addBuiltinEnumCase(layout, caseName: IterationErrorExhaustedCaseName)
+	addBuiltinEnumCase(layout, caseName: IterationErrorAtStartCaseName)
+	return layout
+end 'builtinIterationErrorEnum'
+
 // ⭐ **THE COMPILER-OWNED `__DivisionByZeroError` (A1)** — what a possibly-zero `/` or `mod` throws, and the
 // type `specs-shv2/safety.md`'s `divide-by-zero-expression-form` and `mod-by-zero` discriminate.
 //
@@ -3375,6 +3526,8 @@ export function createEnumRegistry() returns EnumLayoutMap
 	registry.upsert(StringErrorTypeName, value: builtinStringErrorEnum())
 	// What a missing-key `Map.get` throws. See `builtinMapErrorEnum`.
 	registry.upsert(MapErrorTypeName, value: builtinMapErrorEnum())
+	// What a cursor's `advance()` throws. See `builtinIterationErrorEnum`.
+	registry.upsert(IterationErrorTypeName, value: builtinIterationErrorEnum())
 	// A1: what a possibly-zero `/` or `mod` throws. See `builtinDivisionByZeroErrorEnum`.
 	registry.upsert(DivisionByZeroErrorTypeName, value: builtinDivisionByZeroErrorEnum())
 	return registry

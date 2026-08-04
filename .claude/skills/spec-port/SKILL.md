@@ -133,7 +133,7 @@ three forms. Nothing else counts:
 | legitimate | the evidence you must be able to point at |
 |---|---|
 | shv2 has its own **registered** code for this rule | a `shv2` line in `docs/error-codes.txt` — the ONE registry shared by all three compilers. E.g. **E2053** `callArgMissingLabel` is claimed for **shv2 alone**, where the bootstrap reports the same rule through its general E3005. |
-| shv2 **structurally cannot** emit the expected code | the registry claims it for other compilers only. E.g. **E4006** `IrInvalidFieldAccess` is an IR-stage code claimed by `csharp`/`selfhosted`; shv2 refuses the same program one stage earlier under E3004. |
+| shv2 **structurally cannot** emit the expected code | the registry claims it for other compilers only — **check `lookup_error_code`, do not trust an example.** ⚠ This row's long-standing example was **E4006**, and it was WRONG: the registry claims E4006 for all three compilers (shv2 spells it `invalidFieldAccess`) and shv2 emits it from `Queries.maxon`. A 2026-08-04 tick nearly retracted a case on the strength of this row before measuring. **If you cannot point at a `lookup_error_code` result whose `notEmittedBy` names shv2, this row does not apply to you.** *(What IS legitimate is a different-STAGE argument — shv2 resolving at parse time where the reference lowers first — but that is the row below plus a measured reason, not this one.)* |
 | an **already-ported** `specs-shv2` file pins the other spelling | name the file. ⚠ And note this cuts the other way too: if making your spec pass would force a change to that ported file, **you are in HALT AND ASK**, not in a retraction. |
 
 ⛔ **What is NEVER a reason: "shv2 prints something else, so I wrote down what shv2 prints."** That is

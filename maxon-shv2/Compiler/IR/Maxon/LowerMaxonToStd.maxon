@@ -1231,18 +1231,17 @@ type MaxonToStdLowering
 		return self.witnessParamCountForCallee(func.name, sig: sig)
 	end 'witnessParamCountForFunc'
 
-	// The number of witness parameters the CALLEE `callee` carries (P1.7a slice 2a): its enclosing type's
-	// `where`-constraint count for an INSTANCE method, zero for a static or a free function. Both the callee
-	// side (append witness arguments) and the current-function side (bind witness parameters) read this ONE
-	// rule, so they cannot drift on how many witnesses a call passes.
+	// The number of witness parameters the CALLEE `callee` carries (P1.7a slice 2a): its witness-constraint
+	// count for an INSTANCE method, zero for a static or a free function. Both the callee side (append witness
+	// arguments) and the current-function side (bind witness parameters) read this ONE rule, so they cannot
+	// drift on how many witnesses a call passes — and it is the count OF the very list `appendWitnessArgs`
+	// then walks (`ProgramSignatures.witnessConstraintsOfMethod`), rather than a second lookup that could
+	// answer for a different list.
 	function witnessParamCountForCallee(callee ByteArray, sig FuncSignature) returns ParamCount
 		if not sig.takesReceiver() 'notInstance'
 			return 0
 		end 'notInstance'
-		match splitQualifiedName(callee) 'q'
-			notQualified then return 0
-			parts(typeName, _) then return self.signatures.structWhereConstraintCount(typeName)
-		end 'q'
+		return self.signatures.witnessConstraintsOfMethod(callee).count()
 	end 'witnessParamCountForCallee'
 
 	// `finalizeCallArgs` (float widening + companion env args) PLUS the hidden IMPLICIT arguments a
@@ -1320,7 +1319,7 @@ type MaxonToStdLowering
 			return self.pairedWitnessOf(value, site: site)
 		end 'forwardTheFatPointersOwnWitness'
 
-		return self.materializeKeyWitness(self.conformerNameOf(value), interfaceName: interfaceName, dstBlock: dstBlock)
+		return self.materializeWitnessTableAddr(self.conformerNameOf(value), interfaceName: interfaceName, dstBlock: dstBlock)
 	end 'witnessForExistentialValue'
 
 	// The witness the parser paired with an existential VALUE (`IrFunction.valueWitnessIds`). It refuses the
@@ -1357,22 +1356,12 @@ type MaxonToStdLowering
 	// built (never `argIds`), so pushing is safe.
 	function appendWitnessArgs(out ValueIdArray, argIds ValueIdArray, callee ByteArray, dstBlock IrBlock)
 		let receiver = try argIds.get(0) otherwise panic("appendWitnessArgs: witness-carrying instance method '{String.from(callee)}' has no receiver argument — its first parameter is `self`")
-		let constraints = self.calleeWhereConstraints(callee)
+		let constraints = self.signatures.witnessConstraintsOfMethod(callee)
 		for i in 0 upto constraints.count() 'eachConstraint'
 			let constraint = try constraints.get(i) otherwise panic("appendWitnessArgs: whereConstraints.get OOB at {i}")
 			out.push(self.materializeWitnessArg(receiver, constraint: constraint, constraintIndex: i, callee: callee, dstBlock: dstBlock))
 		end 'eachConstraint'
 	end 'appendWitnessArgs'
-
-	// The `where` constraints of `callee`'s enclosing type (P1.7a slice 2a). `callee` is a qualified
-	// `Type.method`; a non-qualified callee has no enclosing type and so no constraints (its witness count was
-	// already 0, so this is unreached for it — the panic guards a caller invariant, not a user error).
-	function calleeWhereConstraints(callee ByteArray) returns WhereConstraintArray
-		match splitQualifiedName(callee) 'q'
-			notQualified then panic("calleeWhereConstraints: witness-carrying callee '{String.from(callee)}' is not a qualified `Type.method` — only an instance method carries witnesses, and its name is always qualified")
-			parts(typeName, _) then return self.signatures.structWhereConstraints(typeName)
-		end 'q'
-	end 'calleeWhereConstraints'
 
 	// The witness-table address to pass for ONE constraint (P1.7a slice 2a). A CONCRETE generic-instance
 	// receiver → the RIP-relative address of `__witness_<ConcreteArg>.<Iface>` (`rdataAddr`), emitting the
@@ -1760,6 +1749,14 @@ type MaxonToStdLowering
 			self.appendSetWitnessArgs(result, callee: callee, args: args, dstBlock: dstBlock)
 			return
 		end 'setWitness'
+		// ⭐ The `Array` surface's `contains` (conditional-extensions) COMPARES ELEMENTS, so it takes the
+		// ELEMENT's `Equatable` table as its one hidden trailing argument — the same dictionary-passing the
+		// hash-table families take, one interface shorter because an element is compared but never hashed. The
+		// element's conformer name comes off the RECEIVER instance (`args[0]`), which is concrete here.
+		if isArrayElementWitnessCallee(callee) 'arrayElementWitness'
+			self.appendArrayElementWitnessArgs(result, callee: callee, args: args, dstBlock: dstBlock)
+			return
+		end 'arrayElementWitness'
 		self.stdModule.appendOp(dstBlock, op: StdOp.call(result, callee: callee, args: self.opaqueCopyArgsWithDescriptor(callee, args: args)))
 	end 'lowerRuntimeCall'
 
@@ -1769,31 +1766,62 @@ type MaxonToStdLowering
 	// eqWitness]`). The receiver `args[0]` is a concrete `Set` instance, so its key type is read off the gid
 	// through `conformerTypeArgName` — the SAME canonical-conformer reducer `materializeWitnessArg` uses, so a
 	// `Set with Integer` and a `Box with Integer` name their `int` witness table identically — and
-	// `materializeKeyWitness` takes each table's `rdataAddr`.
+	// `materializeWitnessTableAddr` takes each table's `rdataAddr`.
 	function appendSetWitnessArgs(result ValueId, callee ByteArray, args ValueIdArray, dstBlock IrBlock)
 		self.stdModule.appendOp(dstBlock, op: StdOp.call(result, callee: callee, args: self.withKeyWitnessArgs(result, callee: callee, args: args, dstBlock: dstBlock)))
 	end 'appendSetWitnessArgs'
 
-	// ⭐⭐ **`args` PLUS THE KEY'S TWO WITNESS-TABLE ADDRESSES — THE ARGUMENT LIST ITSELF, split out from the
-	// op that carries it because there are now TWO ops that carry it.** `__map_get` is the first
-	// witness-dispatching runtime callee that also THROWS, so it lowers as a `tryCall` rather than a `call`,
-	// down `lowerTryCall`'s compiler-owned arm — and that arm never asked this question.
-	//
-	// ⚠⚠ **THAT GAP WAS A MEASURED ACCESS VIOLATION, not a tidiness point.** Every witness-carrying callee
-	// before `__map_get` was non-throwing (`__set_insert`/`contains`/`remove`/`from`, `__cs_contains`,
-	// `__str_trim`), so "append the witnesses" and "lower a throwing call" had never had to meet. Lowered
-	// without them, `__map_get(map, key)` left the two witness PARAMETERS reading whatever the ABI registers
-	// happened to hold, and the fused `witnessCall` inside the probe's `hash()` jumped through it: measured as
-	// `create` + `upsert` + `contains` all correct and the first `try m.get(k)` faulting with 0xC0000005.
-	// ⇒ Both lowering paths now build their argument list HERE, so a third can only get it right.
+	// ⭐⭐ **THE HASH-TABLE FAMILIES' ARGUMENT LIST — `args` PLUS THE KEY'S TWO WITNESS-TABLE ADDRESSES —
+	// split out from the op that carries it because there are TWO ops that carry it.** `__map_get` is the
+	// first witness-dispatching runtime callee that also THROWS, so it lowers as a `tryCall` rather than a
+	// `call`, down `lowerTryCall`'s compiler-owned arm. It supplies the two facts that make this list a hash
+	// table's — WHOSE type names the tables (`setWitnessKeyTypeName`) and WHICH constraints that type carries
+	// (`hashTableKeyWitnessInterfaces`) — so a `call` and a `tryCall` cannot come to answer either one
+	// differently. The building itself is `withWitnessTableArgs`, whose header carries the measured reason a
+	// throwing path must come through a door like this one at all.
 	function withKeyWitnessArgs(result ValueId, callee ByteArray, args ValueIdArray, dstBlock IrBlock) returns ValueIdArray
-		let keyType = self.setWitnessKeyTypeName(result, callee: callee, args: args)
+		return self.withWitnessTableArgs(args, conformerType: self.setWitnessKeyTypeName(result, callee: callee, args: args), interfaceNames: hashTableKeyWitnessInterfaces(), dstBlock: dstBlock)
+	end 'withKeyWitnessArgs'
+
+	// ⭐ **`args` PLUS ONE `__witness_<conformerType>.<interface>` ADDRESS PER CONSTRAINT, IN ORDER — the whole
+	// of dictionary-passing into a compiler-owned runtime entry, written once.** Two families thread witnesses
+	// today and they differ only in WHOSE type argument they name and WHICH constraints that argument carries:
+	// a hash table's KEY is `Hashable and Equatable` (`hashTableKeyWitnessInterfaces`), an `Array`'s ELEMENT is
+	// `Equatable` alone (`arrayElementWitnessInterfaces`). Each list lives beside the runtime whose entry
+	// points declare those trailing parameters, so a body's signature and the arguments it is handed are one
+	// fact — and a third family adds a list rather than a second copy of this loop.
+	//
+	// ⚠⚠ **EVERY LOWERING PATH THAT EMITS A WITNESS-CARRYING CALLEE MUST COME THROUGH HERE, AND THE COST OF
+	// ONE THAT DID NOT WAS A MEASURED ACCESS VIOLATION — not a tidiness point.** Every witness-carrying callee
+	// before `__map_get` was non-throwing (`__set_insert`/`contains`/`remove`/`from`, `__cs_contains`,
+	// `__str_trim`), so "append the witnesses" and "lower a throwing call" had never had to meet, and
+	// `lowerTryCall`'s compiler-owned arm never asked the question. Lowered without them, `__map_get(map, key)`
+	// left the two witness PARAMETERS reading whatever the ABI registers happened to hold, and the fused
+	// `witnessCall` inside the probe's `hash()` jumped through it: measured as `create` + `upsert` + `contains`
+	// all correct and the first `try m.get(k)` faulting with 0xC0000005. ⇒ A new family, or a new op shape for
+	// an existing one, adds an arm that reaches THIS function — the `Array` family's is
+	// `appendArrayElementWitnessArgs`, which calls it directly rather than through the hash-table door.
+	function withWitnessTableArgs(args ValueIdArray, conformerType ByteArray, interfaceNames ByteArrayArray, dstBlock IrBlock) returns ValueIdArray
 		var fullArgs = ValueIdArray.create()
 		fullArgs.append(args)
-		fullArgs.push(self.materializeKeyWitness(keyType, interfaceName: HashableInterfaceName, dstBlock: dstBlock))
-		fullArgs.push(self.materializeKeyWitness(keyType, interfaceName: EquatableInterfaceName, dstBlock: dstBlock))
+		for i in 0 upto interfaceNames.count() 'eachConstraint'
+			let interfaceName = try interfaceNames.get(i) otherwise panic("withWitnessTableArgs: interfaceNames.get OOB at {i} below count {interfaceNames.count()}")
+			fullArgs.push(self.materializeWitnessTableAddr(conformerType, interfaceName: interfaceName, dstBlock: dstBlock))
+		end 'eachConstraint'
 		return fullArgs
-	end 'withKeyWitnessArgs'
+	end 'withWitnessTableArgs'
+
+	// The `Array` twin of `appendSetWitnessArgs` (conditional-extensions). The conformer whose table is
+	// threaded is the receiver's ELEMENT — `args[0]` is the array record for all four `contains` entries, and
+	// its instance is concrete here — reduced through the SAME canonical reducer the hash-table path uses
+	// (`containerElementConformerName` -> `conformerNameOfType`), so an `Array with Integer` and a
+	// `Set with Integer` name their `int` witness table identically.
+	function appendArrayElementWitnessArgs(result ValueId, callee ByteArray, args ValueIdArray, dstBlock IrBlock)
+		let receiver = try args.get(0) otherwise panic("appendArrayElementWitnessArgs: array runtime call '{String.from(callee)}' has no receiver argument — its first parameter is the array record")
+		let gid = try self.valueNameIds.get(receiver) otherwise panic("appendArrayElementWitnessArgs: array receiver v{receiver} has no name-id (its GenericInstanceId) — an `Array` value is always a concrete generic instance")
+		let elementType = self.signatures.containerElementConformerName(gid).toByteArray()
+		self.stdModule.appendOp(dstBlock, op: StdOp.call(result, callee: callee, args: self.withWitnessTableArgs(args, conformerType: elementType, interfaceNames: arrayElementWitnessInterfaces(), dstBlock: dstBlock)))
+	end 'appendArrayElementWitnessArgs'
 
 	// ⭐ **WHOSE KEY TYPE NAMES THE WITNESS TABLES?** — the one question `appendSetWitnessArgs` asks, with two
 	// answers. A `Set` runtime call reads it off the instance a value carries; a `CharacterSet` call
@@ -1824,16 +1852,19 @@ type MaxonToStdLowering
 		return try self.valueNameIds.get(setReceiver) otherwise panic("setWitnessKeyGid: hash-table receiver v{setReceiver} has no name-id (its GenericInstanceId) — a `Set` or `Map` value is always a concrete generic instance")
 	end 'setWitnessKeyGid'
 
-	// The `rdataAddr` of the `__witness_<keyType>.<interface>` table (P1.7b slice A) — the address a set runtime
-	// call passes for the key's `Hashable` or `Equatable` witness. `ensureWitnessTable` registers the blob and
-	// its `funcAbs64` slot reloc (to the synthesized `int.hash`/`int.equals`) on first reference, idempotent by
-	// label, so many set operations on one key type build ONE table per interface.
-	function materializeKeyWitness(keyType ByteArray, interfaceName ByteArray, dstBlock IrBlock) returns ValueId
-		let label = self.ensureWitnessTable(keyType, interfaceName: interfaceName)
+	// The `rdataAddr` of the `__witness_<conformerType>.<interface>` table (P1.7b slice A) — the address a
+	// compiler-owned runtime call passes for one of its conformer's protocol witnesses. `ensureWitnessTable`
+	// registers the blob and its `funcAbs64` slot reloc (to the synthesized `int.hash`/`int.equals`) on first
+	// reference, idempotent by label, so many operations on one conformer build ONE table per interface.
+	//
+	// ⚠ It was `materializeKeyWitness` while a hash-table KEY was the only conformer threaded this way; an
+	// `Array`'s ELEMENT is the second (`appendArrayElementWitnessArgs`), and nothing here was ever about a key.
+	function materializeWitnessTableAddr(conformerType ByteArray, interfaceName ByteArray, dstBlock IrBlock) returns ValueId
+		let label = self.ensureWitnessTable(conformerType, interfaceName: interfaceName)
 		let addrId = self.mintStdValueId()
 		self.stdModule.appendOp(dstBlock, op: StdOp.rdataAddr(addrId, label: label.toByteArray()))
 		return addrId
-	end 'materializeKeyWitness'
+	end 'materializeWitnessTableAddr'
 
 	// Append the enclosing instance's layout DESCRIPTOR to an OPAQUE-`T` array-copy call's arguments (P1.7 slice
 	// 3b-vi-b-β) — the LAST argument the `__arr_{slice,clone,append}_opaque` wrappers read `copyFunc@32` from,

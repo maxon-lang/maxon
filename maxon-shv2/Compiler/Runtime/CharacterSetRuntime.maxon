@@ -48,12 +48,6 @@ export let CharSetDecrefName = b"__cs_decref"
 export let CharSetContainsName = b"__cs_contains"
 export let StrTrimName = b"__str_trim"
 
-// The two verdicts `__cs_contains` returns, named for `StringRuntime`'s `StrPredicateTrue` reason: an
-// `i1`-declared graph materializes its bool as two `const`-returning blocks off a fused `cmp`+`jcc`, and a
-// bare 1/0 at a return site is exactly the magic value the no-magic-values rule is for.
-let CharSetContainsTrue = 1
-let CharSetContainsFalse = 0
-
 // The mask value that means "this set has NO category members" — `CharacterSet.from(…)`'s mask
 // (`stdlib/CharacterSet.maxon:120`). It is what lets a purely explicit set skip the codepoint decode and
 // the table read altogether, which is the reference's own short-circuit (`:128`). Exported because the
@@ -361,8 +355,8 @@ function buildCharSetContains(module StdModule)
 	let inCategory = emitCmp(module, block: classify, a: bit, b: emitConst(module, block: classify, value: CharSetCategoryBit, ids: ids), pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(classify, op: StdOp.condBranch(inCategory, thenBlockId: present.id, elseBlockId: absent.id))
 
-	module.setTerminator(present, op: StdOp.ret(emitConst(module, block: present, value: CharSetContainsTrue, ids: ids)))
-	module.setTerminator(absent, op: StdOp.ret(emitConst(module, block: absent, value: CharSetContainsFalse, ids: ids)))
+	emitConstReturn(module, block: present, value: PredicateTrue, ids: ids)
+	emitConstReturn(module, block: absent, value: PredicateFalse, ids: ids)
 
 	module.functions.push(func)
 end 'buildCharSetContains'

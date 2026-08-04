@@ -327,6 +327,94 @@ export let ArrAppendOpaqueName = b"__arr_append_opaque"
 // here — the transform's result is a fresh owned value and `dest` is its sole owner.
 export let ArrMapName = b"__arr_map"
 
+// ⭐⭐ **`contains` — THE `Array`'s CONDITIONAL EXTENSION, AND IT IS AN OVERLOAD SET OF TWO
+// (conditional-extensions).** `stdlib/Array.maxon:534` declares BOTH under one name, inside
+// `export extension Array where Element is Equatable`:
+//
+//   * `contains(element Element)`      — MEMBERSHIP: is any element equal to this one?
+//   * `contains(sequence ElementArray)` — CONTIGUOUS SUBSEQUENCE: does this array occur inside self?
+//
+// `Parser.dispatchArrayMethod` picks between them by the ARGUMENT's type (the receiver's own instance is the
+// sequence overload, the element type is the membership one), which is why the two are separate entry points
+// here rather than one function with a mode flag: the choice is made at parse time and there is nothing left
+// for the runtime to branch on.
+//
+// ⚠ **BOTH BORROW EVERYTHING.** Neither the receiver, the needle nor any element changes owner — a managed
+// element is compared through its `Equatable` witness (`__str_eq`'s content compare for a `String`) and never
+// cloned, retained or dropped. That is what keeps `contains` off `arrayMethodMutatesReceiver` and out of the
+// managed-copy install below.
+//
+// ⚠ **THE EMPTY NEEDLE IS TRUE AND IT IS NOT A SPECIAL CASE HERE** — `stdlib/Array.maxon:544` returns `true`
+// for `elemLen == 0` with an explicit branch, and the scan bound below (`i + needleLen <= hayLen`) already
+// says so: at `i = 0` an empty needle enters the inner loop, which is immediately exhausted and reports a
+// match. Same for a needle LONGER than the haystack, which v1 spells as an empty `0 to (selfLen - elemLen)`
+// range and this spells as a first bound that already fails.
+export let ArrContainsName = b"__arr_contains"
+export let ArrContainsSeqName = b"__arr_contains_seq"
+
+// ⭐ **THE FLOAT-ELEMENT TWINS.** An array's float element is stored as its 64 BITS
+// (`Parser.containerElementWord`), so a runtime that reads two slots holds two GPR words where
+// `float.equals` declares f64 formals — the reinterpretation and the ABI mask that go with it are
+// `emitEquatableWitnessEquals`'s `operandsAreFloat`, and the ELEMENT decides it, so the choice is static and
+// belongs in the entry-point NAME. `Parser.dispatchArrayMethod` picks the pair off
+// `containerElementIsFloatWord`, the same predicate that decides how the element was written INTO the slot.
+//
+// ⚠ **A SEPARATE SYMBOL RATHER THAN A RUNTIME BRANCH, because an ABI mask is metadata on the op and cannot
+// vary per execution.** Both flavours are the SAME graph (`buildArrContains`/`buildArrContainsSeq` take the
+// family), so the two can never come to disagree about what `contains` MEANS — only about which register
+// file the comparison reads.
+export let ArrContainsFloatName = b"__arr_contains_float"
+export let ArrContainsSeqFloatName = b"__arr_contains_seq_float"
+
+// ⭐ **ONE `contains` FLAVOUR, DESCRIBED ONCE: its two entry-point names and whether its element is a float
+// word.** The `HashTableFamily` shape, and it exists for that record's reason — the name↔ABI pairing is
+// exactly the fact that must not drift, so it is stated in the two places this record is BUILT
+// (`installArrayContains`) and nowhere else.
+type ArrayContainsFamily
+	export var elementName as ByteArray
+	export var sequenceName as ByteArray
+	// Are this flavour's elements an f64's 64 bits? Read by `emitEquatableWitnessEquals`, which owns the
+	// whole of what it means.
+	export var elementIsFloat as bool
+
+	export static function create(elementName ByteArray, sequenceName ByteArray, elementIsFloat bool) returns ArrayContainsFamily
+		return Self{elementName: elementName, sequenceName: sequenceName, elementIsFloat: elementIsFloat}
+	end 'create'
+end 'ArrayContainsFamily'
+
+// ⭐ **WHICH OF THE FOUR `contains` ENTRIES A CALL SITE NAMES — the OVERLOAD and the element ABI, resolved
+// together because they are the two independent facts the four names encode.** `Parser.parseArrayContains`
+// holds both: `subsequence` is what the ARGUMENT's type answered, `elementIsFloat` is
+// `containerElementIsFloatWord`. Selecting here rather than at the call site is what keeps the four spellings
+// off the parser — the names are this file's, and a fifth flavour would be one arm rather than a fan-out.
+export function arrayContainsCallee(subsequence bool, elementIsFloat bool) returns ByteArray
+	if subsequence 'sequenceOverload'
+		return ArrContainsSeqFloatName if elementIsFloat else ArrContainsSeqName
+	end 'sequenceOverload'
+
+	return ArrContainsFloatName if elementIsFloat else ArrContainsName
+end 'arrayContainsCallee'
+
+// Is `callee` an array runtime function that COMPARES ELEMENTS, and therefore takes the element's
+// `Equatable` witness table as its hidden trailing argument? All four `contains` entries and nothing else —
+// every other `__arr_*` entry moves bytes it never interprets. `LowerMaxonToStd.lowerRuntimeCall` reads this
+// to decide whether to thread the witness, the array twin of `SetRuntime.isSetWitnessCallee`.
+export function isArrayElementWitnessCallee(callee ByteArray) returns bool
+	return callee.equals(ArrContainsName) or callee.equals(ArrContainsSeqName) or callee.equals(ArrContainsFloatName) or callee.equals(ArrContainsSeqFloatName)
+end 'isArrayElementWitnessCallee'
+
+// ⭐ **THE ELEMENT'S ONE CONSTRAINT, NAMED ONCE — `where Element is Equatable`**, which is
+// `stdlib/Array.maxon:534`'s own clause. `LowerMaxonToStd.appendArrayElementWitnessArgs` threads the tables
+// by walking this list (through the shared `withWitnessTableArgs`), so the trailing argument a `contains`
+// body reads and the constraint `Parser.requireArrayContainsAvailable` enforces are one fact. The hash-table
+// twin is `hashTableKeyWitnessInterfaces`, walked down its own door (`withKeyWitnessArgs`), which names two
+// because a key is hashed as well as compared.
+export function arrayElementWitnessInterfaces() returns ByteArrayArray
+	var interfaces = ByteArrayArray.create()
+	interfaces.push(EquatableInterfaceName)
+	return interfaces
+end 'arrayElementWitnessInterfaces'
+
 // ⭐⭐ **THE `__ManagedMemory` MEMBERS R4.2 DELIVERS.** `__ManagedMemory` IS an `Array with Byte` at this
 // rung (`SignatureIndex.ManagedMemoryTypeName`), so its members are array-runtime entries — which is also why
 // they are `__arr_`-prefixed and ride the existing `usesArray` install with no bit of their own.
@@ -772,6 +860,7 @@ export function installArrayRuntime(module StdModule, usage RuntimeUsage)
 	buildArrClone(module)
 	buildArrAppend(module)
 	buildArrMap(module)
+	installArrayContains(module)
 	buildArrDecref(module)
 	// The `__ManagedMemory` members with a runtime of their own (three from R4.2, three from R4.4, one from
 	// R4.6) — part of the all-or-nothing `usesArray` install for the reason the header gives: `__`-prefixed
@@ -3023,6 +3112,159 @@ function buildArrMap(module StdModule)
 
 	module.functions.push(func)
 end 'buildArrMap'
+
+// `__arr_contains(arr, needle, eqWitness) -> bool` — the MEMBERSHIP overload: walk `[0, length)` in order and
+// answer at the first element the `Equatable` witness calls equal to `needle`. Everything is BORROWED (see
+// `ArrContainsName`).
+//
+// ⭐ **THE ELEMENT READ IS `__arr_get_unchecked`, for `__arr_map`'s stated reason and it is the same reason:**
+// an array's elements are not uniformly machine words — a `b"…"` blob strides 1 byte and a ranged-int element
+// is SUB-BYTE PACKED — so a raw word slot load would read a fragment of every packed element. Reusing the one
+// element-size-aware read is what keeps `for x in arr` and `arr.contains(x)` reading the SAME bytes at every
+// stride.
+//
+// ⚠ `length` is loop-invariant and loaded ONCE, which is sound here for a stronger reason than `__arr_map`'s:
+// this function writes nothing at all, so nothing in the loop can grow or move the array.
+function buildArrContains(module StdModule, family ArrayContainsFamily)
+	var func = IrFunction.createFromStd(family.elementName, returnType: StdReturnType.value(StdType.i64), paramCount: 3, paramTypes: threeI64Params(), returnLine: 0)
+	var ids = ValueMinter.create(3)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var header = module.addBlock(func, label: b"loop")
+	var body = module.addBlock(func, label: b"body")
+	var step = module.addBlock(func, label: b"step")
+	var found = module.addBlock(func, label: b"found")
+	var missing = module.addBlock(func, label: b"missing")
+
+	emitParams(module, block: entry, count: 3)
+	let arr = 0 as ValueId
+	let needle = 1 as ValueId
+	let eqWitness = 2 as ValueId
+
+	let count = emitLoadField(module, block: entry, record: arr, offset: ArrLengthOffset, ids: ids)
+	let scanStart = emitConst(module, block: entry, value: 0, ids: ids)
+	module.setTerminator(entry, op: StdOp.branch(header.id))
+	entry.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(scanStart)))
+
+	let i = ids.mint()
+	header.blockArgs.push(IrBlockArg.create(i, argType: StdType.i64))
+	let atEnd = emitCmp(module, block: header, a: i, b: count, pred: StdCmpPred.ge, ids: ids)
+	module.setTerminator(header, op: StdOp.condBranch(atEnd, thenBlockId: missing.id, elseBlockId: body.id))
+
+	let elem = ids.mint()
+	module.appendOp(body, op: StdOp.call(elem, callee: ArrGetUncheckedName, args: twoArgs(arr, second: i)))
+	let isEqual = emitEquatableWitnessEquals(module, block: body, eqWitness: eqWitness, a: elem, b: needle, operandsAreFloat: family.elementIsFloat, ids: ids)
+	module.setTerminator(body, op: StdOp.condBranch(isEqual, thenBlockId: found.id, elseBlockId: step.id))
+
+	let one = emitConst(module, block: step, value: 1, ids: ids)
+	let iNext = emitBin(module, block: step, a: i, b: one, opcode: StdBinOpcode.add, ids: ids)
+	module.setTerminator(step, op: StdOp.branch(header.id))
+	step.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(iNext)))
+
+	emitConstReturn(module, block: found, value: PredicateTrue, ids: ids)
+	emitConstReturn(module, block: missing, value: PredicateFalse, ids: ids)
+
+	module.functions.push(func)
+end 'buildArrContains'
+
+// `__arr_contains_seq(hay, needle, eqWitness) -> bool` — the CONTIGUOUS-SUBSEQUENCE overload: is `needle`'s
+// whole element sequence present in `hay`, in order and adjacent? The naive O(hayLen · needleLen) scan
+// `stdlib/Array.maxon:545` writes, and deliberately so — v1's is the same shape, and a Boyer–Moore skip table
+// would need per-element hashing the `Equatable` constraint does not supply.
+//
+// ⭐⭐ **THE OUTER BOUND IS `i + needleLen <= hayLen`, AND THAT SPELLING IS WHAT DELETES BOTH EDGE CASES.**
+// v1 writes `for i in 0 to (selfLen - elemLen)` and needs an explicit `elemLen == 0 return true` ahead of it;
+// stated as a bound on the LAST BYTE THE WINDOW WOULD READ, the same two answers fall out of the loop:
+//
+//   * an EMPTY needle enters the window at `i = 0` (`0 + 0 <= hayLen` for any length), the inner loop is
+//     immediately exhausted, and exhausted IS a match — `true`, which is what the reference returns;
+//   * a needle LONGER than the haystack fails the bound at `i = 0` and answers `false`, which is v1's empty
+//     `0 to <negative>` range said without a subtraction that can go negative.
+//
+// ⚠ **THE INNER LOOP'S EXHAUSTION IS THE MATCH, so `found` is reached from the inner header and not from the
+// outer one.** Every element of the window compared equal; there is no separate `matched` flag to keep (v1
+// carries one because its `for` loops cannot answer from inside a nested break).
+function buildArrContainsSeq(module StdModule, family ArrayContainsFamily)
+	var func = IrFunction.createFromStd(family.sequenceName, returnType: StdReturnType.value(StdType.i64), paramCount: 3, paramTypes: threeI64Params(), returnLine: 0)
+	var ids = ValueMinter.create(3)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var outer = module.addBlock(func, label: b"outer")
+	var innerInit = module.addBlock(func, label: b"innerinit")
+	var inner = module.addBlock(func, label: b"inner")
+	var compare = module.addBlock(func, label: b"compare")
+	var innerStep = module.addBlock(func, label: b"innerstep")
+	var outerStep = module.addBlock(func, label: b"outerstep")
+	var found = module.addBlock(func, label: b"found")
+	var missing = module.addBlock(func, label: b"missing")
+
+	emitParams(module, block: entry, count: 3)
+	let hay = 0 as ValueId
+	let needle = 1 as ValueId
+	let eqWitness = 2 as ValueId
+
+	let hayLen = emitLoadField(module, block: entry, record: hay, offset: ArrLengthOffset, ids: ids)
+	let needleLen = emitLoadField(module, block: entry, record: needle, offset: ArrLengthOffset, ids: ids)
+	let one = emitConst(module, block: entry, value: 1, ids: ids)
+	let windowStart = emitConst(module, block: entry, value: 0, ids: ids)
+	module.setTerminator(entry, op: StdOp.branch(outer.id))
+	entry.branchEdges.push(BranchEdge.create(outer.id, argIds: argsOf(windowStart)))
+
+	// `i` — the window's start in `hay`. The window READS `[i, i + needleLen)`, so it fits exactly while
+	// `i + needleLen <= hayLen`; see the header for the two edge cases this single bound answers.
+	let i = ids.mint()
+	outer.blockArgs.push(IrBlockArg.create(i, argType: StdType.i64))
+	let windowEnd = emitBin(module, block: outer, a: i, b: needleLen, opcode: StdBinOpcode.add, ids: ids)
+	let windowOverruns = emitCmp(module, block: outer, a: windowEnd, b: hayLen, pred: StdCmpPred.gt, ids: ids)
+	module.setTerminator(outer, op: StdOp.condBranch(windowOverruns, thenBlockId: missing.id, elseBlockId: innerInit.id))
+
+	// A block of its own because `outer` ends in a CONDITIONAL branch, which carries no edge arguments — the
+	// inner loop's `j` has to be handed over on a plain `branch`. (`buildArrMap`'s `entry` -> `loop` shape.)
+	let matchStart = emitConst(module, block: innerInit, value: 0, ids: ids)
+	module.setTerminator(innerInit, op: StdOp.branch(inner.id))
+	innerInit.branchEdges.push(BranchEdge.create(inner.id, argIds: argsOf(matchStart)))
+
+	// `j` — the offset INSIDE the window. `outer` dominates this block through `innerInit`, so `i` is live
+	// here and in `compare`/`outerStep` below without being threaded as a second block argument.
+	let j = ids.mint()
+	inner.blockArgs.push(IrBlockArg.create(j, argType: StdType.i64))
+	let windowExhausted = emitCmp(module, block: inner, a: j, b: needleLen, pred: StdCmpPred.ge, ids: ids)
+	module.setTerminator(inner, op: StdOp.condBranch(windowExhausted, thenBlockId: found.id, elseBlockId: compare.id))
+
+	let hayIndex = emitBin(module, block: compare, a: i, b: j, opcode: StdBinOpcode.add, ids: ids)
+	let hayElem = ids.mint()
+	module.appendOp(compare, op: StdOp.call(hayElem, callee: ArrGetUncheckedName, args: twoArgs(hay, second: hayIndex)))
+	let needleElem = ids.mint()
+	module.appendOp(compare, op: StdOp.call(needleElem, callee: ArrGetUncheckedName, args: twoArgs(needle, second: j)))
+	let isEqual = emitEquatableWitnessEquals(module, block: compare, eqWitness: eqWitness, a: hayElem, b: needleElem, operandsAreFloat: family.elementIsFloat, ids: ids)
+	module.setTerminator(compare, op: StdOp.condBranch(isEqual, thenBlockId: innerStep.id, elseBlockId: outerStep.id))
+
+	let jNext = emitBin(module, block: innerStep, a: j, b: one, opcode: StdBinOpcode.add, ids: ids)
+	module.setTerminator(innerStep, op: StdOp.branch(inner.id))
+	innerStep.branchEdges.push(BranchEdge.create(inner.id, argIds: argsOf(jNext)))
+
+	let iNext = emitBin(module, block: outerStep, a: i, b: one, opcode: StdBinOpcode.add, ids: ids)
+	module.setTerminator(outerStep, op: StdOp.branch(outer.id))
+	outerStep.branchEdges.push(BranchEdge.create(outer.id, argIds: argsOf(iNext)))
+
+	emitConstReturn(module, block: found, value: PredicateTrue, ids: ids)
+	emitConstReturn(module, block: missing, value: PredicateFalse, ids: ids)
+
+	module.functions.push(func)
+end 'buildArrContainsSeq'
+
+// Install both `contains` overloads, in both element ABIs. The four entry points are TWO graphs — the word
+// flavour and the float flavour are `buildArrContains`/`buildArrContainsSeq` told which register file their
+// comparison reads — so this is the one place a name and an ABI are paired (`ArrayContainsFamily`).
+function installArrayContains(module StdModule)
+	buildArrayContainsFamily(module, family: ArrayContainsFamily.create(ArrContainsName, sequenceName: ArrContainsSeqName, elementIsFloat: false))
+	buildArrayContainsFamily(module, family: ArrayContainsFamily.create(ArrContainsFloatName, sequenceName: ArrContainsSeqFloatName, elementIsFloat: true))
+end 'installArrayContains'
+
+function buildArrayContainsFamily(module StdModule, family ArrayContainsFamily)
+	buildArrContains(module, family: family)
+	buildArrContainsSeq(module, family: family)
+end 'buildArrayContainsFamily'
 
 // `__arr_decref(arr)` — an array's drop: the shared refcount RMW, then on the last owner DESTROY each managed
 // element, free the external element buffer (if any) and the record.

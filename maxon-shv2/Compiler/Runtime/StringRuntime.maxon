@@ -305,12 +305,6 @@ function stringBufferSlots() returns BufferRecordSlots
 	return BufferRecordSlots.create(StringBufferOffset, capacityOffset: StringCapacityOffset, parentOffset: StringParentPtrOffset)
 end 'stringBufferSlots'
 
-// The bool every String PREDICATE returns, as the word a Std return carries: 1 for yes, 0 for no. Shared by
-// `__str_eq`, `__str_range_eq` and the three P1.8 Slice C predicates, so a caller cannot read one function's
-// "true" as another's "false".
-let StrPredicateTrue = 1 as ParsedInt
-let StrPredicateFalse = 0 as ParsedInt
-
 // True iff every byte is ASCII (< 128) — the `isAsciiFlag@40` scan, run once per distinct literal at
 // lower time (the cold path), never per value.
 export function bytesAreAscii(bytes ByteArray) returns bool
@@ -1430,8 +1424,8 @@ export function buildStrEq(module StdModule, name ByteArray)
 	let bBuf = emitLoadField(module, block: lenMatch, record: b, offset: StringBufferOffset, ids: ids)
 	emitByteRangeCompareLoop(module, func: func, cur: lenMatch, aBuf: aBuf, bBuf: bBuf, len: aLen, allMatch: allMatch, notEqual: notEqual, ids: ids)
 
-	emitPredicateReturn(module, block: allMatch, value: StrPredicateTrue, ids: ids)
-	emitPredicateReturn(module, block: notEqual, value: StrPredicateFalse, ids: ids)
+	emitConstReturn(module, block: allMatch, value: PredicateTrue, ids: ids)
+	emitConstReturn(module, block: notEqual, value: PredicateFalse, ids: ids)
 
 	module.functions.push(func)
 end 'buildStrEq'
@@ -1476,15 +1470,6 @@ function emitByteRangeCompareLoop(module StdModule, func IrFunction, cur IrBlock
 	module.setTerminator(body, op: StdOp.condBranch(byteEq, thenBlockId: header.id, elseBlockId: notEqual.id))
 	body.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(iNext)))
 end 'emitByteRangeCompareLoop'
-
-// Terminate `block` by returning one of the two predicate words. Every String predicate ends in a pair of
-// these, so "which constant means true" is written down once (`StrPredicateTrue`/`StrPredicateFalse`) and
-// materialized once. A predicate returns a CONSTANT from its own block rather than the `cmp`'s flag value
-// directly — `buildArrIsEmpty`'s shape, and the one the backend has always been exercised on.
-function emitPredicateReturn(module StdModule, block IrBlock, value ParsedInt, ids ValueMinter)
-	let result = emitConst(module, block: block, value: value, ids: ids)
-	module.setTerminator(block, op: StdOp.ret(result))
-end 'emitPredicateReturn'
 
 // ⭐ **ONE BYTE AT `addr` — THE `u8` LOAD SPELLING FOR EVERY RUNTIME BUILDER**, so a widened read is a
 // one-line change rather than a sweep of every byte-walking loop. Exported because `GraphemeRuntime`'s
@@ -2048,8 +2033,8 @@ function buildStrRangeEq(module StdModule)
 	let len = 2 as ValueId
 
 	emitByteRangeCompareLoop(module, func: func, cur: entry, aBuf: aAddr, bBuf: bAddr, len: len, allMatch: allMatch, notEqual: notEqual, ids: ids)
-	emitPredicateReturn(module, block: allMatch, value: StrPredicateTrue, ids: ids)
-	emitPredicateReturn(module, block: notEqual, value: StrPredicateFalse, ids: ids)
+	emitConstReturn(module, block: allMatch, value: PredicateTrue, ids: ids)
+	emitConstReturn(module, block: notEqual, value: PredicateFalse, ids: ids)
 
 	module.functions.push(func)
 end 'buildStrRangeEq'
@@ -2254,7 +2239,7 @@ function buildStrAffixPredicate(module StdModule, name ByteArray, atTail bool)
 	module.appendOp(compare, op: StdOp.call(matches, callee: StrRangeEqName, args: threeArgs(windowAddr, second: affixBuf, third: affixLen)))
 	module.setTerminator(compare, op: StdOp.ret(matches))
 
-	emitPredicateReturn(module, block: tooLong, value: StrPredicateFalse, ids: ids)
+	emitConstReturn(module, block: tooLong, value: PredicateFalse, ids: ids)
 
 	module.functions.push(func)
 end 'buildStrAffixPredicate'
@@ -2290,8 +2275,8 @@ function buildStrContains(module StdModule)
 	let wasFound = emitCmp(module, block: entry, a: idx, b: zero, pred: StdCmpPred.ge, ids: ids)
 	module.setTerminator(entry, op: StdOp.condBranch(wasFound, thenBlockId: yes.id, elseBlockId: no.id))
 
-	emitPredicateReturn(module, block: yes, value: StrPredicateTrue, ids: ids)
-	emitPredicateReturn(module, block: no, value: StrPredicateFalse, ids: ids)
+	emitConstReturn(module, block: yes, value: PredicateTrue, ids: ids)
+	emitConstReturn(module, block: no, value: PredicateFalse, ids: ids)
 
 	module.functions.push(func)
 end 'buildStrContains'

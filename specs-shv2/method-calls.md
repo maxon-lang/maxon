@@ -82,11 +82,20 @@ three compilers — and by specs already ported, not decided here:
   receiver as an argument — which is what the same call shape already reports in
   `implicit-self-methods.md` (`'Maker.bump' expects 1 argument(s) but 0 were provided`, for a `bump()`
   that declares none) and in `where-clauses.md`.
-- **The unknown-method case is `E3004`, not `E4006`.** E4006 is `IrInvalidFieldAccess`, an **IR-stage**
-  code the registry claims for `csharp` and `selfhosted` only — shv2 cannot emit it. shv2 refuses the
-  same program at the same position one stage EARLIER, under E3004 `callUnknownFunction`, which is the
-  code the registry defines for "a call names a function that does not exist -- a typo" and which
-  `functions.md` already states as the rule.
+- **The unknown-method case is `E3004`, not `E4006`.** shv2 resolves a method call at PARSE time, so an
+  unknown name is refused before lowering ever runs — one stage EARLIER than the bootstrap, at the same
+  position, under E3004 `callUnknownFunction`, the code the registry defines for "a call names a
+  function that does not exist -- a typo" and which `functions.md` already states as the rule. The
+  difference is WHEN shv2 refuses, and that is what ratifies it.
+
+  ⚠ **This bullet used to say "the registry claims E4006 for `csharp` and `selfhosted` only — shv2
+  cannot emit it", and that was FALSE when written.** `docs/error-codes.txt` claims E4006 for all three
+  (shv2 spells it `invalidFieldAccess`), and shv2 emits it from `Queries.maxon` — for `hiddenTypeName`
+  before this note existed, and since 2026-08-04 for `conditionalExtensionWithheld` too
+  (`conditional-extensions.md` pins that one). Corrected 2026-08-04. **The lesson is the standing one:
+  derive what IS supplied and never assert what is ABSENT — the absence half rots first, the moment
+  anyone builds the thing.** A retraction needs the reason it is actually true for, not the nearest
+  reason that sounds structural.
 
 ## Tests
 
