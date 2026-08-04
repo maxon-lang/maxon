@@ -33,7 +33,9 @@ public enum SourceSelection {
 /// ordering dependencies — a duplicate type name resolves first-file-wins, and
 /// auto-conformance synthesis only sees the files pre-scanned before it — so a
 /// divergence in this order can still produce a diagnostic in one client and not
-/// the other, until those are order-independent too.
+/// the other, until those are order-independent too. That is why the order itself
+/// is DEFINED rather than inherited from the filesystem — see
+/// <see cref="MaxonFilesInWalkOrder"/>.
 ///
 /// <see cref="SourceOrderEnvVar"/> is the seam that proves the claim rather than
 /// asserting it: a real project built forwards and backwards must produce
@@ -46,6 +48,12 @@ public static class SourceCollector {
   /// seven places used to carry the literal, and a rename would have moved only some of them.
   /// </summary>
   public const string BuildManifestFileName = "build.maxon";
+
+  /// <summary>
+  /// Match pattern for a Maxon source file. Beside the manifest's name because the two together are
+  /// what the walk asks of a directory, and only <see cref="MaxonFilesInWalkOrder"/> reads either.
+  /// </summary>
+  private const string MaxonSourceGlob = "*.maxon";
 
   /// <summary>
   /// The function a <see cref="BuildManifestFileName"/> must EXPORT for its directory to be a
@@ -189,6 +197,55 @@ public static class SourceCollector {
     throw new ArgumentException(
       $"{SourceOrderEnvVar}='{requested}' is not a known source order; the only supported value is '{ReverseOrder}'");
   }
+
+  /// <summary>
+  /// Every <c>*.maxon</c> file beneath <paramref name="directory"/>, in an order this walk STATES
+  /// rather than one the filesystem happens to reveal.
+  ///
+  /// <c>Directory.GetFiles(.., AllDirectories)</c> hands back OS enumeration order, and the OSes do
+  /// not agree — NTFS keeps its directory index sorted, APFS returns hash order. The pre-scan passes
+  /// named on this class are first-file-wins, so that difference decides which of two identical
+  /// declarations a duplicate diagnostic BLAMES. MEASURED on macOS: one two-directory duplicate
+  /// <c>main</c>, one compiler, blamed <c>alpha/m.maxon</c> in natural order and <c>beta/m.maxon</c>
+  /// under <see cref="SourceOrderEnvVar"/>, where Windows has always reported the latter.
+  ///
+  /// The order defined here is the SHAPE .NET's own recursive enumerator produces — a directory's
+  /// matching files, then its subdirectories, breadth-first over the pending queue — with each
+  /// listing sorted the way NTFS's index already sorts it. On NTFS that is a no-op, which is exactly
+  /// the point: every committed expectation in <c>specs/</c> was minted under that index, so this
+  /// reproduces the order they already describe rather than inventing a new one. A flat sort of the
+  /// full paths would be no less deterministic and would agree with neither — a top-level
+  /// <c>z.maxon</c> sorts after <c>a/b.maxon</c> but is enumerated before it.
+  ///
+  /// NTFS sorts by an UPPERCASE-mapped comparison, hence <see cref="StringComparer.OrdinalIgnoreCase"/>
+  /// rather than <see cref="StringComparer.Ordinal"/> (which would put <c>Point/</c> before
+  /// <c>app/</c>), with an ordinal tiebreak so the result stays a TOTAL order: on a case-sensitive
+  /// filesystem <c>A.maxon</c> and <c>a.maxon</c> can coexist, and a comparison that called them equal
+  /// would hand the choice back to the enumeration this method exists to stop trusting.
+  ///
+  /// <see cref="SourceOrderEnvVar"/> still reverses the result, and only now means something: a
+  /// comparison of two KNOWN orders rather than of one known order and one arbitrary one.
+  /// </summary>
+  private static IEnumerable<string> MaxonFilesInWalkOrder(string directory) {
+    var pending = new Queue<string>();
+    pending.Enqueue(directory);
+    while (pending.Count > 0) {
+      var dir = pending.Dequeue();
+      foreach (var file in InIndexOrder(Directory.GetFiles(dir, MaxonSourceGlob)))
+        yield return file;
+      foreach (var subdirectory in InIndexOrder(Directory.GetDirectories(dir)))
+        pending.Enqueue(subdirectory);
+    }
+  }
+
+  /// <summary>
+  /// One directory listing in the order NTFS's index would have handed it over. Both halves of the
+  /// walk order their listing the same way, so a subdirectory and a file cannot be sorted by two
+  /// different rules.
+  /// </summary>
+  private static IEnumerable<string> InIndexOrder(string[] entries) =>
+    entries.OrderBy(e => e, StringComparer.OrdinalIgnoreCase).ThenBy(e => e, StringComparer.Ordinal);
+
   /// <summary>
   /// Walk <paramref name="directory"/> and collect every .maxon file suitable
   /// as a compiler source. Skips <c>build.maxon</c> (project metadata, not
@@ -224,7 +281,7 @@ public static class SourceCollector {
     // Only test-file exclusions are announced; the other two are long-standing project rules that
     // a user is not surprised by, whereas "my tests are not in the binary" is new behaviour.
     var excludedTestFileCount = 0;
-    foreach (var file in Directory.GetFiles(directory, "*.maxon", SearchOption.AllDirectories)) {
+    foreach (var file in MaxonFilesInWalkOrder(directory)) {
       var normalized = NormalizePath(file);
       var exclusion = ExclusionFor(normalized, includesTests);
       if (exclusion != null) {
