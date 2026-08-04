@@ -280,7 +280,18 @@ export type RegAllocStats
 	// are not pressure — every one of them sat at a point Hall calls FEASIBLE — so they are counted apart
 	// from `forcedSpills`, which they are also included in (a repair IS a forced bracket). The ratio of
 	// the two is what says whether a program is paying for confinement or for order.
-	export var stuckValuesRepaired as EventCount
+	// ⭐⭐ THE TWO CURES ARE COUNTED APART, AND THAT IS THE WHOLE REASON THERE ARE TWO COUNTERS. Neither
+	// is pressure — every value they relieve sat at a point Hall calls FEASIBLE — so both are counted
+	// beside `forcedSpills` rather than inside it, and both are also included in it (a repair IS a forced
+	// bracket).
+	//
+	// ⚠ `repairedByEviction` IS EXPECTED TO READ ZERO, AND THAT IS WHAT IT IS FOR. Cure (a) runs first
+	// and handles everything the corpus produces, so a single merged counter could never tell a reader
+	// that `SplitDriver.repairByEvictingOccupant` has not executed since it was written. Split, the zero
+	// is legible: it is the standing evidence that the eviction path is UNEXERCISED by the suite, and the
+	// only thing that will tell a future rung so. Do not merge them back to tidy the report.
+	export var repairedByWidening as EventCount
+	export var repairedByEviction as EventCount
 
 	export static function create() returns RegAllocStats
 		var phaseNanos = DurationNanosArray.create()
@@ -291,7 +302,7 @@ export type RegAllocStats
 		for _ in 0 upto RegClassCount 'eachClass'
 			maxPressureFunc.push("")
 		end 'eachClass'
-		return Self{phaseNanos: phaseNanos, phaseCpuTicks: phaseCpuTicks, functionsAllocated: 0, livenessMarkStepsTotal: 0, livenessMarkStepsMax: 0, maxPressure: zeroClassRow(), maxPressureFunc: maxPressureFunc, maxLoopDepth: 0, copiesInserted: 0, hintsHonoured: 0, hintsMissed: 0, valuesColored: 0, registersUsed: 0, valuesSplit: 0, reloadsInserted: 0, rematerialized: 0, forcedSpills: 0, stuckValuesRepaired: 0}
+		return Self{phaseNanos: phaseNanos, phaseCpuTicks: phaseCpuTicks, functionsAllocated: 0, livenessMarkStepsTotal: 0, livenessMarkStepsMax: 0, maxPressure: zeroClassRow(), maxPressureFunc: maxPressureFunc, maxLoopDepth: 0, copiesInserted: 0, hintsHonoured: 0, hintsMissed: 0, valuesColored: 0, registersUsed: 0, valuesSplit: 0, reloadsInserted: 0, rematerialized: 0, forcedSpills: 0, repairedByWidening: 0, repairedByEviction: 0}
 	end 'create'
 
 	// Scalars, not a PhaseCost — see CompileTimings.addPhaseCost. These are the per-function
@@ -1113,7 +1124,8 @@ end 'colorRepairingConfinements'
 // So a function that needed a repair counts its colouring decisions twice in `valuesColored` /
 // `copiesInserted` / `hintsHonoured` / `hintsMissed`. That is a debug figure and it is the honest one to
 // leave: the decisions really were made. The counter to read when asking how much a program paid for
-// this is `stuckValuesRepaired`, which counts the repairs themselves and not the passes.
+// this is `repairedByWidening` / `repairedByEviction`, which count the repairs themselves and not the
+// passes.
 function colorOnce(module TargetModule, driver SplitDriver, pool RegMask, callerSaved RegMask, stats RegAllocStats, reuseCopies ReuseCopyPlan, stuck StuckValues, project Project) returns Allocation
 	reuseCopies.clear()
 	stuck.clear()
@@ -2260,7 +2272,7 @@ function regAllocStatsMessage(stats RegAllocStats) returns String
 		msg.append(" max {class.name}={classRowGet(stats.maxPressure, class: class)} (in '{try stats.maxPressureFunc.get(class.ordinal) otherwise panic("regAllocStatsMessage: no maxPressureFunc entry for the {class.name} file")}');")
 	end 'eachClass'
 	msg.append(" maxLoopDepth={stats.maxLoopDepth}; liveness mark-steps total={stats.livenessMarkStepsTotal} max={stats.livenessMarkStepsMax}\n")
-	msg.append("  splitter: valuesSplit={stats.valuesSplit} (forced at fixed-reg points={stats.forcedSpills}, of which colorer repairs={stats.stuckValuesRepaired}); reloadsInserted={stats.reloadsInserted}; rematerialized={stats.rematerialized}\n")
+	msg.append("  splitter: valuesSplit={stats.valuesSplit} (forced at fixed-reg points={stats.forcedSpills}, of which colorer repairs by widening={stats.repairedByWidening} and by eviction={stats.repairedByEviction}); reloadsInserted={stats.reloadsInserted}; rematerialized={stats.rematerialized}\n")
 	msg.append("  copies inserted={stats.copiesInserted}; hints honoured={stats.hintsHonoured} missed={stats.hintsMissed}\n")
 	// Iterated, not hand-listed: a hand-written line silently omits any phase added
 	// later, which is how an unmeasured cost hides in the first place.

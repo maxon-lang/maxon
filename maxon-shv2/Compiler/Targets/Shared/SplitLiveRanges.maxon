@@ -2895,6 +2895,10 @@ export type SplitDriver
 
 		work.anchor.takeForcedCutAt(cut.blockLocal, pos: cut.pos)
 		self.applyRepairSplit(module, victim: v, stats: stats)
+		// Counted HERE and not in the shared tail: WHICH cure ran is the one thing the two callers know
+		// and `applyRepairSplit` does not, and keeping the two counts apart is the whole point of having
+		// two (see `RegAllocStats.repairedByEviction`).
+		stats.repairedByWidening = stats.repairedByWidening + 1
 		return true
 	end 'repairAtExhaustion'
 
@@ -2923,6 +2927,26 @@ export type SplitDriver
 	// nothing — the reload would hold the register at the very op), or `w` is not live across the point at
 	// all because an earlier repair in the same round already moved it. The caller then offers the next
 	// occupant.
+	//
+	// ⚠⚠ **NO SPEC REACHES THIS, AND `RegAllocStats.repairedByEviction` READS ZERO. THAT IS
+	// NOT-CONSTRUCTIBLE-TODAY, NOT UNREACHABLE, AND THE DIFFERENCE IS THE WHOLE OF THIS NOTE.** Cure (a)
+	// runs first and relieves everything the corpus produces; this path is proven live only by DISABLING
+	// cure (a), which leaves the whole suite green on this cure alone. What could not be built is a
+	// program that reaches it with cure (a) still enabled.
+	//
+	// ⭐ **THE REASON IS THAT THE MECHANISM CAUSING A5g WORKS AGAINST REPRODUCING ITS RESIDUE.** The one
+	// forbid family that confines a value without any clobber in its live range is `ParamCrossForbid` —
+	// a parameter capture forbidden its SIBLINGS' incoming registers. To reach here it would have to be
+	// stuck with all eleven registers it IS allowed held and the three sibling registers left FREE. But
+	// those three are CALLER-saved, and `preferredVolatilityMask` steers every unconstrained value into
+	// the caller-saved half FIRST — so the greedy fills exactly the registers the construction needs
+	// empty. `TargetLiveness.maxon:3464-3477` records the same wall from the other side: a detector
+	// found seven programs reaching the sibling shape, every one compiler-SYNTHESIZED, because
+	// `E3012 unused variable` forbids the source-level route.
+	//
+	// ⇒ A future rung that changes the volatility preference, the parameter forbid, or the unused-
+	// parameter rule should re-try the construction. Until one does, the zero counter is the standing
+	// record that this cure is UNEXERCISED by the suite.
 	export function repairByEvictingOccupant(module TargetModule, v ValueId, w ValueId, stats RegAllocStats) returns bool
 		var work = self.scratch
 		var funcLiveness = self.liveness
@@ -2948,6 +2972,7 @@ export type SplitDriver
 
 		work.anchor.takeForcedCutAt(point.blockLocal, pos: point.pos)
 		self.applyRepairSplit(module, victim: w, stats: stats)
+		stats.repairedByEviction = stats.repairedByEviction + 1
 		return true
 	end 'repairByEvictingOccupant'
 
@@ -3001,8 +3026,6 @@ export type SplitDriver
 		if after.found 'repairRaisedPressure'
 			panic("SplitDriver.applyRepairSplit: splitting value {victim} at block {work.anchor.blockLocal} left an over-pool point (pressure {after.pressure} against witness {after.witness}, clobberOnly {after.clobberOnly}) — a split cannot raise any op's pressure, so either the store/reload placement or the incremental pressure repair is wrong")
 		end 'repairRaisedPressure'
-
-		stats.stuckValuesRepaired = stats.stuckValuesRepaired + 1
 	end 'applyRepairSplit'
 
 	// WHERE the colorer gave up on `v` — the program point cure (b) has to free a register AT. A value
