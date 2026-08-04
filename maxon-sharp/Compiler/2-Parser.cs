@@ -19183,7 +19183,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     }
 
     // No existing alias — auto-create one
-    var autoAliasName = $"__Map_{keyType.Name}_{valueType.Name}";
+    var autoAliasName = MangleConcreteInstanceName(mapSourceTypeName, [keyType.Name, valueType.Name]);
     if (!_typeRegistry.ContainsKey(autoAliasName)
         && _typeRegistry.TryGetValue(mapSourceTypeName, out var mapType)
         && mapType is IrStructType mapStruct) {
@@ -19242,6 +19242,21 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       $"Byte string literals require the '{ByteArrayAliasName}' type alias ('Array with Byte'); is the standard library loaded?",
       token.Line, token.Column);
   }
+
+  /// <summary>
+  /// The ONE spelling of a synthesized generic instance's name: `__&lt;Source&gt;_&lt;param type names&gt;`.
+  ///
+  /// The '.' sanitization is part of the rule, not a caller's option. Type names may contain '.'
+  /// (synthesized companion types like `U.unionCases`), and <see cref="ResolveMethodName"/> splits
+  /// `&lt;type&gt;.&lt;method&gt;` on the FIRST dot — so a '.' left in an instance name makes every
+  /// `&lt;alias&gt;.method` lookup resolve against a truncated type part instead of failing.
+  ///
+  /// This was spelled at five call sites and only ONE of them sanitized, so the same rule gave two
+  /// different answers depending on which door minted the instance. That is the shape of defect
+  /// this very function's caller was fixed for — one instance under two names — one level down.
+  /// </summary>
+  private static string MangleConcreteInstanceName(string sourceTypeName, IEnumerable<string> paramTypeNames) =>
+    $"__{sourceTypeName.Replace('.', '_')}_{string.Join("_", paramTypeNames.Select(n => n.Replace('.', '_')))}";
 
   /// <summary>
   /// Finds the typealias name for Array with the given element type.
@@ -23027,8 +23042,19 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
         && resolvedReturnParams.Count > returnSourceStruct.AssociatedTypeNames.Count) {
       var filtered = new Dictionary<string, IrType>();
       foreach (var atn in returnSourceStruct.AssociatedTypeNames) {
-        if (resolvedReturnParams.TryGetValue(atn, out var val))
-          filtered[atn] = val;
+        // Every `uses` name must be among the resolved params, because those names ARE the
+        // instance's identity. Skipping an absent one would leave a PARTIAL key, and both the
+        // search below and the mint further down would then ask about an instance that is not
+        // the one in hand — matching an unrelated alias, or minting a name two genuinely
+        // different instances share (`__Map_Int` for both `(Int, A)` and `(Int, B)`). Either is
+        // a wrong answer with no compile error, which is the same shape as the defect this
+        // function was just fixed for.
+        if (!resolvedReturnParams.TryGetValue(atn, out var val))
+          throw new InvalidOperationException(
+            $"Generic instance of '{returnSourceName}' resolved no type for its 'uses' parameter "
+            + $"'{atn}' (return type '{returnStruct.Name}', resolved: {string.Join(", ", resolvedReturnParams.Keys)})");
+
+        filtered[atn] = val;
       }
       resolvedReturnParams = filtered;
     }
