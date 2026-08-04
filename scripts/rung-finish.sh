@@ -112,7 +112,8 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-[ -n "$BATCH" ] || die "--batch is required (the board row id)"
+[ -n "$BATCH" ] || [ -n "$BRANCH" ] || die "--batch is required (the board row id) â or --branch,
+     which is WAVE mode: a rung with no board row to read or flip."
 if [ "$DRY_RUN" = "0" ]; then
   [ -n "$MSG_FILE" ] || die "--message-file is required (omit only with --dry-run)"
   [ -f "$MSG_FILE" ] || die "--message-file does not exist: $MSG_FILE"
@@ -132,6 +133,9 @@ step "1/9  Position — the branch, the worktree, and the DETAIL ROW you owe"
 WAVE=0
 if [ -n "$BRANCH" ]; then
   WAVE=1
+  # BATCH is a board row id in the other mode; here it survives only as the scratch-tree name and
+  # the stash label, so the branch supplies it rather than the caller inventing an id for nothing.
+  [ -n "$BATCH" ] || BATCH="$BRANCH"
   ok "WAVE mode: branch '$BRANCH' given directly, no board row will be read or flipped"
 else
   # ⭐ THE BRANCH NAME COMES OFF THE BOARD, not off an argument. The row is where that fact is written;
@@ -168,18 +172,16 @@ ok "worktree is clean — all rung work is committed"
 # ⭐ THE DETAIL ROW IS PART OF THE RUNG, AND THIS IS WHERE IT GETS CHECKED. A rung's deliverable is the
 #    set of markers it flipped; the row is where that is written down. The status flip below is
 #    mechanical and this script does it — the PROSE is judgement and only you can write it.
-if [ "$WAVE" = "0" ]; then
-  PLAN_DIRTY="$(git diff --name-only -- maxon-shv2/PLAN.md)"
-  [ -n "$PLAN_DIRTY" ] || die "maxon-shv2/PLAN.md has no uncommitted changes, so this rung wrote NO
-     DETAIL ROW. Write it first, here in the main checkout, and leave it uncommitted — this script
-     flips the board's status cells on top of it and lands both in one commit.
-     ⚠ A rung with open RESIDUALS is marked ◑, not ✅, and each residual goes into the PLAN.md section
-       it belongs to. \"Core landed\" is not \"complete\"."
-  ok "PLAN.md carries uncommitted detail ($(git diff --numstat -- maxon-shv2/PLAN.md | awk '{print $1"+ "$2"-"}'))"
+PLAN_DIRTY="$(git diff --name-only -- maxon-shv2/PLAN.md)"
+[ -n "$PLAN_DIRTY" ] || die "maxon-shv2/PLAN.md has no uncommitted changes, so this rung wrote NO
+   DETAIL ROW. Write it first, here in the main checkout, and leave it uncommitted — this script
+   flips the board's status cells on top of it and lands both in one commit.
+   ⚠ A rung with open RESIDUALS is marked ◑, not ✅, and each residual goes into the PLAN.md section
+     it belongs to. \"Core landed\" is not \"complete\"."
+ok "PLAN.md carries uncommitted detail ($(git diff --numstat -- maxon-shv2/PLAN.md | awk '{print $1"+ "$2"-"}'))"
 
-  OTHER_DIRTY="$(git status --porcelain | grep -v ' maxon-shv2/PLAN\.md$' | head -5)"
-  [ -z "$OTHER_DIRTY" ] || { echo "$OTHER_DIRTY"; warn "other files are dirty in the main checkout; they will be stashed and restored, NOT committed"; }
-fi
+OTHER_DIRTY="$(git status --porcelain | grep -v ' maxon-shv2/PLAN\.md$' | head -5)"
+[ -z "$OTHER_DIRTY" ] || { echo "$OTHER_DIRTY"; warn "other files are dirty in the main checkout; they will be stashed and restored, NOT committed"; }
 
 SHV2="$WORKTREE/maxon-shv2/.maxon/maxon-shv2.exe"
 BOOTSTRAP="$WORKTREE/bin/maxon.exe"
@@ -488,11 +490,14 @@ $(row_members "$PLAN" "$BATCH")"
     esac
   done <<< "$FLIP"
   ok "board flipped"
-
-  git add -- maxon-shv2/PLAN.md || die "git add failed"
-  git commit --quiet -F "$MSG_FILE" || die "git commit failed"
-  ok "committed $(git log --oneline -1)"
 fi
+
+# ⭐ THE DETAIL ROW LANDS IN BOTH MODES. Only the board FLIP above is board-specific — the row itself
+#    is the rung's deliverable ("a rung that wrote no detail is not closed"), and a WAVE rung that
+#    merged its code and silently dropped its PLAN.md row would close having written nothing down.
+git add -- maxon-shv2/PLAN.md || die "git add failed"
+git commit --quiet -F "$MSG_FILE" || die "git commit failed"
+ok "committed $(git log --oneline -1)"
 
 # ─────────────────────────────────────────────────────────────────────────────────────────────────
 step "9/9  Push"
