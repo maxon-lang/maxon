@@ -1142,8 +1142,8 @@ function addNestedStructDestructors(usage RuntimeUsage, layout StructLayout, pro
 		// ⭐ **AN EXISTENTIAL FIELD CONTRIBUTES NO *NESTED* SYMBOL, BECAUSE IT NAMES NONE (P1.7a-existentials
 		// slice 2).** Its drop is `__drop_existential`, which reads the destructor out of the witness table at
 		// run time — so there is no callee here to close the set over. The destructors those tables can name
-		// are rooted whole-program instead, by `rootConformerDrops`, which runs BEFORE this closure so a
-		// conformer that owns a managed field has its own cascade queued and expanded like any other.
+		// are rooted from the RELOCATIONS instead (`noteRelocatedFunctionUsage`), which re-enters this closure
+		// afterwards, so a conformer that owns a managed field still gets its own cascade expanded.
 		if signatures.structFieldIsExistential(layout.name, index: i) 'existential'
 			continue
 		end 'existential'

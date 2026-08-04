@@ -18626,11 +18626,20 @@ export type Parser
 	// the pointer, so the caller's fresh-SSA-name property is identical either way.
 	function emitRetainCall(source ValueId, range SourceRange) returns ValueId
 		if self.tagOf(source) == ValueTypeTag.interfaceRef 'existential'
-			return self.emitRuntimeCall(RetainExistentialName, args: pairArgs(self.witnessOfValue(source), second: source), resultTag: self.tagOf(source), resultNameId: self.valueNameId(source), range: range)
+			return self.emitRetainExistentialCall(source, range: range)
 		end 'existential'
 
 		return self.emitRuntimeCall(MmRetainName, args: singletonArgs(source), resultTag: self.tagOf(source), resultNameId: self.valueNameId(source), range: range)
 	end 'emitRetainCall'
+
+	// ⭐ **THE ONE `__retain_existential` CALL**, so its argument ORDER — the witness first, matching
+	// `__drop_existential` — is spelled once. Its two callers want different halves of it: the `var`
+	// promotion (`emitRetainCall`) needs the returned FRESH id, the consuming-position co-ownership
+	// (`coOwnBorrowedForConsume`) needs only the incref and discards it. The result carries the SOURCE's exact
+	// type so a caller that binds it holds the same existential.
+	function emitRetainExistentialCall(source ValueId, range SourceRange) returns ValueId
+		return self.emitRuntimeCall(RetainExistentialName, args: pairArgs(self.witnessOfValue(source), second: source), resultTag: self.tagOf(source), resultNameId: self.valueNameId(source), range: range)
+	end 'emitRetainExistentialCall'
 
 	// ⭐ **BECOME A SECOND OWNER OF `source`'s BOX, AS AN UNBOUND STATEMENT-SCOPED TEMPORARY** — the door for
 	// an expression that hands back a record SOMEBODY ELSE already owes a drop on, and whose own result may be
@@ -18669,11 +18678,11 @@ export type Parser
 	// transferred `+1` a double free at the second destructor.
 	function coOwnBorrowedForConsume(value ValueId, range SourceRange) returns ValueId
 		if self.tagOf(value) == ValueTypeTag.interfaceRef 'existential'
-			// The witness-gated incref, for `emitRetainCall`'s measured reason: a scalar conformer's value half
-			// is not a pointer. Its returned id is DISCARDED here rather than replacing the argument — the
-			// caller wants the borrow's own name, and the box it hands the value to owns the reference this
-			// took, not a binding in this frame.
-			_ = self.emitRuntimeCall(RetainExistentialName, args: pairArgs(self.witnessOfValue(value), second: value), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
+			// The witness-gated incref, for `emitRetainExistentialCall`'s measured reason: a scalar conformer's
+			// value half is not a pointer. Its returned id is DISCARDED rather than replacing the argument —
+			// the caller wants the borrow's own name, and the reference this took is owned by the box the value
+			// is handed to, not by any binding in this frame.
+			_ = self.emitRetainExistentialCall(value, range: range)
 			return value
 		end 'existential'
 
