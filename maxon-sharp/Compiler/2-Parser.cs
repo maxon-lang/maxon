@@ -19557,6 +19557,12 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
             && _typeAliasSources.TryGetValue(elementTypeName, out var elemSource)
             && _typeAliasSources.TryGetValue(elemType.Name, out var aliasElemSource)
             && elemSource == aliasElemSource
+            // Two element instances of one source type are the same element only if their CONST
+            // arguments agree: `Array with Vec3` and `Array with Vec4` are different arrays, and
+            // without this the ranged normalization below would call their elements equal on the
+            // strength of `Element=Int` alone and hand back the wrong array alias.
+            && IrStructType.ConstArgSegments(elemSt.ConstParams)
+                 .SequenceEqual(IrStructType.ConstArgSegments(aliasElemSt.ConstParams))
             && elemSt.TypeParams.Count == aliasElemSt.TypeParams.Count
             && elemSt.TypeParams.All(kv =>
                 aliasElemSt.TypeParams.TryGetValue(kv.Key, out var v)
@@ -23348,18 +23354,23 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     // If still unresolved, give up
     if (resolvedInnerParams.Values.Any(t => t is IrTypeParameterType)) return null;
 
-    // Find concrete alias matching these resolved params
+    // The inner alias's CONST arguments are fixed where it was declared and are not substituted
+    // through — `typealias Row = Vector with 4 Element` is the capacity-4 instance whatever Element
+    // resolves to — so they are part of the instance this search asks about.
+    var innerInstanceKey = IrStructType.InstanceKey(innerSourceName, resolvedInnerParams, innerStruct.ConstParams);
+
+    // Asked as the instance key, not a hand-written per-parameter loop: written out, this was the
+    // SAME count-plus-per-parameter-name comparison the rest of this family was consolidated onto,
+    // and it silently dropped the const arguments — so a conformance-bound `Row` of capacity 4
+    // could adopt a declared capacity-3 alias, which is this rung's defect one level in.
     foreach (var (aliasName, aliasSource) in _typeAliasSources) {
       if (aliasSource != innerSourceName) continue;
       if (!_typeRegistry.TryGetValue(aliasName, out var aliasRegType)) continue;
       if (aliasRegType is not IrStructType aliasSt) continue;
-      if (aliasSt.TypeParams.Count != resolvedInnerParams.Count) continue;
       if (aliasSt.TypeParams.Values.Any(t => t is IrTypeParameterType)) continue;
-      bool match = true;
-      foreach (var (pn, pt) in resolvedInnerParams) {
-        if (!aliasSt.TypeParams.TryGetValue(pn, out var ct) || ct.Name != pt.Name) { match = false; break; }
-      }
-      if (match) return aliasSt;
+      if (IrStructType.InstanceKey(aliasSource, aliasSt.TypeParams, aliasSt.ConstParams) != innerInstanceKey) continue;
+
+      return aliasSt;
     }
 
     return null;

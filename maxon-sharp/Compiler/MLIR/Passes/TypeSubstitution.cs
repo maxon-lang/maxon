@@ -497,8 +497,16 @@ internal class TypeSubstitution {
         [.. sourceEnum.ConformingInterfaces],
         typeParams: resolvedParams) { IsUnion = sourceEnum.IsUnion };
       module.TypeDefs[autoAliasName] = newEnumType;
-      // An enum has no `with N` form, so constArgs is always null here — carried through anyway so
-      // the record can never describe a different instance from the name minted above.
+
+      // An enum has no `with N` form, so an enum instance can never carry const arguments — and
+      // IrEnumType has nowhere to put them. ENFORCED rather than asserted in a comment: the name
+      // minted above DOES spell them, so a non-empty set here would give the type a name claiming a
+      // capacity the type itself cannot hold, which is one instance described two ways — the exact
+      // defect this whole consolidation exists to close, and silent at every other site.
+      if (constArgs is { Count: > 0 })
+        throw new InvalidOperationException(
+          $"Generic enum instance '{autoAliasName}' was given const arguments, which enums cannot carry");
+
       module.RegisterTypeAlias(autoAliasName, new TypeAliasInfo(sourceTypeName, resolvedParams, ConstParams: constArgs));
       return newEnumType;
     }
