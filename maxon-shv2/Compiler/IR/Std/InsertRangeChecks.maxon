@@ -131,6 +131,19 @@ end 'RangeGuardVerdict'
 // Both are the answers this pass gave before the site recorded its block, and the bootstrap refuses the
 // programs outright. A `ret` of the wrong value is therefore SKIPPED, never panicked on: a panic here
 // would turn shv2's acceptance of unreachable code into a compiler crash.
+//
+// ⛔⛔ **"EXACTLY TWO CAUSES" WAS A HAND-MAINTAINED ENUMERATION, AND G14 FOUND A THIRD THAT WAS NOT
+// UNREACHABLE SOURCE AT ALL: A `throws` FUNCTION.** Its `return` leaves through `errorReturn`, which
+// `retMatchesValue` did not recognise as a return, so `notFound` came back for EVERY ranged return in
+// EVERY throwing function and the silent skip above absorbed it — a wrong answer on ordinary source,
+// wearing the clothes of an enumeration that said the answer could only mean unreachable code. The
+// third cause is CLOSED (`errorReturn` is a recognised arm), and the two above are once more the whole
+// list. ⚠ **BUT NOTHING CHECKS THAT.** The set of Std terminators that RETURN A VALUE is written twice
+// — here in `retMatchesValue`'s arms, and in `StdOpMeta.role` (`OpRole.ret` / `OpRole.errorReturn`,
+// which has no reader in the compiler) — and the two are held in agreement by hand. `retMatchesValue`'s
+// match is exhaustive, so a NEW variant is a compile error there; what defeated it was a variant that
+// already existed being swept into a RANGE arm, which exhaustiveness cannot see. Until `role` is the
+// derived authority, read this list as a claim maintained by whoever last touched either file.
 union RetBlockLookup
 	notFound
 	found(block IrBlock)

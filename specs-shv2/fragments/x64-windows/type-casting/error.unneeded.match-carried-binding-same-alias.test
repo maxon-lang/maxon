@@ -1,0 +1,23 @@
+// Test: error.unneeded.match-carried-binding-same-alias
+typealias Num = int(0 to 1000)
+
+enum K
+	a
+	b
+end 'K'
+
+function pick(k K, x Num, y Num) returns Num
+	var t = x
+	match k 'm'
+		a then t = y
+		b then break 'm'
+	end 'm'
+	return t as Num
+end 'pick'
+
+function main() returns ExitCode
+	return pick(K.a, x: 1, y: 2)
+end 'main'
+---
+CompilerError:
+error E3010: <fragment>:15:11: unneeded cast: 'Num' already fits in 'Num'

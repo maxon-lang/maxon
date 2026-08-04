@@ -19058,6 +19058,23 @@ export type Parser
 				binding.boundValue = phiId
 				edgeArgsA.push(a)
 				edgeArgsB.push(b)
+
+				// ⭐⭐ **AN `if` CONTINUATION IS A MERGE WHOSE INCOMING SET IS COMPLETE AT THE MINT, SO IT
+				// ASKS FOR ITS ALIAS CLAIM BACK (G14 review).** `mintPhi` withholds the claim from EVERY
+				// merge because a LOOP HEADER cannot answer — its back edge is not parsed yet — and that is
+				// the right default; but this continuation is not a loop header. `predA` and `predB` are the
+				// only two blocks that will ever branch here (`finalizeIfElse`/`finalizeIfNoElse` mint
+				// `cont` one statement earlier, hand it exactly this pair, and emit both branches on the
+				// spot), and `a`/`b` are final — `reconcileMovesAtMerge` has already run and the same
+				// statement records them as the edge args.
+				//
+				// ⚠ **WITHOUT IT THE COMMONEST RANGED-`var` SHAPE IN THE LANGUAGE PAID TWICE, AND ONE OF THE
+				// TWO WAS A DIVERGENCE FROM THE ORACLE.** MEASURED on `var t = a` / `if c: t = b` / `return t`
+				// over `Num = int(0 to 1000)` with both parameters declared `Num`: the `return` grew a THIRD
+				// cascade over a value the two entry guards had already proved, and `t as Num` — which the
+				// bootstrap refuses with E3010 *"'Num' already fits in 'Num'"* — compiled clean and ran.
+				// Both are the withheld claim, and both edges prove it, so it is lifted rather than lost.
+				self.recordMergeAliasProof(phiId, incoming: pairArgs(a, second: b))
 			end 'differ'
 		end 'eachVar'
 		self.recordBranchEdge(predA, targetId: cont.id, argIds: edgeArgsA)
@@ -22186,7 +22203,22 @@ export type Parser
 			var binding = try carried.get(k) otherwise panic("finalizeMatchMerge: carried.get OOB at {k}")
 			let isDifferent = try differs.get(k) otherwise panic("finalizeMatchMerge: differs.get OOB at {k}")
 			if isDifferent 'phiVar'
-				binding.boundValue = self.mintPhiForBinding(merge, binding: binding)
+				let phiId = self.mintPhiForBinding(merge, binding: binding)
+				binding.boundValue = phiId
+
+				// ⭐ **A CARRIED BINDING'S MERGE IS THE `if` CONTINUATION'S TWIN, ONE CONSTRUCT OVER (G14
+				// review)** — same withheld claim, same complete incoming set, same two costs when it is
+				// never lifted (a redundant cascade at the next ranged `return`, and the E3010 the bootstrap
+				// still reports for `t as Num`; MEASURED on a `match` whose one arm assigns a `Num` var and
+				// whose other `break`s). `reachingArms` is the complete reaching set — a returning arm
+				// contributes no entry and no edge — and this column is exactly the one `recordEdges` below
+				// pushes onto each arm's edge, so the values judged here are the values the edges carry.
+				var incoming = ValueIdArray.create()
+				for i in 0 upto reachingArms.count() 'eachArm'
+					let arm = try reachingArms.get(i) otherwise panic("finalizeMatchMerge: reachingArms.get OOB at {i}")
+					incoming.push(try arm.exitVals.get(k) otherwise panic("finalizeMatchMerge: exitVals.get OOB at {k}"))
+				end 'eachArm'
+				self.recordMergeAliasProof(phiId, incoming: incoming)
 			end 'phiVar' else 'common'
 				binding.boundValue = try firstArm.exitVals.get(k) otherwise panic("finalizeMatchMerge: exitVals.get OOB at {k}")
 			end 'common'
@@ -23876,11 +23908,21 @@ export type Parser
 	// induction `rangeCoversDenotedRange`'s header states, so the meet over the edges is the honest claim and
 	// the elision A4f built stays legitimate wherever it was legitimate before.
 	//
-	// ⚠ **ONLY TWO MERGES MAY ASK, AND THE TEST IS WHETHER THE EDGES ARE ALL KNOWN AT THE MINT** — a
-	// `try … otherwise <expr>` continuation and a `match`/ternary RESULT. A loop header's back edge does not
-	// exist yet, and a merge minted for a BINDING (`mintPhiForBinding` — loop header, loop exit,
-	// if-continuation, match-carried) reads a value an ASSIGNMENT put there, which is not a door on any tier.
-	// Those keep the withheld claim.
+	// ⚠ **THE TEST IS WHETHER THE EDGES ARE ALL KNOWN AT THE MINT, AND IT IS THE ONLY TEST** — four merges
+	// pass it: a `try … otherwise <expr>` continuation, a `match`/ternary RESULT, an `if` CONTINUATION's
+	// carried binding (`mergeAtContinuation`) and a `match`'s carried binding (`finalizeMatchMerge`'s
+	// `setBindings`). What keeps the claim withheld is a merge that CANNOT answer, never one whose edges
+	// merely came from an assignment: an ASSIGNMENT is a door on no tier, which is precisely why every edge
+	// is asked to prove itself rather than trusted for its shape.
+	//
+	// ⚠ **WHAT STILL CANNOT ASK IS A BACK EDGE.** A loop HEADER (`mintPhiForBinding` from the while/for
+	// header, the `for` index, the step phi) is minted before its back edge is parsed, and a loop EXIT phi
+	// merges that header phi — so its claim is withheld transitively, which is the same answer reached for
+	// free rather than a second rule. ⛔ **THIS PARAGRAPH READ "ONLY TWO MERGES MAY ASK" AND LUMPED ALL FOUR
+	// `mintPhiForBinding` SITES TOGETHER, WHICH COST TWO WRONG ANSWERS** (G14 review): an `if`-merged `Num`
+	// var returned through a `returns Num` grew a cascade two entry guards had already proved, and
+	// `t as Num` on it lost the E3010 the bootstrap oracle still reports. A merge that CAN answer and is
+	// not asked is not the safe direction — it is a second defect pointing the other way.
 	//
 	// ⭐ **THIS IS WHY `try/otherwise` LOOKED IMMUNE AND IS NOT.** `otherwise 0` keeps its elision here — the
 	// ok edge is the callee's own guarded `return` and the fallback is a literal `requireOtherwiseInRangedReturn`
@@ -23923,11 +23965,21 @@ export type Parser
 		try self.phiAliasUnprovenMarks.set(phiId, value: false) otherwise panic("recordMergeAliasProofAgainst: v{phiId} has no merge-alias slot — a phi is minted through mintPhi, which sets it")
 	end 'recordMergeAliasProofAgainst'
 
-	// ⭐ **DOES ONE INCOMING EDGE PROVABLY LIE INSIDE `alias`? — THE SAME PAIR OF TESTS A DOOR APPLIES.**
-	// `InsertRangeChecks.needsRuntimeGuard` asks exactly these two of a value meeting a ranged position: it
-	// already denotes a range the destination covers, or it is a compile-time constant of the destination's
-	// own domain that lands inside it. A merge is not a door, but the question *"is this value in range"* is
-	// the door's question, so it is answered the same way rather than a third way.
+	// ⭐ **DOES ONE INCOMING EDGE PROVABLY LIE INSIDE `alias`? — THE SAME PAIR OF TESTS A DOOR APPLIES,
+	// AND THE PAIR IS SPLIT ACROSS TWO TIERS RATHER THAN HELD BY ONE FUNCTION.** A door reaches "no guard"
+	// two ways and only two: the value already denotes a range the destination covers — asked HERE, at the
+	// parse, by `recordRangedTargetSite`/`returnGuardIsDead` through the shared `rangeCoversDenotedRange` —
+	// or it is a compile-time constant of the destination's own domain that lands inside it, which
+	// `InsertRangeChecks.needsRuntimeGuard` asks of the recorded site. A merge is not a door, but *"is this
+	// value in range"* is the door's question, so it is answered out of the same two rules rather than a
+	// third way; the containment arithmetic itself (`rangeCoversDenotedRange`, `literalInRange`) is
+	// `TypeRules`', spelled once for every asker.
+	//
+	// ⚠ The CONSTANT half reads the PARSER's const columns while `needsRuntimeGuard` reads the Std pass's
+	// `intConsts`/`floatConsts`, and the two need not agree. Neither disagreement is a wrong answer, and the
+	// direction is what says so: the parser knowing a constant the pass does not still proves the value is
+	// in range (a folded literal is one at run time whatever a later tier knows), and the pass knowing one
+	// the parser does not merely leaves the claim withheld — a guard the pass then elides itself.
 	//
 	// ⚠ **THE CONSTANT ARM IS WHAT KEEPS `try f() otherwise 0` ELIDING.** A folded literal denotes NO alias —
 	// `rangeCoversDenotedRange`'s header calls that out as the direction that keeps the guard — so the first

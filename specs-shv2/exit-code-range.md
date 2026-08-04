@@ -392,8 +392,16 @@ Stack trace:
   in mrt_start
 ```
 
-<!-- test: in-range-join-still-elides-and-returns -->
+<!-- test: in-range-join-is-guarded-and-passes -->
 <!-- targets: x64-windows -->
+⛔ **THIS CASE WAS CALLED `in-range-join-still-elides-and-returns`, AND IT DOES NOT ELIDE (G14 review).**
+Its own committed fragment carries the `__rc_panic` block, and the emitted `matchcont` runs the full
+`0 ≤ x ≤ 1000` cascade — because `a + b` denotes no alias, so the arm proves nothing and the merge keeps
+its withheld claim. That is CORRECT and is exactly why the sibling above panics on `900 + 900`; what was
+wrong was the name, which promised an observation this case structurally cannot make. **A runtime case
+cannot see an elision at all** — an emitted guard and an elided one are the same PASS on an in-range
+value — so what it pins is the other half, and the honest half: the withheld claim does not turn a
+program the range admits into a panic. The elision control is the FRAGMENT, and the `otherwise 0` corpus.
 ```maxon
 typealias Num = int(0 to 1000)
 
@@ -460,9 +468,11 @@ the ok edge earns that claim (the callee guards its own `return`), but a VARIABL
 nothing — only a LITERAL fallback is checked, and only at compile time. `5000` therefore reached a
 `returns Num` caller's `return` wearing `Num`, and the guard was elided on it.
 
-⚠ Its negative control is `in-range-join-still-elides-and-returns` and the whole `otherwise 0` corpus:
-the fix withholds the claim per EDGE, not per construct, so a literal fallback still proves and still
-elides. Both halves are needed — a fix that guarded every `trycont` would pass this case and be wrong.
+⚠ Its negative control is the whole `otherwise 0` corpus and its FRAGMENTS: the fix withholds the claim
+per EDGE, not per construct, so a literal fallback still proves and still elides. Both halves are needed
+— a fix that guarded every `trycont` would pass this case and be wrong. ⛔ `in-range-join-is-guarded-and-passes`
+is NOT the elision half and was named as though it were; a runtime case cannot distinguish an emitted
+guard from an elided one on a value the range admits (see its own header). Only a fragment can.
 ```maxon
 typealias Num = int(0 to 1000)
 typealias Integer = int(i64.min to i64.max)

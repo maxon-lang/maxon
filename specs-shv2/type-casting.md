@@ -601,3 +601,61 @@ end 'main'
 ```exitcode
 2
 ```
+
+### E3010 through a MERGED BINDING — the two joins whose incoming set is complete
+
+⭐⭐ **A MERGE MAY NOT SPEND ITS DECLARED ALIAS AS A PROOF (G14), BUT IT MUST STILL SPEND IT WHERE EVERY
+EDGE PROVES IT — AND THESE TWO CASES ARE THE DIFFERENCE.** G14 withheld the ranged-alias claim from every
+phi, because a LOOP HEADER cannot answer: its back edge is not parsed when it is minted, so nothing at the
+mint can see what will reach it. An `if` continuation and a `match`'s carried binding are not loop headers
+— both predecessors are branched in one statement after the phi is minted — and withholding there cost two
+things at once, neither visible in a green suite: the `return` below grew a range cascade over a value the
+two entry guards had already proved, and this E3010 stopped being reported at all while the bootstrap
+oracle went on reporting it. MEASURED both ways on 2026-08-03 (G14 review): shv2 compiled and ran these
+two programs, `maxon-sharp` refused them at the same line and column.
+
+<!-- test: error.unneeded.if-merged-binding-same-alias -->
+```maxon
+typealias Num = int(0 to 1000)
+
+function pick(c bool, a Num, b Num) returns Num
+	var t = a
+	if c 'x'
+		t = b
+	end 'x'
+	return t as Num
+end 'pick'
+
+function main() returns ExitCode
+	return pick(true, a: 1, b: 2)
+end 'main'
+```
+```maxoncstderr
+error E3010: <fragment>:9:11: unneeded cast: 'Num' already fits in 'Num'
+```
+
+<!-- test: error.unneeded.match-carried-binding-same-alias -->
+```maxon
+typealias Num = int(0 to 1000)
+
+enum K
+	a
+	b
+end 'K'
+
+function pick(k K, x Num, y Num) returns Num
+	var t = x
+	match k 'm'
+		a then t = y
+		b then break 'm'
+	end 'm'
+	return t as Num
+end 'pick'
+
+function main() returns ExitCode
+	return pick(K.a, x: 1, y: 2)
+end 'main'
+```
+```maxoncstderr
+error E3010: <fragment>:15:11: unneeded cast: 'Num' already fits in 'Num'
+```
