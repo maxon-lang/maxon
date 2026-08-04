@@ -1221,7 +1221,22 @@ function retMatchesValue(term StdOp, target ValueId) returns bool
 		const to branch gives false
 		ret(retValId) gives retValId == target
 		// `retVoid` is in this range and belongs there: it returns no value, so no site can name it.
-		param to osFreePages gives false
+		param to tryCall gives false
+		// ⭐⭐ **A THROWING FUNCTION LEAVES THROUGH `errorReturn`, NOT `ret`, AND READING ONLY `ret` HERE
+		// UNGUARDED EVERY RANGED RETURN IN EVERY `throws` FUNCTION (G14).** `LowerMaxonToStd.emitRetOrErrorReturn`
+		// picks the terminator off the THROWS clause — *"the ONE place the ABI decides ret-vs-errorReturn"* — so
+		// a `returns ExitCode throws E` function's `return v` lands here as `errorReturn(v, flag)` and was swept
+		// up by the range arm below as "not a `ret`". `retBlockOf` then answered `notFound`, and the site was
+		// dropped in silence. MEASURED against the bootstrap oracle: `return v` with `v == -5` from a
+		// `returns ExitCode throws MatchError` function printed `result=-5` and exited 7 under shv2, where the
+		// oracle panics `Range check failed: value outside typealias 'ExitCode'`.
+		//
+		// The PRIMARY value is what a return site names — the error flag is the ABI's second register and no
+		// range-check site is ever recorded against it — so the comparison is `retValId`'s alone, exactly as the
+		// `ret` arm's is. `emitDeadReturn` already emits the matching `errorReturn` shape for the panic block it
+		// splits in front of, so the guard this unlocks terminates a throwing function correctly on both edges.
+		errorReturn(retValId, _) gives retValId == target
+		osExit to osFreePages gives false
 		// The jump table is a branch terminator, not a `ret` — it returns no value.
 		switch gives false
 		// A witness call is a body op, not a `ret` — it is not the return whose value this checks. Nor is the

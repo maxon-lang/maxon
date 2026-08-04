@@ -292,3 +292,111 @@ Stack trace:
   in main
   in mrt_start
 ```
+
+### Joins, and the return sites a guard never reached
+
+⭐⭐ **THESE THREE ARE REGRESSION CASES FOR A MEASURED WRONG ANSWER, NOT NEW SURFACE.** X6 built the
+guard and its elision path; the elision is correct wherever the value's own range is already inside the
+declared one. **It is NOT correct at a JOIN whose incoming value is wider than the declared type** — the
+premise the guard stands on is lost at the phi — nor at a `return` inside a `throws` function's `match`
+arm, which never got a guard at all. Found 2026-08-03 by the `G14` review while auditing 604 guards the
+re-mint would otherwise have deleted from the record. ⚠ **`try/otherwise` does NOT lose it** (measured),
+which is why `trycont` is excluded below: the asymmetry is the clue to where the fix belongs.
+
+<!-- test: join-in-a-gives-arm-is-guarded -->
+<!-- targets: x64-windows -->
+```maxon
+typealias Num = int(0 to 1000)
+
+union Kw
+	alpha(n Num)
+	end(a Num, b Num)
+end 'Kw'
+
+function tagOf(k Kw) returns Num
+	return match k 'm'
+		alpha(n) gives n
+		end(a, b) gives a + b
+	end 'm'
+end 'tagOf'
+
+function main() returns ExitCode
+	let t = tagOf(Kw.end(900, b: 900))
+	print("t={t}")
+	return 7
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at join-in-a-gives-arm-is-guarded.test:10: Range check failed: value outside typealias 'Num'
+Stack trace:
+  in tagOf
+  in main
+  in mrt_start
+```
+
+<!-- test: throws-match-arm-return-is-guarded -->
+<!-- targets: x64-windows -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+union Result
+	success(value Integer)
+	pending
+end 'Result'
+
+enum MatchError
+	unmatched
+end 'MatchError'
+
+function getValue(r Result) returns ExitCode throws MatchError
+	match r 'check'
+		success(v) then return v
+		default throws MatchError.unmatched
+	end 'check'
+end 'getValue'
+
+function main() returns ExitCode
+	let r = Result.success(-5)
+	let result = try getValue(r) otherwise 0
+	print("result={result}")
+	return 7
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at throws-match-arm-return-is-guarded.test:15: Range check failed: value outside typealias 'ExitCode'
+Stack trace:
+  in getValue
+  in main
+  in mrt_start
+```
+
+<!-- test: in-range-join-still-elides-and-returns -->
+<!-- targets: x64-windows -->
+```maxon
+typealias Num = int(0 to 1000)
+
+union Kw
+	alpha(n Num)
+	end(a Num, b Num)
+end 'Kw'
+
+function tagOf(k Kw) returns Num
+	return match k 'm'
+		alpha(n) gives n
+		end(a, b) gives a + b
+	end 'm'
+end 'tagOf'
+
+function main() returns ExitCode
+	return tagOf(Kw.end(20, b: 22))
+end 'main'
+```
+```exitcode
+42
+```

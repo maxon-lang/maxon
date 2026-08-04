@@ -6228,6 +6228,37 @@ export type Parser
 	// function and most functions are small. So the column is simpler (mirrors `valueOwnsHeap`), marginally
 	// cheaper, and honest — the sparse-is-cheaper premise did not survive the instrument.
 	var valuePromiseMarks as BoolArray
+	// ⭐⭐ **WHICH VALUES ARE MERGES WHOSE DECLARED RANGED ALIAS NOTHING PROVED (G14)** — the column that
+	// stops a phi's DECLARED type being read as a statement about its RANGE. Same lockstep as
+	// `valuePromiseMarks`: pushed `false` in `mintValue`/`recordValueType`, set `true` by `mintPhi` for
+	// EVERY phi, and cleared only by `recordMergeAliasProof`.
+	//
+	// ⚠⚠ **A PHI'S TYPE NAME IS A DECLARATION, AND THE RANGE MACHINERY WAS READING IT AS A PROOF.** The
+	// induction `rangeCoversDenotedRange` rests on — *"a value denoting alias `A` is IN `A`'s range"*,
+	// maintained because every DOOR guards (a cast, a parameter's entry, a ranged `return`, a field or
+	// element store) — has exactly one other producer that is not a door, and `TypeRules` names only
+	// `Array.resize`. **A MERGE IS THE SECOND, and it is far more reachable.** A phi takes its name from ONE
+	// incoming edge — the binding's declared type (`mintPhiForBinding`), the FIRST arm's type
+	// (`finalizeMatchMerge`), the range's start bound (a `for` index) — while an ASSIGNMENT and a `gives` arm
+	// are not doors, so any other edge may hand it a wider value. MEASURED, three ways, each a wrong answer
+	// the oracle gets right:
+	//   • `var t = x` (`x` a `Num = int(0 to 1000)`) then `t = t + 500` in a loop, `return t` ⇒ shv2 returned
+	//     **1600** through a `returns Num`; the bootstrap panics. A4f elided the `return`'s guard because the
+	//     phi "already denoted" `Num`.
+	//   • `match k gives n / gives a + b` ⇒ the join denoted `Num` off arm 0 and returned **1800**. The same
+	//     lie ALSO made `<join> as Num` report E3010 *"'Num' already fits in 'Num'"* — refusing a narrowing
+	//     the program genuinely needs.
+	//   • `divisorProof` read the same claim: a `NonZero` phi decremented to `0` compiled to a BARE `idiv`
+	//     with no `throws DivisionByZero` demanded, and a runtime `0` died an **UNCATCHABLE hardware fault**
+	//     where `safety.md` promises a catchable `DivisionByZero`. That is the precise hazard
+	//     `InsertRangeChecks.guardRangedParams` calls *"WHY THIS IS NOT COSMETIC"*.
+	//
+	// ⭐ **UNPROVEN IS THE DEFAULT BECAUSE A LOOP HEADER CANNOT ANSWER AT ALL.** Its back edge is parsed
+	// AFTER it is minted, so no test at the mint — and no later fix-up either, since a `return` INSIDE the
+	// body reads the header phi — can see what will reach it. The claim is therefore withheld from every
+	// merge and LIFTED only where the complete incoming set is in hand (`recordMergeAliasProof`), which is
+	// the safe direction: a withheld proof costs a guard, an unsound one costs the answer.
+	var phiAliasUnprovenMarks as BoolArray
 	// ⭐ **THE CAPTURING-CLOSURE MARK AND ITS ENVIRONMENT (P1.5-A2b), carried ON THE VALUE — not in a
 	// mutable sidetable.** Two per-value columns in the same lockstep as `valueOwnsHeap`/`valueConstKnown`:
 	// `valueIsCapturingClosure[v]` is true iff value `v` is a closure that CAPTURES; `valueClosureEnv[v]` is
@@ -6813,6 +6844,7 @@ export type Parser
 			valueConstDomains: ConstPayloadDomainArray.create(),
 			valueOwnsHeap: BoolArray.create(),
 			valuePromiseMarks: BoolArray.create(),
+			phiAliasUnprovenMarks: BoolArray.create(),
 			valueIsCapturingClosure: BoolArray.create(),
 			valueClosureEnv: ValueIdArray.create(),
 			valueInstanceAlias: sharedEmptyInstanceAliasMap,
@@ -12444,6 +12476,7 @@ export type Parser
 		self.valueConstDomains = ConstPayloadDomainArray.create()
 		self.valueOwnsHeap = BoolArray.create()
 		self.valuePromiseMarks = BoolArray.create()
+		self.phiAliasUnprovenMarks = BoolArray.create()
 		self.valueIsCapturingClosure = BoolArray.create()
 		self.valueClosureEnv = ValueIdArray.create()
 		// Per-function, like the sibling value columns: a value's per-instance alias provenance names an id
@@ -13173,6 +13206,7 @@ export type Parser
 		self.valueConstDomains = ConstPayloadDomainArray.create()
 		self.valueOwnsHeap = BoolArray.create()
 		self.valuePromiseMarks = BoolArray.create()
+		self.phiAliasUnprovenMarks = BoolArray.create()
 		self.valueIsCapturingClosure = BoolArray.create()
 		self.valueClosureEnv = ValueIdArray.create()
 		self.valueInstanceAlias = sharedEmptyInstanceAliasMap
@@ -15258,9 +15292,38 @@ export type Parser
 	// statement about the same value: `identity(42) as Byte` hands back the call result untouched, and that
 	// result's type column still says `Integer` while the expression now denotes a `Byte`.
 	function valueDenotedAlias(value ValueId) returns DeclaredAlias
-		let aliasId = try self.valueDeclaredAlias.get(value) otherwise return self.declaredAliasOfValue(value)
+		let aliasId = try self.valueDeclaredAlias.get(value) otherwise return self.provenAliasOfValue(value)
 		return self.declaredAliasOfNameId(aliasId)
 	end 'valueDenotedAlias'
+
+	// ⭐⭐ **`declaredAliasOfValue` MINUS THE MERGES NOTHING PROVED — the reader for every question that
+	// spends the alias as a PROOF, as opposed to reading it as the value's DECLARED type (G14).** The type-name
+	// column answers both questions and they are not the same question: for a phi it states the type the merge
+	// was declared with, which no incoming edge need satisfy (see `phiAliasUnprovenMarks`).
+	//
+	// ⭐ **THE SPLIT IS THE POINT — `declaredAliasOfValue` KEEPS ITS TWO HONEST READERS.**
+	// `requireOtherwiseInRangedReturn` asks what a try-result's type IS, to refuse an out-of-range literal
+	// fallback against it, and `elementPackingOfValue` asks how a value would be STORED as an array element.
+	// Both are properties of the DECLARATION and stay right for a merge; routing them through here would
+	// delete a compile-time diagnostic and silently change an element stride. The two PROOF readers are this
+	// function's: `valueDenotedAlias` (E3010 and A4f's guard-death test) and `divisorProof`.
+	//
+	// ⚠ It is consulted only as `valueDenotedAlias`'s FALLBACK, never ahead of `valueDeclaredAlias`: a
+	// recorded cast target IS a proof — the `as` emits the guard — so `<phi> as Num` legitimately denotes
+	// `Num` afterwards even though the phi alone does not.
+	function provenAliasOfValue(value ValueId) returns DeclaredAlias
+		if self.phiAliasIsUnproven(value) 'mergeProvesNothing'
+			return DeclaredAlias.undeclared
+		end 'mergeProvesNothing'
+
+		return self.declaredAliasOfValue(value)
+	end 'provenAliasOfValue'
+
+	// Is `value` a merge whose declared ranged alias nothing proved? Read in the one place that spends the
+	// column (`provenAliasOfValue`), written in two (`mintPhi`, `recordMergeAliasProofAgainst`).
+	function phiAliasIsUnproven(value ValueId) returns bool
+		return try self.phiAliasUnprovenMarks.get(value) otherwise panic("phiAliasIsUnproven: v{value} has no merge-alias slot — every SSA value must be minted through mintValue, which seeds the column")
+	end 'phiAliasIsUnproven'
 
 	// The instance alias NAME `value` came from (`WrapperA`), or `EmptySourceText` when it has none — a
 	// `self` receiver, a value merged across branches, or any non-instance value (P1.6-C).
@@ -16783,6 +16846,13 @@ export type Parser
 		errArgs.push(errEdgeValue)
 		self.recordBranchEdge(errEnd, targetId: cont.id, argIds: errArgs)
 		self.emitBranch(errEnd, targetId: cont.id)
+
+		// ⭐ **BOTH EDGES ARE FINAL HERE, SO THE MERGE MAY ASK FOR ITS ALIAS CLAIM BACK (G14).** The ok edge is
+		// the callee's result, guarded by the callee's own ranged `return`; the err edge is the fallback, which
+		// proves the range when it is an in-range literal or a value already denoting one, and proves nothing
+		// when it is neither. `recordMergeAliasProof` decides from the values rather than from the shape, which
+		// is what keeps `otherwise 0` eliding while `otherwise <wider var>` no longer does.
+		self.recordMergeAliasProof(phiId, incoming: pairArgs(result, second: errEdgeValue))
 
 		self.currentBlock = cont
 		return phiId
@@ -22099,6 +22169,16 @@ export type Parser
 				self.retargetPendingBorrow(func, from: give, to: phiId)
 			end 'eachGive'
 
+			// ⭐ **THE RESULT PHI'S ALIAS CLAIM, ASKED OF EVERY ARM RATHER THAN INHERITED FROM ARM 0 (G14).**
+			// The phi is named off `giveType` — the FIRST arm's type — and `checkGiveTypes` above deliberately
+			// lets a ranged-alias give and a plain `int` give merge (*"the numeric subtypes share a register
+			// file and a phi holds either"*), so arm 0's ALIAS is not a fact about arm 1's VALUE. MEASURED:
+			// `alpha(n) gives n` / `end(a, b) gives a + b` over `Num = int(0 to 1000)` denoted `Num`, returned
+			// **1800** through a `returns Num`, and reported `<join> as Num` as an unneeded cast. `finalGives`
+			// is the complete reaching set — a returning/breaking arm contributes no entry and no edge — so
+			// this merge is one of the two that may ask at all.
+			self.recordMergeAliasProof(phiId, incoming: finalGives)
+
 			result = MatchGiveValue.value(phiId)
 		end 'resultPhi'
 
@@ -23776,11 +23856,98 @@ export type Parser
 	// harmless only while every value lived in a GPR, and the day `argType` chose a phi's REGISTER
 	// FILE, a float phi was coloured into a GPR and the SSA-destruction copy panicked the x64
 	// emitter. See `float-phi-*` in specs-shv2/float-type.md.
+	//
+	// ⚠ **EVERY PHI IS MINTED WITH ITS RANGED-ALIAS CLAIM WITHHELD (G14).** The `nameId` above comes from ONE
+	// incoming edge, so it is the type the merge was DECLARED with and not a statement about the values that
+	// will reach it — see `phiAliasUnprovenMarks` for the three wrong answers reading it as a proof produced.
+	// Withholding it HERE rather than at each of the eight call sites is what makes the safe answer the
+	// DEFAULT: a future merge inherits it, and only a site holding the complete incoming set can lift it
+	// (`recordMergeAliasProof`).
 	function mintPhi(block IrBlock, tag ValueTypeTag, nameId TypeNameId) returns ValueId
 		let phiId = self.mintValue(tag, nameId: nameId)
+		try self.phiAliasUnprovenMarks.set(phiId, value: true) otherwise panic("mintPhi: v{phiId} has no merge-alias slot — every SSA value must be minted through mintValue, which seeds the column")
 		block.blockArgs.push(IrBlockArg.create(phiId, argType: StdType.i64))
 		return phiId
 	end 'mintPhi'
+
+	// ⭐⭐ **LIFT A MERGE'S WITHHELD ALIAS CLAIM — the ONE place `mintPhi`'s blanket withholding is undone,
+	// and it is undone only against the COMPLETE incoming set.** A merge denotes alias `A` exactly when every
+	// value that can reach it already denoted a range inside `A`; each such value carries its own proof by the
+	// induction `rangeCoversDenotedRange`'s header states, so the meet over the edges is the honest claim and
+	// the elision A4f built stays legitimate wherever it was legitimate before.
+	//
+	// ⚠ **ONLY TWO MERGES MAY ASK, AND THE TEST IS WHETHER THE EDGES ARE ALL KNOWN AT THE MINT** — a
+	// `try … otherwise <expr>` continuation and a `match`/ternary RESULT. A loop header's back edge does not
+	// exist yet, and a merge minted for a BINDING (`mintPhiForBinding` — loop header, loop exit,
+	// if-continuation, match-carried) reads a value an ASSIGNMENT put there, which is not a door on any tier.
+	// Those keep the withheld claim.
+	//
+	// ⭐ **THIS IS WHY `try/otherwise` LOOKED IMMUNE AND IS NOT.** `otherwise 0` keeps its elision here — the
+	// ok edge is the callee's own guarded `return` and the fallback is a literal `requireOtherwiseInRangedReturn`
+	// already refused out of range — which is exactly the shape the defect was probed with. MEASURED: swap the
+	// literal for a variable (`otherwise w`, `w == 5000`) and the fallback is NOT checked (that function's
+	// header says so outright), so the merge claimed `Num` over `5000` and `return`ed it unguarded. One rule
+	// covers both: the literal edge proves, the variable edge does not.
+	//
+	// ⚠ It runs AFTER the edge values are final, not at the mint, so an ownership promotion
+	// (`promoteBorrowedMergeEdge`) cannot leave it judging a value the edge no longer carries.
+	//
+	// ⚠ **IT ASKS THE PHI'S OWN TYPE COLUMNS — `declaredAliasOfValue`, WHICH IS TAG-GATED, AND THE GATE IS NOT
+	// OPTIONAL.** A name id is only a real interner entry when the tag is `named`; a merge of any other class
+	// carries `UnnamedTypeId`, and handing that to `declaredAliasOfNameId` panics
+	// *"type-name id 0 is not in this file's interner"*. Both existing readers (`declaredAliasOfValue`,
+	// `declaredAliasOfType`) gate on the tag first, so this asks through one of them rather than spelling a
+	// third copy of the gate — and reading the PHI rather than the values it was named from is what stops the
+	// claim being judged against a type the phi does not actually carry.
+	//
+	// ⚠ `declaredAliasOfValue`, NOT `provenAliasOfValue`: this is deciding whether to LICENSE the declared
+	// claim, so it must read the claim. The proof-aware reader answers `undeclared` for every phi by
+	// construction at this point, which would make the lift unreachable.
+	function recordMergeAliasProof(phiId ValueId, incoming ValueIdArray)
+		match self.declaredAliasOfValue(phiId) 'dest'
+			// The merge names no ranged alias, so there is no claim to lift and nothing downstream reads one.
+			undeclared then break 'dest'
+			declared(alias) then self.recordMergeAliasProofAgainst(phiId, alias: alias, incoming: incoming)
+		end 'dest'
+	end 'recordMergeAliasProof'
+
+	// The half above that has the destination range in hand: resolved ONCE and reused across the edges,
+	// because `declaredAliasOfNameId` CONSTRUCTS its `DeclaredAlias` (a probe per edge would be a probe per arm).
+	function recordMergeAliasProofAgainst(phiId ValueId, alias RangedTypeAlias, incoming ValueIdArray)
+		for value in incoming 'eachEdge'
+			if not self.edgeProvesAlias(value, alias: alias) 'edgeProvesNothing'
+				return
+			end 'edgeProvesNothing'
+		end 'eachEdge'
+
+		try self.phiAliasUnprovenMarks.set(phiId, value: false) otherwise panic("recordMergeAliasProofAgainst: v{phiId} has no merge-alias slot — a phi is minted through mintPhi, which sets it")
+	end 'recordMergeAliasProofAgainst'
+
+	// ⭐ **DOES ONE INCOMING EDGE PROVABLY LIE INSIDE `alias`? — THE SAME PAIR OF TESTS A DOOR APPLIES.**
+	// `InsertRangeChecks.needsRuntimeGuard` asks exactly these two of a value meeting a ranged position: it
+	// already denotes a range the destination covers, or it is a compile-time constant of the destination's
+	// own domain that lands inside it. A merge is not a door, but the question *"is this value in range"* is
+	// the door's question, so it is answered the same way rather than a third way.
+	//
+	// ⚠ **THE CONSTANT ARM IS WHAT KEEPS `try f() otherwise 0` ELIDING.** A folded literal denotes NO alias —
+	// `rangeCoversDenotedRange`'s header calls that out as the direction that keeps the guard — so the first
+	// test alone would withhold the claim from the corpus's most common fallback and re-emit a cascade over a
+	// value that cannot fail it, which is the defect A4f exists to delete.
+	//
+	// ⚠ **THE DOMAIN IS PART OF THE TEST, not decoration** — a float `const`'s payload is an IEEE-754 bit
+	// pattern and an integer's is a number, so reading one as the other would compare two things that were
+	// never the same kind of number. Same split, same reason, as `needsRuntimeGuard`'s two const maps.
+	function edgeProvesAlias(value ValueId, alias RangedTypeAlias) returns bool
+		if rangeCoversDenotedRange(alias, source: self.valueDenotedAlias(value)) 'denotesACoveredRange'
+			return true
+		end 'denotesACoveredRange'
+
+		if aliasIsFloat(alias) 'floatAlias'
+			return self.floatConstIsKnown(value) and literalInRange(self.floatConstBitsOf(value), low: alias.low, high: alias.high, isFloat: true)
+		end 'floatAlias'
+
+		return self.constIsKnown(value) and literalInRange(self.constOf(value), low: alias.low, high: alias.high, isFloat: false)
+	end 'edgeProvesAlias'
 
 	// The phi a MERGED BINDING carries: its type is the binding's declared one, which the
 	// binding already holds as a `MaxonType`, so decomposing it constructs nothing.
@@ -23825,6 +23992,10 @@ export type Parser
 		// The promise mark rides the same lockstep, seeded NOT-a-promise; set by `markValuePromise` on the
 		// one value an `async` spawn produces.
 		self.valuePromiseMarks.push(false)
+		// The merge-alias mark rides the same lockstep, seeded PROVEN — an ordinary value's declared alias is
+		// one it passed a door to acquire. Only `mintPhi` sets it, because only a merge can name an alias no
+		// door stood in front of (see the field header).
+		self.phiAliasUnprovenMarks.push(false)
 		// The capturing-closure mark + its env ride the same lockstep, seeded NOT-a-capture / no-env; set by
 		// `parseClosureExpression` on the one value a capturing closure produces (see the field header).
 		self.valueIsCapturingClosure.push(false)
@@ -23863,6 +24034,9 @@ export type Parser
 		self.valueOwnsHeap.push(false)
 		// A parameter is never an async spawn's handle; the slot must exist so the column stays indexable.
 		self.valuePromiseMarks.push(false)
+		// A parameter is never a merge, and its declared range IS proved — by the entry guard `guardRangedParams`
+		// stands in front of every caller (A1f). The slot must exist so the column stays indexable.
+		self.phiAliasUnprovenMarks.push(false)
 		// A parameter is never a capturing closure; the slots must exist so the columns stay indexable by
 		// every ValueId, params (including a lifted closure's trailing `__env`) included.
 		self.valueIsCapturingClosure.push(false)
@@ -25722,7 +25896,15 @@ export type Parser
 			return divisorProofOf(DivisorZeroVerdict.alwaysZero if value == 0 else DivisorZeroVerdict.neverZero, mayBeNegativeOne: value == OverflowingDivisorPattern)
 		end 'intConstant'
 
-		return match self.declaredAliasOfValue(divisor) 'a'
+		// ⚠ **`provenAliasOfValue`, NOT `declaredAliasOfValue` — A MERGE'S DECLARED ALIAS IS NOT A PROOF, AND
+		// THIS IS THE READER WHERE THAT COSTS AN UNCATCHABLE FAULT (G14).** The list above ends *"WHAT REMAINS
+		// IS NOT A DOOR"* and names only `Array.resize`; a phi is the second such producer. MEASURED: a
+		// `NonZero` binding decremented to `0` around a loop kept the alias on its header phi, this answered
+		// `neverZero`, `100 / d` compiled to a BARE `idiv` needing no `throws DivisionByZero` at all — and the
+		// runtime `0` died `panic: integer divide by zero`, the exact uncatchable fault A1f closed the
+		// PARAMETER door to prevent. The withheld claim falls to `undeclared` below, which is the conservative
+		// arm this function already documents as the safe direction.
+		return match self.provenAliasOfValue(divisor) 'a'
 			// One alias, both bounds tests — and the float arm answers `mayBeNegativeOne: false` for the same
 			// reason the float CONSTANT arm does, not because a float range was examined and cleared.
 			declared(alias) gives divisorProofOf(DivisorZeroVerdict.neverZero if rangeExcludesZero(alias.low, high: alias.high, isFloat: aliasIsFloat(alias)) else DivisorZeroVerdict.possiblyZero, mayBeNegativeOne: not aliasIsFloat(alias) and not rangeExcludesNegativeOne(alias.low, high: alias.high))
@@ -37395,6 +37577,7 @@ export type Parser
 		let savedValueConstDomains = self.valueConstDomains
 		let savedValueOwnsHeap = self.valueOwnsHeap
 		let savedValuePromiseMarks = self.valuePromiseMarks
+		let savedPhiAliasUnprovenMarks = self.phiAliasUnprovenMarks
 		let savedOwnedBindings = self.ownedBindings
 		let savedUnusedCandidates = self.unusedCandidates
 		let savedReferencedNames = self.referencedNames
@@ -37495,6 +37678,7 @@ export type Parser
 		self.valueConstDomains = ConstPayloadDomainArray.create()
 		self.valueOwnsHeap = BoolArray.create()
 		self.valuePromiseMarks = BoolArray.create()
+		self.phiAliasUnprovenMarks = BoolArray.create()
 		self.valueIsCapturingClosure = BoolArray.create()
 		self.valueClosureEnv = ValueIdArray.create()
 		self.valueInstanceAlias = sharedEmptyInstanceAliasMap
@@ -37628,6 +37812,7 @@ export type Parser
 		self.valueConstDomains = savedValueConstDomains
 		self.valueOwnsHeap = savedValueOwnsHeap
 		self.valuePromiseMarks = savedValuePromiseMarks
+		self.phiAliasUnprovenMarks = savedPhiAliasUnprovenMarks
 		self.ownedBindings = savedOwnedBindings
 		self.unusedCandidates = savedUnusedCandidates
 		// ⭐ **A CAPTURE IS A MENTION IN THE ENCLOSING FUNCTION** — the oracle's own restore step
