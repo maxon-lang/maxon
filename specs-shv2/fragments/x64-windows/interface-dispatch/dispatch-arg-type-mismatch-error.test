@@ -1,0 +1,32 @@
+// Test: dispatch-arg-type-mismatch-error
+
+typealias Integer = int(i64.min to i64.max)
+
+interface Runner
+	function run(n Integer) returns Integer
+end 'Runner'
+
+type Direct implements Runner
+	export var tag as Integer
+
+	static function create() returns Direct
+		return Self{tag: 0}
+	end 'create'
+
+	function run(n Integer) returns Integer
+		return n
+	end 'run'
+end 'Direct'
+
+function drive(r Runner) returns Integer
+	return r.run("nope")
+end 'drive'
+
+function main() returns ExitCode
+	let v = drive(Direct.create())
+	print("v={v}\n")
+	return 0
+end 'main'
+---
+CompilerError:
+error E3005: <fragment>:22:11: argument type mismatch for 'n': expected 'int', got 'String'

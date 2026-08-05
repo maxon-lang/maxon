@@ -3869,6 +3869,12 @@ export typealias PendingFnMergeCheckArray = Array with PendingFnMergeCheck
 export enum FunctionTypeDoor
 	cast
 	returned
+	// A boxed union's PAYLOAD (`Box.held(twoArg)` at a `held(f OneArg)` case). It names a place — the payload
+	// FIELD — but it is not assignment-SHAPED: the sentence reads "storing into union payload 'f'", not
+	// "assigning to <noun> 'f'", because the construct is a union CONSTRUCTION and the field is not something
+	// the program could assign to on its own. So it sits ahead of the contiguous assignment band rather than
+	// being appended to it, exactly as this enum's own band rule below directs.
+	payload
 	// The ASSIGNMENT-shaped doors, which differ from each other only in what the place is CALLED. They are
 	// arms of this enum rather than one `assigned` arm beside a noun STRING, and that is MEASURED, not
 	// tidiness: a `String` noun threaded on from `Parser.assignableValue` into the door cost ONE ALLOCATION
@@ -3895,9 +3901,11 @@ export function functionTypeDoorNoun(door FunctionTypeDoor) returns String
 		variable then return "variable"
 		global then return "global"
 		field then return "field"
-		// Neither names a place: a cast and a `return` ARE the construct, and `functionTypeDoorSite`
-		// words them without a noun. Reaching here means a caller asked the wrong question of the door.
-		cast to returned then panic("functionTypeDoorNoun: a cast/return door names no place — only the assignment doors have a noun")
+		// None of these takes a noun: a cast and a `return` ARE the construct, and a payload names its field
+		// directly ("union payload 'f'") rather than through a place word. All three are worded by
+		// `functionTypeDoorSite` without asking here, so reaching this arm means a caller asked the wrong
+		// question of the door.
+		cast to payload then panic("functionTypeDoorNoun: a cast/return/payload door names no place word — only the assignment doors have a noun")
 	end 'd'
 end 'functionTypeDoorNoun'
 
@@ -3943,28 +3951,37 @@ export typealias PendingFunctionTypeDoorArray = Array with PendingFunctionTypeDo
 // compiled on every target and READ AN ARGUMENT NOBODY PASSED (see E3122's registry entry for the
 // measurement, and `Parser.requireElementTransform` for the rule).
 //
-// ⛔⛔ **DO NOT READ THE DOOR LIST ABOVE AS A CENSUS OF FUNCTION-VALUE POSITIONS. IT IS NOT ONE, AND AT
-// LEAST ONE DECLARED POSITION REACHES NO DOOR AT ALL.** A union PAYLOAD declared with a function alias is
-// bound through `Parser.requireScalarPayloadArg`, whose only gate is `checkDeclaredType`, and `function`
-// into `function` answers `ok` on the TAG alone — no `recordFunctionTypeDoor`, no shape compare, no arity.
-// MEASURED 2026-08-04, the same two measurements that justify E3122, on a two-parameter function stored in
-// a one-parameter payload and called through it: arm64-macOS prints `v=7` (the second argument is the
-// leftover slot) and `wasm32-wasi` traps with the identical *"indirect call type mismatch"*. It is the SAME
-// defect at a position this record does not cover, it is PRE-EXISTING rather than this rung's, and it is
-// filed for its own rung rather than widened into here.
+// ⛔ **DO NOT READ THE DOOR LIST ABOVE AS A CENSUS OF FUNCTION-VALUE POSITIONS — IT IS THE LIST OF DOORS,
+// AND THE POSITIONS ARE FOUND ONE AT A TIME.** A union PAYLOAD declared with a function alias reached NO
+// door at all: `Parser.requireScalarPayloadArg`'s only gate was `checkDeclaredType`, and `function` into
+// `function` answers `ok` on the TAG alone — no shape compare, no arity. MEASURED 2026-08-04, the same two
+// measurements that justify E3122, on a two-parameter function stored in a one-parameter payload and called
+// through it: arm64-macOS prints `v=7` (the second argument is the leftover slot) and `wasm32-wasi` traps
+// with the identical *"indirect call type mismatch"*. **CLOSED at BATCH18** — the payload is the `payload`
+// door above, recorded like every other, and `first-class-function.error.wrong-signature-into-union-payload`
+// pins it.
 //
-// Two further positions are reported UNVERIFIED alongside it and want the same probe before anyone trusts
-// them either: a witness-dispatched interface ARGUMENT (`Parser.dispatchWitnessMethod`, which checks arity
-// and labels but is reported to compare no argument TYPES at all) and a generic type PARAMETER bound to a
-// function type (`SemanticCheck.checkTypeParameterArgsAt`, where the `function` tag is reported to skip
-// both the nominal and the scalar half).
+// Two further positions were reported UNVERIFIED alongside it. Both have since been MEASURED, and the report
+// was right about one and WRONG about the other:
+//
+//   • a witness-dispatched interface ARGUMENT (`Parser.dispatchWitnessMethod`) — **TRUE**, and closed at
+//     BATCH18. It checks arity (E3036) and labels and compared no argument TYPE anywhere, so `r.run("nope")`
+//     at a `run(n Integer)` requirement compiled while the identical DIRECT call was already E3005;
+//     `SemanticCheck.checkWitnessArgTypes` now routes those arguments through the shared `checkOneArgType`.
+//   • a generic type PARAMETER bound to a function type (`SemanticCheck.checkTypeParameterArgsAt`) —
+//     **FALSE.** The nominal half FIRES (`bx.echo(Beta.create())` on a `Box with Alpha` is
+//     *"E3005: argument type mismatch for 'v': expected 'Alpha', got 'Beta'"*), and the function-shape half
+//     is UNREACHABLE — a function value cannot bind to a type parameter at all, which is itself an E3005.
+//     Left recorded rather than deleted, because an unverified claim that a later reader re-derives is worth
+//     less than the measurement that retired it.
 //
 // It is a SEPARATE record from `PendingFunctionTypeDoor` and not a sixth arm of it, because the two carry
 // different facts. That one names a declared function TYPE and its whole shape must agree; this one has no
 // declared type to name — `function(Element) returns Element` is a contract the compiler owns, whose return
-// half is already decided in the parser by a NOMINAL rule `functionShapesAgree` cannot express
-// (`Parser.elementTransformAnswersElement`) and whose parameter types this rung deliberately leaves
-// unchecked. So what is left to compare whole-program is exactly the arity, and that is what this says.
+// half is already decided in the parser by a rule `functionShapesAgree` cannot express
+// (`Parser.elementTransformAnswersElement`: two structs both `structRef` are not the same element). So what
+// is left to compare whole-program is the ARITY and the transform's PARAMETER against the element — the two
+// facts below, which is why this carries the element alongside the arity rather than the arity alone.
 //
 // It is RECORDED rather than checked in place for `PendingFunctionTypeDoor`'s reason, and it is the reason
 // the check cannot be a closure-literal rule: a function value's own parameter list lives in the
@@ -3978,14 +3995,24 @@ export type PendingTransformArity
 	// The arity the position calls with. A field rather than the literal 1 so the rule and the sentence
 	// cannot come to disagree, and so a future `filter` can record its own.
 	export var expectedArity as ParamCount
+	// ⭐ **THE ELEMENT THE POSITION CALLS WITH, carried INTERNER-FREE as a `(tag, name)` pair** — exactly the
+	// shape `FunctionTypeAlias` keeps its types in, and for the identical reason: a `TypeNameId` is FILE-LOCAL
+	// until `mergeArtifact` remaps it, so a record that travels to the drain may carry no id at all.
+	//
+	// The tag is the element's PRE-resolution tag (a ranged alias is still `named` here), which is what the
+	// container-slot half of `elementTypePreserved` is written against. The identity is EMPTY unless the
+	// element is a STRUCT — see `Parser.resolvedElementIdentity` for why a union/enum element deliberately
+	// carries none across this boundary.
+	export var elementTag as ValueTypeTag
+	export var elementIdentity as ByteArray
 	// The container method whose contract states it, as the source spells it (`map`).
 	export var methodName as ByteArray
 	export var line as LineNumber
 	export var column as ColumnNumber
 	export var filePath as FilePath
 
-	export static function create(gotName ByteArray, expectedArity ParamCount, methodName ByteArray, line LineNumber, column ColumnNumber, filePath FilePath) returns PendingTransformArity
-		return Self{gotName: gotName, expectedArity: expectedArity, methodName: methodName, line: line, column: column, filePath: filePath}
+	export static function create(gotName ByteArray, expectedArity ParamCount, elementTag ValueTypeTag, elementIdentity ByteArray, methodName ByteArray, line LineNumber, column ColumnNumber, filePath FilePath) returns PendingTransformArity
+		return Self{gotName: gotName, expectedArity: expectedArity, elementTag: elementTag, elementIdentity: elementIdentity, methodName: methodName, line: line, column: column, filePath: filePath}
 	end 'create'
 end 'PendingTransformArity'
 

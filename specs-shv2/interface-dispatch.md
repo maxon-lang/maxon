@@ -373,6 +373,228 @@ error E3005: specs/fragments/interface-dispatch/dispatch-nonconforming-error.tes
 ```
 
 
+<!-- test: dispatch-arg-ranged-widening -->
+⭐ **THE ANTI-FALSE-REFUSAL CONTROL for the two refusals below.** A `Small`-typed binding widening into an
+`Integer` parameter is legal, and it must stay legal reached through the WITNESS as well as directly — a
+ranged alias carries the `named` tag where the resolved formal carries `integer`, so a door that started
+comparing argument types NOMINALLY would refuse this and print nothing at all. Both spellings of the same
+call are here so the pair cannot come apart.
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+typealias Small = int(0 to 10)
+
+interface Runner
+	function run(n Integer) returns Integer
+end 'Runner'
+
+type Direct implements Runner
+	export var tag as Integer
+
+	static function create() returns Direct
+		return Self{tag: 0}
+	end 'create'
+
+	function run(n Integer) returns Integer
+		return n
+	end 'run'
+end 'Direct'
+
+function viaWitness(r Runner, s Small) returns Integer
+	return r.run(s)
+end 'viaWitness'
+
+function main() returns ExitCode
+	let d = Direct.create()
+	let a = viaWitness(d, s: 5)
+	let b = d.run(5)
+	print("witness={a} direct={b}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+witness=5 direct=5
+```
+
+
+<!-- test: dispatch-arg-type-mismatch-error -->
+⭐ **ONE COMPILER DISAGREEING WITH ITSELF.** `dispatchWitnessMethod` checked the method NAME, the ARITY and
+the LABELS and compared no argument TYPE anywhere, so `r.run("nope")` at a `run(n Integer)` requirement
+compiled clean and printed a pointer read as an int — while the IDENTICAL call by direct dispatch was
+already refused E3005. The cure is to make the witness path ask the same helper the direct path asks, so
+the two cannot come to disagree again.
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+interface Runner
+	function run(n Integer) returns Integer
+end 'Runner'
+
+type Direct implements Runner
+	export var tag as Integer
+
+	static function create() returns Direct
+		return Self{tag: 0}
+	end 'create'
+
+	function run(n Integer) returns Integer
+		return n
+	end 'run'
+end 'Direct'
+
+function drive(r Runner) returns Integer
+	return r.run("nope")
+end 'drive'
+
+function main() returns ExitCode
+	let v = drive(Direct.create())
+	print("v={v}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:22:11: argument type mismatch for 'n': expected 'int', got 'String'
+```
+
+
+<!-- test: dispatch-arg-wrong-function-shape-error -->
+The FUNCTION-SHAPE half of the same door. Two different function types share the `function` tag exactly as
+two different structs share `structRef`, so the tag comparison the argument check ends with can never
+settle it — the shapes are compared whole-program, by the same `checkOneArgType` arm a direct call's
+function-typed parameter goes through. Unchecked, a two-parameter function reached a one-parameter formal
+and the call read a slot nobody passed on the register targets, trapping `indirect call type mismatch` on
+wasm32-wasi.
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+typealias OneArg = function(Integer) returns Integer
+
+interface Runner
+	function run(f OneArg) returns Integer
+end 'Runner'
+
+type Direct implements Runner
+	export var tag as Integer
+
+	static function create() returns Direct
+		return Self{tag: 0}
+	end 'create'
+
+	function run(f OneArg) returns Integer
+		return f(7)
+	end 'run'
+end 'Direct'
+
+function twoArg(a Integer, b Integer) returns Integer
+	return a + b
+end 'twoArg'
+
+function drive(r Runner) returns Integer
+	return r.run(twoArg)
+end 'drive'
+
+function main() returns ExitCode
+	let v = drive(Direct.create())
+	print("v={v}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:27:11: argument type mismatch for 'f': expected 'fn(int) returns int', got 'fn(int, int) returns int'
+```
+
+
+<!-- test: dispatch-throwing-arg-widening -->
+The `try` half of the argument check, positive side. A `witnessDispatch` op is REWRITTEN to
+`witnessTryDispatch` when the call is written under `try`, so the arguments arrive at the check through a
+second op shape — and a check wired to only one of them would leave the throwing half unguarded while the
+suite stayed green. This is the control that says the guarded half still accepts.
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+enum Boom implements Error
+	bad
+end 'Boom'
+
+interface Risky
+	function risk(n Integer) returns Integer throws Boom
+end 'Risky'
+
+type Safe implements Risky
+	export var tag as Integer
+
+	static function create() returns Safe
+		return Self{tag: 0}
+	end 'create'
+
+	function risk(n Integer) returns Integer throws Boom
+		return n + 1
+	end 'risk'
+end 'Safe'
+
+function drive(r Risky) returns Integer
+	return try r.risk(41) otherwise 0
+end 'drive'
+
+function main() returns ExitCode
+	print("v={drive(Safe.create())}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+v=42
+```
+
+
+<!-- test: dispatch-throwing-arg-type-mismatch-error -->
+And the refusal through the same op shape. The `try` decides how the error flag travels and says nothing
+about what may be passed, so the argument rule is the plain dispatch's, unchanged.
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+enum Boom implements Error
+	bad
+end 'Boom'
+
+interface Risky
+	function risk(n Integer) returns Integer throws Boom
+end 'Risky'
+
+type Safe implements Risky
+	export var tag as Integer
+
+	static function create() returns Safe
+		return Self{tag: 0}
+	end 'create'
+
+	function risk(n Integer) returns Integer throws Boom
+		return n + 1
+	end 'risk'
+end 'Safe'
+
+function drive(r Risky) returns Integer
+	return try r.risk("no") otherwise 0
+end 'drive'
+
+function main() returns ExitCode
+	print("v={drive(Safe.create())}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:26:15: argument type mismatch for 'n': expected 'int', got 'String'
+```
+
+
 <!-- test: dispatch-extended-interface -->
 ```maxon
 

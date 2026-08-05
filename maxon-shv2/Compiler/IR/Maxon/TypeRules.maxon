@@ -2500,3 +2500,97 @@ export function notOperatorFor(operand ValueTypeTag) returns NotOperator
 		interfaceRef gives NotOperator.nonIntegralOperand
 	end 'k'
 end 'notOperatorFor'
+
+// ⭐⭐ **DOES A VALUE'S TAG FIT A CONTAINER SLOT WHOSE DECLARED TYPE IS `declared`?** — THE rule, asked
+// by every container column: a `Set`'s key, a `Map`'s key and a `Map`'s value. The three containers word
+// their refusals differently (each names the type it is), but the RULE must not fork, which is why only the
+// verdict lives here.
+//
+// ⚠ **`map`'s TRANSFORM IS THE FOURTH READER — BOTH HALVES OF IT — AND IT IS THE SAME QUESTION.** "May this
+// value be stored in a slot declared `declared`?" is what element PRESERVATION asks of what the transform
+// ANSWERS and of what it TAKES — the array's element column is the slot, and the ranged-alias measurement
+// below is the very reason (a closure over `typealias Integer = int(…)` returns `named` where the element
+// reads `integer`, and the narrow spelling would refuse `[1,2,3].map(function(x Integer) gives x * 2)` — the
+// construct itself). Both halves reach it through `elementTypePreserved` below rather than calling here
+// directly, so the RETURN half (decided in the parser) and the PARAMETER half (decided whole-program, after
+// merge) cannot come to answer one question two ways.
+//
+// ⚠ It lives HERE rather than beside the container parsers because it acquired a reader in another tier.
+// `SemanticCheck` drains the transform's PARAMETER half, and a rule the parser owned privately would have
+// had to be spelled a second time there — the one-fact-twice bug this file exists to hold the cure for.
+//
+// ⚠ **"IS THIS AN INT?" IS `tagIsIntegral`, NOT `== ValueTypeTag.integer`, AND THE NARROW SPELLING WAS A
+// MEASURED FALSE REFUSAL.** A value whose static type is a RANGED ALIAS carries the `named` tag until
+// TypeResolution collapses it — which is every parameter and every field read of `typealias Integer =
+// int(…)` — so `insert(v)` inside `function add(s IntSet, v Integer)` was rejected as *"`Set with int`
+// requires an int key — got a 'int' value"*, a sentence that argues against itself precisely because
+// `typeTagName` already reads `named` as `int`.
+//
+// ⚠ A Character column asks the DEFINITELY question and not `tagIsByteRecord`: a `String` value is a byte
+// record too, and hashing one as a Character key would put `"a"` and `'a'` in one bucket under two types.
+export function columnValueTagMatches(valueTag ValueTypeTag, declared ValueTypeTag) returns bool
+	if declared == ValueTypeTag.character 'characterColumn'
+		return valueTag == ValueTypeTag.character
+	end 'characterColumn'
+	if tagIsText(declared) 'textColumn'
+		return tagIsText(valueTag)
+	end 'textColumn'
+
+	// ⚠⚠ **THE LAST ARM IS THE INT ARM, AND IT IS DELIBERATELY A FALL-THROUGH RATHER THAN A `tagIsIntegral`
+	// TEST WITH A PANIC PAST IT — because `declared` IS NOT CONFINED TO THE ADMITTED THREE, and that was
+	// MEASURED, not assumed.** `requireHashTableColumnType` runs where a container is MATERIALIZED
+	// (`IntSet.create()`), so a method call on an instance this function never created reaches here with any
+	// column type at all: `function add(s BadSet) s.insert(1.0) end` over `typealias BadSet = Set with float`
+	// reaches it with a float column. A panic on the residual would replace that program's refusal with a
+	// COMPILER CRASH, and the `insert(1)` spelling of the same program would lose its E2062 (the honest
+	// diagnostic, on the type argument) to it. So the residual must ANSWER, not crash.
+	//
+	// ⛔ **BUT WHAT IT ANSWERS FOR A FLOAT IS NOW A WRONG REFUSAL, AND THE ARGUMENT THAT USED TO EXCUSE IT IS
+	// RETRACTED.** That argument was *"a nonsense sentence, but on a program that is refused either way"* —
+	// true only while `float` was no container's legal element. The `Array with float` work made a float array
+	// FIRST-CLASS, so `[1.5, 2.5].map(function(v float) gives v * 2.0)` — a program that must COMPILE — comes
+	// down `requireElementTransform` -> `elementTransformAnswersElement` -> here, reads FALSE off this arm and
+	// is refused as *"`map`'s transform answers a float value where the container's element is a float"*: a
+	// sentence that refutes itself, on a legal program. FILED AS ITS OWN RUNG — the fix is a FLOAT arm
+	// (`tagIsFloat(declared)` -> `tagIsFloat(valueTag)`) ahead of this one plus the spec case that pins it,
+	// and it is deliberately NOT carried by the conditional-extensions port, whose `contains` path never
+	// reaches this predicate. Until then this comment states the defect rather than licensing it.
+	//
+	// A fourth ADMITTED HASH-TABLE column type must likewise be added here as an arm of its own, ahead of this
+	// one — and its gate is not what will stop you forgetting.
+	return tagIsIntegral(valueTag)
+end 'columnValueTagMatches'
+
+// ⭐⭐ **DOES A TYPE STAND FOR THE CONTAINER'S OWN ELEMENT? — `map`'s element-PRESERVATION test, stated ONCE
+// for the two halves of one declaration.** `stdlib/Interfaces.maxon` declares the transform
+// `function(Element) returns Element`, so the question asked of what it ANSWERS and the question asked of
+// what it TAKES are the same question, and the answer had better not depend on which half asks it.
+//
+// It is TWO questions only in the sense the element's own kind makes it two:
+//
+//   • an element with a NOMINAL identity is settled by that identity and by nothing else. `Point` and `Size`
+//     are both `structRef`, and PRESERVING the element type means the SAME type, which only the name says. A
+//     tag test would be too weak here even where it answers.
+//   • an element WITHOUT one is settled by the container-slot rule above, for that predicate's measured
+//     reason: a ranged-int alias carries `named` where the element carries `integer`, and refusing that pair
+//     would reject `[1,2,3].map(function(x Integer) gives x * 2)`, the construct itself.
+//
+// ⚠ **THE ELEMENT DECIDES WHICH QUESTION IS ASKED, NOT THE OTHER SIDE.** The element is what the transform
+// has to preserve, so a nominal element demands a nominal answer (an identity-less `other` then fails, which
+// is right — a bare int does not preserve a `Point`), while a structural element admits everything the
+// container's own column would.
+//
+// ⚠ **EACH CALLER EXTRACTS THE IDENTITIES ITSELF, AND THE TWO EXTRACTORS ARE DELIBERATELY NOT THE SAME
+// FUNCTION** — the same split `SemanticCheck.checkOneArgType` makes between one RULE and two name
+// extractions. The parser compares two PRE-resolution types and reads both through `Parser.aggregateNameOf`;
+// the whole-program drain compares a pre-resolution element against a RESOLVED parameter and must therefore
+// read an identity that survives `resolveTypes` (see `Parser.resolvedElementIdentity`). Feeding one
+// extractor's answer to the other tier is what would produce a false refusal, so the tier is the caller's to
+// know and the verdict is this function's to give.
+export function elementTypePreserved(elementTag ValueTypeTag, elementIdentity ByteArray, otherTag ValueTypeTag, otherIdentity ByteArray) returns bool
+	if elementIdentity.isEmpty() 'structural'
+		return columnValueTagMatches(otherTag, declared: elementTag)
+	end 'structural'
+
+	return elementIdentity.equals(otherIdentity)
+end 'elementTypePreserved'

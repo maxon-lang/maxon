@@ -1659,6 +1659,13 @@ end 'pushSuccessorPair'
 // the flat op INDEX still keys the call-site span in `project.opRanges`. Calls are body
 // ops (never terminators), so only `block.opRefs` is scanned.
 function checkCalls(project Project, module MaxonModule, signatures ProgramSignatures, funcNames FunctionNameIndex, throwsMap FuncThrowsMap, escapeSummary ParamEscapeSummary, mutationSummary ParamMutationSummary)
+	// ⚠ **THE MEMO IS NOT AN OPTIMIZATION** — the note `LowerMaxonToStd.witnessSlotsOf` carries, one pass
+	// over. `interfaceWitnessSlots` walks the `extends` graph and builds a fresh array plus a visited set on
+	// every call; asked once per dispatch OP that is a quadratic in a program's dispatch count. The list is a
+	// pure function of the interface, which is fixed before any body is parsed, so it is built on the FIRST
+	// dispatch through each interface and held. Declared here rather than inside the walk because the walk is
+	// per op and this must outlive every one of them.
+	var witnessSlots = WitnessSlotsByDeclIndex.create()
 	for func in module.functions 'eachFunc'
 		// A STDLIB function no path from `main` reaches is code dead-function elimination will drop
 		// before the back end, so a check here would report a defect in code the program does not
@@ -1736,15 +1743,18 @@ function checkCalls(project Project, module MaxonModule, signatures ProgramSigna
 					switch then break 'op'
 					// A witness dispatch has no callee NAME to resolve — the parser already resolved the interface
 					// method against the type's `where` constraints (`findWitnessDispatchCandidates`), so there is nothing
-					// for this name-signature validation to say (P1.7a slice 2a). Its ONE remaining obligation is
-					// the throws rule every other call shape gets here: a dispatch of a THROWING interface method
-					// that is still a plain `witnessDispatch` was written without `try`, so its flag would be
-					// dropped — the mirror of `validatePlainCall`'s E3057, keyed on the stamp the op carries
-					// because there is no callee name to key it on (P1.7a slice 2b-v).
-					witnessDispatch(_, _, _, _, _, _, isThrowing) then requireTriedWitnessDispatch(project, func: func, opIndex: opIdx, isThrowing: isThrowing)
-					// A `witnessTryDispatch` IS the `try` — it is produced by nothing else — so the rule above is
-					// satisfied by its existence, exactly as a `tryCall` satisfies `validatePlainCall`'s.
-					witnessTryDispatch then break 'op'
+					// for this name-signature validation to say (P1.7a slice 2a). Two obligations remain, and both
+					// are this pass's because neither can be keyed on a callee name. The first is the throws rule
+					// every other call shape gets here: a dispatch of a THROWING interface method that is still a
+					// plain `witnessDispatch` was written without `try`, so its flag would be dropped — the mirror
+					// of `validatePlainCall`'s E3057, keyed on the stamp the op carries (P1.7a slice 2b-v). The
+					// second is the ARGUMENT TYPES (BATCH18); see `checkWitnessArgTypes`.
+					witnessDispatch(_, args, _, methodIndex, interfaceDeclIndex, _, isThrowing) then checkWitnessDispatchOp(project, func: func, signatures: signatures, witnessSlots: witnessSlots, opIndex: opIdx, args: args, methodIndex: methodIndex, interfaceDeclIndex: interfaceDeclIndex, isThrowing: isThrowing)
+					// A `witnessTryDispatch` IS the `try` — it is produced by nothing else — so the throws rule is
+					// satisfied by its existence, exactly as a `tryCall` satisfies `validatePlainCall`'s. Its
+					// ARGUMENTS are the same arguments, so they get the same check: the `try` decides how the error
+					// flag travels and says nothing about what may be passed.
+					witnessTryDispatch(_, _, args, _, methodIndex, interfaceDeclIndex, _) then checkWitnessArgTypes(project, func: func, signatures: signatures, witnessSlots: witnessSlots, opIndex: opIdx, args: args, methodIndex: methodIndex, interfaceDeclIndex: interfaceDeclIndex)
 					// A panic has no callee name to validate.
 					panicAbortValue then break 'op'
 				end 'op'
@@ -1802,6 +1812,169 @@ function requireTriedWitnessDispatch(project Project, func IrFunction, opIndex O
 	let callRange = project.opRanges.get(opIndex)
 	reportPositioned(project, code: ErrorCode.throwingFunctionRequiresTry, message: "throwing interface method requires try: wrap the witness dispatch as `try <receiver>.<method>(…)` — a bare call drops the error flag the method returns", line: callRange.line, column: callRange.column, filePath: func.sourceFilePath)
 end 'requireTriedWitnessDispatch'
+
+// ⭐ **`args[0]` IS THE BORROWED RECEIVER, WHICH FILLS NO FORMAL** — so interface formal `j` is
+// `args[j + WitnessReceiverArgCount]`. The convention's home is `Parser.withWitnessReceiver`, which is what
+// prepends the receiver after the user's arguments have been slotted; this names the offset rather than
+// spelling a bare `1` at the one site in this pass that has to undo it.
+let WitnessReceiverArgCount = 1 as ParamCount
+
+// The witness slot list per dispatched interface, keyed by the declaration-order handle a `witnessDispatch`
+// op carries. See `checkCalls`, where the one instance is created, for why it exists.
+typealias WitnessSlotsByDeclIndex = Map with (InterfaceDeclIndex, CollectedInterfaceMethodArray)
+
+// What an interface FORMAL denotes at the argument check. `opaque` is a real answer — see
+// `witnessFormalDeclaredType` for its four sources and for why each is a position where comparing would be
+// WRONG rather than merely unimplemented. `preErasedAggregate` rides with the type for
+// `checkOneArgType`'s sake: a boxed union/enum formal resolves to bare `integer` and only the carrier still
+// holds its name.
+union WitnessFormalType
+	declared(paramType MaxonType, preErasedAggregate ByteArray)
+	opaque
+end 'WitnessFormalType'
+
+// The two obligations a PLAIN `witnessDispatch` carries here, in one call so the big match's arm binds its
+// `args` once. A `witnessTryDispatch` asks only the second — it IS the `try`.
+function checkWitnessDispatchOp(project Project, func IrFunction, signatures ProgramSignatures, witnessSlots WitnessSlotsByDeclIndex, opIndex OpIndex, args ValueIdArray, methodIndex WitnessMethodIndex, interfaceDeclIndex InterfaceDeclIndex, isThrowing bool)
+	requireTriedWitnessDispatch(project, func: func, opIndex: opIndex, isThrowing: isThrowing)
+	checkWitnessArgTypes(project, func: func, signatures: signatures, witnessSlots: witnessSlots, opIndex: opIndex, args: args, methodIndex: methodIndex, interfaceDeclIndex: interfaceDeclIndex)
+end 'checkWitnessDispatchOp'
+
+// ⭐⭐ **A WITNESS DISPATCH'S ARGUMENTS AGAINST THE REQUIREMENT'S DECLARED FORMALS — AND UNTIL THIS EXISTED
+// ONE COMPILER DISAGREED WITH ITSELF (BATCH18).** `Parser.dispatchWitnessMethod` checks the method NAME, the
+// ARITY (`pickWitnessDispatchByArity`, a pure count — `r.run()` on a 1-parameter method IS E3036) and the
+// LABELS (`slottedWitnessArgs`), and compared no argument TYPE anywhere. So `r.run("nope")` at a
+// `run(n Integer)` requirement compiled clean and printed a pointer read as an int, **while the identical
+// call by DIRECT dispatch was already refused E3005** — two doors of one compiler answering one question two
+// ways. `LowerMaxonToStd.witnessFormalTypes` had already recorded the consequence in its own header
+// (*"arg-derived widths are unsound while that check is absent"*); this is that check.
+//
+// ⛔ **IT WRITES NO COMPARISON OF ITS OWN.** Every argument goes through `checkOneArgType` — the SAME helper
+// a direct call's slotted argument, an indirect call's positional one and an `async` spawn already ask —
+// which is what makes the existential widening, the nominal aggregate identity, the FUNCTION-SHAPE compare
+// and the coercion rule arrive here by construction rather than by a second author remembering all four. A
+// second spelling of "do these two types agree" is precisely the defect this closes.
+//
+// ⚠ **THE FORMALS COME FROM THE REQUIREMENT, NEVER FROM A CONFORMER.** Under dictionary-passing the shared
+// body has no concrete callee — the same reason `slottedWitnessArgs` binds LABELS against the interface —
+// and `ConformanceCheck.signatureMatches` forces every conformer to declare exactly these types anyway.
+//
+// ⭐ The actuals are indexed past the borrowed receiver (`WitnessReceiverArgCount`), the same mapping
+// `Parser.floatWidenedWitnessArgs` and `requireGenuineSelfArgs` walk. The counts agree by construction — the
+// parser's arity check ran before the op was emitted — so a short `args` is a compiler defect and panics
+// rather than being absorbed.
+function checkWitnessArgTypes(project Project, func IrFunction, signatures ProgramSignatures, witnessSlots WitnessSlotsByDeclIndex, opIndex OpIndex, args ValueIdArray, methodIndex WitnessMethodIndex, interfaceDeclIndex InterfaceDeclIndex)
+	let dispatched = dispatchedInterfaceAt(signatures, interfaceDeclIndex: interfaceDeclIndex)
+	let slots = witnessSlotsAt(signatures, witnessSlots: witnessSlots, dispatched: dispatched, interfaceDeclIndex: interfaceDeclIndex)
+	let requirement = (try slots.get(methodIndex) otherwise panic("checkWitnessArgTypes: slot {methodIndex} is outside the {slots.count()} witness slots of interface '{String.from(dispatched.name)}' — the op's `(interfaceDeclIndex, methodIndex)` pair was numbered against a different slot list")).method
+	let callRange = project.opRanges.get(opIndex)
+
+	for j in 0 upto requirement.paramTypeNames.count() 'eachFormal'
+		let formalName = try requirement.paramTypeNames.get(j) otherwise panic("checkWitnessArgTypes: paramTypeNames.get OOB at {j} below count {requirement.paramTypeNames.count()}")
+		match witnessFormalDeclaredType(project, signatures: signatures, dispatched: dispatched, formalName: formalName) 'formal'
+			opaque then continue
+			declared(paramType, preErasedAggregate) then checkOneArgType(project, func: func, paramType: paramType, preErasedAggregate: preErasedAggregate, paramName: witnessFormalName(requirement, position: j), position: j, argId: try args.get(j + WitnessReceiverArgCount) otherwise panic("checkWitnessArgTypes: args.get OOB at {j + WitnessReceiverArgCount} below count {args.count()} — a dispatch reaching here has the receiver plus one actual per formal"), callRange: callRange, filePath: func.sourceFilePath)
+		end 'formal'
+	end 'eachFormal'
+end 'checkWitnessArgTypes'
+
+// The formal's own NAME, for the diagnostic — the INTERFACE's, which is the vocabulary the call binds
+// against (`WitnessDispatchTarget.paramNames` carries the same list for the same reason). Parallel to
+// `paramTypeNames` by construction.
+function witnessFormalName(requirement InterfaceMethodSig, position ParamCount) returns ByteArray
+	return try requirement.paramNames.get(position) otherwise panic("witnessFormalName: paramNames.get OOB at {position} — an InterfaceMethodSig's paramNames and paramTypeNames are parallel by construction ({requirement.paramNames.count()} names, {requirement.paramTypeNames.count()} types)")
+end 'witnessFormalName'
+
+// The interface a dispatch's handle names, resolved through the ONE rule (`lookupInterface`) over the SAME
+// store the parser numbered the dispatch against (`ProgramSignatures.interfaceMap()`, which
+// `Parser.witnessSlotsOf` also walks). Reading the merged `project.interfaces` instead would be a second
+// writer of what must be one declaration, and `LowerMaxonToStd.interfaceAtDeclIndex` has to assert that seam
+// precisely because it reads the other store; asking the numbering's own store leaves nothing to assert.
+function dispatchedInterfaceAt(signatures ProgramSignatures, interfaceDeclIndex InterfaceDeclIndex) returns IrInterface
+	let name = signatures.interfaceNameAtDeclIndex(interfaceDeclIndex)
+	match lookupInterface(signatures.interfaceMap(), name: name) 'resolve'
+		found(iface) then return iface
+		notFound then panic("dispatchedInterfaceAt: interface '{String.from(name)}' holds position {interfaceDeclIndex} in the signature index but resolves to nothing in it — a witness dispatch was numbered against a declaration the index does not carry")
+	end 'resolve'
+end 'dispatchedInterfaceAt'
+
+// `interfaceDeclIndex`'s transitive witness slot list, walked once per INTERFACE — see `checkCalls`, where
+// the memo is created, for why that is a correctness-shaped concern rather than a speed one.
+function witnessSlotsAt(signatures ProgramSignatures, witnessSlots WitnessSlotsByDeclIndex, dispatched IrInterface, interfaceDeclIndex InterfaceDeclIndex) returns CollectedInterfaceMethodArray
+	if let memoized = try witnessSlots.get(interfaceDeclIndex) 'alreadyWalked'
+		return memoized
+	end 'alreadyWalked'
+
+	let slots = interfaceWitnessSlots(signatures.interfaceMap(), iface: dispatched)
+	witnessSlots.upsert(interfaceDeclIndex, value: slots)
+	return slots
+end 'witnessSlotsAt'
+
+// ⭐⭐ **WHAT AN INTERFACE FORMAL DENOTES AT THE ARGUMENT CHECK, or that there is nothing here to compare
+// against.** An interface stores its formals as RENDERED SOURCE NAMES (`IrInterface`'s header), so this door
+// re-derives what a declaration derived once — the same re-derivation `Parser.interfaceReturnMaxonType` makes
+// for the RETURN, sourced from the same `builtinTypeNameTag` table so the two cannot drift.
+//
+// ⚠ **`opaque` IS AN ANSWER, NOT A GAP TO BE FILLED IN LATER.** Three of its four sources are positions where
+// a comparison HERE would be wrong rather than merely absent, and the fourth is a name this pass cannot
+// resolve at all — in every case refusing on a guess would be a false refusal, which is the failure mode a
+// door that starts comparing types most easily acquires.
+function witnessFormalDeclaredType(project Project, signatures ProgramSignatures, dispatched IrInterface, formalName ByteArray) returns WitnessFormalType
+	// A `Self`-typed formal (`Equatable.equals(other Self)`) is the RECEIVER's own type, which the shared body
+	// does not know. `Parser.requireWitnessSelfArgs` already refuses a concrete value there — the check that
+	// exists because marshalling an int literal into a `Self` pointer FAULTS — so this is not an unguarded
+	// position, it is one guarded by a rule stated where the receiver is.
+	if formalName.equals(InterfaceSelfTypeName) 'selfFormal'
+		return WitnessFormalType.opaque
+	end 'selfFormal'
+
+	// An ASSOCIATED TYPE denotes whatever each CONFORMER binds (`implements Taker with float`), so the
+	// interface cannot state it and neither can this. That the conformers must all bind it ALIKE is E3119's,
+	// reported by `ConformanceCheck` with a position; asking `associatedAbiBindingOf` here would re-derive that
+	// fold to refuse an argument against one conformer's binding in a body compiled for all of them.
+	//
+	// ⚠ Asked BEFORE `builtinTypeNameTag`, and the order is load-bearing for `LowerMaxonToStd.witnessFormalType`'s
+	// measured reason: a `uses` parameter is an IDENTIFIER, and `ExitCode`/`String` are identifiers too, so
+	// `interface Taker uses ExitCode` would otherwise read a TYPE PARAMETER as the u32 builtin.
+	if let _ = try associatedTypePositionOf(dispatched.associatedTypeNames, name: formalName) 'aConformerBindsIt'
+		return WitnessFormalType.opaque
+	end 'aConformerBindsIt'
+
+	// A builtin whose spelling settles it — the table's answer is valid here because this door holds a
+	// RENDERED type name, which is exactly the precondition `builtinTypeNameTag`'s header states.
+	let builtinTag = builtinTypeNameTag(formalName)
+	if builtinTag != ValueTypeTag.named 'builtinFormal'
+		return WitnessFormalType.declared(maxonTypeOfTag(builtinTag, nameId: UnnamedTypeId), preErasedAggregate: EmptySourceText)
+	end 'builtinFormal'
+
+	// Every remaining answer needs the name's id in the PROJECT interner, which is where an argument's own
+	// name id lives after the merge. A formal naming a type no file of this program interned is a name nothing
+	// here can resolve — `resolveTypes` reports it (E3011) against the declaration that wrote it — so it is
+	// opaque rather than a second unpositioned report of the same fact.
+	let id = try project.typeNames.idOf(formalName) otherwise return WitnessFormalType.opaque
+
+	// A FUNCTION TYPEALIAS, which `denotedNamedType` does not answer for: it resolves TYPES, and a function
+	// alias lives in `functionAliasShapes`. Answered as `function(id)` — the same type a declared function
+	// PARAMETER of that alias carries — so `checkOneArgType`'s function-shape arm compares the two shapes
+	// exactly as it does for a direct call.
+	if signatures.isFunctionAlias(formalName) 'functionAliasFormal'
+		return WitnessFormalType.declared(MaxonType.function(id), preErasedAggregate: EmptySourceText)
+	end 'functionAliasFormal'
+
+	// A struct, an interface, an enum/union, a ranged alias — the whole-program cascade, one door.
+	// ⚠ A GENERIC-INSTANCE alias and a TUPLE alias are in NEITHER this cascade nor the one above, so both land
+	// on `notDeclared` and are opaque. That is the honest answer and not an omission: both resolve through a
+	// READER'S FILE (`genericAliasInstanceFrom`, `qualifiedAliasOf`), and a requirement's formal is a
+	// whole-program name with no reading file to scope a contested prefix by.
+	let denoted = try denotedNamedType(signatures, name: formalName, id: id) otherwise return WitnessFormalType.opaque
+
+	// A boxed union/enum formal RESOLVES AWAY to bare `integer`, taking its nominal identity with it — the
+	// erasure `checkOneArgType`'s `preErasedAggregate` exists to survive. A direct call recovers the name from
+	// its signature's `paramAggregateNames`; here the formal's own rendered name IS that carrier, and it is
+	// supplied on exactly the gate `Parser.paramAggregateNamesOf` uses so the two routes cannot come to judge
+	// one parameter differently.
+	return WitnessFormalType.declared(denoted, preErasedAggregate: formalName if signatures.containsEnum(formalName) else EmptySourceText)
+end 'witnessFormalDeclaredType'
 
 // ⭐⭐ **THE NOUN A DIAGNOSTIC ABOUT THIS CALL MUST USE — THE ONE DOOR (A1s-prim).** Every message below
 // that quotes a callee asks HERE rather than rendering `callee` for itself, because for one call family the
@@ -2235,14 +2408,14 @@ function checkOneFunctionTypeDoor(project Project, door PendingFunctionTypeDoor)
 	reportPositioned(project, code: code, message: "function type mismatch {functionTypeDoorSite(door)}: expected '{expected}', got '{actual}'", line: door.line, column: door.column, filePath: door.filePath)
 end 'checkOneFunctionTypeDoor'
 
-// ⭐ **DRAIN THE `map` TRANSFORMS — the ARITY half of the same relationship, at the one position whose
+// ⭐ **DRAIN THE `map` TRANSFORMS — the PARAMETER half of the same relationship, at the one position whose
 // function type the COMPILER owns rather than a declaration.** Each entry is a function value bound as a
-// container `map`'s transform; the position calls it with exactly one element, and until this drained
-// nothing compared that against what the value declares. See `PendingTransformArity` and
-// `Parser.requireElementTransform`.
+// container `map`'s transform; the position calls it with exactly one argument and that argument is the
+// container's own element, and until this drained nothing compared either fact against what the value
+// declares. See `PendingTransformArity` and `Parser.requireElementTransform`.
 function checkTransformArities(project Project)
 	for transform in project.pendingTransformArities 'eachTransform'
-		checkOneTransformArity(project, transform: transform)
+		checkOneTransform(project, transform: transform)
 	end 'eachTransform'
 end 'checkTransformArities'
 
@@ -2250,29 +2423,58 @@ end 'checkTransformArities'
 // only from a declared function, a lifted closure or a function alias, and `requireFunctionShapeOf` reads
 // all three.
 //
-// ⚠ **ONLY THE ARITY IS COMPARED, DELIBERATELY.** The RETURN half is already decided, in the parser, by a
-// NOMINAL rule `functionShapesAgree` cannot express (`Parser.elementTransformAnswersElement`: two structs
-// both `structRef` are not the same element), so asking the whole shape here would either duplicate that
-// rule or contradict it. The PARAMETER TYPES are the hole this rung did not close — `nums.map(function(a
-// String) gives 1)` over an int array is still accepted — which is a wider question than the arity ruling
-// settled and is filed rather than half-answered here.
-function checkOneTransformArity(project Project, transform PendingTransformArity)
-	let got = requireFunctionShapeOf(functionTypeRegistryOf(project), name: transform.gotName, side: "transform").paramTypes.count()
-	if got == transform.expectedArity 'agree'
+// ⚠ **THE WHOLE SHAPE IS NOT ASKED, AND THAT IS DELIBERATE.** The RETURN half is already decided, in the
+// parser, by a rule `functionShapesAgree` cannot express (`Parser.elementTransformAnswersElement`: two
+// structs both `structRef` are not the same element), so asking `functionShapesAgree` here would either
+// duplicate that rule or contradict it. What is left for this tier is exactly the arity and the PARAMETER,
+// and the parameter is judged by the SAME `elementTypePreserved` the return half asks — one rule, two
+// extractions, which is the only arrangement in which the two halves of one declaration cannot disagree.
+function checkOneTransform(project Project, transform PendingTransformArity)
+	let shape = requireFunctionShapeOf(functionTypeRegistryOf(project), name: transform.gotName, side: "transform")
+	let method = String.from(transform.methodName)
+	if shape.paramTypes.count() != transform.expectedArity 'wrongArity'
+		reportPositioned(project, code: ErrorCode.transformArityMismatch, message: "`{method}` calls its transform with {transform.expectedArity} argument(s) — the container's own element — but this transform declares {shape.paramTypes.count()} parameter(s); a transform is `function(Element) returns Element`", line: transform.line, column: transform.column, filePath: transform.filePath)
+		return
+	end 'wrongArity'
+
+	checkTransformParamType(project, transform: transform, shape: shape, method: method)
+end 'checkOneTransform'
+
+// ⭐⭐ **THE TRANSFORM'S PARAMETER IS THE CONTAINER'S ELEMENT, AND UNTIL THIS EXISTED IT WAS A REACHABLE
+// SEGFAULT.** `stdlib/Interfaces.maxon` declares the transform `function(Element) returns Element`, and the
+// walk hands it the element whatever it declares — so `nums.map(function(a String) gives a.count())` over an
+// int array compiled clean and died SIGSEGV, dereferencing the integer `1` as a `String` record pointer.
+//
+// The comparison is `elementTypePreserved`, the return half's own verdict; the only local part is the
+// identity EXTRACTION, and the two sides are read at DIFFERENT tiers — the element pre-resolution off the
+// record, the parameter post-resolution off the shape. `Parser.resolvedElementIdentity` carries why that
+// makes the element's recorded identity narrower than the parser's own.
+//
+// It is E3005 and not E3122: the arity ruling's code says how MANY parameters a transform declares, and
+// wearing it for a TYPE disagreement would print a sentence about a count that is correct.
+//
+// ⚠ Reached only past the arity check, so position 0 exists by construction.
+function checkTransformParamType(project Project, transform PendingTransformArity, shape FunctionShape, method String)
+	let paramType = try shape.paramTypes.get(0) otherwise panic("checkTransformParamType: paramTypes.get OOB at 0 — the arity check proved this transform declares {transform.expectedArity} parameter(s)")
+	let paramTag = maxonTypeTag(paramType)
+	let paramIdentity = aggregateNameFor(project, tag: paramTag, nameId: typeNameIdOf(paramType))
+	if elementTypePreserved(transform.elementTag, elementIdentity: transform.elementIdentity, otherTag: paramTag, otherIdentity: paramIdentity) 'agree'
 		return
 	end 'agree'
 
-	let method = String.from(transform.methodName)
-	reportPositioned(project, code: ErrorCode.transformArityMismatch, message: "`{method}` calls its transform with {transform.expectedArity} argument(s) — the container's own element — but this transform declares {got} parameter(s); a transform is `function(Element) returns Element`", line: transform.line, column: transform.column, filePath: transform.filePath)
-end 'checkOneTransformArity'
+	reportPositioned(project, code: ErrorCode.typeMismatch, message: "`{method}` calls its transform with the container's own element, which is '{aggregateArgDisplay(transform.elementIdentity, tag: transform.elementTag)}' — but this transform declares its parameter as '{aggregateArgDisplay(paramIdentity, tag: paramTag)}'; a transform is `function(Element) returns Element`, so its parameter IS the element", line: transform.line, column: transform.column, filePath: transform.filePath)
+end 'checkTransformParamType'
 
 // Where the door was, as the diagnostic says it. An assignment names its place (`assigning to variable
 // 'g'`); a cast and a `return` are the construct itself and name nothing, which is why the record's
-// `placeName` is empty for them and why the three assignment arms are covered by ONE range arm.
+// `placeName` is empty for them and why the three assignment arms are covered by ONE range arm. A PAYLOAD
+// names its field without a place word — it is a union CONSTRUCTION, not an assignment — which is why it has
+// an arm of its own rather than joining the range.
 function functionTypeDoorSite(door PendingFunctionTypeDoor) returns String
 	return match door.door 'd'
 		cast gives "in cast"
 		returned gives "in return"
+		payload gives "storing into union payload '{String.from(door.placeName)}'"
 		variable to field gives "assigning to {functionTypeDoorNoun(door.door)} '{String.from(door.placeName)}'"
 	end 'd'
 end 'functionTypeDoorSite'

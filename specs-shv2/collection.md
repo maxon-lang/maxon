@@ -392,3 +392,110 @@ end 'main'
 ```stdout
 50
 ```
+
+<!-- test: map-declared-ranged-alias-element -->
+An element that arrives DECLARED rather than from a literal. `Array with Integer` names its element with
+a ranged typealias, which carries the `named` tag until TypeResolution collapses it — so the transform's
+`Integer` return and the container's `Integer` element are one type spelled one way, and the door that
+compares them has to say so.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+function main() returns ExitCode
+	var a = IntArray.create()
+	a.push(1)
+	a.push(2)
+	let t = a.map(function(x Integer) gives x + 1)
+	let val0 = try t.get(0) otherwise 0
+	let val1 = try t.get(1) otherwise 0
+	print("{val0}\n")
+	print("{val1}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+2
+3
+```
+
+<!-- test: map-set-with-declared-ranged-alias -->
+The same element, one container over. A `Set`'s element arrives by the identical route, so a rule that
+reads the two containers differently is reading something other than the element.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntSet = Set with Integer
+
+function main() returns ExitCode
+	var s = IntSet.create()
+	s.insert(1)
+	s.insert(2)
+	let t = s.map(function(a Integer) gives a + 1)
+	print("{t.count()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+2
+```
+
+<!-- test: error-map-transform-param-type-mismatch -->
+⭐ **The transform's PARAMETER is the container's element, by the declaration `map` is read from.** A
+transform declaring another type is handed the element regardless: `nums.map(function(a String) gives
+a.count())` over an int array compiled clean and SEGFAULTED, dereferencing the integer `1` as a `String`.
+The arity half of this contract is E3122's; this is the type half, and both are decided whole-program
+because a bare reference to a named function carries no closure literal to read.
+```maxon
+
+function main() returns ExitCode
+	let nums = [1, 2, 3]
+	let out = nums.map(function(a String) gives a.count())
+	print("v={try out.get(0) otherwise 9}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:5:21: `map` calls its transform with the container's own element, which is 'int' — but this transform declares its parameter as 'String'; a transform is `function(Element) returns Element`, so its parameter IS the element
+```
+
+<!-- test: map-struct-element-preserved -->
+⭐ **THE ANTI-FALSE-REFUSAL CONTROL for the parameter half.** A struct element declared through a generic
+alias arrives at the transform door as a `named` — the sweep that recorded the type argument ran before
+anything could say what `Point` denoted — so a parameter check that asked the TAG read it as identity-less
+and refused this program as *"the container's own element, which is 'int'"*. Only the NAME says which kind
+of thing a `named` is, and a struct's name is the one identity that survives resolution.
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+type Point
+	export var x as Integer
+
+	static function create(x Integer) returns Point
+		return Self{x: x}
+	end 'create'
+end 'Point'
+
+typealias PointArray = Array with Point
+
+function main() returns ExitCode
+	var a = PointArray.create()
+	a.push(Point.create(7))
+	let out = a.map(function(p Point) gives p)
+	let first = try out.get(0) otherwise Point.create(0)
+	print("x={first.x}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+x=7
+```

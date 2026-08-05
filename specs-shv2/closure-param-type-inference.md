@@ -38,9 +38,13 @@ agreement worth keeping.
 
 The two rules stay separate because they refuse different things. E2003 is about a parameter no position
 can TYPE and fires in the parser at the parameter's name; E3122 is about how MANY parameters there are and
-fires after merge, at the argument. A transform's parameter TYPES are still unchecked at this position —
-`nums.map(function(a String) gives 1)` over an int array is accepted — which is a separate hole in the same
-mechanism and a wider question than the arity ruling settled.
+fires after merge, at the argument. A THIRD rule stands beside them since BATCH18 and is neither: the
+transform's parameter TYPE must be the container's element, refused as **E3005** after merge at the same
+argument. `nums.map(function(a String) gives 1)` over an int array used to be accepted — and
+`gives a.count()`, the spelling that actually USES the parameter, compiled clean and SEGFAULTED, since the
+walk hands the transform the element whatever it declares. It is pinned by
+`collection.error-map-transform-param-type-mismatch`, with `collection.map-struct-element-preserved` as its
+anti-false-refusal control.
 
 ⚠ **A shape this file exists to keep out.** Accepted, the untyped `b` typed itself from the same hint as
 `a`, and the closure lifted with three ABI slots `(a, b, __env)`; the array runtime's `callIndirect`

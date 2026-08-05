@@ -2776,6 +2776,43 @@ end 'main'
 error E3005: <fragment>:11:2: function type mismatch in return: expected 'fn(int) returns int', got 'fn(int, int) returns int'
 ```
 
+<!-- test: first-class-function.error.wrong-signature-into-union-payload -->
+And through a union PAYLOAD, the fourth door — the one position a declared function type reaches that no
+`PendingFunctionTypeDoor` covered. `requireScalarPayloadArg` gated on `checkDeclaredType` alone, which
+answers `ok` for function-into-function on the TAG, so a two-parameter function stored in a one-parameter
+payload and called through it read a slot nobody passed (`v=7` on arm64-macOS) and trapped
+`indirect call type mismatch` on wasm32-wasi.
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+typealias OneArg = function(Integer) returns Integer
+
+union Box
+	held(f OneArg)
+	empty
+end 'Box'
+
+function twoArg(a Integer, b Integer) returns Integer
+	return a + b
+end 'twoArg'
+
+function call(x Box) returns Integer
+	return match x 'm'
+		held(f) gives f(7)
+		empty gives 0
+	end 'm'
+end 'call'
+
+function main() returns ExitCode
+	let v = call(Box.held(twoArg))
+	print("v={v}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:23:19: function type mismatch storing into union payload 'f': expected 'fn(int) returns int', got 'fn(int, int) returns int'
+```
+
 <!-- test: first-class-function.nested-function-type-agrees-by-shape -->
 A function type whose own PARAMETER is a function type. The rule is the same one level down — RESOLVED
 shape, not the alias NAME — so `Outer = function(f InnerA)` accepts a function declared `(f InnerB)`

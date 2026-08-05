@@ -4122,61 +4122,8 @@ function listMethodMutatesReceiver(name ByteArray) returns bool
 	return name.equals(AppendMethod) or name.equals(ListPrependMethod) or name.equals(ListRemoveFirstMethod)
 end 'listMethodMutatesReceiver'
 
-// ⭐⭐ **DOES A VALUE'S TAG FIT A CONTAINER SLOT WHOSE DECLARED TYPE IS `declared`?** — THE rule, asked
-// by every container column: a `Set`'s key, a `Map`'s key and a `Map`'s value. The three containers word
-// their refusals differently (each names the type it is), but the RULE must not fork, which is why only the
-// verdict lives here.
-//
-// ⚠ **`map`'s TRANSFORM RETURN TYPE IS THE FOURTH READER, AND IT IS THE SAME QUESTION.** "May this value be
-// stored in a slot declared `declared`?" is what `requireElementTransform` asks of what the transform
-// ANSWERS — the array's element column is the slot, and the ranged-alias measurement below is the very reason
-// (a closure over `typealias Integer = int(…)` returns `named` where the element reads `integer`, and the
-// narrow spelling would refuse `[1,2,3].map(function(x Integer) gives x * 2)` — the construct itself).
-//
-// ⚠ **"IS THIS AN INT?" IS `tagIsIntegral`, NOT `== ValueTypeTag.integer`, AND THE NARROW SPELLING WAS A
-// MEASURED FALSE REFUSAL.** A value whose static type is a RANGED ALIAS carries the `named` tag until
-// TypeResolution collapses it — which is every parameter and every field read of `typealias Integer =
-// int(…)` — so `insert(v)` inside `function add(s IntSet, v Integer)` was rejected as *"`Set with int`
-// requires an int key — got a 'int' value"*, a sentence that argues against itself precisely because
-// `typeTagName` already reads `named` as `int`.
-//
-// ⚠ A Character column asks the DEFINITELY question and not `tagIsByteRecord`: a `String` value is a byte
-// record too, and hashing one as a Character key would put `"a"` and `'a'` in one bucket under two types.
-function columnValueTagMatches(valueTag ValueTypeTag, declared ValueTypeTag) returns bool
-	if declared == ValueTypeTag.character 'characterColumn'
-		return valueTag == ValueTypeTag.character
-	end 'characterColumn'
-	if tagIsText(declared) 'textColumn'
-		return tagIsText(valueTag)
-	end 'textColumn'
-
-	// ⚠⚠ **THE LAST ARM IS THE INT ARM, AND IT IS DELIBERATELY A FALL-THROUGH RATHER THAN A `tagIsIntegral`
-	// TEST WITH A PANIC PAST IT — because `declared` IS NOT CONFINED TO THE ADMITTED THREE, and that was
-	// MEASURED, not assumed.** `requireHashTableColumnType` runs where a container is MATERIALIZED
-	// (`IntSet.create()`), so a method call on an instance this function never created reaches here with any
-	// column type at all: `function add(s BadSet) s.insert(1.0) end` over `typealias BadSet = Set with float`
-	// reaches it with a float column. A panic on the residual would replace that program's refusal with a
-	// COMPILER CRASH, and the `insert(1)` spelling of the same program would lose its E2062 (the honest
-	// diagnostic, on the type argument) to it. So the residual must ANSWER, not crash.
-	//
-	// ⛔ **BUT WHAT IT ANSWERS FOR A FLOAT IS NOW A WRONG REFUSAL, AND THE ARGUMENT THAT USED TO EXCUSE IT IS
-	// RETRACTED.** That argument was *"a nonsense sentence, but on a program that is refused either way"* —
-	// true only while `float` was no container's legal element. The `Array with float` work made a float array
-	// FIRST-CLASS, so `[1.5, 2.5].map(function(v float) gives v * 2.0)` — a program that must COMPILE — comes
-	// down `requireElementTransform` -> `elementTransformAnswersElement` -> here, reads FALSE off this arm and
-	// is refused as *"`map`'s transform answers a float value where the container's element is a float"*: a
-	// sentence that refutes itself, on a legal program. FILED AS ITS OWN RUNG — the fix is a FLOAT arm
-	// (`tagIsFloat(declared)` -> `tagIsFloat(valueTag)`) ahead of this one plus the spec case that pins it,
-	// and it is deliberately NOT carried by the conditional-extensions port, whose `contains` path never
-	// reaches this predicate. Until then this comment states the defect rather than licensing it.
-	//
-	// A fourth ADMITTED HASH-TABLE column type must likewise be added here as an arm of its own, ahead of this
-	// one — and its gate is not what will stop you forgetting.
-	return tagIsIntegral(valueTag)
-end 'columnValueTagMatches'
-
 // `typeTagName` with its English indefinite article — *"an int"*, *"a String"*, *"a Character"*. It exists
-// because the container-column refusals above compose that phrase and a bare `"a {typeTagName(t)}"` reads
+// because this file's container-column refusals compose that phrase and a bare `"a {typeTagName(t)}"` reads
 // *"a int"*, so without it the article would be written out once per refusal site and the three would be
 // free to disagree.
 //
@@ -31245,6 +31192,21 @@ export type Parser
 	function requireScalarPayloadArg(field PayloadField, declared MaxonType, value ValueId, layout EnumLayout, caseTok Token) throws ParseError
 		let declaredTag = maxonTypeTag(declared)
 		let got = self.tagOf(value)
+
+		// ⭐⭐ **A FUNCTION VALUE INTO A FUNCTION-TYPED PAYLOAD IS THE FOURTH DOOR, AND IT REACHED NONE OF THEM
+		// (BATCH18).** `checkDeclaredType` answers `ok` for `function` meeting `function` on the TAG alone —
+		// which is right, because two function TYPES share that tag exactly as two structs share `structRef`
+		// and no tag comparison can settle it. Every other position that holds a declared function type
+		// records a door for `SemanticCheck.checkFunctionTypeDoors`; this one fell through the `ok` arm and
+		// compared nothing at all. MEASURED on a two-parameter function stored in a one-parameter payload and
+		// called through it: arm64-macOS prints `v=7` — the second argument is the leftover slot — and
+		// `wasm32-wasi` traps *"indirect call type mismatch"*, `call_indirect` being the one target that
+		// checks. Recorded rather than decided here for `recordFunctionTypeDoor`'s reason: the shapes live in
+		// the whole-program registries and are compared RESOLVED.
+		if isFunctionTypeDoor(declaredTag, got: got) 'functionIntoFunctionPayload'
+			self.recordFunctionTypeDoor(typeNameIdOf(declared), gotNameId: self.valueNameId(value), door: FunctionTypeDoor.payload, placeName: field.name, anchor: caseTok)
+		end 'functionIntoFunctionPayload'
+
 		match checkDeclaredType(got, declared: declaredTag) 'declared'
 			ok then break 'declared'
 			mismatch then throw ParseError.assignTypeMismatch("{String.from(layout.name)}.{String.from(caseTok.value)}({String.from(field.name)})", got: typeTagName(got), expected: typeTagName(declaredTag), line: caseTok.line, column: caseTok.column)
@@ -33129,17 +33091,25 @@ export type Parser
 	// there is no second element type for the parser to infer, for `emitArrayCreateOp` to stamp, or for the
 	// runtime's word-shaped `callIndirect` to carry.
 	//
-	// The tag comparison is `columnValueTagMatches` — the container-slot rule, already written for a `Set`'s
-	// key and a `Map`'s two columns — and not `==`, for the reason its header measured: a ranged-int alias
-	// carries the `named` tag where the element carries `integer`, and refusing that pair would reject
+	// The comparison is `elementTypePreserved` — nominal for an element that has an identity, and the
+	// container-slot rule (already written for a `Set`'s key and a `Map`'s two columns) for one that has not —
+	// and not `==`, for the reason `columnValueTagMatches`'s header measured: a ranged-int alias carries the
+	// `named` tag where the element carries `integer`, and refusing that pair would reject
 	// `[1,2,3].map(function(x Integer) gives x * 2)`, which is the construct itself.
 	//
-	// ⭐⭐ **AND IT MUST DECLARE EXACTLY ONE PARAMETER (E3122) — RECORDED HERE, DECIDED WHOLE-PROGRAM.** The
-	// third half of the same declaration, and the one the parser cannot answer: a function value's parameter
-	// list lives in `funcSignatures`/`functionAliasShapes`, which are not assembled until merge, and a lifted
-	// closure's is file-local until then (`closureReturns` records only its RETURN). So this records the
-	// value's governing NAME and `SemanticCheck.checkTransformArities` compares. See PendingTransformArity —
-	// including why it is not a sixth `PendingFunctionTypeDoor` arm.
+	// ⭐⭐ **AND ITS PARAMETER MUST BE THE ELEMENT — ONE OF THEM (E3122) AND OF THAT TYPE (E3005) — RECORDED
+	// HERE, DECIDED WHOLE-PROGRAM.** The third half of the same declaration, and the one the parser cannot
+	// answer: a function value's parameter list lives in `funcSignatures`/`functionAliasShapes`, which are not
+	// assembled until merge, and a lifted closure's is file-local until then (`closureReturns` records only
+	// its RETURN). So this records the value's governing NAME and the ELEMENT to judge it against, and
+	// `SemanticCheck.checkTransformArities` compares. See PendingTransformArity — including why it is not a
+	// sixth `PendingFunctionTypeDoor` arm.
+	//
+	// ⚠⚠ **THE TYPE HALF WAS A REACHABLE SEGFAULT, NOT AN ACCEPTED LOOSENESS.** `nums.map(function(a String)
+	// gives a.count())` over an int array compiled clean and died SIGSEGV (exit 139): the walk hands the
+	// transform the element regardless of what it declares, so the integer `1` was dereferenced as a `String`
+	// record pointer. The milder `gives 1` spelling compiled and printed a plausible answer — the contract was
+	// already broken there, the crash only arrives when the body USES the parameter.
 	//
 	// ⚠ **IT IS RECORDED FOR THE VALUE, NOT FOR A CLOSURE LITERAL, AND THAT IS THE WHOLE POINT.**
 	// `nums.map(twoArg)` has no closure in it — the arity belongs to a function that may be declared in
@@ -33162,40 +33132,84 @@ export type Parser
 			throw ParseError.unsupported("`{String.from(MapMethod)}`'s transform answers {articledTypeTagName(maxonTypeTag(returned))} value where the container's element is {articledTypeTagName(declared)} — shv2's `{String.from(MapMethod)}` is element-type-PRESERVING (`stdlib/Interfaces.maxon:187` declares it `function(Element) returns Element`), so a transform to another type is a later slice", line: argTok.line, column: argTok.column)
 		end 'wrongElementType'
 
-		self.artifact.recordTransformArity(PendingTransformArity.create(self.internedName(self.valueNameId(transform)), expectedArity: ElementTransformArity, methodName: MapMethod, line: argTok.line, column: argTok.column, filePath: self.filePath))
+		self.artifact.recordTransformArity(PendingTransformArity.create(self.internedName(self.valueNameId(transform)), expectedArity: ElementTransformArity, elementTag: declared, elementIdentity: self.resolvedElementIdentity(elementType), methodName: MapMethod, line: argTok.line, column: argTok.column, filePath: self.filePath))
 	end 'requireElementTransform'
 
-	// ⭐⭐ **DOES THE TRANSFORM ANSWER THE CONTAINER'S OWN ELEMENT TYPE — the element-PRESERVATION test, which
-	// is TWO different questions depending on what an element is.**
+	// ⭐⭐ **DOES THE TRANSFORM ANSWER THE CONTAINER'S OWN ELEMENT TYPE — the RETURN half of the
+	// element-PRESERVATION test.** The verdict is `elementTypePreserved`, shared with the PARAMETER half; what
+	// is local here is only the identity EXTRACTION, and both ids are this FILE's, which is what makes the
+	// names comparable (`parseContainerMap` adopts the element into the file interner, and every answer
+	// `functionValueReturnType` gives is adopted there too).
 	//
-	// A scalar / text element is settled by the TAG, through `columnValueTagMatches`, for that predicate's
-	// measured reason: a ranged-int alias carries `named` where the element carries `integer`, and refusing
-	// that pair would reject `[1,2,3].map(function(x Integer) gives x * 2)`, which is the construct itself.
-	//
-	// ⚠ **AN AGGREGATE ELEMENT IS SETTLED BY THE NAME, AND THAT PREDICATE CANNOT ANSWER FOR ONE AT ALL.** It
-	// is the HASH-TABLE COLUMN rule, and its own header records that its last arm is the INT arm and that
-	// `declared` is not confined to the admitted set — so a `structRef` element falls straight through it to
-	// `tagIsIntegral` and reads FALSE. MEASURED on `<map>.map(function(p) gives p)`, whose element is the
+	// ⚠ **AN AGGREGATE ELEMENT IS SETTLED BY THE NAME, AND `columnValueTagMatches` CANNOT ANSWER FOR ONE AT
+	// ALL.** It is the HASH-TABLE COLUMN rule, and its own header records that its last arm is the INT arm and
+	// that `declared` is not confined to the admitted set — so a `structRef` element falls straight through it
+	// to `tagIsIntegral` and reads FALSE. MEASURED on `<map>.map(function(p) gives p)`, whose element is the
 	// entry pair: *"`map`'s transform answers a struct value where the container's element is a struct"*, a
 	// sentence that refutes itself. Widening THAT predicate is the wrong door — a hash-table column may never
-	// be a struct (`requireHashTableColumnType`) — and a tag test would be too WEAK here even if it answered:
-	// `Point` and `Size` are both `structRef`, and PRESERVING the element type means the same type, which
-	// only the name says.
-	//
-	// Both ids are this FILE's, which is what makes the names comparable: `parseContainerMap` adopts the
-	// element into the file interner, and every answer `functionValueReturnType` gives is adopted there too.
+	// be a struct (`requireHashTableColumnType`).
 	function elementTransformAnswersElement(returned MaxonType, elementType MaxonType) returns bool
-		let declared = maxonTypeTag(elementType)
-		if not self.signatures.tagMayNameAggregate(declared) 'byTag'
-			return columnValueTagMatches(maxonTypeTag(returned), declared: declared)
-		end 'byTag'
-
-		if not self.signatures.tagMayNameAggregate(maxonTypeTag(returned)) 'answersSomethingElse'
-			return false
-		end 'answersSomethingElse'
-
-		return self.internedName(typeNameIdOf(returned)).equals(self.internedName(typeNameIdOf(elementType)))
+		return elementTypePreserved(maxonTypeTag(elementType), elementIdentity: self.declaredElementIdentity(elementType), otherTag: maxonTypeTag(returned), otherIdentity: self.declaredElementIdentity(returned))
 	end 'elementTransformAnswersElement'
+
+	// ⭐⭐ **THE NOMINAL IDENTITY A PARSE-TIER ELEMENT COMPARISON USES — `aggregateNameOf`'s answer, and
+	// EMPTY exactly where the comparison is the structural one.**
+	//
+	// ⚠⚠ **THE GATE USED TO BE `tagMayNameAggregate` ALONE, AND THAT WAS A MEASURED FALSE REFUSAL (A5i).**
+	// That predicate answers `structRef or named` — and a PLAIN RANGED ALIAS is `named` too until
+	// TypeResolution collapses it (`columnValueTagMatches`'s header carries the measurement). So an element
+	// declared `Array with Integer` / `Set with Integer` took the NOMINAL branch, compared the interned name
+	// `Integer` against the transform's `int`, missed, and was refused *"`map`'s transform answers an int
+	// value where the container's element is an int"* — a sentence that refutes itself, on a legal program.
+	// The discriminator was never the CONTAINER (both are refused identically): it is how the element
+	// ARRIVES, literal (`integer`, structural, accepted) versus declared (`named`, nominal, refused).
+	//
+	// `aggregateNameOf` already draws exactly the line that was wanted — `containsStruct` / `containsEnum` /
+	// `isPerInstanceAlias` name an aggregate, a plain ranged alias does not — so the cure is to ask the
+	// question the whole parser already asks, rather than to widen `tagMayNameAggregate`, which has nine
+	// callers including the MAP LITERAL's key and value inference (`literalColumnTypeFor`).
+	//
+	// ⚠ The `tagMayNameAggregate` gate is KEPT ahead of it, and that is deliberate rather than redundant:
+	// `aggregateNameOf` also names an `interfaceRef` and a `genericInstance`, which this door has always
+	// refused as elements and which admitting would open a lowering path nothing in the corpus exercises. A
+	// widening there is its own piece of work with its own cases, not a side effect of this one.
+	function declaredElementIdentity(t MaxonType) returns ByteArray
+		let tag = maxonTypeTag(t)
+		if not self.signatures.tagMayNameAggregate(tag) 'noNominalIdentityHere'
+			return EmptySourceText
+		end 'noNominalIdentityHere'
+
+		return self.aggregateNameOf(tag, nameId: typeNameIdOf(t))
+	end 'declaredElementIdentity'
+
+	// ⭐⭐ **THE ELEMENT IDENTITY THAT SURVIVES `resolveTypes`, for the whole-program PARAMETER half — a
+	// STRUCT's name, and nothing else.**
+	//
+	// The parameter half compares this element against a transform's RESOLVED parameter type, which is one
+	// tier further on than `declaredElementIdentity` reads. A struct keeps its id through resolution; a boxed
+	// union/enum does NOT — it erases to bare `integer` — so carrying its pre-erasure name across that
+	// boundary would compare `Color` against an erased parameter that can no longer say so, and refuse a
+	// legal program. `SemanticCheck.checkOneArgType` describes the identical boundary and recovers the name
+	// from the carrier `paramAggregateNames`; a `FunctionShape` is not a `FuncSignature` and carries no such
+	// column, so the honest answer here is to compare a union/enum element STRUCTURALLY (an erased parameter
+	// and a `named` element are both integral, which is what the container column already says) rather than
+	// to invent a carrier the transform's shape does not have.
+	//
+	// ⚠⚠ **THE TEST IS "DOES THE NAME DENOTE A STRUCT?", NOT "IS THE TAG `structRef`?", AND THE NARROW
+	// SPELLING WAS A MEASURED FALSE REFUSAL.** A `typealias PointArray = Array with Point` hands this door a
+	// `named("Point")` — the SWEEP that recorded the type argument ran before anything could say what the
+	// name denoted — so the tag test read it as identity-less, fell to the structural branch and refused
+	// `a.map(function(p Point) gives p)` as *"the container's own element, which is 'int'"* on a program that
+	// compiles. It is `declaredElementIdentity`'s trap one level down: `named` is what a declared thing
+	// arrives as, and only the NAME says which kind of thing it is.
+	function resolvedElementIdentity(elementType MaxonType) returns ByteArray
+		let name = self.declaredElementIdentity(elementType)
+		if not self.signatures.containsStruct(name) 'erasesOrHasNoIdentity'
+			return EmptySourceText
+		end 'erasesOrHasNoIdentity'
+
+		return name
+	end 'resolvedElementIdentity'
 
 	// The value type `transform` answers. A VOID function value is refused HERE rather than reaching the tag
 	// comparison, because "returns nothing" is a different complaint from "returns the wrong thing" and the
