@@ -486,6 +486,25 @@ printf '%s %s %s\n' "$TIP_DRIFT" "$TIP_PASSED" "$TIP_FAILED" > "$LOGDIR/rung-dri
 
 restore_stash
 
+# ⛔ **A COMMIT CONTAINING CONFLICT MARKERS MUST NOT BE REACHABLE FROM A GREEN CLOSURE.**
+# `restore_stash` only WARNS when the pop conflicts, and everything below — the flip, the commit, the
+# push — runs anyway. MEASURED 2026-08-05 (BATCH23): another agent added a row to the same board table
+# while the rung was gating, the pop conflicted, and the script reported `RUNG LANDED` with exit 0
+# having committed AND PUSHED three `<<<<<<<` markers, a duplicated batch row and statuses it believed
+# it had flipped. The gates were all green; none of them looks at the file the closure is ABOUT.
+#
+# Resolving the pop is a judgement call — the upstream side may carry another agent's live claim that
+# must survive, so this cannot be automated — but shipping the markers is never right.
+# ⚠ Matched as a PREFIX, not an exact line: git writes `<<<<<<< Updated upstream` and
+# `>>>>>>> Stashed changes` with a suffix, and only `=======` is ever bare — so an anchored `$` would
+# have caught this conflict solely by way of that one line, and missed a diff3-style one entirely.
+if grep -qE '^(<<<<<<<|>>>>>>>|\|\|\|\|\|\|\||=======)' "$REPO/maxon-shv2/PLAN.md" 2>/dev/null; then
+  die "maxon-shv2/PLAN.md contains CONFLICT MARKERS — the stash pop above did not clean up.
+   Nothing has been flipped, committed or pushed. Resolve PLAN.md by hand in $REPO, keeping BOTH
+   sides' rows (the upstream side may hold another agent's live claim — deleting it is worse than
+   any conflict), then re-run. Your detail rows are still in \`git stash list\` if you need them."
+fi
+
 if [ "$WAVE" = "0" ]; then
   # ⭐ THE FLIP IS MECHANICAL AND THIS IS WHERE IT HAPPENS — including every member row. A finished
   #    slice whose row was never flipped blocks its whole lane exactly as effectively as an abandoned
