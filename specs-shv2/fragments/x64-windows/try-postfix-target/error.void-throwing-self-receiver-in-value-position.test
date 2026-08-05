@@ -1,0 +1,34 @@
+// Test: error.void-throwing-self-receiver-in-value-position
+typealias Integer = int(i64.min to i64.max)
+
+enum E implements Error
+	bad
+end 'E'
+
+type Gate
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	function bump(v Integer) throws E
+		if v < 0 'neg'
+			throw E.bad
+		end 'neg'
+		n = n + v
+	end 'bump'
+
+	function drive() returns Integer throws E
+		let x = try self.bump(1) otherwise return 9
+		return x
+	end 'drive'
+end 'Gate'
+
+function main() returns ExitCode
+	var g = Gate.create()
+	return try g.drive() otherwise 8
+end 'main'
+---
+CompilerError:
+error E3059: <fragment>:23:11: type mismatch: ''Gate.bump' does not return a value'

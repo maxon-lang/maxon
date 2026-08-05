@@ -18636,7 +18636,7 @@ export type Parser
 			return try self.parseFieldChainCall(func, resultUsed: false)
 		end 'fieldChainTarget'
 		if self.at(TokenKind.self) 'selfCall'
-			return try self.parseSelfPrimary(func)
+			return try self.parseSelfPrimary(func, resultUsed: false)
 		end 'selfCall'
 		if self.at(TokenKind.identifier) 'named'
 			if self.peekKind() == TokenKind.leftParen 'freeCall'
@@ -30694,7 +30694,7 @@ export type Parser
 		// (`self` vs `selfType`; the lexer splits them, so nothing here has to). Its own arm for the
 		// same reason `Self{…}` has one: a keyword cannot ride the identifier arm below.
 		if self.at(TokenKind.self) 'selfReceiver'
-			return try self.parseSelfPrimary(func)
+			return try self.parseSelfPrimary(func, resultUsed: true)
 		end 'selfReceiver'
 
 		// `sizeof(Type)` (P1.6-B1) — its own arm because `sizeof` is a KEYWORD, so it cannot ride the
@@ -41077,7 +41077,16 @@ export type Parser
 	// and every rule that already governs a borrowed struct/union parameter reaches it unchanged. The
 	// load-bearing one is the HAND-OFF promotion: `return self` and `f(self)` are the `return p` / `f(p)` of
 	// a `p Point` parameter, decided by `emitOwnedValueReturn` and the ordinary argument rules, in ONE place.
-	function parseSelfPrimary(func IrFunction) returns ValueId throws ParseError
+	//
+	// ⚠⚠ **`resultUsed` IS THE CALLER'S, NOT `true` — AND HARDCODING IT REFUSED A LEGAL `try self.m()`.** This
+	// is reached from a VALUE position (`parsePrimary`) and from a `try` TARGET position
+	// (`parseTryCallReceiver`), which is a STATEMENT: `try self.advance()` runs a void throwing method for its
+	// effect, exactly as `try advance()` and `try other.advance()` do. With the flag pinned `true`, the void
+	// arm of `mintDeclaredCallResult` fired instead — `E2004: Function 'C.advance' does not return a value`,
+	// about a call whose value nobody asked for. MEASURED against the bootstrap, which compiles and runs the
+	// same program. The `self` arm was the ONE arm of `parseTryCallReceiver` not threading the caller's flag;
+	// every sibling arm there already passed `false`, which is why the two other spellings were unaffected.
+	function parseSelfPrimary(func IrFunction, resultUsed bool) returns ValueId throws ParseError
 		let selfTok = self.current()
 
 		// A receiver is required for EVERY destination, so its EXISTENCE is established once, here, before
@@ -41099,7 +41108,7 @@ export type Parser
 		end 'bareSelf'
 
 		if self.methodCallsAt(self.pos) 'methodCall'
-			return try self.parseMethodCall(func, resultUsed: true)
+			return try self.parseMethodCall(func, resultUsed: resultUsed)
 		end 'methodCall'
 
 		return try self.parseExplicitSelfFieldRead()

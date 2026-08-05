@@ -239,6 +239,124 @@ end 'main'
 5
 ```
 
+### ⚠⚠ THE THIRD RECEIVER SPELLING — `try self.m()`, WHICH THE CASE ABOVE IS ONE WORD AWAY FROM
+
+**The case above runs a void throwing method through a STATIC (`Gate.check`) and a NAMED receiver
+(`g.bump`), and both were always right. `self` — the same method, the same position — was refused
+`E2004: Function 'Gate.bump' does not return a value`, about a call whose value nobody asked for.**
+
+The cause is the rule `void-call-result.md` states in bold: *a `try` target is parsed with
+`resultUsed: false` BY DESIGN*, because the `try` decides value-ness at its OWN position from the TAG
+of the result the target minted. Every arm of `parseTryCallReceiver` threaded that `false` through —
+except the `self` arm, which reached `parseSelfPrimary`, a routine shared with VALUE position
+(`parsePrimary`) that hardcoded `resultUsed: true`. So the guard that cannot see a `try` target fired
+inside one anyway, and only for the one receiver spelling that shares a parse routine with an
+expression. It is now the caller's flag at both call sites.
+
+⚠ MEASURED against the bootstrap, which compiles and runs the identical program — so this was a wrong
+REJECTION and not a stricter reading.
+
+⚠ **BOTH EDGES ARE IN THE ONE CASE, because a threading bug and a deleted check are told apart by the
+error edge.** `driveTwice` runs two `try self.bump(…)` statements for their effect (`n` becomes 5), then
+`driveBad`'s bare `try self.bump(-1)` PROPAGATES out of a method whose own `try` has no handler — the
+exit code is `total()` read on that error edge, so a `try self.m()` that silently discarded its flag
+would return 0 here.
+
+<!-- test: void-throwing-self-receiver -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+enum E implements Error
+	bad
+end 'E'
+
+type Gate
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	function bump(v Integer) throws E
+		if v < 0 'neg'
+			throw E.bad
+		end 'neg'
+		n = n + v
+	end 'bump'
+
+	function driveTwice() throws E
+		try self.bump(2)
+		try self.bump(3)
+	end 'driveTwice'
+
+	function driveBad() throws E
+		try self.bump(-1)
+	end 'driveBad'
+
+	function total() returns Integer
+		return n
+	end 'total'
+end 'Gate'
+
+function main() returns ExitCode
+	var g = Gate.create()
+	try g.driveTwice() otherwise return 9
+	try g.driveBad() otherwise return g.total()
+	return 0
+end 'main'
+```
+```exitcode
+5
+```
+
+<!-- test: error.void-throwing-self-receiver-in-value-position -->
+⚠ **THE CONTROL, AND WITHOUT IT THE CASE ABOVE IS ALSO GREEN WHEN THE CHECK IS SIMPLY GONE.** A void
+throwing method under a `try` in VALUE position is still refused — by the TAG, at the `try`'s own
+position (`parseTry`'s `voidInValue`, E3059).
+
+⚠⚠ **AND IT PINS MORE THAN "STILL REFUSED": IT PINS *WHICH* REFUSAL, BECAUSE THE `self` SPELLING WAS
+REACHING THE WRONG ONE.** MEASURED on the unfixed compiler, this program was `E2004` at column **15**
+— the receiver-arm guard, quoting a construct the `try` had already taken responsibility for — where
+every other receiver spelling gave `E3059` at column **11**. So the hardcoded flag cost the `self`
+spelling BOTH answers: the statement form was refused outright, and the value form was refused by the
+wrong check at the wrong anchor. The message names the same method a named receiver's does; the two are
+told apart by their programs, not their text.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+enum E implements Error
+	bad
+end 'E'
+
+type Gate
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	function bump(v Integer) throws E
+		if v < 0 'neg'
+			throw E.bad
+		end 'neg'
+		n = n + v
+	end 'bump'
+
+	function drive() returns Integer throws E
+		let x = try self.bump(1) otherwise return 9
+		return x
+	end 'drive'
+end 'Gate'
+
+function main() returns ExitCode
+	var g = Gate.create()
+	return try g.drive() otherwise 8
+end 'main'
+```
+```maxoncstderr
+error E3059: <fragment>:23:11: type mismatch: ''Gate.bump' does not return a value'
+```
+
 <!-- test: error.two-throwing-calls-in-one-chain -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
