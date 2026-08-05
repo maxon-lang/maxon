@@ -73,3 +73,75 @@ end 'main'
 ```stdout
 ok
 ```
+
+<!-- test: sleep.main-thread-with-concurrent-async-io -->
+A `sleep()` on the MAIN thread lasts its full duration even while an `async`
+worker is outstanding. The worker is expected to run *during* the sleep — that is
+what a cooperative timer is for — but parking it on I/O must not end the sleep.
+
+Every `async` worker reaches this: a function that never yields cannot be spawned
+at all (`async-await.error.no-yield`), so an outstanding worker parked on I/O is
+the normal case rather than an unlucky interleaving.
+
+The assertion is a WIDE BAND, never an exact duration. The defect it pins returned
+in **0 ms** against a 300 ms request, so a lower bound of 250 ms separates "slept"
+from "did not sleep" with 250 ms of margin, and the upper bound is loose enough to
+survive any scheduling delay a loaded host can add.
+
+```maxon
+typealias Probe = int(0 to 1000000)
+
+function probe() returns Probe
+		for _ in 0 upto 20 'each'
+				_ = File.exists(FilePath from "noyield.txt")
+		end 'each'
+		return 7
+end 'probe'
+
+function main() returns ExitCode
+		let worker = async probe()
+		let start = Clock.nowMs()
+		sleep(300)
+		let elapsed = Clock.elapsedMs(start)
+		let probed = await worker
+		var score = 0
+		if elapsed >= 250 'slept'
+				score = score + 1
+		end 'slept'
+		if elapsed < 10000 'bounded'
+				score = score + 1
+		end 'bounded'
+		print("score={score} probed={probed}\n")
+		return 0
+end 'main'
+```
+```stdout
+score=2 probed=7
+```
+
+<!-- test: sleep.main-thread-alone -->
+The control for the case above: the same 300 ms main-thread sleep, measured the
+same way, with the `async` worker removed. It is deliberately close to a duplicate
+— that is its whole value. A failure of the pair's first case with this one green
+is attributable to the concurrent worker, and not to the clock, the timer heap or
+the host.
+
+```maxon
+function main() returns ExitCode
+		let start = Clock.nowMs()
+		sleep(300)
+		let elapsed = Clock.elapsedMs(start)
+		var score = 0
+		if elapsed >= 250 'slept'
+				score = score + 1
+		end 'slept'
+		if elapsed < 10000 'bounded'
+				score = score + 1
+		end 'bounded'
+		print("score={score}\n")
+		return 0
+end 'main'
+```
+```stdout
+score=2
+```

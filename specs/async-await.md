@@ -1501,3 +1501,71 @@ end 'main'
 ```exitcode
 9
 ```
+
+<!-- test: async-await.try-await.drives-the-timer-heap -->
+A `try await` park loop drives the TIMER heap, exactly as its `await` twin does.
+Both loops are the same machine — "nothing runnable, poll every engine, recheck" —
+and a park loop that omits one engine leaves the green threads parked on that
+engine unwoken. For a worker whose only wakeup is a `sleep()` deadline, omitting
+the timer poll means the awaiting thread never fires it: the run then survives only
+on whatever OTHER scheduler thread happens to poll timers, at that thread's park
+period, and on a single-processor run (`MAXON_MAX_PROCS=1`) it does not survive at
+all — it hangs.
+
+The assertion is RELATIVE and its control is IN THE SAME PROCESS, so it states the
+invariant directly ("`try await` costs what `await` costs") and is immune to how
+fast the host is. The 200 ms slack is a wide band over six rounds: the defect this
+pins cost ~55 ms per round (measured 328 ms vs 656 ms for six 10 ms sleeps), so a
+regression clears the threshold by 100+ ms while a healthy run sits ~0 ms above its
+own control. The absolute bound on the control is the anchor that keeps the
+relation from passing because BOTH halves regressed.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+enum LeafError implements Error
+		failed
+end 'LeafError'
+
+function timedThrowing() returns Integer throws LeafError
+		_ = File.exists(FilePath from "noyield.txt")
+		sleep(10)
+		return 1
+end 'timedThrowing'
+
+function timedPlain() returns Integer
+		_ = File.exists(FilePath from "noyield.txt")
+		sleep(10)
+		return 1
+end 'timedPlain'
+
+function main() returns ExitCode
+		let awaitStart = Clock.nowMs()
+		var plain = 0
+		for _ in 0 upto 6 'plainRound'
+				let p = async timedPlain()
+				plain = plain + (await p)
+		end 'plainRound'
+		let awaitMs = Clock.elapsedMs(awaitStart)
+
+		let tryStart = Clock.nowMs()
+		var thrown = 0
+		for _ in 0 upto 6 'tryRound'
+				let p = async timedThrowing()
+				thrown = thrown + (try await p otherwise 0)
+		end 'tryRound'
+		let tryMs = Clock.elapsedMs(tryStart)
+
+		var score = 0
+		if awaitMs < 10000 'controlSane'
+				score = score + 1
+		end 'controlSane'
+		if tryMs < awaitMs + 200 'noTimerPenalty'
+				score = score + 1
+		end 'noTimerPenalty'
+		print("plain={plain} thrown={thrown} score={score}\n")
+		return 0
+end 'main'
+```
+```stdout
+plain=6 thrown=6 score=2
+```
