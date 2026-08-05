@@ -1970,9 +1970,18 @@ function witnessFormalDeclaredType(project Project, signatures ProgramSignatures
 
 	// A boxed union/enum formal RESOLVES AWAY to bare `integer`, taking its nominal identity with it — the
 	// erasure `checkOneArgType`'s `preErasedAggregate` exists to survive. A direct call recovers the name from
-	// its signature's `paramAggregateNames`; here the formal's own rendered name IS that carrier, and it is
-	// supplied on exactly the gate `Parser.paramAggregateNamesOf` uses so the two routes cannot come to judge
-	// one parameter differently.
+	// its signature's `paramAggregateNames`; here the formal's own rendered name IS that carrier.
+	//
+	// ⚠ **THE GATE IS `containsEnum` ALONE, WHICH IS NARROWER THAN `Parser.paramAggregateNamesOf`'S, AND THE
+	// DIFFERENCE IS ACCOUNTED FOR RATHER THAN OVERLOOKED** (BATCH18 review — this header claimed the two gates
+	// were the same, and they are not). That one runs `aggregateNameOf`, which also answers for a STRUCT and
+	// for a PER-INSTANCE ALIAS. The struct half needs no carrier on either route: `denoted` above is
+	// `structRef(id)`, so `checkOneArgType` reads the name LIVE and never consults `preErasedAggregate` at all
+	// — filling it would put one name in two places for no reader. The per-instance-alias half genuinely
+	// cannot be answered here, and for `denotedNamedType`'s own reason two paragraphs up: `isPerInstanceAlias`
+	// is scoped by a READER'S FILE and a requirement's formal has none, so this route would have to guess
+	// where the direct route knows. It is therefore structural here, like the generic-instance and tuple
+	// formals above it, and for the same reason rather than a different one.
 	return WitnessFormalType.declared(denoted, preErasedAggregate: formalName if signatures.containsEnum(formalName) else EmptySourceText)
 end 'witnessFormalDeclaredType'
 
