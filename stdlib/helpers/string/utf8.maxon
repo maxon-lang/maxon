@@ -11,6 +11,21 @@ typealias ByteWidth = int(1 to 4)
 //   3-byte:          1110xxxx 10xxxxxx 10xxxxxx (0x800-0xFFFF)
 //   4-byte:          11110xxx 10xxxxxx 10xxxxxx 10xxxxxx (0x10000-0x10FFFF)
 
+// ⭐ **THE PAYLOAD MASKS AND THE CONTINUATION SHIFT, NAMED — `utf8DecodeAt` USED TO SPELL THEM AS `mod`
+// AND MULTIPLY, AND THAT COST AN INTEGER DIVISION PER BYTE.** `(b mod 64)` and `(b and 63)` are the same
+// number for every `b` a `RawByte` can hold (both operands non-negative, the divisor a power of two), and
+// `* 64` and `shl 6` likewise — but a compiler cannot fold `mod` to a mask without proving the dividend
+// non-negative, so the emitted code carried a `cqo`/`idiv` pair per continuation byte on a function every
+// grapheme scan calls once per codepoint. The mask/shift spelling is what `stdlib/Character.maxon:134-140`
+// already uses for this identical decode; these constants are so the two read as one algorithm.
+let Utf8ContinuationShift = 6
+let Utf8ContinuationMask = 63
+// The payload bits each multi-byte LEAD byte carries, below its length tag: `110xxxxx`, `1110xxxx`,
+// `11110xxx`.
+let Utf8TwoByteLeadMask = 31
+let Utf8ThreeByteLeadMask = 15
+let Utf8FourByteLeadMask = 7
+
 /// Get the number of bytes in a UTF-8 sequence from its lead byte
 /// Returns 1-4 for valid lead bytes
 export function utf8ByteLength(leadByte RawByte) returns ByteWidth
@@ -126,7 +141,7 @@ export function utf8DecodeAt(s String, pos BytePos) returns Codepoint
 		let b1 = try s.byteAt(pos + 1) otherwise 'b1Err'
 			panic("utf8DecodeAt: 2-byte seq continuation out of bounds")
 		end 'b1Err'
-		return ((b0 mod 32) * 64) + (b1 mod 64)
+		return ((b0 and Utf8TwoByteLeadMask) shl Utf8ContinuationShift) or (b1 and Utf8ContinuationMask)
 	end 'two'
 	if b0 < 240 'three'
 		let b1 = try s.byteAt(pos + 1) otherwise 'b1Err2'
@@ -135,7 +150,7 @@ export function utf8DecodeAt(s String, pos BytePos) returns Codepoint
 		let b2 = try s.byteAt(pos + 2) otherwise 'b2Err'
 			panic("utf8DecodeAt: 3-byte seq byte 2 out of bounds")
 		end 'b2Err'
-		return ((b0 mod 16) * 4096) + ((b1 mod 64) * 64) + (b2 mod 64)
+		return ((b0 and Utf8ThreeByteLeadMask) shl (Utf8ContinuationShift * 2)) or ((b1 and Utf8ContinuationMask) shl Utf8ContinuationShift) or (b2 and Utf8ContinuationMask)
 	end 'three'
 	let b1 = try s.byteAt(pos + 1) otherwise 'b1Err3'
 		panic("utf8DecodeAt: 4-byte seq byte 1 out of bounds")
@@ -146,5 +161,5 @@ export function utf8DecodeAt(s String, pos BytePos) returns Codepoint
 	let b3 = try s.byteAt(pos + 3) otherwise 'b3Err'
 		panic("utf8DecodeAt: 4-byte seq byte 3 out of bounds")
 	end 'b3Err'
-	return ((b0 mod 8) * 262144) + ((b1 mod 64) * 4096) + ((b2 mod 64) * 64) + (b3 mod 64)
+	return ((b0 and Utf8FourByteLeadMask) shl (Utf8ContinuationShift * 3)) or ((b1 and Utf8ContinuationMask) shl (Utf8ContinuationShift * 2)) or ((b2 and Utf8ContinuationMask) shl Utf8ContinuationShift) or (b3 and Utf8ContinuationMask)
 end 'utf8DecodeAt'

@@ -563,21 +563,15 @@ func @utf8DecodeAt {
     x64.popReg rbp
     x64.ret
   tryok:
-    x64.movRegImm32 rcx, 32
-    x64.movRegReg rax, r13
-    x64.cqo
-    x64.idivReg rcx
-    x64.imulRegRegImm32 rcx, rdx, 64
-    x64.movRegImm32 rsi, 64
-    x64.movRegReg rax, r8
-    x64.cqo
-    x64.idivReg rsi
-    x64.leaRegRegReg r8, rcx, rdx
-    x64.cmpRegImm32 r8, 0
+    x64.andRegImm32 r13, r13, 31
+    x64.shlRegImm8 r13, r13, 6
+    x64.andRegImm32 r8, r8, 63
+    x64.orRegReg r13, r13, r8
+    x64.cmpRegImm32 r13, 0
     x64.jcc less, __rc_panic
     x64.jmp __rc_chk
   __rc_chk:
-    x64.cmpRegImm32 r8, 1114111
+    x64.cmpRegImm32 r13, 1114111
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
   __rc_panic:
@@ -593,6 +587,7 @@ func @utf8DecodeAt {
     x64.popReg rbp
     x64.ret
   __rc_ok:
+    x64.movRegReg r8, r13
     x64.epilogue 40
     x64.popReg r15
     x64.popReg r14
@@ -645,27 +640,20 @@ func @utf8DecodeAt {
     x64.popReg rbp
     x64.ret
   tryok:
-    x64.movRegImm32 rcx, 16
-    x64.movRegReg rax, r13
-    x64.cqo
-    x64.idivReg rcx
-    x64.imulRegRegImm32 rcx, rdx, 4096
-    x64.movRegImm32 rsi, 64
-    x64.movRegReg rax, r14
-    x64.cqo
-    x64.idivReg rsi
-    x64.imulRegRegImm32 rax, rdx, 64
-    x64.leaRegRegReg rcx, rcx, rax
-    x64.movRegImm32 rsi, 64
-    x64.movRegReg rax, r8
-    x64.cqo
-    x64.idivReg rsi
-    x64.leaRegRegReg r8, rcx, rdx
-    x64.cmpRegImm32 r8, 0
+    x64.andRegImm32 r13, r13, 15
+    x64.movRegImm32 rax, 6
+    x64.imulRegRegImm32 rcx, rax, 2
+    x64.shlRegCl r13, r13
+    x64.andRegImm32 r14, r14, 63
+    x64.shlRegImm8 r14, r14, 6
+    x64.orRegReg r13, r13, r14
+    x64.andRegImm32 r8, r8, 63
+    x64.orRegReg r13, r13, r8
+    x64.cmpRegImm32 r13, 0
     x64.jcc less, __rc_panic
     x64.jmp __rc_chk
   __rc_chk:
-    x64.cmpRegImm32 r8, 1114111
+    x64.cmpRegImm32 r13, 1114111
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
   __rc_panic:
@@ -681,6 +669,7 @@ func @utf8DecodeAt {
     x64.popReg rbp
     x64.ret
   __rc_ok:
+    x64.movRegReg r8, r13
     x64.epilogue 40
     x64.popReg r15
     x64.popReg r14
@@ -749,33 +738,26 @@ func @utf8DecodeAt {
     x64.popReg rbp
     x64.ret
   tryok:
-    x64.movRegImm32 rcx, 8
-    x64.movRegReg rax, r13
-    x64.cqo
-    x64.idivReg rcx
-    x64.imulRegRegImm32 rcx, rdx, 262144
-    x64.movRegImm32 rsi, 64
-    x64.movRegReg rax, r14
-    x64.cqo
-    x64.idivReg rsi
-    x64.imulRegRegImm32 rax, rdx, 4096
-    x64.leaRegRegReg rcx, rcx, rax
-    x64.movRegImm32 rsi, 64
-    x64.movRegReg rax, r15
-    x64.cqo
-    x64.idivReg rsi
-    x64.imulRegRegImm32 rax, rdx, 64
-    x64.leaRegRegReg rcx, rcx, rax
-    x64.movRegImm32 rsi, 64
-    x64.movRegReg rax, r8
-    x64.cqo
-    x64.idivReg rsi
-    x64.leaRegRegReg r8, rcx, rdx
-    x64.cmpRegImm32 r8, 0
+    x64.andRegImm32 r13, r13, 7
+    x64.movRegImm32 rax, 6
+    x64.imulRegRegImm32 rcx, rax, 3
+    x64.shlRegCl r13, r13
+    x64.andRegImm32 r14, r14, 63
+    x64.movRegImm32 rax, 6
+    x64.imulRegRegImm32 rax, rax, 2
+    x64.movRegReg rcx, rax
+    x64.shlRegCl r14, r14
+    x64.orRegReg r13, r13, r14
+    x64.andRegImm32 r15, r15, 63
+    x64.shlRegImm8 r15, r15, 6
+    x64.orRegReg r13, r13, r15
+    x64.andRegImm32 r8, r8, 63
+    x64.orRegReg r13, r13, r8
+    x64.cmpRegImm32 r13, 0
     x64.jcc less, __rc_panic
     x64.jmp __rc_chk
   __rc_chk:
-    x64.cmpRegImm32 r8, 1114111
+    x64.cmpRegImm32 r13, 1114111
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
   __rc_panic:
@@ -791,6 +773,7 @@ func @utf8DecodeAt {
     x64.popReg rbp
     x64.ret
   __rc_ok:
+    x64.movRegReg r8, r13
     x64.epilogue 40
     x64.popReg r15
     x64.popReg r14

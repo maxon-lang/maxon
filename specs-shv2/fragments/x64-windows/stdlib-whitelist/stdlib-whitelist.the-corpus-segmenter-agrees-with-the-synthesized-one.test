@@ -346,25 +346,19 @@ func @findGraphemeEnd {
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r12
     x64.callDirect utf8ByteLengthAt
-    x64.leaRegRegReg rax, r12, r8
-    x64.storeSlotReg slot2, rax
+    x64.leaRegRegReg r12, r12, r8
     x64.movRegReg rcx, r14
     x64.callDirect graphemeBreakProperty
-    x64.movRegReg r12, r8
-    x64.callDirect graphemeStateInit
     x64.movRegReg r15, r8
-    x64.movRegReg rcx, r15
-    x64.movRegReg rdx, r12
+    x64.callDirect graphemeStateInit
+    x64.movRegReg rcx, r8
+    x64.movRegReg rdx, r15
     x64.movRegReg rax, r14
     x64.callDirect graphemeStateUpdate
-    x64.movRegReg r14, r8
-    x64.movRegReg rcx, r15
-    x64.callDirect __mm_decref
-    x64.loadRegSlot rdx, slot2
-    x64.movRegReg rax, r14
+    x64.movRegReg rdx, r12
     x64.jmp whilehdr
   whilehdr:
-    x64.storeSlotReg slot1, rax
+    x64.storeSlotReg slot1, r8
     x64.storeSlotReg slot0, rdx
     x64.cmpRegReg rdx, r13
     x64.jcc less, scan
@@ -372,21 +366,19 @@ func @findGraphemeEnd {
   scan:
     x64.movRegReg rcx, rbx
     x64.callDirect utf8DecodeAt
-    x64.movRegReg r14, r8
-    x64.movRegReg rcx, r14
-    x64.callDirect graphemeBreakProperty
-    x64.movRegReg r15, r8
+    x64.movRegReg r12, r8
     x64.movRegReg rcx, r12
-    x64.movRegReg rdx, r15
-    x64.movRegReg rax, r14
+    x64.callDirect graphemeBreakProperty
+    x64.movRegReg r14, r8
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, r14
+    x64.movRegReg rax, r12
     x64.loadRegSlot r9, slot1
     x64.callDirect isGraphemeBreak
     x64.cmpRegImm32 r8, 0
     x64.jcc notEqual, breakFound
     x64.jmp ifcont
   breakFound:
-    x64.loadRegSlot rcx, slot1
-    x64.callDirect __mm_decref
     x64.loadRegSlot r8, slot0
     x64.epilogue 56
     x64.popReg r15
@@ -397,25 +389,20 @@ func @findGraphemeEnd {
     x64.popReg rbp
     x64.ret
   ifcont:
-    x64.loadRegSlot r12, slot1
-    x64.movRegReg rcx, r12
-    x64.movRegReg rdx, r15
-    x64.movRegReg rax, r14
+    x64.loadRegSlot rcx, slot1
+    x64.movRegReg rdx, r14
+    x64.movRegReg rax, r12
     x64.callDirect graphemeStateUpdate
-    x64.movRegReg r14, r8
-    x64.movRegReg rcx, r12
-    x64.callDirect __mm_decref
+    x64.movRegReg r12, r8
     x64.movRegReg rcx, rbx
-    x64.loadRegSlot r12, slot0
-    x64.movRegReg rdx, r12
+    x64.loadRegSlot r15, slot0
+    x64.movRegReg rdx, r15
     x64.callDirect utf8ByteLengthAt
-    x64.leaRegRegReg rdx, r12, r8
-    x64.movRegReg r12, r15
-    x64.movRegReg rax, r14
+    x64.leaRegRegReg rdx, r15, r8
+    x64.movRegReg r15, r14
+    x64.movRegReg r8, r12
     x64.jmp whilehdr
   whileexit:
-    x64.loadRegSlot rcx, slot1
-    x64.callDirect __mm_decref
     x64.loadRegSlot r8, slot0
     x64.epilogue 56
     x64.popReg r15
@@ -954,36 +941,34 @@ func @isExtendedPictographic {
     x64.ret
 }
 
-func @GraphemeState.create {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
-    x64.prologue 32
-    x64.movRegReg rbx, rcx
-    x64.movRegReg r12, rdx
-    x64.movRegImm32 rcx, 16
-    x64.movRegImm32 rdx, 0
-    x64.callDirect __mm_alloc
-    x64.storeBaseDispReg.word64 [r8 + 0], rbx
-    x64.storeBaseDispReg.byte [r8 + 8], r12
-    x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-}
-
 func @graphemeStateInit {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.movRegImm32 rcx, 0
-    x64.movRegImm32 rdx, 0
-    x64.callDirect GraphemeState.create
-    x64.epilogue 32
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+}
+
+func @graphemeStateInEmojiSeq {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.andRegImm32 rcx, rcx, 1
+    x64.cmpRegImm32 rcx, 0
+    x64.setccReg notEqual, r8
+    x64.popReg rbp
+    x64.ret
+}
+
+func @graphemeStateRiIsOdd {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.shrRegImm8 rcx, rcx, 1
+    x64.andRegImm32 rcx, rcx, 1
+    x64.cmpRegImm32 rcx, 0
+    x64.setccReg notEqual, r8
     x64.popReg rbp
     x64.ret
 }
@@ -1330,8 +1315,9 @@ func @isGraphemeBreak {
     x64.jcc notEqual, gb11
     x64.jmp ifcont
   gb11:
-    x64.loadRegBaseDisp.byte rax, [r13 + 8]
-    x64.cmpRegImm32 rax, 0
+    x64.movRegReg rcx, r13
+    x64.callDirect graphemeStateInEmojiSeq
+    x64.cmpRegImm32 r8, 0
     x64.jcc notEqual, gb11_check
     x64.jmp ifcont
   gb11_check:
@@ -1360,12 +1346,10 @@ func @isGraphemeBreak {
     x64.jcc notEqual, gb12
     x64.jmp ifcont
   gb12:
-    x64.loadRegBaseDisp.word64 rax, [r13 + 0]
-    x64.movRegImm32 rcx, 2
-    x64.movRegImm32 rdx, 0
-    x64.divReg rcx
-    x64.cmpRegImm32 rdx, 1
-    x64.jcc equal, gb12_odd
+    x64.movRegReg rcx, r13
+    x64.callDirect graphemeStateRiIsOdd
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, gb12_odd
     x64.jmp ifcont
   gb12_odd:
     x64.movRegImm32 r8, 0
@@ -1398,7 +1382,6 @@ func @graphemeStateUpdate {
     x64.prologue 32
     x64.movRegReg rbx, rcx
     x64.movRegReg r12, rdx
-    x64.movRegReg r13, rax
     x64.cmpRegImm32 r12, 0
     x64.jcc less, __rc_panic
     x64.jmp __rc_chk
@@ -1418,11 +1401,11 @@ func @graphemeStateUpdate {
     x64.popReg rbp
     x64.ret
   __rc_ok:
-    x64.cmpRegImm32 r13, 0
+    x64.cmpRegImm32 rax, 0
     x64.jcc less, __rc_panic
     x64.jmp __rc_chk
   __rc_chk:
-    x64.cmpRegImm32 r13, 1114111
+    x64.cmpRegImm32 rax, 1114111
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
   __rc_panic:
@@ -1438,32 +1421,33 @@ func @graphemeStateUpdate {
     x64.ret
   __rc_ok:
     x64.movRegImm32 rcx, 0
-    x64.movRegImm32 rdx, 0
-    x64.callDirect GraphemeState.create
-    x64.movRegReg r14, r8
+    x64.leaRegRegImm32 r13, rcx, 0
     x64.cmpRegImm32 r12, 6
     x64.jcc equal, ri_update
-    x64.jmp ifcont
+    x64.jmp critsplit
   ri_update:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-    x64.leaRegRegImm32 rax, rax, 1
-    x64.storeBaseDispReg.word64 [r14 + 0], rax
+    x64.movRegReg rcx, rbx
+    x64.shrRegImm8 rcx, rbx, 1
+    x64.leaRegRegImm32 r13, rcx, 1
+    x64.jmp ifcont
+  critsplit:
     x64.jmp ifcont
   ifcont:
-    x64.movRegReg rcx, r13
+    x64.movRegImm32 r14, 0
+    x64.movRegReg rcx, rax
     x64.callDirect isExtendedPictographic
     x64.cmpRegImm32 r8, 0
     x64.jcc notEqual, emoji_base
     x64.jmp ifelse
   emoji_base:
     x64.movRegImm32 rax, 1
-    x64.storeBaseDispReg.byte [r14 + 8], rax
     x64.jmp ifcont
   ifelse:
-    x64.loadRegBaseDisp.byte rax, [rbx + 8]
-    x64.cmpRegImm32 rax, 0
+    x64.movRegReg rcx, rbx
+    x64.callDirect graphemeStateInEmojiSeq
+    x64.cmpRegImm32 r8, 0
     x64.jcc notEqual, emoji_continue
-    x64.jmp ifcont
+    x64.jmp critsplit
   emoji_continue:
     x64.cmpRegImm32 r12, 4
     x64.movRegImm32 rax, 1
@@ -1478,17 +1462,38 @@ func @graphemeStateUpdate {
   scmerge:
     x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, emoji_extend
-    x64.jmp ifcont
+    x64.jmp critsplit
   emoji_extend:
     x64.movRegImm32 rax, 1
-    x64.storeBaseDispReg.byte [r14 + 8], rax
+    x64.jmp ifcont
+  critsplit:
+    x64.movRegReg rax, r14
+    x64.jmp ifcont
+  ifcont:
+    x64.jmp ifcont
+  critsplit:
+    x64.movRegReg rax, r14
     x64.jmp ifcont
   ifcont:
     x64.jmp ifcont
   ifcont:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, packEmoji
     x64.jmp ifcont
+  packEmoji:
+    x64.shlRegImm8 r13, r13, 1
+    x64.movRegReg r8, r13
+    x64.orRegImm32 r8, r13, 1
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
   ifcont:
-    x64.movRegReg r8, r14
+    x64.movRegReg r8, r13
+    x64.shlRegImm8 r8, r13, 1
     x64.epilogue 32
     x64.popReg r14
     x64.popReg r13
@@ -1637,21 +1642,15 @@ func @utf8DecodeAt {
     x64.popReg rbp
     x64.ret
   tryok:
-    x64.movRegImm32 rcx, 32
-    x64.movRegReg rax, r13
-    x64.cqo
-    x64.idivReg rcx
-    x64.imulRegRegImm32 rcx, rdx, 64
-    x64.movRegImm32 rsi, 64
-    x64.movRegReg rax, r8
-    x64.cqo
-    x64.idivReg rsi
-    x64.leaRegRegReg r8, rcx, rdx
-    x64.cmpRegImm32 r8, 0
+    x64.andRegImm32 r13, r13, 31
+    x64.shlRegImm8 r13, r13, 6
+    x64.andRegImm32 r8, r8, 63
+    x64.orRegReg r13, r13, r8
+    x64.cmpRegImm32 r13, 0
     x64.jcc less, __rc_panic
     x64.jmp __rc_chk
   __rc_chk:
-    x64.cmpRegImm32 r8, 1114111
+    x64.cmpRegImm32 r13, 1114111
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
   __rc_panic:
@@ -1667,6 +1666,7 @@ func @utf8DecodeAt {
     x64.popReg rbp
     x64.ret
   __rc_ok:
+    x64.movRegReg r8, r13
     x64.epilogue 40
     x64.popReg r15
     x64.popReg r14
@@ -1719,27 +1719,20 @@ func @utf8DecodeAt {
     x64.popReg rbp
     x64.ret
   tryok:
-    x64.movRegImm32 rcx, 16
-    x64.movRegReg rax, r13
-    x64.cqo
-    x64.idivReg rcx
-    x64.imulRegRegImm32 rcx, rdx, 4096
-    x64.movRegImm32 rsi, 64
-    x64.movRegReg rax, r14
-    x64.cqo
-    x64.idivReg rsi
-    x64.imulRegRegImm32 rax, rdx, 64
-    x64.leaRegRegReg rcx, rcx, rax
-    x64.movRegImm32 rsi, 64
-    x64.movRegReg rax, r8
-    x64.cqo
-    x64.idivReg rsi
-    x64.leaRegRegReg r8, rcx, rdx
-    x64.cmpRegImm32 r8, 0
+    x64.andRegImm32 r13, r13, 15
+    x64.movRegImm32 rax, 6
+    x64.imulRegRegImm32 rcx, rax, 2
+    x64.shlRegCl r13, r13
+    x64.andRegImm32 r14, r14, 63
+    x64.shlRegImm8 r14, r14, 6
+    x64.orRegReg r13, r13, r14
+    x64.andRegImm32 r8, r8, 63
+    x64.orRegReg r13, r13, r8
+    x64.cmpRegImm32 r13, 0
     x64.jcc less, __rc_panic
     x64.jmp __rc_chk
   __rc_chk:
-    x64.cmpRegImm32 r8, 1114111
+    x64.cmpRegImm32 r13, 1114111
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
   __rc_panic:
@@ -1755,6 +1748,7 @@ func @utf8DecodeAt {
     x64.popReg rbp
     x64.ret
   __rc_ok:
+    x64.movRegReg r8, r13
     x64.epilogue 40
     x64.popReg r15
     x64.popReg r14
@@ -1823,33 +1817,26 @@ func @utf8DecodeAt {
     x64.popReg rbp
     x64.ret
   tryok:
-    x64.movRegImm32 rcx, 8
-    x64.movRegReg rax, r13
-    x64.cqo
-    x64.idivReg rcx
-    x64.imulRegRegImm32 rcx, rdx, 262144
-    x64.movRegImm32 rsi, 64
-    x64.movRegReg rax, r14
-    x64.cqo
-    x64.idivReg rsi
-    x64.imulRegRegImm32 rax, rdx, 4096
-    x64.leaRegRegReg rcx, rcx, rax
-    x64.movRegImm32 rsi, 64
-    x64.movRegReg rax, r15
-    x64.cqo
-    x64.idivReg rsi
-    x64.imulRegRegImm32 rax, rdx, 64
-    x64.leaRegRegReg rcx, rcx, rax
-    x64.movRegImm32 rsi, 64
-    x64.movRegReg rax, r8
-    x64.cqo
-    x64.idivReg rsi
-    x64.leaRegRegReg r8, rcx, rdx
-    x64.cmpRegImm32 r8, 0
+    x64.andRegImm32 r13, r13, 7
+    x64.movRegImm32 rax, 6
+    x64.imulRegRegImm32 rcx, rax, 3
+    x64.shlRegCl r13, r13
+    x64.andRegImm32 r14, r14, 63
+    x64.movRegImm32 rax, 6
+    x64.imulRegRegImm32 rax, rax, 2
+    x64.movRegReg rcx, rax
+    x64.shlRegCl r14, r14
+    x64.orRegReg r13, r13, r14
+    x64.andRegImm32 r15, r15, 63
+    x64.shlRegImm8 r15, r15, 6
+    x64.orRegReg r13, r13, r15
+    x64.andRegImm32 r8, r8, 63
+    x64.orRegReg r13, r13, r8
+    x64.cmpRegImm32 r13, 0
     x64.jcc less, __rc_panic
     x64.jmp __rc_chk
   __rc_chk:
-    x64.cmpRegImm32 r8, 1114111
+    x64.cmpRegImm32 r13, 1114111
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
   __rc_panic:
@@ -1865,6 +1852,7 @@ func @utf8DecodeAt {
     x64.popReg rbp
     x64.ret
   __rc_ok:
+    x64.movRegReg r8, r13
     x64.epilogue 40
     x64.popReg r15
     x64.popReg r14

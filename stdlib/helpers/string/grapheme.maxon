@@ -563,20 +563,46 @@ export function isExtendedPictographic(cp Codepoint) returns bool
 	return false
 end 'isExtendedPictographic'
 
-// State for tracking complex grapheme sequences
-type GraphemeState
-	export var riCount as RegionalIndicatorCount  // Count of consecutive Regional Indicators (for GB12-13)
-	export var inEmojiSeq as bool  // Inside Extended_Pictographic...ZWJ sequence (for GB11)
+// ⭐⭐ **THE SCAN STATE IS ONE PACKED WORD, AND IT USED TO BE A HEAP OBJECT ALLOCATED PER CODEPOINT.**
+// `GraphemeState` was a two-field `type` — i.e. a heap box — and `graphemeStateUpdate` minted a fresh one
+// for EVERY codepoint of every scan, so `"…".count()`, `for c in s`, `trim()` and every byte↔grapheme
+// conversion cost one allocation and one release per codepoint. Nothing in the algorithm needs an object:
+// the state is two bits' worth of information (a running count and a flag), it is purely local to a single
+// scan, and it never escapes the loop that threads it.
+//
+// Bit 0 is `inEmojiSeq`; the remaining bits are the regional-indicator count. The COUNT is carried in full
+// rather than just its parity, even though `isGraphemeBreak` reads only `riCount mod 2`: keeping the
+// field the rules are written against means a future GB rule that needs the count finds it, and a shift
+// costs exactly what a parity toggle would. A run long enough to overflow the shift is a run of 2^62
+// regional indicators.
+//
+// ⚠ **THE ENCODING IS SHARED WITH A SECOND IMPLEMENTATION AND MUST STAY BIT-FOR-BIT COMPATIBLE WITH IT.**
+// `maxon-shv2`'s segmenter reached this same packing independently, for its own reason (a Std runtime
+// function returns exactly one value), and states it as `GraphemeStateRiShift` /
+// `GraphemeStateEmojiBit` / `GraphemeStateParityBit`. The two are held together by a CHECK rather than by
+// derivation — `specs-shv2/stdlib-whitelist.md`'s `the-corpus-segmenter-agrees-with-the-synthesized-one`
+// runs both over the same inputs and compares — because neither compiler can read the other's constants.
+typealias GraphemeStateBits = int(0 to u64.max)
 
-	static function create(riCount RegionalIndicatorCount, inEmojiSeq bool) returns GraphemeState
-		return GraphemeState{riCount: riCount, inEmojiSeq: inEmojiSeq}
-	end 'create'
-end 'GraphemeState'
+let GraphemeStateRiShift = 1
+let GraphemeStateEmojiBit = 1
+let GraphemeStateParityBit = 1
 
-// Create initial grapheme state
-function graphemeStateInit() returns GraphemeState
-	return GraphemeState.create(0, inEmojiSeq: false)
+// Create initial grapheme state: no regional indicators seen, not inside an emoji sequence.
+function graphemeStateInit() returns GraphemeStateBits
+	return 0
 end 'graphemeStateInit'
+
+// Whether the scan is inside an Extended_Pictographic…ZWJ sequence (GB11).
+function graphemeStateInEmojiSeq(state GraphemeStateBits) returns bool
+	return (state and GraphemeStateEmojiBit) != 0
+end 'graphemeStateInEmojiSeq'
+
+// Whether an ODD number of consecutive regional indicators has been seen (GB12-13). The rules ask only
+// for the parity, so this is the one reader of the count and the reason it is not stored as a bare flag.
+function graphemeStateRiIsOdd(state GraphemeStateBits) returns bool
+	return ((state shr GraphemeStateRiShift) and GraphemeStateParityBit) != 0
+end 'graphemeStateRiIsOdd'
 
 // Check if there should be a grapheme break between two codepoints
 // prevGbp: Grapheme_Cluster_Break property of previous codepoint
@@ -586,7 +612,7 @@ end 'graphemeStateInit'
 // state: State for tracking RI counts and emoji sequences
 //
 // Returns true if there should be a break BEFORE the current codepoint
-function isGraphemeBreak(prevGbp BreakProperty, currGbp BreakProperty, currCp Codepoint, state GraphemeState) returns bool
+function isGraphemeBreak(prevGbp BreakProperty, currGbp BreakProperty, currCp Codepoint, state GraphemeStateBits) returns bool
 
 	// GB3: Do not break between CR and LF (CR × LF)
 	// prevGbp == 1 (CR) and currGbp == 2 (LF)
@@ -654,7 +680,7 @@ function isGraphemeBreak(prevGbp BreakProperty, currGbp BreakProperty, currCp Co
 	// \p{Extended_Pictographic} Extend* ZWJ × \p{Extended_Pictographic}
 	// prevGbp == 5 (ZWJ)
 	if prevGbp == 5 and isExtendedPictographic(currCp) 'gb11'
-		if state.inEmojiSeq 'gb11_check'
+		if graphemeStateInEmojiSeq(state) 'gb11_check'
 			return false
 		end 'gb11_check'
 	end 'gb11'
@@ -663,7 +689,7 @@ function isGraphemeBreak(prevGbp BreakProperty, currGbp BreakProperty, currCp Co
 	// Only pair up RIs; odd-numbered RIs break before next RI
 	// prevGbp == 6 (Regional_Indicator) and currGbp == 6
 	if prevGbp == 6 and currGbp == 6 'gb12'
-		if state.riCount mod 2 == 1 'gb12_odd'
+		if graphemeStateRiIsOdd(state) 'gb12_odd'
 			return false
 		end 'gb12_odd'
 	end 'gb12'
@@ -672,26 +698,34 @@ function isGraphemeBreak(prevGbp BreakProperty, currGbp BreakProperty, currCp Co
 	return true
 end 'isGraphemeBreak'
 
-// Update grapheme state after processing a codepoint
-function graphemeStateUpdate(state GraphemeState, gbp BreakProperty, cp Codepoint) returns GraphemeState
-	var newState = GraphemeState.create(0, inEmojiSeq: false)
-
+// Update grapheme state after processing a codepoint.
+//
+// BOTH fields reset unless this codepoint extends them: the count survives only across an unbroken run of
+// Regional Indicators, and the emoji flag only while an Extended_Pictographic base is still being extended.
+// That reset is why the old object could never be reused in place and had to be re-minted per codepoint.
+function graphemeStateUpdate(state GraphemeStateBits, gbp BreakProperty, cp Codepoint) returns GraphemeStateBits
 	// Track Regional Indicator sequences (gbp == 6)
+	var riCount = 0 as RegionalIndicatorCount
 	if gbp == 6 'ri_update'
-		newState.riCount = state.riCount + 1
+		riCount = (state shr GraphemeStateRiShift) + 1
 	end 'ri_update'
 
 	// Track emoji sequences for GB11
+	var inEmojiSeq = false
 	if isExtendedPictographic(cp) 'emoji_base'
-		newState.inEmojiSeq = true
+		inEmojiSeq = true
 	end 'emoji_base' else 'not_emoji_base'
-		if state.inEmojiSeq 'emoji_continue'
+		if graphemeStateInEmojiSeq(state) 'emoji_continue'
 			// gbp == 4 (Extend) or 5 (ZWJ)
 			if gbp == 4 or gbp == 5 'emoji_extend'
-				newState.inEmojiSeq = true
+				inEmojiSeq = true
 			end 'emoji_extend'
 		end 'emoji_continue'
 	end 'not_emoji_base'
 
-	return newState
+	if inEmojiSeq 'packEmoji'
+		return (riCount shl GraphemeStateRiShift) or GraphemeStateEmojiBit
+	end 'packEmoji'
+
+	return riCount shl GraphemeStateRiShift
 end 'graphemeStateUpdate'
