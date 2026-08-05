@@ -133,18 +133,63 @@ export type HashTableFamily
 	export var growName as ByteArray
 	export var insertName as ByteArray
 	export var containsName as ByteArray
+	export var removeName as ByteArray
 	export var countName as ByteArray
 	export var decrefName as ByteArray
 	export var recordBytes as ByteCount
 	// Does this table have a `values@48` column (and the `valueDrop@56` stamp behind it)? A `Map` does, a
-	// `Set` does not, and that single bool is the whole of the difference between the two families' six
+	// `Set` does not, and that single bool is the whole of the difference between the two families' seven
 	// shared functions.
 	export var carriesValues as bool
 
-	export static function create(createName ByteArray, growName ByteArray, insertName ByteArray, containsName ByteArray, countName ByteArray, decrefName ByteArray, recordBytes ByteCount, carriesValues bool) returns HashTableFamily
-		return Self{createName: createName, growName: growName, insertName: insertName, containsName: containsName, countName: countName, decrefName: decrefName, recordBytes: recordBytes, carriesValues: carriesValues}
+	export static function create(createName ByteArray, growName ByteArray, insertName ByteArray, containsName ByteArray, removeName ByteArray, countName ByteArray, decrefName ByteArray, recordBytes ByteCount, carriesValues bool) returns HashTableFamily
+		return Self{createName: createName, growName: growName, insertName: insertName, containsName: containsName, removeName: removeName, countName: countName, decrefName: decrefName, recordBytes: recordBytes, carriesValues: carriesValues}
 	end 'create'
 end 'HashTableFamily'
+
+// ⭐⭐ **WHAT AN INSERT DOES WHEN THE KEY IS ALREADY PRESENT — the one place the three insert entry points
+// differ, and the reason they are three POLICIES rather than three functions.** `__set_insert` and
+// `__map_upsert` both KEEP GOING: the table holds on to its existing key, the redundant new one is dropped,
+// and a table that carries values replaces the stored value with the new one — which is the whole of
+// `upsert`'s insert-or-replace contract, and is derived from `carriesValues` rather than stated here because
+// "is there a value to replace?" is a question about the RECORD, not about the policy.
+//
+// `__map_insert` REFUSES: the table is left exactly as it was — the stored value is NOT updated, which
+// `map.md:insert.duplicate-does-not-update` pins — and the call throws instead, so the new key AND the new
+// value are dropped rather than stored.
+//
+// ⚠ **THE CLAUSE TRAVELS WITH THE FLAG BECAUSE THE TWO ARE ONE FACT, AND BECAUSE A `throws` STAMP CHANGES
+// EVERY EXIT AND NOT ONLY THE FAILING ONE.** A throwing function returns through the dual-register
+// `errorReturn(value, flag)` ABI, so a builder told to refuse but stamped non-throwing would emit publish
+// paths that `ret` where the caller reads a flag register — a garbage error nothing prints and no golden
+// shows. Carried together in the arm, that disagreement is unrepresentable rather than reviewed for.
+export union HtDuplicatePolicy
+	keep
+	refuse(errorFlag ParsedInt, throwsClause ThrowsClause)
+end 'HtDuplicatePolicy'
+
+// The `throws` clause an insert entry point is STAMPED with, read off its duplicate-key policy — the one
+// derivation, so `IrFunction.createFromStd`'s stamp and the exits below cannot disagree about whether this
+// function throws.
+function htInsertThrowsClause(onDuplicate HtDuplicatePolicy) returns ThrowsClause
+	match onDuplicate 'policy'
+		keep then return ThrowsClause.none
+		refuse(_, throwsClause) then return throwsClause
+	end 'policy'
+end 'htInsertThrowsClause'
+
+// ⭐ **THE SUCCESS EXIT OF AN INSERT, WHICH IS A PROPERTY OF THE POLICY AND NOT OF THE BLOCK.** A `keep`
+// entry point is an ordinary void function and its exits `retVoid`; a `refuse` one is THROWING, so the very
+// same exits must use the ok half of the error ABI — a `ret` where the caller reads a flag register is a
+// garbage error nothing prints. Four blocks reach a success exit (the empty slot, the reused tombstone, the
+// probe-exhausted fallback and — for `keep` — the duplicate arm), and this is the one place the choice is
+// made.
+function emitHtInsertSuccessReturn(module StdModule, block IrBlock, onDuplicate HtDuplicatePolicy, ids ValueMinter)
+	match onDuplicate 'policy'
+		keep then module.setTerminator(block, op: StdOp.retVoid)
+		refuse then emitVoidOkReturn(module, block: block, ids: ids)
+	end 'policy'
+end 'emitHtInsertSuccessReturn'
 
 // ⭐ **THE VALUE AN INSERT PUBLISHES — A UNION, NOT A `ValueId` GUARDED BY A BOOL, and the difference is a
 // register.** `__map_upsert(map, key, value, hashWitness, eqWitness)` holds its value at parameter 2;
@@ -158,14 +203,20 @@ union HtInsertValue
 	present(value ValueId)
 end 'HtInsertValue'
 
-// Install the six shared entry points of one hash-table container. Each container's own install adds what is
-// genuinely its own afterwards (`__set_remove`/`__set_from`, `__map_get`) — this is the part that must not
-// become two copies.
+// Install the seven shared entry points of one hash-table container. Each container's own install adds what
+// is genuinely its own afterwards (`__set_from`, `__map_get`, `__map_insert`) — this is the part that must
+// not become two copies.
+//
+// ⭐ **THE SHARED `insert` TAKES THE `keep` POLICY, WHICH IS EVERY CONTAINER'S DEFAULT-NAMED ENTRY.** A
+// `Map`'s SECOND insert entry — the throwing `__map_insert` — is built by `MapRuntime` off the same
+// `buildHtInsert`, told to refuse; there is nothing here for it to be a seventh name of, because it is a
+// second door on one container rather than a door every container has.
 export function installHashTable(module StdModule, family HashTableFamily)
 	buildHtCreate(module, family: family)
 	buildHtGrow(module, family: family)
-	buildHtInsert(module, family: family)
+	buildHtInsert(module, family: family, name: family.insertName, onDuplicate: HtDuplicatePolicy.keep)
 	buildHtContains(module, family: family)
+	buildHtRemove(module, family: family)
 	buildHtCount(module, family: family)
 	buildHtDecref(module, family: family)
 end 'installHashTable'
@@ -233,7 +284,7 @@ function emitHtSlotMatchCheck(module StdModule, func IrFunction, cur IrBlock, ta
 
 	let slotKey = emitHtRecordSlotLoad(module, block: checkEquals, table: table, bufferOffset: HtKeysOffset, index: index, ids: ids)
 	// `operandsAreFloat: false` is the KEY-TYPE WHITELIST speaking: `Set`/`Map` refuse a float key
-	// (`Parser.requireHashTableColumnType`), so every key a probe compares is a whole machine word. Widening
+	// (`Parser.requireHashTableKeyType`), so every key a probe compares is a whole machine word. Widening
 	// that whitelist must come back here — see `emitEquatableWitnessEquals`.
 	let keyEqual = emitEquatableWitnessEquals(module, block: checkEquals, eqWitness: eqWitness, a: slotKey, b: key, operandsAreFloat: false, ids: ids)
 	module.setTerminator(checkEquals, op: StdOp.condBranch(keyEqual, thenBlockId: matchBlock.id, elseBlockId: noMatchBlock.id))
@@ -288,7 +339,7 @@ end 'emitHtPublishEntry'
 // — the hash guard only runs inside the Occupied branch, so a stale hash on a tombstone can never cause a
 // false match (v1's contract). Does NOT drop the stored key or value; that is the caller's, because a
 // `remove` that HANDS THE VALUE BACK and one that drops it want different things.
-export function emitHtTombstoneSlot(module StdModule, block IrBlock, table ValueId, index ValueId, ids ValueMinter)
+function emitHtTombstoneSlot(module StdModule, block IrBlock, table ValueId, index ValueId, ids ValueMinter)
 	let deletedTag = emitConst(module, block: block, value: HtSlotDeleted, ids: ids)
 	emitHtRecordSlotStore(module, block: block, table: table, bufferOffset: HtStatesOffset, index: index, value: deletedTag, ids: ids)
 	let count = emitLoadField(module, block: block, record: table, offset: HtCountOffset, ids: ids)
@@ -334,11 +385,11 @@ end 'emitHtBranchOnColumnDrop'
 
 // ⭐ **DROP ONE VALUE IFF the column at `dropOffset` carries a destructor.** When the stamp is non-zero (a
 // MANAGED column), call it on `value`; a trivial column (stamp 0) skips it untouched. The single-value twin
-// of the teardown walk below, shared by insert's duplicate-key drop (the new key the table did not keep, and
-// the old value it replaced) and `__set_remove` (the stored key it vacated), so a trivial-column table can
-// never `callIndirect(0)` and each managed value is freed exactly once. Threads `cur` (sets its terminator)
-// and returns the block both paths converge on.
-export function emitHtDropIfManaged(module StdModule, func IrFunction, cur IrBlock, table ValueId, dropOffset ByteOffset, value ValueId, ids ValueMinter) returns IrBlock
+// of the teardown walk below, shared by insert's duplicate-key drops (the new key the table did not keep,
+// and either the old value it replaced or the new value it refused) and by `remove` (each stored column it
+// vacates), so a trivial-column table can never `callIndirect(0)` and each managed value is freed exactly
+// once. Threads `cur` (sets its terminator) and returns the block both paths converge on.
+function emitHtDropIfManaged(module StdModule, func IrFunction, cur IrBlock, table ValueId, dropOffset ByteOffset, value ValueId, ids ValueMinter) returns IrBlock
 	var doDrop = module.addBlock(func, label: b"htdrop")
 	let cont = module.addBlock(func, label: b"htdropc")
 	let drop = emitHtBranchOnColumnDrop(module, cur: cur, table: table, dropOffset: dropOffset, managed: doDrop, cont: cont, ids: ids)
@@ -665,18 +716,20 @@ end 'emitHtRehashValueMove'
 // 0). The probe reuses a `Deleted` tombstone (`firstDeleted`) so a remove-then-reinsert refills the vacated
 // slot rather than growing.
 //
-// ⭐ **THE DUPLICATE-KEY ARM IS THE ONE PLACE THE TWO CONTAINERS DIVERGE, AND IT IS ONE BRANCH RATHER THAN A
-// SECOND FUNCTION.** A `Set` keeps its existing key and DROPS the redundant new one (`__set_insert` is a
-// no-op on a duplicate). A `Map` drops the redundant new key too, then drops the OLD value and stores the new
-// one in its place — which is what makes `__map_upsert` an insert-or-REPLACE. Everything above that arm — the
-// grow, the seed, the tombstone preference, the probe bound, the exhausted fallback — is the same code.
+// ⭐ **THE DUPLICATE-KEY ARM IS THE ONE PLACE THE THREE INSERT ENTRY POINTS DIVERGE, AND IT IS ONE BRANCH
+// RATHER THAN THREE FUNCTIONS.** A `Set` keeps its existing key and DROPS the redundant new one
+// (`__set_insert` is a no-op on a duplicate). `__map_upsert` drops the redundant new key too, then drops the
+// OLD value and stores the new one in its place — which is what makes it an insert-or-REPLACE.
+// `__map_insert` drops the new key AND the new value and THROWS, leaving the table untouched. Everything
+// above that arm — the grow, the seed, the tombstone preference, the probe bound, the exhausted fallback —
+// is the same code, which is why `name` and `onDuplicate` are arguments rather than a third builder.
 //
 // Across the probe loop only `{table, key, value, eqWitness, hash}` plus the loop indices `{index, probes,
 // firstDeleted}` stay live; the buffers, capacity and mask are reloaded from `table` where used (header note).
-function buildHtInsert(module StdModule, family HashTableFamily)
+export function buildHtInsert(module StdModule, family HashTableFamily, name ByteArray, onDuplicate HtDuplicatePolicy)
 	let paramCount = 5 as ParamCount if family.carriesValues else 4
 	let paramTypes = fiveI64Params() if family.carriesValues else fourI64Params()
-	var func = IrFunction.createFromStd(family.insertName, returnType: StdReturnType.void, paramCount: paramCount, paramTypes: paramTypes, returnLine: 0)
+	var func = IrFunction.createFromStd(name, returnType: StdReturnType.void, paramCount: paramCount, paramTypes: paramTypes, returnLine: 0, throwsTypeName: htInsertThrowsClause(onDuplicate))
 	var ids = ValueMinter.create(paramCount)
 
 	var entry = module.addBlock(func, label: b"entry")
@@ -794,22 +847,17 @@ function buildHtInsert(module StdModule, family HashTableFamily)
 	let haveDeleted = emitCmp(module, block: emptyInsert, a: firstDeleted, b: zeroForEmpty, pred: StdCmpPred.ge, ids: ids)
 	module.setTerminator(emptyInsert, op: StdOp.condBranch(haveDeleted, thenBlockId: insertAtDeleted.id, elseBlockId: insertAtEmpty.id))
 	emitHtPublishEntry(module, block: insertAtDeleted, table: table, index: firstDeleted, key: key, hash: hash, value: value, ids: ids)
-	module.setTerminator(insertAtDeleted, op: StdOp.retVoid)
+	emitHtInsertSuccessReturn(module, block: insertAtDeleted, onDuplicate: onDuplicate, ids: ids)
 	emitHtPublishEntry(module, block: insertAtEmpty, table: table, index: index, key: key, hash: hash, value: value, ids: ids)
-	module.setTerminator(insertAtEmpty, op: StdOp.retVoid)
+	emitHtInsertSuccessReturn(module, block: insertAtEmpty, onDuplicate: onDuplicate, ids: ids)
 
 	// dupFound: the key is already present — the table keeps its EXISTING copy, so the NEW `key` (moved in by
-	// the caller) must be DROPPED here or it leaks. A trivial-key table skips the drop (keyDrop 0). A table
-	// WITH a value column then REPLACES the value: the stored one is dropped and the new one takes its slot,
-	// which is the whole of `upsert`'s insert-or-replace contract. `index` is the probe header's live index —
-	// the header dominates this block and the drop-gate blocks below it — so it names the matched slot
-	// throughout.
-	var afterDupDrop = emitHtDropIfManaged(module, func: func, cur: dupFound, table: table, dropOffset: HtKeyDropOffset, value: key, ids: ids)
-	match value 'replaceValue'
-		absent then break 'replaceValue'
-		present(v) then afterDupDrop = emitHtReplaceValue(module, func: func, cur: afterDupDrop, table: table, index: index, value: v, ids: ids)
-	end 'replaceValue'
-	module.setTerminator(afterDupDrop, op: StdOp.retVoid)
+	// the caller) must be DROPPED here or it leaks, WHICHEVER policy this entry point carries. A trivial-key
+	// table skips the drop (keyDrop 0). What the policy then decides is what becomes of the new VALUE and how
+	// the call ends. `index` is the probe header's live index — the header dominates this block and the
+	// drop-gate blocks below it — so it names the matched slot throughout.
+	var afterDupKeyDrop = emitHtDropIfManaged(module, func: func, cur: dupFound, table: table, dropOffset: HtKeyDropOffset, value: key, ids: ids)
+	emitHtDuplicateArm(module, func: func, cur: afterDupKeyDrop, table: table, index: index, value: value, onDuplicate: onDuplicate, ids: ids)
 
 	// exhausted: every slot was probed without finding Empty — the table is Occupied+Deleted. The load factor
 	// keeps `count` below capacity, so at least one slot is a tombstone and `firstDeleted >= 0` here; reuse it.
@@ -821,11 +869,67 @@ function buildHtInsert(module StdModule, family HashTableFamily)
 	let haveFallback = emitCmp(module, block: exhausted, a: firstDeleted, b: zeroForFallback, pred: StdCmpPred.ge, ids: ids)
 	module.setTerminator(exhausted, op: StdOp.condBranch(haveFallback, thenBlockId: fallbackInsert.id, elseBlockId: unreachableFull.id))
 	emitHtPublishEntry(module, block: fallbackInsert, table: table, index: firstDeleted, key: key, hash: hash, value: value, ids: ids)
-	module.setTerminator(fallbackInsert, op: StdOp.retVoid)
+	emitHtInsertSuccessReturn(module, block: fallbackInsert, onDuplicate: onDuplicate, ids: ids)
 	emitRuntimeAbort(module, func: func, block: unreachableFull, abort: RuntimeAbort.hashTableInsertNoFreeSlot, ids: ids)
 
 	module.functions.push(func)
 end 'buildHtInsert'
+
+// ⭐⭐ **WHAT AN INSERT DOES WITH THE NEW VALUE ONCE THE KEY TURNED OUT TO BE A DUPLICATE — the whole of
+// `HtDuplicatePolicy`, emitted.** The new KEY has already been dropped by the caller above (every policy
+// drops it), so what is left is the value and the exit.
+//
+// ⚠ **BOTH ARMS DROP EXACTLY ONE VALUE, AND THEY DROP DIFFERENT ONES.** `keep` replaces: the STORED value is
+// dropped and the new one takes its slot. `refuse` stores nothing: the NEW value is dropped and the stored
+// one is left untouched, which is what makes `insert.duplicate-does-not-update` a `10` rather than a `99`.
+// Dropping the wrong one is a use-after-free the exit code cannot show, so the two live side by side here
+// rather than one being read as "the other, inverted".
+//
+// A key-only table (`absent`) has no value either way and only the exit differs — a `Set` therefore emits
+// not one instruction of this arm beyond its `retVoid`.
+//
+// ⚠ Each policy's two steps are its OWN emitter below rather than one nested expression here, because a
+// `match` arm is a single statement (`specs/match-statements.md`) and the discriminating word — REPLACE
+// against DROP — sat mid-line inside a `block:` argument, in the one place a reader must check that the two
+// arms name different values. The two emitters stay adjacent so the comparison is still one glance.
+function emitHtDuplicateArm(module StdModule, func IrFunction, cur IrBlock, table ValueId, index ValueId, value HtInsertValue, onDuplicate HtDuplicatePolicy, ids ValueMinter)
+	match onDuplicate 'policy'
+		keep then emitHtDuplicateKeepArm(module, func: func, cur: cur, table: table, index: index, value: value, onDuplicate: onDuplicate, ids: ids)
+		refuse(errorFlag, _) then emitHtDuplicateRefuseArm(module, func: func, cur: cur, table: table, value: value, errorFlag: errorFlag, ids: ids)
+	end 'policy'
+end 'emitHtDuplicateArm'
+
+// `keep` REPLACES: the STORED value is dropped, the new one takes its slot, and the call exits successfully
+// through the policy's own success ABI (`retVoid` here, since only a `keep` entry point reaches this).
+function emitHtDuplicateKeepArm(module StdModule, func IrFunction, cur IrBlock, table ValueId, index ValueId, value HtInsertValue, onDuplicate HtDuplicatePolicy, ids ValueMinter)
+	var afterReplace = emitHtReplaceValueIfPresent(module, func: func, cur: cur, table: table, index: index, value: value, ids: ids)
+	emitHtInsertSuccessReturn(module, block: afterReplace, onDuplicate: onDuplicate, ids: ids)
+end 'emitHtDuplicateKeepArm'
+
+// `refuse` STORES NOTHING: the NEW value is dropped, the stored one is left untouched — which is what makes
+// `insert.duplicate-does-not-update` a `10` rather than a `99` — and the call returns the error flag.
+function emitHtDuplicateRefuseArm(module StdModule, func IrFunction, cur IrBlock, table ValueId, value HtInsertValue, errorFlag ParsedInt, ids ValueMinter)
+	var afterDrop = emitHtDropValueIfPresent(module, func: func, cur: cur, table: table, value: value, ids: ids)
+	emitErrorReturn(module, block: afterDrop, flag: errorFlag, ids: ids)
+end 'emitHtDuplicateRefuseArm'
+
+// Replace slot `index`'s value with the new one when this table HAS a value column — `keep`'s half of the
+// duplicate arm. A key-only table passes the block straight through.
+function emitHtReplaceValueIfPresent(module StdModule, func IrFunction, cur IrBlock, table ValueId, index ValueId, value HtInsertValue, ids ValueMinter) returns IrBlock
+	match value 'column'
+		absent then return cur
+		present(v) then return emitHtReplaceValue(module, func: func, cur: cur, table: table, index: index, value: v, ids: ids)
+	end 'column'
+end 'emitHtReplaceValueIfPresent'
+
+// Drop the REJECTED new value through `valueDrop@56` when this table has a value column — `refuse`'s half.
+// The table stores nothing, so the caller's moved-in value has no owner left and would leak.
+function emitHtDropValueIfPresent(module StdModule, func IrFunction, cur IrBlock, table ValueId, value HtInsertValue, ids ValueMinter) returns IrBlock
+	match value 'column'
+		absent then return cur
+		present(v) then return emitHtDropIfManaged(module, func: func, cur: cur, table: table, dropOffset: HtValueDropOffset, value: v, ids: ids)
+	end 'column'
+end 'emitHtDropValueIfPresent'
 
 // Replace slot `index`'s value: drop the stored one through `valueDrop@56` (a trivial value column skips it),
 // then store the new one. The load MUST precede the drop's gate blocks, so it reads the slot in `cur` while
@@ -866,6 +970,68 @@ function buildHtContains(module StdModule, family HashTableFamily)
 
 	module.functions.push(func)
 end 'buildHtContains'
+
+// `remove(table, key, hashWitness, eqWitness) -> bool` — probe for `key`; a matching Occupied slot has its
+// stored entry DROPPED and is TOMBSTONED (state `Deleted`, count decremented), answering `true`; an absent
+// key — or an empty table — answers `false`.
+//
+// ⭐⭐ **IT IS SHARED, AND `SetRuntime` USED TO SAY IT COULD NOT BE.** That file's own header argued a map's
+// remove "would have to hand the VALUE back to the caller (or throw for a missing key), which is a different
+// signature and a different ownership transfer, not a `carriesValues` branch inside one graph". **The
+// language settles it the other way**: `specs/map.md` declares `remove(key) returns bool`, exactly as a set's
+// does, and hands nothing back. So the two removes differ in ONE thing — a map also drops the VALUE it
+// vacates — and that is precisely a `carriesValues` branch. The premise was a guess about a surface that had
+// not been read; the copy it would have justified is the shape this file exists to refuse.
+//
+// ⚠ **THE VACATED VALUE MUST BE DROPPED HERE OR IT LEAKS FOR THE TABLE'S WHOLE LIFETIME.** The teardown walk
+// is gated on `Occupied` (`emitHtDestroyColumnIfManaged`), so a tombstoned slot is never revisited — a
+// `Map with (int, String)` that removed a key would otherwise carry that String to `exit 101`.
+function buildHtRemove(module StdModule, family HashTableFamily)
+	var func = IrFunction.createFromStd(family.removeName, returnType: StdReturnType.value(StdType.i64), paramCount: 4, paramTypes: fourI64Params(), returnLine: 0)
+	var ids = ValueMinter.create(4)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var emptyTable = module.addBlock(func, label: b"emptytab")
+	var probe = module.addBlock(func, label: b"probe")
+	var found = module.addBlock(func, label: b"found")
+	var notFound = module.addBlock(func, label: b"notfound")
+
+	emitParams(module, block: entry, count: 4)
+	let table = 0 as ValueId
+	let key = 1 as ValueId
+	let hashWitness = 2 as ValueId
+	let eqWitness = 3 as ValueId
+
+	emitHtEmptyTableCheck(module, entry: entry, table: table, emptyBlock: emptyTable, probeBlock: probe, ids: ids)
+	emitConstReturn(module, block: emptyTable, value: PredicateFalse, ids: ids)
+
+	let matchedIndex = emitHtLookupProbe(module, func: func, cur: probe, table: table, key: key, hashWitness: hashWitness, eqWitness: eqWitness, foundBlock: found, notFoundBlock: notFound, ids: ids)
+
+	// found: DROP each managed column's stored entry (the caller's `key` argument stays a BORROW — read for
+	// the compare, not consumed), then tombstone the matched slot and drop the count. `matchedIndex` is the
+	// probe header's live index — the header dominates `found` and every drop-gate block below it — so it
+	// names the slot throughout. A trivial column skips its drop (stamp 0), leaving an int-keyed table's
+	// `remove` free of every one of these instructions.
+	var cur = emitHtDropSlotColumn(module, func: func, cur: found, table: table, index: matchedIndex, dropOffset: HtKeyDropOffset, bufferOffset: HtKeysOffset, ids: ids)
+	if family.carriesValues 'dropValue'
+		cur = emitHtDropSlotColumn(module, func: func, cur: cur, table: table, index: matchedIndex, dropOffset: HtValueDropOffset, bufferOffset: HtValuesOffset, ids: ids)
+	end 'dropValue'
+	emitHtTombstoneSlot(module, block: cur, table: table, index: matchedIndex, ids: ids)
+	emitConstReturn(module, block: cur, value: PredicateTrue, ids: ids)
+
+	emitConstReturn(module, block: notFound, value: PredicateFalse, ids: ids)
+
+	module.functions.push(func)
+end 'buildHtRemove'
+
+// Read slot `index` of the column at `bufferOffset` and drop it through that column's own stamp — the pairing
+// `remove` performs once per managed column. The buffer and the drop stamp are two halves of ONE column, so
+// they are chosen together here rather than at each call site, where a key's buffer could be paired with a
+// value's destructor and free the wrong record. Threads `cur` and returns the block to carry on in.
+function emitHtDropSlotColumn(module StdModule, func IrFunction, cur IrBlock, table ValueId, index ValueId, dropOffset ByteOffset, bufferOffset ByteOffset, ids ValueMinter) returns IrBlock
+	let stored = emitHtRecordSlotLoad(module, block: cur, table: table, bufferOffset: bufferOffset, index: index, ids: ids)
+	return emitHtDropIfManaged(module, func: func, cur: cur, table: table, dropOffset: dropOffset, value: stored, ids: ids)
+end 'emitHtDropSlotColumn'
 
 // ⭐ **THE "IS THERE ANYTHING TO PROBE AT ALL?" GUARD, WRITTEN ONCE.** A table that never grew has capacity 0
 // — so its mask would be `-1` and its buffers null — and every read entry point (`contains`, `remove`, `get`)

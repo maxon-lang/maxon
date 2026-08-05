@@ -2506,6 +2506,12 @@ end 'notOperatorFor'
 // their refusals differently (each names the type it is), but the RULE must not fork, which is why only the
 // verdict lives here.
 //
+// ⚠ **IT IS THE TAG HALF ONLY, AND NO HASH-TABLE COLUMN CALLS IT DIRECTLY ANY MORE.** Every one of them
+// reaches it through `elementTypePreserved` below, so a column with a NOMINAL identity (a `Map` value
+// declared as a struct or an enum) is settled by that identity and never falls to a tag comparison that
+// cannot see one. Two enums are both integral here, which is why calling in directly is a wrong answer
+// rather than a missed refinement.
+//
 // ⚠ **`map`'s TRANSFORM IS THE FOURTH READER — BOTH HALVES OF IT — AND IT IS THE SAME QUESTION.** "May this
 // value be stored in a slot declared `declared`?" is what element PRESERVATION asks of what the transform
 // ANSWERS and of what it TAKES — the array's element column is the slot, and the ranged-alias measurement
@@ -2528,17 +2534,34 @@ end 'notOperatorFor'
 //
 // ⚠ A Character column asks the DEFINITELY question and not `tagIsByteRecord`: a `String` value is a byte
 // record too, and hashing one as a Character key would put `"a"` and `'a'` in one bucket under two types.
+//
+// ⛔⛔ **EVERY TAG `ProgramSignatures.slotTypeFitsOneWord` ADMITS MUST BE ANSWERED HERE — THAT GATE SAYS WHAT
+// MAY *BE* A COLUMN AND THIS SAYS WHAT MAY BE *WRITTEN* TO ONE, AND A TAG PRESENT THERE AND ABSENT HERE IS
+// ADMITTED AT THE `typealias` AND REFUSED AT EVERY WRITE.** MEASURED, on `Map with (String, bool)` +
+// `m.upsert("a", value: true)`: `boolean` passed the gate, reached the integral fall-through below
+// (`tagIsIntegral(boolean)` is FALSE by construction — a bool is not a number) and was refused as *"this
+// `Map`'s value is a bool — got a 'bool' value"*, a sentence that argues against itself on a program the
+// widened value column exists to admit. The two facts live in two files and nothing but this paragraph holds
+// them together; widen one and come here.
 export function columnValueTagMatches(valueTag ValueTypeTag, declared ValueTypeTag) returns bool
-	if declared == ValueTypeTag.character 'characterColumn'
-		return valueTag == ValueTypeTag.character
-	end 'characterColumn'
+	// ⭐ **THE COLUMN TAGS THAT AGREE WITH THEMSELVES AND WITH NOTHING ELSE — one arm, because they differ in
+	// no other way.** A `Character`, a `bool` and a FUNCTION are each one machine word dropped by nothing,
+	// which is `slotTypeFitsOneWord`'s whole question — but each is its own TYPE, so the integral
+	// fall-through below is a wrong answer for all three: it would make `m.upsert("d", value: 7)` on a
+	// `Map with (String, UnaryOp)` (`/specs/map.md:function-valued.dispatch`) a code pointer of 7, and
+	// `value: 1` on a bool column a `true` nobody wrote. ⚠ The function spelling is reachable only because
+	// the caller RESOLVES the column type first (`Parser.parseHashTableColumnArg`): the alias arrives as
+	// `named`, which reads integral.
+	if declared == ValueTypeTag.character or declared == ValueTypeTag.boolean or declared == ValueTypeTag.function 'agreesOnlyWithItself'
+		return valueTag == declared
+	end 'agreesOnlyWithItself'
 	if tagIsText(declared) 'textColumn'
 		return tagIsText(valueTag)
 	end 'textColumn'
 
 	// ⚠⚠ **THE LAST ARM IS THE INT ARM, AND IT IS DELIBERATELY A FALL-THROUGH RATHER THAN A `tagIsIntegral`
-	// TEST WITH A PANIC PAST IT — because `declared` IS NOT CONFINED TO THE ADMITTED THREE, and that was
-	// MEASURED, not assumed.** `requireHashTableColumnType` runs where a container is MATERIALIZED
+	// TEST WITH A PANIC PAST IT — because `declared` IS NOT CONFINED TO THE ADMITTED TAGS, and that was
+	// MEASURED, not assumed.** `requireHashTableKeyType` runs where a container is MATERIALIZED
 	// (`IntSet.create()`), so a method call on an instance this function never created reaches here with any
 	// column type at all: `function add(s BadSet) s.insert(1.0) end` over `typealias BadSet = Set with float`
 	// reaches it with a float column. A panic on the residual would replace that program's refusal with a
@@ -2556,8 +2579,12 @@ export function columnValueTagMatches(valueTag ValueTypeTag, declared ValueTypeT
 	// and it is deliberately NOT carried by the conditional-extensions port, whose `contains` path never
 	// reaches this predicate. Until then this comment states the defect rather than licensing it.
 	//
-	// A fourth ADMITTED HASH-TABLE column type must likewise be added here as an arm of its own, ahead of this
-	// one — and its gate is not what will stop you forgetting.
+	// A further ADMITTED HASH-TABLE column type must likewise be answered ABOVE this arm — by the
+	// agrees-only-with-itself roster if it is its own type, by a class test of its own if it is a family — and
+	// its gate is not what will stop you forgetting. `function` and `boolean` are the two that have been: a
+	// `Map`'s VALUE column is no longer held to the key's three-name whitelist, so what may reach here as
+	// `declared` is now the whole one-machine-word set. An AGGREGATE one never does — a nominal identity on
+	// either side settles the question in `elementTypePreserved` before this predicate is consulted at all.
 	return tagIsIntegral(valueTag)
 end 'columnValueTagMatches'
 

@@ -2402,18 +2402,37 @@ let MixedArrayLiteralElementsMessage = "an array literal with mixed element type
 // serves all three, so the sentence is assembled from the construct plus the column rather than written out
 // three times.
 //
-// ⚠⚠ **`ArrayLiteralSubject` + `ArrayLiteralColumnNoun` REPRODUCE A PINNED SENTENCE BYTE-FOR-BYTE** —
+// ⚠⚠ **`ArrayLiteralSubject` + `ContainerElementColumnNoun` REPRODUCE A PINNED SENTENCE BYTE-FOR-BYTE** —
 // `specs-shv2/character-ownership.md`'s `an-array-literal-element-is-not-a-character` quotes the composed
 // message in a `maxoncstderr` block. Changing either constant rewrites a committed expectation.
 //
-// The two column nouns are the ones `requireHashTableColumnType` / `parseMapColumnValue` / `requireMapColumnTypes`
-// were each spelling as their own bare `"key"` / `"value"` literal — one fact, four writings, which is what
-// naming them here retires.
+// The three column nouns are the ones `requireHashTableKeyType` / `parseMapColumnValue` /
+// `requireMapColumnTypes` / `requireOneWordSlotType` were each spelling as their own bare `"key"` /
+// `"value"` / `"element"` literal — one fact, several writings, which is what naming them here retires.
+// `ContainerElementColumnNoun` serves the array LITERAL's column and a chain's declared ELEMENT alike: it is
+// one word for one slot, and a second constant holding the same string is how the two would drift apart.
 let ArrayLiteralSubject = "an array literal"
-let ArrayLiteralColumnNoun = "element"
+let ContainerElementColumnNoun = "element"
 let MapLiteralSubject = "a map literal"
 let HashTableKeyColumnNoun = "key"
 let HashTableValueColumnNoun = "value"
+
+// ⭐⭐ **THE NOUNS A DESTRUCTURING REFUSAL IS COMPOSED FROM — one TRIPLE PER CONSTRUCT, because TWO constructs
+// spell one pattern.** `let (x, y) = t` has a binding, an initializer and a right-hand side; `for (k, v) in m`
+// has none of those three — it has a loop pattern and a source ELEMENT. `requireDestructurableTuple` serves
+// both, so its two sentences are ASSEMBLED from the construct rather than written out per construct — and the
+// `let` spelling was hard-coded there, which described a binding to a reader who had written a `for`, on the
+// very sentence a `for` header reaches first (`for (a, b) in xs` over an int array).
+//
+// ⚠⚠ **THE `Binding` TRIPLE REPRODUCES TWO PINNED SENTENCES BYTE-FOR-BYTE** — `specs-shv2/tuples.md`'s
+// `error.destructure-of-a-non-tuple` and `error.destructure-arity-mismatch` quote the composed messages in
+// `maxoncstderr` blocks. Changing any of those three constants rewrites a committed expectation.
+let BindingPatternSubject = "a destructuring binding"
+let BindingPatternSourceNoun = "initializer"
+let BindingPatternNeedsClause = "`let (x, y) = …` needs a right-hand side that is a tuple"
+let ForPatternSubject = "a destructuring `for` pattern"
+let ForPatternSourceNoun = "element"
+let ForPatternNeedsClause = "`for (k, v) in …` needs a source whose element is a tuple"
 
 // ⭐ **THE `(key, value)` PAIR BOX'S VALUE SLOT, AS A FIELD INDEX** — the `_1` of the synthesized tuple
 // `__map_entries` fills, read by `emitMapEntriesArray` off the interned layout to get its displacement.
@@ -2439,6 +2458,20 @@ type ArrayLiteralElement
 		return Self{value: value, start: start}
 	end 'create'
 end 'ArrayLiteralElement'
+
+// ⭐ **ONE `Map` ENTRY'S TWO COLUMNS, PARSED — what `( key, value: v )` yields.** They travel as one value
+// rather than as two returns for the reason the runtime's `HtInsertValue` states one tier down: two bare
+// `ValueId`s of the same type, handed to a call in the wrong order, store the value under the key — a wrong
+// answer with no diagnostic anywhere, since both are machine words. Named fields make the swap visible at
+// every call site. See `parseMapEntryArgList`.
+type MapEntryArgs
+	export var key as ValueId
+	export var value as ValueId
+
+	export static function create(key ValueId, value ValueId) returns MapEntryArgs
+		return Self{key: key, value: value}
+	end 'create'
+end 'MapEntryArgs'
 
 // ⚠ **THE EMPTY LITERAL IS REFUSED IN BOTH POSITIONS AND THE ADVICE DIFFERS, so this text is deliberately
 // NOT shared with `parseArrayLiteral`'s.** The defect is identical — `[]` carries no element to infer a
@@ -3557,12 +3590,14 @@ end 'quadArgs'
 // methods dispatched by name in `dispatchArrayMethod` off an `Array`-instance receiver. `get`/`set`/
 // `first`/`last`/`pop`/`remove` are THROWING (they ride `try … otherwise`); the rest are non-throwing.
 //
-// ⚠ **THE THROWING SEVEN ARE NOT DECLARED HERE — THEY ARE `SignatureIndex`'s, AND THIS IS THE ONE PLACE THAT
-// SAYS SO** (`set`/`append` moved at D12, `get`/`first`/`last`/`pop`/`remove`/`slice` at D11c). Each names a
-// throwing runtime callee whose diagnostics must quote the AUTHOR's method rather than the emitted symbol, and
-// `ArrayRuntime`'s source-method maps do that quoting by answering with the constant THIS dispatch matches on
-// — a map cannot name a constant its file cannot see, and a second `b"set"` beside the first is the drift
-// these blocks exist to prevent. Nothing about the dispatch changed: it still matches the same byte strings.
+// ⚠ **THE THROWING EIGHT ARE NOT DECLARED HERE — THEY ARE `SignatureIndex`'s, AND THIS IS THE ONE PLACE THAT
+// SAYS SO** (`set`/`append` moved at D12, `get`/`first`/`last`/`pop`/`remove`/`slice` at D11c, and `insert`
+// the day `Map.insert` became a `Map`'s second throwing entry point). Each names a throwing runtime callee
+// whose diagnostics must quote the AUTHOR's method rather than the emitted symbol, and the source-method maps
+// (`ArrayRuntime`'s, and now `MapRuntime`'s) do that quoting by answering with the constant THIS dispatch
+// matches on — a map cannot name a constant its file cannot see, and a second `b"set"` beside the first is
+// the drift these blocks exist to prevent. Nothing about the dispatch changed: it still matches the same byte
+// strings.
 let CreateMethod = b"create"
 let ArrayPushMethod = b"push"
 let ArrayCapacityMethod = b"capacity"
@@ -3573,7 +3608,6 @@ let ArrayResizeMethod = b"resize"
 // container's property, and a family-prefixed constant serving two families is one rename away from a
 // second `b"clear"` beside the first.
 let ClearMethod = b"clear"
-let InsertMethod = b"insert"
 
 // The whole-array copy methods (P1.7 slice 4). `slice` is THROWING (bounds/inverted-range → `ArrayError`) and
 // returns a NEW independent array; `clone` returns a NEW independent array (non-throwing); `append` mutates the
@@ -3969,6 +4003,35 @@ function stringStaticMemberNames() returns ByteArrayArray
 	return names
 end 'stringStaticMemberNames'
 
+// ⭐⭐ **WHICH MEMBERS THE `Map` SURFACE HAS — the seventh roster, and the one whose hand-written predecessor
+// was ALREADY STALE THE DAY `insert` AND `remove` WERE BUILT.** It read *"shv2 provides
+// create/upsert/contains/get/count/map"*, and the two names this port added would have had to be threaded
+// into that literal by hand — the standing obligation `rosterRefusalSentence` measured the cost of, three
+// surfaces ago. The entries are the very constants `dispatchMapMethod`'s arms match on, the ORDER is the
+// message's order because the message is joined from this list, the dispatch GATES on it ahead of every arm,
+// and its fall-through is a PANIC naming it.
+//
+// ⚠ **`create` IS NOT MISSING FROM THIS LIST, IT IS NOT A MEMBER** — `StrMap.create()` is a static factory
+// reached through the type's own name, exactly as `Array.create(…)` is, and the `Array` roster's header
+// carries the measurement of what naming it here costs.
+//
+// ⚠ **THE LITERAL LIST'S OTHER TWO CLAUSES WERE NOT MEMBERS EITHER, and they are gone rather than moved.**
+// `[k: v, …]` construction is a LITERAL form (`parseMapLiteralBody`) and `for (key, value) in …` is a
+// STATEMENT form (`parseForStatement`); a reader who wrote `m.frobnicate()` reached neither door, and a
+// refusal that describes other doors is how one fact comes to be maintained in two places — the exact clause
+// this shape deleted from the five surfaces above.
+function mapSurfaceMemberNames() returns ByteArrayArray
+	var names = ByteArrayArray.create()
+	names.push(CountMethod)
+	names.push(ContainsMethod)
+	names.push(GetMethod)
+	names.push(UpsertMethod)
+	names.push(InsertMethod)
+	names.push(RemoveMethod)
+	names.push(MapMethod)
+	return names
+end 'mapSurfaceMemberNames'
+
 // ⚠⚠ **A ROSTER IS BUILT ONCE PER FILE THAT ASKS FOR IT, NOT ONCE PER CALL SITE, AND THE DIFFERENCE IS
 // MEASURED.** Both lists are CONSTANTS — the two functions above only push, and nothing mutates what they
 // return — so `dispatchArrayMethod` can hold a reference instead of rebuilding one. Rebuilt per dispatch
@@ -4011,6 +4074,8 @@ enum MemberSurface
 	stringIndex
 	// `String`'s STATICS — `String.from(bytes)` / `String.init(managed)`, reached through the type's own name.
 	stringStatic
+	// `Map with (Key, Value)` — the two-column hash table's own surface.
+	map
 end 'MemberSurface'
 
 // The read side of a roster — asked ONCE per array-method call, ahead of every arm.
@@ -4159,6 +4224,10 @@ function surfaceRosterRefusal(surface MemberSurface, member ByteArray, roster By
 		return rosterRefusalSentence(StringConformerName, member: member, roster: roster, noun: SurfaceStaticNoun, provider: "the reference")
 	end 'stringStaticSurface'
 
+	if surface == MemberSurface.map 'mapSurface'
+		return rosterRefusalSentence(MapBuiltinBaseName, member: member, roster: roster, noun: SurfaceMemberNoun, provider: "shv2")
+	end 'mapSurface'
+
 	panic("surfaceRosterRefusal: no refusal sentence for a `MemberSurface` this function does not cover — a surface added to the enum without one, which every gate reading it would then refuse with another type's roster")
 end 'surfaceRosterRefusal'
 
@@ -4178,10 +4247,10 @@ function setMethodMutatesReceiver(name ByteArray) returns bool
 end 'setMethodMutatesReceiver'
 
 // ⭐ **WHICH `Map` METHODS WRITE THEIR RECEIVER** — the third half of the one immutable-receiver rule, here
-// with its two siblings for their stated reason. `upsert` publishes a slot (and may `__map_grow` the four
-// buffers); `contains` and `get` only probe.
+// with its two siblings for their stated reason. `upsert` and `insert` publish a slot (and may `__map_grow`
+// the four buffers); `remove` tombstones one and drops the count; `contains` and `get` only probe.
 function mapMethodMutatesReceiver(name ByteArray) returns bool
-	return name.equals(UpsertMethod)
+	return name.equals(UpsertMethod) or name.equals(InsertMethod) or name.equals(RemoveMethod)
 end 'mapMethodMutatesReceiver'
 
 // ⭐ **WHICH `List` METHODS WRITE THEIR RECEIVER** — the fourth half of the one immutable-receiver rule, here
@@ -4233,16 +4302,41 @@ end 'managedListMethodFreesANode'
 // *"a int"*, so without it the article would be written out once per refusal site and the three would be
 // free to disagree.
 //
-// ⚠ The three ADMITTED column types (`requireHashTableColumnType` passes `int`, `String` and `Character`)
-// include exactly one that takes *"an"*, which is why the test is the integral one and not a vowel scan over
-// the name. But `tag` is NOT confined to those three — see `columnValueTagMatches`'s last arm for the
-// measured reason — so the `"a"` branch is a real default and not an unreachable one, and it is CORRECT for
-// every remaining tag name (`float`, `bool`, a struct's name…), all of which begin with a consonant. A
-// fourth admitted type whose name opens with a vowel needs its own arm here; nothing will crash to tell you.
+// ⚠ The three ADMITTED KEY types (`requireHashTableKeyType` passes `int`, `String` and `Character`) include
+// exactly one that takes *"an"*, which is why the test is the integral one and not a vowel scan over the
+// name. But `tag` is NOT confined to those three — a `Map`'s VALUE column is held to the wider
+// `slotTypeFitsOneWord`, and see `columnValueTagMatches`'s last arm for the measured reason a refused
+// instance reaches here with any column type at all — so the `"a"` branch is a real default and not an
+// unreachable one, and it is CORRECT for every remaining tag name (`float`, `bool`, `function`, a struct's
+// name…), all of which begin with a consonant. A further admitted type whose name opens with a vowel needs
+// its own arm here; nothing will crash to tell you.
 function articledTypeTagName(tag ValueTypeTag) returns String
 	let name = typeTagName(tag)
 	return "an {name}" if tagIsIntegral(tag) else "a {name}"
 end 'articledTypeTagName'
+
+// ⭐⭐ **WHAT A CONTAINER-COLUMN REFUSAL CALLS A TYPE — its NOMINAL identity when it has one, and the
+// primitive tag name otherwise.** `typeTagName` alone reads a declared ENUM as `int`, because a `named` value
+// IS an integer to the tag rule (`tagIsIntegral`) — so storing a `Shade` in a `Kind` column was refused as
+// *"this `Map`'s value is an int — got a 'int' value"*, a sentence that argues against itself. That is the
+// exact shape `columnValueTagMatches`' header records from the ranged-alias measurement, and it became
+// reachable the moment a `Map`'s VALUE column could carry an identity (`requireOneWordSlotType`).
+//
+// The identity comes from `Parser.declaredColumnIdentity`, and that is what MAKES the name a refusal PRINTS
+// and the name the check COMPARED one string — the subject builders and the comparison call the same door
+// rather than spelling one expression three times. A message naming a type the comparison did not use is how
+// a diagnostic comes to describe a different program from the one that was refused.
+function columnTypeName(tag ValueTypeTag, identity ByteArray) returns String
+	return typeTagName(tag) if identity.isEmpty() else String.from(identity)
+end 'columnTypeName'
+
+// The same name with its indefinite article. A type with no identity keeps `articledTypeTagName`'s rule
+// (whose own note records that the "an" case is exactly the integral one); a DECLARED name takes "a",
+// because nothing here can know how its spelling opens and guessing would be wrong for `Item` and `Edge`
+// alike. Every existing refusal is byte-identical through this door: they all name identity-less types.
+function articledColumnTypeName(tag ValueTypeTag, identity ByteArray) returns String
+	return articledTypeTagName(tag) if identity.isEmpty() else "a {String.from(identity)}"
+end 'articledColumnTypeName'
 
 // Append one argument to a call's THREE PARALLEL COLUMNS — its value, its `name:` label (the empty
 // slice when positional), and its source span.
@@ -7332,7 +7426,7 @@ export type Parser
 	// allocation-neutral against the shared empty — until a name is actually declared twice.
 	var declaredFuncNames as DeclaredFuncNameSet
 	var overloadMembers as OverloadMemberMap
-	// ⭐ The six MEMBER ROSTERS the builtin dispatchers gate on, memoized per file off their shared empty
+	// ⭐ The seven MEMBER ROSTERS the builtin dispatchers gate on, memoized per file off their shared empty
 	// anchor — see `sharedEmptySurfaceRoster` for the measurement that put them here, and `MemberSurface`
 	// for which dispatch reads which.
 	var arraySurfaceRoster as ByteArrayArray
@@ -7341,6 +7435,7 @@ export type Parser
 	var characterSurfaceRoster as ByteArrayArray
 	var stringIndexSurfaceRoster as ByteArrayArray
 	var stringStaticSurfaceRoster as ByteArrayArray
+	var mapSurfaceRoster as ByteArrayArray
 
 	// ⭐⭐ **THE STDLIB/USER SHADOW RENAME IS APPLIED HERE, TO THE TOKENS, AND THAT PLACEMENT IS THE WHOLE
 	// DESIGN (A1s wave 2).**
@@ -7500,7 +7595,8 @@ export type Parser
 			stringSurfaceRoster: sharedEmptySurfaceRoster,
 			characterSurfaceRoster: sharedEmptySurfaceRoster,
 			stringIndexSurfaceRoster: sharedEmptySurfaceRoster,
-			stringStaticSurfaceRoster: sharedEmptySurfaceRoster
+			stringStaticSurfaceRoster: sharedEmptySurfaceRoster,
+			mapSurfaceRoster: sharedEmptySurfaceRoster
 		}
 	end 'create'
 
@@ -11717,7 +11813,7 @@ export type Parser
 		let elementIsBuffer = self.firstGenericArgSpellingDenotesBuffer()
 		var args = GenericArgNodeArray.create()
 		let argsStart = self.pos
-		let argCount = try self.parseGenericArgNodes(args, inlineElement: self.baseStoresArgumentsInline(baseTok.value))
+		let argCount = try self.parseGenericArgNodes(args, inlineElement: self.baseStoresArgumentsInline(baseTok.value), bareCommaList: true)
 		let selfRef = self.selfNamingArgToken(aliasTok, argsStart: argsStart)
 		genericOut.push(GenericAliasEntry.create(aliasTok.value, baseName: baseTok.value, argCount: argCount, args: args, elementIsBuffer: elementIsBuffer, nameLine: aliasTok.line, nameColumn: aliasTok.column, filePath: self.filePath, visibility: visibility, fixedSize: fixedSize, selfRefLine: selfRef.line, selfRefColumn: selfRef.column))
 		self.checkGenericInstance(baseTok, argCount: argCount)
@@ -11848,11 +11944,35 @@ export type Parser
 	// the BASE, so it is passed down from the base that was read rather than re-derived per argument, and a
 	// NESTED instance recomputes it from its own base (a `Vector with 2 (Box with Real)` puts `Real` in a
 	// declared generic's slot, not in a buffer).
-	function parseGenericArgNodes(nodes GenericArgNodeArray, inlineElement bool) returns FieldIndex throws ParseError
-		if not self.at(TokenKind.leftParen) 'singleArg'
+	function parseGenericArgNodes(nodes GenericArgNodeArray, inlineElement bool, bareCommaList bool) returns FieldIndex throws ParseError
+		if not self.at(TokenKind.leftParen) 'unparenthesized'
 			try self.parseGenericArgNode(nodes, inlineElement: inlineElement)
-			return 1
-		end 'singleArg'
+
+			// ⭐⭐ **`Map with String, UnaryOp` IS THE SAME LIST `Map with (String, UnaryOp)` SPELLS, AND
+			// `/specs/map.md:function-valued.dispatch` WRITES IT WITHOUT THE PARENS.** The parenthesized form
+			// already parsed; the bare one stopped after argument 0 and left the `,` for the DECLARATION reader,
+			// which reported it as `E2001 Expected function declaration, got ','` — a complaint about the next
+			// top-level declaration, on a line that declares a two-argument instance. Two spellings of one type
+			// must reach one arity, so the comma continues the list here.
+			//
+			// ⚠ **AND ONLY WHERE THE LIST IS THE DECLARATION'S OWN — `bareCommaList`, which the NESTED caller
+			// passes false.** Inside a parenthesized list a comma belongs to the ENCLOSING list, so a greedy
+			// nested reading would turn `Box with (Map with String, Int)` from a two-argument `Box` into a
+			// one-argument `Box` over a two-argument `Map` — the same tokens, two meanings, decided by whichever
+			// reader ran first. The outermost list of a `typealias` is terminated by the end of the declaration
+			// and has no such second claimant, which is exactly why the form is unambiguous there and nowhere else.
+			if not bareCommaList 'oneArgumentOnly'
+				return 1
+			end 'oneArgumentOnly'
+
+			var bareCount = 1 as FieldIndex
+			while self.at(TokenKind.comma) 'moreBareArgs'
+				try self.consume(TokenKind.comma)
+				try self.parseGenericArgNode(nodes, inlineElement: inlineElement)
+				bareCount = bareCount + 1
+			end 'moreBareArgs'
+			return bareCount
+		end 'unparenthesized'
 		try self.consume(TokenKind.leftParen)
 		var count = 0 as FieldIndex
 		while true 'argLoop'
@@ -11887,7 +12007,7 @@ export type Parser
 			// so the asymmetry was an omission and not a decision.
 			let subSize = try self.readSizedBaseElementCount(baseTok)
 			var subNodes = GenericArgNodeArray.create()
-			let subCount = try self.parseGenericArgNodes(subNodes, inlineElement: self.baseStoresArgumentsInline(baseTok.value))
+			let subCount = try self.parseGenericArgNodes(subNodes, inlineElement: self.baseStoresArgumentsInline(baseTok.value), bareCommaList: false)
 			self.checkGenericInstance(baseTok, argCount: subCount)
 			nodes.push(GenericArgNode.instanceHeader(baseTok.value, argCount: subCount, fixedSize: subSize))
 			nodes.append(subNodes)
@@ -12090,8 +12210,8 @@ export type Parser
 		// `Set with Element` and `Map with (Key, Value)` are all built by the compiler, so `structOf` finds
 		// nothing for any of them and the arity is validated against the index's own table instead. Their
 		// KEY/ELEMENT-type restrictions are not checked here: those need the RESOLVED argument type and are
-		// enforced where the container is materialized — `requireHashTableColumnType`, asked once of a `Set`'s
-		// key and twice of a `Map`'s two columns.
+		// enforced where the container is materialized — `requireHashTableKeyType` for a `Set`'s key and a
+		// `Map`'s, `requireOneWordSlotType` for a `Map`'s value and a chain's element.
 		//
 		// ⚠ One arm for all three, reading `builtinGenericTypeParamCount` — this used to be a per-builtin arm
 		// that spelled the predicate and the count together, and a third builtin generic is exactly the edit
@@ -15956,7 +16076,17 @@ export type Parser
 	//
 	// It runs the SAME `declareInitializedBinding` an ordinary `let` does — for the temp and for every
 	// element — so nothing about a destructured binding is special downstream.
-	function parseDestructuringBinding(func IrFunction, block IrBlock, mutable bool, keywordTok Token) throws ParseError
+
+	// ⭐ **`( x , y , … )` — THE NAME LIST OF A DESTRUCTURING PATTERN, cursor on the `(`.** Two constructs
+	// spell it: a `let`/`var` binding and a `for … in` loop variable (`for (key, value) in m`), and they are
+	// one pattern rather than two — `_` discards a position in both, every name is checked against the
+	// reserved set in both, and both refuse a one-name pattern with the same sentence.
+	//
+	// The ARITY is refused here, before the source is even parsed, so `let (x) = …` and `for (x) in …` are
+	// each read as the malformed destructure they are rather than as a type error about whatever follows.
+	// The sentence names `let`, which is the spelling every reader of it has written; a `for` header that
+	// wanted one name simply omits the parens.
+	function parseDestructuringNames(keywordTok Token) returns TokenArray throws ParseError
 		try self.consume(TokenKind.leftParen)
 		var nameToks = TokenArray.create()
 		while not self.at(TokenKind.rightParen) 'collectNames'
@@ -15970,16 +16100,20 @@ export type Parser
 		end 'collectNames'
 		try self.consume(TokenKind.rightParen)
 
-		// The arity is checked against the NAME LIST before the initializer is parsed, so `let (x) = …` is
-		// refused as the malformed destructure it is rather than as a type error about whatever follows.
 		if nameToks.count() < MinTupleArity 'tooFewNames'
 			throw ParseError.unsupported("a destructuring binding of {nameToks.count()} name(s) (a tuple has at least {MinTupleArity} elements, so `let (x) = …` names no destructurable shape — write `let x = …`)", line: keywordTok.line, column: keywordTok.column)
 		end 'tooFewNames'
 
+		return nameToks
+	end 'parseDestructuringNames'
+
+	function parseDestructuringBinding(func IrFunction, block IrBlock, mutable bool, keywordTok Token) throws ParseError
+		let nameToks = try self.parseDestructuringNames(keywordTok)
+
 		try self.consume(TokenKind.equals)
 		let rhsStart = self.pos
 		let value = try self.parseExpression(func, block: block)
-		let layout = try self.requireDestructurableTuple(value, nameToks: nameToks, keywordTok: keywordTok)
+		let layout = try self.requireDestructurableTuple(value, nameToks: nameToks, keywordTok: keywordTok, patternSubject: BindingPatternSubject, sourceNoun: BindingPatternSourceNoun, needsClause: BindingPatternNeedsClause)
 
 		// WHICH local the initializer reached into, read once for the whole destructure — the temp's move
 		// source, and the root every ELEMENT reaches a field of (see the E3078 ask below).
@@ -16015,18 +16149,24 @@ export type Parser
 		end 'eachName'
 	end 'parseDestructuringBinding'
 
-	// The tuple layout `value` must have for a destructuring binding of `nameToks` to mean anything: a tuple
+	// The tuple layout `value` must have for a destructuring pattern over `nameToks` to mean anything: a tuple
 	// (never a declared struct — its fields have names the author would have to write) whose element count is
-	// the name count. Both refusals are positioned on the binding keyword, which is where the author decides
-	// how many names to write.
-	function requireDestructurableTuple(value ValueId, nameToks TokenArray, keywordTok Token) returns StructLayout throws ParseError
+	// the name count. Both refusals are positioned on the construct's keyword, which is where the author
+	// decides how many names to write.
+	//
+	// ⭐⭐ **THE CONSTRUCT'S NOUNS ARE THE CALLER'S, exactly as `parseHashTableColumnArg` takes its subject** —
+	// because only the caller knows which construct is speaking. `for (a, b) in xs` over an int array reaches
+	// the first sentence, and hard-coded it read *"a destructuring BINDING of a 'int' INITIALIZER … needs a
+	// RIGHT-HAND SIDE"* about a header that has no binding, no initializer and no right-hand side. The nouns
+	// are the two triples above; the `let` triple keeps both sentences byte-identical to their committed pins.
+	function requireDestructurableTuple(value ValueId, nameToks TokenArray, keywordTok Token, patternSubject String, sourceNoun String, needsClause String) returns StructLayout throws ParseError
 		if not tagIsStructRef(self.tagOf(value)) or not isTupleTypeName(self.valueTypeName(value)) 'notATuple'
-			throw ParseError.unsupported("a destructuring binding of a '{typeTagName(self.tagOf(value))}' initializer (only a TUPLE can be destructured — `let (x, y) = …` needs a right-hand side that is a tuple)", line: keywordTok.line, column: keywordTok.column)
+			throw ParseError.unsupported("{patternSubject} of a '{typeTagName(self.tagOf(value))}' {sourceNoun} (only a TUPLE can be destructured — {needsClause})", line: keywordTok.line, column: keywordTok.column)
 		end 'notATuple'
 
 		let layout = self.tupleLayoutOfValue(value)
 		if layout.fieldCount() != nameToks.count() 'arityMismatch'
-			throw ParseError.unsupported("a destructuring binding of {nameToks.count()} names against a tuple of {layout.fieldCount()} elements (every element must be named)", line: keywordTok.line, column: keywordTok.column)
+			throw ParseError.unsupported("{patternSubject} of {nameToks.count()} names against a tuple of {layout.fieldCount()} elements (every element must be named)", line: keywordTok.line, column: keywordTok.column)
 		end 'arityMismatch'
 		return layout
 	end 'requireDestructurableTuple'
@@ -21481,8 +21621,17 @@ export type Parser
 		// Decided from the tokens, before anything is emitted — see `parseWhileStatement`'s header.
 		let bodyEndIndex = self.blockStatementEndIndex(forIndex, continuesAtElse: false)
 
-		let nameTok = try self.consume(TokenKind.identifier)
-		try self.requireUnreservedName(nameTok)
+		// ⭐⭐ **THE LOOP VARIABLE IS A PATTERN, NOT A NAME — `for (key, value) in m` (TUPLES + `Map`).** A
+		// `Map`'s element IS a `(Key, Value)` tuple (`emitMapEntriesArray`), so the destructuring spelling is
+		// how `/specs/map.md` and `/specs/tuples.md` both write a map loop; the single-name form is the same
+		// pattern with one position and no parens. Read as a LIST of names either way, so every question below
+		// — the anchor, the discard, the E3012 candidate, the borrow — is asked once per position rather than
+		// once per spelling.
+		//
+		// ⚠ **THE ANCHOR IS THE PATTERN'S FIRST TOKEN AND NOT A NAME**, because a destructuring header has no
+		// single name to blame and `_` may occupy the position that would otherwise be it.
+		let patternTok = self.current()
+		let nameToks = try self.parseLoopVariablePattern(forTok)
 		try self.consume(TokenKind.in)
 
 		// ⭐ **THE `for` STATEMENT'S OWN LEXICAL FRAME.** Two things live in it and must be gone at the
@@ -21772,8 +21921,8 @@ export type Parser
 		var loopValue = indexPhi
 		var graphemeEnd = indexPhi
 		if isString 'readCluster'
-			graphemeEnd = self.emitRuntimeCall(GraphemeEndName, args: pairArgs(source, second: indexPhi), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(nameTok))
-			loopValue = self.emitRuntimeCall(CharAtName, args: tripleArgs(source, second: indexPhi, third: graphemeEnd), resultTag: ValueTypeTag.character, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(nameTok))
+			graphemeEnd = self.emitRuntimeCall(GraphemeEndName, args: pairArgs(source, second: indexPhi), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(patternTok))
+			loopValue = self.emitRuntimeCall(CharAtName, args: tripleArgs(source, second: indexPhi, third: graphemeEnd), resultTag: ValueTypeTag.character, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(patternTok))
 			// ⭐⭐ **THE OWNERSHIP RULING: A STRING'S ELEMENT IS OWNED, WHERE AN ARRAY'S IS BORROWED — and
 			// the difference is not a preference, it is a fact about where the value lives.** Slice A could
 			// borrow because the ARRAY KEEPS the element and its own `__arr_decref` walk destroys it, so
@@ -21794,8 +21943,13 @@ export type Parser
 			// gate caught as exit 101. `markValueOwnsHeap` rather than `trackOwnedTemp` for the reason a
 			// consumed parameter uses it: this value already drops through `ownedBindings`, and enrolling it
 			// in `pendingTempDrops` as well would drop it a SECOND time at the statement's end.
+			//
+			// A DESTRUCTURING header owns the cluster under the loop's own element name, because no name the
+			// source wrote holds the whole element. That program is refused a few lines below anyway (a
+			// Character is not a tuple), and the enrolment runs first — so the label has to be a name, and
+			// the honest one is the one the element already has where nothing spells it.
 			self.markValueOwnsHeap(loopValue)
-			self.ownedBindings.push(VarInfo.createValueBinding(nameTok.value, varType: self.typeOf(loopValue), mutable: false, boundValue: loopValue))
+			self.ownedBindings.push(VarInfo.createValueBinding(self.loopVariableOwnerName(nameToks), varType: self.typeOf(loopValue), mutable: false, boundValue: loopValue))
 		end 'readCluster'
 		// ⭐ **THE TWO INDEXED-CONTAINER FORMS READ THEIR ELEMENT THROUGH ONE DOOR**, differing only in what the
 		// carried header value MEANS: an ARRAY's is an ordinal into its buffer, a LIST's is the node the value
@@ -21805,7 +21959,7 @@ export type Parser
 		// exactly the callee and its arguments.
 		if not isRange and not isString and cursorTypeName.isEmpty() 'readElement'
 			let elementArgs = singletonArgs(indexPhi) if isList else pairArgs(source, second: indexPhi)
-			loopValue = self.emitContainerElementAccessor(func, callee: ListNodeValueName if isList else ArrGetUncheckedName, container: source, args: elementArgs, giid: self.valueNameId(source), owned: false, borrowSubjectName: elementBorrowSubject, range: SourceRange.ofToken(nameTok))
+			loopValue = self.emitContainerElementAccessor(func, callee: ListNodeValueName if isList else ArrGetUncheckedName, container: source, args: elementArgs, giid: self.valueNameId(source), owned: false, borrowSubjectName: elementBorrowSubject, range: SourceRange.ofToken(patternTok))
 		end 'readElement'
 		// ⭐⭐ **A CURSOR'S ELEMENT IS WHATEVER `current()` RETURNS, AND ITS OWNERSHIP IS THAT CALL'S ANSWER —
 		// NOT A THIRD RULE HERE.** The other four forms each needed one: an array/list element is a BORROW the
@@ -21818,28 +21972,35 @@ export type Parser
 		// silent no-op on the scalar case, which is why the call is unconditional rather than gated on a
 		// managed-return test that would be a second opinion about what the call minted.
 		if not cursorTypeName.isEmpty() 'readCursorElement'
-			loopValue = try self.emitCursorProtocolCall(cursorTypeName, methodName: CurrentMethodName, source: source, anchor: nameTok, resultUsed: true)
+			loopValue = try self.emitCursorProtocolCall(cursorTypeName, methodName: CurrentMethodName, source: source, anchor: patternTok, resultUsed: true)
 			self.giveTemporaryScopeLifetime(loopValue, name: IterationElementBindingName)
 		end 'readCursorElement'
-		if not nameTok.value.equals(DiscardBindingName) 'bindLoopVariable'
-			// Declared in the per-trip frame, so it is in scope for the whole body and gone at the loop's
-			// `end`. Immutable: `for-iterator-immutable` pins `item = …` as E2013.
-			let loopBinding = try self.scope.declareValueBinding(nameTok.value, varType: self.typeOf(loopValue), mutable: false, value: loopValue) otherwise throw ParseError.localShadowsSelfField(String.from(nameTok.value), typeName: String.from(self.enclosingType), line: nameTok.line, column: nameTok.column)
-			// ⭐ **E3012 CANDIDATE: A DECLARED LOOP VARIABLE MUST BE MENTIONED** (`reportUnusedBindings`).
-			// Pushed inside this guard, so `for _ in` is exempt by the same fact that makes the refusal fair:
-			// `_` binds no name, and it is already the legal spelling in BOTH compilers for a loop that wants
-			// the iteration and not the element. Every one of the four `for` forms (counted range, array,
-			// String, List) reaches this one line, which is why the check needs no per-form knowledge — the
-			// bootstrap pushes its own candidate before the range/container fork for the same reason.
-			self.unusedCandidates.push(UnusedBindingCandidate.create(loopBinding, nameRange: SourceRange.ofToken(nameTok), kind: UnusedBindingKind.loopVariable))
-			// ⭐ E3070: the element this loop just read is a BORROW, and it is live for the BODY'S EXTENT
-			// rather than to the variable's last use — see `attachPendingBorrows`'s `liveUntil`. `_` binds
-			// nothing, so nothing can hold the element past its read and there is no borrow to record.
-			// A STRING's element is OWNED rather than borrowed, so there is no borrow to attach — the call
-			// is a no-op on it (`attachPendingBorrows` reads the pending-borrow list the array accessor
-			// fills, and a minted value files none).
-			self.attachPendingBorrows(func, borrower: loopBinding, boundValue: loopValue, liveUntil: bodyEndIndex)
-		end 'bindLoopVariable'
+
+		// ⭐⭐ **ONE PATTERN POSITION IS BOUND TO ONE VALUE, AND A DESTRUCTURING HEADER SIMPLY HAS MORE OF
+		// THEM.** A single name takes the element WHOLE; `for (key, value) in m` takes one tuple FIELD each,
+		// which is the desugaring `parseDestructuringBinding` already writes for `let (x, y) = t` (v1
+		// `parseTupleDestructureVarDecl`, bootstrap `2-Parser.cs:10165-10305`) — a field load per name, and
+		// nothing else.
+		//
+		// ⭐ **AND IT NEEDS NO HIDDEN BINDING, WHERE `let (x, y) = t` DOES.** That one binds the box to an
+		// unspellable name because the RHS is a freshly built tuple SOME binding has to drop. A loop element is
+		// a BORROW the container still owns (`emitContainerElementAccessor(owned: false)`) — its `__arr_decref`
+		// walk destroys every pair — so there is no ownership obligation here to give a name to.
+		//
+		// ⚠ E3070 records no borrow for the destructured names, and that is the LOCK's doing rather than an
+		// omission: what could dangle a field load is a write that frees the pair box, and `lockIterationSource`
+		// has already made every write to the source binding E2013 for the loop's whole extent. The element's
+		// own pending borrow is left unclaimed and cut at the next statement boundary
+		// (`dropUnclaimedPendingBorrows`), exactly as the `for _ in …` discard leaves it.
+		if self.patternNamesOneWholeElement(nameToks) 'bindTheWholeElement'
+			try self.declareLoopVariable(func, nameTok: self.soleLoopVariableName(nameToks), value: loopValue, bodyEndIndex: bodyEndIndex)
+		end 'bindTheWholeElement' else 'bindEachDestructuredName'
+			let layout = try self.requireDestructurableTuple(loopValue, nameToks: nameToks, keywordTok: forTok, patternSubject: ForPatternSubject, sourceNoun: ForPatternSourceNoun, needsClause: ForPatternNeedsClause)
+			for i in 0 upto nameToks.count() 'eachName'
+				let nameTok = try nameToks.get(i) otherwise panic("parseForStatement: nameToks.get OOB at {i} below count {nameToks.count()}")
+				try self.declareLoopVariable(func, nameTok: nameTok, value: self.emitFieldLoad(loopValue, layout: layout, index: i, range: SourceRange.between(patternTok, last: nameTok)), bodyEndIndex: bodyEndIndex)
+			end 'eachName'
+		end 'bindEachDestructuredName'
 
 		var bodyEnd = try self.parseBlockBody(func, block: body, label: loopLabelTok.value)
 
@@ -21923,6 +22084,73 @@ export type Parser
 		self.closeBlock(forMark)
 		return exit
 	end 'parseForStatement'
+
+	// ⭐ **THE `for` HEADER'S LOOP-VARIABLE PATTERN, as the LIST OF NAMES it always was.** `for (key, value) in`
+	// is `parseDestructuringNames`' pattern — the same one `let (x, y) = …` reads, so `_` discards a position
+	// and a one-name pattern is refused by one sentence rather than two — and a bare `for item in` is that
+	// pattern with a single position and no parens, which is why it comes back as a list too. Everything
+	// downstream then asks its questions per POSITION and needs to know nothing about the spelling.
+	function parseLoopVariablePattern(forTok Token) returns TokenArray throws ParseError
+		if self.at(TokenKind.leftParen) 'destructuringPattern'
+			return try self.parseDestructuringNames(forTok)
+		end 'destructuringPattern'
+
+		let nameTok = try self.consume(TokenKind.identifier)
+		try self.requireUnreservedName(nameTok)
+		var names = TokenArray.create()
+		names.push(nameTok)
+		return names
+	end 'parseLoopVariablePattern'
+
+	// ⭐ **DOES THE HEADER'S PATTERN NAME THE ELEMENT WHOLE?** — one position, which is what a bare
+	// `for item in` comes back as. Its two readers FORK on it and used to ask it in two spellings (`== 1` at
+	// the binding, `!= 1` at the owner name below), which is one fact written down twice: a pattern rule that
+	// changed at one would have gone on binding at the other. It is also the PROOF the `get(0)` beneath each
+	// answer rests on, which is why the accessor sits beside it rather than at either site.
+	function patternNamesOneWholeElement(nameToks TokenArray) returns bool
+		return nameToks.count() == 1
+	end 'patternNamesOneWholeElement'
+
+	// The sole name of such a pattern. Both readers guard it with the predicate above, so the panic names ONE
+	// impossible state rather than two sites each describing it in their own words.
+	function soleLoopVariableName(nameToks TokenArray) returns Token
+		return try nameToks.get(0) otherwise panic("soleLoopVariableName: `patternNamesOneWholeElement` answered true for a pattern holding no name at 0")
+	end 'soleLoopVariableName'
+
+	// The name the OWNED loop element is enrolled under when the loop mints one (a String's grapheme cluster).
+	// A single-name header owns it under the name the author wrote; a destructuring header has no name for the
+	// whole element, so it takes the one the compiler already uses where nothing spells it.
+	function loopVariableOwnerName(nameToks TokenArray) returns ByteArray
+		if not self.patternNamesOneWholeElement(nameToks) 'destructuredElementHasNoName'
+			return IterationElementBindingName
+		end 'destructuredElementHasNoName'
+
+		return self.soleLoopVariableName(nameToks).value
+	end 'loopVariableOwnerName'
+
+	// ⭐ **DECLARE ONE POSITION OF A `for` HEADER'S PATTERN.** `_` is the discard (`DiscardBindingName`) and
+	// binds nothing at all — declaring it would make an ordinary `_ = f()` discard statement inside the body a
+	// write to a `let`. Everything else is declared in the per-trip frame, so it is in scope for the whole body
+	// and gone at the loop's `end`; immutable, which `for-iterator-immutable` pins as E2013 for a write.
+	//
+	// ⭐ **E3012 CANDIDATE: A DECLARED LOOP VARIABLE MUST BE MENTIONED** (`reportUnusedBindings`). Recorded
+	// past the discard guard, so `for _ in` — and a destructured `for (_, v) in` — is exempt by the same fact
+	// that makes the refusal fair: `_` binds no name, and it is already the legal spelling in BOTH compilers
+	// for a loop that wants the iteration and not that part of the element.
+	//
+	// ⭐ E3070: what this name binds may be a BORROW, and it is live for the BODY'S EXTENT rather than to the
+	// variable's last use — see `attachPendingBorrows`'s `liveUntil`. A STRING's element is OWNED rather than
+	// borrowed, so there is no borrow to attach and the call is a no-op on it (`attachPendingBorrows` reads the
+	// pending-borrow list the array accessor fills, and a minted value files none).
+	function declareLoopVariable(func IrFunction, nameTok Token, value ValueId, bodyEndIndex TokenIndex) throws ParseError
+		if nameTok.value.equals(DiscardBindingName) 'discardsThisPosition'
+			return
+		end 'discardsThisPosition'
+
+		let loopBinding = try self.scope.declareValueBinding(nameTok.value, varType: self.typeOf(value), mutable: false, value: value) otherwise throw ParseError.localShadowsSelfField(String.from(nameTok.value), typeName: String.from(self.enclosingType), line: nameTok.line, column: nameTok.column)
+		self.unusedCandidates.push(UnusedBindingCandidate.create(loopBinding, nameRange: SourceRange.ofToken(nameTok), kind: UnusedBindingKind.loopVariable))
+		self.attachPendingBorrows(func, borrower: loopBinding, boundValue: value, liveUntil: bodyEndIndex)
+	end 'declareLoopVariable'
 
 	// ⭐ **ONE CURSOR-PROTOCOL CALL — `<T>.current(source)` OR `<T>.advance(source)`.** Both are ordinary
 	// direct calls on the source as receiver, differing only in the method name and in whether the result is
@@ -33691,8 +33919,9 @@ export type Parser
 	// that `declared` is not confined to the admitted set — so a `structRef` element falls straight through it
 	// to `tagIsIntegral` and reads FALSE. MEASURED on `<map>.map(function(p) gives p)`, whose element is the
 	// entry pair: *"`map`'s transform answers a struct value where the container's element is a struct"*, a
-	// sentence that refutes itself. Widening THAT predicate is the wrong door — a hash-table column may never
-	// be a struct (`requireHashTableColumnType`).
+	// sentence that refutes itself. Widening THAT predicate is still the wrong door — the identity belongs on
+	// this side of it, which is why the hash-table column doors ask `elementTypePreserved` too now that a
+	// `Map`'s VALUE column may carry one (`requireOneWordSlotType`).
 	function elementTransformAnswersElement(returned MaxonType, elementType MaxonType) returns bool
 		return elementTypePreserved(maxonTypeTag(elementType), elementIdentity: self.declaredElementIdentity(elementType), otherTag: maxonTypeTag(returned), otherIdentity: self.declaredElementIdentity(returned))
 	end 'elementTransformAnswersElement'
@@ -35254,7 +35483,7 @@ export type Parser
 	// that record is withheld for a bare-local source, so it answered differently for `[7 as N, …]` and
 	// `[v as N, …]` — the measurement is on that predicate.
 	function arrayLiteralInstanceFor(elem ValueId, elemTok Token) returns GenericInstanceId throws ParseError
-		return self.signatures.builtinInstanceForElement(ArrayBuiltinBaseName, element: try self.literalColumnTypeFor(elem, literalKind: ArrayLiteralSubject, columnNoun: ArrayLiteralColumnNoun, valueTok: elemTok))
+		return self.signatures.builtinInstanceForElement(ArrayBuiltinBaseName, element: try self.literalColumnTypeFor(elem, literalKind: ArrayLiteralSubject, columnNoun: ContainerElementColumnNoun, valueTok: elemTok))
 	end 'arrayLiteralInstanceFor'
 
 	// ⭐⭐ **THE TYPE A BRACKETED LITERAL'S VALUE FIXES FOR THE COLUMN IT SITS IN.** An array literal has ONE
@@ -35269,7 +35498,7 @@ export type Parser
 	//
 	// ⚠⚠ **THE REFUSAL'S ARRAY SPELLING IS PINNED BYTE-FOR-BYTE by `specs-shv2/character-ownership.md`'s
 	// `an-array-literal-element-is-not-a-character`**, which is why the subject arrives as `<kind> <noun>`
-	// rather than as one reworded sentence: composed from `ArrayLiteralSubject`/`ArrayLiteralColumnNoun` it
+	// rather than as one reworded sentence: composed from `ArrayLiteralSubject`/`ContainerElementColumnNoun` it
 	// reproduces that expectation exactly, and the map literal's two columns get their own nouns without
 	// touching it.
 	function literalColumnTypeFor(value ValueId, literalKind String, columnNoun String, valueTok Token) returns MaxonType throws ParseError
@@ -35549,7 +35778,7 @@ export type Parser
 	// ALIAS token (the type the author wrote is what is inadmissible), the emit spans alias→method.
 	function gateAndEmitContainerCreate(giid GenericInstanceId, aliasTok Token, range SourceRange) returns ValueId throws ParseError
 		if self.signatures.isSetInstance(giid) 'set'
-			try self.requireHashTableColumnType(giid, position: HashTableKeyArgPosition, containerName: "Set", columnNoun: HashTableKeyColumnNoun, tok: aliasTok)
+			try self.requireHashTableKeyType(giid, containerName: String.from(SetBuiltinBaseName), tok: aliasTok)
 			return self.emitSetCreateOp(giid, range: range)
 		end 'set'
 		if self.signatures.isMapInstance(giid) 'map'
@@ -35600,6 +35829,12 @@ export type Parser
 	// this slice dispatches `hash`/`equals` through the key's `Hashable`/`Equatable` WITNESSES, and those are
 	// the two key types a witness can carry. A struct / `ByteArray` key rides a later slice, so it is a clean
 	// E2015 here rather than a link failure at the missing witness impl.
+	//
+	// ⚠⚠ **IT IS THE KEY'S GATE AND ONLY THE KEY'S — A `Map`'s VALUE IS HELD TO
+	// `ProgramSignatures.slotTypeFitsOneWord` INSTEAD, and asking it here was a measured false refusal.** The
+	// whitelist below exists because the key is HASHED and COMPARED through witnesses; a value is stored and
+	// dropped, which is the one-machine-word question `List` already answers wider. See that predicate's
+	// header for the two programs this cost.
 	// ⚠ `float` is NOT the counter-example it looks like now that `float.hash`/`float.equals` are both
 	// synthesized: a float key is refused one gate EARLIER, by E2062 on the type ARGUMENT, because a type
 	// parameter is an opaque general-purpose slot and a float has no way through it. So this gate never sees
@@ -35609,18 +35844,59 @@ export type Parser
 	// `conformerTypeArgName` — the SAME canonical-conformer reducer the witness threading uses
 	// (`LowerMaxonToStd.appendSetWitnessArgs`) — so the gate and the dispatch agree on the key's identity (an
 	// `int` and a ranged-int alias both reduce to `int`; a `String` names itself).
-	// ⚠ It is asked of a `Map` COLUMN too — both its key and its value — which is why the container and the
-	// noun are parameters rather than the literals a `Set`-only gate would have spelled. A map's VALUE is
-	// held to the same three types as its key even though the value is never hashed: the value column is one
-	// machine word wide and drops through `managedFieldDropCallee`, and those are exactly the types whose
-	// single-word storage and drop protocol the container already knows. A struct / ByteArray value is the
-	// same later slice a struct key is.
-	function requireHashTableColumnType(giid GenericInstanceId, position TypeParamId, containerName String, columnNoun String, tok Token) throws ParseError
-		let columnType = self.signatures.conformerTypeArgName(giid, position: position).toByteArray()
-		if not (columnType.equals(IntConformerName) or columnType.equals(StringConformerName) or columnType.equals(CharacterConformerName)) 'unsupportedColumn'
-			throw ParseError.unsupported("`{containerName}` supports `int`, `String` and `Character` {columnNoun}s — a '{String.from(columnType)}' {columnNoun} (struct / ByteArray) is a later slice", line: tok.line, column: tok.column)
-		end 'unsupportedColumn'
-	end 'requireHashTableColumnType'
+	// ⚠ It is asked of a `Map`'s key as well as a `Set`'s, which is why the container is a parameter rather
+	// than the literal a `Set`-only gate would have spelled.
+	//
+	// ⭐⭐ **THE REFUSAL RENDERS THE ADMITTED SET FROM THE SAME THREE CONSTANTS THE TEST READS**, so a fourth
+	// admitted key type moves the sentence by being admitted. A hand-written roster that has to be edited
+	// beside the test is this project's most frequent single rot — the sentence stays true only until someone
+	// widens the test and not the prose, and nothing fails to say so.
+	function requireHashTableKeyType(giid GenericInstanceId, containerName String, tok Token) throws ParseError
+		let keyType = self.signatures.conformerTypeArgName(giid, position: HashTableKeyArgPosition).toByteArray()
+		if not (keyType.equals(IntConformerName) or keyType.equals(StringConformerName) or keyType.equals(CharacterConformerName)) 'unsupportedKey'
+			throw ParseError.unsupported("`{containerName}` hashes and compares its {HashTableKeyColumnNoun}s through their `Hashable`/`Equatable` witnesses, so a {HashTableKeyColumnNoun} must be one of `{String.from(IntConformerName)}`, `{String.from(StringConformerName)}`, `{String.from(CharacterConformerName)}` — a '{String.from(keyType)}' {HashTableKeyColumnNoun} is a later slice", line: tok.line, column: tok.column)
+		end 'unsupportedKey'
+	end 'requireHashTableKeyType'
+
+	// ⭐⭐ **THE ONE-MACHINE-WORD SLOT GATE — a `List`/`__ManagedList` ELEMENT and a `Map`'s VALUE column.**
+	// Both slots are one word and both are torn down by the destructor `columnDestroyValue` stamps, so the
+	// RULE is `ProgramSignatures.slotTypeFitsOneWord` (see its header for what that buys and what it cost to
+	// have two of them); what differs is only the container and the noun the sentence names, which is why
+	// those are parameters and the sequence is not.
+	//
+	// The OPAQUE arm is asked first and says something else entirely: a `T` slot is not a type that fails to
+	// fit a word, it is a slot with no statically known destructor to stamp — so a managed instantiation would
+	// tear down without dropping what it holds. That is a different refusal and it gets its own sentence.
+	//
+	// ⚠ **`float` IS NOT WHAT THE SECOND REFUSAL IS FOR, AND THAT WAS MEASURED RATHER THAN ASSUMED.** A float
+	// slot would arrive in the XMM file where every container entry is declared `i64`, but it never reaches
+	// here: `typealias FList = List with F` is already **E2062 on the type ARGUMENT** (a type parameter is an
+	// opaque general-purpose slot and a float has no way through it) — the same gate
+	// `requireHashTableKeyType` records for a float key. What the second refusal is for is therefore any slot
+	// type neither managed nor word-shaped that a future type kind might introduce: a clean E2015 rather than
+	// a wrong stride.
+	//
+	// MEASURED to pass through it as a `List` ELEMENT, each printing and tearing down clean: `bool`, a ranged
+	// `Byte`, a declared enum, a function alias, a nested `List`, a nested `Array`, `String`, and a struct
+	// with a `String` field.
+	//
+	// ⚠⚠ **AND PASSING *THIS* GATE IS NOT THE WHOLE ADMISSION — `TypeRules.columnValueTagMatches` DECIDES
+	// WHAT MAY BE WRITTEN, AND THE ROSTER ABOVE WAS MEASURED ON THE OTHER SLOT.** Moving the header onto the
+	// now-shared gate silently re-claimed it for a `Map`'s VALUE column, where `bool` was admitted here and
+	// refused at the first `upsert`; the arm that closes it is that predicate's, and its own header carries
+	// the obligation. RE-MEASURED on a `Map` value after the fix: `bool`, a ranged `Byte`, a declared enum,
+	// `String` and a struct all store and read back.
+	function requireOneWordSlotType(slotType MaxonType, containerName String, columnNoun String, tok Token) throws ParseError
+		if self.signatures.slotTypeIsOpaque(slotType) 'opaqueSlot'
+			throw ParseError.unsupported("`{containerName}` over a bare type parameter — a container inside a generic body has no {columnNoun} destructor to stamp, so a managed instantiation would leak the {columnNoun}s it holds; declare it at a concrete {columnNoun} type", line: tok.line, column: tok.column)
+		end 'opaqueSlot'
+
+		if self.signatures.slotTypeFitsOneWord(slotType) 'fitsTheSlot'
+			return
+		end 'fitsTheSlot'
+
+		throw ParseError.unsupported("`{containerName}` holds one machine word per {columnNoun}, so its {columnNoun} must be a managed type or an integral one — a '{typeTagName(maxonTypeTag(slotType))}' {columnNoun} does not fit that slot", line: tok.line, column: tok.column)
+	end 'requireOneWordSlotType'
 
 	// ⭐ **`Set from [1, 2, 3]` — CONSTRUCT A SET FROM AN ARRAY LITERAL (P1.7b slice B).** The cursor sits on the
 	// `Set` identifier. Parse `from` then the `[…]` through the EXISTING array-literal parser — which infers the
@@ -35807,8 +36083,12 @@ export type Parser
 	function parseSetKeyArg(func IrFunction, giid GenericInstanceId, consume bool) returns ValueId throws ParseError
 		try self.consume(TokenKind.leftParen)
 		let keyType = self.signatures.setKeyType(giid)
-		let declared = maxonTypeTag(keyType)
-		let key = try self.parseHashTableColumnArg(func, columnType: keyType, columnSubject: "`Set with {typeTagName(declared)}` requires {articledTypeTagName(declared)} key", consume: consume)
+		// The RESOLVED column type is computed ONCE and handed to the shared core, so the sentence names the
+		// very type the check compared — see `parseHashTableColumnArg` for why the raw column type is not it.
+		let declaredType = self.resolvedSlotType(keyType)
+		let declared = maxonTypeTag(declaredType)
+		let identity = self.declaredColumnIdentity(declaredType)
+		let key = try self.parseHashTableColumnArg(func, columnType: keyType, declaredType: declaredType, columnSubject: "`Set with {columnTypeName(declared, identity: identity)}` requires {articledColumnTypeName(declared, identity: identity)} {HashTableKeyColumnNoun}", consume: consume)
 		try self.consume(TokenKind.rightParen)
 		return key
 	end 'parseSetKeyArg'
@@ -35834,14 +36114,35 @@ export type Parser
 	//
 	// The tag rule itself is `columnValueTagMatches`, whose header carries the measured reason "is this an int?"
 	// is `tagIsIntegral` and not `== ValueTypeTag.integer`.
-	function parseHashTableColumnArg(func IrFunction, columnType MaxonType, columnSubject String, consume bool) returns ValueId throws ParseError
+	//
+	// ⭐⭐ **THE COLUMN TYPE IS RESOLVED FIRST, AND THE COMPARISON IS `elementTypePreserved` — NOT THE BARE TAG
+	// RULE — BECAUSE A `Map`'s VALUE COLUMN MAY NOW CARRY A NOMINAL IDENTITY.** Both halves were forced by the
+	// same widening (`requireOneWordSlotType`), and each is a wrong answer without the other:
+	//
+	//   • **RESOLVED**: a `Map with (String, UnaryOp)` records its value argument as `named("UnaryOp")` — the
+	//     declaration SWEEP ran before anything could say what the name denoted — and `tagIsIntegral(named)` is
+	//     TRUE, so the raw tag said "int" about a code pointer. `resolvedSlotType` is the same first step the
+	//     element READ takes (`containerSlotValueType`), so the write door and the read door agree about what
+	//     the declaration names. It is exactly the omission that once made an `Array with <function alias>`
+	//     element "stay `named`, i.e. an int".
+	//   • **IDENTITY**: an enum column and an int column are BOTH integral to the tag rule, so `["a": Kind.X,
+	//     "b": 5]` would store a bare 5 where a `match` later reads a case — the ordinal-against-a-match crash
+	//     `declaredElementIdentity`'s header measures twice, one container over. `elementTypePreserved` is that
+	//     rule already stated once: an identity on EITHER side settles it, and only when neither has one does
+	//     the tag rule decide (which is what keeps a ranged-alias key admitted).
+	//
+	// ⚠ The identity is `declaredColumnIdentity`'s, which the two callers compose their SUBJECTS from, so the
+	// name a refusal prints and the name this comparison read are one string by construction.
+	function parseHashTableColumnArg(func IrFunction, columnType MaxonType, declaredType MaxonType, columnSubject String, consume bool) returns ValueId throws ParseError
 		let valueTok = self.current()
 		let valueStart = self.pos
-		let declared = maxonTypeTag(columnType)
+		let declared = maxonTypeTag(declaredType)
 		let parsed = try self.characterizedOperand(try self.parseExpression(func, block: self.currentBlock), expected: declared, start: valueStart, pastEnd: self.pos)
 
-		if not columnValueTagMatches(self.tagOf(parsed), declared: declared) 'mismatch'
-			throw ParseError.unsupported("{columnSubject} — got a '{typeTagName(self.tagOf(parsed))}' value", line: valueTok.line, column: valueTok.column)
+		let valueTag = self.tagOf(parsed)
+		let valueIdentity = self.aggregateNameOf(valueTag, nameId: self.valueNameId(parsed))
+		if not elementTypePreserved(declared, elementIdentity: self.declaredColumnIdentity(declaredType), otherTag: valueTag, otherIdentity: valueIdentity) 'mismatch'
+			throw ParseError.unsupported("{columnSubject} — got a '{columnTypeName(valueTag, identity: valueIdentity)}' value", line: valueTok.line, column: valueTok.column)
 		end 'mismatch'
 
 		if not consume 'borrowed'
@@ -35850,6 +36151,21 @@ export type Parser
 
 		return try self.moveColumnValueIntoTable(parsed, columnType: columnType, valueStart: valueStart)
 	end 'parseHashTableColumnArg'
+
+	// ⭐⭐ **THE NOMINAL IDENTITY OF A COLUMN'S RESOLVED DECLARED TYPE — the ONE expression the three column
+	// doors share.** `parseSetKeyArg` and `parseMapColumnValue` build the refusal's SUBJECT from it and
+	// `parseHashTableColumnArg` runs the `elementTypePreserved` COMPARISON with it, so "the name a refusal
+	// PRINTS" and "the name the check COMPARED" are one string BY CONSTRUCTION rather than by three copies of
+	// one expression agreeing. Spelled out at each site, changing one described a different program from the
+	// one refused, with no compile error anywhere to say so.
+	//
+	// ⚠ It is the ungated `aggregateNameOf` and DELIBERATELY not `declaredElementIdentity`, whose
+	// `tagMayNameAggregate` pre-gate withholds a `genericInstance`'s name — right for the `map`-transform door
+	// that one serves, wrong here, where a nested-container value column is admitted and two distinct
+	// instances share the tag.
+	function declaredColumnIdentity(declaredType MaxonType) returns ByteArray
+		return self.aggregateNameOf(maxonTypeTag(declaredType), nameId: typeNameIdOf(declaredType))
+	end 'declaredColumnIdentity'
 
 	// ⭐ **MOVE A PARSED KEY INTO A MANAGED-KEY SET (P1.7b String keys).** The `Set` twin of `moveElementIntoContainer`:
 	// the set becomes the key's sole owner (its `__set_decref` walk / dup-drop / remove-drop destroys it), so a
@@ -35881,8 +36197,8 @@ export type Parser
 	// BOTH of a map's column types, gated together at the one door a map is born through, so a program can
 	// never build a table whose key is admissible and whose value is not.
 	function requireMapColumnTypes(giid GenericInstanceId, tok Token) throws ParseError
-		try self.requireHashTableColumnType(giid, position: HashTableKeyArgPosition, containerName: "Map", columnNoun: HashTableKeyColumnNoun, tok: tok)
-		try self.requireHashTableColumnType(giid, position: MapValueArgPosition, containerName: "Map", columnNoun: HashTableValueColumnNoun, tok: tok)
+		try self.requireHashTableKeyType(giid, containerName: String.from(MapBuiltinBaseName), tok: tok)
+		try self.requireOneWordSlotType(self.signatures.mapValueType(giid), containerName: String.from(MapBuiltinBaseName), columnNoun: HashTableValueColumnNoun, tok: tok)
 	end 'requireMapColumnTypes'
 
 	// Emit `__map_create(keyDrop, valueDrop)` for instance `giid`, yielding the empty map record. The record is
@@ -36009,17 +36325,24 @@ export type Parser
 	end 'columnCloneValue'
 
 	// ⭐ **DISPATCH A BUILTIN `Map` METHOD** — cursor on the method NAME, `map` the (borrowed) receiver record.
-	// `count` returns the entry count and `contains` a `bool`; `get` returns the VALUE and THROWS
+	// `count` returns the entry count, `contains` and `remove` a `bool`; `get` returns the VALUE and THROWS
 	// `MapError.keyNotFound`; `upsert` is a VOID mutator (refused in value position by
 	// `requireVoidMethodIsStatement`) that returns the receiver — what the statement still denotes, like
-	// `emitArrayVoidCall`.
+	// `emitArrayVoidCall` — and `insert` is that same mutator under a refusal, THROWING
+	// `MapError.keyAlreadyExists` on a duplicate.
 	//
-	// All three carry the KEY's witness tables, appended by `LowerMaxonToStd`; the parser passes only the
-	// receiver, the key and (for `upsert`) the value. Ownership splits exactly as the `Set` dispatcher's does:
-	// `upsert` MOVES a managed key AND a managed value in (the map becomes their sole owner), while
-	// `contains`/`get` BORROW the key for the compare.
+	// Every key-touching arm carries the KEY's witness tables, appended by `LowerMaxonToStd`; the parser
+	// passes only the receiver, the key and (for the two entry writers) the value. Ownership splits exactly as
+	// the `Set` dispatcher's does: `upsert`/`insert` MOVE a managed key AND a managed value in (the map
+	// becomes their sole owner, or — when `insert` refuses — drops both), while `contains`/`get`/`remove`
+	// BORROW the key for the compare.
+	//
+	// ⭐ **THE ROSTER GATE IS ASKED FIRST**, as it is on the five surfaces that already carry one: it is the
+	// question every other refusal about the call presupposes, and it is what stopped the old hand-written
+	// sentence — which still said this dispatch served six names — from having to be edited by hand here.
 	function dispatchMapMethod(func IrFunction, map ValueId, resultUsed bool, immutableReceiverName ByteArray, receiverOwner MutatedParamMask) returns ValueId throws ParseError
 		let methodTok = try self.consume(TokenKind.identifier)
+		let roster = try self.requireSurfaceMember(MemberSurface.map, methodTok: methodTok)
 		let range = SourceRange.ofToken(methodTok)
 		let giid = self.valueNameId(map)
 
@@ -36047,26 +36370,38 @@ export type Parser
 			return self.emitRuntimeCall(MapGetName, args: pairArgs(map, second: key), resultTag: maxonTypeTag(resultType), resultNameId: typeNameIdOf(resultType), range: range)
 		end 'get'
 
+		// `remove(key)` answers a bool and BORROWS the key for the compare (its owned temp drops at statement
+		// end) — the `Set` dispatcher's arm exactly. What is one column wider is at the RUNTIME end, where a
+		// map also drops the VALUE it vacates; the surface is identical, which is why `__map_remove` and
+		// `__set_remove` are one graph (`HashTableRuntime.buildHtRemove`).
+		if methodTok.value.equals(RemoveMethod) 'remove'
+			let key = try self.parseMapKeyArgList(func, giid: giid)
+			return self.emitRuntimeCall(MapRemoveName, args: pairArgs(map, second: key), resultTag: ValueTypeTag.boolean, resultNameId: UnnamedTypeId, range: range)
+		end 'remove'
+
 		// `upsert` is a non-throwing VOID mutator, so a value-position call is refused — from INSIDE the arm its
 		// name matched, which is the shared check's whole scoping (`requireVoidMethodIsStatement`).
 		if methodTok.value.equals(UpsertMethod) 'upsert'
 			try self.requireVoidMethodIsStatement(resultUsed, methodTok: methodTok)
-			// `( key, value: v )` — BOTH columns are consumed: the map becomes the sole owner of a managed key
-			// and of a managed value alike. `ArrayValueLabel` is the same `value:` label the two-argument
-			// `Array` mutators give their value argument — one label, three containers.
-			try self.consume(TokenKind.leftParen)
-			let key = try self.parseMapColumnValue(func, giid: giid, position: HashTableKeyArgPosition, columnNoun: HashTableKeyColumnNoun, consume: true)
-			try self.consume(TokenKind.comma)
-			let labelTok = try self.consumeNameToken(NamePosition.declaration)
-			if not labelTok.value.equals(ArrayValueLabel) 'wrongLabel'
-				throw ParseError.unsupported("`Map.upsert` names its second argument '{String.from(ArrayValueLabel)}:' — got '{String.from(labelTok.value)}:'", line: labelTok.line, column: labelTok.column)
-			end 'wrongLabel'
-			try self.consume(TokenKind.colon)
-			let value = try self.parseMapColumnValue(func, giid: giid, position: MapValueArgPosition, columnNoun: HashTableValueColumnNoun, consume: true)
-			try self.consume(TokenKind.rightParen)
-			self.emitMapUpsert(map, key: key, value: value, range: range)
+			let entry = try self.parseMapEntryArgList(func, giid: giid, methodTok: methodTok)
+			self.emitMapUpsert(map, key: entry.key, value: entry.value, range: range)
 			return map
 		end 'upsert'
+
+		// ⭐ **`insert` IS `upsert` UNDER A REFUSAL** — the same two columns, moved in the same way, and a
+		// duplicate key throws `MapError.keyAlreadyExists` instead of replacing the stored value. So it is a
+		// THROWING void mutator: `requireVoidMethodIsStatement` for the arm above's reason, and the enclosing
+		// `try` rewrites the call into a `tryCall` (`rewriteLastCallToTryCall`) exactly as it does for `get`.
+		//
+		// ⚠ **IT GOES THROUGH `emitRuntimeCall` AND DOES NOT RETURN THE RECEIVER, WHICH `upsert` DOES.** That
+		// is `buildArrSetLength`'s measured rule (see the `setLength`/`setByte` arms): a throwing call that
+		// yields the receiver makes the TRY's value an owned managed record, which the ok/error reconciliation
+		// then acts on — an access violation, not a diagnostic.
+		if methodTok.value.equals(InsertMethod) 'insert'
+			try self.requireVoidMethodIsStatement(resultUsed, methodTok: methodTok)
+			let entry = try self.parseMapEntryArgList(func, giid: giid, methodTok: methodTok)
+			return self.emitRuntimeCall(MapInsertName, args: threeArgs(map, second: entry.key, third: entry.value), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+		end 'insert'
 
 		// ⭐ **`map(transform)` YIELDS AN ARRAY OF `(Key, Value)` PAIRS** — `stdlib/Interfaces.maxon:187`'s
 		// `Array with Element` for every `Iterable`, where a `Map`'s Element IS its entry pair. So it is
@@ -36079,8 +36414,36 @@ export type Parser
 			return try self.parseContainerMap(func, container: entries, resultGiid: self.valueNameId(entries), callee: ArrMapName, range: range)
 		end 'map'
 
-		throw ParseError.unsupported("`Map` method '{String.from(methodTok.value)}' — shv2 provides create/upsert/contains/get/count/map, plus `[k: v, …]` literal construction and `for (key, value) in …` iteration", line: methodTok.line, column: methodTok.column)
+		let drift = rosterDriftMessage("dispatchMapMethod", member: methodTok.value, roster: roster, rosterFuncs: "`mapSurfaceMemberNames`")
+		panic("{drift}")
 	end 'dispatchMapMethod'
+
+	// ⭐ **`( key, value: v )` — THE ENTRY-WRITING ARGUMENT LIST BOTH `upsert` AND `insert` TAKE.** BOTH columns
+	// are consumed: the map becomes the sole owner of a managed key and of a managed value alike.
+	// `ArrayValueLabel` is the same `value:` label the two-argument `Array` mutators give their value argument
+	// — one label, three containers. The two methods differ in what the RUNTIME does with a duplicate and in
+	// nothing the parser can see, so the fencing tokens, the label check and the two move-ins are written once.
+	//
+	// ⚠ **THE FENCING TOKENS ARE CONSUMED HERE AND NOT INSIDE `parseHashTableColumnArg`** — that function's
+	// ordering contract: each column moves in BEFORE the `,`/`)` that fences it is consumed, because
+	// `rhsWasBareLocalReference` reads `[valueStart, self.pos)` and a token consumed first widens that window
+	// and silently mis-decides the move.
+	//
+	// The refusal names the method the AUTHOR wrote rather than a fixed `upsert`, for the reason D12 states
+	// about every builtin diagnostic: a reader who typed `insert` must not be corrected about `upsert`.
+	function parseMapEntryArgList(func IrFunction, giid GenericInstanceId, methodTok Token) returns MapEntryArgs throws ParseError
+		try self.consume(TokenKind.leftParen)
+		let key = try self.parseMapColumnValue(func, giid: giid, position: HashTableKeyArgPosition, columnNoun: HashTableKeyColumnNoun, consume: true)
+		try self.consume(TokenKind.comma)
+		let labelTok = try self.consumeNameToken(NamePosition.declaration)
+		if not labelTok.value.equals(ArrayValueLabel) 'wrongLabel'
+			throw ParseError.unsupported("`Map.{String.from(methodTok.value)}` names its second argument '{String.from(ArrayValueLabel)}:' — got '{String.from(labelTok.value)}:'", line: labelTok.line, column: labelTok.column)
+		end 'wrongLabel'
+		try self.consume(TokenKind.colon)
+		let value = try self.parseMapColumnValue(func, giid: giid, position: MapValueArgPosition, columnNoun: HashTableValueColumnNoun, consume: true)
+		try self.consume(TokenKind.rightParen)
+		return MapEntryArgs.create(key, value: value)
+	end 'parseMapEntryArgList'
 
 	// `( key )` — the argument list of `contains` / `get`, whose key is BORROWED for the compare (its owned temp
 	// drops at statement end). The `Set` twin is `parseSetKeyArg(consume: false)`.
@@ -36100,7 +36463,12 @@ export type Parser
 	// returns, because the move-in inside must run first (see `parseHashTableColumnArg`'s ordering contract).
 	function parseMapColumnValue(func IrFunction, giid GenericInstanceId, position TypeParamId, columnNoun String, consume bool) returns ValueId throws ParseError
 		let columnType = self.mapColumnType(giid, position: position)
-		return try self.parseHashTableColumnArg(func, columnType: columnType, columnSubject: "this `Map`'s {columnNoun} is {articledTypeTagName(maxonTypeTag(columnType))}", consume: consume)
+		// The SUBJECT names the RESOLVED type and its nominal identity for `parseHashTableColumnArg`'s reason:
+		// a `named("UnaryOp")` value column printed as *"is an int"*, a sentence about a code pointer that
+		// argues against itself, and a `Kind` column printed the same way about an enum.
+		let declaredType = self.resolvedSlotType(columnType)
+		let declared = maxonTypeTag(declaredType)
+		return try self.parseHashTableColumnArg(func, columnType: columnType, declaredType: declaredType, columnSubject: "this `{String.from(MapBuiltinBaseName)}`'s {columnNoun} is {articledColumnTypeName(declared, identity: self.declaredColumnIdentity(declaredType))}", consume: consume)
 	end 'parseMapColumnValue'
 
 	// The declared type of map column `position` — a selector rather than a `position` threaded into the index,
@@ -36122,47 +36490,14 @@ export type Parser
 		return self.emitRuntimeCall(ListCreateName, args: singletonArgs(elementDrop), resultTag: ValueTypeTag.genericInstance, resultNameId: giid, range: range)
 	end 'emitListCreateOp'
 
-	// ⭐ **THE `List` ELEMENT-TYPE GATE.** A node's `value@16` is ONE MACHINE WORD, so the element must be a
-	// type whose whole value rides one: a MANAGED type (String / struct / union / instance / nested container,
-	// each held as its 8-byte heap pointer) or an INTEGRAL one (`int`, a ranged-int alias, `bool`, `Character`
-	// — all stored inline).
-	//
-	// ⭐ **THE ARM THAT DOES THE WORK IS THE OPAQUE ONE.** A `List with <type parameter>`
-	// (`type W uses T { var xs as List with T }`) has no statically known destructor to stamp into
-	// `element_drop@24`, so a managed instantiation would tear down without dropping its elements. That is
-	// `containerElementIsOpaque`'s slice-3b question over a second container — and it is the VERY HOLE
-	// `ListRuntime.maxon`'s header measures as the reason `stdlib/List.maxon` cannot be compiled. Refusing it
-	// is what keeps this container from shipping the defect it was built to avoid.
-	//
-	// ⚠ **`float` IS NOT WHAT THE LAST REFUSAL IS FOR, AND THAT WAS MEASURED RATHER THAN ASSUMED.** A float
-	// element would indeed arrive in the XMM file while every `__list_*` entry is declared `i64`, but it never
-	// reaches here: `typealias FList = List with F` is already **E2062 on the type ARGUMENT** (a type parameter
-	// is an opaque general-purpose slot and a float has no way through it) — the same gate
-	// `requireHashTableColumnType` records for a float key. What the last refusal is for is therefore any
-	// element neither managed nor word-shaped that a future type kind might introduce, in the shape
-	// `columnValueTagMatches`'s own last arm documents: a clean E2015 rather than a wrong stride.
-	//
-	// MEASURED to pass, each printing and tearing down clean: `bool`, a ranged `Byte`, a declared enum, a
-	// nested `List`, a nested `Array`, `String`, and a struct with a `String` field.
-	// ⚠ **IT SERVES BOTH CHAIN SURFACES, AND NAMES THE ONE THE AUTHOR WROTE.** A `__ManagedList` is the same
-	// record with the same one-word value slot (`SignatureIndex.ManagedListBuiltinBaseName`), so the RULE is
-	// one rule; only the noun in the refusal differs, and it is read off the instance rather than spelled
-	// twice.
+	// ⭐ **THE `List` ELEMENT-TYPE GATE.** A node's `value@16` is ONE MACHINE WORD — the same slot a `Map`'s
+	// VALUE column is — so the rule and both its refusals are the shared `requireOneWordSlotType`, whose
+	// header carries the two measurements this gate used to state (why `float` is not what the last refusal
+	// is for, and what an opaque `T` would leak). What is this container's own is the SUBJECT: it serves both
+	// chain surfaces (`__ManagedList` is the same record with the same one-word value slot), so the name it
+	// blames is read off the instance rather than spelled twice.
 	function requireListElementType(giid GenericInstanceId, tok Token) throws ParseError
-		let container = String.from(self.signatures.genericInstanceBaseName(giid))
-		if self.signatures.containerElementIsOpaque(giid) 'opaqueElement'
-			throw ParseError.unsupported("`{container} with <type parameter>` — a chain inside a generic body has no element destructor to stamp, so a managed instantiation would leak its elements; declare it at a concrete element type", line: tok.line, column: tok.column)
-		end 'opaqueElement'
-
-		let element = self.signatures.containerElementType(giid)
-		if self.signatures.slotTypeIsManaged(element) 'managedElement'
-			return
-		end 'managedElement'
-		if tagIsIntegral(maxonTypeTag(element)) or maxonTypeTag(element) == ValueTypeTag.boolean or maxonTypeTag(element) == ValueTypeTag.character 'wordElement'
-			return
-		end 'wordElement'
-
-		throw ParseError.unsupported("`{container}` holds one machine word per element, so its element must be a managed type or an integral one — a '{typeTagName(maxonTypeTag(element))}' element does not fit that slot", line: tok.line, column: tok.column)
+		try self.requireOneWordSlotType(self.signatures.containerElementType(giid), containerName: String.from(self.signatures.genericInstanceBaseName(giid)), columnNoun: ContainerElementColumnNoun, tok: tok)
 	end 'requireListElementType'
 
 	// ⭐ **DISPATCH A BUILTIN `List` METHOD** — cursor on the method NAME, `list` the (borrowed) receiver
@@ -37284,10 +37619,10 @@ export type Parser
 	// on the value being dispatched.
 	//
 	// A roster is built on this file's FIRST call into its surface and held after — see
-	// `sharedEmptySurfaceRoster` for why the memo is per Parser and why it is lazy. The six arms differ
+	// `sharedEmptySurfaceRoster` for why the memo is per Parser and why it is lazy. The seven arms differ
 	// only in which field they fill, which is the whole of what Maxon cannot abstract here: there is no way
-	// to hand a function the field to lazily populate, so the alternative to six arms in one home is six
-	// homes.
+	// to hand a function the field to lazily populate, so the alternative to seven arms in one home is
+	// seven homes.
 	function surfaceMemberNames(surface MemberSurface) returns ByteArrayArray
 		if surface == MemberSurface.buffer 'bufferSurface'
 			if self.bufferSurfaceRoster is sharedEmptySurfaceRoster 'firstBufferCallInThisFile'
@@ -37336,6 +37671,14 @@ export type Parser
 
 			return self.stringStaticSurfaceRoster
 		end 'stringStaticSurface'
+
+		if surface == MemberSurface.map 'mapSurface'
+			if self.mapSurfaceRoster is sharedEmptySurfaceRoster 'firstMapCallInThisFile'
+				self.mapSurfaceRoster = mapSurfaceMemberNames()
+			end 'firstMapCallInThisFile'
+
+			return self.mapSurfaceRoster
+		end 'mapSurface'
 
 		panic("surfaceMemberNames: no roster for a `MemberSurface` this function does not cover — a surface added to the enum without one, which every gate reading it would then answer for by falling through")
 	end 'surfaceMemberNames'
@@ -38631,7 +38974,7 @@ export type Parser
 	// the slot" per container, which is the enumeration a two-column container breaks; keyed on the TYPE, an
 	// `Array` element and a `Map` value are one question with one answer.
 	function containerSlotValueType(slotType MaxonType) returns MaxonType
-		let declared = self.signatures.declaredSlotType(slotType, into: self.artifact.typeNames, slotScopeFilePath: self.filePath)
+		let declared = self.resolvedSlotType(slotType)
 		let tag = maxonTypeTag(declared)
 		if tag == ValueTypeTag.genericInstance 'instance'
 			return declared
@@ -38676,6 +39019,19 @@ export type Parser
 		end 'floatSlot'
 		return payloadValueTypeOf(classifyUnionPayload(self.signatures, typeNames: self.artifact.typeNames, fieldType: declared, slotScopeFilePath: self.filePath), declared: declared)
 	end 'containerSlotValueType'
+
+	// ⭐ **WHAT A SLOT'S STORED TYPE ACTUALLY DENOTES, adopted into THIS file's interner** — a generic alias to
+	// its instance (`ByteArray` = `Array with Byte`), a FUNCTION alias to `function`, a float alias to `float`.
+	// The `into`/`slotScopeFilePath` pair is the same at every slot door in this file and was spelled out at
+	// each of them; a slot type that shifted the interning order otherwise misresolves (OPEN #52), which is a
+	// silent wrong type rather than a diagnostic, so the triple is written once.
+	//
+	// ⚠ It is the FIRST STEP of `containerSlotValueType` above and not a synonym for it: that one goes on to
+	// retype the result into the value form a READ hands back (a union payload, a struct field). The doors that
+	// only need to know what the declaration NAMES — the column type checks — stop here.
+	function resolvedSlotType(slotType MaxonType) returns MaxonType
+		return self.signatures.declaredSlotType(slotType, into: self.artifact.typeNames, slotScopeFilePath: self.filePath)
+	end 'resolvedSlotType'
 
 	// ⭐⭐ **AN ELEMENT ARGUMENT MUST AGREE WITH THE INSTANCE'S ELEMENT TYPE.** The `Array` mutators are
 	// PARSER-INTRINSIC — `push`/`set`/`insert` emit `__arr_push`/`__arr_set`/`__arr_insert` directly, so they
@@ -38743,7 +39099,7 @@ export type Parser
 			return value
 		end 'opaqueInSharedBody'
 
-		let declared = self.signatures.declaredSlotType(self.signatures.containerElementType(giid), into: self.artifact.typeNames, slotScopeFilePath: self.filePath)
+		let declared = self.resolvedSlotType(self.signatures.containerElementType(giid))
 		let element = try self.characterizedOperand(value, expected: maxonTypeTag(declared), start: valueStart, pastEnd: self.pos)
 		let class = classifyUnionPayload(self.signatures, typeNames: self.artifact.typeNames, fieldType: declared, slotScopeFilePath: self.filePath)
 		if payloadClassIsManaged(class) 'managed'
@@ -44108,7 +44464,7 @@ export type Parser
 	// it was read out of. `declaredSlotType` ends in `adoptType`, so the crossing this function exists for
 	// is unchanged for every argument that needs no re-tag.
 	function instanceSubstitutedType(receiver ValueId, opaque MaxonType) returns MaxonType
-		return self.signatures.declaredSlotType(self.instanceSubstitutedIndexType(receiver, opaque: opaque), into: self.artifact.typeNames, slotScopeFilePath: self.filePath)
+		return self.resolvedSlotType(self.instanceSubstitutedIndexType(receiver, opaque: opaque))
 	end 'instanceSubstitutedType'
 
 	// ⭐ **A CALL ARGUMENT MEETS THE PARAMETER'S DECLARED RANGE (P1.9), and this is the door that used to

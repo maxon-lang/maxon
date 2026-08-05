@@ -480,3 +480,76 @@ end 'main'
 ```exitcode
 42
 ```
+
+### A container COLUMN is one more position, and a `bool` column holds `bool`s
+
+A `Map`'s VALUE column is one machine word dropped by nothing, which is exactly what a `bool`
+is — so `Map with (String, bool)` is admissible, and the gate
+(`ProgramSignatures.slotTypeFitsOneWord`) admits it. But which types may BE a column and which
+values may be WRITTEN to one are decided in two different files, and for one tick `boolean` was
+in the first roster and in neither arm of the second: the write fell through to the integral
+residual, `tagIsIntegral(boolean)` is FALSE **because a bool is not a number** — this spec's
+whole subject — and the program was admitted at the `typealias` and refused at the first
+`upsert` as *"this `Map`'s value is a bool — got a 'bool' value"*, a sentence that argues
+against itself.
+
+The three cases below are the pin, and they must be read together: the column WORKS, and the
+discipline holds at it in both directions. Widening `slotTypeFitsOneWord` without an answering
+arm in `TypeRules.columnValueTagMatches` breaks the first; collapsing the bool arm into the
+integral fall-through to "fix" it breaks the other two.
+
+<!-- test: bool-map-value-column -->
+A `bool`-valued map stores, reads back and replaces both `true` and `false`. `count` proves the
+two writes landed in two slots rather than one, and the `upsert` at the end proves a replaced
+bool is the new one and not the old.
+```maxon
+typealias Flags = Map with (String, bool)
+
+function main() returns ExitCode
+	var m = Flags.create()
+	m.upsert("on", value: true)
+	m.upsert("off", value: false)
+	let on = try m.get("on") otherwise false
+	let off = try m.get("off") otherwise true
+	m.upsert("on", value: false)
+	let on2 = try m.get("on") otherwise true
+	print("count={m.count()} on={on} off={off} on2={on2}")
+	return 0
+end 'main'
+```
+```stdout
+count=2 on=true off=false on2=false
+```
+
+<!-- test: int-into-a-bool-map-value -->
+An `int` is not admitted by a `bool` column. If this starts passing, the column has been folded
+back into the integral fall-through and a `1` is being stored where a `bool` is read.
+```maxon
+typealias Flags = Map with (String, bool)
+
+function main() returns ExitCode
+	var m = Flags.create()
+	m.upsert("on", value: 1)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:6:24: Unsupported: this `Map`'s value is a bool — got a 'int' value
+```
+
+<!-- test: bool-into-an-int-map-value -->
+And the converse: a `bool` is not admitted by an integral column, which is the same rule read
+from the other side.
+```maxon
+typealias Byte = int(0 to 255)
+typealias Counts = Map with (String, Byte)
+
+function main() returns ExitCode
+	var m = Counts.create()
+	m.upsert("on", value: true)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:7:24: Unsupported: this `Map`'s value is an int — got a 'bool' value
+```

@@ -1558,7 +1558,7 @@ export type RangedAliasRegistry
 	// the compiler's own two byte elements are worth is the caller's to state, not this index's to invent.
 	// ⭐⭐ **IS `name` A PURE SECOND NAME FOR `int` — the WHOLE i64 span, whichever file's declaration you
 	// read?** The `holdsEveryByte` twin one bar up, and its reader is the inferred-int-element boundary
-	// (`ProgramSignatures.inferredIntElementBoundaryAdmits`): an array a bare `[10, 20, 30]` built carries the
+	// (`ProgramSignatures.inferredIntColumnBoundaryAdmits`): an array a bare `[10, 20, 30]` built carries the
 	// compiler's own `integer` element, and it may cross into a declared `Array with <alias>` exactly when
 	// that alias adds NOTHING to `int` — no narrower value set to check, and (a consequence, not a second
 	// condition) no narrower slot, since `rangedAliasStorageBytes` gives the full span the machine word.
@@ -3343,17 +3343,19 @@ export function builtinStringErrorEnum() returns EnumLayout
 	return layout
 end 'builtinStringErrorEnum'
 
-// ⭐ **THE COMPILER-OWNED `MapError`** — what a missing-key `Map.get` throws. Registered under the BARE name
-// `SignatureIndex.MapErrorTypeName`; that constant carries the argument for the bare spelling.
+// ⭐ **THE COMPILER-OWNED `MapError`** — what a missing-key `Map.get` and a duplicate-key `Map.insert`
+// throw. Registered under the BARE name `SignatureIndex.MapErrorTypeName`; that constant carries the
+// argument for the bare spelling.
 //
 // Its provenance is `ArrayError`'s and `StringError`'s exactly — `stdlib/Map.maxon:6-9` declares it and shv2
 // synthesizes `Map` rather than loading that module (see `ProgramSignatures.isMapBaseName` for the measured
 // reason) — so it takes the same UNCONDITIONAL seed for the same stated reason.
 //
-// ⚠ **BOTH of that declaration's cases are registered even though only `keyNotFound` is throwable at this
-// slice**, for `ManagedMemoryErrorTypeName`'s reason: the ordinals are POSITIONAL, so declaring
-// `keyAlreadyExists` only when an `insert` arrives would silently renumber every handler already written
-// against a case after it.
+// ⚠ **BOTH of that declaration's cases were registered while only `keyNotFound` was throwable**, for
+// `ManagedMemoryErrorTypeName`'s reason: the ordinals are POSITIONAL, so declaring `keyAlreadyExists` only
+// when an `insert` arrived would have silently renumbered every handler already written against a case
+// after it. `Map.insert` has since arrived and throws it, and the ordinals did not have to move — which is
+// that rule paying out.
 export function builtinMapErrorEnum() returns EnumLayout
 	var layout = EnumLayout.createCompilerOwned(MapErrorTypeName, conformsTo: builtinErrorConformance())
 	addBuiltinEnumCase(layout, caseName: MapErrorKeyNotFoundCaseName)

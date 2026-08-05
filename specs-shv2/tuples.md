@@ -180,7 +180,7 @@ end 'main'
 42
 ```
 
-<!-- disabled-test: for-destructuring-map -->
+<!-- test: for-destructuring-map -->
 <!-- needs `Map`, which is the FOLLOW-ON rung: `MapIterator.current()` returns a genuine tuple, so Map is sequenced AFTER tuples and cannot be unlocked here. Not a tuple gap. -->
 ```maxon
 function main() returns ExitCode
@@ -369,7 +369,7 @@ end 'main'
 75
 ```
 
-<!-- disabled-test: for-in-over-map-allocates-no-tuple -->
+<!-- test: for-in-over-map-allocates-no-tuple -->
 <!-- needs `Map`, which is the FOLLOW-ON rung: `MapIterator.current()` returns a genuine tuple, so Map is sequenced AFTER tuples and cannot be unlocked here. Not a tuple gap. -->
 <!-- MmTrace -->
 A `for` loop over a Map allocates NO tuple record per iteration. The iterator's `current()`

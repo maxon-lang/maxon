@@ -3423,8 +3423,7 @@ function buildArrSetLength(module StdModule)
 	module.setTerminator(afterDestroy, op: StdOp.branch(setLen.id))
 
 	emitStoreField(module, block: setLen, record: arr, offset: ArrLengthOffset, value: n)
-	let nothing = emitConst(module, block: setLen, value: 0, ids: ids)
-	emitOkReturn(module, block: setLen, value: nothing, ids: ids)
+	emitVoidOkReturn(module, block: setLen, ids: ids)
 
 	module.functions.push(func)
 end 'buildArrSetLength'
@@ -3456,8 +3455,7 @@ function buildArrSetByte(module StdModule)
 	let buffer = emitLoadField(module, block: store, record: arr, offset: ArrBufferOffset, ids: ids)
 	let addr = emitBin(module, block: store, a: buffer, b: byteOffset, opcode: StdBinOpcode.add, ids: ids)
 	module.appendOp(store, op: StdOp.storeIndirect(addr, offset: 0, valueId: value, valueType: StdType.u8))
-	let nothing = emitConst(module, block: store, value: 0, ids: ids)
-	emitOkReturn(module, block: store, value: nothing, ids: ids)
+	emitVoidOkReturn(module, block: store, ids: ids)
 
 	module.functions.push(func)
 end 'buildArrSetByte'
@@ -3667,8 +3665,7 @@ function buildArrMemAppend(module StdModule)
 	module.setTerminator(forward, op: StdOp.errorReturn(forwardValue, errorFlagId: flag))
 
 	module.appendOp(copy, op: StdOp.call(ids.mint(), callee: ArrAppendName, args: twoArgs(dest, second: other)))
-	let nothing = emitConst(module, block: copy, value: 0, ids: ids)
-	emitOkReturn(module, block: copy, value: nothing, ids: ids)
+	emitVoidOkReturn(module, block: copy, ids: ids)
 
 	module.functions.push(func)
 end 'buildArrMemAppend'
@@ -3712,8 +3709,7 @@ function buildArrMemGrow(module StdModule)
 	var afterPublish = emitReallocateToCapacity(module, func: func, cur: grow, arr: arr, newCap: newCapacity, onByteOverflow: bad, ids: ids)
 	module.setTerminator(afterPublish, op: StdOp.branch(done.id))
 
-	let nothing = emitConst(module, block: done, value: 0, ids: ids)
-	emitOkReturn(module, block: done, value: nothing, ids: ids)
+	emitVoidOkReturn(module, block: done, ids: ids)
 
 	module.functions.push(func)
 end 'buildArrMemGrow'

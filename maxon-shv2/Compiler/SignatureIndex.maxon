@@ -2175,8 +2175,9 @@ export let MapErrorTypeName = b"MapError"
 
 // The cases of `MapError`, in `stdlib/Map.maxon:7-8`'s DECLARATION ORDER — the ordinals are positional and a
 // handler's `match` arms are resolved against them, so the order is the contract. `keyNotFound` is what
-// `__map_get` throws; `keyAlreadyExists` belongs to the `insert` this slice does not provide, and is declared
-// anyway so that adding `insert` later cannot renumber the case handlers already written against the first.
+// `__map_get` throws on a miss; `keyAlreadyExists` is what `__map_insert` throws on a duplicate. It was
+// declared before anything threw it, precisely so that building `insert` could not renumber the case
+// handlers already written against the first — and it did not have to.
 export let MapErrorKeyNotFoundCaseName = b"keyNotFound"
 export let MapErrorKeyAlreadyExistsCaseName = b"keyAlreadyExists"
 
@@ -2824,6 +2825,11 @@ export let ArrayLastMethod = b"last"
 export let ArrayPopMethod = b"pop"
 export let RemoveMethod = b"remove"
 export let SliceMethod = b"slice"
+// ⚠ **`insert` JOINED THIS BLOCK WHEN `Map.insert` WAS BUILT**, for the block's own reason: it is the second
+// throwing entry point a `Map` has, so `MapRuntime.mapSourceMethodName` must be able to name the very byte
+// string the parser's dispatch matched. `Array`, `Set` and `Map` all spell it, which is why it carries no
+// family prefix — the rule `set`/`append`/`slice`/`remove` above it already state.
+export let InsertMethod = b"insert"
 // ⚠ **`byteAt` JOINED THIS BLOCK WHEN `String.byteAt` WAS BUILT (BATCH2 slice 6), AND IT WAS SPELLED
 // `ManagedMemoryByteAtMethod` ONE SURFACE ABOVE UNTIL THEN.** It belongs here for the same reason `set`,
 // `append` and `slice` do — the buffer and the `String` spell it identically and the parser dispatches both
@@ -7651,7 +7657,7 @@ export type ProgramSignatures
 			return false
 		end 'oneByteRecord'
 
-		return not self.inferredIntElementBoundaryAdmits(expectedTag, declaredNameId: expectedNameId, gotTag: gotTag, gotNameId: gotNameId)
+		return not self.inferredIntColumnBoundaryAdmits(expectedTag, declaredNameId: expectedNameId, gotTag: gotTag, gotNameId: gotNameId)
 	end 'aggregatesConflict'
 
 	// The underlying primitive of a qualified alias (base-template OR per-instance) — TypeResolution's
@@ -8938,6 +8944,51 @@ export type ProgramSignatures
 		return managedFieldDropCallee(self, typeNames: self.typeNames, fieldType: slotType)
 	end 'slotTypeDropCallee'
 
+	// ⭐⭐ **DOES A SLOT THAT IS EXACTLY ONE MACHINE WORD WIDE HOLD THIS TYPE? — the admission rule a
+	// `List`/`__ManagedList` ELEMENT and a `Map`'s VALUE column both ask, stated once.** Both slots are one
+	// word (`ListRuntime`'s `value@16`, the map's value buffer stride) and both are torn down by the SAME
+	// stamped destructor (`Parser.columnDestroyValue` → `slotTypeDropCallee` above), so the set of types they
+	// admit is one set: a MANAGED type (String / Character / struct / boxed union / instance / nested
+	// container, each held as its 8-byte heap pointer) or a WORD-SHAPED one (`int`, a ranged-int alias, a
+	// declared enum, a function alias, `bool`, `Character`… — all stored inline).
+	//
+	// ⚠ **A `Map`'s VALUE USED TO ASK THE KEY'S QUESTION INSTEAD, AND THAT REFUSED PROGRAMS THE SAME
+	// COMPILER RAN ONE CONTAINER OVER.** The key gate (`Parser.requireHashTableKeyType`) is a
+	// three-name whitelist because the probe HASHES and COMPARES the key through its `Hashable`/`Equatable`
+	// witnesses, and those are the types a witness can carry. A value is never hashed and never compared: it
+	// is stored and dropped, which is the whole of what this asks. Held to the key's rule, an enum value
+	// (`/specs/map.md:map-literal-with-enum-values`) and a function value
+	// (`:function-valued.dispatch`) were refused *"a later slice"* while `List with TokenKind` and
+	// `Array with UnaryOp` — the same word, the same stamp — compiled and ran.
+	//
+	// ⚠ It is NOT the opaque question: a `typeParameter` slot answers false here only incidentally, and its
+	// refusal says something different (there is no destructor to stamp at all), so its askers test
+	// `slotTypeIsOpaque` FIRST and say so in their own words.
+	//
+	// ⛔⛔ **THIS SAYS WHAT MAY *BE* A COLUMN; `TypeRules.columnValueTagMatches` SAYS WHAT MAY BE *WRITTEN* TO
+	// ONE. WIDEN THIS AND GO THERE.** They are two facts in two files with nothing but each other's headers
+	// holding them together, and a tag admitted here that no arm answers there is admitted at the `typealias`
+	// and refused at every write, with a sentence that argues against itself. MEASURED on `boolean`, which
+	// this line admitted while that predicate's integral fall-through refused `m.upsert("a", value: true)` as
+	// *"this `Map`'s value is a bool — got a 'bool' value"*.
+	export function slotTypeFitsOneWord(slotType MaxonType) returns bool
+		if self.slotTypeIsManaged(slotType) 'managedSlot'
+			return true
+		end 'managedSlot'
+
+		let tag = maxonTypeTag(slotType)
+		return tagIsIntegral(tag) or tag == ValueTypeTag.boolean or tag == ValueTypeTag.character
+	end 'slotTypeFitsOneWord'
+
+	// Is a container slot's declared type an OPAQUE TYPE PARAMETER — a `T` from an enclosing generic type's
+	// shared body (`type W uses T { var xs as List with T }`), rather than a concrete type? A concrete slot
+	// knows its destructor at the construction site (the `funcAddr` stamp); an opaque `T` does not — its
+	// destructor lives in the layout descriptor, which is a later slice — so a managed instantiation would
+	// tear down without dropping what it holds.
+	export function slotTypeIsOpaque(slotType MaxonType) returns bool
+		return maxonTypeTag(slotType) == ValueTypeTag.typeParameter
+	end 'slotTypeIsOpaque'
+
 	// --- The `Map` builtin generic ---
 	//
 	// ⭐ **A `Map with (Key, Value)` IS THE `Set` ABOVE WITH A PARALLEL VALUE COLUMN**, and that is a
@@ -9126,13 +9177,12 @@ export type ProgramSignatures
 		return self.typeIsManaged(self.containerElementType(id), from: self.typeNames)
 	end 'containerElementIsManaged'
 
-	// Is a SINGLE-ELEMENT container's element an OPAQUE TYPE PARAMETER — a `T` from an enclosing generic type's
-	// shared body (`type W uses T { var xs as Array with T }`), NOT a concrete type (P1.7 slice 3a). A concrete managed
-	// element knows its destructor at the construction site (the `funcAddr` stamp into `element_destroy@40`); an
-	// opaque `T` does not — its element destructor lives in the layout descriptor's `destroyFunc@40`, reached
-	// through the rdata reloc path, which is slice 3b. Rejected with a positioned E2015 until then.
+	// Is a SINGLE-ELEMENT container's element an OPAQUE TYPE PARAMETER (P1.7 slice 3a)? The instance-keyed
+	// spelling of `slotTypeIsOpaque` above, which carries the reason — a `Map`'s VALUE column asks the same
+	// question of a slot no `containerElementType` names, so the rule lives on the TYPE and this reads it
+	// through the element door.
 	export function containerElementIsOpaque(id GenericInstanceId) returns bool
-		return maxonTypeTag(self.containerElementType(id)) == ValueTypeTag.typeParameter
+		return self.slotTypeIsOpaque(self.containerElementType(id))
 	end 'containerElementIsOpaque'
 
 	// The element type's name AS A DIAGNOSTIC PRINTS IT (`Slot`, `String`) — for the one message that has to
@@ -9382,8 +9432,8 @@ export type ProgramSignatures
 		return self.arrayNamedElementName(gotTag, nameId: gotNameId).equals(SynthesizedByteElementName)
 	end 'byteBufferBoundaryAdmits'
 
-	// ⭐⭐ **THE INFERRED-INT-ELEMENT BOUNDARY — the byte door's twin, and the second place two DIFFERENT
-	// `Array` instances denote one record.** `[10, 20, 30]` names no element type: the author wrote three
+	// ⭐⭐ **THE INFERRED-INT-COLUMN BOUNDARY — the byte door's twin, and the second place two DIFFERENT
+	// container instances denote one record.** `[10, 20, 30]` names no element type: the author wrote three
 	// integers and the compiler picked `Array with integer` for them (`internBuiltinIntegerInstance`). A
 	// declared `typealias Integer = int(i64.min to i64.max)` + `Array with Integer` — the idiom nearly every
 	// spec file in the tree opens with — is a DIFFERENT instance by name, so `IntList.create([10, 20, 30])`
@@ -9391,38 +9441,67 @@ export type ProgramSignatures
 	// (MEASURED both ways; the oracle infers the literal's element from the position it sits in).
 	//
 	// ⚠ **THE ARRIVING SIDE IS THE COMPILER'S OWN INFERENCE, AND THAT ASYMMETRY IS THE WHOLE LICENCE.** An
-	// `integer` element is the one element type NO author spelled — every element a user writes arrives
+	// `integer` column is the one column type NO author spelled — every column a user writes arrives
 	// `named`/`structRef`/`string` — so admitting it commits nothing the author decided. Two AUTHOR-written
 	// spellings stay nominal in both directions, exactly as they do at the byte boundary and for the same
 	// reason: shv2 compares declared aggregates by NAME, and this door is about a value that has no name to
 	// compare.
 	//
 	// ⚠ **THE DECLARED SIDE MUST ADD NOTHING TO `int`, AND THAT ONE TEST COVERS BOTH WAYS IT COULD.**
-	// `spansEveryIntInEveryFile` demands the full i64 span, which settles the VALUE SET (no element a literal
+	// `spansEveryIntInEveryFile` demands the full i64 span, which settles the VALUE SET (no value a literal
 	// can hold is out of range, so nothing goes unchecked) and, as a consequence rather than a second
 	// condition, the SLOT (`rangedAliasStorageBytes` gives the full span the machine word, which is the stride
 	// the arriving record was created with). A narrower alias — `Byte`, `int(0 to 100)` — fails it and keeps
 	// the refusal it has today, which is the right answer: its record would stride differently and its range
 	// would go unchecked.
-	function inferredIntElementBoundaryAdmits(declaredTag ValueTypeTag, declaredNameId TypeNameId, gotTag ValueTypeTag, gotNameId TypeNameId) returns bool
-		if not self.isArrayInstanceAt(gotTag, nameId: gotNameId) 'gotIsNotAnArrayInstance'
-			return false
-		end 'gotIsNotAnArrayInstance'
+	//
+	// ⚠⚠ **A `Map` HAS TWO COLUMNS AND THE DOOR KNEW ONLY ABOUT ONE, WHICH REFUSED `/specs/map.md`'s OWN
+	// PROGRAM.** `for-in.nested` writes `typealias IntMap = Map with (Integer, Integer)` and passes it a
+	// `[1: 1, 2: 2, 3: 3]` literal — `E3005 expected 'IntMap', got 'Map_int_int'`, the identical sentence the
+	// `Array` half of this door was built to stop, one container over. The literal's map is inferred exactly
+	// as the literal's array is (`Parser.parseMapLiteralBody` reads both column types off the first pair), so
+	// the LICENCE is unchanged and only the ARITY is: every column must independently denote one slot.
+	//
+	// A column pair that is simply IDENTICAL denotes one slot too. For a single-column `Array` that clause can
+	// never fire — identical columns mean identical instances, which `namedAggregatesConflict` already
+	// admitted — but for a two-column `Map` it is what keeps `["a": 1]` reaching a
+	// `Map with (String, Integer)`: one column inferred, one written by the author, and refusing the pair
+	// because of the half that AGREES would be arbitrary.
+	function inferredIntColumnBoundaryAdmits(declaredTag ValueTypeTag, declaredNameId TypeNameId, gotTag ValueTypeTag, gotNameId TypeNameId) returns bool
+		if self.isArrayInstanceAt(gotTag, nameId: gotNameId) and self.isArrayInstanceAt(declaredTag, nameId: declaredNameId) 'bothAreArrayInstances'
+			return self.columnsDenoteOneSlot(self.containerElementType(declaredNameId), gotColumn: self.containerElementType(gotNameId))
+		end 'bothAreArrayInstances'
 
-		if maxonTypeTag(self.containerElementType(gotNameId)) != ValueTypeTag.integer 'gotElementWasNamedByTheAuthor'
-			return false
-		end 'gotElementWasNamedByTheAuthor'
+		if self.isMapInstanceAt(gotTag, nameId: gotNameId) and self.isMapInstanceAt(declaredTag, nameId: declaredNameId) 'bothAreMapInstances'
+			return self.columnsDenoteOneSlot(self.mapKeyType(declaredNameId), gotColumn: self.mapKeyType(gotNameId)) and self.columnsDenoteOneSlot(self.mapValueType(declaredNameId), gotColumn: self.mapValueType(gotNameId))
+		end 'bothAreMapInstances'
 
-		let declaredElement = self.arrayNamedElementName(declaredTag, nameId: declaredNameId)
-		if declaredElement.isEmpty() 'declaredIsNotAnArrayOverANamedElement'
-			return false
-		end 'declaredIsNotAnArrayOverANamedElement'
+		return false
+	end 'inferredIntColumnBoundaryAdmits'
 
-		// A name NO file declares as a ranged alias is a struct / union / interface element, which an integer
-		// slot is not — the same `Map.get` channel `rosterElementHoldsEveryByte` reads, with the opposite
-		// default, because here a missing declaration means "not an int alias" rather than "the compiler's own".
-		return try self.typeAliases.spansEveryIntInEveryFile(declaredElement) otherwise false
-	end 'inferredIntElementBoundaryAdmits'
+	// ⭐ **ONE COLUMN OF THE DOOR ABOVE.** Two columns denote one slot when they are the SAME type — compared
+	// on the (tag, id) pair `GenericInstanceRegistry.instanceKey` already treats as a type's whole identity,
+	// so this cannot call two types one where the interner calls them two — or when the arriving one is the
+	// compiler's own `integer` inference and the declared one is a ranged alias that adds nothing to `int`.
+	//
+	// A name NO file declares as a ranged alias is a struct / union / interface column, which an integer slot
+	// is not — the same `Map.get` channel `rosterElementHoldsEveryByte` reads, with the opposite default,
+	// because here a missing declaration means "not an int alias" rather than "the compiler's own".
+	function columnsDenoteOneSlot(declaredColumn MaxonType, gotColumn MaxonType) returns bool
+		if maxonTypeTag(declaredColumn) == maxonTypeTag(gotColumn) and typeNameIdOf(declaredColumn) == typeNameIdOf(gotColumn) 'oneAndTheSameType'
+			return true
+		end 'oneAndTheSameType'
+
+		if maxonTypeTag(gotColumn) != ValueTypeTag.integer 'gotColumnWasNamedByTheAuthor'
+			return false
+		end 'gotColumnWasNamedByTheAuthor'
+
+		if maxonTypeTag(declaredColumn) != ValueTypeTag.named 'declaredColumnIsNotANamedLeaf'
+			return false
+		end 'declaredColumnIsNotANamedLeaf'
+
+		return try self.typeAliases.spansEveryIntInEveryFile(self.nameOfId(typeNameIdOf(declaredColumn))) otherwise false
+	end 'columnsDenoteOneSlot'
 
 	// The BOUNDS half of the declared side, over a name the roster has already accepted. The registry MISS
 	// arm is the same split `undeclaredNamedElementStorageBytes` makes and for the same reason: the two

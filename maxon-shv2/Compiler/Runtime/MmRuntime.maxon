@@ -490,6 +490,17 @@ export function emitOkReturn(module StdModule, block IrBlock, value ValueId, ids
 	module.setTerminator(block, op: StdOp.errorReturn(value, errorFlagId: flag))
 end 'emitOkReturn'
 
+// ⭐ **THE SUCCESS EXIT OF A THROWING *VOID* FUNCTION — the ok return with the placeholder the ABI never
+// moves.** It is not a wrapper around `emitOkReturn`: what it adds is the 0, and that 0 is the whole of the
+// duplication it removes. `__arr_set_length`, `__arr_set_byte`, `__arr_mem_append`, `__arr_mem_grow`,
+// `__md_create`, `__mf_*`'s void pair and `__map_insert` all end this way, and each spelled the same two
+// statements out — one fact written down seven times, whose failure mode is a family that "returns void"
+// with a garbage flag register the day the placeholder is written differently.
+export function emitVoidOkReturn(module StdModule, block IrBlock, ids ValueMinter)
+	let nothing = emitConst(module, block: block, value: 0, ids: ids)
+	emitOkReturn(module, block: block, value: nothing, ids: ids)
+end 'emitVoidOkReturn'
+
 // Terminate `block` with `ret <constant>` — the shape EVERY runtime PREDICATE ends in, because there is no
 // `setcc` at this tier: a verdict is a constant-returning block off a fused compare, one block per answer.
 // A predicate therefore returns a CONSTANT from its own block rather than the compare's flag value directly

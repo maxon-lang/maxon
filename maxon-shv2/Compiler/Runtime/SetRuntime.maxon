@@ -1,16 +1,20 @@
 // Runtime/SetRuntime.maxon — what is genuinely a `Set`'s, and nothing else.
 //
 // ⭐⭐ **THE HASH TABLE ITSELF IS `HashTableRuntime.maxon`'s** — the record layout, the linear probe, the
-// grow, the load factor, the tombstones, the per-column drop walks and the six shared entry points
-// (`create`/`grow`/`insert`/`contains`/`count`/`decref`) are built there, once, for BOTH containers: a
-// `Map with (Key, Value)` record IS this record with a value column appended, so `__set_grow` and
+// grow, the load factor, the tombstones, the per-column drop walks and the seven shared entry points
+// (`create`/`grow`/`insert`/`contains`/`remove`/`count`/`decref`) are built there, once, for BOTH containers:
+// a `Map with (Key, Value)` record IS this record with a value column appended, so `__set_grow` and
 // `__map_grow` are one graph under two names. Read that file's header for the algorithm, the witness
 // dispatch and the register-pressure rule.
 //
+// ⚠ **`__set_remove` WAS THE SEVENTH, AND THIS HEADER USED TO ARGUE IT COULD NOT BE.** It said a map's
+// remove "would have to hand the VALUE back", making the two different signatures rather than one
+// `carriesValues` branch. `specs/map.md` declares `remove(key) returns bool` — the set's signature exactly —
+// so the premise was never read off the language, and the second copy it justified is now one graph. The
+// reasoning lives at `HashTableRuntime.buildHtRemove`.
+//
 // What stays here is what a `Set` has that a `Map` does not:
 //   • its `__set_*` entry-point names, its 48-byte record size, and its usage/witness predicates;
-//   • `__set_remove` — a set REMOVES by key and answers a bool; a map's remove would have to hand the VALUE
-//     back, so the two are not one function and this one is written where its container is;
 //   • `__set_from` — the `Set from [1,2,3]` construction, which has no map twin at all (a map literal is a
 //     different surface).
 //
@@ -104,62 +108,17 @@ end 'isCharacterKeyedWitnessCallee'
 // only re-derive the closure this install already is. Appended AFTER the pipeline (like `installArrayRuntime`),
 // so they are never re-optimized.
 //
-// ⭐ The six shared entries come from `installHashTable`, told THIS container's names and shape — the one
-// place a `Set`'s hash-table identity is stated. `remove` and `from` are built after it because they are the
-// two this container does not share.
+// ⭐ The seven shared entries come from `installHashTable`, told THIS container's names and shape — the one
+// place a `Set`'s hash-table identity is stated. What is built after it is what this container does not
+// share: `from` (the `Set from […]` construction, which has no map twin) and `map` (the element transform).
 export function installSetRuntime(module StdModule, usage RuntimeUsage)
 	if not usage.usesSet 'noSet'
 		return
 	end 'noSet'
-	installHashTable(module, family: HashTableFamily.create(SetCreateName, growName: SetGrowName, insertName: SetInsertName, containsName: SetContainsName, countName: SetCountName, decrefName: SetDecrefName, recordBytes: SetRecordBytes, carriesValues: false))
-	buildSetRemove(module)
+	installHashTable(module, family: HashTableFamily.create(SetCreateName, growName: SetGrowName, insertName: SetInsertName, containsName: SetContainsName, removeName: SetRemoveName, countName: SetCountName, decrefName: SetDecrefName, recordBytes: SetRecordBytes, carriesValues: false))
 	buildSetFrom(module)
 	buildSetMap(module)
 end 'installSetRuntime'
-
-// `__set_remove(set, elem, hashWitness, eqWitness) -> bool` — probe for `elem`; a matching Occupied slot is
-// TOMBSTONED (state `Deleted`, count decremented) and `true` returned; an absent key returns `false`.
-//
-// ⚠ **IT IS NOT SHARED WITH THE MAP FAMILY, AND THAT IS A DECISION RATHER THAN AN OMISSION.** A set's remove
-// answers a bool and drops what it vacated; a map's would have to hand the VALUE back to the caller (or
-// throw for a missing key), which is a different signature and a different ownership transfer, not a
-// `carriesValues` branch inside one graph. The parts that ARE the same — the empty-table guard, the read
-// probe, the managed drop, the tombstone — are all `HashTableRuntime`'s, so what is written here is only the
-// sequencing.
-function buildSetRemove(module StdModule)
-	var func = IrFunction.createFromStd(SetRemoveName, returnType: StdReturnType.value(StdType.i64), paramCount: 4, paramTypes: fourI64Params(), returnLine: 0)
-	var ids = ValueMinter.create(4)
-
-	var entry = module.addBlock(func, label: b"entry")
-	var emptySet = module.addBlock(func, label: b"emptyset")
-	var probe = module.addBlock(func, label: b"probe")
-	var found = module.addBlock(func, label: b"found")
-	var notFound = module.addBlock(func, label: b"notfound")
-
-	emitParams(module, block: entry, count: 4)
-	let set = 0 as ValueId
-	let elem = 1 as ValueId
-	let hashWitness = 2 as ValueId
-	let eqWitness = 3 as ValueId
-
-	emitHtEmptyTableCheck(module, entry: entry, table: set, emptyBlock: emptySet, probeBlock: probe, ids: ids)
-	emitConstReturn(module, block: emptySet, value: PredicateFalse, ids: ids)
-
-	let matchedIndex = emitHtLookupProbe(module, func: func, cur: probe, table: set, key: elem, hashWitness: hashWitness, eqWitness: eqWitness, foundBlock: found, notFoundBlock: notFound, ids: ids)
-
-	// found: DROP the stored key (the caller's `elem` argument stays a BORROW — read for the compare, not
-	// consumed), then tombstone the matched slot and drop the count. `matchedIndex` is the probe header's live
-	// index — the header dominates `found` and the drop-gate blocks below it — so it names the slot throughout.
-	// A trivial-key set skips the drop (keyDrop 0), leaving `remove`'s behaviour unchanged for int keys.
-	let storedKey = emitHtRecordSlotLoad(module, block: found, table: set, bufferOffset: HtKeysOffset, index: matchedIndex, ids: ids)
-	var afterKeyDrop = emitHtDropIfManaged(module, func: func, cur: found, table: set, dropOffset: HtKeyDropOffset, value: storedKey, ids: ids)
-	emitHtTombstoneSlot(module, block: afterKeyDrop, table: set, index: matchedIndex, ids: ids)
-	emitConstReturn(module, block: afterKeyDrop, value: PredicateTrue, ids: ids)
-
-	emitConstReturn(module, block: notFound, value: PredicateFalse, ids: ids)
-
-	module.functions.push(func)
-end 'buildSetRemove'
 
 // `__set_from(arr, hashWitness, eqWitness) -> setPtr` — build a set from an array (P1.7b slice B), the
 // `Set from [1,2,3]` / `Set from ["a","b"]` construction. BORROW `arr` (an `Array with <key>`, whose record

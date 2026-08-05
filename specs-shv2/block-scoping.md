@@ -88,7 +88,7 @@ end 'main'
 error E2004: specs/fragments/block-scoping/for-body-var-not-accessible-after.test:7:9: Undefined variable 'inside'
 ```
 
-<!-- disabled-test: for-destructured-immutable -->
+<!-- test: for-destructured-immutable -->
 <!-- TUPLES + `Map` rung (re-attributed from P1.8d, 2026-07-28) — `Map` + `for (key, value) in m` TUPLE DESTRUCTURING — the `for` statement itself lands in P1.8 slice A (Array + ranges); this case needs a Map source and a destructuring pattern, and shv2's parser stops at the `:` inside `[key: value]` (E2010 "Expected ']' but got ':'") -->
 ```maxon
 function main() returns ExitCode
@@ -103,7 +103,7 @@ end 'main'
 error E2013: specs/fragments/block-scoping/for-destructured-immutable.test:5:3: cannot assign to immutable variable: 'value'
 ```
 
-<!-- disabled-test: for-destructured-not-accessible-after -->
+<!-- test: for-destructured-not-accessible-after -->
 <!-- TUPLES + `Map` rung (re-attributed from P1.8d, 2026-07-28) — `Map` + `for (key, value) in m` TUPLE DESTRUCTURING — the `for` statement itself lands in P1.8 slice A (Array + ranges); this case needs a Map source and a destructuring pattern, and shv2's parser stops at the `:` inside `[key: value]` (E2010 "Expected ']' but got ':'") -->
 ```maxon
 function main() returns ExitCode

@@ -3,15 +3,16 @@
 // ⭐⭐ **THE HASH TABLE ITSELF IS `HashTableRuntime.maxon`'s.** A `Map with (Key, Value)` record IS a `Set`
 // record with a value column appended — the first six slots (`count@0`, `capacity@8`, `keys@16`,
 // `states@24`, `hashes@32`, `keyDrop@40`) are byte-identical, and `values@48` / `valueDrop@56` follow — so
-// the probe, the grow, the insert and the teardown are ONE graph built for both containers, told which shape
-// it is building. Read that file's header for the algorithm, the witness dispatch and the register-pressure
-// rule; `__map_create`/`__map_grow`/`__map_upsert`/`__map_contains`/`__map_count`/`__map_decref` are all
-// built there.
+// the probe, the grow, the insert, the remove and the teardown are ONE graph built for both containers, told
+// which shape it is building. Read that file's header for the algorithm, the witness dispatch and the
+// register-pressure rule; `__map_create`/`__map_grow`/`__map_upsert`/`__map_contains`/`__map_remove`/
+// `__map_count`/`__map_decref` are all built there, and so is `__map_insert` (the shared insert graph under
+// its refusing policy).
 //
 // What stays here is what a `Map` has that a `Set` does not:
 //   • its `__map_*` entry-point names, its 64-byte record size, and its usage/witness predicates;
-//   • `__map_get` — the one THROWING entry point in either container, because a lookup that misses has no
-//     value to answer with, and `MapError.keyNotFound` is what it throws instead;
+//   • `__map_get` — a lookup that misses has no value to answer with, and `MapError.keyNotFound` is what it
+//     throws instead;
 //   • the three composer answers that a throwing family owes (`isThrowingMapRuntimeCallee`,
 //     `mapErrorThrows`, `mapSourceMethodName`) and the install-time guard that holds them to each other.
 //
@@ -33,10 +34,17 @@ export let MapRecordBytes = 64 as ByteCount
 // ⚠ **`__map_upsert` IS INSERT-OR-REPLACE, and the name says so on purpose.** A `Set`'s `insert` is a no-op
 // on a duplicate; a map's must REPLACE the stored value, dropping the old one. Two behaviours, two names,
 // one shared graph with one branch (`HashTableRuntime.buildHtInsert`'s duplicate-key arm).
+//
+// ⭐ **`__map_insert` IS A THIRD BEHAVIOUR AT THAT SAME BRANCH, NOT A THIRD GRAPH.** It REFUSES a duplicate —
+// the table is left exactly as it was and `MapError.keyAlreadyExists` is thrown — which is `specs/map.md`'s
+// `insert(key, value) throws MapError`, and the one reason a `Map` has two insert entry points where a `Set`
+// has one.
 export let MapCreateName = b"__map_create"
 export let MapUpsertName = b"__map_upsert"
+export let MapInsertName = b"__map_insert"
 export let MapContainsName = b"__map_contains"
 export let MapGetName = b"__map_get"
+export let MapRemoveName = b"__map_remove"
 export let MapCountName = b"__map_count"
 export let MapDecrefName = b"__map_decref"
 
@@ -74,9 +82,9 @@ export let MapEntriesName = b"__map_entries"
 // any particular pair, and it is the reason only the VALUE slot's offset has to be passed in.
 let PairKeySlotOffset = 0 as ParsedInt
 
-// `__map_grow` is INTERNAL — called only by `__map_upsert` when the load factor is crossed (and on the first
-// insert, from capacity 0). It reuses the cached hashes, so it needs NO witnesses; kept out of the public
-// name set so no parser path dispatches to it.
+// `__map_grow` is INTERNAL — called only by the two insert entry points when the load factor is crossed (and
+// on the first insert, from capacity 0). It reuses the cached hashes, so it needs NO witnesses; kept out of
+// the public name set so no parser path dispatches to it.
 let MapGrowName = b"__map_grow"
 
 // The `__map_` prefix identifying EVERY map runtime entry point — the one test `recordCallUsage` reads to set
@@ -87,32 +95,32 @@ export function isMapRuntimeCallee(callee ByteArray) returns bool
 	return bytesStartWith(callee, prefix: MapRuntimePrefix)
 end 'isMapRuntimeCallee'
 
-// Is `callee` a map runtime function that DISPATCHES THROUGH THE KEY'S WITNESSES — `upsert`/`contains`/`get`,
-// the three that hash the key and compare it. `create`/`count`/`decref`/`grow` touch no key VALUE (the grow
-// reuses the cached hashes), so they carry no witnesses. `LowerMaxonToStd.lowerRuntimeCall` reads this to
-// decide whether to append the two hidden witness-table addresses to a map runtime call — the `Set` twin,
-// and it threads the KEY's tables (type argument `HashTableKeyArgPosition`), never the value's.
+// Is `callee` a map runtime function that DISPATCHES THROUGH THE KEY'S WITNESSES — `upsert`/`insert`/
+// `contains`/`get`/`remove`, the five that hash the key and compare it. `create`/`count`/`decref`/`grow`
+// touch no key VALUE (the grow reuses the cached hashes), so they carry no witnesses.
+// `LowerMaxonToStd.lowerRuntimeCall` reads this to decide whether to append the two hidden witness-table
+// addresses to a map runtime call — the `Set` twin, and it threads the KEY's tables (type argument
+// `HashTableKeyArgPosition`), never the value's.
 export function isMapWitnessCallee(callee ByteArray) returns bool
-	return callee.equals(MapUpsertName) or callee.equals(MapContainsName) or callee.equals(MapGetName)
+	return callee.equals(MapUpsertName) or callee.equals(MapInsertName) or callee.equals(MapContainsName) or callee.equals(MapGetName) or callee.equals(MapRemoveName)
 end 'isMapWitnessCallee'
 
-// The THROWING map runtime callees — `__map_get` alone. It returns via the dual-register `errorReturn` ABI
-// and can throw `MapError.keyNotFound`, so a call to one MUST become a `tryCall` (it is under a `try`, which
-// `rewriteLastCallToTryCall` converts). The map-side twin of `ArrayRuntime.isThrowingArrayRuntimeCallee`: the
-// families are composed by `GtRuntime.isThrowingRuntimeCallee`, read at the ONE call site in the parser
-// (E3055 accept) and the ONE in SemanticCheck (E3057 reject), so the accept and the reject cannot name
-// different sets.
+// The THROWING map runtime callees — `__map_get` and `__map_insert`. Each returns via the dual-register
+// `errorReturn` ABI and can throw a `MapError` case, so a call to one MUST become a `tryCall` (it is under a
+// `try`, which `rewriteLastCallToTryCall` converts). The map-side twin of
+// `ArrayRuntime.isThrowingArrayRuntimeCallee`: the families are composed by
+// `GtRuntime.isThrowingRuntimeCallee`, read at the ONE call site in the parser (E3055 accept) and the ONE in
+// SemanticCheck (E3057 reject), so the accept and the reject cannot name different sets.
 //
-// ⚠ `upsert` does NOT throw at this slice, and that is a decision with a case behind it rather than an
-// omission: `MapError.keyAlreadyExists` belongs to an `insert` (which refuses a duplicate) and `upsert`
-// replaces instead, so there is no failure for it to report. The enum declares the case anyway
-// (`Project.builtinMapErrorEnum`) so that adding `insert` later cannot renumber handlers already written.
+// ⚠ `upsert` does NOT throw, and that is a decision with a case behind it rather than an omission: it
+// REPLACES a duplicate's value, so there is no failure for it to report. `insert` refuses one and therefore
+// does throw — which is the whole difference between the two entry points and why both exist.
 export function isThrowingMapRuntimeCallee(callee ByteArray) returns bool
-	return callee.equals(MapGetName)
+	return callee.equals(MapGetName) or callee.equals(MapInsertName)
 end 'isThrowingMapRuntimeCallee'
 
-// ⭐ **THE `throws MapError` STAMP `__map_get` CARRIES, AND WHAT A CALLER'S `otherwise (e)` BINDING IS TYPED
-// FROM** — `arrayErrorThrows`'s twin, exported for the same reason: `GtRuntime.runtimeThrowsClause` pairs
+// ⭐ **THE `throws MapError` STAMP `__map_get` AND `__map_insert` CARRY, AND WHAT A CALLER'S `otherwise (e)`
+// BINDING IS TYPED FROM** — `arrayErrorThrows`'s twin, exported for the same reason: `GtRuntime.runtimeThrowsClause` pairs
 // each family's predicate with its clause speller, and two hand-written spellings of one enum's name is what
 // that composer exists to prevent. The name is `SignatureIndex.MapErrorTypeName` — the BARE `MapError`, which
 // that constant explains at length (a user function propagating a `map.get` failure writes `throws MapError`
@@ -125,26 +133,30 @@ end 'mapErrorThrows'
 // one composer (`GtRuntime.runtimeCalleeSourceMethod`) so that an E3057 on a missing `try`, and an E3059 on a
 // valueless one, quote the method the author typed rather than a `__` symbol E2051 forbids them to type.
 //
-// ⚠ **ONE ARM, AND THE MAP EXISTS ANYWAY.** `GtRuntime`'s `Character` family answers from its constant
-// without a map because its predicate IS one name and a one-arm dispatcher would be the identity written as
-// a function. This family is one name TODAY for a reason that is visibly temporary — `insert` (refusing a
-// duplicate with `MapError.keyAlreadyExists`) is already declared in the enum — so the map is here with its
-// panic arm, which is what turns the second name into a compile-time failure at INSTALL instead of a silent
-// inherited noun. It answers with `SignatureIndex.GetMethod`, the byte string the parser's own dispatch
-// matched, never a second `b"get"`.
+// ⚠ **THE SECOND ARM ARRIVED EXACTLY WHERE THIS HEADER SAID IT WOULD.** It read *"one name TODAY for a
+// reason that is visibly temporary — `insert` (refusing a duplicate with `MapError.keyAlreadyExists`) is
+// already declared in the enum"*, and the map was built with its panic arm rather than folded away for that
+// reason. Both arms answer with the parser's own method constants (`SignatureIndex.GetMethod` /
+// `InsertMethod`), the byte strings its dispatch matched, never a second `b"get"`.
 export function mapSourceMethodName(callee ByteArray) returns ByteArray
 	if callee.equals(MapGetName) 'get'
 		return GetMethod
 	end 'get'
+	if callee.equals(MapInsertName) 'insert'
+		return InsertMethod
+	end 'insert'
 	panic("mapSourceMethodName: no source-method arm for '{String.from(callee)}'. EITHER it is not a throwing `Map` runtime callee — this map is asked ONLY behind `isThrowingMapRuntimeCallee`, so nothing else can reach an E3057 — OR that predicate gained a name and this map did not, in which case add an arm answering the parser's own method constant. `installMapRuntime`'s drift guard asks this for every throwing `__map_` builder it installs, so the second case fails at INSTALL and never in front of a user's missing `try`")
 end 'mapSourceMethodName'
 
-// `MapError.keyNotFound`'s ORDINAL — `Project.builtinMapErrorEnum`'s FIRST case, and the wire format
-// `__map_get`'s failure edge writes into the error-flag register. The flag is DERIVED from the one
-// `MaxonDialect.ErrorFlagOrdinalBias` rather than written as a bare `1`, so the runtime encode cannot drift
-// from the parser's decode. Held to the declaration on every map-using compile by `verifyMapErrorOrdinals`.
+// `MapError`'s two ORDINALS — `Project.builtinMapErrorEnum`'s cases in declaration order, and the wire
+// format each failure edge writes into the error-flag register (`__map_get`'s miss, `__map_insert`'s
+// duplicate). Each flag is DERIVED from the one `MaxonDialect.ErrorFlagOrdinalBias` rather than written as a
+// bare number, so the runtime encode cannot drift from the parser's decode. Both are held to the declaration
+// on every map-using compile by `verifyMapErrorOrdinals`.
 let MapKeyNotFoundOrdinal = 0 as ParsedInt
 let MapKeyNotFoundFlag = MapKeyNotFoundOrdinal + ErrorFlagOrdinalBias
+let MapKeyAlreadyExistsOrdinal = 1 as ParsedInt
+let MapKeyAlreadyExistsFlag = MapKeyAlreadyExistsOrdinal + ErrorFlagOrdinalBias
 
 // The name this family's ordinals are transcribed under, for `BuiltinErrorOrdinalCheck`'s diagnostic.
 let MapErrorOrdinalInstaller = b"the Map runtime (MapError)"
@@ -156,11 +168,16 @@ let MapErrorOrdinalInstaller = b"the Map runtime (MapError)"
 // wrong case. `MapError` is a compiler-SYNTHESIZED declaration (shv2 does not load `stdlib/Map.maxon`), so it
 // takes `overSynthesized`, as `ArrayError` and `StringError` do.
 //
-// ⚠ Only `keyNotFound` is claimed: `keyAlreadyExists` is declared but nothing emits it yet, and claiming an
-// ordinal no runtime writes would be a dead claim of exactly the kind the error-code registry refuses.
+// ⚠ **BOTH CASES ARE CLAIMED NOW, and only one was.** The note here read *"`keyAlreadyExists` is declared but
+// nothing emits it yet, and claiming an ordinal no runtime writes would be a dead claim"* — true while
+// `upsert` was the only insert entry point. `__map_insert`'s duplicate arm writes it, so the claim is live
+// and the ordinal is load-bearing: a case inserted between the two would silently retarget every
+// `otherwise (e)` arm that matches `keyAlreadyExists` (`map.md:insert.duplicate-error-binding` is exactly
+// that program) — no crash, no wrong exit code, just a handler naming the wrong case.
 export function verifyMapErrorOrdinals(project Project)
 	var mapErrors = BuiltinErrorOrdinalCheck.overSynthesized(project, declaration: builtinMapErrorEnum(), installer: MapErrorOrdinalInstaller)
 	mapErrors.claim(MapErrorKeyNotFoundCaseName, ordinal: MapKeyNotFoundOrdinal)
+	mapErrors.claim(MapErrorKeyAlreadyExistsCaseName, ordinal: MapKeyAlreadyExistsOrdinal)
 end 'verifyMapErrorOrdinals'
 
 // Install the map runtime into the lowered Std module — ALL of it, when the program touches any map
@@ -170,14 +187,22 @@ end 'verifyMapErrorOrdinals'
 // only re-derive the closure this install already is. Appended AFTER the pipeline (like `installSetRuntime`),
 // so they are never re-optimized.
 //
-// ⭐ The six shared entries come from `installHashTable`, told THIS container's names and shape — the one
-// place a `Map`'s hash-table identity is stated. `get` is built after it because it is the one this container
-// does not share.
+// ⭐ The seven shared entries come from `installHashTable`, told THIS container's names and shape — the one
+// place a `Map`'s hash-table identity is stated. What is built after it is what this container does not
+// share: `get`, `entries`, and the SECOND insert entry point.
+//
+// ⭐ **`__map_insert` IS `buildHtInsert` AGAIN, TOLD TO REFUSE — not a second insert graph.** The family
+// names ONE insert (`__map_upsert`, the `keep` policy every container has); this is the extra door a `Map`
+// has, so it is built here beside `get` rather than folded into a shape a `Set` would have to answer for.
+// The refusal's flag and its `throws` clause travel together in the policy for `HtDuplicatePolicy`'s stated
+// reason, and the drift guard below then checks the stamp against `isThrowingMapRuntimeCallee`.
 export function installMapRuntime(module StdModule, usage RuntimeUsage)
 	if not usage.usesMap 'noMap'
 		return
 	end 'noMap'
-	installHashTable(module, family: HashTableFamily.create(MapCreateName, growName: MapGrowName, insertName: MapUpsertName, containsName: MapContainsName, countName: MapCountName, decrefName: MapDecrefName, recordBytes: MapRecordBytes, carriesValues: true))
+	let family = HashTableFamily.create(MapCreateName, growName: MapGrowName, insertName: MapUpsertName, containsName: MapContainsName, removeName: MapRemoveName, countName: MapCountName, decrefName: MapDecrefName, recordBytes: MapRecordBytes, carriesValues: true)
+	installHashTable(module, family: family)
+	buildHtInsert(module, family: family, name: MapInsertName, onDuplicate: HtDuplicatePolicy.refuse(MapKeyAlreadyExistsFlag, throwsClause: mapErrorThrows()))
 	buildMapGet(module)
 	buildMapEntries(module)
 
@@ -210,7 +235,7 @@ end 'installMapRuntime'
 
 // ⭐ `__map_get(map, key, hashWitness, eqWitness) -> errorReturn(value, flag)` — probe for `key`; a matching
 // Occupied slot answers its `values@48` slot with `NoErrorFlag`, and a miss throws `MapError.keyNotFound`.
-// The one throwing entry point in either hash-table container, and the reason `Map` has an error enum at all.
+// The `Map`'s READ failure, beside `__map_insert`'s write failure: the two reasons `Map` has an error enum.
 //
 // ⚠⚠ **THE RETURNED VALUE IS A BORROW — the map keeps owning it.** This is `__arr_get`'s contract exactly: no
 // clone, no refcount bump, no transfer. A managed value handed out here is still the map's to drop at
