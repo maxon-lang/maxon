@@ -1894,6 +1894,93 @@ end 'main'
 error E3005: specs/fragments/first-class-functions/first-class-function.error.wrong-shape-into-union-payload.test:31:26: type mismatch: 'expected fn(Color) returns Color, got fn(Shade) returns Shade'
 ```
 
+<!-- test: first-class-function.error.wrong-shape-captured-into-closure -->
+A CAPTURED function value is the same value, and it keeps its shape across the capture. Every door
+above compares the SIGNATURE a value carries, so a value that arrives carrying none is admitted —
+the permissive answer, and the right one, because refusing on the compiler's own ignorance refuses
+legal programs. That makes each place a function value can be MINTED part of the rule: reading `g`
+inside a closure loads it from the closure's environment, and an environment load carried only a
+KIND, so the shape `g` was minted with was gone before the call-argument door ever looked. The
+identical `apply(g, ...)` this file refuses two cases above therefore compiled clean and RAN — exit
+`4`, `shadeIt` handed a `Color` and reading `Shade`'s field out of `Color`'s layout.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Color
+	export var v as Integer
+
+	export static function create(v Integer) returns Self
+		return Self{v: v}
+	end 'create'
+end 'Color'
+
+type Shade
+	export var s as Integer
+
+	export static function create(s Integer) returns Self
+		return Self{s: s}
+	end 'create'
+end 'Shade'
+
+typealias ColorFn = function(Color) returns Color
+typealias Thunk = function() returns Integer
+
+function shadeIt(x Shade) returns Shade
+	return Shade.create(x.s + 1)
+end 'shadeIt'
+
+function apply(f ColorFn, c Color) returns Color
+	return f(c)
+end 'apply'
+
+function runThunk(t Thunk) returns Integer
+	return t()
+end 'runThunk'
+
+function main() returns ExitCode
+	let g = shadeIt
+	let t = function() gives apply(g, c: Color.create(3)).v
+
+	return runThunk(t)
+end 'main'
+```
+```maxoncstderr
+error E3005: specs/fragments/first-class-functions/first-class-function.error.wrong-shape-captured-into-closure.test:37:27: argument type mismatch for 'f': expected 'fn(Color) returns Color', got 'fn(Shade) returns Shade'
+```
+
+<!-- test: first-class-function.matching-shape-captured-into-closure -->
+The control for the case above, and the reason a captured signature must be the RIGHT one rather
+than merely present: a MATCHING function captured into a closure is still accepted at the same door
+and still runs. A capture that carried the wrong signature — or the signature of some other value —
+would refuse this, which is the failure mode a shape rule has to be held away from.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias UnaryOp = function(Integer) returns Integer
+typealias Thunk = function() returns Integer
+
+function double(x Integer) returns Integer
+	return x * 2
+end 'double'
+
+function apply(f UnaryOp, x Integer) returns Integer
+	return f(x)
+end 'apply'
+
+function runThunk(t Thunk) returns Integer
+	return t()
+end 'runThunk'
+
+function main() returns ExitCode
+	let g = double
+	let t = function() gives apply(g, x: 21)
+
+	return runThunk(t)
+end 'main'
+```
+```exitcode
+42
+```
+
 <!-- test: first-class-function.matching-shapes-across-every-door -->
 The control that keeps the shape rule from becoming a false-refusal generator: the SAME program with
 matching shapes, through every door at once — a call argument, a `return`, an assignment, a field

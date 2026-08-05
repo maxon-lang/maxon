@@ -458,16 +458,30 @@ public sealed class MaxonClosureCreateOp(string functionName, IrFunctionType fun
 }
 
 // Inside a capturing closure: loads a captured value from the environment pointer
-public sealed class MaxonClosureEnvLoadOp(int index, string name, MaxonValueKind kind, string? structTypeName = null) : MaxonOp {
+//
+// ⚠ THE LOAD MUST REPRODUCE THE CAPTURED VALUE'S IDENTITY, not merely its kind. A capture is the
+// same value seen from inside the closure, so every rule that keys off what a value IS keys off it
+// here too — which is why the Struct and Enum arms below carry the declared name. `functionType` is
+// the third of them, and it was missing: a captured FUNCTION value arrived carrying no signature,
+// the declared-type doors read null (their permissive answer, correctly — see MaxonFunctionPtr) and
+// stopped applying, and `apply(g, ...)` with a `fn(Shade) returns Shade` in a `fn(Color) returns
+// Color` parameter compiled and RAN from inside a closure while the identical line outside one was
+// E3005.
+public sealed class MaxonClosureEnvLoadOp(int index, string name, MaxonValueKind kind, string? structTypeName = null,
+    Core.IrFunctionType? functionType = null) : MaxonOp {
   public override MaxonOpKind Kind => MaxonOpKind.ClosureEnvLoad;
   public override string Mnemonic => $"maxon.closure_env_load {Name}[{Index}]";
   public int Index { get; } = index;
   public string Name { get; } = name;
   public MaxonValueKind ValueKind { get; } = kind;
   public string? StructTypeName { get; } = structTypeName;
+  // `functionType` is deliberately not surfaced as a property: the lowering reads StructTypeName,
+  // but nothing reads a signature off the OP — the readers are the declared-type doors, and they
+  // hold the VALUE. It reaches them on Result, which is the only place it is wanted.
   public MaxonValue Result { get; } = kind switch {
     MaxonValueKind.Struct => new MaxonStruct(IrContext.Current.NextId(), structTypeName!),
     MaxonValueKind.Enum when structTypeName != null => new MaxonEnum(IrContext.Current.NextId(), structTypeName),
+    MaxonValueKind.Function => new MaxonFunctionPtr(IrContext.Current.NextId(), functionType),
     _ => kind.CreateValue()
   };
   public override IReadOnlyList<MaxonValue> Results => [Result];

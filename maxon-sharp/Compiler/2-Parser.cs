@@ -7468,10 +7468,14 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   /// paramOffset is the index offset for the IR param op (e.g., 1 for instance methods with 'self').
   /// </summary>
   private void EmitParameters(List<string> paramNames, List<IrType> paramTypes, List<Token> paramTokens, int paramOffset = 0) {
-    // Each ranged parameter's incoming SSA value, kept by POSITION for the entry guards below. By
-    // position and not by name, because `_` may name several parameters at once and a by-name lookup
-    // would guard the last of them repeatedly against every other one's range.
-    var rangedParamValues = new MaxonValue?[paramNames.Count];
+    // Each ranged parameter's incoming SSA value, paired with the range it must satisfy and the line
+    // that declared it, for the entry guards below. Collected by POSITION and not by name, because
+    // `_` may name several parameters at once and a by-name lookup would guard the last of them
+    // repeatedly against every other one's range. The three travel as ONE record rather than as
+    // parallel lookups into `paramTypes`/`paramTokens`: a value and the range it is checked against
+    // are one fact, and splitting them is what would make a cast back to `IrRangedPrimitiveType`
+    // necessary — a cast that can only ever be wrong.
+    var rangedParams = new List<(MaxonValue Value, IrRangedPrimitiveType Range, Token DeclaredAt)>();
 
     for (int i = 0; i < paramNames.Count; i++) {
       CheckNoSelfFieldShadow(paramNames[i], paramTokens[i].Line, paramTokens[i].Column);
@@ -7497,7 +7501,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
         var paramOp = new MaxonParamOp(i + paramOffset, paramNames[i], kind);
         _currentBlock!.AddOp(paramOp);
         _variables.Declare(paramNames[i], kind, true, paramOp.Result, _currentBlock!, OwnershipFlags.IsParam, structTypeName: rangedParam.Name);
-        rangedParamValues[i] = paramOp.Result;
+        rangedParams.Add((paramOp.Result, rangedParam, paramTokens[i]));
       } else if (paramType is IrTypeParameterType tp) {
         var paramOp = new MaxonParamOp(i + paramOffset, paramNames[i], MaxonValueKind.TypeParameter);
         _currentBlock!.AddOp(paramOp);
@@ -7514,7 +7518,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       }
     }
 
-    EmitParameterRangeGuards(rangedParamValues, paramTypes, paramTokens);
+    EmitParameterRangeGuards(rangedParams);
   }
 
   /// <summary>
@@ -7544,17 +7548,13 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   /// which breaks the argument-pinning pass (see the note at the call-argument site in
   /// <see cref="FillDefaultArgs"/>). At the entry there is no argument list under construction.
   /// </remarks>
-  private void EmitParameterRangeGuards(MaxonValue?[] rangedParamValues, List<IrType> paramTypes, List<Token> paramTokens) {
-    for (int i = 0; i < rangedParamValues.Length; i++) {
-      if (rangedParamValues[i] is not { } paramValue) continue;
-
+  private void EmitParameterRangeGuards(List<(MaxonValue Value, IrRangedPrimitiveType Range, Token DeclaredAt)> rangedParams) {
+    foreach (var (value, range, declaredAt) in rangedParams) {
       // A parameter's value arrives from the caller and is never a literal this compiler is
       // holding, so the fold-then-guard door (`ValidateAndEmitRangeCheck`) has nothing to fold and
       // its whole-function literal scan would be pure cost. The runtime guard is the whole rule
       // here; a full-range alias still costs nothing, because EmitRuntimeRangeCheck says so.
-      var ranged = (IrRangedPrimitiveType)paramTypes[i];
-      EmitRuntimeRangeCheck(paramValue, ranged, ranged.BaseType.ToValueKind(),
-        paramTokens[i].Line, _sourceFilePath);
+      EmitRuntimeRangeCheck(value, range, range.BaseType.ToValueKind(), declaredAt.Line, _sourceFilePath);
     }
   }
 
@@ -20786,7 +20786,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       captureIndex = _closureCaptures.Count;
       _closureCaptures.Add(new CaptureInfo(varName, info.Kind, info.Value, info.StructTypeName));
     }
-    var envLoadOp = new MaxonClosureEnvLoadOp(captureIndex, varName, info.Kind, info.StructTypeName);
+    var envLoadOp = new MaxonClosureEnvLoadOp(captureIndex, varName, info.Kind, info.StructTypeName, info.FnType);
     _currentBlock!.AddOp(envLoadOp);
     return envLoadOp.Result;
   }
@@ -22502,6 +22502,41 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     shape?.Name ?? KindToTypeName(MaxonValueKind.Function);
 
   /// <summary>
+  /// ⭐ ONE answer to "does this VALUE's own identity agree with the aggregate NAME declared at this
+  /// place?" — the question every declared-type door asks about a struct or an enum.
+  /// </summary>
+  /// <remarks>
+  /// It is one method because it was two. <see cref="CoerceAssignedValue"/> and
+  /// <see cref="TypeCheckEnumArg"/> each grew a struct comparison, then an enum comparison beside it,
+  /// then a function comparison beside that — two copies of one rule, in two spellings, agreeing only
+  /// because they were written the same week. Nothing made them agree, and a clause added to one
+  /// (an enum alias tolerance, say) would not have read as a bug at the other; it would simply have
+  /// meant a payload slot and an assignment disagreed about whether the same value fits.
+  ///
+  /// PERMISSIVE where the value carries no identity to compare — a primitive, a compiler-internal
+  /// managed handle. Every caller runs a KIND check first, so "the value is not an aggregate at all"
+  /// is already someone else's rejection, and refusing it again here would only refuse what this
+  /// rule cannot identify. A struct name keeps the typealias tolerance every other struct-identity
+  /// check in this file uses; an enum name has no alias form, so it is plain equality.
+  /// A FUNCTION type is deliberately absent: it has no name, and its identity is compared by
+  /// <see cref="FunctionShapeAccepts"/>.
+  /// </remarks>
+  private bool DeclaredNameAccepts(string declaredName, MaxonValue value) => value switch {
+    MaxonStruct actualStruct => IsStructTypeCompatible(actualStruct.TypeName, declaredName),
+    MaxonEnum actualEnum => actualEnum.TypeName == declaredName,
+    _ => true
+  };
+
+  /// The name a declared-type diagnostic gives the value it was handed: the declared aggregate's own
+  /// name where it has one, a function's SHAPE where it does not, and the primitive kind otherwise.
+  private static string ValueTypeDisplayName(MaxonValue value, MaxonValueKind actualKind) => value switch {
+    MaxonStruct ms => ms.TypeName,
+    MaxonEnum me => me.TypeName,
+    MaxonFunctionPtr fp => FunctionShapeName(fp.FunctionType),
+    _ => IrType.FormatAsSourceName(actualKind.ToIrType())
+  };
+
+  /// <summary>
   /// Applies the assignment type rule — `specs/assignment.md`'s "expression type must match variable
   /// type". A variable's type is fixed by its DECLARATION and an assignment never re-infers it, so
   /// this is the rule that makes `var x = 5; x = "hi"` an error rather than a silent retype.
@@ -22529,32 +22564,22 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       (actual, expected) => $"cannot assign a value of type '{actual}' to {place}, which holds "
         + $"'{expected}'");
 
-    if (declaredTypeName != null && coerced is MaxonStruct assignedStruct
-        && !IsStructTypeCompatible(assignedStruct.TypeName, declaredTypeName)) {
-      throw new CompileError(ErrorCode.SemanticTypeMismatch,
-        $"cannot assign a value of type '{assignedStruct.TypeName}' to {place}, which holds "
-        + $"'{declaredTypeName}'",
-        line, column);
-    }
+    // The IDENTITY half, which the kind check above structurally cannot make: `Struct`, `Enum` and
+    // `Function` are each ONE kind covering every type of that shape. A struct's and an enum's
+    // identity is a NAME (`DeclaredTypeNameOf` yields both); a function type has no name to yield,
+    // so its identity travels as a TYPE, because its identity IS its shape. All three were once
+    // absent and all three were the same defect: `var p = Point.create(1); p = Other.create(2)` died
+    // in the LOWERING as an E9001, `var c = Color.red; c = Shade.light` compiled clean and read
+    // Shade's ordinal under Color's name, and a wrong-shaped function value was then called through
+    // the signature it had been promised.
+    var violatedIdentity = declaredFnType != null
+      ? FunctionShapeAccepts(declaredFnType, FunctionShapeOf(coerced)) ? null : declaredFnType.Name
+      : declaredTypeName != null && !DeclaredNameAccepts(declaredTypeName, coerced) ? declaredTypeName : null;
 
-    // The ENUM half of the same rule, and it was missing for the same reason the struct half once
-    // was: `DeclaredTypeNameOf` has always yielded an enum's name, and nothing compared it. Two
-    // enums are two types — `var c = Color.red; c = Shade.light` compiled clean and `c.ordinal`
-    // reported Shade's ordinal under Color's name.
-    if (declaredTypeName != null && coerced is MaxonEnum assignedEnum
-        && assignedEnum.TypeName != declaredTypeName) {
+    if (violatedIdentity != null) {
       throw new CompileError(ErrorCode.SemanticTypeMismatch,
-        $"cannot assign a value of type '{assignedEnum.TypeName}' to {place}, which holds "
-        + $"'{declaredTypeName}'",
-        line, column);
-    }
-
-    // And the FUNCTION half. A function type's identity is its shape, which is why this one takes
-    // the TYPE where the two above take a name: there is no name to take.
-    if (declaredFnType != null && !FunctionShapeAccepts(declaredFnType, FunctionShapeOf(coerced))) {
-      throw new CompileError(ErrorCode.SemanticTypeMismatch,
-        $"cannot assign a value of type '{FunctionShapeName(FunctionShapeOf(coerced))}' to {place}, "
-        + $"which holds '{declaredFnType.Name}'",
+        $"cannot assign a value of type '{ValueTypeDisplayName(coerced, DetermineValueKind(coerced))}' "
+        + $"to {place}, which holds '{violatedIdentity}'",
         line, column);
     }
 
@@ -23214,34 +23239,23 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     var actualKind = DetermineValueKind(argVal);
     var expectedKind = expectedType.ToValueKind();
     if (actualKind != expectedKind)
-      throw PayloadTypeMismatch(expectedType, PayloadArgTypeName(argVal, actualKind));
+      throw PayloadTypeMismatch(expectedType, ValueTypeDisplayName(argVal, actualKind));
 
     // ⚠ THE KIND CHECK ABOVE IS ONLY HALF THE RULE, AND FOR YEARS IT WAS THE WHOLE OF IT. `Struct`,
     // `Enum` and `Function` are each ONE kind covering every type of that shape, so a payload
     // declared `Color` accepted any struct, any enum and any function whatsoever: `Paint.tint`
     // took a `Shade` and the binding read Shade's field out of Color's layout. A payload slot is a
-    // place with a declared type like any other, so its identity is checked like any other.
+    // place with a declared type like any other, so its identity is decided by the same rule any
+    // other place uses — see `DeclaredNameAccepts` for why that is one method and not one per door.
     bool identityAgrees = expectedType switch {
-      IrStructType expectedStruct => argVal is MaxonStruct payloadStruct
-        && IsStructTypeCompatible(payloadStruct.TypeName, expectedStruct.Name),
-      IrEnumType expectedEnum => argVal is MaxonEnum payloadEnum
-        && payloadEnum.TypeName == expectedEnum.Name,
       IrFunctionType expectedFn => FunctionShapeAccepts(expectedFn, FunctionShapeOf(argVal)),
+      IrStructType or IrEnumType => DeclaredNameAccepts(expectedType.Name, argVal),
       _ => true
     };
 
     if (!identityAgrees)
-      throw PayloadTypeMismatch(expectedType, PayloadArgTypeName(argVal, actualKind));
+      throw PayloadTypeMismatch(expectedType, ValueTypeDisplayName(argVal, actualKind));
   }
-
-  /// The name a payload diagnostic gives the value it was handed: the declared aggregate's own name
-  /// where it has one, a function's SHAPE where it does not, and the primitive kind otherwise.
-  private static string PayloadArgTypeName(MaxonValue argVal, MaxonValueKind actualKind) => argVal switch {
-    MaxonStruct ms => ms.TypeName,
-    MaxonEnum me => me.TypeName,
-    MaxonFunctionPtr fp => FunctionShapeName(fp.FunctionType),
-    _ => IrType.FormatAsSourceName(actualKind.ToIrType())
-  };
 
   private CompileError PayloadTypeMismatch(IrType expectedType, string actualTypeName) =>
     new CompileError(ErrorCode.SemanticTypeMismatch,

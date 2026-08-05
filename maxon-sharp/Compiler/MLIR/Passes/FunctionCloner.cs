@@ -232,7 +232,10 @@ internal class FunctionCloner {
       MaxonShort => new MaxonShort(newId),
       MaxonStruct s => new MaxonStruct(newId, _typeSubstitution.SubstituteName(s.TypeName)),
       MaxonEnum e => new MaxonEnum(newId, e.TypeName),
-      MaxonFunctionPtr => new MaxonFunctionPtr(newId),
+      // A clone is the same value under a new id, so it keeps the identity the original carried —
+      // a struct's name, an enum's name, and a function's SIGNATURE alike. Dropping the signature
+      // here would make the clone answer "I do not know what I am" to every rule that asks.
+      MaxonFunctionPtr f => new MaxonFunctionPtr(newId, f.FunctionType),
       _ => throw new InvalidOperationException($"Unknown MaxonValue type: {old.GetType()}")
     };
     _valueMap[old.Id] = newVal;

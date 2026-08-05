@@ -2267,7 +2267,10 @@ public static class MonomorphizationPass {
           MaxonShort => new MaxonShort(newId),
           MaxonStruct s => new MaxonStruct(newId, sub.SubstituteName(s.TypeName)),
           MaxonEnum e => new MaxonEnum(newId, e.TypeName),
-          MaxonFunctionPtr => new MaxonFunctionPtr(newId),
+          // Keeps the signature for the reason the enum arm above keeps the name: a clone is the
+          // same value under a new id, and a value that forgets what it is answers "unknown" to
+          // every identity rule downstream.
+          MaxonFunctionPtr f => new MaxonFunctionPtr(newId, f.FunctionType),
           _ => throw new InvalidOperationException($"Unknown MaxonValue type: {old.GetType()}")
         };
         valueMap[old.Id] = newVal;
