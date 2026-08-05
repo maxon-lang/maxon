@@ -14883,7 +14883,16 @@ export type Parser
 		self.valueInstanceAlias = sharedEmptyInstanceAliasMap
 		self.valueDeclaredAlias = sharedEmptyDeclaredAliasMap
 		self.immutableGlobalReads = sharedEmptyImmutableGlobalReads
+		// ⭐ **ALL THREE, for `parseFunction`'s stated reason — "they describe one value space" (BATCH22
+		// review).** This site reset `bufferSurfaceValues` alone, and the other two crossed the boundary: a
+		// default helper is a whole FUNCTION drained at the end of `parseModule`, so what reaches it is the
+		// PREVIOUS function's own private map, which `markBufferSurfaceSlots`' copy-on-write detach cannot
+		// help with — the detach protects the shared module-level anchor, not the parser field. MEASURED:
+		// `function useBufferPair(p (__ManagedMemory, Int))` last in the file, then a default expression
+		// reading `.0.length()` off a `(ByteArray, Int)` call, COMPILED AND RAN — both are ValueId 0.
 		self.bufferSurfaceValues = sharedEmptyBufferSurfaceValues
+		self.bufferSurfaceSlots = sharedEmptyBufferSurfaceSlots
+		self.bufferSurfaceElements = sharedEmptyBufferSurfaceElements
 		self.inMatchArmBody = false
 		self.rangeCheckSites = RangeCheckSiteArray.create()
 		self.rangeCheckArgSites = RangeCheckArgSiteArray.create()

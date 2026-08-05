@@ -123,9 +123,15 @@ let DeclShapeDeclaredConformance = 55 as ContentHash
 // what the extended interface's associated type is bound to).
 //
 // ⚠ **IT HELD 68 — `EnumBackingInteger`'s NUMBER — until BATCH22, which is the very collision the paragraph
-// above argues it must not have.** Both constants are mixed into the ONE rolling `self.hash`, and `recordEnum`
-// mixes them four lines apart, so the argument for a discriminator of its own was written down and then not
-// applied. Found while giving a union PAYLOAD its own pair; every number from 72 up was free.
+// above argues it must not have.** The two are mixed into the ONE rolling `self.hash` from the two sides of
+// one declaration space: this one from `recordStruct`'s `conformanceBindings` fold, `EnumBackingInteger` from
+// `recordEnum`'s backing fold, and the hash is a single running value across every declaration in the
+// program. So the argument for a discriminator of its own was written down and then not applied. Found while
+// giving a union PAYLOAD its own pair; every number from 72 up was free.
+//
+// ⚠ The BATCH22 commit message says `recordEnum` mixes both "four lines apart"; it does not — `recordEnum`
+// mixes the backing and `DeclShapeDeclaredConformance`. Corrected here rather than left standing, because a
+// WHY that names the wrong site is what the next reader would check against.
 let DeclShapeConformanceBinding = 72 as ContentHash
 
 // ⭐ **THE `implements` LIST'S CONTRIBUTION TO A DECLARATION'S CONTENT HASH — ONE STATEMENT, BOTH KINDS AND
@@ -6236,9 +6242,11 @@ export type ProgramSignatures
 		let named = mixBytes(state, bytes: layout.caseNameAt(index))
 		let tagBits = layout.tagOfIndex(index) as ContentHash
 		var folded = mix(named, value: tagBits)
+
 		for field in layout.payloadsAt(index) 'eachSlot'
 			folded = self.mixPayloadField(folded, field: field)
 		end 'eachSlot'
+
 		return folded
 	end 'mixEnumCase'
 

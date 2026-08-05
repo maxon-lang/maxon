@@ -3385,3 +3385,120 @@ end 'main'
 ```exitcode
 5
 ```
+
+<!-- test: error.a-tuple-slot-mark-does-not-leak-into-a-parameter-default-helper -->
+
+⭐⭐ **THE SIXTH VALUE SPACE — a PARAMETER DEFAULT's synthesized helper — reset one of the three surface
+columns and not the other two (found by BATCH22's REVIEW).** `error.tuple-slot-mark-does-not-leak-across-functions`
+above pins the ordinary function→function boundary, and it is carried by `markBufferSurfaceSlots`'
+copy-on-write detach off the module-level anchor. That detach cannot help here: a default helper is a whole
+FUNCTION parsed at the end of `parseModule`, so what reaches it is the previous function's own PRIVATE map,
+and only an explicit reset can drop it. `parseParamDefaultHelper` reset `bufferSurfaceValues` alone —
+`parseFunction`'s own comment says all THREE reset together "because they describe one value space", and
+`parseClosureExpression` resets all three — so `bufferSurfaceSlots` and `bufferSurfaceElements` crossed.
+
+**The shapes line up on purpose, exactly as the case above lines them up**: `useBufferPair`'s tuple PARAMETER
+is ValueId 0 and carries the slot mask; the helper's `valueIds` restart at 0 and `arrayPair()` is its first
+mint, so the leaked mask lands exactly on top. **MEASURED before the fix: this program COMPILED, LINKED AND
+RAN, exit 2** — `length()` served on a slot declared `Array with Byte`, from a mark minted in a function
+whose text the helper does not contain.
+
+⚠ `useBufferPair` is deliberately the LAST declaration and is never called: the drain runs after the last
+top-level declaration has closed, so the state that reaches the helper is the last function's.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+
+function arrayPair() returns (ByteArray, Int)
+	return ("hi".toByteArray(), 3)
+end 'arrayPair'
+
+function withDefault(k Int = arrayPair().0.length()) returns Int
+	return k
+end 'withDefault'
+
+function main() returns ExitCode
+	return withDefault() as ExitCode
+end 'main'
+
+function useBufferPair(p (__ManagedMemory, Int)) returns Int
+	return p.0.length()
+end 'useBufferPair'
+```
+```maxoncstderr
+error E2015: <fragment>:10:44: Unsupported: `Array` member 'length' — P1.7 provides managed/get/set/first/last/pop/remove/slice/count/capacity/isEmpty/clone/push/reserve/resize/clear/insert/append/map/contains; that list IS the surface, so nothing else is served here
+```
+
+<!-- test: a-sibling-files-buffer-array-payload-serves-the-roster-alias-file-first -->
+
+⭐ **A2m's FILE-ORDER PAIR AT THE NEW DOOR (BATCH22 review).** `union-payload-declared-an-array-of-buffers-serves-the-roster`
+above is single-file, and A2m's own measured hazard is that a member roster can depend on FILE ORDER — the
+identical two-file program compiled one way round and was refused E2015 the other. The payload's element bit
+is carried by the same complementary pair the struct FIELD's is (`a-sibling-files-array-of-buffers-alias-serves-the-roster`
+and its `-either-order` twin), so it owes the same two halves. **Alias file FIRST**: the alias is registered
+by the time the union is swept, the payload's declared type has already resolved to `genericInstance`, the
+read-door derivation cannot fire, and the declaration's own token bit is what carries it.
+```maxon
+// --- file: alias.maxon
+typealias Int = int(i64.min to i64.max)
+typealias BufArray = Array with __ManagedMemory
+
+export function seed(x BufArray) returns Int
+	return x.count() as Int
+end 'seed'
+
+// --- file: main.maxon
+union Held
+	bufs(b BufArray)
+	nothing
+end 'Held'
+
+function main() returns ExitCode
+	var a = BufArray.create()
+	a.push("hello".toByteArray())
+	let h = Held.bufs(a)
+	match h 'k'
+		bufs(x) then return ((try x.get(0) otherwise return 1).length() + seed(BufArray.create())) as ExitCode
+		nothing then return 0
+	end 'k'
+end 'main'
+```
+```exitcode
+5
+```
+
+<!-- test: a-sibling-files-buffer-array-payload-serves-the-roster-alias-file-last -->
+
+⭐ **The other half — the identical program, its two files declared the other way round.** Now the alias is
+NOT yet registered when the union is swept, so the payload type stays `named("BufArray")`, the sweep's stored
+element bit is clear, and it is `ProgramSignatures.surfaceWithDerivedElement`'s read-door DERIVATION that
+carries the surface. Both halves are pinned because either one alone leaves one order wrong.
+```maxon
+// --- file: main.maxon
+union Held
+	bufs(b BufArray)
+	nothing
+end 'Held'
+
+function main() returns ExitCode
+	var a = BufArray.create()
+	a.push("hello".toByteArray())
+	let h = Held.bufs(a)
+	match h 'k'
+		bufs(x) then return ((try x.get(0) otherwise return 1).length() + seed(BufArray.create())) as ExitCode
+		nothing then return 0
+	end 'k'
+end 'main'
+
+// --- file: alias.maxon
+typealias Int = int(i64.min to i64.max)
+typealias BufArray = Array with __ManagedMemory
+
+export function seed(x BufArray) returns Int
+	return x.count() as Int
+end 'seed'
+```
+```exitcode
+5
+```
