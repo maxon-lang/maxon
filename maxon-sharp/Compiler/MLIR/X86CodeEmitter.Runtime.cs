@@ -1946,27 +1946,7 @@ public partial class X86CodeEmitter {
 
     // MainThread: spin on completions + wake event until our I/O finishes. It never commits, so a
     // completer finds `Wait`, declines the enqueue and leaves it to self-detect here.
-    DefineLabel("rt_ntc_mainthread_loop");
-    EmitDriveSchedulerAndIo();
-    EmitJumpIfNetpollWoken("rt_ntc_resume");
-    // Try dequeue a runnable GT
-    EmitCallRuntimeLabel("__gt_dequeue");
-    EmitBytes(0x48, 0x85, 0xC0); // TEST RAX, RAX
-    EmitJcc("z", "rt_ntc_mainthread_park");
-    // Got a GT — run it
-    EmitMovMemReg(-0x30, X86Register.Rax, 8);
-    EmitMovRegImm(X86Register.Rcx, GtStatusRunning);
-    EmitMovIndirectMemReg(X86Register.Rax, GtOffStatus, X86Register.Rcx);
-    EmitLoadCurrentGtInline(X86Register.Rcx);
-    EmitMovRegMem(X86Register.Rdx, -0x30, 8);
-    EmitCallRuntimeLabel("__gt_context_switch");
-    EmitJmp("rt_ntc_mainthread_loop");
-    // No GT — park briefly
-    DefineLabel("rt_ntc_mainthread_park");
-    EmitGlobalLoadReg(X86Register.Rcx, "__io_done_event");
-    EmitMovRegImm(X86Register.Rdx, 50);
-    EmitCallImportOnSystemStack("kernel32.dll", "WaitForSingleObject");
-    EmitJmp("rt_ntc_mainthread_loop");
+    EmitMainThreadIoParkLoop("rt_ntc", -0x30);
 
     // --- Resume: ConnectEx completed (sync or async) ---
     DefineLabel("rt_ntc_resume");
@@ -2242,27 +2222,7 @@ public partial class X86CodeEmitter {
 
     // MainThread: spin on completions + wake event until our I/O finishes. It never commits, so a
     // completer finds `Wait`, declines the enqueue and leaves it to self-detect here.
-    DefineLabel($"{labelPrefix}_mainthread_loop");
-    EmitDriveSchedulerAndIo();
-    EmitJumpIfNetpollWoken($"{labelPrefix}_resume");
-    // Try dequeue a runnable GT
-    EmitCallRuntimeLabel("__gt_dequeue");
-    EmitBytes(0x48, 0x85, 0xC0); // TEST RAX, RAX
-    EmitJcc("z", $"{labelPrefix}_mainthread_park");
-    // Got a GT -- run it
-    EmitMovMemReg(-0x38, X86Register.Rax, 8);
-    EmitMovRegImm(X86Register.Rcx, GtStatusRunning);
-    EmitMovIndirectMemReg(X86Register.Rax, GtOffStatus, X86Register.Rcx);
-    EmitLoadCurrentGtInline(X86Register.Rcx);
-    EmitMovRegMem(X86Register.Rdx, -0x38, 8);
-    EmitCallRuntimeLabel("__gt_context_switch");
-    EmitJmp($"{labelPrefix}_mainthread_loop");
-    // No GT -- park briefly
-    DefineLabel($"{labelPrefix}_mainthread_park");
-    EmitGlobalLoadReg(X86Register.Rcx, "__io_done_event");
-    EmitMovRegImm(X86Register.Rdx, 50);
-    EmitCallImportOnSystemStack("kernel32.dll", "WaitForSingleObject");
-    EmitJmp($"{labelPrefix}_mainthread_loop");
+    EmitMainThreadIoParkLoop(labelPrefix, -0x38);
 
     // Resume: clear io_handle, return bytes transferred
     DefineLabel($"{labelPrefix}_resume");
@@ -2596,24 +2556,7 @@ public partial class X86CodeEmitter {
 
     // MainThread: spin on completions + wake event until our I/O finishes. It never commits, so a
     // completer finds `Wait`, declines the enqueue and leaves it to self-detect here.
-    DefineLabel($"{labelPrefix}_mainthread_loop");
-    EmitDriveSchedulerAndIo();
-    EmitJumpIfNetpollWoken($"{labelPrefix}_resume");
-    EmitCallRuntimeLabel("__gt_dequeue");
-    EmitBytes(0x48, 0x85, 0xC0); // TEST RAX, RAX
-    EmitJcc("z", $"{labelPrefix}_mainthread_park");
-    EmitMovMemReg(-0x38, X86Register.Rax, 8);
-    EmitMovRegImm(X86Register.Rcx, GtStatusRunning);
-    EmitMovIndirectMemReg(X86Register.Rax, GtOffStatus, X86Register.Rcx);
-    EmitLoadCurrentGtInline(X86Register.Rcx);
-    EmitMovRegMem(X86Register.Rdx, -0x38, 8);
-    EmitCallRuntimeLabel("__gt_context_switch");
-    EmitJmp($"{labelPrefix}_mainthread_loop");
-    DefineLabel($"{labelPrefix}_mainthread_park");
-    EmitGlobalLoadReg(X86Register.Rcx, "__io_done_event");
-    EmitMovRegImm(X86Register.Rdx, 50);
-    EmitCallImportOnSystemStack("kernel32.dll", "WaitForSingleObject");
-    EmitJmp($"{labelPrefix}_mainthread_loop");
+    EmitMainThreadIoParkLoop(labelPrefix, -0x38);
 
     // Resume: clear io_handle, return bytes transferred from gt->io_result_val.
     DefineLabel($"{labelPrefix}_resume");
@@ -4805,13 +4748,20 @@ public partial class X86CodeEmitter {
     // context switch that left the completed GT's stack, so the GT's stack is no longer in use when
     // the waiter frees it — which is why this sits at the loop TOP rather than beside the switch.
     //
-    // ⚠ ARM64's WORKER LOOP IS THE ONE DOCUMENTED NON-CALLER OF ITS OWN HELPER, AND THAT REASON DOES
-    // NOT TRANSFER. It withholds __io_poll_kqueue from an idle worker because kqueue's ungated
-    // re-enqueue would let a second M double-schedule a waiter that is cooperatively spinning on the
-    // same event. There is no kqueue here: this backend's netpoll engine is the IOCP drain thread,
-    // which claims through __netpoll_claim and therefore cannot double-schedule against anyone.
-    // x86's omission was __io_check_completions, which no comment ever justified — drift, not a
-    // decision, and now uniform with the other ten sites.
+    // ⚠ THE ONE CALL THIS SITE GAINED BY BEING COLLAPSED IS __io_check_completions, AND ON THIS
+    // BACKEND THAT CALL IS INERT — its only producer, __io_enqueue_completion, is defined and never
+    // called (see EmitIoCheckCompletions), so __io_dequeue_completion always returns NULL. That is
+    // what makes the collapse safe to assert rather than to hope: the emitted behaviour of this loop
+    // cannot have changed. The omission was drift; no comment ever justified it.
+    //
+    // ⚠ DO NOT READ ARM64's WORKER LOOP AS A PRECEDENT FOR OMITTING ANYTHING HERE. Two arm64 sites
+    // stand outside its helper — __sched_worker_park, which drives only __io_check_completions and
+    // documents why (kqueue's ungated re-enqueue would let a second M double-schedule a waiter that
+    // is cooperatively spinning on the same event), and __sched_worker_loop_top, which drives only
+    // the waiter and the timers and documents nothing. Neither reason transfers: there is no kqueue
+    // here, this backend's netpoll engine being the IOCP drain thread, which claims through
+    // __netpoll_claim and so cannot double-schedule against anyone. Whether arm64's loop top SHOULD
+    // drive more is a question only a Mac host can answer, and it is not answered here.
     EmitDriveSchedulerAndIo();
 
     // Check shutdown flag
@@ -6731,30 +6681,10 @@ public partial class X86CodeEmitter {
 
     // MainThread path: we ARE the mainThread, can't switch to ourselves. It never commits, so a
     // completer finds `Wait`, declines the enqueue and leaves it to self-detect here.
-    DefineLabel("__io_submit_sync_mainthread_loop");
-    EmitDriveSchedulerAndIo();
-    // Ask the park word whether the sync worker has claimed our wakeup. It completes through
-    // __io_complete_gt, which claims; finding `Wait` (we never commit here) it declines the enqueue
-    // and leaves the resume to us — which is exactly what this test is for.
-    EmitJumpIfNetpollWoken("__io_submit_sync_resume"); // I/O done, proceed to resume
-    // Try dequeue a runnable GT and run it while we wait
-    EmitCallRuntimeLabel("__gt_dequeue");
-    EmitBytes(0x48, 0x85, 0xC0); // TEST RAX, RAX
-    EmitJcc("z", "__io_submit_sync_mainthread_park");
-    // Got a GT — context-switch to it, come back when someone switches back to us
-    EmitMovMemReg(-0x30, X86Register.Rax, 8); // save dequeued GT
-    EmitMovRegImm(X86Register.Rcx, GtStatusRunning);
-    EmitMovIndirectMemReg(X86Register.Rax, GtOffStatus, X86Register.Rcx);
-    EmitLoadCurrentGtInline(X86Register.Rcx);
-    EmitMovRegMem(X86Register.Rdx, -0x30, 8);
-    EmitCallRuntimeLabel("__gt_context_switch");
-    EmitJmp("__io_submit_sync_mainthread_loop"); // re-check after returning
-    // No GT to run — park on done event briefly, then retry
-    DefineLabel("__io_submit_sync_mainthread_park");
-    EmitGlobalLoadReg(X86Register.Rcx, "__io_done_event");
-    EmitMovRegImm(X86Register.Rdx, 50); // 50ms timeout
-    EmitCallImportOnSystemStack("kernel32.dll", "WaitForSingleObject");
-    EmitJmp("__io_submit_sync_mainthread_loop");
+    // The park-word test inside the loop is what carries this family: the sync worker completes
+    // through __io_complete_gt, which claims; finding `Wait` (we never commit here) it declines the
+    // enqueue and leaves the resume to us.
+    EmitMainThreadIoParkLoop("__io_submit_sync", -0x30);
 
     // Resume here after being re-enqueued by __io_check_completions
     DefineLabel("__io_submit_sync_resume");
@@ -7123,14 +7053,19 @@ public partial class X86CodeEmitter {
   /// each of the five submit families' main-thread arms — must drive exactly these four, in this
   /// order, or the GTs parked on whichever engine it omits never wake.
   ///
-  /// ⚠ IT IS ONE SEQUENCE BECAUSE THE ELEVEN SITES MUST AGREE AND NOTHING ELSE MAKES THEM.
-  /// It was eleven verbatim-ish copies in FOUR different orderings, and the divergence was not
+  /// ⚠ IT IS ONE SEQUENCE BECAUSE THE TEN SITES MUST AGREE AND NOTHING ELSE MAKES THEM.
+  /// It was ten verbatim-ish copies in FOUR different orderings, and the divergence was not
   /// theoretical: <c>__gt_try_await_sched</c> omitted <c>__gt_timer_check</c>, so a
   /// <c>try await</c> whose worker completes on a <c>sleep()</c> deadline was left to whatever
   /// OTHER M happened to poll timers — measured at ~55 ms of added latency per round against its
   /// <c>__gt_await</c> twin, and a hang outright under <c>MAXON_MAX_PROCS=1</c>, where there is no
   /// other M. Pinned by <c>async-await.try-await.drives-the-timer-heap</c>. Adding a fifth engine to
-  /// ten of eleven copies is not a compile error, it is a subset of GTs that hang.
+  /// nine of ten copies is not a compile error, it is a subset of GTs that hang.
+  ///
+  /// ⚠ THE ELEVENTH <c>__gt_process_pending_waiter</c> IN THIS FILE IS NOT A CALLER AND MUST NOT
+  /// BECOME ONE. It is a lone unconditional call at GT-trampoline entry, not an idle spin: it has
+  /// nothing to poll for, it runs once, and driving the timer heap or the recovery net from there
+  /// would be work on the critical path of every single spawn.
   ///
   /// The order matches ARM64's <c>EmitDriveSchedulerAndIo</c> minus <c>__io_poll_kqueue</c>, which
   /// has no x86 counterpart: on Windows the completion port is drained by the dedicated IOCP thread
@@ -7154,6 +7089,68 @@ public partial class X86CodeEmitter {
     EmitCallRuntimeLabel("__io_check_completions");
     EmitCallRuntimeLabel("__gt_timer_check");
     EmitCallRuntimeLabel("__netpoll_recover");
+  }
+
+  /// <summary>
+  /// How long a main-thread I/O park blocks on <c>__io_done_event</c> before re-driving the
+  /// scheduler. It is a backstop, not the wakeup: the event is set by every completer, so this only
+  /// bounds a missed signal. <c>maxon_sleep</c>'s park deliberately uses a shorter one on a
+  /// different handle (it has a deadline to hit and no completer to set the I/O event), and
+  /// <c>__sched_wloop_park</c> a longer one — see each site.
+  /// </summary>
+  private const int MainThreadIoParkTimeoutMs = 50;
+
+  /// <summary>
+  /// The whole main-thread arm of a submit family: <c>&amp;P-&gt;mainThread</c> cannot context-switch
+  /// to itself, so instead of parking it BECOMES the scheduler — drive every engine, ask the park
+  /// word whether our own I/O finished, otherwise run one runnable GT and come back, and when there
+  /// is nothing to run block briefly on the I/O event.
+  ///
+  /// ⚠⚠ THIS IS THE SAME CLASS OF DUPLICATION AS <see cref="EmitDriveSchedulerAndIo"/>, ONE LAYER
+  /// OUT, AND THE RUNG THAT BUILT THAT HELPER LEFT IT STANDING. The four calls at the top of this
+  /// loop were spelled five times and drifted into four different orderings; this loop AROUND them
+  /// was spelled the same five times, and the only reason it had not drifted too is that nobody had
+  /// yet had a reason to edit one copy. A divergence here reads as no bug at any single site and
+  /// costs a subset of GTs their wakeup — omit the <c>status = running</c> stamp in one copy and
+  /// that family dispatches GTs the timer gate will then hand to a second M.
+  ///
+  /// The two things that genuinely differ per family are parameters, not decisions: the label
+  /// prefix, and <paramref name="dequeuedGtSlot"/>, which is scratch space in the CALLER's frame and
+  /// so is chosen by the caller's own layout. Everything else is identical by requirement.
+  ///
+  /// ⚠ <c>maxon_sleep</c>'s main-thread loop is NOT a caller and must not become one. It has no park
+  /// word (it parks on the timer heap), so its exit test is a <c>status</c> read rather than
+  /// <see cref="EmitJumpIfNetpollWoken"/>, and it waits on <c>P-&gt;wakeEvent</c> because no
+  /// completer will ever set the I/O event for a sleeper. That divergence is a decision and stays
+  /// spelled out at its site.
+  /// </summary>
+  private void EmitMainThreadIoParkLoop(string labelPrefix, int dequeuedGtSlot) {
+    DefineLabel($"{labelPrefix}_mainthread_loop");
+    EmitDriveSchedulerAndIo();
+    EmitJumpIfNetpollWoken($"{labelPrefix}_resume");
+
+    // Nothing for us yet — try to run someone else rather than idle.
+    EmitCallRuntimeLabel("__gt_dequeue");
+    EmitTestRegReg(X86Register.Rax, X86Register.Rax);
+    EmitJcc("z", $"{labelPrefix}_mainthread_park");
+
+    // Got a GT. It came off a run queue, so we are the one who marks it running — the convention
+    // that does NOT apply to &P->mainThread; see EmitSwitchToMainThread.
+    EmitMovMemReg(dequeuedGtSlot, X86Register.Rax, 8);
+    EmitMovRegImm(X86Register.Rcx, GtStatusRunning);
+    EmitMovIndirectMemReg(X86Register.Rax, GtOffStatus, X86Register.Rcx);
+    EmitLoadCurrentGtInline(X86Register.Rcx);
+    EmitMovRegMem(X86Register.Rdx, dequeuedGtSlot, 8);
+    EmitCallRuntimeLabel("__gt_context_switch");
+    EmitJmp($"{labelPrefix}_mainthread_loop");
+
+    // Nothing runnable — block briefly, then re-drive. Never block without a timeout: this thread
+    // is the only scheduler its P has while it sits here.
+    DefineLabel($"{labelPrefix}_mainthread_park");
+    EmitGlobalLoadReg(X86Register.Rcx, "__io_done_event");
+    EmitMovRegImm(X86Register.Rdx, MainThreadIoParkTimeoutMs);
+    EmitCallImportOnSystemStack("kernel32.dll", "WaitForSingleObject");
+    EmitJmp($"{labelPrefix}_mainthread_loop");
   }
 
   private void EmitIoSubmitOverlappedCore(string ioFuncName, string labelPrefix) {
@@ -7275,27 +7272,7 @@ public partial class X86CodeEmitter {
     // MainThread: spin on completions + wake event until our I/O finishes. It never commits — it
     // has no schedulable stack — so a completer finds `Wait`, declines the enqueue and leaves it to
     // self-detect here, which is what the old stackBase==0 guard did by hand.
-    DefineLabel($"{labelPrefix}_mainthread_loop");
-    EmitDriveSchedulerAndIo();
-    EmitJumpIfNetpollWoken($"{labelPrefix}_resume");
-    // Try dequeue a runnable GT
-    EmitCallRuntimeLabel("__gt_dequeue");
-    EmitBytes(0x48, 0x85, 0xC0); // TEST RAX, RAX
-    EmitJcc("z", $"{labelPrefix}_mainthread_park");
-    // Got a GT — run it
-    EmitMovMemReg(-0x28, X86Register.Rax, 8);
-    EmitMovRegImm(X86Register.Rcx, GtStatusRunning);
-    EmitMovIndirectMemReg(X86Register.Rax, GtOffStatus, X86Register.Rcx);
-    EmitLoadCurrentGtInline(X86Register.Rcx);
-    EmitMovRegMem(X86Register.Rdx, -0x28, 8);
-    EmitCallRuntimeLabel("__gt_context_switch");
-    EmitJmp($"{labelPrefix}_mainthread_loop");
-    // No GT — park briefly
-    DefineLabel($"{labelPrefix}_mainthread_park");
-    EmitGlobalLoadReg(X86Register.Rcx, "__io_done_event");
-    EmitMovRegImm(X86Register.Rdx, 50);
-    EmitCallImportOnSystemStack("kernel32.dll", "WaitForSingleObject");
-    EmitJmp($"{labelPrefix}_mainthread_loop");
+    EmitMainThreadIoParkLoop(labelPrefix, -0x28);
 
     // Resume: clear io_handle, return bytes transferred
     DefineLabel($"{labelPrefix}_resume");
