@@ -935,6 +935,18 @@ export union ParseError implements Error
 	// the block label. `isOtherwiseForm` picks the message: the grouped-`try` form or the block-`otherwise`
 	// form (both name the single-statement alternatives the arm can use instead).
 	tryBlockFormInMatchArm(isOtherwiseForm bool, line LineNumber, column ColumnNumber)
+	// A block-form `try 'label' … end 'label'` whose body holds no throwing call. Renders as **E3083**,
+	// positioned at the `try`. The construct exists to funnel several throwing calls into ONE handler, so a
+	// body that can never fail leaves that handler unreachable — and the author has either mis-spelled the
+	// call or does not need the construct. `label` names the block. Same code, position and sentence as the
+	// reference bootstrap's `SemanticTryBlockNoThrows`.
+	tryBlockNoThrows(label String, line LineNumber, column ColumnNumber)
+	// A block-form `try` with no `otherwise (e) 'label' … end` handler after its `end`. Renders as **E2050**,
+	// ONE code with two messages — `missingBinding` picks them: the handler is ABSENT (positioned at the
+	// `try`), or it is present but declares no `(e)` binding (positioned where the binding should have been).
+	// A block form with no handler has nothing for a routed error to reach; one with no binding has no name
+	// to `match` on, which is the handler's whole job. The reference bootstrap refuses both on this code.
+	tryBlockMissingOtherwise(missingBinding bool, line LineNumber, column ColumnNumber)
 	// A `try` applied to a call that cannot throw — `try noFail()`. Renders as **E3055**, positioned at the
 	// `try` token. It is a PARSE error (not SemanticCheck's, where its throws-band siblings E3054/E3057 live)
 	// for a positional reason: the reference gates it byte-for-byte at the `try` keyword, and only the
@@ -5222,6 +5234,30 @@ function moveMarkPrefix(mark MoveMark, height BindingMark) returns MoveMark
 	return MoveMark.create(moved, values: values)
 end 'moveMarkPrefix'
 
+// Do two marks record the SAME set of moved-from bindings? Only the `movedFrom` bits are compared — the
+// VALUES legitimately differ between two points in one body (a reassigned `var` holds a different SSA id)
+// and say nothing about who owes a drop.
+//
+// Its one use is a block-form `try`'s N throw edges (`recordRoutedEdge`): the shared handler is entered
+// with ONE ownership state, so every routed call must leave the outer bindings in the same one. Marks of
+// UNEQUAL height are a disagreement rather than a panic — both are prefixes at the same owned floor, so a
+// height difference would mean the floor itself moved, which the caller's refusal reports as the same
+// unreconcilable shape.
+function moveMarksAgree(a MoveMark, b MoveMark) returns bool
+	if a.moved.count() != b.moved.count() 'differentHeights'
+		return false
+	end 'differentHeights'
+
+	for i in 0 upto a.moved.count() 'each'
+		let am = try a.moved.get(i) otherwise panic("moveMarksAgree: a.moved.get OOB at {i}")
+		let bm = try b.moved.get(i) otherwise panic("moveMarksAgree: b.moved.get OOB at {i}, at the same height as a")
+		if am != bm 'disagrees'
+			return false
+		end 'disagrees'
+	end 'each'
+	return true
+end 'moveMarksAgree'
+
 // How a `try … otherwise …`'s error handler affects the merge (P1.4b). The success (`ok`) block always
 // carries the tryCall's `result`; the error block's shape is one of:
 //   • `value(v)`      — `otherwise <expr>` produced a fallback value; both edges merge into a result phi.
@@ -5718,6 +5754,66 @@ end 'LoopContext'
 
 typealias LoopContextArray = Array with LoopContext
 
+// ⭐⭐ **THE STATE ONE BLOCK-FORM `try 'l' … end 'l' otherwise (e) 'h' … end 'h'` CARRIES WHILE ITS BODY IS
+// PARSED.** A stack, innermost on top: a nested block-form `try` routes its body's throws to its OWN handler,
+// and the stack is popped BEFORE the handler parses, so a throwing call inside a handler belongs to the
+// ENCLOSING block (or to no block at all, and is then the ordinary E3057).
+//
+// ⭐ **THE ERROR BLOCK IS CREATED — AND ITS PHIS MINTED — BEFORE THE BODY, BECAUSE EVERY ROUTED CALL BRANCHES
+// TO IT.** shv2's parser is SSA with block args, not v1's slot machine (`__tryBlockErr`/`__tryBlockDiscr`
+// mem2reg'd later), so the shared handler cannot read "the flag" out of memory: each routed call defines its
+// OWN flag value and the handler sees them merged through a block arg. `flagPhi` is that arg, and `phiVars`
+// carries the same treatment to every mutable binding the body may reassign — the identical model
+// `mintLoopHeaderPhis` builds for a loop header, whose N incoming edges this block's N routed calls are
+// exactly analogous to. The carried set is read off the TOKENS before the body is parsed (see
+// `parseTryBlockStatement`), which is why the phis can exist that early at all.
+type TryBlockContext
+	// The function the block is in — the one thing the ROUTER needs that its emit-time doors cannot hand it.
+	// `emitRuntimeCall` has no `func` parameter and 88 callers, so threading one to reach `newBlock` would
+	// have been the construct's cost charged to every runtime call in the compiler; the block that owns the
+	// routing already knows it.
+	export let func as IrFunction
+	// The `try` keyword — the anchor for every op the ROUTING synthesizes (the flag test, the branch, the
+	// landing-pad drops). None of them is spawned by a source token, and the construct that wired them is
+	// where a reader looks; `desugarTry` anchors its own fork the same way.
+	export let tryTok as Token
+	export let label as ByteArray
+	export let errBlockId as BlockId
+	export let flagPhi as ValueId
+	export let phiVars as LoopPhiVarArray
+	// The owned-binding height at the `try`, so a routed throw releases exactly what the BODY declared and
+	// still owns at that point — the body's `end` is jumped over, so its fall-through drops never run.
+	export let ownedFloor as BindingMark
+	// The error type routed so far, `none` until the first routed call. It types the `(e)` binding
+	// (`tryErrorEnumType`) — read from the SAME `throwsOf` clause the routing decision is made on, so what
+	// the handler binds and what the router accepted cannot disagree.
+	export var throwsClause as ThrowsClause
+	// A SECOND, different error type reaching the same handler. Recorded rather than thrown because the
+	// router cannot throw (see `routeBareThrowingCallToTryBlock`); `parseTryBlockStatement` refuses it at the
+	// body's end, before the handler is parsed and before any of it is lowered.
+	export var conflictingType as String
+	// ⭐⭐ **THE OWNERSHIP STATE THE HANDLER IS ENTERED WITH — the move flags of the bindings declared
+	// OUTSIDE this block, as the FIRST routed call left them.** The handler is a sibling path of the body,
+	// not its continuation, so it must not inherit whatever the body went on to move after the throw edge
+	// was taken; `if`/`else` states the same rule by rewinding to `entryMoveMark` before the else branch.
+	// Truncated to `ownedFloor` (`moveMarkPrefix`) because the body's OWN bindings differ in number from one
+	// routed call to the next and are released by the landing pad regardless — only the outer ones survive
+	// the edge and can still be owed a drop.
+	export var edgeMoveMark as MoveMark
+	// A LATER routed call whose outer-ownership state DISAGREES with `edgeMoveMark` — the body moved an
+	// outer binding BETWEEN two routed calls, so the shared handler is reached with that binding live on one
+	// edge and already given away on another. One handler cannot be right for both, so
+	// `requireRoutableTryBlockBody` refuses it; recorded here rather than thrown for `conflictingType`'s
+	// reason (the router cannot throw).
+	export var conflictingMoveEdge as bool
+
+	export static function create(func IrFunction, tryTok Token, label ByteArray, errBlockId BlockId, flagPhi ValueId, phiVars LoopPhiVarArray, ownedFloor BindingMark) returns TryBlockContext
+		return Self{func: func, tryTok: tryTok, label: label, errBlockId: errBlockId, flagPhi: flagPhi, phiVars: phiVars, ownedFloor: ownedFloor, throwsClause: ThrowsClause.none, conflictingType: "", edgeMoveMark: MoveMark.create(BoolArray.create(), values: ValueIdArray.create()), conflictingMoveEdge: false}
+	end 'create'
+end 'TryBlockContext'
+
+typealias TryBlockContextArray = Array with TryBlockContext
+
 // The name of the internal binding a `for … in` over an OWNED array TEMPORARY moves that temporary
 // into (`parseForStatement`). It is never installed in a `Scope`, so no source line can name it; the
 // `__` prefix is what says so anyway, since `requireUnreservedName` bars every declaration from that
@@ -5796,7 +5892,7 @@ end 'tokenIsLiteralKind'
 // tail panic, so neither half can be extended alone. Its third reader is `parenGroupCanBeAParameterList`,
 // which needs the same set to tell a parameter list from an arbitrary parenthesized expression.
 function kindSpellsBlockStructure(kind TokenKind) returns bool
-	return kind == TokenKind.while or kind == TokenKind.match or kind == TokenKind.for or kind == TokenKind.if or kind == TokenKind.else or kind == TokenKind.otherwise or kind == TokenKind.end
+	return kind == TokenKind.while or kind == TokenKind.match or kind == TokenKind.for or kind == TokenKind.if or kind == TokenKind.else or kind == TokenKind.otherwise or kind == TokenKind.end or kind == TokenKind.try
 end 'kindSpellsBlockStructure'
 
 // ⭐ **CAN `tok` SERVE AS A NAME — in any position where a name is the ONLY thing that may stand?** An
@@ -6662,6 +6758,42 @@ export type Parser
 	// target here; a `while` pushes on entry and pops after its body. Reset per
 	// function (a stray entry across functions would be a parser bug).
 	var loops as LoopContextArray
+	// The enclosing BLOCK-FORM `try` bodies, innermost last. A bare throwing call routes to the innermost;
+	// empty means there is none and a bare throwing call stays a plain `call`, which is exactly what
+	// `SemanticCheck.validatePlainCall` reports E3057 on.
+	//
+	// ⭐ **THE LIFETIME RULE FOR THIS FIELD AND ITS COMPANION FLAG BELOW, STATED HERE ONCE — the three reset
+	// sites point at this paragraph rather than restating it.** Both are per-function state, and both follow
+	// `loops`/`matches` exactly:
+	//
+	//   • **RESET at the start of a function body** (`parseFunction`, `parseParamDefaultHelper`,
+	//     `parseClosureExpression`). A stray context would name an error block, a phi and an `IrFunction`
+	//     from the PREVIOUS function, so a routed call would branch across a function boundary. The reset is
+	//     real rather than defensive: a `ParseError` thrown inside a body or a try target skips the pops and
+	//     restores below, and the next function must not inherit the wreckage.
+	//   • **SAVED AND RESTORED around a CLOSURE** (`parseClosureExpression` only). It is the one re-entrant
+	//     door — the other two reach a fresh function from a drained top level, so they owe no restore, while
+	//     a closure resumes the enclosing body afterwards. Reset without restore there returns to a
+	//     block-form `try` body with an empty stack: its remaining throwing calls stop routing, and its `end`
+	//     panics on the pop.
+	var tryBlocks as TryBlockContextArray
+	// ⛔ **TRUE WHILE A CALL ABOUT TO BE EMITTED MUST *NOT* BE ROUTED to the enclosing block-form `try`'s
+	// handler** (`routeBareThrowingCallToTryBlock` reads it and declines). TWO different reasons set it, and
+	// naming the EFFECT rather than one of the reasons is what lets the second one exist:
+	//
+	//   • **SOMEONE ELSE WILL REWRITE THIS CALL** — an explicit `try`'s target (`parseTryCallTarget`) and a
+	//     `for … in <cursor>` advance (`emitCursorAdvance`), each of which turns the `call` into a `tryCall`
+	//     itself. Routed first, the call would be rewritten TWICE and `try f() otherwise 0` written inside a
+	//     `try 'l' … end` body would have its error stolen by the enclosing block. The bootstrap holds the
+	//     same fact as `_inTryContext` (`2-Parser.cs:23844`).
+	//   • **THE CALL HAS NO AUTHOR-VISIBLE ERROR PATH AT ALL** — a synthesized incref/decref
+	//     (`emitOwnershipRuntimeCall`). Those are emitted INTO the routing's own landing pads and merge
+	//     edges, so routing one would fork a block the router is mid-way through building.
+	//
+	// ⚠ Both reasons are LOCAL to a call the parser is about to emit, so every site brackets it: read the
+	// old value, set true, emit, restore. It is never left set across a statement. Same per-function reset
+	// and per-closure save/restore as `tryBlocks` above (see that field's lifetime rule).
+	var tryBlockRoutingSuppressed as bool
 	// The enclosing match STATEMENTS, innermost last — the other half of the break-target stack (see
 	// `MatchContext` for why `break` needs its own rather than sharing `loops`). `continue` never reads
 	// it. Reset per function AND per closure exactly as `loops` is: without the closure reset, a `break`
@@ -7523,6 +7655,8 @@ export type Parser
 			mutableVarShadowed: sharedEmptyMutableVarShadowed,
 			mutableVarInnermost: sharedEmptyMutableVarInnermost,
 			loops: LoopContextArray.create(),
+			tryBlocks: TryBlockContextArray.create(),
+			tryBlockRoutingSuppressed: false,
 			matches: MatchContextArray.create(),
 			iterationLockedBindings: sharedEmptyIterationLocks,
 			lastBlockBodyEnd: 0,
@@ -8949,9 +9083,10 @@ export type Parser
 			// filter, so over-including here is harmless.
 			// ⚠ A sibling's name may be a KEYWORD (D8: `to(item)` resolving to `self.to(item)`), so the callee is
 			// read through `tokenCanBeAName` — MINUS the block-structure kinds, which is not a hedge: a
-			// parenthesized loop condition IS `while (`, and a bare call to a sibling literally named
-			// `while`/`match`/`for`/`end` is a program `keywordIsANameInOperandPosition` already refuses, so the
-			// seven can only be false positives here.
+			// parenthesized loop condition IS `while (`, and a bare call to a sibling literally named by one of
+			// those keywords is a program `keywordIsANameInOperandPosition` already refuses, so every kind in
+			// that set can only be a false positive here. (Deliberately NOT a count: the set grows — `try`
+			// joined it with the block form — and a number written here would rot on the day it did.)
 			if tokenCanBeAName(self.tokenAt(q)) and not kindSpellsBlockStructure(kind) and self.isBareCallAt(q) 'bareCall'
 				callees.push(self.tokenAt(q).value)
 			end 'bareCall'
@@ -13917,6 +14052,9 @@ export type Parser
 		// function's SSA space, so a move-out would null the wrong slot.
 		self.lastFieldReadValid = false
 		self.loops = LoopContextArray.create()
+		// Fresh per function, with its companion flag — see the `tryBlocks` field declaration for why.
+		self.tryBlocks = TryBlockContextArray.create()
+		self.tryBlockRoutingSuppressed = false
 		self.matches = MatchContextArray.create()
 		// ⚠ Balanced by construction — pushed and popped around each `for` body — EXCEPT on the error path,
 		// where a `ParseError` thrown inside a body skips the release. So the reset is real; it points back
@@ -14711,6 +14849,9 @@ export type Parser
 		self.pendingTempDrops = ValueIdArray.create()
 		self.lastFieldReadValid = false
 		self.loops = LoopContextArray.create()
+		// Fresh per function, with its companion flag — see the `tryBlocks` field declaration for why.
+		self.tryBlocks = TryBlockContextArray.create()
+		self.tryBlockRoutingSuppressed = false
 		self.matches = MatchContextArray.create()
 		self.iterationLockedBindings = sharedEmptyIterationLocks
 		self.valueTags = ValueTypeTagArray.create()
@@ -15617,6 +15758,14 @@ export type Parser
 		end 'continueStmt' else if self.at(TokenKind.throw) 'throwStmt'
 			try self.parseThrowStatement(func, block: block)
 		end 'throwStmt' else if self.at(TokenKind.try) 'tryStmt'
+			// The BLOCK form (`try 'label' … end 'label' otherwise (e) 'h' … end 'h'`) is a statement and
+			// nothing else — it groups statements and yields no value — so it forks HERE, off the same
+			// label lookahead the extent scan reads (`tryOpensBlockAt`). `parseTry` keeps its own refusal of
+			// the form for the EXPRESSION position that still cannot take it.
+			if self.tryOpensBlockAt(self.pos) 'blockForm'
+				return try self.parseTryBlockStatement(func, block: block)
+			end 'blockForm'
+
 			// A `try` in statement position — its value is discarded; the forms are the propagate,
 			// the control-flow `otherwise`s, `otherwise ignore`, and the block handlers.
 			_ = try self.parseTry(func, resultUsed: false)
@@ -17997,10 +18146,37 @@ export type Parser
 		try self.emitThrowError(func, anchor: throwTok)
 	end 'parseThrowStatement'
 
+	// ⛔⛔ **A BARE `throw` INSIDE A BLOCK-FORM `try` BODY IS REFUSED, AND THE ALTERNATIVE WAS A SILENT WRONG
+	// ANSWER.** Both references ROUTE such a throw to the enclosing block's handler — it is the whole point of
+	// `routeBareThrowToTryBlock` (`2-Parser.cs:23904`) and `routeBareThrowToActiveTryBlock`
+	// (`maxon-selfhosted/Parser.maxon:13362`), and the bootstrap's comment records that NOT routing it used to
+	// let the error escape the block, which it calls a correctness bug. MEASURED here before this guard, on a
+	// body holding one routed call and one `throw AErr.beta`: the bootstrap answers **6** (the handler's `beta`
+	// arm) and shv2 answered **3** — the throw neither reached the handler nor left the function.
+	//
+	// ⭐ **IT IS REFUSED RATHER THAN ROUTED BECAUSE ROUTING IT WOULD BE A SECOND COPY OF THE THROW ENCODE.**
+	// A routed throw must become the error FLAG the handler's phi merges — `ordinal + ErrorFlagOrdinalBias`
+	// for a scalar enum, the box pointer for a boxed union — and in shv2 that encode is written exactly once,
+	// at the Std tier, by `LowerMaxonToStd.lowerThrowError` off the `throwError` TERMINATOR this routine
+	// emits. Producing the same flag as a VALUE here would be that encode spelled a second time in the
+	// parser, free to disagree with the one every catch site decodes against. Routing arrives with a
+	// value-producing form of the encode; until then this is loud.
+	//
+	// The stack is popped before the HANDLER parses, so `otherwise (e) 'h' … throw … end 'h'` is untouched —
+	// it re-throws to the enclosing function exactly as the reference does (measured: both exit 8).
+	function rejectThrowInsideTryBlockBody(anchor Token) throws ParseError
+		if self.tryBlocks.count() == 0 'notInATryBlockBody'
+			return
+		end 'notInATryBlockBody'
+
+		throw ParseError.unsupported("a bare `throw` inside a block-form `try 'label' … end` body — the references route it to the block's shared handler, and shv2's error-flag ENCODE exists only as the Std-tier lowering of the `throwError` terminator, so there is no value form of it for a routed edge to carry. Move the `throw` into a function the body calls, or out of the block", line: anchor.line, column: anchor.column)
+	end 'rejectThrowInsideTryBlockBody'
+
 	// Parse the thrown enum expression and emit the `throwError` terminator into `currentBlock`. Shared by
 	// the `throw <e>` statement and the match `default throws <E.case>` arm (which differ only in the
 	// keyword their caller consumed — `throw` vs `throws`).
 	function emitThrowError(func IrFunction, anchor Token) throws ParseError
+		try self.rejectThrowInsideTryBlockBody(anchor)
 		let errValue = try self.parseExpression(func, block: self.currentBlock)
 		let errorType = self.typeOf(errValue)
 
@@ -18251,14 +18427,14 @@ export type Parser
 	function parseTry(func IrFunction, resultUsed bool) returns ValueId throws ParseError
 		let tryTok = try self.consume(TokenKind.try)
 
-		// A block-form `try 'label' … end` (grouping multiple calls) is a later slice; only a match arm
-		// needs it rejected here (E2049 at the block label).
-		if self.at(TokenKind.charLiteral) 'blockForm'
-			if self.inMatchArmBody 'inArm'
-				throw ParseError.tryBlockFormInMatchArm(false, line: tryTok.line, column: tryTok.column)
-			end 'inArm'
-			throw ParseError.unsupported("block-form `try 'label' … end` (grouping multiple calls in one try) — a later slice; use a single-statement `try call()` optionally with `otherwise`", line: tryTok.line, column: tryTok.column)
-		end 'blockForm'
+		// ⭐ **A BLOCK-FORM `try` REACHING HERE IS IN AN EXPRESSION POSITION**, and that is the only way it
+		// can: `parseStatement` forks the statement spelling to `parseTryBlockStatement` before this routine
+		// is entered (both read the same `tryOpensBlockAt` label lookahead). The construct GROUPS statements
+		// and yields nothing, so there is no value for the enclosing expression to take — the same rule that
+		// makes an `if` a statement and a `<t> if <c> else <f>` the expression spelling.
+		if self.at(TokenKind.charLiteral) 'blockFormInValuePosition'
+			throw ParseError.errorTypeMismatch("a block-form `try 'label' … end` groups statements and yields no value, so it cannot stand where a value is expected — use a single-statement `try call()` with an `otherwise <value>` fallback", line: tryTok.line, column: tryTok.column)
+		end 'blockFormInValuePosition'
 
 		// ⭐⭐ **WHERE THE TARGET'S OWN OPS BEGIN — the fact that makes "the LAST op in the block" mean "the
 		// TARGET'S last op".** `module.ops` is append-only for the whole parse (nothing truncates it, and a
@@ -18307,7 +18483,38 @@ export type Parser
 	// own position (the void-callee E3059). A second copy of that question inside the target answers it from
 	// the wrong place — reporting "this call's value cannot be used" for a `try f().push(1)` STATEMENT, whose
 	// value is not used at all — where the real fault is that `push` cannot throw (E3055).
+	// ⭐⭐ **THE ROUTINE BOTH `try` TARGETS FUNNEL THROUGH, WHICH IS WHY THE BLOCK-FORM SUPPRESSION SITS
+	// HERE.** The call this parses is about to be rewritten into a `tryCall` by the caller's own desugar, so
+	// the block-form router must not claim it first: a `try f() otherwise 0` written INSIDE a `try 'l' … end`
+	// body catches its own error and the enclosing block never sees it — the bootstrap's `_inTryContext`
+	// (`2-Parser.cs:23844`) and v1's op-kind exclusion (`Parser.maxon:13233`, which skips a `tryCall`) both
+	// draw the same line. Its two callers are the EXPRESSION form (`parseTry`) and the `if try` form
+	// (`parseCatchingCondition`), and setting the flag in each would be the same fact written twice.
+	//
+	// ⚠ **IT IS NOT THE ONLY SITE THAT SUPPRESSES, AND SAYING OTHERWISE ROTS.** The `for … in <cursor>`
+	// advance (`emitCursorAdvance`) claims a call for `rewriteLastCallToTryCall` WITHOUT parsing a try target
+	// — it synthesizes the call itself, so there is no target grammar for it to come through here for — and
+	// the synthesized ownership calls suppress for a different reason entirely (`emitOwnershipRuntimeCall`).
+	// What all of them share is the FLAG, whose own header enumerates them; this routine is one setter of it.
+	//
+	// ⚠ **A `ParseError` FROM THE TARGET SKIPS THE RESTORE, AND THAT IS HARMLESS BY CONSTRUCTION**: the flag
+	// is re-seeded per function beside `tryBlocks`, and a parse error ends this file's parse regardless.
+	//
+	// ⚠ **THE SUPPRESSION COVERS THE TARGET'S ARGUMENTS TOO, WHICH IS A NARROWING WORTH KNOWING.** A bare
+	// throwing call in an explicit try target's argument list inside a block body — `try g(h())`, `h`
+	// throwing — is not routed and stays a plain `call`, so it is the ordinary E3057 telling the author to
+	// `try` it. That is what a bare `h()` gets everywhere else in the language today; the block form does not
+	// make it worse, it simply does not yet make it better.
 	function parseTryCallTarget(func IrFunction) returns ValueId throws ParseError
+		let savedRoutingSuppressed = self.tryBlockRoutingSuppressed
+		self.tryBlockRoutingSuppressed = true
+		let target = try self.parseTryTargetExpression(func)
+		self.tryBlockRoutingSuppressed = savedRoutingSuppressed
+		return target
+	end 'parseTryCallTarget'
+
+	// The target's GRAMMAR, split from the state above so the flag brackets every path through it.
+	function parseTryTargetExpression(func IrFunction) returns ValueId throws ParseError
 		// P1.5-B2b: `try await p` — the awaited THROWING promise is the try target (the AWAIT is the throwing
 		// operation). Emit the `await` op via the SHARED `emitAwaitOp`, WITHOUT the plain-await E3057 reject:
 		// catching the thrown error is exactly what `try await` does. `rewriteLastCallToTryCall` then converts
@@ -18324,7 +18531,7 @@ export type Parser
 		end 'awaitTarget'
 
 		return try self.parsePostfix(func, value: try self.parseTryCallReceiver(func), resultUsed: false)
-	end 'parseTryCallTarget'
+	end 'parseTryTargetExpression'
 
 	// The PRIMARY a `try` target's postfix chain starts from — a free call `f(…)`, a method/qualified call
 	// `obj.m(…)` / `Type.m(…)` / `Self.m(…)`, a `self.m(…)`, a field-chain call, or an array / byte-string
@@ -18734,8 +18941,10 @@ export type Parser
 	// `flag` its error flag, both defined by the `tryCall` in `currentBlock`.
 	function desugarTry(func IrFunction, tryTok Token, result ValueId, flag ValueId, target TryTarget, resultUsed bool) returns ValueId throws ParseError
 		let entryBlock = self.currentBlock
-		let zero = self.emitLiteral(0, valueType: MaxonType.integer, range: SourceRange.ofToken(tryTok))
-		let isErr = try self.emitCompare(flag, rhs: zero, op: MaxonCmpOp.ne, opTok: tryTok)
+		// `NoErrorFlag`, not a bare `0`: this is the dual-register ABI's "no error in flight" value, the one
+		// the throw ENCODE's bias reserves, and it is read here and by the block form's own flag test.
+		let noError = self.emitLiteral(NoErrorFlag, valueType: MaxonType.integer, range: SourceRange.ofToken(tryTok))
+		let isErr = try self.emitCompare(flag, rhs: noError, op: MaxonCmpOp.ne, opTok: tryTok)
 
 		var okBlock = self.newBlock(func, label: b"tryok", line: tryTok.line)
 		let errBlock = self.newBlock(func, label: b"tryerr", line: tryTok.line)
@@ -18744,6 +18953,12 @@ export type Parser
 		// Values entering both branches: the ok path leaves the carried vars unchanged, so `entryVals`
 		// is what it carries; the error handler may reassign them (`otherwise 'err' result = 42`).
 		let entryVals = self.snapshotBindings(self.mutableVars)
+		// ⭐ **AND THE SAME SNAPSHOT FOR THE DROP-GATING BIT.** The ok edge leaves this fork having moved
+		// nothing (the handler is the only thing parsed between here and the merge), so `entryMoveMark` IS
+		// the ok edge's move state — which makes it both the state to rewind to when the handler terminates
+		// and the ok edge's half of the reconciliation when it does not. `parseIfStatement` captures its
+		// `entryMoveMark` at the identical point for the identical pair of uses.
+		let entryMoveMark = self.captureMoveMark()
 
 		// ⭐ **A MANAGED tryCall RESULT IS OWNED ONLY ON THE OK EDGE — pull it out of the ENTRY-block drop
 		// set before the handler parses.** `mintOwnedCallResult` tracked the result as an owned pending
@@ -18800,19 +19015,38 @@ export type Parser
 		self.currentBlock = errBlock
 		let handler = try self.parseOtherwiseHandler(func, result: result, flag: flag, target: target, resultUsed: resultUsed, tryTok: tryTok)
 		var errEnd = self.currentBlock
+		let errMoveMark = self.captureMoveMark()
 
 		return match handler 'h'
-			terminated gives self.finishTerminatedTry(okBlock, entryVals: entryVals, result: result)
-			value(otherwiseValue) gives try self.finishValueTry(func, okBlock: okBlock, errEnd: errEnd, result: result, otherwiseValue: otherwiseValue, tryTok: tryTok)
-			fellThrough gives try self.finishFellThroughTry(func, okBlock: okBlock, errEnd: errEnd, entryVals: entryVals, result: result, resultUsed: resultUsed, tryTok: tryTok)
+			terminated gives self.finishTerminatedTry(okBlock, entryVals: entryVals, entryMoveMark: entryMoveMark, result: result)
+			value(otherwiseValue) gives try self.finishValueTry(func, okBlock: okBlock, errEnd: errEnd, result: result, otherwiseValue: otherwiseValue, entryMoveMark: entryMoveMark, errMoveMark: errMoveMark, tryTok: tryTok)
+			fellThrough gives try self.finishFellThroughTry(func, okBlock: okBlock, errEnd: errEnd, entryVals: entryVals, result: result, resultUsed: resultUsed, entryMoveMark: entryMoveMark, errMoveMark: errMoveMark, tryTok: tryTok)
 		end 'h'
 	end 'desugarTry'
 
+	// ⭐⭐ **RECONCILE A `try`'s TWO LIVE EDGES' MOVE STATE — the ok edge, which moved nothing since the fork,
+	// and the handler's, which may have.** A binding moved on one edge and live on the other is dropped on
+	// the live edge and marked uniformly moved past the merge, so the later scope-exit drop is correct on
+	// both paths. Shared by the two `desugarTry` finishes that HAVE two live edges (`finishValueTry`,
+	// `finishFellThroughTry`), because the reconciliation is the same three lines and the same reason at
+	// both, and the terminated finish has one edge and rewinds instead.
+	//
+	// Called BEFORE the edges' branches are emitted: `reconcileMovesAtMerge` appends each decref to the
+	// edge block that owes it, and that has to land ahead of that block's jump to the continuation.
+	function reconcileTryMergeMoves(okBlock IrBlock, errEnd IrBlock, entryMoveMark MoveMark, errMoveMark MoveMark, tryTok Token)
+		var moveEdges = ReachingMoveEdgeArray.create()
+		moveEdges.push(ReachingMoveEdge.create(okBlock, mark: entryMoveMark))
+		moveEdges.push(ReachingMoveEdge.create(errEnd, mark: errMoveMark))
+		self.reconcileMovesAtMerge(moveEdges, anchor: tryTok)
+	end 'reconcileTryMergeMoves'
+
 	// The error handler TERMINATED (propagate / return / break / continue / throw / panic): only the ok
-	// block reaches the continuation. Restore the carried vars to their pre-try values (the error path's
-	// reassignments do not reach here) and continue in the ok block.
-	function finishTerminatedTry(okBlock IrBlock, entryVals ValueIdArray, result ValueId) returns ValueId
+	// block reaches the continuation. Restore the carried vars AND the drop-gating move state to their
+	// pre-try values (neither the error path's reassignments nor its MOVES reach here — it dropped its own
+	// live values on the way out) and continue in the ok block.
+	function finishTerminatedTry(okBlock IrBlock, entryVals ValueIdArray, entryMoveMark MoveMark, result ValueId) returns ValueId
 		self.restoreBindings(self.mutableVars, snapshot: entryVals)
+		self.restoreMoveMark(entryMoveMark)
 		self.currentBlock = okBlock
 
 		// ⭐ **RE-ENROL A MANAGED RESULT AS AN OWNED TEMP ON THE OK PATH.** The error handler terminated, so
@@ -18832,7 +19066,7 @@ export type Parser
 	// `otherwise <expr>` — both edges reach a fresh continuation carrying a result phi of `result` (ok)
 	// and `otherwiseValue` (err). No carried-var phis: an `otherwise` VALUE is an expression, which
 	// assigns no binding, so the ok and err edges agree on every carried var.
-	function finishValueTry(func IrFunction, okBlock IrBlock, errEnd IrBlock, result ValueId, otherwiseValue ValueId, tryTok Token) returns ValueId throws ParseError
+	function finishValueTry(func IrFunction, okBlock IrBlock, errEnd IrBlock, result ValueId, otherwiseValue ValueId, entryMoveMark MoveMark, errMoveMark MoveMark, tryTok Token) returns ValueId throws ParseError
 		// CONSUMER GUARD for the void-result invariant OPEN #55 fixed at the producer: a void `try`-result
 		// has no width, so a value merge is ill-formed and `mintPhi` below would build a void phi block-arg
 		// lowering can't type. `parseUnboundOtherwiseForm`'s value-form guard already rejects it (E3059) —
@@ -18953,6 +19187,10 @@ export type Parser
 			self.trackOwnedTemp(phiId)
 		end 'enrolPhi'
 
+		// A VALUE fallback is an expression, but an expression can still CONSUME (`otherwise takeIt(s)`), so
+		// the two edges are reconciled here for the same reason the fell-through form reconciles.
+		self.reconcileTryMergeMoves(okBlock, errEnd: errEnd, entryMoveMark: entryMoveMark, errMoveMark: errMoveMark, tryTok: tryTok)
+
 		var okArgs = ValueIdArray.create()
 		okArgs.push(result)
 		self.recordBranchEdge(okBlock, targetId: cont.id, argIds: okArgs)
@@ -18999,7 +19237,7 @@ export type Parser
 	// `otherwise ignore` or a block handler that FELL THROUGH — both edges reach a fresh continuation
 	// with no try-value. Merge the carried vars a block handler may have reassigned (`mergeAtContinuation`
 	// mints a phi only where the two edges differ). The returned `result` is the discarded statement value.
-	function finishFellThroughTry(func IrFunction, okBlock IrBlock, errEnd IrBlock, entryVals ValueIdArray, result ValueId, resultUsed bool, tryTok Token) returns ValueId throws ParseError
+	function finishFellThroughTry(func IrFunction, okBlock IrBlock, errEnd IrBlock, entryVals ValueIdArray, result ValueId, resultUsed bool, entryMoveMark MoveMark, errMoveMark MoveMark, tryTok Token) returns ValueId throws ParseError
 		// ⭐ **A FELL-THROUGH HANDLER CARRIES NO VALUE, SO IT CANNOT STAND IN A VALUE POSITION.** `otherwise
 		// ignore` and a handler block that runs off its end both catch the error and produce nothing, so the
 		// error edge reaches the merge with no value while a value position needs one on BOTH edges — and for
@@ -19014,6 +19252,12 @@ export type Parser
 
 		var cont = self.newBlock(func, label: b"trycont", line: tryTok.line)
 		let errVals = self.snapshotBindings(self.mutableVars)
+
+		// A block handler is statements, so it can move an outer owned binding (`otherwise (e) 'h'
+		// consume(s) end 'h'`) where the ok edge left it live — reconciled across the two edges before
+		// either branches. See `reconcileTryMergeMoves`.
+		self.reconcileTryMergeMoves(okBlock, errEnd: errEnd, entryMoveMark: entryMoveMark, errMoveMark: errMoveMark, tryTok: tryTok)
+
 		self.mergeAtContinuation(okBlock, predB: errEnd, cont: cont, bindings: self.mutableVars, valsA: entryVals, valsB: errVals)
 
 		// ⭐ **A DISCARDED MANAGED RESULT DROPS ON THE OK EDGE, IN `okBlock`.** A fell-through handler
@@ -19050,11 +19294,11 @@ export type Parser
 
 		// Block forms own their caught box end-to-end (`parseOtherwiseBlock` enrols, binds and drops it).
 		if self.at(TokenKind.leftParen) 'bindingForm'
-			return try self.parseOtherwiseBinding(func, flag: flag, target: target)
+			return try self.parseOtherwiseBinding(func, flag: flag, errorType: self.tryErrorEnumType(self.tryTargetThrows(target)))
 		end 'bindingForm'
 
 		if self.at(TokenKind.charLiteral) 'blockForm'
-			return try self.parseOtherwiseBlock(func, bindingName: EmptySourceText, hasBinding: false, flag: flag, target: target)
+			return try self.parseOtherwiseBlock(func, bindingName: EmptySourceText, hasBinding: false, flag: flag, errorType: self.tryErrorEnumType(self.tryTargetThrows(target)))
 		end 'blockForm'
 
 		// ⭐ **THE NON-BLOCK FORMS DISCARD THE CAUGHT ERROR, SO ITS BOX MUST DROP HERE.** `otherwise ignore`,
@@ -19228,14 +19472,19 @@ export type Parser
 		throw ParseError.otherwiseOutsideRangedReturn(value, aliasName: String.from(alias.name), low: alias.low, high: alias.high, line: tryTok.line, column: tryTok.column)
 	end 'requireOtherwiseLiteralInRange'
 
-	// `otherwise (e) 'label' … end 'label'` — bind the caught error `e = flag - 1` (typed as the TARGET's
-	// throws enum so `match e` recognizes it), then parse the labelled handler block. In a match arm this
-	// block form is E2049.
-	function parseOtherwiseBinding(func IrFunction, flag ValueId, target TryTarget) returns TryHandler throws ParseError
+	// `otherwise (e) 'label' … end 'label'` — bind the caught error `e = flag - 1` (typed as `errorType` so
+	// `match e` recognizes it), then parse the labelled handler block. In a match arm this block form is E2049.
+	//
+	// ⭐ **IT TAKES THE ERROR TYPE, NOT THE `TryTarget` IT USED TO DERIVE ONE FROM**, because a block-form
+	// `try 'l' … end 'l' otherwise (e) 'h' … end 'h'` has NO single target to derive it from: its handler is
+	// shared by every routed call in the body, and the type it binds is the one those calls agreed on
+	// (`TryBlockContext.throwsClause`). The single-call form still asks `tryTargetThrows` — one line up, at
+	// its own caller — so this routine keeps ONE input and the two constructs reach it two ways.
+	function parseOtherwiseBinding(func IrFunction, flag ValueId, errorType MaxonType) returns TryHandler throws ParseError
 		try self.consume(TokenKind.leftParen)
 		let eNameTok = try self.consume(TokenKind.identifier)
 		try self.consume(TokenKind.rightParen)
-		return try self.parseOtherwiseBlock(func, bindingName: eNameTok.value, hasBinding: true, flag: flag, target: target)
+		return try self.parseOtherwiseBlock(func, bindingName: eNameTok.value, hasBinding: true, flag: flag, errorType: errorType)
 	end 'parseOtherwiseBinding'
 
 	// ⭐ **ENROL A CAUGHT BOXED ERROR AS OWNED.** The flag IS the box pointer (the throw ENCODE wrote it
@@ -19291,7 +19540,7 @@ export type Parser
 	// The caught error is recovered by the shared `declareCaughtError` — the same decode `if try … else (e)`
 	// runs — in a fresh scope frame opened before the body and drained after it. Both forms are
 	// E2049 in a match arm (the block label is where the arm-body single-statement rule is violated).
-	function parseOtherwiseBlock(func IrFunction, bindingName ByteArray, hasBinding bool, flag ValueId, target TryTarget) returns TryHandler throws ParseError
+	function parseOtherwiseBlock(func IrFunction, bindingName ByteArray, hasBinding bool, flag ValueId, errorType MaxonType) returns TryHandler throws ParseError
 		if not self.at(TokenKind.charLiteral) 'noLabel'
 			let tok = self.current()
 			throw ParseError.matchMissingBlockId(tok.line, column: tok.column)
@@ -19312,7 +19561,7 @@ export type Parser
 		let ownedFloor = self.ownedBindings.count()
 		self.scope.pushScope()
 
-		try self.declareCaughtError(flag, errorType: self.tryErrorEnumType(self.tryTargetThrows(target)), bindingName: bindingName, hasBinding: hasBinding, anchor: labelTok)
+		try self.declareCaughtError(flag, errorType: errorType, bindingName: bindingName, hasBinding: hasBinding, anchor: labelTok)
 
 		let errEnd = try self.parseBlockBody(func, block: errBlock, label: labelTok.value)
 		self.scope.popScope()
@@ -19328,6 +19577,429 @@ export type Parser
 		end 'terminated'
 		return TryHandler.fellThrough
 	end 'parseOtherwiseBlock'
+
+	// ============================================================================
+	// The BLOCK-FORM `try` — `try 'l' <statements> end 'l' otherwise (e) 'h' … end 'h'`
+	// ============================================================================
+
+	// ⭐⭐ **PARSE A BLOCK-FORM `try`: a body whose calls are BARE, and one handler every one of them
+	// branches to.** The single-call form (`parseTry`) puts the `try` on ONE call and forks around it; this
+	// form puts the label on a GROUP and lets every throwing call in it share a handler:
+	//
+	//     entry   → <body stmts>                                       ; each routed call ends its block with
+	//                                                                  ;   flag != 0 ? tryblkerr : tryblkok_N
+	//     tryblkok_N → <the rest of the body>                          ; the success continuation
+	//     tryblkerr(flag, …carried) → <the `otherwise (e)` handler>
+	//     tryblkcont ← both edges, where each fell through
+	//
+	// ⭐ **THE ERROR BLOCK AND ITS PHIS EXIST BEFORE THE BODY IS PARSED**, which is what makes a single-pass
+	// SSA parser able to build this at all: a routed call needs the block id to branch to and the phi slots
+	// to fill, and it needs them the instant it is emitted. The carried set is read off the TOKENS first —
+	// `parseWhileStatement`'s device, for exactly its reason, and the reason its `blockStatementEndIndex` /
+	// `assignedBindingsIn` pair is reused verbatim here rather than approximated.
+	//
+	// ⭐ **THE BODY'S CALLS ARE ROUTED AT EMIT TIME, NOT BY A POST-PASS — and that is where shv2 departs
+	// from BOTH references.** v1 emits the body normally and afterwards rescans the block range, splitting
+	// blocks around each throwing call (`Parser.maxon:13195` `routeTryBlockBody`); the bootstrap routes at the
+	// call site but into SLOTS (`__try_block_err_N`, mem2reg'd later). Neither shape survives here: shv2's
+	// parser mints SSA values and block args as it goes, so (a) there is no slot for the shared handler to
+	// read a flag out of, and (b) a post-pass cannot recover what value each mutable binding held at a call
+	// it has already walked past. Routing where the call is emitted is the only point at which BOTH the flag
+	// and the live carried values are in hand — see `routeBareThrowingCallToTryBlock`.
+	//
+	// ⚠ **AND E3057 NEEDS NO CHANGE WHATEVER, WHICH IS THE POINT.** Both references suppress their
+	// bare-throwing-call diagnostic with the try-block stack itself (`_tryBlockStack.Count > 0` at
+	// `2-Parser.cs:23820`). shv2's E3057 is keyed on the OP KIND — `SemanticCheck.validatePlainCall` fires on
+	// a `call`, never on a `tryCall` — so a routed call is exempt because it IS a `tryCall`, and every call
+	// this router declines stays a plain `call` and is reported exactly as before. One gate, no second
+	// opinion, and a routing door this construct forgets to reach is a LOUD E3057 rather than a dropped flag.
+	function parseTryBlockStatement(func IrFunction, block IrBlock) returns IrBlock throws ParseError
+		self.currentBlock = block
+		let tryIndex = self.pos
+		let tryTok = try self.consume(TokenKind.try)
+		let labelTok = try self.consume(TokenKind.charLiteral)
+
+		// A match arm's body must be a single statement (E2049).
+		//
+		// ⚠ **ANCHORED ON THE `try`, WHERE THE BLOCK-`otherwise` FORM ANCHORS ON ITS LABEL — and the
+		// asymmetry is the CANONICAL spec's, not a slip.** `specs/match-statements.md:1010` pins column 10
+		// (the `try`) for this form and its sibling pins the label for the other. The arm's body BEGINS at
+		// this keyword, so this is where the single-statement rule is broken; an `otherwise` is a
+		// continuation of a statement that already started legally, and its label is the first token that
+		// could not be there.
+		if self.inMatchArmBody 'inArm'
+			throw ParseError.tryBlockFormInMatchArm(false, line: tryTok.line, column: tryTok.column)
+		end 'inArm'
+
+		// Decided from the tokens, before anything is emitted — see the header. `continuesAtElse: false`:
+		// what follows this construct's `end` is an `otherwise`, not an `else`, and `otherwise` opens a
+		// block of its OWN (`otherwiseOpensBlock`) which the scan must not fold into the body's extent.
+		let bodyEndIndex = self.blockStatementEndIndex(tryIndex, continuesAtElse: false)
+		let carried = self.assignedBindingsIn(tryIndex, endIndex: bodyEndIndex)
+
+		var errBlock = self.newBlock(func, label: b"tryblkerr", line: tryTok.line)
+		// ⚠ **THE FLAG PHI IS MINTED FIRST AND EVERY EDGE PUSHES IT FIRST.** Block args and edge args are
+		// POSITIONAL, so this order IS the pairing — the same contract `mintPhiForBinding` states for the
+		// existential witness pair, one construct out.
+		let flagPhi = self.mintPhi(errBlock, tag: ValueTypeTag.integer, nameId: UnnamedTypeId)
+		let phiVars = self.mintCarriedPhis(errBlock, carried: carried)
+
+		self.tryBlocks.push(TryBlockContext.create(func, tryTok: tryTok, label: labelTok.value, errBlockId: errBlock.id, flagPhi: flagPhi, phiVars: phiVars, ownedFloor: self.ownedBindings.count()))
+		var bodyEnd = try self.parseBlockBody(func, block: block, label: labelTok.value)
+		// Guard the token scan against the parse it predicted — `parseWhileStatement`'s guard, and the
+		// reason a construct added to `opensBlockAt` is safe to add: a mis-predicted extent is a loud panic
+		// rather than a silently lost phi.
+		self.assertScanAligned("parseTryBlockStatement", predictedEnd: bodyEndIndex)
+
+		var ctx = try self.tryBlocks.pop() otherwise panic("parseTryBlockStatement: the try-block stack is empty after the body of '{String.from(labelTok.value)}' — it is pushed and popped in this one routine")
+
+		try self.requireRoutableTryBlockBody(ctx, tryTok: tryTok)
+
+		// ⭐ **THE VALUES THE BODY LEAVES, CAPTURED BEFORE THE PHIS ARE INSTALLED.** They are the OK edge's
+		// half of the final merge; installing first would overwrite them with the error block's phis.
+		let bodyVals = self.snapshotBindings(self.mutableVars)
+		// The move state's twin of `bodyVals`, and it is captured for the same reason one statement apart:
+		// the body is one of the two paths reaching the construct's merge, and the drop-gating bit has to
+		// arrive there from the body rather than from whatever the handler goes on to do.
+		let bodyMoveMark = self.captureMoveMark()
+		self.installCarriedPhis(phiVars)
+
+		try self.requireTryBlockOtherwise(tryTok)
+		// ⚠ Re-fetched by ID rather than reusing the `errBlock` alias minted before the body — NOT because an
+		// `IrBlock` alias can go stale (it cannot: blocks are reference objects, and `bodyEnd` is held across
+		// this whole handler parse for exactly that reason). It is fetched by id because the id is what the
+		// CONTEXT carries: `errBlockId` is the only handle the router had, so reading the block back through
+		// it is what proves the block the handler is written into is the one every routed edge branched to.
+		self.currentBlock = try self.artifact.module.getBlockByIdIn(func, id: ctx.errBlockId) otherwise panic("parseTryBlockStatement: the error block {ctx.errBlockId} of '{String.from(labelTok.value)}' is not in its own function")
+
+		// ⭐⭐ **THE HANDLER IS PARSED AGAINST THE OWNERSHIP STATE THE THROW EDGE CARRIES, NOT THE BODY'S END
+		// STATE** — `if`/`else`'s `restoreMoveMark(entryMoveMark)` before the else branch, one construct over.
+		// The edge leaves the body AT a routed call, so anything the body moved AFTER that call did not happen
+		// on this path and the handler must still see those bindings as live (`requireRoutableTryBlockBody`
+		// has already refused a body whose routed calls disagree about this). Without the rewind, a handler
+		// that reads or re-moves such a binding would be reasoning about a move that its own path never made.
+		self.restoreMoveMark(ctx.edgeMoveMark)
+
+		let handler = try self.parseOtherwiseBinding(func, flag: flagPhi, errorType: self.tryErrorEnumType(ctx.throwsClause))
+		var errEnd = self.currentBlock
+		let handlerMoveMark = self.captureMoveMark()
+
+		return try self.finishTryBlock(func, bodyEnd: bodyEnd, errEnd: errEnd, bodyVals: bodyVals, handler: handler, bodyMoveMark: bodyMoveMark, handlerMoveMark: handlerMoveMark, tryTok: tryTok)
+	end 'parseTryBlockStatement'
+
+	// **E3083 — a block-form `try` whose body holds no throwing call**, and the SECOND-ERROR-TYPE refusal
+	// that could not be raised where it was found. Both are questions about the WHOLE body, so both are
+	// asked once here, after it is parsed and before the handler is.
+	function requireRoutableTryBlockBody(ctx TryBlockContext, tryTok Token) throws ParseError
+		// ⭐ **THE PREMISE IS THE CLAUSE, NOT A COUNTER.** `throwsClause` is `none` exactly when nothing was
+		// routed, so "did anything route?" and "what does `(e)` bind?" are ONE fact rather than two that
+		// could disagree — a body that routed a call must give the handler a type, and a body that gave the
+		// handler no type must have routed nothing.
+		if not throwsClauseIsThrowing(ctx.throwsClause) 'noThrowingCalls'
+			throw ParseError.tryBlockNoThrows(String.from(ctx.label), line: tryTok.line, column: tryTok.column)
+		end 'noThrowingCalls'
+
+		// ⚠ **TWO DIFFERENT ERROR TYPES REACHING ONE HANDLER IS A REAL MAXON PROGRAM SHV2 CANNOT YET LOWER.**
+		// The references synthesize an ad-hoc error UNION for it — v1's `errorTypeNames` + `__tryBlockDiscr`
+		// slot (`Parser.maxon:12686`), the bootstrap's `IrErrorUnionType` (`2-Parser.cs:9640`) — and the
+		// handler's `match e` then dispatches on `(discriminant, ordinal)` pairs with its own exhaustiveness,
+		// bare-name ambiguity and boxed-payload rules. shv2 has none of that: one flag phi carries one
+		// encoding, so a second enum's ordinals would be decoded as the first's — the exact silent miscompile
+		// E3059 refuses at the propagate door. Refused here until the union is built, rather than lowered
+		// wrongly. It cannot fire on a program that compiles today: no block-form `try` did.
+		if not ctx.conflictingType.isEmpty() 'twoErrorTypes'
+			let first = try throwsClauseName(ctx.throwsClause) otherwise panic("requireRoutableTryBlockBody: '{String.from(ctx.label)}' recorded a CONFLICTING error type against a `none` clause — a conflict is only ever recorded against a clause already set, and the throwing check above passed")
+			throw ParseError.unsupported("a block-form `try` whose body can throw TWO different error types ('{first}' and '{ctx.conflictingType}') — the shared handler binds ONE error enum, and shv2 has no synthesized error union to discriminate them (the references carry a per-block discriminant slot beside the flag). Give each error type its own `try` block, or route the second through a single-statement `try … otherwise`", line: tryTok.line, column: tryTok.column)
+		end 'twoErrorTypes'
+
+		// ⚠ **THE BODY GAVE AN OUTER VALUE AWAY BETWEEN TWO ROUTED CALLS, SO THE HANDLER'S ONE BLOCK IS
+		// REACHED WITH THAT VALUE BOTH LIVE AND ALREADY MOVED.** The construct's N throw edges all land on one
+		// error block, and the drop that reconciles a conditional move is emitted PER EDGE
+		// (`reconcileMovesAtMerge`) — so a binding live on the early edges and moved on the late ones would
+		// need its release placed on some throw edges and not others, which is a per-edge landing pad this
+		// block does not build (a site owing nothing gets no pad at all). Lowered anyway it is a leak on one
+		// edge or a double free on another, neither of which the type system would catch, so it is refused —
+		// the same call the two-error-type arm above makes, and the same one `poisonOwningBinding` makes for a
+		// move that escapes a LOOP, whose back edge poses this question in its own shape.
+		if ctx.conflictingMoveEdge 'movedBetweenThrowEdges'
+			throw ParseError.unsupported("a block-form `try` whose body MOVES a value declared outside the block (into a field, a union payload, a consuming call or a `return`) BETWEEN two throwing calls — the block's throw edges share one handler, and they would reach it with that value still owned on the earlier edges and already given away on the later ones, so its drop belongs on some throw edges and not others. Move the value before the `try` block or after it, or give the two throwing calls their own `try` blocks", line: tryTok.line, column: tryTok.column)
+		end 'movedBetweenThrowEdges'
+	end 'requireRoutableTryBlockBody'
+
+	// **E2050 — a block-form `try` must be followed by its `otherwise (e) 'label' … end` handler.** The
+	// construct exists to funnel several throwing calls into ONE handler; with no handler there is nothing
+	// for a routed error to reach, and the error block would be an unterminated orphan. The reference
+	// bootstrap refuses the same program with the same code (`2-Parser.cs:9651`).
+	//
+	// The BINDING is required for the same reason it is there: `parseOtherwiseBinding` consumes the `(e)`,
+	// and the handler's whole job is to tell the routed errors apart, which needs a name to `match` on.
+	function requireTryBlockOtherwise(tryTok Token) throws ParseError
+		if not self.at(TokenKind.otherwise) 'noHandler'
+			throw ParseError.tryBlockMissingOtherwise(false, line: tryTok.line, column: tryTok.column)
+		end 'noHandler'
+
+		try self.consume(TokenKind.otherwise)
+		if not self.at(TokenKind.leftParen) 'noBinding'
+			let tok = self.current()
+			throw ParseError.tryBlockMissingOtherwise(true, line: tok.line, column: tok.column)
+		end 'noBinding'
+	end 'requireTryBlockOtherwise'
+
+	// ⭐ **WHERE CONTROL GOES AFTER THE CONSTRUCT — FOUR SHAPES FROM TWO INDEPENDENT FACTS**: whether the
+	// BODY fell through, and whether the HANDLER did. Each is settled by its own block's terminator, so
+	// there is nothing to remember and no fifth case to forget.
+	//
+	// ⭐ **EACH SHAPE SETTLES TWO AXES, NOT ONE — the carried VALUES and the drop-gating MOVE state** — and
+	// they are settled together here for the reason `finalizeIfElse` settles them together: the surviving
+	// path's state prevails, and a shape that carried the values across without the move bits would keep
+	// answering correctly while silently leaking or double-freeing. MEASURED before this was written: a
+	// handler that moved an outer owned binding and then returned left it marked moved on the BODY's
+	// continuation, so its function-end drop was skipped (exit 101, against the bootstrap's 0).
+	function finishTryBlock(func IrFunction, bodyEnd IrBlock, errEnd IrBlock, bodyVals ValueIdArray, handler TryHandler, bodyMoveMark MoveMark, handlerMoveMark MoveMark, tryTok Token) returns IrBlock throws ParseError
+		let bodyFellThrough = not bodyEnd.isTerminated()
+		// ⚠ Read off the HANDLER's own verdict rather than re-asking `errEnd.isTerminated()`. The two agree
+		// today — that test is exactly how `parseOtherwiseBlock` decides what to return — and asking it again
+		// here would be that one fact spelled in two places, free to disagree the day a handler form
+		// terminates without terminating its final block.
+		let handlerFellThrough = match handler 'h'
+			terminated gives false
+			fellThrough gives true
+			value panic("finishTryBlock: a block-form `try`'s handler is parsed by `parseOtherwiseBinding`, which reaches only `parseOtherwiseBlock` — a `value` handler is the single-call form's `otherwise <expr>` fallback and cannot arrive here")
+		end 'h'
+
+		if bodyFellThrough and handlerFellThrough 'bothEdges'
+			// Two live predecessors — the ordinary two-way merge, minting a phi only where the edges
+			// disagree about a carried binding (`mergeAtContinuation`, the same one `if`/`else` uses).
+			var cont = self.newBlock(func, label: b"tryblkcont", line: tryTok.line)
+			let handlerVals = self.snapshotBindings(self.mutableVars)
+
+			// ⭐ **A CONDITIONAL MOVE RECONCILED ACROSS THE TWO LIVE EDGES** — a binding moved on one and left
+			// live on the other is dropped on the LIVE edge and marked uniformly moved past the merge, so the
+			// later scope-exit drop is right on both. Emitted BEFORE the phi edges and the branches, exactly as
+			// `finalizeIfElse` does it, so each decref lands in its own edge's block ahead of that block's jump.
+			var moveEdges = ReachingMoveEdgeArray.create()
+			moveEdges.push(ReachingMoveEdge.create(bodyEnd, mark: bodyMoveMark))
+			moveEdges.push(ReachingMoveEdge.create(errEnd, mark: handlerMoveMark))
+			self.reconcileMovesAtMerge(moveEdges, anchor: tryTok)
+
+			self.mergeAtContinuation(bodyEnd, predB: errEnd, cont: cont, bindings: self.mutableVars, valsA: bodyVals, valsB: handlerVals)
+			self.emitBranch(bodyEnd, targetId: cont.id)
+			self.emitBranch(errEnd, targetId: cont.id)
+			self.currentBlock = cont
+			return cont
+		end 'bothEdges'
+
+		if bodyFellThrough 'onlyTheBody'
+			// The handler terminated (`return`/`throw`/`panic`/`break`/`continue`), so neither its
+			// reassignments nor its MOVES reach the continuation — restore every carried binding and the
+			// drop-gating bit to what the BODY left, exactly as `finishTerminatedTry` restores the pre-try
+			// state for the single-call form. The handler dropped its own live values on the way out.
+			self.restoreBindings(self.mutableVars, snapshot: bodyVals)
+			self.restoreMoveMark(bodyMoveMark)
+			self.currentBlock = bodyEnd
+			return bodyEnd
+		end 'onlyTheBody'
+
+		if handlerFellThrough 'onlyTheHandler'
+			// The body terminated on every path (its last statement was a `return`/`throw`), so only the
+			// handler continues and the carried bindings already read its values — nothing to merge. The move
+			// restore is a no-op today for the same reason `finalizeIfElse`'s `onlyElse` arm's is (the handler
+			// was parsed last and nothing has touched the state since); it is written anyway so "the surviving
+			// path's state prevails" is stated once per axis rather than resting on parse order.
+			self.restoreMoveMark(handlerMoveMark)
+			self.currentBlock = errEnd
+			return errEnd
+		end 'onlyTheHandler'
+
+		// Neither edge falls through. Control leaves through the terminators the two blocks already carry;
+		// `parseStatements` reads `isTerminated()` off the block returned here and stops, so the body's is
+		// what it must see.
+		self.currentBlock = bodyEnd
+		return bodyEnd
+	end 'finishTryBlock'
+
+	// ⭐⭐ **ROUTE A JUST-EMITTED BARE CALL INTO THE INNERMOST BLOCK-FORM `try` — the whole of the body's
+	// error handling, at the one moment it can be done.** Called from the TWO doors that append a
+	// `MaxonOp.call` (`emitCall` for everything the author spelled, `emitRuntimeCall` for every
+	// compiler-emitted callee), with the index of the op they just appended. Declines, and leaves the op a
+	// plain `call`, unless all three of these hold — and every decline is safe, because a plain throwing
+	// `call` is precisely what `SemanticCheck.validatePlainCall` reports E3057 on.
+	//
+	// ⛔⛔ **IT CANNOT THROW, AND THAT SHAPES EVERYTHING BELOW.** `emitRuntimeCall` is not a throwing
+	// function and has 88 callers; making it one — or threading an `IrFunction` to it so this could live at
+	// its callers instead — would charge this construct to every runtime call the compiler emits. So the
+	// error block's `IrFunction` and anchor token ride in the CONTEXT, the flag test goes through
+	// `emitCompareAgainstLiteral` (which does not throw) rather than `emitCompare` (which does), and the one
+	// refusal this routine can discover — a SECOND error type — is RECORDED here and raised by
+	// `requireRoutableTryBlockBody` at the body's end, before the handler parses and before any of it is
+	// lowered.
+	//
+	// ⭐ **THE ROUTING DECISION AND THE `(e)` BINDING'S TYPE COME FROM ONE LOOKUP.** `throwsOf` answers both
+	// "does this callee throw" and "which enum" — for a declared function from its `throws` clause, for a
+	// compiler-internal callee from `runtimeThrowsClause` — so a call this admits always gives the handler a
+	// type, and a callee whose family answers `none` is declined and reported by E3057 rather than routed to
+	// a handler that could not bind it. That is why the gate is the CLAUSE and not `isThrowingRuntimeCallee`,
+	// which is the wider of the two.
+	function routeBareThrowingCallToTryBlock(callee ByteArray, opIdx OpIndex, result ValueId)
+		// ⚡ FIRST, and a single field read: almost no call in any program is inside a block-form `try`, and
+		// this is on the path of every call the compiler emits.
+		if self.tryBlocks.count() == 0 'noEnclosingTryBlock'
+			return
+		end 'noEnclosingTryBlock'
+
+		// An explicit `try` is about to claim this call for its own desugar (`parseTry`); the block-form
+		// handler must not catch an error the author already routed. See `tryBlockRoutingSuppressed`.
+		if self.tryBlockRoutingSuppressed 'explicitTryOwnsThisCall'
+			return
+		end 'explicitTryOwnsThisCall'
+
+		let clause = self.signatures.throwsOf(callee)
+		if not throwsClauseIsThrowing(clause) 'cannotThrow'
+			return
+		end 'cannotThrow'
+
+		var ctx = try self.tryBlocks.get(self.tryBlocks.count() - 1) otherwise panic("routeBareThrowingCallToTryBlock: tryBlocks.get failed on a non-empty stack")
+		self.recordRoutedEdge(ctx, clause: clause)
+
+		let flag = self.mintValue(ValueTypeTag.integer, nameId: UnnamedTypeId)
+		self.rewriteRoutedCallToTryCall(opIdx, flag: flag, callee: callee)
+
+		// The success continuation. Everything the rest of the body emits lands here, so a second throwing
+		// call in the same body splits THIS block in turn — which is how N calls reach one handler with no
+		// N-aware bookkeeping anywhere.
+		let okBlock = self.newBlock(ctx.func, label: b"tryblkok", line: ctx.tryTok.line)
+		let isErr = self.emitCompareAgainstLiteral(flag, literal: NoErrorFlag, op: MaxonCmpOp.ne, opTok: ctx.tryTok)
+
+		// ⭐ **THE ERROR EDGE'S ARGS: THE FLAG, THEN EVERY CARRIED BINDING'S VALUE RIGHT HERE.** Positional
+		// against the phis `parseTryBlockStatement` minted in that order. `edgeArgsFor(preLoop: false)` reads
+		// each binding's CURRENT value, which is exactly what this point in the body left it holding.
+		var errArgs = ValueIdArray.create()
+		errArgs.push(flag)
+		for arg in self.edgeArgsFor(ctx.phiVars, preLoop: false) 'carried'
+			errArgs.push(arg)
+		end 'carried'
+
+		// ⛔⛔ **THIS CALL'S OWN RESULT IS OWNED ONLY ON THE OK EDGE, SO IT COMES OUT OF THE PENDING LIST
+		// WHILE THE ERROR EDGE IS BUILT.** `emitCall` mints the result BEFORE it appends the op, and a managed
+		// one arrives here already enrolled as an owned temp by `mintOwnedCallResult` → `trackOwnedTemp`. The
+		// landing pad below drains that list — but the pad sits on the error edge, where the `tryCall` never
+		// wrote the result register, so decrefing it there reads a register the throw zeroed: an access
+		// violation, MEASURED on `let s = fetch(0)` with `fetch` returning a managed `String`. This is
+		// verbatim the hazard `desugarTry` documents and guards at its own fork — one construct, two forks,
+		// and now one rule.
+		//
+		// ⚠ **REMOVED BEFORE THE EDGE IS BUILT, NOT INSIDE IT**, so `tryBlockThrowEdgeTarget`'s "does this
+		// site owe anything?" test sees the same list its drops will walk: a call whose only pending temp is
+		// its own result owes NOTHING on the error edge and needs no pad at all.
+		//
+		// ⚠ **AND PUT STRAIGHT BACK, WHERE `desugarTry` LEAVES IT OFF UNTIL ITS FINISH PATH.** The two differ
+		// because the OK path differs: `desugarTry` forks the whole statement and each finish path re-scopes
+		// the result itself, while here the ok continuation is the SAME statement still being parsed, which
+		// still owes the drop. It is re-pushed at the tail, which is where it was — a call's own result is the
+		// last thing enrolled before the op is appended, its arguments' temporaries having been parsed first.
+		let resultIsOwnedTemp = self.pendingTempsContain(result)
+		if resultIsOwnedTemp 'offTheErrorEdge'
+			self.removeFromPendingTemps(result)
+		end 'offTheErrorEdge'
+
+		let errTargetId = self.tryBlockThrowEdgeTarget(ctx, errArgs: errArgs)
+
+		if resultIsOwnedTemp 'backOnTheOkPath'
+			self.pendingTempDrops.push(result)
+		end 'backOnTheOkPath'
+
+		self.emitCondBranch(self.currentBlock, cond: isErr, thenId: errTargetId, elseId: okBlock.id, ifTok: ctx.tryTok)
+		self.currentBlock = okBlock
+	end 'routeBareThrowingCallToTryBlock'
+
+	// ⭐⭐ **WHERE THE THROW EDGE ACTUALLY GOES — the shared error block, or a LANDING PAD in front of it
+	// that releases what the body owns at THIS call.** A routed throw jumps over the body's `end`, so none
+	// of the drops that fall-through would have run do: the temporaries the half-finished statement built
+	// (`f(Item.create())` where `f` throws) and every owned binding the body declared before this point
+	// would both leak. They cannot be released in the shared error block — it is reached from every routed
+	// call, each owing a DIFFERENT set — so each site that owes anything gets its own one-way pad. This is
+	// the bootstrap's `PendingLandingPads` (`2-Parser.cs:167`, "body-local-temps-live-at-throw") reached from
+	// the same reasoning, and it is `desugarTry`'s per-edge fork drops with N edges instead of two.
+	//
+	// ⚠ **THE PENDING TEMP LIST IS READ, NOT CLEARED.** The OK path continues and still owes those same
+	// temporaries at the end of its statement, so clearing here — which is what `desugarTry` may do, because
+	// BOTH of its edges drop at the fork — would leak them on the path that did not throw.
+	//
+	// A site owing nothing branches straight to the error block: no pad, no block, no drops.
+	function tryBlockThrowEdgeTarget(ctx TryBlockContext, errArgs ValueIdArray) returns BlockId
+		let owesTemps = self.pendingTempDrops.count() > WholeStatementTempFloor
+		let owesBindings = self.ownedBindings.count() > ctx.ownedFloor
+		if not owesTemps and not owesBindings 'nothingToRelease'
+			self.recordBranchEdge(self.currentBlock, targetId: ctx.errBlockId, argIds: errArgs)
+			return ctx.errBlockId
+		end 'nothingToRelease'
+
+		var pad = self.newBlock(ctx.func, label: b"tryblkthrow", line: ctx.tryTok.line)
+
+		// ⚠ **THE PARSER'S POSITION MOVES INTO THE PAD AND BACK, AND THE RESTORE IS LOAD-BEARING.** The two
+		// drop routines take their destination differently — `emitScopeDrops` by parameter, `emitTempDrops`
+		// through `emitDecref` → `currentBlock` — and the CALLER emits its `condBranch` into the block this
+		// was entered in. Left pointing at the pad, that branch would terminate the pad instead.
+		let saved = self.currentBlock
+		self.currentBlock = pad
+		self.emitTempDrops(self.pendingTempDrops, floor: WholeStatementTempFloor, anchor: ctx.tryTok)
+		self.emitScopeDrops(pad, floor: ctx.ownedFloor, anchor: ctx.tryTok)
+		self.currentBlock = saved
+
+		self.recordBranchEdge(pad, targetId: ctx.errBlockId, argIds: errArgs)
+		self.emitBranch(pad, targetId: ctx.errBlockId)
+		return pad.id
+	end 'tryBlockThrowEdgeTarget'
+
+	// Convert the routed call at `opIdx` into the `tryCall` / `witnessTryDispatch` that DEFINES `flag`,
+	// through the same two commit routines an explicit `try` uses — so a routed call and a `try`ed one carry
+	// byte-identical ops and nothing downstream can tell them apart.
+	//
+	// ⚠ **IT IS NOT `rewriteLastCallToTryCall`, AND THE DIFFERENCE IS WHICH QUESTION IS BEING ASKED.** That
+	// routine SEARCHES for the op an author's `try` was applied to and REJECTS a non-call (`try (a)` is a
+	// user error with its own sentence). Here the index is the op this parser appended one line ago, so any
+	// other kind is a broken invariant in the compiler — a panic, not a diagnostic. Sharing the search would
+	// have meant answering a user's mistake with a compiler's, or the reverse.
+	function rewriteRoutedCallToTryCall(opIdx OpIndex, flag ValueId, callee ByteArray)
+		match try self.artifact.module.ops.get(opIdx) otherwise panic("rewriteRoutedCallToTryCall: op {opIdx} is not in module.ops") 'routed'
+			call(result, opCallee, args, argLabels, argRanges, argImmutableNames, argDefaultSlots, mint) then _ = self.commitTryCallRewrite(opIdx, result: result, errorFlag: flag, callee: opCallee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, argDefaultSlots: argDefaultSlots, mint: mint)
+			default panic("rewriteRoutedCallToTryCall: the op at {opIdx} for '{String.from(callee)}' is not a `call` — the two doors that route (`emitCall`, `emitRuntimeCall`) hand this the index of a `call` they appended immediately before")
+		end 'routed'
+	end 'rewriteRoutedCallToTryCall'
+
+	// ⭐ **WHAT A ROUTED CALL TELLS THE SHARED HANDLER — the error TYPE it must bind and the OWNERSHIP state
+	// it will be entered with.** Both are settled by the FIRST routed call and every later one must AGREE
+	// with it, so both are asked off ONE "is this the first?" test rather than two that could drift apart.
+	// A disagreement on either axis is RECORDED for `requireRoutableTryBlockBody` to refuse at the body's
+	// end, because this path cannot throw (see `routeBareThrowingCallToTryBlock`).
+	function recordRoutedEdge(ctx TryBlockContext, clause ThrowsClause)
+		// The outer bindings' move state ON THIS EDGE. Truncated to the block's owned floor: the body's own
+		// bindings vary in number between routed calls and the landing pad releases them anyway, so only the
+		// outer ones are comparable — and only they can still be owed a drop past the handler.
+		let edgeMark = moveMarkPrefix(self.captureMoveMark(), height: ctx.ownedFloor)
+
+		if not throwsClauseIsThrowing(ctx.throwsClause) 'firstRoutedCall'
+			ctx.throwsClause = clause
+			ctx.edgeMoveMark = edgeMark
+			return
+		end 'firstRoutedCall'
+
+		if not moveMarksAgree(ctx.edgeMoveMark, b: edgeMark) 'movedBetweenEdges'
+			ctx.conflictingMoveEdge = true
+		end 'movedBetweenEdges'
+
+		let recorded = try throwsClauseName(ctx.throwsClause) otherwise panic("recordRoutedEdge: a clause that answers `throwing` has a name")
+		let arriving = try throwsClauseName(clause) otherwise panic("recordRoutedEdge: the caller routes only on a `throwing` clause")
+		if recorded == arriving 'sameErrorType'
+			return
+		end 'sameErrorType'
+
+		// FIRST conflict only: the message names the two types the block cannot reconcile, and a third would
+		// tell the author nothing the first pair does not.
+		if ctx.conflictingType.isEmpty() 'firstConflict'
+			ctx.conflictingType = arriving
+		end 'firstConflict'
+	end 'recordRoutedEdge'
 
 	// The MaxonType of the enum a throwing `callee` throws — the type an `(e)` binding recovers. A callee
 	// with no throws clause is rejected by SemanticCheck (E3055), so the fallback `integer` here is never
@@ -19534,13 +20206,31 @@ export type Parser
 	// from the other side.
 	function emitDecref(value ValueId, range SourceRange)
 		if self.tagOf(value) == ValueTypeTag.interfaceRef 'existential'
-			_ = self.emitRuntimeCall(DropExistentialName, args: pairArgs(self.witnessOfValue(value), second: value), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+			self.emitOwnershipRuntimeCall(DropExistentialName, args: pairArgs(self.witnessOfValue(value), second: value), range: range)
 			return
 		end 'existential'
 
-		let callee = self.decrefCalleeFor(value)
-		_ = self.emitRuntimeCall(callee, args: singletonArgs(value), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+		self.emitOwnershipRuntimeCall(self.decrefCalleeFor(value), args: singletonArgs(value), range: range)
 	end 'emitDecref'
+
+	// ⛔⛔ **EVERY SYNTHESIZED RETAIN OR RELEASE GOES THROUGH HERE, AND THE ONE THING THIS DOOR ADDS IS THAT
+	// IT IS NEVER ROUTED TO A BLOCK-FORM `try`'s HANDLER.** These calls are `void`, they are the compiler's
+	// and not the author's, and — the reason it must be stated rather than assumed — they are emitted INTO
+	// the block-form router's own output: `tryBlockThrowEdgeTarget` fills a landing pad with them while the
+	// stack is still non-empty and `currentBlock` points at that pad, and `reconcileMovesAtMerge` appends
+	// them to already-live edge blocks. Routed, one would split the very block the router is building.
+	//
+	// ⚠ **IT IS INERT TODAY AND THAT IS EXACTLY WHY IT IS WRITTEN DOWN.** No drop or retain callee
+	// (`__mm_incref`, `__mm_decref`, `__str_decref`, `__arr_decref`, `__destruct_*`, `__drop_existential`)
+	// carries a throws clause, so the router already declines on the clause — an accident of which runtime
+	// families are typed, not a property of this code. The day one of them becomes throwing, a silent
+	// re-entry is not the failure anyone would want to debug.
+	function emitOwnershipRuntimeCall(callee ByteArray, args ValueIdArray, range SourceRange)
+		let savedRoutingSuppressed = self.tryBlockRoutingSuppressed
+		self.tryBlockRoutingSuppressed = true
+		_ = self.emitRuntimeCall(callee, args: args, resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+		self.tryBlockRoutingSuppressed = savedRoutingSuppressed
+	end 'emitOwnershipRuntimeCall'
 
 	// ⭐ **PATH-SENSITIVE MOVE STATE — CAPTURE.** Snapshot the `movedFrom` bit (and current value) of every
 	// owned binding in scope, so a branch's moves can be UNDONE for a sibling path (`restoreMoveMark`) or
@@ -19742,10 +20432,25 @@ export type Parser
 	// future labelled runtime call fail loudly rather than mis-slot.
 	function emitRuntimeCall(callee ByteArray, args ValueIdArray, resultTag ValueTypeTag, resultNameId TypeNameId, range SourceRange) returns ValueId
 		let result = self.mintValue(resultTag, nameId: resultNameId)
+		// The index the op below will occupy — read before the append, so the ROUTING hook after it names an
+		// op rather than re-deriving "the last one" from a block whose contents it does not own.
+		let opIdx = self.artifact.module.ops.count()
 		// `notMinted`: a runtime entry's callee is not the author's bytes either, but its noun is a question
 		// about the NAME — `GtRuntime.runtimeCalleeSourceMethod` answers it, keyed by name, and may be. Only the
 		// primitive-static mint needs the per-SITE bit. See `CalleeMint`.
 		self.artifact.emitOp(self.currentBlock, op: MaxonOp.call(result, callee: callee, args: args, argLabels: emptyArgLabels(args), argRanges: uniformArgRanges(args, range: range), argImmutableNames: NoImmutableArgNames, argDefaultSlots: NoDefaultArgSlots, mint: CalleeMint.notMinted), range: range)
+		// ⭐ **ONE OF THE TWO ROUTING DOORS FOR A BLOCK-FORM `try` BODY** — this one carries every
+		// compiler-emitted callee, which is how `arr.get(i)`, `map.get(k)` and a checked divide inside such a
+		// body reach the shared handler. It declines instantly (one field read) when there is no enclosing
+		// block-form `try`, which is every call in almost every program.
+		//
+		// ⚠ **`result` IS HANDED OVER EVEN THOUGH NOTHING HAS ENROLLED IT YET, AND THAT IS THE POINT.** A
+		// runtime call's managed result is tracked by its CALLER after this returns
+		// (`emitContainerElementAccessor`), so the router's pending-list test answers false here today — by an
+		// ordering nobody had written down. Passing it makes the rule "the routed call's own result never
+		// rides the error edge" hold at both doors by statement rather than by accident, so a future door
+		// that enrols before emitting is already correct.
+		self.routeBareThrowingCallToTryBlock(callee, opIdx: opIdx, result: result)
 		return result
 	end 'emitRuntimeCall'
 
@@ -19758,7 +20463,7 @@ export type Parser
 	// (`retainBorrowedAggregate`) for when a FRESH SSA name is needed; this void form is for when the box is
 	// increfed in place and the caller already holds the ValueId it means.
 	function emitIncref(value ValueId, range SourceRange)
-		_ = self.emitRuntimeCall(MmIncrefName, args: singletonArgs(value), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+		self.emitOwnershipRuntimeCall(MmIncrefName, args: singletonArgs(value), range: range)
 	end 'emitIncref'
 
 	// ⭐ **THE ONE `__mm_alloc` CALL.** Every heap box the compiler builds — a struct record, a fused
@@ -21638,16 +22343,43 @@ export type Parser
 	// Index-based so each binding is a MUTABLE reference — a `for x in …` loop variable is immutable,
 	// and installing the phi writes through the binding.
 	function mintLoopHeaderPhis(header IrBlock, carried VarInfoArray) returns LoopPhiVarArray
-		var phiVars = LoopPhiVarArray.create()
-		for k in 0 upto carried.count() 'mkPhi'
-			var binding = try carried.get(k) otherwise panic("mintLoopHeaderPhis: carried.get OOB at {k}")
-			let entryValue = binding.boundValue
-			let phiId = self.mintPhiForBinding(header, binding: binding)
-			phiVars.push(LoopPhiVar.create(binding, phiId: phiId, entryValue: entryValue))
-			binding.boundValue = phiId
-		end 'mkPhi'
+		let phiVars = self.mintCarriedPhis(header, carried: carried)
+		self.installCarriedPhis(phiVars)
 		return phiVars
 	end 'mintLoopHeaderPhis'
+
+	// The MINT half, without the install — one phi per carried binding, in `carried`'s order, each
+	// remembering the value the binding held BEFORE the phi existed.
+	//
+	// ⭐ **IT IS SPLIT FROM THE INSTALL BECAUSE THE TWO CONSTRUCTS THAT MINT THESE PHIS INSTALL THEM AT
+	// DIFFERENT MOMENTS.** A loop header DOMINATES its body, so its phis are the values the body itself must
+	// read and the install belongs here. A block-form `try`'s error block does NOT dominate the try body —
+	// it is a SIBLING the body branches to — so its phis must not be visible while the body parses (the body
+	// reads and reassigns the ordinary values, and each routed edge carries whatever they hold at that point);
+	// they are installed only for the HANDLER, which is the block those phis dominate. One mint, two install
+	// points, and the positional contract `edgeArgsFor` depends on is written down once.
+	function mintCarriedPhis(block IrBlock, carried VarInfoArray) returns LoopPhiVarArray
+		var phiVars = LoopPhiVarArray.create()
+		for k in 0 upto carried.count() 'mkPhi'
+			var binding = try carried.get(k) otherwise panic("mintCarriedPhis: carried.get OOB at {k}")
+			// Read BEFORE the mint, and in its own statement: the value a binding held before its phi
+			// existed is what every pre-merge edge carries, and folding it into the `create` call below
+			// would make that ordering an argument-evaluation accident.
+			let entryValue = binding.boundValue
+			phiVars.push(LoopPhiVar.create(binding, phiId: self.mintPhiForBinding(block, binding: binding), entryValue: entryValue))
+		end 'mkPhi'
+		return phiVars
+	end 'mintCarriedPhis'
+
+	// Make each carried binding READ its phi from here on — the install half above. Index-based for
+	// `mintCarriedPhis`' reason: a `for x in …` loop variable is immutable, and this writes through the
+	// binding.
+	function installCarriedPhis(phiVars LoopPhiVarArray)
+		for k in 0 upto phiVars.count() 'install'
+			var phiVar = try phiVars.get(k) otherwise panic("installCarriedPhis: phiVars.get OOB at {k}")
+			phiVar.binding.boundValue = phiVar.phiId
+		end 'install'
+	end 'installCarriedPhis'
 
 	// ⭐⭐ **PARSE A `for` LOOP (P1.8 slice A).** Three source spellings, ONE lowering:
 	//
@@ -22265,7 +22997,18 @@ export type Parser
 		// The floor `rewriteLastCallToTryCall` measures "the target's own op" against — see `parseTry`, which
 		// captures it at the same point and for the same reason.
 		let targetOpFloor = self.artifact.module.ops.count()
+		// ⚠ **THE SECOND SITE THAT CLAIMS A CALL FOR ITS OWN REWRITE, SO THE SECOND THAT MUST SUPPRESS THE
+		// BLOCK-FORM ROUTER** — `parseTryCallTarget` is the other, and the rule is one sentence for both:
+		// whoever is going to turn this `call` into a `tryCall` itself must stop the router turning it into a
+		// DIFFERENT one first. A `for x in <cursor>` loop inside a `try 'l' … end` body is the reaching
+		// program. It does not bite TODAY only because `runtimeThrowsClause` has no cursor arm, so the router
+		// declines on the clause — an accident of which families are typed, not a property of this code, and
+		// the day that arm is added the advance would branch to the block's handler and this rewrite would
+		// then meet a `tryCall` it must reject. Suppressed here, that cannot happen.
+		let savedRoutingSuppressed = self.tryBlockRoutingSuppressed
+		self.tryBlockRoutingSuppressed = true
 		_ = try self.emitCursorProtocolCall(cursorTypeName, methodName: AdvanceMethodName, source: source, anchor: anchor, resultUsed: false)
+		self.tryBlockRoutingSuppressed = savedRoutingSuppressed
 		let flag = self.mintValue(ValueTypeTag.integer, nameId: UnnamedTypeId)
 		_ = try self.rewriteLastCallToTryCall(func, flag: flag, tryTok: anchor, targetOpFloor: targetOpFloor)
 		return flag
@@ -23132,6 +23875,14 @@ export type Parser
 			return self.otherwiseOpensBlock(index)
 		end 'tryBlock'
 
+		// `try` is the third position-sensitive one, and it needs no position test at all: only the BLOCK
+		// form spells a label after the keyword, and every EXPRESSION form (`try f()`, `try await p`,
+		// `try (a).b()`) must be followed by a call, which no charLiteral can begin. So the label IS the
+		// discriminator — the same one `parseStatement` routes on, asked once here rather than restated.
+		if kind == TokenKind.try 'tryKw'
+			return self.tryOpensBlockAt(index)
+		end 'tryKw'
+
 		if kind == TokenKind.else 'elseKw'
 			// An `else if` opens NOTHING of its own: the else branch simply IS a nested `if` statement, and
 			// that `if` is the opener whose `end` closes it.
@@ -23224,6 +23975,16 @@ export type Parser
 
 		return next == TokenKind.leftParen and self.kindAt(index + 2) == TokenKind.identifier and self.kindAt(index + 3) == TokenKind.rightParen and self.kindAt(index + 4) == TokenKind.charLiteral
 	end 'otherwiseOpensBlock'
+
+	// ⭐ **THE BLOCK-FORM `try` — A LABEL AFTER THE KEYWORD, AND THAT IS THE WHOLE TEST.** `try 'work' … end
+	// 'work'` opens a block; every expression form (`try f()`, `try obj.m()`, `try await p`, `try (a).b()`)
+	// must be applied to a CALL, and no call can begin with a charLiteral, so the two forms are disjoint on
+	// this one token. It is the SAME discriminator `parseStatement` routes the two forms on and
+	// `parseTry` refuses the block form in expression position by — asked here so the extent scan and the
+	// grammar cannot disagree about which `try` owns an `end`.
+	function tryOpensBlockAt(index TokenIndex) returns bool
+		return self.kindAt(index + 1) == TokenKind.charLiteral
+	end 'tryOpensBlockAt'
 
 	// Is the keyword at `index` being used as a NAME rather than as block structure?
 	//
@@ -25908,19 +26669,30 @@ export type Parser
 		try covered.set(index, value: true) otherwise panic("markEnumCovered: covered.set OOB at {index}")
 	end 'markEnumCovered'
 
-	// ⭐ **THE MATCH DISPATCH COMPARE** — `subject <op> tag`, emitting `MaxonOp.compare` DIRECTLY rather
-	// than through `emitCompare`, and that bypass is load-bearing. `emitCompare` refuses a `union` operand
-	// (E3066), and a PAYLOAD-FREE union match dispatches on the scrutinee itself (a `named(union)` value)
-	// — so routing through it would reject `match u`. Both the subject (a scalar enum's `named` value, a
-	// boxed union's loaded i64 tag, or a scalar int/char/bool) and the tag literal collapse to i64, so this
-	// is a plain i64 comparison with no operand type to check. It is the ONE compare every dispatch node
-	// emits: a point leaf's `==`, a range leaf's `>=`/`<=`, and an internal node's `<` pivot test.
-	function emitDispatchCompare(subject ValueId, tag ParsedInt, op MaxonCmpOp, opTok Token) returns ValueId
-		let tagLit = self.emitLiteral(tag, valueType: MaxonType.integer, range: SourceRange.ofToken(opTok))
+	// ⭐ **COMPARE A SCALAR AGAINST AN INTEGER LITERAL** — `subject <op> literal`, emitting `MaxonOp.compare`
+	// DIRECTLY rather than through `emitCompare`, and that bypass is load-bearing twice over.
+	//
+	//   • **The MATCH DISPATCH** — a point leaf's `==`, a range leaf's `>=`/`<=`, an internal node's `<`
+	//     pivot. `emitCompare` refuses a `union` operand (E3066), and a PAYLOAD-FREE union match dispatches
+	//     on the scrutinee itself (a `named(union)` value), so routing through it would reject `match u`.
+	//   • **A BLOCK-FORM `try`'s ERROR-FLAG TEST** (`flag != NoErrorFlag`), whose router is NON-THROWING by
+	//     construction — one of its two emit doors, `emitRuntimeCall`, is not a throwing function — and
+	//     `emitCompare` throws.
+	//
+	// ⚠ **THE PARAMETER IS `literal`, NOT `tag`.** It was `tag` while the match dispatch was its only caller,
+	// which named that caller's USE of the operand rather than the operand — and a flag test passing
+	// `NoErrorFlag` is what made the mis-naming visible.
+	//
+	// Both callers hand it operands whose types are settled by construction: the subject is a scalar enum's
+	// `named` value, a boxed union's loaded i64 tag, a scalar int/char/bool, or a minted error flag, and the
+	// literal is an i64. There is no operand type left to check, which is exactly what makes the bypass a
+	// narrowing of `emitCompare` rather than an evasion of it.
+	function emitCompareAgainstLiteral(subject ValueId, literal ParsedInt, op MaxonCmpOp, opTok Token) returns ValueId
+		let rhs = self.emitLiteral(literal, valueType: MaxonType.integer, range: SourceRange.ofToken(opTok))
 		let result = self.mintValue(ValueTypeTag.boolean, nameId: UnnamedTypeId)
-		self.artifact.emitOp(self.currentBlock, op: MaxonOp.compare(result, lhs: subject, rhs: tagLit, op: op), range: SourceRange.ofToken(opTok))
+		self.artifact.emitOp(self.currentBlock, op: MaxonOp.compare(result, lhs: subject, rhs: rhs, op: op), range: SourceRange.ofToken(opTok))
 		return result
-	end 'emitDispatchCompare'
+	end 'emitCompareAgainstLiteral'
 
 	// The OPEN #21 range rule, reduced to DISPATCH INTERVALS. A range arm `low to high` MEANS the cases in
 	// the declaration-index slice `[low, lastCovered]` (`upto` drops the upper). Where the covered cases'
@@ -26284,7 +27056,7 @@ export type Parser
 		let mid = from + count / 2
 		let pivot = (try intervals.get(mid) otherwise panic("emitDispatchRange: intervals.get OOB at pivot {mid}")).lo
 		self.currentBlock = block
-		let cond = self.emitDispatchCompare(subject, tag: pivot, op: MaxonCmpOp.lt, opTok: opTok)
+		let cond = self.emitCompareAgainstLiteral(subject, literal: pivot, op: MaxonCmpOp.lt, opTok: opTok)
 		// `var` because each half is emitted INTO its block by the recursive call, which mutates it — the
 		// same mutating-parameter sensitivity `dispatchEntry` carries.
 		var lowerBlock = self.newBlock(func, label: b"matchlo", line: opTok.line)
@@ -26409,7 +27181,7 @@ export type Parser
 	end 'emitDispatchTable'
 
 	// The zero-based table index `subject − bias`, emitted as a RAW `binOp(sub)` that MINTS an `integer`
-	// result and bypasses `emitBinOp`'s operand type check — exactly as `emitDispatchCompare` emits a raw
+	// result and bypasses `emitBinOp`'s operand type check — exactly as `emitCompareAgainstLiteral` emits a raw
 	// `compare`. The bypass is the point: a SCALAR enum's dispatch subject is a `named(<Enum>)` value, and
 	// arithmetic on an enum is a user-level type error — but this is not user arithmetic, it is the compiler
 	// REINTERPRETING the tag bits as the integer index the jump table needs. The subtraction is MODULAR
@@ -26468,21 +27240,21 @@ export type Parser
 	// the whole plan, since it would subsume any later arm).
 	function emitIntervalHitTest(subject ValueId, lo ParsedInt, hi ParsedInt, opTok Token) returns ValueId throws ParseError
 		if lo == hi 'point'
-			return self.emitDispatchCompare(subject, tag: lo, op: MaxonCmpOp.eq, opTok: opTok)
+			return self.emitCompareAgainstLiteral(subject, literal: lo, op: MaxonCmpOp.eq, opTok: opTok)
 		end 'point'
 
 		let needLo = lo > I64MinBound
 		let needHi = hi < I64MaxBound
 		if needLo and needHi 'closed'
-			let loCmp = self.emitDispatchCompare(subject, tag: lo, op: MaxonCmpOp.ge, opTok: opTok)
-			let hiCmp = self.emitDispatchCompare(subject, tag: hi, op: MaxonCmpOp.le, opTok: opTok)
+			let loCmp = self.emitCompareAgainstLiteral(subject, literal: lo, op: MaxonCmpOp.ge, opTok: opTok)
+			let hiCmp = self.emitCompareAgainstLiteral(subject, literal: hi, op: MaxonCmpOp.le, opTok: opTok)
 			return try self.emitBinOp(loCmp, rhs: hiCmp, op: MaxonBinOp.bitAnd, opTok: opTok)
 		end 'closed'
 		if needLo 'openUpper'
-			return self.emitDispatchCompare(subject, tag: lo, op: MaxonCmpOp.ge, opTok: opTok)
+			return self.emitCompareAgainstLiteral(subject, literal: lo, op: MaxonCmpOp.ge, opTok: opTok)
 		end 'openUpper'
 		if needHi 'openLower'
-			return self.emitDispatchCompare(subject, tag: hi, op: MaxonCmpOp.le, opTok: opTok)
+			return self.emitCompareAgainstLiteral(subject, literal: hi, op: MaxonCmpOp.le, opTok: opTok)
 		end 'openLower'
 
 		return self.emitLiteral(BoolTrueValue, valueType: MaxonType.boolean, range: SourceRange.ofToken(opTok))
@@ -29134,7 +29906,7 @@ export type Parser
 		// `==`/`!=` have no synthesized equality; `<`/`>`/`<=`/`>=` a fortiori have no meaning either, so
 		// ALL of them reject here (the message names whichever operator the author wrote). An ENUM's value
 		// IS its i64 tag, so `Color.red == c` is a real tag compare and stays legal; only a `union`
-		// (`isUnion`) is rejected. The match dispatch (`emitDispatchCompare`) builds its tag compare with
+		// (`isUnion`) is rejected. The match dispatch (`emitCompareAgainstLiteral`) builds its tag compare with
 		// its own `MaxonOp.compare` and never routes through here, so a `match` arm is unaffected.
 		if self.valueIsUnion(lhs) or self.valueIsUnion(rhs) 'unionCompare'
 			throw ParseError.unionNotComparable(comparisonOpSpelling(op), line: opTok.line, column: opTok.column)
@@ -29209,7 +29981,7 @@ export type Parser
 		//     `enum-match-exhaustive`'s float range arm passes under both readings and pins neither.
 		//   • EQUALITY between two values of ONE enum stays the TAG compare, and that is not a concession:
 		//     `x == Type.case` is the language's way of asking which CASE a value is, and it must agree
-		//     with `match`, whose dispatch is an i64 compare (`emitDispatchCompare`). Routing it through
+		//     with `match`, whose dispatch is an i64 compare (`emitCompareAgainstLiteral`). Routing it through
 		//     `ucomisd` would make `SignedZero.negz == SignedZero.posz` TRUE while `match negz` selects
 		//     `negz` — `enums-simple.md`'s `float-backed-signed-zero` pins that single equality.
 		//   • EQUALITY against anything else (`w == 2.5`) names no case, so it is the number, which is what
@@ -29412,7 +30184,7 @@ export type Parser
 	// (`2-Parser.cs:22293-22302`, the correct 3-valued reading).
 	//
 	// Every tag is read OFF the `Ordering` layout (`EnumLayout.tagOfCase`), never written as a literal; the layout is
-	// fetched ONCE here rather than per arm. The compare itself is `emitDispatchCompare`, the SAME tag compare
+	// fetched ONCE here rather than per arm. The compare itself is `emitCompareAgainstLiteral`, the SAME tag compare
 	// an enum `match` arm emits — so `a < b` and a hand-written `match a.compare(b)` agree by construction.
 	function emitOrderingVerdict(orderingResult ValueId, op MaxonCmpOp, opTok Token) returns ValueId
 		let ordering = builtinOrderingEnum()
@@ -29421,10 +30193,10 @@ export type Parser
 
 		match op 'ordinal'
 			eq to ne then panic("emitOrderingVerdict: `==`/`!=` are the equality verdict, handled by emitTypeParamComparison before it routes an ORDERING operator here")
-			lt then return self.emitDispatchCompare(orderingResult, tag: lessThanTag, op: MaxonCmpOp.eq, opTok: opTok)
-			gt then return self.emitDispatchCompare(orderingResult, tag: greaterThanTag, op: MaxonCmpOp.eq, opTok: opTok)
-			le then return self.emitDispatchCompare(orderingResult, tag: greaterThanTag, op: MaxonCmpOp.ne, opTok: opTok)
-			ge then return self.emitDispatchCompare(orderingResult, tag: lessThanTag, op: MaxonCmpOp.ne, opTok: opTok)
+			lt then return self.emitCompareAgainstLiteral(orderingResult, literal: lessThanTag, op: MaxonCmpOp.eq, opTok: opTok)
+			gt then return self.emitCompareAgainstLiteral(orderingResult, literal: greaterThanTag, op: MaxonCmpOp.eq, opTok: opTok)
+			le then return self.emitCompareAgainstLiteral(orderingResult, literal: greaterThanTag, op: MaxonCmpOp.ne, opTok: opTok)
+			ge then return self.emitCompareAgainstLiteral(orderingResult, literal: lessThanTag, op: MaxonCmpOp.ne, opTok: opTok)
 		end 'ordinal'
 	end 'emitOrderingVerdict'
 
@@ -41983,6 +42755,14 @@ export type Parser
 		let savedMutableVarInnermost = self.mutableVarInnermost
 		let savedLoops = self.loops
 		let savedMatches = self.matches
+		// ⚠ **SAVED AND RESTORED, NOT MERELY RESET — a closure is the ONE re-entrant door into this reset
+		// block.** `parseFunction` and `parseParamDefaultHelper` reach a fresh function from a drained
+		// top level, so a reset with no restore is right there; this routine resumes the ENCLOSING body
+		// afterwards, and a closure written INSIDE a block-form `try` body would otherwise return to it
+		// with an empty stack — the body's remaining throwing calls stop routing and its `end` panics on
+		// the pop. `loops`/`matches` two lines up carry exactly this pairing for exactly this reason.
+		let savedTryBlocks = self.tryBlocks
+		let savedRoutingSuppressed = self.tryBlockRoutingSuppressed
 		let savedCurrentBlock = self.currentBlock
 		let savedValueTags = self.valueTags
 		let savedValueNameIds = self.valueNameIds
@@ -42085,6 +42865,9 @@ export type Parser
 		self.pendingTempDrops = ValueIdArray.create()
 		self.lastFieldReadValid = false
 		self.loops = LoopContextArray.create()
+		// Fresh per function, with its companion flag — see the `tryBlocks` field declaration for why.
+		self.tryBlocks = TryBlockContextArray.create()
+		self.tryBlockRoutingSuppressed = false
 		self.matches = MatchContextArray.create()
 		// ⚠ Balanced by construction — pushed and popped around each `for` body — EXCEPT on the error path,
 		// where a `ParseError` thrown inside a body skips the release. So the reset is real; it points back
@@ -42234,6 +43017,8 @@ export type Parser
 		self.mutableVarInnermost = savedMutableVarInnermost
 		self.loops = savedLoops
 		self.matches = savedMatches
+		self.tryBlocks = savedTryBlocks
+		self.tryBlockRoutingSuppressed = savedRoutingSuppressed
 		self.currentBlock = savedCurrentBlock
 		self.valueTags = savedValueTags
 		self.valueNameIds = savedValueNameIds
@@ -44641,7 +45426,14 @@ export type Parser
 		// emitted so a refused call emits nothing.
 		try self.applyCallerConsume(callee, args: args, argLabels: argLabels, argRanges: argRanges, anchor: anchor, constructorInstance: constructorInstance)
 		self.recordConstantArgRangeChecks(callee, args: args, argLabels: argLabels, anchor: anchor)
+		let opIdx = self.artifact.module.ops.count()
 		self.artifact.emitOp(self.currentBlock, op: MaxonOp.call(result, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: settledImmutableArgNames(argImmutableNames), argDefaultSlots: argDefaultSlots, mint: mint), range: SourceRange.between(anchor, last: rparenTok))
+		// ⭐ **THE OTHER ROUTING DOOR FOR A BLOCK-FORM `try` BODY** — this one carries every call the author
+		// spelled (free, method, static), so a bare call to a declared throwing function inside such a body
+		// reaches the shared handler. `result` rides along because a MANAGED one is already enrolled as an
+		// owned temp by the mint above, and it must not be dropped on the error edge — see
+		// `routeBareThrowingCallToTryBlock`.
+		self.routeBareThrowingCallToTryBlock(callee, opIdx: opIdx, result: result)
 		return result
 	end 'emitCall'
 

@@ -1305,6 +1305,10 @@ function reportParseError(project Project, path FilePath, error ParseError)
 		otherwiseWithoutTry(line, column) then reportPositioned(project, code: ErrorCode.otherwiseRequiresTry, message: "otherwise requires try expression", line: line, column: column, filePath: path)
 		errorTypeMismatch(detail, line, column) then reportPositioned(project, code: ErrorCode.errorTypeMismatch, message: "type mismatch: '{detail}'", line: line, column: column, filePath: path)
 		tryBlockFormInMatchArm(isOtherwiseForm, line, column) then reportPositioned(project, code: ErrorCode.matchBlockStatement, message: tryBlockFormMessage(isOtherwiseForm), line: line, column: column, filePath: path)
+		// The two block-form `try` refusals (E3083 / E2050). The first sentence is the reference bootstrap's
+		// byte for byte, because the canonical `try-block.md` pins it as a `maxoncstderr` golden.
+		tryBlockNoThrows(label, line, column) then reportPositioned(project, code: ErrorCode.tryBlockNoThrows, message: "try block contains no throwing calls: '{label}'", line: line, column: column, filePath: path)
+		tryBlockMissingOtherwise(missingBinding, line, column) then reportPositioned(project, code: ErrorCode.otherwiseBlockMissingBinding, message: tryBlockMissingOtherwiseMessage(missingBinding), line: line, column: column, filePath: path)
 		tryOnNonThrowing(callee, line, column) then reportPositioned(project, code: ErrorCode.tryRequiresThrowingFunction, message: "try requires a throwing function: '{callee}' does not throw'", line: line, column: column, filePath: path)
 		redundantContainsGet(message, line, column) then reportPositioned(project, code: ErrorCode.redundantContainsGet, message: message, line: line, column: column, filePath: path)
 		// The BUILTIN half of E3055 — one code, a second message. The reference names the builtin
@@ -1370,3 +1374,13 @@ function tryBlockFormMessage(isOtherwiseForm bool) returns String
 	end 'otherwiseForm'
 	return "block-form 'try ... end' is not allowed in a match arm; use a single-statement try form (e.g. 'try call()' or 'try call() otherwise panic(...)') instead"
 end 'tryBlockFormMessage'
+
+// The two E2050 messages, split out for `tryBlockFormMessage`'s reason. A block-form `try` needs a handler,
+// and that handler needs the binding it exists to dispatch on — the same code for both halves, because the
+// author's mistake is one thing (an incomplete handler) told apart only by how far they got.
+function tryBlockMissingOtherwiseMessage(missingBinding bool) returns String
+	if missingBinding 'noBinding'
+		return "block-form 'try ... end' requires its handler to bind the caught error: write \"otherwise (e) 'label' ... end 'label'\" — the handler dispatches on that binding with 'match e'"
+	end 'noBinding'
+	return "try block requires 'otherwise ...' clause"
+end 'tryBlockMissingOtherwiseMessage'

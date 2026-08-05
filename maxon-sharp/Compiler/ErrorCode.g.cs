@@ -138,6 +138,10 @@ public enum ErrorCode {
   ParserMatchBlockStatement = 2049,
   /// <summary>
   /// An 'otherwise' block form declares no error binding.
+  /// TWO messages on one code, and the bootstrap emits both: a block-form
+  /// `try 'l' ... end 'l'` with NO `otherwise` handler at all, and one whose
+  /// handler declares no `(e)`. The author's mistake is one thing -- an
+  /// incomplete handler -- told apart only by how far they got.
   /// </summary>
   ParserOtherwiseBlockMissingBinding = 2050,
   /// <summary>

@@ -93,6 +93,12 @@ export enum ErrorCode
 	// allocate persistent slots that leak on every error path through
 	// the match.
 	matchBlockStatement = "E2049"
+	// An 'otherwise' block form declares no error binding.
+	// TWO messages on one code, and the bootstrap emits both: a block-form
+	// `try 'l' ... end 'l'` with NO `otherwise` handler at all, and one whose
+	// handler declares no `(e)`. The author's mistake is one thing -- an
+	// incomplete handler -- told apart only by how far they got.
+	otherwiseBlockMissingBinding = "E2050"
 	// A declaration uses a name reserved by the compiler.
 	reservedIdentifier = "E2051"
 	// A call labels its first argument. The first argument is positional; only the second and later arguments take 'name:' labels.
@@ -452,6 +458,12 @@ export enum ErrorCode
 	// from `parseBodyOrEmpty` after `parseScopedStatements` reports no
 	// statements were consumed.
 	semanticEmptyBlock = "E3082"
+	// a block-form `try 'label' ... end` body contains no throwing
+	// calls (no bare throwing call/methodCall, no routed `throw`). The
+	// construct exists to funnel multiple throwing calls into one handler;
+	// a body that can never fail has no error to route, so the `otherwise`
+	// handler is dead. Mirrors the C# bootstrap's `SemanticTryBlockNoThrows`.
+	tryBlockNoThrows = "E3083"
 	// a struct literal omits a field that has no default value, is not a
 	// compiler-synthesized managed builtin, and (for a return-site `Self{...}`
 	// in a static factory) was not proven definitely assigned via `self.field =

@@ -1,0 +1,75 @@
+// Test: try-block-forward-declared-throwing-call
+enum BumpError implements Error
+		tooBig
+end 'BumpError'
+
+function run() returns ExitCode
+		try 'work'
+				step()
+		end 'work' otherwise (e) 'bad'
+				match e 'kind'
+						tooBig then return 7
+				end 'kind'
+		end 'bad'
+		return 3
+end 'run'
+
+function step() throws BumpError
+		throw BumpError.tooBig
+end 'step'
+
+function main() returns ExitCode
+		return run()
+end 'main'
+---
+ExitCode: 7
+---
+func @run {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.callDirect step
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryblkerr
+    x64.jmp tryblkok
+  tryblkerr:
+    x64.leaRegRegImm32 rax, r10, -1
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, matcharm
+    x64.jmp matchdead
+  matcharm:
+    x64.movRegImm32 r8, 7
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  matchdead:
+  tryblkok:
+    x64.movRegImm32 r8, 3
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  matchcont:
+}
+
+func @step {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 rax, 0
+    x64.leaRegRegImm32 r10, rax, 1
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.callDirect run
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

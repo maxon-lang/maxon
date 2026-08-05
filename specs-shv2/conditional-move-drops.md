@@ -427,3 +427,97 @@ end 'main'
 ```maxoncstderr
 error E2015: <fragment>:13:8: Unsupported: moving a value declared outside this loop from inside the loop body — its drop on the loop's other exit paths (the back edge would re-move it next iteration; a `break` leaves it live on the normal exit) needs path-sensitive elaboration across the loop boundary, which arrives with a later wave. Move the value into the loop body, or restructure so the move does not cross the loop boundary
 ```
+
+### `try … otherwise` Handler That Moves and Terminates, OK Path Live
+
+The two-branch reconciliation reaches the `try` fork as well: `a` is moved into the handler-local `u` by
+an `otherwise (e)` handler that then returns, while the OK path never moved it. Driven down the OK path
+(`step(1)` does not throw), `a` must be dropped once when `run` exits. Before the fork restored the move
+state on its surviving edge, the handler's move persisted onto the ok path and `a` leaked (exit 101).
+
+<!-- test: try-handler-move-return-ok-live -->
+```maxon
+typealias Code = int(0 to 125)
+
+enum StepError implements Error
+	bad
+end 'StepError'
+
+function build(x Code) returns String
+	return "built value {x} padded out long enough to heap allocate"
+end 'build'
+
+function step(k Code) returns Code throws StepError
+	if k < 1 'b'
+		throw StepError.bad
+	end 'b'
+	return k
+end 'step'
+
+function run(k Code) returns ExitCode
+	var a = build(1)
+	let v = try step(k) otherwise (e) 'bad'
+		let u = a
+		print("handed={u}\n")
+		return 2
+	end 'bad'
+	print("v={v}\n")
+	return 0
+end 'run'
+
+function main() returns ExitCode
+	return run(1)
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+v=1
+```
+
+### `try … otherwise` Handler That Moves and FALLS THROUGH, Both Edges Live
+
+The same fork with both edges reaching the continuation: the handler moves `a` and runs off its end, the
+ok path leaves it live. `a` must be dropped on the ok edge and marked moved past the merge, so the
+scope-exit drop is right on both paths. Driven down the OK path here.
+
+<!-- test: try-handler-move-fallthrough-both-live -->
+```maxon
+typealias Code = int(0 to 125)
+
+enum StepError implements Error
+	bad
+end 'StepError'
+
+function build(x Code) returns String
+	return "built value {x} padded out long enough to heap allocate"
+end 'build'
+
+function step(k Code) returns Code throws StepError
+	if k < 1 'b'
+		throw StepError.bad
+	end 'b'
+	return k
+end 'step'
+
+function run(k Code) returns ExitCode
+	var a = build(1)
+	try step(k) otherwise (e) 'bad'
+		let u = a
+		print("moved={u}\n")
+	end 'bad'
+	print("done\n")
+	return 0
+end 'run'
+
+function main() returns ExitCode
+	return run(1)
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+done
+```
