@@ -1,0 +1,19 @@
+// Test: error.cross-file-module-scoped-factory
+// --- file: api/db.maxon
+export type Database
+	export var n as int
+
+	module static function create() returns Self
+		return Self{n: 7}
+	end 'create'
+end 'Database'
+
+// --- file: bin/main.maxon
+var db = Database.create()
+
+function main() returns ExitCode
+	return db.n
+end 'main'
+---
+CompilerError:
+error E3088: bin/<fragment>:12:19: function 'Database.create' is module-scoped and not visible from this directory

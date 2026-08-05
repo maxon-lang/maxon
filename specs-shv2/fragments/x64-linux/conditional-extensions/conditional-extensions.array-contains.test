@@ -1,0 +1,98 @@
+// Test: conditional-extensions.array-contains
+function main() returns ExitCode
+	let nums = [10, 20, 30, 40]
+	if nums.contains([20]) 'found'
+		return 1
+	end 'found'
+	return 0
+end 'main'
+---
+ExitCode: 1
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __arr_create
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rdx, 10
+    x64.movRegReg rcx, rbx
+    x64.callDirect __arr_push
+    x64.movRegImm32 rdx, 20
+    x64.movRegReg rcx, rbx
+    x64.callDirect __arr_push
+    x64.movRegImm32 rdx, 30
+    x64.movRegReg rcx, rbx
+    x64.callDirect __arr_push
+    x64.movRegImm32 rdx, 40
+    x64.movRegReg rcx, rbx
+    x64.callDirect __arr_push
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __arr_create
+    x64.movRegReg r12, r8
+    x64.movRegImm32 rdx, 20
+    x64.movRegReg rcx, r12
+    x64.callDirect __arr_push
+    x64.leaRegRdata rax, [rip + __witness_int.Equatable]
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
+    x64.callDirect __arr_contains_seq
+    x64.movRegReg r13, r8
+    x64.movRegReg rcx, r12
+    x64.callDirect __arr_decref
+    x64.cmpRegImm32 r13, 0
+    x64.jcc notEqual, found
+    x64.jmp ifcont
+  found:
+    x64.movRegImm32 r12, 1
+    x64.movRegReg rcx, rbx
+    x64.callDirect __arr_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r12, 0
+    x64.movRegReg rcx, rbx
+    x64.callDirect __arr_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @int.equals {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.cmpRegReg rcx, rdx
+    x64.jcc equal, equal
+    x64.jmp notEqual
+  equal:
+    x64.movRegImm32 r8, 1
+    x64.popReg rbp
+    x64.ret
+  notEqual:
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+}

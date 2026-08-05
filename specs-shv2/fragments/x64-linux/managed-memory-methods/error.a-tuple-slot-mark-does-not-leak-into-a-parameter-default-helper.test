@@ -1,0 +1,23 @@
+// Test: error.a-tuple-slot-mark-does-not-leak-into-a-parameter-default-helper
+typealias Int = int(i64.min to i64.max)
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+
+function arrayPair() returns (ByteArray, Int)
+	return ("hi".toByteArray(), 3)
+end 'arrayPair'
+
+function withDefault(k Int = arrayPair().0.length()) returns Int
+	return k
+end 'withDefault'
+
+function main() returns ExitCode
+	return withDefault() as ExitCode
+end 'main'
+
+function useBufferPair(p (__ManagedMemory, Int)) returns Int
+	return p.0.length()
+end 'useBufferPair'
+---
+CompilerError:
+error E2015: <fragment>:10:44: Unsupported: `Array` member 'length' — P1.7 provides managed/get/set/first/last/pop/remove/slice/count/capacity/isEmpty/clone/push/reserve/resize/clear/insert/append/map/contains/hash/equals; that list IS the surface, so nothing else is served here

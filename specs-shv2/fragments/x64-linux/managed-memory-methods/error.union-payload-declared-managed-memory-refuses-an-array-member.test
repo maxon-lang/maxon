@@ -1,0 +1,22 @@
+// Test: error.union-payload-declared-managed-memory-refuses-an-array-member
+typealias Int = int(i64.min to i64.max)
+
+union Held
+	mem(m __ManagedMemory)
+	nothing
+end 'Held'
+
+function size(h Held) returns Int
+	return match h 'k'
+		mem(x) gives x.count()
+		nothing gives 0
+	end 'k'
+end 'size'
+
+function main() returns ExitCode
+	let h = Held.mem("hello".toByteArray())
+	return size(h) as ExitCode
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:11:18: Unsupported: `__ManagedMemory` member 'count' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/elementSize/grow/append/slice/clear; that list IS the surface, so nothing else is served here

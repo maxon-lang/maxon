@@ -1,0 +1,19 @@
+// Test: error.let-global-key-is-linted
+typealias StrMap = Map with (String, String)
+
+let KEY = "a"
+
+function probe(t StrMap) returns ExitCode
+	if t.contains(KEY) 'has'
+		print(try t.get(KEY) otherwise "?")
+	end 'has'
+	return 0
+end 'probe'
+
+function main() returns ExitCode
+	let m = StrMap.create()
+	return probe(m)
+end 'main'
+---
+CompilerError:
+error E3087: <fragment>:7:7: redundant 'Map.contains' followed by 'Map.get' on 't': use 'if let v = try t.get(KEY)' (or 'if var') instead — performs one lookup instead of two

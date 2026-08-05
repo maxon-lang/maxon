@@ -1,0 +1,141 @@
+// Test: try-block-throwing-method-on-param-array
+typealias Code = int(0 to 125)
+typealias CodeArray = Array with Code
+
+function bump(a CodeArray)
+		try 'update'
+				let old = a.get(0)
+				a.set(0, value: old + 1)
+		end 'update' otherwise (e) 'bad'
+				match e 'kind'
+						indexOutOfBounds then panic("oob")
+						emptySlot then panic("empty")
+				end 'kind'
+		end 'bad'
+end 'bump'
+
+function main() returns ExitCode
+		var a = CodeArray.create()
+		a.push(41)
+		bump(a)
+		return try a.get(0) otherwise 99
+end 'main'
+---
+ExitCode: 42
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @bump {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.movRegImm32 rdx, 0
+    x64.movRegReg rcx, rbx
+    x64.callDirect __arr_get
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, critsplit
+    x64.jmp tryblkok
+  critsplit:
+    x64.jmp tryblkerr
+  tryblkok:
+    x64.movRegImm32 rdx, 0
+    x64.leaRegRegImm32 rax, r8, 1
+    x64.cmpRegImm32 rax, 0
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.cmpRegImm32 rax, 125
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_2]
+    x64.callDirect mrt_panic
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __arr_set
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, critsplit
+    x64.jmp tryblkok
+  critsplit:
+    x64.jmp tryblkerr
+  tryblkerr:
+    x64.leaRegRegImm32 rax, r10, -1
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, matcharm
+    x64.jmp matchnext
+  matcharm:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]
+    x64.callDirect mrt_panic
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  matchnext:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc equal, matcharm
+    x64.jmp matchdead
+  matcharm:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]
+    x64.callDirect mrt_panic
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  matchdead:
+  tryblkok:
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  matchcont:
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegImm32 rcx, 1
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __arr_create
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rdx, 41
+    x64.movRegReg rcx, rbx
+    x64.callDirect __arr_push
+    x64.movRegReg rcx, rbx
+    x64.callDirect bump
+    x64.movRegImm32 rdx, 0
+    x64.movRegReg rcx, rbx
+    x64.callDirect __arr_get
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.movRegImm32 r12, 99
+    x64.jmp trycont
+  tryok:
+    x64.movRegReg r12, r8
+    x64.jmp trycont
+  trycont:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __arr_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

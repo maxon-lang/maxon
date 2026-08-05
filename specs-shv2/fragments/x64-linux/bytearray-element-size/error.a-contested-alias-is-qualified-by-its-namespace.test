@@ -1,0 +1,21 @@
+// Test: error.a-contested-alias-is-qualified-by-its-namespace
+// --- file: api/lib.maxon
+export typealias Byte = int(0 to 1000)
+export typealias Bytes = Array with Byte
+
+export function takesWide(b Bytes) returns ExitCode
+	return b.count() as ExitCode
+end 'takesWide'
+
+// --- file: app/main.maxon
+typealias Byte = int(0 to u8.max)
+typealias Bytes = Array with Byte
+
+function main() returns ExitCode
+	var mine = Bytes.create()
+	mine.push(65)
+	return takesWide(mine)
+end 'main'
+---
+CompilerError:
+error E3005: app/<fragment>:17:9: argument type mismatch for 'b': expected 'api.Bytes', got 'app.Bytes'

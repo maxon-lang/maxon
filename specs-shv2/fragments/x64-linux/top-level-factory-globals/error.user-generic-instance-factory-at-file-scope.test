@@ -1,0 +1,21 @@
+// Test: error.user-generic-instance-factory-at-file-scope
+typealias Count = int(0 to u64.max)
+
+type Box uses T
+	export var n as Count
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+end 'Box'
+
+typealias IntBox = Box with Count
+
+var b = IntBox.create()
+
+function main() returns ExitCode
+	return b.n
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:14:9: Unsupported: a top-level `IntBox.create()` — `IntBox` instantiates the user generic `Box`, and a global's record is built before `main` by `__module_init` from the BUILTIN container registry's description, which a user generic has none of. Declare it inside a function

@@ -1,0 +1,118 @@
+// Test: union-payload-declared-managed-memory-serves-the-roster
+typealias Int = int(i64.min to i64.max)
+
+union Held
+	mem(m __ManagedMemory)
+	nothing
+end 'Held'
+
+function size(h Held) returns Int
+	return match h 'k'
+		mem(x) gives x.length()
+		nothing gives 0
+	end 'k'
+end 'size'
+
+function main() returns ExitCode
+	let h = Held.mem("hello".toByteArray())
+	return size(h) as ExitCode
+end 'main'
+---
+ExitCode: 5
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @size {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, matcharm
+    x64.jmp matchnext
+  matcharm:
+    x64.loadRegBaseDisp.word64 rbx, [rcx + 8]
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_incref
+    x64.movRegReg rcx, rbx
+    x64.callDirect __arr_count
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __arr_decref
+    x64.movRegReg r8, r12
+    x64.jmp matchcont
+  matchnext:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc equal, matcharm
+    x64.jmp matchdead
+  matcharm:
+    x64.movRegImm32 r8, 0
+    x64.jmp matchcont
+  matchcont:
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  matchdead:
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.leaRegRdata rbx, [rip + __str_rec_1]
+    x64.movRegImm32 rcx, 1
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __arr_create
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
+    x64.callDirect __str_to_bytes
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [rbx + 0], rax
+    x64.storeBaseDispReg.word64 [rbx + 8], r12
+    x64.movRegReg rcx, rbx
+    x64.callDirect size
+    x64.movRegReg r12, r8
+    x64.cmpRegImm32 r12, 0
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r12, rax
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_2]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_Held
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

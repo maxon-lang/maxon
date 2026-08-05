@@ -1,0 +1,40 @@
+// Test: outer-move-between-routed-calls-rejected
+typealias Code = int(0 to 125)
+
+enum StepError implements Error
+	bad
+end 'StepError'
+
+function build(x Code) returns String
+	return "built value {x} padded out long enough to heap allocate"
+end 'build'
+
+function step(k Code) returns Code throws StepError
+	if k < 1 'b'
+		throw StepError.bad
+	end 'b'
+	return k
+end 'step'
+
+function run(k Code) returns ExitCode
+	var a = build(1)
+	try 'work'
+		let v = step(k)
+		let u = a
+		print(u)
+		let w = step(v)
+		print("w={w}\n")
+	end 'work' otherwise (e) 'bad'
+		match e 'kind'
+			bad then print("caught\n")
+		end 'kind'
+	end 'bad'
+	return 0
+end 'run'
+
+function main() returns ExitCode
+	return run(0)
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:21:2: Unsupported: a block-form `try` whose body MOVES a value declared outside the block (into a field, a union payload, a consuming call or a `return`) BETWEEN two throwing calls — the block's throw edges share one handler, and they would reach it with that value still owned on the earlier edges and already given away on the later ones, so its drop belongs on some throw edges and not others. Move the value before the `try` block or after it, or give the two throwing calls their own `try` blocks
