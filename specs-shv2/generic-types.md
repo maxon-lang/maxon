@@ -2735,6 +2735,51 @@ end 'main'
 5
 ```
 
+<!-- test: generic-managed-return-relayed-inside-the-generic-body -->
+⭐⭐ **THE CO-OWN MUST NOT COMPOUND, AND THIS IS THE SHAPE THAT WOULD MAKE IT.** `relay()` returns what
+`self.get()` returned — a `T` produced by a call made INSIDE the shared body. If the caller-side co-own
+fired at both call sites the box would take two references and be dropped once: a LEAK, not a double free,
+and therefore invisible to a crash and visible only to the leak gate. It does not fire twice, and the
+reason is structural rather than lucky: `retypeOpaqueMethodResult` substitutes only when the receiver's tag
+is `genericInstance`, and inside the shared body `self` is the generic BASE, so no retype happens there and
+no co-own is spent. The instantiation's single co-own at `bx.relay()` is the only one, which is exactly the
+claim that a `T` return is a BORROW every callee refuses to retain. Pinned because a second co-own here
+would pass every other case in this file.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+type Alpha
+	export var a as Integer
+	export static function create(a Integer) returns Self
+		return Self{a: a}
+	end 'create'
+end 'Alpha'
+type Box uses T
+	export var value as T
+	export static function create(v T) returns Self
+		return Self{value: v}
+	end 'create'
+	export function get() returns T
+		return self.value
+	end 'get'
+	export function relay() returns T
+		return self.get()
+	end 'relay'
+end 'Box'
+typealias AlphaBox = Box with Alpha
+function main() returns ExitCode
+	let bx = AlphaBox.create(Alpha.create(3))
+	let r = bx.relay()
+	print("r={r.a}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+r=3
+```
+
 <!-- test: generic-managed-return-overload-selection -->
 ⭐ **THE REFUSAL THAT GOES AWAY.** While the result kept the opaque tag, an overloaded callee handed one had
 nothing to choose by, and shv2 said so rather than guessing (`resolving an overload of 'over' against an
