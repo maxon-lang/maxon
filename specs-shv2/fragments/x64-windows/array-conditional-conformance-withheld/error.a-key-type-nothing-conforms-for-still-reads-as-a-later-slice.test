@@ -1,0 +1,20 @@
+// Test: error.a-key-type-nothing-conforms-for-still-reads-as-a-later-slice
+typealias Val = int(i64.min to i64.max)
+
+type Opaque
+	export var x as Val
+
+	static function create(x Val) returns Self
+		return Self{x: x}
+	end 'create'
+end 'Opaque'
+
+typealias OpaqueMap = Map with (Opaque, Val)
+
+function main() returns ExitCode
+	var m = OpaqueMap.create()
+	return 0
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:15:10: Unsupported: `Map` hashes and compares its keys through their `Hashable`/`Equatable` witnesses, so a key must be one of `int`, `String`, `Character`, `Array` — a 'Opaque' key is a later slice

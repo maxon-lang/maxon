@@ -162,6 +162,8 @@ export function installBuiltinConformanceRuntime(module StdModule, globalData Gl
 	let strEquals = candidateImplName(impls, conformerName: StringConformerName, methodName: EqualsMethodName)
 	let charHash = candidateImplName(impls, conformerName: CharacterConformerName, methodName: HashMethodName)
 	let charEquals = candidateImplName(impls, conformerName: CharacterConformerName, methodName: EqualsMethodName)
+	let arrayHash = candidateImplName(impls, conformerName: ArrayBuiltinBaseName, methodName: HashMethodName)
+	let arrayEquals = candidateImplName(impls, conformerName: ArrayBuiltinBaseName, methodName: EqualsMethodName)
 
 	// ⭐ ASKED ONCE, BEFORE THE FIRST INSTALL — which is what makes the answers independent of the order
 	// they are acted on in. A scan run BETWEEN installs would see the ops of the impls this very function
@@ -226,6 +228,24 @@ export function installBuiltinConformanceRuntime(module StdModule, globalData Gl
 	if referenced.contains(charEquals) 'charEquals'
 		buildStrEq(module, name: charEquals)
 	end 'charEquals'
+
+	// ⭐⭐ **`Array` IS THE SIXTH CONFORMER, AND ITS TWO BODIES ARE `ArrayRuntime`'s (array-hashable)** — that
+	// file owns the 48-byte record and the packed-aware byte extent, exactly as `StringRuntime` owns
+	// `buildStrEq`'s. It joins by the same rule as every impl here: one symbol per (conformer, method), built
+	// iff the emitted module names it.
+	//
+	// ⭐ **AND IT IS THE `__str_eq` / `String.equals` ARRANGEMENT, NOT A THIRD SHAPE.** The very same graphs
+	// are ALSO installed under `__arr_hash`/`__arr_eq` by `installArrayRuntime`, which is what the DIRECT
+	// `arr.hash()` / `a == b` dispatch calls; the witness-visible pair is these. Two symbols, one builder
+	// each — see `ArrayRuntime.ArrHashName` for why the direct door may not name `Array.<method>` the way the
+	// `String` and `int` doors name theirs.
+	if referenced.contains(arrayHash) 'arrayHash'
+		buildArrayHash(module, name: arrayHash)
+	end 'arrayHash'
+
+	if referenced.contains(arrayEquals) 'arrayEquals'
+		buildArrayEquals(module, name: arrayEquals)
+	end 'arrayEquals'
 end 'installBuiltinConformanceRuntime'
 
 // Mint one impl's symbol and enrol it as a candidate in ONE act — see the installer for the drift this
@@ -722,36 +742,70 @@ function buildStrHash(module StdModule, name ByteArray)
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry")
-	var header = module.addBlock(func, label: b"header")
-	var body = module.addBlock(func, label: b"body")
-	var done = module.addBlock(func, label: b"done")
 
 	emitParams(module, block: entry, count: 1)
 	let strPtr = 0 as ValueId
 
-	// entry: load `buffer@0`/`length@8`, seed `h = 5381` / `i = 0`, and enter the loop.
+	// entry: load `buffer@0`/`length@8`, then the shared djb2 walk over those bytes.
 	let buffer = emitLoadField(module, block: entry, record: strPtr, offset: StringBufferOffset, ids: ids)
 	let length = emitLoadField(module, block: entry, record: strPtr, offset: StringLengthOffset, ids: ids)
-	let hSeed = emitConst(module, block: entry, value: Djb2Seed, ids: ids)
-	let iSeed = emitConst(module, block: entry, value: 0, ids: ids)
+	emitDjb2HashOverByteRange(module, func: func, cur: entry, buffer: buffer, len: length, ids: ids)
+
+	module.functions.push(func)
+end 'buildStrHash'
+
+// ⭐⭐ **THE WHOLE OF A djb2 BYTE HASH — the loop AND the masked return.** `h = 5381`, then `h = h * 33 + b`
+// over `buffer[0..len)`, then `return h & 0xFFFFFFFF`. Emitted off `cur`, which it terminates into a fresh
+// header; the exit block is its own.
+//
+// ⚠ **IT OWNS THE TAIL RATHER THAN HANDING THE ACCUMULATOR BACK, AND THAT IS A CODEGEN FACT RATHER THAN A
+// STYLE ONE.** Block creation ORDER is emission order, which decides layout and therefore register
+// assignment. Returning `(done, h)` for the caller to finish would make the caller mint `done` — before the
+// loop's own two blocks, inverting the order `buildStrHash` had before this emitter was extracted. MEASURED:
+// that inversion alone moved `String.hash`'s register allocation in **42 committed fragments**, for a body
+// computing the identical djb2. Owning the tail costs nothing, because BOTH callers' tails were already the
+// same line.
+//
+// ⚠ **SHARED FOR `emitByteRangeCompareLoop`'s REASON, one protocol over.** `String.hash`, `Character.hash`
+// and `Array.hash` all fold raw bytes with djb2, and the algorithm is a CONTRACT between them and every
+// container that hashes their values: a widened read or a changed multiplier reaching one and not another
+// would leave two conformers hashing the same bytes differently, with nothing failing to compile.
+//
+// The loop carries `[i, h]` as the header's two phis — the `emitByteRangeCompareLoop` shape with an
+// accumulator added. `len == 0` folds nothing and yields the bare seed (`""` -> 5381). Both `argType`s are
+// set explicitly: `retypeBlockArgs` runs in `lowerMaxonToStd`, which these post-pipeline functions never
+// pass through.
+//
+// ⚠ The low-32 mask is the CALLER's (`returnLow32Masked`) and deliberately not applied per iteration: i64
+// multiply/add wrap mod 2^64 and `(x mod 2^64) mod 2^32 == x mod 2^32`, so one mask at the end is the same
+// low-32 djb2 as a mask every round, over a range of any length.
+//
+// ⚠ The three block LABELS are the ones `buildStrHash` carried before the extraction, and they are kept
+// deliberately: a label is emitted into every `jmp` a spec fragment records, so renaming them would rewrite
+// **192 committed goldens** to say nothing about the code.
+export function emitDjb2HashOverByteRange(module StdModule, func IrFunction, cur IrBlock, buffer ValueId, len ValueId, ids ValueMinter)
+	var header = module.addBlock(func, label: b"header")
+	var body = module.addBlock(func, label: b"body")
+	var done = module.addBlock(func, label: b"done")
+
+	let hSeed = emitConst(module, block: cur, value: Djb2Seed, ids: ids)
+	let iSeed = emitConst(module, block: cur, value: 0, ids: ids)
 
 	// The loop's two carried phis, in the order `[i, h]` — the SAME order every incoming edge pushes below.
 	let i = ids.mint()
 	header.blockArgs.push(IrBlockArg.create(i, argType: StdType.i64))
 	let h = ids.mint()
 	header.blockArgs.push(IrBlockArg.create(h, argType: StdType.i64))
-	module.setTerminator(entry, op: StdOp.branch(header.id))
-	entry.branchEdges.push(BranchEdge.create(header.id, argIds: twoArgs(iSeed, second: hSeed)))
+	module.setTerminator(cur, op: StdOp.branch(header.id))
+	cur.branchEdges.push(BranchEdge.create(header.id, argIds: twoArgs(iSeed, second: hSeed)))
 
-	// header: `i >= length` ⇒ every byte folded in ⇒ mask and return; else fold `buffer[i]`.
-	let atEnd = emitCmp(module, block: header, a: i, b: length, pred: StdCmpPred.ge, ids: ids)
+	// header: `i >= len` ⇒ every byte folded in ⇒ out to `done`; else fold `buffer[i]`.
+	let atEnd = emitCmp(module, block: header, a: i, b: len, pred: StdCmpPred.ge, ids: ids)
 	module.setTerminator(header, op: StdOp.condBranch(atEnd, thenBlockId: done.id, elseBlockId: body.id))
 
 	// body: `h = h * 33 + buffer[i]`; `i = i + 1`; back-edge. `i`/`h` are the header phis (header dominates
-	// body), so they are read directly. The byte is a u8 load off `buffer + i`.
-	let addr = emitBin(module, block: body, a: buffer, b: i, opcode: StdBinOpcode.add, ids: ids)
-	let curByte = ids.mint()
-	module.appendOp(body, op: StdOp.loadIndirect(curByte, addrId: addr, offset: 0, valueType: StdType.u8))
+	// body), so they are read directly.
+	let curByte = emitLoadByteIndexed(module, block: body, base: buffer, index: i, ids: ids)
 	let mult = emitConst(module, block: body, value: Djb2Multiplier, ids: ids)
 	let hScaled = emitBin(module, block: body, a: h, b: mult, opcode: StdBinOpcode.mul, ids: ids)
 	let hNext = emitBin(module, block: body, a: hScaled, b: curByte, opcode: StdBinOpcode.add, ids: ids)
@@ -760,8 +814,7 @@ function buildStrHash(module StdModule, name ByteArray)
 	module.setTerminator(body, op: StdOp.branch(header.id))
 	body.branchEdges.push(BranchEdge.create(header.id, argIds: twoArgs(iNext, second: hNext)))
 
-	// done: mask the accumulator to the low 32 bits (`h` is the header phi, and header dominates done).
+	// done: mask the accumulator to the low 32 bits and return it (`h` is the header phi, and header
+	// dominates done).
 	returnLow32Masked(module, block: done, value: h, ids: ids)
-
-	module.functions.push(func)
-end 'buildStrHash'
+end 'emitDjb2HashOverByteRange'

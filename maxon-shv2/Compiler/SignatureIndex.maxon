@@ -8434,8 +8434,8 @@ export type ProgramSignatures
 	// Outer` inside `type Outer`, in EITHER of the two spellings such a field arrives in. A directly-tagged
 	// `genericInstance` is not an aggregate NAME at all, so the walk's tag guard skips it; a generic ALIAS
 	// (`typealias OuterBox = Box with Outer`, `var b as OuterBox`) arrives as a bare `named` — the sweep
-	// recorded the field before the alias was interned (`fieldTypeIsArray` and `declaredSlotType` both state
-	// it) — so it passes the tag guard and is skipped one line later by `structTypes.contains`, which a
+	// recorded the field before the alias was interned (`denotesArrayInstance` and `declaredSlotType` both
+	// state it) — so it passes the tag guard and is skipped one line later by `structTypes.contains`, which a
 	// generic alias's name is not in. Same verdict, different door.
 	//
 	// The direction is CHOSEN, not overlooked: the other arm of that trade treats every generic-instance
@@ -9336,13 +9336,78 @@ export type ProgramSignatures
 	// header for the unresolved-symbol crash that fix is), and a witness label minted off the un-canonical
 	// spelling would name a table nothing registers.
 	//
-	// Two callers, one question: `Parser.requireArrayContainsAvailable` asks it to decide whether `contains`
-	// exists on this receiver at all, and `LowerMaxonToStd.appendArrayElementWitnessArgs` asks it to name the
-	// table that call dispatches through. Split, the front end could admit a call the lowering then cannot
-	// resolve a symbol for.
+	// One question, whatever the caller does with it: `arrayElementConstraintCheck` asks it to decide whether
+	// a conditional extension method exists on this receiver at all (and through it the front end's
+	// withholding and the conformer-name reduction), and `LowerMaxonToStd.appendArrayElementWitnessArgs` asks
+	// it to name the table such a call dispatches through. Split, the front end could admit a call the
+	// lowering then cannot resolve a symbol for. The readers are deliberately NOT counted here: a number
+	// beside the thing it counts is one edit away from being wrong, and this one already was.
 	export function containerElementConformerName(id GenericInstanceId) returns String
 		return self.conformerNameOfType(self.containerElementType(id), idsFrom: self.typeNames)
 	end 'containerElementConformerName'
+
+	// ⭐⭐ **DOES A CONTAINER INSTANCE'S ELEMENT SATISFY A CONDITIONAL EXTENSION'S `where` CLAUSE? — THE ONE
+	// WALK, FOR EVERY DOOR THAT ASKS (array-hashable; unified at the tick's review).** `Array`'s conditional
+	// conformance is asked at doors whose CONSEQUENCES differ — the front end WITHHOLDS a method
+	// (`Parser.requireArrayExtensionAvailable`), the reduction collapses the instance's conformer name to
+	// `Array` (`arrayElementCarriesConformance`, and through it every `__witness_Array.*` stamp, every
+	// admitted hash-table key and every `where T is Hashable` slot) — and a second copy of the walk lets those
+	// two answer differently with nothing failing to compile: `a == b` refused while the same array is still
+	// stamped and keyed, or the reverse. One walk, and each caller keeps only its own consequence.
+	//
+	// ⭐ **IT IS THE `where` HALF OF THE CONFORMANCE, ASKED AT THE ONE PLACE THAT STILL HAS AN INSTANCE.**
+	// Everything downstream of `conformerNameOfType` works in NAMES — a name cannot carry an element — so the
+	// conditional half has to be discharged by the reduction itself; see that function's `Array` arm.
+	//
+	// ⭐ **THE CLAUSE IS A PARAMETER, because `Array` has TWO of them and they are two FACTS** — `contains`'s
+	// `where Element is Equatable` (whose list is also what the lowering threads witness tables for) and the
+	// conformance's `where Element is Hashable and Equatable`. See `Parser.arrayWhereClause`.
+	//
+	// It answers in `ExtensionConstraintCheck`, the verdict a USER's conditional extension is filtered by
+	// (`ConformanceCheck.checkExtensionConstraints`), so the compiler-owned clause and the parsed one are
+	// reported through one shape: the failing arm carries the constraint and the binding every diagnostic
+	// here names, and a caller cannot reach for either after a `satisfied`.
+	//
+	// ⚠ The OPAQUE element is the CALLER's to handle and is deliberately not an arm: `Array with T` inside a
+	// generic body is not an element that fails the clause, it is an element nothing here knows — which the
+	// reduction answers with "does not conform" and the parser answers with a WITNESS-FORWARDING refusal
+	// naming the type parameter. Two different answers to one question, so the question is asked twice.
+	//
+	// ⚠ **IT IS MUTUALLY RECURSIVE and terminates on ELEMENT-NESTING DEPTH**: `containerElementConformerName`
+	// -> `conformerNameOfType` -> `instanceReducesToArrayConformer` -> `arrayElementCarriesConformance` ->
+	// here, which is how an `Array with (Array with E)` gets the inner array's own conditional conformance
+	// decided before the outer's. Each hop strictly descends into an ELEMENT, and a type cannot contain
+	// itself (a self-naming typealias is E2012 before any of this runs — MEASURED), so there is no cycle to
+	// guard against.
+	export function arrayElementConstraintCheck(id GenericInstanceId, clauseInterfaces ByteArrayArray) returns ExtensionConstraintCheck
+		let element = self.containerElementConformerName(id).toByteArray()
+		for interfaceName in clauseInterfaces 'eachConstraint'
+			if not typeConformsTo(self.sweptConformanceIndex(), interfaces: self.interfaces, typeName: element, interfaceName: interfaceName) 'violates'
+				return ExtensionConstraintCheck.unmet(interfaceName, bindingName: element)
+			end 'violates'
+		end 'eachConstraint'
+
+		return ExtensionConstraintCheck.satisfied
+	end 'arrayElementConstraintCheck'
+
+	// ⭐⭐ **DOES THIS ARRAY INSTANCE'S ELEMENT SATISFY `Array`'s CONDITIONAL CONFORMANCE (array-hashable)?**
+	// — `where Element is Hashable and Equatable`, read off `IrInterface.intrinsicConformanceProtocolNames`
+	// so the clause enforced here, the clause a withheld method is refused with, and the row
+	// `isIntrinsicBuiltinConformance` states for `Array` are one list.
+	//
+	// ⚠ An OPAQUE element (`Array with T` inside a generic body) is refused rather than admitted: nothing
+	// here knows what `T` binds to, and answering `true` would file the instance under a conformer whose
+	// element may not conform at the call site that instantiates it.
+	export function arrayElementCarriesConformance(id GenericInstanceId) returns bool
+		if self.containerElementIsOpaque(id) 'opaqueElement'
+			return false
+		end 'opaqueElement'
+
+		return match self.arrayElementConstraintCheck(id, clauseInterfaces: intrinsicConformanceProtocolNames(ArrayBuiltinBaseName)) 'clause'
+			satisfied gives true
+			unmet gives false
+		end 'clause'
+	end 'arrayElementCarriesConformance'
 
 	// ⭐⭐ **THE DECLARED RANGE OF AN `Array` INSTANCE'S ELEMENT, AS `readerFilePath` RESOLVES IT** — the
 	// BOUNDS twin of `arrayElementSize`, and the question a value being stored INTO the instance has to be
@@ -10757,7 +10822,7 @@ export type ProgramSignatures
 	// A struct field and a union payload are recorded by the declaration SWEEP, which runs before any generic
 	// alias is interned, so their declared type is a bare `named("Bag")`. The drop and clone cascades read
 	// that column with NO reader file (`managedFieldDropCallee`, `managedFieldCloneStrategy`,
-	// `fieldTypeIsArray`) — while everything was last-wins they simply agreed with the parser, and the
+	// `denotesArrayInstance`) — while everything was last-wins they simply agreed with the parser, and the
 	// program was refused rather than miscompiled. Scope the parser alone and they DISAGREE: `Nums.items`, a
 	// buffer of integers, would be routed to `__destruct_Array_String` and its elements freed as pointers.
 	//
@@ -11371,8 +11436,41 @@ export type ProgramSignatures
 			return self.conformerNameOfDeclaredName(try idsFrom.nameOf(typeNameIdOf(t)) otherwise panic("conformerNameOfType: type-name id {typeNameIdOf(t)} is not in the interner it was resolved against — pass the interner this type's ids live in"))
 		end 'namesAnAggregate'
 
+		// ⭐⭐ **EVERY CONFORMING `Array with E` REDUCES TO THE ONE CONFORMER `Array` (array-hashable)** — the
+		// generic-instance analogue of `Integer` reducing to `int`, and it rests on the same property: the
+		// impls it names are ELEMENT-INDEPENDENT. `Array.hash`/`Array.equals` walk the backing buffer's raw
+		// bytes (`stdlib/Array.maxon:637-664`), so one pair of `.text` symbols and one pair of
+		// `__witness_Array.*` tables answer for every array in the program, whatever it holds — where a
+		// per-instance conformer name would mint an identical body per element type.
+		//
+		// ⚠⚠ **AND THE REDUCTION IS CONDITIONAL, WHICH IS THE WHOLE OF HOW A CONDITIONAL CONFORMANCE SURVIVES
+		// A NAME-KEYED CONFORMANCE MODEL.** An `Array with <non-conforming element>` keeps its MANGLED
+		// instance name, which no `implements` and no intrinsic row claims — so `where T is Hashable` refuses
+		// it through the ordinary E3017 door, with no second predicate anywhere to keep in step. It is why
+		// `isIntrinsicBuiltinConformance`'s `Array` arm may answer unconditionally.
+		//
+		// ⚠ The id-bearing arms above are settled first: this asks about a `genericInstance`, whose id is a
+		// `GenericInstanceId` in THIS index's registry and carries no per-interner name.
+		// ⚠ The TAG guard is spelled here rather than through `isArrayInstanceAt` because the conjunction
+		// continues into the conformance half: routing it through that door would ask `isArrayInstance` twice
+		// over one id. It is the same two-part test and the same reason for it — a `TypeNameId` and a
+		// `GenericInstanceId` share a numeric space, so the tag is what makes the id question meaningful.
+		if maxonTypeTag(t) == ValueTypeTag.genericInstance and self.instanceReducesToArrayConformer(typeNameIdOf(t)) 'conformingArray'
+			return String.from(ArrayBuiltinBaseName)
+		end 'conformingArray'
+
 		return self.mangleTypeArg(t)
 	end 'conformerNameOfType'
+
+	// ⭐ **DOES INSTANCE `id` REDUCE TO THE `Array` CONFORMER?** — an `Array with E` whose `E` satisfies the
+	// conditional conformance. TWO doors reduce to it and each arrives with a different thing in hand: this
+	// one with a resolved instance (`conformerNameOfType`), `conformerNameOfDeclaredName` with the NAME of a
+	// generic-instance typealias. The reduction they share is stated once, here — the arrangement
+	// `canonicalizeRangedAlias` and `conformerNameOfDeclaredName` already have for a ranged alias, which is
+	// split across exactly the same two doors for exactly the same reason.
+	function instanceReducesToArrayConformer(id GenericInstanceId) returns bool
+		return self.isArrayInstance(id) and self.arrayElementCarriesConformance(id)
+	end 'instanceReducesToArrayConformer'
 
 	// The conformer a declared NAME reduces to: a ranged int/float alias collapses to its underlying
 	// primitive's name (`Integer` -> `int`), which is what its intrinsic conformance and its `__witness_int.*`
@@ -11382,6 +11480,22 @@ export type ProgramSignatures
 		if let underlying = try self.aliasUnderlyingInAnyFile(name) 'rangedAlias'
 			return primitiveTypeTagName(maxonTypeTag(underlying))
 		end 'rangedAlias'
+
+		// ⭐⭐ **A GENERIC-INSTANCE TYPEALIAS OVER A CONFORMING `Array` REDUCES TO THE `Array` CONFORMER
+		// (array-hashable) — the ranged alias's rule one alias kind over, and it is NOT optional.** A generic
+		// instance stores its type argument as the SOURCE spelling: `Map with (IntArr, Val)` holds
+		// `named("IntArr")` exactly as it holds `named("Val")`, and both are reduced HERE rather than at
+		// instantiation. Without this arm the key of `specs-shv2/array-hashable.md`'s `int-array-map-key` is
+		// the conformer `IntArr` — a name nothing conforms under — so the very witness slot the reduction
+		// exists to name is never reachable through an alias, which is the only way the corpus writes one.
+		//
+		// ⚠ **THE SUPERSEDED GUARD IS `genericAliasInstance`'s PRECONDITION, not caution.** That door refuses
+		// a spelling two files contest, and a whole-program reader must ask this first (see there); a
+		// superseded spelling falls through to its own name, which conforms to nothing — the same answer a
+		// non-conforming array gets, and the safe direction.
+		if self.isGenericAlias(name) and not self.genericAliasSpellingIsSuperseded(name) and self.instanceReducesToArrayConformer(self.genericAliasInstance(name)) 'conformingArrayAlias'
+			return String.from(ArrayBuiltinBaseName)
+		end 'conformingArrayAlias'
 
 		return String.from(name)
 	end 'conformerNameOfDeclaredName'
@@ -13153,36 +13267,46 @@ export type ProgramSignatures
 		let layout = try self.structTypes.get(structName) otherwise panic("ProgramSignatures.structHasArrayField: no `type {String.from(structName)}` is declared — every caller asks `structOf` first")
 		for i in 0 upto layout.fieldCount() 'eachField'
 			let fieldType = try layout.fieldTypes.get(i) otherwise panic("ProgramSignatures.structHasArrayField: fieldTypes.get OOB at {i}")
-			if self.fieldTypeIsArray(fieldType) 'array'
+			if self.denotesArrayInstance(fieldType) 'array'
 				return true
 			end 'array'
 		end 'eachField'
 		return false
 	end 'structHasArrayField'
 
-	// Is a (possibly `named`-generic-alias) field type an `Array` instance — the shared "is this an array?"
-	// test over a RAW layout field type, resolving a `named` generic alias to its instance first.
-	function fieldTypeIsArray(fieldType MaxonType) returns bool
-		let tag = maxonTypeTag(fieldType)
+	// ⭐ **DOES A TYPE DENOTE AN `Array` INSTANCE — DIRECTLY OR THROUGH A GENERIC-ALIAS NAME?** A layout's
+	// field type is recorded by the SWEEP, before interning, so an `items as IntArr` field arrives as
+	// `named("IntArr")` where an `items as Array with Int` field arrives already tagged `genericInstance`;
+	// a generic instance's stored type ARGUMENT carries the same two spellings for the same reason
+	// (`conformerNameOfDeclaredName`'s alias arm). One resolution serves both, so a rule written for one
+	// spelling cannot miss the other — which is how an array `Map` key spelled through an alias
+	// (`Parser.requireHashTableKeyType`) and an array FIELD stay one question.
+	//
+	// ⚠ **A SUPERSEDED SPELLING ANSWERS `false` RATHER THAN REACHING `genericAliasInstance` (which PANICS on
+	// one).** That door refuses a name two files contest because it can name no reader to choose between
+	// them, and a whole-program reader must ask this first — the arrangement `conformerNameOfDeclaredName`
+	// states in full. Answering "not an array" is the safe direction and the same one that door takes: it
+	// costs a contested field its array treatment, where reaching the panic costs the user their compile.
+	export function denotesArrayInstance(t MaxonType) returns bool
+		let tag = maxonTypeTag(t)
 		if tag == ValueTypeTag.genericInstance 'instance'
-			return self.isArrayInstance(typeNameIdOf(fieldType))
+			return self.isArrayInstance(typeNameIdOf(t))
 		end 'instance'
 		if tag != ValueTypeTag.named 'notNamed'
 			return false
 		end 'notNamed'
-		let name = self.nameOfId(typeNameIdOf(fieldType))
-		return self.genericAliases.contains(name) and self.isArrayInstance(self.genericAliasInstance(name))
-	end 'fieldTypeIsArray'
+		let name = self.nameOfId(typeNameIdOf(t))
+		return self.isGenericAlias(name) and not self.genericAliasSpellingIsSuperseded(name) and self.isArrayInstance(self.genericAliasInstance(name))
+	end 'denotesArrayInstance'
 
-	// The `Array` instance a field type denotes — a directly-tagged `genericInstance`, or a `named`
-	// generic-alias field (the sweep recorded the layout before interning) resolved to its instance.
-	// Precondition: `fieldTypeIsArray(fieldType)`, so exactly these two shapes reach here.
-	function arrayInstanceOfFieldType(fieldType MaxonType) returns GenericInstanceId
-		if maxonTypeTag(fieldType) == ValueTypeTag.genericInstance 'instance'
-			return typeNameIdOf(fieldType)
+	// The `Array` instance the type above denotes. Precondition: `denotesArrayInstance(t)`, so exactly the
+	// two spellings it admits reach here.
+	export function denotedArrayInstance(t MaxonType) returns GenericInstanceId
+		if maxonTypeTag(t) == ValueTypeTag.genericInstance 'instance'
+			return typeNameIdOf(t)
 		end 'instance'
-		return self.genericAliasInstance(self.nameOfId(typeNameIdOf(fieldType)))
-	end 'arrayInstanceOfFieldType'
+		return self.genericAliasInstance(self.nameOfId(typeNameIdOf(t)))
+	end 'denotedArrayInstance'
 
 	// ⭐ **DOES A CONCRETE INSTANCE HOLD AN OPAQUE-`T` `Array` FIELD WHOSE ELEMENT IS MANAGED (P1.7 slice
 	// 3b)?** — `Container with String`'s `items as Array with typeParameter(0)` field, where the substituted
@@ -13284,8 +13408,8 @@ export type ProgramSignatures
 		for i in 0 upto layout.fieldCount() 'eachField'
 			let fieldType = try layout.fieldTypes.get(i) otherwise panic("ProgramSignatures.managedOpaqueArrayElementOf: fieldTypes.get OOB at {i}")
 			// An opaque `Array with T` field: the descriptor drops each ELEMENT (P1.7 slice 3b-ii).
-			if self.fieldTypeIsArray(fieldType) 'arrayField'
-				let element = self.containerElementType(self.arrayInstanceOfFieldType(fieldType))
+			if self.denotesArrayInstance(fieldType) 'arrayField'
+				let element = self.containerElementType(self.denotedArrayInstance(fieldType))
 				if maxonTypeTag(element) == ValueTypeTag.typeParameter and self.genericInstanceArgIsOwned(id, position: typeNameIdOf(element)) 'managedArrayElement'
 					return ManagedOpaqueArrayElement.present(self.substitutedInstanceArg(id, position: typeNameIdOf(element)))
 				end 'managedArrayElement'

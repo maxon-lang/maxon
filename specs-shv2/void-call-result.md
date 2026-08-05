@@ -214,7 +214,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:8:14: Unsupported: `Array` member 'frobnicate' — P1.7 provides managed/get/set/first/last/pop/remove/slice/count/capacity/isEmpty/clone/push/reserve/resize/clear/insert/append/map/contains; that list IS the surface, so nothing else is served here
+error E2015: <fragment>:8:14: Unsupported: `Array` member 'frobnicate' — P1.7 provides managed/get/set/first/last/pop/remove/slice/count/capacity/isEmpty/clone/push/reserve/resize/clear/insert/append/map/contains/hash/equals; that list IS the surface, so nothing else is served here
 ```
 
 <!-- test: error.unknown-set-method-in-value-position -->
@@ -264,7 +264,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:8:14: Unsupported: `Array` member 'grow' — P1.7 provides managed/get/set/first/last/pop/remove/slice/count/capacity/isEmpty/clone/push/reserve/resize/clear/insert/append/map/contains; that list IS the surface, so nothing else is served here
+error E2015: <fragment>:8:14: Unsupported: `Array` member 'grow' — P1.7 provides managed/get/set/first/last/pop/remove/slice/count/capacity/isEmpty/clone/push/reserve/resize/clear/insert/append/map/contains/hash/equals; that list IS the surface, so nothing else is served here
 ```
 
 <!-- test: error.array-void-mutator-in-value-position -->

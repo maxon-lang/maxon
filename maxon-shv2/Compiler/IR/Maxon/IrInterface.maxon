@@ -335,7 +335,12 @@ export let CompareMethodName = b"compare"
 export let CloneMethodName = b"clone"
 
 let FormatParamName = b"format"
-let OtherParamName = b"other"
+// ⚠ Exported since array-hashable: `Parser.requireSameArrayInstanceArg` reports a bad `Array.equals`
+// argument under the formal name `Equatable.equals` DECLARES, which is this one. It is deliberately not
+// `SignatureIndex.ManagedMemoryOtherParamName` — that is `__ManagedMemory.append`'s own formal, a different
+// declaration that happens to have chosen the same word, and merging them would make one interface's
+// signature the authority for a buffer method's.
+export let OtherParamName = b"other"
 export let HashValueTypeName = b"HashValue"
 
 // `stdlib/Character.maxon`'s `export typealias Codepoint = int(0 to 1114111)` — the SECOND name
@@ -1515,6 +1520,26 @@ export function isIntrinsicBuiltinConformance(typeName ByteArray, interfaceName 
 	if typeName.equals(BoolConformerName) 'bool'
 		return interfaceName.equals(ComparableInterfaceName)
 	end 'bool'
+	// ⭐⭐ **`Array` IS THE SIXTH CONFORMER AND THE FIRST *CONDITIONAL* ONE (array-hashable).** Both
+	// references declare it as an extension — `extension Array implements Hashable, Equatable where Element
+	// is Hashable and Equatable` (`stdlib/Array.maxon:635`) — and the two halves of that declaration name the
+	// SAME two protocols, which is not a coincidence: a container promises exactly what it demands of its
+	// element. `intrinsicConformanceProtocolNames(ArrayBuiltinBaseName)` is therefore the `where` clause as
+	// well as the `implements` list, and the doors that enforce the element constraint read it from here
+	// rather than transcribing it.
+	//
+	// ⚠ **THE `where` HALF IS NOT ASKED HERE, AND CANNOT BE — this predicate sees a NAME, not an instance.**
+	// It is discharged one door earlier, by the reduction that produces the name: an `Array with E` reduces
+	// to the conformer `Array` only when `E` conforms to both protocols, and otherwise keeps its mangled
+	// instance name, which conforms to nothing (`ProgramSignatures.conformerNameOfType`). So "the conformer
+	// is spelled `Array`" already means "its element satisfied the clause", and this arm may answer
+	// unconditionally.
+	//
+	// ⚠ **`Comparable` IS ABSENT for `String`'s reason one shape up**: `Array.equals` is a byte compare, and
+	// bytes have no ordering; neither reference gives an array one.
+	if typeName.equals(ArrayBuiltinBaseName) 'array'
+		return interfaceName.equals(HashableInterfaceName) or interfaceName.equals(EquatableInterfaceName)
+	end 'array'
 	return false
 end 'isIntrinsicBuiltinConformance'
 
@@ -1663,6 +1688,24 @@ function builtinConformableProtocolNames() returns ByteArrayArray
 	return names
 end 'builtinConformableProtocolNames'
 
+// ⭐⭐ **WHICH PROTOCOLS ONE BUILTIN CONFORMER ACTUALLY CONFORMS TO** — the ragged table's row for
+// `typeName`, read off the predicate rather than restated. It was the opening `if … continue` of the two
+// walks below, written twice; a third reader made it a function rather than a third copy.
+//
+// ⭐ **AND THAT THIRD READER IS THE CONDITIONAL CONFORMANCE'S `where` CLAUSE.** `Array`'s row IS the clause
+// its element must satisfy (see `isIntrinsicBuiltinConformance`'s `Array` arm), so the availability check,
+// the sentence a withheld method is refused with, and this predicate's answer are one list. Written out as
+// `[Hashable, Equatable]` at those doors it would be the copy that stops matching the day the row moves.
+export function intrinsicConformanceProtocolNames(typeName ByteArray) returns ByteArrayArray
+	var names = ByteArrayArray.create()
+	for protocolName in builtinConformableProtocolNames() 'eachProtocol'
+		if isIntrinsicBuiltinConformance(typeName, interfaceName: protocolName) 'conforms'
+			names.push(protocolName)
+		end 'conforms'
+	end 'eachProtocol'
+	return names
+end 'intrinsicConformanceProtocolNames'
+
 // ⭐ **THE METHOD A DIRECT `<value>.<name>(…)` DISPATCH RESOLVES TO ON A BUILTIN CONFORMER** — searched
 // through the conformer's INTRINSIC conformances, so the method set is DERIVED from
 // `isIntrinsicBuiltinConformance` plus the synthesized protocol declarations rather than listed a second
@@ -1675,11 +1718,7 @@ end 'builtinConformableProtocolNames'
 //     result) — all three fetched off the one declaration instead of respelled at the dispatch site, the
 //     same "fetch, don't describe" rule `requireBuiltinInterface` exists for.
 export function builtinConformerMethod(typeName ByteArray, methodName ByteArray) returns BuiltinConformerMethodLookup
-	for protocolName in builtinConformableProtocolNames() 'eachProtocol'
-		if not isIntrinsicBuiltinConformance(typeName, interfaceName: protocolName) 'doesNotConform'
-			continue
-		end 'doesNotConform'
-
+	for protocolName in intrinsicConformanceProtocolNames(typeName) 'eachProtocol'
 		// A DIRECT scan of the protocol's own methods, and deliberately not `interfaceWitnessSlots`: a
 		// synthesized protocol declares no `extends` (`singleMethodInterface`/`markerInterface` build them all
 		// with an empty list), so there is no chain to walk — and this dispatch wants the SIGNATURE, never a
@@ -1713,11 +1752,7 @@ end 'builtinConformerMethod'
 // a second copy of this answer.
 export function builtinConformerMethodNameList(typeName ByteArray) returns ByteArrayArray
 	var names = ByteArrayArray.create()
-	for protocolName in builtinConformableProtocolNames() 'eachProtocol'
-		if not isIntrinsicBuiltinConformance(typeName, interfaceName: protocolName) 'doesNotConform'
-			continue
-		end 'doesNotConform'
-
+	for protocolName in intrinsicConformanceProtocolNames(typeName) 'eachProtocol'
 		let iface = requireBuiltinInterface(protocolName)
 		for method in iface.methods 'eachMethod'
 			names.push(method.name)

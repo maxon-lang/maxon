@@ -3875,32 +3875,49 @@ function arraySurfaceMemberNames() returns ByteArrayArray
 	names.push(MapMethod)
 	// ⚠ **`contains` IS ON THE SURFACE UNCONDITIONALLY AND AVAILABLE CONDITIONALLY, and the two answers belong
 	// at different doors (conditional-extensions).** A roster says what the dispatch SERVES; whether THIS
-	// receiver's element satisfies `where Element is Equatable` is `requireArrayContainsAvailable`'s question,
+	// receiver's element satisfies `where Element is Equatable` is `requireArrayExtensionAvailable`'s question,
 	// asked at its own span with its own diagnostic (E4006, the same one a user's conditional extension is
 	// withheld with). Leaving the name off for a non-`Equatable` element would be the roster lying about the
 	// surface — the exact shape this list's header records twice already.
 	names.push(ContainsMethod)
+
+	// ⚠ **`hash`/`equals` ARE ON THE SURFACE UNCONDITIONALLY AND AVAILABLE CONDITIONALLY** (array-hashable),
+	// for the sentence `contains` carries three lines up — whether THIS receiver's element satisfies `where
+	// Element is Hashable and Equatable` is `requireArrayExtensionAvailable`'s question, asked at its own
+	// span with its own diagnostic. The pair is APPENDED FROM ITS OWN SOURCE rather than typed out
+	// (`stringSurfaceMemberNames`'s rule): the conformance row is
+	// `IrInterface.isIntrinsicBuiltinConformance`'s, so the day `Array` gains a protocol, its method joins
+	// the roster, the refusal and the dispatch together.
+	for conformanceMethod in builtinConformerMethodNameList(ArrayBuiltinBaseName) 'eachConformance'
+		names.push(conformanceMethod)
+	end 'eachConformance'
 	return names
 end 'arraySurfaceMemberNames'
 
-// ⭐ **THE CLAUSE `Array.contains` IS WITHHELD UNDER, RENDERED RATHER THAN WRITTEN** — `where Element is
-// Equatable`, which is `stdlib/Array.maxon:534`'s own clause. It goes through the SAME renderer a user's
-// `where` clause is spelled back out by (`renderWhereConstraints`), over the SAME interface list the
-// availability check tests and the lowering threads tables for (`arrayElementWitnessInterfaces`), so the
-// sentence a reader is given and the condition they actually failed are one fact. Typed out as a literal it
-// would be the third spelling of that list and the first one nothing checks.
-function arrayContainsWhereClause() returns String
-	let interfaces = arrayElementWitnessInterfaces()
+// ⭐ **THE CLAUSE AN `Array` CONDITIONAL EXTENSION IS WITHHELD UNDER, RENDERED RATHER THAN WRITTEN.** It
+// goes through the SAME renderer a user's `where` clause is spelled back out by (`renderWhereConstraints`),
+// over the SAME interface list the availability check tests, so the sentence a reader is given and the
+// condition they actually failed are one fact. Typed out as a literal it would be a further spelling of
+// that list and the first one nothing checks.
+//
+// ⚠ **THE LIST IS A PARAMETER BECAUSE `Array` HAS TWO DIFFERENT CLAUSES, and they are two FACTS rather
+// than two spellings of one.** `contains` is `where Element is Equatable` (`stdlib/Array.maxon:534`) and
+// carries the element's `Equatable` witness table as a hidden argument, so its list is also what the
+// lowering threads (`arrayElementWitnessInterfaces`). `hash`/`equals` are `where Element is Hashable and
+// Equatable` (`:635`) and carry NOTHING, because an array's own hash is a byte walk — their list is
+// `Array`'s own conformance row (`IrInterface.intrinsicConformanceProtocolNames`). Each caller names the
+// source of its own.
+function arrayWhereClause(interfaces ByteArrayArray) returns String
 	var constraints = WhereConstraintArray.create()
 	for i in 0 upto interfaces.count() 'eachConstraint'
-		let interfaceName = try interfaces.get(i) otherwise panic("arrayContainsWhereClause: interfaces.get OOB at {i} below count {interfaces.count()}")
+		let interfaceName = try interfaces.get(i) otherwise panic("arrayWhereClause: interfaces.get OOB at {i} below count {interfaces.count()}")
 		constraints.push(WhereConstraint.create(ArrayElementTypeParamIndex, interfaceName: interfaceName))
 	end 'eachConstraint'
 
 	var paramNames = ByteArrayArray.create()
 	paramNames.push(ArrayElementTypeParamName)
 	return renderWhereConstraints(constraints, paramNames: paramNames)
-end 'arrayContainsWhereClause'
+end 'arrayWhereClause'
 
 // ⭐⭐ **WHICH MEMBERS THE `String` SURFACE HAS (A2q)** — the third roster, and the one whose hand-written
 // predecessor is why the shape exists at all. It carries the identical obligations: the entries are the
@@ -29976,6 +29993,28 @@ export type Parser
 			return try self.emitStructEqualityCall(lhs, rhs: rhs, op: op, opTok: opTok)
 		end 'structEquality'
 
+		// ⭐⭐ **`a == b` ON TWO ARRAYS IS A CONTENT COMPARE, AND BEFORE array-hashable IT WAS A SILENT WRONG
+		// ANSWER.** Two `genericInstance` operands AGREE and are neither float, so they fell straight through
+		// to the raw `MaxonOp.compare` below — an integer compare of two RECORD ADDRESSES. MEASURED on
+		// `let a = [1, 2, 3]` beside `let b = [1, 2, 3]`: `a == b` answered **false** and `a != b` **true**,
+		// for two arrays whose contents are identical. It is exactly the reference-identity hazard
+		// `comparableOperands` already refuses for two structs and two existentials, except that here it
+		// COMPILED, so nothing said so.
+		//
+		// ⚠ **THE FIX IS A DISPATCH, NOT A REFUSAL, and that is what separates this case from those two.**
+		// A struct has no synthesized structural equality and an existential cannot prove its two dynamic
+		// types match, so both are refused; an `Array` DECLARES `equals` (conditionally on its element), and
+		// dispatching it is what both references do. `!=` is that same call negated, built from it, so the
+		// two operators can never come to disagree — `emitStringCompare`'s rule.
+		//
+		// ⚠ **ONLY `Array` INSTANCES, AND ONLY EQUALITY.** A `Set`/`Map`/`List`/user-generic pair keeps
+		// today's fall-through, because none of them has an `equals` for this to reach; ordering has no
+		// `equals` reading at all (`stdlib/Array.maxon` declares no `Comparable`), so `<`/`>`/`<=`/`>=` on
+		// two arrays stay the E3005 below.
+		if self.arrayEqualityOperands(lhs, rhs: rhs, op: op) 'arrayEquality'
+			return try self.emitArrayEqualityCall(lhs, rhs: rhs, op: op, opTok: opTok)
+		end 'arrayEquality'
+
 		// ⭐⭐ **A COMPARISON OF TWO EXISTENTIALS IS REFUSED WITH ITS OWN REASON, NOT WITH "cannot compare
 		// Comparable with Comparable".** `comparableOperands` already returns false for the pair (see there for
 		// the measured wrong answers), so this changes no verdict — it changes what the author is told. The
@@ -30099,6 +30138,55 @@ export type Parser
 			lt to ge panic("emitStructEqualityCall: reached with the ordering operator {comparisonOpSpelling(op)}, which `structEqualityOperands` refuses")
 		end 'op'
 	end 'emitStructEqualityCall'
+
+	// Is this an `==`/`!=` between two values of ONE `Array` instance? `structEqualityOperands`' twin, and
+	// every clause is that one's, one tag over: EQUALITY only, BOTH operands the SAME generic instance
+	// (spelled as one property so a later edit cannot widen one side into a compare of one instance's record
+	// against another's), and the instance an `Array` rather than any other builtin or user generic.
+	//
+	// ⚠ It does NOT ask whether the element conforms. That is the availability question, and it is asked at
+	// the emit below so that a non-conforming element gets `Array.equals`'s own E4006 rather than falling
+	// through to a comparison type mismatch naming two identical instance names.
+	function arrayEqualityOperands(lhs ValueId, rhs ValueId, op MaxonCmpOp) returns bool
+		if not comparisonIsEquality(op) 'notEquality'
+			return false
+		end 'notEquality'
+
+		if not (self.tagOf(lhs) == ValueTypeTag.genericInstance and self.tagOf(rhs) == ValueTypeTag.genericInstance and self.valueNameId(lhs) == self.valueNameId(rhs)) 'notOneInstancesPair'
+			return false
+		end 'notOneInstancesPair'
+
+		// The bare `isArrayInstance` and not `isArrayInstanceAt`: the tag half of that two-part test is the
+		// line above, already asked of BOTH operands, so routing through the combined door would ask it a
+		// third time over an id it has already qualified.
+		return self.signatures.isArrayInstance(self.valueNameId(lhs))
+	end 'arrayEqualityOperands'
+
+	// `a == b` / `a != b` on one `Array` instance, as the byte-compare `a.equals(b)` lowers to — the SAME
+	// `__arr_eq` entry the method door emits, so the operator and the method cannot answer differently.
+	//
+	// ⚠ **THE AVAILABILITY RULE IS THE METHOD'S, ASKED AT THE OPERATOR'S SPAN.** `==` on an array means
+	// `Array.equals`, which exists only where the element satisfies the conditional conformance — so an
+	// array of a non-conforming element is E4006 here, naming `equals` and the clause, rather than the
+	// pointer compare it used to be.
+	//
+	// ⚠ Both operands are BORROWED (`__arr_eq` reads two records and frees nothing), so each stays whatever
+	// pending temporary the climber made it and drops at statement end, AFTER the compare —
+	// `emitBuiltinConformanceCall`'s contract for a managed receiver.
+	function emitArrayEqualityCall(lhs ValueId, rhs ValueId, op MaxonCmpOp, opTok Token) returns ValueId throws ParseError
+		try self.requireArrayConformanceAvailable(self.valueNameId(lhs), methodName: EqualsMethodName, anchor: opTok)
+
+		let range = SourceRange.ofToken(opTok)
+		let equal = self.emitRuntimeCall(ArrEqName, args: pairArgs(lhs, second: rhs), resultTag: ValueTypeTag.boolean, resultNameId: UnnamedTypeId, range: range)
+
+		return match op 'op'
+			eq gives equal
+			ne gives self.emitUnaryOp(equal, op: MaxonUnaryOp.logicalNot, resultTag: ValueTypeTag.boolean, range: range)
+			// Unreachable: `arrayEqualityOperands` admits only `eq`/`ne`, and it is the one gate in front of
+			// this function.
+			lt to ge panic("emitArrayEqualityCall: reached with the ordering operator {comparisonOpSpelling(op)}, which `arrayEqualityOperands` refuses")
+		end 'op'
+	end 'emitArrayEqualityCall'
 
 	// ⭐ **IS THIS COMPARISON AN EQUALITY ONE (`==`/`!=`) RATHER THAN AN ORDERING ONE?** — the ONE place the
 	// operator families are split, because both readers derive the same consequence from it: a struct's own
@@ -34675,7 +34763,7 @@ export type Parser
 	// representation the haystack's elements are stored in, or the comparison compares a float against a bit
 	// pattern. One door decides that for the write side and for this one.
 	function parseArrayContains(func IrFunction, arr ValueId, giid GenericInstanceId, methodTok Token, range SourceRange) returns ValueId throws ParseError
-		try self.requireArrayContainsAvailable(giid, methodTok: methodTok)
+		try self.requireArrayExtensionAvailable(giid, interfaces: arrayElementWitnessInterfaces(), methodName: methodTok.value, anchor: methodTok)
 		try self.consume(TokenKind.leftParen)
 		let argTok = self.current()
 		let argStart = self.pos
@@ -34691,18 +34779,18 @@ export type Parser
 		return self.emitRuntimeCall(arrayContainsCallee(subsequence, elementIsFloat: self.containerElementIsFloatWord(giid)), args: pairArgs(arr, second: needle), resultTag: ValueTypeTag.boolean, resultNameId: UnnamedTypeId, range: range)
 	end 'parseArrayContains'
 
-	// ⭐⭐ **DOES THIS RECEIVER'S ELEMENT SATISFY `where Element is Equatable`? — the WITHHOLDING rule, and it
-	// is the SAME question, the same predicate and the same diagnostic a user's own conditional extension
-	// gets.** `ConformanceCheck.typeConformsTo` over `sweptConformanceIndex` is what
-	// `requireReceiverSatisfiesExtensionConstraints` asks of a declared type's extension methods; the only
-	// difference here is that `Array`'s extension is not read from a file — shv2 loads no `stdlib/Array.maxon`
-	// — so the clause is stated by `arrayElementWitnessInterfaces` instead of parsed. E4006 is therefore the
-	// same sentence a reader gets from a `where` clause they wrote themselves.
+	// ⭐⭐ **DOES THIS RECEIVER'S ELEMENT SATISFY THE `where` CLAUSE OF AN `Array` CONDITIONAL EXTENSION? —
+	// the WITHHOLDING rule, and it is the SAME question, the same predicate and the same diagnostic a user's
+	// own conditional extension gets.** `ConformanceCheck.typeConformsTo` over `sweptConformanceIndex` is
+	// what `requireReceiverSatisfiesExtensionConstraints` asks of a declared type's extension methods; the
+	// only difference here is that `Array`'s extensions are not read from a file — shv2 loads no
+	// `stdlib/Array.maxon` — so the clause is stated by an interface list instead of parsed. E4006 is
+	// therefore the same sentence a reader gets from a `where` clause they wrote themselves.
 	//
-	// ⭐ **THE CONSTRAINT LIST IS READ, NOT WRITTEN — three readers, one list.** The satisfaction test here,
-	// the clause this refusal RENDERS, and the witness tables `LowerMaxonToStd.appendArrayElementWitnessArgs`
-	// threads all walk `arrayElementWitnessInterfaces()`. Split, the front end could admit a constraint the
-	// lowering threads no table for, or refuse under a clause the runtime never asked about.
+	// ⭐ **THE CONSTRAINT LIST IS READ, NOT WRITTEN, AND IT IS THE CALLER'S TO NAME.** `contains` passes
+	// `arrayElementWitnessInterfaces()`, which is ALSO what `LowerMaxonToStd.appendArrayElementWitnessArgs`
+	// threads tables for — split, the front end could admit a constraint the lowering threads no table for.
+	// `hash`/`equals` pass `Array`'s own conformance row; see `arrayWhereClause` for why those are two facts.
 	//
 	// ⚠ **AN OPAQUE `T` ELEMENT IS REFUSED, AND IT IS A WITNESS-FORWARDING GAP RATHER THAN A CONFORMANCE
 	// ONE.** Inside a generic body `self.items.contains(x)` has no concrete element to look a table up for,
@@ -34710,20 +34798,52 @@ export type Parser
 	// have to be forwarded, which needs the enclosing function to carry the SAME constraint
 	// (`requireReceiverSatisfiesExtensionConstraints`'s `callerCarriesThem`). Answering E4006 instead would
 	// claim the element does not conform, which is not what is known: nothing here knows what it binds to.
-	function requireArrayContainsAvailable(giid GenericInstanceId, methodTok Token) throws ParseError
+	// ⚠ `hash`/`equals` take NO witness, so the sentence's "takes the element's witness table as an argument"
+	// half is not theirs — but the refusal still stands for them and for a reason of its own: a `T` element's
+	// STRIDE is not known here either (`Array with T` is opaque), and their bodies read `element_size@24` to
+	// bound the walk. Both are "this array's element type is not known here", which is what the sentence says.
+	// ⭐ **THE `Hashable`/`Equatable` HALF OF THE RULE ABOVE, ASKED UNDER `Array`'s OWN CONFORMANCE ROW.**
+	// `where Element is Hashable and Equatable` is the SAME two protocols `Array` conditionally supplies, so
+	// the clause is READ from `isIntrinsicBuiltinConformance` rather than transcribed (see that predicate's
+	// `Array` arm). The three doors that WITHHOLD a method under it — `arr.hash()`, `a.equals(b)` and the
+	// `==`/`!=` operator — share this one, so the refusal they raise is one sentence. (The hash-table KEY
+	// gate reads the same row but does NOT come through here: it refuses a key rather than a method, so it
+	// wants the verdict's payload and not this throw. See `requireArrayKeyElementConforms`.)
+	function requireArrayConformanceAvailable(giid GenericInstanceId, methodName ByteArray, anchor Token) throws ParseError
+		try self.requireArrayExtensionAvailable(giid, interfaces: intrinsicConformanceProtocolNames(ArrayBuiltinBaseName), methodName: methodName, anchor: anchor)
+	end 'requireArrayConformanceAvailable'
+
+	// `equals`'s formal is `other Self`, so its actual must be a value of the RECEIVER's own array instance —
+	// the same rule `requireBuiltinConformanceSelfArgs` enforces for a scalar or `String` conformer, and for
+	// the same reason: the impl reads two array RECORDS, so anything else would be dereferenced as one.
+	//
+	// ⚠ It is the STRICT instance test and deliberately not `appendArgAdmitted`: that one also admits the
+	// byte-buffer boundary (an `Array with Byte` taking a `__ManagedMemory`), which `append` wants because it
+	// COPIES BYTES between two records the boundary says are one — and which `equals` must not, because two
+	// spellings of one record answering `Self` would let `bytearray-element-size`'s whole subject through
+	// (an `Array with <one Byte>` compared against an `Array with <another>`).
+	function requireSameArrayInstanceArg(other ValueId, arr ValueId, giid GenericInstanceId, methodTok Token) throws ParseError
+		if self.tagOf(other) == ValueTypeTag.genericInstance and self.valueNameId(other) == giid 'sameInstance'
+			return
+		end 'sameInstance'
+
+		throw ParseError.builtinArgumentType(String.from(OtherParamName), expected: self.valueDisplayTypeName(arr), got: self.valueDisplayTypeName(other), line: methodTok.line, column: methodTok.column)
+	end 'requireSameArrayInstanceArg'
+
+	// ⚠ **THE METHOD NAME AND THE POSITION ARE TWO PARAMETERS, because the OPERATOR door has one and not the
+	// other.** `a == b` fails this rule as `Array.equals` — that is the method whose availability was
+	// withheld — but the only span to blame is the operator's, and there is no `equals` token to read a name
+	// off. Every other caller passes its own method token for both.
+	function requireArrayExtensionAvailable(giid GenericInstanceId, interfaces ByteArrayArray, methodName ByteArray, anchor Token) throws ParseError
 		if self.signatures.containerElementIsOpaque(giid) 'opaqueElement'
-			throw ParseError.unsupported("'{String.from(ArrayBuiltinBaseName)}.{String.from(methodTok.value)}' is a conditional extension method ({arrayContainsWhereClause()}), and this array's element type is not known here — it is the enclosing generic's own type parameter, and a compiler-owned `{String.from(methodTok.value)}` takes the element's witness table as an argument this body has none to pass. Call it on an array of a concrete element type", line: methodTok.line, column: methodTok.column)
+			throw ParseError.unsupported("'{String.from(ArrayBuiltinBaseName)}.{String.from(methodName)}' is a conditional extension method ({arrayWhereClause(interfaces)}), and this array's element type is not known here — it is the enclosing generic's own type parameter, and a compiler-owned `{String.from(methodName)}` cannot be given the element facts it needs from this body. Call it on an array of a concrete element type", line: anchor.line, column: anchor.column)
 		end 'opaqueElement'
 
-		let element = self.signatures.containerElementConformerName(giid).toByteArray()
-		let interfaces = arrayElementWitnessInterfaces()
-		for i in 0 upto interfaces.count() 'eachConstraint'
-			let interfaceName = try interfaces.get(i) otherwise panic("requireArrayContainsAvailable: interfaces.get OOB at {i} below count {interfaces.count()}")
-			if not typeConformsTo(self.signatures.sweptConformanceIndex(), interfaces: self.signatures.interfaceMap(), typeName: element, interfaceName: interfaceName) 'violates'
-				throw ParseError.conditionalExtensionWithheld(String.from(ArrayBuiltinBaseName), methodName: String.from(methodTok.value), clause: arrayContainsWhereClause(), unmetInterfaceName: String.from(interfaceName), bindingName: String.from(element), line: methodTok.line, column: methodTok.column)
-			end 'violates'
-		end 'eachConstraint'
-	end 'requireArrayContainsAvailable'
+		match self.signatures.arrayElementConstraintCheck(giid, clauseInterfaces: interfaces) 'clause'
+			satisfied then return
+			unmet(unmetInterfaceName, bindingName) then throw ParseError.conditionalExtensionWithheld(String.from(ArrayBuiltinBaseName), methodName: String.from(methodName), clause: arrayWhereClause(interfaces), unmetInterfaceName: String.from(unmetInterfaceName), bindingName: String.from(bindingName), line: anchor.line, column: anchor.column)
+		end 'clause'
+	end 'requireArrayExtensionAvailable'
 
 	// `( transform )` — `map`'s single positional argument, a FUNCTION VALUE over the container's element.
 	// Parsed as an ordinary expression, so every producer of a function value reaches it: an inline closure
@@ -36804,11 +36924,50 @@ export type Parser
 	// beside the test is this project's most frequent single rot — the sentence stays true only until someone
 	// widens the test and not the prose, and nothing fails to say so.
 	function requireHashTableKeyType(giid GenericInstanceId, containerName String, tok Token) throws ParseError
+		// ⭐⭐ **`Array` IS THE FOURTH ADMITTED KEY, AND IT NEEDED NO SECOND PREDICATE (array-hashable)** —
+		// which is the reduction doing its job. An `Array with E` reduces to the conformer `Array` exactly
+		// when `E` satisfies the conditional conformance (`ProgramSignatures.conformerNameOfType`), so this
+		// one added name admits every array a witness slot can actually be stamped for; an array whose
+		// element does not conform keeps its own unreduced spelling and is refused below.
 		let keyType = self.signatures.conformerTypeArgName(giid, position: HashTableKeyArgPosition).toByteArray()
-		if not (keyType.equals(IntConformerName) or keyType.equals(StringConformerName) or keyType.equals(CharacterConformerName)) 'unsupportedKey'
-			throw ParseError.unsupported("`{containerName}` hashes and compares its {HashTableKeyColumnNoun}s through their `Hashable`/`Equatable` witnesses, so a {HashTableKeyColumnNoun} must be one of `{String.from(IntConformerName)}`, `{String.from(StringConformerName)}`, `{String.from(CharacterConformerName)}` — a '{String.from(keyType)}' {HashTableKeyColumnNoun} is a later slice", line: tok.line, column: tok.column)
+		if not (keyType.equals(IntConformerName) or keyType.equals(StringConformerName) or keyType.equals(CharacterConformerName) or keyType.equals(ArrayBuiltinBaseName)) 'unsupportedKey'
+			try self.requireArrayKeyElementConforms(giid, containerName: containerName, tok: tok)
+			throw ParseError.unsupported("`{containerName}` hashes and compares its {HashTableKeyColumnNoun}s through their `Hashable`/`Equatable` witnesses, so a {HashTableKeyColumnNoun} must be one of `{String.from(IntConformerName)}`, `{String.from(StringConformerName)}`, `{String.from(CharacterConformerName)}`, `{String.from(ArrayBuiltinBaseName)}` — a '{String.from(keyType)}' {HashTableKeyColumnNoun} is a later slice", line: tok.line, column: tok.column)
 		end 'unsupportedKey'
 	end 'requireHashTableKeyType'
+
+	// ⭐⭐ **AN ARRAY KEY THAT FAILED THE ROSTER FAILED IT FOR ITS ELEMENT, AND THE ROSTER SENTENCE MAY NOT
+	// SAY OTHERWISE (array-hashable review).** `Array` IS an admitted key, so "a '…' key is a later slice"
+	// is TRUE of a struct and FALSE of an `Array with <non-conforming element>` — that one is refused
+	// because `Array`'s `Hashable`/`Equatable` is CONDITIONAL and this element does not satisfy the clause,
+	// a feature that exists rather than one that is owed. The reduction is what hides it: a withheld array
+	// arrives under its own unreduced spelling and is indistinguishable HERE from a type nothing conforms
+	// for, so the array question has to be asked again, of the key's own type.
+	//
+	// ⭐ It is the SAME walk the method surface is withheld by (`arrayElementConstraintCheck`), under the
+	// SAME clause, so the two doors cannot come to disagree about which arrays carry the conformance — only
+	// about what to say when one does not.
+	//
+	// ⚠ An OPAQUE element falls through to the roster sentence deliberately: `Map with (Array with T, V)`
+	// inside a generic body is not an array whose element failed the clause, it is a key this rung does not
+	// support at all — which is what "a later slice" says.
+	function requireArrayKeyElementConforms(giid GenericInstanceId, containerName String, tok Token) throws ParseError
+		let keyType = self.signatures.substitutedInstanceArg(giid, position: HashTableKeyArgPosition)
+		if not self.signatures.denotesArrayInstance(keyType) 'notAnArrayKey'
+			return
+		end 'notAnArrayKey'
+
+		let keyArray = self.signatures.denotedArrayInstance(keyType)
+		if self.signatures.containerElementIsOpaque(keyArray) 'opaqueElement'
+			return
+		end 'opaqueElement'
+
+		let interfaces = intrinsicConformanceProtocolNames(ArrayBuiltinBaseName)
+		match self.signatures.arrayElementConstraintCheck(keyArray, clauseInterfaces: interfaces) 'clause'
+			satisfied then return
+			unmet(unmetInterfaceName, bindingName) then throw ParseError.unsupported("`{containerName}` hashes and compares its {HashTableKeyColumnNoun}s through their `Hashable`/`Equatable` witnesses, and `{String.from(ArrayBuiltinBaseName)}` supplies those only as a conditional extension ({arrayWhereClause(interfaces)}) — this {HashTableKeyColumnNoun}'s element '{String.from(bindingName)}' does not implement '{String.from(unmetInterfaceName)}'", line: tok.line, column: tok.column)
+		end 'clause'
+	end 'requireArrayKeyElementConforms'
 
 	// ⭐⭐ **THE ONE-MACHINE-WORD SLOT GATE — a `List`/`__ManagedList` ELEMENT and a `Map`'s VALUE column.**
 	// Both slots are one word and both are torn down by the destructor `columnDestroyValue` stamps, so the
@@ -38964,6 +39123,34 @@ export type Parser
 		if methodTok.value.equals(ContainsMethod) 'contains'
 			return try self.parseArrayContains(func, arr: arr, giid: giid, methodTok: methodTok, range: range)
 		end 'contains'
+
+		// ⭐⭐ **`hash()` / `equals(other)` — THE `Hashable`/`Equatable` CONDITIONAL CONFORMANCE
+		// (array-hashable).** They sit beside `contains` because all three are `stdlib`'s `Array` EXTENSIONS
+		// rather than its core surface, and they carry the same availability rule under their own clause.
+		//
+		// ⚠ **THIS IS THE ONE CONFORMANCE THE `builtinConformerOfTag` CLASSIFIER DOES NOT ROUTE, and that is
+		// `Character`'s arrangement rather than a new one**: an `Array` receiver is routed HERE several arms
+		// above any conformance lookup (it must be — `arr.count()` may not resolve against the intrinsic
+		// conformances), so the two arms live where the receiver actually arrives. What they emit is the same
+		// pair of graphs a `Map` key's witness slot names; see `ArrayRuntime.ArrHashName` for why the direct
+		// door spells them `__arr_*` and the witness door spells them `Array.*`.
+		if methodTok.value.equals(HashMethodName) 'hash'
+			try self.requireArrayConformanceAvailable(giid, methodName: methodTok.value, anchor: methodTok)
+			try self.consumeEmptyArgList()
+			// The result is typed off `Hashable.hash`'s own declared return, exactly as the witness-dispatched
+			// and the `int.hash` forms are (`emitBuiltinConformanceCall`), so a `HashValue` carries the ranged
+			// alias's `named` tag rather than a bare `integer` minted here.
+			let hashType = self.interfaceReturnMaxonType(HashValueTypeName)
+			return self.emitRuntimeCall(ArrHashName, args: singletonArgs(arr), resultTag: maxonTypeTag(hashType), resultNameId: typeNameIdOf(hashType), range: range)
+		end 'hash'
+		if methodTok.value.equals(EqualsMethodName) 'equals'
+			try self.requireArrayConformanceAvailable(giid, methodName: methodTok.value, anchor: methodTok)
+			try self.consume(TokenKind.leftParen)
+			let other = try self.parseExpression(func, block: self.currentBlock)
+			try self.requireSameArrayInstanceArg(other, arr: arr, giid: giid, methodTok: methodTok)
+			try self.consume(TokenKind.rightParen)
+			return self.emitRuntimeCall(ArrEqName, args: pairArgs(arr, second: other), resultTag: ValueTypeTag.boolean, resultNameId: UnnamedTypeId, range: range)
+		end 'equals'
 
 		// ⭐ **THE VOID MUTATORS — AND EACH REFUSES VALUE POSITION FROM INSIDE ITS OWN ARM
 		// (`requireVoidMethodIsStatement`, whose header carries the D11 measurement).** The refusal used to

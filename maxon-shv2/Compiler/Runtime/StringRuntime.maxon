@@ -1434,10 +1434,12 @@ end 'buildStrEq'
 // off `cur`: `cur` is terminated into a fresh header, a full match falls out to `allMatch`, and the first
 // mismatching byte to `notEqual`. `len == 0` matches vacuously (the header guard is `i >= len`, true at once).
 //
-// ⚠ **SHARED BECAUSE TWO RUNTIME FUNCTIONS COMPARE BYTE RANGES**: `__str_eq` compares two whole records after
-// a length check, and `__str_range_eq` compares two raw address ranges a search has already positioned. They
-// were one loop written twice, with nothing making them agree — a widened load or a changed bound in one would
-// silently leave the other reading a byte at a time on exactly one of the two paths.
+// ⚠ **SHARED BECAUSE THREE RUNTIME FUNCTIONS COMPARE BYTE RANGES**: `__str_eq` compares two whole records
+// after a length check, `__str_range_eq` compares two raw address ranges a search has already positioned, and
+// `Array.equals` compares two element buffers after the same length check (array-hashable — an array's
+// equality IS a byte compare, `stdlib/Array.maxon:648-663`). They were one loop written twice, with nothing
+// making them agree — a widened load or a changed bound in one would silently leave the other reading a byte
+// at a time on exactly one of the paths.
 //
 // ⚠ It stays a shared EMITTER and does NOT become a `call __str_range_eq` from inside `__str_eq`: `==` on
 // Strings is what the operator lowers to, and routing it through a call would buy this dedup at the price of a
@@ -1447,7 +1449,7 @@ end 'buildStrEq'
 // every runtime loop here builds directly, a runtime function having no parser. The phi's `argType` is set
 // explicitly because `retypeBlockArgs` runs in `lowerMaxonToStd`, which these post-pipeline functions never
 // pass through.
-function emitByteRangeCompareLoop(module StdModule, func IrFunction, cur IrBlock, aBuf ValueId, bBuf ValueId, len ValueId, allMatch IrBlock, notEqual IrBlock, ids ValueMinter)
+export function emitByteRangeCompareLoop(module StdModule, func IrFunction, cur IrBlock, aBuf ValueId, bBuf ValueId, len ValueId, allMatch IrBlock, notEqual IrBlock, ids ValueMinter)
 	var header = module.addBlock(func, label: b"cmphdr")
 	var body = module.addBlock(func, label: b"cmpbody")
 
