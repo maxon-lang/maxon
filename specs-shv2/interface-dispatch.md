@@ -2755,3 +2755,134 @@ end 'main'
 ```maxoncstderr
 error E2015: specs/fragments/interface-dispatch/error.interface-typed-function-type-return.test:8:38: Unsupported: a function type's return type declared at the interface type 'Shape' — a value held at an interface type is a two-word fat pointer `(value, witness)`, and a call through a function value carries its whole signature on the call op (`callIndirect`), where there is room for ONE result — so the second register is never read and the witness half is dropped. Declare the return at a concrete type, or hand the interface back from a NAMED function called DIRECTLY, whose second return register carries the witness half
 ```
+
+<!-- test: dispatch-arg-per-instance-alias-mismatch-error -->
+⭐ **THE SAME COMPILER STILL DISAGREEING WITH ITSELF, one identity KIND over (BATCH18 review, second
+pass).** `witnessFormalDeclaredType` recovered the formal's pre-erasure identity through `containsEnum`
+alone, which is a THIRD classification of "which identities does resolution destroy?" beside
+`Parser.erasedAggregateNameOf` and `SemanticCheck.aggregateNameFor` — and it was the narrow one. A
+PER-INSTANCE ranged alias erases to bare `integer` exactly as a boxed enum does, so with no carrier the
+formal read as a plain int and any int satisfied it.
+
+**MEASURED: the DIRECT call `im.take(n)` is `E3005: expected 'IntPool.Idx', got 'int'`, while the
+identical requirement dispatched through a witness compiled clean and ran `9999` — a value four orders of
+magnitude outside the declared `int(0 to 15)` — straight into the formal, printing `v=10019`.** A ranged
+type's guarantee silently voided on one of the two routes.
+
+The cure writes no fourth rule: the carrier is now asked of `aggregateNameFor`, the whole-program
+classifier this pass already owns, LIVE first and PRE-ERASURE second — the same two steps
+`checkOneArgType` takes for every other argument.
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+type Pool uses T
+	export typealias Idx = int(0 to 15)
+	export var v as T
+
+	export static function create(v T) returns Pool
+		return Self{v: v}
+	end 'create'
+end 'Pool'
+
+typealias IntPool = Pool with Integer
+
+interface Taker
+	function take(i IntPool.Idx) returns Integer
+end 'Taker'
+
+type Impl implements Taker
+	let base as Integer
+
+	function take(i IntPool.Idx) returns Integer
+		return base + (i as Integer)
+	end 'take'
+
+	static function create(base Integer) returns Self
+		return Self{base: base}
+	end 'create'
+end 'Impl'
+
+type Box uses T where T is Taker
+	let item as T
+
+	export function go(n Integer) returns Integer
+		return self.item.take(n)
+	end 'go'
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+end 'Box'
+
+typealias ImplBox = Box with Impl
+
+function main() returns ExitCode
+	print("v={ImplBox.create(Impl.create(20)).go(9999)}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:36:20: argument type mismatch for 'i': expected 'IntPool.Idx', got 'int'
+```
+
+<!-- test: dispatch-arg-per-instance-alias-agrees -->
+⚠ **THE FALSE-REFUSAL CONTROL for the case above.** The carrier must name the per-instance alias on BOTH
+sides, so the legal call — a genuine `IntPool.Idx` actual at an `IntPool.Idx` formal, through a witness —
+has to stay green. A cure that merely started refusing would take this program with it.
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+type Pool uses T
+	export typealias Idx = int(0 to 15)
+	export var v as T
+
+	export static function create(v T) returns Pool
+		return Self{v: v}
+	end 'create'
+end 'Pool'
+
+typealias IntPool = Pool with Integer
+
+interface Taker
+	function take(i IntPool.Idx) returns Integer
+end 'Taker'
+
+type Impl implements Taker
+	let base as Integer
+
+	function take(i IntPool.Idx) returns Integer
+		return base + (i as Integer)
+	end 'take'
+
+	static function create(base Integer) returns Self
+		return Self{base: base}
+	end 'create'
+end 'Impl'
+
+type Box uses T where T is Taker
+	let item as T
+
+	export function go() returns Integer
+		return self.item.take(3 as IntPool.Idx)
+	end 'go'
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+end 'Box'
+
+typealias ImplBox = Box with Impl
+
+function main() returns ExitCode
+	print("v={ImplBox.create(Impl.create(20)).go()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+v=23
+```

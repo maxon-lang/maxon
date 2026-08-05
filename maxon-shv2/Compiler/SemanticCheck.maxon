@@ -1974,22 +1974,39 @@ function witnessFormalDeclaredType(project Project, signatures ProgramSignatures
 	// whole-program name with no reading file to scope a contested prefix by.
 	let denoted = try denotedNamedType(signatures, name: formalName, id: id) otherwise return WitnessFormalType.opaque
 
-	// A boxed union/enum formal RESOLVES AWAY to bare `integer`, taking its nominal identity with it — the
-	// erasure `checkOneArgType`'s `preErasedAggregate` exists to survive. A direct call recovers the name from
-	// its signature's `paramAggregateNames`; here the formal's own rendered name IS that carrier.
-	//
-	// ⚠ **THE GATE IS `containsEnum` ALONE, WHICH IS NARROWER THAN `Parser.paramAggregateNamesOf`'S, AND THE
-	// DIFFERENCE IS ACCOUNTED FOR RATHER THAN OVERLOOKED** (BATCH18 review — this header claimed the two gates
-	// were the same, and they are not). That one runs `aggregateNameOf`, which also answers for a STRUCT and
-	// for a PER-INSTANCE ALIAS. The struct half needs no carrier on either route: `denoted` above is
-	// `structRef(id)`, so `checkOneArgType` reads the name LIVE and never consults `preErasedAggregate` at all
-	// — filling it would put one name in two places for no reader. The per-instance-alias half genuinely
-	// cannot be answered here, and for `denotedNamedType`'s own reason two paragraphs up: `isPerInstanceAlias`
-	// is scoped by a READER'S FILE and a requirement's formal has none, so this route would have to guess
-	// where the direct route knows. It is therefore structural here, like the generic-instance and tuple
-	// formals above it, and for the same reason rather than a different one.
-	return WitnessFormalType.declared(denoted, preErasedAggregate: formalName if signatures.containsEnum(formalName) else EmptySourceText)
+	// The identity `resolveTypes` took off this formal, if it took one — see `erasedFormalIdentity`.
+	return WitnessFormalType.declared(denoted, preErasedAggregate: erasedFormalIdentity(project, denoted: denoted, id: id))
 end 'witnessFormalDeclaredType'
+
+// ⭐⭐ **THE IDENTITY THE FORMAL'S RESOLUTION DESTROYED, ASKED OF THE ONE WHOLE-PROGRAM CLASSIFIER — and
+// spelling it a THIRD time here was a measured wrong answer (BATCH18 review, second pass).**
+//
+// This gate read `containsEnum(formalName)`, which is a third answer to *"which identities does resolution
+// destroy?"* beside `Parser.erasedAggregateNameOf` (the parse tier's, which BATCH18-b unified across its own
+// two fill sites) and `aggregateNameFor` (this pass's own). It was the narrow one: a boxed enum erases, and
+// so does a **PER-INSTANCE RANGED ALIAS**, which it did not name.
+//
+// **MEASURED.** `interface Taker { take(i IntPool.Idx) }` over `export typealias Idx = int(0 to 15)`: the
+// DIRECT call `im.take(n)` with a plain `Integer` is *"E3005: expected 'IntPool.Idx', got 'int'"*, while the
+// identical requirement through a WITNESS compiled clean and carried **9999** into the formal, printing
+// `v=10019`. One compiler answering one question two ways — the defect this batch exists to close, surviving
+// inside the door the batch added, because the two doors classified the same fact apart.
+//
+// ⚠ **IT WRITES NO FOURTH RULE. It asks `aggregateNameFor` TWICE — LIVE, then PRE-ERASURE** — which is
+// exactly the two steps `checkOneArgType` takes for every argument it judges, and exactly what
+// `checkTransformParamType` does at the transform door. A formal whose identity SURVIVED (a struct's
+// `structRef`, an existential's `interfaceRef`) is read live by the checker and must carry nothing, or one
+// name would sit in two places; a formal whose identity did NOT survive arrives as bare `integer`, and the
+// pre-resolution `named(id)` is the only thing that still knows what it was. `aggregateNameFor` decides both
+// asks, so the enum arm, the per-instance-alias arm and any arm added later reach this door by construction
+// rather than by a second author remembering them.
+function erasedFormalIdentity(project Project, denoted MaxonType, id TypeNameId) returns ByteArray
+	if not aggregateNameFor(project, tag: maxonTypeTag(denoted), nameId: typeNameIdOf(denoted)).isEmpty() 'survivedResolution'
+		return EmptySourceText
+	end 'survivedResolution'
+
+	return aggregateNameFor(project, tag: ValueTypeTag.named, nameId: id)
+end 'erasedFormalIdentity'
 
 // ⭐⭐ **THE NOUN A DIAGNOSTIC ABOUT THIS CALL MUST USE — THE ONE DOOR (A1s-prim).** Every message below
 // that quotes a callee asks HERE rather than rendering `callee` for itself, because for one call family the
