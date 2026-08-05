@@ -61,9 +61,22 @@ recent board text (BATCH2 slice 8) is correct at *"stdlib cone 11 → 16 of 50"*
 
 ### A. Ready today (7 files, 1,519 lines)
 
+⚠⚠ **"READY" MEANS THE MODULE COMPILES. IT DOES NOT MEAN THE ENTRY IS FREE — MEASURED ON `Log.maxon`
+2026-08-05, WHICH WAS THE FIRST ONE TRIED.** Listing it broke `StdlibLoader.maxon`'s byte-neutrality
+invariant: a same-worktree A/B (two binaries, one trivial program) gave **1,592 code bytes without the
+entry and 2,978 with it — +1,386, +87%** — for `function main() returns ExitCode / return 7`, which never
+spells `Log`. `Log.maxon` is the first candidate with mutable **top-level state**, and the two mechanisms
+that keep an unused module free prune the wrong things: DFE prunes FUNCTIONS, `StdlibFacts.unreachable`
+prunes LOWERING, and a top-level `var` with an initializer runs in `__module_init` — neither. The entry
+was withdrawn and the blocker filed as board row **`S2h`**.
+
+⇒ **A third question belongs beside "does it compile?" and "are its bodies analyzed?": *what does the
+entry cost a program that does not use it?* Answer it with a two-binary A/B, not by reading.** Every
+module below carrying a top-level `var`/`let` inherits this.
+
 | Module | Lines | Verdict |
 |---|--:|---|
-| `Log.maxon` | 64 | **READY** — ordinary statics, verified by injection (see headline table) |
+| `Log.maxon` | 64 | compiles clean (verified by injection) — but **the ENTRY is blocked on `S2h`**, see above |
 | `helpers/sort/insertionSort.maxon` | 49 | ⚠ READY-UNEXAMINED |
 | `helpers/sort/smallSort.maxon` | 138 | ⚠ READY-UNEXAMINED |
 | `helpers/sort/driftQuicksort.maxon` | 171 | ⚠ READY-UNEXAMINED |
