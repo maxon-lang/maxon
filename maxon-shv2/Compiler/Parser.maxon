@@ -7669,6 +7669,15 @@ export type Parser
 	// statement end. Reset per function, like every other per-function column. It holds only owned RESULTS —
 	// the interpolation's internal scratch buffers are freed inside `emitStringInterp`, never tracked here.
 	var pendingTempDrops as ValueIdArray
+	// ⭐ **THE PERMANENTLY EMPTY TEMPORARY LIST every NON-catching `if` is answered with, allocated ONCE per
+	// file instead of once per `if`.** `takeCatchingForkTemps` has to hand its caller a list on both of its
+	// paths, and only the catching path has anything to put in one — a fresh `ValueIdArray` on the other
+	// path is a heap record per `if` statement in the program, MEASURED at +3,424 allocations / +136,960
+	// bytes of `phase:parse` over a 3,000-`if` corpus, on a construct whose own parse is the parser's
+	// hottest. ⚠ **IT IS SHARED, SO IT IS READ-ONLY, AND ITS ONE READER MUST STAY ONE**: `emitTempDropsInto`
+	// returns at `count() == 0` without touching it. Anything that would PUSH to a fork-temp list has to be
+	// handed a list of its own — `takeCatchingForkTemps`' catching arm mints one.
+	var noForkTemps as ValueIdArray
 	// ⭐ **TRUE WHILE PARSING A `match` ARM's single-statement body (P1.4b).** A match arm body is a single
 	// statement, so a `try` used there may take only a single-statement form — the block forms
 	// (`try 'label' … end`, `otherwise 'label' … end`, `otherwise (e) 'label' … end`) are rejected as
@@ -7940,6 +7949,7 @@ export type Parser
 			functionMintedValueAliases: false,
 			referencedNames: ByteArrayArray.create(),
 			pendingTempDrops: ValueIdArray.create(),
+			noForkTemps: ValueIdArray.create(),
 			lastDispatchedMemberIndex: 0,
 			lastDispatchedReceiver: 0,
 			inMatchArmBody: false,
@@ -19574,10 +19584,8 @@ export type Parser
 		// while the field still holds the list and fatal once it does not, so the walks stay ahead of the store
 		// and no handle is taken at all, which is what makes the rule unbreakable rather than remembered.
 		if self.pendingTempDrops.count() > 0 'forkTemps'
-			self.currentBlock = okBlock
-			self.emitTempDrops(self.pendingTempDrops, floor: WholeStatementTempFloor, anchor: tryTok)
-			self.currentBlock = errBlock
-			self.emitTempDrops(self.pendingTempDrops, floor: WholeStatementTempFloor, anchor: tryTok)
+			self.emitTempDropsInto(okBlock, temps: self.pendingTempDrops, anchor: tryTok)
+			self.emitTempDropsInto(errBlock, temps: self.pendingTempDrops, anchor: tryTok)
 			self.pendingTempDrops = ValueIdArray.create()
 		end 'forkTemps'
 
@@ -21946,7 +21954,9 @@ export type Parser
 	// FORKS owes its own temporaries a release in a block their definitions dominate; miss one and the shape
 	// is a leak (a release on too few paths) or a release of a value the taken path never built (which the
 	// register allocator reports, several passes later, as "a use dominates its def"):
-	//   • `parseIfStatement` / `parseWhileStatement` — the condition, in its exit block before the branch;
+	//   • `parseIfStatement` / `parseWhileStatement` — the condition, in its exit block before the branch,
+	//     EXCEPT a CATCHING `if`, which is a `try` fork and takes `desugarTry`'s per-edge rule instead
+	//     (`takeCatchingForkTemps`);
 	//   • `parseMatchCommon` — the scrutinee before the first test, and each ARM at its own exit
 	//     (`finishArmExit`, which releases the arm's SCOPE-lifetime records in the same block and by the same
 	//     rule);
@@ -21982,6 +21992,67 @@ export type Parser
 			self.emitDecref(temp, range: SourceRange.ofToken(anchor))
 		end 'eachTemp'
 	end 'emitTempDrops'
+
+	// ⭐⭐ **RELEASE A FORK'S TEMPORARIES AT THE HEAD OF ONE EDGE — in that edge's OWN block, whatever block
+	// the parse is standing in.** The half the parser's TWO `try` forks share: the temporaries were built
+	// BEFORE the split and are live on both edges, so each edge releases them exactly once, in a block their
+	// definitions dominate. `desugarTry` calls it for `tryok` and `tryerr`; the catching `if` calls it for its
+	// then and else blocks, which are the identical pair of edges wearing the `if`'s spelling. `currentBlock`
+	// is saved and restored because neither caller is done with the block it was standing in.
+	function emitTempDropsInto(block IrBlock, temps ValueIdArray, anchor Token)
+		if temps.count() == 0 'nothingToRelease'
+			return
+		end 'nothingToRelease'
+
+		let saved = self.currentBlock
+		self.currentBlock = block
+		self.emitTempDrops(temps, floor: WholeStatementTempFloor, anchor: anchor)
+		self.currentBlock = saved
+	end 'emitTempDropsInto'
+
+	// ⭐⭐ **A CATCHING `if` IS A `try` FORK, SO ITS CONDITION'S TEMPORARIES MAY NOT DIE IN THE ENTRY BLOCK.**
+	// A PLAIN condition's do, and that is `drainPendingTemps`' own rule: `entry` is the single path through
+	// the condition and dominates then, else and continuation alike, so one release there is one release on
+	// every path.
+	//
+	// ⛔ **A CATCHING CONDITION BREAKS THE PREMISE THAT RULE RESTS ON — that nothing past the fork still READS
+	// a temporary.** Its ok edge owes the caller's `+1` for a substituted `T` result
+	// (`attachSubstitutedCoOwnToOkEdge`), and that `+1` takes its reference OUT OF one of these temporaries:
+	// for `if let x = try make().fetch()` the receiver `make()` is a temporary whose destructor decrefs the
+	// very record the retain is about. Released in `entry` it runs BEFORE the branch and therefore before the
+	// retain, and the then branch reads `0x3F3F…` poison — MEASURED, `ok=4557430888798830399`. Handed back
+	// here instead, they are released once per EDGE, at the head of each and BEHIND the co-own, which is
+	// precisely what `desugarTry` already does for `tryok`/`tryerr`. The two try forks now say it once.
+	function takeCatchingForkTemps(cond IfCondition, floor TempDropMark, anchor Token) returns ValueIdArray
+		if not ifConditionCatches(cond) 'plainCondition'
+			self.drainPendingTemps(floor, anchor: anchor)
+			return self.noForkTemps
+		end 'plainCondition'
+
+		var carried = ValueIdArray.create()
+		var i = floor
+		while i < self.pendingTempDrops.count() 'collect'
+			carried.push(try self.pendingTempDrops.get(i) otherwise panic("takeCatchingForkTemps: pendingTempDrops.get OOB at {i} on a list of {self.pendingTempDrops.count()}"))
+			i = i + 1
+		end 'collect'
+		while self.pendingTempDrops.count() > floor 'forget'
+			_ = try self.pendingTempDrops.pop() otherwise panic("takeCatchingForkTemps: pendingTempDrops.pop above floor {floor} failed on a list of {self.pendingTempDrops.count()} — the loop pops strictly while the count exceeds the floor")
+		end 'forget'
+
+		return carried
+	end 'takeCatchingForkTemps'
+
+	// ⭐ **OPEN A CATCHING `if`'s OK EDGE — the same two things `desugarTry` puts at the head of `tryok`, in
+	// the same order.** The co-own the caller owes a substituted `T` result goes first (it reads out of the
+	// temporaries), the fork's releases second. A plain `if` has neither and this is inert for it.
+	function openCatchingOkEdge(cond IfCondition, okBlock IrBlock, temps ValueIdArray, anchor Token)
+		if not ifConditionCatches(cond) 'plainCondition'
+			return
+		end 'plainCondition'
+
+		self.attachSubstitutedCoOwnToOkEdge(okBlock)
+		self.emitTempDropsInto(okBlock, temps: temps, anchor: anchor)
+	end 'openCatchingOkEdge'
 
 	// Parse an `if` statement (M4):
 	//   if <cond> 'thenLabel'
@@ -22056,7 +22127,12 @@ export type Parser
 		// cannot be: the branches are the two halves of a fork (a drop in the body runs only when the body
 		// does — the leak), and the continuation is reached from both (a drop there runs twice, or on a path
 		// that returned early, never at all).
-		self.drainPendingTemps(condTempFloor, anchor: ifTok)
+		//
+		// ⛔ **A CATCHING `if` IS THE ONE CONDITION THAT CANNOT TAKE THAT DEAL**, because its ok edge still owes
+		// a co-own that READS one of these temporaries — so it gets them back here and releases them per edge
+		// (see `takeCatchingForkTemps`). The list is empty for every other condition, and each of the two edges
+		// below drops it exactly once.
+		let forkTemps = self.takeCatchingForkTemps(cond, floor: condTempFloor, anchor: ifTok)
 
 		// E3087 — `if x.contains(k)` guarding a `try x.get(k)` on the same key. Asked HERE, with the cursor
 		// still on the then-label, because this is the first point that holds both halves the check needs: the
@@ -22078,6 +22154,13 @@ export type Parser
 		// statement parser fills the block; the finalizers wire its terminator) — a
 		// `let` binding cannot be forwarded to a mutating parameter (E3019).
 		var thenBlock = self.newBlock(func, label: thenLabel.value, line: thenLabel.line)
+
+		// ⭐ **THE OK EDGE'S HEAD, IN ORDER: the lifted co-own FIRST, then the fork's temporary releases.**
+		// `parseCatchingCondition` tests `flag == 0`, so the THEN block is the edge the `tryCall` wrote the
+		// result on — and the `+1` the caller owes a substituted `T` result has to precede the release of the
+		// temporary it takes its reference out of. Both are no-ops for a plain `if`.
+		self.openCatchingOkEdge(cond, okBlock: thenBlock, temps: forkTemps, anchor: ifTok)
+
 		var thenEnd = try self.parseIfThenBody(func, thenBlock: thenBlock, label: thenLabel.value, cond: cond, binder: binder, anchor: thenLabel)
 
 		// Snapshot the then-branch's exit values and move state, then rewind BOTH to the entry state so the
@@ -22101,6 +22184,12 @@ export type Parser
 		end 'noElse'
 
 		var elseBlock = self.newBlock(func, label: b"ifelse", line: ifTok.line)
+
+		// The catching fork's OTHER edge. Nothing on it reads the condition's temporaries, but it reaches the
+		// continuation just as the then edge does, so it owes them the same single release — and it owes it
+		// here rather than in the handler body, which may `return` before ever reaching a drain.
+		self.emitTempDropsInto(elseBlock, temps: forkTemps, anchor: ifTok)
+
 		var elseEnd = try self.parseElseBody(func, elseBlock: elseBlock, cond: cond, ifTok: ifTok)
 		let elseVals = self.snapshotBindings(assignedBindings)
 		let elseMoveMark = self.captureMoveMark()
@@ -22535,12 +22624,10 @@ export type Parser
 	//     result is dropped at the TOP of the then block. Never in the continuation: the error edge reaches
 	//     that too, with a NULL register a decref would fault on.
 	function parseCaughtThenBody(func IrFunction, thenBlock IrBlock, label ByteArray, result ValueId, binder IfBinder, anchor Token) returns IrBlock throws ParseError
-		// ⭐ **THIS IS THE OK EDGE, so a substituted `T` result's co-own lands here** — `parseCatchingCondition`
-		// tests `flag == 0`, so the THEN block is the edge the `tryCall` wrote the result on. Lifted off the
-		// condition's entry block by `parseTryCallTarget`, and placed before the binding or the discard drop
-		// below, both of which name the promoted value.
-		self.attachSubstitutedCoOwnToOkEdge(thenBlock)
-
+		// ⚠ **THE SUBSTITUTED `T` CO-OWN IS ALREADY AT THE HEAD OF `thenBlock`, PUT THERE BY
+		// `openCatchingOkEdge` BEFORE THIS RUNS** — and it has to be, because the fork's temporary releases go
+		// in behind it and this routine is entered after them. What is left here is the binding or the discard
+		// drop, both of which name the promoted value and both of which must follow it.
 		match binder 'b'
 			none then break 'b'
 			binding(nameIndex, mutable) then return try self.parseBoundThenBody(func, thenBlock: thenBlock, label: label, result: result, nameIndex: nameIndex, mutable: mutable)

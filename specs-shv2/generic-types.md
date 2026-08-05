@@ -3238,3 +3238,63 @@ end 'main'
 ```stdout
 ok=11 err=1
 ```
+
+<!-- test: condition-form-try-over-a-substituted-return-whose-receiver-is-a-fork-temporary -->
+⛔⛔ **THE SIBLING DOOR'S FORK TEMPORARY, WHICH THE REVIEW FOUND MISCOMPILING AND WHICH THE ORDERING
+ARGUMENT ABOVE DOES NOT REACH ON ITS OWN.** `desugarTry` releases the fork's temporaries at the top of
+each EDGE, so the co-own it puts at the head of `tryok` is ahead of them for free. A catching `if` used to
+release its condition's temporaries in the ENTRY block instead — one release dominating both edges, which
+is right for every condition whose temporaries nothing past the fork still reads, and wrong for exactly
+this one: `__destruct_Box_Alpha` ran before the branch, so the retain on the then edge took a reference to
+a freed record and `got.a` read the poison. MEASURED, before the fix: `ok=4557430888798830399`.
+
+⭐ **THE CURE IS THAT THE TWO `try` FORKS NOW SAY IT ONCE** — a catching `if` takes `desugarTry`'s per-edge
+rule (`takeCatchingForkTemps`), so the head of its then block is the co-own and then the drops, and the
+head of its else block is the drops, in the order the expression form has always had. The pair of cases —
+this one and its `otherwise` twin above — is what keeps the two doors from drifting apart again.
+```maxon
+typealias Integer = int(0 to 125)
+enum Boom implements Error
+	bad
+end 'Boom'
+type Alpha
+	export var a as Integer
+	export static function create(v Integer) returns Self
+		return Self{a: v}
+	end 'create'
+end 'Alpha'
+type Box uses T
+	export var value as T
+	export var fail as bool
+	export static function create(v T, f bool) returns Self
+		return Self{value: v, fail: f}
+	end 'create'
+	export function fetch() returns T throws Boom
+		if self.fail 'boom'
+			throw Boom.bad
+		end 'boom'
+		return self.value
+	end 'fetch'
+end 'Box'
+typealias AlphaBox = Box with Alpha
+function make(f bool) returns AlphaBox
+	return AlphaBox.create(Alpha.create(11), f: f)
+end 'make'
+function forkTemp(f bool) returns Integer
+	if let got = try make(f).fetch() 'ok'
+		return got.a
+	end 'ok' else (e) 'bad'
+		return 1
+	end 'bad'
+end 'forkTemp'
+function main() returns ExitCode
+	print("ok={forkTemp(false)} err={forkTemp(true)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+ok=11 err=1
+```
