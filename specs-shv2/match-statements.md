@@ -189,7 +189,8 @@ end 'main'
 **Character ranges:**
 
 Characters implement the `Comparable` interface, so they can be used in range patterns.
-The comparison is lexicographic (byte-by-byte).
+The comparison is lexicographic (byte-by-byte): the first differing byte decides, and where one
+cluster's bytes are a prefix of the other's, the shorter cluster orders first.
 
 ```maxon
 typealias Score = int(i64.min to i64.max)
@@ -1249,8 +1250,112 @@ end 'main'
 3
 ```
 
+<!-- test: match-character-literal -->
+```maxon
+function main() returns ExitCode
+	let c = 'ñ'
+	match c 'check'
+		'ñ' then print("eq\n")
+		default then print("ne\n")
+	end 'check'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+eq
+```
+
+<!-- test: match-character-range -->
+```maxon
+function main() returns ExitCode
+	let c = 'ñ'
+	match c 'check'
+		'é' to 'ü' then print("inrange\n")
+		default then print("out\n")
+	end 'check'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+inrange
+```
+
+<!-- test: match-character-range-outside -->
+A range test that only ever matches is not a range test. `Ω` is `CE A9`, whose FIRST byte is above `ü`'s `C3`, so it falls outside the range and the arm must not be taken.
+
+```maxon
+function main() returns ExitCode
+	let c = 'Ω'
+	match c 'check'
+		'é' to 'ü' then print("inrange\n")
+		default then print("out\n")
+	end 'check'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+out
+```
+
+<!-- test: match-character-range-over-an-owned-scrutinee -->
+The scrutinee is an OWNED `Character` the loop mints, while both range bounds are immortal `.rdata`
+literals — so nothing the arm compares against is droppable and the loop's own temporary is dropped
+exactly once. `x` (one ASCII byte, `0x78`) falls below `'é'` (`C3 A9`) and takes the default.
+
+```maxon
+function main() returns ExitCode
+	let s = "éxü"
+	var hits = 0
+	for c in s 'each'
+		match c 'classify'
+			'é' to 'ü' then hits = hits + 1
+			default then hits = hits + 100
+		end 'classify'
+	end 'each'
+	print("{hits}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+102
+```
+
+<!-- test: error.match-character-pattern-on-int-scrutinee -->
+A `Character` pattern against an `int` scrutinee is an ordinary pattern/scrutinee type mismatch — the two
+do not compare, exactly as a `String` pattern against an `int` one does not.
+
+```maxon
+function main() returns ExitCode
+	let n = 5
+	match n 'check'
+		'é' then return 1
+		default then return 0
+	end 'check'
+end 'main'
+```
+```maxoncstderr
+error E2028: specs/fragments/match-statements/error.match-character-pattern-on-int-scrutinee.test:5:3: pattern type 'Character' does not match scrutinee type 'int'
+```
+
 <!-- disabled-test: match-range.character -->
-<!-- Character Comparable-range, a later rung -->
+<!-- CHARACTER LITERAL TYPE MODEL, a later rung — NOT the range. Character range patterns are built
+     (A5m-c: `match-character-range` beside this one). What blocks these three is that a SINGLE-BYTE
+     literal is an `int` in shv2 (the width rule, `Parser.parseCharLiteral`), so `let c = 'G'` binds an
+     int and `'a' to 'z'` is an INTEGER range. ⚠ MEASURED: they PASS that way — for the wrong reason,
+     testing integer ranges and never a Character. Enabling them would claim a mechanism they do not
+     reach (the P1.7 slice-1 lesson). They unblock when a char literal types as a `Character`. -->
 ```maxon
 function main() returns ExitCode
 	let c = 'G'
@@ -1267,7 +1372,12 @@ end 'main'
 ```
 
 <!-- disabled-test: match-range.character-lowercase -->
-<!-- Character Comparable-range, a later rung -->
+<!-- CHARACTER LITERAL TYPE MODEL, a later rung — NOT the range. Character range patterns are built
+     (A5m-c: `match-character-range` beside this one). What blocks these three is that a SINGLE-BYTE
+     literal is an `int` in shv2 (the width rule, `Parser.parseCharLiteral`), so `let c = 'G'` binds an
+     int and `'a' to 'z'` is an INTEGER range. ⚠ MEASURED: they PASS that way — for the wrong reason,
+     testing integer ranges and never a Character. Enabling them would claim a mechanism they do not
+     reach (the P1.7 slice-1 lesson). They unblock when a char literal types as a `Character`. -->
 ```maxon
 function main() returns ExitCode
 	let c = 'm'
@@ -1283,7 +1393,12 @@ end 'main'
 ```
 
 <!-- disabled-test: match-range.character-digit -->
-<!-- Character Comparable-range, a later rung -->
+<!-- CHARACTER LITERAL TYPE MODEL, a later rung — NOT the range. Character range patterns are built
+     (A5m-c: `match-character-range` beside this one). What blocks these three is that a SINGLE-BYTE
+     literal is an `int` in shv2 (the width rule, `Parser.parseCharLiteral`), so `let c = 'G'` binds an
+     int and `'a' to 'z'` is an INTEGER range. ⚠ MEASURED: they PASS that way — for the wrong reason,
+     testing integer ranges and never a Character. Enabling them would claim a mechanism they do not
+     reach (the P1.7 slice-1 lesson). They unblock when a char literal types as a `Character`. -->
 ```maxon
 function main() returns ExitCode
 	let c = '7'

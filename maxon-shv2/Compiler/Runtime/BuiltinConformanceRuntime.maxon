@@ -149,7 +149,9 @@ export function installBuiltinConformanceRuntime(module StdModule, globalData Gl
 	//
 	// `bool` has neither `Hashable` nor `Equatable`, so there is no `bool.hash`/`bool.equals` to mint —
 	// and `String` has no `Comparable`, so no `String.compare`. Those three holes are one fact, stated in
-	// `isIntrinsicBuiltinConformance` and read from there rather than restated here.
+	// `isIntrinsicBuiltinConformance` and read from there rather than restated here. ⚠ `Character` looks
+	// like a fourth and is not: it conforms to all three (A5m-c), and the arm that said otherwise was a
+	// claim about `stdlib/Character.maxon` that the file contradicts.
 	var impls = ByteArrayArray.create()
 	let intHash = candidateImplName(impls, conformerName: IntConformerName, methodName: HashMethodName)
 	let intEquals = candidateImplName(impls, conformerName: IntConformerName, methodName: EqualsMethodName)
@@ -162,6 +164,7 @@ export function installBuiltinConformanceRuntime(module StdModule, globalData Gl
 	let strEquals = candidateImplName(impls, conformerName: StringConformerName, methodName: EqualsMethodName)
 	let charHash = candidateImplName(impls, conformerName: CharacterConformerName, methodName: HashMethodName)
 	let charEquals = candidateImplName(impls, conformerName: CharacterConformerName, methodName: EqualsMethodName)
+	let charCompare = candidateImplName(impls, conformerName: CharacterConformerName, methodName: CompareMethodName)
 	let arrayHash = candidateImplName(impls, conformerName: ArrayBuiltinBaseName, methodName: HashMethodName)
 	let arrayEquals = candidateImplName(impls, conformerName: ArrayBuiltinBaseName, methodName: EqualsMethodName)
 
@@ -228,6 +231,14 @@ export function installBuiltinConformanceRuntime(module StdModule, globalData Gl
 	if referenced.contains(charEquals) 'charEquals'
 		buildStrEq(module, name: charEquals)
 	end 'charEquals'
+
+	// ⭐ **`Character.compare` IS THE ONE IMPL A `String` HAS NO TWIN FOR** (A5m-c). The graph is the
+	// byte-record lexicographic cascade, installed here under the WITNESS-visible symbol and under
+	// `__char_cmp` by `installGraphemeRuntime` for the operator door — `buildStrEq`'s two-symbol
+	// arrangement, one builder.
+	if referenced.contains(charCompare) 'charCompare'
+		buildByteRecordCompare(module, name: charCompare)
+	end 'charCompare'
 
 	// ⭐⭐ **`Array` IS THE SIXTH CONFORMER, AND ITS TWO BODIES ARE `ArrayRuntime`'s (array-hashable)** — that
 	// file owns the 48-byte record and the packed-aware byte extent, exactly as `StringRuntime` owns
@@ -637,6 +648,13 @@ end 'emitOrderingVerdict'
 //
 // The four verdict/continuation blocks are the CALLER's, not this function's, because their creation ORDER is
 // the order they are emitted in — and `float.compare` must interleave its preamble's blocks ahead of them.
+//
+// ⚠ **`buildByteRecordCompare`'s BYTE LOOP DELIBERATELY DOES NOT CALL THIS, AND CALLS `emitOrderingTest`
+// TWICE INSTEAD.** A tied BYTE must continue the walk rather than answer `equalTo`, so the loop needs the two
+// TESTS without the three verdicts — and extracting a tests-only helper for both to share would move the
+// `lessThan` const from between the two tests to after them, renumbering every value in `int.compare`,
+// `bool.compare` and `float.compare`. That is the same reordering `emitDjb2HashOverByteRange` measured at 42
+// moved fragments, bought here for two lines. The shared unit is `emitOrderingTest`, and it already is.
 function emitOrderedCascade(module StdModule, head IrBlock, a ValueId, b ValueId, operandType StdType, ordering EnumLayout, lessBlock IrBlock, notLessBlock IrBlock, greaterBlock IrBlock, equalBlock IrBlock, ids ValueMinter)
 	emitOrderingTest(module, block: head, a: a, b: b, pred: StdCmpPred.lt, operandType: operandType, thenBlock: lessBlock, elseBlock: notLessBlock, ids: ids)
 	emitOrderingVerdict(module, block: lessBlock, ordering: ordering, caseName: OrderingLessThanCaseName, ids: ids)
@@ -725,6 +743,109 @@ function buildFloatCompare(module StdModule, name ByteArray)
 
 	module.functions.push(func)
 end 'buildFloatCompare'
+
+// ⭐⭐ **`<name>(self, other) -> Ordering` — THE LEXICOGRAPHIC BYTE COMPARE OF TWO FUSED BYTE RECORDS
+// (A5m-c).** The corpus's `Character.compare` (`stdlib/Character.maxon:80-104`), verbatim as a rule: walk the
+// bytes up to the SHORTER length, and the first differing byte decides; if every byte agrees, the SHORTER
+// record is `lessThan` and equal lengths are `equalTo`. Both operands are BORROWED — it reads `buffer@0`/
+// `length@8` and walks the bytes, freeing and allocating nothing — so it is safe on an `.rdata` literal and
+// on an owned temporary alike.
+//
+// ⭐ **PARAMETERIZED BY NAME so ONE graph serves TWO symbols** — `buildStrEq`'s arrangement and taken for its
+// reason. It is emitted under `__char_cmp` for the `<`/`>`/`<=`/`>=` OPERATOR path
+// (`GraphemeRuntime.installGraphemeRuntime`) and under `Character.compare` for the `Comparable` WITNESS path
+// (`installBuiltinConformanceRuntime`), because a witness reloc names the impl by
+// `qualifiedMethodName("Character", "compare")`. Two `.text` symbols, one graph, so `a < b` and a
+// `where T is Comparable` dispatch cannot come to order Characters differently.
+//
+// ⚠ **THE OPERATOR DOOR MAY NOT SIMPLY NAME `Character.compare`, AND THAT IS `ArrHashName`'s ARGUMENT WITH
+// ITS SECOND HALF MISSING.** `Character` IS reserved (`TypeResolution.isCompilerOwnedTypeName`), so no user
+// can mint that symbol — but unlike `String`, a source-written `Character.<member>(…)` reaches
+// `SemanticCheck.validateCall` rather than a parser interception (MEASURED: `Character.fromCodepoint(65)` is
+// a clean **E3004: call to undefined function 'Character.fromCodepoint'**). Admitting the qualifier to
+// `IrInterface.isBuiltinConformanceImplName` would make `isCompilerInternalCallee` wave that call past E3004
+// and turn a positioned diagnostic into a link failure. A `__`-prefixed name needs no such reservation.
+//
+// ⚠ **THE BYTE COMPARES ARE UNSIGNED, and they are unsigned because the LOAD is** — `StdType.u8` through
+// `emitLoadByteIndexed` zero-extends into the machine word (`TargetDialect`: `movzx dest, byte [base+disp]`),
+// so a lead byte `0xC3` arrives as 195 rather than as -61. Read signed, an ASCII-based cluster
+// (`e` + COMBINING ACUTE, `65 CC 81`) would order ABOVE the precomposed `é` (`C3 A9`), which is the opposite
+// of what the corpus and the oracle both answer. `emitByteRangeCompareLoop` could never have caught it: an
+// equality walk gives the same verdict either way. `specs-shv2/character-type.md`'s
+// `character-ordering-compares-bytes-unsigned` is the case that does.
+//
+// The loop carries `[i, minLen]` as the header's two phis — `emitDjb2HashOverByteRange`'s shape with the
+// bound carried instead of an accumulator, because the bound is chosen by a BRANCH (the shorter of the two
+// lengths) rather than computed. Both `argType`s are set explicitly: `retypeBlockArgs` runs in
+// `lowerMaxonToStd`, which these post-pipeline functions never pass through.
+export function buildByteRecordCompare(module StdModule, name ByteArray)
+	var func = createTwoOperandImpl(name, operandType: StdType.i64, resultType: builtinProtocolResultStdType(OrderingTypeName))
+	var ids = ValueMinter.create(2)
+	let ordering = builtinOrderingEnum()
+
+	var entry = module.addBlock(func, label: b"entry")
+	var selfShorter = module.addBlock(func, label: b"selfShorter")
+	var otherShorter = module.addBlock(func, label: b"otherShorter")
+	var header = module.addBlock(func, label: b"header")
+	var body = module.addBlock(func, label: b"body")
+	var byteNotLess = module.addBlock(func, label: b"byteNotLess")
+	var nextByte = module.addBlock(func, label: b"nextByte")
+	var lengthTie = module.addBlock(func, label: b"lengthTie")
+	var lenNotLess = module.addBlock(func, label: b"lenNotLess")
+	var lessBlock = module.addBlock(func, label: b"less")
+	var greaterBlock = module.addBlock(func, label: b"greater")
+	var equalBlock = module.addBlock(func, label: b"equal")
+
+	emitTypedParams(module, block: entry, paramTypes: func.paramTypes)
+	let receiver = 0 as ValueId
+	let other = 1 as ValueId
+
+	// Every field the whole body reads is loaded ONCE in `entry`, which dominates every block below — the
+	// two lengths are read again at the length tie, so re-loading them there would be a second read of a
+	// record the caller may not have kept alive any more than this one word.
+	let selfLen = emitLoadField(module, block: entry, record: receiver, offset: StringLengthOffset, ids: ids)
+	let otherLen = emitLoadField(module, block: entry, record: other, offset: StringLengthOffset, ids: ids)
+	let selfBuf = emitLoadField(module, block: entry, record: receiver, offset: StringBufferOffset, ids: ids)
+	let otherBuf = emitLoadField(module, block: entry, record: other, offset: StringBufferOffset, ids: ids)
+	emitOrderingTest(module, block: entry, a: selfLen, b: otherLen, pred: StdCmpPred.lt, operandType: StdType.i64, thenBlock: selfShorter, elseBlock: otherShorter, ids: ids)
+
+	// The two arms exist only to hand the header its bound. `otherShorter` is reached when the lengths are
+	// EQUAL too, and either length is the right bound there.
+	let i = ids.mint()
+	header.blockArgs.push(IrBlockArg.create(i, argType: StdType.i64))
+	let minLen = ids.mint()
+	header.blockArgs.push(IrBlockArg.create(minLen, argType: StdType.i64))
+
+	let selfZero = emitConst(module, block: selfShorter, value: 0, ids: ids)
+	module.setTerminator(selfShorter, op: StdOp.branch(header.id))
+	selfShorter.branchEdges.push(BranchEdge.create(header.id, argIds: twoArgs(selfZero, second: selfLen)))
+
+	let otherZero = emitConst(module, block: otherShorter, value: 0, ids: ids)
+	module.setTerminator(otherShorter, op: StdOp.branch(header.id))
+	otherShorter.branchEdges.push(BranchEdge.create(header.id, argIds: twoArgs(otherZero, second: otherLen)))
+
+	// `i >= minLen` ⇒ every compared byte agreed, so only the lengths are left to separate them. Two empty
+	// records take this edge immediately and land on `equalTo`.
+	emitOrderingTest(module, block: header, a: i, b: minLen, pred: StdCmpPred.ge, operandType: StdType.i64, thenBlock: lengthTie, elseBlock: body, ids: ids)
+
+	// The first differing byte ANSWERS; a tied byte falls through to the next index (which is why this is two
+	// `emitOrderingTest`s rather than the shared cascade — see `emitOrderedCascade`).
+	let selfByte = emitLoadByteIndexed(module, block: body, base: selfBuf, index: i, ids: ids)
+	let otherByte = emitLoadByteIndexed(module, block: body, base: otherBuf, index: i, ids: ids)
+	emitOrderingTest(module, block: body, a: selfByte, b: otherByte, pred: StdCmpPred.lt, operandType: StdType.i64, thenBlock: lessBlock, elseBlock: byteNotLess, ids: ids)
+	emitOrderingTest(module, block: byteNotLess, a: selfByte, b: otherByte, pred: StdCmpPred.gt, operandType: StdType.i64, thenBlock: greaterBlock, elseBlock: nextByte, ids: ids)
+
+	let one = emitConst(module, block: nextByte, value: 1, ids: ids)
+	let iNext = emitBin(module, block: nextByte, a: i, b: one, opcode: StdBinOpcode.add, ids: ids)
+	module.setTerminator(nextByte, op: StdOp.branch(header.id))
+	nextByte.branchEdges.push(BranchEdge.create(header.id, argIds: twoArgs(iNext, second: minLen)))
+
+	// The tiebreak IS the ordinary cascade over the two lengths — shorter first — and it owns the three
+	// verdict blocks the byte loop branches into, so `lessThan` means one thing in this graph.
+	emitOrderedCascade(module, head: lengthTie, a: selfLen, b: otherLen, operandType: StdType.i64, ordering: ordering, lessBlock: lessBlock, notLessBlock: lenNotLess, greaterBlock: greaterBlock, equalBlock: equalBlock, ids: ids)
+
+	module.functions.push(func)
+end 'buildByteRecordCompare'
 
 // `String.hash(self) -> HashValue` — djb2 over the String's bytes. `self` is a by-value String POINTER in
 // arg-0 (the witness dispatch passes `self.item`, an opaque `T` field read, straight in — a `String` rides

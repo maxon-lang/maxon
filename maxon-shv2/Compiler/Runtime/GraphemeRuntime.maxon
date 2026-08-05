@@ -113,6 +113,11 @@ let Utf8OneByteLength = 1 as ParsedInt
 //   * `__gr_count(strRec)` — the cluster count, i.e. `String.count()`.
 //   * `__char_at(strRec, startPos, endPos)` — mint an OWNED `Character` from the byte range `[startPos,
 //     endPos)`. The ONE door a Character is born through.
+//   * `__char_cmp(a, b)` — `a.compare(b)` as an `Ordering` tag: the lexicographic byte order of two
+//     Characters (`stdlib/Character.maxon:80-104`), which is what `<`/`>`/`<=`/`>=` lower to (A5m-c). It
+//     BORROWS both records. The GRAPH is `BuiltinConformanceRuntime.buildByteRecordCompare`, installed there
+//     under `Character.compare` for the witness door as well — see it for why the operator door needs a
+//     `__`-prefixed name of its own rather than calling the conformer symbol the way `int.compare` is called.
 //   * `__char_ascii(charRec)` — `Character.asciiValue()`: the cluster's single ASCII byte, THROWING
 //     `CharacterError.notAscii` through the dual-register `errorReturn` ABI when the cluster is not one
 //     byte, or is one byte that is not ASCII (`stdlib/Character.maxon:154-166`). It BORROWS its record.
@@ -124,6 +129,7 @@ let Utf8OneByteLength = 1 as ParsedInt
 //     push-only contract, one UTF-8 walk each. They fill an `Array with integer` rather than an
 //     `Array with Byte` — see `buildStrToUtf16` for why the element is the plain integer instance.
 export let CharAtName = b"__char_at"
+export let CharCmpName = b"__char_cmp"
 export let CharAsciiValueName = b"__char_ascii"
 export let StrToBytesName = b"__str_to_bytes"
 export let StrToCodepointsName = b"__str_to_codepoints"
@@ -175,6 +181,9 @@ export function installGraphemeRuntime(module StdModule, usage RuntimeUsage)
 	if usage.usesCharAt 'charat'
 		buildCharAt(module)
 	end 'charat'
+	if usage.usesCharCmp 'charcmp'
+		buildByteRecordCompare(module, name: CharCmpName)
+	end 'charcmp'
 	if usage.usesCharAsciiValue 'charascii'
 		buildCharAscii(module)
 	end 'charascii'

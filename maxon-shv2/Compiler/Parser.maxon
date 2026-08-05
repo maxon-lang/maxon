@@ -899,6 +899,16 @@ export union ParseError implements Error
 	// same `comparisonOpSpelling` the union arm reads, so every form is named rather than only the two the
 	// corpus happens to exercise.
 	existentialNotComparable(op String, line LineNumber, column ColumnNumber)
+	// ORDERING (`<`/`>`/`<=`/`>=`) is applied to two `String`s. Renders as **E3005**, positioned at the
+	// operator. `op` is the operator's spelling, from the same `comparisonOpSpelling` the two arms above read.
+	//
+	// ⭐ **IT HAS ITS OWN REASON RATHER THAN A MISMATCH MESSAGE, FOR `existentialNotComparable`'s REASON**
+	// (A5m-c): this pair AGREES perfectly and the OPERATION is what has no meaning, so *"cannot compare String
+	// with String"* — which is what stood here — told the author their two types disagreed with themselves.
+	// Worse, it was raised with `string` hardcoded on BOTH sides, so a `Character` pair got the same sentence
+	// about a type the program never mentions. `stdlib/String.maxon:49` declares no `Comparable` where
+	// `stdlib/Character.maxon:19` does, and that is the fact the message now states.
+	stringNotOrderable(op String, line LineNumber, column ColumnNumber)
 	// --- The reserved-name arm (P1.2 follow-up) ---
 	//
 	// A user DECLARATION whose name starts with `__` — the prefix Maxon reserves for compiler
@@ -26397,7 +26407,7 @@ export type Parser
 
 		if self.at(TokenKind.charLiteral) 'charPattern'
 			let charTok = try self.consume(TokenKind.charLiteral)
-			let value = try self.decodeCharPatternValue(charTok)
+			let value = try self.decodeCharPatternValue(charTok, scrutTag: scrutTag)
 			return try self.checkScalarPatternBound(value, valTag: ValueTypeTag.integer, scrutTag: scrutTag, patternTok: firstTok)
 		end 'charPattern'
 
@@ -26767,7 +26777,7 @@ export type Parser
 	end 'markEnumCovered'
 
 	// ⭐ **COMPARE A SCALAR AGAINST AN INTEGER LITERAL** — `subject <op> literal`, emitting `MaxonOp.compare`
-	// DIRECTLY rather than through `emitCompare`, and that bypass is load-bearing twice over.
+	// DIRECTLY rather than through `emitCompare`, and that bypass is load-bearing three times over.
 	//
 	//   • **The MATCH DISPATCH** — a point leaf's `==`, a range leaf's `>=`/`<=`, an internal node's `<`
 	//     pivot. `emitCompare` refuses a `union` operand (E3066), and a PAYLOAD-FREE union match dispatches
@@ -26775,15 +26785,18 @@ export type Parser
 	//   • **A BLOCK-FORM `try`'s ERROR-FLAG TEST** (`flag != NoErrorFlag`), whose router is NON-THROWING by
 	//     construction — one of its two emit doors, `emitRuntimeCall`, is not a throwing function — and
 	//     `emitCompare` throws.
+	//   • **AN `Ordering` VERDICT** (`emitOrderingVerdict`) — the tag test that turns a `compare` result into
+	//     an ordering operator's bool. Its subject is a `named(Ordering)` value, which `emitCompare` would
+	//     hand to the same `valueIsUnion` gate the match dispatch dodges.
 	//
 	// ⚠ **THE PARAMETER IS `literal`, NOT `tag`.** It was `tag` while the match dispatch was its only caller,
 	// which named that caller's USE of the operand rather than the operand — and a flag test passing
 	// `NoErrorFlag` is what made the mis-naming visible.
 	//
-	// Both callers hand it operands whose types are settled by construction: the subject is a scalar enum's
-	// `named` value, a boxed union's loaded i64 tag, a scalar int/char/bool, or a minted error flag, and the
-	// literal is an i64. There is no operand type left to check, which is exactly what makes the bypass a
-	// narrowing of `emitCompare` rather than an evasion of it.
+	// Every caller hands it operands whose types are settled by construction: the subject is a scalar enum's
+	// `named` value, a boxed union's loaded i64 tag, a scalar int/char/bool, an `Ordering` case tag, or a
+	// minted error flag, and the literal is an i64. There is no operand type left to check, which is exactly
+	// what makes the bypass a narrowing of `emitCompare` rather than an evasion of it.
 	function emitCompareAgainstLiteral(subject ValueId, literal ParsedInt, op MaxonCmpOp, opTok Token) returns ValueId
 		let rhs = self.emitLiteral(literal, valueType: MaxonType.integer, range: SourceRange.ofToken(opTok))
 		let result = self.mintValue(ValueTypeTag.boolean, nameId: UnnamedTypeId)
@@ -29951,10 +29964,12 @@ export type Parser
 
 		// ⭐ A BYTE RECORD'S `==`/`!=` IS A RUNTIME BYTE COMPARE, not a `compare` op (which would compare two
 		// box POINTERS — reference equality answering a question about VALUES). Handled at the TOP, before
-		// `comparableOperands`: two byte records do NOT `comparableOperands` (that rule governs ORDERING,
-		// which neither a String nor a Character has), so a matching pair must be intercepted here or it
-		// would be rejected as a mismatch. A byte-record-vs-anything-else pair falls through to the mismatch
-		// gate below — a clean type error, not a crash.
+		// `comparableOperands`: a matching STRING pair does not `comparableOperands` at all (that rule
+		// governs ORDERING, which a String has none of), so it must be intercepted here or it would be
+		// rejected as a mismatch — and a matching CHARACTER pair, which since A5m-c DOES `comparableOperands`,
+		// must be intercepted for the opposite reason: it would otherwise fall through to the raw
+		// `MaxonOp.compare` below and order two clusters by their ADDRESSES. A byte-record-vs-anything-else
+		// pair falls through to the mismatch gate below — a clean type error, not a crash.
 		//
 		// ⚠ **`leftTag == rightTag` IS THE HALF THAT KEEPS A STRING AND A CHARACTER APART, AND WITHOUT IT
 		// THIS IS A SILENT WRONG ANSWER.** They share a record, so `__str_eq` would happily compare a
@@ -29967,7 +29982,7 @@ export type Parser
 		// because the property being asserted is "both operands are the SAME byte-record type" — one
 		// sentence, not two that a later edit could widen independently.
 		if tagIsByteRecord(leftTag) and leftTag == rightTag 'byteRecordCompare'
-			return try self.emitStringCompare(lhs, rhs: rhs, op: op, opTok: opTok)
+			return try self.emitByteRecordCompare(lhs, rhs: rhs, op: op, opTok: opTok)
 		end 'byteRecordCompare'
 
 		// ⭐⭐ **A `StringIndex` COMPARES BY ITS GRAPHEME INDEX, AND ONLY BY THAT** — the reference's own
@@ -30047,7 +30062,7 @@ export type Parser
 		// `Comparable.compare` returning an `Ordering`, which is a different method, a different verdict
 		// shape and has no consumer anywhere in this cone — and admitting the four operators here would
 		// silently answer them with an EQUALITY test. `!=` is the negation of the same call, built from it,
-		// so the two can never come to disagree about what equality means — `emitStringCompare`'s rule.
+		// so the two can never come to disagree about what equality means — `emitByteRecordCompare`'s rule.
 		if self.structEqualityOperands(lhs, rhs: rhs, op: op) 'structEquality'
 			return try self.emitStructEqualityCall(lhs, rhs: rhs, op: op, opTok: opTok)
 		end 'structEquality'
@@ -30064,7 +30079,7 @@ export type Parser
 		// A struct has no synthesized structural equality and an existential cannot prove its two dynamic
 		// types match, so both are refused; an `Array` DECLARES `equals` (conditionally on its element), and
 		// dispatching it is what both references do. `!=` is that same call negated, built from it, so the
-		// two operators can never come to disagree — `emitStringCompare`'s rule.
+		// two operators can never come to disagree — `emitByteRecordCompare`'s rule.
 		//
 		// ⚠ **ONLY `Array` INSTANCES, AND ONLY EQUALITY.** A `Set`/`Map`/`List`/user-generic pair keeps
 		// today's fall-through, because none of them has an `equals` for this to reach; ordering has no
@@ -30270,20 +30285,57 @@ export type Parser
 		return try self.emitCompare(self.emitStringIndexField(lhs, index: StringIndexCharIdxFieldIndex, range: range), rhs: self.emitStringIndexField(rhs, index: StringIndexCharIdxFieldIndex, range: range), op: op, opTok: opTok)
 	end 'emitStringIndexCompare'
 
-	// The two String comparisons — the ONLY operators String has. `==` is the `__str_eq` runtime call
-	// (content equality: equal lengths, then equal bytes); `!=` is its logical negation, built from the
-	// same call so the two can never disagree about what equality means. ORDERING (`<`/`>`/`<=`/`>=`)
-	// has no meaning on a byte record and is rejected — the bootstrap rejects it identically.
-	function emitStringCompare(lhs ValueId, rhs ValueId, op MaxonCmpOp, opTok Token) returns ValueId throws ParseError
+	// ⭐ **EVERY COMPARISON ON A MATCHED PAIR OF BYTE RECORDS** — a `String` pair or a `Character` pair, which
+	// `emitCompare`'s one interception hands here. `==` is the `__str_eq` runtime call (content equality:
+	// equal lengths, then equal bytes) and `!=` is its logical negation, built from the SAME call so the two
+	// can never disagree about what equality means; both answer for either type, because the two share the
+	// record. ORDERING is where they part (see `emitByteRecordOrdering`).
+	//
+	// ⚠ **IT WAS `emitStringCompare`, AND THE NAME WAS THE BUG'S OTHER HALF.** It has served `Character`
+	// since P1.8 slice B — `tagIsByteRecord` is what routes here — so a function named for one of its two
+	// types wrote its diagnostic in that type's noun and reported *"cannot compare String with String"* for
+	// a program that mentions no String. The message is now the operand's own (`emitByteRecordOrdering`), and
+	// the name says which question this answers rather than which caller arrived first.
+	function emitByteRecordCompare(lhs ValueId, rhs ValueId, op MaxonCmpOp, opTok Token) returns ValueId throws ParseError
 		match op 'op'
 			eq then return self.emitStrEqCall(lhs, rhs: rhs, opTok: opTok)
 			ne then return self.emitUnaryOp(self.emitStrEqCall(lhs, rhs: rhs, opTok: opTok), op: MaxonUnaryOp.logicalNot, resultTag: ValueTypeTag.boolean, range: SourceRange.ofToken(opTok))
-			// `lt`/`gt`/`le`/`ge` — ordering on a String. Reported as a comparison type mismatch (there
-			// is no ordering to fall through to), which is the acceptable existing diagnostic; a String
-			// is orderable by no operator this rung provides.
-			lt to ge then throw ParseError.comparisonTypeMismatch(typeTagName(ValueTypeTag.string), right: typeTagName(ValueTypeTag.string), line: opTok.line, column: opTok.column)
+			lt to ge then return try self.emitByteRecordOrdering(lhs, rhs: rhs, op: op, opTok: opTok)
 		end 'op'
-	end 'emitStringCompare'
+	end 'emitByteRecordCompare'
+
+	// ⭐⭐ **`<`/`>`/`<=`/`>=` ON A BYTE-RECORD PAIR — WHERE `Character` AND `String` PART COMPANY (A5m-c).**
+	// The two types share a 48-byte record and every other rule in this file treats them as one thing; this
+	// is the single question whose answer differs, and it differs because the CORPUS says so:
+	// `stdlib/Character.maxon:19` declares `implements … Comparable` and writes the order out at `:80-104`,
+	// while `stdlib/String.maxon:49` declares no such conformance. The oracle answers both accordingly —
+	// `'é' < 'ü'` runs, `"apple" < "banana"` is refused.
+	//
+	// ⭐ **A CHARACTER'S ORDERING IS THE `Comparable` CASCADE, NOT AN INLINE COMPARE.** `__char_cmp` is the
+	// SAME graph installed under `Character.compare` for the witness door
+	// (`BuiltinConformanceRuntime.buildByteRecordCompare`), and the verdict is read off its `Ordering` by the
+	// SAME `emitOrderingVerdict` a `where T is Comparable` dispatch uses — so `c < d`, `c.compare(d)` through
+	// a witness, and a `match` range arm over Characters cannot come to mean three different things.
+	//
+	// ⚠ **A POINTER COMPARE HERE WOULD HAVE COMPILED AND ANSWERED NONSENSE**, which is the hazard
+	// `comparableOperands` already names for two structs and two existentials: a Character's value is its
+	// RECORD'S ADDRESS, so `MaxonOp.compare` would order two clusters by where they happen to be allocated.
+	// That is why the refusal came first and the cascade second, rather than the operator being let through.
+	function emitByteRecordOrdering(lhs ValueId, rhs ValueId, op MaxonCmpOp, opTok Token) returns ValueId throws ParseError
+		// A precondition, not a case: `emitCompare` routes here only on `tagIsByteRecord(left) and left ==
+		// right`, so the pair is two Strings or two Characters and nothing else.
+		if tagIsText(self.tagOf(lhs)) 'noStringOrdering'
+			throw ParseError.stringNotOrderable(comparisonOpSpelling(op), line: opTok.line, column: opTok.column)
+		end 'noStringOrdering'
+
+		// Typed through `interfaceReturnMaxonType`, the SAME typer `emitBuiltinConformanceCall` gives
+		// `i.compare(j)`'s result, so the `Ordering` this hands `emitOrderingVerdict` carries the enum's
+		// `named` tag exactly as a witness dispatch's does.
+		let orderingType = self.interfaceReturnMaxonType(OrderingTypeName)
+		let ordering = self.emitRuntimeCall(CharCmpName, args: pairArgs(lhs, second: rhs), resultTag: maxonTypeTag(orderingType), resultNameId: typeNameIdOf(orderingType), range: SourceRange.ofToken(opTok))
+
+		return self.emitOrderingVerdict(ordering, op: op, opTok: opTok)
+	end 'emitByteRecordOrdering'
 
 	// Is `v` a value of one of the ENCLOSING type's parameters (`self.item`, `other T` inside `type Box uses T`)
 	// — a genuinely opaque `T`, NOT a concrete generic-method result that the parser happens to tag
@@ -30336,7 +30388,7 @@ export type Parser
 		self.emitWitnessDispatch(dispatchResult, args: args, target: target, isVoid: false, range: SourceRange.ofToken(opTok), siteTok: opTok)
 
 		// The verdict. `==` is the dispatch's own bool and `!=` negates that SAME dispatch, so the two can never
-		// disagree about what equality means (the `emitStringCompare` shape); the four ordering operators read
+		// disagree about what equality means (the `emitByteRecordCompare` shape); the four ordering operators read
 		// the `Ordering` (below).
 		match op 'verdict'
 			eq then return dispatchResult
@@ -30345,8 +30397,13 @@ export type Parser
 		end 'verdict'
 	end 'emitTypeParamComparison'
 
-	// The ordinal test that turns a `compare` dispatch's `Ordering` into an ordering operator's bool (P1.7a
-	// slice 2b-ii). It reads the THREE-VALUED result: `<` is `lessThan` and `>` is `greaterThan`, while the
+	// The ordinal test that turns a `compare` result's `Ordering` into an ordering operator's bool (P1.7a
+	// slice 2b-ii). Its two callers are the two ways a `compare` is reached — the WITNESS dispatch on a
+	// constrained type parameter (`emitTypeParamComparison`) and the DIRECT `__char_cmp` call a `Character`
+	// pair lowers to (`emitByteRecordOrdering`, A5m-c) — and they share this because the verdict is a fact
+	// about `Ordering`, not about how the ordering was obtained.
+	//
+	// It reads the THREE-VALUED result: `<` is `lessThan` and `>` is `greaterThan`, while the
 	// INCLUSIVE pair is the NEGATION of the strict opposite — `<=` is "not greaterThan", `>=` is "not lessThan"
 	// — which is what makes `equalTo` satisfy both without a second compare, and is the bootstrap's mapping
 	// (`2-Parser.cs:22293-22302`, the correct 3-valued reading).
@@ -30360,7 +30417,7 @@ export type Parser
 		let greaterThanTag = ordering.tagOfCase(OrderingGreaterThanCaseName)
 
 		match op 'ordinal'
-			eq to ne then panic("emitOrderingVerdict: `==`/`!=` are the equality verdict, handled by emitTypeParamComparison before it routes an ORDERING operator here")
+			eq to ne then panic("emitOrderingVerdict: `==`/`!=` are the equality verdict, answered by each caller's own equality path (`emitTypeParamComparison`'s `Equatable` dispatch, `emitByteRecordCompare`'s `__str_eq`) before an ORDERING operator is routed here")
 			lt then return self.emitCompareAgainstLiteral(orderingResult, literal: lessThanTag, op: MaxonCmpOp.eq, opTok: opTok)
 			gt then return self.emitCompareAgainstLiteral(orderingResult, literal: greaterThanTag, op: MaxonCmpOp.eq, opTok: opTok)
 			le then return self.emitCompareAgainstLiteral(orderingResult, literal: greaterThanTag, op: MaxonCmpOp.ne, opTok: opTok)
@@ -31194,16 +31251,25 @@ export type Parser
 	end 'emitCharacterLiteral'
 
 	// Decode a single-byte character literal to its byte value, or the same positioned diagnostic
-	// `parseCharLiteral` gives for an empty/multi-byte/bad-escape literal. Shared with the match interval
-	// plan, which needs the byte VALUE (a pattern bound) rather than an emitted `literal` op.
-	function decodeCharPatternValue(tok Token) returns ParsedInt throws ParseError
+	// `parseCharLiteral` gives for an empty/bad-escape literal. Its one caller is the match INTERVAL plan,
+	// which needs the byte VALUE (a pattern bound) rather than an emitted `literal` op.
+	//
+	// ⚠ **THE INTERVAL PLAN IS ONLY EVER BUILT FOR AN INTEGER-LIKE SCRUTINEE** (`matchUsesIntervalPlan`), so
+	// `scrutTag` here is an `int`/`bool`/`ExitCode`/ranged-alias and never a `character`. A `match` over a
+	// CHARACTER scrutinee keeps the linear compare chain, whose bounds come from `emitPatternValue` and whose
+	// compares are `emitCompare`'s — which is what makes a Character range arm work at all (A5m-c).
+	function decodeCharPatternValue(tok Token, scrutTag ValueTypeTag) returns ParsedInt throws ParseError
 		match decodeCharLiteral(tok.value) 'decoded'
 			byte(value) then return value
 			empty then throw ParseError.invalidCharacterLiteral("a character literal must contain exactly one character", line: tok.line, column: tok.column)
-			// A `match` PATTERN needs a compile-time integer bound, and a Character is a record pointer —
-			// there is nothing to compare a scrutinee against here. `match` over Characters is P1.1's
-			// pattern machinery meeting this type, not this rung's.
-			multiByte(bytes) then throw ParseError.unsupported("the multi-byte character literal '{String.from(tok.value)}' as a `match` pattern — a pattern bound is a compile-time integer and a `Character` is a byte record ({bytes.count()} bytes here); comparing Characters in a `match` needs pattern dispatch over a runtime equality", line: tok.line, column: tok.column)
+			// ⚠ **A MULTI-BYTE LITERAL HERE IS A `Character` PATTERN AGAINST A NON-CHARACTER SCRUTINEE, AND
+			// THAT IS AN ORDINARY TYPE MISMATCH.** It used to be an `unsupported` naming the missing feature —
+			// *"comparing Characters in a `match` needs pattern dispatch over a runtime equality"* — which was
+			// true when a Character `match` did not exist and became a wrong noun the moment it did: the
+			// capability is built, and what is wrong with `match someInt 'm' 'é' then …` is that an `int` and
+			// a `Character` do not compare, exactly as a `String` pattern against an `int` does not
+			// (`decodeScalarPatternBound`'s own string arm, one screen up, says it in the same words).
+			multiByte then throw ParseError.matchPatternTypeMismatch(typeTagName(ValueTypeTag.character), scrutineeType: typeTagName(scrutTag), line: tok.line, column: tok.column)
 			badEscape(text) then throw ParseError.invalidCharacterLiteral("unknown escape sequence '{text}'", line: tok.line, column: tok.column)
 			badDigitEscape(text, offset, marker) then throw invalidDigitEscapeError(text, kind: CharacterLiteralEscapeKind, offset: offset, marker: marker, tok: tok)
 		end 'decoded'

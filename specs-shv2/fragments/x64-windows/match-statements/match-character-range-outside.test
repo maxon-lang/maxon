@@ -1,0 +1,53 @@
+// Test: match-character-range-outside
+function main() returns ExitCode
+	let c = 'Ω'
+	match c 'check'
+		'é' to 'ü' then print("inrange\n")
+		default then print("out\n")
+	end 'check'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.leaRegRdata rbx, [rip + __str_rec_1]
+    x64.leaRegRdata rdx, [rip + __str_rec_3]
+    x64.leaRegRdata r12, [rip + __str_rec_5]
+    x64.movRegReg rcx, rbx
+    x64.callDirect __char_cmp
+    x64.cmpRegImm32 r8, 0
+    x64.setccReg notEqual, r13
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
+    x64.callDirect __char_cmp
+    x64.cmpRegImm32 r8, 2
+    x64.setccReg notEqual, rax
+    x64.andRegReg r13, r13, rax
+    x64.cmpRegImm32 r13, 0
+    x64.jcc notEqual, matcharm
+    x64.jmp matchnext
+  matcharm:
+    x64.leaRegRdata rcx, [rip + __str_rec_7]
+    x64.callDirect __print_string
+    x64.jmp matchcont
+  matchnext:
+    x64.leaRegRdata rcx, [rip + __str_rec_9]
+    x64.callDirect __print_string
+    x64.jmp matchcont
+  matchcont:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

@@ -1507,12 +1507,17 @@ export function isIntrinsicBuiltinConformance(typeName ByteArray, interfaceName 
 	if typeName.equals(StringConformerName) 'string'
 		return interfaceName.equals(HashableInterfaceName) or interfaceName.equals(EquatableInterfaceName)
 	end 'string'
-	// A `Character` conforms exactly where a `String` does, and for the same reason: both ARE the fused
-	// byte record, so both hash their bytes and compare them. It is NOT `Comparable` — the reference's
-	// `Character` declares `Hashable, Equatable, Cloneable` and no ordering (`stdlib/Character.maxon`), the
-	// same hole `String` has one line up.
+	// ⭐ A `Character` hashes and compares as a `String` does — both ARE the fused byte record — and it is
+	// ALSO `Comparable`, which is the one place the two byte records part company (A5m-c).
+	//
+	// ⚠ **THIS ARM READ `Hashable`/`Equatable` ONLY, UNDER A COMMENT ASSERTING THE CORPUS AGREED, AND THE
+	// CORPUS SAID THE OPPOSITE.** `stdlib/Character.maxon:19` declares
+	// `implements BuiltinCharLiteral, Hashable, Equatable, Comparable, Stringable, Cloneable` and `:80-104`
+	// writes the order out — byte-lexicographic, shorter-prefix-first — while `stdlib/String.maxon:49`
+	// genuinely declares no `Comparable`. So `String`'s hole is real and `Character`'s never was; the
+	// comment that said otherwise is what made one look like the other.
 	if typeName.equals(CharacterConformerName) 'character'
-		return interfaceName.equals(HashableInterfaceName) or interfaceName.equals(EquatableInterfaceName)
+		return interfaceName.equals(HashableInterfaceName) or interfaceName.equals(EquatableInterfaceName) or interfaceName.equals(ComparableInterfaceName)
 	end 'character'
 	if typeName.equals(FloatConformerName) 'float'
 		return interfaceName.equals(HashableInterfaceName) or interfaceName.equals(EquatableInterfaceName) or interfaceName.equals(ComparableInterfaceName)
@@ -1585,10 +1590,17 @@ end 'BuiltinConformer'
 // `Parser.valueIsConformer`, and without this arm a perfectly good `"ab".equals("ac")` would be refused
 // for handing a `String` to a `Self` formal.
 //
-// ⚠ `character` is deliberately still out, and for a DIFFERENT reason than "no impl": `Character.hash` and
-// `Character.equals` are installed and witness-reachable, but `dispatchCharacterMethod` routes every
-// Character receiver and does not fall through to a conformance lookup, so an entry here would be
-// unreachable rather than wrong. It joins when that dispatcher grows the door `dispatchStringMethod` just did.
+// ⚠ `character` is deliberately still out, and for a DIFFERENT reason than "no impl":
+// `Character.hash`/`Character.equals`/`Character.compare` are all installed and witness-reachable, but
+// `dispatchCharacterMethod` routes every Character receiver and does not fall through to a conformance
+// lookup, so an entry here would be unreachable rather than wrong. It joins when that dispatcher grows the
+// door `dispatchStringMethod` just did.
+//
+// ⚠ **AND THE `<` OPERATOR DID NOT PUT IT IN, WHICH IS WHY A5m-c LEFT THIS MAP ALONE.** Character ordering
+// calls `__char_cmp` — a `__`-prefixed symbol of the compiler's own — precisely so that it needs no entry
+// here and no qualifier in `isBuiltinConformanceImplName`: admitting `Character.` to that predicate would
+// wave a user's `Character.fromCodepoint(65)` past `SemanticCheck`'s E3004 into a link failure, because
+// unlike `String.` there is no parser interception in front of it. See `buildByteRecordCompare`.
 //
 // ⚠ A tag admitted here answers for the CONFORMER, not for a method: `bool` carries `compare` and NEITHER
 // `hash` NOR `equals`, and that hole is `isIntrinsicBuiltinConformance`'s to state — `builtinConformerMethod`

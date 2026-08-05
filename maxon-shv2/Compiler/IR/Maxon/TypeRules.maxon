@@ -97,9 +97,13 @@ export enum TypeClass
 	// The class of a `Character` — one extended grapheme cluster (P1.8 slice B). Its OWN class, NOT
 	// `text`, even though a Character and a String share a record: a class is what AGREES with what, and
 	// `s == c` must be a type error rather than a byte compare. Like `text` it converts to nothing and
-	// nothing converts to it, and like `text` it has no ORDERING (two Characters agree but do not
-	// `comparableOperands`) — a byte-lexicographic `compare` is real but has no consumer at this slice,
-	// so `c < d` is refused rather than guessed at.
+	// nothing converts to it.
+	//
+	// ⭐ **UNLIKE `text` IT IS ORDERED (A5m-c).** `stdlib/Character.maxon:19` declares
+	// `implements … Comparable` and `:80-104` writes the order out — byte-lexicographic, shorter-prefix
+	// first — while `stdlib/String.maxon:49` declares no such thing. So the two byte-record types part
+	// company at exactly this rule and nowhere else: two Characters `comparableOperands`, two Strings
+	// still do not. `c < d` is the `Character.compare` cascade, NOT a pointer compare.
 	character
 	// ⭐ **The class of an EXISTENTIAL — a value held at its INTERFACE type (P1.7a-existentials slice 1).**
 	// Its OWN class, and it agrees with NOTHING but another existential — deliberately, including with the
@@ -2101,10 +2105,17 @@ export function comparableOperands(left ValueTypeTag, right ValueTypeTag) return
 	// this rule is asked. So the only comparison that arrives here with a `string` operand is an
 	// ORDERING one (which has no meaning on a byte pointer) or a `string`-vs-non-`string` mismatch
 	// (already rejected by the agreement gate above). Both are `false`. The bootstrap rejects ordering
-	// on String identically.
-	if operandsAreByteRecord(left, right: right) 'noByteRecordOrdering'
+	// on String identically (MEASURED: *"operator '<' is not defined for type 'String'"*).
+	//
+	// ⚠⚠ **IT ASKS `operandsAreText`, NOT `operandsAreByteRecord`, AND THAT NARROWING IS THE WHOLE OF
+	// A5m-c'S TYPE RULE.** The two predicates were one until a `Character` gained its ordering, and asking
+	// the REPRESENTATION question here would refuse `c < d` for a type the corpus declares `Comparable`;
+	// asking it in `lacksIntegralReading` is still right, because neither byte record is a MAGNITUDE.
+	// **A rule keyed on the representation and a rule keyed on the type are two questions, and this is the
+	// pair that proves it** — see `tagIsByteRecord`, which says the same thing about the memory sites.
+	if operandsAreText(left, right: right) 'noStringOrdering'
 		return false
-	end 'noByteRecordOrdering'
+	end 'noStringOrdering'
 
 	// Two floats compare; two integers compare; two bools compare (they agreed, and neither is a
 	// float). One of each does not.
@@ -2153,23 +2164,29 @@ end 'tagIsText'
 // to the MEMORY — is it dropped (`__str_decref`), cloned (`__str_clone`), promoted by a fused-record
 // blit, moved into durable storage, or blitted into an interpolation. Ask `tagIsText` when the answer
 // decides what the TYPE may do — may this be `print`ed, may it be a `panic` message, is this Set's key
-// a String, is this array literal's element a String. A site that is asking "is the memory mine?" and
-// spells it `tagIsText` is the bug this comment exists to prevent recurring.
+// a String, is this array literal's element a String, **may this be ORDERED** (`operandsAreText`, A5m-c:
+// a Character is, a String is not). A site that is asking "is the memory mine?" and spells it
+// `tagIsText` is the bug this comment exists to prevent recurring.
 export function tagIsByteRecord(tag ValueTypeTag) returns bool
 	return tagIsText(tag) or tag == ValueTypeTag.character
 end 'tagIsByteRecord'
 
-// **DOES EITHER OPERAND NAME A BYTE RECORD?** `operandsAreStructRef`'s twin, and it exists for the same
-// reason: an operator with no reading for a String (arithmetic, ordering, the bit ops) has none for
-// either side, so both `lacksIntegralReading` and `comparableOperands` have to ask.
+// **DOES EITHER OPERAND NAME A `String`?** `operandsAreStructRef`'s twin, and it exists for the same
+// reason: an operator with no reading for a String on one side has none with it on the other.
 //
-// It asks the REPRESENTATION question rather than the type one, and that is deliberate: neither a
-// String nor a Character is a magnitude, so `c shl 1` and `c < d` are refused for the identical reason
-// `s shl 1` and `s < t` are. Equality is the one operator either has, and it never reaches these two
-// rules — `Parser.emitCompare` intercepts a matching byte-record pair at its top.
-export function operandsAreByteRecord(left ValueTypeTag, right ValueTypeTag) returns bool
-	return tagIsByteRecord(left) or tagIsByteRecord(right)
-end 'operandsAreByteRecord'
+// ⚠ **IT ASKS THE TYPE QUESTION (`tagIsText`), NOT THE REPRESENTATION ONE, AND IT USED TO ASK THE OTHER.**
+// It was `operandsAreByteRecord` — `tagIsByteRecord` on either side — with `lacksIntegralReading` and
+// `comparableOperands` reading it as one sentence, which was exact only while NEITHER byte record was
+// ordered. `stdlib/Character.maxon:19` declares `Comparable` and `stdlib/String.maxon:49` does not, so the
+// two rules now differ and each asks its own: ORDERING is a fact about the TYPE (one byte record has it,
+// the other does not), while an INTEGRAL READING is a fact about the REPRESENTATION (a pointer to a record
+// is not a magnitude, whichever type it is) and stays on `tagIsByteRecord` in `lacksIntegralReading`.
+//
+// Equality is the one operator BOTH byte records have, and it never reaches either rule —
+// `Parser.emitCompare` intercepts a matching byte-record pair at its top.
+export function operandsAreText(left ValueTypeTag, right ValueTypeTag) returns bool
+	return tagIsText(left) or tagIsText(right)
+end 'operandsAreText'
 
 // **DOES EITHER OPERAND NAME A STRUCT?** `operandsAreFloat`'s twin, and it exists for the same
 // reason: the operators that have no reading for one of them have no reading for the other, and
@@ -2361,8 +2378,14 @@ end 'integralOperandsFor'
 // `BinOpOperands.nonIntegralOperands` covers, and it has TWO readers that must never disagree:
 // `integralOperandsFor` (which DECIDES the rejection) and `nonIntegralOperandOf` (which NAMES the
 // operand for the message). A float's bits are a sign/exponent/mantissa triple, not a magnitude;
-// a struct reference is a box's ADDRESS, not a magnitude either. Neither is a bit pattern the
+// a struct reference is a box's ADDRESS, not a magnitude either; a byte record's value is the
+// ADDRESS of its record, which is the same objection one type further on. None is a bit pattern the
 // source meant to mask or shift.
+//
+// ⚠ **THIS IS THE ONE RULE THAT STAYED ON `tagIsByteRecord` WHEN `comparableOperands` LEFT IT** (A5m-c),
+// and the split is the point: a `Character` gained an ORDERING (`stdlib/Character.maxon:80-104`) and gained
+// no arithmetic with it, because `c - 1` and `c shl 1` would be reading a record pointer as a number
+// whether or not the type is orderable. Both references agree; the oracle answers `c - 1` with a refusal.
 //
 // ⚠ Written as the union of the two DOMAINS rather than as `not tagIsIntegral(tag)`, per
 // `tagIsIntegral`'s own warning: the negated form is TRUE for `unresolved`, which agrees with
