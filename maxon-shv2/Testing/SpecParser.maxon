@@ -40,12 +40,12 @@
 // the inner `<!-- test: … -->` line) closes the OUTER comment, so the inner test
 // marker + its code blocks are exposed as live markup and a naive parser
 // extracts and RUNS a deferred test. Rather than depend on comment nesting, the
-// active-test region is bounded by markdown headings: it runs from the
-// `## Tests` heading to the NEXT `## ` heading. Deferred tests live under a
-// `## Deferred` heading (as plain `### name` subsections, carrying NO
-// `<!-- test: … -->` marker), so they are both out of the scanned region AND
-// carry no marker — belt and suspenders. The specs-shv2 files were rewritten to
-// this convention in lockstep with this parser.
+// active-test region runs from the `## Tests` heading to the next STOP HEADING
+// (see `RegionEndHeadings`) or EOF. Deferred tests live under a `## Deferred`
+// heading (as plain `### name` subsections, carrying NO `<!-- test: … -->`
+// marker), so they are both out of the scanned region AND carry no marker —
+// belt and suspenders. The specs-shv2 files were rewritten to this convention
+// in lockstep with this parser.
 //
 // DISABLED TESTS — the per-CASE shelf, and the mechanism Workstream S runs on.
 // `## Deferred` shelves at the wrong granularity for a ported spec: a real
@@ -81,6 +81,22 @@ let StatusKey = "status:"
 let TestsHeading = "## Tests"
 let SectionHeadingPrefix = "## "
 let TestMarker = "<!-- test:"
+
+// The ONE heading that ENDS the active-test region. Every OTHER `## ` heading is an
+// ordinary section heading INSIDE `## Tests`, and the region continues across it:
+// `/specs/array-sort.md` organizes its 40 cases under six `## Stage N: …` headings, and a
+// rule that stopped at ANY heading ran the 12 cases above `## Stage 2`, dropped the other
+// 28, and reported the file green. Neither reference parser has such a rule — the C#
+// reference (`SpecParser.cs`) keys on `## Documentation` / `## Tests` only, and v1 keys on
+// `## Tests` / `## Documentation` — so this stop is shv2's, and it is narrow.
+//
+// ⚠ It cannot be replaced by "a heading with no test markers under it": the `## Deferred`
+// section's own PROSE quotes the marker literally ("prefix it with its `<!-- test: NAME -->`
+// marker"), so a marker-driven scan would read that sentence as a case. The stop is
+// POSITIONAL, and the headings that qualify are named here — the one place a future stop
+// heading joins. Matched with `startsWith`, so a decorated stop heading
+// (`## Deferred (P1.6)`) still stops rather than silently exposing the section below it.
+let RegionEndHeadings = ["## Deferred"]
 
 // A case shv2 cannot yet pass — same grammar, opposite verdict. It is NOT a
 // superstring of `TestMarker` ("<!-- disabled-test:" does not contain
@@ -576,11 +592,25 @@ function valueAfterKey(line String, key String) returns String
 	return line.slice(pos, endIndex: line.endIndex()).trim()
 end 'valueAfterKey'
 
+// Whether `line` is a heading that ENDS the active-test region — the single decision
+// site for `RegionEndHeadings`, which states the stop set. An ordinary `## ` heading is
+// not one: a spec is free to organize its cases under section headings, and the scan
+// walks straight over them.
+function endsActiveTestRegion(line String) returns bool
+	for heading in RegionEndHeadings 'stops'
+		if line.startsWith(heading) 'isStop'
+			return true
+		end 'isStop'
+	end 'stops'
+
+	return false
+end 'endsActiveTestRegion'
+
 // Extract every ACTIVE test, and count the disabled ones. The scanned region is the
-// `## Tests` section only: from the line after the `## Tests` heading to the next
-// `## ` heading (or EOF). A `## Deferred` heading therefore ends scanning, so no
-// deferred test is ever reached — see the deferred-skip convention at the top of
-// this file.
+// `## Tests` section only: from the line after the `## Tests` heading to the next STOP
+// HEADING (or EOF). `## Deferred` is that stop, so no deferred test is ever reached — see
+// the deferred-skip convention at the top of this file, and `RegionEndHeadings` for why
+// an ordinary section heading must NOT end the region.
 function extractTests(lines StringArray, effectiveTargetKey String) returns ExtractedTests
 	var tests = SpecTestArray.create()
 	var disabledCount = 0 as DisabledTestCount
@@ -608,8 +638,9 @@ function extractTests(lines StringArray, effectiveTargetKey String) returns Extr
 	while i < lineCount 'scan'
 		let line = try lines.get(i) otherwise panic("SpecParser.extractTests: index {i} >= lineCount {lineCount} despite the while guard i<lineCount")
 
-		// A new `## ` section (e.g. `## Deferred`) ends the active-test region.
-		if line.startsWith(SectionHeadingPrefix) 'sectionEnd'
+		// A STOP heading — `## Deferred` — ends the active-test region. Any other `## `
+		// heading is an ordinary section inside `## Tests` and is walked over below.
+		if endsActiveTestRegion(line) 'sectionEnd'
 			break
 		end 'sectionEnd'
 
@@ -681,6 +712,10 @@ function scanTestFromMarker(lines StringArray, markerIndex LineIndex, markerLine
 		// `i` ON that line so the outer scan re-examines it. Disabled markers must end
 		// a test just as active ones do, or an active case followed by a shelved one
 		// would swallow the shelved case's blocks and mis-read its expectation.
+		//
+		// ⚠ ANY `## ` heading ends a TEST — deliberately wider than `endsActiveTestRegion`,
+		// which ends the whole REGION. The last case before `## Stage 3` stops at that
+		// heading (its blocks cannot span it), and the region then continues underneath.
 		if line.startsWith(SectionHeadingPrefix) 'sectionEnd'
 			break
 		end 'sectionEnd'

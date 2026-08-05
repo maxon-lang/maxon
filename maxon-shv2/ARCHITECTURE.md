@@ -2715,9 +2715,12 @@ shv2, so it can use the full stdlib (File, String, `Subprocess`, `async`).
 `SpecParser.parseSpecFile` extracts `<!-- test: NAME -->` markers + the ` ```maxon ` block + one
 expected block (` ```exitcode ` or ` ```maxoncstderr `) into a `SpecTest{name, source, expectation}`
 (`SpecExpectation` is a union — no sentinel). It scans **only the `## Tests` section** (up to the
-next `## ` heading): deferred tests live under a marker-less `## Deferred` section, because **HTML
-comments do not nest** — `<!-- … <!-- test: … --> … -->` closes at the first `-->`, so a
-comment-wrapped deferral would still be run.
+next STOP heading — `SpecParser.RegionEndHeadings`, today just `## Deferred`): deferred tests live
+under a marker-less `## Deferred` section, because **HTML comments do not nest** —
+`<!-- … <!-- test: … --> … -->` closes at the first `-->`, so a comment-wrapped deferral would
+still be run. An ORDINARY `## ` heading does **not** end the region — a spec may organize its cases
+into sections (`/specs/array-sort.md` uses six `## Stage N` headings), and a rule that stopped at
+any heading silently ran 12 of that file's 40 cases and reported green.
 
 `SpecTestRunner.runOneSpec` runs **one** spec: it writes each test's source verbatim (headerless,
 code at line 1) to a temp fragment and spawns `<compiler> build` as a **subprocess** through the
