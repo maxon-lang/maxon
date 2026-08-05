@@ -5,7 +5,8 @@
 #
 # ⭐ **WHY IT MATTERS FAR MORE THAN TODAY'S NUMBER.** `Compiler/StdlibLoader.maxon`'s own header says
 # the whitelist "IS DESIGNED TO GROW, one entry per widening rung, until it names every file there" —
-# 49 files in this checkout, 3 listed today. If a per-compile cost is proportional to the PRODUCT of
+# 50 files in this checkout, 16 listed today (2026-08-05; it read "49 files, 3 listed" when this ladder
+# was written — the live table is `maxon-shv2/STDLIB-BRINGUP.md`). If a per-compile cost is proportional to the PRODUCT of
 # corpus size and listed modules, the loader's own intended end state turns a 0.005% tax into a
 # genuine superlinearity, and the cheapest moment to find that is while the list is short. The same
 # header already reasons about an O(files x listed) membership test and chose a hash for it, so the
@@ -118,7 +119,8 @@
 #   interned some of what the module wants — the only cross term that exists, and it has the wrong
 #   SIGN to be a hazard: an extra module gets marginally CHEAPER as the program grows.
 #
-#   ⇒ **THE LOADER'S INTENDED END STATE IS SAFE ON THIS AXIS.** 49 listed modules cost the SUM of 49
+#   ⇒ **THE LOADER'S INTENDED END STATE IS SAFE ON THIS AXIS.** 49 listed modules (50 on disk less the
+#   permanently-excluded `Internals.maxon`) cost the SUM of 49
 #   modules' own parses, at any program size. What each entry costs is its own file's size; what it
 #   costs per unit of user code is ZERO.
 #

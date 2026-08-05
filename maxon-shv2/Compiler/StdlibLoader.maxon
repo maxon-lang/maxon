@@ -312,9 +312,11 @@ end 'registeredPathsWhenTheRootIsInsideStdlib'
 // The listed modules are a `MaxonSourcePathSet` — a SET rather than a list, because the membership
 // test runs once per file under `stdlib/` and THIS LIST IS DESIGNED TO GROW, one entry per widening
 // rung, until it names every file there. A scan would therefore cost O(files x listed), and each pair
-// is about four String allocations (see the alias). MEASURED against the 49 files this checkout has:
+// is about four String allocations (see the alias). MEASURED against the 49 files the checkout had when
+// this was written (**it has 50 today**, and the live per-module table is `maxon-shv2/STDLIB-BRINGUP.md`):
 // a 48-entry scan costs ~9,400 allocations a compile where the hash lookup costs ~98, flat in the
-// list's length.
+// list's length. The measurement stands — it is about the SHAPE of the membership test, and one more
+// file does not change which shape wins.
 //
 // The stdlib modules this rung loads, each named RELATIVE TO `stdlib/` and resolved against the very
 // directory the loader enumerates — so both sides of the membership test are built by the same `join`
