@@ -322,7 +322,7 @@ function prependEntryStub(module TargetModule, checkLeaks bool, initGlobals bool
 	module.appendOp(block, op: TargetOp.prologue(EntryStubFrameBytes))
 	module.appendOp(block, op: TargetOp.callDirect(RuntimeInitName))
 	appendModuleInitCall(module, block: block, initGlobals: initGlobals)
-	module.appendOp(block, op: TargetOp.callDirect(UserEntryName))
+	module.appendOp(block, op: TargetOp.callDirect(UserEntryName.toByteArray()))
 	appendGlobalCleanupGate(module, block: block, initGlobals: initGlobals)
 
 	// ⭐ THE LEAK GATE (P1.0r) — the one seam on the exit path, and the reason `__mm_decref` has a
@@ -429,7 +429,7 @@ function prependLinuxEntryStub(module TargetModule, checkLeaks bool, initGlobals
 	// rsp restored, so the following `call main` still lands main at rsp≡8 (mod 16).
 	module.appendOp(block, op: TargetOp.callDirect(RuntimeInitName))
 	appendModuleInitCall(module, block: block, initGlobals: initGlobals)
-	module.appendOp(block, op: TargetOp.callDirect(UserEntryName))
+	module.appendOp(block, op: TargetOp.callDirect(UserEntryName.toByteArray()))
 	appendGlobalCleanupGate(module, block: block, initGlobals: initGlobals)
 	appendLeakGate(module, block: block, checkLeaks: checkLeaks)
 
