@@ -499,3 +499,121 @@ end 'main'
 ```stdout
 x=7
 ```
+
+<!-- test: map-enum-element-preserved -->
+⭐ **THE POSITIVE CONTROL for the enum half of element preservation.** A boxed enum element ERASES to bare
+`integer` at resolution — it is the one aggregate whose identity `paramTypes` cannot carry — so the
+parameter check has to recover the name from `FunctionShape.paramAggregateNames` rather than from the
+resolved type. A check that recovered nothing would read two enums as one int and admit any of them; a check
+that recovered the wrong thing would refuse this program.
+```maxon
+
+enum Color
+	red
+	green
+	blue
+end 'Color'
+
+typealias ColorArray = Array with Color
+
+function good(c Color) returns Color
+	match c 'k'
+		red then print("saw red\n")
+		green then print("saw green\n")
+		blue then print("saw blue\n")
+	end 'k'
+	return Color.red
+end 'good'
+
+function main() returns ExitCode
+	var a = ColorArray.create()
+	a.push(Color.blue)
+	let b = a.map(good)
+	print("n={b.count()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+saw blue
+n=1
+```
+
+<!-- test: error-map-transform-param-enum-mismatch -->
+⭐ **THE ENUM TWIN OF THE SEGFAULT, AND IT IS A CRASH OF ITS OWN.** A boxed union/enum parameter resolves to
+bare `integer`, so a check that asks only the RESOLVED parameter type reads every enum as every other enum:
+`<Array with Color>.map(bad)` where `bad` takes a `Shade` compiled clean and died `STATUS_STACK_OVERFLOW` —
+`Color.blue` is ordinal 2 and `Shade` has two cases, so the `match` had no arm for the value it was handed.
+The name survives only on the pre-erasure carrier, which is why `FunctionShape` grew one.
+```maxon
+
+enum Color
+	red
+	green
+	blue
+end 'Color'
+
+enum Shade
+	dark
+	light
+end 'Shade'
+
+typealias ColorArray = Array with Color
+
+function bad(s Shade) returns Color
+	match s 'k'
+		dark then print("saw dark\n")
+		light then print("saw light\n")
+	end 'k'
+	return Color.red
+end 'bad'
+
+function main() returns ExitCode
+	var a = ColorArray.create()
+	a.push(Color.blue)
+	let b = a.map(bad)
+	print("n={b.count()}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:27:16: `map` calls its transform with the container's own element, which is 'Color' — but this transform declares its parameter as 'Shade'; a transform is `function(Element) returns Element`, so its parameter IS the element
+```
+
+<!-- test: error-map-transform-param-enum-at-an-int-element -->
+⭐ **THE SAME DEFECT WITH THE SIDES SWAPPED, and the reason the verdict cannot let the ELEMENT decide which
+question is asked.** Here the element is a plain `int` — no nominal identity — and the transform's PARAMETER
+is the enum. A rule that fell to the tag comparison whenever the element was identity-less admitted it (a
+boxed enum is integral), and `[1,2,3]` arrived inside a two-case `match` as 1, 2 and 3: compiles clean,
+`STATUS_STACK_OVERFLOW` at run. **The identical call by DIRECT dispatch was already `E3005: argument type
+mismatch for 'c': expected 'Color', got 'int'`** — one compiler answering one question two ways. An identity
+on EITHER side settles the question.
+```maxon
+
+enum Color
+	red
+	green
+end 'Color'
+
+typealias Integer = int(i64.min to i64.max)
+
+function show(c Color) returns Integer
+	match c 'k'
+		red then print("red\n")
+		green then print("green\n")
+	end 'k'
+	return 0
+end 'show'
+
+function main() returns ExitCode
+	let nums = [1, 2, 3]
+	let out = nums.map(function(c Color) gives show(c))
+	print("n={out.count()}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:20:21: `map` calls its transform with the container's own element, which is 'int' — but this transform declares its parameter as 'Color'; a transform is `function(Element) returns Element`, so its parameter IS the element
+```

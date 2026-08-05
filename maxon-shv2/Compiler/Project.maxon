@@ -2330,9 +2330,30 @@ export typealias FunctionTypeAliasMap = Map with (ByteArray, FunctionTypeAlias)
 export type FunctionShape
 	export let paramTypes as MaxonTypeArray
 	export let returnType as MaxonReturnType
+	// ⭐⭐ **THE ONE IDENTITY `paramTypes` CANNOT CARRY — a boxed union/enum parameter's NAME — parallel to
+	// `paramTypes`, `EmptySourceText` everywhere else.** It is `FuncSignature.paramAggregateNames` at the
+	// function-TYPE tier, and it exists because a shape assembled from either registry was previously the one
+	// currency in the compiler that could not answer *"which enum is this parameter?"*: `resolveType` collapses
+	// a `named` union/enum to bare `integer`, so `function(Color)` and `function(Shade)` are the SAME
+	// `paramTypes`. **MEASURED (BATCH18 review): `<Array with Color>.map(function(c Shade) gives Color.red)`
+	// compiled clean and died `STATUS_STACK_OVERFLOW` — a 3-case ordinal matched against a 2-case `match` —
+	// and the identical mismatch through a function ALIAS died `ACCESS_VIOLATION`.**
+	//
+	// ⚠ **A STRUCT PARAMETER IS DELIBERATELY EMPTY HERE, AND THAT IS NOT AN OMISSION** — the rule
+	// `FuncSignature.paramAggregateNames` states one tier down. A struct keeps its `structRef(id)` through
+	// resolution, so its identity is read LIVE off `paramTypes` and a reader consults this column only where
+	// the live answer is empty. Filling it for a struct would put one name in two places for no reader.
+	//
+	// ⚠ **`functionShapesAgree` DOES NOT COMPARE IT, AND THAT IS THIS COLUMN'S BOUND rather than its
+	// intention.** That predicate is representational by design (see this header), and the enum-erasure hole
+	// at the general function-type door — `function(Shade)` accepted into a `function(Color)`-typed field,
+	// which faults on the call — is the SAME defect one door over, pre-existing, with its own blast radius
+	// across every door a function value passes. It is filed for its own rung; the carrier is here so that
+	// rung has one to read rather than one to invent.
+	export let paramAggregateNames as ByteArrayArray
 
-	export static function create(paramTypes MaxonTypeArray, returnType MaxonReturnType) returns FunctionShape
-		return Self{paramTypes: paramTypes, returnType: returnType}
+	export static function create(paramTypes MaxonTypeArray, returnType MaxonReturnType, paramAggregateNames ByteArrayArray) returns FunctionShape
+		return Self{paramTypes: paramTypes, returnType: returnType, paramAggregateNames: paramAggregateNames}
 	end 'create'
 end 'FunctionShape'
 

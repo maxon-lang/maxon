@@ -2566,19 +2566,25 @@ end 'columnValueTagMatches'
 // `function(Element) returns Element`, so the question asked of what it ANSWERS and the question asked of
 // what it TAKES are the same question, and the answer had better not depend on which half asks it.
 //
-// It is TWO questions only in the sense the element's own kind makes it two:
+// It is TWO questions only in the sense the PAIR makes it two:
 //
-//   • an element with a NOMINAL identity is settled by that identity and by nothing else. `Point` and `Size`
-//     are both `structRef`, and PRESERVING the element type means the SAME type, which only the name says. A
-//     tag test would be too weak here even where it answers.
-//   • an element WITHOUT one is settled by the container-slot rule above, for that predicate's measured
+//   • if EITHER side has a NOMINAL identity the question is settled by identity and by nothing else. `Point`
+//     and `Size` are both `structRef`, and PRESERVING the element type means the SAME type, which only the
+//     name says. A tag test would be too weak here even where it answers.
+//   • only when NEITHER has one does the container-slot rule above decide, for that predicate's measured
 //     reason: a ranged-int alias carries `named` where the element carries `integer`, and refusing that pair
 //     would reject `[1,2,3].map(function(x Integer) gives x * 2)`, the construct itself.
 //
-// ⚠ **THE ELEMENT DECIDES WHICH QUESTION IS ASKED, NOT THE OTHER SIDE.** The element is what the transform
-// has to preserve, so a nominal element demands a nominal answer (an identity-less `other` then fails, which
-// is right — a bare int does not preserve a `Point`), while a structural element admits everything the
-// container's own column would.
+// ⚠⚠ **"THE ELEMENT DECIDES WHICH QUESTION IS ASKED, NOT THE OTHER SIDE" STOOD HERE AND WAS A MEASURED
+// CRASH (BATCH18 review).** Under it a structural element admitted *everything the container's own column
+// would*, and a boxed enum's column answer is `integral` — so `[1,2,3].map(function(c Color) gives show(c))`
+// over an INT array compiled clean and died `STATUS_STACK_OVERFLOW`, the ordinals 1..3 matched against a
+// two-case `match`. **The identical call by DIRECT dispatch was already `E3005: expected 'Color', got
+// 'int'`** — one compiler answering one question two ways, which is the defect this whole batch exists to
+// close, reproduced inside its own cure. An identity on EITHER side is a fact the tag rule cannot see, so it
+// is the tag rule that must stand aside, not the identity. This is the same widening
+// `SemanticCheck.checkOneArgType` already made for the mirror quadrant (a SCALAR parameter meeting an
+// AGGREGATE argument, which `tagAdmitsNoAggregate` guards) and for the same reason.
 //
 // ⚠ **EACH CALLER EXTRACTS THE IDENTITIES ITSELF, AND THE TWO EXTRACTORS ARE DELIBERATELY NOT THE SAME
 // FUNCTION** — the same split `SemanticCheck.checkOneArgType` makes between one RULE and two name
@@ -2588,9 +2594,9 @@ end 'columnValueTagMatches'
 // extractor's answer to the other tier is what would produce a false refusal, so the tier is the caller's to
 // know and the verdict is this function's to give.
 export function elementTypePreserved(elementTag ValueTypeTag, elementIdentity ByteArray, otherTag ValueTypeTag, otherIdentity ByteArray) returns bool
-	if elementIdentity.isEmpty() 'structural'
-		return columnValueTagMatches(otherTag, declared: elementTag)
-	end 'structural'
+	if not elementIdentity.isEmpty() or not otherIdentity.isEmpty() 'eitherSideIsNominal'
+		return elementIdentity.equals(otherIdentity)
+	end 'eitherSideIsNominal'
 
-	return elementIdentity.equals(otherIdentity)
+	return columnValueTagMatches(otherTag, declared: elementTag)
 end 'elementTypePreserved'

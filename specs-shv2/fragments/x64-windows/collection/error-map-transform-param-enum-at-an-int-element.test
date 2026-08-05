@@ -1,0 +1,26 @@
+// Test: error-map-transform-param-enum-at-an-int-element
+
+enum Color
+	red
+	green
+end 'Color'
+
+typealias Integer = int(i64.min to i64.max)
+
+function show(c Color) returns Integer
+	match c 'k'
+		red then print("red\n")
+		green then print("green\n")
+	end 'k'
+	return 0
+end 'show'
+
+function main() returns ExitCode
+	let nums = [1, 2, 3]
+	let out = nums.map(function(c Color) gives show(c))
+	print("n={out.count()}\n")
+	return 0
+end 'main'
+---
+CompilerError:
+error E3005: <fragment>:20:21: `map` calls its transform with the container's own element, which is 'int' — but this transform declares its parameter as 'Color'; a transform is `function(Element) returns Element`, so its parameter IS the element

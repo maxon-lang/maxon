@@ -33182,29 +33182,42 @@ export type Parser
 		return self.aggregateNameOf(tag, nameId: typeNameIdOf(t))
 	end 'declaredElementIdentity'
 
-	// ⭐⭐ **THE ELEMENT IDENTITY THAT SURVIVES `resolveTypes`, for the whole-program PARAMETER half — a
-	// STRUCT's name, and nothing else.**
+	// ⭐⭐ **THE ELEMENT IDENTITY THE WHOLE-PROGRAM PARAMETER HALF COMPARES — a STRUCT's or a boxed
+	// UNION/ENUM's name, and nothing else.**
 	//
-	// The parameter half compares this element against a transform's RESOLVED parameter type, which is one
-	// tier further on than `declaredElementIdentity` reads. A struct keeps its id through resolution; a boxed
-	// union/enum does NOT — it erases to bare `integer` — so carrying its pre-erasure name across that
-	// boundary would compare `Color` against an erased parameter that can no longer say so, and refuse a
-	// legal program. `SemanticCheck.checkOneArgType` describes the identical boundary and recovers the name
-	// from the carrier `paramAggregateNames`; a `FunctionShape` is not a `FuncSignature` and carries no such
-	// column, so the honest answer here is to compare a union/enum element STRUCTURALLY (an erased parameter
-	// and a `named` element are both integral, which is what the container column already says) rather than
-	// to invent a carrier the transform's shape does not have.
+	// The parameter half compares this element against a transform's RESOLVED parameter type, one tier
+	// further on than `declaredElementIdentity` reads, and the two aggregate kinds get there by two routes: a
+	// STRUCT keeps its `structRef(id)` through resolution and is read live off the parameter, while a boxed
+	// union/enum ERASES to bare `integer` and is recovered from the carrier column
+	// `FunctionShape.paramAggregateNames`. `SemanticCheck.checkTransformParamType` asks for both in that
+	// order, exactly as `checkOneArgType` does with its `preErasedAggregate`, so ONE name here answers for
+	// either kind.
 	//
-	// ⚠⚠ **THE TEST IS "DOES THE NAME DENOTE A STRUCT?", NOT "IS THE TAG `structRef`?", AND THE NARROW
-	// SPELLING WAS A MEASURED FALSE REFUSAL.** A `typealias PointArray = Array with Point` hands this door a
+	// ⚠⚠ **THE UNION/ENUM HALF WAS EXCLUDED HERE AND THAT WAS A REACHABLE CRASH (BATCH18 review).** The
+	// argument for excluding it was that a `FunctionShape` carries no pre-erasure column — true when written,
+	// and CURED rather than worked around, because the alternative it chose was to compare a union/enum
+	// element STRUCTURALLY, and an erased parameter and a `named` element are both integral: EVERY enum
+	// matched EVERY other. MEASURED on `<Array with Color>.map(function(c Shade) gives Color.red)` with
+	// `Color` 3-case and `Shade` 2-case — compiles clean, `STATUS_STACK_OVERFLOW` at run, an ordinal matched
+	// against a `match` that has no arm for it — and again through a named function and through a function
+	// ALIAS (`ACCESS_VIOLATION`). It is the SIGSEGV this door exists to close, wearing the other aggregate.
+	//
+	// ⚠⚠ **THE TEST IS "WHAT DOES THE NAME DENOTE?", NOT "IS THE TAG `structRef`?", AND THE NARROW SPELLING
+	// WAS A MEASURED FALSE REFUSAL.** A `typealias PointArray = Array with Point` hands this door a
 	// `named("Point")` — the SWEEP that recorded the type argument ran before anything could say what the
 	// name denoted — so the tag test read it as identity-less, fell to the structural branch and refused
 	// `a.map(function(p Point) gives p)` as *"the container's own element, which is 'int'"* on a program that
 	// compiles. It is `declaredElementIdentity`'s trap one level down: `named` is what a declared thing
 	// arrives as, and only the NAME says which kind of thing it is.
+	//
+	// ⚠ NARROWER than `declaredElementIdentity` still, and deliberately: an `interfaceRef`, a
+	// `genericInstance` and a per-instance alias all have a nominal identity at the PARSE tier and no carrier
+	// that survives to the drain, so each stays structural rather than being compared against a parameter
+	// that can no longer name itself. Widening any of them is its own piece of work — a carrier first, then
+	// the arm.
 	function resolvedElementIdentity(elementType MaxonType) returns ByteArray
 		let name = self.declaredElementIdentity(elementType)
-		if not self.signatures.containsStruct(name) 'erasesOrHasNoIdentity'
+		if not self.signatures.containsStruct(name) and not self.signatures.containsEnum(name) 'erasesOrHasNoIdentity'
 			return EmptySourceText
 		end 'erasesOrHasNoIdentity'
 

@@ -2450,6 +2450,13 @@ end 'checkOneTransform'
 // record, the parameter post-resolution off the shape. `Parser.resolvedElementIdentity` carries why that
 // makes the element's recorded identity narrower than the parser's own.
 //
+// ⚠ **THE PARAMETER'S IDENTITY IS READ THE WAY `checkOneArgType` READS ITS PARAMETER'S — LIVE FIRST, THEN
+// THE PRE-ERASURE CARRIER — because one of the two aggregate kinds does not survive resolution.** A struct
+// parameter still says `structRef(Point)` here; a boxed union/enum parameter is bare `integer` and only
+// `FunctionShape.paramAggregateNames` still holds its name. Asking only the live answer made every enum
+// agree with every other enum — MEASURED as a compiling program that faults, see that column's header — so
+// the fallback is not a nicety, it is the half of the check that was missing.
+//
 // It is E3005 and not E3122: the arity ruling's code says how MANY parameters a transform declares, and
 // wearing it for a TYPE disagreement would print a sentence about a count that is correct.
 //
@@ -2457,7 +2464,11 @@ end 'checkOneTransform'
 function checkTransformParamType(project Project, transform PendingTransformArity, shape FunctionShape, method String)
 	let paramType = try shape.paramTypes.get(0) otherwise panic("checkTransformParamType: paramTypes.get OOB at 0 — the arity check proved this transform declares {transform.expectedArity} parameter(s)")
 	let paramTag = maxonTypeTag(paramType)
-	let paramIdentity = aggregateNameFor(project, tag: paramTag, nameId: typeNameIdOf(paramType))
+	var paramIdentity = aggregateNameFor(project, tag: paramTag, nameId: typeNameIdOf(paramType))
+	if paramIdentity.isEmpty() 'erasedUnionParam'
+		paramIdentity = try shape.paramAggregateNames.get(0) otherwise panic("checkTransformParamType: paramAggregateNames.get OOB at 0 below count {shape.paramAggregateNames.count()} — a shape's parameter columns are built in lockstep with its {shape.paramTypes.count()} parameter type(s)")
+	end 'erasedUnionParam'
+
 	if elementTypePreserved(transform.elementTag, elementIdentity: transform.elementIdentity, otherTag: paramTag, otherIdentity: paramIdentity) 'agree'
 		return
 	end 'agree'

@@ -314,12 +314,26 @@ end 'declarationAlreadyReported'
 function resolveFunctionAliasShapes(project Project, signatures ProgramSignatures)
 	for (name, alias) in project.functionTypeAliases 'eachAlias'
 		var resolvedParams = MaxonTypeArray.create()
+		var preErasedNames = ByteArrayArray.create()
 		for param in alias.paramTypes 'eachParam'
 			resolvedParams.push(resolveType(project, signatures: signatures, t: functionAliasParamType(project, param: param)))
+			preErasedNames.push(functionAliasParamAggregateName(signatures, param: param))
 		end 'eachParam'
-		project.functionAliasShapes.upsert(name, value: FunctionShape.create(resolvedParams, returnType: resolveReturnType(project, signatures: signatures, ret: functionAliasReturnType(project, alias: alias))))
+		project.functionAliasShapes.upsert(name, value: FunctionShape.create(resolvedParams, returnType: resolveReturnType(project, signatures: signatures, ret: functionAliasReturnType(project, alias: alias)), paramAggregateNames: preErasedNames))
 	end 'eachAlias'
 end 'resolveFunctionAliasShapes'
+
+// ⭐ **THE ALIAS TIER'S ANSWER FOR `FunctionShape.paramAggregateNames`** — the identity the very
+// `resolveType` two lines above is about to destroy, captured before it does. A boxed union/enum is the ONE
+// declared parameter type whose name does not survive resolution (it collapses to bare `integer`), which is
+// why the gate is `containsEnum` and not the wider `Parser.aggregateNameOf`: a struct's `structRef(id)`
+// survives, so its slot stays empty by that column's own rule.
+//
+// A primitive parameter carries no name at all (`FunctionAliasParam.typeName` is empty for one), and
+// `containsEnum` answers false for the empty name, so the common case needs no arm of its own.
+function functionAliasParamAggregateName(signatures ProgramSignatures, param FunctionAliasParam) returns ByteArray
+	return param.typeName if signatures.containsEnum(param.typeName) else EmptySourceText
+end 'functionAliasParamAggregateName'
 
 // Rebuild one stored parameter's `MaxonType` from its interner-free `(tag, name)` pair, re-interning the
 // name into the project's merged interner. The twin of `functionAliasReturnType` below and of the parser's
@@ -365,7 +379,7 @@ end 'DeclaredFunctionShape'
 export function declaredFunctionShapeOf(registry FunctionTypeRegistry, name ByteArray) returns DeclaredFunctionShape
 	if let sig = try registry.funcSignatures.get(name) 'declaredFn'
 		let returnType = try registry.funcReturnTypes.get(name) otherwise panic("declaredFunctionShapeOf: '{String.from(name)}' is in funcSignatures but not funcReturnTypes — the two are committed together per function and re-synced together by resolveTypes")
-		return DeclaredFunctionShape.declared(FunctionShape.create(sig.paramTypes, returnType: returnType))
+		return DeclaredFunctionShape.declared(FunctionShape.create(sig.paramTypes, returnType: returnType, paramAggregateNames: sig.paramAggregateNames))
 	end 'declaredFn'
 
 	if let aliasShape = try registry.aliasShapes.get(name) 'alias'
