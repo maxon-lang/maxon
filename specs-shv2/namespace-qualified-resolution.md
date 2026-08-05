@@ -930,3 +930,106 @@ end 'main'
 ```maxoncstderr
 error E3095: app/specs/fragments/namespace-qualified-resolution/error.three-way-ambiguous-bare-call.test:25:9: Ambiguous bare-name call to 'pick': multiple visible definitions found. Qualify with a directory name. Candidates: alpha.pick, mid.pick, zulu.pick
 ```
+
+
+<!-- test: error.contested-free-function-default-is-not-inherited -->
+⛔⛔ **A CONTESTANT'S PARAMETER DEFAULT BELONGS TO ITS OWN DECLARATION, AND IT USED TO BE BORROWED
+FROM WHICHEVER FILE FOLDED FIRST (A5l).** The end-of-fold SELF refile moves this file's declaration
+off the bare key — but the bare key ACCUMULATES, so a positive fact sitting there may be an earlier
+directory's. `beta.pick` declares no default and takes one required argument; `alpha.pick`, folded
+first, declares one.
+
+⛔ MEASURED before the fix: this program COMPILED and `beta.pick()` answered **5** — alpha's default
+value, supplied to beta's parameter, in a file that declares no default at all. The control is the
+byte-identical program with alpha's `= 5` removed, which has always reported exactly the refusal
+below. **The only variable is a DIFFERENT directory's declaration.**
+```maxon
+// --- file: alpha/a.maxon
+typealias Ms = int(0 to 125)
+
+export function pick(ms Ms = 5) returns Ms
+	return ms
+end 'pick'
+
+// --- file: beta/b.maxon
+typealias Slot = int(0 to 125)
+
+export function pick(slot Slot) returns Slot
+	return slot
+end 'pick'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	return (alpha.pick() * 10 + beta.pick()) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3036: app/specs/fragments/namespace-qualified-resolution/error.contested-free-function-default-is-not-inherited.test:18:30: 'beta.pick' expects 1 argument(s) but 0 were provided
+```
+
+
+<!-- test: contested-free-function-own-default-still-applies -->
+The positive half of the case above, and the reason the cure is a SOURCE test rather than a clear of
+the bare key: alpha's own default must still reach alpha's own qualified key. Only one of the two
+contestants declares a default here, which is precisely the asymmetry the refusal above rests on —
+so a fix that stopped copying defaults altogether would turn this green case red.
+```maxon
+// --- file: alpha/a.maxon
+typealias Ms = int(0 to 125)
+
+export function pick(ms Ms = 5) returns Ms
+	return ms
+end 'pick'
+
+// --- file: beta/b.maxon
+typealias Slot = int(0 to 125)
+
+export function pick(slot Slot) returns Slot
+	return slot
+end 'pick'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	return (alpha.pick() * 10 + beta.pick(3)) as ExitCode
+end 'main'
+```
+```exitcode
+53
+```
+
+
+<!-- test: error.contested-free-function-throws-is-not-inherited -->
+**THE SAME BORROWED-FACT BUG ON THE `throws` REGISTRY, MEASURED RATHER THAN ASSUMED (A5l).** The six
+facts the SELF refile moves travel together, so the `throws` clause is inherited exactly as the
+parameter default was — and it IS read: `Parser.requireThrowingNamedTryTarget` asks
+`ProgramSignatures.throwsOf(callee)` to refuse a `try` on a callee that cannot throw.
+
+⛔ MEASURED before the fix: `try beta.pick() otherwise 0` compiled clean, against a `beta.pick` whose
+declaration has no `throws` clause. The control — the same program with alpha's `throws Boom`
+removed — reports exactly the refusal below. *(E3057, the other direction, is NOT affected:
+`SemanticCheck.buildThrowsMap` rebuilds its map from the checked IR functions rather than from the
+sweep, so a call that omits a needed `try` was never decided by this registry.)*
+```maxon
+// --- file: alpha/a.maxon
+enum Boom
+	case bad
+end 'Boom'
+
+export function pick() returns int throws Boom
+	throw Boom.bad
+end 'pick'
+
+// --- file: beta/b.maxon
+export function pick() returns int
+	return 5
+end 'pick'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	let v = try beta.pick() otherwise 0
+	return v as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3055: app/specs/fragments/namespace-qualified-resolution/error.contested-free-function-throws-is-not-inherited.test:18:10: try requires a throwing function: 'beta.pick' does not throw'
+```

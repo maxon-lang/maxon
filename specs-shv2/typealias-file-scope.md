@@ -1009,3 +1009,94 @@ end 'main'
 ```exitcode
 0
 ```
+
+<!-- test: tuple-alias-over-a-contested-generic-alias -->
+⛔⛔ **A USER-DECLARED TUPLE `typealias` HAS AN HONEST DECLARING FILE, AND IT USED TO THROW IT AWAY
+(A3v).** A tuple's canonical name is keyed on its ELEMENT types, and `canonicalTupleElement` resolved
+each of them through `declaredSlotType` under `CompilerOwnedDeclFilePath` — the STRANGER convention
+(N2), which is right for a compiler-SYNTHESIZED tuple (it is declared in no file) and wrong for one
+the source wrote a `typealias` for. So `adef.maxon`'s `Pair = (Bag, Num)` was interned over
+`bother.maxon`'s `Bag`, and the declaring file could not construct its OWN field.
+
+⛔ MEASURED before the fix: `error E3005: cannot assign '__Tuple2.Array_Num.int' to variable
+'Keeper.p' of type '__Tuple2.Array_String.int'` — reported at line 10 of `adef.maxon`, the file that
+declares every name in the sentence. Same shape as a contested generic alias in a RETURN type: the
+LOSER's own legal program is the one refused.
+
+⚠ The two files' `(Bag, Num)` are now two DIFFERENT tuple types, which is what the language already
+says: `Bag` denotes different things in them. A tuple stays STRUCTURAL where the spellings agree —
+per-file resolution then lands on identical element types and therefore on one canonical name.
+```maxon
+// --- file: adef.maxon
+typealias Num = int(0 to 125)
+typealias Bag = Array with Num
+typealias Pair = (Bag, Num)
+
+export type Keeper
+	export var p as Pair
+	export static function make() returns Self
+		var b = Bag.create()
+		b.push(7)
+		return Self{p: (b, 1)}
+	end 'make'
+end 'Keeper'
+
+export function useA() returns Num
+	var k = Keeper.make()
+	return try k.p.0.get(0) otherwise 0
+end 'useA'
+
+// --- file: bother.maxon
+typealias Bag = Array with String
+
+export function useB() returns int
+	var b = Bag.create()
+	b.push("x")
+	return b.count() as int
+end 'useB'
+
+// --- file: cmain.maxon
+function main() returns ExitCode
+	return (useA() + useB()) as ExitCode
+end 'main'
+```
+```exitcode
+8
+```
+
+<!-- test: contested-generic-alias-in-a-cross-file-return-type -->
+**A CROSS-FILE RETURN TYPE SPELLED WITH A CONTESTED GENERIC ALIAS RESOLVES IN THE CALLEE'S FILE, AND
+THIS CASE EXISTS TO KEEP IT THAT WAY.** `makeBag` returns `Bag`, and the CALLER is itself a
+contestant that means something else by that name — the shape that would bite hardest if the return
+type were resolved against the reader's file. `ProgramSignatures.funcReturnDeclFiles` is the
+per-callee declaring-file index that decides it, and `copyFreeFunctionSweepEntries` carries it across
+a contest refile; nothing else pins either, so a regression in them would have been silent.
+
+The element type is what discriminates: `theirs.get(1)` is an `int` only if `Bag` meant adef's
+`Array with Num`. Had it resolved against `cmain.maxon`, the value would be a `String` and the `as
+ExitCode` would not compile.
+```maxon
+// --- file: adef.maxon
+typealias Num = int(0 to 125)
+typealias Bag = Array with Num
+
+export function makeBag() returns Bag
+	var b = Bag.create()
+	b.push(4)
+	b.push(9)
+	return b
+end 'makeBag'
+
+// --- file: cmain.maxon
+typealias Bag = Array with String
+
+function main() returns ExitCode
+	var mine = Bag.create()
+	mine.push("x")
+	var theirs = makeBag()
+	return ((try theirs.get(1) otherwise 0) * 10 + mine.count()) as ExitCode
+end 'main'
+```
+```exitcode
+91
+```

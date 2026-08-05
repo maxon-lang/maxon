@@ -1,0 +1,22 @@
+// Test: error.contested-free-function-default-is-not-inherited
+// --- file: alpha/a.maxon
+typealias Ms = int(0 to 125)
+
+export function pick(ms Ms = 5) returns Ms
+	return ms
+end 'pick'
+
+// --- file: beta/b.maxon
+typealias Slot = int(0 to 125)
+
+export function pick(slot Slot) returns Slot
+	return slot
+end 'pick'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	return (alpha.pick() * 10 + beta.pick()) as ExitCode
+end 'main'
+---
+CompilerError:
+error E3036: app/<fragment>:18:30: 'beta.pick' expects 1 argument(s) but 0 were provided

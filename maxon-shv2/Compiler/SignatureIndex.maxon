@@ -3180,8 +3180,20 @@ end 'isTupleTypeName'
 // first: a wrong ACCEPTANCE, which no diagnostic reports. A tuple slot's surface rides the VALUE instead
 // (`Parser.bufferSurfaceSlots`), and `error.a-tuple-of-byte-arrays-keeps-the-array-surface` is what holds
 // this shut.
-export function tupleStructLayout(name ByteArray, elements MaxonTypeArray) returns StructLayout
-	var layout = StructLayout.createCompilerOwned(name)
+// ⚠⚠ **`declFilePath` IS THE FILE WHOSE SPELLING MINTED THIS TUPLE, AND IT IS NOT `CompilerOwnedDeclFilePath`
+// (A3v).** A tuple TYPE is synthesized and declared in no file, so the compiler-owned path reads like the
+// honest answer — and it was, until a tuple ELEMENT could name a per-file thing. `(Bag, Num)` written in
+// `adef.maxon` means adef's `Bag`; resolving it as a file declaring no `Bag` at all made the DECLARING file
+// unable to construct its own field. What a tuple has is not a declaration site but a SPELLING site, and
+// every spelling has one — so the path a tuple layout carries is the file that wrote the element list.
+//
+// It is the same column a declared `type` uses because it answers the same question at the same doors:
+// `resolveRecordedGenericAliasTypes` re-scopes this layout's recorded `named` elements against it (which is
+// what settles a SWEEP-minted spelling, whose elements are still bare names), and `fieldTypeOf` scopes an
+// element read through it. Visibility is `global` exactly as before — a tuple is nameable wherever its
+// elements are, and the path is read for SCOPING, never for reach.
+export function tupleStructLayout(name ByteArray, elements MaxonTypeArray, declFilePath FilePath) returns StructLayout
+	var layout = StructLayout.create(name, visibility: Visibility.global, declFilePath: declFilePath)
 	for i in 0 upto elements.count() 'eachElement'
 		layout.addField(tupleFieldName("{i}".toByteArray()), declaredType: try elements.get(i) otherwise panic("tupleStructLayout: elements.get OOB at {i} below count {elements.count()}"), mutable: true, tier: Visibility.global, defaultValue: FieldDefault.none, declaredSurface: sharedEmptyDeclaredSurface)
 	end 'eachElement'
@@ -4320,6 +4332,88 @@ end 'FreeFunctionContest'
 // costs one map miss and no allocation on every call the compiler validates. NEVER mutated.
 let sharedEmptyContestedSpellings = ByteArrayArray.create()
 
+// ⭐⭐ **WHICH OF THE SWEEP'S CONDITIONAL PER-FUNCTION FACTS *ONE* DECLARATION ACTUALLY STATES (A5l).**
+//
+// Five of the six facts `copyFreeFunctionSweepEntries` moves are recorded only by a declaration that HAS
+// them — that is the "absence is the answer" the whole registry rests on — and every one of them is written
+// under the BARE name, which ACCUMULATES across files. So at the end-of-fold SELF refile the bare key may
+// hold a positive fact no declaration in this file ever stated, and copying it files another file's answer
+// under this declaration's qualified key. ⛔ MEASURED both ways: a `beta.pick()` with no default silently
+// borrowed `alpha.pick`'s and compiled where E3036 is right, and `try beta.pick() otherwise 0` was accepted
+// against a `beta.pick` declaring no `throws`.
+//
+// ⛔⛔ **THE CURE IS NOT TO CLEAR THE BARE KEY, AND THAT WAS TRIED.** `recordParamDefaults`' own
+// `funcParamDefaults.contains(name)` test IS the "two declarations of one name" test that earns
+// `Parser.captureParamDefault`'s positioned refusal; a mid-fold clear blinds it and retires that refusal
+// silently. The bare key must keep accumulating, so the COPY is what learns to be selective.
+//
+// The RETURN TYPE is not here because it is not conditional: `record` writes one for every declaration, so
+// the bare key holds this file's by the time the SELF refile runs.
+type StatedSweepFacts
+	export let returnSurface as bool
+	export let returnDeclFile as bool
+	export let paramConsumes as bool
+	export let paramDefaults as bool
+	export let throwsClause as bool
+
+	export static function create(returnSurface bool, returnDeclFile bool, paramConsumes bool, paramDefaults bool, throwsClause bool) returns StatedSweepFacts
+		return Self{returnSurface: returnSurface, returnDeclFile: returnDeclFile, paramConsumes: paramConsumes, paramDefaults: paramDefaults, throwsClause: throwsClause}
+	end 'create'
+
+	// ⭐ **THE CONTEST-MINTING REFILE'S ANSWER, and it is sound by CONSTRUCTION rather than by inspection.**
+	// `newlyContested` fires at the instant a SECOND directory declares the name, so exactly one declaration
+	// of it has ever folded and every entry at the bare key is that declaration's. The same is true of the
+	// root mirror's read-back (`restoreRootDeclarationToBareKey`), whose source key only ever held what one
+	// root declaration's own refile filtered into it.
+	export static function everyFact() returns StatedSweepFacts
+		return StatedSweepFacts.create(true, returnDeclFile: true, paramConsumes: true, paramDefaults: true, throwsClause: true)
+	end 'everyFact'
+end 'StatedSweepFacts'
+
+// ⭐ **WHAT *THIS FILE'S* DECLARATION OF `bareName` STATES, read off the very arrays the fold recorded from.**
+//
+// Each test mirrors its recorder's own condition and asks it through the SAME predicate, which is what keeps
+// the two from drifting: `record` writes a surface when `not surfaceIsPlain` and a declaring file when
+// `returnTypeNamesAType`; `recordParamConsume` and `recordParamDefaults` write whenever the scan handed them
+// an entry; `recordThrows` writes when `throwsClauseIsThrowing`.
+//
+// `scanned` is walked ONCE for both of the return-derived bits — a file's scan holds an entry per declared
+// function, so asking it twice would be two walks of the same array for one declaration's two facts.
+//
+// ⚠ **EVERY BIT IS OR-ED ACROSS MATCHES RATHER THAN TAKEN FROM THE FIRST**, because a file MAY declare one
+// name twice (that is E3006, reported after every file has parsed, and this fold runs long before it). Both
+// declarations wrote to the bare key, so both are entitled to be moved off it; taking the first would strand
+// the second's fact under a key its own parse will not look at.
+function statedSweepFacts(bareName ByteArray, scanned FuncReturnTypeEntryArray, paramConsumes ParamConsumeEntryArray, paramDefaults ParamDefaultEntryArray, throwsEntries ThrowsClauseEntryArray) returns StatedSweepFacts
+	var returnSurface = false
+	var returnDeclFile = false
+	for entry in scanned 'eachDeclaration'
+		if not entry.name.equals(bareName) 'anotherDeclaration'
+			continue
+		end 'anotherDeclaration'
+
+		returnSurface = returnSurface or not surfaceIsPlain(entry.declaredSurface)
+		returnDeclFile = returnDeclFile or returnTypeNamesAType(entry.returnType)
+	end 'eachDeclaration'
+
+	var consumes = false
+	for entry in paramConsumes 'eachConsume'
+		consumes = consumes or entry.name.equals(bareName)
+	end 'eachConsume'
+
+	var defaults = false
+	for entry in paramDefaults 'eachParamDefault'
+		defaults = defaults or entry.name.equals(bareName)
+	end 'eachParamDefault'
+
+	var throwing = false
+	for entry in throwsEntries 'eachThrows'
+		throwing = throwing or (entry.name.equals(bareName) and throwsClauseIsThrowing(entry.clause))
+	end 'eachThrows'
+
+	return StatedSweepFacts.create(returnSurface, returnDeclFile: returnDeclFile, paramConsumes: consumes, paramDefaults: defaults, throwsClause: throwing)
+end 'statedSweepFacts'
+
 // The head of the reserved key a contested ROOT declaration's sweep entries are mirrored under — see
 // `ProgramSignatures.rootDeclarationShadowName`. It joins through `overloadRegistrationName`, so the
 // `#` that makes every synthesized name unspellable is stated in ONE place for all of them.
@@ -5122,7 +5216,9 @@ export type ProgramSignatures
 				// has nothing left to move. This file's own entries are moved at the end of the fold, where
 				// they exist.
 				alreadyContested then continue
-				newlyContested(incumbentRegistrationName) then self.refileContestedFreeFunction(bareName, registrationName: incumbentRegistrationName)
+					// `everyFact`: exactly one declaration of this name has folded, so every entry at the bare
+					// key is the incumbent's — see `StatedSweepFacts.everyFact`.
+					newlyContested(incumbentRegistrationName) then self.refileContestedFreeFunction(bareName, registrationName: incumbentRegistrationName, stating: StatedSweepFacts.everyFact())
 			end 'contest'
 		end 'eachFreeFunction'
 
@@ -5264,12 +5360,18 @@ export type ProgramSignatures
 		//
 		// A program with no contested name does not enter the loop body at all: `isContestedFreeFunction` is
 		// a miss on an empty map for every name.
+		//
+		// ⛔⛔ **AND UNLIKE THE INCUMBENT REFILE ABOVE, THIS ONE MAY NOT TAKE WHAT IT FINDS (A5l).** The bare
+		// key ACCUMULATES — every earlier file's positive facts are still sitting there — so what this
+		// declaration is entitled to move is what THIS FILE's own scan recorded, which is exactly what the
+		// arrays in hand say. MEASURED before the filter: `beta.pick()` compiled by borrowing `alpha.pick`'s
+		// parameter default, and `try beta.pick()` was accepted by borrowing its `throws` clause.
 		for bareName in freeFunctionNames 'eachFreeFunctionOfThisFile'
 			if not self.isContestedFreeFunction(bareName) 'keepsItsBareName'
 				continue
 			end 'keepsItsBareName'
 
-			self.refileContestedFreeFunction(bareName, registrationName: freeFunctionRegistrationName(bareName, moduleDirectory: moduleDirectory))
+			self.refileContestedFreeFunction(bareName, registrationName: freeFunctionRegistrationName(bareName, moduleDirectory: moduleDirectory), stating: statedSweepFacts(bareName, scanned: scanned, paramConsumes: paramConsumes, paramDefaults: paramDefaults, throwsEntries: throwsEntries))
 		end 'eachFreeFunctionOfThisFile'
 	end 'foldFile'
 
@@ -6098,7 +6200,7 @@ export type ProgramSignatures
 	// DERIVED from declarations that hash already covers — mixing again would make the memo key depend on the
 	// copy rather than on the program. The same holds of the DEFAULT-HELPER rename below: its inputs are this
 	// declaration's bare name and its module directory, both of which already move the hash.
-	export function refileContestedFreeFunction(bareName ByteArray, registrationName ByteArray)
+	export function refileContestedFreeFunction(bareName ByteArray, registrationName ByteArray, stating StatedSweepFacts)
 		// ⭐⭐ **A ROOT DECLARATION HAS NO QUALIFIED KEY TO MOVE TO, SO IT IS MIRRORED INSTEAD.** It keeps the
 		// bare key — that is the rule, not a fallback — and the mirror is what every LATER contestant's fold
 		// restores it from, because the record loops that run between here and there write the bare key too.
@@ -6109,7 +6211,7 @@ export type ProgramSignatures
 		// the end of the ROOT file's own fold (the root is a later contestant, and its record loops have just
 		// run). There is no third caller and no fourth moment.
 		if registrationName.equals(bareName) 'aRootDeclarationOwnsTheBareKey'
-			self.copyFreeFunctionSweepEntries(bareName, to: self.rootDeclarationShadowName(bareName))
+			self.copyFreeFunctionSweepEntries(bareName, to: self.rootDeclarationShadowName(bareName), stating: stating)
 			return
 		end 'aRootDeclarationOwnsTheBareKey'
 
@@ -6140,10 +6242,15 @@ export type ProgramSignatures
 		// declaration below. Declining to TAKE another declaration's key says nothing about whose entries the
 		// key this fold overwrote must end up holding.
 		if not self.returnTypes.contains(registrationName) 'thisKeyIsThisDeclarationsToTake'
-			self.copyFreeFunctionSweepEntries(bareName, to: registrationName)
-			if let defaults = try self.funcParamDefaults.get(bareName) 'hasParameterDefaults'
-				self.renameParamDefaultHelpers(defaults, bareName: bareName, registrationName: registrationName)
-			end 'hasParameterDefaults'
+			self.copyFreeFunctionSweepEntries(bareName, to: registrationName, stating: stating)
+			// ⚠ Gated on the SAME fact as the copy above: a declaration that states no default has no helper
+			// to rename, and the object sitting at the bare key belongs to another file — renaming through it
+			// would move THAT declaration's helper names out from under it.
+			if stating.paramDefaults 'declaresParameterDefaults'
+				if let defaults = try self.funcParamDefaults.get(bareName) 'hasParameterDefaults'
+					self.renameParamDefaultHelpers(defaults, bareName: bareName, registrationName: registrationName)
+				end 'hasParameterDefaults'
+			end 'declaresParameterDefaults'
 		end 'thisKeyIsThisDeclarationsToTake'
 
 		self.restoreRootDeclarationToBareKey(bareName)
@@ -6180,43 +6287,62 @@ export type ProgramSignatures
 		end 'noRootDeclarationContestsThisName'
 
 		self.clearFreeFunctionSweepEntries(bareName)
-		self.copyFreeFunctionSweepEntries(shadow, to: bareName)
+		self.copyFreeFunctionSweepEntries(shadow, to: bareName, stating: StatedSweepFacts.everyFact())
 	end 'restoreRootDeclarationToBareKey'
 
-	// ⭐ **THE FIVE PER-DECLARATION FACTS THE SWEEP FILES UNDER A FUNCTION NAME, COPIED FROM ONE KEY TO
+	// ⭐ **THE SIX PER-DECLARATION FACTS THE SWEEP FILES UNDER A FUNCTION NAME, COPIED FROM ONE KEY TO
 	// ANOTHER.** They travel together because they are exactly what a CALL SITE reads about a callee whose
-	// declaration it cannot see — `returnTypeOf`, `declaredReturnSurface`, `consumeOf`, `defaultsOf` and
-	// `throwsOf` — so a key holding four of them answers four
-	// questions about one declaration and the fifth about another.
+	// declaration it cannot see — `returnTypeOf`, `declaredReturnSurface`, the recorded return type's
+	// declaring file, `consumeOf`, `defaultsOf` and `throwsOf` — so a key holding five of them answers five
+	// questions about one declaration and the sixth about another.
 	//
-	// ⚠ **AN ABSENT FACT IS NOT COPIED, AND ABSENCE IS AN ANSWER IN FOUR OF THE FIVE** ("the plain surface",
-	// "borrows every parameter", "every parameter required", "does not throw"). A caller that needs the
-	// DESTINATION to inherit the source's absences too must therefore `clearFreeFunctionSweepEntries` first —
-	// which is what `restoreRootDeclarationToBareKey` does and what the qualified-key copy deliberately does
-	// not, its destination being a key nothing has written.
+	// ⚠ **AN ABSENT FACT IS NOT COPIED, AND ABSENCE IS AN ANSWER IN FIVE OF THE SIX** ("the plain surface",
+	// "no name left to resolve", "borrows every parameter", "every parameter required", "does not throw"). A
+	// caller that needs the DESTINATION to inherit the source's absences too must therefore
+	// `clearFreeFunctionSweepEntries` first — which is what `restoreRootDeclarationToBareKey` does and what
+	// the qualified-key copy deliberately does not, its destination being a key nothing has written.
+	//
+	// ⛔⛔ **A PRESENT FACT IS NOT NECESSARILY *THIS* DECLARATION'S, AND THAT IS WHAT `stating` DECIDES
+	// (A5l).** This routine's own header used to rest on "an absent fact is not copied" alone — true only
+	// while the source key holds ONE declaration's facts. The bare key accumulates across files, so at the
+	// end-of-fold SELF refile a positive entry may be a predecessor's, and then the fact is not absent, it is
+	// someone else's. See `StatedSweepFacts` for what the caller has to establish and why clearing the bare
+	// key is not the alternative.
 	//
 	// The DEFAULT-HELPER rename is NOT part of this: it renames the helper a declaration's own real parse
 	// synthesizes, which is a property of the destination NAME rather than of the facts, and the mirror
 	// direction must leave those names alone.
-	function copyFreeFunctionSweepEntries(from ByteArray, to ByteArray)
+	function copyFreeFunctionSweepEntries(from ByteArray, to ByteArray, stating StatedSweepFacts)
+		// The return type is unconditional at every recorder (`record` writes one per declaration), so the
+		// source key holds this declaration's own by construction and `stating` has nothing to say about it.
 		if let returnType = try self.returnTypes.get(from) 'hasReturnType'
 			self.returnTypes.upsert(to, value: returnType)
 		end 'hasReturnType'
-		if let surface = try self.declaredReturnSurfaces.get(from) 'namesTheBufferAlias'
-			self.declaredReturnSurfaces.upsert(to, value: surface)
-		end 'namesTheBufferAlias'
-		if let declFilePath = try self.funcReturnDeclFiles.get(from) 'returnsANameStillToBeResolved'
-			self.funcReturnDeclFiles.upsert(to, value: declFilePath)
-		end 'returnsANameStillToBeResolved'
-		if let consumes = try self.funcParamConsumes.get(from) 'consumesAParameter'
-			self.funcParamConsumes.upsert(to, value: consumes)
-		end 'consumesAParameter'
-		if let defaults = try self.funcParamDefaults.get(from) 'hasParameterDefaults'
-			self.funcParamDefaults.upsert(to, value: defaults)
-		end 'hasParameterDefaults'
-		if let clause = try self.funcThrows.get(from) 'throws'
-			self.funcThrows.upsert(to, value: clause)
-		end 'throws'
+		if stating.returnSurface 'declaresANonPlainSurface'
+			if let surface = try self.declaredReturnSurfaces.get(from) 'namesTheBufferAlias'
+				self.declaredReturnSurfaces.upsert(to, value: surface)
+			end 'namesTheBufferAlias'
+		end 'declaresANonPlainSurface'
+		if stating.returnDeclFile 'returnsANameOfItsOwn'
+			if let declFilePath = try self.funcReturnDeclFiles.get(from) 'returnsANameStillToBeResolved'
+				self.funcReturnDeclFiles.upsert(to, value: declFilePath)
+			end 'returnsANameStillToBeResolved'
+		end 'returnsANameOfItsOwn'
+		if stating.paramConsumes 'declaresAConsumingParameter'
+			if let consumes = try self.funcParamConsumes.get(from) 'consumesAParameter'
+				self.funcParamConsumes.upsert(to, value: consumes)
+			end 'consumesAParameter'
+		end 'declaresAConsumingParameter'
+		if stating.paramDefaults 'declaresParameterDefaults'
+			if let defaults = try self.funcParamDefaults.get(from) 'hasParameterDefaults'
+				self.funcParamDefaults.upsert(to, value: defaults)
+			end 'hasParameterDefaults'
+		end 'declaresParameterDefaults'
+		if stating.throwsClause 'declaresAThrowsClause'
+			if let clause = try self.funcThrows.get(from) 'throws'
+				self.funcThrows.upsert(to, value: clause)
+			end 'throws'
+		end 'declaresAThrowsClause'
 	end 'copyFreeFunctionSweepEntries'
 
 	// Drop all five, so the copy that follows lands the source's ABSENCES as well as its entries. The
@@ -8114,7 +8240,13 @@ export type ProgramSignatures
 	// spelling it sees, the real parse asks the question with the whole program in hand, and a program that
 	// fails it is rejected before anything downstream reads the tuple. The sweep's spelling is registered but
 	// never referenced, exactly like the instances `internLiteralContainerInstances` over-interns.
-	export function internTupleType(elements MaxonTypeArray, from TypeNameInterner) returns ByteArray throws TupleElementRejection
+	//
+	// ⚠ **`slotScopeFilePath` IS THE FILE THAT WROTE THE ELEMENT LIST, and it is what makes a tuple's identity
+	// a statement about the program rather than about the filesystem (A3v).** Every spelling reaching here —
+	// a `(a, b)` literal, a `(T, U)` annotation, a `typealias Pair = (…)` — was written in exactly one file,
+	// and an element naming a CONTESTED generic alias means what that file means by it. See
+	// `tupleStructLayout` for why the minted layout carries it too.
+	export function internTupleType(elements MaxonTypeArray, from TypeNameInterner, slotScopeFilePath FilePath) returns ByteArray throws TupleElementRejection
 		var interned = MaxonTypeArray.create()
 		for i in 0 upto elements.count() 'eachElement'
 			let adopted = self.adoptTypeFrom(try elements.get(i) otherwise panic("internTupleType: elements.get OOB at {i} below count {elements.count()}"), from: from)
@@ -8124,12 +8256,12 @@ export type ProgramSignatures
 			end 'tolerantSweep'
 
 			try requireTupleElementType(adopted, position: i)
-			let canonical = self.canonicalTupleElement(adopted)
+			let canonical = self.canonicalTupleElement(adopted, slotScopeFilePath: slotScopeFilePath)
 			try self.requireSeparatorFreeElementName(canonical, position: i)
 			interned.push(canonical)
 		end 'eachElement'
 
-		return self.registerTupleLayout(interned)
+		return self.registerTupleLayout(interned, declFilePath: slotScopeFilePath)
 	end 'internTupleType'
 
 	// ⭐ **THE INJECTIVITY ARGUMENT, ENFORCED AT THE JOIN THAT RELIES ON IT** — `witnessTableLabel`'s
@@ -8151,15 +8283,81 @@ export type ProgramSignatures
 
 	// Register the layout for an already-interned, already-canonical element list and answer its name.
 	// Idempotent — a second mint of the same tuple type is a `contains` hit that builds nothing.
-	function registerTupleLayout(elements MaxonTypeArray) returns ByteArray
-		let name = self.tupleTypeNameOf(elements)
+	//
+	// ⚠ **THE FIRST MINTER'S FILE IS THE ONE THE LAYOUT KEEPS, and `sweepScopedTupleName` is what makes that
+	// exact rather than a race.** A CANONICAL element list holds resolved types, so every file that reaches
+	// that name means the same thing by it and the path is never consulted to say otherwise — one layout,
+	// one file, no ambiguity. A SWEEP spelling still holds bare `named`s, so it is keyed per file and there
+	// is again exactly one minter.
+	function registerTupleLayout(elements MaxonTypeArray, declFilePath FilePath) returns ByteArray
+		let name = self.sweepScopedTupleName(self.tupleTypeNameOf(elements), declFilePath: declFilePath)
 		if self.structTypes.contains(name) 'alreadyRegistered'
 			return name
 		end 'alreadyRegistered'
 
-		self.structTypes.upsert(name, value: tupleStructLayout(name, elements: elements))
+		self.structTypes.upsert(name, value: tupleStructLayout(name, elements: elements, declFilePath: declFilePath))
 		return name
 	end 'registerTupleLayout'
+
+	// ⭐⭐ **ONE SWEEP KEY PER (SPELLING, FILE) — because a sweep spelling is NOT a whole-program identity and
+	// a canonical name is (A3v).** A canonical name is derived from RESOLVED elements, so every file that
+	// reaches it means the same thing by it; that property is what every reader of a tuple type rests on and
+	// nothing here touches it. A sweep spelling is the opposite: its elements are still the bare names the
+	// source wrote, because the registries that say what those names MEAN are being built while the sweep
+	// runs. So `__Tuple2.Bag.int` written in two files whose `Bag` declarations disagree is two types wearing
+	// one key — and the layout that key holds carries ONE declaring file, which is what
+	// `resolveRecordedGenericAliasTypes` rescopes its elements against and what `canonicalTupleName` walks
+	// them with.
+	//
+	// ⛔ MEASURED with the key shared: the file that folded SECOND could not construct its own field —
+	// `E3005: cannot assign '__Tuple2.Array_String.int' to variable 'Holder.q' of type
+	// '__Tuple2.Array_Num.int'`. A wrong answer decided by directory order.
+	//
+	// ⚠⚠ **THE FIRST MINTER KEEPS THE PLAIN KEY, AND THE SUFFIX IS AN ORDINAL RATHER THAN THE PATH.** Both
+	// halves are corrections of a version that qualified every sweep key with `declFilePath`, and each has
+	// its own reason:
+	//   • **A PATH IS NOT A LEGAL ELEMENT-NAME FRAGMENT.** A sweep key can be embedded as an ELEMENT of
+	//     another tuple's name (`canonicalTupleName`'s A3e re-entry does exactly that), and the element join
+	//     is `.` — which every path contains. It is also host-dependent, so it would print differently on
+	//     every machine.
+	//   • **THE FIRST MINTER MUST BE UNSUFFIXED**, because that same re-entry is the one place a sweep key
+	//     reaches a user-visible type name. MEASURED: with every key suffixed,
+	//     `tuples/error.self-referential-tuple-alias` rendered `…P.Int#<fragment>…` in its E3005. A single
+	//     file spelling a tuple — which is that case, and the overwhelming common one — now takes the plain
+	//     key and no message moves.
+	//
+	// The join is `overloadRegistrationName`'s for `rootDeclarationShadowName`'s reason: `#` appears in no
+	// source identifier and in no canonical element name, so the key is unspellable, `isTupleTypeName` still
+	// recognizes it by its intact prefix, and the digits cannot hold the element separator.
+	function sweepScopedTupleName(name ByteArray, declFilePath FilePath) returns ByteArray
+		if self.allFilesFolded 'aCanonicalIdentity'
+			return name
+		end 'aCanonicalIdentity'
+
+		if self.tupleKeyIsAvailableTo(name, declFilePath: declFilePath) 'theFirstMintOfThisSpelling'
+			return name
+		end 'theFirstMintOfThisSpelling'
+
+		// Every candidate this walk passes over is held by a layout of ANOTHER file, so the registry itself
+		// bounds the search: there cannot be more taken candidates than there are registered layouts.
+		for claimed in 1 upto self.structTypes.count() + 1 'eachLaterFilesMint'
+			let candidate = overloadRegistrationName(name, suffix: "{claimed}".toByteArray())
+			if self.tupleKeyIsAvailableTo(candidate, declFilePath: declFilePath) 'free'
+				return candidate
+			end 'free'
+		end 'eachLaterFilesMint'
+
+		panic("ProgramSignatures.sweepScopedTupleName: every candidate key for the sweep spelling `{String.from(name)}` through #{self.structTypes.count()} is held by another file's layout, which cannot happen — each taken candidate occupies a registered layout of its own, so the walk is bounded by the registry's own size")
+	end 'sweepScopedTupleName'
+
+	// Is `candidate` a key this file may register its tuple layout under — free, or already this file's own
+	// mint? A second mint of one spelling by one file is the ordinary case (a `typealias` and a field
+	// annotation spelling the same element list), and it must land on that file's existing layout rather
+	// than on a fresh suffix.
+	function tupleKeyIsAvailableTo(candidate ByteArray, declFilePath FilePath) returns bool
+		let existing = try self.structTypes.get(candidate) otherwise return true
+		return existing.declFilePath.toString().equals(declFilePath.toString())
+	end 'tupleKeyIsAvailableTo'
 
 	// `__Tuple<N>.<e0>.<e1>…` — the mangled name of a tuple over `elements`. See `TupleElementSeparator` for
 	// why the arity leads and why the join is `.`.
@@ -8204,14 +8402,23 @@ export type ProgramSignatures
 	// element spelled by name canonicalizes like every other `structRef`. A `named` denoting an enum/union
 	// stays `named`, which is the tag a union value carries.
 	//
-	// ⚠ **IT RESOLVES A COMPILER-MINTED ALIAS LIKE A STRANGER (N2), AND A TUPLE HAS NO OTHER HONEST FILE.**
-	// A tuple TYPE is compiler-synthesized and declared in no file — its layout carries
-	// `CompilerOwnedDeclFilePath` for exactly that reason — while its canonical name is a WHOLE-PROGRAM key,
-	// so it must be one string however many files spell the same element list. `__ManagedMemory` inside a
-	// tuple therefore means what a file declaring no `Byte` means by it; a file whose own `Byte` disagrees
-	// meets that at the tuple's CONSTRUCTION, nominally, rather than by striding a record two ways.
-	function canonicalTupleElement(element MaxonType) returns MaxonType
-		let resolved = self.canonicalizeRangedAlias(self.declaredSlotType(element, into: self.typeNames, slotScopeFilePath: CompilerOwnedDeclFilePath))
+	// ⚠⚠ **AN ELEMENT IS RESOLVED IN THE FILE THAT SPELLED IT, AND THIS DOOR USED TO RESOLVE IT AS A STRANGER
+	// (A3v).** The old convention read: a tuple is compiler-synthesized, so it has no honest file, so every
+	// element resolves as a file declaring none of the name would. That is true of the tuple's IDENTITY and
+	// false of its element SPELLINGS — `(Bag, Num)` is written in one file, and where `Bag` is a contested
+	// generic alias the stranger's reading is a THIRD answer, agreeing with neither declaration. ⛔ MEASURED:
+	// a file declaring `Bag = Array with Num` and `Pair = (Bag, Num)` could not construct its own field —
+	// `E3005: cannot assign '__Tuple2.Array_Num.int' to variable 'Keeper.p' of type
+	// '__Tuple2.Array_String.int'`, at the declaring file's own line, naming another file's `Bag`.
+	//
+	// ⭐ **THE CANONICAL NAME STAYS A WHOLE-PROGRAM KEY, and per-file resolution is what makes it one.** The
+	// key is derived from the RESOLVED elements, so two files that mean the same thing by `(Bag, Num)` walk to
+	// identical element types and therefore to one name — a tuple stays STRUCTURAL wherever the language says
+	// the spellings agree. Two files that mean different things by it get two types, which is not a split of
+	// one type but the two types the program always had. `__ManagedMemory` inside a tuple therefore means what
+	// the SPELLING'S OWN FILE means by `Byte`, exactly as the same spelling in a struct field does.
+	function canonicalTupleElement(element MaxonType, slotScopeFilePath FilePath) returns MaxonType
+		let resolved = self.canonicalizeRangedAlias(self.declaredSlotType(element, into: self.typeNames, slotScopeFilePath: slotScopeFilePath))
 		if maxonTypeTag(resolved) != ValueTypeTag.named 'notNamed'
 			return self.canonicalTupleStructRef(resolved)
 		end 'notNamed'
@@ -8266,12 +8473,16 @@ export type ProgramSignatures
 		self.tupleCanonicalNames.upsert(name, value: name)
 
 		let layout = try self.structTypes.get(name) otherwise panic("ProgramSignatures.canonicalTupleName: `{String.from(name)}` is not registered — every tuple `structRef` in the compiler was minted by `internTupleType`, which registers the layout before it hands the name back")
+		// ⭐ **THE SCOPE FILE COMES OFF THE LAYOUT, because a SWEEP-minted spelling still holds bare `named`
+		// elements and this is the walk that resolves them (A3v).** It is the file that wrote the element list
+		// — see `tupleStructLayout` — and it rides on to the canonical layout so a re-entrant walk scopes the
+		// same way the first one did.
 		var canonical = MaxonTypeArray.create()
 		for element in layout.fieldTypes 'eachElement'
-			canonical.push(self.canonicalTupleElement(element))
+			canonical.push(self.canonicalTupleElement(element, slotScopeFilePath: layout.declFilePath))
 		end 'eachElement'
 
-		let canonicalName = self.registerTupleLayout(canonical)
+		let canonicalName = self.registerTupleLayout(canonical, declFilePath: layout.declFilePath)
 		self.tupleCanonicalNames.upsert(name, value: canonicalName)
 		return canonicalName
 	end 'canonicalTupleName'
@@ -8356,7 +8567,7 @@ export type ProgramSignatures
 		for element in layout.fieldTypes 'eachElement'
 			adopted.push(self.adoptType(element, into: into))
 		end 'eachElement'
-		return tupleStructLayout(name, elements: adopted)
+		return tupleStructLayout(name, elements: adopted, declFilePath: layout.declFilePath)
 	end 'adoptTupleLayout'
 
 	// ⭐ **THE MIRROR OF `adoptType`: re-intern an id-bearing type INTO this index's own table.** `adoptType`
@@ -10054,12 +10265,17 @@ export type ProgramSignatures
 	// `CompilerOwnedDeclFilePath`, which declares no alias and so resolves like a stranger — the tier-2/3
 	// answer, which is the same answer for all of them.
 	//
-	// ⭐ **A TUPLE'S ELEMENT IS ONE OF THOSE, AND THE STRANGER IS THE ONLY HONEST OWNER FOR IT (N3 review).**
-	// `internTupleType` builds its layout through `StructLayout.createCompilerOwned`, so a `(Bag, Num)` whose
-	// `Bag` is contested is scoped here as a file declaring none of it would be. That is not a gap being
-	// papered over: a tuple is STRUCTURAL — the same spelling in two files is ONE type by construction
-	// (`tupleAliasTarget` canonicalizes to one name) — so there is no declaring file to prefer, and picking
-	// one file's would make two identical spellings two types.
+	// ⛔⛔ **A TUPLE'S ELEMENT IS *NOT* ONE OF THOSE, AND THIS COMMENT SAID IT WAS (N3 review, overturned by
+	// A3v).** It read: *"a tuple is STRUCTURAL — the same spelling in two files is ONE type by construction —
+	// so there is no declaring file to prefer, and picking one file's would make two identical spellings two
+	// types."* The premise is right and the conclusion does not follow. A tuple's canonical name is derived
+	// from its RESOLVED elements, so two files that mean the same thing by `(Bag, Num)` resolve to identical
+	// element types and land on ONE name — structural identity is preserved BY per-file resolution, not
+	// despite it. Two files that mean different things by `Bag` were never spelling one type. What the
+	// stranger's reading actually produced was a THIRD answer agreeing with neither file, and the file that
+	// declared both `Bag` and `Pair = (Bag, Num)` could not construct its own field (E3005, MEASURED — see
+	// `canonicalTupleElement`). A tuple layout now carries the file that SPELLED it (`tupleStructLayout`), so
+	// this pass re-scopes a sweep-minted element list against that file like any other slot.
 	function contestScopedDeclaredType(declared MaxonType, slotScopeFilePath FilePath) returns MaxonType throws MapError
 		if maxonTypeTag(declared) != ValueTypeTag.named 'namesNoAlias'
 			throw MapError.keyNotFound
@@ -12011,9 +12227,15 @@ export type ProgramSignatures
 	//     where a `match` reads it. It is the SAME file `resolveRecordedGenericAliasTypes` already settled
 	//     that payload's recorded column against (N3), so the column and the classifier cannot come to mean
 	//     two different declarations of one contested name.
-	//   • **A TUPLE element and a COMPILER-SYNTHESIZED layout** carry `CompilerOwnedDeclFilePath`, the same
-	//     probe a file declaring none of a contested name makes: a type declared in no file resolves like a
-	//     stranger, which is the one answer that is the same for all of them.
+	//   • **A TUPLE element** (`canonicalTupleElement`, `fieldTypeOf` over a tuple layout) passes the file that
+	//     WROTE the element list — the sixth kind of asker, and the one this list did not have (A3v). A tuple
+	//     is declared in no file, so it long carried `CompilerOwnedDeclFilePath`; but a SPELLING has a file
+	//     even where a declaration does not, and the stranger's reading of `(Bag, Num)` is a third answer
+	//     agreeing with neither declaration of a contested `Bag`. MEASURED: the file declaring `Bag` AND
+	//     `Pair = (Bag, Num)` could not construct its own field. See `canonicalTupleElement`.
+	//   • **A COMPILER-SYNTHESIZED layout** still carries `CompilerOwnedDeclFilePath`, the same probe a file
+	//     declaring none of a contested name makes: a type no source spells resolves like a stranger, which is
+	//     the one answer that is the same for every reader of it.
 	//
 	// ⚠ The parameter is NOT named `declFilePath`, deliberately: the two `Array` ELEMENT sites above have no
 	// declaration to name, and a parameter whose name is true at some call sites and false at others is the

@@ -1,0 +1,23 @@
+// Test: error.contested-free-function-throws-is-not-inherited
+// --- file: alpha/a.maxon
+enum Boom
+	case bad
+end 'Boom'
+
+export function pick() returns int throws Boom
+	throw Boom.bad
+end 'pick'
+
+// --- file: beta/b.maxon
+export function pick() returns int
+	return 5
+end 'pick'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	let v = try beta.pick() otherwise 0
+	return v as ExitCode
+end 'main'
+---
+CompilerError:
+error E3055: app/<fragment>:18:10: try requires a throwing function: 'beta.pick' does not throw'
