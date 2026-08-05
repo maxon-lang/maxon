@@ -36,6 +36,7 @@ module {
   func @Box.create(n: i64) -> i64 {
   entry:
     x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
     x64.xor eax, eax
     x64.mov edx, 4294967295
     x64.cmp rcx, rdx
@@ -48,19 +49,31 @@ module {
     x64.mov rcx, rax
     x64.call mrt_panic
   __range_ok_0:
-    x64.mov [rbp-16], rcx
+    x64.mov rbx, [rbp-8]
+    x64.xor esi, esi
+    x64.mov edi, 4294967295
+    x64.cmp rbx, rdi
+    x64.jg Box.create.__range_panic_1
+    x64.cmp rbx, rsi
+    x64.jl Box.create.__range_panic_1
+    x64.jmp Box.create.__range_ok_1
+  __range_panic_1:
+    x64.lea_symdata rax, [__panic_msg_1]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_1:
     x64.mov rcx, 8
     x64.xor edx, edx
     x64.mov r8, 8
     x64.call mm_alloc
-    x64.mov [rbp-8], rax
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rbp-16]
-    x64.mov [rax+0], rcx
-    x64.mov rdx, [rbp-8]
+    x64.mov [rbp-16], rax
+    x64.mov rax, [rbp-16]
     x64.mov rcx, [rbp-8]
+    x64.mov [rax+0], rcx
+    x64.mov rdx, [rbp-16]
+    x64.mov rcx, [rbp-16]
     x64.call mm_incref
-    x64.mov rax, [rbp-8]
+    x64.mov rax, [rbp-16]
     x64.epilogue
     x64.ret
   }
@@ -81,7 +94,7 @@ module {
     x64.jl Box.doubled.__range_panic_0
     x64.jmp Box.doubled.__range_ok_0
   __range_panic_0:
-    x64.lea_symdata rax, [__panic_msg_1]
+    x64.lea_symdata rax, [__panic_msg_2]
     x64.mov rcx, rax
     x64.call mrt_panic
   __range_ok_0:
@@ -104,7 +117,7 @@ module {
     x64.jl callThunk.__range_panic_0
     x64.jmp callThunk.__range_ok_0
   __range_panic_0:
-    x64.lea_symdata rax, [__panic_msg_2]
+    x64.lea_symdata rax, [__panic_msg_3]
     x64.mov rcx, rax
     x64.call mrt_panic
   __range_ok_0:
@@ -120,7 +133,20 @@ module {
     x64.xor eax, eax
     x64.mov [rbp-16], rax
     x64.xor eax, eax
+    x64.mov edx, 4294967295
+    x64.cmp rcx, rdx
+    x64.jg run.__range_panic_0
     x64.cmp rcx, rax
+    x64.jl run.__range_panic_0
+    x64.jmp run.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_4]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.xor ebx, ebx
+    x64.mov rsi, [rbp-24]
+    x64.cmp rsi, rbx
     x64.jle run.pos_0.after
   pos_0:
     x64.mov rax, [rbp-24]
@@ -147,15 +173,15 @@ module {
     x64.xor r8d, r8d
     x64.mov r9, 4294967295
     x64.cmp rdi, r9
-    x64.jg run.__range_panic_0
+    x64.jg run.__range_panic_1
     x64.cmp rdi, r8
-    x64.jl run.__range_panic_0
-    x64.jmp run.__range_ok_0
-  __range_panic_0:
-    x64.lea_symdata rax, [__panic_msg_3]
+    x64.jl run.__range_panic_1
+    x64.jmp run.__range_ok_1
+  __range_panic_1:
+    x64.lea_symdata rax, [__panic_msg_5]
     x64.mov rcx, rax
     x64.call mrt_panic
-  __range_ok_0:
+  __range_ok_1:
     x64.mov rax, [rbp-8]
     x64.mov [rbp-40], rdi
     x64.test rax, rax
@@ -199,7 +225,7 @@ module {
     x64.jl main.__range_panic_0
     x64.jmp main.__range_ok_0
   __range_panic_0:
-    x64.lea_symdata rax, [__panic_msg_4]
+    x64.lea_symdata rax, [__panic_msg_6]
     x64.mov rcx, rax
     x64.call mrt_panic
   __range_ok_0:

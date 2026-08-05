@@ -208,3 +208,115 @@ circle/0/0
 square/1/1
 point/2/2
 ```
+
+### A payload slot has a declared type, and its IDENTITY is part of it
+
+A case's associated value is declared with a type, so an argument to that case obeys the same rule
+every other declared place applies. That check compared only the value's KIND — and `Struct`,
+`Enum` and `Function` are each one kind covering every type of that shape — so a payload declared
+`Color` accepted any enum, any struct, or any function whatsoever.
+
+<!-- test: union-payload.error.wrong-enum -->
+`tint`'s payload is declared `Color` and is handed a `Shade`. This compiled clean and the binding
+`c` came back out as a `Shade` ordinal wearing `Color`'s name.
+```maxon
+enum Color
+	red
+	green
+end 'Color'
+
+enum Shade
+	dark
+	light
+end 'Shade'
+
+union Paint
+	tint(c Color)
+end 'Paint'
+
+function main() returns ExitCode
+	let p = Paint.tint(Shade.light)
+	match p 'go'
+		tint(c) then return c.ordinal
+	end 'go'
+end 'main'
+```
+```maxoncstderr
+error E3005: specs/fragments/union-cases/union-payload.error.wrong-enum.test:17:32: type mismatch: 'expected Color, got Shade'
+```
+
+<!-- test: union-payload.error.wrong-struct -->
+The same hole one kind over: a payload declared `Color` accepting a `Shade` struct. Both are
+"a struct", so the kind check agreed, and `c.v` read `Shade`'s field out of `Color`'s layout.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Color
+	export var v as Integer
+
+	export static function create(v Integer) returns Self
+		return Self{v: v}
+	end 'create'
+end 'Color'
+
+type Shade
+	export var s as Integer
+
+	export static function create(s Integer) returns Self
+		return Self{s: s}
+	end 'create'
+end 'Shade'
+
+union Paint
+	tint(c Color)
+end 'Paint'
+
+function main() returns ExitCode
+	let p = Paint.tint(Shade.create(7))
+	match p 'go'
+		tint(c) then return c.v
+	end 'go'
+end 'main'
+```
+```maxoncstderr
+error E3005: specs/fragments/union-cases/union-payload.error.wrong-struct.test:25:36: type mismatch: 'expected Color, got Shade'
+```
+
+<!-- test: union-payload.matching-payload-types -->
+The control: the declared types, passed. Both a struct and an enum payload still construct, match
+and read back.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+enum Shade
+	dark
+	light
+end 'Shade'
+
+type Color
+	export var v as Integer
+
+	export static function create(v Integer) returns Self
+		return Self{v: v}
+	end 'create'
+end 'Color'
+
+union Paint
+	tint(c Color)
+	wash(s Shade)
+end 'Paint'
+
+function readOne(p Paint) returns Integer
+	match p 'go'
+		tint(c) then return c.v
+		wash(s) then return s.ordinal
+	end 'go'
+end 'readOne'
+
+function main() returns ExitCode
+	return readOne(Paint.tint(Color.create(4))) + readOne(Paint.wash(Shade.light))
+end 'main'
+```
+```exitcode
+5
+```

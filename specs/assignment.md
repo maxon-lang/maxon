@@ -425,3 +425,129 @@ end 'main'
 6
 ```
 
+
+### The type rule for an ENUM place — the same rule, the same hole
+
+<!-- test: error.retype-enum-to-other-enum-errors -->
+Two different enums are two different types, exactly as two different structs are. This is the
+struct case above one type over, and it had the identical defect for the identical reason: the
+assignment door compared the declared NAME against the value only when the value was a struct, so
+an enum place accepted any enum at all. `c` is declared `Color` and holds `Shade.light`; the
+program compiled clean and `c.ordinal` reported `Shade.light`'s ordinal under `Color`'s name.
+```maxon
+
+enum Color
+	red
+	green
+end 'Color'
+
+enum Shade
+	dark
+	light
+end 'Shade'
+
+function main() returns ExitCode
+	var c = Color.red
+	c = Shade.light
+	return c.ordinal
+end 'main'
+```
+```maxoncstderr
+error E3005: specs/fragments/assignment/error.retype-enum-to-other-enum-errors.test:15:2: cannot assign a value of type 'Shade' to variable 'c', which holds 'Color'
+```
+
+<!-- test: error.retype-enum-field-errors -->
+The FIELD store reaches the same place by the same road — it shares the door with the local
+assignment, so it shared the hole.
+```maxon
+
+enum Color
+	red
+	green
+end 'Color'
+
+enum Shade
+	dark
+	light
+end 'Shade'
+
+type Holder
+	export var c as Color
+
+	static function create() returns Self
+		return Self{c: Color.red}
+	end 'create'
+end 'Holder'
+
+function main() returns ExitCode
+	var h = Holder.create()
+	h.c = Shade.light
+	return h.c.ordinal
+end 'main'
+```
+```maxoncstderr
+error E3005: specs/fragments/assignment/error.retype-enum-field-errors.test:23:4: cannot assign a value of type 'Shade' to field 'c' of 'Holder', which holds 'Color'
+```
+
+<!-- test: error.wrong-enum-in-struct-literal-field-errors -->
+And the STRUCT-LITERAL field initializer, which put the same value in the same slot under the same
+declared type — but reached it through a door that skipped the check entirely unless the field was
+a numeric primitive.
+```maxon
+
+enum Color
+	red
+	green
+end 'Color'
+
+enum Shade
+	dark
+	light
+end 'Shade'
+
+type Holder
+	export var c as Color
+
+	static function create() returns Self
+		return Self{c: Shade.light}
+	end 'create'
+end 'Holder'
+
+function main() returns ExitCode
+	let h = Holder.create()
+	return h.c.ordinal
+end 'main'
+```
+```maxoncstderr
+error E3005: specs/fragments/assignment/error.wrong-enum-in-struct-literal-field-errors.test:17:15: cannot assign a value of type 'Shade' to field 'c' of 'Holder', which holds 'Color'
+```
+
+<!-- test: assign-enum-to-same-enum -->
+The control: the same shape with the enum it declared. A rule that refused this would be worse than
+no rule.
+```maxon
+
+enum Color
+	red
+	green
+end 'Color'
+
+type Holder
+	export var c as Color
+
+	static function create() returns Self
+		return Self{c: Color.red}
+	end 'create'
+end 'Holder'
+
+function main() returns ExitCode
+	var h = Holder.create()
+	h.c = Color.green
+	var c = Color.red
+	c = Color.green
+	return h.c.ordinal + c.ordinal
+end 'main'
+```
+```exitcode
+2
+```

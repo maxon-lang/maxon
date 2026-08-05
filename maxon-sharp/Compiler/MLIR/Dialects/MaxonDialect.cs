@@ -422,7 +422,7 @@ public sealed class MaxonFunctionParamOp(int index, string name, IrFunctionType 
   public int Index { get; } = index;
   public string Name { get; } = name;
   public IrFunctionType FunctionType { get; } = functionType;
-  public MaxonFunctionPtr Result { get; } = new MaxonFunctionPtr(IrContext.Current.NextId());
+  public MaxonFunctionPtr Result { get; } = new MaxonFunctionPtr(IrContext.Current.NextId(), functionType);
   public override IReadOnlyList<MaxonValue> Results => [Result];
   /// Reads nothing — a leaf op (a literal, a parameter, a var reference, or a jump).
   public override IReadOnlyList<MaxonValue> Operands => [];
@@ -434,7 +434,7 @@ public sealed class MaxonFunctionRefOp(string functionName, IrFunctionType funct
   public override string Mnemonic => $"maxon.function_ref @{FunctionName}";
   public string FunctionName { get; } = functionName;
   public IrFunctionType FunctionType { get; } = functionType;
-  public MaxonFunctionPtr Result { get; } = new MaxonFunctionPtr(IrContext.Current.NextId());
+  public MaxonFunctionPtr Result { get; } = new MaxonFunctionPtr(IrContext.Current.NextId(), functionType);
   public override IReadOnlyList<MaxonValue> Results => [Result];
   /// Reads nothing — a leaf op (a literal, a parameter, a var reference, or a jump).
   public override IReadOnlyList<MaxonValue> Operands => [];
@@ -452,7 +452,7 @@ public sealed class MaxonClosureCreateOp(string functionName, IrFunctionType fun
   public List<string> CapturedNames { get; } = capturedNames;
   public List<MaxonValueKind> CapturedKinds { get; } = capturedKinds;
   public List<string?> CapturedStructTypes { get; } = capturedStructTypes;
-  public MaxonFunctionPtr Result { get; } = new MaxonFunctionPtr(IrContext.Current.NextId());
+  public MaxonFunctionPtr Result { get; } = new MaxonFunctionPtr(IrContext.Current.NextId(), functionType);
   public override IReadOnlyList<MaxonValue> Results => [Result];
   public override IReadOnlyList<MaxonValue> Operands => CapturedValues;
 }
@@ -482,7 +482,7 @@ public sealed class MaxonFunctionVarRefOp(string varName, IrFunctionType functio
   public string VarName { get; } = varName;
   public string ReadVarName => VarName;
   public IrFunctionType FunctionType { get; } = functionType;
-  public MaxonFunctionPtr Result { get; } = new MaxonFunctionPtr(IrContext.Current.NextId());
+  public MaxonFunctionPtr Result { get; } = new MaxonFunctionPtr(IrContext.Current.NextId(), functionType);
   public override IReadOnlyList<MaxonValue> Results => [Result];
   /// Reads nothing — a leaf op (a literal, a parameter, a var reference, or a jump).
   public override IReadOnlyList<MaxonValue> Operands => [];
@@ -501,7 +501,11 @@ public sealed class MaxonIndirectCallOp(MaxonValue callee, IrFunctionType callee
   // return type was an enum or a union produced a bare MaxonInteger with the type
   // name dropped: `report(handler(x))` was rejected as "expected 'Outcome', got
   // 'int'", and a `match` on the result died with "Expected pattern value".
-  public MaxonValue? Result { get; } = MaxonCallOp.CreateResult(resultKind, resultStructTypeName);
+  // An indirect call knows the signature it returns without being told: it is the callee type's
+  // own ReturnType. A DIRECT call has to be told (MaxonCallOp.ResultFnType), because the callee
+  // is a name whose declared return may be an alias or a generic that only resolves later.
+  public MaxonValue? Result { get; } =
+    MaxonCallOp.CreateResult(resultKind, resultStructTypeName, calleeType.ReturnType as IrFunctionType);
   public MaxonValueKind? ResultKind { get; } = resultKind;
   public string? ResultStructTypeName { get; } = resultStructTypeName;
   public override IReadOnlyList<MaxonValue> Results => Result != null ? [Result] : [];
@@ -603,7 +607,18 @@ public class MaxonCallOp : MaxonOp {
   // parser to recover the signature at `let f = call(...)` sites where the
   // callee's declared return is a function-type alias or a generic Value that
   // resolves to a function type after instantiation.
-  public IrFunctionType? ResultFnType { get; set; }
+  //
+  // Setting it also stamps the RESULT VALUE, because a declared-type door holds a value, not an
+  // op: `apply(pick(), ...)` compares the shape of what `pick` returned, and by then the op that
+  // produced it is no longer the one being looked at. One assignment, both readers.
+  private IrFunctionType? _resultFnType;
+  public IrFunctionType? ResultFnType {
+    get => _resultFnType;
+    set {
+      _resultFnType = value;
+      if (Result is MaxonFunctionPtr resultFnPtr) resultFnPtr.FunctionType = value;
+    }
+  }
   // Whether each argument at the call site came from a mutable variable
   public List<bool>? ArgMutabilities { get; set; }
   // The variable name each argument came from (null for literals/expressions)
@@ -633,13 +648,18 @@ public class MaxonCallOp : MaxonOp {
   }
 
   // Shared by every call op — direct, try, and indirect. A call's result value must
-  // carry the NAME of the struct/enum/union it returns, not just its kind: that name
-  // is what the argument checker and the `match` patterns downstream key off.
-  internal static MaxonValue? CreateResult(MaxonValueKind? resultKind, string? resultStructTypeName) {
+  // carry the IDENTITY of what it returns, not just its kind: the NAME of the struct/enum/union,
+  // or — for a function — its SIGNATURE, which is the identity a `fn` kind cannot express. That
+  // identity is what the argument checker, the declared-type doors and the `match` patterns
+  // downstream key off.
+  internal static MaxonValue? CreateResult(MaxonValueKind? resultKind, string? resultStructTypeName,
+      IrFunctionType? resultFnType = null) {
     if (resultKind == MaxonValueKind.Struct)
       return new MaxonStruct(IrContext.Current.NextId(), resultStructTypeName!);
     if (resultKind == MaxonValueKind.Enum)
       return new MaxonEnum(IrContext.Current.NextId(), resultStructTypeName!);
+    if (resultKind == MaxonValueKind.Function)
+      return new MaxonFunctionPtr(IrContext.Current.NextId(), resultFnType);
     return resultKind?.CreateValue();
   }
 
@@ -1354,7 +1374,7 @@ public sealed class MaxonEnumFunctionRawValueOp(MaxonValue enumValue, string enu
   public MaxonValue EnumValue { get; } = enumValue;
   public string EnumTypeName { get; } = enumTypeName;
   public IrFunctionType Signature { get; } = signature;
-  public MaxonFunctionPtr Result { get; } = new MaxonFunctionPtr(IrContext.Current.NextId());
+  public MaxonFunctionPtr Result { get; } = new MaxonFunctionPtr(IrContext.Current.NextId(), signature);
   public override IReadOnlyList<MaxonValue> Results => [Result];
   public override IReadOnlyList<MaxonValue> Operands => [EnumValue];
 }

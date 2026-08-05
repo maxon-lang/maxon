@@ -42,10 +42,24 @@ module {
   entry:
     x64.prologue stack_size=16
     x64.mov [rbp-8], rcx
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, 100
-    x64.sub rax, rcx
-    x64.jump_table rax, 16 cases, default=classify.m_0.case16
+    x64.xor eax, eax
+    x64.mov rdx, 1000
+    x64.cmp rcx, rdx
+    x64.jg classify.__range_panic_0
+    x64.cmp rcx, rax
+    x64.jl classify.__range_panic_0
+    x64.jmp classify.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov rbx, [rbp-8]
+    x64.mov [rbp-16], rbx
+    x64.mov rbx, [rbp-16]
+    x64.mov rsi, 100
+    x64.sub rbx, rsi
+    x64.jump_table rbx, 16 cases, default=classify.m_0.case16
   m_0.case0:
     x64.mov rax, 1
     x64.epilogue

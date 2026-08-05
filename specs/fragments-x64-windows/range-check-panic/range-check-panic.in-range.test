@@ -16,6 +16,7 @@ module {
   func @check(x: i64) -> u8 {
   entry:
     x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
     x64.xor eax, eax
     x64.mov rdx, 10
     x64.cmp rcx, rdx
@@ -28,7 +29,20 @@ module {
     x64.mov rcx, rax
     x64.call mrt_panic
   __range_ok_0:
-    x64.mov rax, rcx
+    x64.mov rbx, [rbp-8]
+    x64.xor esi, esi
+    x64.mov rdi, 10
+    x64.cmp rbx, rdi
+    x64.jg check.__range_panic_1
+    x64.cmp rbx, rsi
+    x64.jl check.__range_panic_1
+    x64.jmp check.__range_ok_1
+  __range_panic_1:
+    x64.lea_symdata rax, [__panic_msg_1]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_1:
+    x64.mov rax, rbx
     x64.epilogue
     x64.ret
   }
@@ -45,7 +59,7 @@ module {
     x64.jl main.__range_panic_0
     x64.jmp main.__range_ok_0
   __range_panic_0:
-    x64.lea_symdata rax, [__panic_msg_1]
+    x64.lea_symdata rax, [__panic_msg_2]
     x64.mov rcx, rax
     x64.call mrt_panic
   __range_ok_0:

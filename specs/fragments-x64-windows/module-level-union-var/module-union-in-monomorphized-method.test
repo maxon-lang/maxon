@@ -95,34 +95,47 @@ module {
   func @SmallCell.stash(__self_ptr: i64, v: i64) {
   entry:
     x64.prologue stack_size=32
-    x64.mov [rbp-16], rcx
-    x64.mov [rbp-24], rdx
+    x64.mov [rbp-8], rdx
+    x64.xor eax, eax
+    x64.mov rbx, 100
+    x64.cmp rdx, rbx
+    x64.jg SmallCell.stash.__range_panic_0
+    x64.cmp rdx, rax
+    x64.jl SmallCell.stash.__range_panic_0
+    x64.jmp SmallCell.stash.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_1]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov rsi, [rbp-8]
+    x64.mov [rbp-24], rcx
     x64.mov rcx, 16
     x64.xor edx, edx
     x64.mov r8, 7
     x64.call mm_alloc
-    x64.mov [rbp-8], rax
+    x64.mov [rbp-16], rax
     x64.mov rcx, 1
     x64.mov [rax+0], rcx
-    x64.mov rcx, [rbp-24]
-    x64.mov [rax+8], rcx
     x64.mov rcx, [rbp-8]
+    x64.mov [rax+8], rcx
+    x64.mov rcx, [rbp-16]
     x64.call mm_incref
-    x64.mov rax, [rbp-8]
+    x64.mov rax, [rbp-16]
     x64.mov rcx, qword [rip+hold]
     x64.mov [rbp-32], rcx
     x64.test rcx, rcx
     x64.jz __nonnull_skip_0
     x64.call mm_decref
     x64.label __nonnull_skip_0
-    x64.mov rcx, [rbp-8]
+    x64.mov rcx, [rbp-16]
     x64.call mm_incref
-    x64.mov rdx, [rbp-8]
+    x64.mov rdx, [rbp-16]
     x64.mov qword [rip+hold], rdx
-    x64.mov rbx, [rbp-8]
+    x64.mov rbx, [rbp-16]
     x64.test rbx, rbx
     x64.jz __nonnull_skip_1
-    x64.mov rcx, [rbp-8]
+    x64.mov rcx, [rbp-16]
     x64.call mm_decref
     x64.label __nonnull_skip_1
     x64.epilogue
@@ -187,7 +200,7 @@ module {
     x64.jl SmallCell.readBack.__range_panic_0
     x64.jmp SmallCell.readBack.__range_ok_0
   __range_panic_0:
-    x64.lea_symdata rax, [__panic_msg_1]
+    x64.lea_symdata rax, [__panic_msg_2]
     x64.mov rcx, rax
     x64.call mrt_panic
   __range_ok_0:

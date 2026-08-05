@@ -31,7 +31,23 @@ public sealed class MaxonStruct(int id, string typeName) : MaxonValue(id) {
 public sealed class MaxonEnum(int id, string typeName) : MaxonValue(id) {
   public string TypeName { get; } = typeName;
 }
-public sealed class MaxonFunctionPtr(int id) : MaxonValue(id);
+/// <summary>
+/// A function value. <see cref="FunctionType"/> is its SIGNATURE, carried on the value for exactly
+/// the reason <see cref="MaxonStruct.TypeName"/> and <see cref="MaxonEnum.TypeName"/> are: a
+/// <see cref="MaxonValueKind"/> is ONE kind for every type of that shape, so a door holding only a
+/// value and its kind cannot tell `function(Color) returns Color` from `function(Shade) returns
+/// Shade` — and every such door answered "the kinds agree". A struct value knows which struct it is;
+/// a function value did not know which function type it was.
+/// </summary>
+/// <remarks>
+/// Null where the minting site does not know the signature — <see cref="MaxonValueKindExtensions"/>'s
+/// kind-only <c>CreateValue</c> path. Null is the PERMISSIVE answer, deliberately, and it is the
+/// same stance the struct rule takes for a null declared name: these doors refuse what they can
+/// PROVE is a different shape, never what they merely cannot identify.
+/// </remarks>
+public sealed class MaxonFunctionPtr(int id, Core.IrFunctionType? functionType = null) : MaxonValue(id) {
+  public Core.IrFunctionType? FunctionType { get; set; } = functionType;
+}
 
 /// The `Promise` facade type declared in stdlib/Builtins.maxon, named in one place so the
 /// compiler's promise paths key off a constant rather than a scattered string literal.

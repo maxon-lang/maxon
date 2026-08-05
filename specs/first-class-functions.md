@@ -1663,3 +1663,297 @@ end 'main'
 ```exitcode
 42
 ```
+
+### A function type's identity is its SHAPE, and a kind cannot express it
+
+A function value's type is `function(P...) returns R`. Two function types are the same type only
+when their shapes are — same parameters, in order, and the same return. Everywhere a function value
+meets a declared function type — a call argument, a `return`, an assignment, a field store, a
+struct-literal field initializer, a union payload — that is the comparison the compiler makes.
+
+It cannot be made on the *kind*: every function type is one kind. Compared by kind alone,
+`function(Shade) returns Shade` satisfies a declared `function(Color) returns Color`, the callee is
+handed a pointer it will call with the wrong argument type, and what comes back is whatever the two
+layouts happen to share.
+
+<!-- test: first-class-function.error.wrong-shape-into-function-param -->
+The CALL-ARGUMENT door. `apply` declares `f ColorFn` and gets a `function(Shade) returns Shade`.
+Both are "a function", so a kind check passes; the program then compiled clean and `apply` called
+`shadeIt` with a `Color`, reading `Shade`'s field out of `Color`'s layout — a wrong ANSWER, in
+silence, with no diagnostic anywhere.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Color
+	export var v as Integer
+
+	export static function create(v Integer) returns Self
+		return Self{v: v}
+	end 'create'
+end 'Color'
+
+type Shade
+	export var s as Integer
+
+	export static function create(s Integer) returns Self
+		return Self{s: s}
+	end 'create'
+end 'Shade'
+
+typealias ColorFn = function(Color) returns Color
+
+function shadeIt(x Shade) returns Shade
+	return Shade.create(x.s + 1)
+end 'shadeIt'
+
+function apply(f ColorFn, c Color) returns Color
+	return f(c)
+end 'apply'
+
+function main() returns ExitCode
+	let c = Color.create(3)
+	return apply(shadeIt, c: c).v
+end 'main'
+```
+```maxoncstderr
+error E3005: specs/fragments/first-class-functions/first-class-function.error.wrong-shape-into-function-param.test:32:9: argument type mismatch for 'f': expected 'fn(Color) returns Color', got 'fn(Shade) returns Shade'
+```
+
+<!-- test: first-class-function.error.wrong-shape-into-struct-literal-field -->
+The STRUCT-LITERAL FIELD door — the weakest of them, because it did not merely compare kinds, it
+skipped the check entirely unless the field was a numeric primitive. A function-typed field
+initializer was therefore never type-checked at all.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Color
+	export var v as Integer
+
+	export static function create(v Integer) returns Self
+		return Self{v: v}
+	end 'create'
+end 'Color'
+
+type Shade
+	export var s as Integer
+
+	export static function create(s Integer) returns Self
+		return Self{s: s}
+	end 'create'
+end 'Shade'
+
+typealias ColorFn = function(Color) returns Color
+
+function shadeIt(x Shade) returns Shade
+	return Shade.create(x.s + 1)
+end 'shadeIt'
+
+type Holder
+	export var op as ColorFn
+
+	export static function create() returns Self
+		return Self{op: shadeIt}
+	end 'create'
+end 'Holder'
+
+function main() returns ExitCode
+	let h = Holder.create()
+	return h.op(Color.create(3)).v
+end 'main'
+```
+```maxoncstderr
+error E3005: specs/fragments/first-class-functions/first-class-function.error.wrong-shape-into-struct-literal-field.test:30:15: cannot assign a value of type 'fn(Shade) returns Shade' to field 'op' of 'Holder', which holds 'fn(Color) returns Color'
+```
+
+<!-- test: first-class-function.error.wrong-shape-into-function-local -->
+The ASSIGNMENT door. `f`'s type is fixed by its declaration, and an assignment never re-infers it —
+the same rule that makes `var x = 5; x = "hi"` an error, applied to the one type a kind cannot name.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Color
+	export var v as Integer
+
+	export static function create(v Integer) returns Self
+		return Self{v: v}
+	end 'create'
+end 'Color'
+
+type Shade
+	export var s as Integer
+
+	export static function create(s Integer) returns Self
+		return Self{s: s}
+	end 'create'
+end 'Shade'
+
+typealias ColorFn = function(Color) returns Color
+
+function shadeIt(x Shade) returns Shade
+	return Shade.create(x.s + 1)
+end 'shadeIt'
+
+function colorIt(x Color) returns Color
+	return Color.create(x.v + 1)
+end 'colorIt'
+
+function apply(f ColorFn, c Color) returns Color
+	return f(c)
+end 'apply'
+
+function main() returns ExitCode
+	var f = colorIt
+	f = shadeIt
+	return apply(f, c: Color.create(3)).v
+end 'main'
+```
+```maxoncstderr
+error E3005: specs/fragments/first-class-functions/first-class-function.error.wrong-shape-into-function-local.test:36:2: cannot assign a value of type 'fn(Shade) returns Shade' to variable 'f', which holds 'fn(Color) returns Color'
+```
+
+<!-- test: first-class-function.error.wrong-shape-returned -->
+The RETURN door. `pick` declares `ColorFn` and hands back a `ShadeFn`; the caller then calls it
+through the signature `pick` promised.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Color
+	export var v as Integer
+
+	export static function create(v Integer) returns Self
+		return Self{v: v}
+	end 'create'
+end 'Color'
+
+type Shade
+	export var s as Integer
+
+	export static function create(s Integer) returns Self
+		return Self{s: s}
+	end 'create'
+end 'Shade'
+
+typealias ColorFn = function(Color) returns Color
+
+function shadeIt(x Shade) returns Shade
+	return Shade.create(x.s + 1)
+end 'shadeIt'
+
+function pick() returns ColorFn
+	return shadeIt
+end 'pick'
+
+function main() returns ExitCode
+	let f = pick()
+	return f(Color.create(3)).v
+end 'main'
+```
+```maxoncstderr
+error E3005: specs/fragments/first-class-functions/first-class-function.error.wrong-shape-returned.test:27:2: Cannot return 'fn(Shade) returns Shade' from function declared to return 'fn(Color) returns Color'
+```
+
+<!-- test: first-class-function.error.wrong-shape-into-union-payload -->
+The UNION PAYLOAD door. A payload slot has a declared type like any other place.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Color
+	export var v as Integer
+
+	export static function create(v Integer) returns Self
+		return Self{v: v}
+	end 'create'
+end 'Color'
+
+type Shade
+	export var s as Integer
+
+	export static function create(s Integer) returns Self
+		return Self{s: s}
+	end 'create'
+end 'Shade'
+
+typealias ColorFn = function(Color) returns Color
+
+function shadeIt(x Shade) returns Shade
+	return Shade.create(x.s + 1)
+end 'shadeIt'
+
+union Task
+	run(op ColorFn)
+end 'Task'
+
+function main() returns ExitCode
+	let t = Task.run(shadeIt)
+	match t 'go'
+		run(op) then return op(Color.create(3)).v
+	end 'go'
+end 'main'
+```
+```maxoncstderr
+error E3005: specs/fragments/first-class-functions/first-class-function.error.wrong-shape-into-union-payload.test:31:26: type mismatch: 'expected fn(Color) returns Color, got fn(Shade) returns Shade'
+```
+
+<!-- test: first-class-function.matching-shapes-across-every-door -->
+The control that keeps the shape rule from becoming a false-refusal generator: the SAME program with
+matching shapes, through every door at once — a call argument, a `return`, an assignment, a field
+store, a struct-literal field initializer and a union payload. All six must still compile and run.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Color
+	export var v as Integer
+
+	export static function create(v Integer) returns Self
+		return Self{v: v}
+	end 'create'
+end 'Color'
+
+typealias ColorFn = function(Color) returns Color
+
+function bump(x Color) returns Color
+	return Color.create(x.v + 1)
+end 'bump'
+
+function bumpTwice(x Color) returns Color
+	return Color.create(x.v + 2)
+end 'bumpTwice'
+
+type Holder
+	export var op as ColorFn
+
+	export static function create() returns Self
+		return Self{op: bump}
+	end 'create'
+end 'Holder'
+
+union Task
+	run(op ColorFn)
+end 'Task'
+
+function pick() returns ColorFn
+	return bump
+end 'pick'
+
+function apply(f ColorFn, c Color) returns Color
+	return f(c)
+end 'apply'
+
+function main() returns ExitCode
+	var f = bump
+	f = bumpTwice
+	var h = Holder.create()
+	h.op = bump
+	let t = Task.run(bump)
+	let c = Color.create(0)
+	let viaLocal = apply(f, c: c).v
+	let viaField = h.op(c).v
+	let viaReturn = pick()(c).v
+	match t 'go'
+		run(op) then return viaLocal + viaField + viaReturn + op(c).v
+	end 'go'
+end 'main'
+```
+```exitcode
+5
+```

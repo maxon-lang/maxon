@@ -27,49 +27,13 @@ Stdout: ```
 module {
   func @score(role: i64) -> u32 {
   entry:
-    x64.prologue stack_size=16
+    x64.prologue stack_size=32
+    x64.mov [rbp-8], rcx
     x64.xor eax, eax
-    x64.mov [rbp-8], rax
-    x64.mov [rbp-16], rcx
-    x64.mov rcx, [rbp-16]
-    x64.mov rdx, 10
-    x64.sub rcx, rdx
-    x64.jump_table rcx, 4 cases, default=score.auth_0.case4
-  auth_0.case0:
-    x64.mov rax, 1000
-    x64.mov rcx, [rbp-8]
-    x64.add rcx, rax
-    x64.mov [rbp-8], rcx
-    x64.jmp score.auth_0.case1
-  auth_0.case1:
-    x64.mov rax, 100
-    x64.mov rcx, [rbp-8]
-    x64.add rcx, rax
-    x64.mov [rbp-8], rcx
-    x64.jmp score.auth_0.case2
-  auth_0.case2:
-    x64.mov rax, 10
-    x64.mov rcx, [rbp-8]
-    x64.add rcx, rax
-    x64.mov [rbp-8], rcx
-    x64.jmp score.auth_0.case3
-  auth_0.case3:
-    x64.mov rax, 1
-    x64.mov rcx, [rbp-8]
-    x64.add rcx, rax
-    x64.mov [rbp-8], rcx
-    x64.jmp score.auth_0.merge
-  auth_0.case4:
-    x64.xor eax, eax
-    x64.mov [rbp-8], rax
-    x64.jmp score.auth_0.merge
-  auth_0.merge:
-    x64.mov rax, [rbp-8]
-    x64.xor ecx, ecx
-    x64.mov rdx, 100000
-    x64.cmp rax, rdx
+    x64.mov rdx, 100
+    x64.cmp rcx, rdx
     x64.jg score.__range_panic_0
-    x64.cmp rax, rcx
+    x64.cmp rcx, rax
     x64.jl score.__range_panic_0
     x64.jmp score.__range_ok_0
   __range_panic_0:
@@ -77,6 +41,56 @@ module {
     x64.mov rcx, rax
     x64.call mrt_panic
   __range_ok_0:
+    x64.xor ebx, ebx
+    x64.mov [rbp-16], rbx
+    x64.mov rbx, [rbp-8]
+    x64.mov [rbp-24], rbx
+    x64.mov rbx, [rbp-24]
+    x64.mov rsi, 10
+    x64.sub rbx, rsi
+    x64.jump_table rbx, 4 cases, default=score.auth_0.case4
+  auth_0.case0:
+    x64.mov rax, 1000
+    x64.mov rcx, [rbp-16]
+    x64.add rcx, rax
+    x64.mov [rbp-16], rcx
+    x64.jmp score.auth_0.case1
+  auth_0.case1:
+    x64.mov rax, 100
+    x64.mov rcx, [rbp-16]
+    x64.add rcx, rax
+    x64.mov [rbp-16], rcx
+    x64.jmp score.auth_0.case2
+  auth_0.case2:
+    x64.mov rax, 10
+    x64.mov rcx, [rbp-16]
+    x64.add rcx, rax
+    x64.mov [rbp-16], rcx
+    x64.jmp score.auth_0.case3
+  auth_0.case3:
+    x64.mov rax, 1
+    x64.mov rcx, [rbp-16]
+    x64.add rcx, rax
+    x64.mov [rbp-16], rcx
+    x64.jmp score.auth_0.merge
+  auth_0.case4:
+    x64.xor eax, eax
+    x64.mov [rbp-16], rax
+    x64.jmp score.auth_0.merge
+  auth_0.merge:
+    x64.mov rax, [rbp-16]
+    x64.xor ecx, ecx
+    x64.mov rdx, 100000
+    x64.cmp rax, rdx
+    x64.jg score.__range_panic_1
+    x64.cmp rax, rcx
+    x64.jl score.__range_panic_1
+    x64.jmp score.__range_ok_1
+  __range_panic_1:
+    x64.lea_symdata rax, [__panic_msg_1]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_1:
     x64.epilogue
     x64.ret
   }

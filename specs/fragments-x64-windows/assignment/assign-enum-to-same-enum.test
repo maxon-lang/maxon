@@ -1,0 +1,125 @@
+// Test: assign-enum-to-same-enum
+
+enum Color
+	red
+	green
+end 'Color'
+
+type Holder
+	export var c as Color
+
+	static function create() returns Self
+		return Self{c: Color.red}
+	end 'create'
+end 'Holder'
+
+function main() returns ExitCode
+	var h = Holder.create()
+	h.c = Color.green
+	var c = Color.red
+	c = Color.green
+	return h.c.ordinal + c.ordinal
+end 'main'
+---
+ExitCode: 2
+---
+// CompiledIR
+module {
+  func @Holder.create() -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.xor eax, eax
+    x64.mov rcx, 8
+    x64.xor edx, edx
+    x64.mov r8, 8
+    x64.call mm_alloc
+    x64.mov [rbp-8], rax
+    x64.mov rcx, [rbp-8]
+    x64.xor edx, edx
+    x64.mov [rcx+0], rdx
+    x64.mov rbx, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call mm_incref
+    x64.mov rax, [rbp-8]
+    x64.epilogue
+    x64.ret
+  }
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=32
+    x64.call Holder.create
+    x64.mov [rbp-8], rax
+    x64.mov rax, 1
+    x64.mov rcx, [rbp-8]
+    x64.mov [rcx+0], rax
+    x64.mov rdx, 1
+    x64.mov [rbp-16], rdx
+    x64.mov rbx, [rbp-8]
+    x64.mov rsi, [rbx+0]
+    x64.xor edi, edi
+    x64.xor r8d, r8d
+    x64.cmp rsi, r8
+    x64.sete r9
+    x64.movzx r9, r9b
+    x64.xor eax, eax
+    x64.test r9, r9
+    x64.mov rcx, rdi
+    x64.cmovne rcx, rax
+    x64.mov rax, 1
+    x64.cmp rsi, rax
+    x64.sete rax
+    x64.movzx rax, raxb
+    x64.mov rdx, 1
+    x64.test rax, rax
+    x64.mov rbx, rcx
+    x64.cmovne rbx, rdx
+    x64.mov rax, [rbp-16]
+    x64.xor ecx, ecx
+    x64.xor edx, edx
+    x64.cmp rax, rdx
+    x64.sete rdx
+    x64.movzx rdx, rdxb
+    x64.xor esi, esi
+    x64.test rdx, rdx
+    x64.mov rdi, rcx
+    x64.cmovne rdi, rsi
+    x64.mov rcx, 1
+    x64.cmp rax, rcx
+    x64.sete rax
+    x64.movzx rax, raxb
+    x64.mov rcx, 1
+    x64.test rax, rax
+    x64.mov rdx, rdi
+    x64.cmovne rdx, rcx
+    x64.add rbx, rdx
+    x64.xor eax, eax
+    x64.mov ecx, 4294967295
+    x64.cmp rbx, rcx
+    x64.jg main.__range_panic_0
+    x64.cmp rbx, rax
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov rdx, [rbp-8]
+    x64.mov [rbp-24], rbx
+    x64.test rdx, rdx
+    x64.jz __nonnull_skip_0
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.mov rax, [rbp-24]
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_Holder(ptr: i64) {
+  entry:
+    x64.jmp __destruct_Holder.done
+  done:
+    x64.ret
+  }
+}
+---

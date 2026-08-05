@@ -37,14 +37,27 @@ module {
   func @quotient(bits: i64, halfRadix: i64) -> i64 {
   entry:
     x64.prologue stack_size=16
-    x64.mov rax, 1
-    x64.mov rbx, rcx
     x64.mov [rbp-8], rcx
-    x64.mov rcx, rax
-    x64.sar rbx, cl
-    x64.mov rcx, rdx
     x64.mov [rbp-16], rdx
-    x64.mov rax, rbx
+    x64.mov rax, 1
+    x64.mov rbx, 8
+    x64.cmp rdx, rbx
+    x64.jg quotient.__range_panic_0
+    x64.cmp rdx, rax
+    x64.jl quotient.__range_panic_0
+    x64.jmp quotient.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov rsi, 1
+    x64.mov rdi, [rbp-8]
+    x64.mov rcx, rsi
+    x64.mov r8, rdi
+    x64.sar r8, cl
+    x64.mov rcx, [rbp-16]
+    x64.mov rax, r8
     x64.cqo
     x64.idiv rcx
     x64.epilogue
@@ -53,14 +66,27 @@ module {
   func @remainder(bits: i64, halfRadix: i64) -> i64 {
   entry:
     x64.prologue stack_size=16
-    x64.mov rax, 1
-    x64.mov rbx, rcx
     x64.mov [rbp-8], rcx
-    x64.mov rcx, rax
-    x64.sar rbx, cl
-    x64.mov rcx, rdx
     x64.mov [rbp-16], rdx
-    x64.mov rax, rbx
+    x64.mov rax, 1
+    x64.mov rbx, 8
+    x64.cmp rdx, rbx
+    x64.jg remainder.__range_panic_0
+    x64.cmp rdx, rax
+    x64.jl remainder.__range_panic_0
+    x64.jmp remainder.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_1]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov rsi, 1
+    x64.mov rdi, [rbp-8]
+    x64.mov rcx, rsi
+    x64.mov r8, rdi
+    x64.sar r8, cl
+    x64.mov rcx, [rbp-16]
+    x64.mov rax, r8
     x64.cqo
     x64.idiv rcx
     x64.mov rax, rdx

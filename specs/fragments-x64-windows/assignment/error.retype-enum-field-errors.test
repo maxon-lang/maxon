@@ -1,0 +1,31 @@
+// Test: error.retype-enum-field-errors
+
+enum Color
+	red
+	green
+end 'Color'
+
+enum Shade
+	dark
+	light
+end 'Shade'
+
+type Holder
+	export var c as Color
+
+	static function create() returns Self
+		return Self{c: Color.red}
+	end 'create'
+end 'Holder'
+
+function main() returns ExitCode
+	var h = Holder.create()
+	h.c = Shade.light
+	return h.c.ordinal
+end 'main'
+---
+MaxoncStderr: ```
+error E3005: specs/fragments/assignment/error.retype-enum-field-errors.test:23:4: cannot assign a value of type 'Shade' to field 'c' of 'Holder', which holds 'Color'
+```
+---
+---

@@ -51,18 +51,12 @@ module {
   entry:
     x64.prologue stack_size=16
     x64.mov [rbp-8], rcx
-    x64.mov rax, [rbp-8]
-    x64.mov rbx, [rax+0]
-    x64.mov eax, ebx
-    x64.mov ebx, edx
-    x64.add rax, rbx
-    x64.xor edx, edx
-    x64.mov ebx, rax
-    x64.mov rsi, 100
-    x64.mov edi, rax
-    x64.cmp rdi, rsi
+    x64.mov [rbp-16], rdx
+    x64.xor eax, eax
+    x64.mov rbx, 100
+    x64.cmp rdx, rbx
     x64.jg Counter.bump.__range_panic_0
-    x64.cmp rbx, rdx
+    x64.cmp rdx, rax
     x64.jl Counter.bump.__range_panic_0
     x64.jmp Counter.bump.__range_ok_0
   __range_panic_0:
@@ -70,15 +64,15 @@ module {
     x64.mov rcx, rax
     x64.call mrt_panic
   __range_ok_0:
-    x64.mov r8, [rbp-8]
-    x64.mov [r8+0], rax
-    x64.mov rax, [rbp-8]
-    x64.mov r8, [rax+0]
-    x64.xor eax, eax
-    x64.mov r9, 100
-    x64.cmp r8, r9
+    x64.mov rsi, [rbp-8]
+    x64.mov rdi, [rsi+0]
+    x64.mov rsi, [rbp-16]
+    x64.add rdi, rsi
+    x64.xor esi, esi
+    x64.mov r8, 100
+    x64.cmp rdi, r8
     x64.jg Counter.bump.__range_panic_1
-    x64.cmp r8, rax
+    x64.cmp rdi, rsi
     x64.jl Counter.bump.__range_panic_1
     x64.jmp Counter.bump.__range_ok_1
   __range_panic_1:
@@ -86,7 +80,23 @@ module {
     x64.mov rcx, rax
     x64.call mrt_panic
   __range_ok_1:
-    x64.mov rax, r8
+    x64.mov r9, [rbp-8]
+    x64.mov [r9+0], rdi
+    x64.mov rdi, [rbp-8]
+    x64.mov r9, [rdi+0]
+    x64.xor edi, edi
+    x64.mov rax, 100
+    x64.cmp r9, rax
+    x64.jg Counter.bump.__range_panic_2
+    x64.cmp r9, rdi
+    x64.jl Counter.bump.__range_panic_2
+    x64.jmp Counter.bump.__range_ok_2
+  __range_panic_2:
+    x64.lea_symdata rax, [__panic_msg_2]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_2:
+    x64.mov rax, r9
     x64.epilogue
     x64.ret
   }
@@ -94,24 +104,39 @@ module {
   entry:
     x64.prologue stack_size=16
     x64.mov [rbp-8], rcx
-    x64.mov rax, [rbp-8]
+    x64.mov [rbp-16], rdx
+    x64.xor eax, eax
+    x64.mov rbx, 100
+    x64.cmp rdx, rbx
+    x64.jg Counter.bumpTwice.__range_panic_0
+    x64.cmp rdx, rax
+    x64.jl Counter.bumpTwice.__range_panic_0
+    x64.jmp Counter.bumpTwice.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_3]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov rsi, [rbp-16]
+    x64.mov rdi, [rbp-8]
     x64.mov rcx, [rbp-8]
+    x64.mov rdx, [rbp-16]
     x64.call Counter.bump
     x64.mov rcx, [rbp-8]
     x64.mov rdx, rax
     x64.call Counter.bump
-    x64.xor edx, edx
-    x64.mov rbx, 100
-    x64.cmp rax, rbx
-    x64.jg Counter.bumpTwice.__range_panic_0
+    x64.xor ecx, ecx
+    x64.mov rdx, 100
     x64.cmp rax, rdx
-    x64.jl Counter.bumpTwice.__range_panic_0
-    x64.jmp Counter.bumpTwice.__range_ok_0
-  __range_panic_0:
-    x64.lea_symdata rax, [__panic_msg_2]
+    x64.jg Counter.bumpTwice.__range_panic_1
+    x64.cmp rax, rcx
+    x64.jl Counter.bumpTwice.__range_panic_1
+    x64.jmp Counter.bumpTwice.__range_ok_1
+  __range_panic_1:
+    x64.lea_symdata rax, [__panic_msg_4]
     x64.mov rcx, rax
     x64.call mrt_panic
-  __range_ok_0:
+  __range_ok_1:
     x64.epilogue
     x64.ret
   }
@@ -132,7 +157,7 @@ module {
     x64.jl main.__range_panic_0
     x64.jmp main.__range_ok_0
   __range_panic_0:
-    x64.lea_symdata rax, [__panic_msg_3]
+    x64.lea_symdata rax, [__panic_msg_5]
     x64.mov rcx, rax
     x64.call mrt_panic
   __range_ok_0:

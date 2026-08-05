@@ -46,8 +46,23 @@ Stderr: ```
 module {
   func @advance(n: i64) {
   entry:
-    x64.mov rax, 1
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.xor eax, eax
+    x64.mov rdx, 9
+    x64.cmp rcx, rdx
+    x64.jg advance.__range_panic_0
     x64.cmp rcx, rax
+    x64.jl advance.__range_panic_0
+    x64.jmp advance.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov rbx, 1
+    x64.mov rsi, [rbp-8]
+    x64.cmp rsi, rbx
     x64.jle advance.over_0.after
   over_0:
     x64.xor eax, eax
@@ -55,9 +70,11 @@ module {
     x64.add rax, rcx
     x64.mov rdx, rax
     x64.xor eax, eax
+    x64.epilogue
     x64.ret
   over_0.after:
     x64.xor edx, edx
+    x64.epilogue
     x64.ret
   }
   func @__test_walks_the_steps() {
@@ -340,7 +357,7 @@ module {
     x64.label __nonnull_skip_7
     x64.xor ebx, ebx
     x64.mov [rbp-32], rbx
-    x64.lea_symdata rsi, [__panic_msg_0]
+    x64.lea_symdata rsi, [__panic_msg_1]
     x64.mov rdi, rsi
     x64.mov rcx, rdi
     x64.call mrt_panic

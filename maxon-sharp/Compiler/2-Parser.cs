@@ -3820,18 +3820,33 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     }
   }
 
-  /// Structural equality on IrFunctionType: same parameter arity, identical param
-  /// types by name, identical (or both null) return type by name. Used by the
-  /// post-prescan resolution pass to ensure all cases of a function-backed enum
-  /// share a single signature.
-  internal static bool FunctionSignaturesEqual(IrFunctionType a, IrFunctionType b) {
+  /// <summary>
+  /// Structural equality on IrFunctionType: same parameter arity, and every position the same type.
+  /// </summary>
+  /// <param name="positionsMatch">
+  /// What "the same type" means at one position. Two callers ask it two ways, and the difference is
+  /// what each is comparing: the post-prescan pass holds two DECLARED signatures — both written out
+  /// by hand, so plain name equality (the default) is exactly right — while the declared-type doors
+  /// hold a declared signature against an INFERRED one and must tolerate a ranged alias spelled as
+  /// its base. One skeleton, because the arity-and-positions shape is the same question either way.
+  /// </param>
+  internal static bool FunctionSignaturesEqual(IrFunctionType a, IrFunctionType b,
+      Func<IrType?, IrType?, bool>? positionsMatch = null) {
+    var same = positionsMatch ?? SameTypeName;
+
     if (a.ParameterTypes.Count != b.ParameterTypes.Count) return false;
     for (int i = 0; i < a.ParameterTypes.Count; i++) {
-      if (a.ParameterTypes[i].Name != b.ParameterTypes[i].Name) return false;
+      if (!same(a.ParameterTypes[i], b.ParameterTypes[i])) return false;
     }
-    if ((a.ReturnType == null) != (b.ReturnType == null)) return false;
-    if (a.ReturnType != null && a.ReturnType.Name != b.ReturnType!.Name) return false;
-    return true;
+
+    return same(a.ReturnType, b.ReturnType);
+  }
+
+  /// An IrFunctionType's name IS its structure, so a name comparison IS a structural one — and a
+  /// void position is spelled as a null type on both sides.
+  private static bool SameTypeName(IrType? a, IrType? b) {
+    if (a == null) return b == null;
+    return b != null && a.Name == b.Name;
   }
 
   private void PreScanEnum(IrModule<MaxonOp> module, bool isExported = false, bool isModuleVisible = false, bool isUnion = false) {
@@ -7453,6 +7468,11 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   /// paramOffset is the index offset for the IR param op (e.g., 1 for instance methods with 'self').
   /// </summary>
   private void EmitParameters(List<string> paramNames, List<IrType> paramTypes, List<Token> paramTokens, int paramOffset = 0) {
+    // Each ranged parameter's incoming SSA value, kept by POSITION for the entry guards below. By
+    // position and not by name, because `_` may name several parameters at once and a by-name lookup
+    // would guard the last of them repeatedly against every other one's range.
+    var rangedParamValues = new MaxonValue?[paramNames.Count];
+
     for (int i = 0; i < paramNames.Count; i++) {
       CheckNoSelfFieldShadow(paramNames[i], paramTokens[i].Line, paramTokens[i].Column);
       if (paramNames[i] != "_") {
@@ -7477,6 +7497,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
         var paramOp = new MaxonParamOp(i + paramOffset, paramNames[i], kind);
         _currentBlock!.AddOp(paramOp);
         _variables.Declare(paramNames[i], kind, true, paramOp.Result, _currentBlock!, OwnershipFlags.IsParam, structTypeName: rangedParam.Name);
+        rangedParamValues[i] = paramOp.Result;
       } else if (paramType is IrTypeParameterType tp) {
         var paramOp = new MaxonParamOp(i + paramOffset, paramNames[i], MaxonValueKind.TypeParameter);
         _currentBlock!.AddOp(paramOp);
@@ -7491,6 +7512,49 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
         _currentBlock!.AddOp(paramOp);
         _variables.Declare(paramNames[i], kind, true, paramOp.Result, _currentBlock!, OwnershipFlags.IsParam);
       }
+    }
+
+    EmitParameterRangeGuards(rangedParamValues, paramTypes, paramTokens);
+  }
+
+  /// <summary>
+  /// Enforces every ranged parameter's declared bounds AT THE CALLEE'S ENTRY — past all the incoming
+  /// param ops, before a single body op.
+  /// </summary>
+  /// <remarks>
+  /// ⚠ A PARAMETER'S RANGE IS A PREMISE THE BODY IS COMPILED AGAINST, not a decoration.
+  /// `function divide(n Integer, d NonZero)` may write `n / d` with no `try` and no guard precisely
+  /// because `NonZero` excludes 0 — the compiler PROVES the divide safe from the declared type and
+  /// emits the bare instruction. Nothing enforced that premise, so the proof rested on the caller's
+  /// good behaviour: a runtime zero produced `panic: integer divide by zero` from inside `divide`,
+  /// an uncatchable CPU fault where the language promises a catchable `DivisionByZero`, blaming the
+  /// instruction instead of the broken promise. The compiler's own E3057 text recommends the ranged
+  /// type as the alternative to `try` — so taking its advice was what removed the check.
+  ///
+  /// It is a PANIC and not a throw, deliberately: the range is a contract the caller promised, so
+  /// breaking it is a bug in the caller, not an expected outcome the callee should offer to handle.
+  ///
+  /// ⚠ WHY HERE AND NOT AT THE CALL SITE, where the compile-time half lives. Two reasons, neither
+  /// available there — both are shv2's, whose `InsertRangeChecks` splits the same rule the same way:
+  ///   - COST: one guard per parameter per FUNCTION, rather than one per CALL.
+  ///   - COVERAGE: an indirect call through a function value has no callee NAME at the call site to
+  ///     look a range up by, so only the entry can cover every caller.
+  /// There is a third, particular to this compiler: <see cref="EmitRuntimeRangeCheck"/> SPLITS the
+  /// current block, and at a call site that split lands part-way through building an argument list,
+  /// which breaks the argument-pinning pass (see the note at the call-argument site in
+  /// <see cref="FillDefaultArgs"/>). At the entry there is no argument list under construction.
+  /// </remarks>
+  private void EmitParameterRangeGuards(MaxonValue?[] rangedParamValues, List<IrType> paramTypes, List<Token> paramTokens) {
+    for (int i = 0; i < rangedParamValues.Length; i++) {
+      if (rangedParamValues[i] is not { } paramValue) continue;
+
+      // A parameter's value arrives from the caller and is never a literal this compiler is
+      // holding, so the fold-then-guard door (`ValidateAndEmitRangeCheck`) has nothing to fold and
+      // its whole-function literal scan would be pure cost. The runtime guard is the whole rule
+      // here; a full-range alias still costs nothing, because EmitRuntimeRangeCheck says so.
+      var ranged = (IrRangedPrimitiveType)paramTypes[i];
+      EmitRuntimeRangeCheck(paramValue, ranged, ranged.BaseType.ToValueKind(),
+        paramTokens[i].Line, _sourceFilePath);
     }
   }
 
@@ -9269,6 +9333,19 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       return value;
     }
 
+    // A declared FUNCTION return type is identified by its shape, and the kind check below cannot
+    // see it: every function type is one kind, so `return shadeIt` from a function declared to
+    // return `ColorFn` passed, and the caller then called it through the signature it was promised.
+    if (returnType is IrFunctionType expectedFn) {
+      var actualFn = FunctionShapeOf(value);
+      if (DetermineValueKind(value) == MaxonValueKind.Function
+          && !FunctionShapeAccepts(expectedFn, actualFn))
+        throw new CompileError(ErrorCode.SemanticTypeMismatch,
+          $"Cannot return '{FunctionShapeName(actualFn)}' from function declared to return "
+          + $"'{expectedFn.Name}'",
+          returnToken.Line, returnToken.Column);
+    }
+
     // Returning into a declared return type asks the same question an assignment asks — "may this
     // value be represented in a place of this kind?" — so it is decided by the same code.
     return CoerceValueToExpectedKind(value, returnType.ToValueKind(),
@@ -10894,14 +10971,19 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     // like it re-inferred its type (readers forward the SSA value, so `x = "hi"` "worked") while a
     // global could not (a typed load uses the DECLARED kind, so the same store read a String pointer
     // back as an int). One fact, one decision, one answer.
-    var (declaredKind, declaredTypeName, place) = resolved switch {
-      ResolvedVar.Global(var g) => ((MaxonValueKind, string?, string))(g.Kind, g.TypeName, $"global '{name}'"),
-      ResolvedVar.Local(var l) => (l.Kind, l.StructTypeName, $"variable '{name}'"),
+    //
+    // A function-typed place is identified by its SHAPE rather than by a name, so it travels as a
+    // fourth component. Only a LOCAL can be one: a module-level binding cannot be initialized with
+    // a function reference at all (`var g = f` is "Undefined constant 'f'"), so a global has no
+    // signature to carry and null is the correct answer rather than a gap.
+    var (declaredKind, declaredTypeName, declaredFnType, place) = resolved switch {
+      ResolvedVar.Global(var g) => ((MaxonValueKind, string?, IrFunctionType?, string))(g.Kind, g.TypeName, null, $"global '{name}'"),
+      ResolvedVar.Local(var l) => (l.Kind, l.StructTypeName, l.FnType, $"variable '{name}'"),
       _ => throw new InvalidOperationException($"Unhandled resolved variable kind: {resolved.GetType().Name}")
     };
 
     newVal = CoerceAssignedValue(newVal, declaredKind, declaredTypeName, place,
-      nameToken.Line, nameToken.Column);
+      nameToken.Line, nameToken.Column, declaredFnType);
 
     if (resolved is ResolvedVar.Global(var globalInfo)) {
       RejectEscapingCapturingClosure(newVal, $"store a closure that captures in global '{name}'",
@@ -15030,6 +15112,13 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
         var payloadOp = new MaxonEnumPayloadOp(enumVarRef.Result, enumTypeName, i, bindingKind, structTypeName);
         _currentBlock!.AddOp(payloadOp);
 
+        // A function-typed payload's signature is its DECLARED type, and the binding is the only
+        // place it can come from — a payload load carries a kind. Without it, `run(op) then op(x)`
+        // died `E4001 internal: function-typed variable 'op' was declared without a function type`
+        // on a perfectly legal program. The value carries it too, so the declared-type doors see it.
+        var bindingFnType = assocType as IrFunctionType;
+        if (payloadOp.Result is MaxonFunctionPtr payloadFnPtr) payloadFnPtr.FunctionType = bindingFnType;
+
         // Write-back targets the original variable so mutations are visible after the match
         var payloadBinding = scrutineeMutable && scrutineeVarName != null
           ? new EnumPayloadBinding(scrutineeVarName, enumTypeName, i)
@@ -15037,7 +15126,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
 
         _currentBlock!.AddOp(new MaxonAssignOp(bindingName, payloadOp.Result,
           isDeclaration: true, isMutable: scrutineeMutable, bindingKind));
-        _variables.Declare(bindingName, bindingKind, scrutineeMutable, payloadOp.Result, _currentBlock!, structTypeName: structTypeName, payloadBinding: payloadBinding);
+        _variables.Declare(bindingName, bindingKind, scrutineeMutable, payloadOp.Result, _currentBlock!, structTypeName: structTypeName, fnType: bindingFnType, payloadBinding: payloadBinding);
         if (!bindingName.StartsWith("__discard_")) {
           _localVarLocations.Add((bindingName, bindingLine, bindingCol));
         }
@@ -18717,6 +18806,10 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       // lets the loop's call-suffix arm lower `h.op(x)` on the next turn, and what lets
       // `let f = h.op` recover a signature for the binding.
       resultFnType = field.Type as IrFunctionType;
+
+      // The same fact, on the VALUE, because a declared-type door holds a value rather than a
+      // position: `apply(h.op, ...)` compares shapes long after this op stopped being the last one.
+      if (accessOp.Result is MaxonFunctionPtr fieldFnPtr) fieldFnPtr.FunctionType = resultFnType;
     }
 
     // Preserve mutability and variable name from root variable so field values
@@ -22299,22 +22392,6 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   }
 
   /// <summary>
-  /// Applies the assignment type rule — `specs/assignment.md`'s "expression type must match variable
-  /// type". A variable's type is fixed by its DECLARATION and an assignment never re-infers it, so
-  /// this is the rule that makes `var x = 5; x = "hi"` an error rather than a silent retype.
-  ///
-  /// Shared by every simple assignment — local, global and qualified static — because those differ
-  /// only in where the store lands, never in what may be stored.
-  ///
-  /// <paramref name="declaredTypeName"/> is the declared STRUCT or ENUM name where there is one.
-  /// A kind alone cannot separate two structs — `Point` and `Other` are both
-  /// <see cref="MaxonValueKind.Struct"/> — so without it `var p = Point.create(1); p = Other.create(2)`
-  /// passed the kind check and died in the LOWERING as an E9001 internal error ("The given key 'p.x'
-  /// was not present in the dictionary"). Null where the declaration records no name, which is the
-  /// permissive answer: this rule refuses what it can PROVE is a different type, never what it merely
-  /// cannot identify.
-  /// </summary>
-  /// <summary>
   /// The declared STRUCT or ENUM name carried by a type, or null where the type names no such thing
   /// (a primitive, a ranged alias, a type parameter). Null is what makes <see cref="CoerceAssignedValue"/>
   /// permissive rather than wrong when a declaration records no identity to compare against.
@@ -22325,9 +22402,129 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     _ => null
   };
 
+  /// <summary>
+  /// Whether a function value whose signature is <paramref name="actual"/> may meet a place declared
+  /// <paramref name="expected"/>. Two function types are the same type exactly when their SHAPES
+  /// agree — same parameters in order, same return — and <see cref="FunctionSignaturesEqual"/> is
+  /// where that comparison already lived (the post-prescan pass uses it to hold a function-backed
+  /// enum's cases to one signature). This is that rule, applied at the declared-type doors.
+  /// </summary>
+  /// <remarks>
+  /// ⚠ TWO CASES ARE DELIBERATELY PERMISSIVE, and both of them are the difference between a rule and
+  /// a FALSE-REFUSAL GENERATOR:
+  ///
+  /// - A null <paramref name="actual"/> — the value's producer recorded no signature. Refusing here
+  ///   would refuse programs on the compiler's own ignorance. Same stance as a null declared struct
+  ///   name in <see cref="CoerceAssignedValue"/>.
+  /// - Either side still mentioning a TYPE PARAMETER. `function(Element) returns bool` and
+  ///   `function(byte) returns bool` are the same type once `Element` is bound, and which one a door
+  ///   is holding depends on whether it runs before or after substitution — so a name comparison
+  ///   there tests the substitution's timing, not the program.
+  /// </remarks>
+  private bool FunctionShapeAccepts(IrFunctionType expected, IrFunctionType? actual) {
+    if (actual == null) return true;
+    if (MentionsTypeParameter(expected) || MentionsTypeParameter(actual)) return true;
+
+    return FunctionSignaturesEqual(expected, actual, SignaturePositionAccepts);
+  }
+
+  /// <summary>
+  /// Whether one position of a DECLARED signature and the same position of an ACTUAL one denote the
+  /// same type. A named AGGREGATE is its name; everything else is its representation.
+  /// </summary>
+  /// <remarks>
+  /// ⚠ WHAT THIS RULE OWNS IS THE DISAGREEMENT NOTHING DOWNSTREAM CAN CATCH — a different struct, a
+  /// different enum, a different interface, a different arity, a different scalar KIND. Each of
+  /// those makes the callee read one layout as another, and no guard can recover from it.
+  ///
+  /// ⚠ IT DELIBERATELY DOES NOT OWN THE BOUNDS, and that is not slack. Two integer spellings —
+  /// `Percent`, `ExitCode`, a bare `i64` — are ONE representation differing only in range, and a
+  /// range is enforced DYNAMICALLY at the callee's entry (<see cref="EmitParameterRangeGuards"/>),
+  /// where a violation panics naming the type it violated. So a range disagreement is a checked
+  /// condition rather than an unrepresentable one. It is also the same stance shv2 takes: its
+  /// `exitCode` and `integer` tags widen into each other, "that is how a ranged alias reaches an
+  /// `int`".
+  ///
+  /// Refusing bounds here would be a FALSE-REFUSAL GENERATOR, measured twice on the corpus: a
+  /// CLOSURE's return type is inferred from its body and comes back as the raw base (`i64`) while
+  /// the alias it is stored under names the range, which refused nine passing programs; and `main`
+  /// (`function() returns ExitCode`) stopped being usable as a `function() returns Integer` in a
+  /// test that has nothing to do with function shapes.
+  /// </remarks>
+  private bool SignaturePositionAccepts(IrType? expected, IrType? actual) {
+    if (expected == null) return actual == null;
+    if (actual == null) return false;
+    if (expected.Name == actual.Name) return true;
+
+    // A struct keeps the typealias tolerance every other struct-identity check in this file uses.
+    if (expected is IrStructType expectedStruct)
+      return actual is IrStructType actualStruct
+        && IsStructTypeCompatible(actualStruct.Name, expectedStruct.Name);
+
+    // An enum, a union and an interface are each their NAME, and the names already differ here.
+    if (expected is IrEnumType or IrInterfaceType || actual is IrEnumType or IrInterfaceType
+        || actual is IrStructType)
+      return false;
+
+    // A nested function position is the same question one level down.
+    if (expected is IrFunctionType expectedNested)
+      return actual is IrFunctionType actualNested
+        && FunctionSignaturesEqual(expectedNested, actualNested, SignaturePositionAccepts);
+    if (actual is IrFunctionType) return false;
+
+    // What is left is scalars, where the kind IS the representation.
+    return expected.ToValueKind() == actual.ToValueKind();
+  }
+
+  /// True when any position of <paramref name="fnType"/> is still an unbound type parameter,
+  /// directly or inside a nested function type.
+  private static bool MentionsTypeParameter(IrFunctionType fnType) =>
+    fnType.ParameterTypes.Any(IsOrContainsTypeParameter)
+    || (fnType.ReturnType != null && IsOrContainsTypeParameter(fnType.ReturnType));
+
+  private static bool IsOrContainsTypeParameter(IrType type) => type switch {
+    IrTypeParameterType => true,
+    IrFunctionType nested => MentionsTypeParameter(nested),
+    _ => false
+  };
+
+  /// <summary>
+  /// The SIGNATURE a function value carries, or null when it is not a function value or its producer
+  /// recorded none. See <see cref="MaxonFunctionPtr.FunctionType"/> for why null is permissive.
+  /// </summary>
+  private static IrFunctionType? FunctionShapeOf(MaxonValue value) =>
+    (value as MaxonFunctionPtr)?.FunctionType;
+
+  /// The name a declared-type diagnostic gives a function value: its SHAPE
+  /// (`fn(Color) returns Color`), which is the only thing that distinguishes one function type from
+  /// another. Falls back to the bare kind name for a value carrying no recorded signature.
+  private static string FunctionShapeName(IrFunctionType? shape) =>
+    shape?.Name ?? KindToTypeName(MaxonValueKind.Function);
+
+  /// <summary>
+  /// Applies the assignment type rule — `specs/assignment.md`'s "expression type must match variable
+  /// type". A variable's type is fixed by its DECLARATION and an assignment never re-infers it, so
+  /// this is the rule that makes `var x = 5; x = "hi"` an error rather than a silent retype.
+  ///
+  /// Shared by every simple assignment — local, global and qualified static — because those differ
+  /// only in where the store lands, never in what may be stored.
+  /// </summary>
+  /// <param name="declaredTypeName">
+  /// The declared STRUCT or ENUM name where there is one. A kind alone cannot separate two structs —
+  /// `Point` and `Other` are both <see cref="MaxonValueKind.Struct"/> — so without it
+  /// `var p = Point.create(1); p = Other.create(2)` passed the kind check and died in the LOWERING as
+  /// an E9001 internal error ("The given key 'p.x' was not present in the dictionary"). Null where the
+  /// declaration records no name, which is the permissive answer: this rule refuses what it can PROVE
+  /// is a different type, never what it merely cannot identify.
+  /// </param>
+  /// <param name="declaredFnType">
+  /// The declared FUNCTION type where there is one. It travels as a type rather than a name for the
+  /// reason the whole shape rule exists: a function type has no name to travel as — its identity IS
+  /// its shape, and a kind flattens every shape to one.
+  /// </param>
   private MaxonValue CoerceAssignedValue(
       MaxonValue value, MaxonValueKind declaredKind, string? declaredTypeName, string place,
-      int line, int column) {
+      int line, int column, IrFunctionType? declaredFnType = null) {
     var coerced = CoerceValueToExpectedKind(value, declaredKind, line, column,
       (actual, expected) => $"cannot assign a value of type '{actual}' to {place}, which holds "
         + $"'{expected}'");
@@ -22337,6 +22534,27 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       throw new CompileError(ErrorCode.SemanticTypeMismatch,
         $"cannot assign a value of type '{assignedStruct.TypeName}' to {place}, which holds "
         + $"'{declaredTypeName}'",
+        line, column);
+    }
+
+    // The ENUM half of the same rule, and it was missing for the same reason the struct half once
+    // was: `DeclaredTypeNameOf` has always yielded an enum's name, and nothing compared it. Two
+    // enums are two types — `var c = Color.red; c = Shade.light` compiled clean and `c.ordinal`
+    // reported Shade's ordinal under Color's name.
+    if (declaredTypeName != null && coerced is MaxonEnum assignedEnum
+        && assignedEnum.TypeName != declaredTypeName) {
+      throw new CompileError(ErrorCode.SemanticTypeMismatch,
+        $"cannot assign a value of type '{assignedEnum.TypeName}' to {place}, which holds "
+        + $"'{declaredTypeName}'",
+        line, column);
+    }
+
+    // And the FUNCTION half. A function type's identity is its shape, which is why this one takes
+    // the TYPE where the two above take a name: there is no name to take.
+    if (declaredFnType != null && !FunctionShapeAccepts(declaredFnType, FunctionShapeOf(coerced))) {
+      throw new CompileError(ErrorCode.SemanticTypeMismatch,
+        $"cannot assign a value of type '{FunctionShapeName(FunctionShapeOf(coerced))}' to {place}, "
+        + $"which holds '{declaredFnType.Name}'",
         line, column);
     }
 
@@ -22371,7 +22589,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       MaxonValue value, IrType declaredType, string place, Token errorToken) {
     var declaredKind = declaredType.ToValueKind();
     var coerced = CoerceAssignedValue(value, declaredKind, DeclaredTypeNameOf(declaredType), place,
-      errorToken.Line, errorToken.Column);
+      errorToken.Line, errorToken.Column, declaredType as IrFunctionType);
 
     if (declaredType is IrRangedPrimitiveType ranged)
       coerced = ValidateAndEmitRangeCheck(coerced, ranged, declaredKind, errorToken);
@@ -22398,16 +22616,25 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   /// `Self{v: 3.7}` into an int field died the mirror death instead of getting E3009 and the `trunc`
   /// advice the same store gets one line later as an assignment.
   ///
-  /// ⚠ THE NUMERIC-PRIMITIVE GATE IS LOAD-BEARING, not a narrowing for caution's sake. The
+  /// ⚠ THE STRUCT-TYPED EXCLUSION IS LOAD-BEARING, not a narrowing for caution's sake. The
   /// compiler-internal managed types (`__ManagedMemory` and friends) deliberately carry RAW INTEGER
   /// HANDLES in struct-typed fields — <c>ParseStructLiteral</c> says so where it skips them — so an
   /// assignment-shaped kind check over every field type would reject the handle the compiler itself
   /// synthesises. Struct-typed fields also keep their own identity check at the call site, whose
-  /// wording is gated by specs. This owns exactly the numeric family the conversion rule is about.
+  /// wording is gated by specs.
+  ///
+  /// ⚠ THE GATE WAS "NUMERIC PRIMITIVE ONLY", AND THAT LEFT THE OTHER TWO IDENTITY-BEARING TYPES
+  /// UNCHECKED ENTIRELY — not compared by kind and then let through, but never looked at. An ENUM
+  /// field accepted any enum (`Self{c: Shade.light}` into a `Color` field), and a FUNCTION field
+  /// accepted any function (`Self{op: shadeIt}` into a `function(Color) returns Color` field, which
+  /// then called `shadeIt` with a `Color`). Both are exactly what the assignment door refuses one
+  /// line away, which is why they are admitted here rather than given a check of their own.
   /// </remarks>
   private MaxonValue CoerceStructLiteralField(
       IrStructField field, MaxonValue value, string typeName, Token errorToken) {
-    if (!IsNumericPrimitiveKind(field.Type.ToValueKind())) return value;
+    if (!IsNumericPrimitiveKind(field.Type.ToValueKind())
+        && field.Type is not IrEnumType and not IrFunctionType)
+      return value;
 
     return CoerceValueToDeclaredType(value, field.Type, $"field '{field.Name}' of '{typeName}'",
       errorToken);
@@ -22606,6 +22833,27 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
         continue;
       }
 
+      // Function parameter: the arg must be a function value OF THE DECLARED SHAPE. There was no
+      // arm here at all — struct, interface, enum and ranged each had one, function was never
+      // written — so a function argument fell through to the kind comparison below, where every
+      // function type is `MaxonValueKind.Function` and therefore agreed with every other.
+      // `apply(shadeIt, ...)` into an `f ColorFn` compiled clean and handed `shadeIt` a `Color`.
+      if (paramType is IrFunctionType paramFnType) {
+        if (args[i] is not MaxonFunctionPtr argFn)
+          throw new CompileError(ErrorCode.SemanticTypeMismatch,
+            $"argument type mismatch for '{callee.ParamNames[i]}': expected '{paramFnType.Name}', "
+            + $"got '{ArgTypeName(args[i]!, argKind)}'",
+            functionNameToken.Line, functionNameToken.Column);
+
+        if (!FunctionShapeAccepts(paramFnType, argFn.FunctionType))
+          throw new CompileError(ErrorCode.SemanticTypeMismatch,
+            $"argument type mismatch for '{callee.ParamNames[i]}': expected '{paramFnType.Name}', "
+            + $"got '{FunctionShapeName(argFn.FunctionType)}'",
+            functionNameToken.Line, functionNameToken.Column);
+
+        continue;
+      }
+
       // Per-instance ranged primitive parameter: check nominal type match.
       // When the param type is a ranged alias that's an inner alias of a generic type,
       // resolve it to the per-instance alias and verify the argument carries the same type.
@@ -22667,26 +22915,26 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       // with plain `int` on kind ALWAYS (`int(0 to 100)` is Integer, so is `int`). The common case
       // was therefore the unguarded one: `takePercent(500)` ran the callee with p = 500.
       //
-      // ⚠⚠ COMPILE-TIME ONLY, AND THE RUNTIME HALF IS BLOCKED BY A LOWERING BUG, NOT BY CHOICE.
-      // `EmitRuntimeRangeCheck` SPLITS the current block (it needs a branch and a panic block). Done
-      // here, that split lands in the middle of an argument list, and the arg-PINNING pass that runs
-      // over `argLocations` assumes an argument's value is defined in the block its evaluation was
-      // recorded against. Enabling it dies building shv2:
+      // ⚠⚠ COMPILE-TIME ONLY HERE, AND THE RUNTIME HALF IS AT THE CALLEE'S ENTRY — see
+      // `EmitParameterRangeGuards`. The two halves are DISJOINT, not one of them missing.
+      //
+      // The split is not a compromise; it is where each half belongs. The compile-time half needs
+      // the LITERAL, which only the call site has. The runtime half needs to cover every caller,
+      // including an indirect one with no callee name here to look a range up by — and it costs one
+      // guard per parameter per FUNCTION there against one per CALL here.
+      //
+      // A third reason forbids the runtime half at THIS site outright: `EmitRuntimeRangeCheck`
+      // SPLITS the current block (it needs a branch and a panic block). Done here, that split lands
+      // in the middle of an argument list, and the arg-PINNING pass that runs over `argLocations`
+      // assumes an argument's value is defined in the block its evaluation was recorded against.
+      // Enabling it died building shv2:
       //   E9001: Lowering 'Compiler.CompileMemory.deltaOf' failed: assign value %3748
       //          (kind=MaxonInteger) not in valueMap; assigning to '__arg_pin_4'
       // on `PhaseDelta.create(0, cpuTicks: 0, allocs: allocs, frees: frees,
       // bytes: self.columns.bytesAt(phase.ordinal))` — five ranged params where the LAST argument is
       // itself a call whose own argument needs a runtime check, so the split happens while the outer
-      // argument list is still being built. Verified by bisection: the identical tree builds clean
-      // with `emitRuntimeCheck: false` and dies with it true. The pinning fragility is PRE-EXISTING
-      // (this is the first caller to split a block there); filed on PLAN.md's bootstrap-oracle-bugs
-      // list rather than worked around, because the workaround would be to stop checking.
-      //
-      // What is lost is narrow and worth stating: a call argument the compiler CANNOT fold is not
-      // guarded at the boundary. It is still caught downstream wherever it lands — a `return` of the
-      // ranged type, a field store, an `as` — which is where every such value in the corpus is
-      // caught today. What is GAINED is the whole statically-known half, which is where every
-      // measured instance of this bug lived.
+      // argument list is still being built. At the callee's entry there is no argument list under
+      // construction, so the same emitter is safe there and unsafe here.
       if (paramType is IrRangedPrimitiveType paramRangedBound
           && GetArgRangedTypeName(args[i]!) != paramRangedBound.Name)
         args[i] = ValidateAndEmitRangeCheck(args[i]!, paramRangedBound, paramKind, functionNameToken,
@@ -22961,19 +23209,50 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       + $"'{enumCase.Name}'", Current().Line, Current().Column);
 
     var expectedType = associatedValue.Type;
-    if (expectedType is not IrTypeParameterType) {
-      var actualKind = DetermineValueKind(argVal);
-      var expectedKind = expectedType.ToValueKind();
-      if (actualKind != expectedKind) {
-        var actualTypeName = argVal is MaxonStruct ms
-          ? ms.TypeName
-          : IrType.FormatAsSourceName(actualKind.ToIrType());
-        throw new CompileError(ErrorCode.SemanticTypeMismatch,
-          $"type mismatch: 'expected {IrType.FormatAsSourceName(expectedType)}, got {actualTypeName}'",
-          Current().Line, Current().Column);
-      }
-    }
+    if (expectedType is IrTypeParameterType) return;
+
+    var actualKind = DetermineValueKind(argVal);
+    var expectedKind = expectedType.ToValueKind();
+    if (actualKind != expectedKind)
+      throw PayloadTypeMismatch(expectedType, PayloadArgTypeName(argVal, actualKind));
+
+    // ⚠ THE KIND CHECK ABOVE IS ONLY HALF THE RULE, AND FOR YEARS IT WAS THE WHOLE OF IT. `Struct`,
+    // `Enum` and `Function` are each ONE kind covering every type of that shape, so a payload
+    // declared `Color` accepted any struct, any enum and any function whatsoever: `Paint.tint`
+    // took a `Shade` and the binding read Shade's field out of Color's layout. A payload slot is a
+    // place with a declared type like any other, so its identity is checked like any other.
+    bool identityAgrees = expectedType switch {
+      IrStructType expectedStruct => argVal is MaxonStruct payloadStruct
+        && IsStructTypeCompatible(payloadStruct.TypeName, expectedStruct.Name),
+      IrEnumType expectedEnum => argVal is MaxonEnum payloadEnum
+        && payloadEnum.TypeName == expectedEnum.Name,
+      IrFunctionType expectedFn => FunctionShapeAccepts(expectedFn, FunctionShapeOf(argVal)),
+      _ => true
+    };
+
+    if (!identityAgrees)
+      throw PayloadTypeMismatch(expectedType, PayloadArgTypeName(argVal, actualKind));
   }
+
+  /// The name a payload diagnostic gives the value it was handed: the declared aggregate's own name
+  /// where it has one, a function's SHAPE where it does not, and the primitive kind otherwise.
+  private static string PayloadArgTypeName(MaxonValue argVal, MaxonValueKind actualKind) => argVal switch {
+    MaxonStruct ms => ms.TypeName,
+    MaxonEnum me => me.TypeName,
+    MaxonFunctionPtr fp => FunctionShapeName(fp.FunctionType),
+    _ => IrType.FormatAsSourceName(actualKind.ToIrType())
+  };
+
+  private CompileError PayloadTypeMismatch(IrType expectedType, string actualTypeName) =>
+    new CompileError(ErrorCode.SemanticTypeMismatch,
+      $"type mismatch: 'expected {PayloadTypeDisplayName(expectedType)}, got {actualTypeName}'",
+      Current().Line, Current().Column);
+
+  /// A payload's declared type as the diagnostic names it. `FormatAsSourceName` renders every
+  /// function type as the bare word `fn`, which cannot distinguish the two signatures a shape
+  /// mismatch is about — so a function type names its shape, exactly as the value does.
+  private static string PayloadTypeDisplayName(IrType expectedType) =>
+    expectedType is IrFunctionType fn ? fn.Name : IrType.FormatAsSourceName(expectedType);
 
   /// <summary>
   /// Parses call arguments for an instance method call, pre-filling the self argument at index 0.

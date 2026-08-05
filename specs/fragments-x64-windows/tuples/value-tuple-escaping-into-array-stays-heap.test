@@ -26,15 +26,43 @@ ExitCode: 66
 module {
   func @pair(a: i64, b: i64) -> i64 {
   entry:
-    x64.prologue stack_size=16
-    x64.mov rax, 1
-    x64.add rcx, rax
-    x64.mov rax, 2
-    x64.add rdx, rax
-    x64.mov [rbp-16], rcx
-    x64.mov [rbp-8], rdx
+    x64.prologue stack_size=32
+    x64.mov [rbp-8], rcx
+    x64.mov [rbp-16], rdx
+    x64.xor eax, eax
+    x64.mov rbx, 1000
+    x64.cmp rcx, rbx
+    x64.jg pair.__range_panic_0
+    x64.cmp rcx, rax
+    x64.jl pair.__range_panic_0
+    x64.jmp pair.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.xor esi, esi
+    x64.mov rdi, 1000
+    x64.cmp rdx, rdi
+    x64.jg pair.__range_panic_1
+    x64.cmp rdx, rsi
+    x64.jl pair.__range_panic_1
+    x64.jmp pair.__range_ok_1
+  __range_panic_1:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_1:
+    x64.mov r8, 1
+    x64.mov r9, [rbp-8]
+    x64.add r9, r8
+    x64.mov r8, 2
     x64.mov rax, [rbp-16]
-    x64.mov r10, [rbp-8]
+    x64.add rax, r8
+    x64.mov [rbp-32], r9
+    x64.mov [rbp-24], rax
+    x64.mov rax, [rbp-32]
+    x64.mov r10, [rbp-24]
     x64.epilogue
     x64.ret
   }
@@ -100,7 +128,7 @@ module {
     x64.cmp rdx, rax
     x64.je main.otherwise_continue_0
   otherwise_panic_0:
-    x64.lea_symdata rax, [__panic_msg_0]
+    x64.lea_symdata rax, [__panic_msg_1]
     x64.mov rcx, rax
     x64.call mrt_panic
   otherwise_continue_0:
@@ -125,7 +153,7 @@ module {
     x64.jl main.__range_panic_0
     x64.jmp main.__range_ok_0
   __range_panic_0:
-    x64.lea_symdata rax, [__panic_msg_1]
+    x64.lea_symdata rax, [__panic_msg_2]
     x64.mov rcx, rax
     x64.call mrt_panic
   __range_ok_0:

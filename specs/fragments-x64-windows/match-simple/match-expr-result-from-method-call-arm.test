@@ -85,17 +85,32 @@ module {
   entry:
     x64.prologue stack_size=48
     x64.mov [rbp-16], rcx
+    x64.mov [rbp-24], rdx
     x64.xor eax, eax
     x64.mov [rbp-8], rax
-    x64.mov rax, [rbp-16]
-    x64.mov rbx, [rax+0]
-    x64.mov [rbp-24], rbx
-    x64.mov rax, [rbp-24]
-    x64.mov rcx, [rbp-24]
+    x64.xor eax, eax
+    x64.mov rbx, 100
+    x64.cmp rdx, rbx
+    x64.jg Lookup.getName.__range_panic_0
+    x64.cmp rdx, rax
+    x64.jl Lookup.getName.__range_panic_0
+    x64.jmp Lookup.getName.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov rsi, [rbp-16]
+    x64.mov rdi, [rsi+0]
+    x64.mov [rbp-32], rdi
+    x64.mov rsi, [rbp-24]
+    x64.mov rdi, [rbp-32]
+    x64.mov rcx, [rbp-32]
+    x64.mov rdx, [rbp-24]
     x64.call StringArray.get
-    x64.mov [rbp-32], rax
-    x64.xor ecx, ecx
-    x64.cmp rdx, rcx
+    x64.mov [rbp-40], rax
+    x64.xor eax, eax
+    x64.cmp rdx, rax
     x64.je Lookup.getName.otherwise_default_success_0
   otherwise_default_error_0:
     x64.lea rax, [rip+__static_lit_1]
@@ -107,14 +122,14 @@ module {
     x64.mov rcx, [rbp-8]
     x64.call mm_incref
     x64.mov rsi, [rbp-8]
-    x64.mov [rbp-40], rsi
-    x64.mov rdi, [rbp-40]
-    x64.mov rcx, [rbp-40]
+    x64.mov [rbp-48], rsi
+    x64.mov rdi, [rbp-48]
+    x64.mov rcx, [rbp-48]
     x64.call mm_incref
     x64.jmp Lookup.getName.otherwise_default_continue_0
   otherwise_default_success_0:
-    x64.mov rax, [rbp-32]
-    x64.mov [rbp-40], rax
+    x64.mov rax, [rbp-40]
+    x64.mov [rbp-48], rax
     x64.jmp Lookup.getName.otherwise_default_continue_0
   otherwise_default_continue_0:
     x64.mov rax, [rbp-8]
@@ -123,20 +138,34 @@ module {
     x64.mov rcx, [rbp-8]
     x64.call mm_decref
     x64.label __nonnull_skip_0
-    x64.mov rax, [rbp-40]
+    x64.mov rax, [rbp-48]
     x64.epilogue
     x64.ret
   }
   func @Lookup.nameLen(__self_ptr: i64, t: i64) -> u8 {
   entry:
-    x64.prologue stack_size=48
+    x64.prologue stack_size=64
     x64.mov [rbp-8], rcx
+    x64.mov [rbp-16], rdx
     x64.xor eax, eax
-    x64.mov [rbp-16], rax
-    x64.mov [rbp-24], rdx
-    x64.mov rax, [rbp-24]
-    x64.xor edx, edx
-    x64.cmp rax, rdx
+    x64.mov rbx, 100
+    x64.cmp rdx, rbx
+    x64.jg Lookup.nameLen.__range_panic_0
+    x64.cmp rdx, rax
+    x64.jl Lookup.nameLen.__range_panic_0
+    x64.jmp Lookup.nameLen.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_1]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov rsi, [rbp-16]
+    x64.xor edi, edi
+    x64.mov [rbp-24], rdi
+    x64.mov [rbp-32], rsi
+    x64.mov rsi, [rbp-32]
+    x64.xor edi, edi
+    x64.cmp rsi, rdi
     x64.je Lookup.nameLen.pick_0.case0
   pick_0.dispatch0:
     x64.jmp Lookup.nameLen.pick_0.case1
@@ -145,74 +174,74 @@ module {
     x64.mov rcx, [rbp-8]
     x64.xor edx, edx
     x64.call Lookup.getName
-    x64.mov [rbp-32], rax
-    x64.mov rcx, [rbp-16]
+    x64.mov [rbp-40], rax
+    x64.mov rcx, [rbp-24]
     x64.test rcx, rcx
     x64.jz __nonnull_skip_0
     x64.call mm_decref
     x64.label __nonnull_skip_0
-    x64.mov rdx, [rbp-32]
-    x64.mov [rbp-16], rdx
-    x64.mov rbx, [rbp-16]
-    x64.mov rcx, [rbp-16]
+    x64.mov rdx, [rbp-40]
+    x64.mov [rbp-24], rdx
+    x64.mov rbx, [rbp-24]
+    x64.mov rcx, [rbp-24]
     x64.call mm_incref
-    x64.mov rsi, [rbp-32]
+    x64.mov rsi, [rbp-40]
     x64.test rsi, rsi
     x64.jz __nonnull_skip_1
-    x64.mov rcx, [rbp-32]
+    x64.mov rcx, [rbp-40]
     x64.call mm_decref
     x64.label __nonnull_skip_1
     x64.jmp Lookup.nameLen.pick_0.merge
   pick_0.case1:
-    x64.mov rax, [rbp-16]
+    x64.mov rax, [rbp-24]
     x64.test rax, rax
     x64.jz __nonnull_skip_2
-    x64.mov rcx, [rbp-16]
+    x64.mov rcx, [rbp-24]
     x64.call mm_decref
     x64.label __nonnull_skip_2
     x64.xor ecx, ecx
-    x64.mov [rbp-16], rcx
-    x64.lea_symdata rdx, [__panic_msg_0]
+    x64.mov [rbp-24], rcx
+    x64.lea_symdata rdx, [__panic_msg_2]
     x64.mov rbx, rdx
     x64.mov rcx, rbx
     x64.call mrt_panic
   pick_0.merge:
-    x64.mov rax, [rbp-16]
-    x64.mov [rbp-40], rax
-    x64.mov rcx, [rbp-40]
+    x64.mov rax, [rbp-24]
+    x64.mov [rbp-48], rax
+    x64.mov rcx, [rbp-48]
     x64.mov rdx, [rcx+8]
     x64.xor ebx, ebx
     x64.mov rsi, 100
     x64.cmp rdx, rsi
-    x64.jg Lookup.nameLen.__range_panic_0
-    x64.cmp rdx, rbx
-    x64.jl Lookup.nameLen.__range_panic_0
-    x64.jmp Lookup.nameLen.__range_ok_0
-  __range_panic_0:
-    x64.lea_symdata rax, [__panic_msg_1]
-    x64.mov rcx, rax
-    x64.call mrt_panic
-  __range_ok_0:
-    x64.xor eax, eax
-    x64.mov rcx, 100
-    x64.cmp rdx, rcx
     x64.jg Lookup.nameLen.__range_panic_1
-    x64.cmp rdx, rax
+    x64.cmp rdx, rbx
     x64.jl Lookup.nameLen.__range_panic_1
     x64.jmp Lookup.nameLen.__range_ok_1
   __range_panic_1:
-    x64.lea_symdata rax, [__panic_msg_1]
+    x64.lea_symdata rax, [__panic_msg_3]
     x64.mov rcx, rax
     x64.call mrt_panic
   __range_ok_1:
-    x64.mov rdi, [rbp-16]
-    x64.mov [rbp-48], rdx
+    x64.xor eax, eax
+    x64.mov rcx, 100
+    x64.cmp rdx, rcx
+    x64.jg Lookup.nameLen.__range_panic_2
+    x64.cmp rdx, rax
+    x64.jl Lookup.nameLen.__range_panic_2
+    x64.jmp Lookup.nameLen.__range_ok_2
+  __range_panic_2:
+    x64.lea_symdata rax, [__panic_msg_3]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_2:
+    x64.mov rdi, [rbp-24]
+    x64.mov [rbp-56], rdx
     x64.test rdi, rdi
     x64.jz __nonnull_skip_3
-    x64.mov rcx, [rbp-16]
+    x64.mov rcx, [rbp-24]
     x64.call mm_decref
     x64.label __nonnull_skip_3
-    x64.mov rax, [rbp-48]
+    x64.mov rax, [rbp-56]
     x64.epilogue
     x64.ret
   }
@@ -233,7 +262,7 @@ module {
     x64.jl main.__range_panic_0
     x64.jmp main.__range_ok_0
   __range_panic_0:
-    x64.lea_symdata rax, [__panic_msg_2]
+    x64.lea_symdata rax, [__panic_msg_4]
     x64.mov rcx, rax
     x64.call mrt_panic
   __range_ok_0:

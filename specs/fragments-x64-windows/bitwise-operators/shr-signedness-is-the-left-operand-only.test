@@ -53,6 +53,7 @@ module {
   func @bitsCount(n: i64) -> u8 {
   entry:
     x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
     x64.xor eax, eax
     x64.mov rdx, 63
     x64.cmp rcx, rdx
@@ -65,7 +66,20 @@ module {
     x64.mov rcx, rax
     x64.call mrt_panic
   __range_ok_0:
-    x64.mov rax, rcx
+    x64.mov rbx, [rbp-8]
+    x64.xor esi, esi
+    x64.mov rdi, 63
+    x64.cmp rbx, rdi
+    x64.jg bitsCount.__range_panic_1
+    x64.cmp rbx, rsi
+    x64.jl bitsCount.__range_panic_1
+    x64.jmp bitsCount.__range_ok_1
+  __range_panic_1:
+    x64.lea_symdata rax, [__panic_msg_1]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_1:
+    x64.mov rax, rbx
     x64.epilogue
     x64.ret
   }
@@ -77,26 +91,42 @@ module {
   func @shiftRight(value: i64, distance: i64) -> i64 {
   entry:
     x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov [rbp-16], rdx
     x64.xor eax, eax
+    x64.mov rbx, 63
+    x64.cmp rdx, rbx
+    x64.jg shiftRight.__range_panic_0
     x64.cmp rdx, rax
+    x64.jl shiftRight.__range_panic_0
+    x64.jmp shiftRight.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_2]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov rsi, [rbp-8]
+    x64.mov rdi, [rbp-16]
+    x64.xor r8d, r8d
+    x64.cmp rdi, r8
     x64.jge shiftRight.__shift_count_ok_0
   __shift_count_panic_0:
-    x64.lea_symdata rax, [__panic_msg_1]
+    x64.lea_symdata rax, [__panic_msg_3]
     x64.mov rcx, rax
     x64.call mrt_panic
   __shift_count_ok_0:
-    x64.mov rax, 64
-    x64.cmp rdx, rax
-    x64.setb rax
-    x64.movzx rax, raxb
-    x64.mov rbx, 63
-    x64.test rax, rax
-    x64.mov rsi, rbx
-    x64.cmovne rsi, rdx
-    x64.mov rax, rcx
-    x64.mov [rbp-8], rcx
-    x64.mov rcx, rsi
-    x64.sar rax, cl
+    x64.mov r8, 64
+    x64.cmp rdi, r8
+    x64.setb r8
+    x64.movzx r8, r8b
+    x64.mov r9, 63
+    x64.test r8, r8
+    x64.mov rax, r9
+    x64.cmovne rax, rdi
+    x64.mov rcx, rax
+    x64.mov rdi, rsi
+    x64.sar rdi, cl
+    x64.mov rax, rdi
     x64.epilogue
     x64.ret
   }
@@ -113,7 +143,7 @@ module {
     x64.cmp rax, rdx
     x64.jge main.__shift_count_ok_0
   __shift_count_panic_0:
-    x64.lea_symdata rax, [__panic_msg_2]
+    x64.lea_symdata rax, [__panic_msg_4]
     x64.mov rcx, rax
     x64.call mrt_panic
   __shift_count_ok_0:
@@ -229,7 +259,7 @@ module {
     x64.cmp rax, rdx
     x64.jge main.__shift_count_ok_1
   __shift_count_panic_1:
-    x64.lea_symdata rax, [__panic_msg_3]
+    x64.lea_symdata rax, [__panic_msg_5]
     x64.mov rcx, rax
     x64.call mrt_panic
   __shift_count_ok_1:
@@ -344,7 +374,7 @@ module {
     x64.cmp rax, rdx
     x64.jge main.__shift_count_ok_2
   __shift_count_panic_2:
-    x64.lea_symdata rax, [__panic_msg_4]
+    x64.lea_symdata rax, [__panic_msg_6]
     x64.mov rcx, rax
     x64.call mrt_panic
   __shift_count_ok_2:

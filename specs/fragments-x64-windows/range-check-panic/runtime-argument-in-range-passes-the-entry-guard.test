@@ -1,0 +1,72 @@
+// Test: runtime-argument-in-range-passes-the-entry-guard
+typealias Integer = int(i64.min to i64.max)
+typealias NonZero = int(1 to i64.max)
+
+function ident(v Integer) returns Integer
+	return v
+end 'ident'
+
+function divide(n Integer, d NonZero) returns Integer
+	return n / d
+end 'divide'
+
+function main() returns ExitCode
+	let ok = ident(5)
+	return divide(10, d: ok)
+end 'main'
+---
+ExitCode: 2
+---
+// CompiledIR
+module {
+  func @ident(v: i64) -> i64 {
+  entry:
+    x64.mov rax, rcx
+    x64.ret
+  }
+  func @divide(n: i64, d: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov [rbp-16], rdx
+    x64.mov rax, 1
+    x64.cmp rdx, rax
+    x64.jge divide.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rdx, [rbp-16]
+    x64.mov rbx, rdx
+    x64.cqo
+    x64.idiv rbx
+    x64.epilogue
+    x64.ret
+  }
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov rcx, 5
+    x64.call ident
+    x64.mov rdx, rax
+    x64.mov rcx, 10
+    x64.call divide
+    x64.xor ecx, ecx
+    x64.mov edx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg main.__range_panic_0
+    x64.cmp rax, rcx
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_1]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.epilogue
+    x64.ret
+  }
+}
+---

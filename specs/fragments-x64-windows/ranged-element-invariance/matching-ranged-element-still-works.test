@@ -23,16 +23,28 @@ module {
     x64.prologue stack_size=32
     x64.mov [rbp-8], rcx
     x64.mov [rbp-16], rdx
-    x64.mov rax, [rbp-8]
+    x64.xor eax, eax
+    x64.mov rbx, 100
+    x64.cmp rdx, rbx
+    x64.jg bump.__range_panic_0
+    x64.cmp rdx, rax
+    x64.jl bump.__range_panic_0
+    x64.jmp bump.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov rsi, [rbp-8]
     x64.mov rcx, [rbp-8]
     x64.xor edx, edx
     x64.call SmallCol.get
     x64.mov [rbp-24], rax
-    x64.xor ecx, ecx
-    x64.cmp rdx, rcx
+    x64.xor eax, eax
+    x64.cmp rdx, rax
     x64.je bump.otherwise_continue_0
   otherwise_panic_0:
-    x64.lea_symdata rax, [__panic_msg_0]
+    x64.lea_symdata rax, [__panic_msg_1]
     x64.mov rcx, rax
     x64.call mrt_panic
   otherwise_continue_0:
@@ -48,7 +60,7 @@ module {
     x64.cmp rdx, rbx
     x64.je bump.otherwise_continue_1
   otherwise_panic_1:
-    x64.lea_symdata rax, [__panic_msg_1]
+    x64.lea_symdata rax, [__panic_msg_2]
     x64.mov rcx, rax
     x64.call mrt_panic
   otherwise_continue_1:
@@ -76,7 +88,7 @@ module {
     x64.cmp rdx, rbx
     x64.je main.otherwise_continue_0
   otherwise_panic_0:
-    x64.lea_symdata rax, [__panic_msg_2]
+    x64.lea_symdata rax, [__panic_msg_3]
     x64.mov rcx, rax
     x64.call mrt_panic
   otherwise_continue_0:
@@ -89,7 +101,7 @@ module {
     x64.jl main.__range_panic_0
     x64.jmp main.__range_ok_0
   __range_panic_0:
-    x64.lea_symdata rax, [__panic_msg_3]
+    x64.lea_symdata rax, [__panic_msg_4]
     x64.mov rcx, rax
     x64.call mrt_panic
   __range_ok_0:

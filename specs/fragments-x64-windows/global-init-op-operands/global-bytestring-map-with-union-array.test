@@ -43,7 +43,8 @@ module {
   func @KeywordInfo.create(kind: i64, helpText: i64) -> i64 {
   entry:
     x64.prologue stack_size=32
-    x64.mov [rbp-8], rdx
+    x64.mov [rbp-8], rcx
+    x64.mov [rbp-16], rdx
     x64.xor eax, eax
     x64.mov rbx, 100
     x64.cmp rcx, rbx
@@ -56,26 +57,38 @@ module {
     x64.mov rcx, rax
     x64.call mrt_panic
   __range_ok_0:
-    x64.lea_func rsi, [__destruct_KeywordInfo]
-    x64.mov rdi, rsi
-    x64.mov [rbp-24], rcx
-    x64.mov rdx, rdi
+    x64.mov rsi, [rbp-8]
+    x64.xor edi, edi
+    x64.mov r8, 100
+    x64.cmp rsi, r8
+    x64.jg KeywordInfo.create.__range_panic_1
+    x64.cmp rsi, rdi
+    x64.jl KeywordInfo.create.__range_panic_1
+    x64.jmp KeywordInfo.create.__range_ok_1
+  __range_panic_1:
+    x64.lea_symdata rax, [__panic_msg_1]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_1:
+    x64.lea_func r9, [__destruct_KeywordInfo]
+    x64.mov rax, r9
+    x64.mov rdx, rax
     x64.mov rcx, 16
     x64.mov r8, 2
     x64.call mm_alloc
-    x64.mov [rbp-16], rax
-    x64.mov rax, [rbp-16]
-    x64.mov rcx, [rbp-24]
-    x64.mov [rax+0], rcx
-    x64.mov rdx, [rbp-8]
-    x64.mov rbx, [rbp-16]
-    x64.mov [rbx+8], rdx
+    x64.mov [rbp-24], rax
+    x64.mov rax, [rbp-24]
     x64.mov rcx, [rbp-8]
-    x64.call mm_incref
-    x64.mov rsi, [rbp-16]
+    x64.mov [rax+0], rcx
+    x64.mov rdx, [rbp-16]
+    x64.mov rbx, [rbp-24]
+    x64.mov [rbx+8], rdx
     x64.mov rcx, [rbp-16]
     x64.call mm_incref
-    x64.mov rax, [rbp-16]
+    x64.mov rsi, [rbp-24]
+    x64.mov rcx, [rbp-24]
+    x64.call mm_incref
+    x64.mov rax, [rbp-24]
     x64.epilogue
     x64.ret
   }
@@ -293,7 +306,7 @@ module {
     x64.jl main.__range_panic_0
     x64.jmp main.__range_ok_0
   __range_panic_0:
-    x64.lea_symdata rax, [__panic_msg_1]
+    x64.lea_symdata rax, [__panic_msg_2]
     x64.mov rcx, rax
     x64.call mrt_panic
   __range_ok_0:

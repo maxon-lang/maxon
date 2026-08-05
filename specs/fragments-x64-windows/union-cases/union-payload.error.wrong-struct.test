@@ -1,0 +1,35 @@
+// Test: union-payload.error.wrong-struct
+typealias Integer = int(i64.min to i64.max)
+
+type Color
+	export var v as Integer
+
+	export static function create(v Integer) returns Self
+		return Self{v: v}
+	end 'create'
+end 'Color'
+
+type Shade
+	export var s as Integer
+
+	export static function create(s Integer) returns Self
+		return Self{s: s}
+	end 'create'
+end 'Shade'
+
+union Paint
+	tint(c Color)
+end 'Paint'
+
+function main() returns ExitCode
+	let p = Paint.tint(Shade.create(7))
+	match p 'go'
+		tint(c) then return c.v
+	end 'go'
+end 'main'
+---
+MaxoncStderr: ```
+error E3005: specs/fragments/union-cases/union-payload.error.wrong-struct.test:25:36: type mismatch: 'expected Color, got Shade'
+```
+---
+---

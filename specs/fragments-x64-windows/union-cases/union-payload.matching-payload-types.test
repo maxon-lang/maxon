@@ -1,0 +1,247 @@
+// Test: union-payload.matching-payload-types
+typealias Integer = int(i64.min to i64.max)
+
+enum Shade
+	dark
+	light
+end 'Shade'
+
+type Color
+	export var v as Integer
+
+	export static function create(v Integer) returns Self
+		return Self{v: v}
+	end 'create'
+end 'Color'
+
+union Paint
+	tint(c Color)
+	wash(s Shade)
+end 'Paint'
+
+function readOne(p Paint) returns Integer
+	match p 'go'
+		tint(c) then return c.v
+		wash(s) then return s.ordinal
+	end 'go'
+end 'readOne'
+
+function main() returns ExitCode
+	return readOne(Paint.tint(Color.create(4))) + readOne(Paint.wash(Shade.light))
+end 'main'
+---
+ExitCode: 5
+---
+// CompiledIR
+module {
+  func @Color.create(v: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-16], rcx
+    x64.mov rcx, 8
+    x64.xor edx, edx
+    x64.mov r8, 3
+    x64.call mm_alloc
+    x64.mov [rbp-8], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-16]
+    x64.mov [rax+0], rcx
+    x64.mov rdx, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call mm_incref
+    x64.mov rax, [rbp-8]
+    x64.epilogue
+    x64.ret
+  }
+  func @readOne(p: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=48
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rdx, [rax+0]
+    x64.mov [rbp-16], rcx
+    x64.mov rcx, [rbp-16]
+    x64.mov [rbp-48], rdx
+    x64.call mm_incref
+    x64.mov rdx, [rbp-48]
+    x64.mov [rbp-24], rdx
+    x64.mov rbx, [rbp-24]
+    x64.xor esi, esi
+    x64.cmp rbx, rsi
+    x64.je readOne.go_0.case0
+  go_0.dispatch0:
+    x64.mov rax, 1
+    x64.mov rcx, [rbp-24]
+    x64.cmp rcx, rax
+    x64.je readOne.go_0.case1
+  go_0.dispatch1:
+    x64.jmp readOne.go_0.merge
+  go_0.case0:
+    x64.mov rax, [rbp-16]
+    x64.mov rcx, [rax+8]
+    x64.mov [rbp-32], rcx
+    x64.mov rdx, [rbp-32]
+    x64.mov rcx, [rbp-32]
+    x64.call mm_incref
+    x64.mov rbx, [rbp-32]
+    x64.mov rax, [rbx+0]
+    x64.mov rsi, [rbp-16]
+    x64.mov [rbp-48], rax
+    x64.test rsi, rsi
+    x64.jz __nonnull_skip_0
+    x64.mov rcx, [rbp-16]
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.mov rdi, [rbp-32]
+    x64.test rdi, rdi
+    x64.jz __nonnull_skip_1
+    x64.mov rcx, [rbp-32]
+    x64.call mm_decref
+    x64.label __nonnull_skip_1
+    x64.mov rax, [rbp-48]
+    x64.epilogue
+    x64.ret
+  go_0.case1:
+    x64.mov rax, [rbp-16]
+    x64.mov rcx, [rax+8]
+    x64.mov [rbp-40], rcx
+    x64.mov rdx, [rbp-40]
+    x64.xor ebx, ebx
+    x64.xor esi, esi
+    x64.cmp rdx, rsi
+    x64.sete rdi
+    x64.movzx rdi, rdib
+    x64.xor r8d, r8d
+    x64.test rdi, rdi
+    x64.mov r9, rbx
+    x64.cmovne r9, r8
+    x64.mov rax, 1
+    x64.cmp rdx, rax
+    x64.sete rax
+    x64.movzx rax, raxb
+    x64.mov rcx, 1
+    x64.test rax, rax
+    x64.mov rdx, r9
+    x64.cmovne rdx, rcx
+    x64.mov rax, [rbp-16]
+    x64.mov [rbp-48], rdx
+    x64.test rax, rax
+    x64.jz __nonnull_skip_2
+    x64.mov rcx, [rbp-16]
+    x64.call mm_decref
+    x64.label __nonnull_skip_2
+    x64.mov rax, [rbp-48]
+    x64.epilogue
+    x64.ret
+  go_0.merge:
+  }
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=48
+    x64.mov rcx, 4
+    x64.call Color.create
+    x64.mov [rbp-8], rax
+    x64.lea_func rax, [__destruct_Paint]
+    x64.mov rcx, rax
+    x64.mov rdx, rcx
+    x64.mov rcx, 16
+    x64.mov r8, 4
+    x64.call mm_alloc
+    x64.mov [rbp-16], rax
+    x64.xor edx, edx
+    x64.mov [rax+0], rdx
+    x64.mov rbx, [rbp-8]
+    x64.mov [rax+8], rbx
+    x64.mov rcx, [rbp-8]
+    x64.call mm_incref
+    x64.mov rcx, [rbp-16]
+    x64.call mm_incref
+    x64.mov rsi, [rbp-16]
+    x64.mov rcx, [rbp-16]
+    x64.call readOne
+    x64.mov rdi, 1
+    x64.lea_func r8, [__destruct_Paint]
+    x64.mov r9, r8
+    x64.mov [rbp-32], rax
+    x64.mov rdx, r9
+    x64.mov rcx, 16
+    x64.mov r8, 4
+    x64.call mm_alloc
+    x64.mov [rbp-24], rax
+    x64.mov rcx, 1
+    x64.mov [rax+0], rcx
+    x64.mov rcx, 1
+    x64.mov [rax+8], rcx
+    x64.mov rcx, [rbp-24]
+    x64.call mm_incref
+    x64.mov rax, [rbp-24]
+    x64.mov rcx, [rbp-24]
+    x64.call readOne
+    x64.mov rcx, [rbp-32]
+    x64.add rcx, rax
+    x64.xor eax, eax
+    x64.mov edx, 4294967295
+    x64.cmp rcx, rdx
+    x64.jg main.__range_panic_0
+    x64.cmp rcx, rax
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov rbx, [rbp-8]
+    x64.mov [rbp-40], rcx
+    x64.test rbx, rbx
+    x64.jz __nonnull_skip_0
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.mov rax, [rbp-16]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_1
+    x64.mov rcx, [rbp-16]
+    x64.call mm_decref
+    x64.label __nonnull_skip_1
+    x64.mov rcx, [rbp-24]
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_2
+    x64.call mm_decref
+    x64.label __nonnull_skip_2
+    x64.mov rax, [rbp-40]
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_Color(ptr: i64) {
+  entry:
+    x64.jmp __destruct_Color.done
+  done:
+    x64.ret
+  }
+  func @__destruct_Paint(ptr: i64) {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.xor edx, edx
+    x64.cmp rcx, rdx
+    x64.jne __destruct_Paint.check_0
+  case_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+8]
+    x64.mov [rbp-16], rcx
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_0
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.jmp __destruct_Paint.done
+  check_0:
+    x64.jmp __destruct_Paint.done
+  done:
+    x64.epilogue
+    x64.ret
+  }
+}
+---
