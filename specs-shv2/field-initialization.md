@@ -145,11 +145,18 @@ end 'main'
 ```
 
 <!-- test: string-literal-field-default-errors -->
-A field default may only be a numeric or boolean LITERAL (`= 5`, `= 50.0`, `= true`, optionally
-signed) — an arbitrary expression or a STRING-literal default is refused rather than silently
-accepted. It is a pure PARSE error, so the compiler tears its half-built parse down on the error path;
-the always-on leak gate makes this case a standing guard that the rejection frees everything it
-allocated (a leak there would flip the suite to exit 101).
+An UNANNOTATED field default supplies the field's type as well as its value, so it may only be a
+literal the type can be read off — `= 5`, `= 50.0`, `= true`, optionally signed. A STRING literal is
+not one of them, and this case is where the three compilers actually differ: the C# bootstrap admits
+signed numbers, bools and a registered enum's case here and refuses everything else, while
+`maxon-selfhosted`'s `shorthandDefaultIsLiteralLike` also takes string and char literals. shv2 follows
+the bootstrap and `specs/field-defaults.md`, whose documentation says "numeric, boolean, and enum-case"
+and nothing more. The cure the message names — an explicit annotation — makes it legal, because an
+ANNOTATED default may be any expression at all (`specs/field-defaults.md`).
+
+It is a pure PARSE error, so the compiler tears its half-built parse down on the error path; the
+always-on leak gate makes this case a standing guard that the rejection frees everything it allocated
+(a leak there would flip the suite to exit 101).
 ```maxon
 
 type Box
@@ -166,7 +173,72 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: specs/fragments/field-initialization/string-literal-field-default-errors.test:4:20: Unsupported: 'string literal' as a field default (only a LITERAL default is parsed — `= 5`, `= 50.0`, `= true`, optionally signed. An arbitrary expression is evaluated once per struct literal, which needs the initializer captured at the declaration and replayed at every literal that omits the field, and arrives with the rung that has a case needing one)
+error E2004: specs/fragments/field-initialization/string-literal-field-default-errors.test:4:20: Expected default value: literal (int, float, bool, or enum case). For other expressions, add a type annotation: 'var name Type = expr'.
+```
+
+### Error: a field declared at a TYPE PARAMETER may not carry a default, of either form
+
+A default value is produced by a function the compiler synthesizes ONCE, from the generic type's shared
+body — where the type parameter is an opaque word. Nothing written there can produce a value *of* it: the
+concrete type is not known until an instantiation, and two instantiations may bind it differently. So the
+default is refused at the declaration.
+
+⚠ Both cases below **compiled** before this rule existed, and both were MEASURED to be memory-unsafe rather
+than merely wrong: instantiated as `Box with String`, the field read treats the integer the default produced
+as a String record — shv2 access-violated (`0xC0000005`) and the C# bootstrap panicked inside `mm_incref` at
+address `0x1`. The bootstrap still accepts them, so this is a deliberate divergence from the oracle: a
+compiler that crashes on a program is not a definition of what that program means.
+
+<!-- test: type-parameter-field-expression-default-errors -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias StrBox = Box with String
+
+type Box uses T
+	export var value as T = makeIt()
+
+	export static function create() returns Self
+		return Self{}
+	end 'create'
+end 'Box'
+
+function makeIt() returns Integer
+	return 9
+end 'makeIt'
+
+function main() returns ExitCode
+	let b = StrBox.create()
+	print("{b.value}")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: specs/fragments/field-initialization/type-parameter-field-expression-default-errors.test:6:24: Unsupported: a default value on field 'value' of `type Box`, whose declared type is the type parameter 'T' — a default is produced by a function compiled ONCE from this type's shared body, where 'T' is an opaque word, so nothing written there can produce a value of it, and each instantiation may bind it to a different type. Declare the field at a concrete type, or give it a value at every struct literal of 'Box'
+```
+
+The LITERAL form is the identical fault and pre-dates expression defaults entirely, so the rule is stated
+once, against the field's declared TYPE, before either form of default is read.
+
+<!-- test: type-parameter-field-literal-default-errors -->
+```maxon
+typealias StrBox = Box with String
+
+type Box uses T
+	export var value as T = 0
+
+	export static function create() returns Self
+		return Self{}
+	end 'create'
+end 'Box'
+
+function main() returns ExitCode
+	let b = StrBox.create()
+	print("{b.value}")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: specs/fragments/field-initialization/type-parameter-field-literal-default-errors.test:5:24: Unsupported: a default value on field 'value' of `type Box`, whose declared type is the type parameter 'T' — a default is produced by a function compiled ONCE from this type's shared body, where 'T' is an opaque word, so nothing written there can produce a value of it, and each instantiation may bind it to a different type. Declare the field at a concrete type, or give it a value at every struct literal of 'Box'
 ```
 
 <!-- disabled-test: empty-literal-no-defaults-errors -->

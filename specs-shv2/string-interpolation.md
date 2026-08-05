@@ -1535,7 +1535,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2010: <fragment>:3:12: Expected 'interpolation end' but got 'identifier'
+error E2010: <fragment>:3:12: Expected 'interpolation end' but got 'zzz'
 ```
 
 ### Error: An exponent without a decimal point is not a float literal
@@ -1553,7 +1553,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2010: <fragment>:3:11: Expected 'interpolation end' but got 'identifier'
+error E2010: <fragment>:3:11: Expected 'interpolation end' but got 'e100'
 ```
 
 ### The expression boundary is exact in both directions

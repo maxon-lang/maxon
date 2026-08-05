@@ -207,6 +207,12 @@ let FieldShapeImmutable = 17 as ContentHash
 let FieldShapeNoDefault = 18 as ContentHash
 let FieldShapeDefaulted = 19 as ContentHash
 
+// ⭐ A field whose default is an ARBITRARY EXPRESSION (S2f) — a THIRD constant beside those two, for their
+// exact reason one step out: a field that gains an expression default accepts programs the other two do
+// not (`Self{}` is legal, and the box holds a freshly-called value rather than a folded constant), so it
+// must hash differently from both. It rides ALONE — see `mixFieldDefault` for why the expression must not.
+let FieldShapeDefaultHelper = 75 as ContentHash
+
 // The two shapes a top-level constant's ANSWER hashes under: it evaluated to a value, or it did
 // not. Their own discriminators for `DeclShapeAlias`'s reason — a name that stops being a function
 // and starts being a constant must move the hash rather than collide.
@@ -6282,10 +6288,23 @@ export type ProgramSignatures
 	// The DEFAULT half of `mixField`. `none` mixes its own shape rather than nothing: a field that
 	// gained a default must hash differently from one that never had it, and `= 0` on a field whose
 	// payload would otherwise fold to the same 0 is exactly the collision that would hide it.
+	// ⭐⭐ **THE HELPER ARM MIXES ITS PRESENCE AND NOTHING ELSE, AND THAT IS THE `recordParamDefaults`
+	// RULING APPLIED VERBATIM (S2f).** What a READER of `type Bag` copies out of an expression default is
+	// exactly one thing — `call __fieldDefault#Bag#items` — and those bytes are byte-identical whether the
+	// default is `IntArray.create()` or `IntArray.withCapacity(4)`. The expression itself reaches only the
+	// DECLARING file's own helper body, which re-parses on that file's own content hash. So mixing it would
+	// be sound and WRONG: every keystroke inside any default would re-parse the whole program.
+	//
+	// ⚠ The two facts a reader DOES depend on both ride already, and neither needs an arm here: the helper's
+	// NAME is `(type name, field name)`, both mixed by `mixField`/`recordStruct` above; and its RETURN TYPE
+	// is the field's declared type, mixed by `mixField`'s own `mixType`. What is left is the presence BIT —
+	// a field that gained an expression default must hash differently from one with none and from one with
+	// a literal — which is this constant.
 	function mixFieldDefault(state ContentHash, defaultValue FieldDefault) returns ContentHash
 		return match defaultValue 'shape'
 			none gives mix(state, value: FieldShapeNoDefault)
 			literal(payload, tag) gives self.mixDefaultLiteral(state, payload: payload, tag: tag)
+			helper gives mix(state, value: FieldShapeDefaultHelper)
 		end 'shape'
 	end 'mixFieldDefault'
 
@@ -7775,13 +7794,17 @@ export type ProgramSignatures
 	// Exhaustive over `ValueTypeTag`, and the unreachable arms panic rather than hashing. Both producers
 	// bottom out in the same three tags, by different routes: the constant EVALUATOR produces `integer`,
 	// `boolean` and `float` and nothing else (its literals are ints, chars, bools and floats;
-	// `foldIntCompare` yields a bool; `binOpResultTag` yields one of them given two of them), and a field
-	// DEFAULT is a TOKEN-KIND lookup over exactly three literal kinds (`Parser.readFieldDefaultLiteral`;
-	// anything else is `rejectNonLiteralFieldDefault`). So each arm's argument below is stated for the
-	// evaluator — the producer that can reach furthest — and holds a fortiori for the field default,
-	// whose reader admits three token kinds and no expression at all. Hashing the rest "just in case"
-	// would be inventing a key for a value that cannot exist, and the day one can, this is where it must
-	// be decided rather than defaulted.
+	// `foldIntCompare` yields a bool; `binOpResultTag` yields one of them given two of them), and a
+	// LITERAL field DEFAULT is a TOKEN-KIND lookup over exactly three literal kinds
+	// (`Parser.readFieldDefaultLiteral`, entered only after `Parser.defaultRegionIsLiteral` has said the
+	// whole default IS one of those three). So each arm's argument below is stated for the evaluator —
+	// the producer that can reach furthest — and holds a fortiori for the field default. Hashing the
+	// rest "just in case" would be inventing a key for a value that cannot exist, and the day one can,
+	// this is where it must be decided rather than defaulted.
+	//
+	// ⚠ **AN EXPRESSION FIELD DEFAULT NEVER REACHES HERE AT ALL (S2f)** — it is a `FieldDefault.helper`,
+	// which `mixFieldDefault` hashes as a presence bit and never as a value. This door stays the
+	// three-literal question it always was.
 	//
 	// P1.0d.4 takes the invitation the old `float to named` arm left ("a float needs P1.0d.4"):
 	// `let PI = 3.14` and `var ratio = 2.5` are constants now, so a float tag is REACHABLE and gets

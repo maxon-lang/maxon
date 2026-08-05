@@ -817,6 +817,13 @@ export enum CalleeMint
 	// accept `FilePath from "…"` from user code while refusing a written-out `FilePath.init("…")`. The mint
 	// is what tells those two spellings apart — they build the identical callee, so no name-keyed rule can.
 	stringLiteralInit
+	// ⭐ `Bag.create()`'s `Self{}` → `Self{items: __fieldDefault#Bag#items()}`, minted by
+	// `Parser.fillFieldDefaultFromHelper` (S2f). APPENDED at the end of the enum, per the band-append
+	// invariant. It is `paramDefaultHelper` one door over and carries that arm's exact reason: the author
+	// wrote NO call at all — they wrote a struct literal that omitted a field — so `requireCalleeIsNotReservedName`
+	// cannot read "the compiler owns this `__` name" off the name, and a diagnostic quoting the callee would
+	// name a symbol absent from the program (`Project.fieldDefaultCalleeSpelling` is the decode).
+	fieldDefaultHelper
 end 'CalleeMint'
 
 export union MaxonOp

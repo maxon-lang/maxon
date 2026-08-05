@@ -124,7 +124,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2010: <fragment>:4:37: Expected 'end of default value' but got 'identifier'
+error E2010: <fragment>:4:37: Expected 'end of default value' but got 'zzz'
 ```
 
 <!-- test: error-param-default-exponent-without-point -->
@@ -144,5 +144,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2010: <fragment>:4:30: Expected 'end of default value' but got 'identifier'
+error E2010: <fragment>:4:30: Expected 'end of default value' but got 'e100'
 ```

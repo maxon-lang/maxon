@@ -112,6 +112,24 @@ export let CapturingClosureMergeSuffix = "a merge joins its arms through a singl
 // `integerOverflow` / `floatLiteralOverflow`). queryParseOps turns a thrown
 // `ParseError` into a project diagnostic — the parser itself never touches `Project`.
 export union ParseError implements Error
+	// ⭐⭐ **`got` IS `tokenDisplayText`'s AT EVERY RAISER — THE TOKEN'S TEXT, NOT ITS KIND (S2f).** The
+	// reader has to FIND the token this refuses, and `identifier` is not in the file where `zzz` is; a
+	// message naming a spelling the program does not contain is the defect class D11c is on the board for,
+	// stated about a callee and equally true of a token. `tokenDisplayText` is the one door that answers it,
+	// falling back to the kind's own spelling for exactly the tokens that carry no text (every punctuator,
+	// `newline`, EOF) — which is why those pins do not move and read correctly either way.
+	//
+	// ⚠ **THIS WAS WRITTEN THREE WAYS AND THE SUITE WAS GREEN, because the committed expectations had
+	// ENCODED the wrong answers.** Nine raisers passed `tok.kind.rawValue`, two passed
+	// `String.from(tok.value)` (which renders EMPTY for a punctuator), and one passed the helper. MEASURED
+	// against the oracle on identical programs: for `print("{1e100}")` the bootstrap says `but got 'e100'`
+	// and shv2 said `but got 'identifier'` — and `specs/string-interpolation.md`, the canonical definition,
+	// pins `'e100'` at that very line and column while `specs-shv2`'s copy had been retargeted onto shv2's
+	// own wrong answer. Three doors, one question; it is asked once now.
+	//
+	// ⚠ `expected` is deliberately NOT the same question and does NOT go through that helper: it names a
+	// GRAMMATICAL CATEGORY the source has yet to supply (`'identifier'`, `'a type'`, `'end of default
+	// value'`), which no token in the file spells. See `consumeNameToken`'s `NamePosition`.
 	unexpectedToken(expected String, got String, line LineNumber, column ColumnNumber)
 	// A primary expression was required but the token stream had something else
 	// (e.g. an operator where an operand belongs). Distinct from `unexpectedToken`:
@@ -123,6 +141,19 @@ export union ParseError implements Error
 	// path names a MISSING operand as `(empty)` where the general renderer would name the layout token,
 	// and a rendering read off the token at each of the five raisers is one fact written five times.
 	expectedExpression(got String, line LineNumber, column ColumnNumber)
+	// ⭐ **A SHORTHAND FIELD DEFAULT (`var name = <expr>`) THAT IS NOT A BARE LITERAL (S2f)** — an
+	// ANNOTATED field takes an arbitrary expression, and this is the one form that cannot: with no
+	// annotation, the field's type has to be read off the default's raw tokens, and only a literal says
+	// what it is. It carries NO payload because the sentence names no part of the program: what the author
+	// wrote is wrong in KIND, and the cure — add an annotation — is the same words whatever they wrote.
+	// The message is `specs/field-defaults.md`'s, pinned by `missing-type-annotation-errors`, and the
+	// bootstrap emits it verbatim for exactly this input.
+	//
+	// ⚠ **IT NAMES THE ENUM CASE THE BOOTSTRAP ADMITS AND shv2 DOES NOT.** `var level = Priority.low` is
+	// inferable in both references; shv2's shorthand has never read a case, and admitting one is a fresh
+	// inference rule rather than an arm of this one. Naming it in the sentence keeps the message the
+	// language's own rather than this compiler's current reach.
+	uninferrableFieldDefault(line LineNumber, column ColumnNumber)
 	unexpectedEof(line LineNumber, column ColumnNumber)
 	// An integer literal whose magnitude does not fit an i64. `literal` is the token's RAW TEXT —
 	// radix prefix and `_` separators intact — because the diagnostic quotes what the source WROTE
@@ -1554,40 +1585,61 @@ union ClosureParamTypeHint
 	none
 end 'ClosureParamTypeHint'
 
-// One captured parameter default awaiting its helper's parse (BATCH2 slice 4): the helper's name, the
-// parameter's declared type — which is the helper's declared RETURN type — and the token index of the
-// default expression's first token, which is where the drain sets the cursor.
-type PendingParamDefault
-	export let ownerName as ByteArray
-	export let paramIndex as ParamCount
-	export let paramType as MaxonType
+// ⭐⭐ **WHOSE DEFAULT A CAPTURED HELPER PRODUCES — AND IT IS ALSO HOW THE HELPER'S NAME IS KNOWN**, which
+// is the one thing the language's two default doors do differently.
+//
+//   • A PARAMETER's helper is named by the parameter's CALL-ALIGNED POSITION, which the declaration sweep
+//     and the real parse compute from different starting points (an instance method's receiver shifts
+//     every parameter by one). So exactly ONE of them may derive it — the sweep, which must publish it
+//     whole-program anyway — and the drain READS it back (`sweptParamDefaultHelperName`). This arm
+//     therefore carries the inputs of that lookup and no name.
+//   • A FIELD's helper is named by `(type name, field name)` and neither is positional, so the ONE shared
+//     field reader mints the identical name on both walks by construction. It is minted at the
+//     declaration, because the LAYOUT has to carry it too (`FieldDefault.helper`), and the same bytes ride
+//     here rather than being derived a second time.
+union DefaultHelperOwner
+	parameter(ownerName ByteArray, paramIndex ParamCount)
+	field(helperName ByteArray)
+end 'DefaultHelperOwner'
+
+// One captured default awaiting its helper's parse (BATCH2 slice 4 for parameters, S2f for fields): whose
+// default it is, the declared type — which is the helper's declared RETURN type — and the token region the
+// default expression occupies, whose first index is where the drain sets the cursor.
+//
+// ⭐ **ONE LIST FOR BOTH DOORS, because a default value is ONE mechanism.** The drain, the per-function
+// column reset, the `IrFunction` and the end-of-default check are the same for a parameter and a field;
+// only the name and the tier differ, and `DefaultHelperOwner` is exactly those two.
+type PendingDefaultHelper
+	export let owner as DefaultHelperOwner
+	export let declaredType as MaxonType
 	export let exprStart as TokenIndex
-	// The `,` or `)` the CAPTURE skipped to. The drain parses one expression from `exprStart` and must
-	// arrive exactly here: `skipParamDefault` already decided where the author's default ends, so any
-	// gap between the two is text the author wrote and the compiler was about to ignore. Recorded
-	// rather than recomputed at the drain — a second walk is a second answer, and this file has paid
-	// for that twice already (see `sweptParamDefaultHelperName`).
+	// The token the CAPTURE skipped to — the `,`/`)` that ends a parameter default (`skipParamDefault`),
+	// the NEWLINE that ends a field one (`fieldDefaultEnd`). The drain parses one expression from
+	// `exprStart` and must arrive exactly here: the capture already decided where the author's default
+	// ends, so any gap between the two is text the author wrote and the compiler was about to ignore.
+	// Recorded rather than recomputed at the drain — a second walk is a second answer, and this file has
+	// paid for that twice already (see `sweptParamDefaultHelperName`).
 	export let exprEnd as TokenIndex
 
-	export static function create(ownerName ByteArray, paramIndex ParamCount, paramType MaxonType, exprStart TokenIndex, exprEnd TokenIndex) returns PendingParamDefault
-		return Self{ownerName: ownerName, paramIndex: paramIndex, paramType: paramType, exprStart: exprStart, exprEnd: exprEnd}
+	export static function create(owner DefaultHelperOwner, declaredType MaxonType, exprStart TokenIndex, exprEnd TokenIndex) returns PendingDefaultHelper
+		return Self{owner: owner, declaredType: declaredType, exprStart: exprStart, exprEnd: exprEnd}
 	end 'create'
-end 'PendingParamDefault'
+end 'PendingDefaultHelper'
 
-typealias PendingParamDefaultArray = Array with PendingParamDefault
+typealias PendingDefaultHelperArray = Array with PendingDefaultHelper
 
-// The list a file holds until it has declared a parameter default — nearly every file, and every file on
-// the scale corpus. Materialized copy-on-write exactly as `sharedEmptyParamSites` is, and a free function
-// for that binding's stated reason.
-let sharedEmptyPendingParamDefaults = PendingParamDefaultArray.create()
+// The list a file holds until it has declared a default — nearly every file, and every file on the scale
+// corpus. Materialized copy-on-write exactly as `sharedEmptyParamSites` is, and a free function for that
+// binding's stated reason.
+let sharedEmptyPendingDefaultHelpers = PendingDefaultHelperArray.create()
 
-function materializedPendingParamDefaults(pending PendingParamDefaultArray) returns PendingParamDefaultArray
-	if pending is sharedEmptyPendingParamDefaults 'firstDefault'
-		return PendingParamDefaultArray.create()
+function materializedPendingDefaultHelpers(pending PendingDefaultHelperArray) returns PendingDefaultHelperArray
+	if pending is sharedEmptyPendingDefaultHelpers 'firstDefault'
+		return PendingDefaultHelperArray.create()
 	end 'firstDefault'
 
 	return pending
-end 'materializedPendingParamDefaults'
+end 'materializedPendingDefaultHelpers'
 
 // Materialize `rangedParamSites`' list on the FIRST parameter that turns out to be a ranged alias; a
 // list already materialized is returned untouched.
@@ -3332,15 +3384,16 @@ function requireCalleeIsNotReservedName(callee ByteArray, anchor Token, fileDecl
 		return
 	end 'theCompilersOwnPrimitiveStaticMint'
 
-	// ⭐ **THE FOURTH KIND OF EXEMPTION: A PARAMETER DEFAULT'S HELPER (BATCH2 slice 4)** — the
+	// ⭐ **THE FOURTH KIND OF EXEMPTION: A DEFAULT VALUE'S HELPER** — a PARAMETER's (BATCH2 slice 4) or a
+	// FIELD's (S2f), which are one exemption because they are one mechanism and one mistake. It is the
 	// `primitiveStatic` clause one mint over, and conjoined with `declaresCallee` for its exact reason: the
 	// mint says the compiler spelled the callee, and this says the program actually contains that function.
-	// A helper is declared by the SWEEP (`recordScannedParamDefaults` publishes its return type), so a mint
-	// whose helper is absent is a drift between the sweep and the fill and lands here rather than in the
-	// backend.
-	if mint == CalleeMint.paramDefaultHelper and signatures.declaresCallee(callee) 'theCompilersOwnParamDefaultMint'
+	// Both helpers are declared by the SWEEP (`recordScannedParamDefaults` / `recordScannedFieldDefaultHelper`
+	// publish their return types), so a mint whose helper is absent is a drift between the sweep and the
+	// fill and lands here rather than in the backend.
+	if calleeMintIsDefaultHelper(mint) and signatures.declaresCallee(callee) 'theCompilersOwnDefaultHelperMint'
 		return
-	end 'theCompilersOwnParamDefaultMint'
+	end 'theCompilersOwnDefaultHelperMint'
 
 	if fileDeclaresReservedNames and signatures.declaresCallee(callee) 'theReservedSpacesOwnDeclaration'
 		return
@@ -3366,6 +3419,14 @@ function requireCalleeIsNotReservedName(callee ByteArray, anchor Token, fileDecl
 
 	throw ParseError.unknownCompilerIntrinsic(String.from(callee), line: anchor.line, column: anchor.column)
 end 'requireCalleeIsNotReservedName'
+
+// Is this call site's callee a DEFAULT VALUE's synthesized helper — a parameter's or a field's? The two
+// mints are separate because the diagnostic noun each decodes to is different
+// (`SemanticCheck.callDiagnosticNoun`), and every OTHER question about them has one answer, so it is
+// asked once here rather than as two clauses at each door.
+function calleeMintIsDefaultHelper(mint CalleeMint) returns bool
+	return mint == CalleeMint.paramDefaultHelper or mint == CalleeMint.fieldDefaultHelper
+end 'calleeMintIsDefaultHelper'
 
 // ⭐⭐ **THE ONE PLACE A SIGNATURE'S ARGUMENT COUNT IS JUDGED**, asked of the ABI count and of nothing
 // else. `paramCount` is what the calling convention actually passes: the parameters the source writes,
@@ -6922,7 +6983,7 @@ export type Parser
 	// sites point at this paragraph rather than restating it.** Both are per-function state, and both follow
 	// `loops`/`matches` exactly:
 	//
-	//   • **RESET at the start of a function body** (`parseFunction`, `parseParamDefaultHelper`,
+	//   • **RESET at the start of a function body** (`parseFunction`, `parseDefaultHelperBody`,
 	//     `parseClosureExpression`). A stray context would name an error block, a phi and an `IrFunction`
 	//     from the PREVIOUS function, so a routed call would branch across a function boundary. The reset is
 	//     real rather than defensive: a `ParseError` thrown inside a body or a try target skips the pops and
@@ -7357,11 +7418,11 @@ export type Parser
 	var rangeCheckReturnSites as RangeCheckReturnSiteArray
 	var rangeCheckReturnAlias as ByteArray
 	var rangeCheckParamSites as RangeCheckParamSiteArray
-	// ⭐ Parameter defaults captured by this FILE's declarations, awaiting their helpers' parse (BATCH2
-	// slice 4). It is per-FILE and not per-function — deliberately: the helpers are drained once, at
-	// end-of-file, when no declaration is open (see `captureParamDefault`), so it is one of the few parser
-	// lists that must NOT be re-created per function.
-	var pendingParamDefaults as PendingParamDefaultArray
+	// ⭐ Parameter AND field defaults captured by this FILE's declarations, awaiting their helpers' parse
+	// (BATCH2 slice 4; fields from S2f). It is per-FILE and not per-function — deliberately: the helpers are
+	// drained once, at end-of-file, when no declaration is open (see `captureParamDefault`), so it is one of
+	// the few parser lists that must NOT be re-created per function.
+	var pendingDefaultHelpers as PendingDefaultHelperArray
 	// Every function declared ANYWHERE IN THE PROGRAM, with its return type — the whole-program
 	// signature index (SignatureIndex.maxon), built from every file's TOKENS before any file is
 	// parsed and handed to every Parser.
@@ -7861,7 +7922,7 @@ export type Parser
 			rangeCheckReturnSites: RangeCheckReturnSiteArray.create(),
 			rangeCheckReturnAlias: EmptySourceText,
 			rangeCheckParamSites: sharedEmptyParamSites,
-			pendingParamDefaults: sharedEmptyPendingParamDefaults,
+			pendingDefaultHelpers: sharedEmptyPendingDefaultHelpers,
 			signatures: signatures,
 			enclosingType: EmptySourceText,
 			enclosingTypeIsEnum: false,
@@ -7941,9 +8002,9 @@ export type Parser
 		end 'top'
 
 		// ⭐ Every parameter default this file declared becomes a function HERE, with no declaration open
-		// (BATCH2 slice 4) — see `parseParamDefaultHelpers` for why the drain is at the end and why it comes
+		// (BATCH2 slice 4; fields from S2f) — see `parseDefaultHelpers` for why the drain is at the end and why it comes
 		// before the unused-alias report below.
-		try self.parseParamDefaultHelpers()
+		try self.parseDefaultHelpers()
 
 		// ⭐ AT THE END, AND ONLY AT THE END: "is this alias used?" is a question about the WHOLE file, so
 		// it cannot be answered before the last declaration has been read. A file that threw never gets
@@ -10627,10 +10688,14 @@ export type Parser
 			end 'isWhere'
 
 			if depth == 0 and self.atStructFieldKeyword() 'isField'
+				// Captured BEFORE the read so the field's own index is exact rather than derived from a
+				// count that a failed read would leave standing still.
+				let fieldIndex = layout.fieldCount()
 				// A field the sweep cannot read leaves the layout SHORT, which would put every later
 				// field at the wrong offset — so the scan stops rather than recording a layout it
 				// knows is wrong. The real parse reports the malformed declaration properly.
 				try self.readStructFieldInto(layout) otherwise break
+				self.recordScannedFieldDefaultHelper(layout, index: fieldIndex, entries: entries)
 				continue
 			end 'isField'
 
@@ -10660,6 +10725,37 @@ export type Parser
 		structs.push(layout)
 		self.closeTypeParamScope()
 	end 'recordScannedType'
+
+	// ⭐ **PUBLISH A FIELD DEFAULT'S SYNTHESIZED HELPER WHOLE-PROGRAM (S2f)** — the field twin of
+	// `recordScannedParamDefaults`' `entries.push`, and it is on this walk for that routine's exact reason:
+	// the helper's RETURN TYPE is what the site that CALLS it needs to type the call it emits
+	// (`mintCallResult`), and that site — `applyFieldDefaults`, inside a `Self{…}` — is reached by the real
+	// parse long before the drain declares the helper's body. Only the sweep can answer ahead of it.
+	//
+	// It reads the LAST-READ field rather than being handed the facts, because `readStructFieldInto` is the
+	// one shared field reader and must stay one: a second out-parameter on it would be a second place a
+	// field's declared type is stated, and the layout it just wrote already holds every fact needed here.
+	//
+	// ⚠ **THE RETURN TYPE IS THE FIELD'S DECLARED TYPE AND THE SURFACE IS THE FIELD'S DECLARED SPELLING**,
+	// both taken from that one write. That is what makes `var buf as __ManagedMemory = makeBuffer()` hand
+	// its `Self{}` a value bearing the BUFFER's member roster (A2j / A2m) — hardcoded plain, the default
+	// would arrive wearing `Array`'s.
+	//
+	// ⚠ **THE TIER IS `file`, AND IT IS THE SAME `file` `parseDefaultHelper` STAMPS ON THE `IrFunction`** —
+	// deliberately, because a helper's tier is asked of two different registries (this one through
+	// `calleeVisibilityFrom`, the `IrFunction`'s through `SemanticCheck.calleeVisibleFrom`) and one
+	// declaration must not answer two ways. It is TRUE rather than merely consistent: a struct literal may
+	// only be written inside the type's own body, so every call is in the declaring file. Neither reader can
+	// actually reach it — a minted callee is exempt from both — which is exactly why a disagreement here
+	// would have gone unnoticed.
+	function recordScannedFieldDefaultHelper(layout StructLayout, index FieldIndex, entries FuncReturnTypeEntryArray)
+		match layout.fieldDefault(index) 'declared'
+			// A field with no default, and a LITERAL one, declare no function: the literal is emitted
+			// straight into the box (`Parser.fillFieldDefault`) and there is nothing to call.
+			none to literal then return
+			helper(helperName) then entries.push(FuncReturnTypeEntry.create(helperName, returnType: MaxonReturnType.value(try layout.fieldTypes.get(index) otherwise panic("recordScannedFieldDefaultHelper: fieldTypes.get OOB at {index} for `type {String.from(layout.name)}`, whose field was just written by `readStructFieldInto`")), declaredSurface: layout.fieldDeclaredSurface(index), visibility: Visibility.file))
+		end 'declared'
+	end 'recordScannedFieldDefaultHelper'
 
 	// ⭐ **CONSUME A WHOLE `interface` DECLARATION IN THE TOLERANT SWEEP (P1.7a slice 1)** — the twin of
 	// `recordScannedType`/`recordScannedEnum`, and it MUST walk the body itself for a sharp reason: an
@@ -11296,9 +11392,13 @@ export type Parser
 	// **THE THREE LEGAL SHAPES**, and the `as` is what tells them apart:
 	//
 	//   1. `export var x as Integer`     — annotated, no default. A literal must supply it (E3086).
-	//   2. `export var x = 0`            — the literal supplies BOTH the value and the TYPE.
-	//   3. `export var x as Integer = 0` — annotated AND defaulted; the literal is checked against
-	//                                      the annotation.
+	//   2. `export var x = 0`            — the default supplies BOTH the value and the TYPE, so it must
+	//                                      BE a literal; anything else is E2004 (S2f).
+	//   3. `export var x as Integer = 0` — annotated AND defaulted. The annotation is the type, so the
+	//                                      default may be ANY expression (S2f): a literal is checked
+	//                                      against the annotation here, and everything else becomes a
+	//                                      synthesized nullary helper checked by the ordinary `return`
+	//                                      rules (`FieldDefault.helper`).
 	//
 	// Neither `as` nor `=` is E2010 — the `consume(equals)` below reporting the token it wanted.
 	//
@@ -11334,7 +11434,18 @@ export type Parser
 		if not self.at(TokenKind.as) 'typeFromLiteral'
 			// Shape 2. There is no annotation to read the type off, so the literal's TOKEN KIND is
 			// the whole of the type inference — see `readFieldDefaultLiteral`.
+			let inferrableEnd = self.fieldDefaultEnd(self.pos)
 			try self.consume(TokenKind.equals)
+			// ⭐ **AND THAT IS WHY THE SHORTHAND ADMITS ONLY A BARE LITERAL (S2f).** An annotated field takes
+			// an arbitrary expression, because the annotation says what the expression must produce; here
+			// there is no annotation, and a type read off the raw tokens of `IntArray.create()` or `7 + 1`
+			// would be a guess. So anything that is not exactly a literal earns E2004 — see
+			// `ParseError.uninferrableFieldDefault` — positioned at the default's first token, which is
+			// where the annotation would have to be added to make it legal.
+			if not self.defaultRegionIsLiteral(self.pos, regionEnd: inferrableEnd) 'uninferrable'
+				let uninferrableTok = self.current()
+				throw ParseError.uninferrableFieldDefault(uninferrableTok.line, column: uninferrableTok.column)
+			end 'uninferrable'
 			let inferred = try self.readFieldDefaultLiteral()
 			// Shape 2 has no annotation at all, so no spelling can name the buffer alias (A2j); the type
 			// comes from a LITERAL, and no literal produces a `__ManagedMemory`.
@@ -11366,21 +11477,140 @@ export type Parser
 			return
 		end 'noDefault'
 
-		// Shape 3. The ANNOTATION is the field's type and the literal must agree with it: `as
+		// Shape 3. The ANNOTATION is the field's type and the default must agree with it: `as
 		// Integer = 50.0` is the same lossy coercion `var x as Integer` then `x = 50.0` is, so it
 		// asks the same rule (`requireAssignable`) rather than a second opinion about floats.
 		//
+		// ⭐⭐ **AND WITH AN ANNOTATION IN HAND THE DEFAULT MAY BE ANY EXPRESSION (S2f), WHICH IS THE ONE
+		// FORM THAT DOES NOT COME BACK THROUGH THIS LINE.** It becomes a synthesized nullary function whose
+		// body is `return <the expression>` (`FieldDefault.helper`), so the annotation binds it by the
+		// ordinary `return` rules — `as Integer = "x"` is an ordinary return-type mismatch, `as Real = 3` an
+		// ordinary widening — with no rule written twice. The LITERAL form deliberately stays here; see
+		// `fillFieldDefault` for the one thing a helper cannot do.
+		try self.requireDefaultableFieldType(nameTok, layout: layout, fieldType: fieldType)
+
+		let defaultEnd = self.fieldDefaultEnd(self.pos)
+		try self.consume(TokenKind.equals)
+
+		if not self.defaultRegionIsLiteral(self.pos, regionEnd: defaultEnd) 'anExpression'
+			let helperName = self.captureFieldDefault(layout.name, fieldName: nameTok.value, fieldType: fieldType, regionEnd: defaultEnd)
+			layout.addField(nameTok.value, declaredType: fieldType, mutable: mutable, tier: visibility, defaultValue: FieldDefault.helper(helperName), declaredSurface: declaredSurface)
+			return
+		end 'anExpression'
+
 		// **THE LITERAL IS RECORDED EXACTLY AS WRITTEN — payload AND tag, unconverted.** The widening a
 		// `float` field's `= 3` needs is paid at the ONE place a default becomes a value
 		// (`fillFieldDefault`), off the tag recorded here. It cannot be paid at this line: the declaration
 		// SWEEP shares this reader and may not resolve `fieldType` when it is a ranged-alias NAME, yet it is
 		// the SWEEP's layout a `Self{…}` reads its defaults out of — so a conversion decided here would be
 		// decided blind for exactly the fields that need it, and written into the wrong copy besides.
-		try self.consume(TokenKind.equals)
 		let given = try self.readFieldDefaultLiteral()
 		try self.requireFieldDefaultType(nameTok, fieldType: fieldType, given: given)
 		layout.addField(nameTok.value, declaredType: fieldType, mutable: mutable, tier: visibility, defaultValue: FieldDefault.literal(given.payload, tag: given.tag), declaredSurface: declaredSurface)
 	end 'readStructFieldInto'
+
+	// ⛔⛔ **A FIELD DECLARED AT A TYPE PARAMETER MAY NOT CARRY A DEFAULT — OF EITHER FORM (S2f).** `type Box
+	// uses T … var value as T = <anything>` is not a missing feature: a default is produced ONCE, from this
+	// type's SHARED body, where `T` is an opaque 8-byte word. No literal and no expression in that body can
+	// produce a value OF `T` — the concrete type is not known until an instantiation, and two instantiations
+	// may pick different ones — so whatever the default produces is stored into a slot whose real type
+	// somebody else decides later.
+	//
+	// ⚠⚠ **MEASURED, AND IT IS A MEMORY-SAFETY BUG IN BOTH COMPILERS, WHICH IS WHY THE ORACLE IS NOT
+	// FOLLOWED HERE.** `type Box uses T … var value as T = makeIt()` (returning an `Integer`) instantiated as
+	// `Box with String` COMPILED on both, and on both the field read then treated the integer 9 as a String
+	// record: shv2 access-violated (`0xC0000005`), the bootstrap panicked inside `mm_incref` at address `0x1`.
+	// The LITERAL form (`as T = 0`) is the identical fault and PRE-DATES this rung, which is why the refusal
+	// is written here — against the field's declared TYPE, before either default form is read — rather than
+	// on the expression arm alone. One rule, one place, both forms.
+	//
+	// It refuses at the `=`, because the `=` is what has to go: the field itself is perfectly legal, and the
+	// cure is either a concrete type or a value supplied at each `Self{…}`.
+	//
+	// ⚠ Thrown from the SHARED field reader, so the tolerant sweep swallows it (`otherwise break`) and the
+	// real parse raises it with a position — `requireUnreservedName`'s arrangement, three lines up.
+	function requireDefaultableFieldType(nameTok Token, layout StructLayout, fieldType MaxonType) throws ParseError
+		if maxonTypeTag(fieldType) != ValueTypeTag.typeParameter 'aConcreteSlot'
+			return
+		end 'aConcreteSlot'
+
+		let paramName = String.from(self.enclosingTypeParamName(typeNameIdOf(fieldType)))
+		let eqTok = self.current()
+		throw ParseError.unsupported("a default value on field '{String.from(nameTok.value)}' of `type {String.from(layout.name)}`, whose declared type is the type parameter '{paramName}' — a default is produced by a function compiled ONCE from this type's shared body, where '{paramName}' is an opaque word, so nothing written there can produce a value of it, and each instantiation may bind it to a different type. Declare the field at a concrete type, or give it a value at every struct literal of '{String.from(layout.name)}'", line: eqTok.line, column: eqTok.column)
+	end 'requireDefaultableFieldType'
+
+	// ⭐⭐ **WHERE A FIELD DEFAULT ENDS — AT THE END OF ITS LINE, AND THAT CHOICE IS WHAT MAKES A TRAILING
+	// TOKEN REPORTABLE AT ALL (S2f).** `skipParamDefault` answers the same question for a PARAMETER, where
+	// the terminator is the `,` or `)` the list supplies; a field declaration has no such punctuation, so
+	// the line is the extent. `var v as Integer = 7 zzz` therefore has a default region of two tokens, the
+	// expression parser consumes one, and the drain's end-of-default check reports the other
+	// (`parseDefaultHelperBody`) rather than leaving `v` silently initialized to 7.
+	//
+	// ⚠ It counts no brackets, and does not need to: it stops at the FIRST newline whatever the nesting,
+	// which is exactly the rule the language already applies to every other declaration and statement — a
+	// field declaration is one line. A default that wanted to span lines would need a continuation syntax
+	// the language does not have, so there is nothing here to be tolerant of.
+	//
+	// The cursor is AT the `=`; the answer is an index into the token stream, never a cursor move.
+	function fieldDefaultEnd(fromEquals TokenIndex) returns TokenIndex
+		var q = fromEquals + 1
+		while self.kindAt(q) != TokenKind.newline and self.kindAt(q) != TokenKind.eof 'scan'
+			q = q + 1
+		end 'scan'
+		return q
+	end 'fieldDefaultEnd'
+
+	// ⭐ **IS THE DEFAULT OCCUPYING `[start, regionEnd)` EXACTLY A LITERAL — `5`, `50.0`, `true`, optionally
+	// signed — AND NOTHING ELSE?** THE dispatch between a field default's two forms, asked once per
+	// defaulted field, before either reader runs. It is a TOKEN-SHAPE test and can be nothing else: the
+	// answer decides which of the two doors reads the tokens, so it must be decidable without reading them.
+	//
+	// ⚠ **THE WHOLE REGION MUST BE THE LITERAL, WHICH IS WHY IT COMPARES AGAINST `regionEnd`.** `= 7 + 1`
+	// opens with a literal token and is not one, and taking the literal door on the strength of the first
+	// token would consume the `7` and abandon the rest — the exact silent-drop this rung exists to close.
+	//
+	// ⚠ **A LEADING `-` IS A SIGN, AND ONLY A NUMBER HAS ONE.** `-true` is not a signed literal, it is a
+	// negation applied to a bool: an EXPRESSION, which the annotated door hands to a helper (where it earns
+	// the ordinary type error) and the shorthand door refuses as uninferrable. Before this rung that case
+	// had a refusal of its own inside the literal reader, which was the same rule stated in a second place.
+	function defaultRegionIsLiteral(start TokenIndex, regionEnd TokenIndex) returns bool
+		var q = start
+		var signed = false
+		if self.kindAt(q) == TokenKind.minus 'sign'
+			signed = true
+			q = q + 1
+		end 'sign'
+
+		let kind = self.kindAt(q)
+		let isNumber = kind == TokenKind.intLiteral or kind == TokenKind.floatLiteral
+		let isBool = kind == TokenKind.true or kind == TokenKind.false
+		if not (isNumber or (isBool and not signed)) 'notALiteralToken'
+			return false
+		end 'notALiteralToken'
+
+		return (q + 1) as TokenIndex == regionEnd
+	end 'defaultRegionIsLiteral'
+
+	// Capture one field's `= <expression>` for the drain and leave the cursor at the token that ENDS it, so
+	// the field reader resumes exactly as it would have without a default. The cursor arrives just PAST the
+	// `=`. It answers the helper's NAME, because the LAYOUT must carry the same bytes
+	// (`FieldDefault.helper`) — minted once, here, and handed to both.
+	//
+	// ⚠ **THE DECLARATION SWEEP CAPTURES TOO, AND THAT IS DELIBERATE RATHER THAN AN OVERSIGHT.**
+	// `readStructFieldInto` is SHARED by the tolerant sweep and the real parse (its header says why it must
+	// be), and only the real parse ever DRAINS — `parseModule` is the sole drain site, and a Parser used for
+	// a sweep never reaches it, so the sweep's captures are discarded with the sweep's Parser. Gating this
+	// on "which pass am I?" would put a second answer to that question in this file; the first is
+	// `requireFieldDefaultType`'s `allFilesFolded`, and it is about something else entirely (whether the
+	// INDEX is complete). The cost is one record per defaulted field on a walk that already builds a
+	// `StructLayout` per type.
+	function captureFieldDefault(typeName ByteArray, fieldName ByteArray, fieldType MaxonType, regionEnd TokenIndex) returns ByteArray
+		let helperName = fieldDefaultHelperName(typeName, fieldName: fieldName)
+		self.pendingDefaultHelpers = materializedPendingDefaultHelpers(self.pendingDefaultHelpers)
+		self.pendingDefaultHelpers.push(PendingDefaultHelper.create(DefaultHelperOwner.field(helperName), declaredType: fieldType, exprStart: self.pos, exprEnd: regionEnd))
+		self.pos = regionEnd
+		return helperName
+	end 'captureFieldDefault'
 
 	// ⭐ **THE VERDICT ON A FIELD'S LITERAL DEFAULT, ASKED ONLY WHERE IT CAN BE ANSWERED.** `as Integer =
 	// 50.0` is the same lossy coercion `var x as Integer` then `x = 50.0` is, so it is the same
@@ -11420,6 +11650,10 @@ export type Parser
 	// The three literal DECODERS are the emitting path's own (`intLiteralValue`, `__float_bitsFromText`,
 	// `BoolTrueValue`) — the same ones `evalConstIntLiteral` and friends call, for their stated
 	// reason: a field default must read a literal exactly as a function body reads it.
+	// ⚠ **ITS PRECONDITION IS `defaultRegionIsLiteral`, AND THE FINAL PANIC IS WHAT SAYS SO.** Both callers
+	// ask that question first, because the ANSWER decides which door reads the tokens at all; reaching the
+	// bottom of this function means the classifier and the reader disagree about what a literal is, which is
+	// a compiler defect and not a program the source can write.
 	function readFieldDefaultLiteral() returns ConstValue throws ParseError
 		let negated = self.at(TokenKind.minus)
 		if negated 'signed'
@@ -11437,43 +11671,17 @@ export type Parser
 			return ConstValue.create(negatedFloatBits(bits) if negated else bits, tag: ValueTypeTag.float)
 		end 'floatLit'
 
+		// `= true` / `= false`. It cannot be NEGATED here — `defaultRegionIsLiteral` refuses a signed bool
+		// as the expression it is — so no second refusal is written for it.
 		if self.at(TokenKind.true) or self.at(TokenKind.false) 'boolLit'
-			return try self.readBoolFieldDefault(negated)
+			let isTrue = self.at(TokenKind.true)
+			self.advance()
+			return ConstValue.create(BoolTrueValue if isTrue else BoolFalseValue, tag: ValueTypeTag.boolean)
 		end 'boolLit'
 
-		// Everything else — `= pick()`, `= 2 + 3`, `= OTHER`. See `rejectNonLiteralFieldDefault`.
-		throw self.rejectNonLiteralFieldDefault()
+		panic("readFieldDefaultLiteral: the default at token {self.pos} is not a literal, but `defaultRegionIsLiteral` said it was — the classifier that routes a field default and the reader that decodes it have come apart on which token kinds a literal is")
 	end 'readFieldDefaultLiteral'
 
-	// `= true` / `= false`. A leading `-` is not a sign here — there is no negative bool — so it is
-	// rejected as the non-literal it is rather than silently ignored.
-	function readBoolFieldDefault(negated bool) returns ConstValue throws ParseError
-		if negated 'negatedBool'
-			throw self.rejectNonLiteralFieldDefault()
-		end 'negatedBool'
-
-		let isTrue = self.at(TokenKind.true)
-		self.advance()
-		return ConstValue.create(BoolTrueValue if isTrue else BoolFalseValue, tag: ValueTypeTag.boolean)
-	end 'readBoolFieldDefault'
-
-	// ⚠ **A NON-LITERAL DEFAULT IS DEFERRED, AND IT IS DEFERRED LOUDLY** — positioned at the token
-	// that is not a literal, naming the mechanism that is missing.
-	//
-	// ⚠ **THIS OVER-REJECTS, DELIBERATELY. THE BOOTSTRAP ACCEPTS IT** (measured: `export var x as
-	// Integer = pick()` compiles, and the field arrives holding 4). A default is an arbitrary
-	// expression there, evaluated at CONSTRUCTION — v1 implements it by synthesizing a nullary
-	// `__field_init_*` function per default and splicing a call into every literal
-	// (Parser.maxon:15885-15893). That machinery needs the initializer captured at the declaration
-	// and replayed at each construction site, and it has ZERO reachable consumers at this rung:
-	// every corpus case that wants it also wants Array (P1.7), String (P1.2) or a struct-typed
-	// field. Building it now would be a mechanism with no consumer — this ladder's founding error,
-	// made four times on P1.0r — so the rung takes the literal every enabled case actually needs,
-	// and says plainly that the rest is not here yet.
-	function rejectNonLiteralFieldDefault() returns ParseError
-		let tok = self.current()
-		return ParseError.unsupported("'{tok.kind.rawValue}' as a field default (only a LITERAL default is parsed — `= 5`, `= 50.0`, `= true`, optionally signed. An arbitrary expression is evaluated once per struct literal, which needs the initializer captured at the declaration and replayed at every literal that omits the field, and arrives with the rung that has a case needing one)", line: tok.line, column: tok.column)
-	end 'rejectNonLiteralFieldDefault'
 
 	// The index of the `)` that closes the balanced `( … )` group opening at `index`, or the EOF token's
 	// index when the stream holds no matching one. Depth-counted rather than "scan to the first `)`"
@@ -12148,10 +12356,14 @@ export type Parser
 	// again per malformed-looking INSTANCE, linear in the program's generic declarations. Spending it to
 	// produce an answer that is thrown away — and would be wrong if it were not — is the whole of the cost.
 	//
-	// ⚠ **It also sidesteps the bootstrap's 64-managed-case union limit** (`ParseError` sits at exactly 64
-	// String-carrying arms — a 65th overflows the C# runtime's u64 droppable-case bitmask and corrupts the
-	// synthesized `__destruct_ParseError`). A diagnostic carries its message on a `Diagnostic` record, not
-	// a new `ParseError` arm, so it adds no managed union case. (See the rung report / DEVLOG.)
+	// ⛔ **THIS COMMENT USED TO CLAIM A SECOND REASON — A 64-MANAGED-CASE UNION LIMIT — AND THAT CLAIM IS
+	// MEASURED FALSE.** It said `ParseError` sat at exactly 64 String-carrying arms and that a 65th would
+	// overflow the C# runtime's u64 droppable-case bitmask. `ParseError` passed 64 long ago (A2w measured 96
+	// and added the 97th; S2f added the 98th, `uninferrableFieldDefault`), and every suite has stayed green.
+	// It is struck out rather than quietly deleted because the false version COST A DESIGN: A2w's implementer
+	// recorded a diagnostic instead of throwing, specifically to avoid "a 97th arm", and the recorded one was
+	// swallowed by `abortedParseArtifact`. The reason above stands entirely on its own — a diagnostic nobody
+	// reads is not free — and needs no help from a limit that is not there.
 	function readGenericInstanceAlias(aliasTok Token, genericOut GenericAliasEntryArray, visibility Visibility) throws ParseError
 		let baseTok = try self.consume(TokenKind.identifier)
 		try self.consume(TokenKind.with)
@@ -12920,7 +13132,7 @@ export type Parser
 			// existing laxness rather than adding a validation the int path does not have).
 			value(bound) then return ParsedRangeBound.qualified(bound, qualifier: typeTok.value, isMax: wantMax)
 			floatBound(bits) then return ParsedRangeBound.qualified(try floatBoundInFloatAlias(bits, isFloat: isFloat, typeTok: typeTok, fieldTok: fieldTok), qualifier: typeTok.value, isMax: wantMax)
-			notASizedType then throw ParseError.unexpectedToken("a sized numeric type (u8/u16/u32/u64/i8/i16/i32/i64/f32/f64)", got: String.from(typeTok.value), line: typeTok.line, column: typeTok.column)
+			notASizedType then throw ParseError.unexpectedToken("a sized numeric type (u8/u16/u32/u64/i8/i16/i32/i64/f32/f64)", got: tokenDisplayText(typeTok), line: typeTok.line, column: typeTok.column)
 		end 'resolve'
 	end 'parseTypeQualifiedBound'
 
@@ -12933,7 +13145,7 @@ export type Parser
 		if fieldTok.value.equals(MinBoundField) 'min'
 			return false
 		end 'min'
-		throw ParseError.unexpectedToken("'min' or 'max'", got: String.from(fieldTok.value), line: fieldTok.line, column: fieldTok.column)
+		throw ParseError.unexpectedToken("'min' or 'max'", got: tokenDisplayText(fieldTok), line: fieldTok.line, column: fieldTok.column)
 	end 'boundFieldIsMax'
 
 	// Parse a struct type declaration (P1.0r):
@@ -14030,7 +14242,7 @@ export type Parser
 
 		if not self.at(TokenKind.function) 'notFunction'
 			let tok = self.current()
-			throw ParseError.unexpectedToken(TokenKind.function.rawValue, got: tok.kind.rawValue, line: tok.line, column: tok.column)
+			throw ParseError.unexpectedToken(TokenKind.function.rawValue, got: tokenDisplayText(tok), line: tok.line, column: tok.column)
 		end 'notFunction'
 
 		try self.parseFunction(visibility, takesReceiver: not isStatic)
@@ -14806,7 +15018,7 @@ export type Parser
 
 			// ⭐ **A DEFAULT VALUE IS CAPTURED, NOT PARSED HERE (BATCH2 slice 4)** — its expression becomes the
 			// whole body of a synthesized nullary helper, parsed at the END of the file by
-			// `parseParamDefaultHelpers`, and the call site emits a call to that helper for every argument it
+			// `parseDefaultHelpers`, and the call site emits a call to that helper for every argument it
 			// omits (see `SignatureIndex.ParamDefaultInfo` for the mechanism and why it is a function).
 			//
 			// ⚠ **IT IS DEFERRED TO END-OF-FILE RATHER THAN PARSED IN PLACE, AND THAT IS THE WHOLE REASON
@@ -14930,14 +15142,15 @@ export type Parser
 		end 'twoDeclarationsOfOneName'
 
 		// ⚠ **THE HELPER'S NAME IS NOT MINTED HERE — IT IS READ BACK FROM THE SWEEP AT THE DRAIN**
-		// (`parseParamDefaultHelper`). The sweep is the mechanism's ONE mint, because it is the mint a CALL
+		// (`parseDefaultHelper`). The sweep is the PARAMETER mint's one home, because it is the mint a CALL
 		// SITE in another file must be able to see; a second one here would be the same name derived twice,
 		// and the only input the two could disagree on — the parameter's index — is exactly what they did
 		// disagree on when this was written that way. Reading it turns the agreement into a lookup that
-		// either finds the sweep's answer or says so.
+		// either finds the sweep's answer or says so. (A FIELD default's name IS minted at its capture, and
+		// safely — see `DefaultHelperOwner` for the property a field name has that a position does not.)
 		let exprEnd = self.skipParamDefault(self.pos)
-		self.pendingParamDefaults = materializedPendingParamDefaults(self.pendingParamDefaults)
-		self.pendingParamDefaults.push(PendingParamDefault.create(ownerName, paramIndex: paramIndex, paramType: paramType, exprStart: (self.pos + 1) as TokenIndex, exprEnd: exprEnd))
+		self.pendingDefaultHelpers = materializedPendingDefaultHelpers(self.pendingDefaultHelpers)
+		self.pendingDefaultHelpers.push(PendingDefaultHelper.create(DefaultHelperOwner.parameter(ownerName, paramIndex: paramIndex), declaredType: paramType, exprStart: (self.pos + 1) as TokenIndex, exprEnd: exprEnd))
 		self.pos = exprEnd
 	end 'captureParamDefault'
 
@@ -14952,30 +15165,33 @@ export type Parser
 		end 'owner'
 	end 'paramDefaultOwnerName'
 
-	// ⭐ **PARSE EVERY CAPTURED PARAMETER DEFAULT AS ITS OWN FUNCTION** (BATCH2 slice 4) — the drain, run
-	// once at the end of `parseModule`, when the last top-level declaration has closed and NO function is
-	// open. That timing is the whole design: see `parseFunctionParameters`' capture site for why parsing a
-	// helper in place would be `parseClosureExpression`'s ~25-alias save/restore, and why draining here needs
-	// none of it.
+	// ⭐ **PARSE EVERY CAPTURED DEFAULT AS ITS OWN FUNCTION** (BATCH2 slice 4; fields from S2f) — the drain,
+	// run once at the end of `parseModule`, when the last top-level declaration has closed and NO function
+	// is open. That timing is the whole design: see `parseFunctionParameters`' capture site for why parsing
+	// a helper in place would be `parseClosureExpression`'s ~25-alias save/restore, and why draining here
+	// needs none of it. A FIELD default needs it for a second reason of its own: a `Self{}` written ABOVE
+	// the field it defaults must still get that default (`field-defaults.method-before-field`), and a drain
+	// at end-of-file is the only point at which declaration ORDER inside a type body cannot matter.
 	//
 	// It runs BEFORE `reportUnusedTypeAliases`, because a default expression can be the only USE of an alias
 	// in its file (`items IntArray = [1, 2, 3]` names `IntArray` in the type, but `let n = Count.max` in a
 	// default names one nothing else need mention). Reported first, that alias would be called unused on the
 	// strength of code the parser had not read yet.
 	//
-	// ⚠ The list cannot grow while it is drained: the only construct inside a default expression that parses
-	// a parameter list at all is a CLOSURE literal, and `captureParamDefault` refuses a default there.
-	function parseParamDefaultHelpers() throws ParseError
-		if self.pendingParamDefaults.isEmpty() 'noDefaults'
+	// ⚠ The list cannot grow while it is drained. A parameter default can only reach a parameter list
+	// through a CLOSURE literal, and `captureParamDefault` refuses a default there; a field default can only
+	// be captured from a `type` body, and an expression declares no type.
+	function parseDefaultHelpers() throws ParseError
+		if self.pendingDefaultHelpers.isEmpty() 'noDefaults'
 			return
 		end 'noDefaults'
 
 		let resume = self.pos
-		for pending in self.pendingParamDefaults 'eachDefault'
-			try self.parseParamDefaultHelper(pending)
+		for pending in self.pendingDefaultHelpers 'eachDefault'
+			try self.parseDefaultHelper(pending)
 		end 'eachDefault'
 		self.pos = resume
-	end 'parseParamDefaultHelpers'
+	end 'parseDefaultHelpers'
 
 	// The name the SWEEP published for this captured default — the mechanism's one mint, read back rather
 	// than re-derived (see `captureParamDefault`). It panics rather than falling back to a fresh mint,
@@ -14988,28 +15204,44 @@ export type Parser
 	// parse has already captured from); asked at the capture, that would panic ahead of the positioned
 	// diagnostic the real parse is about to raise for the same malformed declaration. Asked here, a file
 	// whose parse throws never reaches the drain at all.
-	function sweptParamDefaultHelperName(pending PendingParamDefault) returns ByteArray
-		match self.signatures.defaultsOf(pending.ownerName) 'swept'
+	function sweptParamDefaultHelperName(ownerName ByteArray, paramIndex ParamCount) returns ByteArray
+		match self.signatures.defaultsOf(ownerName) 'swept'
 			allRequired then break 'swept'
-			defaults(info) then return self.requireSweptHelperName(info.helperFor(pending.paramIndex), pending: pending)
+			defaults(info) then return self.requireSweptHelperName(info.helperFor(paramIndex), ownerName: ownerName, paramIndex: paramIndex)
 		end 'swept'
 
-		return self.requireSweptHelperName(EmptySourceText, pending: pending)
+		return self.requireSweptHelperName(EmptySourceText, ownerName: ownerName, paramIndex: paramIndex)
 	end 'sweptParamDefaultHelperName'
 
 	// The panic the lookup above owes when the sweep has no name at the position the parse captured — one
 	// sentence for both ways that happens (no entry for the function at all, or an entry with nothing at
 	// this position), because they are one defect: the two walks of one parameter list have come apart.
-	function requireSweptHelperName(helperName ByteArray, pending PendingParamDefault) returns ByteArray
+	function requireSweptHelperName(helperName ByteArray, ownerName ByteArray, paramIndex ParamCount) returns ByteArray
 		if helperName.isEmpty() 'sweepRecordedNoDefaultHere'
-			panic("sweptParamDefaultHelperName: '{String.from(pending.ownerName)}' declares a default on CALL-ALIGNED parameter {pending.paramIndex}, and the declaration sweep published no helper at that position — `recordScannedParamDefaults` and `parseFunctionParameters` walk the same parameter list and have come apart on whether it holds a `=`, or on where the parameter sits in it")
+			panic("sweptParamDefaultHelperName: '{String.from(ownerName)}' declares a default on CALL-ALIGNED parameter {paramIndex}, and the declaration sweep published no helper at that position — `recordScannedParamDefaults` and `parseFunctionParameters` walk the same parameter list and have come apart on whether it holds a `=`, or on where the parameter sits in it")
 		end 'sweepRecordedNoDefaultHere'
 
 		return helperName
 	end 'requireSweptHelperName'
 
-	// One helper: `function __paramDefault#<callee>#<i>() returns <the parameter's type>` whose entire body
-	// is `return <the default expression>`.
+	// ⭐ **THE NAME AND THE TIER — the ONLY two things a parameter default's helper and a field default's
+	// helper differ in.** Everything else about them is one function (`parseDefaultHelperBody`), which is
+	// what "a default value is a synthesized nullary function" means when it is said once instead of twice.
+	function parseDefaultHelper(pending PendingDefaultHelper) throws ParseError
+		match pending.owner 'owner'
+			// ⭐ GLOBAL: a defaulted parameter of an `export function` is omitted by call sites in OTHER
+			// files, and each of them emits a call to this helper by name.
+			parameter(ownerName, paramIndex) then try self.parseDefaultHelperBody(self.sweptParamDefaultHelperName(ownerName, paramIndex: paramIndex), visibility: Visibility.global, pending: pending)
+			// ⭐ FILE, and the difference from the parameter tier is a real fact rather than caution: a struct
+			// literal may only be written inside the type's OWN body (`requireConstructible`'s E3076), so
+			// every call to a field default's helper is in the file that declares the type. A lifted closure
+			// is published the same way for the same reason.
+			field(helperName) then try self.parseDefaultHelperBody(helperName, visibility: Visibility.file, pending: pending)
+		end 'owner'
+	end 'parseDefaultHelper'
+
+	// One helper: `function <the minted name>() returns <the declared type>` whose entire body is
+	// `return <the default expression>`.
 	//
 	// Every per-function column is re-created exactly as `parseFunction` re-creates it at its own entry, and
 	// for its stated reason — a stray entry carried in from the previous function would name a value in that
@@ -15018,15 +15250,15 @@ export type Parser
 	//
 	// The body goes through `parseCheckedValueReturn`, so the default meets every rule a `return` meets —
 	// which is what makes `name String = 42` an ordinary return-type mismatch and `factor Number = 2` an
-	// ordinary widening, with no rule written twice.
-	function parseParamDefaultHelper(pending PendingParamDefault) throws ParseError
-		let helperName = self.sweptParamDefaultHelperName(pending)
+	// ordinary widening, with no rule written twice. That is exactly as true of a FIELD's `as Integer =
+	// "x"`, which is why the field door needed no type rule of its own.
+	function parseDefaultHelperBody(helperName ByteArray, visibility Visibility, pending PendingDefaultHelper) throws ParseError
 		self.pos = pending.exprStart
 		let anchor = self.current()
-		// Resolved HERE rather than at the capture: a `named` parameter type is re-tagged `structRef` only
+		// Resolved HERE rather than at the capture: a `named` declared type is re-tagged `structRef` only
 		// once the whole-program struct registry is complete, which at capture time — mid-declaration, and
 		// possibly above the `type` being named — it is not.
-		let returnType = self.resolveNamedStructReturn(MaxonReturnType.value(pending.paramType))
+		let returnType = self.resolveNamedStructReturn(MaxonReturnType.value(pending.declaredType))
 
 		self.scope = Scope.create()
 		self.valueIds = ValueIdRef.create(0 as ParamCount)
@@ -15074,16 +15306,16 @@ export type Parser
 		self.rangeCheckSites = RangeCheckSiteArray.create()
 		self.rangeCheckArgSites = RangeCheckArgSiteArray.create()
 		self.rangeCheckReturnSites = RangeCheckReturnSiteArray.create()
-		// A ranged-alias parameter type makes the helper a ranged-RETURN function, so the default is guarded
+		// A ranged-alias declared type makes the helper a ranged-RETURN function, so the default is guarded
 		// by the P1.9 entry check exactly as `return <expr>` from such a function is — which is precisely the
-		// check the parameter itself would otherwise owe.
+		// check the parameter (or the field) itself would otherwise owe.
 		self.rangeCheckReturnAlias = self.rangedReturnAliasName(returnType)
 		self.rangeCheckParamSites = sharedEmptyParamSites
 
 		var helper = IrFunction.create(helperName, maxonReturnType: returnType, paramCount: 0, maxonParamTypes: MaxonTypeArray.create(), valueTags: self.valueTags, valueNameIds: self.valueNameIds, valueClosureEnv: self.valueClosureEnv, valueIsCapturingClosure: self.valueIsCapturingClosure, valueWitnessIds: self.valueWitnessIds, returnLine: anchor.line, declaredAt: SourcePosition.declaredAt(self.filePath, nameTok: anchor), throwsTypeName: ThrowsClause.none)
-		// ⭐ GLOBAL, unlike a lifted closure's `file`: a defaulted parameter of an `export function` is
-		// omitted by call sites in OTHER files, and each of them emits a call to this helper by name.
-		helper.visibility = Visibility.global
+		// The tier the OWNER decided (`parseDefaultHelper`), which is the one fact about a helper that is not
+		// the same for both doors: a parameter's is reachable from every file, a field's from exactly one.
+		helper.visibility = visibility
 
 		let helperIndex = self.artifact.module.funcCount()
 		self.artifact.module.pushFunc(helper)
@@ -15102,15 +15334,28 @@ export type Parser
 		// magnitude wrong, silently. The bootstrap refused neither and now refuses both, at its own two
 		// injected streams; a rule enforced by one compiler and not the other would make a program's
 		// meaning depend on which one read it.
+		//
+		// ⭐ **AND A FIELD DEFAULT INHERITS IT WHOLE (S2f)**, which is why the field door built no check of
+		// its own: `var v as Integer = 7 zzz` had the identical silent drop with the identical cure, and
+		// `field-defaults.error.trailing-tokens` is the case that pins it here.
+		//
+		// ⛔ **THE STRAY TOKEN IS NAMED BY ITS TEXT, NOT BY ITS KIND, AND IT SAID `'identifier'` UNTIL S2f.**
+		// The reader has to FIND the token this refuses, and `zzz` is in the file where `identifier` is not
+		// — the D11c defect class exactly, in a message rather than a callee. `tokenDisplayText` is the one
+		// door that answers "how does a diagnostic name this token?" (the kind's spelling only where the
+		// token carries no text of its own), so this asks it rather than inlining half of it. MEASURED
+		// against the oracle on the identical program: the bootstrap says `but got 'zzz'`, and
+		// `specs/default-values.md` — the canonical definition, for the PARAMETER door — pins `'zzz'` and
+		// `'e100'`. shv2's own `param-default-refusals.md` had encoded the wrong answer as its expectation.
 		if self.pos != pending.exprEnd 'trailingTokens'
 			let stray = self.current()
-			throw ParseError.unexpectedToken("end of default value", got: stray.kind.rawValue, line: stray.line, column: stray.column)
+			throw ParseError.unexpectedToken("end of default value", got: tokenDisplayText(stray), line: stray.line, column: stray.column)
 		end 'trailingTokens'
 
 		self.artifact.recordFuncReturnType(helperName, returnType: returnType, declaredSurface: sharedEmptyDeclaredSurface)
 		self.artifact.recordFuncSignature(helperName, signature: FuncSignature.create(ByteArrayArray.create(), paramTypes: MaxonTypeArray.create(), paramAggregateNames: ByteArrayArray.create(), paramDeclaredNames: ByteArrayArray.create(), returnAggregateName: self.erasedAggregateNameOfReturn(returnType)), nameLine: anchor.line, nameColumn: anchor.column, sourceFilePath: self.filePath)
 		self.commitRangeChecks(helperName)
-	end 'parseParamDefaultHelper'
+	end 'parseDefaultHelperBody'
 
 	// Bind each parameter name to its reserved SSA ValueId in the fresh function
 	// scope: parameter `i` is ValueId `i` (the ids 0..paramCount-1 the value
@@ -15715,7 +15960,7 @@ export type Parser
 			return MaxonType.float
 		end 'primFloat'
 		let tok = self.current()
-		throw ParseError.unexpectedToken("a type", got: tok.kind.rawValue, line: tok.line, column: tok.column)
+		throw ParseError.unexpectedToken("a type", got: tokenDisplayText(tok), line: tok.line, column: tok.column)
 	end 'parseTypeReference'
 
 	// The type naming the declaration currently being read, for `Self` and for its own name.
@@ -18105,7 +18350,7 @@ export type Parser
 	//
 	// ⭐⭐ **IT IS SHARED BECAUSE A PARAMETER DEFAULT *IS* A RETURN** (BATCH2 slice 4). A default is
 	// compiled as the whole body of a synthesized nullary helper whose declared return type is the
-	// parameter's declared type (`parseParamDefaultHelper`), so `name String = 42` has to be refused with
+	// parameter's declared type (`parseDefaultHelperBody`), so `name String = 42` has to be refused with
 	// exactly the diagnostic `return 42` earns from a `returns String` function, and `factor Number = 2` has
 	// to widen exactly as `return 2` does. Every one of those rules lives here, once: a second copy at the
 	// default site would be a second opinion about what a value must satisfy to leave a function.
@@ -25453,6 +25698,17 @@ export type Parser
 		if self.at(TokenKind.charLiteral) 'endLabel'
 			let closeTok = try self.consume(TokenKind.charLiteral)
 			if not closeTok.value.equals(matchLabel) 'labelMismatch'
+				// ⛔ **`got` IS HAND-SPELLED HERE ON PURPOSE — DO NOT ROUTE IT THROUGH `tokenDisplayText`.**
+				// The rule stated on `ParseError.unexpectedToken` ("`got` is `tokenDisplayText`'s at every
+				// raiser") is about TOKENS THE AUTHOR MIGHT NOT HAVE SPELLED, and its fallback rests on
+				// "an empty value means the KIND implies the text" — true of a punctuator (`equals` is
+				// literally `=`), FALSE of a block label, which is a `charLiteral` whose value IS the
+				// label and may legitimately be EMPTY. MEASURED: `end ''` reports `expected 'pick', got ''`
+				// today; through the helper it would report `got 'character literal'` — the reader hunting
+				// for a string that is not in the file, which is the exact D11c defect the diagnostic
+				// sweep removed everywhere else. A label is always spelled, so there is nothing to fall
+				// back to. (Found by the S2f review, which read the new rule as broad enough to invite a
+				// later tidy-up here.)
 				throw ParseError.matchMismatchedBlockId(String.from(matchLabel), got: String.from(closeTok.value), line: endTok.line, column: endTok.column)
 			end 'labelMismatch'
 		end 'endLabel'
@@ -26289,7 +26545,7 @@ export type Parser
 	function emitOpenLowerRange(scrut ValueId, scrutTag ValueTypeTag) returns ValueId throws ParseError
 		if not (self.at(TokenKind.to) or self.at(TokenKind.upto)) 'notRange'
 			let notRangeTok = self.current()
-			throw ParseError.unexpectedToken(TokenKind.to.rawValue, got: notRangeTok.kind.rawValue, line: notRangeTok.line, column: notRangeTok.column)
+			throw ParseError.unexpectedToken(TokenKind.to.rawValue, got: tokenDisplayText(notRangeTok), line: notRangeTok.line, column: notRangeTok.column)
 		end 'notRange'
 		let isUpto = self.at(TokenKind.upto)
 		let rangeTok = self.current()
@@ -32174,9 +32430,25 @@ export type Parser
 		// Defaults are applied BEFORE the check, which is what makes an omitted-but-defaulted field
 		// legal without teaching `requireAllFieldsInitialized` a second rule. That one goes on
 		// asking exactly what it always asked — "does every slot have a value by now?" — and a
-		// default is simply one of the two ways a slot comes to have one. A default is a scalar literal,
-		// never a managed value, so its `fieldBareLocal` stays false and its store never moves.
-		self.applyFieldDefaults(layout, fieldValues: fieldValues, filled: filled, anchor: typeTok)
+		// default is simply one of the two ways a slot comes to have one.
+		//
+		// ⚠⚠ **A DEFAULT CAN NOW BE A MANAGED VALUE (S2f), AND ITS `fieldBareLocal` STAYING FALSE IS WHAT
+		// MAKES THAT SAFE RATHER THAN A COINCIDENCE.** This line used to say a default was always a scalar
+		// literal. It is not: `as IntArray = IntArray.create()` emits a CALL, whose result the mint already
+		// owns and lists as this statement's temporary (`mintOwnedCallResult` → `trackOwnedTemp`). The
+		// store loop below cannot tell that slot from a written one, and must not: it moves the value in
+		// exactly as it moves a written `Self{items: makeItems()}`, and `fieldBareLocal` false is the
+		// correct answer for BOTH — a call result names no binding, so there is nothing to poison and the
+		// temp is simply consumed out of the pending drops (`transferOwnedInto`).
+		//
+		// ⭐ **AND THE DEFAULTS RUN AFTER EVERY WRITTEN FIELD'S EXPRESSION, DELIBERATELY.** The literal's
+		// own values are evaluated as it is read (`parseStructLiteralFields`), so a side-effecting default
+		// runs after every side-effecting value the author actually wrote — source order for what is
+		// written, then the defaults, in declaration order. v1 splices its default-init call in immediately
+		// after the allocation instead, i.e. AHEAD of the written fields; no case in either corpus can tell
+		// the two apart, and this order is the one that keeps the two fills independent passes over the same
+		// two columns rather than one interleaved walk.
+		try self.applyFieldDefaults(layout, fieldValues: fieldValues, filled: filled, anchor: typeTok)
 		try self.requireAllFieldsInitialized(layout, filled: filled, anchor: typeTok)
 
 		return try self.emitStructLiteral(layout, fieldValues: fieldValues, fieldBareLocal: fieldBareLocal, anchor: typeTok, range: SourceRange.between(typeTok, last: rbraceTok))
@@ -32504,7 +32776,7 @@ export type Parser
 	//
 	// The span is the LITERAL's anchor — the `Self` token — and not the field declaration's, which
 	// may be in another file entirely: a `SourceRange` is an offset into THIS file's bytes.
-	function applyFieldDefaults(layout StructLayout, fieldValues ValueIdArray, filled BoolArray, anchor Token)
+	function applyFieldDefaults(layout StructLayout, fieldValues ValueIdArray, filled BoolArray, anchor Token) throws ParseError
 		let range = SourceRange.ofToken(anchor)
 		for i in 0 upto layout.fieldCount() 'eachField'
 			let wasFilled = try filled.get(i) otherwise panic("applyFieldDefaults: filled.get OOB at {i} — the column is sized to the layout's field count")
@@ -32517,9 +32789,40 @@ export type Parser
 				// E3086, and `requireAllFieldsInitialized` is what says so — not this function.
 				none then continue
 				literal(payload, tag) then self.fillFieldDefault(layout, index: i, given: ConstValue.create(payload, tag: tag), fieldValues: fieldValues, filled: filled, range: range)
+				helper(helperName) then try self.fillFieldDefaultFromHelper(helperName, index: i, fieldValues: fieldValues, filled: filled, anchor: anchor)
 			end 'declared'
 		end 'eachField'
 	end 'applyFieldDefaults'
+
+	// ⭐⭐ **EMIT THE CALL THAT PRODUCES ONE FIELD'S ARBITRARY DEFAULT (S2f)** — an ORDINARY `MaxonOp.call`
+	// to the nullary helper the declaration synthesized, exactly as an omitted ARGUMENT emits one
+	// (`fillArgsFromParamDefaults`), and by the same door for the same reasons: `emitCall` is what OWNS the
+	// result (`mintCallResult` → `mintOwnedCallResult` → `trackOwnedTemp`), so a managed default arrives
+	// enrolled as this statement's owned temporary and is then CONSUMED into the box by the store loop.
+	//
+	// ⛔ **IT MUST NOT BE `emitRuntimeCall`.** That door mints its result type by hand and enrols nothing,
+	// so the box would end up holding a value nobody owns — a leak or a double free, decided by whatever
+	// the field's type turns out to be.
+	//
+	// ⭐ **EACH CONSTRUCTION GETS ITS OWN VALUE**, which is `field-defaults.fresh-per-construction`'s whole
+	// point, and it is a property of emitting a CALL rather than a rule stated anywhere: two `Bag.create()`
+	// calls parse two `Self{}` literals, emit two calls, and the helper allocates on each.
+	//
+	// ⚠ **THE ANCHOR IS THE `Self` TOKEN AND NOT THE FIELD'S DECLARATION**, for `applyFieldDefaults`'
+	// stated reason: a `SourceRange` is an offset into THIS file's bytes, and it also serves as the call's
+	// `rparenTok` because the call has no parentheses in the source at all — nobody wrote it.
+	function fillFieldDefaultFromHelper(helperName ByteArray, index FieldIndex, fieldValues ValueIdArray, filled BoolArray, anchor Token) throws ParseError
+		let value = try self.emitCall(helperName, anchor: anchor, args: ValueIdArray.create(), argLabels: ByteArrayArray.create(), argRanges: SourceRangeArray.create(), argImmutableNames: NoImmutableArgNames, rparenTok: anchor, resultUsed: true, constructorInstance: ConstructorInstance.none, mint: CalleeMint.fieldDefaultHelper)
+		self.recordFieldDefaultValue(index, value: value, fieldValues: fieldValues, filled: filled)
+	end 'fillFieldDefaultFromHelper'
+
+	// Record `value` as slot `index`'s value and mark the slot filled — the last two lines of BOTH ways a
+	// declared default becomes one (a folded literal, a call to the synthesized helper), so the two columns
+	// are written from one place and the out-of-bounds sentence is stated once.
+	function recordFieldDefaultValue(index FieldIndex, value ValueId, fieldValues ValueIdArray, filled BoolArray)
+		try fieldValues.set(index, value: value) otherwise panic("recordFieldDefaultValue: fieldValues.set OOB at {index} — the column is sized to the layout's field count")
+		try filled.set(index, value: true) otherwise panic("recordFieldDefaultValue: filled.set OOB at {index} — the column is sized to the layout's field count")
+	end 'recordFieldDefaultValue'
 
 	// Emit one default's `literal` and record it as slot `index`'s value. Split out so the payload
 	// is bound by the match arm that proved there IS one, rather than read back out of the union
@@ -32552,13 +32855,21 @@ export type Parser
 		// runtime half it is nominally owed is never emitted; it is recorded exactly as the WRITTEN field
 		// store is (`requireFieldType`), so the two doors say one thing rather than two.
 		//
+		// ⭐⭐ **AND THAT SENTENCE IS WHY A LITERAL DEFAULT KEEPS ITS OWN ARM (S2f).** Everything else a
+		// field can default to is now a synthesized nullary helper, which is one mechanism where the
+		// parameter twin has one too (`SignatureIndex.ParamDefaultInfo` argues at length that a constant
+		// fast path is not worth having, and for a PARAMETER it is right). A field's literal is the case
+		// that argument does not cover: it is the arm that makes the range check DISAPPEAR. A call result
+		// cannot be constant-folded, so routing `= 500` through a helper would emit — in 158 spec files —
+		// a runtime range check that costs nothing today. The fast path is not redundant; it is the only
+		// path on which `InsertRangeChecks` can see a constant.
+		//
 		// ⚠ **A4f'S CONTAINMENT ELISION CANNOT FIRE HERE**: `emitLiteral` mints the value two lines up, and a
 		// freshly minted literal denotes no ranged alias — so the compile-time half this door exists for is
 		// untouched.
 		self.recordRangeCheckSite(value, targetAlias: self.declaredAliasOfType(declared), line: range.line, column: range.column)
 
-		try fieldValues.set(index, value: value) otherwise panic("fillFieldDefault: fieldValues.set OOB at {index} — the column is sized to the layout's field count")
-		try filled.set(index, value: true) otherwise panic("fillFieldDefault: filled.set OOB at {index} — the column is sized to the layout's field count")
+		self.recordFieldDefaultValue(index, value: value, fieldValues: fieldValues, filled: filled)
 	end 'fillFieldDefault'
 
 	// Every declared field must have been given a value — see `parseStructLiteral` for why the
@@ -41041,7 +41352,7 @@ export type Parser
 			return tok
 		end 'namedMember'
 		if tok.kind != TokenKind.intLiteral 'notAMemberName'
-			throw ParseError.unexpectedToken(TokenKind.identifier.rawValue, got: tok.kind.rawValue, line: tok.line, column: tok.column)
+			throw ParseError.unexpectedToken(TokenKind.identifier.rawValue, got: tokenDisplayText(tok), line: tok.line, column: tok.column)
 		end 'notAMemberName'
 
 		return Token.create(TokenKind.identifier, line: tok.line, column: tok.column, value: tupleFieldName(tok.value))
@@ -43389,7 +43700,7 @@ export type Parser
 		let savedLoops = self.loops
 		let savedMatches = self.matches
 		// ⚠ **SAVED AND RESTORED, NOT MERELY RESET — a closure is the ONE re-entrant door into this reset
-		// block.** `parseFunction` and `parseParamDefaultHelper` reach a fresh function from a drained
+		// block.** `parseFunction` and `parseDefaultHelperBody` reach a fresh function from a drained
 		// top level, so a reset with no restore is right there; this routine resumes the ENCLOSING body
 		// afterwards, and a closure written INSIDE a block-form `try` body would otherwise return to it
 		// with an empty stack — the body's remaining throwing calls stop routing and its `end` panics on
@@ -44717,7 +45028,7 @@ export type Parser
 	function consumeConstToken(kind TokenKind) throws ConstEvalError
 		if not self.at(kind) 'mismatch'
 			let tok = self.current()
-			throw ConstEvalError.defective(ParseError.unexpectedToken(kind.rawValue, got: tok.kind.rawValue, line: tok.line, column: tok.column))
+			throw ConstEvalError.defective(ParseError.unexpectedToken(kind.rawValue, got: tokenDisplayText(tok), line: tok.line, column: tok.column))
 		end 'mismatch'
 		self.advance()
 	end 'consumeConstToken'
@@ -47674,7 +47985,7 @@ export type Parser
 	function consume(kind TokenKind) returns Token throws ParseError
 		let tok = self.current()
 		if tok.kind != kind 'mismatch'
-			throw ParseError.unexpectedToken(kind.rawValue, got: tok.kind.rawValue, line: tok.line, column: tok.column)
+			throw ParseError.unexpectedToken(kind.rawValue, got: tokenDisplayText(tok), line: tok.line, column: tok.column)
 		end 'mismatch'
 		self.advance()
 		return tok
@@ -47693,7 +48004,7 @@ export type Parser
 	function consumeNameToken(position NamePosition) returns Token throws ParseError
 		let tok = self.current()
 		if not tokenCanBeAName(tok) 'notAName'
-			throw ParseError.unexpectedToken(nameExpectationOf(position), got: tok.kind.rawValue, line: tok.line, column: tok.column)
+			throw ParseError.unexpectedToken(nameExpectationOf(position), got: tokenDisplayText(tok), line: tok.line, column: tok.column)
 		end 'notAName'
 		self.advance()
 		return tok
@@ -47749,7 +48060,7 @@ export type Parser
 		// on the same token and in the same words — a base position admits a type NAME and the one keyword
 		// that stands for one, and nothing else.
 		if tok.kind != TokenKind.selfType 'notATypeName'
-			throw ParseError.unexpectedToken(TokenKind.identifier.rawValue, got: tok.kind.rawValue, line: tok.line, column: tok.column)
+			throw ParseError.unexpectedToken(TokenKind.identifier.rawValue, got: tokenDisplayText(tok), line: tok.line, column: tok.column)
 		end 'notATypeName'
 
 		// The name is bound before the call rather than passed inline: the bootstrap cannot lower a `try`

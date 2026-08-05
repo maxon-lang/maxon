@@ -2489,6 +2489,24 @@ export union FieldDefault
 	// unresolved alias name here. The pair travels together for `ConstValue`'s reason: a payload
 	// without its tag is a number whose meaning has been thrown away.
 	literal(payload ParsedInt, tag ValueTypeTag)
+	// ⭐⭐ **ANY OTHER DEFAULT IS A SYNTHESIZED NULLARY FUNCTION, AND THIS IS ITS NAME (S2f).**
+	// `export var items as IntArray = IntArray.create()` declares a second function,
+	// `__fieldDefault#Bag#items`, whose whole body is `return IntArray.create()`; a `Self{…}` that omits
+	// the field emits an ordinary call to it and stores the result. That is the SAME mechanism a
+	// PARAMETER default is, reached through a second door — see `SignatureIndex.ParamDefaultInfo`, whose
+	// header argues the design in full, and every one of its three consequences holds here unchanged.
+	// The one that decides the design is ownership: a call RESULT is a shape the parser already owns and
+	// drops (`mintOwnedCallResult`), so a managed field default needs no new ownership rule at all.
+	//
+	// ⚠ **THE EXPRESSION IS DELIBERATELY NOT HERE.** A default's tokens are read exactly once, by the file
+	// that declares them; every other reader emits `call __fieldDefault#Bag#items`, byte-identical whatever
+	// the expression says. See `ProgramSignatures.mixFieldDefault` for what therefore rides the hash.
+	//
+	// ⚠ **A LITERAL DEFAULT KEEPS THE `literal` ARM ABOVE AND DOES NOT COME THROUGH HERE**, which is a
+	// deliberate divergence from the parameter twin's "one mechanism, one place a default is produced".
+	// `Parser.fillFieldDefault` states the reason: a literal is folded away entirely by `InsertRangeChecks`
+	// and a call result cannot be.
+	helper(name ByteArray)
 end 'FieldDefault'
 
 export typealias FieldDefaultArray = Array with FieldDefault
@@ -3837,24 +3855,79 @@ end 'paramDefaultHelperName'
 
 let ParamDefaultHelperPrefix = "__paramDefault"
 
-// ⭐ **THE INVERSE OF THE MINT ABOVE: WHICH CALL DID THE AUTHOR ACTUALLY WRITE?** A helper call is a call
-// the author wrote NO part of — they wrote `greet()`, and the compiler supplied the argument — so a
+// ⭐ **THE NAME OF THE SYNTHESIZED NULLARY FUNCTION THAT PRODUCES FIELD `fieldName`'s DEFAULT VALUE** (S2f)
+// — `__fieldDefault#Bag#items`. See `FieldDefault.helper` for what the mechanism is; this is only where
+// its name is spelled, and it is spelled HERE, beside the parameter twin, so the `#` join keeps its one
+// speller.
+//
+// ⚠⚠ **UNLIKE THE PARAMETER TWIN, THIS IS MINTED BY BOTH WALKS OF A FIELD DECLARATION — AND THAT IS SAFE
+// FOR A REASON THE PARAMETER MINT DOES NOT HAVE.** A parameter's helper is named by its CALL-ALIGNED
+// POSITION, which the declaration sweep and the real parse compute from different starting points (an
+// instance method's receiver shifts every parameter by one) — so exactly one of them may derive it and the
+// other reads it back. A field's helper is named by `(type name, field name)`, and neither is positional:
+// `Parser.readStructFieldInto` is THE one field reader, shared by `recordScannedType`'s tolerant sweep and
+// `parseTypeDeclaration`'s parse, so the two walks put the identical two names in and get the identical
+// name out, by construction. That matters because the LAYOUT a `Self{…}` reads its defaults out of is the
+// SWEEP's, while the helper's BODY is parsed by the real parse.
+//
+// Unique by CONSTRUCTION, exactly as the parameter twin is: a type name is unique whole-program (a second
+// declaration of one name is E3006) and a field name is unique within its type, so the pair is; the `__`
+// prefix puts the result in the reserved space no declaration may enter (E2051); and `#` is not in the
+// identifier alphabet, so the two joins are injective by character class.
+export function fieldDefaultHelperName(typeName ByteArray, fieldName ByteArray) returns ByteArray
+	return overloadRegistrationName(overloadRegistrationName(FieldDefaultHelperPrefix.toByteArray(), suffix: typeName), suffix: fieldName)
+end 'fieldDefaultHelperName'
+
+let FieldDefaultHelperPrefix = "__fieldDefault"
+
+// ⭐ **THE INVERSE OF THE PARAMETER MINT: WHICH CALL DID THE AUTHOR ACTUALLY WRITE?** A helper call is a
+// call the author wrote NO part of — they wrote `greet()`, and the compiler supplied the argument — so a
 // diagnostic that quoted `__paramDefault#greet#0` would name a symbol absent from the program, which is the
 // defect class D11c is on the board for. Every consumer asks THIS rather than decoding the name itself
 // (`SemanticCheck.callDiagnosticNoun`), and it lives beside the join so the two cannot drift —
 // `primitiveStaticSourceSpelling`'s arrangement exactly, one mint over.
-//
-// ⭐ **AND IT CHECKS ITSELF AGAINST THE FORWARD JOIN RATHER THAN TRUSTING ITS OWN SPLIT**, for that
-// routine's reason: the split takes everything between the FIRST separator and the LAST, which is exact
-// only while the prefix holds no separator and the trailing index is one run — re-joining the pieces and
-// comparing turns those premises into a check the mint owns.
 export function paramDefaultCalleeSpelling(helperName ByteArray) returns ByteArray
-	let separator = try OverloadNameSeparator.toByteArray().get(0) otherwise panic("paramDefaultCalleeSpelling: OverloadNameSeparator is a one-byte literal")
+	return splitMintedHelperName(helperName, prefix: ParamDefaultHelperPrefix, mint: "CalleeMint.paramDefaultHelper").head
+end 'paramDefaultCalleeSpelling'
+
+// ⭐ **AND THE INVERSE OF THE FIELD MINT (S2f)** — but the author wrote no CALL here at all: they wrote a
+// `Self{…}` that omitted a field, and the compiler supplied its default. So the nearest thing to what they
+// wrote is the FIELD, named the way every other diagnostic in the compiler names a type's member. It joins
+// through `qualifiedMethodName` rather than re-spelling the `.`, for the reason the mint joins through
+// `overloadRegistrationName`.
+export function fieldDefaultCalleeSpelling(helperName ByteArray) returns ByteArray
+	let parts = splitMintedHelperName(helperName, prefix: FieldDefaultHelperPrefix, mint: "CalleeMint.fieldDefaultHelper")
+	return qualifiedMethodName(parts.head, methodName: parts.tail)
+end 'fieldDefaultCalleeSpelling'
+
+// The two names a minted helper name splits back into — `("greet", "0")` for `__paramDefault#greet#0`,
+// `("Bag", "items")` for `__fieldDefault#Bag#items`. ONE record rather than two scans, because the single
+// walk that locates the separators already knows both halves and a second walk would be a second answer.
+type MintedHelperNameParts
+	export let head as ByteArray
+	export let tail as ByteArray
+
+	export static function create(head ByteArray, tail ByteArray) returns MintedHelperNameParts
+		return Self{head: head, tail: tail}
+	end 'create'
+end 'MintedHelperNameParts'
+
+// ⭐ **SPLIT A `<prefix>#<head>#<tail>` HELPER NAME — the shared inverse of both mints above.** Written
+// once because the two decodes differ in exactly two ways: which prefix they expect, and what they do with
+// the pieces. Written twice, a later fix to the scan would reach one of them.
+//
+// ⭐ **AND IT CHECKS ITSELF AGAINST THE FORWARD JOIN RATHER THAN TRUSTING ITS OWN SPLIT.** The split takes
+// everything between the FIRST separator and the LAST, which is exact only while the prefix holds no
+// separator and the trailing part is one run — re-joining the pieces and comparing turns those premises
+// into a check the mint owns. `mint` names the `CalleeMint` arm entitled to ask, so a panic here says which
+// call site is at fault rather than merely which name looked wrong.
+function splitMintedHelperName(helperName ByteArray, prefix String, mint String) returns MintedHelperNameParts
+	let separator = try OverloadNameSeparator.toByteArray().get(0) otherwise panic("splitMintedHelperName: OverloadNameSeparator is a one-byte literal")
 
 	var firstSplit = helperName.count()
 	var lastSplit = helperName.count()
 	for i in 0 upto helperName.count() 'scan'
-		if (try helperName.get(i) otherwise panic("paramDefaultCalleeSpelling: helperName.get OOB at {i} inside its own count()")) != separator 'ordinaryByte'
+		if (try helperName.get(i) otherwise panic("splitMintedHelperName: helperName.get OOB at {i} inside its own count()")) != separator 'ordinaryByte'
 			continue
 		end 'ordinaryByte'
 		if firstSplit == helperName.count() 'firstSeparator'
@@ -3864,18 +3937,18 @@ export function paramDefaultCalleeSpelling(helperName ByteArray) returns ByteArr
 	end 'scan'
 
 	if firstSplit == lastSplit 'fewerThanTwoSeparators'
-		panic("paramDefaultCalleeSpelling: '{String.from(helperName)}' holds fewer than two '{OverloadNameSeparator}' separators, so `paramDefaultHelperName` cannot have minted it — only a call site the op marks `CalleeMint.paramDefaultHelper` may be asked")
+		panic("splitMintedHelperName: '{String.from(helperName)}' holds fewer than two '{OverloadNameSeparator}' separators, so the '{prefix}' mint cannot have produced it — only a call site the op marks `{mint}` may be asked")
 	end 'fewerThanTwoSeparators'
 
-	let funcName = try helperName.slice(firstSplit + 1, endIndex: lastSplit) otherwise panic("paramDefaultCalleeSpelling: slice [{firstSplit + 1}, {lastSplit}) of a {helperName.count()}-byte name is in range by the indices just found")
-	let indexDigits = try helperName.slice(lastSplit + 1, endIndex: helperName.count()) otherwise panic("paramDefaultCalleeSpelling: slice [{lastSplit + 1}, {helperName.count()}) is in range by the index just found")
-	let remint = overloadRegistrationName(overloadRegistrationName(ParamDefaultHelperPrefix.toByteArray(), suffix: funcName), suffix: indexDigits)
+	let head = try helperName.slice(firstSplit + 1, endIndex: lastSplit) otherwise panic("splitMintedHelperName: slice [{firstSplit + 1}, {lastSplit}) of a {helperName.count()}-byte name is in range by the indices just found")
+	let tail = try helperName.slice(lastSplit + 1, endIndex: helperName.count()) otherwise panic("splitMintedHelperName: slice [{lastSplit + 1}, {helperName.count()}) is in range by the index just found")
+	let remint = overloadRegistrationName(overloadRegistrationName(prefix.toByteArray(), suffix: head), suffix: tail)
 	if not remint.equals(helperName) 'decodeDisagreesWithTheMint'
-		panic("paramDefaultCalleeSpelling: '{String.from(helperName)}' splits as ('{String.from(funcName)}', '{String.from(indexDigits)}'), which `paramDefaultHelperName` re-mints as '{String.from(remint)}' — the join and its inverse have come apart")
+		panic("splitMintedHelperName: '{String.from(helperName)}' splits as ('{String.from(head)}', '{String.from(tail)}'), which the '{prefix}' mint re-joins as '{String.from(remint)}' — the join and its inverse have come apart")
 	end 'decodeDisagreesWithTheMint'
 
-	return funcName
-end 'paramDefaultCalleeSpelling'
+	return MintedHelperNameParts.create(head, tail: tail)
+end 'splitMintedHelperName'
 
 // Append one part to an overload suffix under construction — so a suffix's parts and the suffix's own join
 // to the base name are the same character, stated once above.

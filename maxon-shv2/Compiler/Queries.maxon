@@ -1059,6 +1059,11 @@ function reportParseError(project Project, path FilePath, error ParseError)
 		// The fifth E2004 family (see the registry's `doc`): the initializer parsed fine and is simply
 		// not CONSTANT. Byte-for-byte the reference compilers' sentence, gated by `lexer-edge-cases.md`.
 		expectedConstantExpression(got, line, column) then reportPositioned(project, code: ErrorCode.parserExpressionError, message: "Expected constant expression, got '{got}'", line: line, column: column, filePath: path)
+		// A shorthand field default whose raw tokens name no type (S2f) — one more E2004 family than the
+		// registry's `doc` enumerates, which is a stale COUNT there rather than a wrong code here (the
+		// bootstrap reports this same program under this same code). Byte-for-byte the bootstrap's sentence,
+		// pinned by `field-defaults.missing-type-annotation-errors`.
+		uninferrableFieldDefault(line, column) then reportPositioned(project, code: ErrorCode.parserExpressionError, message: "Expected default value: literal (int, float, bool, or enum case). For other expressions, add a type annotation: 'var name Type = expr'.", line: line, column: column, filePath: path)
 		unexpectedEof(line, column) then reportPositioned(project, code: ErrorCode.parserUnexpectedEof, message: "Unexpected end of input", line: line, column: column, filePath: path)
 		// The literal is quoted VERBATIM — `0x1ff_ffffffffffffff`, separators and radix prefix intact —
 		// because the source's own spelling is what the reader has to find, and the decoded value does
