@@ -102,7 +102,7 @@ via the `__Managed*Error` precedent (`Project.declaredBuiltinErrorEnum`).
 | `Map.maxon` | 395 | `MapError` (`:6`) | |
 | `Character.maxon` | 236 | `Character` (`:19`) | needs `BuiltinCharLiteral` discovery |
 | `CharacterSet.maxon` | 137 | `CharSet` (`:19`) | `CharacterMemberSetAliasName` |
-| `Set.maxon` | 396 | — | stops earlier, at a non-literal field default (`:19:33`) |
+| `Set.maxon` | 396 | — | stops earlier — was the field default (`:19:33`, closed by `S2f`), now `E3076 :43:15`, see `S2i` |
 
 ### C. Blocked ONLY on `Interfaces.maxon` not being loaded (2 files, 301 lines)
 
@@ -134,8 +134,8 @@ via the `__Managed*Error` precedent (`Project.declaredBuiltinErrorEnum`).
 | `Sha256.maxon` | 204 | `E2015 :152:34` | `Array.createIterator` is not on shv2's `Array` roster — **one member** |
 | `Ascii.maxon` | 66 | ~~`E2028 :10:4`~~ → **`E3001` ONLY (it type-checks clean)** | ⚖ **THIS ROW WENT STALE THE SAME DAY IT WAS MEASURED — re-measured 2026-08-05 after `BATCH23`.** The blocker was `match c '0' to '9'` — pattern type `int` vs scrutinee `Character` — which is exactly the character-literal WIDTH RULE `BATCH23` deleted: every literal is now a `Character`, and `Character` gained ordering and range patterns, so this file's five `match` arms type-check. **No compiler change is owed here any more; what remains is the WHITELIST entry**, which is `L-stdlib` — not a lane `BATCH23` held. ⚠ But read the headline above before listing it: `Ascii` is all `static function`s, NOT a conditional `extension`, so the criterion is NOT vacuous for this one. |
 | `PrimitiveExtensions.maxon` | 101 | `E2010 :2:11` | `extension int` — the extension decl path rejects a primitive keyword as the extended type |
-| `Json.maxon` | 1080 | `E2015 :77:37` | a **string-literal field default**; only signed numeric/bool literals are parsed |
-| `Set.maxon` | 396 | `E2015 :19:33` | an **identifier field default** — same mechanism |
+| `Json.maxon` | 1080 | ~~`E2015 :77:37`~~ -> **`E2015 :281:3`** | ✅ **THE FIELD-DEFAULT BLOCKER IS GONE — `S2f` closed it 2026-08-05.** Re-probed on `ba7f8271f`: this module now advances 204 lines to a **field access through `doc`, a struct-typed FIELD of the enclosing type**. A different mechanism, unowned by any row. |
+| `Set.maxon` | 396 | ~~`E2015 :19:33`~~ -> **`E3076 :43:15`** | ✅ **FIELD-DEFAULT BLOCKER GONE (`S2f`)**; now stops at `ElementArray{}`. ⛔ **AND THAT ONE IS shv2 DIVERGING FROM THE ORACLE — see `S2i` below.** |
 | `List.maxon` | 175 | `E3086 :21:10` | field `chain` uninitialized by the literal and has no default — the same mechanism, one door over |
 | `Vector.maxon` | 50 | `E3086 :19:10` | field `managed` uninitialized by the literal |
 | `Testing.maxon` | 343 | `E2051 :34:13` | `__TestReport` is `__`-reserved — needs the exemption `Builtins.maxon` has via `Queries.CompilerInternalDeclaringModule` |
@@ -192,6 +192,43 @@ all — it reaches `:357` and gives a clean overload diagnostic. That row is sta
    real first blockers — a struct-typed field inference failure and a throwing overload — are ordinary
    language gaps that may well clear before Wave 6.
 6. **`§F` needs one ruling** covering both sites before either module can move.
+
+## Re-probe after `S2f` — MEASURED 2026-08-05 on `ba7f8271f`
+
+All 34 unlisted modules re-probed after `S2f` (field defaults may be an arbitrary expression) and after
+`BATCH23` (every character literal is a `Character`). What moved:
+
+| module | was | now |
+|---|---|---|
+| `Json.maxon` | `E2015 :77:37` field default | **`E2015 :281:3`** — struct-typed field access through `doc` |
+| `Set.maxon` | `E2015 :19:33` field default | **`E3076 :43:15`** — `ElementArray{}`, see `S2i` |
+| `Ascii.maxon` | `E2028 :10:4` pattern type | **`E3001` only** (BATCH23) |
+| `List.maxon` · `Vector.maxon` | `E3086` | **unchanged** — they need v1's THIRD arm (a managed-builtin init for an omitted builtin-typed field), which `S2f` deliberately did not build |
+
+**Modules giving `E3001` and nothing else, as of this probe (8):** `Ascii` · `Log` · all six
+`helpers/sort/*`. ⚠ Six of those eight are conditional `extension`s, so the criterion is VACUOUS for them
+(see the headline); `Ascii` and `Log` are the two where it means something — and `Log`'s ENTRY is still
+blocked on `S2h` for a reason the criterion cannot see either.
+
+⛔ **`S2i` — `<InnerAlias>{}` IS LEGAL IN THE ORACLE AND E3076 IN shv2, AND IT BLOCKS THREE MODULES.**
+MEASURED both compilers on a minimal repro:
+
+| shape | oracle | shv2 |
+|---|---|---|
+| TOP-LEVEL `typealias Nums = Array with Integer`, `Nums{}` in a free function | `E3076` | `E3076` — **agree** |
+| INNER `typealias ElementArray = Array with Element` inside `type Holder uses Element`, constructed inside `Holder`'s own static | **compiles, runs (exit 5)** | **`E3076`** |
+
+So the rule the oracle implements is that **a type's own body is a legitimate construction site for the
+aliases that body declares**; shv2 applies the restriction without that exemption. It is the FIRST blocker
+in three modules, all the same shape — an inner alias declared in the body that constructs it:
+`stdlib/Interfaces.maxon:188` (used `:193`, `:201`), `stdlib/Map.maxon:18-19` (used `:52,54,81,83,273,275`),
+`stdlib/Set.maxon` (used `:43,45,47`).
+
+⚠⚠ **DO NOT "FIX" THE CORPUS HERE.** An earlier note claimed the bootstrap refuses this construct too and
+prescribed rewriting `stdlib/` to `ElementArray.create()`. That measurement was taken on the TOP-LEVEL
+shape, where the two compilers really do agree; it does not transfer to the inner-alias shape, which is
+what all three modules actually write. Rewriting the corpus would paper over a compiler divergence and
+make three reference files disagree with the oracle they are the reference for.
 
 ## Reproducing this table
 
