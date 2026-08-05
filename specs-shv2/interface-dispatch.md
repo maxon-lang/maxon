@@ -457,7 +457,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:22:11: argument type mismatch for 'n': expected 'int', got 'String'
+error E3005: <fragment>:22:11: argument type mismatch for 'n': expected 'Integer', got 'String'
 ```
 
 
@@ -591,7 +591,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:26:15: argument type mismatch for 'n': expected 'int', got 'String'
+error E3005: <fragment>:26:15: argument type mismatch for 'n': expected 'Integer', got 'String'
 ```
 
 
