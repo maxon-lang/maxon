@@ -1661,7 +1661,7 @@ end 'writeManyFunctions'
 // failure offset is the one that cannot be reached: this single site witnesses the short-circuit `and`'s
 // OUTCOME and the arithmetic behind it at once. (The old fall-through `return c + a` is what the
 // failure path replaces; nothing else about the body moves.)
-function smallFunctionSource(fileIndex KnobSize, slot KnobSize, salt KnobSize) returns String
+function smallFunctionSource(fileIndex KnobIndex, slot KnobIndex, salt KnobIndex) returns String
 	let name = smallFunctionName(fileIndex, slot: slot)
 	// `salt` varies the constants across functions so they are not textually identical — identical
 	// bodies would be a fair benchmark of nothing but the parser's cache.
@@ -1681,7 +1681,7 @@ function smallFunctionSource(fileIndex KnobSize, slot KnobSize, salt KnobSize) r
 	return out.build()
 end 'smallFunctionSource'
 
-function smallFunctionName(fileIndex KnobSize, slot KnobSize) returns String
+function smallFunctionName(fileIndex KnobIndex, slot KnobIndex) returns String
 	return "sf{fileIndex}_{slot}"
 end 'smallFunctionName'
 
@@ -2629,7 +2629,7 @@ end 'genericBoxDecl'
 //
 // Before this, the site read `acc` three times and added all three back: `acc -> 7*acc + k`, which is
 // how eight sites at rung 0 turned the seed into 10^8 and 256 sites at rung 5 wrapped i64 outright.
-function structCreateInBlock(index KnobSize, typeName String, binding String) returns String
+function structCreateInBlock(index KnobIndex, typeName String, binding String) returns String
 	let created = index mod 5 + 1
 	let rewritten = index mod 3 + 1
 	var body = StringBuilder.create()
@@ -3386,7 +3386,7 @@ end 'enumTypesSource'
 // Shared by both enum knobs, so the two measure the same opacity trick against different dimensions —
 // how many enums exist, and how many sites dispatch over a fixed pair of them. `salt` varies the branch
 // constant so the pickers are not textually identical, which would benchmark the parser's cache.
-function enumPickerSource(pickerName String, enumName String, casePrefix String, salt KnobSize) returns String
+function enumPickerSource(pickerName String, enumName String, casePrefix String, salt KnobIndex) returns String
 	var out = StringBuilder.create()
 	out.append("\nfunction {pickerName}(a int) returns {enumName}\n")
 	out.append("\tif a > {enumPickerThreshold(salt)} 'hi'\n")
@@ -3400,11 +3400,11 @@ end 'enumPickerSource'
 // The branch constant the picker for `salt` tests against, and the ORDINAL it therefore hands back for
 // the pinned accumulator. Two facts about one emitted `if`, stated beside it: every `match` witness in
 // the corpus needs the second, and the second cannot be right unless it reads the first from here.
-function enumPickerThreshold(salt KnobSize) returns KnobSize
+function enumPickerThreshold(salt KnobIndex) returns KnobSize
 	return salt mod 7 + 1
 end 'enumPickerThreshold'
 
-function enumPickerCase(salt KnobSize) returns KnobIndex
+function enumPickerCase(salt KnobIndex) returns KnobIndex
 	if corpusSeedValue() > enumPickerThreshold(salt) 'highArm'
 		return EnumCasesPerType - 1
 	end 'highArm'
@@ -3470,7 +3470,7 @@ let MatchDenseSalt = 2 as KnobSize
 let MatchSparseSalt = 5 as KnobSize
 
 // SHAPE 0 — a STATEMENT match whose arms assign: dense contiguous ordinals, so a jump table.
-function matchDenseStatementSite(index KnobSize) returns String
+function matchDenseStatementSite(index KnobIndex) returns String
 	var out = StringBuilder.create()
 	out.append("\tlet mv{index} = {MatchDensePickName}(a)\n")
 	out.append("\tmatch mv{index} 'ms{index}'\n")
@@ -3488,7 +3488,7 @@ end 'matchDenseStatementSite'
 // Its two arms give different values, so which one the scrutinee reaches decides the expectation — and
 // the RANGE arm covering all but the last case is exactly the interval a wrong lowering would widen or
 // narrow. That is what this witness is for.
-function matchRangeExpressionSite(index KnobSize) returns String
+function matchRangeExpressionSite(index KnobIndex) returns String
 	var arms = StringBuilder.create()
 	arms.append("\t\t{MatchDenseCasePrefix}0 to {MatchDenseCasePrefix}{EnumCasesPerType - 2} gives {index mod 9 + 1}\n")
 	arms.append("\t\t{MatchDenseCasePrefix}{EnumCasesPerType - 1} gives {index mod 6 + 2}\n")
@@ -3501,7 +3501,7 @@ function matchRangeExpressionSite(index KnobSize) returns String
 end 'matchRangeExpressionSite'
 
 // SHAPE 2 — an EXPRESSION match over the SPARSE enum: four far-apart intervals, so a binary search.
-function matchSparseExpressionSite(index KnobSize) returns String
+function matchSparseExpressionSite(index KnobIndex) returns String
 	var arms = StringBuilder.create()
 	for c in 0 upto EnumCasesPerType 'eachArm'
 		arms.append("\t\t{MatchSparseCasePrefix}{c} gives {(index + c) mod 8 + 1}\n")
@@ -3514,7 +3514,7 @@ end 'matchSparseExpressionSite'
 // only in their ARM SET — which enum they dispatch on and how its cases are grouped — and that difference
 // is the point of having both; the scaffolding around it is not, and two copies of it would be two places
 // for the result to stop flowing into `acc` and the whole site to become deletable dead code.
-function matchExpressionSite(index KnobSize, pickName String, arms String, given TrackedValue) returns String
+function matchExpressionSite(index KnobIndex, pickName String, arms String, given TrackedValue) returns String
 	var out = StringBuilder.create()
 	out.append("\tlet mv{index} = {pickName}(a)\n")
 	out.append("\tlet mr{index} = match mv{index} 'ms{index}'\n")
@@ -3952,7 +3952,7 @@ function createRungSubdir(dir FilePath, relative String, written StringArray) th
 end 'createRungSubdir'
 
 // One module's own file. See `writeNamespacedModules` for what each declaration is here to price.
-function namespacedModuleSource(m KnobSize) returns String
+function namespacedModuleSource(m KnobIndex) returns String
 	let privateAlias = "{NsPrivateAliasPrefix}{m}"
 	var out = StringBuilder.create()
 	out.append("// Generated by ScaleCorpus: namespace `{NsModuleDirPrefix}{m}` — the namespace knob's module {m}.\n")
@@ -3985,17 +3985,17 @@ end 'namespacedModuleSource'
 // below it. Named because the consumer's witness has to know what a qualified call across a namespace
 // boundary ANSWERS, and a second spelling of either would be a witness that agreed with itself and not
 // with the program.
-function nsSharedIncrement(m KnobSize) returns TrackedValue
+function nsSharedIncrement(m KnobIndex) returns TrackedValue
 	return m mod 7 + 1
 end 'nsSharedIncrement'
 
-function nsHiddenIncrement(m KnobSize) returns TrackedValue
+function nsHiddenIncrement(m KnobIndex) returns TrackedValue
 	return m mod 5 + 2
 end 'nsHiddenIncrement'
 
 // What `ns{m}.nsHelper{m}(argument)` answers: its file-private helper's increment, plus the masked value
 // it casts through its own file-private alias. The one-dot qualified CALL door, tracked.
-function nsHelperValue(m KnobSize, argument TrackedValue) returns TrackedValue
+function nsHelperValue(m KnobIndex, argument TrackedValue) returns TrackedValue
 	return (argument + nsHiddenIncrement(m)) + (argument and NsAliasMask)
 end 'nsHelperValue'
 
@@ -4003,7 +4003,7 @@ end 'nsHelperValue'
 // BARE from one level down, and — for every module but the first — the PREVIOUS module's export named by
 // qualifier from inside a namespaced file. So this witness spans two namespaces and three visibility
 // tiers, and a resolution that reached the wrong module's declaration moves it.
-function nsDeepValue(m KnobSize, argument TrackedValue) returns TrackedValue
+function nsDeepValue(m KnobIndex, argument TrackedValue) returns TrackedValue
 	var value = argument + nsSharedIncrement(m)
 	if m > 0 'namesThePreviousModule'
 		value = value + nsHelperValue(m - 1, argument: value)
@@ -4012,7 +4012,7 @@ function nsDeepValue(m KnobSize, argument TrackedValue) returns TrackedValue
 end 'nsDeepValue'
 
 // The module's INNER file — namespace `ns{m}.inner`, the multi-segment half of the knob.
-function namespacedInnerSource(m KnobSize) returns String
+function namespacedInnerSource(m KnobIndex) returns String
 	var out = StringBuilder.create()
 	out.append("// Generated by ScaleCorpus: namespace `{NsModuleDirPrefix}{m}{NsQualifierSeparator}{NsInnerDirName}` — the MULTI-SEGMENT half of the namespace knob.\n")
 	out.append("export typealias {NsDeepAliasName} = int(0 to {NsAliasMask})\n")
@@ -4036,7 +4036,7 @@ end 'namespacedInnerSource'
 
 // One module's worth of QUALIFIED references, as written from the ROOT namespace. Five sites, and each
 // is a different door — a corpus that emitted only one of them would price a fifth of the rung.
-function qualifiedReferenceGroup(m KnobSize) returns String
+function qualifiedReferenceGroup(m KnobIndex) returns String
 	let moduleNs = "{NsModuleDirPrefix}{m}"
 	let innerNs = "{moduleNs}{NsQualifierSeparator}{NsInnerDirName}"
 	var out = StringBuilder.create()
@@ -4125,7 +4125,7 @@ end 'writeInterfaceTypes'
 //
 // ⚠ NO `where T is I` — concrete dispatch only. A constrained type parameter's method call is a witness
 // dispatch, whose table rides the x64-only `funcAbs64InRdata` relocation; see the knob section's header.
-function interfaceConformancePair(interfaceName String, typeName String, measureAlias String, salt KnobSize) returns String
+function interfaceConformancePair(interfaceName String, typeName String, measureAlias String, salt KnobIndex) returns String
 	var out = StringBuilder.create()
 	out.append("\ninterface {interfaceName}\n")
 	out.append("\tfunction {InterfaceProbeMethod}() returns {measureAlias}\n")
@@ -4157,7 +4157,7 @@ end 'interfaceConformancePair'
 // `ifaceDispatch` rotates M sites over a FIXED set of conformances — so site 9 there calls the type
 // declared with salt `9 mod IfaceDispatchTypeCount`. Reading the site index instead would have been right
 // for `interfaceTypes`, where the two coincide, and quietly wrong for every rung of the other knob.
-function interfaceDispatchSite(index KnobSize, typeName String, binding String, label String, salt KnobSize) returns String
+function interfaceDispatchSite(index KnobIndex, typeName String, binding String, label String, salt KnobIndex) returns String
 	let scaleArgument = index mod 5 + 1
 	// `base` is the accumulator because the `create` on the line above put it there, so both method
 	// answers are known: `probe()` adds the conformer's salt to it, and `scaleBy(n)` doubles it and adds
@@ -4224,7 +4224,7 @@ end 'ifaceDispatchSource'
 // it could not say before is whether the surface a door produced VIEWS THE SAME ELEMENTS: a co-owned arm
 // that retained the wrong record, or a `return` door handing back an empty view, compiles perfectly and
 // answers the wrong length. All four value doors are witnessed against the same two pushes here.
-function bufferValueDoorsBlock(index KnobSize) returns String
+function bufferValueDoorsBlock(index KnobIndex) returns String
 	let published = BufferValueDoorsPushCount
 	var body = StringBuilder.create()
 	body.append("\t\tvar ba{index} = {BufferSurfaceArrayAlias}.create()\n")
@@ -4254,7 +4254,7 @@ let BufferValueDoorsPushCount = 2
 //
 // The literal is LONG for `stringOpsSource`'s reason: a short one lives inline in the 48-byte record and
 // the bytes never reach the heap the buffer surface is a view onto.
-function bufferPendingTempBlock(index KnobSize) returns String
+function bufferPendingTempBlock(index KnobIndex) returns String
 	// The view is over the literal's own bytes, so its length is the literal's byte count — which makes
 	// this the one door whose witness also checks `toByteArray()` itself.
 	let payload = "scale buffer payload segment {index} long enough to reach the heap"
@@ -4280,7 +4280,7 @@ end 'bufferPendingTempBlock'
 // NOT a buffer — measured, as E2015 on the very next `setLength`. `panic` is also what these three deserve:
 // the capacity is requested one line above, the length is published inside it and the slice is inside that,
 // so none of them can fail (`.claude/CLAUDE.md`: a `try` that should never fail uses `otherwise panic`).
-function bufferStaticAndSliceBlock(index KnobSize) returns String
+function bufferStaticAndSliceBlock(index KnobIndex) returns String
 	var body = StringBuilder.create()
 	body.append("\t\tvar bc{index} = try {ManagedMemoryTypeSpelling}.create({BufferSurfaceCapacity}, elementSize: {BufferSurfaceElementSize}) otherwise panic(\"scale corpus: the {BufferSurfaceCapacity}-byte buffer this line just asked for\")\n")
 	body.append("\t\ttry bc{index}.setLength({BufferSurfacePublishedLength}) otherwise panic(\"scale corpus: length {BufferSurfacePublishedLength} is inside the capacity allocated one line above\")\n")
@@ -4302,7 +4302,7 @@ end 'bufferStaticAndSliceBlock'
 // The pushed element is a `String`'s byte view rather than a `__ManagedMemory.create`, because the two are
 // the SAME instance (`Array with Byte`) and this element only has to BE a buffer — the create path is
 // already priced one block up, and paying for it twice would put two producers on one column.
-function bufferElementReadBlock(index KnobSize) returns String
+function bufferElementReadBlock(index KnobIndex) returns String
 	// The element read back is the one element pushed, so its length is that literal's byte count and the
 	// array's count is one — which is what makes `markElementReadSurface` answering about the WRONG slot
 	// visible rather than merely compiling.
