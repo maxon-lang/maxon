@@ -735,3 +735,85 @@ end 'main'
 ```exitcode
 9
 ```
+
+<!-- test: closure-body-restores-the-enclosing-functions-parse-context -->
+### A closure body restores every column of the enclosing function's parse context
+
+⛔⛔ **`parseClosureExpression` RESET FOUR PER-FUNCTION COLUMNS AND RESTORED ONE OF THEM (BATCH23 review).**
+The closure body gets its own `IrFunction` with its own dense SSA numbering, so the parser saves the
+enclosing function's context, resets it, parses the body and restores it. The reset list and the
+save/restore list are written out separately and NOTHING makes them agree, so three columns were reset and
+never put back. All three are a compiler PANIC — not a diagnostic, a crash — on programs anyone writes:
+
+  • **`iterationLockedBindings`** — the `for..in` lock STACK. A closure anywhere in a loop body emptied it,
+    and the loop's own `releaseIterationSource` then found nothing to pop: *"the iteration lock stack is
+    empty"*. That is `for x in a` with a closure in it, and nothing more.
+  • **`currentWitnessParamBase`/`currentWitnessParamCount`** — where a `where`-constrained generic method's
+    witness parameters sit. Zeroed by a closure, the first witness dispatch AFTER it panicked in
+    `witnessParamValueId`. The same two statements in the OTHER order compile, which is what hid it.
+  • **`charLiteralOps`** — pinned by `char-literal-to-int/char-literal-coerces-across-a-closure-body`, whose
+    second half is a SILENT WRONG ANSWER rather than a panic.
+
+This case is the shared one: one program that reaches all three, so a future column added to the reset list
+and forgotten in the restore list has somewhere to fail.
+
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+typealias Fn1 = function(Integer) returns Integer
+
+function apply(f Fn1, x Integer) returns Integer
+	return f(x)
+end 'apply'
+
+interface Named
+	function label() returns Integer
+end 'Named'
+
+type W implements Named
+	export var n as Integer
+
+	export function label() returns Integer
+		return self.n
+	end 'label'
+
+	export static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'W'
+
+type Holder uses T where T is Named
+	export var item as T
+
+	export static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+
+	export function go() returns Integer
+		let viaClosure = apply(function(n Integer) gives n + 1, x: 0)
+		return self.item.label() + viaClosure
+	end 'go'
+end 'Holder'
+
+typealias WH = Holder with W
+
+function main() returns ExitCode
+	var a = IntArray.create()
+	a.push(1)
+	a.push(2)
+	var total = 0
+	for x in a 'loop'
+		total = total + x + apply(function(n Integer) gives n + 1, x: 0)
+	end 'loop'
+	let h = WH.create(W.create(38))
+	print("total={total} go={h.go()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+total=5 go=39
+```

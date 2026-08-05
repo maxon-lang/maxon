@@ -1387,12 +1387,15 @@ end 'main'
 ```
 
 <!-- test: match-range.character -->
-<!-- CHARACTER LITERAL TYPE MODEL, a later rung — NOT the range. Character range patterns are built
-     (A5m-c: `match-character-range` beside this one). What blocks these three is that a SINGLE-BYTE
-     literal is an `int` in shv2 (the width rule, `Parser.parseCharLiteral`), so `let c = 'G'` binds an
-     int and `'a' to 'z'` is an INTEGER range. ⚠ MEASURED: they PASS that way — for the wrong reason,
-     testing integer ranges and never a Character. Enabling them would claim a mechanism they do not
-     reach (the P1.7 slice-1 lesson). They unblock when a char literal types as a `Character`. -->
+<!-- ⭐ A GENUINE `Character` RANGE PATTERN — the unblock condition this note used to carry IS NOW MET
+     (re-measured 2026-08-05, A5m-ab). What stood here said a SINGLE-BYTE literal was an `int` under the
+     WIDTH RULE, so `let c = 'G'` bound an int, `'a' to 'z'` was an INTEGER range, and these three
+     PASSED for the wrong reason — testing integer ranges and never a Character. The width rule is
+     GONE: every character literal materializes as a `Character` (`Parser.parseCharLiteral`), so the
+     scrutinee is a Character and the arms are Character bounds. A Character `match` keeps the linear
+     compare chain rather than the interval plan (`matchUsesIntervalPlan`), and the compares are
+     `Character`'s own ordering (A5m-c, `__char_cmp`) — the same mechanism `match-character-range`
+     beside this one pins. These three now reach what their names claim. -->
 ```maxon
 function main() returns ExitCode
 	let c = 'G'
@@ -1409,12 +1412,15 @@ end 'main'
 ```
 
 <!-- test: match-range.character-lowercase -->
-<!-- CHARACTER LITERAL TYPE MODEL, a later rung — NOT the range. Character range patterns are built
-     (A5m-c: `match-character-range` beside this one). What blocks these three is that a SINGLE-BYTE
-     literal is an `int` in shv2 (the width rule, `Parser.parseCharLiteral`), so `let c = 'G'` binds an
-     int and `'a' to 'z'` is an INTEGER range. ⚠ MEASURED: they PASS that way — for the wrong reason,
-     testing integer ranges and never a Character. Enabling them would claim a mechanism they do not
-     reach (the P1.7 slice-1 lesson). They unblock when a char literal types as a `Character`. -->
+<!-- ⭐ A GENUINE `Character` RANGE PATTERN — the unblock condition this note used to carry IS NOW MET
+     (re-measured 2026-08-05, A5m-ab). What stood here said a SINGLE-BYTE literal was an `int` under the
+     WIDTH RULE, so `let c = 'G'` bound an int, `'a' to 'z'` was an INTEGER range, and these three
+     PASSED for the wrong reason — testing integer ranges and never a Character. The width rule is
+     GONE: every character literal materializes as a `Character` (`Parser.parseCharLiteral`), so the
+     scrutinee is a Character and the arms are Character bounds. A Character `match` keeps the linear
+     compare chain rather than the interval plan (`matchUsesIntervalPlan`), and the compares are
+     `Character`'s own ordering (A5m-c, `__char_cmp`) — the same mechanism `match-character-range`
+     beside this one pins. These three now reach what their names claim. -->
 ```maxon
 function main() returns ExitCode
 	let c = 'm'
@@ -1430,12 +1436,15 @@ end 'main'
 ```
 
 <!-- test: match-range.character-digit -->
-<!-- CHARACTER LITERAL TYPE MODEL, a later rung — NOT the range. Character range patterns are built
-     (A5m-c: `match-character-range` beside this one). What blocks these three is that a SINGLE-BYTE
-     literal is an `int` in shv2 (the width rule, `Parser.parseCharLiteral`), so `let c = 'G'` binds an
-     int and `'a' to 'z'` is an INTEGER range. ⚠ MEASURED: they PASS that way — for the wrong reason,
-     testing integer ranges and never a Character. Enabling them would claim a mechanism they do not
-     reach (the P1.7 slice-1 lesson). They unblock when a char literal types as a `Character`. -->
+<!-- ⭐ A GENUINE `Character` RANGE PATTERN — the unblock condition this note used to carry IS NOW MET
+     (re-measured 2026-08-05, A5m-ab). What stood here said a SINGLE-BYTE literal was an `int` under the
+     WIDTH RULE, so `let c = 'G'` bound an int, `'a' to 'z'` was an INTEGER range, and these three
+     PASSED for the wrong reason — testing integer ranges and never a Character. The width rule is
+     GONE: every character literal materializes as a `Character` (`Parser.parseCharLiteral`), so the
+     scrutinee is a Character and the arms are Character bounds. A Character `match` keeps the linear
+     compare chain rather than the interval plan (`matchUsesIntervalPlan`), and the compares are
+     `Character`'s own ordering (A5m-c, `__char_cmp`) — the same mechanism `match-character-range`
+     beside this one pins. These three now reach what their names claim. -->
 ```maxon
 function main() returns ExitCode
 	let c = '7'

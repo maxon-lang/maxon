@@ -13,12 +13,12 @@
 #                 hole `genfor.sh` was built for at slice A and it has not moved.
 #     `'…'`       53,766 single-quoted tokens, and 0 of them in a VALUE position: every one is a BLOCK
 #                 LABEL. So the `charLiteral` LEXER path is hammered and the literal-directed TYPING path
-#                 (`characterizedOperand`) is never entered.
+#                 (`integerizedOperand`) is never entered.
 #
 # The whole method inventory of the corpus is `create` `push` `count` `get` `append` `scaleBy` `probe`
 # `byteLength` `slice` `reserve` `clone` `firstVal` — the same twelve slice C found, with nothing added.
 # ⇒ `String.count()`, `.bytes()`, `for c in s`, `__gr_end`/`__gr_count`/`__char_at`/`__gbp`, the whole
-# `RuntimeUsage` grapheme closure and `characterizedOperand` are STRUCTURALLY invisible to a default
+# `RuntimeUsage` grapheme closure and `integerizedOperand` are STRUCTURALLY invisible to a default
 # `scale-test` run, in allocations, in bytes and in CPU ticks alike. A Δ0 from it is the instrument's
 # blind spot and not a result.
 #   ⇒ ⚠ AND THE CONVERSE MATTERS TOO, which is what slice C's optimizer got right by checking BOTH
@@ -37,7 +37,7 @@
 #              not one Character in it. It prices what the rung costs a program that never uses it —
 #              `recordGraphemeUsage` runs eight `ByteArray.equals` plus `closeGraphemeNeeds` on EVERY
 #              call op in the module, grapheme-related or not, and `parseBinary` now asks
-#              `characterizedOperand` about BOTH operands of EVERY comparison. Against a PARENT binary at
+#              `integerizedOperand` about BOTH operands of EVERY binary operator. Against a PARENT binary at
 #              a fixed `<n>`, that tax is what is being priced. (It is the shape the P1.7a 2b-i pass
 #              found: a union that heap-boxed to answer "no conformer", taxing every struct method call
 #              in every program.)
@@ -173,10 +173,13 @@ emit_sites_program() {
 		echo "function fn${f}(s String, p String) returns Int"
 		echo -e "\tvar total = 0"
 		if [ "$MODE" = "sites-charlit" ]; then
-			# The Character the literals are compared AGAINST. Minted once per function from a multi-byte
-			# literal — the ONE spelling that materializes a Character without a loop, since the width rule
-			# makes a one-byte literal an `int` — so the function's cost is dominated by the comparison
-			# sites and not by a segmentation scan.
+			# The Character the literals are compared AGAINST. Minted once per function from a lone literal
+			# rather than from a segmentation scan, so the function's cost is dominated by the comparison
+			# sites. ⚠ **The multi-byte spelling is HISTORY, not a requirement.** Under the WIDTH RULE (gone
+			# at A5m-ab) a one-byte literal materialized as an `int`, so `'é'` was the ONE spelling that
+			# minted a Character without a loop; every character literal is a `Character` now, so `'a'`
+			# would serve equally. It is left multi-byte so a reading taken against a PARENT binary stays
+			# apples-to-apples with the ones recorded below.
 			echo -e "\tvar ch = 'é'"
 		fi
 		n=0
@@ -196,12 +199,21 @@ emit_sites_program() {
 				echo -e "\ttotal = total + p.count()"
 				;;
 			sites-charlit)
-				# ⭐ THE LITERAL-DIRECTED TYPING PATH, and nothing else. `characterizedOperand` is asked of
-				# BOTH operands of every comparison in the module; here both sides are the shape that makes
-				# it do its work — a Character meeting a lone one-byte `charLiteral` token, which it
-				# re-materializes as a Character and leaves the already-emitted integer `literal` op behind
-				# for const DCE. `sites-control` is the same site count with the same operator and no
-				# Character, which is what isolates this.
+				# ⭐ THE LITERAL-DIRECTED TYPING PATH, and nothing else. `integerizedOperand` is asked of
+				# BOTH operands of every binary operator in the module, each against what the OTHER side is,
+				# so this mode prices that PROBE at the shape it is asked of most: a Character binding
+				# meeting a lone `charLiteral` token. ⚠ **The probe DECLINES here, and that is the reading.**
+				# Since A5m-ab every character literal materializes as a `Character`, so both sides are
+				# already Characters, the expected tag is not integral and the door returns at its first
+				# test — what this mode measures is the per-operand probe plus the literal's own `.rdata`
+				# record, not a rewrite. (Under the WIDTH RULE this was the opposite shape: the literal came
+				# out an `int` and the old `characterizedOperand` re-materialized it as a Character. That
+				# function is gone; the direction that survives converts a literal to its CODEPOINT in an
+				# INTEGER-expecting position, and rewrites the emitted `stringLiteral` op IN PLACE rather
+				# than leaving one behind for a const DCE that does not run on it — see
+				# `Parser.retypeCharLiteralAsCodepoint`. To measure THAT arm, compare against an integral
+				# operand: `total - '0'`.) `sites-control` is the same site count with the same operator and
+				# no Character, which is what isolates this.
 				echo -e "\tif ch == 'a' 'k${n}'"
 				echo -e "\t\ttotal = total + 1"
 				echo -e "\tend 'k${n}'"

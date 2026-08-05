@@ -4618,17 +4618,20 @@ let AllProducerBits = 15 as ProducerMask
 // disambiguation, and its comment (Parser.maxon:16600) says the same thing.
 
 // What a character literal's body decodes to.
+//
+// ⚠ **THE TWO CASES ARE A FACT ABOUT BYTE COUNT AND NO LONGER A FACT ABOUT TYPE (A5m-ab).** They were the
+// WIDTH RULE — one byte materialized as an `int`, wider as a `Character` — and this header said so at both
+// arms. Every character literal is a `Character` now (`parseCharLiteral`), and an integer-expecting position
+// converts it to its codepoint (`integerizedOperand`); the split survives only inside `charLiteralBytes`,
+// which folds both arms to the literal's UTF-8 bytes.
 union CharLiteralValue
-	// A single byte — an ASCII character, or an escape that produces one. It materializes
-	// as an ordinary integer literal carrying that byte, which is what makes `cp == '-'`,
-	// `cp - '0'` and `if c >= '0'` mean what they say.
+	// A single byte — an ASCII character, or an escape that produces one.
 	byte(value ParsedInt)
 	// `''`. No character, and no value to give it.
 	empty
-	// A literal whose UTF-8 body is more than one byte: `'é'`, `'中'`, an emoji, an EGC. It
-	// materializes as a `Character` (P1.8 slice B) — an immortal `.rdata` byte record carrying
-	// exactly these bytes, typed `character`. The BYTES ride the case because the decode already
-	// has them and re-deriving them at the emit site would be the same escape walk twice.
+	// A literal whose UTF-8 body is more than one byte: `'é'`, `'中'`, an emoji, an EGC. The BYTES ride the
+	// case because the decode already has them and re-deriving them at the emit site would be the same
+	// escape walk twice.
 	multiByte(bytes ByteArray)
 	// A `\` escape this decoder does not know.
 	badEscape(text String)
@@ -4641,10 +4644,10 @@ union CharLiteralValue
 end 'CharLiteralValue'
 
 // Decode a character-literal body. Ported from maxon-selfhosted's `parseCharLiteralExpr`
-// (Parser.maxon:16606-16637) + `decodeStringEscapes` (11069): v1 takes the SINGLE-BYTE
-// literal as an `integer` and routes everything wider to its `Character` struct. shv2 keeps
-// the first half exactly and rejects the second with a positioned diagnostic naming the gap
-// — it has no Character type to route to yet.
+// (Parser.maxon:16606-16637) + `decodeStringEscapes` (11069). v1 takes the SINGLE-BYTE literal as an
+// `integer` and routes everything wider to its `Character` struct; shv2 no longer splits on width at all
+// (A5m-ab) — every literal is a `Character` and an integer position converts it — so what this returns is a
+// DECODING, and its two value arms differ only in how many bytes the character occupies.
 function decodeCharLiteral(raw ByteArray) returns CharLiteralValue
 	let decoded = decodeEscapes(raw)
 	match decoded 'd'
@@ -8349,8 +8352,11 @@ export type Parser
 	// instance read as the first write to the shared registry mid-parse.
 	//
 	// ⚠ **ONLY THE BARE BASE NAME, where `Set` also admits an INSTANCE ALIAS.** That form exists for a
-	// `CharSet from ['x']`, whose key type the array literal genuinely cannot infer (a one-byte character
-	// literal materializes as an int). A `List`'s element is whatever the literal's elements are — there is no
+	// `CharSet from ['x']`, whose key type the array literal genuinely cannot infer — a bare `['x', 'y']` is an
+	// array of `Character`, and the alias is what says the container is a `Set` over them rather than an
+	// `Array` of them. (It used to be needed for a different reason — under the width rule `'x'` was an `int`
+	// and the alias supplied the element TYPE — and A5m-ab retired that half, not the form.) A `List`'s
+	// element is whatever the literal's elements are — there is no
 	// element type an alias could state that the literal does not already carry — so `PointList from […]`
 	// would be a second spelling with nothing to decide, and it keeps falling through to `E2004 Undefined
 	// variable 'PointList'` as it does today.
@@ -23300,8 +23306,15 @@ export type Parser
 	// ⚠ **The test is `tagIsIntegral`, NOT `== ValueTypeTag.integer`** — see `columnValueTagMatches`'s
 	// header for the measured false refusal the narrow spelling caused. A ranged alias (`typealias Row =
 	// int(0 to 63)`) carries `named` until TypeResolution collapses it, and `for r in 0 to lastRow` where
-	// `lastRow` is such a parameter must stay legal. A char literal is an integer codepoint here
-	// (`ranges.character-range`), so `'a' to 'e'` passes for the reason it prints as one.
+	// `lastRow` is such a parameter must stay legal.
+	//
+	// ⚠ **A CHARACTER BOUND HAS ALREADY BEEN CONVERTED BY THE TIME THIS IS ASKED (A5m-ab).** `'a' to 'e'` is a
+	// pair of `Character` RECORDS as written, and `parseForStatement` runs BOTH bounds through
+	// `integerizedOperand` before this rule sees them — so what arrives is two codepoints and this passes for
+	// the reason a counted range does. It is NOT that a char literal "is an integer codepoint here": the
+	// ELEMENT is a `Character` minted per trip from the counter (`ranges.character-range` prints `abcde`), and
+	// a bound this rule still refuses is one the conversion could not express (a Character BINDING, a
+	// multi-codepoint cluster) — which is exactly why the refusal is left to say so in its own words.
 	//
 	// Both bounds are asked, each anchored on its own half — the START on the source's first token, the
 	// END on the `to`/`upto`, so a mixed range names the side that is wrong.
@@ -43315,6 +43328,46 @@ export type Parser
 		let savedValueWitnessIds = self.valueWitnessIds
 		let savedValueInstanceAlias = self.valueInstanceAlias
 		let savedValueDeclaredAlias = self.valueDeclaredAlias
+		// ⛔⛔ **THE CHARACTER-LITERAL OP MAP SWAPS WITH ITS SIBLINGS, AND IT WAS RESET WITHOUT BEING SAVED
+		// (BATCH23 review).** It was added to the RESET below and to `parseFunction`'s two resets, but not to
+		// this save/restore pair — so a closure erased the ENCLOSING function's filed op indices, and its own
+		// entries were left behind in their place. Both halves of that are wrong answers on legal programs,
+		// MEASURED:
+		//
+		//   • `'0' + apply(function(n Integer) gives n + 1, x: 1)` — the outer literal is parsed BEFORE the
+		//     closure and coerced AFTER it (`parseBinary` reads the left operand's span once the right is in
+		//     hand), so `retypeCharLiteralAsCodepoint` found no entry and PANICKED the compiler.
+		//   • `'A' + apply(function(n Integer) gives n + '0', x: 1)` — worse, because a closure's value ids are
+		//     a FRESH SSA space that COLLIDES with the enclosing function's: the lookup HIT the closure's entry,
+		//     rewrote the CLOSURE's op, and left the outer literal a `stringLiteral`. It printed 5368717386 —
+		//     the record's `.rdata` ADDRESS added as a number — where 114 is correct, with no diagnostic.
+		//
+		// The invariant is the one `CharLiteralOpMap`'s header already states ("SWAPPED across a closure body,
+		// exactly like the sibling value columns"); this is what makes it true.
+		let savedCharLiteralOps = self.charLiteralOps
+		// ⛔⛔ **THE SAME DEFECT, TWICE MORE — FOUND BY SWEEPING THE RESET LIST AGAINST THIS ONE (BATCH23
+		// review).** Both are RESET below, correctly, and neither was restored, and each is a compiler PANIC
+		// on an ordinary program. They are listed here rather than beside their resets because the reset is
+		// not what was wrong.
+		//
+		//   • `iterationLockedBindings` is the enclosing function's `for..in` lock STACK, popped by
+		//     `releaseIterationSource` with a panic when it is empty. Emptied by a closure, the enclosing
+		//     loop's own release had nothing to pop — MEASURED: `for x in a` with ANY closure in the body,
+		//     *"the iteration lock stack is empty"*.
+		//   • `currentWitnessParamBase`/`Count` say where the enclosing function's `where`-constraint witness
+		//     parameters sit. Zeroed by a closure, the first witness dispatch AFTER it found none — MEASURED
+		//     inside `type Holder uses T where T is Named`: a closure then `self.item.label()` panicked in
+		//     `witnessParamValueId`, while the SAME two statements in the other order compile and print 42.
+		//     The ORDER being the whole of it is what kept this invisible.
+		//
+		// ⚠ **AND THE ROOT CAUSE IS THAT THIS LIST IS WRITTEN THREE TIMES.** The columns that make up one
+		// function's parse context are spelled in the `Parser.create` initializer, in `parseFunction`'s reset,
+		// in the synthesized-helper reset, and in this save/reset/restore TRIPLE — four places, with nothing
+		// that makes them agree. Every miss is silent at the compiler's own build and shows up only as a
+		// panic or a wrong answer on a user program, which is how three of them shipped at once.
+		let savedIterationLockedBindings = self.iterationLockedBindings
+		let savedWitnessParamBase = self.currentWitnessParamBase
+		let savedWitnessParamCount = self.currentWitnessParamCount
 		let savedImmutableGlobalReads = self.immutableGlobalReads
 		let savedBufferSurfaceValues = self.bufferSurfaceValues
 		let savedBufferSurfaceSlots = self.bufferSurfaceSlots
@@ -43572,6 +43625,10 @@ export type Parser
 		self.valueWitnessIds = savedValueWitnessIds
 		self.valueInstanceAlias = savedValueInstanceAlias
 		self.valueDeclaredAlias = savedValueDeclaredAlias
+		self.charLiteralOps = savedCharLiteralOps
+		self.iterationLockedBindings = savedIterationLockedBindings
+		self.currentWitnessParamBase = savedWitnessParamBase
+		self.currentWitnessParamCount = savedWitnessParamCount
 		self.immutableGlobalReads = savedImmutableGlobalReads
 		self.bufferSurfaceValues = savedBufferSurfaceValues
 		self.bufferSurfaceSlots = savedBufferSurfaceSlots

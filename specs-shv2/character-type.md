@@ -620,7 +620,7 @@ end 'main'
 ```
 
 <!-- test: ascii-value-letter -->
-<!-- P1.4 errors (`try`/`otherwise`) + P1.2 `Character.asciiValue()` -->
+<!-- `Character.asciiValue()` read through `try … otherwise` (P1.4b) -->
 ### ASCII Value for Letter
 
 ```maxon
@@ -639,7 +639,7 @@ end 'main'
 ```
 
 <!-- test: ascii-value-digit -->
-<!-- P1.4 errors (`try`/`otherwise`) + P1.2 `Character.asciiValue()` -->
+<!-- `Character.asciiValue()` read through `try … otherwise` (P1.4b) -->
 ### ASCII Value for Digit
 
 ```maxon
@@ -658,7 +658,7 @@ end 'main'
 ```
 
 <!-- test: ascii-value-lowercase -->
-<!-- P1.4 errors (`try`/`otherwise`) + P1.2 `Character.asciiValue()` -->
+<!-- `Character.asciiValue()` read through `try … otherwise` (P1.4b) -->
 ### ASCII Value for Lowercase
 
 ```maxon
@@ -677,7 +677,7 @@ end 'main'
 ```
 
 <!-- test: ascii-value-space -->
-<!-- P1.4 errors (`try`/`otherwise`) + P1.2 `Character.asciiValue()` -->
+<!-- `Character.asciiValue()` read through `try … otherwise` (P1.4b) -->
 ### ASCII Value for Space
 
 ```maxon
@@ -696,7 +696,7 @@ end 'main'
 ```
 
 <!-- test: ascii-value-newline -->
-<!-- P1.4 errors (`try`/`otherwise`) + P1.2 `Character.asciiValue()` -->
+<!-- `Character.asciiValue()` read through `try … otherwise` (P1.4b) -->
 ### ASCII Value for Newline Escape
 
 ```maxon
@@ -715,7 +715,7 @@ end 'main'
 ```
 
 <!-- test: ascii-value-non-ascii -->
-<!-- P1.4b `try` IN CONDITION POSITION as a SUCCESS TEST — `if try c.asciiValue()`. NOT a Character gap: `Character` and its `bytes`/`byteLength` land at P1.8 Slice B, and the blocker is that shv2 has no `if try <throwing call>` form for ANY callee (measured on an already-throwing builtin: `if try a.first()` over an `Array` is `E3005: 'if' requires a bool condition, got 'int'`). `Character.asciiValue()` itself is deliberately unbuilt until that form exists — it throws `CharacterError.notAscii`, so without it there is no non-sentinel way to call it -->
+<!-- P1.4b `try` IN CONDITION POSITION as a SUCCESS TEST — `if try c.asciiValue()` takes the branch only when the call did not throw. ⭐ It is also the THROWING half of `Character.asciiValue()`: the five sibling `ascii-value-*` cases pin the value it returns for an ASCII character, this pair pins that a non-ASCII one throws `CharacterError.notAscii` instead. ⚠ The blocker note that stood here is RETIRED (re-measured 2026-08-05, A5m-ab) — it claimed `Character` and its `bytes`/`byteLength` were still ahead at P1.8 Slice B, that shv2 had no `if try <throwing call>` form for ANY callee, and that `asciiValue()` was "deliberately unbuilt until that form exists". All three are built, and this case is green -->
 ### ASCII Value for Non-ASCII Returns Error
 
 ```maxon
@@ -732,7 +732,7 @@ end 'main'
 ```
 
 <!-- test: ascii-value-emoji -->
-<!-- P1.4b `try` IN CONDITION POSITION as a SUCCESS TEST — `if try c.asciiValue()`. NOT a Character gap: `Character` and its `bytes`/`byteLength` land at P1.8 Slice B, and the blocker is that shv2 has no `if try <throwing call>` form for ANY callee (measured on an already-throwing builtin: `if try a.first()` over an `Array` is `E3005: 'if' requires a bool condition, got 'int'`). `Character.asciiValue()` itself is deliberately unbuilt until that form exists — it throws `CharacterError.notAscii`, so without it there is no non-sentinel way to call it -->
+<!-- P1.4b `try` IN CONDITION POSITION as a SUCCESS TEST — `if try c.asciiValue()` takes the branch only when the call did not throw. ⭐ It is also the THROWING half of `Character.asciiValue()`: the five sibling `ascii-value-*` cases pin the value it returns for an ASCII character, this pair pins that a non-ASCII one throws `CharacterError.notAscii` instead. ⚠ The blocker note that stood here is RETIRED (re-measured 2026-08-05, A5m-ab) — it claimed `Character` and its `bytes`/`byteLength` were still ahead at P1.8 Slice B, that shv2 had no `if try <throwing call>` form for ANY callee, and that `asciiValue()` was "deliberately unbuilt until that form exists". All three are built, and this case is green -->
 ### ASCII Value for Emoji Returns Error
 
 ```maxon

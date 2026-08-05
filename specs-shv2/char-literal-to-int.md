@@ -158,3 +158,48 @@ end 'main'
 ```exitcode
 2
 ```
+
+<!-- test: char-literal-coerces-across-a-closure-body -->
+### A character literal parsed before a closure still converts after it
+
+⛔⛔ **THE PER-FUNCTION COLUMN THAT WAS RESET WITHOUT BEING SAVED (BATCH23 review).** `integerizedOperand`
+rewrites a character literal's already-emitted `stringLiteral` op IN PLACE, and finds that op through
+`Parser.charLiteralOps` — a per-function map keyed by `ValueId`. `parseBinary` reads the LEFT operand's
+token span only once the RIGHT operand is in hand, so a closure in the right operand is parsed BETWEEN the
+left literal's emit and its conversion. The closure-body context swap reset that map and never restored it,
+which is two wrong answers on one line, both MEASURED:
+
+  • `'0' + apply(function(n Integer) gives n + 1, x: 1)` found no entry and **PANICKED the compiler**.
+  • `'A' + apply(function(n Integer) gives n + '0', x: 1)` was worse, because a closure's value ids are a
+    FRESH SSA space that COLLIDES with the enclosing function's: the lookup HIT the closure's entry, rewrote
+    the CLOSURE's op, and left the outer literal a `stringLiteral`. It printed **5368717386** — the record's
+    `.rdata` ADDRESS added as a number — where 114 is correct, silently.
+
+All three answers below are the oracle's own (MEASURED: `a=50 b=114 c=51`). The third case pins the other
+direction — a literal AFTER the closure — so a fix that saved the map without restoring it would still fail.
+
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+typealias Fn1 = function(Integer) returns Integer
+
+function apply(f Fn1, x Integer) returns Integer
+	return f(x)
+end 'apply'
+
+function main() returns ExitCode
+	let a = '0' + apply(function(n Integer) gives n + 1, x: 1)
+	let p0 = 0
+	let p1 = 1
+	let b = 'A' + apply(function(n Integer) gives n + '0', x: 1)
+	let c = apply(function(n Integer) gives n + 2, x: 1) + '0'
+	print("a={a} b={b} c={c} pad={p0}{p1}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+a=50 b=114 c=51 pad=01
+```

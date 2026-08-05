@@ -260,7 +260,7 @@ end 'main'
 ```
 
 <!-- test: ranges.character-range -->
-<!-- CHARACTER RANGES rung (re-attributed from P1.8b, 2026-07-28) — shv2 has no `Character` type (`Parser.maxon` says so in its own words); a char literal is an INT. ⚠ MEASURED: this case PASSES anyway, because it only COUNTS the iterations and 'a'..'z' as codepoints counts 26 the same way. Its twin `character-range-print` — which looks at the value — does not. Left disabled deliberately: enabling it would claim a mechanism that is not here (the P1.7 slice-1 lesson) -->
+<!-- ⭐ A GENUINE `Character` RANGE — re-measured 2026-08-05 (A5m-ab), and every claim the old note carried is now false. It said shv2 had no `Character` type and that a char literal was an INT, so this case passed only because it COUNTS iterations and `'a'..'z'` as codepoints counts 26 the same way, and that it was "left disabled deliberately" — while the marker above already read `test:`. All three are gone: `Character` exists, every character literal materializes as one (`Parser.parseCharLiteral`), and `parseForStatement` builds a real Character range (both bounds coerced to codepoints through `integerizedOperand`, the ELEMENT minted per trip by `__char_from_cp`). The trip count is still 26; its twin `character-range-print`, which looks at the VALUE, is the one that pins the element type -->
 ```maxon
 function main() returns ExitCode
 		var count = 0
@@ -275,12 +275,16 @@ end 'main'
 ```
 
 <!-- test: ranges.character-range-print -->
-<!-- CHARACTER RANGES rung (re-attributed from P1.8, 2026-07-28) — `'a' upto 'f'` is a range of INTEGERS in shv2: a single-byte character
-     literal materializes as an integer literal (`decodeCharLiteral`'s `byte` arm), so the loop variable
-     is an int and prints as one. ⚠ MEASURED at P1.8 Slice E, on the enabled case: `97 98 99 100 101`
-     where the spec wants `a b c d e`. Its twin `ranges.character-range` passes over the identical
-     construct because it only COUNTS the trips — see the note there. Unblocking needs a range whose
-     ELEMENT TYPE is `Character`, which is a range question and not a String-method one -->
+<!-- ⭐⭐ THE CASE THAT PINS THE ELEMENT TYPE, and it now reads what the spec wants — re-measured
+     2026-08-05 (A5m-ab). Under the WIDTH RULE `'a' to 'e'` was a range of INTEGERS: a single-byte
+     character literal materialized as an integer literal (`decodeCharLiteral`'s `byte` arm), so the loop
+     variable was an int and printed as one — measured at P1.8 Slice E as `97 98 99 100 101` where the
+     spec wants `a b c d e`. The unblock condition that note named — a range whose ELEMENT TYPE is
+     `Character` — is what A5m-ab built: `Parser.parseForStatement` reads BOTH bounds' tags before
+     coercing, and a pair of character literals makes a CHARACTER range (`isCharacterRange`). The bounds
+     go through the ordinary `integerizedOperand` door to become codepoints, so the loop is the counted
+     integer range it always was, and the ELEMENT is minted per trip from the counter by
+     `__char_from_cp`. ⚠ BOTH bounds or neither: `for i in 'a' to n` is an integer range from 97 -->
 ```maxon
 function main() returns ExitCode
 		for c in 'a' to 'e' 'loop'
@@ -474,4 +478,50 @@ end 'main'
 ```
 ```exitcode
 20
+```
+
+<!-- test: ranges.character-range-encodes-every-utf8-width -->
+### A character range mints its element through all four UTF-8 encoder widths
+
+⚠ **THE ENCODER HAS FOUR ARMS AND THE COMMITTED CORPUS EXERCISED ONE (BATCH23 review).** A character range
+mints its per-trip element with `__char_from_cp` (`GraphemeRuntime.buildCharFromCodepoint`), which ENCODES a
+codepoint into a fresh owned record — the dual of `__char_at`, which copies bytes that are already UTF-8.
+Every other character-range case in this file and in `character-ownership.md` uses `'a'`…`'z'`, so only the
+ASCII arm ever ran; the 2-, 3- and 4-byte arms — each with its own lead-byte floor, its own shift ladder and
+its own continuation bytes — were emitted and never executed. They are correct (measured), and this is what
+says so, because a lead-byte constant paired with the wrong shift is a wrong ANSWER that no equality walk
+and no golden fragment would name.
+
+It also pins the OWNERSHIP of the wide arms: each trip allocates a record `__str_decref` must reclaim, so a
+missed drop on any arm is the runner's exit 101 rather than a wrong string.
+
+```maxon
+
+function main() returns ExitCode
+	var two = ""
+	for c in 'à' to 'å' 'twoByte'
+		two.append("{c}")
+	end 'twoByte'
+
+	var three = ""
+	for c in '一' to '五' 'threeByte'
+		three.append("{c}")
+	end 'threeByte'
+
+	var four = ""
+	for c in '😀' to '😃' 'fourByte'
+		four.append("{c}")
+	end 'fourByte'
+
+	print("two={two}\nthree={three}\nfour={four}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+two=àáâãäå
+three=一丁丂七丄丅丆万丈三上下丌不与丏丐丑丒专且丕世丗丘丙业丛东丝丞丟丠両丢丣两严並丧丨丩个丫丬中丮丯丰丱串丳临丵丶丷丸丹为主丼丽举丿乀乁乂乃乄久乆乇么义乊之乌乍乎乏乐乑乒乓乔乕乖乗乘乙乚乛乜九乞也习乡乢乣乤乥书乧乨乩乪乫乬乭乮乯买乱乲乳乴乵乶乷乸乹乺乻乼乽乾乿亀亁亂亃亄亅了亇予争亊事二亍于亏亐云互亓五
+four=😀😁😂😃
 ```
