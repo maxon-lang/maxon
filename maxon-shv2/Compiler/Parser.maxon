@@ -1113,6 +1113,20 @@ export union ParseError implements Error
 	// Accepted, it lifted a closure whose ABI has one more slot than the runtime's `callIndirect` passes, and
 	// the extra parameter read the environment pointer as its value — see `ClosureParamTypeHint`.
 	uninferrableClosureParam(paramName String, line LineNumber, column ColumnNumber)
+	// ⭐⭐ **A TOP-LEVEL INITIALIZER NAMING A STATIC ITS FILE MAY NOT SEE** — `var db = Database.create()`
+	// against a `static function create` that is not exported. Renders as **E3008** or **E3088** by TIER,
+	// with the wording `SemanticCheck.reportCalleeNotVisible` gives the same mistake in a function BODY,
+	// through the one producer both call (`hiddenCalleeDiagnostic`).
+	//
+	// ⚠ **IT IS RAISED IN THE PARSER FOR `unknownTypeName`'S REASON, not by preference.** A top-level
+	// initializer is walked inside `queryProgramSignatures`, before any file is parsed and long before
+	// `FunctionNameIndex` exists — so the pass that owns this refusal for every other call cannot reach this
+	// one, and without an arm here the call was admitted silently (MEASURED: a cross-file file-private
+	// `Database.create` built and ran, where the byte-identical call from a function body is E3008).
+	//
+	// The TIER rides because it picks the code and the sentence, and the parser has it in hand from the
+	// sweep's own column — re-deriving it in the renderer would need the index the renderer has no handle to.
+	calleeNotVisible(callee String, tier Visibility, line LineNumber, column ColumnNumber)
 end 'ParseError'
 
 // ⭐⭐ **ONE PARSER-DETECTED NAME DIAGNOSTIC WHOSE REPORT IS HELD BACK UNTIL EVERY FILE IS PARSED.**
@@ -2544,6 +2558,10 @@ end 'pickBound'
 // what those names are — rather than from a second list beside it, so a name cannot be sized enough to
 // have a bound and not sized enough to be refused as a bare alias RHS. `wantMax` is immaterial: a name
 // either has both extremes or neither.
+//
+// ⭐ Its SECOND reader (spec-port `map-struct-bytearray`) asks the same question one door over: does
+// `<name>.<field>` have a BOUND reading at all? A constant initializer used to enter the bound grammar
+// on any dotted name and refuse `Database.create()` as `Expected 'min' or 'max'` — see `evalConstNamed`.
 //
 // ⚠ It answers TRUE for `f32`/`f64` as well as the eight integers, and that is the reference oracle's
 // roster, measured: `typealias Real = f64` is E2003 there. (v1's own `isSizedTypeName` lists only the
@@ -8324,37 +8342,56 @@ export type Parser
 	// an initializer ends. That routine consumes the `let` keyword before it can fail, so the cursor
 	// always advances and the caller's loop cannot spin.
 	function recordScannedBinding(bindings TopLevelDeclArray)
-		let visibility = self.scannedVisibility()
+		let visibility = self.visibilityBefore(self.pos)
 		let decl = try self.readTopLevelBinding(visibility) otherwise return
 		bindings.push(decl)
 	end 'recordScannedBinding'
 
-	// The visibility of the declaration at the cursor, read from the token BEFORE it.
+	// The visibility of the declaration whose KEYWORD sits at `keyword`, read from the token before it.
 	//
 	// Backwards, rather than by tracking an `export` flag forward across the scan loop: a flag would
 	// have to be CLEARED on every token that is not a declaration, and the one clear that got missed
 	// would silently export the next declaration — a visibility bug, which is a wrong answer about
 	// what another file can see. `dispatchTopLevel` consumes `export` and the keyword adjacently, so
 	// the previous token is exactly the modifier and nothing else can sit between them.
-	function scannedVisibility() returns Visibility
-		if self.pos == 0 'atFileStart'
+	//
+	// ⚠ **IT TAKES THE KEYWORD'S INDEX RATHER THAN READING `self.pos - 1`, because ONE declaration form
+	// puts a second modifier in between.** A method spells `export static function`, so its `function`
+	// keyword's predecessor is `static` and the tier is one token further back — `recordScannedSignature`
+	// hands the index it has already established that for, and the three callers whose cursor sits ON the
+	// keyword hand `self.pos`.
+	function visibilityBefore(keyword TokenIndex) returns Visibility
+		if keyword == 0 'atFileStart'
 			return Visibility.file
 		end 'atFileStart'
 
-		let modifier = (self.pos - 1) as TokenIndex
+		let modifier = (keyword - 1) as TokenIndex
 		if self.kindAt(modifier) == TokenKind.export 'exported'
 			return Visibility.global
 		end 'exported'
 
-		// `moduleModifierAt`, not `atModuleModifier`: the cursor is ON the declaration keyword, so "the next
-		// token opens a declaration" is this position's own premise, and the forward test would ask it of the
+		// `moduleModifierAt`, not `atModuleModifier`: `keyword` names the declaration keyword, so "the next
+		// token opens a declaration" is that position's own premise, and the forward test would ask it of the
 		// keyword instead of of the modifier.
 		if self.moduleModifierAt(modifier) 'moduleScoped'
 			return Visibility.module
 		end 'moduleScoped'
 
 		return Visibility.file
-	end 'scannedVisibility'
+	end 'visibilityBefore'
+
+	// The tier of the `function` declaration whose NAME the cursor sits on — `visibilityBefore` positioned
+	// past the one modifier that can sit between the tier and the keyword. `export static function create`
+	// puts `static` where the tier would otherwise be, so a method's tier is one token further back; the
+	// caller has already read that bit for the receiver question and hands it here rather than re-peeking.
+	function declaredFunctionVisibility(hasStaticModifier bool) returns Visibility
+		if self.pos == 0 'noKeywordBeforeTheName'
+			return Visibility.file
+		end 'noKeywordBeforeTheName'
+
+		let keyword = (self.pos - 1) as TokenIndex
+		return self.visibilityBefore((keyword - 1) as TokenIndex) if hasStaticModifier else self.visibilityBefore(keyword)
+	end 'declaredFunctionVisibility'
 
 	// Cursor is just past `function`, ON the declared name. Append the declared return type of the
 	// function that name introduces, if the declaration is well-formed enough to read one off.
@@ -8374,6 +8411,12 @@ export type Parser
 		// underflowing; such a top-level `function` has an empty `enclosingType` anyway) so this scan and the
 		// implicit-self sibling walk answer "does this method take `self`?" from one token-level test.
 		let hasStaticModifier = self.pos >= 1 and self.functionDeclIsStatic((self.pos - 1) as TokenIndex)
+		// ⭐ **THE DECLARATION'S OWN VISIBILITY TIER, from the SAME backwards read every other declaration
+		// gets** — and it is captured here for `hasStaticModifier`'s reason, while the cursor still sits on the
+		// name. `static` is the one modifier that comes BETWEEN `export` and the keyword (`export static
+		// function`), so the tier is read one token further back when it is present; asking `visibilityBefore`
+		// at the `function` token would answer `file` for every exported method in the program.
+		let visibility = self.declaredFunctionVisibility(hasStaticModifier)
 		self.advance()
 		// The parameter list's `(` is captured before the skip so the param NAMES can be read back out of it
 		// (`paramNamesIn`) — the CONSUME scan needs them, and `skipBalancedParens` only advances past them.
@@ -8388,7 +8431,7 @@ export type Parser
 		let declaredSurface = self.returnDeclaredSurface()
 		let returnType = try self.parseOptionalReturnType() otherwise return
 		let funcName = self.declaredMethodName(nameTok)
-		entries.push(FuncReturnTypeEntry.create(funcName, returnType: returnType, declaredSurface: declaredSurface))
+		entries.push(FuncReturnTypeEntry.create(funcName, returnType: returnType, declaredSurface: declaredSurface, visibility: visibility))
 		// ⭐⭐ **EVERY FREE FUNCTION'S BARE NAME (N1b's qualified-spelling record, re-cut by N1c)** — recorded
 		// here, from the SAME token walk that records its return type, because it answers two questions only
 		// the whole-program index can: is `utils.helper(…)` a directory-qualified free call or a static on a
@@ -8422,7 +8465,7 @@ export type Parser
 		// the whole program learns that a call may legally omit an argument. It also publishes each
 		// synthesized helper's RETURN TYPE into `entries`, which is what lets a call site in another file
 		// type the call it emits to that helper (`mintCallResult`).
-		self.recordScannedParamDefaults(funcName, paramsStart: paramsStart, takesReceiver: takesReceiver, entries: entries, paramDefaults: paramDefaults)
+		self.recordScannedParamDefaults(funcName, paramsStart: paramsStart, takesReceiver: takesReceiver, visibility: visibility, entries: entries, paramDefaults: paramDefaults)
 		// The `throws E` clause follows the return type; parsed BEFORE the consume-scan so the cursor lands
 		// past it. Only a THROWING function gets an entry (its absence is "does not throw"), mirroring
 		// `paramConsumes` recording only consuming functions. Gated on the `throws` KEYWORD being present so
@@ -8496,7 +8539,10 @@ export type Parser
 	// It is TOLERANT like every other routine on this walk: a parameter type it cannot read abandons the
 	// whole function's defaults rather than publishing half of them, and the real parse reports the malformed
 	// declaration with a position.
-	function recordScannedParamDefaults(funcName ByteArray, paramsStart TokenIndex, takesReceiver bool, entries FuncReturnTypeEntryArray, paramDefaults ParamDefaultEntryArray)
+	//
+	// A helper is published at the DECLARING function's own tier, which is the only true statement about it:
+	// nobody writes its name, so no file can be refused it, and every call to it is the compiler's own mint.
+	function recordScannedParamDefaults(funcName ByteArray, paramsStart TokenIndex, takesReceiver bool, visibility Visibility, entries FuncReturnTypeEntryArray, paramDefaults ParamDefaultEntryArray)
 		if not self.paramListDeclaresDefault(paramsStart) 'noDefaults'
 			return
 		end 'noDefaults'
@@ -8545,7 +8591,7 @@ export type Parser
 				// `slotElementsFromAliases: false` for `returnDeclaredSurface`'s reason, and it is the same
 				// reason: this helper is published by the SWEEP, whose copy is the one the whole-program index
 				// stores, so a SLOT's element bit read here would be how far the sweep had got.
-				entries.push(FuncReturnTypeEntry.create(helperName, returnType: MaxonReturnType.value(paramType), declaredSurface: self.declaredSurfaceAt(typeStart, slotElementsFromAliases: false)))
+				entries.push(FuncReturnTypeEntry.create(helperName, returnType: MaxonReturnType.value(paramType), declaredSurface: self.declaredSurfaceAt(typeStart, slotElementsFromAliases: false), visibility: visibility))
 			end 'hasDefault'
 
 			if self.kindAt(itemEnd) != TokenKind.comma 'endList'
@@ -10187,7 +10233,7 @@ export type Parser
 		// declaration in the program — and the sweep's layout is the one the PARSER resolves every type name
 		// against, so the two passes disagreeing about a tier is a wrong answer about what another file may
 		// name.
-		let visibility = self.scannedVisibility()
+		let visibility = self.visibilityBefore(self.pos)
 		let nameTok = try self.readTypeHeader() otherwise return
 		self.enterTypeScope(nameTok.value, isEnum: false)
 
@@ -10702,7 +10748,7 @@ export type Parser
 	function recordScannedEnum(enums EnumLayoutArray, entries FuncReturnTypeEntryArray, paramConsumes ParamConsumeEntryArray, paramDefaults ParamDefaultEntryArray, throwsEntries ThrowsClauseEntryArray, methodInnerAliasParamOut MethodInnerAliasParamEntryArray, freeFunctionNameOut ByteArrayArray, isUnion bool)
 		// Read BACKWARDS, before the keyword is consumed — see `recordScannedType` for why the sweep cannot
 		// read this modifier forwards.
-		let visibility = self.scannedVisibility()
+		let visibility = self.visibilityBefore(self.pos)
 		try self.consume(TokenKind.union if isUnion else TokenKind.enum) otherwise return
 		let nameTok = try self.consume(TokenKind.identifier) otherwise return
 		let scannedConformances = try self.readOptionalImplementsClause() otherwise return
@@ -11392,7 +11438,7 @@ export type Parser
 			// the same enumeration and is now the only one.
 			value then break 'outcome'
 			failed(error) then try self.throwRecordedConstantError(error)
-			poisoned to containerValue then break 'outcome'
+			poisoned to factoryValue then break 'outcome'
 			pending to evaluating then panic("Parser.raiseBindingFailure: top-level binding '{String.from(decl.name)}' is unevaluated — `evaluateInitializers` runs to completion inside `queryProgramSignatures`, before any file is parsed")
 		end 'outcome'
 	end 'raiseBindingFailure'
@@ -16717,7 +16763,7 @@ export type Parser
 	// Without it `let xs = [1, 2]` would silently accept `xs = [3, 4]` — an accepted write that should have
 	// been refused, which is a wrong answer rather than a compile error.
 	function parseTopLevelAssignment(func IrFunction, block IrBlock, nameTok Token, nameIndex TokenIndex) throws ParseError
-		match self.signatures.globalDeclFor(nameTok.value, readerFilePath: self.filePath) 'global'
+		match self.signatures.globalDeclFor(nameTok.value, readerFilePath: self.filePath, into: self.artifact.typeNames) 'global'
 			found(label, valueType, mutable) then try self.storeToGlobal(func, block: block, nameTok: nameTok, nameIndex: nameIndex, label: label, valueType: valueType, mutable: mutable)
 			notFound then try self.rejectNonGlobalAssignment(nameTok)
 		end 'global'
@@ -20825,6 +20871,35 @@ export type Parser
 			return
 		end 'keyIsNotAPath'
 
+		// ⛔⛔ **A PATH ROOTED IN A WRITABLE GLOBAL IS NOT LINTED, AND THAT IS SOUNDNESS RATHER THAN TASTE**
+		// (spec-port `map-struct-bytearray`). The suppression scan below rests on a premise that holds for a
+		// binding this function owns and FAILS for a top-level `var`: that the only code which can invalidate
+		// the membership answer is code the scan can SEE touching this path. A `var` global's storage is
+		// reachable from every function in the program, so any call in the then-block — `print(…)`, a helper,
+		// anything — may `upsert` into the very table the `contains` probed, under a receiver spelling this
+		// token walk has no way to connect to it. Reporting one would be a false accusation.
+		//
+		// ⚠ **THE TEST IS `namesWritableModuleStorage`, WHICH IS THE ARGUMENT ABOVE AND NOT A PROXY FOR IT.**
+		// It was written as "the base is not a local or a capture", whose complement is much larger than
+		// "a mutable global": a `let` global's container refuses mutation at every door — MEASURED, both
+		// `m.upsert(…)` on it directly and `fill(m)` into a mutating parameter are E3019 — so nothing in the
+		// then-block can invalidate a membership answer probed through one, and a key that is a top-level
+		// `let` cannot be rewritten either. Both were skipped, and both are exactly what the lint is for.
+		// LOCAL FIRST, which is what keeps a shadowing local a different subject — `borrowSubjectNameAt`'s
+		// rule, for its reason.
+		//
+		// ⚠ **BOTH REFERENCES SKIP THE WHOLE GLOBAL FAMILY, and this is where the token-level design is
+		// SHARPER than what they express structurally**: their `BuildAccessPath` / `buildAccessPath` cannot
+		// canonicalize a global load at all, so the path is `null` and the lint is skipped for every global —
+		// while this walk holds the tokens AND the declaration, so it can tell the two apart. MEASURED against
+		// the runnable oracle, which compiles the global-rooted program and refuses the byte-identical one
+		// whose base is a PARAMETER; and pinned by the canonical corpus, whose
+		// `map-struct-bytearray/struct-field-access-in-untaken-if-branch` is exactly the `var`-rooted program
+		// and expects exit 0.
+		if self.baseNamesWritableModuleStorage(condStart) or self.baseNamesWritableModuleStorage(keyStart) 'pathIsRootedInWritableModuleStorage'
+			return
+		end 'pathIsRootedInWritableModuleStorage'
+
 		// The THEN block's own extent — `continuesAtElse: false`, so the scan stops at the first `end` and
 		// never walks an `else` branch, which the membership test did not guard.
 		if not self.thenBlockRepeatsTheLookup(self.pos, ifEnd: self.blockStatementEndIndex(ifIndex, continuesAtElse: false), chainStart: condStart, chainPastEnd: memberIndex - 1, keyStart: keyStart, keyPastEnd: keyPastEnd) 'noRedundantGet'
@@ -22546,12 +22621,20 @@ export type Parser
 	// struct-method receiver in the program. `namesManagedTopLevel` is a set membership test and a `false`
 	// from it is final, so a program with no top-level managed binding — the whole scale corpus — never
 	// reaches the box.
+	// Does the chain base at `index` name a top-level `var` — module storage any function in the program can
+	// write? `namesWritableModuleStorage` with the SCOPE test in front of it, which is what keeps a local
+	// that shadows a global's name reading as the local (`borrowSubjectNameAt`'s order, for its reason).
+	function baseNamesWritableModuleStorage(index TokenIndex) returns bool
+		let baseTok = self.tokenAt(index)
+		return not self.baseNamesAValueInScope(baseTok) and self.namesWritableModuleStorage(baseTok.value)
+	end 'baseNamesWritableModuleStorage'
+
 	function namesWritableModuleStorage(name ByteArray) returns bool
 		if not self.signatures.namesManagedTopLevel(name) 'notAManagedTopLevelName'
 			return false
 		end 'notAManagedTopLevelName'
 
-		return match self.signatures.globalDeclFor(name, readerFilePath: self.filePath) 'global'
+		return match self.signatures.globalDeclFor(name, readerFilePath: self.filePath, into: self.artifact.typeNames) 'global'
 			found(_, _, mutable) gives mutable
 			notFound gives false
 		end 'global'
@@ -22599,7 +22682,7 @@ export type Parser
 	// name only past `namesWritableModuleStorage`, which resolves through this very lookup — so it panics
 	// rather than inventing a type nothing declared.
 	function moduleStorageTypeOf(subjectName ByteArray) returns MaxonType
-		match self.signatures.globalDeclFor(subjectName, readerFilePath: self.filePath) 'global'
+		match self.signatures.globalDeclFor(subjectName, readerFilePath: self.filePath, into: self.artifact.typeNames) 'global'
 			found(_, valueType, _) then return valueType
 			notFound then panic("moduleStorageTypeOf: '{String.from(subjectName)}' is not a top-level binding — a subject name reaches here only past `namesWritableModuleStorage`, which asks this same lookup")
 		end 'global'
@@ -31399,6 +31482,13 @@ export type Parser
 		// (`requireFieldAccessible` ⇒ E4006). Both references decide it exactly there and exactly that way —
 		// v1 at `TypeResolution.maxon:10200-10220`, which returns without a diagnostic for a visible method
 		// and defers to the field gate. Asked LAST so a visible type still takes whichever arm above claims it.
+		// ⭐ **A TOP-LEVEL MANAGED GLOBAL'S FIELD — `db.sourceFiles`** (spec-port `map-struct-bytearray`), the
+		// one value base that is neither in scope nor captured. Asked HERE, below every type-based arm, and
+		// that placement is the rule rather than an accident: see `chainBaseNamesAValue`.
+		if self.managedTopLevelBaseAt(self.pos) 'managedTopLevelField'
+			return try self.parseFieldAccess()
+		end 'managedTopLevelField'
+
 		if not self.typeNameVisibleHere(baseTok.value) 'hiddenTypeBase'
 			throw ParseError.undefinedVariable(String.from(baseTok.value), line: baseTok.line, column: baseTok.column)
 		end 'hiddenTypeBase'
@@ -32853,7 +32943,7 @@ export type Parser
 			notFound then break 'constant'
 		end 'constant'
 
-		return match self.signatures.globalDeclFor(tok.value, readerFilePath: self.filePath) 'global'
+		return match self.signatures.globalDeclFor(tok.value, readerFilePath: self.filePath, into: self.artifact.typeNames) 'global'
 			found(label, valueType, mutable) gives ManagedReceiverBinding.global(label, valueType: valueType, mutable: mutable)
 			notFound gives ManagedReceiverBinding.none
 		end 'global'
@@ -35770,37 +35860,97 @@ export type Parser
 		if self.signatures.isManagedListInstance(giid) 'managedList'
 			return "`{String.from(ManagedListBuiltinBaseName)}` static method '{String.from(method)}' — shv2 provides `{String.from(CreateMethod)}()` only"
 		end 'managedList'
-		panic("Parser.containerStaticSurfaceSentence: generic instance {giid} is not a create-only builtin container — every caller opens with the builtin-base test `parseBuiltinContainerStaticCall`'s call sites make, and a container admitted there owes a sentence here")
+		// ⛔ A NODE HANDLE HAS NO STATIC SURFACE AT ALL — not even `create()` — so its sentence names the
+		// method the author wrote and offers nothing in its place. It lives here rather than beside the gate
+		// that used to raise it because this is where "what does this container offer?" is answered, and both
+		// doors that refuse a node now read it from here.
+		if self.signatures.isManagedListNodeInstance(giid) 'nodeHandle'
+			return "`{String.from(ManagedListNodeBuiltinBaseName)}` static method '{String.from(method)}' — a node handle has no static surface at all, not even `{String.from(CreateMethod)}()`: one exists only because a `{String.from(ManagedListBuiltinBaseName)}` insertion linked it, and `insertFirst`/`insertLast` hand back the handle"
+		end 'nodeHandle'
+		panic("Parser.containerStaticSurfaceSentence: generic instance {giid} is not a builtin container — every caller opens with the builtin-base test `requireContainerIsCreatable` makes, and a container admitted there owes a sentence here")
 	end 'containerStaticSurfaceSentence'
 
 	// Gate this container's element/column types and emit its `create` — ONE router, so the gate and the emit
 	// cannot come to disagree about which container they are serving. The gate anchors its diagnostic on the
 	// ALIAS token (the type the author wrote is what is inadmissible), the emit spans alias→method.
 	function gateAndEmitContainerCreate(giid GenericInstanceId, aliasTok Token, range SourceRange) returns ValueId throws ParseError
+		try self.requireContainerIsCreatable(giid, aliasTok: aliasTok)
+
 		if self.signatures.isSetInstance(giid) 'set'
-			try self.requireHashTableKeyType(giid, containerName: String.from(SetBuiltinBaseName), tok: aliasTok)
 			return self.emitSetCreateOp(giid, range: range)
 		end 'set'
 		if self.signatures.isMapInstance(giid) 'map'
-			try self.requireMapColumnTypes(giid, tok: aliasTok)
 			return self.emitMapCreateOp(giid, range: range)
 		end 'map'
 		if self.signatures.isListInstance(giid) or self.signatures.isManagedListInstance(giid) 'chain'
-			try self.requireListElementType(giid, tok: aliasTok)
 			return self.emitListCreateOp(giid, range: range)
 		end 'chain'
 		if self.signatures.isVectorInstance(giid) 'vector'
-			try self.requireVectorElementType(giid, tok: aliasTok)
 			return self.emitVectorCreateOp(giid, range: range)
 		end 'vector'
-		// ⛔ A NODE HANDLE IS NOT CONSTRUCTIBLE — only an insertion mints one — so a `typealias N =
-		// __ManagedListNode with T` + `N.create()` is refused HERE with a sentence rather than reaching the
-		// panic below, which is about a container this router forgot rather than one that has no create.
-		if self.signatures.isManagedListNodeInstance(giid) 'nodeHandle'
-			throw ParseError.unsupported("`{String.from(ManagedListNodeBuiltinBaseName)}` has no `{String.from(CreateMethod)}()` — a node exists only because a `{String.from(ManagedListBuiltinBaseName)}` insertion linked it, and `insertFirst`/`insertLast` hand back the handle", line: aliasTok.line, column: aliasTok.column)
-		end 'nodeHandle'
-		panic("Parser.gateAndEmitContainerCreate: generic instance {giid} is not a create-only builtin container — every caller opens with the builtin-base test `parseBuiltinContainerStaticCall`'s call sites make, and a container admitted there owes a gate and an emit here")
+		panic("Parser.gateAndEmitContainerCreate: generic instance {giid} is not a create-only builtin container — every caller opens with the builtin-base test `requireContainerIsCreatable` makes, and a container admitted there owes a gate and an emit here")
 	end 'gateAndEmitContainerCreate'
+
+	// ⭐⭐ **MAY `<Alias>.create()` BE WRITTEN FOR THIS INSTANCE — the WHOLE gate, asked from BOTH positions.**
+	// A body's `create()` and a top-level `var g = Alias.create()` reach it through
+	// `gateAndEmitContainerCreate` and `evalConstContainerCreate` respectively, so what one refuses cannot
+	// become admissible by being written at the other. It anchors every diagnostic on the ALIAS token: the
+	// type the author wrote is what is inadmissible. Three steps, in the order a reader would ask them — is
+	// this a builtin container at all, does that container have a `create`, and are its columns admissible.
+	function requireContainerIsCreatable(giid GenericInstanceId, aliasTok Token) throws ParseError
+		// ⛔⛔ **A USER GENERIC'S INSTANCE ALIAS REACHES THE TOP-LEVEL DOOR AND MUST BE REFUSED HERE.** That
+		// door claims the shape on `isGenericAlias` alone (`evalConstFoldedValue`), and `genericAliases` holds
+		// USER instances (`typealias IntBox = Box with Count`) beside the builtin ones — so without this test
+		// a user generic fell through `instanceHasBuiltinCreate`, whose header states "this is a builtin
+		// container" as a PRECONDITION, and reached `ProgramSignatures.containerCreateCall`'s named panic.
+		// The body door establishes the same fact one line before it dispatches
+		// (`isBuiltinGenericBaseName` at `parseBuiltinContainerStaticCall`'s call sites), which is why it is
+		// asked here rather than there: one home for it, on the path that had none.
+		//
+		// ⚠ **THE SENTENCE NAMES THE TOP-LEVEL POSITION BECAUSE THAT IS THE ONLY DOOR THAT CAN RAISE IT**, and
+		// what it says is MEASURED: the very same `IntBox.create()` compiles and runs inside a function, so the
+		// refusal is about where it was written and not about the call.
+		if not self.signatures.isBuiltinGenericBaseName(self.signatures.genericInstanceBaseName(giid)) 'notABuiltinContainer'
+			throw ParseError.unsupported("a top-level `{String.from(aliasTok.value)}.{String.from(CreateMethod)}()` — `{String.from(aliasTok.value)}` instantiates the user generic `{String.from(self.signatures.genericInstanceBaseName(giid))}`, and a global's record is built before `main` by `__module_init` from the BUILTIN container registry's description, which a user generic has none of. Declare it inside a function", line: aliasTok.line, column: aliasTok.column)
+		end 'notABuiltinContainer'
+
+		// ⛔ A NODE HANDLE IS NOT CONSTRUCTIBLE — only an insertion mints one — so a `typealias N =
+		// __ManagedListNode with T` + `N.create()` is refused with the sentence
+		// `containerStaticSurfaceSentence` owns, rather than reaching either router's panic, which is about a
+		// container they forgot rather than one that has no create.
+		if not self.signatures.instanceHasBuiltinCreate(giid) 'noCreate'
+			throw ParseError.unsupported(self.containerStaticSurfaceSentence(giid, method: CreateMethod), line: aliasTok.line, column: aliasTok.column)
+		end 'noCreate'
+
+		try self.requireContainerColumnTypes(giid, aliasTok: aliasTok)
+	end 'requireContainerIsCreatable'
+
+	// ⭐ **THE ELEMENT/COLUMN GATE ONE CONTAINER'S `create` PASSES.** Its caller has already established that
+	// the instance is a builtin container with a `create`, so this is a TOTAL router over the five that have
+	// one: `Array` alone has no column rule (its element rule is the instance's own) and says so by returning,
+	// and a SIXTH container whose rule someone forgets meets the panic rather than passing ungated.
+	function requireContainerColumnTypes(giid GenericInstanceId, aliasTok Token) throws ParseError
+		if self.signatures.isArrayInstance(giid) 'array'
+			return
+		end 'array'
+		if self.signatures.isSetInstance(giid) 'set'
+			try self.requireHashTableKeyType(giid, containerName: String.from(SetBuiltinBaseName), tok: aliasTok)
+			return
+		end 'set'
+		if self.signatures.isMapInstance(giid) 'map'
+			try self.requireMapColumnTypes(giid, tok: aliasTok)
+			return
+		end 'map'
+		if self.signatures.isListInstance(giid) or self.signatures.isManagedListInstance(giid) 'chain'
+			try self.requireListElementType(giid, tok: aliasTok)
+			return
+		end 'chain'
+		if self.signatures.isVectorInstance(giid) 'vector'
+			try self.requireVectorElementType(giid, tok: aliasTok)
+			return
+		end 'vector'
+		panic("Parser.requireContainerColumnTypes: generic instance {giid} is a builtin container with a `{String.from(CreateMethod)}` and no column rule — `requireContainerIsCreatable` admitted it, and a container admitted there owes an arm here even if that arm is `Array`'s bare return")
+	end 'requireContainerColumnTypes'
 
 	// Emit `__set_create(elemDrop)` for instance `giid`, yielding the empty set record (P1.7b). The record is
 	// zeroed by `__mm_alloc`, so the first insert lazily allocates the buffers; `elemDrop@40` carries the key
@@ -37558,7 +37708,7 @@ export type Parser
 		// ADMITS `TokenKind.selfType`, and `baseBindingName` special-cases only `TokenKind.self` — so with a
 		// parameter legally bound under the literal name `Self` (D8), a `Self.field.method(…)` chain read as
 		// naming a VALUE base here while the other three doors read it as the TYPE.
-		return self.baseNamesAValueInScope(self.tokenAt(index))
+		return self.chainBaseNamesAValue(index)
 	end 'fieldChainMethodCallAt'
 
 	// The token index just PAST a field-access chain starting at `index` — a `base` (an identifier or
@@ -39413,6 +39563,26 @@ export type Parser
 		return self.scope.contains(name) or self.captureBinds(name)
 	end 'baseNamesAValueInScope'
 
+	// ⭐ **DOES THE BASE AT `index` NAME A VALUE A FIELD CHAIN CAN START FROM?** `baseNamesAValueInScope`
+	// plus the one base that is neither a local nor a capture: a TOP-LEVEL MANAGED BINDING (spec-port
+	// `map-struct-bytearray`) — `db.sourceFiles.contains(key)`, where `var db = Database.create(…)` is a
+	// struct global. Without it the chain fell past every arm to the SIZED-BOUND reading and was refused as
+	// `Expected ''min' or 'max'' but got 'sourceFiles'`.
+	//
+	// ⚠ **THE GLOBAL IS ASKED LAST, AND EVERY TYPE-BASED READING OF THE SHAPE IS ASKED BEFORE IT** — the
+	// precedence `staticCallClaimsBase` already fixes for a one-hop call: a name that is both a declared type
+	// and a global keeps its type reading. That is why the expression door's arm sits BELOW the enum,
+	// namespace-call and static-call arms rather than beside the local one. A LOCAL, by contrast, outranks a
+	// type name (the rule `baseNamesAValueInScope` carries), and the two orders differ for a reason: a local
+	// is a declaration the reader can see on the page, while a global's spelling can collide with a type's
+	// from another file.
+	//
+	// It costs one hash of bytes already in hand when the scope test declines — `managedTopLevelBaseAt`'s
+	// measured filter — and allocates nothing.
+	function chainBaseNamesAValue(index TokenIndex) returns bool
+		return self.baseNamesAValueInScope(self.tokenAt(index)) or self.managedTopLevelBaseAt(index)
+	end 'chainBaseNamesAValue'
+
 	// `p.x` — read field `x` out of the box `p` points at.
 	//
 	// ⭐ **IT RIDES `loadIndirect`, THE OP A GLOBAL'S READ ALREADY USES** (`emitGlobalLoad`), with a
@@ -39555,6 +39725,9 @@ export type Parser
 	end 'consumeChainBaseToken'
 
 	function resolveFieldChain() returns FieldChainStep throws ParseError
+		// The base's INDEX, taken before the token is consumed: the top-level arm below is keyed on it, because
+		// deciding whether a global claims this base needs the MEMBER name too (`managedTopLevelBaseAt`).
+		let baseIndex = self.pos
 		// The base is a local identifier (`b.ops.push`) OR the receiver `self` (`self.nodes.push` — P1.7 slice 3):
 		// `self` is a keyword, not an identifier, and it names the receiver parameter bound under `SelfParamName`,
 		// which `baseBindingName` maps. A single-hop `self.field` read/write resolves elsewhere; this is the 2+-hop
@@ -39599,8 +39772,36 @@ export type Parser
 			end 'captured'
 		end 'valueBase'
 
+		// ⭐ **A TOP-LEVEL MANAGED GLOBAL IS THE THIRD BASE** (spec-port `map-struct-bytearray`) —
+		// `db.sourceFiles.contains(key)`. The slot's occupant is LOADED and wrapped in the same synthetic
+		// `VarInfo` a global METHOD receiver already wears (`dispatchOnManagedReceiver`), so the layout
+		// resolution, the live-binding guard and the immutable-write rule are the ones every other base gets;
+		// nothing about a chain over a global is decided a second time here.
+		//
+		// The loaded pointer is BORROWED — the slot owns it, and `__maxon_global_cleanup` releases it at exit
+		// — which is exactly the property an intermediate field load already has, so the chain walk below
+		// needs no ownership bookkeeping it did not already have.
+		if self.managedTopLevelBaseAt(baseIndex) 'managedTopLevelBase'
+			match self.managedReceiverBindingOf(baseTok) 'binding'
+				// A managed CONSTANT is a `String` or a `b"…"`, neither of which has a field, so it takes the
+				// same `undefinedVariable` an unknown base does rather than an arm that could only refuse.
+				constant then break 'binding'
+				global(label, valueType, mutable) then return try self.resolveGlobalFieldChain(baseTok, label: label, valueType: valueType, mutable: mutable)
+				none then break 'binding'
+			end 'binding'
+		end 'managedTopLevelBase'
+
 		throw ParseError.undefinedVariable(String.from(baseTok.value), line: baseTok.line, column: baseTok.column)
 	end 'resolveFieldChain'
+
+	// Resolve a field chain whose base is a top-level managed global. Split out so the arm above stays one
+	// line and the synthetic binding is built once — `VarInfo.createValueBinding` is the same constructor
+	// `dispatchOnManagedReceiver` uses, and the two must not come to describe one global differently.
+	function resolveGlobalFieldChain(baseTok Token, label ByteArray, valueType MaxonType, mutable bool) returns FieldChainStep throws ParseError
+		let binding = VarInfo.createValueBinding(baseTok.value, varType: valueType, mutable: mutable, boundValue: self.emitGlobalLoad(label, valueType: valueType, range: SourceRange.ofToken(baseTok)))
+		let base = try self.requireStructBase(binding, baseTok: baseTok, subjectName: EmptySourceText)
+		return try self.resolveFieldChainFrom(base.box, layout: base.layout, baseTok: baseTok, baseBinding: binding)
+	end 'resolveGlobalFieldChain'
 
 	// ⭐ **RESOLVE A FIELD-ACCESS CHAIN ON A CAPTURED STRUCT BASE (P1.5-A2b-2).** `level.rawValue` inside a
 	// closure that captures the enclosing struct `level`. The box is READ OUT OF THE ENV (`emitCaptureRead` —
@@ -41238,7 +41439,7 @@ export type Parser
 	// function's doing — it is `loadIndirect`'s `isPure: false` (see StdDialect). Get that wrong and
 	// this emits perfectly correct IR that a later pass silently breaks.
 	function topLevelGlobalRead(tok Token) returns ValueId throws ParseError
-		match self.signatures.globalDeclFor(tok.value, readerFilePath: self.filePath) 'global'
+		match self.signatures.globalDeclFor(tok.value, readerFilePath: self.filePath, into: self.artifact.typeNames) 'global'
 			// A read itself does not care whether the slot may be WRITTEN — it borrows the occupant either
 			// way. What the MUTABILITY decides is whether the borrowed value may later become a mutable
 			// ALIAS, which is `recordGlobalReadValue`'s business (P1.7 slice 2b).
@@ -42255,6 +42456,37 @@ export type Parser
 	export function evalConstInitializer(decl TopLevelDecl, stack TopLevelDeclIndexArray) returns ConstInitializerValue throws ConstEvalError
 		self.pos = decl.initStart
 
+		// ⭐⭐ **A USER STATIC FACTORY CALL IS THE ONE INITIALIZER THAT IS NOT A FOLD** (spec-port
+		// `map-struct-bytearray`) — `var db = Database.create(EntryMap.create(), sourcePaths: …)`. Nothing
+		// about it is evaluated here: what the walk produces is WHICH function to call and WHAT to pass it,
+		// and the record is built before `main` by `__module_init`, exactly as a top-level array literal's
+		// already is. It is claimed on the same three-token lookahead the container factory below is, and for
+		// the same reason — the scalar walk reads `<identifier> .` as a RANGED-TYPE BOUND and has no other
+		// reading of it.
+		if self.atConstFactoryCall() 'factoryCallInitializer'
+			let call = try self.evalConstFactoryCall(stack)
+			try self.requireInitializerConsumed(decl)
+
+			return call
+		end 'factoryCallInitializer'
+
+		let folded = try self.evalConstFoldedValue(stack)
+		// ⭐ **ONE CONSUMED CHECK FOR EVERY FORM.** It used to be spelled once per arm below, four identical
+		// copies of the rule that an initializer is the WHOLE token range — and a fifth arm that forgot it
+		// would silently truncate `var xs = [1, 2] junk` to `[1, 2]`.
+		try self.requireInitializerConsumed(decl)
+
+		return ConstInitializerValue.direct(folded)
+	end 'evalConstInitializer'
+
+	// ⭐ **EVERYTHING A TOP-LEVEL INITIALIZER CAN FOLD TO WITHOUT RUNNING USER CODE** — and therefore,
+	// exactly, everything a factory ARGUMENT may be. The two callers are the initializer entry point above
+	// and `evalConstFactoryArgument`, which is what makes the admitted argument set a consequence of the
+	// grammar rather than a second list that could drift from it.
+	//
+	// ⚠ It does NOT check that the token range is exhausted: an initializer is bounded by its declaration and
+	// an argument by the `,` or `)` that follows it, so the two callers own that check and it is not one rule.
+	function evalConstFoldedValue(stack TopLevelDeclIndexArray) returns ConstFoldedValue throws ConstEvalError
 		// ⭐ **THE OPENING TOKEN IS THE MANAGED TEST, and whatever FOLLOWS the literal is rejected by the one
 		// shared `requireInitializerConsumed`** — the array-literal arm's arrangement below, for its reason.
 		//
@@ -42278,9 +42510,8 @@ export type Parser
 		// later. The token test IS the kind test, read once.
 		if self.at(TokenKind.stringLiteral) 'stringLiteral'
 			let decoded = try self.decodeConstStringLiteral(self.consumeManagedLiteral())
-			try self.requireInitializerConsumed(decl)
 
-			return ConstInitializerValue.managed(decoded, kind: ManagedConstKind.string)
+			return ConstFoldedValue.managed(decoded, kind: ManagedConstKind.string)
 		end 'stringLiteral'
 		if self.at(TokenKind.byteStringLiteral) 'byteStringLiteral'
 			let byteStringTok = self.consumeManagedLiteral()
@@ -42289,22 +42520,17 @@ export type Parser
 			// expression door has always asked in this order, and now the two doors ask one question.
 			let decoded = try self.decodeConstByteStringLiteral(byteStringTok)
 			try self.requireConstByteStringBlobFitsItsElement(decoded, tok: byteStringTok)
-			try self.requireInitializerConsumed(decl)
 
-			return ConstInitializerValue.managed(decoded, kind: ManagedConstKind.byteArray)
+			return ConstFoldedValue.managed(decoded, kind: ManagedConstKind.byteArray)
 		end 'byteStringLiteral'
 
 		// ⭐ **AN ARRAY LITERAL IS THE THIRD ANSWER, AND IT IS DECIDED ON THE OPENING TOKEN** (P1.7 slice
 		// 2b). It cannot ride the single-token test above — `[1, 2]` is five tokens — and it must not fall
 		// to the scalar walk, whose `evalConstPrimary` has no `[` and would report `Expected expression but
-		// got '['` (which is what it did before this slice, in every position). Unlike the two literal arms,
-		// it is followed by `requireInitializerConsumed`: the walk stops at the closing `]`, so a trailing
-		// `var xs = [1, 2] junk` would otherwise be silently truncated to `[1, 2]`.
+		// got '['` (which is what it did before this slice, in every position). The walk stops at the closing
+		// `]`, so a trailing `var xs = [1, 2] junk` is caught by the caller's consumed check.
 		if self.at(TokenKind.leftBracket) 'arrayLiteralInitializer'
-			let array = try self.evalConstArrayLiteral(stack)
-			try self.requireInitializerConsumed(decl)
-
-			return array
+			return try self.evalConstArrayLiteral(stack)
 		end 'arrayLiteralInitializer'
 
 		// ⭐⭐ **`<ContainerAlias>.create()` IS THE FOURTH ANSWER, AND IT IS DECIDED ON THE OPENING TOKEN**
@@ -42319,17 +42545,145 @@ export type Parser
 		// form — and claiming the whole shape is what lets the arm below say what a container's static
 		// surface IS, rather than leaving `ItemArray.push` to the bound reader's nonsense message.
 		if self.at(TokenKind.identifier) and self.peekKind() == TokenKind.dot and self.signatures.isGenericAlias(self.current().value) 'containerFactoryInitializer'
-			let container = try self.evalConstContainerCreate()
-			try self.requireInitializerConsumed(decl)
-
-			return container
+			return try self.evalConstContainerCreate()
 		end 'containerFactoryInitializer'
 
-		let value = try self.evalConstBinary(stack, minPrec: OrPrecedence)
-		try self.requireInitializerConsumed(decl)
+		return ConstFoldedValue.scalar(try self.evalConstBinary(stack, minPrec: OrPrecedence))
+	end 'evalConstFoldedValue'
 
-		return ConstInitializerValue.scalar(value)
-	end 'evalConstInitializer'
+	// ⭐⭐ **DOES THE CURSOR SIT ON A USER STATIC FACTORY CALL — `<TypeName>.<method>(`?** Four tokens of
+	// lookahead, and the decisive one is the LAST: what makes this form recognizable is that some file
+	// DECLARES a function under the mangled `Type.method` name, which is exactly the question the call
+	// site asks (`Parser.staticCallClaimsBase`) and exactly the key the signature index files a method
+	// under. Asking anything weaker — "does the head start with a capital?", "is the member `create`?" —
+	// would be a second, weaker reading of what a static call IS.
+	//
+	// ⚠ **THIS TEST IS ASKED *BEFORE* THE CONTAINER ARM (`evalConstInitializer`), AND THE TWO ARE DISJOINT
+	// ANYWAY.** A generic-instance alias lives in a different registry and declares no `Type.method`, so no
+	// spelling can satisfy both — which is what keeps the container's own surface sentence saying what a
+	// container has, whichever order the two are asked in.
+	function atConstFactoryCall() returns bool
+		if not (self.at(TokenKind.identifier) and self.peekKind() == TokenKind.dot) 'notADottedName'
+			return false
+		end 'notADottedName'
+		if self.kindAt(self.pos + 2) != TokenKind.identifier or self.kindAt(self.pos + 3) != TokenKind.leftParen 'notACall'
+			return false
+		end 'notACall'
+
+		return self.signatures.declaresCallee(qualifiedMethodName(self.current().value, methodName: self.tokenAt(self.pos + 2).value))
+	end 'atConstFactoryCall'
+
+	// ⭐⭐ **`Database.create(EntryMap.create(), sourcePaths: StringArray.create())` — A GLOBAL BUILT BY THE
+	// PROGRAM'S OWN CODE** (spec-port `map-struct-bytearray`). The cursor sits on the type name;
+	// `atConstFactoryCall` has already established that some file declares this `Type.method`.
+	//
+	// ⭐ **THIS IS THE ONE INITIALIZER FORM THAT RUNS USER CODE, AND EVERYTHING ELSE ABOUT IT FOLLOWS FROM
+	// THAT.** `evalConstNamed` refuses `f()` because a call's answer needs the program to be RUNNING — still
+	// true, and still nothing is folded here. What the walk produces is the CALL, which `__module_init`
+	// makes before `main`, so the answer exists by the time any user code can read the slot.
+	//
+	// ⚠ **THE FACTORY MAY NOT READ ANOTHER GLOBAL — and that is a property of the ARGUMENTS, not a rule this
+	// walk enforces on the body.** `__module_init` fills the slots in arena order, so a body that read a
+	// later global would read the null the image left there. The reason no ordering pass is needed is the
+	// same one `ModuleInit`'s header already states for the literal kinds: a managed initializer cannot NAME
+	// another global (`ProgramSignatures.evaluateDecl` answers `notFound` for every record-valued decl), and
+	// the admitted argument set below inherits that unchanged — every argument is a constant or a fresh
+	// empty container. What a factory BODY does is not bounded here, and `specs/static-variables.md` does
+	// not bound it in any compiler in the tree.
+	function evalConstFactoryCall(stack TopLevelDeclIndexArray) returns ConstInitializerValue throws ConstEvalError
+		let typeTok = try self.consumeConst(TokenKind.identifier)
+		// The type name is a USE of it, recorded for the same reason and at the same point the container
+		// factory's alias is: this walk is the only reader of a top-level initializer's tokens, so it is the
+		// only thing that can tell the E3062 check the name was written here.
+		self.signatures.recordConstInitializerTypeName(typeTok.value, declFilePath: self.filePath)
+		try self.consumeConstToken(TokenKind.dot)
+		let methodTok = try self.consumeConst(TokenKind.identifier)
+		let callee = qualifiedMethodName(typeTok.value, methodName: methodTok.value)
+
+		// The TYPE half of the visibility rule, asked through the door every other type-named form asks
+		// (`parseDottedPrimary`'s hidden-base guard): a file that may not NAME `Database` may not build one
+		// at file scope either.
+		if not self.typeNameVisibleHere(typeTok.value) 'hiddenFactoryType'
+			throw ConstEvalError.defective(ParseError.undefinedVariable(String.from(typeTok.value), line: typeTok.line, column: typeTok.column))
+		end 'hiddenFactoryType'
+
+		// ⭐⭐ **AND THE METHOD HALF, which a body's call site gets from `SemanticCheck.calleeVisibleFrom` and
+		// this position cannot.** `__module_init` is a function no file wrote, so that pass exempts every call
+		// it makes (there is no reader path to hold them to) — which would leave an exported type's
+		// file-private `static` reachable from any file that writes `var db = Database.create()`, permanently
+		// and silently. MEASURED before this guard: a cross-file file-private `Database.create` built and
+		// returned 7, where the byte-identical call from inside a function is E3008. So the question is asked
+		// HERE, where the reader file is known exactly, against the sweep's own visibility column and through
+		// the very same `isVisibleFrom` the body door uses.
+		match self.signatures.calleeVisibilityFrom(callee, readerFilePath: self.filePath) 'factoryMethodVisibility'
+			visible then break 'factoryMethodVisibility'
+			hidden(tier) then throw ConstEvalError.defective(ParseError.calleeNotVisible(String.from(callee), tier: tier, line: methodTok.line, column: methodTok.column))
+		end 'factoryMethodVisibility'
+
+		try self.requireGlobalFactoryReturnsARecord(callee, typeTok: typeTok, methodTok: methodTok)
+
+		try self.consumeConstToken(TokenKind.leftParen)
+		var args = ConstFactoryArgumentArray.create()
+		if not self.at(TokenKind.rightParen) 'hasArguments'
+			args.push(try self.evalConstFactoryArgument(stack))
+			while self.at(TokenKind.comma) 'moreArguments'
+				try self.consumeConstToken(TokenKind.comma)
+				args.push(try self.evalConstFactoryArgument(stack))
+			end 'moreArguments'
+		end 'hasArguments'
+		try self.consumeConstToken(TokenKind.rightParen)
+
+		return ConstInitializerValue.factoryCall(callee, args: args)
+	end 'evalConstFactoryCall'
+
+	// ⭐ **A TOP-LEVEL FACTORY MUST HAND BACK A RECORD.** A `.data` slot holds either a baked VALUE or a
+	// POINTER filled before `main`, and only the second can be the result of a call: a scalar global's
+	// number is written into the image, which happens strictly before anything runs. So a factory returning
+	// `int`/`bool`/`float` — or returning nothing at all — is refused here with a sentence naming what it
+	// returns, rather than reaching `globalStdType`'s width table with a tag it has no slot shape for.
+	function requireGlobalFactoryReturnsARecord(callee ByteArray, typeTok Token, methodTok Token) throws ConstEvalError
+		match self.signatures.globalFactoryReturn(callee) 'returns'
+			record then return
+			// Unreachable through `atConstFactoryCall`, which admits the form only for a declared callee —
+			// stated as a case rather than assumed, because the two doors are asked of the same name.
+			undeclared then throw ConstEvalError.defective(ParseError.unsupported("`{String.from(typeTok.value)}.{String.from(methodTok.value)}` as a top-level initializer — no file declares it", line: methodTok.line, column: methodTok.column))
+			scalar(typeName) then throw ConstEvalError.defective(ParseError.unsupported("`{String.from(typeTok.value)}.{String.from(methodTok.value)}` as a top-level initializer — it returns '{typeName}', and a global holding a scalar has its value written into the `.data` image, which happens before any code can run. A factory-built global must return a record (a struct, a String or a container)", line: methodTok.line, column: methodTok.column))
+			void then throw ConstEvalError.defective(ParseError.unsupported("`{String.from(typeTok.value)}.{String.from(methodTok.value)}` as a top-level initializer — it returns nothing, so there is no value for the binding to hold", line: methodTok.line, column: methodTok.column))
+		end 'returns'
+	end 'requireGlobalFactoryReturnsARecord'
+
+	// ⭐ **ONE ARGUMENT OF A TOP-LEVEL FACTORY CALL — its optional `name:` LABEL and a value that is anything
+	// an initializer may be EXCEPT another call.** The admitted set is not a list written here: it is
+	// `evalConstFoldedValue`, the very walk the initializer itself goes through.
+	//
+	// ⛔ **A NESTED FACTORY CALL IS REFUSED, AND THE GAP IS THE TYPE SYSTEM'S RATHER THAN THIS WALK'S.** An
+	// argument that could itself be a call makes the folded-value union RECURSIVE, and Maxon forbids a
+	// recursive type outright (E4014, `type 'X' contains a reference cycle`) — so admitting it needs the
+	// call tree flattened into an arena with indices, which is a mechanism and not a line. The refusal says
+	// so at the argument the author wrote.
+	function evalConstFactoryArgument(stack TopLevelDeclIndexArray) returns ConstFactoryArgument throws ConstEvalError
+		let label = self.consumeConstArgumentLabel()
+		let argTok = self.current()
+		if self.atConstFactoryCall() 'nestedCall'
+			throw ConstEvalError.defective(ParseError.unsupported("a nested factory call `{String.from(argTok.value)}.{String.from(self.tokenAt(self.pos + 2).value)}(…)` as an argument in a top-level initializer — an argument is a constant, a literal or an empty container, and nesting one call inside another needs the folded call tree held out of line. Build the inner value in the factory instead", line: argTok.line, column: argTok.column))
+		end 'nestedCall'
+
+		return ConstFactoryArgument.create(label, value: try self.evalConstFoldedValue(stack))
+	end 'evalConstFactoryArgument'
+
+	// The `name:` an argument was written with, or the EMPTY bytes that mean "positional" — the same "no
+	// label" spelling `MaxonOp.call`'s `argLabels` uses, so what this walk records and what a body's call
+	// site records are one encoding. A label is an identifier followed by `:`; anything else is the value.
+	function consumeConstArgumentLabel() returns ByteArray
+		if not (self.at(TokenKind.identifier) and self.peekKind() == TokenKind.colon) 'positional'
+			return EmptySourceText
+		end 'positional'
+
+		let labelTok = self.current()
+		self.advance()
+		self.advance()
+		return labelTok.value
+	end 'consumeConstArgumentLabel'
 
 	// ⭐ **`[e0, e1, …]` AT TOP LEVEL — the constant twin of `parseArrayLiteral`**, and the same three rules
 	// read off the same grammar: an EMPTY literal has no element type to infer, the FIRST element fixes the
@@ -42344,7 +42698,7 @@ export type Parser
 	// elements are CONSTANTS — there is no binding to poison and no temp to de-list — so the only thing that
 	// carries over is that a String element must reach the array OWNED, which `ModuleInit` does by cloning
 	// the literal exactly as `moveElementIntoContainer` promotes a borrowed one.
-	function evalConstArrayLiteral(stack TopLevelDeclIndexArray) returns ConstInitializerValue throws ConstEvalError
+	function evalConstArrayLiteral(stack TopLevelDeclIndexArray) returns ConstFoldedValue throws ConstEvalError
 		let openTok = try self.consumeConst(TokenKind.leftBracket)
 		self.skipNewlines()
 		if self.at(TokenKind.rightBracket) 'empty'
@@ -42372,7 +42726,7 @@ export type Parser
 		end 'moreElements'
 		try self.consumeConst(TokenKind.rightBracket)
 
-		return ConstInitializerValue.arrayLiteral(elements, element: element)
+		return ConstFoldedValue.arrayLiteral(elements, element: element)
 	end 'evalConstArrayLiteral'
 
 	// ⭐⭐ **`ItemArray.create()` AT TOP LEVEL — AN EMPTY CONTAINER AS A GLOBAL** (spec-port `ownership`).
@@ -42386,11 +42740,12 @@ export type Parser
 	// (`ModuleInit.builtArrayRecord`). A container factory is the array literal's empty case, so it takes
 	// the same slot, the same init and the same `__maxon_global_cleanup` drop.
 	//
-	// ⚠ **ARRAY INSTANCES ONLY, and the refusal names what the door can build.** `__module_init` builds a
-	// record through `__arr_create`; a `Set`/`Map`/`List`/`Vector` global would need that function to learn
-	// each container's own create — a real slice, not a line — and the honest answer meanwhile is a sentence
-	// saying so rather than a record of the wrong shape.
-	function evalConstContainerCreate() returns ConstInitializerValue throws ConstEvalError
+	// ⭐ **EVERY BUILTIN CONTAINER, not just `Array`** (spec-port `map-struct-bytearray`). The `Array`-only
+	// limit this door used to carry was a property of `__module_init`, which knew one `create`; the routing
+	// now lives on the instance registry (`ProgramSignatures.containerCreateCall`), so a `Set` / `Map` /
+	// `List` / `Vector` global is built from the same description an `Array` global is. What remains
+	// refused is a container with NO `create` at all, which is a fact about the container.
+	function evalConstContainerCreate() returns ConstFoldedValue throws ConstEvalError
 		let aliasTok = try self.consumeConst(TokenKind.identifier)
 		// This walk is the ONLY reader of a top-level initializer's tokens, so it is the only thing that can
 		// tell the E3062 check the alias was named here — the cast target's door, one shape over, and
@@ -42412,9 +42767,13 @@ export type Parser
 		try self.consumeConstToken(TokenKind.rightParen)
 
 		let giid = self.signatures.genericAliasInstanceFrom(aliasTok.value, readerFilePath: self.filePath)
-		if not self.signatures.isArrayInstance(giid) 'notAnArrayInstance'
-			throw ConstEvalError.defective(ParseError.unsupported("a top-level `{String.from(aliasTok.value)}.{String.from(CreateMethod)}()` — a global container's record is built by `__module_init`, which builds an `{String.from(ArrayBuiltinBaseName)}`'s; a `{String.from(SetBuiltinBaseName)}` / `{String.from(MapBuiltinBaseName)}` / `{String.from(ListBuiltinBaseName)}` / `{String.from(VectorBuiltinBaseName)}` global is a later slice. Declare it inside a function, or use an `{String.from(ArrayBuiltinBaseName)}`", line: aliasTok.line, column: aliasTok.column))
-		end 'notAnArrayInstance'
+		// The SAME gate a body's `create()` passes, reached through the same function so a container this
+		// index refuses cannot become admissible by being written at file scope. Only the error TYPE differs —
+		// a constant initializer's refusals travel as `ConstEvalError` — which is one wrap and not a second
+		// decider.
+		try self.requireContainerIsCreatable(giid, aliasTok: aliasTok) otherwise (err) 'inadmissibleContainer'
+			throw ConstEvalError.defective(err)
+		end 'inadmissibleContainer'
 
 		// ⚠ **AN ARRAY OF BUFFERS IS REFUSED, because the SURFACE would not survive the slot.** Which
 		// surface an element reads as is a mark the parser carries on the VALUE
@@ -42426,7 +42785,7 @@ export type Parser
 			throw ConstEvalError.defective(ParseError.unsupported("a top-level `{String.from(aliasTok.value)}.{String.from(CreateMethod)}()` — its elements are `{String.from(ManagedMemoryTypeName)}` buffers, and a global is re-loaded at every use, so an element read out of it would carry the `{String.from(ArrayBuiltinBaseName)}` surface instead. Declare an array of buffers inside a function", line: aliasTok.line, column: aliasTok.column))
 		end 'elementsAreBuffers'
 
-		return ConstInitializerValue.containerCreate(giid)
+		return ConstFoldedValue.containerCreate(giid)
 	end 'evalConstContainerCreate'
 
 	// ONE element of a top-level array literal: a STRING literal, or anything the scalar evaluator folds to
@@ -43058,12 +43417,26 @@ export type Parser
 			throw ConstEvalError.defective(ParseError.functionCallInConstant(String.from(tok.value), line: tok.line, column: tok.column))
 		end 'call'
 
-		if self.peekKind() == TokenKind.dot 'qualifiedBound'
+		// ⭐⭐ **THE SIZED-BOUND READING IS CLAIMED ONLY BY A SIZED TYPE, AND THAT ORDER IS THE FIX FOR A
+		// DIAGNOSTIC THAT DESCRIBED A DIFFERENT PROGRAM** (spec-port `map-struct-bytearray`). `<ident> .`
+		// used to enter `parseTypeQualifiedBound` unconditionally, so ANY dotted name in a constant —
+		// `Database.create()`, `Colour.green`, `lib.inner.pick()` — was read as `i64.min` and refused with
+		// **E2010 `Expected ''min' or 'max'' but got 'create'`**, a message about a grammar the author was
+		// not writing in. The bound's base is a fixed roster of ten spellings (`sizedTypeBound`), so asking
+		// FIRST whether the head is one of them costs one comparison and makes the misreading unreachable:
+		// everything else now gets a sentence naming the real gap, which is that a constant initializer
+		// cannot reach a member of a user type.
+		if self.peekKind() == TokenKind.dot and isSizedTypeName(tok.value) 'qualifiedBound'
 			let bound = try self.parseTypeQualifiedBound(false) otherwise (err) 'badBound'
 				throw ConstEvalError.defective(err)
 			end 'badBound'
 			return ConstValue.create(bound.value, tag: ValueTypeTag.integer)
 		end 'qualifiedBound'
+
+		if self.peekKind() == TokenKind.dot 'dottedNonBound'
+			let memberTok = self.tokenAt(self.pos + 2)
+			throw ConstEvalError.defective(ParseError.unsupported("`{String.from(tok.value)}.{tokenDisplayText(memberTok)}` in a constant initializer — a constant is folded before any code runs, so it can name another top-level `let`, a literal, an empty container, a `{String.from(CreateMethod)}()`-style factory at the TOP of an initializer, or a sized type's `.{String.from(MinBoundField)}`/`.{String.from(MaxBoundField)}`, and nothing else", line: tok.line, column: tok.column))
+		end 'dottedNonBound'
 
 		self.advance()
 		return try self.evalConstNameRef(tok, stack: stack)

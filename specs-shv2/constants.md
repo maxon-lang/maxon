@@ -468,7 +468,7 @@ end 'main'
 ```
 
 <!-- disabled-test: top-level-constant -->
-<!-- a module-scope `let X = Enum.case` — shv2's top-level initializers are constant-only and read a dotted name as a ranged-alias bound (E2010 "Expected 'min' or 'max'"); the same door the `array-globals` call-initialized cases wait on -->
+<!-- a module-scope `let X = Enum.case`. ⚠ The old reason here — "reads a dotted name as a ranged-alias bound (E2010 'Expected min or max')" — went stale when top-level factory-call initializers landed: that misreading is now impossible, and the refusal names what a constant may contain. The LIVE blocker is narrower: an enum CASE is not among the foldable forms (a top-level `let`, a literal, an empty container, a `create()`-style factory, a sized type's `.min`/`.max`), so `Color.green` is a clean E2015. It unlocks when a constant initializer can fold an enum case to its ordinal. -->
 ```maxon
 enum Color
 	red

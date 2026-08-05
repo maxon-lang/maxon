@@ -96,9 +96,23 @@ function buildModuleInit(module MaxonModule, project Project, globals ManagedGlo
 	fn.terminate(MaxonOp.retVoid, range: anchorRange(globals))
 end 'buildModuleInit'
 
-// The OWNED record a managed global's slot starts life holding. The three kinds differ in exactly one thing
-// — how much of the record the literal's own materialization already is — and that difference is a fact
-// about the record formats, not a choice made here:
+// The OWNED value a managed global's slot starts life holding — either a record this function MATERIALIZES,
+// or whatever a user factory RETURNS.
+//
+// ⭐ **THE FACTORY ARM IS THE ONE PLACE THE COMPILER RUNS THE PROGRAM'S OWN CODE BEFORE `main`** (spec-port
+// `map-struct-bytearray`), and it is exactly what `DeadGlobalElimination`'s header filed against the day an
+// initializer may call: the call belongs here, and a global whose initializer calls is kept alive by
+// `ProgramSignatures.contributesStorage` so this run is never spliced out from under its side effects.
+function initialRecordOf(fn SynthesizedFunction, global ManagedGlobal) returns ValueId
+	return match global.initializer 'initializer'
+		record(build) gives builtRecord(fn, build: build, valueType: global.valueType, range: global.range)
+		factoryCall(callee, args) gives calledFactoryRecord(fn, callee: callee, args: args, valueType: global.valueType, range: global.range)
+	end 'initializer'
+end 'initialRecordOf'
+
+// ⭐ **ONE RECORD, MATERIALIZED — the shared producer for a global's own slot AND for a factory argument.**
+// The three kinds differ in exactly one thing — how much of the record the literal's own materialization
+// already is — and that difference is a fact about the record formats, not a choice made here:
 //
 //   • a **String** literal is a WHOLLY immortal `.rdata` record (`lowerStringLiteral`), shared by every
 //     read of that literal in the program, so it is CLONED into a fresh owned heap String. `__str_clone`
@@ -108,16 +122,16 @@ end 'buildModuleInit'
 //     immortal `.rdata` blob (`lowerConstArrayLiteral`), which is precisely what the slot must hold — so
 //     there is nothing to clone. Its first receiver-writing method detaches the buffer off `.rdata`
 //     (`byte-string-literal.push-grows-off-rdata`), which is what makes a MUTABLE byte-string global work.
-//   • an **array** literal has no literal record at all (P1.7 slice 2b): the record is BUILT here, exactly
-//     as `Parser.parseArrayLiteral` builds one in a function body — `__arr_create` with this instance's
-//     stamps, then one `__arr_push` per folded element.
-function initialRecordOf(fn SynthesizedFunction, global ManagedGlobal) returns ValueId
-	return match global.initializer 'initializer'
-		stringRecord(bytes) gives clonedStringRecord(fn, bytes: bytes, valueType: global.valueType, range: global.range)
-		byteStringRecord(bytes) gives ownedByteStringRecord(fn, bytes: bytes, valueType: global.valueType, range: global.range)
-		arrayRecord(elements, elementSize, elementDestroy) gives builtArrayRecord(fn, elements: elements, elementSize: elementSize, elementDestroy: elementDestroy, valueType: global.valueType, range: global.range)
-	end 'initializer'
-end 'initialRecordOf'
+//   • a **container** has no literal record at all (P1.7 slice 2b): the record is BUILT here, exactly as
+//     `Parser`'s body emitters build one — this instance's `create` with the stamps it fixes, then one
+//     `__arr_push` per folded element, of which an array LITERAL has some and every other container none.
+function builtRecord(fn SynthesizedFunction, build ManagedGlobalRecord, valueType MaxonType, range SourceRange) returns ValueId
+	return match build 'build'
+		stringRecord(bytes) gives clonedStringRecord(fn, bytes: bytes, valueType: valueType, range: range)
+		byteStringRecord(bytes) gives ownedByteStringRecord(fn, bytes: bytes, valueType: valueType, range: range)
+		containerRecord(create, elements) gives builtContainerRecord(fn, create: create, elements: elements, valueType: valueType, range: range)
+	end 'build'
+end 'builtRecord'
 
 // The String arm: materialize the immortal `.rdata` literal, then CLONE it into a fresh owned heap
 // String the slot can own, mutate and eventually free. Shared with the array build, whose STRING ELEMENTS
@@ -138,46 +152,108 @@ function ownedByteStringRecord(fn SynthesizedFunction, bytes ByteArray, valueTyp
 	return record
 end 'ownedByteStringRecord'
 
-// ⭐ **AN ARRAY GLOBAL'S RECORD IS BUILT, ELEMENT BY ELEMENT, AT RUN TIME** (P1.7 slice 2b) — the ops
-// `Parser.parseArrayLiteral` emits for `[10, 20, 30]` in a function body, emitted here for the same literal
-// written at file scope. Deliberately NOT v1's `ConstantArrayLiteralRdata` (`Compiler/Passes/`), which moves
-// an all-constant-integer element BUFFER into `.rdata` while still heap-allocating the header: that is an
-// OPTIMIZATION over this, it is the optimizer's call to make, and building it now would fork a second
-// element-emission path before the first one is proven.
+// ⭐ **A CONTAINER GLOBAL'S RECORD IS BUILT AT RUN TIME** (P1.7 slice 2b, every container since spec-port
+// `map-struct-bytearray`) — the ops `Parser`'s body emitters make for `[10, 20, 30]` or `MapAlias.create()`
+// inside a function, emitted here for the same thing written at file scope. Deliberately NOT v1's
+// `ConstantArrayLiteralRdata` (`Compiler/Passes/`), which moves an all-constant-integer element BUFFER into
+// `.rdata` while still heap-allocating the header: that is an OPTIMIZATION over this, it is the optimizer's
+// call to make, and building it now would fork a second element-emission path before the first one is proven.
 //
-// ⚠ **THE STAMPS ARE THE INSTANCE'S, NOT THIS FUNCTION'S.** `elementSize` and `elementDestroy` were resolved
-// where the instance registry lives (`ProgramSignatures.arrayRecordInitializer`), off the very instance the
-// global's slot is typed by — so the strides this record is born with and the type every use loads through
-// cannot disagree, and the element destructor equals the one a body's literal of the same elements stamps.
+// ⚠ **THE CREATE AND ITS STAMPS ARE THE INSTANCE'S, NOT THIS FUNCTION'S.** Both were resolved where the
+// instance registry lives (`ProgramSignatures.containerCreateCall`), off the very instance the global's slot
+// is typed by — so the strides this record is born with and the type every use loads through cannot
+// disagree, and each column's destructor equals the one a body's `create()` of the same instance stamps.
 //
 // It takes the type and range rather than the `ManagedGlobal` for its two siblings' reason, and now the
 // three arms read alike: nothing here is a fact about a GLOBAL, and a builder that cannot see one cannot
-// come to read a second field off it that the other two arms would not have.
-function builtArrayRecord(fn SynthesizedFunction, elements ConstArrayElementArray, elementSize ByteOffset, elementDestroy ArrayElementDestroy, valueType MaxonType, range SourceRange) returns ValueId
+// come to read a second field off it that the other two arms would not have — which is also what lets all
+// three serve a factory ARGUMENT unchanged.
+function builtContainerRecord(fn SynthesizedFunction, create ContainerCreateCall, elements ConstArrayElementArray, valueType MaxonType, range SourceRange) returns ValueId
 	var args = ValueIdArray.create()
-	args.push(fn.emitIntegerLiteral(elementSize as ParsedInt, range: range))
-	args.push(elementDestroyValue(fn, destroy: elementDestroy, range: range))
-	let record = fn.emitRuntimeCall(ArrCreateName, args: args, resultTag: maxonTypeTag(valueType), resultNameId: typeNameIdOf(valueType), range: range)
+	for stamp in create.stamps 'eachStamp'
+		args.push(containerStampValue(fn, stamp: stamp, range: range))
+	end 'eachStamp'
+	let record = fn.emitRuntimeCall(create.callee, args: args, resultTag: maxonTypeTag(valueType), resultNameId: typeNameIdOf(valueType), range: range)
+
+	// A fixed-size container's elements are addressable from birth, so the record is sized before anything
+	// reads it — the second call `Parser.emitVectorCreateOp` makes, for the same reason.
+	match create.sizing 'sizing'
+		grown then break 'sizing'
+		fixed(count) then _ = fn.emitRuntimeCall(ArrResizeName, args: pairArgs(record, second: fn.emitTypedLiteral(count as ParsedInt, valueType: MaxonType.integer, range: range)), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+	end 'sizing'
 
 	for element in elements 'eachElement'
 		_ = fn.emitRuntimeCall(ArrPushName, args: pairArgs(record, second: elementRecordOf(fn, element: element, range: range)), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
 	end 'eachElement'
 
 	return record
-end 'builtArrayRecord'
+end 'builtContainerRecord'
 
-// The `element_destroy@40` argument `__arr_create` stamps: the drop callee's raw `.text` ADDRESS for a
-// managed element, 0 for a trivial one. The emitting twin of `Parser.arrayElementDestroyValue`, over the ONE
-// decision both read (`ProgramSignatures.arrayElementDestroy`). The address rides a `functionRef`, which
+// One stamp a container's `create` is born holding: a number, or the drop callee's raw `.text` ADDRESS. The
+// emitting twin of `Parser.columnDestroyValue`, over the ONE decision both read
+// (`ProgramSignatures.columnDestroyStamp`). The address rides a `functionRef`, which
 // `LowerMaxonToStd.lowerFunctionRef` materializes BARE for a `__`-prefixed callee (not the `__fnref_` env
 // thunk — the drop walk invokes it through a plain `callIndirect(ptr)`) and `scanRuntimeUsage` records, so
 // naming it here is what installs the destructor.
-function elementDestroyValue(fn SynthesizedFunction, destroy ArrayElementDestroy, range SourceRange) returns ValueId
-	return match destroy 'destroy'
-		trivial gives fn.emitIntegerLiteral(TrivialDestructor, range: range)
-		drop(callee) gives fn.emitRuntimeFuncAddr(callee, range: range)
-	end 'destroy'
-end 'elementDestroyValue'
+function containerStampValue(fn SynthesizedFunction, stamp ContainerCreateStamp, range SourceRange) returns ValueId
+	return match stamp 'stamp'
+		inline(value) gives fn.emitTypedLiteral(value, valueType: MaxonType.integer, range: range)
+		dropCallee(callee) gives fn.emitRuntimeFuncAddr(callee, range: range)
+	end 'stamp'
+end 'containerStampValue'
+
+// ⭐⭐ **THE SLOT'S OCCUPANT, RETURNED BY THE PROGRAM'S OWN CODE** (spec-port `map-struct-bytearray`) —
+// `var db = Database.create(EntryMap.create(), sourcePaths: StringArray.create())`. Each argument is
+// materialized first, in SOURCE order, and then one ordinary `MaxonOp.call`: the same op a body's call site
+// emits, carrying the same labels, so `LowerMaxonToStd.lowerCall` slots the labelled arguments against the
+// callee's declared parameter names exactly as it does everywhere else. Nothing about the call is special
+// here, which is the point — the factory is an ordinary function and this is an ordinary call to it.
+//
+// ⚠ **THE RESULT IS OWNED AND NOTHING ELSE HOLDS IT.** A user factory hands back a fresh record (or one it
+// has already taken ownership of through its consumed parameters), the slot becomes its sole owner, and
+// `__maxon_global_cleanup` drops it through the callee's return type's own drop — the same pair every other
+// arm balances by.
+//
+// ⚠ **AND THE ARGUMENTS THE CALLEE ONLY BORROWED ARE STILL THIS FUNCTION'S.** They are materialized here, so
+// this frame owns them; a body's call site hands that job to the statement's own temp list
+// (`Parser.trackOwnedTemp`) and `__module_init` has no statement to end. So each one is dropped right after
+// the call, on the decision the index already made per argument (`GlobalInitArgumentCleanup`).
+function calledFactoryRecord(fn SynthesizedFunction, callee ByteArray, args GlobalInitArgumentArray, valueType MaxonType, range SourceRange) returns ValueId
+	var values = ValueIdArray.create()
+	var labels = ByteArrayArray.create()
+	for arg in args 'eachArgument'
+		values.push(factoryArgumentValue(fn, arg: arg, range: range))
+		labels.push(arg.label)
+	end 'eachArgument'
+
+	let record = fn.emitCall(callee, args: values, argLabels: labels, resultTag: maxonTypeTag(valueType), resultNameId: typeNameIdOf(valueType), range: range)
+	dropBorrowedArguments(fn, args: args, values: values, range: range)
+	return record
+end 'calledFactoryRecord'
+
+// Release every argument record the callee did not take. AFTER the call, never before: the callee reads
+// through the borrow, so the record has to outlive the body it was lent to.
+function dropBorrowedArguments(fn SynthesizedFunction, args GlobalInitArgumentArray, values ValueIdArray, range SourceRange)
+	for i in 0 upto args.count() 'eachArgument'
+		let arg = try args.get(i) otherwise panic("dropBorrowedArguments: args.get OOB at {i} below count {args.count()}")
+		let value = try values.get(i) otherwise panic("dropBorrowedArguments: values.get OOB at {i} — the materialization above pushes one value per argument")
+		match arg.cleanup 'cleanup'
+			none then continue
+			dropAfterCall(dropCallee) then _ = fn.emitRuntimeCall(dropCallee, args: singletonArgs(value), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+		end 'cleanup'
+	end 'eachArgument'
+end 'dropBorrowedArguments'
+
+// ONE argument, materialized. A scalar is a `literal` at its own folded type; everything else is a record,
+// built through the very producer a global's own slot goes through — which is what makes "an argument is
+// anything an initializer may be except another call" a fact about the emitted code and not only about the
+// grammar.
+function factoryArgumentValue(fn SynthesizedFunction, arg GlobalInitArgument, range SourceRange) returns ValueId
+	return match arg.value 'value'
+		scalar(payload) gives fn.emitTypedLiteral(payload, valueType: arg.valueType, range: range)
+		record(build) gives builtRecord(fn, build: build, valueType: arg.valueType, range: range)
+	end 'value'
+end 'factoryArgumentValue'
 
 // ONE element's value, ready to be pushed. An integer element is its number; a String element is the
 // immortal `.rdata` literal CLONED, because the array becomes the element's sole owner and `__arr_decref`'s
@@ -185,7 +261,7 @@ end 'elementDestroyValue'
 // borrowed String literal at a body's `push`, reached through the same `__str_clone`.
 function elementRecordOf(fn SynthesizedFunction, element ConstArrayElement, range SourceRange) returns ValueId
 	return match element 'element'
-		integer(payload) gives fn.emitIntegerLiteral(payload, range: range)
+		integer(payload) gives fn.emitTypedLiteral(payload, valueType: MaxonType.integer, range: range)
 		string(bytes) gives clonedStringRecord(fn, bytes: bytes, valueType: MaxonType.string, range: range)
 	end 'element'
 end 'elementRecordOf'
@@ -340,18 +416,21 @@ type SynthesizedFunction
 		end 'result'
 	end 'recordOpTables'
 
-	// ⭐ **AN INTEGER `literal`** — an element's number, an `element_size` stride, a null `element_destroy`
-	// (P1.7 slice 2b). `MaxonType.integer` for all three because the Maxon tier has no pointer or size type:
-	// a machine word is an integer here, the same reading `emitSlotAddr` above gives an ADDRESS.
+	// ⭐ **A `literal`** — an element's number, an `element_size` stride, a null `element_destroy` (P1.7 slice
+	// 2b), a fixed element count, or a scalar argument of a top-level factory call. `MaxonType.integer` for
+	// all but the last, because the Maxon tier has no pointer or size type: a machine word is an integer
+	// here, the same reading `emitSlotAddr` above gives an ADDRESS. A factory argument carries its own folded
+	// type instead, which is how a `bool` or a `float` argument reaches the call at the width it was written
+	// at rather than as an i64.
 	//
 	// It does NOT record the value in a constant column, and `Parser.emitLiteralIn` does: that column is the
 	// PARSER's constant view, feeding the shift-count rule and `foldConstOperands` over source the user
 	// wrote. Nothing here is folded against anything, so there is no view to keep.
-	function emitIntegerLiteral(value ParsedInt, range SourceRange) returns ValueId
-		let result = self.mintOfType(MaxonType.integer)
-		self.emit(MaxonOp.literal(result, value: value, valueType: MaxonType.integer), range: range)
+	function emitTypedLiteral(value ParsedInt, valueType MaxonType, range SourceRange) returns ValueId
+		let result = self.mintOfType(valueType)
+		self.emit(MaxonOp.literal(result, value: value, valueType: valueType), range: range)
 		return result
-	end 'emitIntegerLiteral'
+	end 'emitTypedLiteral'
 
 	// The raw `.text` ADDRESS of a compiler-internal runtime function, as a value — `Parser.emitRuntimeFuncAddr`'s
 	// twin on this carrier, for the array element destructor `__arr_create` stamps into `element_destroy@40`.
@@ -369,8 +448,23 @@ type SynthesizedFunction
 	// `__arr_push`. `Parser.emitRuntimeCall`'s twin, and positional for its reason: the runtime has no
 	// parameter names for a label to match, so the arguments pass through `lowerRuntimeCall` verbatim.
 	function emitRuntimeCall(callee ByteArray, args ValueIdArray, resultTag ValueTypeTag, resultNameId TypeNameId, range SourceRange) returns ValueId
-		let result = self.mint(resultTag, nameId: resultNameId)
-		self.emit(MaxonOp.call(result, callee: callee, args: args, argLabels: emptyArgLabels(args), argRanges: uniformArgRanges(args, range: range), argImmutableNames: NoImmutableArgNames, argDefaultSlots: NoDefaultArgSlots, mint: CalleeMint.notMinted), range: range)
-		return result
+		return self.emitCall(callee, args: args, argLabels: emptyArgLabels(args), resultTag: resultTag, resultNameId: resultNameId, range: range)
 	end 'emitRuntimeCall'
+
+	// ⭐ **CALL A FUNCTION THE AUTHOR DECLARED — a top-level factory** (spec-port `map-struct-bytearray`), and
+	// the op every runtime call above is built from. `argLabels` is the only thing that differs between the
+	// two: the runtime has no parameter names for a label to match, while a user factory may be called
+	// `create(a, b: c)` and `LowerMaxonToStd.lowerCall` reorders against its declared signature.
+	//
+	// `CalleeMint.notMinted` because both halves of the name are the AUTHOR'S — the type is one they declared
+	// and the method is one they wrote — which is what the reserved-callee check needs to know to leave a
+	// `__`-prefixed runtime name alone and hold a user name to the rule.
+	//
+	// `argDefaultSlots` is empty and that is exact: this walk passes every argument the source wrote and
+	// synthesizes none, so there is no supplied default whose declaration slot `slotCallArgs` would need.
+	function emitCall(callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, resultTag ValueTypeTag, resultNameId TypeNameId, range SourceRange) returns ValueId
+		let result = self.mint(resultTag, nameId: resultNameId)
+		self.emit(MaxonOp.call(result, callee: callee, args: args, argLabels: argLabels, argRanges: uniformArgRanges(args, range: range), argImmutableNames: NoImmutableArgNames, argDefaultSlots: NoDefaultArgSlots, mint: CalleeMint.notMinted), range: range)
+		return result
+	end 'emitCall'
 end 'SynthesizedFunction'

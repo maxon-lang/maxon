@@ -2298,6 +2298,28 @@ function calleeVisibleFrom(signatures ProgramSignatures, funcNames FunctionNameI
 		return true
 	end 'theCompilersOwnSpelling'
 
+	// ⭐ **AND THE SYMMETRIC HALF: A CALLER WITH NO DECLARING FILE ASKS ON NOBODY'S BEHALF** (spec-port
+	// `map-struct-bytearray`). Visibility governs what a FILE may name, and `__module_init` is a function
+	// no file wrote — it exists because declarations across the WHOLE program asked for their slots to be
+	// filled, so there is no single reader path to hold its calls to, and comparing its empty one against a
+	// real declaration's refuses every call it makes. MEASURED: a same-file `var db = Database.create(…)`
+	// beside a file-private `static function create` reported `E3008 function 'Database.create' is not
+	// exported` — about a program with one file in it.
+	//
+	// ⛔⛔ **AND IT IS NOT A HOLE, BECAUSE THE ONE USER-WRITTEN CALL `__module_init` MAKES IS CHECKED WHERE
+	// ITS READER FILE STILL EXISTS.** Every other op in that function is a runtime call the arm above
+	// exempts; the exception is a top-level factory (`var db = Database.create(…)`), and its visibility —
+	// both halves, the type's and the METHOD's — is decided by `Parser.evalConstFactoryCall` against the
+	// declaring file of the BINDING, through this same `isVisibleFrom`. Widening this exemption without that
+	// door in place makes method visibility unaskable for every factory-built global in the program.
+	//
+	// ⚠ It is asked BEFORE the callee's own path for the caller's-mistake-first reason the header states,
+	// and it is exact rather than defensive: `SourcePosition.synthesized()` is `IrFunction`'s positive claim
+	// that the compiler built the function, and every such function's calls are the compiler's.
+	if readerFilePath.toString().isEmpty() 'callerIsCompilerBuilt'
+		return true
+	end 'callerIsCompilerBuilt'
+
 	let declared = try funcNames.funcNamed(callee) otherwise return true
 	if declared.sourceFilePath.toString().isEmpty() 'compilerBuilt'
 		return true
@@ -2352,12 +2374,23 @@ end 'reportAmbiguousCrossFileCall'
 // reached only when it answered `false` — so it panics rather than inventing a third sentence.
 function reportCalleeNotVisible(project Project, funcNames FunctionNameIndex, callee ByteArray, noun ByteArray, callRange SourceRange, filePath FilePath)
 	let declared = try funcNames.funcNamed(callee) otherwise panic("reportCalleeNotVisible: '{String.from(callee)}' has no declaration — `calleeVisibleFrom` answered `false`, which it can only do for a callee it found")
-	match declared.visibility 'tier'
-		file then reportPositioned(project, code: ErrorCode.symbolNotExported, message: "function '{String.from(noun)}' is not exported", line: callRange.line, column: callRange.column, filePath: filePath)
-		module then reportPositioned(project, code: ErrorCode.symbolNotInModuleScope, message: "function '{String.from(noun)}' is module-scoped and not visible from this directory", line: callRange.line, column: callRange.column, filePath: filePath)
-		global then panic("reportCalleeNotVisible: '{String.from(callee)}' is `global` and visible from every file — `calleeVisibleFrom` cannot have answered `false` for it")
-	end 'tier'
+	reportHiddenCallee(project, noun: String.from(noun), tier: declared.visibility, line: callRange.line, column: callRange.column, filePath: filePath)
 end 'reportCalleeNotVisible'
+
+// ⭐ **THE CODE AND THE SENTENCE A HIDDEN CALLEE IS REFUSED WITH — one producer for the two positions a
+// call can be written in.** A call in a function BODY reaches it from `validateCall` above, off
+// `FunctionNameIndex`; a call in a TOP-LEVEL INITIALIZER reaches it from `Queries.reportParseError`'s
+// `calleeNotVisible` arm, off the sweep's own visibility column, because that call is decided before this
+// pass exists. Two askers, one wording — the discipline the `unknownTypeName` arm states.
+//
+// A `global` callee cannot be refused by any door, so reaching here with one is an invariant break.
+export function reportHiddenCallee(project Project, noun String, tier Visibility, line LineNumber, column ColumnNumber, filePath FilePath)
+	match tier 'tier'
+		file then reportPositioned(project, code: ErrorCode.symbolNotExported, message: "function '{noun}' is not exported", line: line, column: column, filePath: filePath)
+		module then reportPositioned(project, code: ErrorCode.symbolNotInModuleScope, message: "function '{noun}' is module-scoped and not visible from this directory", line: line, column: column, filePath: filePath)
+		global then panic("reportHiddenCallee: '{noun}' is `global` and visible from every file — no visibility door can have refused it")
+	end 'tier'
+end 'reportHiddenCallee'
 
 // ⭐ **VALIDATE AN INDIRECT CALL AGAINST THE FUNCTION TYPE ITS CALLEE VALUE WAS DECLARED WITH.** The
 // declared type is the authority: the call site derives its argument count, its per-argument register file

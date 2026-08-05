@@ -237,6 +237,15 @@ let ArrayElementShapeString = 50 as ContentHash
 // alone, which is exactly what a reader depends on.
 let ConstShapeContainerValue = 70 as ContentHash
 
+// A top-level binding that folded to a USER STATIC FACTORY CALL (spec-port `map-struct-bytearray`). Its
+// own discriminator for `ConstShapeContainerValue`'s reason, one step further: `var db = IntArray.create()`
+// becoming `var db = Database.create(…)` keeps the label and the load and changes the slot's TYPE, so
+// every reader's field access is built over a different record.
+//
+// ⚠ What rides beside it is the CALLEE's mangled `Type.method` name — a function of the source alone, for
+// the reason stated above — and deliberately not the arguments, which reach only `__module_init`.
+let ConstShapeFactoryValue = 71 as ContentHash
+
 // A declaration's MUTABILITY, mixed into the hash beside its value. `let X = 5` and `var X = 5`
 // are the same name and the same number and compile to COMPLETELY different code — one inlines
 // as a literal, the other loads from `.data` — so a reader's parse memo must move when one
@@ -561,6 +570,15 @@ export union TopLevelConstant
 	// ⚠ APPENDED AT THE END, for `managedValue`'s reason: every range arm over this union then EXCLUDES it
 	// and fails to compile until it has been visited and decided.
 	containerValue(giid GenericInstanceId)
+	// ⭐ **IT EVALUATED TO A USER STATIC FACTORY CALL — `var db = Database.create(…)`** (spec-port
+	// `map-struct-bytearray`). Its own arm because it is the one outcome whose value the compiler does not
+	// KNOW: the other stored arms carry a record's contents, this one carries the CALL that produces them.
+	// `returnType` is the callee's declared return type, resolved in this index's own interner when the
+	// outcome is settled — it is what types the `.data` slot and what routes the cleanup's drop.
+	//
+	// ⚠ APPENDED AT THE END, for `managedValue`'s reason: every range arm over this union then EXCLUDES it
+	// and fails to compile until it has been visited and decided.
+	factoryValue(callee ByteArray, args ConstFactoryArgumentArray, returnType MaxonType)
 end 'TopLevelConstant'
 
 // ONE folded ELEMENT of a top-level array literal (P1.7 slice 2b) — what `__module_init` materializes and
@@ -640,10 +658,31 @@ end 'ManagedGlobal'
 
 export typealias ManagedGlobalArray = Array with ManagedGlobal
 
-// ⭐ **HOW ONE MANAGED GLOBAL'S INITIAL OWNED RECORD IS BUILT** — three arms because there are three record
-// constructions, and each differs in whether the literal's own materialization is ALREADY the owned record
-// the slot must hold. That is a fact about the record formats, not a choice `ModuleInit` makes.
+// ⭐⭐ **HOW ONE MANAGED GLOBAL'S SLOT COMES TO HOLD A RECORD — TWO ARMS, AND THE SPLIT IS BETWEEN THE TWO
+// WAYS A RECORD CAN COME TO EXIST**: the compiler MATERIALIZES it from what the initializer folded to, or
+// the program's own code RETURNS it.
 export union ManagedGlobalInitializer
+	// A record `__module_init` builds itself, out of folded constants and nothing else.
+	record(build ManagedGlobalRecord)
+	// ⭐ **A USER STATIC FACTORY — `var db = Database.create(EntryMap.create(), sourcePaths: …)`** (spec-port
+	// `map-struct-bytearray`). The slot's occupant is whatever `callee` RETURNS, so `__module_init`
+	// materializes each argument and then CALLS it: this is the one initializer form that runs user code
+	// before `main`. `callee` is the mangled `Type.method` name (`qualifiedMethodName`), which is the same
+	// key a call site emits and the signature registry files the declaration under — so the argument
+	// reordering `LowerMaxonToStd.lowerCall` does for a labelled call happens here for free.
+	factoryCall(callee ByteArray, args GlobalInitArgumentArray)
+end 'ManagedGlobalInitializer'
+
+// ⭐ **A RECORD `__module_init` BUILDS WITHOUT RUNNING USER CODE** — exactly the constructions a global's own
+// slot may start life holding AND, exactly, the ones a factory ARGUMENT may be. Each arm differs in whether
+// the literal's own materialization is ALREADY the owned record the slot must hold, which is a fact about
+// the record formats rather than a choice `ModuleInit` makes.
+//
+// ⚠ **IT IS ITS OWN UNION BECAUSE MAXON FORBIDS A RECURSIVE TYPE (E4014).** A factory call carries arguments
+// and an argument may be any of these, so one union holding both arms would name itself. The split is not a
+// workaround for that rule — it STATES the rule the admitted argument set obeys: an argument is anything a
+// top-level initializer may be except another call.
+export union ManagedGlobalRecord
 	// A `String` literal is a WHOLLY immortal `.rdata` record shared by every read of those bytes, so the
 	// slot's occupant is a CLONE of it — the `(box) -> newBox` dual of the `__str_decref` the cleanup drops
 	// it with, so the pair balances by construction.
@@ -651,33 +690,137 @@ export union ManagedGlobalInitializer
 	// A `b"…"` literal ALREADY materializes as an owned heap 48-byte `Array` record over an immortal `.rdata`
 	// blob, which is precisely what the slot must hold — so there is nothing to clone.
 	byteStringRecord(bytes ByteArray)
-	// An ARRAY literal (P1.7 slice 2b) has no literal record at all: it is BUILT, `__arr_create` then one
-	// `__arr_push` per element. `elementSize` and `elementDestroy` are what `__arr_create` stamps into
-	// `element_size@24` / `element_destroy@40`, resolved HERE (where the instance registry is) rather than
-	// re-derived by the synthesis — the same discipline `dropCallee` above follows.
-	arrayRecord(elements ConstArrayElementArray, elementSize ElementStride, elementDestroy ArrayElementDestroy)
-end 'ManagedGlobalInitializer'
+	// ⭐ A BUILTIN CONTAINER (P1.7 slice 2b, widened by spec-port `map-struct-bytearray`) has no literal record
+	// at all: it is BUILT, `create` then one `__arr_push` per element. `create` carries which runtime entry and
+	// which stamps this instance fixes, resolved HERE (where the instance registry is) rather than re-derived
+	// by the synthesis — the same discipline `ManagedGlobal.dropCallee` follows. An array LITERAL has elements
+	// and every other container global has none, which is the same fact the container-factory arm has always
+	// stated: a container factory IS an array literal with no elements.
+	containerRecord(create ContainerCreateCall, elements ConstArrayElementArray)
+end 'ManagedGlobalRecord'
 
-// ⭐ **THE `element_destroy@40` STAMP AN ARRAY RECORD IS BORN WITH** — the ADDRESS of the element's drop
-// callee for a MANAGED element, which `__arr_decref`'s last-owner walk calls through a `callIndirect` on
-// each live slot, and NOTHING for a trivial one (an inline element owns nothing, so the walk is skipped).
+// ONE argument a top-level factory call passes: its source-level `name:` LABEL (empty for a positional
+// argument, exactly the "no label" spelling `MaxonOp.call`'s `argLabels` uses), the value, the TYPE that
+// value is minted at — which the synthesis needs and cannot re-derive, an argument's type being a fact about
+// the initializer that produced it rather than about the global's own slot — and WHO FREES IT.
+export type GlobalInitArgument
+	export let label as ByteArray
+	export let value as GlobalInitArgumentValue
+	export let valueType as MaxonType
+	export let cleanup as GlobalInitArgumentCleanup
+
+	export static function create(label ByteArray, value GlobalInitArgumentValue, valueType MaxonType, cleanup GlobalInitArgumentCleanup) returns GlobalInitArgument
+		return Self{label: label, value: value, valueType: valueType, cleanup: cleanup}
+	end 'create'
+end 'GlobalInitArgument'
+
+export typealias GlobalInitArgumentArray = Array with GlobalInitArgument
+
+// ⭐⭐ **WHO FREES A FACTORY ARGUMENT'S RECORD — the ownership fact `__module_init` has no statement to end
+// in.** A body's call site materializes an argument as an owned TEMP (`Parser.trackOwnedTemp`) and drops it
+// at the end of the statement unless the callee consumed it; the synthesis has no statement and no temp
+// list, so the same decision is made HERE, off the callee's recorded consume bits, and travels with the
+// argument it is about.
+//
+// ⛔ It was missing outright, and the leak was on an ERROR-FREE path: `var c = Counter.create(Bytes.create())`
+// against a `create` that only READS its parameter allocated the array and freed nothing — exit 101. The
+// spec that landed this door consumes both of its parameters, which is exactly why the corpus could not see
+// it.
+export union GlobalInitArgumentCleanup
+	// Nothing to free: a scalar owns no heap, and a record the callee CONSUMES is the callee's to release.
+	none
+	// The callee only BORROWED this record, so `__module_init` is still its sole owner and drops it through
+	// `callee` once the call has returned — the same runtime entry `__maxon_global_cleanup` would drop a
+	// global of that type through, resolved off the same `managedFieldDropCallee` router.
+	dropAfterCall(callee ByteArray)
+end 'GlobalInitArgumentCleanup'
+
+// What ONE factory argument evaluates to — a folded number, or one of the records above. The two are
+// different instructions to the emitter (a `literal` op versus a record construction), which is the whole
+// of the distinction.
+export union GlobalInitArgumentValue
+	// A folded number: an integer, a bool's 0/1 (TypeRules' `BoolTrueValue`) or a float's IEEE bit pattern.
+	scalar(payload ParsedInt)
+	record(build ManagedGlobalRecord)
+end 'GlobalInitArgumentValue'
+
+// A record construction and the TYPE its value is minted at — the two facts `ProgramSignatures.globalRecordOf`
+// settles together off ONE folded value. They travel as a pair because re-deriving the type from the
+// construction would mean asking a literal's element kind a second time, and the two answers must not be able
+// to disagree about what the slot holds.
+export type GlobalRecordAndType
+	export let build as ManagedGlobalRecord
+	export let valueType as MaxonType
+
+	export static function create(build ManagedGlobalRecord, valueType MaxonType) returns GlobalRecordAndType
+		return Self{build: build, valueType: valueType}
+	end 'create'
+end 'GlobalRecordAndType'
+
+// ⭐ **THE RUNTIME `create` ONE BUILTIN CONTAINER INSTANCE IS BORN THROUGH** — which entry point, which
+// stamps it is born holding, and whether the record is then SIZED. ONE description, so a global `Array`, a
+// global `Map` and a global `List` reach `__module_init` through one emitter rather than one arm apiece.
+export type ContainerCreateCall
+	export let callee as ByteArray
+	export let stamps as ContainerCreateStampArray
+	export let sizing as ContainerSizing
+
+	export static function create(callee ByteArray, stamps ContainerCreateStampArray, sizing ContainerSizing) returns ContainerCreateCall
+		return Self{callee: callee, stamps: stamps, sizing: sizing}
+	end 'create'
+end 'ContainerCreateCall'
+
+// ONE argument a container's `create` is stamped with — an `element_size@24` stride, or the
+// `element_destroy@40` / `elemDrop@40` / `element_drop@24` destructor a container's teardown walk calls
+// through a `callIndirect` on each live slot.
 //
 // A union rather than a callee name whose emptiness means "trivial": the two are different instructions to
 // the emitter (a `functionRef` op versus a `literal 0`), and a sentinel would let a genuinely missing name
 // read as a deliberate absence.
-export union ArrayElementDestroy
-	trivial
-	drop(callee ByteArray)
-end 'ArrayElementDestroy'
+export union ContainerCreateStamp
+	// A number the record is born holding — a stride, or the 0 that says a column owns nothing and its
+	// teardown walk is skipped.
+	inline(value ParsedInt)
+	// The RAW `.text` ADDRESS of a managed column's drop callee.
+	dropCallee(callee ByteArray)
+end 'ContainerCreateStamp'
 
-// WHICH record a managed LITERAL global's bytes build — the `ManagedConstKind` → `ManagedGlobalInitializer`
+export typealias ContainerCreateStampArray = Array with ContainerCreateStamp
+
+// ⭐ **MAY A `.data` SLOT HOLD WHAT THIS CALLEE RETURNS?** — the whole of what a top-level factory's
+// signature has to answer, and each arm carries exactly what its refusal needs to say. A union rather than a
+// bool because three of the four answers are REASONS, and a bool would leave each caller to re-derive which.
+export union GlobalFactoryReturn
+	// A heap record — a struct, a String, a Character, a boxed union or a container. Its slot holds a
+	// pointer `__module_init` fills before `main`.
+	record
+	// A number. Its slot holds the VALUE, written into the image, which happens before any code can run.
+	// `typeName` is the type as a diagnostic prints it, rendered on the index's side because only that side
+	// holds the interner the id lives in.
+	scalar(typeName String)
+	void
+	// No file declares this name. Unreachable from the initializer door, which admits the form only for a
+	// declared callee — kept as an arm so the answer is total rather than an assumption.
+	undeclared
+end 'GlobalFactoryReturn'
+
+// Is the record `create` hands back already the size it will always be? A `Vector with N T` is — its
+// elements are addressable from birth, so its create is followed by one `__arr_resize` — and every other
+// builtin container GROWS. Read off `ProgramSignatures.genericInstanceFixedSize`, so the count a global
+// vector is born with and the count `Vector.create()` gives one in a body are the same fact.
+export union ContainerSizing
+	grown
+	fixed(count FixedElementCount)
+end 'ContainerSizing'
+
+// WHICH record a managed LITERAL global's bytes build — the `ManagedConstKind` → `ManagedGlobalRecord`
 // map, in one place so the kind a constant folded to and the construction its slot gets cannot drift apart.
-function managedLiteralInitializer(bytes ByteArray, kind ManagedConstKind) returns ManagedGlobalInitializer
+function managedLiteralRecord(bytes ByteArray, kind ManagedConstKind) returns ManagedGlobalRecord
 	return match kind 'k'
-		string gives ManagedGlobalInitializer.stringRecord(bytes)
-		byteArray gives ManagedGlobalInitializer.byteStringRecord(bytes)
+		string gives ManagedGlobalRecord.stringRecord(bytes)
+		byteArray gives ManagedGlobalRecord.byteStringRecord(bytes)
 	end 'k'
-end 'managedLiteralInitializer'
+end 'managedLiteralRecord'
 
 // The value a managed global's `.data` slot holds BEFORE `__module_init` runs: a null pointer. Named
 // rather than a bare 0 because it is a CLAIM — "no record exists yet" — and it is the one state the
@@ -852,17 +995,46 @@ end 'ConstValue'
 // literal is never an operand of an operator that would have to reject it, and the arithmetic rules
 // stay one reading of the grammar rather than two.
 export union ConstInitializerValue
+	// Everything that folds WITHOUT running user code — and therefore, exactly, everything a factory
+	// ARGUMENT may be.
+	direct(value ConstFoldedValue)
+	// ⭐ **A USER STATIC FACTORY CALL — `Database.create(EntryMap.create(), sourcePaths: …)`** (spec-port
+	// `map-struct-bytearray`). Nothing is folded: what this answer carries is WHICH function to call and
+	// WHAT to pass it, and the record itself is built before `main` by `__module_init`. `callee` is the
+	// mangled `Type.method` name; the return TYPE is resolved on the index's side, where the interner the
+	// global's drop callee is routed against lives.
+	factoryCall(callee ByteArray, args ConstFactoryArgumentArray)
+end 'ConstInitializerValue'
+
+// What a top-level initializer folds to when it does NOT call. Its own union for `ManagedGlobalRecord`'s
+// reason — Maxon forbids a recursive type (E4014), and a factory's arguments are these — and the two say
+// the same thing at the two tiers: this is the admitted argument set, stated once on each side of the fold.
+export union ConstFoldedValue
 	scalar(value ConstValue)
 	managed(bytes ByteArray, kind ManagedConstKind)
-	// An ARRAY LITERAL (P1.7 slice 2b) — its folded elements and the kind they share. It is a THIRD answer
+	// An ARRAY LITERAL (P1.7 slice 2b) — its folded elements and the kind they share. It is its own answer
 	// rather than a `managed` with a different payload for `TopLevelConstant.arrayValue`'s reason: the
 	// binding it settles has STORAGE, where a `managed` `let` has none.
 	arrayLiteral(elements ConstArrayElementArray, element ConstArrayElementKind)
-	// A CONTAINER FACTORY CALL (`ItemArray.create()`) — the alias's instance, which is the whole value of
-	// an empty container. The FOURTH answer for `arrayLiteral`'s reason: the binding it settles has
-	// STORAGE, and what it stores is a record no read can re-materialize.
+	// A CONTAINER FACTORY CALL (`ItemArray.create()`, `EntryMap.create()`) — the alias's instance, which is
+	// the whole value of an empty container. Its own answer for `arrayLiteral`'s reason: the binding it
+	// settles has STORAGE, and what it stores is a record no read can re-materialize.
 	containerCreate(giid GenericInstanceId)
-end 'ConstInitializerValue'
+end 'ConstFoldedValue'
+
+// ONE argument of a top-level factory call, as the evaluator folded it: the source-level `name:` LABEL
+// (empty for a positional argument) and the value. The `GlobalInitArgument` this becomes carries a TYPE as
+// well, resolved on the index's side against its own interner.
+export type ConstFactoryArgument
+	export let label as ByteArray
+	export let value as ConstFoldedValue
+
+	export static function create(label ByteArray, value ConstFoldedValue) returns ConstFactoryArgument
+		return Self{label: label, value: value}
+	end 'create'
+end 'ConstFactoryArgument'
+
+export typealias ConstFactoryArgumentArray = Array with ConstFactoryArgument
 
 // The result of asking the evaluator for a constant's value. `failed` is not an error to report — the
 // diagnostic is already recorded on the decl that owns it — it is the instruction to STOP.
@@ -985,13 +1157,12 @@ function globalStdType(tag ValueTypeTag, name ByteArray) returns StdType
 		boolean to float then break 'reachable'
 		named then panic("globalStdType: top-level var '{String.from(name)}' is tagged '{typeTagName(tag)}' — a global's type is inferred from a bare constant initializer, so it is never a ranged alias (that needs an `as` cast, P1.9)")
 		exitCode to void then panic("globalStdType: top-level var '{String.from(name)}' is tagged '{typeTagName(tag)}' — the constant evaluator folds integers, bools and floats only")
-		// A STRUCT GLOBAL is the case this guard's header was written FOR, arriving one rung early.
-		// It is unreachable by the same route the others are — the constant evaluator folds no
-		// `T.create(…)`, because a call in a top-level initializer is E2045 — so a struct's tag
-		// cannot get this far. Were it to, the honest answer is still not a width: a struct global
-		// needs a `.data` slot holding a POINTER to a box allocated before `main`, which is module
-		// initialization, and shv2 has none.
-		structRef then panic("globalStdType: top-level var '{String.from(name)}' is tagged '{typeTagName(tag)}' — a struct global would need its box allocated before `main` runs, which needs module initialization (not built); a call in a top-level initializer is rejected as E2045 long before this")
+		// ⭐ A STRUCT GLOBAL is the case this guard's header was written FOR, and it is REACHABLE as of
+		// spec-port `map-struct-bytearray`: `var db = Database.create(…)` is admitted, and its slot is
+		// the POINTER to a box `__module_init` allocates before `main` — which is exactly the module
+		// initialization the old refusal said shv2 had none of. It has, and the width is the `string`
+		// arm's, from the one table.
+		structRef then break 'reachable'
 		// ⭐ A MANAGED global (P1.7 slice 2a) — a `String` or a `b"…"` byte string. Its slot holds a
 		// POINTER to the record `__module_init` builds before `main`, so the `.data` image reserves one
 		// machine word of zero and the width comes from the same table every other pointer's does. It is
@@ -1662,6 +1833,20 @@ export union CalleeConsume
 	consumes(info ParamConsumeInfo)
 	borrowsAll
 end 'CalleeConsume'
+
+// ⭐ **DOES THE CALLEE TAKE OWNERSHIP OF THE ARGUMENT AT `argIndex`?** The whole of the call site's consume
+// question in one place: the recorded bits, read at the position the label→position mapping puts this
+// argument at (`argSlotPosition` — the ONE home of that mapping). `borrowsAll` is a callee with no recorded
+// entry, which is most of them, and it answers false without touching a position at all.
+//
+// The two askers are `Parser.transferConsumedArgs`, which needs the position anyway to report a
+// double-consume against it, and `ProgramSignatures.recordArgumentCleanup`, which needs only the answer.
+export function calleeConsumesArgument(consume CalleeConsume, argIndex ParamCount, label ByteArray) returns bool
+	return match consume 'c'
+		borrowsAll gives false
+		consumes(info) gives info.isConsumed(argSlotPosition(info.paramNames, argIndex: argIndex, label: label))
+	end 'c'
+end 'calleeConsumesArgument'
 
 // ⭐ **WHICH RUNTIME ENTRY DROPS A MANAGED FIELD OF DECLARED TYPE `fieldType`** — the ONE router shared by
 // the parser's value-keyed `decrefCalleeFor` (a top-level owned value's drop) and the struct/union
@@ -4295,6 +4480,29 @@ typealias ModuleDirectorySet = Set with String
 // concrete and there is no name left in it for a later reader to resolve as ITS file means.
 typealias FuncReturnDeclFileMap = Map with (ByteArray, FilePath)
 
+// ⭐⭐ **WHERE A FUNCTION WAS DECLARED AND AT WHAT TIER — the two facts `isVisibleFrom` needs, as a pair.**
+// They travel together because they are one question's inputs: a tier alone cannot say who may name the
+// declaration, and a file alone cannot say whether anyone but itself may. Filed for EVERY declaration, so a
+// name with no entry means no file declares it rather than "declared, tier unknown".
+export type FunctionDeclSite
+	export let visibility as Visibility
+	export let declFilePath as FilePath
+
+	export static function create(visibility Visibility, declFilePath FilePath) returns FunctionDeclSite
+		return Self{visibility: visibility, declFilePath: declFilePath}
+	end 'create'
+end 'FunctionDeclSite'
+
+typealias FunctionDeclSiteMap = Map with (ByteArray, FunctionDeclSite)
+
+// The verdict `ProgramSignatures.calleeVisibilityFrom` hands back. A union rather than a bool because the
+// refusing arm owes the caller the TIER — it is what picks the diagnostic's code and sentence — and a bool
+// would send every caller back for a second lookup to find out.
+export union CalleeVisibility
+	visible
+	hidden(tier Visibility)
+end 'CalleeVisibility'
+
 // Does this recorded return type still carry a NAME a later reader will have to resolve? Exactly the bare
 // `named` arm: `void` and every concrete tag are already decided, and `Parser.resolveNamedAlias` — the one
 // reader that turns a swept name into a type — takes the same guard, so the column and its spender agree on
@@ -4760,6 +4968,18 @@ export type ProgramSignatures
 	// that refile a `returnTypes` entry under a new key, so it can never outlive or lag the return type it
 	// describes.
 	var funcReturnDeclFiles as FuncReturnDeclFileMap
+	// ⭐⭐ **EVERY DECLARED FUNCTION'S TIER AND DECLARING FILE (the top-level factory's visibility half).**
+	// `SemanticCheck.calleeVisibleFrom` answers the same question for a call in a BODY, off `FunctionNameIndex`
+	// — but that index is built long after the constant evaluator has run, and a top-level initializer's call
+	// is decided during `queryProgramSignatures`, before any file is parsed. So the sweep publishes the two
+	// facts here and `Parser.evalConstFactoryCall` asks them through the very same `isVisibleFrom`: two
+	// SOURCES for one declaration, never two RULES.
+	//
+	// ⚠ Written UNCONDITIONALLY by `record` — `returnTypes`' discipline rather than
+	// `funcReturnDeclFiles`', because "no entry" has to mean "no file declares this name" for the answer to
+	// be exact. It is moved by the same three refiles that move a `returnTypes` entry, so it can never lag
+	// the declaration it describes.
+	var funcDeclSites as FunctionDeclSiteMap
 	// ⭐ **EVERY GENERIC-INSTANCE ALIAS WHOSE ELEMENT WAS SPELLED `__ManagedMemory` (A2m)** — written by
 	// `recordGenericAlias`, read by `aliasElementIsBufferSurface`. See `BufferElementAliasNameSet` for why the
 	// key is the alias NAME and can never be the instance.
@@ -4960,7 +5180,7 @@ export type ProgramSignatures
 	// Every index, empty. Split out of `create` only so the seed stamping above reads as the two steps it
 	// is; this is its one caller.
 	static function freshIndexes() returns ProgramSignatures
-		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), structNamesInDeclOrder: ByteArrayArray.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), instanceDisplayNames: InstanceDisplayNameMap.create(), canonicalInstanceNameIndex: CanonicalInstanceNameSet.create(), canonicalNamesIndexedThrough: 0, tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleAliases: TupleCanonicalNameMap.create(), sawAggregateArrayLiteral: false, sawListFromConstruction: false, genericAliases: GenericAliasMap.create(), contestedGenericAliases: sharedEmptyGenericAliasContests, multiplyDeclaredGenericAliases: sharedEmptyDisagreeingAliasNames, divergedGenericAliasDecl: AliasCycleResult.none, nameableGenericAliases: sharedEmptyNameableGenericAliases, genericAliasSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceNamesInDeclOrder: builtinInterfaceNames(), interfaceDeclIndexByName: builtinInterfaceDeclIndices(), interfaceDeclSites: InterfaceDeclSiteArray.create(), extensionDeclSites: ExtensionDeclSiteArray.create(), conditionalExtensionSkips: ConditionalExtensionSkipMap.create(), sweptConformances: DeclaredConformanceMap.create(), sweptConformancesBuilt: false, extensionMethodConstraints: ExtensionMethodConstraintMap.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcThrows: FuncThrowsMap.create(), funcParamDefaults: ParamDefaultMap.create(), collidingParamDefaults: CollidingParamDefaultNameSet.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), funcReturnDeclFiles: FuncReturnDeclFileMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), hash: fnvOffsetBasis(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, allFilesFolded: false, rootIsUnderStdlibDirectory: false, constInitializerTypeNames: ConstInitializerTypeNameSet.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibShadowRenames: StdlibShadowRenameMap.create(), fileModuleDirectories: FileModuleDirectoryMap.create(), namespaceQualifiedFunctions: NamespaceQualifiedFunctionSet.create(), freeFunctionDirectories: FreeFunctionDirectoryMap.create(), contestedFreeFunctions: ContestedFreeFunctionMap.create(), contestedRegistrationNames: ContestedRegistrationNameSet.create()}
+		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), structNamesInDeclOrder: ByteArrayArray.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), instanceDisplayNames: InstanceDisplayNameMap.create(), canonicalInstanceNameIndex: CanonicalInstanceNameSet.create(), canonicalNamesIndexedThrough: 0, tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleAliases: TupleCanonicalNameMap.create(), sawAggregateArrayLiteral: false, sawListFromConstruction: false, genericAliases: GenericAliasMap.create(), contestedGenericAliases: sharedEmptyGenericAliasContests, multiplyDeclaredGenericAliases: sharedEmptyDisagreeingAliasNames, divergedGenericAliasDecl: AliasCycleResult.none, nameableGenericAliases: sharedEmptyNameableGenericAliases, genericAliasSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceNamesInDeclOrder: builtinInterfaceNames(), interfaceDeclIndexByName: builtinInterfaceDeclIndices(), interfaceDeclSites: InterfaceDeclSiteArray.create(), extensionDeclSites: ExtensionDeclSiteArray.create(), conditionalExtensionSkips: ConditionalExtensionSkipMap.create(), sweptConformances: DeclaredConformanceMap.create(), sweptConformancesBuilt: false, extensionMethodConstraints: ExtensionMethodConstraintMap.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcThrows: FuncThrowsMap.create(), funcParamDefaults: ParamDefaultMap.create(), collidingParamDefaults: CollidingParamDefaultNameSet.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), funcReturnDeclFiles: FuncReturnDeclFileMap.create(), funcDeclSites: FunctionDeclSiteMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), hash: fnvOffsetBasis(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, allFilesFolded: false, rootIsUnderStdlibDirectory: false, constInitializerTypeNames: ConstInitializerTypeNameSet.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibShadowRenames: StdlibShadowRenameMap.create(), fileModuleDirectories: FileModuleDirectoryMap.create(), namespaceQualifiedFunctions: NamespaceQualifiedFunctionSet.create(), freeFunctionDirectories: FreeFunctionDirectoryMap.create(), contestedFreeFunctions: ContestedFreeFunctionMap.create(), contestedRegistrationNames: ContestedRegistrationNameSet.create()}
 	end 'freshIndexes'
 
 	// --- MODULE DIRECTORIES and the ONE visibility decision (N1a) ---
@@ -5360,11 +5580,11 @@ export type ProgramSignatures
 		// `MM leak: 7 allocation(s) remain` on every build, exit 101). Recorded in OPEN.md.
 		if remap.isIdentity 'idsUnchanged'
 			for entry in scanned 'eachUnmapped'
-				self.record(entry.name, returnType: entry.returnType, declaredSurface: entry.declaredSurface, declFilePath: filePath)
+				self.record(entry.name, returnType: entry.returnType, declaredSurface: entry.declaredSurface, visibility: entry.visibility, declFilePath: filePath)
 			end 'eachUnmapped'
 		end 'idsUnchanged' else 'idsMoved'
 			for entry in scanned 'eachRemapped'
-				self.record(entry.name, returnType: remapMaxonReturnType(entry.returnType, remap: remap), declaredSurface: entry.declaredSurface, declFilePath: filePath)
+				self.record(entry.name, returnType: remapMaxonReturnType(entry.returnType, remap: remap), declaredSurface: entry.declaredSurface, visibility: entry.visibility, declFilePath: filePath)
 			end 'eachRemapped'
 		end 'idsMoved'
 
@@ -5414,7 +5634,7 @@ export type ProgramSignatures
 	//
 	// So `declaredReturnSurface` is exact for every name that reaches a call: a name with no entry names the
 	// buffer in no declaration anywhere, and a name with one is either unique or already refused.
-	function record(name ByteArray, returnType MaxonReturnType, declaredSurface DeclaredSurface, declFilePath FilePath)
+	function record(name ByteArray, returnType MaxonReturnType, declaredSurface DeclaredSurface, visibility Visibility, declFilePath FilePath)
 		self.returnTypes.upsert(name, value: returnType)
 		if not surfaceIsPlain(declaredSurface) 'namesTheBufferAlias'
 			self.declaredReturnSurfaces.upsert(name, value: declaredSurface)
@@ -5422,8 +5642,9 @@ export type ProgramSignatures
 		if returnTypeNamesAType(returnType) 'aNameThisFileMustBeAbleToResolveLaterOn'
 			self.funcReturnDeclFiles.upsert(name, value: declFilePath)
 		end 'aNameThisFileMustBeAbleToResolveLaterOn'
+		self.funcDeclSites.upsert(name, value: FunctionDeclSite.create(visibility, declFilePath: declFilePath))
 
-		self.hash = self.mixDeclaration(self.hash, name: name, returnType: returnType, declaredSurface: declaredSurface)
+		self.hash = self.mixDeclaration(self.hash, name: name, returnType: returnType, declaredSurface: declaredSurface, visibility: visibility)
 	end 'record'
 
 	// The surface already recorded for `name`, or the plain one. Split out because `Map.get` is a `try` and a
@@ -6338,6 +6559,11 @@ export type ProgramSignatures
 		if let returnType = try self.returnTypes.get(from) 'hasReturnType'
 			self.returnTypes.upsert(to, value: returnType)
 		end 'hasReturnType'
+		// The declaration SITE is unconditional at `record` for the same reason the return type is, so it
+		// moves on the same terms and `stating` has nothing to say about it either.
+		if let site = try self.funcDeclSites.get(from) 'hasDeclarationSite'
+			self.funcDeclSites.upsert(to, value: site)
+		end 'hasDeclarationSite'
 		if stating.returnSurface 'declaresANonPlainSurface'
 			if let surface = try self.declaredReturnSurfaces.get(from) 'namesTheBufferAlias'
 				self.declaredReturnSurfaces.upsert(to, value: surface)
@@ -6365,13 +6591,14 @@ export type ProgramSignatures
 		end 'declaresAThrowsClause'
 	end 'copyFreeFunctionSweepEntries'
 
-	// Drop all SIX, so the copy that follows lands the source's ABSENCES as well as its entries. The
+	// Drop all SEVEN, so the copy that follows lands the source's ABSENCES as well as its entries. The
 	// booleans are discarded because a key with no entry is the ordinary case here, not an error: five of
-	// the six are written only by a declaration that has the fact to state — the same count
+	// the seven are written only by a declaration that has the fact to state — the same count
 	// `copyFreeFunctionSweepEntries` states above, and the two must move together or one of them is lying
 	// about how many facts a function name carries.
 	function clearFreeFunctionSweepEntries(name ByteArray)
 		_ = self.returnTypes.remove(name)
+		_ = self.funcDeclSites.remove(name)
 		_ = self.declaredReturnSurfaces.remove(name)
 		_ = self.funcReturnDeclFiles.remove(name)
 		_ = self.funcParamConsumes.remove(name)
@@ -6429,6 +6656,9 @@ export type ProgramSignatures
 			if let declFilePath = try self.funcReturnDeclFiles.get(swept) 'returnsANameStillToBeResolved'
 				self.funcReturnDeclFiles.upsert(renamed, value: declFilePath)
 			end 'returnsANameStillToBeResolved'
+			if let site = try self.funcDeclSites.get(swept) 'theSweepFiledItsSite'
+				self.funcDeclSites.upsert(renamed, value: site)
+			end 'theSweepFiledItsSite'
 
 			info.renameHelper(slot, renamedTo: renamed)
 		end 'eachCallAlignedSlot'
@@ -6489,7 +6719,7 @@ export type ProgramSignatures
 				// Already settled by an earlier decl's DFS — it referenced this one. A managed constant is
 				// settled too; it is simply not reachable BY a reference (see `evaluateDecl`).
 				value to poisoned then break 'state'
-				managedValue to containerValue then break 'state'
+				managedValue to factoryValue then break 'state'
 				evaluating then panic("ProgramSignatures.evaluateInitializers: '{String.from(decl.name)}' is still marked `evaluating` between two top-level walks — every DFS pops what it pushes")
 				pending then self.startDecl(i)
 			end 'state'
@@ -6582,7 +6812,13 @@ export type ProgramSignatures
 			// caller reading this for a NAME is a reference from inside another initializer, and there is
 			// nothing an arithmetic fold could do with a heap record. MEASURED against the runnable oracle —
 			// `let A = [1, 2]` / `let B = A` is E2004 `Undefined constant 'A'` in BOTH declaration orders.
-			managedValue to containerValue then return ConstEvalOutcome.notFound
+			// ⭐ A FACTORY-CALL binding joins them (spec-port `map-struct-bytearray`) and WIDENS the boundary
+			// by nothing: its value is a record built by running code, so there is even less for an
+			// arithmetic fold to do with it than with a literal's bytes. `var db = Database.create(…)` /
+			// `let N = db` is `Undefined constant 'db'`, in both declaration orders, exactly as the other
+			// record kinds already are — which is what keeps the arena free of any initialization ORDER to
+			// get wrong: no admitted initializer can name another global.
+			managedValue to factoryValue then return ConstEvalOutcome.notFound
 			// Reached a decl already on this walk's stack: the reference chain has closed on itself.
 			evaluating then return self.recordCycle(index, stack: stack)
 			pending then break 'state'
@@ -6625,12 +6861,39 @@ export type ProgramSignatures
 		end 'noValue'
 
 		match folded 'kind'
-			scalar(value) then return self.settleScalarValue(decl, value: value)
+			direct(value) then return self.settleFoldedValue(decl, value: value)
+			// ⭐ A FACTORY CALL settles like any other stored record — the slot, the storage bit and the
+			// receiver-name set are the same three facts — and additionally resolves the callee's declared
+			// RETURN TYPE, which is what types the slot. It is resolved here rather than in the evaluator
+			// because it must live in THIS index's interner: the drop callee the cleanup emits is routed
+			// against `self.typeNames`, and a type adopted into a file's artifact interner would name an id
+			// this side cannot resolve.
+			factoryCall(callee, args) then return self.settleStoredRecordValue(decl, outcome: TopLevelConstant.factoryValue(callee, args: args, returnType: self.declaredReturnValueType(callee, name: decl.name)))
+		end 'kind'
+	end 'walkConstInitializer'
+
+	// The VALUE type `callee` returns, in this index's own interner. The evaluator has already established
+	// that the callee is declared and that its return type is a managed value (`Parser.requireGlobalFactory`),
+	// so both refusals here are invariant breaks rather than cases a program can reach.
+	function declaredReturnValueType(callee ByteArray, name ByteArray) returns MaxonType
+		let declared = try self.returnTypes.get(callee) otherwise panic("ProgramSignatures.declaredReturnValueType: '{String.from(name)}' names the factory '{String.from(callee)}', which no file declares — the evaluator admits the form only after `declaresCallee` says otherwise")
+		match declared 'returns'
+			void then panic("ProgramSignatures.declaredReturnValueType: '{String.from(name)}' is initialized by '{String.from(callee)}', which returns nothing — the evaluator refuses a void factory before it folds one")
+			value(valueType) then return valueType
+		end 'returns'
+	end 'declaredReturnValueType'
+
+	// Settle a decl from the value its initializer FOLDED to — the four non-call answers, each keeping the
+	// arm it has always had. One door rather than four call sites, so the evaluator's union and the arena's
+	// outcome union are mapped in exactly one place.
+	function settleFoldedValue(decl TopLevelDecl, value ConstFoldedValue) returns ConstEvalOutcome
+		match value 'kind'
+			scalar(folded) then return self.settleScalarValue(decl, value: folded)
 			managed(bytes, managedKind) then return self.settleManagedValue(decl, bytes: bytes, kind: managedKind)
 			arrayLiteral(elements, element) then return self.settleStoredRecordValue(decl, outcome: TopLevelConstant.arrayValue(elements, element: element))
 			containerCreate(giid) then return self.settleStoredRecordValue(decl, outcome: TopLevelConstant.containerValue(giid))
 		end 'kind'
-	end 'walkConstInitializer'
+	end 'settleFoldedValue'
 
 	// Settle a decl whose initializer folded to a NUMBER — the arm this arena has always had.
 	function settleScalarValue(decl TopLevelDecl, value ConstValue) returns ConstEvalOutcome
@@ -6686,7 +6949,7 @@ export type ProgramSignatures
 			failed to poisoned then break 'state'
 			evaluating then decl.outcome = TopLevelConstant.poisoned
 			value then panic("ProgramSignatures.poisonIfUndecided: '{String.from(decl.name)}' holds a scalar value AND failed to evaluate — an initializer produces one or the other")
-			managedValue to containerValue then panic("ProgramSignatures.poisonIfUndecided: '{String.from(decl.name)}' holds a managed value AND failed to evaluate — an initializer produces one or the other")
+			managedValue to factoryValue then panic("ProgramSignatures.poisonIfUndecided: '{String.from(decl.name)}' holds a managed value AND failed to evaluate — an initializer produces one or the other")
 			pending then panic("ProgramSignatures.poisonIfUndecided: '{String.from(decl.name)}' is `pending` while unwinding its own evaluation — `evaluateDecl` marks it `evaluating` before the walk")
 		end 'state'
 	end 'poisonIfUndecided'
@@ -6801,9 +7064,15 @@ export type ProgramSignatures
 	// It resolves through the IDENTICAL scoped-then-bare probe (`declFor`), which is the whole point
 	// of extending the storage key to vars: this is what makes featA's `counter` and featB's
 	// `counter` two slots instead of one.
-	export function globalDeclFor(name ByteArray, readerFilePath FilePath) returns TopLevelGlobalLookup
+	// ⚠ **`into` IS THE READER'S OWN INTERNER, and it is `returnTypeOf`'s discipline applied to a SLOT.** A
+	// factory-built global's type is the callee's declared return type, which lives in THIS index's interner
+	// — and a `MaxonType.structRef(id)` is meaningless outside the table that minted the id. So the type is
+	// ADOPTED on the way out, exactly as a call's return type is. Every other arm's type carries no
+	// interner id (a gid, a builtin, a tag) and crosses unchanged, which is why the parameter arrived only
+	// when the struct arm did.
+	export function globalDeclFor(name ByteArray, readerFilePath FilePath, into TypeNameInterner) returns TopLevelGlobalLookup
 		match self.declFor(name, readerFilePath: readerFilePath, wanted: DeclKind.stored) 'lookup'
-			found(index) then return self.resolvedGlobalOf(index)
+			found(index) then return self.resolvedGlobalOf(index, into: into)
 			notFound then return TopLevelGlobalLookup.notFound
 		end 'lookup'
 	end 'globalDeclFor'
@@ -6812,7 +7081,7 @@ export type ProgramSignatures
 	// name it. A var whose initializer failed reads as `notFound` for `resolvedValueOf`'s reason: the
 	// declaration's own diagnostic has already failed the build, and a slot with no value is a slot
 	// with no bytes to emit.
-	function resolvedGlobalOf(index TopLevelDeclIndex) returns TopLevelGlobalLookup
+	function resolvedGlobalOf(index TopLevelDeclIndex, into TypeNameInterner) returns TopLevelGlobalLookup
 		let decl = self.declAt(index)
 		match decl.outcome 'state'
 			value(_, tag) then return TopLevelGlobalLookup.found(self.dataLabelOf(decl), valueType: constantValueType(tag), mutable: decl.mutable)
@@ -6828,6 +7097,10 @@ export type ProgramSignatures
 			// ⭐ A CONTAINER FACTORY reads as an array literal does — a POINTER slot holding the record
 			// `__module_init` built — and its type needs no inference at all: the alias named the instance.
 			containerValue(giid) then return TopLevelGlobalLookup.found(self.dataLabelOf(decl), valueType: MaxonType.genericInstance(giid), mutable: decl.mutable)
+			// ⭐ A FACTORY-CALL GLOBAL reads the same way, at the callee's declared RETURN type — a struct
+			// reference for `Database.create(…)`, which is what makes `db.sourceFiles` an ordinary field
+			// load off an ordinary struct pointer.
+			factoryValue(_, _, returnType) then return TopLevelGlobalLookup.found(self.dataLabelOf(decl), valueType: self.adoptType(returnType, into: into), mutable: decl.mutable)
 			pending to evaluating then panic("ProgramSignatures.resolvedGlobalOf: '{String.from(decl.name)}' is unevaluated at a use site — `evaluateInitializers` runs to completion before any file is parsed")
 		end 'state'
 	end 'resolvedGlobalOf'
@@ -6908,8 +7181,30 @@ export type ProgramSignatures
 			return false
 		end 'inlinedHasNoSlot'
 
+		// ⛔ **A GLOBAL WHOSE INITIALIZER CALLS IS NEVER DROPPED, EVEN WHEN NOTHING READS IT** — the
+		// obligation `DeadGlobalElimination`'s header filed against the day an initializer may call, landing
+		// here (spec-port `map-struct-bytearray`). Dropping the arena entry drops the `__module_init` ops
+		// TOO, and for every other kind that is exactly right: they are compiler-synthesized allocation with
+		// no user-visible effect. A user factory can `print`, mutate another global or throw, and
+		// `specs/dead-top-level-var-elim.md:31` is explicit that "the call still runs even when the slot is
+		// dead". Keeping the slot is the conservative half of that — a dead 8-byte word, never a lost effect
+		// — and it is deliberately NOT the oracle's `callee.EndsWith(".create")` naming heuristic, which
+		// makes renaming a method change whether its side effects run (see that header).
+		if self.declOutcomeCalls(decl) 'initializerRunsUserCode'
+			return true
+		end 'initializerRunsUserCode'
+
 		return live.contains(self.dataLabelOf(decl))
 	end 'contributesStorage'
+
+	// Does this declaration's initializer RUN USER CODE? The one property that keeps a global out of dead
+	// elimination, asked of the outcome rather than of a name so it cannot be answered by a spelling.
+	function declOutcomeCalls(decl TopLevelDecl) returns bool
+		match decl.outcome 'state'
+			pending to containerValue then return false
+			factoryValue then return true
+		end 'state'
+	end 'declOutcomeCalls'
 
 	// EVERY LIVE top-level global in the program, in ARENA (declaration) order, with the label and value
 	// its `.data` slot carries — the door the backend's data-section layout asks through.
@@ -6930,22 +7225,28 @@ export type ProgramSignatures
 			match decl.outcome 'state'
 				value(payload, tag) then entries.push(DataSectionEntry.create(String.from(self.dataLabelOf(decl)), valueType: globalStdType(tag, name: decl.name), value: payload))
 				failed to poisoned then continue
-				// ⭐ A MANAGED `var` (P1.7 slice 2a) reserves a POINTER slot holding NULL. The record it will
-				// point at cannot be baked into a constant image — a data→data pointer has no compile-time VA
-				// under ASLR (`specs/static-variables.md:729-730`) — so the bytes are zero here and
-				// `__module_init` writes the address before `main` runs.
-				managedValue(_, kind) then entries.push(DataSectionEntry.create(String.from(self.dataLabelOf(decl)), valueType: globalStdType(maxonTypeTag(self.managedConstValueType(kind, elementFilePath: decl.declFilePath)), name: decl.name), value: ManagedGlobalInitialSlot))
-				// ⭐ AN ARRAY BINDING (P1.7 slice 2b) reserves the SAME null POINTER slot, for the same reason
-				// and now for a `let` too — its record is built, so there is even less to bake than a String's.
-				arrayValue(_, element) then entries.push(DataSectionEntry.create(String.from(self.dataLabelOf(decl)), valueType: globalStdType(maxonTypeTag(self.constArrayValueType(element)), name: decl.name), value: ManagedGlobalInitialSlot))
-				// ⭐ A CONTAINER FACTORY reserves the SAME null POINTER slot, for the same reason: the record
-				// `create()` builds is a heap allocation, and nothing about it can be baked into the image.
-				containerValue(giid) then entries.push(DataSectionEntry.create(String.from(self.dataLabelOf(decl)), valueType: globalStdType(maxonTypeTag(MaxonType.genericInstance(giid)), name: decl.name), value: ManagedGlobalInitialSlot))
+				// ⭐ EVERY RECORD BINDING reserves a POINTER slot holding NULL — a managed literal (P1.7 slice
+				// 2a), an array literal (slice 2b) and a container factory alike, and now for a `let` too. The
+				// record it will point at cannot be baked into a constant image — a data→data pointer has no
+				// compile-time VA under ASLR (`specs/static-variables.md:729-730`) — so the bytes are zero
+				// here and `__module_init` writes the address before `main` runs.
+				managedValue to containerValue then entries.push(self.nullPointerSlot(decl, valueType: self.foldedValueType(self.foldedValueOf(decl.outcome, name: decl.name), elementFilePath: decl.declFilePath)))
+				// ⭐ A FACTORY-CALL GLOBAL reserves the SAME null POINTER slot, for the same reason and one
+				// more: the record does not exist until the callee has RUN, which is strictly later than the
+				// image is written.
+				factoryValue(_, _, returnType) then entries.push(self.nullPointerSlot(decl, valueType: returnType))
 				pending to evaluating then panic("ProgramSignatures.declaredGlobals: '{String.from(decl.name)}' is unevaluated — `evaluateInitializers` runs to completion inside `queryProgramSignatures`")
 			end 'state'
 		end 'each'
 		return entries
 	end 'declaredGlobals'
+
+	// The `.data` entry every RECORD-valued global reserves: one machine word of zero, sized from the type
+	// its slot will hold a pointer to. One function rather than one spelling per outcome arm, because the
+	// bytes are the same zero in every case and only the width's derivation differs.
+	function nullPointerSlot(decl TopLevelDecl, valueType MaxonType) returns DataSectionEntry
+		return DataSectionEntry.create(String.from(self.dataLabelOf(decl)), valueType: globalStdType(maxonTypeTag(valueType), name: decl.name), value: ManagedGlobalInitialSlot)
+	end 'nullPointerSlot'
 
 	// ⭐ **EVERY LIVE MANAGED TOP-LEVEL GLOBAL IN THE PROGRAM, in ARENA (declaration) order** — the door
 	// `installManagedGlobalInit` asks through, and the ONLY enumeration of them.
@@ -6969,17 +7270,15 @@ export type ProgramSignatures
 			end 'noReachableSlot'
 			match decl.outcome 'state'
 				value to poisoned then continue
-				managedValue(bytes, kind) then entries.push(self.managedGlobalEntry(decl, initializer: managedLiteralInitializer(bytes, kind: kind), valueType: self.managedConstValueType(kind, elementFilePath: decl.declFilePath)))
-				// ⭐ AN ARRAY BINDING (P1.7 slice 2b) is a managed global whichever keyword declared it — its
-				// record is built before `main` and released after, and `let` refuses only the WRITE.
-				arrayValue(elements, element) then entries.push(self.managedGlobalEntry(decl, initializer: self.arrayRecordInitializer(elements, giid: typeNameIdOf(self.constArrayValueType(element))), valueType: self.constArrayValueType(element)))
-				// ⭐ A CONTAINER FACTORY IS AN ARRAY LITERAL WITH NO ELEMENTS, and that is a fact about the
-				// record rather than a shortcut: `ItemArray.create()` IS the `__arr_create` an array literal's
-				// own materialization opens with, and the pushes that follow it are the literal's elements —
-				// of which there are none here. So it takes the SAME initializer arm, and the stamps come
-				// from the same two doors, which is what keeps a global container's record and a global
-				// literal's identical at birth.
-				containerValue(giid) then entries.push(self.managedGlobalEntry(decl, initializer: self.arrayRecordInitializer(ConstArrayElementArray.create(), giid: giid), valueType: MaxonType.genericInstance(giid)))
+				// ⭐ A MANAGED LITERAL, AN ARRAY LITERAL (P1.7 slice 2b) AND A CONTAINER FACTORY are all managed
+				// globals whichever keyword declared them — the record is built before `main` and released
+				// after, and `let` refuses only the WRITE. All three route through `globalRecordOf`, which is
+				// also what a factory ARGUMENT of the same shape routes through: a container factory IS an
+				// array literal with no elements, and that is a fact about the record rather than a shortcut.
+				managedValue to containerValue then entries.push(self.recordGlobalOf(decl))
+				// ⭐ A FACTORY-CALL GLOBAL's slot holds whatever the callee returns, so its construction is the
+				// CALL and its type is the callee's declared return type — settled when the outcome was.
+				factoryValue(callee, args, returnType) then entries.push(self.managedGlobalEntry(decl, initializer: ManagedGlobalInitializer.factoryCall(callee, args: self.globalInitArguments(args, callee: callee, elementFilePath: decl.declFilePath)), valueType: returnType))
 				pending to evaluating then panic("ProgramSignatures.managedGlobals: '{String.from(decl.name)}' is unevaluated — `evaluateInitializers` runs to completion inside `queryProgramSignatures`")
 			end 'state'
 		end 'each'
@@ -6993,17 +7292,127 @@ export type ProgramSignatures
 		return ManagedGlobal.create(self.dataLabelOf(decl), initializer: initializer, valueType: valueType, dropCallee: managedFieldDropCallee(self, typeNames: self.typeNames, fieldType: valueType), range: declInitializerRange(decl))
 	end 'managedGlobalEntry'
 
-	// The record construction an ARRAY-RECORD global asks for: `__arr_create` with the stamps this instance
-	// fixes, then one push per element. Both stamps come from the instance the global is TYPED by, so the
+	// The entry for a global whose slot the compiler MATERIALIZES: resolve the folded value to its record and
+	// its type together, then file both. It resolves the outcome itself rather than taking one, so the record
+	// arm cannot pass a type derived from anything but its own build.
+	function recordGlobalOf(decl TopLevelDecl) returns ManagedGlobal
+		let record = self.globalRecordOf(self.foldedValueOf(decl.outcome, name: decl.name), elementFilePath: decl.declFilePath)
+		return self.managedGlobalEntry(decl, initializer: ManagedGlobalInitializer.record(record.build), valueType: record.valueType)
+	end 'recordGlobalOf'
+
+	// ⭐ **EVERY ARGUMENT OF A FACTORY-CALL GLOBAL, RESOLVED FOR THE SYNTHESIS.** Each folded argument becomes
+	// either a number to materialize as a `literal` or one of the record constructions `globalRecordOf`
+	// resolves — the same door the global's own slot goes through, which is what makes "an argument is
+	// anything an initializer may be except another call" true of the EMITTED code and not only of the
+	// grammar. The LABEL rides through untouched: `LowerMaxonToStd.lowerCall` reorders a labelled call
+	// against the callee's declared parameter names, so the synthesis emits the arguments in SOURCE order
+	// exactly as a body's call site does.
+	//
+	// ⭐ **THE CALLEE'S CONSUME FACTS ARE ASKED ONCE, HERE, AND SLOTTED PER ARGUMENT** — the shape
+	// `Parser.applyCallerConsume` uses at a body's call site, over the same `consumeOf` entry and the same
+	// `argSlotPosition` label→position mapping, so "did the callee take this one?" has one answer whichever
+	// position the call was written in.
+	function globalInitArguments(args ConstFactoryArgumentArray, callee ByteArray, elementFilePath FilePath) returns GlobalInitArgumentArray
+		let consume = self.consumeOf(callee)
+		var resolved = GlobalInitArgumentArray.create()
+		for i in 0 upto args.count() 'eachArgument'
+			let arg = try args.get(i) otherwise panic("ProgramSignatures.globalInitArguments: args.get OOB at {i} below count {args.count()}")
+			resolved.push(self.globalInitArgument(arg, consume: consume, argIndex: i, elementFilePath: elementFilePath))
+		end 'eachArgument'
+		return resolved
+	end 'globalInitArguments'
+
+	// ONE argument, resolved. A SCALAR carries its number and the type it is minted at — rebuilt from the
+	// folded tag alone (`UnnamedTypeId`, because the evaluator folds an integer, a bool or a float and none
+	// of the three names a type). The call site's DECLARED parameter type is deliberately not consulted:
+	// `LowerMaxonToStd.lowerCall` slots the argument against the signature exactly as it does for a body's
+	// call, so a second reading of the declaration here could only ever disagree with the one that matters.
+	// A scalar owns nothing, so it needs no cleanup; a RECORD's is the question below.
+	function globalInitArgument(arg ConstFactoryArgument, consume CalleeConsume, argIndex ParamCount, elementFilePath FilePath) returns GlobalInitArgument
+		match arg.value 'value'
+			scalar(folded) then return GlobalInitArgument.create(arg.label, value: GlobalInitArgumentValue.scalar(folded.payload), valueType: maxonTypeOfTag(folded.tag, nameId: UnnamedTypeId), cleanup: GlobalInitArgumentCleanup.none)
+			managed to containerCreate then break 'value'
+		end 'value'
+
+		let record = self.globalRecordOf(arg.value, elementFilePath: elementFilePath)
+		return GlobalInitArgument.create(arg.label, value: GlobalInitArgumentValue.record(record.build), valueType: record.valueType, cleanup: self.recordArgumentCleanup(consume, argIndex: argIndex, label: arg.label, valueType: record.valueType))
+	end 'globalInitArgument'
+
+	// ⭐ **WHO FREES THIS RECORD ARGUMENT?** A CONSUMED parameter is the callee's — it stored the record, and
+	// dropping it here would be a double-free — so nothing is emitted. Everything else is still
+	// `__module_init`'s, and its drop is the very callee `__maxon_global_cleanup` would use for a global of
+	// that type, off the one router (`managedFieldDropCallee`) rather than a second reading of the type.
+	//
+	// ⚠ **THE DEFAULT IS TO DROP, and that direction is the load-bearing one.** `consumeOf` answers
+	// `borrowsAll` for a callee with no recorded entry — the overwhelming majority — so a callee whose
+	// consume the sweep cannot see leaks nothing; the failure mode of a wrong answer here is a double-free
+	// only in the direction the sweep is POSITIVE about, which is the direction it is exact in.
+	function recordArgumentCleanup(consume CalleeConsume, argIndex ParamCount, label ByteArray, valueType MaxonType) returns GlobalInitArgumentCleanup
+		if calleeConsumesArgument(consume, argIndex: argIndex, label: label) 'movedIntoTheCallee'
+			return GlobalInitArgumentCleanup.none
+		end 'movedIntoTheCallee'
+
+		return GlobalInitArgumentCleanup.dropAfterCall(managedFieldDropCallee(self, typeNames: self.typeNames, fieldType: valueType))
+	end 'recordArgumentCleanup'
+
+	// The record construction a CONTAINER-RECORD global asks for: this instance's `create` with the stamps it
+	// fixes, then one push per element. The stamps come from the instance the global is TYPED by, so the
 	// strides the record is born with and the type every use loads through are one answer rather than two.
 	//
-	// ⚠ **THE INSTANCE IS THE CALLER'S, because the two kinds of array-record global know it differently.**
+	// ⚠ **THE INSTANCE IS THE CALLER'S, because the two kinds of container global know it differently.**
 	// A literal INFERS it from its element kind (`constArrayValueType`); a container factory READ it off the
 	// alias the author wrote. Deriving it here would mean re-deriving one of those two from the other, and
 	// an empty container has no element kind to derive from at all.
-	function arrayRecordInitializer(elements ConstArrayElementArray, giid GenericInstanceId) returns ManagedGlobalInitializer
-		return ManagedGlobalInitializer.arrayRecord(elements, elementSize: self.arrayElementSize(giid), elementDestroy: self.arrayElementDestroy(giid))
-	end 'arrayRecordInitializer'
+	function containerRecordOf(elements ConstArrayElementArray, giid GenericInstanceId) returns ManagedGlobalRecord
+		return ManagedGlobalRecord.containerRecord(self.containerCreateCall(giid), elements: elements)
+	end 'containerRecordOf'
+
+	// ⭐ **THE TYPE ONE FOLDED RECORD VALUE DENOTES** — what its `.data` slot is sized as, what its value is
+	// minted at and what routes its drop. ONE derivation, read by the `.data` walk, the init walk and the
+	// factory-argument builder alike; it used to be spelled once per arm in each of the first two, which is
+	// three copies of a three-line map.
+	function foldedValueType(value ConstFoldedValue, elementFilePath FilePath) returns MaxonType
+		match value 'folded'
+			scalar(folded) then panic("ProgramSignatures.foldedValueType: a folded scalar of tag '{typeTagName(folded.tag)}' names no record type — a scalar occupies its slot as a VALUE, and every caller splits the two before asking")
+			managed(_, kind) then return self.managedConstValueType(kind, elementFilePath: elementFilePath)
+			arrayLiteral(_, element) then return self.constArrayValueType(element)
+			containerCreate(giid) then return MaxonType.genericInstance(giid)
+		end 'folded'
+	end 'foldedValueType'
+
+	// ⭐ **RESOLVE ONE FOLDED VALUE INTO WHAT `__module_init` DOES WITH IT** — the bridge between the
+	// evaluator's answer and the synthesis's instruction, and the ONE place the mapping is written. Both a
+	// global's own slot and a factory ARGUMENT come through it, so a `String` argument is cloned exactly as a
+	// `String` global is and a `Map` argument is stamped exactly as a `Map` global is.
+	//
+	// It hands back the TYPE beside the construction because the two are read together and must not be able
+	// to disagree about what the record is.
+	function globalRecordOf(value ConstFoldedValue, elementFilePath FilePath) returns GlobalRecordAndType
+		let valueType = self.foldedValueType(value, elementFilePath: elementFilePath)
+		match value 'folded'
+			scalar(folded) then panic("ProgramSignatures.globalRecordOf: a folded scalar of tag '{typeTagName(folded.tag)}' has no record construction — `foldedValueType` above refuses the same value for the same reason")
+			managed(bytes, kind) then return GlobalRecordAndType.create(managedLiteralRecord(bytes, kind: kind), valueType: valueType)
+			// The instance is read off `valueType` — which `foldedValueType` above resolved from this very
+			// element kind — rather than resolved a second time from the kind. One derivation, so the record's
+			// stamps and the slot's type cannot come from two answers to one question.
+			arrayLiteral(elements, _) then return GlobalRecordAndType.create(self.containerRecordOf(elements, giid: typeNameIdOf(valueType)), valueType: valueType)
+			containerCreate(giid) then return GlobalRecordAndType.create(self.containerRecordOf(ConstArrayElementArray.create(), giid: giid), valueType: valueType)
+		end 'folded'
+	end 'globalRecordOf'
+
+	// The folded value the three STORED-RECORD outcomes came from. It exists so ONE resolver serves a global's
+	// own slot and a factory ARGUMENT: the outcome union records what a declaration SETTLED to (and carries
+	// two arms an argument can never be), while `ConstFoldedValue` records what an initializer FOLDED to, and
+	// these three arms are the same three facts wearing the first union's name.
+	function foldedValueOf(outcome TopLevelConstant, name ByteArray) returns ConstFoldedValue
+		match outcome 'o'
+			pending to poisoned then panic("ProgramSignatures.foldedValueOf: '{String.from(name)}' settled to an outcome that stores no record — every caller filters on the stored-record arms first")
+			managedValue(bytes, kind) then return ConstFoldedValue.managed(bytes, kind: kind)
+			arrayValue(elements, element) then return ConstFoldedValue.arrayLiteral(elements, element: element)
+			containerValue(giid) then return ConstFoldedValue.containerCreate(giid)
+			factoryValue then panic("ProgramSignatures.foldedValueOf: '{String.from(name)}' settled to a factory CALL, which is not a folded value — its record is built by calling user code, not by materializing a constant")
+		end 'o'
+	end 'foldedValueOf'
 
 	// The recorded arena entry a top-level `decl` resolves to, keyed on the decl's OWN storage key
 	// rather than on a bare name (a declaration resolves to ITSELF, never through the scoped-then-bare
@@ -7095,7 +7504,7 @@ export type ProgramSignatures
 			// record with a `.data` slot, so a read is a LOAD and the caller's NEXT probe (`globalDeclFor`)
 			// is the one that answers. That makes `notFound` the right answer here rather than merely a
 			// defensive one — it is the same "no CONSTANT of that name is visible" a `var` has always given.
-			arrayValue to containerValue then return TopLevelConstantLookup.notFound
+			arrayValue to factoryValue then return TopLevelConstantLookup.notFound
 			pending to evaluating then panic("ProgramSignatures.resolvedValueOf: '{String.from(decl.name)}' is unevaluated at a use site — `evaluateInitializers` runs to completion before any file is parsed")
 		end 'state'
 	end 'resolvedValueOf'
@@ -7208,6 +7617,14 @@ export type ProgramSignatures
 			// with the instance stated outright instead of inferred from an element kind. There are no
 			// elements to leave out.
 			containerValue(giid) then return mixBytes(mixBytes(mix(keyed, value: ConstShapeContainerValue), bytes: self.mangleGenericInstance(giid)), bytes: decl.dataLabel)
+			// ⭐ **A FACTORY-CALL GLOBAL MIXES ITS CALLEE AND ITS LABEL, AND NOT ITS ARGUMENTS** — the
+			// array-literal arm's rule, applied to the one initializer that calls. Every reader emits
+			// `globalAddr <label>` + `loadIndirect`, byte-identical whichever arguments the call passes, so
+			// the arguments reach only `__module_init`, which is rebuilt from this arena whenever this query
+			// misses. What a reader DOES depend on is the CALLEE — it fixes the slot's type, and swapping
+			// `Database.create` for `Database.empty` can retype every use — and the LABEL, which is the slot
+			// the emitted `globalAddr` names.
+			factoryValue(callee, _, _) then return mixBytes(mixBytes(mix(keyed, value: ConstShapeFactoryValue), bytes: callee), bytes: decl.dataLabel)
 			// A constant with no value bakes no number into a reader, so every failure hashes alike —
 			// but it must still hash differently from every VALUE, or `let X = compute()` becoming
 			// `let X = 0` would leave a reader's memo valid. The failure's DETAILS are deliberately not
@@ -9743,19 +10160,122 @@ export type ProgramSignatures
 		return managedFieldDropCallee(self, typeNames: self.typeNames, fieldType: self.containerElementType(id))
 	end 'arrayElementDropCallee'
 
-	// ⭐ **WHAT `element_destroy@40` IS STAMPED WITH for `Array with T`, as a DESCRIPTION** — what a top-level
-	// array global's record carries to `ModuleInit`, which has no `ProgramSignatures` to ask (P1.7 slice 2b).
-	// It composes the same two accessors `Parser.arrayElementDestroyValue` does, off the same
-	// `containerElementIsManaged` decision, so the destructor a global's record is stamped with equals the one a
-	// body's literal of the same instance gets. It is asked ONCE PER MANAGED GLOBAL, which is why it may box
-	// a union where the parser's per-SITE emitter deliberately does not.
-	function arrayElementDestroy(id GenericInstanceId) returns ArrayElementDestroy
-		if self.containerElementIsManaged(id) 'managed'
-			return ArrayElementDestroy.drop(self.arrayElementDropCallee(id))
+	// ⭐ **THE DESTRUCTOR STAMP ONE CONTAINER COLUMN IS BORN WITH, AS A DESCRIPTION** — what a top-level
+	// container global's record carries to `ModuleInit`, which has no `ProgramSignatures` to ask (P1.7 slice
+	// 2b, widened to every container by spec-port `map-struct-bytearray`). A MANAGED column carries the drop
+	// callee its teardown walk invokes through a `callIndirect` on each live slot; a trivial one carries 0
+	// and its walk is skipped.
+	//
+	// It composes the same two accessors `Parser.columnDestroyValue` does, off the same `slotTypeIsManaged`
+	// decision, so the destructor a global's record is stamped with equals the one a body's `create()` of the
+	// same instance gets. It is asked ONCE PER MANAGED GLOBAL, which is why it may box a union where the
+	// parser's per-SITE emitter deliberately does not.
+	//
+	// ⚠ It is keyed on the column's TYPE and not on a `(giid, which-column)` pair, for the reason its value
+	// twin states: a `Map` has TWO of these stamps, and a per-column copy is exactly how the key's and the
+	// value's teardown come to disagree about what "managed" means.
+	function columnDestroyStamp(columnType MaxonType) returns ContainerCreateStamp
+		if self.slotTypeIsManaged(columnType) 'managed'
+			return ContainerCreateStamp.dropCallee(self.slotTypeDropCallee(columnType))
 		end 'managed'
 
-		return ArrayElementDestroy.trivial
-	end 'arrayElementDestroy'
+		return ContainerCreateStamp.inline(TrivialDestructor)
+	end 'columnDestroyStamp'
+
+	// ⭐ **DOES THIS BUILTIN CONTAINER HAVE A `create()` AT ALL?** The one home of that question, so the body
+	// door and the top-level door refuse the same instances. Exactly one builtin says no — a
+	// `__ManagedListNode` handle, which only an insertion can mint — and it is stated as the exception it is
+	// rather than by enumerating the five that do.
+	export function instanceHasBuiltinCreate(id GenericInstanceId) returns bool
+		return not self.isManagedListNodeInstance(id)
+	end 'instanceHasBuiltinCreate'
+
+	// ⭐⭐ **MAY `readerFilePath` NAME `callee`?** The function half of `Visibility`, answered where a call in a
+	// FUNCTION BODY cannot ask it: a top-level initializer's call is decided inside `queryProgramSignatures`,
+	// before any file is parsed and long before `FunctionNameIndex` — which is what
+	// `SemanticCheck.calleeVisibleFrom` reads — exists. The tier and the declaring file come from the SWEEP's
+	// own column, and the rule they are fed to is the one `isVisibleFrom` already owns, so the two askers can
+	// disagree about no declaration they both see.
+	//
+	// A callee no file declares is VISIBLE: "there is no such function" is a different mistake, and the
+	// caller's own `globalFactoryReturn` reports it with the right sentence.
+	//
+	// The refusing TIER rides back with the verdict because the diagnostic's CODE is chosen by it (E3008 vs
+	// E3088), and asking for it separately would be a second lookup of the same key that could answer about
+	// a different declaration if anything refiled the name in between.
+	export function calleeVisibilityFrom(callee ByteArray, readerFilePath FilePath) returns CalleeVisibility
+		let site = try self.funcDeclSites.get(callee) otherwise return CalleeVisibility.visible
+		if self.isVisibleFrom(site.visibility, declFilePath: site.declFilePath, readerFilePath: readerFilePath) 'nameableHere'
+			return CalleeVisibility.visible
+		end 'nameableHere'
+
+		return CalleeVisibility.hidden(site.visibility)
+	end 'calleeVisibilityFrom'
+
+	// ⭐ **WHAT A CANDIDATE TOP-LEVEL FACTORY RETURNS, CLASSIFIED FOR THE ONE DECISION THAT READS IT** — may
+	// a `.data` slot hold it? A RECORD can (the slot holds a pointer `__module_init` fills); a scalar cannot
+	// (its value is written into the image, which happens before any code runs). The scalar arm carries the
+	// type's DISPLAY NAME because only this side holds the interner those ids live in.
+	export function globalFactoryReturn(callee ByteArray) returns GlobalFactoryReturn
+		let declared = try self.returnTypes.get(callee) otherwise return GlobalFactoryReturn.undeclared
+		match declared 'returns'
+			void then return GlobalFactoryReturn.void
+			value(valueType) then return self.globalFactoryValueReturn(valueType)
+		end 'returns'
+	end 'globalFactoryReturn'
+
+	// The classification of a factory's declared VALUE return type — split out so the `void` arm above stays
+	// one line and this one holds the whole managed/scalar question, which is `slotTypeIsManaged`'s.
+	function globalFactoryValueReturn(valueType MaxonType) returns GlobalFactoryReturn
+		if not self.slotTypeIsManaged(valueType) 'scalar'
+			return GlobalFactoryReturn.scalar(maxonTypeName(valueType, typeNames: self.typeNames))
+		end 'scalar'
+
+		return GlobalFactoryReturn.record
+	end 'globalFactoryValueReturn'
+
+	// ⭐⭐ **WHICH RUNTIME `create` BUILDS THIS INSTANCE'S RECORD, AND WHAT IT IS STAMPED WITH — the ONE
+	// description a top-level container global reaches `ModuleInit` through** (spec-port
+	// `map-struct-bytearray`, which widened P1.7 slice 2b's `Array`-only door to every builtin container).
+	// The routing is settled HERE, where the instance registry is, because the synthesis holds no index.
+	//
+	// ⚠ **IT IS A SECOND COMPOSITION OF THE SAME DECISIONS, NEVER A SECOND DECIDER.** `Parser`'s body
+	// emitters (`emitArrayCreateOp` / `emitSetCreateOp` / `emitMapCreateOp` / `emitListCreateOp` /
+	// `emitVectorCreateOp`) build the same calls as VALUES and deliberately box no description per site —
+	// MEASURED at +1 allocation per creation site in the program (see `Parser.arrayElementDestroyValue`).
+	// What must not be written twice is the RULE, and none of it is: which container this is
+	// (`isSetInstance`/`isMapInstance`/…), which column owns what (`slotTypeIsManaged`), which drop
+	// (`slotTypeDropCallee`) and which stride (`arrayElementSize`) are each answered in one place and read
+	// from both sides. This is asked ONCE PER MANAGED GLOBAL.
+	function containerCreateCall(id GenericInstanceId) returns ContainerCreateCall
+		var stamps = ContainerCreateStampArray.create()
+
+		if self.isSetInstance(id) 'set'
+			stamps.push(self.columnDestroyStamp(self.setKeyType(id)))
+			return ContainerCreateCall.create(SetCreateName, stamps: stamps, sizing: ContainerSizing.grown)
+		end 'set'
+
+		if self.isMapInstance(id) 'map'
+			stamps.push(self.columnDestroyStamp(self.mapKeyType(id)))
+			stamps.push(self.columnDestroyStamp(self.mapValueType(id)))
+			return ContainerCreateCall.create(MapCreateName, stamps: stamps, sizing: ContainerSizing.grown)
+		end 'map'
+
+		if self.isListInstance(id) or self.isManagedListInstance(id) 'chain'
+			stamps.push(self.columnDestroyStamp(self.containerElementType(id)))
+			return ContainerCreateCall.create(ListCreateName, stamps: stamps, sizing: ContainerSizing.grown)
+		end 'chain'
+
+		if not (self.isArrayInstance(id) or self.isVectorInstance(id)) 'notACreatableContainer'
+			panic("ProgramSignatures.containerCreateCall: generic instance {id} is not a builtin container with a `create` — every caller has already admitted the instance through `Parser.requireContainerIsCreatable`, which refuses everything this router has no arm for")
+		end 'notACreatableContainer'
+
+		// `Array` and `Vector` share `__arr_create` and its two stamps; a `Vector`'s elements are addressable
+		// from birth, so its record is then sized. That is the same pair of calls `emitVectorCreateOp` makes.
+		stamps.push(ContainerCreateStamp.inline(self.arrayElementSize(id)))
+		stamps.push(self.columnDestroyStamp(self.containerElementType(id)))
+		return ContainerCreateCall.create(ArrCreateName, stamps: stamps, sizing: ContainerSizing.fixed(self.genericInstanceFixedSize(id)) if self.isVectorInstance(id) else ContainerSizing.grown)
+	end 'containerCreateCall'
 
 	// The element CLONE strategy for a managed-element `Array with T` (P1.7 slice 3b-vi-b) — the DUAL of
 	// `arrayElementDropCallee`. The front end stamps `funcAddr(<the direct callee>)` into the `_managed`
@@ -13310,9 +13830,15 @@ export type ProgramSignatures
 	// `mixReturnType` folds them identically — an edit from one to the other would move no hash, and every
 	// caller's parse memo would stay valid while what its calls MEAN had changed. Its own discriminator pair,
 	// for `DeclShapeAlias`'s reason.
-	function mixDeclaration(state ContentHash, name ByteArray, returnType MaxonReturnType, declaredSurface DeclaredSurface) returns ContentHash
+	//
+	// ⚠ **THE VISIBILITY TIER MUST RIDE TOO, for `recordAlias`'s reason one declaration kind over.** Adding or
+	// removing `export` on a `static function` changes whether ANOTHER file's `var db = Database.create()`
+	// compiles at all (`Parser.evalConstFactoryCall`), and that decision is baked into that file's memoized
+	// parse. The whole ORDINAL rather than an exported bit, exactly as `recordAlias` states: `module` is a
+	// third answer a user can write, and a fourth tier would ride automatically.
+	function mixDeclaration(state ContentHash, name ByteArray, returnType MaxonReturnType, declaredSurface DeclaredSurface, visibility Visibility) returns ContentHash
 		let named = self.mixReturnType(mixBytes(state, bytes: name), returnType: returnType)
-		return mixSurface(mix(named, value: ReturnShapeSurface), surface: declaredSurface)
+		return mix(mixSurface(mix(named, value: ReturnShapeSurface), surface: declaredSurface), value: tierOrdinal(visibility) as ContentHash)
 	end 'mixDeclaration'
 
 	function mixReturnType(state ContentHash, returnType MaxonReturnType) returns ContentHash

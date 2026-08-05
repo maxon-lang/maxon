@@ -519,7 +519,7 @@ end 'main'
 0
 ```
 
-<!-- disabled-test: get-empty-module-level-array -->
+<!-- test: get-empty-module-level-array -->
 <!-- module-level array global initialized by a CALL — a top-level `var arr = IntArray.create()`; shv2's module-scope initializers are constant-only, so the parser reads `IntArray.` as a ranged-alias bound (E2010 "Expected 'min' or 'max' but got 'create'") -->
 Get on an empty module-level array throws error and is caught by otherwise.
 

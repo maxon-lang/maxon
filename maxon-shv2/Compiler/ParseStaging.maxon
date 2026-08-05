@@ -62,13 +62,25 @@ let sharedEmptyOverloadSets = OverloadSetMap.create()
 // remapped and folded as one entry. `ProgramSignatures.record` applies them together, with identical
 // last-wins semantics, so the surface is exactly as accurate as the return type it accompanies —
 // including for an overload set, where the sweep publishes ONE answer per bare name for both.
+// ⭐⭐ **`visibility` IS THE DECLARATION'S OWN TIER, AND IT RIDES HERE FOR `declaredSurface`'S REASON** — it
+// is a second fact about the SAME declaration, applied by `ProgramSignatures.record` beside the declaring
+// file it already receives, so the tier and the file a visibility question needs are written together and
+// cannot come to describe two declarations.
+//
+// ⚠ **IT DEFAULTS, AND THE DEFAULT IS FOR THE `Project.funcReturnTypes` REGISTRY'S THREE PRODUCERS ONLY.**
+// This record serves two registries: the pre-parse SWEEP (which folds into `ProgramSignatures` and is the
+// only reader of this field) and the real parse's per-file contribution (`ParseArtifact.recordFuncReturnType`
+// — a declared function, a parameter-default helper and a lifted closure shim). The latter three never reach
+// `ProgramSignatures.record`, and two of them are functions no file wrote, so there is no author tier for
+// them to state; `file` is the narrowest one and states nothing wider than the truth.
 export type FuncReturnTypeEntry
 	export var name as ByteArray
 	export var returnType as MaxonReturnType
 	export var declaredSurface as DeclaredSurface
+	export var visibility as Visibility
 
-	export static function create(name ByteArray, returnType MaxonReturnType, declaredSurface DeclaredSurface) returns FuncReturnTypeEntry
-		return Self{name: name, returnType: returnType, declaredSurface: declaredSurface}
+	export static function create(name ByteArray, returnType MaxonReturnType, declaredSurface DeclaredSurface, visibility Visibility = Visibility.file) returns FuncReturnTypeEntry
+		return Self{name: name, returnType: returnType, declaredSurface: declaredSurface, visibility: visibility}
 	end 'create'
 end 'FuncReturnTypeEntry'
 
