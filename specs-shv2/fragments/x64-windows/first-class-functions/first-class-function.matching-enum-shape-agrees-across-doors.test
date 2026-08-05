@@ -1,0 +1,222 @@
+// Test: first-class-function.matching-enum-shape-agrees-across-doors
+
+enum Color
+	red
+	green
+	blue
+end 'Color'
+
+typealias ColorFn = function(Color) returns Color
+
+union Holder
+	held(f ColorFn)
+	empty
+end 'Holder'
+
+function next(c Color) returns Color
+	match c 'k'
+		red then return Color.green
+		green then return Color.blue
+		blue then return Color.red
+	end 'k'
+end 'next'
+
+function pick() returns ColorFn
+	return next
+end 'pick'
+
+function callThrough(f ColorFn) returns Color
+	return f(Color.red)
+end 'callThrough'
+
+function callPayload(h Holder) returns Color
+	return match h 'm'
+		held(f) gives f(Color.green)
+		empty gives Color.red
+	end 'm'
+end 'callPayload'
+
+function show(c Color)
+	match c 'k'
+		red then print("red\n")
+		green then print("green\n")
+		blue then print("blue\n")
+	end 'k'
+end 'show'
+
+function main() returns ExitCode
+	show(callThrough(next))
+	show(callPayload(Holder.held(next)))
+	show(pick()(Color.blue))
+	return 0
+end 'main'
+---
+ExitCode: unpinned
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @next {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, matcharm
+    x64.jmp matchnext
+  matcharm:
+    x64.movRegImm32 r8, 1
+    x64.popReg rbp
+    x64.ret
+  matchnext:
+    x64.cmpRegImm32 rcx, 1
+    x64.jcc equal, matcharm
+    x64.jmp matchnext
+  matcharm:
+    x64.movRegImm32 r8, 2
+    x64.popReg rbp
+    x64.ret
+  matchnext:
+    x64.cmpRegImm32 rcx, 2
+    x64.jcc equal, matcharm
+    x64.jmp matchdead
+  matcharm:
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+  matchdead:
+  matchcont:
+}
+
+func @pick {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.leaRegFunc r8, [rip + __fnref_next]
+    x64.popReg rbp
+    x64.ret
+}
+
+func @callThrough {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.movRegImm32 rcx, 0
+    x64.callReg rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @callPayload {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, matcharm
+    x64.jmp matchnext
+  matcharm:
+    x64.loadRegBaseDisp.word64 rbx, [rcx + 8]
+    x64.movRegImm32 rcx, 1
+    x64.movRegImm32 rdx, 0
+    x64.callReg rbx
+    x64.jmp matchcont
+  matchnext:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc equal, matcharm
+    x64.jmp matchdead
+  matcharm:
+    x64.movRegImm32 r8, 0
+    x64.jmp matchcont
+  matchcont:
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  matchdead:
+}
+
+func @show {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, matcharm
+    x64.jmp matchnext
+  matcharm:
+    x64.leaRegRdata rcx, [rip + __str_rec_1]
+    x64.callDirect __print_string
+    x64.jmp matchcont
+  matchnext:
+    x64.cmpRegImm32 rcx, 1
+    x64.jcc equal, matcharm
+    x64.jmp matchnext
+  matcharm:
+    x64.leaRegRdata rcx, [rip + __str_rec_3]
+    x64.callDirect __print_string
+    x64.jmp matchcont
+  matchnext:
+    x64.cmpRegImm32 rcx, 2
+    x64.jcc equal, matcharm
+    x64.jmp matchdead
+  matcharm:
+    x64.leaRegRdata rcx, [rip + __str_rec_5]
+    x64.callDirect __print_string
+    x64.jmp matchcont
+  matchcont:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  matchdead:
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.leaRegFunc rcx, [rip + __fnref_next]
+    x64.movRegImm32 rdx, 0
+    x64.callDirect callThrough
+    x64.movRegReg rcx, r8
+    x64.callDirect show
+    x64.leaRegFunc rbx, [rip + __fnref_next]
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r12, r8
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [r12 + 0], rax
+    x64.storeBaseDispReg.word64 [r12 + 8], rbx
+    x64.movRegReg rcx, r12
+    x64.callDirect callPayload
+    x64.movRegReg rcx, r8
+    x64.callDirect show
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_decref
+    x64.callDirect pick
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rcx, 2
+    x64.movRegImm32 rdx, 0
+    x64.callReg rbx
+    x64.movRegReg rcx, r8
+    x64.callDirect show
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

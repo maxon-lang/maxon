@@ -2266,6 +2266,11 @@ export type FunctionTypeAlias
 	export let name as ByteArray
 	export let returnTag as ValueTypeTag
 	export let returnTypeName as ByteArray
+	// The RETURN slot's half of `FunctionAliasParam.aggregateName` — see there. EMPTY for a `void` return and
+	// for every type whose identity survives resolution, and EMPTY on the SWEEP's copy of an alias, which
+	// cannot classify a name the registry it is still building has not reached (`Parser.readFunctionTypeAlias`
+	// states the gate). The real parse's copy in `project.functionTypeAliases` is the one every shape reads.
+	export let returnAggregateName as ByteArray
 	// ⭐ **THE DECLARED PARAMETER TYPES**, in declaration order. EMPTY for an alias read by the
 	// whole-program token SWEEP rather than by a real parse, and that is a property of the sweep and not
 	// an omission: `Parser.parseTypeReference` answers a type spelling DIFFERENTLY there (the alias and
@@ -2284,8 +2289,8 @@ export type FunctionTypeAlias
 	// against a declared function's display built the same way.
 	export let display as ByteArray
 
-	export static function create(name ByteArray, returnTag ValueTypeTag, returnTypeName ByteArray, display ByteArray, paramTypes FunctionAliasParamArray) returns FunctionTypeAlias
-		return Self{name: name, returnTag: returnTag, returnTypeName: returnTypeName, display: display, paramTypes: paramTypes}
+	export static function create(name ByteArray, returnTag ValueTypeTag, returnTypeName ByteArray, returnAggregateName ByteArray, display ByteArray, paramTypes FunctionAliasParamArray) returns FunctionTypeAlias
+		return Self{name: name, returnTag: returnTag, returnTypeName: returnTypeName, returnAggregateName: returnAggregateName, display: display, paramTypes: paramTypes}
 	end 'create'
 end 'FunctionTypeAlias'
 
@@ -2301,9 +2306,18 @@ export type FunctionAliasParam
 	// exactly `FunctionTypeAlias.returnTypeName`'s convention, produced by the same
 	// `Parser.functionAliasTypeName`.
 	export let typeName as ByteArray
+	// ⭐ **THE IDENTITY RESOLUTION ERASES — this parameter's contribution to `FunctionShape.paramAggregateNames`.**
+	// NOT the same thing as `typeName` above, and the difference is the point: `typeName` is what a reader's
+	// interner must re-intern to rebuild the TYPE (a struct's name is there, a primitive's is not), while this
+	// is what survives NOTHING and therefore has to be carried (a boxed union/enum, a per-instance ranged
+	// alias). A struct is empty here and non-empty there. Filled by `Parser.erasedAggregateNameOf`, the one
+	// extraction the declared-function tier fills `FuncSignature.paramAggregateNames` through — see there for
+	// why sharing the EXTRACTION rather than loosening the comparison is what keeps the two tiers from
+	// classifying one parameter two ways.
+	export let aggregateName as ByteArray
 
-	export static function create(tag ValueTypeTag, typeName ByteArray) returns FunctionAliasParam
-		return Self{tag: tag, typeName: typeName}
+	export static function create(tag ValueTypeTag, typeName ByteArray, aggregateName ByteArray) returns FunctionAliasParam
+		return Self{tag: tag, typeName: typeName, aggregateName: aggregateName}
 	end 'create'
 end 'FunctionAliasParam'
 
@@ -2344,16 +2358,19 @@ export type FunctionShape
 	// resolution, so its identity is read LIVE off `paramTypes` and a reader consults this column only where
 	// the live answer is empty. Filling it for a struct would put one name in two places for no reader.
 	//
-	// ⚠ **`functionShapesAgree` DOES NOT COMPARE IT, AND THAT IS THIS COLUMN'S BOUND rather than its
-	// intention.** That predicate is representational by design (see this header), and the enum-erasure hole
-	// at the general function-type door — `function(Shade)` accepted into a `function(Color)`-typed field,
-	// which faults on the call — is the SAME defect one door over, pre-existing, with its own blast radius
-	// across every door a function value passes. It is filed for its own rung; the carrier is here so that
-	// rung has one to read rather than one to invent.
+	// ⭐ **`functionShapesAgree` COMPARES IT (BATCH18-b), and until it did, the six doors that predicate
+	// serves ALL had the hole** — `function(Shade)` accepted into a `function(Color)` cast, return, variable,
+	// global, field or union payload, faulting on the call. It is not a widening of the "representational"
+	// rule above but its completion: two positions agree when their REPRESENTATION agrees AND the identity
+	// that representation destroyed agrees. The two halves are disjoint by construction, which is what makes
+	// the conjunction safe — see the parameter loop in `TypeResolution.shapesAgreeUnder`.
 	export let paramAggregateNames as ByteArrayArray
+	// The RETURN slot's half of the same column, one name rather than an array. See
+	// `FuncSignature.returnAggregateName` for the measurement that made it necessary.
+	export let returnAggregateName as ByteArray
 
-	export static function create(paramTypes MaxonTypeArray, returnType MaxonReturnType, paramAggregateNames ByteArrayArray) returns FunctionShape
-		return Self{paramTypes: paramTypes, returnType: returnType, paramAggregateNames: paramAggregateNames}
+	export static function create(paramTypes MaxonTypeArray, returnType MaxonReturnType, paramAggregateNames ByteArrayArray, returnAggregateName ByteArray) returns FunctionShape
+		return Self{paramTypes: paramTypes, returnType: returnType, paramAggregateNames: paramAggregateNames, returnAggregateName: returnAggregateName}
 	end 'create'
 end 'FunctionShape'
 
@@ -3630,15 +3647,24 @@ export type FuncSignature
 	// alias must stay empty in the identity column (`takeInt(x Integer)` accepts any int-valued argument, and
 	// a nominal comparison there would refuse it) and must be present here (`resolveTypes` collapses
 	// `n Integer` to bare `integer`, so without it the refusal reads `expected 'int'` where
-	// `specs/type-checking.md` pins `expected 'Integer'`). They are BUILT IN ONE WALK, from this column, so
-	// they cannot come to disagree about which parameter is which — see `Parser.paramDeclaredNamesOf`.
+	// `specs/type-checking.md` pins `expected 'Integer'`). Both are derived from the SAME `paramTypes` array,
+	// one entry per parameter and in the same order, so they cannot come to disagree about which parameter is
+	// which — see `Parser.paramDeclaredNamesOf` and `Parser.paramAggregateNamesOf`.
 	//
 	// Travels by NAME like its sibling (a `ByteArray`, no interner id), so the merge needs no remap and
 	// `syncResolvedSignature` carries it through untouched.
 	export var paramDeclaredNames as ByteArrayArray
 
-	export static function create(paramNames ByteArrayArray, paramTypes MaxonTypeArray, paramAggregateNames ByteArrayArray, paramDeclaredNames ByteArrayArray) returns FuncSignature
-		return Self{paramNames: paramNames, paramTypes: paramTypes, paramAggregateNames: paramAggregateNames, paramDeclaredNames: paramDeclaredNames}
+	// ⭐ **THE RETURN SLOT'S HALF OF THE IDENTITY COLUMN (BATCH18-b).** `funcReturnTypes` is RESOLVED — the same
+	// `resolveTypes` that erases a union PARAMETER erases a union RETURN — so a function value handed to a
+	// function type had no name to compare there either. MEASURED: `function() returns Color` accepted where
+	// `function() returns Shade` was declared, and the two-arm `match` on the result fell off its end with
+	// `STATUS_STACK_OVERFLOW`. One name rather than an array, because a function returns exactly one thing;
+	// EMPTY for `void` and for every identity resolution preserves.
+	export var returnAggregateName as ByteArray
+
+	export static function create(paramNames ByteArrayArray, paramTypes MaxonTypeArray, paramAggregateNames ByteArrayArray, paramDeclaredNames ByteArrayArray, returnAggregateName ByteArray) returns FuncSignature
+		return Self{paramNames: paramNames, paramTypes: paramTypes, paramAggregateNames: paramAggregateNames, paramDeclaredNames: paramDeclaredNames, returnAggregateName: returnAggregateName}
 	end 'create'
 
 	// The declared parameter count — the arity a call must match.

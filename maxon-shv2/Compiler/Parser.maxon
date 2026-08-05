@@ -12029,7 +12029,7 @@ export type Parser
 					// parameter position is E2010 — so one call site covers the position.
 					try self.requireStorableDeclaredType(paramType, position: DeclaredStoragePosition.functionTypeParameter, line: paramAnchor.line, column: paramAnchor.column)
 					paramTypes.push(paramType)
-					declaredParams.push(FunctionAliasParam.create(maxonTypeTag(paramType), typeName: self.functionAliasTypeName(paramType)))
+					declaredParams.push(FunctionAliasParam.create(maxonTypeTag(paramType), typeName: self.functionAliasTypeName(paramType), aggregateName: self.erasedAggregateNameOf(paramType)))
 				end 'collectParam'
 				if not self.at(TokenKind.comma) 'endParams'
 					break
@@ -12042,6 +12042,7 @@ export type Parser
 
 		var returnTag = ValueTypeTag.void
 		var returnTypeName = EmptySourceText
+		var returnAggregateName = EmptySourceText
 		var returnForDisplay = MaxonReturnType.void
 		if self.at(TokenKind.returns) 'hasReturn'
 			let returnsTok = try self.consume(TokenKind.returns)
@@ -12052,6 +12053,11 @@ export type Parser
 				// value cannot read it (`callIndirect` declares one result). Gated on `recordSignature`
 				// exactly as the parameter half above is: the sweep may not veto.
 				try self.requireStorableDeclaredType(returnType, position: DeclaredStoragePosition.functionTypeReturnType, line: returnsTok.line, column: returnsTok.column)
+				// ⚠ Inside the gate with the parameter half, and NOT beside the two unconditional lines below,
+				// because it is the one fact of the three the sweep cannot read identically: `erasedAggregateNameOf`
+				// classifies through `self.signatures`, the registry the sweep is still filling. The sweep's copy
+				// of an alias carries the return TAG and no identity, which is exactly what it can honestly say.
+				returnAggregateName = self.erasedAggregateNameOf(returnType)
 			end 'realParse'
 			returnTag = maxonTypeTag(returnType)
 			returnTypeName = self.functionAliasTypeName(returnType)
@@ -12062,7 +12068,7 @@ export type Parser
 		if recordSignature 'display'
 			display = formatFnTypeDisplay(paramTypes, returnType: returnForDisplay, typeNames: self.artifact.typeNames).toByteArray()
 		end 'display'
-		return FunctionTypeAlias.create(nameTok.value, returnTag: returnTag, returnTypeName: returnTypeName, display: display, paramTypes: declaredParams)
+		return FunctionTypeAlias.create(nameTok.value, returnTag: returnTag, returnTypeName: returnTypeName, returnAggregateName: returnAggregateName, display: display, paramTypes: declaredParams)
 	end 'readFunctionTypeAlias'
 
 	// One parameter of a function-type signature — an optional NAME followed by its type, or a bare type,
@@ -13724,8 +13730,7 @@ export type Parser
 		self.skipOptionalLabel()
 
 		self.artifact.recordFuncReturnType(name, returnType: returnType, declaredSurface: declaredReturnSurface)
-		let paramDeclaredNames = self.paramDeclaredNamesOf(paramTypes)
-		self.artifact.recordFuncSignature(name, signature: FuncSignature.create(paramNames, paramTypes: paramTypes, paramAggregateNames: self.paramAggregateNamesOf(paramDeclaredNames), paramDeclaredNames: paramDeclaredNames), nameLine: nameTok.line, nameColumn: nameTok.column, sourceFilePath: self.filePath)
+		self.artifact.recordFuncSignature(name, signature: FuncSignature.create(paramNames, paramTypes: paramTypes, paramAggregateNames: self.paramAggregateNamesOf(paramTypes), paramDeclaredNames: self.paramDeclaredNamesOf(paramTypes), returnAggregateName: self.erasedAggregateNameOfReturn(returnType)), nameLine: nameTok.line, nameColumn: nameTok.column, sourceFilePath: self.filePath)
 		self.commitRangeChecks(name)
 	end 'parseFunction'
 
@@ -14415,7 +14420,7 @@ export type Parser
 		end 'trailingTokens'
 
 		self.artifact.recordFuncReturnType(helperName, returnType: returnType, declaredSurface: sharedEmptyDeclaredSurface)
-		self.artifact.recordFuncSignature(helperName, signature: FuncSignature.create(ByteArrayArray.create(), paramTypes: MaxonTypeArray.create(), paramAggregateNames: ByteArrayArray.create(), paramDeclaredNames: ByteArrayArray.create()), nameLine: anchor.line, nameColumn: anchor.column, sourceFilePath: self.filePath)
+		self.artifact.recordFuncSignature(helperName, signature: FuncSignature.create(ByteArrayArray.create(), paramTypes: MaxonTypeArray.create(), paramAggregateNames: ByteArrayArray.create(), paramDeclaredNames: ByteArrayArray.create(), returnAggregateName: self.erasedAggregateNameOfReturn(returnType)), nameLine: anchor.line, nameColumn: anchor.column, sourceFilePath: self.filePath)
 		self.commitRangeChecks(helperName)
 	end 'parseParamDefaultHelper'
 
@@ -16831,9 +16836,11 @@ export type Parser
 	end 'aggregateNameOf'
 
 	// The `named` arm's whole rule, given the already-interned name: which NAMES carry a nominal identity, and
-	// which are numeric. Split out because `paramAggregateNamesOf` derives its column from the SPELLING column
-	// rather than from a type, and a second spelling of this rule is exactly what would let a signature's
-	// stored identity and a live value's disagree about the same name.
+	// which are numeric. Named apart from the tag dispatch above so that the question *"is this NAME nominal?"*
+	// — the only arm of `aggregateNameOf` that consults a registry rather than reading the tag — is stated once,
+	// where a second spelling of it is exactly what would let a signature's stored identity and a live value's
+	// disagree about the same name. Every reader arrives through `aggregateNameOf`, including the pre-erasure
+	// columns, which reach it through `erasedAggregateNameOf`.
 	function namedAggregateName(name ByteArray) returns ByteArray
 		if self.signatures.containsStruct(name) or self.signatures.containsEnum(name) 'registeredAggregate'
 			return name
@@ -16880,35 +16887,62 @@ export type Parser
 		self.artifact.recordFunctionTypeDoor(PendingFunctionTypeDoor.create(self.internedName(gotNameId), declaredName: self.internedName(declaredNameId), door: door, placeName: placeName, line: anchor.line, column: anchor.column, filePath: self.filePath))
 	end 'recordFunctionTypeDoor'
 
-	// ⭐ **THE PRE-ERASURE UNION/ENUM IDENTITY COLUMN A SIGNATURE CARRIES (OPEN #54 Slice B2)** — one
-	// `ByteArray` per parameter for `FuncSignature.paramAggregateNames`, the interned name of a declared
-	// boxed union/enum parameter and `EmptySourceText` for anything else. Captured HERE, at the real
-	// parse, because this is the last point a union parameter still knows its name: `resolveTypes`
-	// erases its `named` tag to bare `integer` (TypeResolution.resolveNamedType), leaving SemanticCheck's
-	// call-argument check no name to compare. A STRUCT is deliberately left empty — its `structRef(id)`
-	// survives resolution, so the check reads its name off `paramTypes` and the name is never stored
-	// twice. The gate is exactly `tag == named`: a struct is `structRef` (skipped), a scalar or a ranged
-	// alias is not `named` (skipped), and a `named` ranged/float alias yields `EmptySourceText` from
-	// `aggregateNameOf` (not registered), so only a genuine boxed union/enum lands a non-empty entry.
-	function paramAggregateNamesOf(declaredNames ByteArrayArray) returns ByteArrayArray
+	// ⭐⭐ **THE IDENTITY `resolveTypes` IS ABOUT TO DESTROY — the ONE extraction EVERY pre-erasure column
+	// fills through (OPEN #54 Slice B2, widened to the function-TYPE tier by BATCH18-b).** The interned name
+	// of a declared boxed union/enum (or a per-instance ranged alias), and `EmptySourceText` for everything
+	// else. Captured at the real parse because this is the last point such a type still knows its name:
+	// `TypeResolution.resolveNamedType` collapses it to bare `integer`, leaving every whole-program check
+	// nothing to compare.
+	//
+	// ⚠ **`resolveNamedStruct` IS ASKED FIRST, AND THAT LINE IS THE WHOLE UNIFICATION.** The rule this column
+	// states is *"the identity that does NOT survive resolution"*, so a STRUCT must answer empty — its
+	// `structRef(id)` survives and every reader takes its name live off the type. But the two callers hand in
+	// types at DIFFERENT stages of exactly that rewrite: `parseFunction`/`parseClosureExpression` have already
+	// folded `resolveNamedStructAll` over their parameter list, while `readFunctionTypeAlias` has not (a
+	// function typealias stores what `parseTypeReference` minted, and a struct is still `named` there). Asking
+	// the idempotent re-tag here is what makes both answer alike; without it a `function(Point)` ALIAS carried
+	// "Point" while a `function(p Point)` FUNCTION carried nothing, and `functionShapesAgree` would have
+	// refused the legal program that passes one to the other. A near-mirror that is not exact is this
+	// project's signature bug — so the two sides share the extraction, not merely the comparison.
+	//
+	// ⚠ **CALLABLE ONLY FROM THE REAL PARSE**, for `resolveNamedStruct`/`aggregateNameOf`'s own reason: both
+	// consult `self.signatures`, which the tolerant declaration SWEEP is still building, so a name the sweep
+	// has not reached yet would classify differently there. Every caller is inside a `recordSignature`-gated
+	// or real-parse-only path.
+	function erasedAggregateNameOf(t MaxonType) returns ByteArray
+		let resolved = self.resolveNamedStruct(t)
+		let tag = maxonTypeTag(resolved)
+		if tag != ValueTypeTag.named 'survivesResolution'
+			return EmptySourceText
+		end 'survivesResolution'
+
+		return self.aggregateNameOf(tag, nameId: typeNameIdOf(resolved))
+	end 'erasedAggregateNameOf'
+
+	// The same extraction for a RETURN slot — a `void` return carries no type and so no identity. Its column
+	// is a single `ByteArray` rather than an array because a function type returns exactly one thing.
+	function erasedAggregateNameOfReturn(rt MaxonReturnType) returns ByteArray
+		return match rt 'r'
+			void gives EmptySourceText
+			value(inner) gives self.erasedAggregateNameOf(inner)
+		end 'r'
+	end 'erasedAggregateNameOfReturn'
+
+	// `erasedAggregateNameOf` folded over a parameter list — `FuncSignature.paramAggregateNames` for a
+	// declared function or a lifted closure, one entry per parameter and in lockstep with `paramTypes`.
+	function paramAggregateNamesOf(paramTypes MaxonTypeArray) returns ByteArrayArray
 		var names = ByteArrayArray.create()
-		for declared in declaredNames 'each'
-			// An empty slot is a parameter that was never `named` — there is no name to classify. Everything
-			// else goes through the ONE rule `aggregateNameOf`'s `named` arm applies, so the column a signature
-			// stores and the answer a live value gets cannot diverge.
-			if declared.isEmpty() 'notANamedParameter'
-				names.push(EmptySourceText)
-			end 'notANamedParameter' else 'named'
-				names.push(self.namedAggregateName(declared))
-			end 'named'
+		for pt in paramTypes 'each'
+			names.push(self.erasedAggregateNameOf(pt))
 		end 'each'
 		return names
 	end 'paramAggregateNamesOf'
 
 	// ⭐ **THE PRE-ERASURE *SPELLING* COLUMN A SIGNATURE CARRIES (user ruling, 2026-08-04)** — the interned
-	// name of every `named` parameter, `EmptySourceText` for anything else, and the column
-	// `paramAggregateNamesOf` above is derived FROM. See `FuncSignature.paramDeclaredNames` for why the two are
-	// different facts and why one walk produces both.
+	// name of every `named` parameter, `EmptySourceText` for anything else. Its sibling
+	// `paramAggregateNamesOf` above walks the SAME `paramTypes`, position for position, so the two columns
+	// cannot come to disagree about which parameter is which. See `FuncSignature.paramDeclaredNames` for why
+	// they are different facts — a SPELLING to print versus an IDENTITY to compare.
 	//
 	// Captured HERE, at the real parse, for `paramAggregateNamesOf`'s reason: this is the last point a `named`
 	// parameter still knows its name, because `resolveTypes` erases both a union/enum and a ranged alias to
@@ -40926,8 +40960,10 @@ export type Parser
 		// A closure's return type is INFERRED from its body expression, never spelled, so no declared
 		// spelling can name the buffer alias here (A2j).
 		self.artifact.recordFuncReturnType(closureName, returnType: returnType, declaredSurface: sharedEmptyDeclaredSurface)
-		let paramDeclaredNames = self.paramDeclaredNamesOf(paramTypes)
-		self.artifact.recordFuncSignature(closureName, signature: FuncSignature.create(paramNames, paramTypes: paramTypes, paramAggregateNames: self.paramAggregateNamesOf(paramDeclaredNames), paramDeclaredNames: paramDeclaredNames), nameLine: functionTok.line, nameColumn: functionTok.column, sourceFilePath: self.filePath)
+		// ⚠ The return identity is read off the INFERRED `returnType` — a closure never spells one, so this is
+		// the only place its enum-ness is knowable. `function() gives Color.blue` therefore reaches an
+		// enum-returning function type as a `Color` rather than as the bare `integer` resolution leaves.
+		self.artifact.recordFuncSignature(closureName, signature: FuncSignature.create(paramNames, paramTypes: paramTypes, paramAggregateNames: self.paramAggregateNamesOf(paramTypes), paramDeclaredNames: self.paramDeclaredNamesOf(paramTypes), returnAggregateName: self.erasedAggregateNameOfReturn(returnType)), nameLine: functionTok.line, nameColumn: functionTok.column, sourceFilePath: self.filePath)
 		self.closureReturns.upsert(closureName, value: returnType)
 		// Commit the closure's OWN range-check sites under its OWN lifted name, so `InsertRangeChecks`
 		// resolves them against the function whose SSA space numbered them. It sits here — after the body,

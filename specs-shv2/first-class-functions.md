@@ -2813,6 +2813,362 @@ end 'main'
 error E3005: <fragment>:23:19: function type mismatch storing into union payload 'f': expected 'fn(int) returns int', got 'fn(int, int) returns int'
 ```
 
+<!-- test: first-class-function.error.different-enum-param-into-function-param -->
+⭐⭐ **THE SAME DOOR, DECIDED FROM AN ERASED PARAMETER — and the shape check could not see it.**
+`TypeResolution.resolveType` collapses a boxed enum/union parameter to bare `integer`, so
+`function(Shade)` and `function(Color)` were the SAME `paramTypes` and every enum agreed with every other
+enum. The call then hands the callee a `Color` ordinal its own `match` has no arm for: MEASURED as a clean
+compile that died SIGSEGV (139) on x64-linux and `ACCESS_VIOLATION` on x64-windows. The identity a
+parameter loses at resolution rides in `FunctionShape.paramAggregateNames`, and this is the door that
+reads it.
+```maxon
+
+enum Color
+	red
+	green
+	blue
+end 'Color'
+
+enum Shade
+	dark
+	light
+end 'Shade'
+
+typealias ColorFn = function(Color) returns Color
+
+function shadeFn(s Shade) returns Color
+	match s 'k'
+		dark then return Color.red
+		light then return Color.green
+	end 'k'
+end 'shadeFn'
+
+function takesFn(f ColorFn) returns Color
+	return f(Color.blue)
+end 'takesFn'
+
+function main() returns ExitCode
+	let c = takesFn(shadeFn)
+	match c 'k'
+		red then print("red\n")
+		green then print("green\n")
+		blue then print("blue\n")
+	end 'k'
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:28:10: argument type mismatch for 'f': expected 'fn(Color) returns Color', got 'fn(Shade) returns Color'
+```
+
+<!-- test: first-class-function.error.different-enum-param-into-union-payload -->
+The PAYLOAD door, which this batch added, was wired to that same checker — so it caught a wrong ARITY and
+missed a wrong ENUM. One predicate serves six doors, which is the point: naming the defect once is what
+closes all six, and pinning it at more than one door is what proves the fix is in the predicate rather
+than in a door.
+```maxon
+
+enum Color
+	red
+	green
+	blue
+end 'Color'
+
+enum Shade
+	dark
+	light
+end 'Shade'
+
+typealias ColorFn = function(Color) returns Color
+
+union Holder
+	held(f ColorFn)
+	empty
+end 'Holder'
+
+function shadeFn(s Shade) returns Color
+	match s 'k'
+		dark then return Color.red
+		light then return Color.green
+	end 'k'
+end 'shadeFn'
+
+function call(h Holder) returns Color
+	return match h 'm'
+		held(f) gives f(Color.blue)
+		empty gives Color.red
+	end 'm'
+end 'call'
+
+function main() returns ExitCode
+	let c = call(Holder.held(shadeFn))
+	match c 'k'
+		red then print("red\n")
+		green then print("green\n")
+		blue then print("blue\n")
+	end 'k'
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:36:22: function type mismatch storing into union payload 'f': expected 'fn(Color) returns Color', got 'fn(Shade) returns Color'
+```
+
+<!-- test: first-class-function.error.different-enum-return-into-function-param -->
+The RETURN slot has the identical erasure and needed the identical carrier: a `function() returns Color`
+arriving where `function() returns Shade` is declared handed back a three-case ordinal to a two-arm
+`match`, and MEASURED as a clean compile that died `STATUS_STACK_OVERFLOW` falling off the end of it.
+A shape's return column carries ONE name rather than a per-position array, because a function type
+returns exactly one thing.
+```maxon
+
+enum Color
+	red
+	green
+	blue
+end 'Color'
+
+enum Shade
+	dark
+	light
+end 'Shade'
+
+typealias Integer = int(i64.min to i64.max)
+typealias ShadeMaker = function() returns Shade
+
+function makeColor() returns Color
+	return Color.blue
+end 'makeColor'
+
+function useMaker(f ShadeMaker) returns Integer
+	let s = f()
+	match s 'k'
+		dark then return 10
+		light then return 20
+	end 'k'
+end 'useMaker'
+
+function main() returns ExitCode
+	print("{useMaker(makeColor)}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:30:10: argument type mismatch for 'f': expected 'fn() returns Shade', got 'fn() returns Color'
+```
+
+<!-- test: first-class-function.error.int-function-into-enum-function-type -->
+And the other half of the erasure — a function over a plain ranged INT reaching an enum-typed function
+place. It is the same wrong answer with the identity missing on one side rather than differing on both:
+the callee would read an ordinal as a number, or a number as an ordinal. Refused at the CAST door, so
+this rule is pinned at four of the six doors one predicate serves.
+```maxon
+
+enum Color
+	red
+	green
+	blue
+end 'Color'
+
+typealias Integer = int(i64.min to i64.max)
+typealias ColorFn = function(Color) returns Color
+
+function bump(n Integer) returns Integer
+	return n + 1
+end 'bump'
+
+function main() returns ExitCode
+	let f = bump as ColorFn
+	return f(Color.red) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3009: <fragment>:17:15: function type mismatch in cast: expected 'fn(Color) returns Color', got 'fn(int) returns int'
+```
+
+<!-- test: first-class-function.matching-enum-shape-agrees-across-doors -->
+The POSITIVE twin of all four, at three doors in one program: an enum-parameter function type that
+genuinely agrees must still pass the ARGUMENT door, the PAYLOAD door and the `return` door. A rule that
+only refuses is half a rule — the identity comparison is exact NAME equality, so the very same enum on
+both sides has to reach agreement rather than merely a different kind of refusal.
+```maxon
+
+enum Color
+	red
+	green
+	blue
+end 'Color'
+
+typealias ColorFn = function(Color) returns Color
+
+union Holder
+	held(f ColorFn)
+	empty
+end 'Holder'
+
+function next(c Color) returns Color
+	match c 'k'
+		red then return Color.green
+		green then return Color.blue
+		blue then return Color.red
+	end 'k'
+end 'next'
+
+function pick() returns ColorFn
+	return next
+end 'pick'
+
+function callThrough(f ColorFn) returns Color
+	return f(Color.red)
+end 'callThrough'
+
+function callPayload(h Holder) returns Color
+	return match h 'm'
+		held(f) gives f(Color.green)
+		empty gives Color.red
+	end 'm'
+end 'callPayload'
+
+function show(c Color)
+	match c 'k'
+		red then print("red\n")
+		green then print("green\n")
+		blue then print("blue\n")
+	end 'k'
+end 'show'
+
+function main() returns ExitCode
+	show(callThrough(next))
+	show(callPayload(Holder.held(next)))
+	show(pick()(Color.blue))
+	return 0
+end 'main'
+```
+```stdout
+green
+blue
+red
+```
+
+<!-- test: first-class-function.per-instance-alias-param-agrees -->
+⚠ **THE FALSE-REFUSAL CONTROL, and it is why the two fill sites had to be UNIFIED rather than the
+comparison loosened.** The two branches that build a `FunctionShape` classified a parameter differently:
+the DECLARED branch asked `Parser.aggregateNameOf` (a struct OR an enum OR a per-instance alias) while the
+ALIAS branch asked `containsEnum` alone — so `IntPool.Idx` carried an identity on one side and none on the
+other, and a comparison that merely tolerated the disagreement would have refused this legal program.
+Both sides now fill through ONE parser-tier extraction.
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+type Pool uses T
+	export typealias Idx = int(0 to 15)
+	export var v as T
+
+	export static function create(v T) returns Pool
+		return Self{v: v}
+	end 'create'
+end 'Pool'
+
+typealias IntPool = Pool with Integer
+typealias IdxFn = function(i IntPool.Idx) returns Integer
+
+function widen(i IntPool.Idx) returns Integer
+	return i as Integer
+end 'widen'
+
+function run(f IdxFn) returns Integer
+	return f(3 as IntPool.Idx)
+end 'run'
+
+function main() returns ExitCode
+	print("{run(widen)}\n")
+	return 0
+end 'main'
+```
+```stdout
+3
+```
+
+<!-- test: first-class-function.union-payload-param-called-through-function-type -->
+⚠ **THE OTHER FALSE REFUSAL THE SAME CARRIER CURES.** An INDIRECT call passed
+`preErasedAggregate: EmptySourceText` under a comment reading *"a function TYPE carries no pre-erasure
+union/enum identity"* — true when it was written, stale the moment the column existed. The consequence was
+not a missed refusal but a WRONG one: calling a `function(Payload)` with a `Payload` was rejected as
+*"expected 'int', got 'Payload'"*, a sentence naming the erasure rather than the program.
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+union Payload
+	num(n Integer)
+	none
+end 'Payload'
+
+typealias PayloadFn = function(p Payload) returns Integer
+
+function unwrap(p Payload) returns Integer
+	return match p 'm'
+		num(n) gives n
+		none gives 0
+	end 'm'
+end 'unwrap'
+
+function run(f PayloadFn) returns Integer
+	return f(Payload.num(4))
+end 'run'
+
+function main() returns ExitCode
+	print("{run(unwrap)}\n")
+	return 0
+end 'main'
+```
+```stdout
+4
+```
+
+<!-- test: first-class-function.closure-inferred-enum-return-agrees -->
+A lifted closure's return type is INFERRED from its body, so the carrier on the arriving side is filled
+from a type nobody spelled. It must still name the enum, or the very construct the return rule exists to
+admit — a closure handed to an enum-returning function type — becomes a refusal. The parameter half is
+here too, spelled rather than inferred.
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+enum Color
+	red
+	green
+	blue
+end 'Color'
+
+typealias ColorMaker = function() returns Color
+typealias ColorEater = function(c Color) returns Integer
+
+function useMaker(f ColorMaker) returns Integer
+	let c = f()
+	match c 'k'
+		red then return 1
+		green then return 2
+		blue then return 3
+	end 'k'
+end 'useMaker'
+
+function useEater(f ColorEater) returns Integer
+	return f(Color.green)
+end 'useEater'
+
+function main() returns ExitCode
+	let mk = function() gives Color.blue
+	let et = function(c Color) gives 40
+	print("{useMaker(mk)} {useEater(et)}\n")
+	return 0
+end 'main'
+```
+```stdout
+3 40
+```
+
 <!-- test: first-class-function.nested-function-type-agrees-by-shape -->
 A function type whose own PARAMETER is a function type. The rule is the same one level down — RESOLVED
 shape, not the alias NAME — so `Outer = function(f InnerA)` accepts a function declared `(f InnerB)`

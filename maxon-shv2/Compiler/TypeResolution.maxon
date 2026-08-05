@@ -317,23 +317,17 @@ function resolveFunctionAliasShapes(project Project, signatures ProgramSignature
 		var preErasedNames = ByteArrayArray.create()
 		for param in alias.paramTypes 'eachParam'
 			resolvedParams.push(resolveType(project, signatures: signatures, t: functionAliasParamType(project, param: param)))
-			preErasedNames.push(functionAliasParamAggregateName(signatures, param: param))
+			// ⚠ **READ, NOT DERIVED — and it used to be derived, differently.** This tier once asked
+			// `signatures.containsEnum(param.typeName)` while the declared-function tier asked
+			// `Parser.aggregateNameOf`, so one parameter got two classifications: a per-instance ranged alias
+			// carried an identity on one side and none on the other. The identity is now extracted ONCE, at the
+			// parse, by the extraction both tiers fill through (`Parser.erasedAggregateNameOf`) — a shared
+			// comparison over two different classifications would only have made the disagreement a refusal.
+			preErasedNames.push(param.aggregateName)
 		end 'eachParam'
-		project.functionAliasShapes.upsert(name, value: FunctionShape.create(resolvedParams, returnType: resolveReturnType(project, signatures: signatures, ret: functionAliasReturnType(project, alias: alias)), paramAggregateNames: preErasedNames))
+		project.functionAliasShapes.upsert(name, value: FunctionShape.create(resolvedParams, returnType: resolveReturnType(project, signatures: signatures, ret: functionAliasReturnType(project, alias: alias)), paramAggregateNames: preErasedNames, returnAggregateName: alias.returnAggregateName))
 	end 'eachAlias'
 end 'resolveFunctionAliasShapes'
-
-// ⭐ **THE ALIAS TIER'S ANSWER FOR `FunctionShape.paramAggregateNames`** — the identity the very
-// `resolveType` two lines above is about to destroy, captured before it does. A boxed union/enum is the ONE
-// declared parameter type whose name does not survive resolution (it collapses to bare `integer`), which is
-// why the gate is `containsEnum` and not the wider `Parser.aggregateNameOf`: a struct's `structRef(id)`
-// survives, so its slot stays empty by that column's own rule.
-//
-// A primitive parameter carries no name at all (`FunctionAliasParam.typeName` is empty for one), and
-// `containsEnum` answers false for the empty name, so the common case needs no arm of its own.
-function functionAliasParamAggregateName(signatures ProgramSignatures, param FunctionAliasParam) returns ByteArray
-	return param.typeName if signatures.containsEnum(param.typeName) else EmptySourceText
-end 'functionAliasParamAggregateName'
 
 // Rebuild one stored parameter's `MaxonType` from its interner-free `(tag, name)` pair, re-interning the
 // name into the project's merged interner. The twin of `functionAliasReturnType` below and of the parser's
@@ -379,7 +373,7 @@ end 'DeclaredFunctionShape'
 export function declaredFunctionShapeOf(registry FunctionTypeRegistry, name ByteArray) returns DeclaredFunctionShape
 	if let sig = try registry.funcSignatures.get(name) 'declaredFn'
 		let returnType = try registry.funcReturnTypes.get(name) otherwise panic("declaredFunctionShapeOf: '{String.from(name)}' is in funcSignatures but not funcReturnTypes — the two are committed together per function and re-synced together by resolveTypes")
-		return DeclaredFunctionShape.declared(FunctionShape.create(sig.paramTypes, returnType: returnType, paramAggregateNames: sig.paramAggregateNames))
+		return DeclaredFunctionShape.declared(FunctionShape.create(sig.paramTypes, returnType: returnType, paramAggregateNames: sig.paramAggregateNames, returnAggregateName: sig.returnAggregateName))
 	end 'declaredFn'
 
 	if let aliasShape = try registry.aliasShapes.get(name) 'alias'
@@ -423,10 +417,80 @@ function shapesAgreeUnder(registry FunctionTypeRegistry, declared FunctionShape,
 		if not resolvedTypesMatch(registry, declared: declaredParam, got: gotParam, pending: pending) 'paramMismatch'
 			return false
 		end 'paramMismatch'
+		// ⭐⭐ **AND THE PRE-ERASURE IDENTITY, WHICH `resolvedTypesMatch` STRUCTURALLY CANNOT ASK.** `resolveType`
+		// collapses a boxed union/enum (and a per-instance ranged alias) to bare `integer`, so `function(Shade)`
+		// and `function(Color)` are the SAME resolved parameter list and every enum agreed with every other.
+		// **MEASURED, on programs that compiled clean and then died: SIGSEGV at a function-typed parameter,
+		// `ACCESS_VIOLATION` at a struct field, `STATUS_STACK_OVERFLOW` at an erased RETURN** — the callee's
+		// `match` indexing an ordinal past its own last arm.
+		//
+		// ⚠ **A CONJUNCTION WITH THE TAG RULE RATHER THAN A REPLACEMENT FOR IT, AND THAT IS SAFE BECAUSE THE TWO
+		// ARE DISJOINT BY CONSTRUCTION.** The identity-first/tag-second shape `SemanticCheck.checkTransformParamType`
+		// and `TypeRules.elementTypePreserved` are written in is the same rule stated for a caller holding ONE
+		// side's live type; here both sides are already RESOLVED, so every tag whose identity survives resolution
+		// (`structRef`, `interfaceRef`, `genericInstance`, `typeParameter`) is compared by id above while carrying
+		// an EMPTY column, and every tag whose identity does not survive arrives as bare `integer` with nothing
+		// for the tag rule to say. At most one of the two halves is informative about a position, so asking both
+		// IS "identity where there is one, representation where there is not".
+		//
+		// ⚠ **EXACT NAME EQUALITY, THE EMPTY-AGAINST-NON-EMPTY CASE INCLUDED** — `function(Integer)` reaching a
+		// `function(Color)` place is a real disagreement rather than a missing fact: the callee would read an
+		// ordinal as a number, or a number as an ordinal. The same exactness `Parser.namedAggregatesConflict`
+		// applies one tier down, where an aggregate is never a subtype of another.
+		if not shapeParamIdentity(declared, index: i).equals(shapeParamIdentity(got, index: i)) 'paramIdentityMismatch'
+			return false
+		end 'paramIdentityMismatch'
 	end 'eachParam'
 
-	return returnSlotsMatch(registry, declared: declared.returnType, got: got.returnType, pending: pending)
+	// The RETURN slot asks both halves too, and for the same measurement — a shape carries ONE return identity
+	// rather than a per-position array, because a function type returns exactly one thing.
+	return returnSlotsMatch(registry, declared: declared.returnType, got: got.returnType, pending: pending) and declared.returnAggregateName.equals(got.returnAggregateName)
 end 'shapesAgreeUnder'
+
+// ⭐ **RENDER A RESOLVED SHAPE THE WAY IT WAS WRITTEN — the diagnostic twin of `functionShapesAgree`, and it
+// exists for the reason `resolvedTypesMatch`'s nested arm states one screen up.** Rendering a shape's
+// `paramTypes` directly is right for every position resolution preserves and WRONG for the ones it erases: a
+// refusal over two different enums printed `expected 'fn(int) returns int', got 'fn(int) returns int'` — a
+// diagnostic saying a type does not match itself, on the one refusal that most needs to be readable.
+//
+// ⚠ **IT UN-ERASES AND THEN DELEGATES, rather than re-implementing the `fn(…) returns …` assembly.** There is
+// exactly ONE canonical spelling of a function type (`SignatureIndex.formatFnTypeDisplay`, which the merge
+// check compares by name), and a second loop here would be a second spelling that could drift from it. So the
+// only local work is putting each erased position's identity back as the `named` type it was before
+// resolution, which is precisely what the shared renderer already knows how to print.
+export function formatFunctionShapeDisplay(shape FunctionShape, typeNames TypeNameInterner) returns String
+	var unerasedParams = MaxonTypeArray.create()
+	for i in 0 upto shape.paramTypes.count() 'eachParam'
+		unerasedParams.push(unerasedType(try shape.paramTypes.get(i) otherwise panic("formatFunctionShapeDisplay: paramTypes.get OOB at {i} — the count was just read from the same array"), identity: shapeParamIdentity(shape, index: i), typeNames: typeNames))
+	end 'eachParam'
+
+	let unerasedReturn = match shape.returnType 'r'
+		void gives MaxonReturnType.void
+		value(inner) gives MaxonReturnType.value(unerasedType(inner, identity: shape.returnAggregateName, typeNames: typeNames))
+	end 'r'
+	return formatFnTypeDisplay(unerasedParams, returnType: unerasedReturn, typeNames: typeNames)
+end 'formatFunctionShapeDisplay'
+
+// One position, with its pre-erasure identity put back. A position that carries none is already the type it
+// was written as and passes through untouched.
+//
+// The name is looked up rather than interned, and it cannot be missing: a non-empty identity is a declared
+// TYPE name, and this shape's own parameter reached `resolveNamedType` through that very name in
+// `project.typeNames`. A miss therefore means a column was filled from an interner this renderer was not
+// given, which is a compiler bug and never a program's.
+function unerasedType(t MaxonType, identity ByteArray, typeNames TypeNameInterner) returns MaxonType
+	if identity.isEmpty() 'survivedResolution'
+		return t
+	end 'survivedResolution'
+
+	return MaxonType.named(try typeNames.idOf(identity) otherwise panic("unerasedType: '{String.from(identity)}' is not in this interner — a pre-erasure identity is a declared type name, interned project-global by the merge that folded the file declaring it"))
+end 'unerasedType'
+
+// One position's entry in a shape's pre-erasure identity column. The two columns are built in lockstep with
+// `paramTypes` at both fill sites, so an out-of-range read is a compiler bug rather than a program's.
+export function shapeParamIdentity(shape FunctionShape, index ParamCount) returns ByteArray
+	return try shape.paramAggregateNames.get(index) otherwise panic("shapeParamIdentity: paramAggregateNames.get OOB at {index} below count {shape.paramAggregateNames.count()} — a shape's parameter columns are built in lockstep with its {shape.paramTypes.count()} parameter type(s)")
+end 'shapeParamIdentity'
 
 // The pending list a top-level comparison starts from. ONE object for the whole compile and NEVER mutated
 // (`pendingWithPair` builds a fresh array), the same pay-for-use discipline `sharedEmptyBorrowFacts` carries:
@@ -639,17 +703,17 @@ end 'checkStructFieldTypes'
 // no registered signature (none at M5 — the parser records one per function it
 // builds) is left alone rather than fabricated.
 //
-// The two pre-erasure name columns — `paramAggregateNames` (OPEN #54 Slice B2) and `paramDeclaredNames`
-// (the display spelling) — are carried STRAIGHT THROUGH. They are precisely what resolving
-// `func.maxonParamTypes` destroys (a `named` union AND a `named` ranged alias both collapse to `integer`
-// here), so they must be read off the SIGNATURE (which the parser captured before this pass) and never
-// re-derived from the now-erased param types.
+// All three pre-erasure name columns — `paramAggregateNames` (OPEN #54 Slice B2), its `returnAggregateName`
+// twin (BATCH18-b) and `paramDeclaredNames` (the display spelling) — are carried STRAIGHT THROUGH. They are
+// precisely what resolving `func.maxonParamTypes` destroys (a `named` union AND a `named` ranged alias both
+// collapse to `integer` here), so they must be read off the SIGNATURE (which the parser captured before this
+// pass) and never re-derived from the now-erased types.
 function syncResolvedSignature(project Project, func IrFunction)
 	if not project.funcSignatures.contains(func.name) 'noSig'
 		return
 	end 'noSig'
 	let sig = try project.funcSignatures.get(func.name) otherwise panic("syncResolvedSignature: contains({String.from(func.name)}) true but get failed")
-	project.funcSignatures.upsert(func.name, value: FuncSignature.create(sig.paramNames, paramTypes: sourceParamTypesOf(func, declaredCount: sig.paramNames.count()), paramAggregateNames: sig.paramAggregateNames, paramDeclaredNames: sig.paramDeclaredNames))
+	project.funcSignatures.upsert(func.name, value: FuncSignature.create(sig.paramNames, paramTypes: sourceParamTypesOf(func, declaredCount: sig.paramNames.count()), paramAggregateNames: sig.paramAggregateNames, paramDeclaredNames: sig.paramDeclaredNames, returnAggregateName: sig.returnAggregateName))
 end 'syncResolvedSignature'
 
 // ⭐ **THE FUNCTION'S SOURCE PARAMETER TYPES — WHICH IS NOT ALWAYS ALL OF `maxonParamTypes`.** A LIFTED

@@ -1873,7 +1873,13 @@ function checkWitnessArgTypes(project Project, func IrFunction, signatures Progr
 		let formalName = try requirement.paramTypeNames.get(j) otherwise panic("checkWitnessArgTypes: paramTypeNames.get OOB at {j} below count {requirement.paramTypeNames.count()}")
 		match witnessFormalDeclaredType(project, signatures: signatures, dispatched: dispatched, formalName: formalName) 'formal'
 			opaque then continue
-			declared(paramType, preErasedAggregate) then checkOneArgType(project, func: func, paramType: paramType, preErasedAggregate: preErasedAggregate, paramName: witnessFormalName(requirement, position: j), position: j, argId: try args.get(j + WitnessReceiverArgCount) otherwise panic("checkWitnessArgTypes: args.get OOB at {j + WitnessReceiverArgCount} below count {args.count()} — a dispatch reaching here has the receiver plus one actual per formal"), callRange: callRange, filePath: func.sourceFilePath)
+			// ⭐ `declaredParamName` is the formal's OWN rendered name, which is exactly the pre-erasure SPELLING
+			// a direct call reads off `FuncSignature.paramDeclaredNames` — an interface stores its formals as
+			// source names (`IrInterface`'s header), so this route HAS the fact rather than having to recover it.
+			// Passing `EmptySourceText` here would make the witness route report `expected 'int'` where the
+			// direct route reports `expected 'Integer'` for the identical declaration: this door's own defect,
+			// surviving in the sentence after being closed in the verdict.
+			declared(paramType, preErasedAggregate) then checkOneArgType(project, func: func, paramType: paramType, preErasedAggregate: preErasedAggregate, declaredParamName: formalName, paramName: witnessFormalName(requirement, position: j), position: j, argId: try args.get(j + WitnessReceiverArgCount) otherwise panic("checkWitnessArgTypes: args.get OOB at {j + WitnessReceiverArgCount} below count {args.count()} — a dispatch reaching here has the receiver plus one actual per formal"), callRange: callRange, filePath: func.sourceFilePath)
 		end 'formal'
 	end 'eachFormal'
 end 'checkWitnessArgTypes'
@@ -2373,9 +2379,16 @@ function checkIndirectCallArgs(project Project, func IrFunction, opIndex OpIndex
 	for i in 0 upto suppliedCount 'eachArg'
 		let argId = try args.get(i) otherwise panic("checkIndirectCallArgs: args.get OOB at {i} — the arity check above proved there are at least this many")
 		let paramType = try shape.paramTypes.get(i) otherwise panic("checkIndirectCallArgs: paramTypes.get OOB at {i} — the arity check above proved the counts equal")
-		// A function TYPE carries no pre-erasure union/enum identity (see `checkOneArgType`), so the
-		// aggregate carrier is empty and a union parameter is checked structurally.
-		checkOneArgType(project, func: func, paramType: paramType, preErasedAggregate: EmptySourceText, declaredParamName: EmptySourceText, paramName: EmptySourceText, position: i, argId: argId, callRange: callRange, filePath: func.sourceFilePath)
+		// ⭐ **THE FUNCTION TYPE'S OWN PRE-ERASURE CARRIER, and passing `EmptySourceText` here was a measured
+		// FALSE REFUSAL rather than a missed one.** This site read *"a function TYPE carries no pre-erasure
+		// union/enum identity"* — true until `FunctionShape.paramAggregateNames` existed, stale the moment it
+		// did. With the carrier empty, a `function(Payload)` parameter resolved to bare `integer` and the
+		// aggregate rule refused the only argument it can legally be called with: *"expected 'int', got
+		// 'Payload'"*, a sentence naming the erasure instead of the program.
+		//
+		// `declaredParamName` stays empty and is the one column a `FunctionShape` genuinely does not have: it is
+		// the SPELLING, and a function type gives its parameters no names to spell.
+		checkOneArgType(project, func: func, paramType: paramType, preErasedAggregate: shapeParamIdentity(shape, index: i), declaredParamName: EmptySourceText, paramName: EmptySourceText, position: i, argId: argId, callRange: callRange, filePath: func.sourceFilePath)
 	end 'eachArg'
 end 'checkIndirectCallArgs'
 
@@ -2407,8 +2420,8 @@ function checkOneFunctionTypeDoor(project Project, door PendingFunctionTypeDoor)
 		return
 	end 'agree'
 
-	let expected = formatFnTypeDisplay(declared.paramTypes, returnType: declared.returnType, typeNames: project.typeNames)
-	let actual = formatFnTypeDisplay(got.paramTypes, returnType: got.returnType, typeNames: project.typeNames)
+	let expected = formatFunctionShapeDisplay(declared, typeNames: project.typeNames)
+	let actual = formatFunctionShapeDisplay(got, typeNames: project.typeNames)
 	// A cast is a CAST rejection and takes E3009, the sibling of the cross-kind refusal
 	// `castHasNoLegalConversion` makes; every other door is a type mismatch and takes E3005, the sibling of
 	// what a bool meeting a declared int earns there. One sentence for all three, because one RULE decided
@@ -2475,7 +2488,7 @@ function checkTransformParamType(project Project, transform PendingTransformArit
 	let paramTag = maxonTypeTag(paramType)
 	var paramIdentity = aggregateNameFor(project, tag: paramTag, nameId: typeNameIdOf(paramType))
 	if paramIdentity.isEmpty() 'erasedUnionParam'
-		paramIdentity = try shape.paramAggregateNames.get(0) otherwise panic("checkTransformParamType: paramAggregateNames.get OOB at 0 below count {shape.paramAggregateNames.count()} — a shape's parameter columns are built in lockstep with its {shape.paramTypes.count()} parameter type(s)")
+		paramIdentity = shapeParamIdentity(shape, index: 0)
 	end 'erasedUnionParam'
 
 	if elementTypePreserved(transform.elementTag, elementIdentity: transform.elementIdentity, otherTag: paramTag, otherIdentity: paramIdentity) 'agree'
@@ -3338,10 +3351,16 @@ end 'checkOneReturnedValue'
 // `preErasedAggregate` is the union/enum identity `resolveTypes` destroys: a STRUCT parameter keeps its
 // `structRef(id)` through resolution so `aggregateNameFor` reads it straight off `paramType`, but a
 // UNION/ENUM parameter collapses to bare `integer`, and only the carrier the parser stashed before that
-// erasure still holds the name. A direct call has one on its signature (`paramAggregateNames`); an
-// indirect call has none, because a function TYPE's stored parameters are not a `FuncSignature` — so a
-// union-parameter function type is checked structurally and not nominally there. That is strictly more
-// than the nothing it got before, and it is the bound of what a `FunctionShape` can say.
+// erasure still holds the name. **BOTH call shapes now have one** — a direct call off its signature
+// (`FuncSignature.paramAggregateNames`), an indirect call off the callee's declared shape
+// (`FunctionShape.paramAggregateNames`, filled by the identical parser-tier extraction) — so the rule below
+// is nominal for both. It was structural for the indirect one until BATCH18-b, and the cost of that was not
+// a missed refusal but a WRONG one; `checkIndirectCallArgs` carries the measurement.
+//
+// `declaredParamName` is the OTHER pre-erasure column — the SPELLING an author wrote, read only to PRINT
+// (`FuncSignature.paramDeclaredNames`, user ruling 2026-08-04). Only a direct call has one: a function TYPE
+// names its parameters nowhere, so an indirect call passes `EmptySourceText` and the refusal falls back to the
+// resolved type's own display name.
 function checkOneArgType(project Project, func IrFunction, paramType MaxonType, preErasedAggregate ByteArray, declaredParamName ByteArray, paramName ByteArray, position ParamCount, argId ValueId, callRange SourceRange, filePath FilePath)
 	let argTag = try func.valueTags.get(argId) otherwise panic("checkOneArgType: value v{argId} of function '{String.from(func.name)}' has no recorded type — every SSA value must be minted through Parser.mintValue")
 	let argNameId = try func.valueNameIds.get(argId) otherwise panic("checkOneArgType: value v{argId} of function '{String.from(func.name)}' has no recorded type name — the two type columns are minted in lockstep")
@@ -3415,7 +3434,7 @@ function checkOneArgType(project Project, func IrFunction, paramType MaxonType, 
 		let declaredShape = requireFunctionShapeOf(functionTypeRegistryOf(project), name: functionTypeNameOf(functionTypeRegistryOf(project), nameId: typeNameIdOf(paramType)), side: "declared")
 		let gotShape = requireFunctionShapeOf(functionTypeRegistryOf(project), name: functionValueGoverningName(project, func: func, value: argId), side: "arriving")
 		if not functionShapesAgree(functionTypeRegistryOf(project), declared: declaredShape, got: gotShape) 'signatureMismatch'
-			reportPositioned(project, code: ErrorCode.typeMismatch, message: argTypeMismatchMessage(paramName, position: position, expected: formatFnTypeDisplay(declaredShape.paramTypes, returnType: declaredShape.returnType, typeNames: project.typeNames), got: formatFnTypeDisplay(gotShape.paramTypes, returnType: gotShape.returnType, typeNames: project.typeNames)), line: callRange.line, column: callRange.column, filePath: filePath)
+			reportPositioned(project, code: ErrorCode.typeMismatch, message: argTypeMismatchMessage(paramName, position: position, expected: formatFunctionShapeDisplay(declaredShape, typeNames: project.typeNames), got: formatFunctionShapeDisplay(gotShape, typeNames: project.typeNames)), line: callRange.line, column: callRange.column, filePath: filePath)
 			return
 		end 'signatureMismatch'
 	end 'functionArg'
