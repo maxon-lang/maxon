@@ -1,0 +1,53 @@
+// Test: character-ordering-prefix-is-less
+function main() returns ExitCode
+	let shorter = 'é'
+	let longer = 'é̈'
+	if shorter < longer 'lt'
+		print("lt\n")
+	end 'lt'
+	if longer < shorter 'reversed'
+		print("REVERSED\n")
+	end 'reversed'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.leaRegRdata rbx, [rip + __str_rec_1]
+    x64.leaRegRdata r12, [rip + __str_rec_3]
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
+    x64.callDirect __char_cmp
+    x64.cmpRegImm32 r8, 0
+    x64.jcc equal, lt
+    x64.jmp ifcont
+  lt:
+    x64.leaRegRdata rcx, [rip + __str_rec_5]
+    x64.callDirect __print_string
+    x64.jmp ifcont
+  ifcont:
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, rbx
+    x64.callDirect __char_cmp
+    x64.cmpRegImm32 r8, 0
+    x64.jcc equal, reversed
+    x64.jmp ifcont
+  reversed:
+    x64.leaRegRdata rcx, [rip + __str_rec_7]
+    x64.callDirect __print_string
+    x64.jmp ifcont
+  ifcont:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
