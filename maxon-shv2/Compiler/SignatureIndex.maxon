@@ -121,7 +121,12 @@ let DeclShapeDeclaredConformance = 55 as ContentHash
 // `implements A, B` and `implements A with B` are two different declarations that both offer the byte
 // sequences `A` then `B` to this mixer, and they decide different things (which extensions apply, versus
 // what the extended interface's associated type is bound to).
-let DeclShapeConformanceBinding = 68 as ContentHash
+//
+// ⚠ **IT HELD 68 — `EnumBackingInteger`'s NUMBER — until BATCH22, which is the very collision the paragraph
+// above argues it must not have.** Both constants are mixed into the ONE rolling `self.hash`, and `recordEnum`
+// mixes them four lines apart, so the argument for a discriminator of its own was written down and then not
+// applied. Found while giving a union PAYLOAD its own pair; every number from 72 up was free.
+let DeclShapeConformanceBinding = 72 as ContentHash
 
 // ⭐ **THE `implements` LIST'S CONTRIBUTION TO A DECLARATION'S CONTENT HASH — ONE STATEMENT, BOTH KINDS AND
 // BOTH HALVES.** The reason the list must ride is the same on each and it is `recordStruct`'s rule: a
@@ -287,6 +292,17 @@ let ReturnShapeSurface = 56 as ContentHash
 // different roster. Mixed by `mixField`, so it rides `recordStruct`'s one hash write like every other
 // per-field fact.
 let FieldShapeSurface = 58 as ContentHash
+
+// ⭐ ONE union case PAYLOAD SLOT (BATCH22) — the discriminator that opens a payload's contribution to
+// `mixEnumCase`, so a payload's NAME cannot be absorbed by the case name it follows and a case that GAINED a
+// slot cannot collide with the one it grew from. `DeclShapeDeclaredConformance`'s reason, one column over.
+let PayloadShapeSlot = 73 as ContentHash
+
+// ⭐ A union PAYLOAD's pre-erasure SPELLING (BATCH22) — `FieldShapeSurface`'s twin at the fifth declared
+// position, load-bearing for the identical reason: `mem(m __ManagedMemory)` and `mem(m ByteArray)` fold
+// identically through `mixPayloadField`'s type, while the `match` binding out of them reaches a different
+// member roster.
+let PayloadShapeSurface = 74 as ContentHash
 
 // A FUNCTION typealias's shape discriminator (P1.5-A1) — `DeclShapeAlias`'s twin, for its reason: a name
 // that stops being a ranged alias and becomes a function one, or whose function return type changes,
@@ -5670,29 +5686,33 @@ export type ProgramSignatures
 	// `Parser.requireOverloadableName` asks to refuse an overload set this index cannot answer for.
 	export function declaredReturnSurface(callee ByteArray) returns DeclaredSurface
 		let stored = self.storedReturnSurface(callee)
-		if self.returnElementIsBufferSurface(callee) 'returnsAnArrayOfBuffers'
-			return surfaceWithElementBuffer(stored)
-		end 'returnsAnArrayOfBuffers'
+		if let declared = try self.returnTypes.get(callee) 'declaresAReturnType'
+			return match declared 'r'
+				void gives stored
+				value(inner) gives self.surfaceWithDerivedElement(stored, declared: inner)
+			end 'r'
+		end 'declaresAReturnType'
 
 		return stored
 	end 'declaredReturnSurface'
 
-	// Does `callee`'s recorded return type NAME a generic alias whose element is a buffer? The `value` arm of
-	// the recorded `MaxonReturnType`, asked through the one derivation every declared slot uses.
-	function returnElementIsBufferSurface(callee ByteArray) returns bool
-		if let declared = try self.returnTypes.get(callee) 'declaresAReturnType'
-			return match declared 'r'
-				void gives false
-				value(inner) gives self.declaredElementIsBufferSurface(inner)
-			end 'r'
-		end 'declaresAReturnType'
+	// ⭐ **THE ONE FOLD OF A STORED SURFACE WITH THE ELEMENT BIT THAT MUST BE DERIVED.** Every declared
+	// position whose surface the SWEEP wrote asks it — a struct FIELD (`fieldSurfaceOf`), a declared RETURN
+	// (above), and a union PAYLOAD (`payloadSurfaceOf`) — because two of the three bits are token facts the
+	// sweep could answer and the element bit is not; see `declaredElementIsBufferSurface` for why. It was
+	// written out at the first two doors, and BATCH22's third would have been a third copy of one rule.
+	function surfaceWithDerivedElement(stored DeclaredSurface, declared MaxonType) returns DeclaredSurface
+		if not self.declaredElementIsBufferSurface(declared) 'holdsNoArrayOfBuffers'
+			return stored
+		end 'holdsNoArrayOfBuffers'
 
-		return false
-	end 'returnElementIsBufferSurface'
+		return surfaceWithElementBuffer(stored)
+	end 'surfaceWithDerivedElement'
 
 	// ⭐ **WAS THIS DECLARED SLOT'S TYPE A GENERIC ALIAS WHOSE ELEMENT IS A BUFFER (A2m)?** THE one derivation,
-	// shared by the struct-FIELD door (`fieldSurfaceOf`) and the RETURN door above, so the two cannot come to
-	// disagree about what `var bufs as BufArray` and `returns BufArray` mean.
+	// reached by every declared position through `surfaceWithDerivedElement` — the struct FIELD, the RETURN
+	// clause and (BATCH22) the union PAYLOAD — so no two of them can come to disagree about what
+	// `var bufs as BufArray`, `returns BufArray` and `mem(b BufArray)` mean.
 	//
 	// It reads the `named` the SWEEP recorded and not a resolved type, and that is the whole mechanism: the
 	// sweep runs before any alias is interned, so an alias-typed slot arrives as a bare `named` carrying the
@@ -6095,6 +6115,9 @@ export type ProgramSignatures
 	// word a non-exhaustive-match diagnostic prints, and a reader that met that diagnostic must
 	// re-parse to reprint it.
 	//
+	// ⚠⚠ **AND EACH CASE'S PAYLOAD SLOTS RIDE (BATCH22)**, for that same rule one column further in — the case
+	// name and tag alone said nothing about what a `mem(x)` binding LOADS. See `mixPayloadField`.
+	//
 	// ⚠⚠ **AND THE BACKING RIDES, BECAUSE THE TAG COLUMN CANNOT CARRY IT (A4o).** `enum Z  z = 0` and
 	// `enum Z  z = 0.0` fold to the IDENTICAL name + tag (`floatLiteralBits(0.0)` is 0), and a reading file
 	// compiles `"{z}"` to `__int_to_string` for one and `__float_toString` for the other. Editing the `0`
@@ -6205,15 +6228,34 @@ export type ProgramSignatures
 		return MaxonType.genericInstance(self.genericInstances.intern(baseId, args: args, fixedSize: fixedSize))
 	end 'internNestedNode'
 
-	// Fold one case's NAME and TAG into the enum's hash. Split out so the SIGNED tag (`ParsedInt`)
-	// crosses to the UNSIGNED hash domain through a local — `recordAlias`/`mixDefaultPayload` have
-	// the same two lines for the same reason (the bootstrap rejects the cast as unneeded, E3010, when
+	// Fold one case's NAME, TAG and PAYLOAD SLOTS into the enum's hash. Split out so the SIGNED tag
+	// (`ParsedInt`) crosses to the UNSIGNED hash domain through a local — `recordAlias`/`mixDefaultPayload`
+	// have the same two lines for the same reason (the bootstrap rejects the cast as unneeded, E3010, when
 	// it is written inline as a nested `mix` argument).
 	function mixEnumCase(state ContentHash, layout EnumLayout, index CaseIndex) returns ContentHash
 		let named = mixBytes(state, bytes: layout.caseNameAt(index))
 		let tagBits = layout.tagOfIndex(index) as ContentHash
-		return mix(named, value: tagBits)
+		var folded = mix(named, value: tagBits)
+		for field in layout.payloadsAt(index) 'eachSlot'
+			folded = self.mixPayloadField(folded, field: field)
+		end 'eachSlot'
+		return folded
 	end 'mixEnumCase'
+
+	// ⭐ **FOLD ONE PAYLOAD SLOT IN — `mixField`'s twin, and it rides for `recordStruct`'s rule (BATCH22).**
+	// A reading file COPIES a payload's declared type into its own code: the `match` binding's load width, its
+	// ownership class (moved out, retained, or a scalar copy), and whether the slot is a nested union at all
+	// are all read off it (`classifyUnionPayload`). So editing `mem(m Bytes)` to `mem(m String)` changes what
+	// every other file COMPILES TO while that file's own bytes never move — the exact staleness the case list
+	// already rides for, one column further in, and the case NAME and TAG alone could not carry it.
+	//
+	// ⚠ **AND THE SPELLING RIDES BESIDE THE TYPE, for `FieldShapeSurface`'s reason** (this rung's own fact):
+	// `__ManagedMemory` and `ByteArray` fold to the identical `genericInstance` through `mixType`, while a
+	// binding destructured out of the two reaches a different member roster.
+	function mixPayloadField(state ContentHash, field PayloadField) returns ContentHash
+		let named = self.mixType(mixBytes(mix(state, value: PayloadShapeSlot), bytes: field.name), t: field.declaredType)
+		return mixSurface(mix(named, value: PayloadShapeSurface), surface: field.declaredSurface)
+	end 'mixPayloadField'
 
 	// Fold EVERYTHING the compiler reads off field `index` into the index's hash. See `recordStruct`
 	// for why each fact must ride, and why they must all ride from one place.
@@ -10879,7 +10921,7 @@ export type ProgramSignatures
 		var changed = false
 		for field in payloads 'eachSlot'
 			if let resolved = try self.contestScopedDeclaredType(field.declaredType, slotScopeFilePath: layout.declFilePath) 'namesAContestedAlias'
-				rewritten.push(PayloadField.create(field.name, declaredType: resolved))
+				rewritten.push(PayloadField.create(field.name, declaredType: resolved, declaredSurface: field.declaredSurface))
 				changed = true
 			end 'namesAContestedAlias' else 'unchanged'
 				rewritten.push(field)
@@ -12800,13 +12842,20 @@ export type ProgramSignatures
 	export function fieldSurfaceOf(layout StructLayout, index FieldIndex) returns DeclaredSurface
 		let declared = try layout.fieldTypes.get(index) otherwise panic("ProgramSignatures.fieldSurfaceOf: field {index} is out of range for `type {String.from(layout.name)}`, which declares {layout.fieldCount()} — every index handed out came from `indexOfField`")
 
-		let stored = layout.fieldDeclaredSurface(index)
-		if self.declaredElementIsBufferSurface(declared) 'holdsAnArrayOfBuffers'
-			return surfaceWithElementBuffer(stored)
-		end 'holdsAnArrayOfBuffers'
-
-		return stored
+		return self.surfaceWithDerivedElement(layout.fieldDeclaredSurface(index), declared: declared)
 	end 'fieldSurfaceOf'
+
+	// ⭐ **THE PRE-ERASURE `__ManagedMemory` SPELLING OF A UNION PAYLOAD (BATCH22)** — `payloadTypeOf`'s twin
+	// for the half a `MaxonType` cannot hold, and `fieldSurfaceOf`'s twin at the FIFTH declared position. The
+	// door `Parser.emitUnionPayloadLoad` asks at the one site a `match` binding mints its value.
+	//
+	// ⚠ **IT TAKES THE FIELD ALONE where `fieldSurfaceOf` takes a layout and an index**, because a
+	// `PayloadField` is a RECORD and not a set of parallel columns: both halves the answer needs — the stored
+	// token facts, and the swept `named` the element bit is derived from — arrive in one value, so there is
+	// nothing to look up and no pair that can fall out of lockstep.
+	export function payloadSurfaceOf(field PayloadField) returns DeclaredSurface
+		return self.surfaceWithDerivedElement(field.declaredSurface, declared: field.declaredType)
+	end 'payloadSurfaceOf'
 
 	// ⭐ **WHAT A SLOT'S DECLARED TYPE MEANS ONCE THE ALIAS REGISTRIES ARE KNOWN** — the door a struct
 	// FIELD and an `Array` ELEMENT both come out of, ADOPTED into `into` (the calling file's own artifact

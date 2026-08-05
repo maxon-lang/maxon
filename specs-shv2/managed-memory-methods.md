@@ -3181,3 +3181,207 @@ end 'main'
 ```exitcode
 5
 ```
+
+### BATCH22 — a union-case PAYLOAD is the FIFTH declared position, and it never joined the discipline
+
+⚖ **THE SAME USER RULING (2026-07-31), at the one declared position A2j and A2m both missed.** A declared
+spelling reaches the value it describes through exactly one bridge (`Parser.markDeclaredSurface`), and it
+had four producers: a PARAMETER, a struct FIELD, a tuple SLOT and a declared RETURN. A `union` case's
+payload is a fifth — `mem(m __ManagedMemory)` is a declared position spelled by the very type reader the
+other four use (`readPayloadFieldsInto` calls `parseTypeReference`) — and a `match` binding destructured
+out of it was minted with no surface at all, i.e. the `Array` one, which is the absence of the mark.
+
+**MEASURED before this fix, on the first two programs below**: `x.length()` on a payload declared
+`__ManagedMemory` was refused as an unknown `Array` member, while `x.count()` compiled and RAN — the
+roster exactly inverted, exactly as A2j measured it at the other three spellings.
+
+⚠ **THE GAP WAS ONE LEVEL BELOW THE MISSING CALL.** `StructLayout` has carried a per-field declared-surface
+column since A2j (`fieldDeclaredSurfaces`, read through `ProgramSignatures.fieldSurfaceOf`); `PayloadField`
+carried only a name and a declared type, so the declaration SWEEP that captures *"this position spelled
+`__ManagedMemory`"* had nowhere to write a payload's answer and adding the mark alone would have read
+nothing. The column is the fix; the mark is what reads it.
+
+<!-- test: union-payload-declared-managed-memory-serves-the-roster -->
+
+The false-reject half, and the one that was WRONG rather than merely permissive: `length()` is the buffer
+roster's FIRST member. The payload value is an ordinary `"hello".toByteArray()` — nothing about the VALUE
+says buffer, and the case declaration is doing all the work.
+```maxon
+typealias Int = int(i64.min to i64.max)
+
+union Held
+	mem(m __ManagedMemory)
+	nothing
+end 'Held'
+
+function size(h Held) returns Int
+	return match h 'k'
+		mem(x) gives x.length()
+		nothing gives 0
+	end 'k'
+end 'size'
+
+function main() returns ExitCode
+	let h = Held.mem("hello".toByteArray())
+	return size(h) as ExitCode
+end 'main'
+```
+```exitcode
+5
+```
+
+<!-- test: error.union-payload-declared-managed-memory-refuses-an-array-member -->
+
+The refusal half. `count` is an `Array` member and not a buffer one, so the binding is refused it — and
+refused it with the BUFFER's roster, which is what says the message answers for the type it is shown about.
+**This exact program COMPILED before this fix** — the runner's own words were *"expected a compile error
+but compilation succeeded"* — which is the wrong answer no diagnostic reported.
+```maxon
+typealias Int = int(i64.min to i64.max)
+
+union Held
+	mem(m __ManagedMemory)
+	nothing
+end 'Held'
+
+function size(h Held) returns Int
+	return match h 'k'
+		mem(x) gives x.count()
+		nothing gives 0
+	end 'k'
+end 'size'
+
+function main() returns ExitCode
+	let h = Held.mem("hello".toByteArray())
+	return size(h) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:11:18: Unsupported: `__ManagedMemory` member 'count' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/elementSize/grow/append/slice/clear; that list IS the surface, so nothing else is served here
+```
+
+<!-- test: union-payload-declared-managed-memory-serves-a-shared-member -->
+
+The POSITIVE CONTROL — a member BOTH rosters name, so it answers on either side of the flip and pins that
+the payload binding stayed usable rather than merely changing which refusal it gets. `capacity` is on the
+`Array` roster and on the buffer's, and with `elementSize: 1` the two readings of it are the same number.
+```maxon
+typealias Int = int(i64.min to i64.max)
+
+union Held
+	mem(m __ManagedMemory)
+	nothing
+end 'Held'
+
+function room(h Held) returns Int
+	return match h 'k'
+		mem(x) gives x.capacity()
+		nothing gives 0
+	end 'k'
+end 'room'
+
+function main() returns ExitCode
+	let mm = try __ManagedMemory.create(4, elementSize: 1) otherwise return 1
+	try mm.setLength(2) otherwise return 2
+	let h = Held.mem(mm)
+	return room(h) as ExitCode
+end 'main'
+```
+```exitcode
+4
+```
+
+<!-- test: error.a-byte-array-payload-keeps-the-array-surface -->
+
+⭐⭐ **THE OVER-ACCEPTANCE CONTROL, and it is the load-bearing one.** `__ManagedMemory` is a generic ALIAS
+of `Array with Byte`, so a payload declared `ByteArray` resolves to the IDENTICAL `MaxonType` — the surface
+cannot be keyed on it. A fix that handed the buffer roster to every payload would accept this program, and
+nothing would report it.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+
+union Held
+	mem(m ByteArray)
+	nothing
+end 'Held'
+
+function size(h Held) returns Int
+	return match h 'k'
+		mem(x) gives x.length()
+		nothing gives 0
+	end 'k'
+end 'size'
+
+function main() returns ExitCode
+	let h = Held.mem("hello".toByteArray())
+	return size(h) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:13:18: Unsupported: `Array` member 'length' — P1.7 provides managed/get/set/first/last/pop/remove/slice/count/capacity/isEmpty/clone/push/reserve/resize/clear/insert/append/map/contains; that list IS the surface, so nothing else is served here
+```
+
+<!-- test: a-byte-array-payload-still-serves-count -->
+
+The over-acceptance control's positive half, for the reason its A2m twins have one: a refusal alone would
+also be satisfied by a payload binding that lost its `Array` surface without gaining the buffer's.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+
+union Held
+	mem(m ByteArray)
+	nothing
+end 'Held'
+
+function size(h Held) returns Int
+	return match h 'k'
+		mem(x) gives x.count()
+		nothing gives 0
+	end 'k'
+end 'size'
+
+function main() returns ExitCode
+	let h = Held.mem("hello".toByteArray())
+	return size(h) as ExitCode
+end 'main'
+```
+```exitcode
+5
+```
+
+<!-- test: union-payload-declared-an-array-of-buffers-serves-the-roster -->
+
+⭐ **A2m's DEPTH AT THE NEW DOOR, and it comes free rather than needing a second mechanism**: a payload
+declared `BufArray` hands its ELEMENTS the buffer surface, so `x.get(0).length()` answers. The element bit
+is the one of the three the declaration SWEEP cannot store — at sweep time `BufArray` may not be interned
+yet — so it is DERIVED at the read from the alias NAME the swept `named` still carries, through the one
+fold a struct field and a declared return already came out of (`surfaceWithDerivedElement`).
+
+⚠ Its RED is STRUCTURAL rather than measured: before this fix `emitUnionPayloadLoad` called
+`markDeclaredSurface` not at all, so no payload binding could carry ANY of the three marks — which is the
+same absence the two cases above measured directly on the outright bit.
+```maxon
+typealias BufArray = Array with __ManagedMemory
+
+union Held
+	bufs(b BufArray)
+	nothing
+end 'Held'
+
+function main() returns ExitCode
+	var a = BufArray.create()
+	a.push("hello".toByteArray())
+	let h = Held.bufs(a)
+	match h 'k'
+		bufs(x) then return (try x.get(0) otherwise return 1).length() as ExitCode
+		nothing then return 0
+	end 'k'
+end 'main'
+```
+```exitcode
+5
+```

@@ -1,0 +1,24 @@
+// Test: error.a-byte-array-payload-keeps-the-array-surface
+typealias Int = int(i64.min to i64.max)
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+
+union Held
+	mem(m ByteArray)
+	nothing
+end 'Held'
+
+function size(h Held) returns Int
+	return match h 'k'
+		mem(x) gives x.length()
+		nothing gives 0
+	end 'k'
+end 'size'
+
+function main() returns ExitCode
+	let h = Held.mem("hello".toByteArray())
+	return size(h) as ExitCode
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:13:18: Unsupported: `Array` member 'length' — P1.7 provides managed/get/set/first/last/pop/remove/slice/count/capacity/isEmpty/clone/push/reserve/resize/clear/insert/append/map/contains; that list IS the surface, so nothing else is served here

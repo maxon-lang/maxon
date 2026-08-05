@@ -2917,8 +2917,16 @@ export type PayloadField
 	export let name as ByteArray
 	export let declaredType as MaxonType
 
-	export static function create(name ByteArray, declaredType MaxonType) returns PayloadField
-		return Self{name: name, declaredType: declaredType}
+	// ⭐ **THE PRE-ERASURE `__ManagedMemory` SPELLING OF THIS PAYLOAD (BATCH22)** — `StructLayout`'s
+	// `fieldDeclaredSurfaces` column, at the FIFTH declared position. A payload is spelled by the very type
+	// reader a struct field and a parameter use, so `mem(m __ManagedMemory)` resolves to the identical
+	// `genericInstance` a `ByteArray` payload does and `declaredType` above cannot carry the difference;
+	// without this column the `match` binding was minted with no surface, i.e. the `Array` one. Read through
+	// `ProgramSignatures.payloadSurfaceOf`, which ORs in the element bit the sweep could not answer.
+	export let declaredSurface as DeclaredSurface
+
+	export static function create(name ByteArray, declaredType MaxonType, declaredSurface DeclaredSurface) returns PayloadField
+		return Self{name: name, declaredType: declaredType, declaredSurface: declaredSurface}
 	end 'create'
 end 'PayloadField'
 

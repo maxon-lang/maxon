@@ -13723,9 +13723,21 @@ export type Parser
 			// to the real parse.
 			try self.requireUnreservedName(nameTok)
 			let typeTok = self.current()
+			// ⭐ **THE PAYLOAD's PRE-ERASURE SPELLING (BATCH22)** — asked at the cursor, which sits on the
+			// type's first token, for the reason a struct field asks it there: `parseTypeReference` on the
+			// next line folds `__ManagedMemory` into the very `genericInstance` a `ByteArray` payload
+			// resolves to. Captured in this ONE shared reader, so the tolerant sweep's layout — the
+			// whole-program one every read door consults — and the real parse's carry the identical word.
+			//
+			// ⚠ A tuple SLOT's element bit is held clear (`slotElementsFromAliases: false`) for
+			// `readStructFieldInto`'s reason: the SWEEP fills this column while the alias table is still
+			// being built, so a slot's element bit read there answers *how far the sweep had got*. The
+			// ROOT keeps asking, because `ProgramSignatures.payloadSurfaceOf` ORs in the complementary
+			// derivation; see `declaredSurfaceAt`.
+			let declaredSurface = self.declaredSurfaceAt(self.pos, slotElementsFromAliases: false)
 			let fieldType = try self.parseTypeReference()
 			try self.requireStorableDeclaredType(fieldType, position: DeclaredStoragePosition.unionPayload, line: typeTok.line, column: typeTok.column)
-			fields.push(PayloadField.create(nameTok.value, declaredType: fieldType))
+			fields.push(PayloadField.create(nameTok.value, declaredType: fieldType, declaredSurface: declaredSurface))
 
 			if not self.at(TokenKind.comma) 'endFields'
 				break
@@ -32870,7 +32882,16 @@ export type Parser
 		let class = try self.requirePayloadLowerable(field, declared: declared, layout: layout, posTok: posTok)
 		let storage = payloadStorageOf(class)
 		let valueType = payloadValueTypeOf(class, declared: declared)
-		return self.emitIndirectLoad(valueType, box: box, offset: layout.payloadSlotOffset(slot), storageType: storage, range: range)
+		let result = self.emitIndirectLoad(valueType, box: box, offset: layout.payloadSlotOffset(slot), storageType: storage, range: range)
+
+		// ⭐ **A PAYLOAD DECLARED `__ManagedMemory` BINDS AS THE BUFFER SURFACE (BATCH22)** — the declared
+		// SPELLING, which `declared` above cannot carry (the alias resolves to the same `genericInstance` a
+		// `ByteArray` payload does), taken off the payload record's own column. It sits at THIS mint for
+		// `emitFieldLoad`'s reason: every `match` arm, every nesting depth and every scrutinee ownership
+		// mode funnels through this one line, and a per-door mark would be the enumeration that misses one.
+		self.markDeclaredSurface(result, declared: self.signatures.payloadSurfaceOf(field))
+
+		return result
 	end 'emitUnionPayloadLoad'
 
 	// Emit a case's TAG as an i64 `literal` whose VALUE tag is `named(<enum>)`. The one site that
