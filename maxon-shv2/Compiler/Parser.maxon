@@ -15161,7 +15161,7 @@ export type Parser
 
 	// Is `value` a managed HEAP value — a struct box, a String, or a boxed union — the kinds a consumed
 	// parameter can own (and this function must drop) and a consumed argument must transfer? A ranged-alias /
-	// `int` / `bool` owns no heap. This is the one owned-temp adoption test, so `mintOwnedCallResult` routes
+	// `int` / `bool` owns no heap. This is the one owned-temp adoption test, so `enrolOwnedCallTemp` routes
 	// through it rather than re-spelling the three tags. A managed heap value is a BYTE RECORD (a String or a
 	// Character) or a non-text aggregate, so it is derived from `valueIsNonTextAggregate` to keep the
 	// aggregate half stated once.
@@ -18146,7 +18146,7 @@ export type Parser
 	// point at (`return`'s keyword, or the closure's `gives`).
 	//
 	// **A `returns String` FUNCTION HANDS BACK A UNIFORMLY OWNED HEAP String**, and the caller drops that
-	// result unconditionally (`mintOwnedCallResult`). So the callee must return something OWNED and must not
+	// result unconditionally (`enrolOwnedCallTemp`). So the callee must return something OWNED and must not
 	// drop it — two adjustments, in this order, BEFORE the scope drops:
 	//
 	//   • PROMOTE a borrowed return. `return "hi"` is an immortal rdata literal (capacity == -2), not owned
@@ -19042,7 +19042,7 @@ export type Parser
 		let entryMoveMark = self.captureMoveMark()
 
 		// ⭐ **A MANAGED tryCall RESULT IS OWNED ONLY ON THE OK EDGE — pull it out of the ENTRY-block drop
-		// set before the handler parses.** `mintOwnedCallResult` tracked the result as an owned pending
+		// set before the handler parses.** `enrolOwnedCallTemp` tracked the result as an owned pending
 		// temp in the entry block, which flows to BOTH `tryok` and `tryerr`; on the `tryerr` edge the
 		// result register is NULL (a throw zeroes it). An error handler that drains the pending temps
 		// (`otherwise return`/`throw`, whose exit runs `emitHandoffExitDrops`) would then decref that NULL —
@@ -19962,7 +19962,7 @@ export type Parser
 
 		// ⛔⛔ **THIS CALL'S OWN RESULT IS OWNED ONLY ON THE OK EDGE, SO IT COMES OUT OF THE PENDING LIST
 		// WHILE THE ERROR EDGE IS BUILT.** `emitCall` mints the result BEFORE it appends the op, and a managed
-		// one arrives here already enrolled as an owned temp by `mintOwnedCallResult` → `trackOwnedTemp`. The
+		// one arrives here already enrolled as an owned temp by `enrolOwnedCallTemp` → `trackOwnedTemp`. The
 		// landing pad below drains that list — but the pad sits on the error edge, where the `tryCall` never
 		// wrote the result register, so decrefing it there reads a register the throw zeroed: an access
 		// violation, MEASURED on `let s = fetch(0)` with `fetch` returning a managed `String`. This is
@@ -22868,7 +22868,7 @@ export type Parser
 		// ⭐⭐ **A CURSOR'S ELEMENT IS WHATEVER `current()` RETURNS, AND ITS OWNERSHIP IS THAT CALL'S ANSWER —
 		// NOT A THIRD RULE HERE.** The other four forms each needed one: an array/list element is a BORROW the
 		// container keeps, a String's cluster is MINTED and owned by the trip. This one is an ordinary user
-		// call, so `mintCallResult` has already decided — a scalar owns nothing, a managed return is tracked as
+		// call, so `emitCall` has already decided — a scalar owns nothing, a managed return is tracked as
 		// an owned pending temporary. All this arm adds is the LIFETIME: a pending temp is dropped at the
 		// STATEMENT's tail, which for a value the body may hold across the whole trip is too early on one path
 		// and (once a `return` inside the body drains the list) a leak on another. `giveTemporaryScopeLifetime`
@@ -31518,7 +31518,7 @@ export type Parser
 		// needs and has — so the routine lives in `stdlib/` and both callers reach the one copy.
 		//
 		// The call is the same door `materializeStructToStringPart` takes one arm down: an ordinary
-		// `emitCall` whose String result is classified +1 OWNED (`mintOwnedCallResult` →
+		// `emitCall` whose String result is classified +1 OWNED (`enrolOwnedCallTemp` →
 		// `trackOwnedTemp`) and freed at statement end, its bytes spliced by
 		// `materializeStringRecordPart` exactly as any other String part's are.
 		if tagIsFloat(tag) 'floatPart'
@@ -31572,7 +31572,7 @@ export type Parser
 	// ⭐ **INTERPOLATE A USER STRUCT VIA A DIRECT `<Type>.toString()` CALL (P1.7a slice 1).** A struct is
 	// interpolable iff it HAS a `toString` method (by NAME, not by declaring `Stringable` — the oracle's
 	// rule); a struct WITHOUT one is E3016, positioned at the interpolated expression. The call's result is
-	// classified +1 OWNED by `emitCall` (`mintOwnedCallResult` → `trackOwnedTemp`), so the fresh String is
+	// classified +1 OWNED by `emitCall` (`enrolOwnedCallTemp` → `trackOwnedTemp`), so the fresh String is
 	// freed at STATEMENT END — after `emitStringInterp` has copied its bytes into the interp result. Its
 	// bytes are spliced exactly as a `{s}` String part's are (`materializeStringRecordPart`), the same
 	// machinery a String-returning call already interpolates through. Without the owned classify, one
@@ -38651,10 +38651,11 @@ export type Parser
 
 	// Mint the SSA value a witness dispatch defines, typed from the interface method's return type (P1.7a slice
 	// 2a) — the witness-dispatch twin of `mintDeclaredCallResult`. A `void` method mints a discarded `void`
-	// result in statement position and reports E2004 in value position (like a void direct call); a `Self`
-	// return is the receiver's own type parameter (the shared body cannot know the concrete type); every other
-	// return type is minted through `mintOwnedCallResult`, so a heap-returning interface method's result is
-	// adopted owned exactly as a direct call's is.
+	// result in statement position and reports E2004 in value position (like a void direct call); every other
+	// return type is minted below and enrolled through `enrolOwnedCallTemp`, so a heap-returning interface
+	// method's result is adopted owned exactly as a direct call's is. There is no retype to wait for here —
+	// an interface's declared return type is already concrete, and the one that is not (`Self`) is answered
+	// by the receiver rather than substituted afterwards.
 	function mintWitnessDispatchResult(target WitnessDispatchTarget, receiver ValueId, methodTok Token, resultUsed bool) returns ValueId throws ParseError
 		if target.returnTypeName.equals(InterfaceVoidTypeName) 'voidReturn'
 			if resultUsed 'noValueToUse'
@@ -38663,12 +38664,22 @@ export type Parser
 			return self.mintValue(ValueTypeTag.void, nameId: UnnamedTypeId)
 		end 'voidReturn'
 
+		let result = self.witnessDispatchValueResult(target, receiver: receiver)
+		self.enrolOwnedCallTemp(result)
+		return result
+	end 'mintWitnessDispatchResult'
+
+	// The two spellings a NON-void interface return has, split from the door above so the drop enrolment is
+	// written once across both arms rather than once per arm — the same one-rule-one-site reason
+	// `enrolOwnedCallTemp` exists at all.
+	function witnessDispatchValueResult(target WitnessDispatchTarget, receiver ValueId) returns ValueId
+		// A `Self` return is the receiver's own type (the shared body cannot know the concrete one).
 		if target.returnTypeName.equals(InterfaceSelfTypeName) 'selfReturn'
 			return self.mintSelfReturnedWitnessResult(receiver)
 		end 'selfReturn'
 
 		return self.mintOwnedCallResult(self.interfaceReturnMaxonType(target.returnTypeName))
-	end 'mintWitnessDispatchResult'
+	end 'witnessDispatchValueResult'
 
 	// ⭐ **A `Self`-RETURNING REQUIREMENT HANDS BACK THE RECEIVER'S OWN TYPE, AND EACH RECEIVER SPELLS THAT
 	// DIFFERENTLY (P1.7a-existentials slice 1).**
@@ -45701,7 +45712,25 @@ export type Parser
 		// it with no change to any of them.
 		let argDefaultSlots = try self.fillOmittedArgDefaults(callee, anchor: anchor, args: args, argLabels: argLabels, argRanges: argRanges)
 		let result = try self.mintCallResult(callee, anchor: anchor, resultUsed: resultUsed)
-		self.retypeOpaqueMethodResult(result, callee: callee, args: args)
+		let substituted = self.retypeOpaqueMethodResult(result, callee: callee, args: args)
+		// ⭐⭐ **THE DROP ENROLMENT COMES AFTER THE RETYPE, AND THAT ORDER IS THE WHOLE OF A5o.** It used to sit
+		// in the mint's own tail, where the tag was still the opaque `T` — and an opaque tag ALWAYS answers "owns
+		// nothing" (`valueIsManagedHeap` tests byte-record and aggregate tags, and `typeParameter` is neither).
+		// So the retype was forced to decline for a managed concrete argument rather than move a decision that
+		// had already been taken, and `bx.echo(got)` on a `Box with Alpha` was `E3005 … got 'type parameter'` for
+		// a value whose type the instance fixes. Asked HERE the tag is the concrete one, so the two halves agree.
+		// See `enrolOwnedCallTemp` for why re-ordering it can only ADD enrolments.
+		//
+		// ⛔⛔ **A SUBSTITUTED RESULT IS THE ONE KIND THE CALLEE DID NOT CO-OWN, SO IT IS NOT ADOPTED HERE.**
+		// Adoption assumes the `+1` a `returns <managed>` callee hands back (`emitOwnedValueReturn` retains
+		// before the `ret` — MEASURED: a concrete `Holder.get` returning `self.value` emits `__mm_retain`). A
+		// SHARED generic body emits none, because it cannot classify `T`, so its `T` return is a BORROW.
+		// Adopting it drops a reference nobody took: MEASURED, `back.a` on a `Box with Alpha` round trip read
+		// `4557430888798830399` — `0x3F3F…`, the free poison — with the box then freed twice. The caller takes
+		// its own reference instead, below, where the value exists (`coOwnSubstitutedCallResult`).
+		if not substituted 'calleeAlreadyCoOwnedIt'
+			self.enrolOwnedCallTemp(result)
+		end 'calleeAlreadyCoOwnedIt'
 		// ⭐ **A CALLEE THAT DECLARED `returns __ManagedMemory` YIELDS THE BUFFER SURFACE (A2j).** Read HERE
 		// rather than inside the mint chain because the mint's tail (`mintOwnedCallResult`) is handed a
 		// `MaxonType` and not the callee name — and the name is the only thing that still knows the spelling,
@@ -45718,11 +45747,51 @@ export type Parser
 		// ⭐ **THE OTHER ROUTING DOOR FOR A BLOCK-FORM `try` BODY** — this one carries every call the author
 		// spelled (free, method, static), so a bare call to a declared throwing function inside such a body
 		// reaches the shared handler. `result` rides along because a MANAGED one is already enrolled as an
-		// owned temp by the mint above, and it must not be dropped on the error edge — see
+		// owned temp by `enrolOwnedCallTemp` above, and it must not be dropped on the error edge — see
 		// `routeBareThrowingCallToTryBlock`.
 		self.routeBareThrowingCallToTryBlock(callee, opIdx: opIdx, result: result)
+		if substituted 'sharedBodyHandedBackABorrow'
+			return try self.coOwnSubstitutedCallResult(result, range: SourceRange.between(anchor, last: rparenTok))
+		end 'sharedBodyHandedBackABorrow'
+
 		return result
 	end 'emitCall'
+
+	// ⭐⭐ **THE REFERENCE A SHARED GENERIC BODY COULD NOT TAKE, TAKEN BY THE ONE PARTY THAT CAN (A5o).**
+	// `Box.get`'s `return self.value` hands back a `T` it cannot classify: the body is compiled ONCE for every
+	// instantiation, so an unconditional `__mm_retain` there would fault on a trivial instantiation's raw
+	// scalar — the same bound `finishValueTry` states for an opaque `try` merge. The CALLER has no such
+	// problem: the receiver's alias fixes `T`, `retypeOpaqueMethodResult` has just substituted it, and the
+	// question is now a static one. So the hand-off the callee owed is performed here.
+	//
+	// It is the SAME `promoteBorrowedToOwned` a `return` spends, through the SAME `returned` door, because it
+	// is literally that return one frame later: a String COPIES (an immortal `.rdata` literal cannot be
+	// increfed, which is why a bare `emitIncref` would be wrong here), a trivial tuple gets its own record,
+	// an aggregate INCREFS the shared box so the alias a field write shows through is preserved. The
+	// immutable-global refusal that door also carries cannot fire on a value minted by a `call` op.
+	//
+	// A TRIVIAL instantiation owns no heap, so this is a no-op for `Box with Integer` and the emitted code is
+	// unchanged for it.
+	function coOwnSubstitutedCallResult(result ValueId, range SourceRange) returns ValueId throws ParseError
+		if not self.valueIsManagedHeap(result) 'trivialInstantiation'
+			return result
+		end 'trivialInstantiation'
+
+		let owned = try self.promoteBorrowedToOwned(result, door: BorrowLaunderDoor.returned, range: range)
+
+		// ⚠ **NORMALIZED, THE WAY `promoteBorrowedMergeEdge` NORMALIZES IT THE OTHER WAY.** The promotion's
+		// arms disagree about the STATEMENT's obligation, and each is right for its own first caller: a String
+		// copy is minted through `emitStringInterp`, which enrols it, while an aggregate retain sets the
+		// owned-heap bit ALONE because `promoteBorrowedToOwned` is written for a value a BINDING will drop. A
+		// call result may reach no binding at all (`over(b.get())`), so it owes the statement too — and asking
+		// first is what keeps the String arm off the list twice, which would be a double free rather than a
+		// leak.
+		if not self.pendingTempsContain(owned) 'statementStillOwesTheDrop'
+			self.trackOwnedTemp(owned)
+		end 'statementStillOwesTheDrop'
+
+		return owned
+	end 'coOwnSubstitutedCallResult'
 
 	// ⭐ **SUPPLY EVERY ARGUMENT THE CALL OMITTED AND THE DECLARATION DEFAULTS** (BATCH2 slice 4) — each one
 	// becomes a call to the declaration's synthesized helper, appended with the parameter's own NAME as its
@@ -45816,67 +45885,79 @@ export type Parser
 	// The receiver's alias binds `T`, so the answer is the instance's substituted argument — the same
 	// `substitutedInstanceArg` a concrete field read already asks.
 	//
-	// ⚠ **IT IS NARROWER THAN THE FIELD-READ RULE, AND THE OWNERSHIP PREMISE IS WHY.** A field read is a
-	// BORROW whatever the concrete type turns out to be, so that site retypes to a managed argument freely.
-	// A call RESULT's ownership was already decided by `mintCallResult` FROM THE OPAQUE TYPE — the drop
-	// enrollment either happened or did not — and the tag is what `valueIsManagedHeap` later reads to decide
-	// whether the value is dropped at scope exit. Retyping opaque→`String` would move that decision AFTER the
-	// ops that implement it, i.e. leak or double-free. So the substitution is applied only when the concrete
-	// argument owns no heap, which is exactly when no ownership decision depends on the tag.
+	// ⭐ **IT IS THE FIELD-READ RULE EXACTLY, INCLUDING FOR A MANAGED ARGUMENT (A5o).** It was narrower until
+	// A5o, on an ORDERING premise rather than a rule: a call RESULT's drop enrolment ran inside the mint,
+	// FROM THE OPAQUE TYPE, so retyping opaque→`Alpha` here would have moved a decision that was already
+	// taken. `emitCall` now enrols AFTER this call (`enrolOwnedCallTemp`), so the ownership decision is made
+	// from the SUBSTITUTED tag and the substitution applies whether or not the concrete argument owns heap.
+	// A field read remains a BORROW and this remains an OWNED result; what they now share is that both learn
+	// what `T` is before anything reads the answer.
 	//
 	// The gate is ordered cheapest-first: almost every call in a program has a non-generic first argument, and
 	// that test is one array read. Only past it is the callee's return type looked up.
-	function retypeOpaqueMethodResult(result ValueId, callee ByteArray, args ValueIdArray)
+	//
+	// ⭐ **IT REPORTS WHETHER IT FIRED, AND THAT ANSWER IS AN OWNERSHIP FACT, NOT A CONVENIENCE.** A
+	// substituted result is the one call result whose callee took no reference for it, so `emitCall` needs
+	// exactly this bit to tell the two hand-offs apart — see `coOwnSubstitutedCallResult`. Re-deriving it
+	// there would be the same question asked twice, of a value whose tag the substitution has just changed.
+	function retypeOpaqueMethodResult(result ValueId, callee ByteArray, args ValueIdArray) returns bool
 		if args.isEmpty() 'noReceiver'
-			return
+			return false
 		end 'noReceiver'
 
 		let receiver = try args.get(0) otherwise panic("retypeOpaqueMethodResult: args.get(0) failed on a non-empty list")
 		if self.tagOf(receiver) != ValueTypeTag.genericInstance 'concreteReceiverOnly'
-			return
+			return false
 		end 'concreteReceiverOnly'
 
 		// The callee must be a method OF the receiver's own generic base, or `T` names a different type's
 		// parameter and the substitution would be against the wrong binding.
 		if not isQualifiedUnderTypeName(callee, typeName: self.signatures.genericInstanceBaseName(self.valueNameId(receiver))) 'notItsOwnMethod'
-			return
+			return false
 		end 'notItsOwnMethod'
 
 		match self.signatures.returnTypeOf(callee, into: self.artifact.typeNames) 'declared'
-			declared(returnType) then self.retypeOpaqueReturn(result, receiver: receiver, returnType: returnType)
+			declared(returnType) then return self.retypeOpaqueReturn(result, receiver: receiver, returnType: returnType)
 			undeclared then break 'declared'
 		end 'declared'
+
+		return false
 	end 'retypeOpaqueMethodResult'
 
-	function retypeOpaqueReturn(result ValueId, receiver ValueId, returnType MaxonReturnType)
+	function retypeOpaqueReturn(result ValueId, receiver ValueId, returnType MaxonReturnType) returns bool
 		match returnType 'r'
-			value(inner) then self.retypeOpaqueReturnValue(result, receiver: receiver, inner: inner)
+			value(inner) then return self.retypeOpaqueReturnValue(result, receiver: receiver, inner: inner)
 			void then break 'r'
 		end 'r'
+
+		return false
 	end 'retypeOpaqueReturn'
 
-	function retypeOpaqueReturnValue(result ValueId, receiver ValueId, inner MaxonType)
+	// ⛔ **THERE IS NO MANAGED/TRIVIAL SPLIT HERE ANY MORE, AND ITS REMOVAL IS A5o.** A `managedConcrete`
+	// guard stood between these two statements, refusing the substitution whenever the instance's argument
+	// owned heap. Its whole justification was the ORDER `emitCall` used to run in — the drop enrolment was
+	// taken from the opaque tag inside the mint, so a later retype would have contradicted it — and with the
+	// enrolment moved after this call (`enrolOwnedCallTemp`) there is nothing left for it to protect. It
+	// refused a program the oracle runs: `bx.echo(bx.echo(Alpha.create()))` on a `Box with Alpha`, and every
+	// field read of the value that came back.
+	//
+	// ⚠ **The guard is gone; the RULE it was written next to is not.** `typeIsManaged` and every other
+	// `ProgramSignatures` classifier must be asked of the INDEX-SPACE type, never of one
+	// `instanceSubstitutedType` has already re-interned into this file's table — the two interners assign ids
+	// in their own insertion orders, so such an answer is right exactly while they coincide and silently
+	// wrong when they drift (OPEN #56, and the reason `substitutedInstanceArg` and `adoptType` are two
+	// steps). That is why the substitution below goes through `instanceSubstitutedType` and not a bare
+	// `adoptType`: `declaredSlotType` re-tags a struct / generic-alias / function name and leaves a union's
+	// `named` alone, which is what makes `Box with Shape` pick `over(x Shape)` rather than reading the box
+	// pointer as an integer (`generic-managed-union-return-overload-selection` — exit 25 where 7 is correct,
+	// the failure this door's predecessor MEASURED before A4i/A4k gave it that cascade).
+	function retypeOpaqueReturnValue(result ValueId, receiver ValueId, inner MaxonType) returns bool
 		if maxonTypeTag(inner) != ValueTypeTag.typeParameter 'notOpaque'
-			return
+			return false
 		end 'notOpaque'
 
-		// The ownership bound stated in `retypeOpaqueMethodResult`: a managed concrete argument keeps the
-		// opaque tag, because the drop decision that tag governs has already been made.
-		//
-		// ⚠ **ASKED OF THE INDEX-SPACE TYPE, NOT THE ADOPTED ONE — every `ProgramSignatures` classifier must
-		// be.** `typeIsManaged` resolves a `named` id through the INDEX's own interner, so handing it a type
-		// `instanceSubstitutedType` has already re-interned into THIS FILE's table asks about whatever name
-		// happens to sit at that id over there. It does not even panic: the two interners assign ids in
-		// their own insertion orders, so the answer is right exactly while they coincide and silently wrong
-		// when they drift. MEASURED wrong, on `Box with Shape` for a boxed union `Shape`: the guard read
-		// `false`, the retype fired on a managed type anyway, and `over(b.get())` chose an `over(x Integer)`
-		// overload that then did arithmetic on the payload word (exit 25 where 7 was correct). This is
-		// OPEN #56's interner mismatch — the reason `substitutedInstanceArg` and `adoptType` are two steps.
-		if self.signatures.instanceArgIsManaged(self.valueNameId(receiver), position: typeNameIdOf(inner)) 'managedConcrete'
-			return
-		end 'managedConcrete'
-
 		self.retypeValue(result, valueType: self.instanceSubstitutedType(receiver, opaque: inner))
+		return true
 	end 'retypeOpaqueReturnValue'
 
 	// The CONCRETE type a generic-instance receiver binds an opaque `T` to, IN THE INDEX'S OWN INTERNER —
@@ -46420,10 +46501,10 @@ export type Parser
 	//     OPEN #44 case: a `named` result whose LAYOUT `isBoxed`, indistinguishable by tag from a bare
 	//     enum value, which owns no box and is adopted by no one.
 	//
-	// Adoption is the one owned-temp door, `trackOwnedTemp`, exactly as an interpolation temporary rides:
-	// `parseBinding` transfers a bound result to a scope-exit drop, `drainPendingTemps` frees an unbound
-	// one after the consuming statement. A scalar / payload-free-enum result owns no heap and is enrolled
-	// in nothing.
+	// ⚠ **THE ADOPTION ITSELF IS THE CALLER'S, NOT THIS FUNCTION'S (A5o) — see `enrolOwnedCallTemp`.** It was
+	// this function's tail until A5o, which put it one step too early for the one caller that RETYPES the
+	// result afterwards. The name still says `Owned` because that is what the returned value is; what moved
+	// is only WHEN the obligation is written down.
 	function mintOwnedCallResult(inner MaxonType) returns ValueId
 		// `resolveNamedStruct` re-tags a struct-`named` return to `structRef`; `resolveFloatAliasType` then
 		// resolves a float-alias `named` return (`returns Float`) to `float` (F2a). Both are needed and
@@ -46442,11 +46523,45 @@ export type Parser
 			self.recordValueDeclaredAliasName(result, aliasName: self.internedName(typeNameIdOf(inner)))
 		end 'floatAliasReturn'
 
+		return result
+	end 'mintOwnedCallResult'
+
+	// ⭐⭐ **THE ONE RULE THAT SAYS A CALL'S RESULT OWES A DROP (A5o).** It ADOPTS the `+1` the callee took on
+	// its way out (`emitOwnedValueReturn`): adoption is the one owned-temp door, `trackOwnedTemp`, exactly as
+	// an interpolation temporary rides — `parseBinding` transfers a bound result to a scope-exit drop,
+	// `drainPendingTemps` frees an unbound one after the consuming statement. A scalar / payload-free-enum /
+	// void / unresolved result owns no heap and is enrolled in nothing, so a call door with nothing to
+	// classify may ask unconditionally.
+	//
+	// ⛔ **THE ONE RESULT THAT IS NOT ADOPTED is a SUBSTITUTED opaque return** — a shared generic body takes
+	// no reference, so there is no `+1` to adopt and the caller mints its own instead
+	// (`coOwnSubstitutedCallResult`). That is the single gate on this call, at the single door that can reach
+	// one; the witness and indirect doors have no substitution and ask unconditionally.
+	//
+	// ⛔⛔ **IT IS ASKED ONCE PER CALL DOOR, AND IT MUST BE ASKED OF THE FINAL TAG.** `valueIsManagedHeap`
+	// reads the value's TAG, and an OPAQUE tag is none of `string` / `character` / `structRef` /
+	// `genericInstance` / `interfaceRef` and is not `named`, so it always answers `false`. Asked while a
+	// generic method's result still carried its declared `T`, it therefore enrolled nothing for a
+	// `Box with Alpha` — and forced `retypeOpaqueReturnValue` to decline the substitution rather than
+	// contradict a decision already taken. So the DIRECT-call door (`emitCall`) asks AFTER
+	// `retypeOpaqueMethodResult`; the WITNESS door (`mintWitnessDispatchResult`) and the INDIRECT one
+	// (`parseIndirectCall`) have no retype to wait for and ask as soon as the value exists.
+	//
+	// ⚠ **THE RE-ORDER CAN ONLY ADD ENROLMENTS, NEVER REMOVE ONE.** The retype fires only on a
+	// `typeParameter` tag, which answers `false` here; and the three lifts inside `mintOwnedCallResult`
+	// (`resolveNamedStruct`, `resolveFloatAliasType`, `resolveNamedAlias`) each return their argument
+	// unchanged unless the tag is `named`. So the retype is strictly not-managed → maybe-managed, and for
+	// every non-generic call it is a no-op and this answer is bit-identical to the pre-A5o one.
+	//
+	// ⛔ **IT MUST ALSO RUN BEFORE THE CALL'S OWN OP IS APPENDED.** `routeBareThrowingCallToTryBlock` states
+	// the invariant it depends on — *a call's own result is the last thing enrolled before the op is
+	// appended* — and takes the result back off the pending list while it builds the error edge, because the
+	// `tryCall` never wrote that register on a throw.
+	function enrolOwnedCallTemp(result ValueId)
 		if self.valueIsManagedHeap(result) 'adoptsHeapBox'
 			self.trackOwnedTemp(result)
 		end 'adoptsHeapBox'
-		return result
-	end 'mintOwnedCallResult'
+	end 'enrolOwnedCallTemp'
 
 	// ⭐ **A CALL THROUGH A FUNCTION VALUE** (P1.5-A1) — `f(21)`, `h.op(21)`, `pick()(21)`. The cursor sits
 	// on the `(`; `callee` is the SSA value holding the code pointer (a `function`-tagged value produced by
@@ -46470,6 +46585,10 @@ export type Parser
 		args.push(self.emitClosureEnvArg(callee, range: SourceRange.between(anchor, last: rparenTok)))
 
 		let result = try self.mintIndirectCallResult(callee, resultUsed: resultUsed, anchor: anchor)
+		// The indirect twin of `emitCall`'s enrolment, and in the same place — between the mint and the op.
+		// No retype stands in between here (a function VALUE's return type is already concrete), so the
+		// position is dictated only by `enrolOwnedCallTemp`'s "before the op is appended" half.
+		self.enrolOwnedCallTemp(result)
 		self.artifact.emitOp(self.currentBlock, op: MaxonOp.indirectCall(result, callee: callee, args: args), range: SourceRange.between(anchor, last: rparenTok))
 		return result
 	end 'parseIndirectCall'

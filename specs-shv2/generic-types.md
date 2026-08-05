@@ -2569,3 +2569,352 @@ end 'main'
 ```maxoncstderr
 error E2015: <fragment>:12:12: Unsupported: a field access on 'a': `Array` is a BUILTIN whose runtime record shv2 synthesizes, not a `type` it compiles — shv2 reads no stdlib, so none of the fields `stdlib/Array.maxon` declares exist here yet. The field is missing from this compiler, not from the language; reach the contents through the methods
 ```
+
+<!-- test: generic-managed-return-round-trips -->
+⭐⭐ **A `T`-RETURNING METHOD ON A MANAGED CONCRETE INSTANCE HANDS BACK THE CONCRETE TYPE, AND THE ROUND TRIP
+IS WHAT PROVES IT (A5o).** `bx.echo(Alpha.create())` was accepted — its argument is the opaque `T`, which
+agrees with everything — and then FEEDING THE RESULT BACK was refused: `E3005 … expected 'Alpha', got 'type
+parameter'` at the second call, and `back.a` was `E2015 … declared 'type parameter' and not a struct type`.
+One instantiation, one method, and the two directions disagreed.
+
+The cause was an ORDER, not a rule: the drop enrolment (`valueIsManagedHeap` → `trackOwnedTemp`) ran inside
+the MINT, while the tag was still the opaque `T`, so it always answered "owns nothing"; the retype then
+DECLINED to fire for a managed argument precisely because that decision had already been made. Enrolling
+AFTER the retype makes both halves true at once. MEASURED on the oracle: `a=1`.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+type Alpha
+	export var a as Integer
+	export static function create() returns Self
+		return Self{a: 1}
+	end 'create'
+end 'Alpha'
+type Box uses T
+	export var tag as Integer
+	export static function create() returns Self
+		return Self{tag: 0}
+	end 'create'
+	export function echo(v T) returns T
+		return v
+	end 'echo'
+end 'Box'
+typealias AlphaBox = Box with Alpha
+function main() returns ExitCode
+	var bx = AlphaBox.create()
+	let got = bx.echo(Alpha.create())
+	let back = bx.echo(got)
+	print("a={back.a}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+a=1
+```
+
+<!-- test: generic-managed-return-drops-once -->
+⛔⛔ **THE CASE THE DELETED `managedConcrete` GUARD EXISTED FOR — a managed `T` return bound to a `let` and
+left to fall out of scope.** Before A5o the enrolment could never fire for such a result (the tag was still
+opaque when it was asked), so the guard's job was to stop the retype from making the value LOOK managed
+after the drop decision had been taken. With the enrolment moved after the retype the two agree, and this
+is the case that says so: a hundred boxes allocated, each dropped exactly once. A missed enrolment is a
+leak (the runner reports exit 101); a doubled one faults on the poisoned box.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+type Alpha
+	export var a as Integer
+	export static function create(a Integer) returns Self
+		return Self{a: a}
+	end 'create'
+end 'Alpha'
+type Box uses T
+	export var tag as Integer
+	export static function create() returns Self
+		return Self{tag: 0}
+	end 'create'
+	export function echo(v T) returns T
+		return v
+	end 'echo'
+end 'Box'
+typealias AlphaBox = Box with Alpha
+function main() returns ExitCode
+	var bx = AlphaBox.create()
+	var i = 0
+	var total = 0
+	while i < 100 'loop'
+		let back = bx.echo(Alpha.create(i))
+		total = total + back.a
+		i = i + 1
+	end 'loop'
+	return total - 4950
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: generic-managed-string-return-drops-once -->
+The OTHER half of `valueIsManagedHeap` — a BYTE RECORD rather than an aggregate. `Box with String` reaches
+the enrolment through `tagIsByteRecord`, not `valueIsNonTextAggregate`, so a fix that moved only the
+aggregate half would pass the case above and leak here. A hundred fused String records, each returned out
+of the shared body and dropped once; the byte lengths of `0`…`99` sum to 190.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+type Box uses T
+	export var tag as Integer
+	export static function create() returns Self
+		return Self{tag: 0}
+	end 'create'
+	export function echo(v T) returns T
+		return v
+	end 'echo'
+end 'Box'
+typealias StrBox = Box with String
+function main() returns ExitCode
+	var bx = StrBox.create()
+	var i = 0
+	var total = 0
+	while i < 100 'loop'
+		let s = bx.echo("{i}")
+		total = total + s.byteLength()
+		i = i + 1
+	end 'loop'
+	return total - 190
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: generic-managed-return-passed-on -->
+⚠ **THE ENROLMENT AND THE CALLER-SIDE CONSUME MEET HERE, AND THIS IS THE PATH THAT DOUBLE-FREES IF THEY
+DISAGREE.** The `T` result is enrolled as an owned temporary and then MOVED into `Wrap`'s field by
+`applyCallerConsume`, which poisons the source and takes it back off the pending list. Enrol without the
+transfer and the box is freed at the statement while the field still points at it; transfer without the
+enrolment and nobody ever owed the drop. The oracle cannot compile this program — it types a `T`-returning
+method's result as `int` at a concretely-typed parameter (`E3005 … expected 'Alpha', got 'int'`, a bootstrap
+defect) — so the answer is pinned by the non-generic control it DOES run, `Wrap.create(Alpha.create(5))`,
+which reads back 5.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+type Alpha
+	export var a as Integer
+	export static function create(a Integer) returns Self
+		return Self{a: a}
+	end 'create'
+end 'Alpha'
+type Wrap
+	export var held as Alpha
+	export static function create(v Alpha) returns Self
+		return Self{held: v}
+	end 'create'
+end 'Wrap'
+type Box uses T
+	export var tag as Integer
+	export static function create() returns Self
+		return Self{tag: 0}
+	end 'create'
+	export function echo(v T) returns T
+		return v
+	end 'echo'
+end 'Box'
+typealias AlphaBox = Box with Alpha
+function main() returns ExitCode
+	var bx = AlphaBox.create()
+	let w = Wrap.create(bx.echo(Alpha.create(5)))
+	print("{w.held.a}\n")
+	return w.held.a - 5
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+5
+```
+
+<!-- test: generic-managed-return-overload-selection -->
+⭐ **THE REFUSAL THAT GOES AWAY.** While the result kept the opaque tag, an overloaded callee handed one had
+nothing to choose by, and shv2 said so rather than guessing (`resolving an overload of 'over' against an
+argument of opaque generic type`). Retyped, the argument is an `Alpha` and there is nothing left to
+disambiguate. The oracle cannot run the generic spelling (same bootstrap defect as the case above: it types
+`b.get()` as `int` and reports `E3005 … expected 'Alpha', got 'int'`); the value 7 is the oracle's own answer
+to the non-generic control `over(Alpha.create(3))`, which this program must agree with.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+type Alpha
+	export var a as Integer
+	export static function create(a Integer) returns Self
+		return Self{a: a}
+	end 'create'
+end 'Alpha'
+type Box uses T
+	export var value as T
+	export static function create(v T) returns Self
+		return Self{value: v}
+	end 'create'
+	export function get() returns T
+		return self.value
+	end 'get'
+end 'Box'
+typealias AlphaBox = Box with Alpha
+function over(x Alpha) returns Integer
+	return x.a + 4
+end 'over'
+function over(x Integer) returns Integer
+	return x + 22
+end 'over'
+function main() returns ExitCode
+	let b = AlphaBox.create(Alpha.create(3))
+	print("{over(b.get())}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+7
+```
+
+<!-- test: generic-managed-union-return-overload-selection -->
+⛔⛔ **THE EXACT PROGRAM THE DELETED GUARD'S HEADER CITED AS ITS EVIDENCE — `Box with Shape` for a BOXED
+UNION.** That header recorded a MEASURED wrong answer of exit 25 where 7 was correct: the retype fired, the
+substituted type stayed a bare `named` (which reads as an INTEGER), and `over(b.get())` chose
+`over(x Integer)` and did arithmetic on the payload word. A4i/A4k routed the substitution through
+`declaredSlotType` in the meantime, so the union name is now re-interned as itself and picks its own
+overload — but nothing in either corpus said so, which is how a fix could have silently un-fixed it. The
+oracle runs the non-generic control (`over(Shape.circle(3))` with the `Shape` overload alone) and answers 7;
+with both overloads present it reports its own `E3007 Ambiguous overload … (x Shape), (x i64)`, so the
+generic spelling is beyond it.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+union Shape
+	circle(r Integer)
+	square(s Integer)
+end 'Shape'
+type Box uses T
+	export var value as T
+	export static function create(v T) returns Self
+		return Self{value: v}
+	end 'create'
+	export function get() returns T
+		return self.value
+	end 'get'
+end 'Box'
+typealias ShapeBox = Box with Shape
+function over(x Shape) returns Integer
+	match x 'k'
+		circle(r) then return r + 4
+		square(s) then return s + 5
+	end 'k'
+end 'over'
+function over(x Integer) returns Integer
+	return x + 22
+end 'over'
+function main() returns ExitCode
+	let b = ShapeBox.create(Shape.circle(3))
+	print("{over(b.get())}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+7
+```
+
+<!-- test: generic-managed-return-of-an-rdata-literal-copies -->
+⛔ **THE REASON THE CO-OWNERSHIP GOES THROUGH `promoteBorrowedToOwned` AND NOT THROUGH A BARE INCREF.** The
+reference a shared generic body could not take is taken by the CALLER (`coOwnSubstitutedCallResult`), and
+for a `String` that must be a COPY: `"hi"` is an immortal `.rdata` literal (capacity == -2) whose header
+lives in read-only memory, so `__mm_incref` on it writes a page the loader mapped read-only. The
+promotion's byte-record arm copies instead, exactly as a concrete `returns String` callee's own hand-off
+does. The oracle cannot compile this program either — it types the generic result as `int`
+(`E4006 Variable 's' is not a struct or enum type` at `s.byteLength()`) — so the answer is pinned by the
+non-generic control `let s = "hi"`, whose `byteLength()` is 2.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+type Box uses T
+	export var tag as Integer
+	export static function create() returns Self
+		return Self{tag: 0}
+	end 'create'
+	export function echo(v T) returns T
+		return v
+	end 'echo'
+end 'Box'
+typealias StrBox = Box with String
+function main() returns ExitCode
+	var bx = StrBox.create()
+	let s = bx.echo("hi")
+	print("{s}\n")
+	return s.byteLength() - 2
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+hi
+```
+
+<!-- test: generic-managed-return-routed-through-a-try-block -->
+⚠ **THE SUBSTITUTED RESULT MEETS THE BLOCK-FORM `try`'s ROUTING, WHICH IS THE ONE ORDERING A5o COULD NOT
+MOVE.** `routeBareThrowingCallToTryBlock` rewrites the call to a `tryCall` and builds the throw edge, and
+it depends on the result's drop obligation being settled before the op is appended — on the error edge the
+result register was never written, so releasing it there faults. A SUBSTITUTED result owes nothing on that
+edge (the callee took no reference for it) and is co-owned only on the OK continuation, after the routing
+has forked. Both paths run here: `run(0)` returns through the body, `run(1)` throws out of the same call.
+```maxon
+typealias Integer = int(0 to 125)
+enum Boom implements Error
+	bad
+end 'Boom'
+type Alpha
+	export var a as Integer
+	export static function create(a Integer) returns Self
+		return Self{a: a}
+	end 'create'
+end 'Alpha'
+type Box uses T
+	export var tag as Integer
+	export static function create(t Integer) returns Self
+		return Self{tag: t}
+	end 'create'
+	export function echo(v T) returns T throws Boom
+		if self.tag > 0 'blows'
+			throw Boom.bad
+		end 'blows'
+		return v
+	end 'echo'
+end 'Box'
+typealias AlphaBox = Box with Alpha
+function run(t Integer) returns Integer
+	var bx = AlphaBox.create(t)
+	try 'work'
+		let back = bx.echo(Alpha.create(9))
+		print("ok={back.a}\n")
+	end 'work' otherwise (e) 'bad'
+		match e 'kind'
+			bad then print("caught\n")
+		end 'kind'
+	end 'bad'
+	return 0
+end 'run'
+function main() returns ExitCode
+	let a = run(0)
+	let b = run(1)
+	return a + b
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+ok=9
+caught
+```
