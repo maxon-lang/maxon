@@ -5568,50 +5568,28 @@ end 'requireThrowingWitnessTryTarget'
 // `rewriteLastCallToTryCall` claims exactly the last op: an expression-form `try` over such a call rewrote
 // the compiler's own `__mm_retain` (E3055, *"this builtin call cannot fail"*, about a method that plainly
 // declares `throws`) or, for a String substitution whose promotion COPIES, its interpolation op (E2015,
-// *"the expression after `try` is not a call"*). Both are refusals with the wrong noun. This record is what
-// lets the refusal name the construct the program actually contains.
+// *"the expression after `try` is not a call"*). This record is what lets the two `try` doors LIFT the
+// promotion off the block the fork splits and hand it to the OK EDGE, which is the only edge the `tryCall`
+// wrote the result register on.
 //
 // ⚠ **THE `at` ARM IS MINTED ONLY WHERE A SUBSTITUTED MANAGED RESULT IS ACTUALLY PROMOTED**, which is a
 // generic instance over a managed type argument and nothing else — a trivial instantiation promotes nothing
 // and records nothing. So a Maxon union's per-value heap object (see `ManagedReceiverBinding` for the
 // measurement that makes a per-CALL-SITE union worth avoiding) is paid once per such call, not per call.
 union SubstitutedCoOwn
-	// `promotionFloor` is `module.ops.count()` read BEFORE the promotion emitted, `owned` the value it
-	// minted, and `callee` the generic method whose `T` return it was taken for.
-	at(promotionFloor OpIndex, owned ValueId, callee ByteArray)
+	// `promotionFloor` is `module.ops.count()` read BEFORE the promotion emitted, `blockId` / `opRefMark` the
+	// block it emitted into and that block's `opRefs` height at the same instant, and `owned` the value it
+	// minted. The two marks together name the promotion's ops as a suffix of one block's `opRefs`, which is
+	// what makes the lift a slice rather than a search.
+	at(promotionFloor OpIndex, blockId BlockId, opRefMark ElementCount, owned ValueId)
 	// No substituted co-own has promoted anything yet in this file's parse.
 	none
+	// The promotion's ops, LIFTED off the fork's entry block by `liftSubstitutedCoOwnForOkEdge` and waiting
+	// for the door that caused the lift to re-attach them at the head of its ok edge
+	// (`attachSubstitutedCoOwnToOkEdge`). Declared LAST so `at to none` is one range arm for "nothing is in
+	// flight" — the question every reader but the two lift/attach doors asks.
+	liftedForOkEdge(opRefs OpIndexArray)
 end 'SubstitutedCoOwn'
-
-// ⭐ **DID THIS CO-OWN PRODUCE THE VALUE THE `try` IS ABOUT TO REWRITE?** Both halves are load-bearing and
-// neither implies the other:
-//
-//   • the VALUE identity says the promotion is the TARGET'S OWN trailing op rather than one taken for an
-//     ARGUMENT of it. `try f(bx.fetch())` co-owns too, but the argument's promotion is emitted BEFORE `f`'s
-//     call, so `f`'s call is still the last op and rewrites correctly — refusing that would lose a legal
-//     program to a record that is not about it.
-//   • the OP FLOOR says the record was minted during THIS target's parse. `module.ops` is append-only for
-//     the whole file and nothing truncates it, so an index below the floor cannot belong to the target —
-//     which is also what lets this record live with NO per-function reset and NO closure save/restore,
-//     unlike every value-keyed mark beside it. ValueIds are numbered from zero again in each function and
-//     each closure body (`mintValue`), so identity ALONE would let a stale record from one function refuse
-//     an unrelated `try` in the next.
-function substitutedCoOwnProducedTryTarget(record SubstitutedCoOwn, target ValueId, targetOpFloor OpIndex) returns bool
-	return match record 'r'
-		at(promotionFloor, owned, _) gives owned == target and promotionFloor >= targetOpFloor
-		none gives false
-	end 'r'
-end 'substitutedCoOwnProducedTryTarget'
-
-// The generic METHOD the refusal names — the callee whose substituted `T` return the caller had to co-own.
-function substitutedCoOwnMethod(record SubstitutedCoOwn) returns ByteArray
-	return match record 'r'
-		at(_, _, callee) gives callee
-		// Unreachable — the sole caller asks only after `substitutedCoOwnProducedTryTarget` has answered
-		// true, and that predicate answers false for `none`.
-		none panic("substitutedCoOwnMethod: a `none` record names no method — it is read only past a true `substitutedCoOwnProducedTryTarget`, which `none` never answers")
-	end 'r'
-end 'substitutedCoOwnMethod'
 
 // The result of `captureEnclosing` (P1.5-A2b): a name that resolved into an enclosing frame yields
 // `captured` with the value read out of the env block; any other name is `notCaptured` and resolves
@@ -7011,8 +6989,9 @@ export type Parser
 	// old value, set true, emit, restore. It is never left set across a statement. Same per-function reset
 	// and per-closure save/restore as `tryBlocks` above (see that field's lifetime rule).
 	var tryBlockRoutingSuppressed as bool
-	// ⭐ **THE MOST RECENT CO-OWN OF A SUBSTITUTED `T` CALL RESULT** — read by `parseTryCallTarget` to tell an
-	// author that a `try` cannot take such a value here (see `SubstitutedCoOwn` for the whole argument).
+	// ⭐ **THE MOST RECENT CO-OWN OF A SUBSTITUTED `T` CALL RESULT** — read by `parseTryCallTarget`, which
+	// LIFTS the promotion onto the ok edge when the `try` is about to fork on the call that produced it (see
+	// `SubstitutedCoOwn` for the whole argument).
 	//
 	// ⚠ **IT DELIBERATELY DOES *NOT* JOIN THE PER-FUNCTION RESET / PER-CLOSURE SAVE-RESTORE DISCIPLINE ABOVE**,
 	// and that is a property of what it holds rather than an omission: its `promotionFloor` is a
@@ -7020,6 +6999,11 @@ export type Parser
 	// record therefore answers "not this target" by construction — where a value-keyed mark would have had to
 	// be cleared in three places and restored in one, which is the exact shape of the bug the review of this
 	// batch found in the closure save/restore.
+	//
+	// ⚠ **THE `liftedForOkEdge` STATE IS THE ONE THING HERE THAT IS NOT SELF-EXPIRING, AND IT IS SPENT WITHIN
+	// THE SAME `try`.** Between the lift and the re-attach the parser mints a flag, rewrites the call, tests
+	// the callee's `throws` clause and opens one block; none of that can reach `emitCall`, so no second co-own
+	// can overwrite an unspent lift. `coOwnSubstitutedCallResult` panics rather than trusting that by memory.
 	var lastSubstitutedCoOwn as SubstitutedCoOwn
 	// The enclosing match STATEMENTS, innermost last — the other half of the break-target stack (see
 	// `MatchContext` for why `break` needs its own rather than sharing `loops`). `continue` never reads
@@ -18892,7 +18876,7 @@ export type Parser
 		// desugars into a fork and the outer call lands in the merge block, so a per-block count would be
 		// measured against a block that is no longer current.
 		let targetOpFloor = self.artifact.module.ops.count()
-		let result = try self.parseTryCallTarget(func, tryTok: tryTok, targetOpFloor: targetOpFloor)
+		let result = try self.parseTryCallTarget(func, targetOpFloor: targetOpFloor)
 		let flag = self.mintValue(ValueTypeTag.integer, nameId: UnnamedTypeId)
 		let target = try self.rewriteLastCallToTryCall(func, flag: flag, tryTok: tryTok, targetOpFloor: targetOpFloor)
 
@@ -18952,52 +18936,135 @@ export type Parser
 	// `try` it. That is what a bare `h()` gets everywhere else in the language today; the block form does not
 	// make it worse, it simply does not yet make it better.
 	//
-	// ⛔ **AND IT IS ALSO WHERE THE SUBSTITUTED-CO-OWN REFUSAL SITS, FOR THE SAME "BOTH FORMS FUNNEL HERE"
-	// REASON THE SUPPRESSION DOES.** The two doors — `parseTry` and `parseCatchingCondition` — both take the
-	// target's VALUE and both hand the last op to `rewriteLastCallToTryCall`, so both are broken by a
-	// promotion trailing the call and both must say the same thing about it. `targetOpFloor` and `tryTok`
-	// are threaded in rather than re-derived because each caller already holds both, and because the floor
-	// is only meaningful where the caller reads it: taken HERE it would be measured after whatever the `try`
+	// ⛔ **AND IT IS ALSO WHERE THE SUBSTITUTED CO-OWN IS LIFTED ONTO THE OK EDGE, FOR THE SAME "BOTH FORMS
+	// FUNNEL HERE" REASON THE SUPPRESSION IS.** The two doors — `parseTry` and `parseCatchingCondition` —
+	// both take the target's VALUE and both hand the last op to `rewriteLastCallToTryCall`, so both are
+	// broken by a promotion trailing the call and both need the identical repair. `targetOpFloor` is
+	// threaded in rather than re-derived because each caller already holds it, and because the floor is only
+	// meaningful where the caller reads it: taken HERE it would be measured after whatever the `try`
 	// keyword's own consumption emitted, which is not the same question.
-	function parseTryCallTarget(func IrFunction, tryTok Token, targetOpFloor OpIndex) returns ValueId throws ParseError
+	function parseTryCallTarget(func IrFunction, targetOpFloor OpIndex) returns ValueId throws ParseError
 		let savedRoutingSuppressed = self.tryBlockRoutingSuppressed
 		self.tryBlockRoutingSuppressed = true
 		let target = try self.parseTryTargetExpression(func)
 		self.tryBlockRoutingSuppressed = savedRoutingSuppressed
 
-		try self.requireTryTargetIsNotACoOwnedSubstitution(target, tryTok: tryTok, targetOpFloor: targetOpFloor)
+		self.liftSubstitutedCoOwnForOkEdge(target, targetOpFloor: targetOpFloor)
 		return target
 	end 'parseTryCallTarget'
 
-	// ⛔⛔ **A `try` WHOSE VALUE IS THE CALLER'S OWN REFERENCE TO A SUBSTITUTED `T` RESULT IS REFUSED, AND
-	// REFUSED BY NAME.** The reference has to be taken AFTER the call returns (`coOwnSubstitutedCallResult`
-	// — a shared generic body cannot classify `T`, so it hands back a borrow), while an expression `try`
-	// splits on the error flag at exactly that point. The only block the promotion could sit in is the one
-	// both edges flow from, and on the error edge the result register was never written — so there is
-	// nowhere to put it, and the construct is refused rather than miscompiled.
+	// ⭐⭐ **A `try` WHOSE VALUE IS THE CALLER'S OWN REFERENCE TO A SUBSTITUTED `T` RESULT TAKES THAT
+	// REFERENCE ON THE OK EDGE — SO THE PROMOTION'S OPS COME OFF THE BLOCK THE FORK SPLITS.** The reference
+	// has to be taken AFTER the call returns (`coOwnSubstitutedCallResult` — a shared generic body cannot
+	// classify `T`, so it hands back a borrow), while the `try` splits on the error flag at exactly that
+	// point. Left where it was emitted it is BOTH the op `rewriteLastCallToTryCall` claims — the author is
+	// told about the compiler's own `__mm_retain` — and, once the rewrite is pointed past it, a `+1` on the
+	// error edge, where the result register the throw zeroed would be increfed. Lifted here and re-attached
+	// by the fork, it is neither.
 	//
-	// ⚠ **IT IS A GATE AHEAD OF A BROKEN INTERACTION, NOT A CHANGE TO THE CO-OWN.** Before it, the
-	// try-rewrite silently claimed the promotion instead of the call and the author was told about the
-	// compiler's own `__mm_retain`. What is refused here is the same set of programs that were refused
-	// before — with the noun the program actually contains.
-	//
-	// ⭐ **THE BLOCK FORM IS THE CURE, AND IT ALREADY WORKS** — it forks BEFORE the call's result is
-	// promoted (`routeBareThrowingCallToTryBlock` runs at emission, ahead of the co-own) and takes the
-	// reference on the ok continuation alone, which is the one edge that wrote the result. That is why
-	// `generic-managed-return-routed-through-a-try-block` runs and this does not, and it is what the
-	// sentence points the author at.
+	// ⭐ **THE SHAPE THIS PRODUCES IS THE BLOCK FORM'S, WHICH HAS ALWAYS BEEN RIGHT** — `call → flag →
+	// condBranch → retain as the first op of the ok block`
+	// (`generic-managed-return-routed-through-a-try-block`). There the ordering falls out for free, because
+	// `routeBareThrowingCallToTryBlock` forks at emission time, AHEAD of the co-own. The expression and
+	// condition forms fork after it, so what is free there is a MOVE here — the same move
+	// `parseTernaryExpression` makes on a true arm parsed onto the unconditional path before the form
+	// announced itself. The ops keep their `module.ops` indices; only the block referencing them changes.
 	//
 	// ⚠ **THE ORACLE IS NOT THE ARBITER HERE.** MEASURED on the bootstrap: the same program compiles, prints
 	// its value, and then dies with `mm_decref: refcount underflow (already zero)` — it takes no reference
-	// and over-releases. So the eventual capability has to derive its ownership from the rule, not from what
-	// the reference compiler happens to emit.
-	function requireTryTargetIsNotACoOwnedSubstitution(target ValueId, tryTok Token, targetOpFloor OpIndex) throws ParseError
-		if not substitutedCoOwnProducedTryTarget(self.lastSubstitutedCoOwn, target: target, targetOpFloor: targetOpFloor) 'notACoOwnedSubstitution'
-			return
-		end 'notACoOwnedSubstitution'
+	// and over-releases. So this derives its ownership from the rule and from the block form's shape, not
+	// from what the reference compiler happens to emit.
+	function liftSubstitutedCoOwnForOkEdge(target ValueId, targetOpFloor OpIndex)
+		match self.lastSubstitutedCoOwn 'record'
+			at(promotionFloor, blockId, opRefMark, owned) then self.liftPromotionOpsForOkEdge(promotionFloor, blockId: blockId, opRefMark: opRefMark, owned: owned, target: target, targetOpFloor: targetOpFloor)
+			none then break 'record'
+			liftedForOkEdge then panic("liftSubstitutedCoOwnForOkEdge: a promotion lifted for an earlier `try`'s ok edge was never re-attached — every lift is spent by the fork that caused it, before that fork can parse another call")
+		end 'record'
+	end 'liftSubstitutedCoOwnForOkEdge'
 
-		throw ParseError.unsupported("`try` cannot take the value of '{String.from(substitutedCoOwnMethod(self.lastSubstitutedCoOwn))}' here — its return type is the type argument the instance fixes, so the caller must take its own reference to the result after the call returns, and an expression `try` has nowhere to put that reference but the fork both edges flow from, where the error edge never wrote the result. Use the block form — `try 'label' … end 'label' otherwise (e) 'handler' … end 'handler'` — which forks first and takes the reference on the ok continuation", line: tryTok.line, column: tryTok.column)
-	end 'requireTryTargetIsNotACoOwnedSubstitution'
+	// ⭐⭐ **TAKE THE OPS A BLOCK HAS GAINED SINCE `mark` OFF IT, AND HAND THEM BACK — the half the parser's TWO
+	// relocations share.** A ternary's TRUE ARM is parsed onto the unconditional path before the `if` announces
+	// the form (`parseTernaryExpression`), and a substituted `T` result's co-own is emitted onto the block a
+	// `try` is about to fork (`liftPromotionOpsForOkEdge`); both then re-attach the ops inside a block only ONE
+	// edge reaches. The ops keep their `module.ops` indices — only the block referencing them changes.
+	//
+	// ⚠ **COLLECT AND TRUNCATE ARE ONE OPERATION, WHICH IS WHY THEY ARE ONE FUNCTION.** A collect without the
+	// truncate leaves the ops running on the path that was supposed to lose them — a `+1` (or a whole arm) on
+	// both edges of a fork, which is a leak on one of them and no diagnostic on either.
+	function detachOpRefsAbove(block IrBlock, mark ElementCount) returns OpIndexArray
+		var detached = OpIndexArray.create()
+		for i in mark upto block.opRefs.count() 'collect'
+			detached.push(try block.opRefs.get(i) otherwise panic("detachOpRefsAbove: block {block.id} opRefs.get OOB at {i}"))
+		end 'collect'
+		while block.opRefs.count() > mark 'truncate'
+			_ = try block.opRefs.pop() otherwise panic("detachOpRefsAbove: block {block.id} opRefs.pop above the mark {mark} failed")
+		end 'truncate'
+
+		return detached
+	end 'detachOpRefsAbove'
+
+	// ⭐ **WHETHER THIS RECORD IS THE TARGET'S OWN PROMOTION — TWO HALVES, AND NEITHER IMPLIES THE OTHER:**
+	//
+	//   • the VALUE identity says the promotion is the TARGET'S OWN trailing op rather than one taken for an
+	//     ARGUMENT of it. `try consume(bx.fetch())` co-owns too, but that promotion is emitted BEFORE
+	//     `consume`'s call and belongs on the unconditional path: the value it takes a reference to is one
+	//     `consume` is handed, not one the ok edge produces, and moving it past `consume`'s own fork would
+	//     hand the callee the borrow the `+1` exists to replace.
+	//   • the OP FLOOR says the record was minted during THIS target's parse. `module.ops` is append-only for
+	//     the whole file and nothing truncates it, so an index below the floor cannot belong to the target —
+	//     which is also what lets this record live with NO per-function reset and NO closure save/restore,
+	//     unlike every value-keyed mark beside it. ValueIds are numbered from zero again in each function and
+	//     each closure body (`mintValue`), so identity ALONE would let a stale record from one function move
+	//     ops out from under an unrelated `try` in the next.
+	//
+	// Past that gate, the promotion's ops are the tail of its block's `opRefs` since the mark — nothing else
+	// emits between a call's own co-own and the end of the target's parse — so the lift is a SLICE and needs
+	// no search.
+	function liftPromotionOpsForOkEdge(promotionFloor OpIndex, blockId BlockId, opRefMark ElementCount, owned ValueId, target ValueId, targetOpFloor OpIndex)
+		if owned != target or promotionFloor < targetOpFloor 'notThisTargetsOwnPromotion'
+			return
+		end 'notThisTargetsOwnPromotion'
+
+		// A promotion mints a value distinct from its source, so it always emitted at least one op; and it
+		// emitted them into the block the parse is still in, because a value-producing construct is the only
+		// thing that moves `currentBlock` and the target produced no value after this one. Both are the
+		// premises the slice below rests on, so both are asserted rather than assumed.
+		if blockId != self.currentBlock.id 'promotionLeftItsBlock'
+			panic("liftPromotionOpsForOkEdge: the promotion for v{owned} emitted into block {blockId} but the target's parse ended in block {self.currentBlock.id} — the lift moves a SUFFIX of one block's opRefs, so a promotion the parse has since left cannot be the target's own trailing op")
+		end 'promotionLeftItsBlock'
+
+		let lifted = self.detachOpRefsAbove(self.currentBlock, mark: opRefMark)
+		if lifted.count() == 0 'promotionEmittedNothing'
+			panic("liftPromotionOpsForOkEdge: the promotion for v{owned} left no ops above the mark {opRefMark} — `promoteBorrowedToOwned` mints a value distinct from its source, so it always emits")
+		end 'promotionEmittedNothing'
+
+		self.lastSubstitutedCoOwn = SubstitutedCoOwn.liftedForOkEdge(lifted)
+	end 'liftPromotionOpsForOkEdge'
+
+	// ⭐ **SPEND A LIFTED PROMOTION AT THE HEAD OF THE FORK'S OK EDGE.** Both doors call it on a block they
+	// have just minted and not yet emitted into, so the promotion lands FIRST — ahead of the fork's own
+	// temporary drops, which matters when the value it takes a reference to is read out of one of them
+	// (`try make().fetch()` releases the receiver on both edges at the fork). The two ok edges are
+	// `desugarTry`'s `tryok` and the catching `if`'s THEN block, which is the ok edge because
+	// `parseCatchingCondition` tests `flag == 0`.
+	function attachSubstitutedCoOwnToOkEdge(okBlock IrBlock)
+		match self.lastSubstitutedCoOwn 'record'
+			at to none then break 'record'
+			liftedForOkEdge(opRefs) then self.placeLiftedCoOwnAtHeadOf(okBlock, opRefs: opRefs)
+		end 'record'
+	end 'attachSubstitutedCoOwnToOkEdge'
+
+	function placeLiftedCoOwnAtHeadOf(okBlock IrBlock, opRefs OpIndexArray)
+		if okBlock.opRefs.count() != 0 'okEdgeAlreadyEmittedInto'
+			panic("placeLiftedCoOwnAtHeadOf: block {okBlock.id} already holds {okBlock.opRefs.count()} op(s) — a lifted promotion must be the FIRST thing on the ok edge, ahead of the fork's own drops")
+		end 'okEdgeAlreadyEmittedInto'
+
+		// Written through a `var` alias of the same record, the `poisonValueAliases` idiom: the block is a
+		// heap `type`, so this is the block the fork will go on emitting into.
+		var edge = okBlock
+		edge.opRefs = opRefs
+		self.lastSubstitutedCoOwn = SubstitutedCoOwn.none
+	end 'placeLiftedCoOwnAtHeadOf'
 
 	// The target's GRAMMAR, split from the state above so the flag brackets every path through it.
 	function parseTryTargetExpression(func IrFunction) returns ValueId throws ParseError
@@ -19443,6 +19510,12 @@ export type Parser
 		let isErr = try self.emitCompare(flag, rhs: noError, op: MaxonCmpOp.ne, opTok: tryTok)
 
 		var okBlock = self.newBlock(func, label: b"tryok", line: tryTok.line)
+		// ⭐ **THE CALLER'S `+1` FOR A SUBSTITUTED `T` RESULT LANDS HERE, FIRST.** `parseTryCallTarget` lifted
+		// it off `entryBlock` because that block is what the branch below splits, and on the error edge the
+		// result register was never written. Nothing has emitted into `okBlock` yet, so the promotion is
+		// ahead of the fork's own temporary drops — which matters when the promoted value is read out of one
+		// of them.
+		self.attachSubstitutedCoOwnToOkEdge(okBlock)
 		let errBlock = self.newBlock(func, label: b"tryerr", line: tryTok.line)
 		self.emitCondBranch(entryBlock, cond: isErr, thenId: errBlock.id, elseId: okBlock.id, ifTok: tryTok)
 
@@ -22424,7 +22497,7 @@ export type Parser
 		let tryTok = try self.consume(TokenKind.try)
 
 		let targetOpFloor = self.artifact.module.ops.count()
-		let result = try self.parseTryCallTarget(func, tryTok: tryTok, targetOpFloor: targetOpFloor)
+		let result = try self.parseTryCallTarget(func, targetOpFloor: targetOpFloor)
 		let flag = self.mintValue(ValueTypeTag.integer, nameId: UnnamedTypeId)
 		let target = try self.rewriteLastCallToTryCall(func, flag: flag, tryTok: tryTok, targetOpFloor: targetOpFloor)
 		try self.requireThrowingTryTarget(target, tryTok: tryTok)
@@ -22462,6 +22535,12 @@ export type Parser
 	//     result is dropped at the TOP of the then block. Never in the continuation: the error edge reaches
 	//     that too, with a NULL register a decref would fault on.
 	function parseCaughtThenBody(func IrFunction, thenBlock IrBlock, label ByteArray, result ValueId, binder IfBinder, anchor Token) returns IrBlock throws ParseError
+		// ⭐ **THIS IS THE OK EDGE, so a substituted `T` result's co-own lands here** — `parseCatchingCondition`
+		// tests `flag == 0`, so the THEN block is the edge the `tryCall` wrote the result on. Lifted off the
+		// condition's entry block by `parseTryCallTarget`, and placed before the binding or the discard drop
+		// below, both of which name the promoted value.
+		self.attachSubstitutedCoOwnToOkEdge(thenBlock)
+
 		match binder 'b'
 			none then break 'b'
 			binding(nameIndex, mutable) then return try self.parseBoundThenBody(func, thenBlock: thenBlock, label: label, result: result, nameIndex: nameIndex, mutable: mutable)
@@ -28484,13 +28563,7 @@ export type Parser
 		// flow — unset/empty for a straight-line arm, since `startBlock` was unterminated at the mark) and its
 		// inner blocks (the `func.blockRefs` tail since the mark) go with them. The ops keep their
 		// `module.ops` indices; only the block that references them changes.
-		var relocatedOpRefs = OpIndexArray.create()
-		for i in markOpRefCount upto startBlock.opRefs.count() 'collectOps'
-			relocatedOpRefs.push(try startBlock.opRefs.get(i) otherwise panic("parseTernaryExpression: startBlock.opRefs.get OOB at {i}"))
-		end 'collectOps'
-		while startBlock.opRefs.count() > markOpRefCount 'truncOps'
-			_ = try startBlock.opRefs.pop() otherwise panic("parseTernaryExpression: startBlock.opRefs.pop above the mark {markOpRefCount} failed")
-		end 'truncOps'
+		let relocatedOpRefs = self.detachOpRefsAbove(startBlock, mark: markOpRefCount)
 
 		let savedTerminator = startBlock.terminator
 		let savedEdges = startBlock.branchEdges
@@ -46473,17 +46546,20 @@ export type Parser
 	// unchanged for it.
 	//
 	// ⚠ **IT IS ALSO THE ONE WRITER OF `lastSubstitutedCoOwn`, AND THE EARLY RETURN ABOVE IS WHAT MAKES THAT
-	// RECORD EXACT.** The `try` refusal that reads it must fire for a managed argument and must NOT fire for a
+	// RECORD EXACT.** The `try` lift that reads it must fire for a managed result and must NOT fire for a
 	// trivial one — which is precisely the split this function already makes, so recording it HERE keeps the
-	// refusal's condition and the promotion's condition one fact instead of two that can drift.
+	// lift's condition and the promotion's condition one fact instead of two that can drift.
 	function coOwnSubstitutedCallResult(result ValueId, callee ByteArray, range SourceRange) returns ValueId throws ParseError
 		if not self.valueIsManagedHeap(result) 'trivialInstantiation'
 			return result
 		end 'trivialInstantiation'
 
-		// Read BEFORE the promotion: it is the floor of the ops the promotion is about to append, which is
-		// what `substitutedCoOwnProducedTryTarget` measures against the try target's own floor.
+		// Read BEFORE the promotion: the module-op floor and the block-local `opRefs` height are what
+		// `liftSubstitutedCoOwnForOkEdge` measures against the try target's own floor and slices the
+		// promotion's ops out of.
 		let promotionFloor = self.artifact.module.ops.count()
+		let promotionBlock = self.currentBlock
+		let opRefMark = promotionBlock.opRefs.count()
 		let owned = try self.promoteBorrowedToOwned(result, door: BorrowLaunderDoor.returned, range: range)
 
 		// ⚠ **NORMALIZED, THE WAY `promoteBorrowedMergeEdge` NORMALIZES IT THE OTHER WAY.** The promotion's
@@ -46497,9 +46573,21 @@ export type Parser
 			self.trackOwnedTemp(owned)
 		end 'statementStillOwesTheDrop'
 
-		self.lastSubstitutedCoOwn = SubstitutedCoOwn.at(promotionFloor, owned: owned, callee: callee)
+		self.requireNoUnspentSubstitutedCoOwnLift(callee)
+		self.lastSubstitutedCoOwn = SubstitutedCoOwn.at(promotionFloor, blockId: promotionBlock.id, opRefMark: opRefMark, owned: owned)
 		return owned
 	end 'coOwnSubstitutedCallResult'
+
+	// A lift is spent by the fork that caused it before that fork parses anything else, so a second co-own
+	// can never overwrite one in flight. Asserted rather than remembered: overwriting a lift would DELETE the
+	// earlier promotion's ops from the module's block graph — a `+1` that silently stops being taken, which
+	// is a use-after-free at the far end and nothing at all at this one.
+	function requireNoUnspentSubstitutedCoOwnLift(callee ByteArray)
+		match self.lastSubstitutedCoOwn 'record'
+			at to none then break 'record'
+			liftedForOkEdge then panic("coOwnSubstitutedCallResult: co-owning '{String.from(callee)}'s substituted result would overwrite a promotion already lifted for a `try`'s ok edge and not yet re-attached")
+		end 'record'
+	end 'requireNoUnspentSubstitutedCoOwnLift'
 
 	// ⭐ **SUPPLY EVERY ARGUMENT THE CALL OMITTED AND THE DECLARATION DEFAULTS** (BATCH2 slice 4) — each one
 	// becomes a call to the declaration's synthesized helper, appended with the parameter's own NAME as its

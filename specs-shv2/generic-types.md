@@ -2964,21 +2964,21 @@ ok=9
 caught
 ```
 
-<!-- test: error.expression-form-try-over-a-substituted-return -->
-⛔ **THE EXPRESSION FORM OF THE CASE THE BLOCK FORM ABOVE HANDLES, AND IT IS REFUSED RATHER THAN
-MISCOMPILED.** The caller — not the shared body — takes the reference a substituted `T` result needs
-(`coOwnSubstitutedCallResult`), and it can only take it AFTER the call has returned. An expression `try`
-splits on the error flag at exactly that point, so the only place the promotion could sit is a block both
-edges flow from — and on the error edge the result register was never written. There is nowhere to put
-it, so the construct is refused with the mechanism named. The BLOCK form has somewhere: it forks first
-and co-owns on the ok continuation alone, which is why `generic-managed-return-routed-through-a-try-block`
-runs and this does not.
+<!-- test: expression-form-try-over-a-substituted-return -->
+⭐⭐ **THE EXPRESSION FORM OF THE CASE THE BLOCK FORM ABOVE HANDLES, AND IT REACHES THE SAME SHAPE BY THE
+SAME RULE: THE CALLER'S `+1` RIDES THE OK EDGE.** A shared generic body cannot classify its `T` return, so
+it hands one back as a BORROW and the caller takes its own reference (`coOwnSubstitutedCallResult`) —
+necessarily after the call, which is where the value exists. An expression `try` splits on the error flag
+at exactly that point, and on the error edge the result register was never written, so the promotion may
+not sit in the block both edges flow from. It does not: its ops are lifted off the fork's entry block and
+re-attached as the FIRST ops of `tryok`, the one edge the `tryCall` wrote the result on. That is the shape
+`generic-managed-return-routed-through-a-try-block` already emits — reached here by MOVING the ops the
+call left behind rather than by building a second mechanism to emit them elsewhere.
 
 ⚠ **THE ORACLE MISCOMPILES THIS PROGRAM, so it is NOT the arbiter for the capability.** MEASURED on the
 bootstrap: it compiles, prints `v=9`, and then dies with `mm_decref: refcount underflow (already zero)`
-in `__destruct_AlphaBox`, exit 1 — it takes no reference and then over-releases. shv2's refusal is the
-safer of the two answers, and whoever builds the capability must derive the ownership from the rule
-rather than from what the reference does.
+in `__destruct_AlphaBox`, exit 1 — it takes no reference and then over-releases. shv2's answer is derived
+from the rule and from the block form's golden shape, never from what the reference emits.
 ```maxon
 typealias Integer = int(0 to 125)
 enum Boom implements Error
@@ -3007,19 +3007,22 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E2015: <fragment>:24:12: Unsupported: `try` cannot take the value of 'Box.fetch' here — its return type is the type argument the instance fixes, so the caller must take its own reference to the result after the call returns, and an expression `try` has nowhere to put that reference but the fork both edges flow from, where the error edge never wrote the result. Use the block form — `try 'label' … end 'label' otherwise (e) 'handler' … end 'handler'` — which forks first and takes the reference on the ok continuation
+```exitcode
+0
+```
+```stdout
+v=9
 ```
 
-<!-- test: error.expression-form-try-over-a-substituted-string-return -->
-The same refusal for the other managed spelling, which reached it by a different wrong road: a `String`
+<!-- test: expression-form-try-over-a-substituted-string-return -->
+The other managed spelling, which used to reach the refusal by a different wrong road: a `String`
 substitution promotes by COPYING (`promoteToOwnedString`), so the op the try-rewrite found trailing the
 target was a string-interpolation rather than the aggregate's `__mm_retain` call, and the program was
 told *"the expression after `try` is not a call"* about a program whose `try` is applied to exactly one.
-Both spellings are one construct and get one sentence -- a refusal that only taught the aggregate arm
-would leave half the wrong noun live.
+Both spellings are ONE construct, so the move onto the ok edge is keyed on the promotion's op RANGE and
+not on which op the promotion happened to end with — a cure that only understood the aggregate arm's
+single `call` would leave the interpolation's whole op chain on the fork's entry block.
 ```maxon
-typealias Integer = int(0 to 125)
 enum Boom implements Error
 	bad
 end 'Boom'
@@ -3040,8 +3043,11 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E2015: <fragment>:18:12: Unsupported: `try` cannot take the value of 'Box.fetch' here — its return type is the type argument the instance fixes, so the caller must take its own reference to the result after the call returns, and an expression `try` has nowhere to put that reference but the fork both edges flow from, where the error edge never wrote the result. Use the block form — `try 'label' … end 'label' otherwise (e) 'handler' … end 'handler'` — which forks first and takes the reference on the ok continuation
+```exitcode
+0
+```
+```stdout
+v=hi
 ```
 
 <!-- test: expression-form-try-over-a-trivial-substituted-return -->
@@ -3049,9 +3055,10 @@ error E2015: <fragment>:18:12: Unsupported: `try` cannot take the value of 'Box.
 owns no heap, so `coOwnSubstitutedCallResult` returns early and emits nothing at all — the call op is
 still the last op the target emitted, the rewrite claims it, and the program compiles and runs. That
 asymmetry between `Box with Integer` and `Box with Alpha` is what identified the co-own's promotion,
-rather than anything about `try` or about generics, as what the rewrite was grabbing. The refusal above
-must stay narrow enough to leave this running: widened to every substituted return it swallows this
-case, which is the sabotage this control is here to fail.
+rather than anything about `try` or about generics, as what the rewrite was grabbing. It stays a control
+after the cure: there is no promotion here to move onto the ok edge, so **not one op may change** and the
+golden must not budge. Widen the move to every substituted return and this case starts relocating the
+CALL itself — the sabotage this control is here to fail.
 ```maxon
 typealias Integer = int(0 to 125)
 enum Boom implements Error
@@ -3081,12 +3088,13 @@ end 'main'
 v=9
 ```
 
-<!-- test: error.condition-form-try-over-a-substituted-return -->
-⚠ **THE SIBLING DOOR, WHICH HAD THE SAME WRONG NOUN AND NEEDED THE SAME SENTENCE.** `if let x = try …`
-does not go through `parseTry` at all — `parseCatchingCondition` runs the same three steps and lets the
-`if` own the fork — but it takes the target's VALUE through the identical `parseTryCallTarget`, so it was
-broken identically and told the author about `__mm_retain` identically. The refusal lives at that one
-funnel rather than at each door, which is why both spellings say this without either being written twice.
+<!-- test: condition-form-try-over-a-substituted-return -->
+⚠ **THE SIBLING DOOR, WHICH HAD THE SAME WRONG NOUN AND TAKES THE SAME CURE.** `if let x = try …` does not
+go through `parseTry` at all — `parseCatchingCondition` runs the same three steps and lets the `if` own the
+fork — but it takes the target's VALUE through the identical `parseTryCallTarget`, so it was broken
+identically and told the author about `__mm_retain` identically. The promotion is lifted off the condition's
+entry block at that ONE funnel, and each door re-attaches it at the head of its own ok edge: `tryok` for the
+expression form, the `if`'s THEN block here (the condition tests `flag == 0`, so then IS the ok edge).
 ```maxon
 typealias Integer = int(0 to 125)
 enum Boom implements Error
@@ -3112,23 +3120,29 @@ function main() returns ExitCode
 	let bx = AlphaBox.create(Alpha.create(9))
 	if let got = try bx.fetch() 'ok'
 		print("v={got.a}\n")
-	end 'ok' otherwise (e) 'bad'
+	end 'ok' else (e) 'bad'
 		print("boom\n")
 	end 'bad'
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E2015: <fragment>:24:15: Unsupported: `try` cannot take the value of 'Box.fetch' here — its return type is the type argument the instance fixes, so the caller must take its own reference to the result after the call returns, and an expression `try` has nowhere to put that reference but the fork both edges flow from, where the error edge never wrote the result. Use the block form — `try 'label' … end 'label' otherwise (e) 'handler' … end 'handler'` — which forks first and takes the reference on the ok continuation
+```exitcode
+0
+```
+```stdout
+v=9
 ```
 
 <!-- test: try-over-a-call-whose-argument-is-a-substituted-return -->
-⭐ **THE SECOND NEGATIVE CONTROL, AND THE ONE THAT PINS THE OTHER HALF OF THE REFUSAL'S CONDITION.** A
+⭐ **THE SECOND NEGATIVE CONTROL, AND THE ONE THAT PINS THE OTHER HALF OF THE MOVE'S CONDITION.** A
 substituted `T` result is co-owned here too — `bx.get()` returns `Alpha` — but it is an ARGUMENT of the
 try target, so its promotion is emitted BEFORE `consume`'s call and `consume`'s call is still the last op
-the target left behind. The rewrite claims the right op and the program is legal. That is why the refusal
-tests the co-own's own VALUE against the target rather than merely asking whether a co-own happened
-inside the target's extent: the looser question is true here, and answering it would lose this program.
+the target left behind. The rewrite claims the right op and the program is legal WITHOUT anything moving:
+the promotion belongs on the unconditional path here, because the value it takes a reference to is one
+`consume` is handed and not one the fork's ok edge produces. That is why the move tests the co-own's own
+VALUE against the target rather than merely asking whether a co-own happened inside the target's extent:
+the looser question is true here, and a deferral keyed on it would carry this retain past `consume`'s own
+fork — a `+1` on the wrong side of a split, and an argument handed the borrow it was taken to replace.
 ```maxon
 typealias Integer = int(0 to 125)
 enum Boom implements Error
@@ -3168,4 +3182,59 @@ end 'main'
 ```
 ```stdout
 n=9
+```
+
+<!-- test: try-over-a-substituted-return-whose-receiver-is-a-fork-temporary -->
+⭐⭐ **THE CO-OWN LANDS *FIRST* ON THE OK EDGE, AHEAD OF THE FORK'S OWN DROPS — AND THIS IS THE PROGRAM
+THAT CAN TELL.** `try make(f).fetch()` builds its receiver as a TEMPORARY, and `desugarTry` releases the
+fork's temporaries at the top of BOTH edges (they are live on each and each must drop them once). The
+box's release runs `__destruct_Box_Alpha`, which decrefs the very `Alpha` the promotion is about to take a
+reference to — so a co-own placed after those drops retains a freed record and `got.a` reads the `0x3F3F…`
+poison. Placed first, it holds the field alive across the box's own death and the answer is **11**.
+
+Every other case in this family binds its receiver, so the box outlives the statement and the ordering is
+unobservable. This one is why `attachSubstitutedCoOwnToOkEdge` is called on a block nothing has emitted
+into yet, rather than merely "somewhere on the ok edge".
+```maxon
+typealias Integer = int(0 to 125)
+enum Boom implements Error
+	bad
+end 'Boom'
+type Alpha
+	export var a as Integer
+	export static function create(v Integer) returns Self
+		return Self{a: v}
+	end 'create'
+end 'Alpha'
+type Box uses T
+	export var value as T
+	export var fail as bool
+	export static function create(v T, f bool) returns Self
+		return Self{value: v, fail: f}
+	end 'create'
+	export function fetch() returns T throws Boom
+		if self.fail 'boom'
+			throw Boom.bad
+		end 'boom'
+		return self.value
+	end 'fetch'
+end 'Box'
+typealias AlphaBox = Box with Alpha
+function make(f bool) returns AlphaBox
+	return AlphaBox.create(Alpha.create(11), f: f)
+end 'make'
+function forkTemp(f bool) returns Integer
+	let got = try make(f).fetch() otherwise Alpha.create(1)
+	return got.a
+end 'forkTemp'
+function main() returns ExitCode
+	print("ok={forkTemp(false)} err={forkTemp(true)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+ok=11 err=1
 ```
