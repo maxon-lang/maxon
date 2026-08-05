@@ -86,6 +86,12 @@ export let Utf8ThreeByteCeiling = 65536 as ParsedInt
 export let Utf8ContinuationFloor = 0x80 as ParsedInt
 
 let Utf8OneByteLength = 1 as ParsedInt
+// The other three widths of the SAME ladder, named for `Utf8OneByteLength`'s reason: the encoder
+// (`buildCharFromCodepoint`) allocates a record of exactly the width its arm took, and "3" spelled bare
+// beside `Utf8ThreeByteHighShift` would be the one number in the group that had to be re-derived to read.
+let Utf8TwoByteLength = 2 as ParsedInt
+let Utf8ThreeByteLength = 3 as ParsedInt
+let Utf8FourByteLength = 4 as ParsedInt
 
 // ⭐ **`GraphemeState` PACKED INTO ONE MACHINE WORD**, because a Std runtime function returns exactly one
 // value and the reference's state is a two-field struct (`GraphemeState{riCount, inEmojiSeq}`,
@@ -113,6 +119,9 @@ let Utf8OneByteLength = 1 as ParsedInt
 //   * `__gr_count(strRec)` — the cluster count, i.e. `String.count()`.
 //   * `__char_at(strRec, startPos, endPos)` — mint an OWNED `Character` from the byte range `[startPos,
 //     endPos)`. The ONE door a Character is born through.
+//   * `__char_from_cp(cp)` — mint an OWNED `Character` from a CODEPOINT, `__char_at`'s dual: it ENCODES
+//     UTF-8 where that one copies already-encoded bytes. The one producer of a Character with no String
+//     behind it, and what makes `for c in 'a' to 'e'` yield Characters (A5m-ab).
 //   * `__char_cmp(a, b)` — `a.compare(b)` as an `Ordering` tag: the lexicographic byte order of two
 //     Characters (`stdlib/Character.maxon:80-104`), which is what `<`/`>`/`<=`/`>=` lower to (A5m-c). It
 //     BORROWS both records. The GRAPH is `BuiltinConformanceRuntime.buildByteRecordCompare`, installed there
@@ -129,6 +138,7 @@ let Utf8OneByteLength = 1 as ParsedInt
 //     push-only contract, one UTF-8 walk each. They fill an `Array with integer` rather than an
 //     `Array with Byte` — see `buildStrToUtf16` for why the element is the plain integer instance.
 export let CharAtName = b"__char_at"
+export let CharFromCodepointName = b"__char_from_cp"
 export let CharCmpName = b"__char_cmp"
 export let CharAsciiValueName = b"__char_ascii"
 export let StrToBytesName = b"__str_to_bytes"
@@ -181,6 +191,9 @@ export function installGraphemeRuntime(module StdModule, usage RuntimeUsage)
 	if usage.usesCharAt 'charat'
 		buildCharAt(module)
 	end 'charat'
+	if usage.usesCharFromCodepoint 'charfromcp'
+		buildCharFromCodepoint(module)
+	end 'charfromcp'
 	if usage.usesCharCmp 'charcmp'
 		buildByteRecordCompare(module, name: CharCmpName)
 	end 'charcmp'
@@ -230,6 +243,120 @@ function buildCharAt(module StdModule)
 
 	module.functions.push(func)
 end 'buildCharAt'
+
+// ⭐⭐ **`__char_from_cp(cp) -> Character` — THE SECOND DOOR A `Character` IS BORN THROUGH, AND THE ONLY ONE
+// WITH NO STRING BEHIND IT.** `__char_at` COPIES bytes that are already UTF-8 in some record; this one
+// ENCODES a codepoint into a fresh owned record. `for c in 'a' to 'e'` is its consumer: a character range
+// iterates CODEPOINTS (both bounds are literals, so `Parser` knows them) and the body needs a real Character
+// per trip, which no byte range in memory holds.
+//
+// It is the dual of `Parser.appendUtf8Encoded` and of `stdlib/Character.maxon`'s `fromCodepoint`
+// (`:170-235`) — the SAME four-way ladder and the same bit layout, off the same eleven constants this file
+// already declares for the DECODER. A fifth spelling of "0xC0 | cp >> 6" would be the drift those constants
+// exist to prevent.
+//
+// The record is `emitAllocOwnedInlineString`'s, so a minted Character is byte-for-byte the record
+// `__char_at` mints and `__str_decref` reclaims it identically. `isAscii@40` is EXACT here rather than
+// inherited-and-conservative: the encoder knows which arm it took, so the one-byte arm publishes `true` and
+// the three wide arms publish `false`.
+//
+// ⚠ **NO ARM VALIDATES `cp`.** Its one caller decodes a character LITERAL, so the value is a codepoint the
+// lexer already accepted; a surrogate or an out-of-range number would encode to the same bytes the reference
+// encoder produces for it, which is the reference's behaviour too (`fromCodepoint` has no guard either).
+function buildCharFromCodepoint(module StdModule)
+	var func = IrFunction.createFromStd(CharFromCodepointName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var wide = module.addBlock(func, label: b"wide")
+	var three = module.addBlock(func, label: b"three")
+	var oneByte = module.addBlock(func, label: b"one")
+	var twoByte = module.addBlock(func, label: b"two")
+	var threeByte = module.addBlock(func, label: b"three3")
+	var fourByte = module.addBlock(func, label: b"four")
+
+	emitParams(module, block: entry, count: 1)
+	let cp = 0 as ValueId
+
+	emitUtf8WidthFork(module, block: entry, cp: cp, ceiling: Utf8OneByteCeiling, narrow: oneByte, wider: wide, ids: ids)
+	emitUtf8WidthFork(module, block: wide, cp: cp, ceiling: Utf8TwoByteCeiling, narrow: twoByte, wider: three, ids: ids)
+	emitUtf8WidthFork(module, block: three, cp: cp, ceiling: Utf8ThreeByteCeiling, narrow: threeByte, wider: fourByte, ids: ids)
+
+	// ASCII is the one width whose lead byte IS the codepoint, so it has no floor to add and it is the one
+	// arm that publishes `isAscii@40 = true`.
+	let asciiBuf = emitCharRecordBuffer(module, block: oneByte, byteLength: Utf8OneByteLength, isAscii: PredicateTrue, ids: ids)
+	emitStoreByteAtOffset(module, block: oneByte, buf: asciiBuf.buffer, offset: 0, value: cp)
+	module.setTerminator(oneByte, op: StdOp.ret(asciiBuf.record))
+
+	let twoBuf = emitCharRecordBuffer(module, block: twoByte, byteLength: Utf8TwoByteLength, isAscii: PredicateFalse, ids: ids)
+	emitStoreByteAtOffset(module, block: twoByte, buf: twoBuf.buffer, offset: 0, value: emitUtf8LeadByte(module, block: twoByte, cp: cp, floor: Utf8LeadTwoByteFloor, shift: Utf8ContinuationBits, ids: ids))
+	emitStoreByteAtOffset(module, block: twoByte, buf: twoBuf.buffer, offset: 1, value: emitUtf8ContinuationByte(module, block: twoByte, cp: cp, shift: 0, ids: ids))
+	module.setTerminator(twoByte, op: StdOp.ret(twoBuf.record))
+
+	let threeBuf = emitCharRecordBuffer(module, block: threeByte, byteLength: Utf8ThreeByteLength, isAscii: PredicateFalse, ids: ids)
+	emitStoreByteAtOffset(module, block: threeByte, buf: threeBuf.buffer, offset: 0, value: emitUtf8LeadByte(module, block: threeByte, cp: cp, floor: Utf8LeadThreeByteFloor, shift: Utf8ThreeByteHighShift, ids: ids))
+	emitStoreByteAtOffset(module, block: threeByte, buf: threeBuf.buffer, offset: 1, value: emitUtf8ContinuationByte(module, block: threeByte, cp: cp, shift: Utf8ContinuationBits, ids: ids))
+	emitStoreByteAtOffset(module, block: threeByte, buf: threeBuf.buffer, offset: 2, value: emitUtf8ContinuationByte(module, block: threeByte, cp: cp, shift: 0, ids: ids))
+	module.setTerminator(threeByte, op: StdOp.ret(threeBuf.record))
+
+	let fourBuf = emitCharRecordBuffer(module, block: fourByte, byteLength: Utf8FourByteLength, isAscii: PredicateFalse, ids: ids)
+	emitStoreByteAtOffset(module, block: fourByte, buf: fourBuf.buffer, offset: 0, value: emitUtf8LeadByte(module, block: fourByte, cp: cp, floor: Utf8LeadFourByteFloor, shift: Utf8FourByteHighShift, ids: ids))
+	emitStoreByteAtOffset(module, block: fourByte, buf: fourBuf.buffer, offset: 1, value: emitUtf8ContinuationByte(module, block: fourByte, cp: cp, shift: Utf8ThreeByteHighShift, ids: ids))
+	emitStoreByteAtOffset(module, block: fourByte, buf: fourBuf.buffer, offset: 2, value: emitUtf8ContinuationByte(module, block: fourByte, cp: cp, shift: Utf8ContinuationBits, ids: ids))
+	emitStoreByteAtOffset(module, block: fourByte, buf: fourBuf.buffer, offset: 3, value: emitUtf8ContinuationByte(module, block: fourByte, cp: cp, shift: 0, ids: ids))
+	module.setTerminator(fourByte, op: StdOp.ret(fourBuf.record))
+
+	module.functions.push(func)
+end 'buildCharFromCodepoint'
+
+// One rung of the encoder's width ladder: `cp < ceiling` picks `narrow`, anything else `wider`. Three
+// identical forks written once, so a ceiling cannot be tested with the wrong predicate in one arm and the
+// right one in another (`emitRangeTable`'s reason, one function up).
+function emitUtf8WidthFork(module StdModule, block IrBlock, cp ValueId, ceiling ParsedInt, narrow IrBlock, wider IrBlock, ids ValueMinter)
+	let bound = emitConst(module, block: block, value: ceiling, ids: ids)
+	let fits = emitCmp(module, block: block, a: cp, b: bound, pred: StdCmpPred.lt, ids: ids)
+	module.setTerminator(block, op: StdOp.condBranch(fits, thenBlockId: narrow.id, elseBlockId: wider.id))
+end 'emitUtf8WidthFork'
+
+// A fresh owned Character record of `byteLength` bytes, plus the address its bytes start at — the pair
+// every encoder arm needs and the one place the two are taken together.
+function emitCharRecordBuffer(module StdModule, block IrBlock, byteLength ParsedInt, isAscii ParsedInt, ids ValueMinter) returns CharRecordBuffer
+	let len = emitConst(module, block: block, value: byteLength, ids: ids)
+	let ascii = emitConst(module, block: block, value: isAscii, ids: ids)
+	let record = emitAllocOwnedInlineString(module, block: block, ids: ids, byteLen: len, isAscii: ascii)
+	return CharRecordBuffer.of(record, buffer: emitInlineStringBuffer(module, block: block, ids: ids, record: record))
+end 'emitCharRecordBuffer'
+
+// The record `emitCharRecordBuffer` allocated and the address of its inline bytes. Two values one caller
+// always wants together, so they travel as one rather than as two returns nobody can keep in step.
+type CharRecordBuffer
+	export let record as ValueId
+	export let buffer as ValueId
+
+	static function of(record ValueId, buffer ValueId) returns Self
+		return Self{record: record, buffer: buffer}
+	end 'of'
+end 'CharRecordBuffer'
+
+// `buf[offset] = value` as a byte — `emitStoreByte`'s constant-index twin, which every encoder arm uses
+// because its offsets are known and an index register would be an add per store.
+function emitStoreByteAtOffset(module StdModule, block IrBlock, buf ValueId, offset ByteOffset, value ValueId)
+	module.appendOp(block, op: StdOp.storeIndirect(buf, offset: offset, valueId: value, valueType: StdType.u8))
+end 'emitStoreByteAtOffset'
+
+// A UTF-8 LEAD byte: the width's floor OR the codepoint's high bits.
+function emitUtf8LeadByte(module StdModule, block IrBlock, cp ValueId, floor ParsedInt, shift ParsedInt, ids ValueMinter) returns ValueId
+	let high = emitBin(module, block: block, a: cp, b: emitConst(module, block: block, value: shift, ids: ids), opcode: StdBinOpcode.shrLogical, ids: ids)
+	return emitBin(module, block: block, a: high, b: emitConst(module, block: block, value: floor, ids: ids), opcode: StdBinOpcode.bitOr, ids: ids)
+end 'emitUtf8LeadByte'
+
+// A UTF-8 CONTINUATION byte: `0b10` followed by the six payload bits at `shift` —
+// `Parser.utf8ContinuationByte`, emitted rather than computed.
+function emitUtf8ContinuationByte(module StdModule, block IrBlock, cp ValueId, shift ParsedInt, ids ValueMinter) returns ValueId
+	let shifted = emitBin(module, block: block, a: cp, b: emitConst(module, block: block, value: shift, ids: ids), opcode: StdBinOpcode.shrLogical, ids: ids)
+	let payload = emitBin(module, block: block, a: shifted, b: emitConst(module, block: block, value: Utf8ContinuationMask, ids: ids), opcode: StdBinOpcode.bitAnd, ids: ids)
+	return emitBin(module, block: block, a: payload, b: emitConst(module, block: block, value: Utf8ContinuationFloor, ids: ids), opcode: StdBinOpcode.bitOr, ids: ids)
+end 'emitUtf8ContinuationByte'
 
 // ⭐ **`__char_ascii(charRec) -> (byte, flag)` — `Character.asciiValue()`, THE ONE THROWING `Character`
 // MEMBER**, transcribed from `stdlib/Character.maxon:154-166` rule for rule: a cluster whose byte length is

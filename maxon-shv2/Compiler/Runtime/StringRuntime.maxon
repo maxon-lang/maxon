@@ -588,6 +588,7 @@ export type RuntimeUsage
 	// `__char_at` MINTS a Character — one `__mm_alloc`'d fused record per call, blitted with `__str_copy`
 	// — so it declares the heap and the copy loop that `emitBuildOwnedInlineString` puts inside its body.
 	export var usesCharAt as bool
+	export var usesCharFromCodepoint as bool
 	// `__char_cmp` reads two BORROWED records' `buffer@0`/`length@8` and walks their bytes, allocating
 	// nothing and calling nothing — `__char_ascii`'s floor-free shape, so it has no arm in
 	// `closeGraphemeNeeds` either.
@@ -652,7 +653,7 @@ export type RuntimeUsage
 	export var usesCommandLine as bool
 
 	static function create() returns RuntimeUsage
-		return Self{usesHeap: false, usesGt: false, usesIocp: false, usesStreaming: false, usesPrint: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesBoolToString: false, usesStrAppend: false, usesStrDecref: false, usesArray: false, usesSet: false, usesMap: false, usesList: false, usesDropTypeParam: false, usesDropExistential: false, usesRetainExistential: false, usesIncref: false, usesRetain: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrRangeEq: false, usesStrFind: false, usesStrRFind: false, usesStrStartsWith: false, usesStrEndsWith: false, usesStrContains: false, usesStrMapCase: false, usesStrReplace: false, usesStrSplit: false, usesStrReplaceFirst: false, usesStrFromBytes: false, usesStrBytesView: false, usesStrByteAt: false, usesStrByteAtOrPanic: false, usesManagedArrayCopy: false, usesOpaqueArrayCopy: false, neededCloners: ClonerSet.create(), usesWallClock: false, usesCharAt: false, usesCharCmp: false, usesCharAsciiValue: false, usesStrToBytes: false, usesStrToCodepoints: false, usesStrToUtf16: false, usesStrIndexMake: false, usesStrIndexEnd: false, usesStrIndexByteToGrapheme: false, usesStrIndexAdvance: false, usesStrIndexFirst: false, usesStrIndexLast: false, usesStrIndexSlice: false, usesStrIndexAfter: false, usesUcdCategory: false, usesCharSetMake: false, usesCharSetDecref: false, usesCharSetContains: false, usesStrTrim: false, usesManagedFile: false, usesManagedDirectory: false, usesCommandLine: false}
+		return Self{usesHeap: false, usesGt: false, usesIocp: false, usesStreaming: false, usesPrint: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesBoolToString: false, usesStrAppend: false, usesStrDecref: false, usesArray: false, usesSet: false, usesMap: false, usesList: false, usesDropTypeParam: false, usesDropExistential: false, usesRetainExistential: false, usesIncref: false, usesRetain: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrRangeEq: false, usesStrFind: false, usesStrRFind: false, usesStrStartsWith: false, usesStrEndsWith: false, usesStrContains: false, usesStrMapCase: false, usesStrReplace: false, usesStrSplit: false, usesStrReplaceFirst: false, usesStrFromBytes: false, usesStrBytesView: false, usesStrByteAt: false, usesStrByteAtOrPanic: false, usesManagedArrayCopy: false, usesOpaqueArrayCopy: false, neededCloners: ClonerSet.create(), usesWallClock: false, usesCharAt: false, usesCharCmp: false, usesCharFromCodepoint: false, usesCharAsciiValue: false, usesStrToBytes: false, usesStrToCodepoints: false, usesStrToUtf16: false, usesStrIndexMake: false, usesStrIndexEnd: false, usesStrIndexByteToGrapheme: false, usesStrIndexAdvance: false, usesStrIndexFirst: false, usesStrIndexLast: false, usesStrIndexSlice: false, usesStrIndexAfter: false, usesUcdCategory: false, usesCharSetMake: false, usesCharSetDecref: false, usesCharSetContains: false, usesStrTrim: false, usesManagedFile: false, usesManagedDirectory: false, usesCommandLine: false}
 	end 'create'
 end 'RuntimeUsage'
 
@@ -1033,6 +1034,9 @@ function recordGraphemeUsage(callee ByteArray, usage RuntimeUsage)
 	if callee.equals(CharAtName) 'charat'
 		usage.usesCharAt = true
 	end 'charat'
+	if callee.equals(CharFromCodepointName) 'charfromcp'
+		usage.usesCharFromCodepoint = true
+	end 'charfromcp'
 	if callee.equals(CharCmpName) 'charcmp'
 		usage.usesCharCmp = true
 	end 'charcmp'
@@ -1146,6 +1150,11 @@ function closeGraphemeNeeds(usage RuntimeUsage)
 		usage.usesHeap = true
 		usage.usesStrCopy = true
 	end 'mintsCharacters'
+	// `__char_from_cp` builds the same record with one `__mm_alloc` and NO blit — it stores the bytes it
+	// encoded, so it needs the allocator and not the copier.
+	if usage.usesCharFromCodepoint 'encodesCharacters'
+		usage.usesHeap = true
+	end 'encodesCharacters'
 	// `__str_to_bytes` pushes into the caller's array.
 	if usage.usesStrToBytes 'pushesBytes'
 		usage.usesArray = true

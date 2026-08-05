@@ -259,7 +259,7 @@ end 'main'
 1000
 ```
 
-<!-- disabled-test: ranges.character-range -->
+<!-- test: ranges.character-range -->
 <!-- CHARACTER RANGES rung (re-attributed from P1.8b, 2026-07-28) — shv2 has no `Character` type (`Parser.maxon` says so in its own words); a char literal is an INT. ⚠ MEASURED: this case PASSES anyway, because it only COUNTS the iterations and 'a'..'z' as codepoints counts 26 the same way. Its twin `character-range-print` — which looks at the value — does not. Left disabled deliberately: enabling it would claim a mechanism that is not here (the P1.7 slice-1 lesson) -->
 ```maxon
 function main() returns ExitCode
@@ -274,7 +274,7 @@ end 'main'
 26
 ```
 
-<!-- disabled-test: ranges.character-range-print -->
+<!-- test: ranges.character-range-print -->
 <!-- CHARACTER RANGES rung (re-attributed from P1.8, 2026-07-28) — `'a' upto 'f'` is a range of INTEGERS in shv2: a single-byte character
      literal materializes as an integer literal (`decodeCharLiteral`'s `byte` arm), so the loop variable
      is an int and prints as one. ⚠ MEASURED at P1.8 Slice E, on the enabled case: `97 98 99 100 101`

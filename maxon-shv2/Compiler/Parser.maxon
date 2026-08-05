@@ -1434,6 +1434,11 @@ let sharedEmptyExtensionAssociatedTypes = ByteArrayArray.create()
 // allocating, and `recordValueDeclaredAlias` copies on its first write keyed on this instance's identity.
 let sharedEmptyDeclaredAliasMap = ValueDeclaredAliasMap.create()
 
+// The same COW anchor for the character-literal op map (`CharLiteralOpMap`), with the same invariant: a
+// function that writes no character literal INCREFS this one rather than allocating, and
+// `recordCharLiteralOp` copies on its first write keyed on this instance's identity.
+let sharedEmptyCharLiteralOps = CharLiteralOpMap.create()
+
 // The module-level shared EMPTY tuple-layout table (P1.10), held as the INITIAL value of `Parser.tupleLayouts`
 // AND as the COW anchor `internTupleLayout` keys on — `sharedEmptyInstanceAliasMap`'s pattern, for its reason
 // and with its invariant. A file that writes no tuple INCREFS this one rather than allocating a map of its
@@ -4941,6 +4946,15 @@ type Utf8Sequence
 	end 'of'
 end 'Utf8Sequence'
 
+// The answer `Parser.charLiteralCodepoint` gives: the single Unicode codepoint a character literal denotes,
+// or `cluster` for an EGC that is a SEQUENCE of them (a ZWJ family emoji, a regional-indicator flag). A
+// `cluster` is a `Character` and nothing else — it has no integer reading — so it is a CASE here rather than
+// a sentinel codepoint no caller could tell from a real one.
+union CharLiteralCodepoint
+	codepoint(value ParsedInt)
+	cluster
+end 'CharLiteralCodepoint'
+
 // ⭐ Decode a `b"…"` literal body (the raw bytes between the quotes, escapes undecoded) to its Latin-1 byte
 // payload. `tok` positions the E2015 an UNKNOWN escape raises (the byte-string twin of `decodeEscapes`'
 // `unknownEscape`); a codepoint-range rejection is E1004 and rendered anchor-less (see `reportParseError`).
@@ -5722,6 +5736,23 @@ typealias ValueInstanceAliasMap = Map with (ValueId, TypeNameId)
 // casts, which is zero for most functions. Reset per function and SWAPPED across a closure body (its value
 // ids are a fresh SSA space), exactly like the sibling value columns.
 typealias ValueDeclaredAliasMap = Map with (ValueId, TypeNameId)
+
+// ⭐⭐ **WHICH OP A CHARACTER-LITERAL VALUE'S `.rdata` RECORD WAS EMITTED BY** — the fact `integerizedOperand`
+// needs to REPLACE that record with an integer immediate instead of leaving it behind.
+//
+// Every character literal materializes as a `Character` (`parseCharLiteral`), and an integer-expecting
+// position un-materializes it. That direction cannot take the shape the CHARACTER direction used to have —
+// emit the other thing and leave the first behind, which cost only a dead `const` the fold's DCE collects:
+// a Character is a `stringLiteral` op, and `LowerMaxonToStd.lowerStringLiteral`
+// registers `.rdata` for one whether or not anything reads it — a blob, a 48-byte record and a fixup off the
+// ONE `GlobalDataTable.nextStringId` counter every rdata prefix shares. A single stray blob in a whitelisted
+// stdlib module therefore renumbers every later `__str_blob_`/`__fconst_`/`__jumptable_` label in EVERY
+// program. So the op is rewritten in place, and this is how its index is found in O(1).
+//
+// A Map rather than a dense column for `ValueDeclaredAliasMap`'s reason: the population is a function's
+// character literals, which is zero for almost every function. Reset per function and SWAPPED across a
+// closure body (its value ids are a fresh SSA space), exactly like the sibling value columns.
+typealias CharLiteralOpMap = Map with (ValueId, OpIndex)
 
 // ⭐ **ONE PARSER MARK OVER THIS FUNCTION'S SSA VALUES — a set of the values that carry it.** The two marks
 // that wear this shape are `Parser.immutableGlobalReads` (loaded out of an IMMUTABLE top-level global's slot,
@@ -7112,6 +7143,10 @@ export type Parser
 	// say so (E3010)** — see `ValueDeclaredAliasMap` for the two cases and for why the cast writer is gated.
 	// Reset per function and SWAPPED across a closure body, exactly like the sibling value columns.
 	var valueDeclaredAlias as ValueDeclaredAliasMap
+	// ⭐⭐ **THE `.rdata` OP EACH CHARACTER-LITERAL VALUE WAS MATERIALIZED BY** — see `CharLiteralOpMap` for
+	// what an integer position does with it and why the op must be REPLACED rather than orphaned.
+	// Reset per function and SWAPPED across a closure body, exactly like the sibling value columns.
+	var charLiteralOps as CharLiteralOpMap
 	// ⭐⭐ **WHICH VALUES WERE READ OUT OF AN IMMUTABLE TOP-LEVEL GLOBAL (P1.7 slice 2b)** — the fact that
 	// stops a `let`-declared array's record from being written through a mutable ALIAS.
 	//
@@ -7745,6 +7780,7 @@ export type Parser
 			valueClosureEnv: ValueIdArray.create(),
 			valueInstanceAlias: sharedEmptyInstanceAliasMap,
 			valueDeclaredAlias: sharedEmptyDeclaredAliasMap,
+			charLiteralOps: sharedEmptyCharLiteralOps,
 			immutableGlobalReads: sharedEmptyImmutableGlobalReads,
 			bufferSurfaceValues: sharedEmptyBufferSurfaceValues,
 			bufferSurfaceSlots: sharedEmptyBufferSurfaceSlots,
@@ -14165,6 +14201,7 @@ export type Parser
 		// Per-function for the identical reason: a value's declared ranged alias names an id in THIS
 		// function's SSA space (see `ValueDeclaredAliasMap`), and shares the same copy-on-write anchor.
 		self.valueDeclaredAlias = sharedEmptyDeclaredAliasMap
+		self.charLiteralOps = sharedEmptyCharLiteralOps
 		// Per-function for the identical reason (P1.7 slice 2b): a marked value names an id in THIS
 		// function's SSA space, so a mark carried over would name an unrelated value in the next one.
 		self.immutableGlobalReads = sharedEmptyImmutableGlobalReads
@@ -14952,6 +14989,7 @@ export type Parser
 		self.currentWitnessParamCount = 0
 		self.valueInstanceAlias = sharedEmptyInstanceAliasMap
 		self.valueDeclaredAlias = sharedEmptyDeclaredAliasMap
+		self.charLiteralOps = sharedEmptyCharLiteralOps
 		self.immutableGlobalReads = sharedEmptyImmutableGlobalReads
 		// ⭐ **ALL THREE, for `parseFunction`'s stated reason — "they describe one value space" (BATCH22
 		// review).** This site reset `bufferSurfaceValues` alone, and the other two crossed the boundary: a
@@ -15851,8 +15889,9 @@ export type Parser
 		end 'throwStmt' else if self.at(TokenKind.try) 'tryStmt'
 			// The BLOCK form (`try 'label' … end 'label' otherwise (e) 'h' … end 'h'`) is a statement and
 			// nothing else — it groups statements and yields no value — so it forks HERE, off the same
-			// label lookahead the extent scan reads (`tryOpensBlockAt`). `parseTry` keeps its own refusal of
-			// the form for the EXPRESSION position that still cannot take it.
+			// label lookahead the extent scan reads (`tryOpensBlockAt`, which is also where the label-vs-
+			// character-receiver rule lives). `parseTry` keeps its own refusal of the form for the EXPRESSION
+			// position that still cannot take it.
 			if self.tryOpensBlockAt(self.pos) 'blockForm'
 				return try self.parseTryBlockStatement(func, block: block)
 			end 'blockForm'
@@ -16771,10 +16810,11 @@ export type Parser
 		// so `reassignBindingValue` gates the poison's owned-set scan on it (see `rhsWasBareLocalReference`).
 		let rhsWasBareLocal = self.rhsWasBareLocalReference(rhsStart)
 
-		// ⭐ AN ASSIGNMENT IS A CHARACTER-EXPECTING POSITION when the binding declares one, so a character
-		// literal RHS adopts that type — `found = 'z'` into a `Character` var. See `characterizedOperand`.
+		// ⭐ AN ASSIGNMENT IS AN INTEGER-EXPECTING POSITION when the binding declares an integral type, so a
+		// character literal RHS coerces to its codepoint — `b = '0'` into a `var b Byte`. A `Character` binding
+		// needs nothing: the literal already IS one. See `integerizedOperand`.
 		let declaredTag = maxonTypeTag(binding.varType)
-		let value = try self.characterizedOperand(parsedValue, expected: declaredTag, start: rhsStart, pastEnd: self.pos)
+		let value = try self.integerizedOperand(parsedValue, expected: declaredTag, start: rhsStart, pastEnd: self.pos)
 		let valueTag = self.tagOf(value)
 
 		// ⭐ The binding KEEPS ITS DECLARED TYPE ACROSS A REBIND, so `x = 3` into a `var x = 0.0` rebinds
@@ -18005,10 +18045,11 @@ export type Parser
 		// in. `return a or b` evaluates the `or` across three blocks and leaves control in
 		// the merge; terminating `block` instead would leave the merge unterminated (a
 		// backend panic) and put the `ret` on a path the value it returns does not reach.
-		// ⭐ A `return` IS A CHARACTER-EXPECTING POSITION when the function declares one, so a character
-		// literal adopts that type — `return 'a'` from `returns Character`. See `characterizedOperand`.
+		// ⭐ A `return` IS AN INTEGER-EXPECTING POSITION when the function declares an integral type, so a
+		// character literal coerces to its codepoint there. `return 'a'` from `returns Character` needs
+		// nothing: the literal already IS one. See `integerizedOperand`.
 		let retStart = self.pos
-		let retVal = try self.characterizedOperand(try self.parseExpression(func, block: block), expected: maxonReturnTypeTag(func.maxonReturnType), start: retStart, pastEnd: self.pos)
+		let retVal = try self.integerizedOperand(try self.parseExpression(func, block: block), expected: maxonReturnTypeTag(func.maxonReturnType), start: retStart, pastEnd: self.pos)
 
 		// ⭐ **ESCAPE (P1.5-A2b): a capturing closure may not be RETURNED** — the env it carries is dropped at
 		// this frame's scope exit, so handing it back would leave the caller a closure whose environment is
@@ -18523,7 +18564,7 @@ export type Parser
 		// is entered (both read the same `tryOpensBlockAt` label lookahead). The construct GROUPS statements
 		// and yields nothing, so there is no value for the enclosing expression to take — the same rule that
 		// makes an `if` a statement and a `<t> if <c> else <f>` the expression spelling.
-		if self.at(TokenKind.charLiteral) 'blockFormInValuePosition'
+		if self.charLiteralOpensTryBlockAt(self.pos) 'blockFormInValuePosition'
 			throw ParseError.errorTypeMismatch("a block-form `try 'label' … end` groups statements and yields no value, so it cannot stand where a value is expected — use a single-statement `try call()` with an `otherwise <value>` fallback", line: tryTok.line, column: tryTok.column)
 		end 'blockFormInValuePosition'
 
@@ -18698,6 +18739,16 @@ export type Parser
 		if self.at(TokenKind.stringLiteral) 'stringLiteralTarget'
 			return try self.parseStringLiteral(func)
 		end 'stringLiteralTarget'
+
+		// ⭐ **`try 'A'.asciiValue() otherwise 0` — A CHARACTER LITERAL RECEIVER (A5m-ab), THE FOURTH CASE OF
+		// THE ARGUMENT THE TWO NOTES ABOVE ALREADY MAKE.** `Character.asciiValue()` is the type's one throwing
+		// member, so `try` is the only way a program calls it, and a literal is the receiver the oracle prints
+		// **65** for. Reaching this arm at all is the other half of the same rung: the block-form router used to
+		// claim the token first, and `tryOpensBlockAt` now tells a block LABEL from a receiver by the `.` behind
+		// it — which is also why nothing here needs to re-ask, a bare `try 'x'` never gets past `parseTry`.
+		if self.at(TokenKind.charLiteral) 'characterLiteralTarget'
+			return try self.parseCharLiteral()
+		end 'characterLiteralTarget'
 
 		// ⭐ **`try (a / b) otherwise …` — A PARENTHESIZED EXPRESSION AS THE TRY TARGET (A1).** The only
 		// throwing operation in the language written as an OPERATOR rather than a call, so it is the only one
@@ -22573,12 +22624,34 @@ export type Parser
 		var rangeInclusive = false
 		var limit = source
 		var testAnchorIndex = forIndex
+		// ⭐⭐ **A RANGE WHOSE BOUNDS ARE BOTH CHARACTER LITERALS IS A RANGE OF `Character`S** (A5m-ab), and
+		// this is the one place that is decided. Every character literal is a `Character`
+		// (`parseCharLiteral`), so `for c in 'a' to 'e'` arrives here with two RECORDS where the loop needs two
+		// COUNTERS — and the body needs a Character per trip, which no record in memory holds.
+		//
+		// Both halves fall out of coercing the bounds to their CODEPOINTS through the ordinary
+		// `integerizedOperand` door: the loop below is then the counted integer range it always was, stepping
+		// codepoint by codepoint, and the ELEMENT is minted from the counter by `__char_from_cp`. Nothing about
+		// the range machinery changes, and no `.rdata` record is registered for a bound that became a number.
+		//
+		// ⚠ **BOTH, OR NEITHER.** `for i in 'a' to n` is an INTEGER range from 97 — one bound is a number, so
+		// the range is over numbers, exactly as `cp == '-'` is a comparison of numbers. The element type
+		// follows the PAIR and not either half, which is why the two tags are read BEFORE the coercion.
+		var isCharacterRange = false
 		if self.at(TokenKind.to) or self.at(TokenKind.upto) 'rangeHeader'
 			isRange = true
 			rangeInclusive = self.at(TokenKind.to)
 			testAnchorIndex = self.pos
 			self.advance()
+			let limitStart = self.pos
 			limit = try self.parseExpression(func, block: self.currentBlock)
+			let bothWereCharacters = self.tagOf(source) == ValueTypeTag.character and self.tagOf(limit) == ValueTypeTag.character
+			source = try self.integerizedOperand(source, expected: ValueTypeTag.integer, start: sourceStart, pastEnd: testAnchorIndex)
+			limit = try self.integerizedOperand(limit, expected: ValueTypeTag.integer, start: limitStart, pastEnd: self.pos)
+			// A pair of Characters that did NOT both coerce is a pair of bounds the counter cannot step — a
+			// binding rather than a literal, or a multi-codepoint cluster — and `requireCountableRangeBound`
+			// below refuses it in its own words rather than this flag promising an element it cannot mint.
+			isCharacterRange = bothWereCharacters and tagIsIntegral(self.tagOf(source)) and tagIsIntegral(self.tagOf(limit))
 		end 'rangeHeader'
 
 		// ⭐ **A COUNTED RANGE'S BOUNDS MUST BE INTEGERS**, asked here — the moment both are in hand and
@@ -22834,20 +22907,30 @@ export type Parser
 		self.currentBlock = body
 		var loopValue = indexPhi
 		var graphemeEnd = indexPhi
+		// ⭐ **A CHARACTER RANGE MINTS ITS ELEMENT FROM THE COUNTER**, where a String mints it from a byte
+		// range — two producers of the SAME owned per-trip Character, which is why the ownership below is
+		// asked once for both rather than beside each. See `GraphemeRuntime.buildCharFromCodepoint`.
+		if isCharacterRange 'mintFromCodepoint'
+			loopValue = self.emitRuntimeCall(CharFromCodepointName, args: singletonArgs(indexPhi), resultTag: ValueTypeTag.character, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(patternTok))
+		end 'mintFromCodepoint'
 		if isString 'readCluster'
 			graphemeEnd = self.emitRuntimeCall(CorpusFindGraphemeEnd, args: pairArgs(source, second: indexPhi), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(patternTok), argLabels: corpusFindGraphemeEndLabels())
 			loopValue = self.emitRuntimeCall(CharAtName, args: tripleArgs(source, second: indexPhi, third: graphemeEnd), resultTag: ValueTypeTag.character, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(patternTok))
-			// ⭐⭐ **THE OWNERSHIP RULING: A STRING'S ELEMENT IS OWNED, WHERE AN ARRAY'S IS BORROWED — and
+		end 'readCluster'
+		if isString or isCharacterRange 'ownsTheTripsCharacter'
+			// ⭐⭐ **THE OWNERSHIP RULING: A MINTED CHARACTER IS OWNED, WHERE AN ARRAY'S ELEMENT IS BORROWED — and
 			// the difference is not a preference, it is a fact about where the value lives.** Slice A could
 			// borrow because the ARRAY KEEPS the element and its own `__arr_decref` walk destroys it, so
-			// there was an owner to borrow from. A String's grapheme clusters are stored NOWHERE: the
-			// record holds bytes, and a Character is a record, so the value the body sees did not exist
-			// until `__char_at` built it. A minted value has exactly one owner and it is this trip.
+			// there was an owner to borrow from. A String's grapheme clusters are stored NOWHERE (the record
+			// holds bytes, and a Character is a record) and a character RANGE stores nothing at all — it has
+			// only a counter — so in both the value the body sees did not exist until `__char_at` /
+			// `__char_from_cp` built it. A minted value has exactly one owner and it is this trip.
 			//
 			// Enrolled even when the name is `_`, and that is not an oversight: the discard binds no NAME
 			// but the record was still allocated, so the drop is owed regardless of whether anything could
 			// read it. (`for _ in s` is exactly `grapheme-clusters/grapheme-boundary-combining-iteration`,
-			// which counts clusters without looking at one — and it would leak every cluster it counted.)
+			// and `for _ in 'a' to 'e'` is `ranges/ranges.character-range` — both count without looking at one,
+			// and both would leak every character they counted.)
 			//
 			// ⚠ **THE PROVENANCE BIT AND THE BINDING ARE BOTH REQUIRED, AND THE BINDING ALONE IS NOT ENOUGH.**
 			// `ownedBindings` is what DROPS the value; `markValueOwnsHeap` is what makes every other owner-
@@ -22864,7 +22947,7 @@ export type Parser
 			// the honest one is the one the element already has where nothing spells it.
 			self.markValueOwnsHeap(loopValue)
 			self.ownedBindings.push(VarInfo.createValueBinding(self.loopVariableOwnerName(nameToks), varType: self.typeOf(loopValue), mutable: false, boundValue: loopValue))
-		end 'readCluster'
+		end 'ownsTheTripsCharacter'
 		// ⭐ **THE TWO INDEXED-CONTAINER FORMS READ THEIR ELEMENT THROUGH ONE DOOR**, differing only in what the
 		// carried header value MEANS: an ARRAY's is an ordinal into its buffer, a LIST's is the node the value
 		// sits in. Both hand back a BORROW the container still owns, both are the UNCHECKED read the header's
@@ -23982,10 +24065,11 @@ export type Parser
 			return self.otherwiseOpensBlock(index)
 		end 'tryBlock'
 
-		// `try` is the third position-sensitive one, and it needs no position test at all: only the BLOCK
-		// form spells a label after the keyword, and every EXPRESSION form (`try f()`, `try await p`,
-		// `try (a).b()`) must be followed by a call, which no charLiteral can begin. So the label IS the
-		// discriminator — the same one `parseStatement` routes on, asked once here rather than restated.
+		// `try` is the third position-sensitive one: only the BLOCK form spells a LABEL after the keyword, and
+		// a label is told from a character-literal RECEIVER (`try 'A'.asciiValue()`) by the `.` behind it — see
+		// `tryOpensBlockAt`, which owns that rule and which this comment used to contradict by asserting no call
+		// could begin with a charLiteral. It is the same discriminator `parseStatement` routes on, asked once
+		// there rather than restated here.
 		if kind == TokenKind.try 'tryKw'
 			return self.tryOpensBlockAt(index)
 		end 'tryKw'
@@ -24083,15 +24167,31 @@ export type Parser
 		return next == TokenKind.leftParen and self.kindAt(index + 2) == TokenKind.identifier and self.kindAt(index + 3) == TokenKind.rightParen and self.kindAt(index + 4) == TokenKind.charLiteral
 	end 'otherwiseOpensBlock'
 
-	// ⭐ **THE BLOCK-FORM `try` — A LABEL AFTER THE KEYWORD, AND THAT IS THE WHOLE TEST.** `try 'work' … end
-	// 'work'` opens a block; every expression form (`try f()`, `try obj.m()`, `try await p`, `try (a).b()`)
-	// must be applied to a CALL, and no call can begin with a charLiteral, so the two forms are disjoint on
-	// this one token. It is the SAME discriminator `parseStatement` routes the two forms on and
-	// `parseTry` refuses the block form in expression position by — asked here so the extent scan and the
-	// grammar cannot disagree about which `try` owns an `end`.
+	// ⭐ **THE BLOCK-FORM `try` — A LABEL AFTER THE KEYWORD, AND A `.` IS WHAT TELLS IT FROM A CHARACTER.**
+	// `try 'work' … end 'work'` opens a block. It is the SAME discriminator `parseStatement` routes the two
+	// forms on and `parseTry` refuses the block form in expression position by — asked here so the extent scan
+	// and the grammar cannot disagree about which `try` owns an `end`.
+	//
+	// ⚠⚠ **THIS ROUTINE ONCE CLAIMED THE TWO FORMS WERE DISJOINT ON THE TOKEN ALONE — *"no call can begin
+	// with a charLiteral"* — AND THAT WAS FALSE THE MOMENT A CHARACTER LITERAL GREW METHODS.**
+	// `try 'A'.asciiValue() otherwise 0` is a call that begins with one, and MEASURED it was **E3059**,
+	// *"a block-form `try 'label' … end` groups statements and yields no value"* — a diagnostic about a
+	// construct the program does not contain, over a program the oracle runs and prints 65 for.
+	//
+	// ⭐ **THE DISAMBIGUATOR IS THE `.` AND NOTHING ELSE NEEDS TO BE.** A block LABEL is always followed by a
+	// STATEMENT, so the lexer has emitted a `newline` behind it; it can never be followed by `.`. A character
+	// literal used as a `try` TARGET must be a call, so it is always followed by `.`. One token of lookahead
+	// past the label separates them, and a character literal that is NOT a receiver (`try 'A' otherwise 0`)
+	// is not a call either — it stays the block form, and `parseTry`'s own refusal names it.
 	function tryOpensBlockAt(index TokenIndex) returns bool
-		return self.kindAt(index + 1) == TokenKind.charLiteral
+		return self.charLiteralOpensTryBlockAt(index + 1)
 	end 'tryOpensBlockAt'
+
+	// The label-vs-receiver test itself, over the token AFTER `try`. Split out because the two askers stand in
+	// different places: the extent scans hold the `try`'s index, and `parseTry` has already consumed it.
+	function charLiteralOpensTryBlockAt(index TokenIndex) returns bool
+		return self.kindAt(index) == TokenKind.charLiteral and self.kindAt(index + 1) != TokenKind.dot
+	end 'charLiteralOpensTryBlockAt'
 
 	// Is the keyword at `index` being used as a NAME rather than as block structure?
 	//
@@ -26156,8 +26256,12 @@ export type Parser
 			return try self.checkPatternType(boolValue, scrutTag: scrutTag, patternTok: firstTok)
 		end 'boolPattern'
 
+		// ⭐ A PATTERN IS AN INTEGER-EXPECTING POSITION when the scrutinee is integral, so `match cp 'm' '-'
+		// then …` compares codepoints while `match c 'm' 'a' then …` over a `Character` compares records —
+		// through the same `integerizedOperand` every operand and declared slot goes through (A5m-ab).
 		if self.at(TokenKind.charLiteral) 'charPattern'
-			let charValue = try self.parseCharLiteral()
+			let charStart = self.pos
+			let charValue = try self.integerizedOperand(try self.parseCharLiteral(), expected: scrutTag, start: charStart, pastEnd: self.pos)
 			return try self.checkPatternType(charValue, scrutTag: scrutTag, patternTok: firstTok)
 		end 'charPattern'
 
@@ -28158,7 +28262,7 @@ export type Parser
 	// with the machinery that forced it.
 	function parseBinary(func IrFunction, minPrec InfixPrecedence) returns ValueId throws ParseError
 		// The LEFT operand's first token, remembered before it is parsed — the twin of `rhsStart` below,
-		// and read for the same kind of question: `characterizedOperand` needs to know whether an operand
+		// and read for the same kind of question: `integerizedOperand` needs to know whether an operand
 		// was written as a lone character LITERAL, which is a fact about its tokens, not about its value.
 		let leftStart = self.pos
 		var left = try self.parseCast(func)
@@ -28200,12 +28304,20 @@ export type Parser
 			let right = try self.parseBinary(func, minPrec: prec + 1)
 			let rhsEnd = self.pos
 
-			// ⭐ A COMPARISON IS A CHARACTER-EXPECTING POSITION when its other side is a `Character`, so a
-			// character LITERAL on either side adopts that type — `c == 'a'` and `'a' == c` alike. Asked of
-			// both operands, each against what the OTHER is; see `characterizedOperand`.
+			// ⭐⭐ **A BINARY OPERATOR IS AN INTEGER-EXPECTING POSITION FOR WHICHEVER SIDE IS A CHARACTER
+			// LITERAL WHEN THE OTHER SIDE IS INTEGRAL** — `cp == '-'`, `'-' == cp` and `cp - '0'` alike. Asked
+			// of both operands, each against what the OTHER is, and asked HERE rather than inside the
+			// comparison arm because `specs/char-literal-to-int.md` documents the rule over "a binary
+			// operation", not over a comparison: its own `char-literal-arithmetic` case subtracts.
+			//
+			// ⚠ The second call reads `leftValue`'s tag rather than `left`'s, because the first may have
+			// turned a Character into an `int` and the right operand must be judged against what the left
+			// now IS. Two character literals settle each other by staying Characters, which is what makes
+			// `'A' == 'A'` a Character comparison (`char-literal-to-int.md`'s own case name says so).
+			let leftValue = try self.integerizedOperand(left, expected: self.tagOf(right), start: leftStart, pastEnd: opIndex)
+			let rightValue = try self.integerizedOperand(right, expected: self.tagOf(leftValue), start: rhsStart, pastEnd: rhsEnd)
+
 			if comparisonOperator(opTok.kind) 'comparison'
-				let leftValue = try self.characterizedOperand(left, expected: self.tagOf(right), start: leftStart, pastEnd: opIndex)
-				let rightValue = try self.characterizedOperand(right, expected: self.tagOf(leftValue), start: rhsStart, pastEnd: rhsEnd)
 				left = try self.emitCompare(leftValue, rhs: rightValue, op: infixCmpOp(opTok.kind), opTok: opTok)
 				continue
 			end 'comparison'
@@ -28216,7 +28328,7 @@ export type Parser
 			// for it (Go's) is deliberately not the hardware's. It gets its own emitter, which
 			// owns the rule, the diagnostic, AND the runtime guard. See `emitShift`.
 			if shiftOperator(op) 'isShift'
-				left = try self.emitShift(left, count: right, op: op, opTok: opTok, countStart: rhsStart, countEnd: rhsEnd)
+				left = try self.emitShift(leftValue, count: rightValue, op: op, opTok: opTok, countStart: rhsStart, countEnd: rhsEnd)
 				continue
 			end 'isShift'
 
@@ -28225,11 +28337,11 @@ export type Parser
 			// the rule, both diagnostics AND the throwing desugar — the same split, for the same reason, as the
 			// shift above. See `emitDivOrMod`.
 			if divisionOperator(op) 'isDivision'
-				left = try self.emitDivOrMod(left, divisor: right, op: op, opTok: opTok)
+				left = try self.emitDivOrMod(leftValue, divisor: rightValue, op: op, opTok: opTok)
 				continue
 			end 'isDivision'
 
-			left = try self.emitBinOp(left, rhs: right, op: op, opTok: opTok)
+			left = try self.emitBinOp(leftValue, rhs: rightValue, op: op, opTok: opTok)
 		end 'climb'
 
 		return left
@@ -31152,127 +31264,174 @@ export type Parser
 		end 'why'
 	end 'tupleElementError'
 
-	// `'a'`, `'\n'`, `'0'` — a character literal in operand position. It materializes as an
-	// ordinary INTEGER literal carrying the character's byte, which is exactly what
-	// specs/char-literal-to-int.md asks for ("the compiler automatically converts the
-	// character literal to its Unicode codepoint value at compile time") and what makes
-	// `cp == '-'`, `cp - '0'` and `if c >= '0'` compile and mean what they say.
+	// ⭐⭐ **EVERY CHARACTER LITERAL IS A `Character`, AND AN INTEGER-EXPECTING POSITION COERCES IT TO ITS
+	// CODEPOINT AT COMPILE TIME** (A5m-ab, user ruling 2026-08-05). `'a'`, `'\n'`, `'0'`, `'é'`, `'🎉'` and a
+	// whole EGC all materialize the same way: an immortal `.rdata` byte record, typed `character`.
 	//
-	// v1 does the same for the single-byte case (`parseCharLiteralExpr`, Parser.maxon:16606:
-	// *"Emits an integer literal carrying the byte value of an ASCII character"*) and routes
-	// wider literals to its `Character` struct. shv2 has no Character type — it is a heap
-	// value, and heap values arrive with String at P1.2 — so it REJECTS them with a
-	// positioned diagnostic naming the gap, exactly as v1's own comment says it must
-	// ("report them as a diagnostic instead of silently producing the wrong byte").
-	// ⭐ **A CHARACTER LITERAL HAS TWO MATERIALIZATIONS, DECIDED BY ITS BYTE WIDTH** (P1.8 slice B).
+	// It is the model BOTH reference compilers use (`BuiltinCharLiteral`), and it is what
+	// `specs/char-literal-to-int.md`'s own Documentation describes — *"the compiler automatically converts
+	// the character literal to its Unicode codepoint value at compile time"*, which is a statement about a
+	// CONVERSION and therefore about a literal that was something else first.
 	//
-	//   * ONE byte — an ASCII character or an escape that produces one — materializes as an ordinary
-	//     INTEGER literal carrying that byte. Unchanged, and load-bearing: it is what makes `cp == '-'`,
-	//     `cp - '0'` and `if c >= '0'` mean what they say (`specs-shv2/char-literal-to-int.md`).
-	//   * MORE than one byte — `'é'`, `'中'`, an emoji, a whole EGC — materializes as a `Character`: an
-	//     immortal `.rdata` byte record, typed `character`.
+	// ⚠ **IT REPLACES A WIDTH RULE — one byte was an `int`, wider was a `Character` — AND THE WIDTH RULE'S
+	// COST WAS A TYPE HOLE, not a divergence in wording.** `'A'.asciiValue()` was *"'int' has no method named
+	// 'asciiValue'"* where the oracle prints 65; `let c = 'G'` bound an `int` so a Character `match` arm could
+	// not see it; `for c in 'a' to 'e'` printed `97 98 99 100 101`; and `Self{ch: 'e'}` / `f(target: 'a')`
+	// were refused at a `Character` field and a `Character` parameter. All five are one fact — the literal was
+	// typed by its bytes rather than by what it IS — and all five close here.
 	//
-	// ⚠ **THAT SPLIT IS A DIVERGENCE FROM BOTH REFERENCES AND IT IS DELIBERATE.** There, EVERY character
-	// literal is a `Character` and an integer CONTEXT coerces it (`BuiltinCharLiteral`); here the WIDTH
-	// decides, with no coercion. The corpus does not distinguish the two models on any enabled case — the
-	// integer-coercion cases all use single-byte literals and the Character cases all use multi-byte ones
-	// — and the width rule needs no context-dependent literal typing, which shv2 has nowhere else. The
-	// visible consequence is that `'A'.asciiValue()` is not available (an int has no methods) while
-	// `'é'.asciiValue()` is — and now that the member is BUILT, that consequence is the whole of what
-	// separates `character-type.md`'s two live `ascii-value-*` cases from its five disabled single-byte
-	// ones, which stay disabled naming the width rule rather than a missing Character.
+	// ⚠ **THE INTEGER DIRECTION IS `integerizedOperand`, AND IT REWRITES RATHER THAN ORPHANS.** See there: a
+	// discarded `stringLiteral` op still registers `.rdata`, so `cp == '-'` must never MATERIALIZE a record it
+	// does not use. `cp == '-'`, `cp - '0'` and `if c >= '0'` therefore emit exactly the op they always did.
 	function parseCharLiteral() returns ValueId throws ParseError
 		let tok = try self.consume(TokenKind.charLiteral)
+		return self.emitCharacterLiteral(try self.charLiteralBytes(tok), range: SourceRange.ofToken(tok))
+	end 'parseCharLiteral'
+
+	// A `charLiteral` token's payload decoded to the UTF-8 bytes of the one character it holds, or the
+	// positioned diagnostic the literal earned. THE one door onto `decodeCharLiteral` for every site that
+	// wants BYTES — `parseCharLiteral`, `charLiteralCodepoint` and the top-level constant evaluator — so a
+	// literal one of them accepts and another rejects cannot differ (`decodedStringLiteralBytes` is the String
+	// twin, and exists for the same reason).
+	//
+	// The `byte`/`multiByte` split survives only INSIDE here, where it is what it always was: a fact about
+	// how many bytes the character occupies, and no longer a fact about its type.
+	function charLiteralBytes(tok Token) returns ByteArray throws ParseError
 		match decodeCharLiteral(tok.value) 'decoded'
-			byte(value) then return self.emitLiteral(value, valueType: MaxonType.integer, range: SourceRange.ofToken(tok))
-			multiByte(bytes) then return self.emitCharacterLiteral(bytes, range: SourceRange.ofToken(tok))
+			byte(value) then return byteSlice(value as Byte)
+			multiByte(bytes) then return bytes
 			empty then throw ParseError.invalidCharacterLiteral("a character literal must contain exactly one character", line: tok.line, column: tok.column)
 			badEscape(text) then throw ParseError.invalidCharacterLiteral("unknown escape sequence '{text}'", line: tok.line, column: tok.column)
 			badDigitEscape(text, offset, marker) then throw invalidDigitEscapeError(text, kind: CharacterLiteralEscapeKind, offset: offset, marker: marker, tok: tok)
 		end 'decoded'
-	end 'parseCharLiteral'
+	end 'charLiteralBytes'
 
-	// ⭐⭐ **A CHARACTER LITERAL IN A CHARACTER-EXPECTING POSITION IS A `Character`** — literal-directed
-	// typing, asked at the one kind of site that can unambiguously ask for it.
+	// ⭐⭐ **A CHARACTER LITERAL IN AN INTEGER-EXPECTING POSITION IS ITS CODEPOINT** — the whole of the
+	// ruling's second half, at the one kind of site that can unambiguously ask for it (A5m-ab).
 	//
-	// shv2 types a character literal BY ITS BYTE WIDTH (`parseCharLiteral`): one byte materializes as an
-	// `int`, wider as a `Character`. That rule is what lets `cp == '-'`, `cp - '0'` and `if c >= '0'` mean
-	// what they say without the context-dependent literal typing both reference compilers need for their
-	// `BuiltinCharLiteral` coercion. Its GAP is the other direction, and it was a shipped defect rather
-	// than a divergence: `c == 'a'` inside `for c in s` — the very next thing anyone writes after the loop
-	// itself — was refused as *"cannot compare Character with int"* where the oracle counts the a's.
+	// Every character literal materializes as a `Character` (`parseCharLiteral`). What `cp == '-'`,
+	// `cp - '0'` and `if c >= '0'` need is the other direction, and it is the direction
+	// `specs/char-literal-to-int.md` names outright: *"the compiler automatically converts the character
+	// literal to its Unicode codepoint value at compile time"*. Both reference compilers coerce here and
+	// nowhere else — MEASURED on the oracle: `cp == 'é'` compares against **233**, `'A' + 1` is **66**,
+	// while `f(x Small)` called as `f('A')` is refused (*"expected 'Small', got 'Character'"*). So this is a
+	// rule about OPERANDS and DECLARED SLOTS, never a general int↔Character conversion.
 	//
-	// The cure is NOT general int↔Character coercion. It is exactly this: when a position unambiguously
-	// expects a Character and the operand is WRITTEN AS A CHARACTER LITERAL, the literal adopts that type.
-	// Its bytes are known at parse time, so nothing is inferred — the token is materialized as the other
-	// thing it could always have been, and every position that does not expect a Character is untouched
-	// (`char-literal-to-int.md`'s cases all compare against an `int`, and keep their integer literal).
+	// ⚠ **IT KEYS ON THE OPERAND BEING A LITERAL, NEVER ON THE TWO TAGS.** `c == 45` where `c` is a
+	// Character binding stays a type error, so nothing here makes two different tags comparable, and
+	// `character-ownership.md`'s `string-and-character-do-not-compare` still pins its half.
 	//
-	// ⚠ **IT KEYS ON THE OPERAND BEING A LITERAL, NEVER ON THE TWO TAGS.** `s == c` stays a type error —
-	// a String binding is no character literal — so nothing here makes two different tags comparable, and
-	// `character-ownership.md`'s `string-and-character-do-not-compare` still pins it.
-	//
-	// ⚠ **THE ALREADY-EMITTED INTEGER `literal` OP IS LEFT BEHIND, UNREFERENCED.** The operand was parsed
-	// before its position's expectation was known, and a Character is a POINTER to a byte record where an
-	// int literal is the byte itself — so there is nothing to retag, only a different op to emit. The dead
-	// one costs a `const` that no reader names, which is precisely what `foldConstOperands`'s const DCE
-	// collects; it happens only on a character literal that meets a Character.
-	function characterizedOperand(value ValueId, expected ValueTypeTag, start TokenIndex, pastEnd TokenIndex) returns ValueId throws ParseError
-		if expected != ValueTypeTag.character or self.tagOf(value) == ValueTypeTag.character 'notACharacterPosition'
+	// ⚠⚠ **THE `.rdata` RECORD IS REWRITTEN, NOT ORPHANED, AND THAT IS NOT A TIDINESS CHOICE.**
+	// `LowerMaxonToStd.lowerStringLiteral` walks `block.opRefs` and registers a blob + a 48-byte record +
+	// a fixup for EVERY `stringLiteral` op it finds, read or not; `foldConstOperands`'s const DCE
+	// deliberately excludes `rdataAddr`, and no general DCE pass is scheduled. One orphan in a whitelisted
+	// stdlib module would therefore renumber every later `__str_blob_`/`__fconst_`/`__jumptable_` label in
+	// EVERY program off the single `GlobalDataTable.nextStringId` counter — the measured 317-golden move
+	// that listing `Builtins.maxon` cost. Rewriting the op in place leaves the op stream, the op INDEX, the
+	// ValueId and the source range exactly as an integer literal's always were, so `cp == '-'` emits the
+	// byte-identical code it emitted under the old width rule.
+	function integerizedOperand(value ValueId, expected ValueTypeTag, start TokenIndex, pastEnd TokenIndex) returns ValueId throws ParseError
+		if not tagIsIntegral(expected) or self.tagOf(value) != ValueTypeTag.character 'notAnIntegerPosition'
 			return value
-		end 'notACharacterPosition'
+		end 'notAnIntegerPosition'
 
 		// The operand must be the character literal ITSELF and nothing else: exactly one token, and that
-		// token a `charLiteral`. A compound expression that merely CONTAINS one (`'a' + 1`) spans more
-		// than one token and is left alone, which is what keeps this a rule about literals.
+		// token a `charLiteral`. A compound expression that merely CONTAINS one spans more than one token
+		// and is left alone, which is what keeps this a rule about literals — and, with the tag test above,
+		// what stops a Character BINDING (`let c = 'a'` then `c == 45`) from being silently re-typed.
 		if pastEnd != start + 1 or self.kindAt(start) != TokenKind.charLiteral 'notALoneLiteral'
 			return value
 		end 'notALoneLiteral'
 
 		let tok = self.tokenAt(start)
-		match decodeCharLiteral(tok.value) 'decoded'
-			byte(b) then return self.emitCharacterLiteral(byteSlice(b as Byte), range: SourceRange.ofToken(tok))
-			multiByte(bytes) then panic("characterizedOperand: the {bytes.count()}-byte literal '{String.from(tok.value)}' already materialized as a Character, so the tag guard above cannot have let it reach here")
-			empty then panic("characterizedOperand: an empty character literal is refused by parseCharLiteral, so no operand carrying one reaches a typed position")
-			badEscape(text) then panic("characterizedOperand: the unknown escape '{text}' is refused by parseCharLiteral, so no operand carrying one reaches a typed position")
-			badDigitEscape(text, _, _) then panic("characterizedOperand: the malformed digit escape '{text}' is refused by parseCharLiteral, so no operand carrying one reaches a typed position")
-		end 'decoded'
-	end 'characterizedOperand'
+		match try self.charLiteralCodepoint(tok) 'converted'
+			codepoint(cp) then return self.retypeCharLiteralAsCodepoint(value, codepoint: cp, tok: tok)
+			// A cluster the coercion cannot express stays a `Character`, and the operator raises its own
+			// type error over it — see `CharLiteralCodepoint`.
+			cluster then return value
+		end 'converted'
+	end 'integerizedOperand'
 
-	// ⭐ Append the `stringLiteral` op a multi-byte character literal materializes as, and mint a
-	// `character`-tagged value for it. It is the SAME op a String literal emits — one immortal `.rdata`
-	// byte record, `capacity@16 = RdataBufferCapacity`, never allocated or dropped — because a Character
-	// IS that record (see `GraphemeRuntime`'s header). Only the value's TAG differs, and the tag is what
-	// every rule reads, so `'é' == "é"` is a type error and `print(c)` is refused while `"{c}"` works.
+	// ⭐⭐ **THE CODEPOINT A CHARACTER LITERAL DENOTES — THE one door, because two readers ask.**
+	// `integerizedOperand` asks it for an operand or a declared slot; `decodeCharPatternValue` asks it for a
+	// `match` INTERVAL bound, which emits no op and so cannot go through the operand path at all. Written
+	// twice, one of them would have coerced `'é'` and the other refused it.
+	//
+	// ⚠ **A MULTI-CODEPOINT CLUSTER HAS NONE.** `'é'` and `'中'` are one codepoint each and convert (MEASURED
+	// on the oracle: `cp == 'é'` compares against **233**); a ZWJ family emoji or a regional-indicator flag is
+	// a SEQUENCE of codepoints, and answering with the FIRST would be a wrong number wearing a conversion's
+	// name. Each caller decides what to do with that answer — stay a `Character`, or raise E2028.
+	function charLiteralCodepoint(tok Token) returns CharLiteralCodepoint throws ParseError
+		let bytes = try self.charLiteralBytes(tok)
+		let decoded = decodeUtf8Sequence(bytes, start: 0)
+		if decoded.byteLength != bytes.count() 'notOneCodepoint'
+			return CharLiteralCodepoint.cluster
+		end 'notOneCodepoint'
+
+		return CharLiteralCodepoint.codepoint(decoded.codepoint)
+	end 'charLiteralCodepoint'
+
+	// ⭐⭐ **REPLACE A CHARACTER LITERAL'S `stringLiteral` OP WITH THE INTEGER `literal` OP IT WOULD HAVE
+	// BEEN, IN PLACE** — the write `integerizedOperand`'s header argues for. Everything an emitted integer
+	// literal carries is restored on the SAME ValueId: the op, the two type columns, and the parser's
+	// constant view (without which `53 - '0'` would stop folding and every fold-sensitive golden would move).
+	//
+	// The op INDEX comes from `charLiteralOps`, filed by `emitCharacterLiteral` — an O(1) read where
+	// `ValueOriginTable.lookup` is a linear scan its own header calls THE COLD PATH.
+	function retypeCharLiteralAsCodepoint(value ValueId, codepoint ParsedInt, tok Token) returns ValueId
+		let opIndex = try self.charLiteralOps.get(value) otherwise panic("retypeCharLiteralAsCodepoint: v{value} is tagged `character` at a lone charLiteral token '{String.from(tok.value)}' but `emitCharacterLiteral` filed no op for it — every character-tagged literal is minted there")
+		try self.artifact.module.ops.set(opIndex, value: MaxonOp.literal(value, value: codepoint, valueType: MaxonType.integer)) otherwise panic("retypeCharLiteralAsCodepoint: ops.set({opIndex}) OOB — the index was filed by `emitCharacterLiteral` as it appended that very op")
+		self.retypeValue(value, valueType: MaxonType.integer)
+		self.recordConst(value, folded: codepoint)
+
+		return value
+	end 'retypeCharLiteralAsCodepoint'
+
+	// ⭐ Append the `stringLiteral` op a character literal materializes as, and mint a `character`-tagged
+	// value for it. It is the SAME op a String literal emits — one immortal `.rdata` byte record,
+	// `capacity@16 = RdataBufferCapacity`, never allocated or dropped — because a Character IS that record
+	// (see `GraphemeRuntime`'s header). Only the value's TAG differs, and the tag is what every rule reads,
+	// so `'é' == "é"` is a type error and `print(c)` is refused while `"{c}"` works.
 	function emitCharacterLiteral(bytes ByteArray, range SourceRange) returns ValueId
 		let result = self.mintValue(ValueTypeTag.character, nameId: UnnamedTypeId)
+		// Filed BEFORE the emit, off the count that IS the index the append will land at — the same
+		// `module.ops.count()` floor `parseTry` reads for the same reason.
+		self.recordCharLiteralOp(result, opIndex: self.artifact.module.opCount())
 		self.artifact.emitOp(self.currentBlock, op: MaxonOp.stringLiteral(result, bytes: bytes), range: range)
 		return result
 	end 'emitCharacterLiteral'
 
-	// Decode a single-byte character literal to its byte value, or the same positioned diagnostic
-	// `parseCharLiteral` gives for an empty/bad-escape literal. Its one caller is the match INTERVAL plan,
-	// which needs the byte VALUE (a pattern bound) rather than an emitted `literal` op.
+	// File the op a character-literal value was materialized by, so an integer position can rewrite it.
+	function recordCharLiteralOp(value ValueId, opIndex OpIndex)
+		// COPY-ON-WRITE off the shared empty map, exactly as `recordValueInstanceAlias` does and for its
+		// reason: a function that writes no character literal never allocates one.
+		if self.charLiteralOps is sharedEmptyCharLiteralOps 'stillShared'
+			self.charLiteralOps = CharLiteralOpMap.create()
+		end 'stillShared'
+		self.charLiteralOps.upsert(value, value: opIndex)
+	end 'recordCharLiteralOp'
+
+	// Decode a character literal to the CODEPOINT its pattern bound denotes, or the same positioned
+	// diagnostic `parseCharLiteral` gives for an empty/bad-escape literal. Its one caller is the match
+	// INTERVAL plan, which needs the VALUE (a pattern bound) rather than an emitted `literal` op — which is
+	// why it reaches `charLiteralCodepoint` directly instead of through `integerizedOperand`.
 	//
 	// ⚠ **THE INTERVAL PLAN IS ONLY EVER BUILT FOR AN INTEGER-LIKE SCRUTINEE** (`matchUsesIntervalPlan`), so
 	// `scrutTag` here is an `int`/`bool`/`ExitCode`/ranged-alias and never a `character`. A `match` over a
 	// CHARACTER scrutinee keeps the linear compare chain, whose bounds come from `emitPatternValue` and whose
 	// compares are `emitCompare`'s — which is what makes a Character range arm work at all (A5m-c).
 	function decodeCharPatternValue(tok Token, scrutTag ValueTypeTag) returns ParsedInt throws ParseError
-		match decodeCharLiteral(tok.value) 'decoded'
-			byte(value) then return value
-			empty then throw ParseError.invalidCharacterLiteral("a character literal must contain exactly one character", line: tok.line, column: tok.column)
-			// ⚠ **A MULTI-BYTE LITERAL HERE IS A `Character` PATTERN AGAINST A NON-CHARACTER SCRUTINEE, AND
-			// THAT IS AN ORDINARY TYPE MISMATCH.** It used to be an `unsupported` naming the missing feature —
+		match try self.charLiteralCodepoint(tok) 'converted'
+			codepoint(value) then return value
+			// ⚠ **A MULTI-CODEPOINT CLUSTER HERE IS A `Character` PATTERN AGAINST A NON-CHARACTER SCRUTINEE,
+			// AND THAT IS AN ORDINARY TYPE MISMATCH.** It used to be an `unsupported` naming a missing feature —
 			// *"comparing Characters in a `match` needs pattern dispatch over a runtime equality"* — which was
 			// true when a Character `match` did not exist and became a wrong noun the moment it did: the
-			// capability is built, and what is wrong with `match someInt 'm' 'é' then …` is that an `int` and
-			// a `Character` do not compare, exactly as a `String` pattern against an `int` does not
+			// capability is built, and what is wrong with a cluster pattern over an `int` scrutinee is that an
+			// `int` and a `Character` do not compare, exactly as a `String` pattern against an `int` does not
 			// (`decodeScalarPatternBound`'s own string arm, one screen up, says it in the same words).
-			multiByte then throw ParseError.matchPatternTypeMismatch(typeTagName(ValueTypeTag.character), scrutineeType: typeTagName(scrutTag), line: tok.line, column: tok.column)
-			badEscape(text) then throw ParseError.invalidCharacterLiteral("unknown escape sequence '{text}'", line: tok.line, column: tok.column)
-			badDigitEscape(text, offset, marker) then throw invalidDigitEscapeError(text, kind: CharacterLiteralEscapeKind, offset: offset, marker: marker, tok: tok)
-		end 'decoded'
+			cluster then throw ParseError.matchPatternTypeMismatch(typeTagName(ValueTypeTag.character), scrutineeType: typeTagName(scrutTag), line: tok.line, column: tok.column)
+		end 'converted'
 	end 'decodeCharPatternValue'
 
 	// `"hello"`, `""`, `"Use \{expr\} for interpolation"` — a `String` LITERAL in operand position (P1.2
@@ -35771,7 +35930,8 @@ export type Parser
 	end 'emitCharacterMemberSet'
 
 	// `CharSet from ['x', 'y', 'z']` — the SOURCE form of a member set. The cursor sits on the `[`. Each
-	// element is characterized (`'x'` adopts `Character`) and MOVED in, exactly as a preset's minted literal
+	// element is a `Character` by being written as a character literal (A5m-ab; it used to have to ADOPT the
+	// type here, because a one-byte literal was an int) and is MOVED in, exactly as a preset's minted literal
 	// is, so the two producers cannot disagree about who owns a member.
 	function parseCharacterMemberSetLiteral(func IrFunction, range SourceRange) returns ValueId throws ParseError
 		try self.consume(TokenKind.leftBracket)
@@ -35779,7 +35939,7 @@ export type Parser
 		while not self.at(TokenKind.rightBracket) 'eachMember'
 			let memberTok = self.current()
 			let memberStart = self.pos
-			let member = try self.characterizedOperand(try self.parseExpression(func, block: self.currentBlock), expected: ValueTypeTag.character, start: memberStart, pastEnd: self.pos)
+			let member = try self.parseExpression(func, block: self.currentBlock)
 			if self.tagOf(member) != ValueTypeTag.character 'notACharacter'
 				throw ParseError.builtinOperandType(String.from(CharacterMemberSetAliasName), required: typeTagName(ValueTypeTag.character), got: typeTagName(self.tagOf(member)), line: memberTok.line, column: memberTok.column)
 			end 'notACharacter'
@@ -35847,10 +36007,10 @@ export type Parser
 		return self.valueNameId(value) == self.signatures.setInstanceForCharacter()
 	end 'valueIsCharacterMemberSet'
 
-	// ⭐ **`cs.contains(c)` — the type's one instance method.** The argument must be a `Character`; a lone
-	// character literal ADOPTS that type (`characterizedOperand`), which is what makes `cs.contains('x')`
-	// compile where `'x'` would otherwise be an int. The set BORROWS the character for the probe, so its
-	// owned temp drops at statement end as any other borrowed argument's does.
+	// ⭐ **`cs.contains(c)` — the type's one instance method.** The argument must be a `Character`, which
+	// `cs.contains('x')` satisfies by writing one (A5m-ab; the literal used to have to ADOPT the type here).
+	// The set BORROWS the character for the probe, so its owned temp drops at statement end as any other
+	// borrowed argument's does.
 	function dispatchCharacterSetMethod(func IrFunction, recv MethodReceiver) returns ValueId throws ParseError
 		let methodTok = try self.consume(TokenKind.identifier)
 		let range = SourceRange.between(recv.anchor, last: methodTok)
@@ -35870,12 +36030,10 @@ export type Parser
 	end 'dispatchCharacterSetMethod'
 
 	// Parse one argument expression and require it to be a `Character`, blaming the argument's own first
-	// token. The `requireStringArgValue` twin, and it characterizes a lone literal first for the reason
-	// `parseSetKeyArg` does: `'x'` is one byte, so it materializes as an int unless a Character is expected.
+	// token. The `requireStringArgValue` twin.
 	function requireCharacterArgValue(func IrFunction, methodName ByteArray) returns ValueId throws ParseError
 		let argTok = self.current()
-		let argStart = self.pos
-		let arg = try self.characterizedOperand(try self.parseExpression(func, block: self.currentBlock), expected: ValueTypeTag.character, start: argStart, pastEnd: self.pos)
+		let arg = try self.parseExpression(func, block: self.currentBlock)
 		if self.tagOf(arg) != ValueTypeTag.character 'argNotCharacter'
 			throw ParseError.builtinOperandType(String.from(methodName), required: typeTagName(ValueTypeTag.character), got: typeTagName(self.tagOf(arg)), line: argTok.line, column: argTok.column)
 		end 'argNotCharacter'
@@ -37344,11 +37502,10 @@ export type Parser
 	// function consuming them: a `Set` key is fenced by `( … )`, a `Map`'s two columns by `(`, `,` and `)`.
 	// Written once per container, the ordering contract was stated twice and could be honoured once.
 	//
-	// ⚠ **A LONE CHARACTER LITERAL ADOPTS THE COLUMN'S TYPE (P1.8 Slice D).** `chars.contains('x')` on a
-	// `Set with Character` is the whole reason: `'x'` is one byte, so `parseCharLiteral` materializes it as an
-	// INT (shv2 types a character literal by its byte WIDTH), and the tag check below would refuse a program the
-	// oracle runs. This is `characterizedOperand`'s existing rule reaching one more position — exactly the
-	// `let`/`return`/comparison positions it already serves.
+	// ⚠ **A LONE CHARACTER LITERAL COERCES TO THE COLUMN'S TYPE WHEN THAT COLUMN IS INTEGRAL (A5m-ab).** A
+	// `Set with Character` needs nothing — `chars.contains('x')` writes a Character and gets one — but a column
+	// declared over a ranged integer alias does, and it is the same rule the `let`/`return`/comparison positions
+	// serve (`integerizedOperand`).
 	//
 	// The tag rule itself is `columnValueTagMatches`, whose header carries the measured reason "is this an int?"
 	// is `tagIsIntegral` and not `== ValueTypeTag.integer`.
@@ -37375,7 +37532,7 @@ export type Parser
 		let valueTok = self.current()
 		let valueStart = self.pos
 		let declared = maxonTypeTag(declaredType)
-		let parsed = try self.characterizedOperand(try self.parseExpression(func, block: self.currentBlock), expected: declared, start: valueStart, pastEnd: self.pos)
+		let parsed = try self.integerizedOperand(try self.parseExpression(func, block: self.currentBlock), expected: declared, start: valueStart, pastEnd: self.pos)
 
 		let valueTag = self.tagOf(parsed)
 		let valueIdentity = self.aggregateNameOf(valueTag, nameId: self.valueNameId(parsed))
@@ -40362,22 +40519,18 @@ export type Parser
 	// type to violate — its first element FIXES the instance (`arrayLiteralInstanceFor`) and every later one
 	// is compared against it by `requireArrayLiteralElementMatches`. It also has no method token to name.
 	//
-	// ⚠⚠ **A `Character` ELEMENT IS THE ONE SLOT THAT COERCES BEFORE IT COMPARES, AND LEAVING THAT OUT IS A
-	// FALSE REJECTION, MEASURED.** shv2 types a character literal by its BYTE WIDTH — one byte is an `int`,
-	// wider is a `Character` — so `a.push('e')` into an `Array with Character` arrives INT-tagged where every
-	// other Character-expecting position already makes such a literal adopt the type (`characterizedOperand`,
-	// `character-ownership.md`'s `character-literal-adopts-the-character-type`). Checked without it, the
-	// oracle counts one element and shv2 answers *"cannot assign 'int' … of type 'Character'"*. It is asked
-	// through the ONE adoption door — a literal in a Character position, never a tag pairing — so
-	// `char-literal-to-int.md`'s codepoint arithmetic is untouched, and it needs the value's TOKEN SPAN,
-	// which is why the callers hand over `valueStart` (the same position `moveElementIntoContainer` reads).
+	// ⚠ **AN INTEGRAL ELEMENT SLOT COERCES A CHARACTER LITERAL BEFORE IT COMPARES (A5m-ab).** `a.push('e')`
+	// into an `Array with Character` needs nothing — the literal already IS a Character — but pushing one into
+	// an array of a ranged integer alias reaches the same codepoint conversion every other declared slot makes
+	// (`integerizedOperand`). It needs the value's TOKEN SPAN, which is why the callers hand over `valueStart`
+	// (the same position `moveElementIntoContainer` reads).
 	function requireContainerElementType(giid GenericInstanceId, value ValueId, valueStart TokenIndex, methodTok Token) returns ValueId throws ParseError
 		if self.signatures.containerElementIsOpaque(giid) 'opaqueInSharedBody'
 			return value
 		end 'opaqueInSharedBody'
 
 		let declared = self.resolvedSlotType(self.signatures.containerElementType(giid))
-		let element = try self.characterizedOperand(value, expected: maxonTypeTag(declared), start: valueStart, pastEnd: self.pos)
+		let element = try self.integerizedOperand(value, expected: maxonTypeTag(declared), start: valueStart, pastEnd: self.pos)
 		let class = classifyUnionPayload(self.signatures, typeNames: self.artifact.typeNames, fieldType: declared, slotScopeFilePath: self.filePath)
 		if payloadClassIsManaged(class) 'managed'
 			try self.requireManagedValueMatches(payloadStorageOf(class), isString: payloadClassIsString(class), value: element, assignedName: String.from(methodTok.value), voice: SlotMismatchVoice.containerElementArgument, anchor: methodTok)
@@ -43253,6 +43406,7 @@ export type Parser
 		self.currentWitnessParamCount = 0
 		self.valueInstanceAlias = sharedEmptyInstanceAliasMap
 		self.valueDeclaredAlias = sharedEmptyDeclaredAliasMap
+		self.charLiteralOps = sharedEmptyCharLiteralOps
 		self.immutableGlobalReads = sharedEmptyImmutableGlobalReads
 		self.bufferSurfaceValues = sharedEmptyBufferSurfaceValues
 		self.bufferSurfaceSlots = sharedEmptyBufferSurfaceSlots
@@ -44517,29 +44671,30 @@ export type Parser
 		return ConstValue.create(BoolFalseValue, tag: ValueTypeTag.boolean)
 	end 'evalConstBoolLiteral'
 
-	// A character literal is an INTEGER carrying its byte — the same reading `parseCharLiteral` gives
-	// it, through the same decoder, so `let DASH = '-'` and `c == '-'` cannot disagree about what a
-	// dash is.
+	// ⭐ **A TOP-LEVEL `let c = 'x'` IS REFUSED, WHATEVER THE CHARACTER'S WIDTH.** A module-scope binding
+	// folds to a compile-time constant, and a `Character` is a heap-shaped record the constant evaluator has
+	// no representation for (`SignatureIndex.globalStdType` says the same from the other end). EVERY character
+	// literal is one (`parseCharLiteral`), so the one-byte case that used to fold to its byte folds no longer
+	// — and that is the ruling's own consequence rather than a narrowing: the value the initializer denotes
+	// is a record, and it read as an integer only because the literal did.
+	//
+	// ⚠ The refusal is PERMANENT, so it is E2004 and not E2015: nothing about this is a feature pending
+	// implementation — a module-scope initializer IS a folded constant by definition, and a Character record
+	// can never be one. E2015 said "not yet", which was the one thing the verdict does not mean. Both
+	// reference compilers refuse a single-quoted top-level initializer under E2004 with this exact sentence
+	// (v1 `Parser.maxon:3277`; MEASURED on the oracle, `let DASH = '-'` is *"Expected constant expression,
+	// got '-'"*), so this agrees with them on the verdict and not merely on the wording.
+	//
+	// It still DECODES the literal first, so a malformed one is named for what is wrong with it rather than
+	// swept into the constant complaint.
 	function evalConstCharLiteral() returns ConstValue throws ConstEvalError
 		let tok = self.current()
 		self.advance()
-		match decodeCharLiteral(tok.value) 'decoded'
-			byte(value) then return ConstValue.create(value, tag: ValueTypeTag.integer)
-			empty then throw ConstEvalError.defective(ParseError.invalidCharacterLiteral("a character literal must contain exactly one character", line: tok.line, column: tok.column))
-			// A TOP-LEVEL binding folds to a compile-time constant, and a Character is a heap-shaped record
-			// the constant evaluator has no representation for (`SignatureIndex.globalStdType` says the same
-			// from the other end). A module-scope `let c = 'é'` is therefore refused rather than folded.
-			//
-			// ⚠ The refusal is PERMANENT, so it is E2004 and not E2015: nothing about this is a feature
-			// pending implementation — a module-scope initializer IS a folded constant by definition, and
-			// a Character record can never be one. E2015 said "not yet", which was the one thing the
-			// verdict does not mean. Both reference compilers refuse a single-quoted top-level initializer
-			// under E2004 with this exact sentence (v1 `Parser.maxon:3277`), so this also brings shv2 into
-			// agreement with them on the verdict, not just the wording.
-			multiByte then throw ConstEvalError.defective(ParseError.expectedConstantExpression(String.from(tok.value), line: tok.line, column: tok.column))
-			badEscape(text) then throw ConstEvalError.defective(ParseError.invalidCharacterLiteral("unknown escape sequence '{text}'", line: tok.line, column: tok.column))
-			badDigitEscape(text, offset, marker) then throw ConstEvalError.defective(invalidDigitEscapeError(text, kind: CharacterLiteralEscapeKind, offset: offset, marker: marker, tok: tok))
-		end 'decoded'
+		try self.charLiteralBytes(tok) otherwise (err) 'malformed'
+			throw ConstEvalError.defective(err)
+		end 'malformed'
+
+		throw ConstEvalError.defective(ParseError.expectedConstantExpression(String.from(tok.value), line: tok.line, column: tok.column))
 	end 'evalConstCharLiteral'
 
 	// `( … )` — grouping, re-entering the climb at the LOOSEST precedence exactly as

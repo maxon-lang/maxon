@@ -170,7 +170,7 @@ end 'main'
 4
 ```
 
-<!-- disabled-test: character-to-string -->
+<!-- test: character-to-string -->
 <!-- P1.2 String - `print` and string interpolation -->
 ### Character to String Conversion
 
@@ -592,7 +592,7 @@ end 'main'
 8
 ```
 
-<!-- disabled-test: escape-sequences -->
+<!-- test: escape-sequences -->
 <!-- P1.2 `Character.bytes()` + String interpolation. Escape DECODING itself already works - char-literal-to-int.md's `char-literal-escape-coercion` case covers it; what is missing is the Character type this case measures the escapes' byte length with -->
 ### Escape Sequences in Character
 
@@ -619,7 +619,7 @@ end 'main'
 1
 ```
 
-<!-- disabled-test: ascii-value-letter -->
+<!-- test: ascii-value-letter -->
 <!-- P1.4 errors (`try`/`otherwise`) + P1.2 `Character.asciiValue()` -->
 ### ASCII Value for Letter
 
@@ -638,7 +638,7 @@ end 'main'
 65
 ```
 
-<!-- disabled-test: ascii-value-digit -->
+<!-- test: ascii-value-digit -->
 <!-- P1.4 errors (`try`/`otherwise`) + P1.2 `Character.asciiValue()` -->
 ### ASCII Value for Digit
 
@@ -657,7 +657,7 @@ end 'main'
 48
 ```
 
-<!-- disabled-test: ascii-value-lowercase -->
+<!-- test: ascii-value-lowercase -->
 <!-- P1.4 errors (`try`/`otherwise`) + P1.2 `Character.asciiValue()` -->
 ### ASCII Value for Lowercase
 
@@ -676,7 +676,7 @@ end 'main'
 97
 ```
 
-<!-- disabled-test: ascii-value-space -->
+<!-- test: ascii-value-space -->
 <!-- P1.4 errors (`try`/`otherwise`) + P1.2 `Character.asciiValue()` -->
 ### ASCII Value for Space
 
@@ -695,7 +695,7 @@ end 'main'
 32
 ```
 
-<!-- disabled-test: ascii-value-newline -->
+<!-- test: ascii-value-newline -->
 <!-- P1.4 errors (`try`/`otherwise`) + P1.2 `Character.asciiValue()` -->
 ### ASCII Value for Newline Escape
 
@@ -749,11 +749,16 @@ end 'main'
 ```
 
 <!-- disabled-test: error.otherwise-out-of-range -->
-<!-- MEASURED 2026-07-28: blocked ONLY on `Character.asciiValue()`, which does not exist
-     (`E2015: 'int' has no method named 'asciiValue'`). P1.4 `try`/`otherwise` landed, and the
-     P1.9 half — E3005 on an out-of-range `otherwise` value against a ranged return type — is
-     implemented and pinned by `ranged-typealias/error.otherwise-outside-ranged-return`.
-     This case is a `Character` method gap, NOT a ranged-typealias gap. -->
+<!-- A SYNTHESIZED RANGED ALIAS CARRIES NO RANGE — re-measured 2026-08-05 (A5m-ab), and the marker
+     that stood here was wrong. `Character.asciiValue()` now EXISTS and its five sibling cases are
+     green; what this one needs is the alias `AsciiValue = int(0 to 127)` the message names, and
+     shv2's `__char_ascii` returns a bare `int`. The alias is declared in `stdlib/Character.maxon`,
+     a module shv2 cannot load, so it is answered the way `HashValue`/`Codepoint` are — by
+     `isSynthesizedIntAliasName`, which erases the name to `integer` and DROPS the range. Giving a
+     synthesized alias its range is filed as its own rung in `IrInterface.isSynthesizedIntAliasName`'s
+     header, together with the two other silences it causes; the ranged-alias half of `otherwise` is
+     built and pinned by `ranged-typealias/error.otherwise-outside-ranged-return`. Under the marker
+     above this case FAILS "expected a compile error but compilation succeeded" — measured. -->
 ### Otherwise value must be within ranged type bounds
 
 ```maxon
@@ -767,7 +772,7 @@ end 'main'
 error E3005: specs/fragments/character-type/error.otherwise-out-of-range.test:4:12: otherwise value -1 is outside the range of 'AsciiValue' (int(0 to 127))
 ```
 
-<!-- disabled-test: match-escape-character -->
+<!-- test: match-escape-character -->
 <!-- P1.1 `match` -->
 ### Match with Escape Character Literals
 

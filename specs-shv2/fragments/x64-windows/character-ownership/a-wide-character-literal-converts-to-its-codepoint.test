@@ -1,15 +1,15 @@
-// Test: an-int-position-keeps-its-integer-literal
+// Test: a-wide-character-literal-converts-to-its-codepoint
 function main() returns ExitCode
-	let cp = 45
 	var hits = 0
-	if cp == '-' 'dash'
+	let cp = 233
+	if cp == 'é' 'accent'
 		hits = hits + 1
-	end 'dash'
-	if 'A' == 'A' 'bothLiterals'
+	end 'accent'
+	if '中' == 20013 'han'
 		hits = hits + 1
-	end 'bothLiterals'
-	let digit = 53 - '0'
-	print("{hits} {digit}\n")
+	end 'han'
+	let shifted = 'é' + 1
+	print("{hits} {shifted}\n")
 	return 0
 end 'main'
 ---
@@ -31,31 +31,30 @@ func @main {
     x64.pushReg r14
     x64.pushReg r15
     x64.prologue 88
-    x64.movRegImm32 rax, 45
-    x64.movRegImm32 rbx, 0
-    x64.cmpRegImm32 rax, 45
-    x64.jcc equal, dash
+    x64.movRegImm32 rax, 0
+    x64.movRegImm32 rcx, 233
+    x64.cmpRegImm32 rcx, 233
+    x64.jcc equal, accent
     x64.jmp critsplit
-  dash:
-    x64.leaRegRegImm32 rbx, rbx, 1
+  accent:
+    x64.leaRegRegImm32 rax, rax, 1
     x64.jmp ifcont
   critsplit:
     x64.jmp ifcont
   ifcont:
-    x64.leaRegRdata rcx, [rip + __str_rec_1]
-    x64.leaRegRdata rdx, [rip + __str_rec_1]
-    x64.callDirect __str_eq
-    x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, bothLiterals
+    x64.movRegImm32 rcx, 20013
+    x64.cmpRegImm32 rcx, 20013
+    x64.jcc equal, han
     x64.jmp critsplit
-  bothLiterals:
-    x64.leaRegRegImm32 rbx, rbx, 1
+  han:
+    x64.leaRegRegImm32 rbx, rax, 1
     x64.jmp ifcont
   critsplit:
+    x64.movRegReg rbx, rax
     x64.jmp ifcont
   ifcont:
-    x64.movRegImm32 rax, 53
-    x64.leaRegRegImm32 r12, rax, -48
+    x64.movRegImm32 rax, 233
+    x64.leaRegRegImm32 r12, rax, 1
     x64.movRegImm32 rcx, 21
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
@@ -65,7 +64,7 @@ func @main {
     x64.movRegReg rdx, r13
     x64.callDirect __int_to_string
     x64.movRegReg rbx, r8
-    x64.leaRegRdata rax, [rip + __str_rec_3]
+    x64.leaRegRdata rax, [rip + __str_rec_1]
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
     x64.storeSlotReg slot6, rcx
     x64.loadRegBaseDisp.word64 r14, [rax + 8]
@@ -77,7 +76,7 @@ func @main {
     x64.movRegReg rdx, r15
     x64.callDirect __int_to_string
     x64.storeSlotReg slot5, r8
-    x64.leaRegRdata rax, [rip + __str_rec_5]
+    x64.leaRegRdata rax, [rip + __str_rec_3]
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
     x64.storeSlotReg slot4, rcx
     x64.loadRegBaseDisp.word64 rax, [rax + 8]

@@ -426,11 +426,11 @@ end 'main'
 <!-- test: character-literal-adopts-the-character-type -->
 ### A character literal in a Character-expecting position IS a Character
 
-shv2 types a character literal by its BYTE WIDTH — one byte is an `int`, wider is a `Character` — which
-is what keeps `cp == '-'` and `cp - '0'` meaning what they say. The gap that leaves is the other
-direction: `c == 'a'` inside `for c in s`, the very next thing anyone writes after the loop. A literal
-in a position that unambiguously expects a Character now adopts that type, on both sides of a
-comparison, on an assignment's right-hand side, and at a `return`.
+Every character literal IS a `Character` (A5m-ab), so no position has to ask for one: `c == 'a'` inside
+`for c in s`, `found = 'z'` into a `Character` var and `return 'a'` from `returns Character` are all the
+literal's own type meeting itself. The case predates that ruling — it was written when a one-byte literal
+was an `int` and each of these positions had to make the literal ADOPT the type — and it is kept exactly
+as it was, because what it measures is the behaviour and not the route to it.
 
 ```maxon
 function firstAscii() returns Character
@@ -475,8 +475,11 @@ end 'main'
 <!-- test: an-int-position-keeps-its-integer-literal -->
 ### A character literal meeting an `int` is still an int
 
-The rule is keyed on the position expecting a Character, never on the two tags — so nothing about
-`char-literal-to-int.md`'s codepoint arithmetic moves.
+Its title survives the flip and its behaviour is unchanged, but the direction of the rule is now the
+opposite one: the literal is a `Character` and the INTEGER position converts it to its codepoint
+(`Parser.integerizedOperand`), where before the position had to be a Character one for anything to happen
+at all. What must not move is the ANSWER, and `char-literal-to-int.md`'s codepoint arithmetic pins the
+rest of it.
 
 ```maxon
 function main() returns ExitCode
@@ -500,7 +503,7 @@ end 'main'
 2 5
 ```
 
-<!-- disabled-test: character-literal-at-a-call-argument -->
+<!-- test: character-literal-at-a-call-argument -->
 <!-- A CHARACTER LITERAL AT A `Character` PARAMETER. The other three Character-expecting positions (comparison, assignment, `return`) adopt the literal's type; a call ARGUMENT cannot yet, and the blocker is measured: the parse-time whole-program index records parameter NAMES but no parameter TYPES (`mixDeclaration` hashes a declaration's name and RETURN type only), so at the moment an argument is parsed there is nothing to ask what the parameter expects. Measured: `isTarget(c, target: 'a')` is `E3005: argument type mismatch for 'target': expected 'Character', got 'int'`, while the same call with a multi-byte literal (`target: 'ö'`) compiles — see `character-parameter-and-equality`. Closing it means giving `ProgramSignatures` a per-parameter fact, which is a whole-program query sitting under a per-file one (cost is O(functions x params) x files) whose hash keys every parse memo -->
 ### Character literal at a call argument
 
@@ -618,12 +621,11 @@ end 'main'
 <!-- test: a-character-array-takes-a-one-byte-literal -->
 ### A ONE-BYTE character literal adopts `Character` at an array element too
 
-`push` / `set` / `insert` are Character-expecting positions like any other, so the width rule that
-makes `'e'` an `int` and `'é'` a `Character` must not decide what an `Array with Character` accepts.
-It nearly did: when the element-argument type check landed, `a.push('e')` was refused as
-*"cannot assign 'int' … of type 'Character'"* on a program the oracle runs — the adoption door
-(`characterizedOperand`) has to be asked before the slot's type is compared, exactly as at a
-comparison, an assignment and a `return`.
+`push` / `set` / `insert` take whatever the element slot declares, and a one-byte literal must not be a
+different KIND of thing from a wider one. It nearly was: under the width rule that made `'e'` an `int` and
+`'é'` a `Character`, `a.push('e')` was refused as *"cannot assign 'int' … of type 'Character'"* on a
+program the oracle runs, and the cure was an adoption door asked before the slot's type was compared. Since
+A5m-ab there is no width rule and no adoption to do — but the case is what would catch its return.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -687,12 +689,12 @@ error E2015: specs/fragments/character-ownership/an-array-literal-element-is-not
 ```
 
 <!-- test: a-single-byte-literal-adopts-on-the-left-too -->
-### The LEFT operand's literal adopts the type as well
+### The LEFT operand's literal is judged against the RIGHT one
 
-`character-literal-adopts-the-character-type`'s `'é' == c` case cannot pin this: a MULTI-byte literal is
-already a `Character`, so it takes `characterizedOperand`'s early return and never reaches the
-materialization. Only a SINGLE-byte literal on the left does — and with the left operand asking its own
-tag instead of the other side's (a one-word transposition), the whole suite stayed **2113/0**.
+A one-word transposition — the left operand asking its own tag instead of the other side's — left the whole
+suite at **2113/0** when this was written, and the asymmetry it hides is still exactly as reachable after
+A5m-ab: `integerizedOperand` is asked of both operands, each against what the OTHER is, and a left operand
+compared with itself would answer about nothing.
 
 ```maxon
 function main() returns ExitCode
@@ -717,4 +719,191 @@ end 'main'
 ```
 ```stdout
 3 3
+```
+
+<!-- test: a-character-literal-receiver-is-not-a-try-block-label -->
+### `try 'A'.asciiValue()` is a call, not a block-form `try`
+
+A block LABEL and a character literal are the same `TokenKind.charLiteral`; only grammatical position tells
+them apart, and `tryOpensBlockAt` used to claim the two forms were disjoint on the token alone because *"no
+call can begin with a charLiteral"*. A character literal with methods is exactly such a call, and the claim
+became false: measured, this program was **E3059**, *"a block-form `try 'label' … end` groups statements and
+yields no value"* — a diagnostic about a construct it does not contain. The disambiguator is the `.`: a block
+label is always followed by a statement, so the lexer emits a `newline` behind it and never a dot.
+
+```maxon
+function main() returns ExitCode
+	let val = try 'A'.asciiValue() otherwise 0
+	print("{val}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+65
+```
+
+<!-- test: a-character-literal-fills-a-character-struct-field -->
+### A character literal at a struct-literal field
+
+`Self{ch: 'e'}` was `E3005 … cannot assign 'int' to variable 'Cell.ch' of type 'Character'` while the oracle
+compiled and ran it (`PLAN.md`'s roster entry). It needs no roster entry now: the literal IS a `Character`,
+so the field and the value are the same type without anything being asked.
+
+```maxon
+type Cell
+	export var ch as Character
+
+	static function create() returns Cell
+		return Self{ch: 'e'}
+	end 'create'
+end 'Cell'
+
+function main() returns ExitCode
+	let c = Cell.create()
+	print("{c.ch}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+e
+```
+
+<!-- test: a-character-binding-is-never-retyped-by-an-int -->
+### Only a LONE LITERAL converts — a `Character` binding meeting an `int` is a type error
+
+The coercion keys on the operand being written as a character literal, never on the two tags. Without that
+guard `let c = 'a'` followed by `c == 45` would silently re-type the BINDING to 97 — a wrong answer with no
+diagnostic anywhere — because a `let` binds the literal's own SSA value.
+
+```maxon
+function main() returns ExitCode
+	let c = 'a'
+	if c == 45 'oops'
+		return 1
+	end 'oops'
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: specs/fragments/character-ownership/a-character-binding-is-never-retyped-by-an-int.test:4:7: type mismatch: 'cannot compare Character with int'
+```
+
+<!-- test: a-module-level-character-initializer-is-not-a-constant -->
+### A top-level `let` cannot hold a character
+
+A module-scope binding folds to a compile-time constant and a `Character` is a heap-shaped record, so there
+is nothing for the constant evaluator to fold — whatever the character's byte width. The one-byte case used
+to fold to its byte, which it could only do while the literal was an `int`. Both reference compilers refuse
+it under the same code and the same sentence.
+
+```maxon
+let DASH = '-'
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2004: specs/fragments/character-ownership/a-module-level-character-initializer-is-not-a-constant.test:2:12: Expected constant expression, got '-'
+```
+
+<!-- test: a-character-range-needs-both-bounds -->
+### A range is a `Character` range only when BOTH bounds are character literals
+
+`for c in 'a' to 'e'` iterates Characters; `for i in 'a' to n` is an INTEGER range starting at 97, because
+one bound is a number and the range is therefore over numbers — the same rule that makes `cp == '-'` a
+comparison of numbers. The element type follows the pair, never either half.
+
+```maxon
+function main() returns ExitCode
+	for c in 'a' to 'e' 'chars'
+		print("{c}")
+	end 'chars'
+	let stop = 99
+	var total = 0
+	for i in 'a' to stop 'codepoints'
+		total = total + i
+	end 'codepoints'
+	print(" {total}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+abcde 294
+```
+
+<!-- test: a-wide-character-literal-converts-to-its-codepoint -->
+### The conversion is to the CODEPOINT, not to a byte
+
+`'é'` is two bytes and one codepoint, and an integer position wants the codepoint: 233, which is what the
+oracle compares against too. It is what makes the rule a statement about characters rather than about the
+one-byte case that happened to be an `int` before A5m-ab.
+
+```maxon
+function main() returns ExitCode
+	var hits = 0
+	let cp = 233
+	if cp == 'é' 'accent'
+		hits = hits + 1
+	end 'accent'
+	if '中' == 20013 'han'
+		hits = hits + 1
+	end 'han'
+	let shifted = 'é' + 1
+	print("{hits} {shifted}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+2 234
+```
+
+<!-- test: a-cluster-has-no-integer-reading -->
+### A multi-codepoint cluster stays a `Character` in an integer position
+
+A ZWJ family emoji is a SEQUENCE of codepoints, so there is no single number to convert it to — answering
+with the FIRST would be a wrong number wearing a conversion's name. The literal stays a `Character` and the
+operator raises its own type error.
+
+```maxon
+function main() returns ExitCode
+	let cp = 128104
+	if cp == '👨‍👩‍👧‍👦' 'family'
+		return 1
+	end 'family'
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: specs/fragments/character-ownership/a-cluster-has-no-integer-reading.test:4:8: type mismatch: 'cannot compare int with Character'
+```
+
+<!-- test: an-ascii-array-literal-is-a-character-array-too -->
+### `['a', 'b']` infers the same element type `['é', 'ö']` does
+
+The width rule made these two literals different kinds of array; they are one kind now, and shv2 refuses a
+`Character` array in both. The case exists because the refusal moved: `['a', 'b']` used to be an
+`Array with integer` and compiled.
+
+```maxon
+function main() returns ExitCode
+	let a = ['a', 'b']
+	print("{a.count()}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: specs/fragments/character-ownership/an-ascii-array-literal-is-a-character-array-too.test:3:11: Unsupported: an array literal element of type 'Character' — a literal's elements are an integer, a float, a bool, a String, a struct, or a boxed union (a bare `[…]` infers the type from the first element)
 ```

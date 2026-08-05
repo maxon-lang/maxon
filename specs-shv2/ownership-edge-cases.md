@@ -1260,7 +1260,7 @@ end 'main'
 1
 ```
 
-<!-- disabled-test: rc-char-single-alloc-freed -->
+<!-- test: rc-char-single-alloc-freed -->
 <!-- beyond P1.2: Character type not yet in shv2 -->
 Single character allocated and freed in the same function scope; Character + child __ManagedMemory both cleaned up.
 ```maxon
@@ -1273,7 +1273,7 @@ end 'main'
 1
 ```
 
-<!-- disabled-test: rc-char-alias-incref -->
+<!-- test: rc-char-alias-incref -->
 <!-- beyond P1.2: Character type not yet in shv2 -->
 Aliasing a character increfs it; both variables share the same Character object.
 ```maxon
@@ -1287,7 +1287,7 @@ end 'main'
 2
 ```
 
-<!-- disabled-test: rc-char-reassign-decrefs-old -->
+<!-- test: rc-char-reassign-decrefs-old -->
 <!-- beyond P1.2: Character type not yet in shv2 -->
 Reassigning a character var decrefs and frees the old Character (with its managed child) before storing the new one.
 ```maxon
@@ -1301,7 +1301,7 @@ end 'main'
 1
 ```
 
-<!-- disabled-test: rc-char-return-transfers-ownership -->
+<!-- test: rc-char-return-transfers-ownership -->
 <!-- beyond P1.2: Character type not yet in shv2 -->
 Returning a character from a function transfers ownership to the caller.
 ```maxon
@@ -1318,7 +1318,7 @@ end 'main'
 1
 ```
 
-<!-- disabled-test: rc-char-inner-block-freed -->
+<!-- test: rc-char-inner-block-freed -->
 <!-- beyond P1.2: Character type not yet in shv2 -->
 A character created in an inner if-block is freed when that block exits.
 ```maxon
@@ -1648,7 +1648,7 @@ end 'main'
 42
 ```
 
-<!-- disabled-test: rc-char-to-string-interpolation -->
+<!-- test: rc-char-to-string-interpolation -->
 <!-- beyond P1.2: Character type not yet in shv2 -->
 Interpolating a character into a string must not leak. Currently the intermediate ManagedMemory allocation from the Character is not freed.
 ```maxon
@@ -1666,7 +1666,7 @@ end 'main'
 A
 ```
 
-<!-- disabled-test: rc-match-char-range-cleanup -->
+<!-- test: rc-match-char-range-cleanup -->
 <!-- beyond P1.2: Character type not yet in shv2 -->
 Using character range patterns in a match statement must clean up all allocated Characters. Currently the range bound Characters leak.
 ```maxon

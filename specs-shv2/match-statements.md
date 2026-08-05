@@ -1336,11 +1336,16 @@ end 'main'
 A `Character` pattern against an `int` scrutinee is an ordinary pattern/scrutinee type mismatch — the two
 do not compare, exactly as a `String` pattern against an `int` one does not.
 
+The pattern is a ZWJ family emoji, and that is the whole point of the case since A5m-ab: a match pattern is
+an integer-expecting position, so a SINGLE-codepoint literal there converts to its codepoint (see
+`match-character-literal-pattern-is-its-codepoint` below). A cluster is a SEQUENCE of codepoints and has no
+integer reading at all, so it is the pattern that still cannot meet an `int`.
+
 ```maxon
 function main() returns ExitCode
 	let n = 5
 	match n 'check'
-		'é' then return 1
+		'👨‍👩‍👧‍👦' then return 1
 		default then return 0
 	end 'check'
 end 'main'
@@ -1349,7 +1354,39 @@ end 'main'
 error E2028: specs/fragments/match-statements/error.match-character-pattern-on-int-scrutinee.test:5:3: pattern type 'Character' does not match scrutinee type 'int'
 ```
 
-<!-- disabled-test: match-range.character -->
+<!-- test: match-character-literal-pattern-is-its-codepoint -->
+### A character-literal pattern over an `int` scrutinee is its codepoint
+
+A `match` pattern is an integer-expecting position when the scrutinee is integral, so the literal converts
+exactly as `cp == '-'`'s operand does — one rule, one door (`Parser.integerizedOperand`). The multi-byte arm
+is what makes it a CODEPOINT rule rather than a byte one: `'é'` is 233, which the oracle also compares
+against.
+
+```maxon
+function main() returns ExitCode
+	var hits = 0
+	let dash = 45
+	match dash 'ascii'
+		'-' then hits = hits + 1
+		default then hits = hits + 100
+	end 'ascii'
+	let accent = 233
+	match accent 'wide'
+		'é' then hits = hits + 1
+		default then hits = hits + 100
+	end 'wide'
+	print("{hits}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+2
+```
+
+<!-- test: match-range.character -->
 <!-- CHARACTER LITERAL TYPE MODEL, a later rung — NOT the range. Character range patterns are built
      (A5m-c: `match-character-range` beside this one). What blocks these three is that a SINGLE-BYTE
      literal is an `int` in shv2 (the width rule, `Parser.parseCharLiteral`), so `let c = 'G'` binds an
@@ -1371,7 +1408,7 @@ end 'main'
 2
 ```
 
-<!-- disabled-test: match-range.character-lowercase -->
+<!-- test: match-range.character-lowercase -->
 <!-- CHARACTER LITERAL TYPE MODEL, a later rung — NOT the range. Character range patterns are built
      (A5m-c: `match-character-range` beside this one). What blocks these three is that a SINGLE-BYTE
      literal is an `int` in shv2 (the width rule, `Parser.parseCharLiteral`), so `let c = 'G'` binds an
@@ -1392,7 +1429,7 @@ end 'main'
 1
 ```
 
-<!-- disabled-test: match-range.character-digit -->
+<!-- test: match-range.character-digit -->
 <!-- CHARACTER LITERAL TYPE MODEL, a later rung — NOT the range. Character range patterns are built
      (A5m-c: `match-character-range` beside this one). What blocks these three is that a SINGLE-BYTE
      literal is an `int` in shv2 (the width rule, `Parser.parseCharLiteral`), so `let c = 'G'` binds an

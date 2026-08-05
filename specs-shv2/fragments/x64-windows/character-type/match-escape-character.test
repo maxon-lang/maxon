@@ -1,10 +1,10 @@
-// Test: character-in-variable
+// Test: match-escape-character
 function main() returns ExitCode
-	let letter = 'Z'
-	if letter == 'Z' 'check'
-		return 0
+	let c = '\n'
+	match c 'check'
+		'\n' then return 0
+		default then return 1
 	end 'check'
-	return 1
 end 'main'
 ---
 ExitCode: 0
@@ -18,16 +18,17 @@ func @main {
     x64.leaRegRdata rdx, [rip + __str_rec_1]
     x64.callDirect __str_eq
     x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, check
-    x64.jmp ifcont
-  check:
+    x64.jcc notEqual, matcharm
+    x64.jmp matchnext
+  matcharm:
     x64.movRegImm32 r8, 0
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
-  ifcont:
+  matchnext:
     x64.movRegImm32 r8, 1
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
+  matchcont:
 }

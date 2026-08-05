@@ -19,6 +19,12 @@ end 'main'
 ---
 ExitCode: 20
 ---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
 func @sumTo {
   entry:
     x64.pushReg rbp
@@ -78,19 +84,24 @@ func @main {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
-    x64.prologue 40
+    x64.pushReg r12
+    x64.prologue 32
     x64.movRegImm32 rbx, 0
-    x64.movRegImm32 rax, 97
+    x64.movRegImm32 r12, 97
     x64.jmp forhdr
   forhdr:
-    x64.cmpRegImm32 rax, 101
+    x64.cmpRegImm32 r12, 101
     x64.jcc lessEqual, k
     x64.jmp forexit
   k:
+    x64.movRegReg rcx, r12
+    x64.callDirect __char_from_cp
     x64.leaRegRegImm32 rbx, rbx, 1
+    x64.movRegReg rcx, r8
+    x64.callDirect __str_decref
     x64.jmp forstep
   forstep:
-    x64.leaRegRegImm32 rax, rax, 1
+    x64.leaRegRegImm32 r12, r12, 1
     x64.jmp forhdr
   forexit:
     x64.movRegImm32 rcx, 5
@@ -108,12 +119,14 @@ func @main {
     x64.leaRegRdata rcx, [rip + __str_blob_2]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 40
+    x64.epilogue 32
+    x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
   __rc_ok:
-    x64.epilogue 40
+    x64.epilogue 32
+    x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
