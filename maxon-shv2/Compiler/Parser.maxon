@@ -5500,6 +5500,58 @@ function requireThrowingWitnessTryTarget(methodName ByteArray, throwsClause Thro
 	end 'nonThrowing'
 end 'requireThrowingWitnessTryTarget'
 
+// ⭐⭐ **WHERE THE CALLER TOOK ITS OWN REFERENCE TO A SUBSTITUTED `T` RESULT, AND THE ONE QUESTION A `try`
+// HAS TO ASK OF IT.** A shared generic body cannot classify its `T` return, so it hands the value back as a
+// BORROW and the CALLER promotes it (`coOwnSubstitutedCallResult`) — necessarily AFTER the call op, because
+// that is where the value exists. The promotion is then the LAST op the expression emitted, and
+// `rewriteLastCallToTryCall` claims exactly the last op: an expression-form `try` over such a call rewrote
+// the compiler's own `__mm_retain` (E3055, *"this builtin call cannot fail"*, about a method that plainly
+// declares `throws`) or, for a String substitution whose promotion COPIES, its interpolation op (E2015,
+// *"the expression after `try` is not a call"*). Both are refusals with the wrong noun. This record is what
+// lets the refusal name the construct the program actually contains.
+//
+// ⚠ **THE `at` ARM IS MINTED ONLY WHERE A SUBSTITUTED MANAGED RESULT IS ACTUALLY PROMOTED**, which is a
+// generic instance over a managed type argument and nothing else — a trivial instantiation promotes nothing
+// and records nothing. So a Maxon union's per-value heap object (see `ManagedReceiverBinding` for the
+// measurement that makes a per-CALL-SITE union worth avoiding) is paid once per such call, not per call.
+union SubstitutedCoOwn
+	// `promotionFloor` is `module.ops.count()` read BEFORE the promotion emitted, `owned` the value it
+	// minted, and `callee` the generic method whose `T` return it was taken for.
+	at(promotionFloor OpIndex, owned ValueId, callee ByteArray)
+	// No substituted co-own has promoted anything yet in this file's parse.
+	none
+end 'SubstitutedCoOwn'
+
+// ⭐ **DID THIS CO-OWN PRODUCE THE VALUE THE `try` IS ABOUT TO REWRITE?** Both halves are load-bearing and
+// neither implies the other:
+//
+//   • the VALUE identity says the promotion is the TARGET'S OWN trailing op rather than one taken for an
+//     ARGUMENT of it. `try f(bx.fetch())` co-owns too, but the argument's promotion is emitted BEFORE `f`'s
+//     call, so `f`'s call is still the last op and rewrites correctly — refusing that would lose a legal
+//     program to a record that is not about it.
+//   • the OP FLOOR says the record was minted during THIS target's parse. `module.ops` is append-only for
+//     the whole file and nothing truncates it, so an index below the floor cannot belong to the target —
+//     which is also what lets this record live with NO per-function reset and NO closure save/restore,
+//     unlike every value-keyed mark beside it. ValueIds are numbered from zero again in each function and
+//     each closure body (`mintValue`), so identity ALONE would let a stale record from one function refuse
+//     an unrelated `try` in the next.
+function substitutedCoOwnProducedTryTarget(record SubstitutedCoOwn, target ValueId, targetOpFloor OpIndex) returns bool
+	return match record 'r'
+		at(promotionFloor, owned, _) gives owned == target and promotionFloor >= targetOpFloor
+		none gives false
+	end 'r'
+end 'substitutedCoOwnProducedTryTarget'
+
+// The generic METHOD the refusal names — the callee whose substituted `T` return the caller had to co-own.
+function substitutedCoOwnMethod(record SubstitutedCoOwn) returns ByteArray
+	return match record 'r'
+		at(_, _, callee) gives callee
+		// Unreachable — the sole caller asks only after `substitutedCoOwnProducedTryTarget` has answered
+		// true, and that predicate answers false for `none`.
+		none panic("substitutedCoOwnMethod: a `none` record names no method — it is read only past a true `substitutedCoOwnProducedTryTarget`, which `none` never answers")
+	end 'r'
+end 'substitutedCoOwnMethod'
+
 // The result of `captureEnclosing` (P1.5-A2b): a name that resolved into an enclosing frame yields
 // `captured` with the value read out of the env block; any other name is `notCaptured` and resolves
 // through the ordinary top-level path.
@@ -6898,6 +6950,16 @@ export type Parser
 	// old value, set true, emit, restore. It is never left set across a statement. Same per-function reset
 	// and per-closure save/restore as `tryBlocks` above (see that field's lifetime rule).
 	var tryBlockRoutingSuppressed as bool
+	// ⭐ **THE MOST RECENT CO-OWN OF A SUBSTITUTED `T` CALL RESULT** — read by `parseTryCallTarget` to tell an
+	// author that a `try` cannot take such a value here (see `SubstitutedCoOwn` for the whole argument).
+	//
+	// ⚠ **IT DELIBERATELY DOES *NOT* JOIN THE PER-FUNCTION RESET / PER-CLOSURE SAVE-RESTORE DISCIPLINE ABOVE**,
+	// and that is a property of what it holds rather than an omission: its `promotionFloor` is a
+	// `module.ops` index, which is unique for the WHOLE file parse, and every reader gates on it. A stale
+	// record therefore answers "not this target" by construction — where a value-keyed mark would have had to
+	// be cleared in three places and restored in one, which is the exact shape of the bug the review of this
+	// batch found in the closure save/restore.
+	var lastSubstitutedCoOwn as SubstitutedCoOwn
 	// The enclosing match STATEMENTS, innermost last — the other half of the break-target stack (see
 	// `MatchContext` for why `break` needs its own rather than sharing `loops`). `continue` never reads
 	// it. Reset per function AND per closure exactly as `loops` is: without the closure reset, a `break`
@@ -7765,6 +7827,7 @@ export type Parser
 			loops: LoopContextArray.create(),
 			tryBlocks: TryBlockContextArray.create(),
 			tryBlockRoutingSuppressed: false,
+			lastSubstitutedCoOwn: SubstitutedCoOwn.none,
 			matches: MatchContextArray.create(),
 			iterationLockedBindings: sharedEmptyIterationLocks,
 			lastBlockBodyEnd: 0,
@@ -18584,7 +18647,7 @@ export type Parser
 		// desugars into a fork and the outer call lands in the merge block, so a per-block count would be
 		// measured against a block that is no longer current.
 		let targetOpFloor = self.artifact.module.ops.count()
-		let result = try self.parseTryCallTarget(func)
+		let result = try self.parseTryCallTarget(func, tryTok: tryTok, targetOpFloor: targetOpFloor)
 		let flag = self.mintValue(ValueTypeTag.integer, nameId: UnnamedTypeId)
 		let target = try self.rewriteLastCallToTryCall(func, flag: flag, tryTok: tryTok, targetOpFloor: targetOpFloor)
 
@@ -18643,13 +18706,53 @@ export type Parser
 	// throwing — is not routed and stays a plain `call`, so it is the ordinary E3057 telling the author to
 	// `try` it. That is what a bare `h()` gets everywhere else in the language today; the block form does not
 	// make it worse, it simply does not yet make it better.
-	function parseTryCallTarget(func IrFunction) returns ValueId throws ParseError
+	//
+	// ⛔ **AND IT IS ALSO WHERE THE SUBSTITUTED-CO-OWN REFUSAL SITS, FOR THE SAME "BOTH FORMS FUNNEL HERE"
+	// REASON THE SUPPRESSION DOES.** The two doors — `parseTry` and `parseCatchingCondition` — both take the
+	// target's VALUE and both hand the last op to `rewriteLastCallToTryCall`, so both are broken by a
+	// promotion trailing the call and both must say the same thing about it. `targetOpFloor` and `tryTok`
+	// are threaded in rather than re-derived because each caller already holds both, and because the floor
+	// is only meaningful where the caller reads it: taken HERE it would be measured after whatever the `try`
+	// keyword's own consumption emitted, which is not the same question.
+	function parseTryCallTarget(func IrFunction, tryTok Token, targetOpFloor OpIndex) returns ValueId throws ParseError
 		let savedRoutingSuppressed = self.tryBlockRoutingSuppressed
 		self.tryBlockRoutingSuppressed = true
 		let target = try self.parseTryTargetExpression(func)
 		self.tryBlockRoutingSuppressed = savedRoutingSuppressed
+
+		try self.requireTryTargetIsNotACoOwnedSubstitution(target, tryTok: tryTok, targetOpFloor: targetOpFloor)
 		return target
 	end 'parseTryCallTarget'
+
+	// ⛔⛔ **A `try` WHOSE VALUE IS THE CALLER'S OWN REFERENCE TO A SUBSTITUTED `T` RESULT IS REFUSED, AND
+	// REFUSED BY NAME.** The reference has to be taken AFTER the call returns (`coOwnSubstitutedCallResult`
+	// — a shared generic body cannot classify `T`, so it hands back a borrow), while an expression `try`
+	// splits on the error flag at exactly that point. The only block the promotion could sit in is the one
+	// both edges flow from, and on the error edge the result register was never written — so there is
+	// nowhere to put it, and the construct is refused rather than miscompiled.
+	//
+	// ⚠ **IT IS A GATE AHEAD OF A BROKEN INTERACTION, NOT A CHANGE TO THE CO-OWN.** Before it, the
+	// try-rewrite silently claimed the promotion instead of the call and the author was told about the
+	// compiler's own `__mm_retain`. What is refused here is the same set of programs that were refused
+	// before — with the noun the program actually contains.
+	//
+	// ⭐ **THE BLOCK FORM IS THE CURE, AND IT ALREADY WORKS** — it forks BEFORE the call's result is
+	// promoted (`routeBareThrowingCallToTryBlock` runs at emission, ahead of the co-own) and takes the
+	// reference on the ok continuation alone, which is the one edge that wrote the result. That is why
+	// `generic-managed-return-routed-through-a-try-block` runs and this does not, and it is what the
+	// sentence points the author at.
+	//
+	// ⚠ **THE ORACLE IS NOT THE ARBITER HERE.** MEASURED on the bootstrap: the same program compiles, prints
+	// its value, and then dies with `mm_decref: refcount underflow (already zero)` — it takes no reference
+	// and over-releases. So the eventual capability has to derive its ownership from the rule, not from what
+	// the reference compiler happens to emit.
+	function requireTryTargetIsNotACoOwnedSubstitution(target ValueId, tryTok Token, targetOpFloor OpIndex) throws ParseError
+		if not substitutedCoOwnProducedTryTarget(self.lastSubstitutedCoOwn, target: target, targetOpFloor: targetOpFloor) 'notACoOwnedSubstitution'
+			return
+		end 'notACoOwnedSubstitution'
+
+		throw ParseError.unsupported("`try` cannot take the value of '{String.from(substitutedCoOwnMethod(self.lastSubstitutedCoOwn))}' here — its return type is the type argument the instance fixes, so the caller must take its own reference to the result after the call returns, and an expression `try` has nowhere to put that reference but the fork both edges flow from, where the error edge never wrote the result. Use the block form — `try 'label' … end 'label' otherwise (e) 'handler' … end 'handler'` — which forks first and takes the reference on the ok continuation", line: tryTok.line, column: tryTok.column)
+	end 'requireTryTargetIsNotACoOwnedSubstitution'
 
 	// The target's GRAMMAR, split from the state above so the flag brackets every path through it.
 	function parseTryTargetExpression(func IrFunction) returns ValueId throws ParseError
@@ -22076,7 +22179,7 @@ export type Parser
 		let tryTok = try self.consume(TokenKind.try)
 
 		let targetOpFloor = self.artifact.module.ops.count()
-		let result = try self.parseTryCallTarget(func)
+		let result = try self.parseTryCallTarget(func, tryTok: tryTok, targetOpFloor: targetOpFloor)
 		let flag = self.mintValue(ValueTypeTag.integer, nameId: UnnamedTypeId)
 		let target = try self.rewriteLastCallToTryCall(func, flag: flag, tryTok: tryTok, targetOpFloor: targetOpFloor)
 		try self.requireThrowingTryTarget(target, tryTok: tryTok)
@@ -46036,7 +46139,7 @@ export type Parser
 		// the only edge the `tryCall` wrote the result register on.
 		self.routeBareThrowingCallToTryBlock(callee, opIdx: opIdx, result: result)
 		if substituted 'sharedBodyHandedBackABorrow'
-			return try self.coOwnSubstitutedCallResult(result, range: SourceRange.between(anchor, last: rparenTok))
+			return try self.coOwnSubstitutedCallResult(result, callee: callee, range: SourceRange.between(anchor, last: rparenTok))
 		end 'sharedBodyHandedBackABorrow'
 
 		return result
@@ -46057,11 +46160,19 @@ export type Parser
 	//
 	// A TRIVIAL instantiation owns no heap, so this is a no-op for `Box with Integer` and the emitted code is
 	// unchanged for it.
-	function coOwnSubstitutedCallResult(result ValueId, range SourceRange) returns ValueId throws ParseError
+	//
+	// ⚠ **IT IS ALSO THE ONE WRITER OF `lastSubstitutedCoOwn`, AND THE EARLY RETURN ABOVE IS WHAT MAKES THAT
+	// RECORD EXACT.** The `try` refusal that reads it must fire for a managed argument and must NOT fire for a
+	// trivial one — which is precisely the split this function already makes, so recording it HERE keeps the
+	// refusal's condition and the promotion's condition one fact instead of two that can drift.
+	function coOwnSubstitutedCallResult(result ValueId, callee ByteArray, range SourceRange) returns ValueId throws ParseError
 		if not self.valueIsManagedHeap(result) 'trivialInstantiation'
 			return result
 		end 'trivialInstantiation'
 
+		// Read BEFORE the promotion: it is the floor of the ops the promotion is about to append, which is
+		// what `substitutedCoOwnProducedTryTarget` measures against the try target's own floor.
+		let promotionFloor = self.artifact.module.ops.count()
 		let owned = try self.promoteBorrowedToOwned(result, door: BorrowLaunderDoor.returned, range: range)
 
 		// ⚠ **NORMALIZED, THE WAY `promoteBorrowedMergeEdge` NORMALIZES IT THE OTHER WAY.** The promotion's
@@ -46075,6 +46186,7 @@ export type Parser
 			self.trackOwnedTemp(owned)
 		end 'statementStillOwesTheDrop'
 
+		self.lastSubstitutedCoOwn = SubstitutedCoOwn.at(promotionFloor, owned: owned, callee: callee)
 		return owned
 	end 'coOwnSubstitutedCallResult'
 

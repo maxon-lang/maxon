@@ -2963,3 +2963,209 @@ end 'main'
 ok=9
 caught
 ```
+
+<!-- test: error.expression-form-try-over-a-substituted-return -->
+⛔ **THE EXPRESSION FORM OF THE CASE THE BLOCK FORM ABOVE HANDLES, AND IT IS REFUSED RATHER THAN
+MISCOMPILED.** The caller — not the shared body — takes the reference a substituted `T` result needs
+(`coOwnSubstitutedCallResult`), and it can only take it AFTER the call has returned. An expression `try`
+splits on the error flag at exactly that point, so the only place the promotion could sit is a block both
+edges flow from — and on the error edge the result register was never written. There is nowhere to put
+it, so the construct is refused with the mechanism named. The BLOCK form has somewhere: it forks first
+and co-owns on the ok continuation alone, which is why `generic-managed-return-routed-through-a-try-block`
+runs and this does not.
+
+⚠ **THE ORACLE MISCOMPILES THIS PROGRAM, so it is NOT the arbiter for the capability.** MEASURED on the
+bootstrap: it compiles, prints `v=9`, and then dies with `mm_decref: refcount underflow (already zero)`
+in `__destruct_AlphaBox`, exit 1 — it takes no reference and then over-releases. shv2's refusal is the
+safer of the two answers, and whoever builds the capability must derive the ownership from the rule
+rather than from what the reference does.
+```maxon
+typealias Integer = int(0 to 125)
+enum Boom implements Error
+	bad
+end 'Boom'
+type Alpha
+	export var a as Integer
+	export static function create(v Integer) returns Self
+		return Self{a: v}
+	end 'create'
+end 'Alpha'
+type Box uses T
+	export var value as T
+	export static function create(v T) returns Self
+		return Self{value: v}
+	end 'create'
+	export function fetch() returns T throws Boom
+		return self.value
+	end 'fetch'
+end 'Box'
+typealias AlphaBox = Box with Alpha
+function main() returns ExitCode
+	let bx = AlphaBox.create(Alpha.create(9))
+	let got = try bx.fetch() otherwise Alpha.create(0)
+	print("v={got.a}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:24:12: Unsupported: `try` cannot take the value of 'Box.fetch' here — its return type is the type argument the instance fixes, so the caller must take its own reference to the result after the call returns, and an expression `try` has nowhere to put that reference but the fork both edges flow from, where the error edge never wrote the result. Use the block form — `try 'label' … end 'label' otherwise (e) 'handler' … end 'handler'` — which forks first and takes the reference on the ok continuation
+```
+
+<!-- test: error.expression-form-try-over-a-substituted-string-return -->
+The same refusal for the other managed spelling, which reached it by a different wrong road: a `String`
+substitution promotes by COPYING (`promoteToOwnedString`), so the op the try-rewrite found trailing the
+target was a string-interpolation rather than the aggregate's `__mm_retain` call, and the program was
+told *"the expression after `try` is not a call"* about a program whose `try` is applied to exactly one.
+Both spellings are one construct and get one sentence -- a refusal that only taught the aggregate arm
+would leave half the wrong noun live.
+```maxon
+typealias Integer = int(0 to 125)
+enum Boom implements Error
+	bad
+end 'Boom'
+type Box uses T
+	export var value as T
+	export static function create(v T) returns Self
+		return Self{value: v}
+	end 'create'
+	export function fetch() returns T throws Boom
+		return self.value
+	end 'fetch'
+end 'Box'
+typealias StrBox = Box with String
+function main() returns ExitCode
+	let bx = StrBox.create("hi")
+	let got = try bx.fetch() otherwise "no"
+	print("v={got}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:18:12: Unsupported: `try` cannot take the value of 'Box.fetch' here — its return type is the type argument the instance fixes, so the caller must take its own reference to the result after the call returns, and an expression `try` has nowhere to put that reference but the fork both edges flow from, where the error edge never wrote the result. Use the block form — `try 'label' … end 'label' otherwise (e) 'handler' … end 'handler'` — which forks first and takes the reference on the ok continuation
+```
+
+<!-- test: expression-form-try-over-a-trivial-substituted-return -->
+⭐ **THE NEGATIVE CONTROL, AND THE DISCRIMINATOR THAT PROVED THE DIAGNOSIS.** A TRIVIAL instantiation
+owns no heap, so `coOwnSubstitutedCallResult` returns early and emits nothing at all — the call op is
+still the last op the target emitted, the rewrite claims it, and the program compiles and runs. That
+asymmetry between `Box with Integer` and `Box with Alpha` is what identified the co-own's promotion,
+rather than anything about `try` or about generics, as what the rewrite was grabbing. The refusal above
+must stay narrow enough to leave this running: widened to every substituted return it swallows this
+case, which is the sabotage this control is here to fail.
+```maxon
+typealias Integer = int(0 to 125)
+enum Boom implements Error
+	bad
+end 'Boom'
+type Box uses T
+	export var value as T
+	export static function create(v T) returns Self
+		return Self{value: v}
+	end 'create'
+	export function fetch() returns T throws Boom
+		return self.value
+	end 'fetch'
+end 'Box'
+typealias IntBox = Box with Integer
+function main() returns ExitCode
+	let bx = IntBox.create(9)
+	let got = try bx.fetch() otherwise 0
+	print("v={got}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+v=9
+```
+
+<!-- test: error.condition-form-try-over-a-substituted-return -->
+⚠ **THE SIBLING DOOR, WHICH HAD THE SAME WRONG NOUN AND NEEDED THE SAME SENTENCE.** `if let x = try …`
+does not go through `parseTry` at all — `parseCatchingCondition` runs the same three steps and lets the
+`if` own the fork — but it takes the target's VALUE through the identical `parseTryCallTarget`, so it was
+broken identically and told the author about `__mm_retain` identically. The refusal lives at that one
+funnel rather than at each door, which is why both spellings say this without either being written twice.
+```maxon
+typealias Integer = int(0 to 125)
+enum Boom implements Error
+	bad
+end 'Boom'
+type Alpha
+	export var a as Integer
+	export static function create(v Integer) returns Self
+		return Self{a: v}
+	end 'create'
+end 'Alpha'
+type Box uses T
+	export var value as T
+	export static function create(v T) returns Self
+		return Self{value: v}
+	end 'create'
+	export function fetch() returns T throws Boom
+		return self.value
+	end 'fetch'
+end 'Box'
+typealias AlphaBox = Box with Alpha
+function main() returns ExitCode
+	let bx = AlphaBox.create(Alpha.create(9))
+	if let got = try bx.fetch() 'ok'
+		print("v={got.a}\n")
+	end 'ok' otherwise (e) 'bad'
+		print("boom\n")
+	end 'bad'
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:24:15: Unsupported: `try` cannot take the value of 'Box.fetch' here — its return type is the type argument the instance fixes, so the caller must take its own reference to the result after the call returns, and an expression `try` has nowhere to put that reference but the fork both edges flow from, where the error edge never wrote the result. Use the block form — `try 'label' … end 'label' otherwise (e) 'handler' … end 'handler'` — which forks first and takes the reference on the ok continuation
+```
+
+<!-- test: try-over-a-call-whose-argument-is-a-substituted-return -->
+⭐ **THE SECOND NEGATIVE CONTROL, AND THE ONE THAT PINS THE OTHER HALF OF THE REFUSAL'S CONDITION.** A
+substituted `T` result is co-owned here too — `bx.get()` returns `Alpha` — but it is an ARGUMENT of the
+try target, so its promotion is emitted BEFORE `consume`'s call and `consume`'s call is still the last op
+the target left behind. The rewrite claims the right op and the program is legal. That is why the refusal
+tests the co-own's own VALUE against the target rather than merely asking whether a co-own happened
+inside the target's extent: the looser question is true here, and answering it would lose this program.
+```maxon
+typealias Integer = int(0 to 125)
+enum Boom implements Error
+	bad
+end 'Boom'
+type Alpha
+	export var a as Integer
+	export static function create(v Integer) returns Self
+		return Self{a: v}
+	end 'create'
+end 'Alpha'
+type Box uses T
+	export var value as T
+	export static function create(v T) returns Self
+		return Self{value: v}
+	end 'create'
+	export function get() returns T
+		return self.value
+	end 'get'
+end 'Box'
+typealias AlphaBox = Box with Alpha
+function consume(a Alpha) returns Integer throws Boom
+	if a.a > 100 'big'
+		throw Boom.bad
+	end 'big'
+	return a.a
+end 'consume'
+function main() returns ExitCode
+	let bx = AlphaBox.create(Alpha.create(9))
+	let n = try consume(bx.get()) otherwise 0
+	print("n={n}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+n=9
+```
