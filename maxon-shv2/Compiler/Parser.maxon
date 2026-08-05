@@ -45700,6 +45700,11 @@ export type Parser
 	// minted through `mintCallResult`, which can REFUSE (a void call in value position), so nothing
 	// is emitted for a call the program is not allowed to make.
 	//
+	// ⚠ **WHAT IT RETURNS IS NOT ALWAYS THE OP'S RESULT.** A SUBSTITUTED opaque return is a borrow the shared
+	// body handed back, and the value the expression goes on to use is the caller's own reference to it
+	// (`coOwnSubstitutedCallResult`) — a different ValueId, deliberately, so a later re-borrow of the source
+	// cannot `poisonMoveSource`-match it. The op still defines the borrow.
+	//
 	// `spelling` says whether those callee bytes are the AUTHOR'S or the COMPILER'S, which is the one
 	// question the reserved-space door cannot answer from the name — see `CalleeMint`.
 	function emitCall(callee ByteArray, anchor Token, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, argImmutableNames ByteArrayArray, rparenTok Token, resultUsed bool, constructorInstance ConstructorInstance, mint CalleeMint) returns ValueId throws ParseError
@@ -45746,9 +45751,11 @@ export type Parser
 		self.artifact.emitOp(self.currentBlock, op: MaxonOp.call(result, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: settledImmutableArgNames(argImmutableNames), argDefaultSlots: argDefaultSlots, mint: mint), range: SourceRange.between(anchor, last: rparenTok))
 		// ⭐ **THE OTHER ROUTING DOOR FOR A BLOCK-FORM `try` BODY** — this one carries every call the author
 		// spelled (free, method, static), so a bare call to a declared throwing function inside such a body
-		// reaches the shared handler. `result` rides along because a MANAGED one is already enrolled as an
-		// owned temp by `enrolOwnedCallTemp` above, and it must not be dropped on the error edge — see
-		// `routeBareThrowingCallToTryBlock`.
+		// reaches the shared handler. `result` rides along because an ADOPTED managed one is already enrolled
+		// as an owned temp by `enrolOwnedCallTemp` above, and it must not be dropped on the error edge — see
+		// `routeBareThrowingCallToTryBlock`. A SUBSTITUTED one is not enrolled at all when this runs, so that
+		// function's test simply answers no and the co-ownership below lands on the ok continuation, which is
+		// the only edge the `tryCall` wrote the result register on.
 		self.routeBareThrowingCallToTryBlock(callee, opIdx: opIdx, result: result)
 		if substituted 'sharedBodyHandedBackABorrow'
 			return try self.coOwnSubstitutedCallResult(result, range: SourceRange.between(anchor, last: rparenTok))

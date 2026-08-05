@@ -2325,14 +2325,13 @@ error E3017: specs/fragments/where-clauses/where-clauses.constraint-violation.te
 
 A user-defined generic type can use where clauses:
 
-<!-- disabled-test: where-clauses.user-defined -->
-<!-- P1.x-typeparam-field-read: READING A TYPE-PARAMETER-TYPED FIELD FROM OUTSIDE THE GENERIC BODY.
-     MEASURED: `error E2015: <fragment>:34:17: Unsupported: a member access 'value' on a 'int' value` —
-     `h.item.value()` in `main`, where `h` is a `Holder with Wrapper`, resolves `h.item` to the
-     instance's substituted field and then dispatches on it CONCRETELY. Inside the generic body the same
-     call is a witness dispatch and works today (`where-clauses.witness-user-dispatch`); what is missing
-     is the per-instance field type at an instantiation site. Nothing to do with interface resolution —
-     `Valuable` is declared ABOVE its constrained use here, so R8's rule never applies. -->
+<!-- test: where-clauses.user-defined -->
+<!-- ⚠ ENABLED BY A5o, BUT NOT FIXED BY IT — the disable was STALE. Its note recorded
+     `a member access 'value' on a 'int' value` for `h.item.value()`, i.e. the missing per-instance
+     field type at an instantiation site. A4i landed exactly that (`declaredSlotType` at
+     `instanceSubstitutedType`) and nobody re-ran the case. MEASURED both ways at A5o: exit 10 on the
+     PRE-A5o binary as well as the post one, so the credit belongs to the field-read retype, not to the
+     call-result one. This is what a disabled case costs — it pins nothing while it waits. -->
 
 ```maxon
 
@@ -2378,11 +2377,9 @@ end 'main'
 
 A type parameter can require multiple interface conformance:
 
-<!-- disabled-test: where-clauses.multiple-interfaces -->
-<!-- P1.x-typeparam-field-read: the same missing mechanism as `where-clauses.user-defined`, one line
-     further out. MEASURED: `error E2015: <fragment>:42:17: Unsupported: a member access 'age' on a
-     'int' value` — `r.item.age()` in `main`. The two-interface `where T is HasName and HasAge` half is
-     already covered green by `where-clauses.two-constraints`. -->
+<!-- test: where-clauses.multiple-interfaces -->
+<!-- ⚠ The same stale disable as `where-clauses.user-defined`, one line further out, and re-measured
+     with it: exit 30 on the PRE-A5o binary too. -->
 
 ```maxon
 
