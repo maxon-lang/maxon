@@ -1029,6 +1029,24 @@ let MatchSparseCaseStride = 100
 // String dimension away again.
 let StringOpsBase = 8 as KnobSize
 
+// ONE file, M `Character` operation groups — the per-SITE cost of the OTHER byte record.
+//
+// ⚠ **IT EXISTS BECAUSE A WHOLE LANGUAGE MODEL LANDED INTO A CORPUS THAT COULD NOT SPELL IT.** BATCH23
+// made every character literal a `Character` (it had been an `int` whenever it fitted in one byte), gave
+// `Character` an ORDERING through `__char_cmp`, and taught an integer position to convert a literal to
+// its codepoint by REWRITING the emitted op in place. This generator emitted **not one character
+// literal** at any rung — `grep -c "'" rung5/*.maxon` over a dumped corpus found none — so all three
+// read a flat delta of zero in allocations, in bytes AND in CPU ticks. That is the blind spot this file's
+// header calls its founding defect, arriving for the sixth time; the reading is only worth what the
+// corpus can express.
+//
+// ⚠ **NOT `stringOps` WITH A NARROWER LITERAL.** The two types share the 48-byte record and every rule
+// but one, and that one is the point: a `Character` is `Comparable` and a `String` is not, so `c < d`
+// lowers to a `__char_cmp` call plus an `Ordering` verdict where `s < t` is a diagnostic. A change to
+// `buildByteRecordCompare`, to the character `match` compare chain or to `retypeCharLiteralAsCodepoint`
+// moves this column and leaves the String one flat.
+let CharOpsBase = 8 as KnobSize
+
 // ONE file, N types each owning a `String` field, each built once and dropped at scope exit — the
 // PER-TYPE cost of the SYNTHESIZED destructor cascade (`__destruct_<T>`, which frees the field).
 //
@@ -1396,6 +1414,7 @@ function generateRung(root FilePath, rung RungIndex) returns ScaleRung throws Sc
 	sourceBytes = sourceBytes + try writeRungFile(dir, name: "q_enums", source: enumTypesSource(knobAt(EnumTypesBase, rung: rung)), written: written, drivers: drivers, driver: RungDriver.threads(EnumTypesDriver))
 	sourceBytes = sourceBytes + try writeRungFile(dir, name: "r_match", source: matchSitesSource(knobAt(MatchSitesBase, rung: rung)), written: written, drivers: drivers, driver: RungDriver.threads(MatchSitesDriver))
 	sourceBytes = sourceBytes + try writeRungFile(dir, name: "s_strings", source: stringOpsSource(knobAt(StringOpsBase, rung: rung)), written: written, drivers: drivers, driver: RungDriver.threads(StringOpsDriver))
+	sourceBytes = sourceBytes + try writeRungFile(dir, name: "s_chars", source: charOpsSource(knobAt(CharOpsBase, rung: rung)), written: written, drivers: drivers, driver: RungDriver.threads(CharOpsDriver))
 	sourceBytes = sourceBytes + try writeRungFile(dir, name: "t_mstruct", source: managedStructTypesSource(knobAt(ManagedStructTypesBase, rung: rung)), written: written, drivers: drivers, driver: RungDriver.threads(ManagedStructsDriver))
 	sourceBytes = sourceBytes + try writeRungFile(dir, name: "u_arrays", source: arrayOpsSource(knobAt(ArrayOpsBase, rung: rung)), written: written, drivers: drivers, driver: RungDriver.threads(ArrayOpsDriver))
 	sourceBytes = sourceBytes + try writeRungFile(dir, name: "v_marray", source: managedArrayOpsSource(knobAt(ManagedArrayOpsBase, rung: rung)), written: written, drivers: drivers, driver: RungDriver.threads(ManagedArrayOpsDriver))
@@ -3239,6 +3258,8 @@ let MatchSitesDriver = "scaleMatchSites"
 
 let StringOpsDriver = "scaleStringOps"
 
+let CharOpsDriver = "scaleCharOps"
+
 let ManagedStructPrefix = "ScaleNamed"
 let ManagedStructValueAlias = "ScaleNamedValue"
 let ManagedStructsDriver = "scaleManagedStructs"
@@ -3574,6 +3595,179 @@ function stringOpsSource(groupCount KnobSize) returns String
 	out.append(accWitnessTail(StringOpsDriver))
 	return out.build()
 end 'stringOpsSource'
+
+// ⭐ **EVERYTHING THE GENERATOR MUST KNOW ABOUT ONE CHARACTER TO WITNESS THE SITES IT WRITES FOR IT.**
+// Every field is a fact this file can only state because it chose the character: a site whose answer the
+// generator cannot predict cannot be neutralized, and an un-neutralized site is one the accumulator
+// cannot be pinned across — which is how `ownedSiteBlock`'s header records seven knobs silently not
+// running at all.
+type CharSample
+	// The literal's spelling, written between the quotes of the generated source.
+	export let text as String
+
+	// Its Unicode codepoint — what a character literal in an INTEGER position becomes
+	// (`Parser.retypeCharLiteralAsCodepoint`), and therefore what the coercion site contributes.
+	export let codepoint as TrackedValue
+
+	// A character strictly BELOW `text` in byte-lexicographic order, so the `>` site is true by
+	// construction and a `__char_cmp` that answered otherwise is short by the mark.
+	export let below as String
+
+	// The inclusive `match` interval that CONTAINS `text`. A range arm that a wrong lowering widened or
+	// narrowed sends the scrutinee to the `default`, which is this knob's failure marker.
+	export let rangeLow as String
+	export let rangeHigh as String
+
+	export static function create(text String, codepoint TrackedValue, below String, rangeLow String, rangeHigh String) returns CharSample
+		return Self{text: text, codepoint: codepoint, below: below, rangeLow: rangeLow, rangeHigh: rangeHigh}
+	end 'create'
+end 'CharSample'
+
+// How many distinct characters the knob rotates over. CONSTANT on purpose, for `AllocStructTypeCount`'s
+// reason: this knob grows how many character SITES a program holds, not how many distinct characters
+// exist. A corpus with one character per site would be measuring the interner instead.
+let CharSampleCount = 4 as KnobIndex
+
+// ⭐ **THE ROSTER SPANS BOTH RECORD WIDTHS, AND THAT IS THE ONE DISTINCTION THE OLD WIDTH RULE TURNED
+// ON.** Until BATCH23 a one-byte literal was an `int` and a wider one was a `Character`, so a roster of
+// ASCII would exercise exactly the half that USED to be trivial and none of the half that always was a
+// record. `é` is `C3 A9` and `ü` is `C3 BC`: two bytes each, sharing a first byte, so the interval below
+// tests the byte loop past its first step rather than settling on it.
+//
+// ⚠ **EVERY ORDERING FACT HERE IS BYTE-LEXICOGRAPHIC, WHICH IS WHAT `__char_cmp` IMPLEMENTS** — never
+// codepoint order and never locale order. `'é' > 'z'` because `C3 > 7A`, not because é sorts later in any
+// alphabet.
+// ⛔ **IT TAKES THE ORDINAL ALREADY REDUCED, AND THE `mod` MUST STAY AT THE CALL SITE — A BOOTSTRAP
+// MISCOMPILE, MEASURED 2026-08-05.** Written the obvious way — `match index mod CharSampleCount` with the
+// wrap inside — this function returns the DEFAULT arm for every non-zero ordinal when built by the C#
+// bootstrap, so `charOpsSource` panicked at its second group. Minimal repro, bootstrap only:
+//
+//     function byMod(i Ix) returns Val
+//         match i mod Three 'a'
+//             0 then return 10
+//             1 then return 11
+//             default then return 90
+//         end 'a'
+//     end 'byMod'
+//
+// `byMod(1)` answers 90. The VALUE is right — `print("{i mod Three}")` beside it reads 1 — and an
+// `if m == 1` chain over the same expression is right too; only the `match` dispatch is wrong, and only
+// when the dividend traces to a PARAMETER (`matchSitesSource`'s `match i mod MatchDispatchShapeCount` over
+// a LOOP variable is correct, which is why no existing knob was affected). **shv2 compiles all three
+// forms correctly**, so this is a bootstrap defect found from shv2, not a language question. Matching a
+// BARE parameter is the shape that works, and it is the shape below.
+function charSampleAt(ordinal KnobIndex) returns CharSample
+	match ordinal 'sample'
+		0 then return CharSample.create("a", codepoint: 97, below: "A", rangeLow: "a", rangeHigh: "z")
+		1 then return CharSample.create("Q", codepoint: 81, below: "0", rangeLow: "A", rangeHigh: "Z")
+		2 then return CharSample.create("7", codepoint: 55, below: "!", rangeLow: "0", rangeHigh: "9")
+		3 then return CharSample.create("é", codepoint: 233, below: "z", rangeLow: "a", rangeHigh: "ü")
+		// `CharSampleCount` and this arm set are the same fact stated twice; this is the CHECK between the
+		// copies, exactly as `matchSitesSource`'s shape dispatch keeps its own.
+		default panic("charSampleAt: CharSampleCount is {CharSampleCount} but ordinal {ordinal} has no sample — add one beside the four above, or lower the constant")
+	end 'sample'
+end 'charSampleAt'
+
+// The character RANGE both `for` loops walk, and the number of trips it makes. `to` is INCLUSIVE, so
+// `'a' to 'e'` is five characters — the closed form the loops' neutralizers are written from, stated once
+// beside the bounds it is derived from so a widened range cannot leave a stale trip count behind.
+let CharRangeLow = "a"
+let CharRangeHigh = "e"
+let CharRangeTrips = 5 as TrackedValue
+
+// The one character inside that range the USED-element loop tests for, so exactly one trip of five hits.
+let CharRangeHit = "c"
+
+// The `charOps` knob: M `Character` operation groups, each in its own block for `ownedSiteBlock`'s reason.
+//
+// The five shapes are the five distinct things BATCH23 gave a character literal to do, and each reaches a
+// different piece of the compiler:
+//
+//   • a `let` BINDING off an immortal `.rdata` byte record, then `==` against the same literal — the
+//     `__str_eq` content compare a `Character` equality now lowers to, where a one-byte literal used to be
+//     an immediate integer compare. This is the shape the rung's implementer flagged as a cost and
+//     deliberately did not act on; it is measurable here for the first time.
+//   • `>` against a known-lower character — `__char_cmp` plus `emitOrderingVerdict`'s `Ordering` test,
+//     the ONE operation where `Character` and `String` part company.
+//   • the literal in an INTEGER position (`acc + 'a'`), which is `integerizedOperand` finding a lone
+//     `charLiteral` token and `retypeCharLiteralAsCodepoint` REWRITING the emitted `stringLiteral` op in
+//     place. It is also the only site that fills `Parser.charLiteralOps`, the map BATCH23 added — so this
+//     knob is what makes that map's growth a column rather than a claim.
+//   • a `match` with a character INTERVAL arm — the linear compare chain a Character scrutinee keeps
+//     (an integer-like scrutinee would get a binary search or a jump table, which the enum knob owns).
+//   • two `for` loops over a character RANGE, one DISCARDING the element and one USING it. Each trip mints
+//     a fresh owned `Character` through `__char_from_cp`, and the discarding form mints one it never reads
+//     — the second cost the implementer flagged. The rung binary is RUN and its exit insisted on, so a
+//     record minted per trip and not freed is exit 101 here rather than a number nobody explains.
+//
+// ⚠ **THE `for` LOOPS ARE THIS CORPUS'S FIRST `for`-in OF ANY KIND**, which is why the manifest's NOT
+// GENERATED line narrowed rather than lost an entry: a character range is now generated and every other
+// `for`-in source — an array, a String's clusters, a bare integer range — still is not.
+function charOpsSource(groupCount KnobSize) returns String
+	var out = StringBuilder.create()
+	out.append("// Generated by ScaleCorpus: the character-ops knob — {groupCount} groups of Character binding + == + ordering + codepoint coercion + a match interval + two character-range for loops.\n")
+	out.append("\n")
+	out.append(witnessedDriverHeader(CharOpsDriver))
+
+	for i in 0 upto groupCount 'eachGroup'
+		// The wrap is spelled HERE and not inside the callee — see `charSampleAt`'s header for the
+		// bootstrap miscompile that makes the position load-bearing.
+		let sample = charSampleAt(i mod CharSampleCount)
+		var body = StringBuilder.create()
+
+		// EQUALITY. The same literal on both sides, so `__str_eq` answering false is the failure — and it
+		// is the BINDING-versus-literal shape a real program writes, not two literals a constant folder
+		// could in principle settle.
+		body.append("\t\tlet cv{i} = '{sample.text}'\n")
+		body.append("\t\tif cv{i} == '{sample.text}' 'ceq{i}'\n")
+		body.append("\t\t\tacc = acc + {SiteEnteredMark}\n")
+		body.append("\t\tend 'ceq{i}'\n")
+		body.append("\t\tacc = acc - {SiteEnteredMark}\n")
+
+		// ORDERING through `__char_cmp`.
+		body.append("\t\tif cv{i} > '{sample.below}' 'cgt{i}'\n")
+		body.append("\t\t\tacc = acc + {SiteEnteredMark}\n")
+		body.append("\t\tend 'cgt{i}'\n")
+		body.append("\t\tacc = acc - {SiteEnteredMark}\n")
+
+		// THE CODEPOINT COERCION. `acc` is the opaque accumulator, so the add survives `foldConstOperands`
+		// and the literal genuinely has to become an integer operand for it to compile at all.
+		body.append("\t\tacc = acc + '{sample.text}'{neutralizeText(sample.codepoint)}\n")
+		body.append(accProbe("\t\t"))
+
+		// THE `match` INTERVAL. The `default` arm is the failure marker rather than a silent fallthrough:
+		// the interval was chosen to contain the scrutinee, so reaching the default means the lowering
+		// disagrees with the generator about what the arm covers, and the witness says so.
+		body.append("\t\tmatch cv{i} 'cms{i}'\n")
+		body.append("\t\t\t'{sample.rangeLow}' to '{sample.rangeHigh}' then acc = acc + {SiteEnteredMark}\n")
+		body.append("\t\t\tdefault then acc = acc + {CorpusWitnessFailedOffset}\n")
+		body.append("\t\tend 'cms{i}'\n")
+		body.append("\t\tacc = acc - {SiteEnteredMark}\n")
+		body.append(accProbe("\t\t"))
+
+		// THE DISCARDED-ELEMENT RANGE LOOP — a Character minted per trip that nothing reads.
+		body.append("\t\tfor _ in '{CharRangeLow}' to '{CharRangeHigh}' 'cdr{i}'\n")
+		body.append("\t\t\tacc = acc + {SiteEnteredMark}\n")
+		body.append("\t\tend 'cdr{i}'\n")
+		body.append("\t\tacc = acc - {CharRangeTrips * SiteEnteredMark}\n")
+
+		// THE USED-ELEMENT RANGE LOOP — the same mint, compared against a literal, so exactly one trip of
+		// `CharRangeTrips` contributes and a loop that walked the wrong characters cannot come out level.
+		body.append("\t\tvar cn{i} = 0\n")
+		body.append("\t\tfor cc{i} in '{CharRangeLow}' to '{CharRangeHigh}' 'cur{i}'\n")
+		body.append("\t\t\tif cc{i} == '{CharRangeHit}' 'cch{i}'\n")
+		body.append("\t\t\t\tcn{i} = cn{i} + {SiteEnteredMark}\n")
+		body.append("\t\t\tend 'cch{i}'\n")
+		body.append("\t\tend 'cur{i}'\n")
+		body.append("\t\tacc = acc + cn{i} - {SiteEnteredMark}\n")
+		body.append(accProbe("\t\t"))
+
+		out.append(ownedSiteBlock("cg{i}", body: body.build()))
+	end 'eachGroup'
+
+	out.append(accWitnessTail(CharOpsDriver))
+	return out.build()
+end 'charOpsSource'
 
 // The `managedStructTypes` knob: N types each owning a `String` field, each built once and dropped.
 //
@@ -4603,6 +4797,17 @@ export function printCorpusManifest()
 	print("      opaque accumulator (an int->String conversion that allocates), `.append` (which detaches\n")
 	print("      onto a private buffer), `==` through __str_eq, `.byteLength()` as the way back out to int,\n")
 	print("      and a struct owning a String field dropped through its synthesized __destruct_<T> cascade\n")
+	print("    CHARACTER (the OTHER byte record, BATCH23): character LITERALS at both widths (one ASCII byte\n")
+	print("      and two, sharing a lead byte), a `let`-bound Character, `==` through __str_eq (where a\n")
+	print("      one-byte literal used to be an immediate integer compare), `>` through __char_cmp plus the\n")
+	print("      Ordering verdict — the ONE operation a Character has and a String does not — a literal in an\n")
+	print("      INTEGER position (which REWRITES the emitted stringLiteral op into an integer literal in\n")
+	print("      place, and is the only thing that fills Parser.charLiteralOps), a `match` with a character\n")
+	print("      INTERVAL arm (the linear compare chain a Character scrutinee keeps), and character RANGE\n")
+	print("      `for` loops in BOTH element forms — one USING the per-trip Character and one DISCARDING it\n")
+	print("    ⚠ THE CORPUS EMITTED NOT ONE CHARACTER LITERAL AT ANY RUNG until that knob, so the whole model\n")
+	print("      above read a flat delta of ZERO in allocations, in bytes and in CPU alike on the rung that\n")
+	print("      introduced it. That is this file's founding defect for the sixth time; see `CharOpsBase`\n")
 	print("    ARRAY, trivial-element: create / reserve / push / get / count, plus the O(1) COW trio\n")
 	print("      slice / clone / append — which refcount the element BUFFER rather than the record\n")
 	print("    ARRAY, CONCRETE-managed-element: `Array with String` and `Array with <struct owning a\n")
@@ -4664,7 +4869,9 @@ export function printCorpusManifest()
 	print("    the column carries the sites x blocks-in-the-function product a per-site scan would cost,\n")
 	print("    `enum` declaration COUNT (per-TYPE) and `match` SITE count (per-SITE, over a fixed pair of\n")
 	print("    enums, so a change to tag layout and a change to dispatch strategy move different columns),\n")
-	print("    String op-group count, managed-struct TYPE count (per synthesized __destruct_<T> body),\n")
+	print("    String op-group count, CHARACTER op-group count (per-SITE, over a FIXED roster of four\n")
+	print("    characters, so it grows how many character sites a program holds and not how many distinct\n")
+	print("    characters exist), managed-struct TYPE count (per synthesized __destruct_<T> body),\n")
 	print("    trivial-element Array group count and MANAGED-element Array group count (the element-drop\n")
 	print("    threading is what separates them), generic BASE count (per shared body) and generic\n")
 	print("    INSTANTIATION count (per layout descriptor, over a FIXED base), interface CONFORMANCE count\n")
@@ -4680,7 +4887,9 @@ export function printCorpusManifest()
 	print("    without a namespace to name, so two knobs would double in lockstep and be one knob twice)\n")
 	print("\n")
 	print("  NOT GENERATED — a codegen change to any of these is INVISIBLE here (structural blind spot):\n")
-	print("    `for`-in, closures, async. Float ARGUMENTS and float RETURNS are absent because they do not\n")
+	print("    `for`-in over anything but a CHARACTER RANGE — an array, a String's clusters and a bare\n")
+	print("    integer range are all still absent, and the character-ops knob is the only `for`-in here.\n")
+	print("    Closures and async. Float ARGUMENTS and float RETURNS are absent because they do not\n")
 	print("    exist yet (Wave 2 — the xmm0 ABI slot); every float here enters by promotion and leaves\n")
 	print("    through trunc, which is the whole of what Wave 1 can express.\n")
 	print("    ⚠ AND THREE FAMILIES ARE ABSENT FOR A REASON THAT IS NEITHER 'unimplemented' NOR 'forgotten',\n")
