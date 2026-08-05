@@ -341,13 +341,15 @@ function buildCharSetContains(module StdModule)
 	// The character's FIRST codepoint decides its category — a cluster of several codepoints is classified
 	// by its base, which is what `Character.codepoint()` returns (`stdlib/Character.maxon:127-146`) and what
 	// the reference passes here (`:129`).
-	let buffer = emitLoadField(module, block: classify, record: character, offset: StringBufferOffset, ids: ids)
-	// The decoder's buffer-end bound is the Character's OWN byte length — its record is a String record, so
-	// the cluster's bytes are all there are, and a lead byte announcing more than the cluster holds must
-	// not be read past (`emitUtf8LeadLadder`).
-	let available = emitLoadField(module, block: classify, record: character, offset: StringLengthOffset, ids: ids)
+	// ⭐ **THE CORPUS DECODER TAKES THE RECORD AND A POSITION, WHICH IS WHY NO BUFFER ADDRESS IS LOADED HERE
+	// ANY MORE.** A `Character` IS a String record, so its first codepoint is `utf8DecodeAt(character, 0)` —
+	// exactly what `Character.codepoint()` is in the corpus (`stdlib/Character.maxon:127-146`). The
+	// buffer-end bound the retired `__utf8_cp_at` had to be handed explicitly is now the record's own
+	// `byteLength()`, read inside the decoder: a lead byte announcing more than the cluster holds decodes as
+	// itself rather than reading past (`utf8WidthFits`).
+	let firstCodepoint = emitConst(module, block: classify, value: 0, ids: ids)
 	let codepoint = ids.mint()
-	module.appendOp(classify, op: StdOp.call(codepoint, callee: Utf8CodepointAtName, args: twoArgs(buffer, second: available)))
+	module.appendOp(classify, op: StdOp.call(codepoint, callee: CorpusUtf8DecodeAt, args: twoArgs(character, second: firstCodepoint)))
 	let category = ids.mint()
 	module.appendOp(classify, op: StdOp.call(category, callee: UcdCategoryName, args: argsOf(codepoint)))
 	let shifted = emitBin(module, block: classify, a: mask, b: category, opcode: StdBinOpcode.shrLogical, ids: ids)
@@ -456,7 +458,7 @@ function buildStrTrim(module StdModule)
 	// OWNED by this frame and dropped on BOTH arms below — a trim over an all-matching string mints one per
 	// cluster, so leaking it would leak per character trimmed.
 	let clusterEnd = ids.mint()
-	module.appendOp(probe, op: StdOp.call(clusterEnd, callee: GraphemeEndName, args: twoArgs(record, second: pos)))
+	module.appendOp(probe, op: StdOp.call(clusterEnd, callee: CorpusFindGraphemeEnd, args: twoArgs(record, second: pos)))
 	let cluster = ids.mint()
 	module.appendOp(probe, op: StdOp.call(cluster, callee: CharAtName, args: threeArgs(record, second: pos, third: clusterEnd)))
 	let inSet = ids.mint()

@@ -3468,6 +3468,42 @@ let Utf16ViewMethod = b"utf16"
 // synthesized one — two implementations of one table, which
 // `stdlib-whitelist.the-corpus-segmenter-agrees-with-the-synthesized-one` is the differential over.
 
+// ⭐⭐ **THE CORPUS SEGMENTER'S ENTRY POINTS — WHAT `String.count()` AND `for c in s` NOW CALL, AND THE END OF
+// THE "TWO IMPLEMENTATIONS OF ONE TABLE" THE BLOCK ABOVE FILED.** These are ordinary declarations in
+// `stdlib/helpers/string/grapheme.maxon`, reached by an ordinary Maxon-tier call — the SAME call a user's own
+// `countGraphemes(s)` emits — so reachability, ownership and dead-function elimination are the ordinary rules
+// and this door needs no mechanism of its own. The differential named above is what it is now measured by:
+// the two sides of it are one body.
+//
+// ⚠ **THE SPELLING IS THE CORPUS'S AND MUST STAY THAT WAY.** A call whose callee names no declaration is an
+// ordinary `E3004`, so a renamed corpus function fails loudly here rather than silently routing nowhere —
+// which is exactly what the retired bare-name builtins could not do.
+export let CorpusCountGraphemes = b"countGraphemes"
+export let CorpusFindGraphemeEnd = b"findGraphemeEnd"
+// `utf8DecodeAt(s, pos:)` — the codepoint at a byte position. Reached from `__cs_contains`, which classifies
+// a `Character` by its FIRST codepoint and holds that Character's own record, so it passes the record and 0
+// rather than the buffer address the retired `__utf8_cp_at` took.
+export let CorpusUtf8DecodeAt = b"utf8DecodeAt"
+// `utf8ByteLengthAt(s, pos:)` — the sequence width at a byte position, which is what advances the
+// `.codepoints()` and `.utf16()` walks. Its twin above decodes; this one steps, and the two MUST agree on a
+// truncated sequence or a walk steps into bytes it declined to decode (`utf8WidthFits`).
+export let CorpusUtf8ByteLengthAt = b"utf8ByteLengthAt"
+
+// `findGraphemeEnd(s, startPos: pos)` — the second parameter is LABELLED in the corpus declaration, and a
+// Maxon-tier call must present the label or `lowerCall` mis-slots it. Stated here beside the callee whose
+// signature it belongs to.
+let CorpusStartPosLabel = b"startPos"
+
+// The `argLabels` column for that call: the receiver is positional, `startPos` is not. Built per call
+// because `slotCallArgs` INDEXES the column (a shared one would be a per-argument structure shared across
+// the parse fan-out — see `NoImmutableArgNames` for why that distinction is kept).
+function corpusFindGraphemeEndLabels() returns ByteArrayArray
+	var labels = ByteArrayArray.create()
+	labels.push(EmptySourceText)
+	labels.push(CorpusStartPosLabel)
+	return labels
+end 'corpusFindGraphemeEndLabels'
+
 // ⭐ **THE P1.8 SLICE C BYTE/ASCII METHODS** — the seven `String` methods that need no Unicode character
 // database, no grapheme segmentation and no `StringIndex`. That last one is the LINE, not a coincidence:
 // `findFirst`/`findLast` return a `StringIndex` whose `charIdx` is a GRAPHEME index, and `slice` takes two of
@@ -4461,6 +4497,13 @@ end 'uniformArgRanges'
 // blame name could describe. That is the difference from `emptyArgLabels`, which must materialize a real
 // per-argument column because `slotCallArgs` indexes it.
 export let NoImmutableArgNames = ByteArrayArray.create()
+
+// ⭐ **THE DEFAULT `argLabels` OF A COMPILER-EMITTED CALL: "all positional".** Shared and empty for
+// `NoImmutableArgNames`'s reason — nothing ever reads or mutates it, since `emitRuntimeCall` materializes a
+// real per-argument column the moment it sees this one is empty. It is a DISTINCT constant from
+// `NoImmutableArgNames` rather than the same empty array reused, because the two answer different questions
+// and a shared name would make a reader check whether one had grown a per-argument meaning.
+let NoRuntimeCallLabels = ByteArrayArray.create()
 
 // The `argDefaultSlots` column of a call that omitted no defaulted argument — which is nearly every call in
 // any program. Read-only (its readers only index it), so ONE allocation serves them all, exactly as
@@ -20464,11 +20507,27 @@ export type Parser
 	// So the caller states the result's type, because the caller is the compiler and it KNOWS: an
 	// `__mm_alloc` returns the struct it just built, a `__mm_decref` returns nothing.
 	//
-	// ⚠ **EVERY ARGUMENT IS POSITIONAL, IN DECLARATION ORDER.** There is no label to reorder by —
-	// the runtime has no parameter names for a label to match — so `lowerCall` passes them straight
-	// through. `emptyArgLabels` is what says so on the op, and `lowerCall`'s guard is what makes a
-	// future labelled runtime call fail loudly rather than mis-slot.
-	function emitRuntimeCall(callee ByteArray, args ValueIdArray, resultTag ValueTypeTag, resultNameId TypeNameId, range SourceRange) returns ValueId
+	// ⚠ **EVERY ARGUMENT IS POSITIONAL, IN DECLARATION ORDER — FOR A `__`-PREFIXED RUNTIME CALLEE.** There
+	// is no label to reorder by: the runtime has no parameter names for a label to match, so `lowerCall`
+	// passes them straight through. `emptyArgLabels` is what says so on the op, and `lowerCall`'s guard is
+	// what makes a labelled runtime call fail loudly rather than mis-slot.
+	//
+	// ⭐ **`argLabels` IS THE ONE EXCEPTION, AND IT EXISTS FOR THE CORPUS SEGMENTER (see
+	// `CorpusFindGraphemeEnd`).** A callee that IS declared — a stdlib free function this compiler routes a
+	// builtin method to — is slotted against its declaration by `slotCallArgs`, so a labelled parameter
+	// needs its label present or the argument lands in the wrong slot. Supplying it is therefore the whole
+	// difference between the two kinds of callee, and it is a PARAMETER rather than a second emitter
+	// because everything else about the two is identical: same op, same routing hook, same result mint.
+	//
+	// ⚠ An EMPTY column means "all positional", never "zero arguments" — `slotCallArgs` INDEXES this
+	// column, so a positional call must still hand it a real per-argument one (`emptyArgLabels`'s own
+	// header). The two cases cannot be confused: a call with no arguments has nothing to slot either way.
+	function emitRuntimeCall(callee ByteArray, args ValueIdArray, resultTag ValueTypeTag, resultNameId TypeNameId, range SourceRange, argLabels ByteArrayArray = NoRuntimeCallLabels) returns ValueId
+		var labels = argLabels
+		if labels.count() == 0 'allPositional'
+			labels = emptyArgLabels(args)
+		end 'allPositional'
+
 		let result = self.mintValue(resultTag, nameId: resultNameId)
 		// The index the op below will occupy — read before the append, so the ROUTING hook after it names an
 		// op rather than re-deriving "the last one" from a block whose contents it does not own.
@@ -20476,7 +20535,7 @@ export type Parser
 		// `notMinted`: a runtime entry's callee is not the author's bytes either, but its noun is a question
 		// about the NAME — `GtRuntime.runtimeCalleeSourceMethod` answers it, keyed by name, and may be. Only the
 		// primitive-static mint needs the per-SITE bit. See `CalleeMint`.
-		self.artifact.emitOp(self.currentBlock, op: MaxonOp.call(result, callee: callee, args: args, argLabels: emptyArgLabels(args), argRanges: uniformArgRanges(args, range: range), argImmutableNames: NoImmutableArgNames, argDefaultSlots: NoDefaultArgSlots, mint: CalleeMint.notMinted), range: range)
+		self.artifact.emitOp(self.currentBlock, op: MaxonOp.call(result, callee: callee, args: args, argLabels: labels, argRanges: uniformArgRanges(args, range: range), argImmutableNames: NoImmutableArgNames, argDefaultSlots: NoDefaultArgSlots, mint: CalleeMint.notMinted), range: range)
 		// ⭐ **ONE OF THE TWO ROUTING DOORS FOR A BLOCK-FORM `try` BODY** — this one carries every
 		// compiler-emitted callee, which is how `arr.get(i)`, `map.get(k)` and a checked divide inside such a
 		// body reach the shared handler. It declines instantly (one field read) when there is no enclosing
@@ -22766,7 +22825,7 @@ export type Parser
 		var loopValue = indexPhi
 		var graphemeEnd = indexPhi
 		if isString 'readCluster'
-			graphemeEnd = self.emitRuntimeCall(GraphemeEndName, args: pairArgs(source, second: indexPhi), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(patternTok))
+			graphemeEnd = self.emitRuntimeCall(CorpusFindGraphemeEnd, args: pairArgs(source, second: indexPhi), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(patternTok), argLabels: corpusFindGraphemeEndLabels())
 			loopValue = self.emitRuntimeCall(CharAtName, args: tripleArgs(source, second: indexPhi, third: graphemeEnd), resultTag: ValueTypeTag.character, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(patternTok))
 			// ⭐⭐ **THE OWNERSHIP RULING: A STRING'S ELEMENT IS OWNED, WHERE AN ARRAY'S IS BORROWED — and
 			// the difference is not a preference, it is a fact about where the value lives.** Slice A could
@@ -34254,11 +34313,13 @@ export type Parser
 			return try self.parseStringSplit(func, receiver: recv.value, range: range)
 		end 'split'
 
-		// ⭐ P1.8 Slice B. `count()` is the GRAPHEME count — O(n) per call, exactly as the reference's is
-		// (see `GraphemeRuntime.buildGraphemeCount`). `bytes()` is the byte view, shared with Character's.
+		// ⭐ P1.8 Slice B. `count()` is the GRAPHEME count — O(n) per call, exactly as the reference's is.
+		// It calls the CORPUS's `countGraphemes` (`CorpusCountGraphemes`), which is the same body a user's own
+		// `countGraphemes(s)` reaches; the synthesized `__gr_count` it used to call is retired.
+		// `bytes()` is the byte view, shared with Character's.
 		if methodTok.value.equals(CountMethod) 'count'
 			try self.consumeEmptyArgList()
-			return self.emitRuntimeCall(GraphemeCountName, args: singletonArgs(recv.value), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
+			return self.emitRuntimeCall(CorpusCountGraphemes, args: singletonArgs(recv.value), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
 		end 'count'
 		if methodTok.value.equals(ByteViewMethod) 'bytes'
 			return try self.parseByteView(recv.value, methodTok: methodTok, range: range)

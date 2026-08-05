@@ -166,14 +166,14 @@ export function deriveStdlibFacts(project Project, module MaxonModule) returns S
 		stdlibSet.insert(name)
 	end 'seed'
 
-	// ⭐ COMMON-CASE SHORT-CIRCUIT. If no op in USER code names a stdlib callee, no stdlib function is
+	// ⭐ COMMON-CASE SHORT-CIRCUIT. If no op in USER code REACHES stdlib, no stdlib function is
 	// reachable at all, so ALL of them are unreachable and NONE can be blamed for a substrate — reached by
 	// ONE allocation-free O(ops) scan, WITHOUT the O(functions) name->index map and reached-array the
 	// from-`main` walk allocates, and without the substrate fixpoint. That map is the whole per-compile
 	// memory cost of loading stdlib source into a program that never touches it, so skipping it keeps the
 	// cost a per-compile CONSTANT instead of growing with the user program. It stays EXACT: a stdlib
 	// function referenced by nothing is reachable from nothing.
-	if not userCodeCallsStdlib(module, stdlib: stdlibSet) 'noneReferenced'
+	if not userCodeReachesStdlib(module, stdlib: stdlibSet) 'noneReferenced'
 		var allUnreachable = FunctionNameSet.create()
 		for name in stdlibNames 'markAll'
 			allUnreachable.insert(name)
@@ -336,6 +336,7 @@ function markMaxonCallees(module MaxonModule, project Project, func IrFunction, 
 		for opIdx in block.opRefs 'eachOp'
 			let op = try module.ops.get(opIdx) otherwise panic("markMaxonCallees: opRef {opIdx} not in module.ops")
 			markMaxonCalleeEdge(op, project: project, byName: byName, reached: reached, worklist: worklist, names: names)
+			markCorpusCalleesOfSynthesizedRuntime(op, project: project, byName: byName, reached: reached, worklist: worklist, names: names)
 		end 'eachOp'
 	end 'eachBlock'
 end 'markMaxonCallees'
@@ -367,7 +368,59 @@ end 'markMaxonCalleeEdge'
 // asks the same dialect classifier `markMaxonCalleeEdge` does (`maxonOpCalleeKind`), and differs from it
 // only in what it does with a hit: it runs on every compile, so it must allocate nothing (no map, no
 // queue) — it only asks "is one present?".
-function userCodeCallsStdlib(module MaxonModule, stdlib FunctionNameSet) returns bool
+
+// One op. Asks the callee question through `maxonOpCalleeKind`/`maxonOpCalleeName` — the same pair
+// `opNamesStdlibCallee` reads — rather than matching the call forms here, so a new call form is learned by
+// both scans at once.
+// ⭐⭐ **THE ONE CALL EDGE THIS WALK CANNOT SEE, SEEDED AT THE OP THAT IMPLIES IT.**
+// `__str_trim`, `__cs_contains`, the `__strix_*` walks and the two decoding views are SYNTHESIZED Std
+// bodies, appended after the pipeline (`Compiler.compile`'s install block). Their calls into
+// `stdlib/helpers/string/` are therefore not edges of the MAXON call graph — the caller does not exist yet
+// when this walk runs — so without this the corpus segmenter would be filed `unreachable`,
+// `lowerMaxonToStd` would lower no body for it, and the installed body would call a symbol nothing defined.
+//
+// ⭐ **IT IS A SEED AND NOT A SECOND REACHABILITY RULE.** Everything BELOW these four names is found by the
+// ordinary walk: `findGraphemeEnd` calls `utf8DecodeAt`, `graphemeBreakProperty`, `isGraphemeBreak` and the
+// state helpers, and every one of those is an honest Maxon edge. Only the ENTRY points are declared.
+//
+// ⚠⚠ **IT RUNS INSIDE THE WALK, PER REACHED OP, AND A PRE-PASS OVER THE MODULE WAS MEASURABLY WRONG.**
+// The first version scanned every function of the merged module up front — which includes STDLIB's OWN
+// bodies, and a listed module calls `.codepoints()`. So the seed fired on EVERY program: `return 1 + 1`
+// lowered the whole corpus segmenter, registered its eleven panic literals in `.rdata`, and shifted
+// `__str_blob_0` to `__str_blob_11` in **2223 committed fragments** of programs containing no string at
+// all. (DFE then dropped the code, so it was numbering and lowering work, never emitted bytes — which is
+// exactly why a golden count was the only thing that could see it.) This is the trap `userCodeReachesStdlib`
+// documents one screen down — *"stdlib is internally connected, so scanning its bodies would find an
+// intra-stdlib edge on EVERY compile"* — and skipping stdlib bodies would NOT have been the fix either: a
+// REACHED stdlib body that calls one of these entries needs the seed just as much as a user body does.
+// Asking at the op, inside the walk, is exact for both: the question becomes "does something this program
+// actually reaches name one of these?", which is the question the walk exists to answer.
+function markCorpusCalleesOfSynthesizedRuntime(op MaxonOp, project Project, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet)
+	if not opNamesGraphemeRuntimeEntry(op) 'notASynthesizedSegmenterCaller'
+		return
+	end 'notASynthesizedSegmenterCaller'
+
+	markReachable(CorpusFindGraphemeEnd, project: project, byName: byName, reached: reached, worklist: worklist, names: names)
+	markReachable(CorpusCountGraphemes, project: project, byName: byName, reached: reached, worklist: worklist, names: names)
+	markReachable(CorpusUtf8DecodeAt, project: project, byName: byName, reached: reached, worklist: worklist, names: names)
+	markReachable(CorpusUtf8ByteLengthAt, project: project, byName: byName, reached: reached, worklist: worklist, names: names)
+end 'markCorpusCalleesOfSynthesizedRuntime'
+
+function opNamesGraphemeRuntimeEntry(op MaxonOp) returns bool
+	return match maxonOpCalleeKind(op) 'kind'
+		direct to functionValue gives calleeIsGraphemeRuntimeEntry(maxonOpCalleeName(op))
+		noCallee gives false
+	end 'kind'
+end 'opNamesGraphemeRuntimeEntry'
+
+// ⚠ **`isStringIndexRuntimeCallee` IS READ, NOT TRANSCRIBED.** That predicate is `StringIndexRuntime`'s own
+// answer to "is this one of my entry points", already a prefix test for the reason a roster would be wrong;
+// spelling `__strix_` a second time here would be this project's signature bug in the file that seeds it.
+function calleeIsGraphemeRuntimeEntry(callee ByteArray) returns bool
+	return callee.equals(StrTrimName) or callee.equals(CharSetContainsName) or callee.equals(StrToCodepointsName) or callee.equals(StrToUtf16Name) or isStringIndexRuntimeCallee(callee)
+end 'calleeIsGraphemeRuntimeEntry'
+
+function userCodeReachesStdlib(module MaxonModule, stdlib FunctionNameSet) returns bool
 	for func in module.functions 'eachFunc'
 		// ⭐ SKIP STDLIB's OWN BODIES. Stdlib is internally connected (`Clock.elapsedMs` calls
 		// `Clock.nowMs`), so scanning its bodies would find an intra-stdlib edge on EVERY compile and
@@ -386,17 +439,17 @@ function userCodeCallsStdlib(module MaxonModule, stdlib FunctionNameSet) returns
 		// Direct `block.opRefs` walk — allocation-free, and safe for the same reason `markMaxonCallees`
 		// and `scanRuntimeUsage` use it at this tier (pre-pipeline: no orphan ops; callees are body ops).
 		for blockRef in func.blockRefs 'eachBlock'
-			let block = try module.blocks.get(blockRef) otherwise panic("userCodeCallsStdlib: blockRef from func.blockRefs not in module.blocks")
+			let block = try module.blocks.get(blockRef) otherwise panic("userCodeReachesStdlib: blockRef from func.blockRefs not in module.blocks")
 			for opIdx in block.opRefs 'eachOp'
-				let op = try module.ops.get(opIdx) otherwise panic("userCodeCallsStdlib: opRef {opIdx} not in module.ops")
-				if opNamesStdlibCallee(op, stdlib: stdlib) 'found'
+				let op = try module.ops.get(opIdx) otherwise panic("userCodeReachesStdlib: opRef {opIdx} not in module.ops")
+				if opNamesStdlibCallee(op, stdlib: stdlib) or opNamesGraphemeRuntimeEntry(op) 'found'
 					return true
 				end 'found'
 			end 'eachOp'
 		end 'eachBlock'
 	end 'eachFunc'
 	return false
-end 'userCodeCallsStdlib'
+end 'userCodeReachesStdlib'
 
 // Whether one `MaxonOp` names a callee in `stdlib` — the SAME dialect classifier `markMaxonCalleeEdge`
 // asks, over the same four callee-bearing variants.

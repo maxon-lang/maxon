@@ -1,130 +1,43 @@
-// Runtime/GraphemeRuntime.maxon — UAX #29 extended-grapheme-cluster segmentation, and the `Character`
-// values it mints (P1.8 slice B).
+// Runtime/GraphemeRuntime.maxon — the `Character` values a grapheme scan mints, and the three array
+// views over a String's bytes (P1.8 slice B / slice E).
 //
 // ⭐ **A `Character` IS A STRING RECORD.** It carries the same fused 48-byte layout `StringRuntime` owns
 // (`buffer@0`, `length@8`, `capacity@16`, `elementSize@24`, `parent@32`, `isAscii@40`), holding one
 // grapheme cluster's UTF-8 bytes — so it is dropped by `__str_decref`, cloned by `__str_clone`, printed by
 // reading `buffer@0`/`length@8`, and compared by `__str_eq`. Not one line of that machinery is rebuilt
-// here; this file adds only the SEGMENTATION and the one minting door. The type-level distinction between
-// a String and a Character lives entirely in `MaxonType`/`ValueTypeTag` — see `TypeRules.tagIsByteRecord`,
+// here; this file adds only the one MINTING door and the views. The type-level distinction between a
+// String and a Character lives entirely in `MaxonType`/`ValueTypeTag` — see `TypeRules.tagIsByteRecord`,
 // which states exactly which questions the shared representation answers and which it does not.
 //
-// ⭐ **PORTED FROM `stdlib/helpers/string/grapheme.maxon` (627 lines) AND `stdlib/helpers/string/utf8.maxon`,
-// WHICH IS THE ORACLE.** Both reference compilers execute that same stdlib — v1 has no Character-specific
-// dispatch and the bootstrap inlines only `byteAt`/`byteLength`/`makeCharFromBytes`/`setByte` — so there is
-// no divergence between the two references to resolve: the stdlib IS the answer. What changes here is only
-// the SHAPE, not the algorithm: shv2 reads no stdlib, so each helper becomes a hand-built `StdOp` graph in
-// the manner of `StringRuntime`/`SetRuntime`, and the two multi-field `GraphemeState` fields are PACKED
-// into one machine word because a Std function returns one value (see `GraphemeStateRiShift`).
+// ⭐⭐ **THE SEGMENTER USED TO LIVE HERE, AS A HAND-BUILT `StdOp` PORT OF
+// `stdlib/helpers/string/grapheme.maxon`. IT IS GONE, AND THE CORPUS IS NOW THE ONE IMPLEMENTATION.**
+// 661 lines went: the UAX #29 property table (`__gbp`), the Extended_Pictographic table (`__ext_pict`),
+// the GB3–GB999 rules (`__gr_break`), the RI/emoji state machine (`__gr_state`), the segmenter itself
+// (`__gr_end`), the counter (`__gr_count`) and the two UTF-8 decoders (`__utf8_cp_at` / `__utf8_len_at`).
+// Every one of them had a twin in `stdlib/helpers/string/`, which shv2 has LOADED since BATCH2 slice 6 —
+// so `s.count()` ran the port while a user's own `countGraphemes(s)` ran the corpus, two implementations
+// of one table that a differential spec existed only to keep in agreement.
 //
-// ⚠ **TWO DELIBERATE DIVERGENCES FROM THE REFERENCE, AND THEY ARE LICENSED DIFFERENTLY. READ BOTH.**
+// The port was written when its premise was true — *"shv2 reads no stdlib"* — and the premise expired
+// without the code noticing. What replaced it is not a mechanism: `String.count()` and `for c in s` emit
+// an ORDINARY Maxon-tier call (`Parser.CorpusCountGraphemes`, `CorpusFindGraphemeEnd`), and the Std bodies
+// that still walk clusters — the trim, the `StringIndex` walks, the views below — name the corpus callee
+// directly. The ONE thing that needed building is the reachability seed those Std bodies require, because
+// they are appended after the pipeline and their call edges do not exist when reachability is computed:
+// `StdlibSource.markCorpusCalleesOfSynthesizedRuntimes`.
 //
-//   1. **CRLF — WE DIVERGE, BECAUSE THE ORACLE CONTRADICTS ITSELF.** The reference's `String.count()` goes
-//      through `countGraphemes` → `findGraphemeEnd`, which honours GB3 and answers **1** for `"\r\n"`; its
-//      `for c in s` goes through `StringIterator` → `computeGraphemeLen`, whose `isAsciiFlag ⇒ return 1`
-//      shortcut never consults GB3 and yields **2**. MEASURED on the runnable bootstrap: `"\r\n"` counts 1
-//      and iterates 2; `"ab\r\ncd"` counts 5 and iterates 6. There is therefore no single oracle answer to
-//      match, so shv2 picks the one the language's own GB3 rule gives and the corpus pins
-//      (`grapheme-clusters/grapheme-boundary-crlf` requires `count() == 1`): **BOTH paths run the real scan,
-//      and `"\r\n"` is ONE grapheme either way.** `computeGraphemeLen`'s shortcut is NOT ported.
-//      ⭐ The ASCII fast path is NOT lost by that — it merely moves to where it is CORRECT. It lives inside
-//      `__gr_end` (the reference's own `findGraphemeEnd:39-69`): an ASCII lead byte is settled by two byte
-//      loads and a compare, with no codepoint decode, no property lookup and no state machine. That is what
-//      "ASCII text does not pay for UAX#29" means, and unlike the shortcut it gets CR LF right.
+// ⚠ **THE TWO DIVERGENCES THE PORT DOCUMENTED ARE NOT LOST — ONE WAS NEVER REAL AND THE OTHER MOVED.**
+// The CRLF divergence was against the reference's `computeGraphemeLen` shortcut, which the port declined
+// to copy; the corpus's own `countGraphemes` → `findGraphemeEnd` honours GB3 and answers **1** for
+// a CR followed by an LF, which is the answer shv2 already gave and
+// `grapheme-clusters/grapheme-boundary-crlf` still
+// pins. The Extend-block gap is the corpus's own and is now simply the corpus's to own.
 //
-//   2. **THE EXTEND BLOCKS — WE MATCH THE REFERENCE, INCLUDING ITS GAP.** `graphemeBreakProperty`
-//      (`grapheme.maxon:435-438`) treats only U+0300–U+036F (Combining Diacritical Marks) as `Extend`, and
-//      OMITS the other real Extend blocks: **U+1AB0–1AFF** (Combining Diacritical Marks Extended),
-//      **U+1DC0–1DFF** (Combining Diacritical Marks Supplement) and **U+20D0–20FF** (Combining Diacritical
-//      Marks for Symbols). Those omissions are reproduced here on purpose. The reference is SELF-CONSISTENT
-//      about them — merely incomplete — so unlike the CRLF case there IS a single oracle answer, and
-//      widening the ranges would break agreement on shapes the corpus tests rather than fix a contradiction.
-//      Widening is a behaviour change against the oracle and belongs to whoever owns that decision.
-
-// --- The Grapheme_Cluster_Break property values (UAX #29 table 2) ---
-//
-// The reference returns these as bare integers 0..13 with the legend in a comment
-// (`grapheme.maxon:365-373`); here each is a named constant, because these numbers are read by
-// `__gr_break`'s fourteen rules and a bare `5` in a rule is exactly what the no-magic-values rule is for.
-// The VALUES are the reference's and must not be renumbered: `graphemeBreakProperty` is a user-callable
-// function whose answers the corpus pins by number (`grapheme-break-property-zwj` expects `5`).
-let GbpOther = 0 as ParsedInt
-let GbpCR = 1 as ParsedInt
-let GbpLF = 2 as ParsedInt
-let GbpControl = 3 as ParsedInt
-let GbpExtend = 4 as ParsedInt
-let GbpZwj = 5 as ParsedInt
-let GbpRegionalIndicator = 6 as ParsedInt
-let GbpPrepend = 7 as ParsedInt
-let GbpSpacingMark = 8 as ParsedInt
-let GbpHangulL = 9 as ParsedInt
-let GbpHangulV = 10 as ParsedInt
-let GbpHangulT = 11 as ParsedInt
-let GbpHangulLV = 12 as ParsedInt
-let GbpHangulLVT = 13 as ParsedInt
-
-// --- The codepoint ranges each property covers (the reference's `graphemeBreakProperty`, verbatim) ---
-//
-// Named rather than inline for the reason above, and because several are read TWICE — once by the range
-// table and once by a rule that has to recognize the same codepoint (`CodepointCR` is both a `Gbp` row and
-// the byte `__gr_end`'s ASCII fast path tests for).
-let CodepointLF = 10 as ParsedInt
-let CodepointCR = 13 as ParsedInt
-let ControlLow = 0 as ParsedInt
-let ControlHigh = 31 as ParsedInt
-let ControlDeleteLow = 127 as ParsedInt
-let ControlDeleteHigh = 159 as ParsedInt
-let CodepointZwsp = 8203 as ParsedInt
-let CodepointZwnj = 8204 as ParsedInt
-let CodepointZwj = 8205 as ParsedInt
-let FormatMarkLow = 8206 as ParsedInt
-let FormatMarkHigh = 8207 as ParsedInt
-let SeparatorLow = 8232 as ParsedInt
-let SeparatorHigh = 8238 as ParsedInt
-let RegionalIndicatorLow = 127462 as ParsedInt
-let RegionalIndicatorHigh = 127487 as ParsedInt
-let JamoLLow = 4352 as ParsedInt
-let JamoLHigh = 4447 as ParsedInt
-let JamoVLow = 4448 as ParsedInt
-let JamoVHigh = 4519 as ParsedInt
-let JamoTLow = 4520 as ParsedInt
-let JamoTHigh = 4607 as ParsedInt
-let SkinToneLow = 127995 as ParsedInt
-let SkinToneHigh = 127999 as ParsedInt
-let VariationSelectorLow = 65024 as ParsedInt
-let VariationSelectorHigh = 65039 as ParsedInt
-
-// ⚠ **THE COMBINING-MARK RANGE THE REFERENCE KNOWS, AND THE THREE IT DOES NOT.** U+0300–U+036F is the
-// Combining Diacritical Marks block. See divergence 2 in this file's header for the omitted blocks
-// (U+1AB0–1AFF, U+1DC0–1DFF, U+20D0–20FF) and why they stay omitted.
-let CombiningMarkLow = 768 as ParsedInt
-let CombiningMarkHigh = 879 as ParsedInt
-
-// The precomposed Hangul syllable block U+AC00–U+D7A3, whose property is LV or LVT depending on whether
-// the syllable has a trailing consonant — `(cp - base) mod 28 == 0` picks LV. The one row of the property
-// table that is not a plain range, which is why it is emitted as its own arm (`emitHangulSyllableArm`).
-let HangulSyllableLow = 44032 as ParsedInt
-let HangulSyllableHigh = 55203 as ParsedInt
-let HangulJamoTCount = 28 as ParsedInt
-
-// The seven Extended_Pictographic ranges the reference recognizes (`grapheme.maxon:456-493`). Emoji faces
-// U+1F600–1F64F sit INSIDE emoji symbols U+1F300–1F5FF's successor range in the reference's own ordering;
-// both are kept exactly as written, since a range table's first hit wins and the answer is the same either
-// way (`true`).
-let EmojiFacesLow = 128512 as ParsedInt
-let EmojiFacesHigh = 128591 as ParsedInt
-let EmojiSymbolsLow = 127744 as ParsedInt
-let EmojiSymbolsHigh = 128511 as ParsedInt
-let EmojiTransportLow = 128640 as ParsedInt
-let EmojiTransportHigh = 128767 as ParsedInt
-let EmojiSupplementalLow = 129280 as ParsedInt
-let EmojiSupplementalHigh = 129535 as ParsedInt
-let EmojiExtraLow = 129536 as ParsedInt
-let EmojiExtraHigh = 130047 as ParsedInt
-let MiscSymbolsLow = 9728 as ParsedInt
-let MiscSymbolsHigh = 9983 as ParsedInt
-let DingbatsLow = 9984 as ParsedInt
-let DingbatsHigh = 10175 as ParsedInt
+// ⚠ **AND ONE DIVERGENCE WAS REAL, UNDOCUMENTED, AND THE PORT WAS THE CORRECT SIDE.** A truncated UTF-8
+// sequence made the corpus `panic` where the port decoded the lead byte and advanced one. Converging
+// surfaced it as a red spec (`string-views/truncated-sequences-stop-at-the-buffer-end`) and the rule moved
+// INTO the corpus (`utf8.maxon`'s `utf8WidthFits`), because a lead byte that promises more than the buffer
+// holds is a reachable input — `String.from(bytes)` — and not a corrupt-memory signal.
 
 // ⭐⭐ **THE UTF-8 ENCODING'S BIT LAYOUT — THE ONE DECLARATION, `export`ed, exactly as `StringRuntime`
 // exports the fused record's field offsets** (`stdlib/helpers/string/utf8.maxon`, verbatim). The three
@@ -173,9 +86,6 @@ export let Utf8ThreeByteCeiling = 65536 as ParsedInt
 export let Utf8ContinuationFloor = 0x80 as ParsedInt
 
 let Utf8OneByteLength = 1 as ParsedInt
-let Utf8TwoByteLength = 2 as ParsedInt
-let Utf8ThreeByteLength = 3 as ParsedInt
-let Utf8FourByteLength = 4 as ParsedInt
 
 // ⭐ **`GraphemeState` PACKED INTO ONE MACHINE WORD**, because a Std runtime function returns exactly one
 // value and the reference's state is a two-field struct (`GraphemeState{riCount, inEmojiSeq}`,
@@ -185,9 +95,6 @@ let Utf8FourByteLength = 4 as ParsedInt
 // `riCount mod 2`: keeping the reference's own field means a future GB rule that needs the count finds it,
 // and a shift costs exactly what a parity toggle would. A run long enough to overflow the shift is a run
 // of 2^62 regional indicators.
-let GraphemeStateRiShift = 1 as ParsedInt
-let GraphemeStateEmojiBit = 1 as ParsedInt
-let GraphemeStateParityBit = 1 as ParsedInt
 
 // ⭐ **THE ENTRY POINTS.** All `__`-prefixed compiler-internal (`isCompilerInternalCallee` — no E3004, no
 // signature slotting) but NOT `__mm_`-prefixed, so none of them widens the heap decision by its prefix;
@@ -216,14 +123,6 @@ let GraphemeStateParityBit = 1 as ParsedInt
 //     (P1.8 Slice E), `__str_to_bytes`'s two siblings: the same caller-created array, the same
 //     push-only contract, one UTF-8 walk each. They fill an `Array with integer` rather than an
 //     `Array with Byte` — see `buildStrToUtf16` for why the element is the plain integer instance.
-export let GbpName = b"__gbp"
-export let ExtPictName = b"__ext_pict"
-export let Utf8CodepointAtName = b"__utf8_cp_at"
-export let Utf8LengthAtName = b"__utf8_len_at"
-export let GraphemeBreakName = b"__gr_break"
-export let GraphemeStateName = b"__gr_state"
-export let GraphemeEndName = b"__gr_end"
-export let GraphemeCountName = b"__gr_count"
 export let CharAtName = b"__char_at"
 export let CharAsciiValueName = b"__char_ascii"
 export let StrToBytesName = b"__str_to_bytes"
@@ -269,98 +168,10 @@ let Utf16LeadSurrogateBase = 55296 as ParsedInt
 let Utf16TrailSurrogateBase = 56320 as ParsedInt
 let Utf16SurrogateHalfBits = 10 as ParsedInt
 let Utf16SurrogateHalfMask = 1023 as ParsedInt
-
-// ⭐ **ONE ROW OF A CODEPOINT RANGE TABLE** — `lo <= cp <= hi` gives `value`. Both classifiers
-// (`graphemeBreakProperty`, `isExtendedPictographic`) are ordered lists of these plus a default, so they
-// are DATA here and one emitter walks them. The reference writes each as its own `if` block; fifteen
-// hand-built block groups would be fifteen chances to transpose a bound.
-type GbpRange
-	export var lo as ParsedInt
-	export var hi as ParsedInt
-	export var value as ParsedInt
-
-	static function of(lo ParsedInt, hi ParsedInt, value ParsedInt) returns GbpRange
-		return Self{lo: lo, hi: hi, value: value}
-	end 'of'
-end 'GbpRange'
-
-typealias GbpRangeArray = Array with GbpRange
-
-// The property rows that precede the Hangul-syllable arm, in the reference's own order. Order is
-// LOAD-BEARING and not incidental: the table is first-hit-wins, and `CodepointCR`/`CodepointLF` sit inside
-// the `ControlLow..ControlHigh` run, so the two must be tested first or a CR would classify as Control and
-// GB3 would never fire.
-function gbpRowsBeforeHangul() returns GbpRangeArray
-	var rows = GbpRangeArray.create()
-	rows.push(GbpRange.of(CodepointCR, hi: CodepointCR, value: GbpCR))
-	rows.push(GbpRange.of(CodepointLF, hi: CodepointLF, value: GbpLF))
-	rows.push(GbpRange.of(ControlLow, hi: ControlHigh, value: GbpControl))
-	rows.push(GbpRange.of(ControlDeleteLow, hi: ControlDeleteHigh, value: GbpControl))
-	rows.push(GbpRange.of(CodepointZwj, hi: CodepointZwj, value: GbpZwj))
-	rows.push(GbpRange.of(RegionalIndicatorLow, hi: RegionalIndicatorHigh, value: GbpRegionalIndicator))
-	return rows
-end 'gbpRowsBeforeHangul'
-
-// The property rows that follow the Hangul-syllable arm, in the reference's own order.
-//
-// ⚠ The three `Control` rows at the end (ZWSP, the LRM/RLM pair, the separator run) come AFTER the Extend
-// rows in the reference, and the order is kept even though these ranges are disjoint from every row above:
-// preserving the reference's sequence is what makes a future edit to either table a diff of one line
-// rather than an argument about whether the reordering changed anything.
-function gbpRowsAfterHangul() returns GbpRangeArray
-	var rows = GbpRangeArray.create()
-	rows.push(GbpRange.of(JamoLLow, hi: JamoLHigh, value: GbpHangulL))
-	rows.push(GbpRange.of(JamoVLow, hi: JamoVHigh, value: GbpHangulV))
-	rows.push(GbpRange.of(JamoTLow, hi: JamoTHigh, value: GbpHangulT))
-	rows.push(GbpRange.of(SkinToneLow, hi: SkinToneHigh, value: GbpExtend))
-	rows.push(GbpRange.of(VariationSelectorLow, hi: VariationSelectorHigh, value: GbpExtend))
-	rows.push(GbpRange.of(CombiningMarkLow, hi: CombiningMarkHigh, value: GbpExtend))
-	rows.push(GbpRange.of(CodepointZwsp, hi: CodepointZwsp, value: GbpControl))
-	rows.push(GbpRange.of(FormatMarkLow, hi: FormatMarkHigh, value: GbpControl))
-	rows.push(GbpRange.of(SeparatorLow, hi: SeparatorHigh, value: GbpControl))
-	rows.push(GbpRange.of(CodepointZwnj, hi: CodepointZwnj, value: GbpExtend))
-	return rows
-end 'gbpRowsAfterHangul'
-
-// The Extended_Pictographic ranges — one table, every row giving `true`, default `false`. It is the same
-// SHAPE as the property table (an ordered list of ranges over one codepoint), which is why it reuses the
-// same row type and the same emitter rather than growing a second, nearly identical walker.
-function extendedPictographicRows() returns GbpRangeArray
-	var rows = GbpRangeArray.create()
-	rows.push(GbpRange.of(EmojiFacesLow, hi: EmojiFacesHigh, value: PredicateTrue))
-	rows.push(GbpRange.of(EmojiSymbolsLow, hi: EmojiSymbolsHigh, value: PredicateTrue))
-	rows.push(GbpRange.of(EmojiTransportLow, hi: EmojiTransportHigh, value: PredicateTrue))
-	rows.push(GbpRange.of(EmojiSupplementalLow, hi: EmojiSupplementalHigh, value: PredicateTrue))
-	rows.push(GbpRange.of(EmojiExtraLow, hi: EmojiExtraHigh, value: PredicateTrue))
-	rows.push(GbpRange.of(MiscSymbolsLow, hi: MiscSymbolsHigh, value: PredicateTrue))
-	rows.push(GbpRange.of(DingbatsLow, hi: DingbatsHigh, value: PredicateTrue))
-	return rows
-end 'extendedPictographicRows'
-
 // Install the referenced grapheme runtime functions into the lowered Std module. Called AFTER the
 // pipeline (like `installStringRuntime`), so these are appended already-lowered and never re-optimized.
 // Each is installed ONLY when referenced — vocabulary does not ship ahead of its consumer.
 export function installGraphemeRuntime(module StdModule, usage RuntimeUsage)
-	if usage.usesGbp 'gbp'
-		buildGbp(module)
-	end 'gbp'
-	if usage.usesExtPict 'extpict'
-		buildExtPict(module)
-	end 'extpict'
-	if usage.usesUtf8Decode 'utf8'
-		buildUtf8CodepointAt(module)
-		buildUtf8LengthAt(module)
-	end 'utf8'
-	if usage.usesGraphemeBreak 'grbreak'
-		buildGraphemeBreak(module)
-		buildGraphemeState(module)
-	end 'grbreak'
-	if usage.usesGraphemeEnd 'grend'
-		buildGraphemeEnd(module)
-	end 'grend'
-	if usage.usesGraphemeCount 'grcount'
-		buildGraphemeCount(module)
-	end 'grcount'
 	if usage.usesCharAt 'charat'
 		buildCharAt(module)
 	end 'charat'
@@ -377,668 +188,6 @@ export function installGraphemeRuntime(module StdModule, usage RuntimeUsage)
 		buildStrToUtf16(module)
 	end 'toutf16'
 end 'installGraphemeRuntime'
-
-// ⭐ **THE ONE RANGE-TABLE EMITTER.** Emit `rows` as a first-hit-wins chain off `cur`, each hit returning
-// its row's value, and give back the block a MISS falls through to — so a caller chains two tables and a
-// bespoke arm between them (`buildGbp` does exactly that around the Hangul syllable row).
-//
-// Two blocks per row plus the hit block: `cur` tests the lower bound, `hiTest` the upper, `hit` returns.
-// A single-codepoint row (`lo == hi`) takes the identical shape rather than a fused `eq` — one row layout
-// means a bound cannot be tested with the wrong predicate in one arm and the right one in another, and the
-// redundant compare costs a `cmp`/`jcc` on a path that is already a chain of them.
-function emitRangeTable(module StdModule, func IrFunction, cur IrBlock, cp ValueId, rows GbpRangeArray, ids ValueMinter) returns IrBlock
-	var block = cur
-	for row in rows 'eachRow'
-		var hiTest = module.addBlock(func, label: b"hi")
-		var hit = module.addBlock(func, label: b"hit")
-		let miss = module.addBlock(func, label: b"miss")
-
-		let lo = emitConst(module, block: block, value: row.lo, ids: ids)
-		let atOrAboveLo = emitCmp(module, block: block, a: cp, b: lo, pred: StdCmpPred.ge, ids: ids)
-		module.setTerminator(block, op: StdOp.condBranch(atOrAboveLo, thenBlockId: hiTest.id, elseBlockId: miss.id))
-
-		let hi = emitConst(module, block: hiTest, value: row.hi, ids: ids)
-		let atOrBelowHi = emitCmp(module, block: hiTest, a: cp, b: hi, pred: StdCmpPred.le, ids: ids)
-		module.setTerminator(hiTest, op: StdOp.condBranch(atOrBelowHi, thenBlockId: hit.id, elseBlockId: miss.id))
-
-		emitConstReturn(module, block: hit, value: row.value, ids: ids)
-		block = miss
-	end 'eachRow'
-	return block
-end 'emitRangeTable'
-
-// `__gbp(cp) -> i64` — the Grapheme_Cluster_Break property (`grapheme.maxon:374-453`).
-//
-// The ONE row that is not a plain range is the precomposed Hangul syllable block, which splits LV from LVT
-// on `(cp - base) mod 28`; it is emitted between the two range tables at exactly the position the reference
-// tests it, because the table is first-hit-wins and the Jamo rows below it must not shadow it.
-function buildGbp(module StdModule)
-	var func = IrFunction.createFromStd(GbpName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
-	var ids = ValueMinter.create(1)
-
-	var entry = module.addBlock(func, label: b"entry")
-	emitParams(module, block: entry, count: 1)
-	let cp = 0 as ValueId
-
-	var afterFirst = emitRangeTable(module, func: func, cur: entry, cp: cp, rows: gbpRowsBeforeHangul(), ids: ids)
-	var afterHangul = emitHangulSyllableArm(module, func: func, cur: afterFirst, cp: cp, ids: ids)
-	var miss = emitRangeTable(module, func: func, cur: afterHangul, cp: cp, rows: gbpRowsAfterHangul(), ids: ids)
-
-	emitConstReturn(module, block: miss, value: GbpOther, ids: ids)
-	module.functions.push(func)
-end 'buildGbp'
-
-// The precomposed-Hangul arm: inside U+AC00–U+D7A3, `(cp - U+AC00) mod 28 == 0` is LV (no trailing
-// consonant) and everything else is LVT. Returns the block a codepoint OUTSIDE the block falls through to.
-function emitHangulSyllableArm(module StdModule, func IrFunction, cur IrBlock, cp ValueId, ids ValueMinter) returns IrBlock
-	var hiTest = module.addBlock(func, label: b"hangulHi")
-	var classify = module.addBlock(func, label: b"hangulKind")
-	var isLv = module.addBlock(func, label: b"hangulLv")
-	var isLvt = module.addBlock(func, label: b"hangulLvt")
-	let miss = module.addBlock(func, label: b"notHangul")
-
-	let low = emitConst(module, block: cur, value: HangulSyllableLow, ids: ids)
-	let atOrAboveLo = emitCmp(module, block: cur, a: cp, b: low, pred: StdCmpPred.ge, ids: ids)
-	module.setTerminator(cur, op: StdOp.condBranch(atOrAboveLo, thenBlockId: hiTest.id, elseBlockId: miss.id))
-
-	let high = emitConst(module, block: hiTest, value: HangulSyllableHigh, ids: ids)
-	let atOrBelowHi = emitCmp(module, block: hiTest, a: cp, b: high, pred: StdCmpPred.le, ids: ids)
-	module.setTerminator(hiTest, op: StdOp.condBranch(atOrBelowHi, thenBlockId: classify.id, elseBlockId: miss.id))
-
-	let base = emitConst(module, block: classify, value: HangulSyllableLow, ids: ids)
-	let index = emitBin(module, block: classify, a: cp, b: base, opcode: StdBinOpcode.sub, ids: ids)
-	let tCount = emitConst(module, block: classify, value: HangulJamoTCount, ids: ids)
-	let remainder = ids.mint()
-	module.appendOp(classify, op: StdOp.mod(remainder, lhs: index, rhs: tCount, signedness: DivideSignedness.signed))
-	let zero = emitConst(module, block: classify, value: 0, ids: ids)
-	let noTrailing = emitCmp(module, block: classify, a: remainder, b: zero, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(classify, op: StdOp.condBranch(noTrailing, thenBlockId: isLv.id, elseBlockId: isLvt.id))
-
-	emitConstReturn(module, block: isLv, value: GbpHangulLV, ids: ids)
-	emitConstReturn(module, block: isLvt, value: GbpHangulLVT, ids: ids)
-	return miss
-end 'emitHangulSyllableArm'
-
-// `__ext_pict(cp) -> i1` — Extended_Pictographic (`grapheme.maxon:456-493`). The same ordered range table
-// `__gbp` is, with every row giving `true`.
-function buildExtPict(module StdModule)
-	var func = IrFunction.createFromStd(ExtPictName, returnType: StdReturnType.value(StdType.i1), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
-	var ids = ValueMinter.create(1)
-
-	var entry = module.addBlock(func, label: b"entry")
-	emitParams(module, block: entry, count: 1)
-	let cp = 0 as ValueId
-
-	var miss = emitRangeTable(module, func: func, cur: entry, cp: cp, rows: extendedPictographicRows(), ids: ids)
-	emitConstReturn(module, block: miss, value: PredicateFalse, ids: ids)
-	module.functions.push(func)
-end 'buildExtPict'
-
-// One CONTINUATION byte of a multi-byte sequence: `addr[index] and 0x3F`, the six payload bits. Shared by
-// the three multi-byte arms of `__utf8_cp_at` so the mask is written once.
-function emitContinuationBits(module StdModule, block IrBlock, addr ValueId, index ParsedInt, ids ValueMinter) returns ValueId
-	let raw = emitLoadByteIndexed(module, block: block, base: addr, index: emitConst(module, block: block, value: index, ids: ids), ids: ids)
-	let mask = emitConst(module, block: block, value: Utf8ContinuationMask, ids: ids)
-	return emitBin(module, block: block, a: raw, b: mask, opcode: StdBinOpcode.bitAnd, ids: ids)
-end 'emitContinuationBits'
-
-// `(value and mask) shl bits` — the LEAD byte's contribution to a codepoint.
-function emitLeadBits(module StdModule, block IrBlock, lead ValueId, mask ParsedInt, shift ParsedInt, ids ValueMinter) returns ValueId
-	let masked = emitBin(module, block: block, a: lead, b: emitConst(module, block: block, value: mask, ids: ids), opcode: StdBinOpcode.bitAnd, ids: ids)
-	return emitBin(module, block: block, a: masked, b: emitConst(module, block: block, value: shift, ids: ids), opcode: StdBinOpcode.shl, ids: ids)
-end 'emitLeadBits'
-
-// `a or (b shl shift)` — fold one continuation byte's payload into an accumulating codepoint.
-function emitOrShifted(module StdModule, block IrBlock, acc ValueId, part ValueId, shift ParsedInt, ids ValueMinter) returns ValueId
-	let shifted = emitBin(module, block: block, a: part, b: emitConst(module, block: block, value: shift, ids: ids), opcode: StdBinOpcode.shl, ids: ids)
-	return emitBin(module, block: block, a: acc, b: shifted, opcode: StdBinOpcode.bitOr, ids: ids)
-end 'emitOrShifted'
-
-// ⭐ **THE ONE UTF-8 LEAD-BYTE LADDER.** Dispatch `lead` on its two thresholds into `oneByte`/`twoByte`/
-// `threeByte`, and return the FOUR-byte block everything wider falls through to. The caller creates the
-// three narrow arms and fills all four, because what the two decoders put in an arm is all they differ in.
-//
-// ⚠ **THE THRESHOLDS AND THEIR ORDER ARE THE SHARED PART, AND THEY WERE WRITTEN OUT TWICE.** That is
-// exactly the shape where a threshold corrected in one decoder and not the other makes a sequence's
-// LENGTH and its VALUE disagree: the scan then steps by the wrong width and every following cluster is
-// misread, with no error raised anywhere.
-//
-// ⭐⭐ **AND IT IS ALSO WHERE THE BUFFER END IS ENFORCED (P1.8 Slice E review), FOR PRECISELY THAT REASON.**
-// `avail` is how many bytes the caller's buffer still holds at `addr`. A lead byte announcing a sequence
-// WIDER than that is malformed input, and the answer is the ONE-BYTE arm: the decoders then read the lead
-// and nothing else, `__utf8_len_at` says 1, `__utf8_cp_at` gives the lead's own value, and the walk
-// advances by one. **The two answers cannot disagree, because the routing that produces them is this one
-// function** — which is the whole argument this ladder was extracted for, now carrying the bound as well
-// as the thresholds.
-//
-// ⚠ **WHY IT HAD TO EXIST: `String.from(bytes)` (Slice E) IS THE FIRST DOOR ARBITRARY BYTES REACH THESE
-// DECODERS THROUGH.** Every earlier producer of a `String` is well-formed by construction — a literal is
-// validated by the lexer, a slice is grapheme-aligned, `replace`/`split` rebuild from valid pieces — so a
-// lead byte never promised more than the buffer held. MEASURED before this clamp: `String.from(b"\xC3")`
-// then `.codepoints()` decoded a two-byte sequence out of a one-byte buffer, reading the byte PAST the
-// allocation. It answered rather than faulting, which is the worst version of that: at the end of a slab
-// the same read crosses a page and is an access violation instead.
-//
-// A WELL-FORMED sequence is untouched, and that is checkable rather than asserted: `avail` is then always
-// at least the declared width, every added compare falls through, and the suite's committed goldens do not
-// move.
-function emitUtf8LeadLadder(module StdModule, func IrFunction, entry IrBlock, lead ValueId, avail ValueId, oneByte IrBlock, twoByte IrBlock, threeByte IrBlock, ids ValueMinter) returns IrBlock
-	var afterAscii = emitValueBelow(module, func: func, cur: entry, value: lead, limit: Utf8OneByteCeiling, taken: oneByte, ids: ids)
-	var afterTwo = emitBandWithRoom(module, func: func, cur: afterAscii, lead: lead, avail: avail, leadLimit: Utf8LeadThreeByteFloor, width: Utf8TwoByteLength, band: twoByte, truncated: oneByte, ids: ids)
-	var afterThree = emitBandWithRoom(module, func: func, cur: afterTwo, lead: lead, avail: avail, leadLimit: Utf8LeadFourByteFloor, width: Utf8ThreeByteLength, band: threeByte, truncated: oneByte, ids: ids)
-
-	// The FOUR-byte band is the fall-through and has no lead threshold of its own, so only its room is
-	// tested. The block returned is the one the caller fills as the four-byte arm.
-	let fourByte = module.addBlock(func, label: b"four")
-	let short = emitValueBelow(module, func: func, cur: afterThree, value: avail, limit: Utf8FourByteLength, taken: oneByte, ids: ids)
-	module.setTerminator(short, op: StdOp.branch(fourByte.id))
-
-	return fourByte
-end 'emitUtf8LeadLadder'
-
-// One WIDER band of the ladder: `lead < leadLimit` selects the band, and inside it `avail < width` means
-// the buffer cannot hold the sequence the lead announced, so the byte decodes alone. Returns the
-// continuation for the next band. Written once because the two wider bands differ only in their two
-// numbers — the shape they share is exactly the pairing of a threshold with its width, which is the thing
-// that must never be mismatched.
-function emitBandWithRoom(module StdModule, func IrFunction, cur IrBlock, lead ValueId, avail ValueId, leadLimit ParsedInt, width ParsedInt, band IrBlock, truncated IrBlock, ids ValueMinter) returns IrBlock
-	var inBand = module.addBlock(func, label: b"band")
-	let next = emitValueBelow(module, func: func, cur: cur, value: lead, limit: leadLimit, taken: inBand, ids: ids)
-	let hasRoom = emitValueBelow(module, func: func, cur: inBand, value: avail, limit: width, taken: truncated, ids: ids)
-	module.setTerminator(hasRoom, op: StdOp.branch(band.id))
-
-	return next
-end 'emitBandWithRoom'
-
-// Split `cur` on `value < limit`: the THEN block is `taken`, the ELSE block is returned as the
-// continuation. One step of the ladder above — used for both halves of a band, the LEAD against its
-// threshold and the AVAILABLE bytes against the width, because the two are the same branch.
-function emitValueBelow(module StdModule, func IrFunction, cur IrBlock, value ValueId, limit ParsedInt, taken IrBlock, ids ValueMinter) returns IrBlock
-	let next = module.addBlock(func, label: b"wider")
-	let bound = emitConst(module, block: cur, value: limit, ids: ids)
-	let below = emitCmp(module, block: cur, a: value, b: bound, pred: StdCmpPred.lt, ids: ids)
-	module.setTerminator(cur, op: StdOp.condBranch(below, thenBlockId: taken.id, elseBlockId: next.id))
-	return next
-end 'emitValueBelow'
-
-// `__utf8_len_at(addr, avail) -> i64` — the byte length of the UTF-8 sequence beginning at `addr`
-// (`utf8.maxon:101-115`), decided by the LEAD byte alone — except that a sequence the buffer cannot hold
-// is one byte, which is `emitUtf8LeadLadder`'s clamp and is stated there.
-function buildUtf8LengthAt(module StdModule)
-	var func = IrFunction.createFromStd(Utf8LengthAtName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
-	var ids = ValueMinter.create(2)
-
-	var entry = module.addBlock(func, label: b"entry")
-	var oneByte = module.addBlock(func, label: b"one")
-	var twoByte = module.addBlock(func, label: b"two")
-	var threeByte = module.addBlock(func, label: b"three")
-
-	emitParams(module, block: entry, count: 2)
-	let addr = 0 as ValueId
-	let avail = 1 as ValueId
-
-	let lead = emitLoadByteAt(module, block: entry, addr: addr, ids: ids)
-	var fourByte = emitUtf8LeadLadder(module, func: func, entry: entry, lead: lead, avail: avail, oneByte: oneByte, twoByte: twoByte, threeByte: threeByte, ids: ids)
-	emitConstReturn(module, block: oneByte, value: Utf8OneByteLength, ids: ids)
-	emitConstReturn(module, block: twoByte, value: Utf8TwoByteLength, ids: ids)
-	emitConstReturn(module, block: threeByte, value: Utf8ThreeByteLength, ids: ids)
-	emitConstReturn(module, block: fourByte, value: Utf8FourByteLength, ids: ids)
-	module.functions.push(func)
-end 'buildUtf8LengthAt'
-
-// `__utf8_cp_at(addr, avail) -> i64` — the codepoint of the UTF-8 sequence beginning at `addr`
-// (`utf8.maxon:118-152`). The same three-way lead-byte ladder `__utf8_len_at` walks, and the same
-// buffer-end clamp: it is what stops an arm below from reading a continuation byte the buffer does not
-// have (see `emitUtf8LeadLadder`). Each arm assembles the lead's payload bits with its continuation bytes'.
-function buildUtf8CodepointAt(module StdModule)
-	var func = IrFunction.createFromStd(Utf8CodepointAtName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
-	var ids = ValueMinter.create(2)
-
-	var entry = module.addBlock(func, label: b"entry")
-	var oneByte = module.addBlock(func, label: b"one")
-	var twoByte = module.addBlock(func, label: b"two")
-	var threeByte = module.addBlock(func, label: b"three")
-
-	emitParams(module, block: entry, count: 2)
-	let addr = 0 as ValueId
-	let avail = 1 as ValueId
-
-	let lead = emitLoadByteAt(module, block: entry, addr: addr, ids: ids)
-	var fourByte = emitUtf8LeadLadder(module, func: func, entry: entry, lead: lead, avail: avail, oneByte: oneByte, twoByte: twoByte, threeByte: threeByte, ids: ids)
-
-	// An ASCII byte IS its codepoint — and so is a TRUNCATED lead, which the ladder routes here: with no
-	// room for its continuation bytes there is nothing else to read, and the byte stands for itself.
-	module.setTerminator(oneByte, op: StdOp.ret(lead))
-
-	let twoLead = emitLeadBits(module, block: twoByte, lead: lead, mask: Utf8LeadTwoByteMask, shift: Utf8ContinuationBits, ids: ids)
-	let twoTail = emitContinuationBits(module, block: twoByte, addr: addr, index: 1, ids: ids)
-	module.setTerminator(twoByte, op: StdOp.ret(emitBin(module, block: twoByte, a: twoLead, b: twoTail, opcode: StdBinOpcode.bitOr, ids: ids)))
-
-	let threeLead = emitLeadBits(module, block: threeByte, lead: lead, mask: Utf8LeadThreeByteMask, shift: Utf8ThreeByteHighShift, ids: ids)
-	let threeMid = emitOrShifted(module, block: threeByte, acc: threeLead, part: emitContinuationBits(module, block: threeByte, addr: addr, index: 1, ids: ids), shift: Utf8ContinuationBits, ids: ids)
-	let threeTail = emitContinuationBits(module, block: threeByte, addr: addr, index: 2, ids: ids)
-	module.setTerminator(threeByte, op: StdOp.ret(emitBin(module, block: threeByte, a: threeMid, b: threeTail, opcode: StdBinOpcode.bitOr, ids: ids)))
-
-	let fourLead = emitLeadBits(module, block: fourByte, lead: lead, mask: Utf8LeadFourByteMask, shift: Utf8FourByteHighShift, ids: ids)
-	let fourHigh = emitOrShifted(module, block: fourByte, acc: fourLead, part: emitContinuationBits(module, block: fourByte, addr: addr, index: 1, ids: ids), shift: Utf8ThreeByteHighShift, ids: ids)
-	let fourMid = emitOrShifted(module, block: fourByte, acc: fourHigh, part: emitContinuationBits(module, block: fourByte, addr: addr, index: 2, ids: ids), shift: Utf8ContinuationBits, ids: ids)
-	let fourTail = emitContinuationBits(module, block: fourByte, addr: addr, index: 3, ids: ids)
-	module.setTerminator(fourByte, op: StdOp.ret(emitBin(module, block: fourByte, a: fourMid, b: fourTail, opcode: StdBinOpcode.bitOr, ids: ids)))
-
-	module.functions.push(func)
-end 'buildUtf8CodepointAt'
-
-// Branch `cur` to `taken` when `value == expected`, and return the fall-through block. The shape every
-// equality-keyed rule in `__gr_break` repeats.
-function emitEqualsBranch(module StdModule, func IrFunction, cur IrBlock, value ValueId, expected ParsedInt, taken IrBlock, ids ValueMinter) returns IrBlock
-	let next = module.addBlock(func, label: b"next")
-	let want = emitConst(module, block: cur, value: expected, ids: ids)
-	let matches = emitCmp(module, block: cur, a: value, b: want, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(cur, op: StdOp.condBranch(matches, thenBlockId: taken.id, elseBlockId: next.id))
-	return next
-end 'emitEqualsBranch'
-
-// ⭐ **BRANCH TO `taken` WHEN `value` IS ANY OF `expected`, AND RETURN THE FALL-THROUGH** — the shape
-// every membership rule in this file wants, written once. It had grown three near-identical copies (the
-// Control/CR/LF triple GB4 and GB5 both ask, GB6's four-way Hangul right-hand side, and the
-// Extend/ZWJ/SpacingMark triple `__gr_end`'s ASCII path asks), each an unrolled chain of
-// `emitEqualsBranch`. Nothing made them agree on the chain's shape, and a rule that needed a fourth
-// member would have grown a fourth copy.
-function emitValueInSet(module StdModule, func IrFunction, cur IrBlock, value ValueId, expected ParsedIntArray, taken IrBlock, ids ValueMinter) returns IrBlock
-	var block = cur
-	for want in expected 'eachMember'
-		block = emitEqualsBranch(module, func: func, cur: block, value: value, expected: want, taken: taken, ids: ids)
-	end 'eachMember'
-	return block
-end 'emitValueInSet'
-
-// Control / CR / LF — the three properties that ALWAYS break, asked by GB4 (after) and GB5 (before).
-function controlCrLfProperties() returns ParsedIntArray
-	var props = ParsedIntArray.create()
-	props.push(GbpControl)
-	props.push(GbpCR)
-	props.push(GbpLF)
-	return props
-end 'controlCrLfProperties'
-
-// Extend / ZWJ / SpacingMark — the three that never break from what precedes them (GB9, GB9a).
-function combiningProperties() returns ParsedIntArray
-	var props = ParsedIntArray.create()
-	props.push(GbpExtend)
-	props.push(GbpZwj)
-	props.push(GbpSpacingMark)
-	return props
-end 'combiningProperties'
-
-// L / V / LV / LVT — GB6's right-hand side, the only four-way membership in the rule set.
-function hangulSyllableProperties() returns ParsedIntArray
-	var props = ParsedIntArray.create()
-	props.push(GbpHangulL)
-	props.push(GbpHangulV)
-	props.push(GbpHangulLV)
-	props.push(GbpHangulLVT)
-	return props
-end 'hangulSyllableProperties'
-
-// `__gr_break(prevGbp, currGbp, currCp, state) -> i1` — is there a cluster boundary BEFORE the current
-// codepoint? The GB3–GB999 rules of `isGraphemeBreak` (`grapheme.maxon:518-602`), in the reference's order,
-// which is load-bearing: GB4 (break AFTER control) precedes GB9 (never break BEFORE Extend), so a
-// combining mark after a newline starts a new cluster rather than joining one.
-function buildGraphemeBreak(module StdModule)
-	var func = IrFunction.createFromStd(GraphemeBreakName, returnType: StdReturnType.value(StdType.i1), paramCount: 4, paramTypes: fourI64Params(), returnLine: 0)
-	var ids = ValueMinter.create(4)
-
-	var entry = module.addBlock(func, label: b"entry")
-	var noBreak = module.addBlock(func, label: b"joined")
-	var doBreak = module.addBlock(func, label: b"broken")
-
-	emitParams(module, block: entry, count: 4)
-	let prevGbp = 0 as ValueId
-	let currGbp = 1 as ValueId
-	let currCp = 2 as ValueId
-	let state = 3 as ValueId
-
-	// GB3: CR × LF — the one pair that never breaks. Tested FIRST, before GB4 breaks after every CR.
-	var cur = module.addBlock(func, label: b"gb3")
-	module.setTerminator(entry, op: StdOp.branch(cur.id))
-	var gb3Lf = module.addBlock(func, label: b"gb3Lf")
-	var afterGb3Cr = emitEqualsBranch(module, func: func, cur: cur, value: prevGbp, expected: GbpCR, taken: gb3Lf, ids: ids)
-	var gb3Miss = emitEqualsBranch(module, func: func, cur: gb3Lf, value: currGbp, expected: GbpLF, taken: noBreak, ids: ids)
-	module.setTerminator(gb3Miss, op: StdOp.branch(afterGb3Cr.id))
-
-	// GB4: break AFTER Control / CR / LF. GB5: break BEFORE them.
-	var afterGb4 = emitValueInSet(module, func: func, cur: afterGb3Cr, value: prevGbp, expected: controlCrLfProperties(), taken: doBreak, ids: ids)
-	var afterGb5 = emitValueInSet(module, func: func, cur: afterGb4, value: currGbp, expected: controlCrLfProperties(), taken: doBreak, ids: ids)
-
-	// GB6: L × (L | V | LV | LVT).
-	var gb6Inner = module.addBlock(func, label: b"gb6Inner")
-	var afterGb6 = emitEqualsBranch(module, func: func, cur: afterGb5, value: prevGbp, expected: GbpHangulL, taken: gb6Inner, ids: ids)
-	var gb6Miss = emitValueInSet(module, func: func, cur: gb6Inner, value: currGbp, expected: hangulSyllableProperties(), taken: noBreak, ids: ids)
-	module.setTerminator(gb6Miss, op: StdOp.branch(afterGb6.id))
-
-	// GB7: (LV | V) × (V | T).
-	var gb7Inner = module.addBlock(func, label: b"gb7Inner")
-	var afterGb7Lv = emitEqualsBranch(module, func: func, cur: afterGb6, value: prevGbp, expected: GbpHangulLV, taken: gb7Inner, ids: ids)
-	var afterGb7 = emitEqualsBranch(module, func: func, cur: afterGb7Lv, value: prevGbp, expected: GbpHangulV, taken: gb7Inner, ids: ids)
-	var gb7MissV = emitEqualsBranch(module, func: func, cur: gb7Inner, value: currGbp, expected: GbpHangulV, taken: noBreak, ids: ids)
-	var gb7Miss = emitEqualsBranch(module, func: func, cur: gb7MissV, value: currGbp, expected: GbpHangulT, taken: noBreak, ids: ids)
-	module.setTerminator(gb7Miss, op: StdOp.branch(afterGb7.id))
-
-	// GB8: (LVT | T) × T.
-	var gb8Inner = module.addBlock(func, label: b"gb8Inner")
-	var afterGb8Lvt = emitEqualsBranch(module, func: func, cur: afterGb7, value: prevGbp, expected: GbpHangulLVT, taken: gb8Inner, ids: ids)
-	var afterGb8 = emitEqualsBranch(module, func: func, cur: afterGb8Lvt, value: prevGbp, expected: GbpHangulT, taken: gb8Inner, ids: ids)
-	var gb8Miss = emitEqualsBranch(module, func: func, cur: gb8Inner, value: currGbp, expected: GbpHangulT, taken: noBreak, ids: ids)
-	module.setTerminator(gb8Miss, op: StdOp.branch(afterGb8.id))
-
-	// GB9: × (Extend | ZWJ). GB9a: × SpacingMark. GB9b: Prepend ×.
-	var afterGb9Extend = emitEqualsBranch(module, func: func, cur: afterGb8, value: currGbp, expected: GbpExtend, taken: noBreak, ids: ids)
-	var afterGb9Zwj = emitEqualsBranch(module, func: func, cur: afterGb9Extend, value: currGbp, expected: GbpZwj, taken: noBreak, ids: ids)
-	var afterGb9a = emitEqualsBranch(module, func: func, cur: afterGb9Zwj, value: currGbp, expected: GbpSpacingMark, taken: noBreak, ids: ids)
-	var afterGb9b = emitEqualsBranch(module, func: func, cur: afterGb9a, value: prevGbp, expected: GbpPrepend, taken: noBreak, ids: ids)
-
-	// GB11: Extended_Pictographic Extend* ZWJ × Extended_Pictographic — the previous codepoint was a ZWJ,
-	// the current one is pictographic, and the STATE says the run began at a pictographic base.
-	var gb11Pict = module.addBlock(func, label: b"gb11Pict")
-	var gb11State = module.addBlock(func, label: b"gb11State")
-	var afterGb11 = emitEqualsBranch(module, func: func, cur: afterGb9b, value: prevGbp, expected: GbpZwj, taken: gb11Pict, ids: ids)
-	let isPict = ids.mint()
-	module.appendOp(gb11Pict, op: StdOp.call(isPict, callee: ExtPictName, args: argsOf(currCp)))
-	module.setTerminator(gb11Pict, op: StdOp.condBranch(isPict, thenBlockId: gb11State.id, elseBlockId: afterGb11.id))
-	let inEmoji = emitEmojiFlagOf(module, block: gb11State, state: state, ids: ids)
-	module.setTerminator(gb11State, op: StdOp.condBranch(inEmoji, thenBlockId: noBreak.id, elseBlockId: afterGb11.id))
-
-	// GB12/GB13: RI × RI, but only when an ODD number of regional indicators has been seen — which is what
-	// pairs them left-to-right and leaves a trailing unpaired RI its own cluster.
-	var gb12Curr = module.addBlock(func, label: b"gb12Curr")
-	var gb12Parity = module.addBlock(func, label: b"gb12Parity")
-	var afterGb12 = emitEqualsBranch(module, func: func, cur: afterGb11, value: prevGbp, expected: GbpRegionalIndicator, taken: gb12Curr, ids: ids)
-	var gb12Miss = emitEqualsBranch(module, func: func, cur: gb12Curr, value: currGbp, expected: GbpRegionalIndicator, taken: gb12Parity, ids: ids)
-	module.setTerminator(gb12Miss, op: StdOp.branch(afterGb12.id))
-	let riOdd = emitRiParityOf(module, block: gb12Parity, state: state, ids: ids)
-	module.setTerminator(gb12Parity, op: StdOp.condBranch(riOdd, thenBlockId: noBreak.id, elseBlockId: afterGb12.id))
-
-	// GB999: otherwise, break.
-	module.setTerminator(afterGb12, op: StdOp.branch(doBreak.id))
-
-	emitConstReturn(module, block: noBreak, value: PredicateFalse, ids: ids)
-	emitConstReturn(module, block: doBreak, value: PredicateTrue, ids: ids)
-	module.functions.push(func)
-end 'buildGraphemeBreak'
-
-// `state and 1` — the `inEmojiSeq` flag, as a 0/1 word (see `GraphemeStateRiShift`).
-function emitEmojiFlagOf(module StdModule, block IrBlock, state ValueId, ids ValueMinter) returns ValueId
-	let bit = emitConst(module, block: block, value: GraphemeStateEmojiBit, ids: ids)
-	return emitBin(module, block: block, a: state, b: bit, opcode: StdBinOpcode.bitAnd, ids: ids)
-end 'emitEmojiFlagOf'
-
-// `(state shr 1) and 1` — whether an ODD number of regional indicators has been seen. `isGraphemeBreak`
-// reads `riCount mod 2`, and the count's low bit IS that (a non-negative count, so a logical shift).
-function emitRiParityOf(module StdModule, block IrBlock, state ValueId, ids ValueMinter) returns ValueId
-	let shift = emitConst(module, block: block, value: GraphemeStateRiShift, ids: ids)
-	let count = emitBin(module, block: block, a: state, b: shift, opcode: StdBinOpcode.shrLogical, ids: ids)
-	let parity = emitConst(module, block: block, value: GraphemeStateParityBit, ids: ids)
-	return emitBin(module, block: block, a: count, b: parity, opcode: StdBinOpcode.bitAnd, ids: ids)
-end 'emitRiParityOf'
-
-// `__gr_state(state, gbp, cp) -> i64` — the state after consuming one codepoint
-// (`graphemeStateUpdate`, `grapheme.maxon:605-626`). Both fields RESET unless the new codepoint extends
-// them: an RI run ends at the first non-RI, and an emoji run ends at the first codepoint that is neither
-// pictographic nor an Extend/ZWJ continuation.
-function buildGraphemeState(module StdModule)
-	var func = IrFunction.createFromStd(GraphemeStateName, returnType: StdReturnType.value(StdType.i64), paramCount: 3, paramTypes: threeI64Params(), returnLine: 0)
-	var ids = ValueMinter.create(3)
-
-	var entry = module.addBlock(func, label: b"entry")
-	var bumpRi = module.addBlock(func, label: b"bumpRi")
-	var riJoin = module.addBlock(func, label: b"riJoin")
-	var emojiTest = module.addBlock(func, label: b"emojiTest")
-	var wasEmoji = module.addBlock(func, label: b"wasEmoji")
-	var extendTest = module.addBlock(func, label: b"extendTest")
-	var setEmoji = module.addBlock(func, label: b"setEmoji")
-	var clearEmoji = module.addBlock(func, label: b"clearEmoji")
-	var done = module.addBlock(func, label: b"done")
-
-	emitParams(module, block: entry, count: 3)
-	let state = 0 as ValueId
-	let gbp = 1 as ValueId
-	let cp = 2 as ValueId
-
-	// The RI half: `riCount + 1` for a regional indicator, 0 for anything else.
-	var notRi = emitEqualsBranch(module, func: func, cur: entry, value: gbp, expected: GbpRegionalIndicator, taken: bumpRi, ids: ids)
-	let zeroRi = emitConst(module, block: notRi, value: 0, ids: ids)
-	module.setTerminator(notRi, op: StdOp.branch(riJoin.id))
-
-	let prevCount = emitBin(module, block: bumpRi, a: state, b: emitConst(module, block: bumpRi, value: GraphemeStateRiShift, ids: ids), opcode: StdBinOpcode.shrLogical, ids: ids)
-	let nextCount = emitBin(module, block: bumpRi, a: prevCount, b: emitConst(module, block: bumpRi, value: 1, ids: ids), opcode: StdBinOpcode.add, ids: ids)
-	module.setTerminator(bumpRi, op: StdOp.branch(riJoin.id))
-
-	let riCount = ids.mint()
-	riJoin.blockArgs.push(IrBlockArg.create(riCount, argType: StdType.i64))
-	notRi.branchEdges.push(BranchEdge.create(riJoin.id, argIds: argsOf(zeroRi)))
-	bumpRi.branchEdges.push(BranchEdge.create(riJoin.id, argIds: argsOf(nextCount)))
-	module.setTerminator(riJoin, op: StdOp.branch(emojiTest.id))
-
-	// The emoji half: a pictographic codepoint STARTS a run; otherwise a run already in flight CONTINUES
-	// through an Extend or a ZWJ, and ends at anything else.
-	let isPict = ids.mint()
-	module.appendOp(emojiTest, op: StdOp.call(isPict, callee: ExtPictName, args: argsOf(cp)))
-	module.setTerminator(emojiTest, op: StdOp.condBranch(isPict, thenBlockId: setEmoji.id, elseBlockId: wasEmoji.id))
-
-	let inEmoji = emitEmojiFlagOf(module, block: wasEmoji, state: state, ids: ids)
-	module.setTerminator(wasEmoji, op: StdOp.condBranch(inEmoji, thenBlockId: extendTest.id, elseBlockId: clearEmoji.id))
-
-	var notExtend = emitEqualsBranch(module, func: func, cur: extendTest, value: gbp, expected: GbpExtend, taken: setEmoji, ids: ids)
-	var notZwj = emitEqualsBranch(module, func: func, cur: notExtend, value: gbp, expected: GbpZwj, taken: setEmoji, ids: ids)
-	module.setTerminator(notZwj, op: StdOp.branch(clearEmoji.id))
-
-	let emojiOn = emitConst(module, block: setEmoji, value: GraphemeStateEmojiBit, ids: ids)
-	module.setTerminator(setEmoji, op: StdOp.branch(done.id))
-	let emojiOff = emitConst(module, block: clearEmoji, value: 0, ids: ids)
-	module.setTerminator(clearEmoji, op: StdOp.branch(done.id))
-
-	let emojiFlag = ids.mint()
-	done.blockArgs.push(IrBlockArg.create(emojiFlag, argType: StdType.i64))
-	setEmoji.branchEdges.push(BranchEdge.create(done.id, argIds: argsOf(emojiOn)))
-	clearEmoji.branchEdges.push(BranchEdge.create(done.id, argIds: argsOf(emojiOff)))
-
-	let packed = emitBin(module, block: done, a: riCount, b: emitConst(module, block: done, value: GraphemeStateRiShift, ids: ids), opcode: StdBinOpcode.shl, ids: ids)
-	module.setTerminator(done, op: StdOp.ret(emitBin(module, block: done, a: packed, b: emojiFlag, opcode: StdBinOpcode.bitOr, ids: ids)))
-
-	module.functions.push(func)
-end 'buildGraphemeState'
-
-// ⭐⭐ **`__gr_end(strRec, startPos) -> BytePos` — THE SEGMENTER** (`findGraphemeEnd`,
-// `grapheme.maxon:26-101`). The end of the extended grapheme cluster that begins at `startPos`; `startPos`
-// itself when the string is already exhausted.
-//
-// ⭐ **THE ASCII FAST PATH IS THE FIRST THING IT DOES, AND IT IS WHY ASCII TEXT DOES NOT PAY FOR UAX #29.**
-// An ASCII lead byte is settled with at most two byte loads and no codepoint decode, no property lookup and
-// no state machine — the cluster is one byte UNLESS (a) it is a CR followed by an LF, which is GB3 and
-// makes the cluster two, or (b) the NEXT byte is non-ASCII and decodes to an Extend/ZWJ/SpacingMark, which
-// is a combining mark on an ASCII base (`"é"`) and drops into the general scan.
-//
-// ⚠ **THIS is where the reference's fast path belongs, and NOT in the iterator.** `computeGraphemeLen`'s
-// `isAsciiFlag ⇒ return 1` skips (a) as well as (b) and therefore splits `"\r\n"` into two clusters — see
-// divergence 1 in this file's header. Everything below reproduces the reference exactly; only that
-// shortcut is absent, and both `count()` and `for c in s` reach this function instead.
-function buildGraphemeEnd(module StdModule)
-	var func = IrFunction.createFromStd(GraphemeEndName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
-	var ids = ValueMinter.create(2)
-
-	var entry = module.addBlock(func, label: b"entry")
-	var atEnd = module.addBlock(func, label: b"atEnd")
-	var inRange = module.addBlock(func, label: b"inRange")
-	var asciiLead = module.addBlock(func, label: b"asciiLead")
-	var crTest = module.addBlock(func, label: b"crTest")
-	var crLfHit = module.addBlock(func, label: b"crLf")
-	var nextIsWide = module.addBlock(func, label: b"nextWide")
-	var singleByte = module.addBlock(func, label: b"single")
-	var scanSetup = module.addBlock(func, label: b"scanSetup")
-
-	emitParams(module, block: entry, count: 2)
-	let record = 0 as ValueId
-	let startPos = 1 as ValueId
-
-	// entry: the record's fields, then the exhausted-string guard.
-	let len = emitLoadField(module, block: entry, record: record, offset: StringLengthOffset, ids: ids)
-	let buf = emitLoadField(module, block: entry, record: record, offset: StringBufferOffset, ids: ids)
-	let past = emitCmp(module, block: entry, a: startPos, b: len, pred: StdCmpPred.ge, ids: ids)
-	module.setTerminator(entry, op: StdOp.condBranch(past, thenBlockId: atEnd.id, elseBlockId: inRange.id))
-	module.setTerminator(atEnd, op: StdOp.ret(startPos))
-
-	// inRange: the lead byte, and the ASCII fork.
-	let leadAddr = emitBin(module, block: inRange, a: buf, b: startPos, opcode: StdBinOpcode.add, ids: ids)
-	let lead = emitLoadByteAt(module, block: inRange, addr: leadAddr, ids: ids)
-	let one = emitConst(module, block: inRange, value: 1, ids: ids)
-	let nextPos = emitBin(module, block: inRange, a: startPos, b: one, opcode: StdBinOpcode.add, ids: ids)
-	let asciiLimit = emitConst(module, block: inRange, value: Utf8OneByteCeiling, ids: ids)
-	let isAscii = emitCmp(module, block: inRange, a: lead, b: asciiLimit, pred: StdCmpPred.lt, ids: ids)
-	module.setTerminator(inRange, op: StdOp.condBranch(isAscii, thenBlockId: asciiLead.id, elseBlockId: scanSetup.id))
-
-	// asciiLead: is there a following byte at all? Without one the cluster is this single byte, whatever it
-	// is — which also settles a trailing CR.
-	let hasNext = emitCmp(module, block: asciiLead, a: nextPos, b: len, pred: StdCmpPred.lt, ids: ids)
-	module.setTerminator(asciiLead, op: StdOp.condBranch(hasNext, thenBlockId: crTest.id, elseBlockId: singleByte.id))
-
-	// crTest: GB3 — a CR followed by an LF is ONE cluster of two bytes. This is the arm the reference's
-	// iterator shortcut skips.
-	let nextAddr = emitBin(module, block: crTest, a: buf, b: nextPos, opcode: StdBinOpcode.add, ids: ids)
-	let nextByte = emitLoadByteAt(module, block: crTest, addr: nextAddr, ids: ids)
-	var crLead = module.addBlock(func, label: b"crLead")
-	var notCr = emitEqualsBranch(module, func: func, cur: crTest, value: lead, expected: CodepointCR, taken: crLead, ids: ids)
-	var notLf = emitEqualsBranch(module, func: func, cur: crLead, value: nextByte, expected: CodepointLF, taken: crLfHit, ids: ids)
-	module.setTerminator(notLf, op: StdOp.branch(notCr.id))
-	let two = emitConst(module, block: crLfHit, value: Utf8TwoByteLength, ids: ids)
-	module.setTerminator(crLfHit, op: StdOp.ret(emitBin(module, block: crLfHit, a: startPos, b: two, opcode: StdBinOpcode.add, ids: ids)))
-
-	// notCr: an ASCII byte followed by another ASCII byte is its own cluster; a following NON-ASCII byte
-	// might be a combining mark, so its property decides.
-	let nextAscii = emitCmp(module, block: notCr, a: nextByte, b: asciiLimit, pred: StdCmpPred.lt, ids: ids)
-	module.setTerminator(notCr, op: StdOp.condBranch(nextAscii, thenBlockId: singleByte.id, elseBlockId: nextIsWide.id))
-
-	let nextCp = ids.mint()
-	module.appendOp(nextIsWide, op: StdOp.call(nextCp, callee: Utf8CodepointAtName, args: twoArgs(nextAddr, second: emitBin(module, block: nextIsWide, a: len, b: nextPos, opcode: StdBinOpcode.sub, ids: ids))))
-	let nextGbp = ids.mint()
-	module.appendOp(nextIsWide, op: StdOp.call(nextGbp, callee: GbpName, args: argsOf(nextCp)))
-	// GB9 (× Extend, × ZWJ) and GB9a (× SpacingMark): any of the three JOINS, so only a property outside
-	// the three ends the cluster here. The reference spells this as the negated conjunction
-	// (`nextGbp != 4 and != 5 and != 8`); as branches it is the same three-way membership test.
-	var combiningMiss = emitValueInSet(module, func: func, cur: nextIsWide, value: nextGbp, expected: combiningProperties(), taken: scanSetup, ids: ids)
-	module.setTerminator(combiningMiss, op: StdOp.branch(singleByte.id))
-
-	module.setTerminator(singleByte, op: StdOp.ret(nextPos))
-
-	emitGeneralScan(module, func: func, cur: scanSetup, buf: buf, len: len, startPos: startPos, ids: ids)
-	module.functions.push(func)
-end 'buildGraphemeEnd'
-
-// The GENERAL SCAN — the reference's `findGraphemeEnd:72-100`. Decode the first codepoint, seed the state,
-// then walk forward one codepoint at a time until `__gr_break` reports a boundary or the string ends.
-//
-// Three values are loop-carried: the byte position, the PREVIOUS codepoint's property, and the packed
-// state. The previous CODEPOINT itself is not — `isGraphemeBreak` reads `prevCp` only through the
-// `prevGbp` it was already turned into, and the reference passes it without using it.
-function emitGeneralScan(module StdModule, func IrFunction, cur IrBlock, buf ValueId, len ValueId, startPos ValueId, ids ValueMinter)
-	var header = module.addBlock(func, label: b"scan")
-	var probe = module.addBlock(func, label: b"probe")
-	var advance = module.addBlock(func, label: b"advance")
-	var stop = module.addBlock(func, label: b"stop")
-
-	// Seed: the first codepoint's property and the state after consuming it.
-	let firstAddr = emitBin(module, block: cur, a: buf, b: startPos, opcode: StdBinOpcode.add, ids: ids)
-	// Both decoders get the bytes REMAINING from here, so a truncated tail decodes as its own lead byte
-	// and steps one instead of reading past the buffer (`emitUtf8LeadLadder`). One value, both calls: the
-	// width and the value must be answered about the same amount of buffer or they can disagree.
-	let firstAvail = emitBin(module, block: cur, a: len, b: startPos, opcode: StdBinOpcode.sub, ids: ids)
-	let firstCp = ids.mint()
-	module.appendOp(cur, op: StdOp.call(firstCp, callee: Utf8CodepointAtName, args: twoArgs(firstAddr, second: firstAvail)))
-	let firstGbp = ids.mint()
-	module.appendOp(cur, op: StdOp.call(firstGbp, callee: GbpName, args: argsOf(firstCp)))
-	let firstLen = ids.mint()
-	module.appendOp(cur, op: StdOp.call(firstLen, callee: Utf8LengthAtName, args: twoArgs(firstAddr, second: firstAvail)))
-	let firstPos = emitBin(module, block: cur, a: startPos, b: firstLen, opcode: StdBinOpcode.add, ids: ids)
-	let zeroState = emitConst(module, block: cur, value: 0, ids: ids)
-	let firstState = ids.mint()
-	module.appendOp(cur, op: StdOp.call(firstState, callee: GraphemeStateName, args: threeArgs(zeroState, second: firstGbp, third: firstCp)))
-	module.setTerminator(cur, op: StdOp.branch(header.id))
-
-	let pos = ids.mint()
-	let prevGbp = ids.mint()
-	let state = ids.mint()
-	header.blockArgs.push(IrBlockArg.create(pos, argType: StdType.i64))
-	header.blockArgs.push(IrBlockArg.create(prevGbp, argType: StdType.i64))
-	header.blockArgs.push(IrBlockArg.create(state, argType: StdType.i64))
-	cur.branchEdges.push(BranchEdge.create(header.id, argIds: threeArgs(firstPos, second: firstGbp, third: firstState)))
-
-	let exhausted = emitCmp(module, block: header, a: pos, b: len, pred: StdCmpPred.ge, ids: ids)
-	module.setTerminator(header, op: StdOp.condBranch(exhausted, thenBlockId: stop.id, elseBlockId: probe.id))
-
-	let addr = emitBin(module, block: probe, a: buf, b: pos, opcode: StdBinOpcode.add, ids: ids)
-	// Formed in `probe`, which dominates `advance`, so the value decoded and the width stepped are
-	// answered about ONE remaining count — see the seed above.
-	let avail = emitBin(module, block: probe, a: len, b: pos, opcode: StdBinOpcode.sub, ids: ids)
-	let currCp = ids.mint()
-	module.appendOp(probe, op: StdOp.call(currCp, callee: Utf8CodepointAtName, args: twoArgs(addr, second: avail)))
-	let currGbp = ids.mint()
-	module.appendOp(probe, op: StdOp.call(currGbp, callee: GbpName, args: argsOf(currCp)))
-	let breaks = ids.mint()
-	module.appendOp(probe, op: StdOp.call(breaks, callee: GraphemeBreakName, args: fourArgs(prevGbp, second: currGbp, third: currCp, fourth: state)))
-	module.setTerminator(probe, op: StdOp.condBranch(breaks, thenBlockId: stop.id, elseBlockId: advance.id))
-
-	let nextState = ids.mint()
-	module.appendOp(advance, op: StdOp.call(nextState, callee: GraphemeStateName, args: threeArgs(state, second: currGbp, third: currCp)))
-	let step = ids.mint()
-	module.appendOp(advance, op: StdOp.call(step, callee: Utf8LengthAtName, args: twoArgs(addr, second: avail)))
-	let nextPos = emitBin(module, block: advance, a: pos, b: step, opcode: StdBinOpcode.add, ids: ids)
-	module.setTerminator(advance, op: StdOp.branch(header.id))
-	advance.branchEdges.push(BranchEdge.create(header.id, argIds: threeArgs(nextPos, second: currGbp, third: nextState)))
-
-	module.setTerminator(stop, op: StdOp.ret(pos))
-end 'emitGeneralScan'
-
-// `__gr_count(strRec) -> GraphemeCount` — `String.count()` (`countGraphemes`, `grapheme.maxon:328-337`):
-// walk the string one cluster at a time and count the steps.
-//
-// ⚠ **O(n) PER CALL, exactly as the reference is** — so `s.count()` inside a loop over `s` is O(n²) in USER
-// code. That is the reference's behaviour and shv2 matches it; a cached count would be a different
-// language (`String.count`'s own doc says callers who need it repeatedly should cache it themselves).
-function buildGraphemeCount(module StdModule)
-	var func = IrFunction.createFromStd(GraphemeCountName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
-	var ids = ValueMinter.create(1)
-
-	var entry = module.addBlock(func, label: b"entry")
-	var header = module.addBlock(func, label: b"header")
-	var body = module.addBlock(func, label: b"body")
-	var done = module.addBlock(func, label: b"done")
-
-	emitParams(module, block: entry, count: 1)
-	let record = 0 as ValueId
-
-	let len = emitLoadField(module, block: entry, record: record, offset: StringLengthOffset, ids: ids)
-	let zeroPos = emitConst(module, block: entry, value: 0, ids: ids)
-	let zeroCount = emitConst(module, block: entry, value: 0, ids: ids)
-	module.setTerminator(entry, op: StdOp.branch(header.id))
-
-	let pos = ids.mint()
-	let count = ids.mint()
-	header.blockArgs.push(IrBlockArg.create(pos, argType: StdType.i64))
-	header.blockArgs.push(IrBlockArg.create(count, argType: StdType.i64))
-	entry.branchEdges.push(BranchEdge.create(header.id, argIds: twoArgs(zeroPos, second: zeroCount)))
-
-	let exhausted = emitCmp(module, block: header, a: pos, b: len, pred: StdCmpPred.ge, ids: ids)
-	module.setTerminator(header, op: StdOp.condBranch(exhausted, thenBlockId: done.id, elseBlockId: body.id))
-
-	let nextPos = ids.mint()
-	module.appendOp(body, op: StdOp.call(nextPos, callee: GraphemeEndName, args: twoArgs(record, second: pos)))
-	let one = emitConst(module, block: body, value: 1, ids: ids)
-	let nextCount = emitBin(module, block: body, a: count, b: one, opcode: StdBinOpcode.add, ids: ids)
-	module.setTerminator(body, op: StdOp.branch(header.id))
-	body.branchEdges.push(BranchEdge.create(header.id, argIds: twoArgs(nextPos, second: nextCount)))
-
-	module.setTerminator(done, op: StdOp.ret(count))
-	module.functions.push(func)
-end 'buildGraphemeCount'
 
 // ⭐ **`__char_at(strRec, startPos, endPos) -> Character` — THE ONE DOOR A `Character` IS BORN THROUGH.**
 // A fresh OWNED record holding a COPY of the bytes `[startPos, endPos)`, built through
@@ -1230,14 +379,14 @@ function buildStrToCodepoints(module StdModule)
 	let walk = emitStringWalkSkeleton(module, entry: entry, header: header, body: body, done: done, record: record, ids: ids)
 	let i = walk.position
 
-	let addr = emitBin(module, block: body, a: walk.buffer, b: i, opcode: StdBinOpcode.add, ids: ids)
-	let avail = emitBin(module, block: body, a: walk.length, b: i, opcode: StdBinOpcode.sub, ids: ids)
+	// The corpus decoders take the RECORD and a byte position and bound themselves by the record's own
+	// length, so neither the buffer address nor the remaining-byte count is computed here any more.
 	let cp = ids.mint()
-	module.appendOp(body, op: StdOp.call(cp, callee: Utf8CodepointAtName, args: twoArgs(addr, second: avail)))
+	module.appendOp(body, op: StdOp.call(cp, callee: CorpusUtf8DecodeAt, args: twoArgs(record, second: i)))
 	let pushed = ids.mint()
 	module.appendOp(body, op: StdOp.call(pushed, callee: ArrPushName, args: twoArgs(arr, second: cp)))
 	let width = ids.mint()
-	module.appendOp(body, op: StdOp.call(width, callee: Utf8LengthAtName, args: twoArgs(addr, second: avail)))
+	module.appendOp(body, op: StdOp.call(width, callee: CorpusUtf8ByteLengthAt, args: twoArgs(record, second: i)))
 	let iNext = emitBin(module, block: body, a: i, b: width, opcode: StdBinOpcode.add, ids: ids)
 	module.setTerminator(body, op: StdOp.branch(header.id))
 	body.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(iNext)))
@@ -1279,12 +428,11 @@ function buildStrToUtf16(module StdModule)
 
 	// `body` dominates both encoding arms, so the advance is formed once here and each arm carries it back
 	// to the header — the cursor moves by the SOURCE sequence's width whichever encoding the codepoint took.
-	let addr = emitBin(module, block: body, a: walk.buffer, b: i, opcode: StdBinOpcode.add, ids: ids)
-	let avail = emitBin(module, block: body, a: walk.length, b: i, opcode: StdBinOpcode.sub, ids: ids)
+	// The corpus decoders take the RECORD and a byte position (see `buildStrToCodepoints`).
 	let cp = ids.mint()
-	module.appendOp(body, op: StdOp.call(cp, callee: Utf8CodepointAtName, args: twoArgs(addr, second: avail)))
+	module.appendOp(body, op: StdOp.call(cp, callee: CorpusUtf8DecodeAt, args: twoArgs(record, second: i)))
 	let width = ids.mint()
-	module.appendOp(body, op: StdOp.call(width, callee: Utf8LengthAtName, args: twoArgs(addr, second: avail)))
+	module.appendOp(body, op: StdOp.call(width, callee: CorpusUtf8ByteLengthAt, args: twoArgs(record, second: i)))
 	let iNext = emitBin(module, block: body, a: i, b: width, opcode: StdBinOpcode.add, ids: ids)
 	let supplementaryBase = emitConst(module, block: body, value: Utf16SupplementaryBase, ids: ids)
 	let isBmp = emitCmp(module, block: body, a: cp, b: supplementaryBase, pred: StdCmpPred.lt, ids: ids)

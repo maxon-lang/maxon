@@ -220,7 +220,7 @@ end 'installStringIndexRuntime'
 // Every callee this file installs — what the drift guard above iterates. A PREFIX test rather than an
 // eight-way `or`, exactly as `isManagedDirectoryRuntimeCallee` is: every entry point here is `__strix_`-named
 // by construction, so a ninth is covered without being remembered here as well as declared above.
-function isStringIndexRuntimeCallee(callee ByteArray) returns bool
+export function isStringIndexRuntimeCallee(callee ByteArray) returns bool
 	return bytesStartWith(callee, prefix: StringIndexRuntimePrefix)
 end 'isStringIndexRuntimeCallee'
 
@@ -267,7 +267,7 @@ function buildStringIndexEnd(module StdModule)
 	let record = 0 as ValueId
 
 	let count = ids.mint()
-	module.appendOp(entry, op: StdOp.call(count, callee: GraphemeCountName, args: argsOf(record)))
+	module.appendOp(entry, op: StdOp.call(count, callee: CorpusCountGraphemes, args: argsOf(record)))
 	let len = emitLoadField(module, block: entry, record: record, offset: StringLengthOffset, ids: ids)
 	module.setTerminator(entry, op: StdOp.ret(emitStringIndexMakeCall(module, block: entry, charIdx: count, bytePos: len, ids: ids)))
 
@@ -422,7 +422,7 @@ function emitGraphemeWalk(module StdModule, func IrFunction, entry IrBlock, reco
 	module.setTerminator(checkLen, op: StdOp.condBranch(exhausted, thenBlockId: done.id, elseBlockId: body.id))
 
 	let nextPos = ids.mint()
-	module.appendOp(body, op: StdOp.call(nextPos, callee: GraphemeEndName, args: twoArgs(record, second: pos)))
+	module.appendOp(body, op: StdOp.call(nextPos, callee: CorpusFindGraphemeEnd, args: twoArgs(record, second: pos)))
 	let one = emitConst(module, block: body, value: 1, ids: ids)
 	let nextSteps = emitBin(module, block: body, a: steps, b: one, opcode: StdBinOpcode.add, ids: ids)
 	module.setTerminator(body, op: StdOp.branch(header.id))

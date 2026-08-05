@@ -585,12 +585,6 @@ export type RuntimeUsage
 	// turns on `__gr_end`, which turns on `__gr_break` and the decoders, which turn on `__gbp` and
 	// `__ext_pict`) — the same "declare what the synthesized body calls, because this Maxon-module scan
 	// cannot see inside it" rule the String method family already follows.
-	export var usesGbp as bool
-	export var usesExtPict as bool
-	export var usesUtf8Decode as bool
-	export var usesGraphemeBreak as bool
-	export var usesGraphemeEnd as bool
-	export var usesGraphemeCount as bool
 	// `__char_at` MINTS a Character — one `__mm_alloc`'d fused record per call, blitted with `__str_copy`
 	// — so it declares the heap and the copy loop that `emitBuildOwnedInlineString` puts inside its body.
 	export var usesCharAt as bool
@@ -603,8 +597,8 @@ export type RuntimeUsage
 	// `.codepoints()` and `.utf16()` (P1.8 Slice E) — `__str_to_bytes`'s two siblings, each with its OWN
 	// bit under this file's one-bit-per-entry-point discipline: a program that asks for the bytes must not
 	// carry a UTF-8 decoder, and a program that asks for the codepoints must not carry the surrogate
-	// encoder. Both push into a caller-created array and both decode, so each declares the array runtime
-	// and `usesUtf8Decode` in `closeGraphemeNeeds`.
+	// encoder. Both push into a caller-created array and both decode, so each declares the array runtime in
+	// `closeGraphemeNeeds` and seeds the corpus decoders' reachability in `StdlibSource`.
 	export var usesStrToCodepoints as bool
 	export var usesStrToUtf16 as bool
 	// ⭐ **THE P1.8 SLICE B2 `StringIndex` FAMILY — ONE BIT PER ENTRY POINT**, following this file's
@@ -654,7 +648,7 @@ export type RuntimeUsage
 	export var usesCommandLine as bool
 
 	static function create() returns RuntimeUsage
-		return Self{usesHeap: false, usesGt: false, usesIocp: false, usesStreaming: false, usesPrint: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesBoolToString: false, usesStrAppend: false, usesStrDecref: false, usesArray: false, usesSet: false, usesMap: false, usesList: false, usesDropTypeParam: false, usesDropExistential: false, usesRetainExistential: false, usesIncref: false, usesRetain: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrRangeEq: false, usesStrFind: false, usesStrRFind: false, usesStrStartsWith: false, usesStrEndsWith: false, usesStrContains: false, usesStrMapCase: false, usesStrReplace: false, usesStrSplit: false, usesStrReplaceFirst: false, usesStrFromBytes: false, usesStrBytesView: false, usesStrByteAt: false, usesStrByteAtOrPanic: false, usesManagedArrayCopy: false, usesOpaqueArrayCopy: false, neededCloners: ClonerSet.create(), usesWallClock: false, usesGbp: false, usesExtPict: false, usesUtf8Decode: false, usesGraphemeBreak: false, usesGraphemeEnd: false, usesGraphemeCount: false, usesCharAt: false, usesCharAsciiValue: false, usesStrToBytes: false, usesStrToCodepoints: false, usesStrToUtf16: false, usesStrIndexMake: false, usesStrIndexEnd: false, usesStrIndexByteToGrapheme: false, usesStrIndexAdvance: false, usesStrIndexFirst: false, usesStrIndexLast: false, usesStrIndexSlice: false, usesStrIndexAfter: false, usesUcdCategory: false, usesCharSetMake: false, usesCharSetDecref: false, usesCharSetContains: false, usesStrTrim: false, usesManagedFile: false, usesManagedDirectory: false, usesCommandLine: false}
+		return Self{usesHeap: false, usesGt: false, usesIocp: false, usesStreaming: false, usesPrint: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesBoolToString: false, usesStrAppend: false, usesStrDecref: false, usesArray: false, usesSet: false, usesMap: false, usesList: false, usesDropTypeParam: false, usesDropExistential: false, usesRetainExistential: false, usesIncref: false, usesRetain: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrRangeEq: false, usesStrFind: false, usesStrRFind: false, usesStrStartsWith: false, usesStrEndsWith: false, usesStrContains: false, usesStrMapCase: false, usesStrReplace: false, usesStrSplit: false, usesStrReplaceFirst: false, usesStrFromBytes: false, usesStrBytesView: false, usesStrByteAt: false, usesStrByteAtOrPanic: false, usesManagedArrayCopy: false, usesOpaqueArrayCopy: false, neededCloners: ClonerSet.create(), usesWallClock: false, usesCharAt: false, usesCharAsciiValue: false, usesStrToBytes: false, usesStrToCodepoints: false, usesStrToUtf16: false, usesStrIndexMake: false, usesStrIndexEnd: false, usesStrIndexByteToGrapheme: false, usesStrIndexAdvance: false, usesStrIndexFirst: false, usesStrIndexLast: false, usesStrIndexSlice: false, usesStrIndexAfter: false, usesUcdCategory: false, usesCharSetMake: false, usesCharSetDecref: false, usesCharSetContains: false, usesStrTrim: false, usesManagedFile: false, usesManagedDirectory: false, usesCommandLine: false}
 	end 'create'
 end 'RuntimeUsage'
 
@@ -1007,7 +1001,6 @@ function closeCharacterSetNeeds(usage RuntimeUsage)
 	// producer (`__mm_alloc` + `__str_copy`).
 	if usage.usesStrTrim 'trims'
 		usage.usesCharSetContains = true
-		usage.usesGraphemeEnd = true
 		usage.usesCharAt = true
 		usage.usesStrDecref = true
 		usage.usesHeap = true
@@ -1017,7 +1010,6 @@ function closeCharacterSetNeeds(usage RuntimeUsage)
 	if usage.usesCharSetContains 'probes'
 		usage.usesSet = true
 		usage.usesHeap = true
-		usage.usesUtf8Decode = true
 		usage.usesUcdCategory = true
 	end 'probes'
 	// The box is one `__mm_alloc`; its drop releases the member set and reclaims the box.
@@ -1034,24 +1026,6 @@ end 'closeCharacterSetNeeds'
 // twin, split out for the same reason: `recordCallUsage` stays a readable list of families. Direct
 // references only; what each referenced body in turn needs is closed by `closeGraphemeNeeds`.
 function recordGraphemeUsage(callee ByteArray, usage RuntimeUsage)
-	if callee.equals(GbpName) 'gbp'
-		usage.usesGbp = true
-	end 'gbp'
-	if callee.equals(ExtPictName) 'extpict'
-		usage.usesExtPict = true
-	end 'extpict'
-	if callee.equals(Utf8CodepointAtName) or callee.equals(Utf8LengthAtName) 'utf8'
-		usage.usesUtf8Decode = true
-	end 'utf8'
-	if callee.equals(GraphemeBreakName) or callee.equals(GraphemeStateName) 'grbreak'
-		usage.usesGraphemeBreak = true
-	end 'grbreak'
-	if callee.equals(GraphemeEndName) 'grend'
-		usage.usesGraphemeEnd = true
-	end 'grend'
-	if callee.equals(GraphemeCountName) 'grcount'
-		usage.usesGraphemeCount = true
-	end 'grcount'
 	if callee.equals(CharAtName) 'charat'
 		usage.usesCharAt = true
 	end 'charat'
@@ -1105,17 +1079,17 @@ end 'recordStringIndexUsage'
 // ⭐ **WHAT EACH `StringIndex` BODY CALLS THAT THIS SCAN CANNOT SEE.** Declared here rather than
 // discovered, exactly as `closeStringMethodNeeds` and `closeGraphemeNeeds` declare their families'.
 // Run as a CLOSURE after every record so the answer cannot depend on the order in which the module
-// happens to name its entry points — and the order matters here more than in either sibling, because
-// this family reaches into BOTH of them (`__gr_end` below, `__str_find` beside).
+// happens to name its entry points — and the order still matters here, because this family reaches into
+// the string-method one beside it (`__str_find`).
 //
-// ⚠ It is run BEFORE the grapheme and string-method closures in `recordCallUsage`, so the bits it turns
-// on there are themselves closed over by those two. Turning on `usesGraphemeEnd` after
-// `closeGraphemeNeeds` had run would install `__gr_end` without the decoders and the classifier it calls.
+// ⚠ It is run BEFORE the grapheme and string-method closures in `recordCallUsage`, so the bits it turns on
+// there are themselves closed over by those two. **The cluster walk it used to declare is gone from this
+// argument**: `emitGraphemeWalk` now calls the CORPUS segmenter, whose own needs are ordinary Maxon call
+// edges rather than bits any closure has to turn on in the right order.
 function closeStringIndexNeeds(usage RuntimeUsage)
 	// `__strix_end` counts the clusters; both searches turn a byte position into a grapheme index; and
 	// every one of the four producers mints its box through the one door.
 	if usage.usesStrIndexEnd 'countsClusters'
-		usage.usesGraphemeCount = true
 		usage.usesStrIndexMake = true
 	end 'countsClusters'
 	if usage.usesStrIndexFirst 'searchesForward'
@@ -1137,9 +1111,6 @@ function closeStringIndexNeeds(usage RuntimeUsage)
 	// Both conversions ARE the cluster walk (`emitGraphemeWalk`), so each pulls in the segmenter. Asked AFTER
 	// the arm above, whose `usesStrIndexAdvance` this must then close over — the ordering discipline this
 	// whole closure exists to make order-independent, applied within it.
-	if usage.usesStrIndexByteToGrapheme or usage.usesStrIndexAdvance 'walksClusters'
-		usage.usesGraphemeEnd = true
-	end 'walksClusters'
 	// The box is one `__mm_alloc`; the slice builds a fused record and blits its bytes in.
 	if usage.usesStrIndexMake 'allocatesABox'
 		usage.usesHeap = true
@@ -1155,23 +1126,14 @@ end 'closeStringIndexNeeds'
 // rather than discovered, exactly as `closeStringMethodNeeds` declares the String family's. Run as a
 // CLOSURE after every record (rather than each arm listing its own transitive set) so the answer cannot
 // depend on the order in which the module happens to name its entry points.
+// ⚠ **THE SEGMENTER'S OWN NEEDS ARE NO LONGER CLOSED HERE, BECAUSE IT IS NO LONGER SYNTHESIZED.** This
+// closure used to walk `__gr_count` → `__gr_end` → `__utf8_cp_at` / `__gr_break` → `__ext_pict` / `__gbp`,
+// which is exactly the chain now living in `stdlib/helpers/string/grapheme.maxon`. Those are ORDINARY Maxon
+// call edges, so the query spine follows them without being told: what a corpus function needs is found, not
+// declared. What is left here is the residue with no corpus counterpart — the `Character` mint and the three
+// array-filling views — plus the ONE thing a scan of the Maxon module still cannot see, which has moved to
+// `StdlibSource.markCorpusCalleesOfSynthesizedRuntimes`: the edge FROM these Std bodies INTO the corpus.
 function closeGraphemeNeeds(usage RuntimeUsage)
-	if usage.usesGraphemeCount 'countScans'
-		usage.usesGraphemeEnd = true
-	end 'countScans'
-	// `__gr_end` decodes codepoints, classifies them and runs the rules — its whole general scan.
-	if usage.usesGraphemeEnd 'scans'
-		usage.usesUtf8Decode = true
-		usage.usesGraphemeBreak = true
-	end 'scans'
-	// `__gr_break` asks `__ext_pict` for GB11; `__gr_state` asks it for the emoji-run flag.
-	if usage.usesGraphemeBreak 'classifies'
-		usage.usesExtPict = true
-	end 'classifies'
-	// Every scan classifies each codepoint through `__gbp`.
-	if usage.usesGraphemeEnd 'needsProperty'
-		usage.usesGbp = true
-	end 'needsProperty'
 	// `__char_at` builds a fresh owned inline record: one `__mm_alloc` plus a `__str_copy` blit.
 	if usage.usesCharAt 'mintsCharacters'
 		usage.usesHeap = true
@@ -1182,12 +1144,13 @@ function closeGraphemeNeeds(usage RuntimeUsage)
 		usage.usesArray = true
 		usage.usesHeap = true
 	end 'pushesBytes'
-	// The two decoding views push into the caller's array as well, and each walks the source through the
-	// UTF-8 decoders — `__utf8_cp_at` for the value, `__utf8_len_at` for the step.
+	// The two decoding views push into the caller's array as well. Each also walks the source through the
+	// corpus decoders (`utf8DecodeAt` for the value, `utf8ByteLengthAt` for the step) — an edge declared in
+	// `StdlibSource`, not here, because what it turns on is a stdlib function's REACHABILITY rather than a
+	// runtime-usage bit.
 	if usage.usesStrToCodepoints or usage.usesStrToUtf16 'pushesDecodedUnits'
 		usage.usesArray = true
 		usage.usesHeap = true
-		usage.usesUtf8Decode = true
 	end 'pushesDecodedUnits'
 end 'closeGraphemeNeeds'
 

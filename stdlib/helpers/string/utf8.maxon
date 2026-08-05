@@ -112,6 +112,25 @@ end 'utf8IsValidCodepoint'
 // call: `utf8DecodeAt` is called once per codepoint by every grapheme scan in the stdlib, so that
 // would be an allocation per codepoint. See `String.byteAt`'s doc for the whole rule.
 
+// ⭐⭐ **A LEAD BYTE MAY NOT PROMISE MORE BYTES THAN THE BUFFER HOLDS.** `String.from(bytes)` is the one
+// door arbitrary bytes reach these decoders through — every other producer of a `String` is well-formed by
+// construction (a literal is lexer-validated, a slice is grapheme-aligned, `replace`/`split` rebuild from
+// valid pieces) — so a truncated sequence is a REACHABLE input and not a corrupt-memory signal.
+//
+// **A sequence the buffer cannot complete decodes as its own lead byte and advances ONE**, so no read
+// leaves the buffer and no legal program is refused. These two functions must agree on that rule to the
+// byte: `utf8ByteLengthAt` is what advances the scan and `utf8DecodeAt` is what reads it, so a width one of
+// them takes and the other declines would step INTO a sequence it had just declined to decode.
+//
+// ⚠ **THIS USED TO `panic`, AND THE PANIC WAS NOT A SAFETY PROPERTY — IT WAS THE ABSENCE OF ONE.** Reaching
+// `byteAt(pos + 2)` on a two-byte buffer is already the out-of-bounds question being asked too late; the
+// throw merely reported it. Asking about the WIDTH first means the read never happens.
+// `specs-shv2/string-views.md`'s `truncated-sequences-stop-at-the-buffer-end` is the pin, and it exists
+// because maxon-shv2's segmenter had this rule while this file did not.
+function utf8WidthFits(s String, pos BytePos, width ByteWidth) returns bool
+	return pos + width <= s.byteLength()
+end 'utf8WidthFits'
+
 /// Get the UTF-8 sequence length from the lead byte at `pos`
 export function utf8ByteLengthAt(s String, pos BytePos) returns ByteWidth
 	let b0 = try s.byteAt(pos) otherwise 'b0Err'
@@ -121,12 +140,21 @@ export function utf8ByteLengthAt(s String, pos BytePos) returns ByteWidth
 		return 1
 	end 'ascii'
 	if b0 < 224 'two'
-		return 2
+		if utf8WidthFits(s, pos: pos, width: 2) 'twoFits'
+			return 2
+		end 'twoFits'
+		return 1
 	end 'two'
 	if b0 < 240 'three'
-		return 3
+		if utf8WidthFits(s, pos: pos, width: 3) 'threeFits'
+			return 3
+		end 'threeFits'
+		return 1
 	end 'three'
-	return 4
+	if utf8WidthFits(s, pos: pos, width: 4) 'fourFits'
+		return 4
+	end 'fourFits'
+	return 1
 end 'utf8ByteLengthAt'
 
 /// Decode the UTF-8 codepoint at the given byte position
@@ -137,13 +165,22 @@ export function utf8DecodeAt(s String, pos BytePos) returns Codepoint
 	if b0 < 128 'ascii'
 		return b0
 	end 'ascii'
+	// A lead the buffer cannot complete decodes as ITSELF and the scan advances one — see `utf8WidthFits`.
+	// The width test comes BEFORE the read, which is what makes the read unnecessary rather than merely
+	// checked.
 	if b0 < 224 'two'
+		if not utf8WidthFits(s, pos: pos, width: 2) 'twoTruncated'
+			return b0
+		end 'twoTruncated'
 		let b1 = try s.byteAt(pos + 1) otherwise 'b1Err'
 			panic("utf8DecodeAt: 2-byte seq continuation out of bounds")
 		end 'b1Err'
 		return ((b0 and Utf8TwoByteLeadMask) shl Utf8ContinuationShift) or (b1 and Utf8ContinuationMask)
 	end 'two'
 	if b0 < 240 'three'
+		if not utf8WidthFits(s, pos: pos, width: 3) 'threeTruncated'
+			return b0
+		end 'threeTruncated'
 		let b1 = try s.byteAt(pos + 1) otherwise 'b1Err2'
 			panic("utf8DecodeAt: 3-byte seq byte 1 out of bounds")
 		end 'b1Err2'
@@ -152,6 +189,9 @@ export function utf8DecodeAt(s String, pos BytePos) returns Codepoint
 		end 'b2Err'
 		return ((b0 and Utf8ThreeByteLeadMask) shl (Utf8ContinuationShift * 2)) or ((b1 and Utf8ContinuationMask) shl Utf8ContinuationShift) or (b2 and Utf8ContinuationMask)
 	end 'three'
+	if not utf8WidthFits(s, pos: pos, width: 4) 'fourTruncated'
+		return b0
+	end 'fourTruncated'
 	let b1 = try s.byteAt(pos + 1) otherwise 'b1Err3'
 		panic("utf8DecodeAt: 4-byte seq byte 1 out of bounds")
 	end 'b1Err3'
