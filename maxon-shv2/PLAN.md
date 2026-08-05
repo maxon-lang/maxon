@@ -2507,8 +2507,27 @@ number when it is sequenced (each also has a `disabled-test:` or oracle-divergen
   cannot. Needs what the int side just got: carry the name through a channel `declaredSlotType` does
   not erase.
 
-- **⬜⭐ THE ARGUMENT-MISMATCH SENTENCE HAS TWO VOICES, AND `specs/type-checking.md` IS UNPORTED BECAUSE
-  OF IT — NEEDS A RULING.** Found 2026-07-28 by the P1.6 Array-element rung. shv2's parser-side doors
+- **✅⭐ THE ARGUMENT-MISMATCH SENTENCE HAD TWO VOICES, AND `specs/type-checking.md` WAS UNPORTED BECAUSE
+  OF IT — RULED AND CLOSED 2026-08-04** by the `/spec-port` tick that landed `specs-shv2/type-checking.md`
+  17/17. **The user ruled for the first option: *"the type-checking.md diagnostic messages are more
+  correct"*** — so the oracle's argument-voiced wording was adopted, a container mutator's element
+  argument now reaches it (`SlotMismatchVoice`), and `print`'s bespoke sentence was retired onto the
+  same helper. ⭐ **The ruling's SECOND half was the larger half and is the reason this took four
+  passes: *"however it is right about the names possibly being ambiguous. If a name is possibly
+  ambiguous it needs to contain its full namespace."*** A diagnostic now names a type by the
+  `typealias` the AUTHOR WROTE (`IntArray`, not the `Array_Int` mint; `Integer`, not the erased `int`),
+  qualified by namespace — or by declaring FILE where the namespace is empty, since two root files
+  share it and `'x.Bytes' vs 'x.Bytes'` is the contentless refusal the ruling forbids. The mint remains
+  the IDENTITY and the `.rdata` label, and is still what a diagnostic prints when **no source line
+  names the instance** (`[1,2,3]`, a synthesized `Array___ManagedByte`). ⚠ **It was ONE SHAPE BEHIND
+  SEVEN DOORS** — argument `got`, argument `expected`, assignment, return, `otherwise` merge,
+  match/ternary merge, string-index operand — and the first three passes each found the next door by
+  tripping over a red case; the fourth swept them all and left the inventory. **`IrInterface.renderDeclaredTypeName`
+  is the one door deliberately NOT converted**, written up in place: its string is not a caption, it is
+  what `signatureMatches` DECIDES conformance by comparing, and associated-type substitution rewrites
+  it by name — a display column that substitution skipped would be a *wrong* signature, not an ugly one.
+  Original entry follows.
+  Found 2026-07-28 by the P1.6 Array-element rung. shv2's parser-side doors
   render `assignTypeMismatch` as *"cannot assign 'int' to variable 'push' of type 'String'"* — the noun
   is **"variable"** for every place, so it now calls a METHOD a variable, and it already called a struct
   field one (*"variable 'Cell.ch'"*). The oracle's corpus pins the **argument-voiced** spelling instead

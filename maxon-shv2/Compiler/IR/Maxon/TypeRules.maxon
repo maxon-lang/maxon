@@ -691,6 +691,23 @@ export function typeTagName(tag ValueTypeTag) returns String
 	end 'k'
 end 'typeTagName'
 
+// ⭐⭐ **THE LAST STEP OF EVERY DISPLAY RENDERER: a type's own NAME when it has one, else the class word its
+// tag prints under.** Both tiers' display doors — `Parser.displayTypeNameOf` and
+// `SemanticCheck.typeDisplayName` — end here, and it lives beside `typeTagName` because it is the rule for
+// WHEN that function's answer is the right one to print.
+//
+// ⚠ **THE TWO TIERS' DISPLAY DOORS ARE STILL TWINS ABOVE THIS LINE, AND ONLY ABOVE IT.** What is genuinely
+// tier-bound is the LOOKUP that produces `aggregate` (`Parser.aggregateNameOf` reads the file's interner,
+// `SemanticCheck.aggregateNameFor` the whole-program one) and the `genericInstance` arm each takes first.
+// This tail takes neither an interner nor a tier: it takes a tag and an already-resolved name, so a second
+// copy of it would be a rule with two homes and nothing forcing it. It was exactly that for one tick.
+//
+// An aggregate meeting a SCALAR is a real conflict both tiers report, and both references name the scalar
+// there ("got 'int'"), so an empty aggregate name must print the tag word and never a bare `''`.
+export function displayNameOfAggregate(tag ValueTypeTag, aggregate ByteArray) returns String
+	return typeTagName(tag) if aggregate.isEmpty() else String.from(aggregate)
+end 'displayNameOfAggregate'
+
 // --- The type-DIRECTED operators ---
 //
 // `and` / `or` / `xor` / `not` mean different things on a `bool` than on an `int`, and the

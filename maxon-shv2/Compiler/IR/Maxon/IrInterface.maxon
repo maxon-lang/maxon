@@ -451,6 +451,21 @@ end 'assembleMethodSignature'
 // this branch, for nothing but a shorter call. The RULE lives here, once —
 // it was two copies for one rung, and the copies AGREED on the `genericInstance` hole, which is exactly why
 // the hole read as an acceptance rather than as a disagreement.
+//
+// ⛔⛔ **THIS FUNCTION IS THE ONE PLACE A COMPILER-MINTED NAME STILL REACHES A DIAGNOSTIC, AND THAT IS A
+// DECISION, NOT AN UNSWEPT DOOR (sweep of 2026-08-04).** Every other message that names a type now goes
+// through a DISPLAY renderer that quotes the author's `typealias` — `Parser.displayTypeNameOf`,
+// `SemanticCheck.typeDisplayName`, `ProgramSignatures.instanceArgDisplayName`. This one does not, because
+// the string it returns is not a caption at ALL: `signatureMatches` DECIDES conformance by comparing two of
+// them, and the interface side's copy was frozen into `InterfaceMethodSig.paramTypeNames` at parse time,
+// where the associated-type substitution then rewrites it BY NAME. So `specs-shv2/associated-types.md` shows
+// `take(xs Array_String) … (expected take(xs Array_Integer) …)` where the author wrote `StrArray`/`IntArray`.
+//
+// ⇒ **Converting it means SPLITTING that column into an identity and a display**, carried in lockstep through
+// the parse-time record, the `Self` substitution, the associated-type substitution and both formatters — and
+// a display column that the name-keyed substitution silently skipped would be a WRONG signature in a message
+// rather than an ugly one. It is a rung, it is scoped, and it is deliberately not a line of this sweep.
+// Both halves of every such message spell the type the SAME way today, which is what keeps it merely ugly.
 export function renderDeclaredTypeName(t MaxonType, declarationName ByteArray, typeParamNames ByteArrayArray, typeNames TypeNameInterner, signatures ProgramSignatures) returns ByteArray
 	let tag = maxonTypeTag(t)
 

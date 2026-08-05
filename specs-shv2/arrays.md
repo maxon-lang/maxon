@@ -1585,7 +1585,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:6:6: cannot assign 'int' to variable 'push' of type 'String'
+error E3005: <fragment>:6:6: argument type mismatch for 'value': expected 'String', got 'int'
 ```
 
 <!-- test: error.push-string-into-int-array -->
@@ -1602,7 +1602,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:7:6: cannot assign 'String' to variable 'push' of type 'int'
+error E3005: <fragment>:7:6: argument type mismatch for 'value': expected 'Integer', got 'String'
 ```
 
 <!-- test: error.push-float-into-int-array -->
@@ -1623,6 +1623,9 @@ error E3009: <fragment>:7:6: cannot implicitly convert 'float' to 'int': the con
 
 <!-- test: error.push-struct-into-string-array -->
 ### A struct pushed into a String-element array is refused
+Both halves name a TYPE. The `got` side used to read `'struct'` — the tag's class word — while the
+sibling `push-wrong-struct-into-struct-array` below, the SAME door one arm along, already read
+`got 'Other'`. The bootstrap names it too (`expected 'String', got 'Item'`).
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -1643,7 +1646,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:16:6: cannot assign 'struct' to variable 'push' of type 'String'
+error E3005: <fragment>:16:6: argument type mismatch for 'value': expected 'String', got 'Item'
 ```
 
 <!-- test: error.push-string-into-struct-array -->
@@ -1668,7 +1671,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:16:6: cannot assign 'String' to variable 'push' of type 'struct'
+error E3005: <fragment>:16:6: argument type mismatch for 'value': expected 'Item', got 'String'
 ```
 
 <!-- test: error.push-wrong-struct-into-struct-array -->
@@ -1703,7 +1706,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:24:6: cannot assign 'Other' to variable 'push' of type 'Item'
+error E3005: <fragment>:24:6: argument type mismatch for 'value': expected 'Item', got 'Other'
 ```
 
 <!-- test: error.insert-int-into-string-array -->
@@ -1719,7 +1722,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:7:6: cannot assign 'int' to variable 'insert' of type 'String'
+error E3005: <fragment>:7:6: argument type mismatch for 'value': expected 'String', got 'int'
 ```
 
 <!-- test: error.insert-string-into-int-array -->
@@ -1735,7 +1738,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:8:6: cannot assign 'String' to variable 'insert' of type 'int'
+error E3005: <fragment>:8:6: argument type mismatch for 'value': expected 'Integer', got 'String'
 ```
 
 <!-- test: error.insert-float-into-int-array -->
@@ -1767,7 +1770,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:7:10: cannot assign 'int' to variable 'set' of type 'String'
+error E3005: <fragment>:7:10: argument type mismatch for 'value': expected 'String', got 'int'
 ```
 
 <!-- test: error.set-string-into-int-array -->
@@ -1783,7 +1786,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:8:10: cannot assign 'String' to variable 'set' of type 'int'
+error E3005: <fragment>:8:10: argument type mismatch for 'value': expected 'Integer', got 'String'
 ```
 
 <!-- test: error.set-float-into-int-array -->
@@ -1822,9 +1825,13 @@ first is how a `Small` walked into a `Bytes`; replacing it with instance identit
 pushed as a `Small` then read back through an accessor typed `int(0 to 100)` was a silent wrong
 answer with no diagnostic anywhere.
 
-The element reads `Byte$0_100` and not `Byte` because `stdlib/` declares `Byte` over a different
-range, which makes the name range-CONTESTED and gives each distinct range its own mint
-(`RangedAliasRegistry.settleRangeContests`); it is the same `Byte` this file declares.
+The refusal names the two arrays by the `typealias`es this file declares for them — `Bytes` and
+`Smalls` — rather than by the instances' compiled names, because a diagnostic quotes back the spelling
+the author wrote (user ruling, 2026-08-04; `ProgramSignatures.instanceDisplayName`). The elements behind
+them are still `Byte$0_100` and `Small`: `stdlib/` declares `Byte` over a different range, which makes
+the name range-CONTESTED and gives each distinct range its own mint
+(`RangedAliasRegistry.settleRangeContests`). That mint is the identity the two are compared on; it is not
+what the sentence says, and `bytearray-element-size.md` carries the case where it still has to be.
 ```maxon
 typealias Byte = int(0 to 100)
 typealias Small = int(0 to 200)
@@ -1840,7 +1847,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:11:11: argument type mismatch for 'other': expected 'Array_Byte$0_100', got 'Array_Small'
+error E3005: <fragment>:11:4: argument type mismatch for 'other': expected 'Bytes', got 'Smalls'
 ```
 
 <!-- test: error.append-narrower-element-array-through-the-buffer-surface -->
@@ -1862,7 +1869,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:11:16: argument type mismatch for 'other': expected '__ManagedMemory', got 'Array_Small'
+error E3005: <fragment>:11:16: argument type mismatch for 'other': expected '__ManagedMemory', got 'Smalls'
 ```
 
 <!-- test: error.append-bool-array-into-a-byte-array -->
@@ -1883,7 +1890,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:10:11: argument type mismatch for 'other': expected 'Array_Byte$0_100', got 'Array_bool'
+error E3005: <fragment>:10:4: argument type mismatch for 'other': expected 'Bytes', got 'Bools'
 ```
 
 <!-- test: error.append-enum-array-into-a-different-enum-array -->
@@ -1911,7 +1918,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:19:11: argument type mismatch for 'other': expected 'Array_Colour', got 'Array_Shape'
+error E3005: <fragment>:19:4: argument type mismatch for 'other': expected 'Colours', got 'Shapes'
 ```
 
 <!-- test: error.append-a-non-array -->
@@ -1924,7 +1931,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:4:11: argument type mismatch for 'other': expected 'Array_int', got 'int'
+error E3005: <fragment>:4:4: argument type mismatch for 'other': expected 'Array_int', got 'int'
 ```
 
 <!-- test: append-wider-element-array-takes-a-narrower-one -->
@@ -1995,7 +2002,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:12:11: argument type mismatch for 'other': expected 'Array_Wide', got 'Array_Byte$0_100'
+error E3005: <fragment>:12:4: argument type mismatch for 'other': expected 'Wides', got 'Bytes'
 ```
 
 <!-- test: append-reads-the-value-set-never-the-alias-name -->

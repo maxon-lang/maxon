@@ -617,8 +617,21 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:26:9: argument type mismatch for '_': expected 'Box_Leaf', got 'Box_Other'
+error E3005: <fragment>:26:9: argument type mismatch for '_': expected 'LeafBox', got 'OtherBox'
 ```
+
+### ⚠ `Box_Leaf` BELOW IS THE FALLBACK, NOT AN UNCONVERTED DOOR — and the `typealias` line is the tell
+
+A diagnostic names a type by the `typealias` the author wrote (user ruling, 2026-08-04), and every case in
+this file that HAS such a line reads it back: `expected 'LeafBox'` above, `Cannot return 'OtherBox' …` below.
+The three cases that still print a mint are the three whose type has **no declaration to quote** —
+`typealias LeafBoxBox = Box with (Box with Leaf)` declares `LeafBoxBox`, and the `Box with Leaf` inside its
+argument list is interned without any name of its own. There is nothing else the message could say, so the
+canonical mint is the answer rather than the absence of one (`ProgramSignatures.instanceDisplayName`).
+
+The discriminator is mechanical: add `typealias LeafBox = Box with Leaf` to one of these programs and the
+`expected` side becomes `LeafBox`, measured. **A mint here beside a declaration that names the same type
+would be a bug; a mint here with no such declaration is the rule working.**
 
 <!-- test: error.type-parameter-arg-wrong-instance -->
 ```maxon
@@ -648,7 +661,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:23:12: argument type mismatch for 'v': expected 'Box_Leaf', got 'Box_Other'
+error E3005: <fragment>:23:12: argument type mismatch for 'v': expected 'Box_Leaf', got 'OtherBox'
 ```
 
 <!-- test: error.type-parameter-arg-wrong-instance-bound -->
@@ -680,7 +693,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:24:12: argument type mismatch for 'v': expected 'Box_Leaf', got 'Box_Other'
+error E3005: <fragment>:24:12: argument type mismatch for 'v': expected 'Box_Leaf', got 'OtherBox'
 ```
 
 <!-- test: error.method-arg-wrong-instance -->
@@ -720,7 +733,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:33:9: argument type mismatch for '_': expected 'Box_Leaf', got 'Box_Other'
+error E3005: <fragment>:33:9: argument type mismatch for '_': expected 'LeafBox', got 'OtherBox'
 ```
 
 <!-- test: error.return-wrong-instance -->
@@ -754,7 +767,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:23:2: Cannot return 'Box_Other' from function declared to return 'Box_Leaf'
+error E3005: <fragment>:23:2: Cannot return 'OtherBox' from function declared to return 'LeafBox'
 ```
 
 <!-- test: error.reassign-wrong-instance -->
@@ -786,7 +799,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:24:2: cannot assign 'Box_Other' to variable 'b' of type 'Box_Leaf'
+error E3005: <fragment>:24:2: cannot assign 'OtherBox' to variable 'b' of type 'LeafBox'
 ```
 
 <!-- test: error.struct-field-wrong-instance -->
@@ -823,7 +836,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:25:15: cannot assign 'Box_Other' to variable 'Holder.b' of type 'Box_Leaf'
+error E3005: <fragment>:25:15: cannot assign 'OtherBox' to variable 'Holder.b' of type 'LeafBox'
 ```
 
 <!-- test: error.plain-struct-into-instance-arg -->
@@ -849,7 +862,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:19:9: argument type mismatch for '_': expected 'Box_Leaf', got 'Leaf'
+error E3005: <fragment>:19:9: argument type mismatch for '_': expected 'LeafBox', got 'Leaf'
 ```
 
 <!-- test: error.nested-pair-arg-wrong-instance -->
@@ -882,7 +895,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:25:10: argument type mismatch for 'v': expected 'Pair_Box_Leaf_Box_Box_Leaf', got 'Pair_Box_Leaf_Leaf'
+error E3005: <fragment>:25:10: argument type mismatch for 'v': expected 'Pair_Box_Leaf_Box_Box_Leaf', got 'WrongPair'
 ```
 
 <!-- test: two-aliases-one-instance-agree -->
@@ -1293,7 +1306,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:19:9: argument type mismatch for '_': expected 'Box_S0', got 'Box'
+error E3005: <fragment>:19:9: argument type mismatch for '_': expected 'N0', got 'Box'
 ```
 
 <!-- test: error.bare-generic-constructor-unbound-t-bound-first -->
@@ -1323,7 +1336,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:20:9: argument type mismatch for '_': expected 'Box_S0', got 'Box'
+error E3005: <fragment>:20:9: argument type mismatch for '_': expected 'N0', got 'Box'
 ```
 
 <!-- test: per-instance-alias-decays-at-a-type-parameter-argument -->
@@ -1400,7 +1413,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3091: <fragment>:14:11: typealias 'A' forms a type cycle: its type arguments refer back to 'A'
+error E2012: <fragment>:14:24: Circular typealias dependency: A
 ```
 
 <!-- test: error.mutual-cycle-alias -->
@@ -1424,7 +1437,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3091: <fragment>:14:11: typealias 'A' forms a type cycle: its type arguments refer back to 'A'
+error E2012: <fragment>:14:11: Circular typealias dependency: A -> B -> A
 ```
 
 <!-- test: error.self-cycle-alias-used -->
@@ -1448,7 +1461,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3091: <fragment>:14:11: typealias 'A' forms a type cycle: its type arguments refer back to 'A'
+error E2012: <fragment>:14:24: Circular typealias dependency: A
 ```
 
 <!-- test: error.field-access-on-builtin-array-base -->

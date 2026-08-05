@@ -154,19 +154,26 @@ export union ParseError implements Error
 	// and not SemanticCheck's, because a builtin has no entry in the signature registry that
 	// SemanticCheck's arity check reads — there is nothing there to disagree with.
 	builtinArity(name String, expected ParamCount, got ParamCount, line LineNumber, column ColumnNumber)
-	// A compiler builtin whose argument is the wrong type (`trunc(flag)`, `print(5)`). Same reason as
-	// `builtinArity`: no signature exists for the ordinary argument check to consult. `required` names
-	// what the builtin DOES accept ("number" for `trunc`, "String" for `print`), because the two differ
-	// and a fixed word would be wrong for one of them.
+	// A compiler builtin whose argument fails a REQUIREMENT THAT IS NOT A TYPE NAME (`trunc(flag)` wants "a
+	// number", `Builtins.sleep` wants "an integer", `panic` wants a message). Same reason as `builtinArity`:
+	// no signature exists for the ordinary argument check to consult. `required` is a phrase and not
+	// necessarily a type, which is exactly what separates this from `builtinArgumentType` below — a builtin
+	// whose argument position DOES have a named parameter and a declared type says so in the ordinary
+	// argument sentence instead.
 	builtinOperandType(name String, required String, got String, line LineNumber, column ColumnNumber)
-	// ⭐ A SIGNATURE-checked builtin's argument meeting the wrong type — the `__ManagedFile`,
-	// `__ManagedMemory` and `String.init` family (R4.2). A SECOND variant beside `builtinOperandType` rather
-	// than a reuse of it, because the two say different things for a reason: `builtinOperandType` names the
-	// BUILTIN and what it accepts (`'print' requires a String`), which is right for an ad-hoc builtin that
-	// has no signature; these have real signatures in BOTH references — named, typed parameters run through
-	// the ordinary argument checker — so their mismatch reads as an argument mismatch, and
-	// `builtin-type-checking` pins exactly that. Rendered through `SemanticCheck.argTypeMismatchSentence`, so
-	// the sentence has ONE producer across the two tiers.
+	// ⭐ A builtin's NAMED, TYPED argument meeting the wrong type — the `__ManagedFile`, `__ManagedMemory`
+	// and `String.init` family (R4.2), and `print` (user ruling, 2026-08-04). A SECOND variant beside
+	// `builtinOperandType` rather than a reuse of it, because the two are asked different questions: this one
+	// can name the PARAMETER the author must change and the TYPE it declares, so its mismatch reads as the
+	// argument mismatch it is, and `specs/type-checking.md` — the canonical definition — pins exactly that
+	// for `print(42)`. Rendered through `SemanticCheck.argTypeMismatchSentence`, so the sentence has ONE
+	// producer across the two tiers.
+	//
+	// ⚠ `print` USED TO RAISE `builtinOperandType`, defended in this very comment as *"right for an ad-hoc
+	// builtin that has no signature"*. The ruling retired that reasoning: having no `FuncSignature` entry is
+	// a fact about where shv2 checks the call, not about what the author did wrong. `print` takes one
+	// parameter, that parameter is called `value` and it is declared `String` — every part of the ordinary
+	// sentence is available, so writing a private one only made one rejection read two ways.
 	builtinArgumentType(paramName String, expected String, got String, line LineNumber, column ColumnNumber)
 	unsupported(feature String, line LineNumber, column ColumnNumber)
 	// A parameter list that repeats a name (`function f(x int, x int)`). The second
@@ -2849,6 +2856,14 @@ let PrintBuiltinName = b"print"
 // `print` takes exactly one argument (a String). Named for the same reason `TruncArity` is: `emitPrint`
 // states it as both the check and the diagnostic's `expected`.
 let PrintArity = 1 as ParamCount
+
+// What that one argument is CALLED. `print` is compiler-recognized and so has no `stdlib` declaration to read
+// the name off, but it has a parameter all the same and its type refusal names it — `specs/type-checking.md`'s
+// `stdlib-function-call-wrong-type` pins `argument type mismatch for 'value'`, and the C# bootstrap answers
+// with the same word. It is its OWN constant and not a share of `ArrayValueLabel` or
+// `ManagedMemoryValueParamName`: three unrelated declarations happening to agree on a word is not one fact,
+// and a shared home would make renaming any one of them silently rename the others.
+let PrintValueParamName = b"value"
 
 // **THE `runProcess` BUILTIN** (P1.5 subprocess seed). Like `print`, recognized by name after its arguments are
 // parsed: ordinary call syntax, but it emits no `MaxonOp.call` to a user function — it routes to the
@@ -5670,6 +5685,39 @@ enum NamePosition
 	enumCase
 end 'NamePosition'
 
+// ⭐⭐ **WHICH SENTENCE AN E3005 STORAGE-SLOT MISMATCH IS TOLD IN.** The VERDICT is one rule and this does not
+// touch it (`checkDeclaredType` for a trivial slot, `requireManagedValueMatches` for a managed one, both
+// shared with every assignment door); what differs is the PLACE the value failed to enter, and the two kinds
+// of place say different TRUE things about themselves.
+//
+// ⚠ **UNTIL THIS EXISTED THE PARSER CALLED A METHOD A VARIABLE**, which was not a wording preference but a
+// false statement: `arr.push("hello")` on an `Array with Int` read *"cannot assign 'String' to variable
+// 'push' of type 'int'"* — `push` is not a variable, it is a method, and `"hello"` is its ARGUMENT.
+// `specs/type-checking.md` (the canonical definition, and the user ruling of 2026-08-04 that its wording
+// wins) pins the argument voice for exactly that program.
+//
+// It is a SCALAR passed to the two verdict doors rather than a rendered noun, for `FunctionTypeDoor`'s
+// MEASURED reason — those doors run on every assignment, every field store and every container mutation in
+// the program, and a `String` threaded through one cost +1,852 allocations in `phase:parse` at scale rung 0.
+// `Parser.slotMismatchError` renders the words — the variant, the quoted name and the EXPECTED side's
+// spelling, all three — only where a diagnostic is built, and it is the ONE place any of them is decided.
+//
+// ⚠ **IT IS NOT A NEW `FunctionTypeDoor` ARM**, and that is deliberate: `FunctionTypeDoor` answers *"which
+// door did a FUNCTION VALUE meet a declared function TYPE at"* for a whole-program drain, its assignment-shaped
+// arms are a CONTIGUOUS BAND a range arm depends on, and a container element is still the `field` door for
+// that question (it is a slot of the container's storage). Two questions, two scalars.
+enum SlotMismatchVoice
+	// A place the author NAMED and can point at — a local, a global, a struct field, a union payload. The
+	// refusal names it: `cannot assign '<got>' to variable '<name>' of type '<expected>'`.
+	assignedPlace
+	// The element argument of a parser-intrinsic container mutator (`push` / `set` / `insert`). These emit
+	// `__arr_push`/`__arr_set`/`__arr_insert` directly, so they have no `FuncSignature` and never reach
+	// `SemanticCheck.checkArgTypes` — but they are calls all the same, and their refusal takes the sentence
+	// every other argument position takes (`SemanticCheck.argTypeMismatchSentence`, through
+	// `ParseError.builtinArgumentType` — the SAME variant the sibling `append` doors already raise).
+	containerElementArgument
+end 'SlotMismatchVoice'
+
 // ⭐⭐ **THE TWO DOORS AN ERROR LEAVES A FUNCTION BY (A1s-throwsbox review).** Both hand the caller a flag the
 // caller decodes against the enclosing function's DECLARED `throws` clause, so both owe that clause the same
 // debt — and until this enum existed the debt was paid at the `try` door only, leaving a measured leak and a
@@ -7729,7 +7777,7 @@ export type Parser
 		end 'scan'
 		self.pos = resume
 
-		index.foldFile(entries, aliases: aliases, functionAliases: functionAliases, structs: structs, enums: enums, genericAliasEntries: genericAliases, innerAliasEntries: innerAliases, methodInnerAliasParamEntries: methodInnerAliasParams, interfaceSites: interfaceSites, extensionSites: extensionSites, bindings: bindings, paramConsumes: paramConsumes, paramDefaults: paramDefaults, throwsEntries: throwsEntries, freeFunctionNames: freeFunctionNames, moduleDirectory: index.moduleDirectoryOf(self.filePath), fileTypeNames: self.artifact.typeNames, isStdlibSource: self.isStdlibSource)
+		index.foldFile(entries, aliases: aliases, functionAliases: functionAliases, structs: structs, enums: enums, genericAliasEntries: genericAliases, innerAliasEntries: innerAliases, methodInnerAliasParamEntries: methodInnerAliasParams, interfaceSites: interfaceSites, extensionSites: extensionSites, bindings: bindings, paramConsumes: paramConsumes, paramDefaults: paramDefaults, throwsEntries: throwsEntries, freeFunctionNames: freeFunctionNames, moduleDirectory: index.moduleDirectoryOf(self.filePath), filePath: self.filePath, fileTypeNames: self.artifact.typeNames, isStdlibSource: self.isStdlibSource)
 
 		// Intern the `Array with integer` literal instance if this file materializes one — after `foldFile`,
 		// so its giid follows the file's named generic instances (a stable, source-path-ordered assignment).
@@ -10332,7 +10380,7 @@ export type Parser
 		// there is one place that decides what a scanned signature means. Everything an extension does not
 		// contribute is passed empty; the type-name interner is this reader's own artifact's, exactly as the
 		// per-file sweep passes its own.
-		index.foldFile(entries, aliases: RangedTypeAliasArray.create(), functionAliases: FunctionTypeAliasArray.create(), structs: StructLayoutArray.create(), enums: EnumLayoutArray.create(), genericAliasEntries: GenericAliasEntryArray.create(), innerAliasEntries: InnerAliasEntryArray.create(), methodInnerAliasParamEntries: methodInnerAliasParamOut, interfaceSites: InterfaceDeclSiteArray.create(), extensionSites: ExtensionDeclSiteArray.create(), bindings: TopLevelDeclArray.create(), paramConsumes: paramConsumes, paramDefaults: paramDefaults, throwsEntries: throwsEntries, freeFunctionNames: freeFunctionNameOut, moduleDirectory: index.moduleDirectoryOf(self.filePath), fileTypeNames: self.artifact.typeNames, isStdlibSource: self.isStdlibSource)
+		index.foldFile(entries, aliases: RangedTypeAliasArray.create(), functionAliases: FunctionTypeAliasArray.create(), structs: StructLayoutArray.create(), enums: EnumLayoutArray.create(), genericAliasEntries: GenericAliasEntryArray.create(), innerAliasEntries: InnerAliasEntryArray.create(), methodInnerAliasParamEntries: methodInnerAliasParamOut, interfaceSites: InterfaceDeclSiteArray.create(), extensionSites: ExtensionDeclSiteArray.create(), bindings: TopLevelDeclArray.create(), paramConsumes: paramConsumes, paramDefaults: paramDefaults, throwsEntries: throwsEntries, freeFunctionNames: freeFunctionNameOut, moduleDirectory: index.moduleDirectoryOf(self.filePath), filePath: self.filePath, fileTypeNames: self.artifact.typeNames, isStdlibSource: self.isStdlibSource)
 	end 'foldExtensionDeclarationInto'
 
 	// ⭐⭐ **`extension <Name> [where <constraints>]` — THE ONE READER OF THE HEADER, for the three passes that
@@ -10830,7 +10878,7 @@ export type Parser
 			return
 		end 'indexStillBuilding'
 
-		try self.requireAssignable(nameTok, value: given.tag, declared: self.floatResolvedTag(maxonTypeTag(fieldType), nameId: typeNameIdOf(fieldType)), door: FunctionTypeDoor.field)
+		try self.requireAssignable(nameTok, value: given.tag, declared: self.floatResolvedTag(maxonTypeTag(fieldType), nameId: typeNameIdOf(fieldType)), declaredNameId: typeNameIdOf(fieldType), door: FunctionTypeDoor.field, voice: SlotMismatchVoice.assignedPlace)
 	end 'requireFieldDefaultType'
 
 	// The literal a field default is, as the SAME tagged pair the constant evaluator speaks in — its
@@ -11531,8 +11579,15 @@ export type Parser
 	// type, so it is qualified with the enclosing type — the SAME name `parseTypeReference`'s inner-alias arm
 	// stamps the field type with (`joinQualifiedName`), so the field's stored `named("Container.ElementArray")`
 	// and this `genericAliases` key are one string.
+	//
+	// ⚠ **IT RE-KEYS AND DOES NOTHING ELSE — `renamedTo`, not a rebuild through `create`.** A nested alias is
+	// a declaration a person wrote in a file, and every fact `readGenericInstanceAlias` captured about it (its
+	// declaring FILE above all, but also its visibility, its `Vector` size and its anchors) is as true of it
+	// under the qualified name as under the bare one. Rebuilding took `create`'s defaults for all of them and
+	// filed the entry as declared by the file `""`, which `deriveInstanceDisplayNames` then panicked on — see
+	// `GenericAliasEntry.renamedTo`.
 	function qualifiedInnerGenericAlias(entry GenericAliasEntry) returns GenericAliasEntry
-		return GenericAliasEntry.create(joinQualifiedName(self.enclosingType, member: entry.aliasName), baseName: entry.baseName, argCount: entry.argCount, args: entry.args, elementIsBuffer: entry.elementIsBuffer)
+		return entry.renamedTo(joinQualifiedName(self.enclosingType, member: entry.aliasName))
 	end 'qualifiedInnerGenericAlias'
 
 	// ⭐ **A GENERIC-INSTANCE TYPEALIAS (P1.6-A)** — `typealias IntBox = Box with Integer`. The cursor
@@ -11578,10 +11633,35 @@ export type Parser
 		let fixedSize = try self.readSizedBaseElementCount(baseTok)
 		let elementIsBuffer = self.firstGenericArgSpellingDenotesBuffer()
 		var args = GenericArgNodeArray.create()
+		let argsStart = self.pos
 		let argCount = try self.parseGenericArgNodes(args, inlineElement: self.baseStoresArgumentsInline(baseTok.value))
-		genericOut.push(GenericAliasEntry.create(aliasTok.value, baseName: baseTok.value, argCount: argCount, args: args, elementIsBuffer: elementIsBuffer, nameLine: aliasTok.line, nameColumn: aliasTok.column, filePath: self.filePath, visibility: visibility, fixedSize: fixedSize))
+		let selfRef = self.selfNamingArgToken(aliasTok, argsStart: argsStart)
+		genericOut.push(GenericAliasEntry.create(aliasTok.value, baseName: baseTok.value, argCount: argCount, args: args, elementIsBuffer: elementIsBuffer, nameLine: aliasTok.line, nameColumn: aliasTok.column, filePath: self.filePath, visibility: visibility, fixedSize: fixedSize, selfRefLine: selfRef.line, selfRefColumn: selfRef.column))
 		self.checkGenericInstance(baseTok, argCount: argCount)
 	end 'readGenericInstanceAlias'
+
+	// ⭐ **THE TOKEN AT WHICH THIS DECLARATION NAMES ITSELF** — the second `A` of `typealias A = Array with A`.
+	// It is the word the author has to change, and it is the anchor `specs/type-checking.md` blames a
+	// SELF-cycle at (column 26 of that line), against the alias NAME for a cycle that runs through other
+	// aliases. See `GenericAliasEntry.selfRefLine` for why the position must be captured here.
+	//
+	// It SCANS the argument tokens rather than threading the alias name down through `parseGenericArgNodes`,
+	// so a NESTED occurrence (`typealias A = Box with (Box with A)`) is found by the same three lines that
+	// find a top-level one. The span is one declaration's argument list — a handful of tokens, compared
+	// without allocating.
+	//
+	// **Falls back to the alias's own name token**, which is every declaration that is not a self-reference:
+	// the entry stores an ANCHOR and never an absence, so no reader downstream has to decode one.
+	function selfNamingArgToken(aliasTok Token, argsStart TokenIndex) returns Token
+		for i in argsStart upto self.pos 'eachArgumentToken'
+			let tok = self.tokenAt(i)
+			if tok.kind == TokenKind.identifier and tok.value.equals(aliasTok.value) 'namesItself'
+				return tok
+			end 'namesItself'
+		end 'eachArgumentToken'
+
+		return aliasTok
+	end 'selfNamingArgToken'
 
 	// ⭐⭐ **THE ELEMENT COUNT OF A SIZED CONTAINER SPELLING, cursor just past `with`** — `NoFixedSize` for
 	// every base that is not sized, which is every base but `Vector`, and for those the cursor does not move.
@@ -13697,8 +13777,8 @@ export type Parser
 		self.skipOptionalLabel()
 
 		self.artifact.recordFuncReturnType(name, returnType: returnType, declaredSurface: declaredReturnSurface)
-		let paramAggregateNames = self.paramAggregateNamesOf(paramTypes)
-		self.artifact.recordFuncSignature(name, signature: FuncSignature.create(paramNames, paramTypes: paramTypes, paramAggregateNames: paramAggregateNames), nameLine: nameTok.line, nameColumn: nameTok.column, sourceFilePath: self.filePath)
+		let paramDeclaredNames = self.paramDeclaredNamesOf(paramTypes)
+		self.artifact.recordFuncSignature(name, signature: FuncSignature.create(paramNames, paramTypes: paramTypes, paramAggregateNames: self.paramAggregateNamesOf(paramDeclaredNames), paramDeclaredNames: paramDeclaredNames), nameLine: nameTok.line, nameColumn: nameTok.column, sourceFilePath: self.filePath)
 		self.commitRangeChecks(name)
 	end 'parseFunction'
 
@@ -13745,7 +13825,7 @@ export type Parser
 	function rangedReturnAliasName(returnType MaxonReturnType) returns ByteArray
 		return match returnType 'r'
 			void gives EmptySourceText
-			value(inner) gives self.rangedAliasNameOfType(inner)
+			value(inner) gives self.rangedAliasName(maxonTypeTag(inner), nameId: typeNameIdOf(inner))
 		end 'r'
 	end 'rangedReturnAliasName'
 
@@ -13772,7 +13852,8 @@ export type Parser
 	function rangedParamSites(paramTypes MaxonTypeArray, paramRanges SourceRangeArray) returns RangeCheckParamSiteArray
 		var sites = sharedEmptyParamSites
 		for i in 0 upto paramTypes.count() 'eachParam'
-			let aliasName = self.rangedAliasNameOfType(try paramTypes.get(i) otherwise panic("rangedParamSites: paramTypes.get OOB at {i}"))
+			let paramType = try paramTypes.get(i) otherwise panic("rangedParamSites: paramTypes.get OOB at {i}")
+			let aliasName = self.rangedAliasName(maxonTypeTag(paramType), nameId: typeNameIdOf(paramType))
 			if aliasName.isEmpty() 'notRanged'
 				continue
 			end 'notRanged'
@@ -13818,14 +13899,21 @@ export type Parser
 		return self.signatures.aliasOf(self.internedName(nameId), readerFilePath: self.filePath)
 	end 'declaredAliasOfNameId'
 
-	// The ranged-alias name a `named` type denotes, else EMPTY — the RETURN path's spelling of the
-	// question above, which stores a name rather than an alias (`commitRangeChecks`).
-	function rangedAliasNameOfType(t MaxonType) returns ByteArray
-		return match self.declaredAliasOfType(t) 'a'
+	// The ranged-alias name a `(tag, nameId)` pair denotes, else EMPTY — the spelling of the question above
+	// for the two readers that want a NAME rather than the alias: the range-check sites, which store one
+	// (`commitRangeChecks`), and the EXPECTED side of an argument refusal (`declaredSlotDisplayName`), which
+	// prints one. It takes the scalar pair rather than a `MaxonType` because half its callers hold a
+	// RESOLVED tag (`floatResolvedTag`) that no written type carries.
+	function rangedAliasName(tag ValueTypeTag, nameId TypeNameId) returns ByteArray
+		if tag != ValueTypeTag.named 'notNamed'
+			return EmptySourceText
+		end 'notNamed'
+
+		return match self.declaredAliasOfNameId(nameId) 'a'
 			declared(alias) gives alias.name
 			undeclared gives EmptySourceText
 		end 'a'
-	end 'rangedAliasNameOfType'
+	end 'rangedAliasName'
 
 	// Close a function body. `bodyEnd` is the block its last statement left control in;
 	// when that block has no terminator, control can FALL OFF THE END of the function
@@ -14380,7 +14468,7 @@ export type Parser
 		end 'trailingTokens'
 
 		self.artifact.recordFuncReturnType(helperName, returnType: returnType, declaredSurface: sharedEmptyDeclaredSurface)
-		self.artifact.recordFuncSignature(helperName, signature: FuncSignature.create(ByteArrayArray.create(), paramTypes: MaxonTypeArray.create(), paramAggregateNames: ByteArrayArray.create()), nameLine: anchor.line, nameColumn: anchor.column, sourceFilePath: self.filePath)
+		self.artifact.recordFuncSignature(helperName, signature: FuncSignature.create(ByteArrayArray.create(), paramTypes: MaxonTypeArray.create(), paramAggregateNames: ByteArrayArray.create(), paramDeclaredNames: ByteArrayArray.create()), nameLine: anchor.line, nameColumn: anchor.column, sourceFilePath: self.filePath)
 		self.commitRangeChecks(helperName)
 	end 'parseParamDefaultHelper'
 
@@ -15945,7 +16033,7 @@ export type Parser
 		// an int: `x == 3.0` on the next line was E3005 ("cannot compare int with float") against a
 		// perfectly legal program, and a rebind INSIDE A LOOP fed an i64 and an f64 into one header phi —
 		// measured, a cross-register-file panic in the x64 emitter.
-		let assigned = try self.assignableValue(nameTok, value: value, declared: declaredTag, declaredNameId: typeNameIdOf(binding.varType), door: FunctionTypeDoor.variable)
+		let assigned = try self.assignableValue(nameTok, value: value, declared: declaredTag, declaredNameId: typeNameIdOf(binding.varType), door: FunctionTypeDoor.variable, voice: SlotMismatchVoice.assignedPlace)
 
 		// ⭐ OPEN #54/#59: reassigning a `var` to the WRONG named aggregate — a DIFFERENT struct/union, OR
 		// an aggregate where the binding declares a SCALAR — is a retype the tag check above cannot see
@@ -15954,14 +16042,20 @@ export type Parser
 		// a wild free / leak. `assignableValue`'s verdict stays tag-based (its scalar-coercion job is, and
 		// it is SHARED with the global-store and field callers). Identity is the interned name, EXACT.
 		// Un-gated — both names are computed unconditionally, empty for a scalar with no allocation — and
-		// `giveTypeName` prints the scalar side's primitive, not an empty name.
+		// `displayTypeNameOf` prints the scalar side's primitive, not an empty name.
 		//
 		// It reads the PARSED value, not the coerced one: a widening only ever produces a float scalar, so
 		// both aggregate names are empty on that path and the question is the same one either way.
+		//
+		// ⚠ **THE TWO NAMES DECIDE THE VERDICT AND DO NOT SPELL IT** (user ruling, 2026-08-04). They are
+		// IDENTITIES — for a generic instance, the canonical `Box_Leaf` two values are compared on — and
+		// reusing one as a spelling put a name no source line holds into the sentence. The message asks
+		// `displayTypeNameOf`, which is the same door the ARGUMENT voice already renders through, so the
+		// author's `LeafBox` is what both say.
 		let declaredAggregate = self.aggregateNameOf(declaredTag, nameId: typeNameIdOf(binding.varType))
 		let assignedAggregate = self.aggregateNameOf(valueTag, nameId: self.valueNameId(value))
 		if self.signatures.aggregatesConflict(declaredAggregate, expectedTag: declaredTag, expectedNameId: typeNameIdOf(binding.varType), got: assignedAggregate, gotTag: valueTag, gotNameId: self.valueNameId(value)) 'aggregateReassignMismatch'
-			throw ParseError.assignTypeMismatch(String.from(nameTok.value), got: self.giveTypeName(valueTag, aggregateName: assignedAggregate), expected: self.giveTypeName(declaredTag, aggregateName: declaredAggregate), line: nameTok.line, column: nameTok.column)
+			throw ParseError.assignTypeMismatch(String.from(nameTok.value), got: self.valueDisplayTypeName(value), expected: self.displayTypeNameOf(declaredTag, nameId: typeNameIdOf(binding.varType)), line: nameTok.line, column: nameTok.column)
 		end 'aggregateReassignMismatch'
 
 		try self.reassignBindingValue(func, binding: binding, nameTok: nameTok, value: assigned, rhsWasBareLocal: rhsWasBareLocal)
@@ -16214,7 +16308,7 @@ export type Parser
 		// The slot keeps the type its declaration gave it, so `g = 3` into a `var g = 0.0` stores a WIDENED
 		// f64 and not the integer's raw bytes — the same coercion the local rebind above performs, through
 		// the same door.
-		let stored = try self.assignableValue(nameTok, value: value, declared: maxonTypeTag(valueType), declaredNameId: typeNameIdOf(valueType), door: FunctionTypeDoor.global)
+		let stored = try self.assignableValue(nameTok, value: value, declared: maxonTypeTag(valueType), declaredNameId: typeNameIdOf(valueType), door: FunctionTypeDoor.global, voice: SlotMismatchVoice.assignedPlace)
 
 		let range = SourceRange.ofToken(nameTok)
 		// `from:` names the interner `valueType`'s ids would live in — this file's own. A global's type comes
@@ -16412,6 +16506,7 @@ export type Parser
 
 	// **CHECK AN ASSIGNED VALUE AGAINST ITS DECLARED SLOT AND HAND BACK THE VALUE THAT SLOT WANTS** — the
 	// verdict and the coercion in ONE call, so a caller cannot take the `ok` and forget the conversion.
+	// `voice` is the SENTENCE the refusal is told in and nothing else — see `SlotMismatchVoice`.
 	// Every assignment-shaped door in the parser goes through it: a local `var` rebind, a top-level global
 	// store, a struct-literal field, a field write, a self-field write.
 	//
@@ -16427,9 +16522,9 @@ export type Parser
 	// rather than the noun STRING it used to: threading that string on into the function-type door cost
 	// **one allocation per call, +1,852 in `phase:parse` at scale rung 0**, for a record almost every call
 	// then discarded. See `FunctionTypeDoor`.
-	function assignableValue(nameTok Token, value ValueId, declared ValueTypeTag, declaredNameId TypeNameId, door FunctionTypeDoor) returns ValueId throws ParseError
+	function assignableValue(nameTok Token, value ValueId, declared ValueTypeTag, declaredNameId TypeNameId, door FunctionTypeDoor, voice SlotMismatchVoice) returns ValueId throws ParseError
 		let got = self.tagOf(value)
-		try self.requireAssignable(nameTok, value: got, declared: declared, door: door)
+		try self.requireAssignable(nameTok, value: got, declared: declared, declaredNameId: declaredNameId, door: door, voice: voice)
 		if isFunctionTypeDoor(declared, got: got) 'functionTypeDoor'
 			self.recordFunctionTypeDoor(declaredNameId, gotNameId: self.valueNameId(value), door: door, placeName: nameTok.value, anchor: nameTok)
 		end 'functionTypeDoor'
@@ -16446,10 +16541,10 @@ export type Parser
 	// parse-time CONSTANT rather than an SSA value (a struct field's literal default), which pays the
 	// widening the verdict licenses in the constant's own representation. Every site holding a VALUE asks
 	// `assignableValue` — this plus that conversion, in one call, so the two halves cannot come apart.
-	function requireAssignable(nameTok Token, value ValueTypeTag, declared ValueTypeTag, door FunctionTypeDoor) throws ParseError
+	function requireAssignable(nameTok Token, value ValueTypeTag, declared ValueTypeTag, declaredNameId TypeNameId, door FunctionTypeDoor, voice SlotMismatchVoice) throws ParseError
 		match checkDeclaredType(value, declared: declared) 'declared'
 			ok then break 'declared'
-			mismatch then throw ParseError.assignTypeMismatch(String.from(nameTok.value), got: typeTagName(value), expected: typeTagName(declared), line: nameTok.line, column: nameTok.column)
+			mismatch then throw self.slotMismatchError(voice, assignedName: String.from(nameTok.value), got: typeTagName(value), gotTag: value, resolvedExpected: typeTagName(declared), declared: declared, declaredNameId: declaredNameId, line: nameTok.line, column: nameTok.column)
 			narrowsFloatToInt then throw ParseError.implicitNarrowing(typeTagName(value), targetType: typeTagName(declared), line: nameTok.line, column: nameTok.column)
 			// A FUNCTION VALUE into a NON-function place (P1.5-A1) — the spec's specific E3005 ("cannot
 			// assign a value of type 'function' to {noun} '{name}', which holds '{held}'"). The noun comes
@@ -16457,6 +16552,70 @@ export type Parser
 			functionIntoNonFunction then throw ParseError.functionValueIntoNonFunction(functionTypeDoorNoun(door), name: String.from(nameTok.value), heldType: typeTagName(declared), line: nameTok.line, column: nameTok.column)
 		end 'declared'
 	end 'requireAssignable'
+
+	// ⭐⭐ **THE ONE E3005 A STORAGE-SLOT MISMATCH IS RAISED AS, GIVEN THE VOICE ITS PLACE SPEAKS IN.** Both
+	// verdict doors — the trivial `checkDeclaredType` one above and the managed `requireManagedValueMatches`
+	// one — end here, so a container element and a struct field cannot come to explain one rejection two
+	// ways beyond the one difference `SlotMismatchVoice` names. Everything that varies with the voice varies
+	// HERE, in one `match`: which `ParseError` variant, which name is quoted, and how the EXPECTED side is
+	// spelled.
+	//
+	// `resolvedExpected` is the assignment voice's answer and arrives already rendered, because the two
+	// verdict doors resolve it differently — a bare tag name where two TAGS disagree (there is no name to
+	// print: the value and the slot are not even the same kind of thing), a NAME where two aggregates of one
+	// tag are told apart — and neither may have that decision taken away from it.
+	//
+	// ⚠ **`assignedName` IS THE PLACE THE VALUE WAS ENTERING, AND THE VOICE DECIDES WHETHER THE SENTENCE
+	// QUOTES IT.** The assignment voice does — a local, a global, a field, a union payload all name
+	// themselves. The argument voice does not: at a container mutator the anchor and the quoted name part
+	// company, and both halves are the reference's (`specs/type-checking.md` anchors
+	// `method-call-wrong-element-type` on the `push` token of `arr.push("hello")` while naming the mutator's
+	// `value` PARAMETER, which is what an author would have to change). `ArrayValueLabel` is that parameter —
+	// `stdlib/Array.maxon` declares `push(value Element)`, `set(index, value)` and `insert(at, value)`, so the
+	// label a two-argument mutator REQUIRES and the name its element parameter CARRIES are one fact with one
+	// home. **The selection is made HERE and not by the callers** (review, 2026-08-04): it was a caller
+	// convention, correct at its one site and structurally free to stop being, and a `voice` paired with the
+	// wrong name is precisely the "one refusal, two sentences" defect this enum exists to end.
+	//
+	// ⚠ **WHEREVER A NAME IS PRINTED AT ALL, BOTH VOICES PRINT `displayTypeNameOf`'s** (user ruling,
+	// 2026-08-04: a diagnostic names a type by the `typealias` the author wrote, never by the compiler's
+	// mint) — so a struct, a union, an interface and a GENERIC INSTANCE read the author's way in either
+	// sentence. The one remaining divergence is the extra probe `declaredSlotDisplayName` makes for the
+	// argument voice, documented there rather than restated here — which is why `gotTag` is threaded down: the
+	// probe's answer depends on what the OTHER half of the sentence turned out to be.
+	function slotMismatchError(voice SlotMismatchVoice, assignedName String, got String, gotTag ValueTypeTag, resolvedExpected String, declared ValueTypeTag, declaredNameId TypeNameId, line LineNumber, column ColumnNumber) returns ParseError
+		return match voice 'v'
+			assignedPlace gives ParseError.assignTypeMismatch(assignedName, got: got, expected: resolvedExpected, line: line, column: column)
+			containerElementArgument gives ParseError.builtinArgumentType(String.from(ArrayValueLabel), expected: self.declaredSlotDisplayName(declared, nameId: declaredNameId, gotTag: gotTag), got: got, line: line, column: column)
+		end 'v'
+	end 'slotMismatchError'
+
+	// ⭐ **HOW A DECLARED SLOT'S TYPE IS SPELLED WHERE THE SENTENCE NAMES WHAT WAS *EXPECTED* — the parser's
+	// half of `SemanticCheck.paramDisplayName`, under the same ruling and with the same gate.**
+	// `displayTypeNameOf` already answers for every tag that carries a written name (a struct, an interface, a
+	// registered union/enum, a generic instance's author-written alias). The ONE thing it cannot answer for is
+	// a RANGED-INT ALIAS: its `named` tag is deliberately not an aggregate (`aggregateNameOf` returns empty
+	// for it, because it is numeric), so it falls through to the bare primitive `int` — and
+	// `typealias Int = int(i64.min to i64.max)` is exactly what `specs/type-checking.md`'s element cases
+	// declare. The alias REGISTRY is what still holds the spelling, and `declaredAliasOfNameId` is its one
+	// probe.
+	//
+	// ⚠⚠ **AND THE ALIAS IS WORTH PRINTING ONLY WHEN THE OTHER HALF OF THE SENTENCE NAMES A TYPE** — the rule
+	// `SemanticCheck.paramDisplayName` states in full, from the two canonical specs that pin the SAME shape
+	// two ways (`type-checking.md`'s `expected 'Integer', got 'String'` against
+	// `implicit-type-conversion.md`'s `expected 'int', got 'bool'`). **MEASURED before this gate existed
+	// (review, 2026-08-04): `arr.push(true)` on an `Array with Integer` said `expected 'Integer', got 'bool'`
+	// where `takesInt(true)` on the identical `x Integer` said `expected 'int'` — one rule, two answers,
+	// decided by which door the value entered, and the bootstrap answers `'int'` at BOTH.** It is the very
+	// defect `SlotMismatchVoice`'s header records one tier down, so the gate belongs on both sides of it.
+	function declaredSlotDisplayName(tag ValueTypeTag, nameId TypeNameId, gotTag ValueTypeTag) returns String
+		let rangedAlias = self.rangedAliasName(tag, nameId: nameId)
+		if rangedAlias.isEmpty() or tagAdmitsNoAggregate(gotTag) 'bothHalvesAreClassWords'
+			return self.displayTypeNameOf(tag, nameId: nameId)
+		end 'bothHalvesAreClassWords'
+
+		return String.from(rangedAlias)
+	end 'declaredSlotDisplayName'
 
 	// ⭐⭐ **A DECLARED PLACE THAT CANNOT HOLD A FAT POINTER YET — THE ONE REFUSAL FOR EVERY SUCH PLACE**
 	// (P1.7a-existentials slice 1, grown by its reviews). An existential is TWO machine words, and it is
@@ -16721,7 +16880,14 @@ export type Parser
 			return EmptySourceText
 		end 'notNamed'
 
-		let name = self.internedName(nameId)
+		return self.namedAggregateName(self.internedName(nameId))
+	end 'aggregateNameOf'
+
+	// The `named` arm's whole rule, given the already-interned name: which NAMES carry a nominal identity, and
+	// which are numeric. Split out because `paramAggregateNamesOf` derives its column from the SPELLING column
+	// rather than from a type, and a second spelling of this rule is exactly what would let a signature's
+	// stored identity and a live value's disagree about the same name.
+	function namedAggregateName(name ByteArray) returns ByteArray
 		if self.signatures.containsStruct(name) or self.signatures.containsEnum(name) 'registeredAggregate'
 			return name
 		end 'registeredAggregate'
@@ -16735,7 +16901,7 @@ export type Parser
 		end 'perInstanceAlias'
 
 		return EmptySourceText
-	end 'aggregateNameOf'
+	end 'namedAggregateName'
 
 	// ⭐ **RECORD A FUNCTION VALUE MEETING A FUNCTION-TYPED PLACE — the FUNCTION twin of the nominal
 	// `aggregatesConflict` identity check every door beside this one already makes.** A `structRef` and a
@@ -16777,18 +16943,43 @@ export type Parser
 	// twice. The gate is exactly `tag == named`: a struct is `structRef` (skipped), a scalar or a ranged
 	// alias is not `named` (skipped), and a `named` ranged/float alias yields `EmptySourceText` from
 	// `aggregateNameOf` (not registered), so only a genuine boxed union/enum lands a non-empty entry.
-	function paramAggregateNamesOf(paramTypes MaxonTypeArray) returns ByteArrayArray
+	function paramAggregateNamesOf(declaredNames ByteArrayArray) returns ByteArrayArray
 		var names = ByteArrayArray.create()
-		for pt in paramTypes 'each'
-			let tag = maxonTypeTag(pt)
-			if tag == ValueTypeTag.named 'erasableAggregate'
-				names.push(self.aggregateNameOf(tag, nameId: typeNameIdOf(pt)))
-			end 'erasableAggregate' else 'notErasable'
+		for declared in declaredNames 'each'
+			// An empty slot is a parameter that was never `named` — there is no name to classify. Everything
+			// else goes through the ONE rule `aggregateNameOf`'s `named` arm applies, so the column a signature
+			// stores and the answer a live value gets cannot diverge.
+			if declared.isEmpty() 'notANamedParameter'
 				names.push(EmptySourceText)
-			end 'notErasable'
+			end 'notANamedParameter' else 'named'
+				names.push(self.namedAggregateName(declared))
+			end 'named'
 		end 'each'
 		return names
 	end 'paramAggregateNamesOf'
+
+	// ⭐ **THE PRE-ERASURE *SPELLING* COLUMN A SIGNATURE CARRIES (user ruling, 2026-08-04)** — the interned
+	// name of every `named` parameter, `EmptySourceText` for anything else, and the column
+	// `paramAggregateNamesOf` above is derived FROM. See `FuncSignature.paramDeclaredNames` for why the two are
+	// different facts and why one walk produces both.
+	//
+	// Captured HERE, at the real parse, for `paramAggregateNamesOf`'s reason: this is the last point a `named`
+	// parameter still knows its name, because `resolveTypes` erases both a union/enum and a ranged alias to
+	// bare `integer` (TypeResolution.resolveNamedType). A STRUCT / interface / generic instance keeps its own
+	// tag through resolution and is read straight off `paramTypes`, so its slot stays empty and no name is
+	// stored twice.
+	function paramDeclaredNamesOf(paramTypes MaxonTypeArray) returns ByteArrayArray
+		var names = ByteArrayArray.create()
+		for pt in paramTypes 'each'
+			let tag = maxonTypeTag(pt)
+			if tag == ValueTypeTag.named 'erasedByResolution'
+				names.push(self.internedName(typeNameIdOf(pt)))
+			end 'erasedByResolution' else 'keepsItsOwnTag'
+				names.push(EmptySourceText)
+			end 'keepsItsOwnTag'
+		end 'each'
+		return names
+	end 'paramDeclaredNamesOf'
 
 	// ⭐ **THE PRIMITIVE TAG THE RANGED ALIAS `nameId` REDUCES TO**, or `named` when no ranged alias
 	// declares that name. It is decided through the SAME whole-program `aliasOf` door
@@ -17112,8 +17303,14 @@ export type Parser
 		// type's destructor: a wild free / leak the tag check above cannot see (two structs share the
 		// `structRef` tag; a boxed union and a ranged-int alias share `named`). Identity is the interned
 		// name, EXACT (no subtyping). Un-gated — both names are computed unconditionally, `aggregateNameOf`
-		// returning the shared empty for a scalar with no allocation — and `giveTypeName` prints the
+		// returning the shared empty for a scalar with no allocation — and `displayTypeNameOf` prints the
 		// scalar side's primitive (`int`), not an empty name.
+		//
+		// ⚠ **THE TWO NAMES DECIDE THE VERDICT AND DO NOT SPELL IT** — `parseAssignment`'s reassign check and
+		// `requireManagedValueMatches` carry the identical note for the identical reason (user ruling,
+		// 2026-08-04). MEASURED before the RETURN voice was converted, on a program declaring both aliases:
+		// `Cannot return 'Array_String' from function declared to return 'Array_Integer'`, where the author
+		// wrote `Strs` and `Ints` and no line of the program holds either mint.
 		// The FUNCTION twin of the aggregate identity check below — a function value returned where a
 		// function type is declared agrees on the tag and can still be a different function type entirely.
 		// See `recordFunctionTypeDoor` for why it is recorded rather than decided here.
@@ -17124,7 +17321,7 @@ export type Parser
 		let declaredReturnName = self.aggregateNameOf(declaredTag, nameId: declaredNameId)
 		let returnedName = self.aggregateNameOf(retTag, nameId: self.valueNameId(retVal))
 		if self.signatures.aggregatesConflict(declaredReturnName, expectedTag: declaredTag, expectedNameId: declaredNameId, got: returnedName, gotTag: retTag, gotNameId: self.valueNameId(retVal)) 'aggregateReturnMismatch'
-			throw ParseError.returnTypeMismatch(self.giveTypeName(retTag, aggregateName: returnedName), expected: self.giveTypeName(declaredTag, aggregateName: declaredReturnName), line: anchor.line, column: anchor.column)
+			throw ParseError.returnTypeMismatch(self.valueDisplayTypeName(retVal), expected: self.displayTypeNameOf(declaredTag, nameId: declaredNameId), line: anchor.line, column: anchor.column)
 		end 'aggregateReturnMismatch'
 
 		// ⭐ **THE `ok` VERDICT ABOVE LICENSED A WIDENING, AND SOMETHING HAS TO PERFORM IT.** `return 3`
@@ -17163,7 +17360,7 @@ export type Parser
 
 	// ⭐ **IS THE `return` DOOR'S GUARD PROVABLY DEAD? — the destination unwrapped, then the one shared
 	// containment (A4f).** It is reached only behind `rangeCheckReturnAlias` being non-empty, which is the
-	// tag-checked answer to *"does the declared return type name a ranged alias?"* (`rangedAliasNameOfType`)
+	// tag-checked answer to *"does the declared return type name a ranged alias?"* (`rangedReturnAliasName`)
 	// — so `undeclared` here is the SAME name failing to resolve twice and cannot mean the return type is
 	// unranged. It answers `false` for it all the same, because a destination with no bounds proves nothing
 	// and the safe direction is to keep the check.
@@ -18406,12 +18603,17 @@ export type Parser
 		// cannot see (two structs share the `structRef` tag; a boxed union and a ranged-int alias share
 		// `named`). Runs regardless of `resultUsed`: the phi is dropped on the discard path too (see the
 		// managed-result handling below). Identity is the interned name, EXACT. Un-gated — both names are
-		// computed unconditionally, empty for a scalar with no allocation — and `giveTypeName` prints the
-		// scalar side's primitive, not an empty name.
+		// computed unconditionally, empty for a scalar with no allocation — and `displayTypeNameOf` prints
+		// the scalar side's primitive, not an empty name.
+		//
+		// ⚠ **THE TWO NAMES DECIDE THE VERDICT AND DO NOT SPELL IT** (user ruling, 2026-08-04) — the same
+		// note the return and reassignment doors carry. MEASURED before this voice was converted:
+		// `otherwise type 'Array_String' does not match expected type 'Array_Integer'` on a program whose
+		// author wrote `Strs` and `Ints`.
 		let resultAggregate = self.aggregateNameOf(self.tagOf(result), nameId: self.valueNameId(result))
 		let fallbackAggregate = self.aggregateNameOf(self.tagOf(otherwiseValue), nameId: self.valueNameId(otherwiseValue))
 		if self.signatures.aggregatesConflict(resultAggregate, expectedTag: self.tagOf(result), expectedNameId: self.valueNameId(result), got: fallbackAggregate, gotTag: self.tagOf(otherwiseValue), gotNameId: self.valueNameId(otherwiseValue)) 'aggregateOtherwiseMismatch'
-			throw ParseError.errorTypeMismatch("otherwise type '{self.giveTypeName(self.tagOf(otherwiseValue), aggregateName: fallbackAggregate)}' does not match expected type '{self.giveTypeName(self.tagOf(result), aggregateName: resultAggregate)}'", line: tryTok.line, column: tryTok.column)
+			throw ParseError.errorTypeMismatch("otherwise type '{self.valueDisplayTypeName(otherwiseValue)}' does not match expected type '{self.valueDisplayTypeName(result)}'", line: tryTok.line, column: tryTok.column)
 		end 'aggregateOtherwiseMismatch'
 
 		// ⭐ **A MANAGED try-result and its `otherwise` fallback merge through an OWNED result phi**
@@ -23923,38 +24125,23 @@ export type Parser
 		return false
 	end 'giveIsPromotableToFloat'
 
-	// The printable type name a merge arm's give value carries — a scalar class (`int`/`bool`/`String`/…) or
-	// a declared aggregate's interned name — the same column `checkGiveTypes` names a mismatch by.
-	function giveDisplayName(give ValueId) returns String
-		let tag = self.tagOf(give)
-		return self.giveTypeName(tag, aggregateName: self.aggregateNameOf(tag, nameId: self.valueNameId(give)))
-	end 'giveDisplayName'
-
 	// A give-type mismatch between the FIRST arm and `gotArm`, phrased for `construct` through the shared
 	// `valueMergeMismatchError` mapping. A ternary always names its FALSE (second) branch whichever arm
 	// actually mismatched — it has exactly two arms and the message reads them in source order — so the
 	// displayed "got" arm is arm 1 for a ternary and the mismatching arm itself for a match.
+	//
+	// ⚠ **BOTH ARMS PRINT THROUGH `valueDisplayTypeName`, THE ONE VALUE-DISPLAY DOOR** (user ruling,
+	// 2026-08-04). It had a private renderer that read `aggregateNameOf` — the IDENTITY `checkGiveTypes`
+	// compares on — and for a generic instance that identity is a canonical mint: MEASURED,
+	// `ternary expression type mismatch: true branch is 'Array_Integer' but false branch is 'Array_String'`
+	// where the author wrote `Ints` and `Strs`.
 	function valueMergeGiveMismatch(construct MergeConstruct, reachingArms MatchArmExitArray, firstArm MatchArmExit, gotArm MatchArmExit, matchTok Token) returns ParseError
 		var displayArm = gotArm
 		if construct == MergeConstruct.ternary 'ternaryFalseArm'
 			displayArm = try reachingArms.get(1) otherwise panic("valueMergeGiveMismatch: a ternary merge has no second (false) arm")
 		end 'ternaryFalseArm'
-		return valueMergeMismatchError(construct == MergeConstruct.ternary, expectedDisplay: self.giveDisplayName(self.giveValueOf(firstArm.give)), gotDisplay: self.giveDisplayName(self.giveValueOf(displayArm.give)), line: matchTok.line, column: matchTok.column)
+		return valueMergeMismatchError(construct == MergeConstruct.ternary, expectedDisplay: self.valueDisplayTypeName(self.giveValueOf(firstArm.give)), gotDisplay: self.valueDisplayTypeName(self.giveValueOf(displayArm.give)), line: matchTok.line, column: matchTok.column)
 	end 'valueMergeGiveMismatch'
-
-	// The name a `gives` value prints under in a match type-agreement diagnostic: a declared struct or
-	// union by its interned aggregate NAME, and every scalar — an `int`, a `bool`, a `String`, a
-	// ranged-int alias whose overloaded `named` tag is NOT an aggregate — by its resolved primitive name.
-	// `aggregateName` is `aggregateNameOf`'s result for the value, which is empty for anything that is not
-	// a declared aggregate — so the choice is exactly whether that name is present. One home for the two
-	// `got`/`expected` operands so the three mismatch shapes phrase the value one way.
-	function giveTypeName(tag ValueTypeTag, aggregateName ByteArray) returns String
-		if aggregateName.isEmpty() 'scalar'
-			return typeTagName(tag)
-		end 'scalar'
-
-		return String.from(aggregateName)
-	end 'giveTypeName'
 
 	// The `gives` value an expression arm carries. Only ever asked of an expression-match arm, so a
 	// `none` is a parser invariant break, not a program error. Takes the `MatchGiveValue` itself so both
@@ -30094,14 +30281,14 @@ export type Parser
 			return try self.widenValueIntoExistentialField(layout, index: index, fieldType: fieldType, value: value, anchor: anchor)
 		end 'existentialField'
 		if payloadClassIsManaged(class) 'managed'
-			try self.requireManagedValueMatches(payloadStorageOf(class), isString: payloadClassIsString(class), value: value, siteName: self.fieldSiteName(layout, index: index), anchor: anchor)
+			try self.requireManagedValueMatches(payloadStorageOf(class), isString: payloadClassIsString(class), value: value, assignedName: self.fieldSiteName(layout, index: index), voice: SlotMismatchVoice.assignedPlace, anchor: anchor)
 			return value
 		end 'managed'
 
 		// The SAME verdict-plus-coercion the assignment doors ask, through the `field` door — which is what it always
 		// was, spelled out a second time: the four `DeclaredTypeMatch` arms that stood here were a
 		// character-for-character copy of `requireAssignable`'s, and a rule with two homes drifts.
-		let stored = try self.assignableValue(anchor, value: value, declared: maxonTypeTag(fieldType), declaredNameId: typeNameIdOf(fieldType), door: FunctionTypeDoor.field)
+		let stored = try self.assignableValue(anchor, value: value, declared: maxonTypeTag(fieldType), declaredNameId: typeNameIdOf(fieldType), door: FunctionTypeDoor.field, voice: SlotMismatchVoice.assignedPlace)
 		// ⭐ **THE FIELD'S DECLARED RANGE BINDS WHAT IS STORED IN IT (P1.9).** The site is recorded on the
 		// COERCED value, not the parsed one: that is the value the slot receives, and for a widening door
 		// (an int meeting a declared float) it is a different SSA id. All three field doors — the struct
@@ -30181,7 +30368,7 @@ export type Parser
 			throw ParseError.unsupported("storing a value of a CONCRETE type into the interface-typed field '{self.fieldSiteName(layout, index: index)}' — {ExistentialIsFatPointerReason}, and the second word is the address of the conformer's witness table, which only a widening SITE can name. A field store has no callee whose declared parameter types could name it, unlike a call argument. Pass the value to a named function taking the interface as a PARAMETER and store THAT parameter (which arrives already widened), or declare the field at a concrete type", line: anchor.line, column: anchor.column)
 		end 'aConcreteConformer'
 
-		try self.requireManagedValueMatches(fieldType, isString: false, value: value, siteName: self.fieldSiteName(layout, index: index), anchor: anchor)
+		try self.requireManagedValueMatches(fieldType, isString: false, value: value, assignedName: self.fieldSiteName(layout, index: index), voice: SlotMismatchVoice.assignedPlace, anchor: anchor)
 		return value
 	end 'widenValueIntoExistentialField'
 
@@ -30195,12 +30382,17 @@ export type Parser
 	// PAYLOAD share: a `String` slot takes a `string`; a `struct` slot takes a `structRef` of the SAME struct
 	// name (a pointer of the wrong struct would pass a tag-only check). The names are compared through this
 	// file's interner, the one the classifier's `structRef` id and the value's own id were both minted from.
-	// `siteName` is the `<Type>.<field>` / `<Union>.<case>(<field>)` label the message quotes.
-	function requireManagedValueMatches(storage MaxonType, isString bool, value ValueId, siteName String, anchor Token) throws ParseError
+	// `assignedName` is the `<Type>.<field>` / `<Union>.<case>(<field>)` label the ASSIGNMENT voice quotes;
+	// the argument voice names the mutator's parameter instead, which `slotMismatchError` decides.
+	function requireManagedValueMatches(storage MaxonType, isString bool, value ValueId, assignedName String, voice SlotMismatchVoice, anchor Token) throws ParseError
 		let got = self.tagOf(value)
 		let wantTag = maxonTypeTag(storage)
 		if got != wantTag 'tagMismatch'
-			throw ParseError.assignTypeMismatch(siteName, got: typeTagName(got), expected: typeTagName(wantTag), line: anchor.line, column: anchor.column)
+			// ⚠ **`got` NAMES THE TYPE, NOT THE TAG'S CLASS WORD** (review, 2026-08-04). It read
+			// `typeTagName(got)`, so this arm answered `got 'struct'` for the very struct the arm below
+			// answers `got 'Other'` for — one door, two sentences, sixty lines apart in `specs-shv2/arrays.md`.
+			// The bootstrap names it (`expected 'String', got 'Item'`), and naming the type IS the ruling.
+			throw self.slotMismatchError(voice, assignedName: assignedName, got: self.valueDisplayTypeName(value), gotTag: got, resolvedExpected: typeTagName(wantTag), declared: wantTag, declaredNameId: typeNameIdOf(storage), line: anchor.line, column: anchor.column)
 		end 'tagMismatch'
 		if isString 'stringOk'
 			return
@@ -30210,11 +30402,18 @@ export type Parser
 		// the only tag a struct/union storage and a value can share while disagreeing on aggregate identity
 		// is the overloaded `named` (a boxed union slot met by a ranged-int alias value, or the reverse).
 		// `namedAggregatesConflict` (extended by #59) catches that scalar-vs-aggregate case as well as two
-		// distinct aggregates, and `giveTypeName` prints the scalar side's primitive rather than an empty name.
+		// distinct aggregates, and `displayTypeNameOf` prints the scalar side's primitive rather than an
+		// empty name.
+		//
+		// ⚠ **THE TWO NAMES DECIDE THE VERDICT AND DO NOT SPELL IT** — `parseAssignment`'s aggregate-retype
+		// check carries the identical note for the identical reason (user ruling, 2026-08-04): an aggregate
+		// name is the IDENTITY two values are compared on, and a generic instance's identity is a canonical
+		// mint no source line holds. Both sides render through `displayTypeNameOf` so this door and the
+		// ARGUMENT door spell one type one way.
 		let wantName = self.aggregateNameOf(wantTag, nameId: typeNameIdOf(storage))
 		let gotName = self.aggregateNameOf(got, nameId: self.valueNameId(value))
 		if self.signatures.aggregatesConflict(wantName, expectedTag: wantTag, expectedNameId: typeNameIdOf(storage), got: gotName, gotTag: got, gotNameId: self.valueNameId(value)) 'nameMismatch'
-			throw ParseError.assignTypeMismatch(siteName, got: self.giveTypeName(got, aggregateName: gotName), expected: self.giveTypeName(wantTag, aggregateName: wantName), line: anchor.line, column: anchor.column)
+			throw self.slotMismatchError(voice, assignedName: assignedName, got: self.valueDisplayTypeName(value), gotTag: got, resolvedExpected: self.displayTypeNameOf(wantTag, nameId: typeNameIdOf(storage)), declared: wantTag, declaredNameId: typeNameIdOf(storage), line: anchor.line, column: anchor.column)
 		end 'nameMismatch'
 	end 'requireManagedValueMatches'
 
@@ -31060,7 +31259,7 @@ export type Parser
 	// A managed payload argument must be the matching heap kind — the union-payload caller of the shared
 	// `requireManagedValueMatches`, naming its site `<Union>.<case>(<field>)`.
 	function requireManagedPayloadArg(field PayloadField, storage MaxonType, isString bool, value ValueId, layout EnumLayout, caseTok Token) throws ParseError
-		try self.requireManagedValueMatches(storage, isString: isString, value: value, siteName: "{String.from(layout.name)}.{String.from(caseTok.value)}({String.from(field.name)})", anchor: caseTok)
+		try self.requireManagedValueMatches(storage, isString: isString, value: value, assignedName: "{String.from(layout.name)}.{String.from(caseTok.value)}({String.from(field.name)})", voice: SlotMismatchVoice.assignedPlace, anchor: caseTok)
 	end 'requireManagedPayloadArg'
 
 	// Load a boxed union's i64 TAG from offset 0 — the DISPATCH SUBJECT a `match` compares against
@@ -32085,7 +32284,7 @@ export type Parser
 			// is `checkOneInstantiation`'s split applied at the other end of the same mechanism.
 			let conformer = self.signatures.conformerTypeArgName(gid, position: constraint.typeParamIndex).toByteArray()
 			if not typeConformsTo(self.signatures.sweptConformanceIndex(), interfaces: self.signatures.interfaceMap(), typeName: conformer, interfaceName: constraint.interfaceName) 'violates'
-				let argName = self.signatures.instanceArgTypeName(gid, position: constraint.typeParamIndex)
+				let argName = self.signatures.instanceArgDisplayName(gid, position: constraint.typeParamIndex)
 				throw ParseError.conditionalExtensionWithheld(String.from(typeName), methodName: String.from(memberTok.value), clause: clause, unmetInterfaceName: String.from(constraint.interfaceName), bindingName: argName, line: memberTok.line, column: memberTok.column)
 			end 'violates'
 		end 'eachConstraint'
@@ -32653,7 +32852,7 @@ export type Parser
 	function requireStringIndexValue(func IrFunction, methodName ByteArray, anchor Token) returns ValueId throws ParseError
 		let value = try self.parseExpression(func, block: self.currentBlock)
 		if not self.valueIsStringIndex(value) 'notAnIndex'
-			throw ParseError.builtinOperandType(String.from(methodName), required: String.from(StringIndexTypeName), got: self.giveTypeName(self.tagOf(value), aggregateName: self.aggregateNameOf(self.tagOf(value), nameId: self.valueNameId(value))), line: anchor.line, column: anchor.column)
+			throw ParseError.builtinOperandType(String.from(methodName), required: String.from(StringIndexTypeName), got: self.valueDisplayTypeName(value), line: anchor.line, column: anchor.column)
 		end 'notAnIndex'
 		return value
 	end 'requireStringIndexValue'
@@ -33576,11 +33775,38 @@ export type Parser
 		return self.signatures.isBytePackedArrayInstance(self.tagOf(value), nameId: self.valueNameId(value))
 	end 'valueIsByteArray'
 
-	// How a value's type is SPELLED in a diagnostic — its tag, resolved through the aggregate name behind it.
-	// Three builtin-argument rules read it; written out it was the same four-call chain each time.
+	// How a value's type is SPELLED in a diagnostic — its tag, resolved through the DISPLAY name behind it.
+	// EVERY parser diagnostic that names a VALUE's type reads it (the builtin-argument rules, the assignment
+	// and return voices, the `otherwise` and match-arm merges); written out it was the same four-call chain
+	// each time, and each copy was free to reach for the identity instead.
 	function valueDisplayTypeName(value ValueId) returns String
-		return self.giveTypeName(self.tagOf(value), aggregateName: self.aggregateNameOf(self.tagOf(value), nameId: self.valueNameId(value)))
+		return self.displayTypeNameOf(self.tagOf(value), nameId: self.valueNameId(value))
 	end 'valueDisplayTypeName'
+
+	// ⭐⭐ **THE DISPLAY TWIN OF `aggregateNameOf`, AND THE PARSER-TIER HALF OF ONE RULE (user ruling,
+	// 2026-08-04): a diagnostic names a type the way the AUTHOR WROTE IT.** `aggregateNameOf` answers with the
+	// IDENTITY — for a generic instance, the canonical `Array_String` two values are compared on — and an
+	// identity is not a spelling: no source line holds `Array_String`, the author wrote
+	// `typealias StringArray = Array with String`. Every other tag already answers with a written name (a
+	// struct, an interface, a registered union/enum) or with the primitive the author sees (`int`, `String`),
+	// so the instance arm is the whole difference and the rest routes through the existing chain.
+	//
+	// ⚠ The SemanticCheck twin is `typeDisplayName`; the two are twins for `aggregateNameOf`'s own reason —
+	// different tier, different interner — and the instance name they both quote comes from the shared
+	// whole-program index, so they cannot come to spell one type two ways. **What is twinned is the LOOKUP
+	// and the instance arm, which are the two tier-bound halves; the TAIL is not, and is
+	// `displayNameOfAggregate` — one home, because it takes a tag and a resolved name and neither is bound to
+	// an interner.**
+	function displayTypeNameOf(tag ValueTypeTag, nameId TypeNameId) returns String
+		if tag == ValueTypeTag.genericInstance 'genericInstance'
+			return String.from(self.signatures.instanceDisplayName(nameId))
+		end 'genericInstance'
+
+		// Its aggregate NAME when it has one (a declared struct/union), else the scalar TYPE it actually is —
+		// an `int`, a `bool`, a `String`, or a ranged-int alias whose overloaded `named` tag is NOT an
+		// aggregate.
+		return displayNameOfAggregate(tag, aggregate: self.aggregateNameOf(tag, nameId: nameId))
+	end 'displayTypeNameOf'
 
 	// ⭐ **BUILD ONE PREDEFINED SET: its explicit members into a fresh `Set with Character`, then the box.**
 	// Each member is a `Character` LITERAL the parser mints from the preset's bytes — the same immortal
@@ -36750,7 +36976,7 @@ export type Parser
 		if methodTok.value.equals(AppendMethod) 'append'
 			try self.requireVoidMethodIsStatement(resultUsed, methodTok: methodTok)
 			try self.requireArrayCopyMethodSupported(giid, methodTok: methodTok)
-			return try self.parseArrayAppend(func, arr: arr, giid: giid, range: range)
+			return try self.parseArrayAppend(func, arr: arr, giid: giid, methodTok: methodTok, range: range)
 		end 'append'
 
 		// ⭐⭐ **THE TWO `__ManagedMemory` MUTATORS (R4.2) — `setLength` and `setByte`.** VOID and THROWING,
@@ -37539,11 +37765,10 @@ export type Parser
 	// CONCRETE MANAGED receiver (P1.7 slice 3b-vi-b) DEEP-CLONES each `other` element into `self` via
 	// `__arr_append_managed`, stamped with the element's `funcAddr(__clone_<E>)`, so both arrays end up sole
 	// owners of independent elements. Returns the receiver (what the statement still denotes).
-	function parseArrayAppend(func IrFunction, arr ValueId, giid GenericInstanceId, range SourceRange) returns ValueId throws ParseError
+	function parseArrayAppend(func IrFunction, arr ValueId, giid GenericInstanceId, methodTok Token, range SourceRange) returns ValueId throws ParseError
 		try self.consume(TokenKind.leftParen)
-		let otherTok = self.current()
 		let other = try self.parseExpression(func, block: self.currentBlock)
-		try self.requireArrayAppendArg(other, arr: arr, giid: giid, otherTok: otherTok)
+		try self.requireArrayAppendArg(other, arr: arr, giid: giid, methodTok: methodTok)
 		try self.consume(TokenKind.rightParen)
 		if self.signatures.containerElementIsOpaque(giid) 'opaqueAppend'
 			return self.emitArrayVoidCall(ArrAppendOpaqueName, args: pairArgs(arr, second: other), receiver: arr, range: range)
@@ -37579,12 +37804,20 @@ export type Parser
 	// naming both types) is also what lets the receiver's element be READ OFF the message — the three
 	// hand-written sentences it replaces named neither type, so `expected 'Array_Byte', got 'Array_Small'`
 	// could not be said at all.
-	function requireArrayAppendArg(other ValueId, arr ValueId, giid GenericInstanceId, otherTok Token) throws ParseError
+	//
+	// ⚠ **IT ANCHORS ON THE METHOD NAME, NOT ON THE ARGUMENT, AND THAT IS THE REFERENCE'S ANCHOR.**
+	// `specs/type-checking.md`'s `method-call-wrong-self-type` pins column 6 of `\tarr.append("hello")` — the
+	// `append` token — and its `array-of-different-element-types` pins the `append` of `\tints.append(strings)`
+	// the same way. shv2 pointed at the argument HERE while pointing at the callee at every DECLARED call
+	// (`SemanticCheck.checkOneArgType` anchors on the call op) and at the method at the buffer surface
+	// (`requireManagedMemoryAppendArg`, one function up) — one refusal, three anchors, decided by which door
+	// the value happened to enter.
+	function requireArrayAppendArg(other ValueId, arr ValueId, giid GenericInstanceId, methodTok Token) throws ParseError
 		if self.appendArgAdmitted(other, giid: giid) 'admitted'
 			return
 		end 'admitted'
 
-		throw ParseError.builtinArgumentType(String.from(ManagedMemoryOtherParamName), expected: self.valueDisplayTypeName(arr), got: self.valueDisplayTypeName(other), line: otherTok.line, column: otherTok.column)
+		throw ParseError.builtinArgumentType(String.from(ManagedMemoryOtherParamName), expected: self.valueDisplayTypeName(arr), got: self.valueDisplayTypeName(other), line: methodTok.line, column: methodTok.column)
 	end 'requireArrayAppendArg'
 
 	// The shared adapter putting a `ValueId`'s two type columns in front of the index's rule — `valueIsByteArray`'s
@@ -37764,14 +37997,18 @@ export type Parser
 		let element = try self.characterizedOperand(value, expected: maxonTypeTag(declared), start: valueStart, pastEnd: self.pos)
 		let class = classifyUnionPayload(self.signatures, typeNames: self.artifact.typeNames, fieldType: declared, slotScopeFilePath: self.filePath)
 		if payloadClassIsManaged(class) 'managed'
-			try self.requireManagedValueMatches(payloadStorageOf(class), isString: payloadClassIsString(class), value: element, siteName: String.from(methodTok.value), anchor: methodTok)
+			try self.requireManagedValueMatches(payloadStorageOf(class), isString: payloadClassIsString(class), value: element, assignedName: String.from(methodTok.value), voice: SlotMismatchVoice.containerElementArgument, anchor: methodTok)
 			return element
 		end 'managed'
 
 		// The `field` door, because an element IS a slot of the container's storage and the noun a function
 		// value's E3005 needs is the container-slot one. A fourth noun would have to be minted in
 		// `FunctionTypeDoor`, and there is no fourth RULE here to justify one.
-		let stored = try self.assignableValue(methodTok, value: element, declared: maxonTypeTag(declared), declaredNameId: typeNameIdOf(declared), door: FunctionTypeDoor.field)
+		//
+		// The VOICE is the other axis and is the mutator's own: `push` is a METHOD and its element is that
+		// method's ARGUMENT, so the type refusal is the argument sentence rather than the assignment one.
+		// See `SlotMismatchVoice`, which records what calling `push` a "variable" was measured to say.
+		let stored = try self.assignableValue(methodTok, value: element, declared: maxonTypeTag(declared), declaredNameId: typeNameIdOf(declared), door: FunctionTypeDoor.field, voice: SlotMismatchVoice.containerElementArgument)
 		// ⭐⭐ **THE ELEMENT'S DECLARED RANGE BINDS IT AT RUNTIME TOO (A1f-arrayelem) — AND THE GUARD GOES
 		// HERE, AT THE STORE, WHICH IS THE LAST PLACE THAT KNOWS THE ELEMENT TYPE.** This door owed only
 		// the compile-time half until this rung, on the argument the call-argument door owed it: the element
@@ -40662,8 +40899,8 @@ export type Parser
 		// A closure's return type is INFERRED from its body expression, never spelled, so no declared
 		// spelling can name the buffer alias here (A2j).
 		self.artifact.recordFuncReturnType(closureName, returnType: returnType, declaredSurface: sharedEmptyDeclaredSurface)
-		let paramAggregateNames = self.paramAggregateNamesOf(paramTypes)
-		self.artifact.recordFuncSignature(closureName, signature: FuncSignature.create(paramNames, paramTypes: paramTypes, paramAggregateNames: paramAggregateNames), nameLine: functionTok.line, nameColumn: functionTok.column, sourceFilePath: self.filePath)
+		let paramDeclaredNames = self.paramDeclaredNamesOf(paramTypes)
+		self.artifact.recordFuncSignature(closureName, signature: FuncSignature.create(paramNames, paramTypes: paramTypes, paramAggregateNames: self.paramAggregateNamesOf(paramDeclaredNames), paramDeclaredNames: paramDeclaredNames), nameLine: functionTok.line, nameColumn: functionTok.column, sourceFilePath: self.filePath)
 		self.closureReturns.upsert(closureName, value: returnType)
 		// Commit the closure's OWN range-check sites under its OWN lifted name, so `InsertRangeChecks`
 		// resolves them against the function whose SSA space numbered them. It sits here — after the body,
@@ -42398,7 +42635,11 @@ export type Parser
 		let arg = try args.get(0) otherwise panic("emitPrint: args.count() == PrintArity just checked but get(0) failed")
 		let argTag = self.tagOf(arg)
 		if not tagIsText(argTag) 'notAString'
-			throw ParseError.builtinOperandType(String.from(PrintBuiltinName), required: typeTagName(ValueTypeTag.string), got: typeTagName(argTag), line: calleeTok.line, column: calleeTok.column)
+			// `got` NAMES THE TYPE (review, 2026-08-04): the `arg` value is in hand, so `print(somePoint)`
+			// says `got 'Point'` — what the bootstrap says — and not the tag's class word `struct`. The
+			// EXPECTED side stays a tag name because `print` accepts the `String` builtin itself and there is
+			// no declaration whose spelling could differ from it.
+			throw ParseError.builtinArgumentType(String.from(PrintValueParamName), expected: typeTagName(ValueTypeTag.string), got: self.valueDisplayTypeName(arg), line: calleeTok.line, column: calleeTok.column)
 		end 'notAString'
 
 		// `print` returns nothing, so using its result is using a value that is not there — the same

@@ -78,6 +78,12 @@ MEASURED, and it is worth writing down because the door looks byte-agnostic and 
 | `Array with Integer` | `__ManagedMemory.create(n, elementSize: 8)` | refused — `Array_int` |
 | `Array with Small` (`int(0 to 200)`) | `__ManagedMemory.create(n, elementSize: 1)` | refused — `Array_Byte` |
 
+The verdict column names the INSTANCE the buffer minted. The DIAGNOSTIC spells that instance by the
+`typealias` the program declares for it where one exists (user ruling, 2026-08-04), which is why the byte
+row's refusal below reads `got 'ByteArray'` — `stdlib/File.maxon`'s own
+`export typealias ByteArray = Array with Byte`, the same instance under a name a person wrote. The word
+row has no such name, which is the next paragraph's whole subject, so it still reads `Array_int`.
+
 `managedMemoryInstanceForElementSize` mints exactly two instances — `Array with Byte` for width 1
 and `Array with int` for width 8 — and **`Array with int` is a type no program can name**:
 `typealias IntArray = Array with int` is `E2061: Cannot use bare type 'int' as a type argument; use
@@ -644,7 +650,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:7:19: argument type mismatch for 'managed': expected '__ManagedMemory with Integer', got 'Array_Byte'
+error E3005: <fragment>:7:19: argument type mismatch for 'managed': expected '__ManagedMemory with Integer', got 'ByteArray'
 ```
 
 <!-- test: error.a-word-buffer-has-no-nameable-array -->

@@ -173,6 +173,76 @@ export function nodesOnACycle(graph CsrGraph) returns BoolArray
 	return walk.onCycle
 end 'nodesOnACycle'
 
+// ⭐ **THE SHORTEST CYCLE THROUGH `start`, AS THE NODES ALONG IT WITH `start` FIRST — or EMPTY when `start`
+// lies on no cycle.** `nodesOnACycle` answers WHETHER, for every node at once; this answers WHICH NODES, for
+// one. They are separate functions because the two questions have separate costs and separate callers: the
+// whether is asked on every compile that declares a generic alias, the which only once a diagnostic naming
+// the cycle is already being written (`ProgramSignatures.aliasCyclePath`).
+//
+// Breadth-first, so what comes back is the SHORTEST cycle through `start`. A diagnostic that RENDERS the
+// path — `Circular typealias dependency: A -> B -> A` — should show the smallest loop that proves the
+// defect, not whichever one a depth-first walk wandered into first. Iterative for `nodesOnACycle`'s reason:
+// the depth is the graph's own, and a chain of N nodes would otherwise be N native frames.
+export function shortestCycleThrough(graph CsrGraph, start CsrIndex) returns CsrColumn
+	// The BFS tree: `reached` is the visited set, `cameFrom` the parent each node was first reached from.
+	// Only nodes the search actually reached are ever read back out of `cameFrom`, so its zero fill is never
+	// mistaken for an answer.
+	var reached = BoolArray.create()
+	reached.resize(graph.nodeCount())
+	var cameFrom = CsrColumn.create()
+	cameFrom.resize(graph.nodeCount())
+
+	var frontier = CsrColumn.create()
+	frontier.push(start)
+	try reached.set(start, value: true) otherwise panic("shortestCycleThrough: start node {start} is outside the graph's own {graph.nodeCount()} nodes")
+
+	var head = 0 as CsrIndex
+	while head < frontier.count() 'eachFrontierNode'
+		let node = try frontier.get(head) otherwise panic("shortestCycleThrough: frontier.get({head}) below its own count()")
+		head = head + 1
+
+		for k in 0 upto graph.degree(node) 'eachNeighbour'
+			let next = graph.neighbour(node, k: k)
+			// An edge back to `start` CLOSES the loop, and the BFS tree already holds the way there.
+			if next == start 'closesTheCycle'
+				return cycleThrough(cameFrom, closedBy: node, start: start)
+			end 'closesTheCycle'
+
+			let alreadyReached = try reached.get(next) otherwise panic("shortestCycleThrough: neighbour {next} of node {node} is outside the graph's own {graph.nodeCount()} nodes")
+			if alreadyReached 'alreadyOnTheFrontier'
+				continue
+			end 'alreadyOnTheFrontier'
+
+			try reached.set(next, value: true) otherwise panic("shortestCycleThrough: neighbour {next} of node {node} is outside the graph's own {graph.nodeCount()} nodes")
+			try cameFrom.set(next, value: node) otherwise panic("shortestCycleThrough: neighbour {next} of node {node} is outside the graph's own {graph.nodeCount()} nodes")
+			frontier.push(next)
+		end 'eachNeighbour'
+	end 'eachFrontierNode'
+
+	return CsrColumn.create()
+end 'shortestCycleThrough'
+
+// The nodes from `start` down to `closedBy` inclusive, read backwards off the BFS tree and handed back in
+// walk order. `closedBy == start` is the one-node cycle — a node that is its own neighbour — and falls out
+// of the same walk without a case of its own.
+function cycleThrough(cameFrom CsrColumn, closedBy CsrIndex, start CsrIndex) returns CsrColumn
+	var backwards = CsrColumn.create()
+	var at = closedBy
+	while at != start 'walkBackUpTheTree'
+		backwards.push(at)
+		at = try cameFrom.get(at) otherwise panic("cycleThrough: node {at} is on the BFS tree but has no recorded parent")
+	end 'walkBackUpTheTree'
+	backwards.push(start)
+
+	var path = CsrColumn.create()
+	for i in 0 upto backwards.count() 'eachNode'
+		let fromTheEnd = backwards.count() - 1 - i
+		path.push(try backwards.get(fromTheEnd) otherwise panic("cycleThrough: backwards.get({fromTheEnd}) below its own count()"))
+	end 'eachNode'
+
+	return path
+end 'cycleThrough'
+
 // Is `node` its own neighbour? The one way a component of ONE node is still a cycle, and the only reason
 // a component's size is not the whole test.
 function nodeNamesItself(graph CsrGraph, node CsrIndex) returns bool

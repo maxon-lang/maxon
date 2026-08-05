@@ -3281,6 +3281,19 @@ export typealias CompiledInstanceNameMap = Map with (GenericInstanceId, ByteArra
 // must not move, while this one exists only to answer "are these two values the same type?".
 export typealias CanonicalInstanceNameMap = Map with (GenericInstanceId, ByteArray)
 
+// ⭐⭐ **THE NAME THE *AUTHOR* WROTE FOR AN INSTANCE — a THIRD map, and the third question about one type.**
+// `CompiledInstanceNameMap` names EMITTED SYMBOLS, `CanonicalInstanceNameMap` answers *"are these two values
+// the same type?"*, and this answers *"what does a DIAGNOSTIC call it?"* — `StringArray`, not `Array_String`.
+// The three are separate because the first two may never move (a symbol name is an ABI fact; an identity is a
+// comparison key) while this one exists only to be read back to a person, and a person did not write
+// `Array_String`.
+//
+// ⚠ **A MISS IS AN ANSWER, NOT AN ABSENCE** (`instanceDisplayName` falls back to the canonical name): an
+// instance the COMPILER minted — `Array with int` behind `[1, 2, 3]`, `Array with __ManagedByte` behind a
+// synthesized buffer, the `Array with Byte` `__ManagedMemory` is bound to — has no source line naming it, so
+// there is no author's spelling to quote and the mint is the only thing that can distinguish it.
+export typealias InstanceDisplayNameMap = Map with (GenericInstanceId, ByteArray)
+
 // ⭐ **THE REVERSE OF `CanonicalInstanceNameMap` — every interned instance's canonical name as a SET, so
 // "is this NAME an instance?" is a probe rather than a walk.** `isCanonicalInstanceName` used to answer it
 // by scanning `0 upto genericInstances.count()`, which its own header justified with *"a program interns a
@@ -3523,6 +3536,19 @@ export type GenericAliasEntry
 	export var nameLine as LineNumber
 	export var nameColumn as ColumnNumber
 	export var filePath as FilePath
+	// ⭐ **WHERE THIS DECLARATION NAMES ITSELF** — the second `A` of `typealias A = Array with A`, which is
+	// the word the author has to change and the anchor a SELF-cycle is blamed at (`specs/type-checking.md`
+	// pins column 26 of that line, the argument, against column 11 for a cycle that runs through other
+	// aliases). Read by `Parser.selfNamingArgToken` because that is the only place the RHS's TOKENS still
+	// exist: `GenericArgNode` carries resolved `MaxonType`s and no positions, and the whole-program cycle walk
+	// runs long after the parser is gone.
+	//
+	// It is an ANCHOR, never an absence: a declaration whose RHS does not spell its own name records its
+	// alias-name token here, so no reader has to decode "did it?" — only `checkGenericAliasCycles` asks, and
+	// only for a cycle it has already proven is the alias alone. Zero for a SYNTHESIZED alias, which is the
+	// same "no source anchor at all" `nameLine` records and is decided in the same place.
+	export var selfRefLine as LineNumber
+	export var selfRefColumn as ColumnNumber
 	// ⭐ **THE DECLARATION'S OWN VISIBILITY (N3)** — the `RangedTypeAlias.visibility` twin, and read for the
 	// same one question: when a file that declares NONE of a contested name reads it, which declaration may
 	// it actually mean (`ProgramSignatures.scopedGenericAliasInstance`, tier 2)? Already put through
@@ -3560,16 +3586,33 @@ export type GenericAliasEntry
 	// declaration, which is every declaration whose base is not `Vector`.
 	export var fixedSize as FixedElementCount
 
-	export static function create(aliasName ByteArray, baseName ByteArray, argCount FieldIndex, args GenericArgNodeArray, elementIsBuffer bool = false, nameLine LineNumber = 0, nameColumn ColumnNumber = 0, filePath FilePath = FilePath from "", visibility Visibility = Visibility.file, fixedSize FixedElementCount = NoFixedSize) returns GenericAliasEntry
-		return Self{aliasName: aliasName, baseName: baseName, argCount: argCount, args: args, elementIsBuffer: elementIsBuffer, nameLine: nameLine, nameColumn: nameColumn, filePath: filePath, visibility: visibility, sweptInstance: 0, sweptInstanceRecorded: false, fixedSize: fixedSize}
+	export static function create(aliasName ByteArray, baseName ByteArray, argCount FieldIndex, args GenericArgNodeArray, elementIsBuffer bool = false, nameLine LineNumber = 0, nameColumn ColumnNumber = 0, filePath FilePath = FilePath from "", visibility Visibility = Visibility.file, fixedSize FixedElementCount = NoFixedSize, selfRefLine LineNumber = 0, selfRefColumn ColumnNumber = 0) returns GenericAliasEntry
+		return Self{aliasName: aliasName, baseName: baseName, argCount: argCount, args: args, elementIsBuffer: elementIsBuffer, nameLine: nameLine, nameColumn: nameColumn, filePath: filePath, visibility: visibility, sweptInstance: 0, sweptInstanceRecorded: false, fixedSize: fixedSize, selfRefLine: selfRefLine, selfRefColumn: selfRefColumn}
 	end 'create'
 
 	// This declaration, carrying the instance the index interned it to — the form `genericAliasDecls`
 	// retains. A COPY rather than a mutation so the parser's own entry, whose instance is not yet knowable,
 	// can never be mistaken for a recorded one.
 	export function recorded(id GenericInstanceId) returns GenericAliasEntry
-		return Self{aliasName: self.aliasName, baseName: self.baseName, argCount: self.argCount, args: self.args, elementIsBuffer: self.elementIsBuffer, nameLine: self.nameLine, nameColumn: self.nameColumn, filePath: self.filePath, visibility: self.visibility, sweptInstance: id, sweptInstanceRecorded: true, fixedSize: self.fixedSize}
+		return Self{aliasName: self.aliasName, baseName: self.baseName, argCount: self.argCount, args: self.args, elementIsBuffer: self.elementIsBuffer, nameLine: self.nameLine, nameColumn: self.nameColumn, filePath: self.filePath, visibility: self.visibility, sweptInstance: id, sweptInstanceRecorded: true, fixedSize: self.fixedSize, selfRefLine: self.selfRefLine, selfRefColumn: self.selfRefColumn}
 	end 'recorded'
+
+	// ⭐⭐ **THIS DECLARATION UNDER A DIFFERENT KEY — the NAME changes and NOTHING ELSE DOES.** Its one caller
+	// is `Parser.qualifiedInnerGenericAlias`, which re-keys a nested alias under its base-qualified spelling
+	// (`Container.ElementArray`); a re-key is not a new declaration and must not lose the declaration's facts.
+	//
+	// ⛔ **IT EXISTS BECAUSE THE HAND-WRITTEN RE-KEY DROPPED SEVEN OF THEM, AND ONE OF THOSE PANICKED THE
+	// COMPILER (review, 2026-08-04).** Rebuilding through `create` took the defaults for `filePath`,
+	// `visibility`, `fixedSize`, both anchors and both self-reference anchors, so a nested alias arrived in
+	// `genericAliasDecls` claiming to have been declared by the file `""` — and `deriveInstanceDisplayNames`
+	// asks every entry's declaring file for its module directory. **MEASURED: two files each declaring a
+	// `type Container` whose nested `ElementArray` denotes a different element contested that base-qualified
+	// name, and `moduleDirectoryOfPathText('')` panicked** — on a program whose real defect is the duplicate
+	// `type` E3006 reports one pass later. A copy that names every field is the only shape that cannot
+	// silently omit one.
+	export function renamedTo(qualifiedName ByteArray) returns GenericAliasEntry
+		return Self{aliasName: qualifiedName, baseName: self.baseName, argCount: self.argCount, args: self.args, elementIsBuffer: self.elementIsBuffer, nameLine: self.nameLine, nameColumn: self.nameColumn, filePath: self.filePath, visibility: self.visibility, sweptInstance: self.sweptInstance, sweptInstanceRecorded: self.sweptInstanceRecorded, fixedSize: self.fixedSize, selfRefLine: self.selfRefLine, selfRefColumn: self.selfRefColumn}
+	end 'renamedTo'
 
 	// The instance this declaration names. Precondition: the entry came from `genericAliasDecls`, which
 	// `recordGenericAlias` fills with `recorded` copies exclusively.
@@ -4148,6 +4191,26 @@ typealias StructNameSet = Set with ByteArray
 // `ProgramSignatures.fileModuleDirectories`.
 typealias FileModuleDirectoryMap = Map with (String, String)
 
+// The module directories a CONTESTED alias name's claimants sit in, for the one question
+// `ProgramSignatures.contestedAliasNamespacesAreDistinct` asks of them: does any two of them coincide?
+typealias ModuleDirectorySet = Set with String
+
+// ⭐⭐ **WHICH FILE DECLARED A FUNCTION WHOSE RETURN TYPE IS STILL A BARE `named`** — see
+// `ProgramSignatures.funcReturnDeclFiles`. Only those: every other recorded return type is already
+// concrete and there is no name left in it for a later reader to resolve as ITS file means.
+typealias FuncReturnDeclFileMap = Map with (ByteArray, FilePath)
+
+// Does this recorded return type still carry a NAME a later reader will have to resolve? Exactly the bare
+// `named` arm: `void` and every concrete tag are already decided, and `Parser.resolveNamedAlias` — the one
+// reader that turns a swept name into a type — takes the same guard, so the column and its spender agree on
+// which declarations matter by construction rather than by two lists staying in step.
+function returnTypeNamesAType(rt MaxonReturnType) returns bool
+	return match rt 'r'
+		void gives false
+		value(inner) gives maxonTypeTag(inner) == ValueTypeTag.named
+	end 'r'
+end 'returnTypeNamesAType'
+
 // Every FREE function's namespace-qualified spelling (N1b). See
 // `ProgramSignatures.namespaceQualifiedFunctions`.
 typealias NamespaceQualifiedFunctionSet = Set with ByteArray
@@ -4254,6 +4317,10 @@ export type ProgramSignatures
 	// for the quadratic this removes. Empty for a program that instantiates no generic.
 	var compiledInstanceNames as CompiledInstanceNameMap
 	var canonicalInstanceNames as CanonicalInstanceNameMap
+	// ⭐ Each interned instance's DISPLAY name — the `typealias` an author declared for it. See
+	// `InstanceDisplayNameMap`. Filled once by `deriveInstanceDisplayNames`, which is the only writer, so the
+	// parse (which fans out per file) only ever reads it.
+	var instanceDisplayNames as InstanceDisplayNameMap
 	// The reverse of `canonicalInstanceNames` — see `CanonicalInstanceNameSet` for the quadratic it removes.
 	// Filled by `indexCanonicalInstanceNames`, which is the ONLY writer, so the set and the watermark below
 	// cannot disagree about which ids are in it.
@@ -4478,6 +4545,30 @@ export type ProgramSignatures
 	// must not pay per call for an answer that is always no. Written by `record`, in BOTH directions, so it can
 	// never outlive the return type it describes.
 	var declaredReturnSurfaces as DeclaredReturnSurfaceMap
+	// ⭐⭐ **WHICH FILE DECLARED EACH FUNCTION WHOSE RECORDED RETURN TYPE IS STILL A BARE `named` — the
+	// column that makes a return type answer to ITS OWN file rather than to its READER'S.**
+	//
+	// ⛔ **WITHOUT IT A CROSS-FILE RETURN OF A CONTESTED GENERIC ALIAS WAS A SILENT WRONG ANSWER, MEASURED.**
+	// Two files each declaring `typealias Bytes = Array with Byte` over a DIFFERENT `Byte` range: one file's
+	// `returns Bytes` function feeding the other's `Bytes` parameter COMPILED, and the callee read a
+	// two-byte-stride record at one-byte stride — `300` came back as **44** (exit 44 on a program the type
+	// system exists to refuse). The sweep records `returns Bytes` before any generic alias is interned, so it
+	// stores a bare `named("Bytes")`; `Parser.resolveNamedAlias` then resolves that name in the CALLING file
+	// (`genericAliasInstanceFrom(name, readerFilePath: self.filePath)`), so the callee's array silently
+	// became the caller's homonym and the two instances compared equal.
+	//
+	// `resolveRecordedGenericAliasTypes` is what spends it, rewriting such a return type to the minted
+	// spelling its declaring file means — the same repair that pass already makes for a struct FIELD and a
+	// union PAYLOAD, whose header states the rule this column supplies the missing input for: **the scope
+	// file is the SLOT's declaring file and never a reader's.** A return type is a slot of the declaring
+	// FUNCTION, and it was the one recorded declared type that pass could not reach.
+	//
+	// ⚠ **ONLY BARE-`named` RETURNS GET AN ENTRY**, `declaredReturnSurfaces`' discipline and its reason: a
+	// `returns int` / `returns bool` / already-concrete return carries no name for a reader to re-resolve, so
+	// there is nothing a rescope could do with its file. Written and MOVED by `record` and by the three sites
+	// that refile a `returnTypes` entry under a new key, so it can never outlive or lag the return type it
+	// describes.
+	var funcReturnDeclFiles as FuncReturnDeclFileMap
 	// ⭐ **EVERY GENERIC-INSTANCE ALIAS WHOSE ELEMENT WAS SPELLED `__ManagedMemory` (A2m)** — written by
 	// `recordGenericAlias`, read by `aliasElementIsBufferSurface`. See `BufferElementAliasNameSet` for why the
 	// key is the alias NAME and can never be the instance.
@@ -4678,7 +4769,7 @@ export type ProgramSignatures
 	// Every index, empty. Split out of `create` only so the seed stamping above reads as the two steps it
 	// is; this is its one caller.
 	static function freshIndexes() returns ProgramSignatures
-		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), structNamesInDeclOrder: ByteArrayArray.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), canonicalInstanceNameIndex: CanonicalInstanceNameSet.create(), canonicalNamesIndexedThrough: 0, tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleAliases: TupleCanonicalNameMap.create(), sawAggregateArrayLiteral: false, sawListFromConstruction: false, genericAliases: GenericAliasMap.create(), contestedGenericAliases: sharedEmptyGenericAliasContests, multiplyDeclaredGenericAliases: sharedEmptyDisagreeingAliasNames, divergedGenericAliasDecl: AliasCycleResult.none, nameableGenericAliases: sharedEmptyNameableGenericAliases, genericAliasSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceNamesInDeclOrder: builtinInterfaceNames(), interfaceDeclIndexByName: builtinInterfaceDeclIndices(), interfaceDeclSites: InterfaceDeclSiteArray.create(), extensionDeclSites: ExtensionDeclSiteArray.create(), conditionalExtensionSkips: ConditionalExtensionSkipMap.create(), sweptConformances: DeclaredConformanceMap.create(), sweptConformancesBuilt: false, extensionMethodConstraints: ExtensionMethodConstraintMap.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcThrows: FuncThrowsMap.create(), funcParamDefaults: ParamDefaultMap.create(), collidingParamDefaults: CollidingParamDefaultNameSet.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), hash: fnvOffsetBasis(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, allFilesFolded: false, rootIsUnderStdlibDirectory: false, constCastTargets: ConstCastTargetSet.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibShadowRenames: StdlibShadowRenameMap.create(), fileModuleDirectories: FileModuleDirectoryMap.create(), namespaceQualifiedFunctions: NamespaceQualifiedFunctionSet.create(), freeFunctionDirectories: FreeFunctionDirectoryMap.create(), contestedFreeFunctions: ContestedFreeFunctionMap.create(), contestedRegistrationNames: ContestedRegistrationNameSet.create()}
+		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), structNamesInDeclOrder: ByteArrayArray.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), instanceDisplayNames: InstanceDisplayNameMap.create(), canonicalInstanceNameIndex: CanonicalInstanceNameSet.create(), canonicalNamesIndexedThrough: 0, tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleAliases: TupleCanonicalNameMap.create(), sawAggregateArrayLiteral: false, sawListFromConstruction: false, genericAliases: GenericAliasMap.create(), contestedGenericAliases: sharedEmptyGenericAliasContests, multiplyDeclaredGenericAliases: sharedEmptyDisagreeingAliasNames, divergedGenericAliasDecl: AliasCycleResult.none, nameableGenericAliases: sharedEmptyNameableGenericAliases, genericAliasSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceNamesInDeclOrder: builtinInterfaceNames(), interfaceDeclIndexByName: builtinInterfaceDeclIndices(), interfaceDeclSites: InterfaceDeclSiteArray.create(), extensionDeclSites: ExtensionDeclSiteArray.create(), conditionalExtensionSkips: ConditionalExtensionSkipMap.create(), sweptConformances: DeclaredConformanceMap.create(), sweptConformancesBuilt: false, extensionMethodConstraints: ExtensionMethodConstraintMap.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcThrows: FuncThrowsMap.create(), funcParamDefaults: ParamDefaultMap.create(), collidingParamDefaults: CollidingParamDefaultNameSet.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), funcReturnDeclFiles: FuncReturnDeclFileMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), hash: fnvOffsetBasis(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, allFilesFolded: false, rootIsUnderStdlibDirectory: false, constCastTargets: ConstCastTargetSet.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibShadowRenames: StdlibShadowRenameMap.create(), fileModuleDirectories: FileModuleDirectoryMap.create(), namespaceQualifiedFunctions: NamespaceQualifiedFunctionSet.create(), freeFunctionDirectories: FreeFunctionDirectoryMap.create(), contestedFreeFunctions: ContestedFreeFunctionMap.create(), contestedRegistrationNames: ContestedRegistrationNameSet.create()}
 	end 'freshIndexes'
 
 	// --- MODULE DIRECTORIES and the ONE visibility decision (N1a) ---
@@ -4695,8 +4786,16 @@ export type ProgramSignatures
 	// reached a visibility question without ever having been swept — and answering `""` would silently place
 	// that file in the root module, where every `module` declaration in the program is visible to it.
 	export function moduleDirectoryOf(path FilePath) returns String
-		return try self.fileModuleDirectories.get(path.toString()) otherwise panic("ProgramSignatures.moduleDirectoryOf: '{path.toString()}' has no module directory — every source path is stamped by `Queries.foldOneFileInto` before any declaration of it is folded")
+		return self.moduleDirectoryOfPathText(path.toString())
 	end 'moduleDirectoryOf'
+
+	// The same answer for a caller already holding the STRINGIFIED path — which is the map's key, so a
+	// `contestedGenericAliases` group (keyed by declaring-file text, `GenericAliasByDeclaringFile`) reads it
+	// without a `FilePath` round trip. Split out rather than probed a second time so the miss, and the
+	// paragraph above explaining why a miss is a compiler bug, exist once.
+	function moduleDirectoryOfPathText(pathText String) returns String
+		return try self.fileModuleDirectories.get(pathText) otherwise panic("ProgramSignatures.moduleDirectoryOf: '{pathText}' has no module directory — every source path is stamped by `Queries.foldOneFileInto` before any declaration of it is folded")
+	end 'moduleDirectoryOfPathText'
 
 	// The `.`-joined NAMESPACE a file is shown as — what `Parser.create` stamps onto `Parser.namespace`, from
 	// which a declaration's qualified spelling is minted (`namespaceQualifiedName`). ⚠ It used to say
@@ -4908,7 +5007,7 @@ export type ProgramSignatures
 	// machinery `mergeArtifact` uses for the identical job — `TypeNameInterner.foldInto` +
 	// `remapMaxonReturnType`. One mechanism, two callers: a second copy of "reconcile a file's ids
 	// into a bigger table" would be free to disagree with this one about what an id means.
-	export function foldFile(scanned FuncReturnTypeEntryArray, aliases RangedTypeAliasArray, functionAliases FunctionTypeAliasArray, structs StructLayoutArray, enums EnumLayoutArray, genericAliasEntries GenericAliasEntryArray, innerAliasEntries InnerAliasEntryArray, methodInnerAliasParamEntries MethodInnerAliasParamEntryArray, interfaceSites InterfaceDeclSiteArray, extensionSites ExtensionDeclSiteArray, bindings TopLevelDeclArray, paramConsumes ParamConsumeEntryArray, paramDefaults ParamDefaultEntryArray, throwsEntries ThrowsClauseEntryArray, freeFunctionNames ByteArrayArray, moduleDirectory String, fileTypeNames TypeNameInterner, isStdlibSource bool)
+	export function foldFile(scanned FuncReturnTypeEntryArray, aliases RangedTypeAliasArray, functionAliases FunctionTypeAliasArray, structs StructLayoutArray, enums EnumLayoutArray, genericAliasEntries GenericAliasEntryArray, innerAliasEntries InnerAliasEntryArray, methodInnerAliasParamEntries MethodInnerAliasParamEntryArray, interfaceSites InterfaceDeclSiteArray, extensionSites ExtensionDeclSiteArray, bindings TopLevelDeclArray, paramConsumes ParamConsumeEntryArray, paramDefaults ParamDefaultEntryArray, throwsEntries ThrowsClauseEntryArray, freeFunctionNames ByteArrayArray, moduleDirectory String, filePath FilePath, fileTypeNames TypeNameInterner, isStdlibSource bool)
 		// ⭐ **THE USER HALF OF THE SHADOW CONTEST (A1s wave 2)** — recorded from the SAME declaration arrays
 		// the registries below are built from, so "what the user declared" and "what the index holds" are one
 		// walk. Every KIND is noted, not just the four nominal ones: the contest is asymmetric on purpose (see
@@ -5068,11 +5167,11 @@ export type ProgramSignatures
 		// `MM leak: 7 allocation(s) remain` on every build, exit 101). Recorded in OPEN.md.
 		if remap.isIdentity 'idsUnchanged'
 			for entry in scanned 'eachUnmapped'
-				self.record(entry.name, returnType: entry.returnType, declaredSurface: entry.declaredSurface)
+				self.record(entry.name, returnType: entry.returnType, declaredSurface: entry.declaredSurface, declFilePath: filePath)
 			end 'eachUnmapped'
 		end 'idsUnchanged' else 'idsMoved'
 			for entry in scanned 'eachRemapped'
-				self.record(entry.name, returnType: remapMaxonReturnType(entry.returnType, remap: remap), declaredSurface: entry.declaredSurface)
+				self.record(entry.name, returnType: remapMaxonReturnType(entry.returnType, remap: remap), declaredSurface: entry.declaredSurface, declFilePath: filePath)
 			end 'eachRemapped'
 		end 'idsMoved'
 
@@ -5116,11 +5215,14 @@ export type ProgramSignatures
 	//
 	// So `declaredReturnSurface` is exact for every name that reaches a call: a name with no entry names the
 	// buffer in no declaration anywhere, and a name with one is either unique or already refused.
-	function record(name ByteArray, returnType MaxonReturnType, declaredSurface DeclaredSurface)
+	function record(name ByteArray, returnType MaxonReturnType, declaredSurface DeclaredSurface, declFilePath FilePath)
 		self.returnTypes.upsert(name, value: returnType)
 		if not surfaceIsPlain(declaredSurface) 'namesTheBufferAlias'
 			self.declaredReturnSurfaces.upsert(name, value: declaredSurface)
 		end 'namesTheBufferAlias'
+		if returnTypeNamesAType(returnType) 'aNameThisFileMustBeAbleToResolveLaterOn'
+			self.funcReturnDeclFiles.upsert(name, value: declFilePath)
+		end 'aNameThisFileMustBeAbleToResolveLaterOn'
 
 		self.hash = self.mixDeclaration(self.hash, name: name, returnType: returnType, declaredSurface: declaredSurface)
 	end 'record'
@@ -6026,6 +6128,9 @@ export type ProgramSignatures
 		if let surface = try self.declaredReturnSurfaces.get(from) 'namesTheBufferAlias'
 			self.declaredReturnSurfaces.upsert(to, value: surface)
 		end 'namesTheBufferAlias'
+		if let declFilePath = try self.funcReturnDeclFiles.get(from) 'returnsANameStillToBeResolved'
+			self.funcReturnDeclFiles.upsert(to, value: declFilePath)
+		end 'returnsANameStillToBeResolved'
 		if let consumes = try self.funcParamConsumes.get(from) 'consumesAParameter'
 			self.funcParamConsumes.upsert(to, value: consumes)
 		end 'consumesAParameter'
@@ -6043,6 +6148,7 @@ export type ProgramSignatures
 	function clearFreeFunctionSweepEntries(name ByteArray)
 		_ = self.returnTypes.remove(name)
 		_ = self.declaredReturnSurfaces.remove(name)
+		_ = self.funcReturnDeclFiles.remove(name)
 		_ = self.funcParamConsumes.remove(name)
 		_ = self.funcParamDefaults.remove(name)
 		_ = self.funcThrows.remove(name)
@@ -6081,6 +6187,9 @@ export type ProgramSignatures
 			if let surface = try self.declaredReturnSurfaces.get(swept) 'namesTheBufferAlias'
 				self.declaredReturnSurfaces.upsert(renamed, value: surface)
 			end 'namesTheBufferAlias'
+			if let declFilePath = try self.funcReturnDeclFiles.get(swept) 'returnsANameStillToBeResolved'
+				self.funcReturnDeclFiles.upsert(renamed, value: declFilePath)
+			end 'returnsANameStillToBeResolved'
 
 			info.renameHelper(slot, renamedTo: renamed)
 		end 'eachCallAlignedSlot'
@@ -7508,16 +7617,46 @@ export type ProgramSignatures
 		return self.genericAliasSites
 	end 'instantiationSites'
 
-	// The concrete type NAME of instance `gid`'s type argument at `position` (P1.7a slice 2a) — the struct/name
-	// a witness table is keyed by, and the type the E3017 check verifies conforms. `mangleTypeArg` renders a
-	// struct/named arg to its bare name; a nested instance to its mangled form (which conforms to nothing at
-	// this slice, so the check reports it as non-conforming — correct).
-	export function instanceArgTypeName(gid GenericInstanceId, position TypeParamId) returns ByteArray
+	// The COMPILED name of instance `gid`'s type argument at `position` (P1.7a slice 2a) — `mangleTypeArg`'s
+	// answer, so a struct/named arg reads as its bare name and a NESTED instance as its mangled form.
+	//
+	// ⚠ **IT IS THE `.rdata`-LABEL SPELLING AND ITS ONE CALLER WANTS EXACTLY THAT**: `ParseStaging`'s E3006
+	// pair-collision message, where the compiled join is the SUBJECT of the sentence (see
+	// `renderInstantiation`). It was named `instanceArgTypeName` and read by three DIAGNOSTICS as well, which
+	// is how `Box_Leaf` — a string no source line holds — reached `expected 'Box_Leaf'`. Those three now ask
+	// `instanceArgDisplayName`; this one keeps the mint because the mint is what collided.
+	export function instanceArgCompiledName(gid GenericInstanceId, position TypeParamId) returns ByteArray
 		return self.mangleTypeArg(self.substitutedInstanceArg(gid, position: position)).toByteArray()
-	end 'instanceArgTypeName'
+	end 'instanceArgCompiledName'
+
+	// ⭐⭐ **HOW A DIAGNOSTIC SPELLS ONE OF AN INSTANCE'S TYPE ARGUMENTS — the display twin of the function
+	// above, under the 2026-08-04 ruling that a diagnostic names a type by the `typealias` the author wrote.**
+	// Read by every message that quotes a type argument: the generic call's `expected` side
+	// (`SemanticCheck.checkTypeParameterArgsAt`), the E3017 `where`-constraint violation, and the withheld
+	// conditional-extension refusal.
+	//
+	// ⚠ **THE NESTED-INSTANCE ARM IS THE WHOLE DIFFERENCE**, and the rest is not written a second time. Every
+	// other arm of the compiled renderer already answers with something an author wrote — a struct or a ranged
+	// alias by its own name, a primitive by its keyword — so there is one rule there and it stays in one place.
+	// MEASURED before this existed, on a program declaring `typealias LeafBox = Box with Leaf`:
+	// `argument type mismatch for 'v': expected 'Box_Leaf', got 'OtherBox'` — one sentence spelling one of its
+	// two types the compiler's way and the other the author's.
+	//
+	// It DELEGATES rather than re-spelling `mangleTypeArg(arg)`, which costs a second `substitutedInstanceArg`
+	// — a bounds-checked array read of an already-built type, on a path that only a REJECTED program reaches.
+	// A second copy of the compiled rule for that is the trade this codebase does not make.
+	export function instanceArgDisplayName(gid GenericInstanceId, position TypeParamId) returns ByteArray
+		let arg = self.substitutedInstanceArg(gid, position: position)
+		if maxonTypeTag(arg) == ValueTypeTag.genericInstance 'nestedInstance'
+			return self.instanceDisplayName(typeNameIdOf(arg))
+		end 'nestedInstance'
+
+		return self.instanceArgCompiledName(gid, position: position)
+	end 'instanceArgDisplayName'
 
 	// How many type arguments instance `gid` carries — `Box with String` ⇒ 1, `Pair with (A, B)` ⇒ 2.
-	// The BOUND on `instanceArgTypeName`/`substitutedInstanceArg`'s `position`, for a reader that walks
+	// The BOUND on `instanceArgCompiledName`/`instanceArgDisplayName`/`substitutedInstanceArg`'s `position`,
+	// for a reader that walks
 	// an instance's whole argument list rather than one constrained parameter of it
 	// (`renderInstantiation`, which spells a colliding instantiation back out in source form).
 	//
@@ -9599,7 +9738,42 @@ export type ProgramSignatures
 				self.resolveRecordedPayloadTypes(layout, caseIndex: caseIndex)
 			end 'eachCase'
 		end 'eachEnum'
+
+		self.resolveRecordedReturnTypes()
 	end 'resolveRecordedGenericAliasTypes'
+
+	// ⭐⭐ **THE THIRD RECORDED DECLARED TYPE, AND THE ONE THAT WAS MISSING** — a function's RETURN type,
+	// resolved against the file that declared the FUNCTION. `funcReturnDeclFiles` carries the measurement of
+	// what its absence cost: a `returns Bytes` crossing a file boundary took the CALLER's `Bytes`, and two
+	// element widths compared equal.
+	//
+	// ⚠ **COLLECTED, THEN APPLIED**, for `normalizeSweptInterfaceTypes`' reason one screen up: this rewrites
+	// the very map it walks, and rewriting a container mid-walk is the one shape a `for … in` cannot promise
+	// anything about. Both columns are empty for every program with no contested alias, which is the whole
+	// corpus.
+	//
+	// ⚠ **IT IS KEYED OFF `returnTypes` AND NOT OFF THE FILE COLUMN**, so a name whose entry has since been
+	// REFILED (a contested free function's namespace-qualified key, a stdlib shadow, a renamed default
+	// helper) is rescoped under the key it actually lives at and never resurrected under the one it left.
+	// The three refile sites move the file column with the return type for exactly that reason.
+	function resolveRecordedReturnTypes()
+		var rescopedCallees = ByteArrayArray.create()
+		var rescopedReturns = MaxonTypeArray.create()
+		for (callee, declared) in self.returnTypes 'eachReturnType'
+			if let declFilePath = try self.funcReturnDeclFiles.get(callee) 'returnsANameStillToBeResolved'
+				if let resolved = try self.contestScopedReturnType(declared, declFilePath: declFilePath) 'namesAContestedAlias'
+					rescopedCallees.push(callee)
+					rescopedReturns.push(resolved)
+				end 'namesAContestedAlias'
+			end 'returnsANameStillToBeResolved'
+		end 'eachReturnType'
+
+		for i in 0 upto rescopedCallees.count() 'applyEach'
+			let callee = try rescopedCallees.get(i) otherwise panic("ProgramSignatures.resolveRecordedReturnTypes: rescopedCallees.get OOB at {i} below count {rescopedCallees.count()}")
+			let resolved = try rescopedReturns.get(i) otherwise panic("ProgramSignatures.resolveRecordedReturnTypes: rescopedReturns.get OOB at {i} — the two columns are pushed in lockstep")
+			self.returnTypes.upsert(callee, value: MaxonReturnType.value(resolved))
+		end 'applyEach'
+	end 'resolveRecordedReturnTypes'
 
 	// ⭐⭐ **RE-TAG EVERY SWEPT `named` THAT DENOTES AN `interface` AS AN `interfaceRef`
 	// (P1.7a-existentials slice 1) — the ONE repair that makes the two type registries agree about what an
@@ -9684,6 +9858,16 @@ export type ProgramSignatures
 			value(inner) then return try self.sweptInterfaceTypeOf(inner)
 		end 'shape'
 	end 'sweptInterfaceReturnOf'
+
+	// The `contestScopedDeclaredType` wrapper of the same shape — the return-type slot's spelling, resolved
+	// against the file that DECLARED the function. See `funcReturnDeclFiles` for the wrong answer this
+	// closes.
+	function contestScopedReturnType(declared MaxonReturnType, declFilePath FilePath) returns MaxonType throws MapError
+		match declared 'shape'
+			void then throw MapError.keyNotFound
+			value(inner) then return try self.contestScopedDeclaredType(inner, slotScopeFilePath: declFilePath)
+		end 'shape'
+	end 'contestScopedReturnType'
 
 	// One union case's payload slots, rewritten by the rule above. Split out because a payload array is
 	// replaced wholesale (`PayloadField` holds `let` columns), where a struct field column is retyped in place.
@@ -10058,8 +10242,8 @@ export type ProgramSignatures
 	export function mangleTypeArg(t MaxonType) returns String
 		let tag = maxonTypeTag(t)
 		// ⚠ The NAME is read raw and NOT through `denotedSlotAggregateName`: this label must be the argument's
-		// SOURCE spelling (`instanceArgTypeName`'s header says the same of the E3017 message it feeds), and
-		// canonicalizing a tuple alias here would rename an emitted symbol. Only the TAG question is shared.
+		// SOURCE spelling, and canonicalizing a tuple alias here would rename an emitted symbol. Only the TAG
+		// question is shared.
 		if tagMayNameAggregate(tag) 'namedOrStruct'
 			return String.from(self.nameOfId(typeNameIdOf(t)))
 		end 'namedOrStruct'
@@ -10085,7 +10269,7 @@ export type ProgramSignatures
 	// ONE reducer shared by the E3017 where-constraint check (`typeConformsTo`) and witness-table
 	// materialization (`materializeWitnessArg`), so the conformance lookup, the table label, and the impl
 	// symbol cannot disagree on whether a `Box with Integer` conforms via `int`. Distinct from
-	// `instanceArgTypeName`, which keeps the SOURCE spelling (`Integer`) for the E3017 MESSAGE — this
+	// `instanceArgDisplayName`, which keeps the SOURCE spelling (`Integer`) for the E3017 MESSAGE — this
 	// canonicalizes only the identity the comparison rests on, exactly as `ConformanceCheck.canonicalTypeName`
 	// does for a method-signature type name.
 	export function conformerTypeArgName(gid GenericInstanceId, position TypeParamId) returns String
@@ -10387,6 +10571,13 @@ export type ProgramSignatures
 	// instances minted later (`internArrayByteInstance`, `builtinInstanceForElement`, …) still derive lazily on
 	// first ask — they are interned during lowering, long after the last parse, so they are never contended.
 	export function deriveInstanceNames()
+		// ⚠ **FIRST, because it composes `fileScopedInstance`, which INTERNS.** It cannot in fact intern
+		// anything new — `settleGenericAliasContest`'s fixpoint runs until exactly this composition over
+		// exactly this array stops adding instances — but ordering it ahead of the warming loop means the
+		// warming loop covers whatever it produces, so the invariant this whole function exists for ("the
+		// parse only ever READS") does not rest on that argument holding.
+		self.deriveInstanceDisplayNames()
+
 		for id in 0 upto self.genericInstances.count() 'eachInstance'
 			_ = self.mangleGenericInstance(id)
 			_ = self.canonicalInstanceName(id)
@@ -10396,6 +10587,85 @@ export type ProgramSignatures
 		// left to whichever reader got there first.
 		self.indexCanonicalInstanceNames()
 	end 'deriveInstanceNames'
+
+	// ⭐⭐ **INSTANCE ⇒ THE `typealias` AN AUTHOR DECLARED FOR IT — the DISPLAY index (see
+	// `InstanceDisplayNameMap`).** Derived from `genericAliasDecls`, which holds every SOURCE declaration and
+	// deliberately holds no compiler-minted one (`rekeyScopedGenericAliases` states that split): a name only
+	// counts here if a person wrote it, because the whole point of the index is to quote a person's own
+	// spelling back at them.
+	//
+	// ⚠ **THE INSTANCE IS `fileScopedInstance`'d BY THE DECLARING FILE**, exactly as `rekeyScopedGenericAliases`
+	// and the contest rounds scope it, so a `typealias Bytes = Array with Byte` in a program where two files
+	// declare `Byte` differently is filed against the instance ITS OWN file means and not against whichever
+	// bare one the sweep interned.
+	//
+	// ⚠ **FIRST DECLARATION WINS WHEN TWO NAMES DENOTE ONE INSTANCE** (`Bytes` and `stdlib/File.maxon`'s
+	// `ByteArray` over the same `Byte`). Both spellings are TRUE of that one type, so there is nothing to
+	// choose between them on correctness; declaration order settles it deterministically and needs no reader
+	// file, which the parse-time askers would otherwise all have to supply.
+	function deriveInstanceDisplayNames()
+		for entry in self.genericAliasDecls 'eachDeclaration'
+			let instance = self.fileScopedInstance(entry.internedInstance(), filePath: entry.filePath)
+			if self.instanceDisplayNames.contains(instance) 'anEarlierDeclarationAlreadyNamedThisType'
+				continue
+			end 'anEarlierDeclarationAlreadyNamedThisType'
+
+			self.instanceDisplayNames.upsert(instance, value: self.unambiguousAliasSpelling(entry))
+		end 'eachDeclaration'
+	end 'deriveInstanceDisplayNames'
+
+	// ⭐⭐ **THE AMBIGUITY RULE, AND IT IS THE USER'S (2026-08-04): "if a name is possibly ambiguous it needs
+	// to contain its full namespace".** A declared alias is ambiguous EXACTLY when this program's declarations
+	// of that name denote DIFFERENT types — which is not a fresh question, it is `contestedGenericAliases`,
+	// already settled whole-program by `settleGenericAliasContest`. So the display asks the same index the
+	// RESOLUTION asks, and a spelling can never claim to distinguish two types the compiler does not itself
+	// hold apart.
+	//
+	// ⚠ **THE QUALIFIER IS THE NAMESPACE ONLY WHEN THE NAMESPACE ACTUALLY DISTINGUISHES THE CLAIMANTS.** A
+	// non-exported `typealias` is FILE-local (`specs/duplicate-typealias.md`) and shv2 scopes a contested one
+	// per DECLARING FILE (`GenericAliasByDeclaringFile`) — not per directory — so two files in one directory,
+	// or two files in the ROOT (whose namespace is empty), share a namespace and a namespace-qualified
+	// spelling would render `expected 'x.Bytes', got 'x.Bytes'`: a refusal with no content, which is the one
+	// outcome this whole door exists to prevent. Where the namespaces are distinct the namespace is what an
+	// author recognizes and is used; where they are not, the declaring FILE is the qualifier, because the file
+	// IS the scope that resolves the name.
+	function unambiguousAliasSpelling(entry GenericAliasEntry) returns ByteArray
+		if not self.contestedGenericAliases.contains(entry.aliasName) 'onlyOneTypeInThisProgramWearsThisName'
+			return entry.aliasName
+		end 'onlyOneTypeInThisProgramWearsThisName'
+
+		if self.contestedAliasNamespacesAreDistinct(entry.aliasName) 'theNamespaceTellsThemApart'
+			return qualifiedCandidateName(self.moduleDirectoryOf(entry.filePath), bare: entry.aliasName).toByteArray()
+		end 'theNamespaceTellsThemApart'
+
+		return joinQualifiedName(entry.filePath.toString().toByteArray(), member: entry.aliasName)
+	end 'unambiguousAliasSpelling'
+
+	// Do the files declaring this contested name sit in DIFFERENT modules? Only then does a namespace-qualified
+	// spelling separate them. Walked rather than indexed: it runs once per contested alias declaration, and the
+	// corpus contests none.
+	function contestedAliasNamespacesAreDistinct(aliasName ByteArray) returns bool
+		let claimants = try self.contestedGenericAliases.get(aliasName) otherwise panic("ProgramSignatures.contestedAliasNamespacesAreDistinct: '{String.from(aliasName)}' is contested but carries no declaring-file group — `recordGenericAliasContest` writes both indexes together")
+		var seen = ModuleDirectorySet.create()
+		for (declFilePath, _) in claimants 'eachClaimant'
+			let moduleDirectory = self.moduleDirectoryOfPathText(declFilePath)
+			if seen.contains(moduleDirectory) 'twoClaimantsShareAModule'
+				return false
+			end 'twoClaimantsShareAModule'
+
+			seen.insert(moduleDirectory)
+		end 'eachClaimant'
+
+		return true
+	end 'contestedAliasNamespacesAreDistinct'
+
+	// ⭐ **HOW A DIAGNOSTIC SPELLS A GENERIC INSTANCE** — the author's `typealias` when the program holds one,
+	// else the canonical mint (see `InstanceDisplayNameMap` for why a miss is an answer). It is the DISPLAY
+	// sibling of `canonicalInstanceName`, never a substitute for it: nothing may COMPARE two of these, because
+	// two aliases legitimately spell one type.
+	export function instanceDisplayName(id GenericInstanceId) returns ByteArray
+		return try self.instanceDisplayNames.get(id) otherwise self.canonicalInstanceName(id)
+	end 'instanceDisplayName'
 
 	// ⭐ **THE NOMINAL IDENTITY OF AN INSTANCE'S SUBSTITUTED TYPE ARGUMENT (P1.7)** — what a parameter
 	// declared with the bare type parameter `T` actually demands at a call made through that instance. It is
@@ -10629,7 +10899,52 @@ export type ProgramSignatures
 		return buildCsr(argOf, to: denotes, nodeCount: self.genericInstances.count())
 	end 'buildInstanceArgGraph'
 
-	// The declaration record of alias `index`, for the E3091 diagnostic's name and anchor.
+	// ⭐⭐ **THE ALIAS NAMES ON THE CYCLE DECLARATION `index` CLOSES, IN WALK ORDER — or EMPTY when the
+	// instance graph proves no cycle through it.** `specs/type-checking.md` states the diagnostic as
+	// `Circular typealias dependency: A -> B -> A`, so the PATH is part of the answer rather than decoration:
+	// it is the only thing that tells the mutual shape from the self one, and the canonical corpus has a case
+	// for each. A message naming only the alias it was reported against says identical words for both.
+	//
+	// ⚠ **AN EMPTY ANSWER IS A REAL ANSWER, AND IT SELECTS THE OTHER DIAGNOSTIC.** `firstCyclicAliasDecl` has
+	// a second door — a CROSS-FILE cycle this graph structurally cannot see, because its edges resolve a
+	// `named` argument through the last-wins map, caught instead by the contest fixpoint failing to converge
+	// (`divergedGenericAliasDecl`). Nothing there proves a cycle or names its members, so there is no path to
+	// render and `checkGenericAliasCycles` keeps E3091 and the sentence that says what IS known. The code and
+	// the words follow from what the compiler can prove, and this function is what knows which.
+	//
+	// ⚠ **IT REBUILDS THE GRAPH, AND SCANS THE DECLARATION LIST PER NODE, DELIBERATELY** —
+	// `instantiationAnchor`'s discipline and its reason: this is asked only once a cycle report is already
+	// being written, never on a program that compiles, so an instance ⇒ alias index would cost every build to
+	// serve none.
+	export function aliasCyclePath(index FieldIndex) returns ByteArrayArray
+		var names = ByteArrayArray.create()
+		for gid in shortestCycleThrough(self.buildInstanceArgGraph(), start: self.genericAliasDeclAt(index).internedInstance()) 'eachNodeOnTheCycle'
+			let name = self.aliasNamingInstance(gid)
+			// A NESTED instance (`Box with (Box with A)`) is interned but no `typealias` spells it, so it has
+			// no name to contribute. Skipping it is v1's rendering too (`collectGenericArgNames` collects
+			// named arguments only) — the path names the declarations the author can go and edit.
+			if not name.isEmpty() 'namedByADeclaration'
+				names.push(name)
+			end 'namedByADeclaration'
+		end 'eachNodeOnTheCycle'
+
+		return names
+	end 'aliasCyclePath'
+
+	// The alias that NAMES an interned instance, or EMPTY when none does. Linear over the declaration list
+	// for `aliasCyclePath`'s stated reason.
+	function aliasNamingInstance(gid GenericInstanceId) returns ByteArray
+		for i in 0 upto self.genericAliasDecls.count() 'eachDecl'
+			let entry = try self.genericAliasDecls.get(i) otherwise panic("aliasNamingInstance: genericAliasDecls.get OOB at {i}")
+			if entry.internedInstance() == gid 'namesIt'
+				return entry.aliasName
+			end 'namesIt'
+		end 'eachDecl'
+
+		return EmptySourceText
+	end 'aliasNamingInstance'
+
+	// The declaration record of alias `index`, for the cycle diagnostic's name and anchor.
 	export function genericAliasDeclAt(index FieldIndex) returns GenericAliasEntry
 		return try self.genericAliasDecls.get(index) otherwise panic("genericAliasDeclAt: genericAliasDecls.get OOB at {index}")
 	end 'genericAliasDeclAt'

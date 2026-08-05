@@ -625,17 +625,17 @@ end 'checkStructFieldTypes'
 // no registered signature (none at M5 — the parser records one per function it
 // builds) is left alone rather than fabricated.
 //
-// The pre-erasure `paramAggregateNames` column (OPEN #54 Slice B2) is carried STRAIGHT
-// THROUGH — it is precisely the union/enum identity that resolving `func.maxonParamTypes`
-// destroys (a `named` union collapses to `integer` here), so it must be read off the
-// SIGNATURE (which the parser captured before this pass) and never re-derived from the
-// now-erased param types.
+// The two pre-erasure name columns — `paramAggregateNames` (OPEN #54 Slice B2) and `paramDeclaredNames`
+// (the display spelling) — are carried STRAIGHT THROUGH. They are precisely what resolving
+// `func.maxonParamTypes` destroys (a `named` union AND a `named` ranged alias both collapse to `integer`
+// here), so they must be read off the SIGNATURE (which the parser captured before this pass) and never
+// re-derived from the now-erased param types.
 function syncResolvedSignature(project Project, func IrFunction)
 	if not project.funcSignatures.contains(func.name) 'noSig'
 		return
 	end 'noSig'
 	let sig = try project.funcSignatures.get(func.name) otherwise panic("syncResolvedSignature: contains({String.from(func.name)}) true but get failed")
-	project.funcSignatures.upsert(func.name, value: FuncSignature.create(sig.paramNames, paramTypes: sourceParamTypesOf(func, declaredCount: sig.paramNames.count()), paramAggregateNames: sig.paramAggregateNames))
+	project.funcSignatures.upsert(func.name, value: FuncSignature.create(sig.paramNames, paramTypes: sourceParamTypesOf(func, declaredCount: sig.paramNames.count()), paramAggregateNames: sig.paramAggregateNames, paramDeclaredNames: sig.paramDeclaredNames))
 end 'syncResolvedSignature'
 
 // ⭐ **THE FUNCTION'S SOURCE PARAMETER TYPES — WHICH IS NOT ALWAYS ALL OF `maxonParamTypes`.** A LIFTED

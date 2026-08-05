@@ -72,7 +72,7 @@ public enum ErrorCode {
   /// </summary>
   ParserLiteralOverflow = 2011,
   /// <summary>
-  /// A declaration cycle: something is defined in terms of itself. Broader than 'import cycle', which is only one of the shapes all three compilers report under it -- the other is a cycle among top-level constants ('let A = B + 1' / 'let B = A + 1'), where no initializer can be evaluated because each waits on the other.
+  /// A declaration cycle: something is defined in terms of itself. Broader than 'import cycle', which is one of several shapes all three compilers report under it -- others are a cycle among top-level constants ('let A = B + 1' / 'let B = A + 1'), where no initializer can be evaluated because each waits on the other, and a circular typealias ('typealias A = Array with A', or a mutual pair), which describes an infinite type with no finite layout. The list is not a roster to keep exhaustive: what the code means is the cycle, not the construct it was found in.
   /// </summary>
   ParserCircularDependency = 2012,
   /// <summary>

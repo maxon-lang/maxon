@@ -3599,9 +3599,25 @@ export type FuncSignature
 	// `named`; it travels by NAME (a `ByteArray`, no interner id — OPEN #52) so the merge fold needs no
 	// remap and `syncResolvedSignature` carries it through untouched.
 	export var paramAggregateNames as ByteArrayArray
+	// ⭐ **THE PRE-ERASURE *SPELLING* OF A `named` PARAMETER — what an author WROTE, for diagnostics alone
+	// (user ruling, 2026-08-04).** One entry per parameter: the interned name of any `named` parameter,
+	// `EmptySourceText` for everything else.
+	//
+	// ⚠ **IT IS NOT A SECOND COPY OF THE COLUMN ABOVE, AND THE TWO ANSWER DIFFERENT QUESTIONS.** That one is
+	// an IDENTITY — non-empty only for a registered boxed union/enum, and read to DECIDE whether two types
+	// agree; this one is a SPELLING, non-empty for a ranged/float alias too, and read only to print. A ranged
+	// alias must stay empty in the identity column (`takeInt(x Integer)` accepts any int-valued argument, and
+	// a nominal comparison there would refuse it) and must be present here (`resolveTypes` collapses
+	// `n Integer` to bare `integer`, so without it the refusal reads `expected 'int'` where
+	// `specs/type-checking.md` pins `expected 'Integer'`). They are BUILT IN ONE WALK, from this column, so
+	// they cannot come to disagree about which parameter is which — see `Parser.paramDeclaredNamesOf`.
+	//
+	// Travels by NAME like its sibling (a `ByteArray`, no interner id), so the merge needs no remap and
+	// `syncResolvedSignature` carries it through untouched.
+	export var paramDeclaredNames as ByteArrayArray
 
-	export static function create(paramNames ByteArrayArray, paramTypes MaxonTypeArray, paramAggregateNames ByteArrayArray) returns FuncSignature
-		return Self{paramNames: paramNames, paramTypes: paramTypes, paramAggregateNames: paramAggregateNames}
+	export static function create(paramNames ByteArrayArray, paramTypes MaxonTypeArray, paramAggregateNames ByteArrayArray, paramDeclaredNames ByteArrayArray) returns FuncSignature
+		return Self{paramNames: paramNames, paramTypes: paramTypes, paramAggregateNames: paramAggregateNames, paramDeclaredNames: paramDeclaredNames}
 	end 'create'
 
 	// The declared parameter count — the arity a call must match.

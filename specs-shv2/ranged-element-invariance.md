@@ -45,11 +45,7 @@ range remain interchangeable — they carry the same invariant and the same widt
 
 ## Tests
 
-<!-- disabled-test: narrow-element-rejected-where-wide-expected -->
-<!-- E3005 INSTANCE-NAME RENDERING rung (re-attributed from P1.8, 2026-07-28) — diagnostics: a generic instance is rendered in E3005 by its COMPILED name (`Array_Wide`),
-     not by the `typealias` the user wrote (`WideCol`). shv2 REJECTS both directions correctly, at the
-     right line:col — only the spelling differs — but it holds no giid -> declared-alias-name reverse
-     map, and one instance may carry several aliases, so which name to print is its own decision. -->
+<!-- test: narrow-element-rejected-where-wide-expected -->
 Passing an `Array` whose element is a NARROW ranged alias to a parameter expecting a WIDE one must be
 a compile error. Before, this compiled and silently truncated.
 ```maxon
@@ -73,11 +69,7 @@ end 'main'
 error E3005: specs/fragments/ranged-element-invariance/narrow-element-rejected-where-wide-expected.test:14:2: argument type mismatch for 'col': expected 'WideCol', got 'NarrowCol'
 ```
 
-<!-- disabled-test: wide-element-rejected-where-narrow-expected -->
-<!-- E3005 INSTANCE-NAME RENDERING rung (re-attributed from P1.8, 2026-07-28) — diagnostics: a generic instance is rendered in E3005 by its COMPILED name (`Array_Wide`),
-     not by the `typealias` the user wrote (`WideCol`). shv2 REJECTS both directions correctly, at the
-     right line:col — only the spelling differs — but it holds no giid -> declared-alias-name reverse
-     map, and one instance may carry several aliases, so which name to print is its own decision. -->
+<!-- test: wide-element-rejected-where-narrow-expected -->
 The rejection is symmetric — neither direction is a subtype of the other.
 ```maxon
 typealias Narrow = int(0 to 16)
@@ -100,11 +92,14 @@ error E3005: specs/fragments/ranged-element-invariance/wide-element-rejected-whe
 ```
 
 <!-- disabled-test: same-range-aliases-remain-interchangeable -->
-<!-- Generic-instance identity is NOMINAL in shv2: `Array with Small` and `Array with AlsoSmall`
-     intern under their NAMES, so two aliases spelling the same range are two instances and the call is
-     rejected E3005 where the reference accepts it (measured: oracle returns 42, shv2 reports
-     `expected 'Array_Small', got 'Array_AlsoSmall'`). Independent of element size — the rejection fires
-     at 8 bytes too. The `for v in col` loop in the case is no longer a blocker (P1.8 slice A). -->
+<!-- needs SAME-RANGE GENERIC-INSTANCE IDENTITY, which lives in `ProgramSignatures.genericInstances`:
+     instance identity is NOMINAL in shv2 — `Array with Small` and `Array with AlsoSmall` intern under
+     their element NAMES, so two aliases spelling the same range are two instances and the call is
+     rejected E3005 where the reference accepts it (measured 2026-08-04: oracle returns 42, shv2 reports
+     `expected 'SmallCol', got 'AlsoSmallCol'`). Independent of element size — the rejection fires at 8
+     bytes too. The two cases above were shelved for a different reason (the E3005 instance-name
+     RENDERING) and that reason is gone; this one is about which types are ONE type, not about how one is
+     spelled, so no display change can reach it. -->
 Two aliases spelling the SAME range are the same type — same invariant, same width — and must still be
 accepted. The fix must not over-reject.
 ```maxon

@@ -272,7 +272,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/character-ownership/print-takes-a-string-not-a-character.test:4:2: 'print' requires a String, but its argument is Character
+error E3005: specs/fragments/character-ownership/print-takes-a-string-not-a-character.test:4:2: argument type mismatch for 'value': expected 'String', got 'Character'
 ```
 
 <!-- test: character-parameter-and-equality -->

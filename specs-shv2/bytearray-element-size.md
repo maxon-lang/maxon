@@ -576,7 +576,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/bytearray-element-size/byte-packed-alias-is-not-interchangeable-with-byte.test:14:9: argument type mismatch for 'b': expected 'Array_Byte', got 'Array_Small'
+error E3005: specs/fragments/bytearray-element-size/byte-packed-alias-is-not-interchangeable-with-byte.test:14:9: argument type mismatch for 'b': expected 'Bytes', got 'Smalls'
 ```
 
 ### ⚠ A `Byte` TWO FILES DISAGREE ABOUT IS TWO ELEMENT TYPES, NOT ONE WIDE ONE
@@ -606,6 +606,14 @@ minted half of the element namespace and the declarable half are disjoint by con
 `int(0 to u8.max)` are one range, so the seven `stdlib/` files that declare `Byte` and the eighty spec
 files that declare it are ONE claimant between them: the element keeps its bare name, `Array_Byte` stays
 `Array_Byte`, and no emitted symbol moves. The last two cases below pin both directions of that.
+
+⚠ **THE MINT IS STILL THE INSTANCE'S IDENTITY; IT IS NO LONGER WHAT AN E3005 *SAYS* (user ruling,
+2026-08-04).** A diagnostic names a type by the `typealias` the AUTHOR declared for it
+(`ProgramSignatures.instanceDisplayName`), so the two cases below now read `expected 'Bytes', got
+'ByteArray'` rather than `expected 'Array_Byte$0_1000', got 'Array_Byte$0_255'` — two spellings a person
+wrote, naming the same two instances the mint named. What they pin is unchanged and is the point: whether
+the program holds ONE element type or TWO. The mint is quoted only where no source line names the instance
+at all, which is the `Array___ManagedByte` and `Array_Byte$0_1000` halves further down.
 
 <!-- test: wide-byte-program-that-never-mentions-file-still-runs -->
 ### A wide `Byte` does not break a program that never touches the stdlib's byte buffers
@@ -730,7 +738,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/bytearray-element-size/a-byte-two-files-disagree-about-is-two-types.test:12:9: argument type mismatch for 'b': expected 'Array_Byte$0_1000', got 'Array_Byte$0_255'
+error E3005: specs/fragments/bytearray-element-size/a-byte-two-files-disagree-about-is-two-types.test:12:9: argument type mismatch for 'b': expected 'Bytes', got 'ByteArray'
 ```
 
 <!-- test: an-agreeing-byte-keeps-the-bare-element-name -->
@@ -748,7 +756,135 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/bytearray-element-size/an-agreeing-byte-keeps-the-bare-element-name.test:10:9: argument type mismatch for 'b': expected 'Array_Byte', got 'int'
+error E3005: specs/fragments/bytearray-element-size/an-agreeing-byte-keeps-the-bare-element-name.test:10:9: argument type mismatch for 'b': expected 'Bytes', got 'int'
+```
+
+### ⚠ WHEN ONE NAME IS TWO TYPES, THE BARE NAME IS NOT AN ANSWER — IT IS THE ABSENCE OF ONE
+
+**The two cases above rest on the bare spelling `Bytes` naming exactly one type in the program.** The
+user ruling of 2026-08-04 says what happens when it does not: *"if a name is possibly ambiguous it
+needs to contain its full namespace"*. Without a qualifier the refusal reads **`expected 'Bytes', got
+'Bytes'`** — a sentence with no content, which is the one outcome the whole display door exists to
+prevent, and which no case in this file could see because every case above is single-file or names
+two DIFFERENT aliases.
+
+The two cases below are the two shapes the qualifier takes, and they are separate because the tier is
+chosen by a MEASUREMENT of the program (`contestedAliasNamespacesAreDistinct`) rather than fixed: a
+namespace only tells the claimants apart when the claimants are in different modules, and a
+non-exported `typealias` is FILE-local, so two files in one directory can contest a name while sharing
+a namespace. Each case would go CONTENTLESS — both sides spelling the same word — if its tier
+regressed.
+
+<!-- test: error.a-contested-alias-is-qualified-by-its-namespace -->
+### Claimants in different modules: the NAMESPACE is the qualifier
+`api/lib.maxon` and `app/main.maxon` each declare `Bytes` over their own `Byte`, and those are two
+element types. The namespaces `api` and `app` are distinct, so they are what an author recognizes and
+what the refusal quotes.
+```maxon
+// --- file: api/lib.maxon
+export typealias Byte = int(0 to 1000)
+export typealias Bytes = Array with Byte
+
+export function takesWide(b Bytes) returns ExitCode
+	return b.count() as ExitCode
+end 'takesWide'
+
+// --- file: app/main.maxon
+typealias Byte = int(0 to u8.max)
+typealias Bytes = Array with Byte
+
+function main() returns ExitCode
+	var mine = Bytes.create()
+	mine.push(65)
+	return takesWide(mine)
+end 'main'
+```
+```maxoncstderr
+error E3005: app/<fragment>:17:9: argument type mismatch for 'b': expected 'api.Bytes', got 'app.Bytes'
+```
+
+<!-- test: error.a-contested-alias-in-one-module-is-qualified-by-its-file -->
+### Claimants in ONE module: the DECLARING FILE is the qualifier
+The same contest with both declarations in `pkg/`, where a namespace-qualified spelling would render
+`expected 'pkg.Bytes'` on both sides — the contentless refusal — so the qualifier falls back to the
+file, which IS the scope that resolves a file-local `typealias`.
+
+⚠ **THE WRONG ARGUMENT HERE IS AN `int`, NOT THE OTHER CLAIMANT, AND THAT IS WHAT MAKES THE CASE
+PINNABLE.** This runner normalizes every staged file's NAME to the `<fragment>` token and keeps only
+its directory (`FragmentPathMapping`), so a refusal quoting both claimants' file paths reads
+`'pkg/<fragment>.Bytes'` on both sides here whatever the compiler emitted — the tier would be
+invisible. Quoting ONE side against an `int` keeps the whole qualifier observable: a regression to the
+bare name reads `expected 'Bytes'` and a regression to the namespace tier reads `expected 'pkg.Bytes'`,
+and both fail this expectation. **MEASURED outside the harness, where file names survive:
+`expected 'temp/amb2/a.maxon.Bytes', got 'temp/amb2/main.maxon.Bytes'` — the two paths are distinct
+and it is the runner's normalization, not the compiler, that collapses them.**
+```maxon
+// --- file: pkg/lib.maxon
+export typealias Byte = int(0 to 1000)
+export typealias Bytes = Array with Byte
+
+export function takesWide(b Bytes) returns ExitCode
+	return b.count() as ExitCode
+end 'takesWide'
+
+// --- file: pkg/main.maxon
+typealias Byte = int(0 to u8.max)
+typealias Bytes = Array with Byte
+
+function main() returns ExitCode
+	var mine = Bytes.create()
+	mine.push(65)
+	return takesWide(7) + mine.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: pkg/<fragment>:17:9: argument type mismatch for 'b': expected 'pkg/<fragment>.Bytes', got 'int'
+```
+
+<!-- test: error.a-returned-bytes-answers-to-the-declaring-file-not-the-caller -->
+### A RETURNED `Bytes` is the callee's, not the caller's
+⛔ **THIS PROGRAM COMPILED AND RAN, AND ITS ANSWER WAS WRONG — MEASURED.** `wide.maxon` builds an
+`Array with int(0 to 1000)` (two-byte stride) holding **300**; `main.maxon` reads it through a
+parameter declared over its OWN `int(0 to u8.max)` (one-byte stride) and got **44** — the low byte —
+on a program the whole element-identity family exists to refuse. Both other directions of the same
+contest were already refused (`a-byte-two-files-disagree-about-is-two-types`, and the two cases
+above), so what this pins is not the RULE but the one door the rule could not reach.
+
+The declaration sweep records `returns Bytes` before any generic alias is interned, so it stores a
+bare `named("Bytes")` — and the CALLER's parse then resolved that name as ITS file means
+(`Parser.resolveNamedAlias` asks `genericAliasInstanceFrom(name, readerFilePath: self.filePath)`).
+A struct FIELD and a union PAYLOAD were already re-resolved against their own declaring file
+(`resolveRecordedGenericAliasTypes`, whose header states the rule: *the scope file is the SLOT's
+declaring file and never a reader's*); a return type is a slot of the declaring FUNCTION and was the
+one recorded declared type that pass did not reach.
+The two files sit in different modules so the refusal spells both sides apart — the runner normalizes a
+staged file's NAME away but keeps its directory, so a same-directory pair would read `<fragment>.Bytes`
+on both sides and say nothing about which instance won.
+```maxon
+// --- file: api/wide.maxon
+typealias Byte = int(0 to 1000)
+typealias Bytes = Array with Byte
+
+export function makeWide() returns Bytes
+	var b = Bytes.create()
+	b.push(300)
+	return b
+end 'makeWide'
+
+// --- file: app/main.maxon
+typealias Byte = int(0 to u8.max)
+typealias Bytes = Array with Byte
+
+function takesNarrow(b Bytes) returns ExitCode
+	return try b.get(0) otherwise 0
+end 'takesNarrow'
+
+function main() returns ExitCode
+	return takesNarrow(makeWide())
+end 'main'
+```
+```maxoncstderr
+error E3005: app/<fragment>:21:9: argument type mismatch for 'b': expected 'app.Bytes', got 'api.Bytes'
 ```
 
 ### ⚠ THE READER'S OWN `Byte` DECIDES, AND THE MINT IS NEVER QUOTED BACK AT THE AUTHOR
@@ -882,17 +1018,24 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:23:10: argument type mismatch for 'b': expected 'Array_Byte$0_255', got 'Array_Byte$0_1000'
+error E3005: <fragment>:23:10: argument type mismatch for 'b': expected 'ByteArray', got 'Array_Byte$0_1000'
 ```
 
-### The MINT is an internal spelling, and no diagnostic may quote it
+### The MINT is an internal spelling, and a diagnostic quotes it only when nothing else can tell two types apart
 
 `Byte$0_255` is the compiler's name for ONE declaration of `Byte`; it is unspellable in source
-(`SignatureIndex.RangeQualifiedAliasSeparator`) and no author ever wrote it. A TYPE-IDENTITY message
-must still show it — `expected 'Array_Byte$0_1000', got 'Array_Byte$0_255'` above is the whole
-content of that refusal, and the bare spelling would read `expected 'Array_Byte', got 'Array_Byte'`.
-A RANGE message must not: it quotes a `typealias` back at the author, and its bounds are printed in
-the same sentence, so the suffix carried nothing the reader had not already been told.
+(`SignatureIndex.RangeQualifiedAliasSeparator`) and no author ever wrote it. **A TYPE-IDENTITY message
+prefers the `typealias` the author DID write** (user ruling, 2026-08-04 — `ProgramSignatures.instanceDisplayName`),
+which is why the case above reads `expected 'ByteArray'`: `stdlib/File.maxon` declares
+`export typealias ByteArray = Array with Byte` over the instance the parameter is typed at, and that is a
+name the program contains. The `got` half has no such name — `"ab".toByteArray()` mints
+`Array with Byte$0_1000` and no line of either file declares an alias for it — so the mint stands there,
+and it must: the bare spelling would read `expected 'Array_Byte', got 'Array_Byte'`, a refusal with no
+content. **That is the whole rule: an author's spelling where one exists, the mint where none does, and
+never a message whose two halves are the same string.**
+A RANGE message quotes the mint in neither case: it quotes a `typealias` back at the author, and its
+bounds are printed in the same sentence, so the suffix carried nothing the reader had not already been
+told.
 
 ⛔ **MEASURED (N2 review) before `SignatureIndex.sourceSpelledAliasName` existed**, on the two cases
 below: `Value 2000 is outside the range of 'Byte$0_1000' (int(0 to 1000))` and
@@ -969,6 +1112,11 @@ below also reproduce on `origin/main` with none of N2 applied, so neither is N2'
 * a match arm — `E3005 match arms give incompatible types: 'Array___ManagedByte' vs 'Array_Byte'`
 * a struct-literal field store — `E3005 cannot assign 'Array___ManagedByte' to variable 'Holder.mem' of type 'Array_Byte'`
 * a generic type-parameter argument — `E3005 argument type mismatch for 'item': expected 'Bytes', got 'Array___ManagedByte'`
+
+⚠ Those six sentences are QUOTED AS MEASURED and predate the display rule of 2026-08-04, so the DECLARED side
+of each still reads `Array_Byte` where it would now read the `typealias` its program wrote. The `got` side is
+unchanged in every one — a compiler-synthesized buffer has no declaration to quote, so its canonical mint IS
+its display name. The reading here is about WHICH DOORS asked the boundary, which no spelling changes.
 
 The BOOTSTRAP compiles every one of them. The cure is the door asked ONCE — `aggregatesConflict` now takes
 the (tag, nameId) pair beside each side's aggregate name and folds the byte boundary in, so a site cannot
@@ -1085,7 +1233,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:11:9: argument type mismatch for 'b': expected 'Array_Byte$0_200', got 'Array___ManagedByte'
+error E3005: <fragment>:11:9: argument type mismatch for 'b': expected 'Bytes', got 'Array___ManagedByte'
 ```
 
 ### ⛔ THE EIGHTH SITE — OVERLOAD SCORING — DOES HAVE A DISTINGUISHING CASE
@@ -1099,7 +1247,9 @@ parameter.**
 ⚠ MEASURED on this branch, by putting the bare `namedAggregatesConflict` back into `overloadArgTypeFit`
 alone and rebuilding: the program below stops compiling with
 `E3005 argument type mismatch for 'x': expected 'Array_Integer', got 'Array___ManagedByte'` — quoting `x`,
-the parameter of the overload the call was never written against. With the shared door in place it compiles
+the parameter of the overload the call was never written against. (That measurement predates the display
+rule of 2026-08-04; the same refusal would now name the author's `typealias Ints` on the expected side. The
+reading is about WHICH parameter is quoted, which no spelling changes.) With the shared door in place it compiles
 and picks the `__ManagedMemory` candidate. So the eighth site is load-bearing exactly like the other seven,
 and it is now pinned rather than argued about.
 
@@ -1467,7 +1617,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:13:11: argument type mismatch for 'other': expected 'Array_Byte$0_100', got 'Array___ManagedByte'
+error E3005: <fragment>:13:4: argument type mismatch for 'other': expected 'Bytes', got 'Array___ManagedByte'
 ```
 
 <!-- test: a-byte-that-holds-every-byte-still-appends-a-synthesized-buffer -->

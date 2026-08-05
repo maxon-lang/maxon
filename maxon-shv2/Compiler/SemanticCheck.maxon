@@ -2193,7 +2193,7 @@ function checkIndirectCallArgs(project Project, func IrFunction, opIndex OpIndex
 		let paramType = try shape.paramTypes.get(i) otherwise panic("checkIndirectCallArgs: paramTypes.get OOB at {i} — the arity check above proved the counts equal")
 		// A function TYPE carries no pre-erasure union/enum identity (see `checkOneArgType`), so the
 		// aggregate carrier is empty and a union parameter is checked structurally.
-		checkOneArgType(project, func: func, paramType: paramType, preErasedAggregate: EmptySourceText, paramName: EmptySourceText, position: i, argId: argId, callRange: callRange, filePath: func.sourceFilePath)
+		checkOneArgType(project, func: func, paramType: paramType, preErasedAggregate: EmptySourceText, declaredParamName: EmptySourceText, paramName: EmptySourceText, position: i, argId: argId, callRange: callRange, filePath: func.sourceFilePath)
 	end 'eachArg'
 end 'checkIndirectCallArgs'
 
@@ -2600,7 +2600,12 @@ function checkTypeParameterArgsAt(project Project, func IrFunction, gid GenericI
 			// they differ — a scalar / `String` / ranged-alias argument, whose identity is deliberately
 			// empty — this is the only one that can say `String` rather than `type parameter`. It is asked
 			// on the FAILURE path alone, so the rendering costs a rejected program and nothing else.
-			reportPositioned(project, code: ErrorCode.typeMismatch, message: argTypeMismatchMessage(paramName, position: i, expected: String.from(signatures.instanceArgTypeName(gid, position: position)), got: aggregateArgDisplay(got, tag: argTag)), line: callRange.line, column: callRange.column, filePath: filePath)
+			//
+			// ⚠ It asks the DISPLAY renderer, so the two halves of this one sentence are spelled the same
+			// way (user ruling, 2026-08-04). The compiled twin read `expected 'Box_Leaf', got 'OtherBox'`
+			// on a program that declares `typealias LeafBox = Box with Leaf` — the `got` side quoting the
+			// author and the `expected` side quoting the mangler.
+			reportPositioned(project, code: ErrorCode.typeMismatch, message: argTypeMismatchMessage(paramName, position: i, expected: String.from(signatures.instanceArgDisplayName(gid, position: position)), got: typeDisplayName(project, tag: argTag, nameId: argNameId)), line: callRange.line, column: callRange.column, filePath: filePath)
 			return
 		end 'wrongTypeArgument'
 
@@ -2642,7 +2647,9 @@ function checkTypeParameterArgsAt(project Project, func IrFunction, gid GenericI
 			continue
 		end 'nominalArgumentAlreadyMatched'
 
-		if checkArgAgainstDeclaredTag(project, argTag: argTag, declaredTag: maxonTypeTag(substituted), paramName: paramName, position: i, callRange: callRange, filePath: filePath) != DeclaredTypeMatch.ok 'refusedBySubstitutedType'
+		// The substituted type argument carries no pre-erasure carrier of either kind: it is the INSTANCE's own
+		// argument type, read live out of the signature index rather than off a declaration this pass ever saw.
+		if checkArgAgainstDeclaredTag(project, argTag: argTag, argNameId: argNameId, declaredType: substituted, declaredAggregate: EmptySourceText, declaredName: EmptySourceText, paramName: paramName, position: i, callRange: callRange, filePath: filePath) != DeclaredTypeMatch.ok 'refusedBySubstitutedType'
 			return
 		end 'refusedBySubstitutedType'
 	end 'eachArg'
@@ -2690,7 +2697,7 @@ end 'checkPerInstanceArgs'
 // The body of the per-instance argument check once the callee is known to declare an inner-alias parameter.
 // The receiver's instance alias re-qualifies each inner-alias parameter; the argument's own aggregate name
 // (its per-instance identity, or empty) is compared against it with the SAME `namedAggregatesConflict` rule
-// and `aggregateArgDisplay` wording `checkArgTypes` uses on its own `aggregateNameFor` result — a
+// and `typeDisplayName` wording `checkArgTypes` uses on its own `aggregateNameFor` result — a
 // per-instance alias IS a nominal aggregate here, so the two aggregate-argument checks stay one rule (a
 // future narrower-range compatibility rule lands in one place, not two).
 //
@@ -2729,7 +2736,7 @@ function checkPerInstanceArgsWith(project Project, func IrFunction, sig FuncSign
 		let expected = joinQualifiedName(receiverAlias, member: member)
 		if namedAggregatesConflict(expected, got: got) 'wrongInstance'
 			let paramName = try sig.paramNames.get(i) otherwise panic("checkPerInstanceArgsWith: paramNames.get OOB at {i}")
-			reportPositioned(project, code: ErrorCode.typeMismatch, message: argTypeMismatchMessage(paramName, position: i, expected: String.from(expected), got: aggregateArgDisplay(got, tag: argTag)), line: callRange.line, column: callRange.column, filePath: filePath)
+			reportPositioned(project, code: ErrorCode.typeMismatch, message: argTypeMismatchMessage(paramName, position: i, expected: String.from(expected), got: typeDisplayName(project, tag: argTag, nameId: argNameId)), line: callRange.line, column: callRange.column, filePath: filePath)
 			return
 		end 'wrongInstance'
 	end 'eachArg'
@@ -2920,9 +2927,11 @@ function checkArgTypes(project Project, func IrFunction, sig FuncSignature, argI
 			continue
 		end 'receiverArg'
 
-		// The pre-erasure UNION/ENUM identity a DIRECT call's signature carries; see `checkOneArgType`.
+		// The two pre-erasure columns a DIRECT call's signature carries — the UNION/ENUM identity and the
+		// DECLARED SPELLING; see `checkOneArgType`.
 		let preErasedAggregate = try sig.paramAggregateNames.get(i) otherwise panic("checkArgTypes: paramAggregateNames.get OOB at {i} — a signature's param columns (names, types, aggregate names) are built in lockstep")
-		checkOneArgType(project, func: func, paramType: paramType, preErasedAggregate: preErasedAggregate, paramName: paramName, position: i, argId: argId, callRange: callRange, filePath: filePath)
+		let declaredParamName = try sig.paramDeclaredNames.get(i) otherwise panic("checkArgTypes: paramDeclaredNames.get OOB at {i} — a signature's param columns (names, types, aggregate names, declared names) are built in lockstep")
+		checkOneArgType(project, func: func, paramType: paramType, preErasedAggregate: preErasedAggregate, declaredParamName: declaredParamName, paramName: paramName, position: i, argId: argId, callRange: callRange, filePath: filePath)
 	end 'eachArg'
 end 'checkArgTypes'
 
@@ -3095,7 +3104,7 @@ function checkOneReturnedValue(project Project, func IrFunction, value ValueId, 
 	match existentialWideningVerdict(project, valueTag: valueTag, valueNameId: valueNameId, interfaceName: interfaceName) 'widening'
 		widens then break 'widening'
 		floatHasNoValueHalf then reportPositioned(project, code: ErrorCode.floatWidenedToExistential, message: "Cannot return a `float` from '{String.from(func.name)}', which is declared to return the interface type '{displayName}': {floatHasNoValueHalfReason(displayName)}, or declare the return type as `float`", line: retRange.line, column: retRange.column, filePath: func.sourceFilePath)
-		doesNotConform then reportPositioned(project, code: ErrorCode.typeMismatch, message: nonConformingMessage("return type mismatch in '{String.from(func.name)}'", conformer: aggregateArgDisplay(aggregateNameFor(project, tag: valueTag, nameId: valueNameId), tag: valueTag), interfaceName: displayName), line: retRange.line, column: retRange.column, filePath: func.sourceFilePath)
+		doesNotConform then reportPositioned(project, code: ErrorCode.typeMismatch, message: nonConformingMessage("return type mismatch in '{String.from(func.name)}'", conformer: typeDisplayName(project, tag: valueTag, nameId: valueNameId), interfaceName: displayName), line: retRange.line, column: retRange.column, filePath: func.sourceFilePath)
 	end 'widening'
 end 'checkOneReturnedValue'
 
@@ -3111,7 +3120,7 @@ end 'checkOneReturnedValue'
 // indirect call has none, because a function TYPE's stored parameters are not a `FuncSignature` — so a
 // union-parameter function type is checked structurally and not nominally there. That is strictly more
 // than the nothing it got before, and it is the bound of what a `FunctionShape` can say.
-function checkOneArgType(project Project, func IrFunction, paramType MaxonType, preErasedAggregate ByteArray, paramName ByteArray, position ParamCount, argId ValueId, callRange SourceRange, filePath FilePath)
+function checkOneArgType(project Project, func IrFunction, paramType MaxonType, preErasedAggregate ByteArray, declaredParamName ByteArray, paramName ByteArray, position ParamCount, argId ValueId, callRange SourceRange, filePath FilePath)
 	let argTag = try func.valueTags.get(argId) otherwise panic("checkOneArgType: value v{argId} of function '{String.from(func.name)}' has no recorded type — every SSA value must be minted through Parser.mintValue")
 	let argNameId = try func.valueNameIds.get(argId) otherwise panic("checkOneArgType: value v{argId} of function '{String.from(func.name)}' has no recorded type name — the two type columns are minted in lockstep")
 	let paramTag = maxonTypeTag(paramType)
@@ -3132,7 +3141,7 @@ function checkOneArgType(project Project, func IrFunction, paramType MaxonType, 
 		match existentialWideningVerdict(project, valueTag: argTag, valueNameId: argNameId, interfaceName: interfaceName) 'widening'
 			widens then break 'widening'
 			floatHasNoValueHalf then reportPositioned(project, code: ErrorCode.floatWidenedToExistential, message: "Cannot pass a `float` as {argParamLabel(paramName, position: position)}, which is declared at the interface type '{displayName}': {floatHasNoValueHalfReason(displayName)}, or take the parameter as a `float`", line: callRange.line, column: callRange.column, filePath: filePath)
-			doesNotConform then reportPositioned(project, code: ErrorCode.typeMismatch, message: nonConformingMessage("argument type mismatch for {argParamLabel(paramName, position: position)}", conformer: aggregateArgDisplay(aggregateNameFor(project, tag: argTag, nameId: argNameId), tag: argTag), interfaceName: displayName), line: callRange.line, column: callRange.column, filePath: filePath)
+			doesNotConform then reportPositioned(project, code: ErrorCode.typeMismatch, message: nonConformingMessage("argument type mismatch for {argParamLabel(paramName, position: position)}", conformer: typeDisplayName(project, tag: argTag, nameId: argNameId), interfaceName: displayName), line: callRange.line, column: callRange.column, filePath: filePath)
 		end 'widening'
 		return
 	end 'existentialParam'
@@ -3170,7 +3179,7 @@ function checkOneArgType(project Project, func IrFunction, paramType MaxonType, 
 		// carries cannot fire here: it needs an EMPTY `expectedAggregate`, and an empty one only reaches this
 		// line through `argAggregateCannotDecay`, which has already answered the same question wider.
 		if programSignaturesIn(project, asker: "checkOneArgType").aggregatesConflict(expectedAggregate, expectedTag: paramTag, expectedNameId: typeNameIdOf(paramType), got: gotAggregate, gotTag: argTag, gotNameId: argNameId) 'aggregateArgMismatch'
-			reportPositioned(project, code: ErrorCode.typeMismatch, message: argTypeMismatchMessage(paramName, position: position, expected: String.from(expectedAggregate) if not expectedAggregate.isEmpty() else typeTagName(paramTag), got: aggregateArgDisplay(gotAggregate, tag: argTag)), line: callRange.line, column: callRange.column, filePath: filePath)
+			reportPositioned(project, code: ErrorCode.typeMismatch, message: argTypeMismatchMessage(paramName, position: position, expected: paramDisplayName(project, paramType: paramType, paramTag: paramTag, aggregate: expectedAggregate, declaredName: declaredParamName, argTag: argTag), got: typeDisplayName(project, tag: argTag, nameId: argNameId)), line: callRange.line, column: callRange.column, filePath: filePath)
 			return
 		end 'aggregateArgMismatch'
 	end 'aggregateComparable'
@@ -3189,7 +3198,7 @@ function checkOneArgType(project Project, func IrFunction, paramType MaxonType, 
 		end 'signatureMismatch'
 	end 'functionArg'
 
-	_ = checkArgAgainstDeclaredTag(project, argTag: argTag, declaredTag: paramTag, paramName: paramName, position: position, callRange: callRange, filePath: filePath)
+	_ = checkArgAgainstDeclaredTag(project, argTag: argTag, argNameId: argNameId, declaredType: paramType, declaredAggregate: expectedAggregate, declaredName: declaredParamName, paramName: paramName, position: position, callRange: callRange, filePath: filePath)
 end 'checkOneArgType'
 
 // ⭐ **THE COERCION RULE ON ONE ARGUMENT, AND ITS FOUR WORDINGS — STATED ONCE FOR THE THREE SITES THAT
@@ -3206,12 +3215,26 @@ end 'checkOneArgType'
 //
 // It ANSWERS the verdict rather than swallowing it, because a caller walking several arguments must stop
 // at the first one it refused — one diagnostic per call, the same bound the aggregate arm above it keeps.
-function checkArgAgainstDeclaredTag(project Project, argTag ValueTypeTag, declaredTag ValueTypeTag, paramName ByteArray, position ParamCount, callRange SourceRange, filePath FilePath) returns DeclaredTypeMatch
+// ⚠ **THE PARAMETER ARRIVES AS ITS PIECES AND IS RENDERED ONLY INSIDE THE REPORTING ARMS**, which is
+// `argParamLabel`'s discipline for `argParamLabel`'s measured reason: this runs on EVERY argument of EVERY
+// call in the program, and `paramDisplayName` builds a `String`. The pieces are values the caller already
+// holds, so passing them costs nothing where rendering them up front would cost an allocation per argument.
+function checkArgAgainstDeclaredTag(project Project, argTag ValueTypeTag, argNameId TypeNameId, declaredType MaxonType, declaredAggregate ByteArray, declaredName ByteArray, paramName ByteArray, position ParamCount, callRange SourceRange, filePath FilePath) returns DeclaredTypeMatch
+	let declaredTag = maxonTypeTag(declaredType)
 	let verdict = checkDeclaredType(argTag, declared: declaredTag)
 	match verdict 'declared'
 		ok then break 'declared'
-		mismatch then reportPositioned(project, code: ErrorCode.typeMismatch, message: argTypeMismatchMessage(paramName, position: position, expected: typeTagName(declaredTag), got: typeTagName(argTag)), line: callRange.line, column: callRange.column, filePath: filePath)
-		// The parameter is NAMED, unlike the parser's three sites, because the reader's next
+		mismatch then reportPositioned(project, code: ErrorCode.typeMismatch, message: argTypeMismatchMessage(paramName, position: position, expected: paramDisplayName(project, paramType: declaredType, paramTag: declaredTag, aggregate: declaredAggregate, declaredName: declaredName, argTag: argTag), got: typeDisplayName(project, tag: argTag, nameId: argNameId)), line: callRange.line, column: callRange.column, filePath: filePath)
+		// ⚠ **THE TWO ARMS BELOW SPELL THE PARAMETER BY ITS RESOLVED CLASS WORD AND NOT BY ITS DECLARATION,
+		// AND THAT IS THE CANONICAL COROLLARY OF THE DISPLAY RULE RATHER THAN AN EXCEPTION TO IT.** Each is
+		// ONE SENTENCE WITH SEVERAL DOORS, and every other door of each is a place with no parameter to name:
+		// `specs/implicit-type-conversion.md` pins `cannot implicitly convert 'float' to 'int'` at a
+		// `x Integer` PARAMETER and at the return, both field doors, the global and the local, all `'int'`;
+		// `specs/first-class-functions.md` pins `which holds 'int'` at a `loc Integer` LOCAL, a global, a
+		// field and a return. An argument door that answered `'Integer'` alone would make one rule read two
+		// ways by which door the value entered — the defect `SlotMismatchVoice` records one tier down.
+		//
+		// The parameter is still NAMED, unlike the parser's three sites, because the reader's next
 		// question is which argument — but the rule's own sentence is `implicitNarrowingMessage`'s,
 		// shared verbatim, so the four sites cannot come to explain one rule four ways.
 		narrowsFloatToInt then reportPositioned(project, code: ErrorCode.semanticUnsafeCast, message: "argument {argParamLabel(paramName, position: position)}: {implicitNarrowingMessage(typeTagName(argTag), targetType: typeTagName(declaredTag))}", line: callRange.line, column: callRange.column, filePath: filePath)
@@ -3327,18 +3350,83 @@ function aggregateNameFor(project Project, tag ValueTypeTag, nameId TypeNameId) 
 	return EmptySourceText
 end 'aggregateNameFor'
 
-// How the ARGUMENT reads in the identity diagnostic: its aggregate NAME when it has one (`BoxB`), else
-// the scalar TYPE it actually is (`int` for a bare integer meeting a union parameter). An aggregate
-// meeting a SCALAR is a real conflict `namedAggregatesConflict` reports, and the reference names the
-// scalar there ("got 'int'"), so a bare `got ''` from an empty aggregate name would be strictly worse
-// text for the same rejection. The EXPECTED side never needs this — the check only runs once it holds a
-// non-empty aggregate name for the parameter.
-function aggregateArgDisplay(aggregate ByteArray, tag ValueTypeTag) returns String
-	if aggregate.isEmpty() 'scalar'
-		return typeTagName(tag)
-	end 'scalar'
-	return String.from(aggregate)
-end 'aggregateArgDisplay'
+// ⭐⭐ **THE DISPLAY TWIN OF `aggregateNameFor`, AND THE WHOLE-PROGRAM HALF OF ONE RULE (user ruling,
+// 2026-08-04): a diagnostic names a type the way the AUTHOR WROTE IT.** `aggregateNameFor` answers with the
+// IDENTITY the checks compare on, and for a generic instance that identity is the canonical `Array_String` —
+// a name no source line holds. The author wrote `typealias StringArray = Array with String`, and
+// `specs/type-checking.md` pins `expected 'StringArray'`.
+//
+// Every other tag already answers with something written: a struct/interface/registered union by its declared
+// name, a scalar by the primitive an author sees. So the instance arm is the whole difference, and everything
+// else routes through the identity chain rather than re-deciding it.
+//
+// ⚠ **NOTHING MAY COMPARE TWO OF THESE.** Two `typealias`es legitimately spell one instance, so equal
+// identities can render as different strings and vice versa — `aggregatesConflict` is still the only door that
+// decides whether two types are one. This function is read BY diagnostics and by nothing else.
+//
+// ⚠ The parser tier's twin is `Parser.displayTypeNameOf`; the two exist for the reason `aggregateNameOf` and
+// `aggregateNameFor` do (different tier, different interner), and both quote the instance name out of the one
+// whole-program index, so they cannot spell a type two ways. **The twinning stops at the LOOKUP and the
+// instance arm — the tail is `displayNameOfAggregate`, shared, because a tag and an already-resolved name
+// belong to no tier.**
+function typeDisplayName(project Project, tag ValueTypeTag, nameId TypeNameId) returns String
+	if tag == ValueTypeTag.genericInstance 'genericInstance'
+		return String.from(programSignaturesIn(project, asker: "typeDisplayName").instanceDisplayName(nameId))
+	end 'genericInstance'
+
+	// Its aggregate NAME when it has one (`BoxB`), else the scalar TYPE it actually is (`int` for a bare
+	// integer meeting a union parameter).
+	return displayNameOfAggregate(tag, aggregate: aggregateNameFor(project, tag: tag, nameId: nameId))
+end 'typeDisplayName'
+
+// ⭐⭐ **HOW THE *PARAMETER* SIDE OF AN ARGUMENT REFUSAL IS SPELLED — the display door's other half.** It
+// cannot simply be `typeDisplayName` of the parameter's type, because `resolveTypes` has already run over a
+// signature by the time this pass reads it and has erased two of the three things an author could have
+// written: a boxed union/enum parameter and a RANGED alias parameter are both bare `integer` here. Each side
+// therefore arrives with the carrier that survived the erasure —
+//
+//   • `aggregate`  — the pre-erasure union/enum IDENTITY (`FuncSignature.paramAggregateNames`), which is also
+//                    what the mismatch was DECIDED on, so the sentence names the thing that was compared;
+//   • `declaredName` — the pre-erasure SPELLING (`FuncSignature.paramDeclaredNames`), which is all that is
+//                    left of `n Integer` once the alias has resolved away.
+//
+// ⚠ The instance arm comes FIRST and reads the type rather than `aggregate`, because for a generic instance
+// `aggregate` holds the canonical identity (`Array_Integer`) and the author wrote `IntegerArray`.
+//
+// ⭐⭐ **THE RANGED-ALIAS ARM IS THE ONE THAT ASKS ABOUT THE *ARGUMENT*, AND THE CANONICAL CORPUS IS WHY.**
+// Two canonical specs pin the SAME shape — a scalar argument at a parameter declared `x Integer`, over
+// `typealias Integer = int(i64.min to i64.max)` — and they pin DIFFERENT spellings:
+//
+//   • `specs/type-checking.md`           `expected 'Integer', got 'String'`   (and `'Integer', got 'Point'`)
+//   • `specs/implicit-type-conversion.md` `expected 'int',     got 'bool'`
+//
+// They are not in conflict; they are one rule seen from two sides, and the BOOTSTRAP implements it
+// literally (`2-Parser.cs`: the branch printing `IrType.FormatAsSourceName(paramType)` is gated on the
+// ARGUMENT being a struct/enum kind — and a `String` is a struct there — while a bare primitive argument
+// falls through to the conversion path, which prints the class word). **A declared alias is worth printing
+// when the other half of the sentence NAMES a type; when both halves are class words, naming one side
+// `Integer` claims a nominal disagreement where the mismatch is purely one of class.** `tagAdmitsNoAggregate`
+// is exactly that question and is already the compiler's one answer to it.
+//
+// ⚠ The gate is on THIS arm alone. The two arms above keep answering unconditionally because their
+// fallback is useless: `typeTagName(genericInstance)` is the bare word `struct`, so `expected 'IntegerArray',
+// got 'int'` (`specs/type-checking.md`, an `int` argument — a tag that admits no aggregate) would degrade to
+// `expected 'struct'`. The ranged arm's fallback is `int`, which is the type.
+function paramDisplayName(project Project, paramType MaxonType, paramTag ValueTypeTag, aggregate ByteArray, declaredName ByteArray, argTag ValueTypeTag) returns String
+	if paramTag == ValueTypeTag.genericInstance 'genericInstance'
+		return typeDisplayName(project, tag: paramTag, nameId: typeNameIdOf(paramType))
+	end 'genericInstance'
+
+	if not aggregate.isEmpty() 'nominal'
+		return String.from(aggregate)
+	end 'nominal'
+
+	if not declaredName.isEmpty() and not tagAdmitsNoAggregate(argTag) 'declaredAliasAgainstANamedArgument'
+		return String.from(declaredName)
+	end 'declaredAliasAgainstANamedArgument'
+
+	return typeTagName(paramTag)
+end 'paramDisplayName'
 
 // Report a per-ARGUMENT call error anchored on the offending argument's own source
 // span (from the call op's inline `argRanges`), so the diagnostic points at the bad

@@ -677,21 +677,80 @@ export function checkGenericAliasCycles(project Project, signatures ProgramSigna
 
 	match signatures.firstCyclicAliasDecl() 'cycle'
 		none then return
-		at(index) then reportGenericAliasCycle(project, entry: signatures.genericAliasDeclAt(index))
+		at(index) then reportGenericAliasCycle(project, entry: signatures.genericAliasDeclAt(index), path: signatures.aliasCyclePath(index))
 	end 'cycle'
 end 'checkGenericAliasCycles'
 
-// Report E3091 at the offending `typealias`. A SYNTHESIZED alias carries no anchor (line 0), so it falls back
-// to the whole-program form `reportInstantiationPairCollision` uses for the same reason — pointing at line 0
-// of a file the user never wrote would be worse than not pointing at all.
-function reportGenericAliasCycle(project Project, entry GenericAliasEntry)
+// ⭐⭐ **REPORT THE CYCLE — E2012 WITH THE DEPENDENCY PATH, WHICH IS `specs/type-checking.md`'s OWN SENTENCE**
+// (user ruling, 2026-08-04: the canonical spec's wording wins over what shv2 happened to print).
+// `Circular typealias dependency: A -> B -> A` names every alias the loop passes through, and that path is
+// the whole reason the canonical corpus carries two cases: a message naming only the alias it was reported
+// against says identical words for `typealias A = Array with A` and for the mutual pair, so the mutual case
+// would stop testing mutuality. The code changed with the words — v1 reports a generic-ARGUMENT cycle under
+// E2012 too (`TypeResolution.emitCircularTypealias`), and reserves E3091 for a resolution that never settled.
+//
+// ⚠ **A SELF-CYCLE IS BLAMED AT THE OCCURRENCE AND A LONGER ONE AT THE DECLARATION, and that is a difference
+// in what is at fault rather than an inconsistency.** When an alias names ITSELF, one word in one RHS is the
+// defect and the author can point at it — the canonical spec pins column 26 of `typealias A = Array with A`,
+// the second `A` (`GenericAliasEntry.selfRefLine` is how that position survives the parse). When the loop
+// runs through OTHER aliases, no single occurrence is wrong: each RHS is individually well-formed and what
+// is ill-formed is the SET, so the blame lands on the declaration the cycle is reported against — column 11,
+// the alias name — and the PATH is what names the rest.
+//
+// ⚠ **AN EMPTY PATH IS THE OTHER DOOR, NOT A MISSING PATH.** `firstCyclicAliasDecl` also answers for a
+// CROSS-FILE cycle the instance graph structurally cannot see, caught instead by the contest fixpoint failing
+// to converge. Nothing there proves a cycle or names its members, so it keeps E3091 and the sentence that
+// says what IS known — which `typealias-file-scope.md`'s own prose ratifies (*"the non-convergence IS the
+// detection"*). The code and the words follow from what the compiler can prove.
+//
+// A SYNTHESIZED alias carries no anchor (line 0), so it falls back to the whole-program form
+// `reportInstantiationPairCollision` uses for the same reason — pointing at line 0 of a file the user never
+// wrote would be worse than not pointing at all.
+function reportGenericAliasCycle(project Project, entry GenericAliasEntry, path ByteArrayArray)
+	if path.isEmpty() 'noCycleTheGraphCanProve'
+		reportUnsettledAliasResolution(project, entry: entry)
+		return
+	end 'noCycleTheGraphCanProve'
+
+	let namesOnlyItself = path.count() == 1
+	let line = entry.selfRefLine if namesOnlyItself else entry.nameLine
+	let column = entry.selfRefColumn if namesOnlyItself else entry.nameColumn
+	let message = "Circular typealias dependency: {renderAliasCyclePath(path)}"
+	if line == 0 'synthesized'
+		reportDiagnostic(project, diagnostic: Diagnostic.create(ErrorCode.parserCircularDependency, message: message))
+		return
+	end 'synthesized'
+	reportPositioned(project, code: ErrorCode.parserCircularDependency, message: message, line: line, column: column, filePath: entry.filePath)
+end 'reportGenericAliasCycle'
+
+// `A` for a one-node cycle, `A -> B -> A` for a longer one. The single name is not a TRUNCATED path: an alias
+// that names itself has no intermediate to show, and `A -> A` would repeat the one fact the name already
+// carries. `specs/type-checking.md` pins both spellings, one case each.
+function renderAliasCyclePath(path ByteArrayArray) returns String
+	let first = String.from(try path.get(0) otherwise panic("renderAliasCyclePath: an empty path is the other door and is filtered by the caller"))
+	if path.count() == 1 'namesOnlyItself'
+		return first
+	end 'namesOnlyItself'
+
+	var rendered = "{first}"
+	for i in 1 upto path.count() 'eachFurtherAlias'
+		rendered = "{rendered} -> {String.from(try path.get(i) otherwise panic("renderAliasCyclePath: path.get({i}) below its own count()"))}"
+	end 'eachFurtherAlias'
+
+	return "{rendered} -> {first}"
+end 'renderAliasCyclePath'
+
+// The CROSS-FILE door's diagnostic (E3091): resolution of this alias never settled, and the walk that would
+// name the loop cannot see it. It says what is known and no more — there is no path to quote, which is the
+// difference the caller's header states.
+function reportUnsettledAliasResolution(project Project, entry GenericAliasEntry)
 	let message = "typealias '{String.from(entry.aliasName)}' forms a type cycle: its type arguments refer back to '{String.from(entry.aliasName)}'"
 	if entry.nameLine == 0 'synthesized'
 		reportDiagnostic(project, diagnostic: Diagnostic.create(ErrorCode.semanticTypeResolutionCycle, message: message))
 		return
 	end 'synthesized'
 	reportPositioned(project, code: ErrorCode.semanticTypeResolutionCycle, message: message, line: entry.nameLine, column: entry.nameColumn, filePath: entry.filePath)
-end 'reportGenericAliasCycle'
+end 'reportUnsettledAliasResolution'
 
 // Two instantiations that compile to one name — the shape no declaration takes part in, which the
 // join's non-injectivity makes possible on its own.
@@ -733,7 +792,8 @@ end 'instantiationAnchor'
 // `Pair with (Box_Int, Str)`. A single argument takes no parentheses and a list does, matching the
 // source form (`specs-shv2/generic-types.md`).
 //
-// The arguments come through `instanceArgTypeName`, so a NESTED instantiation appears in its own
+// The arguments come through `instanceArgCompiledName` — the IDENTITY renderer and deliberately not the
+// display one — so a NESTED instantiation appears in its own
 // COMPILED spelling (`Box with Pair_Int_Bool`) rather than as `Box with (Pair with (Int, Bool))`. That
 // is the right rendering and not a shortcut: the compiled spelling is what collided, and the source
 // form would hide the very join the message is about.
@@ -748,7 +808,7 @@ function renderInstantiation(signatures ProgramSignatures, gid GenericInstanceId
 		if position > 0 'afterFirst'
 			rendered.append(", ")
 		end 'afterFirst'
-		rendered.append(String.from(signatures.instanceArgTypeName(gid, position: position)))
+		rendered.append(String.from(signatures.instanceArgCompiledName(gid, position: position)))
 	end 'eachArgument'
 
 	if argCount > 1 'closeArgumentList'
