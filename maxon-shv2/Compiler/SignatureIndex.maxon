@@ -4380,6 +4380,14 @@ end 'StatedSweepFacts'
 // `scanned` is walked ONCE for both of the return-derived bits — a file's scan holds an entry per declared
 // function, so asking it twice would be two walks of the same array for one declaration's two facts.
 //
+// ⚠ **`returnDeclFile` ASKS THE UN-REMAPPED `entry.returnType` WHILE `record` ASKS A POSSIBLY REMAPPED ONE
+// (`foldFile`'s `idsMoved` branch), AND THE TWO CANNOT DISAGREE — because the remap only moves ids.**
+// `returnTypeNamesAType` is a TAG test, and `remapMaxonType` is tag-preserving in every arm: each one either
+// returns its input or rebuilds the SAME case with a rewritten `TypeNameId`. So the answer is invariant under
+// the remap, and this walk is spared re-running it. That is the standing obligation on `remapMaxonType`: an
+// arm that ever changed a type's TAG would break this equality silently, in the direction of a fact being
+// filed under a key its own parse will not look at.
+//
 // ⚠ **EVERY BIT IS OR-ED ACROSS MATCHES RATHER THAN TAKEN FROM THE FIRST**, because a file MAY declare one
 // name twice (that is E3006, reported after every file has parsed, and this fold runs long before it). Both
 // declarations wrote to the bare key, so both are entitled to be moved off it; taking the first would strand
@@ -4413,6 +4421,12 @@ function statedSweepFacts(bareName ByteArray, scanned FuncReturnTypeEntryArray, 
 
 	return StatedSweepFacts.create(returnSurface, returnDeclFile: returnDeclFile, paramConsumes: consumes, paramDefaults: defaults, throwsClause: throwing)
 end 'statedSweepFacts'
+
+// The ordinal the SECOND file to spell one sweep tuple key takes — see
+// `ProgramSignatures.sweepScopedTupleName`, where the FIRST minter deliberately keeps the UNSUFFIXED key.
+// It starts at 1 rather than at `Parser.FirstOverloadNameOrdinal`'s 2 for exactly that reason: an overload
+// name's own first candidate is already suffixed, so its counter starts one past the name it would repeat.
+let FirstLaterFileTupleOrdinal = 1
 
 // The head of the reserved key a contested ROOT declaration's sweep entries are mirrored under — see
 // `ProgramSignatures.rootDeclarationShadowName`. It joins through `overloadRegistrationName`, so the
@@ -6345,9 +6359,11 @@ export type ProgramSignatures
 		end 'declaresAThrowsClause'
 	end 'copyFreeFunctionSweepEntries'
 
-	// Drop all five, so the copy that follows lands the source's ABSENCES as well as its entries. The
-	// booleans are discarded because a key with no entry is the ordinary case here, not an error: four of
-	// the five are written only by a declaration that has the fact to state.
+	// Drop all SIX, so the copy that follows lands the source's ABSENCES as well as its entries. The
+	// booleans are discarded because a key with no entry is the ordinary case here, not an error: five of
+	// the six are written only by a declaration that has the fact to state — the same count
+	// `copyFreeFunctionSweepEntries` states above, and the two must move together or one of them is lying
+	// about how many facts a function name carries.
 	function clearFreeFunctionSweepEntries(name ByteArray)
 		_ = self.returnTypes.remove(name)
 		_ = self.declaredReturnSurfaces.remove(name)
@@ -6374,6 +6390,20 @@ export type ProgramSignatures
 	//
 	// The OLD name is RE-MINTED from the bare name rather than read out of the info, so the two spellings
 	// come from one join and cannot disagree about what the sweep published.
+	//
+	// ⭐⭐ **THE THREE COLUMN MOVES BELOW READ `__paramDefault#<BARE>#<i>`, WHICH ACCUMULATES ACROSS FILES
+	// EXACTLY LIKE THE BARE FUNCTION KEY `stating` WAS INTRODUCED FOR (A5l review) — AND THEY ARE UNGATED ON
+	// PURPOSE, because the FOLD ORDER already decides the question `stating` has to ask.** Every caller
+	// reaches here at a moment when the bare helper key holds THIS declaration's facts, and there are only
+	// three:
+	//   • the end-of-fold SELF refile (`foldFile`), gated on `stating.paramDefaults` — so this file DOES
+	//     declare a default, and its own `recordParamDefaults` / `record` for the helper ran EARLIER IN THE
+	//     SAME FOLD, after every predecessor's and before any successor's;
+	//   • the `newlyContested` INCUMBENT refile, where exactly one declaration of the name has ever folded;
+	//   • the root mirror, which returns before this function is reached at all.
+	// ⇒ a `stating`-shaped filter here would re-derive what the ordering already guarantees. What it is NOT
+	// is an accident: remove the `stating.paramDefaults` gate at the call site and this becomes the same bug
+	// one registry over, since a file declaring no default would arrive holding a predecessor's helper facts.
 	function renameParamDefaultHelpers(info ParamDefaultInfo, bareName ByteArray, registrationName ByteArray)
 		for i in 0 upto info.helperNames.count() 'eachCallAlignedSlot'
 			let slot = i as ParamCount
@@ -8329,6 +8359,14 @@ export type ProgramSignatures
 	// The join is `overloadRegistrationName`'s for `rootDeclarationShadowName`'s reason: `#` appears in no
 	// source identifier and in no canonical element name, so the key is unspellable, `isTupleTypeName` still
 	// recognizes it by its intact prefix, and the digits cannot hold the element separator.
+	//
+	// ⚠ **THE ORDINAL PROBE IS THE SECOND ONE IN THE COMPILER, and the other is `Parser`'s
+	// `unclaimedRegistrationName`** — same join (`overloadRegistrationName`), different registry, different
+	// "taken" test, and a deliberately different FIRST candidate: an overload name is always suffixed, a
+	// tuple key is not (see the ⚠⚠ block above). The one fact the two share — how an ordinal is joined onto a
+	// name — is already spelled once, in `overloadRegistrationName`, which both call; what is left is four
+	// lines of loop around two different questions, so they are not merged. A change to the JOIN belongs
+	// there and reaches both.
 	function sweepScopedTupleName(name ByteArray, declFilePath FilePath) returns ByteArray
 		if self.allFilesFolded 'aCanonicalIdentity'
 			return name
@@ -8340,7 +8378,7 @@ export type ProgramSignatures
 
 		// Every candidate this walk passes over is held by a layout of ANOTHER file, so the registry itself
 		// bounds the search: there cannot be more taken candidates than there are registered layouts.
-		for claimed in 1 upto self.structTypes.count() + 1 'eachLaterFilesMint'
+		for claimed in FirstLaterFileTupleOrdinal upto self.structTypes.count() + 1 'eachLaterFilesMint'
 			let candidate = overloadRegistrationName(name, suffix: "{claimed}".toByteArray())
 			if self.tupleKeyIsAvailableTo(candidate, declFilePath: declFilePath) 'free'
 				return candidate

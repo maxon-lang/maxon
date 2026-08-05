@@ -1100,3 +1100,69 @@ end 'main'
 ```exitcode
 91
 ```
+
+<!-- test: tuple-alias-over-a-contested-generic-alias-either-order -->
+⭐⭐ **THE CURE ABOVE IS A STATEMENT ABOUT THE PROGRAM, NOT ABOUT THE FILESYSTEM, AND THIS IS THE CASE
+THAT SAYS SO (A3v review).** The tuple fix keys a SWEEP-minted spelling per (spelling, file), and the
+first file to mint one keeps the unsuffixed key — so *which* file that is comes off the fold order,
+which is `Directory.list` order, which is NTFS index order on Windows and APFS hash order on macOS
+(defect-board row `A5a`). A cure whose answer moved with that would be the same wrong answer wearing
+a different hat.
+
+Both files here declare their OWN `Bag` and their OWN tuple over it, and each constructs its own
+field — so whichever folds first, the other is the one that would fail. `zdef`/`abother` sort the
+opposite way to `adef`/`bother` above, which is what makes the pair a two-order test rather than one
+program written twice.
+
+⛔ MEASURED against the merge-base compiler, BOTH orders red and each blaming the file that folded
+SECOND: `E3005: cannot assign '__Tuple2.Array_Num.int' to variable 'Holder.q' of type
+'__Tuple2.Array_String.int'` one way, and the same sentence with the two type names swapped the
+other. On this tree both orders answer 72, and the emitted symbol sets are identical between them —
+the ordinal never reaches a name anything renders or emits, because `sweepScopedTupleName` returns
+early once `allFilesFolded` and every name crossing out of the index is canonicalized past it.
+```maxon
+// --- file: abother.maxon
+typealias Bag = Array with String
+typealias Pair = (Bag, int)
+
+export type Holder
+	export var q as Pair
+	export static function make() returns Self
+		var b = Bag.create()
+		b.push("xy")
+		return Self{q: (b, 1)}
+	end 'make'
+end 'Holder'
+
+export function useB() returns int
+	let h = Holder.make()
+	return (try h.q.0.get(0) otherwise "").count() as int
+end 'useB'
+
+// --- file: cmain.maxon
+function main() returns ExitCode
+	return (useA() * 10 + useB()) as ExitCode
+end 'main'
+
+// --- file: zdef.maxon
+typealias Num = int(0 to 125)
+typealias Bag = Array with Num
+typealias Pair = (Bag, int)
+
+export type Keeper
+	export var p as Pair
+	export static function make() returns Self
+		var b = Bag.create()
+		b.push(7)
+		return Self{p: (b, 1)}
+	end 'make'
+end 'Keeper'
+
+export function useA() returns int
+	var k = Keeper.make()
+	return (try k.p.0.get(0) otherwise 0) as int
+end 'useA'
+```
+```exitcode
+72
+```
