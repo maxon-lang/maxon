@@ -10,19 +10,42 @@ category: memory
 ## Documentation
 
 Under shv2's static single-owner model an owned heap value (an owned `String`, a struct box) has
-exactly ONE owner and is dropped exactly once, at that owner's scope exit. Binding or assigning a
-value from a bare reference to an owned binding therefore MOVES ownership rather than aliasing it:
+exactly ONE owner and is dropped exactly once, at that owner's scope exit.
+
+**What decides whether a bare-reference bind MOVES that ownership or merely ALIASES it is the
+SOURCE's MUTABILITY** (`specs/ownership.md`; user ruling, 2026-08-04). Maxon is single-ownership and
+everything is a reference — `clone()` is the only copy — so two names for one value are safe exactly
+when neither can be written through:
 
 ```maxon
 let t = build(1)   // t owns the box
-let u = t          // ownership MOVES to u; t is now moved-from
+let u = t          // t is IMMUTABLE, so u is a SECOND REFERENCE; both stay valid
+print(u)
+print(t)           // fine — the box drops ONCE, at t's scope exit
+```
+
+```maxon
+var t = build(1)   // t owns the box
+let u = t          // t is MUTABLE, so ownership MOVES to u; t is now moved-from
 print(u)           // u still usable
 // print(t)        // ERROR: use of moved value 't'
 ```
 
-The source is left MOVED-FROM: reading it is a compile error (use-after-move), and its scope-exit
-drop is SKIPPED — the value drops once, through its new owner. A fresh owned temporary (`build()`,
-`"{x}"`) is owned by no binding, so binding it is a CONSUME, not a move — nothing is poisoned.
+A `var` source moves because a second name for its value could watch it change: `t = <other>` would
+drop the very box `u` still names. An immutable source cannot be rebound, so the alias costs nothing
+and needs no refcount — the ONE drop stays with the owner, which structurally outlives every alias of
+it (an alias can only be declared later, in the owner's scope or one nested inside it).
+
+The mirror shape — a MUTABLE binding made from an immutable name (`var u = t`) — is refused outright
+as **E3078**, because it would reach the immutable name's storage through a writable one. See
+`specs/var-should-be-let.md`.
+
+When a move does happen the source is left MOVED-FROM: reading it is a compile error
+(use-after-move), and its scope-exit drop is SKIPPED — the value drops once, through its new owner. A
+fresh owned temporary (`build()`, `"{x}"`) is owned by no binding, so binding it is a CONSUME, not a
+move — nothing is poisoned. A CONSUMING hand-off (a call argument, a struct-literal field, a
+container element) moves the value out of whichever binding owns it regardless of mutability, and
+poisons every live name that reads it — an alias included.
 
 A WRITE to a moved-from `var` REVIVES it: the binding owns the new value and is usable again. A value
 moved on some-but-not-all paths of an `if`/`else`/`match` is DROPPED path-sensitively — its drop is
@@ -59,10 +82,76 @@ end 'main'
 v1
 ```
 
+### An Immutable Rebind Is a Second Reference, Not a Move
+
+`t` is a `let`, so `let u = t` ALIASES rather than moves: both names stay readable, and the box drops
+exactly ONCE — at `t`'s scope exit, with `u` owning nothing. Two drops would be a double-free the leak
+gate reports as exit 101; zero would be a leak it reports the same way. No refcount is involved: the
+alias is simply not enrolled as an owner.
+
+<!-- test: immutable-rebind-aliases -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function build(x Integer) returns String
+	return "v{x}"
+end 'build'
+
+function main() returns ExitCode
+	let t = build(1)
+	let u = t
+	print(u)
+	print(t)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+v1v1
+```
+
+### An Alias Is Poisoned When The Value Is CONSUMED Through Any Name
+
+`let b = a` aliases; `take(b)` then hands the value to a callee that owns it. The frame no longer owns
+the box through EITHER name, so a later `print(a)` is use-after-move — reported against the name that
+was read. Poisoning only the owner would leave the alias reading a box the callee has freed.
+
+<!-- test: consume-through-an-alias-poisons-both -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function build(x Integer) returns String
+	return "v{x}"
+end 'build'
+
+type Box
+	export var text as String
+
+	static function create(text String) returns Self
+		return Self{text: text}
+	end 'create'
+end 'Box'
+
+function main() returns ExitCode
+	let a = build(1)
+	let b = a
+	let held = Box.create(b)
+	print(held.text)
+	print(a)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:21:8: use of moved value 'a': its ownership moved to another binding at an earlier bind or assignment
+```
+
 ### Use After Move-On-Bind
 
-`let u = t` moves `t`; the following `print(t)` reads the moved-from binding and is rejected at the
-use.
+`t` is a `var`, so `let u = t` MOVES it; the following `print(t)` reads the moved-from binding and is
+rejected at the use. (With `let t` the same two lines are an ALIAS and both names stay readable — see
+`immutable-rebind-aliases` below.)
 
 <!-- test: use-after-move-on-bind -->
 ```maxon
@@ -73,7 +162,7 @@ function build(x Integer) returns String
 end 'build'
 
 function main() returns ExitCode
-	let t = build(1)
+	var t = build(1)
 	let u = t
 	print(t)
 	return 0
@@ -168,7 +257,8 @@ v10v20
 
 ### Second Alias Of a Moved Value Is Use-After-Move
 
-`let b = a` moves `a`; `let c = a` then reads the moved-from `a` and is rejected at the use.
+`a` is a `var`, so `let b = a` MOVES it; `let c = a` then reads the moved-from `a` and is rejected at
+the use. A second alias of a value that is still OWNED is legal — that is `immutable-rebind-aliases`.
 
 <!-- test: multiple-alias -->
 ```maxon
@@ -179,7 +269,7 @@ function build(x Integer) returns String
 end 'build'
 
 function main() returns ExitCode
-	let a = build(1)
+	var a = build(1)
 	let b = a
 	let c = a
 	return 0
@@ -205,7 +295,7 @@ function build(x Integer) returns String
 end 'build'
 
 function main() returns ExitCode
-	let a = build(1)
+	var a = build(1)
 	let flag = 1
 	if flag > 0 'b'
 		let u = a
@@ -280,9 +370,9 @@ v1
 
 ### Use After Move Through Parentheses
 
-`let u = (t)` moves `t` through redundant parentheses; the following `print(t)` reads the moved-from
-binding and is rejected at the use. The parens do not exempt the source from poisoning — the gate sees
-through them to the bare local reference underneath.
+`let u = (t)` moves the `var` `t` through redundant parentheses; the following `print(t)` reads the
+moved-from binding and is rejected at the use. The parens do not exempt the source from poisoning — the
+gate sees through them to the bare local reference underneath, and reads its mutability there.
 
 <!-- test: paren-use-after-move -->
 ```maxon
@@ -293,7 +383,7 @@ function build(x Integer) returns String
 end 'build'
 
 function main() returns ExitCode
-	let t = build(1)
+	var t = build(1)
 	let u = (t)
 	print(t)
 	return 0
@@ -528,4 +618,145 @@ end 'main'
 ```stdout
 owned managed box string long enough to require heap now
 owned managed box string long enough to require heap now
+```
+
+### A Mutable Binding May Not Be Made From an Immutable Name
+
+The mirror of the alias above. `let t = …` then `var u = t` would reach `t`'s storage through a
+writable name, so it is refused at the bind rather than tolerated — the remedies the message names are
+the two that keep single ownership intact: leave `u` immutable, or take an independent value with
+`clone()`. (A third fix lives at the DECLARATION: make `t` a `var` in the first place.)
+
+⚠ A **value**-typed source is unaffected — `int`/`float`/`bool`/`byte` copy, so there is no shared
+storage to reach. Only reference types (struct, union, function) are refused, and a PARAMETER is
+exempt: its storage is already the caller's copy, which is the line `E3019` draws too.
+
+<!-- test: error.var-from-immutable-struct -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Box
+	export var value as Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Box'
+
+function main() returns ExitCode
+	let t = Box.create(5)
+	var u = t
+	u.value = 9
+	return u.value
+end 'main'
+```
+```maxoncstderr
+error E3078: <fragment>:14:6: cannot assign immutable variable 't' to mutable binding 'u'; use 'let' instead of 'var', or use clone()
+```
+
+### The Refusal Follows the Chain, Parentheses and Tuple Positions Included
+
+`var u = t` and `var u = t.field` are one rule — *"whose storage would this writable name reach?"* — so the
+spellings that reach the same storage get the same answer. Redundant parentheses change nothing about what
+`(t).field` names, and a tuple's positional member `t.0` is its field `_0` under another spelling.
+
+<!-- test: error.var-from-immutable-through-parens -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Inner
+	export var value as Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Inner'
+
+type Outer
+	export var inner as Inner
+
+	static function create(inner Inner) returns Self
+		return Self{inner: inner}
+	end 'create'
+end 'Outer'
+
+function main() returns ExitCode
+	let o = Outer.create(Inner.create(5))
+	var i = (o).inner
+	i.value = 9
+	return o.inner.value
+end 'main'
+```
+```maxoncstderr
+error E3078: <fragment>:22:6: cannot assign from immutable variable to mutable binding 'i'; use 'let' instead of 'var', or use clone()
+```
+
+<!-- test: error.var-from-immutable-tuple-element -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Box
+	export var value as Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Box'
+
+function main() returns ExitCode
+	let t = (Box.create(5), 7)
+	var b = t.0
+	b.value = 9
+	return b.value
+end 'main'
+```
+```maxoncstderr
+error E3078: <fragment>:14:6: cannot assign from immutable variable to mutable binding 'b'; use 'let' instead of 'var', or use clone()
+```
+
+### A Destructuring Is Its Element Bindings
+
+`var (a, b) = t` means `var a = t.0` and `var b = t.1`, so the rule above is asked of each ELEMENT and the
+sentence blames the name the author wrote. Scalars copy, so a tuple of numbers destructures out of an
+immutable source freely — there is no shared storage for the writable names to reach.
+
+<!-- test: var-destructure-scalars-from-immutable -->
+```maxon
+function main() returns ExitCode
+	let t = (10, 20)
+	var (a, b) = t
+	a = a + b
+	b = b + 1
+	print("{a} {b}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+30 21
+```
+
+<!-- test: error.var-destructure-managed-element-from-immutable -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Box
+	export var value as Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Box'
+
+function main() returns ExitCode
+	let t = (Box.create(5), 7)
+	var (b, n) = t
+	b.value = 9
+	return b.value + n
+end 'main'
+```
+```maxoncstderr
+error E3078: <fragment>:14:7: cannot assign from immutable variable to mutable binding 'b'; use 'let' instead of 'var', or use clone()
 ```

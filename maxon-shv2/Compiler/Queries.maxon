@@ -825,7 +825,7 @@ end 'probeRebuildCacheHits'
 // `Project.rootIsUnderStdlibDirectory` rather than spelling the test out, because
 // `livesUnderStdlibDirectory` below is derived from the same predicate and its proof is a claim about
 // THIS arm. Two spellings would be two things free to drift while the proof read as if it held.
-function isStdlibSourceFile(project Project, path FilePath) returns bool
+export function isStdlibSourceFile(project Project, path FilePath) returns bool
 	let cwd = Directory.currentPath()
 	let resolvedPath = path.resolve(cwd)
 
@@ -1102,6 +1102,10 @@ function reportParseError(project Project, path FilePath, error ParseError)
 		// Wave C, static single-owner. shv2-only — the reference compilers refcount and have no move
 		// model, so there is no bootstrap text to match. Positioned on the use.
 		useAfterMove(name, line, column) then reportPositioned(project, code: ErrorCode.useAfterMove, message: "use of moved value '{name}': its ownership moved to another binding at an earlier bind or assignment", line: line, column: column, filePath: path)
+		// `subject` rather than a hardcoded name, for the reason `controlOutsideLoop`'s `targets` is: the
+		// field-chain spelling has no single source name to blame. `Parser.immutableSourceSubject` decides
+		// it. The text is the reference compilers' verbatim, which `specs/var-should-be-let.md` pins.
+		varFromImmutable(subject, binding, line, column) then reportPositioned(project, code: ErrorCode.semanticVarFromImmutable, message: "cannot assign {subject} to mutable binding '{binding}'; use 'let' instead of 'var', or use clone()", line: line, column: column, filePath: path)
 		// `targets` rather than a hardcoded "loop": a `break` may also leave a MATCH statement, so the old
 		// shared wording was FALSE for one of the two keywords. `Parser.controlTargetNoun` is where the
 		// noun is decided, from the same bit that decides which stacks the resolution searches.
@@ -1237,6 +1241,12 @@ function reportParseError(project Project, path FilePath, error ParseError)
 		// gates it exactly. Why it is a variant of its own rather than another raiser on `strayToken` is
 		// argued on the union arm.
 		selfOutsideInstanceMethod(line, column) then reportPositioned(project, code: ErrorCode.parserUnexpectedToken, message: "'self' can only be used inside instance methods", line: line, column: column, filePath: path)
+		// The `@heap` annotation's three refusals — all E2001, the code both references spend on every one of
+		// them. The first two are byte-for-byte their sentences; the third states shv2's own rule, and the
+		// union arms carry the reason for each.
+		unknownAnnotation(got, line, column) then reportPositioned(project, code: ErrorCode.parserUnexpectedToken, message: "Unknown annotation '@{got}' (expected '@heap')", line: line, column: column, filePath: path)
+		heapAnnotationWithoutBinding(line, column) then reportPositioned(project, code: ErrorCode.parserUnexpectedToken, message: "@heap must be followed by 'var' or 'let'", line: line, column: column, filePath: path)
+		heapAnnotationOnNonRecord(name, tag, line, column) then reportPositioned(project, code: ErrorCode.parserUnexpectedToken, message: "@heap can only annotate a binding whose value is a heap record; '{name}' binds a '{tag}'", line: line, column: column, filePath: path)
 		// The SAME code as `strayToken` above — E2001 is "the parser met a token that cannot appear at
 		// this point in the grammar", and a second `module` after an `export` is exactly that. Byte-for-byte
 		// the reference's text, which `module-keyword/error.module-and-export-conflict` gates exactly.

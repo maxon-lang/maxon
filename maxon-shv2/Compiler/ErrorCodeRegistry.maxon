@@ -434,6 +434,16 @@ export enum ErrorCode
 	// type/extension, or a top-level alias). Emitted by `parseStructLiteral`.
 	// Mirrors the C# bootstrap's `SemanticConstructorRestriction`.
 	semanticConstructorRestriction = "E3076"
+	// `var b = a` (or `var b = a.field`) where the source `a` is an
+	// immutable (`let`) binding of a reference type (struct / enum /
+	// function). Copying an immutable reference-type binding into a mutable
+	// one would alias the same heap value through a writable name; the user
+	// must either keep `b` immutable (`let`) or take an independent copy via
+	// `clone()`. Value-typed sources (int/float/bool/byte) are independent
+	// copies and are allowed. Detected after type resolution by
+	// `checkVarFromImmutableForEntry`. Mirrors the C# bootstrap's
+	// `SemanticVarFromImmutable`.
+	semanticVarFromImmutable = "E3078"
 	// A match arm binds a case's payload values and then never reads them. Drop the bindings, or use them.
 	semanticMatchDiscardedBindings = "E3081"
 	// a labeled control-flow block (`if`/`else`/`while`/`for`) has no
@@ -894,6 +904,13 @@ export enum ErrorCode
 
 	// A field access could not be lowered: the base is not a struct, or the field has no slot.
 	invalidFieldAccess = "E4006"
+	// a type definition contains a reference cycle -- it transitively
+	// contains itself through struct fields, union associated values, or
+	// container element types. Maxon's ownership model requires acyclic type
+	// graphs for deterministic destruction, so recursive type references are
+	// rejected. Emitted by the type-cycle check after type resolution. Mirrors
+	// the C# bootstrap's `IrTypeCycle` (same code, same message format).
+	irTypeCycle = "E4014"
 	// a declaration in the source took a function name that belongs to the compiler.
 	// Reachable only from `stdlib/Builtins.maxon`, the one file whose declarations may
 	// carry the reserved `__` prefix (E2051's D6 exemption): the name is declarable

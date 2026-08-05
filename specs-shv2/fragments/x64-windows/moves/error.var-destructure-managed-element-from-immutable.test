@@ -1,0 +1,20 @@
+// Test: error.var-destructure-managed-element-from-immutable
+typealias Integer = int(i64.min to i64.max)
+
+type Box
+	export var value as Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Box'
+
+function main() returns ExitCode
+	let t = (Box.create(5), 7)
+	var (b, n) = t
+	b.value = 9
+	return b.value + n
+end 'main'
+---
+CompilerError:
+error E3078: <fragment>:14:7: cannot assign from immutable variable to mutable binding 'b'; use 'let' instead of 'var', or use clone()

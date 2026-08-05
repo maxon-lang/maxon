@@ -194,6 +194,19 @@ export union ParseError implements Error
 	// is shv2's first ownership program-rejection; the reference compilers refcount and have no
 	// move model, so there is no bootstrap text to match.
 	useAfterMove(name String, line LineNumber, column ColumnNumber)
+	// A `var` DECLARED FROM AN IMMUTABLE NAME OF A REFERENCE TYPE — `var b = a` / `var i = o.inner`
+	// where `a` / `o` is a `let` or a parameter. Maxon is single-ownership and everything is a
+	// reference, so the mutable name would reach the immutable one's storage and write through it;
+	// the author must keep the new name immutable or take an independent copy with `clone()`. A
+	// value-typed source (int/float/bool/byte, and in shv2 an enum ordinal too) is an independent
+	// copy and never reaches here. Renders as E3078.
+	//
+	// `subject` is a rendered PHRASE rather than a name, for the reason `controlOutsideLoop`'s
+	// `targets` is: the two spellings differ in what they can NAME — a bare source is blamed by name
+	// (`immutable variable 'a'`), a field chain has no single name to blame and says only that the
+	// value came `from immutable variable`. One sentence, one variable clause; see
+	// `Parser.immutableSourceSubject`, which is where the two are decided.
+	varFromImmutable(subject String, binding String, line LineNumber, column ColumnNumber)
 	// A `break`/`continue` with no enclosing target. `keyword` is "break"/"continue" for the
 	// message; `targets` names the constructs that keyword may leave, and it is NOT the same for
 	// the two — a `break` also leaves a match statement (`controlTargetNoun`). Renders as E2047.
@@ -750,6 +763,43 @@ export union ParseError implements Error
 	// further and named the `static function` case specifically; that explanation is dropped deliberately —
 	// a rule that holds in three contexts must not be worded as though it were about one of them.
 	selfOutsideInstanceMethod(line LineNumber, column ColumnNumber)
+	// --- The `@heap` annotation's three refusals (see `parseAnnotatedBinding`) ---
+	//
+	// An `@` followed by any word other than `heap`. Renders as **E2001** `Unknown annotation '@<got>'
+	// (expected '@heap')`, positioned at the `@` — the annotation is one construct and the `@` is where it
+	// starts, which is both reference compilers' anchor. Byte-for-byte their sentence (2-Parser.cs:10498,
+	// v1 `Parser.maxon:10834`). `heap` is the ONLY annotation the language has, so the message can name the
+	// whole set; the day a second one lands, this sentence is derived from the roster rather than listing it.
+	//
+	// `got` is `tokenDisplayText`'s for `strayToken`'s reason — the source's own spelling, so `@1` and `@let`
+	// quote what was written rather than a token category no reader can search for.
+	unknownAnnotation(got String, line LineNumber, column ColumnNumber)
+	// `@heap` on anything that is not a `var`/`let` declaration. Renders as **E2001**, positioned at the `@`,
+	// byte-for-byte both references' sentence (2-Parser.cs:10504, v1 `Parser.maxon:10838`). It is the same
+	// code as `strayToken` and deliberately not that variant: the grammar HAS a position for whatever follows,
+	// it is just not a position `@heap` can decorate — so the message can name the one thing that was legal.
+	// (2-Parser.cs:10504, v1 `Parser.maxon:10839`.)
+	heapAnnotationWithoutBinding(line LineNumber, column ColumnNumber)
+	// ⭐ `@heap` on a binding whose value owns NO heap — `@heap let x = 5`. Renders as **E2001**, positioned at
+	// the binding's NAME (the bootstrap's anchor, measured `:2:12` on `\t@heap let x = 5`), because the name is
+	// what identifies the binding whose initializer has to change.
+	//
+	// The message names the initializer's TAG (`typeTagName`) rather than asserting what it is not: the refused
+	// set is everything `valueIsManagedHeap` declines — an `int`, a `bool`, a `float`, an enum ordinal, a
+	// function value — and a single adjective covering all of them would be an overclaim about at least one.
+	//
+	// ⚠ **THE RULE IS shv2's, NOT THE BOOTSTRAP'S, AND THE SENTENCE SAYS SO.** The bootstrap refuses anything
+	// its evaluator did not resolve to a `MaxonStruct` and words that as "can only be used with struct
+	// literals" — a sentence that is false of its own rule (measured: it accepts `@heap let p =
+	// Point.create(1, y: 2)` and `@heap let t = (10, 32)`, neither a literal) and false of shv2's model, where
+	// a `String` and a boxed union are heap records exactly as a struct box is. The question shv2 can answer
+	// honestly is the one `valueIsManagedHeap` already asks — does this value own a heap record — so this
+	// refuses ONLY the values for which no box exists to force (2-Parser.cs:10595 is the shape it descends
+	// from). v1 dropped the check entirely (`Parser.maxon:10824-10830`) on the ground that `@heap` is a no-op
+	// there; that argument covers the shapes it
+	// CAN honour, not the ones it cannot, and silently ignoring an annotation the compiler will never act on
+	// is the silent-unhandled-case this codebase refuses everywhere else.
+	heapAnnotationOnNonRecord(name String, tag String, line LineNumber, column ColumnNumber)
 	// An initializer that has to fold to a compile-time constant and does not. Renders as **E2004**
 	// `Expected constant expression, got '<got>'`, positioned at the offending token, and `got` is the
 	// token's own source text. Both reference compilers spend E2004 on exactly this sentence
@@ -1651,16 +1701,30 @@ union ConstructorInstance
 	none
 end 'ConstructorInstance'
 
-// ⭐ **THE TWO SHAPES A NESTED (inner) TYPEALIAS TAKES (P1.6-C / P1.7 slice 3b-i).** A `typealias Idx =
+// ⭐ **THE THREE SHAPES A NESTED (inner) TYPEALIAS TAKES (P1.6-C / P1.7 slice 3b-i).** A `typealias Idx =
 // int(0 to N)` is a RANGED per-instance alias; a `typealias ElementArray = Array with T` is a
-// GENERIC-INSTANCE alias whose instance (`Array with typeParameter(pos)`) is partially opaque. Both record
-// their bare member into `enclosingInnerAliases` (so a later bare reference resolves), but they fold into
+// GENERIC-INSTANCE alias whose instance (`Array with typeParameter(pos)`) is partially opaque; a
+// `typealias FnTypeAlias1 = function(Integer) returns Integer` is a FUNCTION alias. They fold into
 // DIFFERENT whole-program registries — the ranged one into `innerAliases`, the generic one into
-// `genericAliases` under its base-qualified name — so `readNestedTypeAlias` hands the caller the shape it
-// read and the caller routes it to the right collection.
+// `genericAliases` under its base-qualified name, the function one into the FILE's own
+// `functionTypeAliases` — so `readNestedTypeAlias` hands the caller the shape it read and the caller
+// routes it to the right collection.
+//
+// ⭐ **AND ONLY THE FIRST TWO ARE MEMBERS OF THE ENCLOSING TYPE.** The ranged and generic-instance forms
+// record their bare member into `enclosingInnerAliases` (so a later bare reference inside the body
+// resolves) and are keyed whole-program under the enclosing type's name, because both are PER-INSTANCE:
+// `Container.Idx` is nominally distinct per instantiation (`specs/per-instance-typealias.md`) and
+// `Container.ElementArray` names an instance over the enclosing type's parameters — and their bare names
+// genuinely collide (`stdlib/Array.maxon` declares `ElementMemory` in two different types of one file).
+// A FUNCTION alias has neither property: its identity IS its name whole-program
+// (`resolveNamedAlias` re-tags a `named` reference to `MaxonType.function(<name>)`), so one written inside
+// a body is indistinguishable from one written above it and belongs in the file-scope registry it already
+// has. `specs/ownership.md`'s `closure-captures-borrow` writes exactly that and names the alias from a FREE
+// function below the type.
 union NestedAliasResult
 	ranged(alias RangedTypeAlias)
 	genericInstance(entry GenericAliasEntry)
+	functionAlias(alias FunctionTypeAlias)
 end 'NestedAliasResult'
 
 // The BOX a field access goes through, paired with the LAYOUT that says what is inside it.
@@ -2378,10 +2442,11 @@ end 'ArrayLiteralElement'
 
 // ⚠ **THE EMPTY LITERAL IS REFUSED IN BOTH POSITIONS AND THE ADVICE DIFFERS, so this text is deliberately
 // NOT shared with `parseArrayLiteral`'s.** The defect is identical — `[]` carries no element to infer a
-// type from — but a function body's remedy is `Array with T` + `.create()`, and a top-level initializer must
-// be a CONSTANT, so a `create()` call is not available to it (E2018 in a constant). Pointing a user at a
-// remedy their position forbids is worse than saying less. The runnable oracle refuses it here too.
-let EmptyConstArrayLiteralMessage = "an empty array literal `[]` as a top-level initializer — its element type cannot be inferred, and there is no empty-array form a constant initializer can name (a `.create()` call is not a constant)"
+// type from — and the remedy is now the SAME one a function body's is, which is why this text moved: a
+// top-level `<Alias>.create()` states the element type the brackets could not (`evalConstContainerCreate`).
+// It used to end *"a `.create()` call is not a constant"*, which was true of this evaluator until that door
+// existed and is a wrong sentence now. The runnable oracle refuses the empty literal here too.
+let EmptyConstArrayLiteralMessage = "an empty array literal `[]` as a top-level initializer — its element type cannot be inferred; name it with a generic alias and its factory instead (`typealias Ints = Array with Integer` + `var xs = Ints.create()`)"
 
 // The result of resolving a `<sized>.min` / `<sized>.max` bound. A union, so the
 // caller can tell the two REJECTIONS apart and name the actual gap in its diagnostic
@@ -3293,6 +3358,10 @@ let StringToByteArrayMethod = b"toByteArray"
 // `Parser.atModuleModifier` for the measurement that forbids a `keywordMap` entry.
 let ModuleModifierName = b"module"
 
+// The one annotation the language has, and its spelling — matched as an IDENTIFIER after the `@`, never as a
+// keyword, so `heap` stays a perfectly good name for a variable or a function. See `parseAnnotatedBinding`.
+let HeapAnnotationName = b"heap"
+
 // Does `kind` open a DECLARATION a visibility modifier can precede? The complete list, in one place: it is
 // what makes `module` recognizable without reserving the word, and a keyword left out of it would make
 // `module <thatKeyword>` silently parse as an expression instead of as a modified declaration.
@@ -3499,7 +3568,11 @@ let ArrayPushMethod = b"push"
 let ArrayCapacityMethod = b"capacity"
 let ArrayReserveMethod = b"reserve"
 let ArrayResizeMethod = b"resize"
-let ArrayClearMethod = b"clear"
+// ⚠ `clear` was `ArrayClearMethod` until the `__ManagedList` surface spelled it too (spec-port `ownership`),
+// and it is UNPREFIXED now for the rule the block below states: a method NAME is a token spelling, not a
+// container's property, and a family-prefixed constant serving two families is one rename away from a
+// second `b"clear"` beside the first.
+let ClearMethod = b"clear"
 let InsertMethod = b"insert"
 
 // The whole-array copy methods (P1.7 slice 4). `slice` is THROWING (bounds/inverted-range → `ArrayError`) and
@@ -3628,7 +3701,7 @@ function arrayMethodMutatesReceiver(name ByteArray, isManagedMemory bool) return
 		return true
 	end 'managedMemoryMutator'
 
-	return name.equals(ArrayPushMethod) or name.equals(ArraySetMethod) or name.equals(InsertMethod) or name.equals(AppendMethod) or name.equals(ArrayReserveMethod) or name.equals(ArrayResizeMethod) or name.equals(ArrayClearMethod) or name.equals(ArrayPopMethod) or name.equals(RemoveMethod)
+	return name.equals(ArrayPushMethod) or name.equals(ArraySetMethod) or name.equals(InsertMethod) or name.equals(AppendMethod) or name.equals(ArrayReserveMethod) or name.equals(ArrayResizeMethod) or name.equals(ClearMethod) or name.equals(ArrayPopMethod) or name.equals(RemoveMethod)
 end 'arrayMethodMutatesReceiver'
 
 // ⭐⭐ **WHICH MEMBERS THE `__ManagedMemory` BUFFER SURFACE HAS — THE ONE LIST ITS DISPATCH CONSULTS AND
@@ -3681,7 +3754,7 @@ function bufferSurfaceMemberNames() returns ByteArrayArray
 	names.push(ManagedMemoryGrowMethod)
 	names.push(AppendMethod)
 	names.push(SliceMethod)
-	names.push(ArrayClearMethod)
+	names.push(ClearMethod)
 	return names
 end 'bufferSurfaceMemberNames'
 
@@ -3732,7 +3805,7 @@ function arraySurfaceMemberNames() returns ByteArrayArray
 	names.push(ArrayPushMethod)
 	names.push(ArrayReserveMethod)
 	names.push(ArrayResizeMethod)
-	names.push(ArrayClearMethod)
+	names.push(ClearMethod)
 	names.push(InsertMethod)
 	names.push(AppendMethod)
 	names.push(MapMethod)
@@ -4121,6 +4194,39 @@ end 'mapMethodMutatesReceiver'
 function listMethodMutatesReceiver(name ByteArray) returns bool
 	return name.equals(AppendMethod) or name.equals(ListPrependMethod) or name.equals(ListRemoveFirstMethod)
 end 'listMethodMutatesReceiver'
+
+// ⭐ **WHICH `__ManagedList` METHODS WRITE THEIR RECEIVER** — the same rule one surface over, and NOT the
+// predicate above with two spellings added: the two surfaces name different methods (`insertFirst` vs
+// `prepend`), so one function over both name sets would answer about methods its caller's container does
+// not have. `count` only reads; the other four all link, unlink or free nodes.
+//
+// ⚠ **UNLIKE ITS THREE SIBLINGS, THIS IS NOT ALSO THE E3070 ANSWER — see the predicate below.**
+function managedListMethodMutatesReceiver(name ByteArray) returns bool
+	return name.equals(ManagedListInsertFirstMethod) or name.equals(ManagedListInsertLastMethod) or name.equals(RemoveMethod) or name.equals(ClearMethod)
+end 'managedListMethodMutatesReceiver'
+
+// ⭐⭐ **WHICH `__ManagedList` METHODS INVALIDATE AN OUTSTANDING NODE HANDLE — AND IT IS A NARROWER SET THAN
+// "WRITES THE RECEIVER", WHICH IS THE ONE PLACE THIS CONTAINER GENUINELY DIFFERS FROM AN `Array`.**
+//
+// An array's borrow is invalidated by any write because a `push` may REALLOCATE the element buffer and move
+// every element with it — the pointer an outstanding `get` handed out then names freed memory. A CHAIN's
+// nodes are individually `__mm_alloc`ed and never move: an insertion allocates a new node and rewrites two
+// link words, so every existing handle still names the node it named before. What can dangle a handle is a
+// FREE, and exactly two methods free nodes (`__list_remove_node`, `__list_clear`) — plus the list's own
+// teardown, which cannot happen while a binding of it is live.
+//
+// ⇒ Answering `mutatesReceiver` here would refuse `let a = ml.insertLast(x)` + `ml.insertLast(y)` + a read of
+// `a`, which is not merely legal but the NORMAL way a program builds a list it holds handles into
+// (`/specs/managed-list.md:core.insert-first-multiple`). The immutable-receiver rule (E3019) still uses the
+// wider set, and correctly: an insertion does write a `let` receiver's record.
+//
+// ⚠ **IT IS STILL CONSERVATIVE, AND KNOWINGLY SO.** E3070's subject is the STORAGE, not the individual
+// borrow, so `ml.remove(a)` also kills a handle `b` on a DIFFERENT node that the removal cannot touch. That
+// over-refusal is the sound direction (shv2 does not retain), and narrowing it means teaching the borrow
+// set which borrow a write frees — a different mechanism from this one.
+function managedListMethodFreesANode(name ByteArray) returns bool
+	return name.equals(RemoveMethod) or name.equals(ClearMethod)
+end 'managedListMethodFreesANode'
 
 // `typeTagName` with its English indefinite article — *"an int"*, *"a String"*, *"a Character"*. It exists
 // because this file's container-column refusals compose that phrase and a bare `"a {typeTagName(t)}"` reads
@@ -7056,6 +7162,18 @@ export type Parser
 	// `bindParameters`, and left shared they would be reported against the ENCLOSING function, which
 	// declared none of them.
 	var unusedCandidates as UnusedBindingCandidateArray
+	// ⭐ **HAS THIS FUNCTION BOUND A SECOND NAME TO A VALUE IT DOES NOT OWN?** — set by the immutable
+	// rebind `let b = a` (see `declareInitializedBinding`), and read by nothing but `poisonValueAliases`.
+	//
+	// It exists to keep a symbol-table walk off the move path of every function that mints no alias. Without
+	// an alias, two live bindings provably cannot share one value, so the walk is empty — and the move path
+	// is taken by EVERY consuming call argument in the program, which is where an unconditional per-move
+	// scan of the scope would turn a long body quadratic.
+	//
+	// Reset per function and saved/restored around a closure body like its sibling columns here, because a
+	// closure body is a separate function: an alias minted in the enclosing one says nothing about whether
+	// the closure's own moves need the walk.
+	var functionMintedValueAliases as bool
 	// ⭐⭐ **THE NAMES A MENTION HAS RECORDED IN THIS FUNCTION — E3012's OTHER HALF, and the one
 	// `VarInfo.referenced` structurally cannot answer.** "Referenced" is a fact about the NAME within the
 	// enclosing function, not about the individual binding: MEASURED on the oracle, whose `_referencedVars` is
@@ -7355,6 +7473,7 @@ export type Parser
 			emptyTypeParams: ByteArrayArray.create(),
 			ownedBindings: VarInfoArray.create(),
 			unusedCandidates: UnusedBindingCandidateArray.create(),
+			functionMintedValueAliases: false,
 			referencedNames: ByteArrayArray.create(),
 			pendingTempDrops: ValueIdArray.create(),
 			lastDispatchedMemberIndex: 0,
@@ -7687,7 +7806,7 @@ export type Parser
 			// array. It consumes the `type` keyword before it can fail, so the cursor always
 			// advances and this loop cannot spin.
 			if depth == 0 and self.at(TokenKind.type) 'isTypeDecl'
-				self.recordScannedType(structs, entries: entries, paramConsumes: paramConsumes, paramDefaults: paramDefaults, throwsEntries: throwsEntries, innerAliasOut: innerAliases, genericAliasOut: genericAliases, methodInnerAliasParamOut: methodInnerAliasParams, freeFunctionNameOut: freeFunctionNames)
+				self.recordScannedType(structs, entries: entries, paramConsumes: paramConsumes, paramDefaults: paramDefaults, throwsEntries: throwsEntries, innerAliasOut: innerAliases, genericAliasOut: genericAliases, functionAliasOut: functionAliases, methodInnerAliasParamOut: methodInnerAliasParams, freeFunctionNameOut: freeFunctionNames)
 				continue
 			end 'isTypeDecl'
 
@@ -9965,7 +10084,7 @@ export type Parser
 	// tell them apart. `depth` here is relative to the body — 0 is directly inside it — and
 	// `blockDepthAfter` is the same opener/closer rule the caller counts with, so a method's `if`
 	// and `while` nest correctly and its `end` cannot be mistaken for the type's.
-	function recordScannedType(structs StructLayoutArray, entries FuncReturnTypeEntryArray, paramConsumes ParamConsumeEntryArray, paramDefaults ParamDefaultEntryArray, throwsEntries ThrowsClauseEntryArray, innerAliasOut InnerAliasEntryArray, genericAliasOut GenericAliasEntryArray, methodInnerAliasParamOut MethodInnerAliasParamEntryArray, freeFunctionNameOut ByteArrayArray)
+	function recordScannedType(structs StructLayoutArray, entries FuncReturnTypeEntryArray, paramConsumes ParamConsumeEntryArray, paramDefaults ParamDefaultEntryArray, throwsEntries ThrowsClauseEntryArray, innerAliasOut InnerAliasEntryArray, genericAliasOut GenericAliasEntryArray, functionAliasOut FunctionTypeAliasArray, methodInnerAliasParamOut MethodInnerAliasParamEntryArray, freeFunctionNameOut ByteArrayArray)
 		// ⚠ **THE SWEEP MUST READ THE MODIFIER ITSELF**, and BACKWARDS, exactly as `recordScannedBinding`
 		// does: the caller's loop meets `export`/`module` as an ordinary token and steps over it, so the
 		// cursor arrives here already on the `type` keyword. Read forwards it would answer `file` for every
@@ -10033,10 +10152,13 @@ export type Parser
 			// stopping here leaves the remaining tokens to the robust outer walk.
 			if depth == 0 and self.atTypeAliasDeclaration() 'isInnerAlias'
 				let nestedVisibility = try self.consumeOptionalVisibility() otherwise break
-				let nested = try self.readNestedTypeAlias(nestedVisibility) otherwise break
+				let nested = try self.readNestedTypeAlias(nestedVisibility, recordFunctionSignature: false) otherwise break
 				match nested 'nested'
 					ranged(alias) then innerAliasOut.push(InnerAliasEntry.create(self.enclosingType, alias: alias))
 					genericInstance(entry) then genericAliasOut.push(self.qualifiedInnerGenericAlias(entry))
+					// Into the FILE's function-alias array, the one a top-level `typealias Fn = function(…)`
+					// lands in — unqualified, because that is the scope it declares (see `NestedAliasResult`).
+					functionAlias(alias) then functionAliasOut.push(alias)
 				end 'nested'
 				continue
 			end 'isInnerAlias'
@@ -11076,9 +11198,10 @@ export type Parser
 	//      operand and body `as` cast target. Ten call sites, one hook.
 	//   2. `parseQualifiedCall` — `IntArray.create()`. A generic-instance alias is very often named ONLY
 	//      here, and this base name is a raw token that never reaches (1).
-	//   3. A TOP-LEVEL constant's `as` target (`ProgramSignatures.isConstCastTarget`) — which the real
-	//      parse cannot see at all, because it SKIPS the initializer's tokens and the const evaluator
-	//      that does read them runs before any file is parsed. See that function.
+	//   3. A TYPE NAME A TOP-LEVEL INITIALIZER WRITES — a cast's target, or a container factory's alias
+	//      (`ProgramSignatures.namesTypeInConstInitializer`) — which the real parse cannot see at all,
+	//      because it SKIPS the initializer's tokens and the const evaluator that does read them runs
+	//      before any file is parsed. See that function.
 	//
 	// It takes NAMES indiscriminately — a struct name, an interface name, a type parameter — because a
 	// recording site does not know what a written name denotes and must not have to ask. The filtering
@@ -11115,7 +11238,7 @@ export type Parser
 			// The third door, asked SECOND because it costs a composite key where the set above costs a
 			// hash of bytes already in hand — and asked once per file-private alias DECLARED, which is
 			// the smallest population any of the three is asked of.
-			if self.signatures.isConstCastTarget(candidate.name, declFilePath: self.filePath) 'usedByAConstant'
+			if self.signatures.namesTypeInConstInitializer(candidate.name, declFilePath: self.filePath) 'usedByAConstant'
 				continue
 			end 'usedByAConstant'
 
@@ -11173,7 +11296,7 @@ export type Parser
 			// the same enumeration and is now the only one.
 			value then break 'outcome'
 			failed(error) then try self.throwRecordedConstantError(error)
-			poisoned to arrayValue then break 'outcome'
+			poisoned to containerValue then break 'outcome'
 			pending to evaluating then panic("Parser.raiseBindingFailure: top-level binding '{String.from(decl.name)}' is unevaluated — `evaluateInitializers` runs to completion inside `queryProgramSignatures`, before any file is parsed")
 		end 'outcome'
 	end 'raiseBindingFailure'
@@ -11465,15 +11588,21 @@ export type Parser
 		return self.at(TokenKind.typealias)
 	end 'atTypeAliasDeclaration'
 
-	// ⭐ **READ ONE NESTED (INNER) TYPEALIAS (P1.6-C / P1.7 slice 3b-i)** — `typealias Idx = int(0 to u64.max)`
-	// OR `typealias ElementArray = Array with T` inside a generic type body. The cursor sits at `typealias`
-	// (any `export` is consumed by the caller, which is why the visibility is passed rather than read).
-	// It reuses `readTypeAliasDeclaration` — the ONE typealias grammar the sweep and the real parse share —
-	// which routes a `Base with Args` RHS into `genericOut` and a ranged RHS into `rangedOut`. A nested
-	// FUNCTION alias has neither form and is rejected cleanly (a later slice). Both supported forms record
-	// their bare member into `enclosingInnerAliases` so the rest of the body's bare references resolve; the
-	// caller keys the returned shape whole-program.
-	function readNestedTypeAlias(visibility Visibility) returns NestedAliasResult throws ParseError
+	// ⭐ **READ ONE NESTED (INNER) TYPEALIAS (P1.6-C / P1.7 slice 3b-i)** — `typealias Idx = int(0 to u64.max)`,
+	// `typealias ElementArray = Array with T` or `typealias Fn = function(Integer) returns Integer` inside a
+	// type body. The cursor sits at `typealias` (any `export` is consumed by the caller, which is why the
+	// visibility is passed rather than read). It reuses `readTypeAliasDeclaration` — the ONE typealias grammar
+	// the sweep and the real parse share — which routes each RHS into its own out-array. A nested TUPLE alias
+	// is rejected cleanly (a later slice). The two PER-INSTANCE forms record their bare member into
+	// `enclosingInnerAliases` so the rest of the body's bare references resolve; the FUNCTION form does not,
+	// because it is a file-scope declaration written inside a body and its name must mean the same thing on
+	// both sides of the type's `end` (see `NestedAliasResult`). The caller keys the returned shape.
+	//
+	// ⚠ **NOTHING HERE IS GATED ON THE ENCLOSING TYPE BEING GENERIC, AND NOTHING EVER WAS** — `parseTypeMember`
+	// and the sweep's body walk reach this for a plain `type Config` exactly as for a `type Container uses T`.
+	// The refusal below said "inside a generic type" for a year and was read as a statement about which types
+	// admit a nested alias; it was only ever a statement about which RHS FORMS are built.
+	function readNestedTypeAlias(visibility Visibility, recordFunctionSignature bool) returns NestedAliasResult throws ParseError
 		let aliasTok = self.current()
 		var ranged = RangedTypeAliasArray.create()
 		var functionAliases = FunctionTypeAliasArray.create()
@@ -11482,7 +11611,7 @@ export type Parser
 		// The FORM comes from the reader that decided it, never from which array grew: that inference
 		// would be a second copy of a discrimination `readTypeAliasDeclaration` already makes, free to
 		// drift the day a fourth form appears.
-		let form = try self.readTypeAliasDeclaration(ranged, functionOut: functionAliases, genericOut: generics, recordFunctionSignature: false, visibility: visibility)
+		let form = try self.readTypeAliasDeclaration(ranged, functionOut: functionAliases, genericOut: generics, recordFunctionSignature: recordFunctionSignature, visibility: visibility)
 
 		// A generic-instance nested alias (`Array with T`) — recorded by `readGenericInstanceAlias` into
 		// `generics`. Its instance is PARTIALLY OPAQUE (`Array with typeParameter(pos)`), keyed whole-program by
@@ -11494,13 +11623,20 @@ export type Parser
 			return NestedAliasResult.genericInstance(entry)
 		end 'genericInstance'
 
-		// Every remaining form is unsupported nested — today the FUNCTION one and the TUPLE one, and the
-		// message names both; a nominal kind cannot reach here at all, `typealias` being the only keyword
-		// this reader consumes. The enumeration is kept exhaustive deliberately: it is the reader's only
-		// statement of what a nested alias may be, so a form added to `readTypeAliasDeclaration` and not
-		// added here would be reported as if it did not exist.
+		// A FUNCTION nested alias. It is NOT entered into `enclosingInnerAliases`: an inner-alias name is
+		// stamped `Type.Member` wherever the body writes it (`parseTypeReference`'s inner-alias arm), and a
+		// function alias must read back as the same file-scope `MaxonType.function(<name>)` inside the body
+		// and outside it.
+		if form == TypeDeclKind.functionAlias 'functionAlias'
+			return NestedAliasResult.functionAlias(try functionAliases.get(0) otherwise panic("readNestedTypeAlias: the function form was read but functionAliases.get(0) failed"))
+		end 'functionAlias'
+
+		// The TUPLE form is the one remaining nested shape. A nominal kind cannot reach here at all,
+		// `typealias` being the only keyword this reader consumes. The enumeration is kept exhaustive
+		// deliberately: it is the reader's only statement of what a nested alias may be, so a form added to
+		// `readTypeAliasDeclaration` and not added here would be reported as if it did not exist.
 		if form != TypeDeclKind.rangedAlias 'notSupported'
-			throw ParseError.unsupported("a nested typealias inside a generic type must be a ranged `int`/`float` alias (`typealias Idx = int(0 to u64.max)`) or a generic-instance alias (`typealias ElementArray = Array with T`); a nested function or TUPLE alias is a later slice", line: aliasTok.line, column: aliasTok.column)
+			throw ParseError.unsupported("a nested typealias must be a ranged `int`/`float` alias (`typealias Idx = int(0 to u64.max)`), a generic-instance alias (`typealias ElementArray = Array with T`) or a function alias (`typealias Fn = function(Integer) returns Integer`); a nested TUPLE alias is a later slice", line: aliasTok.line, column: aliasTok.column)
 		end 'notSupported'
 
 		let alias = try ranged.get(0) otherwise panic("readNestedTypeAlias: the ranged form was read but ranged.get(0) failed")
@@ -12028,6 +12164,7 @@ export type Parser
 					// This is the ONLY place a function type's parameter list is parsed — an inline `function(...)` in a
 					// parameter position is E2010 — so one call site covers the position.
 					try self.requireStorableDeclaredType(paramType, position: DeclaredStoragePosition.functionTypeParameter, line: paramAnchor.line, column: paramAnchor.column)
+					try self.requireNoEnclosingTypeParameter(paramType, aliasName: nameTok.value, line: paramAnchor.line, column: paramAnchor.column)
 					paramTypes.push(paramType)
 					declaredParams.push(FunctionAliasParam.create(maxonTypeTag(paramType), typeName: self.functionAliasTypeName(paramType), aggregateName: self.erasedAggregateNameOf(paramType)))
 				end 'collectParam'
@@ -12053,6 +12190,7 @@ export type Parser
 				// value cannot read it (`callIndirect` declares one result). Gated on `recordSignature`
 				// exactly as the parameter half above is: the sweep may not veto.
 				try self.requireStorableDeclaredType(returnType, position: DeclaredStoragePosition.functionTypeReturnType, line: returnsTok.line, column: returnsTok.column)
+				try self.requireNoEnclosingTypeParameter(returnType, aliasName: nameTok.value, line: returnsTok.line, column: returnsTok.column)
 				// ⚠ Inside the gate with the parameter half, and NOT beside the two unconditional lines below,
 				// because it is the one fact of the three the sweep cannot read identically: `erasedAggregateNameOf`
 				// classifies through `self.signatures`, the registry the sweep is still filling. The sweep's copy
@@ -12089,6 +12227,27 @@ export type Parser
 		let k = self.peekKind()
 		return k == TokenKind.identifier or k == TokenKind.int or k == TokenKind.bool or k == TokenKind.float or k == TokenKind.selfType
 	end 'peekStartsType'
+
+	// ⭐ **A FUNCTION ALIAS MAY NOT NAME AN ENCLOSING TYPE PARAMETER, and the reason is the alias's IDENTITY.**
+	// A function alias resolves to `MaxonType.function(<the alias NAME>)` — ONE type whole-program, carrying
+	// ONE stored signature — while `T` denotes a different type in every instantiation of the enclosing
+	// generic. `typealias Fn = function(T) returns T` inside `type Container uses T` therefore has no single
+	// signature to store, and it would not fail loudly on its own: `functionAliasTypeName` has no
+	// re-internable NAME for a `typeParameter` and yields the empty string, which the alias would carry as its
+	// declared parameter type and every later reader would take at face value.
+	//
+	// ⚠ **THE POSITION IS REACHABLE ONLY BECAUSE A NESTED FUNCTION ALIAS IS**: `parseTypeReference` mints a
+	// `typeParameter` only inside a type's own body, so before the nested form was admitted this could not
+	// fire, and `functionAliasTypeName`'s `typeParameter` arm says as much ("not reachable in the trivial
+	// slice"). The refusal lands with the door that opened it. It is asked of BOTH halves of the signature,
+	// beside `requireStorableDeclaredType` and under its `recordSignature` gate, for that gate's reason.
+	function requireNoEnclosingTypeParameter(declared MaxonType, aliasName ByteArray, line LineNumber, column ColumnNumber) throws ParseError
+		if maxonTypeTag(declared) != ValueTypeTag.typeParameter 'notATypeParameter'
+			return
+		end 'notATypeParameter'
+
+		throw ParseError.unsupported("function typealias '{String.from(aliasName)}' names a type parameter of the enclosing type — a function alias's identity is its NAME whole-program, so its signature cannot vary per instantiation; declare it at file scope over a concrete type", line: line, column: column)
+	end 'requireNoEnclosingTypeParameter'
 
 	// The interned NAME behind one type in a function alias's declared signature — a PARAMETER's or the
 	// RETURN's — stored so the type can be re-interned into any reader's own interner (see
@@ -12637,8 +12796,24 @@ export type Parser
 			// interface's BODY (`recordScannedInterface`) because an interface contributes no layout, no
 			// signature and no emitted symbol for a later pass to look one up from. Its header's `uses` ARITY
 			// is the one exception, and it is one because a PARSE reads it back (R7).
+			//
+			// ⚠ **A FUNCTION alias is REFUSED here though a `type` body now takes one**, and the asymmetry is
+			// the sweep's, not the grammar's: a function alias is resolved through the WHOLE-PROGRAM
+			// `signatures.functionTypeAliases`, which `foldFile` fills from the declaration sweep — and the
+			// sweep reads no interface BODY at all (`recordScannedInterface` consumes the declaration whole).
+			// Recorded from the real parse alone the name would be a function alias to `project` and an
+			// unknown type to `parseTypeReference`, which is a wrong answer rather than a missing feature.
 			if self.atTypeAliasDeclaration() 'associatedTypeAlias'
-				_ = try self.readNestedTypeAlias(try self.consumeOptionalVisibility())
+				let aliasTok = self.current()
+				let declaresFunctionType = match try self.readNestedTypeAlias(try self.consumeOptionalVisibility(), recordFunctionSignature: false) 'nested'
+					ranged to genericInstance gives false
+					functionAlias gives true
+				end 'nested'
+
+				if declaresFunctionType 'functionAliasInInterface'
+					throw ParseError.unsupported("a function typealias inside an `interface` body is a later slice — the declaration sweep does not read an interface's members, so the alias would name a type only its own file could resolve; declare it at file scope", line: aliasTok.line, column: aliasTok.column)
+				end 'functionAliasInInterface'
+
 				continue
 			end 'associatedTypeAlias'
 
@@ -13343,20 +13518,25 @@ export type Parser
 			self.advance()
 		end 'staticMember'
 
-		// A NESTED (inner) ranged typealias (P1.6-C) — `export typealias Idx = int(0 to u64.max)`. The
-		// `export` (visibility) is already consumed above; a nested typealias takes no `static`. It records the
-		// bare member into `enclosingInnerAliases` so the rest of the body's bare `Idx` references resolve
-		// (whole-program recording is the sweep's — this artifact needs only the local set). Its visibility is
-		// inert at this rung (an inner alias erases to `integer`, so it names no cross-file value).
+		// A NESTED (inner) typealias (P1.6-C) — `export typealias Idx = int(0 to u64.max)`. The
+		// `export` (visibility) is already consumed above; a nested typealias takes no `static`. Its
+		// visibility is inert for the per-instance forms at this rung (an inner alias erases to `integer`, so
+		// it names no cross-file value).
 		if self.at(TokenKind.typealias) 'nestedTypeAlias'
 			if isStatic 'staticInnerAlias'
 				let tok = self.current()
 				throw ParseError.unsupported("a nested typealias cannot be `static` — it is a per-type declaration, not a member function", line: tok.line, column: tok.column)
 			end 'staticInnerAlias'
-			// The whole-program recording (into `innerAliases`/`genericAliases`) is the sweep's; the real parse
-			// needs only the local `enclosingInnerAliases` population that `readNestedTypeAlias` performs, so the
-			// returned shape is discarded here.
-			_ = try self.readNestedTypeAlias(visibility)
+
+			// The two PER-INSTANCE forms are keyed whole-program by the sweep (`innerAliases`/`genericAliases`)
+			// and the real parse needs only the local `enclosingInnerAliases` population `readNestedTypeAlias`
+			// performs — so their shapes are discarded here. A FUNCTION alias is not a member, and its declared
+			// SIGNATURE lives only in the real parse's artifact (`readFunctionTypeAlias`'s `recordSignature`
+			// note), so it is filed here in the array a top-level `typealias Fn = function(…)` files into.
+			match try self.readNestedTypeAlias(visibility, recordFunctionSignature: true) 'nested'
+				ranged to genericInstance then return
+				functionAlias(alias) then self.artifact.functionTypeAliases.push(alias)
+			end 'nested'
 			return
 		end 'nestedTypeAlias'
 
@@ -13557,6 +13737,9 @@ export type Parser
 		// the previous function would be reported against THIS function's `end`, blaming a parameter no part
 		// of this declaration names.
 		self.unusedCandidates = UnusedBindingCandidateArray.create()
+		// Cleared for the reason its header gives: the aliases it stands for belong to the SSA space of the
+		// function that minted them, and this one has none until it binds one.
+		self.functionMintedValueAliases = false
 		// Re-created for the same reason, one step further out: a name mentioned in the PREVIOUS function
 		// would excuse a candidate of that name here. The name-scoped half is bounded to ONE function,
 		// exactly as the oracle's per-function `_referencedVars` is.
@@ -15246,10 +15429,14 @@ export type Parser
 		if self.at(TokenKind.return) 'ret'
 			try self.parseReturnStatement(func, block: block)
 		end 'ret' else if self.at(TokenKind.let) 'letDecl'
-			try self.parseBinding(func, block: block, mutable: false)
+			try self.parseBinding(func, block: block, mutable: false, heapAnnotated: false)
 		end 'letDecl' else if self.at(TokenKind.var) 'varDecl'
-			try self.parseBinding(func, block: block, mutable: true)
-		end 'varDecl' else if self.at(TokenKind.if) 'ifStmt'
+			try self.parseBinding(func, block: block, mutable: true, heapAnnotated: false)
+		end 'varDecl' else if self.at(TokenKind.at) 'annotatedDecl'
+			// `@heap let p = Point.create(1, y: 2)` — an ANNOTATED binding. The `@` is the only token that opens
+			// one and it opens nothing else, so the arm sits beside the two bindings it decorates.
+			try self.parseAnnotatedBinding(func, block: block)
+		end 'annotatedDecl' else if self.at(TokenKind.if) 'ifStmt'
 			return try self.parseIfStatement(func, block: block)
 		end 'ifStmt' else if self.at(TokenKind.while) 'whileStmt'
 			return try self.parseWhileStatement(func, block: block)
@@ -15449,6 +15636,36 @@ export type Parser
 		return self.currentBlock
 	end 'parseStatement'
 
+	// ⭐⭐ **`@heap let p = Point.create(1, y: 2)` — THE HEAP ANNOTATION (`specs/ownership.md`), WHICH SHV2
+	// ACCEPTS, VALIDATES, AND THEN LOWERS AS A PLAIN BINDING.** It asks the compiler to heap-allocate the
+	// decorated local instead of promoting it to the stack — a request shv2 has nothing to do about, because
+	// **every struct in shv2 IS a heap box** (`Self{…}` emits an `__mm_alloc`; see `valueIsNonTextAggregate`)
+	// and there is no stack-promotion pass to opt out of. So the annotation is honoured by construction, and
+	// the four `ownership.md` cases that carry it (`local-struct-freed`, `nested-block-frees`,
+	// `if-then-block-cleanup`, `while-loop-iteration-cleanup`) were MEASURED to pass with the annotation
+	// stripped — same stdout, exit 0, no leak — which is what says a no-op lowering is honest rather than
+	// merely sufficient. v1 reached the same conclusion for the same reason (`Parser.maxon:10817`).
+	//
+	// ⚠ **WHAT IS NOT A NO-OP IS THE VALIDATION.** An unrecognized annotation, an `@heap` decorating something
+	// that is not a binding, and an `@heap` on a value that owns no heap are all refused — see the three
+	// `ParseError` arms. Accepting the token and ignoring what follows it would make `@hepa let x = 5` a
+	// silently-honoured typo.
+	function parseAnnotatedBinding(func IrFunction, block IrBlock) throws ParseError
+		let atTok = try self.consume(TokenKind.at)
+
+		let annotationTok = self.current()
+		if annotationTok.kind != TokenKind.identifier or not annotationTok.value.equals(HeapAnnotationName) 'unknownAnnotation'
+			throw ParseError.unknownAnnotation(tokenDisplayText(annotationTok), line: atTok.line, column: atTok.column)
+		end 'unknownAnnotation'
+		try self.consume(TokenKind.identifier)
+
+		if not self.at(TokenKind.var) and not self.at(TokenKind.let) 'notABinding'
+			throw ParseError.heapAnnotationWithoutBinding(atTok.line, column: atTok.column)
+		end 'notABinding'
+
+		try self.parseBinding(func, block: block, mutable: self.at(TokenKind.var), heapAnnotated: true)
+	end 'parseAnnotatedBinding'
+
 	// Parse a `let`/`var` binding: `let <name> = <expr>`. M2 rejects a type
 	// annotation — a `:` after the name makes the `=` consume fail with E2010
 	// (`Expected '=' but got ':'`), which IS the `variables.md` type-annotation
@@ -15464,7 +15681,10 @@ export type Parser
 	// The binding takes the initializer's INFERRED type, not a hardcoded `integer`. That was
 	// harmless while every value was an int; it is not any more — `let flag = a > b` binds a
 	// `bool`, and `flag and other` short-circuits only if the parser knows so.
-	function parseBinding(func IrFunction, block IrBlock, mutable bool) throws ParseError
+	//
+	// `heapAnnotated` is true only for the `@heap` spelling (`parseAnnotatedBinding` above), and its whole
+	// effect is the refusal below — the annotation changes no IR.
+	function parseBinding(func IrFunction, block IrBlock, mutable bool, heapAnnotated bool) throws ParseError
 		let keywordTok = self.current()
 		if mutable 'isVar'
 			try self.consume(TokenKind.var)
@@ -15474,6 +15694,10 @@ export type Parser
 
 		// ⭐ **`let (x, y) = <a tuple>` — DESTRUCTURING (P1.10).** Recognized by the `(` where a name belongs:
 		// no other binding form opens with one, so the two grammars are disjoint at the first token.
+		//
+		// `@heap` owes this path no check: a destructuring initializer must BE a tuple (`requireDestructurableTuple`),
+		// a tuple is a heap record, so the annotation is satisfied by construction and the refusal below could
+		// never fire here. The bootstrap accepts the same shape (measured on `@heap let (a, b) = (1, 2)`).
 		if self.at(TokenKind.leftParen) 'destructure'
 			try self.parseDestructuringBinding(func, block: block, mutable: mutable, keywordTok: keywordTok)
 			return
@@ -15484,12 +15708,32 @@ export type Parser
 		try self.consume(TokenKind.equals)
 		let rhsStart = self.pos
 		let value = try self.parseExpression(func, block: block)
-		// Was the initializer a bare reference to a local (`let u = t`)? A MOVE poisons that source; any
-		// other RHS is a consume that poisons nothing. Captured here, off the token position, so the
-		// poison never runs its owned-set scan on a consume (see `rhsWasBareLocalReference`).
-		let rhsWasBareLocal = self.rhsWasBareLocalReference(rhsStart)
 
-		try self.declareInitializedBinding(func, nameTok: nameTok, value: value, rhsWasBareLocal: rhsWasBareLocal, mutable: mutable)
+		// ⭐ **`@heap` ON A VALUE THAT OWNS NO HEAP IS REFUSED** — the annotation asks for a box, and for an
+		// `int` there is none to force. See the `heapAnnotationOnNonRecord` union arm for why the admissible
+		// set is `valueIsManagedHeap`'s and not the bootstrap's narrower "struct literals".
+		if heapAnnotated and not self.valueIsManagedHeap(value) 'annotatedNonRecord'
+			throw ParseError.heapAnnotationOnNonRecord(String.from(nameTok.value), tag: typeTagName(self.tagOf(value)), line: nameTok.line, column: nameTok.column)
+		end 'annotatedNonRecord'
+
+		// WHOSE storage did the initializer reach into — `let u = t` (the binding itself) or `let u = t.x`
+		// (a field of it) — and empty for every other RHS, which mints a fresh value owned by nobody.
+		// Captured here, off the token position, so neither the move poison nor E3078 runs on a consume
+		// (see `rhsRootLocalName`).
+		let sourceName = self.rhsRootLocalName(rhsStart)
+		let sourceReadsAField = self.rhsSpanReadsAField(rhsStart)
+
+		// ⭐⭐ **E3078 IS ASKED AT THE DOORS THAT HOLD A NAME THE AUTHOR WROTE — this one and the
+		// destructuring ELEMENT — and never inside `declareInitializedBinding`.** That door also declares
+		// the destructuring TEMP, a binding the compiler mints (`__destructure_<line>_<col>`) and hands the
+		// author's keyword although its mutability is inert; a mutability-keyed rule asked there refused
+		// `var (a, b) = t` from an immutable `t` outright and blamed a name that appears nowhere in the
+		// program. Asked here, the sentence can only ever name something the author can go and change.
+		// The ordering the rule needs is unaffected: this still runs before the borrowed-managed promotion
+		// that door performs, which is the aliasing being refused (see `requireMutableBindingSource`).
+		try self.requireMutableBindingSource(nameTok, value: value, sourceName: sourceName, sourceReadsAField: sourceReadsAField, mutable: mutable)
+
+		try self.declareInitializedBinding(func, nameTok: nameTok, value: value, sourceName: sourceName, sourceReadsAField: sourceReadsAField, mutable: mutable)
 	end 'parseBinding'
 
 	// ⭐ **BIND ONE NAME TO ONE ALREADY-PARSED INITIALIZER — the whole declaration half of a `let`/`var`.**
@@ -15499,7 +15743,18 @@ export type Parser
 	// owned/promise enrolment and the move-on-bind poison. A second copy of that list is not a duplication
 	// risk in the abstract; it is the concrete way a destructured `String` element comes to be dropped twice
 	// or not at all.
-	function declareInitializedBinding(func IrFunction, nameTok Token, value ValueId, rhsWasBareLocal bool, mutable bool) throws ParseError
+	//
+	// ⚠ **E3078 IS THE CALLER'S, AND IT MUST ALREADY HAVE BEEN ASKED.** The borrowed-managed promotion below
+	// IS the aliasing that rule refuses — it retains an immutable source's box and hands it to a writable
+	// name — so the refusal has to run BEFORE this door rather than inside it. It is asked at the two callers
+	// that hold a name the AUTHOR WROTE (`parseBinding`, and the destructuring ELEMENT) and at neither of the
+	// other two: the `if let` binding names no source at all, and the destructuring TEMP does name one but is
+	// a binding the compiler MINTED, which no diagnostic may tell an author to change. `sourceName` reaches
+	// this door for the MOVE poison, which is a different question. See `requireMutableBindingSource`.
+	function declareInitializedBinding(func IrFunction, nameTok Token, value ValueId, sourceName ByteArray, sourceReadsAField bool, mutable bool) throws ParseError
+		// A bare read of a local is the only initializer that can MOVE an owned value out of an existing
+		// binding — a field read of one mints a fresh borrowed pointer that is the value of no binding.
+		let rhsWasBareLocal = not sourceName.isEmpty() and not sourceReadsAField
 		// ⭐ **A MUTABLE BORROWED MANAGED BINDING IS PROMOTED TO OWNED AT ITS DECLARATION.** A `var` whose
 		// initializer is a BORROWED managed value (a `"literal"` rdata String, or a struct/union PARAMETER —
 		// both hold a managed tag yet own nothing) is made to own a droppable value here, at ITS OWN scope:
@@ -15555,22 +15810,56 @@ export type Parser
 		// bit rides the value), and MOVES it (below). The day a struct arrives from somewhere other than a
 		// factory call, its producer set the same bit, and this asks no new question.
 		if self.valueIsOwnedHeap(boundValue) 'trackOwned'
-			// ⭐ **MOVE-ON-BIND.** If the initializer was a bare reference to an ALREADY-owned binding
-			// (`let u = t`), `boundValue` is that binding's value: it MOVES to this new one. Poison the
-			// source so a later read of it is use-after-move and only the new owner drops the value.
-			// A fresh owned temp (`build()`, `"{x}"`, a promoted mutable-string copy) is held by no
-			// binding, so nothing is poisoned — that is a CONSUME (move-in), not a source-poisoning move.
-			// Gated on `boundBareLocal`, so a consume never pays the owned-set scan; run BEFORE the push
-			// below, so the scan cannot find this new binding (it aliases the same value).
-			if boundBareLocal 'moveOnBind'
-				try self.poisonMoveSource(boundValue, anchor: nameTok)
-			end 'moveOnBind'
-			self.ownedBindings.push(binding)
-			// Ownership TRANSFERS from the statement to the binding, so the statement must no longer drop it
-			// — a second drop of the box the binding now owns is a double-free. A struct box is never in the
-			// pending list (only `emitStringInterp` enrolls); an owned interpolation result is, so this is
-			// what moves its drop from statement-end to scope-exit.
-			self.removeFromPendingTemps(boundValue)
+			// ⭐⭐ **AN IMMUTABLE REBIND IS A SECOND REFERENCE, NOT A MOVE (the ownership ruling, 2026-08-04).**
+			// Maxon is single-ownership and everything is a reference; `clone()` is the only copy. What makes
+			// `let b = a` SAFE is mutability, not linearity — neither name can be written through, so the two
+			// cannot observe each other changing and the value is simply reachable by two names. So `b` binds
+			// `a`'s value, `a` is NOT poisoned, and both stay readable: `specs/ownership.md`'s `local-alias`.
+			//
+			// ⭐ **ONE DROP, AND IT IS STILL THE OWNER'S — no refcount traffic.** The alias is NOT enrolled in
+			// `ownedBindings`, so `emitScopeDrops` never sees it and the ONE drop stays where it already was:
+			// at the owner's scope exit. That is sound without any liveness analysis because a binding can only
+			// be declared AFTER the name it reads, in that name's scope or one nested inside it — so the owner
+			// always outlives every alias of it, structurally. It is the same shape a borrowed binding
+			// (`let q = <a struct parameter>`) already had; what changed is which initializers reach it.
+			//
+			// ⚠ **A MUTABLE SOURCE STILL MOVES**, and that is the ruling's own rationale read the other way: if
+			// `a` is a `var`, a second name for its value CAN observe a write through the first, so there is no
+			// aliasing to be safe. `a = <other>` would then drop the box this binding still names. The refusal
+			// on the mirror shape — a `var` made FROM an immutable name — is E3078 above, so by here a mutable
+			// binding of an owned bare local implies a mutable source.
+			//
+			// ⚠ **IT ASKS `mutable`, NOT `bindingStorageIsWritable`, AND THE DIFFERENCE IS NOT AN OVERSIGHT.**
+			// E3078 asks whether a WRITE could reach storage its owner declared read-only, so it exempts a
+			// PARAMETER (a borrowed reference the callee may mutate). This asks something else: can the source
+			// LOSE its value while the alias still names it? Only a rebind can do that, and only a `var` can be
+			// rebound — a parameter is E2013 — so a consumed owned parameter is a perfectly safe thing to
+			// alias. Two questions, two predicates; collapsing them would either leak a rebound box or refuse
+			// a legal alias.
+			if boundBareLocal and not self.scope.getInfo(sourceName).mutable 'aliasImmutableSource'
+				// `poisonMoveSource` must now consider more than the owned set: a consume of this value
+				// (`f(b)`, `return b`) poisons its OWNER, and this name would go on reading a value the callee
+				// took. The flag keeps that scan off every function that mints no alias — the overwhelming
+				// majority — rather than paying a symbol-table walk per move everywhere.
+				self.functionMintedValueAliases = true
+			end 'aliasImmutableSource' else 'takeOwnership'
+				// ⭐ **MOVE-ON-BIND.** If the initializer was a bare reference to an ALREADY-owned MUTABLE
+				// binding (`var t` + `let u = t`), `boundValue` is that binding's value: it MOVES to this new
+				// one. Poison the source so a later read of it is use-after-move and only the new owner drops
+				// the value. A fresh owned temp (`build()`, `"{x}"`, a promoted mutable-string copy) is held by
+				// no binding, so nothing is poisoned — that is a CONSUME (move-in), not a source-poisoning
+				// move. Gated on `boundBareLocal`, so a consume never pays the owned-set scan; run BEFORE the
+				// push below, so the scan cannot find this new binding (it aliases the same value).
+				if boundBareLocal 'moveOnBind'
+					try self.poisonMoveSource(boundValue, anchor: nameTok)
+				end 'moveOnBind'
+				self.ownedBindings.push(binding)
+				// Ownership TRANSFERS from the statement to the binding, so the statement must no longer drop
+				// it — a second drop of the box the binding now owns is a double-free. A struct box is never in
+				// the pending list (only `emitStringInterp` enrolls); an owned interpolation result is, so this
+				// is what moves its drop from statement-end to scope-exit.
+				self.removeFromPendingTemps(boundValue)
+			end 'takeOwnership'
 		end 'trackOwned'
 
 		// ⭐ **A PROMISE BINDING OWNS A GREEN THREAD (P1.5-B2 #88), the dual of the E3100 linear-await check.**
@@ -15589,6 +15878,69 @@ export type Parser
 			self.removeFromPendingTemps(boundValue)
 		end 'trackPromise'
 	end 'declareInitializedBinding'
+
+	// ⭐⭐ **E3078 — A MUTABLE NAME MAY NOT BE MADE FOR AN IMMUTABLE NAME'S REFERENCE VALUE.**
+	//
+	// The rule the whole ownership model rests on: Maxon is SINGLE-OWNERSHIP and everything is a reference,
+	// so what makes `let b = a` safe is not linearity but MUTABILITY — neither name can be written through,
+	// so two names for one value cannot observe each other. `var b = a` breaks exactly that premise: `b.x = 9`
+	// would show through `a`, which the author wrote `let` to prevent. The author keeps `b` immutable, or
+	// takes an independent copy with `clone()`. Both reference compilers refuse it (the bootstrap at its
+	// `ParseVarOrLetDecl`, v1 deferred to `checkVarFromImmutableForEntry`); shv2 simply never had the rule,
+	// and its move-on-bind accidentally COVERED the hole — after `var b = a` poisoned `a`, the alias was
+	// unreachable rather than refused. Making an immutable rebind an alias removes that cover, which is why
+	// the two halves land together.
+	//
+	// ⭐ **IT RUNS BEFORE THE BORROWED-MANAGED PROMOTION, because the promotion IS the aliasing.**
+	// `declareInitializedBinding` retains a borrowed box for a `var` (`retainBorrowedAggregate`), so a
+	// `var q = <an immutable struct parameter>` would co-own the caller's box under a writable name. Asked
+	// first, that shape never reaches the retain.
+	//
+	// ⭐ **ITS TWO ASKERS ARE THE TWO DOORS THAT HOLD AN AUTHOR-WRITTEN NAME** — `parseBinding`, and the
+	// destructuring ELEMENT (`parseDestructuringBinding`), which asks it of a field of the same source. It is
+	// deliberately NOT asked inside `declareInitializedBinding`, whose third caller declares the destructuring
+	// TEMP: a name the compiler mints cannot be the subject of a sentence telling the author what to change,
+	// and the temp's mutability is inert anyway (see there).
+	//
+	// ⚠ **A REFERENCE TYPE HERE IS A VALUE THAT NAMES STORAGE — asked of the VALUE, not of a type registry.**
+	// `valueIsManagedHeap` is the compiler's existing answer to "is there a record behind this?" (struct box,
+	// boxed union, String/Character record, generic instance, existential), and a FUNCTION value is added
+	// because `specs/var-should-be-let.md` pins it: it is a code pointer, so the copy is harmless, but both
+	// references refuse it and the rule reads better as "everything that is not a number".
+	//
+	// ⚠ **DIVERGENCE, DELIBERATE: a plain ENUM is NOT a reference type in shv2.** The bootstrap refuses
+	// `var d = c` for an enum-typed `c` (its `MaxonValueKind.Enum` arm) because its enums are heap-backed.
+	// shv2 lowers a payload-free enum to its ORDINAL — an integer in a register, with no storage for a second
+	// name to reach — so the refusal would name a hazard the compiler does not have, and `var-should-be-let`
+	// pins no enum case. A union with a payload IS boxed and IS refused, through `valueIsManagedHeap`.
+	function requireMutableBindingSource(nameTok Token, value ValueId, sourceName ByteArray, sourceReadsAField bool, mutable bool) throws ParseError
+		if not mutable or sourceName.isEmpty() 'notAMutableBindOfANamedSource'
+			return
+		end 'notAMutableBindOfANamedSource'
+
+		// A source whose storage is already writable is not the shape this refuses. A `var` is the move
+		// model's own case — it gives the value up, so no second live name aliases it. A PARAMETER is a
+		// borrowed reference to the caller's record, which the callee may mutate; that exemption is
+		// `bindingStorageIsWritable`'s, shared with E3019, and MEASURED on the oracle.
+		if self.bindingStorageIsWritable(self.scope.getInfo(sourceName)) 'sourceIsWritableToo'
+			return
+		end 'sourceIsWritableToo'
+
+		if not self.valueIsManagedHeap(value) and self.tagOf(value) != ValueTypeTag.function 'independentCopy'
+			return
+		end 'independentCopy'
+
+		throw ParseError.varFromImmutable(self.immutableSourceSubject(sourceName, sourceReadsAField: sourceReadsAField), binding: String.from(nameTok.value), line: nameTok.line, column: nameTok.column)
+	end 'requireMutableBindingSource'
+
+	// The clause E3078's sentence blames the source with. A BARE source is blamed by name; a FIELD CHAIN
+	// (`var i = o.inner`) is not, because the value the mutable name would reach is the field's storage and
+	// the field has no binding of its own to name — the root `o` is the immutable thing, and saying `o` would
+	// point the author at a name their `var` line does not mention. Both spellings are the reference
+	// compilers' verbatim (v1 `checkVarFromImmutableForEntry`'s two arms).
+	function immutableSourceSubject(sourceName ByteArray, sourceReadsAField bool) returns String
+		return "from immutable variable" if sourceReadsAField else "immutable variable '{String.from(sourceName)}'"
+	end 'immutableSourceSubject'
 
 	// ⭐⭐ **`let (x, y) = <a tuple>` — DESTRUCTURING, DESUGARED TO A HIDDEN BINDING PLUS ONE FIELD LOAD PER
 	// NAME (P1.10).** Both references lower it exactly this way (v1 `parseTupleDestructureVarDecl`,
@@ -15629,18 +15981,37 @@ export type Parser
 		let value = try self.parseExpression(func, block: block)
 		let layout = try self.requireDestructurableTuple(value, nameToks: nameToks, keywordTok: keywordTok)
 
+		// WHICH local the initializer reached into, read once for the whole destructure — the temp's move
+		// source, and the root every ELEMENT reaches a field of (see the E3078 ask below).
+		let sourceName = self.rhsRootLocalName(rhsStart)
+
 		// The hidden binding takes the SOURCE's keyword: a `var (x, y) = …` element may be reassigned, and a
 		// reassignment of an element rebinds only that name — the box itself is never written through, so the
 		// temp's mutability is inert and simply matches what the author wrote.
+		//
+		// ⚠ **AND BECAUSE IT IS INERT, THE TEMP IS NOT WHAT E3078 MAY BLAME.** Its name is minted here and
+		// appears in no source file, so a refusal keyed on its mutability reported a binding the author never
+		// wrote — and refused `var (a, b) = t` for a tuple of ints, where nothing is aliased at all. The rule
+		// belongs to the ELEMENT names, below, which are the names a write would actually reach storage
+		// through. The temp still supplies the MOVE source, which is a different question (`boundBareLocal`).
 		let tempTok = Token.create(TokenKind.identifier, line: keywordTok.line, column: keywordTok.column, value: "{DestructureTempPrefix}{keywordTok.line}_{keywordTok.column}".toByteArray())
-		try self.declareInitializedBinding(func, nameTok: tempTok, value: value, rhsWasBareLocal: self.rhsWasBareLocalReference(rhsStart), mutable: mutable)
+		try self.declareInitializedBinding(func, nameTok: tempTok, value: value, sourceName: sourceName, sourceReadsAField: self.rhsSpanReadsAField(rhsStart), mutable: mutable)
 
 		for i in 0 upto nameToks.count() 'eachName'
 			let nameTok = try nameToks.get(i) otherwise panic("parseDestructuringBinding: nameToks.get OOB at {i} below count {nameToks.count()}")
 			let element = self.emitFieldLoad(value, layout: layout, index: i, range: SourceRange.between(keywordTok, last: nameTok))
-			// `rhsWasBareLocal: false` — a field load is a fresh borrowed value held by no binding, so there
-			// is no source to poison. It is the same answer a `let x = t.0` written out longhand gets.
-			try self.declareInitializedBinding(func, nameTok: nameTok, value: element, rhsWasBareLocal: false, mutable: mutable)
+
+			// ⭐⭐ **E3078 IS ASKED PER ELEMENT, AND `sourceReadsAField` IS UNCONDITIONALLY TRUE HERE** — an
+			// element IS a field of the source, whatever the initializer's own span was, so `var (p, q) = t`
+			// from an immutable `t` is exactly the `var p = t.0` the desugaring means and gets that program's
+			// answer and that program's sentence, blaming the name the author wrote. A managed element would
+			// otherwise be promoted (retained) into a writable name and `p.x = 9` would show through `t` —
+			// MEASURED, and refused by both reference compilers in the longhand spelling.
+			try self.requireMutableBindingSource(nameTok, value: element, sourceName: sourceName, sourceReadsAField: true, mutable: mutable)
+
+			// No source name for the DECLARATION: a field load is a fresh borrowed value held by no binding,
+			// so there is nothing for the move poison to find.
+			try self.declareInitializedBinding(func, nameTok: nameTok, value: element, sourceName: EmptySourceText, sourceReadsAField: false, mutable: mutable)
 		end 'eachName'
 	end 'parseDestructuringBinding'
 
@@ -19511,14 +19882,49 @@ export type Parser
 	// mints a FRESH temp that is the value of no binding (a CONSUME), so the scan is guaranteed to find
 	// nothing.
 	//
-	// ⚠ **REDUNDANT PARENS ARE STRIPPED FIRST, and that is a soundness requirement, not tidiness.**
+	// A BARE read is a rooted span with no field steps, so it is the two questions `rhsRootLocalName`
+	// and `rhsSpanReadsAField` answer, `and`ed — the chain grammar itself is written down once, there.
+	function rhsWasBareLocalReference(startPos TokenIndex) returns bool
+		return not self.rhsSpanReadsAField(startPos) and not self.rhsRootLocalName(startPos).isEmpty()
+	end 'rhsWasBareLocalReference'
+
+	// ⭐⭐ **WHICH LOCAL THE RHS SPAN IS ROOTED AT — the `t` of `t`, `(t)`, `t.x`, `t.0`, `(t).x`, `(t.x.y)` —
+	// or the EMPTY name when the span is not a chain of members rooted at a readable local.**
+	//
+	// Emptiness IS the discriminant and not a sentinel answer: an identifier token can never be empty, so
+	// "no root" has no other spelling to be confused with. It is the same idiom `bareArgImmutableName` and
+	// `borrowSubjectNameAt` already answer in (`EmptySourceText`), for the same reason.
+	//
+	// ⭐ **TWO RULES ASK IT, AND THEY ASK DIFFERENT HALVES OF ONE QUESTION.** The MOVE model asks *"was
+	// this a bare read of a local?"* (`rhsWasBareLocalReference` — only that shape can move an owned value
+	// out of an existing binding, because only that shape resolves to the binding's own SSA value). E3078
+	// asks *"whose storage is this initializer reaching into?"*, which a field chain answers too — `var i =
+	// o.inner` aliases `o`'s box through a writable name exactly as `var i = o` would. One walk answers
+	// both, so the grammar of "a name, then field steps" is written down once.
+	//
+	// ⚠ **PARENS ARE PART OF THE CHAIN GRAMMAR, and that is a soundness requirement, not tidiness.**
 	// `parseParenthesizedExpression` returns its inner value UNCHANGED, so `(t)` / `((t))` alias the
 	// same owned box a bare `t` does. A token-count-only gate (`self.pos == startPos + 1`) called them
 	// non-bare-local, so the poison never ran, both bindings dropped the one box, and the #41
-	// double-free returned. Stripping the outer parens makes the gate a SOUND over-approximation: it can
-	// only ever add moves, never miss one. (The identical 4-line strip lives in `shiftCountAnchor`; see
-	// the note there for why it is deliberately inlined at both sites rather than shared through a
-	// tuple-returning helper that would heap-allocate on this per-bind/assign path.)
+	// double-free returned.
+	//
+	// ⚠ **AND STRIPPING ONLY THE PAIR THAT WRAPS THE WHOLE SPAN WAS NOT ENOUGH — MEASURED.** `(t).x` opens
+	// with a `(` that no trailing `)` balances at the end of the span, so the strip did not fire, the root
+	// token was the `(`, and the answer was "no root": `var b = t.x` from an immutable `t` was refused while
+	// `var b = (a).x` COMPILED and its `b.x = 99` wrote through `t` (the oracle refuses both). So the walk
+	// recognizes the whole postfix grammar instead — a run of opening parens, the root name, then hops and
+	// closers in any order — which is the shape `parsePrimary` + `parseMemberAccess` actually accept. It
+	// stays a SOUND over-approximation for the move half: every span it newly admits contains a `.`, so
+	// `rhsWasBareLocalReference` (which demands no field step) cannot see one of them.
+	//
+	// ⚠ **A HOP'S NAME IS `namesMemberAt`'s QUESTION, NOT `tokenCanBeAName`'s.** This walk used to spell
+	// "what may follow a `.`" itself, and the copy had already drifted: it did not admit the INT LITERAL of a
+	// tuple's positional access, so `var a = t.0` escaped the same refusal `var a = t._0` receives — the same
+	// wrong answer, one spelling over. The door that owns that question is asked instead.
+	//
+	// (`shiftCountAnchor` still carries the plain whole-span strip; see the note there for why the two are
+	// deliberately not shared. They were never the same question — that one anchors a diagnostic on the token
+	// the author wrote, and it wants the outermost paren gone and nothing else.)
 	//
 	// ⭐ **A GATE, NOT THE DECISION.** `poisonMoveSource` keeps the authority — given a bare-local RHS it
 	// still matches the value against the owned set, so a bare local that is NOT owned (a scalar) still
@@ -19527,40 +19933,88 @@ export type Parser
 	// run on EVERY owned bind and reassignment. Skipping it when this is false is a proven no-op, not a
 	// behaviour change: the scan could not have matched a non-bare-local RHS anyway.
 	//
-	// The single consumed identifier is excluded when it names a top-level binding (`scope.contains`
-	// false) or a self-field alias (`isSelfField`, whose read mints a fresh load rather than aliasing a
-	// binding's value) — neither is a live owned local the scan would match. Those are the same two
-	// conditions `parseVariableReference` treats as a bare LOCAL read, so the gate cannot diverge from
-	// what actually resolves to a binding's `boundValue` — parens included, since a parenthesized read
-	// resolves through the very same `parseVariableReference`.
-	function rhsWasBareLocalReference(startPos TokenIndex) returns bool
+	// ⚠ **THE ROOT TOKEN MAY BE A KEYWORD (D8), because a BINDING's name may be** — asked through
+	// `tokenCanBeAName`, exactly as `consumedParamAfterColon` (the SWEEP's copy of this same question, and
+	// its header names this routine) asks it. The two MUST agree, and the failure when they do not is a
+	// wrong ANSWER: `Self{value: from}` inside `static function create(from String)` had the sweep saying
+	// "the callee consumes it" while this said "the RHS is not a bare local", so the parameter was never
+	// poisoned and the callee dropped at scope exit what it had just stored into the field — a SEGFAULT
+	// on `Box.create(msg)` where the identical program spelling the parameter `path` ran. It stays a
+	// sound over-approximation: `scope.contains` below, and `poisonMoveSource`'s own owned-set match,
+	// keep the authority.
+	//
+	// The root is excluded when it names a top-level binding (`scope.contains` false) or a self-field
+	// alias (`isSelfField`, whose read mints a fresh load rather than aliasing a binding's value) —
+	// neither is a live owned local the move scan would match, and neither is a local whose mutability
+	// E3078 could read. Those are the same two conditions `parseVariableReference` treats as a bare LOCAL
+	// read, so the gate cannot diverge from what actually resolves to a binding's `boundValue` — parens
+	// included, since a parenthesized read resolves through the very same `parseVariableReference`.
+	function rhsRootLocalName(startPos TokenIndex) returns ByteArray
+		let hi = self.pos
 		var lo = startPos
-		var hi = self.pos
-		while lo + 2 <= hi and self.kindAt(lo) == TokenKind.leftParen and self.kindAt(hi - 1) == TokenKind.rightParen 'stripParens'
+		var openParens = 0
+		while lo < hi and self.kindAt(lo) == TokenKind.leftParen 'stripOpeningParens'
 			lo = lo + 1
-			hi = hi - 1
-		end 'stripParens'
+			openParens = openParens + 1
+		end 'stripOpeningParens'
 
-		if hi != lo + 1 'notSingleToken'
-			return false
-		end 'notSingleToken'
+		if lo >= hi 'emptySpan'
+			return EmptySourceText
+		end 'emptySpan'
 
 		let tok = self.tokenAt(lo)
-		// ⚠ **THE ONE TOKEN MAY BE A KEYWORD (D8), because a BINDING's name may be** — asked through
-		// `tokenCanBeAName`, exactly as `consumedParamAfterColon` (the SWEEP's copy of this same question, and
-		// its header names this routine) asks it. The two MUST agree, and the failure when they do not is a
-		// wrong ANSWER: `Self{value: from}` inside `static function create(from String)` had the sweep saying
-		// "the callee consumes it" while this said "the RHS is not a bare local", so the parameter was never
-		// poisoned and the callee dropped at scope exit what it had just stored into the field — a SEGFAULT
-		// on `Box.create(msg)` where the identical program spelling the parameter `path` ran. It stays a
-		// sound over-approximation: `scope.contains` below, and `poisonMoveSource`'s own owned-set match,
-		// keep the authority.
 		if not tokenCanBeAName(tok) 'notAName'
-			return false
+			return EmptySourceText
 		end 'notAName'
 
-		return self.scope.contains(tok.value) and not self.scope.isSelfField(tok.value)
-	end 'rhsWasBareLocalReference'
+		// Everything past the root must CONTINUE the chain — a `. member` hop, or a `)` closing one of the
+		// parens the root was opened behind. A call's `(`, an operator, an index or a trailing method call
+		// all mint a FRESH value that is the storage of no binding, which is precisely the case both askers
+		// must exclude.
+		var closeParens = 0
+		var i = lo + 1
+		while i < hi 'eachStep'
+			if self.kindAt(i) == TokenKind.rightParen 'closesAWrap'
+				closeParens = closeParens + 1
+				i = i + 1
+				continue
+			end 'closesAWrap'
+
+			if self.kindAt(i) != TokenKind.dot or i + 1 >= hi or not self.namesMemberAt(i + 1) 'notAMemberHop'
+				return EmptySourceText
+			end 'notAMemberHop'
+			i = i + 2
+		end 'eachStep'
+
+		// Every paren the root sits behind must be closed by the end of the span. Fewer closers means the
+		// `(` opened something this walk did not read — a call's argument list, a parenthesized operand —
+		// and the span is then not rooted at the name it happens to start with.
+		if closeParens != openParens 'parensDoNotWrapTheChain'
+			return EmptySourceText
+		end 'parensDoNotWrapTheChain'
+
+		if not self.scope.contains(tok.value) or self.scope.isSelfField(tok.value) 'notAReadableLocal'
+			return EmptySourceText
+		end 'notAReadableLocal'
+
+		return tok.value
+	end 'rhsRootLocalName'
+
+	// Did the RHS span reach into a FIELD of its root rather than reading the root itself? A field step is
+	// a `.`, and a bare name span cannot contain one — so this separates `t` from `t.x` without re-walking
+	// the chain grammar `rhsRootLocalName` owns. Spans here are a handful of tokens, so the scan is
+	// cheaper than carrying a second return value out of that walk.
+	function rhsSpanReadsAField(startPos TokenIndex) returns bool
+		var i = startPos
+		while i < self.pos 'eachToken'
+			if self.kindAt(i) == TokenKind.dot 'fieldStep'
+				return true
+			end 'fieldStep'
+			i = i + 1
+		end 'eachToken'
+
+		return false
+	end 'rhsSpanReadsAField'
 
 	// ⭐ **MOVE THE VALUE OUT OF ITS CURRENT OWNER.** If `value` is the current value of a LIVE owned
 	// binding — i.e. the RHS of a bind/assign was a bare reference to that binding (`let u = t`) — mark
@@ -19629,11 +20083,12 @@ export type Parser
 		return false
 	end 'promiseThreadHasLiveAlias'
 
-	// A live binding OTHER than `reArmedName` bound to `thread` and not moved-from — the raw symbol-table scan
-	// `promiseThreadHasLiveAlias` runs on the re-armed value and on each of its phi's incoming values.
+	// A live name of `thread` OTHER than `reArmedName` — the raw symbol-table scan `promiseThreadHasLiveAlias`
+	// runs on the re-armed value and on each of its phi's incoming values. What counts as a live name is
+	// `VarInfo.isLiveNameOf`, shared with `poisonValueAliases`; the name exclusion is this scan's alone.
 	function threadNameAliasedBy(reArmedName ByteArray, thread ValueId) returns bool
 		for (name, info) in self.scope.allVars() 'each'
-			if name != reArmedName and info.boundValue == thread and not info.movedFrom 'alias'
+			if name != reArmedName and info.isLiveNameOf(thread) 'alias'
 				return true
 			end 'alias'
 		end 'each'
@@ -19641,13 +20096,23 @@ export type Parser
 	end 'threadNameAliasedBy'
 
 	function poisonMoveSource(value ValueId, anchor Token) throws ParseError
+		// The OWNER first, and the aliases only once it has been found: the owned-set scan reads
+		// `isLiveOwnerOf`, which a poisoned owner fails — so marking the names first would hide the owner
+		// from its own scan, and with it the loop-escape refusal below.
+		try self.poisonOwningBinding(value, anchor: anchor)
+		self.poisonValueAliases(value)
+	end 'poisonMoveSource'
+
+	// The owned-set half of `poisonMoveSource`: mark the ONE live owner of `value` moved-from, refusing a
+	// move that would escape the innermost loop.
+	function poisonOwningBinding(value ValueId, anchor Token) throws ParseError
 		var i = 0
 		while i < self.ownedBindings.count() 'each'
 			// A `var` bound from `.get(i)`, not a bare `for` element: a field write needs a mutable
 			// binding, and it is written THROUGH the shared `VarInfo` reference (the `Scope.setValue`
 			// idiom), so the flag is observed by every holder — `ownedBindings`, `Scope.vars`, any
 			// loop-phi list.
-			var owned = try self.ownedBindings.get(i) otherwise panic("poisonMoveSource: ownedBindings.get OOB at {i} — the list is only appended to and drained at a block's end")
+			var owned = try self.ownedBindings.get(i) otherwise panic("poisonOwningBinding: ownedBindings.get OOB at {i} — the list is only appended to and drained at a block's end")
 			if self.isLiveOwnerOf(owned, value: value) 'source'
 				if self.bindingIndexEscapesLoop(i as BindingMark) 'escapesLoop'
 					throw ParseError.unsupported("moving a value declared outside this loop from inside the loop body — its drop on the loop's other exit paths (the back edge would re-move it next iteration; a `break` leaves it live on the normal exit) needs path-sensitive elaboration across the loop boundary, which arrives with a later wave. Move the value into the loop body, or restructure so the move does not cross the loop boundary", line: anchor.line, column: anchor.column)
@@ -19657,7 +20122,39 @@ export type Parser
 			end 'source'
 			i = i + 1
 		end 'each'
-	end 'poisonMoveSource'
+	end 'poisonOwningBinding'
+
+	// ⭐⭐ **A MOVE POISONS EVERY NAME THAT READS THE VALUE, NOT ONLY THE ONE THAT OWNS IT.** An immutable
+	// rebind (`let b = a`) enrols no second owner — `b` simply reads `a`'s value — so `poisonMoveSource`'s
+	// owned-set scan finds `a` and stops. That is the right OWNER, and it is not the whole answer: after
+	// `f(b)` or `return b` the callee has the value, and `b` would go on reading a box this frame no longer
+	// owns. The names are not interchangeable to the diagnostic either — a later `print(b)` must say `b`.
+	//
+	// So the symbol table is walked and every live binding on the same value is marked. Only the READ
+	// rejection turns on this bit for an alias: an alias is in no owned set, so no drop is skipped or added
+	// by marking it, which is why marking too widely here can only ever add an E3102, never a leak.
+	//
+	// ⚠ **GATED ON THE FUNCTION HAVING MINTED AN ALIAS AT ALL.** Without an alias no two live bindings can
+	// share a value, so the walk is provably empty — and consuming call arguments reach the poison on every
+	// call in the program, which is exactly where an ungated per-move symbol-table scan would become
+	// quadratic in a long function body.
+	function poisonValueAliases(value ValueId)
+		if not self.functionMintedValueAliases 'noAliasesInThisFunction'
+			return
+		end 'noAliasesInThisFunction'
+
+		for (name, binding) in self.scope.allVars() 'eachBinding'
+			if not binding.isLiveNameOf(value) 'notALiveNameOfIt'
+				continue
+			end 'notALiveNameOfIt'
+
+			// Re-read through `getInfo` for a `var`: the map's `for` element is immutable, and the flag must
+			// be written THROUGH the shared `VarInfo` so every holder observes it — the `Scope.setValue`
+			// idiom `poisonOwningBinding` uses, for its reason.
+			var alias = self.scope.getInfo(name)
+			alias.movedFrom = true
+		end 'eachBinding'
+	end 'poisonValueAliases'
 
 	// Does moving the owned binding at `index` cross OUT of the innermost enclosing loop — i.e. was that
 	// binding declared before the loop body was entered (`LoopContext.ownedFloor`)? Only such a move is
@@ -20559,10 +21056,10 @@ export type Parser
 		// ⭐ **THE SAME DECLARATION A STATEMENT-LEVEL `let`/`var` MAKES, THROUGH THE SAME DOOR.** That is what
 		// carries the success value's FULL type across — a function-typed result keeps its signature, so
 		// `if let g = try pick(true) 'ok' … g(4)` calls through a properly typed value — and it is the whole
-		// reason this is not a second, shorter binding path. `rhsWasBareLocal: false`: the success value is a
-		// fresh call result held by no binding, so there is no source to poison; it is a CONSUME, exactly as
-		// `let x = f()` is.
-		try self.declareInitializedBinding(func, nameTok: nameTok, value: result, rhsWasBareLocal: false, mutable: mutable)
+		// reason this is not a second, shorter binding path. No source name: the success value is a fresh
+		// call result held by no binding, so there is nothing to poison and no immutable source E3078 could
+		// blame; it is a CONSUME, exactly as `let x = f()` is.
+		try self.declareInitializedBinding(func, nameTok: nameTok, value: result, sourceName: EmptySourceText, sourceReadsAField: false, mutable: mutable)
 
 		let thenEnd = try self.parseBlockBody(func, block: thenBlock, label: label)
 		self.dropArmScopedOwned(mark.ownedCount, exitBlock: thenEnd, anchor: nameTok)
@@ -31815,6 +32312,20 @@ export type Parser
 			return try self.dispatchListMethod(func, list: recv.value, resultUsed: resultUsed, immutableReceiverName: recv.immutableName, borrowSubjectName: recv.subjectName, receiverOwner: recv.owner)
 		end 'listMethod'
 
+		// A `__ManagedList` RECEIVER (`ml.insertFirst(x)`, `ml.remove(node)`, `ml.clear()`) is the SAME chain
+		// under the surface that hands out node handles, so it carries the borrow subject for the `List`
+		// arm's reason and one of its own: an insertion's NODE is a reference into the list, and E3070 is
+		// what stops it being read after a `remove`/`clear` frees it.
+		if self.signatures.isManagedListInstanceAt(recv.tag, nameId: recv.nameId) 'managedListMethod'
+			return try self.dispatchManagedListMethod(func, list: recv.value, resultUsed: resultUsed, immutableReceiverName: recv.immutableName, borrowSubjectName: recv.subjectName, receiverOwner: recv.owner)
+		end 'managedListMethod'
+
+		// A NODE-HANDLE RECEIVER (`node.value()`) — its own dispatcher because a node is not a container:
+		// the ONE thing it answers is the element it holds.
+		if self.signatures.isManagedListNodeInstanceAt(recv.tag, nameId: recv.nameId) 'managedListNodeMethod'
+			return try self.dispatchManagedListNodeMethod(func, node: recv.value, giid: recv.nameId)
+		end 'managedListNodeMethod'
+
 		// A VECTOR RECEIVER (`v.get(0)`, `v.set(0, value: 42)`, `v.count()`) goes to the fixed-size container's
 		// dispatch. It carries the STORAGE mask as well as the borrow subject, which the `List` arm above does
 		// not: a vector's slots ARE an array's, so a `set` through one can free the very element an outstanding
@@ -35027,6 +35538,9 @@ export type Parser
 		if self.signatures.isVectorInstance(giid) 'vector'
 			return "`{String.from(VectorBuiltinBaseName)}` static method '{String.from(method)}' — shv2 provides `create()` only; a vector is otherwise built with `{String.from(VectorBuiltinBaseName)} from […]`"
 		end 'vector'
+		if self.signatures.isManagedListInstance(giid) 'managedList'
+			return "`{String.from(ManagedListBuiltinBaseName)}` static method '{String.from(method)}' — shv2 provides `{String.from(CreateMethod)}()` only"
+		end 'managedList'
 		panic("Parser.containerStaticSurfaceSentence: generic instance {giid} is not a create-only builtin container — every caller opens with the builtin-base test `parseBuiltinContainerStaticCall`'s call sites make, and a container admitted there owes a sentence here")
 	end 'containerStaticSurfaceSentence'
 
@@ -35042,14 +35556,20 @@ export type Parser
 			try self.requireMapColumnTypes(giid, tok: aliasTok)
 			return self.emitMapCreateOp(giid, range: range)
 		end 'map'
-		if self.signatures.isListInstance(giid) 'list'
+		if self.signatures.isListInstance(giid) or self.signatures.isManagedListInstance(giid) 'chain'
 			try self.requireListElementType(giid, tok: aliasTok)
 			return self.emitListCreateOp(giid, range: range)
-		end 'list'
+		end 'chain'
 		if self.signatures.isVectorInstance(giid) 'vector'
 			try self.requireVectorElementType(giid, tok: aliasTok)
 			return self.emitVectorCreateOp(giid, range: range)
 		end 'vector'
+		// ⛔ A NODE HANDLE IS NOT CONSTRUCTIBLE — only an insertion mints one — so a `typealias N =
+		// __ManagedListNode with T` + `N.create()` is refused HERE with a sentence rather than reaching the
+		// panic below, which is about a container this router forgot rather than one that has no create.
+		if self.signatures.isManagedListNodeInstance(giid) 'nodeHandle'
+			throw ParseError.unsupported("`{String.from(ManagedListNodeBuiltinBaseName)}` has no `{String.from(CreateMethod)}()` — a node exists only because a `{String.from(ManagedListBuiltinBaseName)}` insertion linked it, and `insertFirst`/`insertLast` hand back the handle", line: aliasTok.line, column: aliasTok.column)
+		end 'nodeHandle'
 		panic("Parser.gateAndEmitContainerCreate: generic instance {giid} is not a create-only builtin container — every caller opens with the builtin-base test `parseBuiltinContainerStaticCall`'s call sites make, and a container admitted there owes a gate and an emit here")
 	end 'gateAndEmitContainerCreate'
 
@@ -35624,9 +36144,14 @@ export type Parser
 	//
 	// MEASURED to pass, each printing and tearing down clean: `bool`, a ranged `Byte`, a declared enum, a
 	// nested `List`, a nested `Array`, `String`, and a struct with a `String` field.
+	// ⚠ **IT SERVES BOTH CHAIN SURFACES, AND NAMES THE ONE THE AUTHOR WROTE.** A `__ManagedList` is the same
+	// record with the same one-word value slot (`SignatureIndex.ManagedListBuiltinBaseName`), so the RULE is
+	// one rule; only the noun in the refusal differs, and it is read off the instance rather than spelled
+	// twice.
 	function requireListElementType(giid GenericInstanceId, tok Token) throws ParseError
+		let container = String.from(self.signatures.genericInstanceBaseName(giid))
 		if self.signatures.containerElementIsOpaque(giid) 'opaqueElement'
-			throw ParseError.unsupported("`List with <type parameter>` — a list inside a generic body has no element destructor to stamp, so a managed instantiation would leak its elements; declare the list at a concrete element type", line: tok.line, column: tok.column)
+			throw ParseError.unsupported("`{container} with <type parameter>` — a chain inside a generic body has no element destructor to stamp, so a managed instantiation would leak its elements; declare it at a concrete element type", line: tok.line, column: tok.column)
 		end 'opaqueElement'
 
 		let element = self.signatures.containerElementType(giid)
@@ -35637,7 +36162,7 @@ export type Parser
 			return
 		end 'wordElement'
 
-		throw ParseError.unsupported("`List` holds one machine word per element, so its element must be a managed type or an integral one — a '{typeTagName(maxonTypeTag(element))}' element does not fit that slot", line: tok.line, column: tok.column)
+		throw ParseError.unsupported("`{container}` holds one machine word per element, so its element must be a managed type or an integral one — a '{typeTagName(maxonTypeTag(element))}' element does not fit that slot", line: tok.line, column: tok.column)
 	end 'requireListElementType'
 
 	// ⭐ **DISPATCH A BUILTIN `List` METHOD** — cursor on the method NAME, `list` the (borrowed) receiver
@@ -35693,12 +36218,156 @@ export type Parser
 			try self.requireVoidMethodIsStatement(resultUsed, methodTok: methodTok)
 			let value = try self.parseContainerElementArg(func, giid: giid, methodTok: methodTok)
 			let callee = ListAppendName if methodTok.value.equals(AppendMethod) else ListPrependName
-			_ = self.emitRuntimeCall(callee, args: pairArgs(list, second: value), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+			// ⚠ The runtime RETURNS the node it linked (the `__ManagedList` surface's handle), so the call is
+			// typed `integer` and the value discarded — a `List` has no node type to hand it to. Typing it
+			// `void` here would tell the Maxon tier a value-returning entry yields nothing, which is the
+			// mismatch `parseArraySetOrInsert`'s own tag note records as a wrong answer in the other
+			// direction. `requireVoidMethodIsStatement` above is what keeps the SURFACE void.
+			_ = self.emitRuntimeCall(callee, args: pairArgs(list, second: value), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
 			return list
 		end 'insertAtAnEnd'
 
 		throw ParseError.unsupported("`List` method '{String.from(methodTok.value)}' — shv2 provides create/append/prepend/get/first/removeFirst/count and `for … in`; last/isEmpty/insert/remove/removeLast/clear/clone are later slices", line: methodTok.line, column: methodTok.column)
 	end 'dispatchListMethod'
+
+	// ⭐⭐ **DISPATCH A `__ManagedList` METHOD** — the node-handle surface over the SAME chain
+	// `dispatchListMethod` serves (`SignatureIndex.ManagedListBuiltinBaseName`), so every emit below is a
+	// `__list_*` entry and not one new runtime call.
+	//
+	// ⭐⭐ **THE NODE AN INSERTION HANDS BACK IS A BORROW OF THE LIST, AND THAT IS WHAT MAKES THIS SURFACE
+	// SOUND WITHOUT REFCOUNTING NODES.** `ListRuntime.maxon`'s header states shv2's node rule — one owner,
+	// reclaimed by a direct `__mm_free` — and argues it from *"shv2 exposes NO node type at all"*, which
+	// this rung changes. The premise moved; the conclusion survives, because the second thing a live handle
+	// could be is not a second OWNER but a DANGLING READ, and shv2 already has the mechanism that refuses
+	// one: `mintPendingBorrow` + E3070, which invalidate every outstanding borrow of a binding at the next
+	// write through it. So `let n = ml.insertFirst(x)` + `ml.clear()` + `n.value()` is **refused at compile
+	// time** rather than reading freed memory — where v1 pays a refcount per node to make the same program
+	// merely *not crash*. Refcounting nodes would buy `detach` (a node deliberately outliving its link),
+	// which shv2 does not provide and no case here asks for.
+	//
+	// ⚠ **THE RECEIVER-WRITE IS NOTED AFTER THE ARGUMENTS ARE PARSED, WHICH IS THE ONE ORDERING DIFFERENCE
+	// FROM EVERY OTHER DISPATCHER.** `ml.remove(node)` READS the handle and then WRITES the list, in that
+	// order, and E3070 compares a mutation site's token against the borrow's LAST USE — so a site recorded
+	// at the method token would sit before the argument's read and refuse the canonical spec's own program
+	// (`/specs/ownership.md:managed-list-remove-decref`). Recorded after, the same rule does exactly the
+	// right thing in both directions: a handle whose last use IS the argument is dead at the write and the
+	// call is legal, and a handle read AGAIN afterwards is live at the write and the read is refused.
+	function dispatchManagedListMethod(func IrFunction, list ValueId, resultUsed bool, immutableReceiverName ByteArray, borrowSubjectName ByteArray, receiverOwner MutatedParamMask) returns ValueId throws ParseError
+		let methodTok = try self.consume(TokenKind.identifier)
+		let range = SourceRange.ofToken(methodTok)
+		let giid = self.valueNameId(list)
+		let mutates = managedListMethodMutatesReceiver(methodTok.value)
+		// ⭐ **THE E3070 HALF ASKS A NARROWER QUESTION, AND IT IS ASKED HERE SO THE TWO SETS SIT SIDE BY
+		// SIDE** — which is the whole content of `managedListMethodFreesANode`'s header, and it can only be
+		// read against `mutates` where both are written. Only the RECORDING of the write stays inside the
+		// arms: `remove` must record its write AFTER its argument is read (see the header above), and one
+		// hoisted `noteBorrowSubjectWrite` could not be in two places at once.
+		let freesANode = managedListMethodFreesANode(methodTok.value)
+
+		// `receiverStorage: NoMutatedParams` for the reason the `String`, `Set`, `Map` and `List` dispatchers
+		// state: a chain write cannot free an ARRAY element, which is the only borrow E3070 tracks there.
+		try self.noteReceiverWrite(func, immutableReceiverName: immutableReceiverName, receiverOwner: receiverOwner, receiverStorage: NoMutatedParams, methodTok: methodTok, mutatesReceiver: mutates)
+
+		if methodTok.value.equals(CountMethod) 'count'
+			try self.consumeEmptyArgList()
+			return self.emitRuntimeCall(ListCountName, args: singletonArgs(list), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
+		end 'count'
+
+		// The two insertions differ only in WHICH end the runtime links onto, so they share one arm — the
+		// `List` dispatcher's argument, with the node kept rather than discarded.
+		if methodTok.value.equals(ManagedListInsertFirstMethod) or methodTok.value.equals(ManagedListInsertLastMethod) 'insertAtAnEnd'
+			let value = try self.parseContainerElementArg(func, giid: giid, methodTok: methodTok)
+			let callee = ListPrependName if methodTok.value.equals(ManagedListInsertFirstMethod) else ListAppendName
+			return self.emitManagedListNodeHandle(func, callee: callee, args: pairArgs(list, second: value), listGiid: giid, container: list, borrowSubjectName: borrowSubjectName, range: range)
+		end 'insertAtAnEnd'
+
+		if methodTok.value.equals(RemoveMethod) 'remove'
+			let node = try self.parseManagedListNodeArg(func, giid: giid)
+			self.noteBorrowSubjectWrite(func, subjectName: borrowSubjectName, display: methodTok.value, anchor: methodTok, mutatesSubject: freesANode)
+			// The element is MOVED OUT — the caller owns it, and a statement-position `remove` drops it at
+			// the statement's end like every other unbound owned temporary. Emitted through the ONE element
+			// accessor, so its ownership, its result type and its buffer-surface mark are the array's answers.
+			return self.emitContainerElementAccessor(func, callee: ListRemoveNodeName, container: list, args: pairArgs(list, second: node), giid: giid, owned: true, borrowSubjectName: borrowSubjectName, range: range)
+		end 'remove'
+
+		if methodTok.value.equals(ClearMethod) 'clear'
+			try self.requireVoidMethodIsStatement(resultUsed, methodTok: methodTok)
+			try self.consumeEmptyArgList()
+			self.noteBorrowSubjectWrite(func, subjectName: borrowSubjectName, display: methodTok.value, anchor: methodTok, mutatesSubject: freesANode)
+			_ = self.emitRuntimeCall(ListClearName, args: singletonArgs(list), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+			return list
+		end 'clear'
+
+		throw ParseError.unsupported("`{String.from(ManagedListBuiltinBaseName)}` method '{String.from(methodTok.value)}' — shv2 provides {String.from(CreateMethod)}/{String.from(ManagedListInsertFirstMethod)}/{String.from(ManagedListInsertLastMethod)}/{String.from(RemoveMethod)}/{String.from(ClearMethod)}/{String.from(CountMethod)}, and `{String.from(ManagedListNodeValueMethod)}()` on the node handle; head/tail/next/prev/insertAfter/insertBefore/detach/setValue/isEmpty are later slices", line: methodTok.line, column: methodTok.column)
+	end 'dispatchManagedListMethod'
+
+	// ⭐ **EMIT AN INSERTION AND TYPE ITS RESULT AS A NODE HANDLE.** The runtime hands back the node it just
+	// linked (`ListRuntime.emitListPublishEnd`); this is where that machine word becomes a value of
+	// `__ManagedListNode with <element>` and a BORROW of the list.
+	//
+	// ⚠ **THE BORROW IS MINTED FOR EVERY ELEMENT TYPE, where the element accessor mints one only for a
+	// MANAGED element.** The two are not the same question: a borrowed ELEMENT of a trivial-element list is
+	// an inline word that no mutation can dangle, while a NODE is a pointer into the chain whatever it
+	// holds — `remove`/`clear` free it either way. So the gate that is right one door over would be a
+	// use-after-free here.
+	function emitManagedListNodeHandle(func IrFunction, callee ByteArray, args ValueIdArray, listGiid GenericInstanceId, container ValueId, borrowSubjectName ByteArray, range SourceRange) returns ValueId
+		let nodeGiid = self.signatures.managedListNodeInstanceFor(listGiid)
+		let node = self.emitRuntimeCall(callee, args: args, resultTag: ValueTypeTag.genericInstance, resultNameId: nodeGiid, range: range)
+
+		// The list is held to the scope's end for `emitContainerElementAccessor`'s measured reason, applied
+		// to a handle instead of an element: the node this points at lives inside a record that must not be
+		// freed at the end of the statement that produced it.
+		self.giveTemporaryScopeLifetime(container, name: BorrowSourceBindingName)
+		if not borrowSubjectName.isEmpty() 'borrowsANamedSourcesNode'
+			self.mintPendingBorrow(func, subjectName: borrowSubjectName, borrowValue: node, range: range)
+		end 'borrowsANamedSourcesNode'
+
+		return node
+	end 'emitManagedListNodeHandle'
+
+	// `( node )` — `remove`'s single argument, which must be a handle on a node of THIS list's element type.
+	// The type test is the instance identity: `managedListNodeInstanceFor` derives the one node instance this
+	// list's handles carry, so a handle from a list of another element type is refused by comparing gids
+	// rather than by unpacking either type.
+	//
+	// ⚠ The handle is NOT moved in and nothing is poisoned: it is a borrow the list already owns the subject
+	// of, so there is no ownership to transfer. What ends its usefulness is the WRITE this argument
+	// authorizes, and that is E3070's job (see `dispatchManagedListMethod`'s ordering note).
+	function parseManagedListNodeArg(func IrFunction, giid GenericInstanceId) returns ValueId throws ParseError
+		try self.consume(TokenKind.leftParen)
+		let argTok = self.current()
+		let node = try self.parseExpression(func, block: self.currentBlock)
+		try self.consume(TokenKind.rightParen)
+
+		if not (self.tagOf(node) == ValueTypeTag.genericInstance and self.valueNameId(node) == self.signatures.managedListNodeInstanceFor(giid)) 'notANodeOfThisList'
+			throw ParseError.unsupported("`{String.from(ManagedListBuiltinBaseName)}.{String.from(RemoveMethod)}` takes a node handle of this list — a `{String.from(ManagedListNodeBuiltinBaseName)} with {self.signatures.arrayElementDisplayName(giid)}`, which `{String.from(ManagedListInsertFirstMethod)}`/`{String.from(ManagedListInsertLastMethod)}` hand back", line: argTok.line, column: argTok.column)
+		end 'notANodeOfThisList'
+
+		return node
+	end 'parseManagedListNodeArg'
+
+	// ⭐ **`node.value()` — THE ONE THING A NODE HANDLE ANSWERS.** It is emitted through the SAME element
+	// accessor a container's `get` is, handed the NODE's instance: that instance carries the element type
+	// (`ManagedListNodeBuiltinBaseName`), so the result's ownership (a BORROW — the list still owns the
+	// element), its type and its buffer-surface mark are all the answers that door already gives.
+	//
+	// ⚠ **THE ELEMENT BORROW IS ANONYMOUS (`EmptySourceText`), and that is a residual rather than a
+	// decision that costs nothing.** E3070's subject is a STORAGE name, and the storage this element lives
+	// in is the LIST — which this dispatcher cannot name: it holds the node, whose own binding is not
+	// storage anything writes through. So `let v = node.value()` + `ml.clear()` + a read of `v` is not
+	// refused, exactly as an element borrowed out of any anonymous receiver is not. The HANDLE itself is
+	// tracked (that is where the hazard actually lives — `n.value()` after a `remove` is refused), and
+	// closing the remaining half needs a value→subject map the parser does not have.
+	function dispatchManagedListNodeMethod(func IrFunction, node ValueId, giid GenericInstanceId) returns ValueId throws ParseError
+		let methodTok = try self.consume(TokenKind.identifier)
+
+		if not methodTok.value.equals(ManagedListNodeValueMethod) 'unknownNodeMethod'
+			throw ParseError.unsupported("`{String.from(ManagedListNodeBuiltinBaseName)}` method '{String.from(methodTok.value)}' — shv2 provides `{String.from(ManagedListNodeValueMethod)}()`; next/prev/setValue are later slices", line: methodTok.line, column: methodTok.column)
+		end 'unknownNodeMethod'
+
+		try self.consumeEmptyArgList()
+		return self.emitContainerElementAccessor(func, callee: ListNodeValueName, container: node, args: singletonArgs(node), giid: giid, owned: false, borrowSubjectName: EmptySourceText, range: SourceRange.ofToken(methodTok))
+	end 'dispatchManagedListNodeMethod'
 
 	// ⭐ **`List from [a, b, c]` — CONSTRUCT A LIST FROM AN ARRAY LITERAL.** The cursor sits on the `List`
 	// identifier. Parse `from` then the `[…]` through the EXISTING array-literal parser — which infers the
@@ -36001,11 +36670,31 @@ export type Parser
 		if self.bindingIsIterationLocked(binding) 'iterated'
 			return baseTok.value
 		end 'iterated'
-		if binding.mutable or binding.isParameter 'writable'
+		if self.bindingStorageIsWritable(binding) 'writable'
 			return EmptySourceText
 		end 'writable'
 		return baseTok.value
 	end 'immutableReceiverNameOf'
+
+	// ⭐⭐ **MAY THE STORAGE THIS NAME DENOTES BE WRITTEN THROUGH?** — and it is NOT `binding.mutable`,
+	// which answers the narrower "may this NAME be rebound?".
+	//
+	// A PARAMETER is the whole difference: it may not be rebound (E2013), and it IS a borrowed reference to
+	// the caller's record, which the callee may legitimately mutate — `dest.append(src)` inside a helper is
+	// ordinary Maxon. See `VarInfo.isParameter` for the measurement.
+	//
+	// ⭐ **TWO RULES REST ON IT, AND THEY MUST NOT DRIFT.** E3019 refuses a mutating METHOD on an immutable
+	// receiver (`immutableReceiverNameOf`); E3078 refuses a mutable BINDING made from an immutable name
+	// (`requireMutableBindingSource`). Both are asking "would this write reach storage its owner declared
+	// read-only?", so both must exempt a parameter — MEASURED on the runnable oracle for each: a mutating
+	// call on a parameter receiver is accepted, and `var q = p` on a struct PARAMETER compiles and mutates
+	// (returns 9), where the same two lines on a `let` LOCAL are E3019 and E3078 respectively. Written down
+	// twice, the parameter exemption would have been added to one and not the other — and the stdlib itself
+	// depends on it (`Builtins.maxon`'s `var numerator = significandDigits`, `FilePath.maxon`'s
+	// `var trimmedBase = base`), so half the rule is a compiler that cannot build its own standard library.
+	function bindingStorageIsWritable(binding VarInfo) returns bool
+		return binding.mutable or binding.isParameter
+	end 'bindingStorageIsWritable'
 
 	// ⭐ **DISPATCH AN INTERFACE METHOD ON A CONSTRAINED TYPE-PARAMETER VALUE (P1.7a slice 2a).** `receiver` is a
 	// `typeParameter`-tagged value (`self.item`, a `T` field read) and the cursor sits on the method name. The concrete type is UNKNOWN in the shared body, so it dispatches through the runtime WITNESS:
@@ -37003,7 +37692,7 @@ export type Parser
 			let n = try self.parseArrayOneArg(func)
 			return self.emitArrayVoidCall(ArrResizeName, args: pairArgs(arr, second: n), receiver: arr, range: range)
 		end 'resize'
-		if methodTok.value.equals(ArrayClearMethod) 'clear'
+		if methodTok.value.equals(ClearMethod) 'clear'
 			try self.requireVoidMethodIsStatement(resultUsed, methodTok: methodTok)
 			try self.consumeEmptyArgList()
 			return self.emitArrayVoidCall(ArrClearName, args: singletonArgs(arr), receiver: arr, range: range)
@@ -40747,6 +41436,7 @@ export type Parser
 		let savedPhiAliasUnprovenMarks = self.phiAliasUnprovenMarks
 		let savedOwnedBindings = self.ownedBindings
 		let savedUnusedCandidates = self.unusedCandidates
+		let savedMintedValueAliases = self.functionMintedValueAliases
 		let savedReferencedNames = self.referencedNames
 		let savedPendingTempDrops = self.pendingTempDrops
 		// The last-field-read record is ONE fact spread over FOUR fields, and ALL FOUR are saved/restored as
@@ -40828,6 +41518,9 @@ export type Parser
 		// A closure declares its own parameters and its body sees none of the enclosing function's bindings,
 		// so it owes its own E3012 accounting — drained under its own name below, before the restore.
 		self.unusedCandidates = UnusedBindingCandidateArray.create()
+		// Cleared for the same reason: whether the ENCLOSING body aliased a value says nothing about whether
+		// this closure's own moves need the alias walk, and its SSA values are a separate space anyway.
+		self.functionMintedValueAliases = false
 		// Fresh for the same reason, and the CLEAR is the point: a closure's private local named `i` may not
 		// excuse an `i` the ENCLOSING function declared and never mentioned. What DOES cross the boundary is
 		// what the closure captured, pushed back at the restore below.
@@ -40994,6 +41687,7 @@ export type Parser
 		self.phiAliasUnprovenMarks = savedPhiAliasUnprovenMarks
 		self.ownedBindings = savedOwnedBindings
 		self.unusedCandidates = savedUnusedCandidates
+		self.functionMintedValueAliases = savedMintedValueAliases
 		// ⭐ **A CAPTURE IS A MENTION IN THE ENCLOSING FUNCTION** — the oracle's own restore step
 		// (`_referencedVars` restored, then `foreach (var c in captures) _referencedVars.Add(c.Name)`). The
 		// captured binding itself is already excused by its `referenced` bit, which `emitCaptureRead` set
@@ -41257,6 +41951,24 @@ export type Parser
 			return array
 		end 'arrayLiteralInitializer'
 
+		// ⭐⭐ **`<ContainerAlias>.create()` IS THE FOURTH ANSWER, AND IT IS DECIDED ON THE OPENING TOKEN**
+		// (spec-port `ownership`) — `var globalArr = ItemArray.create()`, a top-level container every
+		// function in the program pushes into. It is claimed HERE for the array literal's reason: the scalar
+		// walk below reads `<identifier> .` as a RANGED-TYPE BOUND (`i64.min`) and has no other reading of
+		// it, so this shape surfaced as **E2010 `Expected ''min' or 'max'' but got 'create'`** — a diagnostic
+		// about a grammar the author was not writing in.
+		//
+		// ⚠ **THE TEST IS THAT THE NAME IS A GENERIC-INSTANCE ALIAS, NOT THAT THE MEMBER IS `create`.** A
+		// ranged alias and a generic alias live in different registries, so `IntArray.` can only be this
+		// form — and claiming the whole shape is what lets the arm below say what a container's static
+		// surface IS, rather than leaving `ItemArray.push` to the bound reader's nonsense message.
+		if self.at(TokenKind.identifier) and self.peekKind() == TokenKind.dot and self.signatures.isGenericAlias(self.current().value) 'containerFactoryInitializer'
+			let container = try self.evalConstContainerCreate()
+			try self.requireInitializerConsumed(decl)
+
+			return container
+		end 'containerFactoryInitializer'
+
 		let value = try self.evalConstBinary(stack, minPrec: OrPrecedence)
 		try self.requireInitializerConsumed(decl)
 
@@ -41306,6 +42018,60 @@ export type Parser
 
 		return ConstInitializerValue.arrayLiteral(elements, element: element)
 	end 'evalConstArrayLiteral'
+
+	// ⭐⭐ **`ItemArray.create()` AT TOP LEVEL — AN EMPTY CONTAINER AS A GLOBAL** (spec-port `ownership`).
+	// The cursor sits on the alias; `evalConstInitializer` has already established that it names a
+	// generic instance.
+	//
+	// ⭐ **THIS IS NOT A FUNCTION CALL THE EVALUATOR HAS BEEN TALKED INTO ALLOWING.** `evalConstNamed`
+	// refuses `f()` because a call's answer needs the program to be RUNNING, and that is still true: nothing
+	// is folded here. What the fold produces is the INSTANCE — a type, known at compile time — and the
+	// record is built at run time by `__module_init`, exactly as a top-level array literal's already is
+	// (`ModuleInit.builtArrayRecord`). A container factory is the array literal's empty case, so it takes
+	// the same slot, the same init and the same `__maxon_global_cleanup` drop.
+	//
+	// ⚠ **ARRAY INSTANCES ONLY, and the refusal names what the door can build.** `__module_init` builds a
+	// record through `__arr_create`; a `Set`/`Map`/`List`/`Vector` global would need that function to learn
+	// each container's own create — a real slice, not a line — and the honest answer meanwhile is a sentence
+	// saying so rather than a record of the wrong shape.
+	function evalConstContainerCreate() returns ConstInitializerValue throws ConstEvalError
+		let aliasTok = try self.consumeConst(TokenKind.identifier)
+		// This walk is the ONLY reader of a top-level initializer's tokens, so it is the only thing that can
+		// tell the E3062 check the alias was named here — the cast target's door, one shape over, and
+		// recorded BEFORE the refusals below for the same reason: a name about to be rejected is still a
+		// mention, and a file must not be told about two unrelated mistakes at once.
+		self.signatures.recordConstInitializerTypeName(aliasTok.value, declFilePath: self.filePath)
+		try self.consumeConstToken(TokenKind.dot)
+		let methodTok = try self.consumeConst(TokenKind.identifier)
+
+		if not methodTok.value.equals(CreateMethod) 'notTheFactory'
+			throw ConstEvalError.defective(ParseError.unsupported("`{String.from(aliasTok.value)}.{String.from(methodTok.value)}` as a top-level initializer — a global container is declared with `{String.from(CreateMethod)}()`, the one static a constant initializer can name; every other method needs the program to be running", line: methodTok.line, column: methodTok.column))
+		end 'notTheFactory'
+
+		try self.consumeConstToken(TokenKind.leftParen)
+		if not self.at(TokenKind.rightParen) 'hasArguments'
+			let argTok = self.current()
+			throw ConstEvalError.defective(ParseError.unsupported("arguments to `{String.from(aliasTok.value)}.{String.from(CreateMethod)}()` in a top-level initializer — a global container starts EMPTY, and an argument would have to be evaluated before `main` runs", line: argTok.line, column: argTok.column))
+		end 'hasArguments'
+		try self.consumeConstToken(TokenKind.rightParen)
+
+		let giid = self.signatures.genericAliasInstanceFrom(aliasTok.value, readerFilePath: self.filePath)
+		if not self.signatures.isArrayInstance(giid) 'notAnArrayInstance'
+			throw ConstEvalError.defective(ParseError.unsupported("a top-level `{String.from(aliasTok.value)}.{String.from(CreateMethod)}()` — a global container's record is built by `__module_init`, which builds an `{String.from(ArrayBuiltinBaseName)}`'s; a `{String.from(SetBuiltinBaseName)}` / `{String.from(MapBuiltinBaseName)}` / `{String.from(ListBuiltinBaseName)}` / `{String.from(VectorBuiltinBaseName)}` global is a later slice. Declare it inside a function, or use an `{String.from(ArrayBuiltinBaseName)}`", line: aliasTok.line, column: aliasTok.column))
+		end 'notAnArrayInstance'
+
+		// ⚠ **AN ARRAY OF BUFFERS IS REFUSED, because the SURFACE would not survive the slot.** Which
+		// surface an element reads as is a mark the parser carries on the VALUE
+		// (`markBufferSurfaceElements`, asked of the ALIAS NAME at `parseArrayStaticCall`), and a global is
+		// re-loaded at every use, so no mark reaches the read. Admitting it would hand back an ARRAY-surfaced
+		// element where the author wrote a buffer's alias — a refusal at the first buffer method, blaming the
+		// method rather than the declaration.
+		if self.signatures.aliasElementIsBufferSurface(aliasTok.value) 'elementsAreBuffers'
+			throw ConstEvalError.defective(ParseError.unsupported("a top-level `{String.from(aliasTok.value)}.{String.from(CreateMethod)}()` — its elements are `{String.from(ManagedMemoryTypeName)}` buffers, and a global is re-loaded at every use, so an element read out of it would carry the `{String.from(ArrayBuiltinBaseName)}` surface instead. Declare an array of buffers inside a function", line: aliasTok.line, column: aliasTok.column))
+		end 'elementsAreBuffers'
+
+		return ConstInitializerValue.containerCreate(giid)
+	end 'evalConstContainerCreate'
 
 	// ONE element of a top-level array literal: a STRING literal, or anything the scalar evaluator folds to
 	// an integer. The managed/scalar split is `evalConstInitializer`'s, applied between two separators —
@@ -41681,7 +42447,7 @@ export type Parser
 			// them — so it is the only thing that can tell the E3062 check the alias was named here.
 			// Recorded before the kind gate below, so a target that is about to be REJECTED still counts
 			// as a mention and the file is not told about two unrelated mistakes at once.
-			self.signatures.recordConstCastTarget(targetTok.value, declFilePath: self.filePath)
+			self.signatures.recordConstInitializerTypeName(targetTok.value, declFilePath: self.filePath)
 			try self.requireConstCastTargetKind(value, targetTok: targetTok, asTok: asTok)
 			try self.checkConstCastRange(value, targetTok: targetTok, asTok: asTok)
 			return value

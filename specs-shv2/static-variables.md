@@ -739,9 +739,10 @@ end 'main'
 ```
 
 <!-- test: error.top-level-array-empty -->
-An empty array literal has no element to infer a type from, and — unlike a function body's `[]` — a
-top-level initializer cannot fall back on `Array with T` + `.create()` either, because a call is not a
-constant. So it is refused, with advice that does not point at a remedy this position forbids.
+An empty array literal has no element to infer a type from, so it is refused — and the advice is the
+same one a function body's `[]` gets, because a top-level `<Alias>.create()` now names the element type
+the brackets could not. (It did not when this case was written: the sentence used to end *"a `.create()`
+call is not a constant"*, which the container-factory initializer made false.)
 ```maxon
 var items = []
 
@@ -750,7 +751,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:2:13: Unsupported: an empty array literal `[]` as a top-level initializer — its element type cannot be inferred, and there is no empty-array form a constant initializer can name (a `.create()` call is not a constant)
+error E2015: <fragment>:2:13: Unsupported: an empty array literal `[]` as a top-level initializer — its element type cannot be inferred; name it with a generic alias and its factory instead (`typealias Ints = Array with Integer` + `var xs = Ints.create()`)
 ```
 
 <!-- test: error.top-level-array-mixed-elements -->

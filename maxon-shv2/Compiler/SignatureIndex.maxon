@@ -226,6 +226,17 @@ let ConstShapeArrayValue = 48 as ContentHash
 let ArrayElementShapeInteger = 49 as ContentHash
 let ArrayElementShapeString = 50 as ContentHash
 
+// The FIFTH shape a top-level binding's answer hashes under (spec-port `ownership`): it folded to a
+// CONTAINER FACTORY CALL. Its own discriminator for `ConstShapeArrayValue`'s reason — `var g = [1, 2]`
+// becoming `var g = IntArray.create()` keeps the label and the load and changes the RECORD every reader's
+// program is built over, and nothing else on the hash says so.
+//
+// ⚠ What rides beside it is the instance's MANGLED NAME and not its gid: a gid is interned per compile and
+// is a function of what else the program happened to intern, so hashing one would invalidate every reader's
+// memo whenever an unrelated instance appeared ahead of it. The mangled name is a function of the type
+// alone, which is exactly what a reader depends on.
+let ConstShapeContainerValue = 70 as ContentHash
+
 // A declaration's MUTABILITY, mixed into the hash beside its value. `let X = 5` and `var X = 5`
 // are the same name and the same number and compile to COMPLETELY different code — one inlines
 // as a literal, the other loads from `.data` — so a reader's parse memo must move when one
@@ -540,6 +551,16 @@ export union TopLevelConstant
 	// `value to managedValue` all EXCLUDING this case, so each site fails to compile until it has been
 	// visited and decided.
 	arrayValue(elements ConstArrayElementArray, element ConstArrayElementKind)
+	// ⭐ **IT EVALUATED TO A CONTAINER FACTORY — `var g = ItemArray.create()`** (spec-port `ownership`). The
+	// instance is the whole value: an EMPTY container has no elements to carry, and its record is fixed by
+	// the `Array with T` the alias names. Its own arm rather than an `arrayValue` with no elements because
+	// the two are typed from different facts — an array literal's instance is INFERRED from its first
+	// element's kind (`constArrayValueType`), and there is no element here to infer from, so the giid the
+	// alias resolved to is the only thing that can say what the slot holds.
+	//
+	// ⚠ APPENDED AT THE END, for `managedValue`'s reason: every range arm over this union then EXCLUDES it
+	// and fails to compile until it has been visited and decided.
+	containerValue(giid GenericInstanceId)
 end 'TopLevelConstant'
 
 // ONE folded ELEMENT of a top-level array literal (P1.7 slice 2b) — what `__module_init` materializes and
@@ -719,12 +740,14 @@ export type TopLevelDecl
 	// so this starts life equal to `mutable`. But so is an immutable ARRAY: its value is a heap record built
 	// by `__module_init`, and no READ can re-materialize one (a `let` String's read borrows the ONE immortal
 	// `.rdata` record; an array's record is mutable by nature and per-program, so a per-read copy would be a
-	// different array every time). `settleArrayValue` is the ONLY writer that flips it, which is the same
-	// place `outcome` becomes `arrayValue` — so the two cannot disagree, and an array binding gets a slot
+	// different array every time). `settleStoredRecordValue` is the ONLY writer that flips it, which is the same
+	// place `outcome` becomes `arrayValue`/`containerValue` — so the two cannot disagree, and an array binding gets a slot
 	// while `let` keeps refusing the write (E2013 at an assignment, E3019 at a receiver-writing method).
+	// A container factory (`var g = ItemArray.create()`) settles through the same one writer for the same
+	// reason — its value is a heap record too.
 	//
 	// ⚠ **A FIELD RATHER THAN A FUNCTION THAT RE-READS `outcome`.** The obvious spelling is
-	// `mutable or outcome is arrayValue`, asked afresh at each of the four readers. A bool written where the
+	// `mutable or outcome is arrayValue or outcome is containerValue`, asked afresh at each of the four readers. A bool written where the
 	// outcome is written says the same thing once, is O(1) at every ask, and — the part that matters — makes
 	// the answer available in the window where the outcome is not yet settled, which the four readers
 	// straddle (see below). MEASURED: it costs no allocations and about 24 bytes per top-level declaration.
@@ -835,6 +858,10 @@ export union ConstInitializerValue
 	// rather than a `managed` with a different payload for `TopLevelConstant.arrayValue`'s reason: the
 	// binding it settles has STORAGE, where a `managed` `let` has none.
 	arrayLiteral(elements ConstArrayElementArray, element ConstArrayElementKind)
+	// A CONTAINER FACTORY CALL (`ItemArray.create()`) — the alias's instance, which is the whole value of
+	// an empty container. The FOURTH answer for `arrayLiteral`'s reason: the binding it settles has
+	// STORAGE, and what it stores is a record no read can re-materialize.
+	containerCreate(giid GenericInstanceId)
 end 'ConstInitializerValue'
 
 // The result of asking the evaluator for a constant's value. `failed` is not an error to report — the
@@ -2063,6 +2090,42 @@ export let ListBuiltinBaseName = b"List"
 // validates a `List with …` against, the `Array`/`Set` twin.
 export let ListTypeParamCount = 1 as FieldIndex
 
+// ⭐⭐ **`__ManagedList with Element` — THE `List`'s OWN CHAIN, UNDER THE NAME THAT EXPOSES ITS NODES**
+// (spec-port `ownership`; `/specs/managed-list.md`, `/specs/internal-types.md`). `/specs/list.md` writes
+// `List` as a USER type whose sole field is `var chain as __ManagedList with Element`, so the two are one
+// structure in the canonical language too — and in shv2 they are literally one: the same
+// `ListRecordBytes` header, the same 24-byte nodes, the same `__list_*` entries, the same `__list_decref`.
+// This is `Vector`'s relationship to `Array` (see `VectorBuiltinBaseName`) at a second pair: two TYPES whose
+// layouts coincide, kept as separate base names because what may be DONE to them differs — a `List` is
+// indexed and iterated, a `__ManagedList` hands out NODE HANDLES.
+//
+// ⚠ **IT IS `__`-PREFIXED IN THE CANONICAL LANGUAGE, WHICH IS WHY THE NAME IS SPELLED WITH THE PREFIX
+// HERE AND NOT RESERVED-RENAMED.** `/specs/internal-types.md` lists it among the types a program may NAME
+// but whose representation is the compiler's; `stdlib/List.maxon` names it in its own field declaration.
+export let ManagedListBuiltinBaseName = b"__ManagedList"
+
+// The single type parameter `__ManagedList` declares — the `List` twin, and the same one-word element slot.
+export let ManagedListTypeParamCount = 1 as FieldIndex
+
+// ⭐⭐ **`__ManagedListNode with Element` — A HANDLE ON ONE NODE, AND THE ONE TYPE IN shv2 NO SOURCE CAN
+// CONSTRUCT.** Only an insertion mints a value of it (`__ManagedList.insertFirst`/`insertLast`), and what it
+// denotes is a node the LIST owns — so it is emitted as a BORROW, never as an owned temp, and no binding of
+// it is ever dropped. `genericInstanceBoxDropCallee` panics for it rather than answering, because "what
+// frees this?" has an answer that is not the binding's: the list's `__list_clear` walk.
+//
+// ⚠ **IT IS PARAMETERIZED BY THE ELEMENT, and that is what makes `node.value()` typed at all.** A node's
+// value slot is one machine word whatever the element is (see the node-format block below), so the WIDTH
+// needs no parameter — but the TYPE a `value()` reads back does, and there is nowhere else to carry it: a
+// value's type in shv2 is a `(tag, nameId)` pair, so an un-parameterized node would have to look its
+// element up in a side table keyed by `ValueId`, which no phi or merge would survive.
+export let ManagedListNodeBuiltinBaseName = b"__ManagedListNode"
+
+// The single type parameter `__ManagedListNode` carries. Same arity as every one-element container, so
+// every one-argument door (`containerElementType`, `containerElementIsManaged`, `elementAccessorResultType`)
+// serves a node handle unchanged — which is exactly how `value()` is emitted through the SAME element
+// accessor a `get` is.
+export let ManagedListNodeTypeParamCount = 1 as FieldIndex
+
 // ⭐⭐ **THE FIFTH COMPILER-OWNED CONTAINER: `Vector with <N> <Element>`, A FIXED-SIZE ARRAY.**
 // `stdlib/Vector.maxon` declares one, and shv2 cannot read that file for the reason `ListRuntime.maxon`'s
 // header measured a second time and this rung measured a third: its sole field is
@@ -2775,6 +2838,19 @@ export let ByteAtMethod = b"byteAt"
 export let ListPrependMethod = b"prepend"
 export let ListRemoveFirstMethod = b"removeFirst"
 
+// The three spellings only the `__ManagedList` surface has (spec-port `ownership`; `/specs/managed-list.md`).
+// They live here beside `List`'s pair so the chain's whole vocabulary is read in one place. `create`,
+// `count`, `remove` and `clear` are NOT among them: those are already spelled once above (or in `Parser`'s
+// shared block) and the managed list dispatches on the very same byte strings, which is this block's rule.
+//
+// ⚠ `value` is a METHOD name, and the three other `b"value"` constants in this compiler are a print
+// PARAMETER name, a `Map.upsert` argument LABEL and a `__ManagedMemory` parameter name — different name
+// spaces, already kept apart here and in `Parser`. This is the first method of that spelling; a second
+// container spelling it would share this constant rather than mint a fifth.
+export let ManagedListInsertFirstMethod = b"insertFirst"
+export let ManagedListInsertLastMethod = b"insertLast"
+export let ManagedListNodeValueMethod = b"value"
+
 // Its parameter names, the reference's own (`2-Parser.cs:1470-1511`) for the same reason the file's are.
 // ⚠ **`endIndex` IS v1's SPELLING AND THE BOOTSTRAP'S IS `end`** (`LowerMaxonToStd.maxon:1657` vs
 // `2-Parser.cs:1509`), and `specs/managed-memory-builtin.md:slice` writes `endIndex:` — that spec is
@@ -3330,10 +3406,11 @@ typealias DeclaredReturnSurfaceMap = Map with (ByteArray, DeclaredSurface)
 // `Array with ByteArray` intern to the SAME instance, which is the whole reason the question survives.
 typealias BufferElementAliasNameSet = Set with ByteArray
 
-// The `<declaring file>|<type name>` keys of every type name a top-level constant initializer casts to
-// (P1.9). Scoped rather than bare because the question it answers — "was this alias used in its OWN
-// file?" — is a file's. See `ProgramSignatures.constCastTargets`.
-typealias ConstCastTargetSet = Set with ByteArray
+// The `<declaring file>|<type name>` keys of every type name a top-level initializer NAMES — a cast's
+// target (P1.9) or a container factory's alias (spec-port `ownership`). Scoped rather than bare because
+// the question it answers — "was this alias used in its OWN file?" — is a file's. See
+// `ProgramSignatures.constInitializerTypeNames`.
+typealias ConstInitializerTypeNameSet = Set with ByteArray
 
 // The type names one PROVENANCE declares (A1s wave 2) — ONE alias for both halves of the shadow contest,
 // `ProgramSignatures.userDeclaredTypeNames` and `stdlibDeclaredTypeNames`. They hold the same KIND of fact
@@ -4648,10 +4725,10 @@ export type ProgramSignatures
 	// before any file is swept, so no reader can see the seeded `false`.
 	export var rootIsUnderStdlibDirectory as bool
 	// ⭐ **THE TYPE NAMES TOP-LEVEL CONSTANT INITIALIZERS CAST TO, scoped by declaring file** (P1.9) —
-	// the one `use` the E3062 check cannot get from the parser. Written by `recordConstCastTarget` from
+	// the one `use` the E3062 check cannot get from the parser. Written by `recordConstInitializerTypeName` from
 	// inside the constant evaluator, read by `Parser.reportUnusedTypeAliases`; both doors carry the
 	// argument. Empty for every program with no top-level `let X = … as T`, which is nearly all of them.
-	var constCastTargets as ConstCastTargetSet
+	var constInitializerTypeNames as ConstInitializerTypeNameSet
 	// ⭐ **THE `Array with Byte` INSTANCE, DERIVED ONCE PER PROGRAM.** `internArrayByteInstance` is asked on
 	// HOT parser paths — every byte-string literal, every `.toByteArray()`, and since R4.2 every array
 	// METHOD dispatch (`dispatchArrayMethod`'s `isManagedMemory`) — and each ask built a one-element
@@ -4769,7 +4846,7 @@ export type ProgramSignatures
 	// Every index, empty. Split out of `create` only so the seed stamping above reads as the two steps it
 	// is; this is its one caller.
 	static function freshIndexes() returns ProgramSignatures
-		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), structNamesInDeclOrder: ByteArrayArray.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), instanceDisplayNames: InstanceDisplayNameMap.create(), canonicalInstanceNameIndex: CanonicalInstanceNameSet.create(), canonicalNamesIndexedThrough: 0, tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleAliases: TupleCanonicalNameMap.create(), sawAggregateArrayLiteral: false, sawListFromConstruction: false, genericAliases: GenericAliasMap.create(), contestedGenericAliases: sharedEmptyGenericAliasContests, multiplyDeclaredGenericAliases: sharedEmptyDisagreeingAliasNames, divergedGenericAliasDecl: AliasCycleResult.none, nameableGenericAliases: sharedEmptyNameableGenericAliases, genericAliasSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceNamesInDeclOrder: builtinInterfaceNames(), interfaceDeclIndexByName: builtinInterfaceDeclIndices(), interfaceDeclSites: InterfaceDeclSiteArray.create(), extensionDeclSites: ExtensionDeclSiteArray.create(), conditionalExtensionSkips: ConditionalExtensionSkipMap.create(), sweptConformances: DeclaredConformanceMap.create(), sweptConformancesBuilt: false, extensionMethodConstraints: ExtensionMethodConstraintMap.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcThrows: FuncThrowsMap.create(), funcParamDefaults: ParamDefaultMap.create(), collidingParamDefaults: CollidingParamDefaultNameSet.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), funcReturnDeclFiles: FuncReturnDeclFileMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), hash: fnvOffsetBasis(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, allFilesFolded: false, rootIsUnderStdlibDirectory: false, constCastTargets: ConstCastTargetSet.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibShadowRenames: StdlibShadowRenameMap.create(), fileModuleDirectories: FileModuleDirectoryMap.create(), namespaceQualifiedFunctions: NamespaceQualifiedFunctionSet.create(), freeFunctionDirectories: FreeFunctionDirectoryMap.create(), contestedFreeFunctions: ContestedFreeFunctionMap.create(), contestedRegistrationNames: ContestedRegistrationNameSet.create()}
+		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), structNamesInDeclOrder: ByteArrayArray.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), instanceDisplayNames: InstanceDisplayNameMap.create(), canonicalInstanceNameIndex: CanonicalInstanceNameSet.create(), canonicalNamesIndexedThrough: 0, tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleAliases: TupleCanonicalNameMap.create(), sawAggregateArrayLiteral: false, sawListFromConstruction: false, genericAliases: GenericAliasMap.create(), contestedGenericAliases: sharedEmptyGenericAliasContests, multiplyDeclaredGenericAliases: sharedEmptyDisagreeingAliasNames, divergedGenericAliasDecl: AliasCycleResult.none, nameableGenericAliases: sharedEmptyNameableGenericAliases, genericAliasSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceNamesInDeclOrder: builtinInterfaceNames(), interfaceDeclIndexByName: builtinInterfaceDeclIndices(), interfaceDeclSites: InterfaceDeclSiteArray.create(), extensionDeclSites: ExtensionDeclSiteArray.create(), conditionalExtensionSkips: ConditionalExtensionSkipMap.create(), sweptConformances: DeclaredConformanceMap.create(), sweptConformancesBuilt: false, extensionMethodConstraints: ExtensionMethodConstraintMap.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcThrows: FuncThrowsMap.create(), funcParamDefaults: ParamDefaultMap.create(), collidingParamDefaults: CollidingParamDefaultNameSet.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), funcReturnDeclFiles: FuncReturnDeclFileMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), hash: fnvOffsetBasis(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, allFilesFolded: false, rootIsUnderStdlibDirectory: false, constInitializerTypeNames: ConstInitializerTypeNameSet.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibShadowRenames: StdlibShadowRenameMap.create(), fileModuleDirectories: FileModuleDirectoryMap.create(), namespaceQualifiedFunctions: NamespaceQualifiedFunctionSet.create(), freeFunctionDirectories: FreeFunctionDirectoryMap.create(), contestedFreeFunctions: ContestedFreeFunctionMap.create(), contestedRegistrationNames: ContestedRegistrationNameSet.create()}
 	end 'freshIndexes'
 
 	// --- MODULE DIRECTORIES and the ONE visibility decision (N1a) ---
@@ -6250,7 +6327,7 @@ export type ProgramSignatures
 				// Already settled by an earlier decl's DFS — it referenced this one. A managed constant is
 				// settled too; it is simply not reachable BY a reference (see `evaluateDecl`).
 				value to poisoned then break 'state'
-				managedValue to arrayValue then break 'state'
+				managedValue to containerValue then break 'state'
 				evaluating then panic("ProgramSignatures.evaluateInitializers: '{String.from(decl.name)}' is still marked `evaluating` between two top-level walks — every DFS pops what it pushes")
 				pending then self.startDecl(i)
 			end 'state'
@@ -6285,7 +6362,7 @@ export type ProgramSignatures
 	// That is the same property `decls` is an array for.
 	//
 	// ⚠ **IT RUNS AFTER THE EVALUATION LOOP, AND THAT ORDER IS NOW LOAD-BEARING** (P1.7 slice 2b): which
-	// decls have a slot is `TopLevelDecl.hasStorage`, and `settleArrayValue` is what sets it for an immutable
+	// decls have a slot is `TopLevelDecl.hasStorage`, and `settleStoredRecordValue` is what sets it for an immutable
 	// ARRAY binding. Hoisted above the loop it would label the `var`s and silently skip every array `let`.
 	//
 	// ⚠ **A LABEL IS MINTED FOR EVERY STORED DECL, LIVE OR NOT, AND THAT ORDER IS LOAD-BEARING TOO**
@@ -6343,7 +6420,7 @@ export type ProgramSignatures
 			// caller reading this for a NAME is a reference from inside another initializer, and there is
 			// nothing an arithmetic fold could do with a heap record. MEASURED against the runnable oracle —
 			// `let A = [1, 2]` / `let B = A` is E2004 `Undefined constant 'A'` in BOTH declaration orders.
-			managedValue to arrayValue then return ConstEvalOutcome.notFound
+			managedValue to containerValue then return ConstEvalOutcome.notFound
 			// Reached a decl already on this walk's stack: the reference chain has closed on itself.
 			evaluating then return self.recordCycle(index, stack: stack)
 			pending then break 'state'
@@ -6388,7 +6465,8 @@ export type ProgramSignatures
 		match folded 'kind'
 			scalar(value) then return self.settleScalarValue(decl, value: value)
 			managed(bytes, managedKind) then return self.settleManagedValue(decl, bytes: bytes, kind: managedKind)
-			arrayLiteral(elements, element) then return self.settleArrayValue(decl, elements: elements, element: element)
+			arrayLiteral(elements, element) then return self.settleStoredRecordValue(decl, outcome: TopLevelConstant.arrayValue(elements, element: element))
+			containerCreate(giid) then return self.settleStoredRecordValue(decl, outcome: TopLevelConstant.containerValue(giid))
 		end 'kind'
 	end 'walkConstInitializer'
 
@@ -6407,18 +6485,24 @@ export type ProgramSignatures
 		return ConstEvalOutcome.notFound
 	end 'settleManagedValue'
 
-	// Settle a decl whose initializer folded to an ARRAY LITERAL (P1.7 slice 2b). It joins
-	// `managedTopLevelNames` for `settleManagedValue`'s reason — the name is a METHOD RECEIVER
-	// (`counters.get(0)`), and that set is the allocation-free filter in front of every receiver probe — and
-	// answers `notFound` for the same reason a managed literal does.
-	function settleArrayValue(decl TopLevelDecl, elements ConstArrayElementArray, element ConstArrayElementKind) returns ConstEvalOutcome
-		decl.outcome = TopLevelConstant.arrayValue(elements, element: element)
-		// An array binding is STORED whichever keyword declared it — written HERE, beside the outcome it is
+	// Settle a decl whose initializer folded to a HEAP RECORD — an array literal (P1.7 slice 2b) or a
+	// container factory call (spec-port `ownership`). It joins `managedTopLevelNames` for
+	// `settleManagedValue`'s reason — the name is a METHOD RECEIVER (`counters.get(0)`, `globalArr.push(x)`),
+	// and that set is the allocation-free filter in front of every receiver probe — and answers `notFound`
+	// for the same reason a managed literal does.
+	//
+	// ⭐ **ONE FUNCTION FOR BOTH RECORD KINDS, taking the outcome its caller already built.** What differs
+	// between them is only WHICH outcome; the three facts settled here — the outcome, the storage bit and
+	// the receiver-name set — are the same three, and a per-kind copy is how a third record kind would come
+	// to get a slot the layout never laid down (the storage bit) or a receiver probe that skips it.
+	function settleStoredRecordValue(decl TopLevelDecl, outcome TopLevelConstant) returns ConstEvalOutcome
+		decl.outcome = outcome
+		// A record binding is STORED whichever keyword declared it — written HERE, beside the outcome it is
 		// derived from, so the two are one decision (see `TopLevelDecl.hasStorage`).
 		decl.hasStorage = true
 		self.managedTopLevelNames.insert(decl.name)
 		return ConstEvalOutcome.notFound
-	end 'settleArrayValue'
+	end 'settleStoredRecordValue'
 
 	// Settle a decl that produced no value: it either OWNS the defect or merely inherited one.
 	function recordFailure(decl TopLevelDecl, error ConstEvalError) returns ConstEvalOutcome
@@ -6440,7 +6524,7 @@ export type ProgramSignatures
 			failed to poisoned then break 'state'
 			evaluating then decl.outcome = TopLevelConstant.poisoned
 			value then panic("ProgramSignatures.poisonIfUndecided: '{String.from(decl.name)}' holds a scalar value AND failed to evaluate — an initializer produces one or the other")
-			managedValue to arrayValue then panic("ProgramSignatures.poisonIfUndecided: '{String.from(decl.name)}' holds a managed value AND failed to evaluate — an initializer produces one or the other")
+			managedValue to containerValue then panic("ProgramSignatures.poisonIfUndecided: '{String.from(decl.name)}' holds a managed value AND failed to evaluate — an initializer produces one or the other")
 			pending then panic("ProgramSignatures.poisonIfUndecided: '{String.from(decl.name)}' is `pending` while unwinding its own evaluation — `evaluateDecl` marks it `evaluating` before the walk")
 		end 'state'
 	end 'poisonIfUndecided'
@@ -6579,6 +6663,9 @@ export type ProgramSignatures
 			// heap record `__module_init` built. It is the one arm `mutable` can arrive `false` from, and that
 			// bit is the whole of what makes `Live.push(1)` an E3019 and `Live = […]` an E2013.
 			arrayValue(_, element) then return TopLevelGlobalLookup.found(self.dataLabelOf(decl), valueType: self.constArrayValueType(element), mutable: decl.mutable)
+			// ⭐ A CONTAINER FACTORY reads as an array literal does — a POINTER slot holding the record
+			// `__module_init` built — and its type needs no inference at all: the alias named the instance.
+			containerValue(giid) then return TopLevelGlobalLookup.found(self.dataLabelOf(decl), valueType: MaxonType.genericInstance(giid), mutable: decl.mutable)
 			pending to evaluating then panic("ProgramSignatures.resolvedGlobalOf: '{String.from(decl.name)}' is unevaluated at a use site — `evaluateInitializers` runs to completion before any file is parsed")
 		end 'state'
 	end 'resolvedGlobalOf'
@@ -6689,6 +6776,9 @@ export type ProgramSignatures
 				// ⭐ AN ARRAY BINDING (P1.7 slice 2b) reserves the SAME null POINTER slot, for the same reason
 				// and now for a `let` too — its record is built, so there is even less to bake than a String's.
 				arrayValue(_, element) then entries.push(DataSectionEntry.create(String.from(self.dataLabelOf(decl)), valueType: globalStdType(maxonTypeTag(self.constArrayValueType(element)), name: decl.name), value: ManagedGlobalInitialSlot))
+				// ⭐ A CONTAINER FACTORY reserves the SAME null POINTER slot, for the same reason: the record
+				// `create()` builds is a heap allocation, and nothing about it can be baked into the image.
+				containerValue(giid) then entries.push(DataSectionEntry.create(String.from(self.dataLabelOf(decl)), valueType: globalStdType(maxonTypeTag(MaxonType.genericInstance(giid)), name: decl.name), value: ManagedGlobalInitialSlot))
 				pending to evaluating then panic("ProgramSignatures.declaredGlobals: '{String.from(decl.name)}' is unevaluated — `evaluateInitializers` runs to completion inside `queryProgramSignatures`")
 			end 'state'
 		end 'each'
@@ -6720,7 +6810,14 @@ export type ProgramSignatures
 				managedValue(bytes, kind) then entries.push(self.managedGlobalEntry(decl, initializer: managedLiteralInitializer(bytes, kind: kind), valueType: self.managedConstValueType(kind, elementFilePath: decl.declFilePath)))
 				// ⭐ AN ARRAY BINDING (P1.7 slice 2b) is a managed global whichever keyword declared it — its
 				// record is built before `main` and released after, and `let` refuses only the WRITE.
-				arrayValue(elements, element) then entries.push(self.managedGlobalEntry(decl, initializer: self.arrayRecordInitializer(elements, element: element), valueType: self.constArrayValueType(element)))
+				arrayValue(elements, element) then entries.push(self.managedGlobalEntry(decl, initializer: self.arrayRecordInitializer(elements, giid: typeNameIdOf(self.constArrayValueType(element))), valueType: self.constArrayValueType(element)))
+				// ⭐ A CONTAINER FACTORY IS AN ARRAY LITERAL WITH NO ELEMENTS, and that is a fact about the
+				// record rather than a shortcut: `ItemArray.create()` IS the `__arr_create` an array literal's
+				// own materialization opens with, and the pushes that follow it are the literal's elements —
+				// of which there are none here. So it takes the SAME initializer arm, and the stamps come
+				// from the same two doors, which is what keeps a global container's record and a global
+				// literal's identical at birth.
+				containerValue(giid) then entries.push(self.managedGlobalEntry(decl, initializer: self.arrayRecordInitializer(ConstArrayElementArray.create(), giid: giid), valueType: MaxonType.genericInstance(giid)))
 				pending to evaluating then panic("ProgramSignatures.managedGlobals: '{String.from(decl.name)}' is unevaluated — `evaluateInitializers` runs to completion inside `queryProgramSignatures`")
 			end 'state'
 		end 'each'
@@ -6734,12 +6831,15 @@ export type ProgramSignatures
 		return ManagedGlobal.create(self.dataLabelOf(decl), initializer: initializer, valueType: valueType, dropCallee: managedFieldDropCallee(self, typeNames: self.typeNames, fieldType: valueType), range: declInitializerRange(decl))
 	end 'managedGlobalEntry'
 
-	// The record construction an ARRAY literal global asks for: `__arr_create` with the stamps this instance
-	// fixes, then one push per element. Both stamps come from the SAME instance the global is typed by
-	// (`constArrayValueType`), so the strides the record is born with and the type every use loads through
-	// are one answer rather than two.
-	function arrayRecordInitializer(elements ConstArrayElementArray, element ConstArrayElementKind) returns ManagedGlobalInitializer
-		let giid = typeNameIdOf(self.constArrayValueType(element))
+	// The record construction an ARRAY-RECORD global asks for: `__arr_create` with the stamps this instance
+	// fixes, then one push per element. Both stamps come from the instance the global is TYPED by, so the
+	// strides the record is born with and the type every use loads through are one answer rather than two.
+	//
+	// ⚠ **THE INSTANCE IS THE CALLER'S, because the two kinds of array-record global know it differently.**
+	// A literal INFERS it from its element kind (`constArrayValueType`); a container factory READ it off the
+	// alias the author wrote. Deriving it here would mean re-deriving one of those two from the other, and
+	// an empty container has no element kind to derive from at all.
+	function arrayRecordInitializer(elements ConstArrayElementArray, giid GenericInstanceId) returns ManagedGlobalInitializer
 		return ManagedGlobalInitializer.arrayRecord(elements, elementSize: self.arrayElementSize(giid), elementDestroy: self.arrayElementDestroy(giid))
 	end 'arrayRecordInitializer'
 
@@ -6833,7 +6933,7 @@ export type ProgramSignatures
 			// record with a `.data` slot, so a read is a LOAD and the caller's NEXT probe (`globalDeclFor`)
 			// is the one that answers. That makes `notFound` the right answer here rather than merely a
 			// defensive one — it is the same "no CONSTANT of that name is visible" a `var` has always given.
-			arrayValue then return TopLevelConstantLookup.notFound
+			arrayValue to containerValue then return TopLevelConstantLookup.notFound
 			pending to evaluating then panic("ProgramSignatures.resolvedValueOf: '{String.from(decl.name)}' is unevaluated at a use site — `evaluateInitializers` runs to completion before any file is parsed")
 		end 'state'
 	end 'resolvedValueOf'
@@ -6942,6 +7042,10 @@ export type ProgramSignatures
 			// the slot the emitted `globalAddr` names. Mixing the elements too would be SOUND and WRONG: the
 			// "sound, and useless" key that re-parses the program on every keystroke in any initializer.
 			arrayValue(_, element) then return mixBytes(self.mixArrayElementKind(mix(keyed, value: ConstShapeArrayValue), element: element), bytes: decl.dataLabel)
+			// ⭐ **A CONTAINER FACTORY MIXES ITS INSTANCE AND ITS LABEL** — the array-literal arm's two facts,
+			// with the instance stated outright instead of inferred from an element kind. There are no
+			// elements to leave out.
+			containerValue(giid) then return mixBytes(mixBytes(mix(keyed, value: ConstShapeContainerValue), bytes: self.mangleGenericInstance(giid)), bytes: decl.dataLabel)
 			// A constant with no value bakes no number into a reader, so every failure hashes alike —
 			// but it must still hash differently from every VALUE, or `let X = compute()` becoming
 			// `let X = 0` would leave a reader's memo valid. The failure's DETAILS are deliberately not
@@ -7198,11 +7302,12 @@ export type ProgramSignatures
 		return not isStdlibModuleDirectory(self.moduleDirectoryOf(alias.declFilePath))
 	end 'candidateIsReachable'
 
-	// ⭐ **THE TYPE NAMES A FILE'S TOP-LEVEL CONSTANT INITIALIZERS CAST TO (P1.9) — a `use` the real
-	// parse structurally cannot see.**
+	// ⭐ **THE TYPE NAMES A FILE'S TOP-LEVEL INITIALIZERS NAME (P1.9) — a `use` the real parse
+	// structurally cannot see.**
 	//
-	// `let SENTINEL = 5 as Slot` is the only mention of `Slot` in many real files, and the E3062 check
-	// would call the alias unused. It cannot see the cast because the real parse SKIPS a top-level
+	// `let SENTINEL = 5 as Slot` is the only mention of `Slot` in many real files, and `var g =
+	// ItemArray.create()` is very often the only mention of `ItemArray` — and the E3062 check would call
+	// both aliases unused. It cannot see either because the real parse SKIPS a top-level
 	// initializer's tokens wholesale (`readTopLevelBinding`) — the initializer is folded once, before
 	// any file is parsed, by the const evaluator (`evaluateInitializers`), whose `Parser` is transient
 	// and whose artifact is discarded.
@@ -7212,21 +7317,22 @@ export type ProgramSignatures
 	// follow (`Parser.recordTypeNameUse`); this is simply the door for the one reader that is not the
 	// parser. It is keyed per DECLARING FILE, because "used in its OWN file" is the whole question.
 	//
-	// ⚠ It records the target of EVERY constant cast, including `as int` and `as ExitCode`. Filtering
+	// ⚠ It records EVERY such name, including `as int` and `as ExitCode`. Filtering
 	// to alias names would mean asking the alias registry mid-sweep, when it is still being built and
 	// an absence means only "not swept yet"; and a name that is not a declared alias matches no
 	// candidate, so the extra entries answer nothing and cost one set insert each.
-	export function recordConstCastTarget(name ByteArray, declFilePath FilePath)
-		self.constCastTargets.insert(fileScopedDeclKey(name, declFilePath: declFilePath))
-	end 'recordConstCastTarget'
+	export function recordConstInitializerTypeName(name ByteArray, declFilePath FilePath)
+		self.constInitializerTypeNames.insert(fileScopedDeclKey(name, declFilePath: declFilePath))
+	end 'recordConstInitializerTypeName'
 
-	// Did a top-level constant declared in `declFilePath` cast to `name`? The read half of the above.
+	// Did a top-level binding declared in `declFilePath` name `name` in its initializer? The read half of
+	// the above.
 	// It pays `fileScopedDeclKey`'s ~4 allocations, and pays them once per FILE-PRIVATE TYPEALIAS
 	// DECLARED — not per use and not per name reference — which is why the composite key is affordable
 	// here where `RangedAliasRegistry` refuses it.
-	export function isConstCastTarget(name ByteArray, declFilePath FilePath) returns bool
-		return self.constCastTargets.contains(fileScopedDeclKey(name, declFilePath: declFilePath))
-	end 'isConstCastTarget'
+	export function namesTypeInConstInitializer(name ByteArray, declFilePath FilePath) returns bool
+		return self.constInitializerTypeNames.contains(fileScopedDeclKey(name, declFilePath: declFilePath))
+	end 'namesTypeInConstInitializer'
 
 	// The bare-name door, for the readers that have no file to ask from — see
 	// `RangedAliasRegistry.underlyingInAnyFile`, which is where the (narrow) residual is written down
@@ -8659,6 +8765,54 @@ export type ProgramSignatures
 	export function isListInstanceAt(tag ValueTypeTag, nameId TypeNameId) returns bool
 		return tag == ValueTypeTag.genericInstance and self.isListInstance(nameId)
 	end 'isListInstanceAt'
+
+	// --- The `__ManagedList` builtin generic and its node handle ---
+	//
+	// The `List`'s own chain under the surface that exposes nodes (see `ManagedListBuiltinBaseName`). Every
+	// type-level fact it has is a `List`'s — the element through `containerElementType`, the box through
+	// `ListRecordBytes`, the drop through `__list_decref` — so what lives here is only the identity: which
+	// base name it is, and the same for the NODE handle whose element it shares.
+
+	// Is `name` the builtin `__ManagedList` type — the base of every managed-list instance.
+	export function isManagedListBaseName(name ByteArray) returns bool
+		return name.equals(ManagedListBuiltinBaseName)
+	end 'isManagedListBaseName'
+
+	// Is generic instance `id` a `__ManagedList with T`? (Reads the base NAME, which needs no base struct.)
+	export function isManagedListInstance(id GenericInstanceId) returns bool
+		return self.isManagedListBaseName(self.genericInstanceBaseName(id))
+	end 'isManagedListInstance'
+
+	// ⭐ **DOES THIS (tag, id) PAIR DENOTE A `__ManagedList with T`?** — `isListInstanceAt`'s twin, needed for
+	// its measured reason: a `TypeNameId` and a `GenericInstanceId` share one numeric space, so the id alone
+	// can answer TRUE about an instance the caller never had. Its caller is the receiver dispatch, which
+	// holds a value's (tag, nameId) pair.
+	export function isManagedListInstanceAt(tag ValueTypeTag, nameId TypeNameId) returns bool
+		return tag == ValueTypeTag.genericInstance and self.isManagedListInstance(nameId)
+	end 'isManagedListInstanceAt'
+
+	// Is `name` the builtin `__ManagedListNode` type — the base of every node handle.
+	export function isManagedListNodeBaseName(name ByteArray) returns bool
+		return name.equals(ManagedListNodeBuiltinBaseName)
+	end 'isManagedListNodeBaseName'
+
+	// Is generic instance `id` a `__ManagedListNode with T`?
+	export function isManagedListNodeInstance(id GenericInstanceId) returns bool
+		return self.isManagedListNodeBaseName(self.genericInstanceBaseName(id))
+	end 'isManagedListNodeInstance'
+
+	// ⭐ **DOES THIS (tag, id) PAIR DENOTE A NODE HANDLE?** — the receiver dispatch's door, and the (tag, id)
+	// form for `isListInstanceAt`'s reason.
+	export function isManagedListNodeInstanceAt(tag ValueTypeTag, nameId TypeNameId) returns bool
+		return tag == ValueTypeTag.genericInstance and self.isManagedListNodeInstance(nameId)
+	end 'isManagedListNodeInstanceAt'
+
+	// ⭐ **THE NODE-HANDLE INSTANCE FOR A MANAGED LIST'S ELEMENT** — what an insertion's result is typed
+	// with. It is derived from the LIST's instance rather than taken from the caller, so the element a node
+	// reads back through `value()` is by construction the element the list holds.
+	export function managedListNodeInstanceFor(listGiid GenericInstanceId) returns GenericInstanceId
+		return self.builtinInstanceForElement(ManagedListNodeBuiltinBaseName, element: self.containerElementType(listGiid))
+	end 'managedListNodeInstanceFor'
 
 	// --- The `Vector` builtin generic ---
 	//
@@ -10174,6 +10328,19 @@ export type ProgramSignatures
 		if self.isVectorInstance(id) 'vector'
 			return ArrRecordBytes as ByteOffset
 		end 'vector'
+		// A `__ManagedList` instance's box IS a `List`'s — the same chain header, allocated by the same
+		// `__list_create` (see `ManagedListBuiltinBaseName`). A separate arm and not a widened
+		// `isListInstance` for the `Vector` arm's reason: two TYPES whose layouts coincide.
+		if self.isManagedListInstance(id) 'managedList'
+			return ListRecordBytes as ByteOffset
+		end 'managedList'
+		// ⚠ A NODE HANDLE'S "box" is the 24-byte node the LIST allocated, and no program ever asks this
+		// door to allocate one: nothing constructs a node, and `sizeof` of a node type is unwritable
+		// because the type is unnameable in source. The honest size is the node's own, so that a reader
+		// that does arrive is told the truth rather than an `Array` record's 48.
+		if self.isManagedListNodeInstance(id) 'managedListNode'
+			return ListNodeBytes as ByteOffset
+		end 'managedListNode'
 		match self.structOf(self.genericInstanceBaseName(id)) 'base'
 			declared(layout) then return layout.sizeBytes()
 			undeclared then panic("genericInstanceBoxSize: generic instance {id}'s base '{String.from(self.genericInstanceBaseName(id))}' is neither a builtin nor a declared struct, so it has no box — every caller opens with genericInstanceBaseIsKnown")
@@ -10980,7 +11147,7 @@ export type ProgramSignatures
 	// `StructLayout` exists for it and none is missing. The ONE home of the builtin-container disjunction —
 	// every door that means "a container this compiler owns" asks here rather than re-spelling the four names.
 	export function isBuiltinGenericBaseName(name ByteArray) returns bool
-		return self.isArrayBaseName(name) or self.isSetBaseName(name) or self.isMapBaseName(name) or self.isListBaseName(name) or self.isVectorBaseName(name)
+		return self.isArrayBaseName(name) or self.isSetBaseName(name) or self.isMapBaseName(name) or self.isListBaseName(name) or self.isVectorBaseName(name) or self.isManagedListBaseName(name) or self.isManagedListNodeBaseName(name)
 	end 'isBuiltinGenericBaseName'
 
 	// ⭐ **HOW MANY TYPE ARGUMENTS THE SYNTHESIZED GENERIC `name` TAKES** — the arity `Parser.checkGenericInstance`
@@ -11010,6 +11177,12 @@ export type ProgramSignatures
 		if self.isVectorBaseName(name) 'vector'
 			return VectorTypeParamCount
 		end 'vector'
+		if self.isManagedListBaseName(name) 'managedList'
+			return ManagedListTypeParamCount
+		end 'managedList'
+		if self.isManagedListNodeBaseName(name) 'managedListNode'
+			return ManagedListNodeTypeParamCount
+		end 'managedListNode'
 		panic("ProgramSignatures.builtinGenericTypeParamCount: `{String.from(name)}` is not a synthesized builtin generic — every caller opens with isBuiltinGenericBaseName, and a name that answers yes there owes an arity here")
 	end 'builtinGenericTypeParamCount'
 
@@ -11088,6 +11261,26 @@ export type ProgramSignatures
 	export function instanceArgIsManaged(id GenericInstanceId, position TypeParamId) returns bool
 		return self.typeIsManaged(self.substitutedInstanceArg(id, position: position), from: self.typeNames)
 	end 'instanceArgIsManaged'
+
+	// ⭐ **THE TYPE-CYCLE NODE INSTANCE `id`'s ARGUMENT AT `position` POINTS AT (E4014).** A container OWNS its
+	// elements, so each argument is an ownership edge in `TypeCycleCheck`'s graph.
+	//
+	// ⚠ Here rather than at the caller for `instanceArgIsManaged`'s stated reason: the argument's `named` id is
+	// meaningless outside `self.typeNames`, and adopting it into the merged `project.typeNames` is exactly the
+	// mistake — the id would then mean whatever name happens to sit at that number in the OTHER table.
+	//
+	// `denotedInstance` FIRST, because an argument may SPELL a container two ways — a nested
+	// `genericInstance`, or a `named` leaf naming a `typealias` — and that door already answers both as one
+	// question. It is the same door `buildInstanceArgGraph` asks, so the type-cycle graph and the alias-cycle
+	// graph cannot come to disagree about which argument reaches a container.
+	export function instanceArgCycleTarget(id GenericInstanceId, position TypeParamId) returns TypeCycleTarget
+		let arg = self.substitutedInstanceArg(id, position: position)
+		if let denoted = try self.denotedInstance(arg) 'spellsAContainer'
+			return TypeCycleTarget.container(denoted)
+		end 'spellsAContainer'
+
+		return typeCycleTargetOf(arg, typeNames: self.typeNames)
+	end 'instanceArgCycleTarget'
 
 	// The number of fields instance `id` carries — its base struct's field count.
 	export function genericInstanceFieldCount(id GenericInstanceId) returns FieldIndex
@@ -11510,6 +11703,21 @@ export type ProgramSignatures
 		if self.isVectorInstance(id) 'vector'
 			return ArrDecrefName
 		end 'vector'
+		// A `__ManagedList` drops through `__list_decref` — its record IS a `List`'s and the nodes it links
+		// are the same nodes, so the teardown that knows them is the one that already exists.
+		if self.isManagedListInstance(id) 'managedList'
+			return ListDecrefName
+		end 'managedList'
+
+		// ⛔ **A NODE HANDLE IS NEVER DROPPED BY THE BINDING THAT HOLDS IT, so this door has no answer for
+		// one and says so rather than inventing `__mm_decref`.** The list owns every node it links and frees
+		// them in `__list_clear`; a handle is a BORROW into that chain (`ManagedListNodeBuiltinBaseName`),
+		// emitted through the element accessor's `owned: false` path and never enrolled as an owned temp. So
+		// reaching here means a node value was tracked as owned somewhere, which would be a DOUBLE FREE at
+		// the first scope exit — loud here, silent there.
+		if self.isManagedListNodeInstance(id) 'nodeHandleIsABorrow'
+			panic("ProgramSignatures.genericInstanceBoxDropCallee: a `{String.from(ManagedListNodeBuiltinBaseName)}` handle has no drop — the list owns its nodes and frees them in `{String.from(ListClearName)}`, so a node reaching this door was enrolled as an OWNED value and would be freed twice")
+		end 'nodeHandleIsABorrow'
 
 		// ⭐ **THE OMISSION THIS ROUTER USED TO SWALLOW, MADE LOUD** — its two sibling routers
 		// (`builtinGenericTypeParamCount`, `genericInstanceBoxSize`) already panic on a builtin they have no arm

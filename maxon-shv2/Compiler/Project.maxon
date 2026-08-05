@@ -236,7 +236,7 @@ end 'qualifiedCandidateName'
 // rejected, and never by one that compiles.
 export function insertCandidateName(candidates StringArray, candidate String)
 	var at = 0 as ElementCount
-	while at < candidates.count() and candidateNamePrecedes(try candidates.get(at) otherwise panic("insertCandidateName: get OOB at {at} inside its own count()"), later: candidate) 'findPosition'
+	while at < candidates.count() and stringBytesPrecede(try candidates.get(at) otherwise panic("insertCandidateName: get OOB at {at} inside its own count()"), later: candidate) 'findPosition'
 		at = at + 1
 	end 'findPosition'
 
@@ -247,17 +247,21 @@ export function insertCandidateName(candidates StringArray, candidate String)
 	candidates.insert(at, value: candidate)
 end 'insertCandidateName'
 
-// Byte-wise `<` over two candidate spellings. `String` declares no `Comparable` conformance and the byte
-// door that would avoid these two conversions (`String.byteAt`) is `module`-scoped inside `stdlib/`, so the
-// comparison is made on the byte arrays — see `insertCandidateName` for why that cost is acceptable here
-// and would not be on any path a compiling program takes.
-function candidateNamePrecedes(earlier String, later String) returns bool
+// ⭐ **BYTE-WISE `<` OVER TWO STRINGS — the compiler's ONE lexicographic order.** `String` declares no
+// `Comparable` conformance and the byte door that would avoid these two conversions (`String.byteAt`) is
+// `module`-scoped inside `stdlib/`, so the comparison is made on the byte arrays.
+//
+// ⚠ **BOTH READERS ARE ON A PATH THAT HAS ALREADY DECIDED TO FAIL THE BUILD**, which is what makes the
+// per-comparison `toByteArray()` acceptable: `insertCandidateName` orders an ambiguity message's candidates,
+// and `TypeCycleCheck.typeDeclEarlier` breaks the cross-file tie between two cyclic declarations. Neither
+// runs on a program that compiles, and neither would be affordable if it did.
+export function stringBytesPrecede(earlier String, later String) returns bool
 	let a = earlier.toByteArray()
 	let b = later.toByteArray()
 	var i = 0 as ElementCount
 	while i < a.count() and i < b.count() 'compareByte'
-		let left = try a.get(i) otherwise panic("candidateNamePrecedes: get OOB at {i} inside its own count()")
-		let right = try b.get(i) otherwise panic("candidateNamePrecedes: get OOB at {i} inside its own count()")
+		let left = try a.get(i) otherwise panic("stringBytesPrecede: get OOB at {i} inside its own count()")
+		let right = try b.get(i) otherwise panic("stringBytesPrecede: get OOB at {i} inside its own count()")
 		if left != right 'decided'
 			return left < right
 		end 'decided'
@@ -265,7 +269,7 @@ function candidateNamePrecedes(earlier String, later String) returns bool
 	end 'compareByte'
 
 	return a.count() < b.count()
-end 'candidateNamePrecedes'
+end 'stringBytesPrecede'
 
 // The `", "`-joined candidate trailer both ambiguity messages end with. One renderer, because the two
 // diagnostics say the identical sentence about a different kind of declaration.
@@ -566,6 +570,18 @@ export type VarInfo
 	export static function createParameterBinding(name ByteArray, varType MaxonType, mutable bool, boundValue ValueId) returns VarInfo
 		return Self{name: name, varType: varType, mutable: mutable, slot: 0, boundValue: boundValue, ownership: OwnershipKind.trivial, movedFrom: false, partiallyMoved: false, isSelfField: false, fieldIndex: 0, isPayloadBinding: false, payloadScrutineeName: EmptySourceText, payloadFieldIndex: 0, payloadCaseName: EmptySourceText, isParameter: true, lastUseToken: 0, namesModuleStorage: false, referenced: false}
 	end 'createParameterBinding'
+
+	// ⭐ **IS THIS BINDING A LIVE NAME OF `value`?** — the predicate every symbol-table scan over "who else
+	// is reading this value" filters on, and it lives on the binding because it is a fact ABOUT one.
+	//
+	// Two scans ask it and they do opposite things with the answer — `Parser.poisonValueAliases` MARKS every
+	// such binding when the value is consumed, `Parser.promiseThreadHasLiveAlias` merely COUNTS whether one
+	// exists before re-arming a promise — which is exactly why the predicate itself must be one thing. Written
+	// twice, a refinement of what "a live name of a value" means (a second moved-from bit, a scope-depth
+	// qualification) lands in one scan and not the other, and NOTHING fails to compile.
+	export function isLiveNameOf(value ValueId) returns bool
+		return self.boundValue == value and not self.movedFrom
+	end 'isLiveNameOf'
 end 'VarInfo'
 
 export typealias VarInfoMap = Map with (ByteArray, VarInfo)
@@ -1979,6 +1995,17 @@ export type TypeNameRegistry
 
 		return TypeNameRecordOutcome.collides(winner)
 	end 'record'
+
+	// ⭐ **WHERE A TYPE NAME WAS DECLARED** — the anchor a diagnostic about a whole DECLARATION (rather than
+	// about a use of it) has to point at. `TypeCycleCheck` is the reader: E4014 blames `type Node`, at the
+	// NAME token, and none of the four per-kind registries carries a position (`StructLayout` and `EnumLayout`
+	// hold only `declFilePath`), which is precisely the gap this registry was built over.
+	//
+	// A name no declaration filed has no answer, which is why it throws rather than inventing a position —
+	// the sentinel `0:0` would be indistinguishable from a compiler-synthesized declaration's real one.
+	export function declarationOf(name ByteArray) returns TypeNameDecl throws MapError
+		return try self.winners.get(name)
+	end 'declarationOf'
 end 'TypeNameRegistry'
 
 // The ONE exception to "a type name is declared exactly once": the SAME alias form, in a DIFFERENT

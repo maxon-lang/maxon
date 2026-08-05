@@ -21,6 +21,11 @@ after the join the binding is uniformly not-owned and its later scope-exit drop 
 MOVED then left (a `return` out of the moved branch) contributes no join edge — the surviving paths keep
 their own live state, and drop the value themselves.
 
+⚠ **EVERY SOURCE HERE IS A `var`, and that is load-bearing rather than incidental.** A bind from an
+IMMUTABLE binding is an ALIAS, not a move (`specs/ownership.md`; see `moves.md`), so with `let a` these
+programs would perform no move at all and would still pass every expectation below while testing
+nothing. The `var` is what makes `let u = a` a move and puts the reconciliation on trial.
+
 This is a compile-time elaboration: no runtime "was-it-moved" flag exists. A value moved on ALL paths is
 skipped once per path (no double-free); a value moved on NO path is dropped once; and a READ of a value
 that is moved on some-but-not-all paths past the join stays a conservative use-after-move (E3102) — being
@@ -114,7 +119,7 @@ function build(x Integer) returns String
 end 'build'
 
 function main() returns ExitCode
-	let a = build(1)
+	var a = build(1)
 	let flag = 0
 	if flag > 0 'b'
 		let u = a
@@ -147,7 +152,7 @@ function build(x Integer) returns String
 end 'build'
 
 function main() returns ExitCode
-	let a = build(1)
+	var a = build(1)
 	let flag = 0
 	if flag > 0 'b'
 		let u = a
@@ -219,7 +224,7 @@ function build(x Integer) returns String
 end 'build'
 
 function pick(c Color) returns ExitCode
-	let a = build(1)
+	var a = build(1)
 	match c 'm'
 		red then let u = a
 		green then print("green arm leaves it live padded long")
@@ -303,7 +308,7 @@ end 'build'
 function run(n Integer) returns ExitCode
 	var i = 0
 	while i < n 'l'
-		let s = build(i)
+		var s = build(i)
 		if i > 0 'b'
 			let u = s
 			print(u)
@@ -340,7 +345,7 @@ function build(x Integer) returns String
 end 'build'
 
 function main() returns ExitCode
-	let a = build(1)
+	var a = build(1)
 	let flag = 1
 	if flag > 0 'b'
 		let u = a
@@ -369,7 +374,7 @@ function build(x Integer) returns String
 end 'build'
 
 function run(n Integer) returns ExitCode
-	let a = build(1)
+	var a = build(1)
 	var i = 0
 	while i < n 'l'
 		let u = a
@@ -402,7 +407,7 @@ function build(x Integer) returns String
 end 'build'
 
 function run(n Integer) returns ExitCode
-	let a = build(1)
+	var a = build(1)
 	var i = 0
 	while i < n 'l'
 		if i > 0 'b'

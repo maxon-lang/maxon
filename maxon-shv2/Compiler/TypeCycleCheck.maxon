@@ -1,0 +1,408 @@
+// TypeCycleCheck.maxon — the whole-program RECURSIVE-TYPE refusal (E4014).
+//
+// ⭐ **`specs/ownership.md`: *"A type may not reference itself directly or indirectly through struct fields,
+// enum associated values, or container element types. The compiler reports `E4014` with the cycle path."***
+// The reason is DESTRUCTION, not refcounting — a drop cascade over a cyclic type graph has no finite
+// order — so the rule holds under shv2's static single ownership exactly as it does under the bootstrap's
+// refcounts. `GenericInstanceRegistry`'s own header already relies on it (*"inlining args into `MaxonType`
+// would make the union recursively aggregate — E4014"*); this is the check that makes it true of user code.
+//
+// ⭐⭐ **IT OWNS NO GRAPH ALGORITHM OF ITS OWN.** `CsrGraph` already carries the two the check needs —
+// `nodesOnACycle` (Tarjan, one sweep for every node) and `shortestCycleThrough` (BFS, the path for one) —
+// built for `ProgramSignatures.firstCyclicAliasDecl`, whose header records what the per-node alternative
+// MEASURED (cubic). So this file contributes the GRAPH and the WORDS, and nothing else. A second cycle
+// finder here would be the one-fact-twice bug at the algorithm level.
+//
+// ⭐ **THE NODE SPACE IS AGGREGATES *PLUS* GENERIC INSTANCES, AND THE CONTAINER NODES ARE WHAT MAKE THE
+// PATH READ THE WAY THE SPEC PINS IT.** `Folder → children: FolderArray → Folder` names the ALIAS the author
+// wrote, not `Array with Folder` and not the element type alone, so `FolderArray` has to be a node the path
+// passes THROUGH. That is also what makes the rule transitive through nesting for free: an instance's
+// arguments are edges like any other, so `Array with (Map with (String, Folder))` reaches `Folder` by the
+// same walk with no case of its own.
+//
+// ⭐ **ONLY A USER-WRITTEN DECLARATION IS EVER BLAMED, AND THE GRAPH IS BUILT OVER EVERYTHING ANYWAY.**
+// The two halves are separate on purpose. Building over everything is what lets a genuine user → stdlib →
+// user loop be caught; blaming only user declarations is what stops a stdlib-internal loop from being
+// reported against a program that merely mentions it (a type that REACHES a cycle is not ON it, so it is
+// never a candidate). And because the provenance question is asked only of nodes ALREADY KNOWN to be on a
+// cycle, the per-file path probe `isStdlibSourceFile` performs runs ZERO times on every program that
+// compiles — the derivation discipline `livesUnderStdlibDirectory`'s header measures.
+
+// ⭐ **WHAT ONE DECLARED TYPE REFERENCE POINTS AT — the ONE reading of a `MaxonType` this check makes.**
+// It exists because the same question is asked against TWO interners: a struct field's type is interned in
+// `project.typeNames`, a generic instance's argument in the index's own private table
+// (`ProgramSignatures.instanceArgCycleTarget`, which is why that door is a method there and not a call here).
+export union TypeCycleTarget
+	// A primitive, a ranged alias, an opaque type parameter, an interface, a function value — nothing this
+	// graph has a node for, and nothing that can hold a type inside itself.
+	nothing
+	// A declared `type` / `enum` / `union`, BY NAME. The name is resolved against the declaration registries
+	// by the caller rather than here, so a name no declaration holds simply contributes no edge — which is
+	// what keeps a `named` that turned out to be a ranged alias from inventing one.
+	aggregate(name ByteArray)
+	// A generic INSTANCE — `Array with Folder`, whether the author wrote it inline or reached it through a
+	// `typealias`.
+	container(id GenericInstanceId)
+end 'TypeCycleTarget'
+
+// The node a `MaxonType` interned in `typeNames` points at. `named` and `structRef` are ONE arm because the
+// split between them is about how a value is TAGGED (a union value carries `named`, a struct `structRef`)
+// and this check asks only what the reference NAMES — the same question `namedTypeArgIdentity` answers one
+// registry over.
+export function typeCycleTargetOf(t MaxonType, typeNames TypeNameInterner) returns TypeCycleTarget
+	let tag = maxonTypeTag(t)
+	if tag == ValueTypeTag.named or tag == ValueTypeTag.structRef 'namesAnAggregate'
+		let name = try typeNames.nameOf(typeNameIdOf(t)) otherwise panic("typeCycleTargetOf: a `named`/`structRef` type's id is not in the interner it was read against — a declared type's field types are remapped into `project.typeNames` at merge")
+		return TypeCycleTarget.aggregate(name)
+	end 'namesAnAggregate'
+
+	if tag == ValueTypeTag.genericInstance 'namesAContainer'
+		return TypeCycleTarget.container(typeNameIdOf(t))
+	end 'namesAContainer'
+
+	return TypeCycleTarget.nothing
+end 'typeCycleTargetOf'
+
+// Aggregate name ⇒ its dense node key.
+typealias AggregateNodeMap = Map with (ByteArray, CsrIndex)
+
+// ⭐ **"NO NODE" AS A VALUE, NOT AS A SENTINEL INSIDE THE KEY SPACE.** `CsrIndex` is 0-based and 0 is a real
+// node, so the absence has to sit ABOVE every key any program can mint — which `u64.max` does, and which no
+// node count can reach.
+let NoTypeCycleNode = u64.max as CsrIndex
+
+// The path separator `/specs/ownership.md` pins — U+2192, the arrow both reference compilers print.
+let TypeCyclePathArrow = " → "
+
+// ⭐ **THE TYPE-REFERENCE GRAPH, AS PARALLEL EDGE COLUMNS PLUS THE TWO NAME COLUMNS A PATH IS RENDERED
+// FROM.** The name columns hold REFERENCES to names the declarations already own — no string is formatted
+// while the graph is built, because the overwhelming majority of compiles never render one. Formatting is
+// `renderCyclePath`'s, on the error path only, which is `ProgramSignatures.aliasCyclePath`'s own discipline.
+//
+// ⚠ **ONE WALK FILLS ALL FOUR COLUMNS.** The obvious alternative — build (owner, held) here and re-walk the
+// declarations to recover a label when a cycle is found — would be a SECOND spelling of "what does this type
+// hold", free to drift from the first while every green run agreed with it.
+type TypeCycleGraph
+	// Aggregate name ⇒ its node. The container node for instance `gid` is `aggregateCount() + gid`, so the
+	// two spaces are disjoint by construction and neither needs a kind bit.
+	var nodeOfAggregate as AggregateNodeMap
+	// Node ⇒ its name, for the aggregate half. The container half's display name is derived at render time
+	// (`ProgramSignatures.instanceDisplayName`), because it is the author's `typealias` spelling and there is
+	// no reason to materialize one per instance for a program that compiles.
+	var aggregateNames as ByteArrayArray
+	// How many generic instances the program interned — the container half's width, held here so the
+	// adjacency and the node numbering cannot come to disagree about how wide the space is.
+	var instanceCount as GenericInstanceId
+	// The edges, as the parallel (owner, held) columns `buildCsr` consumes.
+	var edgeOwners as CsrColumn
+	var edgeHeld as CsrColumn
+	// The union CASE an edge leaves through, EMPTY unless it does — `link` in `link.next: Link`. A struct
+	// field and a container element both leave one empty; see `edgeLabel`, where the three shapes are one
+	// formula.
+	var edgeCaseNames as ByteArrayArray
+	// The FIELD or PAYLOAD an edge leaves through, EMPTY for a container element — a container owns its
+	// elements in its BUFFER and there is no declared member to name, which is exactly why the spec's path
+	// reads `FolderArray → Folder` with no `:` in it.
+	var edgeMemberNames as ByteArrayArray
+
+	static function create(instanceCount GenericInstanceId) returns TypeCycleGraph
+		return Self{nodeOfAggregate: AggregateNodeMap.create(), aggregateNames: ByteArrayArray.create(), instanceCount: instanceCount, edgeOwners: CsrColumn.create(), edgeHeld: CsrColumn.create(), edgeCaseNames: ByteArrayArray.create(), edgeMemberNames: ByteArrayArray.create()}
+	end 'create'
+
+	function aggregateCount() returns CsrIndex
+		return self.aggregateNames.count()
+	end 'aggregateCount'
+
+	// Claim the node for a declared aggregate. Every declaration claims one before any edge is added, because
+	// an edge may point at a type declared in a file folded later — the completeness argument
+	// `TypeResolution.checkStructFieldTypes` makes for running after the last merge rather than at each commit.
+	function declareAggregate(name ByteArray)
+		self.nodeOfAggregate.upsert(name, value: self.aggregateNames.count())
+		self.aggregateNames.push(name)
+	end 'declareAggregate'
+
+	// The node of a name this graph has already declared. Precondition: `declareAggregate` was called for it,
+	// which the two-pass build guarantees for every name it then walks.
+	function nodeOfDeclaredAggregate(name ByteArray) returns CsrIndex
+		return try self.nodeOfAggregate.get(name) otherwise panic("TypeCycleGraph.nodeOfDeclaredAggregate: '{String.from(name)}' claimed no node — every declared aggregate claims one in the pass before any edge is built")
+	end 'nodeOfDeclaredAggregate'
+
+	// The node `target` denotes, or `NoTypeCycleNode` when it denotes nothing this graph holds — an
+	// undeclared name, or a reference to a type that cannot contain one.
+	//
+	// ⚠ **THE TWO ARMS THAT ANSWER A NODE ANSWER FROM DIFFERENT AUTHORITIES, WHICH IS WHY ONE FALLS BACK AND
+	// THE OTHER PANICS.** An aggregate arrives BY NAME, and a name no declaration filed is an ordinary
+	// property of the program (a `named` that turned out to be a ranged alias) — so "no node" is a real
+	// answer. A container arrives as an INTERNED ID from the very registry whose count fixed this graph's
+	// width at `create`, so an id outside that count is not a program property but a graph built over the
+	// wrong registry — and its node would index past `adjacency()`'s `nodeCount`, reading out of bounds
+	// inside `nodesOnACycle` instead of reporting anything.
+	function nodeOfTarget(target TypeCycleTarget) returns CsrIndex
+		match target 'kind'
+			nothing then return NoTypeCycleNode
+			aggregate(name) then return try self.nodeOfAggregate.get(name) otherwise NoTypeCycleNode
+			container(id) then return self.containerNode(id)
+		end 'kind'
+	end 'nodeOfTarget'
+
+	// The node of an interned generic instance, with the numbering's premise checked where it is relied on.
+	function containerNode(id GenericInstanceId) returns CsrIndex
+		if id >= self.instanceCount 'outsideTheInternedSpace'
+			panic("TypeCycleGraph.containerNode: generic instance {id} lies outside the {self.instanceCount} this graph was built over — the width is taken from `signatures.genericInstanceCount()` at `create`, so every instance a type reference can name is already interned when the graph is built")
+		end 'outsideTheInternedSpace'
+
+		return self.aggregateCount() + id
+	end 'containerNode'
+
+	// Record one ownership edge. `caseName` / `memberName` are EMPTY where the shape has none; the three
+	// legal combinations are stated on the columns themselves.
+	function addEdge(owner CsrIndex, target TypeCycleTarget, caseName ByteArray, memberName ByteArray)
+		let held = self.nodeOfTarget(target)
+		if held == NoTypeCycleNode 'referencesNothingThisGraphHolds'
+			return
+		end 'referencesNothingThisGraphHolds'
+
+		self.edgeOwners.push(owner)
+		self.edgeHeld.push(held)
+		self.edgeCaseNames.push(caseName)
+		self.edgeMemberNames.push(memberName)
+	end 'addEdge'
+
+	// The adjacency both walks read. Built on demand rather than cached: `nodesOnACycle` asks for it once per
+	// compile, and `shortestCycleThrough` only on a program that is already being rejected.
+	function adjacency() returns CsrGraph
+		return buildCsr(self.edgeOwners, to: self.edgeHeld, nodeCount: self.aggregateCount() + self.instanceCount)
+	end 'adjacency'
+
+	// ⭐⭐ **THE PATH, AND IT IS ONE FORMULA FOR ALL FOUR SHAPES `/specs/ownership.md` pins.** The cycle
+	// arrives as its NODES with the blamed type first (`shortestCycleThrough`); what the message shows is
+	// that first node's name followed by the LABEL of each edge along the loop, the closing edge included. So
+	//
+	//   `Node → next: Node`                          — one node, one closing edge (a struct field)
+	//   `Link → link.next: Link`                     — one node, one closing edge (a union case's value)
+	//   `Folder → children: FolderArray → Folder`    — two nodes; the container node contributes the second
+	//   `A → b: B → a: A`                            — two nodes, two member edges
+	//
+	// fall out of the SAME loop. Nothing here asks which shape it is rendering, which is what stops three of
+	// the four canonical cases from silently testing the fourth's spelling.
+	function renderCyclePath(signatures ProgramSignatures, cycle CsrColumn) returns String
+		let start = try cycle.get(0) otherwise panic("TypeCycleGraph.renderCyclePath: the blamed node lies on a cycle, so `shortestCycleThrough` returned a non-empty path for it")
+		var path = String.from(self.displayNameOfNode(signatures, node: start))
+		for index in 0 upto cycle.count() 'eachStep'
+			let owner = try cycle.get(index) otherwise panic("TypeCycleGraph.renderCyclePath: cycle.get OOB at {index} below count {cycle.count()}")
+			// The LAST step closes the loop back onto the node the path started at.
+			var held = start
+			if index + 1 < cycle.count() 'notTheClosingStep'
+				held = try cycle.get(index + 1) otherwise panic("TypeCycleGraph.renderCyclePath: cycle.get OOB at {index} + 1 below count {cycle.count()}")
+			end 'notTheClosingStep'
+
+			path.append(TypeCyclePathArrow)
+			path.append(self.edgeLabel(signatures, owner: owner, held: held))
+		end 'eachStep'
+
+		return path
+	end 'renderCyclePath'
+
+	// One step of the path: the member the reference was declared through, then what it points at. A
+	// container element declares no member, so the qualifier is empty and the step is the bare type name —
+	// which is the whole difference between `children: FolderArray` and the `Folder` that follows it.
+	function edgeLabel(signatures ProgramSignatures, owner CsrIndex, held CsrIndex) returns String
+		let index = self.edgeIndexBetween(owner, held: held)
+		let caseName = try self.edgeCaseNames.get(index) otherwise panic("TypeCycleGraph.edgeLabel: edgeCaseNames.get OOB at {index} below count {self.edgeCaseNames.count()}")
+		let memberName = try self.edgeMemberNames.get(index) otherwise panic("TypeCycleGraph.edgeLabel: edgeMemberNames.get OOB at {index} below count {self.edgeMemberNames.count()}")
+		let target = String.from(self.displayNameOfNode(signatures, node: held))
+
+		if memberName.isEmpty() 'aContainerElement'
+			return target
+		end 'aContainerElement'
+
+		if caseName.isEmpty() 'aStructField'
+			return "{String.from(memberName)}: {target}"
+		end 'aStructField'
+
+		return "{String.from(caseName)}.{String.from(memberName)}: {target}"
+	end 'edgeLabel'
+
+	// The first edge from `owner` to `held`. Linear over the edge list, on the error path only —
+	// `ProgramSignatures.aliasCyclePath`'s discipline and its stated reason: an index built to serve a
+	// diagnostic that no compiling program produces would cost every build to serve none.
+	function edgeIndexBetween(owner CsrIndex, held CsrIndex) returns CsrIndex
+		for index in 0 upto self.edgeOwners.count() 'eachEdge'
+			let ownerAt = try self.edgeOwners.get(index) otherwise panic("TypeCycleGraph.edgeIndexBetween: edgeOwners.get OOB at {index} below count {self.edgeOwners.count()}")
+			let heldAt = try self.edgeHeld.get(index) otherwise panic("TypeCycleGraph.edgeIndexBetween: edgeHeld.get OOB at {index} below count {self.edgeHeld.count()}")
+			if ownerAt == owner and heldAt == held 'theStepThePathTook'
+				return index
+			end 'theStepThePathTook'
+		end 'eachEdge'
+
+		panic("TypeCycleGraph.edgeIndexBetween: the path visits node {owner} then node {held}, but no edge joins them — `shortestCycleThrough` walks the very adjacency these columns were built into")
+	end 'edgeIndexBetween'
+
+	// How the message spells a node: an aggregate by its declared name, a container by the `typealias` its
+	// author wrote for it (`instanceDisplayName`, which falls back to the canonical mint when none does).
+	function displayNameOfNode(signatures ProgramSignatures, node CsrIndex) returns ByteArray
+		if node < self.aggregateCount() 'aDeclaredAggregate'
+			return self.aggregateNameOfNode(node)
+		end 'aDeclaredAggregate'
+
+		return signatures.instanceDisplayName(node - self.aggregateCount())
+	end 'displayNameOfNode'
+
+	// The declared name of a node ALREADY KNOWN to be an aggregate — the half `blameForTypeCycles` needs,
+	// where the loop bound is `aggregateCount()` and the container half of `displayNameOfNode` is therefore
+	// unreachable. Asking the wider door there would hand it a `signatures` it has no use for and would say
+	// the loop might be walking a container, which its own bound already denies.
+	function aggregateNameOfNode(node CsrIndex) returns ByteArray
+		return try self.aggregateNames.get(node) otherwise panic("TypeCycleGraph.aggregateNameOfNode: aggregateNames.get OOB at {node} below count {self.aggregateCount()}")
+	end 'aggregateNameOfNode'
+end 'TypeCycleGraph'
+
+// ⭐ **THE E4014 CHECK.** Build the reference graph, ask `nodesOnACycle` once for the whole of it, and report
+// the EARLIEST-DECLARED user aggregate that lies on a cycle.
+//
+// ⚠ **EARLIEST-DECLARED, because mutual recursion is ONE defect reachable from either end.** `type A` holding
+// a `B` that holds an `A` is a single cycle; reporting it against both would double-diagnose one mistake, and
+// reporting it against whichever the registry map happened to yield first would make the diagnostic a
+// property of a hash table rather than of the program. `specs/ownership.md` pins `A`, the one the author
+// wrote first. Same rule as v1's `cycleCandidateEarlier`.
+//
+// ⚠ **NOT ON A PROGRAM THAT IS ALREADY FAILING**, for `checkGenericAliasCycles`' stated reason: a prior
+// diagnostic leaves the declaration registries half-folded, so a cycle "found" over them could be an artifact
+// of the file that failed to parse rather than of the program.
+export function checkTypeReferenceCycles(project Project, signatures ProgramSignatures)
+	if projectHasErrors(project) 'malformedProject'
+		return
+	end 'malformedProject'
+
+	let graph = buildTypeReferenceGraph(project, signatures: signatures)
+
+	match blameForTypeCycles(project, graph: graph) 'blame'
+		none then return
+		at(node, decl) then reportTypeCycle(project, graph: graph, signatures: signatures, node: node, decl: decl)
+	end 'blame'
+end 'checkTypeReferenceCycles'
+
+// The user declaration a cycle is reported against, together with the node it sits at — or `none` when no
+// user type lies on one. A union rather than a node plus a placeholder declaration, mirroring
+// `AliasCycleResult` and for its reason: "no answer" is a real outcome here, and a stand-in `TypeNameDecl`
+// would be a position the earliest-declared comparison could read as a real one.
+union TypeCycleBlame
+	none
+	at(node CsrIndex, decl TypeNameDecl)
+end 'TypeCycleBlame'
+
+// Every user aggregate on a cycle, reduced to the earliest-declared one. `nodesOnACycle` is asked ONCE for
+// the whole graph — the property `CsrGraph`'s header measures against the per-node alternative.
+function blameForTypeCycles(project Project, graph TypeCycleGraph) returns TypeCycleBlame
+	let onCycle = nodesOnACycle(graph.adjacency())
+	var blame = TypeCycleBlame.none
+	for node in 0 upto graph.aggregateCount() 'eachAggregate'
+		let lies = try onCycle.get(node) otherwise panic("blameForTypeCycles: node {node} is outside the {onCycle.count()}-node answer the graph was built over")
+		if not lies 'liesOnNoCycle'
+			continue
+		end 'liesOnNoCycle'
+
+		if let decl = try userDeclarationOf(project, name: graph.aggregateNameOfNode(node)) 'theAuthorWroteThisType'
+			if blamePrecedes(blame, decl: decl) 'theEarliestSoFar'
+				blame = TypeCycleBlame.at(node, decl: decl)
+			end 'theEarliestSoFar'
+		end 'theAuthorWroteThisType'
+	end 'eachAggregate'
+
+	return blame
+end 'blameForTypeCycles'
+
+// Does `decl` come before whatever `blame` already holds? An empty blame is preceded by anything, which is
+// what makes the reduction above need no first-iteration case of its own.
+function blamePrecedes(blame TypeCycleBlame, decl TypeNameDecl) returns bool
+	return match blame 'held'
+		none gives true
+		at(_, heldDecl) gives typeDeclEarlier(decl, other: heldDecl)
+	end 'held'
+end 'blamePrecedes'
+
+// ⭐ The message, and the second — and only other — walk of the graph: `shortestCycleThrough` runs here and
+// nowhere else, so a program that compiles never pays for it. See `ProgramSignatures.aliasCyclePath`, whose
+// discipline this is.
+function reportTypeCycle(project Project, graph TypeCycleGraph, signatures ProgramSignatures, node CsrIndex, decl TypeNameDecl)
+	let path = graph.renderCyclePath(signatures, cycle: shortestCycleThrough(graph.adjacency(), start: node))
+	reportPositioned(project, code: ErrorCode.irTypeCycle, message: "type '{String.from(decl.name)}' contains a reference cycle (via {path}); recursive type references are not allowed", line: decl.nameLine, column: decl.nameColumn, filePath: decl.declFilePath)
+end 'reportTypeCycle'
+
+// The declaration of `name` when a USER file wrote it — the candidate filter and the anchor, in one lookup.
+// A compiler-synthesized layout (a tuple, `__ManagedFile`, `Ordering`) carries no declaring file at all and a
+// stdlib one carries a file the author never opened; neither may be blamed for a cycle in a user's program.
+//
+// ⚠ Asked ONLY of a node already proven to be on a cycle, which is what makes `isStdlibSourceFile`'s per-file
+// path resolution affordable here: on every program that compiles it runs zero times.
+function userDeclarationOf(project Project, name ByteArray) returns TypeNameDecl throws MapError
+	let decl = try project.typeNameDecls.declarationOf(name)
+	if decl.declFilePath.equals(CompilerOwnedDeclFilePath) or isStdlibSourceFile(project, path: decl.declFilePath) 'noUserFileWroteIt'
+		throw MapError.keyNotFound
+	end 'noUserFileWroteIt'
+
+	return decl
+end 'userDeclarationOf'
+
+// Was `decl` written before `other`? File path, then line, then column — v1's `cycleCandidateEarlier`, and
+// for its reason: it makes the blame a property of the program rather than of a registry's iteration order.
+function typeDeclEarlier(decl TypeNameDecl, other TypeNameDecl) returns bool
+	let path = decl.declFilePath.toString()
+	let otherPath = other.declFilePath.toString()
+	if not path.equals(otherPath) 'differentFiles'
+		return stringBytesPrecede(path, later: otherPath)
+	end 'differentFiles'
+
+	if decl.nameLine != other.nameLine 'differentLines'
+		return decl.nameLine < other.nameLine
+	end 'differentLines'
+
+	return decl.nameColumn < other.nameColumn
+end 'typeDeclEarlier'
+
+// ⭐ **THE ONE WALK OVER "WHAT DOES THIS TYPE HOLD".** Three declaration shapes contribute edges, and they
+// are the three the spec names: a struct FIELD, a union case's ASSOCIATED VALUE, and a container's ELEMENT.
+function buildTypeReferenceGraph(project Project, signatures ProgramSignatures) returns TypeCycleGraph
+	var graph = TypeCycleGraph.create(signatures.genericInstanceCount())
+	for (name, _) in project.structTypes 'eachStructName'
+		graph.declareAggregate(name)
+	end 'eachStructName'
+	for (name, _) in project.enumTypes 'eachEnumName'
+		graph.declareAggregate(name)
+	end 'eachEnumName'
+
+	for (name, layout) in project.structTypes 'eachStruct'
+		let owner = graph.nodeOfDeclaredAggregate(name)
+		for index in 0 upto layout.fieldTypes.count() 'eachField'
+			let fieldType = try layout.fieldTypes.get(index) otherwise panic("buildTypeReferenceGraph: fieldTypes.get OOB at {index} below count {layout.fieldTypes.count()}")
+			let fieldName = try layout.fieldNames.get(index) otherwise panic("buildTypeReferenceGraph: '{String.from(name)}' declares {layout.fieldTypes.count()} field types against {layout.fieldNames.count()} names — `StructLayout.addField` is the one writer of both")
+			graph.addEdge(owner, target: typeCycleTargetOf(fieldType, typeNames: project.typeNames), caseName: EmptySourceText, memberName: fieldName)
+		end 'eachField'
+	end 'eachStruct'
+
+	for (name, layout) in project.enumTypes 'eachEnum'
+		let owner = graph.nodeOfDeclaredAggregate(name)
+		for index in 0 upto layout.casePayloads.count() 'eachCase'
+			let caseName = try layout.caseNames.get(index) otherwise panic("buildTypeReferenceGraph: '{String.from(name)}' declares {layout.casePayloads.count()} payload lists against {layout.caseNames.count()} case names — `EnumLayout.addCase` is the one writer of both")
+			let payloads = try layout.casePayloads.get(index) otherwise panic("buildTypeReferenceGraph: casePayloads.get OOB at {index} below count {layout.casePayloads.count()}")
+			for payload in payloads 'eachPayload'
+				graph.addEdge(owner, target: typeCycleTargetOf(payload.declaredType, typeNames: project.typeNames), caseName: caseName, memberName: payload.name)
+			end 'eachPayload'
+		end 'eachCase'
+	end 'eachEnum'
+
+	// A container OWNS its elements in its buffer, so every type argument is an ownership edge — the same
+	// reading `buildInstanceArgGraph` makes of the same registry for the alias-cycle check, which is why the
+	// argument door is a `ProgramSignatures` method rather than a read of a private interner from here.
+	for id in 0 upto signatures.genericInstanceCount() 'eachInstance'
+		// Through the graph's own door, so the container half of the node numbering is stated once — an
+		// owner computed here and a held node computed in `nodeOfTarget` are the SAME formula, and two
+		// spellings of it would let an edge point at a node nothing in the graph agrees is the same one.
+		let owner = graph.containerNode(id)
+		for position in 0 upto signatures.genericInstanceArgCount(id) 'eachArgument'
+			graph.addEdge(owner, target: signatures.instanceArgCycleTarget(id, position: position), caseName: EmptySourceText, memberName: EmptySourceText)
+		end 'eachArgument'
+	end 'eachInstance'
+
+	return graph
+end 'buildTypeReferenceGraph'

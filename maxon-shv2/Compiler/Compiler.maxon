@@ -337,6 +337,14 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// asking questions of a type that does not exist. Refusing here is what lets all of them assume it does.
 	checkGenericAliasCycles(project, signatures: signatures)
 
+	// ⭐ **A RECURSIVE TYPE IS REFUSED (E4014) — AFTER the alias check above, and for its reason one level
+	// up.** `specs/ownership.md` forbids a type that transitively contains itself through struct fields,
+	// union associated values or container element types, because a drop cascade over a cyclic type graph
+	// has no finite order. It reads the interned instances (`queryProgramSignatures`) and the merged
+	// declarations (`queryAllModule`), which are exactly the two halves its graph joins; any E4014 it records
+	// is caught by the pipeline's error gate, exactly as an E3017 is.
+	checkTypeReferenceCycles(project, signatures: signatures)
+
 	checkWhereConstraints(project, signatures: signatures)
 
 	// ⭐ **THE COMPILED TYPE-NAME NAMESPACE (E3006) — HERE, for `checkWhereConstraints`'s two reasons.**

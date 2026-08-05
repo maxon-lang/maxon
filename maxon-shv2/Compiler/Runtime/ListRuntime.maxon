@@ -1,4 +1,7 @@
-// Runtime/ListRuntime.maxon — the `List with Element` value representation and its runtime functions.
+// Runtime/ListRuntime.maxon — the chain value representation and its runtime functions. ONE structure, TWO
+// surfaces: `List with Element` (indexed, iterated) and `__ManagedList with Element` (node handles), which
+// `/specs/list.md` itself says are one thing — that file's `List` holds a `__ManagedList` as its only field.
+// Every `__list_*` entry below serves both; the split is entirely in the parser's two dispatchers.
 //
 // ⭐⭐ **A `List` IS A DOUBLY LINKED CHAIN OF SINGLE-WORD NODES**, which is what `/specs/list.md` says it is:
 // *"a doubly linked list collection … O(1) insertion and removal at both ends, and O(n) indexed access"*.
@@ -54,10 +57,18 @@ export let ListRecordBytes = 32 as ByteCount
 // OWNER — the list that links it — so it is reclaimed with a direct `__mm_free`, never a `__mm_decref`. That
 // is the divergence from BOTH references, and it is deliberate: v1 refcounts every node so that
 // `insertLast` can hand a live `__ManagedListNode` handle back to user code and `detach` can drop the list's
-// reference while the handle survives (`runtime.std:5330-5337`, an rc=2 invariant). shv2 exposes NO node type
-// at all — `__ManagedListNode` is not in its surface, the cursor a `for` loop carries is compiler-owned and
-// cannot outlive the loop, and the iteration LOCK forbids mutating the source while it does — so there is
-// never a second owner to count. Refcounting them would be paying for a handle nothing can hold.
+// reference while the handle survives (`runtime.std:5330-5337`, an rc=2 invariant).
+//
+// ⚠⚠ **THIS PARAGRAPH USED TO ARGUE THE POINT FROM "shv2 EXPOSES NO NODE TYPE AT ALL", AND THAT PREMISE IS
+// GONE — the `__ManagedList` surface hands `__ManagedListNode` handles to user code (spec-port `ownership`;
+// `/specs/managed-list.md`). THE CONCLUSION SURVIVES, and it survives for a reason worth stating, because a
+// premise that has been withdrawn cannot go on carrying a design.** What a refcount buys is a node that
+// outlives the list's link to it. A shv2 handle never does: it is emitted as a BORROW of the list
+// (`Parser.emitManagedListNodeHandle`), and E3070 refuses every read of it after any write that frees a
+// node (`Parser.managedListMethodFreesANode`) — so *"use a node the list has released"* is a COMPILE ERROR
+// here where v1 makes it merely survivable. The one operation that genuinely needs a second owner is
+// `detach`, which shv2 does not provide; the day it does, this is the paragraph that has to change again.
+// Refcounting today would be paying for a lifetime the front end already proves.
 //
 // ⚠ **THE `value@16` SLOT IS ONE MACHINE WORD WHATEVER THE ELEMENT IS**, exactly as v1 states it
 // (`LowerMaxonToStd.maxon:1980-1983`: *"the IR slot is a single 8-byte word regardless of element type"*) and
@@ -68,7 +79,9 @@ export let ListRecordBytes = 32 as ByteCount
 let ListNextOffset = 0 as ByteOffset
 let ListPrevOffset = 8 as ByteOffset
 let ListValueOffset = 16 as ByteOffset
-let ListNodeBytes = 24 as ParsedInt
+// Exported because `genericInstanceBoxSize` answers a `__ManagedListNode with T` with it — a node handle's
+// "box" is this node, and that door must not restate the number.
+export let ListNodeBytes = 24 as ParsedInt
 
 // That width is not spelled here. `Parser.parseListFromConstruction` reads the SOURCE array's
 // `element_size@24` one word at a time, so an array whose element is byte-PACKED narrower cannot be walked by
@@ -90,6 +103,20 @@ export let ListCountName = b"__list_count"
 export let ListAppendName = b"__list_append"
 export let ListPrependName = b"__list_prepend"
 export let ListDecrefName = b"__list_decref"
+
+// ⭐ **THE TWO ENTRIES ONLY A `__ManagedList` REACHES** (spec-port `ownership`). Both operate on the SAME
+// chain the `List` surface does — one record, one node format, one teardown — because the two surfaces are
+// two ways of naming one structure and a second implementation would be the same chain under a second name.
+//
+// `__list_remove_node(list, node) -> value` unlinks an ARBITRARY node (where `__list_remove_first` unlinks
+// the head), frees it and hands its element out MOVED, so `element_drop@24` is deliberately not consulted —
+// the caller becomes the sole owner, exactly as `__list_remove_first` states.
+export let ListRemoveNodeName = b"__list_remove_node"
+// `__list_clear(list)` drops every live element, frees every node and empties the header. It is what
+// `__list_decref`'s last owner does before freeing the record, which is why the walk lives in ONE function
+// rather than in both: a teardown that dropped elements differently from a `clear()` would be two answers
+// to "what does this list own".
+export let ListClearName = b"__list_clear"
 
 // The THROWING accessors — `first`/`get`/`removeFirst`, each `ArrayError.indexOutOfBounds` on an empty list
 // or an out-of-range index, which is the clause `stdlib/List.maxon:44,73,112` declares for them.
@@ -123,7 +150,8 @@ end 'isListRuntimeCallee'
 
 // ⭐ **THE ONE HOME OF "WHICH LIST CALLEE THROWS."** Read by `GtRuntime.isThrowingRuntimeCallee` (the parser's
 // E3055 accept and SemanticCheck's E3057 reject) and, through `listAccessorSourceMethodName`, by the E3059
-// wording. The other six entries — `create`/`count`/`append`/`prepend`/`decref`/`from` and the three cursor
+// wording. The other entries — `create`/`count`/`append`/`prepend`/`decref`/`from`/`remove_node`/`clear` and
+// the three cursor
 // primitives — cannot fail, and typing a non-throwing callee's clause as `throwing` is exactly what makes
 // `try` REQUIRED on a call that cannot fail (E3055), so this must stay narrower than `isListRuntimeCallee`.
 export function isThrowingListRuntimeCallee(callee ByteArray) returns bool
@@ -169,6 +197,8 @@ export function installListRuntime(module StdModule, usage RuntimeUsage)
 	buildListFirst(module)
 	buildListGet(module)
 	buildListRemoveFirst(module)
+	buildListRemoveNode(module)
+	buildListClear(module)
 	buildListHead(module)
 	buildListNodeValue(module)
 	buildListNodeNext(module)
@@ -259,13 +289,19 @@ end 'buildListCount'
 
 // Publish `node` as the list end named by `endOffset` (`tail@8` for an append, `head@0` for a prepend) and
 // bump the count — the tail the two insertions share, so "this end is now `node`, and there is one more
-// element" is written once. Terminates `block`.
+// element" is written once. Terminates `block` by RETURNING THE NODE.
+//
+// ⚠ **THE NODE IS THE RETURN VALUE, AND THE `List` SURFACE SIMPLY IGNORES IT.** `__ManagedList.insertFirst`
+// hands the node back to user code as a handle (`/specs/managed-list.md`), and the insertion that mints it
+// is the ONE place it exists — so the alternative to returning it was a second pair of entry points doing
+// the identical four steps under different names. A `List.append` statement discards the value instead,
+// which costs a register the caller never reads.
 function emitListPublishEnd(module StdModule, block IrBlock, list ValueId, node ValueId, endOffset ByteOffset, ids ValueMinter)
 	emitStoreField(module, block: block, record: list, offset: endOffset, value: node)
 	let count = emitLoadField(module, block: block, record: list, offset: ListCountOffset, ids: ids)
 	let one = emitConst(module, block: block, value: 1, ids: ids)
 	emitStoreField(module, block: block, record: list, offset: ListCountOffset, value: emitBin(module, block: block, a: count, b: one, opcode: StdBinOpcode.add, ids: ids))
-	module.setTerminator(block, op: StdOp.retVoid)
+	module.setTerminator(block, op: StdOp.ret(node))
 end 'emitListPublishEnd'
 
 // ⭐ **ONE END-INSERTION, BUILT TWICE UNDER TWO ORIENTATIONS.** `append` and `prepend` are the SAME four
@@ -280,7 +316,7 @@ end 'emitListPublishEnd'
 // eventually drops it. There is no incref here and none is owed — shv2 is move-only (both references retain
 // or move-with-a-seeded-consumer instead; see the header's node note).
 function buildListEndInsert(module StdModule, name ByteArray, nearEnd ByteOffset, farEnd ByteOffset, outward ByteOffset, inward ByteOffset)
-	var func = IrFunction.createFromStd(name, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
+	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
 	var ids = ValueMinter.create(2)
 
 	var entry = module.addBlock(func, label: b"entry")
@@ -313,15 +349,145 @@ function buildListEndInsert(module StdModule, name ByteArray, nearEnd ByteOffset
 	module.functions.push(func)
 end 'buildListEndInsert'
 
-// `__list_append(list, value)` — link at the TAIL. O(1).
+// `__list_append(list, value) -> nodePtr` — link at the TAIL. O(1).
 function buildListAppend(module StdModule)
 	buildListEndInsert(module, name: ListAppendName, nearEnd: ListTailOffset, farEnd: ListHeadOffset, outward: ListPrevOffset, inward: ListNextOffset)
 end 'buildListAppend'
 
-// `__list_prepend(list, value)` — link at the HEAD. O(1).
+// `__list_prepend(list, value) -> nodePtr` — link at the HEAD. O(1).
 function buildListPrepend(module StdModule)
 	buildListEndInsert(module, name: ListPrependName, nearEnd: ListHeadOffset, farEnd: ListTailOffset, outward: ListNextOffset, inward: ListPrevOffset)
 end 'buildListPrepend'
+
+// ⭐ **`__list_remove_node(list, node) -> value` — UNLINK AN ARBITRARY NODE AND HAND ITS ELEMENT OUT.** O(1),
+// which is the complexity `/specs/managed-list.md` states for node-level removal, and the whole reason a
+// `__ManagedList` exposes node handles at all.
+//
+// It is NOT `__list_remove_first` widened: that one knows its node is the head and can write `head` outright,
+// while this one must ask each side whether it exists and repair the header only at the end it touched. The
+// two share the count decrement and the free, which is four ops — less than the parameters a shared shape
+// would have to take.
+//
+// ⚠ **THE ELEMENT IS MOVED OUT, NOT DROPPED** — `__list_remove_first`'s rule, for its reason: the caller
+// becomes the sole owner (the parser marks the result OWNED), so consulting `element_drop@24` here would
+// destroy a value that now has an owner elsewhere.
+//
+// ⚠ **NON-THROWING, because there is no failure it could report.** A node handle exists only because an
+// insertion minted one, and E3070 refuses a use of it after any write to the list it came out of — so
+// "this node is not in this list" is not a state a compiling program can reach. Where `remove_first` throws
+// (an EMPTY list has no head), this one is handed the node.
+function buildListRemoveNode(module StdModule)
+	var func = IrFunction.createFromStd(ListRemoveNodeName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
+	var ids = ValueMinter.create(2)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var relinkPrev = module.addBlock(func, label: b"relinkprev")
+	var newHead = module.addBlock(func, label: b"newhead")
+	var backLinked = module.addBlock(func, label: b"backlinked")
+	var relinkNext = module.addBlock(func, label: b"relinknext")
+	var newTail = module.addBlock(func, label: b"newtail")
+	var release = module.addBlock(func, label: b"release")
+
+	emitParams(module, block: entry, count: 2)
+	let list = 0 as ValueId
+	let node = 1 as ValueId
+
+	// All three reads happen BEFORE anything is freed, and they dominate every arm below — the discipline
+	// `buildListDecref`'s walk states: a link is never read out of memory already released.
+	let value = emitLoadField(module, block: entry, record: node, offset: ListValueOffset, ids: ids)
+	let prev = emitLoadField(module, block: entry, record: node, offset: ListPrevOffset, ids: ids)
+	let next = emitLoadField(module, block: entry, record: node, offset: ListNextOffset, ids: ids)
+	let noPrev = emitConst(module, block: entry, value: 0, ids: ids)
+	let hasPrev = emitCmp(module, block: entry, a: prev, b: noPrev, pred: StdCmpPred.ne, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(hasPrev, thenBlockId: relinkPrev.id, elseBlockId: newHead.id))
+
+	// An interior node: its predecessor now points past it.
+	emitStoreField(module, block: relinkPrev, record: prev, offset: ListNextOffset, value: next)
+	module.setTerminator(relinkPrev, op: StdOp.branch(backLinked.id))
+
+	// It WAS the head, so the list's head becomes its successor (0 when it was also the tail).
+	emitStoreField(module, block: newHead, record: list, offset: ListHeadOffset, value: next)
+	module.setTerminator(newHead, op: StdOp.branch(backLinked.id))
+
+	let noNext = emitConst(module, block: backLinked, value: 0, ids: ids)
+	let hasNext = emitCmp(module, block: backLinked, a: next, b: noNext, pred: StdCmpPred.ne, ids: ids)
+	module.setTerminator(backLinked, op: StdOp.condBranch(hasNext, thenBlockId: relinkNext.id, elseBlockId: newTail.id))
+
+	emitStoreField(module, block: relinkNext, record: next, offset: ListPrevOffset, value: prev)
+	module.setTerminator(relinkNext, op: StdOp.branch(release.id))
+
+	// It WAS the tail, so the list's tail becomes its predecessor (0 when it was also the head).
+	emitStoreField(module, block: newTail, record: list, offset: ListTailOffset, value: prev)
+	module.setTerminator(newTail, op: StdOp.branch(release.id))
+
+	let count = emitLoadField(module, block: release, record: list, offset: ListCountOffset, ids: ids)
+	let one = emitConst(module, block: release, value: 1, ids: ids)
+	emitStoreField(module, block: release, record: list, offset: ListCountOffset, value: emitBin(module, block: release, a: count, b: one, opcode: StdBinOpcode.sub, ids: ids))
+	let freed = ids.mint()
+	module.appendOp(release, op: StdOp.call(freed, callee: MmFreeName, args: argsOf(node)))
+	module.setTerminator(release, op: StdOp.ret(value))
+
+	module.functions.push(func)
+end 'buildListRemoveNode'
+
+// ⭐ **`__list_clear(list)` — DESTROY EVERY LIVE ELEMENT, FREE EVERY NODE, EMPTY THE HEADER.** The `clear()`
+// the `__ManagedList` surface offers, and — read one line down — the whole of what `__list_decref`'s last
+// owner does before freeing the record.
+//
+// ⚠ **THE ELEMENT DROP IS GATED ON `element_drop@24` AND NOT ON A NULL SLOT**, for the reason
+// `buildListDecref` states: a node exists only because an insertion was handed a value, and every removal
+// frees the node it vacates, so a live node holding an empty slot is not a state the structure can be in.
+// A trivial-element list stamps 0 and skips every drop, which is what keeps it out of `callIndirect(0)`.
+function buildListClear(module StdModule)
+	var func = IrFunction.createFromStd(ListClearName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var walk = module.addBlock(func, label: b"walk")
+	var body = module.addBlock(func, label: b"body")
+	var dropElem = module.addBlock(func, label: b"dropelem")
+	var freeNode = module.addBlock(func, label: b"freenode")
+	var emptied = module.addBlock(func, label: b"emptied")
+
+	emitParams(module, block: entry, count: 1)
+	let record = 0 as ValueId
+
+	let drop = emitLoadField(module, block: entry, record: record, offset: ListElementDropOffset, ids: ids)
+	let firstNode = emitLoadField(module, block: entry, record: record, offset: ListHeadOffset, ids: ids)
+	module.setTerminator(entry, op: StdOp.branch(walk.id))
+	entry.branchEdges.push(BranchEdge.create(walk.id, argIds: argsOf(firstNode)))
+
+	let node = ids.mint()
+	walk.blockArgs.push(IrBlockArg.create(node, argType: StdType.i64))
+	let chainEnd = emitConst(module, block: walk, value: 0, ids: ids)
+	let more = emitCmp(module, block: walk, a: node, b: chainEnd, pred: StdCmpPred.ne, ids: ids)
+	module.setTerminator(walk, op: StdOp.condBranch(more, thenBlockId: body.id, elseBlockId: emptied.id))
+
+	// `next` is read BEFORE the node is freed, and it dominates both arms below, so the walk never reads a
+	// link out of memory it has already released.
+	let next = emitLoadField(module, block: body, record: node, offset: ListNextOffset, ids: ids)
+	let noDrop = emitConst(module, block: body, value: 0, ids: ids)
+	let isManaged = emitCmp(module, block: body, a: drop, b: noDrop, pred: StdCmpPred.ne, ids: ids)
+	module.setTerminator(body, op: StdOp.condBranch(isManaged, thenBlockId: dropElem.id, elseBlockId: freeNode.id))
+
+	emitElementDestructorCall(module, block: dropElem, destroy: drop, elem: emitLoadField(module, block: dropElem, record: node, offset: ListValueOffset, ids: ids), ids: ids)
+	module.setTerminator(dropElem, op: StdOp.branch(freeNode.id))
+
+	let nodeFreed = ids.mint()
+	module.appendOp(freeNode, op: StdOp.call(nodeFreed, callee: MmFreeName, args: argsOf(node)))
+	module.setTerminator(freeNode, op: StdOp.branch(walk.id))
+	freeNode.branchEdges.push(BranchEdge.create(walk.id, argIds: argsOf(next)))
+
+	// The header is emptied even when the caller is a teardown about to free the record — three stores, and
+	// the alternative is two walks that have to be kept identical for the rest of this compiler's life.
+	let empty = emitConst(module, block: emptied, value: 0, ids: ids)
+	emitStoreField(module, block: emptied, record: record, offset: ListHeadOffset, value: empty)
+	emitStoreField(module, block: emptied, record: record, offset: ListTailOffset, value: empty)
+	emitStoreField(module, block: emptied, record: record, offset: ListCountOffset, value: empty)
+	module.setTerminator(emptied, op: StdOp.retVoid)
+
+	module.functions.push(func)
+end 'buildListClear'
 
 // `__list_first(list) -> (value, flag)` — the head element, throwing `indexOutOfBounds` on an empty list.
 // The result is a BORROW: the list keeps the element and its own `__list_decref` walk destroys it, exactly as
@@ -541,11 +707,11 @@ end 'buildListFrom'
 // `__list_decref(list)` — one fewer owner; at the last, destroy every live element, free every node, then
 // free the record. The refcount read-modify-write is the shared `emitRefcountCheckToLastOwner`.
 //
-// ⚠ **THE ELEMENT DROP IS GATED ON `element_drop@24` AND NOT ON A NULL SLOT.** A node exists only because
-// `__list_node_alloc` was handed a value, and `__list_remove_first` frees the node it vacates — so no live
-// node can hold an empty slot, and a null test would be testing something the structure cannot produce. A
-// TRIVIAL-element list stamps 0 and skips every drop untouched, which is what keeps it from
-// `callIndirect(0)`.
+// ⭐ **THE ELEMENT-AND-NODE WALK IS `__list_clear`'s, CALLED**, not a second copy of it (spec-port
+// `ownership`). "What does this list own, and how is each piece released?" is ONE answer, and it was
+// written here alone only while `clear()` did not exist; two walks would be free to drift on the very
+// thing a chain teardown cannot afford to get wrong. The last owner therefore empties the header it is
+// about to free — three stores it does not need, against a duplicated walk it would have had to maintain.
 function buildListDecref(module StdModule)
 	var func = IrFunction.createFromStd(ListDecrefName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
@@ -553,46 +719,17 @@ function buildListDecref(module StdModule)
 	var entry = module.addBlock(func, label: b"entry")
 	var lower = module.addBlock(func, label: b"lower")
 	var release = module.addBlock(func, label: b"release")
-	var walk = module.addBlock(func, label: b"walk")
-	var body = module.addBlock(func, label: b"body")
-	var dropElem = module.addBlock(func, label: b"dropelem")
-	var freeNode = module.addBlock(func, label: b"freenode")
-	var freeRec = module.addBlock(func, label: b"freerec")
 
 	emitParams(module, block: entry, count: 1)
 	let record = 0 as ValueId
 
 	emitRefcountCheckToLastOwner(module, entry: entry, lower: lower, record: record, lastOwner: release, ids: ids)
 
-	let drop = emitLoadField(module, block: release, record: record, offset: ListElementDropOffset, ids: ids)
-	let firstNode = emitLoadField(module, block: release, record: record, offset: ListHeadOffset, ids: ids)
-	module.setTerminator(release, op: StdOp.branch(walk.id))
-	release.branchEdges.push(BranchEdge.create(walk.id, argIds: argsOf(firstNode)))
-
-	let node = ids.mint()
-	walk.blockArgs.push(IrBlockArg.create(node, argType: StdType.i64))
-	let chainEnd = emitConst(module, block: walk, value: 0, ids: ids)
-	let more = emitCmp(module, block: walk, a: node, b: chainEnd, pred: StdCmpPred.ne, ids: ids)
-	module.setTerminator(walk, op: StdOp.condBranch(more, thenBlockId: body.id, elseBlockId: freeRec.id))
-
-	// `next` is read BEFORE the node is freed, and it dominates both arms below, so the walk never reads a
-	// link out of memory it has already released.
-	let next = emitLoadField(module, block: body, record: node, offset: ListNextOffset, ids: ids)
-	let noDrop = emitConst(module, block: body, value: 0, ids: ids)
-	let isManaged = emitCmp(module, block: body, a: drop, b: noDrop, pred: StdCmpPred.ne, ids: ids)
-	module.setTerminator(body, op: StdOp.condBranch(isManaged, thenBlockId: dropElem.id, elseBlockId: freeNode.id))
-
-	emitElementDestructorCall(module, block: dropElem, destroy: drop, elem: emitLoadField(module, block: dropElem, record: node, offset: ListValueOffset, ids: ids), ids: ids)
-	module.setTerminator(dropElem, op: StdOp.branch(freeNode.id))
-
-	let nodeFreed = ids.mint()
-	module.appendOp(freeNode, op: StdOp.call(nodeFreed, callee: MmFreeName, args: argsOf(node)))
-	module.setTerminator(freeNode, op: StdOp.branch(walk.id))
-	freeNode.branchEdges.push(BranchEdge.create(walk.id, argIds: argsOf(next)))
-
+	let cleared = ids.mint()
+	module.appendOp(release, op: StdOp.call(cleared, callee: ListClearName, args: argsOf(record)))
 	let recFreed = ids.mint()
-	module.appendOp(freeRec, op: StdOp.call(recFreed, callee: MmFreeName, args: argsOf(record)))
-	module.setTerminator(freeRec, op: StdOp.retVoid)
+	module.appendOp(release, op: StdOp.call(recFreed, callee: MmFreeName, args: argsOf(record)))
+	module.setTerminator(release, op: StdOp.retVoid)
 
 	module.functions.push(func)
 end 'buildListDecref'

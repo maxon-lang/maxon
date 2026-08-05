@@ -12,8 +12,7 @@ Uses `MmTrace: true` so the trace log verifies correct incref/decref/free behavi
 
 ## Tests
 
-<!-- disabled-test: rc-single-alloc-freed -->
-<!-- beyond P1.2: heap-struct ownership trace not yet in shv2 -->
+<!-- test: rc-single-alloc-freed -->
 Single struct allocated and freed in the same function scope.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -36,8 +35,7 @@ end 'main'
 1
 ```
 
-<!-- disabled-test: rc-alias-incref -->
-<!-- beyond P1.2: heap-struct ownership trace not yet in shv2 -->
+<!-- test: rc-alias-incref -->
 Aliasing a struct increfs it; both variables share refcount and object is freed once.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -85,8 +83,7 @@ end 'main'
 3
 ```
 
-<!-- disabled-test: rc-inner-block-freed -->
-<!-- beyond P1.2: heap-struct ownership trace not yet in shv2 -->
+<!-- test: rc-inner-block-freed -->
 Struct created in an inner if-block is freed when that block exits, before the outer block ends.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -164,8 +161,7 @@ end 'main'
 30
 ```
 
-<!-- disabled-test: rc-loop-per-iteration-freed -->
-<!-- beyond P1.2: heap-struct ownership trace not yet in shv2 -->
+<!-- test: rc-loop-per-iteration-freed -->
 A struct allocated each loop iteration is freed at loop-block exit before the next iteration.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -193,8 +189,7 @@ end 'main'
 6
 ```
 
-<!-- disabled-test: rc-break-frees-before-exit -->
-<!-- beyond P1.2: heap-struct ownership trace not yet in shv2 -->
+<!-- test: rc-break-frees-before-exit -->
 Struct allocated before a break is decref'd before the loop block is exited.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -223,8 +218,7 @@ end 'main'
 3
 ```
 
-<!-- disabled-test: rc-continue-frees-before-restart -->
-<!-- beyond P1.2: heap-struct ownership trace not yet in shv2 -->
+<!-- test: rc-continue-frees-before-restart -->
 Struct allocated before a continue is decref'd before the loop restarts.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -674,8 +668,7 @@ end 'main'
 2
 ```
 
-<!-- disabled-test: rc-return-from-inner-block-cleanup -->
-<!-- blocked by the `@heap` statement annotation (E2015 "@ statement"), a separate feature — NOT cross-call ownership: `compute` returns an Integer, no struct crosses a call. The nested-block struct-drop-on-return it exercises is already covered; it unlocks when `@` annotations parse. -->
+<!-- test: rc-return-from-inner-block-cleanup -->
 Returning from inside a nested block must decref all locals in every enclosing block before returning.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -935,8 +928,7 @@ end 'main'
 99
 ```
 
-<!-- disabled-test: rc-managed-list-insert-incref -->
-<!-- beyond P1.2: __ManagedList not yet in shv2 -->
+<!-- test: rc-managed-list-insert-incref -->
 Inserting a struct into a managed list increfs the value; the node holds the reference.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -962,8 +954,7 @@ end 'main'
 7
 ```
 
-<!-- disabled-test: rc-managed-list-remove-decrefs -->
-<!-- beyond P1.2: __ManagedList not yet in shv2 -->
+<!-- test: rc-managed-list-remove-decrefs -->
 Removing a node from a managed list transfers ownership; value is freed when the result var leaves scope.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -989,8 +980,7 @@ end 'main'
 9
 ```
 
-<!-- disabled-test: rc-managed-list-clear-decrefs-all -->
-<!-- beyond P1.2: __ManagedList not yet in shv2 -->
+<!-- test: rc-managed-list-clear-decrefs-all -->
 Clearing a managed list decrefs every node value; all values freed when rc hits 0.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -1076,8 +1066,7 @@ end 'main'
 60
 ```
 
-<!-- disabled-test: rc-multiple-aliases-freed-once -->
-<!-- beyond P1.2: heap-struct ownership trace not yet in shv2 -->
+<!-- test: rc-multiple-aliases-freed-once -->
 Three aliases to the same object; the object is freed exactly once when the last alias leaves scope.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -1963,8 +1952,7 @@ end 'main'
 5
 ```
 
-<!-- disabled-test: rc-global-array-push-local-no-leak -->
-<!-- module-level array global initialized by a CALL — a top-level `var arr = IntArray.create()`; shv2's module-scope initializers are constant-only, so the parser reads `IntArray.` as a ranged-alias bound (E2010 "Expected 'min' or 'max' but got 'create'") -->
+<!-- test: rc-global-array-push-local-no-leak -->
 Pushing a local struct into a global array must not leak. When the global array is cleaned up, all elements (including those pushed from other function scopes) must be freed.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -1996,8 +1984,7 @@ end 'main'
 123
 ```
 
-<!-- disabled-test: rc-global-array-push-remove-loop-no-leak -->
-<!-- module-level array global initialized by a CALL — a top-level `var arr = IntArray.create()`; shv2's module-scope initializers are constant-only, so the parser reads `IntArray.` as a ranged-alias bound (E2010 "Expected 'min' or 'max' but got 'create'") -->
+<!-- test: rc-global-array-push-remove-loop-no-leak -->
 Pushing many structs into a global array and then removing them all must not leak. Each removed element must be properly decreffed.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
