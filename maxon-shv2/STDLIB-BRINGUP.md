@@ -132,7 +132,7 @@ via the `__Managed*Error` precedent (`Project.declaredBuiltinErrorEnum`).
 | Module | Lines | First diagnostic | The gap |
 |---|--:|---|---|
 | `Sha256.maxon` | 204 | `E2015 :152:34` | `Array.createIterator` is not on shv2's `Array` roster — **one member** |
-| `Ascii.maxon` | 66 | `E2028 :10:4` | `match c '0' to '9'` — pattern type `int` vs scrutinee `Character`; character-range patterns |
+| `Ascii.maxon` | 66 | ~~`E2028 :10:4`~~ → **`E3001` ONLY (it type-checks clean)** | ⚖ **THIS ROW WENT STALE THE SAME DAY IT WAS MEASURED — re-measured 2026-08-05 after `BATCH23`.** The blocker was `match c '0' to '9'` — pattern type `int` vs scrutinee `Character` — which is exactly the character-literal WIDTH RULE `BATCH23` deleted: every literal is now a `Character`, and `Character` gained ordering and range patterns, so this file's five `match` arms type-check. **No compiler change is owed here any more; what remains is the WHITELIST entry**, which is `L-stdlib` — not a lane `BATCH23` held. ⚠ But read the headline above before listing it: `Ascii` is all `static function`s, NOT a conditional `extension`, so the criterion is NOT vacuous for this one. |
 | `PrimitiveExtensions.maxon` | 101 | `E2010 :2:11` | `extension int` — the extension decl path rejects a primitive keyword as the extended type |
 | `Json.maxon` | 1080 | `E2015 :77:37` | a **string-literal field default**; only signed numeric/bool literals are parsed |
 | `Set.maxon` | 396 | `E2015 :19:33` | an **identifier field default** — same mechanism |
