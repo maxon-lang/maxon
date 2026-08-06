@@ -1,0 +1,47 @@
+// Test: error.abstract-requirement-caught-error-cannot-be-bound
+typealias Payload = int(0 to u64.max)
+
+enum ParseFailure implements Error
+	badDigit
+end 'ParseFailure'
+
+interface Reader
+	function read(seed Payload) returns Payload throws Error
+end 'Reader'
+
+type Digits implements Reader
+	export let cap as Payload
+
+	static function create(cap Payload) returns Digits
+		return Self{cap: cap}
+	end 'create'
+
+	function read(seed Payload) returns Payload throws ParseFailure
+		if seed > self.cap 'reject'
+			throw ParseFailure.badDigit
+		end 'reject'
+		return seed
+	end 'read'
+end 'Digits'
+
+function obtainReader(cap Payload) returns Reader
+	return Digits.create(cap)
+end 'obtainReader'
+
+function attempt(reader Reader, seed Payload) returns Payload
+	let v = try reader.read(seed) otherwise (e) 'oops'
+		return 0
+	end 'oops'
+	return v
+end 'attempt'
+
+function main() returns ExitCode
+	let reader = obtainReader(100)
+	return attempt(reader, seed: 200) as ExitCode
+end 'main'
+---
+MaxoncStderr: ```
+error E3123: specs/fragments/witness-managed-return-throws/error.abstract-requirement-caught-error-cannot-be-bound.test:32:43: cannot bind it as 'e': this call is dispatched through an interface requirement declaring 'throws Error', which names an INTERFACE and so declares no case to decode — each conformer narrows it to its own error enum, and which conformer runs is not known until monomorphization. Use 'otherwise' with a default value, 'ignore', 'panic', 'return' or an unbound block, or declare the requirement as the concrete error enum you mean to catch
+```
+---
+---
