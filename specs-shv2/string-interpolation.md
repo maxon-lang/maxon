@@ -1274,6 +1274,190 @@ end 'main'
 -00042
 ```
 
+### Integer Format Specifier - Unsigned Decimal
+
+⭐ **A FORMAT SPECIFIER NEVER CHANGES WHICH NUMBER IS BEING PRINTED.** An `int(0 to u64.max)`
+value with bit 63 set is a large positive number, and `"{u}"`, `"{u:d}"` and `"{u:25}"` must all
+say so. The formatted converter used to re-derive signedness from the sign BIT instead of taking
+it from the type the compiler already knew, so `"{u:d}"` read `u64.max` as `-1` — the same value
+the unformatted spelling printed as `18446744073709551615`. Signedness is decided once, by the
+compiler, and handed to the renderer.
+
+<!-- disabled-test: int-format-unsigned-decimal -->
+<!-- P1.2 wave B-format: format specifiers -->
+```maxon
+typealias Wide = int(0 to u64.max)
+
+function show(u Wide)
+	print("[{u}] [{u:d}] [{u:25}] [{u:x}]\n")
+end 'show'
+
+function main() returns ExitCode
+	show(u64.max)
+	// Bit 63 alone — the value a SIGNED reading calls i64.min. Written as a shift because a bare
+	// literal is an `int`, and 9223372036854775808 is past the end of one (E2011).
+	show(1 shl 63)
+	show(42)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+[18446744073709551615] [18446744073709551615] [     18446744073709551615] [ffffffffffffffff]
+[9223372036854775808] [9223372036854775808] [      9223372036854775808] [8000000000000000]
+[42] [42] [                       42] [2a]
+```
+
+### Unsigned Decimal Interpolation - the specifier-free half
+
+The three specifier-bearing thirds of the case above arrive with the format-specifier rung; this is
+its first third, which needs no specifier and therefore runs today. It is the rule that case states,
+asked of the ONE rendering shv2 has: **signedness is a property of the value's DECLARED type, read
+once by the compiler and handed to the renderer**, so a value whose type admits no negative is
+rendered by a converter that does no sign handling at all.
+
+`1 shl 63` is not decoration. It is the value a signed reading calls `i64.min`, and it is the second
+way this can be wrong: a renderer that negates instead of dividing unsigned would overflow on it
+where `u64.max` merely comes out as `-1`.
+
+<!-- test: unsigned-decimal-interpolation -->
+```maxon
+typealias Wide = int(0 to u64.max)
+
+function show(u Wide)
+	print("[{u}]\n")
+end 'show'
+
+function main() returns ExitCode
+	show(u64.max)
+	show(1 shl 63)
+	show(42)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+[18446744073709551615]
+[9223372036854775808]
+[42]
+```
+
+### Unsigned Decimal via toString
+
+`x.toString()` on a builtin-typed receiver IS the interpolation path — one `materializeInterpExpr`
+chooses the converter for both spellings — so a second selection site would show up here and nowhere
+else. This is what pins that there is only one.
+
+<!-- test: unsigned-decimal-tostring -->
+```maxon
+typealias Wide = int(0 to u64.max)
+
+function show(u Wide)
+	print("[{u.toString()}]\n")
+end 'show'
+
+function main() returns ExitCode
+	show(u64.max)
+	show(1 shl 63)
+	show(42)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+[18446744073709551615]
+[9223372036854775808]
+[42]
+```
+
+### A value that admits a negative still renders signed
+
+The control the rule above cannot do without: a rung that only proves the new answer cannot see that
+it broke the old one. Neither of these values DECLARES a non-negative range — one has no ranged type
+at all (which means the whole of `i64`, not "no constraint"), and one declares a range that spans
+zero — so both keep the signed renderer and both still print `-1`.
+
+<!-- test: signed-value-still-renders-signed -->
+```maxon
+typealias Signed = int(i64.min to i64.max)
+
+function show(s Signed)
+	print("[{s}]\n")
+end 'show'
+
+function main() returns ExitCode
+	let n = -1
+	print("[{n}]\n")
+	show(-1)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+[-1]
+[-1]
+```
+
+### A folded non-negative constant still renders signed
+
+A constant that happens to be `>= 0` **fits** an unsigned rendering and does not **ask** for one —
+the same distinction that keeps `7 / 2` a signed divide. Both renderings agree on every value a
+non-negative constant can hold, so this case's stdout cannot tell them apart and its committed
+fragment is what records which converter was emitted. It is here so that a future widening of the
+rule from "declares it" to "fits it" moves a golden that somebody has to explain.
+
+<!-- test: folded-non-negative-constant-renders-signed -->
+```maxon
+function main() returns ExitCode
+	let n = 42
+	print("[{n}] [{7 + 1}]\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+[42] [8]
+```
+
+### A declared non-negative range below i64.max prints what it always printed
+
+The unsigned renderer reaches every declared non-negative type, not only the ones a signed reading
+gets wrong — that uniformity is what makes the rule one rule. So these two must print exactly what
+they printed before: a narrow `int(0 to 255)` alias and the builtin `ExitCode`, whose values fit an
+`i64` with room to spare and therefore render identically under either converter.
+
+<!-- test: narrow-non-negative-alias-renders-unchanged -->
+```maxon
+typealias Small = int(0 to 255)
+
+function show(s Small, code ExitCode)
+	print("[{s}] [{code}]\n")
+end 'show'
+
+function main() returns ExitCode
+	show(200, code: 7)
+	show(0, code: 0)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+[200] [7]
+[0] [0]
+```
+
 ### Float Format Specifier - Precision
 
 <!-- disabled-test: float-format-precision -->

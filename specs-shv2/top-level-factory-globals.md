@@ -43,6 +43,17 @@ this wrong is not a wrong answer but a compiler panic: dead-function elimination
 `__module_init`, reaches the factory the pre-elimination passes were told was dead, and
 `requireUnreachableStdlibStayedDead` fires on a program with nothing wrong with it.
 
+**5. The callee's declared return type is ONE fact, however the callee spelled it.** A `static`
+whose `returns` clause names its own enclosing type — as `Self`, or by that type's own name — is
+resolved to the type SYNTACTICALLY, because `Self` is a fact about the tokens and needs no registry.
+A `returns` clause naming a FOREIGN type cannot be: the declaration sweep reads it while the registry
+that would say what the name denotes is still being filled, so it records a bare name. Two spellings
+of one type is a fact written down twice, and the two readers of it disagreed: the admission router
+read the bare name as a record and let the program through, and the slot's width router then found a
+tag it had no case for and panicked — with a sentence written for a different caller, about an `int`
+the program does not contain. A factory returning a type it does not enclose is the same declaration
+as one returning `Self`, and the index normalizes the two to one spelling before anything reads it.
+
 ## Tests
 
 <!-- test: error.user-generic-instance-factory-at-file-scope -->
@@ -175,6 +186,134 @@ var db = Database.create()
 
 function main() returns ExitCode
 	return db.n
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: factory-returning-a-foreign-record -->
+`Outer.build` returns a type it does not enclose, so the sweep records the return type as a bare
+name where `Inner.make`'s `returns Self` one screen up is already resolved. Both are the same
+declaration of the same struct and both must reach the same one-word slot. There is no stdlib in
+this program and no `int` in it either, which is what makes it the clean statement of rule 5.
+```maxon
+type Inner
+	export var v as int
+
+	static function make() returns Self
+		return Self{v: 7}
+	end 'make'
+end 'Inner'
+
+type Outer
+	static function build() returns Inner
+		return Inner.make()
+	end 'build'
+end 'Outer'
+
+var a = Outer.build()
+
+function main() returns ExitCode
+	return a.v
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: factory-returning-a-foreign-record-that-owns-a-managed-field -->
+The same shape with heap in it, so the exit-101 memory gate has teeth on this path: `Inner` owns a
+`String`, the record is built before `main` and released after it by `__maxon_global_cleanup`, and a
+slot the width router had refused to type is a slot nothing would have dropped. Rule 2's concern,
+asked of the record itself rather than of an argument.
+```maxon
+type Inner
+	export var tag as String
+
+	static function make() returns Self
+		return Self{tag: "hi"}
+	end 'make'
+end 'Inner'
+
+type Outer
+	static function build() returns Inner
+		return Inner.make()
+	end 'build'
+end 'Outer'
+
+var a = Outer.build()
+
+function main() returns ExitCode
+	print("{a.tag}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+hi
+```
+
+<!-- test: factory-returning-a-record-declared-in-another-file -->
+The returned type declared in a DIFFERENT file from the factory that returns it. The normalization
+is keyed off the recorded return type and not off any file column, which is what makes this the same
+answer as the single-file case above; keyed off a file instead, a name refiled since it was recorded
+would be resolved under a key it had left.
+```maxon
+// --- file: api/inner.maxon
+export type Inner
+	export var v as int
+
+	static function make() returns Self
+		return Self{v: 7}
+	end 'make'
+end 'Inner'
+
+// --- file: api/outer.maxon
+export type Outer
+	export function build() returns Inner
+		return Inner.make()
+	end 'build'
+end 'Outer'
+
+// --- file: bin/main.maxon
+var a = Outer.build()
+
+function main() returns ExitCode
+	return a.v
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: factory-returning-a-boxed-union -->
+A boxed union is a record for every purpose this form has: its value is a heap pointer, its slot is
+the same one word a struct's is, and the drop router already routes it. It is the ONE record a
+declared name can denote that the normalization above cannot reach — a union value carries the bare
+name deliberately, since that is what a `match` reads it by — so admitting it is a decision the slot
+had to make rather than one the re-tag makes for it.
+```maxon
+union Shape
+	circle(r int)
+	square(s int)
+end 'Shape'
+
+type Maker
+	static function build() returns Shape
+		return Shape.circle(7)
+	end 'build'
+end 'Maker'
+
+var a = Maker.build()
+
+function main() returns ExitCode
+	match a 'kind'
+		circle(r) then return r
+		square(s) then return s
+	end 'kind'
 end 'main'
 ```
 ```exitcode
