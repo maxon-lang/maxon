@@ -92,7 +92,8 @@ class Program {
     Console.WriteLine("                           Drive the REPL non-interactively (spec: ';'-separated or @file); JSON stops");
     Console.WriteLine("  --complete '<partial>' <exe>");
     Console.WriteLine("                           List the completion candidates for a partial input line (one per line)");
-    Console.WriteLine("  --dump-info <exe|.mxdbg> Print the sidecar's files, functions, and line table");
+    Console.WriteLine($"  --dump-info <exe|.mxdbg> [{DumpSectionNames}]");
+    Console.WriteLine("                           Print the sidecar. Name sections to print only those (default: all)");
     Console.WriteLine("  --symbolize <.mxdbg> <codeOffset...>");
     Console.WriteLine("                           Map .text code offsets to file:line:col");
     Console.WriteLine("  --attach-probe <exe>     Attach the in-process debug agent and read its handshake (P3a)");
@@ -130,6 +131,9 @@ class Program {
     Console.WriteLine("  --filter=PATTERN         Run only tests matching pattern");
     Console.WriteLine($"  --workers=N              Use N worker threads (default: {Testing.TestExecutor.DefaultWorkers} here)");
     Console.WriteLine("  --update-required        Force regeneration and update RequiredIR, stderr, and mm-trace blocks");
+    Console.WriteLine($"  {DebugInfoSpecTestFlag}            Compile EVERY test with debug info on — the path `maxon build`");
+    Console.WriteLine("                           takes by default, which a test's own <!-- DebugInfo --> directive");
+    Console.WriteLine("                           turns on for one compile at a time");
     Console.WriteLine("  --verbose                Show per-test PASS/FAIL timing logs");
     Console.WriteLine("  --no-batch               Disable per-spec compile batching (each test compiled individually)");
     Console.WriteLine("  --network                Include 'category: network' specs. They reach the public internet,");
@@ -260,7 +264,9 @@ class Program {
           return 1;
         }
         var reader = MaxonDebugRepl.LoadSidecar(args[1]);
-        return reader == null ? 1 : DumpDebugInfo(reader, args[1]);
+        if (reader == null) return 1;
+        if (ParseDumpSections(args[2..]) is not { } sections) return 1;
+        return DumpDebugInfo(reader, args[1], sections);
       }
 
       case "--symbolize": {
@@ -339,6 +345,14 @@ class Program {
   /// by <see cref="ParseTarget"/>, by `spec-test`'s own option set and by the usage text, and a
   /// literal at each was four chances for them to disagree about what the flag is called.
   internal const string TargetFlag = "--target=";
+
+  /// `spec-test`'s debug-info flag. Read by the option validator, the parse loop and the usage text,
+  /// for the same reason <see cref="TargetFlag"/> is spelled once.
+  ///
+  /// It REPLACES the `MAXON_SPEC_DEBUG_INFO` environment variable, which was an instrument nothing in
+  /// this tree ever set — the shape of switch that rots, since no gate can fail when a variable is
+  /// unset. As a flag it can be put in a script (see buildall.sh) and be run deliberately.
+  internal const string DebugInfoSpecTestFlag = "--debug-info";
 
   /// <summary>
   /// Parse a <see cref="TargetEnvFlag"/> value as `NAME=VALUE`. The NAME must be non-empty and must not
@@ -431,45 +445,103 @@ class Program {
     return MaxonDebugRepl.RunBatch(exe, targetArgs, commands, stopTimeout, targetEnv, stopOthers);
   }
 
-  static int DumpDebugInfo(Debug.MxdbgReader r, string path) {
-    Console.WriteLine($"Debug info: {path}");
-    Console.WriteLine($"  target:   {r.Triple}");
-    Console.WriteLine($"  build-id: 0x{r.BuildId:x16}");
+  /// <summary>
+  /// A section of the `.mxdbg` dump. `maxon debug --dump-info &lt;path&gt;` prints every one of them;
+  /// naming sections after the path prints only those.
+  ///
+  /// <see cref="Lines"/> and <see cref="Statements"/> are the SAME table asked two different
+  /// questions, which is why they share one walk below rather than being two printers. `lines`
+  /// answers a DEBUGGER's question — "what source position is this `.text` offset?" — and the offset
+  /// is its subject. `statements` answers a GATE's question — "which source positions can be stopped
+  /// on, in code order?" — a fact about the SOURCE that must not move when unrelated codegen shifts
+  /// every offset in the file. That distinction is not cosmetic: it is measured. Six checks across
+  /// three committed debugger goldens were red when this was written, for no reason but a `main` that
+  /// had grown somewhere else, and a golden that reds on every codegen change is one that gets
+  /// regenerated without being read.
+  /// </summary>
+  enum DumpSection { Header, Files, Functions, Types, Lines, Statements }
 
-    Console.WriteLine($"  files ({r.FileCount}):");
-    for (uint i = 0; i < r.FileCount; i++) {
-      Console.WriteLine($"    [{i}] {r.FileName(i)}");
+  /// The section names the CLI accepts, DERIVED from the enum rather than listed again, so the parser
+  /// and the usage text cannot disagree and a new section cannot be added without a spelling.
+  static readonly (string Name, DumpSection Section)[] DumpSections =
+    [.. Enum.GetValues<DumpSection>().Select(s => (s.ToString().ToLowerInvariant(), s))];
+
+  static string DumpSectionNames => string.Join('|', DumpSections.Select(s => s.Name));
+
+  /// <summary>
+  /// The sections named on the command line, or ALL of them when none are — so the bare
+  /// `--dump-info &lt;path&gt;` keeps printing the whole sidecar. Null when a name is not a section,
+  /// which is refused (naming the valid set) rather than ignored: a silently dropped section name
+  /// would print a dump the caller did not ask for and could not tell apart from the one it wanted.
+  /// </summary>
+  static HashSet<DumpSection>? ParseDumpSections(string[] names) {
+    if (names.Length == 0) return [.. Enum.GetValues<DumpSection>()];
+
+    var sections = new HashSet<DumpSection>();
+    foreach (var name in names) {
+      var match = DumpSections.FirstOrDefault(s => string.Equals(s.Name, name, StringComparison.OrdinalIgnoreCase));
+      if (match.Name == null) {
+        Console.Error.WriteLine($"maxon debug --dump-info: '{name}' is not a section ({DumpSectionNames}).");
+        return null;
+      }
+      sections.Add(match.Section);
+    }
+    return sections;
+  }
+
+  static int DumpDebugInfo(Debug.MxdbgReader r, string path, HashSet<DumpSection> sections) {
+    if (sections.Contains(DumpSection.Header)) {
+      Console.WriteLine($"Debug info: {path}");
+      Console.WriteLine($"  target:   {r.Triple}");
+      Console.WriteLine($"  build-id: 0x{r.BuildId:x16}");
     }
 
-    // The stack-slot offsets are frame-pointer-relative; the frame-pointer REGISTER is per target
-    // (x29 on arm64, rbp on x64). The sidecar's offsets are target-agnostic — only this label differs.
-    var framePointer = FramePointerRegister(r.Triple);
-
-    Console.WriteLine($"  functions ({r.FunctionCount}):");
-    for (uint i = 0; i < r.FunctionCount; i++) {
-      var f = r.Function(i);
-      Console.WriteLine($"    {f.Name,-32} [0x{f.CodeStart:x4}, 0x{f.CodeEnd:x4})  "
-        + $"frame=0x{f.FrameSize:x}  params={f.ParamCount}  lines={f.LineCount}  locals={f.LocalCount}");
-      for (uint k = f.LocalFirst; k < f.LocalFirst + f.LocalCount; k++) {
-        var lc = r.Local(k);
-        Console.WriteLine($"        {lc.Name,-20} {FormatLocation(lc, framePointer)}  : {r.TypeName(lc.TypeId)}");
+    if (sections.Contains(DumpSection.Files)) {
+      Console.WriteLine($"  files ({r.FileCount}):");
+      for (uint i = 0; i < r.FileCount; i++) {
+        Console.WriteLine($"    [{i}] {r.FileName(i)}");
       }
     }
 
-    Console.WriteLine($"  types ({r.TypeCount}):");
-    for (uint i = 0; i < r.TypeCount; i++) {
-      var t = r.Type(i);
-      Console.WriteLine($"    [{i}] {t.Name,-28} {t.Kind}  size={t.Size} align={t.Align}  fields={t.FieldCount}");
-      for (uint k = t.FieldFirst; k < t.FieldFirst + t.FieldCount; k++) {
-        var fld = r.Field(k);
-        Console.WriteLine($"        +0x{fld.Offset:x2}  {fld.Name,-20} : {r.TypeName(fld.TypeId)}");
+    if (sections.Contains(DumpSection.Functions)) {
+      // The stack-slot offsets are frame-pointer-relative; the frame-pointer REGISTER is per target
+      // (x29 on arm64, rbp on x64). The sidecar's offsets are target-agnostic — only this label differs.
+      var framePointer = FramePointerRegister(r.Triple);
+
+      Console.WriteLine($"  functions ({r.FunctionCount}):");
+      for (uint i = 0; i < r.FunctionCount; i++) {
+        var f = r.Function(i);
+        Console.WriteLine($"    {f.Name,-32} [0x{f.CodeStart:x4}, 0x{f.CodeEnd:x4})  "
+          + $"frame=0x{f.FrameSize:x}  params={f.ParamCount}  lines={f.LineCount}  locals={f.LocalCount}");
+        for (uint k = f.LocalFirst; k < f.LocalFirst + f.LocalCount; k++) {
+          var lc = r.Local(k);
+          Console.WriteLine($"        {lc.Name,-20} {FormatLocation(lc, framePointer)}  : {r.TypeName(lc.TypeId)}");
+        }
       }
     }
 
-    Console.WriteLine($"  line table ({r.LineCount}):");
-    for (uint i = 0; i < r.LineCount; i++) {
-      var l = r.Line(i);
-      Console.WriteLine($"    0x{l.CodeOffset:x4}  {l.File}:{l.Line}:{l.Col}{FormatLineFlags(l.Flags)}");
+    if (sections.Contains(DumpSection.Types)) {
+      Console.WriteLine($"  types ({r.TypeCount}):");
+      for (uint i = 0; i < r.TypeCount; i++) {
+        var t = r.Type(i);
+        Console.WriteLine($"    [{i}] {t.Name,-28} {t.Kind}  size={t.Size} align={t.Align}  fields={t.FieldCount}");
+        for (uint k = t.FieldFirst; k < t.FieldFirst + t.FieldCount; k++) {
+          var fld = r.Field(k);
+          Console.WriteLine($"        +0x{fld.Offset:x2}  {fld.Name,-20} : {r.TypeName(fld.TypeId)}");
+        }
+      }
+    }
+
+    // One walk for both questions: the offset column is the `lines` half, the source position the
+    // `statements` half (see DumpSection). Asking for both prints the full rows.
+    bool withOffsets = sections.Contains(DumpSection.Lines);
+    if (withOffsets || sections.Contains(DumpSection.Statements)) {
+      Console.WriteLine($"  line table ({r.LineCount}):");
+      for (uint i = 0; i < r.LineCount; i++) {
+        var l = r.Line(i);
+        var offset = withOffsets ? $"0x{l.CodeOffset:x4}  " : "";
+        Console.WriteLine($"    {offset}{l.File}:{l.Line}:{l.Col}{FormatLineFlags(l.Flags)}");
+      }
     }
 
     return 0;
@@ -1210,7 +1282,7 @@ class Program {
   static int RunSpecTests(string[] args) {
     SetupTestLogging();
 
-    var specTestOptions = new HashSet<string> { "--filter=", "--workers=", "--update-required", TargetFlag, "--verbose", "--no-batch", "--network" };
+    var specTestOptions = new HashSet<string> { "--filter=", "--workers=", "--update-required", TargetFlag, "--verbose", "--no-batch", "--network", DebugInfoSpecTestFlag };
     var (_, _, valid) = ParseOptions(args, specTestOptions);
     if (!valid) return Fail();
 
@@ -1220,6 +1292,7 @@ class Program {
     bool verbose = false;
     bool noBatch = false;
     bool includeNetwork = false;
+    bool debugInfo = false;
 
     // Through the same door as `build` and `run`, rather than a second `--target=` reader here: the
     // suite must refuse a target the compiler cannot write for exactly the reason a build does, and
@@ -1243,8 +1316,15 @@ class Program {
         noBatch = true;
       } else if (arg == "--network") {
         includeNetwork = true;
+      } else if (arg == DebugInfoSpecTestFlag) {
+        debugInfo = true;
       }
     }
+
+    // Process-wide because the flag it drives (`Compiler.DebugInfo`) is [ThreadStatic] and the runner
+    // compiles on worker threads, so the value has to be reachable from the static that (re)sets those
+    // flags on every compile. Set here, once, before any runner exists.
+    Testing.TestRunner.ForceDebugInfo = debugInfo;
 
     // ⚖ THE MINT DOOR, refused before anything is compiled, run or written (user ruling, 2026-08-02 —
     // see TargetRunHost). `--update-required` is the only flag that rewrites goldens the tree already

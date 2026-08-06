@@ -196,10 +196,20 @@ internal class FunctionCloner {
           clonedOp = CloneOp(op, extraOps);
         }
 
+        // A debug span is keyed by OP REFERENCE (IrFunction._debugSpans), and every op here is a
+        // BRAND-NEW object — so without this a monomorphized generic ships an EMPTY line table and no
+        // debugger can stop anywhere inside one. Nothing reports that as missing: the lowering's
+        // DebugSpanFlow.Mark simply records nothing, and the specialization's instructions fall into
+        // whatever range precedes them. `extraOps` are part of THIS source op's expansion, so they
+        // carry its span too. Under --no-debug-info the source table is null, so this allocates nothing.
+        bool hasSpan = _sourceFunc.TryGetDebugSpan(op, out var span);
+
         foreach (var extra in extraOps) {
           newBlock.AddOp(extra);
+          if (hasSpan) newFunc.SetDebugSpan(extra, span);
         }
         newBlock.AddOp(clonedOp);
+        if (hasSpan) newFunc.SetDebugSpan(clonedOp, span);
       }
     }
 

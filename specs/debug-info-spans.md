@@ -41,6 +41,15 @@ be replayed against the short merge block that replaced it. When they were, the 
 off the end of the merge block and the whole compile died with `E9001 ... Index was out of
 range`, on programs the suite compiles successfully every single run with the flag off.
 
+### A monomorphized generic is a body like any other
+
+A specialization is CLONED, and a span is keyed by op REFERENCE — so a clone that does not carry
+the table forward ships a function with an empty line table. That was the state until this spec's
+third test: every monomorphized generic in every Maxon program had no line rows at all, so a
+debugger could not stop anywhere inside one. Carrying them forward also means the mark/reset rule
+above now applies to specialized bodies for the FIRST time: before, a clone recorded no marks, so
+its block-splitting lowerings could not desync because there was nothing to desync.
+
 ## Tests
 
 <!-- test: bounds-check-merge-block-does-not-desync-marks -->
@@ -108,4 +117,57 @@ after
 ```
 ```exitcode
 77
+```
+
+<!-- test: monomorphized-generic-merge-block-does-not-desync-marks -->
+### A block-splitting lowering inside a monomorphized generic compiles with debug info on
+`churn` is the body of a `Chain uses T` generic, so what reaches lowering is a CLONE with brand-new
+op objects — and it holds both doors at once: an array `get` past the end and a checked divide by
+zero, each of which abandons its block for a fresh merge block. The leading `print` is load-bearing
+for the same reason it is in the divide case above: it makes the abandoned block longer than the
+merge block that replaces it, which is the difference between a mark index that is merely wrong and
+one that is out of range. Nothing could reach this shape before the clone carried spans.
+<!-- DebugInfo -->
+```maxon
+typealias Num = int(0 to 1000)
+
+type Cell
+	export var v as Num
+
+	static function init(v Num) returns Self
+		return Self{v: v}
+	end 'init'
+end 'Cell'
+
+typealias CellArray = Array with Cell
+
+type Chain uses T
+	export var seed as T
+
+	export static function create(seed T) returns Self
+		return Self{seed: seed}
+	end 'create'
+
+	export function churn(d Num) returns Num
+		print("churn\n")
+		let pad = 1
+		var arr = CellArray.create()
+		arr.push(Cell.init(pad))
+		let missed = try arr.get(7) otherwise Cell.init(3)
+		return try (missed.v / d) otherwise 9
+	end 'churn'
+end 'Chain'
+
+typealias NumChain = Chain with Num
+
+function main() returns ExitCode
+	let ch = NumChain.create(1)
+	return ch.churn(0)
+end 'main'
+```
+```stdout
+churn
+```
+```exitcode
+9
 ```

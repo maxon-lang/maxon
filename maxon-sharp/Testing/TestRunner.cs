@@ -1123,24 +1123,20 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
   }
 
   /// <summary>
-  /// Environment variable that forces <c>DebugInfo</c> on for EVERY spec compile, whatever each
-  /// test's directive says. This is a MEASURING INSTRUMENT, not a mode: it answers "how much of the
-  /// corpus survives the path `maxon build` takes by default?", which no per-test directive can ask
-  /// of 3200 programs at once. It is deliberately not a CLI flag — nothing gates on it, and a run
-  /// under it is not the run the committed goldens pin.
+  /// `spec-test --debug-info`: force <c>DebugInfo</c> on for EVERY spec compile, whatever each test's
+  /// directive says. It answers "how much of the corpus survives the path `maxon build` takes by
+  /// DEFAULT?", which no per-test directive can ask of 3200 programs at once — and it is the run in
+  /// which the committed fragment goldens still verifying is the proof that debug info changed not one
+  /// emitted byte.
   ///
-  /// Read once into a static, not per compile: the value cannot change mid-run, and
-  /// <see cref="SetCompileFlags"/> is on the hot path of every one of those compiles.
+  /// ⚠ It was an ENVIRONMENT VARIABLE (`MAXON_SPEC_DEBUG_INFO=1`) and no script, gate or CI path ever
+  /// set it. A switch nothing turns on cannot fail, so it measured nothing and rotted quietly; a flag
+  /// can be written into <c>buildall.sh</c>, which is where it now is.
+  ///
+  /// Static, and set from the CLI before any runner exists, because <see cref="SetCompileFlags"/> is
+  /// static (one of its callers has no instance) and is on the hot path of every one of those compiles.
   /// </summary>
-  private const string ForceDebugInfoEnvVar = "MAXON_SPEC_DEBUG_INFO";
-
-  /// The one value that turns <see cref="ForceDebugInfoEnvVar"/> on. Named beside the variable it
-  /// belongs to: an env var is a NAME AND A VALUE, and half of it written as a bare literal is the
-  /// half nothing describes.
-  private const string EnvVarEnabledValue = "1";
-
-  private static readonly bool ForceDebugInfo =
-    Environment.GetEnvironmentVariable(ForceDebugInfoEnvVar) == EnvVarEnabledValue;
+  internal static bool ForceDebugInfo { get; set; }
 
   /// <summary>
   /// Set the process-wide (ThreadStatic) compile flags every spec-test compile

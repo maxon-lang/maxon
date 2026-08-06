@@ -1,0 +1,64 @@
+// A3d span gate — the sample whose LOWERINGS SPLIT BLOCKS.
+//
+// Every other sample in this directory is straight-line: measured, not one of them uses an array
+// `get`, a `try`, or a checked divide. Each of those three abandons its block mid-statement — a bounds
+// check, a `try` error edge and a divide-by-zero guard each hand the lowering a fresh error block and a
+// fresh merge block through a `ref` parameter — and each is therefore a place a source span can be
+// dropped, or replayed against a block that no longer exists. A straight-line sample structurally
+// cannot catch that, which is exactly why a StoreForwardingPass span-drop was invisible to a green gate.
+//
+// Every statement below sits on its own line and does one thing, so the golden's line table reads as a
+// statement-by-statement roll call: a dropped span is a MISSING row, a desynced one is a WRONG row.
+
+typealias Num = int(0 to 1000)
+typealias ExitCode = int(0 to 255)
+
+type Slot
+	export var value as Num
+
+	static function init(v Num) returns Self
+		return Self{value: v}
+	end 'init'
+end 'Slot'
+
+typealias SlotArray = Array with Slot
+
+// A USER generic. Its methods are cloned by FunctionCloner, which mints brand-new op objects — and a
+// debug span is keyed by op REFERENCE, so a clone that does not carry them ships a specialization with
+// an EMPTY line table. `spread` additionally holds a CHECKED DIVIDE, so the monomorphized body and the
+// block-splitting lowering meet inside one function: a span dropped there is doubly unobservable.
+type Pair uses T
+	export var lo as T
+	export var hi as T
+
+	export static function create(lo T, hi T) returns Self
+		return Self{lo: lo, hi: hi}
+	end 'create'
+
+	export function spread() returns Num
+		let top = self.hi
+		let bottom = self.lo
+		return try (top / bottom) otherwise 0
+	end 'spread'
+end 'Pair'
+
+typealias NumPair = Pair with Num
+
+function main() returns ExitCode
+	var arr = SlotArray.create()
+	arr.push(Slot.init(7))
+	arr.push(Slot.init(9))
+	let inRange = try arr.get(1) otherwise Slot.init(0)
+	let afterGet = inRange.value
+	let outOfRange = try arr.get(4) otherwise Slot.init(3)
+	let afterMiss = outOfRange.value
+	let seed = Slot.init(5)
+	let mirrored = seed
+	let afterCopy = mirrored.value
+	let pair = NumPair.create(4, hi: 24)
+	let spread = pair.spread()
+	let zero = arr.count() - 2
+	let guarded = try (spread / zero) otherwise 11
+	print("spans\n")
+	return (afterGet + afterMiss + afterCopy + guarded) as ExitCode
+end 'main'

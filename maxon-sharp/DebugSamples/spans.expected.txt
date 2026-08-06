@@ -1,0 +1,80 @@
+A3d span gate — the .mxdbg LINE TABLE of a program whose lowerings SPLIT BLOCKS.
+
+HOW TO REPRODUCE (from a checkout that has built the C# compiler):
+  maxon build maxon-sharp/DebugSamples/spans.maxon
+  maxon debug --dump-info maxon-sharp/DebugSamples/spans.exe statements
+  maxon-sharp/DebugSamples/spans.exe; echo "exit=$?"
+
+WHAT THIS PINS, AND WHY IT IS THE ONE THING NOTHING PINNED:
+  Until this golden, NOTHING ANYWHERE ASSERTED .mxdbg LINE-TABLE CONTENT. specs/debug-info-spans.md
+  pins that two block-splitting programs COMPILE with debug info on — the crash, not the spans — and
+  every other golden in this directory drives a straight-line sample: measured, not one of them used an
+  array `get`, a `try`, or a checked divide. So a span dropped inside a block-splitting lowering was
+  invisible to a 53-check green gate, which is exactly how a StoreForwardingPass span-drop got in.
+
+  Block 1 is the sidecar's line table as a STATEMENT ROLL CALL, in code order. A span DROPPED is a
+  MISSING row; a span replayed against a block that lowering has abandoned is a WRONG row. Every
+  statement of `main` is on its own line and does one thing, so rows 48-63 must be present and in
+  order. Between them they cover:
+    * 51  an array `get` that SUCCEEDS — its bounds check still splits the block
+    * 53  an array `get` past the end: the BOUNDS CHECK fails, the `try`'s error edge is taken, and
+          lowering continues in a merge block that is shorter than the one it abandoned
+    * 56  `let mirrored = seed`, the (load, store) pair StoreForwardingPass REWRITES into one new
+          store object. A debug span is keyed by op REFERENCE, so the rewrite drops this row unless
+          the replacement is handed the span — MEASURED: delete that hand-off and row 56 disappears
+          while every other row stays, which is the drop that a straight-line gate could not see
+    * 61  a CHECKED DIVIDE by zero: the divide-by-zero guard fires and splits the block again
+  The rows on either side of each split (52, 54, 57, 62) are what make a mark desync visible as a
+  wrong row rather than merely a wrong offset nobody reads.
+
+  Rows 35 and 39-41 are the other half: they are inside NumPair.create / NumPair.spread, the
+  MONOMORPHIZED bodies of the `Pair uses T` generic. FunctionCloner mints brand-new op objects, so
+  before this gate EVERY specialization in EVERY Maxon program shipped an EMPTY line table — a
+  debugger could not stop anywhere inside a generic, and nothing said so. Row 41 is a checked divide
+  INSIDE a cloned body, where a clone that loses spans and a lowering that splits blocks compose.
+
+  Block 2 pins that the sample actually TAKES those paths rather than merely containing them: exit 28
+  is 9 (the in-range get) + 3 (the bounds-check failure's `otherwise`) + 5 (the copied struct) + 11
+  (the divide guard's). Without it the line table could be regenerated over a sample that had quietly
+  stopped splitting anything.
+
+WHAT IS STABLE vs ENVIRONMENT-SPECIFIC:
+  * DELIBERATELY OFFSET-FREE. `--dump-info <exe> statements` prints the source position of every line
+    row WITHOUT its .text offset, and that is the whole reason this golden is still readable a month
+    from now: absolute offsets move whenever anything earlier in the image changes size, and six checks
+    across step/bpstep/complete were red for exactly that reason when this landed (regenerated in the
+    same commit; the diff was offsets and nothing else). A golden that reds on every codegen change is
+    one that gets regenerated without being read — the failure mode this rung exists to close.
+    `--dump-info` with no section named still prints everything; `lines` is the section that keeps the
+    offsets, and the `--batch` goldens beside this one are where they are pinned.
+  * The source path appears exactly as it was passed to `maxon build` (repo-relative when built from
+    the repo root as shown above).
+  * The sample's own `print` reaches stdout in block 2, ahead of the exit line.
+
+--- EXPECTED --dump-info STDOUT, BLOCK 1 (the statement roll call) ---
+  line table (21):
+    maxon-sharp/DebugSamples/spans.maxon:48:2  [statement]
+    maxon-sharp/DebugSamples/spans.maxon:49:2  [statement]
+    maxon-sharp/DebugSamples/spans.maxon:50:2  [statement]
+    maxon-sharp/DebugSamples/spans.maxon:51:2  [statement]
+    maxon-sharp/DebugSamples/spans.maxon:52:2  [statement]
+    maxon-sharp/DebugSamples/spans.maxon:53:2  [statement]
+    maxon-sharp/DebugSamples/spans.maxon:54:2  [statement]
+    maxon-sharp/DebugSamples/spans.maxon:55:2  [statement]
+    maxon-sharp/DebugSamples/spans.maxon:56:2  [statement]
+    maxon-sharp/DebugSamples/spans.maxon:57:2  [statement]
+    maxon-sharp/DebugSamples/spans.maxon:58:2  [statement]
+    maxon-sharp/DebugSamples/spans.maxon:59:2  [statement]
+    maxon-sharp/DebugSamples/spans.maxon:60:2  [statement]
+    maxon-sharp/DebugSamples/spans.maxon:61:2  [statement]
+    maxon-sharp/DebugSamples/spans.maxon:62:2  [statement]
+    maxon-sharp/DebugSamples/spans.maxon:63:2  [statement]
+    maxon-sharp/DebugSamples/spans.maxon:20:3  [statement]
+    maxon-sharp/DebugSamples/spans.maxon:35:3  [statement]
+    maxon-sharp/DebugSamples/spans.maxon:39:3  [statement]
+    maxon-sharp/DebugSamples/spans.maxon:40:3  [statement]
+    maxon-sharp/DebugSamples/spans.maxon:41:3  [statement]
+
+--- EXPECTED PROGRAM STDOUT, BLOCK 2 (the paths are really taken) ---
+spans
+exit=28

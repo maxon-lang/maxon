@@ -9,6 +9,21 @@ echo "=== Running C# Spec Tests ==="
 bin/maxon spec-test
 
 echo ""
+echo "=== Running C# Spec Tests with debug info ON ==="
+# The SECOND run is the whole point: `Compiler.DebugInfo` is [ThreadStatic] and the harness leaves it
+# OFF, so the default run compiles all ~3200 programs down the path `maxon build` does NOT take. That
+# hole once shipped a crash on a program this very suite compiles every run. A per-test
+# `<!-- DebugInfo -->` directive covers one compile at a time; only this covers the corpus.
+#
+# It is also the only place the "pure observer" contract is MEASURED rather than asserted: the run
+# verifies every committed fragment golden, and those goldens were minted with debug info off — so a
+# green run here is proof that producing a sidecar changed not one emitted byte.
+#
+# It was an environment variable (MAXON_SPEC_DEBUG_INFO=1) that nothing in this tree ever set, which
+# is the same as not having it. A switch nobody turns on cannot fail.
+bin/maxon spec-test --debug-info
+
+echo ""
 echo "=== Checking Debugger Goldens ==="
 # Gates the debugger/profiler/coverage sample transcripts, which the spec suite does not cover:
 # their acceptance is a golden transcript, not a spec test. Runs here because it needs only the
