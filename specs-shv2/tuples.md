@@ -1175,8 +1175,19 @@ and neither ever did; what changed is that they no longer rank by anything else 
 It read that anything interning a tuple ahead of these — a stdlib module a future edit pulls in, a
 differently-ordered directory walk — moved them, which made the pin depend on a count the sentence does not
 name. It does not any more: the token is `fnv1a64` of the cited tuple's registered name, so **an unrelated
-tuple interned first moves nothing**, and only a change to the TYPE this case builds can move a number here.
-A move is a prompt to ask what type changed shape.
+tuple interned first moves nothing** — which the case below this one pins rather than asserts.
+
+⚠ **BUT THIS CASE'S DECLARED-TYPE TOKEN IS SENSITIVE TO THE ALIAS SPELLINGS, AND THAT IS NOT OBVIOUS FROM
+THE RULE ABOVE (W14b review).** `P` is self-referential, so `canonicalTupleName`'s A3e re-entry resolves its
+own element back to the SWEEP spelling `__Tuple2.P.Int` — a name whose elements are still the bare
+identifiers this fragment wrote, because the sweep runs before the registries that say what they mean. The
+Merkle chain therefore bottoms out there, and every digest above it inherits those two identifiers. ⛔
+MEASURED: renaming `Int` to `Signed` and `P` to `Q`, which changes no type's SHAPE, moves
+`#41e3ea25fc813804` to `#303df4d4860b223c`, while the returned type's `#90fac2b26f6571d1` — whose chain
+bottoms out at the fully resolved `__Tuple2.int.int` — does not move at all. ⇒ **a move in the SECOND number
+is a prompt to ask what the termination rule built OR what these two aliases are called; a move in the
+FIRST is only ever the former.** The `-with-an-unrelated-tuple-interned-alongside` case below pins the axis
+that a citation must never depend on: another file.
 
 ⭐ **THE REASON FIRST GIVEN FOR ACCEPTING IT WAS BACKWARDS, AND W14b REMOVED THE THING THAT NEEDED
 ACCEPTING.** The W9 text read *"v1's `GenericInstanceId` has the identical property"*; the W9 review

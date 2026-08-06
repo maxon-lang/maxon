@@ -3448,9 +3448,14 @@ function tupleTypeNameHead(arity FieldIndex) returns String
 end 'tupleTypeNameHead'
 
 // The head READ BACK OFF an already-built tuple NAME — the very `tupleTypeNameHead` that name starts with.
-// `tupleElementTokenFor` needs it and holds only the name, and reading it back is what keeps the token's
-// head and the name's head ONE fact: re-deriving it from a separately counted arity would be two spellings
-// of one thing, which is the lossy-key shape this compiler has paid for more than once.
+// `tupleElementTokenFor` needs it and holds only the name.
+//
+// ⚠ **THE REASON IS NOT "ONE SPELLER" — `tupleTypeNameHead` IS ALREADY THAT, AND AN ARITY PARAMETER WOULD
+// CALL IT TOO (W14b review).** The reason is that an arity parameter is an input NOTHING TIES TO `name`: a
+// caller that passed an arity the name was not built from would mint a token whose head contradicts the
+// very string it digests, and no compile error anywhere would say so — the lossy-key shape this file's join
+// rules exist to make unstateable. Read back, the head and the name's head are the same bytes by
+// construction, and the question cannot be asked wrong.
 //
 // The first separator always exists in a registered tuple name: a tuple has at least two elements (`()` and
 // `(x)` are both refused), so every name holds at least two of them — and a sweep key's `#<ordinal>` rides
@@ -3507,6 +3512,19 @@ end 'tupleTypeNameHeadOf'
 // name is fully structural, its digest therefore is, so a depth-1 tuple's name is, and so on by induction.
 // The digest is a fixed 64 bits however deep the nesting goes, which is the whole asymptote above; and it
 // names nothing but the program, which is what W14b bought.
+//
+// ⚠ **THE INDUCTION'S BASE CASE IS THE NAME `tupleTypeNameOf` BUILT, AND A SWEEP-PHASE NAME IS NOT YET
+// RESOLVED — SO ONE CITATION IN THE TREE STILL CARRIES A SOURCE SPELLING (W14b review).** Before
+// `allFilesFolded` an element renders as the bare name the source wrote, and `sweepScopedTupleName` may add
+// its first-free `#<ordinal>`; such a name reaches a citation through exactly one door —
+// `canonicalTupleName`'s A3e re-entry, which resolves a SELF-REFERENTIAL tuple alias's element back to the
+// sweep spelling it already carries. ⛔ MEASURED on `tuples.md`'s `error.self-referential-tuple-alias`:
+// renaming `typealias Int` to `Signed` and `P` to `Q` — which changes no type's SHAPE — moves the declared
+// type's citation from `#41e3ea25fc813804` to `#303df4d4860b223c`, because the chain bottoms out at the
+// sweep name `__Tuple2.P.Int`. A self-referential tuple alias is an infinite type, so nothing constructible
+// reaches that door; the residue is therefore confined to spellings the program itself wrote, and the
+// remaining FILESYSTEM half of it (a CONTESTED sweep key taking `#<ordinal>` by walk order) is
+// `sweepScopedTupleName`'s, filed as its own row rather than fixed here.
 //
 // ⚠⚠ **IT REPLACED A MINT-ORDERED ORDINAL, AND THAT ORDINAL WAS A WALK-ORDER ARTIFACT (W14b).** The token
 // used to be `tupleElementTokens.count()` — the map's own size, i.e. the order `Directory.list` handed the
@@ -9288,8 +9306,17 @@ export type ProgramSignatures
 
 	// The element token `name` is cited by. Two questions, two probes, and NEITHER allocates: that the layout
 	// is registered at all (the panic W9 wrote, kept in substance), and that the token leads back to the very
-	// name it is filed under — the read-side half of `recordTupleElementToken`'s collision check, which is
-	// what a memo alone could not give, since a memo can only repeat what it was told.
+	// name it is filed under.
+	//
+	// ⚠ **THE SECOND PROBE IS AN ASSERTION, NOT A SECOND COLLISION DETECTOR — THIS HEADER CLAIMED OTHERWISE
+	// AND IT WAS FALSE (W14b review).** It read that the probe "catches a collision at the read too, which is
+	// what a memo alone could not give". There is nothing left to catch: `recordTupleElementToken` panics
+	// BEFORE it writes either map when a token is already owned, and those two `upsert`s are the ONLY writers
+	// of either map in the compiler, so `tupleElementTokens[n] = t` implies `tupleElementTokenOwners[t] = n`
+	// by construction and both arms below are unreachable on every program, legal or not. They are kept for
+	// what an assertion is for: the day a SECOND writer of either map appears, this fails loudly at the next
+	// citation instead of handing one type a name another type owns. Do not cite them as the reason the
+	// digest is injective — `recordTupleElementToken` is that reason, and it is one function away.
 	function tupleElementTokenOf(name ByteArray) returns ByteArray
 		let token = try self.tupleElementTokens.get(name) otherwise panic("ProgramSignatures.tupleElementTokenOf: the nested tuple `{String.from(name)}` has no element token — every tuple `structRef` in the compiler names a layout `registerTupleLayout` minted, and that is where its token is recorded with it")
 		let owner = try self.tupleElementTokenOwners.get(token) otherwise panic("ProgramSignatures.tupleElementTokenOf: the element token `{String.from(token)}` filed under `{String.from(name)}` has no owner — `recordTupleElementToken` writes both maps in one act, so this is a divergence between them")
