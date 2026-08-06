@@ -2474,3 +2474,85 @@ end 'main'
 ```exitcode
 10
 ```
+
+
+<!-- test: rc-repeated-self-append -->
+Appending a string to ITSELF, twice. The second append must grow the buffer, and growing
+it frees the old one — so the bytes being copied in are the bytes that just moved. A copy
+that reads the pre-grow pointer reads freed memory, and the string silently ends in the
+freed block's contents rather than its own. Both rounds must double the string.
+```maxon
+function main() returns ExitCode
+	var s = "abc"
+	s.append(s)
+	print("A={s}|{s.byteLength()}\n")
+	s.append(s)
+	print("B={s}|{s.byteLength()}\n")
+	print("C=done\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+A=abcabc|6
+B=abcabcabcabc|12
+C=done
+```
+
+<!-- test: rc-clone-survives-the-source-growing -->
+`clone()` promises an INDEPENDENT string. Independence has two halves, and the second one is
+the easy one to lose: writing to the clone must not touch the original, AND the original
+growing must not touch the clone. A clone that merely VIEWS the original's bytes keeps the
+first promise and breaks the second — the original's next `append` reallocates and frees the
+very block the clone points at, and the clone silently reads the freed block afterwards.
+
+The string must OWN its buffer for the grow to free anything (a literal lives in read-only
+data, which is never freed), so it is appended to once before the clone is taken. It must also
+be long enough not to be carried inline.
+```maxon
+function main() returns ExitCode
+	var s = "0123456789abcdefghijABCDEFGHIJ"
+	s.append("+")
+	let c = s.clone()
+	s.append("TAIL")
+	print("clone={c}|{c.byteLength()}\n")
+	print("source={s}|{s.byteLength()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+clone=0123456789abcdefghijABCDEFGHIJ+|31
+source=0123456789abcdefghijABCDEFGHIJ+TAIL|35
+```
+
+<!-- test: rc-append-a-clone-of-self -->
+The same aliasing as `rc-repeated-self-append`, one step removed: the source of the append is
+not the receiver's record but a SECOND record over the receiver's bytes. Growing the receiver
+frees those bytes, so an append that copies from wherever the clone points copies from a freed
+block — and the appended half comes out as the allocator's leftovers rather than the string.
+Re-reading the source record's buffer pointer after the grow does not help here, because that
+pointer belongs to a record the grow never updated. What makes it right is that the clone owns
+its own bytes.
+```maxon
+function main() returns ExitCode
+	var s = "0123456789abcdefghijABCDEFGHIJ"
+	s.append("+")
+	let c = s.clone()
+	s.append(c)
+	print("{s}\n")
+	print("{s.byteLength()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+0123456789abcdefghijABCDEFGHIJ+0123456789abcdefghijABCDEFGHIJ+
+62
+```

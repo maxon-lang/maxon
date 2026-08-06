@@ -33403,6 +33403,13 @@ export type Parser
 		// was, spelled out a second time: the four `DeclaredTypeMatch` arms that stood here were a
 		// character-for-character copy of `requireAssignable`'s, and a rule with two homes drifts.
 		let stored = try self.assignableValue(anchor, value: value, declared: maxonTypeTag(fieldType), declaredNameId: typeNameIdOf(fieldType), door: FunctionTypeDoor.field, voice: SlotMismatchVoice.assignedPlace)
+		// ⭐⭐ **AND THE IDENTITY THAT VERDICT CANNOT SEE — the door `parseAssignment` has had since OPEN #54
+		// and this one did not.** `assignableValue`'s verdict is tag-based, and a payload-free ENUM field is
+		// `named` + SCALAR, so it takes the arm above rather than the managed one: `checkDeclaredType(named,
+		// named)` AGREES for any two enums, and `h.c = Shade.light` on a `Color` field compiled and stored
+		// (MEASURED 2026-08-06, BATCH32 — `requireSlotAggregateIdentity` carries the full note). All three
+		// field doors funnel through here, so the literal and the two writes are closed by the one check.
+		try self.requireSlotAggregateIdentity(fieldType, value: value, assignedName: self.fieldSiteName(layout, index: index), voice: SlotMismatchVoice.assignedPlace, anchor: anchor)
 		// ⭐ **THE FIELD'S DECLARED RANGE BINDS WHAT IS STORED IN IT (P1.9).** The site is recorded on the
 		// COERCED value, not the parsed one: that is the value the slot receives, and for a widening door
 		// (an int meeting a declared float) it is a different SSA id. All three field doors — the struct
@@ -33512,24 +33519,67 @@ export type Parser
 			return
 		end 'stringOk'
 
-		// The tag check above (`got != wantTag`) is EXACT, so reaching here means both tags are equal — and
-		// the only tag a struct/union storage and a value can share while disagreeing on aggregate identity
-		// is the overloaded `named` (a boxed union slot met by a ranged-int alias value, or the reverse).
-		// `namedAggregatesConflict` (extended by #59) catches that scalar-vs-aggregate case as well as two
-		// distinct aggregates, and `displayTypeNameOf` prints the scalar side's primitive rather than an
-		// empty name.
+		// The tag check above (`got != wantTag`) is EXACT, so a value reaching the identity question from
+		// HERE shares its tag with the slot — and the only tag a struct/union storage and a value can share
+		// while disagreeing on aggregate identity is the overloaded `named` (a boxed union slot met by a
+		// ranged-int alias value, or the reverse). `namedAggregatesConflict` (extended by #59) catches that
+		// scalar-vs-aggregate case as well as two distinct aggregates.
+		try self.requireSlotAggregateIdentity(storage, value: value, assignedName: assignedName, voice: voice, anchor: anchor)
+	end 'requireManagedValueMatches'
+
+	// ⭐⭐ **THE AGGREGATE-IDENTITY HALF OF A SLOT STORE, ASKED BY THE MANAGED FIELD DOOR AND BY THE SCALAR
+	// ONE — because a `named` ENUM FIELD IS SCALAR, AND IT WAS THE COERCION SITE THAT NEVER ASKED.**
+	// `aggregatesConflict`'s header names the parser's five symmetric doors, and the fifth is the
+	// "union-payload / struct-literal store" — which reached only the MANAGED path. A payload-free enum's
+	// value is its i64 tag, so an enum-typed field is not managed and fell through `requireFieldType`'s
+	// scalar arm, where `assignableValue`'s verdict is `checkDeclaredType(named, named)` — and that AGREES
+	// for any two enums.
+	//
+	// **MEASURED 2026-08-06 (BATCH32), on `type Holder` with `export var c as Color`:** `h.c = Shade.light`
+	// and `Self{c: Shade.light}` both COMPILED and stored, where the bootstrap oracle refuses both
+	// (`error E3005 … to field 'c' of 'Holder', which holds 'Color'`). The stored tag then reads back under
+	// the other enum's name — `specs/assignment.md`'s own `error.retype-enum-field-errors` and
+	// `error.wrong-enum-in-struct-literal-field-errors` are the pair that names it, and it is the identical
+	// defect `parseAssignment`'s door was given this check for one slot up (OPEN #54/#59).
+	//
+	// It is EXTRACTED rather than copied for the reason `requireFieldType`'s own header gives about the four
+	// `DeclaredTypeMatch` arms that once stood there: a rule with two homes drifts, and this one already had
+	// two readers before it had a name.
+	//
+	// ⚠ **THE TWO NAMES DECIDE THE VERDICT AND DO NOT SPELL IT** — `parseAssignment`'s aggregate-retype
+	// check carries the identical note for the identical reason (user ruling, 2026-08-04): an aggregate
+	// name is the IDENTITY two values are compared on, and a generic instance's identity is a canonical
+	// mint no source line holds. Both sides render through `displayTypeNameOf` so this door and the
+	// ARGUMENT door spell one type one way — and where the DECLARED side is the scalar half of the
+	// mismatch, that renderer prints its primitive rather than the empty name the verdict was decided on.
+	//
+	// ⚠ It reads the PARSED value at both call sites and never a coerced one, exactly as
+	// `parseAssignment`'s check does: a widening only ever produces a float scalar, whose aggregate name is
+	// empty either way, so the question is the same one before and after the coercion.
+	function requireSlotAggregateIdentity(storage MaxonType, value ValueId, assignedName String, voice SlotMismatchVoice, anchor Token) throws ParseError
+		let got = self.tagOf(value)
+		let wantTag = maxonTypeTag(storage)
+		// ⭐⭐ **AN OPAQUE `T` SLOT HAS NO IDENTITY TO COMPARE, AND SAYING SO IS NOT THE SAME AS ADMITTING
+		// ANYTHING.** A generic body's `export var value as T` arrives here UNSUBSTITUTED — this door is
+		// handed the layout's declared type and not the instance — so `aggregateNameOf` answers EMPTY for
+		// the slot while the concrete value answers `Label`, and the identity question would refuse the
+		// very write the instance exists to permit. **MEASURED 2026-08-06 (BATCH32):** without this,
+		// `b.value = Label.create(…)` on a `Box with Label` was `E3005 cannot assign 'Label' to variable
+		// 'Box.value' of type 'type parameter'` — `generic-types`' two `opaque-field-write-on-a-concrete-
+		// instance-drops-a-*-argument` cases, both of which the compiler ran green before and after.
 		//
-		// ⚠ **THE TWO NAMES DECIDE THE VERDICT AND DO NOT SPELL IT** — `parseAssignment`'s aggregate-retype
-		// check carries the identical note for the identical reason (user ruling, 2026-08-04): an aggregate
-		// name is the IDENTITY two values are compared on, and a generic instance's identity is a canonical
-		// mint no source line holds. Both sides render through `displayTypeNameOf` so this door and the
-		// ARGUMENT door spell one type one way.
+		// The concrete identity is NOT lost by skipping: it is pinned at the CALL SITE, by
+		// `SemanticCheck.checkTypeParameterArgsAt` against the instance's substituted argument — which is
+		// the same division of labour `aggregatesConflict`'s header records for a per-instance `Idx`.
+		if wantTag == ValueTypeTag.typeParameter 'opaqueSlot'
+			return
+		end 'opaqueSlot'
 		let wantName = self.aggregateNameOf(wantTag, nameId: typeNameIdOf(storage))
 		let gotName = self.aggregateNameOf(got, nameId: self.valueNameId(value))
 		if self.signatures.aggregatesConflict(wantName, expectedTag: wantTag, expectedNameId: typeNameIdOf(storage), got: gotName, gotTag: got, gotNameId: self.valueNameId(value)) 'nameMismatch'
 			throw self.slotMismatchError(voice, assignedName: assignedName, got: self.valueDisplayTypeName(value), gotTag: got, resolvedExpected: self.displayTypeNameOf(wantTag, nameId: typeNameIdOf(storage)), declared: wantTag, declaredNameId: typeNameIdOf(storage), line: anchor.line, column: anchor.column)
 		end 'nameMismatch'
-	end 'requireManagedValueMatches'
+	end 'requireSlotAggregateIdentity'
 
 	// ⭐ **FILL EVERY OMITTED SLOT THAT DECLARES A DEFAULT** — `export var value = 0` + `Self{}`.
 	//

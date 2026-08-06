@@ -1,0 +1,22 @@
+// Test: cross-file-exported-reads-own-private-declared-last
+// --- file: app/main.maxon
+let TOTAL = BASE * 2
+
+function main() returns ExitCode
+	return TOTAL
+end 'main'
+
+// --- file: api/base.maxon
+let SECRET = 20
+export let BASE = SECRET + 1
+---
+ExitCode: 42
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 r8, 42
+    x64.popReg rbp
+    x64.ret
+}

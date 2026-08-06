@@ -376,3 +376,239 @@ end 'main'
 ```stdout
 test.txt
 ```
+
+<!-- test: cross-file-constant-in-initializer -->
+A top-level `let` initializer may reference an exported constant from another file. The declaring
+file here is fed to the compiler LAST, after the file that reads it — resolution is by declaration,
+not by the order the files happen to arrive, so the reference resolves either way.
+```maxon
+// --- file: app/main.maxon
+let TOTAL = BASE * 2
+
+function main() returns ExitCode
+	return TOTAL
+end 'main'
+
+// --- file: api/base.maxon
+export let BASE = 21
+```
+```exitcode
+42
+```
+
+<!-- test: cross-file-constant-in-initializer-declared-first -->
+The same program with the declaring file fed FIRST. Both orders must produce the same executable.
+```maxon
+// --- file: api/base.maxon
+export let BASE = 21
+
+// --- file: app/main.maxon
+let TOTAL = BASE * 2
+
+function main() returns ExitCode
+	return TOTAL
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: cross-file-constant-chain -->
+A cross-file constant chain folds transitively, in either direction, regardless of which file
+declares which link.
+```maxon
+// --- file: app/main.maxon
+let FINAL = MIDDLE + 2
+
+function main() returns ExitCode
+	return FINAL
+end 'main'
+
+// --- file: api/middle.maxon
+export let MIDDLE = ROOT * 4
+
+// --- file: api/root.maxon
+export let ROOT = 10
+```
+```exitcode
+42
+```
+
+<!-- disabled-test: error.circular-dependency-cross-file -->
+<!-- MEASURED 2026-08-06 (BATCH32): the cycle IS detected — `error E2012: api/<fragment>:10:12: Circular dependency detected among global constants: A, B` — but shv2 emits ONE of canonical's two diagnostics. Canonical folds each file in its own perspective, so each participating file reports the cycle from its own side (`B, A` from `app/main.maxon` as well); shv2 folds the whole program once and reports the cycle once. How many times one cycle is worth reporting is a diagnostic-multiplicity ruling, not a missing detection. -->
+A cycle among top-level constants is reported as a circular dependency even when the cycle spans
+files. Each participating file folds its own constants, so each reports the cycle it is in, naming
+the file that closes it from that file's side. Before constant resolution became order-independent
+this was an `E2004 Undefined constant` naming one arbitrary participant — whichever file the
+filesystem happened to hand over second — because the cycle guard was never reached at all.
+```maxon
+// --- file: app/main.maxon
+export let A = B + 1
+
+function main() returns ExitCode
+	return 0
+end 'main'
+
+// --- file: api/b.maxon
+export let B = A + 1
+```
+```maxoncstderr
+error E2012: api/specs/fragments/top-level-let/error.circular-dependency-cross-file.test:10:12: Circular dependency detected among global constants: A, B
+error E2012: app/specs/fragments/top-level-let/error.circular-dependency-cross-file.test:3:12: Circular dependency detected among global constants: B, A
+```
+
+<!-- test: error.file-private-constant-cross-file -->
+A file-private (non-exported) top-level `let` is not a constant another file may read, so a
+cross-file reference to one from a constant initializer is undefined — the whole-program view the
+compiler takes of constant DECLARATIONS does not widen their VISIBILITY.
+```maxon
+// --- file: api/secret.maxon
+let SECRET = 5
+
+export function useSecret() returns ExitCode
+	return SECRET as ExitCode
+end 'useSecret'
+
+// --- file: app/main.maxon
+let COPY = SECRET * 2
+
+function main() returns ExitCode
+	return COPY + useSecret()
+end 'main'
+```
+```maxoncstderr
+error E2004: app/specs/fragments/top-level-let/error.file-private-constant-cross-file.test:10:12: Undefined constant 'SECRET'
+```
+
+<!-- test: cross-file-exported-reads-own-private-declared-last -->
+An exported constant whose initializer reads a constant PRIVATE to its own declaring file resolves
+to the right value from another file — because it is folded in ITS declarer's perspective, where
+that private is visible, not in the demander's. The declaring file is fed LAST here; it must give
+the same result as when fed first (below).
+```maxon
+// --- file: app/main.maxon
+let TOTAL = BASE * 2
+
+function main() returns ExitCode
+	return TOTAL
+end 'main'
+
+// --- file: api/base.maxon
+let SECRET = 20
+export let BASE = SECRET + 1
+```
+```exitcode
+42
+```
+
+<!-- test: cross-file-exported-reads-own-private-declared-first -->
+The same program with the declaring file fed FIRST. Both orders must produce the same executable —
+this is the order-independence the residual fix closes.
+```maxon
+// --- file: api/base.maxon
+let SECRET = 20
+export let BASE = SECRET + 1
+
+// --- file: app/main.maxon
+let TOTAL = BASE * 2
+
+function main() returns ExitCode
+	return TOTAL
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: cross-file-exported-cast-to-own-private-alias-declared-last -->
+An exported constant whose initializer casts to a ranged `typealias` PRIVATE to its own declaring
+file folds in the declarer's perspective, resolving that file-private alias — the cast type is
+looked up as the declarer would see it, not the demander. Declaring file fed LAST.
+```maxon
+// --- file: app/main.maxon
+let VALUE = BASE
+
+function main() returns ExitCode
+	return VALUE
+end 'main'
+
+// --- file: api/base.maxon
+typealias Small = int(0 to 100)
+export let BASE = 21 as Small
+```
+```exitcode
+21
+```
+
+<!-- test: cross-file-exported-cast-to-own-private-alias-declared-first -->
+The same program with the declaring file fed FIRST — the same executable either way.
+```maxon
+// --- file: api/base.maxon
+typealias Small = int(0 to 100)
+export let BASE = 21 as Small
+
+// --- file: app/main.maxon
+let VALUE = BASE
+
+function main() returns ExitCode
+	return VALUE
+end 'main'
+```
+```exitcode
+21
+```
+
+<!-- test: cross-file-private-constant-name-collision -->
+Two files each declare a PRIVATE constant of the same name with different values, each read through
+an exported constant. The exported constants must fold against their OWN file's private — proving
+the fold memo keys by declaration identity, not by bare name. A name-keyed memo would serve the
+first `SECRET` folded (20) for the second, making BVAL 21 and the total 42 instead of 122.
+```maxon
+// --- file: app/main.maxon
+let RESULT = AVAL + BVAL
+
+function main() returns ExitCode
+	return RESULT
+end 'main'
+
+// --- file: api/a.maxon
+let SECRET = 20
+export let AVAL = SECRET + 1
+
+// --- file: lib/b.maxon
+let SECRET = 100
+export let BVAL = SECRET + 1
+```
+```exitcode
+122
+```
+
+### Error: A runtime-initialized global must consume everything up to the end of its line
+
+A global whose initializer is not constant-foldable is re-parsed later, out of the token region the
+declaration scan marked off, and whatever the expression did not reach was abandoned — so
+`var g = Box.create() zzz` compiled, ran, and ignored `zzz`. The same rule the interpolation body and
+the captured parameter default now follow.
+
+<!-- disabled-test: error.runtime-init-trailing-tokens -->
+<!-- MEASURED 2026-08-06 (BATCH32): shv2 refuses the program at the SAME position under a different code — `error E2045: <fragment>:12:22: Global initializer for 'g' is not a constant expression: 'zzz' cannot be evaluated at compile time`, where canonical expects `E2010 Expected 'end of global initializer' but got 'zzz'`. The defect this case guards — a trailing token silently ABANDONED — does not exist here: probed `let K = 3 zzz`, where shv2 and the bootstrap emit the identical E2045, and probed `var g = Box.create()` without the trailing token, which shv2 compiles and runs. shv2 routes a runtime-initialized global through the same constant-fold complaint rather than a trailing-token one, so this is WHICH diagnostic, not WHETHER. -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Box
+	export var v as Integer
+
+	export static function create() returns Self
+		return Self{v: 3}
+	end 'create'
+end 'Box'
+
+var g = Box.create() zzz
+
+function main() returns ExitCode
+	return g.v
+end 'main'
+```
+```maxoncstderr
+error E2010: specs/fragments/top-level-let/error.runtime-init-trailing-tokens.test:12:22: Expected 'end of global initializer' but got 'zzz'
+```

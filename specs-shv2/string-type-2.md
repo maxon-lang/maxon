@@ -777,9 +777,13 @@ end 'main'
 ### Append a String to Itself
 `s.append(s)` ALIASES the argument to the receiver's own bytes, so the source of the blit is the buffer the
 grow has just replaced. The result must still be the doubled text, and the run must stay leak-free: the old
-allocation may only be released once BOTH the grow's copy and the blit have finished reading it. shv2-authored
-(the corpus has no self-append case); the expected output is the bootstrap oracle's, which produces `abcabc`
-for the same program.
+allocation may only be released once BOTH the grow's copy and the blit have finished reading it. shv2-authored;
+the expected output is the bootstrap oracle's, which produces `abcabc` for the same program.
+
+⚠ The parenthetical here read *"the corpus has no self-append case"* until BATCH32, and it was wrong:
+`specs/ownership-edge-cases.md` carries `rc-repeated-self-append`, which is now ported beside it. That case
+appends TWICE, and the second round is the one this case cannot reach — the first append detaches a literal
+onto an owned buffer, so only the second grow FREES the block it is copying from. Keep both.
 ```maxon
 function main() returns ExitCode
 	var s = "abc"
