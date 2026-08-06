@@ -3178,10 +3178,15 @@ export let ArrayErrorTypeName = b"ArrayError"
 
 // ⭐⭐ **`StringError` — WHAT EVERY THROWING `String` OPERATION THROWS, AND IT WEARS THE BARE NAME FOR
 // `ArrayError`'S EXACT REASON.** `stdlib/String.maxon:6-9` declares it with exactly two cases, and its
-// provenance is `ArrayError`'s to the letter: a module the stdlib loader CANNOT list — `String` is
-// compiler-owned, so `stdlib/String.maxon` is unlistable by construction and not merely unlisted (see
-// `TypeResolution.isCompilerOwnedTypeName`'s `String`/`Character` paragraph) — so there is no declaration to
-// be read and the compiler synthesizes what that file declares (`Project.builtinStringErrorEnum`).
+// provenance is `ArrayError`'s to the letter: a module the stdlib loader does not list, so there is no
+// declaration to be read and the compiler synthesizes what that file declares
+// (`Project.builtinStringErrorEnum`).
+//
+// ⚠ **"UNLISTABLE BY CONSTRUCTION AND NOT MERELY UNLISTED" is what this paragraph used to claim, on the
+// ground that `String` is compiler-owned — and W16 measured that false.** Compiler-ownership reserves a name
+// against a USER declaration and has never barred the corpus. What is UNLISTED and what is UNLISTABLE were
+// one word apart here, and the difference decides whether this synthesis is permanent or scaffolding: it is
+// scaffolding, and it retires when String's representation converges with the corpus declaration's.
 //
 // ⚠ It cannot be `__StringError` for the reason `ArrayError` cannot be `__ArrayError`: SOURCE ALREADY SPELLS
 // THE BARE NAME in a `throws` clause — `stdlib/CommandLine.maxon:29,39` write `throws StringError` and
@@ -5733,14 +5738,15 @@ export type ProgramSignatures
 			end 'eachMovedEnum'
 		end 'typeMemberIdsMoved'
 
+		// The fold already knows the file's provenance, so the corpus/user split a compiler-owned type name
+		// turns on (`Project.declarationContestsACompilerOwnedName`) is DERIVED here once per file rather than
+		// per declaration — and derived through the one predicate that owns it, never re-spelled
+		// (`livesUnderStdlibDirectory`). Both declaration loops below read it, so it precedes both.
+		let declaredByTheCorpus = livesUnderStdlibDirectory(self, isStdlibSource: isStdlibSource)
 		for layout in structs 'eachStruct'
-			self.recordStruct(layout)
+			self.recordStruct(layout, declaredByTheCorpus: declaredByTheCorpus)
 		end 'eachStruct'
 
-		// The fold already knows the file's provenance, so the corpus/user split a compiler-owned enum name
-		// turns on (`Project.upsertDeclaredEnum`) is DERIVED here once per file rather than per declaration —
-		// and derived through the one predicate that owns it, never re-spelled (`livesUnderStdlibDirectory`).
-		let declaredByTheCorpus = livesUnderStdlibDirectory(self, isStdlibSource: isStdlibSource)
 		for enumLayout in enums 'eachEnum'
 			self.recordEnum(enumLayout, declaredByTheCorpus: declaredByTheCorpus)
 		end 'eachEnum'
@@ -6213,18 +6219,9 @@ export type ProgramSignatures
 	// `StructField`'s 7 payload fields — `isMutable` survives, `hasDefault` was never written — so
 	// every cached stdlib field arrives claiming it has no default. A hand-listed copy of a record's
 	// fields is a copy that can be short by one, silently. Keep the list in ONE function.
-	function recordStruct(layout StructLayout)
-		// ⭐⭐ **A DECLARED `type` UNDER A COMPILER-OWNED NAME IS NOT REGISTERED — `upsertDeclaredEnum`'s
-		// rule, one registry over (P1.8 Slice E).**
-		//
-		// ⚠ **W3 GAVE THE ENUM REGISTRY A PROVENANCE TEST AND DELIBERATELY DID NOT GIVE THIS ONE ONE**, so
-		// the two rules have parted: a compiler-owned ENUM name may be declared by the CORPUS, because the
-		// compiler now READS two of them out of `stdlib/Interfaces.maxon` rather than transcribing them. No
-		// compiler-owned STRUCT name has a declaration to read — `String`, `Character` and `CharSet` name
-		// modules the loader cannot list at all (see `TypeResolution.isCompilerOwnedTypeName`'s
-		// `String`/`Character` paragraph) — so widening this door would admit a declaration nothing consults,
-		// and admit it from stdlib and user files alike. The asymmetry is which registry the compiler reads,
-		// not an oversight; the day a listed module declares one of these names, this arm gains the same bit.
+	function recordStruct(layout StructLayout, declaredByTheCorpus bool)
+		// ⭐⭐ **A DECLARED `type` UNDER A COMPILER-OWNED NAME MAY COME FROM THE CORPUS AND FROM NOTHING ELSE
+		// — `upsertDeclaredEnum`'s rule, one registry over, now spelled the SAME WAY (W16).**
 		//
 		// The parse-time reject
 		// (`Parser.requireTypeNameNotCompilerOwned`, E2015) is what the AUTHOR sees, but it cannot be what
@@ -6239,9 +6236,27 @@ export type ProgramSignatures
 		// opened** — the user's struct having captured the parameter type of a module they did not write.
 		// Dropping the declaration at the single write makes the collision unrepresentable rather than merely
 		// diagnosed, which is the property the enum registry already has and for the same stated reason.
-		if isCompilerOwnedTypeName(layout.name) 'compilerOwned'
+		//
+		// ⭐⭐ **THE PROVENANCE BIT IS W16's, AND IT CURES TWO REACHABLE COMPILER PANICS.** This arm used to
+		// drop EVERY declaration of such a name, corpus included, on the stated premise that no listed module
+		// could ever declare one. That premise described the loader's whitelist, not the language — and the
+		// two doors over this one rule had parted: `requireTypeNameNotCompilerOwned` ADMITS a stdlib file
+		// (`livesUnderStdlibDirectory`), so the real parse walked into `type String`'s body while this write
+		// had just thrown its layout away. The parser then asked for the layout of the declaration it was
+		// standing inside and found none.
+		// ⚠ MEASURED on the unchanged tree, and they are PANICS rather than diagnostics:
+		//   `maxon-shv2 build stdlib/String.maxon`     ⇒ panic, `Parser.enclosingLayout`
+		//   `maxon-shv2 build stdlib/Character.maxon`  ⇒ panic, `Parser.requireConstructible`
+		// Both blamed the declaration sweep for disagreeing with `parseTypeDeclaration` about what opens a
+		// type declaration. They agreed perfectly; it was this REGISTRY that dropped what both had read.
+		// ⇒ The rule is now the one sentence `upsertDeclaredEnum` already states — **a compiler-owned type
+		// name may be declared by the CORPUS and by nothing else** — and a USER declaration is dropped here
+		// exactly as before, which is what keeps `isCompilerOwnedTypeName`'s two measured silent wrong answers
+		// (a user `hash()` answering 7 where djb2 answers 5381; `Set with String` counting 3 where the control
+		// says 2) closed. `specs-shv2/string-conformance.md`'s two `may-not-bind-the-name` cases pin it.
+		if declarationContestsACompilerOwnedName(layout.name, declaredByTheCorpus: declaredByTheCorpus) 'aUserContest'
 			return
-		end 'compilerOwned'
+		end 'aUserContest'
 
 		// The declaration-order handle, minted in the SAME act as the map entry — `recordInterfaceDeclaration`'s
 		// discipline, for the reason stated at `structNamesInDeclOrder`. Asked BEFORE the upsert, so a

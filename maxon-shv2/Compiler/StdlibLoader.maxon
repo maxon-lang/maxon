@@ -352,11 +352,20 @@ function whitelistedStdlibModules(stdlibDir FilePath) returns MaxonSourcePathSet
 	// reserve nothing from a user program; and it redeclares no builtin type. It has no imports.
 	//
 	// ⚠ **ITS ONE BLOCKER WAS `Codepoint`, AND THE FIX IS NOT ANOTHER ENTRY HERE.** The parameter type is
-	// declared in `stdlib/Character.maxon`, which shv2 cannot load: `Character` is a name the compiler owns,
-	// and MEASURED, listing it is `E3005 Cannot return 'struct' from function declared to return
-	// 'Character'` at that module's own `static function init`. So `Codepoint` is answered where the
+	// declared in `stdlib/Character.maxon`, which shv2 cannot load YET — MEASURED, listing it is
+	// `E3005 Cannot return 'struct' from function declared to return 'Character'` at that module's own
+	// `static function init`. So `Codepoint` is answered where the
 	// compiler already answers for `HashValue` — `isSynthesizedIntAliasName`, whose header carries the
 	// argument in full. With that, `maxon-shv2 build stdlib/helpers/string/utf16.maxon` compiles clean.
+	//
+	// ⚠ **THE REASON GIVEN HERE USED TO BE "`Character` is a name the compiler owns", AND THAT WAS NOT THE
+	// BLOCKER (W16).** Being compiler-owned reserves the name against a USER declaration; it never barred the
+	// corpus, and `Parser.requireTypeNameNotCompilerOwned` has always admitted a stdlib file. What DID bar it
+	// was a second door disagreeing with that one — `ProgramSignatures.recordStruct` dropped the corpus
+	// declaration too — and between this entry's rung and W16 that mismatch stopped merely blocking the module
+	// and started PANICKING the compiler on it, masking the very E3005 quoted above. The panic is fixed and
+	// the E3005 above is re-measured and current: it is the real blocker, and it is about String's
+	// REPRESENTATION (see `TypeResolution.isCompilerOwnedTypeName`), not about who may spell the name.
 	try listWhitelistedModule(stdlibDir, relative: "helpers/string/utf16.maxon", into: listed)
 	// ⭐⭐ **A1s — THE RESERVED-SPACE MODULE, AND THE ONE ENTRY THAT BREAKS THREE OF THIS FILE'S OWN RULES
 	// ON PURPOSE.** `stdlib/Builtins.maxon` is where the language's compiler-facing declarations actually
@@ -425,10 +434,14 @@ function whitelistedStdlibModules(stdlibDir FilePath) returns MaxonSourcePathSet
 	//     half-renamed.
 	//
 	// ⚠ Its blockers were TWO `String` methods, and neither was a missing type: `addressableBytes()` and
-	// `byteAtOrPanic()` are `module function`s of `stdlib/String.maxon` — a file shv2 does not and will not
-	// parse, since `String` is compiler-owned — so they are answered as dispatch arms gated on the caller's
+	// `byteAtOrPanic()` are `module function`s of `stdlib/String.maxon` — a file this loader does not list —
+	// so they are answered as dispatch arms gated on the caller's
 	// file being physically under `stdlib/` (`Parser.requireStdlibOnlyStringMethod`), which is what keeps a
 	// user program's `"x".addressableBytes()` refused exactly as the oracle refuses it.
+	// ⚠ **"and will not parse, since `String` is compiler-owned" is what this line used to say, and W16
+	// measured it false**: shv2 parses that module today (to an `E3005` about String's representation, not to
+	// a refusal about its name). These two arms stay exactly as they are until the module is LISTED, which
+	// convergence gates; nothing here changes on the strength of the module merely parsing.
 	//
 	// ⚠ **THAT GATE MUST READ `livesUnderStdlibDirectory`, NEVER `isStdlibSource`** — the first version read
 	// the latter and broke `maxon-shv2 build stdlib/URL.maxon`, i.e. the command THIS FILE's collision rule
@@ -544,9 +557,13 @@ function whitelistedStdlibModules(stdlibDir FilePath) returns MaxonSourcePathSet
 	// So `optionValue`'s two obstacles were this entry's obstacles as much as `args()`'s were:
 	//   1. `String.indexAfter` did not exist — now built (`__strix_after`, a reuse of `__strix_advance`);
 	//   2. `throw StringError.notFound` did not parse, because `StringError` is declared in
-	//      `stdlib/String.maxon`, which this loader can never list (`String` is compiler-owned). It is now
+	//      `stdlib/String.maxon`, which this loader does not list. It is now
 	//      SYNTHESIZED, exactly as `ArrayError` already was for the identical provenance
 	//      (`Project.builtinStringErrorEnum`).
+	//      ⚠ **"can NEVER list (`String` is compiler-owned)" is what this line used to say, and W16 measured
+	//      it false** — compiler-ownership reserves the name against a USER declaration and never against the
+	//      corpus. The module is unlisted because its REPRESENTATION has not converged, not because of a rule
+	//      about the name; see `TypeResolution.isCompilerOwnedTypeName`.
 	//
 	// MEASURED before listing, which is the check this file's rule prescribes:
 	// `maxon-shv2 build stdlib/CommandLine.maxon` exits 1 with `E3001: No 'main' function found` AND NOTHING

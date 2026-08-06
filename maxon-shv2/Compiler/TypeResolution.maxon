@@ -873,10 +873,27 @@ end 'resolveType'
 //     user's `equals` answered `false`.
 // A third door — the direct `s.hash()` / `s.equals(t)` dispatch — opened in the same rung, which is what
 // forced the fact to be enforced rather than merely asserted: `StdlibLoader` already said in prose that
-// "`String` is compiler-owned" and that "`Character` is a name the compiler owns" (it is why neither
-// `stdlib/String.maxon` nor `stdlib/Character.maxon` can ever be whitelisted), while nothing checked it.
+// "`String` is compiler-owned" and that "`Character` is a name the compiler owns", while nothing checked it.
 // `IrInterface.isBuiltinConformanceImplName` now DEPENDS on this line: it declares every `String.`-qualified
-// callee to be the compiler's own, which is true only while no user declaration can mint one.
+// callee to be the compiler's own, which is true only while no USER declaration can mint one.
+//
+// ⛔⛔ **AND THAT LAST WORD IS THE WHOLE OF IT — THE RESERVATION IS OVER *WHOSE* DECLARATION, NOT OVER
+// WHETHER ONE EXISTS. THIS PARAGRAPH USED TO SAY "…which is why neither `stdlib/String.maxon` nor
+// `stdlib/Character.maxon` can EVER be whitelisted", AND THAT CLAUSE WAS FALSE (W16).** It described shv2's
+// scaffolding as if it were a law about the language, and **both reference compilers disprove it**: the C#
+// bootstrap and v1 each hold `String` as a builtin AND compile `stdlib/String.maxon` — indeed each takes
+// String's whole LAYOUT from that file and neither has a name-reservation list at all.
+// ⚠ **WHAT THE CLAUSE ACTUALLY DESCRIBED WAS A BUG, AND IT WAS COSTING TWO REACHABLE COMPILER PANICS.**
+// `Parser.requireTypeNameNotCompilerOwned` admits a stdlib file, so the real parse walked into `type String`'s
+// body — while `ProgramSignatures.recordStruct` was dropping EVERY declaration of such a name, the corpus's
+// included, and the parser then found no layout for the declaration it stood inside. MEASURED before the fix:
+// `maxon-shv2 build stdlib/String.maxon` panicked in `enclosingLayout` and `.../Character.maxon` in
+// `requireConstructible`. Giving that one write the provenance bit `upsertDeclaredEnum` already had cures
+// both; see `SignatureIndex.recordStruct` for the measurement.
+// ⇒ Neither module is listed YET, and the remaining blocker is NOT this rule. It is that shv2 keeps String's
+// REPRESENTATION itself (`Runtime/StringRuntime.StringRecordBytes`, a fused 48-byte record of six flat
+// 8-byte slots) while the corpus declares two fields — so a corpus `String{managed: …}` would build against
+// offsets the builtin does not read. Reconciling those is CONVERGENCE, and it is a separate slice.
 //
 // ⚠ Neither name costs a program anything it could use. `Character` is the same case in every particular,
 // including the same two synthesized impls under `Character.hash`/`Character.equals`; it is reserved with
@@ -930,13 +947,24 @@ export function denotedNamedType(signatures ProgramSignatures, name ByteArray, i
 	// ⚠ **ONLY `exitCode` IS ADMITTED, and the bound is MEASURED rather than cautious.** The table also
 	// answers for `bool`/`int`/`float`/`String`, and those answers are correct at the INTERFACE door (which
 	// asks about a RENDERED type name) and WRONG here (which asks what a `named` REFERENCE denotes):
-	// `bool`/`int`/`float` are keywords, `String`/`Character` are settled syntactically by
+	// `bool`/`int`/`float` are keywords and `String`/`Character` are settled syntactically by
 	// `Parser.parseTypeReference`, so a `named` reference never carries one of those names from a type
-	// position — but a user `enum String` is legal (`String` is deliberately not in
-	// `isCompilerOwnedTypeName`) and `Self` is NOT settled syntactically, so `Self` inside it DOES arrive
-	// here as `named("String")`. MEASURED: `enum String` with an `export function flip() returns Self`
-	// compiles and runs on the host and on wasm. This arm precedes `containsEnum`, so admitting the table's
-	// `string` answer would resolve that user enum to the managed builtin instead of to its i64 tag.
+	// position at all.
+	//
+	// ⛔ **THIS PARAGRAPH USED TO REST ON A PROGRAM THAT CAN NO LONGER BE WRITTEN, AND W16 RE-MEASURED IT.**
+	// It argued the bound from a user `enum String` — "`String` is deliberately not in
+	// `isCompilerOwnedTypeName`", so `Self` inside such an enum arrives here as `named("String")` and
+	// admitting the table's `string` answer would resolve it to the managed builtin instead of its i64 tag —
+	// and it carried a MEASUREMENT saying that enum "compiles and runs on the host and on wasm". **Both
+	// halves went stale at BATCH2 slice 2**, which added `String` and `Character` to
+	// `isCompilerOwnedTypeName` for the method-SYMBOL capture the function's own header records. RE-MEASURED
+	// at W16 on this tree: that exact program — `enum String` with an `export function flip() returns Self` —
+	// is now **E2015** (`Parser.requireTypeNameNotCompilerOwned`, which every nominal declaration door asks),
+	// so there is no user declaration left that can route one of these names into a `named` reference.
+	// ⇒ The BOUND is unchanged and is now the stronger of the two arguments standing alone: a name settled
+	// syntactically never reaches this door, so admitting it here could only ever answer for a reference that
+	// cannot arrive. The stale copy is kept visible rather than deleted because it is the second time this
+	// file's own header has had to record that a reservation moved and a justification elsewhere did not.
 	let builtinTag = builtinTypeNameTag(name)
 	if builtinTag == ValueTypeTag.exitCode 'isExitCode'
 		return maxonTypeOfTag(builtinTag, nameId: id)

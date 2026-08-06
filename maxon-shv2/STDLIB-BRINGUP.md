@@ -268,20 +268,48 @@ grepped for `^error `. **They do not error — they PANIC**, and a panic writes 
 that greps for one failure spelling reports the other as success. ⇒ **classify on the EXIT CODE and on
 `^panic` as well as `^error `.**
 
-## The two reachable compiler PANICS
+## The two reachable compiler PANICS — ✅ **FIXED at W16**
 
-Both are the Wave 4 pivot, and they locate it precisely:
+Both were the Wave 4 pivot, and they located it precisely:
 
 ```
 stdlib/String.maxon      panic at Parser.maxon:42773  enclosingLayout:      `type String` is being parsed
 stdlib/Character.maxon   panic at Parser.maxon:33155  requireConstructible: `type Character` is being parsed
 ```
 
-Both say the same thing: *"the declaration sweep never recorded it — `recordScannedType` and
-`parseTypeDeclaration` disagree about what opens a type declaration"*. That IS the syntactic settling
-`TypeResolution.maxon:874-876` describes, seen from the inside: the sweep skips `type String` because the
-name is a builtin, then the parser walks the body anyway and finds no layout. **Wave 4's job is to make
-those two agree**, and this panic is its RED baseline.
+Both said the same thing: *"the declaration sweep never recorded it — `recordScannedType` and
+`parseTypeDeclaration` disagree about what opens a type declaration"*.
+
+⛔ **AND THAT MESSAGE NAMED THE WRONG PAIR. Those two functions agreed perfectly.** The disagreement was
+between the two doors over the *compiler-owned name* rule: `Parser.requireTypeNameNotCompilerOwned` ADMITS a
+stdlib file (`livesUnderStdlibDirectory`), while `ProgramSignatures.recordStruct` dropped EVERY declaration of
+such a name, the corpus's included. So the real parse walked into `type String`'s body and the registry had
+just thrown its layout away. Giving that one write the provenance bit `Project.upsertDeclaredEnum` already
+carried cures both — **the rule is now one sentence in one place**
+(`Project.declarationContestsACompilerOwnedName`): *a compiler-owned type name may be declared by the CORPUS
+and by nothing else.*
+
+⚠ **THE PANIC WAS A REGRESSION THAT MASKED THE REAL BLOCKER, AND THIS FILE'S OWN TABLE RECORDED THE BLOCKER
+BEFORE IT.** `StdlibLoader.maxon`'s `utf16.maxon` entry had already measured `Character.maxon` at
+`E3005 Cannot return 'struct' from function declared to return 'Character'`. Adding `String`/`Character` to
+`isCompilerOwnedTypeName` (BATCH2 slice 2 — correct, and it closes two silent wrong answers) turned that
+diagnostic into a crash, because the strict drop had no provenance bit. **Post-fix, MEASURED, the E3005 is
+back and current:**
+
+```
+stdlib/String.maxon      E3005 :115:3  Cannot return 'struct' from function declared to return 'String'
+                       + E3004 Interfaces.maxon:194:3  undefined 'String.createIterator'
+stdlib/Character.maxon   E3005  :30:3  Cannot return 'struct' from function declared to return 'Character'
+```
+
+⭐ **THE ORACLE COMPILES BOTH MODULES CLEAN** — `maxon build stdlib/String.maxon` and `.../Character.maxon`
+each exit 1 at `E3001: No 'main' function found`, the readiness criterion. So the remaining gap is shv2's
+alone, and it is **not** a rule about who may spell the name: shv2 keeps String's REPRESENTATION itself (a
+fused 48-byte record of six flat 8-byte slots, `Runtime/StringRuntime.StringRecordBytes`) while the corpus
+declares two fields, so a corpus `String{managed: …}` builds against offsets the builtin does not read. Both
+reference compilers instead take String's whole layout FROM that file and neither has a name-reservation list
+at all. ⇒ **listing these two is CONVERGENCE, a separate slice**; the panic cure is not a step toward it that
+can be taken further without moving the representation.
 
 ## ⭐ SHARED BLOCKERS — the leverage, and where the plan is wrong
 
@@ -334,7 +362,7 @@ Same result as the original `insertionSort` control at the top of this file, and
 | module | first diagnostic |
 |---|---|
 | `Array.maxon` | E3086 `:126:10` field `managed` not initialized by this literal (2 errors) |
-| `Character.maxon` | ⛔ **PANIC** `Parser.maxon:33155` `requireConstructible` |
+| `Character.maxon` | E3005 `:30:3` Cannot return 'struct' from function declared to return 'Character' (**panic FIXED at `W16`**; blocker is CONVERGENCE) |
 | `CharacterSet.maxon` | E2010 `:31:9` Expected `function` but got `let` |
 | `Console.maxon` | E3004 `:62:12` `__Builtins.readStdin` undefined — **`W5` in flight** |
 | `HttpClient.maxon` | E2015 `:176:18` member access `send` on an `unknown` value |
@@ -348,7 +376,7 @@ Same result as the original `insertionSort` control at the top of this file, and
 | `Process.maxon` | E3004 `:29:17` `__Builtins.executablePath` undefined — **`W5` in flight** |
 | `Range.maxon` | E3005 via `Interfaces.maxon:223` `Cannot return 'unknown'` (**`S2r`**) |
 | `Set.maxon` | E2015 `:55:11` `insert` reads `sizeof` of the type parameter |
-| `String.maxon` | ⛔ **PANIC** `Parser.maxon:42773` `enclosingLayout` |
+| `String.maxon` | E3005 `:115:3` Cannot return 'struct' from function declared to return 'String' (**panic FIXED at `W16`**; blocker is CONVERGENCE) |
 | `Subprocess.maxon` | E2015 `:357:25` overloading `Subprocess.run` |
 | `TcpClient.maxon` | E2053 `:23:70` second and later arguments must be named |
 | `Testing.maxon` | E2051 `:34:13` `__TestReport` reserved (**`S2n` contracted**) |

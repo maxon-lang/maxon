@@ -3746,12 +3746,30 @@ end 'createEnumRegistry'
 // probe `maxon-shv2 build stdlib/Interfaces.maxon` records the same declarations the loaded module does —
 // see `Parser.requireTypeNameNotCompilerOwned` for why `isStdlibSource` is the wrong bit here.
 export function upsertDeclaredEnum(registry EnumLayoutMap, layout EnumLayout, declaredByTheCorpus bool)
-	if isCompilerOwnedTypeName(layout.name) and not declaredByTheCorpus 'aUserContest'
+	if declarationContestsACompilerOwnedName(layout.name, declaredByTheCorpus: declaredByTheCorpus) 'aUserContest'
 		return
 	end 'aUserContest'
 
 	registry.upsert(layout.name, value: layout)
 end 'upsertDeclaredEnum'
+
+// ⭐ **THE RULE ITSELF, IN ONE PLACE: A COMPILER-OWNED TYPE NAME MAY BE DECLARED BY THE CORPUS AND BY
+// NOTHING ELSE.** Asked by both registries that can be handed such a declaration by a walk that is not a
+// validator — `upsertDeclaredEnum` above, and `ProgramSignatures.recordStruct` one file over (W16).
+//
+// ⚠ **IT IS A FUNCTION BECAUSE THE TWO HAD ALREADY DRIFTED.** Spelled out at each site, the struct registry
+// dropped EVERY such declaration while the enum registry dropped only a user's — and since
+// `Parser.requireTypeNameNotCompilerOwned` admits a stdlib file, the strict copy threw away layouts the real
+// parse then went looking for, taking the compiler down at `enclosingLayout` / `requireConstructible` on
+// `stdlib/String.maxon` and `stdlib/Character.maxon`. One conjunction written twice is what let a rule mean
+// two things; `recordStruct`'s header carries the measurement.
+//
+// The bit is the FILE's (`Queries.livesUnderStdlibDirectory`), never `isStdlibSource` — computed once per
+// file by each caller, so the readiness probe `maxon-shv2 build stdlib/<M>.maxon` records exactly what the
+// loaded module records. See `Parser.requireTypeNameNotCompilerOwned` for why the two bits differ.
+export function declarationContestsACompilerOwnedName(name ByteArray, declaredByTheCorpus bool) returns bool
+	return isCompilerOwnedTypeName(name) and not declaredByTheCorpus
+end 'declarationContestsACompilerOwnedName'
 
 // --- Project: the compiler-wide shared state (Chunk C growth) ---
 //
