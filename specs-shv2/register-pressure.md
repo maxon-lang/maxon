@@ -783,6 +783,197 @@ error E5001: the loop at <fragment>:30 needs 2 more register(s) than are availab
   and the loop body no longer needs a register for each one.
 ```
 
+<!-- test: two-loops-later-one-overflows -->
+<!-- targets: x64-windows, x64-linux -->
+⭐ **THE ANCHOR IS THE PEAK'S OWN LOOP, NOT THE FIRST LOOP IN THE FILE.** Two loops in one function
+and only the SECOND overflows: the `pad` loop's entire body is `pad = pad + 1`, while the sixteen
+accumulators and the counter are the working set of the loop below it. The anchor used to be the
+smallest source line over EVERY block at loop depth ≥ 1 — i.e. over every loop in the function — so
+it named `pad`'s body at `:5` while every value it went on to rank was declared *after* that loop had
+ended. A value declared at `:22` cannot be live in a loop that ends at `:6`: the report contradicted
+itself only because the headline and the ranked list came from different places.
+
+`pad` shows the same wrong region in the RANKING. It is live across the second loop (the `return`
+reads it) and used ZERO times inside it, yet its two uses in the FIRST loop were counted as uses "in
+the loop" and ranked it *below* every accumulator — the one value the author could most cheaply move
+out of the way, listed last. Both numbers now come from the peak's own loop.
+
+It really is one of the eighteen, and that is the point of keeping it in the set: the value the
+`return` reads is the first loop's own carried phi, defined at depth 1, so the store of a cold split
+anchored at its def would land inside the first loop's body — the placement Rule 2 forbids. Nothing
+can move it, so it holds a register across the second loop and is counted.
+```maxon
+function hot(_ int) returns int
+	var pad = 0
+	while pad < 3 'pad'
+		pad = pad + 1
+	end 'pad'
+	var s1 = 1
+	var s2 = 2
+	var s3 = 3
+	var s4 = 4
+	var s5 = 5
+	var s6 = 6
+	var s7 = 7
+	var s8 = 8
+	var s9 = 9
+	var s10 = 10
+	var s11 = 11
+	var s12 = 12
+	var s13 = 13
+	var s14 = 14
+	var s15 = 15
+	var s16 = 16
+	var i = 0
+	while i < 5 'loop'
+		s1 = s1 + i
+		s2 = s2 + i
+		s3 = s3 + i
+		s4 = s4 + i
+		s5 = s5 + i
+		s6 = s6 + i
+		s7 = s7 + i
+		s8 = s8 + i
+		s9 = s9 + i
+		s10 = s10 + i
+		s11 = s11 + i
+		s12 = s12 + i
+		s13 = s13 + i
+		s14 = s14 + i
+		s15 = s15 + i
+		s16 = s16 + i
+		i = i + 1
+	end 'loop'
+	return pad + s1 + s2 + s3 + s4 + s5 + s6 + s7 + s8 + s9 + s10 + s11 + s12 + s13 + s14 + s15 + s16
+end 'hot'
+
+function main() returns ExitCode
+	return hot(0)
+end 'main'
+```
+```maxoncstderr
+error E5001: the loop at <fragment>:25 needs 4 more register(s) than are available
+  18 values must be held in registers at once inside this loop, but
+  only 14 registers are available. The values idle across the loop were already
+  spilled around it at no cost; spilling any of these would put a load or store inside
+  the loop body, which is exactly what this error exists to prevent.
+
+  remove 4 of these 18 value(s) from the loop, cheapest first (ranked by uses inside the loop):
+    <fragment>:3:12   used 0 times in the loop
+    <fragment>:7:11   used 1 time in the loop
+    <fragment>:8:11   used 1 time in the loop
+    <fragment>:9:11   used 1 time in the loop
+    <fragment>:10:11   used 1 time in the loop
+    <fragment>:11:11   used 1 time in the loop
+    <fragment>:12:11   used 1 time in the loop
+    <fragment>:13:11   used 1 time in the loop
+    <fragment>:14:11   used 1 time in the loop
+    <fragment>:15:11   used 1 time in the loop
+    <fragment>:16:12   used 1 time in the loop
+    <fragment>:17:12   used 1 time in the loop
+    <fragment>:18:12   used 1 time in the loop
+    <fragment>:19:12   used 1 time in the loop
+    <fragment>:20:12   used 1 time in the loop
+    <fragment>:21:12   used 1 time in the loop
+    <fragment>:22:12   used 1 time in the loop
+    <fragment>:23:10   used 18 times in the loop
+
+  to fix: hold the loop's working set in an array and index it inside the loop.
+  array elements are never promoted into registers, so the values stay in memory
+  and the loop body no longer needs a register for each one.
+```
+
+<!-- test: nested-loop-anchors-on-the-nest -->
+<!-- targets: x64-windows, x64-linux -->
+A NEST IS ONE REGION, and the loop the message names is the OUTERMOST one containing the peak. The
+overflow is at the inner loop, but the values blocking it are not all the inner loop's: `acc` and `o`
+are the outer loop's, live across the inner one and read only outside it. Neither can be moved out of
+the way — a cold split's store anchors at the def, and both are defined by the outer loop's phis at
+depth 1, so the store would land in the outer body — so the region the author must actually thin is
+the whole nest. That is what the headline names (`:6`, the outer body's first statement) and what the
+use counts are taken over (`s1` is read once by its inner-loop update and once by the outer sum, so
+two).
+
+Naming the INNER loop instead would report `acc` as "used 0 times in the loop" and ask for it to be
+removed from a loop it is not in, while the array rewrite that would actually relieve the peak has to
+happen in the outer body either way. This case is the difference between those two readings: every
+line of it is identical under a whole-function anchor, so it also pins that restricting the scan to
+the peak's own nest changed nothing for a function that has only one.
+```maxon
+function hot(_ int) returns int
+	var acc = 0
+	var o = 0
+	while o < 2 'outer'
+		var i = 0
+		var s1 = 1
+		var s2 = 2
+		var s3 = 3
+		var s4 = 4
+		var s5 = 5
+		var s6 = 6
+		var s7 = 7
+		var s8 = 8
+		var s9 = 9
+		var s10 = 10
+		var s11 = 11
+		var s12 = 12
+		var s13 = 13
+		while i < 5 'inner'
+			s1 = s1 + i
+			s2 = s2 + i
+			s3 = s3 + i
+			s4 = s4 + i
+			s5 = s5 + i
+			s6 = s6 + i
+			s7 = s7 + i
+			s8 = s8 + i
+			s9 = s9 + i
+			s10 = s10 + i
+			s11 = s11 + i
+			s12 = s12 + i
+			s13 = s13 + i
+			i = i + 1
+		end 'inner'
+		acc = acc + s1 + s2 + s3 + s4 + s5 + s6 + s7 + s8 + s9 + s10 + s11 + s12 + s13
+		o = o + 1
+	end 'outer'
+	return acc
+end 'hot'
+
+function main() returns ExitCode
+	return hot(0)
+end 'main'
+```
+```maxoncstderr
+error E5001: the loop at <fragment>:6 needs 2 more register(s) than are available
+  16 values must be held in registers at once inside this loop, but
+  only 14 registers are available. The values idle across the loop were already
+  spilled around it at no cost; spilling any of these would put a load or store inside
+  the loop body, which is exactly what this error exists to prevent.
+
+  remove 2 of these 16 value(s) from the loop, cheapest first (ranked by uses inside the loop):
+    <fragment>:3:12   used 1 time in the loop
+    <fragment>:4:10   used 2 times in the loop
+    <fragment>:7:12   used 2 times in the loop
+    <fragment>:8:12   used 2 times in the loop
+    <fragment>:9:12   used 2 times in the loop
+    <fragment>:10:12   used 2 times in the loop
+    <fragment>:11:12   used 2 times in the loop
+    <fragment>:12:12   used 2 times in the loop
+    <fragment>:13:12   used 2 times in the loop
+    <fragment>:14:12   used 2 times in the loop
+    <fragment>:15:12   used 2 times in the loop
+    <fragment>:16:13   used 2 times in the loop
+    <fragment>:17:13   used 2 times in the loop
+    <fragment>:18:13   used 2 times in the loop
+    <fragment>:19:13   used 2 times in the loop
+    <fragment>:6:11   used 15 times in the loop
+
+  to fix: hold the loop's working set in an array and index it inside the loop.
+  array elements are never promoted into registers, so the values stay in memory
+  and the loop body no longer needs a register for each one.
+```
+
 <!-- test: relievable-param-live-across-loop -->
 A parameter LIVE ACROSS the loop but not USED inside it is cold-spillable, so high pressure
 here is relieved — no E5001. `p` is read before the loop (the `k` computations) and after it

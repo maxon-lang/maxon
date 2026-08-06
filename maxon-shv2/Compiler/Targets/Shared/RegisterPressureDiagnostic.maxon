@@ -25,8 +25,8 @@
 //
 // **THE OVERFLOW IS NOT ALWAYS A LOOP.** It was, until stack arguments removed the six-parameter cap: a
 // straight-line function could not hold more live values than the pool. A wide signature can, so the peak's
-// own block decides the REGION (`LoopBodyDepth` vs `AnyBlockDepth`) and, with it, the anchor, the use
-// counts, and which of the two message bodies is built. The loop body is byte-for-byte unchanged.
+// own block decides the REGION (its enclosing loop NEST, or the whole function) and, with it, the anchor,
+// the use counts, and which of the two message bodies is built. The loop body is byte-for-byte unchanged.
 //
 // **Deterministic byte-for-byte** (the `maxoncstderr` spec block gates it): no map iteration
 // anywhere, values are swept in id order, and the candidate list is sorted by a TOTAL order
@@ -47,15 +47,6 @@
 // (fewer uses in it => fewer reloads after the array rewrite). A count of USES, so it is neither a
 // `UseOrdinal` (which use, of one value) nor a `UseRecordIndex` (which record, of the function).
 typealias RegionUseCount = int(0 to u64.max)
-
-// ⭐ THE OVERFLOWING REGION, as a minimum block loop depth — the ONE thing that differs between the two
-// shapes of E5001, so it is named once and everything downstream is asked in terms of it. A peak inside a
-// LOOP is the case the design was written for: the region is the loop body, and what makes the overflow
-// worth REFUSING rather than spilling is that a spill would land inside a body that runs many times. A peak
-// in STRAIGHT-LINE code overflows the file all the same — a wide signature can hold more live values than
-// the machine has registers with no loop anywhere — and its region is simply the function.
-let LoopBodyDepth = 1 as LoopDepth
-let AnyBlockDepth = 0 as LoopDepth
 
 // One blocking value the user must consider removing from the region: its id, the SOURCE span
 // that declares it (a parameter's declaration, an op-defined value's op, or — for a phi — the
@@ -127,7 +118,7 @@ function buildRegisterPressureMessage(project Project, module TargetModule, func
 	let filePath = func.sourceFilePath.toString()
 
 	// ⭐⭐ **IS THE PEAK EVEN IN A LOOP?** Until stack arguments removed the six-parameter cap it always was:
-	// straight-line code could not hold more live values than the pool, and `loopAnchorLine`'s line-0
+	// straight-line code could not hold more live values than the pool, and the anchor scan's line-0
 	// fallback carried a comment saying it "cannot happen for a real loop overflow". A wide signature made
 	// it happen — ~20 live parameters overflow the file with no loop anywhere — and the message then named
 	// A LOOP THAT DOES NOT EXIST, at line 0, with every candidate "used 0 times in the loop". The REFUSAL is
@@ -135,11 +126,11 @@ function buildRegisterPressureMessage(project Project, module TargetModule, func
 	// re-derives it.
 	let peakLoopDepth = try cfg.loopDepth.get(peak.blockLocal) otherwise panic("buildRegisterPressureMessage: loopDepth.get OOB for peak block {peak.blockLocal}")
 	let peakInLoop = peakLoopDepth != 0
-	let regionDepth = LoopBodyDepth if peakInLoop else AnyBlockDepth
 
-	let candidates = collectCandidates(project, module: module, cfg: cfg, funcIndex: funcIndex, peak: peak, lineage: lineage, regionDepth: regionDepth)
+	let regionOps = collectRegionOps(module, cfg: cfg, peak: peak, peakInLoop: peakInLoop)
+	let candidates = collectCandidates(project, module: module, cfg: cfg, funcIndex: funcIndex, peak: peak, lineage: lineage, regionOps: regionOps)
 	let order = sortedOrder(candidates)
-	let anchorLine = pressureAnchorLine(module, cfg: cfg, project: project, funcIndex: funcIndex, peak: peak, peakInLoop: peakInLoop, candidates: candidates)
+	let anchorLine = pressureAnchorLine(module, project: project, funcIndex: funcIndex, peak: peak, peakInLoop: peakInLoop, candidates: candidates, regionOps: regionOps)
 
 	// EVERY count in the message is the number of LISTED, removable values — `candidates.count()`
 	// (the raw live-virtual working set, exactly what the worklist enumerates). The headline,
@@ -194,8 +185,8 @@ end 'minCount'
 // (see IrValueId), so the def site IS the handle, and it is exactly what ValueOrigin exists
 // to recover.
 // `regionNoun` names what the use count was counted over — "the loop" or "the function", the same region
-// `regionDepth` selected for `usesInRegion`. Passed in rather than re-derived from the depth here, so a
-// count and the noun describing it cannot come apart.
+// `collectRegionOps` gathered the ops `usesInRegion` counted in. Passed in rather than re-derived here, so
+// a count and the noun describing it cannot come apart.
 function candidateList(candidates PressureCandidateArray, order CandidateOrder, filePath String, regionNoun String) returns String
 	var out = StringBuilder.create()
 	for idx in order 'each'
@@ -206,27 +197,29 @@ function candidateList(candidates PressureCandidateArray, order CandidateOrder, 
 	return out.build()
 end 'candidateList'
 
-// The source line the headline anchors on, by region. IN A LOOP it is the loop's first body statement
-// (`loopAnchorLine`, unchanged). IN STRAIGHT-LINE CODE it is the PEAK OP's own line — the point every
-// blocking value is live at, which is the only place the user can act.
+// The source line the headline anchors on, by region. IN A LOOP it is the region's first body statement
+// (`regionAnchorLine`). IN STRAIGHT-LINE CODE it is the PEAK OP's own line — the point every blocking
+// value is live at, which is the only place the user can act.
 //
-// ⚠ NEITHER ROUTE MAY RETURN 0, and the straight-line one needs a fallback to promise that: the peak op is
-// often a spill, a call or a control op that defines no origin-carrying value, and `firstOriginLineOfOp`
-// answers 0 for those. It then falls back to the earliest blocking value's def site, which RULE 3
-// guarantees is real user source. Reporting `:0` — a source position that does not exist — is exactly the
-// old loopless behaviour this replaces.
-function pressureAnchorLine(module TargetModule, cfg FuncCfg, project Project, funcIndex FuncIndex, peak PressurePeak, peakInLoop bool, candidates PressureCandidateArray) returns LineNumber
+// ⚠ NEITHER ROUTE MAY RETURN 0, and BOTH need the same fallback to promise it. The peak op is often a
+// spill, a call or a control op that defines no origin-carrying value, and a region can consist of such
+// ops alone; `firstOriginLineOfOp` answers 0 for each. Both then fall back to the earliest blocking
+// value's def site, which RULE 3 guarantees is real user source. Reporting `:0` — a source position that
+// does not exist — is exactly the old loopless behaviour this replaces, so the guard is stated once here
+// rather than in each route.
+function pressureAnchorLine(module TargetModule, project Project, funcIndex FuncIndex, peak PressurePeak, peakInLoop bool, candidates PressureCandidateArray, regionOps OpIndexArray) returns LineNumber
+	var scanned = 0 as LineNumber
 	if peakInLoop 'loop'
-		return loopAnchorLine(module, cfg: cfg, project: project, funcIndex: funcIndex)
-	end 'loop'
+		scanned = regionAnchorLine(module, project: project, funcIndex: funcIndex, regionOps: regionOps)
+	end 'loop' else 'straightLine'
+		var buf = OperandList.create()
+		let peakOp = try module.ops.get(peak.peakOpIdx) otherwise panic("pressureAnchorLine: peak op {peak.peakOpIdx} not in module.ops")
+		scanned = firstOriginLineOfOp(project, funcIndex: funcIndex, op: peakOp, buf: buf)
+	end 'straightLine'
 
-	var buf = OperandList.create()
-	let peakOp = try module.ops.get(peak.peakOpIdx) otherwise panic("pressureAnchorLine: peak op {peak.peakOpIdx} not in module.ops")
-	let peakLine = firstOriginLineOfOp(project, funcIndex: funcIndex, op: peakOp, buf: buf)
-
-	if peakLine != 0 'atPeakOp'
-		return peakLine
-	end 'atPeakOp'
+	if scanned != 0 'found'
+		return scanned
+	end 'found'
 
 	return earliestCandidateLine(candidates)
 end 'pressureAnchorLine'
@@ -251,44 +244,85 @@ function earliestCandidateLine(candidates PressureCandidateArray) returns LineNu
 	return best
 end 'earliestCandidateLine'
 
-// The source line to anchor "the loop at ..." on: the SMALLEST source line among the Target
-// ops that DEFINE an origin-carrying value inside the loop (blocks at loop depth >= 1). Note
-// the loop's CONDITION (`i < N`) does NOT contribute: it is lowered to a fused `cmp`+`jcc`
-// pair that defines no virtual value (the flags are not an SSA value), so `firstOriginLineOfOp`
-// finds no def to map. The anchor is therefore the first in-loop BODY op that defines a value
-// — the first statement inside the loop — resolved with no dependence on block source info
-// (which does not survive to the Target tier). Falls back to line 0 only if no in-loop op has
-// an origin, which cannot happen for a real loop overflow.
-function loopAnchorLine(module TargetModule, cfg FuncCfg, project Project, funcIndex FuncIndex) returns LineNumber
+// The source line to anchor "the loop at ..." on: the SMALLEST source line among the region's
+// Target ops that DEFINE an origin-carrying value, resolved with no dependence on block source info
+// (which does not survive to the Target tier).
+//
+// ⚠ WHETHER THE LOOP'S CONDITION CONTRIBUTES IS PER-ISA, and the committed goldens show both. x64
+// fuses `i < N` into a `cmp`+`jcc` that defines no virtual value (the flags are not an SSA value), so
+// `firstOriginLineOfOp` finds no def to map there and the anchor is the loop's first BODY statement
+// (`hot-loop-overflow`, `:21`). arm64 materializes the same test with a `cset` into a GPR, which IS an
+// origin-carrying def sited on the `while` line, so the anchor is the `while` itself
+// (`hot-loop-overflow-arm64`, `:32`). Both are "the earliest source line in the region that emits a
+// value", which is the one property this computes.
+//
+// 0 when no op of the region has an origin; `pressureAnchorLine` owns what that means.
+function regionAnchorLine(module TargetModule, project Project, funcIndex FuncIndex, regionOps OpIndexArray) returns LineNumber
 	var best = 0 as LineNumber
 	var found = false
 	var buf = OperandList.create()
-	for i in 0 upto cfg.topo.numBlocks 'eachBlock'
-		let depth = try cfg.loopDepth.get(i) otherwise panic("loopAnchorLine: loopDepth.get OOB")
-		if depth == 0 'notInLoop'
+	for opIdx in regionOps 'eachOp'
+		let op = try module.ops.get(opIdx) otherwise panic("regionAnchorLine: op {opIdx} not in module.ops")
+		let line = firstOriginLineOfOp(project, funcIndex: funcIndex, op: op, buf: buf)
+		if line == 0 'noOrigin'
 			continue
-		end 'notInLoop'
-		let block = blockAt(module, topo: cfg.topo, local: i)
-		var ordered = OpIndexArray.create()
-		collectBlockOps(block, out: ordered)
-		for opIdx in ordered 'eachOp'
-			let op = try module.ops.get(opIdx) otherwise panic("loopAnchorLine: op not in module.ops")
-			let line = firstOriginLineOfOp(project, funcIndex: funcIndex, op: op, buf: buf)
-			if line == 0 'noOrigin'
-				continue
-			end 'noOrigin'
-			if (not found) or line < best 'smaller'
-				best = line
-				found = true
-			end 'smaller'
-		end 'eachOp'
-	end 'eachBlock'
+		end 'noOrigin'
+		if (not found) or line < best 'smaller'
+			best = line
+			found = true
+		end 'smaller'
+	end 'eachOp'
 	return best
-end 'loopAnchorLine'
+end 'regionAnchorLine'
+
+// ⭐ THE OVERFLOWING REGION, as the ops it contains — the ONE thing that differs between the two shapes
+// of E5001, so it is derived ONCE here and everything downstream is asked in terms of it. The anchor and
+// every candidate's use count are both taken over this list, which is what stops the headline and the
+// ranked values below it from describing two different regions.
+//
+//  • A peak inside a LOOP is the case the design was written for: the region is the loop NEST enclosing
+//    the peak's OWN block, and what makes the overflow worth REFUSING rather than spilling is that a
+//    spill would land inside a body that runs many times.
+//  • A peak in STRAIGHT-LINE code overflows the file all the same — a wide signature can hold more live
+//    values than the machine has registers with no loop anywhere — and its region is simply the function.
+//
+// ⚠ **THE NEST, NOT "EVERY BLOCK AT DEPTH >= 1".** A block depth answers "is this block in SOME loop",
+// which every loop in the function answers yes to, so a depth test made a multi-loop function report the
+// EARLIEST loop in the file whatever had overflowed — and then ranked the blocking values by their uses
+// in all of the function's loops at once. In `two-loops-later-one-overflows` that named a loop whose whole
+// body is `pad = pad + 1`, three lines above the declarations of every value it went on to list, and
+// counted `pad`'s two uses in THAT loop as uses of a loop it is merely live across. The peak's block is
+// the only thing that says WHICH loop, and `enclosingLoopBlocks` is what turns it into one.
+function collectRegionOps(module TargetModule, cfg FuncCfg, peak PressurePeak, peakInLoop bool) returns OpIndexArray
+	let region = regionBlocks(cfg, peak: peak, peakInLoop: peakInLoop)
+	var ops = OpIndexArray.create()
+	for i in 0 upto cfg.topo.numBlocks 'eachBlock'
+		let inRegion = try region.get(i) otherwise panic("collectRegionOps: region.get OOB at block {i}")
+		if not inRegion 'outside'
+			continue
+		end 'outside'
+		let block = blockAt(module, topo: cfg.topo, local: i)
+		collectBlockOps(block, out: ops)
+	end 'eachBlock'
+	return ops
+end 'collectRegionOps'
+
+// The region's BLOCKS — the peak's enclosing loop nest, or every block of the function when the peak is
+// not in a loop.
+function regionBlocks(cfg FuncCfg, peak PressurePeak, peakInLoop bool) returns BoolArray
+	if peakInLoop 'inLoop'
+		return enclosingLoopBlocks(cfg.topo, blockLocal: peak.blockLocal)
+	end 'inLoop'
+
+	var everyBlock = BoolArray.create()
+	everyBlock.refill(cfg.topo.numBlocks, value: true)
+	return everyBlock
+end 'regionBlocks'
 
 // The source line of the first VIRTUAL DEF of `op` that has a ValueOrigin, or 0 when the op
 // defines no origin-carrying value (a control/spill op, or a phi-fed value). Used only to find
-// the loop's anchor line, so a 0 (skip) result is fine.
+// the message's anchor line, so a 0 result is fine: the region scan skips such an op, and
+// `pressureAnchorLine` turns a 0 from the peak op itself into the earliest blocking value's line.
 function firstOriginLineOfOp(project Project, funcIndex FuncIndex, op TargetOp, buf OperandList) returns LineNumber
 	targetOpOperands(op, buf: buf)
 	for o in buf 'eachOperand'
@@ -312,7 +346,7 @@ end 'firstOriginLineOfOp'
 // order); `sortedOrder` produces the ranked view — sorting a scalar index permutation rather
 // than moving the reference-typed candidates around (moving them would mutate the array while
 // an element borrow is live, which the borrow checker rejects).
-function collectCandidates(project Project, module TargetModule, cfg FuncCfg, funcIndex FuncIndex, peak PressurePeak, lineage SplitLineage, regionDepth LoopDepth) returns PressureCandidateArray
+function collectCandidates(project Project, module TargetModule, cfg FuncCfg, funcIndex FuncIndex, peak PressurePeak, lineage SplitLineage, regionOps OpIndexArray) returns PressureCandidateArray
 	let wordsPerRow = bitsetWordsFor(cfg.valueCount)
 	var candidates = PressureCandidateArray.create()
 
@@ -321,7 +355,7 @@ function collectCandidates(project Project, module TargetModule, cfg FuncCfg, fu
 			continue
 		end 'notLive'
 		let range = defRangeOf(project, module: module, topo: cfg.topo, funcIndex: funcIndex, valueId: v, wordsPerRow: wordsPerRow, lineage: lineage)
-		let useCount = usesInRegion(module, cfg: cfg, valueId: v, regionDepth: regionDepth)
+		let useCount = usesInRegion(module, regionOps: regionOps, valueId: v)
 		candidates.push(PressureCandidate.create(v, line: range.line, column: range.column, usesInRegion: useCount))
 	end 'eachValue'
 
@@ -363,36 +397,27 @@ function candidateAtGreater(candidates PressureCandidateArray, aIndex CandidateI
 	return a.valueId > b.valueId
 end 'candidateAtGreater'
 
-// The number of times `valueId` is USED (as a virtual operand) by an op in the OVERFLOWING REGION — the
-// move-cost rank key (fewer uses => fewer reloads after the array rewrite). `regionDepth` IS the region,
-// and it is the whole difference between the two shapes of E5001:
-//   • `LoopBodyDepth` — only blocks inside a loop. A value in a HOT LOOP blocking set is used only in ITS
-//     OWN loop (one idle across this loop would have been cold-spilled already and never reach here), so
-//     counting every depth->=1 block is exactly its uses in the offending loop.
-//   • `AnyBlockDepth` — every block. A STRAIGHT-LINE peak has no loop to count in, and the loop floor would
-//     rank every candidate 0, which is not a ranking at all: the list would come out in bare value-id
-//     order and the "cheapest first" promise the message makes would be empty.
-function usesInRegion(module TargetModule, cfg FuncCfg, valueId ValueId, regionDepth LoopDepth) returns RegionUseCount
+// The number of times `valueId` is USED (as a virtual operand) by an op of the OVERFLOWING REGION — the
+// move-cost rank key (fewer uses => fewer reloads after the array rewrite), and the number the message
+// prints beside each candidate. It is counted over `collectRegionOps`' list and NOTHING else, so it means
+// exactly what the wording beside it says: uses inside the loop the headline names, or — for a
+// straight-line peak, which has no loop to count in — uses in the function.
+//
+// ⚠ A value in the blocking set can be used ZERO times in the region, and that is not a defect: it is
+// live ACROSS the region without being read there, holding a register the region's own values cannot use.
+// It is then the CHEAPEST thing to move out of the way, which is exactly where the ranking puts it.
+function usesInRegion(module TargetModule, regionOps OpIndexArray, valueId ValueId) returns RegionUseCount
 	var count = 0 as RegionUseCount
 	var buf = OperandList.create()
-	for i in 0 upto cfg.topo.numBlocks 'eachBlock'
-		let depth = try cfg.loopDepth.get(i) otherwise panic("usesInRegion: loopDepth.get OOB")
-		if depth < regionDepth 'outsideRegion'
-			continue
-		end 'outsideRegion'
-		let block = blockAt(module, topo: cfg.topo, local: i)
-		var ordered = OpIndexArray.create()
-		collectBlockOps(block, out: ordered)
-		for opIdx in ordered 'eachOp'
-			let op = try module.ops.get(opIdx) otherwise panic("usesInRegion: op not in module.ops")
-			targetOpOperands(op, buf: buf)
-			for o in buf 'eachOperand'
-				if (not operandIsDef(o)) and operandIsVirtual(o) and operandValueId(o) == valueId 'use'
-					count = count + 1
-				end 'use'
-			end 'eachOperand'
-		end 'eachOp'
-	end 'eachBlock'
+	for opIdx in regionOps 'eachOp'
+		let op = try module.ops.get(opIdx) otherwise panic("usesInRegion: op {opIdx} not in module.ops")
+		targetOpOperands(op, buf: buf)
+		for o in buf 'eachOperand'
+			if (not operandIsDef(o)) and operandIsVirtual(o) and operandValueId(o) == valueId 'use'
+				count = count + 1
+			end 'use'
+		end 'eachOperand'
+	end 'eachOp'
 	return count
 end 'usesInRegion'
 
