@@ -290,19 +290,25 @@ batching the plan asks for:
 
 | blocker | modules it gates | worth |
 |---|---|---|
-| `Interfaces.maxon:223` — E3005 `Cannot return 'unknown'` | `Range.maxon`, `helpers/string/views.maxon` | **+2** |
-| tuple over a type PARAMETER (blocker 6) | `Map.maxon`, `helpers/itertools/withIterator.maxon` | **+2** |
+| tuple over a type PARAMETER (**blocker 6**) | `Map.maxon`, `withIterator.maxon`, **and transitively `Range.maxon` + `views.maxon`** | **+4** |
 | E3086 — a field not initialized by a struct literal | `Array.maxon`, `Vector.maxon`, `List.maxon` | **+3** |
 | `__Builtins.writeStdout` / `writeStderr` | `Print.maxon`, `PrintError.maxon` | **+2** (⚠ also needs Wave 2's bare-name retirement) |
 | E3001-vacuous (see below) | the 6 `helpers/sort/*` files | **+6, BUT NOT CHEAP** |
 
 ⛔ **TWO CORRECTIONS TO THE PLAN, AND ONE TO A CLAIM I MADE EARLIER TODAY.**
 
-1. **`Range.maxon` and `views.maxon` are NOT blocked on blocker 6 (tuples).** Measured, they both stop at
-   `Interfaces.maxon:223` with E3005 `Cannot return 'unknown'` — which is **`S2r`**, the defect `W4` filed
-   as a diagnostic-quality issue. ⇒ **`S2r` is worth +2 CONE, not a nicety.** I said in this session's
-   planning that blocker 6 was worth +3 (`withIterator` + `Range` + `views`); **that was wrong.** Blocker 6
-   is worth +2 (`withIterator` + `Map`), and `S2r` carries the other two.
+1. ⛔ **THIS ITEM WAS ITSELF WRONG WHEN FIRST WRITTEN, AND IS CORRECTED HERE (same day, `b77223fd0` → next
+   commit).** I wrote that `Range.maxon` and `views.maxon` are *not* blocked on blocker 6 but on the E3005
+   `Cannot return 'unknown'` diagnostic (`S2r`), on the strength of the probe's first line alone. **Reproducing it
+   showed the opposite.** The corpus site is `Interfaces.maxon:219`,
+   `typealias WithIterSelf = WithIterIterator with Iter, Element` — and `WithIterIterator` is declared in
+   `helpers/itertools/withIterator.maxon`, which is **UNLISTED**. So it resolves to `unknown` and E3005 fires at
+   `:223`. **A better diagnostic would still refuse.** What unblocks `Range` and `views` is listing
+   `withIterator.maxon`, and that needs blocker 6. ⇒ **blocker 6 is worth +4**, not +2, and `S2r` unblocks
+   NOTHING on its own — it is a real diagnostic-quality defect (the error names the USE, not the DECLARATION)
+   and no more. ⚠ `W4`'s own commit message states this cone plainly (*"the entry is a CONE of two files and the
+   second needs blocker 6"*); it was in context and the refresh contradicted it anyway. **Reading a probe's first
+   line is not reproducing it.**
 2. **The plan's Wave 1 trap note says `Process.maxon` declares `ExitCode`. It does not** — it declares
    `ProcessIntrospectionError` and `Process`. No compiler-owned name to retire there.
 
