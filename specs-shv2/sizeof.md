@@ -170,3 +170,121 @@ end 'main'
 ```exitcode
 16
 ```
+
+<!-- test: sizeof.int -->
+```maxon
+function main() returns ExitCode
+	return sizeof(int)
+end 'main'
+```
+```exitcode
+8
+```
+
+<!-- test: sizeof.float -->
+```maxon
+function main() returns ExitCode
+	return sizeof(float)
+end 'main'
+```
+```exitcode
+8
+```
+
+<!-- test: sizeof.bool -->
+```maxon
+function main() returns ExitCode
+	return sizeof(bool)
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- disabled-test: sizeof.byte -->
+<!-- WRONG ANSWER, NOT A MISSING FEATURE — board row `S2v`. shv2 answers 8; canonical and the C#
+     oracle both answer 1. It is not a `byte` special case: shv2 reports a MACHINE WORD for every
+     ranged type (`byte` 8, `int(0 to 255)` 8, `ExitCode` 8, `int(i64.min to i64.max)` 8) where the
+     oracle reports the STORAGE width (1, 1, 4, 8). Only `bool` agrees, at 1.
+     `LayoutDescriptor.maxon:296-301` documents the machine-word answer as deliberate — which is why
+     this is filed for a ruling-grade rung and not patched here. Re-enable at `S2v`. -->
+```maxon
+function main() returns ExitCode
+	return sizeof(byte)
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: sizeof.struct -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Point
+	export var x as Integer
+	export var y as Integer
+end 'Point'
+
+function main() returns ExitCode
+	return sizeof(Point)
+end 'main'
+```
+```exitcode
+16
+```
+
+<!-- test: sizeof.struct-three-fields -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Vec3
+	export var x as Integer
+	export var y as Integer
+	export var z as Integer
+end 'Vec3'
+
+function main() returns ExitCode
+	return sizeof(Vec3)
+end 'main'
+```
+```exitcode
+24
+```
+
+<!-- test: sizeof.enum -->
+```maxon
+enum Color
+	red
+	green
+	blue
+end 'Color'
+
+function main() returns ExitCode
+	return sizeof(Color)
+end 'main'
+```
+```exitcode
+8
+```
+
+<!-- test: sizeof.arithmetic -->
+```maxon
+function main() returns ExitCode
+	return sizeof(int) + sizeof(bool)
+end 'main'
+```
+```exitcode
+9
+```
+
+<!-- test: sizeof.let-binding -->
+```maxon
+function main() returns ExitCode
+	let size = sizeof(int)
+	return size
+end 'main'
+```
+```exitcode
+8
+```
