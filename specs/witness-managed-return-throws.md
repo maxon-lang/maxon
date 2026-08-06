@@ -754,3 +754,69 @@ end 'main'
 ```maxoncstderr
 error E3016: specs/fragments/witness-managed-return-throws/error.abstract-requirement-narrowed-to-a-boxed-union.test:12:6: Method 'Digits.read' throws 'ParseFailure' but interface 'Reader' declares it 'throws Error', which declares no case to decode — a dispatch catches such a requirement through the SCALAR error-flag ABI, while a payload-carrying union is handed over as a heap box pointer that would be decoded as an ordinal and never released. Throw a payload-free enum, or declare the requirement as 'ParseFailure' itself
 ```
+
+<!-- test: try-block-routes-a-dispatched-throwing-call -->
+<!-- targets: x64-windows, x64-linux, x64-macos, arm64-windows, arm64-macos, arm64-linux -->
+The sixth and last shape: the `try` BLOCK form, where a BARE call inside the block
+has its error flag routed to the block's shared handler rather than caught at the
+call. Routing is what tells the block a throwing call is even present — so before
+the dispatch site could say the call throws, this program was refused outright with
+E3083 (`try block contains no throwing calls`). It is the one form whose failure was
+a REFUSAL rather than a leak, which is why it needs its own case: a suite that only
+counts leaks would have read it as fine.
+```maxon
+typealias Payload = int(0 to u64.max)
+
+union MakeError implements Error
+	tooBig(limit Payload)
+end 'MakeError'
+
+interface ChunkMaker
+	function check(seed Payload) throws MakeError
+end 'ChunkMaker'
+
+type Backend implements ChunkMaker
+	export let cap as Payload
+
+	static function create(cap Payload) returns Backend
+		return Self{cap: cap}
+	end 'create'
+
+	function check(seed Payload) throws MakeError
+		if seed > self.cap 'reject'
+			throw MakeError.tooBig(self.cap)
+		end 'reject'
+	end 'check'
+end 'Backend'
+
+function obtainMaker(cap Payload) returns ChunkMaker
+	return Backend.create(cap)
+end 'obtainMaker'
+
+function attempt(maker ChunkMaker, seed Payload) returns Payload
+	var out = seed
+	try 'work'
+		maker.check(seed)
+	end 'work'
+	otherwise (e) 'handler'
+		match e 'kind'
+			tooBig(limit) then out = limit
+		end 'kind'
+	end 'handler'
+	return out
+end 'attempt'
+
+function main() returns ExitCode
+	let maker = obtainMaker(100)
+	print("{attempt(maker, seed: 42)}\n")
+	print("{attempt(maker, seed: 200)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+42
+100
+```
