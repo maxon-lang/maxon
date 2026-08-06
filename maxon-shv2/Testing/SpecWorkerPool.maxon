@@ -66,8 +66,8 @@
 // parent matches a job's records against its plan ONE PER TEST, and an extra line per drifted golden
 // would have to weaken that into "one or two". Four kinds over two independent facts costs nothing
 // because the combinations that would need more cannot occur — a FAILING test never reaches the golden
-// step at all (`runStagedTest`), and neither does a SKIPPED one — so every record still names exactly
-// one test, exactly once.
+// step at all (`recordFragmentAndCleanup`), and neither does a SKIPPED one — so every record still
+// names exactly one test, exactly once.
 //
 // ⚠ A SKIP IS A RECORD, NOT AN ABSENCE, and that is the whole safety of the mechanism: a case the
 // target cannot express is still SELECTED by the parent, still planned, still reported, and still
@@ -102,7 +102,7 @@
 //   reroutes or retries — it panics with every slot's state. See `WedgeWatchdogMs`.
 // * NO `WORKER_COMPILING:` BREADCRUMBS. Same root cause: v1's worker WAS the compiler, so a
 //   compiler panic killed it and the parent needed a breadcrumb to say which fragment did it.
-//   Here a compiler panic is a non-zero exit from a grandchild, which `runOneTest` already turns
+//   Here a compiler panic is a non-zero exit from a grandchild, which `prepareOneTest` already turns
 //   into an ordinary FAIL result naming the test.
 
 // --- The CLI the pool speaks -----------------------------------------------------------------
@@ -144,7 +144,12 @@ let PollYieldMs = 1
 // Milliseconds in a second. Named because the watchdog below is stated in SECONDS (the unit an
 // operator thinks in) and measured in MILLISECONDS (the unit `Clock` counts in), and one of those
 // two spellings has to be derived from the other rather than written down twice.
-let MillisPerSecond = 1000
+//
+// ⚠ EXPORTED because `SpecSpawnTimeoutMs` needs the same conversion for the same reason, in the other
+// direction: it is spent as a `Subprocess` deadline in milliseconds AND written into the batch script
+// as a coreutils `timeout` duration in seconds. A second copy of `1000` next door is exactly the
+// "one fact written twice" this constant was created to prevent.
+export let MillisPerSecond = 1000
 
 // The one fractional digit `formatSeconds` keeps.
 let TenthsPerSecond = 10
@@ -498,8 +503,8 @@ end 'runSinglesJob'
 //
 // ⚠ TWO INDEPENDENT FACTS, FOUR KINDS. The verdict and the golden are separate axes
 // (`TestOutcome` / `GoldenDrift`), which is six combinations on paper — but only a PASSING test
-// reaches the golden step at all (`runStagedTest` skips it for a failure, because a failing test's IR
-// is noise, and for a skip, because no IR was emitted), so `fail` and `skipped` always carry
+// reaches the golden step at all (`recordFragmentAndCleanup` skips it for a failure, because a failing
+// test's IR is noise, and for a skip, because no IR was emitted), so `fail` and `skipped` always carry
 // `GoldenDrift.none` and the missing kinds are records nothing can emit. That is why those two arms
 // may read the verdict alone without dropping anything.
 function recordLine(specName String, result SpecTestResult) returns String
@@ -820,7 +825,7 @@ function goldenOf(record WorkerRecord) returns GoldenDrift
 		pass gives GoldenDrift.none
 		fail gives GoldenDrift.none
 		drift(_, _, detail) gives GoldenDrift.drifted(detail)
-		// Nothing was compiled here, so no golden was compared — see `runStagedTest`'s `noFragment`.
+		// Nothing was compiled here, so no golden was compared — see `recordFragmentAndCleanup`.
 		skip gives GoldenDrift.none
 	end 'reference'
 end 'goldenOf'
@@ -1370,8 +1375,8 @@ export function runSpecPool(compilerExe FilePath, workerExe FilePath, specDir Fi
 	let results = concatBuckets(buckets)
 
 	// The indicator covers EVERY test this run reported, or it is not an indicator of this run. Each
-	// test contributes exactly one reading (`SpecTestRunner.runOneTest` returns both together), so a
-	// disagreement here means a job's CPU record was decoded against the wrong job — checked for the
+	// test contributes exactly one reading (`SpecTestRunner.TestRun` carries the verdict and the cost
+	// together), so a disagreement here means a job's CPU record was decoded against the wrong job — for the
 	// same reason `resultsFromLines` checks its records, and it costs one comparison.
 	if cpu.tests() != results.count() 'cpuCoverageGap'
 		panic("runSpecPool: the compile-CPU tally covers {cpu.tests()} test(s) but the run reported {results.count()} — a job's {WorkerJobCpuMarker} record was counted against the wrong job")

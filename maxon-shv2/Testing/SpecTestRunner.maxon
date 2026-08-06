@@ -56,7 +56,7 @@ let TempSubdirName = ".spec-tmp"
 let RunWorkingSubdirName = "temp"
 
 // A multi-file test's staged source DIRECTORY hangs off `<tempDir>/<name>.src`, NOT `<tempDir>/<name>`
-// — because `<tempDir>/<name>` is exactly the `-o` output base (`exeBase`, runOneTest). With no suffix
+// — because `<tempDir>/<name>` is exactly the `-o` output base (`exeBase`, prepareOneTest). With no suffix
 // the two collide: on a host whose `executableExtension` is EMPTY (macOS, Linux) `build <dir> -o <dir>`
 // resolves the exe path back onto the source directory, the compile reports success but writes no
 // runnable file, and spawning the directory fails (126). x64-windows only escaped it because its
@@ -277,15 +277,17 @@ let OrbProbeCommand = "true"
 
 // --- WSL: the x64-linux runner (Windows host) ---
 //
-// `wsl --cd <windows-dir> -e ./<exe>` runs a static x86-64 ELF under WSL2's genuine Linux kernel — the
-// Windows twin of the OrbStack path. Because WSL2 is a real kernel, a static, raw-syscall ELF (no libc,
-// no dynamic linker) runs with NOTHING installed inside the distro. Two facts shape the invocation:
-//   * `--cd <dir>` is handed the parent directory as a RAW Windows path (`C:\...`); WSL translates it
-//     to its `/mnt/<drive>/...` mirror itself, so this runner carries no `/mnt` mapping of its own and
-//     is robust to a non-default automount root. The binary is then named `./<exe>` relative to that
-//     cwd — a bare name would be a guest PATH lookup instead.
+// `wsl --cd <windows-dir> -e <command>` runs a static x86-64 ELF under WSL2's genuine Linux kernel —
+// the Windows twin of the OrbStack path. Because WSL2 is a real kernel, a static, raw-syscall ELF (no
+// libc, no dynamic linker) runs with NOTHING installed inside the distro. Two facts shape the
+// invocation:
+//   * `--cd <dir>` is handed a directory as a RAW Windows path (`C:\...`); WSL translates it to its
+//     `/mnt/<drive>/...` mirror itself, so this runner carries no `/mnt` mapping of its own and is
+//     robust to a non-default automount root. Everything the guest then names — the binaries, the
+//     script, the capture files — is named RELATIVE to that cwd, which is what keeps the path
+//     translation entirely WSL's business and none of this file's.
 //   * `-e` execs the command directly (no login shell), and exit codes propagate unchanged
-//     (`wsl -e ./false` → 1, `./true` → 0, verified) — which is exactly what `checkRun` reads.
+//     (`wsl -e ./false` → 1, `./true` → 0, verified) — which is exactly what the run step reads.
 // `wsl` is a SYSTEM install located by PATH (CreateProcessW + PATHEXT resolves `wsl`→`wsl.exe`), so it
 // is `Executable.name`, the same as `orb` and for the same reason.
 let WslExecutableName = "wsl"
@@ -295,10 +297,92 @@ let WslExecFlag = "-e"
 // A binary named relative to the `--cd` directory; WSL resolves `./name` against the translated cwd.
 let WslRelativePrefix = "./"
 
-// coreutils' no-op at its absolute path — `-e` execs the given command with no shell PATH search, so
-// the probe names `/bin/true` outright. The cheapest command that proves WSL is installed and a distro
-// can execute a binary. See `requireWslAvailable`.
-let WslProbeCommand = "/bin/true"
+// The POSIX shell the batch script is handed to, named at its absolute path for `-e`'s reason: the flag
+// execs what it is given with no guest PATH search.
+let GuestShell = "/bin/sh"
+let GuestShellCommandFlag = "-c"
+
+// ⭐ **THE PREFLIGHT PROBES THE LANE, NOT MERELY THAT WSL EXISTS.** The x64-linux run step executes a
+// whole spec's binaries from a generated `/bin/sh` script that bounds each one with coreutils
+// `timeout` (see `runWslBatch`), so a distro without either would fail every test in the suite with
+// one unexplained status — precisely the 3000-identical-failures outcome `requireRunnerAvailable`
+// exists to turn into one sentence. `command -v` is a POSIX shell builtin, so ONE entry proves all
+// three facts at once: a distro is reachable, it can execute `/bin/sh`, and `timeout` is on its PATH.
+//
+// A FUNCTION rather than a module `let`, because it INTERPOLATES: a top-level constant that allocates
+// a String would run its initializer outside any test's ownership, and every other constant in this
+// file is a literal for that reason.
+function wslProbeScript() returns String
+	return "command -v {GuestTimeoutCommand} > /dev/null"
+end 'wslProbeScript'
+
+// --- THE BATCHED RUN STEP: ONE `wsl` ENTRY PER SPEC ---------------------------------------------
+//
+// ⭐⭐ **THE ENTRY IS THE WHOLE PRICE, SO THE ENTRY IS WHAT THIS SPENDS ONCE.** MEASURED on this host,
+// 2026-08-06: a bare `wsl -e /bin/true` costs **137 ms** (20 entries = 2.733 s, almost none of it CPU
+// — it is VM-entry latency), while the same **20 executions inside ONE entry cost 0.264 s**, and
+// **200 inside one cost 0.139 s**. Once you are inside, the executions are free. The lane entered once
+// per TEST — 3246 entries — and therefore paid ~445 s of pure entry latency, ~37 s of its 197 s wall
+// at twelve workers.
+//
+// ⭐ **THE UNIT IS THE SPEC BECAUSE THE SCRATCH DIRECTORY ALREADY IS** (`specTempDirFor`): one worker
+// owns a spec for its whole duration, every binary that spec built sits in that one directory, and
+// that directory is exactly what the per-test command used to hand `--cd`. So the batch gives each
+// program the SAME working directory the per-test path gave it, test for test — which is the only
+// reason this is a speed change and not a behaviour change.
+//
+// ⭐ **THE RESULTS COME BACK THROUGH FILES, NOT A DELIMITED STDOUT STREAM.** A stream needs framing and
+// escaping, and a test program emits arbitrary bytes — the worker wire protocol already had to escape
+// backslash-laden diagnostics for exactly this reason. Three files per test need no framing, no
+// escaping and no ordering assumption, and they are KEYED BY TEST NAME, which is why reading them back
+// needs no index bookkeeping at all.
+//
+// ⚠ **THEY LIVE IN A SUBDIRECTORY OF THE SCRATCH DIR, NOT IN IT.** `<test>.out` beside the binaries
+// would share a namespace with the compiler's own outputs, where `<name>.ir` and `<name>.metrics`
+// ALREADY collide between two tests whose names differ only after their last dot (see
+// `prepareOneTest`). A test named `x` and a test named `x.out` are both legal names, and the first
+// one's stdout would then BE the second one's executable.
+let BatchSubdirName = ".batch"
+let BatchScriptName = "run.sh"
+let BatchStdoutExtension = ".out"
+let BatchStderrExtension = ".err"
+let BatchStatusExtension = ".code"
+
+// The shell function the script defines once and calls once per test. One letter because it is written
+// once per test into a file nothing but this reads, and because it is spelled from this constant at
+// both its definition and its call sites.
+let BatchRunFunctionName = "r"
+
+// coreutils' per-execution bound. NAMED here rather than spelled in the script, because
+// `requireWslAvailable` probes for exactly this command and the two must be the same word.
+let GuestTimeoutCommand = "timeout"
+
+// The suffix `timeout` reads its durations in. Seconds is its default unit; stating it is what keeps
+// the interpolated number from being read as anything else.
+let GuestTimeoutSecondsSuffix = "s"
+
+// How long a process that ignored the TERM `timeout` sends gets before it is KILLed. A test program
+// installs no signal handler at all, so this is only ever paid by something already wedged; it exists
+// so that "wedged" cannot become "wedged and unkillable", which would hold the whole batch.
+let BatchKillGraceSeconds = 5
+
+// ⭐⭐ **WHAT THE SCRIPT WRITES WHEN AN EXECUTION NEVER GOT TO WRITE ITS OWN STATUS.**
+//
+// ⛔ **A NUMBER COULD NOT SAY THIS, AND THAT IS THE WHOLE TIMEOUT DESIGN.** `timeout` exits **124**
+// when it fires — and a program that itself exits 124 is bit-for-bit indistinguishable from it, so a
+// hung test would PASS a case pinning 124 and a case pinning 124 could never fail. There is no flag
+// that separates them. So the status is written by the execution's OWN shell, INSIDE the process group
+// `timeout` signals: either that shell wrote a number (the program ran to completion, whatever it
+// exited with — 101, 124 and 139 all arrive intact), or it was killed before it could and this token is
+// what the outer script finds instead.
+let BatchTimedOutToken = "TIMEDOUT"
+
+// POSIX shell quoting, and it is one rule for every `Args:` value a spec can carry: inside single
+// quotes EVERYTHING is literal — a space, a `$`, a backslash, a newline — and the string ends at the
+// first `'`. So an embedded quote is spelled by CLOSING the quote, escaping one bare quote, and
+// REOPENING it (`'\''`), which is the only case there is.
+let ShQuote = "'"
+let ShBackslash = "\\"
 
 // `FilePathArray` is NOT declared here. It is `QueryDatabase`'s export, and the top-level namespace is
 // FLAT — this file's own copy was file-private and invisible to the flat-namespace check only for as
@@ -346,7 +430,7 @@ end 'TestOutcome'
 // different questions with one boolean until arm64-linux split them (see `needsExternalRunner`).
 //
 // ⚠ A `drifted` value only ever accompanies a PASSING outcome, and that is by construction rather than
-// by convention: `runStagedTest` skips the golden step entirely when behaviour already failed, because
+// by convention: `recordFragmentAndCleanup` skips the golden step entirely when behaviour already failed, because
 // a failing test's IR is noise. `SpecWorkerPool.recordLine` states the same invariant from the wire's
 // side, where it decides that three record kinds cover all four combinations.
 export union GoldenDrift
@@ -417,13 +501,21 @@ end 'ProcessCapture'
 // loop waiting on the worker running it — so the outer must be strictly the longer or it fires first
 // and reports this failure as a pool wedge. Do not re-spell either number as a literal; see
 // `WedgeWatchdogMs`.
-export let SpecSpawnTimeoutMs = 120000
+//
+// ⚠ **IT IS THE DEADLINE FOR ONE EXECUTION, WHICH IS NO LONGER THE SAME THING AS ONE SPAWN.** The
+// batched WSL run performs a whole spec's executions inside a SINGLE `wsl` process (`runWslBatch`):
+// each one is bounded by this value from inside the guest, by coreutils `timeout`, and the spawn
+// carrying them all is bounded by their SUM (`batchDeadlineMs`). Two units, one number — the guest's
+// `timeout` takes SECONDS and `Subprocess` takes MILLISECONDS — so one is DERIVED from the other
+// rather than written down twice, which is also what keeps them from drifting apart.
+let SpecSpawnTimeoutSeconds = 120
+export let SpecSpawnTimeoutMs = SpecSpawnTimeoutSeconds * MillisPerSecond
 
 // `Subprocess`'s own sentinel for "give the child MY cwd" — the EMPTY path, which is exactly what
 // `Configuration.create` defaults `workingDirectory` to. Named here rather than spelled at each spawn
 // because `workingDirectory` below is a REQUIRED argument and SEVEN of this harness's EIGHT spawns want
 // this value (the compile, the git probe, the fixture sub-run, the two `--target` runner probes, the
-// bootstrap trace build and the scale rung compile — every one but `checkRun`'s): seven hand-written
+// bootstrap trace build and the scale rung compile — every one but the RUN step's): seven hand-written
 // `FilePath.from("")`s would be seven chances to write something that is not the sentinel, and a wrong
 // one is silent — the child simply starts somewhere else.
 //
@@ -434,10 +526,16 @@ export function inheritedWorkingDir() returns FilePath
 	return try FilePath.from("") otherwise panic("SpecTestRunner: the empty path is Subprocess's 'inherit cwd' sentinel and must parse")
 end 'inheritedWorkingDir'
 
-export function runProcess(exe Executable, argv StringArray, workingDirectory FilePath) returns ProcessCapture throws SubprocessError
+// ⚠ `timeoutMs` DEFAULTS, and that is deliberately the opposite decision from `workingDirectory`'s
+// above. A working directory is a fact only the CALLER knows, and the defect that made it required was
+// a spawn that never said where it should run; the deadline is the opposite — every spawn in this
+// harness that performs ONE execution wants the same value, and there is exactly one caller that
+// performs many at once and must therefore say so (`runWslBatch`). Defaulting puts the number in one
+// place and makes the one site that differs the one site that states it.
+export function runProcess(exe Executable, argv StringArray, workingDirectory FilePath, timeoutMs DurationMs = SpecSpawnTimeoutMs) returns ProcessCapture throws SubprocessError
 	var config = Configuration.create(exe)
 	config.arguments = argv
-	config.timeoutMs = SpecSpawnTimeoutMs
+	config.timeoutMs = timeoutMs
 	config.workingDirectory = workingDirectory
 
 	let collected = try Subprocess.runConfiguration(config)
@@ -599,6 +697,21 @@ end 'TestRun'
 // spec NAME on stdin and calls exactly this. Nothing above this function walks a directory
 // — the pool does that once, in the parent, because the listing ORDER is also the report
 // order and only one process may own it.
+//
+// ⭐⭐ **IT IS THREE PASSES OVER ONE SPEC, AND THE MIDDLE ONE IS WHY.** Every test is COMPILED (and, if
+// its verdict never needed the program to run, decided) in the first; every test that DOES need its
+// program run has that execution performed in the second, all of them together, by whatever this lane's
+// runner does best (`executeRuns`); every verdict is finished, compared against its golden and cleaned
+// up in the third. On the host lane the middle pass is still one spawn per test and the shape is a
+// bookkeeping change only; on the x64-linux lane it is ONE `wsl` entry for the whole spec instead of
+// one per test, which is where a measured ~37 s of the suite's wall time was going (see
+// `runWslBatch`).
+//
+// ⚠ **THE THREE ARRAYS ARE ALIGNED WITH `tests`, INDEX FOR INDEX, AND THAT IS THE WHOLE BOOKKEEPING.**
+// `prepared` and `observations` each hold exactly one entry per selected test in declaration order —
+// including a `notRequired` observation for a test that never ran — so the third pass needs no counter,
+// no sorting and no name lookup, and a length that disagrees is a panic rather than a silently
+// misattributed result.
 export function runOneSpec(compilerExe FilePath, specDir FilePath, specName String, filter String, updateRequired bool, effectiveTarget Target) returns SpecRun throws CompileError
 	var results = SpecTestResultArray.create()
 	var cpu = SuiteCpuTally.zero()
@@ -635,7 +748,7 @@ export function runOneSpec(compilerExe FilePath, specDir FilePath, specName Stri
 	// for. The pool's `prepareSharedDirs` keys the shared root off the same effective target.
 	let exeExtension = executableExtension(effectiveTarget)
 	let fragmentDir = fragmentsRootDir(specDir, target: effectiveTarget).join(specName)
-	// mkdir -p, but ONLY for a target that has goldens. `runStagedTest` skips the fragment gate
+	// mkdir -p, but ONLY for a target that has goldens. `recordFragmentAndCleanup` skips the fragment gate
 	// entirely when the target emits no Target IR, so creating the tree under wasm32-wasi would
 	// leave a directory per spec that nothing will ever write a `.test` into — empty scaffolding for
 	// a gate that does not exist. A create failure is not a test gate either way: `checkTestFragment`
@@ -644,11 +757,24 @@ export function runOneSpec(compilerExe FilePath, specDir FilePath, specName Stri
 		_ = Directory.create(fragmentDir)
 	end 'hasGoldens'
 
-	for test in tests 'eachTest'
-		let run = runOneTest(compilerExe, test: test, specName: specName, tempDir: tempDir, runWorkingDir: runWorkingDir, exeExtension: exeExtension, fragmentDir: fragmentDir, updateRequired: updateRequired, effectiveTarget: effectiveTarget)
+	var prepared = PreparedTestArray.create()
+	for test in tests 'eachCompile'
+		prepared.push(prepareOneTest(compilerExe, test: test, specName: specName, tempDir: tempDir, exeExtension: exeExtension, fragmentDir: fragmentDir, updateRequired: updateRequired, effectiveTarget: effectiveTarget))
+	end 'eachCompile'
+
+	let observations = executeRuns(prepared, tempDir: tempDir, runWorkingDir: runWorkingDir, effectiveTarget: effectiveTarget)
+
+	for (iter, test) in tests.withIterator() 'eachVerdict'
+		let step = try prepared.get(iter.index()) otherwise panic("runOneSpec: {prepared.count()} prepared tests for {tests.count()} selected — one is pushed per selected test, in one loop")
+		let observation = try observations.get(iter.index()) otherwise panic("runOneSpec: {observations.count()} run observations for {prepared.count()} prepared tests — `executeRuns` answers one per prepared test, including the ones that needed no execution")
+		let run = match step 'phase'
+			finished(done) gives done
+			awaiting(pending) gives finishPendingRun(pending, observation: observation, fragmentDir: fragmentDir, updateRequired: updateRequired, effectiveTarget: effectiveTarget)
+		end 'phase'
+
 		results.push(SpecTestResult.create(specName, testName: test.name, outcome: run.outcome, golden: run.golden))
 		cpu = cpu.adding(run.cpu)
-	end 'eachTest'
+	end 'eachVerdict'
 
 	return SpecRun.create(results, cpu: cpu)
 end 'runOneSpec'
@@ -1133,16 +1259,74 @@ union StagingResult
 	failed(reason String)
 end 'StagingResult'
 
-// Compile one test via a subprocess build (with `--emit-ir` so the Target-IR sidecar is produced),
-// check its expectation, then check the emitted IR against the committed `.test` golden. Everything
-// written is cleaned up before returning.
-function runOneTest(compilerExe FilePath, test SpecTest, specName String, tempDir FilePath, runWorkingDir FilePath, exeExtension String, fragmentDir FilePath, updateRequired bool, effectiveTarget Target) returns TestRun
+// ⭐ EVERYTHING ONE COMPILED TEST LEFT BEHIND — what the compile said, what it cost, and the artifacts
+// it wrote — carried from the compile pass to the verdict pass.
+//
+// ⚠ **`irText` IS THE SIDECAR'S BYTES, NOT ITS PATH, AND THAT IS A CORRECTNESS REQUIREMENT RATHER THAN
+// A CONVENIENCE.** `<name>.ir` and `<name>.metrics` are `changeExtension`'d from the output path, which
+// cuts at the LAST DOT — so on any target whose `executableExtension` is empty (linux, macos) two tests
+// whose names differ only after their last dot land on ONE sidecar path:
+// `async-linearity.error.double-await` and `…double-await-in-loop` are both `async-linearity.error.ir`,
+// and 1,271 of the suite's test names contain a dot. That was survivable while a test's whole life —
+// compile, read, compare, delete — happened before the next test compiled. It is not survivable now
+// that the golden comparison waits for a batched run, so the bytes are taken at the ONE moment they
+// unambiguously belong to this test: immediately after the compile that wrote them. The path collision
+// is then harmless by construction rather than by execution order.
+type CompiledTest
+	export let test as SpecTest
+	export let staged as StagedTest
+	export let compile as ProcessCapture
+	export let cpu as CompileCpu
+	export let irText as String
+	export let exePath as FilePath
+	export let irPath as FilePath
+	export let metricsPath as FilePath
+
+	static function create(test SpecTest, staged StagedTest, compile ProcessCapture, cpu CompileCpu, irText String, exePath FilePath, irPath FilePath, metricsPath FilePath) returns CompiledTest
+		return Self{test: test, staged: staged, compile: compile, cpu: cpu, irText: irText, exePath: exePath, irPath: irPath, metricsPath: metricsPath}
+	end 'create'
+end 'CompiledTest'
+
+// A compiled test whose verdict cannot exist until its program has been RUN, plus the three halves of
+// the expectation that run will be judged against.
+//
+// The pins are carried HERE, unpacked from `SpecExpectation` at the one place that already knew the
+// case was a run expectation, so nothing downstream has to re-match an expectation it has already
+// established — and so there is no `compilerError` arm to write a "cannot happen" for.
+type PendingRun
+	export let compiled as CompiledTest
+	export let expected as SpecExitCode
+	export let stderr as SpecStderr
+	export let stdout as SpecStdout
+
+	static function create(compiled CompiledTest, expected SpecExitCode, stderr SpecStderr, stdout SpecStdout) returns PendingRun
+		return Self{compiled: compiled, expected: expected, stderr: stderr, stdout: stdout}
+	end 'create'
+end 'PendingRun'
+
+// Where one test stood when the compile pass was done with it.
+//
+// A test is `finished` when its verdict never needed the program to run — a `maxoncstderr` case, a
+// compile that failed, a `RequiredData` pin that disagreed with the linked image, a construct this
+// target refused — and those are decided, compared against their golden and cleaned up in the compile
+// pass exactly as they always were. Only `awaiting` survives into the run pass, which is why a spec of
+// nothing but diagnostic cases costs no `wsl` entry at all.
+union PreparedTest
+	finished(run TestRun)
+	awaiting(pending PendingRun)
+end 'PreparedTest'
+
+typealias PreparedTestArray = Array with PreparedTest
+
+// Compile one test via a subprocess build (with `--emit-ir` so the Target-IR sidecar is produced) and
+// take its verdict as far as it can go without running the program.
+function prepareOneTest(compilerExe FilePath, test SpecTest, specName String, tempDir FilePath, exeExtension String, fragmentDir FilePath, updateRequired bool, effectiveTarget Target) returns PreparedTest
 	let exeBase = tempDir.join(test.name)
 	// The driver appends the platform extension to the `-o` value
 	// (resolveOutputPath), so the produced exe is `<exeBase><ext>` — reconstruct
 	// that exact path to spawn it for the exit-code check.
 	let exePath = try FilePath.from("{exeBase.toString()}{exeExtension}") otherwise 'badExePath'
-		return TestRun.notCompiled("could not form output path for {test.name}")
+		return PreparedTest.finished(TestRun.notCompiled("could not form output path for {test.name}"))
 	end 'badExePath'
 	// `--emit-ir` writes `<output>.ir` (Compiler.writeTargetIr uses the same
 	// changeExtension), so the sidecar sits beside the exe under `.ir`.
@@ -1150,31 +1334,27 @@ function runOneTest(compilerExe FilePath, test SpecTest, specName String, tempDi
 	// `--metrics` writes where it is TOLD, so unlike the sidecar this path is chosen here rather than
 	// derived by the compiler — sited beside the exe so one `cleanup` removes everything one test made.
 	//
-	// ⚠ THIS PATH IS UNIQUE BY EXECUTION ORDER, NOT BY CONSTRUCTION, and only off Windows.
-	// `executableExtension` is `""` on linux AND macos (`Target.maxon`), and `changeExtension` cuts at
-	// the LAST DOT of the filename — but 1,271 of the suite's 3,248 test names CONTAIN dots, so there
-	// `async-linearity.error.double-await` and `…double-await-in-loop` both land on
-	// `async-linearity.error.metrics`. It is safe today for reasons that are all about WHEN, never about
-	// the name: a spec's tests run strictly sequentially inside ONE worker, each spec gets its own
-	// `tempDir`, and this file is deleted BOTH before the compile and again in `cleanup`. Make any of
-	// those three parallel or shared and two tests start reading each other's CPU — silently, since a
-	// well-formed file from the wrong test panics nothing. Pre-existing for `.ir`, inherited here.
+	// ⚠ THIS PATH IS NOT UNIQUE, and neither is the `.ir` beside it — see `CompiledTest.irText` for the
+	// collision and for the rule that makes it harmless: every artifact is READ in the pass that
+	// compiled it, before any later compile in this spec can reuse the name. This one is also DELETED
+	// before the compile that writes it (below), so a leftover can never be read as a later compile's
+	// cost either.
 	let metricsPath = exePath.changeExtension(MetricsFileExtension)
 
 	match stageTest(tempDir, test: test, compilerExe: compilerExe) 'staging'
-		failed(reason) then return TestRun.notCompiled(reason)
-		staged(s) then return runStagedTest(test, specName: specName, staged: s, exeBase: exeBase, exePath: exePath, irPath: irPath, metricsPath: metricsPath, runWorkingDir: runWorkingDir, fragmentDir: fragmentDir, updateRequired: updateRequired, effectiveTarget: effectiveTarget)
+		failed(reason) then return PreparedTest.finished(TestRun.notCompiled(reason))
+		staged(s) then return compileStagedTest(test, specName: specName, staged: s, exeBase: exeBase, exePath: exePath, irPath: irPath, metricsPath: metricsPath, fragmentDir: fragmentDir, updateRequired: updateRequired, effectiveTarget: effectiveTarget)
 	end 'staging'
-end 'runOneTest'
+end 'prepareOneTest'
 
-// Compile a test whose source is already on disk, check its behaviour, then check its golden.
-// Split out of `runOneTest` only because staging can FAIL, and a union's arms are the honest way to
-// say so — the two functions are one story read top to bottom.
+// Compile a test whose source is already on disk and decide as much of its verdict as the compiler's
+// answer alone can decide. Split out of `prepareOneTest` only because staging can FAIL, and a union's
+// arms are the honest way to say so — the two functions are one story read top to bottom.
 //
 // ⚠ It takes NO `compilerExe`: staging decides which binary compiles this test (`StagedTest.compilerExe`),
 // because a `// --- stdlib-overlay:` case is compiled by its own copy. A parameter here as well would be a
 // second answer to that question, and the wrong one would silently compile against the checkout's stdlib.
-function runStagedTest(test SpecTest, specName String, staged StagedTest, exeBase FilePath, exePath FilePath, irPath FilePath, metricsPath FilePath, runWorkingDir FilePath, fragmentDir FilePath, updateRequired bool, effectiveTarget Target) returns TestRun
+function compileStagedTest(test SpecTest, specName String, staged StagedTest, exeBase FilePath, exePath FilePath, irPath FilePath, metricsPath FilePath, fragmentDir FilePath, updateRequired bool, effectiveTarget Target) returns PreparedTest
 	let pinnable = emitsTargetIr(effectiveTarget)
 
 	var compileArgv = StringArray.create()
@@ -1213,41 +1393,60 @@ function runStagedTest(test SpecTest, specName String, staged StagedTest, exeBas
 
 	let compile = try runProcess(Executable.path(staged.compilerExe), argv: compileArgv, workingDirectory: inheritedWorkingDir()) otherwise (e) 'compileSpawnFailed'
 		cleanup(staged, exePath: exePath, irPath: irPath, metricsPath: metricsPath)
-		return TestRun.notCompiled("compiler spawn failed: {e.displayReason()}")
+		return PreparedTest.finished(TestRun.notCompiled("compiler spawn failed: {e.displayReason()}"))
 	end 'compileSpawnFailed'
 
-	// Read before `cleanup` removes it, and before anything can return.
-	let cpu = readCompileCpu(metricsPath)
+	// BOTH artifacts are read HERE, in the pass that compiled them — the metrics because `cleanup`
+	// removes it, the IR because the NEXT test's compile may write to the very same path (see
+	// `CompiledTest.irText`). Neither can be deferred to the verdict pass.
+	let compiled = CompiledTest.create(test, staged: staged, compile: compile, cpu: readCompileCpu(metricsPath), irText: try File.readText(irPath) otherwise MissingIrPlaceholder, exePath: exePath, irPath: irPath, metricsPath: metricsPath)
 
-	// ⭐ THE ONE PLACE A CROSS-TARGET SKIP IS DECIDED, and it is here because here is where the
-	// compiler's verdict first exists: `compile` has just come back, and nothing downstream re-reads its
-	// stderr. It wraps `checkExpectation` rather than preceding it, because a case whose EXPECTATION is
-	// the refusal must keep its pass — and it is handed that EXPECTATION as well as the verdict, because
-	// a `compilerError` case must keep its FAIL too. See `outcomeOrTargetSkip`.
-	let outcome = outcomeOrTargetSkip(checkExpectation(test, specName: specName, compile: compile, staged: staged, exePath: exePath, runWorkingDir: runWorkingDir, effectiveTarget: effectiveTarget), expectation: test.expectation, compile: compile)
+	return match preRunVerdict(test, specName: specName, compile: compile, staged: staged, exePath: exePath, effectiveTarget: effectiveTarget) 'verdict'
+		// ⭐ THE ONE PLACE A CROSS-TARGET SKIP IS DECIDED, and it is here because here is where the
+		// compiler's verdict first exists: `compile` has just come back, and nothing downstream re-reads
+		// its stderr. It wraps the verdict rather than preceding it, because a case whose EXPECTATION is
+		// the refusal must keep its pass — and it is handed that EXPECTATION as well, because a
+		// `compilerError` case must keep its FAIL too. See `outcomeOrTargetSkip`.
+		//
+		// ⚠ **THE `awaiting` ARM NEEDS NO SUCH WRAP, AND THAT IS STRUCTURAL RATHER THAN AN OMISSION.**
+		// `runPreconditions` yields it only for a compile that exited 0, and `targetRefusalIn` answers
+		// `notRefused` for anything but the exit code a compile that REPORTED DIAGNOSTICS returns. A
+		// refusal therefore cannot be reachable from a test that got as far as being run.
+		settled(outcome) gives PreparedTest.finished(recordFragmentAndCleanup(compiled, outcome: outcomeOrTargetSkip(outcome, expectation: test.expectation, compile: compile), fragmentDir: fragmentDir, updateRequired: updateRequired, effectiveTarget: effectiveTarget))
+		needsExecution(expected, stderr, stdout) gives PreparedTest.awaiting(PendingRun.create(compiled, expected: expected, stderr: stderr, stdout: stdout))
+	end 'verdict'
+end 'compileStagedTest'
 
-	// The fragment records the emitted Target IR for REFERENCE (see `FragmentsSubdir`), and the step is
-	// skipped in three cases:
-	//   (0) the case was SKIPPED — no binary was linked and no IR was emitted, so there is no artifact
-	//       to compare and a "golden missing" note would blame the case for the target's gap. It rides
-	//       the `not outcome.isPass()` test below, which is exactly the condition;
-	//   (1) BEHAVIOUR already FAILED — a failing test's IR is noise, and a note about its golden on top
-	//       would bury the real failure. This is also what makes `GoldenDrift.drifted` reachable only
-	//       alongside a PASS;
-	//   (2) the target emits NO Target IR (wasm32 alone — see `emitsTargetIr`), so there is nothing
-	//       to record; the RUN plus the worker-count byte-identity gate are the whole check for it.
-	// ⚠ The second condition is `emitsTargetIr`, NOT "is this the host". A cross target that goes
-	// through a register backend — arm64-linux — is pinned exactly like a host build; it was the old
-	// single `cross` boolean here that would have silently dropped its golden.
-	// The pinnable, passing path runs it before cleanup, while the `--emit-ir` sidecar is still on disk.
-	if not outcome.isPass() or not pinnable 'noFragment'
-		cleanup(staged, exePath: exePath, irPath: irPath, metricsPath: metricsPath)
-		return TestRun.create(outcome, cpu: cpu, golden: GoldenDrift.none)
+// The last step of EVERY test, whichever pass its verdict became final in: record the fragment (or
+// don't), remove what the test wrote, and hand back the run.
+//
+// ONE function because the two callers differ only in WHEN they arrive — a `maxoncstderr` case reaches
+// it in the compile pass, an exit-code case after its program has run — and a second copy is how the
+// golden rule and the cleanup rule would come to differ between two kinds of test.
+//
+// The fragment records the emitted Target IR for REFERENCE (see `FragmentsSubdir`), and the step is
+// skipped in three cases:
+//   (0) the case was SKIPPED — no binary was linked and no IR was emitted, so there is no artifact
+//       to compare and a "golden missing" note would blame the case for the target's gap. It rides
+//       the `not outcome.isPass()` test below, which is exactly the condition;
+//   (1) BEHAVIOUR already FAILED — a failing test's IR is noise, and a note about its golden on top
+//       would bury the real failure. This is also what makes `GoldenDrift.drifted` reachable only
+//       alongside a PASS, and it is what keeps a golden from being MINTED for a test that did not
+//       pass;
+//   (2) the target emits NO Target IR (wasm32 alone — see `emitsTargetIr`), so there is nothing
+//       to record; the RUN plus the worker-count byte-identity gate are the whole check for it.
+// ⚠ The second condition is `emitsTargetIr`, NOT "is this the host". A cross target that goes
+// through a register backend — arm64-linux — is pinned exactly like a host build; it was the old
+// single `cross` boolean here that would have silently dropped its golden.
+function recordFragmentAndCleanup(compiled CompiledTest, outcome TestOutcome, fragmentDir FilePath, updateRequired bool, effectiveTarget Target) returns TestRun
+	if not outcome.isPass() or not emitsTargetIr(effectiveTarget) 'noFragment'
+		cleanup(compiled.staged, exePath: compiled.exePath, irPath: compiled.irPath, metricsPath: compiled.metricsPath)
+		return TestRun.create(outcome, cpu: compiled.cpu, golden: GoldenDrift.none)
 	end 'noFragment'
 
-	let fragment = checkTestFragment(fragmentDir, test: test, compile: compile, staged: staged, irPath: irPath, updateRequired: updateRequired)
+	let fragment = checkTestFragment(fragmentDir, test: compiled.test, compile: compiled.compile, staged: compiled.staged, irText: compiled.irText, updateRequired: updateRequired)
 
-	cleanup(staged, exePath: exePath, irPath: irPath, metricsPath: metricsPath)
+	cleanup(compiled.staged, exePath: compiled.exePath, irPath: compiled.irPath, metricsPath: compiled.metricsPath)
 
 	// ⚖ THE TWO ARMS THAT ARE NOT FAILURES, AND THE ONE THAT IS. `recorded` and `drifted` both leave
 	// the behaviour verdict exactly as the assertions left it — drift is reported, never judged.
@@ -1255,11 +1454,21 @@ function runStagedTest(test SpecTest, specName String, staged StagedTest, exeBas
 	// at all but the harness being unable to write a file it was told to write, which is the same
 	// class as `stageTest`'s own "could not write fragment" and is failed for the same reason.
 	return match fragment 'reference'
-		recorded gives TestRun.create(outcome, cpu: cpu, golden: GoldenDrift.none)
-		drifted(detail) gives TestRun.create(outcome, cpu: cpu, golden: GoldenDrift.drifted(detail))
-		notWritten(reason) gives TestRun.create(TestOutcome.fail(reason), cpu: cpu, golden: GoldenDrift.none)
+		recorded gives TestRun.create(outcome, cpu: compiled.cpu, golden: GoldenDrift.none)
+		drifted(detail) gives TestRun.create(outcome, cpu: compiled.cpu, golden: GoldenDrift.drifted(detail))
+		notWritten(reason) gives TestRun.create(TestOutcome.fail(reason), cpu: compiled.cpu, golden: GoldenDrift.none)
 	end 'reference'
-end 'runStagedTest'
+end 'recordFragmentAndCleanup'
+
+// The verdict of a test whose program HAS now run.
+//
+// ⚠ It does not consult `outcomeOrTargetSkip`: a test only reaches here through a compile that exited
+// 0, and a target refusal is read off a compile that exited 1 having printed nothing but E3104s. See
+// `compileStagedTest`'s `settled` arm, which is the only door onto that conversion.
+function finishPendingRun(pending PendingRun, observation RunObservation, fragmentDir FilePath, updateRequired bool, effectiveTarget Target) returns TestRun
+	let outcome = checkObservedRun(pending.expected, stderr: pending.stderr, stdout: pending.stdout, observation: observation, effectiveTarget: effectiveTarget)
+	return recordFragmentAndCleanup(pending.compiled, outcome: outcome, fragmentDir: fragmentDir, updateRequired: updateRequired, effectiveTarget: effectiveTarget)
+end 'finishPendingRun'
 
 // What this test's compile spent, read back out of the `--metrics` file it was told to write.
 //
@@ -1375,7 +1584,7 @@ function stageSourceFiles(tempDir FilePath, test SpecTest, compilerExe FilePath)
 	if not Directory.create(testDir) 'noTestDir'
 		return StagingResult.failed("could not create source directory {testDir.toString()}")
 	end 'noTestDir'
-	purgeSourceFiles(testDir)
+	purgeFilesIn(testDir)
 
 	var paths = FragmentPathMappingArray.create()
 	var written = FilePathArray.create()
@@ -1472,7 +1681,7 @@ function stageStdlibOverlay(tempDir FilePath, test SpecTest, compilerExe FilePat
 	if not Directory.create(overlayRoot) 'noRoot'
 		throw OverlayError.refused("could not create stdlib-overlay directory {overlayRoot.toString()}")
 	end 'noRoot'
-	purgeSourceFiles(overlayRoot)
+	purgeFilesIn(overlayRoot)
 
 	// Interpolated so the argument is a committed `String` — see `specTempRootDir` for why a bare
 	// module-`let` constant is ambiguous between `join`'s two overloads.
@@ -1565,17 +1774,20 @@ end 'applyOverlaySections'
 typealias OverlaidNameSet = Set with String
 
 // Remove every FILE under `dir`, depth-first. The stdlib has no directory-remove, so empty
-// subdirectories survive — which is harmless, because only a `.maxon` file can join a build.
-function purgeSourceFiles(dir FilePath)
+// subdirectories survive — which is harmless: nothing here reads a directory's existence, only its
+// files. Three callers, one rule — a multi-file test's staged sources, a `stdlib-overlay` case's
+// private checkout, and the batch's spent capture files — because "whatever this run did not write,
+// this run removes" is one sentence, not three.
+function purgeFilesIn(dir FilePath)
 	let entries = try Directory.list(dir) otherwise return
 	for entry in entries 'each'
 		if Directory.isDirectory(entry) 'isSubdir'
-			purgeSourceFiles(entry)
+			purgeFilesIn(entry)
 		end 'isSubdir' else 'isFile'
 			try File.delete(entry) otherwise ignore
 		end 'isFile'
 	end 'each'
-end 'purgeSourceFiles'
+end 'purgeFilesIn'
 
 // Would writing this `// --- file:` name stay inside the test's scratch directory? Enforced at the
 // WRITE rather than at the parse, because the write is where the escape would actually happen.
@@ -1606,7 +1818,7 @@ function isSafeRelativeName(name String) returns bool
 end 'isSafeRelativeName'
 
 // What the fragment step concluded. THREE outcomes, and only one of them is a failure — see
-// `runStagedTest`, which is the single place that decides what each means for the test.
+// `recordFragmentAndCleanup`, which is the single place that decides what each means for the test.
 union FragmentCheck
 	// Compared and equal, freshly minted, or regenerated under `--update-required`.
 	recorded
@@ -1644,12 +1856,12 @@ end 'FragmentCheck'
 // C# suite, which batches a spec's tests into one module, is excluded there for exactly the reason
 // this runner does not need to be. ⚠ If shv2 ever compiles several tests together, that script's
 // exclusion list is the OTHER end of this invariant and must change with it.
-function checkTestFragment(fragmentDir FilePath, test SpecTest, compile ProcessCapture, staged StagedTest, irPath FilePath, updateRequired bool) returns FragmentCheck
+function checkTestFragment(fragmentDir FilePath, test SpecTest, compile ProcessCapture, staged StagedTest, irText String, updateRequired bool) returns FragmentCheck
 	// The fragment records the CODE, so a run expectation contributes only its exit code and
 	// its IR — a pinned ```stderr is an assertion about the RUN, checked there, and adding
 	// it here would move every golden for nothing.
 	let content = match test.expectation 'e'
-		run(expected, _, _, _) gives buildExitCodeFragment(test, expected: expected, irPath: irPath)
+		run(expected, _, _, _) gives buildExitCodeFragment(test, expected: expected, irText: irText)
 		compilerError gives buildErrorFragment(test, compile: compile, staged: staged)
 	end 'e'
 
@@ -1728,10 +1940,12 @@ function fragmentHeader(test SpecTest) returns String
 	return "{fragmentSource(test)}{FragmentSectionSep}\n"
 end 'fragmentHeader'
 
-// An exitCode test's fragment: the shared head, the expected exit code, and the
-// generated Target IR read back from the `--emit-ir` sidecar.
-function buildExitCodeFragment(test SpecTest, expected SpecExitCode, irPath FilePath) returns String
-	let irText = try File.readText(irPath) otherwise MissingIrPlaceholder
+// An exitCode test's fragment: the shared head, the expected exit code, and the generated Target IR.
+//
+// ⚠ The IR arrives as BYTES rather than as a path to read now, because "now" is too late: the sidecar
+// was read in the pass that compiled it, and by here another test may already own that filename. See
+// `CompiledTest.irText`.
+function buildExitCodeFragment(test SpecTest, expected SpecExitCode, irText String) returns String
 	return "{fragmentHeader(test)}{ExitCodeLabel}{fragmentExitCodeText(expected)}\n{FragmentSectionSep}\n{irText}"
 end 'buildExitCodeFragment'
 
@@ -1755,12 +1969,24 @@ function buildErrorFragment(test SpecTest, compile ProcessCapture, staged Staged
 	return "{fragmentHeader(test)}{CompilerErrorLabel}\n{normalizedError}\n"
 end 'buildErrorFragment'
 
-function checkExpectation(test SpecTest, specName String, compile ProcessCapture, staged StagedTest, exePath FilePath, runWorkingDir FilePath, effectiveTarget Target) returns TestOutcome
+// How far a test's verdict can be taken on the compiler's answer alone.
+//
+// ⭐ **THE SPLIT IS WHERE THE PROGRAM WOULD HAVE TO RUN, AND NOWHERE ELSE.** A `maxoncstderr` case
+// asserts what the COMPILER said, so it is decided here in full and never joins a batch. A run
+// expectation is decided here only when it cannot get as far as running — the compile failed, or a
+// section the case pinned disagrees with the linked image — and otherwise says so, carrying the three
+// pins its execution will be judged against.
+union PreRunVerdict
+	settled(outcome TestOutcome)
+	needsExecution(expected SpecExitCode, stderr SpecStderr, stdout SpecStdout)
+end 'PreRunVerdict'
+
+function preRunVerdict(test SpecTest, specName String, compile ProcessCapture, staged StagedTest, exePath FilePath, effectiveTarget Target) returns PreRunVerdict
 	return match test.expectation 'e'
-		run(expected, stderr, stdout, sectionPins) gives checkRun(expected, stderr: stderr, stdout: stdout, sectionPins: sectionPins, compile: compile, exePath: exePath, runWorkingDir: runWorkingDir, effectiveTarget: effectiveTarget, programArgs: test.programArgs)
-		compilerError(text) gives checkCompilerError(text, specName: specName, testName: test.name, compile: compile, staged: staged)
+		run(expected, stderr, stdout, sectionPins) gives runPreconditions(expected, stderr: stderr, stdout: stdout, sectionPins: sectionPins, compile: compile, exePath: exePath, effectiveTarget: effectiveTarget)
+		compilerError(text) gives PreRunVerdict.settled(checkCompilerError(text, specName: specName, testName: test.name, compile: compile, staged: staged))
 	end 'e'
-end 'checkExpectation'
+end 'preRunVerdict'
 
 // A ```maxoncstderr test: the compile MUST fail, and its stderr must equal the expected text once
 // BOTH have had the fragment's path replaced by the stable `<fragment>` token — the actual by its
@@ -1791,7 +2017,7 @@ end 'checkCompilerError'
 
 // The executable + argv pair one RUN goes through, whichever target produced the binary. The host's
 // own binary runs with no argv; a wasm module goes behind wasmtime and its flags; an ELF goes behind
-// `orb run`. One type so the single `runProcess` call in `checkRun` is target-agnostic.
+// `orb run`. One type so the single `runProcess` call in `spawnOneRun` is target-agnostic.
 //
 // `exe` is an `Executable`, not a `FilePath`, because the three runners are found in genuinely
 // different ways and the stdlib already names that difference: a built binary and the VENDORED
@@ -1900,7 +2126,12 @@ function buildRunCommand(modulePath FilePath, effectiveTarget Target, programArg
 	let launch = match externalRunnerFor(effectiveTarget) 'runner'
 		wasmtime gives buildWasmRunCommand(modulePath)
 		orbstack gives buildLinuxVmRunCommand(modulePath)
-		wsl gives buildWslRunCommand(modulePath)
+		// ⛔ NOT A GAP — the WSL lane does not execute one program per command, so there is no per-test
+		// command to build for it. It runs a whole spec's programs from one generated script inside a
+		// single entry (`runWslBatch`), and `runStrategyFor` is the ONE table that decides which lane
+		// does which. This arm is what makes the two disagreeing a panic instead of a silent second
+		// answer: reaching it means a lane was routed here that `runStrategyFor` had claimed to batch.
+		wsl panic("SpecTestRunner: the {targetToString(effectiveTarget)} lane runs a whole spec in one {WslExecutableName} entry (see runWslBatch), so it has no per-test run command — `runStrategyFor` and `buildRunCommand` disagree about this target")
 	end 'runner'
 
 	var argv = StringArray.create()
@@ -1975,26 +2206,336 @@ function buildLinuxVmRunCommand(exePath FilePath) returns RunCommand
 	return RunCommand.create(Executable.name(OrbExecutableName), argv: argv)
 end 'buildLinuxVmRunCommand'
 
-// `wsl --cd <windows-dir> -e ./<exe>` — run a static x86-64 ELF under WSL2. See the WSL constants block.
+// ============================================================================================
+// THE RUN PASS — every execution one spec needs, performed the way this lane performs them best
+// ============================================================================================
+
+// What one execution produced, or why there is none. ONE per PREPARED test, including the tests that
+// never needed an execution, so the verdict pass can index observations by the same position it indexes
+// everything else by (see `runOneSpec`).
 //
-// The exe is made ABSOLUTE first (as the orb path does), then SPLIT: `--cd` takes the parent DIRECTORY
-// as a raw Windows path (WSL translates it to `/mnt/...` itself), and the binary is named `./<fileName>`
-// relative to that cwd. Splitting this way keeps the runner out of the business of translating a full
-// Windows path in-process — WSL owns that mapping — so it carries no assumption about the automount root.
+// `failed` is the run-step twin of what a spawn failure used to return inline: a reason, for that test
+// and no other. It is what a batch must produce for every test it could not account for, because the
+// pool's accounting is one record per test and an absence would be a missing record rather than a
+// failure anyone could read.
+union RunObservation
+	notRequired
+	completed(capture ProcessCapture)
+	failed(reason String)
+end 'RunObservation'
+
+typealias RunObservationArray = Array with RunObservation
+
+// ⭐ HOW THIS LANE PERFORMS A SPEC'S EXECUTIONS. The ONE table, over the same `ExternalRunner` union the
+// commands and the preflight are built from, so "which runner" and "one entry or many" cannot come to
+// disagree — adding a runner makes this match fail to compile until it decides.
 //
-// A missing WSL is caught ONCE, up front, by `requireRunnerAvailable` — not here, per test.
-function buildWslRunCommand(exePath FilePath) returns RunCommand
-	let absPath = exePath.resolve(Directory.currentPath())
-	let dir = try absPath.parent() otherwise panic("buildWslRunCommand: the built exe path '{absPath}' has no parent directory — every compiled test binary lives under the per-spec scratch dir, which always has one")
+// ⚠ **ORBSTACK IS DELIBERATELY NOT BATCHED, AND THIS IS THE STATEMENT OF THAT.** The gain measured here
+// is WSL's VM-ENTRY latency (137 ms per entry, on a Windows host); `orb`'s per-entry cost has never been
+// measured, and it cannot be from this host. More decisive: the two lanes give a test binary DIFFERENT
+// working directories today — WSL's `--cd` puts it in the spec's scratch directory while `orb run`
+// leaves it in the cwd this harness spawns with (`temp/`, the `RunWorkingSubdirName` contract) — so a
+// shared script would have to reproduce each lane's cwd exactly, and only one of the two can be
+// verified from here. Batching a lane whose results cannot be diffed is how a speed change becomes a
+// silent behaviour change.
+union RunStrategy
+	individually
+	wslBatch
+end 'RunStrategy'
+
+function runStrategyFor(effectiveTarget Target) returns RunStrategy
+	if not needsExternalRunner(effectiveTarget) 'hostSpawn'
+		return RunStrategy.individually
+	end 'hostSpawn'
+
+	return match externalRunnerFor(effectiveTarget) 'runner'
+		wasmtime gives RunStrategy.individually
+		orbstack gives RunStrategy.individually
+		wsl gives RunStrategy.wslBatch
+	end 'runner'
+end 'runStrategyFor'
+
+function executeRuns(prepared PreparedTestArray, tempDir FilePath, runWorkingDir FilePath, effectiveTarget Target) returns RunObservationArray
+	return match runStrategyFor(effectiveTarget) 'strategy'
+		individually gives spawnEachRun(prepared, runWorkingDir: runWorkingDir, effectiveTarget: effectiveTarget)
+		wslBatch gives runWslBatch(prepared, tempDir: tempDir, runWorkingDir: runWorkingDir)
+	end 'strategy'
+end 'executeRuns'
+
+// One spawn per test — the host's own binaries, and the two external runners that are not batched.
+function spawnEachRun(prepared PreparedTestArray, runWorkingDir FilePath, effectiveTarget Target) returns RunObservationArray
+	var observations = RunObservationArray.create()
+	for step in prepared 'eachStep'
+		observations.push(match step 'phase'
+			finished gives RunObservation.notRequired
+			awaiting(pending) gives spawnOneRun(pending, runWorkingDir: runWorkingDir, effectiveTarget: effectiveTarget)
+		end 'phase')
+	end 'eachStep'
+	return observations
+end 'spawnEachRun'
+
+function spawnOneRun(pending PendingRun, runWorkingDir FilePath, effectiveTarget Target) returns RunObservation
+	// The native path spawns the exe directly; a CROSS target's `.wasm` component cannot be spawned by
+	// the host, so it goes behind the vendored wasmtime instead — what is checked afterwards is
+	// IDENTICAL either way.
+	let runCommand = buildRunCommand(pending.compiled.exePath, effectiveTarget: effectiveTarget, programArgs: pending.compiled.test.programArgs)
+	// ⭐ A TEST BINARY'S WORKING DIRECTORY IS PART OF WHAT ITS SPEC ASSERTS — `directory.md` reaches
+	// `../bin` through it — so it is stated rather than inherited from whoever launched the suite. See
+	// `RunWorkingSubdirName`.
+	let spawned = try runProcess(runCommand.exe, argv: runCommand.argv, workingDirectory: runWorkingDir) otherwise (e) 'runSpawnFailed'
+		return RunObservation.failed("program spawn failed: {e.displayReason()}")
+	end 'runSpawnFailed'
+
+	return RunObservation.completed(spawned)
+end 'spawnOneRun'
+
+// Whether the one `wsl` entry happened at all. A launch that never got off the ground is not one test's
+// failure — every test the batch was carrying has to be told, in its own record, which is what keeps
+// the pool's one-record-per-test accounting true.
+union BatchLaunch
+	completed(capture ProcessCapture)
+	failed(reason String)
+end 'BatchLaunch'
+
+// ⭐⭐ **ONE `wsl` ENTRY FOR THE WHOLE SPEC.** See the batch constants block for the measurement that
+// motivates it and for why the capture is files rather than a stream.
+//
+// The entry is `wsl --cd <spec scratch dir> -e /bin/sh .batch/run.sh`, which is the per-test command's
+// own shape with the script where the binary used to be: `--cd` takes the directory as a RAW Windows
+// path and WSL translates it, so nothing here maps a Windows path to a guest one and nothing here
+// assumes an automount root. Every binary that spec built is IN that directory, so each execution
+// inherits exactly the working directory the per-test `--cd` gave it.
+function runWslBatch(prepared PreparedTestArray, tempDir FilePath, runWorkingDir FilePath) returns RunObservationArray
+	let batchSubdir = batchSubdirPath()
+	let batchDir = tempDir.join(batchSubdir)
+	let launch = launchBatch(prepared, tempDir: tempDir, batchDir: batchDir, runWorkingDir: runWorkingDir)
+
+	var observations = RunObservationArray.create()
+	for step in prepared 'eachStep'
+		observations.push(match step 'phase'
+			finished gives RunObservation.notRequired
+			awaiting(run) gives batchObservationFor(run.compiled.test.name, batchDir: batchDir, launch: launch)
+		end 'phase')
+	end 'eachStep'
+
+	// The captures have been read into the observations, so what is on disk is spent. Removed for
+	// `cleanup`'s reason and with the same best-effort rule: nothing downstream depends on it, but a
+	// suite that leaves three files per test behind is a suite whose scratch tree grows without bound.
+	purgeFilesIn(batchDir)
+
+	return observations
+end 'runWslBatch'
+
+// How many of this spec's tests still need their program run — the batch's size, which is what its
+// deadline is derived from and what decides whether there is anything to enter the guest FOR.
+//
+// ⚠ COUNTED off `prepared` rather than collected into an array of its own, and that is not merely
+// taste: an `Array with PendingRun` obliges the bootstrap to synthesize `PendingRun.clone`, which
+// obliges `CompiledTest.clone` — which it does not generate for a struct that is nobody's array element
+// (`E9001 Function 'CompiledTest.clone' not found in module`). Reading the one array that already
+// exists copies nothing and needs nothing synthesized.
+function pendingRunCount(prepared PreparedTestArray) returns TestTally
+	var pending = 0 as TestTally
+	for step in prepared 'eachStep'
+		match step 'phase'
+			finished then continue
+			awaiting then pending = pending + 1
+		end 'phase'
+	end 'eachStep'
+	return pending
+end 'pendingRunCount'
+
+// Write the script and run it. Everything that can go wrong BEFORE the guest starts is one reason,
+// carried to every test the batch was to have run.
+function launchBatch(prepared PreparedTestArray, tempDir FilePath, batchDir FilePath, runWorkingDir FilePath) returns BatchLaunch
+	let executions = pendingRunCount(prepared)
+	if executions == 0 'nothingToRun'
+		// A spec of nothing but `maxoncstderr` cases runs no program at all, and must not pay a 137 ms
+		// entry to prove it. Every observation this launch is read for is `notRequired` anyway.
+		return BatchLaunch.completed(emptyBatchCapture())
+	end 'nothingToRun'
+
+	if not Directory.create(batchDir) 'noBatchDir'
+		return BatchLaunch.failed("could not create the batch capture directory {batchDir.toString()}")
+	end 'noBatchDir'
+
+	// ⭐ DELETED BEFORE, NOT ONLY AFTER — the same rule the metrics file is deleted under, for the same
+	// reason: a run killed part-way through leaves a `.code` behind, and a test whose execution never
+	// happened would then be read as having produced whatever the last run left there.
+	for step in prepared 'eachStep'
+		match step 'phase'
+			finished then continue
+			awaiting(run) then discardBatchCaptures(batchDir, testName: run.compiled.test.name)
+		end 'phase'
+	end 'eachStep'
+
+	let scriptPath = batchDir.join("{BatchScriptName}")
+	try File.writeText(scriptPath, content: batchScript(prepared)) otherwise 'noScript'
+		return BatchLaunch.failed("could not write the batch script {scriptPath.toString()}")
+	end 'noScript'
 
 	var argv = StringArray.create()
 	argv.push(WslCwdFlag)
-	argv.push(dir.toString())
+	argv.push(tempDir.resolve(Directory.currentPath()).toString())
 	argv.push(WslExecFlag)
-	argv.push("{WslRelativePrefix}{absPath.filename()}")
+	argv.push(GuestShell)
+	argv.push("{BatchSubdirName}{PathSeparator}{BatchScriptName}")
 
-	return RunCommand.create(Executable.name(WslExecutableName), argv: argv)
-end 'buildWslRunCommand'
+	let batch = try runProcess(Executable.name(WslExecutableName), argv: argv, workingDirectory: runWorkingDir, timeoutMs: batchDeadlineMs(executions)) otherwise (e) 'batchSpawnFailed'
+		return BatchLaunch.failed("the batched {WslExecutableName} run failed: {e.displayReason()}")
+	end 'batchSpawnFailed'
+
+	// The script's own exit status is the last execution's and means nothing — every verdict is in the
+	// files. It is carried, not judged, so that a test whose record is MISSING can quote it.
+	return BatchLaunch.completed(batch)
+end 'launchBatch'
+
+// ⚠ **THE BATCH IS ALLOWED EXACTLY THE SUM OF WHAT ITS EXECUTIONS ARE ALLOWED**, plus one execution's
+// worth for the shell around them. It is the same structural ceiling a spec had when each test was its
+// own spawn — (tests) x `SpecSpawnTimeoutMs` — stated once instead of accumulated by accident.
+//
+// ⛔ **A TIGHTER NUMBER WOULD BE WORSE THAN NO NUMBER.** Nothing outside the guest can tell "a test is
+// inside its own deadline" from "`wsl` has stopped responding", so a deadline short enough to catch the
+// second kills a batch that is merely doing what the first one legitimately does — and every test after
+// the one that was slow would then fail for a reason that is not about it. The inner `timeout` is what
+// actually bounds a wedged PROGRAM, per test, at exactly the value one spawn used to be bounded by; this
+// bounds only a `wsl` that never returns at all, which the pool's own wedge watchdog would report
+// anyway.
+function batchDeadlineMs(executions TestTally) returns DurationMs
+	return SpecSpawnTimeoutMs * (executions + 1)
+end 'batchDeadlineMs'
+
+// What a batch that never had to run reports: no process, no output, no failure. Named because
+// "nothing ran" is a real answer here and every field of it has to be the empty one.
+function emptyBatchCapture() returns ProcessCapture
+	return ProcessCapture.create(0, stdout: "", stderr: "")
+end 'emptyBatchCapture'
+
+// The capture subdirectory as a path component. A FilePath (not the String overload) for
+// `specTempRootDir`'s reason: a bare String constant is ambiguous between `join`'s two overloads.
+function batchSubdirPath() returns FilePath
+	return try FilePath.from(BatchSubdirName) otherwise panic("SpecTestRunner: BatchSubdirName '{BatchSubdirName}' must be a valid relative path")
+end 'batchSubdirPath'
+
+// One test's three capture files, removed. Best-effort: an absent file is the normal case both at the
+// pre-run discard and at the post-run purge.
+function discardBatchCaptures(batchDir FilePath, testName String)
+	try File.delete(batchDir.join("{testName}{BatchStdoutExtension}")) otherwise ignore
+	try File.delete(batchDir.join("{testName}{BatchStderrExtension}")) otherwise ignore
+	try File.delete(batchDir.join("{testName}{BatchStatusExtension}")) otherwise ignore
+end 'discardBatchCaptures'
+
+// One test's observation, read back out of the files its execution wrote.
+function batchObservationFor(testName String, batchDir FilePath, launch BatchLaunch) returns RunObservation
+	return match launch 'l'
+		failed(reason) gives RunObservation.failed(reason)
+		completed(capture) gives batchCaptureFor(testName, batchDir: batchDir, batch: capture)
+	end 'l'
+end 'batchObservationFor'
+
+function batchCaptureFor(testName String, batchDir FilePath, batch ProcessCapture) returns RunObservation
+	// THE STATUS FIRST, because it is the file that says the execution finished at all — the other two
+	// exist from the moment the redirection is set up, so neither can answer that question.
+	let status = try File.readText(batchDir.join("{testName}{BatchStatusExtension}")) otherwise 'noStatus'
+		return RunObservation.failed("the batched {WslExecutableName} run recorded no exit status for this test; the batch itself exited {batch.exitCode}{batchStderrNote(batch)}")
+	end 'noStatus'
+
+	let recorded = status.trim()
+	if recorded == BatchTimedOutToken 'timedOut'
+		return RunObservation.failed("the program did not finish within {SpecSpawnTimeoutSeconds}s and was killed inside the batch")
+	end 'timedOut'
+
+	// `parseCount` is the suite's ONE decimal parser (see ScaleTestRunner). Anything it refuses is a
+	// disagreement between this reader and the script above it, which is a harness break rather than a
+	// verdict about the program — so it FAILS this one test with the bytes it could not read.
+	let exitCode = try parseCount(recorded) otherwise (e) 'unreadableStatus'
+		return RunObservation.failed("the batched {WslExecutableName} run wrote an unreadable exit status '{recorded}': {scaleErrorText(e)}")
+	end 'unreadableStatus'
+
+	let stdout = try File.readText(batchDir.join("{testName}{BatchStdoutExtension}")) otherwise 'noStdout'
+		return RunObservation.failed("the batched {WslExecutableName} run recorded exit status {exitCode} but no stdout capture for this test")
+	end 'noStdout'
+
+	let stderr = try File.readText(batchDir.join("{testName}{BatchStderrExtension}")) otherwise 'noStderr'
+		return RunObservation.failed("the batched {WslExecutableName} run recorded exit status {exitCode} but no stderr capture for this test")
+	end 'noStderr'
+
+	return RunObservation.completed(ProcessCapture.create(exitCode as ExitCodeValue, stdout: stdout, stderr: stderr))
+end 'batchCaptureFor'
+
+// The batch process's own stderr, quoted under a missing record — the only place it is worth reading,
+// because that is when something went wrong OUTSIDE any one test. Silent when there is nothing to
+// quote, so the ordinary message does not end in a dangling colon.
+function batchStderrNote(batch ProcessCapture) returns String
+	let text = batch.stderr.trim()
+	return "" if text.isEmpty() else " and said: {text}"
+end 'batchStderrNote'
+
+// ⭐⭐ **THE SCRIPT.** One shell function, then one call per test — the call carrying the test's name
+// (which is its binary's name and the stem of its three capture files) and the case's own `Args:`.
+//
+// ⭐ **THE STATUS IS WRITTEN BY THE EXECUTION'S OWN SHELL, INSIDE THE PROCESS GROUP `timeout` SIGNALS.**
+// That is the whole reason there is an inner shell at all: it is the only way to tell `timeout`'s exit
+// 124 from a PROGRAM's exit 124 (see `BatchTimedOutToken`). If the program ran to completion its status
+// is in the file, whatever it was; if it was killed, nothing wrote the file and the outer shell says so.
+//
+// ⭐ **THE PROGRAM IS `exec`ed INSIDE A SUBSHELL, AND BOTH HALVES OF THAT ARE LOAD-BEARING.** The
+// subshell is what the redirections belong to, so the program's own stdout and stderr are the only
+// things in the capture files; `exec` is what makes the subshell BECOME the program, so a program that
+// dies by a signal is reported by the shell OUTSIDE those redirections — where the per-test path had
+// nothing to report it at all. MEASURED, both ways: a SIGSEGV under `wsl -e ./crash` gives exit 139 and
+// an empty stderr, and so does this (the shell's `Segmentation fault (core dumped)` goes to the batch's
+// own stderr). Without `exec`, that sentence lands in the test's `.err` and a case pinning silence
+// FAILS.
+//
+// ⭐ **THE FUNCTION BODY IS A SUBSHELL `( … )` RATHER THAN A BRACE BLOCK.** POSIX allows either, and
+// `{`/`}` would have to be escaped in every Maxon string literal that spells this script.
+function batchScript(prepared PreparedTestArray) returns String
+	var out = StringBuilder.create()
+
+	out.append("{BatchRunFunctionName}() (\n")
+	out.append("\tn=$1\n")
+	out.append("\tshift\n")
+	out.append("\tc=\"{BatchSubdirName}/$n{BatchStatusExtension}\"\n")
+	out.append("\t{GuestTimeoutCommand} -k {BatchKillGraceSeconds}{GuestTimeoutSecondsSuffix} {SpecSpawnTimeoutSeconds}{GuestTimeoutSecondsSuffix} {GuestShell} {GuestShellCommandFlag} 'exe=$1; out=$2; err=$3; code=$4; shift 4; ( exec \"$exe\" \"$@\" > \"$out\" 2> \"$err\" ); printf %s $? > \"$code\"' _ \"{WslRelativePrefix}$n\" \"{BatchSubdirName}/$n{BatchStdoutExtension}\" \"{BatchSubdirName}/$n{BatchStderrExtension}\" \"$c\" \"$@\"\n")
+	out.append("\t[ -f \"$c\" ] || printf %s {BatchTimedOutToken} > \"$c\"\n")
+	out.append(")\n")
+
+	for step in prepared 'eachStep'
+		match step 'phase'
+			finished then continue
+			awaiting(run) then out.append(batchCallLine(run.compiled.test))
+		end 'phase'
+	end 'eachStep'
+
+	return out.build()
+end 'batchScript'
+
+// One test's line: the function, the test's name, then the case's own `Args:`.
+//
+// ⭐ THE PROGRAM'S OWN ARGUMENTS GO LAST, exactly as they do behind every other runner
+// (`buildRunCommand`): the shell function forwards whatever follows the test's name straight to the
+// binary, so `Args:` reaches the same argv[1..] a direct spawn would have given it.
+function batchCallLine(test SpecTest) returns String
+	var line = StringBuilder.create()
+	line.append(BatchRunFunctionName)
+	line.append(" ")
+	line.append(shQuoted(test.name))
+
+	for arg in test.programArgs 'eachArg'
+		line.append(" ")
+		line.append(shQuoted(arg))
+	end 'eachArg'
+
+	line.append("\n")
+	return line.build()
+end 'batchCallLine'
+
+// One value, quoted so the shell reads it as exactly the bytes it was given. See the `ShQuote` block:
+// single quotes make everything literal, so the only case is the quote itself.
+function shQuoted(value String) returns String
+	return "{ShQuote}{value.replace(ShQuote, with: "{ShQuote}{ShBackslash}{ShQuote}{ShQuote}")}{ShQuote}"
+end 'shQuoted'
 
 // ⭐ CAN THIS HOST EXECUTE BINARIES BUILT FOR `effectiveTarget` AT ALL? Asked ONCE, by the parent,
 // before a single worker is spawned.
@@ -2075,33 +2616,35 @@ function requireOrbMachineReachable(effectiveTarget Target)
 	end 'machineUnreachable'
 end 'requireOrbMachineReachable'
 
-// Probe WSL by running the smallest possible command through it: `wsl -e /bin/true`. Like the orb
-// probe it answers two questions in one spawn — is `wsl` installed, and can a distro execute a binary
-// — each with its own fix. A static raw-syscall ELF needs nothing installed inside the distro, so a
-// reachable distro that runs `/bin/true` is proof enough the suite's binaries will run. The target key
-// is DERIVED from a `Target`, never spelled literally — the same discipline the orb probe follows.
+// Probe WSL by running the smallest command that proves the LANE, not merely the distro — see
+// `wslProbeScript` for why that is `/bin/sh` and `timeout` rather than `/bin/true`. Like the orb probe
+// it answers every question it can in ONE spawn, and each has a different fix: is `wsl` installed, is a
+// distro reachable, can it execute `/bin/sh`, is coreutils there. The target key is DERIVED from a
+// `Target`, never spelled literally — the same discipline the orb probe follows.
 function requireWslAvailable(effectiveTarget Target)
 	let wslTargetKey = targetToString(effectiveTarget)
 
 	var argv = StringArray.create()
 	argv.push(WslExecFlag)
-	argv.push(WslProbeCommand)
+	argv.push(GuestShell)
+	argv.push(GuestShellCommandFlag)
+	argv.push(wslProbeScript())
 
 	let probe = try runProcess(Executable.name(WslExecutableName), argv: argv, workingDirectory: inheritedWorkingDir()) otherwise (e) 'notInstalled'
 		panic("SpecTestRunner: could not run '{WslExecutableName}' ({e.displayReason()}) — running a {wslTargetKey} binary from a Windows host needs WSL2 (`wsl --install`); install it, or drop {TargetFlagPrefix}{wslTargetKey} and run the suite for this host")
 	end 'notInstalled'
 
-	if probe.exitCode != 0 'distroUnreachable'
-		panic("SpecTestRunner: '{WslExecutableName} {WslExecFlag} {WslProbeCommand}' failed (exit {probe.exitCode}): {probe.stderr.trim()} — the {wslTargetKey} run path needs a working WSL2 distribution (`wsl --install`, then confirm `wsl -e /bin/true` exits 0)")
-	end 'distroUnreachable'
+	if probe.exitCode != 0 'distroUnusable'
+		panic("SpecTestRunner: '{WslExecutableName} {WslExecFlag} {GuestShell} {GuestShellCommandFlag} {wslProbeScript()}' failed (exit {probe.exitCode}): {probe.stderr.trim()} — the {wslTargetKey} run path needs a working WSL2 distribution (`wsl --install`) whose {GuestShell} and coreutils `{GuestTimeoutCommand}` are present, because a spec's binaries are run from a generated shell script that bounds each one with it")
+	end 'distroUnusable'
 end 'requireWslAvailable'
 
 // A RUN test (whatever result blocks the case carried — an ```exitcode, a ```stdout, a ```stderr, a
-// ```RequiredData, a ```RequiredRdata, in any combination): the compile MUST succeed, then the produced
-// exe is spawned and EVERY half the spec pinned is checked against that one execution.
-function checkRun(expected SpecExitCode, stderr SpecStderr, stdout SpecStdout, sectionPins SpecSectionPinArray, compile ProcessCapture, exePath FilePath, runWorkingDir FilePath, effectiveTarget Target, programArgs ProgramArgArray) returns TestOutcome
+// ```RequiredData, a ```RequiredRdata, in any combination): the compile MUST succeed and every section
+// the case pinned must hold BEFORE the program is worth running at all.
+function runPreconditions(expected SpecExitCode, stderr SpecStderr, stdout SpecStdout, sectionPins SpecSectionPinArray, compile ProcessCapture, exePath FilePath, effectiveTarget Target) returns PreRunVerdict
 	if compile.exitCode != 0 'compileFailed'
-		return TestOutcome.fail("compilation failed (exit {compile.exitCode}): {compile.stderr.trim()}")
+		return PreRunVerdict.settled(TestOutcome.fail("compilation failed (exit {compile.exitCode}): {compile.stderr.trim()}"))
 	end 'compileFailed'
 
 	// The section gates read the BINARY, so they run before the program does — they are properties of
@@ -2122,20 +2665,27 @@ function checkRun(expected SpecExitCode, stderr SpecStderr, stdout SpecStdout, s
 	// from a FAILED compile) needs no arm at any of them.
 	let sectionOutcome = checkRequiredSections(sectionPins, exePath: exePath, effectiveTarget: effectiveTarget)
 	if not sectionOutcome.isPass() 'sectionDisagreed'
-		return sectionOutcome
+		return PreRunVerdict.settled(sectionOutcome)
 	end 'sectionDisagreed'
 
-	// The native path spawns the exe directly; a CROSS target's `.wasm` component cannot be spawned
-	// by the host, so it is run through the vendored wasmtime instead — everything checked against
-	// that one execution afterwards is IDENTICAL either way.
-	let runCommand = buildRunCommand(exePath, effectiveTarget: effectiveTarget, programArgs: programArgs)
-	// ⭐ THE ONE SPAWN IN THIS HARNESS THAT NAMES ITS OWN WORKING DIRECTORY. A test binary's cwd is part
-	// of what its spec ASSERTS — `directory.md` reaches `../bin` through it — so it is stated here rather
-	// than inherited from whoever launched the suite. See `RunWorkingSubdirName`.
-	let spawned = try runProcess(runCommand.exe, argv: runCommand.argv, workingDirectory: runWorkingDir) otherwise (e) 'runSpawnFailed'
-		return TestOutcome.fail("program spawn failed: {e.displayReason()}")
-	end 'runSpawnFailed'
+	return PreRunVerdict.needsExecution(expected, stderr: stderr, stdout: stdout)
+end 'runPreconditions'
 
+// The verdict a RUN expectation takes from the execution it asked for — whichever way this lane
+// performed it (`executeRuns`).
+//
+// `notRequired` is unreachable and says so: the executors mint it for exactly the tests that FINISHED
+// in the compile pass, and nothing but a `PendingRun` reaches here.
+function checkObservedRun(expected SpecExitCode, stderr SpecStderr, stdout SpecStdout, observation RunObservation, effectiveTarget Target) returns TestOutcome
+	return match observation 'observed'
+		notRequired panic("checkObservedRun: a pending run was handed the 'no execution needed' observation — `executeRuns` answers one observation per PREPARED test and mints that arm only for a test that finished at its compile")
+		failed(reason) gives TestOutcome.fail(reason)
+		completed(capture) gives runAssertions(expected, stderr: stderr, stdout: stdout, spawned: capture, effectiveTarget: effectiveTarget)
+	end 'observed'
+end 'checkObservedRun'
+
+// EVERY half the spec pinned, checked against that ONE execution.
+function runAssertions(expected SpecExitCode, stderr SpecStderr, stdout SpecStdout, spawned ProcessCapture, effectiveTarget Target) returns TestOutcome
 	// What the PROGRAM said and how it ended, which under an external runner is not always what the
 	// PROCESS said and how the process ended — see `observedRun`. Every check below reads this one
 	// observation, so the three halves of a case's expectation cannot be compared against two
@@ -2161,7 +2711,7 @@ function checkRun(expected SpecExitCode, stderr SpecStderr, stdout SpecStdout, s
 	end 'stdoutDisagreed'
 
 	return checkRunStderr(stderr, actual: run.stderr)
-end 'checkRun'
+end 'runAssertions'
 
 // ⭐ **THE SECTION GATES — a linked binary's own bytes, for every section the case pinned.**
 //
@@ -2259,7 +2809,7 @@ end 'checkRunStderr'
 // The `unpinned` arm is NOT "ignore stdout": it asserts the program printed NOTHING, which is what a
 // non-`print` program does. Every pre-P1.2 program printed nothing to stdout, so this holds the whole
 // suite to it — an accidental stray write becomes a FAILURE rather than an invisible one.
-// The exit-code half of a run expectation. `unpinned` passes without looking — see `checkRun`'s note on
+// The exit-code half of a run expectation. `unpinned` passes without looking — see `runAssertions`'s note on
 // why that is not the same rule the stdout half follows.
 function checkRunExitCode(expected SpecExitCode, actual ExitCodeValue) returns TestOutcome
 	return match expected 'pin'
@@ -2606,7 +3156,7 @@ end 'referenceFragmentPath'
 // the IR sidecar and the metrics TSV. A delete failure — e.g. the exe/IR/metrics were never produced
 // because the compile failed — is ignored. Correctness does not rest on this succeeding: a multi-file
 // test's directory is PURGED before it is written (`stageSourceFiles`), and the metrics file is
-// deleted before the compile that would write it (`runStagedTest`), so a leftover can never join a
+// deleted before the compile that would write it (`compileStagedTest`), so a leftover can never join a
 // later build or be read as a later compile's cost.
 function cleanup(staged StagedTest, exePath FilePath, irPath FilePath, metricsPath FilePath)
 	for path in staged.writtenFiles 'eachSource'

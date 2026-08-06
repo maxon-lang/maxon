@@ -56,7 +56,7 @@ export let TargetFlagPrefix = "--target="
 let WorkersFlagPrefix = "--workers="
 
 // ⭐ **THE TWO IR-SIDECAR SPELLINGS, EXPORTED BECAUSE THE SPEC RUNNER EMITS THEM** on the command
-// line it spawns each fragment build with (`SpecTestRunner.runStagedTest`) — the same reason the
+// line it spawns each fragment build with (`SpecTestRunner.compileStagedTest`) — the same reason the
 // worker-pool flags above are exported, and named here where the parser that reads them back lives.
 //
 // `--emit-ir` writes the lowered Target IR beside the exe. `--emit-ir-runtime=<name>,<name>` says
@@ -69,7 +69,7 @@ export let EmitIrRuntimeFlagPrefix = "--emit-ir-runtime="
 
 // `--metrics=<path>`, exported for the same reason and now with TWO harnesses emitting it: the scale
 // runner spawns one build per rung with it (`ScaleTestRunner.compileRung`), and the spec runner
-// spawns one per test (`SpecTestRunner.runStagedTest`, whose cumulative-CPU indicator reads the
+// spawns one per test (`SpecTestRunner.compileStagedTest`, whose cumulative-CPU indicator reads the
 // `total` row back). It was written out as a literal at the parser below AND at the scale runner
 // until the second harness would have made a third copy.
 export let MetricsFlagPrefix = "--metrics="
@@ -499,7 +499,8 @@ end 'filterSuffix'
 //
 // ⭐⭐ **THE ANSWER IS ABSOLUTE WHICHEVER WAY IT WAS SPELLED, AND SINCE R4.8 THAT IS A CORRECTNESS
 // REQUIREMENT RATHER THAN TIDINESS.** Every path this run computes hangs off this one — the staged
-// source, the `-o` output base, the exe that gets SPAWNED (`SpecTestRunner.checkRun`) — and that spawn
+// source, the `-o` output base, the exe that gets SPAWNED (`SpecTestRunner.spawnOneRun`, or the batch
+// script `runWslBatch` writes) — and that spawn
 // now names its own working directory (`specRunWorkingDir`, `<checkoutRoot>/temp/`). A path relative to
 // the HARNESS's cwd handed to a child that no longer has that cwd is a path with two possible meanings,
 // and which one the OS picks is a PLATFORM detail: Windows resolves a partial `lpApplicationName`
