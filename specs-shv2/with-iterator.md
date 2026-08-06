@@ -34,7 +34,8 @@ Iterators are first-class values. Pass a half-consumed iterator into a function 
 ## Tests
 
 <!-- disabled-test: withIterator.basic -->
-<!-- BLOCKED: `withIterator()` needs a tuple over generic type PARAMETERS. `stdlib/helpers/itertools/withIterator.maxon:12` declares `returns (Source, Element)` inside `type WithIterIterator uses Source, Element`, which shv2 refuses (`E2015: a tuple whose element 0 is .type parameter.: a tuple.s identity IS its element types`) — so the module cannot be listed and `Iterable.withIterator` has no result type. It ALSO needs `Array.createIterator()`, which is not on shv2.s `Array` roster (board row `S2l`). -->
+<!-- BLOCKED: `Array` does not serve `withIterator` — it is a compiler builtin with a fixed member roster (`managed/get/set/…`), and `Iterable`'s extension method is not on it. MEASURED 2026-08-06 (W6): this is the FIRST blocker, reached before any tuple question. Behind it, `stdlib/helpers/itertools/withIterator.maxon` needs ASSOCIATED-TYPE BINDING, not the tuple refusal W6 removed: `source.current()` on a `where Source is Iterator` parameter types as the interface's own unbound `E`, so the body yields `__Tuple2.T0.Element` against a declared `__Tuple2.T0.T1`. Reproduces with no stdlib; v1 binds it in `TypeResolution.resolveGenericAliasArgName`. -->
+<!-- W6 -->
 ```maxon
 function main() returns ExitCode
 	let arr = [10, 20, 30]
@@ -53,8 +54,7 @@ end 'main'
 2:30
 ```
 
-<!-- disabled-test: withIterator.bytes -->
-<!-- BLOCKED: `String.bytes()` yields the `ByteView` of `stdlib/helpers/string/views.maxon`, which the stdlib loader does not list — it stops at `Iterable.withIterator` for the tuple reason above. -->
+<!-- test: withIterator.bytes -->
 Iterate over string bytes via the ByteView iterable.
 ```maxon
 function main() returns ExitCode
@@ -97,7 +97,8 @@ end 'main'
 ```
 
 <!-- disabled-test: withIterator.body-advance-skips-element -->
-<!-- BLOCKED: `withIterator()` — same tuple-over-type-parameter blocker as `withIterator.basic`. -->
+<!-- BLOCKED: `Array` member 'withIterator' — same first blocker as `withIterator.basic`, measured 2026-08-06 (W6). -->
+<!-- W6 -->
 Calling `iter.advance()` inside the for-loop body skips the next element. Body runs on 10, advances to 20, header advances again to 30; so 20 is skipped.
 ```maxon
 function main() returns ExitCode
@@ -118,7 +119,8 @@ end 'main'
 ```
 
 <!-- disabled-test: withIterator.body-retreat-revisits-element -->
-<!-- BLOCKED: `withIterator()` — same tuple-over-type-parameter blocker as `withIterator.basic`. -->
+<!-- BLOCKED: `Array` member 'withIterator' — same first blocker as `withIterator.basic`, measured 2026-08-06 (W6). -->
+<!-- W6 -->
 Calling `iter.retreat()` inside the body causes the next iteration to re-visit the current element. Without the guard, this would loop forever — we stop after a fixed count.
 ```maxon
 function main() returns ExitCode
@@ -150,7 +152,8 @@ end 'main'
 ```
 
 <!-- disabled-test: withIterator.iterator-as-parameter -->
-<!-- BLOCKED: `ArrayIterator` and `Array.createIterator()` — shv2 iterates an `Array` with an index counter and mints no cursor object at all (board row `S2l`, whose own STOPPED note records the measurement). -->
+<!-- BLOCKED: `ArrayIterator` and `Array.createIterator()` — shv2 iterates an `Array` with an index counter and mints no cursor object at all (board row `S2l`). Confirmed still the reason 2026-08-06 (W6): the case now stops at `for … in` over a `struct` value. -->
+<!-- S2l -->
 An iterator passed to a helper function is still iterable from its current position. The helper consumes the remaining elements.
 ```maxon
 typealias TokenIter = ArrayIterator with String
