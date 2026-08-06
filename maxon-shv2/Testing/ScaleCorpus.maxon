@@ -1110,6 +1110,32 @@ let GenericInstancesBase = 8 as KnobSize
 // cascade). Both must scale, because they are different ownership paths through the same base.
 let GenericInstanceArgShapeCount = 2 as KnobSize
 
+// ⭐⭐ **M `try` SITES OVER A SUBSTITUTED *MANAGED* `T` RETURN — the shape BATCH25 built, and the shape
+// this corpus could not spell on the day it shipped.**
+//
+// A shared generic body cannot classify its `T` return, so it hands one back as a BORROW and the CALLER
+// takes the `+1` (`coOwnSubstitutedCallResult`) — necessarily after the call. Under a `try` that `+1`
+// may not sit in the block the fork splits, where the error edge would run it against a result register
+// the throw never wrote; BATCH25 LIFTS the promotion's ops off that block and re-attaches them at the
+// head of the ok edge. **Every op of that mechanism is per-SITE**, which is what this knob doubles.
+//
+// ⚠ **IT IS A SITE KNOB, AND THE TYPES ARE FIXED — for the Array knobs' reason.** The per-INSTANCE cost
+// (a layout descriptor, a per-instance `__destruct_<instance>`) is `genericInstances`' dimension and
+// this knob must not re-measure it: two knobs whose columns move together explain nothing about which
+// change moved them. So this file declares exactly ONE base, ONE aggregate holder and TWO instances —
+// `Box with <holder>` and `Box with String` — and only the SITE count climbs.
+//
+// ⚠ **BOTH MANAGED SPELLINGS ARE GENERATED, BECAUSE THE CURE IS KEYED ON AN OP RANGE PRECISELY BECAUSE
+// THEY DIFFER.** An aggregate promotes with a single `__mm_retain` call; a `String` promotes by COPYING
+// (`promoteToOwnedString`), whose trailing op is an interpolation rather than a call. A knob that
+// generated only the aggregate would leave the arm that motivated the range unmeasured.
+let TryCoOwnSitesBase = 8 as KnobSize
+
+// The two managed spellings `tryCoOwnSource` rotates over — see the note above. Named for
+// `GenericInstanceArgShapeCount`'s reason: the count and the branches that realize it are one fact, so
+// the USE loop's `else` panics rather than silently generating fewer spellings than the manifest claims.
+let TryCoOwnSpellingCount = 2 as KnobSize
+
 // N interfaces and their conforming types — the PER-CONFORMANCE cost: `ConformanceCheck`'s declared-
 // conformance index, the method-requirement match, and one compiled method body per requirement.
 //
@@ -1420,6 +1446,11 @@ function generateRung(root FilePath, rung RungIndex) returns ScaleRung throws Sc
 	sourceBytes = sourceBytes + try writeRungFile(dir, name: "v_marray", source: managedArrayOpsSource(knobAt(ManagedArrayOpsBase, rung: rung)), written: written, drivers: drivers, driver: RungDriver.threads(ManagedArrayOpsDriver))
 	sourceBytes = sourceBytes + try writeRungFile(dir, name: "w_gbase", source: genericBasesSource(knobAt(GenericBasesBase, rung: rung)), written: written, drivers: drivers, driver: RungDriver.threads(GenericBasesDriver))
 	sourceBytes = sourceBytes + try writeRungFile(dir, name: "x_ginst", source: genericInstancesSource(knobAt(GenericInstancesBase, rung: rung)), written: written, drivers: drivers, driver: RungDriver.threads(GenericInstancesDriver))
+	// Beside the two generic knobs because it shares their base emitter, and separate from them because
+	// it is a per-SITE dimension over FIXED instances (BATCH25): the `try` sites where a substituted
+	// managed `T` result's co-own is lifted onto the ok edge. Nothing in this corpus reached that
+	// mechanism before it — the rung that built the lift measured Δ0 in all three columns and said so.
+	sourceBytes = sourceBytes + try writeRungFile(dir, name: "x_trycoown", source: tryCoOwnSource(knobAt(TryCoOwnSitesBase, rung: rung)), written: written, drivers: drivers, driver: RungDriver.threads(TryCoOwnDriver))
 	// The interface knob writes and registers itself across MANY files, like `writeManyFunctions`: its
 	// per-file drivers' names are known only inside the loop that mints them, and holding
 	// `InterfacesPerFile` constant is what keeps the per-file interface scan bounded (see its knob).
@@ -2612,6 +2643,22 @@ function managedFieldTypeDecl(name String, managedFieldName String, managedTypeN
 	return out.build()
 end 'managedFieldTypeDecl'
 
+// Whether a generated generic base carries a THROWING `T`-returning method beside its total `get`.
+//
+// It is a union and not an empty-string error name because the two answers are different SHAPES, not one
+// shape with a blank in it: the throwing arm needs an error type to name in its `throws` clause, and a
+// base that has no such method has no error type to offer. An absent name spelled `""` would compile a
+// `throws ` clause with nothing after it into the corpus and take the whole ladder down as a broken run.
+union GenericBoxFetch
+	// `get` only — what both generic knobs want. Neither calls a throwing method, and a body nothing
+	// calls would price a cost their dimension does not claim to carry.
+	none
+
+	// A `fetch() returns T throws <errorTypeName>` beside `get` — the `tryCoOwn` knob's shape, and the
+	// only route in this corpus to a substituted MANAGED `T` result under a `try`.
+	throwing(errorTypeName String)
+end 'GenericBoxFetch'
+
 // ONE UNCONSTRAINED SINGLE-PARAMETER GENERIC BASE — an opaque `T` field, a `create` that takes one, and
 // a `get` that hands it back.
 //
@@ -2620,7 +2667,12 @@ end 'managedFieldTypeDecl'
 // monomorphizing) and the other holds ONE of them fixed and grows the INSTANTIATIONS. Emitting the
 // declaration twice would let the two knobs measure different bases while claiming to isolate the two
 // costs of the same one.
-function genericBoxDecl(name String) returns String
+//
+// ⭐ **AND SHARED BY THE `tryCoOwn` KNOB THROUGH ITS `fetch` PARAMETER RATHER THAN BY A THIRD COPY.**
+// That knob needs the identical base with one THROWING method added; a near-copy would be a fourth
+// declaration of one shape, and the drift would be silent — each knob would go on compiling while
+// measuring a base slightly different from the one the manifest describes.
+function genericBoxDecl(name String, fetch GenericBoxFetch) returns String
 	var out = StringBuilder.create()
 	out.append("\ntype {name} uses T\n")
 	out.append("\texport var value as T\n")
@@ -2632,9 +2684,37 @@ function genericBoxDecl(name String) returns String
 	out.append("\texport function get() returns T\n")
 	out.append("\t\treturn self.value\n")
 	out.append("\tend 'get'\n")
+
+	match fetch 'fetchArm'
+		none then break 'fetchArm'
+		throwing(errorTypeName) then out.append(genericBoxFetchDecl(errorTypeName))
+	end 'fetchArm'
+
 	out.append("end '{name}'\n")
 	return out.build()
 end 'genericBoxDecl'
+
+// The throwing sibling of `get`: the same substituted `T` return, and a `throws` clause that is the
+// whole difference. It is what puts the caller's `+1` for a substituted managed result under a `try` —
+// the promotion BATCH25 lifts onto the ok edge.
+//
+// ⭐ **THE `live` FLAG IS WHAT MAKES THE ERROR EDGE RUN, and a corpus whose error edge never runs cannot
+// check the half of this rung that emits NOTHING.** The lift's rule is that the promotion goes on the ok
+// edge ALONE, because on the error edge the throw never wrote the result register; a retain that leaked
+// onto that edge would take a reference to whatever the register held. That is a RUNTIME fact, so the
+// caller passes an opaque bool (`tryCoOwnLiveText`) and the ladder takes both edges at every rung.
+function genericBoxFetchDecl(errorTypeName String) returns String
+	var out = StringBuilder.create()
+	out.append("\n")
+	out.append("\texport function fetch(live bool) returns T throws {errorTypeName}\n")
+	out.append("\t\tif not live 'absent'\n")
+	out.append("\t\t\tthrow {errorTypeName}.bad\n")
+	out.append("\t\tend 'absent'\n")
+	out.append("\n")
+	out.append("\t\treturn self.value\n")
+	out.append("\tend 'fetch'\n")
+	return out.build()
+end 'genericBoxFetchDecl'
 
 // One struct create SITE: build it, read both fields, WRITE a field, and pass the whole struct across a
 // call. Shared by both struct knobs, so all four are per-SITE costs that ride whichever knob doubles.
@@ -3285,6 +3365,16 @@ let GenericInstanceHoldPrefix = "ScaleXHold"
 let GenericInstanceHoldValueAlias = "ScaleXHoldValue"
 let GenericInstancePrefix = "ScaleXInst"
 let GenericInstancesDriver = "scaleGenericInstances"
+
+let TryCoOwnBaseName = "ScaleTcBox"
+let TryCoOwnErrorName = "ScaleTcBoom"
+let TryCoOwnHolderName = "ScaleTcHolder"
+let TryCoOwnHolderValueAlias = "ScaleTcHoldValue"
+let TryCoOwnHolderBoxAlias = "ScaleTcHolderBox"
+let TryCoOwnStringBoxAlias = "ScaleTcStringBox"
+let TryCoOwnHolderConsumerName = "scaleTcConsumeHolder"
+let TryCoOwnStringConsumerName = "scaleTcConsumeString"
+let TryCoOwnDriver = "scaleTryCoOwn"
 
 let InterfacePrefix = "ScaleProto"
 let ConformerPrefix = "ScaleUnit"
@@ -3949,7 +4039,7 @@ function genericBasesSource(baseCount KnobSize) returns String
 		let instName = "{GenericBaseInstPrefix}{t}"
 		let arity = t mod GenericBaseArityShapeCount
 		if arity == 0 'oneParam'
-			out.append(genericBoxDecl(baseName))
+			out.append(genericBoxDecl(baseName, fetch: GenericBoxFetch.none))
 			out.append("\ntypealias {instName} = {baseName} with {GenericElementAlias}\n")
 		end 'oneParam' else if arity == 1 'twoParam'
 			out.append("\ntype {baseName} uses A, B\n")
@@ -4021,7 +4111,7 @@ function genericInstancesSource(instanceCount KnobSize) returns String
 	var out = StringBuilder.create()
 	out.append("// Generated by ScaleCorpus: the generic-instances knob — {instanceCount} instantiations of one fixed base, each with its OWN type argument (trivial ranged int / managed holder).\n")
 	out.append("typealias {GenericInstanceHoldValueAlias} = int(i64.min to i64.max)\n")
-	out.append(genericBoxDecl(GenericInstanceBaseName))
+	out.append(genericBoxDecl(GenericInstanceBaseName, fetch: GenericBoxFetch.none))
 
 	for i in 0 upto instanceCount 'eachInstance'
 		let shape = i mod GenericInstanceArgShapeCount
@@ -4068,6 +4158,212 @@ function genericInstancesSource(instanceCount KnobSize) returns String
 	out.append(accWitnessTail(GenericInstancesDriver))
 	return out.build()
 end 'genericInstancesSource'
+
+// The value an aggregate `fetch`'s `otherwise` hands back, and what the condition form's ELSE arm folds.
+// They are DIFFERENT from each other and from the seed on purpose: each of the three edges a site can
+// take contributes a value only that edge can contribute, so a fork that took the wrong one moves the
+// witness. A shared constant would make two of the three indistinguishable.
+let TryCoOwnFetchFallbackValue = 41
+let TryCoOwnElseArmValue = 43
+let TryCoOwnConsumerFallbackValue = 47
+
+// Whether site `index` takes its error edge. The cycle is one full rotation of the SPELLINGS per answer,
+// so every spelling is generated on both edges — keying this off `index mod 2` directly would have made
+// the aggregate always succeed and the String always throw, covering half of what it claims.
+//
+// It is derived from `TryCoOwnSpellingCount` rather than written as its own number for this file's
+// founding reason: a third spelling would otherwise leave the cycle behind at two and silently stop
+// generating one of the four combinations.
+function tryCoOwnTakesErrorEdge(index KnobIndex) returns bool
+	return (index mod (TryCoOwnSpellingCount + TryCoOwnSpellingCount)) >= TryCoOwnSpellingCount
+end 'tryCoOwnTakesErrorEdge'
+
+// The opaque bool a site hands `fetch`/a consumer. It is written against `a` and never as `true` /
+// `false`: a literal would let the folder settle the branch and delete the error edge outright, and the
+// edge is what this knob exists to emit. `a` is the seed, which is positive, so `a > 0` is TAKEN and
+// `a < 0` is not — and the compiler can prove neither.
+function tryCoOwnLiveText(throwsHere bool) returns String
+	if throwsHere 'errorEdge'
+		return "a < 0"
+	end 'errorEdge'
+
+	return "a > 0"
+end 'tryCoOwnLiveText'
+
+// The per-site String payload. Long enough to leave the 48-byte inline record (so the promotion COPIES a
+// heap string rather than a record the compiler could keep in registers), and unique per site so the
+// literals are distinct `.rdata` records rather than one interned constant M sites share.
+//
+// ⚠ ITS LENGTH IS MEASURED FROM THE STRING ITSELF, never counted by hand: the generator holds the same
+// bytes the emitted literal will hold — plain ASCII, no escape needed and none written — so
+// `.byteLength()` here IS the `.byteLength()` the rung will compute, and a widened payload cannot leave
+// a stale expectation behind.
+function tryCoOwnPayloadText(index KnobIndex) returns String
+	return "try co-own payload {index}: long enough to leave the inline string record"
+end 'tryCoOwnPayloadText'
+
+// The `tryCoOwn` knob: M `try` SITES over a substituted MANAGED `T` return — see `TryCoOwnSitesBase`.
+//
+// Each site spends the mechanism three times, and the third is a CONTROL rather than a repeat:
+//
+//   • the EXPRESSION form (`let x = try box.fetch(…) otherwise …`), whose promotion is lifted onto
+//     `tryok`;
+//   • the CONDITION form (`if let x = try box.fetch(…) 'ok' … end 'ok' else (e) 'bad' … end 'bad'`),
+//     which reaches the same fork by a different road — `parseCatchingCondition`, not `desugarTry` —
+//     and whose ok edge is the THEN block. This is the arm BATCH25's review found releasing the fork's
+//     temporaries into the block that dominates BOTH edges;
+//   • the ARGUMENT position (`try consume(box.get(), …)`), where a substituted `T` result is co-owned
+//     too and the promotion must NOT move: it belongs to a value the callee is handed, on the
+//     unconditional path. It prices the discrimination (`owned == target` plus the op floor) that keeps
+//     the other two from over-reaching, and it is the case a widened move would break.
+//
+// Every one of the three is written on BOTH edges across the cycle, and each edge folds a value only it
+// can produce, so the rung's exit code is a check on WHICH edge ran and not merely on whether it ran.
+function tryCoOwnSource(siteCount KnobSize) returns String
+	var out = StringBuilder.create()
+	out.append("// Generated by ScaleCorpus: the try-co-own knob — {siteCount} `try` sites over a substituted managed `T` return, in all three forms, on both edges.\n")
+	out.append("typealias {TryCoOwnHolderValueAlias} = int(i64.min to i64.max)\n")
+	out.append("\nenum {TryCoOwnErrorName} implements Error\n")
+	out.append("\tbad\n")
+	out.append("end '{TryCoOwnErrorName}'\n")
+	out.append(managedFieldTypeDecl(TryCoOwnHolderName, managedFieldName: ManagedLabelFieldName, managedTypeName: StringTypeSpelling, valueTypeName: TryCoOwnHolderValueAlias))
+	out.append(genericBoxDecl(TryCoOwnBaseName, fetch: GenericBoxFetch.throwing(TryCoOwnErrorName)))
+	out.append("\ntypealias {TryCoOwnHolderBoxAlias} = {TryCoOwnBaseName} with {TryCoOwnHolderName}\n")
+	out.append("typealias {TryCoOwnStringBoxAlias} = {TryCoOwnBaseName} with {StringTypeSpelling}\n")
+	out.append(tryCoOwnConsumerDecl(TryCoOwnHolderConsumerName, parameterTypeName: TryCoOwnHolderName, valueText: "v.value"))
+	out.append(tryCoOwnConsumerDecl(TryCoOwnStringConsumerName, parameterTypeName: StringTypeSpelling, valueText: "v.byteLength()"))
+
+	out.append("\n")
+	out.append(witnessedDriverHeader(TryCoOwnDriver))
+	for i in 0 upto siteCount 'eachSite'
+		let spelling = i mod TryCoOwnSpellingCount
+		let throwsHere = tryCoOwnTakesErrorEdge(i)
+		if spelling == 0 'aggregateSite'
+			out.append(tryCoOwnSite(i, spelling: tryCoOwnAggregateSpelling(i), throwsHere: throwsHere))
+		end 'aggregateSite' else if spelling == 1 'stringSite'
+			out.append(tryCoOwnSite(i, spelling: tryCoOwnStringSpelling(i), throwsHere: throwsHere))
+		end 'stringSite' else 'noSpellingEmitter'
+			// The CHECK between `TryCoOwnSpellingCount` and the branches that realize it — raise the count
+			// without adding an arm and the ladder stops here rather than generating fewer spellings than
+			// the manifest claims.
+			panic("tryCoOwnSource: TryCoOwnSpellingCount is {TryCoOwnSpellingCount} but spelling {spelling} has no emitter — add one beside the aggregate and String branches, or lower the constant")
+		end 'noSpellingEmitter'
+	end 'eachSite'
+	out.append(accWitnessTail(TryCoOwnDriver))
+	return out.build()
+end 'tryCoOwnSource'
+
+// The throwing free function the ARGUMENT-position control calls. Two of them are generated, one per
+// managed spelling, from one emitter: they differ only in the parameter's type and in how a value comes
+// back out of it, and a second copy would be a second place for the `throws` shape to drift.
+function tryCoOwnConsumerDecl(name String, parameterTypeName String, valueText String) returns String
+	var out = StringBuilder.create()
+	out.append("\nfunction {name}(v {parameterTypeName}, live bool) returns int throws {TryCoOwnErrorName}\n")
+	out.append("\tif not live 'absent'\n")
+	out.append("\t\tthrow {TryCoOwnErrorName}.bad\n")
+	out.append("\tend 'absent'\n")
+	out.append("\n")
+	out.append("\treturn {valueText}\n")
+	out.append("end '{name}'\n")
+	return out.build()
+end 'tryCoOwnConsumerDecl'
+
+// ⭐ **WHAT DIFFERS BETWEEN THE TWO MANAGED SPELLINGS — and it is data, not control flow.**
+//
+// The three `try` forms are IDENTICAL in shape for an aggregate `T` and a `String` `T`: the same fetch,
+// the same catching `if`, the same argument-position control. What changes is how a value is BUILT, how
+// one comes back out to something `acc` can carry, and what the ok edge is therefore worth. Two site
+// emitters would state that shape twice, and the copy is exactly where a form silently stops being
+// generated for one spelling — this file's founding defect, at the emitter level.
+type TryCoOwnSpelling
+	// The per-instance typealias the site constructs — `Box with <holder>` or `Box with String`.
+	export let boxAlias as String
+
+	// The argument text of that construction, and of the expression form's `otherwise`. They differ per
+	// spelling because one builds a struct and the other is a literal.
+	export let payloadText as String
+	export let fallbackText as String
+
+	// Appended to a binding to reach an int — `.value` for the aggregate, `.byteLength()` for a String.
+	// It is the ONE route out of a managed `T` into the accumulator.
+	export let readText as String
+
+	// What the OK edge contributes through `readText`, and what the expression form's `otherwise`
+	// contributes instead when the error edge runs. They must DIFFER, and that is the whole of what makes
+	// a fold discriminate WHICH edge ran rather than merely that one did.
+	export let okValue as TrackedValue
+	export let fetchFallbackValue as TrackedValue
+
+	// The throwing free function the argument-position control calls, and the binding/label stem that
+	// keeps two spellings' generated names apart inside one driver.
+	export let consumerName as String
+	export let stem as String
+
+	export static function create(boxAlias String, payloadText String, fallbackText String, readText String, okValue TrackedValue, fetchFallbackValue TrackedValue, consumerName String, stem String) returns TryCoOwnSpelling
+		return Self{boxAlias: boxAlias, payloadText: payloadText, fallbackText: fallbackText, readText: readText, okValue: okValue, fetchFallbackValue: fetchFallbackValue, consumerName: consumerName, stem: stem}
+	end 'create'
+end 'TryCoOwnSpelling'
+
+// The AGGREGATE spelling: `T` is a struct owning a String, so the caller's promotion is the single
+// `__mm_retain` call the try-rewrite used to claim as its target. Its value rides in a field, so the ok
+// edge is worth the seed the holder was built from.
+function tryCoOwnAggregateSpelling(index KnobIndex) returns TryCoOwnSpelling
+	let payload = "{TryCoOwnHolderName}.create(\"try co-own holder {index}\", value: a)"
+	let fallback = "{TryCoOwnHolderName}.create(\"try co-own fallback {index}\", value: {TryCoOwnFetchFallbackValue})"
+	return TryCoOwnSpelling.create(TryCoOwnHolderBoxAlias, payloadText: payload, fallbackText: fallback, readText: ".value", okValue: corpusSeedValue(), fetchFallbackValue: TryCoOwnFetchFallbackValue, consumerName: TryCoOwnHolderConsumerName, stem: "tca")
+end 'tryCoOwnAggregateSpelling'
+
+// The `String` spelling: the promotion is a COPY (`promoteToOwnedString`) whose trailing op is an
+// interpolation and not a call. The rung's move is keyed on the promotion's op RANGE precisely so that
+// this arm and the aggregate one need no second mechanism — so both are generated, or that claim is
+// untested. Its two values are the LENGTHS of its two literals, which is what makes them differ.
+function tryCoOwnStringSpelling(index KnobIndex) returns TryCoOwnSpelling
+	let payload = tryCoOwnPayloadText(index)
+	let fallback = "fallback {index}"
+	return TryCoOwnSpelling.create(TryCoOwnStringBoxAlias, payloadText: "\"{payload}\"", fallbackText: "\"{fallback}\"", readText: ".byteLength()", okValue: payload.byteLength(), fetchFallbackValue: fallback.byteLength(), consumerName: TryCoOwnStringConsumerName, stem: "tcs")
+end 'tryCoOwnStringSpelling'
+
+// ONE SITE: the three forms, over whichever spelling and on whichever edge it was handed.
+function tryCoOwnSite(index KnobIndex, spelling TryCoOwnSpelling, throwsHere bool) returns String
+	let live = tryCoOwnLiveText(throwsHere)
+	let stem = spelling.stem
+	var body = StringBuilder.create()
+	body.append("\t\tlet {stem}b{index} = {spelling.boxAlias}.create({spelling.payloadText})\n")
+
+	// THE EXPRESSION FORM, whose promotion is lifted onto `tryok`. Its `otherwise` is worth something the
+	// ok edge cannot produce, so this one fold says WHICH edge ran.
+	body.append("\t\tlet {stem}e{index} = try {stem}b{index}.fetch({live}) otherwise {spelling.fallbackText}\n")
+	body.append("\t\tacc = acc + {stem}e{index}{spelling.readText}{neutralizeText(tryCoOwnPick(throwsHere, taken: spelling.fetchFallbackValue, untaken: spelling.okValue))}\n")
+	body.append(accProbe("\t\t"))
+
+	// THE CONDITION FORM, whose ok edge is the THEN block — `parseCatchingCondition`'s road to the same
+	// fork. Each arm folds its own value, for the same reason.
+	body.append("\t\tif let {stem}c{index} = try {stem}b{index}.fetch({live}) '{stem}ok{index}'\n")
+	body.append("\t\t\tacc = acc + {stem}c{index}{spelling.readText}\n")
+	body.append("\t\tend '{stem}ok{index}' else ({stem}err{index}) '{stem}bad{index}'\n")
+	body.append("\t\t\tacc = acc + {TryCoOwnElseArmValue}\n")
+	body.append("\t\tend '{stem}bad{index}'\n")
+	body.append("\t\tacc = acc{neutralizeText(tryCoOwnPick(throwsHere, taken: TryCoOwnElseArmValue, untaken: spelling.okValue))}\n")
+	body.append(accProbe("\t\t"))
+
+	// THE ARGUMENT-POSITION CONTROL — a substituted `T` result co-owned for a value the CALLEE is handed,
+	// whose promotion must NOT move onto any ok edge.
+	body.append("\t\tlet {stem}n{index} = try {spelling.consumerName}({stem}b{index}.get(), live: {live}) otherwise {TryCoOwnConsumerFallbackValue}\n")
+	body.append("\t\tacc = acc + {stem}n{index}{neutralizeText(tryCoOwnPick(throwsHere, taken: TryCoOwnConsumerFallbackValue, untaken: spelling.okValue))}\n")
+	body.append(accProbe("\t\t"))
+	return ownedSiteBlock("{stem}{index}", body: body.build())
+end 'tryCoOwnSite'
+
+// Which of two expectations a site owes, given the edge it takes. One function because the alternative
+// is an `if` at each of the six fold sites, and an inverted one would pin `acc` to a value that is
+// perfectly plausible — the OTHER edge's.
+function tryCoOwnPick(throwsHere bool, taken TrackedValue, untaken TrackedValue) returns TrackedValue
+	if throwsHere 'errorEdge'
+		return taken
+	end 'errorEdge'
+
+	return untaken
+end 'tryCoOwnPick'
 
 // ⭐⭐ **THE NAMESPACE KNOB (N1b): M module DIRECTORIES, and one root consumer that names every one of
 // them with a QUALIFIER.** See `NamespacedModulesBase` for why the corpus had none of this and what it
@@ -4841,6 +5137,19 @@ export function printCorpusManifest()
 	print("      type argument, and both ownership paths for that argument — a TRIVIAL ranged int (borrowed\n")
 	print("      into the box) and a MANAGED struct owning a String (moved in, dropped through the\n")
 	print("      instance's own cascade)\n")
+	print("    A `try` OVER A SUBSTITUTED MANAGED `T` RETURN (BATCH25): a shared generic body cannot classify\n")
+	print("      its `T` return, so the CALLER takes the `+1` after the call and a `try` must carry it onto\n")
+	print("      the OK EDGE alone. All three forms per site — the EXPRESSION form (lifted onto `tryok`), the\n")
+	print("      CONDITION form (`if let x = try …`, whose ok edge is the THEN block and which reaches the\n")
+	print("      fork through `parseCatchingCondition` rather than `desugarTry`), and the ARGUMENT position\n")
+	print("      (`try consume(box.get(), …)`), where the co-own must NOT move — over BOTH managed spellings,\n")
+	print("      an aggregate (whose promotion is one `__mm_retain` call) and a `String` (whose promotion is a\n")
+	print("      COPY ending in an interpolation). ⚠ EVERY SITE IS GENERATED ON BOTH EDGES: the throwing\n")
+	print("      condition is an opaque bool, so the error edge is emitted AND TAKEN, and each of the three\n")
+	print("      edges folds a value only it can produce — the rung's exit code says WHICH edge ran\n")
+	print("    ⚠ NOT ONE `try` OVER A SUBSTITUTED RETURN EXISTED AT ANY RUNG until that knob, so the rung that\n")
+	print("      BUILT the lift read a flat delta of ZERO in allocations, in bytes and in CPU alike. That is\n")
+	print("      this file's founding defect for the seventh time; see `TryCoOwnSitesBase`\n")
 	print("    INTERFACES: `interface` declarations, `type X implements I` conformance, and CONCRETE\n")
 	print("      dispatch (`x.method()`, with and without arguments) — a direct call to a known body\n")
 	print("    NAMESPACES (N1b): a rung is no longer ONE FLAT DIRECTORY. M module SUBDIRECTORIES, each with a\n")
@@ -4881,6 +5190,9 @@ export function printCorpusManifest()
 	print("    buffer is PRODUCED and how many marks one file's mark set holds, against the array-method\n")
 	print("    dispatches in that same file that ASK about them — the product both halves of a value-keyed\n")
 	print("    regression would cost, which is why they are one file),\n")
+	print("    TRY-CO-OWN SITE count (per-SITE, over FIXED instances — one aggregate and one String — so it\n")
+	print("    grows how many `try` sites carry a substituted managed result and NOT how many instances\n")
+	print("    exist, which is the generic-instances column beside it),\n")
 	print("    NAMESPACED-MODULE count (per-NAMESPACE, and the third knob that grows FILES — two per module,\n")
 	print("    one of them a level deeper — because a namespace IS a directory and cannot be simulated inside\n")
 	print("    one. It doubles the qualified-reference count with it, deliberately: a reference cannot exist\n")
