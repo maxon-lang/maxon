@@ -254,3 +254,106 @@ done < <list of unlisted modules>
 And the control that produced the headline — **run it for every conditional-extension module**:
 copy the module outside `stdlib/`, inject `let bogus = NoSuchType.definitelyUndefined(1)` into a body,
 and re-probe. If the diagnostic does not appear, that body is not being analyzed.
+
+---
+
+# ⟳ REFRESH — 2026-08-06 (cone 20 of 50, all 30 unlisted modules re-probed)
+
+**Rows rot. This table was re-measured from scratch at `a5296ad5a`, not edited.** Every number below is
+one `maxon-shv2 build stdlib/<M>.maxon` at that commit.
+
+⚠ **METHODOLOGY BUG, FOUND AND FIXED MID-SWEEP — read this before trusting any probe table, including
+the one above.** My first pass classified `String.maxon` and `Character.maxon` as **CLEAN** because it
+grepped for `^error `. **They do not error — they PANIC**, and a panic writes a different prefix. A probe
+that greps for one failure spelling reports the other as success. ⇒ **classify on the EXIT CODE and on
+`^panic` as well as `^error `.**
+
+## The two reachable compiler PANICS
+
+Both are the Wave 4 pivot, and they locate it precisely:
+
+```
+stdlib/String.maxon      panic at Parser.maxon:42773  enclosingLayout:      `type String` is being parsed
+stdlib/Character.maxon   panic at Parser.maxon:33155  requireConstructible: `type Character` is being parsed
+```
+
+Both say the same thing: *"the declaration sweep never recorded it — `recordScannedType` and
+`parseTypeDeclaration` disagree about what opens a type declaration"*. That IS the syntactic settling
+`TypeResolution.maxon:874-876` describes, seen from the inside: the sweep skips `type String` because the
+name is a builtin, then the parser walks the body anyway and finds no layout. **Wave 4's job is to make
+those two agree**, and this panic is its RED baseline.
+
+## ⭐ SHARED BLOCKERS — the leverage, and where the plan is wrong
+
+**Five blockers account for 17 of the 30 unlisted modules.** Fixing one unblocks a family, which is the
+batching the plan asks for:
+
+| blocker | modules it gates | worth |
+|---|---|---|
+| `Interfaces.maxon:223` — E3005 `Cannot return 'unknown'` | `Range.maxon`, `helpers/string/views.maxon` | **+2** |
+| tuple over a type PARAMETER (blocker 6) | `Map.maxon`, `helpers/itertools/withIterator.maxon` | **+2** |
+| E3086 — a field not initialized by a struct literal | `Array.maxon`, `Vector.maxon`, `List.maxon` | **+3** |
+| `__Builtins.writeStdout` / `writeStderr` | `Print.maxon`, `PrintError.maxon` | **+2** (⚠ also needs Wave 2's bare-name retirement) |
+| E3001-vacuous (see below) | the 6 `helpers/sort/*` files | **+6, BUT NOT CHEAP** |
+
+⛔ **TWO CORRECTIONS TO THE PLAN, AND ONE TO A CLAIM I MADE EARLIER TODAY.**
+
+1. **`Range.maxon` and `views.maxon` are NOT blocked on blocker 6 (tuples).** Measured, they both stop at
+   `Interfaces.maxon:223` with E3005 `Cannot return 'unknown'` — which is **`S2r`**, the defect `W4` filed
+   as a diagnostic-quality issue. ⇒ **`S2r` is worth +2 CONE, not a nicety.** I said in this session's
+   planning that blocker 6 was worth +3 (`withIterator` + `Range` + `views`); **that was wrong.** Blocker 6
+   is worth +2 (`withIterator` + `Map`), and `S2r` carries the other two.
+2. **The plan's Wave 1 trap note says `Process.maxon` declares `ExitCode`. It does not** — it declares
+   `ProcessIntrospectionError` and `Process`. No compiler-owned name to retire there.
+
+## ⛔ THE READINESS CRITERION IS VACUOUS FOR THE SORT FAMILY — MEASURED, NOT INFERRED
+
+All six `helpers/sort/*` files probe at exactly `E3001: No 'main' function found` — the criterion
+`StdlibLoader.maxon` prescribes. **That reads as "six modules ready to list". It is false.**
+
+Every one of them is a single `export extension Array` body (my first grep used `^extension ` and missed
+`export extension` — a second spelling bug in one sweep). Injection control, run on `insertionSort.maxon`
+with `__Builtins.thisDoesNotExistAtAll()` placed **inside** the extension's function body:
+
+```
+insertionSort.maxon + an undefined call in the extension body  ⇒  E3001 only    ⛔ BLIND
+```
+
+Same result as the original `insertionSort` control at the top of this file, and the same conclusion:
+**the bodies are never analyzed, so the clean probe measures the instrument.** ⇒ the sort family is Wave
+5 work behind `Array`, not a cheap +6. **Do not batch it on the strength of the E3001 reading.**
+
+## Full probe table — 30 unlisted, 2026-08-06
+
+| module | first diagnostic |
+|---|---|
+| `Array.maxon` | E3086 `:126:10` field `managed` not initialized by this literal (2 errors) |
+| `Character.maxon` | ⛔ **PANIC** `Parser.maxon:33155` `requireConstructible` |
+| `CharacterSet.maxon` | E2010 `:31:9` Expected `function` but got `let` |
+| `Console.maxon` | E3004 `:62:12` `__Builtins.readStdin` undefined — **`W5` in flight** |
+| `HttpClient.maxon` | E2015 `:176:18` member access `send` on an `unknown` value |
+| `Internals.maxon` | E2051 `:26:10` `__mm_incref` reserved — **EXCLUDED PERMANENTLY** (user ruling) |
+| `Json.maxon` | E2015 `:281:3` field access through `doc`, a struct-typed field |
+| `List.maxon` | E3086 `:21:10` field `chain` not initialized by this literal |
+| `Map.maxon` | E2015 `:20:20` tuple whose element 0 is a type parameter (**blocker 6**) |
+| `PrimitiveExtensions.maxon` | E2010 `:2:11` Expected identifier but got `int` — `extension int` unparseable |
+| `Print.maxon` | E3004 `:10:2` `__Builtins.writeStdout` undefined |
+| `PrintError.maxon` | E3004 `:5:2` `__Builtins.writeStderr` undefined |
+| `Process.maxon` | E3004 `:29:17` `__Builtins.executablePath` undefined — **`W5` in flight** |
+| `Range.maxon` | E3005 via `Interfaces.maxon:223` `Cannot return 'unknown'` (**`S2r`**) |
+| `Set.maxon` | E2015 `:55:11` `insert` reads `sizeof` of the type parameter |
+| `String.maxon` | ⛔ **PANIC** `Parser.maxon:42773` `enclosingLayout` |
+| `Subprocess.maxon` | E2015 `:357:25` overloading `Subprocess.run` |
+| `TcpClient.maxon` | E2053 `:23:70` second and later arguments must be named |
+| `Testing.maxon` | E2051 `:34:13` `__TestReport` reserved (**`S2n` contracted**) |
+| `Vector.maxon` | E3086 `:19:10` field `managed` not initialized by this literal (2 errors) |
+| `helpers/http/httpHelpers.maxon` | E3011 `:4:9` Unknown type `HttpMethod` |
+| `helpers/itertools/withIterator.maxon` | E2015 `:12:36` tuple whose element 0 is a type parameter (**blocker 6**) |
+| `helpers/sort/driftQuicksort.maxon` | E3001 — ⛔ **VACUOUS**, extension-bodied |
+| `helpers/sort/driftsort.maxon` | E3001 — ⛔ **VACUOUS**, extension-bodied |
+| `helpers/sort/insertionSort.maxon` | E3001 — ⛔ **VACUOUS**, injection control run and BLIND |
+| `helpers/sort/mergeSort.maxon` | E3001 — ⛔ **VACUOUS**, extension-bodied |
+| `helpers/sort/pdqsort.maxon` | E3001 — ⛔ **VACUOUS**, extension-bodied |
+| `helpers/sort/smallSort.maxon` | E3001 — ⛔ **VACUOUS**, extension-bodied |
+| `helpers/string/unicodeCategory.maxon` | E2053 `:55:44` second and later arguments must be named |
+| `helpers/string/views.maxon` | E3005 via `Interfaces.maxon:223` `Cannot return 'unknown'` (**`S2r`**) |
