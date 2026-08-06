@@ -1680,7 +1680,101 @@ end 'formatFnTypeDisplay'
 
 export typealias PayloadClassArray = Array with PayloadClass
 
-export typealias TypeParamIdArray = Array with TypeParamId
+export typealias TypeParamPositionArray = Array with TypeParamPosition
+
+// ⭐⭐ **THE TOKEN A TYPE PARAMETER IS IDENTIFIED BY — a digest of `(declaring type name, parameter name)`
+// (W14). THE ONE SPELLER; nothing else may compute one.**
+//
+// ⛔ **IT REPLACED A BARE POSITION, AND A POSITION IS NOT AN IDENTITY.** `typeParameter(0)` named EVERY
+// generic type's first parameter, so `GenericInstanceRegistry.instanceKey` — which mixes each argument's
+// `(tag, id)` pair — gave `Array with U` inside `type HoldA uses U` and `Array with V` inside
+// `type HoldB uses V` ONE key. Two different types, one interned instance, and therefore one entry in the
+// display index that `deriveInstanceDisplayNames` settles by FIRST DECLARATION. MEASURED on a program and
+// its declaration-order twin: a `HoldB` field was cited as `HoldA.Items` in one order — a build-order
+// artifact in a user-visible diagnostic, which the 2026-07-24 user ruling recorded at
+// `StdlibLoader.maxon:39-63` bars. `specs-shv2/generic-types.md`'s
+// `error.a-type-parameter-belongs-to-the-type-THAT-DECLARES-IT{,-swapped}` pair pins it: the same program,
+// the declarations exchanged, ONE byte-identical sentence.
+//
+// ⭐ **WHY A DIGEST AND NOT v1's REGISTRY.** v1 interns the genuine name pair
+// (`TypeParamRegistry.intern`, `maxon-selfhosted/Compiler/Project.maxon:1876-1889`) and compares the
+// resulting integer, which is a sound identity — but shv2 cannot copy it, for two reasons the code states
+// elsewhere and this comment collects:
+//
+//   • **THE PAYLOAD MUST STAY ONE `int`** (`MaxonDialect.TypeParamId`): it rides the dense `valueNameIds`
+//     column every SSA value carries, and widening that column measured **+4,165 allocations on the
+//     smallest scale rung**. A digest is one int; a `(name, name)` pair is not.
+//   • **NO REGISTRY EXISTS AT MINT TIME** (`Parser.parseTypeReference`): a bare `T` is recognized by NAME
+//     against the enclosing type's `uses` list precisely so the tolerant declaration sweep and the real
+//     parse answer it identically WITHOUT one, exactly as `Self` is. An intern-ORDER id would differ
+//     between the two passes.
+//
+// A digest of source text has neither problem: it is one int, and it is the same int in both passes and in
+// every build. It is `tupleElementTokenFor`'s mechanism on the sibling problem, one rung later — read that
+// function for the collision argument, which is this one's too.
+//
+// ⭐ **THE JOIN IS `mixBytes`' TRAILING LENGTH TAG, NOT A SEPARATOR CHARACTER**, and that is stronger than
+// a `#`: it is what keeps `("ab","c")` apart from `("a","bc")` (`ContentHash.mixBytes`, and
+// `mixInterfaceFormals` already spends it on exactly this shape). It also allocates NOTHING — no joined
+// String is built — which matters because this runs at every bare `T` in every generic body, in both the
+// sweep and the real parse.
+//
+// ⚠ **64 BITS IS LOAD-BEARING AND IS WRITTEN DOWN HERE.** At N = 10^4 distinct type parameters,
+// P(collision) ≈ N²/2^65 ≈ 5×10⁻¹²; a 40-bit digest would be ≈ 5×10⁻⁵ — a number a real program can hit.
+// Do not narrow it, and note that a collision is DETECTED rather than assumed:
+// `ProgramSignatures.recordTypeParamToken` stops the compile on one.
+export function typeParamTokenFor(declaringTypeName ByteArray, paramName ByteArray) returns TypeParamId
+	return mixBytes(mixBytes(fnvOffsetBasis(), bytes: declaringTypeName), bytes: paramName)
+end 'typeParamTokenFor'
+
+// ⭐ **WHICH POSITION IN `declarationName`'s OWN `uses` LIST THE TOKEN `token` NAMES — the door for a caller
+// that HOLDS THE DECLARATION (W14).**
+//
+// ⚠ **IT IS A PURE FUNCTION AND NEEDS NO REGISTRY, WHICH IS NOT A CONVENIENCE — IT IS THE ONLY WAY TWO OF
+// ITS CALLERS CAN ASK AT ALL.** `Parser.renderInterfaceTypeName` runs INSIDE `readInterfaceDeclaration`,
+// before that interface is recorded, and the parser's own scope questions run mid-body in a per-file
+// fan-out that may not write a shared index. Both hold exactly `(declarationName, paramNames)`, which is
+// precisely what `typeParamTokenFor` takes — so the question is answered by re-spelling the token, never by
+// a lookup. `ProgramSignatures.typeParamOwnerOf` is the OTHER direction (a caller holding only a token) and
+// they are not two spellings of one rule: they differ in what is available, not in what is true.
+//
+// A linear scan, for `Parser.typeParamPositionOf`'s reason: a declaration names a handful of parameters.
+// Absence is a THROW rather than a `count()` sentinel — `IrInterface.associatedTypePositionOf`'s rule, and
+// its reason: a sentinel index is exactly the shape that let a POSITION stand in for an IDENTITY here.
+export function typeParamPositionIn(token TypeParamId, declarationName ByteArray, paramNames ByteArrayArray) returns TypeParamPosition throws MapError
+	for i in 0 upto paramNames.count() 'eachParam'
+		let paramName = try paramNames.get(i) otherwise panic("typeParamPositionIn: paramNames.get OOB at {i} below count {paramNames.count()}")
+		if typeParamTokenFor(declarationName, paramName: paramName) == token 'thisOne'
+			return i
+		end 'thisOne'
+	end 'eachParam'
+
+	throw MapError.keyNotFound
+end 'typeParamPositionIn'
+
+// ⭐ **WHAT MINTED A TYPE-PARAMETER TOKEN — the reverse of `typeParamTokenFor`, and the record that makes a
+// digest collision a DETECTED event rather than a silent shared identity (W14).** `position` rides with the
+// two names because it is recorded in the same act (the declaration's own `uses` order), so a reader that
+// holds only a token gets all three from one lookup instead of re-deriving the third.
+export type TypeParamOwner
+	export let declaringTypeName as ByteArray
+	export let paramName as ByteArray
+	export let position as TypeParamPosition
+
+	export static function create(declaringTypeName ByteArray, paramName ByteArray, position TypeParamPosition) returns TypeParamOwner
+		return Self{declaringTypeName: declaringTypeName, paramName: paramName, position: position}
+	end 'create'
+
+	// Do two records name the SAME parameter of the SAME declaration? The test `recordTypeParamToken` tells a
+	// genuine 64-bit collision (two DIFFERENT parameters, one token) from a re-record of one parameter — which
+	// a redeclared type name produces and which is E3006's business, not a reason to stop the compile.
+	export function namesTheSameParameterAs(other TypeParamOwner) returns bool
+		return self.declaringTypeName.equals(other.declaringTypeName) and self.paramName.equals(other.paramName)
+	end 'namesTheSameParameterAs'
+end 'TypeParamOwner'
+
+// Token ⇒ the `(declaring type, parameter, position)` that minted it. See `TypeParamOwnerMap`.
+export typealias TypeParamOwnerMap = Map with (TypeParamId, TypeParamOwner)
 
 // ⭐ **A CONSTRUCTOR PARAMETER'S TYPE-PARAMETER FEED (P1.6-B2)** — for a parameter MOVED into a
 // type-PARAMETER field (`Box.create(v T)` → `Self{value: v}`, `v` feeds `T` at position 0), the type
@@ -1690,8 +1784,11 @@ export typealias TypeParamIdArray = Array with TypeParamId
 // and consumes the argument iff it OWNS managed heap (`genericInstanceArgIsOwned`). Trivial arguments
 // (`PointBox`/`IntBox`) feed too, but the call site borrows them — the feed is inert unless the argument
 // owns heap, so `generic-trivial-struct-arg` is byte-identical.
+//
+// ⚠ **A POSITION AND NOT A `TypeParamId` (W14).** It is spent as an INDEX into the concrete instance's
+// argument list, and since W14 those are two different numbers — see `MaxonDialect.TypeParamPosition`.
 export union TypeParamFeed
-	feeds(position TypeParamId)
+	feeds(position TypeParamPosition)
 	none
 
 	// Does this carry a feed position — the `feeds(pos)` case rather than `none`? The boolean the transitive
@@ -2324,8 +2421,8 @@ export let MapTypeParamCount = 2 as FieldIndex
 // something this header ASSERTED while the code that depended on it read a different name.
 //
 // The VALUE position stays `Map`-only, because only a `Map` has a second column.
-export let HashTableKeyArgPosition = 0 as TypeParamId
-export let MapValueArgPosition = 1 as TypeParamId
+export let HashTableKeyArgPosition = 0 as TypeParamPosition
+export let MapValueArgPosition = 1 as TypeParamPosition
 
 // The name of the builtin `List` generic type (`List with Element`) — the linked-list twin of
 // `ArrayBuiltinBaseName`. Like `Array`, `Set` and `Map`, no file declares `type List uses Element` for shv2
@@ -3667,10 +3764,16 @@ function foreignNameOf(typeNames TypeNameInterner, id TypeNameId) returns ByteAr
 end 'foreignNameOf'
 
 // Is `element` a type a tuple can be keyed on? A `typeParameter` is not: the shared generic body has no
-// concrete type to build a layout or a drop cascade against, and `mangleTypeArg` would spell it by POSITION,
-// so two instantiations would silently share one layout. An `unresolved` is not: there is nothing to mangle.
-// A `void` is not: it is no value at all. All three are reachable from source, so each is a positioned
-// rejection rather than a panic.
+// concrete type to build a layout or a drop cascade against. An `unresolved` is not: there is nothing to
+// mangle. A `void` is not: it is no value at all. All three are reachable from source, so each is a
+// positioned rejection rather than a panic.
+//
+// ⚠ **ONE OF THE THREE REASONS THIS REFUSAL CARRIED IS GONE, AND THE REFUSAL IS NOT (W14).** It used to add
+// that `mangleTypeArg` "would spell it by POSITION, so two instantiations would silently share one layout".
+// That was true of a position and is false of the token that replaced it — two distinct parameters now mangle
+// and intern apart. What survives is the reason above, which the identity change does not touch: an opaque
+// element has no concrete type for the LAYOUT or the DROP CASCADE, whatever it is named. Lifting the refusal
+// is a separate rung with its own measurements; deleting the stale half of its justification is not.
 function requireTupleElementType(element MaxonType, position FieldIndex) throws TupleElementRejection
 	let tag = maxonTypeTag(element)
 	if tag == ValueTypeTag.typeParameter or tag == ValueTypeTag.unresolved or tag == ValueTypeTag.void 'unsupported'
@@ -5088,6 +5191,18 @@ export type ProgramSignatures
 	// a digest collision a DETECTED event. `recordTupleElementToken` writes both in one act, so a divergence
 	// between them stops the compile rather than handing two layouts one citation.
 	var tupleElementTokenOwners as TupleElementTokenOwnerMap
+	// ⭐⭐ **EVERY TYPE-PARAMETER TOKEN ⇒ THE `(declaring type, parameter, position)` THAT MINTED IT (W14)** —
+	// `tupleElementTokenOwners`' twin one digest over, and it earns its keep twice. It makes a 64-bit digest
+	// collision a DETECTED event (`recordTypeParamToken` STOPS the compile on one rather than handing two
+	// parameters one identity), and it is the ONLY route from a token back to its declaration for a reader
+	// holding nothing else — which is what let the three `genericTypeFieldHas…Instantiation` gates stop
+	// taking a `(baseName, position)` PAIR their callers had to pair up by hand.
+	//
+	// ⚠ **WRITTEN AT THE FOLD, READ DURING THE PARSE — never the other way round.** `recordStruct` and
+	// `recordInterfaceDeclaration` are its only writers, and both run while the declaration sweep is folding,
+	// single-threaded. That is the same discipline `deriveInstanceNames` states for the name memos: the
+	// per-file parse fan-out may READ this index and may not write it. Empty for a program with no generics.
+	var typeParamOwners as TypeParamOwnerMap
 	// ⭐ A TUPLE typealias name ⇒ the tuple type it names (P1.10) — `Pair` ⇒ `__Tuple2.int.int`. The tuple
 	// twin of `genericAliases`, and it exists for the same reason: a tuple type has no source-spellable name,
 	// so `typealias Pair = (Num, Num)` is the only way to write one in a place that takes a bare identifier
@@ -5538,7 +5653,7 @@ export type ProgramSignatures
 	// Every index, empty. Split out of `create` only so the seed stamping above reads as the two steps it
 	// is; this is its one caller.
 	static function freshIndexes(os Os) returns ProgramSignatures
-		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(os), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), structNamesInDeclOrder: ByteArrayArray.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), instanceDisplayNames: InstanceDisplayNameMap.create(), canonicalInstanceNameIndex: CanonicalInstanceNameSet.create(), canonicalNamesIndexedThrough: 0, tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleElementTokens: TupleElementTokenMap.create(), tupleElementTokenOwners: TupleElementTokenOwnerMap.create(), tupleAliases: TupleCanonicalNameMap.create(), sawAggregateArrayLiteral: false, sawListFromConstruction: false, genericAliases: GenericAliasMap.create(), contestedGenericAliases: sharedEmptyGenericAliasContests, multiplyDeclaredGenericAliases: sharedEmptyDisagreeingAliasNames, divergedGenericAliasDecl: AliasCycleResult.none, nameableGenericAliases: sharedEmptyNameableGenericAliases, genericAliasSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceNamesInDeclOrder: builtinInterfaceNames(), interfaceDeclIndexByName: builtinInterfaceDeclIndices(), interfaceDeclSites: InterfaceDeclSiteArray.create(), extensionDeclSites: ExtensionDeclSiteArray.create(), conditionalExtensionSkips: ConditionalExtensionSkipMap.create(), sweptConformances: DeclaredConformanceMap.create(), sweptConformancesBuilt: false, extensionMethodConstraints: ExtensionMethodConstraintMap.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcThrows: FuncThrowsMap.create(), funcParamDefaults: ParamDefaultMap.create(), collidingParamDefaults: CollidingParamDefaultNameSet.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), funcReturnDeclFiles: FuncReturnDeclFileMap.create(), funcDeclSites: FunctionDeclSiteMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), hash: fnvOffsetBasis(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, allFilesFolded: false, rootIsUnderStdlibDirectory: false, constInitializerTypeNames: ConstInitializerTypeNameSet.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibShadowRenames: StdlibShadowRenameMap.create(), fileModuleDirectories: FileModuleDirectoryMap.create(), namespaceQualifiedFunctions: NamespaceQualifiedFunctionSet.create(), freeFunctionDirectories: FreeFunctionDirectoryMap.create(), contestedFreeFunctions: ContestedFreeFunctionMap.create(), contestedRegistrationNames: ContestedRegistrationNameSet.create()}
+		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(os), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), structNamesInDeclOrder: ByteArrayArray.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), instanceDisplayNames: InstanceDisplayNameMap.create(), canonicalInstanceNameIndex: CanonicalInstanceNameSet.create(), canonicalNamesIndexedThrough: 0, tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleElementTokens: TupleElementTokenMap.create(), tupleElementTokenOwners: TupleElementTokenOwnerMap.create(), typeParamOwners: TypeParamOwnerMap.create(), tupleAliases: TupleCanonicalNameMap.create(), sawAggregateArrayLiteral: false, sawListFromConstruction: false, genericAliases: GenericAliasMap.create(), contestedGenericAliases: sharedEmptyGenericAliasContests, multiplyDeclaredGenericAliases: sharedEmptyDisagreeingAliasNames, divergedGenericAliasDecl: AliasCycleResult.none, nameableGenericAliases: sharedEmptyNameableGenericAliases, genericAliasSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceNamesInDeclOrder: builtinInterfaceNames(), interfaceDeclIndexByName: builtinInterfaceDeclIndices(), interfaceDeclSites: InterfaceDeclSiteArray.create(), extensionDeclSites: ExtensionDeclSiteArray.create(), conditionalExtensionSkips: ConditionalExtensionSkipMap.create(), sweptConformances: DeclaredConformanceMap.create(), sweptConformancesBuilt: false, extensionMethodConstraints: ExtensionMethodConstraintMap.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcThrows: FuncThrowsMap.create(), funcParamDefaults: ParamDefaultMap.create(), collidingParamDefaults: CollidingParamDefaultNameSet.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), funcReturnDeclFiles: FuncReturnDeclFileMap.create(), funcDeclSites: FunctionDeclSiteMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), hash: fnvOffsetBasis(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, allFilesFolded: false, rootIsUnderStdlibDirectory: false, constInitializerTypeNames: ConstInitializerTypeNameSet.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibShadowRenames: StdlibShadowRenameMap.create(), fileModuleDirectories: FileModuleDirectoryMap.create(), namespaceQualifiedFunctions: NamespaceQualifiedFunctionSet.create(), freeFunctionDirectories: FreeFunctionDirectoryMap.create(), contestedFreeFunctions: ContestedFreeFunctionMap.create(), contestedRegistrationNames: ContestedRegistrationNameSet.create()}
 	end 'freshIndexes'
 
 	// --- MODULE DIRECTORIES and the ONE visibility decision (N1a) ---
@@ -6313,6 +6428,16 @@ export type ProgramSignatures
 	export function recordInterfaceDeclaration(iface IrInterface)
 		self.interfaces.upsert(iface.name, value: iface)
 
+		// ⭐ **AN INTERFACE'S ASSOCIATED TYPES ARE TYPE PARAMETERS AND THEY MINT TOKENS (W14)** — inside
+		// `interface Seq uses Element`, a written `Element` resolves to `typeParameter` exactly as a `type`'s
+		// `uses` name does (`Parser.readInterfaceDeclaration` installs them in the same field), so the token
+		// ledger has to know them or a `Seq`'s `Element` and a conformer's would be a token with no owner.
+		// The one other declaration form that installs a parameter scope — a TYPE extension's body — borrows
+		// the extended type's own list, which `recordStruct` has already filed.
+		for i in 0 upto iface.associatedTypeNames.count() 'eachAssociatedType'
+			self.recordTypeParamToken(iface.name, paramName: try iface.associatedTypeNames.get(i) otherwise panic("ProgramSignatures.recordInterfaceDeclaration: associatedTypeNames.get OOB at {i} below count {iface.associatedTypeNames.count()}"), position: i)
+		end 'eachAssociatedType'
+
 		// The declaration-order handle, minted in the SAME act as the map entry (see
 		// `interfaceNamesInDeclOrder`). A name already present keeps its index — a redeclaration, and a user
 		// type sharing a synthesized protocol's name, both resolve through `lookupInterface` at the asking
@@ -6391,6 +6516,16 @@ export type ProgramSignatures
 	// every cached stdlib field arrives claiming it has no default. A hand-listed copy of a record's
 	// fields is a copy that can be short by one, silently. Keep the list in ONE function.
 	function recordStruct(layout StructLayout, declaredByTheCorpus bool)
+		// ⭐ **THE PARAMETER TOKENS ARE FILED FIRST, AHEAD OF EVERY REASON THIS FOLD MIGHT DROP THE LAYOUT
+		// (W14).** A token is a fact about the DECLARATION'S TEXT, not about whether the registry keeps its
+		// layout — and the real parse reads the body of a contested declaration (`type Array uses Element`
+		// under a compiler-owned name) even while its E2015 is being reported, minting `typeParameter` values
+		// whose owner a later instance query must still be able to name. Filing them here costs one map entry
+		// per declared parameter and removes a whole class of "this token has no owner" panic.
+		for i in 0 upto layout.typeParamCount() 'eachDeclaredTypeParam'
+			self.recordTypeParamToken(layout.name, paramName: try layout.typeParamNames.get(i) otherwise panic("ProgramSignatures.recordStruct: typeParamNames.get OOB at {i} below count {layout.typeParamCount()}"), position: i)
+		end 'eachDeclaredTypeParam'
+
 		// ⭐⭐ **A DECLARED `type` UNDER A COMPILER-OWNED NAME MAY COME FROM THE CORPUS AND FROM NOTHING ELSE
 		// — `upsertDeclaredEnum`'s rule, one registry over, now spelled the SAME WAY (W16).**
 		//
@@ -8830,7 +8965,7 @@ export type ProgramSignatures
 	// `renderInstantiation`). It was named `instanceArgTypeName` and read by three DIAGNOSTICS as well, which
 	// is how `Box_Leaf` — a string no source line holds — reached `expected 'Box_Leaf'`. Those three now ask
 	// `instanceArgDisplayName`; this one keeps the mint because the mint is what collided.
-	export function instanceArgCompiledName(gid GenericInstanceId, position TypeParamId) returns ByteArray
+	export function instanceArgCompiledName(gid GenericInstanceId, position TypeParamPosition) returns ByteArray
 		return self.mangleTypeArg(self.substitutedInstanceArg(gid, position: position)).toByteArray()
 	end 'instanceArgCompiledName'
 
@@ -8850,7 +8985,7 @@ export type ProgramSignatures
 	// It DELEGATES rather than re-spelling `mangleTypeArg(arg)`, which costs a second `substitutedInstanceArg`
 	// — a bounds-checked array read of an already-built type, on a path that only a REJECTED program reaches.
 	// A second copy of the compiled rule for that is the trade this codebase does not make.
-	export function instanceArgDisplayName(gid GenericInstanceId, position TypeParamId) returns ByteArray
+	export function instanceArgDisplayName(gid GenericInstanceId, position TypeParamPosition) returns ByteArray
 		let arg = self.substitutedInstanceArg(gid, position: position)
 		if maxonTypeTag(arg) == ValueTypeTag.genericInstance 'nestedInstance'
 			return self.instanceDisplayName(typeNameIdOf(arg))
@@ -8868,7 +9003,7 @@ export type ProgramSignatures
 	// ⚠ It is NOT `genericInstanceFieldCount`, which is the BASE STRUCT's field count: the two agree for
 	// a plain generic struct and disagree for the builtin bases, where `Array with Integer` has one type
 	// argument and no base struct at all (`genericInstanceFieldCount` panics on it).
-	export function genericInstanceArgCount(gid GenericInstanceId) returns TypeParamId
+	export function genericInstanceArgCount(gid GenericInstanceId) returns TypeParamPosition
 		return self.genericInstances.instanceArgs(gid).count()
 	end 'genericInstanceArgCount'
 
@@ -9327,6 +9462,52 @@ export type ProgramSignatures
 		return token
 	end 'tupleElementTokenOf'
 
+	// ⭐⭐ **THE TYPE-PARAMETER INJECTIVITY LEDGER (W14) — `recordTupleElementToken`'s twin, one digest over.**
+	// The token itself is computed rather than allocated (`typeParamTokenFor` carries what it is and why it is
+	// 64 bits); what this adds is the record of WHICH declaration each live token belongs to, and the refusal
+	// to let two distinct parameters share one identity.
+	//
+	// ⭐ **CALLED ONCE PER DECLARED PARAMETER, AT THE FOLD, BY EXACTLY TWO DOORS** — `recordStruct` for a
+	// `type`'s `uses` list and `recordInterfaceDeclaration` for an `interface`'s associated types. Those are
+	// the two declarations `Parser.parseTypeReference` can mint a `typeParameter` inside (an extension body
+	// borrows its TARGET's list, which is one of them), and both fold before any file is parsed — so the map
+	// is complete and READ-ONLY by the time the parse fan-out asks it.
+	//
+	// ⚠ **A RE-RECORD OF THE SAME PARAMETER IS NOT A COLLISION, AND TELLING THE TWO APART IS THE WHOLE JOB.**
+	// Two files may declare `type Box uses T` — that is E3006's business, reported with a position, and it
+	// must not become a compiler panic here. So a repeat that names the same `(declaring type, parameter)` is
+	// kept as it stands (the FIRST record wins, and the two agree on everything a reader asks except possibly
+	// a position the duplicate declaration itself disagrees about). A repeat naming a DIFFERENT parameter is a
+	// genuine 64-bit collision: two type parameters would share one identity, one instance key and one
+	// diagnostic name — precisely the defect W14 exists to remove — so it STOPS the compile.
+	function recordTypeParamToken(declaringTypeName ByteArray, paramName ByteArray, position TypeParamPosition)
+		let token = typeParamTokenFor(declaringTypeName, paramName: paramName)
+		let owner = TypeParamOwner.create(declaringTypeName, paramName: paramName, position: position)
+		if let existing = try self.typeParamOwners.get(token) 'tokenAlreadyOwned'
+			if not existing.namesTheSameParameterAs(owner) 'aDigestCollision'
+				panic("ProgramSignatures.recordTypeParamToken: type parameter `{String.from(paramName)}` of `{String.from(declaringTypeName)}` digests to the same token as `{String.from(existing.paramName)}` of `{String.from(existing.declaringTypeName)}`. This is a genuine 64-bit digest collision between two DISTINCT type parameters, and admitting it would give them one identity — one `GenericInstanceRegistry` key for `Array with` each of them, and one entry in the display index, which is exactly the defect W14 removed. See `typeParamTokenFor` for the width this rests on")
+			end 'aDigestCollision'
+
+			return
+		end 'tokenAlreadyOwned'
+
+		self.typeParamOwners.upsert(token, value: owner)
+	end 'recordTypeParamToken'
+
+	// ⭐ **WHAT MINTED `token` — the door for a caller holding NOTHING BUT THE TOKEN (W14).** An instance query
+	// reads a `typeParameter` off a base struct's field column or a shared method signature and has no
+	// declaration in hand; this is where it learns whose parameter that is and at which position, in one
+	// lookup. `typeParamPositionIn` is the OTHER direction, for a caller that DOES hold the declaration and
+	// therefore needs no registry at all (see there for why both must exist).
+	//
+	// Absence is a THROW, not a panic, because one caller is allowed to ask about a token it may not own:
+	// `Parser.isEnclosingTypeParam` asks of every `typeParameter`-tagged value, including a concrete generic
+	// method's result the parser tags opaque in a NON-generic caller. Callers for whom absence is an invariant
+	// break say so with their own `otherwise panic`.
+	export function typeParamOwnerOf(token TypeParamId) returns TypeParamOwner throws MapError
+		return try self.typeParamOwners.get(token)
+	end 'typeParamOwnerOf'
+
 	// ⭐⭐ **ONE SWEEP KEY PER (SPELLING, FILE) — because a sweep spelling is NOT a whole-program identity and
 	// a canonical name is (A3v).** A canonical name is derived from RESOLVED elements, so every file that
 	// reaches it means the same thing by it; that property is what every reader of a tuple type rests on and
@@ -9632,8 +9813,9 @@ export type ProgramSignatures
 			structRef(id) gives MaxonType.structRef(self.typeNames.intern(foreignNameOf(from, id: id)))
 			function(id) gives MaxonType.function(self.typeNames.intern(foreignNameOf(from, id: id)))
 			// Everything else carries no per-file interner id — a primitive, a `String`/`Character` (no name
-			// at all), a type-parameter POSITION and a whole-program `GenericInstanceId` — so it crosses
-			// unchanged, exactly as `adoptType`'s own arms state.
+			// at all), a type-parameter DIGEST (a pure function of source text since W14, global for that
+			// reason rather than for the numbering reason a position was) and a whole-program
+			// `GenericInstanceId` — so it crosses unchanged, exactly as `adoptType`'s own arms state.
 			boolean to float gives t
 			exitCode to unresolved gives t
 			string gives t
@@ -12058,13 +12240,24 @@ export type ProgramSignatures
 			return String.from(self.mangleGenericInstance(typeNameIdOf(t)))
 		end 'nested'
 		// An OPAQUE type-parameter argument (`Array with T` inside a generic body, P1.7 slice 3b-i) — its
-		// instance `Array with typeParameter(pos)` is interned like any other, so its structural mangling names
-		// the parameter by POSITION (`T0`), stable across cold and warm builds (a position is source-derived).
-		// It is only ever a LOOKUP key (the opaque array never gets a synthesized `__destruct_<mangled>` nor its
-		// own descriptor — it drops through `__arr_decref` and reads the enclosing instance's descriptor), so
-		// this spelling need only be distinct and stable; unlike a concrete arg it names no emitted symbol.
+		// instance `Array with <that parameter>` is interned like any other, so its structural mangling names
+		// the parameter by its own TOKEN, which is a pure function of `(declaring type, parameter name)` and
+		// therefore identical across cold and warm builds and across walk orders — the same property this
+		// function's header demands of every other arm.
+		//
+		// ⛔ **IT SPELLED THE POSITION (`T0`) UNTIL W14, AND THAT WAS THE COLLISION ITSELF WEARING A NAME.**
+		// `HoldA`'s `Array with U` and `HoldB`'s `Array with V` both mangled to `Array_T0` — and, worse, both
+		// built the same `instanceKey`, so they were not two names for two types but ONE interned type. See
+		// `typeParamTokenFor`.
+		//
+		// Rendered in HEX, the same `0-9a-f` `tupleElementTokenFor` spells its digest in and for its reason:
+		// the alphabet holds no `.` and no `#`, so the token cannot disturb the tuple element join or the
+		// overload-registration join, and it is injective in the id, which is all a lookup key needs. It is
+		// only ever a LOOKUP key (the opaque array never gets a synthesized `__destruct_<mangled>` nor its own
+		// descriptor — it drops through `__arr_decref` and reads the enclosing instance's descriptor), and no
+		// committed fragment on any target carries such a label today.
 		if tag == ValueTypeTag.typeParameter 'opaqueParam'
-			return "T{typeNameIdOf(t)}"
+			return "T{typeNameIdOf(t):x}"
 		end 'opaqueParam'
 		return primitiveTypeTagName(tag)
 	end 'mangleTypeArg'
@@ -12079,7 +12272,7 @@ export type ProgramSignatures
 	// `instanceArgDisplayName`, which keeps the SOURCE spelling (`Integer`) for the E3017 MESSAGE — this
 	// canonicalizes only the identity the comparison rests on, exactly as `ConformanceCheck.canonicalTypeName`
 	// does for a method-signature type name.
-	export function conformerTypeArgName(gid GenericInstanceId, position TypeParamId) returns String
+	export function conformerTypeArgName(gid GenericInstanceId, position TypeParamPosition) returns String
 		// An instance's stored ARGUMENT was interned by this index, so its ids are this index's own.
 		return self.conformerNameOfType(self.substitutedInstanceArg(gid, position: position), idsFrom: self.typeNames)
 	end 'conformerTypeArgName'
@@ -12919,23 +13112,42 @@ export type ProgramSignatures
 		return try self.structTypes.get(baseName) otherwise panic("ProgramSignatures.baseLayoutOf: generic instance {id}'s base struct '{String.from(baseName)}' has no declared layout — every field walk opens with genericInstanceHasBaseLayout")
 	end 'baseLayoutOf'
 
+	// ⭐ **THE SUBSCRIPT AN OPAQUE `typeParameter` TYPE STANDS FOR — the ONE door from a type-parameter TOKEN to
+	// an instance-argument INDEX (W14).** Every instance query below is subscripted by a POSITION in the
+	// declaring type's `uses` list, and since W14 a `typeParameter`'s payload is an IDENTITY rather than that
+	// position (see `MaxonDialect.TypeParamId` for the collision the position was). This is where the two meet,
+	// and it is written once so that no caller re-derives it — `substituteInstanceFieldType`,
+	// `managedOpaqueArrayElementOf`, `Parser.instanceSubstitutedIndexType` and
+	// `SemanticCheck.checkTypeParameterArgsAt` all subscript through here.
+	//
+	// A miss is an invariant break rather than a case: every token reaching an instance query was minted inside
+	// a declaration the sweep folded, and `recordStruct` files a declaration's parameters ahead of every reason
+	// it might drop the layout.
+	export function opaqueTypeParamPosition(t MaxonType) returns TypeParamPosition
+		if maxonTypeTag(t) != ValueTypeTag.typeParameter 'notATypeParameter'
+			panic("ProgramSignatures.opaqueTypeParamPosition: asked for the `uses`-list position of a `{typeTagName(maxonTypeTag(t))}`, which names no type parameter — every caller tests the tag first")
+		end 'notATypeParameter'
+
+		return (try self.typeParamOwnerOf(typeNameIdOf(t)) otherwise panic("ProgramSignatures.opaqueTypeParamPosition: type-parameter token {typeNameIdOf(t)} has no owner — `recordStruct` and `recordInterfaceDeclaration` file every declared parameter as the sweep folds, so a token with none was minted inside a declaration neither fold saw")).position
+	end 'opaqueTypeParamPosition'
+
 	// The base struct's field `index` type with the instance's args substituted for the type parameters —
-	// a `typeParameter(pos)` field becomes `args[pos]` (the concrete arg), every other field stays. This is
+	// a `typeParameter` field becomes `args[its position]` (the concrete arg), every other field stays. This is
 	// what turns `Box`'s opaque `value as T` into `String` for a `Box with String`, so the cascade can
-	// classify and drop it. `typeNameIdOf(typeParameter(pos))` is the parameter POSITION; arity was checked
-	// at instantiation (E2056), so the position indexes the args in range.
+	// classify and drop it. Arity was checked at instantiation (E2056), so the position indexes the args in
+	// range.
 	function substituteInstanceFieldType(id GenericInstanceId, index FieldIndex) returns MaxonType
 		let fieldType = try self.baseLayoutOf(id).fieldTypes.get(index) otherwise panic("ProgramSignatures.substituteInstanceFieldType: field {index} out of range for instance {id}'s base struct")
 		if maxonTypeTag(fieldType) != ValueTypeTag.typeParameter 'notTypeParam'
 			return fieldType
 		end 'notTypeParam'
-		return self.substitutedInstanceArg(id, position: typeNameIdOf(fieldType))
+		return self.substitutedInstanceArg(id, position: self.opaqueTypeParamPosition(fieldType))
 	end 'substituteInstanceFieldType'
 
 	// Instance `id`'s concrete type argument at type-parameter `position` (P1.6-B2) — what a `T`-typed field
 	// read on a concrete receiver retypes to. `adoptType` re-interns it into the caller's interner. Arity was
-	// checked at instantiation (E2056), so a `typeParameter(position)` field indexes the args in range.
-	export function substitutedInstanceArg(id GenericInstanceId, position TypeParamId) returns MaxonType
+	// checked at instantiation (E2056), so a type-parameter field's position indexes the args in range.
+	export function substitutedInstanceArg(id GenericInstanceId, position TypeParamPosition) returns MaxonType
 		let args = self.genericInstances.instanceArgs(id)
 		return try args.get(position) otherwise panic("ProgramSignatures.substitutedInstanceArg: type-parameter position {position} out of range for instance {id}'s {args.count()} argument(s) — arity was checked at instantiation (E2056)")
 	end 'substitutedInstanceArg'
@@ -12947,7 +13159,7 @@ export type ProgramSignatures
 	// it is precisely the mistake, because the id then means whatever name happens to sit at that number in
 	// the OTHER table. Keeping both steps inside makes the pairing structural instead of conventional, which
 	// is the same move `typeArgAggregateName` above already makes.
-	export function instanceArgIsManaged(id GenericInstanceId, position TypeParamId) returns bool
+	export function instanceArgIsManaged(id GenericInstanceId, position TypeParamPosition) returns bool
 		return self.typeIsManaged(self.substitutedInstanceArg(id, position: position), from: self.typeNames)
 	end 'instanceArgIsManaged'
 
@@ -12962,7 +13174,7 @@ export type ProgramSignatures
 	// `genericInstance`, or a `named` leaf naming a `typealias` — and that door already answers both as one
 	// question. It is the same door `buildInstanceArgGraph` asks, so the type-cycle graph and the alias-cycle
 	// graph cannot come to disagree about which argument reaches a container.
-	export function instanceArgCycleTarget(id GenericInstanceId, position TypeParamId) returns TypeCycleTarget
+	export function instanceArgCycleTarget(id GenericInstanceId, position TypeParamPosition) returns TypeCycleTarget
 		let arg = self.substitutedInstanceArg(id, position: position)
 		if let denoted = try self.denotedInstance(arg) 'spellsAContainer'
 			return TypeCycleTarget.container(denoted)
@@ -13098,11 +13310,11 @@ export type ProgramSignatures
 		end 'form'
 	end 'typeArgIsOwned'
 
-	// Does ANY interned instance of generic type `baseName` classify its type argument at `position` as
-	// `kind`? The ONE instance-registry read the three type-parameter-instantiation gates
-	// (`genericTypeFieldHas{Managed,CoOwnedTrivial,Uncopyable}Instantiation`) delegate to — so the lookup and
-	// the `position < args.count()` bound are written once for all three and cannot drift between them. The
-	// per-kind predicate is the only thing that varies, in `typeArgHasKind`.
+	// Does ANY interned instance of the type that DECLARES type parameter `param` classify its argument at
+	// that parameter's position as `kind`? The ONE instance-registry read the three
+	// type-parameter-instantiation gates (`genericTypeFieldHas{Managed,CoOwnedTrivial,Uncopyable}Instantiation`)
+	// delegate to — so the lookup and the `position < args.count()` bound are written once for all three and
+	// cannot drift between them. The per-kind predicate is the only thing that varies, in `typeArgHasKind`.
 	//
 	// ⭐ **THROUGH THE BY-BASE INDEX, NOT A WHOLE-REGISTRY WALK (P1.7 Workstream O).** It used to run
 	// `0 upto genericInstances.count()` comparing every instance's base NAME, making the three gates
@@ -13111,8 +13323,22 @@ export type ProgramSignatures
 	// assigns the ids, so this visits only THIS base's instances and the gates become O(instances of the
 	// base). A base with no instantiation has no bucket, and that is the answer: nothing instantiates it,
 	// so no instantiation classifies anything as `kind`.
-	function anyInstanceTypeArgHasKind(baseName ByteArray, position TypeParamId, kind TypeArgInstantiationKind) returns bool
-		if let baseId = try self.typeNames.idOf(baseName) 'namedType'
+	//
+	// ⭐⭐ **IT TAKES ONE TOKEN WHERE IT USED TO TAKE A `(baseName, position)` PAIR, AND THAT IS W14's
+	// REPRESENTATION ABSORBING A HAND-PAIRING.** Both callers held a bare `typeParameter` field type and had
+	// to supply the declaring type ALONGSIDE it from somewhere else — `Parser.requireOpaqueArrayCopyable`
+	// from `self.enclosingType`, `Parser.emitOpaqueFieldReassign` from `layout.name` — so "which type's
+	// parameter is this?" was answered twice, by two parties, and a caller that paired the wrong two would
+	// have scanned another type's instantiations with no complaint from anywhere. The token now carries both
+	// halves, so the pairing is read out of ONE fact at ONE door.
+	//
+	// A token whose owner is not in the ledger, or whose declaring type has no interned instance, answers
+	// `false` for the reason a base with no bucket does: nothing instantiates it, so no instantiation
+	// classifies anything as `kind`.
+	function anyInstanceTypeArgHasKind(param TypeParamId, kind TypeArgInstantiationKind) returns bool
+		let owner = try self.typeParamOwnerOf(param) otherwise return false
+		let position = owner.position
+		if let baseId = try self.typeNames.idOf(owner.declaringTypeName) 'namedType'
 			if let siblings = try self.genericInstances.instancesOfBase(baseId) 'instantiated'
 				for id in siblings 'eachInstance'
 					let args = self.genericInstances.instanceArgs(id)
@@ -13137,8 +13363,8 @@ export type ProgramSignatures
 		end 'kind'
 	end 'typeArgHasKind'
 
-	// ⭐ **DOES ANY INTERNED INSTANCE OF GENERIC TYPE `baseName` MAKE ITS TYPE PARAMETER AT `position`
-	// MANAGED (P1.7 slice 3b-vii)?** A shared generic body reassigns a bare `T` field opaquely; the OLD value's
+	// ⭐ **DOES ANY INTERNED INSTANCE OF THE TYPE THAT DECLARES `param` MAKE THAT PARAMETER MANAGED (P1.7
+	// slice 3b-vii)?** A shared generic body reassigns a bare `T` field opaquely; the OLD value's
 	// descriptor-gated drop (`__drop_type_param`) is needed ONLY when some instantiation makes that field
 	// managed (`Box with String`), and is a sound scalar plain store — no drop — when every instantiation is
 	// trivial (`Box with SmallInt`). This is the exact gate that tells a crash-prone managed reassignment (the
@@ -13148,12 +13374,12 @@ export type ProgramSignatures
 	// described there once; what this gate adds is the KIND — each instance's argument at `position` read
 	// through the SAME `typeArgIsOwned` boundary the box's own per-field drop gate
 	// (`genericInstanceFieldIsManaged`) uses, so the reject and the destructor agree on what "managed" means.
-	export function genericTypeFieldHasManagedInstantiation(baseName ByteArray, position TypeParamId) returns bool
-		return self.anyInstanceTypeArgHasKind(baseName, position: position, kind: TypeArgInstantiationKind.consumeMoved)
+	export function genericTypeFieldHasManagedInstantiation(param TypeParamId) returns bool
+		return self.anyInstanceTypeArgHasKind(param, kind: TypeArgInstantiationKind.consumeMoved)
 	end 'genericTypeFieldHasManagedInstantiation'
 
-	// ⭐ **DOES ANY INTERNED INSTANCE OF GENERIC TYPE `baseName` MAKE ITS TYPE PARAMETER AT `position` A
-	// CO-OWNED TRIVIAL STRUCT (the retain-escaping rung)?** A trivial struct/instance argument (`Box with
+	// ⭐ **DOES ANY INTERNED INSTANCE OF THE TYPE THAT DECLARES `param` MAKE THAT PARAMETER A CO-OWNED
+	// TRIVIAL STRUCT (the retain-escaping rung)?** A trivial struct/instance argument (`Box with
 	// Point`) is BORROWED at the call site (`typeArgIsOwned` false — the caller keeps it) yet CO-OWNED by the
 	// box (`typeIsManaged` true — `genericInstanceFieldIsManaged` drops it, balanced by the constructor-feed
 	// `__mm_retain`). That co-ownership is sound for a field set ONCE at construction, but a SHARED-body
@@ -13165,8 +13391,8 @@ export type ProgramSignatures
 	// so the reject fires on exactly the fields the destructor co-owns but the reassign cannot re-balance. A
 	// managed instantiation (`Box with String`, both true) reassigns through the descriptor as before; a scalar
 	// (both false) is inert; only the borrowed-and-dropped trivial struct — the co-ownership gap — is rejected.
-	export function genericTypeFieldHasCoOwnedTrivialInstantiation(baseName ByteArray, position TypeParamId) returns bool
-		return self.anyInstanceTypeArgHasKind(baseName, position: position, kind: TypeArgInstantiationKind.coOwnedTrivial)
+	export function genericTypeFieldHasCoOwnedTrivialInstantiation(param TypeParamId) returns bool
+		return self.anyInstanceTypeArgHasKind(param, kind: TypeArgInstantiationKind.coOwnedTrivial)
 	end 'genericTypeFieldHasCoOwnedTrivialInstantiation'
 
 	// Is `t` a CO-OWNED TRIVIAL type argument — a heap aggregate the box drops (`typeIsManaged`) but that the
@@ -13207,7 +13433,7 @@ export type ProgramSignatures
 		return not self.typeArgIsOwned(t)
 	end 'typeArgIsCoOwnedTrivial'
 
-	// ⭐ **DOES ANY INTERNED INSTANCE OF GENERIC TYPE `baseName` MAKE ITS OPAQUE ARRAY ELEMENT AT `position`
+	// ⭐ **DOES ANY INTERNED INSTANCE OF THE TYPE THAT DECLARES `param` MAKE THAT OPAQUE ARRAY ELEMENT
 	// UNCOPYABLE (P1.7 slice 3b-vi-b-β)?** The FRONT-END gate for an opaque `slice`/`clone`/`append`: the shared
 	// body copies each element through the descriptor's single `copyFunc@32`, which can hold a cloner only for a
 	// `direct`-clonable element (String / struct / boxed union / trivial-element array — a byte-blit copies a
@@ -13217,12 +13443,12 @@ export type ProgramSignatures
 	// so a copy of it would byte-blit a managed pointer and double-free it; such an instantiation is rejected
 	// with a positioned E2015 at the copy site rather than crash at descriptor emit. HOW the instances are found
 	// is `anyInstanceTypeArgHasKind`'s business and is described there once; what this gate adds is the KIND —
-	// each instance's argument at `position` read through the SAME
+	// each instance's argument at that parameter's position read through the SAME
 	// `typeSupportsDeepClone(asElement: true)` the concrete element-copy gate (`arrayElementSupportsDeepClone`)
 	// uses, so the opaque reject and the concrete reject agree on what "deep-cloneable as an element" means. A
 	// TRIVIAL argument is copyable (a byte blit), so it never triggers the reject.
-	export function genericTypeFieldHasUncopyableInstantiation(baseName ByteArray, position TypeParamId) returns bool
-		return self.anyInstanceTypeArgHasKind(baseName, position: position, kind: TypeArgInstantiationKind.uncopyableElement)
+	export function genericTypeFieldHasUncopyableInstantiation(param TypeParamId) returns bool
+		return self.anyInstanceTypeArgHasKind(param, kind: TypeArgInstantiationKind.uncopyableElement)
 	end 'genericTypeFieldHasUncopyableInstantiation'
 
 	// ⭐ **IS `fieldName` OF `structName` A BARE OPAQUE TYPE-PARAMETER field whose element is MANAGED for some
@@ -13247,7 +13473,7 @@ export type ProgramSignatures
 		if maxonTypeTag(fieldType) != ValueTypeTag.typeParameter 'notOpaque'
 			return false
 		end 'notOpaque'
-		return self.genericTypeFieldHasManagedInstantiation(structName, position: typeNameIdOf(fieldType))
+		return self.genericTypeFieldHasManagedInstantiation(typeNameIdOf(fieldType))
 	end 'isManagedOpaqueTypeParamField'
 
 	// Is instance field `index` DROPPED by the box once its args are substituted — the per-field drop gate.
@@ -13429,7 +13655,7 @@ export type ProgramSignatures
 	// is BORROWED (the P1.6-A behaviour, unchanged — `PointBox.create(p)` keeps `p` usable). It reads exactly
 	// the `typeArgIsOwned` boundary the destructor drops on, so the consumed set equals the dropped set by
 	// construction — no double-free, no leak.
-	export function genericInstanceArgIsOwned(id GenericInstanceId, position TypeParamId) returns bool
+	export function genericInstanceArgIsOwned(id GenericInstanceId, position TypeParamPosition) returns bool
 		let args = self.genericInstances.instanceArgs(id)
 		if position >= args.count() 'oob'
 			return false
@@ -14082,16 +14308,25 @@ export type ProgramSignatures
 			// An opaque `Array with T` field: the descriptor drops each ELEMENT (P1.7 slice 3b-ii).
 			if self.denotesArrayInstance(fieldType) 'arrayField'
 				let element = self.containerElementType(self.denotedArrayInstance(fieldType))
-				if maxonTypeTag(element) == ValueTypeTag.typeParameter and self.genericInstanceArgIsOwned(id, position: typeNameIdOf(element)) 'managedArrayElement'
-					return ManagedOpaqueArrayElement.present(self.substitutedInstanceArg(id, position: typeNameIdOf(element)))
-				end 'managedArrayElement'
+				// The tag gate is its own `if` rather than the left half of an `and`, because the position is
+				// wanted TWICE below and `opaqueTypeParamPosition` may only be asked once the tag says the type
+				// names a parameter at all.
+				if maxonTypeTag(element) == ValueTypeTag.typeParameter 'opaqueElement'
+					let elementPosition = self.opaqueTypeParamPosition(element)
+					if self.genericInstanceArgIsOwned(id, position: elementPosition) 'managedArrayElement'
+						return ManagedOpaqueArrayElement.present(self.substitutedInstanceArg(id, position: elementPosition))
+					end 'managedArrayElement'
+				end 'opaqueElement'
 				continue
 			end 'arrayField'
 			// A BARE opaque `T` field (`saved as Element`): a reassignment drops the field ITSELF through the SAME
 			// descriptor `destroyFunc@40` (P1.7 Finding A) — the sole type argument's destructor, exactly as above.
-			if maxonTypeTag(fieldType) == ValueTypeTag.typeParameter and self.genericInstanceArgIsOwned(id, position: typeNameIdOf(fieldType)) 'managedBareField'
-				return ManagedOpaqueArrayElement.present(self.substitutedInstanceArg(id, position: typeNameIdOf(fieldType)))
-			end 'managedBareField'
+			if maxonTypeTag(fieldType) == ValueTypeTag.typeParameter 'opaqueBareField'
+				let fieldPosition = self.opaqueTypeParamPosition(fieldType)
+				if self.genericInstanceArgIsOwned(id, position: fieldPosition) 'managedBareField'
+					return ManagedOpaqueArrayElement.present(self.substitutedInstanceArg(id, position: fieldPosition))
+				end 'managedBareField'
+			end 'opaqueBareField'
 		end 'eachField'
 		return ManagedOpaqueArrayElement.absent
 	end 'managedOpaqueArrayElementOf'
@@ -14658,8 +14893,9 @@ export type ProgramSignatures
 			// A FUNCTION return type carries its governing name id (P1.5-A1), so it re-interns like `named`.
 			function gives MaxonReturnType.value(self.adoptType(inner, into: into))
 			// A TYPE-PARAMETER / GENERIC-INSTANCE return type (P1.6-A) — `get() returns T`. Neither carries a
-			// per-file interner id (a POSITION / a whole-program giid), so like a primitive it crosses files
-			// unchanged. `adoptType` handles both identically; routing through it keeps the one crossing door.
+			// per-file interner id (a source-derived DIGEST since W14 / a whole-program giid), so like a
+			// primitive it crosses files unchanged. `adoptType` handles both identically; routing through it
+			// keeps the one crossing door.
 			typeParameter gives MaxonReturnType.value(self.adoptType(inner, into: into))
 			genericInstance gives MaxonReturnType.value(self.adoptType(inner, into: into))
 			// A `Character` return type carries no interned name either — it crosses files unchanged.
@@ -14700,9 +14936,13 @@ export type ProgramSignatures
 			string gives t
 			// A FUNCTION value carries its governing name id (P1.5-A1), re-interned by NAME like `named`.
 			function(id) gives MaxonType.function(into.intern(self.nameOfId(id)))
-			// A type-parameter reference and a generic instance (P1.6-A) carry GLOBAL ids — a param
-			// POSITION and a `GenericInstanceId` keyed on THIS index's own registry — not per-file
-			// interner ids, so there is nothing to remap: they pass through unchanged, like a primitive.
+			// A type-parameter reference and a generic instance (P1.6-A) carry GLOBAL ids — a
+			// `(declaring type, parameter name)` DIGEST and a `GenericInstanceId` keyed on THIS index's own
+			// registry — not per-file interner ids, so there is nothing to remap: they pass through
+			// unchanged, like a primitive. ⚠ W14 replaced the type parameter's id and the arm still holds,
+			// but for a NEW reason that has to be stated: a POSITION was global because every declaration
+			// numbers from zero, and a DIGEST is global because it is a pure function of source text. Neither
+			// is an interner id, which is the only property this arm needs.
 			typeParameter gives t
 			genericInstance gives t
 			// A `Character` carries no name id, so like a primitive it passes through unchanged.
@@ -14767,9 +15007,17 @@ export type ProgramSignatures
 			// A FUNCTION value (P1.5-A1) — its own shape, then its governing NAME (never its id, for
 			// `mixDeclaration`'s reason).
 			function(id) gives mixBytes(mix(state, value: TypeShapeFunction), bytes: self.nameOfId(id))
-			// A TYPE-PARAMETER reference (P1.6-A) — its own shape, then its POSITION. The position is a
-			// stable identity (declaration order), NOT a global id, so hashing it does not over-invalidate:
-			// `uses A, B`'s `returns A` (position 0) and `returns B` (position 1) hash apart.
+			// A TYPE-PARAMETER reference (P1.6-A) — its own shape, then its TOKEN. ⚠ **THE ONE ARM THAT MIXES
+			// AN `id` RATHER THAN A NAME, AND SINCE W14 IT DOES SO FOR A BETTER REASON.** `mixDeclaration`'s
+			// rule is names-never-ids because an INTERN-ORDER id shifts when an unrelated file declares
+			// something; a type-parameter token is not an intern-order id at all, it is a digest of the two
+			// NAMES (`typeParamTokenFor`), so mixing it IS mixing those names — it moves when and only when
+			// the declaring type or the parameter is renamed, which is exactly when a reader's memo must
+			// move. It also finally hashes `uses A, B`'s `returns A` apart from ANOTHER type's `returns X`,
+			// where the position hashed them alike.
+			//
+			// ⚠ W14 therefore invalidates every warm parse memo ONCE. The query cache is in-memory only
+			// (`QueryDatabase`), so there is no on-disk artifact to migrate.
 			typeParameter(id) gives mix(mix(state, value: TypeShapeTypeParameter), value: id)
 			// A GENERIC INSTANCE (P1.6-A) — its own shape, then its base NAME (never its id) and each ARG's
 			// shape (recursed), so `Box with Integer` and `Box with Bool` hash apart. `mixGenericInstance`

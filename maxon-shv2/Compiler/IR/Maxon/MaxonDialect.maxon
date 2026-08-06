@@ -55,14 +55,50 @@ end 'isTrivialOwnership'
 // unbounded (one entry per distinct named reference seen in source).
 export typealias TypeNameId = int(0 to u64.max)
 
-// A generic type's type-PARAMETER reference (P1.6-A): `T` in `type Box uses T`. The id is the
-// param's POSITION in its declaring type's `uses` list (`T` is 0, the second is 1, …), which is
-// all a TRIVIAL type parameter needs — it lowers to an opaque 8-byte value and is never
-// substituted at this slice, so the position IS its whole identity and no registry has to intern
-// it. Same underlying range as `TypeNameId` deliberately: a `typeParameter` value rides the dense
-// `nameId` column exactly as `named`/`structRef` do (`maxonTypeOfTag`), so the two ranges must be
-// assignment-compatible.
+// ⭐⭐ **A GENERIC TYPE'S TYPE-PARAMETER REFERENCE (P1.6-A): `T` in `type Box uses T`. THE ID IS A
+// DIGEST OF `(declaring type name, parameter name)` — NOT A POSITION (W14).**
+//
+// ⛔ **IT WAS A POSITION, AND A POSITION IS NOT AN IDENTITY.** `typeParameter(0)` was the same value
+// for EVERY generic type's first parameter, so `Array with U` inside `type HoldA uses U` and
+// `Array with V` inside `type HoldB uses V` built the same `GenericInstanceRegistry.instanceKey` and
+// interned as ONE instance. Two different types, one key. MEASURED, on two programs byte-identical
+// apart from which type is declared first: `b.items` — a `HoldB`'s field — was cited as
+// `HoldA.Items` in one order and `HoldB.Items` in the other, because `deriveInstanceDisplayNames`
+// settles "two names for one instance" by FIRST DECLARATION and the collision had made the two
+// names true of one instance. See `specs-shv2/generic-types.md`'s
+// `error.a-type-parameter-belongs-to-the-type-THAT-DECLARES-IT{,-swapped}` pair.
+//
+// ⭐ **THE DIGEST IS A PURE FUNCTION OF SOURCE TEXT, WHICH IS THE PROPERTY THE MINT NEEDS.** A bare
+// `T` is recognized by NAME against the enclosing type's `uses` list, so the tolerant declaration
+// sweep and the real parse must answer it identically WITHOUT a registry (exactly as `Self` is —
+// see `Parser.parseTypeReference`). An intern-ORDER id (v1's `TypeParamRegistry`,
+// `maxon-selfhosted/Compiler/Project.maxon:1876-1889`) cannot do that: the two passes would number
+// the same parameter differently. `ProgramSignatures.typeParamTokenFor` is the one speller.
+//
+// ⛔ **AND IT MUST STAY ONE `int`.** This payload rides the dense `valueNameIds` column every SSA
+// value carries (`IrFunction`, `Parser.mintValue`, `LowerMaxonToStd`, `ModuleInit`), bound to the
+// union by `maxonTypeOfTag(tag, ONE nameId)` below. `ValueTypeTag`'s own header carries the A/B for
+// widening that column: **+4,165 allocations on the smallest scale rung**, and +5,540 for the
+// reconstruct-on-read variant. A digest is one int, so the column, `maxonTypeOfTag` and
+// `Parser.mintSelfReturnedWitnessResult` (which rebuilds this arm from a raw column int) are all
+// unchanged by W14.
+//
+// Same underlying range as `TypeNameId` deliberately: a `typeParameter` value rides the `nameId`
+// column exactly as `named`/`structRef` do, so the two ranges must be assignment-compatible.
 export typealias TypeParamId = int(0 to u64.max)
+
+// ⭐ **A TYPE PARAMETER'S POSITION IN ITS DECLARING TYPE'S `uses` LIST — a DIFFERENT number from
+// `TypeParamId` since W14, and that is the whole point of naming it apart.** `Box with X` binds
+// argument 0 to the parameter at position 0, so the position is what indexes an instance's
+// `argTypes`, a `where` clause's witness slot and a `StructLayout.typeParamNames` entry.
+//
+// ⛔ **THE TWO USED TO BE ONE NUMBER, AND THAT IS EXACTLY HOW A LOSSY KEY BECAME AN IDENTITY.** With
+// the id spelled as the position, `constraint.typeParamIndex == valueNameId(receiver)` compared a
+// POSITION against an IDENTITY and read as correct code (`Parser.findWitnessDispatchCandidates`).
+// Named apart, every such site has to say which it means. They share an underlying range because
+// both are unbounded counts, so the compiler cannot catch a mix-up — the NAMES are what make one
+// readable.
+export typealias TypeParamPosition = int(0 to u64.max)
 
 // A generic INSTANCE `Base with Args` (P1.6-A): `Box with Integer`. The id keys the
 // `GenericInstanceRegistry` (SignatureIndex), which holds the `(baseId, argTypes)` payload OUT OF
@@ -174,11 +210,12 @@ export union MaxonType
 	// A TYPE-PARAMETER reference (P1.6-A) — `T` inside `type Box uses T`. It is OPAQUE: a trivial
 	// type parameter lowers to an 8-byte machine word (`valueTagToStdType` → i64) exactly as
 	// `structRef`/`string`/`function` do, so a generic type's method bodies compile ONCE against `T`
-	// and are byte-identical to the equivalent monomorphic struct. `id` is the param's POSITION in
-	// its declaring type's `uses` list (see `TypeParamId`), the whole of its identity at this slice —
-	// there is no substitution, so `Box.get() returns T` binds an opaque value the use site compares
-	// as an i64. It agrees with any concrete type (`TypeClass.typeParameter`), the deferral that lets
-	// a concrete argument meet a `T` parameter and a `T` result meet a concrete comparison.
+	// and are byte-identical to the equivalent monomorphic struct. `id` is a DIGEST of the pair
+	// `(declaring type name, parameter name)` (see `TypeParamId`, and W14 for the collision a bare
+	// position was) — there is no substitution in the shared body, so `Box.get() returns T` binds an
+	// opaque value the use site compares as an i64. It agrees with any concrete type
+	// (`TypeClass.typeParameter`), the deferral that lets a concrete argument meet a `T` parameter
+	// and a `T` result meet a concrete comparison.
 	//
 	// ⚠ APPENDED AT THE END, past `function`, per the band-append invariant — the same range arms
 	// (`boolean to float`, `exitCode to unresolved`) that guard `structRef`/`string`/`function`
@@ -364,9 +401,11 @@ export function typeNameIdOf(t MaxonType) returns TypeNameId
 		// what lets it intern, remap and hash by the same machinery. It is NOT collapsed into the
 		// `named to structRef` range: `exitCode`/`unresolved` and now `string` sit between them.
 		function(id) gives id
-		// A type-parameter reference and a generic instance both carry an id (a POSITION and a
-		// GenericInstanceId respectively, P1.6-A); both ride the name column so a value of that type
-		// round-trips through `maxonTypeOfTag`. NOT collapsed into a range: other arms sit between.
+		// A type-parameter reference and a generic instance both carry an id (a `(declaring type,
+		// parameter name)` DIGEST and a GenericInstanceId respectively, P1.6-A/W14); both ride the name
+		// column so a value of that type round-trips through `maxonTypeOfTag` — which is what makes the
+		// digest's ONE-int width load-bearing rather than incidental. NOT collapsed into a range: other
+		// arms sit between.
 		typeParameter(id) gives id
 		genericInstance(id) gives id
 		boolean to float gives UnnamedTypeId
@@ -446,8 +485,10 @@ export function maxonTypeOfTag(tag ValueTypeTag, nameId TypeNameId) returns Maxo
 		// matters: `let f = double` types the binding from this so `f(21)` can find its return type.
 		function then return MaxonType.function(nameId)
 		// A type-parameter reference / generic instance rebuilds from the id column exactly as `named`
-		// does (P1.6-A) — the id is a param POSITION / a GenericInstanceId (see MaxonType). A binding of
-		// a `T`-typed value (`let v = b.get()`) types from this.
+		// does (P1.6-A) — the id is a `(declaring type, parameter name)` DIGEST / a GenericInstanceId
+		// (see MaxonType). A binding of a `T`-typed value (`let v = b.get()`) types from this. ⚠ W14
+		// changed WHAT the digest means and not its WIDTH, which is why this arm needed no change: the
+		// arm is rebuilt from ONE column int, and a digest is one column int.
 		typeParameter then return MaxonType.typeParameter(nameId)
 		genericInstance then return MaxonType.genericInstance(nameId)
 		// A Character rebuilds from the tag alone — it carries no name, exactly as a String does.

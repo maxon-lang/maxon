@@ -3298,3 +3298,119 @@ end 'main'
 ```stdout
 ok=11 err=1
 ```
+
+<!-- test: error.a-type-parameter-belongs-to-the-type-that-declares-it -->
+⭐⭐ **`Array with U` IN ONE GENERIC TYPE AND `Array with V` IN ANOTHER ARE TWO TYPES, AND A DIAGNOSTIC
+MUST SAY WHICH (W14).** A `typeParameter`'s identity used to be its POSITION in its declaring type's
+`uses` list and nothing else, so `HoldA`'s first parameter and `HoldB`'s first parameter were ONE
+value — and `GenericInstanceRegistry.instanceKey`, which mixes each argument's `(tag, id)` pair,
+therefore gave `Array with U` and `Array with V` ONE key. Not two names for two types: one interned
+type. `deriveInstanceDisplayNames` then settled the two spellings by FIRST DECLARATION, which is the
+right rule for two names that really are true of one type and the wrong one for a type the key had
+merged by accident.
+
+⛔ **MEASURED on this program and its twin below — byte-identical apart from which type is declared
+first.** Against the compiler as it stood, this order reported `got 'HoldA.Items'` for a value whose
+type is `HoldB`'s, and the swapped order reported `got 'HoldB.Items'`: one program, two answers,
+decided by declaration order. That is the build-order artifact the 2026-07-24 user ruling recorded at
+`StdlibLoader.maxon:39-63` bars from a diagnostic, and it is the same defect `W14b` closed for a
+nested tuple's name one rung earlier.
+
+⭐ **THE PAIR IS THE GATE, AND NO ORDER-DEPENDENT CITATION CAN PASS IT**: the two cases pin ONE
+byte-identical sentence, so a compiler that lets declaration order pick the name must fail exactly one
+of them WHATEVER text is pinned. The cure is in the KEY — a type parameter is now identified by a
+digest of `(declaring type, parameter name)` (`ProgramSignatures.typeParamTokenFor`) — and NOT in the
+display rule, which needed no change once the two types stopped sharing an instance.
+
+The refusal itself is correct in both orders: an `Array` of `Num` and an `Array` of `String` are
+different types. Only the NAME was wrong.
+```maxon
+typealias Num = int(0 to 1000)
+typealias Nums = Array with Num
+
+type HoldA uses U
+	typealias Items = Array with U
+	export var items as Items
+
+	static function of(first U) returns HoldA
+		var xs = Items.create()
+		xs.push(first)
+		return HoldA{items: xs}
+	end 'of'
+
+	export function total(other Nums) returns Num
+		return other.count()
+	end 'total'
+end 'HoldA'
+
+type HoldB uses V
+	typealias Items = Array with V
+	export var items as Items
+
+	static function of(first V) returns HoldB
+		var xs = Items.create()
+		xs.push(first)
+		return HoldB{items: xs}
+	end 'of'
+end 'HoldB'
+
+typealias HoldANum = HoldA with Num
+typealias HoldBStr = HoldB with String
+
+function main() returns ExitCode
+	let a = HoldANum.of(42)
+	let b = HoldBStr.of("hello")
+	return a.total(b.items)
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:37:9: argument type mismatch for 'other': expected 'Nums', got 'HoldB.Items'
+```
+
+<!-- test: error.a-type-parameter-belongs-to-the-type-that-declares-it-swapped -->
+The RED-GATE CONTROL of the case above: the same program with the two type declarations exchanged, and
+the same pinned sentence, to the byte. `HoldA` is 14 lines and `HoldB` is 10 either way, so
+`a.total(b.items)` sits at the same line in both — which is what leaves declaration order as the only
+difference between the two cases, and therefore the only thing the pair can be measuring.
+```maxon
+typealias Num = int(0 to 1000)
+typealias Nums = Array with Num
+
+type HoldB uses V
+	typealias Items = Array with V
+	export var items as Items
+
+	static function of(first V) returns HoldB
+		var xs = Items.create()
+		xs.push(first)
+		return HoldB{items: xs}
+	end 'of'
+end 'HoldB'
+
+type HoldA uses U
+	typealias Items = Array with U
+	export var items as Items
+
+	static function of(first U) returns HoldA
+		var xs = Items.create()
+		xs.push(first)
+		return HoldA{items: xs}
+	end 'of'
+
+	export function total(other Nums) returns Num
+		return other.count()
+	end 'total'
+end 'HoldA'
+
+typealias HoldANum = HoldA with Num
+typealias HoldBStr = HoldB with String
+
+function main() returns ExitCode
+	let a = HoldANum.of(42)
+	let b = HoldBStr.of("hello")
+	return a.total(b.items)
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:37:9: argument type mismatch for 'other': expected 'Nums', got 'HoldB.Items'
+```

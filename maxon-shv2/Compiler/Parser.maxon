@@ -1718,12 +1718,12 @@ export typealias ForwardFeedEdgeArray = Array with ForwardFeedEdge
 type MethodFeedScan
 	export let funcName as ByteArray
 	export let paramNames as ByteArrayArray
-	export let typeParamPositions as TypeParamIdArray
+	export let typeParamPositions as TypeParamPositionArray
 	export let directFeeds as TypeParamFeedArray
 	export let edges as ForwardFeedEdgeArray
 	export let endPos as TokenIndex
 
-	export static function create(funcName ByteArray, paramNames ByteArrayArray, typeParamPositions TypeParamIdArray, directFeeds TypeParamFeedArray, edges ForwardFeedEdgeArray, endPos TokenIndex) returns MethodFeedScan
+	export static function create(funcName ByteArray, paramNames ByteArrayArray, typeParamPositions TypeParamPositionArray, directFeeds TypeParamFeedArray, edges ForwardFeedEdgeArray, endPos TokenIndex) returns MethodFeedScan
 		return Self{funcName: funcName, paramNames: paramNames, typeParamPositions: typeParamPositions, directFeeds: directFeeds, edges: edges, endPos: endPos}
 	end 'create'
 end 'MethodFeedScan'
@@ -2557,7 +2557,7 @@ let ForPatternNeedsClause = "`for (k, v) in …` needs a source whose element is
 // `__map_entries` fills, read by `emitMapEntriesArray` off the interned layout to get its displacement.
 //
 // ⚠ **IT IS 1 IN ITS OWN NUMBERING SPACE, AND SO ARE TWO OTHER CONSTANTS IN TWO OTHER SPACES.** This site
-// used to pass `SignatureIndex.MapValueArgPosition`, which is a `TypeParamId` — the position of `Map`'s
+// used to pass `SignatureIndex.MapValueArgPosition`, which is a `TypeParamPosition` — the position of `Map`'s
 // value TYPE ARGUMENT, the thing `mapValueType` reads back — and it happened to have the same number. The
 // runtime's own `MapRuntime.PairKeySlotOffset` is a third space again: a byte DISPLACEMENT, which is 0.
 // Describing the pair's layout with an argument position makes a renumber of either space silently move the
@@ -7622,7 +7622,7 @@ export type Parser
 	// never mutated (`paramNamesIn` skips the position work when `collectTypeParamFlags` is false, and
 	// `paramIsTypeParamTyped`/`paramTypeParamPositionAt` only read it, OOB-safe), so one allocation per parser
 	// serves every non-generic function's consume scan, keeping that hot path allocation-free.
-	var emptyTypeParamPositions as TypeParamIdArray
+	var emptyTypeParamPositions as TypeParamPositionArray
 	// The SHARED empty type-parameter-name list (P1.6-A) that `enclosingTypeParams` holds outside a
 	// generic type — which is every type on the generics-free corpus. `openTypeParamScope` points at it
 	// (rather than allocating an empty `uses` list) for a type with no `uses`, and `closeTypeParamScope`
@@ -7986,7 +7986,7 @@ export type Parser
 			extensionAssociatedTypeNames: sharedEmptyExtensionAssociatedTypes,
 			extensionAssociatedTypeBindings: sharedEmptyExtensionAssociatedTypes,
 			genericAliasScratch: GenericAliasEntryArray.create(),
-			emptyTypeParamPositions: TypeParamIdArray.create(),
+			emptyTypeParamPositions: TypeParamPositionArray.create(),
 			emptyTypeParams: ByteArrayArray.create(),
 			ownedBindings: VarInfoArray.create(),
 			unusedCandidates: UnusedBindingCandidateArray.create(),
@@ -8918,13 +8918,13 @@ export type Parser
 			let collectTypeParamFlags = not self.enclosingTypeParams.isEmpty()
 			var typeParamPositions = self.emptyTypeParamPositions
 			if collectTypeParamFlags 'genericScope'
-				typeParamPositions = TypeParamIdArray.create()
+				typeParamPositions = TypeParamPositionArray.create()
 			end 'genericScope'
 			let paramNames = self.paramNamesIn(paramsStart, typeParamPositionsOut: typeParamPositions, collectTypeParamFlags: collectTypeParamFlags)
 			self.scanConsumeBits(funcName, paramNames: paramNames, typeParamPositions: typeParamPositions, bodyStart: self.pos, paramConsumes: paramConsumes, detectFieldStores: true)
 		end 'receiverless' else 'instanceMethod'
 			if not self.enclosingTypeParams.isEmpty() 'genericInstanceMethod'
-				var typeParamPositions = TypeParamIdArray.create()
+				var typeParamPositions = TypeParamPositionArray.create()
 				let paramNames = self.callAlignedInstanceParams(paramsStart, typeParamPositionsOut: typeParamPositions)
 				self.scanConsumeBits(funcName, paramNames: paramNames, typeParamPositions: typeParamPositions, bodyStart: self.pos, paramConsumes: paramConsumes, detectFieldStores: false)
 			end 'genericInstanceMethod'
@@ -9051,7 +9051,7 @@ export type Parser
 	// consume-bit scan (`recordScannedSignature`) and the transitive array-feed scan (`scanTypeMethodFeeds`) — so
 	// the two cannot drift on where `self` sits, which would land a feed on the wrong parameter (a wrong-consume
 	// double-free at the concrete call site).
-	function callAlignedInstanceParams(paramsStart TokenIndex, typeParamPositionsOut TypeParamIdArray) returns ByteArrayArray
+	function callAlignedInstanceParams(paramsStart TokenIndex, typeParamPositionsOut TypeParamPositionArray) returns ByteArrayArray
 		typeParamPositionsOut.push(self.enclosingTypeParams.count())
 		let sourceNames = self.paramNamesIn(paramsStart, typeParamPositionsOut: typeParamPositionsOut, collectTypeParamFlags: true)
 		var paramNames = ByteArrayArray.create()
@@ -9080,17 +9080,17 @@ export type Parser
 	// (the "not a type parameter" sentinel `typeParamPositionOf` uses) when it is a plain type or out of range.
 	// SAFE against the SHARED EMPTY positions array outside a generic type (`collectTypeParamFlags` false): a
 	// missing index reads as the sentinel — a plain parameter.
-	function paramTypeParamPositionAt(positions TypeParamIdArray, index ParamCount) returns TypeParamId
+	function paramTypeParamPositionAt(positions TypeParamPositionArray, index ParamCount) returns TypeParamPosition
 		return try positions.get(index) otherwise self.enclosingTypeParams.count()
 	end 'paramTypeParamPositionAt'
 
 	// Is parameter `index` type-parameter-typed, per the positions `paramNamesIn` filled? A position below the
 	// type-parameter count names a real `uses` parameter; the sentinel (or a short/empty array) is a plain one.
-	function paramIsTypeParamTyped(positions TypeParamIdArray, index ParamCount) returns bool
+	function paramIsTypeParamTyped(positions TypeParamPositionArray, index ParamCount) returns bool
 		return self.paramTypeParamPositionAt(positions, index: index) < self.enclosingTypeParams.count()
 	end 'paramIsTypeParamTyped'
 
-	function scanConsumeBits(funcName ByteArray, paramNames ByteArrayArray, typeParamPositions TypeParamIdArray, bodyStart TokenIndex, paramConsumes ParamConsumeEntryArray, detectFieldStores bool)
+	function scanConsumeBits(funcName ByteArray, paramNames ByteArrayArray, typeParamPositions TypeParamPositionArray, bodyStart TokenIndex, paramConsumes ParamConsumeEntryArray, detectFieldStores bool)
 		if paramNames.count() == 0 'noParams'
 			return
 		end 'noParams'
@@ -9699,7 +9699,7 @@ export type Parser
 	// well-typed program only reaches a real opaque array field here; an ill-typed one is rejected by the real
 	// parse regardless. Only a BARE type-parameter argument is fed (a `push`'s sole positional argument, a
 	// `set`/`insert`'s labelled `value:` element); an index expression, a chain or a `value` label token is not.
-	function markOpaqueArrayMutatorFeeds(selfPos TokenIndex, paramNames ByteArrayArray, typeParamPositions TypeParamIdArray, feeds TypeParamFeedArray) returns bool
+	function markOpaqueArrayMutatorFeeds(selfPos TokenIndex, paramNames ByteArrayArray, typeParamPositions TypeParamPositionArray, feeds TypeParamFeedArray) returns bool
 		if self.kindAt(selfPos + 1) != TokenKind.dot or self.kindAt(selfPos + 2) != TokenKind.identifier 'notFieldAccess'
 			return false
 		end 'notFieldAccess'
@@ -9752,7 +9752,7 @@ export type Parser
 	// this the caller would BORROW the managed argument the box then destroys — a double-free (`0xC0000005`), the
 	// field-store twin of the array-feed hole `recordTransitiveArrayFeeds` closes. The head test recognises
 	// `self . <field> = <param>` where the RHS is a bare type-parameter parameter.
-	function markOpaqueFieldReassignFeed(selfPos TokenIndex, paramNames ByteArrayArray, typeParamPositions TypeParamIdArray, feeds TypeParamFeedArray) returns bool
+	function markOpaqueFieldReassignFeed(selfPos TokenIndex, paramNames ByteArrayArray, typeParamPositions TypeParamPositionArray, feeds TypeParamFeedArray) returns bool
 		// The field's opacity is NOT queried here: this runs in the SWEEP, before the struct layouts are merged
 		// into `self.signatures` (exactly why `markOpaqueArrayMutatorFeeds` is purely token-based too). It need
 		// not be — a type-parameter argument can be assigned ONLY to a type-parameter (opaque) field, so a bare
@@ -9831,7 +9831,7 @@ export type Parser
 				break
 			end 'typeEnd'
 			if self.functionDeclarationAt(q) 'method'
-				var typeParamPositions = TypeParamIdArray.create()
+				var typeParamPositions = TypeParamPositionArray.create()
 				let paramNames = self.callAlignedInstanceParams(q + 2, typeParamPositionsOut: typeParamPositions)
 				let scan = self.scanOneMethodFeedSignals(q + 2, funcName: qualifiedMethodName(self.enclosingType, methodName: self.tokenAt(q + 1).value), paramNames: paramNames, typeParamPositions: typeParamPositions)
 				scans.push(scan)
@@ -9850,7 +9850,7 @@ export type Parser
 	// return type carry no `self.<field>.mutator` or `self.N` shape and no bare-sibling call, so scanning from
 	// `startPos` costs one harmless pass over them — mirroring `scanOneMethodDescriptorSignals`, which starts at the
 	// same token.
-	function scanOneMethodFeedSignals(startPos TokenIndex, funcName ByteArray, paramNames ByteArrayArray, typeParamPositions TypeParamIdArray) returns MethodFeedScan
+	function scanOneMethodFeedSignals(startPos TokenIndex, funcName ByteArray, paramNames ByteArrayArray, typeParamPositions TypeParamPositionArray) returns MethodFeedScan
 		var directFeeds = self.initialTypeParamFeeds(paramNames.count(), genericScope: true)
 		var edges = ForwardFeedEdgeArray.create()
 		var depth = 1 as BlockDepth
@@ -9900,7 +9900,7 @@ export type Parser
 	// for the first argument, labelled (`argLabel:`) otherwise — for the fixpoint to resolve to the callee's own
 	// parameter position. A non-parameter argument, an index expression, or a `.`-chain hop is not a bare forward and
 	// is skipped; a plain-typed caller parameter cannot BE a feed, so it is skipped too.
-	function collectForwardFeedEdges(argsStart TokenIndex, calleeName ByteArray, paramNames ByteArrayArray, typeParamPositions TypeParamIdArray, edges ForwardFeedEdgeArray)
+	function collectForwardFeedEdges(argsStart TokenIndex, calleeName ByteArray, paramNames ByteArrayArray, typeParamPositions TypeParamPositionArray, edges ForwardFeedEdgeArray)
 		var depth = 1
 		var p = argsStart
 		while depth > 0 and self.kindAt(p) != TokenKind.eof 'args'
@@ -10090,7 +10090,7 @@ export type Parser
 	// — see there: it needs a strictly COARSER answer that this grammar cannot give more cheaply, and a shared
 	// walk that returned index COLUMNS measured **+7,794 allocations at rung 0 of the scale ladder, doubling
 	// per rung**, because it put three heap objects on a once-per-function path.
-	function paramNamesIn(parenPos TokenIndex, typeParamPositionsOut TypeParamIdArray, collectTypeParamFlags bool) returns ByteArrayArray
+	function paramNamesIn(parenPos TokenIndex, typeParamPositionsOut TypeParamPositionArray, collectTypeParamFlags bool) returns ByteArrayArray
 		var names = ByteArrayArray.create()
 		var q = parenPos
 		if self.kindAt(q) != TokenKind.leftParen 'noParens'
@@ -10127,7 +10127,7 @@ export type Parser
 	// (`enclosingTypeParams.count()`, what `typeParamPositionOf` returns for a non-parameter name). The
 	// consume scan reads it BOTH as "is it a type parameter?" (position below count) and, for B2, as the
 	// feed position — one walk, one fact.
-	function paramTypeParamPosition(typeStart TokenIndex, typeEnd TokenIndex) returns TypeParamId
+	function paramTypeParamPosition(typeStart TokenIndex, typeEnd TokenIndex) returns TypeParamPosition
 		if typeEnd == typeStart + 1 and self.kindAt(typeStart) == TokenKind.identifier 'singleIdent'
 			return self.typeParamPositionOf(self.tokenAt(typeStart).value)
 		end 'singleIdent'
@@ -15920,14 +15920,30 @@ export type Parser
 
 			// A GENERIC TYPE PARAMETER (P1.6-A) — a bare `T` inside `type Box uses T`. Recognized by NAME
 			// against the enclosing type's `uses` list, so the tolerant sweep and the real parse answer it
-			// identically without a registry (like `Self`). It resolves to `typeParameter(POSITION)` — an
-			// opaque i64 — NEVER `named`, for the reason `structRef`/`string`/`function` are their own arms:
-			// the rules that read `named` treat it as a ranged int, and a `T` is neither numeric nor a
-			// declared type. There is no shadowing question at this slice: a type param name equal to a
-			// declared type name is not in the corpus, and the param wins here (it is the innermost scope).
-			let paramPos = self.typeParamPositionOf(name)
-			if paramPos < self.enclosingTypeParams.count() 'typeParam'
-				return MaxonType.typeParameter(paramPos)
+			// identically without a registry (like `Self`). It resolves to an opaque i64 — NEVER `named`, for
+			// the reason `structRef`/`string`/`function` are their own arms: the rules that read `named` treat
+			// it as a ranged int, and a `T` is neither numeric nor a declared type. There is no shadowing
+			// question at this slice: a type param name equal to a declared type name is not in the corpus,
+			// and the param wins here (it is the innermost scope).
+			//
+			// ⭐⭐ **THE IDENTITY IS `(THIS DECLARATION, THIS NAME)` AND NOT THE POSITION (W14).** A position
+			// made `HoldA`'s first parameter and `HoldB`'s the same value, so `Array with U` and `Array with V`
+			// interned as one instance — see `ProgramSignatures.typeParamTokenFor` for the measured wrong
+			// answer that produced. **`self.enclosingType` IS the owner at all three of the doors that install
+			// a parameter scope**, and that is a property of the doors rather than an assumption here: a
+			// `type`'s own body (`openTypeParamScope`) and an `interface`'s (`readInterfaceDeclaration`) are
+			// each inside the declaration that names the parameters, and a TYPE EXTENSION's body
+			// (`openTypeExtensionBodyScope`) installs the TARGET's list under `enterTypeScope(conformer)` —
+			// where the conformer of a `typeExtension` IS the extended type (`extensionTargetOf` builds the
+			// conformer list as the target alone), which is exactly what makes an extension's `T` the same `T`
+			// as the type's own. An INTERFACE extension's body deliberately installs no parameters at all
+			// (`openExtensionBodyScope` says why), so it mints nothing here.
+			//
+			// ⚠ The digest is a pure function of the two names, so the tolerant sweep and the real parse
+			// compute the SAME token with no registry between them — which is the property this arm's
+			// "without a registry" sentence has always rested on and which an intern-order id would break.
+			if self.typeParamPositionOf(name) < self.enclosingTypeParams.count() 'typeParam'
+				return MaxonType.typeParameter(typeParamTokenFor(self.enclosingType, paramName: name))
 			end 'typeParam'
 
 			// A BARE INNER ALIAS (P1.6-C / P1.7 slice 3b-i) — `Idx` OR `ElementArray` inside `type Wrapper`.
@@ -16128,7 +16144,7 @@ export type Parser
 	// becomes `typeParameter(POSITION)`. A linear scan, for `StructLayout.indexOfField`'s reason: a type
 	// declares a handful of parameters, so a per-parse name→index map would be a heap object bought to
 	// serve two or three lookups.
-	function typeParamPositionOf(name ByteArray) returns TypeParamId
+	function typeParamPositionOf(name ByteArray) returns TypeParamPosition
 		for i in 0 upto self.enclosingTypeParams.count() 'each'
 			let paramName = try self.enclosingTypeParams.get(i) otherwise panic("typeParamPositionOf: enclosingTypeParams.get OOB at {i}")
 			if paramName.equals(name) 'hit'
@@ -31395,15 +31411,28 @@ export type Parser
 
 	// Is `v` a value of one of the ENCLOSING type's parameters (`self.item`, `other T` inside `type Box uses T`)
 	// — a genuinely opaque `T`, NOT a concrete generic-method result that the parser happens to tag
-	// `typeParameter` in a non-generic caller (P1.7a slice 2b)? The `typeParameter` value's name-id is its
-	// parameter POSITION; it names an enclosing parameter iff that position is in range of `enclosingTypeParams`,
-	// which is empty outside a generic body. The gate that keeps `==` a scalar compare for `let v = intBox.get();
-	// v == 42` while making it a witness dispatch for `item == other` inside `Box`'s own body.
+	// `typeParameter` in a non-generic caller (P1.7a slice 2b)? The gate that keeps `==` a scalar compare for
+	// `let v = intBox.get(); v == 42` while making it a witness dispatch for `item == other` inside `Box`'s own
+	// body.
+	//
+	// ⭐ **IT IS AN IDENTITY QUESTION AND IT IS NOW ASKED AS ONE (W14).** It used to be
+	// `valueNameId(v) < enclosingTypeParams.count()` — a RANGE test standing in for an identity test, which is
+	// the collision this rung removed in miniature: any other type's parameter at a position this type also
+	// has would answer yes. Now the token is re-spelled against THIS declaration's own `uses` names, so the
+	// answer is "does this token name one of MY parameters" and nothing weaker. Outside a generic body the
+	// list is empty and the scan cannot match, exactly as the range test could not.
 	function isEnclosingTypeParam(v ValueId) returns bool
 		if self.tagOf(v) != ValueTypeTag.typeParameter 'notParam'
 			return false
 		end 'notParam'
-		return self.valueNameId(v) < self.enclosingTypeParams.count()
+		// `if let _`, the existence form `SemanticCheck.dispatchedAssociatedTypeIsBound` already spells over
+		// this door's twin (`associatedTypePositionOf`): the POSITION is not wanted here, only whether the
+		// token names one of this declaration's parameters at all.
+		if let _ = try typeParamPositionIn(self.valueNameId(v), declarationName: self.enclosingType, paramNames: self.enclosingTypeParams) 'namesOneOfMine'
+			return true
+		end 'namesOneOfMine'
+
+		return false
 	end 'isEnclosingTypeParam'
 
 	// ⭐ **LOWER A COMPARISON ON A CONSTRAINED TYPE PARAMETER TO A WITNESS DISPATCH (P1.7a slice 2b / 2b-ii).**
@@ -31426,14 +31455,14 @@ export type Parser
 	function emitTypeParamComparison(lhs ValueId, rhs ValueId, op MaxonCmpOp, opTok Token, leftIsParam bool) returns ValueId throws ParseError
 		let receiver = lhs if leftIsParam else rhs
 		let other = rhs if leftIsParam else lhs
-		let paramPos = self.valueNameId(receiver)
+		let receiverParam = self.valueNameId(receiver)
 		let target = try self.requireOperatorWitness(receiver, op: op, opTok: opTok)
 
 		// The `other` operand fills the method's `Self`-typed formal, so it must be a value of the receiver's own
 		// `T` — a concrete literal (`item == 42`, `item < 42`) would be marshalled into the `Self` pointer and
 		// faulted. Same reject the method-call form runs, one shared helper.
 		let args = pairArgs(receiver, second: other)
-		try self.requireGenuineSelfArgs(target, args: args, what: comparisonOpSpelling(op), receiverParamPos: paramPos, errorTok: opTok)
+		try self.requireGenuineSelfArgs(target, args: args, what: comparisonOpSpelling(op), receiverParam: receiverParam, errorTok: opTok)
 
 		// Typed through the SAME witness-dispatch result typer the `.method()` form uses, so `equals`'s `bool`
 		// and `compare`'s `Ordering` are minted here exactly as they are there (the `Ordering` result carries the
@@ -31600,7 +31629,7 @@ export type Parser
 	// against the interface's `paramNames`; `witnessTargetIsProtocol` requires the protocol's own formals), so a
 	// missing actual is a compiler defect rather than a program's, and it panics instead of quietly passing an
 	// under-supplied dispatch through to the emit.
-	function requireGenuineSelfArgs(target WitnessDispatchTarget, args ValueIdArray, what String, receiverParamPos TypeParamId, errorTok Token) throws ParseError
+	function requireGenuineSelfArgs(target WitnessDispatchTarget, args ValueIdArray, what String, receiverParam TypeParamId, errorTok Token) throws ParseError
 		for j in 0 upto target.paramTypeNames.count() 'eachFormal'
 			let formalTypeName = try target.paramTypeNames.get(j) otherwise panic("requireGenuineSelfArgs: paramTypeNames.get OOB at {j}")
 			if not formalTypeName.equals(InterfaceSelfTypeName) 'notSelfFormal'
@@ -31608,8 +31637,8 @@ export type Parser
 			end 'notSelfFormal'
 
 			let actual = try args.get(j + 1) otherwise panic("requireGenuineSelfArgs: formal {j} of '{what}' has no actual — args holds {args.count()} entries (receiver + {args.count() - 1}) for {target.paramTypeNames.count()} formals, so the caller's arity check did not run")
-			if not self.isReceiverTypeParamValue(actual, receiverParamPos: receiverParamPos) 'notSelfArg'
-				throw ParseError.witnessSelfArgNotTypeParam(what, typeParamName: String.from(self.enclosingTypeParamName(receiverParamPos)), got: self.selfArgActualDescription(actual), line: errorTok.line, column: errorTok.column)
+			if not self.isReceiverTypeParamValue(actual, receiverParam: receiverParam) 'notSelfArg'
+				throw ParseError.witnessSelfArgNotTypeParam(what, typeParamName: String.from(self.enclosingTypeParamName(receiverParam)), got: self.selfArgActualDescription(actual), line: errorTok.line, column: errorTok.column)
 			end 'notSelfArg'
 		end 'eachFormal'
 	end 'requireGenuineSelfArgs'
@@ -31631,7 +31660,7 @@ export type Parser
 	// existential.
 	function requireWitnessSelfArgs(target WitnessDispatchTarget, args ValueIdArray, receiver ValueId, methodTok Token) throws ParseError
 		if self.tagOf(receiver) != ValueTypeTag.interfaceRef 'constrainedTypeParameter'
-			try self.requireGenuineSelfArgs(target, args: args, what: String.from(methodTok.value), receiverParamPos: self.valueNameId(receiver), errorTok: methodTok)
+			try self.requireGenuineSelfArgs(target, args: args, what: String.from(methodTok.value), receiverParam: self.valueNameId(receiver), errorTok: methodTok)
 			return
 		end 'constrainedTypeParameter'
 
@@ -31656,8 +31685,12 @@ export type Parser
 	//
 	// (A genuine cross-parameter COMPARISON — `A` vs `B` where both conform — is a real feature and needs a
 	// second witness plus a conversion; it is not this, and refusing it is what keeps the door shut until then.)
-	function isReceiverTypeParamValue(actual ValueId, receiverParamPos TypeParamId) returns bool
-		return self.isEnclosingTypeParam(actual) and self.valueNameId(actual) == receiverParamPos
+	//
+	// ⚠ **THE COMPARISON IS BETWEEN TWO IDENTITIES AND IT ALWAYS MEANT TO BE (W14).** Before the type-parameter
+	// token it compared two POSITIONS, which is the same answer only while both come from one declaration —
+	// the property this door exists to check rather than to assume.
+	function isReceiverTypeParamValue(actual ValueId, receiverParam TypeParamId) returns bool
+		return self.isEnclosingTypeParam(actual) and self.valueNameId(actual) == receiverParam
 	end 'isReceiverTypeParamValue'
 
 	// WHAT was supplied where a `Self` was required, for `witnessSelfArgNotTypeParam`'s message — the two ways
@@ -31671,11 +31704,13 @@ export type Parser
 		return "a value of type parameter '{String.from(self.enclosingTypeParamName(self.valueNameId(actual)))}'"
 	end 'selfArgActualDescription'
 
-	// The declared NAME of the enclosing type's type parameter at `pos` (P1.7a slice 2b) — `T` in `type Box uses
-	// T`. `enclosingTypeParams` is name-by-position, populated for every generic type body, so a `typeParameter`
-	// value's position always indexes it.
-	function enclosingTypeParamName(position TypeParamId) returns ByteArray
-		return try self.enclosingTypeParams.get(position) otherwise panic("enclosingTypeParamName: type-parameter position {position} out of range of the enclosing type's {self.enclosingTypeParams.count()} parameter(s)")
+	// The declared NAME the type-parameter token `param` was minted from (P1.7a slice 2b) — `T` in `type Box
+	// uses T`. `enclosingTypeParams` is name-by-position and is populated for every generic type body, so the
+	// token re-spells against it; every caller has already established through `isEnclosingTypeParam` that the
+	// token is one of THIS declaration's, which is what makes the miss a panic rather than a case.
+	function enclosingTypeParamName(param TypeParamId) returns ByteArray
+		let position = try typeParamPositionIn(param, declarationName: self.enclosingType, paramNames: self.enclosingTypeParams) otherwise panic("enclosingTypeParamName: type-parameter token {param} names no parameter of '{String.from(self.enclosingType)}', which declares {self.enclosingTypeParams.count()} — every caller reaches here past `isEnclosingTypeParam`, which asks exactly that question")
+		return try self.enclosingTypeParams.get(position) otherwise panic("enclosingTypeParamName: enclosingTypeParams.get OOB at {position}, a position `typeParamPositionIn` just read out of the same list")
 	end 'enclosingTypeParamName'
 
 	// ⭐ **WHAT PROVIDES THE REQUIREMENTS A WITNESS DISPATCH SEARCHED — for the diagnostics that have to name
@@ -39051,7 +39086,7 @@ export type Parser
 	//
 	// ⚠ The caller consumes the fencing tokens — `(`, the `,` before `value:` and the closing `)` — AFTER this
 	// returns, because the move-in inside must run first (see `parseHashTableColumnArg`'s ordering contract).
-	function parseMapColumnValue(func IrFunction, giid GenericInstanceId, position TypeParamId, columnNoun String, consume bool) returns ValueId throws ParseError
+	function parseMapColumnValue(func IrFunction, giid GenericInstanceId, position TypeParamPosition, columnNoun String, consume bool) returns ValueId throws ParseError
 		let columnType = self.mapColumnType(giid, position: position)
 		// The SUBJECT names the RESOLVED type and its nominal identity for `parseHashTableColumnArg`'s reason:
 		// a `named("UnaryOp")` value column printed as *"is an int"*, a sentence about a code pointer that
@@ -39065,7 +39100,7 @@ export type Parser
 	// because the index's own doors are named for the columns (`mapKeyType` / `mapValueType`) and a positional
 	// door there would be a second way to ask. THE one place that knows which type argument is the key: whether
 	// a column owns what it holds is derived from the type this hands back, never from the position again.
-	function mapColumnType(giid GenericInstanceId, position TypeParamId) returns MaxonType
+	function mapColumnType(giid GenericInstanceId, position TypeParamPosition) returns MaxonType
 		return self.signatures.mapKeyType(giid) if position == HashTableKeyArgPosition else self.signatures.mapValueType(giid)
 	end 'mapColumnType'
 
@@ -39917,9 +39952,18 @@ export type Parser
 			return candidates
 		end 'existentialReceiver'
 
+		// ⭐ **THE RECEIVER'S TOKEN IS TURNED INTO A POSITION ONCE, HERE, BECAUSE THAT IS WHAT A `where` CLAUSE
+		// IS INDEXED BY (W14).** `WhereConstraint.typeParamIndex` is a POSITION in the declaring type's `uses`
+		// list — the witness-slot numbering the dictionary-passing ABI threads — and the receiver carries an
+		// IDENTITY. Until W14 the two were the same number and this loop compared them directly; they are now
+		// different kinds of number and the conversion has to be written. A receiver that is not one of THIS
+		// declaration's parameters (a concrete generic-method result the parser tags opaque in a non-generic
+		// caller) matches no constraint, which is the same answer the direct compare gave and is why the miss
+		// returns the empty candidate list rather than raising.
+		let receiverPosition = try typeParamPositionIn(self.valueNameId(receiver), declarationName: self.enclosingType, paramNames: self.enclosingTypeParams) otherwise return candidates
 		for i in 0 upto self.enclosingWhereConstraints.count() 'eachConstraint'
 			let constraint = try self.enclosingWhereConstraints.get(i) otherwise panic("findWitnessDispatchCandidates: enclosingWhereConstraints.get OOB at {i}")
-			if constraint.typeParamIndex != self.valueNameId(receiver) 'otherParam'
+			if constraint.typeParamIndex != receiverPosition 'otherParam'
 				continue
 			end 'otherParam'
 
@@ -41222,8 +41266,10 @@ export type Parser
 	// element is opaque), so it enumerates the enclosing type's instances through
 	// `genericTypeFieldHasUncopyableInstantiation`, mirroring the concrete gate's `arrayElementSupportsDeepClone`.
 	function requireOpaqueArrayCopyable(giid GenericInstanceId, methodTok Token) throws ParseError
-		let elementPosition = typeNameIdOf(self.signatures.containerElementType(giid))
-		if self.signatures.genericTypeFieldHasUncopyableInstantiation(self.enclosingType, position: elementPosition) 'uncopyable'
+		// ⚠ The declaring type is NOT paired in here from `self.enclosingType` any more (W14): the element's
+		// token names its own declaration, so the gate resolves both halves from one fact — see
+		// `anyInstanceTypeArgHasKind` for the hand-pairing that removes.
+		if self.signatures.genericTypeFieldHasUncopyableInstantiation(typeNameIdOf(self.signatures.containerElementType(giid))) 'uncopyable'
 			throw ParseError.unsupported("`{String.from(methodTok.value)}` COPIES each element of an `Array with <type parameter>` field, but this generic type is instantiated with a type whose managed element cannot be deep-cloned as a single-function element — a managed-element array (`Array with (Array with String)`) or a non-Array generic instance (`Box with String`, whose per-instance cloner is a later slice). String / struct / boxed-union / trivial-element-array / trivial instantiations ARE supported (P1.7 slice 3b-vi-b).", line: methodTok.line, column: methodTok.column)
 		end 'uncopyable'
 	end 'requireOpaqueArrayCopyable'
@@ -42785,11 +42831,11 @@ export type Parser
 		// struct single-value drop is a later slice (the descriptor infrastructure this rung deliberately leaves
 		// untouched). A managed instantiation reassigns through the descriptor as before, and a scalar is inert —
 		// neither is a co-owned trivial, so this fires on exactly the co-ownership gap.
-		if self.signatures.genericTypeFieldHasCoOwnedTrivialInstantiation(layout.name, position: typeNameIdOf(fieldType)) 'coOwnedTrivialReassign'
+		if self.signatures.genericTypeFieldHasCoOwnedTrivialInstantiation(typeNameIdOf(fieldType)) 'coOwnedTrivialReassign'
 			throw ParseError.unsupported("reassigning the type-parameter field '{String.from(anchor.value)}' of '{String.from(layout.name)}' in a shared generic body, where a trivial-struct instantiation co-owns the field — the box retains a co-owned trivial struct at construction and drops it once at destruction, but a shared-body reassignment cannot drop the old co-owned value (the descriptor-gated single-value drop for a trivial struct is a later slice); reassign the field on a concrete instance, or use a managed element type", line: anchor.line, column: anchor.column)
 		end 'coOwnedTrivialReassign'
 
-		if self.signatures.genericTypeFieldHasManagedInstantiation(layout.name, position: typeNameIdOf(fieldType)) 'managedDrop'
+		if self.signatures.genericTypeFieldHasManagedInstantiation(typeNameIdOf(fieldType)) 'managedDrop'
 			let old = self.emitFieldLoad(box, layout: layout, index: index, range: range)
 			self.emitDecref(old, range: range)
 		end 'managedDrop'
@@ -47546,7 +47592,7 @@ export type Parser
 	// one spelling of the lookup itself; `instanceSubstitutedType` is this plus the crossing into this file's
 	// interner, so neither space has a second speller and no caller can pick the wrong one by accident.
 	function instanceSubstitutedIndexType(receiver ValueId, opaque MaxonType) returns MaxonType
-		return self.signatures.substitutedInstanceArg(self.valueNameId(receiver), position: typeNameIdOf(opaque))
+		return self.signatures.substitutedInstanceArg(self.valueNameId(receiver), position: self.signatures.opaqueTypeParamPosition(opaque))
 	end 'instanceSubstitutedIndexType'
 
 	// The same type re-interned into THIS FILE's table, which is what a value's `valueNameIds` column and

@@ -2746,10 +2746,17 @@ export type StructLayout
 	// `sizeBytes()`, which floors an EMPTY struct at one slot; see there for why that floor exists.
 	export var slotBytes as ByteOffset
 	// The GENERIC TYPE PARAMETERS this type declares (P1.6-A): `uses T` ⇒ `[T]`, `uses A, B` ⇒
-	// `[A, B]`, empty for a non-generic type. Recorded IN DECLARATION ORDER — a `T` in a field/method
-	// type is `typeParameter(POSITION)`, so the order IS the identity, and `Box with X` binds arg 0 to
-	// the param at position 0. It rides on the layout (which already travels whole-program) so the
-	// instantiation-site arity check reads it straight off `structOf`, needing no separate registry.
+	// `[A, B]`, empty for a non-generic type. Recorded IN DECLARATION ORDER, because the order is the
+	// ARGUMENT BINDING: `Box with X` binds arg 0 to the param at position 0. It rides on the layout (which
+	// already travels whole-program) so the instantiation-site arity check reads it straight off `structOf`,
+	// needing no separate registry.
+	//
+	// ⚠ **THE ORDER IS THE BINDING AND IT IS NOT THE IDENTITY — THAT SENTENCE WAS HERE AND IT WAS THE BUG
+	// (W14).** A `T` in a field or method type used to be `typeParameter(POSITION)`, which made every generic
+	// type's first parameter ONE value; it now carries a digest of `(this type's name, the parameter's name)`
+	// — see `ProgramSignatures.typeParamTokenFor`. This list is still what a position is READ OUT OF (a token
+	// re-spells against it at `typeParamPositionIn`, and `recordStruct` files the pairing at the fold), which
+	// is why it stays in declaration order and why it stays on the layout.
 	export var typeParamNames as ByteArrayArray
 	// The `where T is <Interface> …` CONSTRAINTS this generic type declares (P1.7a slice 2a), IN SOURCE
 	// ORDER — empty for an unconstrained (or non-generic) type. The order is the witness-slot order the

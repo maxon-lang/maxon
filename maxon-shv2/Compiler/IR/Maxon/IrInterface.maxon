@@ -495,8 +495,15 @@ end 'assembleMethodSignature'
 export function renderDeclaredTypeName(t MaxonType, declarationName ByteArray, typeParamNames ByteArrayArray, typeNames TypeNameInterner, signatures ProgramSignatures) returns ByteArray
 	let tag = maxonTypeTag(t)
 
+	// ⚠ **THE TOKEN IS RE-SPELLED AGAINST THIS DECLARATION'S OWN NAMES, NOT LOOKED UP (W14).** Both callers
+	// hold exactly the `(declarationName, typeParamNames)` pair `typeParamPositionIn` takes, and one of them —
+	// `Parser.renderInterfaceTypeName` — runs INSIDE `readInterfaceDeclaration`, before that interface is
+	// recorded anywhere, so a registry lookup could not answer for it at all. It is also the stronger check:
+	// where the old position subscript would have rendered ANOTHER declaration's parameter name for a token
+	// that happens to be in range, a token this declaration did not mint now fails loudly.
 	if tag == ValueTypeTag.typeParameter 'typeParameterType'
-		return try typeParamNames.get(typeNameIdOf(t)) otherwise panic("renderDeclaredTypeName: type-parameter position {typeNameIdOf(t)} is outside '{String.from(declarationName)}'s own `uses` list of {typeParamNames.count()}, which is the list its signatures were resolved against")
+		let position = try typeParamPositionIn(typeNameIdOf(t), declarationName: declarationName, paramNames: typeParamNames) otherwise panic("renderDeclaredTypeName: type-parameter token {typeNameIdOf(t)} names no parameter of '{String.from(declarationName)}', whose own `uses` list holds {typeParamNames.count()} — that list is what its signatures were resolved against")
+		return try typeParamNames.get(position) otherwise panic("renderDeclaredTypeName: typeParamNames.get OOB at {position}, a position `typeParamPositionIn` just read out of the same list")
 	end 'typeParameterType'
 
 	if tag == ValueTypeTag.genericInstance 'genericInstanceType'

@@ -568,9 +568,13 @@ function resolvedTypesMatch(registry FunctionTypeRegistry, declared MaxonType, g
 		structRef gives true
 		// Handled above, by descent — a `function`-tagged type never reaches this table.
 		function gives true
-		// A type PARAMETER's id is its POSITION and a generic INSTANCE's is its whole-program
-		// `GenericInstanceId`; two function types agree only if they take the same instances in the same
-		// opaque positions, so both are compared the same way for their own reasons.
+		// A type PARAMETER's id is a `(declaring type, parameter name)` DIGEST and a generic INSTANCE's is
+		// its whole-program `GenericInstanceId`; two function types agree only if they take the same
+		// instances and the same type parameters, so both are compared the same way for their own reasons.
+		// ⚠ **THE PARAMETER HALF WAS ONLY APPROXIMATELY TRUE UNTIL W14**: with the id spelled as a POSITION,
+		// `fn(T)` in one generic type and `fn(U)` in another compared EQUAL — a false ACCEPT between two
+		// unrelated opaque types. The digest makes this arm correct by construction rather than by the two
+		// sides happening to come from one declaration.
 		typeParameter to genericInstance gives true
 		// An EXISTENTIAL is nominal in its INTERFACE: a `Base`-typed place and a `Derived`-typed value are
 		// two different types, so the ids must match. Compared for `named`/`structRef`'s reason.
@@ -780,7 +784,8 @@ function resolveType(project Project, signatures ProgramSignatures, t MaxonType)
 		// `typeParameter` for a `T` in scope and a `genericInstance` for a generic-instance alias
 		// reference, both directly. There is no substitution at this trivial slice — a `T` stays `T` (an
 		// opaque i64) and an instance stays an instance (a struct pointer) — so resolution leaves both
-		// untouched, exactly as it leaves `structRef`/`string`/`function`.
+		// untouched, exactly as it leaves `structRef`/`string`/`function`. The type parameter's payload is a
+		// source-derived digest since W14, so there is nothing here a resolution could resolve.
 		typeParameter then return t
 		genericInstance then return t
 		// Already concrete — `Parser.parseTypeReference` mints a `character` directly for the

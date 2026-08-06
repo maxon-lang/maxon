@@ -2863,9 +2863,11 @@ function checkTypeParameterArgsAt(project Project, func IrFunction, gid GenericI
 			continue
 		end 'concreteParam'
 
-		// `typeNameIdOf` of a `typeParameter` is its POSITION in the base type's `uses` list, and the
-		// instance's argument list was arity-checked at instantiation (E2056), so it indexes in range.
-		let position = typeNameIdOf(paramType)
+		// The opaque formal's position in the base type's `uses` list — since W14 a `typeParameter`'s payload
+		// is an IDENTITY rather than that position, so it is recovered through the one door that owns the
+		// conversion (`opaqueTypeParamPosition`). The instance's argument list was arity-checked at
+		// instantiation (E2056), so it indexes in range.
+		let position = signatures.opaqueTypeParamPosition(paramType)
 		// ⭐ **SUBSTITUTED AND RESOLVED ONCE, READ THREE TIMES.** A `MaxonType` is a heap box, and this type is
 		// wanted for its nominal identity, for the (tag, nameId) pair the shared rule compares with, and — on
 		// the scalar path below — for the declared tag. It used to be substituted separately for each, and the
