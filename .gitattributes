@@ -4,3 +4,21 @@
 # Windows batch files require CRLF
 *.bat text eol=crlf
 *.cmd text eol=crlf
+
+# ⭐ THE TREND LOG IS APPEND-ONLY, AND EVERY RUNG APPENDS AT THE SAME ANCHOR.
+# `ScaleHistory` inserts each row immediately before that table's
+# `<!-- scale-history:… -->` end marker, and there are three such tables — so any two
+# rungs landing in sequence conflict three times, every time, on rows that do not
+# overlap in meaning at all. Measured: six such conflicts in one session, each one
+# costing a full ~13-minute gate battery re-run because `rung-finish.sh` rebases first.
+# `union` keeps both sides' rows, which is the resolution a human performs by hand
+# every time. VERIFIED for BOTH merge and rebase before this line was committed — the
+# rebase case is the one that matters, because `rung-finish.sh` rebases onto origin/main
+# before it gates, and a scripted auto-resolve written for it turned out to be redundant.
+#
+# ⚠ UNION APPLIES TO THE WHOLE FILE, so two agents EDITING THE SAME EXISTING ROW get
+# BOTH versions kept rather than a conflict. That is not hypothetical — rows do get
+# edited in place (a re-measurement corrected on the row it belongs to). The failure is
+# a visibly duplicated row carrying the same date and rung name, not silent corruption,
+# which is why it is acceptable HERE and must not be extended to source.
+docs/optimization-log.md merge=union
