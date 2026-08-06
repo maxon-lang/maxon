@@ -3391,15 +3391,28 @@ end 'singletonInteger'
 // already resolves id → name → layout, so a mangled name drops straight in; and a generic instance's RANGED
 // argument is part of its identity (e4146cf8e), which would make `(Integer, Integer)` and `(int, int)` two
 // different tuple types — the very thing `specs-shv2/tuples.md`'s `tuple-as-param` requires them not to be.
+//
+// ⭐⭐ **BUT A NESTED ELEMENT IS INTERNED, NOT INLINED (W9) — v1's structural gid, spent inside the
+// monomorphic form rather than instead of it.** The bootstrap's mangling spells a nested tuple by its whole
+// name, which flattens a DAG of tuple types into a TREE: see `mintTupleElementToken` for the measurement
+// that closed `A3j`. v1 never had that cost because its element is a `GenericInstanceId` — an integer that
+// names one interned entry however deep it is — and that is exactly what the token below restores. The two
+// halves are independent: the LAYOUT stays monomorphic and name-keyed (both reasons above still hold), and
+// only the way one tuple's identity CITES another's changes.
 export let TupleTypeNamePrefix = b"__Tuple"
 
 // ⚠ **THE ARITY RIDES IN FRONT AND THE ELEMENTS JOIN WITH A CHARACTER NO ELEMENT NAME CAN HOLD** — the
 // injectivity rule the Architecture states for `witnessTableLabel`, spent here. An `_` join is NOT injective
 // (`_` is inside the identifier alphabet), so `(A_B, C)` and `(A, B_C)` would both spell `__Tuple_A_B_C` and
 // the second would silently BECOME the first: one layout, two element lists, and a drop cascade taken from
-// whichever registered last. `.` is outside the alphabet the lexer admits inside an identifier, and the
-// ARITY is what keeps a NESTED tuple decodable — without it the flattened element list is prefix notation
-// with variable arity, where `((i,i),i,i)` and `((i,i,i),i)` collide.
+// whichever registered last. `.` is outside the alphabet the lexer admits inside an identifier.
+//
+// ⭐ **AND SINCE W9 THE RULE IS TOTAL RATHER THAN NEARLY-TOTAL: NO element token may hold the separator.**
+// A nested tuple used to be the one exemption — its own name holds separators, and it was admitted on the
+// argument that the leading arity made the flattened list self-delimiting (`((i,i),i,i)` against
+// `((i,i,i),i)`). That argument is gone with the thing it excused: a nested element is now a single
+// `.`-free token (`ProgramSignatures.mintTupleElementToken`), so splitting the join on `.` recovers the
+// element list outright and `requireSeparatorFreeElementName` has no case to exempt.
 //
 // ⚠ Deliberately its own constant rather than `IrInterface`'s `WitnessLabelSeparator` or the parser's
 // `MethodNameSeparator`, for the reason the first of those states at length: three joins whose admissible
@@ -3420,6 +3433,14 @@ export let TupleElementSeparator = "."
 export function tupleFieldName(indexDigits ByteArray) returns ByteArray
 	return "_{String.from(indexDigits)}".toByteArray()
 end 'tupleFieldName'
+
+// `__Tuple<N>` — the head BOTH tuple-name builders start from: the mangled NAME (which appends its
+// elements, `ProgramSignatures.tupleTypeNameOf`) and the ELEMENT TOKEN (which appends an ordinal instead,
+// `ProgramSignatures.mintTupleElementToken`). One speller, so the two cannot come to disagree about how a
+// tuple's arity is written — `instanceNameStem`'s arrangement, for its reason.
+function tupleTypeNameHead(arity FieldIndex) returns String
+	return "{String.from(TupleTypeNamePrefix)}{arity}"
+end 'tupleTypeNameHead'
 
 // Is `name` a synthesized tuple type's name? The prefix is inside the `__` reserved space `E2051` bars every
 // declaration from (`Parser.requireUnreservedName`), so a user `type` can never contest one and this test can
@@ -3483,7 +3504,8 @@ export union TupleElementRejection
 	// The element's canonical name holds the element SEPARATOR, so the join that spells the tuple's name
 	// would stop being injective (see `TupleElementSeparator`). Exactly one name form in the language can do
 	// this — a PER-INSTANCE qualified alias, `StrWrapper.Idx` — since the BASE-TEMPLATE form collapses to its
-	// underlying primitive in `canonicalTupleElement` and every other spelling is a bare identifier.
+	// underlying primitive in `canonicalTupleElement`, a NESTED TUPLE is cited by a separator-free token
+	// (`mintTupleElementToken`) rather than by its own name, and every other spelling is a bare identifier.
 	separatorInElementName(position FieldIndex, elementName String)
 end 'TupleElementRejection'
 
@@ -3664,6 +3686,12 @@ typealias CanonicalInstanceNameSet = Set with ByteArray
 // ⭐ A tuple name ⇒ its CANONICAL tuple name (P1.10). Keyed by name rather than by an id because a tuple has
 // no id: it IS its name (`ProgramSignatures.tupleCanonicalNames`).
 export typealias TupleCanonicalNameMap = Map with (ByteArray, ByteArray)
+
+// ⭐ A tuple name ⇒ the BOUNDED TOKEN that cites it as an ELEMENT of another tuple (W9) — `__Tuple2#3`.
+// This map IS the interner v1 gets from `GenericInstanceRegistry`: its SIZE mints the ordinal and its key
+// space is the set of distinct tuple types, so a tuple's citation is one entry however deeply it nests.
+// See `ProgramSignatures.registerTupleLayout` (the sole writer) and `tupleElementName` (the sole reader).
+typealias TupleElementTokenMap = Map with (ByteArray, ByteArray)
 
 // The NAMES every top-level MANAGED binding in the program is declared under — `let` and `var` alike
 // (P1.7a / P1.7 slice 2a) — the filter `Parser.managedTopLevelReceiverAt` asks before it will build a
@@ -4880,6 +4908,10 @@ export type ProgramSignatures
 	// map hit rather than a re-derivation. A canonical name maps to itself, so one probe answers both
 	// directions. Empty for a program with no tuples.
 	var tupleCanonicalNames as TupleCanonicalNameMap
+	// ⭐ Every registered tuple layout ⇒ the bounded token another tuple's name cites it by (W9). See
+	// `TupleElementTokenMap`; `registerTupleLayout` is the only writer and mints one entry per distinct
+	// tuple type, so the map's own count is the next ordinal. Empty for a program with no tuples.
+	var tupleElementTokens as TupleElementTokenMap
 	// ⭐ A TUPLE typealias name ⇒ the tuple type it names (P1.10) — `Pair` ⇒ `__Tuple2.int.int`. The tuple
 	// twin of `genericAliases`, and it exists for the same reason: a tuple type has no source-spellable name,
 	// so `typealias Pair = (Num, Num)` is the only way to write one in a place that takes a bare identifier
@@ -5330,7 +5362,7 @@ export type ProgramSignatures
 	// Every index, empty. Split out of `create` only so the seed stamping above reads as the two steps it
 	// is; this is its one caller.
 	static function freshIndexes(os Os) returns ProgramSignatures
-		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(os), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), structNamesInDeclOrder: ByteArrayArray.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), instanceDisplayNames: InstanceDisplayNameMap.create(), canonicalInstanceNameIndex: CanonicalInstanceNameSet.create(), canonicalNamesIndexedThrough: 0, tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleAliases: TupleCanonicalNameMap.create(), sawAggregateArrayLiteral: false, sawListFromConstruction: false, genericAliases: GenericAliasMap.create(), contestedGenericAliases: sharedEmptyGenericAliasContests, multiplyDeclaredGenericAliases: sharedEmptyDisagreeingAliasNames, divergedGenericAliasDecl: AliasCycleResult.none, nameableGenericAliases: sharedEmptyNameableGenericAliases, genericAliasSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceNamesInDeclOrder: builtinInterfaceNames(), interfaceDeclIndexByName: builtinInterfaceDeclIndices(), interfaceDeclSites: InterfaceDeclSiteArray.create(), extensionDeclSites: ExtensionDeclSiteArray.create(), conditionalExtensionSkips: ConditionalExtensionSkipMap.create(), sweptConformances: DeclaredConformanceMap.create(), sweptConformancesBuilt: false, extensionMethodConstraints: ExtensionMethodConstraintMap.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcThrows: FuncThrowsMap.create(), funcParamDefaults: ParamDefaultMap.create(), collidingParamDefaults: CollidingParamDefaultNameSet.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), funcReturnDeclFiles: FuncReturnDeclFileMap.create(), funcDeclSites: FunctionDeclSiteMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), hash: fnvOffsetBasis(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, allFilesFolded: false, rootIsUnderStdlibDirectory: false, constInitializerTypeNames: ConstInitializerTypeNameSet.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibShadowRenames: StdlibShadowRenameMap.create(), fileModuleDirectories: FileModuleDirectoryMap.create(), namespaceQualifiedFunctions: NamespaceQualifiedFunctionSet.create(), freeFunctionDirectories: FreeFunctionDirectoryMap.create(), contestedFreeFunctions: ContestedFreeFunctionMap.create(), contestedRegistrationNames: ContestedRegistrationNameSet.create()}
+		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(os), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), structNamesInDeclOrder: ByteArrayArray.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), instanceDisplayNames: InstanceDisplayNameMap.create(), canonicalInstanceNameIndex: CanonicalInstanceNameSet.create(), canonicalNamesIndexedThrough: 0, tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleElementTokens: TupleElementTokenMap.create(), tupleAliases: TupleCanonicalNameMap.create(), sawAggregateArrayLiteral: false, sawListFromConstruction: false, genericAliases: GenericAliasMap.create(), contestedGenericAliases: sharedEmptyGenericAliasContests, multiplyDeclaredGenericAliases: sharedEmptyDisagreeingAliasNames, divergedGenericAliasDecl: AliasCycleResult.none, nameableGenericAliases: sharedEmptyNameableGenericAliases, genericAliasSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceNamesInDeclOrder: builtinInterfaceNames(), interfaceDeclIndexByName: builtinInterfaceDeclIndices(), interfaceDeclSites: InterfaceDeclSiteArray.create(), extensionDeclSites: ExtensionDeclSiteArray.create(), conditionalExtensionSkips: ConditionalExtensionSkipMap.create(), sweptConformances: DeclaredConformanceMap.create(), sweptConformancesBuilt: false, extensionMethodConstraints: ExtensionMethodConstraintMap.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcThrows: FuncThrowsMap.create(), funcParamDefaults: ParamDefaultMap.create(), collidingParamDefaults: CollidingParamDefaultNameSet.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), funcReturnDeclFiles: FuncReturnDeclFileMap.create(), funcDeclSites: FunctionDeclSiteMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), hash: fnvOffsetBasis(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, allFilesFolded: false, rootIsUnderStdlibDirectory: false, constInitializerTypeNames: ConstInitializerTypeNameSet.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibShadowRenames: StdlibShadowRenameMap.create(), fileModuleDirectories: FileModuleDirectoryMap.create(), namespaceQualifiedFunctions: NamespaceQualifiedFunctionSet.create(), freeFunctionDirectories: FreeFunctionDirectoryMap.create(), contestedFreeFunctions: ContestedFreeFunctionMap.create(), contestedRegistrationNames: ContestedRegistrationNameSet.create()}
 	end 'freshIndexes'
 
 	// --- MODULE DIRECTORIES and the ONE visibility decision (N1a) ---
@@ -9003,16 +9035,15 @@ export type ProgramSignatures
 	end 'internTupleType'
 
 	// ⭐ **THE INJECTIVITY ARGUMENT, ENFORCED AT THE JOIN THAT RELIES ON IT** — `witnessTableLabel`'s
-	// discipline, asked where it is spent rather than argued above it. A canonical element renders to a bare
-	// identifier for every tag but one, and the exception is the point: a NESTED tuple's own name holds the
-	// separator, and is exempt because the ARITY in front of it makes it self-delimiting (see
-	// `TupleElementSeparator`). Everything else holding a `.` would make two distinct element lists spell one
-	// name, so it is refused.
+	// discipline, asked where it is spent rather than argued above it. EVERY canonical element renders to a
+	// token holding no separator, so splitting the join on `.` recovers the element list and two distinct
+	// element lists cannot spell one name.
+	//
+	// ⚠ **THE NESTED-TUPLE EXEMPTION IS GONE, AND ITS REMOVAL IS THE POINT (W9).** A nested tuple used to be
+	// admitted with its whole separator-bearing name, self-delimiting by the arity in front of it — the same
+	// inlining that made a DAG of tuple types cost like a tree. It now renders as a `.`-free
+	// `mintTupleElementToken`, so the rule that was "every element but one" is simply every element.
 	function requireSeparatorFreeElementName(element MaxonType, position FieldIndex) throws TupleElementRejection
-		if tagIsStructRef(maxonTypeTag(element)) and isTupleTypeName(self.nameOfId(typeNameIdOf(element))) 'nestedTuple'
-			return
-		end 'nestedTuple'
-
 		let rendered = self.tupleElementName(element)
 		if rendered.contains(TupleElementSeparator) 'separatorInName'
 			throw TupleElementRejection.separatorInElementName(position, elementName: rendered)
@@ -9034,8 +9065,56 @@ export type ProgramSignatures
 		end 'alreadyRegistered'
 
 		self.structTypes.upsert(name, value: tupleStructLayout(name, elements: elements, declFilePath: declFilePath))
+		self.tupleElementTokens.upsert(name, value: self.mintTupleElementToken(elements.count()))
 		return name
 	end 'registerTupleLayout'
+
+	// ⭐⭐ **THE BOUNDED TOKEN ONE TUPLE'S NAME CITES ANOTHER BY — v1's structural gid, in shv2's name-keyed
+	// world (W9). THE cure for `A3j`.**
+	//
+	// A tuple's identity is its element list, and an element that is ITSELF a tuple used to contribute its
+	// whole name. That flattens a DAG of tuple types into a TREE: `typealias A_k = (A_{k-1}, int)` gives d
+	// names of Θ(d) bytes, and `typealias A_k = (A_{k-1}, A_{k-1})` — a program whose SOURCE is linear —
+	// doubles the name at every level.
+	//
+	// ⛔ MEASURED both ways with `--metrics`, total allocated BYTES (exact and reproducible, unlike the CPU
+	// column). The ladder DOUBLES, so a linear cost shows ×2 in the successive deltas:
+	//
+	//   chain d = 50/100/200/400   before  23.10 / 24.51 / 29.05 / 45.23 MB   deltas ×3.2 then ×3.6
+	//                              after   22.86 / 23.45 / 24.60 / 26.95 MB   deltas ×1.97 then ×2.03
+	//   branch d = 8/12/16         before  22.48 / 24.02 / 48.02 MB           ×2 per LEVEL, not per doubling
+	//                              after   22.39 / 22.44 / 22.48 MB           flat
+	//
+	// The branching form is the one that says it plainly: after the change d = 24 costs **22.58 MB and
+	// 0.14 s**, on a 27-line program the old spelling put at roughly **11 GB** (`A3j` extrapolated it; d = 18
+	// already cost 2.47 s and 184 MB and was as far as it could be run).
+	//
+	// An ORDINAL is the whole cure, because a tuple's identity is already established by the time it can be
+	// cited: it is a registered layout, and two registered layouts are two types. So the token needs only to
+	// be DISTINCT and SEPARATOR-FREE — it carries no structure and reconstructs none. v1 spends exactly this
+	// (`Project.GenericInstanceRegistry.intern` hands back an integer, and a nested `genericInstance`
+	// argument holds that integer), and what shv2 keeps is the monomorphic name-keyed LAYOUT around it.
+	//
+	// ⚠ **THE ARITY RIDES IN FRONT SO THE TOKEN STILL SAYS SOMETHING TO A READER.** A tuple's name reaches
+	// diagnostics and emitted symbols (`__destruct_<name>`), and `__Tuple2.__Tuple2#3.int` at least tells its
+	// reader that element 0 is a 2-tuple. It is not free of cost: the inner element TYPES no longer appear,
+	// which is a real loss of detail at nesting depth ≥ 2 — bought with the asymptote above, and paid only
+	// by nested tuples, since a depth-1 tuple's name is unchanged to the byte.
+	//
+	// ⚠ **IT IS MINT-ORDER, WHICH IS WHY IT IS DERIVED HERE AND NOT IN `mangleTypeArg`.** That function is
+	// deliberately structural — "never from a gid number, so the label is identical across cold and warm
+	// builds" — and this token is the opposite by construction. It is admissible here for the reason a gid is
+	// admissible in v1: the compile is whole-program and single-threaded (no pass parses in parallel and no
+	// on-disk index is serialized), so the mint order is a function of the SOURCE, which is what
+	// `verify-warm-rebuild`'s determinism property requires. A descriptor label crossing a build boundary is a
+	// different question, and this token never becomes one.
+	//
+	// The join is `overloadRegistrationName`'s for `sweepScopedTupleName`'s reason: `#` appears in no source
+	// identifier and — critically — in no `TupleElementSeparator`, so the token cannot collide with a spelled
+	// element and cannot be mistaken for two.
+	function mintTupleElementToken(arity FieldIndex) returns ByteArray
+		return overloadRegistrationName(tupleTypeNameHead(arity).toByteArray(), suffix: "{self.tupleElementTokens.count()}".toByteArray())
+	end 'mintTupleElementToken'
 
 	// ⭐⭐ **ONE SWEEP KEY PER (SPELLING, FILE) — because a sweep spelling is NOT a whole-program identity and
 	// a canonical name is (A3v).** A canonical name is derived from RESOLVED elements, so every file that
@@ -9108,7 +9187,7 @@ export type ProgramSignatures
 	// `__Tuple<N>.<e0>.<e1>…` — the mangled name of a tuple over `elements`. See `TupleElementSeparator` for
 	// why the arity leads and why the join is `.`.
 	function tupleTypeNameOf(elements MaxonTypeArray) returns ByteArray
-		var out = "{String.from(TupleTypeNamePrefix)}{elements.count()}"
+		var out = tupleTypeNameHead(elements.count())
 		for element in elements 'eachElement'
 			out.append(TupleElementSeparator)
 			out.append(self.tupleElementName(element))
@@ -9117,15 +9196,30 @@ export type ProgramSignatures
 	end 'tupleTypeNameOf'
 
 	// The mangled spelling of ONE canonical element. `mangleTypeArg` — the index's structural, build-stable
-	// renderer — answers every tag but one.
+	// renderer — answers every tag but two.
 	//
-	// ⚠ **A `function`-TYPED ELEMENT IS THE EXCEPTION, because `mangleTypeArg` renders every function type as
-	// the bare tag name `function`.** That is correct for a descriptor label (a code pointer is a code pointer)
-	// and WRONG for an identity: `(UnaryOp, int)` and `(BinaryOp, int)` would spell one name, and a value of
-	// one would then be accepted where the other is declared. A function type carries its governing alias
-	// NAME, so that is what rides here.
+	// ⭐ **A NESTED TUPLE IS CITED BY ITS INTERNED TOKEN, NEVER BY ITS NAME (W9)** — see
+	// `mintTupleElementToken` for the asymptote that buys, and for why an ordinal is a complete identity here.
+	// The token exists by the time it is asked for: a nested element is a REGISTERED layout, and the only two
+	// producers of one — a `(…)` written inside a `(…)`, which the parser interns innermost-first, and
+	// `canonicalTupleStructRef`, which registers the canonical form before handing back its `structRef` —
+	// both register before the enclosing name is built.
+	//
+	// ⚠ **A `function`-TYPED ELEMENT IS THE OTHER EXCEPTION, because `mangleTypeArg` renders every function
+	// type as the bare tag name `function`.** That is correct for a descriptor label (a code pointer is a code
+	// pointer) and WRONG for an identity: `(UnaryOp, int)` and `(BinaryOp, int)` would spell one name, and a
+	// value of one would then be accepted where the other is declared. A function type carries its governing
+	// alias NAME, so that is what rides here.
 	function tupleElementName(element MaxonType) returns String
-		if maxonTypeTag(element) == ValueTypeTag.function 'functionAlias'
+		let tag = maxonTypeTag(element)
+		if tagIsStructRef(tag) 'aStructRef'
+			let name = self.nameOfId(typeNameIdOf(element))
+			if isTupleTypeName(name) 'nestedTuple'
+				return String.from(try self.tupleElementTokens.get(name) otherwise panic("ProgramSignatures.tupleElementName: the nested tuple `{String.from(name)}` has no element token — every tuple `structRef` in the compiler names a layout `registerTupleLayout` minted, and that is where the token is minted with it"))
+			end 'nestedTuple'
+		end 'aStructRef'
+
+		if tag == ValueTypeTag.function 'functionAlias'
 			return String.from(self.nameOfId(typeNameIdOf(element)))
 		end 'functionAlias'
 		return self.mangleTypeArg(element)

@@ -470,6 +470,41 @@ end 'main'
 42
 ```
 
+<!-- test: an-eight-deep-nesting-is-one-type-however-it-is-spelled -->
+⭐ **NESTING DEPTH, WHICH NO OTHER CASE TAKES PAST THREE — and W9 is why it is now worth taking.** A
+tuple's identity used to INLINE every element, so an eight-level nest spelled its whole history at every
+level: `A3j` measured that as quadratic in depth for a chain and as DOUBLING PER LEVEL for a branching one
+(a 23-line program cost 2.47 s and 184 MB at depth 18, and depth 24 extrapolated to ~11 GB). A nested
+element is now cited by an interned token, so depth is linear — and this is the case that says the
+CITATION is still an identity rather than merely cheap.
+
+The two spellings must converge: `readDeep` declares its parameter through an eight-link ALIAS CHAIN and
+`main` hands it a bare LITERAL nested eight deep. If the citation split those into two types the call is
+`E3005`; if it fused two DIFFERENT levels the eight `.0` hops land on the wrong slot and the arithmetic
+moves. Returns 1 + 9 + 2.
+```maxon
+typealias L0 = (int, int)
+typealias L1 = (L0, int)
+typealias L2 = (L1, int)
+typealias L3 = (L2, int)
+typealias L4 = (L3, int)
+typealias L5 = (L4, int)
+typealias L6 = (L5, int)
+typealias L7 = (L6, int)
+
+function readDeep(t L7) returns int
+	return t.0.0.0.0.0.0.0.0 + t.1
+end 'readDeep'
+
+function main() returns ExitCode
+	let t = ((((((((1, 2), 3), 4), 5), 6), 7), 8), 9)
+	return (readDeep(t) + t.0.0.0.0.0.0.0.1) as ExitCode
+end 'main'
+```
+```exitcode
+12
+```
+
 <!-- test: tuple-element-from-method-call -->
 An element built from a METHOD-CALL RESULT. v1 leaked exactly this shape: the tuple reached lowering
 with no parse-time-pinned type for the element, so its `__mm_alloc` got a NULL destructor and the
@@ -1031,10 +1066,26 @@ level off at every step — can name the very tuple being canonicalized. `typeal
 `__Tuple2.P.int` whose element 0 is `named("P")` whose target is `__Tuple2.P.int`. It is refused, and the
 point of the case is that it is refused rather than recursing until the stack ends.
 
-⚠ The declared name in the message is a nest deeper than the source wrote, and that predates A3e: each
-real-parse read of a self-naming alias re-registers it one level further out, so the spelling grows with
-the number of reads. It is DETERMINISTIC and the program is illegal either way; the case pins it so that a
-change in the termination rule cannot pass unnoticed.
+⚠ The declared type is a nest deeper than the source wrote, and that predates A3e: each real-parse read of
+a self-naming alias re-registers it one level further out, so the type grows with the number of reads. It
+is DETERMINISTIC and the program is illegal either way; the case pins it so that a change in the
+termination rule cannot pass unnoticed.
+
+⚠⚠ **THE MESSAGE NO LONGER SHOWS THAT DEPTH, AND W9 IS WHY — READ THE NEW SPELLING BEFORE TRUSTING YOUR
+EYES.** Until W9 a tuple's name INLINED every element, so the two types read
+`__Tuple2.__Tuple2.int.int.int` against a six-deep `__Tuple2.__Tuple2.…P.Int.int.int.int.int.int` and the
+re-registration was legible in the string itself. That inlining is what `A3j` measured as quadratic in
+nesting depth and exponential for a branching chain, and a nested element is now cited by an INTERNED
+ORDINAL (`__Tuple2#4`) instead. **The depth is still there and still grows — it is the ORDINALS that now
+carry it**, `#6` against `#4` being two distinct registered layouts six and four mints in. So the case
+still discriminates a change in the termination rule (a different number of re-entries mints different
+ordinals) and it is no longer possible to read the depth off the sentence.
+
+⚠ **THE ORDINALS ARE MINT-ORDERED OVER THE WHOLE COMPILE**, so anything interning a tuple ahead of these —
+this fragment's own re-registrations today, a stdlib module a future edit pulls in — moves them. That is
+weaker than the old spelling as a pin, because it depends on a count the sentence does not name; it is
+accepted because there is no order-free dense id and v1's `GenericInstanceId` has the identical property.
+A move here is a prompt to re-derive the number, never to assume the termination rule broke.
 ```maxon
 typealias Int = int(i64.min to i64.max)
 typealias P = (P, Int)
@@ -1049,7 +1100,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:6:2: Cannot return '__Tuple2.__Tuple2.int.int.int' from function declared to return '__Tuple2.__Tuple2.__Tuple2.__Tuple2.__Tuple2.__Tuple2.P.Int.int.int.int.int.int'
+error E3005: <fragment>:6:2: Cannot return '__Tuple2.__Tuple2#6.int' from function declared to return '__Tuple2.__Tuple2#4.int'
 ```
 
 ### A tuple typealias as a GENERIC TYPE ARGUMENT — the RAW instance-argument doors (A3e review)
