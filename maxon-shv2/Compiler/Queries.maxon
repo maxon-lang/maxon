@@ -882,7 +882,12 @@ end 'isStdlibSourceFile'
 // at rung 5** ON TOP of this rung's whitelist cost, growing with the file count — a per-file term bought
 // to answer a per-compile question. As a derivation over one root probe it is **+32 allocations, EXACTLY
 // FLAT at all six rungs**: the probe itself, once, and nothing that scales.
-function livesUnderStdlibDirectory(signatures ProgramSignatures, isStdlibSource bool) returns bool
+// ⭐ **EXPORTED, BECAUSE THE DECLARATION SWEEP ASKS IT TOO (W3).** `ProgramSignatures.foldFile` decides
+// whether a declaration under a COMPILER-OWNED type name is the corpus's own or a user's contest of it, and
+// that is the same question this answers — so it is asked here rather than re-spelled as
+// `isStdlibSource or self.rootIsUnderStdlibDirectory` one file over. The header above is a proof about ONE
+// predicate; a second spelling of it is a second thing that can stop being true.
+export function livesUnderStdlibDirectory(signatures ProgramSignatures, isStdlibSource bool) returns bool
 	return isStdlibSource or signatures.rootIsUnderStdlibDirectory
 end 'livesUnderStdlibDirectory'
 
@@ -1314,7 +1319,11 @@ function reportParseError(project Project, path FilePath, error ParseError)
 		// `reserved-double-underscore.md` `maxoncstderr` goldens gate this stderr exactly, so the two
 		// compilers must not drift.
 		reservedIdentifier(name, line, column) then reportPositioned(project, code: ErrorCode.reservedIdentifier, message: "identifier '{name}' is reserved: declarations starting with '__' are reserved for compiler internals", line: line, column: column, filePath: path)
-		declarationTakesCompilerOwnedTypeName(name, line, column) then reportPositioned(project, code: ErrorCode.parserUnsupportedFeature, message: "Unsupported: a declaration of the type name '{name}', which the compiler owns — shv2 synthesizes that declaration rather than reading it from the stdlib, and has no namespace to tell a user declaration of the name apart from the builtin one", line: line, column: column, filePath: path)
+		// ⚠ **THE SENTENCE SAID "shv2 SYNTHESIZES THAT DECLARATION RATHER THAN READING IT FROM THE STDLIB",
+		// AND W3 MADE THAT FALSE FOR TWO OF THE NAMES** — `Ordering` and `IterationError` are read from
+		// `stdlib/Interfaces.maxon`. What is true of ALL of them, and what the reservation actually is, is
+		// that the name has ONE meaning this compile did not get from the file being refused.
+		declarationTakesCompilerOwnedTypeName(name, line, column) then reportPositioned(project, code: ErrorCode.parserUnsupportedFeature, message: "Unsupported: a declaration of the type name '{name}', which the compiler owns — its one meaning comes from the compiler itself or from the stdlib module that declares it, and shv2 has no namespace to tell a user declaration of the name apart from that one", line: line, column: column, filePath: path)
 		// The scalar-error arms (P1.4b). E3058/E3059/E2049 render the parser's error-handling diagnostics
 		// (the `ParseError` variants are declared in `Parser.maxon`; this is their render half). Each
 		// message is byte-for-byte the reference compiler's — the `error-handling.md`/`match-statements.md`

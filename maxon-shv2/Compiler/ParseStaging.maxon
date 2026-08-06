@@ -125,6 +125,15 @@ export typealias FunctionRangeCheckEntryArray = Array with FunctionRangeCheckEnt
 export type FileParseArtifact
 	// The file this artifact was parsed from (its identity + merge order anchor).
 	export var filePath as FilePath
+	// ⭐ **DOES THIS FILE PHYSICALLY LIVE UNDER `stdlib/` (W3)** — the one fact `commitEnumTypes` needs to
+	// tell the CORPUS's declaration of a compiler-owned enum from a user's contest of it
+	// (`Project.upsertDeclaredEnum`). It rides the artifact rather than being re-derived at commit time
+	// because `Queries.isStdlibSourceFile` costs ~4 String allocations a call and this compile has already
+	// classified every path once — asking a second time per file is the number `StdlibSource`'s header
+	// rejects. It is `livesUnderStdlibDirectory` and NOT `isStdlibSource` for the reason
+	// `Parser.requireTypeNameNotCompilerOwned` states: a project rooted under `stdlib/` must still record its
+	// own declarations, or the readiness probe would disagree with the loaded module.
+	export var livesUnderStdlibDirectory as bool
 	// This file's Maxon IR fragment. `IrModule.merge` offset-relocates it into
 	// the whole-program module at merge time.
 	export var module as MaxonModule
@@ -240,9 +249,10 @@ export type FileParseArtifact
 	export var unusedTypeAliases as DeferredNameDiagnosticArray
 	export var hiddenTypeNames as DeferredNameDiagnosticArray
 
-	export static function create(filePath FilePath) returns FileParseArtifact
+	export static function create(filePath FilePath, livesUnderStdlibDirectory bool) returns FileParseArtifact
 		return Self{
 			filePath: filePath,
+			livesUnderStdlibDirectory: livesUnderStdlibDirectory,
 			module: MaxonModule.create(),
 			opRanges: SourceRangeTable.create(),
 			valueOrigins: ValueOriginTable.create(),
@@ -849,7 +859,7 @@ end 'commitStructTypes'
 // collision for its reason.
 function commitEnumTypes(project Project, artifact FileParseArtifact)
 	for layout in artifact.enumTypes 'each'
-		upsertDeclaredEnum(project.enumTypes, layout: layout)
+		upsertDeclaredEnum(project.enumTypes, layout: layout, declaredByTheCorpus: artifact.livesUnderStdlibDirectory)
 	end 'each'
 end 'commitEnumTypes'
 

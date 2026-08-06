@@ -559,6 +559,22 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 		try refuseCompile(project)
 	end 'pipelineFailed'
 
+	// ⭐ **`Ordering`'s DECLARATION, READ ONCE FOR THE WHOLE BACK END (W3).** The two runtime installs below
+	// that emit a `compare` — the builtin-conformance impls and the grapheme runtime's `__char_cmp` — turn
+	// its case names into TAGS, and the parser turned the same names into the tags those results are TESTED
+	// against. It is fetched here, at the one point both installs are reached from, so there is a single
+	// lookup and a single answer rather than one per builder; the layout is the corpus's own
+	// (`stdlib/Interfaces.maxon:34-38`), not a transcription of it.
+	//
+	// ⚠⚠ **BELOW THE ERROR GATE, AND THAT POSITION IS PAID FOR.** `requireCorpusDeclaredEnum` PANICS on an
+	// absent entry, and there is one way to be absent in a checkout that lists the declaring module: a stdlib
+	// file whose parse FAILED, since a failed parse is never cached and so never merged
+	// (`deriveStdlibFacts`' header records the same rule for the same reason). MEASURED with this line above
+	// the gate: any user program declaring `implements Iterable` — which expands `stdlib/Interfaces.maxon`'s
+	// `extension Iterable` onto the conformer and so can fail inside that file — died with this panic INSTEAD
+	// of the diagnostic naming the real fault. Below the gate, that compile has already refused and said why.
+	let orderingEnum = requireCorpusDeclaredEnum(project.enumTypes, typeName: OrderingTypeName, reader: "the `Comparable` compare impls")
+
 	// ⭐ **THE `.rdata` SLOTS ARE FILLED NOW, AND WHAT THEY NAME MUST BE INSTALLED (P1.7a-existentials slice
 	// 2).** Lowering is what decides which witness tables and layout descriptors a program gets, so the
 	// destructors those tables' `destroyFunc` words point at cannot be known before this line — and every
@@ -602,7 +618,7 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// settled by `scanRuntimeUsage`, which runs before any install, so the order is readability, not a
 	// dependency. It sits AFTER the String install for the same reason `__char_at` needs no ordering: the
 	// functions are appended to one module and the backend resolves calls by name.
-	installGraphemeRuntime(pipeline.stdModule, usage: usage)
+	installGraphemeRuntime(pipeline.stdModule, usage: usage, ordering: orderingEnum)
 
 	// The `StringIndex` runtime (`__strix_*`, P1.8 slice B2) — installed the same already-lowered way,
 	// keyed on its OWN per-entry-point bits so a program that never takes a String index carries none of
@@ -714,7 +730,7 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// and the copy went stale in each of the two rungs that added a conformer — because a roster at a CALL
 	// SITE has no test between it and the original: nothing fails when it drifts, it simply starts lying to
 	// the next reader. A pointer at the owner cannot go stale, so this is one.
-	installBuiltinConformanceRuntime(pipeline.stdModule, globalData: project.globalData)
+	installBuiltinConformanceRuntime(pipeline.stdModule, globalData: project.globalData, ordering: orderingEnum)
 
 	recordPhase(project, phase: CompilePhase.installRuntime, probe: runtimeInstallProbe)
 

@@ -187,7 +187,7 @@ let Utf16SurrogateHalfMask = 1023 as ParsedInt
 // Install the referenced grapheme runtime functions into the lowered Std module. Called AFTER the
 // pipeline (like `installStringRuntime`), so these are appended already-lowered and never re-optimized.
 // Each is installed ONLY when referenced — vocabulary does not ship ahead of its consumer.
-export function installGraphemeRuntime(module StdModule, usage RuntimeUsage)
+export function installGraphemeRuntime(module StdModule, usage RuntimeUsage, ordering EnumLayout)
 	if usage.usesCharAt 'charat'
 		buildCharAt(module)
 	end 'charat'
@@ -195,7 +195,7 @@ export function installGraphemeRuntime(module StdModule, usage RuntimeUsage)
 		buildCharFromCodepoint(module)
 	end 'charfromcp'
 	if usage.usesCharCmp 'charcmp'
-		buildByteRecordCompare(module, name: CharCmpName)
+		buildByteRecordCompare(module, name: CharCmpName, ordering: ordering)
 	end 'charcmp'
 	if usage.usesCharAsciiValue 'charascii'
 		buildCharAscii(module)

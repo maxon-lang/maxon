@@ -397,6 +397,18 @@ export union ExtensionConstraintCheck
 	unmet(interfaceName ByteArray, bindingName ByteArray)
 end 'ExtensionConstraintCheck'
 
+// Does this verdict mean the extension gives the conformer NOTHING — no methods, and (W3) no nested
+// typealiases either? The bool the union deliberately is not, for the one caller that needs the verdict
+// WITHOUT the names: `Parser.foldExtensionDeclarationInto` publishes an extension body's aliases only for the
+// conformers the extension actually reaches, and has no diagnostic to fill in. Asked through this rather
+// than by re-matching the union, so "withheld" has one definition.
+export function extensionMethodsWithheld(verdict ExtensionConstraintCheck) returns bool
+	return match verdict 'verdict'
+		satisfied gives false
+		unmet gives true
+	end 'verdict'
+end 'extensionMethodsWithheld'
+
 // What a conformer that binds NOTHING at a constrained position is reported as binding. It reaches the
 // author only through the withheld-method diagnostic, and only on a program `checkOneInterfaceConformance`
 // separately refuses (E3016 names the unbound associated type), so it is a phrase and never a type name.

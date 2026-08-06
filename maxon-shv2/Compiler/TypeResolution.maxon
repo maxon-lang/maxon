@@ -890,10 +890,18 @@ end 'resolveType'
 // type REFERENCE and stays legal, which is the whole reason the name is bare.
 // ⭐ **`MapError` JOINS FOR THE SAME REASON AS THE OTHER TWO** — `createEnumRegistry` seeds it under a bare
 // name (`Project.builtinMapErrorEnum`), and a bare seed with no entry here is the displaceable-seed hole.
-// ⭐ **`IterationError` JOINS FOR THAT REASON TOO** (`Project.builtinIterationErrorEnum`), and its stake is
-// the plainest of the four: the ordinals it seeds are the ones a user's OWN `throw IterationError.exhausted`
-// and the `match` that catches it are both resolved against, so a displaceable seed would let one program
-// hold two numberings of one enum.
+// ⭐ **`IterationError` JOINS FOR THAT REASON TOO**, and its stake is the plainest of the four: the ordinals
+// under this name are the ones a user's OWN `throw IterationError.exhausted` and the `match` that catches it
+// are both resolved against, so a displaceable entry would let one program hold two numberings of one enum.
+//
+// ⭐⭐ **AND TWO OF THESE NAMES ARE NO LONGER SEEDED AT ALL — THEY ARE READ FROM THE CORPUS (W3).**
+// `Ordering` and `IterationError` are DECLARED by `stdlib/Interfaces.maxon`, which the loader now lists, so
+// what they hold is the corpus's own layout rather than a transcription of it (`Project.createEnumRegistry`,
+// `Project.requireCorpusDeclaredEnum`). **That does not take them off this list, and the distinction is what
+// the list is FOR**: `Project.upsertDeclaredEnum` admits a compiler-owned name from the CORPUS and drops it
+// from a USER file, so this function is what tells the two apart — a reservation over *whose* declaration,
+// not over whether one exists. `HashValue` is the same shape one registry over: `stdlib/Interfaces.maxon:6`
+// declares the ranged alias and its bounds are now the program's, while the name stays reserved here.
 export function isCompilerOwnedTypeName(name ByteArray) returns bool
 	return name.equals(ExitCodeBuiltinName) or name.equals(HashValueTypeName) or name.equals(CodepointTypeName) or name.equals(OrderingTypeName) or name.equals(CharacterSetBuiltinName) or name.equals(CharacterMemberSetAliasName) or name.equals(ArrayErrorTypeName) or name.equals(StringErrorTypeName) or name.equals(MapErrorTypeName) or name.equals(IterationErrorTypeName) or name.equals(StringConformerName) or name.equals(CharacterConformerName)
 end 'isCompilerOwnedTypeName'

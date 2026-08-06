@@ -552,14 +552,20 @@ end 'main'
 error E2015: <fragment>:15:31: Unsupported: constructing an opaque type-parameter `Array` inside a CLOSURE literal — the create reads its element destructor from the enclosing instance's layout descriptor at run time, and only a generic type's own METHOD reserves the parameter that carries it: a closure is lifted to a top-level function whose uniform `(userargs, env)` ABI has no slot for one. Build the array in the method and capture it, or move the construction out of the closure. Threading a layout descriptor into a lifted closure is a later slice
 ```
 
-### An `extension` body's inner alias is refused, naming why
+### An `extension` body's inner alias builds its container, keyed under the CONFORMER
 
-An `extension`'s members are consumed whole by the declaration sweep, so a `typealias` declared in one is
-never keyed whole-program and there is no container instance for the literal to build. The oracle compiles
-this program; shv2 refuses it by name rather than through E3076, whose cure does not exist here either.
-Keying an extension body's nested aliases whole-program is a distinct mechanism.
+⭐ **W3 BUILT THE MECHANISM THIS CASE USED TO RECORD AS ABSENT, AND THE CASE MOVED FROM A REFUSAL TO AN
+ANSWER.** It read: *"an `extension`'s members are consumed whole by the declaration sweep, so a `typealias`
+declared in one is never keyed whole-program … the oracle compiles this program; shv2 refuses it by name."*
+The sweep now reads an extension body's nested typealiases and keys each one under the CONFORMER it is
+expanded onto (`Parser.foldExtensionDeclarationInto`), so `TagArray` inside `extension Tagged` is
+`Box.TagArray` and the literal has an interned instance to build. Both compilers answer **6**.
 
-<!-- test: extension-body-inner-alias-is-refused -->
+⚠ It is the same measurement in the other direction: the refusal was pinned because shv2 diverged from the
+runnable oracle, and the pin is what makes the divergence's END observable. `stdlib/Interfaces.maxon`'s
+`extension Iterable` is the program that forced it — `map`/`filter` open with `var result = ElementArray{}`.
+
+<!-- test: extension-body-inner-alias-builds-the-container -->
 ```maxon
 typealias ExitCode = int(0 to 125)
 typealias Count = int(0 to u64.max)
@@ -599,6 +605,6 @@ function main() returns ExitCode
 	return 1
 end 'main'
 ```
-```maxoncstderr
-error E2015: <fragment>:13:16: Unsupported: a struct literal naming `TagArray`, a typealias declared by an `extension` body — the declaration sweep consumes an `extension` whole, so a nested alias of one is never keyed whole-program and there is no container instance for the literal to build. Declare the alias at file scope, or in the conforming type's own body
+```exitcode
+6
 ```

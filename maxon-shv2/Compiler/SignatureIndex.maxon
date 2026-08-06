@@ -2434,24 +2434,33 @@ export let MapErrorKeyAlreadyExistsCaseName = b"keyAlreadyExists"
 // ⭐⭐ **`IterationError` — WHAT A CURSOR'S `advance()` THROWS (conditional extensions).** Unlike the four
 // error enums above it, the COMPILER never throws this one: it is thrown and caught entirely by USER code
 // (`throw IterationError.exhausted` in an `advance()` body, absorbed by `for … in`'s step block). What the
-// compiler owes is that the NAME resolves, because `stdlib/Interfaces.maxon:28` declares it and the stdlib
-// loader does not list that module — the same provenance `ArrayError`, `StringError` and `MapError` have,
-// and it takes the same unconditional seed in `Project.createEnumRegistry`.
+// compiler owes is that the NAME resolves.
 //
-// ⚠ **THE MODULE IS NOT LISTED, AND ADMITTING IT IS NOT THE ALTERNATIVE.** `stdlib/Interfaces.maxon` also
-// declares `extension Iterable` with `map`/`filter`/`contains`, which — now that extensions parse — would
-// land a second definition of `map` on every conformer beside the compiler-owned `Array.map`/`Set.map`/
-// `Map.map`. Synthesizing the one declaration a program needs is what keeps that module out.
+// ⭐ **AND IT NOW RESOLVES TO THE CORPUS'S OWN DECLARATION (W3).** `stdlib/Interfaces.maxon:28` declares it
+// and the stdlib loader LISTS that module, so — unlike `ArrayError`/`StringError`/`MapError`, whose modules
+// are unlistable because `Array`/`String`/`Map` are synthesized — this one has no seed in
+// `Project.createEnumRegistry` and no transcription anywhere in the compiler. The paragraph that stood here
+// said the module could not be admitted because its `extension Iterable` would "land a second definition of
+// `map` on every conformer beside the compiler-owned `Array.map`". MEASURED at W3: it does not. An
+// interface extension is expanded onto the types whose `implements` clause NAMES that interface
+// (`Parser.parseExtensionDeclaration` over `conformersOf`), and `Array`/`Set`/`Map` are synthesized with no
+// such clause — so `Iterable.map` reaches exactly the types that declare `implements Iterable`, of which
+// the whole corpus and suite have none that also declare their own `map`.
 //
 // It is BARE rather than `__`-prefixed for `MapError`'s stated reason: a user `advance()` writes
 // `throws IterationError` in its own source, so a reserved spelling would make one error type meet itself
-// under two names.
+// under two names. It stays on `TypeResolution.isCompilerOwnedTypeName` for a reason a listed module does
+// not change: a USER declaration of the name would give one program two numberings of one enum.
 export let IterationErrorTypeName = b"IterationError"
 
 // The cases of `IterationError`, in `stdlib/Interfaces.maxon:29-30`'s DECLARATION ORDER — positional
 // ordinals, so the order is the contract a user's `match` arms are resolved against. `exhausted` is what an
-// `advance()` past the last element throws; `atStart` belongs to `BidirectionalIterator.retreat()`, and is
-// declared for `MapError`'s reason: a case added later must not renumber handlers already written.
+// `advance()` past the last element throws; `atStart` belongs to `BidirectionalIterator.retreat()`.
+//
+// ⚠ **THESE ARE NAMES, NOT ORDINALS, AND SINCE W3 NOTHING TRANSCRIBES THE ORDER.** The two constants stayed
+// when the layout left, exactly as the `__Managed*Error` case names stayed at A1s: the compiler still has to
+// NAME the case a cursor protocol declaration must throw (`declaresCursorProtocol`), and it reads the
+// numbering off the declaration.
 export let IterationErrorExhaustedCaseName = b"exhausted"
 export let IterationErrorAtStartCaseName = b"atStart"
 
@@ -4827,7 +4836,11 @@ export type ProgramSignatures
 	// `self.hash` (which `recordEnum` folds a DECLARED enum into): the hash exists to invalidate a parse
 	// memo when a declaration a reader COPIED FROM changes, and this declaration is byte-identical in every
 	// program — mixing a constant would move every program's hash and invalidate nothing.
-	var enumTypes as EnumLayoutMap
+	// ⚠ **EXPORTED FOR ONE READER (W3)**: `requireCorpusDeclaredEnum`, the single door to a compiler-owned
+	// enum's corpus declaration, which serves the PARSER off this index and the Std tier off
+	// `Project.enumTypes` — one function over one type, rather than a message written twice. Everything else
+	// still goes through `enumOf`/`containsEnum` below.
+	export var enumTypes as EnumLayoutMap
 	// ⭐ The generic-alias DECLARATIONS, in record order (P1.7) — the deterministic list `firstCyclicAliasDecl`
 	// walks. `genericAliases` is keyed by NAME and is a Map, so it can answer "which instance?" but never
 	// "which alias was declared first?"; the E3091 blame must be a property of the program, not of a map's
@@ -5686,8 +5699,12 @@ export type ProgramSignatures
 			self.recordStruct(layout)
 		end 'eachStruct'
 
+		// The fold already knows the file's provenance, so the corpus/user split a compiler-owned enum name
+		// turns on (`Project.upsertDeclaredEnum`) is DERIVED here once per file rather than per declaration —
+		// and derived through the one predicate that owns it, never re-spelled (`livesUnderStdlibDirectory`).
+		let declaredByTheCorpus = livesUnderStdlibDirectory(self, isStdlibSource: isStdlibSource)
 		for enumLayout in enums 'eachEnum'
-			self.recordEnum(enumLayout)
+			self.recordEnum(enumLayout, declaredByTheCorpus: declaredByTheCorpus)
 		end 'eachEnum'
 
 		// Generic-instance typealiases (P1.6-A). Folded BEFORE the return-type split below (which returns
@@ -6160,7 +6177,18 @@ export type ProgramSignatures
 	// fields is a copy that can be short by one, silently. Keep the list in ONE function.
 	function recordStruct(layout StructLayout)
 		// ⭐⭐ **A DECLARED `type` UNDER A COMPILER-OWNED NAME IS NOT REGISTERED — `upsertDeclaredEnum`'s
-		// rule, one registry over (P1.8 Slice E).** The parse-time reject
+		// rule, one registry over (P1.8 Slice E).**
+		//
+		// ⚠ **W3 GAVE THE ENUM REGISTRY A PROVENANCE TEST AND DELIBERATELY DID NOT GIVE THIS ONE ONE**, so
+		// the two rules have parted: a compiler-owned ENUM name may be declared by the CORPUS, because the
+		// compiler now READS two of them out of `stdlib/Interfaces.maxon` rather than transcribing them. No
+		// compiler-owned STRUCT name has a declaration to read — `String`, `Character` and `CharSet` name
+		// modules the loader cannot list at all (see `TypeResolution.isCompilerOwnedTypeName`'s
+		// `String`/`Character` paragraph) — so widening this door would admit a declaration nothing consults,
+		// and admit it from stdlib and user files alike. The asymmetry is which registry the compiler reads,
+		// not an oversight; the day a listed module declares one of these names, this arm gains the same bit.
+		//
+		// The parse-time reject
 		// (`Parser.requireTypeNameNotCompilerOwned`, E2015) is what the AUTHOR sees, but it cannot be what
 		// keeps the registry honest: the declaration SWEEP is deliberately not a validator, so it folds the
 		// declaration in before the real parse gets to refuse it, and every reader that resolves the name
@@ -6238,8 +6266,8 @@ export type ProgramSignatures
 	// compiles `"{z}"` to `__int_to_string` for one and `__float_toString` for the other. Editing the `0`
 	// to `0.0` would otherwise leave every other file's parse memo valid and serve a stale answer, which is
 	// exactly the class of staleness this hash exists to prevent — see the rule at `recordStruct`.
-	function recordEnum(layout EnumLayout)
-		upsertDeclaredEnum(self.enumTypes, layout: layout)
+	function recordEnum(layout EnumLayout, declaredByTheCorpus bool)
+		upsertDeclaredEnum(self.enumTypes, layout: layout, declaredByTheCorpus: declaredByTheCorpus)
 
 		var state = mix(mix(mixBytes(mix(self.hash, value: DeclShapeEnum), bytes: layout.name), value: EnumKindUnion if layout.isUnion else EnumKindEnum), value: enumBackingDiscriminator(layout.backing))
 		// The `implements` list rides for the field list's reason (A1s wave 2) — see `mixDeclaredConformances`,
@@ -14161,9 +14189,50 @@ export type ProgramSignatures
 			return false
 		end 'noAdvance'
 
-		let thrown = try throwsClauseName(self.throwsOf(advance)) otherwise return false
-		return thrown.toByteArray().equals(IterationErrorTypeName)
+		return self.throwsIterationError(advance)
 	end 'declaresCursorProtocol'
+
+	// ⭐⭐ **DOES `typeName` SUPPLY THE `Iterable` HALF OF THE TRAVERSAL PROTOCOL (W3)?** — a
+	// `createIterator()` a `for … in` can call once, in the preheader, to obtain the cursor it then walks
+	// through `declaresCursorProtocol`'s two names. `declaresCursorProtocol`'s twin, and STRUCTURAL for its
+	// exact reason: shv2 dispatches statically, so what the loop needs is the declaration, and the runnable
+	// oracle accepts a `createIterator` on a type carrying no `implements` clause at all.
+	//
+	// ⚠ **THE THREE ANSWERS ARE SEPARATE BECAUSE THE LOOP EMITS THREE DIFFERENT PREHEADERS.** An INFALLIBLE
+	// factory seeds the header's error flag with a literal 0; a THROWING one seeds it with the call's own
+	// error flag, so an empty collection — which `stdlib/Interfaces.maxon:132-134` says the constructor
+	// reports by throwing `exhausted` — runs zero trips through the very test that ends the walk. That is
+	// also why the error TYPE is pinned exactly as `advance`'s is: the loop ABSORBS the thrown value without
+	// binding it, which is sound for the payload-free `IterationError` and would leak for anything carrying a
+	// managed payload. A factory throwing something else is a real declaration the loop cannot use, so it is
+	// its own answer rather than being folded into `notDeclared` — `Parser.materializeIterableIterationSource`
+	// refuses it by name instead of reporting that the type has no `createIterator`.
+	export function iterableFactory(typeName ByteArray) returns IterableFactory
+		let create = qualifiedMethodName(typeName, methodName: CreateIteratorMethodName)
+		if not self.declaresCallee(create) 'noFactory'
+			return IterableFactory.notDeclared
+		end 'noFactory'
+
+		let clause = self.throwsOf(create)
+		if not throwsClauseIsThrowing(clause) 'infallible'
+			return IterableFactory.infallible
+		end 'infallible'
+
+		if not self.throwsIterationError(create) 'someOtherError'
+			return IterableFactory.throwsSomethingElse(try throwsClauseName(clause) otherwise panic("ProgramSignatures.iterableFactory: `{String.from(create)}`'s clause answered `throwing` to `throwsClauseIsThrowing` and `none` to `throwsClauseName` — one union, two readings"))
+		end 'someOtherError'
+
+		return IterableFactory.throwsIterationError
+	end 'iterableFactory'
+
+	// Does `callee`'s declared `throws` clause name `IterationError` — the ONE error type the traversal
+	// protocol's two fallible declarations may carry, because the loop absorbs what they throw without
+	// binding it. Both askers above need exactly this test, and it is written once so `advance` and
+	// `createIterator` cannot come to accept different error types.
+	function throwsIterationError(callee ByteArray) returns bool
+		let thrown = try throwsClauseName(self.throwsOf(callee)) otherwise return false
+		return thrown.toByteArray().equals(IterationErrorTypeName)
+	end 'throwsIterationError'
 
 	// ⭐⭐ **DOES `written` RESOLVE AS A DIRECTORY-QUALIFIED FREE CALL — THE WHOLE RULE, IN ONE PLACE (N1b)?**
 	// It is asked of the WHOLE assembled dotted name (`utils.helper`, `lib.inner.deepHelper`), never of its

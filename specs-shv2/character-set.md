@@ -413,7 +413,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:2:11: Unsupported: a declaration of the type name 'CharSet', which the compiler owns — shv2 synthesizes that declaration rather than reading it from the stdlib, and has no namespace to tell a user declaration of the name apart from the builtin one
+error E2015: <fragment>:2:11: Unsupported: a declaration of the type name 'CharSet', which the compiler owns — its one meaning comes from the compiler itself or from the stdlib module that declares it, and shv2 has no namespace to tell a user declaration of the name apart from that one
 ```
 
 <!-- test: characterset-name-is-compiler-owned -->
@@ -435,5 +435,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:2:6: Unsupported: a declaration of the type name 'CharacterSet', which the compiler owns — shv2 synthesizes that declaration rather than reading it from the stdlib, and has no namespace to tell a user declaration of the name apart from the builtin one
+error E2015: <fragment>:2:6: Unsupported: a declaration of the type name 'CharacterSet', which the compiler owns — its one meaning comes from the compiler itself or from the stdlib module that declares it, and shv2 has no namespace to tell a user declaration of the name apart from that one
 ```

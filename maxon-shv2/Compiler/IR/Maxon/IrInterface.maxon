@@ -318,6 +318,22 @@ export let EqualsMethodName = b"equals"
 export let CurrentMethodName = b"current"
 export let AdvanceMethodName = b"advance"
 
+// ⭐ **THE `Iterable` HALF OF THE TRAVERSAL PROTOCOL (W3)** — `stdlib/Interfaces.maxon:183`'s
+// `interface Iterable uses Element, Iter / function createIterator() returns Iter`. A `for … in` over a
+// conformer of THIS interface calls it once, in the preheader, and then walks what it returns through the
+// two names above; that is the whole difference between the two halves, and it is why one name is enough
+// here where the cursor needs two. See `Parser.materializeIterableIterationSource`.
+export let CreateIteratorMethodName = b"createIterator"
+
+// What a type's `createIterator()` declaration is worth to a `for … in` header — see
+// `ProgramSignatures.iterableFactory`, which owns the classification and the argument for the three arms.
+export union IterableFactory
+	notDeclared
+	infallible
+	throwsIterationError
+	throwsSomethingElse(errorName String)
+end 'IterableFactory'
+
 // All three are exported for ONE reason: `BuiltinConformanceRuntime` names each SYNTHESIZED impl it installs
 // (`int.hash`, `<scalar>.equals`, `<scalar>.compare`, `String.hash`/`String.equals`) by joining a conformer
 // name to the method name, and that symbol must be the one the witness-table reloc points at. The operator
@@ -355,16 +371,21 @@ export let CodepointTypeName = b"Codepoint"
 // IS the CONFORMER NAME of that type (`StringConformerName` / `BoolConformerName` below) — one fact, "how
 // this type is spelled in source", wearing an interface signature's hat. They were two constants holding
 // the same bytes for `String`, which is precisely the shape that drifts.
-// Exported: `Comparable.compare`'s result type is a COMPILER-KNOWN ENUM, and the enum registries are
-// seeded with its layout under this exact name (`Project.builtinOrderingEnum`). One spelling for the
-// interface's rendered return type, the seeded layout's name, and the declaration reject that keeps a
-// user from binding the name.
+// Exported: `Comparable.compare`.s result type is an enum the compiler READS out of the corpus under this
+// exact name (`stdlib/Interfaces.maxon:34`, reached through `Project.requireCorpusDeclaredEnum`). One
+// spelling for the interface.s rendered return type, the registry key that declaration lands under, and the
+// declaration reject that keeps a USER from binding the name.
 export let OrderingTypeName = b"Ordering"
 
 // `Ordering`'s three cases, in DECLARATION order, verbatim from stdlib/Interfaces.maxon:34-38. Named
-// rather than spelled at each use because THREE parties depend on the exact bytes: the layout builder
-// that declares them, the synthesized `int.compare` that returns their tags, and the `<`/`>`/`<=`/`>=`
-// lowering that tests its dispatch result against them.
+// rather than spelled at each use because TWO parties depend on the exact bytes: the synthesized
+// `int`/`float`/`Character` `compare` impls that return their tags, and the `<`/`>`/`<=`/`>=` lowering that
+// tests its dispatch result against them.
+//
+// ⚠ **THEY ARE NAMES, NOT ORDINALS, AND THE THIRD PARTY IS GONE (W3).** A layout builder here used to
+// transcribe the ORDER as well (`Project.builtinOrderingEnum`); both readers now take the numbering off the
+// corpus declaration through `EnumLayout.tagOfCase`, so what is left to write down is which case each door
+// means — the `__Managed*Error` arrangement, whose case-name constants stayed for the same reason at A1s.
 export let OrderingLessThanCaseName = b"lessThan"
 export let OrderingEqualToCaseName = b"equalTo"
 export let OrderingGreaterThanCaseName = b"greaterThan"

@@ -953,6 +953,47 @@ function whitelistedStdlibModules(stdlibDir FilePath) returns MaxonSourcePathSet
 	// stronger than the codeBytes match `S2g` recorded, the two emitted executables are **byte-for-byte
 	// identical** (5,567 bytes, `cmp` clean).
 	try listWhitelistedModule(stdlibDir, relative: "Ascii.maxon", into: listed)
+
+	// ⭐⭐ **W3 — `Interfaces.maxon`, THE PROTOCOL ROOT, AND THE FIRST ENTRY THAT RETIRES A COMPILER-OWNED
+	// DECLARATION RATHER THAN MERELY AVOIDING ONE.** Every other module here declares nothing the compiler
+	// owns; this one declares `enum Ordering` and `enum IterationError`, both of which the compiler used to
+	// TRANSCRIBE (`Project.builtinOrderingEnum`, `Project.builtinIterationErrorEnum`, both now deleted). The
+	// declarations arrive through the ordinary path and the compiler reads them
+	// (`Project.requireCorpusDeclaredEnum`) — the A1s `__Managed*Error` precedent, and the reason
+	// `Parser.requireTypeNameNotCompilerOwned` now admits a stdlib declaration of an owned name.
+	//
+	// It clears every entry in this file's collision rule, each checked rather than assumed:
+	//   • FREE FUNCTIONS: exactly one, `spreadHash`. It is claimed by no other listed module and by no BARE
+	//     builtin — checked AT `Parser.parseCallNamed`'s `if` chain, which is what that rule's last bullet
+	//     insists on.
+	//   • TYPE NAMES: `Error`, `Hashable`, `Equatable`, `Comparable`, `Cloneable`, `Iterator`,
+	//     `BidirectionalIterator`, `Iterable`, `Stringable`, `FormattedStringable`, `Ordering`,
+	//     `IterationError`. A user program spelling any of the ten INTERFACE names still wins and the stdlib
+	//     declaration moves into the reserved space (A1s wave 2); the two ENUM names are compiler-owned, so a
+	//     user declaration of either is E2015 and there is nothing to contest.
+	//   • ⚠ **THE TEN INTERFACES ARE DECLARED HERE *AND* SYNTHESIZED** (`IrInterface.builtinInterface`), and
+	//     that is not a duplicate definition: `lookupInterface` answers from the synthesized copy first, so
+	//     the parsed one is inert. It is one fact written twice and it is filed as such — the convergence is
+	//     a rung of its own, because the synthesized signatures are what the WITNESS layout is derived from
+	//     and moving that is not a whitelist change.
+	//   • RANGED typealiases: `HashValue` (`int(0 to u32.max)`) and `IterStep`. `HashValue` is compiler-owned
+	//     and erases to `integer` (`TypeResolution.isSynthesizedIntAliasName`), so the declaration mints no
+	//     identity and contests nothing; giving it its declared BOUNDS is a separate rung with goldens to
+	//     move. `IterStep` is declared by no other listed module.
+	//   • ⚠ The E3112 MEMBER-name rule scans this file like every other listed module. Its members are
+	//     `hash`, `equals`, `compare`, `clone`, `current`, `advance`, `retreat`, `advanceBy`, `retreatBy`,
+	//     `createIterator`, `map`, `filter`, `contains`, `withIterator`, `toString` — ordinary English, which
+	//     is exactly what that check protects.
+	//
+	// ⚠⚠ **ITS `extension` BODIES ARE THE CASE THE READINESS CRITERION CANNOT SEE, so this entry was NOT
+	// weighed on `E3001` alone.** `maxon-shv2 build stdlib/Interfaces.maxon` reaches `E3001` and nothing else,
+	// AND the injection control was run both ways (this file's own headline rule): a
+	// `NoSuchType.definitelyUndefined(1)` injected into `advanceBy` — a method of a plain `extension` — IS
+	// reported, while the same injection inside `extension Iterable`'s `map` is NOT, because no conformer in
+	// that compile forces it to specialize. The extension bodies are therefore driven from a program that
+	// declares a conformer and CALLS them (`specs-shv2/interface-extensions.md`), which is what actually
+	// compiles them.
+	try listWhitelistedModule(stdlibDir, relative: "Interfaces.maxon", into: listed)
 	return listed
 end 'whitelistedStdlibModules'
 

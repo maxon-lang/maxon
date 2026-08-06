@@ -136,7 +136,7 @@ end 'emitEquatableWitnessEquals'
 // them (P1.7a slice 2b + P1.7b). Each impl NAME is `qualifiedMethodName(<conformer>, <method>)`, the SAME
 // construction `ensureWitnessTable` names its reloc target by, so the built function, the reloc, and the
 // dispatch cannot disagree on the symbol.
-export function installBuiltinConformanceRuntime(module StdModule, globalData GlobalDataTable)
+export function installBuiltinConformanceRuntime(module StdModule, globalData GlobalDataTable, ordering EnumLayout)
 	// The candidate list the reference walk matches against, built from the very `ByteArray`s the builders
 	// are installed under — one join per symbol, so the name the walk looks for and the name the function
 	// carries cannot be two joins that happen to agree.
@@ -183,7 +183,7 @@ export function installBuiltinConformanceRuntime(module StdModule, globalData Gl
 	end 'intEquals'
 
 	if referenced.contains(intCompare) 'intCompare'
-		buildOrderingCompare(module, name: intCompare, operandType: StdType.i64)
+		buildOrderingCompare(module, name: intCompare, operandType: StdType.i64, ordering: ordering)
 	end 'intCompare'
 
 	if referenced.contains(floatHash) 'floatHash'
@@ -195,7 +195,7 @@ export function installBuiltinConformanceRuntime(module StdModule, globalData Gl
 	end 'floatEquals'
 
 	if referenced.contains(floatCompare) 'floatCompare'
-		buildFloatCompare(module, name: floatCompare)
+		buildFloatCompare(module, name: floatCompare, ordering: ordering)
 	end 'floatCompare'
 
 	// ⭐ `bool.compare` IS `int.compare`'s graph, and that is a fact about the STD TIER rather than a
@@ -205,7 +205,7 @@ export function installBuiltinConformanceRuntime(module StdModule, globalData Gl
 	// literally the same ops. One builder, two symbols — the symbol must still be `bool.compare`, because
 	// that is what the parser mints and what a `__witness_bool.Comparable` slot would name.
 	if referenced.contains(boolCompare) 'boolCompare'
-		buildOrderingCompare(module, name: boolCompare, operandType: StdType.i64)
+		buildOrderingCompare(module, name: boolCompare, operandType: StdType.i64, ordering: ordering)
 	end 'boolCompare'
 
 	if referenced.contains(strHash) 'strHash'
@@ -237,7 +237,7 @@ export function installBuiltinConformanceRuntime(module StdModule, globalData Gl
 	// `__char_cmp` by `installGraphemeRuntime` for the operator door — `buildStrEq`'s two-symbol
 	// arrangement, one builder.
 	if referenced.contains(charCompare) 'charCompare'
-		buildByteRecordCompare(module, name: charCompare)
+		buildByteRecordCompare(module, name: charCompare, ordering: ordering)
 	end 'charCompare'
 
 	// ⭐⭐ **`Array` IS THE SIXTH CONFORMER, AND ITS TWO BODIES ARE `ArrayRuntime`'s (array-hashable)** — that
@@ -622,11 +622,17 @@ end 'emitOrderingTest'
 
 // ⭐ A block that RETURNS one `Ordering` case's tag — the exit every compare impl's verdict paths land on.
 //
-// ⭐ The tag comes from `EnumLayout.tagOfCase` — read OFF the `Ordering` layout, so reordering the transcription in
-// `Project.builtinOrderingEnum` moves these bodies and the `<`/`>`/`<=`/`>=` lowering's tag tests together.
-// The bootstrap writes them as literals at its consumer sites with nothing tying them back to the
-// declaration; that is a latent coupling shv2 deliberately does not copy. Naming the CASE here rather than
+// ⭐ The tag comes from `EnumLayout.tagOfCase` — read OFF the `Ordering` layout, so reordering
+// `stdlib/Interfaces.maxon`'s own declaration moves these bodies and the `<`/`>`/`<=`/`>=` lowering's tag
+// tests together. The bootstrap writes them as literals at its consumer sites with nothing tying them back to
+// the declaration; that is a latent coupling shv2 deliberately does not copy. Naming the CASE here rather than
 // passing a number is what keeps that derivation at one call per verdict, across both compare impls.
+//
+// ⚠ **THE LAYOUT IS HANDED IN RATHER THAN FETCHED (W3), AND THAT IS WHAT MAKES "the same declaration" TRUE
+// RATHER THAN INTENDED.** It is `stdlib/Interfaces.maxon`'s, read ONCE per compile by the caller of
+// `installBuiltinConformanceRuntime` / `installGraphemeRuntime` off `Project.enumTypes`; these builders sit
+// at the Std tier with no `Project` in reach, and a second door to the layout would be a second thing to keep
+// pointed at the same registry.
 function emitOrderingVerdict(module StdModule, block IrBlock, ordering EnumLayout, caseName ByteArray, ids ValueMinter)
 	let tag = emitConst(module, block: block, value: ordering.tagOfCase(caseName), ids: ids)
 	module.setTerminator(block, op: StdOp.ret(tag))
@@ -669,10 +675,9 @@ end 'emitOrderedCascade'
 // It serves `int.compare` AND `bool.compare` (the installer states why bool's graph IS int's). `float`
 // cannot use it: IEEE `<`/`>` are false for every NaN pair, so `buildFloatCompare` enters the SAME cascade
 // from a NaN preamble instead.
-function buildOrderingCompare(module StdModule, name ByteArray, operandType StdType)
+function buildOrderingCompare(module StdModule, name ByteArray, operandType StdType, ordering EnumLayout)
 	var func = createTwoOperandImpl(name, operandType: operandType, resultType: builtinProtocolResultStdType(OrderingTypeName))
 	var ids = ValueMinter.create(2)
-	let ordering = builtinOrderingEnum()
 
 	var entry = module.addBlock(func, label: b"entry")
 	var lessBlock = module.addBlock(func, label: b"less")
@@ -710,10 +715,9 @@ end 'buildOrderingCompare'
 // The `other != other` test is written TWICE, once per side of the `self` test, exactly as both references
 // write it. Hoisting it would make it a VALUE two blocks read rather than a branch, which on x64 costs the
 // `setne`+`setp`+`lea` materialization instead of a fused jump — a bigger body, to save a duplicated compare.
-function buildFloatCompare(module StdModule, name ByteArray)
+function buildFloatCompare(module StdModule, name ByteArray, ordering EnumLayout)
 	var func = createTwoOperandImpl(name, operandType: StdType.f64, resultType: builtinProtocolResultStdType(OrderingTypeName))
 	var ids = ValueMinter.create(2)
-	let ordering = builtinOrderingEnum()
 
 	var entry = module.addBlock(func, label: b"entry")
 	var selfIsNanBlock = module.addBlock(func, label: b"selfIsNan")
@@ -778,10 +782,9 @@ end 'buildFloatCompare'
 // bound carried instead of an accumulator, because the bound is chosen by a BRANCH (the shorter of the two
 // lengths) rather than computed. Both `argType`s are set explicitly: `retypeBlockArgs` runs in
 // `lowerMaxonToStd`, which these post-pipeline functions never pass through.
-export function buildByteRecordCompare(module StdModule, name ByteArray)
+export function buildByteRecordCompare(module StdModule, name ByteArray, ordering EnumLayout)
 	var func = createTwoOperandImpl(name, operandType: StdType.i64, resultType: builtinProtocolResultStdType(OrderingTypeName))
 	var ids = ValueMinter.create(2)
-	let ordering = builtinOrderingEnum()
 
 	var entry = module.addBlock(func, label: b"entry")
 	var selfShorter = module.addBlock(func, label: b"selfShorter")

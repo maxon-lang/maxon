@@ -3103,8 +3103,11 @@ end 'conformanceListDeclares'
 // (`2-Parser.cs:1371`, `conformingInterfaces: ["Error"]`) for the family it synthesizes.
 //
 // ⇒ A seed stands in for a DECLARATION and owes every clause that declaration writes, not just its cases.
-// `builtinOrderingEnum` takes the shared empty above and is correct to: `stdlib/Interfaces.maxon:34`
-// declares `export enum Ordering` with no clause at all.
+// ⚠ **W3 REMOVED THE ONE SEED THAT GOT THIS RIGHT BY LUCK.** `Ordering` was seeded with the shared EMPTY
+// list and was correct to — `stdlib/Interfaces.maxon:34` declares `export enum Ordering` with no clause at
+// all — which is exactly the coincidence this paragraph warns about: a seed agrees with its declaration
+// until the declaration changes. That enum is now READ rather than seeded, so its clause list is the
+// corpus.s and cannot drift; the three below still owe this.
 function builtinErrorConformance() returns ByteArrayArray
 	var conformsTo = ByteArrayArray.create()
 	conformsTo.push(ErrorInterfaceName)
@@ -3344,7 +3347,7 @@ export type EnumLayout
 	//
 	// It PANICS on an absent case rather than returning a sentinel: a caller that does not already know the
 	// layout declares the name asks `hasCase` first, which is what that predicate is for — and its two callers
-	// name cases the layout they pass is BUILT with (`builtinOrderingEnum`'s three).
+	// name cases the layout they pass DECLARES (`Ordering`.s three, read from `stdlib/Interfaces.maxon`).
 	export function tagOfCase(wanted ByteArray) returns ParsedInt
 		if not self.hasCase(wanted) 'noSuchCase'
 			panic("EnumLayout.tagOfCase: `{self.kindWord()} {String.from(self.name)}` declares no case '{String.from(wanted)}' — ask `hasCase` first when the name is not known to be one of this declaration's own")
@@ -3369,27 +3372,22 @@ export typealias EnumLayoutArray = Array with EnumLayout
 // declared `enum`/`union` to its integer representation (an enum value IS its i64 tag).
 export typealias EnumLayoutMap = Map with (ByteArray, EnumLayout)
 
-// ⭐ **THE COMPILER-KNOWN `Ordering` ENUM (P1.7a slice 2b-ii)** — `Comparable.compare`'s result type,
-// transcribed VERBATIM from `stdlib/Interfaces.maxon:34-38`:
+// ⭐⭐ **`Ordering` IS DECLARED, NOT SYNTHESIZED (W3) — AND IT WAS THE LAST TRANSCRIPTION OF A CORPUS
+// DECLARATION THIS FILE CARRIED.** `builtinOrderingEnum()` stood here, restating `stdlib/Interfaces.maxon:34-38`
+// case for case, for the stated reason that shv2 read no stdlib. It reads that module now
+// (`StdlibLoader.whitelistedStdlibModules`), so the declaration arrives through `upsertDeclaredEnum` like any
+// other and every tag reader takes its layout from `requireCorpusDeclaredEnum` — the `__Managed*Error`
+// precedent directly below, applied to the one enum in the set whose ordinals the compiler EMITS rather than
+// merely throws.
 //
-//     export enum Ordering
-//         lessThan
-//         equalTo
-//         greaterThan
-//     end 'Ordering'
+// ⚠ **THE STAKE IS HIGHER HERE THAN FOR AN ERROR ENUM, WHICH IS WHY THE COPY COULD NOT SIMPLY BE KEPT IN
+// STEP.** `Ordering`'s case ORDER is a wire format between code the compiler emits at two different tiers:
+// `int.compare`/`float.compare`/`Character.compare` RETURN a tag (`BuiltinConformanceRuntime`), and the
+// `<`/`>`/`<=`/`>=` lowering TESTS one (`Parser.emitOrderingVerdict`). Both now read the same declaration, so
+// the two cannot disagree; while the transcription stood, agreement rested on nobody editing one of the two
+// files, and nothing in the tree would have reported it — `BuiltinErrorOrdinalCheck` covers the error
+// families only, and never reached `Ordering` at all.
 //
-// shv2 reads no stdlib, so it SYNTHESIZES this declaration exactly as `builtinInterface` synthesizes the
-// protocol interfaces `Ordering` serves — and it builds it through the SAME `EnumLayout`/`addCase` shape a
-// user `enum` gets, so every downstream reader (a qualified case value, a `match` scrutinee, TypeResolution's
-// erase-to-`integer`, the aggregate-identity check) sees an ordinary enum and needs no arm of its own.
-export function builtinOrderingEnum() returns EnumLayout
-	var layout = EnumLayout.createCompilerOwned(OrderingTypeName, conformsTo: sharedEmptyDeclaredConformances)
-	addBuiltinEnumCase(layout, caseName: OrderingLessThanCaseName)
-	addBuiltinEnumCase(layout, caseName: OrderingEqualToCaseName)
-	addBuiltinEnumCase(layout, caseName: OrderingGreaterThanCaseName)
-	return layout
-end 'builtinOrderingEnum'
-
 // ⭐⭐ **THE THREE `__Managed*Error` FAMILIES ARE DECLARED, NOT SYNTHESIZED (A1s).** `__ManagedMemoryError`,
 // `__ManagedFileError` and `__ManagedDirectoryError` were each transcribed into a `builtin…ErrorEnum()`
 // constructor here, a second spelling of declarations that already exist in `stdlib/Builtins.maxon` (`:152`,
@@ -3472,21 +3470,17 @@ export function builtinMapErrorEnum() returns EnumLayout
 	return layout
 end 'builtinMapErrorEnum'
 
-// ⭐ **THE COMPILER-OWNED `IterationError`** — what a cursor's `advance()` throws, and the ONE builtin error
-// enum the compiler never throws itself: `for … in` over a cursor absorbs the flag without naming the case,
-// so every `throw`/`match` of it is the user's. Registered under the BARE name
-// `SignatureIndex.IterationErrorTypeName`; that constant carries the argument for the bare spelling and for
-// why `stdlib/Interfaces.maxon` is synthesized from rather than loaded.
+// ⭐ **`IterationError` IS DECLARED, NOT SYNTHESIZED (W3)** — what a cursor's `advance()` throws, and the ONE
+// builtin error enum the compiler never throws itself: `for … in` over a cursor absorbs the flag without
+// naming the case, so every `throw`/`match` of it is the user's. `builtinIterationErrorEnum()` stood here
+// because `stdlib/Interfaces.maxon` was not listed; it is listed now, so the declaration arrives through
+// `upsertDeclaredEnum` exactly as the `__Managed*Error` families do, and there is one `enum IterationError`
+// in the tree rather than two.
 //
-// Its provenance is `ArrayError`'s, `StringError`'s and `MapError`'s exactly, so it takes the same
-// UNCONDITIONAL seed for the same stated reason.
-export function builtinIterationErrorEnum() returns EnumLayout
-	var layout = EnumLayout.createCompilerOwned(IterationErrorTypeName, conformsTo: builtinErrorConformance())
-	addBuiltinEnumCase(layout, caseName: IterationErrorExhaustedCaseName)
-	addBuiltinEnumCase(layout, caseName: IterationErrorAtStartCaseName)
-	return layout
-end 'builtinIterationErrorEnum'
-
+// ⚠ Its provenance is the one thing that does NOT match `ArrayError`/`StringError`/`MapError`: those three
+// name modules the loader cannot list (`Array`, `String` and `Map` are synthesized), so they keep their
+// unconditional seed. This one had a declaring file all along — it was merely unreadable.
+//
 // ⭐ **THE COMPILER-OWNED `__DivisionByZeroError` (A1)** — what a possibly-zero `/` or `mod` throws, and the
 // type `specs-shv2/safety.md`'s `divide-by-zero-expression-form` and `mod-by-zero` discriminate.
 //
@@ -3663,34 +3657,52 @@ export function declaredBuiltinErrorEnum(project Project, typeName ByteArray, in
 	return DeclaredBuiltinErrorEnum.found(layout)
 end 'declaredBuiltinErrorEnum'
 
-// ⭐ **AN ENUM REGISTRY, SEEDED WITH THE COMPILER-KNOWN ENUMS (P1.7a slice 2b-ii)** — THE one constructor
-// of an `EnumLayoutMap`, used by BOTH registries that hold declared enums (`Project.enumTypes`, the
-// authority, and `ProgramSignatures.enumTypes`, the parser's whole-program index).
+// ⭐⭐ **THE LAYOUT OF A COMPILER-OWNED ENUM THE COMPILER *BUILDS TAGS FROM* (W3)** — `Ordering`'s, out of
+// whichever registry the reader holds: the PARSER reads `ProgramSignatures.enumTypes` while lowering
+// `<`/`>`/`<=`/`>=`, and the Std tier reads `Project.enumTypes` while building the `Comparable` cascade. Both
+// maps are `createEnumRegistry`'s and both receive the corpus declaration through `upsertDeclaredEnum`, so one
+// function over `EnumLayoutMap` serves both and there is one sentence to keep true instead of two.
 //
-// Seeding at the map's single creation point is what makes `Ordering` visible to EVERY reader of either
-// registry at once — `containsEnum`/`enumOf` (a qualified case value, a `match` scrutinee's enum, a field's
-// storage width), `resolveNamedType`'s erase-to-`integer`, `aggregateNameFor`'s nominal identity — with no
-// per-reader by-name arm to add today or to forget tomorrow. Three by-name special cases were the
+// ⚠ **ITS ABSENCE IS A PANIC, WHERE `declaredBuiltinErrorEnum`'s IS A DIAGNOSTIC, AND THE TWO ANSWER
+// DIFFERENT QUESTIONS.** That one asks *"is there a declaration to CHECK the runtime's claimed ordinals
+// against?"* — a claim can be refused and the compile can carry on to report it. This one asks *"what tag IS
+// `lessThan`?"* at a site that must emit a number: there is no degraded answer, and continuing would mean
+// inventing one. The entry cannot be missing in a sound checkout — `StdlibLoader` lists the declaring module
+// unconditionally and `listWhitelistedModule` throws `fileNotFound` if the file is gone — so what reaches
+// here is a declaration deleted from a listed module, which is the same class of checkout edit
+// `EnumLayout.tagOfCase` panics on.
+export function requireCorpusDeclaredEnum(registry EnumLayoutMap, typeName ByteArray, reader String) returns EnumLayout
+	return try registry.get(typeName) otherwise panic("requireCorpusDeclaredEnum: {reader} needs the case tags of `enum {String.from(typeName)}`, and this compile declares no enum of that name — the compiler reads that declaration out of the corpus rather than transcribing it, so the module declaring it must be listed by `StdlibLoader.whitelistedStdlibModules` and must still declare it")
+end 'requireCorpusDeclaredEnum'
+
+// ⭐ **AN ENUM REGISTRY, SEEDED WITH THE ENUMS NO CORPUS FILE DECLARES (P1.7a slice 2b-ii, +W3)** — THE one
+// constructor of an `EnumLayoutMap`, used by BOTH registries that hold declared enums (`Project.enumTypes`,
+// the authority, and `ProgramSignatures.enumTypes`, the parser's whole-program index).
+//
+// Seeding at the map's single creation point is what makes a synthesized enum visible to EVERY reader of
+// either registry at once — `containsEnum`/`enumOf` (a qualified case value, a `match` scrutinee's enum, a
+// field's storage width), `resolveNamedType`'s erase-to-`integer`, `aggregateNameFor`'s nominal identity —
+// with no per-reader by-name arm to add today or to forget tomorrow. Three by-name special cases were the
 // alternative, and this project's signature bug is one fact written more than once.
 //
-// It stays GOLDEN-NEUTRAL because `Ordering` is a payload-FREE enum: every pass that WALKS this registry to
-// EMIT something (`installUnionDestructors`, `noteDestructorUsage`, `noteClonerUsage`) selects only unions with
-// a managed payload, so the seeded entry contributes no code to any program. **MEASURED: zero modified
+// It stays GOLDEN-NEUTRAL because every enum seeded here is payload-FREE: every pass that WALKS this registry
+// to EMIT something (`installUnionDestructors`, `noteDestructorUsage`, `noteClonerUsage`) selects only unions
+// with a managed payload, so a seeded entry contributes no code to any program. **MEASURED: zero modified
 // `specs-shv2/fragments` goldens across the whole suite.** Its cost is a FLAT per-compile constant — measured
 // +68 allocations / +2,376 bytes, IDENTICAL at scale-test rung 0 and rung 5, i.e. with no growing term —
 // almost all of it the two registries' first `Map` upsert initializing their slot arrays. That constant is the
 // deliberate price of "every reader, no arm": demand-gating the seed would put the "is it registered yet?"
 // question back at each reader, which is the shape this exists to remove.
 //
-// A user declaration cannot displace the seed — a declaration that would mint a nominal identity under a
-// compiler-owned type name is refused (`Parser.requireTypeNameNotCompilerOwned`) — so the registry's
-// `Ordering` is always `builtinOrderingEnum()`'s. That is what lets the tag READERS (`int.compare` and the
-// `<`/`>`/`<=`/`>=` lowering) build their own copy of the layout without risking a different answer from the
-// one a `match` gets out of this registry. `upsertDeclaredEnum` below is what makes that an INVARIANT of the
-// registry rather than a count of parse-time call sites — the reject is the user's diagnostic, not the guarantee.
+// ⭐⭐ **WHAT IS SEEDED IS EXACTLY WHAT NO LISTED MODULE DECLARES — AND W3 MOVED TWO OFF THIS LIST.**
+// `Ordering` and `IterationError` were transcribed here from `stdlib/Interfaces.maxon:28-38`; that module is
+// now LISTED, so both arrive through the ordinary declaration path (`upsertDeclaredEnum`) exactly as the
+// three `__Managed*Error` families do, and the compiler READS the case order it used to restate
+// (`requireCorpusDeclaredEnum`). What remains below is the set with no corpus declaration to read: `Array`,
+// `String` and `Map` are SYNTHESIZED rather than loaded, so their error enums have no listed declaring file,
+// and `__DivisionByZeroError` is declared in no stdlib file at all.
 export function createEnumRegistry() returns EnumLayoutMap
 	var registry = EnumLayoutMap.create()
-	registry.upsert(OrderingTypeName, value: builtinOrderingEnum())
 	// ⚠ **THE THREE `__Managed*Error` FAMILIES ARE NOT SEEDED HERE (A1s)** — they are DECLARED in
 	// `stdlib/Builtins.maxon` and arrive through the ordinary declaration path (`upsertDeclaredEnum`), which
 	// is what makes the declaration the one authority instead of the loser of a last-wins upsert against a
@@ -3702,35 +3714,41 @@ export function createEnumRegistry() returns EnumLayoutMap
 	registry.upsert(StringErrorTypeName, value: builtinStringErrorEnum())
 	// What a missing-key `Map.get` throws. See `builtinMapErrorEnum`.
 	registry.upsert(MapErrorTypeName, value: builtinMapErrorEnum())
-	// What a cursor's `advance()` throws. See `builtinIterationErrorEnum`.
-	registry.upsert(IterationErrorTypeName, value: builtinIterationErrorEnum())
 	// A1: what a possibly-zero `/` or `mod` throws. See `builtinDivisionByZeroErrorEnum`.
 	registry.upsert(DivisionByZeroErrorTypeName, value: builtinDivisionByZeroErrorEnum())
 	return registry
 end 'createEnumRegistry'
 
-// ⭐ **THE ONE DOOR A *DECLARED* ENUM ENTERS EITHER REGISTRY THROUGH, AND IT WILL NOT DISPLACE A SEED** —
-// `Project.enumTypes` (the authority, via `commitEnumTypes`) and `ProgramSignatures.enumTypes` (the parser's
-// whole-program index, via `ProgramSignatures.recordEnum`). Both maps are built by `createEnumRegistry`, and the
-// soundness of that seed rests on one claim: the entry under a compiler-owned name is always
-// `builtinOrderingEnum()`'s, because the tag READERS (`int.compare`, the `<`/`>`/`<=`/`>=` lowering) build their
-// own copy of the layout rather than fetching this one.
+// ⭐ **THE ONE DOOR A *DECLARED* ENUM ENTERS EITHER REGISTRY THROUGH, AND A USER MAY NOT DISPLACE THE
+// COMPILER'S OWN** — `Project.enumTypes` (the authority, via `commitEnumTypes`) and
+// `ProgramSignatures.enumTypes` (the parser's whole-program index, via `ProgramSignatures.recordEnum`). Both
+// maps are built by `createEnumRegistry`, and every reader that turns a compiler-owned enum's case into a TAG
+// (`int.compare`'s cascade, the `<`/`>`/`<=`/`>=` lowering, a `match` arm) resolves it through one of them —
+// so two live layouts under one name is a program in which a comparison and its `match` read different
+// numbers, silently.
 //
-// ⚠ **THE PARSE-TIME REJECT ALONE DOES NOT MAKE THAT CLAIM TRUE, AND A REVIEW PROBE PROVED IT.** The
+// ⚠ **THE PARSE-TIME REJECT ALONE DOES NOT KEEP THAT OUT, AND A REVIEW PROBE PROVED IT.** The
 // whole-program DECLARATION SWEEP is deliberately not a validator (`Parser.recordScannedType`), so it folds a
 // user `enum Ordering` into `ProgramSignatures.enumTypes` BEFORE the real parse gets to refuse it — measured by
 // making this function panic, which fired from `ProgramSignatures.recordEnum` on `enum Ordering … end`. The
 // claim held only because such a program never reaches codegen; it was a comment, not an invariant.
 //
-// So the seed is simply NOT DISPLACEABLE: a declared layout under a compiler-owned name is dropped here, at the
-// single write, and the user-facing error stays the parse-time `E2015`
-// (`Parser.requireTypeNameNotCompilerOwned`). That makes the collision unrepresentable rather than merely
-// diagnosed — a future declaration form that forgets the reject can then only produce a clean error about the
-// builtin's own cases, never a `match` reading different tags from the ones `int.compare` returns.
-export function upsertDeclaredEnum(registry EnumLayoutMap, layout EnumLayout)
-	if isCompilerOwnedTypeName(layout.name) 'compilerOwned'
+// ⭐⭐ **W3 TURNED THE DROP INTO A PROVENANCE TEST, BECAUSE THE COMPILER NOW *READS* TWO OF THESE NAMES.**
+// `Ordering` and `IterationError` are declared in `stdlib/Interfaces.maxon` and are no longer transcribed
+// into this file (`declaredBuiltinEnum`); dropping every compiler-owned layout would drop the very
+// declarations the compare cascade and the cursor protocol are built from. So the rule is now the one
+// sentence it always meant: **a compiler-owned type name may be declared by the CORPUS and by nothing else.**
+// A user declaration is still dropped at this single write — the collision stays unrepresentable rather than
+// merely diagnosed, which is what keeps the E2015 (`Parser.requireTypeNameNotCompilerOwned`) a message to the
+// author rather than the only thing standing between two numberings of one enum.
+//
+// ⚠ The bit is the FILE's (`Queries.livesUnderStdlibDirectory`), computed once per file by the caller, so the
+// probe `maxon-shv2 build stdlib/Interfaces.maxon` records the same declarations the loaded module does —
+// see `Parser.requireTypeNameNotCompilerOwned` for why `isStdlibSource` is the wrong bit here.
+export function upsertDeclaredEnum(registry EnumLayoutMap, layout EnumLayout, declaredByTheCorpus bool)
+	if isCompilerOwnedTypeName(layout.name) and not declaredByTheCorpus 'aUserContest'
 		return
-	end 'compilerOwned'
+	end 'aUserContest'
 
 	registry.upsert(layout.name, value: layout)
 end 'upsertDeclaredEnum'

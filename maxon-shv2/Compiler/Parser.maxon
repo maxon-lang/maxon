@@ -1820,6 +1820,32 @@ union NestedAliasResult
 	functionAlias(alias FunctionTypeAlias)
 end 'NestedAliasResult'
 
+// What `materializeIterableIterationSource` made of a `for … in` source (W3). BOTH halves or neither: the
+// cursor the loop walks and the value its header starts from are decided by the same `createIterator`
+// declaration, and a caller holding one without the other would have to re-derive whether the factory could
+// throw. See that function for what the seed means.
+union IterableIterationSource
+	notIterable
+	cursor(value ValueId, entrySeed ValueId)
+end 'IterableIterationSource'
+
+// Where a CURSOR loop's header error flag starts (W3) — see `parseForStatement`'s `cursorEntrySeed`. A case
+// rather than a pre-emitted literal, because the literal belongs in the preheader beside the other four
+// forms' seeds and emitting one here for the arm that never uses it would put a dead `const` in every
+// cursor loop.
+union CursorEntrySeed
+	atTheFirstElement
+	fromFactory(flag ValueId)
+end 'CursorEntrySeed'
+
+// Whether this `for` statement grew the second entry edge a throwing `createIterator()` needs (W3) — and, if
+// so, the block that edge lands in, which is the one the statement's continuation has to merge with. See
+// `Parser.emitEmptyIterableEntry`.
+union EmptyIterableExit
+	none
+	entered(empty IrBlock)
+end 'EmptyIterableExit'
+
 // The BOX a field access goes through, paired with the LAYOUT that says what is inside it.
 //
 // ⭐ **ONE ANSWER, BECAUSE IT IS ONE QUESTION** — and because the two halves drifting apart is a
@@ -7875,7 +7901,7 @@ export type Parser
 			pos: 0,
 			filePath: filePath,
 			namespace: namespace,
-			artifact: FileParseArtifact.create(filePath),
+			artifact: FileParseArtifact.create(filePath, livesUnderStdlibDirectory: livesUnderStdlibDirectory),
 			scope: Scope.create(),
 			topLevelBorrowSubjects: sharedEmptyTopLevelBorrowSubjects,
 			valueIds: ValueIdRef.create(0),
@@ -8028,7 +8054,7 @@ export type Parser
 	// where the parse stopped. Copied rather than aliased: two artifacts sharing one array is the
 	// hazard `IrBlock`'s header states, and this path is cold.
 	export function abortedParseArtifact() returns FileParseArtifact
-		var salvaged = FileParseArtifact.create(self.filePath)
+		var salvaged = FileParseArtifact.create(self.filePath, livesUnderStdlibDirectory: self.livesUnderStdlibDirectory)
 		for decl in self.artifact.typeNameDecls 'eachDecl'
 			salvaged.recordTypeNameDecl(decl)
 		end 'eachDecl'
@@ -10937,9 +10963,21 @@ export type Parser
 		var paramDefaults = ParamDefaultEntryArray.create()
 		var throwsEntries = ThrowsClauseEntryArray.create()
 		var methodInnerAliasParamOut = MethodInnerAliasParamEntryArray.create()
-		// An extension member is always a METHOD (`enclosingType` is the conformer), so nothing is ever pushed
-		// here — but `recordScannedSignature` writes through the parameter, and passing a shared empty to a
-		// routine that MAY push is how a shared empty stops being empty.
+		// ⭐⭐ **AN EXTENSION BODY'S NESTED TYPEALIASES, KEYED WHOLE-PROGRAM UNDER EACH CONFORMER (W3).** They
+		// were not, and the two things that followed were both real: a `typealias` member ENDED this walk, so
+		// every method declared after one published no signature at all; and a generic-instance alias reached
+		// the real parse's `enclosingInnerAliases` without reaching `genericAliases`, so `ElementArray\{\}`
+		// inside `stdlib/Interfaces.maxon`'s `extension Iterable` was refused as "never keyed whole-program".
+		// The keying is per CONFORMER and that is the whole of why it works: the interface's associated types
+		// are substituted by this conformer's `with` bindings (`openExtensionBodyScope`), so `IntSeq`'s
+		// `ElementArray` interns `Array with Integer` while another conformer's interns its own — the same
+		// `<Type>.<member>` key a nested alias of a `type` body takes (`recordScannedType`).
+		var innerAliasOut = InnerAliasEntryArray.create()
+		var genericAliasOut = GenericAliasEntryArray.create()
+		var functionAliasOut = FunctionTypeAliasArray.create()
+		// An extension member is always a METHOD or a nested typealias (`enclosingType` is the conformer), so
+		// nothing is ever pushed here — but `recordScannedSignature` writes through the parameter, and passing
+		// a shared empty to a routine that MAY push is how a shared empty stops being empty.
 		var freeFunctionNameOut = ByteArrayArray.create()
 
 		self.pos = site.tokenPos
@@ -10977,7 +11015,43 @@ export type Parser
 				// receiver. A member neither understands ends the scan for this conformer rather than being
 				// stepped over: half a signature set is worse than none, and the real parse refuses the
 				// declaration with a position moments later.
-				_ = try self.consumeOptionalVisibility() otherwise break
+				let memberVisibility = try self.consumeOptionalVisibility() otherwise break
+
+				// A NESTED TYPEALIAS, read exactly as `recordScannedType` reads one and keyed under the SAME
+				// `<Type>.<member>` name — the conformer's, because that is `enclosingType` here. It is read
+				// BEFORE the `static` test because a nested alias takes no `static` (the real parse refuses one
+				// that does), and continuing rather than breaking is what lets the methods below it publish.
+				// Tolerant like every other read on this walk: a malformed alias publishes nothing and leaves the
+				// positioned diagnostic to the real parse.
+				if self.atTypeAliasDeclaration() 'nestedTypeAlias'
+					let nested = try self.readNestedTypeAlias(memberVisibility, recordFunctionSignature: false) otherwise break
+
+					// ⚠ **READ ALWAYS, PUBLISH ONLY WHEN THE EXTENSION IS THIS CONFORMER'S** — the withheld
+					// method rule applied to a declaration instead of a signature, and for its reason. The READ
+					// must run whatever the verdict is, or the cursor lands somewhere a published one would not;
+					// the PUBLISH must not, because a CONDITIONAL extension withheld from this conformer gives it
+					// no members, and keying `Box.TagArray` anyway would make the extension's private vocabulary
+					// nameable on a type that receives none of its methods (`parseTypeReference`'s inner-alias arm
+					// resolves that spelling). The real parse skips the conformer whole, so nothing here would
+					// have been looked up — which is precisely why it must not be published.
+					if extensionMethodsWithheld(verdict) 'notThisConformers'
+						continue
+					end 'notThisConformers'
+
+					match nested 'nested'
+						ranged(alias) then innerAliasOut.push(InnerAliasEntry.create(self.enclosingType, alias: alias))
+						genericInstance(entry) then genericAliasOut.push(self.qualifiedInnerGenericAlias(entry))
+						// A FUNCTION alias declares a FILE-scope name (see `NestedAliasResult`), so it is filed
+						// unqualified exactly as `recordScannedTypeAlias` files a top-level one. It is the one form
+						// whose meaning is NOT per-conformer-distinct in the name space: `ElementTransform` written
+						// in `extension Iterable` is one name however many conformers there are, and the last fold
+						// wins. That is unchanged by this rung and is what the real parse already does with it
+						// (`parseTypeMember` pushes it into the file's own array once per conformer).
+						functionAlias(alias) then functionAliasOut.push(alias)
+					end 'nested'
+					continue
+				end 'nestedTypeAlias'
+
 				if self.at(TokenKind.static) 'staticMember'
 					self.advance()
 				end 'staticMember'
@@ -11014,7 +11088,7 @@ export type Parser
 		// there is one place that decides what a scanned signature means. Everything an extension does not
 		// contribute is passed empty; the type-name interner is this reader's own artifact's, exactly as the
 		// per-file sweep passes its own.
-		index.foldFile(entries, aliases: RangedTypeAliasArray.create(), functionAliases: FunctionTypeAliasArray.create(), structs: StructLayoutArray.create(), enums: EnumLayoutArray.create(), genericAliasEntries: GenericAliasEntryArray.create(), innerAliasEntries: InnerAliasEntryArray.create(), methodInnerAliasParamEntries: methodInnerAliasParamOut, interfaceSites: InterfaceDeclSiteArray.create(), extensionSites: ExtensionDeclSiteArray.create(), bindings: TopLevelDeclArray.create(), paramConsumes: paramConsumes, paramDefaults: paramDefaults, throwsEntries: throwsEntries, freeFunctionNames: freeFunctionNameOut, moduleDirectory: index.moduleDirectoryOf(self.filePath), filePath: self.filePath, fileTypeNames: self.artifact.typeNames, isStdlibSource: self.isStdlibSource)
+		index.foldFile(entries, aliases: RangedTypeAliasArray.create(), functionAliases: functionAliasOut, structs: StructLayoutArray.create(), enums: EnumLayoutArray.create(), genericAliasEntries: genericAliasOut, innerAliasEntries: innerAliasOut, methodInnerAliasParamEntries: methodInnerAliasParamOut, interfaceSites: InterfaceDeclSiteArray.create(), extensionSites: ExtensionDeclSiteArray.create(), bindings: TopLevelDeclArray.create(), paramConsumes: paramConsumes, paramDefaults: paramDefaults, throwsEntries: throwsEntries, freeFunctionNames: freeFunctionNameOut, moduleDirectory: index.moduleDirectoryOf(self.filePath), filePath: self.filePath, fileTypeNames: self.artifact.typeNames, isStdlibSource: self.isStdlibSource)
 	end 'foldExtensionDeclarationInto'
 
 	// ⭐⭐ **`extension <Name> [where <constraints>]` — THE ONE READER OF THE HEADER, for the three passes that
@@ -17613,10 +17687,35 @@ export type Parser
 	// RANGED alias mints no identity at all: it ERASES to `integer`/`float`, which is what the builtin does
 	// too, so the two answers agree and there is nothing to refuse. `specs-shv2/generic-type-nested-array-
 	// typealias.md` declares `typealias ExitCode = int(0 to 125)` in all 27 of its cases and is correct to.
+	//
+	// ⭐⭐ **THE CORPUS MAY DECLARE THESE NAMES — IT IS WHERE THEY COME FROM (W3).** The reservation says a
+	// name has ONE meaning, not that the compiler must be the one to write it down: `stdlib/Interfaces.maxon`
+	// declares `Ordering` and `IterationError`, and the compiler now READS those declarations rather than
+	// carrying a second transcription of them (`Project.declaredBuiltinEnum`, the `__Managed*Error` precedent
+	// from A1s). Refusing the corpus here would refuse the very file the layout is read from.
+	//
+	// ⚠ **THE BIT IS `livesUnderStdlibDirectory`, NOT `isStdlibSource`, AND THE DIFFERENCE IS A COMMAND THE
+	// WORKSTREAM RUNS.** `isStdlibSource` answers a VISIBILITY question and deliberately hands a project ROOTED
+	// under `stdlib/` its own files back as the USER's, so gated on it, `maxon-shv2 build stdlib/Interfaces.maxon`
+	// — the readiness probe `StdlibLoader`'s collision rule prescribes — would refuse the module it is checking.
+	// D6 drew this distinction for `stdlib/Builtins.maxon` and `requireStdlibOnlyStringMethod` paid for missing
+	// it; being the declaring site of a compiler-owned name is a property of the FILE, never of how a command
+	// line spelled the project.
+	//
+	// ⚠ It admits stdlib source WHOLESALE rather than mapping each name to one module, and that is exact rather
+	// than loose: a second listed module declaring the same name is an ordinary duplicate definition (E3006,
+	// `commitFuncSignatures`' twin for types), which is a LOUDER answer than a per-name allowlist could give and
+	// one that already exists. What this door owes is only that a USER file may not mint the identity.
 	function requireTypeNameNotCompilerOwned(nameTok Token) throws ParseError
-		if isCompilerOwnedTypeName(nameTok.value) 'compilerOwned'
-			throw ParseError.declarationTakesCompilerOwnedTypeName(String.from(nameTok.value), line: nameTok.line, column: nameTok.column)
-		end 'compilerOwned'
+		if not isCompilerOwnedTypeName(nameTok.value) 'notOwned'
+			return
+		end 'notOwned'
+
+		if self.livesUnderStdlibDirectory 'theDeclaringCorpus'
+			return
+		end 'theDeclaringCorpus'
+
+		throw ParseError.declarationTakesCompilerOwnedTypeName(String.from(nameTok.value), line: nameTok.line, column: nameTok.column)
 	end 'requireTypeNameNotCompilerOwned'
 
 	// ⭐⭐ **THE PARSER-TIER COERCION, PAID.** `TypeRules.widensIntToFloat` states the obligation an `ok`
@@ -23296,6 +23395,11 @@ export type Parser
 		// preheader and computing the next flag in the STEP: a while-shaped loop would advance first and drop
 		// element 0. `partial-availability` counting exactly 2 over a 2-element sequence is the arity check on it.
 		var cursorTypeName = EmptySourceText
+		// What the header's error-flag block-arg starts at for a CURSOR source (W3). `atTheFirstElement` is the
+		// bare cursor form's literal 0 — "no throw yet", which is what makes the first trip unconditional — and
+		// `fromFactory` is a throwing `createIterator()`'s own flag, so an empty collection reports itself
+		// through the loop's ordinary exit test. See `materializeIterableIterationSource`.
+		var cursorEntrySeed = CursorEntrySeed.atTheFirstElement
 		var sourceLock = false
 		// ⭐ **THE E3070 SUBJECT OF THE ELEMENT THIS LOOP WILL BORROW** — resolved HERE, beside the lock and
 		// off the same `sourceStart`, because both are answers about the SOURCE and both must be taken before
@@ -23315,6 +23419,21 @@ export type Parser
 			// `sourceStart` — the token the USER wrote — so `for pair in m` locks `m` and blames `m`, not the
 			// entries temporary that has no name in the source at all.
 			source = try self.materializeMapIterationSource(source, forTok: forTok)
+
+			// ⭐⭐ **AN `Iterable` SOURCE BECOMES ITS CURSOR, AND THEN IT IS A CURSOR LIKE ANY OTHER (W3)** —
+			// the `Map` rewrite one interface over, and placed beside it for the same reasons: it runs before
+			// the lock and the borrow subject, both of which go on keying on `sourceStart`, the token the USER
+			// wrote. See `materializeIterableIterationSource` for why the ENTRY SEED travels with the cursor.
+			let iterable = try self.materializeIterableIterationSource(func, source: source, forTok: forTok)
+			source = match iterable 'walkedValue'
+				notIterable gives source
+				cursor(iterator, _) gives iterator
+			end 'walkedValue'
+			cursorEntrySeed = match iterable 'walkedSeed'
+				notIterable gives cursorEntrySeed
+				cursor(_, seed) gives CursorEntrySeed.fromFactory(seed)
+			end 'walkedSeed'
+
 			try self.requireIterableSource(source, forTok: forTok)
 			isString = tagIsText(self.tagOf(source))
 			isList = self.signatures.isListInstanceAt(self.tagOf(source), nameId: self.valueNameId(source))
@@ -23412,8 +23531,27 @@ export type Parser
 				firstIndex = self.emitLiteral(0, valueType: MaxonType.integer, range: SourceRange.ofToken(forTok))
 			end 'counterStartsAtZero'
 		end 'countedForms'
-		self.recordBranchEdge(self.currentBlock, targetId: header.id, argIds: self.loopHeaderArgs(firstIndex, carried: self.edgeArgsFor(phiVars, preLoop: true)))
-		self.emitBranch(self.currentBlock, targetId: header.id)
+		// The carried bindings' PRE-loop values, captured here because the empty-`Iterable` edge below needs
+		// them again at the join and the bindings themselves are rebound as the body is parsed.
+		let entryCarried = self.edgeArgsFor(phiVars, preLoop: true)
+		self.recordBranchEdge(self.currentBlock, targetId: header.id, argIds: self.loopHeaderArgs(firstIndex, carried: entryCarried))
+
+		// ⭐⭐ **AN EMPTY `Iterable` SKIPS THE LOOP *AND ITS EXIT DROPS* (W3)**, which is why this is a BRANCH
+		// and not a seeded flag. A throwing `createIterator()` reports emptiness by throwing
+		// (`stdlib/Interfaces.maxon:132-134`), and on that path it returned NO cursor — so the exit block's
+		// `emitScopeDrops`, which releases the cursor the loop owns, must not run.
+		//
+		// ⚠ **MEASURED, on the first cut, which seeded the header's error flag with the factory's instead:**
+		// the loop correctly ran zero trips and then `__destruct_<Cursor>` was called on the throw path's
+		// leftover return register — **SIGSEGV**, on `for v in <an empty Iterable>`. Seeding gets the CONTROL
+		// FLOW right and says nothing about OWNERSHIP, and shv2's ownership is static: one owner, dropped at
+		// one point, with no conditional-drop form to express "only if it was created". So the path that owns
+		// nothing must not reach the point that drops.
+		var emptyExit = EmptyIterableExit.none
+		match cursorEntrySeed 'entry'
+			atTheFirstElement then self.emitBranch(self.currentBlock, targetId: header.id)
+			fromFactory(flag) then emptyExit = EmptyIterableExit.entered(self.emitEmptyIterableEntry(func, flag: flag, header: header, forTok: forTok))
+		end 'entry'
 
 		// The loop test, in the header. For a range it is the user's own comparison against the upper
 		// bound and goes through `emitCompare`, so `for i in 1 to "x"` is the ordinary comparison type
@@ -23663,8 +23801,62 @@ export type Parser
 		self.currentBlock = exit
 		self.emitScopeDrops(exit, floor: forMark.ownedCount, anchor: forTok)
 		self.closeBlock(forMark)
-		return exit
+
+		// The empty-`Iterable` path rejoins here, PAST the drops above — see `emitEmptyIterableEntry`.
+		match emptyExit 'emptied'
+			none then return exit
+			entered(empty) then return self.joinAfterEmptyIterable(func, empty: empty, exit: exit, entryCarried: entryCarried, phiVars: phiVars, forTok: forTok)
+		end 'emptied'
 	end 'parseForStatement'
+
+	// ⭐ **THE PREHEADER'S "DID THE FACTORY GIVE US A CURSOR?" BRANCH (W3)** — the taken edge is the ordinary
+	// loop entry recorded by the caller, the other lands in a fresh block that carries NOTHING and rejoins past
+	// the loop's exit drops (`joinAfterEmptyIterable`). The test is `flag == 0`, the SAME sense the header's own
+	// exit test uses on `advance()`'s flag, and it is emitted through the same `emitCompareAgainstLiteral` an
+	// enum `match` arm uses — so "did it throw?" is one comparison in this file, not two.
+	function emitEmptyIterableEntry(func IrFunction, flag ValueId, header IrBlock, forTok Token) returns IrBlock
+		let empty = self.newBlock(func, label: b"forempty", line: forTok.line)
+		let gotCursor = self.emitCompareAgainstLiteral(flag, literal: 0, op: MaxonCmpOp.eq, opTok: forTok)
+		// The empty block carries no binding: every carried value it needs is supplied on ITS edge into the
+		// join, straight from the pre-loop set, because nothing between here and there can have assigned one.
+		self.recordBranchEdge(self.currentBlock, targetId: empty.id, argIds: ValueIdArray.create())
+		self.emitCondBranch(self.currentBlock, cond: gotCursor, thenId: header.id, elseId: empty.id, ifTok: forTok)
+		return empty
+	end 'emitEmptyIterableEntry'
+
+	// ⭐⭐ **THE MERGE THE SECOND ENTRY EDGE FORCES (W3).** With an empty-`Iterable` path the loop statement has
+	// TWO successors to reconcile — the exit, where the carried bindings hold whatever the body last assigned,
+	// and the empty block, where they still hold their pre-loop values — so the statement's continuation is a
+	// JOIN with a phi per carried binding. It is `wireLoopExit`'s shape (`mintPhiForBinding` +
+	// `pushMergedEdgeValue`, in that pairing order) applied one block later, and it exists for the same reason:
+	// a `var` assigned inside the loop must read correctly after it on BOTH paths.
+	//
+	// The pre-loop args are the caller's own entry-edge args, reused rather than re-derived: `edgeArgsFor`
+	// answers off `pv.entryValue`, and asking it twice would be one fact computed twice.
+	function joinAfterEmptyIterable(func IrFunction, empty IrBlock, exit IrBlock, entryCarried ValueIdArray, phiVars LoopPhiVarArray, forTok Token) returns IrBlock
+		var join = self.newBlock(func, label: b"forjoin", line: forTok.line)
+
+		// Collected BEFORE the phis are minted, because minting rebinds each binding to its phi and the exit
+		// edge must carry what the binding held on the way OUT of the loop.
+		var loopVals = ValueIdArray.create()
+		for k in 0 upto phiVars.count() 'exitEdge'
+			var pv = try phiVars.get(k) otherwise panic("joinAfterEmptyIterable: phiVars.get OOB at {k}")
+			self.pushMergedEdgeValue(loopVals, binding: pv.binding, value: pv.binding.boundValue)
+		end 'exitEdge'
+
+		for k in 0 upto phiVars.count() 'mkJoinPhi'
+			var pv = try phiVars.get(k) otherwise panic("joinAfterEmptyIterable: phiVars.get OOB at {k}")
+			pv.binding.boundValue = self.mintPhiForBinding(join, binding: pv.binding)
+		end 'mkJoinPhi'
+
+		self.recordBranchEdge(exit, targetId: join.id, argIds: loopVals)
+		self.emitBranch(exit, targetId: join.id)
+		self.recordBranchEdge(empty, targetId: join.id, argIds: entryCarried)
+		self.emitBranch(empty, targetId: join.id)
+
+		self.currentBlock = join
+		return join
+	end 'joinAfterEmptyIterable'
 
 	// ⭐ **THE `for` HEADER'S LOOP-VARIABLE PATTERN, as the LIST OF NAMES it always was.** `for (key, value) in`
 	// is `parseDestructuringNames`' pattern — the same one `let (x, y) = …` reads, so `_` discards a position
@@ -23812,6 +24004,73 @@ export type Parser
 
 		return try self.emitMapEntriesArray(self.valueNameId(source), map: source, anchor: forTok, range: SourceRange.ofToken(forTok))
 	end 'materializeMapIterationSource'
+
+	// ⭐⭐ **AN `Iterable` SOURCE IS REPLACED BY THE CURSOR ITS `createIterator()` RETURNS (W3)** — the SECOND
+	// rewrite `parseForStatement`'s collection fork performs, and a rewrite for `materializeMapIterationSource`'s
+	// exact reason: what comes back is a cursor, and the cursor form already knows everything about walking one.
+	// It is what makes `for item in self` inside `stdlib/Interfaces.maxon`'s `extension Iterable` mean what that
+	// file's own documentation says it means (*"types that can be iterated over (used by for-in loops)"*), and
+	// it is how `stdlib/Range.maxon` and `stdlib/helpers/string/views.maxon` become iterable.
+	//
+	// ⭐ **A SOURCE THAT IS ALREADY A CURSOR IS LEFT ALONE, AND THAT PRECEDENCE IS THE PROTOCOL'S.** An iterator
+	// may itself declare `createIterator` (the identity passthrough both references implement), and
+	// `for x in iter` over a HALF-CONSUMED iterator must resume from where it stands rather than restarting —
+	// so the cursor protocol is tested first and wins.
+	//
+	// ⚠ **THE ENTRY SEED IS THE OTHER HALF OF THE ANSWER, AND WITHOUT IT AN EMPTY COLLECTION RUNS ONE TRIP.**
+	// The cursor form is a DO-WHILE (see `parseForStatement`'s header): its first test is licensed by the
+	// protocol's invariant that a live cursor is already positioned on an element. A throwing factory is
+	// exactly the case where that invariant does not hold — `stdlib/Interfaces.maxon:132-134` has the
+	// constructor throw `exhausted` for an empty collection — so the factory's own error flag becomes the
+	// value the header starts from, and the loop's ordinary exit test does the rest. An INFALLIBLE factory
+	// cannot report emptiness at all, so its seed is the literal 0 the bare cursor form uses.
+	function materializeIterableIterationSource(func IrFunction, source ValueId, forTok Token) returns IterableIterationSource throws ParseError
+		// The tag gate is `cursorIterationTypeName`'s and is here for its reason: a source that is not a struct
+		// declares no method, and `valueTypeName` of one would be a name no registry answers for.
+		if self.tagOf(source) != ValueTypeTag.structRef 'notAStruct'
+			return IterableIterationSource.notIterable
+		end 'notAStruct'
+
+		let typeName = self.valueTypeName(source)
+		if self.signatures.declaresCursorProtocol(typeName) 'alreadyACursor'
+			return IterableIterationSource.notIterable
+		end 'alreadyACursor'
+
+		match self.signatures.iterableFactory(typeName) 'factory'
+			notDeclared then return IterableIterationSource.notIterable
+			infallible then return IterableIterationSource.cursor(try self.emitIterableFactoryCall(typeName, source: source, forTok: forTok), entrySeed: self.emitLiteral(0, valueType: MaxonType.integer, range: SourceRange.ofToken(forTok)))
+			throwsIterationError then break 'factory'
+			throwsSomethingElse(errorName) then throw ParseError.unsupported("`for … in` over a `{String.from(typeName)}`, whose `{String.from(CreateIteratorMethodName)}()` throws `{errorName}` — the loop absorbs what the traversal protocol throws without binding it, which is sound only for the payload-free `{String.from(IterationErrorTypeName)}`; a factory throwing anything else must be called with an explicit `try` and its result iterated", line: forTok.line, column: forTok.column)
+		end 'factory'
+
+		// The THROWING factory. `rewriteLastCallToTryCall` is the same rewrite `emitCursorAdvance` uses on
+		// `advance()`, taken here for the same reason: it is the ONE place a `call` becomes one that also
+		// defines an error flag, and a second site building the `tryCall` op itself would be a second answer to
+		// which results that op defines and in what order.
+		let targetOpFloor = self.artifact.module.ops.count()
+		// ⚠ **THE BLOCK-FORM ROUTER IS SUPPRESSED FOR `emitCursorAdvance`'s STATED REASON** — whoever is going
+		// to turn this `call` into a `tryCall` must stop the router turning it into a different one first. A
+		// `for x in someIterable` inside a `try 'l' … end` body is the reaching program.
+		let savedRoutingSuppressed = self.tryBlockRoutingSuppressed
+		self.tryBlockRoutingSuppressed = true
+		let cursor = try self.emitIterableFactoryCall(typeName, source: source, forTok: forTok)
+		self.tryBlockRoutingSuppressed = savedRoutingSuppressed
+
+		let flag = self.mintValue(ValueTypeTag.integer, nameId: UnnamedTypeId)
+		_ = try self.rewriteLastCallToTryCall(func, flag: flag, tryTok: forTok, targetOpFloor: targetOpFloor)
+		return IterableIterationSource.cursor(cursor, entrySeed: flag)
+	end 'materializeIterableIterationSource'
+
+	// `<Type>.createIterator(source)` — the one call the rewrite above emits, in both the fallible and the
+	// infallible arm, so the two cannot come to name the callee differently. It is `emitCursorProtocolCall`'s
+	// shape one method over and deliberately not that function: this call takes its receiver from the
+	// ITERABLE and produces the value the cursor calls then take theirs from.
+	function emitIterableFactoryCall(typeName ByteArray, source ValueId, forTok Token) returns ValueId throws ParseError
+		var args = singletonArgs(source)
+		var argLabels = emptyArgLabels(args)
+		var argRanges = uniformArgRanges(args, range: SourceRange.ofToken(forTok))
+		return try self.emitCall(qualifiedMethodName(typeName, methodName: CreateIteratorMethodName), anchor: forTok, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: NoImmutableArgNames, rparenTok: forTok, resultUsed: true, constructorInstance: ConstructorInstance.none, mint: CalleeMint.notMinted)
+	end 'emitIterableFactoryCall'
 
 	// ⭐ **WHAT A `for … in` MAY ITERATE.** An `Array` instance — the only container whose element read is a
 	// random-access index, which is what the counter lowering requires — plus the `Vector` whose record IS an
@@ -31157,8 +31416,14 @@ export type Parser
 	// Every tag is read OFF the `Ordering` layout (`EnumLayout.tagOfCase`), never written as a literal; the layout is
 	// fetched ONCE here rather than per arm. The compare itself is `emitCompareAgainstLiteral`, the SAME tag compare
 	// an enum `match` arm emits — so `a < b` and a hand-written `match a.compare(b)` agree by construction.
+	//
+	// ⭐ **AND THE LAYOUT IS THE CORPUS'S OWN (W3)** — `stdlib/Interfaces.maxon`'s declaration, out of the
+	// whole-program index, rather than a transcription of it in `Project.builtinOrderingEnum`. The Std-tier
+	// `compare` impls whose result this tests read the SAME declaration
+	// (`BuiltinConformanceRuntime.installBuiltinConformanceRuntime`), so the producer and the consumer of
+	// this tag cannot come to number the cases differently.
 	function emitOrderingVerdict(orderingResult ValueId, op MaxonCmpOp, opTok Token) returns ValueId
-		let ordering = builtinOrderingEnum()
+		let ordering = requireCorpusDeclaredEnum(self.signatures.enumTypes, typeName: OrderingTypeName, reader: "the `<`/`>`/`<=`/`>=` lowering")
 		let lessThanTag = ordering.tagOfCase(OrderingLessThanCaseName)
 		let greaterThanTag = ordering.tagOfCase(OrderingGreaterThanCaseName)
 
@@ -32783,15 +33048,20 @@ export type Parser
 			throw ParseError.unsupported("a struct literal naming `{String.from(aliasTok.value)}`, a ranged numeric typealias declared by `{String.from(self.enclosingType)}` — a number declares no fields to write, so write the number itself. `\{\}` on an inner alias builds the EMPTY CONTAINER a container alias denotes, and a numeric alias denotes no container", line: aliasTok.line, column: aliasTok.column)
 		end 'rangedNumeric'
 
-		// ⛔ AN `extension` BODY'S NESTED ALIAS IS IN NEITHER WHOLE-PROGRAM REGISTRY. `recordScannedExtension`
-		// consumes an `extension` whole and `foldExtensionDeclarationInto` publishes only its METHOD
-		// signatures, so a `typealias` declared in one is known to this body alone (`enclosingInnerAliases`,
-		// which the real parse fills as it reads the member) and there is no interned instance to create.
-		// Refused by name: the oracle compiles `stdlib/Interfaces.maxon`'s `extension Iterable` shape, and
-		// keying an extension's nested aliases whole-program is a mechanism of its own — E3076 would answer it
-		// by recommending `TagArray.create()`, which fails one door over with a value of type `unknown`.
+		// ⛔ THE ALIAS IS IN NEITHER WHOLE-PROGRAM REGISTRY, so there is no interned instance to create.
+		//
+		// ⭐ **W3 REMOVED THE CASE THIS ARM WAS WRITTEN FOR AND LEFT THE ARM.** It said an `extension` body's
+		// nested alias is *never* keyed whole-program — true until `foldExtensionDeclarationInto` began keying
+		// one per CONFORMER, which is what makes `stdlib/Interfaces.maxon`'s `extension Iterable` compile
+		// (`map`/`filter` open with `var result = ElementArray\{\}`). What can still arrive here is the
+		// declaration sweep having failed to publish an alias the REAL parse went on to accept locally: both
+		// walks are tolerant by design (`recordScannedType`, `foldExtensionDeclarationInto`), and a malformed
+		// member earlier in the body ends the sweep's walk while `enclosingInnerAliases` is filled by the parse
+		// that reaches this literal. That program is being refused for its real fault a moment later; this arm
+		// exists so the refusal it gets HERE is not E3076's, whose cure (`{alias}.create()`) fails one door over
+		// with a value of type `unknown`.
 		if not self.signatures.isGenericAlias(qualified) 'notKeyedWholeProgram'
-			throw ParseError.unsupported("a struct literal naming `{String.from(aliasTok.value)}`, a typealias declared by an `extension` body — the declaration sweep consumes an `extension` whole, so a nested alias of one is never keyed whole-program and there is no container instance for the literal to build. Declare the alias at file scope, or in the conforming type's own body", line: aliasTok.line, column: aliasTok.column)
+			throw ParseError.unsupported("a struct literal naming `{String.from(aliasTok.value)}`, an inner typealias of `{String.from(self.enclosingType)}` that the whole-program declaration sweep did not key — so there is no container instance for the literal to build. A sweep stops early at a member it cannot read, so the declaration this one shares a body with is the fault to look for", line: aliasTok.line, column: aliasTok.column)
 		end 'notKeyedWholeProgram'
 
 		let giid = self.signatures.genericAliasInstanceFrom(qualified, readerFilePath: self.filePath)
