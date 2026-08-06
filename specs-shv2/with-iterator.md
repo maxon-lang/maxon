@@ -34,8 +34,8 @@ Iterators are first-class values. Pass a half-consumed iterator into a function 
 ## Tests
 
 <!-- disabled-test: withIterator.basic -->
-<!-- BLOCKED: `Array` does not serve `withIterator` — it is a compiler builtin with a fixed member roster (`managed/get/set/…`), and `Iterable`'s extension method is not on it. MEASURED 2026-08-06 (W6): this is the FIRST blocker, reached before any tuple question. Behind it, `stdlib/helpers/itertools/withIterator.maxon` needs ASSOCIATED-TYPE BINDING, not the tuple refusal W6 removed: `source.current()` on a `where Source is Iterator` parameter types as the interface's own unbound `E`, so the body yields `__Tuple2.T0.Element` against a declared `__Tuple2.T0.T1`. Reproduces with no stdlib; v1 binds it in `TypeResolution.resolveGenericAliasArgName`. -->
-<!-- W6 -->
+<!-- BLOCKED: `Array` is not an `Iterable` CONFORMER at all — it is a compiler builtin with a fixed member roster, so `Iterable`'s extension methods never reach it. RE-MEASURED 2026-08-06 (W7): `E2015 … `Array` member 'withIterator'`, and `createIterator` is missing from the same roster by the same message, which is `S2l`'s subject ("shv2 iterates an `Array` with an index counter and mints no cursor object at all") — hence the rung line below, measured rather than inferred. ⚠ THIS MARKER'S SECOND HALF WAS WRONG AND IS REPLACED. It said the module behind this needs ASSOCIATED-TYPE BINDING (`__Tuple2.T0.Element` against a declared `__Tuple2.T0.T1`, v1's `TypeResolution.resolveGenericAliasArgName`). That E3005 was measured while W6's tuple mechanism was APPLIED, and W6 then REVERTED it, so it is not reachable on this tree in any program, with or without stdlib. MEASURED at W7: `maxon-shv2 build stdlib/helpers/itertools/withIterator.maxon` stops one step EARLIER, at `E2015 … a tuple whose element 0 is 'type parameter'` (`withIterator.maxon:12:36`) — the tuple-identity refusal, i.e. row W9. -->
+<!-- S2l -->
 ```maxon
 function main() returns ExitCode
 	let arr = [10, 20, 30]
@@ -97,8 +97,8 @@ end 'main'
 ```
 
 <!-- disabled-test: withIterator.body-advance-skips-element -->
-<!-- BLOCKED: `Array` member 'withIterator' — same first blocker as `withIterator.basic`, measured 2026-08-06 (W6). -->
-<!-- W6 -->
+<!-- BLOCKED: `Array` member 'withIterator' — same first blocker as `withIterator.basic`, re-measured 2026-08-06 (W7); see that marker for the second-blocker correction. -->
+<!-- S2l -->
 Calling `iter.advance()` inside the for-loop body skips the next element. Body runs on 10, advances to 20, header advances again to 30; so 20 is skipped.
 ```maxon
 function main() returns ExitCode
@@ -119,8 +119,8 @@ end 'main'
 ```
 
 <!-- disabled-test: withIterator.body-retreat-revisits-element -->
-<!-- BLOCKED: `Array` member 'withIterator' — same first blocker as `withIterator.basic`, measured 2026-08-06 (W6). -->
-<!-- W6 -->
+<!-- BLOCKED: `Array` member 'withIterator' — same first blocker as `withIterator.basic`, re-measured 2026-08-06 (W7); see that marker for the second-blocker correction. -->
+<!-- S2l -->
 Calling `iter.retreat()` inside the body causes the next iteration to re-visit the current element. Without the guard, this would loop forever — we stop after a fixed count.
 ```maxon
 function main() returns ExitCode

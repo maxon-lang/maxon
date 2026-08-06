@@ -407,6 +407,301 @@ end 'main'
 error E3076: <fragment>:16:11: 'IntPair' can only be constructed inside its own methods; use a static factory such as 'IntPair.create(...)'
 ```
 
+### ⭐ …and the CURE THAT DIAGNOSTIC NAMES ACTUALLY WORKS — the half that was missing (W7)
+
+The SAME program as `user-generic-inner-alias-keeps-e3076`, written the way its message tells the author to
+write it. Until W7 this answered `E2015 … a field access on 'p', which is declared 'unknown'` — the cure
+E3076 names produced a value of no type, so the refusal above sent every author into a second refusal. The
+bootstrap compiles and runs it (**exit 9**, measured), so the divergence was shv2's alone.
+
+⚠ **A DIAGNOSTIC THAT NAMES A CURE OWES A CASE THAT TAKES IT.** The refusal above was specced and the cure
+was not, which is precisely why a defect this reachable survived: `Parser.parseInnerAliasLiteral`'s own
+comment recorded it in prose (*"whose cure (`{alias}.create()`) fails one door over with a value of type
+`unknown`"*) two arms above another comment calling the cure *"real"*. Two sentences in one function
+disagreeing, with nothing running either.
+
+<!-- test: user-generic-inner-alias-create-is-the-cure -->
+```maxon
+typealias ExitCode = int(0 to 125)
+
+type Pair uses T
+	export var a as T
+
+	export static function create(a T) returns Self
+		return Self{a: a}
+	end 'create'
+end 'Pair'
+
+type Plain
+	typealias IntPair = Pair with ExitCode
+
+	static function make() returns ExitCode
+		let p = IntPair.create(9)
+		return p.a
+	end 'make'
+end 'Plain'
+
+function main() returns ExitCode
+	return Plain.make()
+end 'main'
+```
+```exitcode
+9
+```
+
+### …and the alias's argument may be the ENCLOSING TYPE'S OWN PARAMETER
+
+The shape v1 resolves in `TypeResolution.resolveGenericAliasArgName` — the alias's argument is a name in the
+declaring type's `uses` list, so `Wrap.ItemHolder` is `Holder with typeParameter(0)` and the instantiation
+`Wrap with ExitCode` decides what that is. The declaration sweep already resolved the argument that way (it
+is what makes `Array with T` work); what was missing was the STATIC CALL door reading the alias back under
+its whole-program key. Bootstrap: **exit 7**, measured.
+
+<!-- test: generic-body-user-generic-inner-alias-create -->
+```maxon
+typealias ExitCode = int(0 to 125)
+
+type Holder uses Held
+	let value as Held
+
+	export static function create(value Held) returns Self
+		return Self{value: value}
+	end 'create'
+
+	export function get() returns Held
+		return value
+	end 'get'
+end 'Holder'
+
+type Wrap uses Item
+	typealias ItemHolder = Holder with Item
+
+	var seed as Item
+
+	export static function create(seed Item) returns Self
+		return Self{seed: seed}
+	end 'create'
+
+	export function boxed() returns ItemHolder
+		return ItemHolder.create(seed)
+	end 'boxed'
+end 'Wrap'
+
+typealias IntWrap = Wrap with ExitCode
+
+function main() returns ExitCode
+	let w = IntWrap.create(7)
+	return w.boxed().get()
+end 'main'
+```
+```exitcode
+7
+```
+
+### …and an `extension` body's inner alias over a USER type reaches its static too
+
+`extension-body-inner-alias-builds-the-container` pinned the BUILTIN half of this; a user type's generic
+instance took the same fall-through as `IntPair` did, because the arm that recognises an inner alias here
+served only the containers this compiler owns. It is one door, so it is one fix.
+
+⚠ **THE ORACLE REFUSES THIS STANDALONE PROGRAM (`E3003: 'WrappedTag' is a type and cannot be used directly
+as a value`, measured) WHILE ACCEPTING THE IDENTICAL SHAPE IN ITS OWN `stdlib/`.** `stdlib/Interfaces.maxon`
+declares `typealias WithIterSelf = WithIterIterator with Iter, Element` inside `extension Iterable` and
+returns `WithIterSelf.create(iter)` from `:223` — over `WithIterIterator`, a user `type` — and the bootstrap
+compiles and runs a program driving it (`arr.withIterator()`, measured: `0:10 1:20 2:30`). So the refusal is
+a limitation of the bootstrap's standalone path and not a ruling about the shape; the stdlib is the witness
+for what the language means here, and shv2 answers it uniformly at every declaration site.
+
+<!-- test: extension-body-user-generic-inner-alias-create -->
+```maxon
+typealias ExitCode = int(0 to 125)
+
+type Wrapped uses T
+	let value as T
+
+	export static function create(value T) returns Self
+		return Self{value: value}
+	end 'create'
+
+	export function get() returns T
+		return value
+	end 'get'
+end 'Wrapped'
+
+interface Tagged uses Tag
+	function tag() returns Tag
+end 'Tagged'
+
+export extension Tagged
+	typealias WrappedTag = Wrapped with Tag
+
+	export function wrapped() returns WrappedTag
+		return WrappedTag.create(self.tag())
+	end 'wrapped'
+end 'Tagged'
+
+type Box implements Tagged with ExitCode
+	export var v as ExitCode
+
+	export static function create() returns Self
+		return Self{v: 5}
+	end 'create'
+
+	export function tag() returns ExitCode
+		return self.v
+	end 'tag'
+end 'Box'
+
+function main() returns ExitCode
+	let b = Box.create()
+	return b.wrapped().get()
+end 'main'
+```
+```exitcode
+5
+```
+
+### …and the factory's PER-INSTANCE provenance survives the qualified key
+
+The composition risk in reading an inner alias under its base-qualified key: `retypeGenericAliasConstructorResult`
+records that key as the value's instance-alias provenance, and `Pair.Idx` results are re-qualified against it
+(`retypeInstanceMethodResult`). `splitQualifiedName` cuts at the LAST separator, so `Plain.IntPair.Idx`
+splits to the prefix `Plain.IntPair` — a real `genericAliases` key — whose base is `Pair`, and the inner
+alias `Pair.Idx` is found. Both compilers answer **4**.
+
+<!-- test: user-generic-inner-alias-create-carries-per-instance-identity -->
+```maxon
+typealias ExitCode = int(0 to 125)
+
+type Pair uses T
+	typealias Idx = int(0 to 100)
+
+	export var a as T
+
+	export static function create(a T) returns Self
+		return Self{a: a}
+	end 'create'
+
+	export function firstIndex() returns Idx
+		return 3
+	end 'firstIndex'
+
+	export function offsetBy(i Idx) returns Idx
+		return i + 1
+	end 'offsetBy'
+end 'Pair'
+
+type Plain
+	typealias IntPair = Pair with ExitCode
+
+	static function make() returns ExitCode
+		let p = IntPair.create(9)
+		let i = p.firstIndex()
+		return p.offsetBy(i)
+	end 'make'
+end 'Plain'
+
+function main() returns ExitCode
+	return Plain.make()
+end 'main'
+```
+```exitcode
+4
+```
+
+### ⚖ An inner alias SHADOWING ANOTHER type's name wins at the STATIC door too, as it already did at the TYPE door
+
+The precedence W7 moved, and it moved to remove a disagreement rather than to introduce one.
+`namesInnerAliasHere`'s header states the rule the three doors share: the enclosing type's own name and its
+type parameters outrank an inner alias, and nothing else does. `parseTypeReference` has always obeyed it —
+MEASURED on this program's parameter form, `p Other` inside `Plain` is `Plain.Other` and a bare `Pair`
+argument is refused *"expected 'Plain.Other', got 'Pair'"*. The STATIC door alone read the bare member, found
+no alias registration under it, and silently fell through to the unrelated top-level `type Other`'s
+`create`, so one written name meant two types in one body — which is exactly what that header forbids.
+
+⚠ **THE ORACLE IS MEASURABLY BROKEN ON THIS PROGRAM AND IS NOT THE MODEL HERE**: it lets `Plain`'s inner
+alias shadow the top-level `type Other` GLOBALLY, refusing `type Other`'s own constructor with
+`E3018: Type 'Other' has no field 'b'` at `:15`, inside the declaration the alias is not even in scope for.
+
+<!-- test: inner-alias-shadowing-another-type-wins-at-the-static-door -->
+```maxon
+typealias ExitCode = int(0 to 125)
+
+type Pair uses T
+	export var a as T
+
+	export static function create(a T) returns Self
+		return Self{a: a}
+	end 'create'
+end 'Pair'
+
+type Other
+	export var b as ExitCode
+
+	export static function create(v ExitCode) returns Self
+		return Self{b: v}
+	end 'create'
+end 'Other'
+
+type Plain
+	typealias Other = Pair with ExitCode
+
+	static function make() returns ExitCode
+		let p = Other.create(9)
+		return p.a
+	end 'make'
+end 'Plain'
+
+function main() returns ExitCode
+	return Plain.make()
+end 'main'
+```
+```exitcode
+9
+```
+
+### ⚠ THE FALSE-ACCEPT GUARD: an inner alias's static must NOT outrank the enclosing type's own name
+
+`namesInnerAliasHere` is the one predicate that keeps the three doors agreeing, and this is the case that
+holds the static door to it: `type Holder` declaring `typealias Holder = Pair with ExitCode` means the TYPE
+at `Holder.create()`, so the call reaches `Holder`'s own static and not `Pair`'s. Its literal twin is
+`an-inner-alias-shadowing-its-own-type` one heading up.
+
+<!-- test: an-inner-alias-shadowing-its-own-types-static -->
+```maxon
+typealias ExitCode = int(0 to 125)
+
+type Pair uses T
+	export var a as T
+
+	export static function create(a T) returns Self
+		return Self{a: a}
+	end 'create'
+end 'Pair'
+
+type Holder
+	typealias Holder = Pair with ExitCode
+
+	export var seed as ExitCode
+
+	export static function create() returns Holder
+		return Self{seed: 4}
+	end 'create'
+
+	export function seedValue() returns ExitCode
+		return self.seed
+	end 'seedValue'
+end 'Holder'
+
+function main() returns ExitCode
+	let h = Holder.create()
+	return h.seedValue()
+end 'main'
+```
+```exitcode
+4
+```
+
 ### A RANGED inner alias has nothing to construct
 
 `{}` on an inner alias means the alias's empty CONTAINER, and a number is not one. It is refused by what it

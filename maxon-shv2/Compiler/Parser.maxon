@@ -16174,6 +16174,36 @@ export type Parser
 		return self.enclosingInnerAliases.contains(name)
 	end 'namesInnerAliasHere'
 
+	// ⭐⭐ **THE WHOLE-PROGRAM `genericAliases` KEY A WRITTEN BASE NAME DENOTES — the one home of "which
+	// registration is this spelling?" for the static-call doors (W7).** A file-scope generic alias is keyed
+	// under its own name (`IntBox`); an INNER one under the enclosing type's, base-qualified
+	// (`Plain.IntPair`) — `recordScannedType` and `foldExtensionDeclarationInto` both re-key it through
+	// `qualifiedInnerGenericAlias`, because a bare member collides with another type's same-named alias.
+	// A caller here holds the name the AUTHOR wrote, which is the bare member for both.
+	//
+	// ⛔ **ASKING THE BARE NAME WAS A SILENT WRONG ANSWER, NOT A REFUSAL.** `parseQualifiedCall` makes four
+	// alias-driven decisions and every one of them missed for an inner alias over a USER generic base, so
+	// `IntPair.create(9)` mangled onto a callee no file declares and `mintCallResult` typed the value
+	// `unresolved`. The program was then refused for a field access on `unknown` — one door past E3076's own
+	// advice to write exactly that call, which is why `parseInnerAliasLiteral` had recorded the failure in
+	// prose while a comment two arms below it called the same cure "real". MEASURED: the bootstrap compiles
+	// and runs that program (exit 9).
+	//
+	// A name that is not an inner alias here, and one the declaration sweep did not key, are both handed back
+	// unchanged — the callers' file-scope reading, and the tolerant sweep's `no` for every name.
+	function genericAliasKeyFor(name ByteArray) returns ByteArray
+		if not self.namesInnerAliasHere(name) 'notInnerAlias'
+			return name
+		end 'notInnerAlias'
+
+		let qualified = joinQualifiedName(self.enclosingType, member: name)
+		if not self.signatures.isGenericAlias(qualified) 'notKeyedWholeProgram'
+			return name
+		end 'notKeyedWholeProgram'
+
+		return qualified
+	end 'genericAliasKeyFor'
+
 	// ⭐ **RESOLVE A `named` STRUCT REFERENCE TO `structRef` — the parse-time half of what `resolveTypes`
 	// does to a signature.** `parseTypeReference` mints `structRef` SYNTACTICALLY for `Self` and the
 	// enclosing type's own name (they need no registry), but leaves every OTHER type name `named`,
@@ -33072,8 +33102,8 @@ export type Parser
 		// walks are tolerant by design (`recordScannedType`, `foldExtensionDeclarationInto`), and a malformed
 		// member earlier in the body ends the sweep's walk while `enclosingInnerAliases` is filled by the parse
 		// that reaches this literal. That program is being refused for its real fault a moment later; this arm
-		// exists so the refusal it gets HERE is not E3076's, whose cure (`{alias}.create()`) fails one door over
-		// with a value of type `unknown`.
+		// exists so the refusal it gets HERE is not E3076's, whose cure (`{alias}.create()`) has nothing to
+		// resolve either when the sweep never keyed the alias.
 		if not self.signatures.isGenericAlias(qualified) 'notKeyedWholeProgram'
 			throw ParseError.unsupported("a struct literal naming `{String.from(aliasTok.value)}`, an inner typealias of `{String.from(self.enclosingType)}` that the whole-program declaration sweep did not key — so there is no container instance for the literal to build. A sweep stops early at a member it cannot read, so the declaration this one shares a body with is the fault to look for", line: aliasTok.line, column: aliasTok.column)
 		end 'notKeyedWholeProgram'
@@ -33083,7 +33113,9 @@ export type Parser
 		// ⛔ A USER TYPE'S GENERIC INSTANCE KEEPS E3076, and that is the ONE inner-alias form the widening
 		// deliberately does not reach. `typealias IntPair = Pair with Count` denotes `Pair`, whose invariants
 		// are `Pair`'s own to establish — writing its literal here is exactly what the restriction is for, and
-		// the cure it names (`IntPair.create(…)`) is real. (The oracle ACCEPTS it, which voids its own E3076 for
+		// the cure it names (`IntPair.create(…)`) is real: it resolves through `genericAliasKeyFor` and is
+		// pinned by `user-generic-inner-alias-create-is-the-cure`, which is the half W7 built after this
+		// sentence had claimed it for a while without a case. (The oracle ACCEPTS it, which voids its own E3076 for
 		// any type willing to declare an alias; that divergence is deliberate.) Anchored at the alias token,
 		// which is where `requireConstructible` anchors it, so the diagnostic does not move.
 		if not self.signatures.isBuiltinGenericBaseName(self.signatures.genericInstanceBaseName(giid)) 'userType'
@@ -34461,8 +34493,18 @@ export type Parser
 			return try self.parseStringStaticCall(func, typeTok: typeTok)
 		end 'stringStatic'
 
-		// `IntArray.create()` / `IntSet.create()` / `StrMap.create()` / `PointList.create()` — a static call on a
-		// BUILTIN-CONTAINER instance alias (P1.7 slice 1, P1.7b slice A, `Map`, `List`). Every one is intercepted
+		// ⭐⭐ **THE GENERIC ALIAS THIS CALL'S BASE NAMES, RESOLVED ONCE — file-scope (`IntBox`) or INNER
+		// (`Plain.IntPair`) — and all FOUR of this routine's alias-driven decisions read THIS name rather than
+		// the written token (W7):** the builtin-container interception below, the base a static mangles onto
+		// (`qualifiedCallBaseName`), the instance a constructor builds (`constructorInstanceOf`), and the type
+		// its result adopts (`retypeGenericAliasConstructorResult`). Which registration a written name denotes
+		// is `genericAliasKeyFor`'s alone — the inner spelling used to be recognized here and then dropped for
+		// the other three, which is exactly how one call site came to hold two readings of one alias.
+		let aliasName = self.genericAliasKeyFor(typeTok.value)
+
+		// `IntArray.create()` / `IntSet.create()` / `StrMap.create()` / `PointList.create()`, and
+		// `ElementArray.create()` for the inner spelling of the same thing (P1.7 slice 1, P1.7b slice A, `Map`,
+		// `List`, slice 3b-i) — a static call on a BUILTIN-CONTAINER instance alias. Every one is intercepted
 		// before the generic-alias → base rewrite below, which would mangle them to `Array.create` /
 		// `Set.create` / `Map.create` / `List.create` — callees no file declares, because no builtin container
 		// has a base struct. Their statics lower to their own runtime, not to a user method.
@@ -34470,43 +34512,24 @@ export type Parser
 		// ⚠ **THE ALIAS QUESTION IS ASKED ONCE AND THE INSTANCE RESOLVED ONCE**, then the resolved id is tested.
 		// Written as self-contained arms it was two index resolves per container to answer one question, and
 		// each new container added two more — the shape that grows fastest is the one to collapse first.
-		if self.signatures.isGenericAlias(typeTok.value) 'containerAliasStatic'
-			let aliasGiid = self.signatures.genericAliasInstanceFrom(typeTok.value, readerFilePath: self.filePath)
+		//
+		// ⛔ **ONE ROSTER, AND A NARROWER SECOND ONE WAS A WRONG ANSWER TWICE.** The inner spelling first
+		// claimed `Array` and `List` only, on the argument that a `Set`/`Map` inner alias "has never reached the
+		// shared parse" — but the fallthrough it left them on was not a diagnostic. MEASURED (S2i):
+		// `typealias Nums = Set with ExitCode` inside a type body, then `Nums.create()`, produced a value of
+		// type `unknown`, and the program was refused for an `insert` on an `unknown` value. S2i widened the
+		// roster to `isBuiltinGenericBaseName` and left the NON-builtin fall-through still reading a bare
+		// member, which is the identical failure one category over (W7): `typealias IntPair = Pair with
+		// ExitCode` then `IntPair.create(9)`, refused for a field access on `unknown` while the bootstrap runs
+		// it. Two rosters of "which containers does this compiler own", and two keys for one alias, are the
+		// same duplication in two columns.
+		if self.signatures.isGenericAlias(aliasName) 'containerAliasStatic'
+			let aliasGiid = self.signatures.genericAliasInstanceFrom(aliasName, readerFilePath: self.filePath)
 
 			if self.signatures.isBuiltinGenericBaseName(self.signatures.genericInstanceBaseName(aliasGiid)) 'containerStatic'
-				return try self.parseContainerAliasStaticCall(func, aliasTok: typeTok, aliasName: typeTok.value, giid: aliasGiid)
+				return try self.parseContainerAliasStaticCall(func, aliasTok: typeTok, aliasName: aliasName, giid: aliasGiid)
 			end 'containerStatic'
 		end 'containerAliasStatic'
-
-		// `ElementArray.create()` — a static call on a NESTED generic-instance alias inside the enclosing
-		// generic body (P1.7 slice 3b-i). The bare member is recognized against `enclosingInnerAliases` and
-		// qualified to the whole-program `Container.ElementArray` key (the same name the field type carries),
-		// which resolves to the OPAQUE array instance `Array with typeParameter(pos)`. Intercepted here for the
-		// same reason the top-level arm is: no builtin container has a base struct to mangle a `.create` onto.
-		//
-		// ⛔ **IT ASKS THE SAME ROSTER THE TOP-LEVEL ARM ASKS, AND A SECOND NARROWER ONE WAS A WRONG ANSWER**
-		// (S2i). This arm claimed `Array` and `List` only, on the argument that a `Set`/`Map` inner alias "has
-		// never reached the shared parse" — but the fallthrough it left them on was not a diagnostic. MEASURED:
-		// `typealias Nums = Set with ExitCode` inside a type body, then `Nums.create()`, produced a value of
-		// type `unknown`, and the program was refused for a `insert` on an `unknown` value — a call typed
-		// against nothing rather than a container. Two rosters of "which containers does this compiler own" is
-		// exactly the duplication `isBuiltinGenericBaseName` exists to be the one home of.
-		//
-		// ⚠ Which written names ARE an inner alias here is `namesInnerAliasHere`'s to say — the same predicate
-		// the literal door (`parseStructLiteral`) and `parseTypeReference` ask, so the enclosing type's own
-		// name and its type parameters win over an alias shadowing them at every door at once:
-		// `Holder.create()` inside a `type Holder` that also declares `typealias Holder = Array with …` must
-		// reach the TYPE's static, not the array's.
-		if self.namesInnerAliasHere(typeTok.value) 'innerAlias'
-			let qualified = joinQualifiedName(self.enclosingType, member: typeTok.value)
-			if self.signatures.isGenericAlias(qualified) 'innerAliasResolves'
-				let innerGiid = self.signatures.genericAliasInstanceFrom(qualified, readerFilePath: self.filePath)
-
-				if self.signatures.isBuiltinGenericBaseName(self.signatures.genericInstanceBaseName(innerGiid)) 'innerContainerStatic'
-					return try self.parseContainerAliasStaticCall(func, aliasTok: typeTok, aliasName: qualified, giid: innerGiid)
-				end 'innerContainerStatic'
-			end 'innerAliasResolves'
-		end 'innerAlias'
 
 		try self.consume(TokenKind.dot)
 
@@ -34547,7 +34570,7 @@ export type Parser
 		// needs a joined name. Every qualified call in the program pays the first; only a primitive-based one
 		// pays the rest.
 		let memberTok = self.current()
-		let declaredCallee = qualifiedMethodName(self.qualifiedCallBaseName(typeTok.value), methodName: memberTok.value)
+		let declaredCallee = qualifiedMethodName(self.qualifiedCallBaseName(aliasName), methodName: memberTok.value)
 		if namesAPrimitiveType(typeTok.value) and not self.signatures.declaresCallee(declaredCallee) 'primitiveStatic'
 			let minted = primitiveStaticCallee(typeTok.value, methodName: memberTok.value)
 			if self.signatures.declaresCallee(minted) 'declaredPrimitiveStatic'
@@ -34572,8 +34595,8 @@ export type Parser
 			return try self.parseCallNamed(func, callee: self.namespaceQualifiedCallee(declaredCallee, bare: memberTok.value), anchor: typeTok, receiver: ReceiverArg.none, resultUsed: resultUsed, constructorInstance: ConstructorInstance.none, mint: CalleeMint.notMinted)
 		end 'namespaceQualifiedFreeCall'
 
-		let result = try self.parseCallNamed(func, callee: declaredCallee, anchor: typeTok, receiver: ReceiverArg.none, resultUsed: resultUsed, constructorInstance: self.constructorInstanceOf(typeTok.value), mint: CalleeMint.notMinted)
-		self.retypeGenericAliasConstructorResult(result, aliasName: typeTok.value)
+		let result = try self.parseCallNamed(func, callee: declaredCallee, anchor: typeTok, receiver: ReceiverArg.none, resultUsed: resultUsed, constructorInstance: self.constructorInstanceOf(aliasName), mint: CalleeMint.notMinted)
+		self.retypeGenericAliasConstructorResult(result, aliasName: aliasName)
 		return result
 	end 'parseQualifiedCall'
 
@@ -35224,7 +35247,13 @@ export type Parser
 	//     re-spelled here: two derivations of one callee name is the drift `voidStaticCallsAt`
 	//     documents at length, and its failure is a call accepted at one door and refused at the other.
 	function staticCallClaimsBase(index TokenIndex) returns bool
-		let baseName = self.tokenAt(index).value
+		let written = self.tokenAt(index).value
+		// ⚠ **THE SAME KEY `parseQualifiedCall` RESOLVES (W7)**, for the reason the third bullet already gives
+		// about the callee name: the two doors must not read one written spelling as two different aliases, or a
+		// call is claimed at one and refused at the other. An INNER alias is keyed base-qualified, so asking the
+		// bare member here would hand the base to the managed-constant fallback for exactly the aliases
+		// `parseQualifiedCall` does resolve.
+		let baseName = self.genericAliasKeyFor(written)
 
 		if self.signatures.containsEnum(baseName) or self.signatures.isGenericAlias(baseName) 'enumOrGenericAlias'
 			return true
