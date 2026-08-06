@@ -1058,6 +1058,88 @@ export typealias PairArray = Array with Pair
 72
 ```
 
+<!-- test: error.nested-tuple-name-does-not-depend-on-which-file-declares-it -->
+
+⭐⭐ **A NESTED TUPLE'S NAME IS A STATEMENT ABOUT THE PROGRAM, NOT ABOUT THE FILESYSTEM (W14b).** This case
+and its twin below are the SAME program with the SAME file NAMES; the only difference is which of the two
+sibling files declares which alias. Nothing a compiler may observe about the program has changed — `PX` is
+`((int, int), int)` in both — so the two cases pin **one byte-identical sentence**, and a citation decided by
+the order the directory handed the files over cannot satisfy both, whatever text is pinned.
+
+⚠ **THE PAIR ABOVE (`sibling-files-tuple-alias-in-every-declared-position{,-either-order}`) CANNOT SEE THIS
+AND IS NOT A SUBSTITUTE.** It varies the order the two files appear in THIS BLOCK, and the harness stages
+both under the same two names either way — so `Compiler.collectMaxonSources` walks them identically and both
+halves mint identically. It pins that the two declaration orders AGREE ON THE PROGRAM'S MEANING; this pair
+pins that they agree on the NAME. Swapping the file CONTENTS is what moves the walk, and it is why these two
+cases exist rather than a marker flip on those.
+
+⚠ **THE MESSAGE NAMES BOTH TYPES ON PURPOSE.** A one-type message could be made to agree by accident; a
+sentence carrying the returned type AND the declared type pins the whole citation in both directions at one
+anchor, in `main.maxon` — the one file whose name and contents are identical across the pair, so the
+location never moves either.
+```maxon
+// --- file: aaa.maxon
+export typealias PX = ((int, int), int)
+
+export function makeX() returns PX
+	return ((1, 2), 3)
+end 'makeX'
+
+// --- file: zzz.maxon
+export typealias PY = ((String, String), int)
+
+export function makeY() returns PY
+	return (("a", "b"), 7)
+end 'makeY'
+
+// --- file: main.maxon
+function coerce(t PY) returns PX
+	return t
+end 'coerce'
+
+function main() returns ExitCode
+	return coerce(makeY()).1 as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:18:2: Cannot return '__Tuple2.__Tuple2#2.int' from function declared to return '__Tuple2.__Tuple2#0.int'
+```
+
+<!-- test: error.nested-tuple-name-does-not-depend-on-which-file-declares-it-swapped -->
+
+⭐ **THE IDENTICAL PROGRAM, THE TWO ALIASES DECLARED THE OTHER WAY ROUND.** `aaa.maxon` now holds `PY` and
+`zzz.maxon` holds `PX`. **The pinned sentence below must stay byte-identical to its twin's** — that equality
+IS the assertion, and it is the whole reason this case is not a duplicate. If a future change makes these two
+diverge, do NOT re-derive two different pins: a divergence here means the tuple citation has gone back to
+being a function of the walk, which is the defect `W14b` removed.
+```maxon
+// --- file: aaa.maxon
+export typealias PY = ((String, String), int)
+
+export function makeY() returns PY
+	return (("a", "b"), 7)
+end 'makeY'
+
+// --- file: zzz.maxon
+export typealias PX = ((int, int), int)
+
+export function makeX() returns PX
+	return ((1, 2), 3)
+end 'makeX'
+
+// --- file: main.maxon
+function coerce(t PY) returns PX
+	return t
+end 'coerce'
+
+function main() returns ExitCode
+	return coerce(makeY()).1 as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:18:2: Cannot return '__Tuple2.__Tuple2#2.int' from function declared to return '__Tuple2.__Tuple2#0.int'
+```
+
 <!-- test: error.self-referential-tuple-alias -->
 
 ⚠ **THE TERMINATION CASE FOR THE READ-DOOR REPAIR.** Resolving a tuple-alias element follows the alias to
