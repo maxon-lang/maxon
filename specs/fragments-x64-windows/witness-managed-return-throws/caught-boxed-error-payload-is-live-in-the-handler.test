@@ -1,22 +1,12 @@
-// Test: throwing-witness-managed-return-both-edges
+// Test: caught-boxed-error-payload-is-live-in-the-handler
 typealias Payload = int(0 to u64.max)
 
-type Chunk
-	export var payload as Payload
-
-	static function create(payload Payload) returns Chunk
-		return Self{payload: payload}
-	end 'create'
-end 'Chunk'
-
-// A boxed-union error (it carries a payload case) so the caught error is a heap
-// box — exercising the `witnessTryCall` error-flag release.
 union MakeError implements Error
-	tooBig(limit Payload)
+	tooBig(why String)
 end 'MakeError'
 
 interface ChunkMaker
-	function makeChunk(seed Payload) returns Chunk throws MakeError
+	function makeChunk(seed Payload) returns Payload throws MakeError
 end 'ChunkMaker'
 
 type Backend implements ChunkMaker
@@ -26,41 +16,44 @@ type Backend implements ChunkMaker
 		return Self{cap: cap}
 	end 'create'
 
-	function makeChunk(seed Payload) returns Chunk throws MakeError
+	function makeChunk(seed Payload) returns Payload throws MakeError
 		if seed > self.cap 'reject'
-			throw MakeError.tooBig(self.cap)
+			throw MakeError.tooBig("cap {self.cap}")
 		end 'reject'
-		return Chunk.create(seed)
+		return seed
 	end 'makeChunk'
 end 'Backend'
 
-// Returns the bare INTERFACE so `maker.makeChunk` dispatches through the witness
-// table (a `witnessTryCall`, not a monomorphized direct call).
 function obtainMaker(cap Payload) returns ChunkMaker
 	return Backend.create(cap)
 end 'obtainMaker'
 
-function attempt(maker ChunkMaker, seed Payload, fallback Payload) returns Payload
-	let chunk = try maker.makeChunk(seed) otherwise return fallback
-	return chunk.payload
+function attempt(maker ChunkMaker, seed Payload) returns Payload
+	try maker.makeChunk(seed) otherwise (e) 'oops'
+		match e 'kind'
+			tooBig(why) then print("{why}\n")
+		end 'kind'
+	end 'oops'
+	return seed
 end 'attempt'
 
 function main() returns ExitCode
 	let maker = obtainMaker(100)
-	print("{attempt(maker, seed: 42, fallback: 999)}\n")
-	print("{attempt(maker, seed: 200, fallback: 7)}\n")
+	print("{attempt(maker, seed: 42)}\n")
+	print("{attempt(maker, seed: 200)}\n")
 	return 0
 end 'main'
 ---
 ExitCode: 0
 Stdout: ```
 42
-7
+cap 100
+200
 ```
 ---
 // CompiledIR
 module {
-  func @Chunk.create(payload: i64) -> i64 {
+  func @Backend.create(cap: i64) -> i64 {
   entry:
     x64.prologue stack_size=16
     x64.mov [rbp-16], rcx
@@ -79,28 +72,9 @@ module {
     x64.epilogue
     x64.ret
   }
-  func @Backend.create(cap: i64) -> i64 {
+  func @Backend.makeChunk(__self_ptr: i64, seed: i64) -> u64 {
   entry:
-    x64.prologue stack_size=16
-    x64.mov [rbp-16], rcx
-    x64.mov rcx, 8
-    x64.xor edx, edx
-    x64.mov r8, 2
-    x64.call mm_alloc
-    x64.mov [rbp-8], rax
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rbp-16]
-    x64.mov [rax+0], rcx
-    x64.mov rdx, [rbp-8]
-    x64.mov rcx, [rbp-8]
-    x64.call mm_incref
-    x64.mov rax, [rbp-8]
-    x64.epilogue
-    x64.ret
-  }
-  func @Backend.makeChunk(__self_ptr: i64, seed: i64) -> i64 {
-  entry:
-    x64.prologue stack_size=48
+    x64.prologue stack_size=128
     x64.mov [rbp-8], rcx
     x64.mov [rbp-16], rdx
     x64.mov rax, [rbp-8]
@@ -110,29 +84,124 @@ module {
   reject_0:
     x64.mov rax, [rbp-8]
     x64.mov rcx, [rax+0]
-    x64.mov [rbp-40], rcx
+    x64.lea_rdata rdx, [__interp_lit_0]
+    x64.mov rbx, rdx
+    x64.mov rsi, 4
+    x64.mov [rbp-104], rcx
+    x64.mov [rbp-112], rbx
+    x64.mov rcx, 21
+    x64.call mm_raw_alloc
+    x64.mov [rbp-24], rax
+    x64.mov rcx, [rbp-104]
+    x64.mov rdx, [rbp-24]
+    x64.call maxon_i64_to_string
+    x64.mov rdi, [rbp-24]
+    x64.mov r8, 4
+    x64.lea r9, [r8 + rax]
+    x64.mov rcx, 49
+    x64.lea rdx, [r9 + rcx]
+    x64.lea_func rcx, [__destruct_String]
+    x64.mov rbx, rcx
+    x64.mov [rbp-120], rax
+    x64.mov [rbp-128], r9
+    x64.mov rcx, rdx
+    x64.mov rdx, rbx
+    x64.mov r8, 2
+    x64.call mm_alloc
+    x64.mov [rbp-32], rax
+    x64.mov rax, 48
+    x64.mov rcx, [rbp-32]
+    x64.add rcx, rax
+    x64.xor eax, eax
+    x64.mov [rbp-40], rax
+    x64.mov [rbp-48], rcx
+    x64.mov rax, [rbp-128]
+    x64.mov [rbp-56], rax
+    x64.mov rax, [rbp-112]
+    x64.mov [rbp-64], rax
+    x64.mov rax, 4
+    x64.mov [rbp-72], rax
+    x64.mov rax, [rbp-24]
+    x64.mov [rbp-80], rax
+    x64.mov rax, [rbp-120]
+    x64.mov [rbp-88], rax
+    x64.mov rax, [rbp-48]
+    x64.mov rcx, [rbp-40]
+    x64.add rax, rcx
+    x64.mov rcx, [rbp-64]
+    x64.mov rdx, [rbp-72]
+    x64.mov rsi, rcx
+    x64.mov rdi, rax
+    x64.mov rcx, rdx
+    x64.rep_movsb
+    x64.mov rax, [rbp-40]
+    x64.mov rcx, [rbp-72]
+    x64.add rax, rcx
+    x64.mov [rbp-40], rax
+    x64.mov rax, [rbp-48]
+    x64.mov rcx, [rbp-40]
+    x64.add rax, rcx
+    x64.mov rcx, [rbp-80]
+    x64.mov rdx, [rbp-88]
+    x64.mov rsi, rcx
+    x64.mov rdi, rax
+    x64.mov rcx, rdx
+    x64.rep_movsb
+    x64.mov rax, [rbp-48]
+    x64.mov rcx, [rbp-56]
+    x64.add rax, rcx
+    x64.xor ecx, ecx
+    x64.mov byte ptr [rax+0], rcxb
+    x64.mov rax, [rbp-24]
+    x64.mov rcx, [rbp-24]
+    x64.call mm_raw_free
+    x64.mov rax, [rbp-48]
+    x64.mov rcx, [rbp-56]
+    x64.mov rdx, 1
+    x64.mov rbx, -3
+    x64.mov rsi, [rbp-32]
+    x64.mov [rsi+0], rax
+    x64.mov rax, [rbp-32]
+    x64.mov [rax+8], rcx
+    x64.mov rax, [rbp-32]
+    x64.mov [rax+16], rcx
+    x64.mov rax, [rbp-32]
+    x64.mov [rax+24], rdx
+    x64.mov rax, [rbp-32]
+    x64.mov [rax+32], rbx
+    x64.xor eax, eax
+    x64.mov rcx, [rbp-32]
+    x64.mov [rcx+40], rax
+    x64.mov rax, [rbp-32]
+    x64.mov rcx, [rbp-32]
+    x64.call mm_incref
+    x64.lea_func rax, [__destruct_MakeError]
+    x64.mov rcx, rax
+    x64.mov rdx, rcx
     x64.mov rcx, 16
-    x64.xor edx, edx
     x64.mov r8, 3
     x64.call mm_alloc
-    x64.mov [rbp-24], rax
-    x64.xor edx, edx
-    x64.mov [rax+0], rdx
-    x64.mov rbx, [rbp-40]
-    x64.mov [rax+8], rbx
-    x64.mov rsi, [rbp-24]
-    x64.mov rcx, [rbp-24]
+    x64.mov [rbp-96], rax
+    x64.xor ecx, ecx
+    x64.mov [rax+0], rcx
+    x64.mov rcx, [rbp-32]
+    x64.mov [rax+8], rcx
     x64.call mm_incref
-    x64.mov rdx, [rbp-24]
+    x64.mov rax, [rbp-32]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_0
+    x64.mov rcx, [rbp-32]
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.mov rax, [rbp-96]
+    x64.mov rcx, [rbp-96]
+    x64.call mm_incref
+    x64.mov rdx, [rbp-96]
     x64.xor eax, eax
     x64.epilogue
     x64.ret
   reject_0.after:
     x64.mov rax, [rbp-16]
-    x64.mov rcx, [rbp-16]
-    x64.call Chunk.create
-    x64.mov [rbp-32], rax
-    x64.mov rax, [rbp-32]
     x64.xor edx, edx
     x64.epilogue
     x64.ret
@@ -155,7 +224,6 @@ module {
     x64.mov rax, [rbp-8]
     x64.mov rcx, [rbp-8]
     x64.mov rdx, 42
-    x64.mov r8, 999
     x64.call attempt$Backend
     x64.mov [rbp-160], rax
     x64.mov rcx, 21
@@ -165,7 +233,7 @@ module {
     x64.mov rdx, [rbp-16]
     x64.call maxon_i64_to_string
     x64.mov rcx, [rbp-16]
-    x64.lea_rdata rdx, [__interp_lit_0]
+    x64.lea_rdata rdx, [__interp_lit_1]
     x64.mov rbx, rdx
     x64.mov rsi, 1
     x64.lea rdi, [rax + rsi]
@@ -178,7 +246,7 @@ module {
     x64.mov [rbp-184], rdi
     x64.mov rcx, r9
     x64.mov rdx, r8
-    x64.mov r8, 4
+    x64.mov r8, 2
     x64.call mm_alloc
     x64.mov [rbp-24], rax
     x64.mov rax, 48
@@ -253,7 +321,6 @@ module {
     x64.mov rax, [rbp-8]
     x64.mov rcx, [rbp-8]
     x64.mov rdx, 200
-    x64.mov r8, 7
     x64.call attempt$Backend
     x64.mov [rbp-192], rax
     x64.mov rcx, 21
@@ -263,7 +330,7 @@ module {
     x64.mov rdx, [rbp-88]
     x64.call maxon_i64_to_string
     x64.mov rcx, [rbp-88]
-    x64.lea_rdata rdx, [__interp_lit_0]
+    x64.lea_rdata rdx, [__interp_lit_1]
     x64.mov rbx, rdx
     x64.mov rdx, 1
     x64.lea rsi, [rax + rdx]
@@ -276,7 +343,7 @@ module {
     x64.mov [rbp-216], rsi
     x64.mov rcx, r8
     x64.mov rdx, r9
-    x64.mov r8, 4
+    x64.mov r8, 2
     x64.call mm_alloc
     x64.mov [rbp-96], rax
     x64.mov rax, 48
@@ -370,71 +437,164 @@ module {
     x64.epilogue
     x64.ret
   }
-  func @attempt$Backend(maker: i64, seed: i64, fallback: i64) -> u64 {
+  func @attempt$Backend(maker: i64, seed: i64) -> u64 {
   entry:
-    x64.prologue stack_size=48
+    x64.prologue stack_size=160
     x64.mov [rbp-8], rcx
-    x64.mov [rbp-16], r8
+    x64.mov [rbp-16], rdx
     x64.mov rax, [rbp-8]
     x64.mov rcx, [rbp-8]
     x64.call Backend.makeChunk
     x64.mov [rbp-24], rdx
-    x64.mov [rbp-32], rax
     x64.xor ecx, ecx
     x64.cmp rdx, rcx
     x64.je attempt$Backend.otherwise_continue_1
-  otherwise_stmt_0:
+  otherwise_error_0:
     x64.mov rax, [rbp-24]
-    x64.mov rcx, [rbp-24]
-    x64.call mm_decref
-    x64.mov rax, [rbp-16]
+    x64.mov [rbp-32], rax
     x64.mov rcx, [rbp-32]
-    x64.test rcx, rcx
-    x64.jz __nonnull_skip_3
-    x64.call mm_decref
-    x64.label __nonnull_skip_3
-    x64.mov rax, [rbp-16]
-    x64.epilogue
-    x64.ret
-  otherwise_continue_0:
-    x64.mov rax, [rbp-32]
+    x64.mov rdx, [rcx+0]
     x64.mov [rbp-40], rax
+    x64.mov rbx, [rbp-40]
+    x64.mov [rbp-128], rdx
     x64.mov rcx, [rbp-40]
     x64.call mm_incref
-    x64.mov rdx, [rbp-40]
-    x64.mov rax, [rdx+0]
-    x64.mov rbx, [rbp-32]
-    x64.mov [rbp-48], rax
-    x64.test rbx, rbx
+    x64.mov rsi, [rbp-128]
+    x64.mov [rbp-48], rsi
+    x64.mov rdi, [rbp-48]
+    x64.xor r8d, r8d
+    x64.cmp rdi, r8
+    x64.je attempt$Backend.kind_4.case0
+  kind_0.dispatch0:
+    x64.jmp attempt$Backend.kind_4.merge
+  kind_0.case0:
+    x64.mov rax, [rbp-40]
+    x64.mov rcx, [rax+8]
+    x64.mov [rbp-56], rcx
+    x64.mov rdx, [rbp-56]
+    x64.mov rcx, [rbp-56]
+    x64.call mm_incref
+    x64.mov rbx, [rbp-56]
+    x64.mov rsi, [rbx+0]
+    x64.mov rdi, [rbp-56]
+    x64.mov r8, [rdi+8]
+    x64.lea_rdata r9, [__interp_lit_1]
+    x64.mov rax, r9
+    x64.mov rcx, 1
+    x64.lea rdx, [r8 + rcx]
+    x64.mov rbx, 49
+    x64.lea rdi, [rdx + rbx]
+    x64.lea_func rbx, [__destruct_String]
+    x64.mov r9, rbx
+    x64.mov [rbp-128], rax
+    x64.mov [rbp-136], rdx
+    x64.mov [rbp-144], rsi
+    x64.mov [rbp-152], r8
+    x64.mov rcx, rdi
+    x64.mov rdx, r9
+    x64.mov r8, 2
+    x64.call mm_alloc
+    x64.mov [rbp-64], rax
+    x64.mov rax, 48
+    x64.mov rcx, [rbp-64]
+    x64.add rcx, rax
+    x64.xor eax, eax
+    x64.mov [rbp-72], rax
+    x64.mov [rbp-80], rcx
+    x64.mov rax, [rbp-136]
+    x64.mov [rbp-88], rax
+    x64.mov rax, [rbp-144]
+    x64.mov [rbp-96], rax
+    x64.mov rax, [rbp-152]
+    x64.mov [rbp-104], rax
+    x64.mov rax, [rbp-128]
+    x64.mov [rbp-112], rax
+    x64.mov rax, 1
+    x64.mov [rbp-120], rax
+    x64.mov rax, [rbp-80]
+    x64.mov rcx, [rbp-72]
+    x64.add rax, rcx
+    x64.mov rcx, [rbp-96]
+    x64.mov rdx, [rbp-104]
+    x64.mov rsi, rcx
+    x64.mov rdi, rax
+    x64.mov rcx, rdx
+    x64.rep_movsb
+    x64.mov rax, [rbp-72]
+    x64.mov rcx, [rbp-104]
+    x64.add rax, rcx
+    x64.mov [rbp-72], rax
+    x64.mov rax, [rbp-80]
+    x64.mov rcx, [rbp-72]
+    x64.add rax, rcx
+    x64.mov rcx, [rbp-112]
+    x64.mov rdx, [rbp-120]
+    x64.mov rsi, rcx
+    x64.mov rdi, rax
+    x64.mov rcx, rdx
+    x64.rep_movsb
+    x64.mov rax, [rbp-80]
+    x64.mov rcx, [rbp-88]
+    x64.add rax, rcx
+    x64.xor ecx, ecx
+    x64.mov byte ptr [rax+0], rcxb
+    x64.mov rax, [rbp-80]
+    x64.mov rcx, [rbp-88]
+    x64.mov rdx, 1
+    x64.mov rbx, -3
+    x64.mov rsi, [rbp-64]
+    x64.mov [rsi+0], rax
+    x64.mov rax, [rbp-64]
+    x64.mov [rax+8], rcx
+    x64.mov rax, [rbp-64]
+    x64.mov [rax+16], rcx
+    x64.mov rax, [rbp-64]
+    x64.mov [rax+24], rdx
+    x64.mov rax, [rbp-64]
+    x64.mov [rax+32], rbx
+    x64.xor eax, eax
+    x64.mov rcx, [rbp-64]
+    x64.mov [rcx+40], rax
+    x64.mov rax, [rbp-64]
+    x64.mov rcx, [rbp-64]
+    x64.call mm_incref
+    x64.mov rax, [rbp-64]
+    x64.mov rcx, [rbp-64]
+    x64.call stdlib.print
+    x64.mov rax, [rbp-64]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_3
+    x64.mov rcx, [rbp-64]
+    x64.call mm_decref
+    x64.label __nonnull_skip_3
+    x64.mov rax, [rbp-56]
+    x64.test rax, rax
     x64.jz __nonnull_skip_4
-    x64.mov rcx, [rbp-32]
+    x64.mov rcx, [rbp-56]
     x64.call mm_decref
     x64.label __nonnull_skip_4
-    x64.mov rsi, [rbp-40]
-    x64.test rsi, rsi
+    x64.jmp attempt$Backend.kind_4.merge
+  kind_0.merge:
+    x64.mov rax, [rbp-40]
+    x64.test rax, rax
     x64.jz __nonnull_skip_5
     x64.mov rcx, [rbp-40]
     x64.call mm_decref
     x64.label __nonnull_skip_5
-    x64.mov rax, [rbp-48]
+    x64.mov rcx, [rbp-32]
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_6
+    x64.call mm_decref
+    x64.label __nonnull_skip_6
+    x64.jmp attempt$Backend.otherwise_continue_1
+  otherwise_continue_0:
+    x64.mov rax, [rbp-16]
     x64.epilogue
-    x64.ret
-  }
-  func @__destruct_Chunk(ptr: i64) {
-  entry:
-    x64.jmp __destruct_Chunk.done
-  done:
     x64.ret
   }
   func @__destruct_Backend(ptr: i64) {
   entry:
     x64.jmp __destruct_Backend.done
-  done:
-    x64.ret
-  }
-  func @__destruct_MakeError(ptr: i64) {
-  entry:
-    x64.jmp __destruct_MakeError.done
   done:
     x64.ret
   }
@@ -475,6 +635,28 @@ module {
     x64.jmp __destruct_String.skip_buf_0
   skip_buf_0:
     x64.jmp __destruct_String.done
+  done:
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_MakeError(ptr: i64) {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.xor edx, edx
+    x64.cmp rcx, rdx
+    x64.jne __destruct_MakeError.done
+  case_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+8]
+    x64.mov [rbp-16], rcx
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_0
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.jmp __destruct_MakeError.done
   done:
     x64.epilogue
     x64.ret

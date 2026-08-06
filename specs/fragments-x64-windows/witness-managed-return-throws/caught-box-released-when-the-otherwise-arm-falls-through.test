@@ -1,22 +1,12 @@
-// Test: throwing-witness-managed-return-both-edges
+// Test: caught-box-released-when-the-otherwise-arm-falls-through
 typealias Payload = int(0 to u64.max)
 
-type Chunk
-	export var payload as Payload
-
-	static function create(payload Payload) returns Chunk
-		return Self{payload: payload}
-	end 'create'
-end 'Chunk'
-
-// A boxed-union error (it carries a payload case) so the caught error is a heap
-// box — exercising the `witnessTryCall` error-flag release.
 union MakeError implements Error
 	tooBig(limit Payload)
 end 'MakeError'
 
 interface ChunkMaker
-	function makeChunk(seed Payload) returns Chunk throws MakeError
+	function makeChunk(seed Payload) returns Payload throws MakeError
 end 'ChunkMaker'
 
 type Backend implements ChunkMaker
@@ -26,41 +16,45 @@ type Backend implements ChunkMaker
 		return Self{cap: cap}
 	end 'create'
 
-	function makeChunk(seed Payload) returns Chunk throws MakeError
+	function makeChunk(seed Payload) returns Payload throws MakeError
 		if seed > self.cap 'reject'
 			throw MakeError.tooBig(self.cap)
 		end 'reject'
-		return Chunk.create(seed)
+		return seed
 	end 'makeChunk'
 end 'Backend'
 
-// Returns the bare INTERFACE so `maker.makeChunk` dispatches through the witness
-// table (a `witnessTryCall`, not a monomorphized direct call).
 function obtainMaker(cap Payload) returns ChunkMaker
 	return Backend.create(cap)
 end 'obtainMaker'
 
-function attempt(maker ChunkMaker, seed Payload, fallback Payload) returns Payload
-	let chunk = try maker.makeChunk(seed) otherwise return fallback
-	return chunk.payload
+function attempt(maker ChunkMaker, seed Payload) returns Payload
+	var total = 0
+	try maker.makeChunk(seed) otherwise (e) 'oops'
+		match e 'kind'
+			tooBig(limit) then total = limit
+		end 'kind'
+	end 'oops'
+	let second = try maker.makeChunk(1) otherwise 0
+	return total + second
 end 'attempt'
 
 function main() returns ExitCode
 	let maker = obtainMaker(100)
-	print("{attempt(maker, seed: 42, fallback: 999)}\n")
-	print("{attempt(maker, seed: 200, fallback: 7)}\n")
+	print("{attempt(maker, seed: 42)}\n")
+	print("{attempt(maker, seed: 200)}\n")
 	return 0
 end 'main'
 ---
 ExitCode: 0
 Stdout: ```
-42
-7
+1
+101
 ```
 ---
 // CompiledIR
 module {
-  func @Chunk.create(payload: i64) -> i64 {
+  func @Backend.create(cap: i64) -> i64 {
   entry:
     x64.prologue stack_size=16
     x64.mov [rbp-16], rcx
@@ -79,28 +73,9 @@ module {
     x64.epilogue
     x64.ret
   }
-  func @Backend.create(cap: i64) -> i64 {
+  func @Backend.makeChunk(__self_ptr: i64, seed: i64) -> u64 {
   entry:
-    x64.prologue stack_size=16
-    x64.mov [rbp-16], rcx
-    x64.mov rcx, 8
-    x64.xor edx, edx
-    x64.mov r8, 2
-    x64.call mm_alloc
-    x64.mov [rbp-8], rax
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rbp-16]
-    x64.mov [rax+0], rcx
-    x64.mov rdx, [rbp-8]
-    x64.mov rcx, [rbp-8]
-    x64.call mm_incref
-    x64.mov rax, [rbp-8]
-    x64.epilogue
-    x64.ret
-  }
-  func @Backend.makeChunk(__self_ptr: i64, seed: i64) -> i64 {
-  entry:
-    x64.prologue stack_size=48
+    x64.prologue stack_size=32
     x64.mov [rbp-8], rcx
     x64.mov [rbp-16], rdx
     x64.mov rax, [rbp-8]
@@ -110,15 +85,15 @@ module {
   reject_0:
     x64.mov rax, [rbp-8]
     x64.mov rcx, [rax+0]
-    x64.mov [rbp-40], rcx
+    x64.mov [rbp-32], rcx
     x64.mov rcx, 16
     x64.xor edx, edx
-    x64.mov r8, 3
+    x64.mov r8, 2
     x64.call mm_alloc
     x64.mov [rbp-24], rax
     x64.xor edx, edx
     x64.mov [rax+0], rdx
-    x64.mov rbx, [rbp-40]
+    x64.mov rbx, [rbp-32]
     x64.mov [rax+8], rbx
     x64.mov rsi, [rbp-24]
     x64.mov rcx, [rbp-24]
@@ -129,10 +104,6 @@ module {
     x64.ret
   reject_0.after:
     x64.mov rax, [rbp-16]
-    x64.mov rcx, [rbp-16]
-    x64.call Chunk.create
-    x64.mov [rbp-32], rax
-    x64.mov rax, [rbp-32]
     x64.xor edx, edx
     x64.epilogue
     x64.ret
@@ -155,7 +126,6 @@ module {
     x64.mov rax, [rbp-8]
     x64.mov rcx, [rbp-8]
     x64.mov rdx, 42
-    x64.mov r8, 999
     x64.call attempt$Backend
     x64.mov [rbp-160], rax
     x64.mov rcx, 21
@@ -178,7 +148,7 @@ module {
     x64.mov [rbp-184], rdi
     x64.mov rcx, r9
     x64.mov rdx, r8
-    x64.mov r8, 4
+    x64.mov r8, 3
     x64.call mm_alloc
     x64.mov [rbp-24], rax
     x64.mov rax, 48
@@ -253,7 +223,6 @@ module {
     x64.mov rax, [rbp-8]
     x64.mov rcx, [rbp-8]
     x64.mov rdx, 200
-    x64.mov r8, 7
     x64.call attempt$Backend
     x64.mov [rbp-192], rax
     x64.mov rcx, 21
@@ -276,7 +245,7 @@ module {
     x64.mov [rbp-216], rsi
     x64.mov rcx, r8
     x64.mov rdx, r9
-    x64.mov r8, 4
+    x64.mov r8, 3
     x64.call mm_alloc
     x64.mov [rbp-96], rax
     x64.mov rax, 48
@@ -370,60 +339,79 @@ module {
     x64.epilogue
     x64.ret
   }
-  func @attempt$Backend(maker: i64, seed: i64, fallback: i64) -> u64 {
+  func @attempt$Backend(maker: i64, seed: i64) -> u64 {
   entry:
-    x64.prologue stack_size=48
+    x64.prologue stack_size=80
     x64.mov [rbp-8], rcx
-    x64.mov [rbp-16], r8
+    x64.xor eax, eax
+    x64.mov [rbp-16], rax
     x64.mov rax, [rbp-8]
     x64.mov rcx, [rbp-8]
     x64.call Backend.makeChunk
     x64.mov [rbp-24], rdx
-    x64.mov [rbp-32], rax
     x64.xor ecx, ecx
     x64.cmp rdx, rcx
     x64.je attempt$Backend.otherwise_continue_1
-  otherwise_stmt_0:
+  otherwise_error_0:
     x64.mov rax, [rbp-24]
-    x64.mov rcx, [rbp-24]
-    x64.call mm_decref
-    x64.mov rax, [rbp-16]
+    x64.mov [rbp-32], rax
     x64.mov rcx, [rbp-32]
-    x64.test rcx, rcx
-    x64.jz __nonnull_skip_3
-    x64.call mm_decref
-    x64.label __nonnull_skip_3
-    x64.mov rax, [rbp-16]
-    x64.epilogue
-    x64.ret
-  otherwise_continue_0:
-    x64.mov rax, [rbp-32]
+    x64.mov rdx, [rcx+0]
     x64.mov [rbp-40], rax
+    x64.mov rbx, [rbp-40]
+    x64.mov [rbp-80], rdx
     x64.mov rcx, [rbp-40]
     x64.call mm_incref
-    x64.mov rdx, [rbp-40]
-    x64.mov rax, [rdx+0]
-    x64.mov rbx, [rbp-32]
-    x64.mov [rbp-48], rax
-    x64.test rbx, rbx
-    x64.jz __nonnull_skip_4
-    x64.mov rcx, [rbp-32]
-    x64.call mm_decref
-    x64.label __nonnull_skip_4
-    x64.mov rsi, [rbp-40]
-    x64.test rsi, rsi
-    x64.jz __nonnull_skip_5
+    x64.mov rsi, [rbp-80]
+    x64.mov [rbp-48], rsi
+    x64.mov rdi, [rbp-48]
+    x64.xor r8d, r8d
+    x64.cmp rdi, r8
+    x64.je attempt$Backend.kind_4.case0
+  kind_0.dispatch0:
+    x64.jmp attempt$Backend.kind_4.merge
+  kind_0.case0:
+    x64.mov rax, [rbp-40]
+    x64.mov rcx, [rax+8]
+    x64.mov [rbp-16], rcx
+    x64.jmp attempt$Backend.kind_4.merge
+  kind_0.merge:
+    x64.mov rax, [rbp-40]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_3
     x64.mov rcx, [rbp-40]
     x64.call mm_decref
-    x64.label __nonnull_skip_5
-    x64.mov rax, [rbp-48]
+    x64.label __nonnull_skip_3
+    x64.mov rcx, [rbp-32]
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_4
+    x64.call mm_decref
+    x64.label __nonnull_skip_4
+    x64.jmp attempt$Backend.otherwise_continue_1
+  otherwise_continue_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, 1
+    x64.call Backend.makeChunk
+    x64.xor ecx, ecx
+    x64.mov [rbp-56], rcx
+    x64.mov [rbp-64], rdx
+    x64.mov [rbp-72], rax
+    x64.xor eax, eax
+    x64.cmp rdx, rax
+    x64.je attempt$Backend.otherwise_default_continue_9
+  otherwise_default_error_0:
+    x64.mov rax, [rbp-64]
+    x64.mov rcx, [rbp-64]
+    x64.call mm_decref
+    x64.mov rcx, [rbp-56]
+    x64.mov [rbp-72], rcx
+    x64.jmp attempt$Backend.otherwise_default_continue_9
+  otherwise_default_continue_0:
+    x64.mov rax, [rbp-72]
+    x64.mov rcx, [rbp-16]
+    x64.lea rax, [rcx + rax]
     x64.epilogue
-    x64.ret
-  }
-  func @__destruct_Chunk(ptr: i64) {
-  entry:
-    x64.jmp __destruct_Chunk.done
-  done:
     x64.ret
   }
   func @__destruct_Backend(ptr: i64) {

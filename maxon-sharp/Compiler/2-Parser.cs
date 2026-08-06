@@ -1378,7 +1378,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
         new IrEnumCase("recvFailed",        4, 4L),
         new IrEnumCase("connectionClosed",  5, 5L),
         new IrEnumCase("closed",            6, 6L),
-      ], conformingInterfaces: ["Error"]);
+      ], conformingInterfaces: [ErrorInterfaceName]);
     }
     if (!_typeRegistry.ContainsKey("__ManagedFileError")) {
       _typeRegistry["__ManagedFileError"] = new IrEnumType("__ManagedFileError", [
@@ -1393,7 +1393,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
         new IrEnumCase("invalidStatBuffer",  8,  8L),
         new IrEnumCase("invalidStatIndex",   9,  9L),
         new IrEnumCase("closed",            10, 10L),
-      ], conformingInterfaces: ["Error"]);
+      ], conformingInterfaces: [ErrorInterfaceName]);
     }
     if (!_typeRegistry.ContainsKey("__ManagedDirectoryError")) {
       _typeRegistry["__ManagedDirectoryError"] = new IrEnumType("__ManagedDirectoryError", [
@@ -1405,7 +1405,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
         new IrEnumCase("createFailed",       5, 5L),
         new IrEnumCase("currentPathFailed",  6, 6L),
         new IrEnumCase("closed",             7, 7L),
-      ], conformingInterfaces: ["Error"]);
+      ], conformingInterfaces: [ErrorInterfaceName]);
     }
     // The error thrown by an integer `/` / `mod` whose divisor was not proven non-zero. Like the
     // __Managed*Error enums above it is a compiler-synthesized runtime error TYPE (not a
@@ -1414,7 +1414,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     if (!_typeRegistry.ContainsKey("__DivisionByZeroError")) {
       _typeRegistry["__DivisionByZeroError"] = new IrEnumType("__DivisionByZeroError", [
         new IrEnumCase("divisionByZero", 0, 0L),
-      ], conformingInterfaces: ["Error"]);
+      ], conformingInterfaces: [ErrorInterfaceName]);
     }
   }
 
@@ -3605,7 +3605,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
 
         // Static method signatures are handled by the compiler directly
         if (method.IsStatic) {
-          if (func != null && method.ThrowsTypeName != null)
+          if (func != null)
             ValidateThrowsConformance(func, typeName, method.Name, sourceIfaceName, method.ThrowsTypeName, nameToken);
           continue;
         }
@@ -3617,7 +3617,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
         } else if (!SignatureMatches(method, func, sourceIfaceName, typeName, typeParams)) {
           var actualSig = FormatFunctionSignature(method.Name, func);
           wrongSignatureMethods.Add($"{actualSig} (expected {method.FormatResolved(typeParams)})");
-        } else if (method.ThrowsTypeName != null) {
+        } else {
           ValidateThrowsConformance(func, typeName, method.Name, sourceIfaceName, method.ThrowsTypeName, nameToken);
         }
       }
@@ -3656,24 +3656,123 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     }
   }
 
-  /// <summary>
-  /// Validates that a function's throws clause conforms to the interface requirement:
-  /// must throw, and the thrown type must conform to Error.
-  /// </summary>
-  private void ValidateThrowsConformance(IrFunction<MaxonOp> func, string typeName, string methodName, string ifaceName, string requiredThrowsType, Token typeNameToken) {
-    if (func.ThrowsType == null) {
-      throw new CompileError(ErrorCode.SemanticPartialInterfaceImpl,
-        $"Method '{typeName}.{methodName}' must throw '{requiredThrowsType}' as required by interface '{ifaceName}'",
-        typeNameToken.Line, typeNameToken.Column);
+  /// The language's error interface: the channel every `throws` type is delivered through unless an
+  /// abstract requirement names a narrower one. Spelled once because five sites name it.
+  private const string ErrorInterfaceName = "Error";
+
+  /// THE `throws` RELATION BETWEEN AN INTERFACE REQUIREMENT AND ITS IMPL, CHECKED IN BOTH
+  /// DIRECTIONS. A call dispatched through an interface is typed off the REQUIREMENT — that is the
+  /// only declaration in hand at the call site, since the callee is not devirtualized until
+  /// monomorphization (see <see cref="MaxonCallOp.DispatchedSignature"/>) — while the callee delivers
+  /// its error through the ABI its OWN declaration chose. The two must agree, and only this check can
+  /// make them:
+  ///
+  ///   - IMPL DOES NOT THROW WHERE THE REQUIREMENT DOES. A `try` at the dispatch would branch on an
+  ///     error-flag register the callee never wrote.
+  ///   - IMPL THROWS WHERE THE REQUIREMENT DOES NOT. The dispatch reads no error flag, so the throw is
+  ///     silently dropped and its box leaks. MEASURED before this rule: a `Backend.plain` throwing
+  ///     under a non-throwing `ChunkMaker.plain` printed the throw path's primary register as a real
+  ///     answer and exited 101.
+  ///   - THE TWO THROWN TYPES DIFFER. The `(e)` binding at the dispatch decodes the REQUIREMENT's
+  ///     type, so a differing impl type has its ordinals read as the requirement's — and a SCALAR
+  ///     impl error under a BOXED-union requirement makes the catch treat an ordinal as a box pointer.
+  ///     shv2's `validateThrowsConformance` states all three; this is the same rule, one compiler over.
+  ///
+  /// The third rule has ONE exemption, and it is the one `Error` exists for: `stdlib`'s
+  /// `interface Parsable` declares `throws Error` and every conformer throws its own concrete enum.
+  /// The rule is spelled "the same NAME" but the fact it protects is "the same DECODE", and for a
+  /// requirement naming an INTERFACE there is no ordinal to get wrong — a marker interface declares
+  /// no case. <see cref="ThrowsRequirementIsAbstract"/> is where same-name stops standing in for
+  /// same-decode, and <see cref="RequireNarrowedImplErrorIsScalar"/> is the price of the exemption:
+  /// an abstract requirement is caught through the scalar `ordinal + bias` ABI, so a payload-carrying
+  /// union narrowed under it would be handed over as a heap box and decoded as an ordinal.
+  private void ValidateThrowsConformance(IrFunction<MaxonOp> func, string typeName, string methodName, string ifaceName, string? requiredThrowsType, Token typeNameToken) {
+    var declaredThrowsType = func.ThrowsType?.Name;
+
+    if (requiredThrowsType == null) {
+      if (declaredThrowsType == null) return;
+      throw ThrowsConformanceViolation(typeNameToken,
+        $"{ThrowsConformanceSubject(typeName, methodName)} throws '{declaredThrowsType}' but interface '{ifaceName}' declares it non-throwing — a dispatch through a non-throwing interface method reads no error flag, so the error would be silently dropped");
     }
-    var throwsName = func.ThrowsType.Name;
-    if (_typeRegistry.TryGetValue(throwsName, out var throwsTypeEntry)
-        && throwsTypeEntry is IrEnumType throwsEnum
-        && !throwsEnum.ConformingInterfaces.Contains("Error")) {
-      throw new CompileError(ErrorCode.SemanticPartialInterfaceImpl,
-        $"Method '{typeName}.{methodName}' throws '{throwsName}' which does not conform to Error",
-        typeNameToken.Line, typeNameToken.Column);
+
+    if (declaredThrowsType == null) {
+      throw ThrowsConformanceViolation(typeNameToken,
+        $"{ThrowsConformanceSubject(typeName, methodName)} must throw '{requiredThrowsType}' as required by interface '{ifaceName}'");
     }
+
+    // The channel the impl's error is delivered THROUGH: `Error` in general, and — where the
+    // requirement is itself abstract — that requirement's own interface, which is what the dispatch
+    // decodes against. For `throws Error`, the language's error interface, the two coincide; naming
+    // the requirement is what makes one rule serve any abstract channel.
+    var abstractRequirement = ThrowsRequirementIsAbstract(requiredThrowsType);
+    var errorChannel = abstractRequirement ? requiredThrowsType : ErrorInterfaceName;
+    if (LookupDeclaredType(declaredThrowsType) is IrEnumType declaredEnum
+        && !declaredEnum.ConformingInterfaces.Contains(errorChannel)) {
+      throw ThrowsConformanceViolation(typeNameToken,
+        $"{ThrowsConformanceSubject(typeName, methodName)} throws '{declaredThrowsType}' which does not conform to {errorChannel}");
+    }
+
+    if (declaredThrowsType == requiredThrowsType) return;
+
+    if (!abstractRequirement) {
+      throw ThrowsConformanceViolation(typeNameToken,
+        $"{ThrowsConformanceSubject(typeName, methodName)} throws '{declaredThrowsType}' but interface '{ifaceName}' declares it 'throws {requiredThrowsType}' — a dispatch through an interface types its caught error off the INTERFACE, so the impl's error would be decoded as '{requiredThrowsType}'");
+    }
+
+    RequireNarrowedImplErrorIsScalar(typeName, methodName, ifaceName, requiredThrowsType, declaredThrowsType, typeNameToken);
+  }
+
+  /// Does the requirement's `throws` name an INTERFACE rather than a concrete error — i.e. is there
+  /// anything for the dispatch's `(e)` binding to decode WRONG? A name that resolves to nothing reads
+  /// as NOT abstract on purpose: a typo must not buy the abstract requirement's narrowing, so it falls
+  /// to the strict same-name rule and is refused by it.
+  private bool ThrowsRequirementIsAbstract(string requiredThrowsType)
+    => LookupDeclaredType(requiredThrowsType) is IrInterfaceType;
+
+  /// The price of the abstract-requirement exemption. The narrowed impl's error must reach the
+  /// dispatch through the ABI an abstract requirement is CAUGHT with — the scalar `ordinal + bias`
+  /// flag — because a payload-carrying union's flag IS the heap box pointer, which the catch would
+  /// subtract a bias from and never release.
+  ///
+  /// "Not in any registry" is not evidence the flag is scalar; it is the compiler having no answer,
+  /// and it gets its own refusal. Reading it as "not boxed, therefore fine" would be the PERMISSIVE
+  /// reading of a memory-safety question, taken for a name nothing could resolve — the same argument
+  /// <see cref="ThrowsRequirementIsAbstract"/> makes one side over.
+  private void RequireNarrowedImplErrorIsScalar(string typeName, string methodName, string ifaceName, string requiredThrowsType, string declaredThrowsType, Token typeNameToken) {
+    if (LookupDeclaredType(declaredThrowsType) is not IrEnumType declaredEnum) {
+      throw ThrowsConformanceViolation(typeNameToken,
+        $"{ThrowsConformanceSubject(typeName, methodName)} throws '{declaredThrowsType}' but interface '{ifaceName}' declares it 'throws {requiredThrowsType}', and '{declaredThrowsType}' names no declared enum or union — the narrowing an abstract requirement permits is granted only to an error type whose flag SHAPE the compiler can see, and an unresolvable name is a mistake rather than a licence. Declare '{declaredThrowsType}', or name '{requiredThrowsType}' itself");
+    }
+
+    if (!declaredEnum.HasAssociatedValues) return;
+
+    throw ThrowsConformanceViolation(typeNameToken,
+      $"{ThrowsConformanceSubject(typeName, methodName)} throws '{declaredThrowsType}' but interface '{ifaceName}' declares it 'throws {requiredThrowsType}', which declares no case to decode — a dispatch catches such a requirement through the SCALAR error-flag ABI, while a payload-carrying union is handed over as a heap box pointer that would be decoded as an ordinal and never released. Throw a payload-free enum, or declare the requirement as '{declaredThrowsType}' itself");
+  }
+
+  /// `Method 'Type.method'` — the subject all six throws-conformance diagnostics open with, spelled
+  /// once, and built only on a path that is about to produce one. It is NOT hoisted to the top of
+  /// <see cref="ValidateThrowsConformance"/>: that runs for every conforming method of every program
+  /// declaring a conformance, and almost all of them agree.
+  private static string ThrowsConformanceSubject(string typeName, string methodName)
+    => $"Method '{typeName}.{methodName}'";
+
+  /// The ONE construction site for every throws-conformance violation: six of these diagnostics
+  /// carry the same code and anchor on the same token, and spelling that out per arm is how a seventh
+  /// comes to differ from the other six.
+  private static CompileError ThrowsConformanceViolation(Token typeNameToken, string message)
+    => new(ErrorCode.SemanticPartialInterfaceImpl, message, typeNameToken.Line, typeNameToken.Column);
+
+  /// A type by NAME, as this file sees it — or, failing that, as the MODULE declares it. The second
+  /// half is not a visibility hole: it answers only for a name the COMPILER is following out of a
+  /// declaration the user can already see (an interface requirement's `throws`, a caught error's
+  /// type), never for a name the user wrote. A caught error type may be file-private to another
+  /// file — the catch site learns of it only through the declaration it dispatches through — which
+  /// is the same reason <see cref="EmitErrorBinding"/> seeds one into this file's registry.
+  private IrType? LookupDeclaredType(string name) {
+    if (_typeRegistry.TryGetValue(name, out var visibleHere)) return visibleHere;
+    return _currentModule != null && _currentModule.TypeDefs.TryGetValue(name, out var declaredElsewhere)
+      ? declaredElsewhere : null;
   }
 
   /// <summary>
@@ -6220,14 +6319,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       } else {
         long numericVal = value is long lv ? lv : throw new CompileError(
           ErrorCode.SemanticTypeMismatch, $"Cannot cast non-integer value to '{ranged.Name}'", asToken.Line, asToken.Column);
-        bool outOfRange;
-        if (ranged.IntLower >= 0) {
-          outOfRange = (ulong)numericVal < (ulong)ranged.IntLower
-            || (ulong)numericVal > (ulong)ranged.InclusiveIntUpper;
-        } else {
-          outOfRange = numericVal < ranged.IntLower || numericVal > ranged.InclusiveIntUpper;
-        }
-        if (outOfRange) {
+        if (IntegerOutOfRange(numericVal, ranged)) {
           throw new CompileError(ErrorCode.SemanticTypeMismatch,
             $"Value {numericVal} is outside the range of '{ranged.Name}' ({ranged.FormatRange()})",
             asToken.Line, asToken.Column);
@@ -9840,7 +9932,8 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
 
       // Prefer the op-level ThrowsType: a synthetic builtin is absent from the function
       // registry, so `directCallee` is null and the op is the only source of its type.
-      return new TryCallTarget(existingTryCall, directCallee, existingTryCall.ThrowsType ?? directCallee?.ThrowsType);
+      return new TryCallTarget(existingTryCall, directCallee,
+        existingTryCall.ThrowsType ?? DeclaredThrowsTypeOfCall(existingTryCall, directCallee));
     }
 
     if (lastOp is MaxonAssignOp { IsDeclaration: true } tmpAssign
@@ -9855,7 +9948,8 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     }
 
     var callee = _currentModule!.FindFunctionByExactName(callOp.Callee);
-    if (callee != null && callee.ThrowsType == null) {
+    var throwsType = DeclaredThrowsTypeOfCall(callOp, callee);
+    if (throwsType == null && CallTargetDeclarationIsKnown(callOp, callee)) {
       throw new CompileError(ErrorCode.SemanticTryRequiresThrowingFunction,
         $"try requires a throwing function: '{callOp.Callee}' does not throw'",
         tryToken.Line, tryToken.Column);
@@ -9867,11 +9961,12 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       ArgVarNames = callOp.ArgVarNames,
       CallLine = callOp.CallLine,
       CallColumn = callOp.CallColumn,
-      ResultFnType = callOp.ResultFnType
+      ResultFnType = callOp.ResultFnType,
+      DispatchedSignature = callOp.DispatchedSignature
     };
     _currentBlock!.AddOp(tryCallOp);
 
-    return new TryCallTarget(tryCallOp, callee, callee?.ThrowsType);
+    return new TryCallTarget(tryCallOp, callee, throwsType);
   }
 
   /// <summary>
@@ -10406,7 +10501,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       var litOp = _currentBlock!.Operations.OfType<MaxonLiteralOp>().LastOrDefault();
       if (litOp != null) {
         var val = litOp.IntValue;
-        if (val < rangedRetType.IntLower || val > rangedRetType.InclusiveIntUpper) {
+        if (IntegerOutOfRange(val, rangedRetType)) {
           throw new CompileError(ErrorCode.SemanticTypeMismatch,
             $"otherwise value {val} is outside the range of '{rangedRetType.Name}' ({rangedRetType.FormatRange()})",
             tryToken.Line, tryToken.Column);
@@ -12251,9 +12346,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   private void ValidateThrowingBuiltinCallContext(string typeName, string methodName, Token methodToken) {
     var qualifiedName = $"{typeName}.{methodName}";
     var func = _currentModule!.FindFunctionByExactName(qualifiedName);
-    if (func?.ThrowsType != null) {
-      ValidateThrowingCallContext(func, methodToken, methodName);
-    }
+    ValidateThrowingCallContext(func?.ThrowsType, methodToken, methodName);
   }
 
   /// Unified dispatch for builtin type instance methods.
@@ -13064,11 +13157,51 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     }
     Expect(TokenType.RightParen);
     var (resultKind, resultStructTypeName) = ResolveInterfaceMethodReturn(ifaceMethod, userTypeName, fieldName, fieldToken);
-    var callOp = new MaxonCallOp(qualifiedMethodName, args, resultKind, resultStructTypeName);
+    var callOp = new MaxonCallOp(qualifiedMethodName, args, resultKind, resultStructTypeName) {
+      DispatchedSignature = ifaceMethod
+    };
     _currentBlock!.AddOp(callOp);
+    ApplyThrowingCallRules(callOp, fieldToken, qualifiedMethodName);
     InvalidateCachedSelfFields();
     return new ExprResult.Direct(callOp.Result ?? selfVal);
   }
+
+  /// The two obligations a call carrying a `throws` puts on its SITE, applied wherever a call is
+  /// emitted: it must stand in a `try` context, and inside a `try` BLOCK its error flag must be
+  /// routed to the block's shared handler. `EmitCallOpForCallee` has always applied both to direct
+  /// calls; a dispatched call reaches them through the requirement it dispatches through, which is
+  /// the only thing that knows it throws (see <see cref="MaxonCallOp.DispatchedSignature"/>).
+  private void ApplyThrowingCallRules(MaxonCallOp callOp, Token siteToken, string displayName) {
+    // A dispatched callee's name is in no registry, so `null` here is not a fallback — it is the
+    // whole reason the signature is stamped on the op.
+    var throwsType = DeclaredThrowsTypeOfCall(callOp, callee: null);
+    ValidateThrowingCallContext(throwsType, siteToken, displayName);
+    RouteBareThrowingCallToTryBlock(callOp, throwsType);
+  }
+
+  /// ⭐⭐ The `throws` type this CALL SITE catches, and the one place the two sources of that answer
+  /// are reconciled. A direct call's is its callee's registry entry; a DISPATCHED call's is the
+  /// interface requirement it goes through, because its callee name (`ChunkMaker.makeChunk`) is not
+  /// a module function until monomorphization devirtualizes it — long after the parser has decided
+  /// everything a `try` decides. Null means the target declares no `throws`; for a dispatched call
+  /// that is the requirement SAYING so, which is why "does it throw" and "what does it throw" are
+  /// one question here rather than two answered separately by each asker.
+  ///
+  /// A requirement's error type may be file-private to the file declaring the interface, exactly as
+  /// a direct callee's may be — a catch site learns of it only through the declaration it dispatches
+  /// through, which is the same reason <see cref="EmitErrorBinding"/> seeds it into this file's
+  /// registry. So the module's own table answers when this file's registry has never seen the name.
+  private IrType? DeclaredThrowsTypeOfCall(MaxonCallOp callOp, IrFunction<MaxonOp>? callee) {
+    if (callOp.DispatchedSignature is not { } dispatched) return callee?.ThrowsType;
+    return dispatched.ThrowsTypeName is { } requiredName ? LookupDeclaredType(requiredName) : null;
+  }
+
+  /// Whether anything can say what this call throws. A null throws type means "declares no throws"
+  /// only when it came from a declaration; for a call whose target is neither a registry function
+  /// nor a dispatched requirement — a synthetic builtin, whose error type rides on its own op — it
+  /// means nobody was asked, and `try` must not be refused on the strength of an unasked question.
+  private static bool CallTargetDeclarationIsKnown(MaxonCallOp callOp, IrFunction<MaxonOp>? callee)
+    => callee != null || callOp.DispatchedSignature != null;
 
   private void ParseTypeParamMethodCallStatement(string name, ResolvedVar resolved, string userTypeName, string fieldName, IrInterfaceMethodSignature ifaceMethod) {
     Advance(); // consume variable name
@@ -13094,8 +13227,11 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     Expect(TokenType.RightParen);
 
     var (resultKind, resultStructTypeName) = ResolveInterfaceMethodReturn(ifaceMethod, userTypeName, fieldName, methodToken);
-    var callOp = new MaxonCallOp(qualifiedMethodName, args, resultKind, resultStructTypeName);
+    var callOp = new MaxonCallOp(qualifiedMethodName, args, resultKind, resultStructTypeName) {
+      DispatchedSignature = ifaceMethod
+    };
     _currentBlock!.AddOp(callOp);
+    ApplyThrowingCallRules(callOp, methodToken, qualifiedMethodName);
     InvalidateCachedSelfFields();
   }
 
@@ -23813,8 +23949,8 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   /// Inside an active `try { } otherwise (e) { }` block, bare throwing calls are allowed —
   /// the parser later promotes the emitted MaxonCallOp to a MaxonTryCallOp and routes its
   /// error flag to the block's shared error handler (see RouteBareThrowingCallToTryBlock).
-  private void ValidateThrowingCallContext(IrFunction<MaxonOp> callee, Token functionNameToken, string displayName) {
-    if (callee.ThrowsType == null || _inTryContext) return;
+  private void ValidateThrowingCallContext(IrType? throwsType, Token functionNameToken, string displayName) {
+    if (throwsType == null || _inTryContext) return;
 
     // Bare throwing call inside a try block: allowed, routed implicitly.
     if (_tryBlockStack.Count > 0) return;
@@ -23840,10 +23976,10 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   /// callOp.Result to a MaxonVarRefOp loaded in the continuation block — so downstream
   /// callers that captured the original `callOp.Result` see a value that's live in the new
   /// _currentBlock.
-  private void RouteBareThrowingCallToTryBlock(MaxonCallOp callOp, IrFunction<MaxonOp> callee) {
+  private void RouteBareThrowingCallToTryBlock(MaxonCallOp callOp, IrType? throwsType) {
     if (_inTryContext) return;
     if (_tryBlockStack.Count == 0) return;
-    if (callee.ThrowsType is not IrEnumType errorEnum) return;
+    if (throwsType is not IrEnumType errorEnum) return;
 
     // The callOp is the most recently added op (or, for struct returns, second-to-last —
     // the trailing __call_tmp_ assign sits after it). Remove the trailing tmp first if present.
@@ -24088,7 +24224,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   }
 
   private MaxonCallOp EmitCallOpForCallee(Token functionNameToken, List<MaxonValue> args, IrFunction<MaxonOp> callee, string validateName) {
-    ValidateThrowingCallContext(callee, functionNameToken, validateName);
+    ValidateThrowingCallContext(callee.ThrowsType, functionNameToken, validateName);
 
     var (resultKind, resultStructTypeName) = ResolveCallResultType(callee.ReturnType, args, callee);
     var callOp = new MaxonCallOp(callee.Name, args, resultKind, resultStructTypeName) {
@@ -24108,7 +24244,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     if (callOp.Result != null && resultKind == MaxonValueKind.Struct) {
       EmitCallReturnTempAssign(callOp, resultKind.Value, resultStructTypeName);
     }
-    RouteBareThrowingCallToTryBlock(callOp, callee);
+    RouteBareThrowingCallToTryBlock(callOp, callee.ThrowsType);
     InvalidateCachedSelfFields();
     return callOp;
   }

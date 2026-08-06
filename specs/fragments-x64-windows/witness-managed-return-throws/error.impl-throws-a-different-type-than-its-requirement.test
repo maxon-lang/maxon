@@ -1,0 +1,39 @@
+// Test: error.impl-throws-a-different-type-than-its-requirement
+typealias Payload = int(0 to u64.max)
+
+union MakeError implements Error
+	tooBig(limit Payload)
+end 'MakeError'
+
+enum FlatError implements Error
+	nope
+end 'FlatError'
+
+interface ChunkMaker
+	function check(seed Payload) throws MakeError
+end 'ChunkMaker'
+
+type Backend implements ChunkMaker
+	export let cap as Payload
+
+	static function create(cap Payload) returns Backend
+		return Self{cap: cap}
+	end 'create'
+
+	function check(seed Payload) throws FlatError
+		if seed > self.cap 'reject'
+			throw FlatError.nope
+		end 'reject'
+	end 'check'
+end 'Backend'
+
+function main() returns ExitCode
+	let backend = Backend.create(100)
+	return backend.cap as ExitCode
+end 'main'
+---
+MaxoncStderr: ```
+error E3016: specs/fragments/witness-managed-return-throws/error.impl-throws-a-different-type-than-its-requirement.test:16:6: Method 'Backend.check' throws 'FlatError' but interface 'ChunkMaker' declares it 'throws MakeError' — a dispatch through an interface types its caught error off the INTERFACE, so the impl's error would be decoded as 'MakeError'
+```
+---
+---

@@ -1,0 +1,36 @@
+// Test: error.try-on-a-non-throwing-requirement
+typealias Payload = int(0 to u64.max)
+
+interface ChunkMaker
+	function plain(seed Payload) returns Payload
+end 'ChunkMaker'
+
+type Backend implements ChunkMaker
+	export let cap as Payload
+
+	static function create(cap Payload) returns Backend
+		return Self{cap: cap}
+	end 'create'
+
+	function plain(seed Payload) returns Payload
+		return seed
+	end 'plain'
+end 'Backend'
+
+function obtainMaker(cap Payload) returns ChunkMaker
+	return Backend.create(cap)
+end 'obtainMaker'
+
+function attempt(maker ChunkMaker, seed Payload) returns Payload
+	return try maker.plain(seed) otherwise 0
+end 'attempt'
+
+function main() returns ExitCode
+	return attempt(obtainMaker(100), seed: 5) as ExitCode
+end 'main'
+---
+MaxoncStderr: ```
+error E3055: specs/fragments/witness-managed-return-throws/error.try-on-a-non-throwing-requirement.test:25:9: try requires a throwing function: 'ChunkMaker.plain' does not throw'
+```
+---
+---

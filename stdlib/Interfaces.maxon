@@ -179,8 +179,15 @@ end 'BidirectionalIterator'
 // createIterator() returns a fresh Iterator for traversal. Each call produces an
 // independent iterator, so nested for-in loops over the same collection work correctly.
 // Conformance: implements Iterable with (ElementType, IteratorType)
+//
+// It throws IterationError for the same reason `Iterator.advance` does: an EMPTY iterable has no
+// first element to position on, so `createIterator` reports `exhausted` rather than handing back an
+// iterator whose `current()` has nothing to return. Every conforming type in this library already
+// declares it (Array, List, Map, Set, Vector, Range, String and the three String views — 11 of 11);
+// the requirement did not, and a dispatch is typed off the REQUIREMENT, so the flag those impls
+// write was read by nobody and the error was dropped.
 export interface Iterable uses Element, Iter
-	function createIterator() returns Iter
+	function createIterator() returns Iter throws IterationError
 end 'Iterable'
 
 // Extension methods for Iterable - available on all conforming types

@@ -1,0 +1,43 @@
+// Test: error.throwing-requirement-called-without-try
+typealias Payload = int(0 to u64.max)
+
+union MakeError implements Error
+	tooBig(limit Payload)
+end 'MakeError'
+
+interface ChunkMaker
+	function check(seed Payload) throws MakeError
+end 'ChunkMaker'
+
+type Backend implements ChunkMaker
+	export let cap as Payload
+
+	static function create(cap Payload) returns Backend
+		return Self{cap: cap}
+	end 'create'
+
+	function check(seed Payload) throws MakeError
+		if seed > self.cap 'reject'
+			throw MakeError.tooBig(self.cap)
+		end 'reject'
+	end 'check'
+end 'Backend'
+
+function obtainMaker(cap Payload) returns ChunkMaker
+	return Backend.create(cap)
+end 'obtainMaker'
+
+function attempt(maker ChunkMaker, seed Payload) returns Payload
+	maker.check(seed)
+	return seed
+end 'attempt'
+
+function main() returns ExitCode
+	return attempt(obtainMaker(100), seed: 200) as ExitCode
+end 'main'
+---
+MaxoncStderr: ```
+error E3057: specs/fragments/witness-managed-return-throws/error.throwing-requirement-called-without-try.test:31:8: throwing function requires try: 'ChunkMaker.check'
+```
+---
+---

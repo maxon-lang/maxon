@@ -633,6 +633,22 @@ public class MaxonCallOp : MaxonOp {
       if (Result is MaxonFunctionPtr resultFnPtr) resultFnPtr.FunctionType = value;
     }
   }
+
+  /// ⭐⭐ The interface (or `where`-constrained type-parameter) method signature this call
+  /// dispatches through, for a call whose callee NAME — `ChunkMaker.makeChunk` — names no
+  /// module function. Monomorphization devirtualizes such a callee later; until it does,
+  /// `FindFunctionByExactName` answers null, and every question the parser asks about a call's
+  /// `throws` is keyed off exactly that lookup. Answering them from the registry alone made all
+  /// of them read "does not throw": the caught box leaked, `(e)` bound a raw int, a `try` on a
+  /// non-throwing requirement was accepted (and branched on an error register nobody wrote),
+  /// and a throwing one called WITHOUT `try` dropped the error.
+  ///
+  /// This is the only place those answers exist at parse time, which is where the bootstrap
+  /// decides all of them. Null for an ordinary direct call, whose signature IS in the registry —
+  /// so non-null also means "the requirement is authoritative", and a null `ThrowsTypeName`
+  /// inside it means the method genuinely does not throw rather than that nobody knows.
+  public IrInterfaceMethodSignature? DispatchedSignature { get; set; }
+
   // Whether each argument at the call site came from a mutable variable
   public List<bool>? ArgMutabilities { get; set; }
   // The variable name each argument came from (null for literals/expressions)

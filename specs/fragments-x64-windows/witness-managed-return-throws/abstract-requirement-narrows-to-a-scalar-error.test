@@ -1,66 +1,53 @@
-// Test: throwing-witness-managed-return-both-edges
+// Test: abstract-requirement-narrows-to-a-scalar-error
 typealias Payload = int(0 to u64.max)
 
-type Chunk
-	export var payload as Payload
+enum ParseFailure implements Error
+	badDigit
+end 'ParseFailure'
 
-	static function create(payload Payload) returns Chunk
-		return Self{payload: payload}
-	end 'create'
-end 'Chunk'
+interface Reader
+	function read(seed Payload) returns Payload throws Error
+end 'Reader'
 
-// A boxed-union error (it carries a payload case) so the caught error is a heap
-// box — exercising the `witnessTryCall` error-flag release.
-union MakeError implements Error
-	tooBig(limit Payload)
-end 'MakeError'
-
-interface ChunkMaker
-	function makeChunk(seed Payload) returns Chunk throws MakeError
-end 'ChunkMaker'
-
-type Backend implements ChunkMaker
+type Digits implements Reader
 	export let cap as Payload
 
-	static function create(cap Payload) returns Backend
+	static function create(cap Payload) returns Digits
 		return Self{cap: cap}
 	end 'create'
 
-	function makeChunk(seed Payload) returns Chunk throws MakeError
+	function read(seed Payload) returns Payload throws ParseFailure
 		if seed > self.cap 'reject'
-			throw MakeError.tooBig(self.cap)
+			throw ParseFailure.badDigit
 		end 'reject'
-		return Chunk.create(seed)
-	end 'makeChunk'
-end 'Backend'
+		return seed
+	end 'read'
+end 'Digits'
 
-// Returns the bare INTERFACE so `maker.makeChunk` dispatches through the witness
-// table (a `witnessTryCall`, not a monomorphized direct call).
-function obtainMaker(cap Payload) returns ChunkMaker
-	return Backend.create(cap)
-end 'obtainMaker'
+function obtainReader(cap Payload) returns Reader
+	return Digits.create(cap)
+end 'obtainReader'
 
-function attempt(maker ChunkMaker, seed Payload, fallback Payload) returns Payload
-	let chunk = try maker.makeChunk(seed) otherwise return fallback
-	return chunk.payload
+function attempt(reader Reader, seed Payload) returns Payload
+	return try reader.read(seed) otherwise 9
 end 'attempt'
 
 function main() returns ExitCode
-	let maker = obtainMaker(100)
-	print("{attempt(maker, seed: 42, fallback: 999)}\n")
-	print("{attempt(maker, seed: 200, fallback: 7)}\n")
+	let reader = obtainReader(100)
+	print("{attempt(reader, seed: 42)}\n")
+	print("{attempt(reader, seed: 200)}\n")
 	return 0
 end 'main'
 ---
 ExitCode: 0
 Stdout: ```
 42
-7
+9
 ```
 ---
 // CompiledIR
 module {
-  func @Chunk.create(payload: i64) -> i64 {
+  func @Digits.create(cap: i64) -> i64 {
   entry:
     x64.prologue stack_size=16
     x64.mov [rbp-16], rcx
@@ -79,68 +66,33 @@ module {
     x64.epilogue
     x64.ret
   }
-  func @Backend.create(cap: i64) -> i64 {
+  func @Digits.read(__self_ptr: i64, seed: i64) -> u64 {
   entry:
     x64.prologue stack_size=16
-    x64.mov [rbp-16], rcx
-    x64.mov rcx, 8
-    x64.xor edx, edx
-    x64.mov r8, 2
-    x64.call mm_alloc
-    x64.mov [rbp-8], rax
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rbp-16]
-    x64.mov [rax+0], rcx
-    x64.mov rdx, [rbp-8]
-    x64.mov rcx, [rbp-8]
-    x64.call mm_incref
-    x64.mov rax, [rbp-8]
-    x64.epilogue
-    x64.ret
-  }
-  func @Backend.makeChunk(__self_ptr: i64, seed: i64) -> i64 {
-  entry:
-    x64.prologue stack_size=48
     x64.mov [rbp-8], rcx
     x64.mov [rbp-16], rdx
     x64.mov rax, [rbp-8]
     x64.mov rbx, [rax+0]
     x64.cmp rdx, rbx
-    x64.jle Backend.makeChunk.reject_0.after
+    x64.jle Digits.read.reject_0.after
   reject_0:
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+0]
-    x64.mov [rbp-40], rcx
-    x64.mov rcx, 16
-    x64.xor edx, edx
-    x64.mov r8, 3
-    x64.call mm_alloc
-    x64.mov [rbp-24], rax
-    x64.xor edx, edx
-    x64.mov [rax+0], rdx
-    x64.mov rbx, [rbp-40]
-    x64.mov [rax+8], rbx
-    x64.mov rsi, [rbp-24]
-    x64.mov rcx, [rbp-24]
-    x64.call mm_incref
-    x64.mov rdx, [rbp-24]
+    x64.xor eax, eax
+    x64.mov rcx, 1
+    x64.add rax, rcx
+    x64.mov rdx, rax
     x64.xor eax, eax
     x64.epilogue
     x64.ret
   reject_0.after:
     x64.mov rax, [rbp-16]
-    x64.mov rcx, [rbp-16]
-    x64.call Chunk.create
-    x64.mov [rbp-32], rax
-    x64.mov rax, [rbp-32]
     x64.xor edx, edx
     x64.epilogue
     x64.ret
   }
-  func @obtainMaker(cap: i64) -> i64 {
+  func @obtainReader(cap: i64) -> i64 {
   entry:
     x64.prologue stack_size=16
-    x64.call Backend.create
+    x64.call Digits.create
     x64.mov [rbp-8], rax
     x64.mov rax, [rbp-8]
     x64.epilogue
@@ -150,13 +102,12 @@ module {
   entry:
     x64.prologue stack_size=224
     x64.mov rcx, 100
-    x64.call obtainMaker
+    x64.call obtainReader
     x64.mov [rbp-8], rax
     x64.mov rax, [rbp-8]
     x64.mov rcx, [rbp-8]
     x64.mov rdx, 42
-    x64.mov r8, 999
-    x64.call attempt$Backend
+    x64.call attempt$Digits
     x64.mov [rbp-160], rax
     x64.mov rcx, 21
     x64.call mm_raw_alloc
@@ -178,7 +129,7 @@ module {
     x64.mov [rbp-184], rdi
     x64.mov rcx, r9
     x64.mov rdx, r8
-    x64.mov r8, 4
+    x64.mov r8, 2
     x64.call mm_alloc
     x64.mov [rbp-24], rax
     x64.mov rax, 48
@@ -253,8 +204,7 @@ module {
     x64.mov rax, [rbp-8]
     x64.mov rcx, [rbp-8]
     x64.mov rdx, 200
-    x64.mov r8, 7
-    x64.call attempt$Backend
+    x64.call attempt$Digits
     x64.mov [rbp-192], rax
     x64.mov rcx, 21
     x64.call mm_raw_alloc
@@ -276,7 +226,7 @@ module {
     x64.mov [rbp-216], rsi
     x64.mov rcx, r8
     x64.mov rdx, r9
-    x64.mov r8, 4
+    x64.mov r8, 2
     x64.call mm_alloc
     x64.mov [rbp-96], rax
     x64.mov rax, 48
@@ -370,71 +320,31 @@ module {
     x64.epilogue
     x64.ret
   }
-  func @attempt$Backend(maker: i64, seed: i64, fallback: i64) -> u64 {
+  func @attempt$Digits(reader: i64, seed: i64) -> u64 {
   entry:
-    x64.prologue stack_size=48
+    x64.prologue stack_size=32
     x64.mov [rbp-8], rcx
-    x64.mov [rbp-16], r8
     x64.mov rax, [rbp-8]
     x64.mov rcx, [rbp-8]
-    x64.call Backend.makeChunk
-    x64.mov [rbp-24], rdx
-    x64.mov [rbp-32], rax
-    x64.xor ecx, ecx
-    x64.cmp rdx, rcx
-    x64.je attempt$Backend.otherwise_continue_1
-  otherwise_stmt_0:
+    x64.call Digits.read
+    x64.mov rcx, 9
+    x64.mov [rbp-16], rcx
+    x64.mov [rbp-24], rax
+    x64.xor eax, eax
+    x64.cmp rdx, rax
+    x64.je attempt$Digits.otherwise_default_continue_3
+  otherwise_default_error_0:
+    x64.mov rax, [rbp-16]
+    x64.mov [rbp-24], rax
+    x64.jmp attempt$Digits.otherwise_default_continue_3
+  otherwise_default_continue_0:
     x64.mov rax, [rbp-24]
-    x64.mov rcx, [rbp-24]
-    x64.call mm_decref
-    x64.mov rax, [rbp-16]
-    x64.mov rcx, [rbp-32]
-    x64.test rcx, rcx
-    x64.jz __nonnull_skip_3
-    x64.call mm_decref
-    x64.label __nonnull_skip_3
-    x64.mov rax, [rbp-16]
-    x64.epilogue
-    x64.ret
-  otherwise_continue_0:
-    x64.mov rax, [rbp-32]
-    x64.mov [rbp-40], rax
-    x64.mov rcx, [rbp-40]
-    x64.call mm_incref
-    x64.mov rdx, [rbp-40]
-    x64.mov rax, [rdx+0]
-    x64.mov rbx, [rbp-32]
-    x64.mov [rbp-48], rax
-    x64.test rbx, rbx
-    x64.jz __nonnull_skip_4
-    x64.mov rcx, [rbp-32]
-    x64.call mm_decref
-    x64.label __nonnull_skip_4
-    x64.mov rsi, [rbp-40]
-    x64.test rsi, rsi
-    x64.jz __nonnull_skip_5
-    x64.mov rcx, [rbp-40]
-    x64.call mm_decref
-    x64.label __nonnull_skip_5
-    x64.mov rax, [rbp-48]
     x64.epilogue
     x64.ret
   }
-  func @__destruct_Chunk(ptr: i64) {
+  func @__destruct_Digits(ptr: i64) {
   entry:
-    x64.jmp __destruct_Chunk.done
-  done:
-    x64.ret
-  }
-  func @__destruct_Backend(ptr: i64) {
-  entry:
-    x64.jmp __destruct_Backend.done
-  done:
-    x64.ret
-  }
-  func @__destruct_MakeError(ptr: i64) {
-  entry:
-    x64.jmp __destruct_MakeError.done
+    x64.jmp __destruct_Digits.done
   done:
     x64.ret
   }
