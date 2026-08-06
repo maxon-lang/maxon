@@ -41,10 +41,14 @@ WHAT THIS PINS, AND WHY IT IS THE ONE THING NOTHING PINNED:
 WHAT IS STABLE vs ENVIRONMENT-SPECIFIC:
   * DELIBERATELY OFFSET-FREE. `--dump-info <exe> statements` prints the source position of every line
     row WITHOUT its .text offset, and that is the whole reason this golden is still readable a month
-    from now: absolute offsets move whenever anything earlier in the image changes size, and six checks
-    across step/bpstep/complete were red for exactly that reason when this landed (regenerated in the
-    same commit; the diff was offsets and nothing else). A golden that reds on every codegen change is
-    one that gets regenerated without being read — the failure mode this rung exists to close.
+    from now: absolute offsets move whenever anything earlier in the image changes size. FOR THE
+    RECORD, MEASURED — this gate was believed to read 53/53 when this landed and it read 43/53. Four of
+    the ten reds were the known-stale green-thread transcripts (A3b); the other SIX, across
+    step/bpstep/complete, were nobody's filed debt and had gone unnoticed: pure `.text` offset drift
+    from a `main` that had grown somewhere else, verified mechanically as offsets-and-nothing-else
+    (every function, file, line, col, source line and backtrace shape identical) and regenerated in the
+    same commit as this file. A golden that reds on every codegen change is one that gets regenerated
+    without being read — the failure mode this rung exists to close.
     `--dump-info` with no section named still prints everything; `lines` is the section that keeps the
     offsets, and the `--batch` goldens beside this one are where they are pinned.
   * The source path appears exactly as it was passed to `maxon build` (repo-relative when built from

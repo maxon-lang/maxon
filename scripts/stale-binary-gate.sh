@@ -104,10 +104,19 @@ VICTIM="maxon-shv2/Main.maxon"
 # a `.maxonignore`, so its program is not in the binary and cannot make it stale.
 EXCLUDED="maxon-shv2/track0/alloc-torture.maxon"
 
-# One spec, four tests, nothing interesting: every check below is about whether the harness ran AT
-# ALL, so the tests themselves must be the cheapest in the suite.
+# A cheap slice of the suite, nothing interesting: every check below is about whether the harness ran
+# AT ALL, so the tests themselves must be among the cheapest there are.
+#
+# ⚠ THE EXPECTED SUMMARY IS NOT WRITTEN DOWN — it is what CHECK 1 OBSERVES, and the rest of the matrix
+# is compared against that. It WAS a literal `4 passed, 0 failed`, and that literal was a COUNT OF THE
+# CORPUS pinned inside a gate that is not about the corpus. shv2's `--filter` is a SUBSTRING match on
+# `<spec>/<test>` (SpecTestRunner.maxon), so `arithmetic/` selects `wide-immediate-arithmetic/` too —
+# and when that spec landed on 2026-08-04 the count went 4 -> 10 and this gate went red for a reason
+# with nothing to do with stale binaries. Nobody saw it for two days, because `buildall.sh` was dying
+# four steps earlier. Deriving it makes the check STRONGER, not weaker: CHECKS 3-6 now assert the same
+# run the control produced, so a run that silently executed FEWER tests is caught, which a literal
+# could never see.
 FILTER="arithmetic/"
-EXPECTED_SUMMARY="4 passed, 0 failed"
 
 FAILED=0
 
@@ -229,7 +238,12 @@ printf '\n'
 # perfect green on the refusal checks alone, and this is what makes that impossible.
 code="$(run_suite "$SHV2")"
 got="$(summary)"
-if [ "$code" = "0" ] && [ "$got" = "$EXPECTED_SUMMARY" ]; then
+# The control DEFINES the expected summary for every later check (see FILTER). It can only assert what
+# is true of a clean run whatever the corpus holds: it exited 0, it printed a summary, and nothing in
+# it failed. A `0 passed` would satisfy the first two and is refused — that is a filter matching
+# nothing, which would make every check below a comparison between two empty runs.
+EXPECTED_SUMMARY="$got"
+if [ "$code" = "0" ] && [ -n "$got" ] && [ "${got#0 passed}" = "$got" ] && [ "${got% 0 failed}" != "$got" ]; then
 	pass "CHECK 1: a tree with nothing newer than the binary runs normally ($got)"
 else
 	fail "CHECK 1: a tree with nothing newer than the binary runs normally" "exit=$code; ${got:-no summary line}"
