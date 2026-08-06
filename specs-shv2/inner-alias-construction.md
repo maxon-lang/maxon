@@ -702,6 +702,49 @@ end 'main'
 4
 ```
 
+<!-- test: an-inner-alias-shadowing-its-own-type-loses-IN-BODY-too -->
+The companion above calls from `main`, where `enclosingInnerAliases` is EMPTY — so the inner-alias door
+cannot fire there and the case cannot distinguish "the type won" from "the alias was never consulted".
+This one calls from INSIDE `Holder`'s own body, where the alias IS in scope, and is built so the two
+readings disagree LOUDLY: the enclosing type's `create()` takes no arguments while the alias's
+(`Pair.create`) takes one, so if the alias won this program would be an arity error rather than a
+different number. It answers 4, so the enclosing TYPE wins at both call sites and the precedence is one
+rule rather than two. (No oracle spelling: the bootstrap cannot compile a type that shadows its own name
+— measured, it fails this program.)
+```maxon
+typealias ExitCode = int(0 to 125)
+
+type Pair uses T
+	export var a as T
+
+	export static function create(a T) returns Self
+		return Self{a: a}
+	end 'create'
+end 'Pair'
+
+type Holder
+	typealias Holder = Pair with ExitCode
+
+	export var seed as ExitCode
+
+	export static function create() returns Holder
+		return Self{seed: 4}
+	end 'create'
+
+	export static function probe() returns ExitCode
+		let h = Holder.create()
+		return h.seed
+	end 'probe'
+end 'Holder'
+
+function main() returns ExitCode
+	return Holder.probe()
+end 'main'
+```
+```exitcode
+4
+```
+
 ### A RANGED inner alias has nothing to construct
 
 `{}` on an inner alias means the alias's empty CONTAINER, and a number is not one. It is refused by what it
