@@ -778,6 +778,31 @@ public enum ErrorCode {
   /// through the witness ABI, and is guarded separately by E3016.
   /// </summary>
   SemanticThrowsTypeNotAnErrorEnum = 3113,
+  /// <summary>
+  /// A `try` on a call dispatched through an interface requirement whose `throws` names an INTERFACE
+  /// (the abstract error channel, `throws Error`) asks for the caught error in a form that needs the
+  /// error's CONCRETE type -- an `(e)` binding, or routing into a `try` BLOCK's shared handler.
+  /// There is no such type at the dispatch. E3016 lets each conformer NARROW an abstract requirement
+  /// to its own payload-free error enum, so the ordinal in the error flag means whatever the conformer
+  /// that actually ran says it means, and which conformer that is becomes knowable only at
+  /// monomorphization -- long after the parser decides everything a `try` decides.
+  /// MEASURED before this check existed: the binding fell through to the raw error-flag `int`, and
+  /// `print("{e}")` on a caught `ParseFailure.worse` printed `2` -- the ABI's `ordinal +
+  /// ErrorFlagOrdinalBias`, handed to the user as their error value, compiling and running green. A
+  /// `match e` on the same binding was refused instead, with `E2004: Expected pattern value`, naming a
+  /// case the user had just written. The `try` BLOCK form failed a third way: nothing routed the call,
+  /// so the block was refused with E3083 (`try block contains no throwing calls`) about a block that
+  /// contains one.
+  /// The forms that need no concrete type are unaffected and stay legal: `otherwise &lt;default&gt;`,
+  /// `otherwise ignore`, `otherwise panic`, `otherwise return/break/continue`, and an `otherwise
+  /// 'label'` block with no binding. Each catches the flag without decoding it, which is exactly what
+  /// an abstract channel can promise. Bind the error by declaring the requirement as the concrete
+  /// error enum the caller means to catch.
+  /// NOT E3113, which is the same hazard on a FUNCTION's own clause and is refused at the DECLARATION.
+  /// A requirement is allowed to name an interface -- that is what `Error` is for -- so the refusal
+  /// has to fall on the catch site that cannot be served, not on the declaration that is well-formed.
+  /// </summary>
+  SemanticAbstractRequirementErrorNotBindable = 3123,
 
   /// <summary>
   /// The IR builder met an expression form it cannot lower.

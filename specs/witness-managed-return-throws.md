@@ -755,6 +755,208 @@ end 'main'
 error E3016: specs/fragments/witness-managed-return-throws/error.abstract-requirement-narrowed-to-a-boxed-union.test:12:6: Method 'Digits.read' throws 'ParseFailure' but interface 'Reader' declares it 'throws Error', which declares no case to decode — a dispatch catches such a requirement through the SCALAR error-flag ABI, while a payload-carrying union is handed over as a heap box pointer that would be decoded as an ordinal and never released. Throw a payload-free enum, or declare the requirement as 'ParseFailure' itself
 ```
 
+<!-- test: abstract-requirement-non-decoding-handlers-still-catch -->
+<!-- targets: x64-windows, x64-linux, x64-macos, arm64-windows, arm64-macos, arm64-linux -->
+The BOUNDARY of the two refusals below, and the reason they are not a rule about
+dispatching through an abstract requirement at all. Every `otherwise` form that
+catches the error flag WITHOUT decoding it keeps working here: a default value,
+`return`, an UNBOUND `otherwise 'label'` block, and `ignore`. Each of the four
+needs only "did it throw", which is the whole of what an abstract channel can
+promise — and the release is correct for all of them because E3016 has already
+proven the narrowed impl error is scalar, so there is no box to leak.
+```maxon
+typealias Payload = int(0 to u64.max)
+
+enum ParseFailure implements Error
+	badDigit
+end 'ParseFailure'
+
+interface Reader
+	function read(seed Payload) returns Payload throws Error
+	function check(seed Payload) throws Error
+end 'Reader'
+
+type Digits implements Reader
+	export let cap as Payload
+
+	static function create(cap Payload) returns Digits
+		return Self{cap: cap}
+	end 'create'
+
+	function read(seed Payload) returns Payload throws ParseFailure
+		if seed > self.cap 'reject'
+			throw ParseFailure.badDigit
+		end 'reject'
+		return seed
+	end 'read'
+
+	function check(seed Payload) throws ParseFailure
+		if seed > self.cap 'reject'
+			throw ParseFailure.badDigit
+		end 'reject'
+	end 'check'
+end 'Digits'
+
+function obtainReader(cap Payload) returns Reader
+	return Digits.create(cap)
+end 'obtainReader'
+
+function viaDefault(reader Reader, seed Payload) returns Payload
+	return try reader.read(seed) otherwise 9
+end 'viaDefault'
+
+function viaReturn(reader Reader, seed Payload) returns Payload
+	let v = try reader.read(seed) otherwise return 8
+	return v
+end 'viaReturn'
+
+function viaUnboundBlock(reader Reader, seed Payload) returns Payload
+	var out = seed
+	try reader.check(seed) otherwise 'oops'
+		out = 7
+	end 'oops'
+	return out
+end 'viaUnboundBlock'
+
+function viaIgnore(reader Reader, seed Payload) returns Payload
+	try reader.check(seed) otherwise ignore
+	return seed
+end 'viaIgnore'
+
+function main() returns ExitCode
+	let reader = obtainReader(100)
+	print("{viaDefault(reader, seed: 200)}\n")
+	print("{viaReturn(reader, seed: 200)}\n")
+	print("{viaUnboundBlock(reader, seed: 200)}\n")
+	print("{viaIgnore(reader, seed: 200)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+9
+8
+7
+200
+```
+
+<!-- test: error.abstract-requirement-caught-error-cannot-be-bound -->
+An `(e)` binding needs the caught error's CONCRETE type, and a dispatch through an
+abstract requirement has none: the case above lets each conformer narrow
+`throws Error` to its own payload-free enum, so the ordinal in the flag means
+whatever the conformer that actually ran says it means — and which one ran is
+settled at monomorphization, long after the parser decides everything a `try`
+decides.
+
+⚠ This was NOT a refusal before. The binding fell through to the raw error-flag
+`int`: the program below with `print("{e}\n")` in place of the `match` COMPILED,
+RAN and printed `2` — the ABI's `ordinal + ErrorFlagOrdinalBias` handed back as the
+user's error value, green under the whole suite. `match e` earned a different wrong
+answer, `E2004: Expected pattern value, got 'badDigit'`, naming a case the user had
+just written.
+```maxon
+typealias Payload = int(0 to u64.max)
+
+enum ParseFailure implements Error
+	badDigit
+end 'ParseFailure'
+
+interface Reader
+	function read(seed Payload) returns Payload throws Error
+end 'Reader'
+
+type Digits implements Reader
+	export let cap as Payload
+
+	static function create(cap Payload) returns Digits
+		return Self{cap: cap}
+	end 'create'
+
+	function read(seed Payload) returns Payload throws ParseFailure
+		if seed > self.cap 'reject'
+			throw ParseFailure.badDigit
+		end 'reject'
+		return seed
+	end 'read'
+end 'Digits'
+
+function obtainReader(cap Payload) returns Reader
+	return Digits.create(cap)
+end 'obtainReader'
+
+function attempt(reader Reader, seed Payload) returns Payload
+	let v = try reader.read(seed) otherwise (e) 'oops'
+		return 0
+	end 'oops'
+	return v
+end 'attempt'
+
+function main() returns ExitCode
+	let reader = obtainReader(100)
+	return attempt(reader, seed: 200) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3123: specs/fragments/witness-managed-return-throws/error.abstract-requirement-caught-error-cannot-be-bound.test:32:43: cannot bind it as 'e': this call is dispatched through an interface requirement declaring 'throws Error', which names an INTERFACE and so declares no case to decode — each conformer narrows it to its own error enum, and which conformer runs is not known until monomorphization. Use 'otherwise' with a default value, 'ignore', 'panic', 'return' or an unbound block, or declare the requirement as the concrete error enum you mean to catch
+```
+
+<!-- test: error.abstract-requirement-caught-error-cannot-route-into-a-try-block -->
+The same fact reached through the `try` BLOCK form, whose handler decodes the
+routed flag against a concrete enum for the same reason an `(e)` binding does. Its
+old failure named the wrong thing a third way: nothing routed the call, so the
+block was refused with `E3083: try block contains no throwing calls` about a block
+that contains exactly one.
+```maxon
+typealias Payload = int(0 to u64.max)
+
+enum ParseFailure implements Error
+	badDigit
+end 'ParseFailure'
+
+interface Reader
+	function check(seed Payload) throws Error
+end 'Reader'
+
+type Digits implements Reader
+	export let cap as Payload
+
+	static function create(cap Payload) returns Digits
+		return Self{cap: cap}
+	end 'create'
+
+	function check(seed Payload) throws ParseFailure
+		if seed > self.cap 'reject'
+			throw ParseFailure.badDigit
+		end 'reject'
+	end 'check'
+end 'Digits'
+
+function obtainReader(cap Payload) returns Reader
+	return Digits.create(cap)
+end 'obtainReader'
+
+function attempt(reader Reader, seed Payload) returns Payload
+	var out = seed
+	try 'work'
+		reader.check(seed)
+	end 'work'
+	otherwise 'handler'
+		out = 7
+	end 'handler'
+	return out
+end 'attempt'
+
+function main() returns ExitCode
+	let reader = obtainReader(100)
+	return attempt(reader, seed: 200) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3123: specs/fragments/witness-managed-return-throws/error.abstract-requirement-caught-error-cannot-route-into-a-try-block.test:33:10: cannot route it into the enclosing 'try' block: this call is dispatched through an interface requirement declaring 'throws Error', which names an INTERFACE and so declares no case to decode — each conformer narrows it to its own error enum, and which conformer runs is not known until monomorphization. Use 'otherwise' with a default value, 'ignore', 'panic', 'return' or an unbound block, or declare the requirement as the concrete error enum you mean to catch
+```
+
 <!-- test: try-block-routes-a-dispatched-throwing-call -->
 <!-- targets: x64-windows, x64-linux, x64-macos, arm64-windows, arm64-macos, arm64-linux -->
 The sixth and last shape: the `try` BLOCK form, where a BARE call inside the block

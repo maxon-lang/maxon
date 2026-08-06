@@ -1637,6 +1637,31 @@ E3122 SemanticTransformArityMismatch
 	doc deliberately requires less: the transform's parameter TYPES are not checked here, so "the two function
 	doc types must agree" would be false as a statement of what this position demands.
 
+E3123 SemanticAbstractRequirementErrorNotBindable
+	csharp SemanticAbstractRequirementErrorNotBindable
+	doc A `try` on a call dispatched through an interface requirement whose `throws` names an INTERFACE
+	doc (the abstract error channel, `throws Error`) asks for the caught error in a form that needs the
+	doc error's CONCRETE type -- an `(e)` binding, or routing into a `try` BLOCK's shared handler.
+	doc There is no such type at the dispatch. E3016 lets each conformer NARROW an abstract requirement
+	doc to its own payload-free error enum, so the ordinal in the error flag means whatever the conformer
+	doc that actually ran says it means, and which conformer that is becomes knowable only at
+	doc monomorphization -- long after the parser decides everything a `try` decides.
+	doc MEASURED before this check existed: the binding fell through to the raw error-flag `int`, and
+	doc `print("{e}")` on a caught `ParseFailure.worse` printed `2` -- the ABI's `ordinal +
+	doc ErrorFlagOrdinalBias`, handed to the user as their error value, compiling and running green. A
+	doc `match e` on the same binding was refused instead, with `E2004: Expected pattern value`, naming a
+	doc case the user had just written. The `try` BLOCK form failed a third way: nothing routed the call,
+	doc so the block was refused with E3083 (`try block contains no throwing calls`) about a block that
+	doc contains one.
+	doc The forms that need no concrete type are unaffected and stay legal: `otherwise <default>`,
+	doc `otherwise ignore`, `otherwise panic`, `otherwise return/break/continue`, and an `otherwise
+	doc 'label'` block with no binding. Each catches the flag without decoding it, which is exactly what
+	doc an abstract channel can promise. Bind the error by declaring the requirement as the concrete
+	doc error enum the caller means to catch.
+	doc NOT E3113, which is the same hazard on a FUNCTION's own clause and is refused at the DECLARATION.
+	doc A requirement is allowed to name an interface -- that is what `Error` is for -- so the refusal
+	doc has to fall on the catch site that cannot be served, not on the declaration that is well-formed.
+
 E4001 IrUnsupportedExpression
 	csharp IrUnsupportedExpression
 	doc The IR builder met an expression form it cannot lower.

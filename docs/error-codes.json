@@ -1,6 +1,6 @@
 {
   "generatedFrom": "docs/error-codes.txt",
-  "sourceHash": "7ab52fa451b6fb83",
+  "sourceHash": "3907b82dd18be557",
   "note": "GENERATED. Do not edit. Run `maxon error-codes generate`. A reader MUST hash generatedFrom's bytes (FNV-1a 64, hex) and refuse to answer unless it equals sourceHash.",
   "compilers": ["csharp", "selfhosted", "shv2"],
   "codes": [
@@ -1390,6 +1390,15 @@
       "doc": "A function value bound as a container `map`'s transform declares a different number of parameters\nthan the position calls it with. `map`'s transform is `function(Element) returns Element`\n(`stdlib/Interfaces.maxon:189`), so it takes exactly ONE parameter -- the container's own element --\nand the runtime walk calls it with exactly one argument plus the uniform `__env` slot.\nUSER RULING 2026-08-04, and a DELIBERATE divergence from the reference bootstrap, which accepts the\nshape: a transform declaring a further parameter reads a value nobody passed. MEASURED --\n`nums.map(function(a Integer, b Integer) gives b)` prints `sum=0` on arm64-macOS, `b` being whatever\nthe second argument slot held, while on `wasm32-wasi` the program does not run at all: `call_indirect`\ntype-checks the callee's signature and `__arr_map` traps with \"indirect call type mismatch\". One\ntarget of four could see it, which is what makes the shape undefined rather than unspecified.\nNOT E3036, which states that \"a call passes a different number of arguments than the callee declares\nparameters\": there is NO call at this span. The author bound a function VALUE to a position, and the\ncall that would go wrong is one the compiler makes inside `__arr_map`, over a source line the author\nnever wrote -- so E3036's sentence would be false about the program in front of them.\nNOT E3005 either, which is what the four DECLARED function-typed places (a cast, a `return`, an\nassignment, an ordinary function-typed argument) earn when their whole SHAPE disagrees. This position\ndeliberately requires less: the transform's parameter TYPES are not checked here, so \"the two function\ntypes must agree\" would be false as a statement of what this position demands.",
       "emittedBy": {"shv2": "transformArityMismatch"},
       "notEmittedBy": ["csharp", "selfhosted"]
+    },
+    {
+      "code": 3123,
+      "tag": "E3123",
+      "name": "SemanticAbstractRequirementErrorNotBindable",
+      "stage": "semantic",
+      "doc": "A `try` on a call dispatched through an interface requirement whose `throws` names an INTERFACE\n(the abstract error channel, `throws Error`) asks for the caught error in a form that needs the\nerror's CONCRETE type -- an `(e)` binding, or routing into a `try` BLOCK's shared handler.\nThere is no such type at the dispatch. E3016 lets each conformer NARROW an abstract requirement\nto its own payload-free error enum, so the ordinal in the error flag means whatever the conformer\nthat actually ran says it means, and which conformer that is becomes knowable only at\nmonomorphization -- long after the parser decides everything a `try` decides.\nMEASURED before this check existed: the binding fell through to the raw error-flag `int`, and\n`print(\"{e}\")` on a caught `ParseFailure.worse` printed `2` -- the ABI's `ordinal +\nErrorFlagOrdinalBias`, handed to the user as their error value, compiling and running green. A\n`match e` on the same binding was refused instead, with `E2004: Expected pattern value`, naming a\ncase the user had just written. The `try` BLOCK form failed a third way: nothing routed the call,\nso the block was refused with E3083 (`try block contains no throwing calls`) about a block that\ncontains one.\nThe forms that need no concrete type are unaffected and stay legal: `otherwise <default>`,\n`otherwise ignore`, `otherwise panic`, `otherwise return/break/continue`, and an `otherwise\n'label'` block with no binding. Each catches the flag without decoding it, which is exactly what\nan abstract channel can promise. Bind the error by declaring the requirement as the concrete\nerror enum the caller means to catch.\nNOT E3113, which is the same hazard on a FUNCTION's own clause and is refused at the DECLARATION.\nA requirement is allowed to name an interface -- that is what `Error` is for -- so the refusal\nhas to fall on the catch site that cannot be served, not on the declaration that is well-formed.",
+      "emittedBy": {"csharp": "SemanticAbstractRequirementErrorNotBindable"},
+      "notEmittedBy": ["selfhosted", "shv2"]
     },
     {
       "code": 4001,

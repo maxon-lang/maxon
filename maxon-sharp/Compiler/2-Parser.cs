@@ -10124,6 +10124,9 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       // Binding an error we cannot type would hand back the raw error flag as an
       // `int` — a value that answers every method call with a type error naming a
       // type the user never wrote. Refuse, and say where the type went.
+      RequireCaughtErrorIsBindable(calleeThrowsType, errorBindingToken,
+        $"bind it as '{errorBindingToken.Value}'");
+
       return EmitTryOtherwiseBlock(tryInfo, errorBindingToken, calleeThrowsType);
     }
 
@@ -13140,30 +13143,45 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   /// Parse an interface or type-parameter method call in expression position.
   /// Assumes the current token is '(' and the interface method signature has been resolved.
   private ExprResult.Direct EmitInterfaceMethodCallExpr(ExprResult receiver, string userTypeName, string fieldName, IrInterfaceMethodSignature ifaceMethod, Token fieldToken) {
-    var qualifiedMethodName = $"{userTypeName}.{fieldName}";
     Advance(); // consume '('
     var selfVal = ResolveExprValue(receiver);
+    var callOp = EmitDispatchedCall(selfVal, userTypeName, fieldName, ifaceMethod, fieldToken);
+
+    return new ExprResult.Direct(callOp.Result ?? selfVal);
+  }
+
+  /// ⭐ EVERY dispatched call, in one place: the trailing arguments, the op, the requirement stamped
+  /// on it, and the two site rules that requirement is the only source of. The expression form and
+  /// the statement form differ ONLY in how they reach the receiver and what they do with the result;
+  /// everything between was written out twice, so `DispatchedSignature` had to be remembered twice
+  /// the day it was added. A second field stamped at one site and not the other would not be a
+  /// compile error — it would be the exact shape this rung exists to remove, one level up.
+  ///
+  /// The opening `(` is already consumed and <paramref name="selfVal"/> is the receiver, because
+  /// those are the two things the callers genuinely do differently.
+  private MaxonCallOp EmitDispatchedCall(MaxonValue selfVal, string userTypeName, string fieldName,
+      IrInterfaceMethodSignature ifaceMethod, Token siteToken) {
+    var qualifiedMethodName = $"{userTypeName}.{fieldName}";
     var args = new List<MaxonValue> { selfVal };
     if (!Check(TokenType.RightParen)) {
       while (true) {
-        if (Check(TokenType.Identifier) && PeekNext().Type == TokenType.Colon) {
-          Advance(); // consume label
-          Advance(); // consume ':'
-        }
+        TrySkipArgLabel();
         args.Add(ResolveExprValue(ParseExpression()));
         if (!Check(TokenType.Comma)) break;
         Advance(); // consume ','
       }
     }
     Expect(TokenType.RightParen);
-    var (resultKind, resultStructTypeName) = ResolveInterfaceMethodReturn(ifaceMethod, userTypeName, fieldName, fieldToken);
+
+    var (resultKind, resultStructTypeName) = ResolveInterfaceMethodReturn(ifaceMethod, userTypeName, fieldName, siteToken);
     var callOp = new MaxonCallOp(qualifiedMethodName, args, resultKind, resultStructTypeName) {
       DispatchedSignature = ifaceMethod
     };
     _currentBlock!.AddOp(callOp);
-    ApplyThrowingCallRules(callOp, fieldToken, qualifiedMethodName);
+    ApplyThrowingCallRules(callOp, siteToken, qualifiedMethodName);
     InvalidateCachedSelfFields();
-    return new ExprResult.Direct(callOp.Result ?? selfVal);
+
+    return callOp;
   }
 
   /// The two obligations a call carrying a `throws` puts on its SITE, applied wherever a call is
@@ -13176,7 +13194,34 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     // whole reason the signature is stamped on the op.
     var throwsType = DeclaredThrowsTypeOfCall(callOp, callee: null);
     ValidateThrowingCallContext(throwsType, siteToken, displayName);
-    RouteBareThrowingCallToTryBlock(callOp, throwsType);
+    RouteBareThrowingCallToTryBlock(callOp, throwsType, siteToken);
+  }
+
+  /// ⭐⭐ A caught error can only be DECODED where the catch site knows its concrete type, and for a
+  /// call dispatched through an abstract requirement (`throws Error`) it never does: E3016 lets each
+  /// conformer narrow that channel to its OWN payload-free enum, so the ordinal in the error flag
+  /// means whatever the conformer that actually ran says it means — and which one ran is settled at
+  /// monomorphization, long after the parser decides everything a `try` decides.
+  ///
+  /// ⚠ The failure this replaces was NOT a refusal. The binding fell through to the raw error-flag
+  /// `int`, and `print("{e}")` on a caught `ParseFailure.worse` printed `2` — the ABI's
+  /// `ordinal + ErrorFlagOrdinalBias` handed to the user as their error value, compiling and running
+  /// green. Both of its neighbours failed too, and each with a diagnostic that named the wrong thing:
+  /// `match e` earned `E2004: Expected pattern value` about a case the user had just written, and the
+  /// `try` BLOCK form earned E3083 about a block that does contain a throwing call.
+  ///
+  /// Only the forms that DECODE are refused. `otherwise <default>`, `otherwise ignore`, `otherwise
+  /// panic`, `otherwise return/break/continue` and an unbound `otherwise 'label'` block all catch the
+  /// flag without reading it, which is exactly what an abstract channel can promise — and they keep
+  /// working, which is why this is not a rule about dispatching through an abstract requirement at
+  /// all. <paramref name="requestedUse"/> names the decode the site asked for, so one refusal can
+  /// speak for every site that asks.
+  private void RequireCaughtErrorIsBindable(IrType? caughtType, Token siteToken, string requestedUse) {
+    if (caughtType is not IrInterfaceType abstractChannel) return;
+
+    throw new CompileError(ErrorCode.SemanticAbstractRequirementErrorNotBindable,
+      $"cannot {requestedUse}: this call is dispatched through an interface requirement declaring 'throws {abstractChannel.Name}', which names an INTERFACE and so declares no case to decode — each conformer narrows it to its own error enum, and which conformer runs is not known until monomorphization. Use 'otherwise' with a default value, 'ignore', 'panic', 'return' or an unbound block, or declare the requirement as the concrete error enum you mean to catch",
+      siteToken.Line, siteToken.Column);
   }
 
   /// ⭐⭐ The `throws` type this CALL SITE catches, and the one place the two sources of that answer
@@ -13210,29 +13255,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     Advance(); // consume '('
 
     var structVal = ResolveReceiverValue(name, resolved);
-
-    var qualifiedMethodName = $"{userTypeName}.{fieldName}";
-    var args = new List<MaxonValue> { structVal };
-    if (!Check(TokenType.RightParen)) {
-      while (true) {
-        if (Check(TokenType.Identifier) && PeekNext().Type == TokenType.Colon) {
-          Advance(); // consume label
-          Advance(); // consume ':'
-        }
-        args.Add(ResolveExprValue(ParseExpression()));
-        if (!Check(TokenType.Comma)) break;
-        Advance(); // consume ','
-      }
-    }
-    Expect(TokenType.RightParen);
-
-    var (resultKind, resultStructTypeName) = ResolveInterfaceMethodReturn(ifaceMethod, userTypeName, fieldName, methodToken);
-    var callOp = new MaxonCallOp(qualifiedMethodName, args, resultKind, resultStructTypeName) {
-      DispatchedSignature = ifaceMethod
-    };
-    _currentBlock!.AddOp(callOp);
-    ApplyThrowingCallRules(callOp, methodToken, qualifiedMethodName);
-    InvalidateCachedSelfFields();
+    EmitDispatchedCall(structVal, userTypeName, fieldName, ifaceMethod, methodToken);
   }
 
   private void ParseIf() {
@@ -23976,9 +23999,18 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   /// callOp.Result to a MaxonVarRefOp loaded in the continuation block — so downstream
   /// callers that captured the original `callOp.Result` see a value that's live in the new
   /// _currentBlock.
-  private void RouteBareThrowingCallToTryBlock(MaxonCallOp callOp, IrType? throwsType) {
+  private void RouteBareThrowingCallToTryBlock(MaxonCallOp callOp, IrType? throwsType, Token siteToken) {
     if (_inTryContext) return;
     if (_tryBlockStack.Count == 0) return;
+
+    // Past those two guards this call IS being routed, and routing decodes the flag against a
+    // concrete enum. An abstract requirement has none, so it is refused HERE rather than declined
+    // silently below — a silent decline left the block reporting E3083, "contains no throwing
+    // calls", about a block that contains one. The precondition is spelled once, at the only place
+    // that can state it: a second copy at the caller would be a rule about routing living outside
+    // the routing.
+    RequireCaughtErrorIsBindable(throwsType, siteToken, "route it into the enclosing 'try' block");
+
     if (throwsType is not IrEnumType errorEnum) return;
 
     // The callOp is the most recently added op (or, for struct returns, second-to-last —
@@ -24244,7 +24276,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     if (callOp.Result != null && resultKind == MaxonValueKind.Struct) {
       EmitCallReturnTempAssign(callOp, resultKind.Value, resultStructTypeName);
     }
-    RouteBareThrowingCallToTryBlock(callOp, callee.ThrowsType);
+    RouteBareThrowingCallToTryBlock(callOp, callee.ThrowsType, functionNameToken);
     InvalidateCachedSelfFields();
     return callOp;
   }
