@@ -488,3 +488,134 @@ end 'main'
 ```exitcode
 2
 ```
+
+<!-- test: nested-tuple-through-an-inner-alias -->
+A tuple alias used as an ELEMENT of another tuple alias. `Nested` is `(Pair, Num)` where `Pair` is
+itself `(Num, Num)`, and the argument is a bare nested literal. The declared type and the literal name
+the SAME type, so the call type-checks and the two levels read back independently. This is the case
+that distinguishes an alias that is merely *spelled* differently from one that *denotes* something
+different — the identical type written inline as `((Num, Num), Num)` is the sibling case below, and the
+two must be accepted alike. Returns 5 + 1 + 7 = 13.
+```maxon
+typealias Num = int(0 to 1000)
+typealias Pair = (Num, Num)
+typealias Nested = (Pair, Num)
+
+function take(t Nested) returns Num
+	let inner = t._0
+	return inner._0 + inner._1 + t._1
+end 'take'
+
+function main() returns ExitCode
+	return take(((5, 1), 7))
+end 'main'
+```
+```exitcode
+13
+```
+
+<!-- test: nested-tuple-written-inline -->
+The CONTROL for the case above: the same type with no inner alias, written inline as
+`((Num, Num), Num)`. A tuple's identity is its element types, so this and `Nested` are one type and
+neither spelling may be privileged. Returns 13.
+```maxon
+typealias Num = int(0 to 1000)
+
+function take(t ((Num, Num), Num)) returns Num
+	let inner = t._0
+	return inner._0 + inner._1 + t._1
+end 'take'
+
+function main() returns ExitCode
+	return take(((5, 1), 7))
+end 'main'
+```
+```exitcode
+13
+```
+
+<!-- test: error.nested-tuple-shapes-stay-distinct -->
+⭐ The NEGATIVE control for the two cases above, and the reason they may not be satisfied by comparing
+tuples loosely. `((Num, Num), Num)` and `(Num, (Num, Num))` hold the same three scalars in the same
+order and differ ONLY in where the nesting falls, so a fix that accepted a nested literal by counting
+or flattening its leaves would accept this too. It must stay rejected.
+```maxon
+typealias Num = int(0 to 1000)
+
+function takeLeft(t ((Num, Num), Num)) returns Num
+	let inner = t._0
+	return inner._0 + inner._1 + t._1
+end 'takeLeft'
+
+function main() returns ExitCode
+	return takeLeft((5, (1, 7)))
+end 'main'
+```
+```maxoncstderr
+error E3005: specs/fragments/tuples/error.nested-tuple-shapes-stay-distinct.test:10:9: argument type mismatch for 't': expected '__Tuple___Tuple_i64_i64_i64', got '__Tuple_i64___Tuple_i64_i64'
+```
+
+<!-- test: tuple-element-names-join-injectively -->
+⭐⭐ Two DIFFERENT tuple types whose element names differ only in where an `_` falls. A tuple's
+identity is derived from its elements' names, and `_` is inside the identifier alphabet — so joining
+with `_` spells `(A_B, C)` and `(A, B_C)` identically, and whichever is interned FIRST donates its
+field table to the other. Here `A_B` and `A` carry the same two field names in the OPPOSITE order, so
+the mix-up does not fail to find a name: it silently reads the wrong slot. `first` reads `A_B.p` = 1
+and `second` reads `A.p` = 3, so the sum is 4; a collision returns 8, having read `A`'s `q`. The join
+must use something no element name can hold. Returns 4.
+```maxon
+typealias Num = int(0 to 1000)
+
+type A_B
+	export let p as Num
+	export let q as Num
+
+	export static function create(p Num, q Num) returns Self
+		return Self{p: p, q: q}
+	end 'create'
+end 'A_B'
+
+type A
+	export let q as Num
+	export let p as Num
+
+	export static function create(q Num, p Num) returns Self
+		return Self{q: q, p: p}
+	end 'create'
+end 'A'
+
+type C
+	export let z as Num
+
+	export static function create(z Num) returns Self
+		return Self{z: z}
+	end 'create'
+end 'C'
+
+type B_C
+	export let z as Num
+
+	export static function create(z Num) returns Self
+		return Self{z: z}
+	end 'create'
+end 'B_C'
+
+function first(t (A_B, C)) returns Num
+	let l = t._0
+	return l.p
+end 'first'
+
+function second(t (A, B_C)) returns Num
+	let l = t._0
+	return l.p
+end 'second'
+
+function main() returns ExitCode
+	let pTup = (A_B.create(1, q: 2), C.create(0))
+	let qTup = (A.create(7, p: 3), B_C.create(0))
+	return first(pTup) + second(qTup)
+end 'main'
+```
+```exitcode
+4
+```

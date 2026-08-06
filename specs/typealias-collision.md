@@ -189,3 +189,41 @@ end 'main'
 ```exitcode
 42
 ```
+
+
+<!-- test: file-private-alias-does-not-govern-another-file -->
+⭐ A file-private `typealias` is scoped to its declaring file, so it may not change the meaning of a
+name another file declared for itself — **including a file inside the stdlib.** `stdlib/Sha256.maxon`
+declares its own file-private `Word32 = int(i64.min to i64.max)` and computes in 32-bit words; a
+program that happens to declare a *different* `Word32` must not reach inside it. The range is what
+makes this observable: the alias governs a WIDTH, so a narrower one silently truncates every word
+rather than raising a diagnostic, and SHA-256("abc") begins `0xba` = 186 only if the stdlib kept its
+own declaration. ⚠ The range here is deliberately `0 to 255` — a value a caller would plausibly
+write, and wide enough that nothing in the user's own file is out of range. A wider alias such as
+`int(0 to u32.max)` happens to hold the constants and answers correctly whatever the compiler does,
+so it would pass while pinning nothing. Prints the first digest byte, then `7` to show the user's own
+narrow range still governs the user's own file.
+```maxon
+typealias Word32 = int(0 to 255)
+
+function clampish(v Word32) returns Word32
+	return v
+end 'clampish'
+
+function main() returns ExitCode
+	var data = ByteArray.create()
+	data.push(0x61)
+	data.push(0x62)
+	data.push(0x63)
+	let hash = sha256(data)
+	let b = try hash.get(0) otherwise 0
+	print("{b} {clampish(7)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+186 7
+```
