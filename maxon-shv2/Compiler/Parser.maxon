@@ -7497,9 +7497,25 @@ export type Parser
 	var enclosingTypeIsEnum as bool
 	// The GENERIC TYPE PARAMETERS of the type currently being declared (P1.6-A) — `[T]` while parsing
 	// `type Box uses T`, empty otherwise. It is how `parseTypeReference` recognizes a bare `T` as a
-	// type parameter (by NAME, so the sweep and the real parse agree without a registry) and mints
-	// `typeParameter(POSITION)` — the position is the name's index in this list. Written and cleared in
-	// lockstep with `enclosingType` (`parseTypeDeclaration`/`recordScannedType` are the writers).
+	// type parameter (by NAME, so the sweep and the real parse agree without a registry).
+	//
+	// ⛔⛔ **IT IS READ AS A PAIR WITH `enclosingType`, AND EVERY WRITER OWES BOTH (W14).** The mint is
+	// `typeParameter(typeParamTokenFor(self.enclosingType, paramName: name))` — a digest of the DECLARING
+	// TYPE's name and the parameter's — and `ProgramSignatures.recordStruct` /
+	// `recordInterfaceDeclaration` file an owner for exactly the pairs a DECLARATION makes. A writer that
+	// publishes names here under an `enclosingType` that did not declare them therefore mints a token no
+	// fold owns, which is a silently-accepted undeclared type name and, one call deeper, a panic at
+	// `ProgramSignatures.opaqueTypeParamPosition`. **This header used to claim the field was "written and
+	// cleared in lockstep with `enclosingType`, `parseTypeDeclaration`/`recordScannedType` are the
+	// writers", and that was FALSE in both halves and had been for several rungs** — it is what let
+	// `readExtensionHeader`'s window stand open (W14 review). The writers, all five:
+	//   • `enterTypeScope` / `closeTypeParamScope` — the shared empty, in lockstep with `enclosingType`;
+	//   • `openTypeParamScope(layout)` — a `type`'s own `uses`, under the name `enterTypeScope` just set;
+	//   • `readInterfaceDeclaration` — an `interface`'s associated types, likewise;
+	//   • `openTypeExtensionBodyScope` — a TYPE extension's target list, under `enterTypeScope(conformer)`
+	//     where a `typeExtension`'s sole conformer IS that target (`extensionTargetOf`);
+	//   • `readExtensionHeader` — the ONE writer with no `enclosingType` of its own, which is why its
+	//     window is now opened and closed around the `where` clause read alone. See there.
 	var enclosingTypeParams as ByteArrayArray
 	// The `where T is <Interface> …` CONSTRAINTS of the type currently being declared (P1.7a slice 2a) —
 	// in source order (the witness-slot order), empty otherwise. It is how the body parse recognizes
@@ -11110,23 +11126,50 @@ export type Parser
 	// token. Every fact the two later passes disagree about at their peril comes out of here: WHICH types get
 	// the methods, under WHAT condition, and the NAME token a malformed clause is blamed on.
 	//
-	// ⚠ **THE `where` CLAUSE'S PARAMETER NAMES ARE THE TARGET'S, AND THE SCOPE IS OPENED BEFORE IT IS READ.**
-	// `readWhereClause` resolves each constrained name to a POSITION in `enclosingTypeParams` and refuses a
-	// name that is not in it — which is exactly the check wanted here, provided the list it checks against is
-	// the extended declaration's (an interface's associated types, a type's `uses` list) and not whatever
-	// declaration the file was last inside. That is why the assignment is here and not at the call sites: a
-	// caller that forgot it would not fail, it would resolve `Element` against a stale list.
+	// ⚠ **THE `where` CLAUSE'S PARAMETER NAMES ARE THE TARGET'S, AND THE SCOPE IS OPENED AROUND THE CLAUSE
+	// READ AND CLOSED AGAIN AT ITS END.** `readWhereClause` resolves each constrained name to a POSITION in
+	// `enclosingTypeParams` and refuses a name that is not in it — which is exactly the check wanted here,
+	// provided the list it checks against is the extended declaration's (an interface's associated types, a
+	// type's `uses` list) and not whatever declaration the file was last inside. That is why the assignment is
+	// here and not at the call sites: a caller that forgot it would not fail, it would resolve `Element`
+	// against a stale list.
+	//
+	// ⛔⛔ **AND IT IS CLOSED AGAIN BECAUSE THIS IS THE ONE WRITER OF THAT FIELD THAT DOES NOT ALSO WRITE
+	// `enclosingType`, AND SINCE W14 THE TWO ARE READ AS A PAIR (W14 review).** `parseTypeReference` mints a
+	// `typeParameter` as `typeParamTokenFor(self.enclosingType, paramName: name)` for any `name` in
+	// `enclosingTypeParams`, and `recordStruct`/`recordInterfaceDeclaration` file an owner for exactly the
+	// pairs a DECLARATION makes. Left standing, this assignment publishes the target's parameter names under
+	// an `enclosingType` that is not the target — which is what happened whenever the header belonged to an
+	// INTERFACE EXTENSION NO TYPE IMPLEMENTS: `extensionTargetConformers` is empty, the conformer loop that
+	// would have called `enterTypeScope` never runs, and the names stayed live at FILE SCOPE for the rest of
+	// the parse.
+	// ⚠ MEASURED on the unchanged tree, and the two symptoms are one bug at two depths:
+	//   `function f(x Element) returns Element` after such an extension COMPILED CLEAN — `Element` names no
+	//     declared type, and the merge base accepted it too, so this half is older than W14;
+	//   the same `f` returning a generic instance PANICKED the compiler at
+	//     `ProgramSignatures.opaqueTypeParamPosition` ("type-parameter token … has no owner"), because
+	//     `SemanticCheck.checkTypeParameterArgsAt` asks that door for the formal's position and no fold ever
+	//     filed an owner for `("", Element)`. The merge base compiled and ran that program (exit 7).
+	// Closing the window makes both the correct **E3011 Unknown type 'Element'**.
+	//
+	// ⚠ A `readWhereClause` that THROWS leaves the window open, and that is bounded rather than ignored: a
+	// `ParseError` in the real parse abandons the whole file (`abortedParseArtifact`), and in the fold the
+	// throw is swallowed by `foldExtensionDeclarationInto`'s `otherwise return`, whose only successor is the
+	// next site's own call to this reader — which overwrites the field before anything reads it.
 	function readExtensionHeader() returns ExtensionHeader throws ParseError
 		try self.consume(TokenKind.extension)
 		let nameTok = try self.consume(TokenKind.identifier)
 		let target = self.signatures.extensionTargetOf(nameTok.value)
-		self.enclosingTypeParams = extensionTargetParamNames(target)
 
 		if not self.at(TokenKind.where) 'unconditional'
 			return ExtensionHeader.create(nameTok, target: target, constraints: sharedEmptyWhereConstraints)
 		end 'unconditional'
 
-		return ExtensionHeader.create(nameTok, target: target, constraints: try self.readWhereClause())
+		self.enclosingTypeParams = extensionTargetParamNames(target)
+		let constraints = try self.readWhereClause()
+		self.enclosingTypeParams = self.emptyTypeParams
+
+		return ExtensionHeader.create(nameTok, target: target, constraints: constraints)
 	end 'readExtensionHeader'
 
 	// The parser state an extension BODY is read under, for whichever door the extension came through — set
@@ -16141,8 +16184,11 @@ export type Parser
 	end 'witnessParamCountFor'
 
 	// The POSITION of `name` in the enclosing type's `uses` list (P1.6-A), or `count()` when it is not
-	// a type parameter — the door `parseTypeReference` recognizes a bare `T` through, and the value that
-	// becomes `typeParameter(POSITION)`. A linear scan, for `StructLayout.indexOfField`'s reason: a type
+	// a type parameter — the door `parseTypeReference` recognizes a bare `T` through. ⚠ Since W14 the
+	// answer is spent there as a MEMBERSHIP test and nothing more: what the arm mints is
+	// `typeParamTokenFor(enclosingType, paramName: name)`, an identity, not this index. It is still the
+	// position `readWhereClause` records a constraint against, which is why it survives as a position.
+	// A linear scan, for `StructLayout.indexOfField`'s reason: a type
 	// declares a handful of parameters, so a per-parse name→index map would be a heap object bought to
 	// serve two or three lookups.
 	function typeParamPositionOf(name ByteArray) returns TypeParamPosition

@@ -166,9 +166,11 @@ let TypeShapeString = 23 as ContentHash
 // until the alias is known, so today this arm is exhaustiveness insurance, hashed not panicked.)
 let TypeShapeFunction = 29 as ContentHash
 
-// A TYPE-PARAMETER reference's shape (P1.6-A) — `get() returns T` hashes distinctly. Its POSITION
-// is mixed after the shape (a stable identity — declaration order — never the global id), so
-// `uses A, B`'s `returns A` and `returns B` hash apart. A distinct prime for `TypeShapeStructRef`'s
+// A TYPE-PARAMETER reference's shape (P1.6-A) — `get() returns T` hashes distinctly. Its TOKEN is
+// mixed after the shape (W14: a digest of `(declaring type, parameter name)`, so mixing it IS mixing
+// those two names and NOT an intern-order id — see `mixType`'s arm, which carries the argument), so
+// `uses A, B`'s `returns A` and `returns B` hash apart, and so do two DIFFERENT types' first
+// parameters, which the position it replaced hashed alike. A distinct prime for `TypeShapeStructRef`'s
 // reason.
 let TypeShapeTypeParameter = 31 as ContentHash
 
@@ -9500,10 +9502,15 @@ export type ProgramSignatures
 	// lookup. `typeParamPositionIn` is the OTHER direction, for a caller that DOES hold the declaration and
 	// therefore needs no registry at all (see there for why both must exist).
 	//
-	// Absence is a THROW, not a panic, because one caller is allowed to ask about a token it may not own:
-	// `Parser.isEnclosingTypeParam` asks of every `typeParameter`-tagged value, including a concrete generic
-	// method's result the parser tags opaque in a NON-generic caller. Callers for whom absence is an invariant
-	// break say so with their own `otherwise panic`.
+	// Absence is a THROW, not a panic, because one of its two callers is allowed to ask about a token it may
+	// not own: `anyInstanceTypeArgHasKind` answers `false` for a token no declaration filed, for the reason a
+	// base with no instance bucket answers `false` — nothing instantiates it, so no instantiation classifies
+	// anything. The other caller, `opaqueTypeParamPosition`, treats absence as an invariant break and says so
+	// with its own `otherwise panic`.
+	// ⚠ This header used to justify the throw by naming `Parser.isEnclosingTypeParam` as the tolerant caller.
+	// **That function does not call this one** — it re-spells the token against the enclosing declaration's
+	// own names through `typeParamPositionIn`, which is the whole reason both doors exist — so the reason was
+	// true of the design and false of the code beside it (W14 review).
 	export function typeParamOwnerOf(token TypeParamId) returns TypeParamOwner throws MapError
 		return try self.typeParamOwners.get(token)
 	end 'typeParamOwnerOf'
@@ -12295,8 +12302,8 @@ export type ProgramSignatures
 	export function conformerNameOfType(t MaxonType, idsFrom TypeNameInterner) returns String
 		// The id-bearing arms are resolved against the CALLER's interner and then re-asked of this index BY
 		// NAME — the same "names travel, ids do not" discipline `adoptType` states in full. Every other arm
-		// (a primitive, a `GenericInstanceId`, a type-parameter POSITION) carries no per-interner id, so it
-		// goes to the shared mangler untouched.
+		// (a primitive, a `GenericInstanceId`, a type-parameter TOKEN — a source-text digest since W14, not
+		// the position it replaced) carries no per-interner id, so it goes to the shared mangler untouched.
 		if tagMayNameAggregate(maxonTypeTag(t)) 'namesAnAggregate'
 			return self.conformerNameOfDeclaredName(try idsFrom.nameOf(typeNameIdOf(t)) otherwise panic("conformerNameOfType: type-name id {typeNameIdOf(t)} is not in the interner it was resolved against — pass the interner this type's ids live in"))
 		end 'namesAnAggregate'

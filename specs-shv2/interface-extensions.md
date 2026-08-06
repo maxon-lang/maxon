@@ -484,3 +484,98 @@ end 'main'
 ```exitcode
 20
 ```
+
+### An extension NO type implements leaks nothing into file scope
+
+<!-- test: error.an-unconformed-extension-does-not-leak-its-associated-type-names -->
+⛔⛔ **AN `extension <Interface>` WHOSE INTERFACE NO TYPE IMPLEMENTS MUST NOT MAKE THAT INTERFACE'S
+ASSOCIATED-TYPE NAMES SPELLABLE AT FILE SCOPE (W14 review).** `Parser.readExtensionHeader` installs the
+extended declaration's parameter names in `enclosingTypeParams` so `readWhereClause` can resolve a
+constrained name against the right list. The conformer loop that follows re-enters a real declaration
+scope per conformer (`enterTypeScope`) — but an interface **nothing implements has no conformers**, so
+that loop never ran and the names stayed live for the rest of the file's parse.
+
+⛔ **MEASURED on the merge base: `function f(x Element)` below COMPILED CLEAN**, `Element` resolving to
+a type parameter of a declaration `f` is not inside. It names no declared type, so the only correct
+answer is E3011 — which is what the compiler now gives, because the window is opened around the `where`
+clause read alone and closed at its end.
+
+⚠ **THE SECOND CASE BELOW IS THE SAME BUG ONE DOOR DEEPER, AND IT WAS A COMPILER PANIC.** Since W14 a
+`typeParameter`'s payload is a digest of `(declaring type, parameter name)` and
+`ProgramSignatures.opaqueTypeParamPosition` recovers the position from the owner ledger that
+`recordStruct` / `recordInterfaceDeclaration` fill. A token minted under an `enclosingType` that
+declared nothing has no owner, so the leak reached that door as
+*"type-parameter token … has no owner"* rather than as a diagnostic. The pair is kept because the two
+cases fail at two different passes: this one at type RESOLUTION, the next at `SemanticCheck`.
+```maxon
+typealias Num = int(0 to 1000)
+
+interface Seq uses Element
+	function firstOne() returns Element
+end 'Seq'
+
+extension Seq
+	export function twice() returns Element
+		return self.firstOne()
+	end 'twice'
+end 'Seq'
+
+function f(x Element) returns Num
+	_ = x
+	return 1
+end 'f'
+
+function main() returns ExitCode
+	return f(3)
+end 'main'
+```
+```maxoncstderr
+error E3011: Unknown type 'Element'
+```
+
+<!-- test: error.an-unconformed-extension-leak-is-not-a-compiler-panic -->
+The deeper half of the case above: `f` returns a GENERIC INSTANCE, which is what routes its call through
+`SemanticCheck.checkTypeParameterArgs` — the pass that asks `opaqueTypeParamPosition` for an opaque
+formal's position in the declaring type's `uses` list. Against the W14 tip before this fix that ask
+PANICKED the compiler; against the merge base the program compiled and ran (exit 7). One refusal is the
+right answer to both, and it is the same sentence the case above pins, because the fault is the same
+undeclared name.
+```maxon
+typealias Num = int(0 to 1000)
+
+type Box uses T
+	export var v as T
+
+	export static function of(x T) returns Box
+		return Box{v: x}
+	end 'of'
+
+	export function get() returns T
+		return self.v
+	end 'get'
+end 'Box'
+
+typealias BoxN = Box with Num
+
+interface Seq uses Element
+	function firstOne() returns Element
+end 'Seq'
+
+extension Seq
+	export function twice() returns Element
+		return self.firstOne()
+	end 'twice'
+end 'Seq'
+
+function f(x Element) returns BoxN
+	_ = x
+	return BoxN.of(7)
+end 'f'
+
+function main() returns ExitCode
+	return f(3).get()
+end 'main'
+```
+```maxoncstderr
+error E3011: Unknown type 'Element'
+```
