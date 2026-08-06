@@ -243,9 +243,26 @@ let TargetStdoutFencePrefix = "```Stdout:"
 // spec carrying one could move into `/specs`; spelling them the way it WOULD spell them is what keeps
 // that a one-line addition instead of a second syntax for one idea.
 //
-// ⭐ **AND THERE IS DELIBERATELY NO `` ```Exitcode:<target> ``.** Nothing needs one, and an unused
-// mechanism is a claim nobody checks — the fence would be matched by no spec, so no run could ever tell
-// whether it worked.
+// ⚠⚠ **`` ```Stderr: `` IS MATCHED BY NO SPEC TODAY, AND THAT IS STATED HERE RATHER THAN LEFT TO BE
+// DISCOVERED (BATCH27 review).** Only `` ```Maxoncstderr: `` had a case that needed it; the run's stderr
+// has so far been split per target by writing two cases with `<!-- targets: … -->` instead
+// (`exit-code-range.md`'s `computed-argument-is-guarded-at-the-callee-entry` and its wasm twin, which the
+// spec argues must stay two cases because they pin different facts). **So the LITERAL below is the one
+// byte-sequence in this file no run exercises**, and the argument that it is nonetheless not the same
+// claim as the fence refused just below is exactly one thing: it is a THIRD INSTANCE of a mechanism whose
+// other two instances run on every spec in the suite. `TargetPreferredText` already holds the `stderr`
+// slot, `recordTargetQualifiedText` already compares the suffix, and both are exercised in both
+// directions by `` ```Stdout: `` and `` ```Maxoncstderr: `` — so the only property unique to this constant
+// is that it is in no prefix relation with another fence, which is DERIVED in the grammar-token header
+// rather than observed by a run. An asymmetric set would be the worse trade: a `stderr` slot that can
+// never carry a qualified block is a hole in `TargetPreferredText` shaped like the second resolution rule
+// this type exists to prevent.
+//
+// ⭐ **AND THERE IS DELIBERATELY NO `` ```Exitcode:<target> ``, WHICH IS A DIFFERENT KIND OF ABSENCE.**
+// Nothing needs one — and unlike the fence above it would not be a third instance of anything: an exit
+// code is a `SpecExitCode`, not a String, so it would need a FOURTH slot type with its own pair of
+// blocks, its own preference and its own resolution, none of which any spec would run. An unused
+// mechanism is a claim nobody checks, and that is a claim with new code under it.
 //
 // ⚠⚠ Adding two fences to a set that ALREADY CONTAINS A SWALLOWING PAIR is exactly where a second such
 // pair would appear unnoticed. Both prefixes are therefore argued against every other fence in the ONE

@@ -126,13 +126,16 @@ either signedness — `coerceOnStack` is never asked. A case built on that route
 sign-extension defect fully present, which makes it a positive control and not a guard. It is not added,
 and this paragraph is here so the next reader does not re-derive the attractive wrong answer.
 
-⛔ **`Targets/Wasm/StdToWasm.maxon`'s `coerceOnStack` header CONTRADICTS the paragraph above and is the
-one that is wrong.** It states that the widen "stays reachable on wasm by a route that is not
-platform-shaped: a `u32`-RANGED ARRAY ELEMENT … The widen did not become untestable here; only `ExitCode`
-stopped being able to spell it." Its measurement — the 4-byte slot, and the value agreeing across
-targets — is real; its conclusion does not follow from it, for the reason above, and the disassembly is
-the arbiter. **The comment is outside this rung's file list and is reported rather than edited**; when it
-is corrected, this paragraph is what it should be corrected to.
+✅ **`Targets/Wasm/StdToWasm.maxon`'s `coerceOnStack` header BRIEFLY CONTRADICTED the paragraph above, and
+was CORRECTED IN THIS RUNG (`bd24ce8c1`) — the two now say one thing.** It had stated that the widen
+"stays reachable on wasm by a route that is not platform-shaped: a `u32`-RANGED ARRAY ELEMENT … The widen
+did not become untestable here; only `ExitCode` stopped being able to spell it." Its measurement — the
+4-byte slot, and the value agreeing across targets — was real; its conclusion did not follow from it, for
+the reason above, and the disassembly was the arbiter. ⚠ **This note is kept rather than deleted because
+the wrong reading is the ATTRACTIVE one and was reached twice** — once by the coordinator's measurement
+and once by the comment that recorded it — so a reader arriving at either file should find the refutation
+rather than re-derive the appeal. Do not read it as a live disagreement: `coerceOnStack`'s header carries
+the same two premises this section does.
 
 ## Tests
 
