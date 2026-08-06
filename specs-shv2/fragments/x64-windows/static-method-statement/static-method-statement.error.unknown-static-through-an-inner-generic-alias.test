@@ -1,0 +1,24 @@
+// Test: static-method-statement.error.unknown-static-through-an-inner-generic-alias
+type Pair uses T
+	export var a as ExitCode
+
+	export static function create(a ExitCode) returns Self
+		return Self{a: a}
+	end 'create'
+end 'Pair'
+
+type Plain
+	typealias IntPair = Pair with ExitCode
+
+	export static function make() returns ExitCode
+		IntPair.nope()
+		return 0
+	end 'make'
+end 'Plain'
+
+function main() returns ExitCode
+	return Plain.make()
+end 'main'
+---
+CompilerError:
+error E3004: <fragment>:14:3: call to undefined function 'Pair.nope'

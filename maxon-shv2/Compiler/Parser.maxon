@@ -48718,13 +48718,14 @@ export type Parser
 	// to disagree about which qualifier belongs to the compiler, and the failure would be silent in the worst
 	// direction: a statement accepted here and then rejected as an unknown intrinsic three functions later.
 	//
-	// ⚠ **THE NAME IS BUILT BY THE SAME EXPRESSION `parseQualifiedCall` USES, `qualifiedCallBaseName` INCLUDED**,
-	// and that call is not decoration. Deriving the callee here as a bare `qualifiedMethodName(baseToken, …)`
-	// agrees with the real parse only for as long as `qualifiedCallBaseName` is the identity on every name that
-	// can reach this shape — true today (it rewrites a GENERIC ALIAS to its base struct, and no user name may
-	// wear the `__` prefix), and exactly the kind of premise that quietly stops holding. Two derivations of one
-	// name is the duplication this predicate was written to avoid, so it makes the one call rather than
-	// re-deriving a name that merely happens to match.
+	// ⚠⚠ **THE NAME IS BUILT BY THE SAME EXPRESSION `parseQualifiedCall` USES — `genericAliasKeyFor` AND
+	// `qualifiedCallBaseName`, BOTH — and neither call is decoration.** Deriving the callee here from the BARE
+	// base token agrees with the real parse only for as long as those two are jointly the identity on every
+	// name that can reach this shape, and **that premise HAS ALREADY FAILED ONCE**: this comment used to claim
+	// it "true today" of `qualifiedCallBaseName` alone, and W7 then taught `parseQualifiedCall` to read an INNER
+	// alias under its base-qualified key without teaching this door, so one written name meant two things. The
+	// premise is not restated as safe here — it is REMOVED, by making both doors read the one key. Two
+	// derivations of one name is the duplication this predicate was written to avoid.
 	//
 	// The mangling allocates, and it is on a COLD path by construction: the shape is asked only after every
 	// cheaper statement form has declined, and `methodCallsAt` has already claimed every qualified shape whose
@@ -48770,7 +48771,19 @@ export type Parser
 		// The base name is resolved ONCE and threaded to both readings below — the callee mangle and the
 		// declared-type claim. `qualifiedCallBaseName` is a registry lookup that can allocate, and two calls
 		// on one token are two derivations of one name, which is the drift this predicate's header is about.
-		let baseName = self.qualifiedCallBaseName(self.tokenAt(index).value)
+		//
+		// ⛔ **THROUGH `genericAliasKeyFor`, AND THE HEADER'S OWN PREMISE IS WHY (W7 review).** That premise —
+		// *"agrees with the real parse only for as long as `qualifiedCallBaseName` is the identity on every name
+		// that can reach this shape … exactly the kind of premise that quietly stops holding"* — stopped holding
+		// the moment `parseQualifiedCall` began resolving an INNER alias under its base-qualified key. Reading
+		// the bare member here made THIS door the fifth reader of "which registration does this spelling
+		// denote", and the two doors then disagreed about one written name. MEASURED on one binary: with
+		// `typealias IntPair = Pair with ExitCode` at FILE scope, `IntPair.shout()` as a statement compiled and
+		// ran; with the identical alias declared INSIDE the calling type it was
+		// `E2015: Unsupported: identifier statement`, while `let p = IntPair.create(9)` one line below resolved
+		// perfectly — a call accepted at one door and refused at the other, which is the exact failure this
+		// predicate's header names. `staticCallClaimsBase` asks the same key for the same reason.
+		let baseName = self.qualifiedCallBaseName(self.genericAliasKeyFor(self.tokenAt(index).value))
 		let callee = qualifiedMethodName(baseName, methodName: self.tokenAt(index + 2).value)
 		if isBuiltinsIntrinsicCallee(callee) 'builtinsIntrinsic'
 			return true

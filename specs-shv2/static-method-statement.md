@@ -184,3 +184,83 @@ end 'main'
 ```maxoncstderr
 error E3004: <fragment>:9:2: call to undefined function 'Helper.while'
 ```
+
+<!-- test: static-method-statement.void-static-through-an-inner-generic-alias -->
+⭐⭐ **THE BASE IS AN INNER GENERIC ALIAS, AND THIS DOOR HAS TO READ IT UNDER THE SAME KEY THE EXPRESSION
+DOOR READS (found in W7's review).** `typealias IntPair = Pair with ExitCode` declared INSIDE `Plain` is
+keyed whole-program as `Plain.IntPair`, so a statement door asking the BARE member finds no registration,
+mangles `IntPair.shout`, and refuses a program the expression door on the very next line resolves
+perfectly.
+
+⚠ **MEASURED AS AN ASYMMETRY INSIDE ONE BINARY, which is what makes it a defect rather than a missing
+feature.** With the identical alias moved to FILE scope this program already compiled and printed `shout`;
+declared inside the calling type it was `E2015: Unsupported: identifier statement` — one written spelling
+answered two ways, which is exactly what `voidStaticCallsAt`'s own header forbids and what W7's
+`genericAliasKeyFor` exists to make impossible. The bootstrap oracle cannot arbitrate: it fails this
+program with an internal `E9001 … Function 'IntPair.shout' not found in module`, its own spelling of the
+same missing lookup.
+```maxon
+type Pair uses T
+	export var a as ExitCode
+
+	export static function create(a ExitCode) returns Self
+		return Self{a: a}
+	end 'create'
+
+	export static function shout()
+		print("hi")
+	end 'shout'
+end 'Pair'
+
+type Plain
+	typealias IntPair = Pair with ExitCode
+
+	export static function make() returns ExitCode
+		IntPair.shout()
+		let p = IntPair.create(0)
+		return p.a
+	end 'make'
+end 'Plain'
+
+function main() returns ExitCode
+	return Plain.make()
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+hi
+```
+
+<!-- test: static-method-statement.error.unknown-static-through-an-inner-generic-alias -->
+The typo half, and the half that says the base was genuinely RESOLVED rather than merely tolerated. An
+unknown member on an inner generic alias is refused by NAME through the alias's BASE STRUCT — the same
+callee `parseQualifiedCall` would have mangled — and not by the shape message a base this door failed to
+resolve would have earned. `Pair` in the message, not `IntPair`, is the whole evidence: it is the name
+only the whole-program key can produce.
+```maxon
+type Pair uses T
+	export var a as ExitCode
+
+	export static function create(a ExitCode) returns Self
+		return Self{a: a}
+	end 'create'
+end 'Pair'
+
+type Plain
+	typealias IntPair = Pair with ExitCode
+
+	export static function make() returns ExitCode
+		IntPair.nope()
+		return 0
+	end 'make'
+end 'Plain'
+
+function main() returns ExitCode
+	return Plain.make()
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:14:3: call to undefined function 'Pair.nope'
+```
