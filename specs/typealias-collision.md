@@ -206,21 +206,30 @@ then `sizeof(Word32)` — which is the half that DISCRIMINATES: the user's `0 to
 the `i64.min to i64.max` the stdlib declares for that same name is eight, so the SIZE says whose
 declaration governs the user's own file while the digest byte says whose governs the stdlib's. ⚠ The
 `7` alone pins nothing and is not that half — it is inside every range in this fixture, which is
-exactly the weakness this file's older `42` cases have. ⚠⚠ `Word32` APPEARS INSIDE THE INTERPOLATED
-STRING, AND THAT IS LOAD-BEARING A SECOND TIME: the runner's batch rewriter gives every top-level
+exactly the weakness this file's older `42` cases have. ⚠⚠ **TWO FILES ON PURPOSE, AND THE SPLIT IS
+WHAT KEEPS THIS CASE ABLE TO FAIL AT ALL.** The runner's batch rewriter gives every top-level
 declaration in a batched test a per-test prefix, which renames this `Word32` apart from the stdlib's
-and dissolves the collision the case exists to catch. What keeps this test off the batched path is
-`BatchRewriter.FindStringLiteralCollision` seeing a renamed name inside a `"…"` body. Move `Word32`
-out of the string — spell the size as a literal, print it separately — and the case goes GREEN
-against a compiler with the bug restored. Measured on a sibling case: the single-file form passed at
-the parent commit while the same program compiled by hand was rejected.
+and dissolves the very collision the case exists to catch — leaving a green run that tests nothing.
+`FragmentGenerator.IsBatchable` refuses a multi-file test outright, so the split puts this case
+STRUCTURALLY beyond the rewriter rather than incidentally beyond it. *(Incidentally is not
+hypothetical: the single-file form was kept off the batched path only by `Word32` appearing inside an
+interpolated string, and a sibling case in this rung PASSED at the parent commit in that form while
+the identical program compiled by hand was rejected there.)* The split also states the defect more
+honestly — the colliding declaration belongs to a LIBRARY file, and `main` never names it.
 ```maxon
+// --- file: digits.maxon
 typealias Word32 = int(0 to 255)
+export typealias Reading = int(0 to 1000)
 
-function clampish(v Word32) returns Word32
+export function clampish(v Word32) returns Reading
 	return v
 end 'clampish'
 
+export function ownWidth() returns Reading
+	return sizeof(Word32)
+end 'ownWidth'
+
+// --- file: main.maxon
 function main() returns ExitCode
 	var data = ByteArray.create()
 	data.push(0x61)
@@ -228,7 +237,7 @@ function main() returns ExitCode
 	data.push(0x63)
 	let hash = sha256(data)
 	let b = try hash.get(0) otherwise 0
-	print("{b} {clampish(7)} {sizeof(Word32)}\n")
+	print("{b} {clampish(7)} {ownWidth()}\n")
 	return 0
 end 'main'
 ```
@@ -252,25 +261,37 @@ back truncated the moment a by-name lookup swaps in the stdlib's. `sizeof` is pr
 precisely because the two can DISAGREE: the parser resolves a type name per file and answers 4,
 while the generic instance's element type is re-resolved whole-program — a silent disagreement that
 reaches the backend, which is why the value and the size are pinned together and not separately.
-Prints `70000 3 70001 4`. ⚠⚠ `DecimalDigit` APPEARS INSIDE THE INTERPOLATED STRING, AND THAT IS
-LOAD-BEARING A SECOND TIME — see the case above: it is what keeps this test off the batched path,
-where the rewriter's per-test prefix would rename this `DecimalDigit` apart from the stdlib's and
-leave nothing to collide.
+Prints `70000 70001 4`. ⚠⚠ TWO FILES ON PURPOSE, for the reason the case above states: the batch
+rewriter's per-test prefix would rename this `DecimalDigit` apart from the stdlib's and leave nothing
+to collide, and `FragmentGenerator.IsBatchable` refuses a multi-file test outright. ⚠ This case is a
+GUARD-RAIL rather than a regression pin, so it is green both before and after this rung — what it
+exists to fail is the *other* cure for its sibling, a visibility-rank guard on the `TypeDefs` write,
+which was built during this rung and measured to make SHA-256 correct while turning this program's
+`70000` into `880`. Without this case that road passes the suite.
 ```maxon
+// --- file: digits.maxon
 typealias DecimalDigit = int(0 to 100000)
 typealias DigitArray = Array with DecimalDigit
+export typealias Reading = int(0 to 1000000)
 
-function widen(v DecimalDigit) returns DecimalDigit
-	return v
-end 'widen'
-
-function main() returns ExitCode
+export function roundTrip() returns Reading
 	var a = DigitArray.create()
 	a.push(70000)
-	a.push(3)
 	let x = try a.get(0) otherwise 0
-	let y = try a.get(1) otherwise 0
-	print("{x} {y} {widen(70001)} {sizeof(DecimalDigit)}\n")
+	return x
+end 'roundTrip'
+
+export function widen() returns Reading
+	return 70001
+end 'widen'
+
+export function ownWidth() returns Reading
+	return sizeof(DecimalDigit)
+end 'ownWidth'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	print("{roundTrip()} {widen()} {ownWidth()}\n")
 	return 0
 end 'main'
 ```
@@ -278,5 +299,5 @@ end 'main'
 0
 ```
 ```stdout
-70000 3 70001 4
+70000 70001 4
 ```
