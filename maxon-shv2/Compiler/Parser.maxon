@@ -28498,8 +28498,12 @@ export type Parser
 	//                  still an unsigned type here, and a file-local table would answer "signed" and
 	//                  emit the wrong instruction. It is order-independent within a file too, which
 	//                  the artifact table — filled as declarations are parsed — would not be.
-	//   • `exitCode` — `int(0 to u32.max)`. Unsigned, by the same low-bound rule its range would
-	//                  give if it were spelled as one.
+	//   • `exitCode` — the builtin `ExitCode`, whose range is PLATFORM-SHAPED: `int(0 to u32.max)` on
+	//                  Windows and `int(0 to 255)` on Linux, macOS and WASI (`Project.exitCodeAliasHigh`,
+	//                  which mirrors `stdlib/Process.maxon`). Unsigned on EVERY target, by the same
+	//                  low-bound rule `named` above applies — and it is worth saying WHICH bound carries
+	//                  it, because only the high one moves: the verdict rests on the LOW bound, which is
+	//                  0 on all four targets, so the platform range cannot endanger it.
 	//   • `integer`  — a bare `int` is `i64.min to i64.max`. SIGNED, and it is the default every
 	//                  shift in the language sign-fills under.
 	//   • the rest   — not a number, so not a shift operand at all: `requireBinOpOperands` has
@@ -30099,8 +30103,10 @@ export type Parser
 	// ⭐⭐ **A SITE THE DESTINATION PROVABLY ADMITS IS NOT A SITE AT ALL (A4f), AND IT IS DECIDED BELOW
 	// BECAUSE THIS IS WHERE ALL FIVE ALIAS-NAMED DOORS MEET.** The rule is `rangeCoversDenotedRange`, which
 	// is the containment E3010 reports, asked of the pair every door already holds — so *"unneeded cast:
-	// 'Byte' already fits in 'ExitCode'"* and the `0 ≤ x ≤ 4294967295` cascade behind it can no longer be
-	// two answers to one question. Removing the redundant cast used to ADD that cascade, on a value whose
+	// 'Byte' already fits in 'ExitCode'"* and the runtime cascade behind it can no longer be two answers to
+	// one question. (That cascade spells `0 ≤ x ≤ 4294967295` on WINDOWS only — `ExitCode`'s high bound is
+	// platform-shaped, `Project.exitCodeAliasHigh` — and the bound it carries is not what makes it dead; the
+	// containment is, on every target.) Removing the redundant cast used to ADD that cascade, on a value whose
 	// declared type cannot fail it.
 	//
 	// ⚠ **IT SKIPS THE COMPILE-TIME HALF TOO, AND THAT COSTS NO DIAGNOSTIC.** `InsertRangeChecks` reports
@@ -30303,8 +30309,10 @@ export type Parser
 	// make `w / a` unsigned on the strength of a NUMBER where the language's answer comes from a TYPE. The
 	// bootstrap reads the same two facts in the same order (`DeclaredIntRange` before `TryFoldIntConst`).
 	//
-	// `exitCode` is `int(0 to u32.max)` — a declared non-negative range with no alias declaration to look
-	// up, placed here exactly as `valueIsUnsigned` places it.
+	// `exitCode` is the builtin `ExitCode` — a declared non-negative range with no alias declaration to look
+	// up, placed here exactly as `valueIsUnsigned` places it. Its HIGH bound is platform-shaped (`u32.max` on
+	// Windows, 255 elsewhere — `Project.exitCodeAliasHigh`) and none of that reaches this decision:
+	// "non-negative" is a statement about the LOW bound, which is 0 on every target.
 	//
 	// ⚠⚠ **IT READS THE CAST-RECORDED ALIAS AS WELL AS THE TAG COLUMN, AND THAT DIFFERENCE WAS FOUR
 	// SILENT WRONG ANSWERS (X10 review).** A cast to a non-negative alias that ADMITS ZERO —

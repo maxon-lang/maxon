@@ -1413,10 +1413,13 @@ end 'literalInRange'
 // keeps `let x = 42` + `x as Float` legal.
 //
 // ⚠⚠ **THE DIAGNOSTIC AND THE EMITTER MUST NOT ANSWER THIS TWICE.** E3010 saying *"'Byte' already fits in
-// 'ExitCode'"* is a PROOF that the source range is inside the destination; a runtime `0 ≤ x ≤ 4294967295`
-// cascade emitted behind that same proof tests a value that cannot fail it. Before A4f the two halves were
-// decided in different places from different facts — `InsertRangeChecks.needsRuntimeGuard` never saw a
-// source range at all — so removing an unneeded cast ADDED a provably-dead guard.
+// 'ExitCode'"* is a PROOF that the source range is inside the destination; the runtime cascade emitted
+// behind that same proof tests a value that cannot fail it. (Written out, that cascade reads
+// `0 ≤ x ≤ 4294967295` on WINDOWS only — `ExitCode`'s high bound is platform-shaped, see
+// `Project.exitCodeAliasHigh` — and which number it carries is beside the point: what makes it dead is the
+// CONTAINMENT, which holds on every target.) Before A4f the two halves were decided in different places
+// from different facts — `InsertRangeChecks.needsRuntimeGuard` never saw a source range at all — so
+// removing an unneeded cast ADDED a provably-dead guard.
 // `rangeCoversDenotedRange` below is the spelling the guard doors ask, and it ends here.
 //
 // CROSS-DOMAIN: only `int → float` covers, and it covers ALWAYS — an f64 spans every i64 the corpus can

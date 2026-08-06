@@ -927,27 +927,51 @@ end 'singletonValTypes'
 // function's `(from, to)` valtype pair stops carrying enough to decide — the source's signedness has to
 // reach it, and `getValtype`'s table (WasmValType, not StdType) is where that information is dropped today.
 //
-// ⛔⛔ **AND THE INVARIANT ABOVE IS ABOUT THE TYPE, NOT ABOUT THE VALUE — NOTHING RANGE-CHECKS AN
-// `ExitCode`, SO THE ZERO-EXTENSION IS ONLY EXACT INSIDE `[0, u32.max]` (X5 review, MEASURED).** No narrow
-// Std type is SIGNED, which is what the paragraph above establishes; it does not establish that the number
-// in a `u32` slot is inside a `u32`. It need not be — `return -1` from a `returns ExitCode` function is
-// accepted with no diagnostic on EVERY target, and six lines reproduce the divergence with no alias, no
-// loop and no phi:
+// ⚠ **THE TWO CASES NAMED ABOVE ARE A WINDOWS-LANE READING SINCE BATCH27**, because 4,000,000,000 is no
+// longer a legal `ExitCode` anywhere else — the range is `int(0 to 255)` on Linux, macOS and WASI. What
+// they pin is a property of the SLOT, and the slot is still `u32` on every target, so it stays reachable
+// on wasm by a route that is not platform-shaped: a `u32`-RANGED ARRAY ELEMENT, which keeps a 4-byte slot
+// rather than the i64 a scalar `named` alias rides (MEASURED at BATCH27, host and wasm agreeing on
+// 4000000000). The widen did not become untestable here; only `ExitCode` stopped being able to spell it.
+//
+// ⛔⛔ **AND THE INVARIANT ABOVE IS ABOUT THE TYPE, NOT ABOUT THE VALUE — SO THE ZERO-EXTENSION IS EXACT
+// ONLY INSIDE `[0, u32.max]`, WHICH IS THE SLOT'S DOMAIN AND NOT AUTOMATICALLY THE VALUE'S (X5 review,
+// MEASURED).** No narrow Std type is SIGNED, which is what the paragraph above establishes; it does not
+// establish that the number sitting in a `u32` slot is inside a `u32`. That second half is a RANGE
+// obligation and was never this file's to discharge — and while nothing discharged it, six lines
+// reproduced the divergence with no alias, no loop and no phi:
 //
 //     function negOne() returns ExitCode
 //     	return -1
 //     end 'negOne'
-//     let v = negOne()   ⇒ host prints v=-1, plus10=9;   wasm prints v=4294967295, plus10=4294967305
+//     let v = negOne()   ⇒ host printed v=-1, plus10=9;   wasm printed v=4294967295, plus10=4294967305
 //
-// The `v=` reading is PRE-EXISTING and was measured on the pre-X5 binary too, so it is NOT the width work's
-// — the widen has always read a bit pattern the type could not hold. ⇒ **THE CURE IS NOT IN THIS FILE**: it
-// is the missing `InsertRangeChecks` obligation on a narrow declared type (or the ABI decision that a `u32`
-// is a machine word on wasm, one line in `wasmValTypeOf`). Until one lands, `opComputeValType`'s and
-// `emitDivMod`'s "computing at i64 is EXACT" is exact for every value INSIDE its declared type's range —
-// verified across `[0, u32.max]` including 2^31 and u32.max, host and wasm byte-identical on 14 readings —
-// and says nothing at all about a value outside it. ⚠ Do not read the pre-X5 compiler as better here: its
-// 32-bit arithmetic made a few of these readings AGREE with the host by coincidence (`v + 10` was `9` both
-// ways), which is a wrapped answer that happened to land, not a property.
+// That reading was PRE-EXISTING and was measured on the pre-X5 binary too, so it was never the width
+// work's — the widen has always read whatever bit pattern reached it.
+//
+// ⭐ **IT IS CLOSED, AND BY THE CURE THIS BLOCK NAMED: `InsertRangeChecks`, not a line in `wasmValTypeOf`.**
+// X6 gave the builtin `ExitCode` a range the guards can read, so `return -1` is E3005 at the `return` on
+// every target; BATCH27 made that range the compile TARGET's (`int(0 to u32.max)` on Windows,
+// `int(0 to 255)` on Linux, macOS and WASI — `Project.exitCodeAliasHigh`, mirroring `stdlib/Process.maxon`),
+// which is what closed the values between 256 and `u32.max` that the OS was silently masking on this lane.
+// ⚠ **This block asserted the open defect in the PRESENT TENSE from X5 until BATCH27; it was already stale
+// at X6, and the range work found it rather than caused it.**
+//
+// ⇒ What this function relies on is unchanged, and now has a guard standing behind it rather than a hope:
+// `opComputeValType`'s and `emitDivMod`'s "computing at i64 is EXACT" is exact for every value inside the
+// SLOT's domain — verified across `[0, u32.max]` including 2^31 and u32.max, host and wasm byte-identical
+// on 14 readings — and the range checks are what stop a value outside it from ever arriving here.
+//
+// ⛔ **THE SLOT STAYS `u32` ON EVERY TARGET, AND THE NARROWED RANGE IS EXACTLY WHY IT MUST.** BATCH27
+// narrowed the RANGE and deliberately not the width: the runtime half of the call-argument door is a guard
+// at the CALLEE'S ENTRY, which reads the value out of the slot AFTER the ABI narrowed it, so it can only
+// see a truncation while the slot is WIDER than the range. Give `ExitCode` a `u8` slot here and
+// `takes(opaque(0) - 5)` arrives as 251, inside `int(0 to 255)`, and the guard passes — the wrong answer
+// back, wearing a check. `Project.maxon`'s `ExitCode` seed states the argument in full.
+//
+// ⚠ Do not read the pre-X5 compiler as better here: its 32-bit arithmetic made a few of these readings
+// AGREE with the host by coincidence (`v + 10` was `9` both ways), which is a wrapped answer that happened
+// to land, not a property.
 function coerceOnStack(body WasmBody, from WasmValType, to WasmValType)
 	if from == to 'same'
 		return
