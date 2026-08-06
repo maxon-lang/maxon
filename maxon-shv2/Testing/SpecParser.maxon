@@ -7,7 +7,9 @@
 // `TimeoutMs` directive, doc-example extraction — is dropped; each
 // returns when a spec first needs it. **Per-target `Stdout:<target>` was the first
 // one to have come back** — BATCH2 slice 3, for `specs/filepath.md`, whose 26
-// separator-printing cases pin one answer per platform (see `TargetStdoutFencePrefix`) —
+// separator-printing cases pin one answer per platform (see `TargetStdoutFencePrefix`, and
+// `TargetCompilerErrorFencePrefix` for the two twins it has since grown, which do the same for a
+// COMPILER diagnostic and for a run's stderr) —
 // **`RequiredRdata` is the second**, at BATCH8, where the read-only section became the
 // second thing no golden could see (see `RequiredRdataFence`), and **`Args` is the third**,
 // for the 51 `/specs` cases whose programs read their own argv (see `ArgsMarker`).
@@ -76,6 +78,36 @@
 // with spec authors, and because the ORDER two of them are matched in is
 // load-bearing: "```maxoncstderr" startsWith "```maxon", so the compiler-error
 // fence MUST be tested before the source fence or the source check swallows it.
+//
+// ⚠⚠ **THE FENCE PREFIX RELATIONS, IN ONE PLACE — because a swallowed arm is SILENT.**
+// `scanTestFromMarker` recognizes every fence with `startsWith`, so if fence A is a prefix of fence B
+// and A's arm is matched first, B's blocks are read as A's and B is never seen. This set contains
+// exactly ONE such pair (the one named above), and it is handled by ORDER; every other pair must be in
+// no prefix relation at all, and each is checked here rather than assumed — fence order is precisely the
+// kind of thing that stays true until someone edits a literal. (`String.startsWith` compares BYTES, so a
+// difference of CASE is a real difference. Byte 3 is the first character after the ``` opener.)
+//
+//   • **PORTABLE vs PORTABLE.** "```maxoncstderr" startsWith "```maxon" — THE pair, ordered. Every other
+//     pair differs at byte 3 (`m`/`e`/`s` — both `maxon` spellings against "```exitcode", "```stderr" and
+//     "```stdout"), except "```stderr" vs "```stdout", which first differ at byte 6 (`e`/`o`).
+//   • **QUALIFIED vs PORTABLE — separated BY CONSTRUCTION, not by enumeration.** A target-qualified fence
+//     (`` ```Stdout:<target> `` and its twins) is ``` plus the portable name with its first letter
+//     CAPITALIZED plus `:`, so byte 3 is an UPPERCASE letter in every qualified fence and a LOWERCASE one
+//     in every portable fence. Two strings differing at byte 3 are in no prefix relation either way — so
+//     this holds for a portable fence added LATER too, which an enumeration could not promise.
+//   • **QUALIFIED vs QUALIFIED.** "```Maxoncstderr:" differs from the other two at byte 3 (`M` vs `S`);
+//     "```Stdout:" and "```Stderr:" SHARE the six bytes "```Std" and first differ at byte 6 (`o`/`e`) —
+//     the same distance apart as their lowercase originals, one case-flip up. Sharing a prefix is
+//     harmless — neither is a prefix OF the other — but it does mean neither may ever be recognized by a
+//     test that stops short of byte 6, which is the shortcut this one pair invites.
+//   • **THE `Required*` FAMILY**, which is the one group the capitalization rule does not separate from
+//     the qualified fences, because it is capitalized at byte 3 as well: "```RequiredData",
+//     "```RequiredRdata" and "```RequiredRuntime" all differ from "```Maxoncstderr:", "```Stderr:" and
+//     "```Stdout:" at byte 3 (`R` vs `M`/`S`), and from each other at byte 11 (`D`/`R`) and byte 12
+//     (`d`/`u`).
+//
+// ⇒ no arm can swallow another, and the order every arm but the compiler-error/source pair is matched in
+// stays free. Each fence constant below names what it PINS; none of them restates this relation.
 let FrontmatterFence = "---"
 let StatusKey = "status:"
 let TestsHeading = "## Tests"
@@ -167,23 +199,12 @@ let CompilerErrorFence = "```maxoncstderr"
 // `CompilerErrorFence` and not a spelling of it: `maxoncstderr` asserts the compile FAILED
 // and pins the diagnostic, while this asserts the compile SUCCEEDED, the program RAN, and
 // pins what it wrote — the panic path. 32 blocks in `/specs` use it.
-//
-// It is order-INDEPENDENT of the other three: "```stderr" is neither a prefix nor an
-// extension of "```maxon" / "```maxoncstderr" / "```exitcode", so unlike the
-// maxoncstderr-before-maxon rule above, no arm can swallow it and it can swallow none.
-// (Checked explicitly rather than assumed, because the fence order is exactly the kind of
-// thing that is true until someone edits a literal.)
 let RuntimeStderrFence = "```stderr"
 
 // The RUN's stdout — what the COMPILED PROGRAM printed to standard output (P1.2 wave A — `print`). A
 // separate fence from `RuntimeStderrFence` for the same reason that one is separate from
 // `CompilerErrorFence`: it pins a DIFFERENT stream. Until this rung shv2 could `print` nothing, so a
 // ```stdout block was silently walked over — a false green the moment `print` landed.
-//
-// Order-INDEPENDENT of the other five fences: "```stdout" is neither a prefix nor an extension of any
-// of them ("```stderr" first differs at the `o`/`e`), so no arm can swallow it and it can swallow none.
-// (Checked explicitly rather than assumed, because fence order is exactly what breaks when a literal
-// is edited.)
 let StdoutFence = "```stdout"
 
 // ⭐ **THE PER-TARGET EXPECTED STDOUT — `` ```Stdout:x64-windows ``, and the fence a PORTED spec needs
@@ -199,12 +220,39 @@ let StdoutFence = "```stdout"
 // spec author may write either block first, and `specs/filepath.md` writes the qualified one first.
 // A second, shv2-only resolution rule would be this project's signature bug in a file THREE compilers'
 // suites read.
-//
-// ⚠ It is NOT a superstring of `StdoutFence`, and that is checked rather than assumed: "```Stdout:"
-// first differs from "```stdout" at the `S`/`s`, so neither arm can swallow the other and their order is
-// free — the same property `DisabledTestMarker` and `TestMarker` rest on. (`String.startsWith` compares
-// bytes, so the case difference is a real difference.)
 let TargetStdoutFencePrefix = "```Stdout:"
+
+// ⭐⭐ **THE OTHER TWO TARGET-QUALIFIED FENCES — `` ```Maxoncstderr:<target> `` and `` ```Stderr:<target> ``,
+// the COMPILE-ERROR and RUNTIME-STDERR twins of the block above.** They arrived the moment a DIAGNOSTIC'S
+// OWN TEXT became target-dependent: `ExitCode`'s range is `int(0 to u32.max)` on Windows and
+// `int(0 to 255)` on Linux, macOS and WASI (`stdlib/Process.maxon`), so E3005's "outside the range of
+// 'ExitCode' (…)" prints different bytes per target — and `specs-shv2/exit-code-range.md`'s rejected cases
+// RUN on the wasm lane, so one portable block cannot state their expectation. Before this, `` ```Stdout: ``
+// was the only per-target fence: a spec could say a PROGRAM printed different bytes per target but not
+// that the COMPILER did.
+//
+// ⚠ **THE RESOLUTION IS `TargetStdoutFencePrefix`'S, NOT A SECOND AND A THIRD ONE** — a block naming THIS
+// run's target WINS over the portable block, a block naming any other target is consumed and discarded,
+// and order in the file is irrelevant. All three go through `TargetPreferredText` and
+// `recordTargetQualifiedText`, so the rule exists once rather than once per slot.
+//
+// ⚠ **THE SPELLING EXTENDS THE REFERENCE'S CONVENTION RATHER THAN INVENTING ONE.** The C# parser
+// qualifies a fence by CAPITALIZING its name and appending `:<targetKey>` — `Stdout:` and `RequiredIR:`
+// (`SpecParser.cs:190`, `:197`). These are those same two moves applied to `maxoncstderr` and `stderr`. The
+// reference implements neither yet, and its `KnownCodeBlockPrefixes` would have to learn them before a
+// spec carrying one could move into `/specs`; spelling them the way it WOULD spell them is what keeps
+// that a one-line addition instead of a second syntax for one idea.
+//
+// ⭐ **AND THERE IS DELIBERATELY NO `` ```Exitcode:<target> ``.** Nothing needs one, and an unused
+// mechanism is a claim nobody checks — the fence would be matched by no spec, so no run could ever tell
+// whether it worked.
+//
+// ⚠⚠ Adding two fences to a set that ALREADY CONTAINS A SWALLOWING PAIR is exactly where a second such
+// pair would appear unnoticed. Both prefixes are therefore argued against every other fence in the ONE
+// place that whole relation is stated — the `--- Spec-markdown grammar tokens ---` header, which is also
+// where the pair that DOES swallow is named. Nothing here restates it.
+let TargetCompilerErrorFencePrefix = "```Maxoncstderr:"
+let TargetStderrFencePrefix = "```Stderr:"
 
 // ⭐ A LINKED SECTION'S BYTES, as typed values — `i64 42` / `i8 1` / `f64 3.14`, one per line. Not
 // what the compiler thinks it laid out, but what the linked binary actually contains, read back out
@@ -229,10 +277,6 @@ let TargetStdoutFencePrefix = "```Stdout:"
 //
 // The two are ONE mechanism taking a `LinkedSectionKind` (see `LinkedSection.maxon`): one fence
 // table, one block parse, one prefix compare, one message, two section constants.
-//
-// ⚠ Neither is a prefix of the other ("```RequiredData" and "```RequiredRdata" first differ at the
-// `D`/`R`), and neither is a prefix relation with the other five fences — so, exactly as with
-// ```stderr, the order these are matched in is free and no arm can swallow another.
 let RequiredDataFence = "```RequiredData"
 let RequiredRdataFence = "```RequiredRdata"
 
@@ -253,9 +297,6 @@ let RequiredRdataFence = "```RequiredRdata"
 //
 // ⚠ It is NOT a result block: it says nothing about the RUN, so it does not satisfy
 // `pinsAnyResult` — a case carrying only this would compile, render a golden and check no behaviour.
-//
-// ⚠ It is in no prefix relation with either section fence either (`RequiredRuntime` and
-// `RequiredRdata` first differ at the `u`/`d`), so all three may be matched in any order.
 let RequiredRuntimeFence = "```RequiredRuntime"
 let FenceClose = "```"
 
@@ -529,13 +570,68 @@ type FenceBlock
 	end 'create'
 end 'FenceBlock'
 
+// ⭐⭐ **THE TWO BLOCKS THAT MAY COMPETE FOR ONE EXPECTATION SLOT** — a portable fence (```stdout) and a
+// target-qualified one (```Stdout:x64-windows) — held APART until the whole run of a test's blocks has
+// been read. The two may appear in EITHER order (see `TargetStdoutFencePrefix`), so "the qualified block
+// WINS" cannot be expressed by letting a later assignment overwrite an earlier one.
+//
+// ⚠ **ONE type for all THREE slots that have a qualified spelling** — the compile-error text, the run's
+// stderr, the run's stdout. Each is a String under a "did the spec write one" flag and each resolves by
+// the identical preference, so the preference is stated ONCE. Growing the mechanism from one slot to three
+// by copying the pair of variables and the resolve function beside it would have been this project's
+// signature bug — one fact written down three times — in the file that decides what every spec MEANS.
+//
+// ⚠ The two flags are NOT `portable.isEmpty()`: an EMPTY block is a legitimate claim (a ```stdout block
+// with nothing in it asserts the program printed nothing — see `SpecStdout`), so inferring presence from
+// the text would be exactly the sentinel those unions exist to avoid.
+type TargetPreferredText
+	var portable as String
+	var qualified as String
+	var havePortable as bool
+	var haveQualified as bool
+
+	static function create() returns TargetPreferredText
+		return Self{portable: "", qualified: "", havePortable: false, haveQualified: false}
+	end 'create'
+
+	// A LATER block of the same kind replaces an earlier one, which is what a plain assignment always did
+	// here — two portable ```stdout blocks in one case are a spec-authoring mistake, not two claims, and
+	// unlike a section pin they cannot accumulate (a run has one stdout).
+	export function recordPortable(text String)
+		portable = text
+		havePortable = true
+	end 'recordPortable'
+
+	export function recordQualified(text String)
+		qualified = text
+		haveQualified = true
+	end 'recordQualified'
+
+	// Did the spec write EITHER block for this slot? The push condition, and what keeps `resolved` from
+	// being asked a question it has no answer to.
+	export function isPinned() returns bool
+		return haveQualified or havePortable
+	end 'isPinned'
+
+	// The block naming THIS run's target when the spec wrote one, else the portable block — the
+	// reference's `??` (`SpecParser.cs:190`), spelled once for all three slots.
+	export function resolved() returns String
+		if not self.isPinned() 'nothingWritten'
+			panic("SpecParser.TargetPreferredText.resolved: this slot holds no block. Callers gate on `isPinned` first, and an unwritten slot cannot fall back to the empty String — an EMPTY block is itself a claim (the stream was silent), so that value is already taken")
+		end 'nothingWritten'
+
+		return qualified if haveQualified else portable
+	end 'resolved'
+end 'TargetPreferredText'
+
 // Read the spec file at `path` and extract its frontmatter status + active
 // tests. Throws `readError` when the file cannot be read (the runner surfaces
 // it), reusing the driver's IO error union rather than inventing a parallel one.
 //
-// ⚠ **IT TAKES THE RUN'S TARGET, because ONE fence's meaning depends on it** — `` ```Stdout:<target> ``
-// resolves HERE, the way the reference resolves it (`SpecParser.cs:177`), so a `SpecTest` carries ONE
-// already-decided `SpecStdout` and no reader downstream can resolve it a second, different way. It is
+// ⚠ **IT TAKES THE RUN'S TARGET, because THREE fences' meaning depends on it** — `` ```Stdout:<target> ``
+// and its `` ```Stderr: `` / `` ```Maxoncstderr: `` twins resolve HERE, the way the reference resolves the
+// one it has (`SpecParser.cs:177`), so a `SpecTest` carries an already-decided expectation and no reader
+// downstream can resolve it a second, different way. It is
 // deliberately NOT the treatment `<!-- targets: … -->` gets — that marker decides whether the test is in
 // this run's SET at all, which is a selection the RUNNER owns and reports ("skipped"); this one decides
 // what the test's expectation IS, which is the parse's own answer.
@@ -689,16 +785,13 @@ function scanTestFromMarker(lines StringArray, markerIndex LineIndex, markerLine
 	let name = markerValue(markerLine)
 	var source = ""
 	var haveSource = false
-	var compilerError = ""
-	var haveCompilerError = false
 	var exitCode = SpecExitCode.unpinned
-	var stderr = SpecStderr.unpinned
-	var stdout = SpecStdout.unpinned
-	// The `` ```Stdout:<thisTarget> `` block, kept APART from the portable one until the whole run of
-	// blocks has been read — the two fences may appear in either order (see `TargetStdoutFencePrefix`),
-	// so "the qualified block wins" cannot be expressed by letting a later assignment overwrite an
-	// earlier one. Resolved once, below, where both are known.
-	var targetStdout = SpecStdout.unpinned
+	// The three slots a spec may state TWICE — once portably and once for a named target. Each holds both
+	// blocks until the whole run of a test's blocks has been read, because the two fences may appear in
+	// either order; `TargetPreferredText` carries the preference and the reason.
+	var compilerError = TargetPreferredText.create()
+	var stderr = TargetPreferredText.create()
+	var stdout = TargetPreferredText.create()
 	var sectionPins = SpecSectionPinArray.create()
 	var targets = TargetKeyArray.create()
 	var runtimeNames = RuntimeFunctionNameArray.create()
@@ -745,39 +838,39 @@ function scanTestFromMarker(lines StringArray, markerIndex LineIndex, markerLine
 		end 'argsMarker'
 
 		// CompilerError MUST be checked before Source: "```maxoncstderr" also
-		// startsWith "```maxon", so the source arm would otherwise consume it. The
-		// runtime-stderr fence is order-independent of all three (see RuntimeStderrFence).
+		// startsWith "```maxon", so the source arm would otherwise consume it. It is the ONLY ordering
+		// constraint among the fences — every other pair is in no prefix relation at all, which the
+		// `--- Spec-markdown grammar tokens ---` header argues for the whole set.
 		if line.startsWith(CompilerErrorFence) 'compilerErr'
-			let block = readFence(lines, openIndex: i)
-			compilerError = block.text.trim()
-			haveCompilerError = true
-			i = block.nextIndex
+			i = recordPortableText(lines, openIndex: i, slot: compilerError)
 			continue
 		end 'compilerErr'
 
 		if line.startsWith(RuntimeStderrFence) 'runtimeStderr'
-			let block = readFence(lines, openIndex: i)
-			stderr = SpecStderr.pinned(block.text.trim())
-			i = block.nextIndex
+			i = recordPortableText(lines, openIndex: i, slot: stderr)
 			continue
 		end 'runtimeStderr'
 
 		if line.startsWith(StdoutFence) 'runtimeStdout'
-			let block = readFence(lines, openIndex: i)
-			stdout = SpecStdout.pinned(block.text.trim())
-			i = block.nextIndex
+			i = recordPortableText(lines, openIndex: i, slot: stdout)
 			continue
 		end 'runtimeStdout'
 
-		// A TARGET-QUALIFIED stdout block. Every one is READ — the fence has to be consumed either way,
-		// or the outer scan would walk its contents line by line as markup — and only the one naming this
-		// run's target is KEPT.
+		// The three TARGET-QUALIFIED blocks, each the twin of the portable arm above it. One routine, one
+		// target comparison — see `recordTargetQualifiedText` for why every such block is READ whatever
+		// target it names.
+		if line.startsWith(TargetCompilerErrorFencePrefix) 'targetCompilerErr'
+			i = recordTargetQualifiedText(lines, openIndex: i, openLine: line, fencePrefix: TargetCompilerErrorFencePrefix, effectiveTargetKey: effectiveTargetKey, slot: compilerError)
+			continue
+		end 'targetCompilerErr'
+
+		if line.startsWith(TargetStderrFencePrefix) 'targetStderr'
+			i = recordTargetQualifiedText(lines, openIndex: i, openLine: line, fencePrefix: TargetStderrFencePrefix, effectiveTargetKey: effectiveTargetKey, slot: stderr)
+			continue
+		end 'targetStderr'
+
 		if line.startsWith(TargetStdoutFencePrefix) 'targetStdout'
-			let block = readFence(lines, openIndex: i)
-			if valueAfterKey(line, key: TargetStdoutFencePrefix) == effectiveTargetKey 'namesThisTarget'
-				targetStdout = SpecStdout.pinned(block.text.trim())
-			end 'namesThisTarget'
-			i = block.nextIndex
+			i = recordTargetQualifiedText(lines, openIndex: i, openLine: line, fencePrefix: TargetStdoutFencePrefix, effectiveTargetKey: effectiveTargetKey, slot: stdout)
 			continue
 		end 'targetStdout'
 
@@ -831,7 +924,7 @@ function scanTestFromMarker(lines StringArray, markerIndex LineIndex, markerLine
 	// A ```maxoncstderr block WINS over an ```exitcode one: the two are mutually exclusive,
 	// and a spec carrying both is asserting the compile FAILS — which no exit code of the
 	// program it never produced could also be true of.
-	if haveCompilerError 'rejected'
+	if compilerError.isPinned() 'rejected'
 		// ⭐⭐ **A REJECTED CASE PRODUCES NO BINARY, so every block that reads one is refused here
 		// rather than silently discarded** — and silently discarded is exactly what happened: a
 		// ```RequiredRdata claiming bytes no image could hold rode along beside a ```maxoncstderr and
@@ -844,17 +937,21 @@ function scanTestFromMarker(lines StringArray, markerIndex LineIndex, markerLine
 			panic("SpecParser: test '{name}' expects a COMPILE ERROR (a ```maxoncstderr block) and also carries a {RequiredDataFence}/{RequiredRdataFence}/{RequiredRuntimeFence} block. A case that never links produces no image to read a section out of and no IR to render a body into, so that block cannot fail and pins nothing. Drop it, or split the pin into a case that compiles")
 		end 'pinsOnARejectedCase'
 
-		tests.push(SpecTest.create(name, source: source, expectation: SpecExpectation.compilerError(compilerError), targets: targets, runtimeNames: runtimeNames, programArgs: programArgs))
+		tests.push(SpecTest.create(name, source: source, expectation: SpecExpectation.compilerError(compilerError.resolved()), targets: targets, runtimeNames: runtimeNames, programArgs: programArgs))
 		return i
 	end 'rejected'
 
-	// Whatever result blocks this case carried are ONE claim about ONE execution.
-	let resolvedStdout = resolveStdout(targetStdout, portable: stdout)
-	if not pinsAnyResult(exitCode, stderr: stderr, stdout: resolvedStdout, sectionPins: sectionPins) 'pinsNothing'
-		panic("SpecParser: test '{name}' has a ```maxon block but no result block — add an ```exitcode, ```stdout, ```stderr, ```maxoncstderr, ```RequiredData or ```RequiredRdata block, or shelve the case as `<!-- disabled-test: {name} -->`. A case with nothing to check is not a test, and running it would report PASS for a program nothing looked at")
+	// Whatever result blocks this case carried are ONE claim about ONE execution. Each stream's union is
+	// built HERE, from its resolved slot, so no reader downstream can resolve the pair a second and
+	// different way. Two constructors rather than one because `SpecStdout` and `SpecStderr` are distinct
+	// types, each naming ITS stream; everything above the constructor is already shared.
+	let resolvedStdout = SpecStdout.pinned(stdout.resolved()) if stdout.isPinned() else SpecStdout.unpinned
+	let resolvedStderr = SpecStderr.pinned(stderr.resolved()) if stderr.isPinned() else SpecStderr.unpinned
+	if not pinsAnyResult(exitCode, stderr: resolvedStderr, stdout: resolvedStdout, sectionPins: sectionPins) 'pinsNothing'
+		panic("SpecParser: test '{name}' has a ```maxon block but no result block — add an ```exitcode, ```stdout, ```stderr, ```maxoncstderr, ```RequiredData or ```RequiredRdata block, or shelve the case as `<!-- disabled-test: {name} -->`. A case with nothing to check is not a test, and running it would report PASS for a program nothing looked at. (A target-qualified block — `{TargetStdoutFencePrefix}<target>` and its two twins — counts only on the target it NAMES, so a case whose only result block names another target has none here)")
 	end 'pinsNothing'
 
-	tests.push(SpecTest.create(name, source: source, expectation: SpecExpectation.run(exitCode, stderr: stderr, stdout: resolvedStdout, sectionPins: sectionPins), targets: targets, runtimeNames: runtimeNames, programArgs: programArgs))
+	tests.push(SpecTest.create(name, source: source, expectation: SpecExpectation.run(exitCode, stderr: resolvedStderr, stdout: resolvedStdout, sectionPins: sectionPins), targets: targets, runtimeNames: runtimeNames, programArgs: programArgs))
 
 	return i
 end 'scanTestFromMarker'
@@ -946,15 +1043,36 @@ function pinsAnyResult(exitCode SpecExitCode, stderr SpecStderr, stdout SpecStdo
 	return sectionPins.count() > 0
 end 'pinsAnyResult'
 
-// The run's expected stdout: the block naming THIS target when the spec wrote one, else the portable
-// ```stdout block. The reference's `?? ` (`SpecParser.cs:184`), spelled as a function so the preference
-// is stated once — a spec may carry either block, both, or neither, and only this decides which wins.
-function resolveStdout(targetStdout SpecStdout, portable SpecStdout) returns SpecStdout
-	return match targetStdout 'qualified'
-		unpinned gives portable
-		pinned(text) gives SpecStdout.pinned(text)
-	end 'qualified'
-end 'resolveStdout'
+// Consume a PORTABLE result fence opening at `openIndex` and record its text, returning the line index to
+// resume the block scan from. Its target-qualified twin is below, and the pair is why the three portable
+// arms are three lines each instead of the same five lines written out three times: what differs between
+// a ```maxoncstderr, a ```stderr and a ```stdout block is WHICH SLOT it lands in, and nothing else.
+function recordPortableText(lines StringArray, openIndex LineIndex, slot TargetPreferredText) returns LineIndex
+	let block = readFence(lines, openIndex: openIndex)
+	slot.recordPortable(block.text.trim())
+	return block.nextIndex
+end 'recordPortableText'
+
+// Consume a TARGET-QUALIFIED result fence opening at `openIndex` and record its text into `slot` when —
+// and only when — the fence names THIS run's target, returning the line index to resume the block scan
+// from. THE one place a fence's `:<target>` suffix is compared against the run's target, shared by all
+// three qualified fences: a second spelling of "does this block name my target" is one fact written twice.
+//
+// ⚠ **EVERY such block is READ, whatever target it names.** The fence has to be CONSUMED either way, or
+// the outer scan walks its contents line by line as markup — and those contents are arbitrary text: a
+// `## ` line inside one ENDS the test at that point, so an unconsumed `` ```Maxoncstderr:arm64-macos ``
+// sitting above a case's ```maxon block silently deletes the whole case from the run. (Measured on the
+// tree that had no such arm: the case did not fail, it simply was not in the count.) Only the block naming
+// this run's target is KEPT.
+function recordTargetQualifiedText(lines StringArray, openIndex LineIndex, openLine String, fencePrefix String, effectiveTargetKey String, slot TargetPreferredText) returns LineIndex
+	let block = readFence(lines, openIndex: openIndex)
+
+	if valueAfterKey(openLine, key: fencePrefix) == effectiveTargetKey 'namesThisTarget'
+		slot.recordQualified(block.text.trim())
+	end 'namesThisTarget'
+
+	return block.nextIndex
+end 'recordTargetQualifiedText'
 
 // The two section lists one ```maxon block yields. A record rather than two calls over the same text:
 // the scan is one pass and the two answers come out of the same walk, so a second walk would be a
