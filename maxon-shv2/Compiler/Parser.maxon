@@ -14750,6 +14750,11 @@ export type Parser
 	// The registry probe both spellings above end in, written once: a file-local interner id becomes the
 	// name, and the name becomes this FILE's answer for it (the alias registry is scoped per declaring
 	// file, so the reader's path is not optional).
+	//
+	// ⚠ **IT CANNOT TELL THE FILLER ID FROM A REAL ONE, AND NOTHING HERE CAN.** `UnnamedTypeId` is 0 and
+	// `TypeNameInterner` starts empty, so id 0 is the first name a file mentions; a guard here would
+	// refuse that name. The obligation is on the MINT — a value tagged `named` carries a real id — and
+	// `parseUnary`'s `-` arm records what it cost when one did not.
 	function declaredAliasOfNameId(nameId TypeNameId) returns DeclaredAlias
 		return self.signatures.aliasOf(self.internedName(nameId), readerFilePath: self.filePath)
 	end 'declaredAliasOfNameId'
@@ -28133,11 +28138,17 @@ export type Parser
 	//
 	// ⚠ **IT ASKS THE PHI'S OWN TYPE COLUMNS — `declaredAliasOfValue`, WHICH IS TAG-GATED, AND THE GATE IS NOT
 	// OPTIONAL.** A name id is only a real interner entry when the tag is `named`; a merge of any other class
-	// carries `UnnamedTypeId`, and handing that to `declaredAliasOfNameId` panics
-	// *"type-name id 0 is not in this file's interner"*. Both existing readers (`declaredAliasOfValue`,
-	// `declaredAliasOfType`) gate on the tag first, so this asks through one of them rather than spelling a
-	// third copy of the gate — and reading the PHI rather than the values it was named from is what stops the
-	// claim being judged against a type the phi does not actually carry.
+	// carries `UnnamedTypeId`, and handing that to `declaredAliasOfNameId` reads whatever name the interner
+	// gave id 0 — which is the FIRST name the file mentioned, since the table starts empty. Both existing
+	// readers (`declaredAliasOfValue`, `declaredAliasOfType`) gate on the tag first, so this asks through one
+	// of them rather than spelling a third copy of the gate — and reading the PHI rather than the values it
+	// was named from is what stops the claim being judged against a type the phi does not actually carry.
+	//
+	// ⛔ **THE GATE IS NECESSARY AND NOT SUFFICIENT, AND THAT COST A WRONG ANSWER (BATCH28).** The filler id
+	// is INDISTINGUISHABLE from the first real name, so a `named`-tagged value carrying it resolves to a
+	// stranger rather than to nothing — there is no guard `declaredAliasOfNameId` could add. The obligation
+	// is therefore on every MINT: a value tagged `named` must carry a real name id. See `emitUnaryOp`, which
+	// did not, and what that printed.
 	//
 	// ⚠ `declaredAliasOfValue`, NOT `provenAliasOfValue`: this is deciding whether to LICENSE the declared
 	// claim, so it must read the claim. The proof-aware reader answers `undeclared` for every phi by
@@ -29421,7 +29432,24 @@ export type Parser
 				return try self.emitFloatNegation(self.floatBehindEnumValue(operand, anchor: opTok), opTok: opTok)
 			end 'float'
 
-			return self.emitUnaryOp(operand, op: MaxonUnaryOp.neg, resultTag: operandTag, range: SourceRange.ofToken(opTok))
+			// ⭐⭐ **THE NEGATION OF AN INTEGRAL VALUE IS AN `integer`, WHATEVER TYPE IT WAS SPELLED WITH —
+			// the answer `notOperatorFor` already gives the OTHER prefix operator for `named to exitCode`,
+			// and it has to be this one's too (BATCH28).** The float arm has returned, so every tag still
+			// here is integral, and negating leaves the declared type in every case that had one: `-x` for
+			// an `int(0 to 255)` x is not an `int(0 to 255)`, and `-Level.high` is not a `Level`.
+			//
+			// ⛔ **CARRYING THE OPERAND'S TAG WAS A WRONG ANSWER, AND IT WAS THE NAME COLUMN THAT MADE IT
+			// ONE.** `emitUnaryOp` mints with `nameId: UnnamedTypeId` — correct, the result names no type —
+			// so a `named` result tag left the value claiming a declared type with the FILLER id in its name
+			// column. Every reader of a declared alias gates on the tag and then reads that id, and the
+			// filler is INDISTINGUISHABLE from the first real name the file interned (`UnnamedTypeId` is 0
+			// and `TypeNameInterner` starts empty), so the alias registry answered about a stranger.
+			// **MEASURED:** `enum Level  high = 200` then `print("{-Level.high}")` printed
+			// `18446744073709551416` — the unsigned rendering, selected because the file's id 0 happened to
+			// be a non-negative ranged alias. Latent while the divide was the domain's only consumer; X11's
+			// formatter is what reached it. Pinned by `enums-simple/float-backed-negation`, whose int-backed
+			// half is exactly this value.
+			return self.emitUnaryOp(operand, op: MaxonUnaryOp.neg, resultTag: ValueTypeTag.integer, range: SourceRange.ofToken(opTok))
 		end 'neg'
 
 		if self.at(TokenKind.not) 'not'
@@ -44590,26 +44618,26 @@ export type Parser
 	// drops it. That is not an omission — a scope-exit drop of a borrowed global would free the program's
 	// only copy while the slot still points at it, and the cleanup after `main` would then double-free.
 	//
-	// ⚠⚠ **THE SLOT'S DECLARED AND STORAGE TYPES DO *NOT* ALWAYS COINCIDE, AND THIS HEADER SAID THEY DID
-	// (S2j).** The claim was that a global's type is INFERRED FROM ITS INITIALIZER and so is never
-	// `named` — true while every initializer was a folded constant, and false since a top-level FACTORY
+	// ⚠ **THE SLOT'S DECLARED AND STORAGE TYPES COINCIDE — BUT NOT FOR THE REASON THIS HEADER USED TO GIVE
+	// (S2j).** It said a global's type is INFERRED FROM ITS INITIALIZER and so is never `named`. That was
+	// true while every initializer was a folded constant, and it expired the moment a top-level FACTORY
 	// CALL landed: such a global's type is the callee's DECLARED return type, which is a bare `named` for
-	// every boxed union and every tuple alias. The value's own type must stay `named` (a union value is
-	// what `match` reads by its tag), while the ACCESS is one machine word — which is the exact split
-	// `fieldStorageType` exists to make, so a global's slot asks it like every other slot in the
-	// language rather than asserting it needs no bridge. The scalar shapes are unmoved: that door returns
-	// `boolean`/`integer`/`float`/`exitCode`/`structRef`/`string`/`genericInstance` unchanged, so only the
-	// arm that used to reach `maxonTypeToStdType`'s `named` panic moves at all.
+	// every boxed union, tuple alias and generic alias. What keeps this line correct today is a REFUSAL,
+	// not an inference — `Parser.requireGlobalFactoryReturnsARecord` rejects exactly those return types
+	// (`GlobalFactoryReturn.unbridgedRecord`), so every type that reaches here is concrete and needs no
+	// bridge. ⇒ **If that refusal is ever lifted, this pair is one of the doors that must start asking
+	// `fieldStorageType`** — the split every other slot in the language already makes — alongside
+	// `ModuleInit`'s synthesized store and the cleanup's load, which are the two that cannot ask it today.
 	function emitGlobalLoad(label ByteArray, valueType MaxonType, range SourceRange) returns ValueId
 		let addr = self.emitGlobalAddr(label, range: range)
-		return self.emitIndirectLoad(valueType, box: addr, offset: GlobalSlotOffset, storageType: self.fieldStorageType(valueType), range: range)
+		return self.emitIndirectLoad(valueType, box: addr, offset: GlobalSlotOffset, storageType: valueType, range: range)
 	end 'emitGlobalLoad'
 
 	// `globalAddr <label>` then `storeIndirect <addr> 0 <value>` — a global's write, the mirror of
-	// `emitGlobalLoad`, through the same storage-type bridge for the same reason.
+	// `emitGlobalLoad`. It defines no value: a store is a statement.
 	function emitGlobalStore(label ByteArray, valueType MaxonType, value ValueId, range SourceRange)
 		let addr = self.emitGlobalAddr(label, range: range)
-		self.emitIndirectStore(addr, offset: GlobalSlotOffset, value: value, storageType: self.fieldStorageType(valueType), range: range)
+		self.emitIndirectStore(addr, offset: GlobalSlotOffset, value: value, storageType: valueType, range: range)
 	end 'emitGlobalStore'
 
 	// The `globalAddr` half both a read and a write open with. A POINTER, so its value is typed

@@ -1737,9 +1737,12 @@ end 'buildIntegerToString'
 // graph to multiply by, which would cost a needless multiply per digit and an add per call for two values
 // that are identities. See `RenderedSign`.
 function emitRenderedSign(module StdModule, block IrBlock, ids ValueMinter, value ValueId, dest ValueId, signedness DivideSignedness) returns RenderedSign
-	if signedness == DivideSignedness.unsigned 'noSignToDerive'
-		return RenderedSign.unsigned
-	end 'noSignToDerive'
+	// A `match` rather than an equality test, so a third reading added to `DivideSignedness` fails to
+	// compile here instead of silently taking the signed path and writing a `-` nothing asked for.
+	match signedness 'reading'
+		unsigned then return RenderedSign.unsigned
+		signed then break 'reading'
+	end 'reading'
 
 	let signBitConst = ids.mint()
 	module.appendOp(block, op: StdOp.const(signBitConst, value: SignBitPosition, valueType: StdType.i64))
