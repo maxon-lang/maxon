@@ -17897,17 +17897,18 @@ export type Parser
 
 	// ⭐ **THE ALIAS A CAST RECORDED ON THIS VALUE, OR `undeclared`** — the map read the two denoted-alias
 	// readers share, spelled once. They differ ONLY in what they fall back to when nothing was recorded,
-	// and that difference is the whole of why there are two (see `divisionOperandAlias`); the lookup
+	// and that difference is the whole of why there are two (see `domainDeclaringAlias`); the lookup
 	// itself is one fact and lives in one place.
 	function recordedCastAlias(value ValueId) returns DeclaredAlias
 		let aliasId = try self.valueDeclaredAlias.get(value) otherwise return DeclaredAlias.undeclared
 		return self.declaredAliasOfNameId(aliasId)
 	end 'recordedCastAlias'
 
-	// ⭐⭐ **THE RANGED ALIAS A DIVISION OPERAND'S TYPE NAMES — `valueDenotedAlias` WITH THE OTHER
+	// ⭐⭐ **THE RANGED ALIAS AN INTEGER VALUE'S DECLARED TYPE NAMES — `valueDenotedAlias` WITH THE OTHER
 	// FALLBACK, AND THE DIFFERENCE IS A MEASURED ONE (X10 review).** Same map, same precedence; where
 	// nothing was recorded this reads the value's DECLARED type (`declaredAliasOfValue`) and not its
-	// PROVEN one.
+	// PROVEN one. It is what `integerValueDomain` — and so both consumers of that domain, the divide
+	// and the decimal renderer — resolves a value's signedness through.
 	//
 	// ⚠ **A PHI'S DECLARED ALIAS IS WITHHELD FROM THE ZERO PROOF AND MUST NOT BE WITHHELD FROM THE
 	// SIGNEDNESS RULE.** G14's withhold exists because a merge can carry a `0` its declared `NonZero`
@@ -17917,14 +17918,14 @@ export type Parser
 	// question — has always read the plain declared type. MEASURED: routing this through
 	// `provenAliasOfValue` turned stdlib's float printer back to `cqo`+`idiv` on a loop-carried
 	// `int(0 to u64.max)`, silently undoing X10 on ten fragments.
-	function divisionOperandAlias(value ValueId) returns DeclaredAlias
+	function domainDeclaringAlias(value ValueId) returns DeclaredAlias
 		let recorded = self.recordedCastAlias(value)
 
 		return match recorded 'r'
 			declared gives recorded
 			undeclared gives self.declaredAliasOfValue(value)
 		end 'r'
-	end 'divisionOperandAlias'
+	end 'domainDeclaringAlias'
 
 	// ⭐⭐ **`declaredAliasOfValue` MINUS THE MERGES NOTHING PROVED — the reader for every question that
 	// spends the alias as a PROOF, as opposed to reading it as the value's DECLARED type (G14).** The type-name
@@ -29914,7 +29915,7 @@ export type Parser
 
 	// ⭐⭐ **DOES THIS int→int `as` CHANGE THE SIGNEDNESS A DIVISION OF THE VALUE RUNS AT, IN THE ONE
 	// SPELLING NO RECORD CAN CARRY? (X10 review)** — the FOURTH of `applyCast`'s five questions, and the
-	// one X10 added a READER for (`divisionOperandDomain`) without adding any writer.
+	// one X10 added a READER for (`integerValueDomain`) without adding any writer.
 	//
 	// ⚠⚠ **MEASURED AGAINST THE BOOTSTRAP ORACLE, AND IT WAS A SILENT WRONG ANSWER.** With
 	// `Word = int(0 to u64.max)` holding `u64.max` and a divisor cast to a non-negative alias that
@@ -29924,7 +29925,7 @@ export type Parser
 	//
 	// ⭐ **THE OTHER THREE SPELLINGS NEED NO MINT, AND THAT IS WHY THIS ONE IS NARROW.** A cast of a call
 	// result, of a literal or of another cast's temporary is recorded in `ValueDeclaredAliasMap`, and
-	// `divisionOperandDomain` reads it through `divisionOperandAlias` — no new value, no new op, no
+	// `integerValueDomain` reads it through `domainDeclaringAlias` — no new value, no new op, no
 	// codegen movement anywhere the answer does not actually change. `finishCast` WITHHOLDS that record
 	// for exactly one shape: an operand that was a BARE LOCAL REFERENCE, where the result IS the source
 	// and stamping it would make `a` claim the alias `b` was given. A fresh value is the only identity
@@ -29960,7 +29961,7 @@ export type Parser
 			return false
 		end 'targetAdmitsNegatives'
 
-		return self.divisionOperandDomain(value) == DivisionOperandDomain.signed
+		return self.integerValueDomain(value) == IntegerValueDomain.signed
 	end 'aliasChangesTheDivisionSignedness'
 
 	// ⭐⭐ **DOES THIS `as` CHANGE HOW THE VALUE WOULD BE STORED AS AN ARRAY ELEMENT — a byte-strided slot
@@ -30284,10 +30285,10 @@ export type Parser
 
 	// ⭐⭐ **DOES THIS `/` OR `mod` RUN UNSIGNED?** — the parser's half of TypeRules' ⭐⭐ THE DIVISION
 	// SIGNEDNESS RULE: it reads each operand's domain and hands the pair to the rule, which is stated once,
-	// there, over `DivisionOperandDomain` alone.
+	// there, over `IntegerValueDomain` alone.
 	//
 	// The FLOAT gate is not a shortcut. `divsd` has no signedness, a ranged float alias carries tag `float`
-	// rather than `named` (so `divisionOperandDomain` would answer `signed` for it anyway, for the wrong
+	// rather than `named` (so `integerValueDomain` would answer `signed` for it anyway, for the wrong
 	// reason), and the answer must be `false` on this path or `lowerDivisionExpansion` would meet an
 	// unsigned float divide — which it panics on, and rightly. Asked through `operandsAreFloat`, the same
 	// predicate `promotedOperand` uses to decide whether the pair meets in the float domain at all.
@@ -30296,12 +30297,19 @@ export type Parser
 			return false
 		end 'floatDivide'
 
-		return divisionOperandsAreUnsigned(self.divisionOperandDomain(dividend), divisor: self.divisionOperandDomain(divisor))
+		return divisionOperandsAreUnsigned(self.integerValueDomain(dividend), divisor: self.integerValueDomain(divisor))
 	end 'divisionRunsUnsigned'
 
-	// ⭐ **WHAT ONE OPERAND SAYS ABOUT THE DIVIDE'S SIGNEDNESS** — the value-level twin of
-	// `valueIsUnsigned`, and three-valued where that one is two-valued, because a division has to tell
-	// "this operand ASKS for an unsigned divide" apart from "this operand merely FITS one".
+	// ⭐⭐ **WHAT ONE VALUE'S DECLARED TYPE SAYS ABOUT ITS SIGNEDNESS** — the value-level twin of
+	// `valueIsUnsigned`, and three-valued where that one is two-valued, because both consumers have to
+	// tell "this value ASKS for an unsigned reading" apart from "this value merely FITS one".
+	//
+	// ⭐ **TWO CONSUMERS READ IT, AND THE SECOND IS WHY IT IS NAMED FOR THE VALUE (X11).** The DIVIDE
+	// asks it of both operands (`divisionRunsUnsigned` → `divisionOperandsAreUnsigned`); the DECIMAL
+	// RENDERER asks it of one (`materializeInterpExpr` → `valueRendersUnsigned`), which is what makes
+	// `"{w}"` for a `w` of `int(0 to u64.max)` holding `u64.max` print `18446744073709551615` rather
+	// than `-1`. They read ONE walk rather than two, because a second spelling of "is this value
+	// unsigned" is what this family has cost three times (`X8`, `X10`, `X11`).
 	//
 	// ⚠ **A DECLARED RANGE ANSWERS ALONE, BOTH WAYS, AND THE ORDER IS THE RULE.** A value of
 	// `int(-10 to 10)` that happens to hold `3` is an operand whose TYPE admits negatives, so it reads
@@ -30321,26 +30329,26 @@ export type Parser
 	// packing), so it mints no value and the tag column still says what the SOURCE was. Read from the
 	// tag alone the operand answered `signed`, which dragged the whole divide signed and misread the
 	// OTHER operand: with `Word = int(0 to u64.max)` holding `u64.max`, `try (w / d)` answered **0 here
-	// and 6148914691236517205 in the bootstrap oracle**. `divisionOperandAlias` reads the record the
+	// and 6148914691236517205 in the bootstrap oracle**. `domainDeclaringAlias` reads the record the
 	// cast already leaves, and the entry IS a proof — the `as` emits the range guard. The one spelling
 	// no record can carry, a cast of a BARE LOCAL (one value under two names), is what
 	// `castChangesTheDivisionSignedness` mints for.
-	function divisionOperandDomain(value ValueId) returns DivisionOperandDomain
+	function integerValueDomain(value ValueId) returns IntegerValueDomain
 		if self.tagOf(value) == ValueTypeTag.exitCode 'exitCode'
-			return DivisionOperandDomain.declaredNonNegative
+			return IntegerValueDomain.declaredNonNegative
 		end 'exitCode'
 
-		match self.divisionOperandAlias(value) 'declaredType'
-			declared(alias) then return DivisionOperandDomain.declaredNonNegative if rangeIsUnsigned(alias.low) else DivisionOperandDomain.signed
+		match self.domainDeclaringAlias(value) 'declaredType'
+			declared(alias) then return IntegerValueDomain.declaredNonNegative if rangeIsUnsigned(alias.low) else IntegerValueDomain.signed
 			undeclared then break 'declaredType'
 		end 'declaredType'
 
 		if self.constIsKnown(value) and self.constOf(value) >= 0 'fitsWithoutAsking'
-			return DivisionOperandDomain.provablyNonNegative
+			return IntegerValueDomain.provablyNonNegative
 		end 'fitsWithoutAsking'
 
-		return DivisionOperandDomain.signed
-	end 'divisionOperandDomain'
+		return IntegerValueDomain.signed
+	end 'integerValueDomain'
 
 	// ⭐⭐ **THE WHOLE DIVIDE-BY-ZERO PROOF, IN ONE WALK.** Asked of the divisor's OWN constant domain, never of
 	// the divide's RESULT kind — which is what lets `1.0 / n` and `n / 2` each be decided by the operand
@@ -32321,8 +32329,22 @@ export type Parser
 			return
 		end 'byteRecordPart'
 
+		// ⭐⭐ **WHICH DECIMAL RENDERER — DECIDED HERE, ONCE, FROM THE VALUE'S DECLARED TYPE (X11).**
+		// `__int_to_string` is SIGNED by construction (see `buildIntegerToString`: it derives a sign and
+		// multiplies each digit back by it), so a value of `int(0 to u64.max)` holding `u64.max` printed
+		// `-1` while the bootstrap oracle printed `18446744073709551615`. The front end never asked whose
+		// question that was, and it is `integerValueDomain`'s — the very walk the DIVIDE's signedness
+		// already comes from, so this reuses the rule rather than respelling it. Only a DECLARED
+		// non-negative range selects the unsigned entry point; a folded constant that merely FITS one does
+		// not (`valueRendersUnsigned`), which is X10's rule verbatim and what keeps the corpus movement to
+		// the values that actually carry a declared type.
+		//
+		// ⚠ The NAME and the SCRATCH BUDGET both come off the one signedness, because they are two halves
+		// of one choice: the signed budget carries a sign byte the unsigned rendering never writes, and
+		// the signed renderer taken with the unsigned budget would write one byte past `i64.min`'s scratch.
 		if tagIsIntegral(tag) 'intPart'
-			self.materializeScratchPart(value, converter: IntToStringName, scratchBytes: IntToStringScratchBytes, partBufs: partBufs, partLens: partLens, scratchIds: scratchIds, range: range)
+			let signedness = DivideSignedness.unsigned if valueRendersUnsigned(self.integerValueDomain(value)) else DivideSignedness.signed
+			self.materializeScratchPart(value, converter: integerToStringName(signedness), scratchBytes: integerToStringScratchBytes(signedness), partBufs: partBufs, partLens: partLens, scratchIds: scratchIds, range: range)
 			return
 		end 'intPart'
 
@@ -44568,22 +44590,26 @@ export type Parser
 	// drops it. That is not an omission — a scope-exit drop of a borrowed global would free the program's
 	// only copy while the slot still points at it, and the cleanup after `main` would then double-free.
 	//
-	// ⚠ **THE SLOT'S DECLARED AND STORAGE TYPES COINCIDE, AND THAT IS A PROPERTY OF A GLOBAL, NOT A
-	// SHORTCUT.** Elsewhere the two differ and `fieldStorageType` bridges them (a `named` ranged alias
-	// has no width of its own); a global's type is INFERRED FROM ITS INITIALIZER and so is never `named`
-	// — `ProgramSignatures.mixValueTag` panics on a `named`-tagged top-level binding for exactly this
-	// reason, and `var g = 5 as Word` collapses to `integer` before it gets here. So `valueType` is
-	// already concrete and is passed as both.
+	// ⚠⚠ **THE SLOT'S DECLARED AND STORAGE TYPES DO *NOT* ALWAYS COINCIDE, AND THIS HEADER SAID THEY DID
+	// (S2j).** The claim was that a global's type is INFERRED FROM ITS INITIALIZER and so is never
+	// `named` — true while every initializer was a folded constant, and false since a top-level FACTORY
+	// CALL landed: such a global's type is the callee's DECLARED return type, which is a bare `named` for
+	// every boxed union and every tuple alias. The value's own type must stay `named` (a union value is
+	// what `match` reads by its tag), while the ACCESS is one machine word — which is the exact split
+	// `fieldStorageType` exists to make, so a global's slot asks it like every other slot in the
+	// language rather than asserting it needs no bridge. The scalar shapes are unmoved: that door returns
+	// `boolean`/`integer`/`float`/`exitCode`/`structRef`/`string`/`genericInstance` unchanged, so only the
+	// arm that used to reach `maxonTypeToStdType`'s `named` panic moves at all.
 	function emitGlobalLoad(label ByteArray, valueType MaxonType, range SourceRange) returns ValueId
 		let addr = self.emitGlobalAddr(label, range: range)
-		return self.emitIndirectLoad(valueType, box: addr, offset: GlobalSlotOffset, storageType: valueType, range: range)
+		return self.emitIndirectLoad(valueType, box: addr, offset: GlobalSlotOffset, storageType: self.fieldStorageType(valueType), range: range)
 	end 'emitGlobalLoad'
 
 	// `globalAddr <label>` then `storeIndirect <addr> 0 <value>` — a global's write, the mirror of
-	// `emitGlobalLoad`. It defines no value: a store is a statement.
+	// `emitGlobalLoad`, through the same storage-type bridge for the same reason.
 	function emitGlobalStore(label ByteArray, valueType MaxonType, value ValueId, range SourceRange)
 		let addr = self.emitGlobalAddr(label, range: range)
-		self.emitIndirectStore(addr, offset: GlobalSlotOffset, value: value, storageType: valueType, range: range)
+		self.emitIndirectStore(addr, offset: GlobalSlotOffset, value: value, storageType: self.fieldStorageType(valueType), range: range)
 	end 'emitGlobalStore'
 
 	// The `globalAddr` half both a read and a write open with. A POINTER, so its value is typed
@@ -44836,6 +44862,7 @@ export type Parser
 			// stated as a case rather than assumed, because the two doors are asked of the same name.
 			undeclared then throw ConstEvalError.defective(ParseError.unsupported("`{String.from(typeTok.value)}.{String.from(methodTok.value)}` as a top-level initializer — no file declares it", line: methodTok.line, column: methodTok.column))
 			scalar(typeName) then throw ConstEvalError.defective(ParseError.unsupported("`{String.from(typeTok.value)}.{String.from(methodTok.value)}` as a top-level initializer — it returns '{typeName}', and a global holding a scalar has its value written into the `.data` image, which happens before any code can run. A factory-built global must return a record (a struct, a String or a container)", line: methodTok.line, column: methodTok.column))
+			unbridgedRecord(typeName) then throw ConstEvalError.defective(ParseError.unsupported("`{String.from(typeTok.value)}.{String.from(methodTok.value)}` as a top-level initializer — it returns '{typeName}', which IS a record but is not one `__module_init` can access a `.data` slot through. A boxed union, a tuple alias and a generic alias all keep the bare type NAME as their type (a union's is what a `match` reads it by), and the synthesized initializer and cleanup carry that name straight onto the slot's load and store, where there is no width to give it. A struct, a String, a Character and a builtin container all resolve to a concrete type and are legal here. Build it inside a function instead", line: methodTok.line, column: methodTok.column))
 			void then throw ConstEvalError.defective(ParseError.unsupported("`{String.from(typeTok.value)}.{String.from(methodTok.value)}` as a top-level initializer — it returns nothing, so there is no value for the binding to hold", line: methodTok.line, column: methodTok.column))
 		end 'returns'
 	end 'requireGlobalFactoryReturnsARecord'

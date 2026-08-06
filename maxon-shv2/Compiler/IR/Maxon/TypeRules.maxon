@@ -952,14 +952,21 @@ export function divisionIsUnsigned(op MaxonBinOp) returns bool
 	end 'k'
 end 'divisionIsUnsigned'
 
-// ⭐⭐ **WHAT ONE OPERAND OF A `/` OR `mod` SAYS ABOUT THE DIVIDE'S SIGNEDNESS** — three answers, and
+// ⭐⭐ **WHAT ONE INTEGER VALUE'S DECLARED TYPE SAYS ABOUT ITS SIGNEDNESS** — three answers, and
 // the middle one is the whole reason this is not a boolean.
-export enum DivisionOperandDomain
+//
+// ⚠ **IT IS A PROPERTY OF THE VALUE, NOT OF THE OPERATION, AND ITS NAME SAYS SO ONLY SINCE X11.** It
+// was named for the division operand while the divide was its only consumer; the DECIMAL RENDERER
+// (`Parser.materializeInterpExpr`) is the second, and it asks the identical question — *does this
+// value's declared type admit a negative?* — of the identical walk. A second spelling of that
+// question is exactly what this family has cost three times over (`X8` the range, `X10` the divide,
+// `X11` the rendering), so the noun is the value's and both consumers read it.
+export enum IntegerValueDomain
 	// A DECLARED ranged type whose every value is non-negative (`rangeIsUnsigned`) — `int(0 to u64.max)`,
-	// `int(1 to 8)`, `ExitCode`. The only answer that ASKS for an unsigned divide.
+	// `int(1 to 8)`, `ExitCode`. The only answer that ASKS for an unsigned reading.
 	declaredNonNegative
 	// No declared range, but a folded constant that happens to be non-negative. It FITS an unsigned
-	// divide and asks for nothing, which is exactly the distinction that keeps `w / 8` unsigned (`w`
+	// reading and asks for nothing, which is exactly the distinction that keeps `w / 8` unsigned (`w`
 	// declares it) while `7 / 2` — two constants and no declared type anywhere — stays the signed
 	// divide this compiler already emits, buying no codegen movement for no correctness.
 	provablyNonNegative
@@ -967,7 +974,20 @@ export enum DivisionOperandDomain
 	// range admitting negatives, a negative constant, and — the case that reads as "no constraint" and
 	// is not — a value with NO range at all, which means THE WHOLE OF i64.
 	signed
-end 'DivisionOperandDomain'
+end 'IntegerValueDomain'
+
+// ⭐⭐ **DOES A LONE INTEGER VALUE RENDER AS UNSIGNED DECIMAL?** — the ONE-operand twin of the
+// division rule below, stated here beside it because they are the same question asked of a different
+// arity and must not come to disagree about the middle answer.
+//
+// ⚠ **`provablyNonNegative` RENDERS SIGNED, AND THAT IS THE RULE RATHER THAN A CONSERVATISM.** A
+// folded `42` FITS an unsigned rendering and does not ASK for one, exactly as it does not ask for an
+// unsigned divide — and because the two renderings agree on every value that fits an `i64`, reading
+// it the other way would buy no correctness at all while moving the emitted converter at every
+// `"{7 + 1}"` in the corpus. Only a DECLARED type asks.
+export function valueRendersUnsigned(domain IntegerValueDomain) returns bool
+	return domain == IntegerValueDomain.declaredNonNegative
+end 'valueRendersUnsigned'
 
 // ⭐⭐ **THE DIVISION SIGNEDNESS RULE: A `/` OR `mod` RUNS AT A SIGNEDNESS VALID FOR BOTH OPERANDS.**
 //
@@ -977,7 +997,7 @@ end 'DivisionOperandDomain'
 // the instruction, so it is the one family a one-sided reading reaches.
 //
 // ⚠ **NO RANGED TYPE DOES NOT MEAN "NO CONSTRAINT" — IT MEANS THE WHOLE OF `i64`**, and that is the
-// half `DivisionOperandDomain.signed` exists to state. Reading it as "no constraint" is what let the
+// half `IntegerValueDomain.signed` exists to state. Reading it as "no constraint" is what let the
 // BOOTSTRAP narrow a 64-bit dividend into a 32-bit divide from the divisor's `int(1 to 8)` (X8), and
 // the mirror of the same question is what left shv2 emitting a SIGNED `idiv` for two operands both
 // declared non-negative: `u64.max / 3` answered 0, because `0xFFFF…FF` read as `-1`.
@@ -990,12 +1010,12 @@ end 'DivisionOperandDomain'
 // divide at 64 bits — a narrow value sits extended in its register and its own type's range holds it —
 // so the union's WIDTH has nothing to choose and only its SIGNEDNESS does. The two compilers therefore
 // pick the same instruction from the same two ranges.
-export function divisionOperandsAreUnsigned(dividend DivisionOperandDomain, divisor DivisionOperandDomain) returns bool
-	if dividend == DivisionOperandDomain.signed or divisor == DivisionOperandDomain.signed 'eitherAdmitsANegative'
+export function divisionOperandsAreUnsigned(dividend IntegerValueDomain, divisor IntegerValueDomain) returns bool
+	if dividend == IntegerValueDomain.signed or divisor == IntegerValueDomain.signed 'eitherAdmitsANegative'
 		return false
 	end 'eitherAdmitsANegative'
 
-	return dividend == DivisionOperandDomain.declaredNonNegative or divisor == DivisionOperandDomain.declaredNonNegative
+	return dividend == IntegerValueDomain.declaredNonNegative or divisor == IntegerValueDomain.declaredNonNegative
 end 'divisionOperandsAreUnsigned'
 
 // The opcode a SOURCE `/` or `mod` emits once its signedness is known — the DIVISION twin of

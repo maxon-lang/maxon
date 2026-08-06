@@ -268,6 +268,15 @@ export function queryProgramSignatures(project Project) returns ProgramSignature
 	// at each such file re-walked tables that were still growing: O(files × types), measured at ×3.03
 	// allocations per doubling on 1024 files. Before `deriveInstanceNames`, which names every instance.
 	signatures.internLiteralContainerInstances()
+	// ⭐⭐ **AND ONLY NOW CAN A SWEPT `named` BE TOLD FROM A DECLARED `type` (S2j).** The sweep resolves a
+	// `returns Self` — and a `returns <its own type's name>` — to a `structRef` from the tokens alone, but a
+	// FOREIGN name it must leave bare, because `structTypes` is still filling while it reads. That is one
+	// struct recorded under two spellings, and BEFORE `evaluateInitializers` is the only place to settle it:
+	// the constant evaluator COPIES a factory's declared return type into the declaration's outcome, so a
+	// re-tag after this line cannot reach the copy. See `normalizeSweptRecordReturnTypes`, whose header
+	// carries the panic this closes and the argument for why it and the interface normalization below sit on
+	// opposite sides of this call.
+	signatures.normalizeSweptRecordReturnTypes()
 	signatures.evaluateInitializers()
 	// ⭐ And every declared `interface`'s REQUIREMENTS (R8) — for the same "the whole program is known now"
 	// reason, and here it is the reason the pass exists at all rather than merely where it is cheapest. See

@@ -13,7 +13,7 @@ A top-level binding may be initialized by a **user static factory call** —
 initializer form that is not a fold: nothing is evaluated at compile time, and the record is built
 before `main` by `__module_init`, which materializes each argument and then makes an ordinary call.
 
-`map-struct-bytearray.md` is the canonical spec that admits the form. This file pins the four rules
+`map-struct-bytearray.md` is the canonical spec that admits the form. This file pins the five rules
 that form has to obey and that its own programs cannot reach, because all of its arguments are
 consumed and all of its declarations are in one file:
 
@@ -266,14 +266,14 @@ would be resolved under a key it had left.
 export type Inner
 	export var v as int
 
-	static function make() returns Self
+	export static function make() returns Self
 		return Self{v: 7}
 	end 'make'
 end 'Inner'
 
 // --- file: api/outer.maxon
 export type Outer
-	export function build() returns Inner
+	export static function build() returns Inner
 		return Inner.make()
 	end 'build'
 end 'Outer'
@@ -289,12 +289,15 @@ end 'main'
 7
 ```
 
-<!-- test: factory-returning-a-boxed-union -->
-A boxed union is a record for every purpose this form has: its value is a heap pointer, its slot is
-the same one word a struct's is, and the drop router already routes it. It is the ONE record a
-declared name can denote that the normalization above cannot reach — a union value carries the bare
-name deliberately, since that is what a `match` reads it by — so admitting it is a decision the slot
-had to make rather than one the re-tag makes for it.
+<!-- test: error.factory-returning-a-boxed-union -->
+A boxed union is a record — a heap pointer, a one-word slot, and a drop the router already handles —
+but it is the one record rule 5's normalization cannot reach, because a union value carries the bare
+type NAME as its type deliberately: that is what a `match` reads it by. What is missing is not the
+slot's WIDTH but a concrete type for the two SYNTHESIZED functions to access the slot through: user
+code bridges a declared name to a storage type at every field and every global read, and the
+initializer and cleanup this form generates have no such bridge. So it is refused at the declaration,
+where the author can see it, rather than panicking three passes later — which is what it did until
+this rule was written down. The same sentence covers a tuple alias and a generic alias.
 ```maxon
 union Shape
 	circle(r int)
@@ -316,8 +319,8 @@ function main() returns ExitCode
 	end 'kind'
 end 'main'
 ```
-```exitcode
-7
+```maxoncstderr
+error E2015: <fragment>:13:15: Unsupported: `Maker.build` as a top-level initializer — it returns 'Shape', which IS a record but is not one `__module_init` can access a `.data` slot through. A boxed union, a tuple alias and a generic alias all keep the bare type NAME as their type (a union's is what a `match` reads it by), and the synthesized initializer and cleanup carry that name straight onto the slot's load and store, where there is no width to give it. A struct, a String, a Character and a builtin container all resolve to a concrete type and are legal here. Build it inside a function instead
 ```
 
 <!-- test: error.cross-file-file-private-factory -->

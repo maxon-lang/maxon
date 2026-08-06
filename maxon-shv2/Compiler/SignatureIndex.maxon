@@ -844,6 +844,16 @@ export union GlobalFactoryReturn
 	// `typeName` is the type as a diagnostic prints it, rendered on the index's side because only that side
 	// holds the interner the id lives in.
 	scalar(typeName String)
+	// ⛔ **A RECORD STILL CARRYING THE BARE `named` TAG (S2j)** — a boxed union, a tuple alias, a generic
+	// alias, a rendered generic instance. It IS a record and its slot IS one pointer; what it has not got
+	// is a CONCRETE type for the two synthesized functions to access that slot through.
+	// `__module_init`'s store and `__maxon_global_cleanup`'s load carry the declared type straight onto a
+	// `storeIndirect`/`loadIndirect` (`ModuleInit`), where `maxonTypeToStdType` panics on a `named`; user
+	// code has `Parser.fieldStorageType` to bridge that and `SynthesizedFunction` holds neither the
+	// interner nor the registry it asks. ⇒ REFUSED here, at the declaration, rather than panicking three
+	// passes later. A DECLARED `type` is not in this arm at all: `normalizeSweptRecordReturnTypes` has
+	// already re-tagged it `structRef` by the time this is asked.
+	unbridgedRecord(typeName String)
 	void
 	// No file declares this name. Unreachable from the initializer door, which admits the form only for a
 	// declared callee — kept as an arm so the answer is total rather than an assumption.
@@ -1172,8 +1182,17 @@ enum TypeArgInstantiationKind
 	uncopyableElement
 end 'TypeArgInstantiationKind'
 
-// The `StdType` a global of `tag` occupies its `.data` slot as — which is to say WHICH TAGS MAY BE
-// A GLOBAL AT ALL, because the width itself is not this function's to know.
+// The `StdType` a global whose `.data` bytes ARE ITS VALUE occupies its slot as — which is to say WHICH
+// TAGS MAY BE A FOLDED GLOBAL AT ALL, because the width itself is not this function's to know.
+//
+// ⚠⚠ **IT ANSWERS FOR THE INLINE-VALUE PATH ONLY, AND SERVING BOTH PATHS IS WHAT WENT WRONG (S2j).**
+// A RECORD-valued global reserves a POINTER instead, and its width is a fact about the SLOT rather than
+// about the tag; it goes through `recordPointerSlotType`, which carries its own reachability guard. While
+// this door served both, its guard — written for a folded scalar and perfectly right about one — was
+// applied to a factory's declared RETURN type, where the `named` tag means a boxed union or a tuple alias
+// and not a ranged alias at all. A legal program PANICKED, told that its `var` was *"tagged 'int'"* in a
+// program with no int in it. So the arms below now say what is true of THIS caller, and the three record
+// tags that used to break through here name the door that took them.
 //
 // ⚠ **IT NO LONGER CARRIES ITS OWN TABLE, AND THAT IS THE POINT.** It used to answer `integer`→i64
 // and `boolean`→i1 in its own two arms, which made it a SECOND copy of the tag→`StdType` collapse
@@ -1187,57 +1206,45 @@ end 'TypeArgInstantiationKind'
 // and that is a different question from how wide the type is. `named` needs an `as` cast (P1.9), so
 // it panics rather than defaulting to a width.
 //
-// ⭐ **IT IS ALSO THE ONE PLACE THAT SAYS WHICH GLOBALS HAVE STORAGE AT ALL** (P1.7 slice 2a). It used
-// to share that job with `Parser.requireStorableGlobal`, which refused a MANAGED `var` with a positioned
-// E2015 while this function panicked on the same two tags — the same enumeration written down twice, and
-// the pair had already begun to drift (this one had no `float` arm while the other admitted one). The
-// managed refusal is gone: a managed global's slot is an 8-byte POINTER filled before `main` by
-// `__module_init` (see `ModuleInit`), so `string` and `genericInstance` are ordinary reachable widths
-// here, and the remaining arms are invariant backstops with no user-reachable path to them.
+// ⭐ **THE REACHABILITY GUARD IS WHAT IS LOCAL** — which folded constants may be a global's inline value
+// — and that is a different question from how wide the type is. Every tag but the three the evaluator
+// folds panics by name; a bare `default` here would silently size a tag nothing in this door understands.
 //
 // `boolean` is ONE byte (`i1`, whose `storageBytes` is 1), which is what
 // `static-variables.md`'s `data-section-bool-1byte` pins; `integer` is eight (`i64`); `float` is
-// eight (`f64`); a managed pointer is eight. All of them come from the one table.
+// eight (`f64`). All of them come from the one table.
 function globalStdType(tag ValueTypeTag, name ByteArray) returns StdType
 	match tag 'reachable'
 		boolean to float then break 'reachable'
-		named then panic("globalStdType: top-level var '{String.from(name)}' is tagged '{typeTagName(tag)}' — a global's type is inferred from a bare constant initializer, so it is never a ranged alias (that needs an `as` cast, P1.9)")
+		named then panic("globalStdType: top-level var '{String.from(name)}' is tagged '{typeTagName(tag)}' — a folded global's type is inferred from a bare constant initializer, so it is never a ranged alias (that needs an `as` cast, P1.9). A factory's declared `named` RETURN type — a boxed union, a tuple alias — is a RECORD and takes `recordPointerSlotType` instead")
 		exitCode to void then panic("globalStdType: top-level var '{String.from(name)}' is tagged '{typeTagName(tag)}' — the constant evaluator folds integers, bools and floats only")
-		// ⭐ A STRUCT GLOBAL is the case this guard's header was written FOR, and it is REACHABLE as of
-		// spec-port `map-struct-bytearray`: `var db = Database.create(…)` is admitted, and its slot is
-		// the POINTER to a box `__module_init` allocates before `main` — which is exactly the module
-		// initialization the old refusal said shv2 had none of. It has, and the width is the `string`
-		// arm's, from the one table.
-		structRef then break 'reachable'
-		// ⭐ A MANAGED global (P1.7 slice 2a) — a `String` or a `b"…"` byte string. Its slot holds a
-		// POINTER to the record `__module_init` builds before `main`, so the `.data` image reserves one
-		// machine word of zero and the width comes from the same table every other pointer's does. It is
-		// the ONE reachable case whose slot is not its value.
-		string then break 'reachable'
+		// ⭐ THE THREE RECORD TAGS. A struct (`var db = Database.create(…)`), a `String` or `b"…"` literal,
+		// and an array/container instance are all globals whose `.data` bytes are a POINTER rather than a
+		// value, so their width is `recordPointerSlotType`'s to answer and not this door's. They used to
+		// break through here, which is how this guard's `named` arm came to be applied to a factory return
+		// type it was never written about — see this function's header.
+		structRef then panic("globalStdType: top-level var '{String.from(name)}' is tagged '{typeTagName(tag)}' — a struct global's slot holds a POINTER `__module_init` fills, so it is typed by `recordPointerSlotType`; this door answers only for a global whose `.data` bytes ARE its value")
+		string then panic("globalStdType: top-level var '{String.from(name)}' is tagged '{typeTagName(tag)}' — a managed global's slot holds a POINTER `__module_init` fills, so it is typed by `recordPointerSlotType`; this door answers only for a global whose `.data` bytes ARE its value")
+		genericInstance then panic("globalStdType: top-level var '{String.from(name)}' is tagged '{typeTagName(tag)}' — a container global's slot holds a POINTER `__module_init` fills, so it is typed by `recordPointerSlotType`; this door answers only for a global whose `.data` bytes ARE its value")
 		// A FUNCTION global is unreachable (P1.5-A1): a global takes no type annotation and a function
 		// reference is not a constant initializer, so a global's inferred type is never `function` (a bare
 		// function name at top level is rejected before this — `var g = double` is E2045, no call in a
 		// constant initializer). Were it to reach here, the honest answer is still not a width.
 		function then panic("globalStdType: top-level var '{String.from(name)}' is tagged '{typeTagName(tag)}' — a function value is not a constant initializer, so a global's inferred type is never a function")
-		// A TYPE-PARAMETER / GENERIC-INSTANCE global is unreachable (P1.6-A): a type parameter names no
-		// value outside a generic body and a generic instance is a heap pointer, and a global's type is a
-		// folded scalar constant — neither can be one.
+		// A TYPE-PARAMETER global is unreachable (P1.6-A): a type parameter names no value outside a
+		// generic body, and a global's inline value is a folded scalar constant.
 		typeParameter then panic("globalStdType: top-level var '{String.from(name)}' is tagged '{typeTagName(tag)}' — a type parameter names no value at module scope")
-		// A `b"…"` byte-string global: the `Array with Byte` instance whose record `__module_init` builds.
-		// Reachable for the `string` arm's reason, and only through a managed LITERAL — the constant
-		// evaluator folds no `Set.create()`/`Map` initializer, so no other instance can get here.
-		genericInstance then break 'reachable'
 		// A CHARACTER global is unreachable: a top-level binding's initializer is a folded constant, and a
 		// multi-byte character literal folds to a managed `TopLevelConstant.managedValue` only for the two
 		// TEXT kinds the evaluator knows (a String literal and a `b"…"` byte string). Were a Character
-		// global ever admitted, its slot would be a record POINTER — `string`'s answer, not a width — so
-		// this panics rather than silently sizing one.
+		// global ever admitted, its slot would be a record POINTER — the other door's answer, not a width —
+		// so this panics rather than silently sizing one.
 		character then panic("globalStdType: top-level var '{String.from(name)}' is tagged '{typeTagName(tag)}' — a character literal is not a foldable constant initializer, so a global's inferred type is never a Character")
 		// An EXISTENTIAL global is unreachable for `structRef`'s reason and one more of its own: a global
 		// takes no type annotation, so the only way to reach an interface type here is a folded initializer,
 		// and there is none. Were one ever admitted, the honest answer is still not a width — a `.data` slot
-		// for a fat pointer is TWO words, which this single-width door cannot express.
-		interfaceRef then panic("globalStdType: top-level var '{String.from(name)}' is tagged '{typeTagName(tag)}' — an interface-typed value is a two-word fat pointer, and a global's inferred type comes from a folded scalar constant")
+		// for a fat pointer is TWO words, which neither single-width door can express.
+		interfaceRef then panic("globalStdType: top-level var '{String.from(name)}' is tagged '{typeTagName(tag)}' — an interface-typed value is a two-word fat pointer, and a folded global's inferred type comes from a scalar constant")
 	end 'reachable'
 
 	return valueTagToStdType(tag)
@@ -7360,12 +7367,60 @@ export type ProgramSignatures
 		return entries
 	end 'declaredGlobals'
 
-	// The `.data` entry every RECORD-valued global reserves: one machine word of zero, sized from the type
-	// its slot will hold a pointer to. One function rather than one spelling per outcome arm, because the
-	// bytes are the same zero in every case and only the width's derivation differs.
+	// The `.data` entry every RECORD-valued global reserves: one machine word of zero, holding the POINTER
+	// `__module_init` writes before `main`. One function rather than one spelling per outcome arm, because
+	// the bytes are the same zero in every case.
 	function nullPointerSlot(decl TopLevelDecl, valueType MaxonType) returns DataSectionEntry
-		return DataSectionEntry.create(String.from(self.dataLabelOf(decl)), valueType: globalStdType(maxonTypeTag(valueType), name: decl.name), value: ManagedGlobalInitialSlot)
+		return DataSectionEntry.create(String.from(self.dataLabelOf(decl)), valueType: self.recordPointerSlotType(valueType, name: decl.name), value: ManagedGlobalInitialSlot)
 	end 'nullPointerSlot'
+
+	// ⭐⭐ **THE `StdType` A RECORD-VALUED GLOBAL'S SLOT OCCUPIES (S2j)** — the RECORD path's own door, and
+	// a door of its own because it and `globalStdType` ask DIFFERENT questions of the same tag. That one
+	// asks *"may a global's INLINE VALUE be of this tag?"*, where the value IS the `.data` bytes and the
+	// tag is the whole of what they hold. This one asks *"is this record reached through a single
+	// pointer?"*, where the bytes are that pointer and the tag names only what it points AT.
+	//
+	// ⚠⚠ **THE RECORD PATH USED TO ASK THE OTHER DOOR, AND THAT DOOR'S GUARD IS FALSE HERE.**
+	// `globalStdType`'s `named` arm panics saying a global's type *"is inferred from a bare constant
+	// initializer, so it is never a ranged alias"* — exactly right about a FOLDED SCALAR, and simply not
+	// about a factory's declared RETURN type, which may be a BOXED UNION or a TUPLE ALIAS. Both of those
+	// carry the bare `named` tag by design (`enumMatchFor` reads a union's; a tuple alias names the
+	// tuple's own struct), both are records held by one pointer, and both are already dropped by a router
+	// that accepts the tag — `managedFieldDropCallee` takes `structRef` OR `named`. Only the width was
+	// refusing them, and the sentence it refused with described an `int` such a program does not contain.
+	//
+	// ⚠ **IT IS NOT A SECOND WIDTH TABLE.** The machine word is still named exactly once, in
+	// `valueTagToStdType`, which this returns through; what is local here is the REACHABILITY guard, and
+	// that is the half that differs between the two callers.
+	//
+	// ⛔ **AN EXISTENTIAL IS THE ONE RECORD A SINGLE-POINTER SLOT CANNOT HOLD, and that refusal really is
+	// the SLOT's** rather than inherited: an interface-typed value is the 16-byte fat pointer
+	// `(value, witness)`, so its `.data` slot is TWO words. It is unreachable today for a reason that is
+	// an ORDERING accident and not a rule — a swept interface annotation is still a bare `named` when
+	// `evaluateInitializers` runs, so `slotTypeIsManaged` reads it as a scalar and
+	// `requireGlobalFactoryReturnsARecord` refuses it with an E2015 first — which is precisely why the
+	// case is stated here rather than assumed away.
+	function recordPointerSlotType(valueType MaxonType, name ByteArray) returns StdType
+		let tag = maxonTypeTag(valueType)
+		if tag == ValueTypeTag.interfaceRef 'fatPointer'
+			panic("recordPointerSlotType: top-level var '{String.from(name)}' is built by a factory returning an interface-typed value, which is the two-word fat pointer (value, witness) — a `.data` slot for one is TWO words, which this single-pointer door cannot express")
+		end 'fatPointer'
+		// A record still spelling a bare `named` — a boxed union, a tuple alias, a generic alias — is
+		// REFUSED at the declaration (`GlobalFactoryReturn.unbridgedRecord`), because the synthesized init
+		// and cleanup have no width to access its slot through. Typing the slot anyway would be right about
+		// the eight bytes and would leave that refusal to a panic three passes later, which is the shape
+		// this whole door exists to end.
+		if tag == ValueTypeTag.named 'noConcreteSlotAccess'
+			panic("recordPointerSlotType: top-level var '{String.from(name)}' is built by a factory whose return type is still the bare name '{maxonTypeName(valueType, typeNames: self.typeNames)}' — `Parser.requireGlobalFactoryReturnsARecord` refuses that at the declaration, so reaching here means a record was admitted without a concrete slot type")
+		end 'noConcreteSlotAccess'
+		// Asked through the very predicate that ADMITTED the declaration, so the slot cannot be typed for a
+		// shape the admission did not pass. A scalar reaching here is a classification drift, not a program.
+		if not self.slotTypeIsManaged(valueType) 'ownsNoHeap'
+			panic("recordPointerSlotType: top-level var '{String.from(name)}' is typed '{maxonTypeName(valueType, typeNames: self.typeNames)}', which owns no heap — a record global's slot holds a POINTER, and every caller classifies the value a record first (`Parser.requireGlobalFactoryReturnsARecord` for a factory, `foldedValueType` for a literal)")
+		end 'ownsNoHeap'
+
+		return valueTagToStdType(tag)
+	end 'recordPointerSlotType'
 
 	// ⭐ **EVERY LIVE MANAGED TOP-LEVEL GLOBAL IN THE PROGRAM, in ARENA (declaration) order** — the door
 	// `installManagedGlobalInit` asks through, and the ONLY enumeration of them.
@@ -10419,6 +10474,14 @@ export type ProgramSignatures
 			return GlobalFactoryReturn.scalar(maxonTypeName(valueType, typeNames: self.typeNames))
 		end 'scalar'
 
+		// ⭐ **THE TAG IS THE WHOLE TEST (S2j).** A record whose type is CONCRETE by now — a `structRef`
+		// (`normalizeSweptRecordReturnTypes` has run), a `string`, a `character`, a `genericInstance` —
+		// is one the synthesized init and cleanup can access its slot through. One still spelling a bare
+		// `named` is not, and the honest answer is a refusal rather than a width. See `unbridgedRecord`.
+		if maxonTypeTag(valueType) == ValueTypeTag.named 'noConcreteSlotAccess'
+			return GlobalFactoryReturn.unbridgedRecord(maxonTypeName(valueType, typeNames: self.typeNames))
+		end 'noConcreteSlotAccess'
+
 		return GlobalFactoryReturn.record
 	end 'globalFactoryValueReturn'
 
@@ -10964,6 +11027,86 @@ export type ProgramSignatures
 			self.returnTypes.upsert(callee, value: MaxonReturnType.value(resolved))
 		end 'applyEach'
 	end 'resolveRecordedReturnTypes'
+
+	// ⭐⭐ **RE-TAG EVERY SWEPT `named` THAT DENOTES A DECLARED `type` AS A `structRef` (S2j) — the ONE
+	// repair that makes a `returns Inner` and a `returns Self` be the same recorded declaration.**
+	//
+	// `Parser.parseTypeReference` resolves the enclosing type's own name — `Self`, and the type's own
+	// spelling — to a `structRef` SYNTACTICALLY, because that is a fact about the tokens and needs no
+	// registry, and the declaration sweep therefore answers it identically to the real parse. A FOREIGN
+	// name it cannot: the sweep reads a `returns` clause while `structTypes` is still being filled, so the
+	// answer would depend on the filesystem's walk order, and the arm deliberately records a bare `named`
+	// instead. ⇒ **one struct, two recorded spellings**, and this is where the second becomes the first.
+	//
+	// ⚠ **THE READ DOORS ALREADY REPAIR IT AND THAT IS NOT THE SAME THING.** `Parser.resolveNamedStruct`
+	// re-tags a call RESULT, which is why `let p = Outer.build()` inside a function body has always worked.
+	// A TOP-LEVEL initializer has no such door: `evaluateInitializers` copies the recorded return type
+	// straight into the declaration's outcome, and the two readers of that copy then disagreed —
+	// `Parser.requireGlobalFactoryReturnsARecord` asked `slotTypeIsManaged`, which is TRUE for a
+	// struct-denoting `named` and ADMITTED the program, and `globalStdType` then met a tag its width table
+	// has no case for and PANICKED, with a sentence written for its other caller (a scalar global's ranged
+	// alias) claiming a `var` was *"tagged 'int'"* in a program containing no int.
+	//
+	// ⚠ **IT IS A NORMALIZATION, NOT A SECOND RESOLUTION RULE** — `normalizeSweptInterfaceTypes`' words
+	// one screen down, and the same discipline. The rule is `Parser.resolveNamedStruct`'s, statement for
+	// statement: a `named` naming a declared `type` becomes a `structRef`; a `named` naming a UNION or a
+	// ranged int ALIAS stays a `named`, because that IS the tag those carry (`enumMatchFor` reads a
+	// union's, and a ranged alias is the integer). It asks `containsStruct` — the same door that read door
+	// asks — so the two cannot come to disagree about which names move.
+	//
+	// ⚠⚠ **IT RUNS BEFORE `evaluateInitializers` AND `normalizeSweptInterfaceTypes` RUNS AFTER, AND
+	// NEITHER POSITION IS FREE.** Each normalization can only run once the registry it consults is whole:
+	// `structTypes` is filled by the sweep itself, so this may run the moment every file is folded, while
+	// `interfaces` is filled by `foldInterfaceDeclarations`, which runs later. The constant evaluator sits
+	// between them and COPIES what it reads, so a re-tag after it cannot reach the copy — which is exactly
+	// why this one is early. They do not race: a name is a struct or an interface and never both
+	// (`declaredFormOf` answers one form, and E3006/E3061 refuse a name two registries hold), so this walk
+	// leaves every interface name a `named` for that one to claim.
+	//
+	// ⚠ **COLLECTED, THEN APPLIED**, for its two siblings' reason: it rewrites the very map it walks.
+	// Both columns are empty for every program whose declarations all return `Self`, a primitive or their
+	// own type — which is most of the corpus.
+	export function normalizeSweptRecordReturnTypes()
+		var rewrittenCallees = ByteArrayArray.create()
+		var rewrittenReturns = MaxonTypeArray.create()
+		for (callee, declared) in self.returnTypes 'eachReturnType'
+			if let asRecord = try self.sweptStructReturnOf(declared) 'namesADeclaredType'
+				rewrittenCallees.push(callee)
+				rewrittenReturns.push(asRecord)
+			end 'namesADeclaredType'
+		end 'eachReturnType'
+
+		for i in 0 upto rewrittenCallees.count() 'applyEach'
+			let callee = try rewrittenCallees.get(i) otherwise panic("ProgramSignatures.normalizeSweptRecordReturnTypes: rewrittenCallees.get OOB at {i} below count {rewrittenCallees.count()}")
+			let asRecord = try rewrittenReturns.get(i) otherwise panic("ProgramSignatures.normalizeSweptRecordReturnTypes: rewrittenReturns.get OOB at {i} — the two columns are pushed in lockstep")
+			self.returnTypes.upsert(callee, value: MaxonReturnType.value(asRecord))
+		end 'applyEach'
+	end 'normalizeSweptRecordReturnTypes'
+
+	// The `structRef` a swept `named` denotes; `MapError.keyNotFound` when the name is not a declared
+	// `type`. It follows `sweptInterfaceTypeOf`'s shape — the other recorded-return-type re-tag on this
+	// index — including its "absence is a throw" convention, so both read as one kind of pass. A `void`
+	// return names no type to re-tag, and a type that is already concrete is refused by the tag guard,
+	// which is what makes this idempotent.
+	function sweptStructReturnOf(declared MaxonReturnType) returns MaxonType throws MapError
+		match declared 'shape'
+			void then throw MapError.keyNotFound
+			value(inner) then return try self.sweptStructTypeOf(inner)
+		end 'shape'
+	end 'sweptStructReturnOf'
+
+	function sweptStructTypeOf(declared MaxonType) returns MaxonType throws MapError
+		if maxonTypeTag(declared) != ValueTypeTag.named 'namesNoDeclaredType'
+			throw MapError.keyNotFound
+		end 'namesNoDeclaredType'
+
+		let id = typeNameIdOf(declared)
+		if not self.containsStruct(self.nameOfId(id)) 'namesNoDeclaredType'
+			throw MapError.keyNotFound
+		end 'namesNoDeclaredType'
+
+		return MaxonType.structRef(id)
+	end 'sweptStructTypeOf'
 
 	// ⭐⭐ **RE-TAG EVERY SWEPT `named` THAT DENOTES AN `interface` AS AN `interfaceRef`
 	// (P1.7a-existentials slice 1) — the ONE repair that makes the two type registries agree about what an

@@ -1,0 +1,23 @@
+// Test: error.factory-returning-a-boxed-union
+union Shape
+	circle(r int)
+	square(s int)
+end 'Shape'
+
+type Maker
+	static function build() returns Shape
+		return Shape.circle(7)
+	end 'build'
+end 'Maker'
+
+var a = Maker.build()
+
+function main() returns ExitCode
+	match a 'kind'
+		circle(r) then return r
+		square(s) then return s
+	end 'kind'
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:13:15: Unsupported: `Maker.build` as a top-level initializer — it returns 'Shape', which IS a record but is not one `__module_init` can access a `.data` slot through. A boxed union, a tuple alias and a generic alias all keep the bare type NAME as their type (a union's is what a `match` reads it by), and the synthesized initializer and cleanup carry that name straight onto the slot's load and store, where there is no width to give it. A struct, a String, a Character and a builtin container all resolve to a concrete type and are legal here. Build it inside a function instead

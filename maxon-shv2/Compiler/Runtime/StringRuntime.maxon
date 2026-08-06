@@ -99,6 +99,13 @@ let SignMultiplierSpan = 2 as ParsedInt
 // allocates this, the converter fills `len ≤ 21` bytes, and the caller frees it after the copy.
 export let IntToStringScratchBytes = 21 as ParsedInt
 
+// The scratch the UNSIGNED renderer reserves (X11): `u64.max` renders as "18446744073709551615", 20
+// digits and NO sign, and no u64 is wider. It is a constant of its own rather than the signed budget
+// reused, because the two are derived from two different worst cases and the byte the difference is
+// made of — the sign — is precisely the byte this renderer never writes. Pairing it with the wrong
+// name is what `integerToStringScratchBytes` exists to make impossible.
+export let UIntToStringScratchBytes = 20 as ParsedInt
+
 // `__bool_to_string` renders "true" (4) or "false" (5). The ASCII bytes of both, and the two lengths.
 let AsciiLowerT = 116 as ParsedInt
 let AsciiLowerR = 114 as ParsedInt
@@ -135,7 +142,32 @@ export let StrEqName = b"__str_eq"
 // `scanRuntimeUsage` already sees.
 export let StrCopyName = b"__str_copy"
 export let IntToStringName = b"__int_to_string"
+// The UNSIGNED decimal renderer (X11) — `__int_to_string` with no sign handling at all and an unsigned
+// digit walk. It is a second ENTRY POINT and not a second implementation: one builder emits both (see
+// `buildIntegerToString`), because the two graphs share their count loop and their write loop and
+// differ only in the three places the sign reaches.
+export let UIntToStringName = b"__uint_to_string"
 export let BoolToStringName = b"__bool_to_string"
+
+// ⭐ **WHICH DECIMAL RENDERER, AND WHAT SCRATCH IT NEEDS — the two halves of ONE choice, so the
+// selection site cannot take one entry point with the other's budget.** The signed budget is one byte
+// wider (the sign), so the dangerous pairing is the signed renderer with the unsigned budget: `i64.min`
+// would write 21 bytes into a 20-byte scratch. Keying both off the same `DivideSignedness` — the very
+// enum the builder's own divides carry — is what makes that unrepresentable rather than merely
+// unlikely.
+export function integerToStringName(signedness DivideSignedness) returns ByteArray
+	return match signedness 'reading'
+		signed gives IntToStringName
+		unsigned gives UIntToStringName
+	end 'reading'
+end 'integerToStringName'
+
+export function integerToStringScratchBytes(signedness DivideSignedness) returns ParsedInt
+	return match signedness 'reading'
+		signed gives IntToStringScratchBytes
+		unsigned gives UIntToStringScratchBytes
+	end 'reading'
+end 'integerToStringScratchBytes'
 
 // The two Wave-D entry points. `__str_append(self, other)` grows a String in place; `__str_decref(record)`
 // is a String's drop — a `__mm_decref` that ALSO frees the external buffer of a detached String. Both are
@@ -435,6 +467,11 @@ export type RuntimeUsage
 	export var usesStrEq as bool
 	export var usesStrCopy as bool
 	export var usesIntToString as bool
+	// The UNSIGNED decimal renderer (X11). A bit of its own rather than a widening of the one above,
+	// because a program that only prints a declared non-negative value references only `__uint_to_string`
+	// and must not carry the signed entry point it never calls — the "vocabulary does not ship ahead of
+	// its consumer" rule `installStringRuntime` states, applied to a second entry point of one builder.
+	export var usesUIntToString as bool
 	export var usesBoolToString as bool
 	export var usesStrAppend as bool
 	export var usesStrDecref as bool
@@ -653,7 +690,7 @@ export type RuntimeUsage
 	export var usesCommandLine as bool
 
 	static function create() returns RuntimeUsage
-		return Self{usesHeap: false, usesGt: false, usesIocp: false, usesStreaming: false, usesPrint: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesBoolToString: false, usesStrAppend: false, usesStrDecref: false, usesArray: false, usesSet: false, usesMap: false, usesList: false, usesDropTypeParam: false, usesDropExistential: false, usesRetainExistential: false, usesIncref: false, usesRetain: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrRangeEq: false, usesStrFind: false, usesStrRFind: false, usesStrStartsWith: false, usesStrEndsWith: false, usesStrContains: false, usesStrMapCase: false, usesStrReplace: false, usesStrSplit: false, usesStrReplaceFirst: false, usesStrFromBytes: false, usesStrBytesView: false, usesStrByteAt: false, usesStrByteAtOrPanic: false, usesManagedArrayCopy: false, usesOpaqueArrayCopy: false, neededCloners: ClonerSet.create(), usesWallClock: false, usesCharAt: false, usesCharCmp: false, usesCharFromCodepoint: false, usesCharAsciiValue: false, usesStrToBytes: false, usesStrToCodepoints: false, usesStrToUtf16: false, usesStrIndexMake: false, usesStrIndexEnd: false, usesStrIndexByteToGrapheme: false, usesStrIndexAdvance: false, usesStrIndexFirst: false, usesStrIndexLast: false, usesStrIndexSlice: false, usesStrIndexAfter: false, usesUcdCategory: false, usesCharSetMake: false, usesCharSetDecref: false, usesCharSetContains: false, usesStrTrim: false, usesManagedFile: false, usesManagedDirectory: false, usesCommandLine: false}
+		return Self{usesHeap: false, usesGt: false, usesIocp: false, usesStreaming: false, usesPrint: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesUIntToString: false, usesBoolToString: false, usesStrAppend: false, usesStrDecref: false, usesArray: false, usesSet: false, usesMap: false, usesList: false, usesDropTypeParam: false, usesDropExistential: false, usesRetainExistential: false, usesIncref: false, usesRetain: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrRangeEq: false, usesStrFind: false, usesStrRFind: false, usesStrStartsWith: false, usesStrEndsWith: false, usesStrContains: false, usesStrMapCase: false, usesStrReplace: false, usesStrSplit: false, usesStrReplaceFirst: false, usesStrFromBytes: false, usesStrBytesView: false, usesStrByteAt: false, usesStrByteAtOrPanic: false, usesManagedArrayCopy: false, usesOpaqueArrayCopy: false, neededCloners: ClonerSet.create(), usesWallClock: false, usesCharAt: false, usesCharCmp: false, usesCharFromCodepoint: false, usesCharAsciiValue: false, usesStrToBytes: false, usesStrToCodepoints: false, usesStrToUtf16: false, usesStrIndexMake: false, usesStrIndexEnd: false, usesStrIndexByteToGrapheme: false, usesStrIndexAdvance: false, usesStrIndexFirst: false, usesStrIndexLast: false, usesStrIndexSlice: false, usesStrIndexAfter: false, usesUcdCategory: false, usesCharSetMake: false, usesCharSetDecref: false, usesCharSetContains: false, usesStrTrim: false, usesManagedFile: false, usesManagedDirectory: false, usesCommandLine: false}
 	end 'create'
 end 'RuntimeUsage'
 
@@ -830,6 +867,9 @@ export function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 	if callee.equals(IntToStringName) 'inttostr'
 		usage.usesIntToString = true
 	end 'inttostr'
+	if callee.equals(UIntToStringName) 'uinttostr'
+		usage.usesUIntToString = true
+	end 'uinttostr'
 	if callee.equals(BoolToStringName) 'booltostr'
 		usage.usesBoolToString = true
 	end 'booltostr'
@@ -1271,8 +1311,11 @@ export function installStringRuntime(module StdModule, usage RuntimeUsage)
 		buildStrCopy(module)
 	end 'strcopy'
 	if usage.usesIntToString 'inttostr'
-		buildIntToString(module)
+		buildIntegerToString(module, signedness: DivideSignedness.signed)
 	end 'inttostr'
+	if usage.usesUIntToString 'uinttostr'
+		buildIntegerToString(module, signedness: DivideSignedness.unsigned)
+	end 'uinttostr'
 	if usage.usesBoolToString 'booltostr'
 		buildBoolToString(module)
 	end 'booltostr'
@@ -1522,8 +1565,30 @@ function buildStrCopy(module StdModule)
 	module.functions.push(func)
 end 'buildStrCopy'
 
-// `__int_to_string(value, dest) -> len` — render `value`'s signed decimal text into `dest`, returning the
-// byte count written (never a NUL — the caller's buffer is zeroed and it copies exactly `len` bytes).
+// ⭐ **WHAT THE SIGNED RENDERING DERIVES IN `setup` AND THE SHARED GRAPH THEN READS — and what the
+// UNSIGNED one has instead, which is nothing at all (X11).** These two values are the ENTIRETY of the
+// difference between the two renderings beyond the divides' own signedness, which is why one builder
+// emits both: an unsigned rendering writes no `-`, its digit COUNT is already its length, and each
+// `value % 10` is already the digit.
+//
+// It is a union rather than two `ValueId`s plus a flag because `unsigned` has no ids to carry, and a
+// pair of ids that are meaningless in one arm is a sentinel wearing a struct's clothes.
+union RenderedSign
+	// `neg` — the sign bit as 0/1, which is also the digits' START OFFSET — and `sign`, `+1`/`-1`.
+	signed(neg ValueId, sign ValueId)
+	unsigned
+end 'RenderedSign'
+
+// `__int_to_string(value, dest) -> len` / `__uint_to_string(value, dest) -> len` — render `value`'s
+// decimal text into `dest` at the signedness `signedness` names, returning the byte count written (never
+// a NUL — the caller's buffer is zeroed and it copies exactly `len` bytes).
+//
+// ⭐⭐ **ONE BUILDER, TWO ENTRY POINTS, AND THAT IS THE POINT (X11).** The two graphs share their entry
+// zero case, their digit-COUNT loop and their digit-WRITE loop — the whole of the algorithm — and differ
+// in exactly three places, all of them the sign: what `setup` derives (`RenderedSign`), whether the digit
+// count is widened to a length, and whether each digit is multiplied back into its magnitude. Copying the
+// 90 lines below to write the unsigned twin would put the shared 90 in two places where a fix to the
+// count loop could reach one of them.
 //
 // ⭐ IT NEVER NEGATES, so `i64.min` needs no special case. `neg = value >>logical 63` is the sign bit as a
 // 0/1. A leading `-` is written UNCONDITIONALLY at `dest[0]` and then OVERWRITTEN by the most-significant
@@ -1531,11 +1596,17 @@ end 'buildStrCopy'
 // sign costs no branch. Each digit is `value % 10` — which carries the value's sign — turned positive by
 // MULTIPLYING by `sign = 1 - 2*neg` (`+1`/`-1`), again avoiding the `abs` that `i64.min` would overflow.
 //
+// ⚠ **THE SIGNED READING IS THIS GRAPH'S CONTRACT AND THE UNSIGNED ONE IS NOT A RELAXATION OF IT.** The
+// divides below take their signedness from the parameter, and it must be the SAME reading the sign
+// handling above takes: an unsigned `/10` under a `-` already written at `dest[0]` would emit the
+// magnitude's digits while the sign still claimed a negative, and a signed `/10` on a value with bit 63
+// set is X11's defect itself.
+//
 // Values dominating from `entry`/`setup` (`value`, `dest`, `neg`, `sign`) are read directly in the loop
 // blocks those dominate; only the loop-variant `digits`/`v`/`pos` ride block-args. `len` is computed once
 // in `writeSetup`, which dominates `done`.
-function buildIntToString(module StdModule)
-	var func = IrFunction.createFromStd(IntToStringName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
+function buildIntegerToString(module StdModule, signedness DivideSignedness)
+	var func = IrFunction.createFromStd(integerToStringName(signedness), returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
 	var ids = ValueMinter.create(2)
 
 	var entry = module.addBlock(func, label: b"entry")
@@ -1572,22 +1643,9 @@ function buildIntToString(module StdModule)
 	module.appendOp(zeroCase, op: StdOp.const(oneLen, value: 1, valueType: StdType.i64))
 	module.setTerminator(zeroCase, op: StdOp.ret(oneLen))
 
-	// setup: derive `neg` (0/1) and `sign` (+1/-1), and write the provisional '-' at dest[0].
-	let signBitConst = ids.mint()
-	module.appendOp(setup, op: StdOp.const(signBitConst, value: SignBitPosition, valueType: StdType.i64))
-	let neg = ids.mint()
-	module.appendOp(setup, op: StdOp.binOp(neg, lhs: value, rhs: signBitConst, opcode: StdBinOpcode.shrLogical, operandType: StdType.i64))
-	let minusConst = ids.mint()
-	module.appendOp(setup, op: StdOp.const(minusConst, value: AsciiMinusSign, valueType: StdType.i64))
-	module.appendOp(setup, op: StdOp.storeIndirect(dest, offset: 0, valueId: minusConst, valueType: StdType.u8))
-	let spanConst = ids.mint()
-	module.appendOp(setup, op: StdOp.const(spanConst, value: SignMultiplierSpan, valueType: StdType.i64))
-	let twoNeg = ids.mint()
-	module.appendOp(setup, op: StdOp.binOp(twoNeg, lhs: spanConst, rhs: neg, opcode: StdBinOpcode.mul, operandType: StdType.i64))
-	let signBaseConst = ids.mint()
-	module.appendOp(setup, op: StdOp.const(signBaseConst, value: SignMultiplierBase, valueType: StdType.i64))
-	let sign = ids.mint()
-	module.appendOp(setup, op: StdOp.binOp(sign, lhs: signBaseConst, rhs: twoNeg, opcode: StdBinOpcode.sub, operandType: StdType.i64))
+	// setup: derive `neg` (0/1) and `sign` (+1/-1), and write the provisional '-' at dest[0] — or, for the
+	// unsigned rendering, none of that.
+	let renderedSign = emitRenderedSign(module, block: setup, ids: ids, value: value, dest: dest, signedness: signedness)
 	let digitsZero = ids.mint()
 	module.appendOp(setup, op: StdOp.const(digitsZero, value: 0, valueType: StdType.i64))
 	module.setTerminator(setup, op: StdOp.branch(countLoop.id))
@@ -1602,11 +1660,12 @@ function buildIntToString(module StdModule)
 	let radixCount = ids.mint()
 	module.appendOp(countLoop, op: StdOp.const(radixCount, value: DecimalRadix, valueType: StdType.i64))
 	let vNext = ids.mint()
-	// ⭐ **SIGNED, AND THAT IS THIS BUILDER'S WHOLE CONTRACT** (X10, which made every `StdOp.div` state its
-	// reading rather than inherit one). The sign is handled ABOVE — `neg` / `sign` — and each digit step is
-	// multiplied back by `sign`, so this is a SIGNED walk by construction: an unsigned divide here would
-	// emit the magnitude's digits while the `-` already written at `dest[0]` still claimed a negative.
-	module.appendOp(countLoop, op: StdOp.div(vNext, lhs: v, rhs: radixCount, signedness: DivideSignedness.signed))
+	// ⭐ **IT TAKES THE READING THE SIGN HANDLING ABOVE TOOK** (X10 made every `StdOp.div` state its reading
+	// rather than inherit one; X11 made the reading a parameter). For the SIGNED rendering the sign is
+	// handled by `neg`/`sign` and each digit step is multiplied back, so the walk is signed by
+	// construction; for the UNSIGNED one there is no sign to handle and bit 63 is a magnitude bit. The two
+	// halves cannot be mixed — see this builder's header.
+	module.appendOp(countLoop, op: StdOp.div(vNext, lhs: v, rhs: radixCount, signedness: signedness))
 	let oneCount = ids.mint()
 	module.appendOp(countLoop, op: StdOp.const(oneCount, value: 1, valueType: StdType.i64))
 	let digitsNext = ids.mint()
@@ -1622,8 +1681,7 @@ function buildIntToString(module StdModule)
 	// `countLoop` defines it and dominates `writeSetup`, so the last iteration's count reaches here with no
 	// exit phi (only the loop-carried `digits`/`v` recurrence needs a header phi). Then fall into the write
 	// loop with the cursor at `lastPos` and the value to render.
-	let len = ids.mint()
-	module.appendOp(writeSetup, op: StdOp.binOp(len, lhs: digitsNext, rhs: neg, opcode: StdBinOpcode.add, operandType: StdType.i64))
+	let len = emitSignWidenedLength(module, block: writeSetup, ids: ids, digits: digitsNext, sign: renderedSign)
 	let oneWrite = ids.mint()
 	module.appendOp(writeSetup, op: StdOp.const(oneWrite, value: 1, valueType: StdType.i64))
 	let lastPos = ids.mint()
@@ -1649,9 +1707,8 @@ function buildIntToString(module StdModule)
 	let radixWrite = ids.mint()
 	module.appendOp(writeBody, op: StdOp.const(radixWrite, value: DecimalRadix, valueType: StdType.i64))
 	let digit = ids.mint()
-	module.appendOp(writeBody, op: StdOp.mod(digit, lhs: wv, rhs: radixWrite, signedness: DivideSignedness.signed))
-	let digitAbs = ids.mint()
-	module.appendOp(writeBody, op: StdOp.binOp(digitAbs, lhs: digit, rhs: sign, opcode: StdBinOpcode.mul, operandType: StdType.i64))
+	module.appendOp(writeBody, op: StdOp.mod(digit, lhs: wv, rhs: radixWrite, signedness: signedness))
+	let digitAbs = emitDigitMagnitude(module, block: writeBody, ids: ids, digit: digit, sign: renderedSign)
 	let asciiZero = ids.mint()
 	module.appendOp(writeBody, op: StdOp.const(asciiZero, value: AsciiZeroDigit, valueType: StdType.i64))
 	let digitChar = ids.mint()
@@ -1662,7 +1719,7 @@ function buildIntToString(module StdModule)
 	let wvRadix = ids.mint()
 	module.appendOp(writeBody, op: StdOp.const(wvRadix, value: DecimalRadix, valueType: StdType.i64))
 	let wvNext = ids.mint()
-	module.appendOp(writeBody, op: StdOp.div(wvNext, lhs: wv, rhs: wvRadix, signedness: DivideSignedness.signed))
+	module.appendOp(writeBody, op: StdOp.div(wvNext, lhs: wv, rhs: wvRadix, signedness: signedness))
 	let oneWriteStep = ids.mint()
 	module.appendOp(writeBody, op: StdOp.const(oneWriteStep, value: 1, valueType: StdType.i64))
 	let posNext = ids.mint()
@@ -1673,7 +1730,61 @@ function buildIntToString(module StdModule)
 	module.setTerminator(done, op: StdOp.ret(len))
 
 	module.functions.push(func)
-end 'buildIntToString'
+end 'buildIntegerToString'
+
+// The SIGNED rendering's `setup`: derive `neg` (0/1) and `sign` (+1/-1) and write the provisional `-` at
+// `dest[0]`. The unsigned rendering emits NO OP AT ALL — not a `const 0` and a `const 1` for the shared
+// graph to multiply by, which would cost a needless multiply per digit and an add per call for two values
+// that are identities. See `RenderedSign`.
+function emitRenderedSign(module StdModule, block IrBlock, ids ValueMinter, value ValueId, dest ValueId, signedness DivideSignedness) returns RenderedSign
+	if signedness == DivideSignedness.unsigned 'noSignToDerive'
+		return RenderedSign.unsigned
+	end 'noSignToDerive'
+
+	let signBitConst = ids.mint()
+	module.appendOp(block, op: StdOp.const(signBitConst, value: SignBitPosition, valueType: StdType.i64))
+	let neg = ids.mint()
+	module.appendOp(block, op: StdOp.binOp(neg, lhs: value, rhs: signBitConst, opcode: StdBinOpcode.shrLogical, operandType: StdType.i64))
+	let minusConst = ids.mint()
+	module.appendOp(block, op: StdOp.const(minusConst, value: AsciiMinusSign, valueType: StdType.i64))
+	module.appendOp(block, op: StdOp.storeIndirect(dest, offset: 0, valueId: minusConst, valueType: StdType.u8))
+	let spanConst = ids.mint()
+	module.appendOp(block, op: StdOp.const(spanConst, value: SignMultiplierSpan, valueType: StdType.i64))
+	let twoNeg = ids.mint()
+	module.appendOp(block, op: StdOp.binOp(twoNeg, lhs: spanConst, rhs: neg, opcode: StdBinOpcode.mul, operandType: StdType.i64))
+	let signBaseConst = ids.mint()
+	module.appendOp(block, op: StdOp.const(signBaseConst, value: SignMultiplierBase, valueType: StdType.i64))
+	let sign = ids.mint()
+	module.appendOp(block, op: StdOp.binOp(sign, lhs: signBaseConst, rhs: twoNeg, opcode: StdBinOpcode.sub, operandType: StdType.i64))
+
+	return RenderedSign.signed(neg, sign: sign)
+end 'emitRenderedSign'
+
+// `len = digits + neg` — the rendered width, which for an unsigned rendering IS the digit count, since
+// `neg` is also the offset the most significant digit is written at.
+function emitSignWidenedLength(module StdModule, block IrBlock, ids ValueMinter, digits ValueId, sign RenderedSign) returns ValueId
+	return match sign 'rendering'
+		unsigned gives digits
+		signed(neg, _) gives emitI64BinOp(module, block: block, ids: ids, lhs: digits, rhs: neg, opcode: StdBinOpcode.add)
+	end 'rendering'
+end 'emitSignWidenedLength'
+
+// `digit * sign` — one digit's magnitude. A SIGNED `value % 10` carries the value's sign, so a negative
+// value's digits arrive negative and are multiplied back; an unsigned remainder is already the magnitude.
+function emitDigitMagnitude(module StdModule, block IrBlock, ids ValueMinter, digit ValueId, sign RenderedSign) returns ValueId
+	return match sign 'rendering'
+		unsigned gives digit
+		signed(_, multiplier) gives emitI64BinOp(module, block: block, ids: ids, lhs: digit, rhs: multiplier, opcode: StdBinOpcode.mul)
+	end 'rendering'
+end 'emitDigitMagnitude'
+
+// Mint a value and append the 64-bit `binOp` that defines it. The two arms above need that pair as an
+// EXPRESSION — a `gives` arm is one — where the builders spell it out as two statements.
+function emitI64BinOp(module StdModule, block IrBlock, ids ValueMinter, lhs ValueId, rhs ValueId, opcode StdBinOpcode) returns ValueId
+	let result = ids.mint()
+	module.appendOp(block, op: StdOp.binOp(result, lhs: lhs, rhs: rhs, opcode: opcode, operandType: StdType.i64))
+	return result
+end 'emitI64BinOp'
 
 // `__bool_to_string(value, dest) -> len` — render a bool as "true" (4 bytes) or "false" (5). The value is
 // 0 or 1, so a single branch picks the rendering; each branch writes its bytes with fixed offsets and
