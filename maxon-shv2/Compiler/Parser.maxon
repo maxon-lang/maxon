@@ -32089,46 +32089,10 @@ export type Parser
 	// a value moves into is owning iff the value itself owns heap.
 	function collectTupleElement(elementValues ValueIdArray, elementBareLocal BoolArray, elementTypes MaxonTypeArray, movedOwningValues ValueIdArray, value ValueId, valueStart TokenIndex) throws ParseError
 		try self.rejectDoubleOwningStore(movedOwningValues, value: value, fieldType: self.typeOf(value), valueStart: valueStart)
-		try self.requireOwnedOpaqueTupleElement(value, valueStart: valueStart)
 		elementValues.push(value)
 		elementBareLocal.push(self.rhsWasBareLocalReference(valueStart))
 		elementTypes.push(self.typeOf(value))
 	end 'collectTupleElement'
-
-	// ⭐⭐ **AN OPAQUE TUPLE ELEMENT MUST BE OWNED — `emitOpaqueFieldReassign`'s RULE, SPENT AT THE OTHER
-	// PLACE A SHARED BODY CAN PUT AN OPAQUE VALUE INTO A BOX (W6).** A tuple literal ends at
-	// `emitStructLiteral`, whose `moveInPayload` classifies a `typeParameter` element as a SCALAR
-	// (`classifyUnionPayload`'s `typeParameter then return PayloadClass.scalar`) and therefore stores it RAW,
-	// taking no reference. That is right for a value the body OWNS — ownership simply transfers into the box —
-	// and it is a double free for a BORROW, because the caller's tuple is retyped to the concrete
-	// `__Tuple2.<A>.<B>` (`retypeParametricTupleResult`) and drops through a cascade that decrefs what the
-	// shared body never retained.
-	//
-	// ⛔ **MEASURED, and it is the reason this gate exists rather than a precaution.** `Pair uses A, B` with
-	// `both() returns (A, B)` doing `return (a, b)` over a `Pair with Num, String` printed the right answer —
-	// `7 hello` — and then died at teardown with an ACCESS VIOLATION (0xC0000005): the box's `+1` for the
-	// String was never taken, the tuple's cascade released it to zero while the `Pair` still held it, and the
-	// `Pair`'s own destructor then decrefed freed memory. The CONCRETE control — the same program with
-	// `Holder` declaring `a as Num`/`b as String` outright — exits 0, which is what identifies the fault as
-	// the opaque store and not the tuple.
-	//
-	// ⚠ **IT REFUSES A TRIVIAL INSTANTIATION TOO, KNOWINGLY, and that is `emitOpaqueFieldReassign`'s trade
-	// exactly.** A shared body is compiled ONCE for every instantiation, so a `Pair with Num, Num` — which
-	// owns no heap and would be safe — is refused along with the managed one, because there is no second body
-	// to decide it in. The cure for both is the same descriptor-gated single-value COPY that function already
-	// names as a later slice (`copyFunc@32`, which `__arr_{slice,clone,append}_opaque` reads today for the
-	// ARRAY case); with it, a borrowed opaque element could be copied here and the refusal lifted.
-	function requireOwnedOpaqueTupleElement(value ValueId, valueStart TokenIndex) throws ParseError
-		if maxonTypeTag(self.typeOf(value)) != ValueTypeTag.typeParameter 'notOpaque'
-			return
-		end 'notOpaque'
-		if self.valueIsOwnedHeap(value) 'movesIn'
-			return
-		end 'movesIn'
-
-		let anchor = self.tokenAt(valueStart)
-		throw ParseError.unsupported("a tuple element of the opaque type-parameter type from a value that is not owned — the shared generic body cannot copy an opaque `T`, so a tuple built there may take one only from a value it owns (a parameter the method consumes), never from a borrow such as a field read; the tuple would store the borrow without a reference and its caller's concrete drop would release it twice. Aliasing a borrowed opaque value into a tuple needs the descriptor-gated copy a later slice adds", line: anchor.line, column: anchor.column)
-	end 'requireOwnedOpaqueTupleElement'
 
 	// ⭐ **`(T0, T1, …)` IN A TYPE POSITION (P1.10)** — a parameter, a return type, a `typealias` RHS. It
 	// resolves to the SAME `structRef` a literal of those element types mints, which is what makes
@@ -32208,7 +32172,7 @@ export type Parser
 	// is why the two halves are split at all.
 	function tupleElementError(rejection TupleElementRejection, anchor Token) returns ParseError
 		return match rejection 'why'
-			unsupportedTag(position, tagName) gives ParseError.unsupported("a tuple whose element {position} is '{tagName}': a tuple's identity IS its element types, and neither an unresolved type nor a call that returns no value can key one", line: anchor.line, column: anchor.column)
+			unsupportedTag(position, tagName) gives ParseError.unsupported("a tuple whose element {position} is '{tagName}': a tuple's identity IS its element types, and neither a generic type parameter (whose concrete type the shared body does not know) nor an unresolved type can key one", line: anchor.line, column: anchor.column)
 			separatorInElementName(position, elementName) gives ParseError.unsupported("a tuple whose element {position} is named '{elementName}': a tuple type's name joins its elements with '{TupleElementSeparator}', so an element whose own name holds that character would make two different tuples spell one name", line: anchor.line, column: anchor.column)
 		end 'why'
 	end 'tupleElementError'
@@ -47267,7 +47231,7 @@ export type Parser
 		// it with no change to any of them.
 		let argDefaultSlots = try self.fillOmittedArgDefaults(callee, anchor: anchor, args: args, argLabels: argLabels, argRanges: argRanges)
 		let result = try self.mintCallResult(callee, anchor: anchor, resultUsed: resultUsed)
-		let substituted = try self.retypeOpaqueMethodResult(result, callee: callee, args: args, anchor: anchor)
+		let substituted = self.retypeOpaqueMethodResult(result, callee: callee, args: args)
 		// ⭐⭐ **THE DROP ENROLMENT COMES AFTER THE RETYPE, AND THAT ORDER IS THE WHOLE OF A5o.** It used to sit
 		// in the mint's own tail, where the tag was still the opaque `T` — and an opaque tag ALWAYS answers "owns
 		// nothing" (`valueIsManagedHeap` tests byte-record and aggregate tags, and `typeParameter` is neither).
@@ -47481,7 +47445,7 @@ export type Parser
 	// substituted result is the one call result whose callee took no reference for it, so `emitCall` needs
 	// exactly this bit to tell the two hand-offs apart — see `coOwnSubstitutedCallResult`. Re-deriving it
 	// there would be the same question asked twice, of a value whose tag the substitution has just changed.
-	function retypeOpaqueMethodResult(result ValueId, callee ByteArray, args ValueIdArray, anchor Token) returns bool throws ParseError
+	function retypeOpaqueMethodResult(result ValueId, callee ByteArray, args ValueIdArray) returns bool
 		if args.isEmpty() 'noReceiver'
 			return false
 		end 'noReceiver'
@@ -47498,16 +47462,16 @@ export type Parser
 		end 'notItsOwnMethod'
 
 		match self.signatures.returnTypeOf(callee, into: self.artifact.typeNames) 'declared'
-			declared(returnType) then return try self.retypeOpaqueReturn(result, receiver: receiver, returnType: returnType, anchor: anchor)
+			declared(returnType) then return self.retypeOpaqueReturn(result, receiver: receiver, returnType: returnType)
 			undeclared then break 'declared'
 		end 'declared'
 
 		return false
 	end 'retypeOpaqueMethodResult'
 
-	function retypeOpaqueReturn(result ValueId, receiver ValueId, returnType MaxonReturnType, anchor Token) returns bool throws ParseError
+	function retypeOpaqueReturn(result ValueId, receiver ValueId, returnType MaxonReturnType) returns bool
 		match returnType 'r'
-			value(inner) then return try self.retypeOpaqueReturnValue(result, receiver: receiver, inner: inner, anchor: anchor)
+			value(inner) then return self.retypeOpaqueReturnValue(result, receiver: receiver, inner: inner)
 			void then break 'r'
 		end 'r'
 
@@ -47532,59 +47496,14 @@ export type Parser
 	// `named` alone, which is what makes `Box with Shape` pick `over(x Shape)` rather than reading the box
 	// pointer as an integer (`generic-managed-union-return-overload-selection` — exit 25 where 7 is correct,
 	// the failure this door's predecessor MEASURED before A4i/A4k gave it that cascade).
-	function retypeOpaqueReturnValue(result ValueId, receiver ValueId, inner MaxonType, anchor Token) returns bool throws ParseError
-		if maxonTypeTag(inner) == ValueTypeTag.typeParameter 'opaqueScalar'
-			self.retypeValue(result, valueType: self.instanceSubstitutedType(receiver, opaque: inner))
-			return true
-		end 'opaqueScalar'
+	function retypeOpaqueReturnValue(result ValueId, receiver ValueId, inner MaxonType) returns bool
+		if maxonTypeTag(inner) != ValueTypeTag.typeParameter 'notOpaque'
+			return false
+		end 'notOpaque'
 
-		try self.retypeParametricTupleResult(result, receiver: receiver, inner: inner, anchor: anchor)
-		// ⛔⛔ **A RETYPED TUPLE ANSWERS `false`, AND THAT IS AN OWNERSHIP FACT RATHER THAN AN OVERSIGHT.**
-		// This bool does not mean "did anything get retyped"; it means "the callee took NO reference for the
-		// result", which is what makes `emitCall` skip `enrolOwnedCallTemp` and take its own (see this
-		// function's header and `coOwnSubstitutedCallResult`). A bare `T` return earns it because the shared
-		// body cannot classify `T` and so emits no retain — it hands back a BORROW of a field. A tuple return
-		// is the opposite and the difference is visible in the shared body itself: `return (a, b)` ALLOCATES a
-		// box, so the callee owns what it returns and `emitOwnedValueReturn` retains it like any other struct.
-		// Answering `true` here would make the caller take a second reference for a `+1` that was already
-		// handed over, and skip the enrolment that frees it — a leak on every parametric-tuple return.
-		// ⇒ the retype and the ownership hand-off are two questions, and only the retype has a new answer.
-		return false
+		self.retypeValue(result, valueType: self.instanceSubstitutedType(receiver, opaque: inner))
+		return true
 	end 'retypeOpaqueReturnValue'
-
-	// ⭐⭐ **THE PARAMETRIC-TUPLE HALF OF THE SAME RULE (W6)** — `p.both()` on a `Pair with Num, String`
-	// returns the shared body's `__Tuple2.T0.T1`, and the value the caller holds is a `__Tuple2.int.String`.
-	// Both are two 8-byte slots (P1.6-A), so the bytes the callee stored need no fixing; what needs fixing is
-	// the NAME, because everything downstream is keyed by it — `t.0`'s field type, and the drop cascade
-	// `installStructDestructors` synthesized for the concrete tuple. The placeholder has NO cascade at all
-	// (an opaque field is never statically managed), so a caller left holding it leaks every managed element.
-	//
-	// ⚠ **IT RUNS BEFORE `enrolOwnedCallTemp`, WHICH IS THE ORDER A5o ESTABLISHED AND THIS DEPENDS ON.** The
-	// enrolment reads the result's tag to pick the destructor; asked of the placeholder it would enrol the
-	// cascade-less name and free the elements never. Asked here — after the retype — it enrols
-	// `__destruct___Tuple2.int.String` and the String is released exactly once.
-	//
-	// It mints through `internTupleLayout`, the ONE tuple door, rather than re-implementing the registration:
-	// the concrete tuple must be registered whole-program AND recorded on THIS file's artifact, because this
-	// call site may be the first place in the program that names it — the file declaring the generic spelled
-	// only the parametric one, and the file calling it may never spell a tuple at all.
-	function retypeParametricTupleResult(result ValueId, receiver ValueId, inner MaxonType, anchor Token) throws ParseError
-		if not tagIsStructRef(maxonTypeTag(inner)) 'notAStruct'
-			return
-		end 'notAStruct'
-
-		let declaredName = self.internedName(typeNameIdOf(inner))
-		if not isTupleTypeName(declaredName) 'notATuple'
-			return
-		end 'notATuple'
-		if not self.signatures.tupleHasParametricElement(declaredName) 'alreadyConcrete'
-			return
-		end 'alreadyConcrete'
-
-		let elements = self.signatures.substitutedTupleElements(declaredName, instance: self.valueNameId(receiver), into: self.artifact.typeNames)
-		let layout = try self.internTupleLayout(elements, anchor: anchor)
-		self.retypeValue(result, valueType: MaxonType.structRef(self.artifact.typeNames.intern(layout.name)))
-	end 'retypeParametricTupleResult'
 
 	// The CONCRETE type a generic-instance receiver binds an opaque `T` to, IN THE INDEX'S OWN INTERNER —
 	// where `ProgramSignatures` classifies it (`typeIsManaged` and every other `named`-resolving query). The
