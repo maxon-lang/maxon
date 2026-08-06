@@ -201,8 +201,12 @@ rather than raising a diagnostic, and SHA-256("abc") begins `0xba` = 186 only if
 own declaration. ⚠ The range here is deliberately `0 to 255` — a value a caller would plausibly
 write, and wide enough that nothing in the user's own file is out of range. A wider alias such as
 `int(0 to u32.max)` happens to hold the constants and answers correctly whatever the compiler does,
-so it would pass while pinning nothing. Prints the first digest byte, then `7` to show the user's own
-narrow range still governs the user's own file.
+so it would pass while pinning nothing. Prints the first digest byte, then `7` as a liveness marker,
+then `sizeof(Word32)` — which is the half that DISCRIMINATES: the user's `0 to 255` is one byte and
+the `i64.min to i64.max` the stdlib declares for that same name is eight, so the SIZE says whose
+declaration governs the user's own file while the digest byte says whose governs the stdlib's. ⚠ The
+`7` alone pins nothing and is not that half — it is inside every range in this fixture, which is
+exactly the weakness this file's older `42` cases have.
 ```maxon
 typealias Word32 = int(0 to 255)
 
@@ -217,7 +221,7 @@ function main() returns ExitCode
 	data.push(0x63)
 	let hash = sha256(data)
 	let b = try hash.get(0) otherwise 0
-	print("{b} {clampish(7)}\n")
+	print("{b} {clampish(7)} {sizeof(Word32)}\n")
 	return 0
 end 'main'
 ```
@@ -225,7 +229,7 @@ end 'main'
 0
 ```
 ```stdout
-186 7
+186 7 1
 ```
 
 
