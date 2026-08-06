@@ -1,19 +1,17 @@
-// Test: set-all-elements
-typealias Int = int(i64.min to i64.max)
-typealias Vec3 = Vector with 3 Int
+// Test: a-float-vector-at-constant-indexes
+typealias Float = float(f64.min to f64.max)
+typealias Vec2F = Vector with 2 Float
 
 function main() returns ExitCode
-	var v = Vec3.create()
-	try v.set(0, value: 10) otherwise panic("test invariant: set OOB")
-	try v.set(1, value: 20) otherwise panic("test invariant: set OOB")
-	try v.set(2, value: 30) otherwise panic("test invariant: set OOB")
-	let a = try v.get(0) otherwise 0
-	let b = try v.get(1) otherwise 0
-	let c = try v.get(2) otherwise 0
-	return a + b + c
+	var v = Vec2F.create()
+	try v.set(0, value: 2.5) otherwise panic("test invariant: set OOB")
+	try v.set(1, value: 4.25) otherwise panic("test invariant: set OOB")
+	let a = try v.get(0) otherwise 0.0
+	let b = try v.get(1) otherwise 0.0
+	return trunc((a + b) * 4.0)
 end 'main'
 ---
-ExitCode: 60
+ExitCode: 27
 ---
 data {
   __slab_cursor@0 = i64 0
@@ -27,17 +25,18 @@ func @main {
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
     x64.pushReg r12
-    x64.pushReg r13
-    x64.prologue 40
+    x64.prologue 48
+    x64.storeSlotReg slot0, xmm6
     x64.movRegImm32 rcx, 8
     x64.movRegImm32 rdx, 0
     x64.callDirect __arr_create
     x64.movRegReg rbx, r8
-    x64.movRegImm32 rdx, 3
+    x64.movRegImm32 rdx, 2
     x64.movRegReg rcx, rbx
     x64.callDirect __arr_resize
     x64.movRegImm32 rdx, 0
-    x64.movRegImm32 rax, 10
+    x64.movsdRegRip xmm0, [rip + __fconst_3]
+    x64.movqGprXmm rax, xmm0
     x64.movRegReg rcx, rbx
     x64.callDirect __arr_set_in_bounds
     x64.cmpRegImm32 r10, 0
@@ -47,15 +46,16 @@ func @main {
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 40
-    x64.popReg r13
+    x64.loadRegSlot xmm6, slot0
+    x64.epilogue 48
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
   tryok:
     x64.movRegImm32 rdx, 1
-    x64.movRegImm32 rax, 20
+    x64.movsdRegRip xmm0, [rip + __fconst_4]
+    x64.movqGprXmm rax, xmm0
     x64.movRegReg rcx, rbx
     x64.callDirect __arr_set_in_bounds
     x64.cmpRegImm32 r10, 0
@@ -65,26 +65,8 @@ func @main {
     x64.leaRegRdata rcx, [rip + __str_blob_1]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 40
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  tryok:
-    x64.movRegImm32 rdx, 2
-    x64.movRegImm32 rax, 30
-    x64.movRegReg rcx, rbx
-    x64.callDirect __arr_set_in_bounds
-    x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
-  tryerr:
-    x64.leaRegRdata rcx, [rip + __str_blob_2]
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 40
-    x64.popReg r13
+    x64.loadRegSlot xmm6, slot0
+    x64.epilogue 48
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
@@ -93,44 +75,33 @@ func @main {
     x64.movRegImm32 rdx, 0
     x64.movRegReg rcx, rbx
     x64.callDirect __arr_get_in_bounds
+    x64.movqXmmGpr xmm6, r8
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr
     x64.jmp tryok
   tryerr:
-    x64.movRegImm32 r12, 0
+    x64.movsdRegRip xmm6, [rip + __fconst_5]
     x64.jmp trycont
   tryok:
-    x64.movRegReg r12, r8
     x64.jmp trycont
   trycont:
     x64.movRegImm32 rdx, 1
     x64.movRegReg rcx, rbx
     x64.callDirect __arr_get_in_bounds
+    x64.movqXmmGpr xmm0, r8
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr
     x64.jmp tryok
   tryerr:
-    x64.movRegImm32 r13, 0
+    x64.movsdRegRip xmm0, [rip + __fconst_5]
     x64.jmp trycont
   tryok:
-    x64.movRegReg r13, r8
     x64.jmp trycont
   trycont:
-    x64.movRegImm32 rdx, 2
-    x64.movRegReg rcx, rbx
-    x64.callDirect __arr_get_in_bounds
-    x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
-  tryerr:
-    x64.movRegImm32 rax, 0
-    x64.jmp trycont
-  tryok:
-    x64.movRegReg rax, r8
-    x64.jmp trycont
-  trycont:
-    x64.leaRegRegReg rcx, r12, r13
-    x64.leaRegRegReg r12, rcx, rax
+    x64.addsdRegReg xmm6, xmm6, xmm0
+    x64.movsdRegRip xmm0, [rip + __fconst_6]
+    x64.mulsdRegReg xmm6, xmm6, xmm0
+    x64.cvttsd2siRegReg r12, xmm6
     x64.movRegReg rcx, rbx
     x64.callDirect __arr_decref
     x64.cmpRegImm32 r12, 0
@@ -142,19 +113,19 @@ func @main {
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_3]
+    x64.leaRegRdata rcx, [rip + __str_blob_2]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 40
-    x64.popReg r13
+    x64.loadRegSlot xmm6, slot0
+    x64.epilogue 48
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
   __rc_ok:
     x64.movRegReg r8, r12
-    x64.epilogue 40
-    x64.popReg r13
+    x64.loadRegSlot xmm6, slot0
+    x64.epilogue 48
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp

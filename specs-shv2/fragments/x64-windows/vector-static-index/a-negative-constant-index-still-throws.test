@@ -1,11 +1,10 @@
-// Test: get-out-of-bounds
+// Test: a-negative-constant-index-still-throws
 typealias Int = int(i64.min to i64.max)
-typealias Vec2 = Vector with 2 Int
+typealias Vec4 = Vector with 4 Int
 
 function main() returns ExitCode
-	var v = Vec2.create()
-	try v.set(0, value: 10) otherwise panic("test invariant: set OOB")
-	let result = try v.get(5) otherwise -1
+	var v = Vec4.create()
+	let result = try v.get(-1) otherwise -2
 	print("{result}\n")
 	return 0
 end 'main'
@@ -33,37 +32,17 @@ func @main {
     x64.callDirect __arr_create
     x64.movRegReg rbx, r8
     x64.storeSlotReg slot0, rbx
-    x64.movRegImm32 rdx, 2
+    x64.movRegImm32 rdx, 4
     x64.movRegReg rcx, rbx
     x64.callDirect __arr_resize
-    x64.movRegImm32 rdx, 0
-    x64.movRegImm32 rax, 10
-    x64.movRegReg rcx, rbx
-    x64.callDirect __arr_set_in_bounds
-    x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
-  tryerr:
-    x64.leaRegRdata rcx, [rip + __str_blob_0]
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 72
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  tryok:
-    x64.movRegImm32 rdx, 5
+    x64.movRegImm rdx, -1
     x64.movRegReg rcx, rbx
     x64.callDirect __arr_get
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr
     x64.jmp tryok
   tryerr:
-    x64.movRegImm rbx, -1
+    x64.movRegImm rbx, -2
     x64.jmp trycont
   tryok:
     x64.movRegReg rbx, r8
@@ -78,7 +57,7 @@ func @main {
     x64.movRegReg rdx, r12
     x64.callDirect __int_to_string
     x64.movRegReg rbx, r8
-    x64.leaRegRdata rax, [rip + __str_rec_2]
+    x64.leaRegRdata rax, [rip + __str_rec_1]
     x64.loadRegBaseDisp.word64 r13, [rax + 0]
     x64.loadRegBaseDisp.word64 r14, [rax + 8]
     x64.leaRegRegReg rax, rbx, r14

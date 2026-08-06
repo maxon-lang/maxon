@@ -3,6 +3,15 @@
 typealias Word32 = int(i64.min to i64.max)
 typealias Sha256Words = Array with Word32
 
+// The eight-word hash state (FIPS 180-4 section 5.3.3), held in a fixed-size Vector.
+//
+// It was eight scalars, "so round bookkeeping doesn't require bounds-checked indexing" — and that
+// reason is kept rather than overridden. Eight scalars live across the whole block loop do not fit
+// the register pool, and a plain Array would trade that for a bounds check on every state access. A
+// Vector carries its SIZE in its type, so each constant index below is decided at compile time and
+// the access carries no bounds check at all.
+typealias Sha256State = Vector with 8 Word32
+
 // SHA-256 round constants (FIPS 180-4 section 4.2.2)
 let sha256KTable = [
 	0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5,
@@ -67,7 +76,7 @@ function sha256SmSigma1(v Word32) returns Word32
 end 'sha256SmSigma1'
 
 function sha256ReadBE32(buf ByteArray, off Word32) returns Word32
-	// The caller (sha256's block loop) guarantees off+3 < buf.count(); the otherwise
+	// The caller (sha256Compress's schedule loop) guarantees off+3 < buf.count(); the otherwise
 	// branch is unreachable but must be syntactically present since Array.get throws.
 	let b0 = try buf.get(off) otherwise 0
 	let b1 = try buf.get(off + 1) otherwise 0
@@ -76,18 +85,103 @@ function sha256ReadBE32(buf ByteArray, off Word32) returns Word32
 	return (b0 shl 24) or (b1 shl 16) or (b2 shl 8) or b3
 end 'sha256ReadBE32'
 
+// Fold the 64-byte block at `blockOff` into `state` — FIPS 180-4 section 6.2.2.
+//
+// It is a function of its own rather than the body of sha256's block loop because the message
+// schedule, the padding buffer and the block offset are then not all live at once: the compression
+// needs the schedule and the state, and the caller needs the buffer and the offset.
+function sha256Compress(state Sha256State, padded ByteArray, blockOff Word32)
+	// Message schedule: 64 extended words. An Array and not a Vector, because round r reads
+	// w[r-2], w[r-7], w[r-15], w[r-16] — indexes computed from a loop counter, which no fixed size
+	// makes constant. All four are in range by the loop header, so the otherwise branches below are
+	// unreachable.
+	var w = Sha256Words.create()
+	w.reserve(64)
+
+	var wi = 0
+	while wi < 16 'readWords'
+		w.push(sha256ReadBE32(padded, off: blockOff + wi * 4))
+		wi = wi + 1
+	end 'readWords'
+
+	while wi < 64 'extend'
+		// wi is in [16, 64); wi-16 >= 0 and wi-2 < 64 so all indexes are in w's range.
+		let wm2 = try w.get(wi - 2) otherwise panic("sha256: extend w[wi-2] unreachable")
+		let wm7 = try w.get(wi - 7) otherwise panic("sha256: extend w[wi-7] unreachable")
+		let wm15 = try w.get(wi - 15) otherwise panic("sha256: extend w[wi-15] unreachable")
+		let wm16 = try w.get(wi - 16) otherwise panic("sha256: extend w[wi-16] unreachable")
+		let s0 = sha256SmSigma0(wm15)
+		let s1 = sha256SmSigma1(wm2)
+		w.push((wm16 + s0 + wm7 + s1) and 0xFFFFFFFF)
+		wi = wi + 1
+	end 'extend'
+
+	// Round r uses the constant table only as the addend K[r] + W[r], and nothing after the
+	// extension above needs the two apart — so they are summed here, once, and the round loop then
+	// walks ONE array with `for … in`. That is what keeps random, bounds-checked indexing out of the
+	// compression loop, which is where it would be paid 64 times per block.
+	var r = 0
+	for kv in sha256KTable 'foldRoundConstants'
+		let raw = try w.get(r) otherwise panic("sha256: schedule index unreachable")
+		try w.set(r, value: (raw + kv) and 0xFFFFFFFF) otherwise panic("sha256: schedule index unreachable")
+		r = r + 1
+	end 'foldRoundConstants'
+
+	var a = try state.get(0) otherwise panic("sha256: state index unreachable")
+	var b = try state.get(1) otherwise panic("sha256: state index unreachable")
+	var c = try state.get(2) otherwise panic("sha256: state index unreachable")
+	var d = try state.get(3) otherwise panic("sha256: state index unreachable")
+	var ve = try state.get(4) otherwise panic("sha256: state index unreachable")
+	var f = try state.get(5) otherwise panic("sha256: state index unreachable")
+	var g = try state.get(6) otherwise panic("sha256: state index unreachable")
+	var hv = try state.get(7) otherwise panic("sha256: state index unreachable")
+
+	// T1 and T2 are spelled as FIPS 180-4 section 6.2.2 writes them, with K[r] + W[r] already summed
+	// into wri above.
+	for wri in w 'rounds'
+		let t1 = (hv + sha256BigSigma1(ve) + sha256Ch(ve, b: f, c: g) + wri) and 0xFFFFFFFF
+		let t2 = (sha256BigSigma0(a) + sha256Maj(a, b: b, c: c)) and 0xFFFFFFFF
+
+		hv = g
+		g = f
+		f = ve
+		ve = (d + t1) and 0xFFFFFFFF
+		d = c
+		c = b
+		b = a
+		a = (t1 + t2) and 0xFFFFFFFF
+	end 'rounds'
+
+	sha256AddIntoState(state, slot: 0, addend: a)
+	sha256AddIntoState(state, slot: 1, addend: b)
+	sha256AddIntoState(state, slot: 2, addend: c)
+	sha256AddIntoState(state, slot: 3, addend: d)
+	sha256AddIntoState(state, slot: 4, addend: ve)
+	sha256AddIntoState(state, slot: 5, addend: f)
+	sha256AddIntoState(state, slot: 6, addend: g)
+	sha256AddIntoState(state, slot: 7, addend: hv)
+end 'sha256Compress'
+
+// state[slot] = (state[slot] + addend) mod 2^32 — the block's contribution, written once for the
+// eight slots that all owe it. `slot` is a constant at every call site, so both accesses are
+// decided at compile time and neither is bounds-checked.
+function sha256AddIntoState(state Sha256State, slot Word32, addend Word32)
+	let current = try state.get(slot) otherwise panic("sha256: state index unreachable")
+	try state.set(slot, value: (current + addend) and 0xFFFFFFFF) otherwise panic("sha256: state index unreachable")
+end 'sha256AddIntoState'
+
 /// Compute the SHA-256 hash of data. Returns a 32-byte ByteArray.
 export function sha256(data ByteArray) returns ByteArray
-	// Initial hash state from FIPS 180-4 §5.3.3. Scalars (not an Array) so round
-	// bookkeeping doesn't require bounds-checked indexing.
-	var h0 = 0x6a09e667
-	var h1 = 0xbb67ae85
-	var h2 = 0x3c6ef372
-	var h3 = 0xa54ff53a
-	var h4 = 0x510e527f
-	var h5 = 0x9b05688c
-	var h6 = 0x1f83d9ab
-	var h7 = 0x5be0cd19
+	// Initial hash state from FIPS 180-4 section 5.3.3.
+	var h = Sha256State.create()
+	try h.set(0, value: 0x6a09e667) otherwise panic("sha256: state index unreachable")
+	try h.set(1, value: 0xbb67ae85) otherwise panic("sha256: state index unreachable")
+	try h.set(2, value: 0x3c6ef372) otherwise panic("sha256: state index unreachable")
+	try h.set(3, value: 0xa54ff53a) otherwise panic("sha256: state index unreachable")
+	try h.set(4, value: 0x510e527f) otherwise panic("sha256: state index unreachable")
+	try h.set(5, value: 0x9b05688c) otherwise panic("sha256: state index unreachable")
+	try h.set(6, value: 0x1f83d9ab) otherwise panic("sha256: state index unreachable")
+	try h.set(7, value: 0x5be0cd19) otherwise panic("sha256: state index unreachable")
 
 	let msgLen = data.count()
 	let bitLen = msgLen * 8
@@ -112,87 +206,20 @@ export function sha256(data ByteArray) returns ByteArray
 
 	var blockOff = 0
 	while blockOff < padded.count() 'processBlocks'
-		// Message schedule: 64 extended words. Kept as a mutable array only because
-		// round r reads w[r-2], w[r-7], w[r-15], w[r-16] by offset — no iterator fits.
-		// All reads use indexes the loop-header guarantees are in range, so the bounds
-		// check is unreachable (stdlib Array.get panics uncatchably if misused).
-		var w = Sha256Words.create()
-		w.reserve(64)
-
-		var wi = 0
-		while wi < 16 'readWords'
-			w.push(sha256ReadBE32(padded, off: blockOff + wi * 4))
-			wi = wi + 1
-		end 'readWords'
-
-		while wi < 64 'extend'
-			// wi is in [16, 64); wi-16 >= 0 and wi-2 < 64 so all indexes are in w's range.
-			let wm2 = try w.get(wi - 2) otherwise panic("sha256: extend w[wi-2] unreachable")
-			let wm7 = try w.get(wi - 7) otherwise panic("sha256: extend w[wi-7] unreachable")
-			let wm15 = try w.get(wi - 15) otherwise panic("sha256: extend w[wi-15] unreachable")
-			let wm16 = try w.get(wi - 16) otherwise panic("sha256: extend w[wi-16] unreachable")
-			let s0 = sha256SmSigma0(wm15)
-			let s1 = sha256SmSigma1(wm2)
-			w.push((wm16 + s0 + wm7 + s1) and 0xFFFFFFFF)
-			wi = wi + 1
-		end 'extend'
-
-		var a = h0
-		var b = h1
-		var c = h2
-		var d = h3
-		var ve = h4
-		var f = h5
-		var g = h6
-		var hv = h7
-
-		// Iterate the K table and w schedule in lockstep via a K-iterator; w is
-		// indexed by the outer for-loop's counter. This avoids bounds-checked
-		// random access on sha256KTable (which is constant and safely 64-long).
-		let kCursor = try sha256KTable.createIterator() otherwise panic("Sha256: K table iterator failed (unreachable)")
-		for wri in w 'rounds'
-			let ki = kCursor.current()
-			let ss1 = sha256BigSigma1(ve)
-			let ch = sha256Ch(ve, b: f, c: g)
-			let t1 = (hv + ss1 + ch + ki + wri) and 0xFFFFFFFF
-			let ss0 = sha256BigSigma0(a)
-			let maj = sha256Maj(a, b: b, c: c)
-			let t2 = (ss0 + maj) and 0xFFFFFFFF
-
-			hv = g
-			g = f
-			f = ve
-			ve = (d + t1) and 0xFFFFFFFF
-			d = c
-			c = b
-			b = a
-			a = (t1 + t2) and 0xFFFFFFFF
-
-			try kCursor.advance() otherwise break
-		end 'rounds'
-
-		h0 = (h0 + a) and 0xFFFFFFFF
-		h1 = (h1 + b) and 0xFFFFFFFF
-		h2 = (h2 + c) and 0xFFFFFFFF
-		h3 = (h3 + d) and 0xFFFFFFFF
-		h4 = (h4 + ve) and 0xFFFFFFFF
-		h5 = (h5 + f) and 0xFFFFFFFF
-		h6 = (h6 + g) and 0xFFFFFFFF
-		h7 = (h7 + hv) and 0xFFFFFFFF
-
+		sha256Compress(h, padded: padded, blockOff: blockOff)
 		blockOff = blockOff + 64
 	end 'processBlocks'
 
 	var result = ByteArray.create()
 	result.reserve(32)
-	emitBE32(result, val: h0)
-	emitBE32(result, val: h1)
-	emitBE32(result, val: h2)
-	emitBE32(result, val: h3)
-	emitBE32(result, val: h4)
-	emitBE32(result, val: h5)
-	emitBE32(result, val: h6)
-	emitBE32(result, val: h7)
+	emitBE32(result, val: try h.get(0) otherwise panic("sha256: state index unreachable"))
+	emitBE32(result, val: try h.get(1) otherwise panic("sha256: state index unreachable"))
+	emitBE32(result, val: try h.get(2) otherwise panic("sha256: state index unreachable"))
+	emitBE32(result, val: try h.get(3) otherwise panic("sha256: state index unreachable"))
+	emitBE32(result, val: try h.get(4) otherwise panic("sha256: state index unreachable"))
+	emitBE32(result, val: try h.get(5) otherwise panic("sha256: state index unreachable"))
+	emitBE32(result, val: try h.get(6) otherwise panic("sha256: state index unreachable"))
+	emitBE32(result, val: try h.get(7) otherwise panic("sha256: state index unreachable"))
 	return result
 end 'sha256'
 

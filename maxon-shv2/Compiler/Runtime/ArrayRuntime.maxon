@@ -255,6 +255,30 @@ export let ArrGetName = b"__arr_get"
 // little-endian element load are still written down once.
 export let ArrGetUncheckedName = b"__arr_get_unchecked"
 export let ArrSetName = b"__arr_set"
+
+// ⭐⭐ **THE ELEMENT ACCESS WHOSE BOUNDS PROOF WAS DISCHARGED AT THE CALL SITE (S2m-b)** — `__arr_get` and
+// `__arr_set` minus the `index < 0 or index >= length` test and the out-of-range return it guards, and
+// identical to them in every other respect. `Parser.elementAccessCallee` picks these when the container
+// carries its SIZE in its TYPE (only a `Vector` does) and the index is a compile-time constant inside it,
+// so the test they drop is one whose answer the compiler already computed.
+//
+// ⭐ **THEY ARE STILL DECLARED THROWING, AND THAT IS THE SURFACE'S FACT RATHER THAN A HEDGE.**
+// `stdlib/Array.maxon` declares `get`/`set` as `throws ArrayError` and a `Vector` publishes that surface, so
+// the author writes `try v.get(0) otherwise …` whatever the index is — `/specs/vector.md` writes exactly that
+// on every one of its cases. A NON-throwing entry here would make the `try` an E3055 on a program the
+// canonical corpus and both reference compilers accept, which is a language change wearing an
+// optimization's clothes. What the proof discharges is the ONE failure the clause admits for a vector, not
+// the clause; the caller's dual-register protocol is untouched, and `__arr_get_in_bounds` still reports the
+// EMPTY-SLOT failure through it (unreachable for a vector, whose element can never be managed — see
+// `requireVectorElementType` — and correct for any future sized container whose element can).
+//
+// ⚠ **NOT `__arr_get_unchecked`, WHICH ALREADY EXISTS AND DROPS THE SAME TEST.** That one is NON-throwing
+// (see its header: a `for … in` loop has no `try` to attach), so a call to it under a `try` is E3055 and a
+// `tryCall` to it would read an error-flag register the callee never writes. The two differ in the RETURN
+// SHAPE, not in the check, and the shape is what each caller needs.
+export let ArrGetInBoundsName = b"__arr_get_in_bounds"
+export let ArrSetInBoundsName = b"__arr_set_in_bounds"
+
 export let ArrCountName = b"__arr_count"
 export let ArrCapacityName = b"__arr_capacity"
 
@@ -667,9 +691,12 @@ end 'isArrayRuntimeCallee'
 // callee throws": `Parser.dispatchArrayMethod` emits exactly these seven METHODS through its throwing path,
 // and the two lists name the same `Arr*Name` constants so they cannot drift. `slice` (P1.7 slice 4) throws on
 // an out-of-bounds or inverted range.
-// ⚠ Seven METHODS, NINE CALLEES — `slice` has three entries (plain, managed-element, opaque-element), picked
-// by the element's ownership rather than by anything the author writes. The old spelling of this note said
-// "the same seven `Arr*Name` constants" and there have been nine since P1.7 slice 3b-vi-b.
+// ⚠ Seven METHODS, ELEVEN CALLEES — `slice` has three entries (plain, managed-element, opaque-element),
+// picked by the element's ownership rather than by anything the author writes, and `get`/`set` each have a
+// second entry (`ArrGetInBoundsName`/`ArrSetInBoundsName`) picked by whether the call site proved its index
+// in range — the elision `Parser.elementAccessCallee` decides and `inBoundsElementAccessor` names. Neither
+// split is anything the author spells, and both entries of each pair carry the SAME `throws` clause — which
+// is the whole reason the elided one may join this list rather than needing a rule of its own.
 export function isThrowingArrayRuntimeCallee(callee ByteArray) returns bool
 	// R4.2 appends the three `__ManagedMemory` members, which throw `__ManagedMemoryError` rather than
 	// `ArrayError` — a different enum, but the same "throwing vs not" answer this predicate exists to give
@@ -694,8 +721,27 @@ end 'isThrowingArrayRuntimeCallee'
 // exact defect D12 existed to remove. Asking the NARROW predicate is disjointness **by construction**, so
 // the order of those tests stops mattering at all.
 export function isThrowingArrayAccessorCallee(callee ByteArray) returns bool
-	return callee.equals(ArrGetName) or callee.equals(ArrSetName) or callee.equals(ArrFirstName) or callee.equals(ArrLastName) or callee.equals(ArrPopName) or callee.equals(ArrRemoveName) or callee.equals(ArrSliceName) or callee.equals(ArrSliceManagedName) or callee.equals(ArrSliceOpaqueName)
+	return callee.equals(ArrGetName) or callee.equals(ArrSetName) or callee.equals(ArrGetInBoundsName) or callee.equals(ArrSetInBoundsName) or callee.equals(ArrFirstName) or callee.equals(ArrLastName) or callee.equals(ArrPopName) or callee.equals(ArrRemoveName) or callee.equals(ArrSliceName) or callee.equals(ArrSliceManagedName) or callee.equals(ArrSliceOpaqueName)
 end 'isThrowingArrayAccessorCallee'
+
+// ⭐ **THE ELIDED TWIN OF A CHECKED ELEMENT ACCESSOR** — the one place the two pairs are related, read by
+// `Parser.elementAccessCallee` once it has PROVED the index in range. Total over the two accessors a proof
+// can reach: only a `Vector` carries its size in its type, and a vector's whole surface is
+// `count`/`get`/`set` plus `for … in` (`Parser.dispatchVectorMethod`), so `insert`, `slice`, `pop`,
+// `remove` and the buffer's own `__arr_mem_set` cannot arrive here at all. It panics rather than answering
+// `checked` for them, because an identity answer would be a sentinel that silently disables the elision the
+// day a sized container grows a fourth member.
+export function inBoundsElementAccessor(checked ByteArray) returns ByteArray
+	if checked.equals(ArrGetName) 'get'
+		return ArrGetInBoundsName
+	end 'get'
+
+	if checked.equals(ArrSetName) 'set'
+		return ArrSetInBoundsName
+	end 'set'
+
+	panic("inBoundsElementAccessor: '{String.from(checked)}' has no in-bounds twin. The elision is reachable only where the container's SIZE is part of its TYPE, which today is `Vector` alone, and a vector publishes exactly `{String.from(GetMethod)}` and `{String.from(ArraySetMethod)}` as indexed members — so either a sized container gained an indexed member without one being built here, or `Parser.elementAccessCallee` proved an index in range for a callee it must not have")
+end 'inBoundsElementAccessor'
 
 // The `__ManagedMemory`-specific members, as one list with two readers: `isThrowingArrayRuntimeCallee` (THAT
 // they throw) and `GtRuntime.runtimeThrowsClause` (which pairs this with `managedMemoryThrows`, the WHAT — it
@@ -781,10 +827,12 @@ end 'managedMemorySourceMethodName'
 // opposite shape — ONE callee two authors could have written (`__mf_open_write`) — and nothing here needs it,
 // because the three slice entries are picked by the ELEMENT's ownership, which the author never spells.
 export function arrayAccessorSourceMethodName(callee ByteArray) returns ByteArray
-	if callee.equals(ArrGetName) 'get'
+	// The elided entries answer the SAME spelling as the checked ones: the author writes `v.get(0)` whichever
+	// entry the proof picked, and a diagnostic that named the callee would quote a symbol no author can type.
+	if callee.equals(ArrGetName) or callee.equals(ArrGetInBoundsName) 'get'
 		return GetMethod
 	end 'get'
-	if callee.equals(ArrSetName) 'set'
+	if callee.equals(ArrSetName) or callee.equals(ArrSetInBoundsName) 'set'
 		return ArraySetMethod
 	end 'set'
 	if callee.equals(ArrFirstName) 'first'
@@ -863,7 +911,9 @@ export function installArrayRuntime(module StdModule, usage RuntimeUsage)
 	buildArrPush(module)
 	buildArrGet(module)
 	buildArrGetUnchecked(module)
+	buildArrGetInBounds(module)
 	buildArrSet(module)
+	buildArrSetInBounds(module)
 	buildArrCount(module)
 	buildArrCapacity(module)
 	buildArrElementSize(module)
@@ -2467,12 +2517,37 @@ function buildArrGet(module StdModule)
 
 	emitOobReturn(module, block: oob, ids: ids)
 
-	let buffer = emitLoadField(module, block: load, record: arr, offset: ArrBufferOffset, ids: ids)
-	let es = emitLoadField(module, block: load, record: arr, offset: ArrElementSizeOffset, ids: ids)
-	emitLoadElemAndOkReturn(module, func: func, cur: load, record: arr, buffer: buffer, index: index, es: es, ids: ids)
+	emitGetLoadAndReturn(module, func: func, cur: load, arr: arr, index: index, ids: ids)
 
 	module.functions.push(func)
 end 'buildArrGet'
+
+// `__arr_get_in_bounds(arr, index) -> (value, flag)` — the read whose index the CALL SITE proved in range
+// (see `ArrGetInBoundsName`). `buildArrGet` minus its `entry` bounds test and its `oob` block, and nothing
+// else: the element load, the element-destructor gate and the empty-slot arm are the same three lines,
+// through the same helper.
+function buildArrGetInBounds(module StdModule)
+	var func = IrFunction.createFromStd(ArrGetInBoundsName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0, throwsTypeName: arrayErrorThrows())
+	var ids = ValueMinter.create(2)
+
+	var entry = module.addBlock(func, label: b"entry")
+	emitParams(module, block: entry, count: 2)
+	let arr = 0 as ValueId
+	let index = 1 as ValueId
+
+	emitGetLoadAndReturn(module, func: func, cur: entry, arr: arr, index: index, ids: ids)
+
+	module.functions.push(func)
+end 'buildArrGetInBounds'
+
+// The READ half both `get` entries share — the two record fields the element load needs, then the load
+// itself. Written once so the checked and the proven entry cannot come to read an element differently;
+// what separates them is exactly the block above this call and nothing inside it.
+function emitGetLoadAndReturn(module StdModule, func IrFunction, cur IrBlock, arr ValueId, index ValueId, ids ValueMinter)
+	let buffer = emitLoadField(module, block: cur, record: arr, offset: ArrBufferOffset, ids: ids)
+	let es = emitLoadField(module, block: cur, record: arr, offset: ArrElementSizeOffset, ids: ids)
+	emitLoadElemAndOkReturn(module, func: func, cur: cur, record: arr, buffer: buffer, index: index, es: es, ids: ids)
+end 'emitGetLoadAndReturn'
 
 // `__arr_get_unchecked(arr, index) -> value` — the for-in element read. See `ArrGetUncheckedName` for
 // why the bounds check and the empty-slot check are absent rather than missing: the loop header holds
@@ -2533,6 +2608,30 @@ function buildArrSet(module StdModule)
 
 	module.functions.push(func)
 end 'buildArrSet'
+
+// `__arr_set_in_bounds(arr, index, value) -> (_, flag)` — the write whose index the CALL SITE proved in
+// range (see `ArrSetInBoundsName`). `buildArrSet` minus its `entry` bounds test and its `oob` block, and
+// nothing else — the detach and the store are the same two lines through the same helpers.
+//
+// ⭐ **THE REJECTED-ELEMENT DESTROY GOES WITH THE `oob` BLOCK IT BELONGED TO, AND THAT IS NOT AN OMISSION.**
+// `emitDestroyRejectedElement` exists because a MOVED-IN element the setter refuses to store is owned by
+// nobody (R4.6, measured as exit 101). This entry refuses nothing, so there is no rejected element — the
+// array becomes the owner on the one path this function has.
+function buildArrSetInBounds(module StdModule)
+	var func = IrFunction.createFromStd(ArrSetInBoundsName, returnType: StdReturnType.value(StdType.i64), paramCount: 3, paramTypes: threeI64Params(), returnLine: 0, throwsTypeName: arrayErrorThrows())
+	var ids = ValueMinter.create(3)
+
+	var entry = module.addBlock(func, label: b"entry")
+	emitParams(module, block: entry, count: 3)
+	let arr = 0 as ValueId
+	let index = 1 as ValueId
+	let value = 2 as ValueId
+
+	emitCowDetach(module, block: entry, arr: arr, ids: ids)
+	emitElementStoreAndOkReturn(module, func: func, store: entry, arr: arr, index: index, value: value, ids: ids)
+
+	module.functions.push(func)
+end 'buildArrSetInBounds'
 
 // ⭐⭐ **THE WRITE ITSELF, SHARED BY THE TWO ELEMENT SETTERS.** `__arr_set` and `__arr_mem_set` differ in
 // exactly two things — the LIMIT their index is checked against and WHEN the buffer is made this record's —

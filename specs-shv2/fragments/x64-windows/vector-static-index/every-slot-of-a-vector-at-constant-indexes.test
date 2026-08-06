@@ -1,19 +1,23 @@
-// Test: set-all-elements
+// Test: every-slot-of-a-vector-at-constant-indexes
 typealias Int = int(i64.min to i64.max)
-typealias Vec3 = Vector with 3 Int
+typealias Vec5 = Vector with 5 Int
 
 function main() returns ExitCode
-	var v = Vec3.create()
-	try v.set(0, value: 10) otherwise panic("test invariant: set OOB")
-	try v.set(1, value: 20) otherwise panic("test invariant: set OOB")
-	try v.set(2, value: 30) otherwise panic("test invariant: set OOB")
+	var v = Vec5.create()
+	try v.set(0, value: 1) otherwise panic("test invariant: set OOB")
+	try v.set(1, value: 2) otherwise panic("test invariant: set OOB")
+	try v.set(2, value: 4) otherwise panic("test invariant: set OOB")
+	try v.set(3, value: 8) otherwise panic("test invariant: set OOB")
+	try v.set(4, value: 16) otherwise panic("test invariant: set OOB")
 	let a = try v.get(0) otherwise 0
 	let b = try v.get(1) otherwise 0
 	let c = try v.get(2) otherwise 0
-	return a + b + c
+	let d = try v.get(3) otherwise 0
+	let e = try v.get(4) otherwise 0
+	return a + b + c + d + e
 end 'main'
 ---
-ExitCode: 60
+ExitCode: 31
 ---
 data {
   __slab_cursor@0 = i64 0
@@ -28,16 +32,18 @@ func @main {
     x64.pushReg rbx
     x64.pushReg r12
     x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
     x64.prologue 40
     x64.movRegImm32 rcx, 8
     x64.movRegImm32 rdx, 0
     x64.callDirect __arr_create
     x64.movRegReg rbx, r8
-    x64.movRegImm32 rdx, 3
+    x64.movRegImm32 rdx, 5
     x64.movRegReg rcx, rbx
     x64.callDirect __arr_resize
     x64.movRegImm32 rdx, 0
-    x64.movRegImm32 rax, 10
+    x64.movRegImm32 rax, 1
     x64.movRegReg rcx, rbx
     x64.callDirect __arr_set_in_bounds
     x64.cmpRegImm32 r10, 0
@@ -48,6 +54,8 @@ func @main {
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
@@ -55,7 +63,7 @@ func @main {
     x64.ret
   tryok:
     x64.movRegImm32 rdx, 1
-    x64.movRegImm32 rax, 20
+    x64.movRegImm32 rax, 2
     x64.movRegReg rcx, rbx
     x64.callDirect __arr_set_in_bounds
     x64.cmpRegImm32 r10, 0
@@ -66,6 +74,8 @@ func @main {
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
@@ -73,7 +83,7 @@ func @main {
     x64.ret
   tryok:
     x64.movRegImm32 rdx, 2
-    x64.movRegImm32 rax, 30
+    x64.movRegImm32 rax, 4
     x64.movRegReg rcx, rbx
     x64.callDirect __arr_set_in_bounds
     x64.cmpRegImm32 r10, 0
@@ -84,6 +94,48 @@ func @main {
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok:
+    x64.movRegImm32 rdx, 3
+    x64.movRegImm32 rax, 8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __arr_set_in_bounds
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.leaRegRdata rcx, [rip + __str_blob_3]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok:
+    x64.movRegImm32 rdx, 4
+    x64.movRegImm32 rax, 16
+    x64.movRegReg rcx, rbx
+    x64.callDirect __arr_set_in_bounds
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.leaRegRdata rcx, [rip + __str_blob_4]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
@@ -123,6 +175,32 @@ func @main {
     x64.jcc notEqual, tryerr
     x64.jmp tryok
   tryerr:
+    x64.movRegImm32 r14, 0
+    x64.jmp trycont
+  tryok:
+    x64.movRegReg r14, r8
+    x64.jmp trycont
+  trycont:
+    x64.movRegImm32 rdx, 3
+    x64.movRegReg rcx, rbx
+    x64.callDirect __arr_get_in_bounds
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.movRegImm32 r15, 0
+    x64.jmp trycont
+  tryok:
+    x64.movRegReg r15, r8
+    x64.jmp trycont
+  trycont:
+    x64.movRegImm32 rdx, 4
+    x64.movRegReg rcx, rbx
+    x64.callDirect __arr_get_in_bounds
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
     x64.movRegImm32 rax, 0
     x64.jmp trycont
   tryok:
@@ -130,6 +208,8 @@ func @main {
     x64.jmp trycont
   trycont:
     x64.leaRegRegReg rcx, r12, r13
+    x64.leaRegRegReg rcx, rcx, r14
+    x64.leaRegRegReg rcx, rcx, r15
     x64.leaRegRegReg r12, rcx, rax
     x64.movRegReg rcx, rbx
     x64.callDirect __arr_decref
@@ -142,10 +222,12 @@ func @main {
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_3]
+    x64.leaRegRdata rcx, [rip + __str_blob_5]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
@@ -154,6 +236,8 @@ func @main {
   __rc_ok:
     x64.movRegReg r8, r12
     x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx

@@ -39045,7 +39045,7 @@ export type Parser
 
 		if methodTok.value.equals(GetMethod) 'get'
 			let index = try self.parseArrayOneArg(func)
-			return self.emitContainerElementAccessor(func, callee: ArrGetName, container: vec, args: pairArgs(vec, second: index), giid: giid, owned: false, borrowSubjectName: borrowSubjectName, range: range)
+			return self.emitContainerElementAccessor(func, callee: self.elementAccessCallee(ArrGetName, index: index, giid: giid), container: vec, args: pairArgs(vec, second: index), giid: giid, owned: false, borrowSubjectName: borrowSubjectName, range: range)
 		end 'get'
 
 		if methodTok.value.equals(ArraySetMethod) 'set'
@@ -41363,6 +41363,49 @@ export type Parser
 		return stored
 	end 'requireContainerElementType'
 
+	// ⭐⭐ **THE CALLEE AN ELEMENT ACCESS TAKES — the ELIDED entry when the compiler can decide the bounds test
+	// itself (S2m-b), the checked one otherwise.** ⚖ USER RULING, 2026-08-06: *"we should be able to add an
+	// optimization to remove the bounds check when using static indexes on a vector (fixed size)"*.
+	//
+	// ⭐ **BOTH HALVES OF THE PROOF READ A DOOR THAT ALREADY EXISTED, AND NEITHER IS A SECOND ANSWER.**
+	//   • the LENGTH is `genericInstanceFixedSize` — the second coordinate of a sized instance's identity, the
+	//     same one `Vector.count()` folds to a literal through and the same one `requireVectorElementType`
+	//     protects by refusing `Vector with <N> <type parameter>`. It answers `NoFixedSize` for every unsized
+	//     container, which is what makes this safe to ask on the shared `set` path: an `Array`, a `List` and a
+	//     `__ManagedMemory` buffer all decline here without a per-container test.
+	//   • the INDEX is `constIsKnown`/`constOf` — the parser's OWN constant view, the same columns the shift
+	//     rule and `emitBinOp`'s fold read. So a literal, a `let` bound to one and a folded expression all
+	//     qualify by construction, and a loop variable, a parameter and a call result all decline.
+	//
+	// ⚠ **AN OUT-OF-RANGE CONSTANT KEEPS THE CHECK; IT IS NOT A COMPILE ERROR.** The index and the length are
+	// both known there, so refusing it is tempting — but `/specs/vector.md` REQUIRES it to compile and throw:
+	// `get-out-of-bounds` reads `try v.get(5) otherwise -1` off a `Vector with 2 Int` and expects `-1`, and
+	// `set-out-of-bounds-throws` runs its `otherwise` handler. Both are canonical, both are what the runnable
+	// oracle does, and a refusal here would fork shv2 from the corpus over an optimization. The elision proves
+	// SUCCESS and does nothing else: where it cannot, the checked entry answers exactly as before.
+	//
+	// ⚠ **THE CONSTANT TEST IS ASKED FIRST, AND IT IS THE ONE THAT SAYS NO.** Both probes are a single array
+	// read (`valueConstDomains`, `GenericInstanceRegistry.fixedSizes`), so this is not about their cost but
+	// about which of them DECIDES: every element access in the program reaches here, almost none of them has a
+	// constant index, and the constant column is the one the parser is already touching on every value.
+	function elementAccessCallee(checked ByteArray, index ValueId, giid GenericInstanceId) returns ByteArray
+		if not self.constIsKnown(index) 'runtimeIndex'
+			return checked
+		end 'runtimeIndex'
+
+		let size = self.signatures.genericInstanceFixedSize(giid)
+		if size == NoFixedSize 'lengthIsARuntimeField'
+			return checked
+		end 'lengthIsARuntimeField'
+
+		let constant = self.constOf(index)
+		if constant < 0 or constant >= size 'provablyOutOfRange'
+			return checked
+		end 'provablyOutOfRange'
+
+		return inBoundsElementAccessor(checked)
+	end 'elementAccessCallee'
+
 	// `( expr )` — a single positional array-method argument (`push(x)`, `get(i)`, `reserve(n)`).
 	function parseArrayOneArg(func IrFunction) returns ValueId throws ParseError
 		try self.consume(TokenKind.leftParen)
@@ -41455,7 +41498,9 @@ export type Parser
 		// (`__arr_set_length`, `__arr_set_byte` and `__arr_mem_grow` are all declared `StdReturnType.void`
 		// and all throw); what this tag decides is whether MAXON believes the call yields something.
 		if throwing 'throwing'
-			return self.emitRuntimeCall(callee, args: tripleArgs(arr, second: index, third: value), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+			// The elision is asked HERE rather than at the `set` arms, because the index is parsed here — and it
+			// declines by itself for `insert` and for every unsized container, so no arm needs to know about it.
+			return self.emitRuntimeCall(self.elementAccessCallee(callee, index: index, giid: giid), args: tripleArgs(arr, second: index, third: value), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
 		end 'throwing'
 		return self.emitArrayVoidCall(callee, args: tripleArgs(arr, second: index, third: value), receiver: arr, range: range)
 	end 'parseArraySetOrInsert'
