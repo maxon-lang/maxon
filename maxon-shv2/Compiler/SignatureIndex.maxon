@@ -3473,12 +3473,12 @@ export let MinTupleArity = 2 as FieldIndex
 // Why a type cannot be a tuple ELEMENT — raised by `ProgramSignatures.internTupleType` and turned into a
 // positioned `E2015` by the parser, which is the only party holding a token to anchor it on.
 //
-// It is a THROW rather than a `panic` because every case is reachable from source: a `(T, int)` inside a
-// generic body, and a tuple built out of a value whose type the front end never resolved.
+// It is a THROW rather than a `panic` because every case is reachable from source: a tuple built out of a
+// value whose type the front end never resolved, and one written over a `void` call's result.
 export union TupleElementRejection
-	// The element's type tag has no place in a tuple's identity — a `typeParameter` (the shared body has no
-	// concrete type to key the layout on, and the drop cascade would be built against a borrow), an
-	// `unresolved` (nothing to mangle), or a `void` (no value at all). See `requireTupleElementType`.
+	// The element's type tag has no place in a tuple's identity — an `unresolved` (nothing to mangle) or a
+	// `void` (no value at all). A `typeParameter` was a third until W6; see `requireTupleElementType` for
+	// why it is now admitted rather than refused.
 	unsupportedTag(position FieldIndex, tagName String)
 	// The element's canonical name holds the element SEPARATOR, so the join that spells the tuple's name
 	// would stop being injective (see `TupleElementSeparator`). Exactly one name form in the language can do
@@ -3494,14 +3494,44 @@ function foreignNameOf(typeNames TypeNameInterner, id TypeNameId) returns ByteAr
 	return try typeNames.nameOf(id) otherwise panic("foreignNameOf: type-name id {id} is not in the interner it was passed with — a type crossing INTO the signature index must carry ids minted against the interner named alongside it")
 end 'foreignNameOf'
 
-// Is `element` a type a tuple can be keyed on? A `typeParameter` is not: the shared generic body has no
-// concrete type to build a layout or a drop cascade against, and `mangleTypeArg` would spell it by POSITION,
-// so two instantiations would silently share one layout. An `unresolved` is not: there is nothing to mangle.
-// A `void` is not: it is no value at all. All three are reachable from source, so each is a positioned
-// rejection rather than a panic.
+// Is `element` a type a tuple can be keyed on? An `unresolved` is not: there is nothing to mangle. A `void`
+// is not: it is no value at all. Both are reachable from source, so each is a positioned rejection rather
+// than a panic.
+//
+// ⭐⭐ **A `typeParameter` IS ADMITTED (W6), AND THE REASON IS THAT IT CONTRIBUTES NOTHING THE KEY COULD GET
+// WRONG.** This door refused one until W6, on the grounds that `mangleTypeArg` spells a parameter by
+// POSITION (`T0`) rather than by owner, so `(X, Y)` in `type A uses X, Y` and `(P, Q)` in `type B uses P, Q`
+// both spell `__Tuple2.T0.T1` — "two instantiations would silently share one layout". They do share one, and
+// the sharing is BENIGN here, which is the whole of what changed:
+//   • **LAYOUT.** A type parameter is an opaque 8-byte word (P1.6-A, `LowerMaxonToStd.maxon`'s
+//     `typeParameter then return StdType.i64`), and `fieldSlotCount` gives it ONE slot exactly as it gives
+//     every non-existential field one. So the two colliding tuples are both 2 slots at offsets 0 and 8 —
+//     not merely the same size, but the same layout field for field.
+//   • **DROP CASCADE.** An opaque parameter is never statically managed, so it contributes NO decref to
+//     `installStructDestructors`' cascade. Two tuples that mangle alike therefore also drop alike, because
+//     everything the cascade reads is spelled IN the name that collided.
+// ⇒ the lost half of the identity (which type's parameter this is) is read by neither the layout nor the
+// cascade, so a shared key hands both spellings exactly what each would have got alone. That is the
+// argument `mangleTypeArg` already makes for `Array with T`, whose opaque instance is likewise "only ever a
+// LOOKUP key"; a tuple now joins it rather than being the one container that cannot.
+//
+// ⚠⚠ **THE REFERENCE MEASURED THE OPPOSITE AND IT DOES NOT TRANSFER — v1's COLLIDING KEY NAMED A
+// DESCRIPTOR, THIS ONE NAMES A LAYOUT.** `maxon-selfhosted/Compiler/Passes/BuildLayoutDescriptors.maxon:209-229`
+// records the same collision as a real defect: two conditional gids whose type-parameter args share a name
+// mangle to one `__layout_*` label, silently upserted by the PE writer and rejected by the wasm one. v1's
+// cure was to emit NO label for a parametric instance (`anyMaxonTypeIsConditional`, `:596-684`). The
+// difference is what the colliding string IS: v1's is a SYMBOL for a 64-byte descriptor carrying per-instance
+// copy/destroy thunks, so two instances sharing it get one another's thunks; shv2's is the TYPE'S OWN NAME,
+// and everything derived from it is derived from the same string. Taking v1's cure here would mean minting no
+// tuple type at all inside a generic body, which is the refusal this replaces.
+//
+// ⚠ **WHAT KEEPS THE COLLISION UNREACHABLE ANYWAY**: `T0` names the ENCLOSING body's own parameter, and a
+// generic body can name no other type's parameters — so two spellings that mangle alike are never in scope
+// together, and no assignment between them is expressible. The sharing is a property of the KEY SPACE, not
+// of any program.
 function requireTupleElementType(element MaxonType, position FieldIndex) throws TupleElementRejection
 	let tag = maxonTypeTag(element)
-	if tag == ValueTypeTag.typeParameter or tag == ValueTypeTag.unresolved or tag == ValueTypeTag.void 'unsupported'
+	if tag == ValueTypeTag.unresolved or tag == ValueTypeTag.void 'unsupported'
 		throw TupleElementRejection.unsupportedTag(position, tagName: typeTagName(tag))
 	end 'unsupported'
 end 'requireTupleElementType'
@@ -9001,6 +9031,53 @@ export type ProgramSignatures
 
 		return self.registerTupleLayout(interned, declFilePath: slotScopeFilePath)
 	end 'internTupleType'
+
+	// Does the registered tuple `name` hold at least one type-PARAMETER element — is it the SHARED
+	// PLACEHOLDER a concrete receiver has to re-key, rather than a tuple that is already concrete? Asked
+	// before `substitutedTupleElements` so an ordinary `(Integer, String)` return re-interns nothing and
+	// allocates nothing; a method returning a tuple at all is rare, and one returning a parametric tuple
+	// rarer still.
+	export function tupleHasParametricElement(name ByteArray) returns bool
+		let layout = try self.structTypes.get(name) otherwise return false
+		for fieldType in layout.fieldTypes 'eachElement'
+			if maxonTypeTag(fieldType) == ValueTypeTag.typeParameter 'parametric'
+				return true
+			end 'parametric'
+		end 'eachElement'
+		return false
+	end 'tupleHasParametricElement'
+
+	// ⭐⭐ **THE CONCRETE ELEMENT LIST A PARAMETRIC TUPLE DENOTES AT A CONCRETE RECEIVER (W6).**
+	// `(Source, Element)`, declared once in `WithIterIterator`'s shared body, asked of a
+	// `WithIterIterator with ArrayCursor, String`, answers `(ArrayCursor, String)`. Each element that is a
+	// type PARAMETER becomes the instance's argument at that position; every other element is already
+	// concrete and rides unchanged.
+	//
+	// ⚠⚠ **THIS IS WHAT MAKES THE SHARED PLACEHOLDER SAFE, AND `requireTupleElementType` ADMITS ONE ONLY
+	// BECAUSE THIS EXISTS.** `__Tuple2.T0.T1` carries NO drop cascade — an opaque field is never statically
+	// managed — so a caller left holding it would leak every managed element and read every one at the wrong
+	// type. What makes the swap sound rather than a reinterpretation is that the two layouts COINCIDE: a type
+	// parameter is one opaque 8-byte word (P1.6-A) and `fieldSlotCount` gives every non-existential element
+	// one slot, so the shared body's two stores are already exactly the stores the concrete tuple wants. All
+	// the caller is missing is the NAME of the tuple those words already are.
+	//
+	// It answers in the CALLER's interner, `returnTypeOf`'s shape, because that is where the result's type
+	// column is read — and it substitutes in the INDEX's own space first, the discipline `substitutedInstanceArg`
+	// states at length: an element's `named` id means nothing outside the table it was interned against.
+	export function substitutedTupleElements(tupleName ByteArray, instance GenericInstanceId, into TypeNameInterner) returns MaxonTypeArray
+		let layout = try self.structTypes.get(tupleName) otherwise panic("ProgramSignatures.substitutedTupleElements: `{String.from(tupleName)}` is not registered — every caller reached here past `tupleHasParametricElement`, which reads the same registry")
+		var elements = MaxonTypeArray.create()
+		for i in 0 upto layout.fieldCount() 'eachElement'
+			let declared = try layout.fieldTypes.get(i) otherwise panic("ProgramSignatures.substitutedTupleElements: fieldTypes.get OOB at {i} below the {layout.fieldCount()} `{String.from(tupleName)}` declares")
+			if maxonTypeTag(declared) != ValueTypeTag.typeParameter 'concreteAlready'
+				elements.push(self.adoptType(declared, into: into))
+				continue
+			end 'concreteAlready'
+
+			elements.push(self.adoptType(self.substitutedInstanceArg(instance, position: typeNameIdOf(declared)), into: into))
+		end 'eachElement'
+		return elements
+	end 'substitutedTupleElements'
 
 	// ⭐ **THE INJECTIVITY ARGUMENT, ENFORCED AT THE JOIN THAT RELIES ON IT** — `witnessTableLabel`'s
 	// discipline, asked where it is spent rather than argued above it. A canonical element renders to a bare
