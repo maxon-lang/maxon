@@ -397,6 +397,13 @@ end 'main'
 ```
 
 <!-- test: divide-a-value-whose-declared-type-is-narrower-than-a-machine-word -->
+<!-- targets: x64-windows -->
+⚠ **A WINDOWS-LANE READING SINCE BATCH27.** `return 4000000000` is E3005 on every other target —
+`ExitCode` is `int(0 to 255)` there — so those lanes cannot express this program, which is what the
+`targets:` restriction says. It cannot be re-pinned on wasm through any other type, and the reason it
+cannot (plus the array-element route that looks like a substitute and measurably is not) is stated once,
+in `exit-code-range.md`'s *"What the narrowing costs the other lanes"*.
+
 ⭐⭐ **THE OPERANDS' STORAGE WIDTH IS NOT THE DIVISION'S WIDTH (X5).** `div`/`mod` are the two Std ops
 that carry no operand type, so a backend has to take the width from somewhere — and taking it from the
 LEFT OPERAND is what this case refuses. An `ExitCode` is a **u32** (`valueTagToStdType`), an int→int

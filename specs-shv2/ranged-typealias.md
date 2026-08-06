@@ -74,7 +74,12 @@ Functions with a ranged return type have their return values checked:
 
 - **Compile time**: returning a literal outside the range is a compile error
 - **Runtime**: returning a computed expression emits a range check that panics on violation
-- Types whose range covers the full optimal representation (e.g., `ExitCode`) are exempt
+- A check is elided only where the value's declared range provably fits the destination's
+  (`range-check-panic.md`), which a type whose range covers its full representation satisfies against
+  everything. ⚠ **`ExitCode` is NOT such a type in general** — its range is the compile TARGET's,
+  `int(0 to u32.max)` on Windows but `int(0 to 255)` on Linux, macOS and WASI (`stdlib/Process.maxon`),
+  and on those three it is far narrower than the `u32` it rides in. A computed `returns ExitCode` is
+  checked there like any other narrow alias.
 
 ```maxon
 typealias Score = int(0 to 100)
@@ -733,8 +738,12 @@ That matters here because a cast to such an alias is a representational NO-OP: i
 mints no value and the operand's type column still says what the SOURCE was. The alias has to be found
 some other way — and both spellings must find it, the cast of a CALL RESULT and the cast of a BARE
 LOCAL, which are recorded differently because the second leaves one value under two names.
-`ExitCode` is `int(0 to u32.max)`, the same shape with a builtin's name, and it is here for that
-reason. **MEASURED before the fix: every line below printed `0`.**
+`ExitCode` is the same shape with a BUILTIN's name, and both spellings are exercised against it too, for
+that reason. ⚠ Its range is the compile TARGET's — `int(0 to u32.max)` on Windows, `int(0 to 255)` on
+Linux, macOS and WASI (`stdlib/Process.maxon`) — and this case is portable across that difference
+because what it needs from the alias is the SHAPE and not the bounds: non-negative, admitting zero, and
+unable to reach bit 63. Every one of those is true of both ranges, and the value cast through it is `8`.
+**MEASURED before the fix: every line below printed `0`.**
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias MachineWord = int(0 to u64.max)
@@ -1586,6 +1595,10 @@ error E3005: <fragment>:5:12: Value 3 is outside the range of 'NegativeOne' (int
 ```
 
 <!-- test: error.negative-value-renders-signed -->
+The second diagnostic is `ExitCode`'s, and its range is the compile TARGET's — `int(0 to u32.max)` on
+Windows, `int(0 to 255)` on Linux, macOS and WASI (`stdlib/Process.maxon`). Only the rendered bounds
+move; **what this case pins is the SIGNED rendering of the first line's negative bounds**, which no
+target argues about.
 ```maxon
 typealias BelowMinusOne = int(i64.min to -2)
 
@@ -1595,6 +1608,10 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
+error E3005: <fragment>:5:13: Value -1 is outside the range of 'BelowMinusOne' (int(-9223372036854775808 to -2))
+error E3005: <fragment>:6:2: Value -1 is outside the range of 'ExitCode' (int(0 to 255))
+```
+```Maxoncstderr:x64-windows
 error E3005: <fragment>:5:13: Value -1 is outside the range of 'BelowMinusOne' (int(-9223372036854775808 to -2))
 error E3005: <fragment>:6:2: Value -1 is outside the range of 'ExitCode' (int(0 to 4294967295))
 ```

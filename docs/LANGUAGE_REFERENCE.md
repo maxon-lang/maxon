@@ -516,7 +516,7 @@ end 'makePort'
 Functions with a ranged return type have their return values checked:
 - Returning a literal outside the range is a compile error
 - Returning a computed expression emits a runtime range check
-- Types whose range covers the full representation (e.g., `ExitCode`) are exempt
+- A check is elided only where the value's declared range provably fits the destination's — which a type whose range covers its full representation satisfies against everything. `ExitCode` is **not** such a type in general: its range is the compile target's (see Entry Point), so it is exempt on Windows and checked like any other narrow alias on Linux, macOS and WASI
 
 ```maxon
 typealias Score = int(0 to 100)

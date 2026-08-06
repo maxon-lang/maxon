@@ -698,6 +698,18 @@ end 'main'
 ```
 
 <!-- test: closure-capture.capture-exitcode-wide-value -->
+<!-- targets: x64-windows -->
+⚠ **A WINDOWS-LANE READING SINCE BATCH27.** `return 100000` is E3005 on every other target — `ExitCode`
+is `int(0 to 255)` there — so those lanes cannot express this program, which is what the `targets:`
+restriction says. It cannot be re-pinned on wasm through any other type, and the reason it cannot (plus
+the array-element route that looks like a substitute and measurably is not) is stated once, in
+`exit-code-range.md`'s *"What the narrowing costs the other lanes"*. ⚠ This one's subject is the ENV SLOT
+rather than the widen, and it is unreachable for a second, independent reason worth stating on its own:
+`envSlotStorageType` is a one-tag rule — it widens `exitCode` and passes every other declared type to
+`fieldStorageType`, which hands a `named` alias its 8-byte underlying. So `exitCode` is the only tag that
+ever arrives at this door narrow, and a user alias substituted here would ride a machine word before the
+rule ran. The sabotage this case describes would have nothing to truncate.
+
 The WIDTH half of the two cases above, and the reason they are not enough on their own. Both of them
 carry the value `9`, which fits in a single byte — so they pass unchanged even if `envSlotStorageType`
 hands the slot a 1-byte `boolean` instead of the machine word, on every target, clobbering nothing.

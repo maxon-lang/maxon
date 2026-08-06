@@ -116,16 +116,18 @@ VALUE (not on "is there a ranged parameter") and the second on clause 3.
 
 ### ⭐⭐ A value the destination PROVABLY ADMITS gets no check — the same containment E3010 reports (A4f)
 
-A `Byte = int(0 to u8.max)` returned from a `returns ExitCode` function cannot be outside
-`int(0 to 4294967295)`. **No range check is emitted there**, and the reason is not an optimization: the
-compiler *already says so out loud* at the neighbouring door. Write the cast and it refuses the program —
+A `Byte = int(0 to u8.max)` returned from a `returns ExitCode` function cannot be outside `ExitCode`'s
+range on **any** target — `int(0 to u32.max)` on Windows *strictly* contains `0 to 255`, and
+`int(0 to 255)` on Linux, macOS and WASI *is* `0 to 255`, which is contained in itself. **No range check
+is emitted there**, and the reason is not an optimization: the compiler *already says so out loud* at the
+neighbouring door. Write the cast and it refuses the program —
 
 ```text
 error E3010: unneeded cast: 'Byte' already fits in 'ExitCode'
 ```
 
-— which is a **proof** that the source range lies inside the destination. A runtime `0 ≤ x ≤ 4294967295`
-cascade behind that proof tests a value that cannot fail it, so **deleting the redundant cast used to ADD
+— which is a **proof** that the source range lies inside the destination. A runtime bounds cascade behind
+that proof tests a value that cannot fail it, so **deleting the redundant cast used to ADD
 a dead guard**: with the `as` the site recorded nothing, without it the implicit conversion guarded. The
 diagnostic and the emitter were answering one question from two places, and only one of them was reading
 the ranges.
@@ -665,7 +667,9 @@ Stack trace:
 
 <!-- test: range-check-panic.a-contained-return-emits-no-guard -->
 ⭐ **THE A4f REPRODUCER.** `pick` returns a `Byte`, `main` returns an `ExitCode`, and `int(0 to 255)` is
-inside `int(0 to 4294967295)` — so `main`'s `return` gets nothing. Its FRAGMENT is the evidence: `pick`
+inside `ExitCode`'s range on every target — strictly, under Windows' `int(0 to u32.max)`; as an equal
+range, under the `int(0 to 255)` Linux, macOS and WASI carry — so `main`'s `return` gets nothing on any
+of them. Its FRAGMENT is the evidence: `pick`
 keeps its own cascade (the `Integer` it computes from is NOT inside `Byte`, so that one is earned), and
 `main` is a `bl` and a `ret`. Writing `pick() as ExitCode` instead is E3010, which is the same fact said
 in words.
@@ -693,8 +697,9 @@ end 'main'
 <!-- test: range-check-panic.an-identical-range-return-emits-no-guard -->
 The boundary of the rule: the two ranges are the SAME range, which is contained in itself. Every `main`
 in the corpus that returns an `ExitCode`-returning call is this program, and every one of them used to
-carry a full `0 ≤ x ≤ 4294967295` cascade against a value that had just passed the identical cascade one
-frame down.
+carry a full bounds cascade against a value that had just passed the identical cascade one frame down.
+The rule is containment, so it does not care *which* range `ExitCode` carries on the target — only that
+the two ends of the `return` name the same one.
 ```maxon
 function code() returns ExitCode
   return 7

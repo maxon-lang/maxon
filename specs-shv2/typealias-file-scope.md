@@ -142,15 +142,24 @@ error E3005: <fragment>:5:14: Value 500 is outside the range of 'Milliseconds' (
 
 
 <!-- test: narrow-file-cast-still-rejected -->
-`a.maxon`'s `Limit` is `int(0 to 500)` and `b.maxon`'s is `int(0 to 2000)`. The cast in `a.maxon` is
+`a.maxon`'s `Limit` is `int(0 to 200)` and `b.maxon`'s is `int(0 to 2000)`. The cast in `a.maxon` is
 checked against `a.maxon`'s range and rejected. This is the direction where the WIDER alias would
 erase a guard the author wrote — the failure that returned 9 from this program.
 
 The diagnostic is anchored in **`a.maxon`**, the file that wrote the cast — never in `b.maxon`, which
 declares the same name over a different, wider range.
+
+⚠ **`a.maxon`'s BOUND IS INSIDE `ExitCode`'S NARROWEST PLATFORM RANGE, AND THAT IS DELIBERATE.** It was
+`int(0 to 500)` until BATCH27 made `ExitCode` `int(0 to 255)` on Linux, macOS and WASI — at which point
+`return v` stopped fitting and the program grew a SECOND E3005, naming `ExitCode`, on three of four
+targets. That second error is not this case's subject: the subject is *which file's `Limit` the cast in
+`a.maxon` is checked against*, and an incidental diagnostic about an unrelated builtin would sit in the
+expectation masking it. Pinning it per-target would have written the noise down in two places instead of
+removing it. `200` is under `255`, so `checkA`'s `return` is quiet on every target and the only
+diagnostic left is the one the case exists for.
 ```maxon
 // --- file: a.maxon
-typealias Limit = int(0 to 500)
+typealias Limit = int(0 to 200)
 
 export function checkA() returns ExitCode
 	let v = 600 as Limit
@@ -170,7 +179,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:6:14: Value 600 is outside the range of 'Limit' (int(0 to 500))
+error E3005: <fragment>:6:14: Value 600 is outside the range of 'Limit' (int(0 to 200))
 ```
 
 

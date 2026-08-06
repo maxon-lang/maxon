@@ -571,6 +571,14 @@ end 'main'
 ```
 
 <!-- test: where-clauses.witness-exitcode-return-high -->
+<!-- targets: x64-windows -->
+⚠ **A WINDOWS-LANE READING SINCE BATCH27, WHICH IS A REAL LOSS ON THE ONE LANE THIS CASE WAS ABOUT.**
+`return 4000000000` is E3005 on every other target — `ExitCode` is `int(0 to 255)` there — so those lanes
+cannot express this program, which is what the `targets:` restriction says. It cannot be re-pinned on
+wasm through any other type, and the reason it cannot (plus the array-element route that looks like a
+substitute and measurably is not) is stated once, in `exit-code-range.md`'s *"What the narrowing costs
+the other lanes"*.
+
 ⭐⭐ **AN `ExitCode` RETURNED THROUGH A WITNESS, ABOVE 2^31 (W1 review).** `ExitCode` is the only builtin
 type NAME whose tag carries a sub-64 width — a **u32** (`valueTagToStdType`) — and an interface stores its
 method return type as a rendered source STRING, so a witness dispatch RE-DERIVES that width from the name.

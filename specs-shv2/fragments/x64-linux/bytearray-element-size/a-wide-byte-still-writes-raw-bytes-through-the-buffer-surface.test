@@ -1,5 +1,5 @@
 // Test: a-wide-byte-still-writes-raw-bytes-through-the-buffer-surface
-typealias Byte = int(0 to 1000)
+typealias Byte = int(0 to u16.max)
 typealias Bytes = Array with Byte
 
 function takes(b Bytes) returns ExitCode
@@ -7,9 +7,9 @@ function takes(b Bytes) returns ExitCode
 end 'takes'
 
 function main() returns ExitCode
-	var buf = try __ManagedMemory.create(8, 1) otherwise return 1
-	try buf.setLength(4) otherwise return 2
-	try buf.setByte(0, 223) otherwise return 3
+	var buf = Bytes.create()
+	buf.push(0)
+	try buf.managed.setByte(0, 223) otherwise return 3
 	return takes(buf)
 end 'main'
 ---
@@ -41,8 +41,7 @@ func @takes {
     x64.jcc less, __rc_panic
     x64.jmp __rc_chk
   __rc_chk:
-    x64.movRegImm32 rax, 4294967295
-    x64.cmpRegReg r8, rax
+    x64.cmpRegImm32 r8, 255
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
   __rc_panic:
@@ -65,38 +64,13 @@ func @main {
     x64.pushReg rbx
     x64.pushReg r12
     x64.prologue 32
-    x64.movRegImm32 rcx, 8
-    x64.movRegImm32 rdx, 1
-    x64.callDirect __arr_mem_create
+    x64.movRegImm32 rcx, 2
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __arr_create
     x64.movRegReg rbx, r8
-    x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
-  tryerr:
-    x64.movRegImm32 r8, 1
-    x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  tryok:
-    x64.movRegImm32 rdx, 4
+    x64.movRegImm32 rdx, 0
     x64.movRegReg rcx, rbx
-    x64.callDirect __arr_set_length
-    x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
-  tryerr:
-    x64.movRegImm32 r12, 2
-    x64.movRegReg rcx, rbx
-    x64.callDirect __arr_decref
-    x64.movRegReg r8, r12
-    x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  tryok:
+    x64.callDirect __arr_push
     x64.movRegImm32 rdx, 0
     x64.movRegImm32 rax, 223
     x64.movRegReg rcx, rbx
@@ -120,24 +94,6 @@ func @main {
     x64.movRegReg r12, r8
     x64.movRegReg rcx, rbx
     x64.callDirect __arr_decref
-    x64.cmpRegImm32 r12, 0
-    x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
-  __rc_chk:
-    x64.movRegImm32 rax, 4294967295
-    x64.cmpRegReg r12, rax
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_1]
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  __rc_ok:
     x64.movRegReg r8, r12
     x64.epilogue 32
     x64.popReg r12

@@ -3609,6 +3609,14 @@ end 'main'
 ```
 
 <!-- test: first-class-function.exitcode-return-through-alias-high -->
+<!-- targets: x64-windows -->
+⚠ **A WINDOWS-LANE READING SINCE BATCH27, WHICH IS A REAL LOSS ON THE ONE LANE THIS CASE WAS ABOUT.**
+`return 4000000000` is E3005 on every other target — `ExitCode` is `int(0 to 255)` there — so those lanes
+cannot express this program, which is what the `targets:` restriction says. It cannot be re-pinned on
+wasm through any other type, and the reason it cannot (plus the array-element route that looks like a
+substitute and measurably is not) is stated once, in `exit-code-range.md`'s *"What the narrowing costs
+the other lanes"*.
+
 ⭐⭐ **THE WIDTH RECOVERED ABOVE 2^31 — THE CASE THE VALUE `9` CANNOT SEE (W1 review).** The case above
 proves an `ExitCode` returned through a function typealias is the right WIDTH; it cannot prove the
 right VALUE, because 9 is the same number under every extension rule. `ExitCode` is a **u32**
@@ -3649,6 +3657,14 @@ alias=4000000000
 ```
 
 <!-- test: first-class-function.exitcode-through-alias-computes-at-machine-width -->
+<!-- targets: x64-windows -->
+⚠ **A WINDOWS-LANE READING SINCE BATCH27, WHICH IS A REAL LOSS ON THE ONE LANE THIS CASE WAS ABOUT.**
+`return 4000000000` is E3005 on every other target — `ExitCode` is `int(0 to 255)` there — so those lanes
+cannot express this program, which is what the `targets:` restriction says. It cannot be re-pinned on
+wasm through any other type, and the reason it cannot (plus the array-element route that looks like a
+substitute and measurably is not) is stated once, in `exit-code-range.md`'s *"What the narrowing costs
+the other lanes"*.
+
 ⭐⭐ **AN OPERAND'S DECLARED TYPE IS NOT THE WIDTH THE OPERATION IS PERFORMED AT (X5 review).** The case
 above proves an `ExitCode` READ back through a function typealias is the right value. This one asks what
 happens when that value is then USED, and the answer had been: on `wasm32-wasi`, at 32 bits. `ExitCode`

@@ -1466,10 +1466,20 @@ a range wider than a byte is not by itself a reason to refuse a raw write, which
 had to be pulled back from — survives unchanged here: `int(0 to u16.max)` is wider than a byte and admits
 every value of the two-byte slot it was given.
 
-⚠ **THE RETURN NEEDS NEITHER A MASK NOR A CAST, AND UNDER X6 THAT IS A FACT ABOUT THE TYPE RATHER THAN A
-TIDY-UP.** `ExitCode` now carries `int(0 to u32.max)`, so `int(0 to u16.max)` fits it outright and
-`rangeCoversRange` would call an `as ExitCode` here what it calls the five X6 removed from this file: an
-unneeded cast. The `and u8.max` this case carried for one draft is dead for a second, arithmetic reason —
+⚠ **THE RETURN NEEDS NEITHER A MASK NOR A CAST — BUT THE REASON IS NOW THE PLATFORM'S, AND AN EARLIER
+DRAFT OF THIS PARAGRAPH STATED ONE PLATFORM'S REASON AS THE TYPE'S.** It read *"`ExitCode` now carries
+`int(0 to u32.max)`, so `int(0 to u16.max)` fits it outright"* — true on Windows and **inverted
+everywhere else** since BATCH27, where `ExitCode` is `int(0 to 255)` and `int(0 to u16.max)` does not
+fit it at all. The two lanes reach "no cast" by different routes, and the case behaves identically on
+both:
+
+- on **x64-windows**, `rangeCoversRange` proves the containment, so the return is elided and writing
+  `as ExitCode` here would be E3010 — an unneeded cast, exactly like the five X6 removed from this file;
+- on **Linux, macOS and WASI**, nothing is proved and the return carries the ordinary runtime guard
+  (`range-check-panic.md`). `223` is inside `int(0 to 255)`, so it passes — a guard is not a refusal, and
+  the assertion below is the same **223** on every target.
+
+The `and u8.max` this case carried for one draft is dead for a second, arithmetic reason —
 `push(0)` then `setByte(0, …)` leaves the HIGH byte zero, so there is nothing above `u8.max` to mask off.
 The case that genuinely reads a two-byte slot back is `a-raw-byte-write-is-accepted-when-the-element-fills-
 its-two-byte-slot`, which writes at offset 1 and asserts **57089**.
@@ -1908,6 +1918,12 @@ error E3118: <fragment>:12:16: 'setByte' writes a RAW BYTE at a byte OFFSET, so 
 
 <!-- test: error.a-raw-byte-write-is-refused-on-an-exit-code-element -->
 ### An `ExitCode` element has no value set this compiler can compare a slot against
+⚠ `ExitCode`'s range is the compile TARGET's since BATCH27 — `int(0 to u32.max)` on Windows,
+`int(0 to 255)` on Linux, macOS and WASI (`stdlib/Process.maxon`) — so the range this diagnostic prints
+is platform-shaped and the case carries a `` ```Maxoncstderr:x64-windows `` block for it. **The SLOT is
+not**: an `ExitCode` element takes 8 bytes on every target, which is why the refusal itself is one fact
+and not two. The element admits neither range's worth of an 8-byte slot, and the narrower range makes it
+*less* able to, so the direction of the refusal cannot move.
 ```maxon
 typealias Codes = Array with ExitCode
 
@@ -1919,6 +1935,9 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
+error E3118: <fragment>:7:16: 'setByte' writes a RAW BYTE at a byte OFFSET, so what the element's own accessors read back is any bit pattern of its 8-byte slot — every value of int(0 to 18446744073709551615). The element 'ExitCode' (int(0 to 255)) does not admit all of them. Widen the element's declared range to cover its whole slot, or store through the `Array` surface's `set`, which range-checks each value against the element
+```
+```Maxoncstderr:x64-windows
 error E3118: <fragment>:7:16: 'setByte' writes a RAW BYTE at a byte OFFSET, so what the element's own accessors read back is any bit pattern of its 8-byte slot — every value of int(0 to 18446744073709551615). The element 'ExitCode' (int(0 to 4294967295)) does not admit all of them. Widen the element's declared range to cover its whole slot, or store through the `Array` surface's `set`, which range-checks each value against the element
 ```
 

@@ -160,6 +160,13 @@ end 'main'
 ```
 
 <!-- test: compare-against-a-literal-keeps-the-operand-width -->
+<!-- targets: x64-windows -->
+⚠ **A WINDOWS-LANE READING SINCE BATCH27.** `return 4000000000` is E3005 on every other target —
+`ExitCode` is `int(0 to 255)` there — so those lanes cannot express this program, which is what the
+`targets:` restriction says. It cannot be re-pinned on wasm through any other type, and the reason it
+cannot (plus the array-element route that looks like a substitute and measurably is not) is stated once,
+in `exit-code-range.md`'s *"What the narrowing costs the other lanes"*.
+
 ⭐⭐ **A COMPARE AGAINST A LITERAL IS A DIFFERENT INSTRUCTION, AND IT MUST NOT BE A DIFFERENT
 QUESTION (X5).** `foldConstOperands` rewrites `e > 100` into the immediate form, and the immediate
 form used to carry no operand TYPE — so a backend that does not keep every value in a 64-bit register

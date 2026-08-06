@@ -9,10 +9,29 @@ category: runtime
 
 ## Documentation
 
-`ExitCode` is a **narrow declared type** — the compiler gives it a 32-bit unsigned representation, so
-its range is `int(0 to 4294967295)`. It is a builtin rather than a `typealias` the program writes, and
-that is the only thing that distinguishes it from `typealias Percent = int(0 to 100)`. **It is not a
-distinction the range rule may see.**
+`ExitCode` is a **narrow declared type**, and its range is **the compile TARGET's**: `int(0 to u32.max)`
+on Windows, `int(0 to 255)` on Linux, macOS and WASI — the platform's own exit-status domain, which is
+what `stdlib/Process.maxon` has always said and what `docs/LANGUAGE_REFERENCE.md` states at the entry
+point. It is a builtin rather than a `typealias` the program writes, and that is the only thing that
+distinguishes it from `typealias Percent = int(0 to 100)`. **It is not a distinction the range rule may
+see.**
+
+⭐⭐ **THE RANGE IS NOT THE WIDTH, AND THE SENTENCE THAT STOOD HERE DERIVED ONE FROM THE OTHER.** It read
+*"the compiler gives it a 32-bit unsigned representation, **so** its range is `int(0 to 4294967295)`"* —
+which is the whole defect BATCH27 fixed, written down as a definition. The two are separate facts and
+only one of them is platform-shaped:
+
+- the **WIDTH is `u32` on every target** (`valueTagToStdType`), and deliberately stays there;
+- the **RANGE is the platform's**, and on three of four targets it is far narrower than the width.
+
+⛔ **THE RANGE BEING NARROWER THAN THE SLOT IS WHAT MAKES THE ENTRY GUARD WORK, so the width may not
+follow the range down.** The runtime half of the call-argument door is a guard at the CALLEE'S ENTRY
+(`A1f`), which reads the value out of the parameter slot *after* the ABI has narrowed it. A guard can
+only see a truncation while the slot is WIDER than the range: give `ExitCode` a `u8` slot on a POSIX
+lane and `takes(opaque(0) - 5)` arrives as `251`, which is inside `int(0 to 255)`, and the guard passes
+a value the program never wrote. `Project.maxon`'s `ExitCode` seed and
+`Targets/Wasm/StdToWasm.maxon`'s `coerceOnStack` both carry that argument at the two places someone
+would reach for the narrower slot.
 
 So every obligation `range-check-panic.md` states for a ranged typealias is `ExitCode`'s too, at every
 position a value meets one — a `return`, an explicit `as`, a call argument, a struct field, an array
@@ -37,11 +56,92 @@ representation until the two agreed would have made the declared type a lie abou
 left every out-of-range value silently accepted on both. The range is the type's promise, so the range
 is what is enforced.
 
+⚠ **AND X6 THEN WROTE THE WIDTH'S SPAN DOWN AS THE RANGE, WHICH IS WHERE BATCH27 CAME IN.** X6's story
+above is unchanged and still true — the missing check was the defect, and X6 built the check. What X6
+also did was answer *"what range?"* with *"whatever the `u32` slot spans"*, so the builtin's declared
+range became `int(0 to u32.max)` on every target. That number was never the language's: it was the
+representation's, read off the slot the lowering happened to pick, and it disagreed with
+`stdlib/Process.maxon`, with `docs/LANGUAGE_REFERENCE.md` and with the oracle — all three of which key
+the exit-status domain by the OS, because the OS is what defines it.
+
+⭐ **AND ONE SPEC IN THIS CORPUS GOT THERE FIRST, WHICH IS WHY THIS WAS FINDABLE AT ALL.**
+`function-overloads.md`'s `enum-raw-value-argument` already states the platform rule correctly — *"`ExitCode`
+is `int(0 to u32.max)` on Windows but `int(0 to 255)` on Linux, macOS and wasi (`stdlib/Process.maxon`)"* —
+and it says so because a case there was RED on every non-Windows target until its addends were made small.
+It predates this rung and is the one `ExitCode`-range sentence in the corpus that needed no correction; the
+rest of the corpus was quoting shv2's own answer back at itself.
+
+**Deriving the range from the width did not merely quote a wrong number; it made two doors unable to
+refuse anything.** At `u32` width `int(0 to u32.max)` **is** the full span of the slot, so *every bit
+pattern is in range*: there is no predicate that separates a wrapped `-5` from an honest `4294967291`,
+and no check standing anywhere on that value can fire. That is why this spec spent a rung asserting the
+call-argument door could not be closed without moving the guard to the call site (see below) — the
+missing mechanism was never a Std-IR argument position. It was a range that said something.
+
+## ⭐⭐ WHAT THE NARROWING COSTS THE OTHER LANES, AND WHY NOTHING BUYS IT BACK
+
+`ExitCode` was carrying a second job that had nothing to do with exit codes. **`valueTagToStdType` maps
+exactly ONE tag — `exitCode` — to `StdType.u32`; every other tag it can return is `i1`, `f64` or `i64`.**
+So `ExitCode` is the only INTEGER type in the language whose *values* are narrower than a machine word —
+`bool`'s `i1` is the other narrow one and can hold nothing above 1 — and it became the vehicle for six
+cases that pin the behaviour of a narrow value slot on `wasm32-wasi`, where such a value lives in an
+`i32` local and has to be widened back:
+
+| case | property |
+|---|---|
+| `first-class-functions/first-class-function.exitcode-return-through-alias-high` | the widen at a DIRECT call result and at a FUNCTION-TYPEALIAS call result |
+| `where-clauses/where-clauses.witness-exitcode-return-high` | the widen at a WITNESS dispatch result |
+| `first-class-functions/first-class-function.exitcode-through-alias-computes-at-machine-width` | `*`, `not`, `shl` and `>` on an alias-tagged narrow value, immediate and register forms |
+| `comparison-operators/compare-against-a-literal-keeps-the-operand-width` | a folded immediate compare taking its width from the left operand |
+| `division/divide-a-value-whose-declared-type-is-narrower-than-a-machine-word` | `div`/`mod`, which carry no operand type |
+| `closure-capture/closure-capture.capture-exitcode-wide-value` | the closure ENV slot's width |
+
+All six carry a value the platform range no longer admits (`4000000000`, or `100000` for the env slot),
+so all six are now **`<!-- targets: x64-windows -->`** — the honest marker, because those programs are
+*illegal* on POSIX rather than untested there.
+
+⛔⛔ **AND THE READING THEY CARRIED IS NOT MERELY UNTESTED ON WASM NOW — IT IS UNREACHABLE, WHICH IS A
+STRONGER THING AND A MORE FRAGILE ONE. IT IS WRITTEN DOWN HERE BECAUSE IT IS WHAT A FUTURE RUNG WOULD
+BREAK.** The argument is two lines and both are premises, not observations:
+
+1. **`exitCode` is the sole producer of a narrow VALUE type.** `StdType.u32` has two construction sites:
+   `valueTagToStdType`'s `exitCode` arm, and `stdTypeOfAbiClass`, which re-derives it from the narrow BIT
+   that arm put there. A user `typealias U32 = int(0 to u32.max)` is a `named` tag and lowers to
+   `StdType.i64`.
+2. **On Linux, macOS and WASI `ExitCode` admits `[0, 255]`**, and a signed widen first disagrees with an
+   unsigned one at `2^31`. The band is empty.
+
+⇒ **no legal program on those lanes can put a value in the disagreeing band.** The defect class is closed
+by construction there rather than by a case, and it stays closed only while BOTH premises hold: if P1.9
+gives some other value a sub-64 Std type, or a later rung widens the POSIX range past `2^31`, these six
+readings need a new vehicle and the wasm lane has no guard until they get one.
+
+⚠ **AN ARRAY ELEMENT LOOKS LIKE THAT VEHICLE AND IS NOT — MEASURED, and the measurement is the point.** A
+`u32`-ranged element genuinely gets a **4-byte STORAGE slot** (`rangedAliasStorageBytes` = 4, visible as
+the `i64.const 4` handed to `__arr_create`), and a `4000000000` pushed through one reads back identically
+on the host and on wasm. That is a true measurement of a *different* property. **The STORAGE width is not
+the VALUE width:** `__arr_get` is `(param i64 i64) (result i64 i64)`, the loaded element never occupies an
+`i32` local, and the emitted `main` for such a program contains **zero** `extend_i32` instructions of
+either signedness — `coerceOnStack` is never asked. A case built on that route would pass with the
+sign-extension defect fully present, which makes it a positive control and not a guard. It is not added,
+and this paragraph is here so the next reader does not re-derive the attractive wrong answer.
+
+⛔ **`Targets/Wasm/StdToWasm.maxon`'s `coerceOnStack` header CONTRADICTS the paragraph above and is the
+one that is wrong.** It states that the widen "stays reachable on wasm by a route that is not
+platform-shaped: a `u32`-RANGED ARRAY ELEMENT … The widen did not become untestable here; only `ExitCode`
+stopped being able to spell it." Its measurement — the 4-byte slot, and the value agreeing across
+targets — is real; its conclusion does not follow from it, for the reason above, and the disassembly is
+the arbiter. **The comment is outside this rung's file list and is reported rather than edited**; when it
+is corrected, this paragraph is what it should be corrected to.
+
 ## Tests
 
 <!-- test: error.negative-literal-return -->
-The reproducer. `-1` is a literal, `ExitCode` starts at 0, and the two facts are both in hand at the
-`return`.
+The reproducer. `-1` is a literal, `ExitCode` starts at 0 on every platform, and the two facts are both
+in hand at the `return`. The **lower** bound is the one part of the range no target argues about, so this
+case would read identically on every lane were the diagnostic not obliged to print the whole range — which
+is why it, and the three below it, carry a `` ```Maxoncstderr:x64-windows `` block beside the portable one.
+The portable block is the POSIX text; the qualified block wins on Windows.
 ```maxon
 function negOne() returns ExitCode
   return -1
@@ -54,6 +154,9 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
+error E3005: <fragment>:3:3: Value -1 is outside the range of 'ExitCode' (int(0 to 255))
+```
+```Maxoncstderr:x64-windows
 error E3005: <fragment>:3:3: Value -1 is outside the range of 'ExitCode' (int(0 to 4294967295))
 ```
 
@@ -68,12 +171,19 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
+error E3005: <fragment>:3:14: Value -1 is outside the range of 'ExitCode' (int(0 to 255))
+```
+```Maxoncstderr:x64-windows
 error E3005: <fragment>:3:14: Value -1 is outside the range of 'ExitCode' (int(0 to 4294967295))
 ```
 
 <!-- test: error.literal-past-the-upper-bound -->
-And at the top of the range, which is the bound the 32-bit representation actually sets. `4294967296` is
-`u32.max + 1`.
+And at the top of the range — the bound that is **platform-shaped**, unlike the `0` the two cases above
+meet. `4294967296`
+is chosen because it is past the upper bound on *every* target and is therefore one case rather than
+two: it is `u32.max + 1` on Windows, and on Linux, macOS and WASI it is far past the meaningful
+boundary, which there is `256`. Only the range the diagnostic PRINTS differs, which is what the
+qualified block carries.
 ```maxon
 function tooBig() returns ExitCode
   return 4294967296
@@ -86,6 +196,9 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
+error E3005: <fragment>:3:3: Value 4294967296 is outside the range of 'ExitCode' (int(0 to 255))
+```
+```Maxoncstderr:x64-windows
 error E3005: <fragment>:3:3: Value 4294967296 is outside the range of 'ExitCode' (int(0 to 4294967295))
 ```
 
@@ -102,6 +215,9 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
+error E3005: <fragment>:7:10: Value -3 is outside the range of 'ExitCode' (int(0 to 255))
+```
+```Maxoncstderr:x64-windows
 error E3005: <fragment>:7:10: Value -3 is outside the range of 'ExitCode' (int(0 to 4294967295))
 ```
 
@@ -131,7 +247,15 @@ end 'main'
 ```
 
 <!-- test: both-bounds-are-reachable-values -->
-The two ends of the range are ordinary values, on every target — this is the band where a signed and an
+<!-- targets: x64-windows -->
+⭐ **THE CLAIM IS "BOTH ENDS ARE ORDINARY VALUES", AND SINCE BATCH27 THE TOP END IS A DIFFERENT NUMBER PER
+PLATFORM — so this is a TWIN PAIR, not one case with a marker.** A single case would have to pick one
+platform's top bound and would then be asserting the claim on one lane only; two cases assert it on all
+four. The bound is a `targets:` restriction rather than a `` ```Stdout: `` fence because `4294967295` is
+not merely *printed* differently on POSIX — it is **not a legal `ExitCode` there at all**, so the program
+does not compile and there is no stdout to name. That is exactly what a `targets:` omission is for.
+
+This is the Windows half: `int(0 to u32.max)`, whose top bound sits in the band where a signed and an
 unsigned reading of the same 32 bits disagree, and both readings must print the unsigned one.
 ```maxon
 function main() returns ExitCode
@@ -143,6 +267,23 @@ end 'main'
 ```
 ```stdout
 low=0 high=4294967295
+```
+
+<!-- test: both-bounds-are-reachable-values-on-posix -->
+<!-- targets: x64-linux, arm64-macos, arm64-linux, wasm32-wasi -->
+The POSIX half of the pair above: the same claim against `int(0 to 255)`. `255` is the top of the
+platform's exit-status domain and an ordinary value — the range is narrower than the `u32` slot it rides
+in, and a bound being far from its slot's edge is not a reason for it to be unreachable.
+```maxon
+function main() returns ExitCode
+  let low = 0 as ExitCode
+  let high = 255 as ExitCode
+  print("low={low} high={high}\n")
+  return 0
+end 'main'
+```
+```stdout
+low=0 high=255
 ```
 
 <!-- test: computed-negative-return-panics -->
@@ -201,35 +342,48 @@ end 'main'
 7
 ```
 
-### ⛔ ONE DOOR IS NOT CLOSED, AND IT IS THE ONE WHERE THE ABI NARROWS BEFORE THE GUARD RUNS
+### ⭐⭐ THE DOOR WHERE THE ABI NARROWS BEFORE THE GUARD RUNS — CLOSED, AND NOT BY THE CURE THIS SECTION USED TO NAME
 
-Every door above guards the value while it is still a full machine word: a `return`'s guard runs before
+Every door here guards the value while it is still a full machine word: a `return`'s guard runs before
 the `ret` narrows to the u32 return slot, a cast's before the value is used, a struct field's before the
 store (a field declared `ExitCode` takes `alias.underlying`, an 8-byte slot, and an env slot is widened
-outright by `envSlotStorageType`). **The call ARGUMENT is the single exception**, and the reason is
-structural rather than an oversight:
+outright by `envSlotStorageType`). **The call ARGUMENT is the one door whose guard reads the value AFTER
+a narrowing** — `A1f` put the runtime half at the **callee's entry**, one guard per narrowed parameter,
+standing in front of every caller including the indirect ones — and that rests on a premise a narrowing
+ABI falsifies: *the value the callee sees is the value the caller passed.* **MEASURED:**
+`takes(opaque(0) - 5)` arrives inside `takes` as `4294967291` on wasm, byte-for-byte the *legitimate*
+`takes(opaque(4294967291))`. x64 refuses `-5` only because its registers never narrowed it.
 
-`A1f` moved the argument door's runtime half to the **callee's entry** — one guard per narrowed parameter,
-standing in front of every caller including the indirect ones. That rests on a premise nothing had ever
-falsified: *the value the callee sees is the value the caller passed.* An `ExitCode` parameter is the
-first parameter whose **Std type is narrower than a machine word** (`u32`), so on a target whose ABI
-narrows at the boundary the premise is false — and it is false in the one way no callee-side check can
-repair. **MEASURED:** `takes(opaque(0) - 5)` arrives inside `takes` as `4294967291` on wasm, which is
-byte-for-byte the *legitimate* `takes(opaque(4294967291))`. At `u32` width `int(0 to u32.max)` is the FULL
-range: every bit pattern is in range, so there is no predicate that separates the two. x64 refuses `-5`
-only because its registers never narrowed it.
+⛔⛔ **THIS SECTION USED TO CONCLUDE "⇒ THE GUARD HAS TO MOVE TO THE CALLER", AND THAT WAS WRONG — the
+diagnosis, not the observation.** The observation above is exact and stands. What did not survive is the
+cure it was read as needing: an argument position in the Std IR for every argument (the side table records
+only CONSTANT ones today, `recordConstantArgRangeChecks`) plus an answer to the indirect-call question
+`A1f` chose the entry to solve. **None of that was built and none of it was needed.**
 
-⇒ **The guard has to move to the caller for this one door** — the check belongs where the lossy
-conversion is decided, which is the call site. That is not a line here: it needs an argument position in
-the Std IR for every argument (the side table records only CONSTANT ones today, `recordConstantArgRangeChecks`),
-and it has to answer the indirect-call question A1f chose the entry to solve. It is its own rung. The
-compile-time half of this door is unaffected and closed on every target — `takes(-3)` above never builds.
+Read the sentence the old text argued from: *"at `u32` width `int(0 to u32.max)` **is** the FULL range,
+so every bit pattern is in range and there is no predicate that separates the two."* That is true — and
+it is a statement about **the range**, not about where the guard stands. The identity existed only
+because X6 derived the RANGE from the WIDTH. Give `ExitCode` its true platform range and the two values
+stop being the same value: `4294967291` is outside `int(0 to 255)`, and the entry guard X6 already built
+separates them at the entry, where it already stood. **BATCH27 closed this door by narrowing the range
+and changing nothing about the guard's position.**
+
+⚠ **AND HERE IS WHAT WOULD RE-BREAK IT, because the cure is a RELATION between two numbers rather than a
+number.** A guard at the callee's entry can only see a truncation while the **slot is WIDER than the
+range**. `ExitCode`'s slot is deliberately still `u32` on every target: put a `u8` slot under it on a
+POSIX lane — the width that "obviously" matches an `int(0 to 255)` — and `-5` arrives as `251`, which is
+*inside* the range, and the guard passes it. The wrong answer returns wearing a check.
+`Targets/Wasm/StdToWasm.maxon`'s `coerceOnStack` carries the same warning at the place someone would
+reach for that `u8`.
+
+⚠ The compile-time half of this door was never affected and is closed on every target — `takes(-3)`
+above never builds.
 
 <!-- test: computed-argument-is-guarded-at-the-callee-entry -->
 <!-- targets: x64-windows, x64-linux -->
-The half that DOES hold: where the ABI passes the argument at full width, the entry guard refuses it, and
-the panic names the parameter's own declaration line rather than the caller's — one guard serves every
-call site, so the caller's line is not a fact it holds.
+The half that held even before the range was narrowed: where the ABI passes the argument at full width,
+the entry guard refuses it, and the panic names the parameter's own declaration line rather than the
+caller's — one guard serves every call site, so the caller's line is not a fact it holds.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -256,17 +410,25 @@ Stack trace:
   in mrt_start
 ```
 
-<!-- disabled-test: computed-argument-is-guarded-on-a-narrowing-abi -->
-<!-- a rung that moves the call-argument door's RUNTIME half back to the CALL SITE -->
+<!-- test: computed-argument-is-guarded-on-a-narrowing-abi -->
 <!-- targets: wasm32-wasi -->
-The wasm twin of the case above, and the exact shape of the missing mechanism. It is the identical
-program; only the lane differs. It is shelved rather than deleted because a gap nothing states is a gap
-nobody finds again — this case going green is what will say the door is closed.
+⭐⭐ **THE CASE THIS RUNG EXISTED TO TURN GREEN, AND IT WENT GREEN WITHOUT A LINE OF NEW MECHANISM.** The
+wasm twin of the case above — the identical program; only the lane differs, and on this lane the ABI
+narrows the argument to `i32` before the callee's guard ever sees it. It was DISABLED rather than given a
+`targets:` line that omits wasm, because the two say different things: a `targets:` omission reads as
+"this lane cannot express the program", and this lane expressed it perfectly and got the wrong answer.
+It used to exit **251** — `-5` truncated to `u32` and then masked to a byte by WASI — with no diagnostic.
 
-⚠ It is DISABLED, not marked with a `targets:` line that quietly omits wasm, because the two say
-different things: a `targets:` omission reads as "this lane cannot express the program", and this lane
-expresses it perfectly and gets the wrong answer. Today it exits **251** — `-5` truncated to `u32` and
-then masked to a byte by WASI — with no diagnostic.
+It is kept as a SEPARATE case from its x64 sibling rather than merged into one portable case because the
+two pin different facts: the sibling says the guard catches a value the ABI *did not* touch, this one
+says it still catches a value the ABI *did* narrow. A single portable case would assert the weaker of the
+two on every lane and the stronger one nowhere.
+
+⚠ **WHAT MADE IT PASS WAS THE RANGE, NOT THE GUARD'S POSITION** — see the section above. The truncated
+`-5` still arrives as `4294967291`; what changed is that `4294967291` is no longer a value `ExitCode`
+admits on this lane, so the guard that was already standing at the entry has something to refuse. The
+shelving note said the fix was "a rung that moves the call-argument door's RUNTIME half back to the CALL
+SITE"; that was a diagnosis written from the symptom, and it named a mechanism that never had to exist.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
