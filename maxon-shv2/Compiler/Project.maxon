@@ -936,11 +936,10 @@ function builtinStdlibAlias(name ByteArray, low ParsedInt, high ParsedInt, declP
 	return compilerSuppliedIntAlias(name, low: low, high: high, declFilePath: declPath)
 end 'builtinStdlibAlias'
 
-// ⭐⭐ **THE BUILTIN `ExitCode`'S RANGE, WRITTEN AS DATA (X6).** `ExitCode` is a NARROW DECLARED TYPE —
-// `valueTagToStdType` gives it `StdType.u32` and nothing else — so the values it admits are `0 to
-// u32.max` and no others. Until this rung that range existed nowhere a check could read it: it was a
-// SENTENCE, in `Parser.valueIsUnsigned`'s header ("`exitCode` — `int(0 to u32.max)`"), beside a width
-// chosen three tiers down.
+// ⭐⭐ **THE BUILTIN `ExitCode`'S RANGE, WRITTEN AS DATA (X6).** `ExitCode` is a NARROW DECLARED TYPE, and
+// until X6 the values it admits existed nowhere a check could read them: they were a SENTENCE, in
+// `Parser.valueIsUnsigned`'s header ("`exitCode` — `int(0 to u32.max)`"), beside a width chosen three
+// tiers down.
 //
 // ⛔ **MEASURED, and the two targets did not even agree on the wrong answer.** `function negOne()
 // returns ExitCode  return -1` compiled clean and printed **-1 on x64-windows** and **4294967295 on
@@ -953,22 +952,87 @@ end 'builtinStdlibAlias'
 // It is the SAME defect `RangedAliasRegistry.create`'s `Codepoint` seed closed for a name shv2 could not
 // load — *"`insertRangeChecks` guards a RETURN through a ranged alias and can only find a range a
 // registry holds"* — arriving at the one narrow type the compiler declares for itself.
+//
+// ⭐⭐ **AND X6 WROTE DOWN ONE PLATFORM'S ANSWER (BATCH27).** `u32.max` is WINDOWS'.
+// `stdlib/Process.maxon:7-16` declares the type under `#if os(Windows)` and gives every other OS
+// `int(0 to 255)`: a POSIX exit status is a byte, and WASI shares that bound because
+// `wasi:cli/exit.exit-with-code` takes a `u8` — v1 states it where it emits the call
+// (`maxon-selfhosted/Targets/Wasm/MirToWasm.maxon:2675-2684`: *"wasmtime masks to the low 8 bits, so the
+// maxon ExitCode (0..255) round-trips"*). ⛔ **MEASURED against the single bound this held before:
+// `return 4294967295 as ExitCode` compiled clean for wasm32-wasi and the process exited 255.** The
+// program declared one number, the OS got another, and no diagnostic named the difference.
+//
+// ⭐ **THIS IS A MIRROR OF A DECLARATION, NOT A SECOND AUTHORITY — and it retires without being edited.**
+// `stdlib/Process.maxon` is not on shv2's stdlib whitelist (it is blocked on
+// `__Builtins.executablePath`, and on declaring `ExitCode`, a name this compiler owns), so there is no
+// loaded file to read the bound out of and the mirror is the only copy that can exist today. The builtin
+// is the LAST arm of `lookup`, BELOW every declaration — so on the day that module is listed, its
+// `typealias` answers and this stops being consulted.
+//
+// ⭐ **THE BOUND IS RESOLVED WHERE THE TARGET IS KNOWN — AT REGISTRY CONSTRUCTION.** `lookup` holds no
+// project and no target; `Project` holds one, and its own header states the licence: a project *"is
+// aimed once and never re-aimed — two targets are two `Project`s"*. The bootstrap oracle reached the
+// same conclusion from the other end and paid for it first: `maxon-sharp/Compiler/0-Compiler.cs:1266-1281`
+// keys its parsed-stdlib cache BY TARGET because *"a single shared module would bake the BUILD MACHINE's
+// OS into a cross-compiled binary's stdlib"*, and its `#if os(...)` resolves against an injected target
+// OS rather than the host (`2-Parser.cs:25883-25896`); `TargetRunHost.cs:48-56` records the host-baked
+// version as a real bug it had to fix.
+//
+// ⛔⛔ **THE RANGE NARROWS; THE SLOT DOES NOT — AND THE ORACLE DIVERGES HERE, DELIBERATELY.**
+// `maxon-sharp/Compiler/StdlibTargetSelfTest.cs:31-159` is a machine-checked self-test asserting that
+// `main`'s IR return type is `u32` on Windows and **`u8`** on macOS/Linux: in the oracle the WIDTH follows
+// the range. shv2 must not copy that, and `A1f` is the reason. The oracle guards at the COERCION POINT,
+// at full width, BEFORE the truncation (`2-Parser.cs:16909-16911` → `ValidateAndEmitRangeCheck`
+// `:19977-20029`), so a narrow slot costs it nothing. shv2 puts the runtime half of the call-argument
+// door at the CALLEE'S ENTRY instead — one guard covering every call site, direct, indirect and witness
+// alike (`IR/Std/InsertRangeChecks.maxon:385-397`) — and an entry guard reads the value out of the SLOT,
+// after the ABI has already narrowed it. ⇒ **the slot must be WIDER than the range or the guard cannot
+// see the truncation that already happened.** With a `u8` slot on wasm, `takes(opaque(0) - 5)` arrives as
+// 251, which is INSIDE `0 to 255`; the guard would pass and the wrong answer would be silent again.
+// (MEASURED, with a `typealias Wide = int(0 to 100000)` standing in for the type: range < slot panics at
+// the entry on wasm32-wasi, which is exactly the mechanism this bound switches on.)
+//
+// ⇒ `valueTagToStdType` keeps `ExitCode` at `StdType.u32` and `primitiveTypeByteSize(exitCode)` keeps 4,
+// on EVERY target, and neither may start to derive from the bounds below. A guard narrower than its slot
+// is what every ranged alias in the language already is — `int(0 to 100)` rides an i64, and `lookup`'s
+// header spells that argument out in full.
 let ExitCodeAliasLow = 0 as ParsedInt
-let ExitCodeAliasHigh = U32MaxBound
+// The byte-sized POSIX status shared by Linux, macOS and WASI — the `#else` arm of the declaration
+// mirrored above.
+let PosixExitCodeAliasHigh = 255 as ParsedInt
 
-// ⭐ **THE RANGE AND THE WIDTH ARE ONE FACT, AND THIS IS THE CHECK BETWEEN THE TWO COPIES.** The bounds
-// above are `u32`'s span written in the range's vocabulary; `primitiveTypeByteSize(exitCode)` is the same
-// width written in the layout's. Nothing derives either from `valueTagToStdType`'s `StdType.u32`, which is
-// where the width actually lives — so what keeps them together is that a change to one is caught HERE
-// rather than surfacing as a guard admitting values the storage cannot hold. Asked once per registry
-// construction, which is twice per compile.
-function requireExitCodeRangeMatchesItsWidth()
-	let rangeBytes = rangedAliasStorageBytes(ExitCodeAliasLow, high: ExitCodeAliasHigh)
+// The platform shape, spelled ONCE. A `match` over `Os` rather than a "Windows or not" test, for
+// `cpuCanonicalName`'s reason: a fifth OS must be unable to arrive without an arm being written here,
+// where an `else` would quietly hand it Windows' bound or POSIX's.
+function exitCodeAliasHigh(os Os) returns ParsedInt
+	return match os 'os'
+		windows gives U32MaxBound
+		linux gives PosixExitCodeAliasHigh
+		macos gives PosixExitCodeAliasHigh
+		wasi gives PosixExitCodeAliasHigh
+	end 'os'
+end 'exitCodeAliasHigh'
+
+// ⭐ **THE RANGE MUST FIT THE SLOT, AND THIS IS THE CHECK BETWEEN THE TWO COPIES.**
+// `primitiveTypeByteSize(exitCode)` is the slot's width written in the layout's vocabulary, and nothing
+// derives it from the bound above — so what keeps the two together is that a change to either is caught
+// HERE rather than surfacing as a guard admitting values the storage cannot hold. Asked once per registry
+// construction, every one of which is on a cold path.
+//
+// ⚠ **ITS SUBJECT CHANGED WITH THE BOUND (BATCH27): it demanded EQUALITY, and equality was only ever true
+// because the range was Windows'.** On a POSIX target `0 to 255` needs ONE byte against a four-byte slot,
+// and that inequality is the mechanism rather than a tolerance it has to forgive — the entry guard above
+// can only separate a truncated value from an honest one while range < slot. (Equality is precisely the
+// condition under which the two are the same bits, which is why Windows cannot separate them and does not
+// need to: at u32 width nothing truncates on the way in.) What remains an error, and is what is tested, is
+// a range the slot CANNOT hold — a guard admitting values that would be silently cut down on every store.
+function requireExitCodeRangeFitsItsWidth(high ParsedInt)
+	let rangeBytes = rangedAliasStorageBytes(ExitCodeAliasLow, high: high)
 	let widthBytes = primitiveTypeByteSize(ValueTypeTag.exitCode)
-	if rangeBytes != widthBytes 'rangeAndWidthDisagree'
-		panic("requireExitCodeRangeMatchesItsWidth: the builtin `ExitCode` range needs a {rangeBytes}-byte slot but `primitiveTypeByteSize` gives the tag {widthBytes} — the range and the width are one fact and one of them moved")
-	end 'rangeAndWidthDisagree'
-end 'requireExitCodeRangeMatchesItsWidth'
+	if rangeBytes > widthBytes 'rangeOutgrowsItsWidth'
+		panic("requireExitCodeRangeFitsItsWidth: the builtin `ExitCode` range 0 to {high} needs a {rangeBytes}-byte slot but `primitiveTypeByteSize` gives the tag {widthBytes} — a range wider than its own storage guards nothing, because every value it admits is truncated on the way in")
+	end 'rangeOutgrowsItsWidth'
+end 'requireExitCodeRangeFitsItsWidth'
 
 // ⭐ **THE BUILTIN ALIAS ITSELF — built from the caller's own name and the caller's own file.**
 //
@@ -986,8 +1050,12 @@ end 'requireExitCodeRangeMatchesItsWidth'
 // `alias.declFilePath` is ever handed a path the sweep did not visit — which is exactly the hole
 // `seededStdlibAliasDeclFiles` exists to patch for the two aliases the compiler supplies on the
 // STDLIB's behalf, and which a builtin therefore never opens.
-function builtinExitCodeAlias(name ByteArray, readerFilePath FilePath) returns RangedTypeAlias
-	return compilerSuppliedIntAlias(name, low: ExitCodeAliasLow, high: ExitCodeAliasHigh, declFilePath: readerFilePath)
+//
+// ⚠ **THE HIGH BOUND IS PASSED IN, not read from a constant, because it is the TARGET's** — see the seed
+// above. It is the registry's, resolved once when the registry was built, so every lookup in one compile
+// answers with one platform's range by construction rather than by every caller remembering to ask.
+function builtinExitCodeAlias(name ByteArray, readerFilePath FilePath, high ParsedInt) returns RangedTypeAlias
+	return compilerSuppliedIntAlias(name, low: ExitCodeAliasLow, high: high, declFilePath: readerFilePath)
 end 'builtinExitCodeAlias'
 
 // ⭐ **MAY `readerFilePath` NAME THIS DECLARATION (P1.9)?** Three tiers, no exceptions:
@@ -1081,6 +1149,15 @@ export type RangedAliasRegistry
 	// name's declarations at once, so it is settled in one pass after the last one lands
 	// (`settleRangeContests`). Empty until then, and empty forever in a program with no contest.
 	var rangeContested as RangeContestedAliasMap
+	// ⭐⭐ **THE BUILTIN `ExitCode`'S HIGH BOUND, RESOLVED FROM THE COMPILE TARGET'S OS ONCE, HERE
+	// (BATCH27).** `lookup` is handed a name and a reader's path and nothing else — no project, no target —
+	// so the platform fact cannot be derived at the moment it is needed. It is derived at CONSTRUCTION,
+	// where `Project.create` and `Queries.resetMergeTargets` and `ProgramSignatures.create` all have a
+	// `Target` in hand, and carried on the structure that answers the question.
+	//
+	// A `let`, mirroring `Project.target`'s, and for its reason: a registry is aimed at one target when it
+	// is built and re-aiming it mid-compile would make two lookups of one name disagree.
+	let exitCodeHigh as ParsedInt
 
 	// ⭐⭐ **EVERY REGISTRY IS BORN HOLDING `Codepoint`, AND THAT IS WHAT GIVES IT A RANGE (P1.8 Slice E
 	// review).** `Codepoint` is declared, verbatim and with these bounds, in `stdlib/Character.maxon` —
@@ -1113,9 +1190,15 @@ export type RangedAliasRegistry
 	// ⚠ It is deliberately NOT folded into `ProgramSignatures`' content hash (that happens in
 	// `recordAlias`, one level up). The seed is identical in every program, so it distinguishes nothing —
 	// hashing it would invalidate every parse memo in the project to record a constant.
-	export static function create() returns RangedAliasRegistry
-		requireExitCodeRangeMatchesItsWidth()
-		var registry = Self{byName: RangedTypeAliasMap.create(), multiplyDeclared: MultiplyDeclaredAliasMap.create(), storageBytes: AliasStorageBytesMap.create(), packedBits: AliasPackedBitsMap.create(), nameable: NameableAliasMap.create(), rangeContested: sharedEmptyRangeContests}
+	//
+	// ⚠ **AND IT TAKES THE TARGET'S `Os`, WHICH IS THE ONE THING A REGISTRY CANNOT LEARN LATER (BATCH27)** —
+	// see `exitCodeHigh` above. Every construction site supplies it from the `Target` its own caller was
+	// aimed with; none of them defaults, because a default at one site is a compile that silently uses the
+	// build machine's platform for a cross-compiled binary's `ExitCode`.
+	export static function create(os Os) returns RangedAliasRegistry
+		let exitCodeHigh = exitCodeAliasHigh(os)
+		requireExitCodeRangeFitsItsWidth(exitCodeHigh)
+		var registry = Self{byName: RangedTypeAliasMap.create(), multiplyDeclared: MultiplyDeclaredAliasMap.create(), storageBytes: AliasStorageBytesMap.create(), packedBits: AliasPackedBitsMap.create(), nameable: NameableAliasMap.create(), rangeContested: sharedEmptyRangeContests, exitCodeHigh: exitCodeHigh}
 		_ = registry.record(builtinStdlibAlias(CodepointTypeName, low: CodepointAliasLow, high: CodepointAliasHigh, declPathText: CodepointAliasDeclPath))
 		_ = registry.record(builtinStdlibAlias(ElementCountAliasName, low: ElementCountAliasLow, high: ElementCountAliasHigh, declPathText: ElementCountAliasDeclPath))
 		_ = registry.record(builtinStdlibAlias(BytePosAliasName, low: StringPositionAliasLow, high: StringPositionAliasHigh, declPathText: StringPositionAliasDeclPath))
@@ -1352,7 +1435,7 @@ export type RangedAliasRegistry
 		// only on a lookup that was about to answer `undeclared` and never on the hot path — where, first,
 		// they were paid on every named type reference in the program.
 		if builtinTypeNameTag(name) == ValueTypeTag.exitCode 'theBuiltin'
-			return DeclaredAlias.declared(builtinExitCodeAlias(name, readerFilePath: readerFilePath))
+			return DeclaredAlias.declared(builtinExitCodeAlias(name, readerFilePath: readerFilePath, high: self.exitCodeHigh))
 		end 'theBuiltin'
 
 		return DeclaredAlias.undeclared
@@ -4529,7 +4612,8 @@ export type Project
 			collidedTypeNames: CollidedTypeNameSet.create(),
 			pendingFunctionTypeDoors: PendingFunctionTypeDoorArray.create(),
 			pendingTransformArities: PendingTransformArityArray.create(),
-			typeAliases: RangedAliasRegistry.create(),
+			// Aimed at the TARGET this project was created for, never the host — see `exitCodeHigh`.
+			typeAliases: RangedAliasRegistry.create(target.os),
 			typeNameDecls: TypeNameRegistry.create(),
 			rangeChecks: RangeCheckPlanMap.create(),
 			functionTypeAliases: FunctionTypeAliasMap.create(),
@@ -4562,7 +4646,7 @@ end 'Project'
 // valid one: the stdlib loader reads it before the first pass runs, and a field
 // that is briefly wrong is a field something can read while it is wrong.
 export function createProject(rootPath FilePath, target Target, stdlibDir FilePath) returns Project
-	return Project.create(QueryDatabase.create(), rootPath: rootPath, target: target, stdlibDir: stdlibDir)
+	return Project.create(QueryDatabase.create(target.os), rootPath: rootPath, target: target, stdlibDir: stdlibDir)
 end 'createProject'
 
 // ⭐⭐ **IS THE PROJECT ROOT ITSELF UNDER `stdlib/`? — ONE HOME, BECAUSE THREE RULES REST ON IT AND TWO

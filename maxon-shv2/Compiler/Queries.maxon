@@ -187,7 +187,7 @@ export function queryProgramSignatures(project Project) returns ProgramSignature
 	end 'hit'
 	project.db.signatureMisses = project.db.signatureMisses + 1
 
-	var signatures = ProgramSignatures.create()
+	var signatures = ProgramSignatures.create(project.target.os)
 	// ⭐ **THE ONE PROBE THIS COMPILE MAKES OF THE PROJECT ROOT** — set before any file is swept, so every
 	// reader below (and every `Parser.create` in every later query) sees the answer rather than the seeded
 	// `false`. It is what lets `livesUnderStdlibDirectory` be a derivation instead of a per-file path probe;
@@ -979,7 +979,9 @@ function resetMergeTargets(project Project)
 	// agree). Carried across a re-merge, a previous fold's selection would beat the new one — see
 	// `WitnessSlotImplMap`, whose header claimed the opposite until R10c.
 	project.witnessSlotImpls = WitnessSlotImplMap.create()
-	project.typeAliases = RangedAliasRegistry.create()
+	// Re-aimed at the SAME target the project was created with — a reset must not be a second chance to
+	// pick a platform for the builtin `ExitCode`'s range (see `RangedAliasRegistry.exitCodeHigh`).
+	project.typeAliases = RangedAliasRegistry.create(project.target.os)
 	// FIRST-WINS, so it must reset: a warm rebuild that re-merged the same files would find every
 	// name already claimed by its own declaration and report the whole program as duplicates.
 	project.typeNameDecls = TypeNameRegistry.create()

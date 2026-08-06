@@ -76,8 +76,13 @@ export type SignatureMemo
 		return Self{value: value, keyHash: keyHash, computed: computed}
 	end 'create'
 
-	export static function empty() returns SignatureMemo
-		return Self{value: ProgramSignatures.create(), keyHash: 0, computed: false}
+	// ⚠ **THE `Os` REACHES A SENTINEL'S INDEX, and it is threaded rather than defaulted on purpose
+	// (BATCH27).** `ProgramSignatures` holds a `RangedAliasRegistry`, whose builtin `ExitCode` bound is the
+	// compile TARGET's — and while `computed: false` means nothing ever reads THIS index, a site allowed to
+	// invent a bound is exactly the shape the mirror exists to prevent. It costs one enum, and it means no
+	// registry anywhere in the compiler is constructed without a target being named.
+	export static function empty(os Os) returns SignatureMemo
+		return Self{value: ProgramSignatures.create(os), keyHash: 0, computed: false}
 	end 'empty'
 end 'SignatureMemo'
 
@@ -162,7 +167,10 @@ export type QueryDatabase
 	export var allModuleHits as QueryCount
 	export var allModuleMisses as QueryCount
 
-	export static function create() returns QueryDatabase
+	// `os` is the TARGET's, and it reaches only the empty signature sentinel below — see
+	// `SignatureMemo.empty`. A database is filled for one target, exactly as the `Project` that owns it is
+	// aimed at one (`Project.target`'s header), so taking it here states that rather than assuming it.
+	export static function create(os Os) returns QueryDatabase
 		return Self{
 			sourceFiles: SourceFileMap.create(),
 			sourcePaths: FilePathArray.create(),
@@ -170,7 +178,7 @@ export type QueryDatabase
 			tokenCache: TokenCacheMap.create(),
 			activeTokenCache: TokenCacheMap.create(),
 			parseCache: ParseCacheMap.create(),
-			signatureCache: SignatureMemo.empty(),
+			signatureCache: SignatureMemo.empty(os),
 			allModuleCache: ModuleMemo.empty(),
 			tokenHits: 0, tokenMisses: 0,
 			activeTokenHits: 0, activeTokenMisses: 0,
