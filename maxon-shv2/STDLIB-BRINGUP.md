@@ -47,7 +47,7 @@ thesis, `A3m`, and `G9`/`G10`.)*
 
 ## The count
 
-**50 `.maxon` files under `stdlib/`, 18,337 lines. 16 listed (5,594 lines). 34 unlisted (12,743 lines).**
+**50 `.maxon` files under `stdlib/`, 18,337 lines.** ⚠ **The listed count in this file is a DATED SNAPSHOT and the authority is `StdlibLoader.whitelistedStdlibModules` itself** — count it there, never here. It read **16** when this table was measured (2026-08-05) and **18** as of 2026-08-06 (`Log` via `S2g`, `Ascii` via `S2k`), with `Interfaces` in flight. A prose count of a list is the second copy this project keeps being bitten by; the sentence stays only to date the rest of the table.
 
 ⚠ Several places in the tree still say **48 / 49 files** and **"3 whitelisted"**: `PLAN.md:88`, `:2092`,
 `:3605`, `:3694`; `StdlibLoader.maxon`'s header; `Testing/ladders/genwhitelist.sh`'s header. The most
@@ -131,7 +131,7 @@ via the `__Managed*Error` precedent (`Project.declaredBuiltinErrorEnum`).
 
 | Module | Lines | First diagnostic | The gap |
 |---|--:|---|---|
-| `Sha256.maxon` | 204 | `E2015 :152:34` | `Array.createIterator` is not on shv2's `Array` roster — **one member** |
+| `Sha256.maxon` | 204 | ~~`E2015 :152:34`~~ → ~~`E5001`~~ → **compiles and RUNS; unlisted only** | ✅✅ **TWO BLOCKERS CLEARED AND NEITHER WAS THE ONE THIS ROW NAMED.** `createIterator` was never the real blocker: past it lay **`E5001` — 23 live values against a pool of 14** the moment a program CALLED `sha256`, which `build stdlib/Sha256.maxon` alone cannot see because it never runs the register allocator. `S2m-b` (user ruling) rewrote the round state onto a `Vector` and added constant-index bounds-check elision: **23 → 12 live values, margin 2**, and `sha256("abc".toByteArray())` now answers **186 (0xba)** under shv2, byte-identical to the oracle. The rewrite also removed the `createIterator()` call entirely, dissolving `S2l`'s sha256 half. ⇒ **the only thing left is the whitelist entry** — `S2q`. |
 | `Ascii.maxon` | 66 | ~~`E2028 :10:4`~~ → **`E3001` ONLY (it type-checks clean)** | ⚖ **THIS ROW WENT STALE THE SAME DAY IT WAS MEASURED — re-measured 2026-08-05 after `BATCH23`.** The blocker was `match c '0' to '9'` — pattern type `int` vs scrutinee `Character` — which is exactly the character-literal WIDTH RULE `BATCH23` deleted: every literal is now a `Character`, and `Character` gained ordering and range patterns, so this file's five `match` arms type-check. **No compiler change is owed here any more; what remains is the WHITELIST entry**, which is `L-stdlib` — not a lane `BATCH23` held. ⚠ But read the headline above before listing it: `Ascii` is all `static function`s, NOT a conditional `extension`, so the criterion is NOT vacuous for this one. |
 | `PrimitiveExtensions.maxon` | 101 | `E2010 :2:11` | `extension int` — the extension decl path rejects a primitive keyword as the extended type |
 | `Json.maxon` | 1080 | ~~`E2015 :77:37`~~ -> **`E2015 :281:3`** | ✅ **THE FIELD-DEFAULT BLOCKER IS GONE — `S2f` closed it 2026-08-05.** Re-probed on `ba7f8271f`: this module now advances 204 lines to a **field access through `doc`, a struct-typed FIELD of the enclosing type**. A different mechanism, unowned by any row. |
@@ -205,7 +205,9 @@ All 34 unlisted modules re-probed after `S2f` (field defaults may be an arbitrar
 | `Ascii.maxon` | `E2028 :10:4` pattern type | **`E3001` only** (BATCH23) |
 | `List.maxon` · `Vector.maxon` | `E3086` | **unchanged** — they need v1's THIRD arm (a managed-builtin init for an omitted builtin-typed field), which `S2f` deliberately did not build |
 
-**Modules giving `E3001` and nothing else, as of this probe (8):** `Ascii` · `Log` · all six
+⚠ **RE-PROBE BEFORE TRUSTING THE LIST BELOW — it is dated 2026-08-05 and four rungs have landed since.** Known movement: `Ascii` and `Log` are now LISTED, not merely ready; `Sha256` compiles and runs (above); `Json` and `Set` advanced past their field-default blocker via `S2f`; `Set` then advanced again via `S2i`. The probe is one command per file and takes seconds — see "Reproducing this table".
+
+**Modules giving `E3001` and nothing else, as of the 2026-08-05 probe (8):** `Ascii` · `Log` · all six
 `helpers/sort/*`. ⚠ Six of those eight are conditional `extension`s, so the criterion is VACUOUS for them
 (see the headline); `Ascii` and `Log` are the two where it means something — and `Log`'s ENTRY is still
 blocked on `S2h` for a reason the criterion cannot see either.
