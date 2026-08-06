@@ -304,6 +304,18 @@ export function emitLoadByte(module StdModule, block IrBlock, base ValueId, inde
 	return loaded
 end 'emitLoadByte'
 
+// One byte INTO a raw buffer — `emitLoadByte`'s exact dual, and the one writer of a `u8` at this tier.
+//
+// ⚠ **IT LIVES BESIDE ITS DUAL RATHER THAN BESIDE ITS FIRST CALLER (W5).** It was file-private in
+// `CommandLineRuntime`, which made the pair "how wide is a raw byte, and is it zero-extended?" answerable
+// from two files with only one of the two answers exported — so the second family that needed to WRITE a
+// byte (`__proc_exe_path`, NUL-terminating an unavailable path) would have had to copy it. The load and the
+// store are one fact about one representation; they are now one paragraph.
+export function emitStoreByte(module StdModule, block IrBlock, base ValueId, index ValueId, value ValueId, ids ValueMinter)
+	let addr = emitBin(module, block: block, a: base, b: index, opcode: StdBinOpcode.add, ids: ids)
+	module.appendOp(block, op: StdOp.storeIndirect(addr, offset: 0 as ByteOffset, valueId: value, valueType: StdType.u8))
+end 'emitStoreByte'
+
 // ⭐⭐ **A NUL-TERMINATED cstring → A FRESH OWNED `__ManagedMemory`, AND THE CALLER OWNS THE RESULT.**
 // `filename()` and `currentPath()` both answer with one, and both would otherwise be twenty lines of the
 // same loop.
@@ -316,10 +328,10 @@ end 'emitLoadByte'
 // R4.4 and `String.init(dir.filename())` reads its `length@8`/`buffer@0`, which a cstring pointer does not
 // have. Copying is both the safe answer and the only one that types.
 //
-// Built as `__arr_create(1, trivial)` + `__arr_reserve(rec, len)` + a forward copy, rather than through
-// `__arr_mem_create`: that one THROWS (`__ManagedMemoryError.invalidAllocation`), and `__md_filename` is
-// non-throwing, so routing through it would give a non-throwing function an error edge with nowhere to go.
-// The two calls it decomposes into are the two `__arr_mem_create` itself makes.
+// The record and its buffer come from `ArrayRuntime.emitManagedByteBuffer`, which is where the
+// `__arr_create` + `__arr_reserve` pair and the reason for it now live — `__con_read_stdin` (W5) fills the
+// same kind of record from an OS read instead of from a copy, and the two must not grow two answers to
+// "how is a byte-element `Array` record made?".
 //
 // Threads through `cur` and returns the continuation block: the strlen loop and the copy loop each add
 // blocks, so the caller carries on from the one this leaves it in. The record's `ValueId` is MINTED BY THE
@@ -331,11 +343,7 @@ export function emitCStringToManaged(module StdModule, func IrFunction, cur IrBl
 	let i = ids.mint()
 	var build = emitCStringLength(module, func: func, cur: cur, cstr: cstr, length: i, ids: ids)
 
-	let elementSize = emitConst(module, block: build, value: ByteStringElementSize, ids: ids)
-	let trivial = emitConst(module, block: build, value: TrivialElementDestroy, ids: ids)
-	module.appendOp(build, op: StdOp.call(record, callee: ArrCreateName, args: twoArgs(elementSize, second: trivial)))
-	module.appendOp(build, op: StdOp.call(ids.mint(), callee: ArrReserveName, args: twoArgs(record, second: i)))
-	let buffer = emitLoadField(module, block: build, record: record, offset: ArrBufferOffset, ids: ids)
+	let buffer = emitManagedByteBuffer(module, block: build, record: record, byteCount: i, ids: ids)
 	var afterCopy = emitForwardCopy(module, func: func, cur: build, dest: buffer, src: cstr, byteCount: i, ids: ids)
 	// PUBLISH the bytes. `__arr_reserve` sets the capacity and leaves the length 0 (that is its contract, and
 	// `__arr_mem_create`'s comment states it); `String.init` reads `length@8`, so an unpublished record would

@@ -249,6 +249,19 @@ export enum IatSlot
 	// same one — the W entry points plus a real widening — for the whole lane at once, which is the property
 	// a lone UTF-8 producer here would have destroyed.
 	GetCommandLineA
+	// ⭐ **THE PROCESS-INTROSPECTION IMPORT (W5).** APPENDED AFTER `GetCommandLineA` for the reason that
+	// case states: every existing slot INDEX, and hence every existing `iatCall` relocation, is unchanged.
+	// kernel32 again, so `Kernel32DirEntries` stays 1.
+	//
+	// ⚠ **`GetStdHandle` IS NOT ADDED HERE — IT HAS BEEN A SLOT SINCE P1.2 wave A**, where `print` needed
+	// it, and `osStdinHandle` reaches the same slot with a different selector. That is the whole reason
+	// standard INPUT costs no import at all.
+	//
+	// ⚠ The `A` variant, inheriting `CreateFileA`'s stated LIMITATION unchanged and inheriting it
+	// CONSISTENTLY: a path whose bytes are non-ASCII comes back in the system ANSI codepage — which is
+	// exactly what the rest of this lane will then hand to `CreateFileA`, so the round trip holds. A `W`
+	// entry point here alone would be the lone wide producer feeding narrow consumers.
+	GetModuleFileNameA
 end 'IatSlot'
 
 // The IAT slot index of an import — the `slotIndex` an `iatCall` records and the PE writer

@@ -130,6 +130,10 @@ function stdConstInfo(op StdOp) returns StdConstInfo
 		// A3n: the RENDERED panic reads a message pointer; in every other respect it is `osPanic`.
 		osPanicValue gives StdConstInfo.notConst
 		osCommandLine gives StdConstInfo.notConst
+		// W5: a kernel HANDLE and the character count `GetModuleFileNameA` wrote are OS answers, never
+		// compile-time constants.
+		osStdinHandle gives StdConstInfo.notConst
+		osExecutablePath gives StdConstInfo.notConst
 	end 'c'
 end 'stdConstInfo'
 
@@ -222,6 +226,10 @@ function tryFold(op StdOp, constMap ConstValueMap) returns FoldResult
 		// A3n: the RENDERED panic reads a message pointer; in every other respect it is `osPanic`.
 		osPanicValue gives FoldResult.unchanged
 		osCommandLine gives FoldResult.unchanged
+		// W5: the handle read has no operand at all, and the path fill's two are a buffer ADDRESS and a
+		// capacity the caller computed — neither has an immediate form to fold into.
+		osStdinHandle gives FoldResult.unchanged
+		osExecutablePath gives FoldResult.unchanged
 	end 'f'
 end 'tryFold'
 

@@ -1916,14 +1916,29 @@ end 'main'
 error E3118: <fragment>:12:16: 'setByte' writes a RAW BYTE at a byte OFFSET, so what the element's own accessors read back is any bit pattern of its 8-byte slot — every value of int(0 to 18446744073709551615). The element 'Color' does not admit all of them. Widen the element's declared range to cover its whole slot, or store through the `Array` surface's `set`, which range-checks each value against the element
 ```
 
-<!-- test: error.a-raw-byte-write-is-refused-on-an-exit-code-element -->
-### An `ExitCode` element has no value set this compiler can compare a slot against
-⚠ `ExitCode`'s range is the compile TARGET's since BATCH27 — `int(0 to u32.max)` on Windows,
-`int(0 to 255)` on Linux, macOS and WASI (`stdlib/Process.maxon`) — so the range this diagnostic prints
-is platform-shaped and the case carries a `` ```Maxoncstderr:x64-windows `` block for it. **The SLOT is
-not**: an `ExitCode` element takes 8 bytes on every target, which is why the refusal itself is one fact
-and not two. The element admits neither range's worth of an 8-byte slot, and the narrower range makes it
-*less* able to, so the direction of the refusal cannot move.
+<!-- test: an-exit-code-element-fills-its-own-slot-and-takes-a-raw-byte-write -->
+### An `ExitCode` element FILLS its slot, so a raw byte write is legal — and this case USED TO PIN THE OPPOSITE
+⛔⛔ **THIS CASE WAS `error.a-raw-byte-write-is-refused-on-an-exit-code-element`, AND THE REFUSAL IT PINNED
+WAS A FALSE ONE shv2 SHIPPED — MEASURED AGAINST THE RUNNABLE ORACLE AT W5.** The bootstrap compiles this
+exact program and runs it to **3741319169**; shv2 refused it with `E3118`. The disagreement was not about
+the RULE — a raw byte write is legal exactly when the element admits every bit pattern of its own slot —
+it was that shv2 held **two answers about `ExitCode` and used a different one for each half of the rule**:
+it knew the RANGE (`int(0 to u32.max)` here, which is why the old refusal could print it) while giving the
+element the machine-word SLOT of a name no file declares. An element compared against 8 bytes it does not
+occupy fails a test it should never have been given.
+
+⭐ **W5 removed the second answer rather than the check.** `stdlib/Process.maxon` is now a listed module,
+so its `export typealias ExitCode` is an ORDINARY declaration in the alias registry and the slot and the
+range come from the one place — the same convergence W3 performed for `Ordering` and `IterationError`. The
+element is `int(0 to u32.max)`, its slot is therefore 4 bytes, it admits every one of them, and the write
+is accepted. **Both compilers now answer 3741319169** (`0xDF000001` — the pushed `1` with byte 3 set to
+223, which is what a 4-byte element makes of it).
+
+⚠ It carries `<!-- targets: x64-windows -->` because `ExitCode`'s range IS the compile target's
+(`int(0 to 255)` on Linux, macOS and WASI), so the element's WIDTH — and hence which element byte 3
+belongs to — differs per lane. The verdict does not: a narrower range fills a narrower slot just as
+exactly. The three siblings above already pin the rule at 1, 2 and 8 bytes on every target; what this case
+adds is the compiler-owned name, and that is the part that is platform-shaped.
 ```maxon
 typealias Codes = Array with ExitCode
 
@@ -1934,11 +1949,8 @@ function main() returns ExitCode
 	return try a.get(0) otherwise 4
 end 'main'
 ```
-```maxoncstderr
-error E3118: <fragment>:7:16: 'setByte' writes a RAW BYTE at a byte OFFSET, so what the element's own accessors read back is any bit pattern of its 8-byte slot — every value of int(0 to 18446744073709551615). The element 'ExitCode' (int(0 to 255)) does not admit all of them. Widen the element's declared range to cover its whole slot, or store through the `Array` surface's `set`, which range-checks each value against the element
-```
-```Maxoncstderr:x64-windows
-error E3118: <fragment>:7:16: 'setByte' writes a RAW BYTE at a byte OFFSET, so what the element's own accessors read back is any bit pattern of its 8-byte slot — every value of int(0 to 18446744073709551615). The element 'ExitCode' (int(0 to 4294967295)) does not admit all of them. Widen the element's declared range to cover its whole slot, or store through the `Array` surface's `set`, which range-checks each value against the element
+```exitcode
+3741319169
 ```
 
 <!-- test: a-raw-byte-write-is-accepted-when-the-element-fills-its-two-byte-slot -->

@@ -135,6 +135,18 @@ export let VirtualFreeSizeMustBeZero = 0x0  // dwSize is 0 for a MEM_RELEASE (re
 // panic path's `StdErrorHandle` is (DWORD)-12; this is its stdout sibling.
 let StdOutputHandle = 0xFFFFFFF5  // (DWORD)-11 — GetStdHandle's STD_OUTPUT_HANDLE
 
+// `GetStdHandle(STD_INPUT_HANDLE)` — the handle `osStdinHandle` answers with (W5). The third member of
+// the same DWORD-negative family as `StdOutputHandle` above and `X64Runtime`'s `StdErrorHandle`
+// ((DWORD)-12), and named for their reason: a bare `0xFFFFFFF6` at a `mov` says nothing about which of
+// the three streams is being asked for.
+let StdInputHandle = 0xFFFFFFF6  // (DWORD)-10 — GetStdHandle's STD_INPUT_HANDLE
+
+// `GetModuleFileNameA`'s `hModule` — NULL asks for the path of the RUNNING image, which is the only
+// module this op is ever about. Named rather than reusing `NullPointer` below because that constant is
+// WriteFile's `lpOverlapped`, a different argument of a different call that merely happens to be zero
+// too; folding them would make a future change to either one silently change the other.
+let CurrentModuleHandle = 0x0
+
 // WriteFile's `lpOverlapped` — NULL for a synchronous write.
 let NullPointer = 0x0
 
@@ -859,6 +871,10 @@ type StdToX64Lowering
 			osPanicValue gives 0
 			// `GetCommandLineA` takes NO arguments at all, so nothing lands on the stack.
 			osCommandLine gives 0
+			// W5: `GetStdHandle` takes one argument and `GetModuleFileNameA` three, so both are
+			// register-only under Win64's rcx/rdx/r8/r9 and neither lands anything on the stack.
+			osStdinHandle gives 0
+			osExecutablePath gives 0
 		end 'o'
 	end 'stdOpOutgoingArgBytes'
 
@@ -1026,6 +1042,9 @@ type StdToX64Lowering
 				osPanicValue then break 'term'
 				// A command-line read is a value-producing body op, never a terminator.
 				osCommandLine then break 'term'
+				// W5: a handle read and a path fill are value-producing body ops, never terminators.
+				osStdinHandle then break 'term'
+				osExecutablePath then break 'term'
 			end 'term'
 		end 'eachBlock'
 	end 'computeFusedCmps'
@@ -1098,6 +1117,9 @@ type StdToX64Lowering
 				osPanicValue then break 'isTheCompare'
 				// An import call, not the compare — the scan stops.
 				osCommandLine then break 'isTheCompare'
+				// W5: import calls too, and not the compare — the scan stops.
+				osStdinHandle then break 'isTheCompare'
+				osExecutablePath then break 'isTheCompare'
 			end 'isTheCompare'
 			return
 		end 'scanBackward'
@@ -1256,6 +1278,8 @@ type StdToX64Lowering
 			osFileAttributes(resultId, pathPtrId) then self.lowerOsFileAttributes(resultId, pathPtrId: pathPtrId, dstBlock: dstBlock)
 			osPanicValue(messagePtrId) then self.lowerPanicValue(messagePtrId, dstBlock: dstBlock)
 			osCommandLine(resultId) then self.lowerOsCommandLine(resultId, dstBlock: dstBlock)
+			osStdinHandle(resultId) then self.lowerOsStdinHandle(resultId, dstBlock: dstBlock)
+			osExecutablePath(resultId, bufLenId, bufPtrId) then self.lowerOsExecutablePath(resultId, bufLenId: bufLenId, bufPtrId: bufPtrId, dstBlock: dstBlock)
 		end 'lower'
 	end 'lowerBodyOp'
 
@@ -1305,6 +1329,8 @@ type StdToX64Lowering
 			osFileOpenRead to osFileAttributes then panic("lowerStdToX64: a file-IO op appeared as a block terminator (lowering bug — every one is a body op)")
 			osPanicValue then panic("lowerStdToX64: an `osPanicValue` op appeared as a block terminator (lowering bug — a rendered panic is a body op followed by a dead return, exactly like `osPanic`)")
 			osCommandLine then panic("lowerStdToX64: an `osCommandLine` op appeared as a block terminator (lowering bug — a command-line read is a value-producing body op)")
+			osStdinHandle then panic("lowerStdToX64: an `osStdinHandle` op appeared as a block terminator (lowering bug — a standard-handle read is a value-producing body op)")
+			osExecutablePath then panic("lowerStdToX64: an `osExecutablePath` op appeared as a block terminator (lowering bug — an executable-path read is a value-producing body op)")
 		end 'lower'
 	end 'lowerTerminatorOp'
 
@@ -2492,6 +2518,45 @@ type StdToX64Lowering
 		self.emitCaptureRax(dstBlock, resultId: resultId)
 	end 'lowerOsCommandLine'
 
+	// ⭐ **W5: `GetStdHandle(STD_INPUT_HANDLE)`** — the selector is an IMMEDIATE, so there is no virtual
+	// register to marshal and `lowerOsWin64Call1` (which moves one) has nothing to move. It is the same two
+	// instructions `lowerOsWriteStdoutWin64` opens with, and they are not shared with it: that one goes on
+	// to consume the handle in RAX within the same block, while this one CAPTURES it as a Std value the
+	// allocator then keeps live across whatever the builder does next.
+	//
+	// ⚠ `movRegImm32`, not `movRegImm`. `nStdHandle` is a DWORD, and the 32-bit form zero-extends exactly
+	// (DWORD)-10 into ECX — the choice `lowerOsWriteStdoutWin64` and `X64Runtime`'s stderr writer both make
+	// and both write down.
+	//
+	// The handle is the OS's, not a duplicate: `__con_read_stdin` reads through it and must never close it.
+	function lowerOsStdinHandle(resultId ValueId, dstBlock IrBlock)
+		self.requireWin64FileIo("osStdinHandle")
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rcx), value: StdInputHandle))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.GetStdHandle)))
+		self.emitCaptureRax(dstBlock, resultId: resultId)
+	end 'lowerOsStdinHandle'
+
+	// ⭐ **W5: `GetModuleFileNameA(NULL, bufPtr, bufLen)`** — the character count captured, which is what
+	// tells the builder's retry loop "fits" from "truncated".
+	//
+	// ⚠ **THIS IS WHERE THE OP'S FIELD ORDER MEETS kernel32's, AND THEY DISAGREE.** The op reads
+	// `(result, bufLen, bufPtr)` because that is `osDirCurrentPath`'s shape and one shape is better than
+	// two at the target-neutral tier; `GetModuleFileNameA` takes the BUFFER second and the SIZE third,
+	// where `GetCurrentDirectoryA` takes them the other way round. The transposition is one line each and
+	// it belongs here, in the only function that knows the ABI.
+	//
+	// ⚠ It cannot use `lowerOsWin64Call2`: that helper moves TWO virtual registers into rcx/rdx, and the
+	// first argument here is an IMMEDIATE with no ValueId to move from — exactly the case `lowerOsDirCreate`
+	// documents, whose hand-written form this follows.
+	function lowerOsExecutablePath(resultId ValueId, bufLenId ValueId, bufPtrId ValueId, dstBlock IrBlock)
+		self.requireWin64FileIo("osExecutablePath")
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rcx), value: CurrentModuleHandle))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rdx), srcReg: TargetVReg.virtual(bufPtrId)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.r8), srcReg: TargetVReg.virtual(bufLenId)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.GetModuleFileNameA)))
+		self.emitCaptureRax(dstBlock, resultId: resultId)
+	end 'lowerOsExecutablePath'
+
 	function lowerOsIocpCreate(resultId ValueId, dstBlock IrBlock)
 		match x64OsCallKind(self.target.os) 'route'
 			importCall then self.lowerOsIocpCreateWin64(resultId, dstBlock: dstBlock)
@@ -3014,6 +3079,9 @@ type StdToX64Lowering
 			osPanicValue gives false
 			// A command-line read is never a terminator either.
 			osCommandLine gives false
+			// W5: nor is a standard-handle read or an executable-path fill.
+			osStdinHandle gives false
+			osExecutablePath gives false
 		end 'term'
 	end 'settleFloatEqualityBranch'
 
@@ -3158,6 +3226,8 @@ type StdToX64Lowering
 			osFileOpenRead to osFileAttributes panic("condBranchFieldsOf: the terminator of block ref {blockRef} is a file-IO op, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 			osPanicValue panic("condBranchFieldsOf: the terminator of block ref {blockRef} is an `osPanicValue`, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 			osCommandLine panic("condBranchFieldsOf: the terminator of block ref {blockRef} is an `osCommandLine`, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
+			osStdinHandle panic("condBranchFieldsOf: the terminator of block ref {blockRef} is an `osStdinHandle`, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
+			osExecutablePath panic("condBranchFieldsOf: the terminator of block ref {blockRef} is an `osExecutablePath`, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 		end 'term'
 	end 'condBranchFieldsOf'
 

@@ -1148,6 +1148,28 @@ end 'recordGatedReturnType'
 // return the continuation block (`emitLoadElem` also the loaded value). One implementation of each,
 // shared by every accessor, so the element-stride arithmetic lives in exactly one place per direction.
 
+// ⭐⭐ **A FRESH BYTE-ELEMENT `Array` RECORD WITH ROOM FOR `byteCount`, AND ITS BUFFER ADDRESS** — the
+// first half of every "hand the caller an owned `__ManagedMemory`" builder, written once.
+//
+// ⚠ **IT LEAVES `length@8` AT ZERO, WHICH IS `__arr_reserve`'s CONTRACT AND THE CALLER'S OBLIGATION.**
+// Reserving sets the CAPACITY; nothing is published until the caller stores the count it actually filled
+// into `ArrLengthOffset`. That split is the whole reason this is a shared builder rather than one function:
+// its two callers know DIFFERENT counts. `emitCStringToManaged` publishes a length it measured with a NUL
+// scan; `__con_read_stdin` publishes the count the OS reported, which is the only binary-safe answer —
+// stdin may legitimately contain a NUL, so a scan there would truncate real input.
+//
+// ⚠ Built as `__arr_create(1, trivial)` + `__arr_reserve(rec, n)` rather than through `__arr_mem_create`
+// for the reason `emitCStringToManaged` has always recorded: that one THROWS, and these builders are
+// non-throwing, so routing through it would give a function with no error edge somewhere to send one. The
+// two calls here are the two `__arr_mem_create` itself makes.
+export function emitManagedByteBuffer(module StdModule, block IrBlock, record ValueId, byteCount ValueId, ids ValueMinter) returns ValueId
+	let elementSize = emitConst(module, block: block, value: ByteStringElementSize, ids: ids)
+	let trivial = emitConst(module, block: block, value: TrivialElementDestroy, ids: ids)
+	module.appendOp(block, op: StdOp.call(record, callee: ArrCreateName, args: twoArgs(elementSize, second: trivial)))
+	module.appendOp(block, op: StdOp.call(ids.mint(), callee: ArrReserveName, args: twoArgs(record, second: byteCount)))
+	return emitLoadField(module, block: block, record: record, offset: ArrBufferOffset, ids: ids)
+end 'emitManagedByteBuffer'
+
 // Copy `byteCount` bytes from `src` to `dest`, LOW address first — safe when `dest <= src` (a grow's
 // old→new copy, a remove's shift-left). `byteCount == 0` copies nothing (the header guard holds at once).
 // ⚠ EXPORTED for `ManagedFileRuntime` (R4.1), which copies a path's bytes into a NUL-terminated scratch

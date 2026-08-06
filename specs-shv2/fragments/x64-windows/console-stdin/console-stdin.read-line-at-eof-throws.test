@@ -1,0 +1,574 @@
+// Test: console-stdin.read-line-at-eof-throws
+function main() returns ExitCode
+	var stdin = Console.stdin()
+	let line = try stdin.readLine() otherwise 'atEof'
+		return 9
+	end 'atEof'
+	print(line)
+	return 1
+end 'main'
+---
+ExitCode: 9
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.callDirect Console.stdin
+    x64.movRegReg rbx, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect Stdin.readLine
+    x64.movRegReg r12, r8
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.movRegImm32 r12, 9
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_Stdin
+    x64.movRegReg r8, r12
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok:
+    x64.movRegReg rcx, r12
+    x64.callDirect __print_string
+    x64.movRegImm32 r13, 1
+    x64.movRegReg rcx, r12
+    x64.callDirect __str_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_Stdin
+    x64.movRegReg r8, r13
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Stdin.create {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegImm32 rcx, 1
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __arr_create
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 r12, 0
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.storeBaseDispReg.byte [r8 + 8], r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Stdin.fillOnce {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.loadRegBaseDisp.byte rax, [rbx + 8]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, alreadyEof
+    x64.jmp ifcont
+  alreadyEof:
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 rcx, 4096
+    x64.callDirect __con_read_stdin
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, r12
+    x64.callDirect __arr_count
+    x64.cmpRegImm32 r8, 0
+    x64.jcc equal, eofNow
+    x64.jmp ifcont
+  eofNow:
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.byte [rbx + 8], rax
+    x64.movRegReg rcx, r12
+    x64.callDirect __arr_decref
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_retain
+    x64.movRegReg r13, r8
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.movRegReg rdx, r13
+    x64.callDirect __arr_append
+    x64.movRegReg rcx, r13
+    x64.callDirect __arr_decref
+    x64.movRegReg rcx, r12
+    x64.callDirect __arr_decref
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Stdin.readLine {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.jmp whilehdr
+  whilehdr:
+    x64.loadRegBaseDisp.byte rax, [rbx + 8]
+    x64.xorRegImm32 rax, rax, 1
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, fillLoop
+    x64.jmp whileexit
+  fillLoop:
+    x64.movRegReg rcx, rbx
+    x64.callDirect Stdin.findNewline
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.movRegReg rcx, rbx
+    x64.callDirect Stdin.fillOnce
+    x64.jmp whilehdr
+  tryok:
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r8
+    x64.callDirect Stdin.takePrefix
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect Stdin.discardOne
+    x64.movRegReg rcx, r12
+    x64.callDirect stripTrailingCR
+    x64.movRegReg rbx, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_from_bytes
+    x64.movRegReg r13, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __arr_decref
+    x64.movRegReg rcx, r12
+    x64.callDirect __arr_decref
+    x64.movRegImm32 r10, 0
+    x64.movRegReg r8, r13
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  whileexit:
+    x64.movRegReg rcx, rbx
+    x64.callDirect Stdin.findNewline
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.callDirect __arr_count
+    x64.cmpRegImm32 r8, 0
+    x64.jcc equal, empty
+    x64.jmp ifcont
+  empty:
+    x64.movRegImm32 rax, 0
+    x64.leaRegRegImm32 r10, rax, 1
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.callDirect __arr_count
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r8
+    x64.callDirect Stdin.takePrefix
+    x64.movRegReg rbx, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_from_bytes
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __arr_decref
+    x64.movRegImm32 r10, 0
+    x64.movRegReg r8, r12
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok:
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r8
+    x64.callDirect Stdin.takePrefix
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect Stdin.discardOne
+    x64.movRegReg rcx, r12
+    x64.callDirect stripTrailingCR
+    x64.movRegReg rbx, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_from_bytes
+    x64.movRegReg r13, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __arr_decref
+    x64.movRegReg rcx, r12
+    x64.callDirect __arr_decref
+    x64.movRegImm32 r10, 0
+    x64.movRegReg r8, r13
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Stdin.findNewline {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.callDirect __arr_count
+    x64.movRegReg r12, r8
+    x64.movRegImm32 r13, 0
+    x64.jmp whilehdr
+  whilehdr:
+    x64.cmpRegReg r13, r12
+    x64.jcc less, scan
+    x64.jmp whileexit
+  scan:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.movRegReg rdx, r13
+    x64.callDirect __arr_get
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.movRegImm32 r10, 0
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok:
+    x64.cmpRegImm32 r8, 10
+    x64.jcc equal, nl
+    x64.jmp ifcont
+  nl:
+    x64.movRegImm32 r10, 0
+    x64.movRegReg r8, r13
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.leaRegRegImm32 r13, r13, 1
+    x64.jmp whilehdr
+  whileexit:
+    x64.movRegImm32 rax, 0
+    x64.leaRegRegImm32 r10, rax, 1
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Stdin.takePrefix {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.prologue 32
+    x64.movRegReg rbx, rcx
+    x64.movRegReg r12, rdx
+    x64.movRegImm32 rcx, 1
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __arr_create
+    x64.movRegReg r13, r8
+    x64.movRegImm32 r14, 0
+    x64.jmp whilehdr
+  whilehdr:
+    x64.cmpRegReg r14, r12
+    x64.jcc less, copy
+    x64.jmp whileexit
+  copy:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.movRegReg rdx, r14
+    x64.callDirect __arr_get
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok:
+    x64.movRegReg rcx, r13
+    x64.movRegReg rdx, r8
+    x64.callDirect __arr_push
+    x64.leaRegRegImm32 r14, r14, 1
+    x64.jmp whilehdr
+  whileexit:
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
+    x64.callDirect Stdin.shiftLeft
+    x64.movRegReg r8, r13
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Stdin.discardOne {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rdx, 1
+    x64.callDirect Stdin.shiftLeft
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Stdin.shiftLeft {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.prologue 32
+    x64.movRegReg rbx, rcx
+    x64.movRegReg r12, rdx
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.callDirect __arr_count
+    x64.movRegReg r13, r8
+    x64.movRegImm32 rcx, 1
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __arr_create
+    x64.movRegReg r14, r8
+    x64.jmp whilehdr
+  whilehdr:
+    x64.cmpRegReg r12, r13
+    x64.jcc less, copy
+    x64.jmp whileexit
+  copy:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.movRegReg rdx, r12
+    x64.callDirect __arr_get
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.leaRegRdata rcx, [rip + __str_blob_2]
+    x64.callDirect mrt_panic
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok:
+    x64.movRegReg rcx, r14
+    x64.movRegReg rdx, r8
+    x64.callDirect __arr_push
+    x64.leaRegRegImm32 r12, r12, 1
+    x64.jmp whilehdr
+  whileexit:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.callDirect __arr_decref
+    x64.storeBaseDispReg.word64 [rbx + 0], r14
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @stripTrailingCR {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.prologue 32
+    x64.movRegReg rbx, rcx
+    x64.movRegReg rcx, rbx
+    x64.callDirect __arr_count
+    x64.movRegReg r12, r8
+    x64.cmpRegImm32 r12, 0
+    x64.jcc equal, empty
+    x64.jmp ifcont
+  empty:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_retain
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.leaRegRegImm32 rdx, r12, -1
+    x64.movRegReg rcx, rbx
+    x64.callDirect __arr_get
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.leaRegRdata rcx, [rip + __str_blob_3]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok:
+    x64.cmpRegImm32 r8, 13
+    x64.jcc notEqual, noCR
+    x64.jmp ifcont
+  noCR:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_retain
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 rcx, 1
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __arr_create
+    x64.movRegReg r13, r8
+    x64.movRegImm32 r14, 0
+    x64.jmp whilehdr
+  whilehdr:
+    x64.leaRegRegImm32 rax, r12, -1
+    x64.cmpRegReg r14, rax
+    x64.jcc less, copy
+    x64.jmp whileexit
+  copy:
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r14
+    x64.callDirect __arr_get
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.leaRegRdata rcx, [rip + __str_blob_4]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok:
+    x64.movRegReg rcx, r13
+    x64.movRegReg rdx, r8
+    x64.callDirect __arr_push
+    x64.leaRegRegImm32 r14, r14, 1
+    x64.jmp whilehdr
+  whileexit:
+    x64.movRegReg r8, r13
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Console.stdin {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.callDirect Stdin.create
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

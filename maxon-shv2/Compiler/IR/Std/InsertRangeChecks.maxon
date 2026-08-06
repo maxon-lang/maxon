@@ -1133,6 +1133,9 @@ type RangeCheckEmitter
 				// A3n: the RENDERED panic reads a message pointer; in every other respect it is `osPanic`.
 				osPanicValue then break 'c'
 				osCommandLine then break 'c'
+				// W5: a raw OS handle and a character count are not ranged-typealias values.
+				osStdinHandle then break 'c'
+				osExecutablePath then break 'c'
 			end 'c'
 		end 'eachOp'
 	end 'collectConsts'
@@ -1265,6 +1268,9 @@ function retMatchesValue(term StdOp, target ValueId) returns bool
 		// A3n: the RENDERED panic reads a message pointer; in every other respect it is `osPanic`.
 		osPanicValue gives false
 		osCommandLine gives false
+		// W5: both are body ops, never a `ret`.
+		osStdinHandle gives false
+		osExecutablePath gives false
 	end 'term'
 end 'retMatchesValue'
 
@@ -1398,6 +1404,11 @@ function stdOpDefinedValue(op StdOp) returns DefinedValueLookup
 		// A3n: the RENDERED panic reads a message pointer; in every other respect it is `osPanic`.
 		osPanicValue gives DefinedValueLookup.none
 		osCommandLine(resultId) gives DefinedValueLookup.defines(resultId)
+		// W5. BOTH DEFINE — `GetStdHandle` a HANDLE, `GetModuleFileNameA` a character count. Neither has a
+		// void twin, so neither takes `none`, and answering `none` here would not fail to compile: it would
+		// under-count `nextFreeValueId` and let this pass mint a live id (see this function's header).
+		osStdinHandle(resultId) gives DefinedValueLookup.defines(resultId)
+		osExecutablePath(resultId, _, _) gives DefinedValueLookup.defines(resultId)
 	end 'r'
 end 'stdOpDefinedValue'
 

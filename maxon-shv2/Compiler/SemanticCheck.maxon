@@ -2608,7 +2608,14 @@ export function calleeNeedsWin32Substrate(callee ByteArray) returns bool
 	// four above do not have: argv is not merely UNIMPLEMENTED elsewhere, it has a DIFFERENT SHAPE elsewhere
 	// (one unsplit string on Windows, a pre-split vector under SysV), so serving another target is a rung
 	// rather than a lowering. `CommandLineRuntime`'s header carries it in full.
-	return callee.equals(GtNowNsName) or callee.equals(GtSleepName) or isClockRuntimeCallee(callee) or isManagedFileRuntimeCallee(callee) or isManagedDirectoryRuntimeCallee(callee) or isCommandLineRuntimeCallee(callee)
+	// W5's two entries join on the same terms and by the same PREFIX test, and each has a reason of its own
+	// beyond "unimplemented elsewhere" — the shape argument again, twice over. STANDARD INPUT has no HANDLE
+	// to fetch under POSIX or WASI (fd 0 *is* the handle; a component holds an input-stream resource), so
+	// `osStdinHandle` has no work to do there and the graph above it would differ, not merely its lowering.
+	// The EXECUTABLE PATH is read by three different OS APIs with three different retry protocols
+	// (`stdlib/Process.maxon:26-27`), and WASI has no analogue at all. Both are rungs rather than lowerings;
+	// `ConsoleRuntime`'s and `ProcessRuntime`'s headers carry each in full.
+	return callee.equals(GtNowNsName) or callee.equals(GtSleepName) or isClockRuntimeCallee(callee) or isManagedFileRuntimeCallee(callee) or isManagedDirectoryRuntimeCallee(callee) or isCommandLineRuntimeCallee(callee) or isConsoleRuntimeCallee(callee) or isProcessRuntimeCallee(callee)
 end 'calleeNeedsWin32Substrate'
 
 // The SUBJECT of an E3104 raised against a COMPILER-OWNED runtime entry. The user wrote

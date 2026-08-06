@@ -330,6 +330,12 @@ function markCalleeOf(op StdOp, byName FuncIndexByName, reached BoolArray, workl
 		// A3n: the RENDERED panic reads a message pointer; in every other respect it is `osPanic`.
 		osPanicValue then break 'op'
 		osCommandLine then break 'op'
+		// W5. `GetStdHandle` and `GetModuleFileNameA` are Win32 IMPORTS, so neither keeps a Maxon function
+		// live — the file band's reason, and the reason each is named rather than folded into a range with
+		// `osCommandLine`: the next op appended past these must fail to compile here, which a range arm
+		// would silently swallow.
+		osStdinHandle then break 'op'
+		osExecutablePath then break 'op'
 	end 'op'
 end 'markCalleeOf'
 

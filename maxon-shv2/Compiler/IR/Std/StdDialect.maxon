@@ -1539,6 +1539,43 @@ export union StdOp
 	// ⚠ It takes NO operands. `GetCommandLineA` reads the PEB, so there is nothing to pass and nothing that
 	// can differ between two calls in one process.
 	osCommandLine(resultId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: false, isCall: true, clobbersFlags: true, isCmp: false}
+	// --- STANDARD INPUT, and the PROCESS's OWN PATH (W5) ---
+	//
+	// ⚠ APPENDED AT THE VERY END OF THE UNION, per the band-append invariant `osPanicValue` states above.
+	// `category: system` places both logically beside the file-IO band, independent of this tail position.
+	//
+	// `osStdinHandle(result)` = `GetStdHandle(STD_INPUT_HANDLE)` — the console/pipe handle the process was
+	// started with, owned by the OS. It is not a duplicate and must never be closed.
+	//
+	// ⭐⭐ **IT IS A HANDLE OP AND NOT A READ OP, WHICH IS WHY THERE IS NO `osReadStdin`.** The bootstrap
+	// hand-rolls one runtime function that does `GetStdHandle` AND `ReadFile` together
+	// (`X86CodeEmitter.Runtime.cs:458-480`), and shv2 deliberately splits them: `osReadFile` ALREADY marshals
+	// `ReadFile(handle, buf, len, &bytesRead, NULL)` — five arguments, one of them a stack slot — and that
+	// marshalling is debugged. A second op would be a second copy of it, differing only in where the handle
+	// came from, and the two would be free to drift on the out-param slot. So this op supplies the ONE thing
+	// `osReadFile` cannot get for itself, and `__con_read_stdin` composes them at the Std tier.
+	//
+	// ⚠ It takes NO operands: the `STD_INPUT_HANDLE` selector is an IMMEDIATE the backend materializes, so
+	// there is nothing to pass and nothing that can differ between two calls in one process — `osCommandLine`
+	// exactly.
+	osStdinHandle(resultId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: false, isCall: true, clobbersFlags: true, isCmp: false}
+	// `osExecutablePath(result, bufLen, bufPtr)` = `GetModuleFileNameA(NULL, bufPtr, bufLen)` — the running
+	// image's absolute path, written into the caller's buffer. The result is the character count written,
+	// which is how the caller tells "fits" from "truncated"; `isStore: true` because it writes that buffer.
+	//
+	// ⚠ **THE FIELD ORDER IS `osDirCurrentPath`'s, AND THE WIN32 ARGUMENT ORDER IS NOT.**
+	// `GetCurrentDirectoryA(nBufferLength, lpBuffer)` genuinely takes its length first; `GetModuleFileNameA`
+	// takes the buffer first and the size last. The two ops read alike here on purpose — one shape for "an OS
+	// call that fills a caller's buffer and answers a length" — and the TRANSPOSITION lives in the one place
+	// that knows the ABI, `lowerOsExecutablePath`. Ordering these fields to match kernel32 instead would put
+	// a per-import argument order into the target-neutral tier, where nothing can check it.
+	//
+	// ⭐ **THE RETRY LOOP IS BUILDER-BUILT Std ABOVE IT**, the division `osDirCurrentPath` draws. The two
+	// imports do not even signal truncation the same way — `GetCurrentDirectoryA` answers the REQUIRED size,
+	// `GetModuleFileNameA` answers `nSize` itself and sets `ERROR_INSUFFICIENT_BUFFER` — so a backend that
+	// owned the loop would own two different loops, and the classification would be invisible to every pass
+	// between here and the encoder.
+	osExecutablePath(resultId ValueId, bufLenId ValueId, bufPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
 end 'StdOp'
 
 export typealias StdOpArray = Array with StdOp
@@ -1712,6 +1749,12 @@ export function collectStdOpUses(op StdOp, referenced StdValueUseSet)
 		osDirCreate(_, pathPtr) then referenced.insert(pathPtr)
 		osDirCurrentPath(_, bufLen, bufPtr) then insertUsePair(referenced, a: bufLen, b: bufPtr)
 		osFileAttributes(_, pathPtr) then referenced.insert(pathPtr)
+		// W5. No operands: the `STD_INPUT_HANDLE` selector is a backend immediate, so this reads nothing at
+		// all — `osCommandLine` exactly. Its `resultId` is a def and is skipped here.
+		osStdinHandle then break 'u'
+		// Both the buffer ADDRESS and the LENGTH are live value operands, for the reason `osDirCurrentPath`'s
+		// pair are: the allocator must not free either register before the OS writes through the first.
+		osExecutablePath(_, bufLen, bufPtr) then insertUsePair(referenced, a: bufLen, b: bufPtr)
 	end 'u'
 end 'collectStdOpUses'
 
@@ -1881,6 +1924,10 @@ module function remapStdOpUses(op StdOp, subst ValueIdArray) returns StdOp
 		osDirCreate(resultId, pathPtr) gives StdOp.osDirCreate(resultId, pathPtrId: remappedValue(pathPtr, subst: subst))
 		osDirCurrentPath(resultId, bufLen, bufPtr) gives StdOp.osDirCurrentPath(resultId, bufLenId: remappedValue(bufLen, subst: subst), bufPtrId: remappedValue(bufPtr, subst: subst))
 		osFileAttributes(resultId, pathPtr) gives StdOp.osFileAttributes(resultId, pathPtrId: remappedValue(pathPtr, subst: subst))
+		// W5. The exact mirrors of `collectStdOpUses`'s two arms: the handle read has no value operand to
+		// rewrite, and the path fill rewrites exactly the pair it reads.
+		osStdinHandle(resultId) gives StdOp.osStdinHandle(resultId)
+		osExecutablePath(resultId, bufLen, bufPtr) gives StdOp.osExecutablePath(resultId, bufLenId: remappedValue(bufLen, subst: subst), bufPtrId: remappedValue(bufPtr, subst: subst))
 	end 'r'
 end 'remapStdOpUses'
 

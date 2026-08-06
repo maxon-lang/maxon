@@ -475,6 +475,9 @@ type StdToArm64Lowering
 			osPanicValue gives 0
 			// x64-windows only, like the file-IO band above and for the same ruling.
 			osCommandLine gives 0
+			// W5: x64-windows only too — refused at the CALL SITE by E3104, so neither reaches this backend.
+			osStdinHandle gives 0
+			osExecutablePath gives 0
 		end 'o'
 	end 'stdOpOutgoingArgBytes'
 
@@ -610,6 +613,17 @@ type StdToArm64Lowering
 			// program at its source span (E3104, `calleeNeedsWin32Substrate`'s `__cl_` prefix), so this is the
 			// backstop for a compiler bug rather than the user-facing rejection.
 			osCommandLine then panic("lowerStdToArm64: `osCommandLine` is x64-windows only — argv capture is x64-windows-gated, and SemanticCheck refuses such a program at its source span (E3104), so this is the backstop for a compiler bug rather than the user-facing rejection")
+			// W5. Both are x64-windows only, and — like argv above — for a reason stronger than "nobody wrote
+			// the lowering yet": macOS and Linux reach these facts through DIFFERENT MECHANISMS, not through a
+			// differently-spelled version of the same one. There is no `GetStdHandle` at all under POSIX (fd 0
+			// IS the handle, so the op would have no work to do and its callers would want a different graph),
+			// and the executable path is `_NSGetExecutablePath` on macOS against `/proc/self/exe` on Linux
+			// (`stdlib/Process.maxon:26-27` names all three). Serving them is a rung, not a lowering.
+			// SemanticCheck refuses such a program at its source span (E3104, `calleeNeedsWin32Substrate`'s
+			// `__con_`/`__proc_` prefixes), so these are backstops for a compiler bug rather than the
+			// user-facing rejection.
+			osStdinHandle then panic("lowerStdToArm64: `osStdinHandle` is x64-windows only — standard input is x64-windows-gated, and SemanticCheck refuses such a program at its source span (E3104), so this is the backstop for a compiler bug rather than the user-facing rejection")
+			osExecutablePath then panic("lowerStdToArm64: `osExecutablePath` is x64-windows only — the executable path is read through a different OS API on every platform, and SemanticCheck refuses such a program at its source span (E3104), so this is the backstop for a compiler bug rather than the user-facing rejection")
 		end 'lower'
 	end 'lowerBodyOp'
 
@@ -654,6 +668,8 @@ type StdToArm64Lowering
 			osFileOpenRead to osFileAttributes then panic("lowerStdToArm64: a file-IO op appeared as a block terminator (lowering bug — every one is a body op; also x64-windows only)")
 			osPanicValue then panic("lowerStdToArm64: an `osPanicValue` op appeared as a block terminator (lowering bug — a rendered panic is a body op followed by a dead return, exactly like `osPanic`)")
 			osCommandLine then panic("lowerStdToArm64: an `osCommandLine` op appeared as a block terminator (lowering bug — a command-line read is a value-consuming body op; also x64-windows only)")
+			osStdinHandle then panic("lowerStdToArm64: an `osStdinHandle` op appeared as a block terminator (lowering bug — a standard-handle read is a value-producing body op; also x64-windows only)")
+			osExecutablePath then panic("lowerStdToArm64: an `osExecutablePath` op appeared as a block terminator (lowering bug — an executable-path read is a value-producing body op; also x64-windows only)")
 		end 'lower'
 	end 'lowerTerminatorOp'
 

@@ -1,0 +1,105 @@
+// Runtime/ConsoleRuntime.maxon — STANDARD INPUT, read into a fresh owned `__ManagedMemory`.
+//
+// ⭐ **WHAT IT SERVES.** `stdlib/Console.maxon`'s `Stdin` reader bottoms out in ONE `__Builtins` intrinsic —
+// `readStdin(maxBytes)` — and nothing else in the language reaches this entry point. The bootstrap declares
+// the same one (`2-Parser.cs:11249-11257`) with the same arity, the same result type and the same ownership,
+// so the SURFACE here is the reference's; only the implementation differs.
+//
+// ⭐⭐ **THE CONTRACT IS A COUNT, NOT A cstring, AND THAT IS THE WHOLE DESIGN.** `/specs/builtins-type.md`
+// states it: *"Read up to `maxBytes` bytes from stdin into a fresh managed-memory buffer (length reflects
+// bytes actually read; 0 on EOF)"*. So the record's `length@8` comes from what the OS SAID it read, never
+// from a NUL scan — stdin is a byte stream and a NUL is a legal byte in it, so a scan would silently
+// truncate real input at the first zero. That is the one place this file's shape differs from
+// `__cl_arg`/`__md_current_path`, which genuinely do receive NUL-terminated text from Win32.
+//
+// ⭐ **HOST-ONLY BY THE R4 RULING (2026-07-30).** `x64-windows` is real; every other target refuses at the
+// call site with the EXISTING `E3104 targetUnsupportedConstruct` via `SemanticCheck.calleeNeedsWin32Substrate`,
+// which matches on the `__con_` PREFIX — so an entry point added later is gated by construction rather than
+// by memory.
+//
+// ⚠ **THE EXTRA REASON, because "nobody wrote the lowering yet" would be the wrong one to record.** Under
+// POSIX and under WASI there is no HANDLE to fetch at all: fd 0 *is* the handle on Linux/macOS, and a WASI
+// component reaches standard input through `wasi:cli/stdin`'s input-stream RESOURCE. Neither shape has a
+// `GetStdHandle` step, so serving them is not a lowering for `osStdinHandle` — it is a DIFFERENT Std graph
+// that never asks this op anything. That is a rung, and until it lands this file builds the Windows half and
+// REFUSES the rest LOUDLY, which is the one thing that must not be traded for a target that compiles and
+// answers a permanent EOF.
+
+// The `__con_` prefix that identifies EVERY console runtime entry point — the one test `scanRuntimeUsage`
+// reads to set `usesConsoleStdin`, and the one `SemanticCheck` reads for E3104.
+let ConsoleRuntimePrefix = b"__con_"
+
+// ⭐ **THE ONE ENTRY POINT.**
+export let ConsoleReadStdinName = b"__con_read_stdin"
+
+// ⭐⭐ **`__con_read_stdin(maxBytes) -> arrRec`** — a FRESH owned `__ManagedMemory` holding what one read of
+// standard input produced, and the caller frees it.
+//
+// ⭐ **THERE IS NO SCRATCH BUFFER AND NO COPY.** The record is created at `maxBytes` capacity FIRST and the
+// OS reads straight into its own buffer, so the bytes are written exactly once. `__cl_arg` cannot do that —
+// it must scan a command line for the argument's extent before it knows the size — and this one can,
+// because `maxBytes` IS the bound the caller named. It is also what the bootstrap does
+// (`MaxonToStandardConversion.ManagedMemory.cs:1565-1592`: create the MM, read into its buffer, stash the
+// count into the length field), and the agreement is worth having on a contract this exact.
+//
+// ⚠ **THE `ReadFile` BOOL IS DELIBERATELY NOT BRANCHED ON, AND THAT IS SOUND RATHER THAN LAZY.** Three
+// outcomes have to end up as the same answer: a clean EOF (TRUE with 0 bytes), a closed handle and a broken
+// pipe (FALSE). The intrinsic's contract makes all three "0 bytes", so a test would have to route two of
+// them to the same store the third takes. The count slot is `emitWin32OutWord`'s, and `__mm_alloc` hands out
+// ZEROED memory as a stated guarantee — so on the FALSE paths the word the OS never wrote reads back 0 and
+// the three outcomes coincide BY CONSTRUCTION. `osWriteStdout` discards `WriteFile`'s BOOL for a weaker
+// reason than this (nothing a caller could do); here the discard is what the documented contract asks for.
+//
+// ⚠ **`maxBytes` IS NOT VALIDATED HERE.** A negative or absurd count is `__arr_reserve`'s to refuse — it is
+// the one allocator door and it already answers for every other reserve in the language — and duplicating
+// that judgement in a runtime builder would be a second allocation policy for one heap.
+function buildConsoleReadStdin(module StdModule)
+	var func = IrFunction.createFromStd(ConsoleReadStdinName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+
+	emitParams(module, block: entry, count: 1)
+	let maxBytes = 0 as ValueId
+
+	let record = ids.mint()
+	let buffer = emitManagedByteBuffer(module, block: entry, record: record, byteCount: maxBytes, ids: ids)
+
+	let handle = ids.mint()
+	module.appendOp(entry, op: StdOp.osStdinHandle(handle))
+	let out = emitWin32OutWord(module, block: entry, ids: ids)
+	// `osReadFile` defines its BOOL whether or not anyone wants it, so the id is minted and left unread —
+	// a dead def, which the allocator already handles (it is live at no point and colours trivially). It is
+	// named rather than anonymous so this line says WHICH of the call's two answers the builder uses.
+	let verdict = ids.mint()
+	module.appendOp(entry, op: StdOp.osReadFile(verdict, handleId: handle, bufId: buffer, lenId: maxBytes, bytesOutPtrId: out))
+
+	// The READ of the out word comes before the FREE, which is the order `emitWin32BoolOutcome` states for
+	// its own three callers: the word is scratch this function owns, and reading a released block is the
+	// same bug whichever family does it.
+	let bytesRead = emitLoadField(module, block: entry, record: out, offset: 0 as ByteOffset, ids: ids)
+	emitRawFree(module, block: entry, ptr: out, ids: ids)
+
+	// PUBLISH the bytes. `__arr_reserve` set the capacity and left the length 0 (its contract), and
+	// `mm.length()` reads `length@8` — so an unpublished record would answer 0 for every read.
+	emitStoreField(module, block: entry, record: record, offset: ArrLengthOffset, value: bytesRead)
+	module.setTerminator(entry, op: StdOp.ret(record))
+
+	module.functions.push(func)
+end 'buildConsoleReadStdin'
+
+export function installConsoleRuntime(module StdModule, usage RuntimeUsage)
+	if not usage.usesConsoleStdin 'noConsole'
+		return
+	end 'noConsole'
+
+	buildConsoleReadStdin(module)
+end 'installConsoleRuntime'
+
+// Every callee this file installs — what `scanRuntimeUsage` reads to set `usesConsoleStdin`, and what
+// `SemanticCheck.calleeNeedsWin32Substrate` refuses on a non-Windows target. A PREFIX test rather than an
+// `equals` against the single name, for `isCommandLineRuntimeCallee`'s reason: a second entry point here is
+// then covered by construction instead of having to be remembered at two sites.
+export function isConsoleRuntimeCallee(callee ByteArray) returns bool
+	return bytesStartWith(callee, prefix: ConsoleRuntimePrefix)
+end 'isConsoleRuntimeCallee'

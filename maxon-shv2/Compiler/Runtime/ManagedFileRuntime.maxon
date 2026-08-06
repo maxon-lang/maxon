@@ -340,7 +340,12 @@ end 'emitRawFree'
 // One `Win32OutWordBytes` scratch word for an OUT-PARAMETER — see that constant for the size and for why the
 // four bytes `ReadFile` does not write read back as zero. The caller owns it and releases it through
 // `emitWin32BoolOutcome`.
-function emitWin32OutWord(module StdModule, block IrBlock, ids ValueMinter) returns ValueId
+//
+// ⚠ EXPORTED for `ConsoleRuntime` (W5), which hands `osReadFile` an out word for a read on the STDIN handle
+// rather than on a `__ManagedFile` box. Exported rather than re-implemented for the reason the constant
+// itself is named: the width AND the "the allocator zeroed it, so the four bytes the OS does not write read
+// back as 0" guarantee are one fact, and a second copy would be free to drift from either half.
+export function emitWin32OutWord(module StdModule, block IrBlock, ids ValueMinter) returns ValueId
 	let wordSize = emitConst(module, block: block, value: Win32OutWordBytes, ids: ids)
 	return emitRawAlloc(module, block: block, byteCount: wordSize, ids: ids)
 end 'emitWin32OutWord'

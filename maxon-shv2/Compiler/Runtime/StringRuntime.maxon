@@ -693,9 +693,19 @@ export type RuntimeUsage
 	// `__ManagedMemory` answer through `__arr_create`/`__arr_reserve` inside a Std body this Maxon-module
 	// scan cannot see.
 	export var usesCommandLine as bool
+	// W5: the program reads STANDARD INPUT. It carries `usesHeap` (the out word is a raw alloc) AND
+	// `usesArray`: `__con_read_stdin` answers with an `Array` record it builds through
+	// `__arr_create`/`__arr_reserve` in a Std body this Maxon-module scan cannot see.
+	export var usesConsoleStdin as bool
+	// W5: the program asks for its own EXECUTABLE PATH. Its own bit rather than sharing the one above, under
+	// this file's one-bit-per-entry-point discipline: the two serve different stdlib modules and reach
+	// different OS APIs, so a program that reads stdin must not carry a path walk it never calls. Same two
+	// transitive bits, for the same two reasons — the grow-and-retry buffer is a raw alloc, and the answer is
+	// an `Array` record built one tier down.
+	export var usesProcessIntrospection as bool
 
 	static function create() returns RuntimeUsage
-		return Self{usesHeap: false, usesGt: false, usesIocp: false, usesStreaming: false, usesPrint: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesUIntToString: false, usesBoolToString: false, usesStrAppend: false, usesStrDecref: false, usesArray: false, usesSet: false, usesMap: false, usesList: false, usesDropTypeParam: false, usesDropExistential: false, usesRetainExistential: false, usesIncref: false, usesRetain: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrRangeEq: false, usesStrFind: false, usesStrRFind: false, usesStrStartsWith: false, usesStrEndsWith: false, usesStrContains: false, usesStrMapCase: false, usesStrReplace: false, usesStrSplit: false, usesStrReplaceFirst: false, usesStrFromBytes: false, usesStrBytesView: false, usesStrByteAt: false, usesStrByteAtOrPanic: false, usesManagedArrayCopy: false, usesOpaqueArrayCopy: false, neededCloners: ClonerSet.create(), usesWallClock: false, usesCharAt: false, usesCharCmp: false, usesCharFromCodepoint: false, usesCharAsciiValue: false, usesStrToBytes: false, usesStrToCodepoints: false, usesStrToUtf16: false, usesStrIndexMake: false, usesStrIndexEnd: false, usesStrIndexByteToGrapheme: false, usesStrIndexAdvance: false, usesStrIndexFirst: false, usesStrIndexLast: false, usesStrIndexSlice: false, usesStrIndexAfter: false, usesUcdCategory: false, usesCharSetMake: false, usesCharSetDecref: false, usesCharSetContains: false, usesStrTrim: false, usesManagedFile: false, usesManagedDirectory: false, usesCommandLine: false}
+		return Self{usesHeap: false, usesGt: false, usesIocp: false, usesStreaming: false, usesPrint: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesUIntToString: false, usesBoolToString: false, usesStrAppend: false, usesStrDecref: false, usesArray: false, usesSet: false, usesMap: false, usesList: false, usesDropTypeParam: false, usesDropExistential: false, usesRetainExistential: false, usesIncref: false, usesRetain: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrRangeEq: false, usesStrFind: false, usesStrRFind: false, usesStrStartsWith: false, usesStrEndsWith: false, usesStrContains: false, usesStrMapCase: false, usesStrReplace: false, usesStrSplit: false, usesStrReplaceFirst: false, usesStrFromBytes: false, usesStrBytesView: false, usesStrByteAt: false, usesStrByteAtOrPanic: false, usesManagedArrayCopy: false, usesOpaqueArrayCopy: false, neededCloners: ClonerSet.create(), usesWallClock: false, usesCharAt: false, usesCharCmp: false, usesCharFromCodepoint: false, usesCharAsciiValue: false, usesStrToBytes: false, usesStrToCodepoints: false, usesStrToUtf16: false, usesStrIndexMake: false, usesStrIndexEnd: false, usesStrIndexByteToGrapheme: false, usesStrIndexAdvance: false, usesStrIndexFirst: false, usesStrIndexLast: false, usesStrIndexSlice: false, usesStrIndexAfter: false, usesUcdCategory: false, usesCharSetMake: false, usesCharSetDecref: false, usesCharSetContains: false, usesStrTrim: false, usesManagedFile: false, usesManagedDirectory: false, usesCommandLine: false, usesConsoleStdin: false, usesProcessIntrospection: false}
 	end 'create'
 end 'RuntimeUsage'
 
@@ -860,6 +870,19 @@ export function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 		usage.usesHeap = true
 		usage.usesArray = true
 	end 'commandLine'
+	// W5: a `__con_*` or a `__proc_*` call. Same two transitive bits as the command-line family and for the
+	// same two reasons — a raw-alloc scratch word (or buffer), and an `Array` record each answers with from a
+	// Std body this Maxon-module scan cannot see. Left off, both would link against nothing.
+	if isConsoleRuntimeCallee(callee) 'consoleStdin'
+		usage.usesConsoleStdin = true
+		usage.usesHeap = true
+		usage.usesArray = true
+	end 'consoleStdin'
+	if isProcessRuntimeCallee(callee) 'processIntrospection'
+		usage.usesProcessIntrospection = true
+		usage.usesHeap = true
+		usage.usesArray = true
+	end 'processIntrospection'
 	if callee.equals(PrintStringName) 'print'
 		usage.usesPrint = true
 	end 'print'

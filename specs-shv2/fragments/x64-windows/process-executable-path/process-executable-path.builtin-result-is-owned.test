@@ -1,0 +1,79 @@
+// Test: process-executable-path.builtin-result-is-owned
+function main() returns ExitCode
+	var seen = 0
+	var i = 0
+	while i < 50 'reads'
+		let mm = __Builtins.executablePath()
+		if mm.length() > 0 'nonEmpty'
+			seen = seen + 1
+		end 'nonEmpty'
+		i = i + 1
+	end 'reads'
+	if seen == 50 'allFifty'
+		return 6
+	end 'allFifty'
+	return 1
+end 'main'
+---
+ExitCode: 6
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.movRegImm32 rbx, 0
+    x64.movRegImm32 r12, 0
+    x64.jmp whilehdr
+  whilehdr:
+    x64.cmpRegImm32 r12, 50
+    x64.jcc less, reads
+    x64.jmp whileexit
+  reads:
+    x64.callDirect __proc_exe_path
+    x64.movRegReg r13, r8
+    x64.movRegReg rcx, r13
+    x64.callDirect __arr_count
+    x64.cmpRegImm32 r8, 0
+    x64.jcc greater, nonEmpty
+    x64.jmp critsplit
+  nonEmpty:
+    x64.leaRegRegImm32 rbx, rbx, 1
+    x64.jmp ifcont
+  critsplit:
+    x64.jmp ifcont
+  ifcont:
+    x64.leaRegRegImm32 r12, r12, 1
+    x64.movRegReg rcx, r13
+    x64.callDirect __arr_decref
+    x64.jmp whilehdr
+  whileexit:
+    x64.cmpRegImm32 rbx, 50
+    x64.jcc equal, allFifty
+    x64.jmp ifcont
+  allFifty:
+    x64.movRegImm32 r8, 6
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 1
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

@@ -1103,6 +1103,175 @@ function whitelistedStdlibModules(stdlibDir FilePath) returns MaxonSourcePathSet
 	// the 62-byte gap being the metrics/output path text.) The magnitude is this module's SIZE and not a
 	// mechanism — 10,147 source bytes against `Log.maxon`'s 2,293, whose entry measured +3,237 the same way.
 	try listWhitelistedModule(stdlibDir, relative: "Sha256.maxon", into: listed)
+
+	// ⭐⭐ **W5 — `stdlib/Process.maxon`, `Process.executablePath()`.** Thirty-three lines: one `static` over
+	// one intrinsic. Its blocker was `__Builtins.executablePath`, which did not exist
+	// (`E3004 :29:17`, measured at HEAD before this rung); it is now `__proc_exe_path`
+	// (`Runtime/ProcessRuntime.maxon`).
+	//
+	// It clears every entry in this file's collision rule, each CHECKED rather than assumed:
+	//   • FREE FUNCTIONS (E3006): it declares NONE — its one function is a `static` of `Process` — so the
+	//     clause, and with it the SILENT bare-builtin shadow that cost `Sleep.maxon` a builtin retirement, is
+	//     vacuous. Checked against `Parser.parseCallNamed`'s bare-name `if` chain AT THE CHAIN, as that rule's
+	//     last bullet insists, and in BOTH directions: it declares nothing the chain can see, and it CONSUMES
+	//     nothing the chain claims — every call in its body is `Type.`-qualified (`String.init`,
+	//     `FilePath.from`) or `__Builtins.`-prefixed, which is a different namespace.
+	//   • TYPE NAMES: `Process` and `ProcessIntrospectionError` are nominal declarations, so a user program
+	//     spelling either wins and this module's moves into the reserved space (A1s wave 2, directory-scoped
+	//     by N1). Against the other listed modules there is no overlap, checked AT THE SOURCE across all 50
+	//     stdlib files rather than against a roster transcribed here: nothing else declares either name.
+	//     ⚠ `Subprocess.maxon` is the near miss and it is a miss — it declares `Configuration`, `Environment`,
+	//     `InputSource` and their siblings, and it is not listed in any case.
+	//   • TYPE-NAME-vs-BUILTIN, the one shape still SILENT: neither is on
+	//     `TypeResolution.isCompilerOwnedTypeName` nor `builtinTypeNameTag`, and nothing in the compiler
+	//     synthesizes a declaration of either.
+	//   • ⚠⚠ **THE RANGED-TYPEALIAS CLAUSE IS LIVE HERE, AND IT LANDS ON `ExitCode` — A NAME THE COMPILER
+	//     OWNS AND MINTS INSTANCES OF.** ⛔ **PLAN.md's Wave 1 trap note, and this rung's own contract, BOTH
+	//     say `Process.maxon` does not declare `ExitCode`. MEASURED: IT DOES** — `:8` under `#if os(Windows)`
+	//     (`int(0 to u32.max)`) and `:15` on the `#else` arm (`int(0 to 255)`), both `export`ed. So this is
+	//     the FIRST listed module to declare a compiler-owned type name that is not an enum read from the
+	//     corpus, and it is the exact shape that moved `File.maxon`'s golden through `Byte`: `ExitCode` is a
+	//     name the compiler mints an instance of in EVERY program (`main() returns ExitCode`).
+	//     ⚠ It is legal, and by a rule that predates this rung rather than an exemption bought for it:
+	//     `Parser.requireTypeNameNotCompilerOwned` refuses a NOMINAL identity only, and a RANGED alias mints
+	//     none — it erases to `integer` exactly as the builtin does, which is why
+	//     `specs-shv2/generic-type-nested-array-typealias.md` may declare `typealias ExitCode = int(0 to 125)`
+	//     in all 27 of its cases. `denotedNamedType`'s FIRST arm answers `builtinTypeNameTag`'s `exitCode`
+	//     before any registry is consulted, so the DENOTATION cannot move.
+	//     ⚠ **What that argument does NOT settle is the whole-program RANGE FOLD, so it was MEASURED and not
+	//     reasoned:** with this entry present, `--filter=generic-type-nested-array-typealias` — the 27 cases
+	//     that declare their own NARROWER `ExitCode` and so are the live contest — is 27/27, and so is the
+	//     full suite. The two declarations agree on nothing but the name and the program still answers
+	//     correctly, which is the differing-declarations control `Sha256.maxon`'s entry demands.
+	//     ⚠⚠ **AND IT MOVES EXACTLY ONE COMMITTED GOLDEN, WHICH IS THE CONTEST BECOMING VISIBLE RATHER THAN
+	//     A MEANING CHANGING.** `inner-alias-construction/generic-inner-array-alias` emitted
+	//     `__layout_Holder_ExitCode` and now emits `__layout_Holder_ExitCode$0_125`: that spec declares its
+	//     own `int(0 to 125)`, so the name is CONTESTED for the first time and each claimant's element takes
+	//     its per-claimant suffix — the same `Byte$0_255` mechanism `isByteElementName`'s base-name strip
+	//     exists for. A SYMBOL name moved; the case passes and the program's answer is unchanged.
+	//     ⭐⭐ **AND IT REMOVES A FALSE REFUSAL, WHICH IS THE POINT OF THE ENTRY RATHER THAN A SIDE EFFECT.**
+	//     shv2 knew `ExitCode`'s RANGE (a transcription — BATCH27) while giving the element the machine-word
+	//     SLOT of a name no file declares, and `bytearray-element-size`'s raw-byte-write door compared the
+	//     two: a program the BOOTSTRAP compiles and runs to 3741319169 was refused `E3118`. Listing the
+	//     module makes the slot and the range come from ONE declaration, they agree, and **both compilers now
+	//     answer 3741319169** (MEASURED, both ways). The spec case that pinned the refusal is rewritten and
+	//     says so.
+	//   • The "type-parameterized by a user declaration" clause: its body passes a `__ManagedMemory` to
+	//     `String.init` — the EXACT shape that broke `stdlib/URL.maxon` and then `stdlib/CommandLine.maxon`
+	//     with `E3005 … expected '__ManagedMemory', got 'Array_Byte'`. That clause says checking it is a BUILD
+	//     and not a reading, so it was built: a program declaring `typealias Byte = int(0 to 1000)` that calls
+	//     NOTHING here compiles and runs clean, because `emitOwnedManagedMemoryResult` mints the element
+	//     through `SignatureIndex.internSynthesizedByteInstance` rather than spelling it out of
+	//     user-declarable names.
+	//   • It declares NO top-level binding, so it does not inherit the class `S2h` had to build a
+	//     reachability term for: `DeadGlobalElimination` has no global of this module's to keep or drop.
+	//   • E3112 fires only when a user program actually contests a spelling. The surface is one method name
+	//     (`executablePath`) and NO argument label at all — the function takes none.
+	//   • It has NO imports; it calls `String.init` and `FilePath.from`, the latter in `FilePath.maxon`, which
+	//     is already listed.
+	//
+	// MEASURED before listing, which is the check this file's rule prescribes: with `__proc_exe_path` built,
+	// `maxon-shv2 build stdlib/Process.maxon` exits 1 with `E3001: No 'main' function found` AND NOTHING ELSE.
+	try listWhitelistedModule(stdlibDir, relative: "Process.maxon", into: listed)
+	// ⭐⭐ **W5 — `stdlib/Console.maxon`, `Console.stdin()` AND THE BUFFERED LINE READER OVER IT.** Its blocker
+	// was `__Builtins.readStdin`, which did not exist (`E3004 :62:12`, measured at HEAD before this rung); it
+	// is now `__con_read_stdin` (`Runtime/ConsoleRuntime.maxon`).
+	//
+	// ⭐ **IT IS ON THE 🚩 PHASE 1 GATE's OWN PATH**, which no other entry here is: shv2's extracted spec
+	// runner calls `Console.stdin()` at `Testing/SpecWorkerPool.maxon:425` and treats EOF as *"the parent
+	// vanished, shut down"*. So the semantics this entry admits are ones the compiler will eventually read
+	// about itself, not only ones a user program can.
+	//
+	// It clears every entry in this file's collision rule, each CHECKED rather than assumed:
+	//   • ⚠ FREE FUNCTIONS (E3006): it declares ONE — `stripTrailingCR` (`:178`), file-private. That is worth
+	//     naming rather than waving, because `export` is measured to be unreadable at the folds that matter
+	//     (this file's header, second ⛔ paragraph). Checked against `Parser.parseCallNamed`'s bare-name `if`
+	//     chain AT THE CHAIN, in BOTH directions: the chain claims `print trunc runProcess spawnReadLine` and
+	//     the seven `subp*`, plus `floor ceil round sqrt abs min max`, and `stripTrailingCR` is none of them;
+	//     nor does this module CONSUME one, the way `Math.pow` consumes `floor` — every call in its body is
+	//     receiver-dot or `Type.`-qualified. ⚠ `stdlib/Subprocess.maxon:782` declares a `stripTrailingCR` too,
+	//     over a `String` rather than a `ByteArray`, and that file is NOT listed — so there is no
+	//     listed-listed collision today and there WILL be one the day it is. Recorded here rather than
+	//     discovered there.
+	//   • TYPE NAMES: `Console`, `Stdin`, `ConsoleError` and `NotFound` are nominal declarations, so a user
+	//     program spelling any of them wins and this module's moves into the reserved space (A1s wave 2,
+	//     directory-scoped by N1). Against the other listed modules there is no overlap, checked AT THE SOURCE
+	//     across all 50 stdlib files. ⚠ `NotFound` is the one worth stopping on — it is an ordinary English
+	//     word and `File.maxon`/`Directory.maxon` both carry a `notFound` CASE — but a case is not a
+	//     declaration and neither declares the TYPE.
+	//   • TYPE-NAME-vs-BUILTIN, the one shape still SILENT: none of the four is on
+	//     `TypeResolution.isCompilerOwnedTypeName` or `builtinTypeNameTag`.
+	//   • ⚠⚠ **THE RANGED-TYPEALIAS CLAUSE IS LIVE, AND THIS IS THE FIRST ENTRY WHOSE RANGED ALIAS IS ALREADY
+	//     DECLARED BY ANOTHER LISTED MODULE.** `typealias Byte = int(0 to u8.max)` (`:23`) is
+	//     `stdlib/File.maxon:45`'s declaration to the byte, and `typealias ByteArray = Array with Byte` (`:24`)
+	//     is `:46`'s. That is not the two-listed-modules-declare-one-type-name bug this file warns about,
+	//     because neither is NOMINAL: a ranged alias joins `settleRangeContests` by NAME and the two
+	//     declarations AGREE, so the contest has nothing to settle, and a generic-instance alias is file-local
+	//     per alias FORM. ⚠ Which means the `b"…"` element bounds `File.maxon`'s entry moved a golden for do
+	//     not move again — this declaration is the same bounds a second time. **MEASURED rather than argued:
+	//     `--filter=byte-string-literal` and `--filter=bytearray-element-size` are green and their goldens are
+	//     unmoved.**
+	//   • `typealias ByteCount = int(0 to u64.max)` (`:29`) is the one ranged alias genuinely NEW to the listed
+	//     set — `stdlib/String.maxon` and `stdlib/TcpClient.maxon` declare the name, and the loader can list
+	//     neither. Its FORM is already declared under four other names by `Clock.maxon`, the same
+	//     same-form-different-name shape every entry since that one has carried, and the compiler mints no
+	//     instance over a `ByteCount` element.
+	//   • ⚠⚠⚠ **THE "TYPE-PARAMETERIZED BY A USER DECLARATION" CLAUSE HAS THE EXACT SHAPE THAT BROKE
+	//     `stdlib/URL.maxon` AND THEN `stdlib/CommandLine.maxon` — AND HERE IT ACTUALLY FIRED, WHICH IS THE
+	//     THIRD TIME AND THE FIRST THAT THE MINTED ELEMENT ALONE DID NOT CURE.** `fillOnce` (`:62-69`)
+	//     receives a `__ManagedMemory` from the intrinsic and passes it to `ByteArray.init(mm)`, and the
+	//     READINESS PROBE this rule prescribes reported
+	//     `E3005 :68:25 argument type mismatch for 'managed': expected '__ManagedMemory with Byte', got
+	//     'Array___ManagedByte'`. The producer side was already right — the intrinsic mints
+	//     `SignatureIndex.SynthesizedByteElementName`, exactly as this clause demands. The CONSUMER was not:
+	//     `Parser.requireSameArrayInstance` asked raw instance EQUALITY, so it refused the compiler's own
+	//     mint at a declared byte position. That is the EIGHTH door of the class
+	//     `ProgramSignatures.byteBufferBoundaryAdmits`'s header enumerates, and it now asks that shared
+	//     three-question door like the other seven. ⇒ **The clause's cure is TWO-SIDED and the loader header
+	//     only ever stated one side**: minting a compiler-owned element is necessary, and every door that
+	//     receives one must know the boundary. `specs-shv2/array-init.md`'s two new cases are the pins.
+	//     ⚠ The rest of the clause was checked as a BUILD, which is what it demands: a program declaring
+	//     `typealias Byte = int(0 to 1000)` that calls NOTHING here compiles and runs clean.
+	//   • ⭐ **TOP-LEVEL BINDING: `let chunkSize = 4096` (`:33`) — THE `S2h` SHAPE, AND ITS THIRD
+	//     CONFIRMATION.** It is IMMUTABLE and file-PRIVATE, so it is filed under a key carrying its declaring
+	//     path (`topLevelStorageKey`) and a user program may still declare its own `chunkSize`; an EXPORTED
+	//     top-level binding would owe the E3006 argument `Log.maxon`'s entry sets out, and this one does not.
+	//     The byte A/B this shape makes mandatory is recorded at the foot of this entry.
+	//   • E3112 fires only when a user program actually contests a spelling. The surface is the method names
+	//     (`stdin`, `create`, `eof`, `fillOnce`, `readLine`, `readBytes`, `findNewline`, `takePrefix`,
+	//     `discardOne`, `shiftLeft`), two fields (`pending`, `eofSeen`) and the labels `n`/`bytes`. Counted
+	//     against what the listed set ALREADY contests rather than against this module's own roster: `create`
+	//     is `FileInfo.create`'s and `n` is `Sha256.maxon`'s, so the spellings genuinely NEW are the eight
+	//     reader methods plus `pending`, `eofSeen` and `bytes`.
+	//   • It has NO imports and calls into no other stdlib module.
+	//
+	// MEASURED as the check this file's rule prescribes — and it FAILED first, which is the whole value of
+	// running it: with `__con_read_stdin` built but the byte-buffer door unfixed it reported the `E3005`
+	// above, and with both in place `maxon-shv2 build stdlib/Console.maxon` exits 1 with
+	// `E3001: No 'main' function found` AND NOTHING ELSE.
+	//
+	// ⭐⭐ **THE BYTE A/B — MANDATORY FOR A MODULE WITH TOP-LEVEL STATE SINCE `Log.maxon`, AND THIS IS THE
+	// THIRD CONFIRMATION OF `S2h`'s CURE (after `Log` itself and `Sha256.maxon`).** MEASURED in ONE tree, two
+	// binaries differing ONLY by the two `listWhitelistedModule` lines above, on TWO programs rather than one
+	// — because "flat" is a claim about the SHAPE and one point cannot carry it:
+	//   • `function main() returns ExitCode / return 7` — **1,592 code bytes both ways, Δ0**, and the two
+	//     executables are **byte-for-byte identical** (5,567 bytes, `cmp` clean).
+	//   • 600 generated functions, 7,204 lines — **68,334 code bytes both ways**, executables again
+	//     **byte-for-byte identical** (82,927 bytes, `cmp` clean).
+	//
+	// ⭐ **WHAT IT DOES COST IS FLAT IN THE USER'S PROGRAM, AND THAT IS THE TWO-POINT MEASUREMENT AND NOT AN
+	// ARGUMENT** — the per-compile price of two more files lexed, parsed and swept. Allocations rise
+	// **+11,698** on the trivial program (321,911 ⇒ 333,609) and **+11,699** on the 7,204-line one
+	// (1,402,973 ⇒ 1,414,672): identical to within one allocation of output-path text, so nothing here is a
+	// term that grows with the user's program.
+	// ⚠ **BYTES ARE NOT FLAT AND THE COUNT IS — +586,397 against +1,744,537 — WHICH IS A READING TO EXPLAIN
+	// RATHER THAN A COST TO ACCEPT SILENTLY.** Attributed by the per-phase table: **`merge` carries
+	// +1,205,048 of the large program's delta for only +1,043 allocations**, i.e. the same allocations at a
+	// bigger size. Two more files' declarations push the merged module's growable arrays across a DOUBLING
+	// they would otherwise have reached later, and a doubling reallocates in proportion to what is already
+	// there. That predicts a constant STEP on the scale ladder rather than a bend, which is the reading the
+	// ladder can confirm and this A/B cannot.
+	try listWhitelistedModule(stdlibDir, relative: "Console.maxon", into: listed)
 	return listed
 end 'whitelistedStdlibModules'
 

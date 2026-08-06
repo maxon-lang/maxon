@@ -3271,6 +3271,14 @@ let BuiltinsSleepName = b"__Builtins.sleep"
 let BuiltinsCommandLineCountName = b"__Builtins.commandLineCount"
 let BuiltinsCommandLineArgName = b"__Builtins.commandLineArg"
 
+// ⭐ **THE TWO HOST-PROCESS INTRINSICS (W5)**, `stdlib/Console.maxon`'s and `stdlib/Process.maxon`'s only
+// floors. The bootstrap declares exactly these two names with exactly these shapes
+// (`2-Parser.cs:11249-11257` and `:11265-11267`): a read that takes a byte budget and answers an OWNED
+// `__ManagedMemory` the caller frees, and a path read that takes nothing and answers the same. See
+// `ConsoleRuntime` and `ProcessRuntime` for the entry points they lower to.
+let BuiltinsReadStdinName = b"__Builtins.readStdin"
+let BuiltinsExecutablePathName = b"__Builtins.executablePath"
+
 // ⭐ **`__Builtins.floatToBits(x)` — AN f64's IEEE-754 ENCODING AS AN i64, THE ONLY WAY TO TAKE A FLOAT
 // APART IN MAXON.** `stdlib/Builtins.maxon`'s `__float_toString` needs the sign, the exponent field and
 // the significand of the value it is printing, and no arithmetic operator can produce them; the same is
@@ -3309,6 +3317,12 @@ let BitsToFloatArity = 1 as ParamCount
 // ordinary arity check to read, because no file declares it.
 let CommandLineCountArity = 0 as ParamCount
 let CommandLineArgArity = 1 as ParamCount
+
+// `readStdin(maxBytes)` takes exactly one INTEGER byte budget; `executablePath()` takes nothing. Stated here
+// beside the intrinsics for `CommandLineArgArity`'s reason — an intrinsic has no signature for SemanticCheck's
+// ordinary arity check to read, because no file declares it.
+let ReadStdinArity = 1 as ParamCount
+let ExecutablePathArity = 0 as ParamCount
 
 // ⭐ **IS THIS CALLEE A MEMBER OF THE `__Builtins` TYPE?** THE one test, and it has two askers that
 // must never disagree: the intrinsic table in `parseCallNamed` (which dispatches on it) and the
@@ -38091,10 +38105,36 @@ export type Parser
 	// inside-a-closure`). A door keyed on the mark would refuse the `stdlib/File.maxon:135` shape the moment
 	// it appeared inside a closure, for a reason having nothing to do with the element stride this rule
 	// exists to keep honest. The instance is the fact the stride depends on, so the instance is what is asked.
+	// ⚠⚠ **AND IT ADMITS THE BYTE-BUFFER BOUNDARY, WHICH IT DID NOT UNTIL W5 — THE EIGHTH DOOR OF THE CLASS
+	// `byteBufferBoundaryAdmits`'s header ENUMERATES, found by the module the boundary exists to serve.**
+	// A COMPILER-SYNTHESIZED byte buffer wears the reserved element `__ManagedByte`, deliberately a DIFFERENT
+	// instance from the user-visible `Byte` (`SignatureIndex`'s two-names roster: a user may declare `Byte`,
+	// and a compiler-minted buffer's stride may not follow). Raw instance EQUALITY therefore refuses it, and
+	// `stdlib/Console.maxon:68` is exactly that program: `ByteArray.init(__Builtins.readStdin(n))`, refused
+	// `E3005 argument type mismatch for 'managed': expected '__ManagedMemory with Byte', got
+	// 'Array___ManagedByte'` — MEASURED on this rung's own readiness probe, on a module the BOOTSTRAP
+	// compiles.
+	//
+	// ⭐ **THE ADMISSION IS THE SHARED THREE-QUESTION DOOR AND NOT A FOURTH SPELLING OF IT**, which is that
+	// header's own instruction: the receiver's element must be NAMED for a byte, must hold EVERY byte value
+	// in every file that declares it, and its record must stride ONE byte — and only then is the arriving
+	// `__ManagedByte` admitted. All three are load-bearing here for the same reasons they are at the other
+	// seven sites: a user program may contest `Byte` with `typealias Byte = int(0 to 200)` (whole-program, by
+	// NAME — `export` is not read), and adopting a raw byte buffer as an array of THAT element is the
+	// measured 223 the second question exists to refuse. Under all three the stride is provably 1 on both
+	// sides, which is the exact property this function protects.
+	//
+	// ⚠ It stays ONE-WAY, like every other use of that door: only the COMPILER's own mint is admitted at a
+	// declared byte position. A user's `Array with Byte` is not admitted at a `__ManagedByte` position,
+	// because nothing mints a value at that spelling but the compiler.
 	function requireSameArrayInstance(value ValueId, giid GenericInstanceId, anchor Token) throws ParseError
 		if self.tagOf(value) == ValueTypeTag.genericInstance and self.valueNameId(value) == giid 'sameInstance'
 			return
 		end 'sameInstance'
+
+		if self.signatures.byteBufferBoundaryAdmits(ValueTypeTag.genericInstance, declaredNameId: giid, gotTag: self.tagOf(value), gotNameId: self.valueNameId(value)) 'aSynthesizedByteBuffer'
+			return
+		end 'aSynthesizedByteBuffer'
 
 		throw ParseError.builtinArgumentType(String.from(StringInitManagedParamName), expected: "{String.from(ManagedMemoryTypeName)} with {self.signatures.arrayElementDisplayName(giid)}", got: self.valueDisplayTypeName(value), line: anchor.line, column: anchor.column)
 	end 'requireSameArrayInstance'
@@ -46377,6 +46417,37 @@ export type Parser
 
 				return self.emitOwnedManagedMemoryResult(CommandLineArgName, args: singletonArgs(index), range: SourceRange.ofToken(anchor))
 			end 'commandLineArg'
+
+			// ⭐ W5. Both answer an OWNED `__ManagedMemory` — `emitOwnedManagedMemoryResult` again, which is
+			// what carries the instance type, the owned-temp enrolment and the BUFFER SURFACE mark at once.
+			// `stdlib/Console.maxon` reads `mm.length()` off the first and `stdlib/Process.maxon` hands the
+			// second to `String.init`, and both of those resolve through that surface.
+			if callee.equals(BuiltinsReadStdinName) 'readStdin'
+				if args.count() != ReadStdinArity 'readStdinArity'
+					throw ParseError.builtinArity(String.from(callee), expected: ReadStdinArity, got: args.count(), line: anchor.line, column: anchor.column)
+				end 'readStdinArity'
+
+				let maxBytes = try args.get(0) otherwise panic("readStdin: args.count() == ReadStdinArity just checked but get(0) failed")
+				// ⚠ `tagIsIntegral`, NOT `tagIsInteger`. A value whose static type is a RANGED ALIAS carries the
+				// `named` tag until TypeResolution collapses it, so the narrow test refuses every argument
+				// spelled with one — the false reject `parseBuiltinIntegerArg`'s header MEASURED
+				// (`E3005 … expected 'int', got 'int'`, a refusal that names one type twice). A byte budget is
+				// exactly the sort of value a corpus spells with an alias, so the wide predicate is the correct
+				// one here rather than the lenient one.
+				if not tagIsIntegral(self.tagOf(maxBytes)) 'notAByteCount'
+					throw ParseError.builtinOperandType(String.from(callee), required: typeTagName(ValueTypeTag.integer), got: typeTagName(self.tagOf(maxBytes)), line: anchor.line, column: anchor.column)
+				end 'notAByteCount'
+
+				return self.emitOwnedManagedMemoryResult(ConsoleReadStdinName, args: singletonArgs(maxBytes), range: SourceRange.ofToken(anchor))
+			end 'readStdin'
+
+			if callee.equals(BuiltinsExecutablePathName) 'executablePath'
+				if args.count() != ExecutablePathArity 'executablePathArity'
+					throw ParseError.builtinArity(String.from(callee), expected: ExecutablePathArity, got: args.count(), line: anchor.line, column: anchor.column)
+				end 'executablePathArity'
+
+				return self.emitOwnedManagedMemoryResult(ProcessExecutablePathName, args: ValueIdArray.create(), range: SourceRange.ofToken(anchor))
+			end 'executablePath'
 
 			if callee.equals(BuiltinsFloatToBitsName) 'floatToBits'
 				return try self.emitFloatToBits(args, calleeTok: anchor)

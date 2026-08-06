@@ -672,6 +672,9 @@ function internIndirectCallTypeFor(op StdOp, map IndirectCallTypeIdxMap, builder
 		osPanicValue then break 'k'
 		// The command line is x64-windows only (E3104 at the call site) and pulls in no wasm import.
 		osCommandLine then break 'k'
+		// W5: x64-windows only too, and neither pulls in a wasm import.
+		osStdinHandle then break 'k'
+		osExecutablePath then break 'k'
 	end 'k'
 end 'internIndirectCallTypeFor'
 
@@ -1188,6 +1191,9 @@ function recordDefValtype(op StdOp, valtypes WasmValTypeArray, funcNames Functio
 		osPanicValue then break 'def'
 		// x64-windows only, so no wasm valtype is ever recorded for its def.
 		osCommandLine then break 'def'
+		// W5: x64-windows only too, so no wasm valtype is ever recorded for either def.
+		osStdinHandle then break 'def'
+		osExecutablePath then break 'def'
 	end 'def'
 end 'recordDefValtype'
 
@@ -1400,6 +1406,8 @@ type WasmFuncEmitter
 			osFileOpenRead to osFileAttributes then panic("emitStraightLineTerminator: a file-IO op is a body op, never a terminator")
 			osPanicValue then panic("emitStraightLineTerminator: an `osPanicValue` is a body op, never a terminator")
 			osCommandLine then panic("emitStraightLineTerminator: an `osCommandLine` is a body op, never a terminator")
+			osStdinHandle then panic("emitStraightLineTerminator: an `osStdinHandle` is a body op, never a terminator")
+			osExecutablePath then panic("emitStraightLineTerminator: an `osExecutablePath` is a body op, never a terminator")
 		end 'term'
 	end 'emitStraightLineTerminator'
 
@@ -1476,6 +1484,8 @@ type WasmFuncEmitter
 			osFileOpenRead to osFileAttributes then panic("emitDispatcherTerminator: a file-IO op is a body op, never a terminator")
 			osPanicValue then panic("emitDispatcherTerminator: an `osPanicValue` is a body op, never a terminator")
 			osCommandLine then panic("emitDispatcherTerminator: an `osCommandLine` is a body op, never a terminator")
+			osStdinHandle then panic("emitDispatcherTerminator: an `osStdinHandle` is a body op, never a terminator")
+			osExecutablePath then panic("emitDispatcherTerminator: an `osExecutablePath` is a body op, never a terminator")
 		end 'term'
 	end 'emitDispatcherTerminator'
 
@@ -1555,6 +1565,17 @@ type WasmFuncEmitter
 			// answers an `Array with String`. The op could be lowered the day that lane grows those; until then a
 			// lowering would be vocabulary with no reachable consumer.
 			osCommandLine then panic("emitBodyOp: `osCommandLine` is x64-windows only — argv capture is x64-windows-gated, and SemanticCheck refuses such a program on wasm at its own source span (E3104), so this panic is the backstop for a compiler bug that got one past that gate, not the user-facing rejection")
+			// ⚠ W5. THE TWO ARE REFUSED FOR DIFFERENT REASONS, and copying argv's sentence onto both would
+			// hide the one that is permanent.
+			//   • `osStdinHandle`: WASI DOES have a standard input — `wasi:cli/stdin` plus a `read` on the
+			//     input stream — so this is argv's case exactly. There is no HANDLE to fetch (the stream
+			//     resource IS the handle), so the day the lane grows it, `__con_read_stdin` wants a different
+			//     Std graph rather than a lowering for this op. That is a rung.
+			//   • `osExecutablePath`: WASI has NO analogue AT ALL. A component has no image path to report,
+			//     and `args_get[0]` is whatever the host chose to pass, not a resolved path — answering it
+			//     would be a plausible wrong answer, which is the one thing worse than a refusal.
+			osStdinHandle then panic("emitBodyOp: `osStdinHandle` is x64-windows only — standard input is x64-windows-gated, and SemanticCheck refuses such a program on wasm at its own source span (E3104), so this panic is the backstop for a compiler bug that got one past that gate, not the user-facing rejection")
+			osExecutablePath then panic("emitBodyOp: `osExecutablePath` is x64-windows only — WASI has no executable-path primitive at all, and SemanticCheck refuses such a program on wasm at its own source span (E3104), so this panic is the backstop for a compiler bug that got one past that gate, not the user-facing rejection")
 		end 'body'
 	end 'emitBodyOp'
 
@@ -2766,6 +2787,8 @@ function decideDispatcher(module StdModule, func IrFunction) returns bool
 		osFileOpenRead to osFileAttributes then panic("decideDispatcher: a file-IO op is a body op, never a terminator")
 		osPanicValue then panic("decideDispatcher: an `osPanicValue` is a body op, never a terminator")
 		osCommandLine then panic("decideDispatcher: an `osCommandLine` is a body op, never a terminator")
+		osStdinHandle then panic("decideDispatcher: an `osStdinHandle` is a body op, never a terminator")
+		osExecutablePath then panic("decideDispatcher: an `osExecutablePath` is a body op, never a terminator")
 	end 'k'
 	return false
 end 'decideDispatcher'

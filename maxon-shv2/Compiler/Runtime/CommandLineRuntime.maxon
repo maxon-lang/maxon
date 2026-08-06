@@ -409,7 +409,12 @@ end 'buildCommandLineScanOne'
 // `threeArgs`/`quadArgsOf`/`quintArgsOf` call, and this turns one such list into block args. One shape, two
 // uses, no second ordering to keep in step. It replaces four hand-written per-arity pushers, two of which
 // had already grown misleading parameter names by being reused at a different arity.
-function pushI64BlockArgs(block IrBlock, values ValueIdArray)
+//
+// ⚠ EXPORTED for `ProcessRuntime` (W5), whose grow-and-retry loop carries a (buffer, capacity) pair across
+// exactly this kind of merge. Exported rather than re-declared, because the whole point of the paragraph
+// above is that ONE constructor builds both a block's parameter list and its predecessors' argument lists —
+// a second copy in another file would immediately be a second ordering to keep in step.
+export function pushI64BlockArgs(block IrBlock, values ValueIdArray)
 	for value in values 'each'
 		block.blockArgs.push(IrBlockArg.create(value, argType: StdType.i64))
 	end 'each'
@@ -467,12 +472,6 @@ function emitResumeScan(module StdModule, block IrBlock, scan IrBlock, at ValueI
 	module.setTerminator(block, op: StdOp.branch(scan.id))
 	block.branchEdges.push(BranchEdge.create(scan.id, argIds: threeArgs(nextAt, second: nextWrote, third: quoted)))
 end 'emitResumeScan'
-
-// One byte into a raw buffer. `emitLoadByte`'s dual, and the only writer of a `u8` in this file.
-function emitStoreByte(module StdModule, block IrBlock, base ValueId, index ValueId, value ValueId, ids ValueMinter)
-	let addr = emitBin(module, block: block, a: base, b: index, opcode: StdBinOpcode.add, ids: ids)
-	module.appendOp(block, op: StdOp.storeIndirect(addr, offset: 0 as ByteOffset, valueId: value, valueType: StdType.u8))
-end 'emitStoreByte'
 
 // ⭐ **`__cl_count() -> argc`** — walk the whole line and count what `__cl_scan_one` finds.
 //
