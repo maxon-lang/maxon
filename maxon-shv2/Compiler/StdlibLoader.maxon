@@ -994,6 +994,115 @@ function whitelistedStdlibModules(stdlibDir FilePath) returns MaxonSourcePathSet
 	// declares a conformer and CALLS them (`specs-shv2/interface-extensions.md`), which is what actually
 	// compiles them.
 	try listWhitelistedModule(stdlibDir, relative: "Interfaces.maxon", into: listed)
+	// ⭐⭐ **`stdlib/Sha256.maxon` — `sha256(data ByteArray) returns ByteArray`, FIPS 180-4, PURE MAXON.**
+	// No intrinsic, no runtime entry and no target-specific anything: twelve free functions over `Array`,
+	// `Vector` and the bitwise operators. It is also the first listed module the COMPILER ITSELF already
+	// depends on — `Targets/Macos/MachOWriter.maxon` calls `sha256` for the ad-hoc code-signature hashes and
+	// the Mach-O UUID — though it reaches it as a bootstrap-compiled program, which loads all of `stdlib/`
+	// and so never consulted this list.
+	//
+	// ⚠ **ITS BLOCKER WAS REGISTER PRESSURE, NOT A MISSING MECHANISM, AND `S2m-b` REMOVED IT.** The eight
+	// round variables plus a 64-word schedule put **23 values live against a pool of 14** (`E5001`); the
+	// `Vector`-and-`sha256Compress` rewrite cut the peak to 12, margin 2. So this entry is the whitelist line
+	// alone — no compiler change is owed here.
+	//
+	// It clears every entry in this file's collision rule, each CHECKED rather than assumed:
+	//   • FREE FUNCTIONS: **TWELVE**, and the count is RE-DERIVED from the file as it stands rather than
+	//     inherited — `S2m-b`'s rewrite minted `sha256Compress` and `sha256AddIntoState`, so an audit taken
+	//     before it reports ten. They are `sha256RotR`, `sha256Ch`, `sha256Maj`, `sha256BigSigma0`,
+	//     `sha256BigSigma1`, `sha256SmSigma0`, `sha256SmSigma1`, `sha256ReadBE32`, `sha256Compress`,
+	//     `sha256AddIntoState`, `sha256` and `emitBE32` — every one but the last `sha256`-prefixed, which is
+	//     why `emitBE32` is the one worth naming twice. Checked against `Parser.parseCallNamed`'s bare-name
+	//     `if` chain AT THE CHAIN, as that rule's last bullet insists, and in BOTH directions: the chain
+	//     claims `trunc floor ceil round sqrt abs min max` (through `calleeTakesPositionalArgsOnly`), `print`,
+	//     `runProcess`, `spawnReadLine` and the seven `subp*`, none of which is a name here — and this module
+	//     CONSUMES none of them either, the way `Math.pow` consumes `floor`: every call in its body is one of
+	//     its own eleven siblings or is receiver-dot / `Type.`-qualified. Against the other listed modules
+	//     there is no overlap, checked AT THE SOURCE by reading their declarations rather than a roster
+	//     transcribed here — the near miss is `Interfaces.maxon`'s `spreadHash`, the listed set's only other
+	//     hashing free function, and it is a miss.
+	//   • TYPE NAMES: it declares NO nominal `type`/`enum`/`union`/`interface` AT ALL, so the shadowing
+	//     clause (A1s wave 2) and the TYPE-NAME-vs-BUILTIN shape that is still SILENT both have nothing to
+	//     weigh. That is a declaration COUNT, not a hope.
+	//   • ⚠⚠ **THE RANGED-TYPEALIAS CLAUSE THAT MOVED A GOLDEN FOR `File.maxon` IS LIVE HERE.**
+	//     `typealias Word32 = int(i64.min to i64.max)` (`:3`) is file-PRIVATE, which this file's header
+	//     measured to be irrelevant: the two whole-program folds that carry it — `widenStorageBytesFor` ⇒
+	//     `storageBytesInEveryFile` and `record`'s `multiplyDeclared` ⇒ `settleRangeContests` — key on the
+	//     NAME and consult visibility NOWHERE. What decides whether it MOVES anything is whether the compiler
+	//     MINTS instances over that element, and the name that does is `Byte`: `Word32` is not it, and no
+	//     `b"…"` literal's element can reach this alias. Its FORM is already declared under three other names
+	//     by two listed modules (`Builtins.maxon`'s `ParsedInt` and `DecimalPointScale`, `Interfaces.maxon`'s
+	//     `IterStep`) — the same same-form-different-name shape `Clock`'s four `int(0 to u64.max)` aliases
+	//     have carried since that entry. ⚠ **Checked as a BUILD and not as a reading, because a CONTEST is
+	//     what this clause is about**: a program declaring its own NARROWER `typealias Word32 = int(0 to 100)`
+	//     and calling nothing here compiles, runs and answers identically under shv2 and the bootstrap.
+	//     ⛔⛔ **AND THAT CONTROL AGREED WITH A BUG, WHICH IS WHY IT WAS NOT THE LAST WORD.** `21 * 2` is 42
+	//     under either range, so it could not tell "each file reads its own `Word32`" from "one of them won";
+	//     this file's own ⛔⛔ paragraph on `sleep` says a control whose two declarations AGREE proves nothing.
+	//     Run on declarations that DIFFER — the same narrow `Word32` in a program that also CALLS `sha256`,
+	//     whose body holds `0x6a09e667` in one — shv2 **panicked** `sha256: state index unreachable` where the
+	//     bootstrap answered `186`. The fault was NOT this module and NOT the whitelist: a range contest
+	//     re-interns every generic instance over the contested element per reading file, and that re-intern
+	//     dropped the `fixedSize`, so `Vector with 8 Word32` came back SIZELESS. Fixed at
+	//     `SignatureIndex.fileScopedInstance`, reproducible with two plain user files and no stdlib at all
+	//     (`specs-shv2/typealias-file-scope.md`'s
+	//     `a-sized-vector-keeps-its-element-count-when-its-element-is-contested`), and the contest program now
+	//     answers `42 186` under both compilers. ⇒ **an entry for a module whose ranged alias is a `Vector`
+	//     ELEMENT owes the differing-declarations control, not just the agreeing one.**
+	//   • `Sha256Words = Array with Word32` (`:4`) and `Sha256State = Vector with 8 Word32` (`:13`) are
+	//     GENERIC-INSTANCE aliases, file-local per alias FORM exactly as `CommandLine`'s `StringArray` is, so
+	//     they reserve nothing from a user program and join neither fold.
+	//   • ⚠⚠ **THE "TYPE-PARAMETERIZED BY A USER DECLARATION" CLAUSE HAS THE EXACT SHAPE THAT BROKE
+	//     `stdlib/URL.maxon` AND THEN `stdlib/CommandLine.maxon`.** `ByteArray` is `File.maxon`'s
+	//     `Array with Byte` and it is in this module's own PUBLIC signature (`sha256(data ByteArray) returns
+	//     ByteArray`, `:174`) as well as `sha256ReadBE32`'s and `emitBE32`'s — and `Byte` is a name a user may
+	//     declare. That clause says checking it is a BUILD and not a reading, so it was built: a program
+	//     declaring `typealias Byte = int(0 to 1000)` that calls NOTHING here compiles and runs clean, because
+	//     the element the compiler MINTS is `SignatureIndex.SynthesizedByteElementName` rather than a
+	//     spelling taken from user-declarable names.
+	//   • ⭐⭐ **TOP-LEVEL STATE: `let sha256KTable` (`:16`), THE 64-WORD ROUND-CONSTANT TABLE — AND THIS IS
+	//     THE FIRST MODULE OTHER THAN `Log.maxon` TO EXERCISE `S2h`'s CURE.** It is the very shape that cost
+	//     `Log.maxon` **+1,386 code bytes (+87%)** on a program that never spelled `Log`, before
+	//     `DeadGlobalElimination` gained its reachability term. It is IMMUTABLE and file-PRIVATE, so it is
+	//     filed under a key carrying its declaring path (`topLevelStorageKey`) and a user program may still
+	//     declare its own `sha256KTable`; an EXPORTED top-level binding would owe the E3006 argument
+	//     `Log.maxon`'s entry sets out, and this one does not.
+	//   • E3112 fires only when a user program actually contests a spelling, so there is nothing to clear
+	//     ahead of time. These are FREE functions with no receiver, so the surface they expose is their
+	//     call-site argument LABELS — `n`, `b`, `c`, `off`, `padded`, `blockOff`, `slot`, `addend`, `val`,
+	//     `value` — plus the dot-member spellings this file's tokens carry, `.get`/`.set`/`.push`/`.reserve`/
+	//     `.append`/`.count`/`.create` and the `i64.min`/`i64.max` bounds, every one of which the listed set
+	//     already contests.
+	//   • It has NO imports and calls into no other stdlib module.
+	//
+	// MEASURED before listing, which is the check this file's rule prescribes:
+	// `maxon-shv2 build stdlib/Sha256.maxon` exits 1 with `E3001: No 'main' function found` AND NOTHING ELSE.
+	// ⚠ And the criterion was PROVED ABLE TO FAIL for these bodies rather than assumed to be evidence — the
+	// hole `STDLIB-BRINGUP.md` found is a conditional `extension`, which this module does not contain, but
+	// that is an argument and the control is a run: on a copy outside `stdlib/`, verbatim ⇒ `E3001` only;
+	// with `let bogus = NoSuchType.definitelyUndefined(1)` injected into `sha256Ch` ⇒ `E3001` **plus `E3004
+	// call to undefined function 'NoSuchType.definitelyUndefined'`**.
+	//
+	// ⭐⭐ **THE BYTE A/B — THE MEASUREMENT `Log.maxon` MADE MANDATORY FOR A MODULE WITH TOP-LEVEL STATE, AND
+	// THE FIRST TIME `S2h`'s CURE IS CONFIRMED ON A MODULE OTHER THAN `Log`.** MEASURED in ONE tree, two
+	// binaries differing only by the line below, on TWO programs rather than one — because "flat" is a claim
+	// about the SHAPE and one point cannot carry it:
+	//   • `function main() returns ExitCode / return 7` — **1,592 code bytes both ways, Δ0**, and the two
+	//     executables are **byte-for-byte identical** (5,567 bytes, `cmp` clean).
+	//   • 600 generated functions, 6,004 lines — **48,506 code bytes both ways**, executables again
+	//     **byte-for-byte identical**.
+	// ⚠ **AND THE `.rdata` WATCH THIS ENTRY OWES, BEING THE FIRST WITH A LARGE CONSTANT TABLE, READS ZERO
+	// BECAUSE THE SECTION IS NOT EMITTED AT ALL.** The trivial program's PE carries `.text`/`.idata`/`.rsrc`
+	// and NO `.rdata` — `StdlibFacts.unreachable` keeps the 64-word K-table out of the image rather than
+	// merely out of the way, which is the same mechanism `Math.maxon`'s 14 float constants measured.
+	//
+	// ⭐ **WHAT IT DOES COST IS FLAT, AND THAT IS A TWO-POINT MEASUREMENT RATHER THAN AN ARGUMENT** — the
+	// per-compile price of one more file lexed, parsed and swept. Allocations rise **+19,147** on the trivial
+	// program (301,875 ⇒ 321,022) and **+19,147** on the 6,004-line one (1,110,165 ⇒ 1,129,312): identical to
+	// the digit, so nothing here is a term that grows with the user's program. (Bytes: +985,162 and +985,100,
+	// the 62-byte gap being the metrics/output path text.) The magnitude is this module's SIZE and not a
+	// mechanism — 10,147 source bytes against `Log.maxon`'s 2,293, whose entry measured +3,237 the same way.
+	try listWhitelistedModule(stdlibDir, relative: "Sha256.maxon", into: listed)
 	return listed
 end 'whitelistedStdlibModules'
 

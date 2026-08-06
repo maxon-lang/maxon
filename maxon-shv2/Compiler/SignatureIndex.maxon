@@ -3784,8 +3784,14 @@ export type GenericInstanceRegistry
 	end 'instanceKey'
 
 	// Intern `(baseId, args, fixedSize)`, returning an existing id for a structural repeat. O(1)
-	// amortized via `index`. `fixedSize` defaults to `NoFixedSize` — every base but `Vector` is unsized,
-	// so the default is what every one of the ~40 other call sites means and none of them spells it.
+	// amortized via `index`. `fixedSize` defaults to `NoFixedSize` — every base but `Vector` is unsized, so
+	// the default is what the call sites that MINT an instance of some other base mean, and none of them
+	// spells it.
+	//
+	// ⛔ **THE DEFAULT IS A TRAP FOR A CALLER THAT IS RE-INTERNING AN INSTANCE IT ALREADY HOLDS, and that
+	// caller exists: `fileScopedInstance`.** Rebuilding a key from an existing instance means carrying every
+	// component of that instance, and the one that can be lost by silence is this one. See that function's
+	// ⛔ paragraph for the wrong answer it shipped.
 	export function intern(baseId TypeNameId, args MaxonTypeArray, fixedSize FixedElementCount = NoFixedSize) returns GenericInstanceId
 		let key = self.instanceKey(baseId, args: args, fixedSize: fixedSize)
 		if let existing = try self.index.get(key) 'hit'
@@ -10746,12 +10752,25 @@ export type ProgramSignatures
 	// ⚠ **THE PARAMETER IS `filePath` AND NOT `readerFilePath`**, deliberately: at a parse it is the READER's,
 	// at the settle it is the file that WROTE the declaration, and a parameter name true at some call sites
 	// and false at others is the contract `declaredSlotType`'s header refuses for the same reason.
+	//
+	// ⛔⛔ **IT RE-INTERNS AN EXISTING INSTANCE, SO IT MUST CARRY EVERY PART OF THAT INSTANCE'S IDENTITY —
+	// AND IT DROPPED THE `fixedSize` (S2q).** `intern`'s key is `(baseId, args, fixedSize)`; this is the ONLY
+	// call site that rebuilds one from an instance it already holds rather than from a declaration, so it is
+	// the only one that can lose a component by simply not mentioning it — and `fixedSize` DEFAULTS to
+	// `NoFixedSize`, which is silent. A `Vector with 8 W` whose `W` two files disagree about therefore came
+	// back SIZELESS: `create()` built a zero-length vector and every index was out of bounds.
+	// MEASURED, two plain user files and no stdlib at all —
+	// `specs-shv2/typealias-file-scope.md`'s `a-sized-vector-keeps-its-element-count-when-its-element-is-contested`
+	// panicked `a Vector with 8 has an index 7` where the bootstrap answered `42 8 1779033703`.
+	// ⚠ **NO `Array` CASE COULD HAVE CAUGHT IT** — every base but `Vector` is unsized, so on those the
+	// omission is exactly a no-op, which is why the whole existing body of contest cases
+	// (`bytearray-element-size.md`, all `Array with Byte`) stayed green over it.
 	export function fileScopedInstance(id GenericInstanceId, filePath FilePath) returns GenericInstanceId
 		if not self.anythingContested() 'nothingInThisProgramIsContested'
 			return id
 		end 'nothingInThisProgramIsContested'
 
-		return self.genericInstances.intern(self.genericInstances.instanceBaseId(id), args: self.fileScopedArgs(self.genericInstances.instanceArgs(id), filePath: filePath))
+		return self.genericInstances.intern(self.genericInstances.instanceBaseId(id), args: self.fileScopedArgs(self.genericInstances.instanceArgs(id), filePath: filePath), fixedSize: self.genericInstances.instanceFixedSize(id))
 	end 'fileScopedInstance'
 
 	function fileScopedArgs(args MaxonTypeArray, filePath FilePath) returns MaxonTypeArray

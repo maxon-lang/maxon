@@ -1175,3 +1175,51 @@ end 'useA'
 ```exitcode
 72
 ```
+
+
+<!-- test: a-sized-vector-keeps-its-element-count-when-its-element-is-contested -->
+⭐ **A `Vector`'s SIZE is part of its type, and the per-file rescoping a contest causes must carry it.**
+When two files disagree about a ranged alias, every generic instance over that element is re-interned
+once per reading file (`SignatureIndex.fileScopedInstance`) so each file gets its own. That re-intern is
+keyed on `(base, args, fixedSize)` — and it was called WITHOUT the third, so a `Vector with 8 W` came back
+as a SIZELESS `Vector`: `create()` produced a zero-length vector and every index was out of bounds.
+MEASURED on exactly this program before the fix — `panic at lib.maxon:11: a Vector with 8 has an index 7`
+under shv2, against the bootstrap's `42 8 1779033703`.
+
+⚠ **NO `Array` CASE CAN CATCH IT**, which is why this one is a `Vector`: every base but `Vector` is
+unsized, so `fixedSize` is already `NoFixedSize` there and dropping it is a no-op. The contest cases in
+`bytearray-element-size.md` are all `Array with Byte` and stayed green throughout.
+```maxon
+// --- file: lib.maxon
+typealias W = int(i64.min to i64.max)
+typealias WVec = Vector with 8 W
+
+export function wideCount() returns W
+	var v = WVec.create()
+	return v.count()
+end 'wideCount'
+
+export function wideSlot() returns W
+	var v = WVec.create()
+	try v.set(7, value: 1779033703) otherwise panic("a Vector with 8 has an index 7")
+	return try v.get(7) otherwise panic("a Vector with 8 has an index 7")
+end 'wideSlot'
+
+// --- file: main.maxon
+typealias W = int(0 to 100)
+
+function double(w W) returns W
+	return w * 2
+end 'double'
+
+function main() returns ExitCode
+	print("{double(21)} {wideCount()} {wideSlot()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+42 8 1779033703
+```
