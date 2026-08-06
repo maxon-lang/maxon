@@ -882,6 +882,77 @@ function whitelistedStdlibModules(stdlibDir FilePath) returns MaxonSourcePathSet
 	//     CPU cost with no allocation behind it, so it is invisible to the memory columns — see that
 	//     function's header, where the consequence is written down beside the guard it disarms.
 	try listWhitelistedModule(stdlibDir, relative: "Log.maxon", into: listed)
+	// ⭐ `stdlib/Ascii.maxon` — `Ascii.isDigit`/`isAlpha`/`isAlphanumeric`/`isWhitespace`/`isUpper`/
+	// `isLower`, six ASCII classifiers written as range `match`es over a `Character`. Pure Maxon, no
+	// intrinsic and no backend work: the module is loadable exactly as written.
+	//
+	// ⚠ Its blocker was `E2028 :10:4` — `match c '0' to '9'`, a pattern typed `int` against a `Character`
+	// scrutinee — and BATCH23's Character rung deleted it by making every character literal a `Character`
+	// and giving `Character` ordering and range patterns. No compiler change is owed here; this is the
+	// whitelist line alone.
+	//
+	// ⭐⭐ **IT IS THE FIRST ENTRY WHOSE READINESS CHECK WAS PROVED ABLE TO FAIL — AND THAT IS A RUN, NOT
+	// AN ARGUMENT.** `STDLIB-BRINGUP.md`'s headline measured that the check this file prescribes
+	// (`build stdlib/<M>.maxon` ⇒ `E3001` and nothing else) is VACUOUS for a module whose whole content is
+	// a conditional `extension`: the compiler declines to specialize those bodies, so an undefined call
+	// injected into one is never reported and the criterion passes on code nobody analyzed — true of all
+	// six `helpers/sort/*` files. MEASURED here on copies outside `stdlib/`, BOTH directions: verbatim ⇒
+	// `E3001` only; with `let bogus = NoSuchType.definitelyUndefined(1)` in `isDigit`'s body ⇒ `E3001`
+	// **plus `E3004 call to undefined function 'NoSuchType.definitelyUndefined'`**. ⇒ the green below is
+	// evidence about these six bodies, because this module is six ordinary `static function`s and not an
+	// `extension` at all.
+	//
+	// It clears every entry in this file's collision rule, each CHECKED rather than assumed:
+	//   • FREE FUNCTIONS (E3006): it declares NONE — all six are `static`s of `Ascii` — so the clause, and
+	//     with it the SILENT bare-builtin shadow that cost `Sleep.maxon` a builtin retirement, is vacuous.
+	//     Checked against `Parser.parseCallNamed`'s bare-name `if` chain AT THE CHAIN, as that rule's last
+	//     bullet insists, and in BOTH directions: it declares nothing the chain can see, and it CONSUMES
+	//     nothing the chain claims either — every call in its body is receiver-dot (`c.byteLength()`) or
+	//     `Type.`-qualified (`Ascii.isAlpha`, `Ascii.isDigit`), never a bare name the way `Math.pow`
+	//     consumes `floor`.
+	//   • TYPE NAMES: `Ascii` is nominal, so a user program spelling it wins and this one moves into the
+	//     reserved space (A1s wave 2, directory-scoped by N1). No other stdlib file declares it — checked
+	//     AT THE SOURCE across all 50, not against a roster transcribed here.
+	//   • ⚠⚠ **TYPE-NAME-vs-BUILTIN, the one shape still SILENT — AND THIS IS THE FIRST ENTRY WHOSE TYPE
+	//     NAME shv2's OWN COMPILER SOURCE ALSO DECLARES.** `Ascii` is on neither
+	//     `TypeResolution.isCompilerOwnedTypeName` nor `builtinTypeNameTag`, and nothing in the compiler
+	//     synthesizes a declaration of it, so the silent shape is clear. What reading does NOT settle is
+	//     `Lexer.maxon:1517`'s file-private `enum Ascii` (byte constants `underscore`, `dot`, `hash`, `at`,
+	//     `quote`, `backslash`): that is an ORDINARY USER DECLARATION as far as any compiler is concerned,
+	//     and it is exactly what the shadow mechanism is for — so it was MEASURED, not argued.
+	//     ⚠ **And measured on declarations that DIFFER, which is the shape this file's own ⛔⛔ paragraph
+	//     demands** — a control whose two declarations agree cannot tell "the user's won" from "whichever
+	//     folded last won", and that is the bug it agreed with for `sleep`. A user `type Ascii` whose
+	//     `isDigit` returns an **`int`** where this module's returns a **`bool`** compiles and answers 42;
+	//     had the stdlib fold overwritten the user's signature it would have been a TYPE ERROR, not a
+	//     wrong number. The `enum` shape shv2's own Lexer writes was run too and answers 46.
+	//   • It declares NO typealias at all, ranged or otherwise, so the clause that moved `File.maxon`'s
+	//     golden through a declared `Byte` has nothing to weigh. That is a declaration COUNT, not a hope.
+	//   • It declares NO top-level binding, so it does not inherit the class `S2h` had to build a
+	//     reachability term for: `DeadGlobalElimination` has no global of this module's to keep or drop,
+	//     and `__module_init` gains no store.
+	//   • The "type-parameterized by a user declaration" clause: its body passes no `__ManagedMemory` and
+	//     names no type but `Character` and `bool`. ⚠ Checked as a BUILD, which is what that clause demands
+	//     rather than a reading — a program declaring `typealias Byte = int(0 to 1000)` and calling nothing
+	//     here compiles and runs clean.
+	//   • E3112 fires only when a user program actually contests a spelling, so there is nothing to clear
+	//     ahead of time. The surface is six method names and **NO argument label at all** — the file
+	//     contains no `:` — and the only member spellings its own tokens carry are `.byteLength` (already
+	//     `FilePath.maxon`'s), `.isAlpha` and `.isDigit`.
+	//   • It has NO imports and calls into no other stdlib module.
+	//
+	// MEASURED before listing, which is the check this file's rule prescribes:
+	// `maxon-shv2 build stdlib/Ascii.maxon` exits 1 with `E3001: No 'main' function found` AND NOTHING
+	// ELSE. And the capability is real rather than merely loadable: the six classifiers driven from a user
+	// program answer **127** (every bit set) under shv2 and **127** under the bootstrap oracle.
+	//
+	// ⚠ **THE THIRD QUESTION `S2g` ESTABLISHED — what does the entry cost a program that does NOT use it?
+	// — IS ANSWERED BY AN A/B, NOT BY THE ABSENCE OF TOP-LEVEL STATE.** Zero top-level state PREDICTS a
+	// zero, and `Log.maxon` is why this file measures instead of predicting. MEASURED, same worktree, two
+	// binaries, `function main() returns ExitCode / return 7`: **1,592 code bytes both ways — Δ0**, and
+	// stronger than the codeBytes match `S2g` recorded, the two emitted executables are **byte-for-byte
+	// identical** (5,567 bytes, `cmp` clean).
+	try listWhitelistedModule(stdlibDir, relative: "Ascii.maxon", into: listed)
 	return listed
 end 'whitelistedStdlibModules'
 

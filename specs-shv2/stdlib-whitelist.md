@@ -602,6 +602,66 @@ end 'main'
 {  "name": "demo",  "output": ".maxon/demo",  "sources": [  ],  "optimize": false,  "debug_info": true}
 ```
 
+<!-- test: stdlib-whitelist.ascii-classifiers-from-the-whitelist -->
+`stdlib/Ascii.maxon`'s six classifiers. It is the first listed module whose bodies are `match` arms
+over **`Character` RANGE patterns** (`'0' to '9'`, `'a' to 'z' or 'A' to 'Z'`), which is the construct
+BATCH23 built — before it, this module was `E2028` at `:10:4` because the pattern typed `int` against
+a `Character` scrutinee. So what this pins is not only that the entry reaches user code, but that the
+character rung holds when the `match` is compiled from a STDLIB source rather than from the spec that
+built it.
+
+⚠ The last three conditions are the ones worth having, and they are NEGATIVE: `isDigit('x')` and
+`isUpper('k')` pin that the range arms have a lower bound as well as an upper one, and
+`isAlpha('é')` pins the module's own `c.byteLength() != 1` guard — a two-byte scrutinee must fall out
+before the `'a' to 'z'` comparison ever runs. A case with positives alone would pass against a
+classifier that answered `true` for everything.
+
+MEASURED against the reference on the identical program — same six lines, same order, same exit — so
+this is an agreement between the two compilers rather than a transcription of shv2's own answer.
+```maxon
+function main() returns ExitCode
+	if Ascii.isDigit('7') 'digit'
+		print("digit\n")
+	end 'digit'
+	if Ascii.isAlpha('q') 'alpha'
+		print("alpha\n")
+	end 'alpha'
+	if Ascii.isAlphanumeric('Z') 'alnum'
+		print("alnum\n")
+	end 'alnum'
+	if Ascii.isWhitespace('\t') 'tab'
+		print("tab\n")
+	end 'tab'
+	if Ascii.isUpper('K') 'upper'
+		print("upper\n")
+	end 'upper'
+	if Ascii.isLower('k') 'lower'
+		print("lower\n")
+	end 'lower'
+	if Ascii.isDigit('x') 'notDigit'
+		print("UNREACHED-notDigit\n")
+	end 'notDigit'
+	if Ascii.isUpper('k') 'notUpper'
+		print("UNREACHED-notUpper\n")
+	end 'notUpper'
+	if Ascii.isAlpha('é') 'notAscii'
+		print("UNREACHED-notAscii\n")
+	end 'notAscii'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+digit
+alpha
+alnum
+tab
+upper
+lower
+```
+
 ### The corpus segmenter and the synthesized one, side by side
 
 ⭐ **TWO IMPLEMENTATIONS OF ONE TABLE NOW EXIST, AND THIS IS THE ONLY PLACE THEY ANSWER THE SAME
