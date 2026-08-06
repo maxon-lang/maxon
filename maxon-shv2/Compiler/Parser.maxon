@@ -38105,8 +38105,11 @@ export type Parser
 	// inside-a-closure`). A door keyed on the mark would refuse the `stdlib/File.maxon:135` shape the moment
 	// it appeared inside a closure, for a reason having nothing to do with the element stride this rule
 	// exists to keep honest. The instance is the fact the stride depends on, so the instance is what is asked.
-	// ⚠⚠ **AND IT ADMITS THE BYTE-BUFFER BOUNDARY, WHICH IT DID NOT UNTIL W5 — THE EIGHTH DOOR OF THE CLASS
+	// ⚠⚠ **AND IT ADMITS THE BYTE-BUFFER BOUNDARY, WHICH IT DID NOT UNTIL W5 — THE NINTH DOOR OF THE CLASS
 	// `byteBufferBoundaryAdmits`'s header ENUMERATES, found by the module the boundary exists to serve.**
+	// ⚠ NINTH, and the only one that does NOT ride `aggregatesConflict`: the eight that header measured are
+	// aggregate comparisons, and this rule is raw instance EQUALITY (see the paragraph above for why), so it
+	// inherited nothing from them and had to be given the door by name.
 	// A COMPILER-SYNTHESIZED byte buffer wears the reserved element `__ManagedByte`, deliberately a DIFFERENT
 	// instance from the user-visible `Byte` (`SignatureIndex`'s two-names roster: a user may declare `Byte`,
 	// and a compiler-minted buffer's stride may not follow). Raw instance EQUALITY therefore refuses it, and
@@ -38119,7 +38122,7 @@ export type Parser
 	// header's own instruction: the receiver's element must be NAMED for a byte, must hold EVERY byte value
 	// in every file that declares it, and its record must stride ONE byte — and only then is the arriving
 	// `__ManagedByte` admitted. All three are load-bearing here for the same reasons they are at the other
-	// seven sites: a user program may contest `Byte` with `typealias Byte = int(0 to 200)` (whole-program, by
+	// eight sites: a user program may contest `Byte` with `typealias Byte = int(0 to 200)` (whole-program, by
 	// NAME — `export` is not read), and adopting a raw byte buffer as an array of THAT element is the
 	// measured 223 the second question exists to refuse. Under all three the stride is provably 1 on both
 	// sides, which is the exact property this function protects.
@@ -46411,7 +46414,16 @@ export type Parser
 				end 'argArity'
 
 				let index = try args.get(0) otherwise panic("commandLineArg: args.count() == CommandLineArgArity just checked but get(0) failed")
-				if not tagIsInteger(self.tagOf(index)) 'notAnIndex'
+				// ⚠ `tagIsIntegral`, NOT `tagIsInteger`, and the narrow spelling here was a MEASURED FALSE REFUSAL
+				// THAT SHIPPED (W5 review). A value whose static type is a RANGED ALIAS carries the `named` tag
+				// until TypeResolution collapses it, so the narrow test refused every argument spelled with one:
+				// `take(i ArgIndex)` calling `__Builtins.commandLineArg(i)` was
+				// `E3005 '__Builtins.commandLineArg' requires a int, but its argument is int` — a refusal naming
+				// one type twice — on a program the BOOTSTRAP compiles and runs (MEASURED both ways). It is the
+				// same fact `parseBuiltinIntegerArg`'s header measured at the six signature-checked builtin doors
+				// and the same one the `readStdin` arm below asks; this arm kept the narrow spelling while its
+				// neighbours were cured, which is what a third spelling of one question buys.
+				if not tagIsIntegral(self.tagOf(index)) 'notAnIndex'
 					throw ParseError.builtinOperandType(String.from(callee), required: typeTagName(ValueTypeTag.integer), got: typeTagName(self.tagOf(index)), line: anchor.line, column: anchor.column)
 				end 'notAnIndex'
 

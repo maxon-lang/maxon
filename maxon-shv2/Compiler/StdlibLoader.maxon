@@ -200,6 +200,17 @@
 //     names standing after `sleep` left, omitting `spawnReadLine` and all seven `subp*` — so a maintainer
 //     checking a module against the list rather than the chain would have been told a claimed name was
 //     free, and got back exactly the silent shadow this rule exists to prevent.
+//   • ⚠ **AND THE FREE-FUNCTION CHECK HAS A SECOND SURFACE THE BULLET ABOVE DOES NOT REACH: THE LISTED SET'S
+//     OWN FREE FUNCTIONS** (W5 review). That bullet asks one question — *does a BARE BUILTIN claim this
+//     name?* — against `parseCallNamed`'s chain, and the type-name bullet asks the listed-vs-listed question
+//     for TYPES ("two listed modules declaring one type name is a maintainer's bug in this list"). Nobody
+//     asked it for free FUNCTIONS, and `export` is not read at the folds that matter, so a file-private one
+//     counts. ⇒ **ask BOTH: against the chain, and against every free function the already-listed modules
+//     declare.**
+//     ⚠ There is a LIVE one waiting: `stdlib/Console.maxon:178` (listed, W5) and `stdlib/Subprocess.maxon:782`
+//     (not listed) both declare `stripTrailingCR` — over a `ByteArray` and a `String` respectively. The day
+//     `Subprocess.maxon` is listed, that is the collision, and it is the ONE surface here that fails LOUDLY
+//     rather than silently, which is the only reason it is a note and not a blocker.
 //   • ⚠⚠ **A LISTED MODULE'S OWN BODY MUST NOT BE TYPE-PARAMETERIZED BY A USER DECLARATION — and this clause
 //     is here because the four above did NOT cover it, twice.** Every bullet so far is about a NAME the
 //     module DECLARES colliding with one the user declares. This one is about a TYPE the module's body
@@ -1225,8 +1236,9 @@ function whitelistedStdlibModules(stdlibDir FilePath) returns MaxonSourcePathSet
 	//     'Array___ManagedByte'`. The producer side was already right — the intrinsic mints
 	//     `SignatureIndex.SynthesizedByteElementName`, exactly as this clause demands. The CONSUMER was not:
 	//     `Parser.requireSameArrayInstance` asked raw instance EQUALITY, so it refused the compiler's own
-	//     mint at a declared byte position. That is the EIGHTH door of the class
-	//     `ProgramSignatures.byteBufferBoundaryAdmits`'s header enumerates, and it now asks that shared
+	//     mint at a declared byte position. That is the NINTH door of the class
+	//     `ProgramSignatures.byteBufferBoundaryAdmits`'s header enumerates — and the only one that does not
+	//     ride `aggregatesConflict`, which is exactly why the other eight did not cover it — and it now asks that shared
 	//     three-question door like the other seven. ⇒ **The clause's cure is TWO-SIDED and the loader header
 	//     only ever stated one side**: minting a compiler-owned element is necessary, and every door that
 	//     receives one must know the boundary. `specs-shv2/array-init.md`'s two new cases are the pins.

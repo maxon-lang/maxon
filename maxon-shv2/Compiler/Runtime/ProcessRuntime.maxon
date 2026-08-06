@@ -31,12 +31,13 @@ let ProcessRuntimePrefix = b"__proc_"
 // ⭐ **THE ONE ENTRY POINT.**
 export let ProcessExecutablePathName = b"__proc_exe_path"
 
-// The first buffer the walk asks for. `MAX_PATH` (260) is the length that fits every path a program is
+// The first buffer the walk asks for is `ManagedDirectoryRuntime.MaxPathBytes` — the same `MAX_PATH` the
+// `GetCurrentDirectoryA` walk starts at, READ from there rather than re-spelled here (W5 review), because
+// what 260 means is a Win32 fact and not this loop's policy. `MAX_PATH` fits every path a program is
 // normally installed at, so the overwhelmingly common case is one call and one allocation — and it is not a
 // LIMIT here the way it is in an API that refuses past it, because the loop below grows past it. The
 // bootstrap starts at 512 (`X86CodeEmitter.Runtime.cs:1189`); the smaller start costs at most one extra
 // doubling on a long path and allocates half as much on every ordinary one.
-let FirstPathAttemptBytes = 260 as ParsedInt
 
 // The growth factor, as the shift that applies it. Named because a bare `1` at a `shl` says nothing about
 // which of the two obvious policies (double, or ask the OS for the size) this loop uses — and for
@@ -54,11 +55,13 @@ let PathGrowthShift = 1 as ParsedInt
 // the number of doublings is not bounded by anything this code knows, which makes a loop the honest
 // structure rather than a stylistic choice. (The bootstrap loops too, for the same reason.)
 //
-// ⭐ **THE THREE ANSWERS.** `0` is a failure; `< capacity` means the path is in the buffer, NUL-terminated;
-// anything else means truncation. Only the first two are exits; the third grows and goes round again.
-// ⚠ The `written == 0` test must come FIRST: a 0 also satisfies `< capacity`, so the fit test alone would
-// route a failure into the copy and read a buffer the OS never wrote. That is `emitCurrentPathVerdict`'s
-// stated trap, met again here.
+// ⭐ **THE THREE ANSWERS ARE CLASSIFIED BY THE SHARED VERDICT, NOT BY A SECOND COPY OF IT** (W5 review).
+// `0` is a failure; `< capacity` means the path is in the buffer, NUL-terminated; anything else means
+// truncation — and `written == 0` must be asked FIRST, because a 0 also satisfies `< capacity`. That is one
+// fact about a Win32 buffer fill and it now lives in one place,
+// `ManagedDirectoryRuntime.emitFilledBufferVerdict`; only where each of the three answers GOES is this
+// loop's own. Here the third grows and goes round again, where `__md_current_path`'s retries once at the
+// size the OS named.
 //
 // ⚠ **A FAILURE ANSWERS THE EMPTY BUFFER RATHER THAN THROWING**, which is the intrinsic's documented
 // contract (`/specs/builtins-type.md`: *"empty buffer when unavailable"*) and matches `__cl_arg`, whose
@@ -89,7 +92,7 @@ function buildProcessExecutablePath(module StdModule)
 	let capacity = ids.mint()
 	pushI64BlockArgs(attempt, values: twoArgs(buffer, second: capacity))
 
-	let firstSize = emitConst(module, block: entry, value: FirstPathAttemptBytes, ids: ids)
+	let firstSize = emitConst(module, block: entry, value: MaxPathBytes, ids: ids)
 	let firstBuf = emitRawAlloc(module, block: entry, byteCount: firstSize, ids: ids)
 	module.setTerminator(entry, op: StdOp.branch(attempt.id))
 	entry.branchEdges.push(BranchEdge.create(attempt.id, argIds: twoArgs(firstBuf, second: firstSize)))
@@ -99,12 +102,13 @@ function buildProcessExecutablePath(module StdModule)
 	// `written` are simply in scope — the dominance argument `emitCStringLength` states for its own length.
 	let written = ids.mint()
 	module.appendOp(attempt, op: StdOp.osExecutablePath(written, bufLenId: capacity, bufPtrId: buffer))
-	let zero = emitConst(module, block: attempt, value: 0, ids: ids)
-	let refused = emitCmp(module, block: attempt, a: written, b: zero, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(attempt, op: StdOp.condBranch(refused, thenBlockId: unavailable.id, elseBlockId: fitTest.id))
-
-	let fits = emitCmp(module, block: fitTest, a: written, b: capacity, pred: StdCmpPred.lt, ids: ids)
-	module.setTerminator(fitTest, op: StdOp.condBranch(fits, thenBlockId: copyOut.id, elseBlockId: grow.id))
+	// The three-way classification is `ManagedDirectoryRuntime.emitFilledBufferVerdict`'s, not a second copy
+	// of it: `GetModuleFileNameA` and `GetCurrentDirectoryA` disagree about what "too small" MEANS (nSize
+	// against the size needed) and about what to do next, and agree exactly about how to TELL the three
+	// answers apart — including that `written == 0` must be asked before the fit test, because a 0 also
+	// satisfies `< capacity`. No edges are pushed here: `attempt` dominates all four exits, so the pair it
+	// carries is simply in scope and nothing crosses these merges.
+	emitFilledBufferVerdict(module, block: attempt, check: fitTest, written: written, capacity: capacity, whenRefused: unavailable, whenFits: copyOut, whenTooSmall: grow, ids: ids)
 
 	// Truncated: release this attempt's buffer, double the capacity and go round again.
 	emitRawFree(module, block: grow, ptr: buffer, ids: ids)

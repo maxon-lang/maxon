@@ -120,13 +120,19 @@ let ErrorNoMoreFiles = 18 as ParsedInt
 // full DWORD, so it is compared against a DWORD-masked load rather than against -1.
 let InvalidFileAttributes = 0xFFFFFFFF as ParsedInt
 
-// ⭐ **THE `currentPath` BUFFER, AND WHY IT HAS A RETRY LOOP.** `GetCurrentDirectoryA(n, buf)` answers three
-// different things: `0` is failure, `< n` is "written, NUL included", and `>= n` is "too small — and this is
-// the size it needs, NUL included", in which case the buffer's contents are UNDEFINED. So the first attempt
-// uses `MAX_PATH` (which the bootstrap also starts at, `X86CodeEmitter.Runtime.cs:4102`) and a second
-// attempt uses exactly what the OS asked for. A THIRD attempt cannot be needed: the second buffer is the
-// size the OS itself named.
-let MaxPathBytes = 260 as ParsedInt
+// ⭐ **`MAX_PATH` — THE FIRST BUFFER EVERY Win32 PATH FILL IN THIS COMPILER ASKS FOR.** `GetCurrentDirectoryA(n, buf)`
+// answers three different things: `0` is failure, `< n` is "written, NUL included", and `>= n` is "too
+// small — and this is the size it needs, NUL included", in which case the buffer's contents are UNDEFINED.
+// So the first attempt uses `MAX_PATH` (which the bootstrap also starts at,
+// `X86CodeEmitter.Runtime.cs:4102`) and a second attempt uses exactly what the OS asked for. A THIRD attempt
+// cannot be needed: the second buffer is the size the OS itself named.
+//
+// ⚠ EXPORTED for `ProcessRuntime` (W5 review), whose `GetModuleFileNameA` walk starts at the same 260 for
+// the same reason. It briefly held its own `FirstPathAttemptBytes = 260`, which is ONE Win32 constant
+// written down twice: the day a measurement says a bigger first attempt is right, one of the two would move
+// and nothing would make the other follow. The two loops differ in their RETRY POLICY, not in what
+// `MAX_PATH` is.
+export let MaxPathBytes = 260 as ParsedInt
 
 // ⭐ **THE `__ManagedDirectoryError` ORDINALS, AS ERROR FLAGS (`ordinal + ErrorFlagOrdinalBias`)** — the
 // `ManagedFileRuntime` discipline, and the ordinals are positional facts about the case order of the enum
@@ -750,7 +756,13 @@ function buildManagedDirectoryCurrentPath(module StdModule)
 	let firstBuf = emitRawAlloc(module, block: entry, byteCount: firstSize, ids: ids)
 	let firstLen = ids.mint()
 	module.appendOp(entry, op: StdOp.osDirCurrentPath(firstLen, bufLenId: firstSize, bufPtrId: firstBuf))
-	emitCurrentPathVerdict(module, func: func, block: entry, written: firstLen, capacity: firstSize, buffer: firstBuf, failed: failed, copyOut: copyOut, tooSmall: retry, ids: ids)
+	// This attempt's buffer rides every exit as a block arg — the shared verdict classifies, the caller says
+	// what crosses each merge (see `emitFilledBufferVerdict`'s seam paragraph).
+	var firstFit = module.addBlock(func, label: b"mdcpfit")
+	emitFilledBufferVerdict(module, block: entry, check: firstFit, written: firstLen, capacity: firstSize, whenRefused: failed, whenFits: copyOut, whenTooSmall: retry, ids: ids)
+	entry.branchEdges.push(BranchEdge.create(failed.id, argIds: argsOf(firstBuf)))
+	firstFit.branchEdges.push(BranchEdge.create(copyOut.id, argIds: argsOf(firstBuf)))
+	firstFit.branchEdges.push(BranchEdge.create(retry.id, argIds: argsOf(firstBuf)))
 
 	// Attempt 2, at exactly the size the OS named (which INCLUDES the NUL, so it is one more than the path).
 	// `firstLen` is defined in `entry`, which dominates this block.
@@ -758,7 +770,13 @@ function buildManagedDirectoryCurrentPath(module StdModule)
 	let secondBuf = emitRawAlloc(module, block: retry, byteCount: firstLen, ids: ids)
 	let secondLen = ids.mint()
 	module.appendOp(retry, op: StdOp.osDirCurrentPath(secondLen, bufLenId: firstLen, bufPtrId: secondBuf))
-	emitCurrentPathVerdict(module, func: func, block: retry, written: secondLen, capacity: firstLen, buffer: secondBuf, failed: failed, copyOut: copyOut, tooSmall: failed, ids: ids)
+	// Attempt 2's "did not fit" edge goes to the FAILURE exit — see this builder's header for why a second
+	// "too small" is the OS contradicting itself and must not be copied out of.
+	var secondFit = module.addBlock(func, label: b"mdcpfit")
+	emitFilledBufferVerdict(module, block: retry, check: secondFit, written: secondLen, capacity: firstLen, whenRefused: failed, whenFits: copyOut, whenTooSmall: failed, ids: ids)
+	retry.branchEdges.push(BranchEdge.create(failed.id, argIds: argsOf(secondBuf)))
+	secondFit.branchEdges.push(BranchEdge.create(copyOut.id, argIds: argsOf(secondBuf)))
+	secondFit.branchEdges.push(BranchEdge.create(failed.id, argIds: argsOf(secondBuf)))
 
 	emitRawFree(module, block: failed, ptr: doomed, ids: ids)
 	emitErrorReturn(module, block: failed, flag: ManagedDirectoryCurrentPathFailedFlag, ids: ids)
@@ -771,27 +789,33 @@ function buildManagedDirectoryCurrentPath(module StdModule)
 	module.functions.push(func)
 end 'buildManagedDirectoryCurrentPath'
 
-// ⭐ **ONE ATTEMPT'S THREE-WAY VERDICT, WRITTEN ONCE BECAUSE `GetCurrentDirectoryA` HAS THREE ANSWERS.**
-// `0` is a failure; `< capacity` means the path (NUL included) is in the buffer; anything else means the
-// buffer was too small and `written` is the size needed. Each attempt carries its OWN buffer into whichever
-// exit it takes, which is what every `branchEdge` here records — the three targets all take one, so the
-// helper is uniform and the caller only says where "too small" goes.
+// ⭐⭐ **ONE ATTEMPT'S THREE-WAY VERDICT FOR A Win32 CALL THAT FILLS A CALLER'S BUFFER AND ANSWERS A COUNT.**
+// `0` is a failure; `< capacity` means the answer is in the buffer, NUL included; anything else means the
+// buffer was too small. Three answers, one classification, and the callers differ only in where each of
+// the three goes.
 //
-// The `written == 0` test is FIRST and it has to be: a 0 also satisfies `< capacity`, so the fit test alone
-// would route a failure into the copy and read a buffer the OS never wrote.
-function emitCurrentPathVerdict(module StdModule, func IrFunction, block IrBlock, written ValueId, capacity ValueId, buffer ValueId, failed IrBlock, copyOut IrBlock, tooSmall IrBlock, ids ValueMinter)
-	var check = module.addBlock(func, label: b"mdcpfit")
-
+// ⚠⚠ **THE `written == 0` TEST IS FIRST AND IT HAS TO BE: a 0 also satisfies `< capacity`**, so the fit test
+// alone would route a failure into the copy and read a buffer the OS never wrote. That ordering is the ONE
+// fact this function exists to hold — and it was written down TWICE, here and inline in `ProcessRuntime`'s
+// `GetModuleFileNameA` loop, until the W5 review folded them together. Nothing made the two agree, and what
+// a divergence produces is a read of undefined memory rather than a diagnostic.
+//
+// ⭐ **WHAT IT DOES NOT OWN IS THE MERGE ARGUMENTS, AND THAT IS THE HONEST SEAM.** `__md_current_path`
+// carries each attempt's buffer into all three exits as a block arg, because its two attempts reach ONE
+// `copyOut`/`failed` pair from different blocks; `__proc_exe_path`'s exits are all dominated by its loop
+// header, so its buffer is simply in scope and its edges carry nothing. The classification is one fact; the
+// phi shape is two, so the caller pushes its own `branchEdges`.
+//
+// ⚠ The `check` block is the CALLER's to create, so each builder keeps its own block ORDER and its own
+// label. It is the only block this verdict needs beyond the ones the caller already names.
+export function emitFilledBufferVerdict(module StdModule, block IrBlock, check IrBlock, written ValueId, capacity ValueId, whenRefused IrBlock, whenFits IrBlock, whenTooSmall IrBlock, ids ValueMinter)
 	let zero = emitConst(module, block: block, value: 0, ids: ids)
 	let refused = emitCmp(module, block: block, a: written, b: zero, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(block, op: StdOp.condBranch(refused, thenBlockId: failed.id, elseBlockId: check.id))
-	block.branchEdges.push(BranchEdge.create(failed.id, argIds: argsOf(buffer)))
+	module.setTerminator(block, op: StdOp.condBranch(refused, thenBlockId: whenRefused.id, elseBlockId: check.id))
 
 	let fits = emitCmp(module, block: check, a: written, b: capacity, pred: StdCmpPred.lt, ids: ids)
-	module.setTerminator(check, op: StdOp.condBranch(fits, thenBlockId: copyOut.id, elseBlockId: tooSmall.id))
-	check.branchEdges.push(BranchEdge.create(copyOut.id, argIds: argsOf(buffer)))
-	check.branchEdges.push(BranchEdge.create(tooSmall.id, argIds: argsOf(buffer)))
-end 'emitCurrentPathVerdict'
+	module.setTerminator(check, op: StdOp.condBranch(fits, thenBlockId: whenFits.id, elseBlockId: whenTooSmall.id))
+end 'emitFilledBufferVerdict'
 
 // ⭐ **INSTALL + THE BIDIRECTIONAL DRIFT GUARD**, copied from `installManagedFileRuntime` for its stated
 // reason: the predicate above and the `throws` clauses stamped by the builders are ONE fact in two places,

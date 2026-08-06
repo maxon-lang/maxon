@@ -10182,6 +10182,22 @@ export type ProgramSignatures
 	// `specs-shv2/bytearray-element-size.md`'s `a-synthesized-buffer-crosses-every-declared-byte-buffer-door`
 	// pins six of them in one program and
 	// `overload-scoring-admits-a-synthesized-buffer-at-a-byte-buffer-candidate` pins the eighth.
+	//
+	// ⭐⭐ **AND THERE IS A NINTH, WHICH DOES *NOT* COME THROUGH `aggregatesConflict` — `Parser.requireSameArrayInstance`
+	// (W5).** `ByteArray.init(managed)` has a rule of its own (the argument's generic instance must EQUAL the
+	// receiver alias's, which is element-agnostic and strictly stronger than the byte rule), so it asks raw
+	// instance equality rather than an aggregate comparison — and therefore inherited none of the eight above.
+	// It refused `stdlib/Console.maxon:68`'s `ByteArray.init(__Builtins.readStdin(n))` with
+	// `E3005 expected '__ManagedMemory with Byte', got 'Array___ManagedByte'`, on a module the BOOTSTRAP
+	// compiles. It now asks THIS function directly, after its own equality test.
+	// ⚠ **SO THE COUNT IS NINE DOORS AND TWO CALL SITES, AND THAT ASYMMETRY IS THE THING TO KEEP IN VIEW WHEN
+	// A TENTH ARRIVES**: eight ride `aggregatesConflict` and are covered by construction, one asks here by
+	// name. A new whole-container coercion rule spelled as raw instance equality is invisible to the eight.
+	// `specs-shv2/array-init.md`'s `a-synthesized-byte-buffer-adopts` and
+	// `error.a-synthesized-buffer-is-refused-at-a-narrowed-byte` pin the ninth (admission and the BOUNDS
+	// refusal that keeps it honest).
+	// ⚠ Not to be confused with `append`'s "NINTH COERCION SITE" one function down: that site is deliberately
+	// NOT one of these doors (see its own ⚠ paragraph), so the two nines count different things.
 	export function byteBufferBoundaryAdmits(declaredTag ValueTypeTag, declaredNameId TypeNameId, gotTag ValueTypeTag, gotNameId TypeNameId) returns bool
 		let declaredElement = self.arrayNamedElementName(declaredTag, nameId: declaredNameId)
 		if not isByteElementName(declaredElement) 'declaredElementIsNotNamedForAByte'

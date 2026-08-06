@@ -696,15 +696,19 @@ error E2015: <fragment>:6:20: Unsupported: `Array` static method 'nosuch' — sh
 ⭐⭐ **THE BYTE-BUFFER BOUNDARY AT THIS DOOR (W5).** A COMPILER-SYNTHESIZED buffer wears the
 reserved element `__ManagedByte`, deliberately a DIFFERENT instance from the user-visible `Byte` —
 a user may declare `Byte`, and a compiler-minted buffer's stride may not follow. Raw instance
-equality therefore refused it, and this is the EIGHTH door of the class
-`ProgramSignatures.byteBufferBoundaryAdmits`'s header enumerates: `stdlib/Console.maxon:68` is
+equality therefore refused it, and this is the NINTH door of the class
+`ProgramSignatures.byteBufferBoundaryAdmits`'s header enumerates — and the only one that does not
+ride `aggregatesConflict`, which is why the other eight did not cover it: `stdlib/Console.maxon:68` is
 `ByteArray.init(__Builtins.readStdin(n))`, and it got `E3005 … expected '__ManagedMemory with
 Byte', got 'Array___ManagedByte'` on a module the bootstrap compiles.
 
 The buffer here is `__ManagedDirectory.currentPath()` rather than a stdin read, deliberately: the
 subject is the DOOR and not the intrinsic, and this producer is the same four-line shape that
-header uses for the other six. It carries `<!-- targets: x64-windows -->` for that producer's
-substrate, which is the only reason this case is not target-neutral like the rest of the file.
+header uses for the other six. It is restricted to x64-windows by the marker line above, for that
+producer's substrate, which is the only reason this case is not target-neutral like the rest of the
+file. (Quoting the marker's TEXT in prose would be a second marker: `SpecParser` reads the directive
+with `line.contains`, so a sentence inside a test's region sets it too — see
+`bytearray-element-size.md`'s exit-code case, where for one revision the sentence was the only one.)
 ```maxon
 typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte

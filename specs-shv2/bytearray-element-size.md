@@ -1917,6 +1917,7 @@ error E3118: <fragment>:12:16: 'setByte' writes a RAW BYTE at a byte OFFSET, so 
 ```
 
 <!-- test: an-exit-code-element-fills-its-own-slot-and-takes-a-raw-byte-write -->
+<!-- targets: x64-windows -->
 ### An `ExitCode` element FILLS its slot, so a raw byte write is legal — and this case USED TO PIN THE OPPOSITE
 ⛔⛔ **THIS CASE WAS `error.a-raw-byte-write-is-refused-on-an-exit-code-element`, AND THE REFUSAL IT PINNED
 WAS A FALSE ONE shv2 SHIPPED — MEASURED AGAINST THE RUNNABLE ORACLE AT W5.** The bootstrap compiles this
@@ -1934,11 +1935,17 @@ element is `int(0 to u32.max)`, its slot is therefore 4 bytes, it admits every o
 is accepted. **Both compilers now answer 3741319169** (`0xDF000001` — the pushed `1` with byte 3 set to
 223, which is what a 4-byte element makes of it).
 
-⚠ It carries `<!-- targets: x64-windows -->` because `ExitCode`'s range IS the compile target's
-(`int(0 to 255)` on Linux, macOS and WASI), so the element's WIDTH — and hence which element byte 3
-belongs to — differs per lane. The verdict does not: a narrower range fills a narrower slot just as
-exactly. The three siblings above already pin the rule at 1, 2 and 8 bytes on every target; what this case
-adds is the compiler-owned name, and that is the part that is platform-shaped.
+⚠ It is restricted to **x64-windows** by the marker line above, because `ExitCode`'s range IS the compile
+target's (`int(0 to 255)` on Linux, macOS and WASI), so the element's WIDTH — and hence which element byte 3
+belongs to, and whether `3741319169` is even in range for the value `main` returns — differs per lane. The
+verdict does not: a narrower range fills a narrower slot just as exactly. The three siblings above already
+pin the rule at 1, 2 and 8 bytes on every target; what this case adds is the compiler-owned name, and that
+is the part that is platform-shaped.
+⛔ **THE MARKER IS A LINE, NOT A SENTENCE, AND FOR ONE REVISION OF THIS CASE IT WAS A SENTENCE (W5 review).**
+`SpecParser.scanTestFromMarker` reads the directive with `line.contains`, so the prose that *quoted* the
+marker WAS the marker — the case really was x64-windows-only, by accident, and rewording this paragraph
+would have silently released it onto the arm64 and wasm lanes where its element is one byte wide. Quote the
+marker's NAME here, never its text.
 ```maxon
 typealias Codes = Array with ExitCode
 
