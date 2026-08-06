@@ -539,8 +539,10 @@ end 'typeDeclaresInterface'
 // depend only on the conforming type, and `project.structTypes` is a map lookup that would otherwise run
 // per rendered parameter.
 function checkOneConformance(project Project, functionsByName FunctionNameIndex, conformance ConformanceDecl, signatures ProgramSignatures)
-	// The conforming type's own `uses` names — the list a `typeParameter(pos)` in one of its methods indexes,
-	// read ONCE per declaration rather than per rendered type (it is a map lookup, and it does not vary).
+	// The conforming type's own `uses` names — the list a `typeParameter(token)` in one of its methods is
+	// re-spelled against (`typeParamPositionIn`, W14: a token is a digest of `(declaring type, parameter)`,
+	// not an index, so the position is recovered by re-spelling and never by subscripting this list), read
+	// ONCE per declaration rather than per rendered type (it is a map lookup, and it does not vary).
 	//
 	// Only a `type` declaration records a ConformanceDecl (`Parser.parseTypeDeclaration` is the sole caller
 	// of `parseTypeImplementsClause`) and every parsed `type` commits its layout (`commitStructTypes`), so a

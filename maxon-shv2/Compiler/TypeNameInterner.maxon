@@ -132,10 +132,17 @@ export function remapMaxonType(t MaxonType, remap TypeNameRemap) returns MaxonTy
 		// A function value carries a name id (its governing function/alias name) for the same reason
 		// `named`/`structRef` do, so it moves through a merge by the same rule — remap the id.
 		function(id) gives MaxonType.function(remap.apply(id))
-		// A type-parameter reference and a generic instance (P1.6-A) carry GLOBAL ids — a param POSITION
-		// and a `GenericInstanceId` keyed on the whole-program registry, NOT a per-file interner id — so a
+		// A type-parameter reference and a generic instance (P1.6-A) carry GLOBAL ids — a param TOKEN and a
+		// `GenericInstanceId` keyed on the whole-program registry, NOT a per-file interner id — so a
 		// merge's id remap has nothing to rewrite: they pass through unchanged, like a primitive.
-		// Remapping the id (as `named` does) would corrupt the position / instance key.
+		// Remapping the id (as `named` does) would corrupt the token / instance key.
+		//
+		// ⚠ **THE REASON THE TOKEN IS GLOBAL CHANGED AT W14, AND THE CONCLUSION DID NOT.** It used to be a
+		// POSITION, global because every declaration numbers its parameters from zero — which is also why
+		// two declarations' first parameters were one value, the defect W14 removed. It is now a DIGEST of
+		// `(declaringTypeName, paramName)` (`ProgramSignatures.typeParamTokenFor`), global because it is a
+		// pure function of source text and so is computed identically by every file, the tolerant sweep and
+		// the real parse alike. Both spellings are interner-independent; only the second is injective.
 		typeParameter gives t
 		genericInstance gives t
 		// A Character carries no interner id (its identity is the tag), so a merge's remap has nothing

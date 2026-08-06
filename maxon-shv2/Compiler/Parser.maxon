@@ -1796,7 +1796,7 @@ end 'ConstructorInstance'
 
 // ⭐ **THE THREE SHAPES A NESTED (inner) TYPEALIAS TAKES (P1.6-C / P1.7 slice 3b-i).** A `typealias Idx =
 // int(0 to N)` is a RANGED per-instance alias; a `typealias ElementArray = Array with T` is a
-// GENERIC-INSTANCE alias whose instance (`Array with typeParameter(pos)`) is partially opaque; a
+// GENERIC-INSTANCE alias whose instance (`Array with typeParameter(token)`) is partially opaque; a
 // `typealias FnTypeAlias1 = function(Integer) returns Integer` is a FUNCTION alias. They fold into
 // DIFFERENT whole-program registries — the ranged one into `innerAliases`, the generic one into
 // `genericAliases` under its base-qualified name, the function one into the FILE's own
@@ -10668,7 +10668,7 @@ export type Parser
 		var layout = StructLayout.create(nameTok.value, visibility: visibility, declFilePath: self.filePath)
 		// `uses T` (P1.6-A) — parsed here, in the tolerant sweep, exactly as `parseTypeDeclaration` does
 		// it, so the scanned layout carries the SAME parameter list the real parse reads a field's
-		// `typeParameter(pos)` against. The cursor lands past the clause, at the type body the loop walks.
+		// `typeParameter(token)` against. The cursor lands past the clause, at the type body the loop walks.
 		self.openTypeParamScope(layout)
 
 		// ⭐ **`implements I1, I2 [with …]` — THE NAMES AND THE FINAL `with` BINDINGS, AND THAT IS WHY IT IS
@@ -11383,7 +11383,7 @@ export type Parser
 
 	// ⭐ **OPEN A GENERIC TYPE'S PARAMETER SCOPE (P1.6-A)** — `type Box uses T` / `type Pair uses A, B`.
 	// Called by BOTH `parseTypeDeclaration` and the tolerant sweep `recordScannedType` right after
-	// `enterTypeScope`, so the two record the SAME parameter list (the one a field's `typeParameter(pos)`
+	// `enterTypeScope`, so the two record the SAME parameter list (the one a field's `typeParameter(token)`
 	// is meaningful against). It sets `self.enclosingTypeParams` — how `parseTypeReference` recognizes a
 	// bare `T` — and stamps the names onto the layout so the whole-program arity check can read them off
 	// `structOf`. The cursor lands past the clause (at the type body); a type with no `uses` leaves the
@@ -12378,7 +12378,7 @@ export type Parser
 		let form = try self.readTypeAliasDeclaration(ranged, functionOut: functionAliases, genericOut: generics, recordFunctionSignature: recordFunctionSignature, visibility: visibility)
 
 		// A generic-instance nested alias (`Array with T`) — recorded by `readGenericInstanceAlias` into
-		// `generics`. Its instance is PARTIALLY OPAQUE (`Array with typeParameter(pos)`), keyed whole-program by
+		// `generics`. Its instance is PARTIALLY OPAQUE (`Array with typeParameter(token)`), keyed whole-program by
 		// the caller under its base-qualified name so a same-named inner alias of another generic type stays
 		// distinct, exactly as a ranged inner alias is.
 		if form == TypeDeclKind.genericAlias 'genericInstance'
@@ -13054,8 +13054,9 @@ export type Parser
 			boolean to float gives EmptySourceText
 			exitCode to unresolved gives EmptySourceText
 			string gives EmptySourceText
-			// A type parameter / generic instance carries no re-internable NAME (its id is a POSITION / a
-			// GenericInstanceId, P1.6-A), so like a primitive it yields the empty string. A function ALIAS
+			// A type parameter / generic instance carries no re-internable NAME (its id is a W14 TOKEN — a
+			// digest of `(declaring type, parameter)` — / a GenericInstanceId, P1.6-A), so like a primitive
+			// it yields the empty string. A function ALIAS
 			// naming one is not reachable in the trivial slice — this is exhaustiveness insurance.
 			typeParameter gives EmptySourceText
 			genericInstance gives EmptySourceText
@@ -13744,7 +13745,7 @@ export type Parser
 		// Every other type goes through the ONE shared renderer (`IrInterface.renderDeclaredTypeName`) — the
 		// same function the IMPL side of the conformance uses, so an associated type, a type PARAMETER and a
 		// generic INSTANCE cannot be spelled one way here and another way there. `enclosingTypeParams` is the
-		// interface's own `uses` list inside an interface body, which is what a `typeParameter(pos)` in one of
+		// interface's own `uses` list inside an interface body, which is what a `typeParameter(token)` in one of
 		// its signatures indexes.
 		return renderDeclaredTypeName(t, declarationName: interfaceName, typeParamNames: self.enclosingTypeParams, typeNames: self.artifact.typeNames, signatures: self.signatures)
 	end 'renderInterfaceTypeName'
@@ -16162,7 +16163,7 @@ export type Parser
 	// ⛔ **THE ENCLOSING TYPE'S OWN NAME AND ITS TYPE PARAMETERS BOTH WIN OVER AN ALIAS SHADOWING THEM**, and
 	// that is `parseTypeReference`'s ARM ORDER read out as a predicate rather than a precedence chosen here:
 	// that routine answers the type's own name (`enclosingSelfType`) and then a bare `T`
-	// (`typeParameter(pos)`) BEFORE it consults `enclosingInnerAliases`. So `type Holder uses Element`
+	// (`typeParameter(token)`) BEFORE it consults `enclosingInnerAliases`. So `type Holder uses Element`
 	// declaring `typealias Element = Array with ExitCode` means the PARAMETER at `var items as Element`, and
 	// it has to mean the parameter at `Element{}` and `Element.create()` too.
 	//
@@ -37978,7 +37979,7 @@ export type Parser
 	end 'emitArrayCreateOp'
 
 	// ⭐ **CREATE AN OPAQUE-`T` ARRAY inside a shared generic body (P1.7 slice 3b-i).** `ElementArray.create()`
-	// where `ElementArray = Array with typeParameter(pos)`. Two things differ from a concrete create, both
+	// where `ElementArray = Array with typeParameter(token)`. Two things differ from a concrete create, both
 	// because the element type is opaque here (the shared body compiles ONCE and serves every concrete
 	// instance through dictionary-passing):
 	//   • element_size is the fixed machine-word slot every opaque `T` occupies (`LAYOUT_TYPE_PARAM_SLOT_BYTES`),
@@ -41292,7 +41293,7 @@ export type Parser
 	// container that answers every one of its questions identically.
 	// The result carries the element's VALUE type: for a CONCRETE managed element its usable form — a struct →
 	// `structRef` so `first.name` resolves, a boxed union → `named` so `match first` dispatches, a String → text,
-	// an instance → `genericInstance`; for an OPAQUE element the element's own `typeParameter(pos)` (the shared
+	// an instance → `genericInstance`; for an OPAQUE element the element's own `typeParameter(token)` (the shared
 	// body has no concrete type, so the tag stays opaque and its drop is descriptor-gated — slice 3b-vi-a); or
 	// `integer` for a TRIVIAL concrete element (slice 1, unchanged). Ownership:
 	//   • get/first/last yield a BORROW (`owned: false`): the array keeps the element, so the result is NOT
@@ -41423,7 +41424,7 @@ export type Parser
 		end 'containerHoldsBuffers'
 	end 'markElementReadSurface'
 
-	// The VALUE type an element accessor's result carries — the opaque element's own `typeParameter(pos)` for an
+	// The VALUE type an element accessor's result carries — the opaque element's own `typeParameter(token)` for an
 	// OPAQUE array (the shared body keeps the element opaque; its drop is descriptor-gated, `decrefCalleeFor`'s
 	// `typeParameter` arm → `__drop_type_param`), else the CONCRETE managed element's usable value form
 	// (`containerSlotValueType`). Split so `emitContainerElementAccessor` reads ONE type either way; the opaque
