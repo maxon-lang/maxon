@@ -369,10 +369,61 @@ public class IrStructType : IrType {
     return new IrStructType(name, fields, isTuple: true);
   }
 
-  public static string TupleMangledName(List<IrType> elementTypes) {
-    // Resolve ranged primitive types to their base types so that e.g.
-    // (Integer, Integer) and (i64, i64) produce the same mangled name.
-    return "__Tuple_" + string.Join("_", elementTypes.Select(t => IrType.Resolve(t).Name));
+  /// <summary>
+  /// The mangled name IS a tuple's identity — <c>_typeRegistry</c> and <c>IrModule.TypeDefs</c> are
+  /// keyed by it and <c>GetOrCreateTupleType</c> hands back whatever was interned under it first — so
+  /// two DIFFERENT tuple types that spell alike do not clash, they silently BECOME one: the second
+  /// takes the first's field table, and <c>t._0.p</c> then reads the wrong slot with no diagnostic.
+  /// The join therefore has to be injective, and two properties buy that.
+  ///
+  /// ⚠ THE SEPARATOR IS A CHARACTER NO ELEMENT NAME CAN HOLD. <c>_</c> is inside the identifier
+  /// alphabet (<c>1-Lexer.ScanIdentifier</c>), so an <c>_</c> join spells <c>(A_B, C)</c> and
+  /// <c>(A, B_C)</c> identically. <c>.</c> and <c>$</c> are the two other characters outside that
+  /// alphabet this compiler already puts in names — <c>.</c> separates a type from its method,
+  /// <c>$</c> an overload from its mangled argument list — and a third meaning for either would make
+  /// an existing <c>IndexOf</c> misread a tuple as a qualified call. <c>-</c> means nothing here and
+  /// cannot occur in an identifier.
+  ///
+  /// ⚠ THE ARITY RIDES IN FRONT, which is what makes the flattened element list self-delimiting once
+  /// a nested element spells itself in full: without it <c>((A,B),C,D)</c> and <c>((A,B,C),D)</c>
+  /// both join to <c>__Tuple-A-B-C-D</c>.
+  /// </summary>
+  public const string TupleTypeNamePrefix = "__Tuple";
+
+  public const char TupleElementSeparator = '-';
+
+  public static string TupleMangledName(List<IrType> elementTypes) =>
+    $"{TupleTypeNamePrefix}{elementTypes.Count}{TupleElementSeparator}"
+      + string.Join(TupleElementSeparator, elementTypes.Select(TupleElementName));
+
+  /// <summary>
+  /// How one element is spelled inside a tuple's name. A tuple's identity is its ELEMENT TYPES, so an
+  /// element that is itself a tuple is spelled by its own STRUCTURAL name and never by whatever alias
+  /// a source file happened to give it: <c>typealias Pair = (Num, Num)</c> in element position has to
+  /// join as <c>__Tuple2-i64-i64</c>, or <c>(Pair, Num)</c> and <c>((Num, Num), Num)</c> become two
+  /// names for one type and a call from either to the other is rejected as a type mismatch.
+  ///
+  /// <c>IrType.Resolve</c> alone cannot do it: it unwraps a ranged primitive (so
+  /// <c>(Integer, Integer)</c> and <c>(int, int)</c> agree) and a tuple ALIAS is not one — it is an
+  /// <c>IrStructType</c> carrying the tuple's fields under the alias's own Name.
+  /// </summary>
+  private static string TupleElementName(IrType elementType) {
+    var resolved = IrType.Resolve(elementType);
+    return resolved is IrStructType { IsTuple: true } tuple
+      ? TupleMangledName([.. tuple.Fields.Select(f => f.Type)])
+      : resolved.Name;
+  }
+
+  /// <summary>
+  /// True for a name this mint produced. The ONE reader of the shape, so the prefix, the arity and
+  /// the separator are stated in exactly one place each.
+  /// </summary>
+  public static bool IsTupleTypeName(string name) {
+    if (!name.StartsWith(TupleTypeNamePrefix, StringComparison.Ordinal)) return false;
+    var rest = name.AsSpan(TupleTypeNamePrefix.Length);
+    var digits = 0;
+    while (digits < rest.Length && char.IsAsciiDigit(rest[digits])) digits++;
+    return digits > 0 && digits < rest.Length && rest[digits] == TupleElementSeparator;
   }
 }
 

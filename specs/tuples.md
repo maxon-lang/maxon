@@ -552,7 +552,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/tuples/error.nested-tuple-shapes-stay-distinct.test:10:9: argument type mismatch for 't': expected '__Tuple___Tuple_i64_i64_i64', got '__Tuple_i64___Tuple_i64_i64'
+error E3005: specs/fragments/tuples/error.nested-tuple-shapes-stay-distinct.test:10:9: argument type mismatch for 't': expected '__Tuple2-__Tuple2-i64-i64-i64', got '__Tuple2-i64-__Tuple2-i64-i64'
 ```
 
 <!-- test: tuple-element-names-join-injectively -->

@@ -963,12 +963,12 @@ internal class FunctionCloner {
     // both have an ElementMemory field that resolves to different concrete types.
     var resolvedTypeName = SubName(structLit.TypeName);
 
-    // Tuple type names encode field types (e.g., __Tuple_i64_i64) which aren't map keys.
+    // Tuple type names encode field types (e.g., __Tuple2-i64-i64) which aren't map keys.
     // When a generic function returns a tuple with type-parameter-derived fields,
     // the parser creates the tuple using runtime representations (all i64), but
     // the function's return type is correctly substituted. Use it for correction.
     if (resolvedTypeName == structLit.TypeName
-        && structLit.TypeName.StartsWith("__Tuple_")
+        && IrStructType.IsTupleTypeName(structLit.TypeName)
         && _resolvedReturnType is IrStructType retTuple && retTuple.IsTuple
         && retTuple.Fields.Count == structLit.FieldValues.Count
         && retTuple.Name != structLit.TypeName) {
