@@ -968,7 +968,7 @@ internal class FunctionCloner {
     // the parser creates the tuple using runtime representations (all i64), but
     // the function's return type is correctly substituted. Use it for correction.
     if (resolvedTypeName == structLit.TypeName
-        && IrStructType.IsTupleTypeName(structLit.TypeName)
+        && IrType.IsJoinedTypeName(structLit.TypeName, IrStructType.TupleTypeNamePrefix)
         && _resolvedReturnType is IrStructType retTuple && retTuple.IsTuple
         && retTuple.Fields.Count == structLit.FieldValues.Count
         && retTuple.Name != structLit.TypeName) {

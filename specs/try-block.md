@@ -1420,3 +1420,99 @@ end 'main'
 ```exitcode
 8
 ```
+
+
+<!-- test: try-block.union-member-names-join-injectively -->
+A synthesized error union's NAME is a table KEY, not a label: `ParseTryBlock` writes the union into
+the type registry under it and the handler's `match` reads the union back out by it. So the join over
+the member enum names has to be INJECTIVE, or a second union silently REPLACES the first and a
+handler resolves its patterns against the wrong member list. `_` is inside the identifier alphabet,
+so joining with it spells `{A_B, C}` and `{A, B_C}` identically. The nested `try` is what makes it
+observable: it is parsed inside the OUTER handler and BEFORE the outer `match`, so its own union is
+the one sitting under the shared name at the moment `match e` resolves. Measured on the `_` join, the
+outer handler was rejected with `'A_B' is not a member of the error union` for a member it plainly
+has; renaming the four enums so no name holds an `_` compiled and returned 11, which is the control
+saying the underscore is the entire difference. The outer block throws `A_B.kaboom`, so the arm that
+must win sets 11. WRITTEN AS TWO FILES ON PURPOSE, and it is not decoration: the runner's batch
+rewriter gives every top-level declaration in a batched test a per-test prefix, which pulls the two
+member names apart and dissolves the very collision this case is about — a multi-file test is never
+batched (`FragmentGenerator.IsBatchable`), so this is the shape in which the case can still fail.
+```maxon
+// --- file: errors.maxon
+typealias Score = int(0 to 100)
+
+enum A_B implements Error
+    kaboom
+end 'A_B'
+
+enum C implements Error
+    splat
+end 'C'
+
+enum A implements Error
+    zonk
+end 'A'
+
+enum B_C implements Error
+    whap
+end 'B_C'
+
+export function callAB(x bool) returns Score throws A_B
+    if x 'c'
+        throw A_B.kaboom
+    end 'c'
+    return 5
+end 'callAB'
+
+export function callC(x bool) returns Score throws C
+    if x 'c'
+        throw C.splat
+    end 'c'
+    return 6
+end 'callC'
+
+export function callA(x bool) returns Score throws A
+    if x 'c'
+        throw A.zonk
+    end 'c'
+    return 7
+end 'callA'
+
+export function callBC(x bool) returns Score throws B_C
+    if x 'c'
+        throw B_C.whap
+    end 'c'
+    return 8
+end 'callBC'
+
+// --- file: main.maxon
+function main() returns ExitCode
+    var sum = 0
+    try 'work'
+        let a = callAB(true)
+        let b = callC(false)
+        sum = a + b
+    end 'work'
+    otherwise (e) 'h'
+        try 'inner'
+            let p = callA(false)
+            let q = callBC(false)
+            sum = p + q
+        end 'inner'
+        otherwise (f) 'ih'
+            match f 'ik'
+                A.zonk then sum = 1
+                B_C.whap then sum = 2
+            end 'ik'
+        end 'ih'
+        match e 'k'
+            A_B.kaboom then sum = 11
+            C.splat then sum = 22
+        end 'k'
+    end 'h'
+    return sum
+end 'main'
+```
+```exitcode
+11
+```

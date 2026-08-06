@@ -106,6 +106,50 @@ public class IrType {
     type is IrRangedPrimitiveType rpt ? rpt.BaseType : type;
 
   /// <summary>
+  /// ⭐ THE ONE INJECTIVE JOIN of a LIST OF TYPE NAMES into a synthesized type NAME, for every mint
+  /// whose product is then used as a TABLE KEY. Two such mints exist — a tuple's structural name and
+  /// an error union's — and for a keyed name, spelling alike is not a clash but a SILENT MERGE: the
+  /// second type takes the first's contents, and the wrong answer arrives with no diagnostic.
+  ///
+  /// ⚠ THE SEPARATOR IS A CHARACTER NO TYPE NAME CAN HOLD. <c>_</c> is inside the identifier alphabet
+  /// (<c>1-Lexer.ScanIdentifier</c>), so an <c>_</c> join spells <c>[A_B, C]</c> and <c>[A, B_C]</c>
+  /// identically. <c>.</c> and <c>$</c> are the two other characters outside that alphabet this
+  /// compiler already puts in names — <c>.</c> separates a type from its method, <c>$</c> an overload
+  /// from its mangled argument list — and a third meaning for either would make an existing
+  /// <c>IndexOf</c> misread a synthesized name as a qualified call. <c>-</c> means nothing here and
+  /// cannot occur in an identifier.
+  ///
+  /// ⚠ THE COUNT RIDES IN FRONT, which is what makes a flattened list self-delimiting once a member
+  /// that is ITSELF such a name spells itself in full: without it <c>[[A,B],C,D]</c> and
+  /// <c>[[A,B,C],D]</c> both join to <c>__Tuple-A-B-C-D</c>.
+  ///
+  /// Stated ONCE because the mints must agree on the property, not merely happen to have it: each was
+  /// written as its own hand-rolled <c>string.Join("_", …)</c>, both were non-injective for the same
+  /// reason, and fixing one left the other reachable — measured, a program whose enums are named
+  /// <c>A_B</c>/<c>C</c> and <c>A</c>/<c>B_C</c> had one <c>try</c> block's error union answer to the
+  /// other's name and its handler rejected with "'A_B' is not a member of the error union".
+  /// </summary>
+  public const char SynthesizedNameMemberSeparator = '-';
+
+  public static string JoinTypeNamesInjectively(string prefix, IReadOnlyCollection<string> memberNames) =>
+    $"{prefix}{memberNames.Count}{SynthesizedNameMemberSeparator}"
+      + string.Join(SynthesizedNameMemberSeparator, memberNames);
+
+  /// <summary>
+  /// True for a name <see cref="JoinTypeNamesInjectively"/> produced under <paramref name="prefix"/>.
+  /// The ONE reader of the shape, so the count and the separator are each stated in one place.
+  /// </summary>
+  public static bool IsJoinedTypeName(string name, string prefix) {
+    if (!name.StartsWith(prefix, StringComparison.Ordinal)) return false;
+
+    var rest = name.AsSpan(prefix.Length);
+    var digits = 0;
+    while (digits < rest.Length && char.IsAsciiDigit(rest[digits])) digits++;
+
+    return digits > 0 && digits < rest.Length && rest[digits] == SynthesizedNameMemberSeparator;
+  }
+
+  /// <summary>
   /// True when a type ALREADY HELD in a resolved position may be replaced by whatever the
   /// whole-program table currently answers for its NAME. Three passes want that replacement, all for
   /// the same reason: a pre-scan registers an INCOMPLETE stand-in — an <c>IrPlaceholderType</c>, a
@@ -124,10 +168,18 @@ public class IrType {
   /// <c>int(0 to 9)</c> that <c>stdlib/Builtins.maxon</c> declares for itself. Whichever
   /// declaration reached the table last decided the other file's answer.
   ///
+  /// ⚠ AN UNBOUND TYPE PARAMETER IS NEVER THAT STAND-IN EITHER: it IS the abstraction, and
+  /// monomorphization — not a name lookup — is what replaces it. Its name is whatever the generic
+  /// declared (<c>Key</c>, <c>Value</c>, <c>Element</c>, <c>T</c>), so a user type of that name would
+  /// answer for it, which is the hazard <c>SemanticCheckPass.ResolveArrayElementType</c> states in
+  /// full. That clause lived at ONE of the three call sites and not the other two — the same fact in
+  /// two places, with only one of them true of the rule.
+  ///
   /// Stated ONCE, because the three readers must agree: disagreeing, they would give one name two
   /// widths within a single compile, which is the shape that reaches the backend with no diagnostic.
   /// </summary>
-  public static bool MayBeRefreshedByName(IrType held) => held is not IrRangedPrimitiveType;
+  public static bool MayBeRefreshedByName(IrType held) =>
+    held is not IrRangedPrimitiveType and not IrTypeParameterType;
 
   /// <summary>
   /// Maps an IrType back to its source-level name for error messages.
@@ -398,27 +450,14 @@ public class IrStructType : IrType {
   /// keyed by it and <c>GetOrCreateTupleType</c> hands back whatever was interned under it first — so
   /// two DIFFERENT tuple types that spell alike do not clash, they silently BECOME one: the second
   /// takes the first's field table, and <c>t._0.p</c> then reads the wrong slot with no diagnostic.
-  /// The join therefore has to be injective, and two properties buy that.
-  ///
-  /// ⚠ THE SEPARATOR IS A CHARACTER NO ELEMENT NAME CAN HOLD. <c>_</c> is inside the identifier
-  /// alphabet (<c>1-Lexer.ScanIdentifier</c>), so an <c>_</c> join spells <c>(A_B, C)</c> and
-  /// <c>(A, B_C)</c> identically. <c>.</c> and <c>$</c> are the two other characters outside that
-  /// alphabet this compiler already puts in names — <c>.</c> separates a type from its method,
-  /// <c>$</c> an overload from its mangled argument list — and a third meaning for either would make
-  /// an existing <c>IndexOf</c> misread a tuple as a qualified call. <c>-</c> means nothing here and
-  /// cannot occur in an identifier.
-  ///
-  /// ⚠ THE ARITY RIDES IN FRONT, which is what makes the flattened element list self-delimiting once
-  /// a nested element spells itself in full: without it <c>((A,B),C,D)</c> and <c>((A,B,C),D)</c>
-  /// both join to <c>__Tuple-A-B-C-D</c>.
+  /// The join therefore has to be injective, which is why it is
+  /// <see cref="IrType.JoinTypeNamesInjectively"/>'s job and not this mint's — the error-union mint
+  /// needs the identical property for the identical reason.
   /// </summary>
   public const string TupleTypeNamePrefix = "__Tuple";
 
-  public const char TupleElementSeparator = '-';
-
   public static string TupleMangledName(List<IrType> elementTypes) =>
-    $"{TupleTypeNamePrefix}{elementTypes.Count}{TupleElementSeparator}"
-      + string.Join(TupleElementSeparator, elementTypes.Select(TupleElementName));
+    IrType.JoinTypeNamesInjectively(TupleTypeNamePrefix, [.. elementTypes.Select(TupleElementName)]);
 
   /// <summary>
   /// How one element is spelled inside a tuple's name. A tuple's identity is its ELEMENT TYPES, so an
@@ -436,18 +475,6 @@ public class IrStructType : IrType {
     return resolved is IrStructType { IsTuple: true } tuple
       ? TupleMangledName([.. tuple.Fields.Select(f => f.Type)])
       : resolved.Name;
-  }
-
-  /// <summary>
-  /// True for a name this mint produced. The ONE reader of the shape, so the prefix, the arity and
-  /// the separator are stated in exactly one place each.
-  /// </summary>
-  public static bool IsTupleTypeName(string name) {
-    if (!name.StartsWith(TupleTypeNamePrefix, StringComparison.Ordinal)) return false;
-    var rest = name.AsSpan(TupleTypeNamePrefix.Length);
-    var digits = 0;
-    while (digits < rest.Length && char.IsAsciiDigit(rest[digits])) digits++;
-    return digits > 0 && digits < rest.Length && rest[digits] == TupleElementSeparator;
   }
 }
 
@@ -744,18 +771,22 @@ public class IrErrorUnionType : IrType {
     Members = members;
   }
 
-  public int IndexOfMember(IrEnumType member) {
-    for (int i = 0; i < Members.Count; i++) {
-      if (Members[i].Name == member.Name) return i;
-    }
-    return -1;
-  }
-
   /// True if any member enum has associated values (so the error flag may carry a heap pointer).
   public bool AnyMemberHasAssociatedValues => Members.Any(m => m.HasAssociatedValues);
 
+  /// <summary>
+  /// This name is a TABLE KEY, not a label: <c>ParseTryBlock</c> writes the union into
+  /// <c>_typeRegistry</c> under it and the handler's <c>match</c> reads the union back out by it
+  /// (<c>2-Parser.EmitTryBlockBindingDeclaration</c> stores it as the binding's structTypeName). So a
+  /// second union spelling the same name does not clash — it REPLACES the first, and a `try` whose
+  /// handler is parsed after a nested `try` registered a same-spelled union resolves its patterns
+  /// against the WRONG member list. Hence <see cref="IrType.JoinTypeNamesInjectively"/>: the tuple
+  /// mint needs the identical property for the identical reason, so neither states it for itself.
+  /// </summary>
+  public const string ErrorUnionTypeNamePrefix = "__ErrorUnion";
+
   private static string FormatName(IReadOnlyList<IrEnumType> members) =>
-    "__ErrorUnion_" + string.Join("_", members.Select(m => m.Name));
+    IrType.JoinTypeNamesInjectively(ErrorUnionTypeNamePrefix, [.. members.Select(m => m.Name)]);
 
   public override bool Equals(object? obj) {
     if (obj is not IrErrorUnionType other) return false;
