@@ -1,0 +1,52 @@
+// Test: int-mov-reg-reg-32bit
+
+typealias Integer = int(i64.min to i64.max)
+
+function add(a Integer, b Integer) returns Integer
+	return a + b
+end 'add'
+
+function main() returns ExitCode
+	let x = 20
+	let y = 22
+	return add(y, b: x)
+end 'main'
+---
+ExitCode: 42
+---
+func @add {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.leaRegRegReg r8, rcx, rdx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rdx, 20
+    x64.movRegImm32 rcx, 22
+    x64.callDirect add
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.cmpRegImm32 r8, 255
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
