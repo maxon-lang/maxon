@@ -1035,3 +1035,145 @@ end 'main'
 ```exitcode
 5
 ```
+
+## The Size Is Part of the Type
+
+A `Vector with 3 Int` and a `Vector with 4 Int` are two types, wherever they are reached from: a
+declared alias, a field of a generic type, or a synthesized instance nothing has named.
+
+<!-- disabled-test: capacity-is-part-of-instance-identity -->
+<!-- MISSING MECHANISM: `Vector with <N> <type parameter>` inside a generic body. shv2 refuses this
+     cleanly and positionally (E2015 — no statically known element stride to size inline storage
+     with), because dictionary-passing shares ONE body across instantiations while a fixed-size
+     vector field needs its stride at LAYOUT time. Supplied by board row `S2u`; re-enable there.
+     The sibling cases `error.wrong-size-vector-argument` and `same-size-aliases-are-one-type`
+     from this same canonical section DO pass, so the size-is-part-of-identity rule itself holds
+     wherever the element type is concrete. -->
+The size is part of the type, so a generic type's capacity-4 field must keep that capacity
+rather than adopting a declared `Vector with 3` alias that happens to share its element type.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Vec3 = Vector with 3 Int
+
+type Holder uses Element
+	typealias Slot = Vector with 4 Element
+
+	var slot as Slot
+
+	export static function create() returns Self
+		return Self{slot: Slot.create()}
+	end 'create'
+
+	export function size() returns Int
+		return slot.count()
+	end 'size'
+end 'Holder'
+
+typealias IntHolder = Holder with Int
+
+function main() returns ExitCode
+	var v = Vec3.create()
+	var h = IntHolder.create()
+	return v.count() + h.size()
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- disabled-test: distinct-capacities-are-distinct-instances -->
+<!-- MISSING MECHANISM: `Vector with <N> <type parameter>` inside a generic body. shv2 refuses this
+     cleanly and positionally (E2015 — no statically known element stride to size inline storage
+     with), because dictionary-passing shares ONE body across instantiations while a fixed-size
+     vector field needs its stride at LAYOUT time. Supplied by board row `S2u`; re-enable there.
+     The sibling cases `error.wrong-size-vector-argument` and `same-size-aliases-are-one-type`
+     from this same canonical section DO pass, so the size-is-part-of-identity rule itself holds
+     wherever the element type is concrete. -->
+Two generic types whose fields differ only in capacity must not collapse onto one instance,
+even when nothing in the project declares a name for either.
+```maxon
+typealias Int = int(i64.min to i64.max)
+
+type Holder4 uses Element
+	typealias Slot4 = Vector with 4 Element
+
+	var quad as Slot4
+
+	export static function create() returns Self
+		return Self{quad: Slot4.create()}
+	end 'create'
+
+	export function size() returns Int
+		return quad.count()
+	end 'size'
+end 'Holder4'
+
+type Holder7 uses Element
+	typealias Slot7 = Vector with 7 Element
+
+	var septet as Slot7
+
+	export static function create() returns Self
+		return Self{septet: Slot7.create()}
+	end 'create'
+
+	export function size() returns Int
+		return septet.count()
+	end 'size'
+end 'Holder7'
+
+typealias IntHolder4 = Holder4 with Int
+typealias IntHolder7 = Holder7 with Int
+
+function main() returns ExitCode
+	var a = IntHolder4.create()
+	var b = IntHolder7.create()
+	return a.size() * 10 + b.size()
+end 'main'
+```
+```exitcode
+47
+```
+
+<!-- test: error.wrong-size-vector-argument -->
+The size is part of the type, so a differently-sized vector is not a widening — it is a different
+type, and passing one where the other is declared is refused rather than silently accepted.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Vec3 = Vector with 3 Int
+typealias Vec4 = Vector with 4 Int
+
+function wants4(v Vec4) returns Int
+	return v.count()
+end 'wants4'
+
+function main() returns ExitCode
+	var v = Vec3.create()
+	return wants4(v)
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:12:9: argument type mismatch for 'v': expected 'Vec4', got 'Vec3'
+```
+
+<!-- test: same-size-aliases-are-one-type -->
+Two names for one size are one type, and stay interchangeable — separating the sizes must not
+separate two spellings of the same one.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Vec3 = Vector with 3 Int
+typealias Triple = Vector with 3 Int
+
+function first(v Vec3) returns Int
+	return try v.get(0) otherwise 0
+end 'first'
+
+function main() returns ExitCode
+	var t = Triple.create()
+	try t.set(0, value: 21) otherwise panic("test invariant: set OOB")
+	return first(t) + t.count()
+end 'main'
+```
+```exitcode
+24
+```
