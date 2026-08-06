@@ -206,7 +206,14 @@ then `sizeof(Word32)` — which is the half that DISCRIMINATES: the user's `0 to
 the `i64.min to i64.max` the stdlib declares for that same name is eight, so the SIZE says whose
 declaration governs the user's own file while the digest byte says whose governs the stdlib's. ⚠ The
 `7` alone pins nothing and is not that half — it is inside every range in this fixture, which is
-exactly the weakness this file's older `42` cases have.
+exactly the weakness this file's older `42` cases have. ⚠⚠ `Word32` APPEARS INSIDE THE INTERPOLATED
+STRING, AND THAT IS LOAD-BEARING A SECOND TIME: the runner's batch rewriter gives every top-level
+declaration in a batched test a per-test prefix, which renames this `Word32` apart from the stdlib's
+and dissolves the collision the case exists to catch. What keeps this test off the batched path is
+`BatchRewriter.FindStringLiteralCollision` seeing a renamed name inside a `"…"` body. Move `Word32`
+out of the string — spell the size as a literal, print it separately — and the case goes GREEN
+against a compiler with the bug restored. Measured on a sibling case: the single-file form passed at
+the parent commit while the same program compiled by hand was rejected.
 ```maxon
 typealias Word32 = int(0 to 255)
 
@@ -245,7 +252,10 @@ back truncated the moment a by-name lookup swaps in the stdlib's. `sizeof` is pr
 precisely because the two can DISAGREE: the parser resolves a type name per file and answers 4,
 while the generic instance's element type is re-resolved whole-program — a silent disagreement that
 reaches the backend, which is why the value and the size are pinned together and not separately.
-Prints `70000 3 70001 4`.
+Prints `70000 3 70001 4`. ⚠⚠ `DecimalDigit` APPEARS INSIDE THE INTERPOLATED STRING, AND THAT IS
+LOAD-BEARING A SECOND TIME — see the case above: it is what keeps this test off the batched path,
+where the rewriter's per-test prefix would rename this `DecimalDigit` apart from the stdlib's and
+leave nothing to collide.
 ```maxon
 typealias DecimalDigit = int(0 to 100000)
 typealias DigitArray = Array with DecimalDigit
