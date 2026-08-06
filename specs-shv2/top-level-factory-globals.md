@@ -13,7 +13,7 @@ A top-level binding may be initialized by a **user static factory call** —
 initializer form that is not a fold: nothing is evaluated at compile time, and the record is built
 before `main` by `__module_init`, which materializes each argument and then makes an ordinary call.
 
-`map-struct-bytearray.md` is the canonical spec that admits the form. This file pins the five rules
+`map-struct-bytearray.md` is the canonical spec that admits the form. This file pins the six rules
 that form has to obey and that its own programs cannot reach, because all of its arguments are
 consumed and all of its declarations are in one file:
 
@@ -53,6 +53,32 @@ read the bare name as a record and let the program through, and the slot's width
 tag it had no case for and panicked — with a sentence written for a different caller, about an `int`
 the program does not contain. A factory returning a type it does not enclose is the same declaration
 as one returning `Self`, and the index normalizes the two to one spelling before anything reads it.
+
+**A TUPLE TYPEALIAS IS THE SAME RULE, and leaving it out made the answer a property of the disk.**
+`typealias Pair = (Num, Num)` names the tuple's own struct and mints no identity of its own, so a
+`returns Pair` is a `named` the sweep must resolve exactly as it resolves a declared type's name — and
+the resolution goes through the one door that already knows what a name denotes, the same door the
+drop router asks. Without it the same program had TWO answers decided by which file the directory walk
+reached first: the alias resolved from the tokens of its own file, so a same-file `Pair` compiled and a
+cross-file one was refused. Same program, two answers, is a wrong answer whichever one you prefer.
+
+**6. A recorded type can be CONCRETE and still be the wrong SPELLING, and for a tuple that is a
+missing symbol rather than a wrong width.** `Parser.parseTypeReference`'s tuple arm sits outside the
+`allFilesFolded` gate its neighbours are behind, so during the declaration sweep a `returns Tagged`
+already resolves to the tuple's own struct — through a canonicalizer that is ITSELF gated on that
+flag, and therefore hands back the raw spelling at that moment. The sweep records
+`__Tuple2.String.Num` where every value of that tuple, and the destructor synthesized for it, carry
+`__Tuple2.String.int`. So the drop the cleanup emits names a symbol nothing defines, and the program
+dies in the backend.
+
+**The shape of that defect is worth stating exactly, because the obvious reading of it is wrong.** It
+looks like "a tuple owning heap cannot be a global" — and measured, `(String, String)` compiled and
+ran while `(String, Num)` died. The two differ only in whether the swept spelling and the canonical
+one COINCIDE; ownership is merely what makes the difference observable, since a tuple owning nothing
+asks for no destructor at all. Refusing heap-owning tuples would therefore have deleted a working
+program to tidy a rule. ⇒ the normalization settles the SPELLING, at what is the third door this
+index's types leave by; `tuples.md`'s `array-of-managed-element-tuples-drops-each` records the second,
+in the same words and with the same panic.
 
 ## Tests
 
@@ -289,6 +315,165 @@ end 'main'
 7
 ```
 
+<!-- test: factory-returning-a-tuple-alias -->
+A tuple typealias names the tuple's own struct, so a `returns Pair` is a record whose slot is the same
+one word every other record's is. It is the control for the cross-file case below and for rule 5's
+tuple clause: this spelling already worked, and the fix must not be bought by refusing it.
+```maxon
+typealias Num = int(0 to 1000)
+typealias Pair = (Num, Num)
+
+type Maker
+	static function build() returns Pair
+		return (11, 22)
+	end 'build'
+end 'Maker'
+
+var a = Maker.build()
+
+function main() returns ExitCode
+	print("{a.0} {a.1}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+11 22
+```
+
+<!-- test: factory-returning-a-tuple-alias-declared-in-another-file -->
+The identical program with the alias declared in a DIFFERENT file from the factory, and the file
+NAMES are the whole of this case. `recordTupleAlias` writes during the walk rather than at the end of
+a file, so a tuple alias is resolved from the tokens when the declaring file has already been reached
+and left bare when it has not — which makes the verdict a property of the DISK. Measured before rule
+5's tuple clause, in one directory, on byte-identical source: with the alias's file sorting FIRST the
+program compiled and printed `11 22`; with the factory's file sorting first — the spelling below — the
+same program was refused as a record `__module_init` cannot reach. Same program, two answers. This
+case pins the order that was wrong; the control above is the order that was accidentally right.
+```maxon
+// --- file: api/a-maker.maxon
+export type Maker
+	export static function build() returns Pair
+		return (11, 22)
+	end 'build'
+end 'Maker'
+
+// --- file: api/z-pair.maxon
+export typealias Num = int(0 to 1000)
+export typealias Pair = (Num, Num)
+
+// --- file: bin/main.maxon
+var a = Maker.build()
+
+function main() returns ExitCode
+	print("{a.0} {a.1}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+11 22
+```
+
+<!-- test: factory-returning-a-tuple-that-owns-heap -->
+Rule 6, and the reason it is about a SPELLING rather than about ownership. This tuple's elements are
+`String` and an ALIAS, so the sweep spells it `__Tuple2.String.Num` while every value of it — and the
+`__destruct_` synthesized for it — carries `__Tuple2.String.int`; the cleanup after `main` then called
+a symbol nothing defines and the backend died with `resolveCallFixups: call to unknown function
+'__destruct___Tuple2.String.Num'`. **The neighbouring `(String, String)` case, whose two spellings
+coincide, compiled and ran throughout** — which is what proves the cut is at the NAME and not at
+owns-heap, and why this case runs rather than being refused. Exit 0 is also the memory gate: the
+global's record is built before `main` and released after it, through the destructor that now resolves.
+```maxon
+typealias Num = int(0 to 1000)
+typealias Tagged = (String, Num)
+
+type Maker
+	static function build() returns Tagged
+		return ("hi", 7)
+	end 'build'
+end 'Maker'
+
+var a = Maker.build()
+
+function main() returns ExitCode
+	print("{a.0} {a.1}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+hi 7
+```
+
+<!-- test: factory-returning-a-tuple-whose-spelling-is-already-canonical -->
+The control the case above cannot do without: a heap-owning tuple whose elements name no alias, so the
+swept spelling IS the canonical one. It compiled and ran on the merge base and must keep doing so —
+it is the measurement that says the defect above was never "a tuple owns heap", and the reason no
+refusal was added for that shape.
+```maxon
+typealias Both = (String, String)
+
+type Maker
+	static function build() returns Both
+		return ("hi", "there")
+	end 'build'
+end 'Maker'
+
+var a = Maker.build()
+
+function main() returns ExitCode
+	print("{a.0} {a.1}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+hi there
+```
+
+<!-- test: error.factory-returning-a-generic-alias -->
+The other half of the refusal below, pinned rather than asserted: a generic-instance alias keeps the
+bare type name as its type for the union's reason, so it gets the union's sentence. Its own base
+generic is refused one screen up for a DIFFERENT reason (rule 1, the container registry), which is why
+both refusals exist.
+```maxon
+typealias Num = int(0 to 1000)
+
+type Box uses T
+	export var n as Num
+
+	static function create() returns Self
+		return Self{n: 7}
+	end 'create'
+end 'Box'
+
+typealias NumBox = Box with Num
+
+type Maker
+	static function build() returns NumBox
+		return NumBox.create()
+	end 'build'
+end 'Maker'
+
+var a = Maker.build()
+
+function main() returns ExitCode
+	return a.n as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:20:15: Unsupported: `Maker.build` as a top-level initializer — it returns 'NumBox', which IS a record but is not one `__module_init` can access a `.data` slot through. A boxed union and a generic alias keep the bare type NAME as their type — a union's is what a `match` reads it by — and the synthesized initializer and cleanup carry that name straight onto the slot's load and store, where there is no width to give it. A struct, a tuple, a String, a Character and a builtin container all resolve to a concrete type and are legal here. Build it inside a function instead
+```
+
 <!-- test: error.factory-returning-a-boxed-union -->
 A boxed union is a record — a heap pointer, a one-word slot, and a drop the router already handles —
 but it is the one record rule 5's normalization cannot reach, because a union value carries the bare
@@ -297,7 +482,8 @@ slot's WIDTH but a concrete type for the two SYNTHESIZED functions to access the
 code bridges a declared name to a storage type at every field and every global read, and the
 initializer and cleanup this form generates have no such bridge. So it is refused at the declaration,
 where the author can see it, rather than panicking three passes later — which is what it did until
-this rule was written down. The same sentence covers a tuple alias and a generic alias.
+this rule was written down. A generic alias is refused by the same sentence; a TUPLE alias is not, and
+the sentence used to say it was — see the two tuple cases above, which run.
 ```maxon
 union Shape
 	circle(r int)
@@ -320,7 +506,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:13:15: Unsupported: `Maker.build` as a top-level initializer — it returns 'Shape', which IS a record but is not one `__module_init` can access a `.data` slot through. A boxed union, a tuple alias and a generic alias all keep the bare type NAME as their type (a union's is what a `match` reads it by), and the synthesized initializer and cleanup carry that name straight onto the slot's load and store, where there is no width to give it. A struct, a String, a Character and a builtin container all resolve to a concrete type and are legal here. Build it inside a function instead
+error E2015: <fragment>:13:15: Unsupported: `Maker.build` as a top-level initializer — it returns 'Shape', which IS a record but is not one `__module_init` can access a `.data` slot through. A boxed union and a generic alias keep the bare type NAME as their type — a union's is what a `match` reads it by — and the synthesized initializer and cleanup carry that name straight onto the slot's load and store, where there is no width to give it. A struct, a tuple, a String, a Character and a builtin container all resolve to a concrete type and are legal here. Build it inside a function instead
 ```
 
 <!-- test: error.cross-file-file-private-factory -->

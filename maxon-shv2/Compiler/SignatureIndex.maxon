@@ -844,15 +844,20 @@ export union GlobalFactoryReturn
 	// `typeName` is the type as a diagnostic prints it, rendered on the index's side because only that side
 	// holds the interner the id lives in.
 	scalar(typeName String)
-	// ⛔ **A RECORD STILL CARRYING THE BARE `named` TAG (S2j)** — a boxed union, a tuple alias, a generic
-	// alias, a rendered generic instance. It IS a record and its slot IS one pointer; what it has not got
-	// is a CONCRETE type for the two synthesized functions to access that slot through.
+	// ⛔ **A RECORD STILL CARRYING THE BARE `named` TAG (S2j)** — a boxed union, a generic alias, a
+	// rendered generic instance. It IS a record and its slot IS one pointer; what it has not got is a
+	// CONCRETE type for the two synthesized functions to access that slot through.
 	// `__module_init`'s store and `__maxon_global_cleanup`'s load carry the declared type straight onto a
 	// `storeIndirect`/`loadIndirect` (`ModuleInit`), where `maxonTypeToStdType` panics on a `named`; user
 	// code has `Parser.fieldStorageType` to bridge that and `SynthesizedFunction` holds neither the
 	// interner nor the registry it asks. ⇒ REFUSED here, at the declaration, rather than panicking three
-	// passes later. A DECLARED `type` is not in this arm at all: `normalizeSweptRecordReturnTypes` has
-	// already re-tagged it `structRef` by the time this is asked.
+	// passes later.
+	//
+	// ⚠ **A DECLARED `type` AND A TUPLE ALIAS ARE NOT IN THIS ARM**, and the tuple was listed here until
+	// the BATCH28 review measured it: `RecordedReturnTypeRule.declaredStruct` re-tags both to `structRef`
+	// before this is asked, so a `returns Pair` reaches the `record` arm. The refusal's own sentence said
+	// otherwise, which is this batch's defect committed by the batch — a second reader stating a fact it
+	// re-derived rather than asking.
 	unbridgedRecord(typeName String)
 	void
 	// No file declares this name. Unreachable from the initializer door, which admits the form only for a
@@ -4718,8 +4723,15 @@ export enum RecordedReturnTypeRule
 	// ⭐ **N3 — the contested generic ALIAS a `returns` clause names, rescoped against the file that
 	// DECLARED the function.** See `contestScopedReturnTypeOf`.
 	contestScopedAlias
-	// ⭐⭐ **S2j — RE-TAG EVERY SWEPT `named` THAT DENOTES A DECLARED `type` AS A `structRef`: the ONE
-	// repair that makes a `returns Inner` and a `returns Self` be the same recorded declaration.**
+	// ⭐⭐ **S2j — SETTLE WHAT A RECORDED RETURN TYPE NAMING A STRUCT BOX IS SPELLED AS: the ONE repair
+	// that makes a `returns Inner` and a `returns Self` be the same recorded declaration.**
+	//
+	// It claims TWO shapes, and the second was found by BATCH28's review: a bare `named` that denotes a
+	// declared `type` OR a tuple typealias (re-tagged to the box's `structRef`), and an already-`structRef`
+	// TUPLE whose name is not yet the canonical spelling. Both are the same defect — the sweep recorded a
+	// type before it could say what everything downstream would call it — and neither is visible from the
+	// tag alone, which is why `sweptStructTypeOf` asks "what should this name be?" rather than "is this tag
+	// still bare?". See there for the two measurements.
 	//
 	// `Parser.parseTypeReference` resolves the enclosing type's own name — `Self`, and the type's own
 	// spelling — to a `structRef` SYNTACTICALLY, because that is a fact about the tokens and needs no
@@ -10536,9 +10548,10 @@ export type ProgramSignatures
 		end 'scalar'
 
 		// ⭐ **THE TAG IS THE WHOLE TEST (S2j).** A record whose type is CONCRETE by now — a `structRef`
-		// (`normalizeSweptRecordReturnTypes` has run), a `string`, a `character`, a `genericInstance` —
-		// is one the synthesized init and cleanup can access its slot through. One still spelling a bare
-		// `named` is not, and the honest answer is a refusal rather than a width. See `unbridgedRecord`.
+		// (`RecordedReturnTypeRule.declaredStruct` has run, over a declared `type` AND a tuple alias), a
+		// `string`, a `character`, a `genericInstance` — is one the synthesized init and cleanup can access
+		// its slot through. One still spelling a bare `named` is not, and the honest answer is a refusal
+		// rather than a width. See `unbridgedRecord`.
 		if maxonTypeTag(valueType) == ValueTypeTag.named 'noConcreteSlotAccess'
 			return GlobalFactoryReturn.unbridgedRecord(maxonTypeName(valueType, typeNames: self.typeNames))
 		end 'noConcreteSlotAccess'
@@ -11111,11 +11124,11 @@ export type ProgramSignatures
 		return try self.contestScopedReturnType(declared, declFilePath: declFilePath)
 	end 'contestScopedReturnTypeOf'
 
-	// The `structRef` a swept `named` denotes; `MapError.keyNotFound` when the name is not a declared
-	// `type`. It follows `sweptInterfaceTypeOf`'s shape — the other recorded-return-type re-tag on this
-	// index — including its "absence is a throw" convention, so both read as one kind of pass. A `void`
-	// return names no type to re-tag, and a type that is already concrete is refused by the tag guard,
-	// which is what makes this idempotent.
+	// The `structRef` a swept `named` denotes; `MapError.keyNotFound` when the name denotes no struct BOX.
+	// It follows `sweptInterfaceTypeOf`'s shape — the other recorded-return-type re-tag on this index —
+	// including its "absence is a throw" convention, so both read as one kind of pass. A `void` return
+	// names no type to re-tag, and a type that is already concrete is refused by the tag guard, which is
+	// what makes this idempotent.
 	function sweptStructReturnOf(declared MaxonReturnType) returns MaxonType throws MapError
 		match declared 'shape'
 			void then throw MapError.keyNotFound
@@ -11123,17 +11136,64 @@ export type ProgramSignatures
 		end 'shape'
 	end 'sweptStructReturnOf'
 
+	// ⚠⚠ **IT RESOLVES THE NAME THROUGH `denotedAggregateName`, AND ASKING `containsStruct` OF THE RAW NAME
+	// MADE THE ANSWER A PROPERTY OF THE DISK (BATCH28 review).** A TUPLE TYPEALIAS mints no identity — it
+	// names the tuple's own canonical struct and nothing else — so `containsStruct("Pair")` is false while
+	// `containsStruct("__Tuple2.Num.Num")` is true, and a rule reading the raw name declined every
+	// `returns Pair`. That was invisible while the sweep happened to resolve it: `recordTupleAlias` writes
+	// DURING the walk rather than at the end of a file (unlike every other alias registry), so a factory
+	// whose file the walk reached AFTER the alias's file got a resolved `structRef` from
+	// `Parser.parseTypeReference` and never needed this rule. **MEASURED, one directory, byte-identical
+	// source, only the file NAMES changed:** with the alias's file sorting first the program compiled and
+	// printed `11 22`; with the factory's file first the identical program was refused. Same program, two
+	// answers, decided by a directory walk.
+	//
+	// `denotedAggregateName` is the one door that already answers "what does this name denote", and it is
+	// the SAME door the drop router (`managedFieldDropCallee`) and every managed classifier ask — so what
+	// this rule re-tags and what those route are one set by construction. For a declared `type` it is the
+	// identity, and re-interning a name the table already holds returns the id it already had, which is why
+	// no struct return moves.
+	// ⚠⚠ **AND IT CLAIMS AN ALREADY-`structRef` TUPLE TOO, BECAUSE A SWEPT `structRef` IS NOT NECESSARILY
+	// THE CANONICAL SPELLING (BATCH28 review).** `parseTypeReference`'s tuple arm is deliberately OUTSIDE
+	// the `allFilesFolded` gate its neighbours sit behind, so during the sweep a `returns Tagged` already
+	// resolves to `structRef` — through `tupleAliasTarget` → `canonicalNameOfStruct`, which is itself gated
+	// on `allFilesFolded` and therefore hands back the RAW spelling at that moment. The recorded type is
+	// then concrete and WRONG-NAMED: `__Tuple2.String.Num` where every value of that tuple, and the
+	// destructor synthesized for it, carry `__Tuple2.String.int`.
+	//
+	// **MEASURED:** `typealias Tagged = (String, Num)` with `Num = int(0 to 1000)`, built by a top-level
+	// factory, died in the backend — `resolveCallFixups: call to unknown function
+	// '__destruct___Tuple2.String.Num'` — while `(String, String)`, whose two spellings coincide, built and
+	// ran. So the defect was never "a tuple owns heap"; it was the NAME, at a door that had not
+	// canonicalized. This is the third such door and it takes the cure the other two already took —
+	// `tuples.md`'s `array-of-managed-element-tuples-drops-each` records the second, in the same words.
+	//
+	// A tag guard alone would decline exactly the entries that need this most, which is why the shape below
+	// is "what should this name be?" rather than "is this tag still bare?". Re-interning a name the table
+	// already holds returns the id it already had, and a name already canonical maps to itself — so a
+	// declared `type` and an already-canonical tuple both fall out through the `equals` test unmoved, and
+	// the rule stays idempotent.
 	function sweptStructTypeOf(declared MaxonType) returns MaxonType throws MapError
-		if maxonTypeTag(declared) != ValueTypeTag.named 'namesNoDeclaredType'
+		let tag = maxonTypeTag(declared)
+		if not tagMayNameAggregate(tag) 'namesNoStructBox'
 			throw MapError.keyNotFound
-		end 'namesNoDeclaredType'
+		end 'namesNoStructBox'
 
-		let id = typeNameIdOf(declared)
-		if not self.containsStruct(self.nameOfId(id)) 'namesNoDeclaredType'
+		let written = self.nameOfId(typeNameIdOf(declared))
+		// `denotedAggregateName` resolves a tuple TYPEALIAS to the tuple's own name; `canonicalNameOfStruct`
+		// then settles which SPELLING of that tuple everything downstream uses. Both are the doors the drop
+		// router and every managed classifier already ask, so what this re-tags and what those route are one
+		// set by construction.
+		let denoted = self.canonicalNameOfStruct(self.denotedAggregateName(written))
+		if not self.containsStruct(denoted) 'namesNoStructBox'
 			throw MapError.keyNotFound
-		end 'namesNoDeclaredType'
+		end 'namesNoStructBox'
 
-		return MaxonType.structRef(id)
+		if tagIsStructRef(tag) and denoted.equals(written) 'alreadyTheSpellingEveryoneUses'
+			throw MapError.keyNotFound
+		end 'alreadyTheSpellingEveryoneUses'
+
+		return MaxonType.structRef(self.typeNames.intern(denoted))
 	end 'sweptStructTypeOf'
 
 	// ⭐⭐ **RE-TAG EVERY SWEPT `named` THAT DENOTES AN `interface` AS AN `interfaceRef`
