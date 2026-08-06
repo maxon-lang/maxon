@@ -1,0 +1,25 @@
+// Test: free-function-inner-alias-is-restricted
+typealias ExitCode = int(0 to 125)
+typealias Count = int(0 to u64.max)
+
+type Owner
+	typealias Nums = Array with ExitCode
+
+	static function own() returns Count
+		var n = Nums{}
+		return n.count()
+	end 'own'
+end 'Owner'
+
+function main() returns ExitCode
+	var n = Nums{}
+	let c = n.count()
+	let d = Owner.own()
+	if c == d 'ok'
+		return 0
+	end 'ok'
+	return 1
+end 'main'
+---
+CompilerError:
+error E3076: <fragment>:15:10: 'Nums' can only be constructed inside its own methods; use a static factory such as 'Nums.create(...)'

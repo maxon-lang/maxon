@@ -135,7 +135,7 @@ via the `__Managed*Error` precedent (`Project.declaredBuiltinErrorEnum`).
 | `Ascii.maxon` | 66 | ~~`E2028 :10:4`~~ → **`E3001` ONLY (it type-checks clean)** | ⚖ **THIS ROW WENT STALE THE SAME DAY IT WAS MEASURED — re-measured 2026-08-05 after `BATCH23`.** The blocker was `match c '0' to '9'` — pattern type `int` vs scrutinee `Character` — which is exactly the character-literal WIDTH RULE `BATCH23` deleted: every literal is now a `Character`, and `Character` gained ordering and range patterns, so this file's five `match` arms type-check. **No compiler change is owed here any more; what remains is the WHITELIST entry**, which is `L-stdlib` — not a lane `BATCH23` held. ⚠ But read the headline above before listing it: `Ascii` is all `static function`s, NOT a conditional `extension`, so the criterion is NOT vacuous for this one. |
 | `PrimitiveExtensions.maxon` | 101 | `E2010 :2:11` | `extension int` — the extension decl path rejects a primitive keyword as the extended type |
 | `Json.maxon` | 1080 | ~~`E2015 :77:37`~~ -> **`E2015 :281:3`** | ✅ **THE FIELD-DEFAULT BLOCKER IS GONE — `S2f` closed it 2026-08-05.** Re-probed on `ba7f8271f`: this module now advances 204 lines to a **field access through `doc`, a struct-typed FIELD of the enclosing type**. A different mechanism, unowned by any row. |
-| `Set.maxon` | 396 | ~~`E2015 :19:33`~~ -> **`E3076 :43:15`** | ✅ **FIELD-DEFAULT BLOCKER GONE (`S2f`)**; now stops at `ElementArray{}`. ⛔ **AND THAT ONE IS shv2 DIVERGING FROM THE ORACLE — see `S2i` below.** |
+| `Set.maxon` | 396 | ~~`E2015 :19:33`~~ -> ~~`E3076 :43:15`~~ -> **`E2015 :55:11`** | ✅ TWO blockers cleared: the field default (`S2f`) and `ElementArray{}` (`S2i`). Now stops at **`insert` reading `sizeof` of the type parameter** — a generics rung, not a stdlib one. |
 | `List.maxon` | 175 | `E3086 :21:10` | field `chain` uninitialized by the literal and has no default — the same mechanism, one door over |
 | `Vector.maxon` | 50 | `E3086 :19:10` | field `managed` uninitialized by the literal |
 | `Testing.maxon` | 343 | `E2051 :34:13` | `__TestReport` is `__`-reserved — needs the exemption `Builtins.maxon` has via `Queries.CompilerInternalDeclaringModule` |
@@ -219,8 +219,16 @@ MEASURED both compilers on a minimal repro:
 | INNER `typealias ElementArray = Array with Element` inside `type Holder uses Element`, constructed inside `Holder`'s own static | **compiles, runs (exit 5)** | **`E3076`** |
 
 So the rule the oracle implements is that **a type's own body is a legitimate construction site for the
-aliases that body declares**; shv2 applies the restriction without that exemption. It is the FIRST blocker
-in three modules, all the same shape — an inner alias declared in the body that constructs it:
+aliases that body declares**; shv2 applies the restriction without that exemption.
+
+✅ **CLOSED by `S2i`. And the claim below was WRONG — corrected, because a wrong blocker attribution is how
+a workstream mis-plans its own order.** It said "the FIRST blocker in three modules". Measured: it is the
+first blocker in **`Set.maxon` alone**, which advanced `:43:15` → **`:55:11`** (a `sizeof` of the type
+parameter through `insert`). `Map.maxon` and `Interfaces.maxon` **never reach it** — they stop far earlier
+at the compiler-owned-name door (`MapError` `:6:13`, `IterationError` `:28:13`). They do write the
+construct and would have met it, so the rung is still owed by them; it is a LATER blocker there.
+
+The three modules that write it, all the same shape — an inner alias declared in the body that constructs it:
 `stdlib/Interfaces.maxon:188` (used `:193`, `:201`), `stdlib/Map.maxon:18-19` (used `:52,54,81,83,273,275`),
 `stdlib/Set.maxon` (used `:43,45,47`).
 

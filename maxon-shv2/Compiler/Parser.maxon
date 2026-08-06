@@ -3510,6 +3510,7 @@ end 'declarationOpensAt'
 
 let StringAddressableBytesMethod = b"addressableBytes"
 let StringByteAtOrPanicMethod = b"byteAtOrPanic"
+
 // The fourth STDLIB-ONLY `String` member (BATCH2 slice 6) — `stdlib/String.maxon:107`, a `module function`
 // reading the private `singleByteGraphemesFlag`. `stdlib/helpers/string/grapheme.maxon` asks it at three
 // sites (`countGraphemes`, `byteIndexToGraphemeIndex`, `graphemeOffsetToBytePos`), each purely as a fast
@@ -3556,10 +3557,12 @@ let Utf16ViewMethod = b"utf16"
 // which is exactly what the retired bare-name builtins could not do.
 export let CorpusCountGraphemes = b"countGraphemes"
 export let CorpusFindGraphemeEnd = b"findGraphemeEnd"
+
 // `utf8DecodeAt(s, pos:)` — the codepoint at a byte position. Reached from `__cs_contains`, which classifies
 // a `Character` by its FIRST codepoint and holds that Character's own record, so it passes the record and 0
 // rather than the buffer address the retired `__utf8_cp_at` took.
 export let CorpusUtf8DecodeAt = b"utf8DecodeAt"
+
 // `utf8ByteLengthAt(s, pos:)` — the sequence width at a byte position, which is what advances the
 // `.codepoints()` and `.utf16()` walks. Its twin above decodes; this one steps, and the two MUST agree on a
 // truncated sequence or a walk steps into bytes it declined to decode (`utf8WidthFits`).
@@ -3745,6 +3748,7 @@ let ArrayPushMethod = b"push"
 let ArrayCapacityMethod = b"capacity"
 let ArrayReserveMethod = b"reserve"
 let ArrayResizeMethod = b"resize"
+
 // ⚠ `clear` was `ArrayClearMethod` until the `__ManagedList` surface spelled it too (spec-port `ownership`),
 // and it is UNPREFIXED now for the rule the block below states: a method NAME is a token spelling, not a
 // container's property, and a family-prefixed constant serving two families is one rename away from a
@@ -9270,12 +9274,12 @@ export type Parser
 			if kind == TokenKind.return or kind == TokenKind.throw or kind == TokenKind.break or kind == TokenKind.continue 'earlyExit'
 				hasControlFlow = true
 			end 'earlyExit'
-			// Constructing an opaque-`T` array (`ElementArray.create()`) stamps its `element_destroy@40` from the
-			// enclosing instance's threaded descriptor, so — like `sizeof(T)` — it needs the descriptor param
-			// (P1.7 slice 3b-i). `X` `.` `create` `(`, four contiguous tokens with `X` an opaque-array alias.
-			if kind == TokenKind.identifier and self.opaqueArrayCreateAt(q) 'opaqueArrayCreate'
+			// Constructing an opaque-`T` array (`ElementArray.create()`, or the literal `ElementArray{}` it shares
+			// a producer with) stamps its `element_destroy@40` from the enclosing instance's threaded descriptor,
+			// so — like `sizeof(T)` — it needs the descriptor param (P1.7 slice 3b-i, S2i).
+			if kind == TokenKind.identifier and self.opaqueArrayConstructionAt(q) 'opaqueArrayConstruction'
 				direct = true
-			end 'opaqueArrayCreate'
+			end 'opaqueArrayConstruction'
 			// A `.pop()`/`.remove(i)` array MOVE-OUT hands back an OWNED element dropped at scope exit; when the
 			// element is an opaque `typeParameter` that drop routes through the descriptor-gated
 			// `__drop_type_param`, so — like `sizeof(T)` and an opaque `X.create()` — the method needs the
@@ -9369,25 +9373,44 @@ export type Parser
 		return functionTok > 0 and self.kindAt((functionTok - 1) as TokenIndex) == TokenKind.static
 	end 'functionDeclIsStatic'
 
-	// Is the identifier at `aliasPos` a member-level opaque-`T` array alias followed by `.create(` — the
-	// construction that seeds the descriptor need (P1.7 slice 3b-i)? `X` `.` `create` `(`, four contiguous
-	// tokens whose `X` qualifies (`Container.X`) to a whole-program generic alias naming an OPAQUE `Array`
-	// instance. The opacity is read straight off `self.signatures` — the SAME index and the SAME
-	// `containerElementIsOpaque` predicate `emitArrayCreateOp` branches the descriptor-reading create on — so the
-	// reserved slot and the emitted read decide off ONE fact and cannot diverge, whatever their token distance.
-	// The sweep has folded every inner alias before the real parse reaches here, so the lookup is complete
-	// regardless of where the alias sits in the body (a constructing method may textually precede it).
-	function opaqueArrayCreateAt(aliasPos TokenIndex) returns bool
-		if self.kindAt(aliasPos + 1) != TokenKind.dot or self.kindAt(aliasPos + 2) != TokenKind.identifier or not self.tokenAt(aliasPos + 2).value.equals(CreateMethod) or self.kindAt(aliasPos + 3) != TokenKind.leftParen 'notCreateShape'
+	// Is the identifier at `aliasPos` a member-level opaque-`T` array alias being CONSTRUCTED — the
+	// construction that seeds the descriptor need (P1.7 slice 3b-i)? `X` qualifies (`Container.X`) to a
+	// whole-program generic alias naming an OPAQUE `Array` instance. The opacity is read straight off
+	// `self.signatures` — the SAME index and the SAME `containerElementIsOpaque` predicate `emitArrayCreateOp`
+	// branches the descriptor-reading create on — so the reserved slot and the emitted read decide off ONE fact
+	// and cannot diverge, whatever their token distance. The sweep has folded every inner alias before the real
+	// parse reaches here, so the lookup is complete regardless of where the alias sits in the body (a
+	// constructing method may textually precede it).
+	//
+	// ⚠ **BOTH SPELLINGS OF THE CONSTRUCTION SEED IT, AND MISSING ONE IS A COMPILER PANIC RATHER THAN A WRONG
+	// ANSWER** (S2i, measured): the literal form was added to the parser and not to this scan, and
+	// `Holder.create` writing `ElementArray{}` reached `appendOpaqueArrayCreate` with no descriptor parameter
+	// reserved — *"the parser's descriptor-need seed and this lowering disagree"*, which is exactly what
+	// happened. The two spellings are one construction (`parseInnerAliasLiteral` routes them to one producer),
+	// so they are one shape test here.
+	function opaqueArrayConstructionAt(aliasPos TokenIndex) returns bool
+		if not self.aliasConstructionFollows(aliasPos) 'notAConstruction'
 			return false
-		end 'notCreateShape'
+		end 'notAConstruction'
 		let qualified = joinQualifiedName(self.enclosingType, member: self.tokenAt(aliasPos).value)
 		if not self.signatures.isGenericAlias(qualified) 'notAlias'
 			return false
 		end 'notAlias'
 		let giid = self.signatures.genericAliasInstanceFrom(qualified, readerFilePath: self.filePath)
 		return self.signatures.isArrayInstance(giid) and self.signatures.containerElementIsOpaque(giid)
-	end 'opaqueArrayCreateAt'
+	end 'opaqueArrayConstructionAt'
+
+	// The two TOKEN SHAPES that construct the container an alias at `aliasPos` names: the static call
+	// `X` `.` `create` `(` and the literal `X` `{` (S2i). Read by the descriptor-need pre-scan, which runs
+	// before any body is parsed and so has only tokens to go on; an identifier followed by `{` is a struct
+	// literal and nothing else in this grammar, and the caller narrows it to an alias naming an opaque array
+	// anyway — over-inclusion there only reserves a descriptor parameter nothing reads, which is sound.
+	function aliasConstructionFollows(aliasPos TokenIndex) returns bool
+		if self.kindAt(aliasPos + 1) == TokenKind.leftBrace 'literalForm'
+			return true
+		end 'literalForm'
+		return self.kindAt(aliasPos + 1) == TokenKind.dot and self.kindAt(aliasPos + 2) == TokenKind.identifier and self.tokenAt(aliasPos + 2).value.equals(CreateMethod) and self.kindAt(aliasPos + 3) == TokenKind.leftParen
+	end 'aliasConstructionFollows'
 
 	// Is the token at `q` a `<receiver> . <method> (` call HEAD — a preceding `.` and a following `(`? The shared
 	// shape of the receiver-blind array-method descriptor signals (`arrayMoveOutMethodAt` / `arrayCopyMethodAt`):
@@ -11675,7 +11698,6 @@ export type Parser
 
 		panic("readFieldDefaultLiteral: the default at token {self.pos} is not a literal, but `defaultRegionIsLiteral` said it was — the classifier that routes a field default and the reader that decodes it have come apart on which token kinds a literal is")
 	end 'readFieldDefaultLiteral'
-
 
 	// The index of the `)` that closes the balanced `( … )` group opening at `index`, or the EOF token's
 	// index when the stream holds no matching one. Depth-counted rather than "scan to the first `)`"
@@ -15832,7 +15854,7 @@ export type Parser
 			// every WELL-FORMED program. What the gate removes is the one way it could have answered yes: a
 			// SECOND file declaring a type of the same name, which the tolerant sweep folds without complaint
 			// and the real parse rejects later.
-			if self.enclosingInnerAliases.contains(name) 'innerAlias'
+			if self.namesInnerAliasHere(name) 'innerAlias'
 				let qualifiedInner = joinQualifiedName(self.enclosingType, member: name)
 				if self.signatures.allFilesFolded and self.signatures.isGenericAlias(qualifiedInner) 'genericInnerAlias'
 					return MaxonType.genericInstance(self.signatures.genericAliasInstanceFrom(qualifiedInner, readerFilePath: self.filePath))
@@ -15997,11 +16019,6 @@ export type Parser
 		return not self.enclosingType.isEmpty() and self.enclosingType.equals(name)
 	end 'namesEnclosingType'
 
-	// The POSITION of `name` in the enclosing type's `uses` list (P1.6-A), or `count()` when it is not
-	// a type parameter — the door `parseTypeReference` recognizes a bare `T` through, and the value that
-	// becomes `typeParameter(POSITION)`. A linear scan, for `StructLayout.indexOfField`'s reason: a type
-	// declares a handful of parameters, so a per-parse name→index map would be a heap object bought to
-	// serve two or three lookups.
 	// The number of hidden witness parameters a function of the enclosing type carries (P1.7a slice 2a) — one
 	// per `where` constraint for an INSTANCE method of a constrained generic type, zero otherwise (a static, or
 	// an unconstrained type). The reservation is uniform across the type's instance methods (see `parseFunction`),
@@ -16013,6 +16030,11 @@ export type Parser
 		return self.enclosingWhereConstraints.count()
 	end 'witnessParamCountFor'
 
+	// The POSITION of `name` in the enclosing type's `uses` list (P1.6-A), or `count()` when it is not
+	// a type parameter — the door `parseTypeReference` recognizes a bare `T` through, and the value that
+	// becomes `typeParameter(POSITION)`. A linear scan, for `StructLayout.indexOfField`'s reason: a type
+	// declares a handful of parameters, so a per-parse name→index map would be a heap object bought to
+	// serve two or three lookups.
 	function typeParamPositionOf(name ByteArray) returns TypeParamId
 		for i in 0 upto self.enclosingTypeParams.count() 'each'
 			let paramName = try self.enclosingTypeParams.get(i) otherwise panic("typeParamPositionOf: enclosingTypeParams.get OOB at {i}")
@@ -16022,6 +16044,42 @@ export type Parser
 		end 'each'
 		return self.enclosingTypeParams.count()
 	end 'typeParamPositionOf'
+
+	// ⭐⭐ **DOES THE WRITTEN NAME `name` DENOTE AN INNER `typealias` OF THE BODY BEING PARSED — the ONE home
+	// of that question (S2i review).** THREE doors ask it and they must not answer one written name with two
+	// different types: `parseTypeReference`'s inner-alias arm (a field type, a return clause), the STRUCT
+	// LITERAL door (`parseStructLiteral`) and the STATIC CALL door (`parseQualifiedCall`).
+	//
+	// ⛔ **THE ENCLOSING TYPE'S OWN NAME AND ITS TYPE PARAMETERS BOTH WIN OVER AN ALIAS SHADOWING THEM**, and
+	// that is `parseTypeReference`'s ARM ORDER read out as a predicate rather than a precedence chosen here:
+	// that routine answers the type's own name (`enclosingSelfType`) and then a bare `T`
+	// (`typeParameter(pos)`) BEFORE it consults `enclosingInnerAliases`. So `type Holder uses Element`
+	// declaring `typealias Element = Array with ExitCode` means the PARAMETER at `var items as Element`, and
+	// it has to mean the parameter at `Element{}` and `Element.create()` too.
+	//
+	// MEASURED with the two value doors deciding for themselves: `Element{}` built an ARRAY and its record
+	// was accepted into a `typeParameter` field, so one declaration denoted two types in one body and the
+	// only complaint came at the READ (`self.items.count()` refused for a method the parameter's constraints
+	// do not provide — a diagnostic about the slot, not about the store). Neither reference compiler offers
+	// an acceptance to match: the bootstrap CRASHES on the shadowed literal (an unhandled
+	// `IrTypeParameterType`→`IrStructType` cast inside `ParseStructLiteral`, reported as `E9001`), and for
+	// the type parameter it does NOT crash on — a plain `T{}` with no alias in sight — it answers the same
+	// E3076 shv2 answers, which is what this predicate hands the shadowed spelling back to.
+	//
+	// ⚠ At `parseTypeReference` the first two tests are already settled by the arms above it and are asked
+	// again only so that the three doors share ONE predicate: a fourth clause added here reaches every door
+	// that resolves a written name, which is exactly what the arm order could not guarantee.
+	function namesInnerAliasHere(name ByteArray) returns bool
+		if self.namesEnclosingType(name) 'ownName'
+			return false
+		end 'ownName'
+
+		if self.typeParamPositionOf(name) < self.enclosingTypeParams.count() 'typeParam'
+			return false
+		end 'typeParam'
+
+		return self.enclosingInnerAliases.contains(name)
+	end 'namesInnerAliasHere'
 
 	// ⭐ **RESOLVE A `named` STRUCT REFERENCE TO `structRef` — the parse-time half of what `resolveTypes`
 	// does to a signature.** `parseTypeReference` mints `structRef` SYNTACTICALLY for `Self` and the
@@ -32567,6 +32625,34 @@ export type Parser
 		// `Self{…}` and `Point{…}` arrive as ONE token here — `typeBaseTokenAt` has already turned the keyword
 		// into the name it denotes — so the literal's own reader knows nothing about `Self`.
 		let typeTok = try self.consumeTypeBaseToken()
+
+		// ⭐⭐ **`<InnerAlias>{}` — A TYPEALIAS IS CONSTRUCTIBLE IN THE BODY THAT DECLARES IT (S2i).** E3076's
+		// rule is about WHERE the literal is written, and a `typealias` a type body declares is written inside
+		// that body: `stdlib/Set.maxon:43` opens `var elems = ElementArray{}` two lines below its own
+		// `typealias ElementArray = Array with Element`. **The rule is about the alias's DECLARATION SITE and
+		// NOT about genericity** — measured against the oracle, which compiles and runs the identical program
+		// with no type parameters anywhere (`inner-alias-construction.nongeneric-inner-array-alias`). A
+		// TOP-LEVEL alias is declared in no body, so no body may construct it and it stays E3076 below, where
+		// both reference compilers already agree.
+		//
+		// ⚠ **IT IS ROUTED BEFORE `requireConstructible` BECAUSE THAT ROUTINE RETURNS A `StructLayout` AND AN
+		// ALIAS TO `Array with X` HAS NONE.** Widening its location test alone would carry the literal into the
+		// struct registry asking for a name only the generic-instance index holds. What the construct MEANS is
+		// the alias's EMPTY CONTAINER — measured: the oracle's value is then `resize`d and `count()`s back —
+		// so it is served by the producer `<InnerAlias>.create()` already goes through, never a second one.
+		//
+		// ⚠ **THE TYPE'S OWN NAME — AND ITS TYPE PARAMETERS — WIN OVER AN ALIAS SHADOWING THEM, and that
+		// precedence is READ OFF `parseTypeReference` RATHER THAN CHOSEN HERE**: `namesInnerAliasHere` is the
+		// one home of it, so this door, the static-call door and `parseTypeReference` itself cannot come to
+		// disagree about what one written name denotes. MEASURED without it: `Self{}` in a body declaring
+		// `typealias Holder = Array with ExitCode` (which arrives here as `Holder`) built an ARRAY, and the
+		// type's own `create` was refused for returning `Holder.Holder` where it declared `Holder`. Neither
+		// reference compiler refuses the shadowing declaration — the bootstrap compiles the program and
+		// recurses until the stack overflows — so the guard is what keeps the two spellings agreeing.
+		if self.namesInnerAliasHere(typeTok.value) 'innerAliasLiteral'
+			return try self.parseInnerAliasLiteral(typeTok)
+		end 'innerAliasLiteral'
+
 		let layout = try self.requireConstructible(typeTok.value, anchor: typeTok)
 
 		try self.consume(TokenKind.leftBrace)
@@ -32613,6 +32699,69 @@ export type Parser
 
 		return try self.emitStructLiteral(layout, fieldValues: fieldValues, fieldBareLocal: fieldBareLocal, anchor: typeTok, range: SourceRange.between(typeTok, last: rbraceTok))
 	end 'parseStructLiteral'
+
+	// ⭐⭐ **`<InnerAlias>{}` IS THE ALIAS'S EMPTY CONTAINER — the very value `<InnerAlias>.create()` builds**
+	// (S2i). A TOTAL router, so a form nobody thought about meets a sentence naming what it is rather than
+	// E3076's "use a static factory", a cure that exists for exactly one of the four arms below.
+	//
+	// `enclosingInnerAliases` holds two FORMS (`readNestedTypeAlias`: a GENERIC-INSTANCE alias and a RANGED
+	// numeric one — a nested TUPLE alias is refused at its declaration and a nested FUNCTION alias is a
+	// file-scope name that never enters the set). They split four ways here, because a generic instance is
+	// either a container this compiler OWNS or a user type's, and because an alias declared in an `extension`
+	// body reaches this set without reaching either whole-program registry.
+	function parseInnerAliasLiteral(aliasTok Token) returns ValueId throws ParseError
+		// The whole-program key an inner alias is registered under — the SAME name `parseTypeReference`'s
+		// inner-alias arm stamps a field type with and `parseQualifiedCall`'s `<InnerAlias>.create()` looks the
+		// instance up by, because a bare member collides with a same-named inner alias of another type.
+		let qualified = joinQualifiedName(self.enclosingType, member: aliasTok.value)
+
+		// ⛔ A RANGED NUMERIC ALIAS DECLARES NO FIELDS, so there is nothing for a literal to write and no
+		// container for `{}` to mean. Both reference compilers CRASH on this program rather than diagnose it
+		// (the bootstrap with an unhandled `IrRangedPrimitiveType`→`IrStructType` cast inside
+		// `ParseStructLiteral`, reported as an internal `E9001`), so there is no oracle spelling to match and
+		// the message names the cure instead — the enum/union refusal in `requireConstructible` one door over
+		// is the same shape for the same reason.
+		if self.signatures.isInnerAlias(qualified) 'rangedNumeric'
+			throw ParseError.unsupported("a struct literal naming `{String.from(aliasTok.value)}`, a ranged numeric typealias declared by `{String.from(self.enclosingType)}` — a number declares no fields to write, so write the number itself. `\{\}` on an inner alias builds the EMPTY CONTAINER a container alias denotes, and a numeric alias denotes no container", line: aliasTok.line, column: aliasTok.column)
+		end 'rangedNumeric'
+
+		// ⛔ AN `extension` BODY'S NESTED ALIAS IS IN NEITHER WHOLE-PROGRAM REGISTRY. `recordScannedExtension`
+		// consumes an `extension` whole and `foldExtensionDeclarationInto` publishes only its METHOD
+		// signatures, so a `typealias` declared in one is known to this body alone (`enclosingInnerAliases`,
+		// which the real parse fills as it reads the member) and there is no interned instance to create.
+		// Refused by name: the oracle compiles `stdlib/Interfaces.maxon`'s `extension Iterable` shape, and
+		// keying an extension's nested aliases whole-program is a mechanism of its own — E3076 would answer it
+		// by recommending `TagArray.create()`, which fails one door over with a value of type `unknown`.
+		if not self.signatures.isGenericAlias(qualified) 'notKeyedWholeProgram'
+			throw ParseError.unsupported("a struct literal naming `{String.from(aliasTok.value)}`, a typealias declared by an `extension` body — the declaration sweep consumes an `extension` whole, so a nested alias of one is never keyed whole-program and there is no container instance for the literal to build. Declare the alias at file scope, or in the conforming type's own body", line: aliasTok.line, column: aliasTok.column)
+		end 'notKeyedWholeProgram'
+
+		let giid = self.signatures.genericAliasInstanceFrom(qualified, readerFilePath: self.filePath)
+
+		// ⛔ A USER TYPE'S GENERIC INSTANCE KEEPS E3076, and that is the ONE inner-alias form the widening
+		// deliberately does not reach. `typealias IntPair = Pair with Count` denotes `Pair`, whose invariants
+		// are `Pair`'s own to establish — writing its literal here is exactly what the restriction is for, and
+		// the cure it names (`IntPair.create(…)`) is real. (The oracle ACCEPTS it, which voids its own E3076 for
+		// any type willing to declare an alias; that divergence is deliberate.) Anchored at the alias token,
+		// which is where `requireConstructible` anchors it, so the diagnostic does not move.
+		if not self.signatures.isBuiltinGenericBaseName(self.signatures.genericInstanceBaseName(giid)) 'userType'
+			throw ParseError.constructorRestricted(String.from(aliasTok.value), line: aliasTok.line, column: aliasTok.column)
+		end 'userType'
+
+		try self.consume(TokenKind.leftBrace)
+		self.skipNewlines()
+
+		// ⛔ The literal is the container's EMPTY value and nothing else — a builtin container's record is the
+		// runtime's, with no user-writable field for a `name: value` pair to name. Anchored at the field the
+		// author wrote, which is the token that is inadmissible.
+		if not self.at(TokenKind.rightBrace) 'writtenField'
+			let fieldTok = self.current()
+			throw ParseError.unsupported("a field written inside `{String.from(aliasTok.value)}\{…\}` — the literal builds the EMPTY container `{String.from(aliasTok.value)}.{String.from(CreateMethod)}()` builds, and a builtin container has no user-writable fields; fill it after creating it", line: fieldTok.line, column: fieldTok.column)
+		end 'writtenField'
+
+		let rbraceTok = try self.consume(TokenKind.rightBrace)
+		return try self.emitOwnedContainerCreate(giid, aliasTok: aliasTok, aliasName: qualified, range: SourceRange.between(aliasTok, last: rbraceTok))
+	end 'parseInnerAliasLiteral'
 
 	// ⭐ **E3076 — CONSTRUCTION IS RESTRICTED TO THE TYPE'S OWN BODY.** `Self{…}` and `Point{…}`
 	// inside `type Point`; nothing anywhere else. An external caller goes through
@@ -33982,18 +34131,8 @@ export type Parser
 		if self.signatures.isGenericAlias(typeTok.value) 'containerAliasStatic'
 			let aliasGiid = self.signatures.genericAliasInstanceFrom(typeTok.value, readerFilePath: self.filePath)
 
-			if self.signatures.isArrayInstance(aliasGiid) 'arrayStatic'
-				return try self.parseArrayStaticCall(func, aliasTok: typeTok, aliasName: typeTok.value, giid: aliasGiid)
-			end 'arrayStatic'
-
-			// Every OTHER builtin container — `Set`, `Map`, `List` — shares one `create()`-only parse
-			// (`parseBuiltinContainerStaticCall`). The test is the builtin-base disjunction itself
-			// (`isBuiltinGenericBaseName`, the ONE home of it) rather than a second roster of the three names, so
-			// a fifth container is admitted here the day it exists and meets a NAMED panic inside if its routers
-			// were not widened — never the mangled `Base.create` fallthrough, which names a callee no file
-			// declares.
 			if self.signatures.isBuiltinGenericBaseName(self.signatures.genericInstanceBaseName(aliasGiid)) 'containerStatic'
-				return try self.parseBuiltinContainerStaticCall(typeTok, giid: aliasGiid)
+				return try self.parseContainerAliasStaticCall(func, aliasTok: typeTok, aliasName: typeTok.value, giid: aliasGiid)
 			end 'containerStatic'
 		end 'containerAliasStatic'
 
@@ -34001,29 +34140,29 @@ export type Parser
 		// generic body (P1.7 slice 3b-i). The bare member is recognized against `enclosingInnerAliases` and
 		// qualified to the whole-program `Container.ElementArray` key (the same name the field type carries),
 		// which resolves to the OPAQUE array instance `Array with typeParameter(pos)`. Intercepted here for the
-		// same reason the top-level `arrayStatic` case is: `Array` has no base struct to mangle a `.create` onto.
-		if self.enclosingInnerAliases.contains(typeTok.value) 'innerAlias'
+		// same reason the top-level arm is: no builtin container has a base struct to mangle a `.create` onto.
+		//
+		// ⛔ **IT ASKS THE SAME ROSTER THE TOP-LEVEL ARM ASKS, AND A SECOND NARROWER ONE WAS A WRONG ANSWER**
+		// (S2i). This arm claimed `Array` and `List` only, on the argument that a `Set`/`Map` inner alias "has
+		// never reached the shared parse" — but the fallthrough it left them on was not a diagnostic. MEASURED:
+		// `typealias Nums = Set with ExitCode` inside a type body, then `Nums.create()`, produced a value of
+		// type `unknown`, and the program was refused for a `insert` on an `unknown` value — a call typed
+		// against nothing rather than a container. Two rosters of "which containers does this compiler own" is
+		// exactly the duplication `isBuiltinGenericBaseName` exists to be the one home of.
+		//
+		// ⚠ Which written names ARE an inner alias here is `namesInnerAliasHere`'s to say — the same predicate
+		// the literal door (`parseStructLiteral`) and `parseTypeReference` ask, so the enclosing type's own
+		// name and its type parameters win over an alias shadowing them at every door at once:
+		// `Holder.create()` inside a `type Holder` that also declares `typealias Holder = Array with …` must
+		// reach the TYPE's static, not the array's.
+		if self.namesInnerAliasHere(typeTok.value) 'innerAlias'
 			let qualified = joinQualifiedName(self.enclosingType, member: typeTok.value)
 			if self.signatures.isGenericAlias(qualified) 'innerAliasResolves'
 				let innerGiid = self.signatures.genericAliasInstanceFrom(qualified, readerFilePath: self.filePath)
 
-				if self.signatures.isArrayInstance(innerGiid) 'innerArrayStatic'
-					return try self.parseArrayStaticCall(func, aliasTok: typeTok, aliasName: qualified, giid: innerGiid)
-				end 'innerArrayStatic'
-
-				// ⭐ **THE `List` TWIN, AND IT IS HERE TO BE REFUSED HONESTLY RATHER THAN TO WORK.** A
-				// `List with <type parameter>` has no statically known element destructor to stamp
-				// (`requireListElementType`), so this arm exists so that the author of
-				// `type W uses T { var xs as List with T }` meets that sentence at the `.create()` they wrote.
-				// MEASURED without it: the call fell through to the mangled-callee path and answered
-				// `E3005 cannot assign 'unknown' to variable 'W.xs' of type 'struct'` — a diagnostic about the
-				// ASSIGNMENT, naming neither the list nor the reason.
-				// ⚠ Kept NARROW to `List` where the top-level arm above asks the whole builtin disjunction: a
-				// `Set`/`Map` inner alias has never reached the shared parse, and widening it here would move a
-				// diagnostic no case pins.
-				if self.signatures.isListInstance(innerGiid) 'innerListStatic'
-					return try self.parseBuiltinContainerStaticCall(typeTok, giid: innerGiid)
-				end 'innerListStatic'
+				if self.signatures.isBuiltinGenericBaseName(self.signatures.genericInstanceBaseName(innerGiid)) 'innerContainerStatic'
+					return try self.parseContainerAliasStaticCall(func, aliasTok: typeTok, aliasName: qualified, giid: innerGiid)
+				end 'innerContainerStatic'
 			end 'innerAliasResolves'
 		end 'innerAlias'
 
@@ -35496,7 +35635,7 @@ export type Parser
 	function parseStringSplit(func IrFunction, receiver ValueId, range SourceRange) returns ValueId throws ParseError
 		let delimiter = try self.parseStringArg(func, methodName: StringSplitMethod)
 		let giid = self.signatures.builtinInstanceForElement(ArrayBuiltinBaseName, element: MaxonType.string)
-		let parts = self.emitArrayCreateOp(giid, range: range)
+		let parts = try self.emitArrayCreateOp(giid, range: range)
 		_ = self.emitRuntimeCall(StrSplitName, args: tripleArgs(receiver, second: delimiter, third: parts), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
 		self.trackOwnedTemp(parts)
 		return parts
@@ -35553,7 +35692,7 @@ export type Parser
 	// array or who owns it.
 	function parseMaterializedView(record ValueId, giid GenericInstanceId, callee ByteArray, range SourceRange) returns ValueId throws ParseError
 		try self.consumeEmptyArgList()
-		return self.emitMaterializedFill(giid, callee: callee, source: record, extraArgs: ValueIdArray.create(), range: range)
+		return try self.emitMaterializedFill(giid, callee: callee, source: record, extraArgs: ValueIdArray.create(), range: range)
 	end 'parseMaterializedView'
 
 	// ⭐⭐ **A PUSH-ONLY RUNTIME WALK THAT FILLS A CALLER-CREATED ARRAY — the one door, for the three String
@@ -35569,8 +35708,8 @@ export type Parser
 	// ⚠ The result is enrolled owned whatever the element is: `trackOwnedTemp` routes its scope-exit drop by
 	// TAG through `decrefCalleeFor` (`__arr_decref`), which destroys the elements the record's own
 	// `element_destroy@40` stamp names — so a managed-element fill needs nothing extra here.
-	function emitMaterializedFill(giid GenericInstanceId, callee ByteArray, source ValueId, extraArgs ValueIdArray, range SourceRange) returns ValueId
-		let filled = self.emitArrayCreateOp(giid, range: range)
+	function emitMaterializedFill(giid GenericInstanceId, callee ByteArray, source ValueId, extraArgs ValueIdArray, range SourceRange) returns ValueId throws ParseError
+		let filled = try self.emitArrayCreateOp(giid, range: range)
 		var args = pairArgs(source, second: filled)
 		args.append(extraArgs)
 		_ = self.emitRuntimeCall(callee, args: args, resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
@@ -35608,7 +35747,7 @@ export type Parser
 		// (`emitClosureEnvArg`): a capturing closure's heap block, or a materialized null for a plain function
 		// reference or a non-capturing closure. The runtime's `callIndirect` is the uniform `(elem, __env)`
 		// ABI, so a capturing transform works here for the same reason `f(x)` does.
-		return self.emitMaterializedFill(resultGiid, callee: callee, source: container, extraArgs: pairArgs(transform, second: self.emitClosureEnvArg(transform, range: range)), range: range)
+		return try self.emitMaterializedFill(resultGiid, callee: callee, source: container, extraArgs: pairArgs(transform, second: self.emitClosureEnvArg(transform, range: range)), range: range)
 	end 'parseContainerMap'
 
 	// ⭐⭐ **`contains(…)` — THE `Array`'s CONDITIONAL EXTENSION, AND THE CONTAINER SURFACE'S FIRST OVERLOAD
@@ -37186,7 +37325,7 @@ export type Parser
 			return try self.parsePackedArrayLiteralBody(func, first: first, firstStart: firstStart, giid: giid, range: range)
 		end 'aPackedElement'
 
-		let arr = self.emitArrayCreateOp(giid, range: range)
+		let arr = try self.emitArrayCreateOp(giid, range: range)
 		try self.pushArrayLiteralElement(arr, elem: first, giid: giid, valueStart: firstStart, range: range)
 
 		return try self.finishArrayLiteral(func, arr: arr, giid: giid, range: range)
@@ -37231,7 +37370,7 @@ export type Parser
 			return self.emitPackedArrayBlob(values, giid: giid, range: range)
 		end 'aConstantBlob'
 
-		let arr = self.emitArrayCreateOp(giid, range: range)
+		let arr = try self.emitArrayCreateOp(giid, range: range)
 		for i in 0 upto values.count() 'eachElement'
 			let elem = try values.get(i) otherwise panic("parsePackedArrayLiteralBody: values.get({i}) failed inside its own upto bound")
 			let elemStart = try starts.get(i) otherwise panic("parsePackedArrayLiteralBody: starts.get({i}) failed — it is pushed in lockstep with values")
@@ -37275,7 +37414,7 @@ export type Parser
 	// This is slice 1's exact op order, kept so the pre-existing int-literal goldens do not move.
 	function parseIntArrayLiteralBody(func IrFunction, range SourceRange) returns ValueId throws ParseError
 		let giid = self.signatures.internBuiltinIntegerInstance(ArrayBuiltinBaseName)
-		let arr = self.emitArrayCreateOp(giid, range: range)
+		let arr = try self.emitArrayCreateOp(giid, range: range)
 
 		// The FIRST element is not checked against `giid` — it is what FIXES it, exactly as in the general
 		// path above. Only a LATER element can disagree with the first, which is why the "mixed element types"
@@ -37416,9 +37555,9 @@ export type Parser
 	// element (P1.7 slice 3), stamped into `element_destroy@40` before any element move (v1 trap #3: `__arr_create`
 	// stores it inside its body, so it is set at birth); 0 for a trivial element. NOT tracked owned — the caller
 	// decides that (a literal tracks after its pushes, a `create()` immediately).
-	function emitArrayCreateOp(giid GenericInstanceId, range SourceRange) returns ValueId
+	function emitArrayCreateOp(giid GenericInstanceId, range SourceRange) returns ValueId throws ParseError
 		if self.signatures.containerElementIsOpaque(giid) 'opaque'
-			return self.emitOpaqueArrayCreateOp(giid, range: range)
+			return try self.emitOpaqueArrayCreateOp(giid, range: range)
 		end 'opaque'
 		let sizeVal = self.emitLiteral(self.signatures.arrayElementSize(giid), valueType: MaxonType.integer, range: range)
 		let destroyVal = self.arrayElementDestroyValue(giid, range: range)
@@ -37436,7 +37575,25 @@ export type Parser
 	//     (element_size only); LowerMaxonToStd supplies the descriptor-read second argument, so the tier that
 	//     owns the descriptor's ValueId (`implicitLayoutValueId`) is the tier that reads it — the same split
 	//     `sizeof(T)` uses. For a TRIVIAL instance the slot reads 0 and the array's drop walk is skipped.
-	function emitOpaqueArrayCreateOp(giid GenericInstanceId, range SourceRange) returns ValueId
+	//
+	// ⛔ **A LIFTED CLOSURE HAS NO DESCRIPTOR TO READ, AND THE LOWERING PANICKED ON IT RATHER THAN SAYING SO
+	// (S2i).** The reserved descriptor parameter is a GENERIC TYPE'S METHOD's (`parseFunction`'s
+	// `needsLayoutParam`, seeded by `computeTypeDescriptorNeeds`, which walks METHODS). A closure literal is
+	// lifted to a top-level function whose uniform `(userargs, env)` indirect ABI carries one machine word per
+	// argument and has no slot for a descriptor — so the fixpoint marks the enclosing METHOD and the
+	// construction is emitted into the LIFTED body, which carries nothing. MEASURED on BOTH spellings
+	// (`ElementArray{}` and `ElementArray.create()`) inside `function() gives …` in a generic method:
+	// `appendOpaqueArrayCreate`'s panic naming `Holder.sized$closure_0`, with no source position at all.
+	//
+	// Refused here — the one producer of the descriptor-reading create, so no door can miss it — and the exact
+	// sibling of `parseFunction`'s `staticLayoutNeedsSelfReturn`: both are "this position has no descriptor
+	// SOURCE", answered where the source would have been needed. It can reject nothing that used to compile,
+	// because everything it rejects used to abort the compiler.
+	function emitOpaqueArrayCreateOp(giid GenericInstanceId, range SourceRange) returns ValueId throws ParseError
+		if not self.closureCaptureScopes.isEmpty() 'insideALiftedClosure'
+			throw ParseError.unsupported("constructing an opaque type-parameter `{String.from(ArrayBuiltinBaseName)}` inside a CLOSURE literal — the create reads its element destructor from the enclosing instance's layout descriptor at run time, and only a generic type's own METHOD reserves the parameter that carries it: a closure is lifted to a top-level function whose uniform `(userargs, env)` ABI has no slot for one. Build the array in the method and capture it, or move the construction out of the closure. Threading a layout descriptor into a lifted closure is a later slice", line: range.line, column: range.column)
+		end 'insideALiftedClosure'
+
 		let sizeVal = self.emitLiteral(LAYOUT_TYPE_PARAM_SLOT_BYTES as ParsedInt, valueType: MaxonType.integer, range: range)
 		return self.emitRuntimeCall(ArrCreateName, args: singletonArgs(sizeVal), resultTag: ValueTypeTag.genericInstance, resultNameId: giid, range: range)
 	end 'emitOpaqueArrayCreateOp'
@@ -37478,6 +37635,25 @@ export type Parser
 		return result
 	end 'emitRuntimeFuncAddr'
 
+	// ⭐ **THE STATIC SURFACE OF A BUILTIN-CONTAINER INSTANCE ALIAS — ONE dispatch, both spellings of the
+	// alias.** A TOP-LEVEL alias (`IntArray`) and a NESTED one (`Container.ElementArray`) differ only in the
+	// NAME the instance was keyed under, so they route through here rather than each carrying its own list of
+	// which containers are claimed. Two such lists is what let a `Set` inner alias's `create()` produce a value
+	// of type `unknown` (see the caller's `innerAlias` arm).
+	//
+	// `Array` alone has a SECOND static (`init(managed)`), so it keeps its own reader; every other container
+	// is `create()`-only and shares one. A container with no usable `create` for the instance in hand — a
+	// `List with <type parameter>`, which has no statically known element destructor to stamp — is refused by
+	// `requireContainerColumnTypes` with a sentence naming the list, at the `.create()` the author wrote,
+	// rather than falling through to the mangled `Base.create` (a callee no file declares).
+	function parseContainerAliasStaticCall(func IrFunction, aliasTok Token, aliasName ByteArray, giid GenericInstanceId) returns ValueId throws ParseError
+		if self.signatures.isArrayInstance(giid) 'array'
+			return try self.parseArrayStaticCall(func, aliasTok: aliasTok, aliasName: aliasName, giid: giid)
+		end 'array'
+
+		return try self.parseBuiltinContainerStaticCall(aliasTok, aliasName: aliasName, giid: giid)
+	end 'parseContainerAliasStaticCall'
+
 	// The `Array` statics. `create()` (P1.7 slice 1) yields an OWNED empty array; `init(managed)` (BATCH2
 	// slice 5) ADOPTS an existing buffer as the array around it. Both serve a CONCRETE instance
 	// (`Array with Integer`) and an OPAQUE one (`Array with T` inside a generic body, P1.7 slice 3b) alike —
@@ -37498,17 +37674,7 @@ export type Parser
 
 		if methodTok.value.equals(CreateMethod) 'createStatic'
 			try self.consumeEmptyArgList()
-			let arr = self.emitArrayCreateOp(giid, range: range)
-			self.trackOwnedTemp(arr)
-			// ⭐ **`BufArray.create()` YIELDS AN ARRAY OF BUFFERS (A2m)** — asked of the ALIAS NAME and never of
-			// `giid`, which cannot answer: `Array with __ManagedMemory` and `Array with ByteArray` intern to the
-			// SAME instance. The name is the caller's because the two doors spell it differently — a top-level
-			// alias is its own token, a nested one is base-qualified — and only they know which.
-			if self.signatures.aliasElementIsBufferSurface(aliasName) 'elementsAreBuffers'
-				self.markBufferSurfaceElements(arr)
-			end 'elementsAreBuffers'
-
-			return arr
+			return try self.emitOwnedContainerCreate(giid, aliasTok: aliasTok, aliasName: aliasName, range: range)
 		end 'createStatic'
 
 		// `StringInitMethod` is the ONE constant over the spelling `init`, not a borrowed one: this file's
@@ -37620,7 +37786,15 @@ export type Parser
 	//
 	// `Array` is NOT here: its static surface is several methods with arguments (`parseArrayStaticCall`), so it
 	// shares the skeleton with nothing.
-	function parseBuiltinContainerStaticCall(aliasTok Token, giid GenericInstanceId) returns ValueId throws ParseError
+	//
+	// ⚠ **`aliasName` IS THE CALLER'S AND IS NEVER RE-DERIVED FROM `aliasTok`** (S2i review). The two doors
+	// spell the key differently — a top-level alias is its own token, a NESTED one is base-qualified
+	// (`Container.ElementArray`) — so `aliasTok.value` is the right key for one of them and the wrong one for
+	// the other. It is only ever read by the producer's `Array` arm today, which this router cannot reach, so
+	// a bare `aliasTok.value` here answered nothing and was merely a SECOND derivation of a name the caller
+	// had already computed correctly: the day a non-`Array` container carries an element-spelling stamp it
+	// would have started answering, wrongly, for every inner alias.
+	function parseBuiltinContainerStaticCall(aliasTok Token, aliasName ByteArray, giid GenericInstanceId) returns ValueId throws ParseError
 		try self.consume(TokenKind.dot)
 		let methodTok = try self.consume(TokenKind.identifier)
 
@@ -37630,10 +37804,37 @@ export type Parser
 
 		try self.consumeEmptyArgList()
 
-		let container = try self.gateAndEmitContainerCreate(giid, aliasTok: aliasTok, range: SourceRange.between(aliasTok, last: methodTok))
+		return try self.emitOwnedContainerCreate(giid, aliasTok: aliasTok, aliasName: aliasName, range: SourceRange.between(aliasTok, last: methodTok))
+	end 'parseBuiltinContainerStaticCall'
+
+	// ⭐⭐ **THE OWNED EMPTY CONTAINER AN INSTANCE ALIAS DENOTES — the ONE producer behind BOTH spellings**,
+	// `<Alias>.create()` and `<Alias>{}` (S2i). The two are the same value by measurement, not by intention:
+	// the oracle's `ElementArray{}` is `resize`d and `count()`s back exactly as its `ElementArray.create()`
+	// does. A second producer for the literal would be a second answer to "what does an empty `Array with T`
+	// cost?", free to drift from this one the day a header, an element stamp or the buffer surface changes.
+	//
+	// `Array` is its own arm and is UNGATED, exactly as it has always been: its element rule is the instance's
+	// own, so `requireContainerColumnTypes` returns for it, and it alone carries the buffer-surface stamp.
+	//
+	// ⭐ **`BufArray.create()` YIELDS AN ARRAY OF BUFFERS (A2m)** — asked of the ALIAS NAME and never of
+	// `giid`, which cannot answer: `Array with __ManagedMemory` and `Array with ByteArray` intern to the SAME
+	// instance. The name is the caller's because the doors spell it differently — a top-level alias is its own
+	// token, a nested one is base-qualified — and only they know which.
+	function emitOwnedContainerCreate(giid GenericInstanceId, aliasTok Token, aliasName ByteArray, range SourceRange) returns ValueId throws ParseError
+		if self.signatures.isArrayInstance(giid) 'array'
+			let arr = try self.emitArrayCreateOp(giid, range: range)
+			self.trackOwnedTemp(arr)
+			if self.signatures.aliasElementIsBufferSurface(aliasName) 'elementsAreBuffers'
+				self.markBufferSurfaceElements(arr)
+			end 'elementsAreBuffers'
+
+			return arr
+		end 'array'
+
+		let container = try self.gateAndEmitContainerCreate(giid, aliasTok: aliasTok, range: range)
 		self.trackOwnedTemp(container)
 		return container
-	end 'parseBuiltinContainerStaticCall'
+	end 'emitOwnedContainerCreate'
 
 	// What each container says when the author names a static it does not have. A per-container ROUTER rather
 	// than a name threaded into one template, because the three tails are not the same sentence with a noun
@@ -37680,7 +37881,7 @@ export type Parser
 			return self.emitListCreateOp(giid, range: range)
 		end 'chain'
 		if self.signatures.isVectorInstance(giid) 'vector'
-			return self.emitVectorCreateOp(giid, range: range)
+			return try self.emitVectorCreateOp(giid, range: range)
 		end 'vector'
 		panic("Parser.gateAndEmitContainerCreate: generic instance {giid} is not a create-only builtin container — every caller opens with the builtin-base test `requireContainerIsCreatable` makes, and a container admitted there owes a gate and an emit here")
 	end 'gateAndEmitContainerCreate'
@@ -38280,7 +38481,7 @@ export type Parser
 		walkArgs.push(try self.columnCloneValue(self.signatures.mapKeyType(giid), anchor: anchor, range: range))
 		walkArgs.push(try self.columnCloneValue(self.signatures.mapValueType(giid), anchor: anchor, range: range))
 
-		return self.emitMaterializedFill(self.signatures.builtinInstanceForNamedElement(ArrayBuiltinBaseName, element: pair.name), callee: MapEntriesName, source: map, extraArgs: walkArgs, range: range)
+		return try self.emitMaterializedFill(self.signatures.builtinInstanceForNamedElement(ArrayBuiltinBaseName, element: pair.name), callee: MapEntriesName, source: map, extraArgs: walkArgs, range: range)
 	end 'emitMapEntriesArray'
 
 	// ⭐ **THE ADDRESS OF A COLUMN'S DEEP-CLONE CALLEE, OR 0 FOR A TRIVIAL COLUMN — `columnDestroyValue`'s
@@ -38794,8 +38995,8 @@ export type Parser
 	// wrote `create()`), so the guarantee is carried by `requireVectorElementType` instead: it refuses every
 	// managed element at the `create()` itself. **The two are one invariant with two doors — do not relax
 	// either without the other.** Review finding 1 is what happens when only this one exists.
-	function emitVectorCreateOp(giid GenericInstanceId, range SourceRange) returns ValueId
-		let vec = self.emitArrayCreateOp(giid, range: range)
+	function emitVectorCreateOp(giid GenericInstanceId, range SourceRange) returns ValueId throws ParseError
+		let vec = try self.emitArrayCreateOp(giid, range: range)
 		let countVal = self.emitLiteral(self.signatures.genericInstanceFixedSize(giid), valueType: MaxonType.integer, range: range)
 		_ = self.emitRuntimeCall(ArrResizeName, args: pairArgs(vec, second: countVal), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
 		return vec
