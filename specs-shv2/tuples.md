@@ -1102,7 +1102,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:18:2: Cannot return '__Tuple2.__Tuple2#2.int' from function declared to return '__Tuple2.__Tuple2#0.int'
+error E3005: <fragment>:18:2: Cannot return '__Tuple2.__Tuple2#2ce2fdda76cda7c9.int' from function declared to return '__Tuple2.__Tuple2#90fac2b26f6571d1.int'
 ```
 
 <!-- test: error.nested-tuple-name-does-not-depend-on-which-file-declares-it-swapped -->
@@ -1137,7 +1137,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:18:2: Cannot return '__Tuple2.__Tuple2#2.int' from function declared to return '__Tuple2.__Tuple2#0.int'
+error E3005: <fragment>:18:2: Cannot return '__Tuple2.__Tuple2#2ce2fdda76cda7c9.int' from function declared to return '__Tuple2.__Tuple2#90fac2b26f6571d1.int'
 ```
 
 <!-- test: error.self-referential-tuple-alias -->
@@ -1157,32 +1157,37 @@ termination rule cannot pass unnoticed.
 EYES.** Until W9 a tuple's name INLINED every element, so the two types read
 `__Tuple2.__Tuple2.int.int.int` against a six-deep `__Tuple2.__Tuple2.…P.Int.int.int.int.int.int` and the
 re-registration was legible in the string itself. That inlining is what `A3j` measured as quadratic in
-nesting depth and exponential for a branching chain, and a nested element is now cited by an INTERNED
-ORDINAL (`__Tuple2#4`) instead. **The depth is still there and still grows; what the ordinals carry is only
-that the two inner types are DISTINCT and how many mints apart they are.** So the case still discriminates a
-change in the termination rule — a different number of re-entries registers a different number of layouts
-and moves the ordinals — but it can no longer say WHICH way the depth went.
+nesting depth and exponential for a branching chain, and a nested element is now cited by a bounded TOKEN
+instead. **The depth is still there and still grows; what the tokens carry is only that the two inner types
+are DISTINCT.** So the case still discriminates a change in the termination rule — a different number of
+re-entries builds a different inner type and moves its token — but it can no longer say WHICH way the depth
+went.
 
-⚠ **AND THE ORDINALS DO NOT RANK BY DEPTH — DO NOT READ THEM AS IF THEY DID (W9 review).** `#6` is the
-SHALLOW type here (the one-level `((int, int), int)` the function returns) and `#4` is the FIVE-level inner
-of the declared type. The ordinal is mint position, not nesting; the larger number is the type registered
-later, which in this fragment is the shallower one.
+⭐ **AND SINCE W14b THE TOKEN IS A DIGEST OF THE CITED TUPLE'S OWN NAME, so it says something the mint
+ordinal it replaced could not.** `#90fac2b26f6571d1` is the SHALLOW type here — the one-level
+`((int, int), int)` the function returns — and it is **the identical token this suite's
+`error.nested-tuple-name-does-not-depend-on-which-file-declares-it` shows for `((int, int), int)` in an
+unrelated three-file program**, because it is the same type and the citation is now a pure function of the
+structure. `#41e3ea25fc813804` is the FIVE-level inner of the declared type. Neither number ranks by depth
+and neither ever did; what changed is that they no longer rank by anything else either.
 
-⚠ **THE ORDINALS ARE MINT-ORDERED OVER THE WHOLE COMPILE**, so anything interning a tuple ahead of these —
-this fragment's own re-registrations today, a stdlib module a future edit pulls in, a differently-ordered
-directory walk — moves them. That is weaker than the old spelling as a pin, because it depends on a count
-the sentence does not name. A move here is a prompt to re-derive the number, never to assume the
-termination rule broke.
+⭐ **THE TOKENS ARE THEREFORE NO LONGER MINT-ORDERED, AND THIS PARAGRAPH USED TO SAY THE OPPOSITE (W14b).**
+It read that anything interning a tuple ahead of these — a stdlib module a future edit pulls in, a
+differently-ordered directory walk — moved them, which made the pin depend on a count the sentence does not
+name. It does not any more: the token is `fnv1a64` of the cited tuple's registered name, so **an unrelated
+tuple interned first moves nothing**, and only a change to the TYPE this case builds can move a number here.
+A move is a prompt to ask what type changed shape.
 
-⛔ **AND THE REASON FIRST GIVEN FOR ACCEPTING IT WAS BACKWARDS — CORRECTED BY THE W9 REVIEW.** It read
-*"v1's `GenericInstanceId` has the identical property"*. v1 has the OPPOSITE property, by an explicit
-repair with its rationale written down: `maxon-selfhosted/Compiler/Passes/BuildLayoutDescriptors.maxon:62-75`
-records that gid numbering "is NOT stable across build scenarios" (`Array<String>` is gid 6 cold and gid 8
-warm) and therefore emits sorted **by the mangled label, "a pure function of the instance's structural
-shape"** — i.e. v1's dense id is deliberately kept OUT of every emitted artifact, which is the same rule
-`SignatureIndex.mangleTypeArg` states for shv2. What is actually being accepted here is a mint-order number
-reaching a symbol and a diagnostic; see `ProgramSignatures.mintTupleElementToken` for the measurement, the
-pre-W9 control, and the standing 2026-07-24 ruling it sits against.
+⭐ **THE REASON FIRST GIVEN FOR ACCEPTING IT WAS BACKWARDS, AND W14b REMOVED THE THING THAT NEEDED
+ACCEPTING.** The W9 text read *"v1's `GenericInstanceId` has the identical property"*; the W9 review
+established that v1 has the OPPOSITE property, by an explicit repair with its rationale written down:
+`maxon-selfhosted/Compiler/Passes/BuildLayoutDescriptors.maxon:62-75` records that gid numbering "is NOT
+stable across build scenarios" (`Array<String>` is gid 6 cold and gid 8 warm) and therefore emits sorted
+**by the mangled label, "a pure function of the instance's structural shape"** — i.e. v1's dense id is
+deliberately kept OUT of every emitted artifact, the same rule `SignatureIndex.mangleTypeArg` states for
+shv2. shv2 now satisfies that rule rather than excusing itself from it: see
+`ProgramSignatures.tupleElementTokenFor` for the digest, the walk-order measurement it removed, and the
+standing 2026-07-24 file-order ruling it settles.
 ```maxon
 typealias Int = int(i64.min to i64.max)
 typealias P = (P, Int)
@@ -1197,7 +1202,50 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:6:2: Cannot return '__Tuple2.__Tuple2#6.int' from function declared to return '__Tuple2.__Tuple2#4.int'
+error E3005: <fragment>:6:2: Cannot return '__Tuple2.__Tuple2#90fac2b26f6571d1.int' from function declared to return '__Tuple2.__Tuple2#41e3ea25fc813804.int'
+```
+
+<!-- test: error.self-referential-tuple-alias-with-an-unrelated-tuple-interned-alongside -->
+
+⭐⭐ **THE CASE ABOVE, WITH AN UNRELATED SIBLING FILE THAT INTERNS TWO TUPLES OF ITS OWN — AND BOTH TOKENS
+COME OUT UNCHANGED (W14b).** The program `main.maxon` holds is byte-identical to the one above; `aaa.maxon`
+adds `((String, String), int)`, which is a different type in every respect and is walked FIRST. Both cited
+tokens are the same two the case above pins, and only the fragment line moves (a file marker now sits in
+front of the program).
+
+⚠ **THIS EXISTS BECAUSE THE CASE ABOVE MADE A CLAIM IN PROSE THAT NOTHING TESTED.** Until W14b the tokens
+were mint-ordered over the whole compile, and that case's own text warned that *anything* interning a tuple
+ahead of them moved the numbers. ⛔ MEASURED against the pre-W14b compiler, this exact program: the shallow
+type read `__Tuple2#6` alone and `__Tuple2#8` with `aaa.maxon` present, the declared type `__Tuple2#4` and
+`__Tuple2#6` — a diagnostic about one file, moved two ordinals by a file that shares nothing with it. A
+digest of the cited tuple's own name cannot do that, and this is where that stops being an argument.
+
+⚠ It does NOT vary the walk order, and deliberately: `error.nested-tuple-name-does-not-depend-on-which-file-declares-it{,-swapped}`
+already pins that axis by swapping two files' CONTENTS. What this pins is the other one — that an
+UNRELATED interning does not reach a citation at all.
+```maxon
+// --- file: aaa.maxon
+export typealias Other = ((String, String), int)
+
+export function makeOther() returns Other
+	return (("a", "b"), 1)
+end 'makeOther'
+
+// --- file: main.maxon
+typealias Int = int(i64.min to i64.max)
+typealias P = (P, Int)
+
+function make() returns P
+	return ((1, 2), 3)
+end 'make'
+
+function main() returns ExitCode
+	let t = make()
+	return t.1 as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:14:2: Cannot return '__Tuple2.__Tuple2#90fac2b26f6571d1.int' from function declared to return '__Tuple2.__Tuple2#41e3ea25fc813804.int'
 ```
 
 ### A tuple typealias as a GENERIC TYPE ARGUMENT — the RAW instance-argument doors (A3e review)
