@@ -171,10 +171,9 @@ let DiagnosticCodeSuffix = ": "
 // compiler that leaked exits 101 having printed the very same diagnostics.
 let DiagnosticsReportedExitCode = 1
 
-// The two nesting depths of the skipped-case census: a case under the note's headline, and the
-// compiler's own diagnostics under the case they refused. Two constants because they are two different
-// depths — the same reason `indentedList` refuses to own the indent at all.
-let SkippedCaseIndent = "  "
+// How deep the compiler's own diagnostics sit under the case they refused, in the skipped-case census.
+// The depth of the CASE itself is `IndentedReport.ResultNoteIndent`, shared with the golden-drift
+// trailer; this one is the nesting BELOW it and is the caller's, for the reason `indentedList` states.
 let RefusalIndent = "    "
 
 // Where a CPU-fault panic line stops being a claim and starts being an address. See
@@ -765,10 +764,13 @@ end 'TargetRefusal'
 // and why `reportTargetSkips` prints the count, the target and the constructs in the trailer. **A skip
 // that is not counted must never be added here.**
 //
-// ⚠ **THREE THINGS MAKE IT NARROW, AND EACH ANSWERS A DIFFERENT WAY IT COULD SWALLOW A REAL FAILURE:**
+// ⚠ **FOUR THINGS MAKE IT NARROW, AND EACH ANSWERS A DIFFERENT WAY IT COULD SWALLOW A REAL FAILURE:**
 //   * only a verdict that did NOT hold is considered at all, so a case that pins E3104 as its own
-//     expected diagnostic (`builtins-sleep.rejected-on-wasm`) matches, passes, and is never reached
-//     here — the coverage that pins the refusal survives the refusal becoming a skip;
+//     expected diagnostic (`builtins-sleep.rejected-on-wasm`) matches, passes, and is never reached here;
+//   * and a `compilerError` case is not converted even when its verdict DID fail, which is the half the
+//     line above cannot cover and once did not: see `outcomeOrTargetSkip`, where a MEASURED silent skip
+//     of exactly those cases is recorded. The coverage that pins the refusal survives the refusal
+//     becoming a skip in BOTH directions only because of that second guard;
 //   * EVERY NON-EMPTY LINE the compiler printed must BE an E3104, not merely contain one. One other
 //     diagnostic beside it means the compile also had a real complaint, and a real complaint is a
 //     failure; one line that is not a diagnostic at all — a panic, a runtime message, anything this
@@ -815,10 +817,35 @@ end 'targetRefusalIn'
 // The verdict, unless the target could not express the case — in which case the case did not run here
 // and says so. Written as one door because the two halves must not be applied in either order by
 // accident: `outcome` is consulted FIRST, so a case whose expectation IS the refusal keeps its pass.
-function outcomeOrTargetSkip(outcome TestOutcome, compile ProcessCapture) returns TestOutcome
+//
+// ⛔⛔ **A `compilerError` CASE IS NEVER CONVERTED, AND A PASSING ONE IS NOT THE REASON WHY.** Consulting
+// `outcome` first is enough only while such a case PASSES; the moment its pinned text stops matching it
+// becomes a FAILED verdict over a compile that exited 1 having printed nothing but E3104s — which is
+// bit-for-bit the shape a skip is read off. So the very cases that pin the refusal —
+// `builtins-sleep.rejected-on-wasm`, `stdlib-whitelist.target-refusal-blames-the-crossing-call`,
+// `console-stdin`/`process-executable-path`/`builtins-clock`'s twins — would turn into SILENT SKIPS at
+// the exact moment they broke, and a test that can only pass or vanish pins nothing.
+//
+// ⚠ MEASURED 2026-08-06 on this branch, twice and two ways: editing `builtins-sleep.rejected-on-wasm`'s
+// pinned entry name to `__gt_SABOTAGE` reported `SKIP … / 1 passed, 0 failed`, **exit 0**; a purpose-built
+// case pinning a wrong E3104 did the same on x64-linux. Both are FAIL after this guard.
+//
+// ⇒ **THE QUESTION IS WHO THE SUBJECT IS.** A `compilerError` case asserts WHAT THE COMPILER SAYS, so
+// the diagnostics are the artifact under test and a disagreement is an assertion that did not hold. Only
+// a case that expected to BUILD AND RUN can be "not runnable here", and that is the one this converts.
+function outcomeOrTargetSkip(outcome TestOutcome, expectation SpecExpectation, compile ProcessCapture) returns TestOutcome
 	if outcome.isPass() 'itRanHere'
 		return outcome
 	end 'itRanHere'
+
+	let compilerIsTheSubject = match expectation 'e'
+		run gives false
+		compilerError gives true
+	end 'e'
+
+	if compilerIsTheSubject 'diagnosticsAreTheAssertion'
+		return outcome
+	end 'diagnosticsAreTheAssertion'
 
 	return match targetRefusalIn(compile) 'refusal'
 		notRefused gives outcome
@@ -843,18 +870,14 @@ export function reportTargetSkips(results SpecTestResultArray, effectiveTarget T
 		match result.outcome 'verdict'
 			pass then continue
 			fail then continue
-			skipped(refusals) then entries.push("{SkippedCaseIndent}{result.specName}/{result.testName}\n{indentedRefusals(refusals)}")
+			skipped(refusals) then entries.push(resultNoteEntry(result.specName, testName: result.testName, detail: indentedRefusals(refusals)))
 		end 'verdict'
 	end 'each'
 
-	if entries.isEmpty() 'nothingSkipped'
-		return
-	end 'nothingSkipped'
-
-	printError("note: {entries.count()} case(s) SKIPPED on {targetToString(effectiveTarget)} — NOT RUN and NOT PASSED. The compiler refused a construct this target has no implementation for ({ErrorCode.targetUnsupportedConstruct.rawValue}), which is a fact about the TARGET and not about the case:\n")
-	for entry in entries 'eachEntry'
-		printError(entry)
-	end 'eachEntry'
+	// The blank-at-zero guard and the entry loop are `reportResultNote`'s, shared with the golden-drift
+	// trailer this one prints above — see `IndentedReport` for why the two are one shape.
+	let headline = "note: {entries.count()} case(s) SKIPPED on {targetToString(effectiveTarget)} — NOT RUN and NOT PASSED. The compiler refused a construct this target has no implementation for ({ErrorCode.targetUnsupportedConstruct.rawValue}), which is a fact about the TARGET and not about the case:\n"
+	reportResultNote(entries, headline: headline)
 end 'reportTargetSkips'
 
 // One compiler diagnostic block, indented under the test it belongs to. EVERY line of it, because one
@@ -1199,8 +1222,9 @@ function runStagedTest(test SpecTest, specName String, staged StagedTest, exeBas
 	// ⭐ THE ONE PLACE A CROSS-TARGET SKIP IS DECIDED, and it is here because here is where the
 	// compiler's verdict first exists: `compile` has just come back, and nothing downstream re-reads its
 	// stderr. It wraps `checkExpectation` rather than preceding it, because a case whose EXPECTATION is
-	// the refusal must keep its pass — see `outcomeOrTargetSkip`.
-	let outcome = outcomeOrTargetSkip(checkExpectation(test, specName: specName, compile: compile, staged: staged, exePath: exePath, runWorkingDir: runWorkingDir, effectiveTarget: effectiveTarget), compile: compile)
+	// the refusal must keep its pass — and it is handed that EXPECTATION as well as the verdict, because
+	// a `compilerError` case must keep its FAIL too. See `outcomeOrTargetSkip`.
+	let outcome = outcomeOrTargetSkip(checkExpectation(test, specName: specName, compile: compile, staged: staged, exePath: exePath, runWorkingDir: runWorkingDir, effectiveTarget: effectiveTarget), expectation: test.expectation, compile: compile)
 
 	// The fragment records the emitted Target IR for REFERENCE (see `FragmentsSubdir`), and the step is
 	// skipped in three cases:

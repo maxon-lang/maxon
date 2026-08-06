@@ -23,3 +23,45 @@ export function indentedList(items StringArray, indent String) returns String
 	end 'eachItem'
 	return out.build()
 end 'indentedList'
+
+// ============================================================================================
+// THE PER-RESULT TRAILER — one note, one shape, two callers
+// ============================================================================================
+//
+// ⭐ **THE SUITE HAS TWO TRAILERS THAT SAY "HERE ARE THE N CASES THIS RUN HAS SOMETHING TO SAY ABOUT",
+// AND THEY PRINT ONE UNDER THE OTHER IN THE SAME RUN**: `GoldenTracking.reportGoldenDrift` and
+// `SpecTestRunner.reportTargetSkips`. A reader takes the two blocks as one column, so their entry shape
+// and their nesting depth are ONE FACT — and it had already been written twice, as a bare `"  "` in one
+// file against a named constant in the other, with nothing that would have made a change to either
+// reach the other. Both are assembled here now.
+
+// How deep one CASE sits under the sentence that introduces it. Distinct from the depths a caller nests
+// BELOW it (a compiler diagnostic under the case it refused, say) — those stay the caller's, for the
+// reason `indentedList` states.
+export let ResultNoteIndent = "  "
+
+// One case's entry: its `<spec>/<test>` label, then whatever the caller has to say about it on the lines
+// under it. `detail` is emitted VERBATIM, so a caller whose block does not already end in a newline
+// appends one — this cannot add it for them without deciding for `indentedRefusals`, which does.
+export function resultNoteEntry(specName String, testName String, detail String) returns String
+	return "{ResultNoteIndent}{specName}/{testName}\n{detail}"
+end 'resultNoteEntry'
+
+// The note itself, on STDERR — stdout is the REPORT (the per-test verdicts and the `N passed, M failed`
+// line) and must stay byte-identical across worker counts, while an indicator sits beside it.
+//
+// ⚠ **SILENT AT ZERO, AND THAT IS WHY IT TAKES THE HEADLINE ALREADY BUILT.** "No note" means none, at
+// both call sites rather than at whichever one remembered to write the guard — and every such headline
+// states the COUNT, which cannot be known until the last result has been read. So the caller collects,
+// then interpolates, then hands both here.
+export function reportResultNote(entries StringArray, headline String)
+	if entries.isEmpty() 'nothingToSay'
+		return
+	end 'nothingToSay'
+
+	printError(headline)
+
+	for entry in entries 'eachEntry'
+		printError(entry)
+	end 'eachEntry'
+end 'reportResultNote'

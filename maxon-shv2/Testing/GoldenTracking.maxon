@@ -76,22 +76,18 @@ export function reportGoldenDrift(results SpecTestResultArray)
 	for result in results 'eachResult'
 		match result.golden 'reference'
 			none then continue
-			drifted(detail) then entries.push("  {result.specName}/{result.testName}\n{detail}\n")
+			// The trailing newline is this caller's: a drift difference does not end in one, and
+			// `resultNoteEntry` emits `detail` verbatim rather than guessing.
+			drifted(detail) then entries.push(resultNoteEntry(result.specName, testName: result.testName, detail: "{detail}\n"))
 		end 'reference'
 	end 'eachResult'
 
-	if entries.count() == 0 'nothingMoved'
-		return
-	end 'nothingMoved'
-
-	printError("note: {entries.count()} golden fragment(s) no longer match what the compiler emits. GOLDENS ARE REFERENCE, NOT A GATE:\n")
-	printError("  nothing failed on this and the exit code is unaffected. Read the differences below — they are the only\n")
-	printError("  record of what your change did to the emitted code — then re-run with --update-required (paired with a\n")
-	printError("  --filter) to refresh the files. That diff IS the review.\n")
-
-	for entry in entries 'eachEntry'
-		printError(entry)
-	end 'eachEntry'
+	// The headline is FOUR lines, and the count in its first is why the entries are collected before
+	// anything is printed. The blank-at-zero guard and the entry loop are `reportResultNote`'s — shared
+	// with the skip trailer this one prints above, so the two notes cannot come to disagree about the
+	// shape a reader takes them as one column.
+	let headline = "note: {entries.count()} golden fragment(s) no longer match what the compiler emits. GOLDENS ARE REFERENCE, NOT A GATE:\n{ResultNoteIndent}nothing failed on this and the exit code is unaffected. Read the differences below — they are the only\n{ResultNoteIndent}record of what your change did to the emitted code — then re-run with --update-required (paired with a\n{ResultNoteIndent}--filter) to refresh the files. That diff IS the review.\n"
+	reportResultNote(entries, headline: headline)
 end 'reportGoldenDrift'
 
 // ⭐ **THE TRACKING REPORT — goldens this tree has on disk and never put under version control.**
