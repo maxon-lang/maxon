@@ -227,3 +227,42 @@ end 'main'
 ```stdout
 186 7
 ```
+
+
+<!-- test: file-private-alias-still-governs-its-own-file -->
+⭐ The MIRROR of the case above, and the reason that one may not be answered by handing the name to
+the stdlib instead. A name-keyed type table holds ONE type per name, so scoping `DecimalDigit` by
+letting `stdlib/Builtins.maxon`'s own file-private `int(0 to 9)` win would only move the wrong answer
+— the program would then be reading a foreign 1-byte type for a name it declared, itself, four bytes
+wide. Both files declare it and both must keep what they declared. The width is what makes it
+observable in the program's OWN file: `70000` fits `int(0 to 100000)` and survives a round trip
+through an `Array` of it only while that array's element is the program's declaration, and comes
+back truncated the moment a by-name lookup swaps in the stdlib's. `sizeof` is printed beside it
+precisely because the two can DISAGREE: the parser resolves a type name per file and answers 4,
+while the generic instance's element type is re-resolved whole-program — a silent disagreement that
+reaches the backend, which is why the value and the size are pinned together and not separately.
+Prints `70000 3 70001 4`.
+```maxon
+typealias DecimalDigit = int(0 to 100000)
+typealias DigitArray = Array with DecimalDigit
+
+function widen(v DecimalDigit) returns DecimalDigit
+	return v
+end 'widen'
+
+function main() returns ExitCode
+	var a = DigitArray.create()
+	a.push(70000)
+	a.push(3)
+	let x = try a.get(0) otherwise 0
+	let y = try a.get(1) otherwise 0
+	print("{x} {y} {widen(70001)} {sizeof(DecimalDigit)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+70000 3 70001 4
+```

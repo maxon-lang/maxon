@@ -106,6 +106,30 @@ public class IrType {
     type is IrRangedPrimitiveType rpt ? rpt.BaseType : type;
 
   /// <summary>
+  /// True when a type ALREADY HELD in a resolved position may be replaced by whatever the
+  /// whole-program table currently answers for its NAME. Three passes want that replacement, all for
+  /// the same reason: a pre-scan registers an INCOMPLETE stand-in — an <c>IrPlaceholderType</c>, a
+  /// field-less <c>IrStructType</c>, a case-less <c>IrEnumType</c> — and the completed declaration
+  /// arrives later, under the same name, so the held object has to be swapped for it.
+  ///
+  /// ⚠ A RANGED PRIMITIVE IS NEVER THAT STAND-IN, and re-resolving one by bare name is how a
+  /// file-private typealias came to govern another file's arithmetic. It is minted whole — range and
+  /// all — in a single step, so there is no incomplete version of one to upgrade. A DIFFERENT ranged
+  /// type answering to the same name is therefore not this declaration's completed form: it is
+  /// another FILE's declaration of the name, and <c>TypeDefs</c> is keyed by bare name and cannot
+  /// tell the two apart. Measured both ways on one flat table — a program's
+  /// <c>Word32 = int(0 to 255)</c> truncated the 32-bit words of the <c>Word32</c> that
+  /// <c>stdlib/Sha256.maxon</c> declares for itself, and a program's
+  /// <c>DecimalDigit = int(0 to 100000)</c> had 70000 come back as 880 through the
+  /// <c>int(0 to 9)</c> that <c>stdlib/Builtins.maxon</c> declares for itself. Whichever
+  /// declaration reached the table last decided the other file's answer.
+  ///
+  /// Stated ONCE, because the three readers must agree: disagreeing, they would give one name two
+  /// widths within a single compile, which is the shape that reaches the backend with no diagnostic.
+  /// </summary>
+  public static bool MayBeRefreshedByName(IrType held) => held is not IrRangedPrimitiveType;
+
+  /// <summary>
   /// Maps an IrType back to its source-level name for error messages.
   /// </summary>
   public static string FormatAsSourceName(IrType type) {

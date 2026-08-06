@@ -81,8 +81,11 @@ internal class TypeSubstitution {
     foreach (var assocTypeName in paramNames) {
       if (typeParams.TryGetValue(assocTypeName, out var concreteType)) {
         // Re-resolve through TypeDefs to pick up fully-parsed types, but only if the
-        // resolved type has the same name (avoid cross-contamination from stale entries)
-        if (module.TypeDefs.TryGetValue(concreteType.Name, out var resolved)
+        // resolved type has the same name (avoid cross-contamination from stale entries).
+        // The same-name test is NOT enough on its own: two files may declare one name, and then the
+        // names match while the TYPES do not — see IrType.MayBeRefreshedByName.
+        if (IrType.MayBeRefreshedByName(concreteType)
+            && module.TypeDefs.TryGetValue(concreteType.Name, out var resolved)
             && resolved != concreteType && resolved.Name == concreteType.Name) {
           map[assocTypeName] = resolved;
         } else {
@@ -241,7 +244,9 @@ internal class TypeSubstitution {
 
     foreach (var assocTypeName in sourceEnum.AssociatedTypeNames) {
       if (typeParams.TryGetValue(assocTypeName, out var concreteType)) {
-        if (module.TypeDefs.TryGetValue(concreteType.Name, out var resolved) && resolved != concreteType) {
+        // See IrType.MayBeRefreshedByName — the struct twin of this loop, above, states why.
+        if (IrType.MayBeRefreshedByName(concreteType)
+            && module.TypeDefs.TryGetValue(concreteType.Name, out var resolved) && resolved != concreteType) {
           map[assocTypeName] = resolved;
         } else {
           map[assocTypeName] = concreteType;

@@ -1,0 +1,532 @@
+// Test: tuple-element-names-join-injectively
+typealias Num = int(0 to 1000)
+
+type A_B
+	export let p as Num
+	export let q as Num
+
+	export static function create(p Num, q Num) returns Self
+		return Self{p: p, q: q}
+	end 'create'
+end 'A_B'
+
+type A
+	export let q as Num
+	export let p as Num
+
+	export static function create(q Num, p Num) returns Self
+		return Self{q: q, p: p}
+	end 'create'
+end 'A'
+
+type C
+	export let z as Num
+
+	export static function create(z Num) returns Self
+		return Self{z: z}
+	end 'create'
+end 'C'
+
+type B_C
+	export let z as Num
+
+	export static function create(z Num) returns Self
+		return Self{z: z}
+	end 'create'
+end 'B_C'
+
+function first(t (A_B, C)) returns Num
+	let l = t._0
+	return l.p
+end 'first'
+
+function second(t (A, B_C)) returns Num
+	let l = t._0
+	return l.p
+end 'second'
+
+function main() returns ExitCode
+	let pTup = (A_B.create(1, q: 2), C.create(0))
+	let qTup = (A.create(7, p: 3), B_C.create(0))
+	return first(pTup) + second(qTup)
+end 'main'
+---
+ExitCode: 4
+---
+// CompiledIR
+module {
+  func @A_B.create(p: i64, q: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=32
+    x64.mov [rbp-8], rcx
+    x64.mov [rbp-16], rdx
+    x64.xor eax, eax
+    x64.mov rbx, 1000
+    x64.cmp rcx, rbx
+    x64.jg A_B.create.__range_panic_0
+    x64.cmp rcx, rax
+    x64.jl A_B.create.__range_panic_0
+    x64.jmp A_B.create.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.xor esi, esi
+    x64.mov rdi, 1000
+    x64.cmp rdx, rdi
+    x64.jg A_B.create.__range_panic_1
+    x64.cmp rdx, rsi
+    x64.jl A_B.create.__range_panic_1
+    x64.jmp A_B.create.__range_ok_1
+  __range_panic_1:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_1:
+    x64.mov r8, [rbp-8]
+    x64.xor r9d, r9d
+    x64.mov rax, 1000
+    x64.cmp r8, rax
+    x64.jg A_B.create.__range_panic_2
+    x64.cmp r8, r9
+    x64.jl A_B.create.__range_panic_2
+    x64.jmp A_B.create.__range_ok_2
+  __range_panic_2:
+    x64.lea_symdata rax, [__panic_msg_1]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_2:
+    x64.mov rax, [rbp-16]
+    x64.xor ebx, ebx
+    x64.mov rsi, 1000
+    x64.cmp rax, rsi
+    x64.jg A_B.create.__range_panic_3
+    x64.cmp rax, rbx
+    x64.jl A_B.create.__range_panic_3
+    x64.jmp A_B.create.__range_ok_3
+  __range_panic_3:
+    x64.lea_symdata rax, [__panic_msg_1]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_3:
+    x64.mov rcx, 16
+    x64.xor edx, edx
+    x64.mov r8, 9
+    x64.call mm_alloc
+    x64.mov [rbp-24], rax
+    x64.mov rax, [rbp-24]
+    x64.mov rcx, [rbp-8]
+    x64.mov [rax+0], rcx
+    x64.mov rdx, [rbp-24]
+    x64.mov rbx, [rbp-16]
+    x64.mov [rdx+8], rbx
+    x64.mov rsi, [rbp-24]
+    x64.mov rcx, [rbp-24]
+    x64.call mm_incref
+    x64.mov rax, [rbp-24]
+    x64.epilogue
+    x64.ret
+  }
+  func @A.create(q: i64, p: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=32
+    x64.mov [rbp-8], rcx
+    x64.mov [rbp-16], rdx
+    x64.xor eax, eax
+    x64.mov rbx, 1000
+    x64.cmp rcx, rbx
+    x64.jg A.create.__range_panic_0
+    x64.cmp rcx, rax
+    x64.jl A.create.__range_panic_0
+    x64.jmp A.create.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_2]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.xor esi, esi
+    x64.mov rdi, 1000
+    x64.cmp rdx, rdi
+    x64.jg A.create.__range_panic_1
+    x64.cmp rdx, rsi
+    x64.jl A.create.__range_panic_1
+    x64.jmp A.create.__range_ok_1
+  __range_panic_1:
+    x64.lea_symdata rax, [__panic_msg_2]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_1:
+    x64.mov r8, [rbp-8]
+    x64.xor r9d, r9d
+    x64.mov rax, 1000
+    x64.cmp r8, rax
+    x64.jg A.create.__range_panic_2
+    x64.cmp r8, r9
+    x64.jl A.create.__range_panic_2
+    x64.jmp A.create.__range_ok_2
+  __range_panic_2:
+    x64.lea_symdata rax, [__panic_msg_3]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_2:
+    x64.mov rax, [rbp-16]
+    x64.xor ebx, ebx
+    x64.mov rsi, 1000
+    x64.cmp rax, rsi
+    x64.jg A.create.__range_panic_3
+    x64.cmp rax, rbx
+    x64.jl A.create.__range_panic_3
+    x64.jmp A.create.__range_ok_3
+  __range_panic_3:
+    x64.lea_symdata rax, [__panic_msg_3]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_3:
+    x64.mov rcx, 16
+    x64.xor edx, edx
+    x64.mov r8, 10
+    x64.call mm_alloc
+    x64.mov [rbp-24], rax
+    x64.mov rax, [rbp-24]
+    x64.mov rcx, [rbp-8]
+    x64.mov [rax+0], rcx
+    x64.mov rdx, [rbp-24]
+    x64.mov rbx, [rbp-16]
+    x64.mov [rdx+8], rbx
+    x64.mov rsi, [rbp-24]
+    x64.mov rcx, [rbp-24]
+    x64.call mm_incref
+    x64.mov rax, [rbp-24]
+    x64.epilogue
+    x64.ret
+  }
+  func @C.create(z: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.xor eax, eax
+    x64.mov rdx, 1000
+    x64.cmp rcx, rdx
+    x64.jg C.create.__range_panic_0
+    x64.cmp rcx, rax
+    x64.jl C.create.__range_panic_0
+    x64.jmp C.create.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_4]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov rbx, [rbp-8]
+    x64.xor esi, esi
+    x64.mov rdi, 1000
+    x64.cmp rbx, rdi
+    x64.jg C.create.__range_panic_1
+    x64.cmp rbx, rsi
+    x64.jl C.create.__range_panic_1
+    x64.jmp C.create.__range_ok_1
+  __range_panic_1:
+    x64.lea_symdata rax, [__panic_msg_5]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_1:
+    x64.mov rcx, 8
+    x64.xor edx, edx
+    x64.mov r8, 11
+    x64.call mm_alloc
+    x64.mov [rbp-16], rax
+    x64.mov rax, [rbp-16]
+    x64.mov rcx, [rbp-8]
+    x64.mov [rax+0], rcx
+    x64.mov rdx, [rbp-16]
+    x64.mov rcx, [rbp-16]
+    x64.call mm_incref
+    x64.mov rax, [rbp-16]
+    x64.epilogue
+    x64.ret
+  }
+  func @B_C.create(z: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.xor eax, eax
+    x64.mov rdx, 1000
+    x64.cmp rcx, rdx
+    x64.jg B_C.create.__range_panic_0
+    x64.cmp rcx, rax
+    x64.jl B_C.create.__range_panic_0
+    x64.jmp B_C.create.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_6]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov rbx, [rbp-8]
+    x64.xor esi, esi
+    x64.mov rdi, 1000
+    x64.cmp rbx, rdi
+    x64.jg B_C.create.__range_panic_1
+    x64.cmp rbx, rsi
+    x64.jl B_C.create.__range_panic_1
+    x64.jmp B_C.create.__range_ok_1
+  __range_panic_1:
+    x64.lea_symdata rax, [__panic_msg_7]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_1:
+    x64.mov rcx, 8
+    x64.xor edx, edx
+    x64.mov r8, 12
+    x64.call mm_alloc
+    x64.mov [rbp-16], rax
+    x64.mov rax, [rbp-16]
+    x64.mov rcx, [rbp-8]
+    x64.mov [rax+0], rcx
+    x64.mov rdx, [rbp-16]
+    x64.mov rcx, [rbp-16]
+    x64.call mm_incref
+    x64.mov rax, [rbp-16]
+    x64.epilogue
+    x64.ret
+  }
+  func @first(t: i64) -> u16 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rdx, [rax+0]
+    x64.mov [rbp-16], rdx
+    x64.mov rax, [rbp-16]
+    x64.mov rdx, [rax+0]
+    x64.xor eax, eax
+    x64.mov rbx, 1000
+    x64.cmp rdx, rbx
+    x64.jg first.__range_panic_0
+    x64.cmp rdx, rax
+    x64.jl first.__range_panic_0
+    x64.jmp first.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_8]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov rax, rdx
+    x64.epilogue
+    x64.ret
+  }
+  func @second(t: i64) -> u16 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rdx, [rax+0]
+    x64.mov [rbp-16], rdx
+    x64.mov rax, [rbp-16]
+    x64.mov rdx, [rax+8]
+    x64.xor eax, eax
+    x64.mov rbx, 1000
+    x64.cmp rdx, rbx
+    x64.jg second.__range_panic_0
+    x64.cmp rdx, rax
+    x64.jl second.__range_panic_0
+    x64.jmp second.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_9]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov rax, rdx
+    x64.epilogue
+    x64.ret
+  }
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=64
+    x64.mov rcx, 1
+    x64.mov rdx, 2
+    x64.call A_B.create
+    x64.mov [rbp-8], rax
+    x64.xor ecx, ecx
+    x64.call C.create
+    x64.mov [rbp-16], rax
+    x64.lea_func rax, [__destruct___Tuple2-A_B-C]
+    x64.mov rcx, rax
+    x64.mov rdx, rcx
+    x64.mov rcx, 16
+    x64.mov r8, 13
+    x64.call mm_alloc
+    x64.mov [rbp-24], rax
+    x64.mov rdx, [rbp-8]
+    x64.mov rbx, [rbp-24]
+    x64.mov [rbx+0], rdx
+    x64.mov rcx, [rbp-8]
+    x64.call mm_incref
+    x64.mov rsi, [rbp-16]
+    x64.mov rdi, [rbp-24]
+    x64.mov [rdi+8], rsi
+    x64.mov rcx, [rbp-16]
+    x64.call mm_incref
+    x64.mov r8, [rbp-24]
+    x64.mov rcx, [rbp-24]
+    x64.call mm_incref
+    x64.mov rcx, 7
+    x64.mov rdx, 3
+    x64.call A.create
+    x64.mov [rbp-32], rax
+    x64.xor ecx, ecx
+    x64.call B_C.create
+    x64.mov [rbp-40], rax
+    x64.lea_func r9, [__destruct___Tuple2-A-B_C]
+    x64.mov rax, r9
+    x64.mov rdx, rax
+    x64.mov rcx, 16
+    x64.mov r8, 14
+    x64.call mm_alloc
+    x64.mov [rbp-48], rax
+    x64.mov rax, [rbp-32]
+    x64.mov rcx, [rbp-48]
+    x64.mov [rcx+0], rax
+    x64.mov rcx, [rbp-32]
+    x64.call mm_incref
+    x64.mov rax, [rbp-40]
+    x64.mov rcx, [rbp-48]
+    x64.mov [rcx+8], rax
+    x64.mov rcx, [rbp-40]
+    x64.call mm_incref
+    x64.mov rax, [rbp-48]
+    x64.mov rcx, [rbp-48]
+    x64.call mm_incref
+    x64.mov rax, [rbp-24]
+    x64.mov rcx, [rbp-24]
+    x64.call first
+    x64.mov rcx, [rbp-48]
+    x64.mov [rbp-56], rax
+    x64.call second
+    x64.mov rcx, [rbp-56]
+    x64.add rcx, rax
+    x64.xor eax, eax
+    x64.mov edx, 4294967295
+    x64.cmp rcx, rdx
+    x64.jg main.__range_panic_0
+    x64.cmp rcx, rax
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_10]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov rbx, [rbp-40]
+    x64.mov [rbp-64], rcx
+    x64.test rbx, rbx
+    x64.jz __nonnull_skip_0
+    x64.mov rcx, [rbp-40]
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.mov rax, [rbp-32]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_1
+    x64.mov rcx, [rbp-32]
+    x64.call mm_decref
+    x64.label __nonnull_skip_1
+    x64.mov rcx, [rbp-16]
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_2
+    x64.call mm_decref
+    x64.label __nonnull_skip_2
+    x64.mov rdx, [rbp-8]
+    x64.test rdx, rdx
+    x64.jz __nonnull_skip_3
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref
+    x64.label __nonnull_skip_3
+    x64.mov rbx, [rbp-48]
+    x64.test rbx, rbx
+    x64.jz __nonnull_skip_4
+    x64.mov rcx, [rbp-48]
+    x64.call mm_decref
+    x64.label __nonnull_skip_4
+    x64.mov rsi, [rbp-24]
+    x64.test rsi, rsi
+    x64.jz __nonnull_skip_5
+    x64.mov rcx, [rbp-24]
+    x64.call mm_decref
+    x64.label __nonnull_skip_5
+    x64.mov rax, [rbp-64]
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_A_B(ptr: i64) {
+  entry:
+    x64.jmp __destruct_A_B.done
+  done:
+    x64.ret
+  }
+  func @__destruct_A(ptr: i64) {
+  entry:
+    x64.jmp __destruct_A.done
+  done:
+    x64.ret
+  }
+  func @__destruct_C(ptr: i64) {
+  entry:
+    x64.jmp __destruct_C.done
+  done:
+    x64.ret
+  }
+  func @__destruct_B_C(ptr: i64) {
+  entry:
+    x64.jmp __destruct_B_C.done
+  done:
+    x64.ret
+  }
+  func @__destruct___Tuple2-A_B-C(ptr: i64) {
+  entry:
+    x64.prologue stack_size=32
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.mov [rbp-16], rcx
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_0
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.mov rdx, [rbp-8]
+    x64.mov rbx, [rdx+8]
+    x64.mov [rbp-24], rbx
+    x64.test rbx, rbx
+    x64.jz __nonnull_skip_1
+    x64.mov rcx, [rbp-24]
+    x64.call mm_decref
+    x64.label __nonnull_skip_1
+    x64.jmp __destruct___Tuple2-A_B-C.done
+  done:
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct___Tuple2-A-B_C(ptr: i64) {
+  entry:
+    x64.prologue stack_size=32
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.mov [rbp-16], rcx
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_0
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.mov rdx, [rbp-8]
+    x64.mov rbx, [rdx+8]
+    x64.mov [rbp-24], rbx
+    x64.test rbx, rbx
+    x64.jz __nonnull_skip_1
+    x64.mov rcx, [rbp-24]
+    x64.call mm_decref
+    x64.label __nonnull_skip_1
+    x64.jmp __destruct___Tuple2-A-B_C.done
+  done:
+    x64.epilogue
+    x64.ret
+  }
+}
+---

@@ -916,8 +916,11 @@ public class Compiler {
         continue;
       foreach (var key in structType.TypeParams.Keys.ToList()) {
         var paramType = structType.TypeParams[key];
-        if (paramType is IrTypeParameterType)
+        // A type parameter is not a stand-in awaiting its declaration; it IS the abstraction, and
+        // monomorphization is what replaces it.
+        if (paramType is IrTypeParameterType || !IrType.MayBeRefreshedByName(paramType))
           continue;
+
         if (module.TypeDefs.TryGetValue(paramType.Name, out var currentType) && currentType != paramType)
           structType.TypeParams[key] = currentType;
       }
