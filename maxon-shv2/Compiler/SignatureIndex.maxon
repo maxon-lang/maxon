@@ -6254,6 +6254,23 @@ export type ProgramSignatures
 		// exactly as before, which is what keeps `isCompilerOwnedTypeName`'s two measured silent wrong answers
 		// (a user `hash()` answering 7 where djb2 answers 5381; `Set with String` counting 3 where the control
 		// says 2) closed. `specs-shv2/string-conformance.md`'s two `may-not-bind-the-name` cases pin it.
+		//
+		// ⚠ **AND THE PREDICTION THE OLD HEADER MADE IS KEPT, BECAUSE ITS SUBJECT IS STILL LIVE (W16 review).**
+		// That header said *"the day a listed module declares one of these names, this arm gains the same
+		// bit"*, and this rung is that day — but only for the PROBE (`maxon-shv2 build stdlib/<M>.maxon`,
+		// where `livesUnderStdlibDirectory` is the ROOT's answer). **No LISTED module declares a
+		// compiler-owned struct name today**, and exactly three stdlib files declare one at all —
+		// `String`, `Character`, `CharacterSet` — all three unlisted, which is what makes this change
+		// codegen-inert by construction rather than by measurement.
+		// ⛔ **LISTING ONE IS THEREFORE A DECISION THIS ARM NO LONGER REFUSES FOR YOU, AND `CharacterSet` IS
+		// THE SHARP CASE.** The compiler registers its own layout under the RESERVED spelling
+		// `__CharacterSet` (`CharacterSetTypeName`) precisely so a declaration cannot contest that bucket,
+		// while the user-facing name is the bare `CharacterSetBuiltinName` — so `containsStruct` answering
+		// FALSE for `CharacterSet` is a fact `Parser.requireDeclaredBaseTypeName` is written against. List
+		// `stdlib/CharacterSet.maxon` and the corpus layout lands here under the BARE name, that answer
+		// flips, and one concept has two layouts under two keys. **That is the listing rung's question to
+		// settle, not this one's** — recorded here because deleting a prediction that already came true
+		// once is how it comes true twice.
 		if declarationContestsACompilerOwnedName(layout.name, declaredByTheCorpus: declaredByTheCorpus) 'aUserContest'
 			return
 		end 'aUserContest'

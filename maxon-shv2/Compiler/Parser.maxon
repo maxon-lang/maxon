@@ -17750,14 +17750,21 @@ export type Parser
 	// than loose: a second listed module declaring the same name is an ordinary duplicate definition (E3006,
 	// `commitFuncSignatures`' twin for types), which is a LOUDER answer than a per-name allowlist could give and
 	// one that already exists. What this door owes is only that a USER file may not mint the identity.
+	//
+	// ⛔⛔ **IT ASKS THE ONE PREDICATE INSTEAD OF RE-SPELLING THE CONJUNCTION, AND THIS DOOR IS *WHY* THAT
+	// PREDICATE EXISTS (W16 review).** Three sites decide the identical question — this one, which
+	// DIAGNOSES, and the two registries that DROP (`Project.upsertDeclaredEnum`,
+	// `ProgramSignatures.recordStruct`). W16 unified the two registries after the disagreement between THIS
+	// door and one of them cost two reachable compiler PANICS: it admitted `stdlib/String.maxon`'s
+	// declaration while `recordStruct` threw the layout away, so the parse walked into a body whose layout
+	// no longer existed. Leaving `isCompilerOwnedTypeName(…) and not <corpus>` written out a third time here
+	// would leave the rule with two homes again — and the next edit to either one is the same crash. **The
+	// BIT is this parser's** (`livesUnderStdlibDirectory`, for the reason two paragraphs up); **the RULE
+	// over it is `Project.declarationContestsACompilerOwnedName`'s, and only its.**
 	function requireTypeNameNotCompilerOwned(nameTok Token) throws ParseError
-		if not isCompilerOwnedTypeName(nameTok.value) 'notOwned'
+		if not declarationContestsACompilerOwnedName(nameTok.value, declaredByTheCorpus: self.livesUnderStdlibDirectory) 'notAContest'
 			return
-		end 'notOwned'
-
-		if self.livesUnderStdlibDirectory 'theDeclaringCorpus'
-			return
-		end 'theDeclaringCorpus'
+		end 'notAContest'
 
 		throw ParseError.declarationTakesCompilerOwnedTypeName(String.from(nameTok.value), line: nameTok.line, column: nameTok.column)
 	end 'requireTypeNameNotCompilerOwned'

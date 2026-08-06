@@ -847,6 +847,19 @@ end 'renderInstantiation'
 // A plain upsert, and it stays one: a second `type` of the same name is refused by
 // `commitTypeNameDecls` above, which runs first and fails the build, so the overwrite is never
 // observed. That is the same relationship `commitFuncReturnTypes` has with `commitFuncSignatures`.
+//
+// ⚠ **AND IT DOES NOT ASK `Project.declarationContestsACompilerOwnedName` WHILE `commitEnumTypes`
+// DIRECTLY BELOW DOES — THE ASYMMETRY IS PROVED, NOT OVERLOOKED (W16 review).** That rule drops a
+// declaration of a compiler-owned type name from anyone but the corpus, and it belongs at a write a
+// TOLERANT walk can reach: `ProgramSignatures.recordStruct` is fed by the declaration SWEEP, which folds
+// a user's `type String` in before the real parse refuses it. This write is not that. Its two feeders are
+// `Parser.parseTypeDeclaration`, which calls `requireTypeNameNotCompilerOwned` (E2015) BEFORE it mints
+// the layout, and `Parser.internTupleLayout`, whose names are synthesized `__Tuple…` spellings that are
+// compiler-owned under no reading — and an aborted parse contributes `typeNameDecls` alone
+// (`Parser.abortedParseArtifact`), so a refused declaration cannot arrive here by the error path either.
+// ⇒ **a contested layout cannot reach this loop**, and a drop written here would be unreachable rather
+// than defensive. The enum twin's call is not the same shape: `upsertDeclaredEnum` is the ONE upsert both
+// enum registries share, so the rule rides it once for the sweep's sake and this site inherits it.
 function commitStructTypes(project Project, artifact FileParseArtifact)
 	for layout in artifact.structTypes 'each'
 		project.structTypes.upsert(layout.name, value: layout)
