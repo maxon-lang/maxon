@@ -878,8 +878,17 @@ function scanTestFromMarker(lines StringArray, markerIndex LineIndex, markerLine
 		// arms because the arms are what would claim it, and for a DISABLED case as well as a live one —
 		// this is a line that is not a fence at all, which is true however the case is marked, and
 		// `pushRuntimeNames` panics just as hard while scanning a shelved case.
-		if fenceOpenCarriesProse(line) 'proseLineOpeningWithAFencePrefix'
-			panic("SpecParser: {specPath.toString()}:{i + 1}: this line begins with a fence delimiter and its info string contains a space, so it is a PROSE line that every fence arm would claim by prefix and read as a block body: '{line.trim()}'. Every fence tag in this grammar is a single token. Write the name as inline code (one backtick) if it is prose, or make the line a real fence")
+		// ⭐ ONE trim, read by BOTH fence questions — the one above and the terminating arm at the bottom —
+		// so they cannot come to disagree about what "opens a fence" is. They already did: this arm
+		// trimmed and `isUnimplementedFenceOpen` did not, so INDENTING an unreadable fence by two spaces
+		// walked straight past the terminating arm and the block was skipped in silence again (measured
+		// 2026-08-06, BATCH29 review: `  ```mm-trace` in a live case, suite green, exit 0). Markdown
+		// allows a fence up to three columns in and a fence nested in a list item further still, so that
+		// is a spelling an author reaches by accident, not a contrivance.
+		let fenceLine = line.trim()
+
+		if fenceOpenCarriesProse(fenceLine) 'proseLineOpeningWithAFencePrefix'
+			panic("SpecParser: {specPath.toString()}:{i + 1}: this line begins with a fence delimiter and its info string contains a space, so it is a PROSE line that every fence arm would claim by prefix and read as a block body: '{fenceLine}'. Every fence tag in this grammar is a single token. Write the name as inline code (one backtick) if it is prose, or make the line a real fence")
 		end 'proseLineOpeningWithAFencePrefix'
 
 		// CompilerError MUST be checked before Source: "```maxoncstderr" also
@@ -975,8 +984,8 @@ function scanTestFromMarker(lines StringArray, markerIndex LineIndex, markerLine
 		// ⚖ ONLY A LIVE CASE. A `disabled-test:` marker ALREADY says the case runs nowhere, so a block it
 		// carries claims nothing — it is a record kept for the rung that will enable it, which is exactly
 		// what the disabled form is for. Refusing there would delete the notes instead of the lies.
-		if active and isUnimplementedFenceOpen(line) 'unimplementedFence'
-			panic("SpecParser: {specPath.toString()}:{i + 1}: live test '{name}' opens a fence this parser does not implement: '{line.trim()}'. The arms above are the whole set it can read, so this block is silently skipped: it pins NOTHING while reading as coverage. Delete it (what pins the emitted code here is the minted fragment golden), implement the fence, or shelve the case as `disabled-test:` naming the rung that unlocks it")
+		if active and isUnimplementedFenceOpen(fenceLine) 'unimplementedFence'
+			panic("SpecParser: {specPath.toString()}:{i + 1}: live test '{name}' opens a fence this parser does not implement: '{fenceLine}'. The arms above are the whole set it can read, so this block is silently skipped: it pins NOTHING while reading as coverage. Delete it (what pins the emitted code here is the minted fragment golden), implement the fence, or shelve the case as `disabled-test:` naming the rung that unlocks it")
 		end 'unimplementedFence'
 
 		i = i + 1
@@ -1024,36 +1033,36 @@ function scanTestFromMarker(lines StringArray, markerIndex LineIndex, markerLine
 	return i
 end 'scanTestFromMarker'
 
-// Whether `line` opens a fence whose info string carries WHITESPACE — i.e. a prose sentence starting with
-// three backticks rather than one of this grammar's fences, every one of which is a single token. Asked
-// BEFORE the arms, because it is the arms' prefix matching that would misread it.
-//
-// The delimiter itself holds no space, so after trimming, any space or tab in the line is in the info
-// string. A leading-whitespace indent is not the info string and is trimmed off first.
-function fenceOpenCarriesProse(line String) returns bool
-	let trimmed = line.trim()
+// ⚠ BOTH FUNCTIONS BELOW TAKE AN ALREADY-TRIMMED LINE, and the caller trims once for the pair. Each used
+// to decide for itself whether the line "opens a fence" and they decided DIFFERENTLY — one trimming, one
+// not — which is this file's own subject arriving in the guard that closes it: an indented unreadable
+// fence satisfied neither and was skipped in silence. The argument type is what keeps them agreeing.
 
-	if not trimmed.startsWith(FenceDelimiter) 'notAFence'
+// Whether `trimmedLine` opens a fence whose info string carries WHITESPACE — i.e. a prose sentence
+// starting with three backticks rather than one of this grammar's fences, every one of which is a single
+// token. Asked BEFORE the arms, because it is the arms' prefix matching that would misread it.
+//
+// The delimiter itself holds no space, so in a trimmed line any space or tab is in the info string.
+function fenceOpenCarriesProse(trimmedLine String) returns bool
+	if not trimmedLine.startsWith(FenceDelimiter) 'notAFence'
 		return false
 	end 'notAFence'
 
-	return trimmed.contains(" ") or trimmed.contains("\t")
+	return trimmedLine.contains(" ") or trimmedLine.contains("\t")
 end 'fenceOpenCarriesProse'
 
-// Whether `line` opens a block `scanTestFromMarker` has no reader for — asked only AFTER every fence arm
-// has declined it, so a tag with an arm never reaches here.
+// Whether `trimmedLine` opens a block `scanTestFromMarker` has no reader for — asked only AFTER every
+// fence arm has declined it, so a tag with an arm never reaches here.
 //
 // The two exceptions are PROSE and make no claim, which is why walking past them is correct and always
 // was: a bare fence (the closing delimiter of any block is the same three bytes, and 11,210 lines in this
 // corpus are one or the other) and `ProseFenceOpen`.
-function isUnimplementedFenceOpen(line String) returns bool
-	if not line.startsWith(FenceDelimiter) 'notAFence'
+function isUnimplementedFenceOpen(trimmedLine String) returns bool
+	if not trimmedLine.startsWith(FenceDelimiter) 'notAFence'
 		return false
 	end 'notAFence'
 
-	let trimmed = line.trim()
-
-	return trimmed != FenceDelimiter and trimmed != ProseFenceOpen
+	return trimmedLine != FenceDelimiter and trimmedLine != ProseFenceOpen
 end 'isUnimplementedFenceOpen'
 
 // Consume a section-pin fence opening at `openIndex` and record what it claims about `section`,

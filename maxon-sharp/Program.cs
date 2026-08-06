@@ -1337,6 +1337,21 @@ class Program {
       return TreeLock.NothingRanExitCode;
     }
 
+    // ⚖ THE SAME DOOR, ONE FLAG OVER. A mint records what the compiler emits, and every committed
+    // golden in this tree was minted with debug info OFF — the path `maxon build` does NOT take. That
+    // the two paths emit identical bytes is exactly what `--debug-info` is here to MEASURE, so minting
+    // under it would write the measurement's own subject into the reference and the gate would compare
+    // a thing against itself. (The env var this flag replaced carried the rule in its doc comment —
+    // "a run under it is not the run the committed goldens pin" — and could not be combined with
+    // anything because no script ever set it. As a flag the combination is one word away.)
+    if (updateRequired && debugInfo) {
+      Console.Error.WriteLine(
+        $"error: {DebugInfoSpecTestFlag} cannot mint — it compiles every test down a path the committed "
+        + "goldens are not minted from, and a golden written under it would be a measurement of itself. "
+        + $"Run --update-required without {DebugInfoSpecTestFlag}.");
+      return TreeLock.NothingRanExitCode;
+    }
+
     var projectDir = FindProjectRoot();
     if (projectDir == null) {
       Console.WriteLine("Could not find project root (looking for specs/ directory)");

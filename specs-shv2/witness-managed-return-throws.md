@@ -31,11 +31,13 @@ gap #3(d)) and a managed struct result went unbalanced. The refcount inserter's
 throw edge — whose error ABI zeroes the result register — never increfs a null
 result.
 
-This is `status: selfhosted`: C# devirtualizes the dispatch and its uniform-borrow
-model balances the success result, but the C# oracle LEAKS the caught box on the
-diverging `otherwise` here (a C#-oracle-side defect), so the two compilers cannot
-share a leak-gate verdict. The self-hosted compiler owns this spec and releases
-the box; C# skips it.
+⚠ THIS FILE IS `status: stable` — the sentence here read `status: selfhosted` when it was ported,
+carried over byte-identically from `/specs` where it is still true, and it contradicted this file's own
+frontmatter three lines above (corrected 2026-08-06, BATCH29 review). The `/specs` twin stays suspended
+for the reason its own `status-reason:` states, which is the reason below: C# devirtualizes the dispatch
+and its uniform-borrow model balances the success result, but it LEAKS the caught box on the diverging
+`otherwise` here — VERIFIED 2026-08-06, `MM leak: 1 allocation(s) remain`, exit 101 — so the two
+compilers cannot share a leak-gate verdict. shv2 owns this spec and releases the box.
 
 Runs under the suite's leak gate AND `--rc-sanitize`, so a missing result
 classification (dangle/double-free) or a missing error-flag classification (leak)

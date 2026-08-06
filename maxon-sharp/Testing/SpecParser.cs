@@ -113,15 +113,24 @@ public static partial class SpecParser {
       }
 
       if (SuspendingStatuses.Contains(spec.Status)) {
+        // Every test the file DECLARES, which is not the same as `Tests.Count`: a per-test
+        // `SelfhostedOnly` directive inside a whole-file suspension is redundant, but it still moves
+        // that test out of `Tests` — so counting only `Tests` would report a file as holding fewer
+        // tests than it has, and a census that undercounts is the debt hiding again one level down.
+        // They are not double-counted: the per-test list below is built only for LIVE files. Read
+        // ONCE, above both readers, so the refusal and the census cannot state different numbers for
+        // the same file.
+        var declaredTests = spec.Tests.Count + spec.SuspendedTests.Count;
+
         if (string.IsNullOrWhiteSpace(spec.StatusReason)) {
           errors.Add(
-            $"{fileName}: `status: {spec.Status}` takes this file and its {spec.Tests.Count} test(s) out "
+            $"{fileName}: `status: {spec.Status}` takes this file and its {declaredTests} test(s) out "
             + $"of this suite, and no runner in this tree picks them up instead. Add a `{StatusReasonKey}:` "
             + "line to the frontmatter saying why, and what would let them run again.");
           continue;
         }
 
-        suspendedFiles.Add(new SuspendedSpec(fileName, spec.Status, spec.Tests.Count, spec.StatusReason));
+        suspendedFiles.Add(new SuspendedSpec(fileName, spec.Status, declaredTests, spec.StatusReason));
         continue;
       }
 

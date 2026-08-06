@@ -100,22 +100,30 @@ ORDER=()
 # The prerequisite that stopped this step, or empty when every one of them passed. Returns the FIRST
 # blocker by name: a skip has to say which step it is waiting on, or the summary reports an absence
 # with no cause and the reader goes looking in the wrong place.
+#
+# ⛔ A MISORDERED TABLE IS REPORTED THROUGH THE EXIT STATUS, NEVER BY CALLING `exit` HERE. This runs
+# inside `$( )`, so `exit` would end the SUBSHELL and nothing else: the caller would read an empty
+# blocker — "nothing is stopping this step" — and run it anyway, with the whole run still exiting 0.
+# MEASURED 2026-08-06 (BATCH29 review) on the first version of this function. A guard that cannot stop
+# the run is the exact shape this script exists to remove, arriving inside the removal.
+TABLE_MISORDERED=2
 blocked_by() {
 	local requires="$1" key
 	[ "$requires" = "-" ] && return 0
 	local IFS=,
 	for key in $requires; do
-		# A prerequisite that has not run yet is a MISORDERED TABLE, not a skip: reporting it as one
-		# would silently disable every step behind it, which is the failure this whole file is about.
+		# A prerequisite that has not run yet is not a skip: reporting it as one would silently disable
+		# every step behind it, which is the failure this whole file is about.
 		if [ -z "${VERDICT[$key]+set}" ]; then
 			echo "buildall.sh: step '$key' is required before it runs — the STEPS table is misordered." >&2
-			exit 2
+			return $TABLE_MISORDERED
 		fi
 		if [ "${VERDICT[$key]}" != "PASS" ]; then
 			printf '%s' "$key"
 			return 0
 		fi
 	done
+	return 0
 }
 
 for row in "${STEPS[@]}"; do
@@ -124,6 +132,10 @@ for row in "${STEPS[@]}"; do
 	HEADING[$key]="$heading"
 
 	blocker="$(blocked_by "$requires")"
+	# `$?` after an assignment from a command substitution is the SUBSTITUTION's status — the only
+	# channel a subshell has back to here, and why `blocked_by` reports a misordered table this way.
+	[ $? -eq $TABLE_MISORDERED ] && exit $TABLE_MISORDERED
+
 	if [ -n "$blocker" ]; then
 		echo ""
 		echo "=== $heading — SKIPPED ==="

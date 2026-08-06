@@ -113,9 +113,20 @@ EXCLUDED="maxon-shv2/track0/alloc-torture.maxon"
 # `<spec>/<test>` (SpecTestRunner.maxon), so `arithmetic/` selects `wide-immediate-arithmetic/` too —
 # and when that spec landed on 2026-08-04 the count went 4 -> 10 and this gate went red for a reason
 # with nothing to do with stale binaries. Nobody saw it for two days, because `buildall.sh` was dying
-# four steps earlier. Deriving it makes the check STRONGER, not weaker: CHECKS 3-6 now assert the same
-# run the control produced, so a run that silently executed FEWER tests is caught, which a literal
-# could never see.
+# four steps earlier.
+#
+# ⚖ WHAT DERIVING IT COSTS, STATED HONESTLY (BATCH29 review, 2026-08-06 — the first spelling of this
+# comment claimed the derivation was "STRONGER, not weaker", which is true of one direction only):
+#   * STRONGER against a DIFFERENTIAL. CHECKS 3-6 now assert the same run the control produced, so a
+#     later run that silently executes a DIFFERENT number of tests than the control is caught. A
+#     literal could not see that; it only ever knew one number.
+#   * WEAKER against an ABSOLUTE. If the CONTROL itself runs fewer tests — a filter that stops
+#     selecting a spec, a corpus that shrinks — every check agrees with a shrunken baseline and the
+#     whole matrix is green. That is the one thing the literal did catch, and it is given up here.
+#   * ⇒ AND IT CANNOT REACH THIS GATE'S OWN SUBJECT. The checks that decide whether the refusal works
+#     — 2a/2b/2c and 7 — compare against the fixed $STALE_EXIT, an EMPTY summary and the message's own
+#     words. None of them reads $EXPECTED_SUMMARY. So a poisoned baseline can weaken the RUNS-normally
+#     controls and can never manufacture a passing refusal.
 FILTER="arithmetic/"
 
 FAILED=0
