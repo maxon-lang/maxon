@@ -334,8 +334,8 @@ end 'wslProbeScript'
 // ⭐ **THE RESULTS COME BACK THROUGH FILES, NOT A DELIMITED STDOUT STREAM.** A stream needs framing and
 // escaping, and a test program emits arbitrary bytes — the worker wire protocol already had to escape
 // backslash-laden diagnostics for exactly this reason. Three files per test need no framing, no
-// escaping and no ordering assumption, and they are KEYED BY TEST NAME, which is why reading them back
-// needs no index bookkeeping at all.
+// escaping and no ordering assumption, and they are KEYED BY THE BINARY'S OWN FILENAME (`batchKeyFor`),
+// which is why reading them back needs no index bookkeeping at all.
 //
 // ⚠ **THEY LIVE IN A SUBDIRECTORY OF THE SCRATCH DIR, NOT IN IT.** `<test>.out` beside the binaries
 // would share a namespace with the compiler's own outputs, where `<name>.ir` and `<name>.metrics`
@@ -352,6 +352,18 @@ let BatchStatusExtension = ".code"
 // once per test into a file nothing but this reads, and because it is spelled from this constant at
 // both its definition and its call sites.
 let BatchRunFunctionName = "r"
+
+// The shell variable the key `batchCallLine` passes lands in. The script ASSIGNS this name and then
+// REFERENCES it three times through `batchKeyShellVar`, which is derived rather than typed again — one
+// word in two roles, and a rename that reached only one of them would leave the script expanding a
+// variable nothing set.
+let BatchKeyShellName = "n"
+
+// The `$`-reference to it. A FUNCTION and not a `let` for `wslProbeScript`'s reason: a module constant
+// must be a constant expression, and this one interpolates.
+function batchKeyShellVar() returns String
+	return "${BatchKeyShellName}"
+end 'batchKeyShellVar'
 
 // coreutils' per-execution bound. NAMED here rather than spelled in the script, because
 // `requireWslAvailable` probes for exactly this command and the two must be the same word.
@@ -1267,11 +1279,23 @@ end 'StagingResult'
 // cuts at the LAST DOT — so on any target whose `executableExtension` is empty (linux, macos) two tests
 // whose names differ only after their last dot land on ONE sidecar path:
 // `async-linearity.error.double-await` and `…double-await-in-loop` are both `async-linearity.error.ir`,
-// and 1,271 of the suite's test names contain a dot. That was survivable while a test's whole life —
+// and 1,701 of the suite's 4,677 test names contain a dot (RE-MEASURED 2026-08-06; the 1,271 written
+// here at this rung was an older count and understated it). That was survivable while a test's life —
 // compile, read, compare, delete — happened before the next test compiled. It is not survivable now
 // that the golden comparison waits for a batched run, so the bytes are taken at the ONE moment they
 // unambiguously belong to this test: immediately after the compile that wrote them. The path collision
 // is then harmless by construction rather than by execution order.
+//
+// ⚠ **THAT COVERS THE READS. IT DOES NOT COVER THE EXE, WHOSE LIFETIME THIS SAME CHANGE EXTENDED, AND
+// THE REMAINING INVARIANT IS A PROPERTY OF THE CORPUS RATHER THAN OF THIS FILE.** Every binary a spec
+// builds now survives from its own compile until the run pass, so a LATER test in the same spec whose
+// sidecar path happens to BE an earlier test's exe path overwrites a binary that has not run yet — a
+// test named `foo.ir` beside any test named `foo.<anything>`, or a test named `foo.test` beside a test
+// named `foo`, on any target whose `executableExtension` is empty. It cannot become a silent pass: the
+// clobbered file is IR text or Maxon source, `exec` refuses it, and the case fails on the exit code and
+// on the guest shell's own message in its stderr. MEASURED over all 4,677 test names in `specs-shv2/`,
+// 2026-08-06: ZERO such pairs, in any spec, for `.ir`, `.metrics`, `.test`, `.src` or `.stdlib`. Named
+// here because the census is the whole guarantee and it dates from outside the compiler.
 type CompiledTest
 	export let test as SpecTest
 	export let staged as StagedTest
@@ -2314,7 +2338,7 @@ function runWslBatch(prepared PreparedTestArray, tempDir FilePath, runWorkingDir
 	for step in prepared 'eachStep'
 		observations.push(match step 'phase'
 			finished gives RunObservation.notRequired
-			awaiting(run) gives batchObservationFor(run.compiled.test.name, batchDir: batchDir, launch: launch)
+			awaiting(run) gives batchObservationFor(batchKeyFor(run.compiled), batchDir: batchDir, launch: launch)
 		end 'phase')
 	end 'eachStep'
 
@@ -2365,7 +2389,7 @@ function launchBatch(prepared PreparedTestArray, tempDir FilePath, batchDir File
 	for step in prepared 'eachStep'
 		match step 'phase'
 			finished then continue
-			awaiting(run) then discardBatchCaptures(batchDir, testName: run.compiled.test.name)
+			awaiting(run) then discardBatchCaptures(batchDir, key: batchKeyFor(run.compiled))
 		end 'phase'
 	end 'eachStep'
 
@@ -2417,26 +2441,49 @@ function batchSubdirPath() returns FilePath
 	return try FilePath.from(BatchSubdirName) otherwise panic("SpecTestRunner: BatchSubdirName '{BatchSubdirName}' must be a valid relative path")
 end 'batchSubdirPath'
 
+// ⭐⭐ **THE ONE NAME THE GUEST IS GIVEN, DERIVED FROM THE PATH THE COMPILE ACTUALLY PRODUCED.** The
+// script names the binary `./<this>`, and the pre-run discard, the script's redirections and the
+// read-back all key their three capture files off the same word.
+//
+// ⚠ **IT IS `exePath`'s FILENAME AND NOT `test.name`, AND THAT IS THE POINT.** `prepareOneTest` is the
+// one place that knows what the build wrote — `<name>` plus `executableExtension(effectiveTarget)` —
+// and a script that spelled `./<test.name>` would be a SECOND answer to that question, agreeing with
+// the first only for as long as this lane's extension stays EMPTY. Nothing would make them agree: the
+// day a batched lane has a suffix, the script names a file that does not exist and the whole spec
+// reports 127 with the guest shell's `not found` in each test's stderr. Asked of the path, there is
+// only ever one answer.
+function batchKeyFor(compiled CompiledTest) returns String
+	return compiled.exePath.filename()
+end 'batchKeyFor'
+
+// One capture file, on the HOST side. The stem-plus-extension formula is written HERE and nowhere else
+// because its other end is a shell script (`guestCapturePath`) that this process cannot type-check
+// against: a reader that composed the name even slightly differently from the writer would not fail to
+// build, it would report every test in the spec as having produced no record.
+function batchCapturePath(batchDir FilePath, key String, extension String) returns FilePath
+	return batchDir.join("{key}{extension}")
+end 'batchCapturePath'
+
 // One test's three capture files, removed. Best-effort: an absent file is the normal case both at the
 // pre-run discard and at the post-run purge.
-function discardBatchCaptures(batchDir FilePath, testName String)
-	try File.delete(batchDir.join("{testName}{BatchStdoutExtension}")) otherwise ignore
-	try File.delete(batchDir.join("{testName}{BatchStderrExtension}")) otherwise ignore
-	try File.delete(batchDir.join("{testName}{BatchStatusExtension}")) otherwise ignore
+function discardBatchCaptures(batchDir FilePath, key String)
+	try File.delete(batchCapturePath(batchDir, key: key, extension: BatchStdoutExtension)) otherwise ignore
+	try File.delete(batchCapturePath(batchDir, key: key, extension: BatchStderrExtension)) otherwise ignore
+	try File.delete(batchCapturePath(batchDir, key: key, extension: BatchStatusExtension)) otherwise ignore
 end 'discardBatchCaptures'
 
 // One test's observation, read back out of the files its execution wrote.
-function batchObservationFor(testName String, batchDir FilePath, launch BatchLaunch) returns RunObservation
+function batchObservationFor(key String, batchDir FilePath, launch BatchLaunch) returns RunObservation
 	return match launch 'l'
 		failed(reason) gives RunObservation.failed(reason)
-		completed(capture) gives batchCaptureFor(testName, batchDir: batchDir, batch: capture)
+		completed(capture) gives batchCaptureFor(key, batchDir: batchDir, batch: capture)
 	end 'l'
 end 'batchObservationFor'
 
-function batchCaptureFor(testName String, batchDir FilePath, batch ProcessCapture) returns RunObservation
+function batchCaptureFor(key String, batchDir FilePath, batch ProcessCapture) returns RunObservation
 	// THE STATUS FIRST, because it is the file that says the execution finished at all — the other two
 	// exist from the moment the redirection is set up, so neither can answer that question.
-	let status = try File.readText(batchDir.join("{testName}{BatchStatusExtension}")) otherwise 'noStatus'
+	let status = try File.readText(batchCapturePath(batchDir, key: key, extension: BatchStatusExtension)) otherwise 'noStatus'
 		return RunObservation.failed("the batched {WslExecutableName} run recorded no exit status for this test; the batch itself exited {batch.exitCode}{batchStderrNote(batch)}")
 	end 'noStatus'
 
@@ -2452,11 +2499,11 @@ function batchCaptureFor(testName String, batchDir FilePath, batch ProcessCaptur
 		return RunObservation.failed("the batched {WslExecutableName} run wrote an unreadable exit status '{recorded}': {scaleErrorText(e)}")
 	end 'unreadableStatus'
 
-	let stdout = try File.readText(batchDir.join("{testName}{BatchStdoutExtension}")) otherwise 'noStdout'
+	let stdout = try File.readText(batchCapturePath(batchDir, key: key, extension: BatchStdoutExtension)) otherwise 'noStdout'
 		return RunObservation.failed("the batched {WslExecutableName} run recorded exit status {exitCode} but no stdout capture for this test")
 	end 'noStdout'
 
-	let stderr = try File.readText(batchDir.join("{testName}{BatchStderrExtension}")) otherwise 'noStderr'
+	let stderr = try File.readText(batchCapturePath(batchDir, key: key, extension: BatchStderrExtension)) otherwise 'noStderr'
 		return RunObservation.failed("the batched {WslExecutableName} run recorded exit status {exitCode} but no stderr capture for this test")
 	end 'noStderr'
 
@@ -2494,35 +2541,47 @@ function batchScript(prepared PreparedTestArray) returns String
 	var out = StringBuilder.create()
 
 	out.append("{BatchRunFunctionName}() (\n")
-	out.append("\tn=$1\n")
+	out.append("\t{BatchKeyShellName}=$1\n")
 	out.append("\tshift\n")
-	out.append("\tc=\"{BatchSubdirName}/$n{BatchStatusExtension}\"\n")
-	out.append("\t{GuestTimeoutCommand} -k {BatchKillGraceSeconds}{GuestTimeoutSecondsSuffix} {SpecSpawnTimeoutSeconds}{GuestTimeoutSecondsSuffix} {GuestShell} {GuestShellCommandFlag} 'exe=$1; out=$2; err=$3; code=$4; shift 4; ( exec \"$exe\" \"$@\" > \"$out\" 2> \"$err\" ); printf %s $? > \"$code\"' _ \"{WslRelativePrefix}$n\" \"{BatchSubdirName}/$n{BatchStdoutExtension}\" \"{BatchSubdirName}/$n{BatchStderrExtension}\" \"$c\" \"$@\"\n")
+	out.append("\tc=\"{guestCapturePath(BatchStatusExtension)}\"\n")
+	out.append("\t{GuestTimeoutCommand} -k {BatchKillGraceSeconds}{GuestTimeoutSecondsSuffix} {SpecSpawnTimeoutSeconds}{GuestTimeoutSecondsSuffix} {GuestShell} {GuestShellCommandFlag} 'exe=$1; out=$2; err=$3; code=$4; shift 4; ( exec \"$exe\" \"$@\" > \"$out\" 2> \"$err\" ); printf %s $? > \"$code\"' _ \"{WslRelativePrefix}{batchKeyShellVar()}\" \"{guestCapturePath(BatchStdoutExtension)}\" \"{guestCapturePath(BatchStderrExtension)}\" \"$c\" \"$@\"\n")
 	out.append("\t[ -f \"$c\" ] || printf %s {BatchTimedOutToken} > \"$c\"\n")
 	out.append(")\n")
 
 	for step in prepared 'eachStep'
 		match step 'phase'
 			finished then continue
-			awaiting(run) then out.append(batchCallLine(run.compiled.test))
+			awaiting(run) then out.append(batchCallLine(run.compiled))
 		end 'phase'
 	end 'eachStep'
 
 	return out.build()
 end 'batchScript'
 
-// One test's line: the function, the test's name, then the case's own `Args:`.
+// One capture file, on the GUEST side: the same stem-plus-extension formula `batchCapturePath` composes
+// for the reader, written relative to the `--cd` directory with the shell's own variable where the host
+// puts the key.
+//
+// ⚠ `PathSeparator`, never a literal `/`: the guest is POSIX whatever the host is, and the argv that
+// names the script five lines away already spells the separator from this same constant. Two spellings
+// of one separator is how the writer and the reader come to disagree about a path neither compiler
+// checks.
+function guestCapturePath(extension String) returns String
+	return "{BatchSubdirName}{PathSeparator}{batchKeyShellVar()}{extension}"
+end 'guestCapturePath'
+
+// One test's line: the function, the binary's own filename, then the case's own `Args:`.
 //
 // ⭐ THE PROGRAM'S OWN ARGUMENTS GO LAST, exactly as they do behind every other runner
-// (`buildRunCommand`): the shell function forwards whatever follows the test's name straight to the
-// binary, so `Args:` reaches the same argv[1..] a direct spawn would have given it.
-function batchCallLine(test SpecTest) returns String
+// (`buildRunCommand`): the shell function forwards whatever follows the key straight to the binary, so
+// `Args:` reaches the same argv[1..] a direct spawn would have given it.
+function batchCallLine(compiled CompiledTest) returns String
 	var line = StringBuilder.create()
 	line.append(BatchRunFunctionName)
 	line.append(" ")
-	line.append(shQuoted(test.name))
+	line.append(shQuoted(batchKeyFor(compiled)))
 
-	for arg in test.programArgs 'eachArg'
+	for arg in compiled.test.programArgs 'eachArg'
 		line.append(" ")
 		line.append(shQuoted(arg))
 	end 'eachArg'
