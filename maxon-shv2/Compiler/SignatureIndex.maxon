@@ -9065,7 +9065,7 @@ export type ProgramSignatures
 		end 'alreadyRegistered'
 
 		self.structTypes.upsert(name, value: tupleStructLayout(name, elements: elements, declFilePath: declFilePath))
-		self.tupleElementTokens.upsert(name, value: self.mintTupleElementToken(elements.count()))
+		self.tupleElementTokens.upsert(name, value: self.mintTupleElementToken(name, arity: elements.count()))
 		return name
 	end 'registerTupleLayout'
 
@@ -9101,18 +9101,60 @@ export type ProgramSignatures
 	// which is a real loss of detail at nesting depth ≥ 2 — bought with the asymptote above, and paid only
 	// by nested tuples, since a depth-1 tuple's name is unchanged to the byte.
 	//
-	// ⚠ **IT IS MINT-ORDER, WHICH IS WHY IT IS DERIVED HERE AND NOT IN `mangleTypeArg`.** That function is
-	// deliberately structural — "never from a gid number, so the label is identical across cold and warm
-	// builds" — and this token is the opposite by construction. It is admissible here for the reason a gid is
-	// admissible in v1: the compile is whole-program and single-threaded (no pass parses in parallel and no
-	// on-disk index is serialized), so the mint order is a function of the SOURCE, which is what
-	// `verify-warm-rebuild`'s determinism property requires. A descriptor label crossing a build boundary is a
-	// different question, and this token never becomes one.
+	// ⚠⚠ **IT IS MINT-ORDER, AND MINT ORDER IS THE ORDER THE FILESYSTEM HANDED THE FILES OVER — NOT THE
+	// SOURCE. MEASURED, W9 review, with a pre-W9 CONTROL.** Two projects differing only in WHICH sibling file
+	// declares which tuple alias give ONE type two names: `__Tuple2.__Tuple2#0.int` in one walk order and
+	// `__Tuple2.__Tuple2#2.int` in the other. The pre-W9 binary spells it `__Tuple2.__Tuple2.int.int.int` in
+	// BOTH, because the old citation was structural — so the dependence is NEW, and it is the shape
+	// `StdlibLoader`'s header already reports for emission order: `Compiler.collectMaxonSources` walks in
+	// `Directory.list` order and deliberately DOES NOT SORT (user ruling 2026-07-24 — "the compiler must not
+	// depend on file order to work correctly ... the repair belongs at the point of emission, deriving the
+	// order from something stable"). This is a second instance of the `$1` file-private-global suffix that
+	// ruling already filed, and it is reported rather than papered over.
+	//
+	// ⚠ **WHAT THAT COSTS, MEASURED rather than argued.** It does NOT move an ANSWER: eleven tuple-element
+	// shapes (nested, inner ranged alias, function alias, String, struct, union, six-deep chain, array-of-
+	// nested, tuple-of-tuple-alias, nested-managed, two-distinct-nested) accept, refuse and RUN identically
+	// against a pre-W9 binary, and `--filter=tuples` (41/41) and `--filter=managed-memory-methods` (124/124)
+	// are green with no leak. It DOES move a NAME: `__destruct___Tuple2.__Tuple2#0.int` is an emitted symbol,
+	// and every diagnostic naming a nested tuple carries the ordinal — so a golden fragment and an `E3005`
+	// sentence are now functions of the walk order, and ANY file interning a tuple ahead of one moves it.
+	//
+	// ⚠ **`verify-warm-rebuild` CANNOT SEE THIS AND MUST NOT BE CITED FOR IT.** Its determinism property
+	// compares two cold compiles of the SAME input on the SAME host (`VerifyWarmRebuild.verifyDeterminism`),
+	// so the one input that varies here is held fixed by construction. What it does establish is the other
+	// half — that WITHIN one walk order the mint order is a function of the source, which is what makes the
+	// citation an IDENTITY at all rather than merely a bounded string.
+	//
+	// ⛔ **NOR IS v1 A PRECEDENT FOR IT — v1 HAS THE OPPOSITE PROPERTY, AND ITS REPAIR IS THE STANDARD ONE.**
+	// This header first read that a gid is admissible in v1 for the same reasons. It is not:
+	// `maxon-selfhosted/Compiler/Passes/BuildLayoutDescriptors.maxon:62-75` records that v1's gid numbering
+	// "is NOT stable across build scenarios" (`Array<String>` is gid 6 cold and gid 8 warm) and emits sorted
+	// **by the mangled label, "a pure function of the instance's structural shape"**, precisely so the
+	// interning order cannot reach `.rdata`. v1's dense id is an INTERNAL identity that never becomes part of
+	// a name; this token is a name fragment. That is the whole difference, and it is why the cost above is a
+	// filing for the coordinator rather than a settled question.
+	//
+	// It is derived here and NOT in `mangleTypeArg` for the reason that function's own header gives: a
+	// descriptor label must never come "from a gid number ... a build-order artifact". That header now
+	// carries a TUPLE EXCEPTION, stated there, because this door's ordinal reaches it through the name.
 	//
 	// The join is `overloadRegistrationName`'s for `sweepScopedTupleName`'s reason: `#` appears in no source
 	// identifier and — critically — in no `TupleElementSeparator`, so the token cannot collide with a spelled
-	// element and cannot be mistaken for two.
-	function mintTupleElementToken(arity FieldIndex) returns ByteArray
+	// element and cannot be mistaken for two. It cannot collide with a registered tuple NAME either, by
+	// character count rather than by convention: a tuple has at least two elements (`()` and `(x)` are both
+	// refused), so every registered name holds at least two separators and a token holds none.
+	function mintTupleElementToken(name ByteArray, arity FieldIndex) returns ByteArray
+		// ⚠ **THE MAP'S OWN SIZE IS THE ORDINAL, so a SECOND mint under one name would hand TWO layouts ONE
+		// token** — two element lists spelling one enclosing name, which is precisely the non-injective join
+		// `TupleElementSeparator` exists to bar, with the drop cascade taken from whichever registered last.
+		// The one caller cannot do it (it upserts only a name `structTypes` has just been shown not to hold),
+		// and this is that argument ENFORCED rather than restated: the two maps are written in one act, and a
+		// divergence between them stops the compile instead of silently repeating an ordinal.
+		if self.tupleElementTokens.contains(name) 'alreadyMinted'
+			panic("ProgramSignatures.mintTupleElementToken: `{String.from(name)}` already holds an element token — `registerTupleLayout` mints one per REGISTERED layout and returns early for a name `structTypes` already holds, so a second mint means the two maps have diverged and this token would repeat an ordinal another tuple type is already cited by")
+		end 'alreadyMinted'
+
 		return overloadRegistrationName(tupleTypeNameHead(arity).toByteArray(), suffix: "{self.tupleElementTokens.count()}".toByteArray())
 	end 'mintTupleElementToken'
 
@@ -11822,6 +11864,15 @@ export type ProgramSignatures
 	// `bool` ⇒ "bool", a declared `Pair` ⇒ "Pair", a nested `Box with Integer` ⇒ "Box_Integer". It is
 	// derived from the argument's STRUCTURE (base name + args), never from a gid number, so the label is
 	// identical across cold and warm builds (a gid's numeric value is a build-order artifact).
+	//
+	// ⚠ **ONE EXCEPTION SINCE W9, AND IT IS NOT THIS DOOR'S DOING: a `structRef` NAMING A NESTED TUPLE.**
+	// The `namedOrStruct` arm answers such an argument with the tuple's own NAME, and a tuple's name cites a
+	// nested element by a MINT-ORDERED token (`__Tuple2.__Tuple2#0.int` — see
+	// `ProgramSignatures.mintTupleElementToken`, which measures the walk-order dependence and states why it
+	// was taken). That IS the "build-order artifact" the sentence above bars, so the claim is narrowed here
+	// rather than left to read as still total. No committed x64 fragment carries such a label today — every
+	// tuple name in `specs-shv2/fragments/x64-windows/` is a `__destruct_` symbol, which is a DIFFERENT
+	// speller — which is why nothing went red, not evidence that the arm cannot be reached.
 	export function mangleTypeArg(t MaxonType) returns String
 		let tag = maxonTypeTag(t)
 		// ⚠ The NAME is read raw and NOT through `denotedSlotAggregateName`: this label must be the argument's

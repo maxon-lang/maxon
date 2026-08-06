@@ -1076,16 +1076,31 @@ EYES.** Until W9 a tuple's name INLINED every element, so the two types read
 `__Tuple2.__Tuple2.int.int.int` against a six-deep `__Tuple2.__Tuple2.…P.Int.int.int.int.int.int` and the
 re-registration was legible in the string itself. That inlining is what `A3j` measured as quadratic in
 nesting depth and exponential for a branching chain, and a nested element is now cited by an INTERNED
-ORDINAL (`__Tuple2#4`) instead. **The depth is still there and still grows — it is the ORDINALS that now
-carry it**, `#6` against `#4` being two distinct registered layouts six and four mints in. So the case
-still discriminates a change in the termination rule (a different number of re-entries mints different
-ordinals) and it is no longer possible to read the depth off the sentence.
+ORDINAL (`__Tuple2#4`) instead. **The depth is still there and still grows; what the ordinals carry is only
+that the two inner types are DISTINCT and how many mints apart they are.** So the case still discriminates a
+change in the termination rule — a different number of re-entries registers a different number of layouts
+and moves the ordinals — but it can no longer say WHICH way the depth went.
+
+⚠ **AND THE ORDINALS DO NOT RANK BY DEPTH — DO NOT READ THEM AS IF THEY DID (W9 review).** `#6` is the
+SHALLOW type here (the one-level `((int, int), int)` the function returns) and `#4` is the FIVE-level inner
+of the declared type. The ordinal is mint position, not nesting; the larger number is the type registered
+later, which in this fragment is the shallower one.
 
 ⚠ **THE ORDINALS ARE MINT-ORDERED OVER THE WHOLE COMPILE**, so anything interning a tuple ahead of these —
-this fragment's own re-registrations today, a stdlib module a future edit pulls in — moves them. That is
-weaker than the old spelling as a pin, because it depends on a count the sentence does not name; it is
-accepted because there is no order-free dense id and v1's `GenericInstanceId` has the identical property.
-A move here is a prompt to re-derive the number, never to assume the termination rule broke.
+this fragment's own re-registrations today, a stdlib module a future edit pulls in, a differently-ordered
+directory walk — moves them. That is weaker than the old spelling as a pin, because it depends on a count
+the sentence does not name. A move here is a prompt to re-derive the number, never to assume the
+termination rule broke.
+
+⛔ **AND THE REASON FIRST GIVEN FOR ACCEPTING IT WAS BACKWARDS — CORRECTED BY THE W9 REVIEW.** It read
+*"v1's `GenericInstanceId` has the identical property"*. v1 has the OPPOSITE property, by an explicit
+repair with its rationale written down: `maxon-selfhosted/Compiler/Passes/BuildLayoutDescriptors.maxon:62-75`
+records that gid numbering "is NOT stable across build scenarios" (`Array<String>` is gid 6 cold and gid 8
+warm) and therefore emits sorted **by the mangled label, "a pure function of the instance's structural
+shape"** — i.e. v1's dense id is deliberately kept OUT of every emitted artifact, which is the same rule
+`SignatureIndex.mangleTypeArg` states for shv2. What is actually being accepted here is a mint-order number
+reaching a symbol and a diagnostic; see `ProgramSignatures.mintTupleElementToken` for the measurement, the
+pre-W9 control, and the standing 2026-07-24 ruling it sits against.
 ```maxon
 typealias Int = int(i64.min to i64.max)
 typealias P = (P, Int)
