@@ -1,0 +1,27 @@
+// Test: error.factory-returning-a-generic-alias
+typealias Num = int(0 to 1000)
+
+type Box uses T
+	export var n as Num
+
+	static function create() returns Self
+		return Self{n: 7}
+	end 'create'
+end 'Box'
+
+typealias NumBox = Box with Num
+
+type Maker
+	static function build() returns NumBox
+		return NumBox.create()
+	end 'build'
+end 'Maker'
+
+var a = Maker.build()
+
+function main() returns ExitCode
+	return a.n as ExitCode
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:20:15: Unsupported: `Maker.build` as a top-level initializer — it returns 'NumBox', which IS a record but is not one `__module_init` can access a `.data` slot through. A boxed union and a generic alias keep the bare type NAME as their type — a union's is what a `match` reads it by — and the synthesized initializer and cleanup carry that name straight onto the slot's load and store, where there is no width to give it. A struct, a tuple, a String, a Character and a builtin container all resolve to a concrete type and are legal here. Build it inside a function instead
