@@ -928,11 +928,24 @@ end 'singletonValTypes'
 // reach it, and `getValtype`'s table (WasmValType, not StdType) is where that information is dropped today.
 //
 // ⚠ **THE TWO CASES NAMED ABOVE ARE A WINDOWS-LANE READING SINCE BATCH27**, because 4,000,000,000 is no
-// longer a legal `ExitCode` anywhere else — the range is `int(0 to 255)` on Linux, macOS and WASI. What
-// they pin is a property of the SLOT, and the slot is still `u32` on every target, so it stays reachable
-// on wasm by a route that is not platform-shaped: a `u32`-RANGED ARRAY ELEMENT, which keeps a 4-byte slot
-// rather than the i64 a scalar `named` alias rides (MEASURED at BATCH27, host and wasm agreeing on
-// 4000000000). The widen did not become untestable here; only `ExitCode` stopped being able to spell it.
+// longer a legal `ExitCode` anywhere else — the range is `int(0 to 255)` on Linux, macOS and WASI. ⇒ **on
+// the POSIX lanes THIS WIDEN IS NOW UNREACHABLE, and that is a closure by construction rather than a gap.**
+//
+// ⛔ **A `u32`-RANGED ARRAY ELEMENT DOES NOT RE-PIN IT, AND THE COORDINATOR'S FIRST MEASUREMENT SAYING IT
+// DID WAS MEASURING A DIFFERENT PROPERTY.** That probe showed a 4-byte STORAGE slot and a correct
+// round-trip of 4000000000 on both lanes — but a round-trip is a POSITIVE CONTROL: it passes whether or
+// not this function is wrong. MEASURED by disassembly (`wasm-tools print`): `__arr_get` is
+// `(param i64 i64) (result i64 i64)`, so a loaded element NEVER occupies an `i32` local, `coerceOnStack`
+// is never asked, and the module's only `i64.extend_i32_s` is `emitOsAllocPages`' `memory.grow` sentinel.
+// A case on that route would go green with this defect fully present.
+//
+// The structural reason is one line up the pipeline: **`valueTagToStdType` maps exactly ONE tag —
+// `exitCode` — to `StdType.u32`** (`IR/Maxon/LowerMaxonToStd.maxon:123`); a user `typealias U32 =
+// int(0 to u32.max)` is a `named` tag and lowers to `StdType.i64`. So only `ExitCode` mints a narrow
+// VALUE, and on POSIX its range stops at 255 while a signed and an unsigned widening first disagree at
+// 2^31. **Two independent premises, both required.** ⇒ what would REOPEN it: P1.9 giving a user type a
+// narrow Std type, or widening `ExitCode`'s POSIX range past 2^31 — either one, and this widen needs a
+// pin on the wasm lane again.
 //
 // ⛔⛔ **AND THE INVARIANT ABOVE IS ABOUT THE TYPE, NOT ABOUT THE VALUE — SO THE ZERO-EXTENSION IS EXACT
 // ONLY INSIDE `[0, u32.max]`, WHICH IS THE SLOT'S DOMAIN AND NOT AUTOMATICALLY THE VALUE'S (X5 review,
