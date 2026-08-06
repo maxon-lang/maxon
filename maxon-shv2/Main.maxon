@@ -448,6 +448,12 @@ function runSpecSuite(args MaxonArgs, specDir FilePath, workerExe FilePath, comp
 
 	let testsExit = reportResults(run.results)
 
+	// ⭐ WHAT THIS RUN DID NOT RUN, AND WHY — immediately under the verdicts, because it is a statement
+	// about the TESTS and must not sit below the two reports that are about the TREE. A skip is the one
+	// outcome that can look like coverage without being any, so it is named, counted and attributed to
+	// the target here rather than being left to the reader to notice a missing line.
+	reportTargetSkips(run.results, effectiveTarget: effectiveTarget)
+
 	// AFTER the summary and BEFORE the exit branches, so a red run reports its cost too: a suite that
 	// went red because something got dramatically slower is exactly when the number is worth reading.
 	// STDERR, because stdout is the report and must stay byte-identical between worker counts — see
@@ -596,32 +602,69 @@ end 'resolveCompilerUnderTest'
 // *"the gate is the spec tests passing"*). A test whose committed golden drifted still PASSED — it is
 // counted as one, printed as one, and the drift is reported separately and quietly on stderr
 // (`reportGoldenDrift`). `0 failed` means the spec tests passed, with no qualifications to read past.
+//
+// ⚠ **A SKIPPED CASE IS IN NEITHER NUMBER, AND ITS OWN LINE IS WHY THAT IS SAFE.** It did not run on
+// this target, so counting it as a pass would be a claim nothing supports and counting it as a failure
+// would redden every cross-target run over a gap that is not a defect. The summary line's shape is
+// deliberately untouched — several scripts read `^N passed, M failed` — so the count follows on a line
+// of its own, and the constructs behind it are named by `reportTargetSkips`'s note on stderr.
 function reportResults(results SpecTestResultArray) returns ExitCode
 	var passed = 0
 	var failed = 0
+	var skipped = 0
 
 	for result in results 'each'
 		let label = "{result.specName}/{result.testName}"
-		let line = match result.outcome 'verdict'
-			pass gives "PASS {label}"
-			fail(reason) gives "FAIL {label}: {reason}"
-		end 'verdict'
-		print("{line}\n")
+		print("{verdictLine(result.outcome, label: label)}\n")
 
-		if result.outcome.isPass() 'countPass'
-			passed = passed + 1
-		end 'countPass' else 'countFail'
-			failed = failed + 1
-		end 'countFail'
+		match result.outcome 'tally'
+			pass then passed = passed + 1
+			fail then failed = failed + 1
+			skipped then skipped = skipped + 1
+		end 'tally'
 	end 'each'
 
 	print("\n{passed} passed, {failed} failed\n")
+
+	// Silent at zero, which is the host lane and most of every other — the convention `reportGoldenDrift`
+	// already sets, where "no note" means none.
+	if skipped > 0 'anySkipped'
+		print("{skipped} skipped — NOT RUN on this target (see the note on stderr for the constructs)\n")
+	end 'anySkipped'
+
+	// ⛔ **A RUN IN WHICH NOTHING RAN IS A FAILURE, AND IT IS THE SAME FAILURE `runSpecSuite`'s
+	// empty-selection guard refuses one step earlier.** There the filter selected nothing; here
+	// everything it selected was refused by the target. Both print `0 passed, 0 failed` and would
+	// otherwise exit 0 — a green run that tested nothing, which this runner already calls the most
+	// expensive lie it can tell — and the only difference between them is which side of the compile the
+	// emptiness arrived from. It is also the backstop on the skip mechanism itself: a compiler that
+	// started emitting E3104 everywhere would vanish the entire suite, and this is the line that refuses
+	// to call that green.
+	if passed == 0 and failed == 0 'nothingRan'
+		printError("error: every selected test was SKIPPED, so this run proved nothing — the note below names the constructs this target has no implementation for\n")
+		return 1
+	end 'nothingRan'
 
 	if failed > 0 'anyFailed'
 		return 1
 	end 'anyFailed'
 	return 0
 end 'reportResults'
+
+// One test's line in the report. A match EXPRESSION (every arm yields a real string) so the fail
+// reason is extracted without a sentinel; split out of the loop above so the printed text and the
+// tally beside it are not one `match` doing two jobs.
+//
+// A SKIP prints no reason: the reason is the compiler's E3104 diagnostic, which names an absolute
+// scratch path and is genuinely multi-line, and it is printed once per case in the stderr census
+// instead of being crammed onto a verdict line.
+function verdictLine(outcome TestOutcome, label String) returns String
+	return match outcome 'verdict'
+		pass gives "PASS {label}"
+		fail(reason) gives "FAIL {label}: {reason}"
+		skipped gives "SKIP {label}"
+	end 'verdict'
+end 'verdictLine'
 
 // The FIRST bad option wins. A command line can be wrong in several ways at once, and reporting the
 // last one found would point at whichever flag happened to be typed rightmost rather than at the one

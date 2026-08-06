@@ -51,6 +51,11 @@
 //                                                     longer matches; <payload> is the difference,
 //                                                     escaped the same way. NOT A FAILURE — see
 //                                                     SpecTestRunner's `GoldenDrift`
+//       WORKER_SINGLE_SKIP:<spec>:<test>:<payload>    that test did NOT RUN here: the compiler refused
+//                                                     a construct this target has no implementation
+//                                                     for. <payload> is its E3104 text, escaped the
+//                                                     same way. NOT A PASS AND NOT A FAILURE — see
+//                                                     SpecTestRunner's `targetRefusalIn`
 //       WORKER_JOB_CPU:<ticks>:<reported>:<unreported>
 //                                                     exactly once per job, immediately BEFORE that
 //                                                     job's WORKER_READY: what compiling this spec's
@@ -59,9 +64,15 @@
 //
 // ⚠ DRIFT RIDES THE RESULT RECORD RATHER THAN ADDING A LINE, and the count check below is why: the
 // parent matches a job's records against its plan ONE PER TEST, and an extra line per drifted golden
-// would have to weaken that into "one or two". Three kinds over two independent facts costs nothing
-// because the fourth combination cannot occur — a FAILING test never reaches the golden step at all
-// (`runStagedTest`) — so every record still names exactly one test, exactly once.
+// would have to weaken that into "one or two". Four kinds over two independent facts costs nothing
+// because the combinations that would need more cannot occur — a FAILING test never reaches the golden
+// step at all (`runStagedTest`), and neither does a SKIPPED one — so every record still names exactly
+// one test, exactly once.
+//
+// ⚠ A SKIP IS A RECORD, NOT AN ABSENCE, and that is the whole safety of the mechanism: a case the
+// target cannot express is still SELECTED by the parent, still planned, still reported, and still
+// counted. Dropping it from the plan instead would be a case that vanished, which is the failure this
+// project spends whole rungs deleting.
 //
 // ⚠ THE CPU RECORD IS ITS OWN LINE KIND, not a field bolted onto a result record, and it is the LAST
 // line of a job. The parent's drain checks a job's result records against its plan NAME FOR NAME and
@@ -108,6 +119,7 @@ let WorkerReadyMarker = "WORKER_READY"
 let WorkerPassMarker = "WORKER_SINGLE_RESULT:"
 let WorkerFailMarker = "WORKER_SINGLE_FAIL:"
 let WorkerDriftMarker = "WORKER_SINGLE_DRIFT:"
+let WorkerSkipMarker = "WORKER_SINGLE_SKIP:"
 let WorkerJobCpuMarker = "WORKER_JOB_CPU:"
 let JobSinglesPrefix = "JOB:singles:"
 let ExitCommand = "EXIT"
@@ -482,17 +494,19 @@ function runSinglesJob(compilerExe FilePath, specDir FilePath, specName String, 
 	print("{WorkerJobCpuMarker}{run.cpu.ticks}{ProtocolFieldSep}{run.cpu.reported}{ProtocolFieldSep}{run.cpu.unreported}\n")
 end 'runSinglesJob'
 
-// The wire line for ONE result — the one place the three record kinds are chosen between.
+// The wire line for ONE result — the one place the four record kinds are chosen between.
 //
-// ⚠ TWO INDEPENDENT FACTS, THREE KINDS. The verdict and the golden are separate axes
-// (`TestOutcome` / `GoldenDrift`), which is four combinations on paper — but a FAILING test never
-// reaches the golden step (`runStagedTest` skips it, because a failing test's IR is noise), so
-// `fail` always carries `GoldenDrift.none` and the fourth kind would be a record nothing can emit.
-// That is why the fail arm may read the verdict alone without dropping anything.
+// ⚠ TWO INDEPENDENT FACTS, FOUR KINDS. The verdict and the golden are separate axes
+// (`TestOutcome` / `GoldenDrift`), which is six combinations on paper — but only a PASSING test
+// reaches the golden step at all (`runStagedTest` skips it for a failure, because a failing test's IR
+// is noise, and for a skip, because no IR was emitted), so `fail` and `skipped` always carry
+// `GoldenDrift.none` and the missing kinds are records nothing can emit. That is why those two arms
+// may read the verdict alone without dropping anything.
 function recordLine(specName String, result SpecTestResult) returns String
 	return match result.outcome 'verdict'
 		pass gives passOrDriftLine(specName, result: result)
 		fail(reason) gives payloadRecordLine(WorkerFailMarker, specName: specName, testName: result.testName, payload: reason)
+		skipped(refusals) gives payloadRecordLine(WorkerSkipMarker, specName: specName, testName: result.testName, payload: refusals)
 	end 'verdict'
 end 'recordLine'
 
@@ -594,9 +608,9 @@ end 'sliceAfterPrefix'
 // DECODING A WORKER'S RECORDS
 // ============================================================================================
 
-// One decoded result record. THREE cases, because the worker emits exactly three kinds — a line that
+// One decoded result record. FOUR cases, because the worker emits exactly four kinds — a line that
 // is none of them is a protocol break between two halves of this same file, so `decodeWorkerLine`
-// panics on it rather than modelling it as a fourth case a future arm could forget.
+// panics on it rather than modelling it as a fifth case a future arm could forget.
 union WorkerRecord
 	pass(specName String, testName String)
 	fail(specName String, testName String, reason String)
@@ -604,6 +618,10 @@ union WorkerRecord
 	// `pass` so the two facts stay separable all the way to the report (see `SpecTestRunner
 	// .GoldenDrift`); `detail` is the rendered difference.
 	drift(specName String, testName String, detail String)
+	// DID NOT RUN on this target, because the compiler refused a construct it has no implementation
+	// for. `refusals` is that E3104 text, carried all the way to the trailer's census so the report
+	// can name the CONSTRUCT and not merely the count (see `SpecTestRunner.reportTargetSkips`).
+	skip(specName String, testName String, refusals String)
 
 	// The spec and the test this record is ABOUT, whatever its verdict — the two fields the
 	// dispatcher checks against its plan before it trusts anything else in the record.
@@ -612,6 +630,7 @@ union WorkerRecord
 			pass(s, _) gives s
 			fail(s, _, _) gives s
 			drift(s, _, _) gives s
+			skip(s, _, _) gives s
 		end 's'
 	end 'spec'
 
@@ -620,6 +639,7 @@ union WorkerRecord
 			pass(_, t) gives t
 			fail(_, t, _) gives t
 			drift(_, t, _) gives t
+			skip(_, t, _) gives t
 		end 't'
 	end 'test'
 end 'WorkerRecord'
@@ -633,11 +653,15 @@ function decodeWorkerLine(line String) returns WorkerRecord
 		return decodeDriftRecord(line)
 	end 'isDrift'
 
+	if line.startsWith(WorkerSkipMarker) 'isSkip'
+		return decodeSkipRecord(line)
+	end 'isSkip'
+
 	if line.startsWith(WorkerPassMarker) 'isPass'
 		return decodePassRecord(line)
 	end 'isPass'
 
-	panic("spec worker pool: a worker emitted a line that is none of the PASS, FAIL or DRIFT records: '{line}'")
+	panic("spec worker pool: a worker emitted a line that is none of the PASS, FAIL, DRIFT or SKIP records: '{line}'")
 end 'decodeWorkerLine'
 
 // One structural separator consumed: the field in front of it, and everything behind it.
@@ -688,6 +712,13 @@ function decodeDriftRecord(line String) returns WorkerRecord
 	let split = PayloadRecordSplit.of(line, marker: WorkerDriftMarker, payloadName: "detail")
 	return WorkerRecord.drift(split.specName, testName: split.testName, detail: split.payload)
 end 'decodeDriftRecord'
+
+// `WORKER_SINGLE_SKIP:<spec>:<test>:<payload>` — the same three fields again, carrying the compiler's
+// E3104 text.
+function decodeSkipRecord(line String) returns WorkerRecord
+	let split = PayloadRecordSplit.of(line, marker: WorkerSkipMarker, payloadName: "refusals")
+	return WorkerRecord.skip(split.specName, testName: split.testName, refusals: split.payload)
+end 'decodeSkipRecord'
 
 // The three fields of a payload-carrying record, already decoded. Its own type so the two kinds that
 // share the shape share the PARSE of it too — a second copy of the two structural cuts is a second
@@ -780,6 +811,7 @@ function outcomeOf(record WorkerRecord) returns TestOutcome
 		pass gives TestOutcome.pass
 		fail(_, _, reason) gives TestOutcome.fail(reason)
 		drift gives TestOutcome.pass
+		skip(_, _, refusals) gives TestOutcome.skipped(refusals)
 	end 'verdict'
 end 'outcomeOf'
 
@@ -788,6 +820,8 @@ function goldenOf(record WorkerRecord) returns GoldenDrift
 		pass gives GoldenDrift.none
 		fail gives GoldenDrift.none
 		drift(_, _, detail) gives GoldenDrift.drifted(detail)
+		// Nothing was compiled here, so no golden was compared — see `runStagedTest`'s `noFragment`.
+		skip gives GoldenDrift.none
 	end 'reference'
 end 'goldenOf'
 

@@ -141,7 +141,7 @@ let DisabledTestMarker = "<!-- disabled-test:"
 // `<!-- test: NAME -->` (or `<!-- disabled-test: NAME -->`) and its first ```maxon block. It restricts
 // the test to the `targetToString` forms it names (`x64-windows`, `arm64-macos`); on any other target
 // the runner SKIPS it. A missing marker — or one with a blank value — is "no restriction": the test
-// runs on every target (see `SpecTest.targets` and `SpecTestRunner.selectedByTarget`).
+// runs on every target (see `SpecTest.targets` and `SpecTestRunner.markerAllowsTarget`).
 //
 // It is NOT a superstring of `TestMarker` or `DisabledTestMarker` ("<!-- targets:" first differs from
 // "<!-- test:" at the `a`/`e`), so the marker checks are independent and none can swallow another —
@@ -175,12 +175,17 @@ let TargetSeparator = ","
 // case-insensitive shv2 spelling would accept — and act on — a directive the reference silently ignores,
 // which is the one-file-two-meanings failure this file's other shared constants exist to prevent.
 //
-// ⭐ **IT ALSO DECIDES WHICH TARGETS THE CASE RUNS ON, AND NOTHING ELSE IN THE `.md` SAYS SO.** The only
-// route from a Maxon program to argv is the `__cl_*` runtime, which is x64-windows only at this rung, so a
-// case carrying this marker cannot pass anywhere else — it is refused with E3104 before it links. The
-// runner derives that restriction from THIS marker rather than making the spec author write a second
-// `<!-- targets: x64-windows -->` beside it; `SpecTestRunner.argvUnavailableOnTarget` carries the whole
-// argument, including why these cases are the opposite of `file-io.md`'s marked ones.
+// ⚠ **IT DECIDES NOTHING ABOUT WHICH TARGETS THE CASE RUNS ON, AND IT USED TO.** The only route from a
+// Maxon program to argv is the `__cl_*` runtime, which is x64-windows only at this rung, so a case
+// carrying this marker cannot pass anywhere else — and the runner used to read that restriction off
+// THIS marker rather than making the spec author write a second `<!-- targets: x64-windows -->` beside
+// it. The placement argument was right and survives: argv is the harness's DELIVERY MECHANISM, never
+// the subject of `abs`/`max`/`trunc`, so a per-case marker would state a limitation of the mechanism as
+// a property of the maths. What was wrong was the direction of the implication (PLAN row `X2`): the
+// marker is SUFFICIENT for "this case needs argv" and NOT NECESSARY — `command-line-args
+// .args-length-no-extra` reads argv with no marker at all, because the property it pins is that argv[0]
+// arrives ALONE. The restriction is now read off the COMPILER's own E3104 refusal, which needs no
+// marker of any kind; see `SpecTestRunner.targetRefusalIn`.
 let ArgsMarker = "<!-- Args:"
 
 // What separates two arguments in an `<!-- Args: … -->` payload, and what quotes one that must survive
@@ -527,8 +532,9 @@ export type SpecTest
 	export let stdlibOverlays as SpecSourceFileArray
 	// The `targetToString` forms this test is restricted to (a `<!-- targets: … -->` marker), or EMPTY
 	// for the ordinary test that runs on every target. The runner SKIPS a test whose non-empty list
-	// omits the host target (`SpecTestRunner.selectedByTarget`) — the same treatment a draft or
-	// filtered-out test gets, never a failure.
+	// omits the effective target (`SpecTestRunner.markerAllowsTarget`) — the same treatment a draft or
+	// filtered-out test gets, never a failure. ⚠ Distinct from a SKIPPED result, which is a test that
+	// WAS selected, WAS compiled and was refused by the target; that one is counted and reported.
 	export let targets as TargetKeyArray
 	// The emitted runtime functions this test's golden renders (a ```RequiredRuntime block). It rides
 	// on the TEST rather than on the expectation because it is not something the run is checked

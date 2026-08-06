@@ -159,6 +159,24 @@ let PathSplitHalves = 2
 // Compiler output is line-oriented — one diagnostic, one line — and the renumbering walks it that way.
 let LineSeparator = "\n"
 
+// How a rendered diagnostic opens: `error <code>: <message>` (`Diagnostics.render`). Two constants
+// rather than one interpolation because the CODE goes between them, and the code is never written down
+// here: `targetRefusalIn` takes it from the generated `ErrorCodeRegistry`, because a literal `"E3104"`
+// in a source file is a fourth copy of the number space that goes on matching nothing after a renumber.
+let DiagnosticLinePrefix = "error "
+let DiagnosticCodeSuffix = ": "
+
+// What a compile that REPORTED DIAGNOSTICS exits with (`Main.compileAndReport`). `targetRefusalIn`
+// insists on exactly this code rather than on "non-zero", and the difference is the leak gate: a
+// compiler that leaked exits 101 having printed the very same diagnostics.
+let DiagnosticsReportedExitCode = 1
+
+// The two nesting depths of the skipped-case census: a case under the note's headline, and the
+// compiler's own diagnostics under the case they refused. Two constants because they are two different
+// depths — the same reason `indentedList` refuses to own the indent at all.
+let SkippedCaseIndent = "  "
+let RefusalIndent = "    "
+
 // Where a CPU-fault panic line stops being a claim and starts being an address. See
 // `stripFaultRipSuffix`. Named beside the other format contracts because it is one: the
 // runtime writes this exact spelling and the runner recognizes exactly it.
@@ -289,8 +307,9 @@ let WslProbeCommand = "/bin/true"
 // fixture directory's spec files) turned two harmless declarations into the very thing the check
 // refuses, and FAILED the bootstrap build. One declaration, read from wherever it is needed.
 
-// PASS, or FAIL carrying a human-readable reason. A union (not a `bool` + a
-// message field) so a passing result has no vestigial empty-string message.
+// PASS, or FAIL carrying a human-readable reason, or SKIPPED because this target cannot express the
+// case at all. A union (not a `bool` + a message field) so a passing result has no vestigial
+// empty-string message.
 //
 // ⚖ **THIS IS THE GATE, AND IT IS THE WHOLE GATE** (user, 2026-08-02: *"the gate is the spec tests
 // passing"*). A `fail` is an assertion about the PROGRAM that did not hold — a wrong exit code, wrong
@@ -300,11 +319,19 @@ let WslProbeCommand = "/bin/true"
 export union TestOutcome
 	pass
 	fail(reason String)
+	// ⭐⭐ **NOT RUN HERE — AND THAT IS A FACT ABOUT THE TARGET, NOT AN ASSERTION ABOUT THE PROGRAM.**
+	// The compiler refused the case's own construct on this target (E3104), so there is nothing to
+	// assert: no binary was linked and none could be. It is neither a pass (nothing was proved) nor a
+	// fail (nothing went wrong), which is exactly why it is a third arm rather than either of the two.
+	// `refusals` is the compiler's own E3104 text, carried so the census can name the CONSTRUCT rather
+	// than only the count — see `targetRefusalIn` for why this may never be silent.
+	skipped(refusals String)
 
 	export function isPass() returns bool
 		return match self 'p'
 			pass gives true
 			fail gives false
+			skipped gives false
 		end 'p'
 	end 'isPass'
 end 'TestOutcome'
@@ -527,7 +554,7 @@ export type SuiteCpuTally
 	// Every number is spelled out, including a zero `unreported`, because a shape that dropped a term
 	// when it happened to be zero would make two runs of the same suite print two different shapes.
 	export function reportLine(workers WorkerCount) returns String
-		return "compile CPU: {ticks} ticks from {reported} of {tests()} test compiles at {workers} worker(s) ({unreported} wrote no metrics — a compile that FAILS writes none, which every compilerError case does by design)"
+		return "compile CPU: {ticks} ticks from {reported} of {tests()} test compiles at {workers} worker(s) ({unreported} wrote no metrics — a compile that FAILS writes none, which every compilerError case and every case this target refused does by design)"
 	end 'reportLine'
 end 'SuiteCpuTally'
 
@@ -651,8 +678,14 @@ export function selectedTests(specFile SpecFile, specName String, filter String,
 	// so this is the string every test's `targets` list is checked against.
 	let effectiveTargetKey = targetToString(effectiveTarget)
 
+	// ⭐ **SELECTION ASKS THE AUTHOR ONLY.** Whether the TARGET can express the case is not asked here
+	// and structurally cannot be: it is a property of the case's SOURCE, which only the compiler reads.
+	// It is answered where the compiler answers it — see `targetRefusalIn` — and the answer arrives as
+	// a SKIPPED result rather than as an absent one, so it is counted and reported instead of vanishing
+	// out of the plan. This used to carry a second gate that guessed at it from the `<!-- Args: -->`
+	// marker, and the guess was measurably wrong (PLAN row `X2`).
 	for test in specFile.tests 'eachTest'
-		if selectedByFilter(specName, testName: test.name, filter: filter) and selectedByTarget(test, effectiveTarget: effectiveTarget, effectiveTargetKey: effectiveTargetKey) 'isSelected'
+		if selectedByFilter(specName, testName: test.name, filter: filter) and markerAllowsTarget(test, effectiveTargetKey: effectiveTargetKey) 'isSelected'
 			selected.push(test)
 		end 'isSelected'
 	end 'eachTest'
@@ -660,24 +693,11 @@ export function selectedTests(specFile SpecFile, specName String, filter String,
 	return selected
 end 'selectedTests'
 
-// Does this test run under `effectiveTarget`? TWO independent gates, and they are kept apart because
-// they are answered by different parties: the `<!-- targets: … -->` marker is what the SPEC AUTHOR
-// declared, and the argv substrate is what the COMPILER decides. Either one alone excludes the test.
-// A gated-out test is SKIPPED (not run, not failed), exactly as a draft or filtered-out test is,
-// which is why this lives beside `selectedByFilter` under the one door.
-function selectedByTarget(test SpecTest, effectiveTarget Target, effectiveTargetKey String) returns bool
-	if not markerAllowsTarget(test, effectiveTargetKey: effectiveTargetKey) 'restrictedByMarker'
-		return false
-	end 'restrictedByMarker'
-
-	if test.programArgs.isEmpty() 'readsNoArgv'
-		return true
-	end 'readsNoArgv'
-
-	return not argvUnavailableOnTarget(effectiveTarget)
-end 'selectedByTarget'
-
-// The MARKER's own gate. UNIFORM rule for EVERY target (native and cross alike): a test runs on ALL
+// The MARKER's own gate — what the SPEC AUTHOR declared, and the only per-target question selection
+// asks. A gated-out test is not run, not failed and not reported, exactly as a draft or filtered-out
+// test is, which is why this lives beside `selectedByFilter` under the one door.
+//
+// UNIFORM rule for EVERY target (native and cross alike): a test runs on ALL
 // targets unless it declares a `<!-- targets: … -->` RESTRICTION, in which case it runs ONLY on the
 // listed targets. A marker is a restriction for a TECHNICAL reason — an ISA-specific
 // register-allocation test (its register pool), a `RequiredData` test (the native `.data` section a
@@ -701,50 +721,161 @@ function markerAllowsTarget(test SpecTest, effectiveTargetKey String) returns bo
 	return false
 end 'markerAllowsTarget'
 
-// ⭐⭐ **THE ARGV GATE — DERIVED FROM THE `<!-- Args: … -->` MARKER THE CASE ALREADY CARRIES, AND ASKED
-// OF THE COMPILER RATHER THAN RESTATED.**
+// What the compiler's own stderr says about whether this target could express the case AT ALL.
+union TargetRefusal
+	// The compiler said something OTHER than "this target has no implementation for that": an ordinary
+	// diagnostic, a panic, a crash, or nothing at all. Whatever the verdict was, it stands.
+	notRefused
+	// EVERY diagnostic the compiler printed is an E3104 — a construct the chosen target cannot provide.
+	// `diagnostics` is that text verbatim, because it is the only thing that names the CONSTRUCT.
+	refused(diagnostics String)
+end 'TargetRefusal'
+
+// ⭐⭐ **THE CROSS-TARGET SKIP — READ OFF THE COMPILER'S OWN VERDICT, NOT OFF A MARKER AND NOT OFF THE
+// CASE'S SOURCE TEXT.**
 //
-// A case carrying `Args:` is spawned with a non-default argv (`buildRunCommand`), and its expectation
-// depends on the program READING that argv. The only route from a Maxon program to argv is the
-// `__cl_*` runtime — `CommandLine.args()` and the two `__Builtins` intrinsics under it — which is
-// x64-windows only by the R4 ruling (`Runtime/CommandLineRuntime.maxon`'s header: argv has a
-// DIFFERENT SHAPE under SysV, so serving another target is a rung, not a lowering). So the case cannot
-// pass anywhere else: `SemanticCheck.requireTargetSupportsCallee` refuses it with E3104 before it links.
+// A case whose construct the chosen target cannot provide is SKIPPED: not run, not failed, counted and
+// reported. The compiler already knows that fact exactly and states it precisely — `E3104
+// targetUnsupportedConstruct`, at the call's own span, naming the runtime entry that has no lowering
+// there (`SemanticCheck.requireTargetSupportsCallee`). That diagnostic IS the authority, so this asks
+// it rather than keeping a second list beside it.
 //
-// ⭐ **THAT IS WHY THESE 32 CASES CARRY NO `<!-- targets: x64-windows -->` MARKER, AND MUST NOT.** The
-// host-only fact belongs to `Args:` ITSELF — argv is the harness's DELIVERY MECHANISM, not the
-// subject of `abs`/`max`/`trunc`, which are target-neutral — so writing it out per case would state a
-// limitation of the mechanism as though it were a property of the maths. It would also be 32 copies of
-// one fact, in eight files with no natural home for the reason, each able to go stale on its own. The
-// `File.*` cases in `file-io.md` DO carry a marker and that is the opposite situation: there the
-// filesystem IS the subject.
+// ⭐ **WHY THE COMPILER AND NOT THE HARNESS.** The harness's previous answer guessed from the `<!--
+// Args: … -->` marker a case carries — argv is the only host-only substrate the corpus reaches often —
+// and the guess was MEASURED WRONG (PLAN row `X2`, filed by `X1`'s reviewer): `/specs` holds 52
+// argv-reading code blocks against 51 markers. `command-line-args.args-length-no-extra` reads
+// `CommandLine.args()` with NO marker at all, because the property it pins is precisely that argv[0]
+// arrives ALONE — a marker would destroy the test — and `command-line-args.executable-path` is the same
+// shape one substrate over (`Process.executablePath`, which is not argv and so never had one). ⇒ the
+// marker is SUFFICIENT but NOT NECESSARY, and a rule that is only sufficient cannot be a gate. Marking
+// those two cases by hand would have silenced the symptom by lying about the case and left the 53rd
+// unmarked one to red again.
 //
-// ⚠ **MEASURED, and the measurement RUNS ONE WAY ONLY: `Args:` is SUFFICIENT for "this case needs
-// argv", never NECESSARY.** All 51 `Args:` cases in `/specs` do reach a `__cl_*` entry — including
-// `builtins-type.command-line-arg-out-of-bounds`, which spells it `__Builtins.commandLineArg` and
-// would defeat a source-text search for `CommandLine`. But the CONVERSE is ALREADY FALSE in that same
-// corpus, and the counterexample is on the port whitelist rather than hypothetical:
-// `command-line-args.args-length-no-extra` reads `CommandLine.args()` and carries NO `Args:` marker,
-// because the property it pins is that argv[0] arrives ALONE. `command-line-args.executable-path` is
-// the same shape one substrate over (`Process.executablePath`).
+// ⭐ **IT UN-GATES ITSELF, AND IT HANDLES A PARTIAL LANDING FOR FREE.** The day a POSIX or WASI argv
+// substrate lands, the compiler simply stops emitting E3104 on the lane that has it and these cases run
+// there, with no edit here and none in any spec file. That is the case the old marker-derived
+// expression (`calleeNeedsWin32Substrate(…) and not targetHasWin32Substrate(target)`) structurally
+// could NOT express, because it was CALLEE-only: a landing on x64-linux but not wasm would have read
+// false on both.
 //
-// ⭐ **THAT ASYMMETRY IS THE SAFE ONE, which is why the gate is written on the marker anyway.** A case
-// this gate MISSES is not skipped, it is RUN — and `requireTargetSupportsCallee` refuses it with E3104
-// at its own span, so the suite goes RED and names the entry. The fix when that day comes is to WIDEN
-// this gate to the whole substrate question, never to hand-mark the case. The other direction — an
-// `Args:` on a case that never reads argv — is the expensive one, because it is a SILENT skip on every
-// non-Windows target rather than a red; nothing in the corpus does it, and a case that did would be
-// carrying a delivery marker its own program ignores.
+// ⛔⛔ **AND THE HAZARD IT CREATES IS THE ONE THIS WHOLE MECHANISM EXISTS TO DELETE: a SILENT skip.** If
+// the compiler ever emitted E3104 wrongly, cases would vanish and the suite would still read green —
+// the same lie a marker on a case that never needed one would tell, arriving by a new road. That is why
+// a skip is a RESULT (`TestOutcome.skipped`) rather than an absence, why it travels its own wire record,
+// and why `reportTargetSkips` prints the count, the target and the constructs in the trailer. **A skip
+// that is not counted must never be added here.**
 //
-// ⭐ **IT UN-GATES ITSELF.** The expression is the compiler's own refusal, assembled from the two
-// exported predicates: "would `__cl_count` be refused on this target?" The day a POSIX/WASI argv
-// substrate lands, `calleeNeedsWin32Substrate` stops naming the `__cl_` band and this reads false on
-// every target, with no edit here and none in the eight spec files. A hand-written marker is the case
-// this repo warns about — a stale gate is indistinguishable from a real one — and there would have
-// been 32 of them.
-function argvUnavailableOnTarget(target Target) returns bool
-	return calleeNeedsWin32Substrate(CommandLineCountName) and not targetHasWin32Substrate(target)
-end 'argvUnavailableOnTarget'
+// ⚠ **THREE THINGS MAKE IT NARROW, AND EACH ANSWERS A DIFFERENT WAY IT COULD SWALLOW A REAL FAILURE:**
+//   * only a verdict that did NOT hold is considered at all, so a case that pins E3104 as its own
+//     expected diagnostic (`builtins-sleep.rejected-on-wasm`) matches, passes, and is never reached
+//     here — the coverage that pins the refusal survives the refusal becoming a skip;
+//   * EVERY NON-EMPTY LINE the compiler printed must BE an E3104, not merely contain one. One other
+//     diagnostic beside it means the compile also had a real complaint, and a real complaint is a
+//     failure; one line that is not a diagnostic at all — a panic, a runtime message, anything this
+//     harness does not recognise — is likewise not something to interpret as "the target lacks a
+//     feature". That is stricter than "no OTHER diagnostic", deliberately: the failure mode being
+//     guarded against is a skip that swallows something real, so an unrecognised line must count
+//     AGAINST the skip rather than be walked past;
+//   * the exit code must be exactly the one a compile that REPORTED DIAGNOSTICS returns. A compiler
+//     that LEAKED exits 101 having printed the very same lines, and folding that into a skip would
+//     delete the leak gate.
+function targetRefusalIn(compile ProcessCapture) returns TargetRefusal
+	if compile.exitCode != DiagnosticsReportedExitCode 'notADiagnosticFailure'
+		return TargetRefusal.notRefused
+	end 'notADiagnosticFailure'
+
+	// The rendered form of a diagnostic is `error <code>: …` (`Diagnostics.render`), and the code is
+	// taken from the generated registry rather than spelled — a literal "E3104" here would be a fourth
+	// copy of the number space, silently matching nothing after a renumber.
+	let refusalPrefix = "{DiagnosticLinePrefix}{ErrorCode.targetUnsupportedConstruct.rawValue}{DiagnosticCodeSuffix}"
+	var sawRefusal = false
+
+	for line in compile.stderr.split(LineSeparator) 'eachLine'
+		let trimmed = line.trim()
+		if trimmed.isEmpty() 'blank'
+			continue
+		end 'blank'
+
+		if not trimmed.startsWith(refusalPrefix) 'saidSomethingElseToo'
+			return TargetRefusal.notRefused
+		end 'saidSomethingElseToo'
+
+		sawRefusal = true
+	end 'eachLine'
+
+	if not sawRefusal 'saidNothingAtAll'
+		// Exit 1 with an empty stderr: a compile that failed without saying why is a defect to see, not
+		// a target that lacks a feature.
+		return TargetRefusal.notRefused
+	end 'saidNothingAtAll'
+
+	return TargetRefusal.refused(compile.stderr.trim())
+end 'targetRefusalIn'
+
+// The verdict, unless the target could not express the case — in which case the case did not run here
+// and says so. Written as one door because the two halves must not be applied in either order by
+// accident: `outcome` is consulted FIRST, so a case whose expectation IS the refusal keeps its pass.
+function outcomeOrTargetSkip(outcome TestOutcome, compile ProcessCapture) returns TestOutcome
+	if outcome.isPass() 'itRanHere'
+		return outcome
+	end 'itRanHere'
+
+	return match targetRefusalIn(compile) 'refusal'
+		notRefused gives outcome
+		refused(diagnostics) gives TestOutcome.skipped(diagnostics)
+	end 'refusal'
+end 'outcomeOrTargetSkip'
+
+// ⭐ THE CENSUS OF EVERYTHING THIS RUN DID NOT RUN, and the reason it may never be silent is in
+// `targetRefusalIn`'s header: a skip nobody counts is indistinguishable from a case that quietly
+// vanished. It names the COUNT, the TARGET and the CONSTRUCTS — the last one straight out of the
+// compiler's diagnostic, which is the only artifact that knows which runtime entry was missing.
+//
+// SILENT when nothing was skipped, which is the whole of the host lane and most of every other: the
+// same convention `reportGoldenDrift` follows, where "no note" means zero.
+//
+// STDERR, for `reportGoldenDrift`'s reason: stdout is the report and stays byte-identical between
+// worker counts. The per-test `SKIP` lines and the count are on stdout, in `Main.reportResults`.
+export function reportTargetSkips(results SpecTestResultArray, effectiveTarget Target)
+	var entries = StringArray.create()
+
+	for result in results 'each'
+		match result.outcome 'verdict'
+			pass then continue
+			fail then continue
+			skipped(refusals) then entries.push("{SkippedCaseIndent}{result.specName}/{result.testName}\n{indentedRefusals(refusals)}")
+		end 'verdict'
+	end 'each'
+
+	if entries.isEmpty() 'nothingSkipped'
+		return
+	end 'nothingSkipped'
+
+	printError("note: {entries.count()} case(s) SKIPPED on {targetToString(effectiveTarget)} — NOT RUN and NOT PASSED. The compiler refused a construct this target has no implementation for ({ErrorCode.targetUnsupportedConstruct.rawValue}), which is a fact about the TARGET and not about the case:\n")
+	for entry in entries 'eachEntry'
+		printError(entry)
+	end 'eachEntry'
+end 'reportTargetSkips'
+
+// One compiler diagnostic block, indented under the test it belongs to. EVERY line of it, because one
+// E3104 per offending call site is normal and the second one usually names a different construct than
+// the first (`command-line-args.argv-exec-parity` names both `__cl_count` and `__proc_exe_path`).
+//
+// The list itself is rendered by `indentedList` rather than by a loop written here — that function
+// exists because four files had each written this loop and nothing would have made them agree.
+function indentedRefusals(text String) returns String
+	var lines = StringArray.create()
+	for line in text.split(LineSeparator) 'eachLine'
+		let trimmed = line.trim()
+		if trimmed.isEmpty() 'blank'
+			continue
+		end 'blank'
+
+		lines.push("{trimmed}\n")
+	end 'eachLine'
+
+	return indentedList(lines, indent: RefusalIndent)
+end 'indentedRefusals'
 
 // ⭐ Does a binary built for `target` need an EXTERNAL RUNNER, rather than being spawned directly?
 //
@@ -1065,10 +1196,17 @@ function runStagedTest(test SpecTest, specName String, staged StagedTest, exeBas
 	// Read before `cleanup` removes it, and before anything can return.
 	let cpu = readCompileCpu(metricsPath)
 
-	let outcome = checkExpectation(test, specName: specName, compile: compile, staged: staged, exePath: exePath, runWorkingDir: runWorkingDir, effectiveTarget: effectiveTarget)
+	// ⭐ THE ONE PLACE A CROSS-TARGET SKIP IS DECIDED, and it is here because here is where the
+	// compiler's verdict first exists: `compile` has just come back, and nothing downstream re-reads its
+	// stderr. It wraps `checkExpectation` rather than preceding it, because a case whose EXPECTATION is
+	// the refusal must keep its pass — see `outcomeOrTargetSkip`.
+	let outcome = outcomeOrTargetSkip(checkExpectation(test, specName: specName, compile: compile, staged: staged, exePath: exePath, runWorkingDir: runWorkingDir, effectiveTarget: effectiveTarget), compile: compile)
 
 	// The fragment records the emitted Target IR for REFERENCE (see `FragmentsSubdir`), and the step is
-	// skipped in two cases:
+	// skipped in three cases:
+	//   (0) the case was SKIPPED — no binary was linked and no IR was emitted, so there is no artifact
+	//       to compare and a "golden missing" note would blame the case for the target's gap. It rides
+	//       the `not outcome.isPass()` test below, which is exactly the condition;
 	//   (1) BEHAVIOUR already FAILED — a failing test's IR is noise, and a note about its golden on top
 	//       would bury the real failure. This is also what makes `GoldenDrift.drifted` reachable only
 	//       alongside a PASS;
@@ -1952,11 +2090,16 @@ function checkRun(expected SpecExitCode, stderr SpecStderr, stdout SpecStdout, s
 	//
 	// The EFFECTIVE target selects which executable format to parse — the file on disk is an ELF
 	// under `--target=arm64-linux` however macOS-shaped the host is.
+	// ⚠ `isPass()` rather than a `match` with a `fail` arm, here and at the three propagation points
+	// below it. The four sites all ask ONE question — "did this half of the expectation hold, and if not
+	// hand its verdict straight up" — and spelling it as a two-arm match made each of them a place a
+	// third outcome had to be remembered. `isPass()` answers over the whole union in one place, so a
+	// verdict this function never mints (`skipped`, which only `outcomeOrTargetSkip` can produce and only
+	// from a FAILED compile) needs no arm at any of them.
 	let sectionOutcome = checkRequiredSections(sectionPins, exePath: exePath, effectiveTarget: effectiveTarget)
-	match sectionOutcome 'sections'
-		pass then break 'sections'
-		fail then return sectionOutcome
-	end 'sections'
+	if not sectionOutcome.isPass() 'sectionDisagreed'
+		return sectionOutcome
+	end 'sectionDisagreed'
 
 	// The native path spawns the exe directly; a CROSS target's `.wasm` component cannot be spawned
 	// by the host, so it is run through the vendored wasmtime instead — everything checked against
@@ -1982,18 +2125,16 @@ function checkRun(expected SpecExitCode, stderr SpecStderr, stdout SpecStdout, s
 	// difference is real: a program that prints nothing is a claim a spec can make by omission, while a
 	// program that exits 0 is not.
 	let exitOutcome = checkRunExitCode(expected, actual: run.exitCode)
-	match exitOutcome 'exit'
-		pass then break 'exit'
-		fail then return exitOutcome
-	end 'exit'
+	if not exitOutcome.isPass() 'exitDisagreed'
+		return exitOutcome
+	end 'exitDisagreed'
 
 	// Both streams are checked against the ONE execution. stdout first (it is what a `print` test
 	// exists to pin); on a pass, stderr is checked and its outcome returned.
 	let stdoutOutcome = checkRunStdout(stdout, actual: run.stdout)
-	match stdoutOutcome 'stdout'
-		pass then break 'stdout'
-		fail then return stdoutOutcome
-	end 'stdout'
+	if not stdoutOutcome.isPass() 'stdoutDisagreed'
+		return stdoutOutcome
+	end 'stdoutDisagreed'
 
 	return checkRunStderr(stderr, actual: run.stderr)
 end 'checkRun'
@@ -2018,10 +2159,9 @@ end 'checkRun'
 function checkRequiredSections(sectionPins SpecSectionPinArray, exePath FilePath, effectiveTarget Target) returns TestOutcome
 	for pin in sectionPins 'eachPin'
 		let outcome = compareLinkedSection(pin, exePath: exePath, effectiveTarget: effectiveTarget)
-		match outcome 'pin'
-			pass then break 'pin'
-			fail then return outcome
-		end 'pin'
+		if not outcome.isPass() 'pinDisagreed'
+			return outcome
+		end 'pinDisagreed'
 	end 'eachPin'
 
 	return TestOutcome.pass

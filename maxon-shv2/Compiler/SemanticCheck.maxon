@@ -2701,11 +2701,13 @@ end 'reportTargetUnsupportedCallee'
 // at all. Written as a positive capability question rather than as "not wasm", so a target added later is
 // unsupported until someone says otherwise.
 //
-// ⭐ EXPORTED because the SPEC HARNESS asks it, paired with `calleeNeedsWin32Substrate` above, to decide
-// whether a case the runner would spawn with an argv can run on this target at all
-// (`SpecTestRunner.argvUnavailableOnTarget`). It asks the two predicates rather than carrying a
-// "x64-windows only" of its own: a harness copy of this rule is a copy that can outlive it.
-export function targetHasWin32Substrate(target Target) returns bool
+// ⚠ NOT EXPORTED, and it was — the SPEC HARNESS used to pair it with `calleeNeedsWin32Substrate` above
+// to predict whether a case could run on a given target at all. That prediction is gone (PLAN row
+// `X2`): a callee-name pair can only answer for the callees it names, so it could neither see a case
+// reaching a substrate nobody thought to list nor express a PARTIAL landing (x64-linux but not wasm).
+// The harness now reads the compiler's E3104 verdict itself, which is this predicate's own consequence
+// rather than a second copy of it.
+function targetHasWin32Substrate(target Target) returns bool
 	return target.cpu == CpuArch.x64 and target.os == Os.windows
 end 'targetHasWin32Substrate'
 
