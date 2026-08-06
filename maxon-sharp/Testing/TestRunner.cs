@@ -162,6 +162,7 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
     var workItems = prepResult.WorkItems;
     if (workItems.Length == 0) {
       Logger.Info(LogCategory.Testing, "No tests found");
+      ReportSuspensionCensus(prepResult.Census);
       return new TestSummary {
         Results = [],
         TotalDuration = sw.Elapsed
@@ -308,6 +309,8 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
         + "so only an unfiltered batched run is authoritative");
     }
 
+    ReportSuspensionCensus(prepResult.Census);
+
     CleanupExecutables(_tempDir);
 
     return new TestSummary {
@@ -316,6 +319,32 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
       UngatedGoldens = tally.Errors.Count,
       WhyNotRunHere = TargetRunHost.WhyCannotRun(_target),
     };
+  }
+
+  /// <summary>
+  /// State the suspended population out loud, on EVERY run and whatever the number — including zero,
+  /// exactly as the fragment-goldens line above states the skipped case. A report that only speaks up
+  /// when there is something to say is one a reader stops looking for, and that is how this got here:
+  /// a file marked `status: selfhosted` was skipped with a <c>Logger.Debug</c> line nobody reads, its
+  /// goldens sat in the live fragment tree looking exactly like live ones, and 19 files / 173 tests
+  /// accumulated behind it while the suite reported green.
+  ///
+  /// <para>⚠ IT IS NOT A GATE and must not become one. A suspension with a stated reason is a
+  /// legitimate move — <see cref="SpecParser.StatusReasonKey"/> is what makes it cost something to
+  /// make — and reddening the run over a number somebody already justified would train exactly the
+  /// habit this line exists to break.</para>
+  /// </summary>
+  private static void ReportSuspensionCensus(SpecSuspensionCensus census) {
+    if (census.NothingSuspended) {
+      Logger.Info(LogCategory.Testing, "Suspended: none — every spec file in this directory ran here.");
+      return;
+    }
+
+    Logger.Info(LogCategory.Testing,
+      $"Suspended: {census.SuspendedFileCount} spec file(s) holding {census.TestsInSuspendedFiles} test(s) "
+      + $"(`status:`), plus {census.SuspendedTestCount} test(s) marked SelfhostedOnly inside live files. "
+      + "NOTHING RUNS THEM — this runner skips them and no other runner in this tree reads them. Each "
+      + $"states why: `{SpecParser.StatusReasonKey}:` in the frontmatter, or the directive's own text.");
   }
 
   /// The `--verbose` per-test marker. A `match` rather than a ternary so a fourth outcome cannot be
@@ -1930,7 +1959,22 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
   private void UpdateRequiredInSpecFiles() {
     var targetKey = $"{_target.Arch}-{_target.Os}";
     // Parse with targetKey so success.RequiredIR contains the current target's block (or unqualified fallback)
-    var specs = SpecParser.ParseDirectory(_specDir, targetKey, _includeNetwork);
+    var scan = SpecParser.ParseDirectory(_specDir, targetKey, _includeNetwork);
+
+    // ⚖ A MINT RUN OVER A CORPUS THAT DID NOT FULLY PARSE IS REFUSED, and it is refused HERE as well as
+    // in `RunAllSpecTests` because this door opens FIRST — `--update-required` mints before the suite
+    // runs, so a scan error reported only downstream would arrive after the goldens had been rewritten.
+    // The spec whose parse failed is exactly the one whose blocks would go un-regenerated while every
+    // other file's moved, which is a partial mint nobody asked for and nothing records.
+    if (scan.Errors.Count > 0) {
+      foreach (var error in scan.Errors) Logger.Error(LogCategory.Testing, error);
+      throw new InvalidOperationException(
+        $"Refusing to regenerate required blocks: {scan.Errors.Count} spec file(s) could not be read or "
+        + "parsed (listed above). A mint over a corpus that did not fully parse writes some files and "
+        + "silently skips others.");
+    }
+
+    var specs = scan.Specs;
     var updatedSpecs = 0;
     // Split-file directories for multi-file tests, removed once every spec has been rewritten.
     var tempSourceDirs = new List<string>();

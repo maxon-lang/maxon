@@ -1,0 +1,81 @@
+// Test: int-while-loop-multiple-accumulators
+function main() returns ExitCode
+	var even_sum = 0
+	var odd_sum = 0
+	var count = 0
+	var i = 0
+	while i < 20 'loop'
+		if i mod 2 == 0 'even'
+			even_sum = even_sum + i
+			count = count + 1
+		end 'even' else 'odd'
+			odd_sum = odd_sum + i
+		end 'odd'
+		i = i + 1
+	end 'loop'
+	return (even_sum + odd_sum + count) and 125
+end 'main'
+---
+ExitCode: 72
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rcx, 0
+    x64.movRegImm32 rsi, 0
+    x64.movRegImm32 rdi, 0
+    x64.movRegImm32 r8, 0
+    x64.jmp whilehdr
+  whilehdr:
+    x64.cmpRegImm32 r8, 20
+    x64.jcc less, loop
+    x64.jmp whileexit
+  loop:
+    x64.movRegImm32 r9, 2
+    x64.movRegReg rax, r8
+    x64.cqo
+    x64.idivReg r9
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc equal, even
+    x64.jmp ifelse
+  even:
+    x64.leaRegRegReg rax, rcx, r8
+    x64.leaRegRegImm32 rcx, rdi, 1
+    x64.jmp ifcont
+  ifelse:
+    x64.leaRegRegReg rax, rsi, r8
+    x64.movRegReg rsi, rax
+    x64.movRegReg rax, rcx
+    x64.movRegReg rcx, rdi
+    x64.jmp ifcont
+  ifcont:
+    x64.leaRegRegImm32 r8, r8, 1
+    x64.movRegReg rdi, rcx
+    x64.movRegReg rcx, rax
+    x64.jmp whilehdr
+  whileexit:
+    x64.leaRegRegReg rax, rcx, rsi
+    x64.leaRegRegReg r8, rax, rdi
+    x64.andRegImm32 r8, r8, 125
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r8, rax
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

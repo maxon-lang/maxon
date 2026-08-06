@@ -371,16 +371,22 @@ end 'main'
 
 <!-- test: for-in-over-map-allocates-no-tuple -->
 <!-- needs `Map`, which is the FOLLOW-ON rung: `MapIterator.current()` returns a genuine tuple, so Map is sequenced AFTER tuples and cannot be unlocked here. Not a tuple gap. -->
-<!-- MmTrace -->
+⛔⛔ **THE ALLOCATION PROPERTY THIS CASE IS NAMED FOR IS PINNED BY NOTHING, AND WAS PINNED BY NOTHING FROM
+THE DAY IT WAS PORTED.** It arrived carrying a `<!-- MmTrace -->` directive and an ```mm-trace block
+listing every allocation the Map machinery makes, and its own prose said *"the golden is the pin"* — but
+shv2's `SpecParser` has an arm for neither, so both were walked past in silence. The case has been ACTIVE
+and PASSING the whole time, on its ```exitcode block alone. Found and removed 2026-08-06 (BATCH29/A3a) by
+`SpecParser.isUnimplementedFenceOpen`, which now refuses an unreadable fence instead of skipping it.
+
+⇒ **What this case checks today is the ANSWER (`60`), not the allocation.** A per-iteration tuple record
+coming back — by the value-return gate ceasing to cover `current()`, or by the loop's item binding ceasing
+to be recognised as non-escaping — would still compute 60 and this case would stay green. Restoring the
+pin needs an `mm-trace` arm in shv2's spec parser AND the runner's monitor capture behind it; that is a
+rung, not a marker flip, and the sibling `small-tuple-return-allocates-nothing` above is shelved on it.
+
 A `for` loop over a Map allocates NO tuple record per iteration. The iterator's `current()`
 returns its `(key, value)` pair in two registers, and the loop's item binding does not escape,
 so the pair lives in stack slots for the iteration and dies with it.
-
-The golden is the pin: it holds every allocation the Map machinery itself makes, and NOT ONE
-`____Tuple_Key_Value_*` line between the iterator's incref and its decref. A per-iteration
-tuple record coming back — by the value-return gate ceasing to cover `current()`, or by the
-loop's item binding ceasing to be recognised as non-escaping — puts three of them there and
-turns this red.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntMap = Map with (Integer, Integer)
@@ -401,55 +407,6 @@ end 'main'
 ```exitcode
 60
 ```
-```mm-trace
-mm_alloc __ManagedMemory #1 size=40
-mm_incref __ManagedMemory #1 rc=1
-mm_alloc __ManagedMemory #2 size=40
-mm_incref __ManagedMemory #2 rc=1
-mm_alloc __Array_i64 #3 size=40
-mm_incref __Array_i64 #3 rc=1
-mm_alloc __Array_i64 #4 size=40
-mm_incref __Array_i64 #4 rc=1
-mm_alloc StateArray #5 size=40
-mm_incref StateArray #5 rc=1
-mm_alloc HashSlotArray #6 size=40
-mm_incref HashSlotArray #6 rc=1
-mm_alloc __Map_i64_i64 #7 size=48
-mm_incref __Array_i64 #3 rc=2
-mm_incref __Array_i64 #4 rc=2
-mm_incref StateArray #5 rc=2
-mm_incref HashSlotArray #6 rc=2
-mm_incref __Map_i64_i64 #7 rc=1
-mm_decref HashSlotArray #6 rc=1
-mm_decref StateArray #5 rc=1
-mm_decref __Array_i64 #4 rc=1
-mm_decref __Array_i64 #3 rc=1
-mm_alloc __MapIterator_Integer_Integer #8 size=40
-mm_incref __Array_i64 #3 rc=2
-mm_incref __Array_i64 #4 rc=2
-mm_incref StateArray #5 rc=2
-mm_incref __MapIterator_Integer_Integer #8 rc=1
-mm_decref __MapIterator_Integer_Integer #8 rc=0
-mm_decref __Array_i64 #3 rc=1
-mm_decref __Array_i64 #4 rc=1
-mm_decref StateArray #5 rc=1
-mm_free __MapIterator_Integer_Integer #8
-mm_decref __Map_i64_i64 #7 rc=0
-mm_decref __Array_i64 #3 rc=0
-mm_free __Array_i64 #3
-mm_decref __Array_i64 #4 rc=0
-mm_free __Array_i64 #4
-mm_decref StateArray #5 rc=0
-mm_free StateArray #5
-mm_decref HashSlotArray #6 rc=0
-mm_free HashSlotArray #6
-mm_free __Map_i64_i64 #7
-mm_decref __ManagedMemory #1 rc=0
-mm_free __ManagedMemory #1
-mm_decref __ManagedMemory #2 rc=0
-mm_free __ManagedMemory #2
-```
-
 <!-- test: destructure-match-result-then-compare -->
 Destructuring `let (a, b) = match X { … gives (x, y) }` binds the elements of a
 tuple produced by a match-expression arm, then COMPARES each binding. The

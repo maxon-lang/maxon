@@ -1,6 +1,7 @@
 ---
 feature: witness-managed-return-throws
 status: selfhosted
+status-reason: its one case FAILS here with exit 101 - `MM leak: 1 allocation(s) remain` - which is exactly the defect the case was written to catch (its own prose: "a missing error-flag classification leaks the thrown box (pre-fix: MM leak)"), so this compiler is miscompiling the program while the spec that would say so runs nowhere (measured 2026-08-06, BATCH29/A3a; filed for the coordinator). shv2 emits it correctly and now runs it as specs-shv2/witness-managed-return-throws.md, 1 of 1 green.
 keywords: [witness, interface, dispatch, throws, managed, refcount, memory, boxed-union, uaf]
 category: memory-safety
 ---

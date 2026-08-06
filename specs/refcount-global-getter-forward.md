@@ -1,6 +1,7 @@
 ---
 feature: refcount-global-getter-forward
 status: selfhosted
+status-reason: its one case PASSES here, but its committed golden was minted by another compiler and disagrees with what this one emits, so un-suspending re-mints it and overwrites the only record of what v1 emitted (measured 2026-08-06, BATCH29/A3a, by un-suspending the file and running the full suite). shv2 cannot take it either: E2015 for a top-level instantiation of a user generic.
 keywords: [refcount, borrow, global, cache, getter, forward, memory, leak]
 category: memory-safety
 ---

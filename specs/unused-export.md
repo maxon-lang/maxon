@@ -1,6 +1,7 @@
 ---
 feature: unused-export
 status: selfhosted
+status-reason: 7 of its 8 cases pin an unused-export diagnostic this compiler does not raise - they compile clean here (measured 2026-08-06, BATCH29/A3a). shv2 raises it for only 1 of the 8 as well, so the diagnostic itself is the missing mechanism on both live runners.
 keywords: [export, module, visibility, semantic, unused]
 category: diagnostics
 ---

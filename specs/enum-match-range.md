@@ -1,6 +1,7 @@
 ---
 feature: enum-match-range
 status: selfhosted
+status-reason: all 10 cases PASS here, but 8 of its 10 committed goldens were minted by another compiler and disagree with what this one emits - un-suspending it therefore re-mints them, overwriting the only record of what v1 emitted for these programs (measured 2026-08-06, BATCH29/A3a, by un-suspending the file and running the full suite: 2 of 10). shv2 runs 9 of the 10 and is where a port belongs.
 keywords: [enum, match, range, to, upto, bare case, exhaustive]
 category: control-flow
 ---

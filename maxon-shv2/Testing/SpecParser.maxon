@@ -315,7 +315,17 @@ let RequiredRdataFence = "```RequiredRdata"
 // ⚠ It is NOT a result block: it says nothing about the RUN, so it does not satisfy
 // `pinsAnyResult` — a case carrying only this would compile, render a golden and check no behaviour.
 let RequiredRuntimeFence = "```RequiredRuntime"
-let FenceClose = "```"
+
+// The three-backtick delimiter. Markdown spells OPEN and CLOSE the same way, so one name serves both
+// readers: `readFence` looking for the end of a block, and the terminating arm in `scanTestFromMarker`
+// looking at the start of one it has no reader for.
+let FenceDelimiter = "```"
+
+// The one TAGGED fence a test region may open without claiming anything. A bare `FenceDelimiter` block
+// and a ```text one are PROSE — a quoted panic message, an illustrated diagnostic — and 200 of them are
+// in this corpus. Every OTHER tag is a claim, and `isUnimplementedFenceOpen` refuses the ones no arm of
+// `scanTestFromMarker` can honour.
+let ProseFenceOpen = "```text"
 
 // The multi-file marker, and the ONE line the `// Test: <name>` fragment header adds above a
 // block's first line. The header is why a file's line 1 is not the block's line 1 — see
@@ -928,6 +938,29 @@ function scanTestFromMarker(lines StringArray, markerIndex LineIndex, markerLine
 			continue
 		end 'source'
 
+		// ⛔⛔ **THE TERMINATING ARM — A LIVE CASE MAY NOT OPEN A FENCE THIS PARSER DOES NOT IMPLEMENT.**
+		// Every arm above consumes its whole block through `readFence`, so the only fence-opening line that
+		// reaches here is one no arm claimed; the fallthrough below steps over it and then reads its BODY as
+		// ordinary prose.
+		//
+		// That is not a harmless skip. It is this corpus's most expensive shape — a block that LOOKS like an
+		// assertion and asserts nothing — and it was already here twice, both found by this arm the first
+		// time it ran (2026-08-06, BATCH29/A3a). `vector.md` carried six ```RequiredIR blocks copied
+		// byte-identically from `/specs`, pinning v1's instruction selection for an inlined `Vector.get`.
+		// `tuples.md`'s `for-in-over-map-allocates-no-tuple` — an ACTIVE, PASSING case — carried the
+		// ```mm-trace block that IS the property its name claims, and passed on its exit code alone.
+		//
+		// ⚠ The cure is not to implement every v1 fence: it is that dropping one becomes a decision somebody
+		// makes and writes down. What shv2 pins instead is the minted fragment golden, which records what
+		// THIS compiler emits rather than what another one did.
+		//
+		// ⚖ ONLY A LIVE CASE. A `disabled-test:` marker ALREADY says the case runs nowhere, so a block it
+		// carries claims nothing — it is a record kept for the rung that will enable it, which is exactly
+		// what the disabled form is for. Refusing there would delete the notes instead of the lies.
+		if active and isUnimplementedFenceOpen(line) 'unimplementedFence'
+			panic("SpecParser: live test '{name}' opens a fence this parser does not implement: '{line.trim()}'. The arms above are the whole set it can read, so this block is silently skipped: it pins NOTHING while reading as coverage. Delete it (what pins the emitted code here is the minted fragment golden), implement the fence, or shelve the case as `disabled-test:` naming the rung that unlocks it")
+		end 'unimplementedFence'
+
 		i = i + 1
 	end 'blocks'
 
@@ -972,6 +1005,22 @@ function scanTestFromMarker(lines StringArray, markerIndex LineIndex, markerLine
 
 	return i
 end 'scanTestFromMarker'
+
+// Whether `line` opens a block `scanTestFromMarker` has no reader for — asked only AFTER every fence arm
+// has declined it, so a tag with an arm never reaches here.
+//
+// The two exceptions are PROSE and make no claim, which is why walking past them is correct and always
+// was: a bare fence (the closing delimiter of any block is the same three bytes, and 11,210 lines in this
+// corpus are one or the other) and `ProseFenceOpen`.
+function isUnimplementedFenceOpen(line String) returns bool
+	if not line.startsWith(FenceDelimiter) 'notAFence'
+		return false
+	end 'notAFence'
+
+	let trimmed = line.trim()
+
+	return trimmed != FenceDelimiter and trimmed != ProseFenceOpen
+end 'isUnimplementedFenceOpen'
 
 // Consume a section-pin fence opening at `openIndex` and record what it claims about `section`,
 // returning the line index to resume the block scan from. THE one place a pin is read, so the two
@@ -1354,7 +1403,7 @@ function readFence(lines StringArray, openIndex LineIndex) returns FenceBlock
 	while i < lineCount 'read'
 		let line = try lines.get(i) otherwise panic("SpecParser.readFence: index {i} >= lineCount {lineCount} despite the while guard i<lineCount")
 
-		if line.startsWith(FenceClose) 'close'
+		if line.startsWith(FenceDelimiter) 'close'
 			return FenceBlock.create(text.build(), nextIndex: i + 1)
 		end 'close'
 
@@ -1365,9 +1414,9 @@ function readFence(lines StringArray, openIndex LineIndex) returns FenceBlock
 		// scanner walks into the next test. The remainder before the fence is the final content line, then the
 		// block closes. Only fires when the line is NOT itself a bare fence (handled above), and no other spec
 		// has a genuine content line ending in ` ``` `, so this changes nothing else.
-		if line.endsWith(FenceClose) 'inlineClose'
+		if line.endsWith(FenceDelimiter) 'inlineClose'
 			var stop = line.startIndex()
-			for _ in 0 upto line.byteLength() - FenceClose.byteLength() 'toFence'
+			for _ in 0 upto line.byteLength() - FenceDelimiter.byteLength() 'toFence'
 				stop = try line.indexAfter(stop) otherwise panic("SpecParser.readFence: indexAfter failed before the inline closing fence — the byte length and the index walk disagree on an ASCII line")
 			end 'toFence'
 			text.push(line.slice(line.startIndex(), endIndex: stop))

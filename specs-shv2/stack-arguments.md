@@ -25,10 +25,41 @@ Two properties are specific to the stack half and are what these tests pin:
 source position 1 following an integer is float-slot 0 — but there is only one outgoing region and
 one 8-byte stride, so an overflowing float takes the next slot after an overflowing integer.
 
-**The stack stores are emitted BEFORE the register moves.** Materializing a stack argument's value
-takes a register the allocator picks, and an argument register that an earlier move already loaded is
-not a *value* — nothing marks it live from that move to the call — so a store emitted after one can
-silently overwrite it. With the stores first, no argument register exists yet while they run.
+**A stack argument's placement cannot destroy an argument register.** Materializing a stack argument's
+value takes a register the allocator picks, and an argument register that an earlier move already loaded
+is not a *value* — nothing marks it live from that move to the call — so nothing about SSA stops a store
+from silently overwriting one.
+
+⭐⭐ **TWO INDEPENDENT CURES ANSWER THAT, AND EACH ONE ALONE IS SUFFICIENT — MEASURED, 2026-08-06
+(BATCH29/X3), BY REMOVING THEM ONE AT A TIME AND THEN TOGETHER.** They are
+`emitArgMovesByFloatMask`'s two-phase order (every stack store emitted before every register move, so no
+argument register exists yet while the stores run) and `sweepEstablishedRegisters`'s `establishedAtDef`
+forbid (a value defined while an argument register is pending may not be coloured onto it).
+
+- **Two-phase order removed, forbid intact** — source-order emission, the pre-fix shape. The emitted code
+  CHANGES (`movRegImm32 rax, 0` becomes `rcx, 0` in both `x64-stack-arg-disp32` cases) and every answer in
+  this file and that one stays RIGHT. The forbid caught it.
+- **Forbid removed, two-phase order intact** — the emitted code is BYTE-IDENTICAL, in both files. With the
+  stores first the forbid never had anything to forbid.
+- **BOTH removed** — three cases go red at once, with the exact historical symptom the routine's header
+  records: `x64-stack-arg-disp32/twenty-second-param-at-rbp-128` returns **400 instead of 200**,
+  `params-straddling-rbp-128-boundary` 210 instead of 150, and `every-argument-of-a-wide-call-is-distinct`
+  below 272 instead of 253.
+
+⇒ **The property IS pinned, by those three cases**, and no single-mechanism sabotage can show it — which is
+why a case has to be seen red against BOTH cures removed before it can be believed to pin anything here.
+
+⛔ **`a-stack-argument-store-does-not-clobber-an-argument-register` WAS DELETED IN THAT SAME MEASUREMENT
+(BATCH29/X3), AND ITS SHELVING ROW'S TWO CLAIMS WERE BOTH WRONG.** The row said the property was *"now
+pinned by nothing"* (it is pinned by the three cases above) and that *"there is no legal Maxon program with
+this property"*, because seven of its eight parameters had to go unread and an unread parameter is `E3012`.
+The second claim mistakes which side of the call the bug is on: the clobber is emitted by the CALLER, and
+what the callee does with its parameters cannot move an instruction in it — so a version whose callee reads
+all eight behind a guard and still returns only the third is legal, compiles, and was written and run. It
+was then deleted anyway, for the reason the row never reached: **eight arguments do not create enough
+register pressure for the clobber to be observable at all.** That case stayed GREEN with both cures
+removed, in the same run where the three above went red. Restoring it at 22 arguments would make it red and
+would also make it a second spelling of `every-argument-of-a-wide-call-is-distinct`.
 
 A managed argument (a `String`, an `Array`) is passed by pointer like any other 8-byte value, so a
 stack slot changes nothing about who owns it: the callee consumes it and drops it exactly as it would
@@ -82,46 +113,6 @@ end 'main'
 ```
 ```exitcode
 255
-```
-
-<!-- test: a-stack-argument-store-does-not-clobber-an-argument-register -->
-Every argument is a constant, so each one must be materialized into some register before it can be
-stored. The value that lands in argument register 2 is distinctive, and so is the last stack
-argument's: if the stack stores run after the register moves, the constant materialization takes the
-argument register back and the third parameter reads the eighth one's value.
-
-⛔⛔ **THIS CASE NO LONGER RUNS, AND THE PROPERTY ABOVE IS NOW PINNED BY NOTHING.** The shape that makes the
-clobber observable is exactly the shape the language forbids: SEVEN of the eight parameters exist only to
-occupy argument slots and are deliberately never read — the FIRST is already spelled `_`, which it can be
-because it is passed positionally, and the other six are `b`, `d`, `e`, `f`, `g` and `h` — and an unread
-parameter is `E3012` (see
-`unused-parameters`). The spelling for a deliberately unread parameter is `_`, and here it cannot be used —
-every one of those six is supplied BY LABEL, a repeated `_:` label resolves to the first `_` and is refused
-as a duplicate argument (E3038), and a positional `_` argument is refused by BOTH compilers (measured:
-bootstrap `E3005`, shv2 `E2053` — only the first argument may be positional). Nor may they be omitted: the
-case needs eight CONSTANT arguments to put anything on the stack at all. So there is no legal Maxon program
-with this property, and the expectation below pins the refusal instead.
-
-⚠ **`eight-scalar-parameters` DOES NOT COVER IT — do not read it as a replacement.** That case READS all
-eight parameters, so all eight are live and the stack stores cannot be reordered past a register move
-without the answer changing somewhere else; it passes today and passed before the bug this case was
-written for. **It is precisely the ONE-parameter-read shape that makes the clobber observable**, and that
-shape is unwritable. No substitute case is added here on purpose: any legal version makes the other
-parameters live, which is the shape that already passes, and a case that does not pin the property would
-read like coverage while being none.
-```maxon
-typealias Integer = int(i64.min to i64.max)
-
-function pick(_ Integer, b Integer, c Integer, d Integer, e Integer, f Integer, g Integer, h Integer) returns Integer
-	return c
-end 'pick'
-
-function main() returns ExitCode
-	return pick(0, b: 0, c: 3, d: 0, e: 0, f: 0, g: 0, h: 99)
-end 'main'
-```
-```maxoncstderr
-error E3012: specs/fragments/stack-arguments/a-stack-argument-store-does-not-clobber-an-argument-register.test:4:26: unused variable: 'b'
 ```
 
 <!-- test: a-function-typed-parameter-costs-two-argument-slots -->

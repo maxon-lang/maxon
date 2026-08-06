@@ -1,6 +1,7 @@
 ---
 feature: refcount-consumed-interface-param-slot
 status: selfhosted
+status-reason: both cases PASS here, but both committed goldens were minted by another compiler and disagree with what this one emits (its functions come out in a different order), so un-suspending re-mints them and overwrites the only record of what v1 emitted (measured 2026-08-06, BATCH29/A3a, by un-suspending the file and running the full suite). Already re-homed: specs-shv2/refcount-consumed-interface-param-slot.md, 2 of 2 active.
 keywords: [refcount, interface, param, consumed, slot, loop, borrow, memory]
 category: memory-safety
 ---

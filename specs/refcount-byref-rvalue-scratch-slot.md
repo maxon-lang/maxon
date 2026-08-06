@@ -1,6 +1,7 @@
 ---
 feature: refcount-byref-rvalue-scratch-slot
 status: selfhosted
+status-reason: 1 of its 2 cases does not compile here (E3019: cannot pass an immutable `let` to a by-reference parameter), so this compiler and the spec disagree about what a reassigned parameter accepts (measured 2026-08-06, BATCH29/A3a). shv2 fails both, on E2013 for the same shape.
 keywords: [refcount, byref, pass-by-reference, rvalue, scratch, slot, managed, memory]
 category: memory-safety
 ---

@@ -8,8 +8,54 @@ public class SpecFile {
   public required string Feature { get; init; }
   public required string Status { get; init; }
   public required string Category { get; init; }
+
+  /// <summary>
+  /// The frontmatter <c>status-reason</c>, or null when the file did not state one. Required only of
+  /// a <see cref="SpecParser.SuspendingStatuses"/> file, and checked in <see cref="SpecParser.ScanFiles"/>.
+  /// </summary>
+  public string? StatusReason { get; init; }
+
   public required List<TestCase> Tests { get; init; }
+
+  /// <summary>
+  /// Tests this file declares that the parser did NOT put in <see cref="Tests"/> because they carry
+  /// <c>&lt;!-- SelfhostedOnly: why --&gt;</c>. Kept rather than dropped: they are the per-test half of
+  /// the suspended population the runner's trailer reports.
+  /// </summary>
+  public required IReadOnlyList<SuspendedTest> SuspendedTests { get; init; }
 }
+
+/// <summary>One spec file no runner in this tree executes, and the reason it gave.</summary>
+public sealed record SuspendedSpec(string FileName, string Status, int TestCount, string Reason);
+
+/// <summary>One test inside a LIVE spec file that no runner in this tree executes.</summary>
+public sealed record SuspendedTest(string FileName, string TestName, string Reason);
+
+/// <summary>
+/// What one scan of the spec directory found suspended — the population that exists, looks like
+/// coverage, and is run by nothing.
+///
+/// <para>Totals are COMPUTED from the two lists rather than stored beside them, as everything else in
+/// this file does it: a stored count is a second copy of a fact the list already holds, and a census
+/// whose number disagrees with its own contents is worse than no census.</para>
+/// </summary>
+public sealed record SpecSuspensionCensus(
+  IReadOnlyList<SuspendedSpec> Files,
+  IReadOnlyList<SuspendedTest> Tests) {
+
+  public int SuspendedFileCount => Files.Count;
+  public int TestsInSuspendedFiles => Files.Sum(f => f.TestCount);
+  public int SuspendedTestCount => Tests.Count;
+  public bool NothingSuspended => Files.Count == 0 && Tests.Count == 0;
+}
+
+/// <summary>
+/// One pass over the spec directory: what will run, what will not, and what makes running impossible.
+/// </summary>
+public sealed record SpecScan(
+  List<SpecFile> Specs,
+  SpecSuspensionCensus Census,
+  List<string> Errors);
 
 /// <summary>
 /// A single test case extracted from a spec file.
@@ -280,7 +326,8 @@ public abstract record AnyWorkItem {
 public record PrepareResult(
   AnyWorkItem[] WorkItems,
   int TotalTests,
-  List<string> Errors
+  List<string> Errors,
+  SpecSuspensionCensus Census
 );
 
 /// <summary>

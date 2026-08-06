@@ -1,6 +1,7 @@
 ---
 feature: subprocess-unsupported
 status: selfhosted
+status-reason: its one case is restricted to `targets: wasm32-wasi` and this compiler has no wasm emitter, so on every target it can build this file holds ZERO selectable tests (measured 2026-08-06, BATCH29/A3a). shv2 emits wasm and selects the case there, but answers E2015 for the missing Subprocess surface where the case pins E3074 - so neither live runner takes it, and the diagnostic itself is the missing mechanism.
 keywords: [subprocess, wasm, wasi, diagnostics, target]
 category: diagnostics
 ---

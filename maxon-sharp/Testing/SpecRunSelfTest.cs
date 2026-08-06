@@ -28,15 +28,25 @@ namespace MaxonSharp.Testing;
 /// only ever run natively (`scripts/cross-target-gate.sh` reaches arm64-macOS by ssh-ing to a Mac), so
 /// the not-run arm is never taken on any machine that runs the suite.</para>
 ///
+/// <para>⭐ THE SAME QUESTION ONE LEVEL UP IS ALSO HERE: what a spec FILE is worth when nothing runs it.
+/// A file the parser refuses, and a file it deliberately skips, both leave their tests unexecuted, and
+/// both used to leave the run GREEN and silent — <c>Logger.Error</c> prints and returns, and
+/// <c>Logger.Debug</c> is not even read. Those rules have no other coverage and cannot get any: no spec
+/// in the corpus is unparseable, and one added to give them coverage would break every run. So they are
+/// asserted here, against synthesized spec TEXT.</para>
+///
 /// <para>It compiles nothing and launches nothing: every row below is a pure function of a synthesized
-/// <see cref="ProcessRunResult"/> and a target. A guard that proved this by running a foreign-target
-/// suite would cost minutes and would run one on the build machine the moment the wiring it checks
-/// went missing.</para>
+/// <see cref="ProcessRunResult"/> and a target, or of a synthesized spec file's bytes. A guard that
+/// proved this by running a foreign-target suite would cost minutes and would run one on the build
+/// machine the moment the wiring it checks went missing.</para>
 /// </summary>
 public static class SpecRunSelfTest {
   private const string TestName = "self-test";
   private const string FragmentPath = "self-test.test";
   private const string OsReason = "the OS refused it";
+
+  /// A synthesized spec's path. Never read from disk — <see cref="SpecParser.ScanFiles"/> takes the text.
+  private const string SpecPath = "self-test-spec.md";
 
   public static int Run() {
     var host = CompileTarget.Native;
@@ -60,6 +70,9 @@ public static class SpecRunSelfTest {
 
     failures += CheckNotRunHereIsNotGreen();
     failures += CheckEveryOutcomeIsCounted();
+    failures += CheckUnparseableSpecIsAnError();
+    failures += CheckSuspensionNeedsAStatedReason();
+    failures += CheckSuspendedSpecsAreCounted();
 
     if (failures == 0)
       Console.WriteLine(
@@ -67,8 +80,137 @@ public static class SpecRunSelfTest {
         // dash into replacement characters - including in the failure text, which is the one message
         // that has to survive.
         $"spec-run-selftest: OK - launch-failure verdicts for {CompileTarget.Supported.Count()} targets "
-        + $"against host {host.Triple}, and a not-run test reddens the run");
+        + $"against host {host.Triple}, a not-run test reddens the run, and a spec nothing runs is "
+        + "counted, reasoned and never silent");
     return failures == 0 ? 0 : 1;
+  }
+
+  /// One synthesized spec file, scanned. The spec system's own entry point, so what is asserted below is
+  /// what a real run would do with the same bytes.
+  private static SpecScan Scan(string content) => SpecParser.ScanFiles([(SpecPath, content)]);
+
+  /// <summary>
+  /// A spec the parser refuses stops the run. It used to be written to <c>Logger.Error</c>, which prints
+  /// and returns — so the file simply left the suite and the run still exited 0. A spec with a broken
+  /// directive is indistinguishable, from the outside, from a spec that was never written.
+  /// </summary>
+  private static int CheckUnparseableSpecIsAnError() {
+    // A test with a `maxon` block and no result check at all: the parser throws on it, which is the
+    // whole point — an assertion-less case must not be reported as a passing one.
+    var scan = Scan("""
+      ---
+      feature: self-test
+      status: stable
+      ---
+      ## Tests
+
+      <!-- test: no-result-checks -->
+      ```maxon
+      function main() returns ExitCode
+      	return 0
+      end 'main'
+      ```
+      """);
+
+    if (scan.Errors.Count > 0 && scan.Specs.Count == 0) return 0;
+
+    Console.Error.WriteLine(
+      $"spec-run-selftest FAIL: an unparseable spec produced {scan.Errors.Count} error(s) and "
+      + $"{scan.Specs.Count} spec(s). A spec this parser refuses must make the run FAIL, not vanish "
+      + "from it - a file nobody can parse and a file nobody wrote look identical to a green suite.");
+    return 1;
+  }
+
+  /// <summary>
+  /// Suspending a file costs a stated reason, and suspending one test costs the same. Both roads hand
+  /// the work to a runner that cannot be built, so both end in nobody running it; what a reason buys is
+  /// that the next reader knows whether that is still true.
+  /// </summary>
+  private static int CheckSuspensionNeedsAStatedReason() {
+    var failures = 0;
+
+    foreach (var status in SpecParser.SuspendingStatuses) {
+      var scan = Scan($"""
+        ---
+        feature: self-test
+        status: {status}
+        ---
+        ## Tests
+        """);
+
+      if (scan.Errors.Count != 0) continue;
+
+      Console.Error.WriteLine(
+        $"spec-run-selftest FAIL: `status: {status}` with no `{SpecParser.StatusReasonKey}:` was accepted. "
+        + "A file no runner in this tree executes must say why, or suspending one costs two words and "
+        + "nobody ever revisits it.");
+      failures++;
+    }
+
+    var bareDirective = Scan("""
+      ---
+      feature: self-test
+      status: stable
+      ---
+      ## Tests
+
+      <!-- test: handed-to-the-other-runner -->
+      <!-- SelfhostedOnly -->
+      ```maxon
+      function main() returns ExitCode
+      	return 0
+      end 'main'
+      ```
+      ```exitcode
+      0
+      ```
+      """);
+
+    if (bareDirective.Errors.Count != 0) return failures;
+
+    Console.Error.WriteLine(
+      "spec-run-selftest FAIL: a bare `<!-- SelfhostedOnly -->` was accepted. It takes the test out of "
+      + "this suite and hands it to a runner that cannot be built, so it must state a reason exactly as "
+      + $"`{SpecParser.StatusReasonKey}:` does.");
+    return failures + 1;
+  }
+
+  /// <summary>
+  /// What is suspended is COUNTED, so the runner's trailer can say it out loud. A skip the report cannot
+  /// see is the one this whole mechanism exists to stop being possible.
+  /// </summary>
+  private static int CheckSuspendedSpecsAreCounted() {
+    var scan = Scan("""
+      ---
+      feature: self-test
+      status: selfhosted
+      status-reason: a synthesized file, asserting that the census sees it
+      ---
+      ## Tests
+
+      <!-- test: one -->
+      ```maxon
+      function main() returns ExitCode
+      	return 0
+      end 'main'
+      ```
+      ```exitcode
+      0
+      ```
+      """);
+
+    var census = scan.Census;
+    if (scan.Errors.Count == 0 && scan.Specs.Count == 0
+        && census.SuspendedFileCount == 1 && census.TestsInSuspendedFiles == 1 && !census.NothingSuspended) {
+      return 0;
+    }
+
+    Console.Error.WriteLine(
+      $"spec-run-selftest FAIL: a suspended spec with a stated reason produced {scan.Errors.Count} "
+      + $"error(s), {scan.Specs.Count} live spec(s), and a census of {census.SuspendedFileCount} file(s) "
+      + $"/ {census.TestsInSuspendedFiles} test(s). It must run nothing and be counted as exactly one "
+      + "file holding one test - a suspension the census cannot see is invisible debt again.");
+    return 1;
   }
 
   /// <summary>

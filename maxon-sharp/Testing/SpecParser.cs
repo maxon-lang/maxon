@@ -13,79 +13,151 @@ public static partial class SpecParser {
   public const string NetworkCategory = "network";
 
   /// <summary>
-  /// Parse a spec file and extract all tests.
-  /// When targetKey is provided (e.g. "x64-windows"), extracts RequiredIR:{targetKey} blocks.
+  /// Frontmatter `status` values that take a whole spec file out of THIS runner and hand it to
+  /// another one. Both roads end in the same place and it is not the place either name suggests:
+  /// <c>maxon-selfhosted</c> has not built since 2026-07-13 (accepted, deliberately not repaired),
+  /// so a file marked either way is run by NOBODY while its goldens sit in the tree looking exactly
+  /// like live ones.
+  ///
+  /// <para>⭐ THAT IS WHY EACH ONE MUST STATE A REASON (<see cref="StatusReasonKey"/>) AND WHY THE
+  /// COUNT IS IN THE RUNNER'S TRAILER. The skip used to be a <c>Logger.Debug</c> line nobody reads,
+  /// and 19 files / 173 tests accumulated behind it. Suspending a file is a legitimate move; doing it
+  /// SILENTLY is what turned a legitimate move into invisible debt.</para>
   /// </summary>
-  public static SpecFile Parse(string filePath, string? targetKey = null) {
-    var content = File.ReadAllText(filePath);
-    var (feature, status, category) = ParseFrontmatter(content);
-    var tests = ExtractTests(content, targetKey);
+  public static readonly IReadOnlySet<string> SuspendingStatuses =
+    new HashSet<string>(StringComparer.Ordinal) { "draft", "selfhosted" };
+
+  /// <summary>
+  /// The frontmatter key carrying WHY a <see cref="SuspendingStatuses"/> file is suspended, and what
+  /// would let it run again. Required — a spec that names one of those statuses without it is a
+  /// preparation error, so a future author cannot suspend a file by adding two words.
+  /// </summary>
+  public const string StatusReasonKey = "status-reason";
+
+  /// <summary>
+  /// Parse spec TEXT, attributing it to <paramref name="filePath"/> for reporting.
+  /// When targetKey is provided (e.g. "x64-windows"), extracts RequiredIR:{targetKey} blocks.
+  ///
+  /// <para>It takes the TEXT rather than the path so that every classification this file makes —
+  /// suspended or live, parseable or not — is a pure function of the bytes, and can therefore be
+  /// asserted without a directory of fixture files. <c>SpecRunSelfTest</c> drives exactly this entry
+  /// point, which is the only coverage the "a spec that will not parse is an error" rule below has: no
+  /// spec in the corpus is unparseable, and one added to give it coverage would break every run.</para>
+  /// </summary>
+  public static SpecFile ParseText(string content, string filePath, string? targetKey = null) {
+    var (feature, status, category, statusReason) = ParseFrontmatter(content);
+    var fileName = Path.GetFileName(filePath);
+    var (tests, suspendedTests) = ExtractTests(content, fileName, targetKey);
 
     return new SpecFile {
       FilePath = filePath,
       Feature = feature,
       Status = status,
       Category = category,
-      Tests = tests
+      StatusReason = statusReason,
+      Tests = tests,
+      SuspendedTests = suspendedTests
     };
   }
 
   /// <summary>
-  /// Parse all spec files in a directory.
-  /// Skips specs with status: draft (work-in-progress) or status: selfhosted
-  /// (written against self-hosted-only intrinsics like __mm_raw_alloc, which
-  /// the C# bootstrap doesn't expose, or pinning RequiredIR where the two
-  /// compilers' lowering diverges — one shared block can't satisfy both
-  /// runners, so the spec is owned by the self-hosted suite).
+  /// Parse all spec files in a directory, and take the census of the ones nothing runs.
   /// When targetKey is provided (e.g. "x64-windows"), extracts RequiredIR:{targetKey} blocks.
   /// </summary>
-  public static List<SpecFile> ParseDirectory(string specDir, string? targetKey = null, bool includeNetwork = false) {
-    var specs = new List<SpecFile>();
+  public static SpecScan ParseDirectory(string specDir, string? targetKey = null, bool includeNetwork = false) {
+    var files = new List<(string Path, string Content)>();
+    var readErrors = new List<string>();
 
+    // Read here rather than inside ScanFiles so that classification stays a pure function of bytes, and
+    // so a file this process cannot READ lands in the same errors list as one it cannot PARSE. Both mean
+    // the same thing to the suite — a spec that was not run and was not counted.
     foreach (var file in Directory.GetFiles(specDir, "*.md")) {
       try {
-        var spec = Parse(file, targetKey);
-        if (spec.Status == "draft") {
-          Logger.Debug(LogCategory.Testing, $"Skipping draft spec: {Path.GetFileName(file)}");
-          continue;
-        }
-        if (spec.Status == "selfhosted") {
-          Logger.Debug(LogCategory.Testing, $"Skipping selfhosted-only spec: {Path.GetFileName(file)}");
-          continue;
-        }
-        // A `category: network` spec talks to a real server on the public internet. That makes it
-        // a coin toss on somebody else's uptime, not a gate on our compiler: httpbin.org has been
-        // observed returning 503, and it rate-limits under the runner's parallelism, so the suite
-        // goes red for reasons no change of ours caused. A gate that fails for reasons unrelated to
-        // the code under test trains you to ignore it, which is worse than not having it.
-        //
-        // They are still real tests and they still run — `--network` opts in. They are just not part
-        // of the default gate.
-        if (!includeNetwork && spec.Category == NetworkCategory) {
-          Logger.Debug(LogCategory.Testing, $"Skipping network spec (pass --network to include): {Path.GetFileName(file)}");
-          continue;
-        }
-        specs.Add(spec);
-      } catch (Exception ex) {
-        Logger.Error(LogCategory.Testing, $"Failed to parse {file}: {ex.Message}\n{ex.StackTrace}");
+        files.Add((file, File.ReadAllText(file)));
+      } catch (IOException ex) {
+        readErrors.Add($"Could not read {file}: {ex.Message}");
       }
     }
 
-    return specs;
+    var scan = ScanFiles(files, targetKey, includeNetwork);
+    scan.Errors.InsertRange(0, readErrors);
+
+    return scan;
   }
 
-  private static (string feature, string status, string category) ParseFrontmatter(string content) {
+  /// <summary>
+  /// Classify already-read spec files into the ones this run will execute and the ones it will not,
+  /// collecting the reasons for the second group and the errors that make a run impossible.
+  ///
+  /// <para>⚠ A SPEC THAT WILL NOT PARSE IS AN ERROR, NOT A LOG LINE. It used to be caught here and
+  /// written to <c>Logger.Error</c>, which prints and returns — so a spec with an unrecognized code
+  /// block, a bad <c>TimeoutMs</c>, or a test with no result checks at all VANISHED from the suite and
+  /// the run still exited 0. That is the same lie as a silent suspension, arriving by accident instead
+  /// of on purpose, and it is the more dangerous of the two because nobody chose it.</para>
+  /// </summary>
+  public static SpecScan ScanFiles(
+      IEnumerable<(string Path, string Content)> files, string? targetKey = null, bool includeNetwork = false) {
+    var specs = new List<SpecFile>();
+    var suspendedFiles = new List<SuspendedSpec>();
+    var suspendedTests = new List<SuspendedTest>();
+    var errors = new List<string>();
+
+    foreach (var (path, content) in files) {
+      var fileName = Path.GetFileName(path);
+      SpecFile spec;
+      try {
+        spec = ParseText(content, path, targetKey);
+      } catch (Exception ex) {
+        errors.Add($"Failed to parse {path}: {ex.Message}");
+        continue;
+      }
+
+      if (SuspendingStatuses.Contains(spec.Status)) {
+        if (string.IsNullOrWhiteSpace(spec.StatusReason)) {
+          errors.Add(
+            $"{fileName}: `status: {spec.Status}` takes this file and its {spec.Tests.Count} test(s) out "
+            + $"of this suite, and no runner in this tree picks them up instead. Add a `{StatusReasonKey}:` "
+            + "line to the frontmatter saying why, and what would let them run again.");
+          continue;
+        }
+
+        suspendedFiles.Add(new SuspendedSpec(fileName, spec.Status, spec.Tests.Count, spec.StatusReason));
+        continue;
+      }
+
+      // A `category: network` spec talks to a real server on the public internet. That makes it
+      // a coin toss on somebody else's uptime, not a gate on our compiler: httpbin.org has been
+      // observed returning 503, and it rate-limits under the runner's parallelism, so the suite
+      // goes red for reasons no change of ours caused. A gate that fails for reasons unrelated to
+      // the code under test trains you to ignore it, which is worse than not having it.
+      //
+      // Not a suspension: these tests are RUNNABLE here and `--network` runs them, so counting them
+      // beside files nothing can run would make the census's own number mean two things.
+      if (!includeNetwork && spec.Category == NetworkCategory) {
+        Logger.Debug(LogCategory.Testing, $"Skipping network spec (pass --network to include): {fileName}");
+        continue;
+      }
+
+      specs.Add(spec);
+      suspendedTests.AddRange(spec.SuspendedTests);
+    }
+
+    return new SpecScan(specs, new SpecSuspensionCensus(suspendedFiles, suspendedTests), errors);
+  }
+
+  private static (string feature, string status, string category, string? statusReason) ParseFrontmatter(string content) {
     var match = FrontmatterRegex().Match(content);
     if (!match.Success) {
-      return ("unknown", "unknown", "unknown");
+      return ("unknown", "unknown", "unknown", null);
     }
 
     var yaml = match.Groups[1].Value;
     var feature = ExtractYamlValue(yaml, "feature") ?? "unknown";
     var status = ExtractYamlValue(yaml, "status") ?? "unknown";
     var category = ExtractYamlValue(yaml, "category") ?? "unknown";
+    var statusReason = ExtractYamlValue(yaml, StatusReasonKey);
 
-    return (feature, status, category);
+    return (feature, status, category, statusReason);
   }
 
   private static string? ExtractYamlValue(string yaml, string key) {
@@ -93,8 +165,10 @@ public static partial class SpecParser {
     return match.Success ? match.Groups[1].Value.Trim() : null;
   }
 
-  private static List<TestCase> ExtractTests(string content, string? targetKey = null) {
+  private static (List<TestCase> Tests, List<SuspendedTest> Suspended) ExtractTests(
+      string content, string fileName, string? targetKey = null) {
     var tests = new List<TestCase>();
+    var suspended = new List<SuspendedTest>();
 
     // Find all test markers: <!-- test: name -->
     var testMatches = TestMarkerRegex().Matches(content);
@@ -130,11 +204,25 @@ public static partial class SpecParser {
       // to crash on a program the repo itself ships as a passing fragment.
       bool debugInfo = DebugInfoDirectiveRegex().IsMatch(testSection);
 
-      // Tests that exercise a self-hosted-only diagnostic (e.g. E3095) can
-      // opt out of the C# runner by emitting a `<!-- SelfhostedOnly -->`
-      // directive between the test marker and its first fence.
-      if (SelfhostedOnlyDirectiveRegex().IsMatch(testSection)) {
-        Logger.Debug(LogCategory.Testing, $"Skipping selfhosted-only test: {testName}");
+      // One test — rather than a whole file — handed to the self-hosted runner, by a
+      // `<!-- SelfhostedOnly: why -->` directive between the test marker and its first fence.
+      //
+      // ⚠ THE REASON IS REQUIRED, for the same reason `status-reason` is: the runner this hands the
+      // test to CANNOT BE BUILT, so the directive suspends it outright, and a suspension nobody has
+      // to justify is one nobody revisits. The bare `<!-- SelfhostedOnly -->` spelling is refused
+      // here rather than tolerated — silently accepting it would leave the older, cheaper road open
+      // beside the one this check exists to close.
+      var selfhostedOnly = SelfhostedOnlyDirectiveRegex().Match(testSection);
+      if (selfhostedOnly.Success) {
+        var reason = selfhostedOnly.Groups[1].Value.Trim();
+        if (reason.Length == 0) {
+          throw new Exception(
+            $"Test '{testName}' carries a bare `<!-- SelfhostedOnly -->`. That directive takes the test "
+            + "out of this suite and hands it to a runner that cannot be built, so it runs nowhere. "
+            + "Spell it `<!-- SelfhostedOnly: why, and what would let it run here -->`.");
+        }
+
+        suspended.Add(new SuspendedTest(fileName, testName, reason));
         continue;
       }
 
@@ -297,7 +385,7 @@ public static partial class SpecParser {
       }
     }
 
-    return tests;
+    return (tests, suspended);
   }
 
   /// <summary>
@@ -384,7 +472,8 @@ public static partial class SpecParser {
   [GeneratedRegex(@"<!--\s*MmTrace\s*-->")]
   private static partial Regex MmTraceDirectiveRegex();
 
-  [GeneratedRegex(@"<!--\s*SelfhostedOnly\s*-->")]
+  /// Group 1 is the reason, empty for the bare spelling — which is refused, not tolerated.
+  [GeneratedRegex(@"<!--\s*SelfhostedOnly\s*:?(.*?)\s*-->")]
   private static partial Regex SelfhostedOnlyDirectiveRegex();
 
   [GeneratedRegex(@"<!--\s*targets:\s*(.*?)\s*-->")]

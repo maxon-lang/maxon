@@ -1,6 +1,7 @@
 ---
 feature: refcount-param-field-borrow-forward
 status: selfhosted
+status-reason: its one case does not compile here (E2003: unknown type `i64`), a type name this compiler does not have (measured 2026-08-06, BATCH29/A3a). shv2 cannot take it either: E2015 for an `Array` member `cursor` outside P1.7's surface.
 keywords: [refcount, borrow, param, self, field, iterator, forward, memory, leak]
 category: memory-safety
 ---

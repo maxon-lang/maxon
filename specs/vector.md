@@ -120,7 +120,7 @@ end 'loop'
 ## Tests
 
 <!-- test: create-zero-initialized -->
-<!-- SelfhostedOnly -->
+<!-- SelfhostedOnly: pins a RequiredIR:x64-windows block in v1's single-section dump format; run here it fails on that alone, this runner's section comparer cannot read a block with no `=== stage` headers (measured 2026-08-06, BATCH29/A3a). -->
 This test pins a `RequiredIR:x64-windows` block in the self-hosted compiler's single-section format (its own instruction selection for the `try/otherwise` default value and inlined `Vector.get`). The C# bootstrap emits structurally different multi-section IR for the same source, so this test is owned by the self-hosted suite.
 ```maxon
 typealias Int = int(i64.min to i64.max)
@@ -323,7 +323,7 @@ end 'main'
 ```
 
 <!-- test: set-and-get -->
-<!-- SelfhostedOnly -->
+<!-- SelfhostedOnly: pins a RequiredIR:x64-windows block in v1's single-section dump format; run here it fails on that alone, this runner's section comparer cannot read a block with no `=== stage` headers (measured 2026-08-06, BATCH29/A3a). -->
 This test pins a `RequiredIR:x64-windows` block in the self-hosted compiler's single-section format (its own instruction selection for the inlined `Vector.set`/`Vector.get` and `try/otherwise`). The C# bootstrap emits structurally different multi-section IR for the same source, so this test is owned by the self-hosted suite.
 ```maxon
 typealias Int = int(i64.min to i64.max)

@@ -211,7 +211,7 @@ end 'main'
 
 
 <!-- test: error.cross-file-bare-name-ambiguous -->
-<!-- SelfhostedOnly -->
+<!-- SelfhostedOnly: pins v1's E3095 cross-file bare-name ambiguity; run here it fails on a stderr mismatch - this compiler reports an equivalent diagnostic with different text (measured 2026-08-06, BATCH29/A3a). -->
 When two different directories both export a function with the same bare name, a third file's unqualified call is ambiguous. E3095 instructs the user to qualify the call with the appropriate directory namespace. The C# bootstrap reports an equivalent E3007 overload-ambiguity at a different point in the pipeline; this test pins the self-hosted diagnostic.
 ```maxon
 // --- file: alpha/dup.maxon

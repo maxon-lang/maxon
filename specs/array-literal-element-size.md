@@ -1,6 +1,7 @@
 ---
 feature: array-literal-element-size
 status: selfhosted
+status-reason: its one case exits 1 here where the spec pins 0, so the non-constant narrow element stride it exists to check is not what this compiler emits (measured 2026-08-06, BATCH29/A3a; observed, not diagnosed). Already re-homed: specs-shv2/array-literal-element-size.md runs it, 1 of 1 active.
 keywords: [array, literal, byte, bytearray, element-size, stride, non-constant]
 category: memory
 ---

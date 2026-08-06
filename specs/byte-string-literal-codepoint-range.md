@@ -1,6 +1,7 @@
 ---
 feature: byte-string-literal-codepoint-range
 status: selfhosted
+status-reason: all 3 cases pin a compile error this compiler does not raise - they compile clean here (measured 2026-08-06, BATCH29/A3a). Already re-homed: specs-shv2/byte-string-literal-codepoint-range.md, 3 of 3 active.
 keywords: [byte, string, literal, codepoint, latin1, diagnostics]
 category: diagnostics
 ---

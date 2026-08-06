@@ -1,6 +1,7 @@
 ---
 feature: advent of compiler optimization
 status: selfhosted
+status-reason: all 4 cases fail here on 16 whole-module RequiredIR blocks written in v1's dump format (a bare module block with no `=== stage` headers), which this runner's section comparer cannot read (measured 2026-08-06, BATCH29/A3a). The programs themselves are portable and now run 4/4 as specs-shv2/advent.md, where minted fragment goldens pin the emitted code instead.
 keywords: abs, absolute value, math
 category: math-intrinsic
 ---

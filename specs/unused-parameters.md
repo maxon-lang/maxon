@@ -1,6 +1,7 @@
 ---
 feature: unused-parameters
 status: selfhosted
+status-reason: 1 of its 6 cases fails here on a stderr mismatch - this compiler's unused-parameter message is not the one pinned (measured 2026-08-06, BATCH29/A3a). Already re-homed: specs-shv2/unused-parameters.md, 6 of 6 active.
 keywords: [parameters, warnings, errors, unused]
 category: diagnostics
 ---

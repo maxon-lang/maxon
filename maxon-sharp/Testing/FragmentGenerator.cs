@@ -18,6 +18,13 @@ public static partial class FragmentGenerator {
   public static string GetSpecCacheDir(string fragmentDir) => Path.Combine(fragmentDir, ".spec-cache");
 
   /// <summary>
+  /// The census of a scan that never happened. Distinct from "nothing was suspended" only in how it
+  /// was reached — there is no spec directory to have suspended anything — and the run it belongs to
+  /// is already failing on that.
+  /// </summary>
+  private static SpecSuspensionCensus EmptyCensus => new([], []);
+
+  /// <summary>
   /// Reserved suffix for the generated batch fragment filename. The full base
   /// name is "<spec>_batch", so a spec named "arithmetic" produces
   /// "arithmetic/arithmetic_batch.test".
@@ -108,13 +115,16 @@ public static partial class FragmentGenerator {
 
     if (!Directory.Exists(specDir)) {
       errors.Add($"Spec directory not found: {specDir}");
-      return new PrepareResult([], 0, errors);
+      return new PrepareResult([], 0, errors, EmptyCensus);
     }
 
     Directory.CreateDirectory(fragmentDir);
 
     var targetKey = target.Triple;
-    var specs = SpecParser.ParseDirectory(specDir, targetKey, includeNetwork);
+    var scan = SpecParser.ParseDirectory(specDir, targetKey, includeNetwork);
+    var specs = scan.Specs;
+    var census = scan.Census;
+    errors.AddRange(scan.Errors);
     var totalTests = specs.Sum(s => s.Tests.Count);
 
     // Directory under fragmentDir where compiled exes go. Persisted on disk
@@ -138,7 +148,7 @@ public static partial class FragmentGenerator {
       }
     }
     if (errors.Count > 0) {
-      return new PrepareResult([], totalTests, errors);
+      return new PrepareResult([], totalTests, errors, census);
     }
 
     // Pre-create all spec fragment directories (and cache subdirectories)
@@ -268,7 +278,7 @@ public static partial class FragmentGenerator {
     Logger.Info(LogCategory.Testing,
       $"Batching: {batchedTestCount} test(s) in {batchCount} batch(es), {singleTestCount} test(s) per-fragment");
 
-    return new PrepareResult([.. workItems], totalTests, errors);
+    return new PrepareResult([.. workItems], totalTests, errors, census);
   }
 
   /// <summary>

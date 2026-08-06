@@ -1,6 +1,7 @@
 ---
 feature: register-allocator
 status: selfhosted
+status-reason: 55 of its 60 cases fail here on whole-module RequiredIR blocks written in v1's dump format, which this runner's section comparer cannot read (measured 2026-08-06, BATCH29/A3a). The programs themselves are portable and now run 60/60 as specs-shv2/register-allocator.md, where minted fragment goldens pin the emitted code instead.
 keywords: [regalloc, registers, spilling, codegen]
 category: dev
 ---

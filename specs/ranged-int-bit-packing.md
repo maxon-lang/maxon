@@ -1,6 +1,7 @@
 ---
 feature: ranged-int-bit-packing
 status: selfhosted
+status-reason: 8 of its 11 cases fail here - 2 on RequiredRdata mismatches and 6 on exit code 99 where the packed element's value is pinned - so sub-byte bit-packing is not what this compiler emits (measured 2026-08-06, BATCH29/A3a). Already re-homed: specs-shv2/ranged-int-bit-packing.md, 11 of 11 active.
 keywords: [array, bit-packing, ranged-int, sub-byte, element-size, packed, bool]
 category: memory
 ---

@@ -1,6 +1,7 @@
 ---
 feature: codegen-internals
 status: selfhosted
+status-reason: 11 of its 32 cases fail here on whole-module RequiredIR blocks written in v1's dump format, which this runner's section comparer cannot read; the other 21 pass (measured 2026-08-06, BATCH29/A3a). shv2 runs 19 of the 32 as authored and needs ByteArray, a `.rdata` typealias surface and per-stage IR pins for the rest, so porting it is a rung of its own.
 keywords: [rdata, cow, managed-memory, strings, stack-probing, signedness, width, i32, f32]
 category: dev
 ---

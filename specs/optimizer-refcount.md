@@ -1,6 +1,7 @@
 ---
 feature: optimizer-refcount
 status: selfhosted
+status-reason: 8 of its 9 cases pass here; the 9th pins the whole-program refcount baseline through a RequiredIR block in v1's dump format this runner's section comparer cannot read (measured 2026-08-06, BATCH29/A3a). shv2 also runs 8 of 9, failing that same case on E3102 (use of moved value), so the baseline itself needs a rung.
 keywords: [refcount, incref, decref, optimization, mm-trace, managed-memory, whole-program]
 category: compiler
 ---

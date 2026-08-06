@@ -1,6 +1,7 @@
 ---
 feature: managed-memory-builtin
 status: selfhosted
+status-reason: 5 of its 11 cases fail here - 4 do not compile at all (E2001 for `try` on a non-call, E2001 for the discard form, E3003 for an unknown parameter name `endIndex`) and 1 exits 2 where 0 is pinned, so the __ManagedMemory surface they pin is not the one this compiler exposes (measured 2026-08-06, BATCH29/A3a). Already re-homed: specs-shv2/managed-memory-builtin.md, 11 of 11 active.
 keywords: [managed_memory, builtin, slab, allocator, memory]
 category: memory-safety
 ---

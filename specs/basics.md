@@ -1,6 +1,7 @@
 ---
 feature: basics
 status: selfhosted
+status-reason: 2 of its 4 cases fail here on whole-module RequiredIR blocks written in v1's dump format, which this runner's section comparer cannot read; the other 2 pass (measured 2026-08-06, BATCH29/A3a). Already re-homed: specs-shv2/basics.md, 3 of 4 active.
 keywords: [main, return, semantic, validation]
 category: basics
 ---
