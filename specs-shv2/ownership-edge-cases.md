@@ -1335,7 +1335,7 @@ end 'main'
 1
 ```
 
-<!-- disabled-test: rc-tuple-primitive-freed -->
+<!-- test: rc-tuple-primitive-freed -->
 <!-- beyond P1.2: tuples not yet in shv2 -->
 A tuple of primitives is heap-allocated and freed at scope exit.
 ```maxon
@@ -1348,7 +1348,7 @@ end 'main'
 10
 ```
 
-<!-- disabled-test: rc-tuple-alias-incref -->
+<!-- test: rc-tuple-alias-incref -->
 <!-- beyond P1.2: tuples not yet in shv2 -->
 Aliasing a tuple increfs it; both variables share the same tuple object.
 ```maxon
@@ -1362,7 +1362,7 @@ end 'main'
 10
 ```
 
-<!-- disabled-test: rc-tuple-reassign-decrefs-old -->
+<!-- test: rc-tuple-reassign-decrefs-old -->
 <!-- beyond P1.2: tuples not yet in shv2 -->
 Reassigning a tuple var decrefs the old tuple before storing the new one.
 ```maxon
@@ -1376,7 +1376,7 @@ end 'main'
 7
 ```
 
-<!-- disabled-test: rc-tuple-with-string-freed -->
+<!-- test: rc-tuple-with-string-freed -->
 <!-- beyond P1.2: tuples not yet in shv2 -->
 A tuple containing a managed type (String); the destructor must cascade to decref the String field.
 ```maxon
@@ -1389,7 +1389,7 @@ end 'main'
 42
 ```
 
-<!-- disabled-test: rc-tuple-return-transfers-ownership -->
+<!-- test: rc-tuple-return-transfers-ownership -->
 <!-- beyond P1.2: tuples not yet in shv2 -->
 Returning a tuple hands the caller a fully-owned value, with no reference left behind for
 either side to release twice or forget to release once.
@@ -1416,7 +1416,7 @@ end 'main'
 8
 ```
 
-<!-- disabled-test: rc-tuple-destructuring-cleanup -->
+<!-- test: rc-tuple-destructuring-cleanup -->
 <!-- beyond P1.2: tuples not yet in shv2 -->
 Destructuring a tuple frees the tuple wrapper while the bindings remain live.
 ```maxon
@@ -1430,7 +1430,7 @@ end 'main'
 30
 ```
 
-<!-- disabled-test: rc-tuple-with-struct-freed -->
+<!-- test: rc-tuple-with-struct-freed -->
 <!-- beyond P1.2: tuples not yet in shv2 -->
 A tuple containing a user-defined struct; the destructor cascades through the tuple into the struct.
 ```maxon
@@ -1481,7 +1481,7 @@ end 'main'
 7
 ```
 
-<!-- disabled-test: rc-tuple-return-destructure-no-crash -->
+<!-- test: rc-tuple-return-destructure-no-crash -->
 <!-- beyond P1.2: tuples not yet in shv2 -->
 Returning a tuple from a function and destructuring it must not crash. Currently the cleanup code attempts to decref the already-freed tuple, causing a segfault.
 ```maxon

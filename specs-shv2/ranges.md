@@ -305,7 +305,7 @@ e
 ```
 
 <!-- disabled-test: ranges.create-iterator -->
-<!-- NOT the range gap, which this case never reaches. MEASURED: `E2015 Unsupported: `try` must be applied to a call — `try f(…)`, `try obj.method(…)`, or `try await p` (got '(')` — a parser restriction on `try` over a parenthesised operand. The first-class `Range` VALUE + iterator protocol is the blocker BEHIND it, and stays unmeasured until `try` accepts this shape (its siblings below DO get the stated error) -->
+<!-- MEASURED 2026-08-06 (BATCH32), flipped and run: `error E2010: Expected ')' but got 'upto'` at 3:19. The blocker is a PARSER restriction (a range is not accepted as a parenthesised/value operand); the first-class `Range` VALUE + iterator protocol sits BEHIND it and stays unmeasured, because the parse never reaches it. NOT the tuple gap: `specs-shv2/tuples.md` runs 44/44. -->
 A range used outside a for-in header is a first-class value with `createIterator()`.
 ```maxon
 function main() returns ExitCode
@@ -322,7 +322,7 @@ end 'main'
 ```
 
 <!-- disabled-test: ranges.inclusive-create-iterator -->
-<!-- TUPLES + `Map` rung — first-class `Range` VALUE + the iterator protocol. `withIterator()` yields `(Iterator, Element)` TUPLES and shv2 has no tuple type, so this is blocked on the same missing mechanism `Map` is; re-attributed from P1.8 when Slice E closed the rung (2026-07-28). -->
+<!-- MEASURED 2026-08-06 (BATCH32): `error E2010: Expected ')' but got 'to'` at 3:19, the same parser restriction as `ranges.create-iterator` in the inclusive spelling. NOT the tuple gap. -->
 `to` produces an inclusive Range — `createIterator()` visits the endpoint.
 ```maxon
 function main() returns ExitCode
@@ -339,7 +339,7 @@ end 'main'
 ```
 
 <!-- disabled-test: ranges.with-iterator -->
-<!-- TUPLES + `Map` rung — first-class `Range` VALUE + the iterator protocol. `withIterator()` yields `(Iterator, Element)` TUPLES and shv2 has no tuple type, so this is blocked on the same missing mechanism `Map` is; re-attributed from P1.8 when Slice E closed the rung (2026-07-28). -->
+<!-- MEASURED 2026-08-06 (BATCH32): `error E2010: Expected ')' but got 'upto'` at 3:24. The previous reason blamed tuples (`withIterator()` yields `(Iterator, Element)`); shv2 HAS tuples and this case never reaches them, stopping at the same parser restriction as its siblings. -->
 `(start upto end).withIterator()` exposes the underlying iterator inside the loop.
 ```maxon
 function main() returns ExitCode
@@ -359,7 +359,7 @@ end 'main'
 ```
 
 <!-- disabled-test: ranges.empty-create-iterator-throws -->
-<!-- TUPLES + `Map` rung — first-class `Range` VALUE + the iterator protocol. `withIterator()` yields `(Iterator, Element)` TUPLES and shv2 has no tuple type, so this is blocked on the same missing mechanism `Map` is; re-attributed from P1.8 when Slice E closed the rung (2026-07-28). -->
+<!-- MEASURED 2026-08-06 (BATCH32): `error E2010: Expected ')' but got 'upto'` at 3:19, the same parser restriction. NOT the tuple gap. -->
 An empty exclusive range fails to construct an iterator.
 ```maxon
 function main() returns ExitCode
@@ -372,7 +372,7 @@ end 'main'
 ```
 
 <!-- disabled-test: ranges.empty-inclusive-create-iterator-throws -->
-<!-- TUPLES + `Map` rung — first-class `Range` VALUE + the iterator protocol. `withIterator()` yields `(Iterator, Element)` TUPLES and shv2 has no tuple type, so this is blocked on the same missing mechanism `Map` is; re-attributed from P1.8 when Slice E closed the rung (2026-07-28). -->
+<!-- MEASURED 2026-08-06 (BATCH32): `error E2010: Expected ')' but got 'to'` at 3:19, the same parser restriction. NOT the tuple gap. -->
 An empty inclusive range (end < start) also throws.
 ```maxon
 function main() returns ExitCode
@@ -385,7 +385,7 @@ end 'main'
 ```
 
 <!-- disabled-test: ranges.let-binding -->
-<!-- TUPLES + `Map` rung — first-class `Range` VALUE + the iterator protocol. `withIterator()` yields `(Iterator, Element)` TUPLES and shv2 has no tuple type, so this is blocked on the same missing mechanism `Map` is; re-attributed from P1.8 when Slice E closed the rung (2026-07-28). -->
+<!-- MEASURED 2026-08-06 (BATCH32): `error E2001: unexpected token: 'upto'` at 3:13, a range is not a value the binder accepts. Same restriction one door over. NOT the tuple gap. -->
 A range can be bound to a variable and iterated via the standard for-in path.
 ```maxon
 function main() returns ExitCode
