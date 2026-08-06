@@ -32,8 +32,7 @@ This mirrors **E3095** for function-name ambiguity — same model, different reg
 ## Tests
 
 <!-- test: error.exported-typealias-collision -->
-<!-- SelfhostedOnly -->
-Two files in different directories both export `Score`. A bare reference from a third file is rejected with E3063. The self-hosted compiler emits the diagnostic at the parse site; the C# bootstrap reports an equivalent E3063 at the same point in the pipeline but with a slightly different candidate-ordering guarantee, so this test pins the self-hosted message.
+Two files in different directories both export `Score`. A bare reference from a third file is rejected with E3063. shv2 emits the diagnostic at the parse site, with exactly the candidate ordering pinned below, and this suite runs the case (measured 2026-08-06, BATCH29/A3a). The `/specs` copy is suspended and says so there: the bootstrap raises no ambiguity at all for this shape.
 ```maxon
 // --- file: api/types.maxon
 export typealias Score = int(0 to 100)
@@ -53,7 +52,6 @@ error E3063: app/specs/fragments/typealias-collision/error.exported-typealias-co
 
 
 <!-- test: exported-typealias-collision-qualified -->
-<!-- SelfhostedOnly -->
 Two files in different directories both export `Score`. A reader file disambiguates by writing `api.Score` and `legacy.Score`. Both qualified forms resolve to the alias declared in the matching directory.
 ```maxon
 // --- file: api/types.maxon
@@ -75,7 +73,6 @@ end 'main'
 
 
 <!-- test: exported-typealias-collision-multi-segment-namespace -->
-<!-- SelfhostedOnly -->
 A collision between a deeply-nested file (`lib/fmt/types.maxon`) and a top-level file (`legacy/types.maxon`) is disambiguated via the full directory chain — `lib.fmt.Score` vs `legacy.Score`. Confirms the parser's dotted-name walk consumes multi-segment qualifiers.
 ```maxon
 // --- file: lib/fmt/types.maxon
@@ -138,7 +135,6 @@ end 'main'
 
 
 <!-- test: nested-export-shadowed-by-enclosing-dir -->
-<!-- SelfhostedOnly -->
 Directory-as-module precedence: a file in `Compiler/` exports `Tally`, and a
 file in the nested `Compiler/Coverage/` subdirectory also exports `Tally`. A
 bare reference from a `Compiler/` file resolves to the enclosing-directory
@@ -165,8 +161,7 @@ end 'main'
 
 
 <!-- test: exported-typealias-file-private-doesnt-collide -->
-<!-- SelfhostedOnly -->
-A file-private `typealias` is invisible across files. When one file exports `Score` and another file declares a file-private `Score`, a third file using bare `Score` resolves to the exported one without ambiguity — the file-private alias isn't reachable from outside its declaring file. The C# bootstrap currently conflates file-private types across files (a single `NonExportedTypeNames` set), so this scenario only fully resolves in the self-hosted compiler.
+A file-private `typealias` is invisible across files. When one file exports `Score` and another file declares a file-private `Score`, a third file using bare `Score` resolves to the exported one without ambiguity — the file-private alias isn't reachable from outside its declaring file.
 ```maxon
 // --- file: api/types.maxon
 export typealias Score = int(0 to 100)

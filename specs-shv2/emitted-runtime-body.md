@@ -23,7 +23,7 @@ exit code, nor the leak gate, nor any golden can see it.
 ### Naming a body to render: ```RequiredRuntime
 
 A test opts one or more emitted runtime functions INTO its own golden with a
-```RequiredRuntime block, one name per line:
+`RequiredRuntime` block, one name per line:
 
 ```
 __str_bytes_view

@@ -1155,7 +1155,6 @@ Stack trace:
 <!-- disabled-test: force-segfault-macos -->
 <!-- Beyond: arm64-macos target -->
 <!-- targets: arm64-macos -->
-<!-- SelfhostedOnly -->
 ### Deliberate access violation produces a clean panic (arm64-macOS)
 ```maxon
 function main() returns ExitCode

@@ -665,7 +665,7 @@ end 'TargetPreferredText'
 export function parseSpecFile(path FilePath, effectiveTargetKey String) returns SpecFile throws CompileError
 	let content = try File.readText(path) otherwise throw CompileError.readError(path)
 	let lines = content.split("\n")
-	let extracted = extractTests(lines, effectiveTargetKey: effectiveTargetKey)
+	let extracted = extractTests(lines, specPath: path, effectiveTargetKey: effectiveTargetKey)
 	return SpecFile.create(parseStatus(lines), tests: extracted.tests, disabledCount: extracted.disabledCount)
 end 'parseSpecFile'
 
@@ -734,7 +734,7 @@ end 'endsActiveTestRegion'
 // HEADING (or EOF). `## Deferred` is that stop, so no deferred test is ever reached — see
 // the deferred-skip convention at the top of this file, and `RegionEndHeadings` for why
 // an ordinary section heading must NOT end the region.
-function extractTests(lines StringArray, effectiveTargetKey String) returns ExtractedTests
+function extractTests(lines StringArray, specPath FilePath, effectiveTargetKey String) returns ExtractedTests
 	var tests = SpecTestArray.create()
 	var disabledCount = 0 as DisabledTestCount
 	let lineCount = lines.count()
@@ -774,9 +774,9 @@ function extractTests(lines StringArray, effectiveTargetKey String) returns Extr
 		// mode of that disagreement is a shelved case silently RUNNING.
 		if line.contains(DisabledTestMarker) 'isDisabledMarker'
 			disabledCount = disabledCount + 1
-			i = scanTestFromMarker(lines, markerIndex: i, markerLine: line, tests: tests, active: false, effectiveTargetKey: effectiveTargetKey)
+			i = scanTestFromMarker(lines, markerIndex: i, markerLine: line, tests: tests, active: false, specPath: specPath, effectiveTargetKey: effectiveTargetKey)
 		end 'isDisabledMarker' else if line.contains(TestMarker) 'isMarker'
-			i = scanTestFromMarker(lines, markerIndex: i, markerLine: line, tests: tests, active: true, effectiveTargetKey: effectiveTargetKey)
+			i = scanTestFromMarker(lines, markerIndex: i, markerLine: line, tests: tests, active: true, specPath: specPath, effectiveTargetKey: effectiveTargetKey)
 		end 'isMarker' else 'notMarker'
 			i = i + 1
 		end 'notMarker'
@@ -807,7 +807,7 @@ end 'extractTests'
 // block to the outer loop, which — finding no marker in it — would walk over it line by
 // line and silently drop the assertion. A spec that pins a panic would then pass on the
 // exit code alone, which is the one failure mode a panic spec exists to catch.
-function scanTestFromMarker(lines StringArray, markerIndex LineIndex, markerLine String, tests SpecTestArray, active bool, effectiveTargetKey String) returns LineIndex
+function scanTestFromMarker(lines StringArray, markerIndex LineIndex, markerLine String, tests SpecTestArray, active bool, specPath FilePath, effectiveTargetKey String) returns LineIndex
 	let lineCount = lines.count()
 	let name = markerValue(markerLine)
 	var source = ""
@@ -863,6 +863,24 @@ function scanTestFromMarker(lines StringArray, markerIndex LineIndex, markerLine
 			i = i + 1
 			continue
 		end 'argsMarker'
+
+		// ⛔⛔ **A PROSE SENTENCE THAT HAPPENS TO BEGIN WITH A FENCE PREFIX IS NOT A FENCE, AND EVERY ARM
+		// BELOW MATCHES BY PREFIX.** `` ```RequiredRuntime block, one name per line: `` — a real line in
+		// `emitted-runtime-body.md`, where an author meant inline code and typed three backticks —
+		// `startsWith(RequiredRuntimeFence)`, so it would be CONSUMED as a `RequiredRuntime` block and its
+		// prose read as function names. Today that line is harmless for one reason only: it sits above
+		// `## Tests`, where this scan never reaches. That is a coincidence of where it happens to sit, not
+		// a property of anything, and the terminating arm below has just raised the price of tripping it
+		// from a silent skip to a whole-suite abort.
+		//
+		// The rule is derived rather than listed, so it needs no second copy of the fence vocabulary: EVERY
+		// tag in this grammar is a single token, and the shape being caught is a SENTENCE. Asked before the
+		// arms because the arms are what would claim it, and for a DISABLED case as well as a live one —
+		// this is a line that is not a fence at all, which is true however the case is marked, and
+		// `pushRuntimeNames` panics just as hard while scanning a shelved case.
+		if fenceOpenCarriesProse(line) 'proseLineOpeningWithAFencePrefix'
+			panic("SpecParser: {specPath.toString()}:{i + 1}: this line begins with a fence delimiter and its info string contains a space, so it is a PROSE line that every fence arm would claim by prefix and read as a block body: '{line.trim()}'. Every fence tag in this grammar is a single token. Write the name as inline code (one backtick) if it is prose, or make the line a real fence")
+		end 'proseLineOpeningWithAFencePrefix'
 
 		// CompilerError MUST be checked before Source: "```maxoncstderr" also
 		// startsWith "```maxon", so the source arm would otherwise consume it. It is the ONLY ordering
@@ -958,7 +976,7 @@ function scanTestFromMarker(lines StringArray, markerIndex LineIndex, markerLine
 		// carries claims nothing — it is a record kept for the rung that will enable it, which is exactly
 		// what the disabled form is for. Refusing there would delete the notes instead of the lies.
 		if active and isUnimplementedFenceOpen(line) 'unimplementedFence'
-			panic("SpecParser: live test '{name}' opens a fence this parser does not implement: '{line.trim()}'. The arms above are the whole set it can read, so this block is silently skipped: it pins NOTHING while reading as coverage. Delete it (what pins the emitted code here is the minted fragment golden), implement the fence, or shelve the case as `disabled-test:` naming the rung that unlocks it")
+			panic("SpecParser: {specPath.toString()}:{i + 1}: live test '{name}' opens a fence this parser does not implement: '{line.trim()}'. The arms above are the whole set it can read, so this block is silently skipped: it pins NOTHING while reading as coverage. Delete it (what pins the emitted code here is the minted fragment golden), implement the fence, or shelve the case as `disabled-test:` naming the rung that unlocks it")
 		end 'unimplementedFence'
 
 		i = i + 1
@@ -984,7 +1002,7 @@ function scanTestFromMarker(lines StringArray, markerIndex LineIndex, markerLine
 		// the compile fails before the printer runs, so neither the render nor the printer's own
 		// misspelling refusal ever happens.
 		if sectionPins.count() > 0 or runtimeNames.count() > 0 'pinsOnARejectedCase'
-			panic("SpecParser: test '{name}' expects a COMPILE ERROR (a ```maxoncstderr block) and also carries a {RequiredDataFence}/{RequiredRdataFence}/{RequiredRuntimeFence} block. A case that never links produces no image to read a section out of and no IR to render a body into, so that block cannot fail and pins nothing. Drop it, or split the pin into a case that compiles")
+			panic("SpecParser: {specPath.toString()}: test '{name}' expects a COMPILE ERROR (a ```maxoncstderr block) and also carries a {RequiredDataFence}/{RequiredRdataFence}/{RequiredRuntimeFence} block. A case that never links produces no image to read a section out of and no IR to render a body into, so that block cannot fail and pins nothing. Drop it, or split the pin into a case that compiles")
 		end 'pinsOnARejectedCase'
 
 		tests.push(SpecTest.create(name, source: source, expectation: SpecExpectation.compilerError(compilerError.resolved()), targets: targets, runtimeNames: runtimeNames, programArgs: programArgs))
@@ -998,13 +1016,29 @@ function scanTestFromMarker(lines StringArray, markerIndex LineIndex, markerLine
 	let resolvedStdout = SpecStdout.pinned(stdout.resolved()) if stdout.isPinned() else SpecStdout.unpinned
 	let resolvedStderr = SpecStderr.pinned(stderr.resolved()) if stderr.isPinned() else SpecStderr.unpinned
 	if not pinsAnyResult(exitCode, stderr: resolvedStderr, stdout: resolvedStdout, sectionPins: sectionPins) 'pinsNothing'
-		panic("SpecParser: test '{name}' has a ```maxon block but no result block — add an ```exitcode, ```stdout, ```stderr, ```maxoncstderr, ```RequiredData or ```RequiredRdata block, or shelve the case as `<!-- disabled-test: {name} -->`. A case with nothing to check is not a test, and running it would report PASS for a program nothing looked at. (A target-qualified block — `{TargetStdoutFencePrefix}<target>` and its two twins — counts only on the target it NAMES, so a case whose only result block names another target has none here)")
+		panic("SpecParser: {specPath.toString()}: test '{name}' has a ```maxon block but no result block — add an ```exitcode, ```stdout, ```stderr, ```maxoncstderr, ```RequiredData or ```RequiredRdata block, or shelve the case as `<!-- disabled-test: {name} -->`. A case with nothing to check is not a test, and running it would report PASS for a program nothing looked at. (A target-qualified block — `{TargetStdoutFencePrefix}<target>` and its two twins — counts only on the target it NAMES, so a case whose only result block names another target has none here)")
 	end 'pinsNothing'
 
 	tests.push(SpecTest.create(name, source: source, expectation: SpecExpectation.run(exitCode, stderr: resolvedStderr, stdout: resolvedStdout, sectionPins: sectionPins), targets: targets, runtimeNames: runtimeNames, programArgs: programArgs))
 
 	return i
 end 'scanTestFromMarker'
+
+// Whether `line` opens a fence whose info string carries WHITESPACE — i.e. a prose sentence starting with
+// three backticks rather than one of this grammar's fences, every one of which is a single token. Asked
+// BEFORE the arms, because it is the arms' prefix matching that would misread it.
+//
+// The delimiter itself holds no space, so after trimming, any space or tab in the line is in the info
+// string. A leading-whitespace indent is not the info string and is trimmed off first.
+function fenceOpenCarriesProse(line String) returns bool
+	let trimmed = line.trim()
+
+	if not trimmed.startsWith(FenceDelimiter) 'notAFence'
+		return false
+	end 'notAFence'
+
+	return trimmed.contains(" ") or trimmed.contains("\t")
+end 'fenceOpenCarriesProse'
 
 // Whether `line` opens a block `scanTestFromMarker` has no reader for — asked only AFTER every fence arm
 // has declined it, so a tag with an arm never reaches here.
