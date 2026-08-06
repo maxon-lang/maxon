@@ -820,6 +820,68 @@ function whitelistedStdlibModules(stdlibDir FilePath) returns MaxonSourcePathSet
 	//     half-renamed — and it is a CHECK, not something to clear in advance.
 	//   • It has NO imports and calls into no other module.
 	try listWhitelistedModule(stdlibDir, relative: "Build.maxon", into: listed)
+	// ⭐⭐ **`stdlib/Log.maxon` — AND IT IS THE ENTRY THAT FOUND THE INVARIANT'S HOLE, `S2g`+`S2h`.**
+	// `Log.trace(key)` plus the capture trio: a trace-key recorder for stdlib instrumentation, not a
+	// logger. It is the callee the six `helpers/sort/*` files name (`Log.trace`, e.g.
+	// `driftsort.maxon:154`), so listing it is the first half of making those bodies reachable at all.
+	//
+	// ⚠⚠ **IT IS THE FIRST LISTED MODULE WITH MUTABLE TOP-LEVEL STATE, AND ON ITS FIRST ATTEMPT IT BROKE
+	// THIS FILE'S BYTE-NEUTRALITY INVARIANT OUTRIGHT.** `var capturing = false` and
+	// `var captured = TraceKeyArray.create()` (`:26-27`). MEASURED by a same-worktree A/B, one trivial
+	// program, two binaries: `function main() returns ExitCode / return 7` emitted **1,592 code bytes
+	// without this entry and 2,978 with it — +1,386, +87%** — in a program that never spells `Log`.
+	// The entry was WITHDRAWN rather than landed, and the blocker filed as `S2h`.
+	//
+	// ⭐ **THE CAUSE WAS NOT THIS MODULE — IT WAS THAT THE TWO MECHANISMS KEEPING AN UNUSED MODULE FREE
+	// PRUNE THE WRONG THINGS.** DFE prunes FUNCTIONS; `StdlibFacts.unreachable` prunes LOWERING; a
+	// top-level `var` with an initializer runs in `__module_init`, which is NEITHER.
+	// `DeadGlobalElimination` had no reachability term at all, and its own header had predicted this exact
+	// case by name while asserting it was unreachable *"in any case"* — both halves of that reason had
+	// expired. `S2h` gave the pass the term. **Re-measured after it: 1,592 with this entry — Δ0.**
+	// ⇒ **the entry is listed here only because that A/B now reads zero**, and any future entry for a
+	// module with top-level state owes the same measurement rather than the same argument.
+	//
+	// It clears every entry in this file's collision rule, each CHECKED rather than assumed:
+	//   • FREE FUNCTIONS (E3006): it declares NONE — all four are `static`s of `Log` — so the clause, and
+	//     with it the SILENT bare-builtin shadow that cost `Sleep.maxon` a builtin retirement, is vacuous.
+	//     Checked against `Parser.parseCallNamed`'s bare-name `if` chain AT THE CHAIN, in BOTH directions:
+	//     it declares nothing the chain can see, and it CONSUMES nothing the chain claims — every call in
+	//     its body is receiver-dot on an `Array` (`push`/`clear`/`clone`).
+	//   • TYPE NAMES: `Log` is nominal, so a user program spelling it wins and this one moves into the
+	//     reserved space (A1s wave 2, directory-scoped by N1). No other listed module declares it, checked
+	//     AT THE SOURCE rather than against a roster transcribed here.
+	//   • TYPE-NAME-vs-BUILTIN, the one shape still SILENT: `Log` is on neither
+	//     `TypeResolution.isCompilerOwnedTypeName` nor `builtinTypeNameTag`, and the spelling appears
+	//     NOWHERE in shv2's own compiler sources as a type, so nothing synthesizes a declaration of it.
+	//   • `TraceKeyArray = Array with String` (`:24`) is a GENERIC-INSTANCE alias, file-local per alias
+	//     FORM exactly as `CommandLine`'s `StringArray` is — NOT ranged. This module declares no ranged
+	//     alias at all, so the clause that moved `File.maxon`'s golden through a declared `Byte` has
+	//     nothing to weigh.
+	//   • The "type-parameterized by a user declaration" clause: its body passes no `__ManagedMemory`.
+	//   • E3112 fires only when a user program actually contests a spelling; the surface is four method
+	//     names (`trace`, `startCapture`, `stopCapture`, `fired`) and two labels (`key`, `capturedKeys`).
+	//   • It has NO imports and calls into no other stdlib module.
+	//   • ⭐⭐ **TOP-LEVEL BINDING NAMES — THE ONE CLAUSE NO ENTRY ABOVE HAS EVER EXERCISED, because this is
+	//     the first listed module that HAS one, and so the one clause that could not be inherited.** A
+	//     global's name is FLAT and PROJECT-WIDE (`ProgramSignatures.isRedeclaredBinding`), which is a
+	//     RULING and not an implementation detail — so an EXPORTED `capturing` here would be the same name
+	//     as a user's, declared twice. Neither is exported: both are file-private, so each is filed under a
+	//     key carrying its declaring path (`topLevelStorageKey`) and a user program may still declare its
+	//     own. **MEASURED both ways rather than read off the rule** — `var captured = "abcd"` /
+	//     `var capturing = true` in a program that never mentions `Log` compiles and answers 4; a program
+	//     declaring its own `captured` array AND driving `Log.startCapture`/`trace`/`stopCapture` keeps the
+	//     two apart and answers 3. ⇒ **an entry for a module with an EXPORTED top-level binding owes an
+	//     E3006 argument this one does not.**
+	//   • Its two `.data` labels are minted from the bare NAMES (`uniqueDataLabel`), and the arena's order
+	//     decides which claimant of a name gets the unsuffixed label — so listing a module with top-level
+	//     state is the one kind of entry that could rename a USER global's emitted symbol. MEASURED: it does
+	//     not. A user `var captured` still emits `__data_captured`, from a source path sorting both before
+	//     and after the checkout's `stdlib/`, because the root's own declarations are swept first.
+	//   • ⚠ It is what makes `storedGlobalCount` non-zero on EVERY compile, which permanently retires
+	//     `DeadGlobalElimination.liveGlobalLabels`' `storedGlobals == 0` early-return. That is a per-compile
+	//     CPU cost with no allocation behind it, so it is invisible to the memory columns — see that
+	//     function's header, where the consequence is written down beside the guard it disarms.
+	try listWhitelistedModule(stdlibDir, relative: "Log.maxon", into: listed)
 	return listed
 end 'whitelistedStdlibModules'
 

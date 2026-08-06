@@ -609,6 +609,24 @@ export union TopLevelConstant
 	factoryValue(callee ByteArray, args ConstFactoryArgumentArray, returnType MaxonType)
 end 'TopLevelConstant'
 
+// ⭐⭐ **DOES A TOP-LEVEL DECLARATION'S INITIALIZER RUN THE PROGRAM'S OWN CODE, AND WHOSE?** — ONE
+// projection of the union above, because two readers need different halves of the same fact and a
+// disagreement between them is not a missed optimization but a compiler panic:
+//
+//   * `ProgramSignatures.contributesStorage` reads the BOOLEAN — a global whose initializer calls keeps
+//     its slot however dead it looks, because the call may print, mutate or throw.
+//   * `StdlibSource.deriveStdlibFacts` reads the CALLEE — it must ROOT it, since the body that will make
+//     the call (`__module_init`) does not exist yet when the reachability walk runs, and is called by the
+//     entry stub rather than from `main` even once it does.
+//
+// A boolean beside a separate callee scan would let an outcome appended past `factoryValue` be KEPT by the
+// first and left UNROOTED by the second — which is `lowerMaxonToStd` skipping a body that
+// `DeadFunctionElimination` then reaches, i.e. `requireUnreachableStdlibStayedDead`.
+export union TopLevelInitializerCall
+	none
+	calls(callee ByteArray)
+end 'TopLevelInitializerCall'
+
 // ONE folded ELEMENT of a top-level array literal (P1.7 slice 2b) — what `__module_init` materializes and
 // pushes. Deliberately NOT `ConstInitializerValue` (which would make it recursive): a NESTED array literal
 // is not an element an array literal accepts, in a function body or here, so the type says so rather than
@@ -7259,21 +7277,48 @@ export type ProgramSignatures
 		// dead". Keeping the slot is the conservative half of that — a dead 8-byte word, never a lost effect
 		// — and it is deliberately NOT the oracle's `callee.EndsWith(".create")` naming heuristic, which
 		// makes renaming a method change whether its side effects run (see that header).
-		if self.declOutcomeCalls(decl) 'initializerRunsUserCode'
-			return true
-		end 'initializerRunsUserCode'
+		match self.declInitializerCall(decl) 'initializer'
+			none then break 'initializer'
+			calls then return true
+		end 'initializer'
 
 		return live.contains(self.dataLabelOf(decl))
 	end 'contributesStorage'
 
-	// Does this declaration's initializer RUN USER CODE? The one property that keeps a global out of dead
-	// elimination, asked of the outcome rather than of a name so it cannot be answered by a spelling.
-	function declOutcomeCalls(decl TopLevelDecl) returns bool
+	// Does this declaration's initializer RUN USER CODE, and whose? Asked of the OUTCOME rather than of a
+	// name so it cannot be answered by a spelling, and answered ONCE for both readers — see
+	// `TopLevelInitializerCall`, whose header carries why the two halves may not be derived separately.
+	//
+	// A range arm over the whole union, ending at the current last variant, so an outcome appended past
+	// `factoryValue` FAILS TO COMPILE here rather than being silently filed as "does not call".
+	function declInitializerCall(decl TopLevelDecl) returns TopLevelInitializerCall
 		match decl.outcome 'state'
-			pending to containerValue then return false
-			factoryValue then return true
+			pending to containerValue then return TopLevelInitializerCall.none
+			factoryValue(callee, _, _) then return TopLevelInitializerCall.calls(callee)
 		end 'state'
-	end 'declOutcomeCalls'
+	end 'declInitializerCall'
+
+	// ⭐ **EVERY FUNCTION A TOP-LEVEL INITIALIZER CALLS**, in ARENA order — the roots
+	// `StdlibSource.deriveStdlibFacts` walks from BESIDE `main`, because `__module_init` is synthesized
+	// after that walk and is called by the entry stub rather than from `main`. Without them a stdlib
+	// factory named only by an initializer is filed unreachable, its body is never lowered, and
+	// dead-function elimination — which DOES root `__module_init` — reaches the empty function it left.
+	//
+	// ⭐ **IT TAKES NO `LiveGlobalLabelSet`, AND NEEDING NONE IS WHAT BREAKS THE ORDERING CYCLE.** The walk
+	// this feeds runs BEFORE `liveGlobalLabels`, which runs before `installManagedGlobalInit`; a query here
+	// that depended on liveness would close the loop. It does not have to: a declaration whose initializer
+	// calls contributes storage whatever names it (`contributesStorage`, one arm above), so the filter that
+	// walk is computing cannot change this answer.
+	export function globalInitCallees() returns ByteArrayArray
+		var callees = ByteArrayArray.create()
+		for i in 0 upto self.decls.count() 'each'
+			match self.declInitializerCall(self.declAt(i)) 'initializer'
+				none then break 'initializer'
+				calls(callee) then callees.push(callee)
+			end 'initializer'
+		end 'each'
+		return callees
+	end 'globalInitCallees'
 
 	// EVERY LIVE top-level global in the program, in ARENA (declaration) order, with the label and value
 	// its `.data` slot carries — the door the backend's data-section layout asks through.

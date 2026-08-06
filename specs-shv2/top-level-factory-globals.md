@@ -13,7 +13,7 @@ A top-level binding may be initialized by a **user static factory call** —
 initializer form that is not a fold: nothing is evaluated at compile time, and the record is built
 before `main` by `__module_init`, which materializes each argument and then makes an ordinary call.
 
-`map-struct-bytearray.md` is the canonical spec that admits the form. This file pins the three rules
+`map-struct-bytearray.md` is the canonical spec that admits the form. This file pins the four rules
 that form has to obey and that its own programs cannot reach, because all of its arguments are
 consumed and all of its declarations are in one file:
 
@@ -33,6 +33,15 @@ wrote, so the pass that checks a call's visibility exempts every call it makes; 
 belongs to the initializer's own walk, where the declaring file of the BINDING is known exactly. It
 reports the same codes a call in a function body gets: E3008 for a file-private callee, E3088 for a
 module-scoped one.
+
+**4. A factory in a LISTED STDLIB MODULE is REACHED by the initializer.** Every pre-elimination pass
+skips a stdlib function the program cannot reach (`StdlibFacts.unreachable`), and that reachability
+is walked from `main` over the program's own call edges. `__module_init` is not called from `main` —
+the entry stub calls it — so a stdlib factory named ONLY by a top-level initializer has to be reached
+through the DECLARATION that causes the call, not through the synthesized body that makes it. Getting
+this wrong is not a wrong answer but a compiler panic: dead-function elimination roots
+`__module_init`, reaches the factory the pre-elimination passes were told was dead, and
+`requireUnreachableStdlibStayedDead` fires on a program with nothing wrong with it.
 
 ## Tests
 
@@ -219,4 +228,38 @@ end 'main'
 ```
 ```maxoncstderr
 error E3088: bin/<fragment>:12:19: function 'Database.create' is module-scoped and not visible from this directory
+```
+
+<!-- test: stdlib-factory-reached-from-the-initializer -->
+`FilePath.separator()` is a listed stdlib module's static, and this program names it NOWHERE else —
+so the only edge that reaches it is the top-level initializer's. The separator is one byte on every
+host (`\` on Windows, `/` elsewhere), which is what makes the exit code a portable assertion that the
+factory actually RAN rather than merely compiled.
+```maxon
+var sep = FilePath.separator()
+
+function main() returns ExitCode
+	return sep.byteLength() as ExitCode
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: stdlib-factory-with-arguments-reached-from-the-initializer -->
+The same edge with a record ARGUMENT and a struct result: `BuildConfig.create` is reached only from
+this initializer, and the `Array with String` built for `sources` is materialized, borrowed and freed
+inside `__module_init` — so the exit-101 gate is asserting the argument cleanup on a callee whose body
+the compiler had to be told to lower.
+```maxon
+typealias Sources = Array with String
+
+var cfg = BuildConfig.create(name: "app", output: "app.exe", sources: Sources.create(), optimize: false, debug_info: false)
+
+function main() returns ExitCode
+	return cfg.sources.count() as ExitCode
+end 'main'
+```
+```exitcode
+0
 ```

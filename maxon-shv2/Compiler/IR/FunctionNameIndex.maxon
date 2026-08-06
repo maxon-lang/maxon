@@ -28,11 +28,18 @@
 //     index; no synthesizer has appended to the module yet. It is the one site that is not in this class —
 //     and it builds its index HERE anyway, because another spelling of the same loop costs more than the
 //     one integer compare does.
-//   * `StdlibSource.reachableMaxonFunctionNames` — Maxon tier, AFTER `installManagedGlobalInit`. It can see
-//     a `stdlib/Builtins.maxon` declaration of `__module_init` / `__maxon_global_cleanup` against the
-//     compiler's own.
+//   * `StdlibSource.reachableMaxonFunctionNames` — Maxon tier, and since S2h it too runs BEFORE
+//     `installManagedGlobalInit`, so **it can see NONE** for the reason above. ⚠ It used to be the earliest
+//     site that could meet a `stdlib/Builtins.maxon` declaration of `__module_init` /
+//     `__maxon_global_cleanup` against the compiler's own, and moving it did not lose that refusal: the next
+//     site sees the identical pair, and `DeadFunctionElimination.markCompilerOwnedRoot` catches the case with
+//     no pair to count. **That is exactly why this list must be read before an index site is moved** — what
+//     a site can see is a property of its POSITION, and the position is now `Compiler.compileToCodeResult`'s
+//     ordering decision rather than this walk's.
 //   * `IR/PassPipeline.run` — Maxon tier, ONCE for the whole pipeline, over the array `resolveTypes`,
-//     `semanticCheck` and `lowerMaxonToStd` all walk (A2l). Same pair as above. It replaced a build inside
+//     `semanticCheck` and `lowerMaxonToStd` all walk (A2l), and the FIRST site downstream of
+//     `installManagedGlobalInit`. It can see a declaration of `__module_init` / `__maxon_global_cleanup`
+//     against the compiler's own. It replaced a build inside
 //     `SemanticCheck.buildParamMutationSummary`, which sat AFTER two other name-keyed maps that pass builds —
 //     so those two were right by ORDERING and could not say so; they now take this index as an argument.
 //   * `IR/Std/DeadFunctionElimination` — Std tier, after every `install*Runtime`, and TWICE: once over the

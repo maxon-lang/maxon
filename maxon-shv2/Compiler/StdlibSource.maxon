@@ -143,8 +143,16 @@ export type StdlibFacts
 end 'StdlibFacts'
 
 // ⭐ DERIVE BOTH FACTS. Runs once per compile, right after the module is merged and before any pass that
-// reads either of them.
-export function deriveStdlibFacts(project Project, module MaxonModule) returns StdlibFacts throws CompileError
+// reads either of them — and before `DeadGlobalElimination.liveGlobalLabels`, which is the earliest
+// reader (`Compiler.compileToCodeResult`).
+//
+// ⭐ **IT TAKES `signatures` FOR ONE THING: THE FUNCTIONS A TOP-LEVEL INITIALIZER CALLS.** Those calls are
+// made by `__module_init`, which does not exist yet at this point and is called by the entry STUB rather
+// than from `main` once it does — so neither the walk below nor its short-circuit can see the edge in any
+// body. It is read off the DECLARATION that causes the call instead (`ProgramSignatures.globalInitCallees`),
+// which is also what lets this run before the synthesis: see that function for why the answer does not
+// depend on the global liveness this derivation is about to decide.
+export function deriveStdlibFacts(project Project, module MaxonModule, signatures ProgramSignatures) returns StdlibFacts throws CompileError
 	// A prior diagnostic leaves the merged module and its registries describing a program that is already
 	// refused, so deriving anything from it can only be noise — the refusal the four siblings around this
 	// call already make (`checkConformance`, `checkWhereConstraints`, `checkTypeSymbolNamespace`,
@@ -166,6 +174,10 @@ export function deriveStdlibFacts(project Project, module MaxonModule) returns S
 		stdlibSet.insert(name)
 	end 'seed'
 
+	// Built once, here, and handed to both walks below: the short-circuit and the precise walk ask
+	// different questions of the same list, and a second build would be the same arena walked twice.
+	let initCallees = signatures.globalInitCallees()
+
 	// ⭐ COMMON-CASE SHORT-CIRCUIT. If no op in USER code REACHES stdlib, no stdlib function is
 	// reachable at all, so ALL of them are unreachable and NONE can be blamed for a substrate — reached by
 	// ONE allocation-free O(ops) scan, WITHOUT the O(functions) name->index map and reached-array the
@@ -173,7 +185,7 @@ export function deriveStdlibFacts(project Project, module MaxonModule) returns S
 	// memory cost of loading stdlib source into a program that never touches it, so skipping it keeps the
 	// cost a per-compile CONSTANT instead of growing with the user program. It stays EXACT: a stdlib
 	// function referenced by nothing is reachable from nothing.
-	if not userCodeReachesStdlib(module, stdlib: stdlibSet) 'noneReferenced'
+	if not userCodeReachesStdlib(module, stdlib: stdlibSet, initCallees: initCallees) 'noneReferenced'
 		var allUnreachable = FunctionNameSet.create()
 		for name in stdlibNames 'markAll'
 			allUnreachable.insert(name)
@@ -184,7 +196,7 @@ export function deriveStdlibFacts(project Project, module MaxonModule) returns S
 	// User code DOES call stdlib — resolve exactly which stdlib functions the program REACHES from `main`
 	// and mark only the untouched ones. This precise walk (and its maps) runs ONLY for a program that
 	// actually uses stdlib.
-	let reachable = try reachableMaxonFunctionNames(module, project: project)
+	let reachable = try reachableMaxonFunctionNames(module, project: project, initCallees: initCallees)
 	var unreachable = FunctionNameSet.create()
 	for name in stdlibNames 'classify'
 		if not reachable.contains(name) 'unreached'
@@ -225,12 +237,27 @@ end 'stdlibFunctionNames'
 // missed such an edge would be unsound in general, which is why what it decides is scoped to stdlib
 // source rather than applied to every function.
 //
-// ⭐ The name index is the shared, CHECKED one (`FunctionNameIndex`, A1w). This site sits AFTER
-// `installManagedGlobalInit`, so it is the earliest site that can meet a real duplicate — a
-// `stdlib/Builtins.maxon` declaration of `__module_init`/`__maxon_global_cleanup` against the compiler's own
-// — and it used to resolve one last-wins and unchecked, walking ONE of the two bodies and crediting the
-// callees of whichever it picked. What the tie-break chose was never observable, because the refusal came
-// later; a walk that silently under-approximates reachability is not something to leave resting on that.
+// ⭐ The name index is the shared, CHECKED one (`FunctionNameIndex`, A1w). It used to resolve one
+// last-wins and unchecked, walking ONE of two same-named bodies and crediting the callees of whichever it
+// picked; a walk that silently under-approximates reachability is not something to leave resting on a
+// tie-break nobody stated.
+//
+// ⚠ **THIS SITE NOW RUNS BEFORE `installManagedGlobalInit` (S2h), SO IT CAN NO LONGER MEET A REAL
+// DUPLICATE** — a `stdlib/Builtins.maxon` declaration of `__module_init`/`__maxon_global_cleanup` against
+// the compiler's own has no compiler side yet. That refusal did not move, it merely stopped being made
+// TWICE: `PassPipeline.run`'s index sees the identical pair one screen below, and
+// `DeadFunctionElimination.markCompilerOwnedRoot` catches the case with no pair to count. See
+// `FunctionNameIndex`, which is where what each site can see is written down.
+//
+// ⭐⭐ **THE ROOT SET IS `main` PLUS EVERY FUNCTION A TOP-LEVEL INITIALIZER CALLS, and the second half is
+// not a widening — it is the same reachability with an edge no BODY carries.** `__module_init` makes those
+// calls, and it is synthesized after this walk and called by the entry STUB, so it is invisible here in
+// both directions. `DeadFunctionElimination.seedRoots` roots it unconditionally (its kind 2), so leaving
+// the edge out is not conservative: the two derivations disagree, `lowerMaxonToStd` lowers no body for a
+// stdlib factory named only by an initializer, and the elimination walk reaches the empty function it
+// left. MEASURED before the fix, on `var sep = FilePath.separator()`: a `requireUnreachableStdlibStayedDead`
+// panic on a program with nothing wrong with it (`specs-shv2/top-level-factory-globals.md`'s
+// `stdlib-factory-reached-from-the-initializer`).
 //
 // ⚠⚠ **AND IT RUNS BEFORE OVERLOAD RESOLUTION, SO A CALLEE NAME HERE IS PROVISIONAL — WHICH IS WHY THE
 // OVERLOAD SET IS CREDITED WHOLE.** `SemanticCheck.resolveOverloadedCalls` rewrites `call FilePath.join`
@@ -258,7 +285,7 @@ end 'stdlibFunctionNames'
 // resolution, keys on the real callee, and prunes it there. What this costs is only that
 // `scanRuntimeUsage` may read an unreached sibling overload's body — and only in a program that already
 // calls that stdlib name.
-function reachableMaxonFunctionNames(module MaxonModule, project Project) returns FunctionNameSet throws CompileError
+function reachableMaxonFunctionNames(module MaxonModule, project Project, initCallees ByteArrayArray) returns FunctionNameSet throws CompileError
 	let byName = (try FunctionNameIndex.create(module.functions, project: project)).byName
 
 	var reached = BoolArray.create()
@@ -267,6 +294,9 @@ function reachableMaxonFunctionNames(module MaxonModule, project Project) return
 	var names = FunctionNameSet.create()
 
 	markReachable(UserEntryName.toByteArray(), project: project, byName: byName, reached: reached, worklist: worklist, names: names)
+	for callee in initCallees 'eachInitializerRoot'
+		markReachable(callee, project: project, byName: byName, reached: reached, worklist: worklist, names: names)
+	end 'eachInitializerRoot'
 
 	while worklist.count() > 0 'walk'
 		let idx = try worklist.pop() otherwise panic("reachableMaxonFunctionNames: pop from a non-empty worklist")
@@ -363,15 +393,6 @@ function markMaxonCalleeEdge(op MaxonOp, project Project, byName FuncIndexByName
 	end 'kind'
 end 'markMaxonCalleeEdge'
 
-// True iff any live op in USER code names a STDLIB callee — the allocation-free pre-scan that lets a
-// program which never touches stdlib skip the reachability walk and the substrate fixpoint entirely. It
-// asks the same dialect classifier `markMaxonCalleeEdge` does (`maxonOpCalleeKind`), and differs from it
-// only in what it does with a hit: it runs on every compile, so it must allocate nothing (no map, no
-// queue) — it only asks "is one present?".
-
-// One op. Asks the callee question through `maxonOpCalleeKind`/`maxonOpCalleeName` — the same pair
-// `opNamesStdlibCallee` reads — rather than matching the call forms here, so a new call form is learned by
-// both scans at once.
 // ⭐⭐ **THE ONE CALL EDGE THIS WALK CANNOT SEE, SEEDED AT THE OP THAT IMPLIES IT.**
 // `__str_trim`, `__cs_contains`, the `__strix_*` walks and the two decoding views are SYNTHESIZED Std
 // bodies, appended after the pipeline (`Compiler.compile`'s install block). Their calls into
@@ -406,6 +427,9 @@ function markCorpusCalleesOfSynthesizedRuntime(op MaxonOp, project Project, byNa
 	markReachable(CorpusUtf8ByteLengthAt, project: project, byName: byName, reached: reached, worklist: worklist, names: names)
 end 'markCorpusCalleesOfSynthesizedRuntime'
 
+// One op. Asks the callee question through `maxonOpCalleeKind`/`maxonOpCalleeName` — the same pair
+// `opNamesStdlibCallee` reads — rather than matching the call forms here, so a new call form is learned by
+// both scans at once.
 function opNamesGraphemeRuntimeEntry(op MaxonOp) returns bool
 	return match maxonOpCalleeKind(op) 'kind'
 		direct to functionValue gives calleeIsGraphemeRuntimeEntry(maxonOpCalleeName(op))
@@ -420,7 +444,33 @@ function calleeIsGraphemeRuntimeEntry(callee ByteArray) returns bool
 	return callee.equals(StrTrimName) or callee.equals(CharSetContainsName) or callee.equals(StrToCodepointsName) or callee.equals(StrToUtf16Name) or isStringIndexRuntimeCallee(callee)
 end 'calleeIsGraphemeRuntimeEntry'
 
-function userCodeReachesStdlib(module MaxonModule, stdlib FunctionNameSet) returns bool
+// True iff any live op in USER code names a STDLIB callee, or a TOP-LEVEL INITIALIZER does — the
+// allocation-free pre-scan that lets a program which never touches stdlib skip the reachability walk and
+// the substrate fixpoint entirely. It asks the same dialect classifier `markMaxonCalleeEdge` does
+// (`maxonOpCalleeKind`), and differs from it only in what it does with a hit: it runs on every compile, so
+// it must allocate nothing (no map, no queue) — it only asks "is one present?".
+//
+// ⚠ **IT ANSWERS OVER THE SAME `initCallees` LIST THE PRECISE WALK ROOTS FROM — that shared list is the
+// guarantee, not a matching root SET**, and the difference is worth stating because the two are easy to
+// confuse. `markReachable` widens a root over `project.overloadSets` and seeds the grapheme entries per
+// reached op; this asks only "is this bare name a stdlib name?". Those agree EXACTLY, and here is why: a
+// USER callee's own body is scanned by the loop below whatever it goes on to call, a STDLIB callee's bare
+// name is the first overload member's registration name and so is always in `stdlib`, and an undeclared one
+// is refused by the evaluator before it can reach either walk. An under-answer here would file ALL of
+// stdlib unreachable for a program that reaches it — the direction that empties a body the back end then
+// calls — so a new initializer form owes that argument again rather than inheriting it.
+function userCodeReachesStdlib(module MaxonModule, stdlib FunctionNameSet, initCallees ByteArrayArray) returns bool
+	// ⭐ **A TOP-LEVEL INITIALIZER IS A CROSSING NO BODY CARRIES.** `var sep = FilePath.separator()` reaches
+	// stdlib without any function of this module naming it — the call belongs to `__module_init`, which does
+	// not exist yet. The precise walk below roots exactly these, so missing one here would answer "all of
+	// stdlib is unreachable" for a program that reaches it, which is the direction that skips a body the
+	// back end then calls.
+	for callee in initCallees 'eachInitializerRoot'
+		if stdlib.contains(callee) 'found'
+			return true
+		end 'found'
+	end 'eachInitializerRoot'
+
 	for func in module.functions 'eachFunc'
 		// ⭐ SKIP STDLIB's OWN BODIES. Stdlib is internally connected (`Clock.elapsedMs` calls
 		// `Clock.nowMs`), so scanning its bodies would find an intra-stdlib edge on EVERY compile and

@@ -413,16 +413,6 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// to know it was checked rather than assumed.
 	let needsProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.deriveRuntimeNeeds)
 
-	// ⭐ THE HEAP IS CARRIED ONLY BY PROGRAMS THAT REACH IT (P1.0r). A `return 42` program
-	// allocates nothing, so it gets no allocator, no `.data` slots and no leak check — and its
-	// committed golden is byte-for-byte what it was before this rung existed. That is not an
-	// optimization, it is what BackendDispatch's header already promised: the runtime floor GROWS
-	// with the program's needs rather than being unconditional.
-	//
-	// The question is asked of the MAXON module because the answer is needed HERE, before the
-	// layout — the `.data` slots must exist before the backend resolves a `globalAddr` against
-	// them. The parser has already emitted the `__mm_alloc` call by this point, so the fact is
-	// available one tier up from where it is consumed.
 	// ⭐ STDLIB SOURCE THIS PROGRAM CANNOT REACH MUST DECIDE NOTHING ABOUT IT. Stdlib is loaded into
 	// EVERY compile, so a `Clock` no path from `main` reaches must be invisible to every
 	// pre-elimination pass that examines a body — else its `__gt_now_ns`/`__clock_now_unix_s` calls
@@ -433,15 +423,28 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// identical derivation. USER functions are never in it, so nothing about a stdlib-free program
 	// changes. See StdlibSource for why the reachability is exact here (a stdlib function is reached
 	// only by a direct call or a taken address, never by a witness or `.rdata` edge).
-	// ⭐ **SYNTHESIZE `__module_init` / `__maxon_global_cleanup` — HERE, and the position is the whole
-	// wiring** (P1.7 slice 2a, see `ModuleInit`). They are Maxon-tier functions appended to the merged
-	// module, so everything below this line treats them as ordinary program code: `scanRuntimeUsage` sees
-	// their `__str_clone`/`__str_decref`/`__arr_decref` calls and installs the runtime floor they need,
-	// `declaredGlobals` (below) reserves the pointer slots they write, and the pipeline lowers them through
-	// the SAME `lowerMaxonToStd` that turns a `stringLiteral` op into an rdata record and a
-	// `constArrayLiteral` into an owned `Array`. Appending them after any of those would need a second copy
-	// of whichever one it skipped.
 	//
+	// ⚠ **ITS OWN GATE, BECAUSE IT IS THE FIRST SITE THAT CAN REFUSE AND THE PIPELINE'S IS STILL BELOW
+	// (A1w).** `deriveStdlibFacts` reads every stdlib file's parse artifact back and builds a
+	// `FunctionNameIndex` over this module, either of which can throw. Without a gate here that throw would
+	// leave `compileToCodeResult` having passed both gates below, and the diagnostic would never be printed:
+	// exit 1 with nothing said.
+	//
+	// ⚠⚠ **IT USED TO SIT ELEVEN LINES LOWER, AND MOVING IT ABOVE THE TWO STATEMENTS BELOW IS THIS RUNG
+	// (S2h).** `liveGlobalLabels` must not credit a stdlib body no back end will receive, so it needs
+	// `unreachable`; `liveGlobalLabels` must precede `installManagedGlobalInit` (see below); and
+	// `installManagedGlobalInit` consumed the answer this derivation needed. What tied the derivation to the
+	// LOWER position was a single duplicate-name refusal — its `FunctionNameIndex` was then the earliest
+	// index that could meet a `stdlib/Builtins.maxon` declaration of `__module_init` against the compiler's
+	// own — and that refusal is made by `PassPipeline.run`'s index one screen below over the SAME pair, and
+	// again by `DeadFunctionElimination.markCompilerOwnedRoot` for the case with no pair to count. So the
+	// cycle was cut where it was thinnest: nothing is refused later than before, and one derivation feeds
+	// both readers instead of one reader re-deriving it. See `FunctionNameIndex`, which records what each
+	// index site can actually see.
+	project.stdlibFacts = try deriveStdlibFacts(project, module: module, signatures: signatures) otherwise 'stdlibFactsRefused'
+		try refuseCompile(project)
+	end 'stdlibFactsRefused'
+
 	// ⭐ **WHICH GLOBALS CAN THE PROGRAM STILL NAME — ASKED BEFORE ANYTHING IS BUILT FROM THEM** (P1.7
 	// slice 3, see `DeadGlobalElimination`). A binding nothing reads or writes costs an 8-byte slot, an
 	// init run and a cleanup drop, and the three are dropped TOGETHER because all three are produced from
@@ -452,20 +455,32 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// opens every managed global with a `globalAddr` of that global's own slot, so a liveness scan run
 	// after the synthesis would find every global keeping itself alive — the answer would be "everything
 	// is live", silently and always.
-	let liveGlobals = liveGlobalLabels(module, storedGlobals: signatures.storedGlobalCount)
+	let liveGlobals = liveGlobalLabels(module, storedGlobals: signatures.storedGlobalCount, unreachableStdlib: project.stdlibFacts.unreachable)
+
+	// ⭐ **SYNTHESIZE `__module_init` / `__maxon_global_cleanup` — HERE, and the position is the whole
+	// wiring** (P1.7 slice 2a, see `ModuleInit`). They are Maxon-tier functions appended to the merged
+	// module, so everything below this line treats them as ordinary program code: `scanRuntimeUsage` sees
+	// their `__str_clone`/`__str_decref`/`__arr_decref` calls and installs the runtime floor they need,
+	// `declaredGlobals` (below) reserves the pointer slots they write, and the pipeline lowers them through
+	// the SAME `lowerMaxonToStd` that turns a `stringLiteral` op into an rdata record and a
+	// `constArrayLiteral` into an owned `Array`. Appending them after any of those would need a second copy
+	// of whichever one it skipped.
+	//
 	// It answers whether the program has any managed global at all, which is the single bit the entry stubs
 	// gate their two calls on. A program with none builds nothing and is byte-identical to before this rung.
 	let usesManagedGlobals = installManagedGlobalInit(module, project: project, globals: signatures.managedGlobals(liveGlobals))
 
-	// ⚠ **ITS OWN GATE, BECAUSE IT IS THE FIRST SITE THAT CAN REFUSE AND THE PIPELINE'S IS STILL BELOW
-	// (A1w).** `deriveStdlibFacts` builds a `FunctionNameIndex` over this module — the earliest site
-	// that sits AFTER `installManagedGlobalInit`, hence the earliest that can meet a declaration colliding with
-	// `__module_init` / `__maxon_global_cleanup` — and refuses it with E4015. Without a gate here that throw
-	// would leave `compileToCodeResult` having passed both gates below, and the diagnostic would never be
-	// printed: exit 1 with nothing said.
-	project.stdlibFacts = try deriveStdlibFacts(project, module: module) otherwise 'stdlibFactsRefused'
-		try refuseCompile(project)
-	end 'stdlibFactsRefused'
+	// ⭐ THE HEAP IS CARRIED ONLY BY PROGRAMS THAT REACH IT (P1.0r). A `return 42` program
+	// allocates nothing, so it gets no allocator, no `.data` slots and no leak check — and its
+	// committed golden is byte-for-byte what it was before this rung existed. That is not an
+	// optimization, it is what BackendDispatch's header already promised: the runtime floor GROWS
+	// with the program's needs rather than being unconditional.
+	//
+	// The question is asked of the MAXON module because the answer is needed HERE, before the
+	// layout — the `.data` slots must exist before the backend resolves a `globalAddr` against
+	// them. The parser has already emitted the `__mm_alloc` call by this point, so the fact is
+	// available one tier up from where it is consumed.
+	//
 	// ONE walk of the Maxon module answers all three "which runtime does this program carry?" questions
 	// (heap / print / string-`==`). The HEAP answer alone drives `.data` layout — the `.data` slots must
 	// exist before the backend resolves a `globalAddr`, so it is needed here, before lowering — and it
