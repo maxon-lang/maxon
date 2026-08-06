@@ -149,12 +149,17 @@ export let IntToStringName = b"__int_to_string"
 export let UIntToStringName = b"__uint_to_string"
 export let BoolToStringName = b"__bool_to_string"
 
-// ⭐ **WHICH DECIMAL RENDERER, AND WHAT SCRATCH IT NEEDS — the two halves of ONE choice, so the
-// selection site cannot take one entry point with the other's budget.** The signed budget is one byte
-// wider (the sign), so the dangerous pairing is the signed renderer with the unsigned budget: `i64.min`
-// would write 21 bytes into a 20-byte scratch. Keying both off the same `DivideSignedness` — the very
-// enum the builder's own divides carry — is what makes that unrepresentable rather than merely
-// unlikely.
+// ⭐ **WHICH DECIMAL RENDERER, AND WHAT SCRATCH IT NEEDS — the two halves of ONE choice.** The signed
+// budget is one byte wider (the sign), so the dangerous pairing is the signed renderer with the unsigned
+// budget: `i64.min` would write 21 bytes into a 20-byte scratch. Both are keyed off the same
+// `DivideSignedness` — the very enum the builder's own divides carry — and the one selection site
+// (`Parser.materializeInterpExpr`) reads both off ONE local, so the wrong pairing cannot be reached by
+// deciding twice.
+//
+// ⚠ It is not made UNREPRESENTABLE by the types, and saying so would be a claim the signatures do not
+// keep: `integerToStringName(unsigned)` and `integerToStringScratchBytes(signed)` type-check. What rules
+// it out is that no caller derives the signedness twice — so a SECOND selection site must take both from
+// one decision too, or pass the `DivideSignedness` itself rather than its two answers.
 export function integerToStringName(signedness DivideSignedness) returns ByteArray
 	return match signedness 'reading'
 		signed gives IntToStringName

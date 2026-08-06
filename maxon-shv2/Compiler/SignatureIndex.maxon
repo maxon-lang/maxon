@@ -1202,13 +1202,10 @@ end 'TypeArgInstantiationKind'
 // perfectly willing to give it an f64. A global's width and a value's width are THE SAME QUESTION,
 // and `data-section-f64-8byte` pins the 8 bytes that answer proves.
 //
-// What is genuinely local is the REACHABILITY guard below — what a top-level `var` can be typed —
-// and that is a different question from how wide the type is. `named` needs an `as` cast (P1.9), so
-// it panics rather than defaulting to a width.
-//
 // ⭐ **THE REACHABILITY GUARD IS WHAT IS LOCAL** — which folded constants may be a global's inline value
 // — and that is a different question from how wide the type is. Every tag but the three the evaluator
 // folds panics by name; a bare `default` here would silently size a tag nothing in this door understands.
+// `named` needs an `as` cast (P1.9), so it panics rather than defaulting to a width.
 //
 // `boolean` is ONE byte (`i1`, whose `storageBytes` is 1), which is what
 // `static-variables.md`'s `data-section-bool-1byte` pins; `integer` is eight (`i64`); `float` is
@@ -1223,9 +1220,12 @@ function globalStdType(tag ValueTypeTag, name ByteArray) returns StdType
 		// value, so their width is `recordPointerSlotType`'s to answer and not this door's. They used to
 		// break through here, which is how this guard's `named` arm came to be applied to a factory return
 		// type it was never written about — see this function's header.
-		structRef then panic("globalStdType: top-level var '{String.from(name)}' is tagged '{typeTagName(tag)}' — a struct global's slot holds a POINTER `__module_init` fills, so it is typed by `recordPointerSlotType`; this door answers only for a global whose `.data` bytes ARE its value")
-		string then panic("globalStdType: top-level var '{String.from(name)}' is tagged '{typeTagName(tag)}' — a managed global's slot holds a POINTER `__module_init` fills, so it is typed by `recordPointerSlotType`; this door answers only for a global whose `.data` bytes ARE its value")
-		genericInstance then panic("globalStdType: top-level var '{String.from(name)}' is tagged '{typeTagName(tag)}' — a container global's slot holds a POINTER `__module_init` fills, so it is typed by `recordPointerSlotType`; this door answers only for a global whose `.data` bytes ARE its value")
+		//
+		// ⚠ ONE SENTENCE, not one per tag: the three differ by nothing the message does not already carry,
+		// because `typeTagName(tag)` names which of them arrived. Three spellings of it were three chances
+		// for one to drift from the door it points at.
+		structRef to string then panic("{recordSlotGlobalPanic(name, tag: tag)}")
+		genericInstance then panic("{recordSlotGlobalPanic(name, tag: tag)}")
 		// A FUNCTION global is unreachable (P1.5-A1): a global takes no type annotation and a function
 		// reference is not a constant initializer, so a global's inferred type is never `function` (a bare
 		// function name at top level is rejected before this — `var g = double` is E2045, no call in a
@@ -1249,6 +1249,13 @@ function globalStdType(tag ValueTypeTag, name ByteArray) returns StdType
 
 	return valueTagToStdType(tag)
 end 'globalStdType'
+
+// The one sentence the three RECORD tags share when they reach the INLINE-VALUE door by mistake. Written
+// once because the only thing that distinguishes them — which tag arrived — is already interpolated into
+// it, and because the door it redirects to is a name that can be renamed.
+function recordSlotGlobalPanic(name ByteArray, tag ValueTypeTag) returns String
+	return "globalStdType: top-level var '{String.from(name)}' is tagged '{typeTagName(tag)}' — a record-valued global's slot holds a POINTER `__module_init` fills, so it is typed by `recordPointerSlotType`; this door answers only for a global whose `.data` bytes ARE its value"
+end 'recordSlotGlobalPanic'
 
 // What the index knows about a callee — the TWO outcomes the old `MaxonType.unresolved` sentinel
 // collapsed into one, plus the third (`void`) that it dropped on the floor.
@@ -4699,6 +4706,60 @@ let FirstLaterFileTupleOrdinal = 1
 // `ProgramSignatures.rootDeclarationShadowName`. It joins through `overloadRegistrationName`, so the
 // `#` that makes every synthesized name unspellable is stated in ONE place for all of them.
 let RootDeclarationShadowPrefix = "__rootDecl"
+
+// ⭐⭐ **WHICH RULE `ProgramSignatures.rewriteRecordedReturnTypes` IS WALKING `returnTypes` UNDER.** Three
+// whole-program passes re-decide a recorded return type, and until BATCH28's review each carried its own
+// copy of the collect-then-apply walk. The walk is one fact; these three are what actually differ.
+//
+// An `enum` and not three functions passed as values: it is `match`ed in one place
+// (`rewrittenReturnTypeUnder`), so a fourth rule fails to compile there rather than silently taking a
+// neighbour's line.
+export enum RecordedReturnTypeRule
+	// ⭐ **N3 — the contested generic ALIAS a `returns` clause names, rescoped against the file that
+	// DECLARED the function.** See `contestScopedReturnTypeOf`.
+	contestScopedAlias
+	// ⭐⭐ **S2j — RE-TAG EVERY SWEPT `named` THAT DENOTES A DECLARED `type` AS A `structRef`: the ONE
+	// repair that makes a `returns Inner` and a `returns Self` be the same recorded declaration.**
+	//
+	// `Parser.parseTypeReference` resolves the enclosing type's own name — `Self`, and the type's own
+	// spelling — to a `structRef` SYNTACTICALLY, because that is a fact about the tokens and needs no
+	// registry, and the declaration sweep therefore answers it identically to the real parse. A FOREIGN
+	// name it cannot: the sweep reads a `returns` clause while `structTypes` is still being filled, so the
+	// answer would depend on the filesystem's walk order, and the arm deliberately records a bare `named`
+	// instead. ⇒ **one struct, two recorded spellings**, and this rule is where the second becomes the
+	// first.
+	//
+	// ⚠ **THE READ DOORS ALREADY REPAIR IT AND THAT IS NOT THE SAME THING.** `Parser.resolveNamedStruct`
+	// re-tags a call RESULT, which is why `let p = Outer.build()` inside a function body has always worked.
+	// A TOP-LEVEL initializer has no such door: `evaluateInitializers` copies the recorded return type
+	// straight into the declaration's outcome, and the two readers of that copy then disagreed —
+	// `Parser.requireGlobalFactoryReturnsARecord` asked `slotTypeIsManaged`, which is TRUE for a
+	// struct-denoting `named` and ADMITTED the program, and `globalStdType` then met a tag its width table
+	// has no case for and PANICKED, with a sentence written for its other caller (a scalar global's ranged
+	// alias) claiming a `var` was *"tagged 'int'"* in a program containing no int.
+	//
+	// ⚠ **IT IS A NORMALIZATION, NOT A SECOND RESOLUTION RULE** — `declaredInterface`'s words below, and
+	// the same discipline. The rule is the READ DOOR's, statement for statement: a `named` naming a
+	// declared `type` becomes a `structRef`; a `named` naming a UNION or a ranged int ALIAS stays a
+	// `named`, because that IS the tag those carry (`enumMatchFor` reads a union's, and a ranged alias is
+	// the integer). It asks `containsStruct` — the same door that read door asks — so the two cannot come
+	// to disagree about which names move.
+	//
+	// ⚠⚠ **IT RUNS BEFORE `evaluateInitializers` AND `declaredInterface` RUNS AFTER, AND NEITHER POSITION
+	// IS FREE.** Each normalization can only run once the registry it consults is whole: `structTypes` is
+	// filled by the sweep itself, so this may run the moment every file is folded, while `interfaces` is
+	// filled by `foldInterfaceDeclarations`, which runs later. The constant evaluator sits between them and
+	// COPIES what it reads, so a re-tag after it cannot reach the copy — which is exactly why this one is
+	// early. They do not race: a name is a struct or an interface and never both (`declaredFormOf` answers
+	// one form, and E3006/E3061 refuse a name two registries hold), so this walk leaves every interface
+	// name a `named` for the rule below to claim.
+	declaredStruct
+	// ⭐⭐ **P1.7a-existentials slice 1 — RE-TAG EVERY SWEPT `named` THAT DENOTES AN `interface` AS AN
+	// `interfaceRef`.** The return-type half of `normalizeSweptInterfaceTypes`, whose header carries the
+	// wrong SIZE this closes and why the field half cannot ride this walk (it writes through a layout, not
+	// through this map).
+	declaredInterface
+end 'RecordedReturnTypeRule'
 
 export type ProgramSignatures
 	// Function name -> its declared return type. Last-wins on a duplicate name, exactly as the
@@ -10992,96 +11053,63 @@ export type ProgramSignatures
 			end 'eachCase'
 		end 'eachEnum'
 
-		self.resolveRecordedReturnTypes()
+		self.rewriteRecordedReturnTypes(RecordedReturnTypeRule.contestScopedAlias)
 	end 'resolveRecordedGenericAliasTypes'
 
-	// ⭐⭐ **THE THIRD RECORDED DECLARED TYPE, AND THE ONE THAT WAS MISSING** — a function's RETURN type,
-	// resolved against the file that declared the FUNCTION. `funcReturnDeclFiles` carries the measurement of
-	// what its absence cost: a `returns Bytes` crossing a file boundary took the CALLER's `Bytes`, and two
-	// element widths compared equal.
+	// ⭐⭐ **THE ONE REWRITE OF `returnTypes`, AND THE THREE RULES THAT DRIVE IT (BATCH28 review).** Three
+	// whole-program passes re-decide a recorded return type — N3's contest rescoping, S2j's struct re-tag
+	// and P1.7a's interface re-tag — and each had spelled out the same COLLECT-THEN-APPLY walk of the same
+	// map, under the same key, reconstructing the same `MaxonReturnType.value`. Nothing made the three
+	// agree: the keying rule stated below is a property of THE MAP and not of any one pass, so a fourth
+	// pass copying the shape would have had to rediscover it, and a correction to one copy would have
+	// reached one caller in three. The walk is one fact and lives here; what differs between the three is a
+	// single line, and that line IS the rule (`rewrittenReturnTypeUnder`).
 	//
-	// ⚠ **COLLECTED, THEN APPLIED**, for `normalizeSweptInterfaceTypes`' reason one screen up: this rewrites
-	// the very map it walks, and rewriting a container mid-walk is the one shape a `for … in` cannot promise
-	// anything about. Both columns are empty for every program with no contested alias, which is the whole
+	// ⚠ **COLLECTED, THEN APPLIED**: it rewrites the very map it walks, and rewriting a container mid-walk
+	// is the one shape a `for … in` cannot promise anything about. Both columns stay empty for every
+	// program whose declarations the rule claims none of — which, for all three rules, is most of the
 	// corpus.
 	//
-	// ⚠ **IT IS KEYED OFF `returnTypes` AND NOT OFF THE FILE COLUMN**, so a name whose entry has since been
+	// ⚠ **IT IS KEYED OFF `returnTypes` AND NOT OFF ANY FILE COLUMN**, so a name whose entry has since been
 	// REFILED (a contested free function's namespace-qualified key, a stdlib shadow, a renamed default
-	// helper) is rescoped under the key it actually lives at and never resurrected under the one it left.
+	// helper) is rewritten under the key it actually lives at and never resurrected under the one it left.
 	// The three refile sites move the file column with the return type for exactly that reason.
-	function resolveRecordedReturnTypes()
-		var rescopedCallees = ByteArrayArray.create()
-		var rescopedReturns = MaxonTypeArray.create()
-		for (callee, declared) in self.returnTypes 'eachReturnType'
-			if let declFilePath = try self.funcReturnDeclFiles.get(callee) 'returnsANameStillToBeResolved'
-				if let resolved = try self.contestScopedReturnType(declared, declFilePath: declFilePath) 'namesAContestedAlias'
-					rescopedCallees.push(callee)
-					rescopedReturns.push(resolved)
-				end 'namesAContestedAlias'
-			end 'returnsANameStillToBeResolved'
-		end 'eachReturnType'
-
-		for i in 0 upto rescopedCallees.count() 'applyEach'
-			let callee = try rescopedCallees.get(i) otherwise panic("ProgramSignatures.resolveRecordedReturnTypes: rescopedCallees.get OOB at {i} below count {rescopedCallees.count()}")
-			let resolved = try rescopedReturns.get(i) otherwise panic("ProgramSignatures.resolveRecordedReturnTypes: rescopedReturns.get OOB at {i} — the two columns are pushed in lockstep")
-			self.returnTypes.upsert(callee, value: MaxonReturnType.value(resolved))
-		end 'applyEach'
-	end 'resolveRecordedReturnTypes'
-
-	// ⭐⭐ **RE-TAG EVERY SWEPT `named` THAT DENOTES A DECLARED `type` AS A `structRef` (S2j) — the ONE
-	// repair that makes a `returns Inner` and a `returns Self` be the same recorded declaration.**
-	//
-	// `Parser.parseTypeReference` resolves the enclosing type's own name — `Self`, and the type's own
-	// spelling — to a `structRef` SYNTACTICALLY, because that is a fact about the tokens and needs no
-	// registry, and the declaration sweep therefore answers it identically to the real parse. A FOREIGN
-	// name it cannot: the sweep reads a `returns` clause while `structTypes` is still being filled, so the
-	// answer would depend on the filesystem's walk order, and the arm deliberately records a bare `named`
-	// instead. ⇒ **one struct, two recorded spellings**, and this is where the second becomes the first.
-	//
-	// ⚠ **THE READ DOORS ALREADY REPAIR IT AND THAT IS NOT THE SAME THING.** `Parser.resolveNamedStruct`
-	// re-tags a call RESULT, which is why `let p = Outer.build()` inside a function body has always worked.
-	// A TOP-LEVEL initializer has no such door: `evaluateInitializers` copies the recorded return type
-	// straight into the declaration's outcome, and the two readers of that copy then disagreed —
-	// `Parser.requireGlobalFactoryReturnsARecord` asked `slotTypeIsManaged`, which is TRUE for a
-	// struct-denoting `named` and ADMITTED the program, and `globalStdType` then met a tag its width table
-	// has no case for and PANICKED, with a sentence written for its other caller (a scalar global's ranged
-	// alias) claiming a `var` was *"tagged 'int'"* in a program containing no int.
-	//
-	// ⚠ **IT IS A NORMALIZATION, NOT A SECOND RESOLUTION RULE** — `normalizeSweptInterfaceTypes`' words
-	// one screen down, and the same discipline. The rule is `Parser.resolveNamedStruct`'s, statement for
-	// statement: a `named` naming a declared `type` becomes a `structRef`; a `named` naming a UNION or a
-	// ranged int ALIAS stays a `named`, because that IS the tag those carry (`enumMatchFor` reads a
-	// union's, and a ranged alias is the integer). It asks `containsStruct` — the same door that read door
-	// asks — so the two cannot come to disagree about which names move.
-	//
-	// ⚠⚠ **IT RUNS BEFORE `evaluateInitializers` AND `normalizeSweptInterfaceTypes` RUNS AFTER, AND
-	// NEITHER POSITION IS FREE.** Each normalization can only run once the registry it consults is whole:
-	// `structTypes` is filled by the sweep itself, so this may run the moment every file is folded, while
-	// `interfaces` is filled by `foldInterfaceDeclarations`, which runs later. The constant evaluator sits
-	// between them and COPIES what it reads, so a re-tag after it cannot reach the copy — which is exactly
-	// why this one is early. They do not race: a name is a struct or an interface and never both
-	// (`declaredFormOf` answers one form, and E3006/E3061 refuse a name two registries hold), so this walk
-	// leaves every interface name a `named` for that one to claim.
-	//
-	// ⚠ **COLLECTED, THEN APPLIED**, for its two siblings' reason: it rewrites the very map it walks.
-	// Both columns are empty for every program whose declarations all return `Self`, a primitive or their
-	// own type — which is most of the corpus.
-	export function normalizeSweptRecordReturnTypes()
+	export function rewriteRecordedReturnTypes(rule RecordedReturnTypeRule)
 		var rewrittenCallees = ByteArrayArray.create()
 		var rewrittenReturns = MaxonTypeArray.create()
 		for (callee, declared) in self.returnTypes 'eachReturnType'
-			if let asRecord = try self.sweptStructReturnOf(declared) 'namesADeclaredType'
+			if let rewritten = try self.rewrittenReturnTypeUnder(rule, callee: callee, declared: declared) 'theRuleClaimsIt'
 				rewrittenCallees.push(callee)
-				rewrittenReturns.push(asRecord)
-			end 'namesADeclaredType'
+				rewrittenReturns.push(rewritten)
+			end 'theRuleClaimsIt'
 		end 'eachReturnType'
 
 		for i in 0 upto rewrittenCallees.count() 'applyEach'
-			let callee = try rewrittenCallees.get(i) otherwise panic("ProgramSignatures.normalizeSweptRecordReturnTypes: rewrittenCallees.get OOB at {i} below count {rewrittenCallees.count()}")
-			let asRecord = try rewrittenReturns.get(i) otherwise panic("ProgramSignatures.normalizeSweptRecordReturnTypes: rewrittenReturns.get OOB at {i} — the two columns are pushed in lockstep")
-			self.returnTypes.upsert(callee, value: MaxonReturnType.value(asRecord))
+			let callee = try rewrittenCallees.get(i) otherwise panic("ProgramSignatures.rewriteRecordedReturnTypes: rewrittenCallees.get OOB at {i} below count {rewrittenCallees.count()}")
+			let rewritten = try rewrittenReturns.get(i) otherwise panic("ProgramSignatures.rewriteRecordedReturnTypes: rewrittenReturns.get OOB at {i} — the two columns are pushed in lockstep")
+			self.returnTypes.upsert(callee, value: MaxonReturnType.value(rewritten))
 		end 'applyEach'
-	end 'normalizeSweptRecordReturnTypes'
+	end 'rewriteRecordedReturnTypes'
+
+	// The ONE line each rule contributes: the type this entry should now carry, or `MapError.keyNotFound`
+	// when the rule does not claim it — the "absence is a throw" convention all three re-tags already
+	// shared. A `match` rather than a chain, so a fourth rule cannot be added without being given a line.
+	function rewrittenReturnTypeUnder(rule RecordedReturnTypeRule, callee ByteArray, declared MaxonReturnType) returns MaxonType throws MapError
+		match rule 'rule'
+			contestScopedAlias then return try self.contestScopedReturnTypeOf(callee, declared: declared)
+			declaredStruct then return try self.sweptStructReturnOf(declared)
+			declaredInterface then return try self.sweptInterfaceReturnOf(declared)
+		end 'rule'
+	end 'rewrittenReturnTypeUnder'
+
+	// N3's rule: a function's RETURN type resolved against the file that declared the FUNCTION.
+	// `funcReturnDeclFiles` carries the measurement of what its absence cost — a `returns Bytes` crossing a
+	// file boundary took the CALLER's `Bytes`, and two element widths compared equal. A callee with no file
+	// recorded names nothing still to be resolved, which is the rule declining the entry.
+	function contestScopedReturnTypeOf(callee ByteArray, declared MaxonReturnType) returns MaxonType throws MapError
+		let declFilePath = try self.funcReturnDeclFiles.get(callee)
+		return try self.contestScopedReturnType(declared, declFilePath: declFilePath)
+	end 'contestScopedReturnTypeOf'
 
 	// The `structRef` a swept `named` denotes; `MapError.keyNotFound` when the name is not a declared
 	// `type`. It follows `sweptInterfaceTypeOf`'s shape — the other recorded-return-type re-tag on this
@@ -11143,24 +11171,11 @@ export type ProgramSignatures
 			end 'eachField'
 		end 'eachStruct'
 
-		// ⚠ COLLECTED, THEN APPLIED. A field re-tag writes THROUGH a layout (`retypeField`), which touches no
-		// map; a return-type re-tag rewrites the very map being walked, and rewriting a container mid-walk is
-		// the one shape a `for … in` cannot promise anything about. Two passes over a list that is empty for
-		// every program with no interface-returning declaration.
-		var rewrittenCallees = ByteArrayArray.create()
-		var rewrittenReturns = MaxonTypeArray.create()
-		for (callee, declared) in self.returnTypes 'eachReturnType'
-			if let asInterface = try self.sweptInterfaceReturnOf(declared) 'namesAnInterface'
-				rewrittenCallees.push(callee)
-				rewrittenReturns.push(asInterface)
-			end 'namesAnInterface'
-		end 'eachReturnType'
-
-		for i in 0 upto rewrittenCallees.count() 'applyEach'
-			let callee = try rewrittenCallees.get(i) otherwise panic("ProgramSignatures.normalizeSweptInterfaceTypes: rewrittenCallees.get OOB at {i} below count {rewrittenCallees.count()}")
-			let asInterface = try rewrittenReturns.get(i) otherwise panic("ProgramSignatures.normalizeSweptInterfaceTypes: rewrittenReturns.get OOB at {i} — the two columns are pushed in lockstep")
-			self.returnTypes.upsert(callee, value: MaxonReturnType.value(asInterface))
-		end 'applyEach'
+		// ⚠ **THE RETURN-TYPE HALF IS THE SHARED WALK AND THE FIELD HALF CANNOT BE.** A field re-tag writes
+		// THROUGH a layout (`retypeField`) and touches no map, so it may run in place above; a return-type
+		// re-tag rewrites the very map it walks, which is the collect-then-apply
+		// `rewriteRecordedReturnTypes` states once for all three rules.
+		self.rewriteRecordedReturnTypes(RecordedReturnTypeRule.declaredInterface)
 	end 'normalizeSweptInterfaceTypes'
 
 	// The `interfaceRef` a swept `named` denotes; `MapError.keyNotFound` when the name is not an interface —
