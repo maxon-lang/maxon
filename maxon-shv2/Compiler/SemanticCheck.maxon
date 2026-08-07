@@ -1868,6 +1868,7 @@ function checkWitnessArgTypes(project Project, func IrFunction, signatures Progr
 	let slots = witnessSlotsAt(signatures, witnessSlots: witnessSlots, dispatched: dispatched, interfaceDeclIndex: interfaceDeclIndex)
 	let requirement = (try slots.get(methodIndex) otherwise panic("checkWitnessArgTypes: slot {methodIndex} is outside the {slots.count()} witness slots of interface '{String.from(dispatched.name)}' — the op's `(interfaceDeclIndex, methodIndex)` pair was numbered against a different slot list")).method
 	let callRange = project.opRanges.get(opIndex)
+	let witnessReceiver = try args.get(0) otherwise panic("checkWitnessArgTypes: args.get OOB at 0 on an empty argument list — a witness dispatch carries its borrowed receiver at position 0 before any actual")
 
 	for j in 0 upto requirement.paramTypeNames.count() 'eachFormal'
 		let formalName = try requirement.paramTypeNames.get(j) otherwise panic("checkWitnessArgTypes: paramTypeNames.get OOB at {j} below count {requirement.paramTypeNames.count()}")
@@ -1879,7 +1880,12 @@ function checkWitnessArgTypes(project Project, func IrFunction, signatures Progr
 			// Passing `EmptySourceText` here would make the witness route report `expected 'int'` where the
 			// direct route reports `expected 'Integer'` for the identical declaration: this door's own defect,
 			// surviving in the sentence after being closed in the verdict.
-			declared(paramType, preErasedAggregate) then checkOneArgType(project, func: func, paramType: paramType, preErasedAggregate: preErasedAggregate, declaredParamName: formalName, paramName: witnessFormalName(requirement, position: j), position: j, argId: try args.get(j + WitnessReceiverArgCount) otherwise panic("checkWitnessArgTypes: args.get OOB at {j + WitnessReceiverArgCount} below count {args.count()} — a dispatch reaching here has the receiver plus one actual per formal"), callRange: callRange, filePath: func.sourceFilePath)
+			// ⚠ The BORROWED RECEIVER is this dispatch's subject. The shape substitution cannot fire through it
+			// and must not: the formals are the INTERFACE's (see this function's header), so their opaque types
+			// are owned by the interface rather than by any conformer — which is exactly the owner guard
+			// `ProgramSignatures.substituteThroughInstance` applies, and `witnessFormalDeclaredType` has already
+			// answered `opaque` for them one line up.
+			declared(paramType, preErasedAggregate) then checkOneArgType(project, func: func, paramType: paramType, preErasedAggregate: preErasedAggregate, declaredParamName: formalName, paramName: witnessFormalName(requirement, position: j), position: j, argId: try args.get(j + WitnessReceiverArgCount) otherwise panic("checkWitnessArgTypes: args.get OOB at {j + WitnessReceiverArgCount} below count {args.count()} — a dispatch reaching here has the receiver plus one actual per formal"), callInstanceSubject: witnessReceiver, callRange: callRange, filePath: func.sourceFilePath)
 		end 'formal'
 	end 'eachFormal'
 end 'checkWitnessArgTypes'
@@ -2443,7 +2449,10 @@ function checkIndirectCallArgs(project Project, func IrFunction, opIndex OpIndex
 		//
 		// `declaredParamName` stays empty and is the one column a `FunctionShape` genuinely does not have: it is
 		// the SPELLING, and a function type gives its parameters no names to spell.
-		checkOneArgType(project, func: func, paramType: paramType, preErasedAggregate: shapeParamIdentity(shape, index: i), declaredParamName: EmptySourceText, paramName: EmptySourceText, position: i, argId: argId, callRange: callRange, filePath: func.sourceFilePath)
+		// ⚠ The CALLEE is this call's own subject, and it is a function VALUE — never `genericInstance`-tagged —
+		// so the shape substitution declines. That is the right answer as well as an honest one: an indirect
+		// call's declared shape is the function TYPE's own, written in no generic body's declaration view.
+		checkOneArgType(project, func: func, paramType: paramType, preErasedAggregate: shapeParamIdentity(shape, index: i), declaredParamName: EmptySourceText, paramName: EmptySourceText, position: i, argId: argId, callInstanceSubject: callee, callRange: callRange, filePath: func.sourceFilePath)
 	end 'eachArg'
 end 'checkIndirectCallArgs'
 
@@ -3260,7 +3269,7 @@ function checkArgTypes(project Project, func IrFunction, result ValueId, sig Fun
 		// DECLARED SPELLING; see `checkOneArgType`.
 		let preErasedAggregate = try sig.paramAggregateNames.get(i) otherwise panic("checkArgTypes: paramAggregateNames.get OOB at {i} — a signature's param columns (names, types, aggregate names) are built in lockstep")
 		let declaredParamName = try sig.paramDeclaredNames.get(i) otherwise panic("checkArgTypes: paramDeclaredNames.get OOB at {i} — a signature's param columns (names, types, aggregate names, declared names) are built in lockstep")
-		checkOneArgType(project, func: func, paramType: paramType, preErasedAggregate: preErasedAggregate, declaredParamName: declaredParamName, paramName: paramName, position: i, argId: argId, callRange: callRange, filePath: filePath)
+		checkOneArgType(project, func: func, paramType: paramType, preErasedAggregate: preErasedAggregate, declaredParamName: declaredParamName, paramName: paramName, position: i, argId: argId, callInstanceSubject: instanceSubject, callRange: callRange, filePath: filePath)
 	end 'eachArg'
 end 'checkArgTypes'
 
@@ -3318,6 +3327,81 @@ function paramTypeThroughCallInstance(project Project, func IrFunction, subject 
 
 	return signatures.substituteThroughInstance(paramType, id: gid)
 end 'paramTypeThroughCallInstance'
+
+// ⭐⭐ **A FUNCTION-TYPED PARAMETER CARRIES A DECLARATION VIEW TOO — IN ITS SHAPE, WHICH IS WHY THE DOOR ABOVE
+// CANNOT REACH IT (W41).** `paramTypeThroughCallInstance` rewrites a TYPE, and a function type is a NAME
+// (`MaxonType.function(id)`): its parameter and return types live in a `FunctionShape` off to the side, so
+// there is nothing in the type itself for a substitution to fix. The shape is therefore fixed HERE, at the one
+// comparison that reads it, rather than by minting a substituted alias nothing else would ever ask for.
+//
+// ⛔ **MEASURED, and it refused a program the runnable oracle compiles and runs.** `stdlib/Interfaces.maxon`'s
+// `map(transform ElementTransform)` is re-parsed once per CONFORMER, so `Map.map`'s transform is
+// `function(Map.Entry) returns Map.Entry` — a tuple citing `Map`'s own type parameters. Judged unfixed against a
+// closure written at a concrete `Map with (String, int)`, `m.map(function(p (String, Integer)) gives p)` was
+// **`E3005 … expected 'fn(__Tuple2.Tfcd8090be60770aa.T5d84c0fc6312cff6) returns …', got 'fn(__Tuple2.String.int)
+// returns …'`** — one type named twice, in two views, which is `paramTypeThroughCallInstance`'s own W25
+// measurement one tier down. The bootstrap runs that program and answers 6.
+//
+// ⚠ **THE PRE-ERASURE IDENTITY COLUMNS ARE CARRIED THROUGH UNCHANGED, AND THAT IS CORRECT RATHER THAN LAZY.**
+// They hold the names resolution DESTROYS — a boxed union/enum, a per-instance ranged alias — and
+// `FunctionShape.paramAggregateNames` is deliberately EMPTY for exactly the shapes this substitution moves (a
+// struct, a tuple, a nested instance keep their identity live in `paramTypes`). A type argument cannot turn a
+// position from one kind into the other: the substitution replaces a type parameter or an instance argument,
+// never the enum-ness of a slot.
+//
+// Returns the shape UNCHANGED — the same object — when nothing moved, the early-return contract every
+// substitution in this compiler keeps, so the overwhelmingly common non-generic call allocates nothing.
+function functionShapeThroughCallInstance(project Project, func IrFunction, subject ValueId, shape FunctionShape) returns FunctionShape
+	let subjectTag = try func.valueTags.get(subject) otherwise panic("functionShapeThroughCallInstance: value v{subject} of function '{String.from(func.name)}' has no recorded type — every SSA value must be minted through Parser.mintValue")
+	if subjectTag != ValueTypeTag.genericInstance 'notACallThroughAConcreteInstance'
+		return shape
+	end 'notACallThroughAConcreteInstance'
+
+	// ⚠ `var` for `paramTypeThroughCallInstance`'s reason — the substitution INTERNS the instance and the tuple
+	// it produces, so the identity the comparison is about has to exist by the time it is compared.
+	var signatures = programSignaturesIn(project, asker: "functionShapeThroughCallInstance")
+	let gid = try func.valueNameIds.get(subject) otherwise panic("functionShapeThroughCallInstance: genericInstance value v{subject} of function '{String.from(func.name)}' has no recorded GenericInstanceId — the two type columns are minted in lockstep")
+	var substituted = MaxonTypeArray.create()
+	var moved = false
+	for paramType in shape.paramTypes 'eachParam'
+		let next = signatures.substituteThroughInstanceInterned(paramType, id: gid, interner: project.typeNames)
+		if not maxonTypesDenoteSame(next, b: paramType) 'paramMoved'
+			moved = true
+		end 'paramMoved'
+		substituted.push(next)
+	end 'eachParam'
+
+	let returnType = returnTypeThroughCallInstance(signatures, returnType: shape.returnType, gid: gid, typeNames: project.typeNames)
+	if not moved and maxonReturnTypesDenoteSame(returnType, b: shape.returnType) 'theInstanceFixesNothingHere'
+		return shape
+	end 'theInstanceFixesNothingHere'
+
+	return FunctionShape.create(substituted, returnType: returnType, paramAggregateNames: shape.paramAggregateNames, returnAggregateName: shape.returnAggregateName)
+end 'functionShapeThroughCallInstance'
+
+// The RETURN slot of the substitution above — the `void`/`value` split, which a match arm's single statement
+// makes its own function exactly as `mappedArrayElementHint` is in the parser.
+function returnTypeThroughCallInstance(signatures ProgramSignatures, returnType MaxonReturnType, gid GenericInstanceId, typeNames TypeNameInterner) returns MaxonReturnType
+	match returnType 'returned'
+		void then break 'returned'
+		value(inner) then return MaxonReturnType.value(signatures.substituteThroughInstanceInterned(inner, id: gid, interner: typeNames))
+	end 'returned'
+
+	return returnType
+end 'returnTypeThroughCallInstance'
+
+// Do two return slots denote the same thing? `void` is `void`, and a value slot defers to the type rule the
+// substitutions share. Written here because the substitution above needs the "did anything move" answer over a
+// `MaxonReturnType`, and the type-level `maxonTypesDenoteSame` cannot see the union's own arm.
+function maxonReturnTypesDenoteSame(a MaxonReturnType, b MaxonReturnType) returns bool
+	match a 'left'
+		void then return maxonReturnTypeIsVoid(b)
+		value(innerA) then return match b 'right'
+			void gives false
+			value(innerB) gives maxonTypesDenoteSame(innerA, b: innerB)
+		end 'right'
+	end 'left'
+end 'maxonReturnTypesDenoteSame'
 
 // How a diagnostic NAMES the parameter an argument met: by NAME at a direct call, by 1-based POSITION at
 // an indirect one — a function TYPE's parameter names are documentation the parser discards
@@ -3510,7 +3594,12 @@ end 'checkOneReturnedValue'
 // (`FuncSignature.paramDeclaredNames`, user ruling 2026-08-04). Only a direct call has one: a function TYPE
 // names its parameters nowhere, so an indirect call passes `EmptySourceText` and the refusal falls back to the
 // resolved type's own display name.
-function checkOneArgType(project Project, func IrFunction, paramType MaxonType, preErasedAggregate ByteArray, declaredParamName ByteArray, paramName ByteArray, position ParamCount, argId ValueId, callRange SourceRange, filePath FilePath)
+//
+// `callInstanceSubject` is the value whose CONCRETE generic instance fixes the callee's declaration-view
+// parameter types — the same subject `checkArgTypes` reads for `paramTypeThroughCallInstance`. Only the
+// function-shape arm below consults it, and it declines for any subject not tagged `genericInstance`, which
+// is how the two callers that HAVE no instance pass their own honest subject rather than a sentinel.
+function checkOneArgType(project Project, func IrFunction, paramType MaxonType, preErasedAggregate ByteArray, declaredParamName ByteArray, paramName ByteArray, position ParamCount, argId ValueId, callInstanceSubject ValueId, callRange SourceRange, filePath FilePath)
 	let argTag = try func.valueTags.get(argId) otherwise panic("checkOneArgType: value v{argId} of function '{String.from(func.name)}' has no recorded type — every SSA value must be minted through Parser.mintValue")
 	let argNameId = try func.valueNameIds.get(argId) otherwise panic("checkOneArgType: value v{argId} of function '{String.from(func.name)}' has no recorded type name — the two type columns are minted in lockstep")
 	let paramTag = maxonTypeTag(paramType)
@@ -3580,7 +3669,7 @@ function checkOneArgType(project Project, func IrFunction, paramType MaxonType, 
 	// below answers `ok` for it (two `function` tags agree), which is how `use(intish)` reached the backend
 	// with a callee returning an integer where the call site read the float return register.
 	if paramTag == ValueTypeTag.function and argTag == ValueTypeTag.function 'functionArg'
-		let declaredShape = requireFunctionShapeOf(functionTypeRegistryOf(project), name: functionTypeNameOf(functionTypeRegistryOf(project), nameId: typeNameIdOf(paramType)), side: "declared")
+		let declaredShape = functionShapeThroughCallInstance(project, func: func, subject: callInstanceSubject, shape: requireFunctionShapeOf(functionTypeRegistryOf(project), name: functionTypeNameOf(functionTypeRegistryOf(project), nameId: typeNameIdOf(paramType)), side: "declared"))
 		let gotShape = requireFunctionShapeOf(functionTypeRegistryOf(project), name: functionValueGoverningName(project, func: func, value: argId), side: "arriving")
 		if not functionShapesAgree(functionTypeRegistryOf(project), declared: declaredShape, got: gotShape) 'signatureMismatch'
 			reportPositioned(project, code: ErrorCode.typeMismatch, message: argTypeMismatchMessage(paramName, position: position, expected: formatFunctionShapeDisplay(declaredShape, typeNames: project.typeNames), got: formatFunctionShapeDisplay(gotShape, typeNames: project.typeNames)), line: callRange.line, column: callRange.column, filePath: filePath)

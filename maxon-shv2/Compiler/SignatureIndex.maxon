@@ -6513,6 +6513,18 @@ export type ProgramSignatures
 		return self.extensionShadowedMethods.contains(qualified)
 	end 'extensionMethodIsShadowed'
 
+	// ⭐ **DID AN `extension` PUBLISH `qualified`, rather than the conformer declaring it?** — the DIRECT read
+	// of the set above, and a genuinely different question from `conformerDeclaresOwnMethod`'s. That one is a
+	// CONJUNCTION asked while the fold is still running, and it answers `false` both for an extension's method
+	// and for a name nothing declares at all; a caller that needs to know the method's signature is the
+	// INTERFACE's — because only then does it know what that signature says without reading it — must ask
+	// about publication itself. `Parser.extensionElementTransformHint` is that caller: it offers a closure
+	// parameter type only for a `map` whose declaration it can name, and a conformer's own `map` is free to
+	// declare anything.
+	export function methodPublishedByExtension(qualified ByteArray) returns bool
+		return self.extensionPublishedMethods.contains(qualified)
+	end 'methodPublishedByExtension'
+
 	// Add one function's consume bits to the index AND fold them into the hash. The one write, for
 	// `record`'s reason: the table and the hash that keys every parse memo on it cannot disagree about what
 	// the index contains. A function with NO consumed parameter is not recorded (its default answer is "not
@@ -14024,12 +14036,24 @@ export type ProgramSignatures
 	// mints a `MaxonType` box nor builds an intern key, and — because the answer is the same object — the field
 	// read's caller can tell "this needed no instance view" from the answer itself rather than from a second
 	// predicate over the same shape.
+	//
+	// ⛔ **AN ARGUMENT THAT IS A TUPLE CROSSES THROUGH THE INTERNED DOOR, NOT THE INTERNER-FREE ONE (W41).** A
+	// tuple is the one `structRef` whose identity CITES the declaring type's parameters, and
+	// `substituteThroughInstance` passes every `structRef` through untouched because it has no name table. Asked
+	// on an ARGUMENT that is a tuple, that silence is a wrong type rather than a missing optimization:
+	// `Array with Map.Entry` under `Map -> (String, int)` stayed `Array with Map.Entry`, so the element of the
+	// array `Iterable.map` returns never became concrete. MEASURED on `m.map(function(p) gives p)` — the closure
+	// was typed with the DECLARATION-view tuple and refused against a correctly substituted parameter,
+	// `expected 'fn(__Tuple2.String.int) …', got 'fn(__Tuple2.Tfcd8090be60770aa.T5d84c0fc6312cff6) …'`.
+	//
+	// The index's OWN interner is the right table here and needs no caller to supply one: `instanceArgs` answers
+	// in this index's space, which is the same space `substituteTupleThroughInstance` interns its result into.
 	function substituteInstanceArgsThrough(nested GenericInstanceId, through GenericInstanceId) returns MaxonType
 		let args = self.genericInstances.instanceArgs(nested)
 		var substituted = MaxonTypeArray.create()
 		var moved = false
 		for arg in args 'eachArg'
-			let next = self.substituteThroughInstance(arg, id: through)
+			let next = self.substituteThroughInstanceInterned(arg, id: through, interner: self.typeNames)
 			if not maxonTypesDenoteSame(next, b: arg) 'argMoved'
 				moved = true
 			end 'argMoved'
@@ -14120,6 +14144,36 @@ export type ProgramSignatures
 
 		return try self.internTupleType(substituted, from: self.typeNames, slotScopeFilePath: layout.declFilePath) otherwise panic("ProgramSignatures.substituteTupleThroughInstance: the instance view of `{String.from(tupleName)}` was refused as a tuple element list, which its declaration view already passed")
 	end 'substituteTupleThroughInstance'
+
+	// ⭐⭐ **THE INSTANCE VIEW OF A DECLARATION-VIEW TYPE, TUPLE INCLUDED — the ONE home of the name/id split
+	// the two substitutions above leave open.** `substituteThroughInstance` is deliberately interner-FREE, so it
+	// passes a `structRef` through untouched; a TUPLE `structRef` is the one `structRef` whose identity CITES the
+	// declaring type's parameters, and it crosses as a NAME rather than as an id. Composing the two therefore
+	// needs a name table, and the composition is written HERE — once — rather than at each door that wants it.
+	//
+	// ⛔ **IT EXISTS BECAUSE THE COMPOSITION HAD ACQUIRED A SECOND SITE, which `Parser.slotTypeThroughReceiver`'s
+	// own header had already named as the drift to prevent** (*"a second site holding the name/id split is the
+	// drift the function below exists to prevent"*). That door serves the PARSER, in a file's interner; the
+	// argument check needs the identical rule in the PROJECT's, and re-spelling it there would have made the
+	// warning's own prediction come true.
+	//
+	// `interner` is read AND written: the declared name is looked up in it and the substituted tuple is interned
+	// back into it, so a caller always gets an id its own table resolves. The type is returned UNCHANGED — the
+	// same object — when the instance fixes nothing, which is the early-return contract both substitutions above
+	// keep and which lets a caller tell "no instance view" from the answer itself.
+	export function substituteThroughInstanceInterned(t MaxonType, id GenericInstanceId, interner TypeNameInterner) returns MaxonType
+		if not tagIsStructRef(maxonTypeTag(t)) 'notATuple'
+			return self.substituteThroughInstance(t, id: id)
+		end 'notATuple'
+
+		let declaredName = try interner.nameOf(typeNameIdOf(t)) otherwise panic("ProgramSignatures.substituteThroughInstanceInterned: structRef id {typeNameIdOf(t)} is not in the interner it was read with — a caller must hand the table its own type was minted from")
+		if not isTupleTypeName(declaredName) 'aPlainStruct'
+			return t
+		end 'aPlainStruct'
+
+		let instanceView = self.substituteTupleThroughInstance(declaredName, id: id)
+		return t if instanceView.equals(declaredName) else MaxonType.structRef(interner.intern(instanceView))
+	end 'substituteThroughInstanceInterned'
 
 	// The base struct's field `index` type as instance `id` sees it — `substituteThroughInstance` applied to the
 	// declared field type. This is what turns `Box`'s opaque `value as T` into `String` for a `Box with String`,

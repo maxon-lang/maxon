@@ -36969,7 +36969,14 @@ export type Parser
 		try self.requireWitnessSourceForForwarding(base, callee: callee, memberTok: memberTok)
 		try self.requireMethodNotWithheldByConstraint(base.layout.name, callee: callee, receiver: base.box, memberTok: memberTok)
 
+		// ⭐ **THE TRANSFORM POSITION'S PARAMETER-TYPE OFFER, for a `map` an `extension` supplies** — the corpus
+		// twin of `parseElementTransformArg`'s, and it is spent by the SAME `parseFunctionParameters` rule.
+		// Restored on the SUCCESS path only, exactly as the builtin offer is and for the identical reason: a
+		// `ParseError` out of the arguments aborts the file's parse, so a hint left set reaches no later closure.
+		let savedHint = self.closureParamHint
+		self.closureParamHint = self.extensionElementTransformHint(base.box, methodName: memberTok.value, callee: callee)
 		let result = try self.parseCallNamed(func, callee: callee, anchor: baseTok, receiver: ReceiverArg.value(base.box, immutableName: base.immutableName, subjectName: base.subjectName), resultUsed: resultUsed, constructorInstance: self.receiverConstructorInstance(base.box), mint: CalleeMint.notMinted)
+		self.closureParamHint = savedHint
 		self.retypeInstanceMethodResult(result, receiver: base.box)
 		return result
 	end 'dispatchMethodOnBase'
@@ -38016,6 +38023,120 @@ export type Parser
 		try self.consume(TokenKind.rightParen)
 		return transform
 	end 'parseElementTransformArg'
+
+	// ⭐⭐ **THE SAME OFFER, FOR A CONTAINER WHOSE `map` COMES FROM `extension Iterable` RATHER THAN FROM THE
+	// BUILTIN ROSTER (W41).** `stdlib/Map.maxon` is listed and the synthesized `Map` is retired, so `Map` is an
+	// ordinary user generic: `m.map(f)` no longer reaches `parseContainerMap` at all, it reaches
+	// `dispatchMethodOnBase` like any other struct method. The inference was keyed to the roster, so it went
+	// silent on the very construct `specs-shv2/interface-extensions.md` writes — the refusal named `map` while
+	// refusing the one `map` a corpus container has.
+	//
+	// ⭐ **THE OFFER IS THE ELEMENT OF THE ARRAY `map` IS DECLARED TO RETURN, and that is the SAME question the
+	// builtin path asks** (`parseContainerMap` hands `containerElementType(resultGiid)`). It is sound because
+	// `map` is element-type-PRESERVING — `stdlib/Interfaces.maxon:199` declares
+	// `map(transform ElementTransform) returns ElementArray` over one `Element`, which `requireElementTransform`
+	// states as the rule for the builtin twin. So "what element does this `map` produce" and "what element does
+	// its transform take" are one fact, and reading the DECLARATION is what keeps them one: the answer is the
+	// extension's own published signature, re-parsed per conformer with `Element` already substituted, not a
+	// re-derivation of the element from the `implements` clause.
+	//
+	// ⛔ **`StructLayout.bindingsForInterface("Iterable")` WAS THE OBVIOUS KEY AND IS THE WRONG ONE.** It answers
+	// only when the type names that interface LAST (its own header says so), so `implements Iterable with (…),
+	// Printable` would silently offer nothing — and it would be a SECOND derivation of the container's element,
+	// disagreeing with the declaration whenever a conformance and a signature drift apart. Reading the callee's
+	// own declared return cannot drift from the callee.
+	//
+	// ⚠ **GATED ON THE METHOD BEING THE EXTENSION'S, because a conformer that declares its OWN `map` may declare
+	// anything.** `methodPublishedByExtension` is what says the signature above is the one being called; without
+	// it, a `map(x Integer) returns IntArray` would have its return's element offered to a closure its own
+	// parameter list never asked for.
+	//
+	// Every gate FAILS SAFE — an unrecognized shape returns `none`, which is the existing positioned E2015
+	// naming the one construct that does infer, not a wrong type.
+	function extensionElementTransformHint(receiver ValueId, methodName ByteArray, callee ByteArray) returns ClosureParamTypeHint
+		if not methodName.equals(MapMethod) 'notTheTransformPosition'
+			return ClosureParamTypeHint.none
+		end 'notTheTransformPosition'
+
+		if not self.signatures.methodPublishedByExtension(callee) 'theConformersOwnMap'
+			return ClosureParamTypeHint.none
+		end 'theConformersOwnMap'
+
+		match self.signatures.returnTypeOf(callee, into: self.artifact.typeNames) 'declaredReturn'
+			declared(returnType) then return self.mappedArrayElementHint(receiver, returnType: returnType)
+			undeclared then break 'declaredReturn'
+		end 'declaredReturn'
+
+		return ClosureParamTypeHint.none
+	end 'extensionElementTransformHint'
+
+	// The `value`/`void` split of the declared return, one shape over from `retypeOpaqueReturn`'s and for its
+	// reason — a match arm holds one statement, so the union is unwrapped a level at a time.
+	function mappedArrayElementHint(receiver ValueId, returnType MaxonReturnType) returns ClosureParamTypeHint
+		match returnType 'returned'
+			value(declaredArray) then return self.mappedArrayElementOffer(receiver, declaredArray: declaredArray)
+			void then break 'returned'
+		end 'returned'
+
+		return ClosureParamTypeHint.none
+	end 'mappedArrayElementHint'
+
+	// ⚠ **FIXED BY THE RECEIVER'S INSTANCE FIRST.** `Iterable.map` is re-parsed once per CONFORMER, not once per
+	// INSTANCE, so `Map.map`'s declared `ElementArray` is `Array with Map.Entry` in the DECLARATION view — its
+	// element cites `Map`'s own type parameters. Offered unfixed, a closure would be typed against an opaque
+	// tuple its body could not read a field of; `slotTypeThroughReceiver` is the door that turns it into the
+	// `Array with (String, int)` this receiver actually holds, and it is the same door the field read and the
+	// method return already cross.
+	function mappedArrayElementOffer(receiver ValueId, declaredArray MaxonType) returns ClosureParamTypeHint
+		let fixed = self.slotTypeThroughReceiver(receiver, declared: self.calleeScopedContainerReturn(declaredArray))
+		if maxonTypeTag(fixed) != ValueTypeTag.genericInstance 'notAContainerReturn'
+			return ClosureParamTypeHint.none
+		end 'notAContainerReturn'
+
+		return ClosureParamTypeHint.fromContainerElement(self.signatures.adoptType(self.signatures.containerElementType(typeNameIdOf(fixed)), into: self.artifact.typeNames))
+	end 'mappedArrayElementOffer'
+
+	// ⭐⭐ **THE SWEPT RETURN TYPE IS A BARE NAME, AND `ElementArray` IS AN INNER GENERIC ALIAS OF THE
+	// CONFORMER** — `promoteBareGenericResultToCalleeScope`'s question asked of a TYPE instead of a minted
+	// VALUE, and of the one shape that door does not reach.
+	//
+	// `returnTypeOf` reads the token SWEEP's table, which records every written type as the bare name the source
+	// spelled (`parseTypeReference`'s `allFilesFolded` gate argues why it must). So `Iterable.map`'s
+	// `returns ElementArray`, folded onto conformer `Map`, arrives here as `named("ElementArray")` — and the
+	// registry that says what it MEANS keys it under the conformer, `Map.ElementArray`, because
+	// `foldExtensionDeclarationInto` files a nested `typealias ElementArray = Array with Element` through
+	// `qualifiedInnerGenericAlias`.
+	//
+	// ⚠ **`scopedGenericInstanceOf` CANNOT ANSWER FOR IT, which is why this is not simply that door reused.**
+	// That one re-scopes a bare generic BASE (`Inner` ⇒ `Inner with (Map.Key, Map.Value)`) and gates on
+	// `structTypeParamsOf`, which answers the shared empty for a name no `type` declares — and `ElementArray` is
+	// an alias, not a type. This is `parseTypeReference`'s inner-alias GENERIC arm, reached from a call site
+	// whose cursor is nowhere near the declaration that gives the name its meaning.
+	//
+	// ⚠ **THE RECORDED NAME IS ALREADY THE REGISTRY KEY — it needs no re-qualifying, and MEASURED, re-qualifying
+	// it is what made this door answer nothing.** The sweep files an extension's nested alias under the
+	// CONFORMER (`qualifiedInnerGenericAlias`) and records the return type under that same qualified spelling, so
+	// what arrives here is `Map.ElementArray`, not `ElementArray`. Joining the declaring type onto it a second
+	// time asked the registry about `Map.Map.ElementArray`, which nothing declares, and every corpus `map` fell
+	// through to the E2015 this function exists to retire.
+	//
+	// Anything else passes through untouched: a conformer that spells its return concretely
+	// (`returns IntArray`) is already what it needs to be, and a name in no generic-alias registry answers
+	// `none` two lines on rather than guessing.
+	function calleeScopedContainerReturn(declared MaxonType) returns MaxonType
+		if maxonTypeTag(declared) != ValueTypeTag.named 'notASweptBareName'
+			return declared
+		end 'notASweptBareName'
+
+		// ⚠ `allFilesFolded` for the reason `scopedGenericInstanceOf` states: the alias registry is one the
+		// declaration sweep is still filling, so an ungated answer would depend on the loader's walk order.
+		let name = self.internedName(typeNameIdOf(declared))
+		if not self.signatures.allFilesFolded or not self.signatures.isGenericAlias(name) 'notAGenericAliasReturn'
+			return declared
+		end 'notAGenericAliasReturn'
+
+		return MaxonType.genericInstance(self.signatures.genericAliasInstanceFrom(name, readerFilePath: self.filePath))
+	end 'calleeScopedContainerReturn'
 
 	// ⭐ **`map`'s TRANSFORM MUST BE A FUNCTION, AND IT MUST ANSWER THE CONTAINER'S OWN ELEMENT TYPE.** Both
 	// halves are the reference declaration read literally (`function(Element) returns Element`): shv2's `map`
@@ -45489,24 +45610,24 @@ export type Parser
 		end 'notAConcreteInstance'
 
 		// ⭐ **A TUPLE CROSSES AS A NAME, NOT AS AN ID** — `substituteTupleThroughInstance` states why the
-		// interner-free substitution below cannot answer for a `structRef`, and why a tuple's canonical name is
-		// the currency that can. Asked here rather than beside it because THIS is the door that already owns
-		// both directions of the crossing, and a second site holding the name/id split is the drift the
-		// function below exists to prevent.
-		if tagIsStructRef(maxonTypeTag(declared)) 'maybeATuple'
-			let declaredName = self.internedName(typeNameIdOf(declared))
-			if isTupleTypeName(declaredName) 'aTuple'
-				let instanceView = self.signatures.substituteTupleThroughInstance(declaredName, id: self.valueNameId(box))
-				return declared if instanceView.equals(declaredName) else MaxonType.structRef(self.artifact.typeNames.intern(instanceView))
-			end 'aTuple'
-		end 'maybeATuple'
-
-		let substituted = self.signatures.substituteThroughInstance(declared, id: self.valueNameId(box))
+		// interner-free substitution cannot answer for a `structRef`, and why a tuple's canonical name is the
+		// currency that can. The composition of the two lives in `substituteThroughInstanceInterned`, beside the
+		// substitutions it composes, because the ARGUMENT CHECK needs the identical rule in the PROJECT's
+		// interner — and this header used to say the crossing was owned here, which stopped being true the
+		// moment a second door needed it.
+		let substituted = self.signatures.substituteThroughInstanceInterned(declared, id: self.valueNameId(box), interner: self.artifact.typeNames)
 		if maxonTypesDenoteSame(substituted, b: declared) 'theInstanceFixesNothingHere'
 			return declared
 		end 'theInstanceFixesNothingHere'
 
-		return self.resolvedSlotType(substituted)
+		// ⚠ **ONLY THE NON-TUPLE ANSWER IS RESOLVED, and the gate reads the DECLARED side rather than the
+		// substituted one.** `resolvedSlotType` repairs a sweep-recorded `named` leaf (see the A4i note above); a
+		// tuple came back already interned as a `structRef` by the crossing, and handing THAT to the slot
+		// resolver would ask the alias registries about a name no alias declares. A `structRef` INPUT that
+		// reached this line can only be a moved tuple — every other `structRef` leaves through the
+		// denotes-same return one line up — whereas a `structRef` ANSWER is also what a `typeParameter` whose
+		// argument is a struct substitutes to, and that one still needs resolving.
+		return substituted if tagIsStructRef(maxonTypeTag(declared)) else self.resolvedSlotType(substituted)
 	end 'slotTypeThroughReceiver'
 
 	// ⭐ **THE ONE `loadIndirect` EMIT** — and it now IS the one, which it was not when it first claimed
