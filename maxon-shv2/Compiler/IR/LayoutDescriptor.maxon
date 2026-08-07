@@ -28,9 +28,20 @@
 // ⚠ **A B1 DESCRIPTOR IS PURE DATA — every function-pointer slot is 0, so NO relocation is emitted
 // or needed.** The moment a slot at +32/+40 must hold a `.text` address, that is B2's
 // `funcAbs64InRdata` machinery, not B1's.
+//
+// ⭐⭐ **AND THE BLOB IS ONE SUCH BLOCK PER TYPE PARAMETER (W43b).** The two function-pointer slots
+// describe ONE type argument, so a `Map with (Key, Value)` needs two of each — see
+// `layoutDescriptorBytesFor` for the wild free a single shared pair caused, and `layoutBlockOffsetFor`
+// for how a reader addresses parameter `i`'s block. A ONE-parameter instance is one block and is
+// byte-identical to everything above.
+//
+// ⚠ `elementLogicalSize@56` still answers only for a SOLE parameter (`LAYOUT_NO_SOLE_ELEMENT`), even
+// though block `i` now has somewhere to put parameter `i`'s size: filling it would be a widening of
+// what `sizeof(T)` means in a multi-parameter body, which `parseSizeof` refuses today. The slot and the
+// refusal are named in each other's comments precisely so that pair moves together or not at all.
 
-// The fixed on-disk size of one descriptor blob. Every field is a machine word (8 bytes), and there
-// are eight of them.
+// The fixed on-disk size of ONE descriptor block — one type parameter's dictionary. Every field is a
+// machine word (8 bytes), and there are eight of them.
 export let LAYOUT_DESCRIPTOR_BYTE_SIZE = 64 as ByteOffset
 
 // The byte offset of the `elementLogicalSize` slot — the source-level `sizeof` of the single type

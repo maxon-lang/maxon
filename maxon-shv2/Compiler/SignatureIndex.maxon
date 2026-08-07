@@ -9053,6 +9053,27 @@ export type ProgramSignatures
 		return self.functionTypeAliases.contains(name)
 	end 'isFunctionAlias'
 
+	// ⭐ **A FUNCTION TYPEALIAS SUBSTITUTED IN AS A TYPE ARGUMENT IS A `function` PLACE, AND IT ARRIVES AS A
+	// `named` LEAF (W43b).** `substitutedInstanceArg` answers the argument AS INTERNED, and a function alias
+	// is not in the type registries `denotedNamedType` walks — it lives in `functionTypeAliases` — so
+	// `Map with (String, UnaryOp)`'s value argument reads `named`, whose tag prints "int". Handed to the
+	// scalar coercion rule unresolved, `m.upsert("d", value: double)` was refused *"cannot pass a value of
+	// type 'function' … which holds 'int'"* on a program the oracle runs
+	// (`specs/map.md:function-valued.dispatch`).
+	//
+	// It is the same resolution `SemanticCheck.witnessFormalDeclaredType` makes for an interface
+	// requirement's formal, for the same reason and with the same answer — `MaxonType.function(id)`, the
+	// type a declared parameter of that alias carries — so a function alias means one thing at both doors.
+	export function functionAliasResolved(t MaxonType) returns MaxonType
+		if maxonTypeTag(t) != ValueTypeTag.named 'notANamedLeaf'
+			return t
+		end 'notANamedLeaf'
+		if not self.isFunctionAlias(self.nameOfId(typeNameIdOf(t))) 'notAFunctionAlias'
+			return t
+		end 'notAFunctionAlias'
+		return MaxonType.function(typeNameIdOf(t))
+	end 'functionAliasResolved'
+
 	// The struct type `name` denotes, declared in ANY file — `aliasOf`'s twin, and the door the
 	// PARSER asks every struct question through: is this name a `type`? how big is its box? which
 	// slot is `x`?

@@ -404,7 +404,17 @@ export function checkDeclaredType(value ValueTypeTag, declared ValueTypeTag) ret
 	// `mismatch` (both would be E3005, but the function one carries the "use a function typealias" advice).
 	// A function into a FUNCTION place falls through to agree below; a NON-function into a function place is
 	// an ordinary class `mismatch`, which is why the guard is one-sided.
-	if value == ValueTypeTag.function and declared != ValueTypeTag.function 'functionValue'
+	//
+	// ⭐ **AN OPAQUE TYPE-PARAMETER PLACE IS NOT "A NON-FUNCTION PLACE" — IT IS A PLACE WHOSE TYPE IS
+	// DECIDED SOMEWHERE ELSE (W43b).** `T` is one machine word and a function code pointer is one machine
+	// word (`ProgramSignatures.slotTypeFitsOneWord` admits "a function alias" by name), so whether a
+	// function value belongs there is settled by the INSTANTIATION — `Map with (String, UnaryOp)` binds
+	// `Value` to a function alias and `Map with (String, int)` does not — and `checkTypeParameterArgsAt`
+	// asks exactly that, against the SUBSTITUTED argument, at every concrete call site. Deciding it here
+	// from the FORMAL's shape is the alternative that ruling already rejected for floats
+	// (`checkTypeParameterArgsAt`'s ⚠), and it refused `specs/map.md`'s `function-valued.dispatch` — a
+	// `Map<String, FunctionType>` the oracle compiles and runs.
+	if value == ValueTypeTag.function and declared != ValueTypeTag.function and declared != ValueTypeTag.typeParameter 'functionValue'
 		return DeclaredTypeMatch.functionIntoNonFunction
 	end 'functionValue'
 

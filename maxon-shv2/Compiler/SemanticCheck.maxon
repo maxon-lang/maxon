@@ -2874,7 +2874,10 @@ function checkTypeParameterArgsAt(project Project, func IrFunction, gid GenericI
 		// alias resolution (`canonicalTypeArg`) lived inside the identity read alone, where the pair could not
 		// see it: `Box with Bytes`'s argument then read `Array_Byte` as its identity while its tag stayed
 		// `named`, and the byte boundary was asked about a name id that is not an instance id.
-		let substituted = signatures.canonicalTypeArg(signatures.substitutedInstanceArg(gid, position: position))
+		// ⚠ `functionAliasResolved` is the LAST step and not the first: canonicalization works on the interned
+		// leaf, and a function alias is only a `function` place once nothing else is going to read it as a
+		// name. See that door for the program it refused unresolved.
+		let substituted = signatures.functionAliasResolved(signatures.canonicalTypeArg(signatures.substitutedInstanceArg(gid, position: position)))
 		let expected = signatures.typeArgAggregateName(substituted)
 		let argId = try argIds.get(i) otherwise panic("checkTypeParameterArgsAt: argIds.get OOB at {i}")
 		let argTag = try func.valueTags.get(argId) otherwise panic("checkTypeParameterArgsAt: value v{argId} of function '{String.from(func.name)}' has no recorded type — every SSA value must be minted through Parser.mintValue")
