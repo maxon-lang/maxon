@@ -11081,7 +11081,9 @@ export type Parser
 		// Tolerant like every other read on this walk: a malformed clause records no conformance and leaves
 		// the positioned diagnostic to the real parse. The cursor is left wherever the read stopped, which the
 		// body loop below steps over token by token exactly as it stepped over the whole clause before.
+		self.openConformanceClauseAliasScope()
 		let scannedConformances = try self.readOptionalImplementsClause() otherwise ScannedConformanceClause.declaringNothing()
+		self.closeConformanceClauseAliasScope()
 		layout.recordConformances(scannedConformances.names, bindings: scannedConformances.bindings)
 
 		// The cursor now sits at the type body's first token — captured for the transitive array-feed post-pass
@@ -11522,8 +11524,38 @@ export type Parser
 				// but where a published one leaves it, and the only way to guarantee that is to run the same
 				// reader over it. A second, shorter walk of a signature is exactly the resume point one token
 				// off that `skipPastBlockEnd`'s header warns about.
+				// ⭐⭐ **THE CONFORMER'S OWN DECLARATION SHADOWS THE EXTENSION'S (W43), AND THE DECISION IS TAKEN
+				// HERE AND RECORDED.** `stdlib/Map.maxon` declares `contains(key Key)` and
+				// `stdlib/Interfaces.maxon`'s `extension Iterable` declares `contains(predicate …)`: both wanted
+				// to be `Map.contains`, and the result was `E3006 duplicate definition of function
+				// 'Map.contains'` — with the extension's signature having ALREADY overwritten the type's in the
+				// index on the way there, which is the wrong-answer half nothing reported.
+				//
+				// ⚖ **BOTH REFERENCES MAKE THIS AN OVERLOAD AND shv2 CANNOT, WHICH IS WHY IT SHADOWS.** The
+				// bootstrap re-parses the extension body as a member of the conformer, so `MangleOverloadName`
+				// distinguishes `contains(self, key)` from `contains(self, predicate)`; v1's
+				// `tryRegisterOverload` re-keys the incumbent. Both registries are WHOLE-PROGRAM. shv2's is
+				// deliberately PER FILE — `overloadRegistrationNameFor`'s own header states the boundary, "two
+				// FILES declaring one name still collide at the merge" — and a conformer and the extension over
+				// it are in different files by construction here. Making it an overload therefore needs the
+				// per-member whole-program facts that header names as a rung of its own.
+				//
+				// So the rule shv2 takes is the one an interface extension already means: its methods are
+				// DEFAULT implementations, and a conformer that declares the name has said what it means there.
+				// It is also the bootstrap's own rule for CONDITIONAL extensions
+				// (`FilterConflictingExtensionMethods`, `2-Parser.cs:4925-4944`: *"Skip this extension method if
+				// the same specific overload already has a body"*), applied to every extension rather than to
+				// the one arm that happened to have it. ⚠ The capability it costs is real and is named: a
+				// conformer's own `contains` HIDES `Iterable.contains(predicate)` on that type, where both
+				// references would offer both. Nothing in `/specs` calls the hidden one.
+				let qualifiedMethodName = qualifiedMethodName(conformer, methodName: methodName)
+				let shadowed = index.conformerDeclaresOwnMethod(qualifiedMethodName)
+				if shadowed 'theConformerDeclaresItsOwn'
+					index.noteExtensionShadowedMethod(qualifiedMethodName)
+				end 'theConformerDeclaresItsOwn'
+
 				match verdict 'verdict'
-					satisfied then self.recordScannedSignature(entries, paramConsumes: paramConsumes, paramDefaults: paramDefaults, throwsEntries: throwsEntries, methodInnerAliasParamOut: methodInnerAliasParamOut, freeFunctionNameOut: freeFunctionNameOut)
+					satisfied then self.publishOrShadowExtensionMethod(index, shadowed: shadowed, qualifiedMethodName: qualifiedMethodName, entries: entries, paramConsumes: paramConsumes, paramDefaults: paramDefaults, throwsEntries: throwsEntries, methodInnerAliasParamOut: methodInnerAliasParamOut, freeFunctionNameOut: freeFunctionNameOut)
 					unmet(unmetInterfaceName, bindingName) then self.foldWithheldExtensionMethod(index, conformer: conformer, methodName: methodName, clause: clause, unmetInterfaceName: unmetInterfaceName, bindingName: bindingName)
 				end 'verdict'
 				// `recordScannedSignature` leaves the cursor at the method BODY's first token, i.e. inside the
@@ -11721,6 +11753,24 @@ export type Parser
 		end 'target'
 	end 'noteTypeExtensionWitnessConstraints'
 
+	// ⭐ **PUBLISH THE EXTENSION METHOD, OR READ IT AND THROW THE SIGNATURE AWAY (W43).** A SHADOWED method is
+	// read exactly as a withheld one is — the cursor must land where a published one leaves it — and files no
+	// `ConditionalExtensionSkip`, because nothing is missing: the conformer's own method wears the name, and a
+	// call to it resolves through the ordinary member door with the ordinary diagnostics.
+	//
+	// The published name is noted so `conformerDeclaresOwnMethod` can tell a conformer's own declaration from
+	// an extension's the next time it is asked — see that door for why the distinction is what keeps the
+	// verdict independent of fold order.
+	function publishOrShadowExtensionMethod(index ProgramSignatures, shadowed bool, qualifiedMethodName ByteArray, entries FuncReturnTypeEntryArray, paramConsumes ParamConsumeEntryArray, paramDefaults ParamDefaultEntryArray, throwsEntries ThrowsClauseEntryArray, methodInnerAliasParamOut MethodInnerAliasParamEntryArray, freeFunctionNameOut ByteArrayArray)
+		if shadowed 'theConformerDeclaresItsOwn'
+			self.recordScannedSignature(FuncReturnTypeEntryArray.create(), paramConsumes: ParamConsumeEntryArray.create(), paramDefaults: ParamDefaultEntryArray.create(), throwsEntries: ThrowsClauseEntryArray.create(), methodInnerAliasParamOut: MethodInnerAliasParamEntryArray.create(), freeFunctionNameOut: ByteArrayArray.create())
+			return
+		end 'theConformerDeclaresItsOwn'
+
+		self.recordScannedSignature(entries, paramConsumes: paramConsumes, paramDefaults: paramDefaults, throwsEntries: throwsEntries, methodInnerAliasParamOut: methodInnerAliasParamOut, freeFunctionNameOut: freeFunctionNameOut)
+		index.noteExtensionPublishedMethod(qualifiedMethodName)
+	end 'publishOrShadowExtensionMethod'
+
 	// Read a WITHHELD method's signature into arrays that are discarded, and file why it is missing. The read
 	// is what keeps the cursor where a published method's leaves it (see the call site); the filing is what
 	// lets the call site say something better than "no such method".
@@ -11870,32 +11920,11 @@ export type Parser
 				continue
 			end 'notThisOne'
 
-			return self.conformerScopedBinding(try self.extensionAssociatedTypeBindings.get(i) otherwise panic("extensionAssociatedTypeBinding: the conformer binds nothing at associated-type position {i}, where the interface declares {self.extensionAssociatedTypeNames.count()} — `openExtensionBodyScope` installs the two columns only when their lengths agree"))
+			return try self.extensionAssociatedTypeBindings.get(i) otherwise panic("extensionAssociatedTypeBinding: the conformer binds nothing at associated-type position {i}, where the interface declares {self.extensionAssociatedTypeNames.count()} — `openExtensionBodyScope` installs the two columns only when their lengths agree")
 		end 'eachAssociated'
 
 		return name
 	end 'extensionAssociatedTypeBinding'
-
-	// ⭐⭐ **A BINDING THAT NAMES ONE OF THE CONFORMER'S OWN NESTED TYPEALIASES MEANS *THAT* ALIAS (W43).**
-	// `stdlib/Map.maxon` writes `implements Iterable with (Entry, MapIterator)` and declares
-	// `typealias Entry = (Key, Value)` in its body, so the binding recorded for `Element` is the BARE member
-	// `Entry` — and a nested alias is keyed whole-program under `Map.Entry`, never under its bare member
-	// (which two types in one file may both declare). Substituted unqualified into `extension Iterable`'s
-	// body, `typealias ElementArray = Array with Element` became `Array with Entry`, a name no file declares:
-	// **MEASURED, `error E3011 … Unknown type 'Entry'` at `stdlib/Interfaces.maxon:195:38` and `:226:55`.**
-	//
-	// ⚠ **IT CANNOT BE FIXED WHERE THE BINDING IS RECORDED, AND THAT IS AN ORDERING FACT.** An `implements`
-	// clause is part of the type's HEADER: at the moment `readConformanceWithArg` renders `Entry`, the body
-	// that declares it has not been read, in EITHER pass. So the qualification belongs at the READ — here,
-	// where the conformer is `self.enclosingType` and the whole-program registries are complete.
-	//
-	// ⚠ It fires only on a name the substitution actually MATCHED, never on an arbitrary name the extension
-	// body wrote: an extension's own vocabulary is its own, and a written `Entry` that is not an associated
-	// type must not silently acquire the conformer's meaning.
-	function conformerScopedBinding(binding ByteArray) returns ByteArray
-		let qualified = joinQualifiedName(self.enclosingType, member: binding)
-		return qualified if self.signatures.declaresInnerAlias(qualified) else binding
-	end 'conformerScopedBinding'
 
 	// ⭐ **OPEN A GENERIC TYPE'S PARAMETER SCOPE (P1.6-A)** — `type Box uses T` / `type Pair uses A, B`.
 	// Called by BOTH `parseTypeDeclaration` and the tolerant sweep `recordScannedType` right after
@@ -12964,6 +12993,81 @@ export type Parser
 		self.enclosingInnerAliases.insert(name)
 	end 'recordInnerAliasName'
 
+	// ⭐⭐ **A CONFORMANCE ARGUMENT MAY NAME THE TYPE'S OWN NESTED TYPEALIAS, AND THE CLAUSE IS READ BEFORE
+	// THE BODY THAT DECLARES IT (W43).** `stdlib/Map.maxon` writes
+	// `type Map … implements Iterable with (Entry, MapIterator)` and declares `typealias Entry = (Key, Value)`
+	// on its first body line; `type MapIterator … implements Iterator with Entry` does the same. An
+	// `implements` clause is part of the HEADER, so at the moment `readConformanceWithArg` renders `Entry`
+	// the body has not been read — in EITHER pass — and the binding was recorded as the BARE member, which is
+	// not the name a nested alias is keyed under and not the name the declared type renders to.
+	// **MEASURED: `E3016 … current() returns __Tuple2.T38ee….Taebb… (expected current() returns Entry)`** —
+	// the two sides of ONE type, spelled two ways.
+	//
+	// ⇒ The names are pre-scanned out of the body the clause belongs to and put in scope FOR THE CLAUSE ONLY.
+	// Not for the body: `closeConformanceClauseAliasScope` puts the shared empty back, and the body records
+	// each alias as it reaches it exactly as before, so a bare name inside a method still resolves against the
+	// aliases DECLARED ABOVE IT and nothing about the body's scoping moves.
+	//
+	// ⚠ It is the ONE repair of this ordering, deliberately, and not one per reader. A binding is compared
+	// ACROSS conformers (`associatedAbiBindingOf` refuses two conformers that bind one associated type
+	// differently) and substituted at three tiers, so a resolver bolted onto any one of them would leave the
+	// others reading a name the first had already decided meant something else.
+	//
+	// ⚠ Gated on `implements`, so only a declaration that actually binds something walks — and a type with no
+	// conformance clause, which is nearly every type, pays one token test.
+	function openConformanceClauseAliasScope()
+		if not self.at(TokenKind.implements) 'declaresNoConformance'
+			return
+		end 'declaresNoConformance'
+
+		let resume = self.pos
+		var depth = 1 as BlockDepth
+		while not self.isEof() 'walk'
+			if self.functionDeclarationAt(self.pos) 'opensAMethod'
+				depth = depth + 1
+				self.advance()
+				continue
+			end 'opensAMethod'
+
+			let member = self.nestedAliasNameAt(self.pos)
+			if depth == 1 and not member.isEmpty() 'nestedAlias'
+				self.recordInnerAliasName(member)
+			end 'nestedAlias'
+
+			// The extent rule is `skipPastBlockEnd`'s, to the token: the closer test is taken BEFORE the
+			// counter moves, and it is asked through `closesBlockAt` because a member may be NAMED `end` (D8).
+			let closes = self.closesBlockAt(self.pos)
+			depth = self.blockDepthAfter(depth)
+			self.advance()
+			if closes and depth == 0 'closesTheDeclaration'
+				break
+			end 'closesTheDeclaration'
+		end 'walk'
+		self.pos = resume
+	end 'openConformanceClauseAliasScope'
+
+	// Put the shared empty set back after the clause — see the door above for why the pre-scanned names are
+	// deliberately NOT left in scope for the body.
+	function closeConformanceClauseAliasScope()
+		self.enclosingInnerAliases = sharedEmptyInnerAliases
+	end 'closeConformanceClauseAliasScope'
+
+	// The MEMBER a nested typealias declaration starting at `index` names, or the empty source text when the
+	// token is not one. A PEEK — the pre-scan above must not consume — and it reads the header in the order
+	// `atTypeAliasDeclaration` recognizes it: an optional visibility modifier, then `typealias <name>`.
+	function nestedAliasNameAt(index TokenIndex) returns ByteArray
+		var at = index
+		if self.kindAt(at) == TokenKind.export or self.moduleModifierAt(at) 'visibilityModifier'
+			at = at + 1
+		end 'visibilityModifier'
+
+		if self.kindAt(at) != TokenKind.typealias 'notATypeAlias'
+			return EmptySourceText
+		end 'notATypeAlias'
+
+		return self.identifierNameAt((at + 1) as TokenIndex)
+	end 'nestedAliasNameAt'
+
 	// Re-key a nested generic-instance alias entry under its BASE-QUALIFIED name (`Container.ElementArray`)
 	// before the sweep folds it whole-program (P1.7 slice 3b-i). `readGenericInstanceAlias` records the BARE
 	// member (`ElementArray`), but a bare member collides with a same-named inner alias of another generic
@@ -13027,11 +13131,16 @@ export type Parser
 		// instance's identity — a sweep that skipped it would file every `Vector with N Int` under one gid.
 		let fixedSize = try self.readSizedBaseElementCount(baseTok)
 		let elementIsBuffer = self.firstGenericArgSpellingDenotesBuffer()
+		// ⭐ **`__ManagedMemory with T` INTERNS AS `Array with T` (W43)** — one record, one instance; see
+		// `canonicalGenericBaseName`. The SPELLING is kept only as `baseIsBuffer`, which decides the member
+		// surface every declared position naming this alias takes.
+		let baseIsBuffer = baseTok.value.equals(ManagedMemoryTypeName)
+		let baseName = canonicalGenericBaseName(baseTok.value)
 		var args = GenericArgNodeArray.create()
 		let argsStart = self.pos
-		let argCount = try self.parseGenericArgNodes(args, inlineElement: self.baseStoresArgumentsInline(baseTok.value), bareCommaList: true)
+		let argCount = try self.parseGenericArgNodes(args, inlineElement: self.baseStoresArgumentsInline(baseName), bareCommaList: true)
 		let selfRef = self.selfNamingArgToken(aliasTok, argsStart: argsStart)
-		genericOut.push(GenericAliasEntry.create(aliasTok.value, baseName: baseTok.value, argCount: argCount, args: args, elementIsBuffer: elementIsBuffer, nameLine: aliasTok.line, nameColumn: aliasTok.column, filePath: self.filePath, visibility: visibility, fixedSize: fixedSize, selfRefLine: selfRef.line, selfRefColumn: selfRef.column))
+		genericOut.push(GenericAliasEntry.create(aliasTok.value, baseName: baseName, argCount: argCount, args: args, elementIsBuffer: elementIsBuffer, baseIsBuffer: baseIsBuffer, nameLine: aliasTok.line, nameColumn: aliasTok.column, filePath: self.filePath, visibility: visibility, fixedSize: fixedSize, selfRefLine: selfRef.line, selfRefColumn: selfRef.column))
 		self.checkGenericInstance(baseTok, argCount: argCount)
 	end 'readGenericInstanceAlias'
 
@@ -13222,10 +13331,13 @@ export type Parser
 			// gate. This arm had already been taught the OTHER `Vector`-specific fact (`inlineElement` below),
 			// so the asymmetry was an omission and not a decision.
 			let subSize = try self.readSizedBaseElementCount(baseTok)
+			// The canonical base, for the top-level arm's reason (W43): a nested `__ManagedMemory with T` must
+			// intern to the same instance a nested `Array with T` does, or one record has two ids.
+			let subBaseName = canonicalGenericBaseName(baseTok.value)
 			var subNodes = GenericArgNodeArray.create()
-			let subCount = try self.parseGenericArgNodes(subNodes, inlineElement: self.baseStoresArgumentsInline(baseTok.value), bareCommaList: false)
+			let subCount = try self.parseGenericArgNodes(subNodes, inlineElement: self.baseStoresArgumentsInline(subBaseName), bareCommaList: false)
 			self.checkGenericInstance(baseTok, argCount: subCount)
-			nodes.push(GenericArgNode.instanceHeader(baseTok.value, argCount: subCount, fixedSize: subSize))
+			nodes.push(GenericArgNode.instanceHeader(subBaseName, argCount: subCount, fixedSize: subSize))
 			nodes.append(subNodes)
 			return
 		end 'nested'
@@ -13432,14 +13544,18 @@ export type Parser
 		// ⚠ One arm for all three, reading `builtinGenericTypeParamCount` — this used to be a per-builtin arm
 		// that spelled the predicate and the count together, and a third builtin generic is exactly the edit
 		// that would have left one of the two behind.
-		if self.signatures.isBuiltinGenericBaseName(baseTok.value) 'builtinGeneric'
-			let expected = self.signatures.builtinGenericTypeParamCount(baseTok.value)
+		// ⭐ **ASKED ABOUT THE CANONICAL BASE AND BLAMED ON THE WRITTEN ONE (W43)** — `__ManagedMemory with T`
+		// is an `Array` instance (`canonicalGenericBaseName`), so it must be checked against `Array`'s arity;
+		// the sentence still quotes the spelling the author actually wrote, because that is the word to change.
+		let baseName = canonicalGenericBaseName(baseTok.value)
+		if self.signatures.isBuiltinGenericBaseName(baseName) 'builtinGeneric'
+			let expected = self.signatures.builtinGenericTypeParamCount(baseName)
 			if argCount != expected 'wrongArity'
 				self.recordArtifactDiagnostic(ErrorCode.genericArityMismatch, message: "generic type '{String.from(baseTok.value)}' expects {expected} type argument(s), but {argCount} were supplied", range: SourceRange.ofToken(baseTok))
 			end 'wrongArity'
 			return
 		end 'builtinGeneric'
-		match self.signatures.structOf(baseTok.value) 'base'
+		match self.signatures.structOf(baseName) 'base'
 			undeclared then self.recordBaseNotGeneric(baseTok)
 			declared(layout) then self.checkGenericInstanceAgainst(layout, baseTok: baseTok, argCount: argCount)
 		end 'base'
@@ -13836,7 +13952,9 @@ export type Parser
 		// `implements I1, I2` (P1.7a slice 1) — parsed AFTER `uses` per the grammar
 		// `type Name [uses …] [implements …]`. Records a whole-program ConformanceDecl (anchored on the
 		// type NAME token) that `checkConformance` validates; the declaration itself emits nothing.
+		self.openConformanceClauseAliasScope()
 		try self.parseTypeImplementsClause(nameTok)
+		self.closeConformanceClauseAliasScope()
 
 		// `where T is <Interface> …` (P1.7a slice 2a) — parsed AFTER `implements` per the grammar
 		// `type Name uses T [implements I] where T is C`. The constraints are set on `enclosingWhereConstraints`
@@ -13961,6 +14079,16 @@ export type Parser
 					break
 				end 'closes'
 
+				// ⭐ **A SHADOWED METHOD IS STEPPED OVER WHOLE (W43)** — the conformer declares its own, so the
+				// fold published no signature for this one and a body emitted here would be a second definition
+				// under the same symbol. The DECISION is the fold's, read back rather than re-derived: by now the
+				// index also holds the extension's OWN published names, so `conformerDeclaresOwnMethod` can no
+				// longer tell them apart. See `ProgramSignatures.extensionPublishedMethods`.
+				if self.signatures.extensionMethodIsShadowed(qualifiedMethodName(conformer, methodName: self.extensionMemberMethodNameAt(self.pos))) 'theConformerDeclaresItsOwn'
+					self.skipPastExtensionMember()
+					continue
+				end 'theConformerDeclaresItsOwn'
+
 				// An extension member is a TYPE member — same visibility, same `static`, same `function`.
 				// A `var`/`let` is refused by that reader (E2001 at the keyword), which is the right answer:
 				// an extension adds behaviour, never storage, so there is no layout for a field to join.
@@ -13974,6 +14102,39 @@ export type Parser
 		self.pos = bodyStart
 		self.skipPastBlockEnd()
 	end 'parseExtensionDeclaration'
+
+	// ⭐ **THE METHOD NAME AN EXTENSION MEMBER STARTING AT `index` DECLARES, as a PEEK** — the empty source
+	// text for a nested typealias, for a malformed member, and for anything that is not a method, so the one
+	// caller can ask unconditionally. It mirrors the header order the fold and `parseTypeMember` both read —
+	// an optional visibility modifier, an optional `static`, then `function <name>` — because the shadow
+	// decision has to be taken BEFORE the member is consumed, and a member the decision skips is stepped over
+	// whole rather than parsed.
+	function extensionMemberMethodNameAt(index TokenIndex) returns ByteArray
+		var at = index
+		if self.kindAt(at) == TokenKind.export or self.moduleModifierAt(at) 'visibilityModifier'
+			at = at + 1
+		end 'visibilityModifier'
+		if self.kindAt(at) == TokenKind.static 'staticMember'
+			at = at + 1
+		end 'staticMember'
+		if not self.functionDeclarationAt(at) 'notAMethod'
+			return EmptySourceText
+		end 'notAMethod'
+
+		return self.tokenAt(at + 1).value
+	end 'extensionMemberMethodNameAt'
+
+	// Step the cursor past a whole extension MEMBER, leaving it exactly where `parseTypeMember` would have.
+	// The member's own `end` is found by `skipPastBlockEnd`, which needs the cursor INSIDE the one block that
+	// `end` closes — so the `function` keyword is consumed first, exactly as every other walk over a method
+	// enters it.
+	function skipPastExtensionMember()
+		while not self.isEof() and self.kindAt(self.pos) != TokenKind.function 'toTheKeyword'
+			self.advance()
+		end 'toTheKeyword'
+		self.advance()
+		self.skipPastBlockEnd()
+	end 'skipPastExtensionMember'
 
 	// The interface whose REQUIREMENTS are siblings of this body's methods — see `ensureSiblingReceivers`.
 	// Empty for a TYPE extension, and that is the point: `extension Box` extends a type, whose own members the
@@ -45132,8 +45293,25 @@ export type Parser
 	//
 	// `identifierNameAt` answers the empty source text for anything that is not an identifier — a `returns
 	// int`, a missing clause, a token past the end — so every non-identifier type position answers "no".
+	// ⭐⭐ **AND AN ALIAS FOR ONE DENOTES IT TOO (W43)** — `typealias KeyMemory = __ManagedMemory with Key`,
+	// then `function init(initKeys KeyMemory)`. The alias FOLDS the spelling away (`canonicalGenericBaseName`
+	// interns it as an `Array` instance, which is the binding R4.4 exists to keep), so the declaration that
+	// wrote `__ManagedMemory` is the only place the fact survives — `recordGenericAlias` files it, and this is
+	// where a position spelling the alias reads it back. Without it `initKeys.length()` is refused as an
+	// unknown `Array` member on `stdlib/Map.maxon`'s `init`, which is the exact inversion A2j measured for the
+	// bare spelling.
+	//
+	// ⚠ **BOTH KEYS, because a nested alias is keyed `<Type>.<member>` and SPELLED bare.** `Map.KeyMemory` is
+	// what `qualifiedInnerGenericAlias` files; `KeyMemory` is what the parameter writes. The bare probe comes
+	// first — a file-scope alias is the common case and `enclosingType` is empty at file scope, where the join
+	// would build a string for a key that cannot exist.
 	function typeSpellingAtDenotesBuffer(index TokenIndex) returns bool
-		return self.identifierNameAt(index).equals(ManagedMemoryTypeName)
+		let spelling = self.identifierNameAt(index)
+		if spelling.equals(ManagedMemoryTypeName) or self.signatures.aliasDenotesBufferSurface(spelling) 'spelledItOrAFileScopeAlias'
+			return true
+		end 'spelledItOrAFileScopeAlias'
+
+		return not self.enclosingType.isEmpty() and self.signatures.aliasDenotesBufferSurface(joinQualifiedName(self.enclosingType, member: spelling))
 	end 'typeSpellingAtDenotesBuffer'
 
 	// ⭐⭐ **WHERE DOES THE TYPE WRITTEN AT `index` NAME `__ManagedMemory` (A2m)?** THE one reader every

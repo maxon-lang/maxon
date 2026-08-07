@@ -985,7 +985,40 @@ function whitelistedStdlibModules(stdlibDir FilePath) returns MaxonSourcePathSet
 	// stronger than the codeBytes match `S2g` recorded, the two emitted executables are **byte-for-byte
 	// identical** (5,567 bytes, `cmp` clean).
 	try listWhitelistedModule(stdlibDir, relative: "Ascii.maxon", into: listed)
-	try listWhitelistedModule(stdlibDir, relative: "Map.maxon", into: listed)
+
+	// ⭐⭐ **W43 — `helpers/itertools/withIterator.maxon`, AND IT IS LISTED TO CLOSE A HOLE RATHER THAN TO ADD
+	// A CAPABILITY.** `Interfaces.maxon`'s `extension Iterable` declares
+	// `typealias WithIterSelf = WithIterIterator with Iter, Element`, and an extension body is specialized
+	// once per CONFORMER — so the first compile in which any PARSED type implements `Iterable` reports
+	// **`E2055 stdlib/Interfaces.maxon:226:27  Type 'WithIterIterator' has no associated types`**, naming a
+	// module nothing listed. The corpus's own `Iterable` conformers (`Array`, `String`, `List`, `Set`,
+	// `Range`, `Vector`, the three String views) are all SYNTHESIZED here and so are not parsed conformers,
+	// which is the only reason the hole stayed latent: **a user program writing
+	// `implements Iterable with (E, I)` trips it today**, and no spec in the suite writes one.
+	//
+	// It clears every entry in this file's collision rule, each checked rather than assumed:
+	//   • FREE FUNCTIONS (E3006): **NONE.** The file is one `type` and three of its members, so the clause —
+	//     and with it the SILENT bare-builtin shadow — is vacuous. It CONSUMES no bare name either: every
+	//     call in its body is receiver-dot (`source.current()`, `source.advance()`).
+	//   • TYPE NAMES: `WithIterIterator` alone. It is declared by no other stdlib file — checked at the
+	//     source across all 50 — and by nothing in shv2's own compiler, so the one shape this file calls
+	//     SILENT (type-name-vs-builtin) has nothing to contest.
+	//   • It declares NO typealias, NO top-level binding and NO enum, so the three clauses that moved
+	//     `File.maxon`'s golden, built `S2h`'s reachability term and contested `Ordering` all have nothing
+	//     to weigh. That is a declaration COUNT, not a hope.
+	//   • E3112 MEMBER names: `create`, `current`, `advance` — the `Iterator` protocol's own vocabulary,
+	//     already claimed by every iterator in the library. Its one argument label is `source`.
+	//   • It IMPORTS nothing and names only `Iterator`, `IterationError` and its own two parameters, all of
+	//     them `Interfaces.maxon`'s, which is listed.
+	//
+	// ⚠ **IT IS THE FIRST LISTED MODULE THAT WRITES `implements <Interface> with (A, B)` AT ARITY ONE**, and
+	// that spelling is a TUPLE argument rather than two bindings — see `Parser.parenthesizedWithBindsOneTuple`
+	// for the rule, which both references already had and shv2's `R6` did not.
+	//
+	// ⚠ **THE THIRD QUESTION `S2g` ESTABLISHED — what does the entry cost a program that does NOT use it?**
+	// MEASURED, same worktree, two binaries, `function main() returns ExitCode / return 7`: **1,592 code
+	// bytes both ways — Δ0**, and the two emitted executables are **byte-for-byte identical** (5,567 bytes,
+	// `cmp` clean).
 	try listWhitelistedModule(stdlibDir, relative: "helpers/itertools/withIterator.maxon", into: listed)
 
 	// ⭐⭐ **W3 — `Interfaces.maxon`, THE PROTOCOL ROOT, AND THE FIRST ENTRY THAT RETIRES A COMPILER-OWNED

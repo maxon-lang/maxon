@@ -1103,6 +1103,30 @@ unparenthesized surplus as ignored. So this refusal diverges from nothing that c
 Before it, `implements One with (Integer, Float)` against `interface One uses A` bound `A := Integer`,
 dropped `Float` and COMPILED (measured, exit 42): a typo nothing reported.
 
+### ⭐⭐ AT ARITY ONE THE REFUSAL IS GONE, AND `with (A, B)` IS A TUPLE ARGUMENT (W43)
+
+R6's own text below named the day this would come: *"It is also the spelling
+`stdlib/helpers/itertools/withIterator.maxon` needs the day it is loadable: that file writes
+`implements Iterator with (Source, Element)` against a one-`uses` `Iterator`, which under shv2's settled
+LIST reading is exactly the surplus this rule refuses."* That file also declares
+`current() returns (Source, Element)`, so **no list reading can make it conform** — the LIST reading was
+not a stricter shv2 rule here, it was a rejection of a program the corpus writes and both references
+compile. **BOTH references arity-discriminate**: the bootstrap outright (*"when expecting a single type
+arg, let ParseTypeRef handle it — (A, B) is a tuple type, not two separate type arguments"*,
+`2-Parser.cs:3129-3137`), v1 by recording `parenForm` so `TypeResolution` can *"collapse a parenthesized
+multi-arg list against a single-`uses` interface into one `__TupleN`"* (`Parser.maxon:1944-1949`).
+
+⚠ **THE TUPLE READING NEEDS A TOP-LEVEL COMMA, WHICH IS WHAT KEEPS THE TWO SPELLINGS R6 PINNED ALIVE** —
+`with (T)` holds none and stays one ordinary binding (the case further down pins it), and `with ((A, B))`
+holds its comma one level DOWN and stays one binding whose single item is the tuple (pinned too). Only
+`with (A, B)` moves, and only at arity one. **E2066 still fires at every other arity** — the three cases
+below it are unchanged and green.
+
+⚠ **AND THE TYPO R6 EXISTED TO CATCH IS STILL CAUGHT**, by the check that was always going to have the
+last word about it: `A` is now the tuple, so a `get()` that returns `Integer` disagrees with the
+requirement. The verdict is unchanged and the sentence is better — it names both types rather than a
+count.
+
 <!-- test: error.surplus-parenthesized-conformance-argument -->
 ```maxon
 
@@ -1131,7 +1155,8 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2066: specs/fragments/associated-types/error.surplus-parenthesized-conformance-argument.test:10:33: interface 'One' declares 1 associated type(s), but this parenthesized 'with' clause binds 2
+error E3016: specs/fragments/associated-types/error.surplus-parenthesized-conformance-argument.test:10:6: Partial interface implementation: type 'Holder' has 1 method(s) with wrong signature:
+  - get() returns Integer (expected get() returns __Tuple2.int.float)
 ```
 
 

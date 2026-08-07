@@ -750,10 +750,21 @@ end 'main'
 error E2015: <fragment>:3:2: Unsupported: a destructuring binding of a 'int' initializer (only a TUPLE can be destructured — `let (x, y) = …` needs a right-hand side that is a tuple)
 ```
 
-<!-- test: error.tuple-of-a-type-parameter -->
-A tuple's identity IS its element types, so a generic type PARAMETER cannot key one: the shared body
-compiles once against an opaque `T` and does not know which concrete type the record would hold, so
-neither its layout nor its drop cascade has anything to be built from.
+### ⭐ A TUPLE OVER A GENERIC TYPE PARAMETER (W43)
+
+This case was `error.tuple-of-a-type-parameter` and is now a POSITIVE one. The refusal carried three
+reasons and each was answered by a different rung, which is why it survived so long: IDENTITY by `W14`
+(a type-parameter token is a digest of `(declaring type, parameter)`, so two parameters mangle and intern
+apart, where a POSITION made them one), LAYOUT by `W6` (a type parameter lowers to an opaque machine word
+and every non-existential field is one slot, so `(T, Int)` is statically 16 bytes), and the DROP CASCADE by
+the layout descriptor the instance already carries. Refusing the TYPE to avoid a question about a VALUE was
+the category error; the value-side rule keeps its own refusal at the construction site.
+
+⚠ It is pinned in BOTH element classes deliberately. A scalar `T` proves only that the shape parses; the
+MANAGED one is where a wrong cascade would show, as a double free or a leak — and a leak is exit 101, which
+is a failure of this case rather than a note.
+
+<!-- test: tuple-of-a-type-parameter -->
 ```maxon
 type Box uses T
 	export let v as T
@@ -773,8 +784,36 @@ function main() returns ExitCode
 	return b.pack()
 end 'main'
 ```
-```maxoncstderr
-error E2015: <fragment>:10:11: Unsupported: a tuple whose element 0 is 'type parameter': a tuple's identity IS its element types, and neither a generic type parameter (whose concrete type the shared body does not know) nor an unresolved type can key one
+```exitcode
+1
+```
+
+<!-- test: tuple-of-a-managed-type-parameter -->
+The same body instantiated over `String`, so the tuple's element 0 is an opaque word that really does own
+heap. Measured: exit 7, and no leak.
+```maxon
+type Box uses T
+	export let v as T
+
+	export static function create(v T) returns Self
+		return Self{v: v}
+	end 'create'
+
+	export function pack() returns int
+		let t = (self.v, 1)
+		return t.1
+	end 'pack'
+end 'Box'
+
+typealias StrBox = Box with String
+
+function main() returns ExitCode
+	let b = StrBox.create("hello")
+	return b.pack() + 6
+end 'main'
+```
+```exitcode
+7
 ```
 
 <!-- test: error.duplicate-owned-element -->
