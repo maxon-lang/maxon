@@ -1629,9 +1629,22 @@ type PendingDefaultHelper
 	// Recorded rather than recomputed at the drain — a second walk is a second answer, and this file has
 	// paid for that twice already (see `sweptParamDefaultHelperName`).
 	export let exprEnd as TokenIndex
+	// ⭐⭐ **THE DECLARATION THE DEFAULT WAS WRITTEN INSIDE (W43), or empty for one written at file scope.**
+	// The drain runs at the END of `parseModule`, where no declaration scope is open — so without this a
+	// default expression was re-parsed as if it had been written at top level, and every name that is only
+	// meaningful INSIDE the declaration stopped meaning it. **MEASURED, both doors, on a non-generic type:**
+	// `var items as Items = Items.create()` and `function fill(seed Items = Items.create())` inside a
+	// `type Box` declaring `typealias Items = Array with Integer` both gave
+	// `E3005 Cannot return 'unknown' from function declared to return 'Box.Items'` — `Items` denoted nothing,
+	// so the call had no return type at all. The same line is `stdlib/Map.maxon:24`.
+	//
+	// It is the type's NAME and nothing more: every other part of the scope is a property of the type that
+	// the whole-program index already holds (`restoreDeclaringTypeScope` reads them off its `StructLayout`),
+	// and a captured copy of a fact the index owns is the second copy this file keeps paying for.
+	export let enclosingType as ByteArray
 
-	export static function create(owner DefaultHelperOwner, declaredType MaxonType, exprStart TokenIndex, exprEnd TokenIndex) returns PendingDefaultHelper
-		return Self{owner: owner, declaredType: declaredType, exprStart: exprStart, exprEnd: exprEnd}
+	export static function create(owner DefaultHelperOwner, declaredType MaxonType, exprStart TokenIndex, exprEnd TokenIndex, enclosingType ByteArray) returns PendingDefaultHelper
+		return Self{owner: owner, declaredType: declaredType, exprStart: exprStart, exprEnd: exprEnd, enclosingType: enclosingType}
 	end 'create'
 end 'PendingDefaultHelper'
 
@@ -7810,6 +7823,12 @@ export type Parser
 	// still walking this very type). Written by the `typealias` member arm and cleared in lockstep with
 	// `enclosingType` (`parseTypeDeclaration`/`recordScannedType` are the writers).
 	var enclosingInnerAliases as InnerAliasNameSet
+	// ⭐ **ARE THE ENCLOSING TYPE'S NESTED TYPEALIASES IN SCOPE THROUGH THE WHOLE-PROGRAM INDEX RATHER THAN
+	// THROUGH THE SET ABOVE (W43)?** True in exactly one place — inside a captured DEFAULT expression being
+	// drained (`restoreDeclaringTypeScope`), where the body walk that built that set finished long ago and
+	// the registries it folded into are complete. The FIFTH per-declaration scope, reset with the other four
+	// by `enterTypeScope`/`closeTypeParamScope` so it cannot outlive the one declaration that sets it.
+	var innerAliasesFromIndex as bool
 	// ⭐ The TUPLE layouts this file has minted (P1.10), keyed by the tuple's mangled name — this file's OWN
 	// copies, whose field types are interned against `artifact.typeNames`. They cannot be the copies
 	// `ProgramSignatures` holds: `remapArtifact` REWRITES an artifact layout's field types IN PLACE on the
@@ -8277,6 +8296,7 @@ export type Parser
 			lastWitnessDispatchName: EmptySourceText,
 			lastWitnessDispatchThrows: ThrowsClause.none,
 			enclosingInnerAliases: sharedEmptyInnerAliases,
+			innerAliasesFromIndex: false,
 			tupleLayouts: sharedEmptyTupleLayouts,
 			descriptorScanSites: sharedEmptyDescriptorScanSites,
 			functionCarriesLayoutParam: false,
@@ -11822,6 +11842,7 @@ export type Parser
 		self.enclosingTypeIsEnum = isEnum
 		self.enclosingTypeParams = self.emptyTypeParams
 		self.enclosingInnerAliases = sharedEmptyInnerAliases
+		self.innerAliasesFromIndex = false
 		self.enclosingWhereConstraints = sharedEmptyWhereConstraints
 		self.clearExtensionAssociatedTypes()
 	end 'enterTypeScope'
@@ -11923,6 +11944,9 @@ export type Parser
 		// declared one, resolves as an ordinary named type rather than a stale inner alias — and allocates
 		// nothing, exactly as `emptyTypeParams` restores.
 		self.enclosingInnerAliases = sharedEmptyInnerAliases
+		// Restored in lockstep for the same reason, one layer up: a drained default's index-scoped answer must
+		// not survive into the next declaration, where the set above is the only truth again.
+		self.innerAliasesFromIndex = false
 		// Restored in lockstep (P1.7a slice 2a) so a dispatch outside a constrained type body resolves against
 		// no stale constraints — and allocates nothing, exactly as `emptyTypeParams` restores.
 		self.enclosingWhereConstraints = sharedEmptyWhereConstraints
@@ -12207,7 +12231,7 @@ export type Parser
 	function captureFieldDefault(typeName ByteArray, fieldName ByteArray, fieldType MaxonType, regionEnd TokenIndex) returns ByteArray
 		let helperName = fieldDefaultHelperName(typeName, fieldName: fieldName)
 		self.pendingDefaultHelpers = materializedPendingDefaultHelpers(self.pendingDefaultHelpers)
-		self.pendingDefaultHelpers.push(PendingDefaultHelper.create(DefaultHelperOwner.field(helperName), declaredType: fieldType, exprStart: self.pos, exprEnd: regionEnd))
+		self.pendingDefaultHelpers.push(PendingDefaultHelper.create(DefaultHelperOwner.field(helperName), declaredType: fieldType, exprStart: self.pos, exprEnd: regionEnd, enclosingType: self.enclosingType))
 		self.pos = regionEnd
 		return helperName
 	end 'captureFieldDefault'
@@ -15939,7 +15963,7 @@ export type Parser
 		// safely — see `DefaultHelperOwner` for the property a field name has that a position does not.)
 		let exprEnd = self.skipParamDefault(self.pos)
 		self.pendingDefaultHelpers = materializedPendingDefaultHelpers(self.pendingDefaultHelpers)
-		self.pendingDefaultHelpers.push(PendingDefaultHelper.create(DefaultHelperOwner.parameter(ownerName, paramIndex: paramIndex), declaredType: paramType, exprStart: (self.pos + 1) as TokenIndex, exprEnd: exprEnd))
+		self.pendingDefaultHelpers.push(PendingDefaultHelper.create(DefaultHelperOwner.parameter(ownerName, paramIndex: paramIndex), declaredType: paramType, exprStart: (self.pos + 1) as TokenIndex, exprEnd: exprEnd, enclosingType: self.enclosingType))
 		self.pos = exprEnd
 	end 'captureParamDefault'
 
@@ -15980,6 +16004,10 @@ export type Parser
 			try self.parseDefaultHelper(pending)
 		end 'eachDefault'
 		self.pos = resume
+		// The last helper drained left ITS declaration's scope open (W43, `restoreDeclaringTypeScope`), and
+		// the module is at file scope from here on — so it is closed here rather than left for whatever reads
+		// the parser next to be surprised by.
+		self.closeTypeParamScope()
 	end 'parseDefaultHelpers'
 
 	// The name the SWEEP published for this captured default — the mechanism's one mint, read back rather
@@ -16013,6 +16041,51 @@ export type Parser
 		return helperName
 	end 'requireSweptHelperName'
 
+	// ⭐⭐ **RE-OPEN THE DECLARATION SCOPE A CAPTURED DEFAULT WAS WRITTEN INSIDE (W43)** — the drain runs at
+	// the end of `parseModule`, where the type that declared the default closed long ago, so every scope
+	// `enterTypeScope`/`openTypeParamScope` install has to be put back or the expression is re-parsed as if
+	// it had been written at top level.
+	//
+	// ⭐ **ONLY THE NAME TRAVELS; EVERYTHING ELSE IS READ BACK OFF THE INDEX.** A type's `uses` parameters
+	// and its `where` constraints are ON its `StructLayout`, whole-program and complete by the drain, so
+	// capturing copies of them at the declaration would be two records of one fact.
+	//
+	// ⚠ **THE ONE SCOPE THAT CANNOT BE READ BACK IS `enclosingInnerAliases`** — it is built by the BODY WALK
+	// and is not a column of anything — which is why `innerAliasesFromIndex` exists: inside a drained default
+	// the same question is answered from the three whole-program alias registries instead
+	// (`namesInnerAliasHere`, the one home of it). That is not a widening: `declaresInnerAlias` is keyed
+	// `<Type>.<member>`, so it answers about exactly the declarations the body walk would have recorded.
+	//
+	// ⚠ An INTERFACE EXTENSION's associated-type substitution is deliberately NOT restored — it is a
+	// property of the (extension, conformer) PAIR rather than of the conformer, and neither the pending
+	// record nor the layout names the extension. A default expression inside an extension method that writes
+	// the interface's associated type therefore reports `E3011 Unknown type`, which is a refusal with a
+	// position and not a wrong type.
+	function restoreDeclaringTypeScope(declaringType ByteArray)
+		if declaringType.isEmpty() 'writtenAtFileScope'
+			self.closeTypeParamScope()
+			return
+		end 'writtenAtFileScope'
+
+		self.enterTypeScope(declaringType, isEnum: self.signatures.containsEnum(declaringType))
+		// An ENUM declares no `uses` clause and no `where` clause, and an undeclared name reaches here only
+		// from a program the real parse is already refusing — both leave the empty scopes `enterTypeScope`
+		// just installed, which is exactly what those declarations have.
+		match self.signatures.structOf(declaringType) 'declaringType'
+			declared(layout) then self.installDeclaringTypeScope(layout)
+			undeclared then break 'declaringType'
+		end 'declaringType'
+		self.innerAliasesFromIndex = true
+	end 'restoreDeclaringTypeScope'
+
+	// The two per-declaration scopes a `StructLayout` carries, installed together because `enterTypeScope`
+	// resets them together. The lists are the layout's own — the same aliasing `openTypeParamScope` already
+	// creates between the parser field and the layout it stamps.
+	function installDeclaringTypeScope(layout StructLayout)
+		self.enclosingTypeParams = layout.typeParamNames
+		self.enclosingWhereConstraints = layout.whereConstraints
+	end 'installDeclaringTypeScope'
+
 	// ⭐ **THE NAME AND THE TIER — the ONLY two things a parameter default's helper and a field default's
 	// helper differ in.** Everything else about them is one function (`parseDefaultHelperBody`), which is
 	// what "a default value is a synthesized nullary function" means when it is said once instead of twice.
@@ -16044,6 +16117,9 @@ export type Parser
 	function parseDefaultHelperBody(helperName ByteArray, visibility Visibility, pending PendingDefaultHelper) throws ParseError
 		self.pos = pending.exprStart
 		let anchor = self.current()
+		// The DECLARATION scope the default was written inside, re-opened before a token of it is read (W43).
+		// See `PendingDefaultHelper.enclosingType` for the measurement.
+		self.restoreDeclaringTypeScope(pending.enclosingType)
 		// Resolved HERE rather than at the capture: a `named` declared type is re-tagged `structRef` only
 		// once the whole-program struct registry is complete, which at capture time — mid-declaration, and
 		// possibly above the `type` being named — it is not.
@@ -16889,6 +16965,14 @@ export type Parser
 		if self.typeParamPositionOf(name) < self.enclosingTypeParams.count() 'typeParam'
 			return false
 		end 'typeParam'
+
+		// Inside a drained DEFAULT expression the set below no longer exists — the body walk that built it
+		// closed with its declaration — so the identical question is asked of the whole-program registries
+		// the walk folded into. Keyed `<Type>.<member>`, so it answers about exactly those declarations and
+		// widens nothing. See `restoreDeclaringTypeScope`.
+		if self.innerAliasesFromIndex 'drainedDefaultExpression'
+			return self.signatures.declaresInnerAlias(joinQualifiedName(self.enclosingType, member: name))
+		end 'drainedDefaultExpression'
 
 		return self.enclosingInnerAliases.contains(name)
 	end 'namesInnerAliasHere'
