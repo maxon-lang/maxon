@@ -11816,29 +11816,21 @@ export type Parser
 	// The parser state an extension BODY is read under, for whichever door the extension came through — set
 	// after `enterTypeScope(conformer)`, which deliberately clears every one of these.
 	//
-	// ⚠⚠ **AN INTERFACE EXTENSION'S BODY GETS `enclosingTypeParams` SET BY NEITHER DOOR, AND THAT IS NOT AN
-	// OMISSION.** Its `where` clause names the INTERFACE's associated types, which this body may not refer to
-	// as type PARAMETERS: they are bound concretely per conformer, and installing them in
-	// `enclosingTypeParams` would make a written `Element` resolve to `typeParameter(0)` of the CONFORMER — a
-	// different type, silently. The extension's OWN constraints are a filter already applied by the time this
-	// is called (`extensionConformerVerdict`), so there is nothing left for the body to dispatch through
-	// either.
+	// ⚠⚠ **AN INTERFACE EXTENSION'S BODY NEVER GETS THE *INTERFACE'S* ASSOCIATED NAMES AS TYPE PARAMETERS, AND
+	// THAT IS NOT AN OMISSION.** Its `where` clause names those associated types, which this body may not
+	// refer to as type PARAMETERS: they are bound concretely per conformer, and installing them in
+	// `enclosingTypeParams` would make a written `Element` resolve to a parameter of the CONFORMER — a
+	// different type, silently. Its constraints are a filter that has already been applied by the time this is
+	// called (`extensionConformerVerdict`), so there is nothing left for the body to dispatch through either.
 	//
-	// ⛔⛔ **BUT THE CONFORMER'S OWN `where` CLAUSE IS A DIFFERENT FACT, AND LEAVING IT OUT WAS AN ABI
-	// MISMATCH (W43b).** This body is monomorphized for ONE conformer, so a method published onto a
-	// `where`-constrained type carries that type's witness block exactly as its own methods do — and the
-	// SUPPLY side already passes it, because `witnessConstraintsOfMethod` resolves a callee by its TYPE name
-	// and answers with `typeExtensionWitnessConstraints(<the conformer>, …)` whatever door the method came
-	// through. Reserving nothing here left `stdlib/Interfaces.maxon`'s `extension Iterator.advanceBy`, over a
-	// conformer declared `where Key is Hashable and Equatable`, reading two argument registers its callers
-	// filled and its own body never reserved — the precise shape `witnessConstraintsOfMethod`'s header
-	// records two measured crashes for. It is installed through the SAME one call the type-extension arm
-	// makes, so reserve and supply are one list and not two derivations of one rule.
-	//
-	// ⭐ **WHAT IT GETS INSTEAD IS THE NAME SUBSTITUTION** (conditional extensions), which is available here
-	// for exactly the reason the parameter reading is wrong: this pass is monomorphizing for ONE conformer,
-	// and that conformer's `implements … with …` says what its `Element` IS. See
+	// ⭐ **WHAT THE ASSOCIATED NAMES GET INSTEAD IS THE NAME SUBSTITUTION** (conditional extensions), which is
+	// available here for exactly the reason the parameter reading is wrong: this pass is monomorphizing for ONE
+	// conformer, and that conformer's `implements … with …` says what its `Element` IS. See
 	// `Parser.extensionAssociatedTypeNames` and the ⚠ in `parseTypeReference`.
+	//
+	// ⭐ **THE CONFORMER'S OWN `uses` PARAMETERS ARE A DIFFERENT LIST AND ARE INSTALLED** — see the block
+	// at the assignment below for why the two are not the same fact, and for the two things that break
+	// without it.
 	function openExtensionBodyScope(header ExtensionHeader, conformer ByteArray, index ProgramSignatures)
 		match header.target 'target'
 			interfaceExtension then break 'target'
@@ -11851,10 +11843,34 @@ export type Parser
 			typeExtension then return self.openTypeExtensionBodyScope(header, index: index)
 		end 'target'
 
-		// The CONFORMER's own witness block — see the ⛔⛔ above. `sharedEmptyWhereConstraints` for the
-		// extension's side because an interface extension contributes none to this list: its clause names the
-		// interface's ASSOCIATED types, not the conformer's parameters, and it has already been spent as a
-		// filter.
+		// ⭐⭐ **A GENERIC CONFORMER'S OWN `uses` PARAMETERS ARE INSTALLED, AND THAT IS NOT THE THING THE ⚠ ABOVE
+		// FORBIDS.** What must never be installed is the INTERFACE's associated names — that would make a
+		// written `Element` resolve to a parameter of the CONFORMER, a different type. These are the
+		// CONFORMER's own names, and this body is being specialized for exactly that conformer: `Box.map` IS a
+		// method of `type Box uses T`, so a `T` reachable here means `Box.T` and can mean nothing else. The
+		// substitution and the scope compose rather than compete — `Element` is rewritten to the binding the
+		// conformer wrote (`T`), and the scope is what then gives that name a type at all.
+		//
+		// ⛔ **WITHOUT IT, `extension Iterable`'s BODY CANNOT BE PARSED FOR ANY GENERIC CONFORMER** — its
+		// `typealias ElementArray = Array with Element` substitutes to `Array with T` and `T` names nothing:
+		// **`E3011 stdlib/Interfaces.maxon:195:38: Unknown type 'T'`**, five times, for a legal program the
+		// oracle runs. That is why no generic type in the corpus implemented `Iterable` before this assignment
+		// existed — the conformance was unrepresentable, not merely unused.
+		//
+		// ⛔⛔ **AND THE WITNESS SLOTS MUST BE INSTALLED IN THE SAME ACT, OR THE BODY RESERVES ZERO ARGUMENT
+		// REGISTERS WHILE EVERY CALLER FILLS TWO (the W23 defect, one door over).** The SUPPLY side answers
+		// `witnessConstraintsOfMethod("Map.map")` → `typeExtensionWitnessConstraints("Map", …)`, which returns
+		// the TYPE's own clause whether the method came from the type's body or from an interface extension —
+		// an interface extension files no EXTRA constraints (`noteTypeExtensionWitnessConstraints`), but "adds
+		// none" is not "carries none". Asked through the same one door the type extension asks through, so the
+		// two sides remain one call and not two agreeing lists.
+		//
+		// ⚠ **MEASURED INDEPENDENTLY, ON A CONFORMER WHOSE OWN CLAUSE IS THE ONLY ONE THERE IS:**
+		// `stdlib/Interfaces.maxon`'s `extension Iterator.advanceBy`, published onto a conformer declared
+		// `where Key is Hashable and Equatable`, reserved zero witness slots while its `try self.advance()`
+		// forwarded two — the precise shape `witnessConstraintsOfMethod`'s header records two crashes for.
+		// `sharedEmptyWhereConstraints` is the extension's OWN side, which is empty for the reason above.
+		self.enclosingTypeParams = index.structTypeParamsOf(conformer)
 		self.enclosingWhereConstraints = index.typeExtensionWitnessConstraints(conformer, extensionConstraints: sharedEmptyWhereConstraints)
 
 		// BOTH COLUMNS OR NEITHER — the length agreement `conformerAssociatedBindings` enforces has already
@@ -17142,8 +17158,10 @@ export type Parser
 			// (`openTypeExtensionBodyScope`) installs the TARGET's list under `enterTypeScope(conformer)` —
 			// where the conformer of a `typeExtension` IS the extended type (`extensionTargetOf` builds the
 			// conformer list as the target alone), which is exactly what makes an extension's `T` the same `T`
-			// as the type's own. An INTERFACE extension's body deliberately installs no parameters at all
-			// (`openExtensionBodyScope` says why), so it mints nothing here.
+			// as the type's own. An INTERFACE extension's body (`openExtensionBodyScope`) is the fourth door
+			// and it installs the CONFORMER's list under `enterTypeScope(conformer)` — never the interface's
+			// associated names, which reach a body as a NAME SUBSTITUTION and are resolved by whichever arm
+			// the substituted name lands on.
 			//
 			// ⚠ The digest is a pure function of the two names, so the tolerant sweep and the real parse
 			// compute the SAME token with no registry between them — which is the property this arm's
@@ -17281,6 +17299,25 @@ export type Parser
 				return MaxonType.structRef(self.artifact.typeNames.intern(self.signatures.tupleAliasTarget(name)))
 			end 'tupleAlias'
 
+			// ⭐⭐ **A BARE GENERIC TYPE NAME INSIDE A TYPE-PARAMETER SCOPE IS THAT TYPE AT THIS SCOPE'S
+			// PARAMETERS** — `returns Inner` inside `type Outer uses T` is `Inner with Outer.T`, and
+			// `WithIterIterator with Iter, Element` inside an interface extension specialized for a generic
+			// conformer reaches this arm at its ARGUMENTS. It sits below every arm that binds a name more
+			// tightly — the enclosing type's own name, a type PARAMETER, an inner alias, a generic/function/tuple
+			// alias — because each of those is a nearer scope and this one only answers a name none of them
+			// claimed. It stays ABOVE the `named` fallthrough because that is the DECLARATION view (a type whose
+			// parameters nothing bound), which is precisely the reading this arm exists to replace.
+			//
+			// The `count()` gate is `bareGenericInstanceInScope`'s cost obligation, stated at that door: every
+			// type annotation in the program passes this line, and outside a generic body there is no scope for
+			// the question to have an answer in.
+			if self.enclosingTypeParams.count() != 0 'insideATypeParameterScope'
+				match self.bareGenericInstanceInScope(name) 'scoped'
+					instance(gid) then return MaxonType.genericInstance(gid)
+					none then break 'scoped'
+				end 'scoped'
+			end 'insideATypeParameterScope'
+
 			// ⭐⭐ **THE LAST ARM IS WHERE A BARE RANGED-ALIAS NAME LANDS, SO IT IS WHERE E3063 IS DECIDED (N1c).**
 			try self.requireUnambiguousTypeName(name, anchor: tok)
 
@@ -17389,6 +17426,69 @@ export type Parser
 		end 'each'
 		return self.enclosingTypeParams.count()
 	end 'typeParamPositionOf'
+
+	// ⭐⭐ **THE INSTANCE A BARE GENERIC TYPE NAME DENOTES AT THE CURSOR, or `none`** — `Inner` written
+	// inside `type Outer uses T` means `Inner with Outer.T`, at a TYPE reference (`returns Inner`,
+	// `var v as Inner`, a `with` ARGUMENT), at a STATIC CALL base (`Inner.make(items)`), and — through the
+	// first of those — in an `implements … with (…)` clause. All of them used to read the name as a plain
+	// `named("Inner")`, the base struct's DECLARATION view: a type whose parameters nothing had bound, so
+	// `Inner.make`'s `Array with Inner.T` parameter and the caller's `Array with Outer.T` argument were two
+	// instances with no relation and the legal program was **`E3005: expected 'Inner.TArr', got 'Outer.OArr'`**.
+	//
+	// The RULE is `ProgramSignatures.scopedGenericInstanceOf`'s, shared with the two read doors that ask it of
+	// a different scope; what this adds is only which scope the CURSOR is in, and the `ConstructorInstance` the
+	// call door speaks in.
+	//
+	// ⚠ **THE CALLER GATES ON `enclosingTypeParams` BEING NON-EMPTY**, and that gate is why this may be asked
+	// at every type annotation in the program: a union return is heap-boxed even for its payload-free arm
+	// (see `parseTypeReference`'s `isInterfaceName` note, measured at +24,396 allocations), so the whole
+	// generics-free corpus — and every non-generic body in a generic program — must not reach the call at all.
+	function bareGenericInstanceInScope(name ByteArray) returns ConstructorInstance
+		match self.signatures.scopedGenericInstanceOf(name, declaringTypeName: self.enclosingType, scopeParamNames: self.enclosingTypeParams) 'scoped'
+			notInScope then return ConstructorInstance.none
+			instance(gid) then return ConstructorInstance.instance(gid)
+		end 'scoped'
+	end 'bareGenericInstanceInScope'
+
+	// ⭐⭐ **A CALL RESULT NAMING A BARE GENERIC TYPE IS READ IN THE CALLEE'S OWN SCOPE** — the READ-DOOR
+	// repair of a swept return type, and the reason the type-reference arm alone is not enough.
+	//
+	// ⚠ **`mintCallResult` TYPES A CALL FROM THE TOKEN SWEEP'S `returnTypeOf`, NOT FROM THE REAL PARSE**, and
+	// the sweep answers every bare generic name as a plain `named` — deliberately, on the `allFilesFolded`
+	// gate `parseTypeReference` argues for at length, because a registry answer during the sweep is a
+	// property of the loader's walk order. So `MyMap.createIterator() returns MyMapIterator` reaches its CALL
+	// SITE as `MyMapIterator`, the base, and everything the receiver's instance could have fixed about it is
+	// already gone. That is exactly the split v1 pays for with a second copy of the algorithm.
+	//
+	// ⭐ **THE SCOPE IS THE CALLEE'S DECLARING TYPE, NOT THE CALLER'S** — `MyMapIterator` written in `MyMap`'s
+	// body means `MyMapIterator with (MyMap.Key, MyMap.Value)` whoever is calling, and the caller's own
+	// parameters have nothing to do with it. `retypeInstanceMethodResult` then fixes THAT with the receiver's
+	// concrete instance, which is the second half and a different question.
+	function promoteBareGenericResultToCalleeScope(result ValueId, receiver ValueId)
+		let resultTag = self.tagOf(result)
+		if resultTag != ValueTypeTag.named and not tagIsStructRef(resultTag) 'namesNoDeclaredType'
+			return
+		end 'namesNoDeclaredType'
+
+		let declaringType = self.methodDeclaringTypeNameOf(receiver)
+		if declaringType.isEmpty() 'receiverDeclaresNoMethods'
+			return
+		end 'receiverDeclaresNoMethods'
+
+		// ⚠ **THE COST GATE, and it is the same one `ProgramSignatures.fieldTypeOf` spells for its own door**:
+		// this runs at every method call in the program whose result names a declared type, and the answer is a
+		// UNION Maxon heap-boxes even for its payload-free arm. A NON-GENERIC declaring type binds nothing, so
+		// every call in the generics-free corpus leaves here rather than allocating to be told so.
+		let scopeParamNames = self.signatures.structTypeParamsOf(declaringType)
+		if scopeParamNames.isEmpty() 'calleeDeclaresNoTypeParameters'
+			return
+		end 'calleeDeclaresNoTypeParameters'
+
+		match self.signatures.scopedGenericInstanceOf(self.internedName(self.valueNameId(result)), declaringTypeName: declaringType, scopeParamNames: scopeParamNames) 'scoped'
+			notInScope then break 'scoped'
+			instance(gid) then self.retypeValue(result, valueType: MaxonType.genericInstance(gid))
+		end 'scoped'
+	end 'promoteBareGenericResultToCalleeScope'
 
 	// ⭐⭐ **DOES THE WRITTEN NAME `name` DENOTE AN INNER `typealias` OF THE BODY BEING PARSED — the ONE home
 	// of that question (S2i review).** THREE doors ask it and they must not answer one written name with two
@@ -25023,7 +25123,7 @@ export type Parser
 		// silent no-op on the scalar case, which is why the call is unconditional rather than gated on a
 		// managed-return test that would be a second opinion about what the call minted.
 		if not cursorTypeName.isEmpty() 'readCursorElement'
-			loopValue = try self.emitCursorProtocolCall(cursorTypeName, methodName: CurrentMethodName, source: source, anchor: patternTok, resultUsed: true)
+			loopValue = try self.emitReceiverProtocolCall(cursorTypeName, methodName: CurrentMethodName, source: source, anchor: patternTok, resultUsed: true)
 			self.giveTemporaryScopeLifetime(loopValue, name: IterationElementBindingName)
 		end 'readCursorElement'
 
@@ -25257,25 +25357,41 @@ export type Parser
 		self.attachPendingBorrows(func, borrower: loopBinding, boundValue: value, liveUntil: bodyEndIndex)
 	end 'declareLoopVariable'
 
-	// ⭐ **ONE CURSOR-PROTOCOL CALL — `<T>.current(source)` OR `<T>.advance(source)`.** Both are ordinary
-	// direct calls on the source as receiver, differing only in the method name and in whether the result is
-	// used, so they share the argument construction rather than each spelling it: a second copy is how the two
-	// would come to disagree about the receiver's position, which is the one thing a direct method call gets
-	// from its caller and cannot re-derive.
+	// ⭐ **ONE ZERO-ARGUMENT METHOD CALL ON A RECEIVER VALUE — the whole of the `for … in` protocol surface.**
+	// `<T>.createIterator(source)`, `<T>.current(source)` and `<T>.advance(source)` are the same call three
+	// times over: an ordinary direct call on the source as receiver, differing only in the method name and in
+	// whether the result is used. They share the argument construction rather than each spelling it, because a
+	// second copy is how they would come to disagree about the receiver's position — the one thing a direct
+	// method call gets from its caller and cannot re-derive.
+	//
+	// ⚠ **THE FACTORY USED TO BE A SECOND FUNCTION, ON THE ARGUMENT THAT IT "TAKES ITS RECEIVER FROM THE
+	// ITERABLE"** — a difference in what the CALLER does with the result, never in what is emitted. Generic substitution made
+	// that visible by giving both bodies two more obligations they must discharge identically (below), which is
+	// exactly the moment two copies of one call become two places for one rule to rot.
+	//
+	// ⭐⭐ **THE RECEIVER'S CONCRETE INSTANCE IS THREADED, AND THE RESULT IS READ THROUGH IT** — the same
+	// two things `dispatchMethodOnBase` does for a written `b.next()`, and for the same reasons. Without the
+	// first, a protocol method whose parameter FEEDS an opaque field cannot tell whether its argument owns
+	// managed heap for this instance; without the second, `Box.createIterator() returns BoxIter` hands back the
+	// SHARED body's `BoxIter with Box.T` and every later call on that cursor is typed against an opaque `T`
+	// the call site had already fixed. A plain-struct receiver supplies `none` and substitutes nothing, so
+	// every non-generic iterable emits exactly what it emitted before.
 	//
 	// `CalleeMint.notMinted` because both halves of the name are the AUTHOR'S — the type is one they declared
 	// and the method is one they wrote, joined the way `declaredMethodName` already joined them when the
 	// signature was published. Nothing here is in the reserved space.
-	function emitCursorProtocolCall(cursorTypeName ByteArray, methodName ByteArray, source ValueId, anchor Token, resultUsed bool) returns ValueId throws ParseError
+	function emitReceiverProtocolCall(typeName ByteArray, methodName ByteArray, source ValueId, anchor Token, resultUsed bool) returns ValueId throws ParseError
 		// `var` on all three: `emitCall` supplies omitted defaults by PUSHING onto the argument columns
-		// (`fillOmittedArgDefaults`), so they are its output as well as its input. Neither protocol method
-		// declares a parameter, so nothing is ever appended — but the mutability is the signature's, not the
-		// callee's, and E3019 asks about the signature.
+		// (`fillOmittedArgDefaults`), so they are its output as well as its input. No protocol method declares
+		// a parameter, so nothing is ever appended — but the mutability is the signature's, not the callee's,
+		// and E3019 asks about the signature.
 		var args = singletonArgs(source)
 		var argLabels = emptyArgLabels(args)
 		var argRanges = uniformArgRanges(args, range: SourceRange.ofToken(anchor))
-		return try self.emitCall(qualifiedMethodName(cursorTypeName, methodName: methodName), anchor: anchor, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: NoImmutableArgNames, rparenTok: anchor, resultUsed: resultUsed, constructorInstance: ConstructorInstance.none, mint: CalleeMint.notMinted)
-	end 'emitCursorProtocolCall'
+		let result = try self.emitCall(qualifiedMethodName(typeName, methodName: methodName), anchor: anchor, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: NoImmutableArgNames, rparenTok: anchor, resultUsed: resultUsed, constructorInstance: self.receiverConstructorInstance(source), mint: CalleeMint.notMinted)
+		self.retypeInstanceMethodResult(result, receiver: source)
+		return result
+	end 'emitReceiverProtocolCall'
 
 	// ⭐⭐ **CALL `advance()` AND HAND BACK ITS ERROR FLAG** — the value a cursor loop's header carries, and
 	// the whole of its termination condition.
@@ -25305,7 +25421,7 @@ export type Parser
 		// then meet a `tryCall` it must reject. Suppressed here, that cannot happen.
 		let savedRoutingSuppressed = self.tryBlockRoutingSuppressed
 		self.tryBlockRoutingSuppressed = true
-		_ = try self.emitCursorProtocolCall(cursorTypeName, methodName: AdvanceMethodName, source: source, anchor: anchor, resultUsed: false)
+		_ = try self.emitReceiverProtocolCall(cursorTypeName, methodName: AdvanceMethodName, source: source, anchor: anchor, resultUsed: false)
 		self.tryBlockRoutingSuppressed = savedRoutingSuppressed
 		let flag = self.mintValue(ValueTypeTag.integer, nameId: UnnamedTypeId)
 		_ = try self.rewriteLastCallToTryCall(func, flag: flag, tryTok: anchor, targetOpFloor: targetOpFloor)
@@ -25357,20 +25473,20 @@ export type Parser
 	// value the header starts from, and the loop's ordinary exit test does the rest. An INFALLIBLE factory
 	// cannot report emptiness at all, so its seed is the literal 0 the bare cursor form uses.
 	function materializeIterableIterationSource(func IrFunction, source ValueId, forTok Token) returns IterableIterationSource throws ParseError
-		// The tag gate is `cursorIterationTypeName`'s and is here for its reason: a source that is not a struct
-		// declares no method, and `valueTypeName` of one would be a name no registry answers for.
-		if self.tagOf(source) != ValueTypeTag.structRef 'notAStruct'
+		// The tag gate is `methodDeclaringTypeNameOf`'s and is there for its reason: a source that declares no
+		// methods has no `createIterator` to find, and its type name would answer no registry.
+		let typeName = self.methodDeclaringTypeNameOf(source)
+		if typeName.isEmpty() 'declaresNoMethods'
 			return IterableIterationSource.notIterable
-		end 'notAStruct'
+		end 'declaresNoMethods'
 
-		let typeName = self.valueTypeName(source)
 		if self.signatures.declaresCursorProtocol(typeName) 'alreadyACursor'
 			return IterableIterationSource.notIterable
 		end 'alreadyACursor'
 
 		match self.signatures.iterableFactory(typeName) 'factory'
 			notDeclared then return IterableIterationSource.notIterable
-			infallible then return IterableIterationSource.cursor(try self.emitIterableFactoryCall(typeName, source: source, forTok: forTok), entrySeed: self.emitLiteral(0, valueType: MaxonType.integer, range: SourceRange.ofToken(forTok)))
+			infallible then return IterableIterationSource.cursor(try self.emitReceiverProtocolCall(typeName, methodName: CreateIteratorMethodName, source: source, anchor: forTok, resultUsed: true), entrySeed: self.emitLiteral(0, valueType: MaxonType.integer, range: SourceRange.ofToken(forTok)))
 			throwsIterationError then break 'factory'
 			throwsSomethingElse(errorName) then throw ParseError.unsupported("`for … in` over a `{String.from(typeName)}`, whose `{String.from(CreateIteratorMethodName)}()` throws `{errorName}` — the loop absorbs what the traversal protocol throws without binding it, which is sound only for the payload-free `{String.from(IterationErrorTypeName)}`; a factory throwing anything else must be called with an explicit `try` and its result iterated", line: forTok.line, column: forTok.column)
 		end 'factory'
@@ -25385,24 +25501,13 @@ export type Parser
 		// `for x in someIterable` inside a `try 'l' … end` body is the reaching program.
 		let savedRoutingSuppressed = self.tryBlockRoutingSuppressed
 		self.tryBlockRoutingSuppressed = true
-		let cursor = try self.emitIterableFactoryCall(typeName, source: source, forTok: forTok)
+		let cursor = try self.emitReceiverProtocolCall(typeName, methodName: CreateIteratorMethodName, source: source, anchor: forTok, resultUsed: true)
 		self.tryBlockRoutingSuppressed = savedRoutingSuppressed
 
 		let flag = self.mintValue(ValueTypeTag.integer, nameId: UnnamedTypeId)
 		_ = try self.rewriteLastCallToTryCall(func, flag: flag, tryTok: forTok, targetOpFloor: targetOpFloor)
 		return IterableIterationSource.cursor(cursor, entrySeed: flag)
 	end 'materializeIterableIterationSource'
-
-	// `<Type>.createIterator(source)` — the one call the rewrite above emits, in both the fallible and the
-	// infallible arm, so the two cannot come to name the callee differently. It is `emitCursorProtocolCall`'s
-	// shape one method over and deliberately not that function: this call takes its receiver from the
-	// ITERABLE and produces the value the cursor calls then take theirs from.
-	function emitIterableFactoryCall(typeName ByteArray, source ValueId, forTok Token) returns ValueId throws ParseError
-		var args = singletonArgs(source)
-		var argLabels = emptyArgLabels(args)
-		var argRanges = uniformArgRanges(args, range: SourceRange.ofToken(forTok))
-		return try self.emitCall(qualifiedMethodName(typeName, methodName: CreateIteratorMethodName), anchor: forTok, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: NoImmutableArgNames, rparenTok: forTok, resultUsed: true, constructorInstance: ConstructorInstance.none, mint: CalleeMint.notMinted)
-	end 'emitIterableFactoryCall'
 
 	// ⭐ **WHAT A `for … in` MAY ITERATE.** An `Array` instance — the only container whose element read is a
 	// random-access index, which is what the counter lowering requires — plus the `Vector` whose record IS an
@@ -25444,21 +25549,42 @@ export type Parser
 	// the loop emits `<name>.current` / `<name>.advance` as direct calls, so a separate lookup would be a
 	// second chance to resolve the receiver's type differently from the admission test.
 	//
-	// ⚠ The tag gate is what keeps the protocol test off every OTHER value in the program: a source that is
-	// not a struct cannot declare a method at all, and `valueTypeName` of one would be a name no struct
-	// registry answers for.
+	// ⚠ The tag gate is `methodDeclaringTypeNameOf`'s and keeps the protocol test off every OTHER value in the
+	// program: a source that declares no methods cannot declare these two, and its type name would be one no
+	// struct registry answers for.
 	function cursorIterationTypeName(source ValueId) returns ByteArray
-		if self.tagOf(source) != ValueTypeTag.structRef 'notAStruct'
-			return EmptySourceText
-		end 'notAStruct'
-
-		let typeName = self.valueTypeName(source)
-		if not self.signatures.declaresCursorProtocol(typeName) 'noProtocol'
+		let typeName = self.methodDeclaringTypeNameOf(source)
+		if typeName.isEmpty() or not self.signatures.declaresCursorProtocol(typeName) 'noProtocol'
 			return EmptySourceText
 		end 'noProtocol'
 
 		return typeName
 	end 'cursorIterationTypeName'
+
+	// ⭐⭐ **THE DECLARATION A VALUE'S METHODS ARE WRITTEN ON, or EMPTY when it has none** — the ONE
+	// answer both `for … in` doors above ask, and the reason neither says `structRef` any more.
+	//
+	// A plain struct answers its own name. A GENERIC INSTANCE answers its BASE, because shv2 compiles ONE body
+	// per generic type (P1.6-A): `Box with Integer`'s `createIterator` IS `Box.createIterator`, the same symbol
+	// a `Box with String` reaches, and it is the name every other method door already mangles onto
+	// (`qualifiedCallBaseName`, `dispatchMethodOnBase`). Everything else — an int, a `String`, an interface
+	// value — answers empty.
+	//
+	// ⛔ **THE TWO DOORS ASKED `tagOf(source) != structRef` AND THAT GATE WAS THE BUG, NOT THE DESIGN.** A
+	// `genericInstance` carries its base name AND its concrete type arguments, which is strictly MORE than a
+	// `structRef` has — so `for x in b` over a `Box with Integer` that declares the whole cursor protocol was
+	// **`E2015: for … in over a 'struct' value`**, a refusal whose own sentence names the protocol the value
+	// supplies. (The word "struct" in it came from `typeTagName` of a tag that was not `structRef` at all.)
+	function methodDeclaringTypeNameOf(value ValueId) returns ByteArray
+		if self.tagOf(value) == ValueTypeTag.structRef 'plainStruct'
+			return self.valueTypeName(value)
+		end 'plainStruct'
+		if self.tagOf(value) == ValueTypeTag.genericInstance 'instance'
+			return self.signatures.genericInstanceBaseName(self.valueNameId(value))
+		end 'instance'
+
+		return EmptySourceText
+	end 'methodDeclaringTypeNameOf'
 
 	// ⭐⭐ **WHAT A COUNTED RANGE'S BOUNDS MAY BE — the RANGE form's twin of `requireIterableSource`, and
 	// the rung shipped without it.** A counted range is an INDEX PHI stepped by `emitMachineWordAdd`, a
@@ -35962,8 +36088,16 @@ export type Parser
 			return try self.parseCallNamed(func, callee: self.namespaceQualifiedCallee(declaredCallee, bare: memberTok.value), anchor: typeTok, receiver: ReceiverArg.none, resultUsed: resultUsed, constructorInstance: ConstructorInstance.none, mint: CalleeMint.notMinted)
 		end 'namespaceQualifiedFreeCall'
 
-		let result = try self.parseCallNamed(func, callee: declaredCallee, anchor: typeTok, receiver: ReceiverArg.none, resultUsed: resultUsed, constructorInstance: self.constructorInstanceOf(aliasName), mint: CalleeMint.notMinted)
-		self.retypeGenericAliasConstructorResult(result, aliasName: aliasName)
+		// ⭐ **ASKED ONCE AND READ TWICE.** The consume side (which argument OWNS the box being built) and the
+		// result side (which instance the value IS) are two halves of one fact, and each used to re-derive it
+		// from `aliasName`: a second derivation is a second chance to answer the same call site differently,
+		// which is what `staticCallClaimsBase`'s own header says about the callee name one door up.
+		let constructed = self.constructorInstanceOf(aliasName)
+		let result = try self.parseCallNamed(func, callee: declaredCallee, anchor: typeTok, receiver: ReceiverArg.none, resultUsed: resultUsed, constructorInstance: constructed, mint: CalleeMint.notMinted)
+		match constructed 'constructed'
+			none then break 'constructed'
+			instance(gid) then self.retypeGenericAliasConstructorResult(result, gid: gid, aliasName: aliasName)
+		end 'constructed'
 		return result
 	end 'parseQualifiedCall'
 
@@ -35972,14 +36106,25 @@ export type Parser
 	// owning box; `none` for a plain type's static method. It reads the whole-program index, complete in the
 	// real parse (during the tolerant sweep `isGenericAlias` answers no, so the consume simply does not fire —
 	// which is sound: the sweep's artifact is discarded).
+	//
+	// ⭐ **A BARE GENERIC TYPE NAME INSIDE A TYPE-PARAMETER SCOPE IS THE SECOND WAY A BASE NAMES AN INSTANCE
+	//** — `Inner.make(items)` written in `type Outer uses T` builds an `Inner with Outer.T`. It is the
+	// same question as the alias arm's and gets the same answer shape, so the two live at one door: what
+	// differs is only where the ARGUMENTS come from, a `typealias`'s written list or the enclosing scope's
+	// parameters. See `bareGenericInstanceInScope` for the binding rule and for why the caller-side gate is
+	// spelled here.
 	function constructorInstanceOf(baseName ByteArray) returns ConstructorInstance
 		if self.signatures.isGenericAlias(baseName) 'genericAlias'
 			return ConstructorInstance.instance(self.signatures.genericAliasInstanceFrom(baseName, readerFilePath: self.filePath))
 		end 'genericAlias'
-		return ConstructorInstance.none
+		if self.enclosingTypeParams.count() == 0 'noTypeParameterScope'
+			return ConstructorInstance.none
+		end 'noTypeParameterScope'
+
+		return self.bareGenericInstanceInScope(baseName)
 	end 'constructorInstanceOf'
 
-	// ⭐ **A GENERIC-ALIAS CONSTRUCTOR'S RESULT IS THE INSTANCE, not the base struct (P1.6-B1).**
+	// ⭐ **A GENERIC CONSTRUCTOR'S RESULT IS THE INSTANCE, not the base struct (P1.6-B1).**
 	// `BoolSizer.create(…)` links to `Sizer.create`, which returns `Self` — the BASE struct `Sizer`
 	// (`structRef`) — because the shared body is compiled once against the opaque `T`. But the VALUE is a
 	// `Sizer with bool`, and dictionary-passing needs that instance identity ON the value so a later
@@ -35987,15 +36132,21 @@ export type Parser
 	// type, retype it to `genericInstance(gid)`, carrying the gid the method call site reads out of the
 	// value's name column. A method returning a SCALAR (`typeSize() returns Integer`) or a DIFFERENT struct
 	// keeps its type — only a `Self`/base-struct return is the instance, which the base-id guard enforces.
-	function retypeGenericAliasConstructorResult(result ValueId, aliasName ByteArray)
-		if not self.signatures.isGenericAlias(aliasName) 'notAlias'
-			return
-		end 'notAlias'
+	//
+	// ⚠ **THE INSTANCE ARRIVES AS A PARAMETER RATHER THAN BEING RE-DERIVED FROM `aliasName`**, and that is not
+	// tidying: the CONSUME side already asked `constructorInstanceOf` for exactly this value, so re-deriving it
+	// was a second reading of one call site — and with generic substitution the two readings would genuinely differ, because a
+	// base name may denote an instance the alias registry knows nothing about (`Inner` inside `type Outer uses
+	// T`). `aliasName` is still taken, for the one thing only the WRITTEN spelling can answer.
+	//
+	// ⚠ The `GenericAlias` in the name is now the NARROWER of the two bases it serves; it is kept because three
+	// cross-file comments cite it (`SemanticCheck.maxon:2813, 2960`, `LowerMaxonToStd.maxon:1560`) and this
+	// rung owns neither file. A rename is a two-file comment edit and belongs to whoever holds them.
+	function retypeGenericAliasConstructorResult(result ValueId, gid GenericInstanceId, aliasName ByteArray)
 		if self.tagOf(result) != ValueTypeTag.structRef 'notBaseStruct'
 			return
 		end 'notBaseStruct'
 
-		let gid = self.signatures.genericAliasInstanceFrom(aliasName, readerFilePath: self.filePath)
 		let baseId = self.artifact.typeNames.intern(self.signatures.genericInstanceBaseName(gid))
 		let resultNameId = try self.valueNameIds.get(result) otherwise panic("retypeGenericAliasConstructorResult: result v{result} has no name-id — the two type columns are dense and in lockstep")
 		if resultNameId != baseId 'notThisBase'
@@ -36005,7 +36156,16 @@ export type Parser
 		// ⭐ Carry the FACTORY's instance-alias provenance onto the result (P1.6-C), so a later
 		// `w.getTag()` / `w.setTag(…)` on this value can re-qualify an inner-alias return/parameter to
 		// `WrapperA.Idx`. The shared gid cannot recover `WrapperA`; only the syntactic `aliasName` here can.
-		self.recordValueInstanceAlias(result, aliasName: aliasName)
+		//
+		// ⚠ **A BARE GENERIC BASE HAS NO SUCH SPELLING TO CARRY** — `Inner` names the BASE, and the
+		// per-instance registries are keyed on alias names (`perInstanceAliasFromParts` resolves the prefix
+		// through the generic-alias registry, which has no entry for a base). Stamping the base name here
+		// would file a per-instance question under a name that answers no per-instance registry; the
+		// substitution the value actually needs is `retypeInstanceMethodResult`'s instance arm, which reads
+		// the gid and never the spelling.
+		if self.signatures.isGenericAlias(aliasName) 'writtenAlias'
+			self.recordValueInstanceAlias(result, aliasName: aliasName)
+		end 'writtenAlias'
 	end 'retypeGenericAliasConstructorResult'
 
 	// ⭐ **THE STRUCT A QUALIFIED CALL'S METHOD IS DECLARED ON (P1.6-A).** A generic-instance alias
@@ -36857,7 +37017,42 @@ export type Parser
 	//     instance and type-checks (the assignment would else reject `Wrapper` into a `genericInstance` var).
 	// A receiver with NO alias (a `self` receiver, a value merged across branches) leaves the result plain — it
 	// DECAYS, matching the oracle. `receiver` is BORROWED; only the result's type moves.
+	//
+	// ⭐⭐ **AND A THIRD SHAPE NEEDS NO ALIAS AT ALL: A RETURN THAT IS ITSELF WRITTEN IN THE SHARED BODY'S
+	// DECLARATION VIEW.** `Outer.wrap() returns Inner` resolves, inside `type Outer uses T`, to
+	// `genericInstance(Inner with Outer.T)` — a type that still mentions the DECLARING type's parameter, so a
+	// call on a `Outer with Integer` receiver must read it as `Inner with Integer` or nothing downstream can
+	// type `w.first()`. The same is true of a bare `returns T`, which is `typeParameter(Outer.T)` and must
+	// become `Integer`. Both are exactly `substituteThroughInstance` — the ONE substitution the field read, the
+	// drop cascade and the argument check already share (W25) — so this arm ADDS no rule, it reaches the
+	// existing one from the method-RESULT position.
+	//
+	// ⚠ It sits ABOVE the alias gate because it does not need a spelling, only the receiver's gid: a receiver
+	// minted by a bare generic base (`Inner.make(items)` inside another generic body) carries an instance and
+	// no alias, and is precisely the value this arm exists for. It cannot disturb the two arms below, which
+	// answer only for a `named` or `structRef` result.
+	//
+	// ⚠ It goes through `slotTypeThroughReceiver` rather than calling the substitution directly, because the
+	// answer has to CROSS INTERNERS: a `typeParameter` return substitutes to the instance's stored ARGUMENT,
+	// which is a type in the INDEX's table, and a bare `adoptType` of it would re-intern the name while
+	// leaving a `named` tag that reads as an INTEGER. That door already owns both steps and the measured
+	// three-faced defect behind them; asking it here is the same field-read question at the return position,
+	// and a second spelling of it is the one thing that could make the two disagree. It also returns the
+	// declared type unchanged when the instance fixes nothing, so a method returning a FULLY CONCRETE instance
+	// (`entries() returns IntArray`) is retyped to exactly what it already was.
 	function retypeInstanceMethodResult(result ValueId, receiver ValueId)
+		// FIRST, because the two are stages of one reading and not alternatives: the callee's own scope is what
+		// the declared return MEANS, and the receiver's instance is what fixes it. A result promoted here to
+		// `MyMapIterator with (MyMap.Key, MyMap.Value)` is then reduced by the arm below to
+		// `MyMapIterator with (Integer, Integer)` when the receiver has that much; a result the promotion does
+		// not touch reaches the arm exactly as it did before this rung.
+		self.promoteBareGenericResultToCalleeScope(result, receiver: receiver)
+
+		if self.tagOf(receiver) == ValueTypeTag.genericInstance and self.carriesDeclarationView(result) 'declarationViewReturn'
+			self.retypeValue(result, valueType: self.slotTypeThroughReceiver(receiver, declared: maxonTypeOfTag(self.tagOf(result), nameId: self.valueNameId(result))))
+			return
+		end 'declarationViewReturn'
+
 		let receiverAlias = self.instanceAliasNameOfValue(receiver)
 		if receiverAlias.isEmpty() 'noReceiverAlias'
 			return
@@ -36880,6 +37075,29 @@ export type Parser
 			end 'sameBase'
 		end 'selfReturn'
 	end 'retypeInstanceMethodResult'
+
+	// ⭐ **IS THIS VALUE'S TYPE STILL WRITTEN IN THE SHARED GENERIC BODY'S DECLARATION VIEW?** — the
+	// exact set of shapes a concrete receiver can FIX, and therefore the gate on the substituting arm above.
+	// Three, and each is a whole family rather than a case:
+	//   • a `genericInstance` (`returns Inner`, `returns ElementArray`) — its ARGUMENTS may name the declaring
+	//     type's parameters;
+	//   • a bare `typeParameter` (`returns T`) — it IS one;
+	//   • a TUPLE `structRef` (`returns Entry`, where `typealias Entry = (Key, Value)`) — its canonical name
+	//     CITES them (`substituteTupleThroughInstance`).
+	//
+	// ⚠ **A NON-TUPLE `structRef` IS DELIBERATELY EXCLUDED, AND THAT EXCLUSION IS LOAD-BEARING.** A `Self`
+	// return is one, and it needs the OTHER arm — the one that also propagates the receiver's instance ALIAS,
+	// which the substitution neither carries nor could. Answering `true` here would substitute it (a no-op, a
+	// plain struct names no parameter) and then RETURN, silently dropping the alias every per-instance
+	// inner-alias re-qualification downstream reads.
+	function carriesDeclarationView(value ValueId) returns bool
+		let tag = self.tagOf(value)
+		if tag == ValueTypeTag.genericInstance or tag == ValueTypeTag.typeParameter 'nestedOrOpaque'
+			return true
+		end 'nestedOrOpaque'
+
+		return tagIsStructRef(tag) and isTupleTypeName(self.internedName(self.valueNameId(value)))
+	end 'carriesDeclarationView'
 
 	// ⚠ **A LAYOUT DESCRIPTOR IS FORWARDED FROM THE CALLER'S OWN SLOT, SO THE CALLER MUST HOLD ONE** (P1.6-B1).
 	// A method that reads `sizeof(T)` needs the descriptor threaded to it. When the receiver is a value of the
@@ -44984,6 +45202,19 @@ export type Parser
 		if self.tagOf(box) != ValueTypeTag.genericInstance 'notAConcreteInstance'
 			return declared
 		end 'notAConcreteInstance'
+
+		// ⭐ **A TUPLE CROSSES AS A NAME, NOT AS AN ID** — `substituteTupleThroughInstance` states why the
+		// interner-free substitution below cannot answer for a `structRef`, and why a tuple's canonical name is
+		// the currency that can. Asked here rather than beside it because THIS is the door that already owns
+		// both directions of the crossing, and a second site holding the name/id split is the drift the
+		// function below exists to prevent.
+		if tagIsStructRef(maxonTypeTag(declared)) 'maybeATuple'
+			let declaredName = self.internedName(typeNameIdOf(declared))
+			if isTupleTypeName(declaredName) 'aTuple'
+				let instanceView = self.signatures.substituteTupleThroughInstance(declaredName, id: self.valueNameId(box))
+				return declared if instanceView.equals(declaredName) else MaxonType.structRef(self.artifact.typeNames.intern(instanceView))
+			end 'aTuple'
+		end 'maybeATuple'
 
 		let substituted = self.signatures.substituteThroughInstance(declared, id: self.valueNameId(box))
 		if maxonTypesDenoteSame(substituted, b: declared) 'theInstanceFixesNothingHere'
