@@ -9703,6 +9703,9 @@ export type Parser
 		var hasArrayMoveOut = false
 		var reassignsOpaqueField = false
 		var hasArrayCopy = false
+		// ⭐ **THE LOCALS THIS BODY BINDS TO A `Self{…}` — a call on one of them is a SELF-CALL** (W43b). See
+		// `selfTypedLocalBoundAt` for why the binding is read rather than every receiver over-approximated.
+		var selfTypedLocals = ByteArrayArray.create()
 		var depth = 1 as BlockDepth
 		var q = bodyStart
 		while self.kindAt(q) != TokenKind.eof 'walk'
@@ -9752,6 +9755,15 @@ export type Parser
 			if kind == TokenKind.self and self.isSelfMethodCallAt(q) 'selfCall'
 				callees.push(self.tokenAt(q + 2).value)
 			end 'selfCall'
+			// ⭐ A `var result = Self{…}` LOCAL is a value of the enclosing type, so `result.upsert(…)` reaches
+			// the same shared body `self.upsert(…)` does and must feed the fixpoint identically (W43b). Recorded
+			// on the way past the binding, so the call sites below it are recognized in this one walk.
+			if self.selfTypedLocalBoundAt(q) 'selfTypedBinding'
+				selfTypedLocals.push(self.tokenAt(q + 1).value)
+			end 'selfTypedBinding'
+			if self.selfTypedLocalCallAt(q, locals: selfTypedLocals) 'selfTypedLocalCall'
+				callees.push(self.tokenAt(q + 2).value)
+			end 'selfTypedLocalCall'
 			// A BARE sibling call `method(…)` (#65) is a self-call too: implicit-self resolves it to
 			// `self.method(…)`, so it must feed the descriptor-need fixpoint exactly as an explicit
 			// `self.method(…)` does — otherwise a method reading `sizeof(T)` reached only through a bare sibling
@@ -9796,6 +9808,51 @@ export type Parser
 	function isSelfMethodCallAt(selfPos TokenIndex) returns bool
 		return self.memberCallFollows(selfPos + 1)
 	end 'isSelfMethodCallAt'
+
+	// ⭐⭐ **DOES `var|let <name> = Self{` OR `var|let <name> = Self.<static>(` BIND A LOCAL OF THE ENCLOSING
+	// TYPE? (W43b)** — the token shape that lets the descriptor-need fixpoint see a call on a `Self`-typed
+	// LOCAL as the self-call it is. `stdlib/Map.maxon:58-68` is the program: `var result = Self{…}` then
+	// `result.upsert(k, value: v)`, where `upsert` reads the layout descriptor. Without this the fixpoint gave
+	// `Map.init` no descriptor to forward and `requireSelfForDescriptorForwarding` refused the call outright.
+	//
+	// ⛔ **IT IS A BINDING TEST AND DELIBERATELY NOT A RECEIVER-BLIND OVER-APPROXIMATION.** The sibling signals
+	// above (`arrayMoveOutMethodAt`, `arrayCopyMethodAt`) DO ignore the receiver, because over-reserving a
+	// descriptor there is free. It is not free here: a STATIC that needs one and does not return `Self` is a
+	// hard `E2015` (`staticLayoutNeedsSelfReturn` — a static has no descriptor source), so a receiver-blind
+	// edge from a static whose inner-container method merely SHARES A NAME with a descriptor-needing sibling
+	// would turn a legal program into a refused one. Reading the binding costs one name list and refuses nothing.
+	//
+	// A local later reassigned to something else only ever ADDS edges the fixpoint's own name filter may drop,
+	// so the over-approximation that remains is in the sound direction.
+	function selfTypedLocalBoundAt(q TokenIndex) returns bool
+		let kind = self.kindAt(q)
+		if kind != TokenKind.var and kind != TokenKind.let 'notABinding'
+			return false
+		end 'notABinding'
+		if self.kindAt(q + 1) != TokenKind.identifier or self.kindAt(q + 2) != TokenKind.equals 'notAPlainInitializer'
+			return false
+		end 'notAPlainInitializer'
+		if self.kindAt(q + 3) != TokenKind.selfType 'notSelfValued'
+			return false
+		end 'notSelfValued'
+		return self.kindAt(q + 4) == TokenKind.leftBrace or self.memberCallFollows((q + 4) as TokenIndex)
+	end 'selfTypedLocalBoundAt'
+
+	// Is the token at `q` a `<local>.<method>(` call whose receiver `selfTypedLocalBoundAt` recorded — the
+	// self-call the line above makes visible. The name list is a handful of locals per body, so a scan is what
+	// it costs; `typeParamPositionOf` answers the same shape of question the same way.
+	function selfTypedLocalCallAt(q TokenIndex, locals ByteArrayArray) returns bool
+		if self.kindAt(q) != TokenKind.identifier or not self.memberCallFollows(q + 1) 'notAMemberCall'
+			return false
+		end 'notAMemberCall'
+		let receiver = self.tokenAt(q).value
+		for name in locals 'eachLocal'
+			if name.equals(receiver) 'hit'
+				return true
+			end 'hit'
+		end 'eachLocal'
+		return false
+	end 'selfTypedLocalCallAt'
 
 	// Is the identifier at `q` a BARE call `<identifier>(` — followed by `(` and NOT preceded by a `.` (which
 	// would make it the member of a `receiver.method(…)` or a qualified `Type.method(…)` call, neither of which
@@ -36602,14 +36659,23 @@ export type Parser
 		end 'selfReturn'
 	end 'retypeInstanceMethodResult'
 
-	// ⚠ **B1 FORWARDS A LAYOUT DESCRIPTOR ONLY FROM `self`, NOT FROM A `Self`-RETURNING RESULT** (P1.6-B1). A
-	// method that reads `sizeof(T)` needs the descriptor threaded to it. When the receiver is a value of the
-	// enclosing generic type — `self` (ValueId 0) or a `let c = self.makeCopy()` bound local — the descriptor
-	// must be FORWARDED from the caller's own slot, which the caller holds only when its own transitive need
-	// was set. `self` always qualifies; a non-`self` same-type value does not (the enclosing method may hold
-	// no descriptor to forward, and the token pre-scan cannot see that `c` is same-typed), so it is a CLEAN
-	// E2015 here rather than a lowering panic. A CONCRETE-instance receiver (`genericInstance`, not
-	// `structRef`) supplies its OWN descriptor and never reaches this guard.
+	// ⚠ **A LAYOUT DESCRIPTOR IS FORWARDED FROM THE CALLER'S OWN SLOT, SO THE CALLER MUST HOLD ONE** (P1.6-B1).
+	// A method that reads `sizeof(T)` needs the descriptor threaded to it. When the receiver is a value of the
+	// enclosing generic type — `self` (ValueId 0), a `let c = self.makeCopy()` bound local, a `var result =
+	// Self{…}` — the descriptor must be FORWARDED, which the enclosing function can do only when its own
+	// transitive need was set. That is exactly `functionCarriesLayoutParam`, so it is what this asks. A
+	// CONCRETE-instance receiver (`genericInstance`, not `structRef`) supplies its OWN descriptor and never
+	// reaches this guard.
+	//
+	// ⛔ **THE TEST USED TO BE `base.box == 0` — *is the receiver literally `self`?* — AND THAT REFUSED A LEGAL
+	// PROGRAM THE ORACLE COMPILES (W43b).** `stdlib/Map.maxon:58-68` builds `var result = Self{…}` in a static
+	// and calls `result.upsert(k, value: v)` on it; the receiver is a `Self` value that is not `self`, so the
+	// old shape rejected it outright. The premise behind that shape — *"the token pre-scan cannot see that `c`
+	// is same-typed"* — is what changed: `selfTypedLocalBoundAt` now reads the binding, so the fixpoint gives
+	// such a caller a descriptor and this asks whether it actually got one instead of guessing from the
+	// receiver's spelling. A caller that did NOT (a `Self` PARAMETER, `merge(source Self)`, whose enclosing
+	// method the pre-scan still cannot see is same-typed) is still the CLEAN E2015 below rather than
+	// `forwardCallerLayout`'s panic.
 	function requireSelfForDescriptorForwarding(base StructBase, memberTok Token) throws ParseError
 		// ⚠ **THE GATE WAS `enclosingTypeParams`, AND THAT FIELD IS EMPTY INSIDE AN INTERFACE EXTENSION'S
 		// BODY BY DESIGN (W23c)** — so this refusal, which exists precisely to keep a non-`self` forward from
@@ -36623,17 +36689,17 @@ export type Parser
 		if self.tagOf(base.box) != ValueTypeTag.structRef 'notSameTypeValue'
 			return
 		end 'notSameTypeValue'
-		if base.box == 0 'isSelf'
+		if self.functionCarriesLayoutParam 'hasOneToForward'
 			return
-		end 'isSelf'
+		end 'hasOneToForward'
 		// A `structRef` receiver whose base is the enclosing type is a `Self`-typed value — a `Self`-returning
-		// result, or a `Self` PARAMETER (`merge(source Self)`); every other `structRef` (a plain non-generic
-		// struct local) names a type whose methods carry no descriptor at all.
+		// result, a `var result = Self{…}` local, or a `Self` PARAMETER (`merge(source Self)`); every other
+		// `structRef` (a plain non-generic struct local) names a type whose methods carry no descriptor at all.
 		if not base.layout.name.equals(self.enclosingType) 'notEnclosingType'
 			return
 		end 'notEnclosingType'
 		if self.signatures.functionNeedsLayoutDescriptor(qualifiedMethodName(self.enclosingType, methodName: memberTok.value)) 'reject'
-			throw ParseError.unsupported("calling '{String.from(memberTok.value)}' (which reads sizeof of the type parameter) on a value of the enclosing type that is NOT `self` — B1 forwards the layout descriptor only from `self`, so read the size through `self` (or a concrete instance) instead; forwarding from a `Self`-returning result is a later slice", line: memberTok.line, column: memberTok.column)
+			throw ParseError.unsupported("calling '{String.from(memberTok.value)}' (which reads sizeof of the type parameter) on a value of the enclosing type, from a function that carries no layout descriptor of its own to forward — reach it through `self`, through a local bound to a `Self\{…}`, or through a concrete instance instead", line: memberTok.line, column: memberTok.column)
 		end 'reject'
 	end 'requireSelfForDescriptorForwarding'
 
