@@ -689,18 +689,11 @@ export function queryAllModule(project Project) returns MaxonModule throws Compi
 	// asks for is a memo HIT except the files whose demand actually moved.
 	var merged = try foldEveryFileIntoAModule(project)
 	while try growStdlibBodyDemand(project, module: merged, signatures: try queryProgramSignatures(project)) 'demandGrew'
-		// ⛔⛔ **THE PARSE MEMOS MUST GO BEFORE A SECOND FOLD, BECAUSE `mergeArtifact` MUTATES THE ARTIFACT
-		// IT FOLDS.** `remapArtifact` rewrites an artifact's `named(id)` type ids from the FILE's interner
-		// into the PROJECT's, in place. Fold the same artifact again against the interner
-		// `resetMergeTargets` has just emptied and its ids are already project-global: measured, the
-		// second round dies on `TypeNameRemap.apply: id 2 out of range (this remap was built from a
-		// smaller interner)` compiling `Math.exp(0.0)`.
-		//
-		// ⚠ It is not a defect this rung introduced and it is not one it repairs — `queryAllModule` simply
-		// had no second fold before, so nothing ever asked the artifacts to be re-foldable. Dropping the
-		// memos is what asks the parser for artifacts that are, and it is cheap for the reason the whole
-		// change exists: a file whose bodies are still unreached re-parses as DECLARATIONS ONLY.
-		project.db.parseCache = ParseCacheMap.create()
+		// ⭐ **NOTHING IS INVALIDATED HERE, AND THAT IS THE POINT.** A round re-folds every file, but only
+		// the files whose bodies this round newly demanded have a moved parse key — everything else is a
+		// memo HIT, and `mergeArtifact` re-folds none of their type ids
+		// (`FileParseArtifact.typeIdsAreProjectGlobal`). So a round costs one re-parse of the files that
+		// changed plus a fold, not a re-parse of the cone.
 		merged = try foldEveryFileIntoAModule(project)
 	end 'demandGrew'
 
@@ -1060,7 +1053,18 @@ function resetMergeTargets(project Project)
 	project.typeNameDecls = TypeNameRegistry.create()
 	project.rangeChecks = RangeCheckPlanMap.create()
 	project.structTypes = StructLayoutMap.create()
-	project.typeNames = TypeNameInterner.create()
+	// ⛔⛔ **`project.typeNames` IS DELIBERATELY NOT RESET, AND IT IS THE ONE REGISTRY HERE THAT MUST NOT
+	// BE.** Every other line in this function drops a table the coming fold REBUILDS from the artifacts.
+	// The interner is different in kind: `mergeArtifact` has already rewritten the artifacts' `named(id)`s
+	// to index THIS table, in place, and the project's struct/enum layouts ARE the artifacts' own objects.
+	// Emptying it would leave every one of those ids pointing into a table that no longer holds the name —
+	// silently for a re-fold that happened to intern the same names in the same order, and as
+	// `TypeNameRemap.apply: id N out of range` for one that did not.
+	//
+	// ⚠ It is a NAME TABLE, so keeping it across a rebuild is not carrying stale state: an entry is a
+	// name, ids are only ever handed out (never reused), and a name that no source still spells is simply
+	// never looked up. What a reset would buy is reclaiming those few bytes; what it costs is the
+	// invariant `FileParseArtifact.typeIdsAreProjectGlobal` rests on.
 	// Must reset with the others: `mergeArtifact` appends spans to this table and
 	// asserts its count tracks the merged module's op count. The module accumulator
 	// (`merged`) is rebuilt from empty on every miss, so a span table carried over

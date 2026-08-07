@@ -134,6 +134,29 @@ export type FileParseArtifact
 	// `Parser.requireTypeNameNotCompilerOwned` states: a project rooted under `stdlib/` must still record its
 	// own declarations, or the readiness probe would disagree with the loaded module.
 	export var livesUnderStdlibDirectory as bool
+	// ⭐⭐ **HAVE THIS ARTIFACT'S `named(id)`s ALREADY BEEN FOLDED INTO THE PROJECT INTERNER?**
+	//
+	// `mergeArtifact` rewrites a file's LOCAL type-name ids into PROJECT-GLOBAL ones, and it does so in
+	// place — the module's functions, `funcReturnTypes`, and the struct/enum LAYOUTS, the last of which the
+	// project registries then hold BY REFERENCE (`commitStructTypes` upserts the artifact's own object).
+	// Rewriting them into a copy instead would mean a copy constructor for `StructLayout` and `EnumLayout`,
+	// i.e. two field lists to keep in step with the real ones forever — the "one fact written twice" defect
+	// this tree keeps paying for.
+	//
+	// So the fold is made IDEMPOTENT instead of non-mutating: an artifact remembers that its ids are
+	// already the project's, and a second fold of it re-folds nothing. That is exact rather than defensive
+	// — the ids ARE correct, because `Queries.resetMergeTargets` deliberately does NOT reset
+	// `project.typeNames`, so the interner they were folded into is the one still in hand.
+	//
+	// ⚠ **A RE-PARSE CLEARS IT FOR FREE**, which is the property that makes this safe: a fresh parse builds
+	// a fresh artifact through `create` below, with file-local ids and this flag `false`. There is no state
+	// to invalidate and no way to forget to.
+	//
+	// It exists because `queryAllModule` folds more than once — the stdlib body-demand fixpoint. Before it,
+	// the second fold died on `TypeNameRemap.apply: id 2 out of range (this remap was built from a smaller
+	// interner)`, and the first cure was to DROP THE PARSE MEMOS between rounds, which cost a stdlib-using
+	// compile ~10% (`Math.exp(0.0)`: 609.8 -> 672.2 ms). This is that cost's actual cause, fixed.
+	export var typeIdsAreProjectGlobal as bool
 	// This file's Maxon IR fragment. `IrModule.merge` offset-relocates it into
 	// the whole-program module at merge time.
 	export var module as MaxonModule
@@ -253,6 +276,7 @@ export type FileParseArtifact
 		return Self{
 			filePath: filePath,
 			livesUnderStdlibDirectory: livesUnderStdlibDirectory,
+			typeIdsAreProjectGlobal: false,
 			module: MaxonModule.create(),
 			opRanges: SourceRangeTable.create(),
 			valueOrigins: ValueOriginTable.create(),
@@ -484,15 +508,24 @@ end 'FileParseArtifact'
 // v1's mid-parse inserts + ParseDelta rollback, needing no rollback because
 // nothing was ever written to `Project` speculatively.
 export function mergeArtifact(project Project, target MaxonModule, artifact FileParseArtifact)
-	let remap = project.typeNames.foldInto(artifact.typeNames)
-	if not remap.isIdentity 'remapNeeded'
-		// A prior file already interned some of these names under different ids
-		// (the multi-file case, first exercised at M2). Rewrite this artifact's
-		// module signatures + registry entries through the remap before merging
-		// so every `named(id)` indexes the project interner. Identity (always
-		// true for the first/only file) skips this entirely.
-		remapArtifact(artifact, remap: remap)
-	end 'remapNeeded'
+	// ⭐ **FOLDED AT MOST ONCE, whatever this artifact is merged into and however often.** The second and
+	// later folds of one compile are the stdlib body-demand fixpoint's re-folds; this artifact's ids are
+	// already the project interner's, and its names are already in that interner, so there is nothing left
+	// to do — see `FileParseArtifact.typeIdsAreProjectGlobal` for why the flag is exact rather than a
+	// guess, and `Queries.resetMergeTargets` for the one line it rests on.
+	if not artifact.typeIdsAreProjectGlobal 'notYetFolded'
+		let remap = project.typeNames.foldInto(artifact.typeNames)
+		if not remap.isIdentity 'remapNeeded'
+			// A prior file already interned some of these names under different ids
+			// (the multi-file case, first exercised at M2). Rewrite this artifact's
+			// module signatures + registry entries through the remap before merging
+			// so every `named(id)` indexes the project interner. Identity (always
+			// true for the first/only file) skips this entirely.
+			remapArtifact(artifact, remap: remap)
+		end 'remapNeeded'
+
+		artifact.typeIdsAreProjectGlobal = true
+	end 'notYetFolded'
 
 	// `IrModule.merge` relocates the artifact's ops to `target.ops.count()` and up,
 	// so the spans must land at exactly that offset in `project.opRanges` to stay
