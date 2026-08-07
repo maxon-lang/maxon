@@ -1283,6 +1283,49 @@ is what also keeps the forward reference `let TOTAL = FIRST + SECOND` working. A
 (E2015): it has no element to infer from, and unlike a function body it cannot be told to use
 `Array with T` + `.create()`, because a call is not a constant.
 
+### Top-level container globals — `<Alias>.create()`, builtin or DECLARED (W41)
+
+`var g = ItemArray.create()` and `var g = StrMap.create()` are the array literal's **empty case**, and they
+take the same slot, the same `__module_init` build and the same `__maxon_global_cleanup` drop. One outcome
+(`ConstFoldedValue.containerCreate(giid)`) carries an INSTANCE and nothing else, which is what lets it serve
+a factory ARGUMENT as well as a global's own slot — `var db = Database.create(EntryMap.create(), …)`.
+
+**What `__module_init` needs is a CALLEE and a STAMP LIST** (`ProgramSignatures.containerCreateCall`), and
+the two kinds of container differ only in the second:
+
+- a **builtin** container's `create` is a runtime entry (`__arr_create`, `__set_create`, …) that cannot look
+  up a stride or a column destructor and must be handed both;
+- a **declared** generic's is a real `create()` static the program wrote (`Map.create`, once
+  `stdlib/Map.maxon` is listed and `Map` is an ordinary generic), which builds its own fields from its own
+  declaration and is handed nothing.
+
+> ⭐ **The hidden DICTIONARY arguments are not in that description, and deliberately so.** A generic's
+> `create()` carries a layout descriptor plus one witness per `where` constraint, and both are sourced at the
+> CALL SITE from the call's RESULT for a `Self`-returning static (`LowerMaxonToStd.witnessSourceValue`). The
+> record minted here is typed `genericInstance(giid)`, so the lowering threads `__layout_Map_String_Integer`
+> and `__witness_String.Hashable`/`.Equatable` unasked — the emitted call is byte-identical to the one the
+> same `StrMap.create()` inside a function lowers to. Building that block here would have been a second,
+> driftable copy of an ABI.
+
+Three premises of that call are therefore checked at the declaration
+(`Parser.requireDeclaredGenericGlobalCreate`): the `create()` must EXIST, be NAMEABLE from the declaring file
+(`__module_init` is exempt from `SemanticCheck.calleeVisibleFrom`, so the visibility question has to be asked
+where the reader file is known — the same measured hole the user-factory form closes), and return `Self`.
+
+> ⚠ **A DECLARED `create` MUST BE ROOTED, and missing one is a PANIC rather than a wrong answer.**
+> `__module_init` does not exist when `StdlibSource.deriveStdlibFacts` walks reachability, and it is called by
+> the entry stub rather than from `main` — so a stdlib `create` named only by an initializer is filed
+> unreachable, its body is never lowered, and `DeadFunctionElimination` then reaches the empty function
+> (`requireUnreachableStdlibStayedDead`). `ProgramSignatures.globalInitCallees` supplies those roots off the
+> DECLARATION, and it must name **every** call the initializer makes: measured, a `Map.create` sitting in a
+> factory's ARGUMENT list was left out while the factory itself was rooted, and that is precisely the panic.
+
+**What stays refused** is a `create` this position cannot call — absent, invisible, or not `Self`-returning —
+plus ARGUMENTS, which no `containerCreate` outcome carries. The initializer form that does carry them
+(`factoryValue`) types its slot from the callee's DECLARED return, which for a generic is the BASE and not
+the instance, so it cannot serve `IntBox.create(9)` either. The oracle accepts that program; shv2 refuses it
+at the argument, and closing the gap means retyping a factory global's slot to the instance its alias names.
+
 ### Dead-global elimination — a global no code NAMES is never built (P1.7 slice 3)
 
 A stored top-level binding costs three things: an 8-byte `.data` slot, the `__module_init` ops that build
@@ -1344,9 +1387,14 @@ table to re-lay-out, and no ordering between three edits to get right.
 - **No side-effect heuristic.** The bootstrap decides removability by `callee.EndsWith(".create") || ".from"`
   (`DeadFunctionElimination.cs:181-183`), so `Counter.build()` keeps its `print` while the identical body
   renamed `Counter.create()` silently loses it. **Renaming a method must not change whether its side effects
-  run.** shv2 cannot reach the case at all today (a call in a top-level initializer is E2045, so every init
-  op is compiler-synthesized allocation); when initializers may call, the obligation lands in
-  `ModuleInit.initialRecordOf` — keep the call, drop the slot.
+  run.** shv2 answers it structurally instead: **an initializer that CALLS keeps its slot, whatever names
+  it** — the whole filter short-circuits on `ProgramSignatures.declInitializerCall`, so a dead 8-byte word is
+  paid rather than a `print` lost, and the decision reads the OUTCOME rather than a spelling. TWO initializer
+  forms call: a user static factory (`var db = Database.create(…)`, spec-port `map-struct-bytearray`) and a
+  DECLARED generic's empty record (`var g = StrMap.create()`, W41), the second in the ARGUMENT position as
+  well as its own. That one projection also feeds `globalInitCallees`, which ROOTS every one of those callees
+  — see *Top-level container globals* below for why a missed root is a compiler panic rather than a wrong
+  answer.
 
 **Cost: ONE O(ops) walk that allocates nothing per op, SKIPPED entirely when the program declares no stored
 global** (`ProgramSignatures.storedGlobalCount`, counted by `assignDataLabels`, which already visits exactly

@@ -303,6 +303,97 @@ end 'main'
 7
 ```
 
+<!-- test: substituted-return-of-a-built-record-is-already-owned -->
+### A substituted return the shared body BUILT is already owned, and the caller must not co-own it
+⭐⭐ **THE CALLER'S `+1` IS OWED FOR AN OPAQUE `T` AND FOR NOTHING ELSE.** A shared generic body cannot
+classify a bare `T` — an unconditional retain there would fault on a trivial instantiation's raw scalar —
+so `Walker.current() returns T` hands the caller a BORROW and the caller takes the reference itself
+(`Parser.coOwnSubstitutedCallResult`). That premise is a property of the **opaque** return, not of
+substitution: a return type that is a CONCRETE managed record — a tuple `(T, T)`, whose shape the body
+knows whichever type `T` is — is classified by `emitOwnedValueReturn` like any other, so the body already
+promotes-or-passes-through an OWNED record and the hand-off is discharged before the caller sees it.
+
+⛔ **Co-owning one anyway leaks it, once per call.** The caller minted a SECOND reference — a trivial
+tuple gets a whole fresh record (`copyTupleValue`), a managed-element one an `__mm_retain` — and then
+dropped only that one, while the record the body actually built was adopted by nobody. The answer stays
+correct and the leak gate is the only thing that can see it, which is why this case asserts an exit code
+that is only reachable through `__mm_leak_check`.
+
+The reaching program needs no loop, no iterator and no `Map`: one generic method whose substituted return
+type is a freshly built tuple, called once. Returns `42`, and exits 101 if the record is leaked.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+type Holder uses T
+	typealias Pair = (T, T)
+	typealias Items = Array with T
+	var items as Items
+
+	export static function create(items Items) returns Self
+		return Self{items: items}
+	end 'create'
+
+	export function pair() returns Pair
+		let a = try items.get(0) otherwise panic("oob")
+		let b = try items.get(1) otherwise panic("oob")
+		return (a, b)
+	end 'pair'
+end 'Holder'
+
+typealias IntHolder = Holder with Integer
+
+function main() returns ExitCode
+	var a = IntArray.create()
+	a.push(11)
+	a.push(31)
+	let h = IntHolder.create(a)
+	let (x, y) = h.pair()
+	return x + y
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: substituted-return-of-a-managed-element-tuple-is-already-owned -->
+### The same, through the INCREF arm rather than the record copy
+A tuple with a MANAGED element is not copyable — a shallow copy would free one `String` twice — so the
+promotion increfs it instead. That is the other arm of the same door, and it leaks the same way: `+1`
+taken by the caller, `-1` spent by the caller, and the body's own record adopted by nobody. Returns `42`.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+type Labeller uses T
+	typealias Tagged = (String, T)
+	typealias Items = Array with T
+	var items as Items
+
+	export static function create(items Items) returns Self
+		return Self{items: items}
+	end 'create'
+
+	export function tagged() returns Tagged
+		let v = try items.get(0) otherwise panic("oob")
+		return ("ab{items.count()}", v)
+	end 'tagged'
+end 'Labeller'
+
+typealias IntLabeller = Labeller with Integer
+
+function main() returns ExitCode
+	var a = IntArray.create()
+	a.push(39)
+	let l = IntLabeller.create(a)
+	let (name, v) = l.tagged()
+	return v + name.count()
+end 'main'
+```
+```exitcode
+42
+```
+
 <!-- disabled-test: generic-type-conforming-to-Iterable -->
 <!-- function types over a TYPE PARAMETER (rung unassigned - reported by generic-substitution) — `stdlib/Interfaces.maxon:196` declares
      `typealias ElementTransform = function(Element) returns Element`, and for a GENERIC conformer

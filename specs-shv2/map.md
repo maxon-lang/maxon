@@ -614,3 +614,52 @@ end 'main'
 ```exitcode
 0
 ```
+
+<!-- test: a-user-type-can-be-a-map-key -->
+⭐⭐ **THE CAPABILITY THE RETIREMENT BOUGHT (W41), and it is the reason the retirement was worth
+doing rather than a like-for-like swap.** While `Map` was SYNTHESIZED its keys were a fixed roster of
+four — `int`, `String`, `Character`, `Array` — and anything else was refused outright with *"a
+'<Type>' key is a later slice"*. `Map` is `stdlib/Map.maxon` now, declared
+`where Key is Hashable and Equatable`, so **the roster is not a list any more: it is the constraint**,
+and a user type that declares both conformances is a key like any other.
+
+Measured against the C# bootstrap on this exact program: **both compilers exit 42.**
+
+⚠ The `hash()` return type must be `HashValue` and not merely some `int` alias of the same span. The
+oracle refuses `returns Val` with `E3016: Partial interface implementation … expected hash() returns
+HashValue`; shv2 accepts it, because its signature match erases a ranged alias to its underlying
+primitive where the bootstrap compares the alias NAME. That divergence is PRE-EXISTING and is not
+this case's subject — it is recorded here because this is the program that surfaces it, and a reader
+who writes `returns Val` will otherwise get a green shv2 and a red oracle with no idea why.
+```maxon
+typealias Val = int(i64.min to i64.max)
+
+type Point implements Hashable, Equatable
+	export var x as Val
+	export var y as Val
+
+	export static function create(x Val, y Val) returns Self
+		return Self{x: x, y: y}
+	end 'create'
+
+	export function hash() returns HashValue
+		return x * 31 + y
+	end 'hash'
+
+	export function equals(other Self) returns bool
+		return x == other.x and y == other.y
+	end 'equals'
+end 'Point'
+
+typealias PointMap = Map with (Point, Val)
+
+function main() returns ExitCode
+	var m = PointMap.create()
+	m.upsert(Point.create(1, y: 2), value: 40)
+	m.upsert(Point.create(3, y: 4), value: 2)
+	return (try m.get(Point.create(1, y: 2)) otherwise 0) + (try m.get(Point.create(3, y: 4)) otherwise 0)
+end 'main'
+```
+```exitcode
+42
+```

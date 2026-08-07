@@ -99,10 +99,12 @@ end 'buildModuleInit'
 // The OWNED value a managed global's slot starts life holding — either a record this function MATERIALIZES,
 // or whatever a user factory RETURNS.
 //
-// ⭐ **THE FACTORY ARM IS THE ONE PLACE THE COMPILER RUNS THE PROGRAM'S OWN CODE BEFORE `main`** (spec-port
-// `map-struct-bytearray`), and it is exactly what `DeadGlobalElimination`'s header filed against the day an
+// ⭐ **BOTH ARMS CAN RUN THE PROGRAM'S OWN CODE BEFORE `main`** — the factory call outright (spec-port
+// `map-struct-bytearray`), and, since W41, a container record whose `create` is a DECLARED generic's static
+// rather than a runtime entry. That is exactly what `DeadGlobalElimination`'s header filed against the day an
 // initializer may call: the call belongs here, and a global whose initializer calls is kept alive by
-// `ProgramSignatures.contributesStorage` so this run is never spliced out from under its side effects.
+// `ProgramSignatures.contributesStorage` — which asks `declInitializerCall`, and so answers for both — so this
+// run is never spliced out from under its side effects.
 function initialRecordOf(fn SynthesizedFunction, global ManagedGlobal) returns ValueId
 	return match global.initializer 'initializer'
 		record(build) gives builtRecord(fn, build: build, valueType: global.valueType, range: global.range)
@@ -141,7 +143,7 @@ end 'builtRecord'
 function clonedStringRecord(fn SynthesizedFunction, bytes ByteArray, valueType MaxonType, range SourceRange) returns ValueId
 	let literal = fn.mintOfType(valueType)
 	fn.emit(MaxonOp.stringLiteral(literal, bytes: bytes), range: range)
-	return fn.emitRuntimeCall(StrCloneName, args: singletonArgs(literal), resultTag: maxonTypeTag(valueType), resultNameId: typeNameIdOf(valueType), range: range)
+	return fn.emitPositionalCall(StrCloneName, args: singletonArgs(literal), resultTag: maxonTypeTag(valueType), resultNameId: typeNameIdOf(valueType), range: range)
 end 'clonedStringRecord'
 
 // The byte-string arm: ONE op, because the literal's own materialization is already the owned heap
@@ -164,6 +166,15 @@ end 'ownedByteStringRecord'
 // is typed by — so the strides this record is born with and the type every use loads through cannot
 // disagree, and each column's destructor equals the one a body's `create()` of the same instance stamps.
 //
+// ⭐⭐ **A DECLARED GENERIC'S `create()` ARRIVES AS THAT SAME DESCRIPTION WITH AN EMPTY STAMP LIST (W41)**, so
+// the loop below emits nothing and the call is a bare `Map.create()`. Its HIDDEN arguments — the layout
+// descriptor and one witness per `where` constraint — are not this function's to supply and deliberately are
+// not in the description: `LowerMaxonToStd.finalizeCallArgsWithLayout` appends them, sourcing both from the
+// call's RESULT for a `Self`-returning static (`witnessSourceValue`), and the result is minted at
+// `genericInstance(id)` by `resultTag`/`resultNameId` below. That is why the emitted call is byte-identical to
+// the one the same `StrMap.create()` lowers to inside a function, and why building the block here instead
+// would have been a second, driftable copy of an ABI.
+//
 // It takes the type and range rather than the `ManagedGlobal` for its two siblings' reason, and now the
 // three arms read alike: nothing here is a fact about a GLOBAL, and a builder that cannot see one cannot
 // come to read a second field off it that the other two arms would not have — which is also what lets all
@@ -173,17 +184,17 @@ function builtContainerRecord(fn SynthesizedFunction, create ContainerCreateCall
 	for stamp in create.stamps 'eachStamp'
 		args.push(containerStampValue(fn, stamp: stamp, range: range))
 	end 'eachStamp'
-	let record = fn.emitRuntimeCall(create.callee, args: args, resultTag: maxonTypeTag(valueType), resultNameId: typeNameIdOf(valueType), range: range)
+	let record = fn.emitPositionalCall(create.callee, args: args, resultTag: maxonTypeTag(valueType), resultNameId: typeNameIdOf(valueType), range: range)
 
 	// A fixed-size container's elements are addressable from birth, so the record is sized before anything
 	// reads it — the second call `Parser.emitVectorCreateOp` makes, for the same reason.
 	match create.sizing 'sizing'
 		grown then break 'sizing'
-		fixed(count) then _ = fn.emitRuntimeCall(ArrResizeName, args: pairArgs(record, second: fn.emitTypedLiteral(count as ParsedInt, valueType: MaxonType.integer, range: range)), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+		fixed(count) then _ = fn.emitPositionalCall(ArrResizeName, args: pairArgs(record, second: fn.emitTypedLiteral(count as ParsedInt, valueType: MaxonType.integer, range: range)), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
 	end 'sizing'
 
 	for element in elements 'eachElement'
-		_ = fn.emitRuntimeCall(ArrPushName, args: pairArgs(record, second: elementRecordOf(fn, element: element, range: range)), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+		_ = fn.emitPositionalCall(ArrPushName, args: pairArgs(record, second: elementRecordOf(fn, element: element, range: range)), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
 	end 'eachElement'
 
 	return record
@@ -239,7 +250,7 @@ function dropBorrowedArguments(fn SynthesizedFunction, args GlobalInitArgumentAr
 		let value = try values.get(i) otherwise panic("dropBorrowedArguments: values.get OOB at {i} — the materialization above pushes one value per argument")
 		match arg.cleanup 'cleanup'
 			none then continue
-			dropAfterCall(dropCallee) then _ = fn.emitRuntimeCall(dropCallee, args: singletonArgs(value), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+			dropAfterCall(dropCallee) then _ = fn.emitPositionalCall(dropCallee, args: singletonArgs(value), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
 		end 'cleanup'
 	end 'eachArgument'
 end 'dropBorrowedArguments'
@@ -290,7 +301,7 @@ function buildGlobalCleanup(module MaxonModule, project Project, globals Managed
 		let addr = fn.emitSlotAddr(global)
 		let record = fn.mintOfType(global.valueType)
 		fn.emit(MaxonOp.loadIndirect(record, addr: addr, offset: GlobalSlotOffset, valueType: global.valueType), range: global.range)
-		_ = fn.emitRuntimeCall(global.dropCallee, args: singletonArgs(record), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: global.range)
+		_ = fn.emitPositionalCall(global.dropCallee, args: singletonArgs(record), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: global.range)
 	end 'eachGlobal'
 
 	fn.terminate(MaxonOp.ret(ExitCodeParam), range: anchorRange(globals))
@@ -444,12 +455,15 @@ type SynthesizedFunction
 		return result
 	end 'emitRuntimeFuncAddr'
 
-	// Call an emitted runtime entry point — `__str_clone`, `__str_decref`, `__arr_decref`, `__arr_create`,
-	// `__arr_push`. `Parser.emitRuntimeCall`'s twin, and positional for its reason: the runtime has no
-	// parameter names for a label to match, so the arguments pass through `lowerRuntimeCall` verbatim.
-	function emitRuntimeCall(callee ByteArray, args ValueIdArray, resultTag ValueTypeTag, resultNameId TypeNameId, range SourceRange) returns ValueId
+	// ⭐ **A CALL WHOSE ARGUMENTS ARE ALL POSITIONAL** — every runtime entry point (`__str_clone`,
+	// `__str_decref`, `__arr_create`, `__arr_push`), because the runtime has no parameter names for a label to
+	// match, AND a DECLARED generic's `create()` (W41), because the door that admits one admits no arguments at
+	// all (`Parser.evalConstContainerCreate`). It is named for that property rather than for the runtime,
+	// because since W41 the runtime is no longer the only thing it serves: a user factory taking ARGUMENTS goes
+	// to `emitCall` directly, its labels being what `LowerMaxonToStd.lowerCall` reorders against the signature.
+	function emitPositionalCall(callee ByteArray, args ValueIdArray, resultTag ValueTypeTag, resultNameId TypeNameId, range SourceRange) returns ValueId
 		return self.emitCall(callee, args: args, argLabels: emptyArgLabels(args), resultTag: resultTag, resultNameId: resultNameId, range: range)
-	end 'emitRuntimeCall'
+	end 'emitPositionalCall'
 
 	// ⭐ **CALL A FUNCTION THE AUTHOR DECLARED — a top-level factory** (spec-port `map-struct-bytearray`), and
 	// the op every runtime call above is built from. `argLabels` is the only thing that differs between the

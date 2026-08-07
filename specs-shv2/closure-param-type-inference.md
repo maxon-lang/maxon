@@ -198,3 +198,36 @@ end 'main'
 ```maxoncstderr
 error E2015: <fragment>:4:27: Unsupported: parameter 'b' with no type — shv2 infers an omitted parameter type in exactly one position, a closure passed to a container's `map`, whose transform takes the container's own element; every other parameter declares its type
 ```
+
+<!-- test: error-a-conformers-own-map-is-not-the-extensions-map -->
+The FALSE-REJECT BOUNDARY of the corpus arm (W41). The offer widened from the builtin container roster to
+any `map` an interface `extension` PUBLISHES onto a conformer, and the gate that keeps that from becoming
+"any method spelled `map`" is `ProgramSignatures.methodPublishedByExtension`. `Counter` declares its OWN
+`map`, whose transform takes an `Integer` and which returns one — so there is no container element to
+offer, and the declared return's element (which the extension arm reads) would be a fabrication. The
+inference must stay silent here and the refusal must be the unchanged `none` one, naming the construct
+that does infer.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Doubler = function(Integer) returns Integer
+
+type Counter
+	var n as Integer
+
+	export static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+
+	export function map(transform Doubler) returns Integer
+		return transform(self.n)
+	end 'map'
+end 'Counter'
+
+function main() returns ExitCode
+	let c = Counter.create(2)
+	return c.map(function(x) gives x * 2) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:19:24: Unsupported: parameter 'x' with no type — shv2 infers an omitted parameter type in exactly one position, a closure passed to a container's `map`, whose transform takes the container's own element; every other parameter declares its type
+```

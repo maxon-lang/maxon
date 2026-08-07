@@ -623,16 +623,24 @@ end 'TopLevelConstant'
 //
 //   * `ProgramSignatures.contributesStorage` reads the BOOLEAN — a global whose initializer calls keeps
 //     its slot however dead it looks, because the call may print, mutate or throw.
-//   * `StdlibSource.deriveStdlibFacts` reads the CALLEE — it must ROOT it, since the body that will make
-//     the call (`__module_init`) does not exist yet when the reachability walk runs, and is called by the
+//   * `StdlibSource.deriveStdlibFacts` reads the CALLEES — it must ROOT them, since the body that will make
+//     the calls (`__module_init`) does not exist yet when the reachability walk runs, and is called by the
 //     entry stub rather than from `main` even once it does.
 //
 // A boolean beside a separate callee scan would let an outcome appended past `factoryValue` be KEPT by the
 // first and left UNROOTED by the second — which is `lowerMaxonToStd` skipping a body that
 // `DeadFunctionElimination` then reaches, i.e. `requireUnreachableStdlibStayedDead`.
+//
+// ⚠ **A LIST, NOT ONE NAME, BECAUSE ONE INITIALIZER MAKES SEVERAL CALLS (W41).** It carried a single callee
+// while a factory call was the only calling form and every ARGUMENT was a constant or a runtime-built
+// container. A DECLARED generic's empty record is neither: `var db = Database.create(EntryMap.create(), …)`
+// calls `Map.create` as well as `Database.create`, and `__module_init` emits both. MEASURED with the single
+// name: the argument's `create` was left out of the root set and the compile died in
+// `requireUnreachableStdlibStayedDead` — the exact failure this union's header already described, arriving
+// through the ARGUMENT rather than through a new outcome arm.
 export union TopLevelInitializerCall
 	none
-	calls(callee ByteArray)
+	calls(callees ByteArrayArray)
 end 'TopLevelInitializerCall'
 
 // ONE folded ELEMENT of a top-level array literal (P1.7 slice 2b) — what `__module_init` materializes and
@@ -744,12 +752,12 @@ export union ManagedGlobalRecord
 	// A `b"…"` literal ALREADY materializes as an owned heap 48-byte `Array` record over an immortal `.rdata`
 	// blob, which is precisely what the slot must hold — so there is nothing to clone.
 	byteStringRecord(bytes ByteArray)
-	// ⭐ A BUILTIN CONTAINER (P1.7 slice 2b, widened by spec-port `map-struct-bytearray`) has no literal record
-	// at all: it is BUILT, `create` then one `__arr_push` per element. `create` carries which runtime entry and
-	// which stamps this instance fixes, resolved HERE (where the instance registry is) rather than re-derived
-	// by the synthesis — the same discipline `ManagedGlobal.dropCallee` follows. An array LITERAL has elements
-	// and every other container global has none, which is the same fact the container-factory arm has always
-	// stated: a container factory IS an array literal with no elements.
+	// ⭐ A CONTAINER (P1.7 slice 2b, widened by spec-port `map-struct-bytearray`, and to DECLARED generics at
+	// W41) has no literal record at all: it is BUILT, `create` then one `__arr_push` per element. `create`
+	// carries which callee and which stamps this instance fixes, resolved HERE (where the instance registry is)
+	// rather than re-derived by the synthesis — the same discipline `ManagedGlobal.dropCallee` follows. An
+	// array LITERAL has elements and every other container global has none, which is the same fact the
+	// container-factory arm has always stated: a container factory IS an array literal with no elements.
 	containerRecord(create ContainerCreateCall, elements ConstArrayElementArray)
 end 'ManagedGlobalRecord'
 
@@ -811,9 +819,16 @@ export type GlobalRecordAndType
 	end 'create'
 end 'GlobalRecordAndType'
 
-// ⭐ **THE RUNTIME `create` ONE BUILTIN CONTAINER INSTANCE IS BORN THROUGH** — which entry point, which
-// stamps it is born holding, and whether the record is then SIZED. ONE description, so a global `Array`, a
-// global `Map` and a global `List` reach `__module_init` through one emitter rather than one arm apiece.
+// ⭐ **THE `create` ONE CONTAINER INSTANCE IS BORN THROUGH** — which callee, which stamps it is born holding,
+// and whether the record is then SIZED. ONE description, so a global `Array`, a global `List` and a global
+// instance of a DECLARED generic reach `__module_init` through one emitter rather than one arm apiece.
+//
+// ⚠ **THE CALLEE IS A RUNTIME ENTRY *OR* A DECLARED STATIC, AND THE DESCRIPTION DOES NOT DISTINGUISH THEM**
+// (W41). It does not need to: `ModuleInit` emits `callee(stamps…)` either way, and the two differ only in
+// how many stamps there are — a runtime `create` cannot look up a stride or a column destructor and must be
+// handed both, while a declared `create()` builds its own fields from its own declaration and is handed none.
+// Who owns a given instance's `create` is `ProgramSignatures.instanceCreateIsDeclared`'s single answer, read
+// by the producer here and by the two liveness decisions, never re-derived from this callee's spelling.
 export type ContainerCreateCall
 	export let callee as ByteArray
 	export let stamps as ContainerCreateStampArray
@@ -1408,6 +1423,21 @@ export union PayloadClass
 	// exhaustive `match`es over this union, so a case inserted mid-list would be silently absorbed by nothing
 	// while a case appended is a compile error at every one of them until it is answered.
 	existential
+	// ⭐⭐ **A SLOT DECLARED AT THE ENCLOSING GENERIC'S OWN TYPE PARAMETER (W41-opaque)** — one opaque machine
+	// word in the shared body, whose ownership is a fact only the INSTANTIATION has. It is NOT
+	// `payloadClassIsManaged`: nothing in the declaration view drops it (the base struct's own
+	// `__destruct_<Base>` skips it — a per-INSTANCE cascade drops the substituted field, which is a different
+	// symbol), so calling it managed here would drop it twice in the one view that can see neither.
+	//
+	// ⚠ **BUT IT IS NOT A PLAIN SCALAR EITHER, AND THAT WAS THE DEFECT.** It classified as `scalar` and so was
+	// stored RAW — while the record it was stored into is CONCRETE at the caller (a `(String, Integer)` tuple,
+	// a `Box with String`) and its destructor drops that slot. Two owners, one reference. The store now takes
+	// its own reference through the descriptor's `retainFunc@64` (`Parser.moveInPayload`), which is inert on a
+	// trivial instantiation and so leaves those instances storing exactly the word they always stored.
+	//
+	// `storage` is the `typeParameter` type itself — the same value the `scalar` arm carried, so every reader
+	// asking about the SLOT (its width, a loaded value's type) is unchanged.
+	typeParam(storage MaxonType)
 end 'PayloadClass'
 
 // ⭐⭐ **HOW A CONFORMER'S VALUE HALF IS OWNED AND RELEASED — ONE DECISION, TWO WITNESS WORDS
@@ -1434,6 +1464,23 @@ export union ExistentialOwnershipProtocol
 	// same box.
 	aggregate
 end 'ExistentialOwnershipProtocol'
+
+// ⭐⭐ **THE ONE SPELLING OF "HOW DO I TAKE A REFERENCE UNDER THIS PROTOCOL" (W41-opaque).** Two runtime words
+// are filled from it — a witness table's `retainFunc@16` (`existentialRetainCallee`) and a layout descriptor's
+// `retainFunc@64` (`typeParamRetainCallee`) — and they are the same question asked of a conformer and of a
+// type argument. Written twice, the pair's one genuinely surprising arm is what would drift: a `String`'s
+// answer is a COPY and not an incref, because a literal's record is immortal `.rdata` and increfing one writes
+// read-only memory (MEASURED as 0xC0000005 — see `IrInterface.WitnessRetainFuncOffset`).
+//
+// EMPTY is the complete answer for a protocol that owns nothing, never a sentinel: both readers stamp nothing
+// for it, and the zero word left behind is the encoding both runtime entries treat as inert.
+export function retainCalleeForProtocol(protocol ExistentialOwnershipProtocol) returns ByteArray
+	match protocol 'protocol'
+		byteRecord then return StrCloneName
+		aggregate then return MmRetainName
+		none then return EmptySourceText
+	end 'protocol'
+end 'retainCalleeForProtocol'
 
 // Classify a union payload field's storage and ownership. `typeNames` resolves a `named` field's id to
 // a NAME; pass the interner the LAYOUT's ids live in — the file-local artifact interner at the
@@ -1469,15 +1516,13 @@ export function classifyUnionPayload(signatures ProgramSignatures, typeNames Typ
 		// heap, and the cascade skips it (nothing to drop). It stores through `maxonTypeToStdType(function)`
 		// → i64, exactly as a scalar does.
 		function then return PayloadClass.scalar(fieldType)
-		// ⭐ A TYPE-PARAMETER field is a TRIVIAL SCALAR (P1.6-A) — and this is what keeps the shared
-		// destructor sound. `T` is opaque and its trivial argument is stored as-is (an 8-byte word), so
-		// the box neither increfs it on the way in (`moveInPayload` plain-stores it) nor drops it (the
-		// cascade skips it — `structFieldIsManaged` is false), which makes `type Box uses T`'s destructor
-		// the TRIVIAL `__mm_decref`, byte-identical to the equivalent monomorphic struct. Its concrete
-		// managed argument is REJECTED at instantiation (`checkGenericInstanceArg`), so the borrow this
-		// implies (the box holds a pointer it does not own) is only ever a trivial scalar or a caller-owned
-		// trivial struct — never a String or a managed-field struct that would leak here.
-		typeParameter then return PayloadClass.scalar(fieldType)
+		// ⭐ A TYPE-PARAMETER slot is its own class (`PayloadClass.typeParam`) — one opaque machine word in the
+		// DECLARATION view, dropped by nothing there (the per-INSTANCE cascade drops the substituted field
+		// instead), which is what keeps `type Box uses T`'s own destructor the trivial `__mm_decref`. What it is
+		// NOT is a scalar: a MANAGED instantiation makes the concrete record the slot's owner, so a store into
+		// it takes a reference through the descriptor at run time. See `PayloadClass.typeParam`, whose header
+		// carries the double free the `scalar` classification was.
+		typeParameter then return PayloadClass.typeParam(fieldType)
 		// A generic-INSTANCE payload is an OWNED base-struct box (P1.6-B2), exactly like a `structRef`
 		// payload: construct MOVES it in, a match binds it out, the cascade drops it through its own
 		// `__destruct_<instance>` / `__mm_decref` (`managedFieldDropCallee` routes the `genericInstance`
@@ -1601,6 +1646,14 @@ export function payloadClassIsManaged(class PayloadClass) returns bool
 		scalar gives false
 		floatPayload gives false
 		undeclaredName gives false
+		// ⭐ **FALSE, AND IT IS THE DECLARATION VIEW'S ANSWER RATHER THAN THE SLOT'S (W41-opaque).** Every
+		// reader here is a DECLARATION-view drop question — the base struct's own cascade, the usage gates,
+		// `caseHasManagedField` — and a `T` slot is dropped by none of them: `genericInstanceFieldIsManaged`
+		// answers the substituted question for the per-instance cascade that does drop it. Answering `true`
+		// would give `type Box uses T` a `__destruct_Box` that decrefs an opaque word, which for a trivial
+		// instantiation is a raw scalar. The STORE-side reference the slot does owe is taken by
+		// `Parser.moveInPayload`, which routes on this case by NAME and not through this predicate.
+		typeParam gives false
 	end 'c'
 end 'payloadClassIsManaged'
 
@@ -1616,8 +1669,26 @@ export function payloadClassIsExistential(class PayloadClass) returns bool
 		scalar gives false
 		floatPayload gives false
 		undeclaredName gives false
+		typeParam gives false
 	end 'c'
 end 'payloadClassIsExistential'
+
+// Is a classified slot the enclosing generic's own TYPE PARAMETER (W41-opaque) — one opaque machine word whose
+// reference protocol is a run-time fact? Its reader is the store door (`Parser.moveInPayload`) and nothing
+// else: every OTHER question about the slot (its width, a loaded value's type, whether the DECLARATION view
+// drops it) is answered identically to a scalar's, which is why those readers stay unaware of the case. A
+// `match` like its siblings so a case appended to `PayloadClass` fails to compile here.
+export function payloadClassIsTypeParam(class PayloadClass) returns bool
+	return match class 'c'
+		typeParam gives true
+		existential gives false
+		managed gives false
+		nestedUnion gives false
+		scalar gives false
+		floatPayload gives false
+		undeclaredName gives false
+	end 'c'
+end 'payloadClassIsTypeParam'
 
 // Is a classified payload a STRING (drops through `__str_decref`) rather than a struct (`__mm_decref`)?
 // The single reader of "which managed drop?", so the destructor synthesis and the usesStrDecref gate route
@@ -1637,6 +1708,10 @@ export function payloadClassIsString(class PayloadClass) returns bool
 		// String route", which is right because the choice belongs to the witness at run time.
 		existential gives false
 		undeclaredName gives false
+		// An opaque `T` may BE a String at some instantiation — which is exactly the fact the shared body
+		// cannot know, and the reason its store dispatches through the descriptor's `retainFunc@64`. `false`
+		// means "do not take the STATIC String route" here, precisely as it does for an existential.
+		typeParam gives false
 	end 'c'
 end 'payloadClassIsString'
 
@@ -1658,6 +1733,9 @@ export function payloadStorageOf(class PayloadClass) returns MaxonType
 		// own width is the one word this answers.
 		existential then return MaxonType.integer
 		undeclaredName then return MaxonType.integer
+		// The opaque word itself — the same value the `scalar` arm carried before this case split off, so the
+		// store's width is unchanged for every instantiation.
+		typeParam(storage) then return storage
 		floatPayload then panic("payloadStorageOf: a float payload has no lowerable storage — requirePayloadLowerable rejects it before any store")
 	end 'c'
 end 'payloadStorageOf'
@@ -1676,6 +1754,10 @@ export function payloadValueTypeOf(class PayloadClass, declared MaxonType) retur
 		// dispatches on the tag (`witnessOfValue`'s pairing, the argument widening, the drop router).
 		existential then return declared
 		undeclaredName then return declared
+		// The DECLARED type, exactly as the `scalar` arm answers: a loaded `T` must read back as the opaque
+		// `typeParameter` its slot is declared at, which is what the caller's `retypeOpaqueMethodResult`
+		// substitutes and what `decrefCalleeFor` routes to `__drop_type_param` on.
+		typeParam then return declared
 		floatPayload then panic("payloadValueTypeOf: a float payload has no lowerable value type — requirePayloadLowerable rejects it before any load")
 	end 'c'
 end 'payloadValueTypeOf'
@@ -6498,6 +6580,18 @@ export type ProgramSignatures
 		return self.extensionShadowedMethods.contains(qualified)
 	end 'extensionMethodIsShadowed'
 
+	// ⭐ **DID AN `extension` PUBLISH `qualified`, rather than the conformer declaring it?** — the DIRECT read
+	// of the set above, and a genuinely different question from `conformerDeclaresOwnMethod`'s. That one is a
+	// CONJUNCTION asked while the fold is still running, and it answers `false` both for an extension's method
+	// and for a name nothing declares at all; a caller that needs to know the method's signature is the
+	// INTERFACE's — because only then does it know what that signature says without reading it — must ask
+	// about publication itself. `Parser.extensionElementTransformHint` is that caller: it offers a closure
+	// parameter type only for a `map` whose declaration it can name, and a conformer's own `map` is free to
+	// declare anything.
+	export function methodPublishedByExtension(qualified ByteArray) returns bool
+		return self.extensionPublishedMethods.contains(qualified)
+	end 'methodPublishedByExtension'
+
 	// Add one function's consume bits to the index AND fold them into the hash. The one write, for
 	// `record`'s reason: the table and the hash that keys every parse memo on it cannot disagree about what
 	// the index contains. A function with NO consumed parameter is not recorded (its default answer is "not
@@ -8097,10 +8191,59 @@ export type ProgramSignatures
 	// `factoryValue` FAILS TO COMPILE here rather than being silently filed as "does not call".
 	function declInitializerCall(decl TopLevelDecl) returns TopLevelInitializerCall
 		match decl.outcome 'state'
-			pending to containerValue then return TopLevelInitializerCall.none
-			factoryValue(callee, _, _) then return TopLevelInitializerCall.calls(callee)
+			pending to arrayValue then return TopLevelInitializerCall.none
+			containerValue(giid) then return self.containerInitializerCall(giid)
+			factoryValue(callee, args, _) then return TopLevelInitializerCall.calls(self.factoryInitializerCallees(callee, args: args))
 		end 'state'
 	end 'declInitializerCall'
+
+	// ⭐ **A FACTORY CALLS ITSELF AND EVERY DECLARED GENERIC AMONG ITS ARGUMENTS (W41)** — the calls
+	// `ModuleInit.calledFactoryRecord` emits, in the order it emits them: each argument is materialized first,
+	// in source order, and then the factory itself. The list is built from the SAME folded values
+	// `globalInitArguments` resolves into records, so what is rooted and what is emitted are two readings of
+	// one outcome rather than two walks that could disagree.
+	//
+	// A range arm over every non-container argument kind, ending at the current last variant, so an arm
+	// appended past `containerCreate` FAILS TO COMPILE here rather than being silently filed as "calls nothing".
+	function factoryInitializerCallees(callee ByteArray, args ConstFactoryArgumentArray) returns ByteArrayArray
+		var callees = ByteArrayArray.create()
+		callees.push(callee)
+		for arg in args 'eachArgument'
+			match arg.value 'value'
+				scalar to arrayLiteral then continue
+				containerCreate(giid) then self.appendDeclaredInstanceCreateCallee(callees, giid: giid)
+			end 'value'
+		end 'eachArgument'
+		return callees
+	end 'factoryInitializerCallees'
+
+	// ⭐ **A CONTAINER GLOBAL CALLS IFF ITS `create` IS DECLARED CODE (W41)** — a BUILTIN container's record is
+	// compiler-synthesized allocation with no source body to reach and no user-visible effect, which is why
+	// this whole arm used to be `none`. Both halves of what `calls` then means are the union header's.
+	//
+	// It contributes through the same `appendDeclaredInstanceCreateCallee` the factory-ARGUMENT loop uses, and
+	// an EMPTY list is what "the runtime builds this one" reads as — so the decision has one home and a
+	// container rooted in one position cannot be missed in the other.
+	function containerInitializerCall(giid GenericInstanceId) returns TopLevelInitializerCall
+		var callees = ByteArrayArray.create()
+		self.appendDeclaredInstanceCreateCallee(callees, giid: giid)
+		if callees.count() == 0 'runtimeCreate'
+			return TopLevelInitializerCall.none
+		end 'runtimeCreate'
+
+		return TopLevelInitializerCall.calls(callees)
+	end 'containerInitializerCall'
+
+	// The `create()` an empty-container value contributes to the root set, or nothing when the runtime builds
+	// it. It asks `instanceCreateIsDeclared` rather than re-reading the base roster, so which callee this
+	// reports and which callee `containerCreateCall` emits are one derivation.
+	function appendDeclaredInstanceCreateCallee(callees ByteArrayArray, giid GenericInstanceId)
+		if not self.instanceCreateIsDeclared(giid) 'runtimeCreate'
+			return
+		end 'runtimeCreate'
+
+		callees.push(self.declaredInstanceCreateCallee(giid))
+	end 'appendDeclaredInstanceCreateCallee'
 
 	// ⭐ **EVERY FUNCTION A TOP-LEVEL INITIALIZER CALLS**, in ARENA order — the roots
 	// `StdlibSource.deriveStdlibFacts` walks from BESIDE `main`, because `__module_init` is synthesized
@@ -8118,7 +8261,7 @@ export type ProgramSignatures
 		for i in 0 upto self.decls.count() 'each'
 			match self.declInitializerCall(self.declAt(i)) 'initializer'
 				none then break 'initializer'
-				calls(callee) then callees.push(callee)
+				calls(names) then callees.append(names)
 			end 'initializer'
 		end 'each'
 		return callees
@@ -10855,8 +10998,24 @@ export type ProgramSignatures
 	end 'typeMentionsTypeParameter'
 
 	// Is `name` the builtin `Map` type — the base of every map instance.
+	// ⭐⭐ **AND A CORPUS `type Map` RETIRES IT (W41).** Every `Map`-instance query in the compiler routes
+	// through this one predicate, so a DECLARED `Map` answering false here is the whole retirement: the
+	// synthesized record, the `MapRecordBytes` box size, the seven-member builtin roster and the `__map_*`
+	// runtime all fall away together, and `Map with (K, V)` resolves as the ordinary declared generic instance
+	// it now is. One switch rather than ten, because the ten already asked one question.
+	//
+	// ⚠ **IT KEYS ON THE DECLARATION, NOT ON THE WHITELIST**, which is what makes it correct for a USER
+	// program too: a program declaring its own `type Map uses Key, Value` gets its own, exactly as A1s wave 2
+	// says a user spelling wins. `stdlib/Map.maxon` being listed is just the corpus taking that same door.
 	export function isMapBaseName(name ByteArray) returns bool
-		return name.equals(MapBuiltinBaseName)
+		if not name.equals(MapBuiltinBaseName) 'notTheName'
+			return false
+		end 'notTheName'
+
+		return match self.structOf(name) 'declaredByTheCorpus'
+			declared gives false
+			undeclared gives true
+		end 'declaredByTheCorpus'
 	end 'isMapBaseName'
 
 	// Is generic instance `id` a `Map with (K, V)`? (Reads the base NAME, which needs no base struct.)
@@ -10872,6 +11031,25 @@ export type ProgramSignatures
 	export function isMapInstanceAt(tag ValueTypeTag, nameId TypeNameId) returns bool
 		return tag == ValueTypeTag.genericInstance and self.isMapInstance(nameId)
 	end 'isMapInstanceAt'
+
+	// ⭐⭐ **DOES THIS (tag, id) DENOTE THE `Map` CONTAINER — WHOEVER SERVES IT (W41)?** The SHAPE question, and
+	// it is a genuinely different one from `isMapInstanceAt` above, which since the retirement asks *"is this
+	// map served by the SYNTHESIZED record"*.
+	//
+	// ⚠ **THE TWO CAME APART THE MOMENT `stdlib/Map.maxon` WAS LISTED, AND A DOOR THAT WANTED THE SHAPE GOT
+	// THE RUNTIME.** `inferredIntColumnBoundaryAdmits` asks how many COLUMNS a container has, so that a
+	// `[1: 1]` literal's inferred `Map with (int, int)` reaches a parameter declared through a
+	// `typealias IntMap = Map with (Integer, Integer)`. That has nothing to do with which runtime serves the
+	// record — and reading the retirement gate there re-broke the very program its own header records having
+	// been built for: **MEASURED, `map.md`'s `for-in.nested` and `tuples`' `for-in-over-map-allocates-no-tuple`
+	// both answered `E3005: argument type mismatch for 'm': expected 'IntMap', got 'Map_int_int'`.**
+	//
+	// ⇒ A door asks THIS one when it wants to know what the container IS, and `isMapInstanceAt` when it wants
+	// to know what will EXECUTE it. Splitting them is what makes that choice visible at each site instead of
+	// riding on a predicate whose meaning changed underneath them.
+	export function isMapShapedInstanceAt(tag ValueTypeTag, nameId TypeNameId) returns bool
+		return tag == ValueTypeTag.genericInstance and self.genericInstanceBaseName(nameId).equals(MapBuiltinBaseName)
+	end 'isMapShapedInstanceAt'
 
 	// The KEY type of `Map with (K, V)` — type argument 0, the one the probe hashes and compares.
 	export function mapKeyType(id GenericInstanceId) returns MaxonType
@@ -11335,7 +11513,9 @@ export type ProgramSignatures
 			return self.columnsDenoteOneSlot(self.containerElementType(declaredNameId), gotColumn: self.containerElementType(gotNameId))
 		end 'bothAreArrayInstances'
 
-		if self.isMapInstanceAt(gotTag, nameId: gotNameId) and self.isMapInstanceAt(declaredTag, nameId: declaredNameId) 'bothAreMapInstances'
+		// The SHAPE predicate, not the runtime one: this arm is about a container having two columns, which is
+		// true of the corpus `Map` exactly as it was of the synthesized one. See `isMapShapedInstanceAt`.
+		if self.isMapShapedInstanceAt(gotTag, nameId: gotNameId) and self.isMapShapedInstanceAt(declaredTag, nameId: declaredNameId) 'bothAreMapInstances'
 			return self.columnsDenoteOneSlot(self.mapKeyType(declaredNameId), gotColumn: self.mapKeyType(gotNameId)) and self.columnsDenoteOneSlot(self.mapValueType(declaredNameId), gotColumn: self.mapValueType(gotNameId))
 		end 'bothAreMapInstances'
 
@@ -11636,6 +11816,31 @@ export type ProgramSignatures
 		return not self.isManagedListNodeInstance(id)
 	end 'instanceHasBuiltinCreate'
 
+	// ⭐⭐ **WHOSE CODE BUILDS THIS INSTANCE'S EMPTY RECORD — THE RUNTIME'S, OR THE PROGRAM'S? (W41)** The ONE
+	// derivation behind every decision a top-level `<Alias>.create()` turns on, and there are three of them:
+	// which callee `__module_init` emits (`containerCreateCall`), whether that callee must be ROOTED and its
+	// slot KEPT (`declInitializerCall`), and which gate the top-level door runs the instance through
+	// (`Parser.requireGlobalContainerIsCreatable`). Three readers, three different concerns, one fact — and
+	// re-spelling `isBuiltinGenericBaseName(genericInstanceBaseName(id))` at each is how two of them would come
+	// to disagree about who owns a `create`.
+	//
+	// ⚠ **IT IS THE COMPLEMENT OF THE BUILTIN ROSTER AND NOT A SECOND ROSTER**, which is what makes it
+	// self-maintaining: `stdlib/Map.maxon` being listed retires `Map` from `isBuiltinGenericBaseName` (see
+	// `isMapBaseName`) and this predicate starts answering true for every `Map with (K, V)` on the same day,
+	// with nothing here edited. A container promoted or demoted moves both answers at once.
+	export function instanceCreateIsDeclared(id GenericInstanceId) returns bool
+		return not self.isBuiltinGenericBaseName(self.genericInstanceBaseName(id))
+	end 'instanceCreateIsDeclared'
+
+	// The `create()` static a DECLARED generic's instance is born through — `Map.create` for every
+	// `Map with (K, V)` (W41). It is the SAME name a body's `StrMap.create()` links to
+	// (`Parser.qualifiedCallBaseName` mangles the alias to its base, then joins the method), so the record a
+	// global's slot holds and the record the identical call in a function body builds come out of one function.
+	// Precondition: `instanceCreateIsDeclared`.
+	export function declaredInstanceCreateCallee(id GenericInstanceId) returns ByteArray
+		return qualifiedMethodName(self.genericInstanceBaseName(id), methodName: CreateMethod)
+	end 'declaredInstanceCreateCallee'
+
 	// ⭐⭐ **MAY `readerFilePath` NAME `callee`?** The function half of `Visibility`, answered where a call in a
 	// FUNCTION BODY cannot ask it: a top-level initializer's call is decided inside `queryProgramSignatures`,
 	// before any file is parsed and long before `FunctionNameIndex` — which is what
@@ -11702,8 +11907,25 @@ export type ProgramSignatures
 	// (`isSetInstance`/`isMapInstance`/…), which column owns what (`slotTypeIsManaged`), which drop
 	// (`slotTypeDropCallee`) and which stride (`arrayElementSize`) are each answered in one place and read
 	// from both sides. This is asked ONCE PER MANAGED GLOBAL.
+	//
+	// ⭐⭐ **A DECLARED GENERIC IS THE SAME DESCRIPTION WITH NO STAMPS (W41)** — `var g = StrMap.create()` once
+	// `stdlib/Map.maxon` is listed and `Map` is an ordinary user generic. A builtin container's `create` is a
+	// RUNTIME entry that has to be handed the strides and column destructors it cannot look up; a declared
+	// generic's is a real `create()` static the compiler can simply CALL, and it needs none of them — it builds
+	// its own fields from its own declaration. So the widening is one arm and nothing downstream moves:
+	// `ModuleInit.builtContainerRecord` already emits `create.callee` with `create.stamps`, and an empty stamp
+	// list makes that a bare `call Map.create`.
+	//
+	// ⭐ **THE DICTIONARY COLUMNS ARE NOT THIS DESCRIPTION'S JOB, AND THAT IS WHY THE ARM IS ONE LINE** — the
+	// lowering threads them off the record's own type, which `foldedValueType` settles as `genericInstance(id)`
+	// for this very outcome. `ModuleInit.builtContainerRecord` states that handoff in full;
+	// `Parser.requireDeclaredGenericGlobalCreate` holds the instance to the `Self`-return it rests on.
 	function containerCreateCall(id GenericInstanceId) returns ContainerCreateCall
 		var stamps = ContainerCreateStampArray.create()
+
+		if self.instanceCreateIsDeclared(id) 'declaredGeneric'
+			return ContainerCreateCall.create(self.declaredInstanceCreateCallee(id), stamps: stamps, sizing: ContainerSizing.grown)
+		end 'declaredGeneric'
 
 		if self.isSetInstance(id) 'set'
 			stamps.push(self.columnDestroyStamp(self.setKeyType(id)))
@@ -11722,7 +11944,7 @@ export type ProgramSignatures
 		end 'chain'
 
 		if not (self.isArrayInstance(id) or self.isVectorInstance(id)) 'notACreatableContainer'
-			panic("ProgramSignatures.containerCreateCall: generic instance {id} is not a builtin container with a `create` — every caller has already admitted the instance through `Parser.requireContainerIsCreatable`, which refuses everything this router has no arm for")
+			panic("ProgramSignatures.containerCreateCall: generic instance {id} is not a builtin container with a `create` — a DECLARED generic returned one arm above, and every builtin reaching here was admitted through `Parser.requireContainerIsCreatable`, which refuses everything this router has no arm for")
 		end 'notACreatableContainer'
 
 		// `Array` and `Vector` share `__arr_create` and its two stamps; a `Vector`'s elements are addressable
@@ -13881,12 +14103,24 @@ export type ProgramSignatures
 	// mints a `MaxonType` box nor builds an intern key, and — because the answer is the same object — the field
 	// read's caller can tell "this needed no instance view" from the answer itself rather than from a second
 	// predicate over the same shape.
+	//
+	// ⛔ **AN ARGUMENT THAT IS A TUPLE CROSSES THROUGH THE INTERNED DOOR, NOT THE INTERNER-FREE ONE (W41).** A
+	// tuple is the one `structRef` whose identity CITES the declaring type's parameters, and
+	// `substituteThroughInstance` passes every `structRef` through untouched because it has no name table. Asked
+	// on an ARGUMENT that is a tuple, that silence is a wrong type rather than a missing optimization:
+	// `Array with Map.Entry` under `Map -> (String, int)` stayed `Array with Map.Entry`, so the element of the
+	// array `Iterable.map` returns never became concrete. MEASURED on `m.map(function(p) gives p)` — the closure
+	// was typed with the DECLARATION-view tuple and refused against a correctly substituted parameter,
+	// `expected 'fn(__Tuple2.String.int) …', got 'fn(__Tuple2.Tfcd8090be60770aa.T5d84c0fc6312cff6) …'`.
+	//
+	// The index's OWN interner is the right table here and needs no caller to supply one: `instanceArgs` answers
+	// in this index's space, which is the same space `substituteTupleThroughInstance` interns its result into.
 	function substituteInstanceArgsThrough(nested GenericInstanceId, through GenericInstanceId) returns MaxonType
 		let args = self.genericInstances.instanceArgs(nested)
 		var substituted = MaxonTypeArray.create()
 		var moved = false
 		for arg in args 'eachArg'
-			let next = self.substituteThroughInstance(arg, id: through)
+			let next = self.substituteThroughInstanceInterned(arg, id: through, interner: self.typeNames)
 			if not maxonTypesDenoteSame(next, b: arg) 'argMoved'
 				moved = true
 			end 'argMoved'
@@ -13925,6 +14159,36 @@ export type ProgramSignatures
 	// every other door reaches for that element list rather than a second spelling of it. A rejection is an
 	// invariant break, not a user error: every element came out of a layout this index already registered and
 	// was only substituted, so an element that fails the tuple-element rule now failed it at the declaration.
+	// ⭐⭐ **EVERY TUPLE LAYOUT THE WHOLE-PROGRAM INDEX HOLDS — because a SUBSTITUTED one is in no file's
+	// artifact and so reaches `project.structTypes` through nothing (W41).**
+	//
+	// A tuple the source SPELLS is interned while its file is parsed, lands in that file's
+	// `artifact.structTypes`, and `ParseStaging.commitStructTypes` copies it into the project registry that
+	// `MmRuntime.installStructDestructors` walks. A tuple minted by SUBSTITUTION has neither half: it is
+	// created by `substituteTupleThroughInstance` at a CALL SITE, straight into this index, and no artifact
+	// ever carries it.
+	//
+	// ⚠ **MEASURED, and the symptom is a compiler panic rather than a diagnostic**: with the corpus `Map`
+	// live, `for (_, value) in m` over a `["a": 10]` walks `MapIterator.current()`, whose declared `Entry =
+	// (Key, Value)` substitutes to `__Tuple2.String.int`. The parser emits the drop call for it; nothing
+	// synthesizes the body; the backend stops at
+	// `resolveCallFixups: call to unknown function '__destruct___Tuple2.String.int'`. A plain
+	// `function pair() returns (String, Num)` in the same tree compiles and runs, which is what localizes it
+	// to the substituted mint and not to tuples.
+	//
+	// It answers with the LAYOUTS rather than with the names, because its one caller needs the field list to
+	// synthesize a cascade and a name would only send it back here. Walked once per compile, and only by a
+	// program that already needs a destructor at all — see the caller's gate.
+	export function tupleLayouts() returns StructLayoutArray
+		var out = StructLayoutArray.create()
+		for (name, layout) in self.structTypes 'eachRegisteredType'
+			if isTupleTypeName(name) 'aTuple'
+				out.push(layout)
+			end 'aTuple'
+		end 'eachRegisteredType'
+		return out
+	end 'tupleLayouts'
+
 	export function substituteTupleThroughInstance(tupleName ByteArray, id GenericInstanceId) returns ByteArray
 		let layout = try self.structTypes.get(tupleName) otherwise panic("ProgramSignatures.substituteTupleThroughInstance: `{String.from(tupleName)}` is not registered — every tuple `structRef` in the compiler was minted by `internTupleType`, which registers the layout before it hands the name back")
 
@@ -13947,6 +14211,36 @@ export type ProgramSignatures
 
 		return try self.internTupleType(substituted, from: self.typeNames, slotScopeFilePath: layout.declFilePath) otherwise panic("ProgramSignatures.substituteTupleThroughInstance: the instance view of `{String.from(tupleName)}` was refused as a tuple element list, which its declaration view already passed")
 	end 'substituteTupleThroughInstance'
+
+	// ⭐⭐ **THE INSTANCE VIEW OF A DECLARATION-VIEW TYPE, TUPLE INCLUDED — the ONE home of the name/id split
+	// the two substitutions above leave open.** `substituteThroughInstance` is deliberately interner-FREE, so it
+	// passes a `structRef` through untouched; a TUPLE `structRef` is the one `structRef` whose identity CITES the
+	// declaring type's parameters, and it crosses as a NAME rather than as an id. Composing the two therefore
+	// needs a name table, and the composition is written HERE — once — rather than at each door that wants it.
+	//
+	// ⛔ **IT EXISTS BECAUSE THE COMPOSITION HAD ACQUIRED A SECOND SITE, which `Parser.slotTypeThroughReceiver`'s
+	// own header had already named as the drift to prevent** (*"a second site holding the name/id split is the
+	// drift the function below exists to prevent"*). That door serves the PARSER, in a file's interner; the
+	// argument check needs the identical rule in the PROJECT's, and re-spelling it there would have made the
+	// warning's own prediction come true.
+	//
+	// `interner` is read AND written: the declared name is looked up in it and the substituted tuple is interned
+	// back into it, so a caller always gets an id its own table resolves. The type is returned UNCHANGED — the
+	// same object — when the instance fixes nothing, which is the early-return contract both substitutions above
+	// keep and which lets a caller tell "no instance view" from the answer itself.
+	export function substituteThroughInstanceInterned(t MaxonType, id GenericInstanceId, interner TypeNameInterner) returns MaxonType
+		if not tagIsStructRef(maxonTypeTag(t)) 'notATuple'
+			return self.substituteThroughInstance(t, id: id)
+		end 'notATuple'
+
+		let declaredName = try interner.nameOf(typeNameIdOf(t)) otherwise panic("ProgramSignatures.substituteThroughInstanceInterned: structRef id {typeNameIdOf(t)} is not in the interner it was read with — a caller must hand the table its own type was minted from")
+		if not isTupleTypeName(declaredName) 'aPlainStruct'
+			return t
+		end 'aPlainStruct'
+
+		let instanceView = self.substituteTupleThroughInstance(declaredName, id: id)
+		return t if instanceView.equals(declaredName) else MaxonType.structRef(interner.intern(instanceView))
+	end 'substituteThroughInstanceInterned'
 
 	// The base struct's field `index` type as instance `id` sees it — `substituteThroughInstance` applied to the
 	// declared field type. This is what turns `Box`'s opaque `value as T` into `String` for a `Box with String`,
@@ -14191,6 +14485,51 @@ export type ProgramSignatures
 	export function genericTypeFieldHasManagedInstantiation(param TypeParamId) returns bool
 		return self.anyInstanceTypeArgHasKind(param, kind: TypeArgInstantiationKind.consumeMoved)
 	end 'genericTypeFieldHasManagedInstantiation'
+
+	// ⭐⭐ **IS GENERIC `typeName` INSTANTIATED ANYWHERE THE DECLARATION SWEEP CAN SEE (W41-opaque)?** The gate
+	// on the store-side descriptor-need seed, and it asks the WEAKEST question that separates the two shapes,
+	// deliberately:
+	//
+	// ⛔ **"is some instantiation MANAGED" IS THE QUESTION THIS CANNOT ASK, AND ASKING IT WAS MEASURED AS A
+	// REFUSAL ON A LEGAL PROGRAM.** A CONCRETE instantiation is interned by the PARSE that meets it — `for pair
+	// in m` is what mints `MapIterator with (String, Integer)` — and this seed is computed before any body is
+	// parsed, so at that moment the registry holds only what DECLARATIONS put there. Measured with the managed
+	// question in place: `stdlib/Map.maxon`'s `current` reserved nothing and was then refused for want of the
+	// descriptor its own store asked for.
+	//
+	// ⭐ **WHAT A DECLARATION *CAN* SETTLE is whether the type is instantiated at ALL**, because a
+	// declaration-view instance (`Map.createIterator() returns MapIterator`, read inside its own type-parameter
+	// scope) is interned by the sweep exactly as a `typealias StrBox = Box with String` is. So an all-but-
+	// uninstantiated generic — one no `with` in the program ever names — answers `false` and reserves nothing.
+	// That matters because such a type's value is held as a bare `structRef(Base)` with no instance behind it
+	// (`let b = Box.create(5)`), which no call site can source a descriptor for: reserving one there turns a
+	// legal program into `forwardCallerLayout`'s panic, and that panic is reachable today through `sizeof(T)`
+	// on the identical shape (it is not this seed's to introduce).
+	//
+	// ⚠ **AND IT IS SOUND IN THE ONE DIRECTION IT CAN BE WRONG.** A program that instantiates a base ONLY
+	// through an expression the sweep cannot see would answer `false` here and then need a reference at the
+	// store — where `Parser.requireDescriptorForOpaqueStores` refuses it with a position rather than emitting a
+	// raw store. A refusal, never a silent wrong answer.
+	export function genericTypeIsInstantiated(typeName ByteArray) returns bool
+		let baseId = try self.typeNames.idOf(typeName) otherwise return false
+		let siblings = try self.genericInstances.instancesOfBase(baseId) otherwise return false
+		return not siblings.isEmpty()
+	end 'genericTypeIsInstantiated'
+
+	// ⭐ **IS THE GENERIC THAT DECLARES `param` INSTANTIATED (W41-opaque)?** — the question above, asked of a
+	// VALUE's own type-parameter token rather than of a declaration site's name, so the store side and the
+	// descriptor-need seed decide off ONE predicate. The token carries both halves of "which type's parameter
+	// is this" (W14), which is exactly what lets the store ask it without being handed the enclosing type from
+	// somewhere else — the pairing hazard `anyInstanceTypeArgHasKind`'s header records.
+	//
+	// A token no ledger holds answers `false`, for `anyInstanceTypeArgHasKind`'s reason: nothing declares it,
+	// so nothing instantiates it.
+	export function typeParamOwnerIsInstantiated(param TypeParamId) returns bool
+		let owner = try self.typeParamOwnerOf(param) otherwise return false
+		return self.genericTypeIsInstantiated(owner.declaringTypeName)
+	end 'typeParamOwnerIsInstantiated'
+
+
 
 	// ⭐ **DOES ANY INTERNED INSTANCE OF THE TYPE THAT DECLARES `param` MAKE THAT PARAMETER A CO-OWNED
 	// TRIVIAL STRUCT (the retain-escaping rung)?** A trivial struct/instance argument (`Box with
@@ -14963,16 +15302,49 @@ export type ProgramSignatures
 
 	// ⭐⭐ **WHAT A WITNESS TABLE'S `retainFunc@16` HOLDS FOR CONFORMER `typeName`** (P1.7a-existentials slice
 	// 2b) — the exact dual of the destroy callee above, off the SAME protocol answer, so the two words are
-	// non-zero together by construction. `__str_clone` COPIES (the only protocol an immortal `.rdata` literal
-	// admits, see `IrInterface.WitnessRetainFuncOffset`); `__mm_retain` increfs and hands the pointer back;
-	// EMPTY leaves the zero word `__retain_existential` treats as inert.
+	// non-zero together by construction.
 	export function existentialRetainCallee(typeName ByteArray) returns ByteArray
-		match self.existentialOwnershipProtocol(typeName) 'protocol'
-			byteRecord then return StrCloneName
-			aggregate then return MmRetainName
-			none then return EmptySourceText
-		end 'protocol'
+		return retainCalleeForProtocol(self.existentialOwnershipProtocol(typeName))
 	end 'existentialRetainCallee'
+
+	// ⭐⭐ **WHAT A LAYOUT DESCRIPTOR'S `retainFunc@64` HOLDS FOR INSTANCE `id`'s TYPE ARGUMENT AT `position`
+	// (W41-opaque)** — the witness table's `retainFunc@16` asked of a generic's type ARGUMENT rather than of an
+	// existential's conformer. Same three protocols, same callees, ONE speller
+	// (`retainCalleeForProtocol`): the two words answer the identical question — *"how does a body that cannot
+	// name this type take a reference to it?"* — and a second spelling is exactly how they would come to
+	// disagree about a `String`, the one type whose answer is a COPY rather than an incref.
+	//
+	// ⚠ **THE PROTOCOL IS READ OFF THE TYPE, NOT OFF A CONFORMER NAME, AND THE TWO ARE NOT INTERCHANGEABLE
+	// HERE.** `conformerNameOfType` REDUCES a generic instance to its base (`Array with String` → `Array`,
+	// which no `declaredFormOf` holds), because that is right for the CONFORMANCE question; routed through it,
+	// a `Holder with (Array with String)` would answer `none` and store an array without a reference. This
+	// asks `typeIsManaged`, which is the boundary the concrete record's destructor drops on.
+	//
+	// EMPTY is the ANSWER for a trivial argument, not a sentinel: the zero word is what makes
+	// `__retain_type_param` inert, exactly as the witness pair's zero makes `__retain_existential` inert.
+	export function typeParamRetainCallee(id GenericInstanceId, position TypeParamPosition) returns ByteArray
+		return retainCalleeForProtocol(self.typeOwnershipProtocol(self.substitutedInstanceArg(id, position: position)))
+	end 'typeParamRetainCallee'
+
+	// ⭐⭐ **WHICH OWNERSHIP PROTOCOL A TYPE'S VALUE TAKES — `existentialOwnershipProtocol`'s TYPE-KEYED DOOR
+	// (W41-opaque).** ONE rule, two entries, the arrangement `conformerNameOfType` /
+	// `conformerNameOfDeclaredName` already has and for the same reason: an existential widening holds a
+	// CONFORMER NAME, a generic instance holds a resolved `MaxonType` argument, and neither can cheaply become
+	// the other. The rule is the same in both spellings — a byte record first (its representation, not a
+	// registry, is what decides it), then the one managed classifier, then aggregate.
+	//
+	// ⚠ The byte-record test is a TAG here where the name door tests two names, and that is the same test:
+	// `tagIsByteRecord` is exactly "String or Character", and a name door has no tag to read.
+	export function typeOwnershipProtocol(t MaxonType) returns ExistentialOwnershipProtocol
+		if tagIsByteRecord(maxonTypeTag(t)) 'byteRecord'
+			return ExistentialOwnershipProtocol.byteRecord
+		end 'byteRecord'
+		if not self.typeIsManaged(t, from: self.typeNames) 'ownsNothing'
+			return ExistentialOwnershipProtocol.none
+		end 'ownsNothing'
+
+		return ExistentialOwnershipProtocol.aggregate
+	end 'typeOwnershipProtocol'
 
 	// Is struct field `index` declared at an INTERFACE type — the two-slot fat pointer whose drop is
 	// `__drop_existential` rather than a statically named callee (P1.7a-existentials slice 2)? Asked through
