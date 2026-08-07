@@ -550,6 +550,26 @@ public class IrModule<TOp> where TOp : IPrintableOp {
   // Ambiguous exported type names (same name from different files)
   public HashSet<string> AmbiguousTypeNames { get; } = [];
 
+  /// <summary>
+  /// ⭐ THE GENERIC-INSTANCE TYPEALIAS NAMES TWO FILES DECLARE OVER DIFFERENT INSTANCES.
+  ///
+  /// A plain <c>typealias</c> is file-local (specs/duplicate-typealias.md), so two files may each
+  /// declare <c>Cells = Array with Cell</c> over their own <c>Cell</c> and both declarations are
+  /// legal. But a generic instance also names a FAMILY OF EMITTED METHODS, and those go into the
+  /// program's one flat symbol namespace under the type's own name — so the bare name cannot be
+  /// both instances' identity. Last-writer-wins in <see cref="TypeDefs"/> made it whichever file
+  /// merged last: MEASURED, a file declaring <c>Cell = int(0 to 100000)</c> pushed 70000 into its
+  /// own array and read back 112, because another file's one-byte <c>Cell</c> had decided the
+  /// stride, and the same program with the files renamed answered correctly.
+  ///
+  /// A name in here therefore names no type at all: every declaring file registers its instance
+  /// under the STRUCTURAL name that instance would have had if nothing declared it
+  /// (<see cref="IrStructType.InstanceIdentity"/>'s spelling), and the alias stays a per-file
+  /// spelling of it. Recorded by the typealias pre-scan, which walks every file before the pass
+  /// that mints, so both declarations are renamed and the answer does not depend on file order.
+  /// </summary>
+  public HashSet<string> ContestedGenericAliasNames { get; } = [];
+
   // Struct literal result IDs eligible for stack allocation (no escape).
   // Populated by StackPromotionAnalysisPass, consumed by MaxonToStandardConversion.
   public HashSet<int> StackEligibleStructs { get; } = [];
@@ -670,6 +690,7 @@ public class IrModule<TOp> where TOp : IPrintableOp {
     foreach (var (k, v) in GlobalVarSourceFiles) clone.GlobalVarSourceFiles[k] = v;
     foreach (var (k, v) in TypeDefSourceFiles) clone.TypeDefSourceFiles[k] = v;
     foreach (var n in AmbiguousTypeNames) clone.AmbiguousTypeNames.Add(n);
+    foreach (var n in ContestedGenericAliasNames) clone.ContestedGenericAliasNames.Add(n);
     clone.TagTable.AddRange(TagTable);
     clone.TagNames.AddRange(TagNames);
     clone.DebugStreamNames.AddRange(DebugStreamNames);
@@ -758,6 +779,7 @@ public class IrModule<TOp> where TOp : IPrintableOp {
     foreach (var (k, v) in other.GlobalVarSourceFiles) GlobalVarSourceFiles.TryAdd(k, v);
     foreach (var (k, v) in other.TypeDefSourceFiles) TypeDefSourceFiles.TryAdd(k, v);
     foreach (var n in other.AmbiguousTypeNames) AmbiguousTypeNames.Add(n);
+    foreach (var n in other.ContestedGenericAliasNames) ContestedGenericAliasNames.Add(n);
     foreach (var (k, v) in other.ModuleVisibleConstants) ModuleVisibleConstants.TryAdd(k, v);
     foreach (var (k, v) in other.ModuleConstantSourceFiles) ModuleConstantSourceFiles.TryAdd(k, v);
     foreach (var (k, v) in other.ConstantArrayLiterals) ConstantArrayLiterals.TryAdd(k, v);

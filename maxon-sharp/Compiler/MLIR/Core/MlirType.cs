@@ -310,11 +310,89 @@ public class IrStructType : IrType {
   /// one key between them.
   /// </summary>
   public static string InstanceKey(string sourceName, IReadOnlyDictionary<string, IrType> typeArgs,
-      IReadOnlyDictionary<string, long>? constArgs) {
-    var args = typeArgs.Select(kv => $"{kv.Key}={kv.Value.Name}").ToList();
+      IReadOnlyDictionary<string, long>? constArgs) =>
+    InstanceSpelling(sourceName, typeArgs, constArgs, static t => t.Name);
+
+  /// <summary>
+  /// ⭐ WHICH generic instance a fully-resolved DECLARATION denotes — <see cref="InstanceKey"/>'s
+  /// question asked of declarations rather than of spellings, and the one place two files' same-named
+  /// declarations of one alias are compared.
+  ///
+  /// Identical to the key above except that a type argument is spelled by
+  /// <see cref="TypeArgIdentity"/>, so <c>Array with Cell</c> over <c>int(0 to 100000)</c> and
+  /// <c>Array with Cell</c> over <c>int(0 to 255)</c> — one key, two instances — come apart.
+  /// </summary>
+  public static string InstanceIdentity(string sourceName, IReadOnlyDictionary<string, IrType> typeArgs,
+      IReadOnlyDictionary<string, long>? constArgs) =>
+    InstanceSpelling(sourceName, typeArgs, constArgs, TypeArgIdentity);
+
+  /// The shared body of the two spellings above — they differ in HOW a type argument is named and in
+  /// nothing else, and a second hand-written copy of the sort-and-join is exactly the drift
+  /// <see cref="InstanceKey"/>'s own header warns about, one call site further out.
+  private static string InstanceSpelling(string sourceName, IReadOnlyDictionary<string, IrType> typeArgs,
+      IReadOnlyDictionary<string, long>? constArgs, Func<IrType, string> spellTypeArg) {
+    var args = typeArgs.Select(kv => $"{kv.Key}={spellTypeArg(kv.Value)}").ToList();
     args.Sort(StringComparer.Ordinal);
     return $"{sourceName}<{string.Join(",", args)}|{string.Join(",", ConstArgSegments(constArgs))}>";
   }
+
+  /// <summary>
+  /// ⭐ A type argument spelled so that two DECLARATIONS OF ONE NAME are told apart — the segment
+  /// <see cref="InstanceIdentity"/> and the contested-alias mint are both built from.
+  ///
+  /// A plain <c>typealias</c> is file-local (specs/duplicate-typealias.md), so two files may each
+  /// declare <c>Cell</c> over a different range and both declarations are legal and distinct. A
+  /// NAME therefore cannot be a type argument's identity in a program that has such a pair, which is
+  /// exactly what <see cref="InstanceKey"/> reads and deliberately cannot see — it is asked from
+  /// parsers holding a placeholder for the same name, so a name is the only thing it MAY read.
+  /// This is the other question: not "are these two spellings the same instance?" but "do these two
+  /// declarations denote the same instance?", asked only where both are fully resolved.
+  ///
+  /// An INTEGER range is spelled with its inclusive upper, so <c>0 to 100</c> and <c>0 upto 101</c> —
+  /// one range written two ways — cannot read as two instances. A FLOAT range has no such
+  /// normalization (its exclusive upper is not a value), so the two forms keep the two spellings the
+  /// source has, which is what they are.
+  ///
+  /// ⚠ THE BOUNDS ARE JOINED BY A WORD, NOT BY AN UNDERSCORE, AND THAT IS NOT COSMETIC. This
+  /// segment ends up inside an emitted type name, and <c>MlirPrinter</c>'s IR dump reads a trailing
+  /// <c>_&lt;digits&gt;</c> on ANY identifier as a per-scope COUNTER and renumbers it. Spelled
+  /// <c>Cell_0_100000</c>, the two contested instances printed as one name — <c>Cell_0_0</c> — so a
+  /// golden recorded two different destructors under one header. Spelled <c>Cell_0to100000</c>, the
+  /// last underscore is not followed by digits alone and the name is left as it is.
+  /// </summary>
+  public static string TypeArgIdentity(IrType typeArg) {
+    if (typeArg is not IrRangedPrimitiveType ranged) return typeArg.Name;
+
+    return ranged.IsFloatBased
+      ? $"{ranged.Name}_{RangeBoundSegment(ranged.FloatLower)}"
+        + (ranged.UpperInclusive ? InclusiveRangeJoin : ExclusiveRangeJoin)
+        + RangeBoundSegment(ranged.FloatUpper)
+      : $"{ranged.Name}_{RangeBoundSegment(ranged.IntLower)}{InclusiveRangeJoin}{RangeBoundSegment(ranged.InclusiveIntUpper)}";
+  }
+
+  // How the two bounds are joined, and what stands in for the two characters a bound can carry that
+  // a synthesized type NAME may not. The stand-ins are substitutions rather than deletions because
+  // the segment has to stay INJECTIVE: two bounds differing only in a sign are two ranges, and a
+  // name that dropped the sign would hand them one instance. The joins are the source keywords.
+  private const string InclusiveRangeJoin = "to";
+  private const string ExclusiveRangeJoin = "upto";
+  private const string NegativeMark = "n";
+  private const string DecimalPointMark = "p";
+
+  /// A range bound as a segment of a synthesized type name. <c>long.MinValue</c> has no positive
+  /// magnitude, so the minus sign is dropped from the TEXT rather than negated out of the number.
+  private static string RangeBoundSegment(long bound) =>
+    bound < 0
+      ? NegativeMark + bound.ToString(CultureInfo.InvariantCulture)[1..]
+      : bound.ToString(CultureInfo.InvariantCulture);
+
+  /// A float bound, whose round-trip form additionally carries a decimal point and may carry an
+  /// exponent. An exponent's <c>+</c> is dropped rather than stood in for: it is redundant with the
+  /// bare digits that follow, so dropping it cannot merge two different bounds.
+  private static string RangeBoundSegment(double bound) =>
+    bound.ToString("R", CultureInfo.InvariantCulture)
+      .Replace("-", NegativeMark).Replace(".", DecimalPointMark).Replace("+", "");
+
   public Dictionary<string, IrType> TypeParams { get; }
   public bool IsTuple { get; }
   // True when this type represents a typealias of an interface (e.g., typealias ElementIterable = Iterable with Element)

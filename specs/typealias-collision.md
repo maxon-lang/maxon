@@ -354,3 +354,57 @@ end 'main'
 ```stdout
 wide=70000 narrow=200
 ```
+
+
+<!-- test: file-private-generic-alias-over-different-element-types -->
+⭐ The twin of the case above, and the shape where one instance CANNOT stand in for the other. Both
+files declare `Bag`, but over element types that share nothing: one is an `Array with String` and the
+other an `Array with Num`, so no single specialization serves them and there is no widest declaration
+to fall back on. The two declarations are legal for the reason its sibling's are — a plain
+`typealias` is file-local (`specs/duplicate-typealias.md`) — and each file's own `Bag.create()` must
+reach its own family of methods. ⚠⚠ **THIS ONE DID NOT PRINT A WRONG NUMBER; IT FAULTED.** Measured
+before the fix: the program compiled clean and died in `mm_incref` inside `Wide.stash`, because the
+surviving `Bag` was the integer array, so pushing a `String` stored a pointer through a one-byte
+element and reading it back retained garbage. That is the same defect as the range case — one flat
+name-keyed table, one winner, chosen by which file merged last — in the direction where the loser's
+values are POINTERS. Prints `wide=5 narrow=200`; `5` is the byte count of the string the wide file
+stored and can only be right if that file's `Bag` held a `String`.
+```maxon
+// --- file: aa.maxon
+typealias Len = int(0 to 1000)
+typealias Bag = Array with String
+
+export type Wide
+	export static function stash() returns Len
+		var xs = Bag.create()
+		xs.push("hello")
+		let v = try xs.get(0) otherwise ""
+		return v.count()
+	end 'stash'
+end 'Wide'
+
+// --- file: zz.maxon
+typealias Num = int(0 to 255)
+typealias Bag = Array with Num
+
+export type Narrow
+	export static function stash() returns Num
+		var xs = Bag.create()
+		xs.push(200)
+		let v = try xs.get(0) otherwise 0
+		return v
+	end 'stash'
+end 'Narrow'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	print("wide={Wide.stash()} narrow={Narrow.stash()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+wide=5 narrow=200
+```

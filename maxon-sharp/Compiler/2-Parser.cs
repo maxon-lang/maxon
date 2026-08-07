@@ -380,6 +380,11 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   private bool _inExtensionConformanceLoop;
   private readonly Dictionary<string, string> _extensionAliasToMangled = [];
 
+  // The structural name this file's declaration of a CONTESTED alias was minted under — the same
+  // fact _extensionAliasToMangled carries, for the other mint. See TryResolveAliasSpelling for why
+  // they are two maps and one reader, and IrModule.ContestedGenericAliasNames for the mint itself.
+  private readonly Dictionary<string, string> _contestedAliasInstanceNames = [];
+
   // Interface associated type names (interfaceName -> list of associated type names from 'uses' clause)
   private readonly Dictionary<string, List<string>> _interfaceAssociatedTypes = [];
 
@@ -1688,7 +1693,21 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
           || _typeAliasOwners.ContainsKey(aliasName);
       if (_seededTypeAliases.Contains(aliasName)
           && !(_isRescanningTypeAliases && isLocallyDeclared)) continue;
-      if (_typeRegistry.TryGetValue(aliasName, out var aliasType))
+      _typeRegistry.TryGetValue(aliasName, out var aliasType);
+
+      // ⭐ TWO FILES, ONE ALIAS NAME, TWO GENERIC INSTANCES — recorded HERE because this is the
+      // write that used to lose one of them, and a fact derived from the losing write cannot come
+      // to disagree with it. See IrModule.ContestedGenericAliasNames for what the record is for.
+      // Only a LOCAL declaration is a competitor: an alias this parser borrowed on another file's
+      // behalf is the incumbent wearing a second parser's hat, not a second declaration of it.
+      if (isLocallyDeclared && aliasType != null
+          && module.TypeDefs.TryGetValue(aliasName, out var incumbentType)
+          && module.TypeAliasSources.TryGetValue(aliasName, out var incumbentAlias)
+          && incumbentAlias.SourceFilePath != _sourceFilePath
+          && DenotesADifferentInstance(incumbentAlias.SourceTypeName, incumbentType, sourceTypeName, aliasType))
+        module.ContestedGenericAliasNames.Add(aliasName);
+
+      if (aliasType != null)
         module.TypeDefs[aliasName] = aliasType;
       var typeParams = aliasType is IrStructType st && st.TypeParams.Count > 0
         ? new Dictionary<string, IrType>(st.TypeParams)
@@ -1756,6 +1775,61 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     }
   }
 
+  /// <summary>
+  /// True when two same-named typealias declarations from two files name DIFFERENT generic
+  /// instances — the condition <see cref="IrModule{TOp}.ContestedGenericAliasNames"/> exists for.
+  ///
+  /// It is asked only of declarations that are fully resolved on BOTH sides. A type argument still
+  /// standing as a type PARAMETER is a declaration caught mid-specialization rather than a competing
+  /// instance, and reading one as a difference would rename an alias no second file contests.
+  ///
+  /// Non-generic declarations answer false and are not this record's business: a ranged alias emits
+  /// no methods, so two files' <c>Word32</c> already keep their own ranges — the parser resolves a
+  /// type name per file (specs/typealias-collision.md,
+  /// <c>file-private-alias-does-not-govern-another-file</c>).
+  /// </summary>
+  private static bool DenotesADifferentInstance(string incumbentSource, IrType incumbent,
+      string localSource, IrType local) {
+    if (incumbent is not IrStructType incumbentStruct || incumbentStruct.TypeParams.Count == 0) return false;
+    if (local is not IrStructType localStruct || localStruct.TypeParams.Count == 0) return false;
+    if (!incumbentStruct.TypeParams.Values.All(IsFullyConcreteType)) return false;
+    if (!localStruct.TypeParams.Values.All(IsFullyConcreteType)) return false;
+
+    return IrStructType.InstanceIdentity(incumbentSource, incumbentStruct.TypeParams, incumbentStruct.ConstParams)
+        != IrStructType.InstanceIdentity(localSource, localStruct.TypeParams, localStruct.ConstParams);
+  }
+
+  /// <summary>
+  /// Whether this parser's declaration of <paramref name="aliasName"/> is one only its own file may
+  /// write down. ONLY such a declaration is renamed under a contest, and the restriction is the
+  /// whole reason renaming is safe: a declaration another file MAY name is one that file's reference
+  /// resolves through BY NAME, so renaming it would break a reader doing nothing wrong. Two nameable
+  /// declarations of one name is the AMBIGUITY question instead (E3063 / AmbiguousTypeNames), which
+  /// this is not — leaving that pair exactly as it was.
+  ///
+  /// A stdlib alias counts as nameable however it is written, because SeedFromModule seeds every
+  /// stdlib alias into every parser regardless of `export`: its file-privacy is not enforced, so it
+  /// is not a fact the mint may rest on. A type-scoped inner alias is out for the same reason from
+  /// the other side — it is not a file's declaration at all, but one copy per generic instance of
+  /// its owner's.
+  /// </summary>
+  private bool IsFileScopedAliasDeclaration(string aliasName) =>
+    !_isStdlib
+    && !_exportedTypeAliases.Contains(aliasName)
+    && !_moduleVisibleTypeAliases.Contains(aliasName)
+    && !_typeAliasOwners.ContainsKey(aliasName);
+
+  /// <summary>
+  /// The name a generic instance carries when the alias name declaring it is CONTESTED: the
+  /// structural name the field-alias mint would have invented had no file declared one, except that
+  /// each type argument is spelled by <see cref="IrStructType.TypeArgIdentity"/> — otherwise the two
+  /// declarations the contest is ABOUT would mint one name between them, since it is precisely a
+  /// type argument's NAME they agree on and its meaning they do not.
+  /// </summary>
+  private static string ContestedInstanceName(string sourceName,
+      Dictionary<string, IrType> substitution, Dictionary<string, long>? constParams) =>
+    $"{sourceName}_{IrStructType.InstanceNameSuffix(constParams, substitution.Values.Select(IrStructType.TypeArgIdentity))}";
+
   // How widely a typealias declaration is visible, ordered so the widest declaration of a name owns
   // the module's single record for it (see the record guard in CopyTypeAliasesToModule).
   private static TypeAliasVisibilityRank AliasVisibilityRank(bool isExported, bool isModuleVisible, bool isStdlib) =>
@@ -1774,6 +1848,13 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   /// </summary>
   private void SeedFromModule(IrModule<MaxonOp>? source, IrModule<MaxonOp> target) {
     if (source == null) return;
+    // ⭐ Carried WHOLE, ahead of every visibility question below, because it is not one: a name two
+    // files contest is contested for every file in the compilation, and it is not a name any file
+    // may or may not see. It has to arrive before the first alias registers, because the module a
+    // full parse builds is a FRESH one per file and is the module RegisterConcreteTypeAlias asks —
+    // seeded late, the first file would mint the bare name and the second the structural one, which
+    // is the file-order dependence this record exists to remove.
+    foreach (var n in source.ContestedGenericAliasNames) target.ContestedGenericAliasNames.Add(n);
     foreach (var func in source.Functions) {
       if (target.FindFunctionByExactName(func.Name) == null)
         target.AddFunction(func);
@@ -5453,6 +5534,23 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       _extensionAliasToMangled[aliasName] = effectiveAliasName;
     }
 
+    // ⭐ A CONTESTED ALIAS NAME NAMES NO TYPE FOR THE FILE THAT ALONE MAY WRITE IT — that file's
+    // instance takes the structural name instead, so two files' `Cells = Array with Cell` stop
+    // sharing one family of emitted methods. Every FILE-SCOPED declaration reaches this the same
+    // way, because the contest is settled by the whole-file typealias pre-scan before the pass that
+    // mints: which of them gets renamed is not a question, and so cannot be answered by the order
+    // the filesystem handed over the sources. See IrModule.ContestedGenericAliasNames.
+    bool isContestedMint = false;
+    if (effectiveAliasName == aliasName
+        && _currentModule != null
+        && _currentModule.ContestedGenericAliasNames.Contains(aliasName)
+        && IsFileScopedAliasDeclaration(aliasName)
+        && substitution.Values.All(IsFullyConcreteType)) {
+      effectiveAliasName = ContestedInstanceName(sourceName, substitution, constParams);
+      _contestedAliasInstanceNames[aliasName] = effectiveAliasName;
+      isContestedMint = true;
+    }
+
     var concreteFields = new List<IrStructField>();
     foreach (var field in sourceStruct.Fields) {
       var fieldType = expandedSub.TryGetValue(field.Type.Name, out var concreteType)
@@ -5495,10 +5593,14 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     }
 
     _typeAliasSources[effectiveAliasName] = sourceName;
-    // When using a mangled name, do NOT write the unqualified alias to _typeAliasSources.
+    // When the EXTENSION loop mangles, do NOT write the unqualified alias to _typeAliasSources.
     // The unqualified entry would be overwritten by the next conforming type and cause
     // monomorphization to create a duplicate specialization from the last type's binding.
-    if (effectiveAliasName == aliasName)
+    //
+    // A CONTESTED mint is the opposite case and must write it: it is one file's own declaration
+    // written once, and it is what carries the alias through CopyTypeAliasesToModule — which is
+    // where the declaring file, the file-private mark, and the contest record itself are kept.
+    if (effectiveAliasName == aliasName || isContestedMint)
       _typeAliasSources[aliasName] = sourceName;
     // Propagate export status to the mangled name
     if (effectiveAliasName != aliasName && _exportedTypeAliases.Contains(aliasName))
@@ -20535,9 +20637,9 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
 
     Expect(TokenType.RightBrace);
 
-    // Use mangled name for extension-scoped aliases so each conforming type's struct
-    // literal references its own unique type definition in the module.
-    var literalTypeName = _extensionAliasToMangled.TryGetValue(typeName, out var mangledLitName)
+    // Use the minted name when the alias spelling denotes one, so the struct literal references the
+    // one type definition this file means rather than the shared alias name.
+    var literalTypeName = TryResolveAliasSpelling(typeName, out var mangledLitName)
       ? mangledLitName : typeName;
     var structLiteral = new MaxonStructLiteralOp(literalTypeName, fieldValues);
     // Set the array literal tag for lowering if this type has a __ManagedMemory buffer
@@ -26517,13 +26619,29 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     return new CompileError(ErrorCode.ParserExpectedToken, $"Expected {expectedDisplay} but got '{tok.Value}'", tok.Line, tok.Column);
   }
 
+  /// <summary>
+  /// ⭐ THE TYPE NAME AN ALIAS SPELLING DENOTES, when the spelling is not the type's own name.
+  ///
+  /// Two mints put a type under a name the user never wrote — the extension conformance loop's
+  /// per-conforming-type name, and the contested-alias mint — and every op that carries a type name
+  /// owes the same answer to both. They are two dictionaries because their LIFETIMES differ, not
+  /// their meaning: an extension alias is re-minted for each conforming type and its map is cleared
+  /// between them, while a contested alias is minted once per declaring file and must survive every
+  /// extension loop in that file. One reader is what stops the two answering one call site
+  /// differently — which would not be a compile error at any of them, just an op naming a type that
+  /// is not the one in hand.
+  /// </summary>
+  private bool TryResolveAliasSpelling(string aliasName, [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out string? typeName) {
+    if (_extensionAliasToMangled.TryGetValue(aliasName, out typeName)) return true;
+    return _contestedAliasInstanceNames.TryGetValue(aliasName, out typeName);
+  }
+
   /// If the callee was resolved through a type alias, override it with the alias-qualified name
   /// so Stage 1 monomorphization can match and specialize it correctly.
-  /// When inside an extension conformance loop, uses the per-conforming-type mangled alias name
-  /// so each conforming type's IR references its own unique specialization.
+  /// When the alias spelling denotes a minted name (an extension conformance loop's, or a contested
+  /// alias's), uses that so the IR references the one specialization this file means.
   private void OverrideCalleeForTypeAlias(MaxonCallOp callOp, string aliasTypeName, string aliasQualifiedName) {
-    // Extension-scoped alias: redirect to the per-conforming-type mangled name
-    if (_extensionAliasToMangled.TryGetValue(aliasTypeName, out var mangledName)) {
+    if (TryResolveAliasSpelling(aliasTypeName, out var mangledName)) {
       var dotIdx = aliasQualifiedName.IndexOf('.');
       var methodPart = dotIdx >= 0 ? aliasQualifiedName[(dotIdx + 1)..] : aliasQualifiedName;
       callOp.Callee = $"{mangledName}.{methodPart}";
