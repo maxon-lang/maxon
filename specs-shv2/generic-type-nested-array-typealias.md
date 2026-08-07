@@ -1963,3 +1963,385 @@ end 'main'
 ```exitcode
 0
 ```
+
+### An UNCONDITIONAL extension on a `where`-constrained generic type carries the type's witnesses
+
+⭐⭐ **THE EXTENSION BODY RESERVES ONE WITNESS LIST AND THE CALL SITE SUPPLIES ANOTHER, AND THAT IS A
+SEGFAULT ON A LEGAL PROGRAM (W23).** `Parser.openTypeExtensionBodyScope` opened the body with the
+EXTENSION's own `where` clause, which for an unconditional `extension Pair` is EMPTY — so `bothAre`
+reserved **0** hidden witness parameters — while `ProgramSignatures.witnessConstraintsOfMethod` fell back
+to the TYPE's `where A is Equatable, B is Equatable` and every caller duly passed **2**. A witness-slot
+count is ABI, so the two disagreeing is an argument-register mismatch, not a type error: **MEASURED on the
+merge base, this program compiled clean (no diagnostic, 2,646 bytes of code) and the binary SEGFAULTED
+after printing `a=true`.** The oracle prints all three lines and exits 0.
+
+⚠ **THE BODY HAS TWO DOORS TO A WITNESS AND ONLY ONE WAS GUARDED.** A bare `self.first == x` written in
+the same body is a clean refusal (`E3005`, "requires type parameter 'A' to be constrained"); routing the
+identical dispatch through `self.firstIs(x)` — a call, not an operator — compiled and crashed. The cure is
+that BOTH the reservation and the supply read one derived list (`witnessConstraintsOfMethod`, the type's
+constraints then the extension's extras), not that a third check is added at the method-call door.
+
+<!-- test: unconditional-extension-on-constrained-type-dispatches-a-witness -->
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Pair uses A, B where A is Equatable, B is Equatable
+	export var first as A
+	export var second as B
+	export static function create(a A, b B) returns Self
+		return Self{first: a, second: b}
+	end 'create'
+	export function firstIs(x A) returns bool
+		return self.first == x
+	end 'firstIs'
+end 'Pair'
+
+extension Pair
+	export function bothAre(x A) returns bool
+		return self.firstIs(x)
+	end 'bothAre'
+end 'Pair'
+
+typealias NumPair = Pair with (Num, Num)
+
+function main() returns ExitCode
+	let p = NumPair.create(1, b: 2)
+	if p.firstIs(1) 'a'
+		print("a=true\n")
+	end 'a'
+	if p.bothAre(1) 'c'
+		print("both=true\n")
+	end 'c'
+	print("done\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+a=true
+both=true
+done
+```
+
+### The same, with TWO witnesses actually dereferenced through the unconditional extension
+
+The case above proves the slot COUNT; this one proves the ORDER, because both hidden witnesses are
+followed to a real `equals` impl. With the extension's empty clause chosen, `bothAre` reserved nothing and
+read its two forwarded slots off whatever the argument registers happened to hold — **MEASURED: exit 139
+after `a=true`**, the same shape as the single-witness case, which is what says the count and the order are
+one defect and not two.
+
+<!-- test: unconditional-extension-forwards-two-witnesses-in-order -->
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Pair uses A, B where A is Equatable, B is Equatable
+	export var first as A
+	export var second as B
+	export static function create(a A, b B) returns Self
+		return Self{first: a, second: b}
+	end 'create'
+	export function firstIs(x A) returns bool
+		return self.first == x
+	end 'firstIs'
+	export function secondIs(y B) returns bool
+		return self.second == y
+	end 'secondIs'
+end 'Pair'
+
+extension Pair
+	export function bothAre(x A, y B) returns bool
+		if self.firstIs(x) 'f'
+			return self.secondIs(y)
+		end 'f'
+		return false
+	end 'bothAre'
+end 'Pair'
+
+typealias NumPair = Pair with (Num, Num)
+
+function main() returns ExitCode
+	let p = NumPair.create(1, b: 2)
+	if p.firstIs(1) 'a'
+		print("a=true\n")
+	end 'a'
+	if p.bothAre(1, y: 2) 'c'
+		print("both=true\n")
+	end 'c'
+	print("done\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+a=true
+both=true
+done
+```
+
+### An extension clause DISJOINT from the type's own is a UNION, not a replacement
+
+⛔ **THE REPLACE-RULE'S WORST FORM: the extension's `where A is Comparable` DISPLACED the type's
+`where A is Equatable, B is Equatable` entirely, so the body reserved ONE witness where its callee wanted
+TWO — and the compiler did not survive its own IR.** MEASURED on the merge base: **`panic at
+RegisterAllocator.maxon:1913: colorOpForward: use of value 3 before it was colored`**, which is not the
+allocator's defect at all. The one-variable control is the SUPERSET case below, which differs in the
+extension's clause ALONE and compiled clean on the same binary.
+
+Under the union the body carries `[A is Equatable, B is Equatable, A is Comparable]` — the type's list
+FIRST, in declaration order, then the extension's extras — so `self.firstIs(x)`, whose own list is exactly
+the type's, forwards slots 0 and 1 and finds them index-aligned by construction.
+
+<!-- test: extension-clause-disjoint-from-the-types-own -->
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Pair uses A, B where A is Equatable, B is Equatable
+	export var first as A
+	export var second as B
+	export static function create(a A, b B) returns Self
+		return Self{first: a, second: b}
+	end 'create'
+	export function firstIs(x A) returns bool
+		return self.first == x
+	end 'firstIs'
+end 'Pair'
+
+extension Pair where A is Comparable
+	export function firstIsVia(x A) returns bool
+		return self.firstIs(x)
+	end 'firstIsVia'
+end 'Pair'
+
+typealias NumPair = Pair with (Num, Num)
+
+function main() returns ExitCode
+	let p = NumPair.create(1, b: 2)
+	if p.firstIs(1) 'a'
+		print("a=true\n")
+	end 'a'
+	if p.firstIsVia(1) 'c'
+		print("via=true\n")
+	end 'c'
+	print("done\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+a=true
+via=true
+done
+```
+
+### The extension declared BEFORE the type it extends — the ORDER-INDEPENDENCE proof
+
+⭐⭐ **A WITNESS-SLOT COUNT IS ABI, SO IT MAY NOT BE DECIDED BY WHICH DECLARATION THE COMPILER MET FIRST.**
+The union is taken where the whole-program struct registry is already complete — `foldExtensionDeclarations`
+runs after every file's declarations are folded, which is why `readExtensionHeader` can ask
+`extensionTargetOf` about a type declared later at all — so the answer cannot depend on declaration order.
+This case is the twin of the disjoint-clause case above with the two declarations exchanged, and it is the
+case that fails first if the union is ever computed from a partially folded registry.
+
+<!-- test: extension-declared-before-the-type-it-extends -->
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+extension Pair where A is Comparable
+	export function firstIsVia(x A) returns bool
+		return self.firstIs(x)
+	end 'firstIsVia'
+end 'Pair'
+
+type Pair uses A, B where A is Equatable, B is Equatable
+	export var first as A
+	export var second as B
+	export static function create(a A, b B) returns Self
+		return Self{first: a, second: b}
+	end 'create'
+	export function firstIs(x A) returns bool
+		return self.first == x
+	end 'firstIs'
+end 'Pair'
+
+typealias NumPair = Pair with (Num, Num)
+
+function main() returns ExitCode
+	let p = NumPair.create(1, b: 2)
+	if p.firstIs(1) 'a'
+		print("a=true\n")
+	end 'a'
+	if p.firstIsVia(1) 'c'
+		print("via=true\n")
+	end 'c'
+	print("done\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+a=true
+via=true
+done
+```
+
+### CONTROL — an extension clause EQUAL to the type's own
+
+The one shape the replace-rule was accidentally right for, kept as a control so the union cannot regress
+it: replacing a list with a copy of itself is the identity, and so is unioning it with itself. It was green
+on the merge base and it stays green.
+
+<!-- test: extension-clause-equal-to-the-types-own -->
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Pair uses A, B where A is Equatable, B is Equatable
+	export var first as A
+	export var second as B
+	export static function create(a A, b B) returns Self
+		return Self{first: a, second: b}
+	end 'create'
+	export function firstIs(x A) returns bool
+		return self.first == x
+	end 'firstIs'
+end 'Pair'
+
+extension Pair where A is Equatable, B is Equatable
+	export function bothAre(x A) returns bool
+		return self.firstIs(x)
+	end 'bothAre'
+end 'Pair'
+
+typealias NumPair = Pair with (Num, Num)
+
+function main() returns ExitCode
+	let p = NumPair.create(1, b: 2)
+	if p.firstIs(1) 'a'
+		print("a=true\n")
+	end 'a'
+	if p.bothAre(1) 'c'
+		print("both=true\n")
+	end 'c'
+	print("done\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+a=true
+both=true
+done
+```
+
+### CONTROL — an extension clause that is a SUPERSET of the type's own
+
+⚠ **THIS ONE WAS GREEN BY LUCK, AND THE UNION IS WHAT MAKES IT GREEN BY CONSTRUCTION.** Under the
+replace-rule the body carried `[A is Equatable, A is Comparable, B is Equatable]` — the clause's own source
+order — while `firstIs` carried the type's `[A is Equatable, B is Equatable]`, so the forward of slot 1
+handed `firstIs` the `A is Comparable` table where the `B is Equatable` one belonged. The program only ever
+dereferences slot 0, so the wrong table at slot 1 was never followed and the run said nothing. Under the
+union the body carries `[A is Equatable, B is Equatable, A is Comparable]` and every prefix aligns.
+
+<!-- test: extension-clause-superset-of-the-types-own -->
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Pair uses A, B where A is Equatable, B is Equatable
+	export var first as A
+	export var second as B
+	export static function create(a A, b B) returns Self
+		return Self{first: a, second: b}
+	end 'create'
+	export function firstIs(x A) returns bool
+		return self.first == x
+	end 'firstIs'
+end 'Pair'
+
+extension Pair where A is Equatable and Comparable, B is Equatable
+	export function firstIsVia(x A) returns bool
+		return self.firstIs(x)
+	end 'firstIsVia'
+end 'Pair'
+
+typealias NumPair = Pair with (Num, Num)
+
+function main() returns ExitCode
+	let p = NumPair.create(1, b: 2)
+	if p.firstIs(1) 'a'
+		print("a=true\n")
+	end 'a'
+	if p.firstIsVia(1) 'c'
+		print("via=true\n")
+	end 'c'
+	print("done\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+a=true
+via=true
+done
+```
+
+### CONTROL — an unconditional extension whose body dispatches NO witness
+
+The other half of the trigger: a body that reserves the wrong number of witness slots is harmless while it
+never forwards one. Green on the merge base, and it stays green — which is what pins that the union changed
+the ABI of the methods that need it and of no others.
+
+<!-- test: unconditional-extension-body-that-dispatches-no-witness -->
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Pair uses A, B where A is Equatable, B is Equatable
+	export var first as A
+	export var second as B
+	export static function create(a A, b B) returns Self
+		return Self{first: a, second: b}
+	end 'create'
+	export function firstIs(x A) returns bool
+		return self.first == x
+	end 'firstIs'
+end 'Pair'
+
+extension Pair
+	export function firstCopy() returns A
+		return self.first
+	end 'firstCopy'
+end 'Pair'
+
+typealias NumPair = Pair with (Num, Num)
+
+function main() returns ExitCode
+	let p = NumPair.create(1, b: 2)
+	if p.firstIs(1) 'a'
+		print("a=true\n")
+	end 'a'
+	if p.firstCopy() == 1 'c'
+		print("copy=true\n")
+	end 'c'
+	print("done\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+a=true
+copy=true
+done
+```

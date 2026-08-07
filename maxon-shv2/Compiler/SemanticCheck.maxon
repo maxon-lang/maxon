@@ -2746,7 +2746,7 @@ end 'programSignaturesIn'
 // WRITES (E3019). The first three read `argIds` in declaration order, so each pairs `argIds[i]` with
 // parameter `i` — the slotting is done once, by `slotCallArgs`, and none re-derives it.
 function checkSlottedCall(project Project, func IrFunction, result ValueId, callee ByteArray, sig FuncSignature, args ValueIdArray, argLabels ByteArrayArray, argImmutableNames ByteArrayArray, argIds ValueIdArray, escapeSummary ParamEscapeSummary, mutationSummary ParamMutationSummary, callRange SourceRange, filePath FilePath)
-	checkArgTypes(project, func: func, sig: sig, argIds: argIds, callRange: callRange, filePath: filePath)
+	checkArgTypes(project, func: func, result: result, sig: sig, argIds: argIds, callRange: callRange, filePath: filePath)
 	checkTypeParameterArgs(project, func: func, result: result, sig: sig, argIds: argIds, callRange: callRange, filePath: filePath)
 	checkPerInstanceArgs(project, func: func, callee: callee, sig: sig, argIds: argIds, callRange: callRange, filePath: filePath)
 	checkCapturingClosureEscape(project, func: func, callee: callee, argIds: argIds, escapeSummary: escapeSummary, callRange: callRange, filePath: filePath)
@@ -2989,7 +2989,7 @@ function checkPerInstanceArgs(project Project, func IrFunction, callee ByteArray
 
 	match signatures.methodInnerAliasParamsOf(callee) 'lookup'
 		noInnerAliasParams then return
-		found(info) then checkPerInstanceArgsWith(project, func: func, sig: sig, argIds: argIds, info: info, callRange: callRange, filePath: filePath)
+		found(info) then checkPerInstanceArgsWith(project, signatures: signatures, func: func, sig: sig, argIds: argIds, info: info, callRange: callRange, filePath: filePath)
 	end 'lookup'
 end 'checkPerInstanceArgs'
 
@@ -3007,7 +3007,19 @@ end 'checkPerInstanceArgs'
 // what the shared door adds are unreachable on this comparison: a per-instance alias is a `named` wrapper
 // over an int, never an `Array` instance, so the byte-element boundary cannot open, and the decay is
 // already decided one line above by `got.isEmpty()`.
-function checkPerInstanceArgsWith(project Project, func IrFunction, sig FuncSignature, argIds ValueIdArray, info InnerAliasParamInfo, callRange SourceRange, filePath FilePath)
+//
+// ⛔⛔ **IT MINTS `<receiverAlias>.<member>` AS AN IDENTITY, SO IT MAY ONLY BE ASKED WHERE THAT NAME IS ONE
+// (W25).** `info` records EVERY parameter typed with an inner alias of the enclosing generic type, and only a
+// RANGED one (`typealias Idx = int(0 to 9)`) has a per-instance identity — an int wearing a name, distinct per
+// instance alias, which is the whole subject of P1.6-C. A GENERIC-INSTANCE inner alias
+// (`typealias Items = Array with T`) has none: `HoldANum.Items` is in no registry, it is a string this line
+// builds, and comparing a real type against it can only ever fail. **MEASURED: `a.adopt(b.items)` with `a` and
+// `b` both `HoldA with Num` was `E3005: expected 'HoldANum.Items', got 'HoldA.Items'`** — a program handing a
+// value to a parameter of its own type, refused by a name no declaration wears. Such a parameter is judged by
+// TYPE instead, against the instance view of its declared type (`paramTypeThroughCallInstance`), which is
+// where it belongs: that comparison sees `Array with Num` on both sides and also REFUSES a
+// `HoldA with String`'s items, which this name check accepted (both spelled `HoldA.Items`).
+function checkPerInstanceArgsWith(project Project, signatures ProgramSignatures, func IrFunction, sig FuncSignature, argIds ValueIdArray, info InnerAliasParamInfo, callRange SourceRange, filePath FilePath)
 	// A method prepends `__self` at real position 0; the sweep records inner-alias members over the SOURCE
 	// parameters (no `__self`), so a method's real position i maps to source i - 1. A static factory has no
 	// receiver here — its inner-alias arguments decay — so only a method is checked.
@@ -3033,6 +3045,12 @@ function checkPerInstanceArgsWith(project Project, func IrFunction, sig FuncSign
 			continue
 		end 'decays'
 		let expected = joinQualifiedName(receiverAlias, member: member)
+		// The reader is the CALLING file, which is the scope a contested instance-alias prefix resolves in —
+		// unlike `aggregatesConflict`, which is handed two bare names and has no reader to ask (N3).
+		if not signatures.isPerInstanceAlias(expected, readerFilePath: filePath) 'noPerInstanceIdentityToCompare'
+			continue
+		end 'noPerInstanceIdentityToCompare'
+
 		if namedAggregatesConflict(expected, got: got) 'wrongInstance'
 			let paramName = try sig.paramNames.get(i) otherwise panic("checkPerInstanceArgsWith: paramNames.get OOB at {i}")
 			reportPositioned(project, code: ErrorCode.typeMismatch, message: argTypeMismatchMessage(paramName, position: i, expected: String.from(expected), got: typeDisplayName(project, tag: argTag, nameId: argNameId)), line: callRange.line, column: callRange.column, filePath: filePath)
@@ -3210,10 +3228,17 @@ function closureDefiningOp(project Project, func IrFunction, funcIndex FuncIndex
 	panic("closureDefiningOp: capturing closure v{closure} of '{String.from(func.name)}' has no defining op in `valueOrigins` — the mark is set only on a value `functionRef` defined")
 end 'closureDefiningOp'
 
-function checkArgTypes(project Project, func IrFunction, sig FuncSignature, argIds ValueIdArray, callRange SourceRange, filePath FilePath)
+function checkArgTypes(project Project, func IrFunction, result ValueId, sig FuncSignature, argIds ValueIdArray, callRange SourceRange, filePath FilePath)
+	// ⭐⭐ **A CALL THROUGH A CONCRETE INSTANCE JUDGES ITS ARGUMENTS AGAINST THE INSTANCE VIEW OF EACH
+	// PARAMETER, NOT AGAINST THE SHARED BODY'S DECLARATION VIEW (W25).** shv2 compiles one body per generic
+	// type, so `adopt(other Items)` and `merge(source Self)` are declared in terms the receiver fixes — and
+	// judging them unfixed refuses a program handing a value to a parameter of its own type. The subject is
+	// read ONCE, here, through the same `callInstanceSubject` the substituted check below uses, so the two
+	// halves of the argument rule cannot come to disagree about which instance this call is made at.
+	let instanceSubject = callInstanceSubject(sig, result: result, argIds: argIds)
 	for i in 0 upto argIds.count() 'eachArg'
 		let argId = try argIds.get(i) otherwise panic("checkArgTypes: argIds.get OOB at {i}")
-		let paramType = try sig.paramTypes.get(i) otherwise panic("checkArgTypes: paramTypes.get OOB at {i} — slotCallArgs returned {argIds.count()} slots for a {sig.paramCount()}-parameter signature")
+		let paramType = paramTypeThroughCallInstance(project, func: func, subject: instanceSubject, paramType: try sig.paramTypes.get(i) otherwise panic("checkArgTypes: paramTypes.get OOB at {i} — slotCallArgs returned {argIds.count()} slots for a {sig.paramCount()}-parameter signature"))
 		let paramName = try sig.paramNames.get(i) otherwise panic("checkArgTypes: paramNames.get OOB at {i}")
 
 		// ⭐ THE RECEIVER ARGUMENT (`__self`, position 0 of an instance-method call) IS COMPATIBLE WITH ITS
@@ -3233,6 +3258,61 @@ function checkArgTypes(project Project, func IrFunction, sig FuncSignature, argI
 		checkOneArgType(project, func: func, paramType: paramType, preErasedAggregate: preErasedAggregate, declaredParamName: declaredParamName, paramName: paramName, position: i, argId: argId, callRange: callRange, filePath: filePath)
 	end 'eachArg'
 end 'checkArgTypes'
+
+// ⭐⭐ **ONE PARAMETER'S TYPE AS THE CALL'S CONCRETE INSTANCE SEES IT (W25)** — the declaration-view types a
+// shared generic body spells, resolved against the instance the call is actually made at:
+//
+//   • an inner-alias / nested-instance parameter (`other Items`, i.e. `Array with T`) becomes the instance's
+//     own (`Array with Num`), through `ProgramSignatures.substituteThroughInstance` — the SAME substitution
+//     the field read and the drop cascade use, so what `b.items` IS and what `adopt` ACCEPTS are one answer;
+//   • a `Self` parameter (`merge(source Self)`, tagged with the base's `structRef`) becomes the instance.
+//
+// ⛔ **BOTH WERE REFUSALS OF LEGAL PROGRAMS THE ORACLE RUNS.** `a.adopt(b.items)` on two `HoldA with Num` was
+// `E3005: expected 'HoldANum.Items', got 'HoldA.Items'` and `b.merge(a)` on two `Container with Integer` was
+// `E3005: expected 'Container', got 'IntContainer'` — each a sentence naming one type twice.
+//
+// ⚠ **A BARE `typeParameter` PARAMETER IS DELIBERATELY LEFT ALONE HERE**, and that is the PARTITION between
+// the two halves of the argument rule rather than an omission: `checkTypeParameterArgsAt` owns those
+// positions, substitutes them through the same instance, and carries the nominal/scalar split and the
+// `instanceArgDisplayName` wording that the whole `IntBox.create(1.5)` argument rests on. Substituting them
+// here as well would judge one position twice, under two renderings.
+//
+// ⚠ **THE `Self` ARM IS THE ARGUMENT CHECK'S AND IS NOT INSIDE THE SHARED SUBSTITUTION.** It was, for one
+// build, and it MEASURED **21 newly failing cases** in `--filter=generic` alone: the substitution is also what
+// retypes a field READ and a method RETURN, where `returns Self` legitimately keeps the shared body's
+// `structRef` and a value that was a `Leaf` became a `LeafBox`. A `structRef` payload is an interner-local
+// name id too, so resolving it needs a table the interner-free substitution deliberately does not take.
+//
+// The subject's tag is read per parameter rather than hoisted for `argParamLabel`'s reason — a dense array
+// read is cheaper than threading a second value through, and the overwhelmingly common call (no instance
+// subject at all) leaves after it.
+function paramTypeThroughCallInstance(project Project, func IrFunction, subject ValueId, paramType MaxonType) returns MaxonType
+	let paramTag = maxonTypeTag(paramType)
+	if paramTag == ValueTypeTag.typeParameter 'ownedByTheSubstitutedCheck'
+		return paramType
+	end 'ownedByTheSubstitutedCheck'
+
+	if paramTag != ValueTypeTag.structRef and paramTag != ValueTypeTag.genericInstance 'carriesNoDeclarationView'
+		return paramType
+	end 'carriesNoDeclarationView'
+
+	let subjectTag = try func.valueTags.get(subject) otherwise panic("paramTypeThroughCallInstance: value v{subject} of function '{String.from(func.name)}' has no recorded type — every SSA value must be minted through Parser.mintValue")
+	if subjectTag != ValueTypeTag.genericInstance 'notACallThroughAConcreteInstance'
+		return paramType
+	end 'notACallThroughAConcreteInstance'
+
+	// ⚠ `var`, because the substitution INTERNS the instance it produces — `Array with T` under `T -> Num` is a
+	// type the program may never spell, and the identity it is compared by has to exist. Same reason
+	// `checkTypeParameterArgsAt` binds the index that way for the compiled-name memo.
+	var signatures = programSignaturesIn(project, asker: "paramTypeThroughCallInstance")
+	let gid = try func.valueNameIds.get(subject) otherwise panic("paramTypeThroughCallInstance: genericInstance value v{subject} of function '{String.from(func.name)}' has no recorded GenericInstanceId — the two type columns are minted in lockstep")
+	if paramTag == ValueTypeTag.structRef 'maybeSelf'
+		let name = try project.typeNames.nameOf(typeNameIdOf(paramType)) otherwise panic("paramTypeThroughCallInstance: structRef id {typeNameIdOf(paramType)} is not in the project interner — a signature's param types are remapped project-global at merge (mergeArtifact)")
+		return MaxonType.genericInstance(gid) if name.equals(signatures.genericInstanceBaseName(gid)) else paramType
+	end 'maybeSelf'
+
+	return signatures.substituteThroughInstance(paramType, id: gid)
+end 'paramTypeThroughCallInstance'
 
 // How a diagnostic NAMES the parameter an argument met: by NAME at a direct call, by 1-based POSITION at
 // an indirect one — a function TYPE's parameter names are documentation the parser discards

@@ -1,0 +1,181 @@
+// Test: extension-declared-before-the-type-it-extends
+typealias Num = int(i64.min to i64.max)
+
+extension Pair where A is Comparable
+	export function firstIsVia(x A) returns bool
+		return self.firstIs(x)
+	end 'firstIsVia'
+end 'Pair'
+
+type Pair uses A, B where A is Equatable, B is Equatable
+	export var first as A
+	export var second as B
+	export static function create(a A, b B) returns Self
+		return Self{first: a, second: b}
+	end 'create'
+	export function firstIs(x A) returns bool
+		return self.first == x
+	end 'firstIs'
+end 'Pair'
+
+typealias NumPair = Pair with (Num, Num)
+
+function main() returns ExitCode
+	let p = NumPair.create(1, b: 2)
+	if p.firstIs(1) 'a'
+		print("a=true\n")
+	end 'a'
+	if p.firstIsVia(1) 'c'
+		print("via=true\n")
+	end 'c'
+	print("done\n")
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @Pair.firstIsVia {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.callDirect Pair.firstIs
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Pair.create {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegReg rbx, rcx
+    x64.movRegReg r12, rdx
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.storeBaseDispReg.word64 [r8 + 8], r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Pair.firstIs {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, rax
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
+    x64.callMem [rbx + 24]
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegImm32 rcx, 1
+    x64.movRegImm32 rdx, 2
+    x64.callDirect Pair.create
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rdx, 1
+    x64.leaRegRdata rax, [rip + __witness_int.Equatable]
+    x64.leaRegRdata r9, [rip + __witness_int.Equatable]
+    x64.movRegReg rcx, rbx
+    x64.callDirect Pair.firstIs
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, a
+    x64.jmp ifcont
+  a:
+    x64.leaRegRdata rcx, [rip + __str_rec_1]
+    x64.callDirect __print_string
+    x64.jmp ifcont
+  ifcont:
+    x64.movRegImm32 rdx, 1
+    x64.leaRegRdata rax, [rip + __witness_int.Equatable]
+    x64.leaRegRdata r9, [rip + __witness_int.Equatable]
+    x64.leaRegRdata rsi, [rip + __witness_int.Comparable]
+    x64.movRegReg rcx, rbx
+    x64.callDirect Pair.firstIsVia
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, c
+    x64.jmp ifcont
+  c:
+    x64.leaRegRdata rcx, [rip + __str_rec_3]
+    x64.callDirect __print_string
+    x64.jmp ifcont
+  ifcont:
+    x64.leaRegRdata rcx, [rip + __str_rec_5]
+    x64.callDirect __print_string
+    x64.movRegImm32 r12, 0
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @int.equals {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.cmpRegReg rcx, rdx
+    x64.jcc equal, equal
+    x64.jmp notEqual
+  equal:
+    x64.movRegImm32 r8, 1
+    x64.popReg rbp
+    x64.ret
+  notEqual:
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+}
+
+func @int.compare {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.cmpRegReg rcx, rdx
+    x64.jcc less, less
+    x64.jmp notLess
+  less:
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+  notLess:
+    x64.cmpRegReg rcx, rdx
+    x64.jcc greater, greater
+    x64.jmp equal
+  greater:
+    x64.movRegImm32 r8, 2
+    x64.popReg rbp
+    x64.ret
+  equal:
+    x64.movRegImm32 r8, 1
+    x64.popReg rbp
+    x64.ret
+}

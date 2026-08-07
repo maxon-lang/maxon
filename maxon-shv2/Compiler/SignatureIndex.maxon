@@ -4592,10 +4592,17 @@ end 'ConditionalExtensionSkip'
 
 export typealias ConditionalExtensionSkipMap = Map with (ByteArray, ConditionalExtensionSkip)
 
-// The witness constraints of an extension method that is NOT its enclosing type's own — see
+// The witness constraints of an extension method that are NOT its enclosing type's own — see
 // `ExtensionTarget`'s type arm. Keyed by the qualified method name, which is the key both the reservation
 // side (`Parser.witnessParamCountFor`, through the constraints the extension body is parsed under) and the
 // supply side (`LowerMaxonToStd.appendWitnessArgs`) resolve a callee by.
+//
+// ⚠ **IT HOLDS THE EXTRAS, NOT THE WHOLE SLOT LIST.** A method's witness slots are the type's own constraints
+// FOLLOWED by these (`ProgramSignatures.typeExtensionWitnessConstraints`), so an entry here is one INPUT to
+// that answer and never the answer itself. The distinction is what lets the same entry serve the other
+// question this map exists for — which constraints are validated NOWHERE ELSE, and so must be checked at the
+// call (`Parser.requireReceiverSatisfiesExtensionConstraints`) — since a type's own constraints are already
+// settled at the instantiation site by E3017.
 export typealias ExtensionMethodConstraintMap = Map with (ByteArray, WhereConstraintArray)
 
 // The answer to "was this missing method WITHHELD, or is it simply absent?" — a case rather than an empty
@@ -4609,6 +4616,34 @@ end 'ConditionalExtensionSkipLookup'
 // The constraint list a callee with no enclosing type carries — none, shared, for
 // `sharedEmptyWhereConstraints`' reason: every free function in the corpus asks and none has one.
 let sharedEmptyMethodWitnessConstraints = WhereConstraintArray.create()
+
+// ⭐ **DO TWO `MaxonType`s DENOTE THE SAME TYPE? — the (tag, id) pair, which is the identity
+// `GenericInstanceRegistry.instanceKey` already builds an instance's key out of.** A tag with no payload
+// answers `typeNameIdOf` uniformly, so the one comparison serves every arm.
+//
+// It exists because a SUBSTITUTION has to be able to say it moved NOTHING: `substituteThroughInstance` returns
+// the argument unchanged for a type with no declaration view, and its callers — the recursion itself, and the
+// parser's field read, which must not re-resolve a slot the instance did not touch — decide on exactly that.
+// ⚠ It is NOT a general structural equality: two `named` ids from DIFFERENT interners are incomparable, which
+// is why every caller compares a substitution's output against its own input, both from one table.
+export function maxonTypesDenoteSame(a MaxonType, b MaxonType) returns bool
+	return maxonTypeTag(a) == maxonTypeTag(b) and typeNameIdOf(a) == typeNameIdOf(b)
+end 'maxonTypesDenoteSame'
+
+// Does `reserved` already carry a witness slot for `constraint` — the same (parameter, interface) pair?
+// `ProgramSignatures.typeExtensionWitnessConstraints`' de-duplication, which is what keeps an extension that
+// restates one of its target's own constraints from reserving two slots for one witness.
+//
+// A linear scan for `whereConstraintsMatch`'s reason one level up: a `where` clause is a handful of entries,
+// and it is walked once per (extension, method) rather than per call.
+function whereConstraintListReserves(reserved WhereConstraintArray, constraint WhereConstraint) returns bool
+	for existing in reserved 'eachReserved'
+		if existing.typeParamIndex == constraint.typeParamIndex and existing.interfaceName.equals(constraint.interfaceName) 'sameSlot'
+			return true
+		end 'sameSlot'
+	end 'eachReserved'
+	return false
+end 'whereConstraintListReserves'
 
 // ⭐ **AN INTERFACE'S POSITION IN DECLARATION ORDER — the whole-program, interner-FREE handle a
 // `witnessDispatch` names its requirement's interface by.** See `ProgramSignatures.interfaceNamesInDeclOrder`
@@ -8938,28 +8973,89 @@ export type ProgramSignatures
 	end 'structWhereConstraints'
 
 	// ⭐⭐ **THE WITNESS CONSTRAINTS THE INSTANCE METHOD `callee` CARRIES — the ONE answer both the reservation
-	// side and the supply side of the dictionary-passing ABI resolve a callee by.** Almost always its
-	// enclosing type's own `where` clause; for a method a CONDITIONAL TYPE EXTENSION contributed, the
-	// EXTENSION's clause instead, because that method is the only one of the type's that carries those
-	// witnesses (`ExtensionTarget`). Asked with the qualified `Type.method` name.
+	// side and the supply side of the dictionary-passing ABI resolve a callee by.** Its enclosing type's own
+	// `where` clause, UNIONED with the clause a TYPE EXTENSION added, in that order. Asked with the qualified
+	// `Type.method` name.
 	//
-	// ⚠ **THE EXTENSION'S CLAUSE REPLACES THE TYPE'S RATHER THAN APPENDING TO IT, and that is not a
-	// simplification** — `Parser.parseExtensionDeclaration` parses the body under the SAME list, formed the
-	// same way, so the slot a dispatch resolves to inside the body and the slot the caller fills are one
-	// numbering by construction. A type-extension method on a type that ALSO declares its own `where` is the
-	// case where the two lists differ — and nothing reconciles them, because nothing has to: exactly ONE of
-	// them is CHOSEN (the extension's), by this function, for every reader of that method's witness slots.
+	// ⛔⛔ **THE EXTENSION'S CLAUSE USED TO *REPLACE* THE TYPE'S, AND THE COMMENT HERE ASSERTED THAT THE
+	// REPLACEMENT WAS SAFE "BY CONSTRUCTION". IT WAS SAFE ONLY WHERE THE EXTENSION'S CLAUSE HAPPENED TO CONTAIN
+	// THE TYPE'S** — which is why the two shapes that break it are the two the corpus had never written:
+	//   • an UNCONDITIONAL `extension Pair` on a `where`-constrained type chose the EMPTY clause, so the body
+	//     reserved 0 witness slots while every caller passed 2 — **MEASURED: compiled clean, 2,646 bytes, and
+	//     the binary access-violated after its first line of output**;
+	//   • a clause DISJOINT from the type's (`extension Pair where A is Comparable`) reserved 1 where the body's
+	//     own callee wanted 2 — **MEASURED: `panic at RegisterAllocator.maxon:1913, colorOpForward: use of
+	//     value 3 before it was colored`**, a compiler crash whose cause is nowhere near the allocator.
+	// A witness-slot count is ABI, so a reservation and a supply that disagree is an argument-register
+	// mismatch and not a type error: nothing downstream can notice.
+	//
+	// ⭐ **BOTH REFERENCES UNION, AND NEITHER HAS A REPLACE ANYWHERE.** v1 collects the enclosing TYPE's
+	// constraints unconditionally and then APPENDS the extension's, de-duplicated
+	// (`maxon-selfhosted/Compiler/IR/Maxon/LowerMaxonToStd.maxon:14706-14765`); the bootstrap merges the
+	// extension's clause INTO the target struct's with the type's own entry winning
+	// (`maxon-sharp/Compiler/2-Parser.cs:4899-4914`).
+	//
+	// ⭐⭐ **AND THE UNION IS TAKEN IN ONE PLACE THAT BOTH SIDES CALL** (`typeExtensionWitnessConstraints`),
+	// never computed a second time at the reservation door — the same fact derived twice is the defect this
+	// replaced, not the cure for it. See that function for the order argument and for why it is
+	// declaration-order independent.
 	export function witnessConstraintsOfMethod(callee ByteArray) returns WhereConstraintArray
-		let extensionConstraints = self.extensionMethodConstraintsOf(callee)
-		if not extensionConstraints.isEmpty() 'anExtensionMethod'
-			return extensionConstraints
-		end 'anExtensionMethod'
-
 		match splitQualifiedName(callee) 'q'
 			notQualified then return sharedEmptyMethodWitnessConstraints
-			parts(typeName, _) then return self.structWhereConstraints(typeName)
+			parts(typeName, _) then return self.typeExtensionWitnessConstraints(typeName, extensionConstraints: self.extensionMethodConstraintsOf(callee))
 		end 'q'
 	end 'witnessConstraintsOfMethod'
+
+	// ⭐⭐ **THE WITNESS-SLOT LIST OF A TYPE `typeName` WHOSE METHOD ALSO CARRIES THE EXTENSION CLAUSE
+	// `extensionConstraints` — the ONE derived list the RESERVATION side and the SUPPLY side of the
+	// dictionary-passing ABI both read.** `Parser.openTypeExtensionBodyScope` opens the body with it (so
+	// `witnessParamCountFor` reserves exactly these slots) and `witnessConstraintsOfMethod` answers with it (so
+	// `LowerMaxonToStd.appendWitnessArgs` fills exactly these slots). Both hand it the SAME two inputs — the
+	// extension's target type, and the extension's own clause as `noteTypeExtensionWitnessConstraints` filed it
+	// — so the two lists are not merely equal, they are one call.
+	//
+	// ⭐ **THE TYPE'S OWN CONSTRAINTS COME FIRST, IN DECLARATION ORDER, AND THAT ORDER IS LOAD-BEARING.** A
+	// PLAIN method of the type carries exactly the type's list, so the type's list must be a PREFIX of an
+	// extension method's — that is precisely the premise `LowerMaxonToStd.forwardCallerWitness` rests on when
+	// an extension body drives another method on `self` and forwards slot `i` to slot `i`. Appending the extras
+	// after is the only order that makes every such prefix align by construction rather than by luck. (It was
+	// luck: with the extension's own source order chosen, `extension Pair where A is Equatable and Comparable,
+	// B is Equatable` handed its callee the `A is Comparable` table where `B is Equatable` belonged, and the
+	// program was green only because it never followed slot 1.)
+	//
+	// ⭐ **DE-DUPLICATED AGAINST WHAT IS ALREADY RESERVED**, so an extension that restates one of the type's own
+	// constraints — the shape the replace-rule was accidentally right for — reserves one slot for it and not
+	// two. The scan is against the list being BUILT rather than against the type's alone, so a clause that
+	// repeats itself cannot reserve a slot twice either.
+	//
+	// ⚠ **IT IS ORDER-INDEPENDENT BECAUSE OF WHERE IT IS ASKED FROM, NOT BECAUSE OF A FALLBACK.** Both callers
+	// run after `ProgramSignatures.allFilesFolded`: an extension's header is read by
+	// `Queries.foldExtensionDeclarations`, which waits for every file's declarations for its own older reason
+	// (`extensionTargetOf` cannot say what `extension Pair` even extends until `Pair` is folded), and the real
+	// parse runs later still. So `structWhereConstraints` is complete at both doors and an `extension` written
+	// ABOVE the `type` it extends reserves the same slots as one written below. There is deliberately no
+	// "type's clause not available yet" arm: it would be the second source of truth this function exists to
+	// remove.
+	//
+	// The unconditional arm returns the type's own array rather than a copy of it — the answer for every method
+	// in a program that declares no conditional extension, which is the whole corpus but one spec.
+	export function typeExtensionWitnessConstraints(typeName ByteArray, extensionConstraints WhereConstraintArray) returns WhereConstraintArray
+		let declared = self.structWhereConstraints(typeName)
+		if extensionConstraints.isEmpty() 'unconditional'
+			return declared
+		end 'unconditional'
+
+		var reserved = WhereConstraintArray.create()
+		reserved.append(declared)
+		for constraint in extensionConstraints 'eachExtra'
+			if whereConstraintListReserves(reserved, constraint: constraint) 'alreadyReserved'
+				continue
+			end 'alreadyReserved'
+			reserved.push(constraint)
+		end 'eachExtra'
+
+		return reserved
+	end 'typeExtensionWitnessConstraints'
 
 	// ⭐ The constraints `callee` carries that came from a conditional TYPE EXTENSION rather than from its
 	// type's own declaration — empty for every other method. The same map read as above, asked a DIFFERENT
@@ -13184,17 +13280,101 @@ export type ProgramSignatures
 		return (try self.typeParamOwnerOf(typeNameIdOf(t)) otherwise panic("ProgramSignatures.opaqueTypeParamPosition: type-parameter token {typeNameIdOf(t)} has no owner — `recordStruct` and `recordInterfaceDeclaration` file every declared parameter as the sweep folds, so a token with none was minted inside a declaration neither fold saw")).position
 	end 'opaqueTypeParamPosition'
 
-	// The base struct's field `index` type with the instance's args substituted for the type parameters —
-	// a `typeParameter` field becomes `args[its position]` (the concrete arg), every other field stays. This is
-	// what turns `Box`'s opaque `value as T` into `String` for a `Box with String`, so the cascade can
-	// classify and drop it. Arity was checked at instantiation (E2056), so the position indexes the args in
-	// range.
-	function substituteInstanceFieldType(id GenericInstanceId, index FieldIndex) returns MaxonType
+	// ⭐⭐ **THE INSTANCE VIEW OF A TYPE THE SHARED GENERIC BODY SPELLS IN ITS DECLARATION VIEW — the ONE
+	// substitution, read by every door that meets the two views at once (W25).** shv2 compiles ONE body per
+	// generic type (P1.6-A), so a field, a parameter or a return inside `type HoldA uses T` is written in terms
+	// of `T`, of `Self`, and of instances OVER those (`Array with T`) — and a concrete `HoldA with Num`
+	// receiver fixes every one of them. Three doors need that answer and each used to hold its own, shorter
+	// version of it:
+	//
+	//   • the DROP CASCADE (`substituteInstanceFieldType` below) — what a field holds, so what destroys it;
+	//   • the FIELD READ (`Parser.emitFieldLoad`) — the type of the value a `b.items` produces;
+	//   • the ARGUMENT CHECK (`SemanticCheck.checkArgTypes`) — the type a parameter accepts at this call.
+	//
+	// ⛔ **ALL THREE STOPPED AT A BARE `typeParameter`, AND THE PROGRAM THAT FALLS THROUGH THE GAP IS A LEGAL
+	// ONE (W25).** A field typed through an inner `typealias Items = Array with T` is a `genericInstance`, not a
+	// `typeParameter`, so it was never substituted at all: `b.items` on a `HoldA with Num` kept the shared
+	// body's `Array with T`, and handing it to `adopt(other Items)` on another `HoldA with Num` was
+	// **`E3005: expected 'HoldANum.Items', got 'HoldA.Items'`** — a program handing a value to a parameter of
+	// its own type, refused, while the oracle runs it. The other half of the same gap is worse than a refusal:
+	// two DIFFERENT instances of one base (`HoldA with Num` and `HoldA with String`) both read as `HoldA.Items`,
+	// so the wrong one was ACCEPTED into a field the box then destroys under the other's element type.
+	//
+	// ⭐ **v1 RECURSES AND ITS HEADER NAMES THIS EXACT CASE** — `maxon-selfhosted/Compiler/TypeSystem/
+	// Substitution.maxon:75-78`, *"Recurses into `genericInstance` argument lists so a
+	// `Array with (Pair with Element)` properly becomes `Array with (Pair with Int)` when `Element -> Int`"* —
+	// and re-INTERNS the result (`:189`), because the substituted instance may be a type the program never
+	// spells. Interning is keyed structurally, so the mint is idempotent and two doors substituting the same
+	// pair reach the same `GenericInstanceId`; that identity is what lets the argument check compare them at
+	// all.
+	//
+	// ⚠ **THE `typeParameter` ARM IS GUARDED BY ITS OWNER, WHICH `opaqueTypeParamPosition` ALONE CANNOT BE.**
+	// Since W14 a parameter token identifies `(declaring type, parameter name)`, so `HoldA`'s `U` and `HoldB`'s
+	// `V` are different tokens — and a token belonging to another declaration must pass through UNCHANGED
+	// rather than be indexed into this instance's argument list by position. No caller can reach that today
+	// (a body only ever spells its own parameters), which is exactly why the guard belongs to the function and
+	// not to its callers.
+	//
+	// ⭐ **IT IS INTERNER-FREE, AND THAT IS WHY EVERY CALLER MAY HAND IT ITS OWN FILE'S TYPES.** Both arms key
+	// on a WHOLE-PROGRAM payload — a `typeParameter` carries W14's `(declaring type, parameter name)` digest and
+	// a `genericInstance` carries a registry id — while every arm that would need a name table (`named`,
+	// `structRef`) is one this substitution passes through untouched.
+	export function substituteThroughInstance(t MaxonType, id GenericInstanceId) returns MaxonType
+		let tag = maxonTypeTag(t)
+		if tag == ValueTypeTag.typeParameter 'opaqueFormal'
+			let owner = try self.typeParamOwnerOf(typeNameIdOf(t)) otherwise panic("ProgramSignatures.substituteThroughInstance: type-parameter token {typeNameIdOf(t)} has no owner — `recordStruct` and `recordInterfaceDeclaration` file every declared parameter as the sweep folds, so a token with none was minted inside a declaration neither fold saw")
+			if not owner.declaringTypeName.equals(self.genericInstanceBaseName(id)) 'anotherDeclarationsParameter'
+				return t
+			end 'anotherDeclarationsParameter'
+
+			return self.substitutedInstanceArg(id, position: owner.position)
+		end 'opaqueFormal'
+
+		if tag != ValueTypeTag.genericInstance 'carriesNoDeclarationView'
+			return t
+		end 'carriesNoDeclarationView'
+
+		return self.substituteInstanceArgsThrough(typeNameIdOf(t), through: id)
+	end 'substituteThroughInstance'
+
+	// The `genericInstance` arm of the substitution above: each argument substituted in turn, then the result
+	// RE-INTERNED so `Array with T` under `T -> Num` becomes the one `Array with Num` every other door reaches.
+	//
+	// It returns the ORIGINAL instance when no argument moved, and that early return is what keeps the common
+	// case allocation-free in the two senses that matter: a concrete field type (`Array with Item`) neither
+	// mints a `MaxonType` box nor builds an intern key, and — because the answer is the same object — the field
+	// read's caller can tell "this needed no instance view" from the answer itself rather than from a second
+	// predicate over the same shape.
+	function substituteInstanceArgsThrough(nested GenericInstanceId, through GenericInstanceId) returns MaxonType
+		let args = self.genericInstances.instanceArgs(nested)
+		var substituted = MaxonTypeArray.create()
+		var moved = false
+		for arg in args 'eachArg'
+			let next = self.substituteThroughInstance(arg, id: through)
+			if not maxonTypesDenoteSame(next, b: arg) 'argMoved'
+				moved = true
+			end 'argMoved'
+			substituted.push(next)
+		end 'eachArg'
+
+		if not moved 'noArgumentMoved'
+			return MaxonType.genericInstance(nested)
+		end 'noArgumentMoved'
+
+		// The fixed size travels with the re-intern for `GenericInstanceRegistry.intern`'s stated reason: a
+		// caller re-interning an instance it already holds must carry every component of its key, and the one
+		// silence can lose is this one.
+		return MaxonType.genericInstance(self.genericInstances.intern(self.genericInstances.instanceBaseId(nested), args: substituted, fixedSize: self.genericInstances.instanceFixedSize(nested)))
+	end 'substituteInstanceArgsThrough'
+
+	// The base struct's field `index` type as instance `id` sees it — `substituteThroughInstance` applied to the
+	// declared field type. This is what turns `Box`'s opaque `value as T` into `String` for a `Box with String`,
+	// and `HoldA`'s `items as Items` into `Array with Num` for a `HoldA with Num`, so the cascade can classify
+	// and drop it. Arity was checked at instantiation (E2056), so a type-parameter field's position indexes the
+	// args in range.
+	export function substituteInstanceFieldType(id GenericInstanceId, index FieldIndex) returns MaxonType
 		let fieldType = try self.baseLayoutOf(id).fieldTypes.get(index) otherwise panic("ProgramSignatures.substituteInstanceFieldType: field {index} out of range for instance {id}'s base struct")
-		if maxonTypeTag(fieldType) != ValueTypeTag.typeParameter 'notTypeParam'
-			return fieldType
-		end 'notTypeParam'
-		return self.substitutedInstanceArg(id, position: self.opaqueTypeParamPosition(fieldType))
+		return self.substituteThroughInstance(fieldType, id: id)
 	end 'substituteInstanceFieldType'
 
 	// Instance `id`'s concrete type argument at type-parameter `position` (P1.6-B2) — what a `T`-typed field

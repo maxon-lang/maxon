@@ -1,0 +1,156 @@
+// Test: the-same-field-store-on-a-non-generic-type
+typealias Num = int(i64.min to i64.max)
+typealias NumArray = Array with Num
+
+type HoldConcrete
+	export var items as NumArray
+	export static function create(seed Num) returns Self
+		var arr = NumArray.create()
+		arr.resize(1)
+		try arr.set(0, value: seed) otherwise panic("seeded slot 0 must exist after resize(1)")
+		return Self{items: arr}
+	end 'create'
+	export function adopt(other NumArray)
+		self.items = other
+	end 'adopt'
+	export function isSingle() returns bool
+		return self.items.count() == 1
+	end 'isSingle'
+end 'HoldConcrete'
+
+function main() returns ExitCode
+	let b = HoldConcrete.create(7)
+	var a = HoldConcrete.create(1)
+	a.adopt(b.items)
+	if a.isSingle() 'ok'
+		print("ok\n")
+	end 'ok'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @HoldConcrete.create {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegReg rbx, rcx
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __arr_create
+    x64.movRegReg r12, r8
+    x64.movRegImm32 rdx, 1
+    x64.movRegReg rcx, r12
+    x64.callDirect __arr_resize
+    x64.movRegImm32 rdx, 0
+    x64.movRegReg rcx, r12
+    x64.movRegReg rax, rbx
+    x64.callDirect __arr_set
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok:
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeBaseDispReg.word64 [r8 + 0], r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @HoldConcrete.adopt {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegReg rbx, rcx
+    x64.movRegReg r12, rdx
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.callDirect __arr_decref
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_incref
+    x64.storeBaseDispReg.word64 [rbx + 0], r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @HoldConcrete.isSingle {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
+    x64.callDirect __arr_count
+    x64.cmpRegImm32 r8, 1
+    x64.setccReg equal, r8
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.movRegImm32 rcx, 7
+    x64.callDirect HoldConcrete.create
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rcx, 1
+    x64.callDirect HoldConcrete.create
+    x64.movRegReg r12, r8
+    x64.loadRegBaseDisp.word64 rdx, [rbx + 0]
+    x64.movRegReg rcx, r12
+    x64.callDirect HoldConcrete.adopt
+    x64.movRegReg rcx, r12
+    x64.callDirect HoldConcrete.isSingle
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, ok
+    x64.jmp ifcont
+  ok:
+    x64.leaRegRdata rcx, [rip + __str_rec_2]
+    x64.callDirect __print_string
+    x64.jmp ifcont
+  ifcont:
+    x64.movRegImm32 r13, 0
+    x64.movRegReg rcx, r12
+    x64.callDirect __destruct_HoldConcrete
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_HoldConcrete
+    x64.movRegReg r8, r13
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

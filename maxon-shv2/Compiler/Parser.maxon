@@ -11358,7 +11358,7 @@ export type Parser
 			// the hidden witness the constraint reserves — the same two mechanisms a `where` clause written on
 			// the `type` itself drives, reached through the same two fields. It installs NO substitution: its
 			// parameters are bound per INSTANTIATION, so there is no single binding to substitute.
-			typeExtension then return self.openTypeExtensionBodyScope(header)
+			typeExtension then return self.openTypeExtensionBodyScope(header, index: index)
 		end 'target'
 
 		// ⚠ **BOTH COLUMNS OR NEITHER, and the length agreement is the gate.** The interface's associated names
@@ -11379,9 +11379,20 @@ export type Parser
 
 	// The TYPE-extension half of the door above, split out so the interface half reads as one path rather than
 	// as an early return threaded through a `match` arm.
-	function openTypeExtensionBodyScope(header ExtensionHeader)
+	//
+	// ⭐⭐ **THE WITNESS SLOTS THIS BODY RESERVES ARE THE ONES `ProgramSignatures.witnessConstraintsOfMethod`
+	// ANSWERS WITH — the SAME call, not a second derivation of the same rule (W23).** It used to install
+	// `header.constraints`, the extension's own clause, while the supply side fell back to the TYPE's `where`
+	// clause; the two lists agreed only when the extension's happened to contain the type's, and where they
+	// did not the body reserved fewer argument registers than every caller filled. See
+	// `typeExtensionWitnessConstraints` for the two measured crashes and for why the union is
+	// declaration-order independent.
+	//
+	// `header.nameTok.value` IS the extended type's name — the type arm of `extensionTargetOf` is taken only
+	// when that name resolves in the struct registry, and the single conformer it publishes is that same name.
+	function openTypeExtensionBodyScope(header ExtensionHeader, index ProgramSignatures)
 		self.enclosingTypeParams = extensionTargetParamNames(header.target)
-		self.enclosingWhereConstraints = header.constraints
+		self.enclosingWhereConstraints = index.typeExtensionWitnessConstraints(header.nameTok.value, extensionConstraints: header.constraints)
 	end 'openTypeExtensionBodyScope'
 
 	// What `conformer` binds the extended interface's associated types to — the same column
@@ -11418,9 +11429,15 @@ export type Parser
 		end 'conformerLayout'
 	end 'extensionConformerVerdict'
 
-	// File the witness constraints a TYPE-extension method carries, under the qualified name a call to it
-	// resolves to. A no-op for every other extension: an interface extension's clause is a filter (its methods
-	// carry no witnesses), and an unconditional extension has no constraints to carry.
+	// File the witness constraints a TYPE-extension method adds ON TOP of its target type's own, under the
+	// qualified name a call to it resolves to. A no-op for every other extension: an interface extension's
+	// clause is a filter (its methods carry no witnesses), and an UNCONDITIONAL extension adds none.
+	//
+	// ⚠ **"ADDS NONE" IS NOT "CARRIES NONE" (W23).** An unconditional extension on a `where`-constrained type
+	// carries that type's witnesses like every other instance method of it; there is simply nothing EXTRA for
+	// this to file, and `ProgramSignatures.typeExtensionWitnessConstraints` recovers the type's half from the
+	// type. Reading this early return as "no witnesses" is exactly the mistake that made the body reserve zero
+	// argument registers while its callers filled two.
 	function noteTypeExtensionWitnessConstraints(index ProgramSignatures, header ExtensionHeader, conformer ByteArray, methodName ByteArray)
 		if header.constraints.isEmpty() 'unconditional'
 			return
@@ -35757,7 +35774,14 @@ export type Parser
 	//     argument is opaque and the witness is FORWARDED from the caller's own slots, so the caller must
 	//     carry the SAME constraints in the SAME order. Inside the extension's own body it does, by
 	//     construction (`openExtensionBodyScope` installs that very list); inside a plain method of the same
-	//     type it carries none, and the forward would read a slot that was never reserved.
+	//     type it carries only the type's own, and the forward would read a slot that was never reserved.
+	//
+	// ⚠ **THE TWO LISTS THIS FUNCTION HOLDS ARE DIFFERENT LISTS AND MUST STAY SO (W23).** The one it VALIDATES
+	// is the extension's own clause — the constraints nothing else checks, and the clause a refusal quotes back
+	// at the author. The one the OPAQUE arm compares against is the callee's WHOLE witness list
+	// (`witnessConstraintsOfMethod`: the type's constraints then the extension's extras), because that is what
+	// the forward is index-aligned to. Comparing against the extension's clause alone was right only while the
+	// two coincided, i.e. only for a target type that declares no `where` of its own.
 	function requireReceiverSatisfiesExtensionConstraints(typeName ByteArray, callee ByteArray, receiver ValueId, memberTok Token) throws ParseError
 		let constraints = self.signatures.extensionMethodConstraintsOf(callee)
 		if constraints.isEmpty() 'notAConditionalTypeExtensionMethod'
@@ -35766,7 +35790,7 @@ export type Parser
 
 		let clause = renderWhereConstraints(constraints, paramNames: self.structTypeParamNames(typeName))
 		if self.tagOf(receiver) != ValueTypeTag.genericInstance 'opaqueReceiver'
-			if whereConstraintsMatch(self.enclosingWhereConstraints, other: constraints) 'callerCarriesThem'
+			if whereConstraintsMatch(self.enclosingWhereConstraints, other: self.signatures.witnessConstraintsOfMethod(callee)) 'callerCarriesThem'
 				return
 			end 'callerCarriesThem'
 
@@ -42812,7 +42836,7 @@ export type Parser
 		// VALUE one line below, under the same shared condition; it has to happen here as well because the
 		// walk decides where to go NEXT from the type, before any value exists.
 		let declaredFieldType = self.signatures.fieldTypeOf(layout, index: index, into: self.artifact.typeNames)
-		let fieldType = self.instanceSubstitutedType(box, opaque: declaredFieldType) if self.readsTypeParameterThroughInstance(box, declared: declaredFieldType) else declaredFieldType
+		let fieldType = self.slotTypeThroughReceiver(box, declared: declaredFieldType)
 		let nextLayout = try self.structLayoutOfField(layout, fieldTok: fieldTok, fieldType: fieldType)
 		let nextBox = self.emitFieldLoad(box, layout: layout, index: index, range: SourceRange.between(baseTok, last: fieldTok))
 		return try self.resolveFieldChainFrom(nextBox, layout: nextLayout, baseTok: baseTok, baseBinding: baseBinding)
@@ -43137,7 +43161,7 @@ export type Parser
 	// ⭐⭐ **THE TYPE A WRITE THROUGH *THIS BOX* ACTUALLY STORES — the ONE derivation, read by the TYPE CHECK
 	// and by the STORE.** A field's declared type is the SHARED layout's, so an opaque `export var value as T`
 	// answers `typeParameter` however concrete the receiver is; only the box says what `T` stands for. A
-	// `genericInstance` box binds it (`instanceSubstitutedType`, the same door `emitFieldLoad` retypes a READ
+	// `genericInstance` box binds it (`slotTypeThroughReceiver`, the same door `emitFieldLoad` retypes a READ
 	// through), a `structRef` box is the shared generic body and leaves it opaque.
 	//
 	// ⛔ **IT IS A HELPER BECAUSE THE STORE ALREADY DID THIS AND THE CHECK DID NOT, AND THAT SPLIT WAS A WILD
@@ -43149,17 +43173,14 @@ export type Parser
 	// `b.value.text` exited **0xC0000005** — where the bootstrap refuses it (`E3005 cannot assign a value of
 	// type 'Other' to field 'value' of 'LabelBox', which holds 'Label'`). Two derivations of one fact, and
 	// nothing made them agree; now there is one and both read it.
+	//
+	// ⚠ **AND IT IS THE READ'S DOOR VERBATIM SINCE W25**, where it used to carry its own `typeParameter`-only
+	// copy of the condition. That copy had the read's blind spot exactly: a field typed through an inner
+	// `typealias Items = Array with T` is a `genericInstance`, so the store's verdict was taken against
+	// `Array with T` for a box that holds `Array with Num` — the same two-derivations-of-one-fact shape the
+	// paragraph above records, one declaration form over.
 	function storedFieldType(box ValueId, layout StructLayout, index FieldIndex) returns MaxonType
-		let declared = self.signatures.fieldTypeOf(layout, index: index, into: self.artifact.typeNames)
-		if maxonTypeTag(declared) != ValueTypeTag.typeParameter 'notOpaque'
-			return declared
-		end 'notOpaque'
-
-		if self.tagOf(box) != ValueTypeTag.genericInstance 'boxBindsNothing'
-			return declared
-		end 'boxBindsNothing'
-
-		return self.instanceSubstitutedType(box, opaque: declared)
+		return self.slotTypeThroughReceiver(box, declared: self.signatures.fieldTypeOf(layout, index: index, into: self.artifact.typeNames))
 	end 'storedFieldType'
 
 	function emitFieldWrite(box ValueId, layout StructLayout, index FieldIndex, value ValueId, argBareLocal bool, anchor Token, range SourceRange) throws ParseError
@@ -43877,15 +43898,17 @@ export type Parser
 			self.pairInterfaceWitness(result, witness: self.emitIndirectLoad(MaxonType.integer, box: box, offset: offset + InterfaceWitnessHalfOffset, storageType: MaxonType.integer, range: range))
 		end 'existentialField'
 
-		// ⭐ **RETYPE-OF-T AT A CONCRETE FIELD READ (P1.6-B2).** A `b.value` read on a concrete `Box with String`
-		// loads a field the shared body typed opaque `T` (`typeParameter`). Retype the result to the instance's
-		// SUBSTITUTED concrete argument (`String`) so it is usable as what it actually is — but ONLY the type
-		// moves: the read is a BORROW (`emitFieldLoad` never marks it owned-heap), so the box keeps its +1 and
-		// drops the value at ITS scope exit; a `let s = b.value` re-reads a live pointer and is never
-		// double-dropped. `adoptType` re-interns any named argument into this file's interner.
-		if self.readsTypeParameterThroughInstance(box, declared: declared) 'concreteTypeParamRead'
-			self.retypeValue(result, valueType: self.instanceSubstitutedType(box, opaque: declared))
-		end 'concreteTypeParamRead'
+		// ⭐ **RETYPE AT A CONCRETE FIELD READ (P1.6-B2, widened by W25).** A `b.value` read on a concrete
+		// `Box with String` loads a field the shared body typed opaque `T`, and a `b.items` read on a
+		// `HoldA with Num` loads one it typed `Array with T`. Retype the result to what the instance FIXES it to
+		// (`String`, `Array with Num`) so it is usable as what it actually is — but ONLY the type moves: the read
+		// is a BORROW (`emitFieldLoad` never marks it owned-heap), so the box keeps its +1 and drops the value at
+		// ITS scope exit; a `let s = b.value` re-reads a live pointer and is never double-dropped. The
+		// substitution ends in `adoptType`, which re-interns any named argument into this file's interner.
+		let fixedByTheInstance = self.slotTypeThroughReceiver(box, declared: declared)
+		if not maxonTypesDenoteSame(fixedByTheInstance, b: declared) 'concreteSlotRead'
+			self.retypeValue(result, valueType: fixedByTheInstance)
+		end 'concreteSlotRead'
 
 		// ⭐ **RECORD A BOXED-UNION-CANDIDATE FIELD READ**, so a THROW of it can MOVE it out of the container
 		// (`emitThrowError` nulls this slot — shv2's only transfer for a borrowed error). Gated on the `named`
@@ -43920,15 +43943,58 @@ export type Parser
 		return result
 	end 'emitFieldLoad'
 
-	// ⭐ **IS THIS SLOT'S DECLARED TYPE THE SHARED GENERIC BODY'S `T`, READ THROUGH A CONCRETE INSTANCE?** —
-	// the ONE condition under which `instanceSubstitutedType` has anything to say, asked by the two doors that
-	// each need the answer at a different moment: `emitFieldLoad` retypes the loaded VALUE, and
-	// `resolveFieldChainFrom` needs the TYPE one step earlier, to decide what the next hop addresses (A4j).
-	// Written out twice it was one condition with two homes; the second home did not exist yet, and the
-	// spelling it would have needed is exactly what the chain walk was missing.
-	function readsTypeParameterThroughInstance(box ValueId, declared MaxonType) returns bool
-		return maxonTypeTag(declared) == ValueTypeTag.typeParameter and self.tagOf(box) == ValueTypeTag.genericInstance
-	end 'readsTypeParameterThroughInstance'
+	// ⭐⭐ **WHAT A SLOT DECLARED IN A SHARED GENERIC BODY ACTUALLY HOLDS WHEN IT IS READ THROUGH A CONCRETE
+	// INSTANCE — the ONE answer, for the two doors that each need it at a different moment:** `emitFieldLoad`
+	// retypes the loaded VALUE, and `resolveFieldChainFrom` needs the TYPE one step earlier, to decide what the
+	// next hop addresses (A4j). Written out twice it was one condition with two homes.
+	//
+	// ⛔ **IT USED TO BE A PREDICATE OVER THE BARE `typeParameter` TAG ALONE (W25), and that is exactly the tag
+	// an inner `typealias Items = Array with T` does NOT carry.** A field typed `Items` is a `genericInstance`,
+	// so `b.items` on a `HoldA with Num` kept the declaration view's `Array with T` — refused where it should
+	// have been accepted (`E3005: expected 'HoldANum.Items', got 'HoldA.Items'`), and accepted where a
+	// `HoldA with String`'s items should have been refused. The question is not "is this the body's `T`", it is
+	// "does this instance FIX this type", and only the substitution can answer that.
+	//
+	// It returns `declared` UNCHANGED — the same object — when the receiver is not a concrete instance or when
+	// the instance fixes nothing in it, so a caller distinguishes "no instance view" by asking
+	// `maxonTypesDenoteSame` of what it passed in. That is one fact (the substitution) read two ways, rather
+	// than a predicate that has to agree with a substitution it does not call.
+	//
+	// ⭐⭐ **THE CROSSING BACK IS `resolvedSlotType` AND NOT A BARE `adoptType` (A4i) — AN INSTANCE'S TYPE
+	// ARGUMENT IS A SLOT LIKE ANY OTHER, RECORDED BEFORE THE ALIAS REGISTRIES EXISTED.** The DECLARATION SWEEP
+	// interns `Box with Point`'s argument before anything can say what `Point` denotes, so it comes back here as
+	// a bare `named` for exactly the reason a struct FIELD's and an `Array` ELEMENT's declared types do — and
+	// `adoptType` re-interns the NAME while leaving the tag alone. That is not a cosmetic loss: `named` reads as
+	// an INTEGER (`tagIsIntegral`), so this door — the ONE place a `T`-typed read learns what `T` is — would
+	// hand back a type that says "int" for a value that is a POINTER.
+	//
+	// ⚠ **MEASURED, THREE FACES OF THIS ONE LINE, against the runnable oracle** (which compiles and runs all
+	// three): `let q = b.value` on a `Box with Point` then
+	//   • `q + 0` **COMPILED AND PRINTED THE RAW HEAP ADDRESS** — arithmetic accepted against a pointer, and
+	//     the worst of the three because it is the one that does not refuse (the oracle says E2004);
+	//   • `q.x` was `E2015 … 'q', which is declared 'int' and not a struct type`;
+	//   • with a GENERIC-ALIAS argument (`Holder with IntBox`) it was `E3011 Unknown type 'IntBox'`, said of
+	//     a name the program declares one line above.
+	// One decision, one cause, one door — the struct arm and the generic-alias arm of `declaredSlotType` are
+	// literally the two the three faces split along.
+	//
+	// ⚠ **THE SUBSTITUTION ITSELF IS ASKED IN THE INDEX'S SPACE, and only the ANSWER crosses.** `typeIsManaged`
+	// and every other `ProgramSignatures` classifier must be asked of an index-space type, never of one already
+	// re-interned into this file's table — the two interners assign ids in their own insertion orders, so such
+	// an answer is right exactly while they coincide and silently wrong when they drift (OPEN #56). That is why
+	// the two steps stay two.
+	function slotTypeThroughReceiver(box ValueId, declared MaxonType) returns MaxonType
+		if self.tagOf(box) != ValueTypeTag.genericInstance 'notAConcreteInstance'
+			return declared
+		end 'notAConcreteInstance'
+
+		let substituted = self.signatures.substituteThroughInstance(declared, id: self.valueNameId(box))
+		if maxonTypesDenoteSame(substituted, b: declared) 'theInstanceFixesNothingHere'
+			return declared
+		end 'theInstanceFixesNothingHere'
+
+		return self.resolvedSlotType(substituted)
+	end 'slotTypeThroughReceiver'
 
 	// ⭐ **THE ONE `loadIndirect` EMIT** — and it now IS the one, which it was not when it first claimed
 	// to be. A field read (`p.x`), a union tag load, a union payload read, a capturing closure's
@@ -47990,62 +48056,27 @@ export type Parser
 	//
 	// ⚠ **The guard is gone; the RULE it was written next to is not.** `typeIsManaged` and every other
 	// `ProgramSignatures` classifier must be asked of the INDEX-SPACE type, never of one
-	// `instanceSubstitutedType` has already re-interned into this file's table — the two interners assign ids
+	// `slotTypeThroughReceiver` has already re-interned into this file's table — the two interners assign ids
 	// in their own insertion orders, so such an answer is right exactly while they coincide and silently
-	// wrong when they drift (OPEN #56, and the reason `substitutedInstanceArg` and `adoptType` are two
-	// steps). That is why the substitution below goes through `instanceSubstitutedType` and not a bare
-	// `adoptType`: `declaredSlotType` re-tags a struct / generic-alias / function name and leaves a union's
-	// `named` alone, which is what makes `Box with Shape` pick `over(x Shape)` rather than reading the box
-	// pointer as an integer (`generic-managed-union-return-overload-selection` — exit 25 where 7 is correct,
-	// the failure this door's predecessor MEASURED before A4i/A4k gave it that cascade).
+	// wrong when they drift (OPEN #56, and the reason the substitution and `adoptType` are two steps). That is
+	// why the substitution below goes through `slotTypeThroughReceiver` and not a bare `adoptType`:
+	// `declaredSlotType` re-tags a struct / generic-alias / function name and leaves a union's `named` alone,
+	// which is what makes `Box with Shape` pick `over(x Shape)` rather than reading the box pointer as an
+	// integer (`generic-managed-union-return-overload-selection` — exit 25 where 7 is correct, the failure this
+	// door's predecessor MEASURED before A4i/A4k gave it that cascade).
+	//
+	// ⚠ **AND ITS OWN `typeParameter`-ONLY GATE IS GONE WITH W25**, for the reason the read door's was: a method
+	// declared `returns Items` inside `type HoldA uses T` hands back an `Array with T` that the receiver has
+	// already fixed to `Array with Num`, and a gate keyed on the bare opaque tag cannot see it.
 	function retypeOpaqueReturnValue(result ValueId, receiver ValueId, inner MaxonType) returns bool
-		if maxonTypeTag(inner) != ValueTypeTag.typeParameter 'notOpaque'
+		let fixedByTheInstance = self.slotTypeThroughReceiver(receiver, declared: inner)
+		if maxonTypesDenoteSame(fixedByTheInstance, b: inner) 'theInstanceFixesNothingHere'
 			return false
-		end 'notOpaque'
+		end 'theInstanceFixesNothingHere'
 
-		self.retypeValue(result, valueType: self.instanceSubstitutedType(receiver, opaque: inner))
+		self.retypeValue(result, valueType: fixedByTheInstance)
 		return true
 	end 'retypeOpaqueReturnValue'
-
-	// The CONCRETE type a generic-instance receiver binds an opaque `T` to, IN THE INDEX'S OWN INTERNER —
-	// where `ProgramSignatures` classifies it (`typeIsManaged` and every other `named`-resolving query). The
-	// one spelling of the lookup itself; `instanceSubstitutedType` is this plus the crossing into this file's
-	// interner, so neither space has a second speller and no caller can pick the wrong one by accident.
-	function instanceSubstitutedIndexType(receiver ValueId, opaque MaxonType) returns MaxonType
-		return self.signatures.substitutedInstanceArg(self.valueNameId(receiver), position: self.signatures.opaqueTypeParamPosition(opaque))
-	end 'instanceSubstitutedIndexType'
-
-	// The same type re-interned into THIS FILE's table, which is what a value's `valueNameIds` column and
-	// every `maxonTypeName` render against. Shared by the field read (`emitFieldLoad`) and the method return
-	// above, so the adoption rides here rather than at each site.
-	//
-	// ⭐⭐ **THROUGH `declaredSlotType` AND NOT A BARE `adoptType` (A4i) — AN INSTANCE'S TYPE ARGUMENT IS A
-	// SLOT LIKE ANY OTHER, RECORDED BEFORE THE ALIAS REGISTRIES EXISTED.** The DECLARATION SWEEP interns
-	// `Box with Point`'s argument before anything can say what `Point` denotes, so it arrives here as a bare
-	// `named` for exactly the reason a struct FIELD's and an `Array` ELEMENT's declared types do — and
-	// `adoptType` re-interns the NAME while leaving the tag alone. That is not a cosmetic loss: `named` reads
-	// as an INTEGER (`tagIsIntegral`), so this door — the ONE place a `T`-typed read learns what `T` is —
-	// handed back a type that says "int" for a value that is a POINTER.
-	//
-	// ⚠ **MEASURED, THREE FACES OF THIS ONE LINE, against the runnable oracle** (which compiles and runs all
-	// three): `let q = b.value` on a `Box with Point` then
-	//   • `q + 0` **COMPILED AND PRINTED THE RAW HEAP ADDRESS** — arithmetic accepted against a pointer, and
-	//     the worst of the three because it is the one that does not refuse (the oracle says E2004);
-	//   • `q.x` was `E2015 … 'q', which is declared 'int' and not a struct type`;
-	//   • with a GENERIC-ALIAS argument (`Holder with IntBox`) it was `E3011 Unknown type 'IntBox'`, said of
-	//     a name the program declares one line above.
-	// One decision, one cause, one door — the struct arm and the generic-alias arm of `declaredSlotType` are
-	// literally the two the three faces split along.
-	//
-	// `slotScopeFilePath` is THIS FILE for the `Array` ELEMENT's reason and not the struct FIELD's: an
-	// instance is declared in no file, so it has no declaring one to ask, and what it has is the file its
-	// `giid` was already range-scoped FOR (`genericAliasInstanceFrom(…, readerFilePath: self.filePath)` at
-	// the receiver's own mint). Passing anything else would let an argument disagree with the very instance
-	// it was read out of. `declaredSlotType` ends in `adoptType`, so the crossing this function exists for
-	// is unchanged for every argument that needs no re-tag.
-	function instanceSubstitutedType(receiver ValueId, opaque MaxonType) returns MaxonType
-		return self.resolvedSlotType(self.instanceSubstitutedIndexType(receiver, opaque: opaque))
-	end 'instanceSubstitutedType'
 
 	// ⭐ **A CALL ARGUMENT MEETS THE PARAMETER'S DECLARED RANGE (P1.9), and this is the door that used to
 	// let it through in silence** — `clamp(101)` ran the callee with `p = 101` and the body observed

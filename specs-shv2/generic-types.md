@@ -3404,9 +3404,25 @@ display rule, which needed no change once the two types stopped sharing an insta
 
 The refusal itself is correct in both orders: an `Array` of `Num` and an `Array` of `String` are
 different types. Only the NAME was wrong.
+
+⚠ **THE `got` SIDE MOVED AT W25, FROM THE DECLARATION VIEW TO THE INSTANCE VIEW, AND THE PAIR STILL
+MEASURES WHAT IT WAS BUILT TO MEASURE.** `b.items` on a `HoldB with String` no longer keeps the shared
+body's `Array with V` — it is substituted to the type the receiver actually fixes, `Array with String` — so
+the sentence names that type by the `typealias` the program declares for it (`Strs`) instead of by the
+inner alias of the declaration it was read through (`HoldB.Items`). The property the pair exists for is
+untouched: the two orders must still print ONE byte-identical sentence, and a compiler that lets
+declaration order pick the name fails exactly one of them.
+
+⚠ `Strs` is declared here ON PURPOSE, in both cases identically. Without it the program names
+`Array with String` nowhere, and `instanceDisplayName`'s first-declaration fallback then reaches into
+STDLIB and quotes `BuildConfig.StringArray` — a non-exported inner alias of a type this program has never
+heard of. That fallback is not W25's: it reproduces on the merge base for a bare `total(["a", "b"])`, and
+it is reported as its own finding rather than pinned here, because pinning it would couple this case to a
+stdlib private name.
 ```maxon
 typealias Num = int(0 to 1000)
 typealias Nums = Array with Num
+typealias Strs = Array with String
 
 type HoldA uses U
 	typealias Items = Array with U
@@ -3440,11 +3456,13 @@ typealias HoldBStr = HoldB with String
 function main() returns ExitCode
 	let a = HoldANum.of(42)
 	let b = HoldBStr.of("hello")
+	var s = Strs.create()
+	s.push("names the type the refusal quotes")
 	return a.total(b.items)
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:37:9: argument type mismatch for 'other': expected 'Nums', got 'HoldB.Items'
+error E3005: <fragment>:40:9: argument type mismatch for 'other': expected 'Nums', got 'Strs'
 ```
 
 <!-- test: error.a-type-parameter-belongs-to-the-type-that-declares-it-swapped -->
@@ -3455,6 +3473,7 @@ difference between the two cases, and therefore the only thing the pair can be m
 ```maxon
 typealias Num = int(0 to 1000)
 typealias Nums = Array with Num
+typealias Strs = Array with String
 
 type HoldB uses V
 	typealias Items = Array with V
@@ -3488,9 +3507,108 @@ typealias HoldBStr = HoldB with String
 function main() returns ExitCode
 	let a = HoldANum.of(42)
 	let b = HoldBStr.of("hello")
+	var s = Strs.create()
+	s.push("names the type the refusal quotes")
 	return a.total(b.items)
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:37:9: argument type mismatch for 'other': expected 'Nums', got 'HoldB.Items'
+error E3005: <fragment>:40:9: argument type mismatch for 'other': expected 'Nums', got 'Strs'
+```
+
+<!-- test: an-inner-alias-field-crosses-into-a-parameter-of-its-own-instance -->
+⭐⭐ **THE LEGAL COUNTERPART OF THE PAIR ABOVE — AND IT WAS REFUSED (W25).** The two cases above pin that
+`HoldA`'s `Items` and `HoldB`'s `Items` are DIFFERENT types and a diagnostic must say which. This one pins
+the other half of that sentence: **`HoldA`'s `Items` and `HoldA`'s `Items` are the SAME type**, so a value
+read out of one `HoldA with Num` may be handed to a parameter of another one. It was
+**`E3005: argument type mismatch for 'other': expected 'HoldANum.Items', got 'HoldA.Items'`** — a program
+handing a value to a parameter of its own type, refused, with a sentence naming one type twice. The oracle
+builds it, runs it and prints `ok`.
+
+⚠ **THE MECHANISM IS THE SAME DECLARATION-VIEW/INSTANCE-VIEW SPLIT the extension crash is made of**, one
+surface over: substitution stopped at a bare `typeParameter`, so a field whose declared type is a generic
+INSTANCE (`Array with T`, reached through the inner `typealias Items`) was never substituted at all and
+`b.items` kept the shared body's opaque `Array with T` where the receiver had already fixed it to
+`Array with Num`. The NON-generic control is the case below: the identical store on a plain `type` compiled
+and ran throughout, which is what says the store is ownership-legal and this was purely a substitution
+failure.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type HoldA uses T
+	typealias Items = Array with T
+	export var items as Items
+	export static function create(seed T) returns Self
+		var arr = Items.create()
+		arr.resize(1)
+		try arr.set(0, value: seed) otherwise panic("seeded slot 0 must exist after resize(1)")
+		return Self{items: arr}
+	end 'create'
+	export function adopt(other Items)
+		self.items = other
+	end 'adopt'
+	export function isSingle() returns bool
+		return self.items.count() == 1
+	end 'isSingle'
+end 'HoldA'
+
+typealias HoldANum = HoldA with Num
+
+function main() returns ExitCode
+	let b = HoldANum.create(7)
+	var a = HoldANum.create(1)
+	a.adopt(b.items)
+	if a.isSingle() 'ok'
+		print("ok\n")
+	end 'ok'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+ok
+```
+
+<!-- test: the-same-field-store-on-a-non-generic-type -->
+The one-variable CONTROL of the case above: the identical program with the type parameter removed and the
+array alias hoisted to file scope, so nothing is substituted and nothing can fail to be. It compiled and
+ran on the merge base, which is what attributes the refusal above to the substitution and not to the store,
+to the array's ownership, or to `adopt`'s signature.
+```maxon
+typealias Num = int(i64.min to i64.max)
+typealias NumArray = Array with Num
+
+type HoldConcrete
+	export var items as NumArray
+	export static function create(seed Num) returns Self
+		var arr = NumArray.create()
+		arr.resize(1)
+		try arr.set(0, value: seed) otherwise panic("seeded slot 0 must exist after resize(1)")
+		return Self{items: arr}
+	end 'create'
+	export function adopt(other NumArray)
+		self.items = other
+	end 'adopt'
+	export function isSingle() returns bool
+		return self.items.count() == 1
+	end 'isSingle'
+end 'HoldConcrete'
+
+function main() returns ExitCode
+	let b = HoldConcrete.create(7)
+	var a = HoldConcrete.create(1)
+	a.adopt(b.items)
+	if a.isSingle() 'ok'
+		print("ok\n")
+	end 'ok'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+ok
 ```
