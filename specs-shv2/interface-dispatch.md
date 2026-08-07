@@ -2886,3 +2886,258 @@ end 'main'
 ```stdout
 v=23
 ```
+
+### A witness impl that reaches STDLIB, through every route that builds a table
+
+A witness table's method slots are `.rdata` relocations, so the implementation each one names is named
+by no `call` anywhere in the module. The Maxon-tier reachability walk that decides which stdlib bodies
+this compile even BUILDS (`StdlibSource.reachableMaxonFunctionNames`) therefore cannot see them — and
+when a requirement implementation's body calls a stdlib function, that function is filed unreachable
+while dead-function elimination, which DOES follow the relocations, reaches it. The two derivations
+disagree and the compiler PANICS (`requireUnreachableStdlibStayedDead`).
+
+`print` is why this is pinned and not merely noted. The hole predates `print` becoming an ordinary
+`stdlib/Print.maxon` call — substituting `sleep(1)` panics identically — but *a witness impl that
+prints* is among the commonest shapes in the language, where *a witness impl that sleeps* is exotic.
+
+⚠ **THESE ARE THREE ROUTES, NOT THREE SPELLINGS OF ONE.** `LowerMaxonToStd.ensureWitnessTable` has three
+callers and only the first involves a dispatch, which is exactly how the first fix was wrong: it keyed
+on the `witnessDispatch` op and left the other two panicking. The second fix was wrong the other way —
+keyed on a signature, it credited every conformance in the program, including every LISTED STDLIB
+module's, and cost a boxing program **+81% allocations** and 400 emitted bytes. What holds is the
+CONFORMER: a witness table for `T` needs a `T` VALUE, and a `T` value needs a reached function OF `T`.
+
+⚠⚠ **THE CONFORMER'S FIELD IS AN INT ON PURPOSE — DO NOT "IMPROVE" IT TO A `String`.** A conformer with
+a MANAGED field is released through the witness header's `destroyFunc@8`, another `.rdata` edge, and
+THAT destructor's own transitive runtime need is never declared: `panic … resolveCallFixups: call to
+unknown function '__str_decref'`. MEASURED on the merge base as well as here, on a program whose witness
+impl calls no stdlib at all — so it is a DIFFERENT, pre-existing defect, and a `String` field here would
+hide these three cases behind it. (It is itself hidden whenever anything else in the program
+interpolates, which is why it is rarely met.)
+
+The DISPATCHED route — the table is built, and jumped through.
+
+<!-- test: witness-impl-reaching-stdlib-when-dispatched -->
+```maxon
+typealias Tag = int(0 to 100)
+
+interface Printer
+	function show()
+end 'Printer'
+
+type Thing implements Printer
+	let label as Tag
+
+	export static function create(label Tag) returns Self
+		return Self{label: label}
+	end 'create'
+
+	export function show()
+		print("shown: {label}\n")
+	end 'show'
+end 'Thing'
+
+type Holder
+	export let p as Printer
+	export let n as ExitCode
+
+	export static function create(p Printer, n ExitCode) returns Self
+		return Self{p: p, n: n}
+	end 'create'
+end 'Holder'
+
+function main() returns ExitCode
+	let h = Holder.create(Thing.create(7), n: 3 as ExitCode)
+	h.p.show()
+	return h.n
+end 'main'
+```
+```exitcode
+3
+```
+```stdout
+shown: 7
+```
+
+The WIDENED-BUT-NEVER-DISPATCHED route. The same program with the one dispatch removed — the table is
+still built and every slot still relocated, so `Thing.show` is still live code the walk must credit.
+Whether anything ever jumps through a table is a separate question from whether one exists.
+
+<!-- test: witness-impl-reaching-stdlib-when-only-boxed -->
+```maxon
+typealias Tag = int(0 to 100)
+
+interface Printer
+	function show()
+end 'Printer'
+
+type Thing implements Printer
+	let label as Tag
+
+	export static function create(label Tag) returns Self
+		return Self{label: label}
+	end 'create'
+
+	export function show()
+		print("never shown\n")
+	end 'show'
+end 'Thing'
+
+type Holder
+	let p as Printer
+	export let n as ExitCode
+
+	export static function create(p Printer, n ExitCode) returns Self
+		return Self{p: p, n: n}
+	end 'create'
+end 'Holder'
+
+function main() returns ExitCode
+	let h = Holder.create(Thing.create(7), n: 3 as ExitCode)
+	return h.n
+end 'main'
+```
+```exitcode
+3
+```
+```stdout
+```
+
+The RETURN route. A widening has exactly two SITES in the language — a call argument and a return — and
+this is the other one: no interface-typed parameter appears anywhere, so a rule keyed on parameters
+alone would miss it.
+
+<!-- test: witness-impl-reaching-stdlib-through-a-returned-existential -->
+```maxon
+typealias Tag = int(0 to 100)
+
+interface Printer
+	function show()
+end 'Printer'
+
+type Thing implements Printer
+	let label as Tag
+
+	export static function create(label Tag) returns Self
+		return Self{label: label}
+	end 'create'
+
+	export function show()
+		print("never shown\n")
+	end 'show'
+end 'Thing'
+
+function box() returns Printer
+	return Thing.create(7)
+end 'box'
+
+function main() returns ExitCode
+	let p = box()
+	return 3
+end 'main'
+```
+```exitcode
+3
+```
+```stdout
+```
+
+The `where T is Iface` CONSTRAINT route, whose table is built at every call to a constrained method
+even when the body never touches `T` — `constantAnswer()` returns a literal and the witness for
+`Point`'s `Digest` conformance is still materialized and still relocated.
+
+<!-- test: witness-impl-reaching-stdlib-through-an-untouched-constraint -->
+```maxon
+typealias Code = int(0 to 1000)
+
+interface Digest
+	function digest() returns Code
+end 'Digest'
+
+type Point implements Digest
+	export var x as Code
+
+	export static function create(x Code) returns Self
+		return Self{x: x}
+	end 'create'
+
+	export function digest() returns Code
+		print("never shown\n")
+		return self.x
+	end 'digest'
+end 'Point'
+
+type Box uses T where T is Digest
+	export var item as T
+
+	export static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+
+	export function constantAnswer() returns Code
+		return 3
+	end 'constantAnswer'
+end 'Box'
+
+typealias PointBox = Box with Point
+
+function main() returns ExitCode
+	let b = PointBox.create(Point.create(7))
+	return b.constantAnswer()
+end 'main'
+```
+```exitcode
+3
+```
+```stdout
+```
+
+And the same constraint DISPATCHED, so the pair brackets the constraint route exactly as the first two
+cases bracket the widening route.
+
+<!-- test: witness-impl-reaching-stdlib-through-a-dispatched-constraint -->
+```maxon
+typealias Code = int(0 to 1000)
+
+interface Digest
+	function digest() returns Code
+end 'Digest'
+
+type Point implements Digest
+	export var x as Code
+
+	export static function create(x Code) returns Self
+		return Self{x: x}
+	end 'create'
+
+	export function digest() returns Code
+		print("digesting {self.x}\n")
+		return self.x
+	end 'digest'
+end 'Point'
+
+type Box uses T where T is Digest
+	export var item as T
+
+	export static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+
+	export function itemDigest() returns Code
+		return self.item.digest()
+	end 'itemDigest'
+end 'Box'
+
+typealias PointBox = Box with Point
+
+function main() returns ExitCode
+	let b = PointBox.create(Point.create(3))
+	return b.itemDigest()
+end 'main'
+```
+```exitcode
+3
+```
+```stdout
+digesting 3
+```

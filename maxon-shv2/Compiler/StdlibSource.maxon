@@ -439,7 +439,9 @@ function reachableMaxonFunctionNames(module MaxonModule, project Project, initCa
 
 	while worklist.count() > 0 'walk'
 		let idx = try worklist.pop() otherwise panic("reachableMaxonFunctionNames: pop from a non-empty worklist")
-		markMaxonCallees(module, project: project, func: module.getFunc(idx), byName: byName, reached: reached, worklist: worklist, names: names)
+		let func = module.getFunc(idx)
+		markConformerWitnessImpls(func, project: project, byName: byName, reached: reached, worklist: worklist, names: names)
+		markMaxonCallees(module, project: project, func: func, byName: byName, reached: reached, worklist: worklist, names: names)
 	end 'walk'
 
 	return names
@@ -505,7 +507,6 @@ function markMaxonCallees(module MaxonModule, project Project, func IrFunction, 
 		for opIdx in block.opRefs 'eachOp'
 			let op = try module.ops.get(opIdx) otherwise panic("markMaxonCallees: opRef {opIdx} not in module.ops")
 			markMaxonCalleeEdge(op, project: project, byName: byName, reached: reached, worklist: worklist, names: names)
-			markWitnessTableImpls(op, project: project, byName: byName, reached: reached, worklist: worklist, names: names)
 			markCorpusCalleesOfSynthesizedRuntime(op, project: project, byName: byName, reached: reached, worklist: worklist, names: names)
 		end 'eachOp'
 	end 'eachBlock'
@@ -533,73 +534,92 @@ function markMaxonCalleeEdge(op MaxonOp, project Project, byName FuncIndexByName
 	end 'kind'
 end 'markMaxonCalleeEdge'
 
-// ⭐⭐ **THE DATA EDGE THIS WALK CANNOT SEE — A WITNESS TABLE'S METHOD SLOTS — SEEDED AT THE OP THAT
-// IMPLIES IT (W35).** A `witnessDispatch` loads a code pointer out of `__witness_<Type>.<Iface>` and jumps,
-// so the implementation it reaches is named by no `call` anywhere in the module. Without this, an interface
+// ⭐⭐⭐ **THE DATA EDGE THIS WALK CANNOT SEE — A WITNESS TABLE'S METHOD SLOTS — CREDITED AT THE CONFORMER
+// THE WALK REACHES (W35).** `__witness_<Type>.<Iface>`'s slots are `.rdata` relocations, so the
+// implementation each one names is named by no `call` anywhere in the module. Without this, an interface
 // method whose body calls a stdlib function leaves that function filed `unreachable` while
-// `DeadFunctionElimination` — which DOES follow the `.rdata` relocs — reaches it, and the two derivations
-// disagree exactly as `requireUnreachableStdlibStayedDead` says. See this walk's header for the measured
-// case and for the one shape this still does not cover.
+// `DeadFunctionElimination` — which DOES follow those relocations — reaches it, and the two derivations
+// disagree exactly as `requireUnreachableStdlibStayedDead` says.
 //
-// ⭐ **IT CREDITS EVERY CONFORMANCE IN THE PROGRAM, NOT JUST THIS DISPATCH'S** — an OVER-approximation, and
-// a deliberate one. The op carries an `interfaceDeclIndex` but not the CONCRETE conformer, which is the
-// whole point of an existential: which table is loaded is a run-time fact. Over-approximating is sound here
-// for the reason the provisional-callee rule above is sound — it only ever REMOVES names from `unreachable`,
-// and every consumer of that set treats absence as "compile it normally". Under-approximating is the panic.
+// ⭐⭐ **THE KEY IS THE CONFORMER, AND THAT IS WHAT MAKES IT NARROW.** `LowerMaxonToStd.ensureWitnessTable`
+// has THREE callers and none of them is one op shape: an existential WIDENING at a call argument
+// (`appendExistentialWitnessArgs`) or at a RETURN (`witnessForExistentialValue`), and a `where T is Iface`
+// CONSTRAINT witness (`materializeWitnessArg`). Rather than predict all three from signatures, this asks the
+// question they all share — **a witness table for `T` can only be built if a `T` VALUE EXISTS, and a `T`
+// value can only be produced by a function OF `T`.** A type cannot be constructed from outside its own
+// methods (E3076), so reaching some `T.<method>` is a precondition for every one of the three, and it is a
+// precondition this walk already computes.
 //
-// ⚠⚠ **IT JOINS `<Type>.<requirement>` RATHER THAN READING `project.witnessSlotImpls`, AND THE FIRST CUT
-// READ THAT MAP AND WAS WRONG. MEASURED:** the map is filled by `checkConformance`, which runs AFTER
-// `queryAllModule` — and `growStdlibBodyDemand`'s fixpoint, which decides which stdlib bodies are BUILT AT
-// ALL, runs INSIDE it. So the map is empty for every round of the fixpoint and full only by the time
-// `deriveStdlibFacts` asks: the panic went away (the facts were right) and the emitted `@print` was an
-// EMPTY function the program called — a silent wrong answer in place of a loud one, which is strictly
-// worse. `conformances`/`interfaces` are merge-time stores (`Queries.resetMergeTargets` resets all three
+// ⇒ Reaching any function of a conforming type credits THAT type's requirement impls, and no others.
+//
+// ⛔⛔ **THE FIRST TWO CUTS WERE BOTH WRONG, IN OPPOSITE DIRECTIONS, AND BOTH ARE WORTH KEEPING HERE.**
+//   • **TOO NARROW:** keyed on a `witnessDispatch` OP. It fixed the dispatched case and left the other two
+//     `ensureWitnessTable` callers panicking — a `Thing` boxed into an interface-typed field and never
+//     dispatched, and a `where T is Digest` method that never touches `T`. Both compile on the merge base,
+//     so the reachable-program set REGRESSED.
+//   • **TOO BROAD:** keyed on a signature predicate, crediting EVERY conformance in the program. MEASURED
+//     on one interface-boxing program, same binary both ways: allocations **370,345 ⇒ 671,836 (+81%)**,
+//     bytes +20.9 MB, and the emitted code moved **3,388 ⇒ 3,788** — because `project.conformances` holds
+//     every LISTED STDLIB module's conformances too, so `URL.equals`/`FilePath.hash` and their whole files'
+//     bodies were demanded by a program that names neither. That is the blanket-seed trap
+//     `markCorpusCalleesOfSynthesizedRuntime` measured at 2223 moved fragments, arriving by a second road.
+//   ⇒ The conformer key is what makes it exact: a program that never reaches `URL` credits nothing of it.
+//
+// ⚠ **IT JOINS `<Type>.<requirement>` RATHER THAN READING `project.witnessSlotImpls`, AND A CUT THAT READ
+// THAT MAP WAS WRONG. MEASURED:** the map is filled by `checkConformance`, which runs AFTER `queryAllModule`
+// — and `growStdlibBodyDemand`'s fixpoint, which decides which stdlib bodies are BUILT AT ALL, runs INSIDE
+// it. So the map is empty for every round of the fixpoint and full only by the time `deriveStdlibFacts`
+// asks: the panic went away (the facts were right) and the emitted `@print` was an EMPTY function the
+// program called — a silent wrong answer in place of a loud one, which is strictly worse.
+// `conformances`/`interfaces` are merge-time stores (`Queries.resetMergeTargets` resets all three
 // together), so they answer the same in both askers, which is the property this walk's header demands.
 // ⇒ The `<Type>.<method>` join `ensureWitnessTable` is forbidden to make (R10) is correct HERE for the
 // reason it is wrong there: a name no module function carries is silently skipped by `markReachable`, so a
 // join that names nothing costs nothing, where a RELOCATION that names nothing is a wrong code pointer.
 // Overloads are covered because `markReachable` credits the whole set.
 //
-// ⚠ **AND IT IS BOUNDED BY THE OP, WHICH IS WHY IT IS NOT A PRE-PASS.** EVERY listed stdlib module declares
-// conformances (`Builtins.maxon` alone has seven), so a seed that ran unconditionally would fire on a
-// `return 1 + 1` — the 2223-fragment trap the next function's header measured. A program that never
-// dispatches through an existential reaches no such op and pays one enum compare per op. MEASURED: `return
-// 7` and a 5,406-line generated program are byte-identical with and without this seed.
-function markWitnessTableImpls(op MaxonOp, project Project, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet)
-	if not opLoadsAWitnessTableSlot(op) 'noWitnessTable'
+// ⚠ **THE FOURTH `ensureWitnessTable` ROUTE — `withWitnessTableArgs` / `appendArrayElementWitnessArgs`, the
+// `Hashable`/`Equatable` witness a `Set`/`Map`/`Array` threads — NEEDS NOTHING EXTRA TODAY, AND THAT IS
+// MEASURED RATHER THAN ASSUMED.** Its conformer is the container's KEY or ELEMENT, and a USER type there is
+// refused: *"E2015: `Set` hashes and compares its keys through their `Hashable`/`Equatable` witnesses, so a
+// key must be one of `int`, `String`, `Character`, `Array` — a 'Point' key is a later slice"*. So every such
+// conformer is a BUILTIN whose impls `BuiltinConformanceRuntime` SYNTHESIZES, and a synthesized body calls no
+// stdlib source, so nothing behind that table can be filed unreachable. The day user-type keys land, the
+// conformer key above already covers them — reaching `Point.create` to put one in a `Set` credits
+// `Point.hash` — which is a third reason to key on the conformer rather than on the three call sites.
+function markConformerWitnessImpls(func IrFunction, project Project, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet)
+	match splitQualifiedName(func.name) 'owner'
+		// A FREE function belongs to no type, so reaching it produces no conformer and implies no table.
+		notQualified then break 'owner'
+		parts(typeName, _) then markWitnessImplsOfConformer(typeName, project: project, byName: byName, reached: reached, worklist: worklist, names: names)
+	end 'owner'
+end 'markConformerWitnessImpls'
+
+// Credit every requirement implementation `typeName`'s witness tables can name. A type that declares no
+// conformance has no table and nothing to credit, which is almost every type in almost every program.
+//
+// ⚠ The index is `declaredConformanceIndex`'s, not a second walk of `project.conformances`: that memo is
+// reset in lockstep with the store it derives from (`Queries.resetMergeTargets`), so it cannot answer this
+// walk from a previous merge round's declarations.
+function markWitnessImplsOfConformer(typeName ByteArray, project Project, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet)
+	let conformedTo = try declaredConformanceIndex(project).get(typeName) otherwise 'declaresNoConformance'
 		return
-	end 'noWitnessTable'
+	end 'declaresNoConformance'
 
-	for conformance in project.conformances 'eachConformer'
-		for conformed in conformance.interfaces 'eachInterface'
-			let iface = try project.interfaces.get(conformed.interfaceName) otherwise 'noSuchInterface'
-				// A conformance naming an interface the program does not declare is E3017's, reported by
-				// `checkConformance` one pass later; a reachability walk has nothing to add and nothing to
-				// credit.
-				continue
-			end 'noSuchInterface'
+	for interfaceName in conformedTo 'eachInterface'
+		let iface = try project.interfaces.get(interfaceName) otherwise 'noSuchInterface'
+			// A conformance naming an interface the program does not declare is E3017's, reported by
+			// `checkConformance` one pass later; a reachability walk has nothing to add and nothing to credit.
+			continue
+		end 'noSuchInterface'
 
-			// The TRANSITIVE requirement set, `ensureWitnessTable`'s own list — `iface.methods` alone
-			// would miss every `extends`-inherited slot, which is a slot like any other.
-			for slot in interfaceWitnessSlots(project.interfaces, iface: iface) 'eachSlot'
-				markReachable(qualifiedMethodName(conformance.typeName, methodName: slot.method.name), project: project, byName: byName, reached: reached, worklist: worklist, names: names)
-			end 'eachSlot'
-		end 'eachInterface'
-	end 'eachConformer'
-end 'markWitnessTableImpls'
-
-// Does this op reach a function through a witness table's method slot? The band structure — and the
-// band-append protection — is `markMaxonCalleeEdge`'s and `noteSubstrateEdge`'s, the family this joins as a
-// fourth member: a variant appended past `panicAbortValue` fails to compile in all four rather than being
-// silently swallowed by any of them.
-function opLoadsAWitnessTableSlot(op MaxonOp) returns bool
-	return match op 'op'
-		call to switch gives false
-		witnessDispatch gives true
-		witnessTryDispatch gives true
-		panicAbortValue gives false
-	end 'op'
-end 'opLoadsAWitnessTableSlot'
+		// The TRANSITIVE requirement set, `ensureWitnessTable`'s own list — `iface.methods` alone would miss
+		// every `extends`-inherited slot, which is a slot like any other.
+		for slot in interfaceWitnessSlots(project.interfaces, iface: iface) 'eachSlot'
+			markReachable(qualifiedMethodName(typeName, methodName: slot.method.name), project: project, byName: byName, reached: reached, worklist: worklist, names: names)
+		end 'eachSlot'
+	end 'eachInterface'
+end 'markWitnessImplsOfConformer'
 
 // ⭐⭐ **THE ONE CALL EDGE THIS WALK CANNOT SEE, SEEDED AT THE OP THAT IMPLIES IT.**
 // `__str_trim`, `__cs_contains`, the `__strix_*` walks and the two decoding views are SYNTHESIZED Std
