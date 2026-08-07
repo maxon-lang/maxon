@@ -1120,9 +1120,14 @@ end 'noteRelocatedFunctionUsage'
 // instance merely installs a leaf runtime function it never calls.
 function rootManagedOpaqueArrayElementDrops(usage RuntimeUsage, signatures ProgramSignatures)
 	for id in 0 upto signatures.genericInstanceCount() 'eachInstance'
-		if signatures.genericInstanceHasManagedOpaqueArrayField(id) 'managedOpaque'
-			recordCallUsage(signatures.managedOpaqueArrayElementDropCallee(id), usage: usage)
-		end 'managedOpaque'
+		// ⭐ Once per TYPE PARAMETER, because the descriptor carries one dictionary block per parameter and
+		// stamps each independently (W43b) — a `Map with (String, int)` roots `__str_decref` for its key
+		// column and nothing for its value column.
+		for position in 0 upto signatures.genericInstanceArgCount(id) 'eachTypeParam'
+			if signatures.genericInstanceHasManagedOpaqueArrayField(id, position: position) 'managedOpaque'
+				recordCallUsage(signatures.managedOpaqueArrayElementDropCallee(id, position: position), usage: usage)
+			end 'managedOpaque'
+		end 'eachTypeParam'
 	end 'eachInstance'
 end 'rootManagedOpaqueArrayElementDrops'
 

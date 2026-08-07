@@ -417,3 +417,131 @@ end 'main'
 ```exitcode
 2
 ```
+
+### Two type parameters, two independently managed columns
+
+A `Map with (String, int)` is this shape, and it is where the descriptor's single `destroyFunc@40`
+was a wild free: both columns were stamped with the FIRST column's destructor, so the trivial column's
+words were freed as String records. The program printed the right answer and exited 139.
+
+<!-- test: field-defaults.two-type-params-with-one-managed-column -->
+```maxon
+typealias Count = int(0 to u64.max)
+typealias Integer = int(i64.min to i64.max)
+
+type Pairs uses Key, Value
+	typealias KeyArray = Array with Key
+	typealias ValueArray = Array with Value
+	var keys as KeyArray = KeyArray.create()
+	var values as ValueArray = ValueArray.create()
+
+	export static function create() returns Self
+		return Self{}
+	end 'create'
+
+	export function add(key Key, value Value)
+		keys.push(key)
+		values.push(value)
+	end 'add'
+
+	export function size() returns Count
+		return keys.count()
+	end 'size'
+end 'Pairs'
+
+typealias StrIntPairs = Pairs with (String, Integer)
+
+function main() returns ExitCode
+	var p = StrIntPairs.create()
+	p.add("alpha", value: 1)
+	p.add("beta", value: 2)
+	return p.size()
+end 'main'
+```
+```exitcode
+2
+```
+
+### …and with the MANAGED column second
+
+The mirror image, so the fix cannot be "always use the first column's destructor" wearing a pass.
+
+<!-- test: field-defaults.two-type-params-with-the-managed-column-second -->
+```maxon
+typealias Count = int(0 to u64.max)
+typealias Integer = int(i64.min to i64.max)
+
+type Pairs uses Key, Value
+	typealias KeyArray = Array with Key
+	typealias ValueArray = Array with Value
+	var keys as KeyArray = KeyArray.create()
+	var values as ValueArray = ValueArray.create()
+
+	export static function create() returns Self
+		return Self{}
+	end 'create'
+
+	export function add(key Key, value Value)
+		keys.push(key)
+		values.push(value)
+	end 'add'
+
+	export function size() returns Count
+		return values.count()
+	end 'size'
+end 'Pairs'
+
+typealias IntStrPairs = Pairs with (Integer, String)
+
+function main() returns ExitCode
+	var p = IntStrPairs.create()
+	p.add(1, value: "alpha")
+	p.add(2, value: "beta")
+	p.add(3, value: "gamma")
+	return p.size()
+end 'main'
+```
+```exitcode
+3
+```
+
+### Both columns managed
+
+Two live destructors in one descriptor, one per parameter.
+
+<!-- test: field-defaults.two-type-params-with-both-columns-managed -->
+```maxon
+typealias Count = int(0 to u64.max)
+
+type Pairs uses Key, Value
+	typealias KeyArray = Array with Key
+	typealias ValueArray = Array with Value
+	var keys as KeyArray = KeyArray.create()
+	var values as ValueArray = ValueArray.create()
+
+	export static function create() returns Self
+		return Self{}
+	end 'create'
+
+	export function add(key Key, value Value)
+		keys.push(key)
+		values.push(value)
+	end 'add'
+
+	export function size() returns Count
+		return keys.count() + values.count()
+	end 'size'
+end 'Pairs'
+
+typealias StrStrPairs = Pairs with (String, String)
+
+function main() returns ExitCode
+	var p = StrStrPairs.create()
+	p.add("a", value: "alpha")
+	p.add("b", value: "beta")
+	return p.size()
+end 'main'
+```
+```exitcode
+4
+```

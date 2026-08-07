@@ -403,18 +403,54 @@ end 'LayoutDescriptor'
 // words. The two function-pointer slots (+32 copyFunc, +40 destroyFunc) and the field-offsets slot
 // (+48) are zero on disk in B1: a trivial instance has no thunk and no field-offset blob, so nothing
 // patches them and the blob needs no relocation.
-export function encodeLayoutDescriptor(d LayoutDescriptor) returns ByteArray
+export function encodeLayoutDescriptor(d LayoutDescriptor, typeParamCount TypeParamPosition) returns ByteArray
 	var buf = ByteArray.create()
-	buf.reserve(LAYOUT_DESCRIPTOR_BYTE_SIZE)
-	writeLayoutWord(buf, value: d.size)
-	writeLayoutWord(buf, value: d.alignment)
-	writeLayoutWord(buf, value: d.elementSize)
-	for _ in 0 upto LAYOUT_ZERO_SLOTS_MID 'zeroSlots'
-		writeLayoutWord(buf, value: 0)
-	end 'zeroSlots'
-	writeLayoutWord(buf, value: d.elementLogicalSize)
+	buf.reserve(layoutDescriptorBytesFor(typeParamCount))
+	for _ in 0 upto typeParamCount 'eachTypeParam'
+		writeLayoutWord(buf, value: d.size)
+		writeLayoutWord(buf, value: d.alignment)
+		writeLayoutWord(buf, value: d.elementSize)
+		for _ in 0 upto LAYOUT_ZERO_SLOTS_MID 'zeroSlots'
+			writeLayoutWord(buf, value: 0)
+		end 'zeroSlots'
+		writeLayoutWord(buf, value: d.elementLogicalSize)
+	end 'eachTypeParam'
 	return buf
 end 'encodeLayoutDescriptor'
+
+// ⭐⭐ **A DESCRIPTOR IS ONE 64-BYTE BLOCK PER TYPE PARAMETER, AND BLOCK 0 IS THE WHOLE OF A
+// SINGLE-PARAMETER INSTANCE'S (W43b).** The two function-pointer slots — `copyFunc@32` and
+// `destroyFunc@40` — describe ONE type argument, so a `Map with (Key, Value)` needs two of each: its
+// `keys as Array with Key` and its `values as Array with Value` are two independently managed columns
+// created by ONE shared body.
+//
+// ⛔⛔ **WITH A SINGLE PAIR THEY SHARED ONE SLOT, AND THAT WAS A WILD FREE.** The stamp took the FIRST
+// managed opaque field's destructor, and every opaque `Array.create()` in the body then read it —
+// **MEASURED on `type Pairs uses Key, Value` with `Array with Key` and `Array with Value` instantiated
+// `(String, Integer)`: the program printed the right answer and exited 139 (SIGSEGV) at teardown**,
+// because the `Integer` column's array had been stamped `__str_decref` and freed its ints as Strings.
+// The C# bootstrap, which monomorphizes, exits 0 on the same program. That measurement is what ruled
+// `stdlib/Map.maxon` uncompilable and made `Map` a synthesized builtin.
+//
+// ⭐ **THE BLOCK REPEATS RATHER THAN A TABLE BEING APPENDED, AND THAT IS WHAT KEEPS THE ABI STILL.**
+// Every reader addresses a dictionary by `descriptor + i * LAYOUT_DESCRIPTOR_BYTE_SIZE` and then uses
+// the SAME field offsets it always used — so the runtime graphs that take a descriptor POINTER
+// (`__drop_type_param`, the `__arr_*_opaque` copy wrappers) need no signature change and no second
+// offset argument; the caller, which knows `i` statically, hands them the right block. A ONE-parameter
+// instance has one block at offset 0, byte-identical to what it emitted before.
+//
+// The header fields (size, alignment, elementSize, elementLogicalSize) are the INSTANCE's and are the
+// same in every block, so block `i` is a complete dictionary for parameter `i` and a reader never has
+// to hold two pointers.
+export function layoutDescriptorBytesFor(typeParamCount TypeParamPosition) returns ByteOffset
+	return LAYOUT_DESCRIPTOR_BYTE_SIZE * typeParamCount
+end 'layoutDescriptorBytesFor'
+
+// The byte offset of type parameter `position`'s own dictionary block — what a reader adds to the
+// descriptor address before using any of the field offsets above. THE one speller of the stride.
+export function layoutBlockOffsetFor(position TypeParamPosition) returns ByteOffset
+	return LAYOUT_DESCRIPTOR_BYTE_SIZE * position
+end 'layoutBlockOffsetFor'
 
 // Append one machine word as `LAYOUT_FIELD_BYTES` little-endian bytes — the same shift-and-mask the
 // `.data`/`.rdata` scalar serializer uses, restated here because that one lives in the Targets layer

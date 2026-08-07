@@ -14711,8 +14711,8 @@ export type ProgramSignatures
 	// subject. The reloc CONDITION and the reloc's DESTRUCTOR (`managedOpaqueArrayElementDropCallee`) read the
 	// same walk (`managedOpaqueArrayElementOf`), so "is there such a field?" and "what destructor?" cannot
 	// disagree about which field they mean.
-	export function genericInstanceHasManagedOpaqueArrayField(id GenericInstanceId) returns bool
-		match self.managedOpaqueArrayElementOf(id) 'has'
+	export function genericInstanceHasManagedOpaqueArrayField(id GenericInstanceId, position TypeParamPosition) returns bool
+		match self.managedOpaqueArrayElementOf(id, position: position) 'has'
 			present then return true
 			absent then return false
 		end 'has'
@@ -14725,10 +14725,10 @@ export type ProgramSignatures
 	// the SAME `managedFieldDropCallee` a concrete `Array with String` element uses (`arrayElementDropCallee`),
 	// so the opaque stamp and the concrete stamp name the identical destructor. Precondition:
 	// `genericInstanceHasManagedOpaqueArrayField(id)`.
-	export function managedOpaqueArrayElementDropCallee(id GenericInstanceId) returns ByteArray
-		match self.managedOpaqueArrayElementOf(id) 'element'
+	export function managedOpaqueArrayElementDropCallee(id GenericInstanceId, position TypeParamPosition) returns ByteArray
+		match self.managedOpaqueArrayElementOf(id, position: position) 'element'
 			present(element) then return managedFieldDropCallee(self, typeNames: self.typeNames, fieldType: element)
-			absent then panic("ProgramSignatures.managedOpaqueArrayElementDropCallee: instance {id} holds no managed opaque-`T` `Array` field — every caller gates on genericInstanceHasManagedOpaqueArrayField")
+			absent then panic("ProgramSignatures.managedOpaqueArrayElementDropCallee: instance {id} holds no managed opaque field at type-parameter position {position} — every caller gates on genericInstanceHasManagedOpaqueArrayField")
 		end 'element'
 	end 'managedOpaqueArrayElementDropCallee'
 
@@ -14752,9 +14752,9 @@ export type ProgramSignatures
 	// thus stamps `destroyFunc@40` but not `copyFunc@32`, exactly right — its element still DROPs through
 	// `__arr_decref`, which needs no single-function-pointer form. Reads the SAME `managedOpaqueArrayElementOf`
 	// walk as the drop stamp, so the two agree on which element they mean.
-	export function genericInstanceOpaqueArrayElementIsCopyable(id GenericInstanceId) returns bool
+	export function genericInstanceOpaqueArrayElementIsCopyable(id GenericInstanceId, position TypeParamPosition) returns bool
 		var visited = ClonerSet.create()
-		match self.managedOpaqueArrayElementOf(id) 'element'
+		match self.managedOpaqueArrayElementOf(id, position: position) 'element'
 			present(element) then return self.typeSupportsDeepClone(element, asElement: true, visited: visited)
 			absent then return false
 		end 'element'
@@ -14769,24 +14769,30 @@ export type ProgramSignatures
 	// the opaque stamp and the concrete stamp name the identical cloner. Precondition:
 	// `genericInstanceOpaqueArrayElementIsCopyable(id)` — a `managedArray`/`unsupported` element panics as an
 	// invariant break, exactly as `Parser.arrayElementCloneValue` does for the concrete top-level element.
-	export function managedOpaqueArrayElementCloneCallee(id GenericInstanceId) returns ByteArray
-		match self.managedOpaqueArrayElementOf(id) 'element'
+	export function managedOpaqueArrayElementCloneCallee(id GenericInstanceId, position TypeParamPosition) returns ByteArray
+		match self.managedOpaqueArrayElementOf(id, position: position) 'element'
 			present(element) then return directCloneCalleeOf(managedFieldCloneStrategy(self, typeNames: self.typeNames, fieldType: element))
-			absent then panic("ProgramSignatures.managedOpaqueArrayElementCloneCallee: instance {id} holds no managed opaque-`T` `Array` field — every caller gates on genericInstanceOpaqueArrayElementIsCopyable")
+			absent then panic("ProgramSignatures.managedOpaqueArrayElementCloneCallee: instance {id} holds no managed opaque field at type-parameter position {position} — every caller gates on genericInstanceOpaqueArrayElementIsCopyable")
 		end 'element'
 	end 'managedOpaqueArrayElementCloneCallee'
 
-	// The SUBSTITUTED type whose destructor a managed opaque type-parameter instance bakes into its descriptor
-	// `destroyFunc@40` — the ONE walk both the reloc-need predicate (`genericInstanceHasManagedOpaqueArrayField`)
-	// and the reloc's destructor (`managedOpaqueArrayElementDropCallee`) read, so neither can drift to a
-	// different field. The descriptor carries a SINGLE `destroyFunc@40` slot (one type parameter), and the shared
-	// body drops the sole substituted argument through it in TWO field shapes, both resolved here so ONE stamp
-	// serves both: an opaque `Array with T` ELEMENT — dropped on `.pop()`/scope-exit (P1.7 slice 3b-ii) — and a
-	// BARE opaque `T` field — dropped on reassignment (`self.saved = next`, P1.7 Finding A). Both carry the sole
-	// type parameter, so the first managed opaque field of either shape is the destructor the slot needs. (The
-	// public predicates keep their "Array" names for their out-of-tree call sites; the mechanism now spans array
-	// elements AND bare fields.)
-	function managedOpaqueArrayElementOf(id GenericInstanceId) returns ManagedOpaqueArrayElement
+	// The SUBSTITUTED type whose destructor a managed opaque type-parameter instance bakes into type parameter
+	// `position`'s descriptor block `destroyFunc@40` — the ONE walk both the reloc-need predicate
+	// (`genericInstanceHasManagedOpaqueArrayField`) and the reloc's destructor
+	// (`managedOpaqueArrayElementDropCallee`) read, so neither can drift to a different field. The shared body
+	// drops a substituted argument through it in TWO field shapes, both resolved here so ONE stamp serves both:
+	// an opaque `Array with T` ELEMENT — dropped on `.pop()`/scope-exit (P1.7 slice 3b-ii) — and a BARE opaque
+	// `T` field — dropped on reassignment (`self.saved = next`, P1.7 Finding A). (The public predicates keep
+	// their "Array" names for their out-of-tree call sites; the mechanism spans array elements AND bare fields.)
+	//
+	// ⛔⛔ **IT USED TO TAKE THE FIRST MANAGED OPAQUE FIELD OF ANY POSITION, AND THAT WAS A WILD FREE (W43b).**
+	// One descriptor carried one `destroyFunc@40`, so a two-parameter generic's two columns shared one
+	// destructor: `type Pairs uses Key, Value` holding `Array with Key` and `Array with Value`, instantiated
+	// `(String, Integer)`, stamped `__str_decref` on BOTH — the program printed the right answer and exited 139
+	// at teardown, freeing its `Integer` column's words as String records. The descriptor is now one block PER
+	// PARAMETER (`layoutBlockOffsetFor`) and this walk answers for ONE of them, so a column is stamped with its
+	// OWN argument's destructor or with nothing.
+	function managedOpaqueArrayElementOf(id GenericInstanceId, position TypeParamPosition) returns ManagedOpaqueArrayElement
 		// ⚠ **THIS IS THE SITE THE UNDECLARED HALF OF THE GATE WAS MEASURED ON.**
 		// `noteDestructorUsage`'s `rootManagedOpaqueArrayElementDrops` calls this over EVERY interned
 		// instance, so it meets whatever a `with` named: a `Set with Int` (synthesized — no base struct to
@@ -14808,17 +14814,18 @@ export type ProgramSignatures
 				// names a parameter at all.
 				if maxonTypeTag(element) == ValueTypeTag.typeParameter 'opaqueElement'
 					let elementPosition = self.opaqueTypeParamPosition(element)
-					if self.genericInstanceArgIsOwned(id, position: elementPosition) 'managedArrayElement'
+					if elementPosition == position and self.genericInstanceArgIsOwned(id, position: elementPosition) 'managedArrayElement'
 						return ManagedOpaqueArrayElement.present(self.substitutedInstanceArg(id, position: elementPosition))
 					end 'managedArrayElement'
 				end 'opaqueElement'
 				continue
 			end 'arrayField'
-			// A BARE opaque `T` field (`saved as Element`): a reassignment drops the field ITSELF through the SAME
-			// descriptor `destroyFunc@40` (P1.7 Finding A) — the sole type argument's destructor, exactly as above.
+			// A BARE opaque `T` field (`saved as Element`): a reassignment drops the field ITSELF through the
+			// SAME block's `destroyFunc@40` (P1.7 Finding A) — that parameter's argument destructor, exactly as
+			// above.
 			if maxonTypeTag(fieldType) == ValueTypeTag.typeParameter 'opaqueBareField'
 				let fieldPosition = self.opaqueTypeParamPosition(fieldType)
-				if self.genericInstanceArgIsOwned(id, position: fieldPosition) 'managedBareField'
+				if fieldPosition == position and self.genericInstanceArgIsOwned(id, position: fieldPosition) 'managedBareField'
 					return ManagedOpaqueArrayElement.present(self.substitutedInstanceArg(id, position: fieldPosition))
 				end 'managedBareField'
 			end 'opaqueBareField'

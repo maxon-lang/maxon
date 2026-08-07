@@ -1650,7 +1650,11 @@ type MaxonToStdLowering
 		// are named in each other's comments.
 		let soleArgLogicalSize = self.signatures.genericInstanceSoleArgLogicalSizeOrNone(gid)
 		let descriptor = LayoutDescriptor.create(self.signatures.genericInstanceBoxSize(gid), alignment: LAYOUT_MIN_ALIGNMENT, elementSize: LAYOUT_TYPE_PARAM_SLOT_BYTES, elementLogicalSize: soleArgLogicalSize)
-		let label = self.globalData.registerRdataConstantLabeled("__layout_{String.from(self.signatures.mangleGenericInstance(gid))}", bytes: encodeLayoutDescriptor(descriptor))
+		// ⭐ ONE BLOCK PER TYPE PARAMETER — see `layoutDescriptorBytesFor` for the wild free a single shared
+		// `destroyFunc@40` caused on a two-parameter generic. A one-parameter instance emits one block and is
+		// byte-identical to what it always emitted.
+		let paramCount = self.signatures.genericInstanceArgCount(gid)
+		let label = self.globalData.registerRdataConstantLabeled("__layout_{String.from(self.signatures.mangleGenericInstance(gid))}", bytes: encodeLayoutDescriptor(descriptor, typeParamCount: paramCount))
 		self.layoutDescriptors.record(gid, label: label)
 
 		// A MANAGED opaque-`T` `Array` field's `destroyFunc@40` is the ONLY compile-time reference to the
@@ -1658,23 +1662,26 @@ type MaxonToStdLowering
 		// scan cannot see — so the relocation both fills the slot AND is what the writer resolves the
 		// destructor's `.text` VA against. The destructor is DCE-rooted where the enclosing instance's own
 		// `__destruct_<mangled>` is noted (`noteDestructorUsage`), so it is installed for the writer to resolve.
-		if self.signatures.genericInstanceHasManagedOpaqueArrayField(gid) 'managedOpaqueElement'
-			self.globalData.recordFuncAbs64InRdata(self.signatures.managedOpaqueArrayElementDropCallee(gid), rdataLabel: label, offsetInLabel: LAYOUT_OFFSET_DESTROY_FUNC)
-		end 'managedOpaqueElement'
-
-		// ⭐ **THE `copyFunc@32` STAMP — the exact CLONE dual of the `destroyFunc@40` stamp above (P1.7 slice
-		// 3b-vi-b-β).** When the instance's managed opaque-`T` `Array` element is DIRECT-clonable (a String /
-		// struct / boxed-union / trivial-element-array element — the only shape a single `(box) -> newBox` cloner
-		// can hold), a second `funcAbs64InRdata` relocation fills `copyFunc@32` with the element CLONER's `.text`
-		// VA, the value the shared opaque-copy wrappers read back and `callIndirect` per element. A TRIVIAL element
-		// records nothing (its wrapper takes the byte-blit/COW path), and a MANAGED but non-direct element
-		// (`Array with (Array with String)`) records nothing either — it is never copied (the front end rejects a
-		// base that copies with such an instantiation), so its 0 slot is never read. The cloner is DCE-rooted on
-		// the SAME `genericInstanceOpaqueArrayElementIsCopyable` predicate (`rootManagedOpaqueArrayElementClones`),
-		// so the reloc never names a `.text` VA that was not installed.
-		if self.signatures.genericInstanceOpaqueArrayElementIsCopyable(gid) 'copyableOpaqueElement'
-			self.globalData.recordFuncAbs64InRdata(self.signatures.managedOpaqueArrayElementCloneCallee(gid), rdataLabel: label, offsetInLabel: LAYOUT_OFFSET_COPY_FUNC)
-		end 'copyableOpaqueElement'
+		//
+		// ⭐ **THE `copyFunc@32` STAMP — the exact CLONE dual (P1.7 slice 3b-vi-b-β).** When the parameter's
+		// managed opaque `Array` element is DIRECT-clonable (a String / struct / boxed-union / trivial-element-array
+		// element — the only shape a single `(box) -> newBox` cloner can hold), a second `funcAbs64InRdata`
+		// relocation fills `copyFunc@32` with the element CLONER's `.text` VA, the value the shared opaque-copy
+		// wrappers read back and `callIndirect` per element. A TRIVIAL element records nothing (its wrapper takes
+		// the byte-blit/COW path), and a MANAGED but non-direct element (`Array with (Array with String)`) records
+		// nothing either — it is never copied (the front end rejects a base that copies with such an
+		// instantiation), so its 0 slot is never read. The cloner is DCE-rooted on the SAME
+		// `genericInstanceOpaqueArrayElementIsCopyable` predicate (`rootManagedOpaqueArrayElementClones`), so the
+		// reloc never names a `.text` VA that was not installed.
+		for position in 0 upto paramCount 'eachTypeParam'
+			let blockBase = layoutBlockOffsetFor(position)
+			if self.signatures.genericInstanceHasManagedOpaqueArrayField(gid, position: position) 'managedOpaqueElement'
+				self.globalData.recordFuncAbs64InRdata(self.signatures.managedOpaqueArrayElementDropCallee(gid, position: position), rdataLabel: label, offsetInLabel: (blockBase + LAYOUT_OFFSET_DESTROY_FUNC) as ByteOffset)
+			end 'managedOpaqueElement'
+			if self.signatures.genericInstanceOpaqueArrayElementIsCopyable(gid, position: position) 'copyableOpaqueElement'
+				self.globalData.recordFuncAbs64InRdata(self.signatures.managedOpaqueArrayElementCloneCallee(gid, position: position), rdataLabel: label, offsetInLabel: (blockBase + LAYOUT_OFFSET_COPY_FUNC) as ByteOffset)
+			end 'copyableOpaqueElement'
+		end 'eachTypeParam'
 
 		return label
 	end 'ensureLayoutDescriptor'
@@ -1804,7 +1811,7 @@ type MaxonToStdLowering
 			self.appendArrayElementWitnessArgs(result, callee: callee, args: args, dstBlock: dstBlock)
 			return
 		end 'arrayElementWitness'
-		self.stdModule.appendOp(dstBlock, op: StdOp.call(result, callee: callee, args: self.opaqueCopyArgsWithDescriptor(callee, args: args)))
+		self.stdModule.appendOp(dstBlock, op: StdOp.call(result, callee: callee, args: self.opaqueCopyArgsWithDescriptor(callee, args: args, dstBlock: dstBlock)))
 	end 'lowerRuntimeCall'
 
 	// ⭐ **APPEND THE KEY-WITNESS ARGUMENTS to a set runtime call (P1.7b slice A).** `insert`/`contains`/
@@ -1922,16 +1929,19 @@ type MaxonToStdLowering
 	// parser's copy-descriptor-need seed (a method that copies an opaque array reserves it, exactly as an opaque
 	// `X.create()` or a `sizeof(T)` method does), so its absence here is a parser/lowering divergence — a loud
 	// bug, not a silent wrong load, matching `appendOpaqueArrayCreate`.
-	function opaqueCopyArgsWithDescriptor(callee ByteArray, args ValueIdArray) returns ValueIdArray
+	function opaqueCopyArgsWithDescriptor(callee ByteArray, args ValueIdArray, dstBlock IrBlock) returns ValueIdArray
 		if not isOpaqueArrayCopyCallee(callee) 'notOpaqueCopy'
 			return args
 		end 'notOpaqueCopy'
 		if not self.hasImplicitLayout 'noLayout'
 			panic("opaqueCopyArgsWithDescriptor: opaque array copy '{String.from(callee)}' in '{String.from(self.currentFuncName)}' but the function carries no layout descriptor parameter — the parser's copy-descriptor-need seed and this lowering disagree")
 		end 'noLayout'
+		// The COPIED array's own type parameter decides the block (W43b) — its `copyFunc@32` is that column's
+		// cloner and no other's, the exact dual of `appendOpaqueArrayCreate`'s destructor read.
+		let source = try args.get(0) otherwise panic("opaqueCopyArgsWithDescriptor: opaque array copy '{String.from(callee)}' has no receiver argument — its first parameter is the array record")
 		var fullArgs = ValueIdArray.create()
 		fullArgs.append(args)
-		fullArgs.push(self.implicitLayoutValueId)
+		fullArgs.push(self.descriptorBlockAddr(self.opaqueArrayBlockOffset(source, callee: callee), dstBlock: dstBlock))
 		return fullArgs
 	end 'opaqueCopyArgsWithDescriptor'
 
@@ -1945,11 +1955,26 @@ type MaxonToStdLowering
 		if not self.hasImplicitLayout 'noLayout'
 			panic("appendDropTypeParamDescriptor: `__drop_type_param` in '{String.from(self.currentFuncName)}' but the function carries no layout descriptor parameter — the parser's descriptor-need seed (a method that drops an opaque feed binding) and this lowering disagree")
 		end 'noLayout'
+		// The DROPPED value's own type parameter decides the block (W43b): `__drop_type_param` reads
+		// `destroyFunc@40` off whatever descriptor it is handed, so a two-parameter generic dropping its
+		// SECOND parameter's value must be handed that parameter's block and not the first's.
+		let dropped = try args.get(0) otherwise panic("appendDropTypeParamDescriptor: `__drop_type_param` has no value argument")
 		var fullArgs = ValueIdArray.create()
-		fullArgs.push(self.implicitLayoutValueId)
+		fullArgs.push(self.descriptorBlockAddr(self.droppedTypeParamBlockOffset(dropped), dstBlock: dstBlock))
 		fullArgs.append(args)
 		self.stdModule.appendOp(dstBlock, op: StdOp.call(result, callee: callee, args: fullArgs))
 	end 'appendDropTypeParamDescriptor'
+
+	// The descriptor block of the type parameter a `__drop_type_param` value is typed at — read off the
+	// value's own `typeParameter` token, the same token the stamp matched positions against.
+	function droppedTypeParamBlockOffset(dropped ValueId) returns ByteOffset
+		let tag = self.valueTagOf(dropped)
+		if tag != ValueTypeTag.typeParameter 'notATypeParameter'
+			panic("droppedTypeParamBlockOffset: `__drop_type_param` was given a {tag.name} value — only an opaque type-parameter value drops through the descriptor")
+		end 'notATypeParameter'
+		let token = try self.valueNameIds.get(dropped) otherwise panic("droppedTypeParamBlockOffset: typeParameter value v{dropped} has no name-id (its type-parameter token) — the two type columns are dense and in lockstep")
+		return layoutBlockOffsetFor(self.signatures.opaqueTypeParamPosition(MaxonType.typeParameter(token)))
+	end 'droppedTypeParamBlockOffset'
 
 	// Is this runtime call an OPAQUE-`T` `Array.create()` — an `__arr_create` whose result instance's element
 	// is a type parameter (P1.7 slice 3b-i)? The parser emits such a create with only `element_size`; the
@@ -1974,13 +1999,47 @@ type MaxonToStdLowering
 		if not self.hasImplicitLayout 'noLayout'
 			panic("appendOpaqueArrayCreate: opaque `Array.create()` in '{String.from(self.currentFuncName)}' but the function carries no layout descriptor parameter — the parser's descriptor-need seed and this lowering disagree")
 		end 'noLayout'
+		// ⭐ **WHICH type parameter's dictionary — the block for the ELEMENT's OWN parameter (W43b).** A
+		// two-parameter generic creates one opaque array per column from ONE shared body, and reading a fixed
+		// `destroyFunc@40` gave both columns the FIRST column's destructor: measured, an `Array with Value`
+		// over `Integer` was stamped `__str_decref` and freed its ints as Strings at teardown.
 		let destroyId = self.mintStdValueId()
-		self.stdModule.appendOp(dstBlock, op: StdOp.loadIndirect(destroyId, addrId: self.implicitLayoutValueId, offset: LAYOUT_OFFSET_DESTROY_FUNC, valueType: StdType.i64))
+		self.stdModule.appendOp(dstBlock, op: StdOp.loadIndirect(destroyId, addrId: self.implicitLayoutValueId, offset: self.opaqueArrayBlockOffset(result, callee: callee) + LAYOUT_OFFSET_DESTROY_FUNC, valueType: StdType.i64))
 		var fullArgs = ValueIdArray.create()
 		fullArgs.append(args)
 		fullArgs.push(destroyId)
 		self.stdModule.appendOp(dstBlock, op: StdOp.call(result, callee: callee, args: fullArgs))
 	end 'appendOpaqueArrayCreate'
+
+	// ⭐ **THE DESCRIPTOR BLOCK an OPAQUE `Array with T` VALUE's dictionary lives in (W43b)** — the block for
+	// the type parameter its ELEMENT names. Read off the array instance's own element type, which is the same
+	// `typeParameter` token `managedOpaqueArrayElementOf` matched positions against when it stamped the slot,
+	// so the write side and this read side name one block by construction. A concrete-element array never
+	// reaches here (its callers gate on `containerElementIsOpaque` / `isOpaqueArrayCopyCallee`).
+	function opaqueArrayBlockOffset(arrayInstance ValueId, callee ByteArray) returns ByteOffset
+		let gid = try self.valueNameIds.get(arrayInstance) otherwise panic("opaqueArrayBlockOffset: opaque array value v{arrayInstance} of '{String.from(callee)}' has no name-id (its GenericInstanceId) — the two type columns are dense and in lockstep")
+		return layoutBlockOffsetFor(self.signatures.opaqueTypeParamPosition(self.signatures.containerElementType(gid)))
+	end 'opaqueArrayBlockOffset'
+
+	// ⭐ **THE ADDRESS OF ONE TYPE PARAMETER'S DICTIONARY BLOCK inside the current function's descriptor
+	// (W43b)** — what a runtime graph that takes a descriptor POINTER and reads a FIXED field offset from it
+	// (`__drop_type_param`'s `destroyFunc@40`, the `__arr_*_opaque` wrappers' `copyFunc@32`) must be handed,
+	// so that those graphs need no second offset argument and no signature change: the caller knows the
+	// parameter statically and the callee keeps reading field 0 of whatever block it was given.
+	//
+	// Parameter 0's block IS the descriptor, so a single-parameter instance emits no arithmetic at all and
+	// its code is byte-identical to what it emitted before the descriptor grew a block per parameter.
+	function descriptorBlockAddr(blockOffset ByteOffset, dstBlock IrBlock) returns ValueId
+		if blockOffset == 0 'theFirstBlockIsTheDescriptor'
+			return self.implicitLayoutValueId
+		end 'theFirstBlockIsTheDescriptor'
+
+		let offsetId = self.mintStdValueId()
+		self.stdModule.appendOp(dstBlock, op: StdOp.const(offsetId, value: blockOffset as ParsedInt, valueType: StdType.i64))
+		let addrId = self.mintStdValueId()
+		self.stdModule.appendOp(dstBlock, op: StdOp.binOp(addrId, lhs: self.implicitLayoutValueId, rhs: offsetId, opcode: StdBinOpcode.add, operandType: StdType.i64))
+		return addrId
+	end 'descriptorBlockAddr'
 
 	// Lower a Maxon `indirectCall` to `StdOp.callIndirect` (P1.5-A1). There is NO signature to SLOT
 	// against — a function TYPE has no parameter names, so the arguments are already in call order (the
@@ -2848,7 +2907,7 @@ type MaxonToStdLowering
 			end 'witnessTryCall'
 			// The throwing OPAQUE-`T` `slice` (`__arr_slice_opaque`) takes the enclosing instance's descriptor as
 			// its last argument, appended here exactly as the non-throwing clone/append do in `lowerRuntimeCall`.
-			self.stdModule.appendOp(dstBlock, op: StdOp.tryCall(result, errorFlagId: errorFlag, callee: callee, args: self.opaqueCopyArgsWithDescriptor(callee, args: args)))
+			self.stdModule.appendOp(dstBlock, op: StdOp.tryCall(result, errorFlagId: errorFlag, callee: callee, args: self.opaqueCopyArgsWithDescriptor(callee, args: args, dstBlock: dstBlock)))
 			return
 		end 'compilerOwnTryCall'
 

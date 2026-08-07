@@ -4419,9 +4419,12 @@ end 'noteClonerUsage'
 // copies does not carry).
 function rootManagedOpaqueArrayElementClones(usage RuntimeUsage, signatures ProgramSignatures)
 	for id in 0 upto signatures.genericInstanceCount() 'eachInstance'
-		if signatures.genericInstanceOpaqueArrayElementIsCopyable(id) 'copyableOpaque'
-			recordCallUsage(signatures.managedOpaqueArrayElementCloneCallee(id), usage: usage)
-		end 'copyableOpaque'
+		// Once per TYPE PARAMETER — `rootManagedOpaqueArrayElementDrops`' rule, one column over (W43b).
+		for position in 0 upto signatures.genericInstanceArgCount(id) 'eachTypeParam'
+			if signatures.genericInstanceOpaqueArrayElementIsCopyable(id, position: position) 'copyableOpaque'
+				recordCallUsage(signatures.managedOpaqueArrayElementCloneCallee(id, position: position), usage: usage)
+			end 'copyableOpaque'
+		end 'eachTypeParam'
 	end 'eachInstance'
 end 'rootManagedOpaqueArrayElementClones'
 
