@@ -15789,7 +15789,17 @@ export type Parser
 			// is redundant with the sink — but it makes this branch PROVABLY exclusive of the managed branch above
 			// (which needs `valueIsManagedHeap`, false for a `typeParameter`), so no parameter is ever enrolled
 			// twice, and it pins the drop router's `typeParameter` arm to exactly what is enrolled here.
-			if self.signatures.paramFeedOf(funcName, index: i).sinkIsCalleeStorage() and self.tagOf(i as ValueId) == ValueTypeTag.typeParameter 'opaqueFeed'
+			//
+			// ⚡ **THE TAG IS ASKED FIRST, AND THE ORDER IS THE WHOLE OPTIMIZATION.** `tagOf` is a dense
+			// per-value array read; `paramFeedOf` is a whole-program map lookup that returns two unions, and
+			// MEASURED it costs 2 allocations EVERY TIME IT IS ASKED — +2 per single-parameter function and
+			// +6 per three-parameter one, on a corpus with no generics anywhere in it. The predecessor kept it
+			// off that path by accident: `isInstanceMethod` was a per-FUNCTION boolean hoisted out of this loop,
+			// and it short-circuited every receiverless function's parameters before the lookup. W10 replaced it
+			// with the right question and lost the guard with the wrong one. The tag is the guard that belongs
+			// here — it is local, it is exact (a feed parameter is type-parameter-typed by construction, stated
+			// two paragraphs up), and it is already a required conjunct, so asking it first adds no test at all.
+			if self.tagOf(i as ValueId) == ValueTypeTag.typeParameter and self.signatures.paramFeedOf(funcName, index: i).sinkIsCalleeStorage() 'opaqueFeed'
 				self.markValueOwnsHeap(i as ValueId)
 				self.ownedBindings.push(binding)
 			end 'opaqueFeed'
