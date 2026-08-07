@@ -1358,13 +1358,25 @@ type MaxonToStdLowering
 	// same predicate (`sig.takesReceiver()`) so a call can never take its descriptor from one value and its
 	// witnesses from another.
 	function appendWitnessArgs(out ValueIdArray, argIds ValueIdArray, sig FuncSignature, result ValueId, callee ByteArray, dstBlock IrBlock)
-		let source = try argIds.get(0) otherwise panic("appendWitnessArgs: witness-carrying instance method '{String.from(callee)}' has no receiver argument — its first parameter is `self`") if sig.takesReceiver() else result
+		let source = self.witnessSourceValue(argIds, sig: sig, result: result, callee: callee)
 		let constraints = self.signatures.witnessConstraintsOfMethod(callee)
 		for i in 0 upto constraints.count() 'eachConstraint'
 			let constraint = try constraints.get(i) otherwise panic("appendWitnessArgs: whereConstraints.get OOB at {i}")
 			out.push(self.materializeWitnessArg(source, constraint: constraint, constraintIndex: i, callee: callee, dstBlock: dstBlock))
 		end 'eachConstraint'
 	end 'appendWitnessArgs'
+
+	// The value a call's witness tables are read off — the RECEIVER for an instance method, the RESULT for a
+	// `Self`-returning static (W43b). It is `materializeLayoutArgFor`'s split, decided by the same
+	// `sig.takesReceiver()`, so a call cannot take its layout descriptor from one value and its witnesses
+	// from another. A receiverless callee that is NOT a generic constructor carries no witness block at all
+	// (`witnessParamCountForCallee`), so it never reaches here.
+	function witnessSourceValue(argIds ValueIdArray, sig FuncSignature, result ValueId, callee ByteArray) returns ValueId
+		if not sig.takesReceiver() 'staticConstructor'
+			return result
+		end 'staticConstructor'
+		return try argIds.get(0) otherwise panic("witnessSourceValue: witness-carrying instance method '{String.from(callee)}' has no receiver argument — its first parameter is `self`")
+	end 'witnessSourceValue'
 
 	// The witness-table address to pass for ONE constraint (P1.7a slice 2a). A CONCRETE generic-instance
 	// receiver → the RIP-relative address of `__witness_<ConcreteArg>.<Iface>` (`rdataAddr`), emitting the
