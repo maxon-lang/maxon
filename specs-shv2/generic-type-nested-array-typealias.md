@@ -1702,6 +1702,8 @@ array would make two arrays each destroy it once, so the array move-in door refu
 refuses a `get`: the shared body has no way to copy an opaque `T`, and this is the copy the program is asking
 for.
 
+⚠ **THIS IS THE ONE NEW REFUSAL IN THIS RUNG THAT TURNS A COMPILING PROGRAM RED, AND THE COORDINATOR MEASURED IT RATHER THAN TAKING THE CLAIM.** On the merge base (`cad4cf30d`) this exact program **compiles and exits 0** — not because it is sound, but because `main` never calls `copyInto`, so the unsound body is never reached. Its two siblings in this rung are strict improvements by comparison: `feed-into-borrowing-user-push-rejected` **panicked the compiler** on the base (`appendDropTypeParamDescriptor`), and `push-borrowed-opaque-element-rejected` **compiled and segfaulted** (exit 139). ⭐ **The body is refused rather than the CALL, and that is deliberate and consistent**: `emitOpaqueFieldReassign` already refuses the identical borrow at a FIELD store, and shv2 refuses an unsound opaque body at the statement (the owned-opaque `return`) rather than compiling it and hoping nothing reaches it. ⚠ Measured blast radius INSIDE the corpus: **zero** — the full suite is green, which builds the whitelisted stdlib for every case. Outside it, what this newly refuses is a body that could not be called anyway: the base answers `E3005 expected 'Container.ElementArray', got 'StringArray'` at any external call site (board row `W25`), and emits that diagnostic twice (`W24`).
+
 <!-- test: push-for-element-into-second-opaque-array-rejected -->
 ```maxon
 typealias ExitCode = int(0 to 125)
