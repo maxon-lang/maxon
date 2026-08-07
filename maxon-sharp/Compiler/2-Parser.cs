@@ -222,20 +222,43 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     var registry = new Dictionary<string, IrType>();
     if (seedModule == null) return registry;
 
-    foreach (var (typeName, type) in seedModule.TypeDefs) {
-      if (TryGoverningDeclaration(seedModule, typeName, sourceFilePath, out var governing)) {
-        // A name with no governing declaration is not a fallback to the flat entry: it is this reader
-        // standing outside every scope the name was declared in, and the name is not a type here.
-        if (governing is not { } nearest) continue;
-
-        registry[typeName] = nearest.DeclaredType ?? type;
-        continue;
-      }
-
-      if (IsTypeVisibleAcrossFiles(seedModule, typeName, sourceFilePath)) registry[typeName] = type;
-    }
+    foreach (var typeName in seedModule.TypeDefs.Keys)
+      if (TryTypeAsSeenFrom(seedModule, typeName, sourceFilePath, out var type)) registry[typeName] = type;
 
     return registry;
+  }
+
+  /// <summary>
+  /// ⭐ WHAT <paramref name="typeName"/> MEANS TO A FILE AT <paramref name="accessorPath"/> — WHICH
+  /// declaration governs it and WHAT that declaration binds the name to, answered in one call.
+  ///
+  /// ⚠ THEY ARE ONE QUESTION, AND SPLITTING THEM IS THE DEFECT ITSELF. Asked of two maps — the choice
+  /// through the scoped sites, the payload from the flat, bare-name-keyed <c>TypeDefs</c> — they can
+  /// answer about two DIFFERENT declarations, which is exactly why the type travels in
+  /// <see cref="AliasSite.DeclaredType"/> rather than in a table beside it. The constant folder's
+  /// foreign-perspective lookup (<see cref="TryResolveForeignConstFoldType"/>) was doing precisely
+  /// that: it gated on the scoped visibility rule and then handed back <c>TypeDefs</c>'s single
+  /// entry, which for a name two files declare is whichever merged last.
+  ///
+  /// <c>false</c> means the name is not a type this reader may write: either no declaration of it
+  /// governs <paramref name="accessorPath"/>, or — for a name with at most one declaring file, where
+  /// the flat tables describe it exactly — the visibility filter says no.
+  /// </summary>
+  private static bool TryTypeAsSeenFrom(IrModule<MaxonOp> seedModule, string typeName,
+      string? accessorPath, [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out IrType? type) {
+    type = null;
+    if (TryGoverningDeclaration(seedModule, typeName, accessorPath, out var governing)) {
+      // A name with no governing declaration is not a fallback to the flat entry: it is this reader
+      // standing outside every scope the name was declared in, and the name is not a type here.
+      if (governing is not { } nearest) return false;
+
+      type = nearest.DeclaredType ?? seedModule.TypeDefs.GetValueOrDefault(typeName);
+      return type != null;
+    }
+
+    if (!IsTypeVisibleAcrossFiles(seedModule, typeName, accessorPath)) return false;
+
+    return seedModule.TypeDefs.TryGetValue(typeName, out type);
   }
 
   // Cross-file type visibility used by the parser-ctor seed filter and by
@@ -1779,15 +1802,20 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   /// USE-SITE error. <see cref="ParseTypeRef"/> raises E3063 against this set, ahead of its own
   /// registry lookup, so the DECLARING files' own references are refused too.
   ///
-  /// ⚠ REFUSING THE DECLARER'S OWN REFERENCE IS A DIVERGENCE FROM CANONICAL, AND A DELIBERATE ONE.
-  /// Canonical's model is directory precedence: a file's own declaration is nearest, so its own use
-  /// is unambiguous. This compiler cannot honour that — its type tables are keyed by bare name and
-  /// hold ONE entry, so of two declarations neither of which may be renamed, the one that merged last
-  /// takes the other's storage. Measured with two one-byte ranges that disagree on signedness, an
-  /// `export typealias Cell = int(0 to 255)` holding 200 read its own value back as −56. There is no
-  /// use site at which a use-site rule could catch that: the file's own use is the wrong answer, and
-  /// canonical calls it unambiguous. So the choice is a wrong answer or a refusal, and it is a
-  /// refusal. Giving the tables a scope is the other cure and is not a mint rule.
+  /// ⚠ REFUSING THE DECLARER'S OWN REFERENCE IS A DIVERGENCE FROM CANONICAL, AND ITS ORIGINAL REASON
+  /// IS DEAD. It read: canonical's model is directory precedence, a file's own declaration is
+  /// nearest, and this compiler CANNOT HONOUR THAT — its type tables are keyed by bare name and hold
+  /// ONE entry, so of two declarations neither of which may be renamed the one that merged last took
+  /// the other's storage, and the declarer's own use was the wrong answer with no use site able to
+  /// catch it. W48 gave those tables a scope: <see cref="AliasScope.NearestDeclarationFor"/> ranks
+  /// THE READER'S OWN FILE first, so a declarer now reads back what it stored — measured, the
+  /// enclosing and nested declarers of one `Tally` answer 200 and −50 for themselves. The dilemma
+  /// "a wrong answer or a refusal" is therefore gone, and what is left is a CHOICE, still made the
+  /// same way: the pair this set marks is one NO rule separates for a third file, and E3063 is raised
+  /// at every bare use of the name including the declarers' own (measured: two `export Score`s in
+  /// disjoint directories are refused at `api/types.maxon`'s own reference).
+  ///
+  /// ⚠ DO NOT RE-DERIVE "GIVE THE TABLES A SCOPE" FROM THIS PARAGRAPH. It exists.
   ///
   /// ⚠ IT WAS COMPUTED IN <c>IrModule.Merge</c> AND NOWHERE ELSE — a place a file's own parse has
   /// already passed by the time its module is merged, so a declaring file could never be refused by
@@ -6459,11 +6487,15 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   // is tried first (the common path — folding the current file's own constant). When folding a
   // FOREIGN constant, its cast/enum type may be an alias or enum PRIVATE to the declaring file:
   // absent from this parser's registry but present on the module keyed by name, admitted only if
-  // that file may actually see it, through the one cross-file type-visibility rule.
+  // that file may actually see it.
+  //
+  // ⚠ THROUGH THE SAME ONE ANSWERER THE PARSER'S OWN SEED USES, and it did not used to be. It asked
+  // the SCOPED visibility rule which declaration governs the declarer, then took the payload from the
+  // flat `TypeDefs` — two maps, which for a name two files declare can describe two different
+  // declarations. That is the defect this rung closes, and it had a third reader here.
   private bool TryResolveForeignConstFoldType(string name, out IrType type) {
     if (_constFoldPerspectivePath != null && _currentModule != null
-        && _currentModule.TypeDefs.TryGetValue(name, out var foreign)
-        && IsTypeVisibleAcrossFiles(_currentModule, name, _constFoldPerspectivePath)) {
+        && TryTypeAsSeenFrom(_currentModule, name, _constFoldPerspectivePath, out var foreign)) {
       type = foreign;
       return true;
     }

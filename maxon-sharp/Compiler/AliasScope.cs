@@ -6,12 +6,16 @@ namespace MaxonSharp.Compiler;
 /// How far a typealias declaration reaches — the one fact three separate questions about a
 /// declaration are answers to.
 ///
-/// ⚠ THE MEMBER ORDER IS LOAD-BEARING AND IS COMPARED WITH <c>&gt;</c>, at the record guard in
-/// <c>Parser.CopyTypeAliasesToModule</c>: the WIDEST declaration owns the module's single
-/// record for a name. Declared narrowest-first for that reason. Reordering or inserting a member
-/// changes which declaration wins that record, and nothing would fail to compile — it was a private
-/// enum beside its own comparison until BATCH34 moved it here, so the dependency is now across files
-/// and this note is the only thing carrying it.
+/// ⚠ THE MEMBER ORDER IS LOAD-BEARING AND IS COMPARED WITH <c>&gt;</c> BY TWO READERS. Declared
+/// narrowest-first for that reason; reordering or inserting a member changes what both decide, and
+/// nothing would fail to compile — it was a private enum beside its own comparison until BATCH34
+/// moved it here, so the dependency is now across files and this note is the only thing carrying it.
+/// <list type="bullet">
+/// <item>the record guard in <c>Parser.CopyTypeAliasesToModule</c>: the WIDEST declaration owns the
+///   module's single record for a name;</item>
+/// <item>the last rank in <see cref="AliasScope.CompareNearness"/>: of two declarations nothing else
+///   separates, the one that PUBLISHES its name governs the reader.</item>
+/// </list>
 /// </summary>
 public enum AliasReach {
   /// <summary>A plain <c>typealias</c>: its own file and nowhere else.</summary>
@@ -170,6 +174,10 @@ public static class AliasScope {
   ///   the reader's side. Among those that do NOT contain the reader, canonical gives the reader the
   ///   ENCLOSING declaration ("the nearer declaration wins inside its own subtree and the enclosing
   ///   one everywhere else"), so there the SHALLOWEST governs.</item>
+  /// <item>DECLARED REACH. Only the stdlib layer reaches this: <see cref="ReachOfSeeded"/> promotes a
+  ///   stdlib file-private declaration to whole-program, so it arrives beside a stdlib
+  ///   <c>export</c> of the same name with nothing above to separate them. The one that PUBLISHES
+  ///   its name governs — see <see cref="CompareNearness"/> for what was measured without it.</item>
   /// </list>
   ///
   /// ⚠ THE ORDER IS TOTAL, DELIBERATELY. Two declarations no rule separates are the AMBIGUITY
@@ -223,6 +231,23 @@ public static class AliasScope {
       bool candidateIsDeeper = candidateDepth > incumbentDepth;
       return (candidateEncloses ? candidateIsDeeper : !candidateIsDeeper) ? 1 : -1;
     }
+
+    // ⭐ A DECLARATION THAT PUBLISHES ITS NAME OUTRANKS ONE THAT DOES NOT, and only the STDLIB layer
+    // ever gets here needing it. Two PROJECT declarations cannot reach this line as peers: a
+    // file-private one is visible to its own file alone, and the reader's-own-file test above has
+    // already settled that file. But ReachOfSeeded hands every stdlib alias to every parser however
+    // it is written, so a stdlib file-private declaration and a stdlib `export` of one name arrive
+    // here indistinguishable, at equal depth, and the ordinal break below gave the name to whichever
+    // PATH sorted first. MEASURED, with `stdlib/Json.maxon`'s file-private `BytePos` narrowed to
+    // `int(0 to 9)`: a project file's `BytePos` resolved to THAT one rather than to
+    // `stdlib/String.maxon`'s `export typealias BytePos = int(0 to u64.max)`, and 5000 was refused
+    // E3005. The five such names in today's stdlib — `Byte`, `ByteArray`, `ByteCount`, `BytePos`,
+    // `StringArray` — are each written over identical ranges wherever they are declared, so the
+    // wrong winner is invisible until one of them moves.
+    //
+    // ⚠ IT IS THE DECLARED reach, not the seeded one: seeding is what made the pair peers, so
+    // reading it here would compare Program against Program and say nothing.
+    if (candidate.Reach != incumbent.Reach) return candidate.Reach > incumbent.Reach ? 1 : -1;
 
     return string.CompareOrdinal(incumbent.File, candidate.File);
   }
