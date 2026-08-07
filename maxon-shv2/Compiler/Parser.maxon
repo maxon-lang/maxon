@@ -4758,6 +4758,12 @@ end 'uniformArgRanges'
 // per-argument column because `slotCallArgs` indexes it.
 export let NoImmutableArgNames = ByteArrayArray.create()
 
+// The `value:` label of `Map.upsert(key, value:)` and its slot in a synthesized `(receiver, key, value)`
+// argument list (W41) — named rather than spelled inline so the desugar and the declaration it calls into
+// cannot disagree about which argument carries the label. `stdlib/Map.maxon:124`.
+let MapUpsertValueLabel = b"value"
+let MapUpsertValueArgSlot = 2 as FieldIndex
+
 // ⭐ **THE DEFAULT `argLabels` OF A COMPILER-EMITTED CALL: "all positional".** Shared and empty for
 // `NoImmutableArgNames`'s reason — nothing ever reads or mutates it, since `emitRuntimeCall` materializes a
 // real per-argument column the moment it sees this one is empty. It is a DISTINCT constant from
@@ -40540,6 +40546,48 @@ export type Parser
 	// zeroed by `__mm_alloc`, so the first `upsert` lazily allocates the four buffers; the two destructor stamps
 	// carry the key's and the value's drop callees (`__str_decref` for a managed column, 0 for a trivial one) so
 	// the map drops what it owns at teardown, at a replaced value and at a redundant duplicate key.
+	// ⭐ **THE EMPTY MAP A LITERAL STARTS FROM — the builtin op, or the corpus type's own `create()` (W41).**
+	// The one place the literal's two representations part company, so the `isMapBaseName` question is asked
+	// once per step rather than once per pair. `ConstructorInstance.instance(giid)` is what re-types the
+	// `returns Self` result to THIS instance — the same thing a written `IntIntMap.create()` gets from
+	// `constructorInstanceForBaseName`, so a literal-built map and a hand-built one carry one type.
+	function emitMapLiteralCreate(giid GenericInstanceId, anchor Token, range SourceRange) returns ValueId throws ParseError
+		if self.signatures.isMapInstance(giid) 'synthesizedRecord'
+			return self.emitMapCreateOp(giid, range: range)
+		end 'synthesizedRecord'
+
+		var args = ValueIdArray.create()
+		var argLabels = emptyArgLabels(args)
+		var argRanges = uniformArgRanges(args, range: range)
+		let map = try self.emitCall(qualifiedMethodName(MapBuiltinBaseName, methodName: CreateMethodName), anchor: anchor, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: NoImmutableArgNames, rparenTok: anchor, resultUsed: true, constructorInstance: ConstructorInstance.instance(giid), mint: CalleeMint.notMinted)
+		// ⭐ **THE RESULT IS THE INSTANCE, AND SAYING SO IS THE CALLER'S JOB — `emitCall` does not do it.**
+		// `constructorInstance` is read by the CONSUME side alone; the type half is this separate step, exactly
+		// as `parseQualifiedCall` does it after its own `parseCallNamed`. Without it `Map.create` hands back
+		// the shared body's base `structRef` and the very next lowering step refuses it:
+		// *"materializeStaticConstructorLayout: layout-needing static callee 'Map.create' returns a structRef,
+		// not a generic instance"* (measured). The literal has no written alias to carry provenance from, which
+		// is what the empty name means here.
+		self.retypeGenericAliasConstructorResult(map, gid: giid, aliasName: EmptySourceText)
+		return map
+	end 'emitMapLiteralCreate'
+
+	// ⭐ **ONE PAIR INTO THE MAP — `emitMapLiteralCreate`'s twin, and the `value:` LABEL is the half that is
+	// easy to leave off.** `Map.upsert(key Key, value Value)` declares its second parameter labelled, so the
+	// synthesized call must spell it exactly as a written `m.upsert(k, value: v)` does or the argument
+	// matcher answers about a parameter the author never named.
+	function emitMapLiteralUpsert(map ValueId, key ValueId, value ValueId, anchor Token, range SourceRange) throws ParseError
+		if self.signatures.isMapInstanceAt(self.tagOf(map), nameId: self.valueNameId(map)) 'synthesizedRecord'
+			self.emitMapUpsert(map, key: key, value: value, range: range)
+			return
+		end 'synthesizedRecord'
+
+		var args = tripleArgs(map, second: key, third: value)
+		var argLabels = emptyArgLabels(args)
+		try argLabels.set(MapUpsertValueArgSlot, value: MapUpsertValueLabel) otherwise panic("emitMapLiteralUpsert: the label column for a three-argument call has no slot {MapUpsertValueArgSlot} — `emptyArgLabels` mints one entry per argument")
+		var argRanges = uniformArgRanges(args, range: range)
+		_ = try self.emitCall(qualifiedMethodName(MapBuiltinBaseName, methodName: UpsertMethodName), anchor: anchor, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: NoImmutableArgNames, rparenTok: anchor, resultUsed: false, constructorInstance: self.receiverConstructorInstance(map), mint: CalleeMint.notMinted)
+	end 'emitMapLiteralUpsert'
+
 	function emitMapCreateOp(giid GenericInstanceId, range SourceRange) returns ValueId
 		let keyDrop = self.columnDestroyValue(self.signatures.mapKeyType(giid), range: range)
 		let valueDrop = self.columnDestroyValue(self.signatures.mapValueType(giid), range: range)
@@ -40578,8 +40626,19 @@ export type Parser
 		// the same column gate the annotated door owes — asked BEFORE the create, so a refused literal emits no op.
 		try self.requireMapColumnTypes(giid, tok: firstKeyTok)
 
-		let map = self.emitMapCreateOp(giid, range: range)
-		self.emitMapUpsert(map, key: storedKey, value: storedValue, range: range)
+		// ⭐⭐ **ONCE `Map` IS THE CORPUS TYPE, THE LITERAL CALLS ITS METHODS (W41).** The desugar is
+		// UNCHANGED in shape — an empty map plus one insert-or-replace per pair — and changes only in what
+		// those two steps ARE: `__map_create`/`__map_upsert` while the record is synthesized,
+		// `Map.create`/`Map.upsert` once `stdlib/Map.maxon` is listed and `isMapBaseName` has retired the
+		// builtin. Anything else would be a literal-built map and a hand-built one that are not the same
+		// representation, which is the property this function's header has always claimed.
+		//
+		// ⚠ **MEASURED, and it is why the branch exists at all**: with the corpus type live and this door
+		// still emitting the builtin ops, `let m = [1: 10]` built a `MapRecordBytes` fused record and then
+		// dispatched `m.count()` into the corpus body that reads six declared fields — **0xC0000005 on 32 of
+		// `map.md`'s cases**, a green compile every time.
+		let map = try self.emitMapLiteralCreate(giid, anchor: firstKeyTok, range: range)
+		try self.emitMapLiteralUpsert(map, key: storedKey, value: storedValue, anchor: firstKeyTok, range: range)
 
 		self.skipNewlines()
 		while self.at(TokenKind.comma) 'morePairs'
@@ -40593,7 +40652,7 @@ export type Parser
 			try self.consume(TokenKind.colon)
 			self.skipNewlines()
 			let value = try self.parseMapColumnValue(func, giid: giid, position: MapValueArgPosition, columnNoun: HashTableValueColumnNoun, consume: true)
-			self.emitMapUpsert(map, key: key, value: value, range: range)
+			try self.emitMapLiteralUpsert(map, key: key, value: value, anchor: firstKeyTok, range: range)
 			self.skipNewlines()
 		end 'morePairs'
 		try self.consume(TokenKind.rightBracket)

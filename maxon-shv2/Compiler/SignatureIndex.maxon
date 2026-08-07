@@ -10855,8 +10855,24 @@ export type ProgramSignatures
 	end 'typeMentionsTypeParameter'
 
 	// Is `name` the builtin `Map` type — the base of every map instance.
+	// ⭐⭐ **AND A CORPUS `type Map` RETIRES IT (W41).** Every `Map`-instance query in the compiler routes
+	// through this one predicate, so a DECLARED `Map` answering false here is the whole retirement: the
+	// synthesized record, the `MapRecordBytes` box size, the seven-member builtin roster and the `__map_*`
+	// runtime all fall away together, and `Map with (K, V)` resolves as the ordinary declared generic instance
+	// it now is. One switch rather than ten, because the ten already asked one question.
+	//
+	// ⚠ **IT KEYS ON THE DECLARATION, NOT ON THE WHITELIST**, which is what makes it correct for a USER
+	// program too: a program declaring its own `type Map uses Key, Value` gets its own, exactly as A1s wave 2
+	// says a user spelling wins. `stdlib/Map.maxon` being listed is just the corpus taking that same door.
 	export function isMapBaseName(name ByteArray) returns bool
-		return name.equals(MapBuiltinBaseName)
+		if not name.equals(MapBuiltinBaseName) 'notTheName'
+			return false
+		end 'notTheName'
+
+		return match self.structOf(name) 'declaredByTheCorpus'
+			declared gives false
+			undeclared gives true
+		end 'declaredByTheCorpus'
 	end 'isMapBaseName'
 
 	// Is generic instance `id` a `Map with (K, V)`? (Reads the base NAME, which needs no base struct.)
@@ -10872,6 +10888,25 @@ export type ProgramSignatures
 	export function isMapInstanceAt(tag ValueTypeTag, nameId TypeNameId) returns bool
 		return tag == ValueTypeTag.genericInstance and self.isMapInstance(nameId)
 	end 'isMapInstanceAt'
+
+	// ⭐⭐ **DOES THIS (tag, id) DENOTE THE `Map` CONTAINER — WHOEVER SERVES IT (W41)?** The SHAPE question, and
+	// it is a genuinely different one from `isMapInstanceAt` above, which since the retirement asks *"is this
+	// map served by the SYNTHESIZED record"*.
+	//
+	// ⚠ **THE TWO CAME APART THE MOMENT `stdlib/Map.maxon` WAS LISTED, AND A DOOR THAT WANTED THE SHAPE GOT
+	// THE RUNTIME.** `inferredIntColumnBoundaryAdmits` asks how many COLUMNS a container has, so that a
+	// `[1: 1]` literal's inferred `Map with (int, int)` reaches a parameter declared through a
+	// `typealias IntMap = Map with (Integer, Integer)`. That has nothing to do with which runtime serves the
+	// record — and reading the retirement gate there re-broke the very program its own header records having
+	// been built for: **MEASURED, `map.md`'s `for-in.nested` and `tuples`' `for-in-over-map-allocates-no-tuple`
+	// both answered `E3005: argument type mismatch for 'm': expected 'IntMap', got 'Map_int_int'`.**
+	//
+	// ⇒ A door asks THIS one when it wants to know what the container IS, and `isMapInstanceAt` when it wants
+	// to know what will EXECUTE it. Splitting them is what makes that choice visible at each site instead of
+	// riding on a predicate whose meaning changed underneath them.
+	export function isMapShapedInstanceAt(tag ValueTypeTag, nameId TypeNameId) returns bool
+		return tag == ValueTypeTag.genericInstance and self.genericInstanceBaseName(nameId).equals(MapBuiltinBaseName)
+	end 'isMapShapedInstanceAt'
 
 	// The KEY type of `Map with (K, V)` — type argument 0, the one the probe hashes and compares.
 	export function mapKeyType(id GenericInstanceId) returns MaxonType
@@ -11335,7 +11370,9 @@ export type ProgramSignatures
 			return self.columnsDenoteOneSlot(self.containerElementType(declaredNameId), gotColumn: self.containerElementType(gotNameId))
 		end 'bothAreArrayInstances'
 
-		if self.isMapInstanceAt(gotTag, nameId: gotNameId) and self.isMapInstanceAt(declaredTag, nameId: declaredNameId) 'bothAreMapInstances'
+		// The SHAPE predicate, not the runtime one: this arm is about a container having two columns, which is
+		// true of the corpus `Map` exactly as it was of the synthesized one. See `isMapShapedInstanceAt`.
+		if self.isMapShapedInstanceAt(gotTag, nameId: gotNameId) and self.isMapShapedInstanceAt(declaredTag, nameId: declaredNameId) 'bothAreMapInstances'
 			return self.columnsDenoteOneSlot(self.mapKeyType(declaredNameId), gotColumn: self.mapKeyType(gotNameId)) and self.columnsDenoteOneSlot(self.mapValueType(declaredNameId), gotColumn: self.mapValueType(gotNameId))
 		end 'bothAreMapInstances'
 
@@ -13925,6 +13962,36 @@ export type ProgramSignatures
 	// every other door reaches for that element list rather than a second spelling of it. A rejection is an
 	// invariant break, not a user error: every element came out of a layout this index already registered and
 	// was only substituted, so an element that fails the tuple-element rule now failed it at the declaration.
+	// ⭐⭐ **EVERY TUPLE LAYOUT THE WHOLE-PROGRAM INDEX HOLDS — because a SUBSTITUTED one is in no file's
+	// artifact and so reaches `project.structTypes` through nothing (W41).**
+	//
+	// A tuple the source SPELLS is interned while its file is parsed, lands in that file's
+	// `artifact.structTypes`, and `ParseStaging.commitStructTypes` copies it into the project registry that
+	// `MmRuntime.installStructDestructors` walks. A tuple minted by SUBSTITUTION has neither half: it is
+	// created by `substituteTupleThroughInstance` at a CALL SITE, straight into this index, and no artifact
+	// ever carries it.
+	//
+	// ⚠ **MEASURED, and the symptom is a compiler panic rather than a diagnostic**: with the corpus `Map`
+	// live, `for (_, value) in m` over a `["a": 10]` walks `MapIterator.current()`, whose declared `Entry =
+	// (Key, Value)` substitutes to `__Tuple2.String.int`. The parser emits the drop call for it; nothing
+	// synthesizes the body; the backend stops at
+	// `resolveCallFixups: call to unknown function '__destruct___Tuple2.String.int'`. A plain
+	// `function pair() returns (String, Num)` in the same tree compiles and runs, which is what localizes it
+	// to the substituted mint and not to tuples.
+	//
+	// It answers with the LAYOUTS rather than with the names, because its one caller needs the field list to
+	// synthesize a cascade and a name would only send it back here. Walked once per compile, and only by a
+	// program that already needs a destructor at all — see the caller's gate.
+	export function tupleLayouts() returns StructLayoutArray
+		var out = StructLayoutArray.create()
+		for (name, layout) in self.structTypes 'eachRegisteredType'
+			if isTupleTypeName(name) 'aTuple'
+				out.push(layout)
+			end 'aTuple'
+		end 'eachRegisteredType'
+		return out
+	end 'tupleLayouts'
+
 	export function substituteTupleThroughInstance(tupleName ByteArray, id GenericInstanceId) returns ByteArray
 		let layout = try self.structTypes.get(tupleName) otherwise panic("ProgramSignatures.substituteTupleThroughInstance: `{String.from(tupleName)}` is not registered — every tuple `structRef` in the compiler was minted by `internTupleType`, which registers the layout before it hands the name back")
 

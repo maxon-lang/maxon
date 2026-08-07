@@ -1387,6 +1387,26 @@ type MaxonToStdLowering
 		let tag = self.valueTagOf(receiver)
 		if tag == ValueTypeTag.genericInstance 'concrete'
 			let gid = try self.valueNameIds.get(receiver) otherwise panic("materializeWitnessArg: genericInstance receiver v{receiver} has no name-id (its GenericInstanceId)")
+
+			// ⭐⭐ **AN INSTANCE OVER THE ENCLOSING BODY'S OWN TYPE PARAMETER FORWARDS, IT DOES NOT MATERIALIZE
+			// (W41).** The receiver IS a concrete `genericInstance` — but the argument at the constrained
+			// position may be an OPAQUE parameter of the function we are lowering: `Map.createIterator` building
+			// a `MapIterator with (Key, Value)` while `Key` is still `Map`'s own parameter. There is no table to
+			// name (`conformerTypeArgName` answers a mangled `T<digest>` that no conformance is filed under, and
+			// `ensureWitnessTable` on it PANICS in `witnessSlotImpl`), and there does not need to be: the caller
+			// was handed one, and its own `where` clause says which slot.
+			//
+			// ⚠ **THE SLOT COMES FROM THE SHARED VERDICT, NEVER FROM `constraintIndex`.** The two constraint
+			// lists here belong to DIFFERENT declarations (`Map`'s and `MapIterator`'s), so the prefix-alignment
+			// that lets the `structRef`/`typeParameter` arm below forward slot `i` to slot `i` does not hold and
+			// must not be assumed — that is exactly the wrong forwarding index this rung exists to avoid.
+			// `opaqueParamDischarge` is the same answer `checkWhereConstraints` accepted the program on, so the
+			// slot placed here is the slot the check verified.
+			let typeArg = self.signatures.substitutedInstanceArg(gid, position: constraint.typeParamIndex)
+			if maxonTypeTag(typeArg) == ValueTypeTag.typeParameter 'opaqueArgument'
+				return self.forwardOpaqueParamWitness(typeNameIdOf(typeArg), constraint: constraint, callee: callee)
+			end 'opaqueArgument'
+
 			// The CANONICAL conformer name (`Box with Integer` -> `int`, `Box with Point` -> `Point`), so the
 			// table label (`__witness_int.Hashable`) and its slot reloc (`int.hash`) name the synthesized primitive
 			// impl — the SAME reducer the E3017 check keys its conformance lookup by, never a second spelling.
@@ -1421,6 +1441,42 @@ type MaxonToStdLowering
 	// diagnosable type error. `Parser.requireReceiverSatisfiesExtensionConstraints` refuses that program with a
 	// position, so reaching here means that refusal did not fire; testing only `== 0` let every non-zero
 	// mismatch through in silence.
+	// ⭐⭐ **FORWARD THE SLOT THE ENCLOSING DECLARATION'S OWN `where` CLAUSE PROMISED FOR AN OPAQUE ARGUMENT
+	// (W41)** — the cross-declaration case `forwardCallerWitness` deliberately does not cover, because there
+	// the two constraint lists belong to one type and align by index, and here they do not.
+	//
+	// ⚠⚠ **THE OWNER GUARD IS THE WHOLE SAFETY ARGUMENT AND IT IS CHECKED, NOT ASSUMED.**
+	// `opaqueParamDischarge` returns an index into the OWNER declaration's `whereConstraints`, and that index
+	// is a witness-parameter number only for a function whose witness block IS that list — a method of the
+	// owner type (its own, or an extension's, whose extras come after). Lowering a body that reached an
+	// opaque parameter owned by some OTHER declaration would forward a slot holding an unrelated table: a
+	// wild indirect call, invisible to every check downstream. Nothing produces that shape today — a bare `T`
+	// resolves against the ENCLOSING declaration's `uses` list and nowhere else — which is precisely why it
+	// is worth a panic rather than a comment.
+	//
+	// ⚠ `unsatisfied` is likewise an invariant break rather than a user error: `checkWhereConstraints` ran
+	// this same predicate and refused the program with E3017 if it did not discharge, so reaching lowering
+	// means it did. Both panics name the two declarations, because the answer to "which one is wrong" is
+	// always which pair failed to line up.
+	function forwardOpaqueParamWitness(token TypeParamId, constraint WhereConstraint, callee ByteArray) returns ValueId
+		let owner = try self.signatures.typeParamOwnerOf(token) otherwise panic("forwardOpaqueParamWitness: lowering '{String.from(self.currentFuncName)}' reached an opaque type parameter (token {token}) that no declaration filed — every `typeParameter` the parser mints is recorded against the `uses` list it was resolved from")
+		// The declaring TYPE of the function being lowered — the same `Type.member` split
+		// `witnessConstraintsOfMethod` reads a caller's own constraint list through, so the two agree on what
+		// "this function's type" means by construction.
+		let enclosingType = match splitQualifiedName(self.currentFuncName) 'q'
+			notQualified gives EmptySourceText
+			parts(typeName, _) gives typeName
+		end 'q'
+		if not enclosingType.equals(owner.declaringTypeName) 'foreignParameter'
+			panic("forwardOpaqueParamWitness: '{String.from(self.currentFuncName)}' passes `{String.from(owner.paramName)}` of `type {String.from(owner.declaringTypeName)}` to '{String.from(callee)}', but this function is a method of `{String.from(enclosingType)}` — a witness slot index of one declaration is not a parameter number of another, and forwarding it would read a table out of an unrelated slot")
+		end 'foreignParameter'
+
+		match opaqueParamDischarge(self.signatures, interfaces: self.interfaces, token: token, interfaceName: constraint.interfaceName) 'discharge'
+			slot(index) then return self.forwardCallerWitness(index, callee: callee)
+			unsatisfied then panic("forwardOpaqueParamWitness: '{String.from(self.currentFuncName)}' passes `{String.from(owner.paramName)}` to '{String.from(callee)}', which requires `{String.from(constraint.interfaceName)}`, and `type {String.from(owner.declaringTypeName)}` promises nothing that reaches it — `checkWhereConstraints` asks this same question and refuses such a program with E3017, so the two have come apart")
+		end 'discharge'
+	end 'forwardOpaqueParamWitness'
+
 	function forwardCallerWitness(constraintIndex WitnessSlotIndex, callee ByteArray) returns ValueId
 		if constraintIndex >= self.currentWitnessCount 'noSuchSlot'
 			panic("forwardCallerWitness: caller '{String.from(self.currentFuncName)}' carries {self.currentWitnessCount} witness parameter(s) and was asked to forward slot {constraintIndex} to '{String.from(callee)}' — a generic→generic dispatch is only reached from an instance method whose own constraint list is a PREFIX-COMPATIBLE superset of the callee's")
