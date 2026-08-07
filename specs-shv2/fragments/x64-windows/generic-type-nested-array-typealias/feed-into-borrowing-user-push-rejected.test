@@ -1,0 +1,39 @@
+// Test: feed-into-borrowing-user-push-rejected
+typealias ExitCode = int(0 to 125)
+
+type Sink uses S
+	export var n as ExitCode
+
+	export static function create() returns Self
+		return Self{ n: 0 }
+	end 'create'
+
+	export function push(x S) returns S
+		return x
+	end 'push'
+end 'Sink'
+
+type Container uses Element
+	typealias ElementSink = Sink with Element
+
+	export var sink as ElementSink
+
+	export static function create() returns Self
+		return Self{ sink: ElementSink.create() }
+	end 'create'
+
+	export function add(item Element)
+		let kept = self.sink.push(item)
+	end 'add'
+end 'Container'
+
+typealias StringContainer = Container with String
+
+function main() returns ExitCode
+	var sc = StringContainer.create()
+	sc.add("a string long enough to force a heap allocation")
+	return 0
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:25:18: Unsupported: 'add' owns an opaque type-parameter value it must release on some path, but the method reserves no layout descriptor to release it through — the shared generic body compiles once for every instantiation, so the element's destructor is read from the enclosing instance's descriptor at run time, and the parameter carrying it is reserved only for a method whose feed can be left live. This happens when a type-parameter argument is handed to a `push`/`set`/`insert` on something that is NOT an `Array` and does not take ownership of it: move it into an `Array with <type parameter>` (or a type-parameter field), or take the argument on a method that consumes it

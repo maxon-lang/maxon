@@ -1316,3 +1316,477 @@ end 'main'
 ```exitcode
 0
 ```
+
+### An IMPLICIT-self array mutator feeds the opaque element exactly as `self.items.push` does
+
+`items.push(item)` and `self.items.push(item)` are the SAME store — implicit-self resolves the bare field read
+to `self.items` — so the whole-program feed fact must be the same for both. Recorded off a `self`-headed token
+run only, the implicit spelling left `item` unmarked: the concrete call site handed the array a BORROWED
+`.rdata` String it believed it solely owned, and the array's one-shot element drop wrote a refcount into a
+read-only section (`0xC0000005`). The mutator call is recognized by its own `<receiver> . push (` shape, so
+neither spelling can be the one that is seen.
+
+<!-- test: implicit-self-push-feeds-opaque-element -->
+```maxon
+typealias ExitCode = int(0 to 125)
+typealias Count = int(0 to u64.max)
+
+type Container uses Element
+	typealias ElementArray = Array with Element
+
+	export var items as ElementArray
+
+	export static function create() returns Self
+		return Self{ items: ElementArray.create() }
+	end 'create'
+
+	export function count() returns Count
+		return items.count()
+	end 'count'
+
+	export function push(item Element)
+		items.push(item)
+	end 'push'
+end 'Container'
+
+typealias StringContainer = Container with String
+
+function main() returns ExitCode
+	var sc = StringContainer.create()
+	sc.push("hello")
+	sc.push("world")
+	let c = sc.count()
+	if c == 2 'check'
+		return 0
+	end 'check'
+	return 1
+end 'main'
+```
+```exitcode
+0
+```
+
+### An implicit-self mutator feed of a HEAP element is freed once, not twice
+
+The same implicit-self push with an INTERPOLATED (heap) String element. The `.rdata` arm above faults on the
+first release because the section is read-only; a heap element takes the OTHER arm of the same missing transfer
+— two `__str_decref` on one live record, a genuine double free. Both arms are the one unbalanced `+0` on the way
+in, so both are pinned.
+
+<!-- test: implicit-self-push-heap-element -->
+```maxon
+typealias ExitCode = int(0 to 125)
+typealias Count = int(0 to u64.max)
+
+type Container uses Element
+	typealias ElementArray = Array with Element
+
+	export var items as ElementArray
+
+	export static function create() returns Self
+		return Self{ items: ElementArray.create() }
+	end 'create'
+
+	export function count() returns Count
+		return items.count()
+	end 'count'
+
+	export function push(item Element)
+		items.push(item)
+	end 'push'
+end 'Container'
+
+typealias StringContainer = Container with String
+
+function main() returns ExitCode
+	var sc = StringContainer.create()
+	for i in 0 upto 3 'fill'
+		sc.push("element number {i} of a heap-allocated string")
+	end 'fill'
+	let c = sc.count()
+	if c == 3 'check'
+		return 0
+	end 'check'
+	return 1
+end 'main'
+```
+```exitcode
+0
+```
+
+### A STATIC factory feeds an opaque element through a LOCAL array
+
+A `static function of(first Element) returns Self` that pushes its type-parameter argument into a LOCAL
+`ElementArray` and then hands that array to the returned `Self` durably stores `first`: the array owns the
+element wherever the array itself lives, and the instance the static returns owns the array. The sweep once
+declared that *"a `static` method has no `self`, so it contributes no direct feed"* — false, and this is the
+shape that disproves it. The parameter is recorded as a callee-storage feed and enrolled owned in the shared
+body, so the concrete call site transfers.
+
+<!-- test: static-factory-push-into-local-array -->
+```maxon
+typealias ExitCode = int(0 to 125)
+typealias Count = int(0 to u64.max)
+
+type Holder uses Element
+	typealias ElementArray = Array with Element
+
+	export var items as ElementArray
+
+	export static function of(first Element) returns Self
+		var xs = ElementArray.create()
+		xs.push(first)
+		return Self{ items: xs }
+	end 'of'
+
+	export function count() returns Count
+		return items.count()
+	end 'count'
+end 'Holder'
+
+typealias StringHolder = Holder with String
+
+function main() returns ExitCode
+	let h = StringHolder.of("hello")
+	let c = h.count()
+	if c == 1 'check'
+		return 0
+	end 'check'
+	return 1
+end 'main'
+```
+```exitcode
+0
+```
+
+### A static factory feed of a HEAP element is freed once, not twice
+
+The static-factory shape with an interpolated (heap) String element — the double-free arm of the same missing
+transfer, pinned beside its `.rdata` twin above.
+
+<!-- test: static-factory-push-heap-element -->
+```maxon
+typealias ExitCode = int(0 to 125)
+typealias Count = int(0 to u64.max)
+
+type Holder uses Element
+	typealias ElementArray = Array with Element
+
+	export var items as ElementArray
+
+	export static function of(first Element) returns Self
+		var xs = ElementArray.create()
+		xs.push(first)
+		return Self{ items: xs }
+	end 'of'
+
+	export function count() returns Count
+		return items.count()
+	end 'count'
+end 'Holder'
+
+typealias StringHolder = Holder with String
+
+function main() returns ExitCode
+	let n = 7
+	let h = StringHolder.of("a heap-allocated element numbered {n}")
+	let c = h.count()
+	if c == 1 'check'
+		return 0
+	end 'check'
+	return 1
+end 'main'
+```
+```exitcode
+0
+```
+
+### Pushing a POPPED opaque element back into the array frees it once
+
+`self.items.push(self.items.pop())` moves the element OUT (the runtime nulls the vacated slot and the caller
+becomes its sole owner) and straight back IN (the array becomes its sole owner again). The moved-out value is an
+owned TEMPORARY, so the push must drain it from the statement's pending drops as well as poison a bare-local
+source — otherwise the statement drops it once and the array's element walk drops it again, a double free on a
+live record.
+
+<!-- test: push-a-popped-opaque-element -->
+```maxon
+typealias ExitCode = int(0 to 125)
+typealias Count = int(0 to u64.max)
+
+type Container uses Element
+	typealias ElementArray = Array with Element
+
+	export var items as ElementArray
+
+	export static function create() returns Self
+		return Self{ items: ElementArray.create() }
+	end 'create'
+
+	export function count() returns Count
+		return self.items.count()
+	end 'count'
+
+	export function push(item Element)
+		self.items.push(item)
+	end 'push'
+
+	export function rotate()
+		self.items.push(try self.items.pop() otherwise panic("rotate on an empty container"))
+	end 'rotate'
+end 'Container'
+
+typealias StringContainer = Container with String
+
+function main() returns ExitCode
+	var sc = StringContainer.create()
+	sc.push("a string long enough to force a heap allocation")
+	sc.rotate()
+	let c = sc.count()
+	if c == 1 'check'
+		return 0
+	end 'check'
+	return 1
+end 'main'
+```
+```exitcode
+0
+```
+
+### Pushing a BORROWED opaque element is rejected
+
+The shared generic body cannot COPY an opaque `T`, so an element moved into an opaque array must be a value this
+frame OWNS. `self.items.get(0)` yields a BORROW the array keeps, so pushing it back would give the array a
+second reference to a record it destroys once per slot — a double free with no diagnostic anywhere. The array
+move-in door makes the same demand `emitOpaqueFieldReassign` already makes at a field store: the two opaque
+sinks agree, and what the feed recognizer cannot transfer is refused rather than miscompiled.
+
+<!-- test: push-borrowed-opaque-element-rejected -->
+```maxon
+typealias ExitCode = int(0 to 125)
+
+type Container uses Element
+	typealias ElementArray = Array with Element
+
+	export var items as ElementArray
+
+	export static function create() returns Self
+		return Self{ items: ElementArray.create() }
+	end 'create'
+
+	export function push(item Element)
+		self.items.push(item)
+	end 'push'
+
+	export function duplicateFirst()
+		self.items.push(try self.items.get(0) otherwise panic("empty container"))
+	end 'duplicateFirst'
+end 'Container'
+
+typealias StringContainer = Container with String
+
+function main() returns ExitCode
+	var sc = StringContainer.create()
+	sc.push("a string long enough to force a heap allocation")
+	sc.duplicateFirst()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:18:19: Unsupported: moving a value that is not owned into an `Array with <type parameter>` in a shared generic body — the body cannot copy an opaque `T`, so the element must come from a parameter the method consumes or from a `pop`/`remove` that moved one out; a borrowed element (`get`/`first`/`last`, a `for` element, an opaque field read) would give the array a second reference to a record it destroys once
+```
+
+### A CONDITIONAL implicit-self feed is dropped on the un-pushed path, not leaked
+
+The half of the fix a wrong answer cannot show: recording the feed without ENROLLING it leaves the caller
+transferring a `+1` that nobody releases — a LEAK, which the process-exit gate reports as 101 rather than as a
+fault. `addMaybe` pushes on one branch only, so the enrolled opaque parameter is live at the merge on the other
+and the join drops it once through the descriptor-gated `__drop_type_param`. Two hundred heap elements are
+allocated and none survives.
+
+<!-- test: conditional-implicit-self-feed-leak-free -->
+```maxon
+typealias ExitCode = int(0 to 125)
+typealias Count = int(0 to u64.max)
+
+type Container uses Element
+	typealias ElementArray = Array with Element
+
+	export var items as ElementArray
+
+	export static function create() returns Self
+		return Self{ items: ElementArray.create() }
+	end 'create'
+
+	export function addMaybe(item Element, flag bool)
+		if flag 'maybe'
+			items.push(item)
+		end 'maybe'
+	end 'addMaybe'
+
+	export function count() returns Count
+		return items.count()
+	end 'count'
+end 'Container'
+
+typealias StringContainer = Container with String
+
+function main() returns ExitCode
+	var kept = 0
+	for i in 0 upto 200 'loop'
+		var sc = StringContainer.create()
+		sc.addMaybe("a heap-allocated element numbered {i}", flag: false)
+		kept = kept + sc.count()
+	end 'loop'
+	if kept == 0 'check'
+		return 0
+	end 'check'
+	return 1
+end 'main'
+```
+```exitcode
+0
+```
+
+### A CONDITIONAL static-factory feed is dropped on the un-pushed path, not leaked
+
+The same leak arm with no receiver at all. A `static` whose feed can be left live at an exit reserves the layout
+descriptor off its own feed fact rather than off "is this an instance method" — the descriptor-need seed asks
+the feed's SINK, so the reservation and the drop are decided by the same fact and cannot disagree.
+
+<!-- test: conditional-static-factory-feed-leak-free -->
+```maxon
+typealias ExitCode = int(0 to 125)
+typealias Count = int(0 to u64.max)
+
+type Holder uses Element
+	typealias ElementArray = Array with Element
+
+	export var items as ElementArray
+
+	export static function ofMaybe(first Element, flag bool) returns Self
+		var xs = ElementArray.create()
+		if flag 'maybe'
+			xs.push(first)
+		end 'maybe'
+		return Self{ items: xs }
+	end 'ofMaybe'
+
+	export function count() returns Count
+		return items.count()
+	end 'count'
+end 'Holder'
+
+typealias StringHolder = Holder with String
+
+function main() returns ExitCode
+	var kept = 0
+	for i in 0 upto 200 'loop'
+		let h = StringHolder.ofMaybe("a heap-allocated element numbered {i}", flag: false)
+		kept = kept + h.count()
+	end 'loop'
+	if kept == 0 'check'
+		return 0
+	end 'check'
+	return 1
+end 'main'
+```
+```exitcode
+0
+```
+
+### Pushing a `for` element of one opaque array into another is rejected
+
+A `for … in self.items` element is a BORROW the source array keeps and destroys. Moving it into a second opaque
+array would make two arrays each destroy it once, so the array move-in door refuses it for the same reason it
+refuses a `get`: the shared body has no way to copy an opaque `T`, and this is the copy the program is asking
+for.
+
+<!-- test: push-for-element-into-second-opaque-array-rejected -->
+```maxon
+typealias ExitCode = int(0 to 125)
+
+type Container uses Element
+	typealias ElementArray = Array with Element
+
+	export var items as ElementArray
+
+	export static function create() returns Self
+		return Self{ items: ElementArray.create() }
+	end 'create'
+
+	export function push(item Element)
+		self.items.push(item)
+	end 'push'
+
+	export function copyInto(dst ElementArray)
+		for e in self.items 'each'
+			dst.push(e)
+		end 'each'
+	end 'copyInto'
+end 'Container'
+
+typealias StringContainer = Container with String
+
+function main() returns ExitCode
+	var sc = StringContainer.create()
+	sc.push("a string long enough to force a heap allocation")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:19:13: Unsupported: moving a value that is not owned into an `Array with <type parameter>` in a shared generic body — the body cannot copy an opaque `T`, so the element must come from a parameter the method consumes or from a `pop`/`remove` that moved one out; a borrowed element (`get`/`first`/`last`, a `for` element, an opaque field read) would give the array a second reference to a record it destroys once
+```
+
+### A feed handed to a BORROWING `push` that is not an array's is rejected, not aborted
+
+The receiver of a `push`/`set`/`insert` is not resolvable when the feed sweep runs — it precedes every body
+parse — so a call on a USER type whose `push` merely borrows marks its argument a feed exactly as a real array
+move-in does. The parameter is then enrolled owned and nothing moves it, so it is released at the method's exit
+through the descriptor-gated `__drop_type_param`; and the descriptor is reserved only for a method whose feed
+can be left live, which this straight-line body is not. The two bodies are the same token shape one receiver
+TYPE apart, so no pre-scan can separate them — the disagreement is caught once the body is emitted and REFUSED
+with a position. Before, it reached the lowering, which ABORTED THE COMPILER naming the function and no source
+location at all.
+
+<!-- test: feed-into-borrowing-user-push-rejected -->
+```maxon
+typealias ExitCode = int(0 to 125)
+
+type Sink uses S
+	export var n as ExitCode
+
+	export static function create() returns Self
+		return Self{ n: 0 }
+	end 'create'
+
+	export function push(x S) returns S
+		return x
+	end 'push'
+end 'Sink'
+
+type Container uses Element
+	typealias ElementSink = Sink with Element
+
+	export var sink as ElementSink
+
+	export static function create() returns Self
+		return Self{ sink: ElementSink.create() }
+	end 'create'
+
+	export function add(item Element)
+		let kept = self.sink.push(item)
+	end 'add'
+end 'Container'
+
+typealias StringContainer = Container with String
+
+function main() returns ExitCode
+	var sc = StringContainer.create()
+	sc.add("a string long enough to force a heap allocation")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:25:18: Unsupported: 'add' owns an opaque type-parameter value it must release on some path, but the method reserves no layout descriptor to release it through — the shared generic body compiles once for every instantiation, so the element's destructor is read from the enclosing instance's descriptor at run time, and the parameter carrying it is reserved only for a method whose feed can be left live. This happens when a type-parameter argument is handed to a `push`/`set`/`insert` on something that is NOT an `Array` and does not take ownership of it: move it into an `Array with <type parameter>` (or a type-parameter field), or take the argument on a method that consumes it
+```

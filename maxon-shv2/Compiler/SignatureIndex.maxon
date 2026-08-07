@@ -345,6 +345,12 @@ let DeclShapeWhereConstraint = 44 as ContentHash
 let FeedShapeFeeds = 38 as ContentHash
 let FeedShapeNone = 39 as ContentHash
 
+// The feed's SINK (W10). It decides whether the CALLEE is enrolled owner of the fed parameter, and whether a
+// BORROWED argument at that position is retained or given a scope lifetime — two different emitted programs
+// for the same position, so a change to it must move a caller's parse memo exactly as the position does.
+let FeedSinkConstructedValueShape = 76 as ContentHash
+let FeedSinkCalleeStorageShape = 77 as ContentHash
+
 // A generic type's INNER ranged typealias shape discriminator (P1.6-C) — `DeclShapeAlias`'s twin, for its
 // reason: a change to `type Wrapper`'s `typealias Idx` (its range, or whether it exists) changes what
 // `Instance.Idx` resolves and type-checks against in ANY file, so a reader's parse memo must move with it.
@@ -1778,6 +1784,39 @@ end 'TypeParamOwner'
 // Token ⇒ the `(declaring type, parameter, position)` that minted it. See `TypeParamOwnerMap`.
 export typealias TypeParamOwnerMap = Map with (TypeParamId, TypeParamOwner)
 
+// ⭐⭐ **WHERE A FED TYPE-PARAMETER ARGUMENT ENDS UP — AND IT IS A PER-PARAMETER FACT, NOT A PER-FUNCTION ONE
+// (W10).** The two sinks want OPPOSITE things of the callee, so which one a parameter feeds decides whether the
+// shared body enrols it owned, whether the method reserves a layout descriptor to drop it through, and what a
+// BORROWED argument at that position costs the caller.
+//
+// ⚠ **IT USED TO BE READ OFF `ParamConsumeInfo.isInstanceMethod()`, AND THAT WAS A LOSSY KEY.** It happened to
+// be exact while the recognizer saw only `self`-headed stores: `Self{f: p}` feeds were marked for receiverless
+// functions only (`scanConsumeBits`'s `detectFieldStores`) and array/field-reassign feeds only under a literal
+// `self` token, so "is there a receiver" and "which sink" agreed by accident. A STATIC that pushes its
+// type-parameter argument into a LOCAL `Array with T` and hands that array to the `Self` it returns feeds
+// callee storage with no receiver at all, and there the accident stops holding — so the fact is recorded
+// rather than inferred.
+export enum FeedSink
+	// `Self{item: p}` in a receiverless constructor: the parameter is moved into a field of the value the call
+	// RETURNS, so the CALLER's value co-owns it and this frame drops nothing. Enrolling it owned in the callee
+	// would drop it a second time.
+	constructedValue
+	// An opaque `Array` element (`items.push(p)`, wherever the array lives) or a reassigned opaque `T` field
+	// (`self.saved = p`): the callee's own storage takes ownership and releases the value exactly once, so the
+	// shared body must enrol the parameter owned — move-tracked into the sink, and dropped once through the
+	// descriptor-gated `__drop_type_param` on any path that does not move it.
+	calleeStorage
+end 'FeedSink'
+
+// The content-hash discriminator of one feed sink — the enum's own spelling for `mixTypeParamFeed`, kept beside
+// the enum so a third sink cannot be added without a discriminator of its own.
+function feedSinkShape(sink FeedSink) returns ContentHash
+	return match sink 'sink'
+		constructedValue gives FeedSinkConstructedValueShape
+		calleeStorage gives FeedSinkCalleeStorageShape
+	end 'sink'
+end 'feedSinkShape'
+
 // ⭐ **A CONSTRUCTOR PARAMETER'S TYPE-PARAMETER FEED (P1.6-B2)** — for a parameter MOVED into a
 // type-PARAMETER field (`Box.create(v T)` → `Self{value: v}`, `v` feeds `T` at position 0), the type
 // parameter POSITION it fills; `none` for every other parameter (a scalar, a direct-field store, an
@@ -1790,10 +1829,10 @@ export typealias TypeParamOwnerMap = Map with (TypeParamId, TypeParamOwner)
 // ⚠ **A POSITION AND NOT A `TypeParamId` (W14).** It is spent as an INDEX into the concrete instance's
 // argument list, and since W14 those are two different numbers — see `MaxonDialect.TypeParamPosition`.
 export union TypeParamFeed
-	feeds(position TypeParamPosition)
+	feeds(position TypeParamPosition, sink FeedSink)
 	none
 
-	// Does this carry a feed position — the `feeds(pos)` case rather than `none`? The boolean the transitive
+	// Does this carry a feed position — the `feeds(…)` case rather than `none`? The boolean the transitive
 	// array-feed fixpoint (P1.7 slice 3b-iv) seeds its reverse-reachability BFS from, without re-spelling the
 	// `match` at every node.
 	export function isFeed() returns bool
@@ -1802,6 +1841,17 @@ export union TypeParamFeed
 			none gives false
 		end 'f'
 	end 'isFeed'
+
+	// Does the fed value land in storage the CALLEE owns and releases (W10)? The one question the callee-side
+	// enrolment (`bindParameters`), the descriptor-need seed (`computeTypeDescriptorNeeds`) and the
+	// borrowed-argument promotion (`handleEscapingBorrowFeed`) all ask, so the sink is read through ONE door
+	// and the three cannot come to disagree about who frees the value.
+	export function sinkIsCalleeStorage() returns bool
+		return match self 'f'
+			feeds(_, sink) gives sink == FeedSink.calleeStorage
+			none gives false
+		end 'f'
+	end 'sinkIsCalleeStorage'
 end 'TypeParamFeed'
 
 export typealias TypeParamFeedArray = Array with TypeParamFeed
@@ -1830,17 +1880,22 @@ export type ParamConsumeInfo
 		return try self.bits.get(index) otherwise panic("ParamConsumeInfo.isConsumed: bits.get OOB at {index} despite index < count")
 	end 'isConsumed'
 
-	// Does ANY parameter feed a type parameter (P1.7 slice 3b-v)? The whole-`feeds`-column twin of
+	// Does ANY parameter feed CALLEE-OWNED storage (P1.7 slice 3b-v, W10)? The whole-`feeds`-column twin of
 	// `typeParamFeedOf`'s single-index read — the descriptor-need seed asks it per method (via
-	// `ProgramSignatures.functionFeedsTypeParam`). Empty for a non-generic function, so it answers false.
-	export function feedsAnyTypeParam() returns bool
+	// `ProgramSignatures.functionFeedsCalleeStorage`). Empty for a non-generic function, so it answers false.
+	//
+	// ⚠ It asks the SINK, not merely `isFeed()`: only a callee-storage feed is enrolled owned, so only it can be
+	// left live at an exit and dropped through the descriptor. A `Self{item: p}` CONSTRUCTOR feed is settled
+	// entirely at the concrete call site, and seeding the descriptor off it would reserve a slot a generic
+	// constructor has no receiver to source (the refusal at `parseFunction`'s `staticLayoutNeedsSelfReturn`).
+	export function feedsCalleeStorage() returns bool
 		for i in 0 upto self.feeds.count() 'each'
-			if (try self.feeds.get(i) otherwise panic("feedsAnyTypeParam: feeds.get OOB at {i} despite i < count")).isFeed() 'feed'
+			if (try self.feeds.get(i) otherwise panic("feedsCalleeStorage: feeds.get OOB at {i} despite i < count")).sinkIsCalleeStorage() 'feed'
 				return true
 			end 'feed'
 		end 'each'
 		return false
-	end 'feedsAnyTypeParam'
+	end 'feedsCalleeStorage'
 
 	// The type-parameter position parameter `index` feeds, or `none` — the concrete-site managed-consume
 	// map. Out of range (a non-generic function's empty `feeds`, an unknown label) answers `none`, exactly
@@ -1851,17 +1906,6 @@ export type ParamConsumeInfo
 		end 'past'
 		return try self.feeds.get(index) otherwise panic("ParamConsumeInfo.typeParamFeedOf: feeds.get OOB at {index} despite index < count")
 	end 'typeParamFeedOf'
-
-	// Does this function TAKE A RECEIVER — is it an instance method rather than a static/top-level function?
-	// The sweep prepends `SelfParamName` at slot 0 for an instance method's CALL-ALIGNED parameter list
-	// (`callAlignedInstanceParams`) and never for a receiverless function, so the first name IS the whole test.
-	// The distinction the escaping-borrow store reads: a type-parameter FEED in a STATIC constructor is a
-	// `Self{item: item}` store the box CO-OWNS (retained), while a feed in an INSTANCE method is a
-	// callee-owns-and-moves store into durable storage (`self.items.push(item)`, `self.saved = next` — the
-	// slice-3b mechanism) whose lifetime is handled by the callee, never by a caller-side retain.
-	export function isInstanceMethod() returns bool
-		return self.paramNames.count() > 0 and (try self.paramNames.get(0) otherwise panic("ParamConsumeInfo.isInstanceMethod: paramNames.get(0) on a non-empty list")).equals(SelfParamName)
-	end 'isInstanceMethod'
 end 'ParamConsumeInfo'
 
 export type ParamConsumeEntry
@@ -6227,11 +6271,13 @@ export type ProgramSignatures
 		self.hash = state
 	end 'recordParamConsume'
 
-	// Fold one parameter's type-parameter feed into the hash — `feeds(position)` mixes its position, `none`
-	// its own discriminator (so a parameter that GAINED a feed hashes distinctly from one that never had one).
+	// Fold one parameter's type-parameter feed into the hash — `feeds(position, sink)` mixes both, `none` its own
+	// discriminator (so a parameter that GAINED a feed hashes distinctly from one that never had one). The SINK
+	// rides because the two sinks emit different programs for the same position (W10): one enrols the callee
+	// owner, the other leaves ownership with the constructed value.
 	function mixTypeParamFeed(state ContentHash, feed TypeParamFeed) returns ContentHash
 		return match feed 'f'
-			feeds(position) gives mix(mix(state, value: FeedShapeFeeds), value: position)
+			feeds(position, sink) gives mix(mix(mix(state, value: FeedShapeFeeds), value: position), value: feedSinkShape(sink))
 			none gives mix(state, value: FeedShapeNone)
 		end 'f'
 	end 'mixTypeParamFeed'
@@ -6260,17 +6306,17 @@ export type ProgramSignatures
 		end 'c'
 	end 'paramFeedOf'
 
-	// ⭐ **DOES `callee` FEED ANY parameter into a type parameter?** (P1.7 slice 3b-v) — the descriptor-need
+	// ⭐ **DOES `callee` FEED ANY parameter into storage IT owns?** (P1.7 slice 3b-v, W10) — the descriptor-need
 	// seed reads this: a method that enrols an opaque feed parameter owned may DROP it on a path that does not
 	// move it (a conditional `push`/forward), and that drop reads the enclosing instance's layout descriptor
 	// `destroyFunc@40` at run time, so the method must carry the descriptor parameter. A borrow-only callee (no
-	// entry) feeds nothing.
-	export function functionFeedsTypeParam(callee ByteArray) returns bool
+	// entry) feeds nothing, and a CONSTRUCTOR feed enrols nothing, so neither can need a descriptor.
+	export function functionFeedsCalleeStorage(callee ByteArray) returns bool
 		return match self.consumeOf(callee) 'c'
-			consumes(info) gives info.feedsAnyTypeParam()
+			consumes(info) gives info.feedsCalleeStorage()
 			borrowsAll gives false
 		end 'c'
-	end 'functionFeedsTypeParam'
+	end 'functionFeedsCalleeStorage'
 
 	// ⭐ **THE CALLEE'S CONSUME FACTS, or `borrowsAll`** — the door a CALL SITE asks once, then slots each
 	// argument against `info.paramNames` to decide which ones are moved. `borrowsAll` (no recorded entry) is
