@@ -53,6 +53,13 @@ public record TypeAliasInfo(string SourceTypeName, Dictionary<string, IrType>? T
 public record DeclaredGenericAlias(string Name, bool IsExported, bool IsModuleVisible, bool IsStdlib,
     string? SourceFilePath, Dictionary<string, long>? ConstArgs);
 
+// Which generic INSTANCE one top-level alias NAME was declared over, and by which file — the two
+// facts the contest test needs (see IrModule.DeclaredAliasInstances). The instance is carried as
+// IrStructType.InstanceIdentity's spelling rather than as types, because the declaration pass runs
+// before any source struct has its fields and the type OBJECTS it holds are re-made by every later
+// pass; the spelling is the part that is settled at declaration time and stays settled.
+public record DeclaredAliasInstance(string Identity, string? SourceFilePath);
+
 // Metadata for constant array literals that can be placed in .rdata
 public record ConstantArrayLiteralInfo(string RdataLabel, long[] Values, bool IsMutable, int ElementSize, bool IsBitPacked = false);
 
@@ -393,6 +400,14 @@ public class IrModule<TOp> where TOp : IPrintableOp {
   // and a project compile must inherit stdlib's DECLARATIONS while sharing none of its objects.
   public Dictionary<string, DeclaredGenericAlias> DeclaredGenericAliases { get; } = [];
 
+  // The same declarations, indexed the other way round — by alias NAME, carrying the INSTANCE that
+  // name was declared over. The index above answers "what does the project call this instance?"; this
+  // one answers "do two files mean two instances by this name?", which is the contest
+  // (<see cref="ContestedGenericAliasNames"/>). Filled in the same whole-project pass and read only
+  // to fill that set, so the answer is settled before the first file mints anything — see the ⭐ note
+  // on ContestedGenericAliasNames for why a LATE answer is not merely late but wrong.
+  public Dictionary<string, DeclaredAliasInstance> DeclaredAliasInstances { get; } = [];
+
   // Reverse index: sourceTypeName -> aliases for that source. Hot during
   // monomorphization (TypeSubstitution.FindConcreteAlias used to scan every
   // alias linearly). Lazily (re)built when TypeAliasSources.Count differs from
@@ -565,8 +580,13 @@ public class IrModule<TOp> where TOp : IPrintableOp {
   /// A name in here therefore names no type at all: every declaring file registers its instance
   /// under the STRUCTURAL name that instance would have had if nothing declared it
   /// (<see cref="IrStructType.InstanceIdentity"/>'s spelling), and the alias stays a per-file
-  /// spelling of it. Recorded by the typealias pre-scan, which walks every file before the pass
-  /// that mints, so both declarations are renamed and the answer does not depend on file order.
+  /// spelling of it.
+  ///
+  /// ⚠ RECORDED BY THE WHOLE-PROJECT DECLARATION PASS (<see cref="DeclaredAliasInstances"/>), which
+  /// is the ONLY pass that has read every file and minted nothing — so both declarations are renamed,
+  /// the answer does not depend on file order, and, just as importantly, no pass that mints ever sees
+  /// this answer CHANGE. Recorded any later it flipped a parameter type's name between two passes,
+  /// which registered one function twice and crashed the compiler; see RecordAliasInstanceForContest.
   /// </summary>
   public HashSet<string> ContestedGenericAliasNames { get; } = [];
 
@@ -677,6 +697,7 @@ public class IrModule<TOp> where TOp : IPrintableOp {
     foreach (var (k, v) in FunctionDefaults) clone.FunctionDefaults[k] = v;
     foreach (var (k, v) in TypeAliasSources) clone.TypeAliasSources[k] = CopyAliasInfo(v, typeCopier);
     foreach (var (k, v) in DeclaredGenericAliases) clone.DeclaredGenericAliases[k] = v;
+    foreach (var (k, v) in DeclaredAliasInstances) clone.DeclaredAliasInstances[k] = v;
     foreach (var (k, v) in ConstantArrayLiterals) clone.ConstantArrayLiterals[k] = v;
     foreach (var (k, v) in InterfaceAssociatedTypes) clone.InterfaceAssociatedTypes[k] = v;
     foreach (var (k, v) in PrimitiveConformances) clone.PrimitiveConformances[k] = [.. v];

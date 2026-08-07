@@ -408,3 +408,114 @@ end 'main'
 ```stdout
 wide=5 narrow=200
 ```
+
+
+<!-- test: file-private-generic-alias-named-in-a-signature -->
+⭐ The same two declarations as the case above, with the alias named where a TYPE NAME OUTLIVES THE
+PASS THAT RESOLVED IT: a function parameter. ⚠⚠ **THIS CRASHED THE COMPILER** — `E9001 An item with
+the same key has already been added. Key: wideFill$xs_Cells`, out of `ParameterMutationAnalysisPass`,
+on a program that is perfectly legal. A contested alias's type is registered under a structural name,
+so `xs Cells` resolved to a type answering `Cells` for its name in the pass that had not yet seen the
+contest and `Array_Cell_i64_0to100000` in the pass that had. Overload registration mangles a colliding
+signature by that name, so ONE function registered in two passes became TWO, and the second was then
+renamed onto the first's name. The cure is that the contest is settled by the whole-project
+DECLARATION pass — the one pass that has read every file and minted nothing — so no pass that mints
+ever sees the answer change. Prints `wide=70000 narrow=200`, exactly as its sibling: the point is that
+it compiles at all, and that the two files still keep their own storage.
+```maxon
+// --- file: aa.maxon
+typealias Cell = int(0 to 100000)
+typealias Cells = Array with Cell
+
+function wideFill(xs Cells) returns Cell
+	xs.push(70000)
+	let v = try xs.get(0) otherwise 0
+	return v
+end 'wideFill'
+
+export type Wide
+	export static function stash() returns Cell
+		var xs = Cells.create()
+		return wideFill(xs)
+	end 'stash'
+end 'Wide'
+
+// --- file: zz.maxon
+typealias Cell = int(0 to 255)
+typealias Cells = Array with Cell
+
+function narrowFill(xs Cells) returns Cell
+	xs.push(200)
+	let v = try xs.get(0) otherwise 0
+	return v
+end 'narrowFill'
+
+export type Narrow
+	export static function stash() returns Cell
+		var xs = Cells.create()
+		return narrowFill(xs)
+	end 'stash'
+end 'Narrow'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	print("wide={Wide.stash()} narrow={Narrow.stash()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+wide=70000 narrow=200
+```
+
+
+<!-- test: file-private-generic-alias-over-float-and-int -->
+⭐ Two files' `Cell` agree on a NAME and on both BOUNDS and differ in the only remaining thing — the
+base type. ⚠⚠ **A CONTEST TEST THAT SPELLS AN INSTANCE WITHOUT ITS BASE TYPE READS THIS PAIR AS ONE
+INSTANCE**, reports agreement, renames nothing, and hands both files the same `Array`. Measured that
+way: `wide` printed a double's bit pattern read as an integer in one file order and `narrow` printed
+`0` in the other — a wrong answer BOTH ways, and a different wrong answer each way. It is the sibling
+cases' defect reached through the identity spelling rather than through the alias table, which is why
+it belongs beside them: a projection that drops a distinguishing field does not report a difference,
+it reports agreement. Prints `wide=2.5 narrow=70000`.
+```maxon
+// --- file: aa.maxon
+typealias Cell = float(0 to 100000)
+typealias Cells = Array with Cell
+
+export type Wide
+	export static function stash() returns Cell
+		var xs = Cells.create()
+		xs.push(2.5)
+		let v = try xs.get(0) otherwise 0.0
+		return v
+	end 'stash'
+end 'Wide'
+
+// --- file: zz.maxon
+typealias Cell = int(0 to 100000)
+typealias Cells = Array with Cell
+
+export type Narrow
+	export static function stash() returns Cell
+		var xs = Cells.create()
+		xs.push(70000)
+		let v = try xs.get(0) otherwise 0
+		return v
+	end 'stash'
+end 'Narrow'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	print("wide={Wide.stash()} narrow={Narrow.stash()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+wide=2.5 narrow=70000
+```

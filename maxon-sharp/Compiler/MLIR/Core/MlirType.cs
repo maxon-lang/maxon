@@ -353,6 +353,14 @@ public class IrStructType : IrType {
   /// normalization (its exclusive upper is not a value), so the two forms keep the two spellings the
   /// source has, which is what they are.
   ///
+  /// ⚠ THE BASE TYPE IS PART OF THE SPELLING, AND LEAVING IT OUT REOPENED THE WHOLE DEFECT.
+  /// A name and a pair of bounds do not determine a type: <c>float(0 to 100000)</c> and
+  /// <c>int(0 to 100000)</c>, declared under one alias name in two files, spelled the same
+  /// <c>Cell_0to100000</c> — so the contest test read TWO instances as one, nothing was renamed, and
+  /// the program printed a double's bits as an integer in one file order and <c>0</c> in the other.
+  /// A projection that drops a distinguishing field does not report a difference; it reports
+  /// agreement, which is the failure mode this whole record exists to remove.
+  ///
   /// ⚠ THE BOUNDS ARE JOINED BY A WORD, NOT BY AN UNDERSCORE, AND THAT IS NOT COSMETIC. This
   /// segment ends up inside an emitted type name, and <c>MlirPrinter</c>'s IR dump reads a trailing
   /// <c>_&lt;digits&gt;</c> on ANY identifier as a per-scope COUNTER and renumbers it. Spelled
@@ -364,10 +372,10 @@ public class IrStructType : IrType {
     if (typeArg is not IrRangedPrimitiveType ranged) return typeArg.Name;
 
     return ranged.IsFloatBased
-      ? $"{ranged.Name}_{RangeBoundSegment(ranged.FloatLower)}"
+      ? $"{ranged.Name}_{ranged.BaseType.Name}_{RangeBoundSegment(ranged.FloatLower)}"
         + (ranged.UpperInclusive ? InclusiveRangeJoin : ExclusiveRangeJoin)
         + RangeBoundSegment(ranged.FloatUpper)
-      : $"{ranged.Name}_{RangeBoundSegment(ranged.IntLower)}{InclusiveRangeJoin}{RangeBoundSegment(ranged.InclusiveIntUpper)}";
+      : $"{ranged.Name}_{ranged.BaseType.Name}_{RangeBoundSegment(ranged.IntLower)}{InclusiveRangeJoin}{RangeBoundSegment(ranged.InclusiveIntUpper)}";
   }
 
   // How the two bounds are joined, and what stands in for the two characters a bound can carry that

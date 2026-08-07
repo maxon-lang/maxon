@@ -1695,18 +1695,6 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
           && !(_isRescanningTypeAliases && isLocallyDeclared)) continue;
       _typeRegistry.TryGetValue(aliasName, out var aliasType);
 
-      // ⭐ TWO FILES, ONE ALIAS NAME, TWO GENERIC INSTANCES — recorded HERE because this is the
-      // write that used to lose one of them, and a fact derived from the losing write cannot come
-      // to disagree with it. See IrModule.ContestedGenericAliasNames for what the record is for.
-      // Only a LOCAL declaration is a competitor: an alias this parser borrowed on another file's
-      // behalf is the incumbent wearing a second parser's hat, not a second declaration of it.
-      if (isLocallyDeclared && aliasType != null
-          && module.TypeDefs.TryGetValue(aliasName, out var incumbentType)
-          && module.TypeAliasSources.TryGetValue(aliasName, out var incumbentAlias)
-          && incumbentAlias.SourceFilePath != _sourceFilePath
-          && DenotesADifferentInstance(incumbentAlias.SourceTypeName, incumbentType, sourceTypeName, aliasType))
-        module.ContestedGenericAliasNames.Add(aliasName);
-
       if (aliasType != null)
         module.TypeDefs[aliasName] = aliasType;
       var typeParams = aliasType is IrStructType st && st.TypeParams.Count > 0
@@ -1773,30 +1761,6 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
         module.NonExportedTypeNames.Add(aliasName);
       }
     }
-  }
-
-  /// <summary>
-  /// True when two same-named typealias declarations from two files name DIFFERENT generic
-  /// instances — the condition <see cref="IrModule{TOp}.ContestedGenericAliasNames"/> exists for.
-  ///
-  /// It is asked only of declarations that are fully resolved on BOTH sides. A type argument still
-  /// standing as a type PARAMETER is a declaration caught mid-specialization rather than a competing
-  /// instance, and reading one as a difference would rename an alias no second file contests.
-  ///
-  /// Non-generic declarations answer false and are not this record's business: a ranged alias emits
-  /// no methods, so two files' <c>Word32</c> already keep their own ranges — the parser resolves a
-  /// type name per file (specs/typealias-collision.md,
-  /// <c>file-private-alias-does-not-govern-another-file</c>).
-  /// </summary>
-  private static bool DenotesADifferentInstance(string incumbentSource, IrType incumbent,
-      string localSource, IrType local) {
-    if (incumbent is not IrStructType incumbentStruct || incumbentStruct.TypeParams.Count == 0) return false;
-    if (local is not IrStructType localStruct || localStruct.TypeParams.Count == 0) return false;
-    if (!incumbentStruct.TypeParams.Values.All(IsFullyConcreteType)) return false;
-    if (!localStruct.TypeParams.Values.All(IsFullyConcreteType)) return false;
-
-    return IrStructType.InstanceIdentity(incumbentSource, incumbentStruct.TypeParams, incumbentStruct.ConstParams)
-        != IrStructType.InstanceIdentity(localSource, localStruct.TypeParams, localStruct.ConstParams);
   }
 
   /// <summary>
@@ -5336,6 +5300,8 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   private void RecordDeclaredGenericAlias(string aliasName, string sourceName,
       Dictionary<string, IrType> substitution, Dictionary<string, long>? constArgs,
       bool isExported, bool isModuleVisible) {
+    RecordAliasInstanceForContest(aliasName, sourceName, substitution, constArgs);
+
     var index = _currentModule!.DeclaredGenericAliases;
     var key = IrStructType.InstanceKey(sourceName, substitution, constArgs);
     var declaration = new DeclaredGenericAlias(aliasName, isExported, isModuleVisible, _isStdlib,
@@ -5358,6 +5324,48 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
 
     if (string.CompareOrdinal(aliasName, incumbent.Name) < 0)
       index[key] = declaration;
+  }
+
+  /// <summary>
+  /// ⭐ TWO FILES, ONE ALIAS NAME, TWO GENERIC INSTANCES — the whole of the contest test, asked in
+  /// the DECLARATION pass because that is the only pass that has read every file and minted nothing.
+  ///
+  /// ⚠ ASKING IT ANY LATER IS NOT MERELY LATE, IT IS WRONG, AND IT CRASHED THE COMPILER. A contested
+  /// alias's type is registered under a STRUCTURAL name, so the type a parameter written
+  /// <c>xs Cells</c> resolves to answers <c>Cells</c> for its <c>.Name</c> before the contest is
+  /// known and <c>Array_Cell_i64_0to100000</c> after. Overload registration mangles a colliding signature
+  /// by that name (<see cref="TypeMangledSuffix"/>), so one function registered in two passes became
+  /// TWO functions, one of which was then renamed onto the other's name — a duplicate
+  /// <c>module.Functions</c> entry, and <c>E9001 An item with the same key has already been added</c>
+  /// out of ParameterMutationAnalysisPass on a program that is perfectly legal. The cure is not a
+  /// guard downstream; it is that no pass which mints ever sees this answer change.
+  ///
+  /// A type argument still standing as a type PARAMETER is a declaration caught mid-resolution rather
+  /// than a competing instance, and reading one as a difference would rename an alias no second file
+  /// contests. Two declarations in ONE file are not a contest either — that is the duplicate-alias
+  /// question, and one file's second declaration simply replaces its first.
+  ///
+  /// Non-generic declarations never reach here and are not this record's business: a ranged alias
+  /// emits no methods, so two files' <c>Word32</c> already keep their own ranges — the parser
+  /// resolves a type name per file (specs/typealias-collision.md,
+  /// <c>file-private-alias-does-not-govern-another-file</c>).
+  /// </summary>
+  private void RecordAliasInstanceForContest(string aliasName, string sourceName,
+      Dictionary<string, IrType> substitution, Dictionary<string, long>? constArgs) {
+    if (substitution.Count == 0 || !substitution.Values.All(IsFullyConcreteType)) return;
+
+    var identity = IrStructType.InstanceIdentity(sourceName, substitution, constArgs);
+    var index = _currentModule!.DeclaredAliasInstances;
+
+    if (!index.TryGetValue(aliasName, out var incumbent)) {
+      index[aliasName] = new DeclaredAliasInstance(identity, _sourceFilePath);
+      return;
+    }
+
+    if (incumbent.SourceFilePath == _sourceFilePath) return;
+
+    if (incumbent.Identity != identity)
+      _currentModule.ContestedGenericAliasNames.Add(aliasName);
   }
 
   /// <summary>
