@@ -301,3 +301,56 @@ end 'main'
 ```stdout
 70000 70001 4
 ```
+
+
+<!-- test: file-private-alias-does-not-govern-another-project-file -->
+⭐ The project-to-project twin of `file-private-alias-does-not-govern-another-file`, which pins the
+same rule against the *stdlib*. A file-private `typealias` is scoped to its declaring file, so two
+project files may each declare the same name over a different RANGE and each must keep its own.
+⚠⚠ **THE FILE ORDER IS LOAD-BEARING AND IS WHY THIS CASE LOOKS ODD.** The declaration that merges
+LAST wins the shared table, so the defect is invisible unless the NARROW declaration is the later one:
+written the other way round this program answers correctly and pins nothing. `aa.maxon` declares
+`Cell` wide and `zz.maxon` declares it narrow, and the names are chosen for that order, not for
+readability. ⚠ The wide file's own round trip is the discriminator: 70000 fits `int(0 to 100000)`
+and is truncated to 112 (= 70000 mod 256) the moment a range it never declared decides its storage.
+`Narrow.stash()`'s 200 is a liveness marker only — it sits inside BOTH ranges and can never tell them
+apart. Prints `wide=70000 narrow=200`.
+```maxon
+// --- file: aa.maxon
+typealias Cell = int(0 to 100000)
+typealias Cells = Array with Cell
+
+export type Wide
+	export static function stash() returns Cell
+		var xs = Cells.create()
+		xs.push(70000)
+		let v = try xs.get(0) otherwise 0
+		return v
+	end 'stash'
+end 'Wide'
+
+// --- file: zz.maxon
+typealias Cell = int(0 to 255)
+typealias Cells = Array with Cell
+
+export type Narrow
+	export static function stash() returns Cell
+		var xs = Cells.create()
+		xs.push(200)
+		let v = try xs.get(0) otherwise 0
+		return v
+	end 'stash'
+end 'Narrow'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	print("wide={Wide.stash()} narrow={Narrow.stash()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+wide=70000 narrow=200
+```
