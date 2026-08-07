@@ -41,6 +41,11 @@ that exists so `stdlib/Map.maxon`'s `MapIterator.current()` compiles, while a fi
 field assignment and a call argument all refuse it. What may not happen either way is a crash or a
 self-contradictory sentence, and those are what the cases below pin.
 
+⚠ **A diagnostic must not state WHERE the value came from unless it knows.** A tuple field written
+inline over the parameters is not substituted when the generic is instantiated, so the same refusal
+is reached from `main` — with no generic body anywhere in the program. A sentence about the two
+DERIVATIONS is true at every site that reaches it; a sentence about a "shared generic body" is not.
+
 ## Tests
 
 <!-- test: type-parameter-value-assigned-into-a-type-parameter-field -->
@@ -126,22 +131,22 @@ error E3005: specs/fragments/generic-body-doors/error.concrete-value-written-int
 ```
 
 
-<!-- disabled-test: error.concrete-value-passed-to-a-type-parameter-parameter -->
-<!-- needs a binding-aware check at monomorphization; the shared-body door cannot decide it -->
+<!-- test: error.concrete-value-passed-to-a-type-parameter-parameter -->
 The same store one door along: a concrete `Label` handed to a parameter the shared body declares as
-`T`. ⚠ It compiles clean, and passes a `Label` heap pointer into a slot the instantiation had fixed
-as an integer. Measured on `Box with Num`: the program built without a diagnostic and the pointer
-surfaced as the return value, where only an unrelated `ExitCode` range guard turned it into a panic
-instead of a wrong number.
+`T`. ⚠ It compiled CLEAN, and passed a `Label` heap pointer into a slot the instantiation had fixed
+as an integer — measured on `Box with Num`, the same program printing `r=2283682242640`, a pointer
+rendered as a number, with no diagnostic anywhere. That is the SILENCE this spec's documentation
+excludes, and it is the twin of the crash above: one door refused every program, its mirror accepted
+every program.
 
-⚠ **It is DISABLED rather than fixed, and the reason is a measurement, not caution.** The argument
-door skips an unbound type parameter, and it must: `stdlib/Interfaces.maxon:230` hands a concrete
-`ByteIterator` to a parameter declared `Source` and is CORRECT, because `Source` is bound two levels
-up to exactly that iterator. Refusing by the value's runtime aggregate identity — the only proxy
-available where the binding is unknown — turns the stdlib build red. Unlike the field-assignment
-door above, which refused every program by crashing and could therefore only be loosened, this door
-accepts every program, so the same proxy would be a REGRESSION. The exact rule needs the binding,
-and the binding is known at monomorphization.
+⚠ **The door cannot decide this in general, and must not try.** `stdlib/Interfaces.maxon:230` hands
+a concrete `ByteIterator` to a parameter declared `Source` and is CORRECT, because `Source` is bound
+two levels up to exactly that iterator; refusing by the value's runtime aggregate identity turns the
+stdlib build red. What it decides instead is the one case where the binding question answers itself:
+the callee is a method of the very type whose body we are in, and the parameter is that type's OWN
+parameter, still unbound. There is no binding, there cannot be one, and one body serves every
+instantiation — so no concrete aggregate can be that `T`. Measured: 11 candidate sites in the
+stdlib and 3495 committed spec fragments, zero refusals among them.
 ```maxon
 typealias Num = int(i64.min to i64.max)
 
@@ -177,7 +182,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/generic-body-doors/error.concrete-value-passed-to-a-type-parameter-parameter.test:23:10: a value of type 'Label' cannot meet argument 'v', which holds the type parameter 'T': one body serves every instantiation, so the type 'T' stands for is not known here
+error E3005: specs/fragments/generic-body-doors/error.concrete-value-passed-to-a-type-parameter-parameter.test:24:10: a value of type 'Label' cannot meet argument 'v', which holds the type parameter 'T': one body serves every instantiation, so the type 'T' stands for is not known here
 ```
 
 
@@ -191,6 +196,9 @@ time the mint sees it. ⚠ The refusal must NAME that. It previously read `expec
 got '__Tuple2-i64-i64'`: both spellings are the compiler's own, the declared side keeping the
 parameter NAMES while the constructed value had already been lowered, so the message reported an
 internal disagreement as though it were the program's mistake.
+
+⚠ **The sentence names the two DERIVATIONS and deliberately does not say where the value was
+built** — see the next case, which reaches the same refusal from `main`.
 ```maxon
 typealias Num = int(i64.min to i64.max)
 
@@ -211,5 +219,47 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/generic-body-doors/error.tuple-built-over-a-generics-own-type-parameters.test:8:15: a tuple built inside a shared generic body carries its elements' storage types, not the type parameters they came from, so it cannot meet field 'both' of 'Pair', declared '(A, B)'
+error E3005: specs/fragments/generic-body-doors/error.tuple-built-over-a-generics-own-type-parameters.test:8:15: a tuple value is named by its elements' storage types, and a tuple declared over a generic's type parameters is named by those parameters, so no tuple value can meet field 'both' of 'Pair', declared '(A, B)'
+```
+
+
+<!-- test: error.tuple-refused-at-an-instantiation-site-too -->
+The SAME refusal, reached from `main`, where there is no shared generic body anywhere in sight. ⚠ An
+inline tuple field type is NOT substituted when the generic is instantiated: `NumPair`'s `both` keeps
+the type `__Tuple2-A-B`, so a tuple literal written at top level meets a declared type still spelled
+in `Pair`'s parameters and is refused by the same door.
+
+Both top-level lines are refused this way — the reported one is the CALL, because the compiler stops
+at the first error; the assignment on the next line produces the same sentence with
+`field 'both' of 'NumPair'` in place of `argument 't'`.
+
+⚠ **This program is CORRECT and its refusal is a known limitation, not a verdict.** `NumPair` is
+`Pair with Num, Num`, so `(1, 2)` and `(7, 8)` are exactly what `both` holds. What this case pins is the SENTENCE:
+the message must state the two derivations and nothing about WHERE the value was built. It read *"a
+tuple built inside a shared generic body …"* and said that of this program, which is simply false —
+the same mistake, one level down, as refusing the DECLARATION would have been. Spelling the
+declared side as a NAMED alias does not lift the refusal either, it only moves the spellings
+(`__Tuple2-A-B_Num_Num` against `__Tuple2-i64-i64`), so lifting it is a type-identity change rather
+than a diagnostic's.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Pair uses A, B
+	export var both as (A, B)
+
+	static function make(t (A, B)) returns Self
+		return Self{both: t}
+	end 'make'
+end 'Pair'
+
+typealias NumPair = Pair with Num, Num
+
+function main() returns ExitCode
+	var p = NumPair.make((1, 2))
+	p.both = (7, 8)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: specs/fragments/generic-body-doors/error.tuple-refused-at-an-instantiation-site-too.test:15:18: a tuple value is named by its elements' storage types, and a tuple declared over a generic's type parameters is named by those parameters, so no tuple value can meet argument 't', declared '(A, B)'
 ```

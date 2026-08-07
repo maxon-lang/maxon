@@ -1,0 +1,39 @@
+// Test: error.concrete-value-passed-to-a-type-parameter-parameter
+typealias Num = int(i64.min to i64.max)
+
+type Label
+	export let n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Label'
+
+type Box uses T
+	export var value as T
+
+	static function create(v T) returns Self
+		return Self{value: v}
+	end 'create'
+
+	export function put(v T) returns T
+		return v
+	end 'put'
+
+	export function clobber() returns T
+		return put(Label.create(77))
+	end 'clobber'
+end 'Box'
+
+typealias NumBox = Box with Num
+
+function main() returns ExitCode
+	var b = NumBox.create(1)
+	return b.clobber() as ExitCode
+end 'main'
+---
+MaxoncStderr: ```
+error E3005: specs/fragments/generic-body-doors/error.concrete-value-passed-to-a-type-parameter-parameter.test:24:10: a value of type 'Label' cannot meet argument 'v', which holds the type parameter 'T': one body serves every instantiation, so the type 'T' stands for is not known here
+```
+---
+---

@@ -9398,10 +9398,13 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     if (returnType is IrTypeParameterType) return value;
 
     if (returnType is IrStructType expectedStruct) {
-      if (value is not MaxonStruct actualStruct || actualStruct.TypeName != expectedStruct.Name) {
-        if (value is MaxonStruct aliasActual && IsStructTypeCompatible(aliasActual.TypeName, expectedStruct.Name)) {
-          return value;
-        }
+      // ⚠ THE IDENTITY QUESTION IS ASKED THROUGH `DeclaredNameAccepts`, not respelled here. It was
+      // respelled here — an equality test, then an `IsStructTypeCompatible` fallback beside it —
+      // which is a THIRD copy of the rule that method's own remark says must have one home, and the
+      // two copies could only ever agree by having been written the same week: a tolerance added
+      // there (the enum-alias case it names) would have left a `return` refusing exactly what an
+      // assignment one line away accepts, with nothing in either site reading as a bug.
+      if (!(value is MaxonStruct && DeclaredNameAccepts(expectedStruct.Name, value))) {
         // A concrete tuple meeting a tuple declared over the enclosing generic's own parameters. The
         // two can never agree by NAME — see TupleDerivationMismatch, which is where the other doors
         // meet this same shape — and THIS door's answer is to accept it. It is not a local
@@ -9421,7 +9424,8 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     }
 
     if (returnType is IrEnumType expectedEnum) {
-      if (value is not MaxonEnum actualEnum || actualEnum.TypeName != expectedEnum.Name) {
+      // Same rule, same one home — see the struct arm above.
+      if (!(value is MaxonEnum && DeclaredNameAccepts(expectedEnum.Name, value))) {
         var actualName = value is MaxonEnum e ? e.TypeName : value.GetType().Name.Replace("Maxon", "").ToLower();
         throw new CompileError(ErrorCode.SemanticTypeMismatch,
           $"Cannot return '{actualName}' from function declared to return '{expectedEnum.Name}'",
@@ -15068,6 +15072,29 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
         + "(or round/floor/ceil)",
       line, column);
 
+  /// <summary>
+  /// The user-facing name of a primitive KIND. Ten of <see cref="MaxonValueKind"/>'s twelve members
+  /// have an arm; the two that do not are absent for DIFFERENT reasons, and reading them as one fact
+  /// is how an arm gets added that should not exist.
+  /// </summary>
+  /// <remarks>
+  /// ⚠ `TypeParameter` HAS A PRODUCER — `IrTypeParameterType.ToValueKind()` returns it — so arriving
+  /// here with one is an E9001 INTERNAL error for a program a user can write. Measured at the
+  /// field-assignment door, where it meant every generic setter in the language crashed the
+  /// compiler. The cure is that each door holding a possibly-bare type parameter decides BEFORE
+  /// projecting it to a kind (<see cref="CheckReturnType"/>, <see cref="CoerceValueToDeclaredType"/>,
+  /// <see cref="TypeCheckEnumArg"/>, and the argument door, which resolves or skips). An arm here
+  /// would trade those refusals for a name the reader never wrote; this throw is what keeps a
+  /// MISSING guard loud instead of silently plausible.
+  ///
+  /// ⚠ `ErrorUnion` HAS NO PRODUCER THAT CAN REACH A MESSAGE, so an arm would be dead code. Neither
+  /// `ToValueKind` nor <see cref="DetermineValueKind"/> ever yields it; it enters only where
+  /// <see cref="EmitTryBlockBindingDeclaration"/> declares a `try { } otherwise (e) { }` union
+  /// binding, and that binding is declared IMMUTABLE — so the one door that forwards a variable's
+  /// own recorded kind into a diagnostic (`ParseAssignment` → <see cref="CoerceAssignedValue"/>)
+  /// throws "cannot assign to immutable variable" several lines before the kind is used, and a
+  /// `match` on the binding is diverted to `ParseUnionMatch` before any kind is taken at all.
+  /// </remarks>
   private static string KindToTypeName(MaxonValueKind kind) => kind switch {
     MaxonValueKind.Integer => "int",
     MaxonValueKind.Float => "float",
@@ -22693,15 +22720,78 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   /// shape it now admits is a shape that could not compile. It cannot regress a program, and the
   /// exact rule belongs where the binding lives.
   ///
-  /// ⚠ THE ARGUMENT DOOR IS THE MIRROR CASE AND IS DELIBERATELY LEFT ALONE. It starts from the
-  /// opposite end — it SKIPS an unbound type parameter, so it accepts everything — and tightening
-  /// it with this same proxy is what the `Interfaces.maxon` measurement above came from: the build
-  /// went red on the stdlib. Its own hole is real (`put(Label.create(77))` for `put(v T)` inside
-  /// `Box with Num` compiles clean and passes a heap pointer into an integer slot) and it needs the
-  /// binding-aware check, not this proxy.
+  /// ⚠ THE ARGUMENT DOOR IS THE MIRROR CASE and shares this predicate only BEHIND A GUARD. It
+  /// starts from the opposite end — it SKIPS an unbound type parameter, so it accepts everything —
+  /// so applying this proxy there unguarded is a REGRESSION, not a loosening, and the measurement
+  /// is `stdlib/Interfaces.maxon:230` above: the build went red. What it uses instead is
+  /// <see cref="CalleeSharesThisBodysTypeParameter"/>, which answers the binding question for the
+  /// one case where the answer is free; everything else still skips.
   /// </remarks>
   private static bool TypeParameterPositionAccepts(MaxonValue value) =>
     value is not (MaxonStruct or MaxonEnum);
+
+  /// <summary>
+  /// Whether <paramref name="tp"/> — a parameter of the CALLEE's signature that nothing at this
+  /// call site could bind — is the very same still-unbound parameter of the generic whose shared
+  /// body this call is being parsed inside.
+  /// </summary>
+  /// <remarks>
+  /// ⭐ THIS IS THE BINDING QUESTION, ANSWERED FOR THE ONE CASE WHERE THE ANSWER IS FREE. The
+  /// argument door generally cannot decide whether a value's type is what `T` stands for, because
+  /// the binding lives at monomorphization — and the price of guessing was measured on
+  /// `stdlib/Interfaces.maxon:230`, where `WithIterIterator.create(source Source)` is correctly
+  /// handed a concrete `ByteIterator` because `Source` is bound two levels up to exactly that.
+  ///
+  /// But when the callee is a method of the very type whose body we are in, and the parameter is
+  /// that type's OWN parameter, still unbound: there is no binding, there cannot be one, and the
+  /// body is compiled once for every instantiation. A value carrying a concrete aggregate identity
+  /// therefore cannot be a `T` for any instantiation, and saying so needs nothing this door does
+  /// not already hold.
+  ///
+  /// ⚠ THIS CLOSED A LIVE WRONG ANSWER, not a theoretical one. `put(Label.create(77))` for
+  /// `put(v T)` inside `Box with Num` compiled clean and passed a `Label` heap pointer into an
+  /// integer slot; the program printed `r=2283682242640`, a pointer rendered as a number, with no
+  /// diagnostic anywhere.
+  ///
+  /// ⚠ IT REFUSES NOTHING THE CORPUS CONTAINS, and that is measured rather than argued: with this
+  /// predicate instrumented to report every site it would fire on, the stdlib compiles with 11
+  /// candidate sites and ZERO fires (all 11 are the `Interfaces.maxon` shape, whose callee belongs
+  /// to a different type), and all 3495 committed spec fragments compile with ZERO fires.
+  ///
+  /// The owner comes off the callee's QUALIFIED NAME because that is the only record of it — an
+  /// <see cref="IrFunction{TOp}"/> carries no declaring type. The comparison is against the leaf,
+  /// and the `flat-namespace` build gate is what makes a leaf unambiguous: it fails the build if
+  /// any two files of a project declare the same top-level name.
+  /// </remarks>
+  private bool CalleeSharesThisBodysTypeParameter(IrFunction<MaxonOp> callee, IrTypeParameterType tp) {
+    if (string.IsNullOrEmpty(_currentTypeName)
+        || DeclaringTypeLeafName(callee.Name) != _currentTypeName)
+      return false;
+
+    // ⚠ THE DECLARATION'S PARAMETERS ARE `AssociatedTypeNames`, NOT `TypeParams` — asking the
+    // wrong one makes this method silently answer FALSE for every generic in the language, which
+    // is a check that cannot fail. `type Box uses T` records `AssociatedTypeNames = ["T"]` and
+    // leaves `TypeParams` EMPTY; `TypeParams` is what an INSTANTIATION fills in, so a non-empty
+    // binding here is the statement that this name is no longer the unbound one.
+    return _typeRegistry.TryGetValue(_currentTypeName!, out var enclosing)
+      && enclosing is IrStructType enclosingStruct
+      && enclosingStruct.AssociatedTypeNames.Contains(tp.ParameterName)
+      && (!enclosingStruct.TypeParams.TryGetValue(tp.ParameterName, out var binding)
+          || binding is IrTypeParameterType);
+  }
+
+  /// The declaring type's own short name inside a method's qualified name
+  /// (`stdlib.helpers.itertools.WithIterIterator.create` → `WithIterIterator`), and the empty
+  /// string for a free function, which no type's name can equal.
+  private static string DeclaringTypeLeafName(string qualifiedFunctionName) {
+    var afterMethod = qualifiedFunctionName.LastIndexOf('.');
+    if (afterMethod < 0) return "";
+
+    var owner = qualifiedFunctionName[..afterMethod];
+    var afterNamespace = owner.LastIndexOf('.');
+
+    return afterNamespace < 0 ? owner : owner[(afterNamespace + 1)..];
+  }
 
   /// The words, kept beside the predicate that decides them so a second door adopting the rule
   /// adopts its sentence too.
@@ -22736,6 +22826,18 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   /// It is reached only from a comparison that has ALREADY failed, so it can re-word a refusal and
   /// can never create one.
   ///
+  /// ⚠⚠ THE SENTENCE MUST NOT SAY WHERE THE VALUE WAS BUILT, and it once did — "a tuple built
+  /// inside a shared generic body …" — which is FALSE at half the sites this fires from. Measured:
+  /// a declared tuple written INLINE over the parameters (`var both as (A, B)`) is not substituted
+  /// when the generic is instantiated, so `NumPair`'s field keeps the type `__Tuple2-A-B`; a
+  /// `p.both = (7, 8)` and a `NumPair.make((1, 2))` written in `main` — no generic body in sight —
+  /// therefore reach here too and were told their tuple had been "built inside a shared generic
+  /// body". The two DERIVATIONS are what this method knows; where the program stood is not, so the
+  /// wording states only the derivations. (Refusing those two instantiation-site programs at all is
+  /// a separate, older gap: a substituted tuple type and a tuple value's structural name are still
+  /// two spellings — `__Tuple2-A-B_Num_Num` against `__Tuple2-i64-i64` — and reconciling them is a
+  /// type-identity change, not a diagnostic's.)
+  ///
   /// ⚠ WHETHER THE SHAPE SHOULD BE REFUSED AT ALL IS OPEN, and this compiler does not currently
   /// answer it consistently: <see cref="CheckReturnType"/> meets the identical shape and ACCEPTS it,
   /// by an arm that exists precisely so `MapIterator.current()` compiles. These three doors are the
@@ -22755,9 +22857,9 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       return null;
 
     return new CompileError(ErrorCode.SemanticTypeMismatch,
-      "a tuple built inside a shared generic body carries its elements' storage types, not the type "
-        + $"parameters they came from, so it cannot meet {place}, declared "
-        + $"'{IrType.FormatAsSourceName(declaredTuple)}'",
+      "a tuple value is named by its elements' storage types, and a tuple declared over a generic's "
+        + $"type parameters is named by those parameters, so no tuple value can meet {place}, "
+        + $"declared '{IrType.FormatAsSourceName(declaredTuple)}'",
       line, column);
   }
 
@@ -23080,6 +23182,14 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
             && resolvedType is not IrTypeParameterType) {
           paramType = resolvedType;
         } else {
+          // The one case where the BINDING question this door cannot generally answer answers
+          // itself — see CalleeSharesThisBodysTypeParameter. Everything else still skips, which is
+          // what the `continue` below has always done.
+          if (CalleeSharesThisBodysTypeParameter(callee, tp) && !TypeParameterPositionAccepts(args[i]!))
+            throw TypeParameterPositionError(tp, args[i]!, argKind,
+              $"argument '{callee.ParamNames[i]}'",
+              functionNameToken.Line, functionNameToken.Column);
+
           continue;
         }
       }

@@ -1,0 +1,24 @@
+// Test: error.tuple-refused-at-an-instantiation-site-too
+typealias Num = int(i64.min to i64.max)
+
+type Pair uses A, B
+	export var both as (A, B)
+
+	static function make(t (A, B)) returns Self
+		return Self{both: t}
+	end 'make'
+end 'Pair'
+
+typealias NumPair = Pair with Num, Num
+
+function main() returns ExitCode
+	var p = NumPair.make((1, 2))
+	p.both = (7, 8)
+	return 0
+end 'main'
+---
+MaxoncStderr: ```
+error E3005: specs/fragments/generic-body-doors/error.tuple-refused-at-an-instantiation-site-too.test:15:18: a tuple value is named by its elements' storage types, and a tuple declared over a generic's type parameters is named by those parameters, so no tuple value can meet argument 't', declared '(A, B)'
+```
+---
+---
