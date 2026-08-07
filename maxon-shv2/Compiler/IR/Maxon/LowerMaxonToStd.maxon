@@ -1389,13 +1389,27 @@ type MaxonToStdLowering
 
 	// Forward the CURRENT (generic) function's own witness slot for `constraintIndex` to a callee (P1.7a slice
 	// 2a) — a generic body driving another generic method on `self` (or a value of its type parameter), both of
-	// the same type, so the caller's constraint list and the callee's are identical and the slot index aligns.
+	// the same type, so the slot index aligns.
 	// The witness twin of `forwardCallerLayout`: the caller MUST carry witnesses (an instance method of a
 	// constrained type always does), so a missing slot is an internal invariant break, not a user error.
+	//
+	// ⚠ **THE TWO LISTS ARE PREFIX-ALIGNED, NOT IDENTICAL, AND THIS HEADER SAID "IDENTICAL" (corrected at
+	// review — W23 made it false).** A TYPE EXTENSION's method carries the type's constraints FOLLOWED by the
+	// extension's extras (`ProgramSignatures.typeExtensionWitnessConstraints`), so an extension body forwarding
+	// to a plain method of the same type has a STRICTLY LONGER list than its callee. Alignment survives because
+	// the type's own constraints come FIRST — that ordering is the whole reason the union appends rather than
+	// interleaving, and it is what this function rests on.
+	//
+	// ⛔ **AND THE BOUND IS CHECKED, NOT ASSUMED.** The reverse direction — a caller whose list is SHORTER than
+	// its callee's — indexes past this function's own parameters and returns a `ValueId` belonging to some
+	// other value: a witness table read out of the wrong slot, which is a wild indirect call and not a
+	// diagnosable type error. `Parser.requireReceiverSatisfiesExtensionConstraints` refuses that program with a
+	// position, so reaching here means that refusal did not fire; testing only `== 0` let every non-zero
+	// mismatch through in silence.
 	function forwardCallerWitness(constraintIndex WitnessSlotIndex, callee ByteArray) returns ValueId
-		if self.currentWitnessCount == 0 'noSlot'
-			panic("forwardCallerWitness: caller '{String.from(self.currentFuncName)}' has no witness parameter to forward to '{String.from(callee)}' — a generic→generic dispatch is only reached from an instance method of a constrained type, which always carries witnesses")
-		end 'noSlot'
+		if constraintIndex >= self.currentWitnessCount 'noSuchSlot'
+			panic("forwardCallerWitness: caller '{String.from(self.currentFuncName)}' carries {self.currentWitnessCount} witness parameter(s) and was asked to forward slot {constraintIndex} to '{String.from(callee)}' — a generic→generic dispatch is only reached from an instance method whose own constraint list is a PREFIX-COMPATIBLE superset of the callee's")
+		end 'noSuchSlot'
 		return (self.witnessParamBase + constraintIndex) as ValueId
 	end 'forwardCallerWitness'
 

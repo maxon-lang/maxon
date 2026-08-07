@@ -2533,3 +2533,126 @@ end 'main'
 ```exitcode
 0
 ```
+
+### A CONDITIONAL extension WITHHELD from a conformer contributes NOTHING to the descriptor fixpoint
+
+⛔⛔ **THE WHOLE-PROGRAM FIXPOINT SCANNED EXTENSION BODIES THE CONFORMER NEVER RECEIVES, AND ONE OF THEIR
+GHOST METHOD NAMES ERASED A REAL METHOD'S ABI SLOT (found at review).** `foldExtensionDeclarationInto`
+recorded a `DescriptorScanSite` for every generic conformer *before* `extensionConformerVerdict` was taken,
+so a `where Item is Comparable` extension withheld from `Bag` was still walked in `Bag`'s scope and still
+filed a `Bag.slotSize` seed — for a method `Bag` does not have. The fixpoint's columns are keyed by that
+name alone, so the ghost's `false` replaced the real `Bag.slotSize`'s `true`, the method reserved no layout
+descriptor, and its own `sizeof(T)` had nothing to read: **MEASURED on this rung's tip, `panic at
+LowerMaxonToStd.maxon:1644: lowerSizeofType: sizeof(T) in 'Bag.slotSize' but the function carries no layout
+descriptor parameter`**, with no position and no `error E….`, on a program the MERGE BASE and the oracle
+both compile and run (printing `1`).
+
+⚠ **IT CANNOT BE CAUGHT AS A DUPLICATE DECLARATION.** A withheld method publishes no signature at all —
+`foldWithheldExtensionMethod` files a `ConditionalExtensionSkip` instead — so E3006 never sees two `Bag.slotSize`
+and there is no diagnostic anywhere between the two names colliding and the compiler aborting. The gate is the
+VERDICT: a conformer the extension is withheld from is not scanned, because those methods are not its.
+
+<!-- test: a-withheld-conditional-extension-scans-no-descriptor-site -->
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+interface Holder uses Item
+	function get() returns Item
+end 'Holder'
+
+extension Holder where Item is Comparable
+	function slotSize() returns Num
+		return 1
+	end 'slotSize'
+end 'Holder'
+
+type Plain
+	export var x as Num
+
+	export static function create(x Num) returns Self
+		return Self{x: x}
+	end 'create'
+end 'Plain'
+
+type Bag uses T implements Holder with Plain
+	export var value as T
+	export var tag as Plain
+
+	export static function create(v T, tag Plain) returns Self
+		return Self{value: v, tag: tag}
+	end 'create'
+
+	export function get() returns Plain
+		return self.tag
+	end 'get'
+
+	export function slotSize() returns Num
+		return sizeof(T)
+	end 'slotSize'
+end 'Bag'
+
+typealias NumBag = Bag with Num
+
+function main() returns ExitCode
+	let b = NumBag.create(7, tag: Plain.create(1))
+	print("{b.get().x}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1
+```
+
+### TWO METHOD DECLARATIONS WEARING ONE NAME MERGE THEIR SEEDS — the last one in is not the answer
+
+⛔ **THE FIXPOINT'S COLUMNS ARE KEYED BY `Type.method` AND `upsert` MADE THE LAST WRITER THE WHOLE ANSWER**
+(found at review; PRE-EXISTING — the merge base panics identically, with the key merely spelled bare).
+`Bag` declares `slotSize()` twice; shv2 keeps the FIRST signature and resolves `b.slotSize()` to it, so the
+body that runs is the one reading `sizeof(T)` — while the seed recorded for `Bag.slotSize` was the SECOND
+declaration's `false`. **MEASURED: `panic at LowerMaxonToStd.maxon:1644: lowerSizeofType: sizeof(T) in
+'Bag.slotSize' but the function carries no layout descriptor parameter`**, on a program the oracle compiles
+and runs (printing `8`).
+
+⭐ **THE MERGE IS A UNION, AND THE DIRECTION IS FORCED BY THE ASYMMETRY OF BEING WRONG.** Reserving a
+descriptor no body reads costs one ignored parameter and the supply side still agrees, because it reads the
+reservation itself (`LowerMaxonToStd.buildLayoutNeedingFuncs` counts emitted params). NOT reserving one a
+body does read has no error path — it aborts the compiler. So `solveDescriptorNeeds`' claim that same-named
+methods "share one answer" is now MADE true where the columns are filled, rather than assumed.
+
+<!-- test: two-method-declarations-of-one-name-merge-their-descriptor-seeds -->
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Bag uses T
+	export var value as T
+
+	export static function create(v T) returns Self
+		return Self{value: v}
+	end 'create'
+
+	export function slotSize() returns Num
+		return sizeof(T)
+	end 'slotSize'
+
+	export function slotSize(scale Num) returns Num
+		return scale
+	end 'slotSize'
+end 'Bag'
+
+typealias NumBag = Bag with Num
+
+function main() returns ExitCode
+	let b = NumBag.create(7)
+	print("{b.slotSize()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+8
+```

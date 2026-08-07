@@ -6975,6 +6975,7 @@ typealias SeenPatternValues = Set with ParsedInt
 // (`Queries.foldDescriptorNeeds`) rather than once per type body, there is no `Parser` that naturally owns
 // the solve. Left as methods, the whole-program pass would have had to nominate an arbitrary reader to call
 // them on, which is a fiction about where the answer comes from.
+
 // ⭐⭐ **SOLVE THE WHOLE-PROGRAM DESCRIPTOR-NEED FIXPOINT** — given every method of every generic type in
 // the program (its own body's and every extension's, all keyed `Type.method`), which of them carry the
 // hidden layout-descriptor parameter. A method needs it iff it directly reads `sizeof(T)` — or one of the
@@ -6985,9 +6986,12 @@ typealias SeenPatternValues = Set with ParsedInt
 // entirely, so a per-declaration solve drops exactly the edge that matters. See `scanDescriptorNeedsInto`
 // for the compiler abort that dropped edge cost.
 //
-// ⚠ Two methods of DIFFERENT types can share a bare name and never collide here, because the key is
-// qualified. Two methods of ONE type cannot share one (overloads register under one bare name and share
-// one answer, exactly as they did when the key was bare).
+// ⚠ **ONE KEY IS ONE NODE, AND METHODS THAT SHARE A KEY SHARE AN ANSWER BECAUSE `scanDescriptorNeedsInto`
+// UNIONS THEM — not because they cannot.** Two methods of DIFFERENT types never collide, since the key is
+// qualified; two of ONE type genuinely can (a type body may declare a name twice, and shv2 keeps the first
+// signature without reporting a duplicate), and this header asserted they could not. Read as a guarantee it
+// licensed the plain `upsert` that made the LAST declaration the whole answer — see the merge at the fill
+// site for the compiler abort that cost.
 export function solveDescriptorNeeds(methodNames ByteArrayArray, directSeeds DescriptorNeedMap, selfCallees SelfCalleesMap) returns DescriptorNeedNameSet
 	let methodCount = methodNames.count()
 
@@ -7038,8 +7042,15 @@ end 'solveDescriptorNeeds'
 // The sibling methods `methodNames[callerIndex]` calls on `self` — the forward self-call edges out of one
 // method. A thin read-only view onto `selfCallees` shared by the descriptor-need fixpoint's two CSR passes
 // (count, then scatter) so the edge iteration is written once, not twice.
+//
+// ⚠ **PANIC, NOT AN EMPTY LIST (corrected at review).** A miss is not "this method calls nothing" — it is
+// impossible: `scanDescriptorNeedsInto` writes the seed, the callee row and the name in one act, so every
+// entry of `methodNames` has a row here. Answered with a fresh empty array it would be a method silently
+// stripped of its self-call edges, which under-reserves an ABI parameter and aborts the compiler two passes
+// later with no position — the exact failure this fixpoint exists to prevent, wearing a default value's face.
 function calleesOf(methodNames ByteArrayArray, selfCallees SelfCalleesMap, callerIndex ElementCount) returns ByteArrayArray
-	return try selfCallees.get(try methodNames.get(callerIndex) otherwise panic("calleesOf: methodNames.get({callerIndex}) OOB")) otherwise ByteArrayArray.create()
+	let caller = try methodNames.get(callerIndex) otherwise panic("calleesOf: methodNames.get({callerIndex}) OOB")
+	return try selfCallees.get(caller) otherwise panic("calleesOf: '{String.from(caller)}' is in `methodNames` with no `selfCallees` row — `scanDescriptorNeedsInto` writes both in one act")
 end 'calleesOf'
 
 // ⭐ **REVERSE-REACHABILITY BFS over a CSR adjacency** — return the bit per node that is set iff the node is a
@@ -9505,9 +9516,38 @@ export type Parser
 				// byte-identical; seeded like a direct `sizeof(T)` so the fixpoint gives every self-caller a
 				// descriptor to forward.
 				let reassignsOpaqueManagedField = scan.reassignsOpaqueField and not self.functionDeclIsStatic(q)
-				directSeeds.upsert(qualified, value: scan.direct or dropsFeed or movesOutArrayElement or reassignsOpaqueManagedField or copiesArrayElement)
-				selfCallees.upsert(qualified, value: self.qualifiedSelfCallees(site.typeName, callees: scan.callees))
-				methodNames.push(qualified)
+				// ⭐⭐ **TWO DECLARATIONS CAN WEAR ONE QUALIFIED NAME, AND THE MERGE IS A UNION — NOT THE LAST
+				// ONE IN (found at review).** The columns are keyed by `Type.method` and nothing above this
+				// line guarantees that key is unique: a type body may declare `slotSize()` twice (shv2 keeps
+				// the FIRST signature and reports no duplicate), and a body and an extension over it may each
+				// declare one. A plain `upsert` makes the LAST writer the whole answer, so the earlier
+				// declaration's `sizeof(T)` — and its self-call edges — are simply gone. That is an ABI slot
+				// decided by declaration order: **MEASURED, `panic at LowerMaxonToStd.maxon:1644:
+				// lowerSizeofType: sizeof(T) in 'Bag.slotSize' but the function carries no layout descriptor
+				// parameter`**, on a program the oracle compiles and runs.
+				//
+				// ⚠ **THE UNION IS THE ONLY SAFE DIRECTION, AND THE ASYMMETRY IS WHY.** Reserving a descriptor
+				// no body reads costs one ignored parameter, and the supply side reads the reservation itself
+				// (`LowerMaxonToStd.buildLayoutNeedingFuncs` counts params), so the two still agree. NOT
+				// reserving one a body does read has no error path at all — it aborts the compiler. So an
+				// answer that must be wrong is wrong upwards, and `solveDescriptorNeeds`' claim that same-named
+				// methods "share one answer" is made true here rather than assumed.
+				let alreadyContributed = directSeeds.contains(qualified)
+				var directlyNeeded = scan.direct or dropsFeed or movesOutArrayElement or reassignsOpaqueManagedField or copiesArrayElement
+				var edges = self.qualifiedSelfCallees(site.typeName, callees: scan.callees)
+				if alreadyContributed 'aSecondDeclarationWearingThisName'
+					directlyNeeded = directlyNeeded or (try directSeeds.get(qualified) otherwise panic("scanDescriptorNeedsInto: '{String.from(qualified)}' is a seeded key by `contains` and absent by `get`"))
+					edges.append(try selfCallees.get(qualified) otherwise panic("scanDescriptorNeedsInto: '{String.from(qualified)}' has a direct-need seed but no self-callee row — the two columns are written in one act"))
+				end 'aSecondDeclarationWearingThisName'
+
+				directSeeds.upsert(qualified, value: directlyNeeded)
+				selfCallees.upsert(qualified, value: edges)
+				// Once per NAME, not once per declaration: `solveDescriptorNeeds` indexes the graph by this
+				// array, and a name listed twice would be two nodes standing for one method.
+				if not alreadyContributed 'firstDeclarationWearingThisName'
+					methodNames.push(qualified)
+				end 'firstDeclarationWearingThisName'
+
 				q = scan.endPos
 				continue
 			end 'method'
@@ -10861,6 +10901,16 @@ export type Parser
 		return Visibility.global if self.isStdlibSource else declared
 	end 'typeAliasVisibility'
 
+	// Replace the shared empty with a real array, once, on the first generic type this file declares. EMPTY
+	// IS THE TEST because the shared instance is never mutated — the field is the shared one exactly while it
+	// is empty — so the swap costs one comparison per generic type and one allocation per file that has any.
+	function growDescriptorScanSites()
+		if self.descriptorScanSites.count() != 0 'alreadyItsOwn'
+			return
+		end 'alreadyItsOwn'
+		self.descriptorScanSites = DescriptorScanSiteArray.create()
+	end 'growDescriptorScanSites'
+
 	// Cursor is AT `type`. Append the struct it declares, plus a `FuncReturnTypeEntry` for each
 	// method it declares, and leave the cursor PAST the declaration's `end`.
 	//
@@ -10877,16 +10927,6 @@ export type Parser
 	// tell them apart. `depth` here is relative to the body — 0 is directly inside it — and
 	// `blockDepthAfter` is the same opener/closer rule the caller counts with, so a method's `if`
 	// and `while` nest correctly and its `end` cannot be mistaken for the type's.
-	// Replace the shared empty with a real array, once, on the first generic type this file declares. EMPTY
-	// IS THE TEST because the shared instance is never mutated — the field is the shared one exactly while it
-	// is empty — so the swap costs one comparison per generic type and one allocation per file that has any.
-	function growDescriptorScanSites()
-		if self.descriptorScanSites.count() != 0 'alreadyItsOwn'
-			return
-		end 'alreadyItsOwn'
-		self.descriptorScanSites = DescriptorScanSiteArray.create()
-	end 'growDescriptorScanSites'
-
 	function recordScannedType(structs StructLayoutArray, entries FuncReturnTypeEntryArray, paramConsumes ParamConsumeEntryArray, paramDefaults ParamDefaultEntryArray, throwsEntries ThrowsClauseEntryArray, innerAliasOut InnerAliasEntryArray, genericAliasOut GenericAliasEntryArray, functionAliasOut FunctionTypeAliasArray, methodInnerAliasParamOut MethodInnerAliasParamEntryArray, freeFunctionNameOut ByteArrayArray)
 		// ⚠ **THE SWEEP MUST READ THE MODIFIER ITSELF**, and BACKWARDS, exactly as `recordScannedBinding`
 		// does: the caller's loop meets `export`/`module` as an ordinary token and steps over it, so the
@@ -11254,9 +11294,6 @@ export type Parser
 			self.pos = bodyStart
 			self.enterTypeScope(conformer, isEnum: false)
 			self.openExtensionBodyScope(header, conformer: conformer, index: index)
-			if index.structDeclaresTypeParams(conformer) 'aGenericConformer'
-				descriptorScanSiteOut.push(DescriptorScanSite.create(self.filePath, bodyStart: bodyStart, typeName: conformer))
-			end 'aGenericConformer'
 
 			// ⭐ **THE CONDITIONAL FILTER, TAKEN ONCE PER CONFORMER.** An INTERFACE extension's `where` clause
 			// is checked against what this conformer binds the interface's associated types to; a TYPE
@@ -11264,6 +11301,27 @@ export type Parser
 			// witness constraints instead — see `ExtensionTarget`. Both answers are pure functions of the
 			// whole-program index, which is what lets `parseExtensionDeclaration` take the identical one.
 			let verdict = self.extensionConformerVerdict(header, conformer: conformer, index: index)
+
+			// ⭐⭐ **A WITHHELD CONFORMER GETS NO SITE, AND THAT GATE IS THE VERDICT'S — NOT A SECOND RULE
+			// (found at review).** A CONDITIONAL extension the conformer does not satisfy publishes it no
+			// methods at all: the fold files a `ConditionalExtensionSkip` instead of a signature, and the real
+			// parse skips the conformer whole. Scanned anyway, this body files `<Conformer>.<method>` seeds for
+			// methods that do not exist on that conformer — and a name a real method of it already wears is
+			// OVERWRITTEN, because the fixpoint's columns are keyed by that name alone.
+			// **MEASURED at review, on this rung's own tip: a `where Item is Comparable` extension declaring
+			// `slotSize()`, withheld from a `Bag uses T` that declares its own `slotSize()` returning
+			// `sizeof(T)`, erased that method's seed — `panic at LowerMaxonToStd.maxon:1644: lowerSizeofType:
+			// sizeof(T) in 'Bag.slotSize' but the function carries no layout descriptor parameter`**, with no
+			// position and no `error E….`, on a program the merge base and the oracle both compile and run.
+			// It cannot be caught as a duplicate declaration either: a withheld method publishes no signature,
+			// so E3006 never sees two.
+			//
+			// ⚠ The site is recorded HERE rather than beside `openExtensionBodyScope` for exactly that reason —
+			// the verdict is what says whether these methods are this conformer's, and a site taken before it
+			// is a scan of a body that was never this type's.
+			if not extensionMethodsWithheld(verdict) and index.structDeclaresTypeParams(conformer) 'aGenericConformerThatKeepsThem'
+				descriptorScanSiteOut.push(DescriptorScanSite.create(self.filePath, bodyStart: bodyStart, typeName: conformer))
+			end 'aGenericConformerThatKeepsThem'
 
 			while not self.isEof() 'members'
 				self.skipNewlines()
@@ -43276,7 +43334,8 @@ export type Parser
 		//
 		// ⭐⭐ **"AS `emitFieldLoad` RETYPES A READ" IS NOW LITERALLY THE SAME CALL, AND THE DAY IT WAS ONLY A
 		// COMMENT IT WAS A READ-AFTER-FREE (A4i review).** This line spelled `adoptType(substitutedInstanceArg(…))`
-		// — the exact body `instanceSubstitutedType` had before A4i routed it through `declaredSlotType` — so the
+		// — the exact body the READ door (now `slotTypeThroughReceiver`) had before A4i routed it through
+		// `declaredSlotType` — so the
 		// READ door was fixed and its declared twin was not. What the copy handed on was a bare `named`, and the
 		// consumer here is `classifyUnionPayload`, which resolves a `named` through its OWN cascade: it has a
 		// struct arm (so a `Box with Point` write kept working, which is why the split hid) and NO generic-alias

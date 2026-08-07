@@ -5464,7 +5464,11 @@ export type ProgramSignatures
 	// ⭐⭐ **WHICH METHODS CARRY THE HIDDEN LAYOUT-DESCRIPTOR PARAMETER (P1.6-B1) — the ONE answer, keyed by
 	// the qualified `Type.method` name a call resolves to.** Solved whole-program by
 	// `Queries.foldDescriptorNeeds` after `allFilesFolded`; read by `Parser.parseFunction` to reserve the slot
-	// before it numbers a method's body values, and by nothing else.
+	// before it numbers a method's body values, and by `Parser.requireSelfForDescriptorForwarding` to refuse a
+	// forward from a same-type value that is not `self`. (This said "and by nothing else"; the same commit that
+	// wrote it added the second reader — corrected at review.) TWO READERS ARE NOT TWO ANSWERS: both ask this
+	// one set through `functionNeedsLayoutDescriptor`, under the same qualified name, so the reservation and
+	// the refusal cannot disagree about which methods carry the slot.
 	//
 	// ⛔ **IT WAS A PER-TYPE-BODY MAP ON THE PARSER, AND THAT COST A COMPILER ABORT ON A LEGAL PROGRAM
 	// (W23c).** The fixpoint ran from `parseTypeDeclaration` over the tokens of the one body it had just
@@ -13368,9 +13372,13 @@ export type ProgramSignatures
 	// an instance-argument INDEX (W14).** Every instance query below is subscripted by a POSITION in the
 	// declaring type's `uses` list, and since W14 a `typeParameter`'s payload is an IDENTITY rather than that
 	// position (see `MaxonDialect.TypeParamId` for the collision the position was). This is where the two meet,
-	// and it is written once so that no caller re-derives it — `substituteInstanceFieldType`,
-	// `managedOpaqueArrayElementOf`, `Parser.instanceSubstitutedIndexType` and
-	// `SemanticCheck.checkTypeParameterArgsAt` all subscript through here.
+	// and it is written once so that no caller re-derives it — `managedOpaqueArrayElementOf` and
+	// `SemanticCheck.checkTypeParameterArgsAt` subscript through here.
+	//
+	// ⚠ **`substituteThroughInstance` DELIBERATELY DOES NOT, AND THAT IS NOT A SECOND DERIVATION.** It reads the
+	// whole `typeParamOwner` record because it needs the OWNER as well as the position — a token belonging to
+	// another declaration must pass through unchanged rather than be indexed into this instance's argument list.
+	// This function cannot answer that, by construction: it projects the record down to the position alone.
 	//
 	// A miss is an invariant break rather than a case: every token reaching an instance query was minted inside
 	// a declaration the sweep folded, and `recordStruct` files a declaration's parameters ahead of every reason
@@ -14252,7 +14260,7 @@ export type ProgramSignatures
 	//     declared in no file, so it has no declaring one to ask; what it has is the file its `giid` was
 	//     already range-scoped FOR, one line earlier in the same parser, and that file is `self.filePath`.
 	//     Passing anything else would let an element disagree with the very instance it was read out of.
-	//   • **A GENERIC INSTANCE's TYPE ARGUMENT** (`Parser.instanceSubstitutedType`, A4i) passes the PARSING
+	//   • **A GENERIC INSTANCE's TYPE ARGUMENT** (`Parser.slotTypeThroughReceiver`, A4i) passes the PARSING
 	//     FILE for the `Array` ELEMENT's reason and not the struct FIELD's, and it is the same reason twice
 	//     over: an instance is declared in no file, and its `giid` was already range-scoped FOR the reading
 	//     file at the receiver's own mint. It is the door a `T`-typed field READ, a `T`-returning METHOD CALL
