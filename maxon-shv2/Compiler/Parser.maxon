@@ -7046,7 +7046,7 @@ end 'calleesOf'
 // seed OR reaches one over `graph`'s edges. The graph is the REVERSED relation (`buildCsr` with (callee,
 // caller) swapped), so a seed's row lists the nodes that point AT it and the BFS propagates the mark BACKWARD.
 // Each node enters the worklist at most once (the first time its bit flips on) and each edge is walked once,
-// for O(nodes + edges). The shared engine of the descriptor-need fixpoint (`solveDescriptorNeedFixpoint`) and
+// for O(nodes + edges). The shared engine of the descriptor-need fixpoint (`Queries.foldDescriptorNeeds`) and
 // the transitive array-feed fixpoint (`solveAndPublishTransitiveFeeds`), so the two cannot drift on how
 // reachability is marked.
 function reverseReachabilityMark(graph CsrGraph, seeds BoolArray) returns BoolArray
@@ -9999,7 +9999,7 @@ export type Parser
 	// method that DIRECTLY pushes into the array (`store`) is a feed, so a forwarder (`add(item){ self.store(item) }`)
 	// leaves its OWN concrete call site (`sc.add("x")`) BORROWING the managed argument — which the owning array then
 	// destroys, freeing a value nobody transferred (a double-free, `0xC0000005`). This is the per-parameter analogue
-	// of `solveDescriptorNeedFixpoint`: a least fixpoint over the same self-call graph, mirrored here with FORWARD
+	// of `Queries.foldDescriptorNeeds`: a least fixpoint over the same self-call graph, mirrored here with FORWARD
 	// edges (M's parameter -> N's parameter) rather than a per-method boolean, solved by the same linear
 	// reverse-reachability BFS. It runs in the SWEEP — feeds are a whole-program `ParamConsumeInfo` fact a cross-file
 	// concrete call site reads — after the method loop, so every sibling's parameter list is known for edge
@@ -10142,7 +10142,7 @@ export type Parser
 	// Solve the array-feed relation to its least fixpoint over the self-call forward edges, then publish each
 	// method's transitive feeds into `paramConsumes`. A (method, parameter) NODE is a feed iff it directly feeds an
 	// array mutator OR it forwards to a feed node — iff it can REACH a directly-fed node over the forward edges. So
-	// REVERSE the edges (`buildCsr` with (callee, caller) SWAPPED, exactly as `solveDescriptorNeedFixpoint`) and mark
+	// REVERSE the edges (`buildCsr` with (callee, caller) SWAPPED, exactly as `Queries.foldDescriptorNeeds`) and mark
 	// reachability BACKWARD from the seeds: each node enters the worklist at most once (the first time its bit flips
 	// on) and each edge is walked once, for O(nodes + edges).
 	function solveAndPublishTransitiveFeeds(scans MethodFeedScanArray, paramConsumes ParamConsumeEntryArray, feedStart ElementCount)
