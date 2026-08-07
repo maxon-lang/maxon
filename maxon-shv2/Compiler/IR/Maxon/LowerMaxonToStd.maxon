@@ -1238,9 +1238,9 @@ type MaxonToStdLowering
 	// then walks (`ProgramSignatures.witnessConstraintsOfMethod`), rather than a second lookup that could
 	// answer for a different list.
 	function witnessParamCountForCallee(callee ByteArray, sig FuncSignature) returns ParamCount
-		if not sig.takesReceiver() 'notInstance'
+		if not sig.takesReceiver() and not self.signatures.calleeReturnsItsDeclaringType(callee) 'noWitnessSource'
 			return 0
-		end 'notInstance'
+		end 'noWitnessSource'
 		return self.signatures.witnessConstraintsOfMethod(callee).count()
 	end 'witnessParamCountForCallee'
 
@@ -1273,7 +1273,7 @@ type MaxonToStdLowering
 			out.push(self.materializeLayoutArgFor(argIds, sig: sig, result: result, callee: callee, dstBlock: dstBlock))
 		end 'layout'
 		if witnessCount > 0 'witnesses'
-			self.appendWitnessArgs(out, argIds: argIds, callee: callee, dstBlock: dstBlock)
+			self.appendWitnessArgs(out, argIds: argIds, sig: sig, result: result, callee: callee, dstBlock: dstBlock)
 		end 'witnesses'
 		return out
 	end 'finalizeCallArgsWithLayout'
@@ -1350,16 +1350,19 @@ type MaxonToStdLowering
 
 	// Append the hidden WITNESS arguments a dictionary-passing call to `callee` carries (P1.7a slice 2a) — one
 	// per `where` constraint of the callee's enclosing type, in constraint (source) order, AFTER any layout
-	// descriptor. Only an INSTANCE method carries witnesses (`witnessParamCountForCallee` returns 0 for a
-	// static/free callee), so the receiver is always `argIds[0]` — the value whose CONCRETE instance (or
-	// enclosing `self`) supplies each witness. `out` is the fresh argument array `finalizeCallArgsWithLayout`
-	// built (never `argIds`), so pushing is safe.
-	function appendWitnessArgs(out ValueIdArray, argIds ValueIdArray, callee ByteArray, dstBlock IrBlock)
-		let receiver = try argIds.get(0) otherwise panic("appendWitnessArgs: witness-carrying instance method '{String.from(callee)}' has no receiver argument — its first parameter is `self`")
+	// descriptor. `out` is the fresh argument array `finalizeCallArgsWithLayout` built (never `argIds`), so
+	// pushing is safe.
+	//
+	// ⭐ **THE SOURCE VALUE IS THE RECEIVER, OR — FOR A `Self`-RETURNING STATIC — THE RESULT (W43b).** It is
+	// `materializeLayoutArgFor`'s split exactly, one dictionary column over, and the two are decided by the
+	// same predicate (`sig.takesReceiver()`) so a call can never take its descriptor from one value and its
+	// witnesses from another.
+	function appendWitnessArgs(out ValueIdArray, argIds ValueIdArray, sig FuncSignature, result ValueId, callee ByteArray, dstBlock IrBlock)
+		let source = try argIds.get(0) otherwise panic("appendWitnessArgs: witness-carrying instance method '{String.from(callee)}' has no receiver argument — its first parameter is `self`") if sig.takesReceiver() else result
 		let constraints = self.signatures.witnessConstraintsOfMethod(callee)
 		for i in 0 upto constraints.count() 'eachConstraint'
 			let constraint = try constraints.get(i) otherwise panic("appendWitnessArgs: whereConstraints.get OOB at {i}")
-			out.push(self.materializeWitnessArg(receiver, constraint: constraint, constraintIndex: i, callee: callee, dstBlock: dstBlock))
+			out.push(self.materializeWitnessArg(source, constraint: constraint, constraintIndex: i, callee: callee, dstBlock: dstBlock))
 		end 'eachConstraint'
 	end 'appendWitnessArgs'
 

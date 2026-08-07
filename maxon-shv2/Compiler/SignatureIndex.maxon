@@ -15222,6 +15222,39 @@ export type ProgramSignatures
 		return CalleeReturn.declared(self.adoptReturnType(declared, into: into))
 	end 'returnTypeOf'
 
+	// ⭐⭐ **DOES `callee` RETURN THE TYPE THAT DECLARES IT — i.e. is it a `Self`-returning CONSTRUCTOR? THE
+	// ONE HOME, because both sides of a hidden ABI block read it (W43b).** A static has no `self`, so its
+	// dictionary columns — the layout descriptor (P1.6-B1) and the constraint witnesses (P1.7a slice 2a) —
+	// are sourced at the CALL SITE from the call's RESULT, and that is the concrete instance only when the
+	// static returns its own type (`retypeGenericAliasConstructorResult`). `Parser.witnessParamCountFor`
+	// RESERVES the block on this answer and `LowerMaxonToStd.witnessParamCountForCallee` SUPPLIES it on the
+	// same answer, so the two cannot size the block differently — which they must not, because a witness-slot
+	// count is ABI and a mismatch is an argument-register disagreement nothing downstream can notice
+	// (`witnessConstraintsOfMethod`'s header records what two such disagreements cost).
+	//
+	// ⚠ **IT READS THE DECLARED RETURN TYPE, NOT `FuncSignature.returnAggregateName`.** That column states
+	// *"the identity that does NOT survive resolution"* and is therefore EMPTY for a struct return by design
+	// (`Parser.erasedAggregateNameOf`) — measured: reading it here answered `false` for
+	// `stdlib/Map.maxon`'s `static function init(…) returns Self`, so the parser reserved two witness slots
+	// and the lowering bound none, and the body's first forward panicked.
+	//
+	// Allocation-free: it compares the interned NAME in this index's own table rather than adopting the type
+	// into a caller's interner, because the question is about identity and not about a type crossing out.
+	export function calleeReturnsItsDeclaringType(callee ByteArray) returns bool
+		match splitQualifiedName(callee) 'qualified'
+			notQualified then return false
+			parts(typeName, _) then return self.declaredReturnNamesStruct(callee, typeName: typeName)
+		end 'qualified'
+	end 'calleeReturnsItsDeclaringType'
+
+	// The tail of the question above, split out because a `match` arm may not open one.
+	function declaredReturnNamesStruct(callee ByteArray, typeName ByteArray) returns bool
+		match try self.returnTypes.get(callee) otherwise return false 'declared'
+			void then return false
+			value(inner) then return maxonTypeTag(inner) == ValueTypeTag.structRef and self.nameOfId(typeNameIdOf(inner)).equals(typeName)
+		end 'declared'
+	end 'declaredReturnNamesStruct'
+
 	// Does ANY file declare a function under `callee` — the `bool` half of `returnTypeOf`, and its twin
 	// in the sense `containsEnum` is `enumOf`'s: a caller that only needs "does this name resolve to a
 	// call at all?" must not pay the answer's cost to throw it away. `returnTypeOf` ADOPTS the return

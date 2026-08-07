@@ -11816,12 +11816,24 @@ export type Parser
 	// The parser state an extension BODY is read under, for whichever door the extension came through — set
 	// after `enterTypeScope(conformer)`, which deliberately clears every one of these.
 	//
-	// ⚠⚠ **AN INTERFACE EXTENSION'S BODY GETS THE TYPE-PARAMETER FIELDS SET BY NEITHER, AND THAT IS NOT AN
+	// ⚠⚠ **AN INTERFACE EXTENSION'S BODY GETS `enclosingTypeParams` SET BY NEITHER DOOR, AND THAT IS NOT AN
 	// OMISSION.** Its `where` clause names the INTERFACE's associated types, which this body may not refer to
 	// as type PARAMETERS: they are bound concretely per conformer, and installing them in
 	// `enclosingTypeParams` would make a written `Element` resolve to `typeParameter(0)` of the CONFORMER — a
-	// different type, silently. Its constraints are a filter that has already been applied by the time this is
-	// called (`extensionConformerVerdict`), so there is nothing left for the body to dispatch through either.
+	// different type, silently. The extension's OWN constraints are a filter already applied by the time this
+	// is called (`extensionConformerVerdict`), so there is nothing left for the body to dispatch through
+	// either.
+	//
+	// ⛔⛔ **BUT THE CONFORMER'S OWN `where` CLAUSE IS A DIFFERENT FACT, AND LEAVING IT OUT WAS AN ABI
+	// MISMATCH (W43b).** This body is monomorphized for ONE conformer, so a method published onto a
+	// `where`-constrained type carries that type's witness block exactly as its own methods do — and the
+	// SUPPLY side already passes it, because `witnessConstraintsOfMethod` resolves a callee by its TYPE name
+	// and answers with `typeExtensionWitnessConstraints(<the conformer>, …)` whatever door the method came
+	// through. Reserving nothing here left `stdlib/Interfaces.maxon`'s `extension Iterator.advanceBy`, over a
+	// conformer declared `where Key is Hashable and Equatable`, reading two argument registers its callers
+	// filled and its own body never reserved — the precise shape `witnessConstraintsOfMethod`'s header
+	// records two measured crashes for. It is installed through the SAME one call the type-extension arm
+	// makes, so reserve and supply are one list and not two derivations of one rule.
 	//
 	// ⭐ **WHAT IT GETS INSTEAD IS THE NAME SUBSTITUTION** (conditional extensions), which is available here
 	// for exactly the reason the parameter reading is wrong: this pass is monomorphizing for ONE conformer,
@@ -11838,6 +11850,12 @@ export type Parser
 			// parameters are bound per INSTANTIATION, so there is no single binding to substitute.
 			typeExtension then return self.openTypeExtensionBodyScope(header, index: index)
 		end 'target'
+
+		// The CONFORMER's own witness block — see the ⛔⛔ above. `sharedEmptyWhereConstraints` for the
+		// extension's side because an interface extension contributes none to this list: its clause names the
+		// interface's ASSOCIATED types, not the conformer's parameters, and it has already been spent as a
+		// filter.
+		self.enclosingWhereConstraints = index.typeExtensionWitnessConstraints(conformer, extensionConstraints: sharedEmptyWhereConstraints)
 
 		// BOTH COLUMNS OR NEITHER — the length agreement `conformerAssociatedBindings` enforces has already
 		// emptied a list that cannot be paired, so an empty one here means only "this conformer binds nothing
@@ -15525,7 +15543,7 @@ export type Parser
 		// from, and a static that dispatches is a later slice). `LowerMaxonToStd` splits layout from witness by
 		// this same rule (the enclosing type's constraint count + `takesReceiver`), so the count is derivable
 		// whole-program without a per-function field.
-		let witnessParamCount = self.witnessParamCountFor(takesReceiver)
+		let witnessParamCount = self.witnessParamCountFor(takesReceiver, registrationName: name)
 		// ⭐ **AND ONE HIDDEN WITNESS PER INTERFACE-TYPED USER PARAMETER (P1.7a-existentials slice 1)** — the
 		// other half of the fat pointer, travelling as an adjacent ABI parameter rather than as an aggregate.
 		// It sits between the env block and the layout slot; see `bindExistentialWitnessParams` for why that
@@ -17325,13 +17343,32 @@ export type Parser
 	end 'namesEnclosingType'
 
 	// The number of hidden witness parameters a function of the enclosing type carries (P1.7a slice 2a) — one
-	// per `where` constraint for an INSTANCE method of a constrained generic type, zero otherwise (a static, or
-	// an unconstrained type). The reservation is uniform across the type's instance methods (see `parseFunction`),
-	// so this is a pure function of `takesReceiver` and the type's constraint count.
-	function witnessParamCountFor(takesReceiver bool) returns ParamCount
-		if not takesReceiver or self.enclosingWhereConstraints.isEmpty() 'noWitness'
+	// per `where` constraint of a constrained generic type, for every method that has somewhere to source them
+	// FROM. The reservation is uniform (no per-method need analysis), so this is a pure function of the
+	// declaration's shape and the type's constraint count.
+	//
+	// ⭐ **AND A `Self`-RETURNING STATIC HAS SOMEWHERE, EXACTLY AS IT DOES FOR THE LAYOUT DESCRIPTOR (W43b).**
+	// A static has no `self`, which is why the block used to be gated on `takesReceiver` alone — but a static
+	// that returns the enclosing type builds the concrete instance, and the parser retypes its RESULT to that
+	// instance (`retypeGenericAliasConstructorResult`), so the call site can materialize each witness table from
+	// the result's type argument. It is the SAME source `materializeStaticConstructorLayout` reads the
+	// descriptor off, and the two are now reserved on the same terms rather than one of them alone.
+	// **MEASURED before this: `panic at LowerMaxonToStd.maxon:1411: forwardCallerWitness: caller 'Map.init'
+	// carries 0 witness parameter(s) and was asked to forward slot 0 to 'Map.upsert'`** — `stdlib/Map.maxon`'s
+	// static `init`, which builds a `Self{…}` and calls a key-hashing method on it.
+	//
+	// ⚠ **THE SUPPLY SIDE IS `LowerMaxonToStd.witnessParamCountForCallee`, AND BOTH ASK ONE DOOR**
+	// (`ProgramSignatures.calleeReturnsItsDeclaringType`). A witness-slot count is ABI: a reservation and a
+	// supply that disagree is an argument-register mismatch nothing downstream can notice
+	// (`witnessConstraintsOfMethod`'s header records what two such disagreements cost), so the `Self`-return
+	// test is asked in ONE place off the whole-program declared return type rather than spelled on each side.
+	function witnessParamCountFor(takesReceiver bool, registrationName ByteArray) returns ParamCount
+		if self.enclosingWhereConstraints.isEmpty() 'unconstrainedType'
 			return 0
-		end 'noWitness'
+		end 'unconstrainedType'
+		if not takesReceiver and not self.signatures.calleeReturnsItsDeclaringType(registrationName) 'noWitnessSource'
+			return 0
+		end 'noWitnessSource'
 		return self.enclosingWhereConstraints.count()
 	end 'witnessParamCountFor'
 
@@ -36644,6 +36681,7 @@ export type Parser
 		// below dispatches on it. Derived twice, it was two string joins and an allocation on EVERY struct
 		// method call in every program, for one name that cannot differ.
 		let callee = qualifiedMethodName(base.layout.name, methodName: memberTok.value)
+		try self.requireWitnessSourceForForwarding(base, callee: callee, memberTok: memberTok)
 		try self.requireMethodNotWithheldByConstraint(base.layout.name, callee: callee, receiver: base.box, memberTok: memberTok)
 
 		let result = try self.parseCallNamed(func, callee: callee, anchor: baseTok, receiver: ReceiverArg.value(base.box, immutableName: base.immutableName, subjectName: base.subjectName), resultUsed: resultUsed, constructorInstance: self.receiverConstructorInstance(base.box), mint: CalleeMint.notMinted)
@@ -36886,6 +36924,35 @@ export type Parser
 			throw ParseError.unsupported("calling '{String.from(memberTok.value)}' (which reads sizeof of the type parameter) on a value of the enclosing type, from a function that carries no layout descriptor of its own to forward — reach it through `self`, through a local bound to a `Self\{…}`, or through a concrete instance instead", line: memberTok.line, column: memberTok.column)
 		end 'reject'
 	end 'requireSelfForDescriptorForwarding'
+
+	// ⚠ **THE WITNESS TWIN OF `requireSelfForDescriptorForwarding`, AND IT REPLACES A COMPILER ABORT (W43b).**
+	// A dictionary-passing call on a value of the enclosing generic type FORWARDS the caller's own witness
+	// tables (`LowerMaxonToStd.materializeWitnessArg`'s `structRef` arm), so the caller must carry them. An
+	// INSTANCE method always does, and — since W43b — so does a `Self`-returning static, which sources them at
+	// its call site from the concrete instance it builds. What is left with no source at all is a static that
+	// returns something ELSE, and that reached `forwardCallerWitness`'s panic:
+	// **MEASURED, `panic at LowerMaxonToStd.maxon:1414: forwardCallerWitness: caller 'Holder.digestOf'
+	// carries 0 witness parameter(s) and was asked to forward slot 0 to 'Holder.digest'`**, on
+	// `static function digestOf(v T) returns HashValue` building a `Self{v: v}` and calling `.digest()` on it —
+	// a program the oracle compiles and runs (exit 41).
+	//
+	// ⚠ **IT IS A CLEAN REFUSAL AND NOT THE FULL ANSWER, WHICH IS THE SAME "LATER SLICE" THE DESCRIPTOR'S
+	// `staticLayoutNeedsSelfReturn` NAMES:** threading the dictionary from a static CALL SITE's alias
+	// (`H.digestOf(41)` knows `H = Holder with Integer`). Until that exists, both columns want the same source
+	// and this refuses the same shape in the same words rather than aborting the compiler.
+	function requireWitnessSourceForForwarding(base StructBase, callee ByteArray, memberTok Token) throws ParseError
+		if self.currentWitnessParamCount != 0 'hasThemToForward'
+			return
+		end 'hasThemToForward'
+		if self.tagOf(base.box) != ValueTypeTag.structRef or not base.layout.name.equals(self.enclosingType) 'notSameTypeValue'
+			return
+		end 'notSameTypeValue'
+		if self.signatures.witnessConstraintsOfMethod(callee).isEmpty() 'calleeDispatchesNothing'
+			return
+		end 'calleeDispatchesNothing'
+
+		throw ParseError.unsupported("calling '{String.from(memberTok.value)}' (which dispatches through the type's `where` constraints) on a value of the enclosing type, from a `static function` that carries no witness tables of its own to forward — a static sources them from the instance it RETURNS, so declare this one `returns Self` and call the method on the result, or make it an instance method", line: memberTok.line, column: memberTok.column)
+	end 'requireWitnessSourceForForwarding'
 
 	// ⭐ **A METHOD CALL ON A CAPTURED STRUCT RECEIVER (P1.5-A2b-2).** `b.doubled()` where `b` is an enclosing
 	// struct captured by the closure. The receiver box is READ OUT OF THE ENV (`emitCaptureRead` — a borrowed
