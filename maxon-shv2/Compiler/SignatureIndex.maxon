@@ -1423,6 +1423,21 @@ export union PayloadClass
 	// exhaustive `match`es over this union, so a case inserted mid-list would be silently absorbed by nothing
 	// while a case appended is a compile error at every one of them until it is answered.
 	existential
+	// ⭐⭐ **A SLOT DECLARED AT THE ENCLOSING GENERIC'S OWN TYPE PARAMETER (W41-opaque)** — one opaque machine
+	// word in the shared body, whose ownership is a fact only the INSTANTIATION has. It is NOT
+	// `payloadClassIsManaged`: nothing in the declaration view drops it (the base struct's own
+	// `__destruct_<Base>` skips it — a per-INSTANCE cascade drops the substituted field, which is a different
+	// symbol), so calling it managed here would drop it twice in the one view that can see neither.
+	//
+	// ⚠ **BUT IT IS NOT A PLAIN SCALAR EITHER, AND THAT WAS THE DEFECT.** It classified as `scalar` and so was
+	// stored RAW — while the record it was stored into is CONCRETE at the caller (a `(String, Integer)` tuple,
+	// a `Box with String`) and its destructor drops that slot. Two owners, one reference. The store now takes
+	// its own reference through the descriptor's `retainFunc@64` (`Parser.moveInPayload`), which is inert on a
+	// trivial instantiation and so leaves those instances storing exactly the word they always stored.
+	//
+	// `storage` is the `typeParameter` type itself — the same value the `scalar` arm carried, so every reader
+	// asking about the SLOT (its width, a loaded value's type) is unchanged.
+	typeParam(storage MaxonType)
 end 'PayloadClass'
 
 // ⭐⭐ **HOW A CONFORMER'S VALUE HALF IS OWNED AND RELEASED — ONE DECISION, TWO WITNESS WORDS
@@ -1449,6 +1464,23 @@ export union ExistentialOwnershipProtocol
 	// same box.
 	aggregate
 end 'ExistentialOwnershipProtocol'
+
+// ⭐⭐ **THE ONE SPELLING OF "HOW DO I TAKE A REFERENCE UNDER THIS PROTOCOL" (W41-opaque).** Two runtime words
+// are filled from it — a witness table's `retainFunc@16` (`existentialRetainCallee`) and a layout descriptor's
+// `retainFunc@64` (`typeParamRetainCallee`) — and they are the same question asked of a conformer and of a
+// type argument. Written twice, the pair's one genuinely surprising arm is what would drift: a `String`'s
+// answer is a COPY and not an incref, because a literal's record is immortal `.rdata` and increfing one writes
+// read-only memory (MEASURED as 0xC0000005 — see `IrInterface.WitnessRetainFuncOffset`).
+//
+// EMPTY is the complete answer for a protocol that owns nothing, never a sentinel: both readers stamp nothing
+// for it, and the zero word left behind is the encoding both runtime entries treat as inert.
+export function retainCalleeForProtocol(protocol ExistentialOwnershipProtocol) returns ByteArray
+	match protocol 'protocol'
+		byteRecord then return StrCloneName
+		aggregate then return MmRetainName
+		none then return EmptySourceText
+	end 'protocol'
+end 'retainCalleeForProtocol'
 
 // Classify a union payload field's storage and ownership. `typeNames` resolves a `named` field's id to
 // a NAME; pass the interner the LAYOUT's ids live in — the file-local artifact interner at the
@@ -1484,15 +1516,13 @@ export function classifyUnionPayload(signatures ProgramSignatures, typeNames Typ
 		// heap, and the cascade skips it (nothing to drop). It stores through `maxonTypeToStdType(function)`
 		// → i64, exactly as a scalar does.
 		function then return PayloadClass.scalar(fieldType)
-		// ⭐ A TYPE-PARAMETER field is a TRIVIAL SCALAR (P1.6-A) — and this is what keeps the shared
-		// destructor sound. `T` is opaque and its trivial argument is stored as-is (an 8-byte word), so
-		// the box neither increfs it on the way in (`moveInPayload` plain-stores it) nor drops it (the
-		// cascade skips it — `structFieldIsManaged` is false), which makes `type Box uses T`'s destructor
-		// the TRIVIAL `__mm_decref`, byte-identical to the equivalent monomorphic struct. Its concrete
-		// managed argument is REJECTED at instantiation (`checkGenericInstanceArg`), so the borrow this
-		// implies (the box holds a pointer it does not own) is only ever a trivial scalar or a caller-owned
-		// trivial struct — never a String or a managed-field struct that would leak here.
-		typeParameter then return PayloadClass.scalar(fieldType)
+		// ⭐ A TYPE-PARAMETER slot is its own class (`PayloadClass.typeParam`) — one opaque machine word in the
+		// DECLARATION view, dropped by nothing there (the per-INSTANCE cascade drops the substituted field
+		// instead), which is what keeps `type Box uses T`'s own destructor the trivial `__mm_decref`. What it is
+		// NOT is a scalar: a MANAGED instantiation makes the concrete record the slot's owner, so a store into
+		// it takes a reference through the descriptor at run time. See `PayloadClass.typeParam`, whose header
+		// carries the double free the `scalar` classification was.
+		typeParameter then return PayloadClass.typeParam(fieldType)
 		// A generic-INSTANCE payload is an OWNED base-struct box (P1.6-B2), exactly like a `structRef`
 		// payload: construct MOVES it in, a match binds it out, the cascade drops it through its own
 		// `__destruct_<instance>` / `__mm_decref` (`managedFieldDropCallee` routes the `genericInstance`
@@ -1616,6 +1646,14 @@ export function payloadClassIsManaged(class PayloadClass) returns bool
 		scalar gives false
 		floatPayload gives false
 		undeclaredName gives false
+		// ⭐ **FALSE, AND IT IS THE DECLARATION VIEW'S ANSWER RATHER THAN THE SLOT'S (W41-opaque).** Every
+		// reader here is a DECLARATION-view drop question — the base struct's own cascade, the usage gates,
+		// `caseHasManagedField` — and a `T` slot is dropped by none of them: `genericInstanceFieldIsManaged`
+		// answers the substituted question for the per-instance cascade that does drop it. Answering `true`
+		// would give `type Box uses T` a `__destruct_Box` that decrefs an opaque word, which for a trivial
+		// instantiation is a raw scalar. The STORE-side reference the slot does owe is taken by
+		// `Parser.moveInPayload`, which routes on this case by NAME and not through this predicate.
+		typeParam gives false
 	end 'c'
 end 'payloadClassIsManaged'
 
@@ -1631,8 +1669,26 @@ export function payloadClassIsExistential(class PayloadClass) returns bool
 		scalar gives false
 		floatPayload gives false
 		undeclaredName gives false
+		typeParam gives false
 	end 'c'
 end 'payloadClassIsExistential'
+
+// Is a classified slot the enclosing generic's own TYPE PARAMETER (W41-opaque) — one opaque machine word whose
+// reference protocol is a run-time fact? Its reader is the store door (`Parser.moveInPayload`) and nothing
+// else: every OTHER question about the slot (its width, a loaded value's type, whether the DECLARATION view
+// drops it) is answered identically to a scalar's, which is why those readers stay unaware of the case. A
+// `match` like its siblings so a case appended to `PayloadClass` fails to compile here.
+export function payloadClassIsTypeParam(class PayloadClass) returns bool
+	return match class 'c'
+		typeParam gives true
+		existential gives false
+		managed gives false
+		nestedUnion gives false
+		scalar gives false
+		floatPayload gives false
+		undeclaredName gives false
+	end 'c'
+end 'payloadClassIsTypeParam'
 
 // Is a classified payload a STRING (drops through `__str_decref`) rather than a struct (`__mm_decref`)?
 // The single reader of "which managed drop?", so the destructor synthesis and the usesStrDecref gate route
@@ -1652,6 +1708,10 @@ export function payloadClassIsString(class PayloadClass) returns bool
 		// String route", which is right because the choice belongs to the witness at run time.
 		existential gives false
 		undeclaredName gives false
+		// An opaque `T` may BE a String at some instantiation — which is exactly the fact the shared body
+		// cannot know, and the reason its store dispatches through the descriptor's `retainFunc@64`. `false`
+		// means "do not take the STATIC String route" here, precisely as it does for an existential.
+		typeParam gives false
 	end 'c'
 end 'payloadClassIsString'
 
@@ -1673,6 +1733,9 @@ export function payloadStorageOf(class PayloadClass) returns MaxonType
 		// own width is the one word this answers.
 		existential then return MaxonType.integer
 		undeclaredName then return MaxonType.integer
+		// The opaque word itself — the same value the `scalar` arm carried before this case split off, so the
+		// store's width is unchanged for every instantiation.
+		typeParam(storage) then return storage
 		floatPayload then panic("payloadStorageOf: a float payload has no lowerable storage — requirePayloadLowerable rejects it before any store")
 	end 'c'
 end 'payloadStorageOf'
@@ -1691,6 +1754,10 @@ export function payloadValueTypeOf(class PayloadClass, declared MaxonType) retur
 		// dispatches on the tag (`witnessOfValue`'s pairing, the argument widening, the drop router).
 		existential then return declared
 		undeclaredName then return declared
+		// The DECLARED type, exactly as the `scalar` arm answers: a loaded `T` must read back as the opaque
+		// `typeParameter` its slot is declared at, which is what the caller's `retypeOpaqueMethodResult`
+		// substitutes and what `decrefCalleeFor` routes to `__drop_type_param` on.
+		typeParam then return declared
 		floatPayload then panic("payloadValueTypeOf: a float payload has no lowerable value type — requirePayloadLowerable rejects it before any load")
 	end 'c'
 end 'payloadValueTypeOf'
@@ -14419,6 +14486,51 @@ export type ProgramSignatures
 		return self.anyInstanceTypeArgHasKind(param, kind: TypeArgInstantiationKind.consumeMoved)
 	end 'genericTypeFieldHasManagedInstantiation'
 
+	// ⭐⭐ **IS GENERIC `typeName` INSTANTIATED ANYWHERE THE DECLARATION SWEEP CAN SEE (W41-opaque)?** The gate
+	// on the store-side descriptor-need seed, and it asks the WEAKEST question that separates the two shapes,
+	// deliberately:
+	//
+	// ⛔ **"is some instantiation MANAGED" IS THE QUESTION THIS CANNOT ASK, AND ASKING IT WAS MEASURED AS A
+	// REFUSAL ON A LEGAL PROGRAM.** A CONCRETE instantiation is interned by the PARSE that meets it — `for pair
+	// in m` is what mints `MapIterator with (String, Integer)` — and this seed is computed before any body is
+	// parsed, so at that moment the registry holds only what DECLARATIONS put there. Measured with the managed
+	// question in place: `stdlib/Map.maxon`'s `current` reserved nothing and was then refused for want of the
+	// descriptor its own store asked for.
+	//
+	// ⭐ **WHAT A DECLARATION *CAN* SETTLE is whether the type is instantiated at ALL**, because a
+	// declaration-view instance (`Map.createIterator() returns MapIterator`, read inside its own type-parameter
+	// scope) is interned by the sweep exactly as a `typealias StrBox = Box with String` is. So an all-but-
+	// uninstantiated generic — one no `with` in the program ever names — answers `false` and reserves nothing.
+	// That matters because such a type's value is held as a bare `structRef(Base)` with no instance behind it
+	// (`let b = Box.create(5)`), which no call site can source a descriptor for: reserving one there turns a
+	// legal program into `forwardCallerLayout`'s panic, and that panic is reachable today through `sizeof(T)`
+	// on the identical shape (it is not this seed's to introduce).
+	//
+	// ⚠ **AND IT IS SOUND IN THE ONE DIRECTION IT CAN BE WRONG.** A program that instantiates a base ONLY
+	// through an expression the sweep cannot see would answer `false` here and then need a reference at the
+	// store — where `Parser.requireDescriptorForOpaqueStores` refuses it with a position rather than emitting a
+	// raw store. A refusal, never a silent wrong answer.
+	export function genericTypeIsInstantiated(typeName ByteArray) returns bool
+		let baseId = try self.typeNames.idOf(typeName) otherwise return false
+		let siblings = try self.genericInstances.instancesOfBase(baseId) otherwise return false
+		return not siblings.isEmpty()
+	end 'genericTypeIsInstantiated'
+
+	// ⭐ **IS THE GENERIC THAT DECLARES `param` INSTANTIATED (W41-opaque)?** — the question above, asked of a
+	// VALUE's own type-parameter token rather than of a declaration site's name, so the store side and the
+	// descriptor-need seed decide off ONE predicate. The token carries both halves of "which type's parameter
+	// is this" (W14), which is exactly what lets the store ask it without being handed the enclosing type from
+	// somewhere else — the pairing hazard `anyInstanceTypeArgHasKind`'s header records.
+	//
+	// A token no ledger holds answers `false`, for `anyInstanceTypeArgHasKind`'s reason: nothing declares it,
+	// so nothing instantiates it.
+	export function typeParamOwnerIsInstantiated(param TypeParamId) returns bool
+		let owner = try self.typeParamOwnerOf(param) otherwise return false
+		return self.genericTypeIsInstantiated(owner.declaringTypeName)
+	end 'typeParamOwnerIsInstantiated'
+
+
+
 	// ⭐ **DOES ANY INTERNED INSTANCE OF THE TYPE THAT DECLARES `param` MAKE THAT PARAMETER A CO-OWNED
 	// TRIVIAL STRUCT (the retain-escaping rung)?** A trivial struct/instance argument (`Box with
 	// Point`) is BORROWED at the call site (`typeArgIsOwned` false — the caller keeps it) yet CO-OWNED by the
@@ -15190,16 +15302,49 @@ export type ProgramSignatures
 
 	// ⭐⭐ **WHAT A WITNESS TABLE'S `retainFunc@16` HOLDS FOR CONFORMER `typeName`** (P1.7a-existentials slice
 	// 2b) — the exact dual of the destroy callee above, off the SAME protocol answer, so the two words are
-	// non-zero together by construction. `__str_clone` COPIES (the only protocol an immortal `.rdata` literal
-	// admits, see `IrInterface.WitnessRetainFuncOffset`); `__mm_retain` increfs and hands the pointer back;
-	// EMPTY leaves the zero word `__retain_existential` treats as inert.
+	// non-zero together by construction.
 	export function existentialRetainCallee(typeName ByteArray) returns ByteArray
-		match self.existentialOwnershipProtocol(typeName) 'protocol'
-			byteRecord then return StrCloneName
-			aggregate then return MmRetainName
-			none then return EmptySourceText
-		end 'protocol'
+		return retainCalleeForProtocol(self.existentialOwnershipProtocol(typeName))
 	end 'existentialRetainCallee'
+
+	// ⭐⭐ **WHAT A LAYOUT DESCRIPTOR'S `retainFunc@64` HOLDS FOR INSTANCE `id`'s TYPE ARGUMENT AT `position`
+	// (W41-opaque)** — the witness table's `retainFunc@16` asked of a generic's type ARGUMENT rather than of an
+	// existential's conformer. Same three protocols, same callees, ONE speller
+	// (`retainCalleeForProtocol`): the two words answer the identical question — *"how does a body that cannot
+	// name this type take a reference to it?"* — and a second spelling is exactly how they would come to
+	// disagree about a `String`, the one type whose answer is a COPY rather than an incref.
+	//
+	// ⚠ **THE PROTOCOL IS READ OFF THE TYPE, NOT OFF A CONFORMER NAME, AND THE TWO ARE NOT INTERCHANGEABLE
+	// HERE.** `conformerNameOfType` REDUCES a generic instance to its base (`Array with String` → `Array`,
+	// which no `declaredFormOf` holds), because that is right for the CONFORMANCE question; routed through it,
+	// a `Holder with (Array with String)` would answer `none` and store an array without a reference. This
+	// asks `typeIsManaged`, which is the boundary the concrete record's destructor drops on.
+	//
+	// EMPTY is the ANSWER for a trivial argument, not a sentinel: the zero word is what makes
+	// `__retain_type_param` inert, exactly as the witness pair's zero makes `__retain_existential` inert.
+	export function typeParamRetainCallee(id GenericInstanceId, position TypeParamPosition) returns ByteArray
+		return retainCalleeForProtocol(self.typeOwnershipProtocol(self.substitutedInstanceArg(id, position: position)))
+	end 'typeParamRetainCallee'
+
+	// ⭐⭐ **WHICH OWNERSHIP PROTOCOL A TYPE'S VALUE TAKES — `existentialOwnershipProtocol`'s TYPE-KEYED DOOR
+	// (W41-opaque).** ONE rule, two entries, the arrangement `conformerNameOfType` /
+	// `conformerNameOfDeclaredName` already has and for the same reason: an existential widening holds a
+	// CONFORMER NAME, a generic instance holds a resolved `MaxonType` argument, and neither can cheaply become
+	// the other. The rule is the same in both spellings — a byte record first (its representation, not a
+	// registry, is what decides it), then the one managed classifier, then aggregate.
+	//
+	// ⚠ The byte-record test is a TAG here where the name door tests two names, and that is the same test:
+	// `tagIsByteRecord` is exactly "String or Character", and a name door has no tag to read.
+	export function typeOwnershipProtocol(t MaxonType) returns ExistentialOwnershipProtocol
+		if tagIsByteRecord(maxonTypeTag(t)) 'byteRecord'
+			return ExistentialOwnershipProtocol.byteRecord
+		end 'byteRecord'
+		if not self.typeIsManaged(t, from: self.typeNames) 'ownsNothing'
+			return ExistentialOwnershipProtocol.none
+		end 'ownsNothing'
+
+		return ExistentialOwnershipProtocol.aggregate
+	end 'typeOwnershipProtocol'
 
 	// Is struct field `index` declared at an INTERFACE type — the two-slot fat pointer whose drop is
 	// `__drop_existential` rather than a statically named callee (P1.7a-existentials slice 2)? Asked through

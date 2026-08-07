@@ -1,0 +1,269 @@
+// Test: string-argument-outlives-its-source
+typealias Integer = int(i64.min to i64.max)
+typealias Index = int(0 to u64.max)
+
+type Holder uses Element
+	typealias EArray = Array with Element
+	typealias Entry = (Element, Integer)
+
+	var items as EArray = EArray.create()
+
+	export static function create() returns Self
+		return Self{}
+	end 'create'
+
+	export function add(item Element)
+		items.push(item)
+	end 'add'
+
+	export function entryAt(i Index) returns Entry
+		let v = try items.get(i) otherwise panic("Holder.entryAt: out of range")
+		return (v, 1)
+	end 'entryAt'
+end 'Holder'
+
+typealias StringHolder = Holder with String
+
+function pluck() returns (String, Integer)
+	var h = StringHolder.create()
+	h.add("the source is gone")
+	return h.entryAt(0)
+end 'pluck'
+
+function main() returns ExitCode
+	let e = pluck()
+	if e.0.equals("the source is gone") 'kept'
+		return 42
+	end 'kept'
+	return 1
+end 'main'
+---
+ExitCode: 42
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @Holder.create {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.callDirect __fieldDefault#Holder#items
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Holder.add {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
+    x64.callDirect __arr_push
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Holder.entryAt {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.prologue 32
+    x64.movRegReg rbx, rax
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
+    x64.callDirect __arr_get
+    x64.movRegReg r12, r8
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok:
+    x64.movRegImm32 r13, 1
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r14, r8
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
+    x64.callDirect __retain_type_param
+    x64.storeBaseDispReg.word64 [r14 + 0], r8
+    x64.storeBaseDispReg.word64 [r14 + 8], r13
+    x64.movRegReg r8, r14
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @pluck {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 40
+    x64.leaRegRdata rcx, [rip + __layout_Holder_String]
+    x64.callDirect Holder.create
+    x64.movRegReg rbx, r8
+    x64.leaRegRdata rax, [rip + __str_rec_2]
+    x64.loadRegBaseDisp.word64 r12, [rax + 0]
+    x64.loadRegBaseDisp.word64 r13, [rax + 8]
+    x64.leaRegRegImm32 rcx, r13, 49
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r14, r8
+    x64.leaRegRegImm32 r15, r14, 48
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, r12
+    x64.movRegReg rax, r13
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rax, r15, r13
+    x64.storeBaseDispReg.word64 [r14 + 0], r15
+    x64.storeBaseDispReg.word64 [r14 + 8], r13
+    x64.movRegImm rax, -3
+    x64.storeBaseDispReg.word64 [r14 + 16], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [r14 + 24], rax
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r14
+    x64.callDirect Holder.add
+    x64.movRegImm32 rdx, 0
+    x64.leaRegRdata rax, [rip + __layout_Holder_String]
+    x64.movRegReg rcx, rbx
+    x64.callDirect Holder.entryAt
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_Holder_String
+    x64.movRegReg r8, r12
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.callDirect pluck
+    x64.movRegReg rbx, r8
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.leaRegRdata rdx, [rip + __str_rec_2]
+    x64.callDirect String.equals
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, kept
+    x64.jmp ifcont
+  kept:
+    x64.movRegImm32 r12, 42
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct___Tuple2.String.int
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r12, 1
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct___Tuple2.String.int
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @__fieldDefault#Holder#items {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rax, 8
+    x64.loadRegBaseDisp.word64 rdx, [rcx + 40]
+    x64.movRegReg rcx, rax
+    x64.callDirect __arr_create
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @String.equals {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.loadRegBaseDisp.word64 rax, [rcx + 8]
+    x64.loadRegBaseDisp.word64 rsi, [rdx + 8]
+    x64.cmpRegReg rax, rsi
+    x64.jcc equal, lenMatch
+    x64.jmp notEqual
+  lenMatch:
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
+    x64.loadRegBaseDisp.word64 rdx, [rdx + 0]
+    x64.movRegImm32 rsi, 0
+    x64.jmp cmphdr
+  cmphdr:
+    x64.cmpRegReg rsi, rax
+    x64.jcc greaterEqual, allMatch
+    x64.jmp cmpbody
+  allMatch:
+    x64.movRegImm32 r8, 1
+    x64.popReg rbp
+    x64.ret
+  cmpbody:
+    x64.leaRegRegReg rdi, rcx, rsi
+    x64.loadRegBaseDisp.byte rdi, [rdi + 0]
+    x64.leaRegRegReg r8, rdx, rsi
+    x64.loadRegBaseDisp.byte r8, [r8 + 0]
+    x64.movRegImm32 r9, 1
+    x64.leaRegRegReg rsi, rsi, r9
+    x64.cmpRegReg rdi, r8
+    x64.jcc equal, critsplit
+    x64.jmp notEqual
+  critsplit:
+    x64.jmp cmphdr
+  notEqual:
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+}

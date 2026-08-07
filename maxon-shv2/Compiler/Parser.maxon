@@ -1501,6 +1501,19 @@ let sharedEmptyImmutableGlobalReads = ValueMarkSet.create()
 // no name to a managed value read out of a writable slot never writes it.
 let sharedEmptyRebindableSlotReads = ValueMarkSet.create()
 
+// The module-level shared EMPTY constructor-feed parameter set (W41-opaque), held as the initial value of
+// `constructorFeedParams` AND as the COW anchor its per-function reset points at —
+// `sharedEmptyRebindableSlotReads`'s pattern, for its reason and with its invariant. A function with no
+// opaque `Self{field: p}` feed parameter never writes it, which is every function in a program with no
+// generic constructor in it.
+let sharedEmptyConstructorFeedParams = ValueMarkSet.create()
+
+// The module-level shared EMPTY opaque-slot-owner set (W41-opaque), held as the initial value of
+// `recordsOwningOpaqueSlots` AND as the COW anchor its per-function reset points at —
+// `sharedEmptyConstructorFeedParams`'s pattern, for its reason and with its invariant. Only a shared generic
+// body that BUILDS a record out of a borrowed opaque `T` ever writes it.
+let sharedEmptyRecordsOwningOpaqueSlots = ValueMarkSet.create()
+
 // The module-level shared EMPTY buffer-surface mark set (R4.4), held as the initial value of
 // `bufferSurfaceValues` AND as the COW anchor its per-function reset points at —
 // `sharedEmptyImmutableGlobalReads`'s pattern, for its reason and with its invariant. Every program that
@@ -1729,10 +1742,15 @@ type MethodDescriptorScan
 	export let reassignsOpaqueField as bool
 	export let hasArrayCopy as bool
 	export let constructsSelfLiteral as bool
+	// ⭐ Does this region BUILD A RECORD — a tuple literal, or a `Self{…}`/`Type{…}` struct literal (W41-opaque)?
+	// A record built inside a shared generic body may take a borrowed opaque `T` into a slot the CONCRETE
+	// record's destructor drops, so it needs the descriptor to take that reference through. See
+	// `recordConstructionIn` for why the tuple half is a paren-stack walk rather than a token test.
+	export let buildsRecord as bool
 	export let endPos as TokenIndex
 
-	export static function create(direct bool, callees ByteArrayArray, hasControlFlow bool, hasArrayMoveOut bool, reassignsOpaqueField bool, hasArrayCopy bool, constructsSelfLiteral bool, endPos TokenIndex) returns MethodDescriptorScan
-		return Self{direct: direct, callees: callees, hasControlFlow: hasControlFlow, hasArrayMoveOut: hasArrayMoveOut, reassignsOpaqueField: reassignsOpaqueField, hasArrayCopy: hasArrayCopy, constructsSelfLiteral: constructsSelfLiteral, endPos: endPos}
+	export static function create(direct bool, callees ByteArrayArray, hasControlFlow bool, hasArrayMoveOut bool, reassignsOpaqueField bool, hasArrayCopy bool, constructsSelfLiteral bool, buildsRecord bool, endPos TokenIndex) returns MethodDescriptorScan
+		return Self{direct: direct, callees: callees, hasControlFlow: hasControlFlow, hasArrayMoveOut: hasArrayMoveOut, reassignsOpaqueField: reassignsOpaqueField, hasArrayCopy: hasArrayCopy, constructsSelfLiteral: constructsSelfLiteral, buildsRecord: buildsRecord, endPos: endPos}
 	end 'create'
 end 'MethodDescriptorScan'
 
@@ -7656,6 +7674,34 @@ export type Parser
 	// A SPARSE set, reset per function and SWAPPED across a closure body, exactly like the sibling value
 	// marks — a mark names an id in THIS function's SSA space.
 	var rebindableSlotReads as ValueMarkSet
+	// ⭐⭐ **WHICH OPAQUE PARAMETERS ARE `constructedValue` FEEDS — the ones the CALL SITE has already settled
+	// (W41-opaque).** `Box.create(v T)` doing `Self{value: v}` hands `v` to the box the call RETURNS, and the
+	// concrete caller consumed its argument to pay for that; so this store owes no reference, and taking one
+	// would leak the caller's.
+	//
+	// ⚠ **IT CANNOT BE READ OFF `valueIsOpaqueOwned`, AND THE REASON IS DELIBERATE**: `bindParameters` pointedly
+	// does NOT enrol such a parameter owned, because enrolling it would make the shared body DROP it (see there).
+	// So the ownership bit says "borrowed" for a value whose reference is already accounted for, and this is the
+	// distinction the store side needs. It is a mark of its own rather than a widening of that bit because
+	// `isOpaqueOwnedFeedArg` and `transferConsumedArg` read that bit to decide FORWARDING, where the answer for
+	// a constructor feed must stay what it is.
+	//
+	// A SPARSE set, reset per function and SWAPPED across a closure body, exactly like the sibling value marks.
+	var constructorFeedParams as ValueMarkSet
+	// ⭐⭐ **WHICH RECORDS THIS SHARED BODY BUILT HOLD A REFERENCE IT TOOK THROUGH THE DESCRIPTOR
+	// (W41-opaque)** — the exact set whose drop, IF IT HAPPENS HERE, must release that reference.
+	//
+	// ⚠ **IT IS THE DROP HALF OF THE STORE, AND WITHOUT IT THE STORE IS A LEAK.** The record's type is
+	// SUBSTITUTED at the caller (`Box.pack`'s `(self.v, 1)` is `__Tuple2.<T>.int` here and
+	// `__Tuple2.String.int` there), so a caller's cascade releases the slot and this body's does NOT — the
+	// declaration-view layout's `T` field is not managed, so `__destruct_` skips it and `__mm_decref` just
+	// frees the box. MEASURED on `tuples/tuple-of-a-managed-type-parameter`: exit 101, the clone stranded.
+	// A record RETURNED from here is moved out of the pending drops, so exactly one of the two views
+	// releases it.
+	//
+	// A per-VALUE mark and not a per-LAYOUT rule, because the obligation is the STORE's: a record of the
+	// same type filled from an already-owned value took no reference and must not release one.
+	var recordsOwningOpaqueSlots as ValueMarkSet
 	// ⭐⭐ **WHICH SSA VALUES DENOTE A `__ManagedMemory` BUFFER RATHER THAN THE `Array` AROUND IT (R4.4)** —
 	// the fact `SignatureIndex.ManagedMemoryTypeName` says the binding costs, kept where shv2 keeps such facts.
 	//
@@ -7938,6 +7984,13 @@ export type Parser
 	// whatever put it there.
 	var functionCarriesLayoutParam as bool
 	var functionDroppedOpaqueWithoutDescriptor as bool
+	// ⭐ **THE SAME DISAGREEMENT ON THE STORE SIDE (W41-opaque)** — the function STORED a borrowed opaque `T`
+	// into a record and so owes `__retain_type_param`, but reserved no descriptor to read `retainFunc@64`
+	// from. It is a SECOND bool rather than a widening of the one above because the two owe the reader
+	// different advice: a drop is cured by moving the value into a slot that takes ownership, a store by
+	// giving the enclosing method a shape the pre-scan can see. Answered where the answer is still
+	// positionable, for its sibling's reason.
+	var functionStoredOpaqueWithoutDescriptor as bool
 	// ⭐ **THE ENCLOSING TYPE'S MEMBER METHODS, bare name -> takesReceiver (#65)** — the map that resolves a
 	// bare call `foo(…)` inside a method body to the sibling method `foo`, prepending `self` for an instance
 	// method and nothing for a `static` one. Built LAZILY (`siblingReceiverMap`) the first time a call inside a
@@ -8334,6 +8387,8 @@ export type Parser
 			stringBytesViewOps: sharedEmptyStringBytesViewOps,
 			immutableGlobalReads: sharedEmptyImmutableGlobalReads,
 			rebindableSlotReads: sharedEmptyRebindableSlotReads,
+			constructorFeedParams: sharedEmptyConstructorFeedParams,
+			recordsOwningOpaqueSlots: sharedEmptyRecordsOwningOpaqueSlots,
 			bufferSurfaceValues: sharedEmptyBufferSurfaceValues,
 			bufferSurfaceSlots: sharedEmptyBufferSurfaceSlots,
 			bufferSurfaceElements: sharedEmptyBufferSurfaceElements,
@@ -8369,6 +8424,7 @@ export type Parser
 			descriptorScanSites: sharedEmptyDescriptorScanSites,
 			functionCarriesLayoutParam: false,
 			functionDroppedOpaqueWithoutDescriptor: false,
+			functionStoredOpaqueWithoutDescriptor: false,
 			siblingReceivers: sharedEmptySiblingReceivers,
 			siblingReceiverScanType: EmptySourceText,
 			siblingReceiverScanBody: 0,
@@ -9652,6 +9708,10 @@ export type Parser
 		// clause of its own — is scanned in exactly its target's scope.
 		self.enterTypeScope(site.typeName, isEnum: false)
 		self.enclosingTypeParams = self.signatures.structTypeParamsOf(site.typeName)
+		// ⭐ Is this type instantiated at all (W41-opaque)? A property of the TYPE, so it is read once per site
+		// rather than once per method. See `genericTypeIsInstantiated` for why this is the weakest question the
+		// store-side seed can ask and why a stronger one is measurably wrong here.
+		let instantiated = self.signatures.genericTypeIsInstantiated(site.typeName)
 
 		var q = site.bodyStart
 		while self.kindAt(q) != TokenKind.eof 'walk'
@@ -9703,6 +9763,30 @@ export type Parser
 				// byte-identical; seeded like a direct `sizeof(T)` so the fixpoint gives every self-caller a
 				// descriptor to forward.
 				let reassignsOpaqueManagedField = scan.reassignsOpaqueField and not self.functionDeclIsStatic(q)
+				// ⭐⭐ **A method that BUILDS A RECORD may store a BORROWED opaque `T` into it, and that store
+				// takes its reference through the descriptor's `retainFunc@64` (W41-opaque), so it needs the
+				// descriptor.** `MapIterator.current`'s `return (k, v)` — two `keys.get(i)`/`values.get(i)`
+				// BORROWS into a tuple the caller's substituted `(String, Integer)` destructor then drops — is
+				// exactly this shape, and it is the one that measured 0xC0000005.
+				//
+				// ⚠ **THE SOURCE OF THE OPAQUE VALUE IS NOT RESOLVED HERE, AND THAT IS THE SIBLING SIGNALS'
+				// DISCIPLINE, NOT A GAP.** A borrowed `T` reaches a record from an array READ, a bare field
+				// read OR a non-consumed parameter, and the pre-scan runs before any body is parsed — so no
+				// token separates a body that will store one from a body that will not. Over-reserving costs
+				// one ignored parameter; missing one aborts the compiler.
+				//
+				// ⛔ **`instantiated` IS THE WEAKEST GATE THAT SEPARATES THE TWO SHAPES, AND A STRONGER ONE WAS
+				// MEASURED AS A REFUSAL ON A LEGAL PROGRAM** — `genericTypeIsInstantiated` carries the argument
+				// in full: "is some instantiation MANAGED" cannot be asked here, because a CONCRETE instance is
+				// interned by the parse that meets it and this scan runs before any body is parsed. A type no
+				// `with` in the program ever names is the one this must decline for: its value is held as a bare
+				// `structRef(Base)` that no call site can source a descriptor for.
+				//
+				// `not isStatic` mirrors every sibling opaque signal: a static generic constructor has no
+				// receiver to source a descriptor from, and one that needed one would be `E2015`
+				// (`staticLayoutNeedsSelfReturn`). A static that stores a borrowed opaque value is refused with
+				// a position instead (`requireDescriptorForOpaqueStores`).
+				let buildsRecordFromOpaqueSource = scan.buildsRecord and instantiated and not self.functionDeclIsStatic(q)
 				// ⭐⭐ **TWO DECLARATIONS CAN WEAR ONE QUALIFIED NAME, AND THE MERGE IS A UNION — NOT THE LAST
 				// ONE IN (found at review).** The columns are keyed by `Type.method` and nothing above this
 				// line guarantees that key is unique: a type body may declare `slotSize()` twice (shv2 keeps
@@ -9720,7 +9804,7 @@ export type Parser
 				// answer that must be wrong is wrong upwards, and `solveDescriptorNeeds`' claim that same-named
 				// methods "share one answer" is made true here rather than assumed.
 				let alreadyContributed = directSeeds.contains(qualified)
-				var directlyNeeded = scan.direct or dropsFeed or movesOutArrayElement or reassignsOpaqueManagedField or copiesArrayElement
+				var directlyNeeded = scan.direct or dropsFeed or movesOutArrayElement or reassignsOpaqueManagedField or copiesArrayElement or buildsRecordFromOpaqueSource
 				var edges = self.qualifiedSelfCallees(site.typeName, callees: scan.callees)
 				// ⭐ A `Self{…}` CALLS this type's field-default helpers, so it is a call edge like any other
 				// (W43b). See `fieldDefaultHelperNamesOf` for why every helper is named rather than only the
@@ -9884,6 +9968,11 @@ export type Parser
 		// ⭐ Does this region write a `Self{…}`? Every field-default helper of the enclosing type is CALLED by
 		// one (`Parser.fillFieldDefault`), so the caller turns this into edges (W43b).
 		var constructsSelfLiteral = false
+		// ⭐ Does this region build a RECORD — a struct literal or a tuple literal (W41-opaque)?
+		var buildsRecord = false
+		// The open `(`/`[`/`{` groups enclosing the cursor, each carrying whether a comma directly inside it
+		// would be a TUPLE's separator rather than an argument list's. See the comma arm below.
+		var groupIsTuplePosition = BoolArray.create()
 		var q = start
 		while q < regionEnd 'walk'
 			let kind = self.kindAt(q)
@@ -9959,6 +10048,32 @@ export type Parser
 			if kind == TokenKind.selfType and self.kindAt(q + 1) == TokenKind.leftBrace 'selfLiteral'
 				constructsSelfLiteral = true
 			end 'selfLiteral'
+			// ⭐ A `<TypeName>{` / `Self{` STRUCT literal is a record construction (W41-opaque) — the half of
+			// the signal that IS a token test. The tuple half is folded in below, off a paren stack.
+			if kind == TokenKind.leftBrace and tokenCanBeAName(self.tokenAt(q - 1)) 'structLiteral'
+				buildsRecord = true
+			end 'structLiteral'
+			// ⭐⭐ **A TUPLE LITERAL IS A `(` IN EXPRESSION POSITION HOLDING A DEPTH-1 COMMA, and a token test
+			// cannot see it (W41-opaque).** A `(` FOLLOWING something that can end a primary expression opens a
+			// CALL or an index, whose commas separate arguments; every other `(` opens a grouping, and a
+			// grouping holding a top-level comma is a tuple. The stack is what makes "top-level" exact: a comma
+			// inside a nested call, bracket or brace belongs to that opener and not to this one.
+			//
+			// ⚠ A STACK rather than a rescan from each `(`, for the cost this project keeps measuring: a
+			// rescan is O(tokens) per paren and so quadratic in a body of nested calls, where the signal walk
+			// is O(tokens) for everything else it collects. `groupDepths` is empty for a body with no
+			// parenthesis at all, which is not the common case here but is the cheap one.
+			if kind == TokenKind.leftParen or kind == TokenKind.leftBracket or kind == TokenKind.leftBrace 'opensGroup'
+				groupIsTuplePosition.push(kind == TokenKind.leftParen and not self.tokenEndsAPrimaryExpression((q - 1) as TokenIndex))
+			end 'opensGroup'
+			if kind == TokenKind.comma and not groupIsTuplePosition.isEmpty() and (try groupIsTuplePosition.last() otherwise panic("scanDescriptorSignalsIn: groupIsTuplePosition is non-empty by the guard and has no last")) 'topLevelCommaInAGrouping'
+				buildsRecord = true
+			end 'topLevelCommaInAGrouping'
+			if (kind == TokenKind.rightParen or kind == TokenKind.rightBracket or kind == TokenKind.rightBrace) and not groupIsTuplePosition.isEmpty() 'closesGroup'
+				// A region may CLOSE more groups than it opens (a field default is the `=` to the end of its
+				// line), so an unmatched closer pops nothing rather than faulting.
+				_ = try groupIsTuplePosition.pop() otherwise panic("scanDescriptorSignalsIn: groupIsTuplePosition is non-empty by the guard and cannot pop")
+			end 'closesGroup'
 
 			// A nested block-opener (`if`/`while`/`match`/`for`/`try`/inner block) — the feed's consume may be
 			// guarded, so it can be left live at the merge. A method's own block is already open before this
@@ -9969,8 +10084,41 @@ export type Parser
 
 			q = q + 1
 		end 'walk'
-		return MethodDescriptorScan.create(direct, callees: callees, hasControlFlow: hasControlFlow, hasArrayMoveOut: hasArrayMoveOut, reassignsOpaqueField: reassignsOpaqueField, hasArrayCopy: hasArrayCopy, constructsSelfLiteral: constructsSelfLiteral, endPos: regionEnd)
+		return MethodDescriptorScan.create(direct, callees: callees, hasControlFlow: hasControlFlow, hasArrayMoveOut: hasArrayMoveOut, reassignsOpaqueField: reassignsOpaqueField, hasArrayCopy: hasArrayCopy, constructsSelfLiteral: constructsSelfLiteral, buildsRecord: buildsRecord, endPos: regionEnd)
 	end 'scanDescriptorSignalsIn'
+
+	// ⭐ **DOES THE TOKEN AT `q` END A PRIMARY EXPRESSION — i.e. does a `(` after it open a CALL rather than a
+	// GROUPING (W41-opaque)?** The whole of how the signal walk tells `f(a, b)` from `(a, b)`. An identifier, a
+	// literal, `self`/`Self` and a closing bracket can each be the thing being CALLED or INDEXED; a KEYWORD, an
+	// operator, a comma or an opening bracket cannot, so a `(` after one of those opens a grouping.
+	//
+	// ⛔ **THE WIDE NAME TEST IS THE WRONG ONE HERE, AND USING IT MADE THE SIGNAL SEE NOTHING.**
+	// `tokenCanBeAName` admits every keyword with a spelling (D8's keyword-named methods), so `return (k, v)`
+	// — the exact shape this signal exists for — read as a call to `return` and detected no tuple at all
+	// (MEASURED: all three `generic-opaque-value-store` cases refused for want of a descriptor nothing
+	// reserved). A keyword therefore ends a primary expression only where it can be a METHOD NAME, which is
+	// exactly "immediately after a `.`".
+	//
+	// A BARE sibling call to a keyword-named method (`to(a, b)` resolving to `self.to(a, b)`) is read as a
+	// tuple and over-reserves a descriptor. That is the sound direction and the same one every sibling signal
+	// takes: an unused parameter costs nothing, a missing one aborts the compiler.
+	function tokenEndsAPrimaryExpression(q TokenIndex) returns bool
+		let kind = self.kindAt(q)
+		if kind == TokenKind.identifier 'plainName'
+			return true
+		end 'plainName'
+		if kind == TokenKind.rightParen or kind == TokenKind.rightBracket or kind == TokenKind.rightBrace 'closesAValue'
+			return true
+		end 'closesAValue'
+		if tokenIsLiteralKind(kind) 'literal'
+			return true
+		end 'literal'
+		if kind == TokenKind.self or kind == TokenKind.selfType 'receiver'
+			return true
+		end 'receiver'
+
+		return self.kindAt(q - 1) == TokenKind.dot and tokenCanBeAName(self.tokenAt(q))
+	end 'tokenEndsAPrimaryExpression'
 
 	// Is the token at `selfPos` the start of a `self.<method>(` call — the self-call the descriptor-need
 	// fixpoint threads through? `self` `.` `<name>` `(`, four contiguous tokens — the tail asked through the
@@ -15599,6 +15747,7 @@ export type Parser
 		// decision is made, and re-armed per function so a previous method's answer cannot stand in for this one.
 		self.functionCarriesLayoutParam = needsLayoutParam
 		self.functionDroppedOpaqueWithoutDescriptor = false
+		self.functionStoredOpaqueWithoutDescriptor = false
 
 		let layoutParamCount = 1 if needsLayoutParam else 0
 		// ⭐ **A HIDDEN WITNESS PARAMETER PER `where` CONSTRAINT (P1.7a slice 2a, the dictionary's dispatch
@@ -15687,6 +15836,8 @@ export type Parser
 		self.immutableGlobalReads = sharedEmptyImmutableGlobalReads
 		// The rebindable-slot reads (W41) are per-function for that same reason — see `rebindableSlotReads`.
 		self.rebindableSlotReads = sharedEmptyRebindableSlotReads
+		self.constructorFeedParams = sharedEmptyConstructorFeedParams
+		self.recordsOwningOpaqueSlots = sharedEmptyRecordsOwningOpaqueSlots
 		// The buffer-surface marks (R4.4, A2m) are per-function for exactly that reason too — see
 		// `bufferSurfaceValues`. All THREE reset together, because they describe one value space.
 		self.bufferSurfaceValues = sharedEmptyBufferSurfaceValues
@@ -15870,11 +16021,29 @@ export type Parser
 	// So the message states the FACT it is certain of — a drop with no descriptor to drop through — and offers the
 	// causes as causes.
 	function requireDescriptorForOpaqueDrops(nameTok Token) throws ParseError
+		try self.requireDescriptorForOpaqueStores(nameTok)
 		if not self.functionDroppedOpaqueWithoutDescriptor 'nothingOwed'
 			return
 		end 'nothingOwed'
 		throw ParseError.unsupported("'{String.from(nameTok.value)}' owns an opaque type-parameter value it must release on some path, but the method reserves no layout descriptor to release it through — the shared generic body compiles once for every instantiation, so the value's destructor is read from the enclosing instance's descriptor at run time, and the parameter carrying it is reserved only for the method shapes that are known ahead of the body to need one. Two shapes reach this: a type-parameter argument handed to a `push`/`set`/`insert` on something that is NOT an `Array` and so never takes ownership of it (move it into an `Array with <type parameter>` or a type-parameter field instead); a `pop`/`remove` of an opaque element in a `static function` (do it on an instance method, which can source the descriptor from `self`)", line: nameTok.line, column: nameTok.column)
 	end 'requireDescriptorForOpaqueDrops'
+
+	// ⛔ **A BODY THAT STORES A BORROWED OPAQUE `T` MUST CARRY THE DESCRIPTOR THAT REFERENCE IS TAKEN THROUGH
+	// (W41-opaque)** — the store-side sibling of the guard above, asked at the same moment and for the same
+	// reason: the slot is reserved before the body is parsed, so a late discovery can only refuse.
+	//
+	// The reservation (`scanDescriptorNeedsInto`'s `buildsRecordFromOpaqueSource`) rests on a token pre-scan
+	// finding BOTH a record construction and a borrowing read of an opaque value in the same body. Both halves
+	// are over-approximations that cost only an unused parameter — but the pre-scan cannot resolve a RECEIVER,
+	// so a body whose only record construction is a `Self{…}` in a `static` reserves nothing (a static generic
+	// constructor has no descriptor to source, `dropsFeed`'s stated bound), and such a body storing a borrowed
+	// opaque value is refused here rather than aborting the compiler in `appendTypeParamDescriptor`.
+	function requireDescriptorForOpaqueStores(nameTok Token) throws ParseError
+		if not self.functionStoredOpaqueWithoutDescriptor 'nothingOwed'
+			return
+		end 'nothingOwed'
+		throw ParseError.unsupported("'{String.from(nameTok.value)}' stores a borrowed type-parameter value into a record it builds, but the method reserves no layout descriptor to take that reference through — the shared generic body compiles once for every instantiation, so how a `T` is referenced (a copy for a `String`, an incref for a struct, nothing for an `int`) is read from the enclosing instance's descriptor at run time, and the parameter carrying it is reserved only for the method shapes that are known ahead of the body to need one. A `static function` is the shape that reaches this: it has no `self` to source the descriptor from, so build the record in an instance method instead", line: nameTok.line, column: nameTok.column)
+	end 'requireDescriptorForOpaqueStores'
 
 	// Commit this function's accumulated range-check sites to the artifact (P1.9), keyed by `name`.
 	// Files nothing when the function has no cast into a ranged alias AND no ranged return — the
@@ -16618,6 +16787,7 @@ export type Parser
 		let needsLayoutParam = self.signatures.anyFunctionNeedsLayoutDescriptor() and self.signatures.functionNeedsLayoutDescriptor(helperName)
 		self.functionCarriesLayoutParam = needsLayoutParam
 		self.functionDroppedOpaqueWithoutDescriptor = false
+		self.functionStoredOpaqueWithoutDescriptor = false
 		let helperParamCount = 1 if needsLayoutParam else 0
 
 		self.scope = Scope.create()
@@ -16655,6 +16825,8 @@ export type Parser
 		self.immutableGlobalReads = sharedEmptyImmutableGlobalReads
 		// W41's mark crosses the same boundary and for the same reason — see `rebindableSlotReads`.
 		self.rebindableSlotReads = sharedEmptyRebindableSlotReads
+		self.constructorFeedParams = sharedEmptyConstructorFeedParams
+		self.recordsOwningOpaqueSlots = sharedEmptyRecordsOwningOpaqueSlots
 		// ⭐ **ALL THREE, for `parseFunction`'s stated reason — "they describe one value space" (BATCH22
 		// review).** This site reset `bufferSurfaceValues` alone, and the other two crossed the boundary: a
 		// default helper is a whole FUNCTION drained at the end of `parseModule`, so what reaches it is the
@@ -16845,6 +17017,17 @@ export type Parser
 				self.markValueOwnsHeap(i as ValueId)
 				self.ownedBindings.push(binding)
 			end 'opaqueFeed'
+
+			// ⭐ **A `constructedValue` FEED IS RECORDED RATHER THAN ENROLLED (W41-opaque).** The paragraph above
+			// says why it must not be enrolled owned — the value the call RETURNS owns it, so a drop here would
+			// be the second. But the STORE that puts it there must equally not take a reference for it: the
+			// concrete call site already consumed the argument to pay for that slot. So the fact is recorded for
+			// `moveOpaqueValueInto` to read, which is the one place that has to tell this parameter from a
+			// borrow the body itself produced. Guarded by the same tag test, first, for its measured reason.
+			if self.tagOf(i as ValueId) == ValueTypeTag.typeParameter and self.signatures.paramFeedOf(funcName, index: i).isFeed() 'anyOpaqueFeed'
+				self.constructorFeedParams = privateValueMarkSet(self.constructorFeedParams, anchor: sharedEmptyConstructorFeedParams)
+				self.constructorFeedParams.insert(i as ValueId)
+			end 'anyOpaqueFeed'
 		end 'eachParam'
 	end 'bindParameters'
 
@@ -22430,6 +22613,14 @@ export type Parser
 			return
 		end 'existential'
 
+		// ⭐ **A RECORD THIS SHARED BODY GAVE A DESCRIPTOR-MEDIATED REFERENCE RELEASES IT BEFORE ITS BOX GOES**
+		// (W41-opaque). Its own cascade cannot: the layout's `T` field is not managed in the DECLARATION view,
+		// which is right for every OTHER reader of that layout and is exactly why the obligation is carried on
+		// the value. See `recordsOwningOpaqueSlots` for the leak this closes and why the mark is per-value.
+		if self.recordsOwningOpaqueSlots.contains(value) 'ownsOpaqueSlots'
+			self.emitOpaqueSlotReleases(value, range: range)
+		end 'ownsOpaqueSlots'
+
 		let callee = self.decrefCalleeFor(value)
 		// ⭐ An OPAQUE drop reads the enclosing instance's layout descriptor at run time, so it needs the
 		// parameter that carries it — reserved before this body was parsed. Record a disagreement rather than
@@ -22439,6 +22630,46 @@ export type Parser
 		end 'noDescriptorToDropThrough'
 		self.emitOwnershipRuntimeCall(callee, args: singletonArgs(value), range: range)
 	end 'emitDecref'
+
+	// ⭐⭐ **RELEASE EVERY OPAQUE `T` SLOT OF A RECORD THIS BODY BUILT AND IS ABOUT TO FREE (W41-opaque)** —
+	// the drop dual of `moveOpaqueValueInto`'s store, emitted only for a record the store actually referenced
+	// (`recordsOwningOpaqueSlots`).
+	//
+	// The slot is LOADED rather than the retained SSA value being remembered, because a tuple slot is
+	// WRITABLE (`t.0 = x`) — a remembered value would be the one the write replaced, and releasing that is a
+	// double free at the far end. The load is what the record actually holds at this moment, which is the only
+	// thing the drop may act on.
+	//
+	// The descriptor is guaranteed: the store that set the mark went through `__retain_type_param`, which owes
+	// the same descriptor and records its absence itself, so this cannot be the first site to need one.
+	function emitOpaqueSlotReleases(box ValueId, range SourceRange)
+		let layout = self.declaredLayoutOfRecordValue(box)
+		for i in 0 upto layout.fieldCount() 'eachField'
+			let declared = self.signatures.fieldTypeOf(layout, index: i, into: self.artifact.typeNames)
+			if maxonTypeTag(declared) != ValueTypeTag.typeParameter 'notOpaque'
+				continue
+			end 'notOpaque'
+
+			self.emitOwnershipRuntimeCall(DropTypeParamName, args: singletonArgs(self.emitFieldLoad(box, layout: layout, index: i, range: range)), range: range)
+		end 'eachField'
+	end 'emitOpaqueSlotReleases'
+
+	// The declared layout of a record VALUE that took a descriptor-mediated reference — a `Self{…}` or a tuple
+	// literal, both `structRef`-tagged by `emitOwnedStructBox`.
+	//
+	// ⚠ **A UNION BOX IS THE ONE OTHER THING `moveInPayload` FILLS, AND IT CANNOT REACH HERE TODAY** — not by
+	// arrangement but because the construct is refused: a generic union instantiated over a type parameter is
+	// unspellable in a return position (`E2001` on `returns Holder with E`) and `E3005` through an inner
+	// alias, so no shared body ever builds one and no `T` payload is ever stored. The panic states that rather
+	// than a layout being silently skipped, because the day the front end admits the construct this cascade
+	// owes it a release and a quiet miss would be a leak.
+	function declaredLayoutOfRecordValue(box ValueId) returns StructLayout
+		let name = self.valueTypeName(box)
+		match self.signatures.structOf(name) 'declared'
+			declared(layout) then return layout
+			undeclared then panic("declaredLayoutOfRecordValue: v{box} took a descriptor-mediated reference into a slot of '{String.from(name)}', which declares no struct — a UNION box is the only other record `moveInPayload` fills, and a generic union over a type parameter is refused at the front end, so admitting one means this cascade now owes its payload a release")
+		end 'declared'
+	end 'declaredLayoutOfRecordValue'
 
 	// ⛔⛔ **EVERY SYNTHESIZED RETAIN OR RELEASE GOES THROUGH HERE, AND THE ONE THING THIS DOOR ADDS IS THAT
 	// IT IS NEVER ROUTED TO A BLOCK-FORM `try`'s HANDLER.** These calls are `void`, they are the compiler's
@@ -35219,12 +35450,19 @@ export type Parser
 			let bareLocal = try fieldBareLocal.get(i) otherwise panic("emitStructLiteral: fieldBareLocal.get OOB at {i} — the column is sized to the layout's field count")
 			let fieldType = self.signatures.fieldTypeOf(layout, index: i, into: self.artifact.typeNames)
 			let class = classifyUnionPayload(self.signatures, typeNames: self.artifact.typeNames, fieldType: fieldType, slotScopeFilePath: layout.declFilePath)
-			let stored = try self.moveInPayload(class, arg: value, argBareLocal: bareLocal, anchor: anchor, range: range)
+			let stored = try self.moveInPayload(class, arg: value, argBareLocal: bareLocal, owner: box, anchor: anchor, range: range)
 			self.emitFieldStore(box, layout: layout, index: i, value: stored, range: range)
 		end 'eachField'
 
 		return box
 	end 'emitStructLiteral'
+
+	// The ONE writer of `recordsOwningOpaqueSlots` (W41-opaque) — `markRebindableSlotRead`'s twin, for the
+	// identical copy-on-write reason and through the same one home for it (`privateValueMarkSet`).
+	function markRecordOwningOpaqueSlots(box ValueId)
+		self.recordsOwningOpaqueSlots = privateValueMarkSet(self.recordsOwningOpaqueSlots, anchor: sharedEmptyRecordsOwningOpaqueSlots)
+		self.recordsOwningOpaqueSlots.insert(box)
+	end 'markRecordOwningOpaqueSlots'
 
 	// ⭐ **ALLOCATE THE HEAP RECORD A STRUCT-SHAPED LITERAL LIVES IN, AND ENROL IT AS THIS STATEMENT'S OWNED
 	// TEMPORARY** — the three steps that MUST happen together (the size literal read off the layout, the
@@ -35742,7 +35980,7 @@ export type Parser
 			let arg = try args.get(i) otherwise panic("emitEnumBox: args.get OOB at {i} after the arity check")
 			let class = try classes.get(i) otherwise panic("emitEnumBox: classes.get OOB at {i} — it is filled in lockstep with the fields")
 			let bareLocal = try argsBareLocal.get(i) otherwise panic("emitEnumBox: argsBareLocal.get OOB at {i} — captured in lockstep with the args")
-			let stored = try self.moveInPayload(class, arg: arg, argBareLocal: bareLocal, anchor: caseTok, range: range)
+			let stored = try self.moveInPayload(class, arg: arg, argBareLocal: bareLocal, owner: box, anchor: caseTok, range: range)
 			self.emitIndirectStore(box, offset: layout.payloadSlotOffset(i), value: stored, storageType: payloadStorageOf(class), range: range)
 		end 'storeEach'
 
@@ -35770,12 +36008,101 @@ export type Parser
 	//     copy rather than a second reference — and an EXISTENTIAL whose conformer IS a String takes that same
 	//     copy at run time, through its witness, which is why `coOwnBorrowedForConsume` answers with a value
 	//     rather than with the one it was handed.)
-	function moveInPayload(class PayloadClass, arg ValueId, argBareLocal bool, anchor Token, range SourceRange) returns ValueId throws ParseError
+	//   • a slot declared at the enclosing generic's own TYPE PARAMETER takes its reference at RUN TIME
+	//     (`moveOpaqueValueInto`, W41-opaque) — the shared body cannot name the protocol, but the record it
+	//     fills is concrete at the caller and its destructor drops the slot regardless.
+	// `owner` is the RECORD the slot belongs to — passed so the one door that takes a descriptor-mediated
+	// reference can record the release obligation ON THE RECORD, rather than a caller inferring "a reference
+	// was taken" from the returned value differing (which the substituted-concrete arm also does).
+	function moveInPayload(class PayloadClass, arg ValueId, argBareLocal bool, owner ValueId, anchor Token, range SourceRange) returns ValueId throws ParseError
+		if payloadClassIsTypeParam(class) 'opaqueSlot'
+			return try self.moveOpaqueValueInto(arg, argBareLocal: argBareLocal, owner: owner, anchor: anchor, range: range)
+		end 'opaqueSlot'
 		if not payloadClassIsManaged(class) 'scalar'
 			return arg
 		end 'scalar'
 		return try self.moveManagedValueInto(arg, argBareLocal: argBareLocal, isString: payloadClassIsString(class), anchor: anchor, range: range)
 	end 'moveInPayload'
+
+	// ⭐⭐ **MOVE A VALUE INTO A SLOT DECLARED AT THE ENCLOSING GENERIC'S OWN TYPE PARAMETER (W41-opaque)** —
+	// `moveManagedValueInto`'s twin for the one slot kind whose protocol is not a compile-time fact. The split
+	// it makes is the SAME split: an already-OWNED value is TRANSFERRED (a consumed feed parameter moved into
+	// `Self{value: v}` or into an opaque array — the caller already handed over its `+1`, so a reference taken
+	// here would leak it), and a BORROWED one is CO-OWNED. Only the second arm is new, and only it could ever
+	// have been right: a body reading `items.get(i)` holds a borrow the array still owns.
+	//
+	// ⚠ **A VALUE WHOSE TAG IS NO LONGER THE OPAQUE PARAMETER HAS BEEN SUBSTITUTED**, and then the static
+	// protocol is both available and strictly better — a String COPIES rather than dispatching to `__str_clone`
+	// through a load, and the two answers are the same answer. It is routed through the ordinary doors rather
+	// than through the descriptor so that a body which knows the type never pays a run-time dispatch for it.
+	function moveOpaqueValueInto(arg ValueId, argBareLocal bool, owner ValueId, anchor Token, range SourceRange) returns ValueId throws ParseError
+		if self.tagOf(arg) != ValueTypeTag.typeParameter 'substitutedToAConcreteType'
+			if not self.valueIsManagedHeap(arg) 'trivialConcrete'
+				return arg
+			end 'trivialConcrete'
+
+			return try self.moveManagedValueInto(arg, argBareLocal: argBareLocal, isString: tagIsByteRecord(self.tagOf(arg)), anchor: anchor, range: range)
+		end 'substitutedToAConcreteType'
+
+		if self.valueIsOpaqueOwned(arg) 'ownedOpaque'
+			try self.transferOwnedInto(arg, argBareLocal: argBareLocal, anchor: anchor)
+			return arg
+		end 'ownedOpaque'
+
+		// ⭐⭐ **A `constructedValue` FEED PARAMETER IS ALREADY PAID FOR AT THE CALL SITE (W41-opaque).**
+		// `Box.create(v T)`'s `Self{value: v}` is the whole of P1.6-B2's constructor feed: the CONCRETE caller
+		// consumed its argument precisely because this store takes ownership of it, so a reference here would be
+		// a second one and the caller's would leak. It reads as a BORROW to the ownership bit — deliberately, so
+		// the shared body drops nothing (`bindParameters`) — which is exactly why it needs its own mark.
+		if self.constructorFeedParams.contains(arg) 'settledByTheCallSite'
+			return arg
+		end 'settledByTheCallSite'
+
+		// ⭐ **A GENERIC NO `with` EVER NAMES HAS NO `T` TO REFERENCE, AND THIS IS THE SAME PREDICATE THE
+		// RESERVATION READ** (`genericTypeIsInstantiated`, asked here of the value's own token). One question,
+		// two askers, so the descriptor the store wants and the descriptor the seed reserved are one decision —
+		// where two predicates would meet as `requireDescriptorForOpaqueStores` refusing a legal program.
+		//
+		// ⚠ **IT IS DELIBERATELY *NOT* "IS SOME INSTANTIATION MANAGED".** That would be free here and wrong at
+		// the seed, which is computed before any body is parsed and so cannot see a CONCRETE instantiation at
+		// all — see `genericTypeIsInstantiated`, which carries the measurement. Asking the weaker question at
+		// both ends is what keeps them the same question.
+		//
+		// The zero word is what makes the retain free where it is not needed: `retainFunc@64` is 0 for a
+		// trivial instantiation, so `__retain_type_param` loads it, skips the `callIndirect` and hands back
+		// exactly the value it was given. WHICH protocol applies stays the DESCRIPTOR's to say — minted per
+		// instance after every file is parsed — and is never re-decided here.
+		if not self.signatures.typeParamOwnerIsInstantiated(self.valueNameId(arg)) 'noInstantiationToReference'
+			return arg
+		end 'noInstantiationToReference'
+
+		// The record becomes the reference's owner, so it owes the release if IT is dropped here — recorded at
+		// the one line that takes the reference, which is what makes the store half and the drop half one act
+		// rather than two that agree.
+		self.markRecordOwningOpaqueSlots(owner)
+		return self.coOwnBorrowedOpaqueForConsume(arg, range: range)
+	end 'moveOpaqueValueInto'
+
+	// ⭐⭐ **BECOME A SECOND OWNER OF A BORROWED OPAQUE `T`, THROUGH THE ENCLOSING INSTANCE'S DESCRIPTOR
+	// (W41-opaque)** — `coOwnBorrowedForConsume`'s arm for the type the shared body cannot name.
+	// `__retain_type_param(descriptor, value)` reads `retainFunc@64` and `callIndirect`s it: `__str_clone` for a
+	// byte-record argument, `__mm_retain` for an aggregate, and nothing at all for a trivial one, whose word is
+	// 0. `lowerRuntimeCall` prepends the descriptor, exactly as it does for the drop twin.
+	//
+	// ⚠ **THE RESULT IS WHAT THE CALLER STORES AND NEVER `value`** — the byte-record arm hands back a DIFFERENT
+	// record, which is the identical trap `coOwnBorrowedForConsume`'s existential arm measured as an access
+	// violation plus a leaked clone. This frame marks the result neither owned nor pending, for that door's
+	// reason: the new owner is a SLOT in another record, whose destructor releases exactly this reference.
+	//
+	// ⚠ It records a missing descriptor rather than emitting a call the lowering can only abort on — the W10
+	// arrangement `emitDecref` already has for the drop, so `parseFunction` refuses it with a position.
+	function coOwnBorrowedOpaqueForConsume(value ValueId, range SourceRange) returns ValueId
+		if not self.functionCarriesLayoutParam 'noDescriptorToRetainThrough'
+			self.functionStoredOpaqueWithoutDescriptor = true
+		end 'noDescriptorToRetainThrough'
+
+		return self.emitRuntimeCall(RetainTypeParamName, args: singletonArgs(value), resultTag: self.tagOf(value), resultNameId: self.valueNameId(value), range: range)
+	end 'coOwnBorrowedOpaqueForConsume'
 
 	// ⭐ **MOVE AN ALREADY-CLASSIFIED-MANAGED VALUE INTO DURABLE STORAGE** — the core of `moveInPayload`,
 	// factored out so a struct field / union payload (`moveInPayload`) and an ARRAY element (P1.7 slice 3,
@@ -35886,6 +36213,10 @@ export type Parser
 			scalar then break 'c'
 			managed then break 'c'
 			undeclaredName then break 'c'
+			// An opaque `T` payload lowers exactly as a scalar does — one machine word out of
+			// `payloadStorageOf` — which is what it did while it WAS classified `scalar`. What the split bought
+			// is the store-side reference (`moveInPayload`), not a different slot.
+			typeParam then break 'c'
 			floatPayload then throw ParseError.unsupported(self.floatPayloadMessage(field, layout: layout), line: posTok.line, column: posTok.column)
 			nestedUnion(storage) then throw ParseError.unsupported(self.nestedUnionPayloadMessage(field, layout: layout, typeName: self.boxedUnionDisplay(storage)), line: posTok.line, column: posTok.column)
 			// An interface-typed PAYLOAD is refused at the DECLARATION (`requireStorableDeclaredType`,
@@ -35917,6 +36248,13 @@ export type Parser
 	function requirePayloadArgType(field PayloadField, declared MaxonType, class PayloadClass, value ValueId, layout EnumLayout, caseTok Token) throws ParseError
 		match class 'c'
 			scalar then try self.requireScalarPayloadArg(field, declared: declared, value: value, layout: layout, caseTok: caseTok)
+			// ⚠ The scalar rule, spelled as its OWN arm and deliberately not folded into a `scalar to typeParam`
+			// RANGE: `typeParam` is the last variant of `PayloadClass` and `scalar` the first, so that range
+			// would swallow every case between them — the band-append trap, one union down.
+			// `checkDeclaredType`'s type-parameter arm is where an argument meets an opaque formal, which is
+			// what checked this payload while it was classified `scalar`; the store-side split changed nothing
+			// an argument must satisfy.
+			typeParam then try self.requireScalarPayloadArg(field, declared: declared, value: value, layout: layout, caseTok: caseTok)
 			managed(storage, isString) then try self.requireManagedPayloadArg(field, storage: storage, isString: isString, value: value, layout: layout, caseTok: caseTok)
 			// An undeclared payload name is a user error TypeResolution reports (E3011); the op is kept
 			// well-formed for the instant before the pipeline's error gate throws — nothing to check here.
@@ -44837,7 +45175,10 @@ export type Parser
 
 		let old = self.emitFieldLoad(box, layout: layout, index: index, range: range)
 		self.emitDecref(old, range: range)
-		let stored = try self.moveInPayload(class, arg: value, argBareLocal: argBareLocal, anchor: anchor, range: range)
+		// An opaque `T` field is settled above by `emitOpaqueFieldReassign`, so the class here is always a
+		// concrete managed one and the `owner` is never read — it is passed because the box IS the owner of
+		// whatever lands in the slot, which is the fact the parameter names.
+		let stored = try self.moveInPayload(class, arg: value, argBareLocal: argBareLocal, owner: box, anchor: anchor, range: range)
 		self.emitFieldStore(box, layout: layout, index: index, value: stored, range: range)
 	end 'emitFieldWrite'
 
@@ -46816,6 +47157,8 @@ export type Parser
 		let savedWitnessParamCount = self.currentWitnessParamCount
 		let savedImmutableGlobalReads = self.immutableGlobalReads
 		let savedRebindableSlotReads = self.rebindableSlotReads
+		let savedConstructorFeedParams = self.constructorFeedParams
+		let savedRecordsOwningOpaqueSlots = self.recordsOwningOpaqueSlots
 		let savedBufferSurfaceValues = self.bufferSurfaceValues
 		let savedBufferSurfaceSlots = self.bufferSurfaceSlots
 		let savedBufferSurfaceElements = self.bufferSurfaceElements
@@ -46910,6 +47253,8 @@ export type Parser
 		self.stringBytesViewOps = sharedEmptyStringBytesViewOps
 		self.immutableGlobalReads = sharedEmptyImmutableGlobalReads
 		self.rebindableSlotReads = sharedEmptyRebindableSlotReads
+		self.constructorFeedParams = sharedEmptyConstructorFeedParams
+		self.recordsOwningOpaqueSlots = sharedEmptyRecordsOwningOpaqueSlots
 		self.bufferSurfaceValues = sharedEmptyBufferSurfaceValues
 		self.bufferSurfaceSlots = sharedEmptyBufferSurfaceSlots
 		self.bufferSurfaceElements = sharedEmptyBufferSurfaceElements
@@ -47081,6 +47426,8 @@ export type Parser
 		self.currentWitnessParamCount = savedWitnessParamCount
 		self.immutableGlobalReads = savedImmutableGlobalReads
 		self.rebindableSlotReads = savedRebindableSlotReads
+		self.constructorFeedParams = savedConstructorFeedParams
+		self.recordsOwningOpaqueSlots = savedRecordsOwningOpaqueSlots
 		self.bufferSurfaceValues = savedBufferSurfaceValues
 		self.bufferSurfaceSlots = savedBufferSurfaceSlots
 		self.bufferSurfaceElements = savedBufferSurfaceElements
