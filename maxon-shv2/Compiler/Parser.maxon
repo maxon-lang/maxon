@@ -22648,15 +22648,20 @@ export type Parser
 		end 'eachField'
 	end 'emitOpaqueSlotReleases'
 
-	// The declared layout of a record VALUE this body built — a `Self{…}` or a tuple literal, both
-	// `structRef`-tagged by `emitOwnedStructBox`. A miss is an internal invariant break rather than a user
-	// error: the only values reaching here are ones `emitStructLiteral` marked, and it marks the box it just
-	// minted from a layout it holds.
+	// The declared layout of a record VALUE that took a descriptor-mediated reference — a `Self{…}` or a tuple
+	// literal, both `structRef`-tagged by `emitOwnedStructBox`.
+	//
+	// ⚠ **A UNION BOX IS THE ONE OTHER THING `moveInPayload` FILLS, AND IT CANNOT REACH HERE TODAY** — not by
+	// arrangement but because the construct is refused: a generic union instantiated over a type parameter is
+	// unspellable in a return position (`E2001` on `returns Holder with E`) and `E3005` through an inner
+	// alias, so no shared body ever builds one and no `T` payload is ever stored. The panic states that rather
+	// than a layout being silently skipped, because the day the front end admits the construct this cascade
+	// owes it a release and a quiet miss would be a leak.
 	function declaredLayoutOfRecordValue(box ValueId) returns StructLayout
 		let name = self.valueTypeName(box)
 		match self.signatures.structOf(name) 'declared'
 			declared(layout) then return layout
-			undeclared then panic("declaredLayoutOfRecordValue: v{box} is tagged {self.tagOf(box).name} naming '{String.from(name)}', which declares no struct — every value reaching here was minted by `emitStructLiteral` from a registered layout")
+			undeclared then panic("declaredLayoutOfRecordValue: v{box} took a descriptor-mediated reference into a slot of '{String.from(name)}', which declares no struct — a UNION box is the only other record `moveInPayload` fills, and a generic union over a type parameter is refused at the front end, so admitting one means this cascade now owes its payload a release")
 		end 'declared'
 	end 'declaredLayoutOfRecordValue'
 
@@ -35439,15 +35444,7 @@ export type Parser
 			let bareLocal = try fieldBareLocal.get(i) otherwise panic("emitStructLiteral: fieldBareLocal.get OOB at {i} — the column is sized to the layout's field count")
 			let fieldType = self.signatures.fieldTypeOf(layout, index: i, into: self.artifact.typeNames)
 			let class = classifyUnionPayload(self.signatures, typeNames: self.artifact.typeNames, fieldType: fieldType, slotScopeFilePath: layout.declFilePath)
-			let stored = try self.moveInPayload(class, arg: value, argBareLocal: bareLocal, anchor: anchor, range: range)
-			// ⭐ **A SLOT THAT TOOK ITS REFERENCE THROUGH THE DESCRIPTOR MAKES THE BOX OWE ITS RELEASE
-			// (W41-opaque)** — recorded at the one line that knows a reference was taken, so the drop half and
-			// the store half cannot come to disagree about which records owe one. `stored != value` is exactly
-			// the retain's signature here: `moveOpaqueValueInto` answers with the co-owner it minted and
-			// answers with `value` itself on every path that took none.
-			if payloadClassIsTypeParam(class) and stored != value 'slotOwesARelease'
-				self.markRecordOwningOpaqueSlots(box)
-			end 'slotOwesARelease'
+			let stored = try self.moveInPayload(class, arg: value, argBareLocal: bareLocal, owner: box, anchor: anchor, range: range)
 			self.emitFieldStore(box, layout: layout, index: i, value: stored, range: range)
 		end 'eachField'
 
@@ -35977,7 +35974,7 @@ export type Parser
 			let arg = try args.get(i) otherwise panic("emitEnumBox: args.get OOB at {i} after the arity check")
 			let class = try classes.get(i) otherwise panic("emitEnumBox: classes.get OOB at {i} — it is filled in lockstep with the fields")
 			let bareLocal = try argsBareLocal.get(i) otherwise panic("emitEnumBox: argsBareLocal.get OOB at {i} — captured in lockstep with the args")
-			let stored = try self.moveInPayload(class, arg: arg, argBareLocal: bareLocal, anchor: caseTok, range: range)
+			let stored = try self.moveInPayload(class, arg: arg, argBareLocal: bareLocal, owner: box, anchor: caseTok, range: range)
 			self.emitIndirectStore(box, offset: layout.payloadSlotOffset(i), value: stored, storageType: payloadStorageOf(class), range: range)
 		end 'storeEach'
 
@@ -36008,9 +36005,12 @@ export type Parser
 	//   • a slot declared at the enclosing generic's own TYPE PARAMETER takes its reference at RUN TIME
 	//     (`moveOpaqueValueInto`, W41-opaque) — the shared body cannot name the protocol, but the record it
 	//     fills is concrete at the caller and its destructor drops the slot regardless.
-	function moveInPayload(class PayloadClass, arg ValueId, argBareLocal bool, anchor Token, range SourceRange) returns ValueId throws ParseError
+	// `owner` is the RECORD the slot belongs to — passed so the one door that takes a descriptor-mediated
+	// reference can record the release obligation ON THE RECORD, rather than a caller inferring "a reference
+	// was taken" from the returned value differing (which the substituted-concrete arm also does).
+	function moveInPayload(class PayloadClass, arg ValueId, argBareLocal bool, owner ValueId, anchor Token, range SourceRange) returns ValueId throws ParseError
 		if payloadClassIsTypeParam(class) 'opaqueSlot'
-			return try self.moveOpaqueValueInto(arg, argBareLocal: argBareLocal, anchor: anchor, range: range)
+			return try self.moveOpaqueValueInto(arg, argBareLocal: argBareLocal, owner: owner, anchor: anchor, range: range)
 		end 'opaqueSlot'
 		if not payloadClassIsManaged(class) 'scalar'
 			return arg
@@ -36029,7 +36029,7 @@ export type Parser
 	// protocol is both available and strictly better — a String COPIES rather than dispatching to `__str_clone`
 	// through a load, and the two answers are the same answer. It is routed through the ordinary doors rather
 	// than through the descriptor so that a body which knows the type never pays a run-time dispatch for it.
-	function moveOpaqueValueInto(arg ValueId, argBareLocal bool, anchor Token, range SourceRange) returns ValueId throws ParseError
+	function moveOpaqueValueInto(arg ValueId, argBareLocal bool, owner ValueId, anchor Token, range SourceRange) returns ValueId throws ParseError
 		if self.tagOf(arg) != ValueTypeTag.typeParameter 'substitutedToAConcreteType'
 			if not self.valueIsManagedHeap(arg) 'trivialConcrete'
 				return arg
@@ -36070,6 +36070,10 @@ export type Parser
 			return arg
 		end 'noInstantiationToReference'
 
+		// The record becomes the reference's owner, so it owes the release if IT is dropped here — recorded at
+		// the one line that takes the reference, which is what makes the store half and the drop half one act
+		// rather than two that agree.
+		self.markRecordOwningOpaqueSlots(owner)
 		return self.coOwnBorrowedOpaqueForConsume(arg, range: range)
 	end 'moveOpaqueValueInto'
 
@@ -44957,7 +44961,10 @@ export type Parser
 
 		let old = self.emitFieldLoad(box, layout: layout, index: index, range: range)
 		self.emitDecref(old, range: range)
-		let stored = try self.moveInPayload(class, arg: value, argBareLocal: argBareLocal, anchor: anchor, range: range)
+		// An opaque `T` field is settled above by `emitOpaqueFieldReassign`, so the class here is always a
+		// concrete managed one and the `owner` is never read — it is passed because the box IS the owner of
+		// whatever lands in the slot, which is the fact the parameter names.
+		let stored = try self.moveInPayload(class, arg: value, argBareLocal: argBareLocal, owner: box, anchor: anchor, range: range)
 		self.emitFieldStore(box, layout: layout, index: index, value: stored, range: range)
 	end 'emitFieldWrite'
 
