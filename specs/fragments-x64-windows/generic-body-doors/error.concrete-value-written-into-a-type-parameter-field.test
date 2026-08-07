@@ -1,0 +1,36 @@
+// Test: error.concrete-value-written-into-a-type-parameter-field
+typealias Num = int(i64.min to i64.max)
+
+type Label
+	export let n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Label'
+
+type Box uses T
+	export var value as T
+
+	static function create(v T) returns Self
+		return Self{value: v}
+	end 'create'
+
+	export function clobber()
+		self.value = Label.create(77)
+	end 'clobber'
+end 'Box'
+
+typealias LabelBox = Box with Label
+
+function main() returns ExitCode
+	var b = LabelBox.create(Label.create(5))
+	b.clobber()
+	return 0
+end 'main'
+---
+MaxoncStderr: ```
+error E3005: specs/fragments/generic-body-doors/error.concrete-value-written-into-a-type-parameter-field.test:20:8: a value of type 'Label' cannot meet field 'value' of 'Box', which holds the type parameter 'T': one body serves every instantiation, so the type 'T' stands for is not known here
+```
+---
+---

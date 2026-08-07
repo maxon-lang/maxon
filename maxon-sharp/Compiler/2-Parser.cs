@@ -9402,9 +9402,14 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
         if (value is MaxonStruct aliasActual && IsStructTypeCompatible(aliasActual.TypeName, expectedStruct.Name)) {
           return value;
         }
-        // Allow returning concrete tuples when expected type has unresolved type parameters
-        if (value is MaxonStruct && expectedStruct.IsTuple
-            && expectedStruct.Fields.Any(f => f.Type is IrTypeParameterType)) {
+        // A concrete tuple meeting a tuple declared over the enclosing generic's own parameters. The
+        // two can never agree by NAME — see TupleDerivationMismatch, which is where the other doors
+        // meet this same shape — and THIS door's answer is to accept it. It is not a local
+        // indulgence: `stdlib/Map.maxon`'s `MapIterator.current()` returns `(Key, Value)` through
+        // exactly this arm, so every dictionary literal in the language rests on it.
+        // ⚠ The predicate is shared deliberately. It was spelled here by hand and non-recursively,
+        // which is one fact in two places AND the two disagreeing about a NESTED tuple.
+        if (value is MaxonStruct && IsOrContainsTypeParameter(expectedStruct)) {
           return value;
         }
         var actualName = value is MaxonStruct s ? s.TypeName : value.GetType().Name.Replace("Maxon", "").ToLower();
@@ -20364,9 +20369,12 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
                                          or "__ManagedSocket" or "__ManagedList" or "__ManagedListNode")) {
           if (value is MaxonStruct valueStruct) {
             if (ResolveBaseTypeName(valueStruct.TypeName) != ResolveBaseTypeName(fieldStructType.Name)) {
-              throw new CompileError(ErrorCode.SemanticTypeMismatch,
-                $"Type mismatch: field '{fieldNameToken.Value}' expects '{fieldStructType.Name}' but got '{valueStruct.TypeName}'",
-                fieldNameToken.Line, fieldNameToken.Column);
+              throw TupleDerivationMismatch(fieldStructType, value,
+                  $"field '{fieldNameToken.Value}' of '{typeName}'",
+                  fieldNameToken.Line, fieldNameToken.Column)
+                ?? new CompileError(ErrorCode.SemanticTypeMismatch,
+                  $"Type mismatch: field '{fieldNameToken.Value}' expects '{fieldStructType.Name}' but got '{valueStruct.TypeName}'",
+                  fieldNameToken.Line, fieldNameToken.Column);
             }
           } else {
             throw new CompileError(ErrorCode.SemanticTypeMismatch,
@@ -22641,11 +22649,117 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     fnType.ParameterTypes.Any(IsOrContainsTypeParameter)
     || (fnType.ReturnType != null && IsOrContainsTypeParameter(fnType.ReturnType));
 
+  /// <remarks>
+  /// A TUPLE is a container of types exactly as a function type is, so it recurses for the same
+  /// reason: `(A, B)` mentions the enclosing generic's parameters just as `function(A) returns B`
+  /// does, and every rule built on this predicate is about whether a type is still abstract.
+  /// </remarks>
   private static bool IsOrContainsTypeParameter(IrType type) => type switch {
     IrTypeParameterType => true,
     IrFunctionType nested => MentionsTypeParameter(nested),
+    IrStructType { IsTuple: true } tuple => tuple.Fields.Any(f => IsOrContainsTypeParameter(f.Type)),
     _ => false
   };
+
+  /// <summary>
+  /// Whether a value may meet a position the SHARED GENERIC BODY declares as an UNBOUND type
+  /// parameter, for the one door that reaches here with an E9001 otherwise: a field assignment.
+  /// </summary>
+  /// <remarks>
+  /// ⚠ THE KIND CANNOT ANSWER IT, which is why this exists rather than another arm in the widening
+  /// table. A `T`-typed value is materialized as a plain <see cref="MaxonInteger"/> —
+  /// <see cref="DetermineValueKind"/> has no <see cref="MaxonValueKind.TypeParameter"/> result at
+  /// all — so `valueKind == expectedKind` is FALSE for every value that ever reaches a type-parameter
+  /// position, the correct ones included. That door therefore had NO PASSING PATH AT ALL: measured,
+  /// `self.value = v` with the field AND the parameter both declared `T` — the shape every generic
+  /// container is written in — fell through the whole table and died formatting
+  /// `KindToTypeName(TypeParameter)` as an E9001 internal error.
+  ///
+  /// ⚠ IT IS DELIBERATELY PERMISSIVE ABOUT SCALARS, and that is not slack — it is the only answer
+  /// the erasure leaves available. Once a `T` is an i64, a value that IS a `T` and an integer
+  /// literal are the same value, so refusing the literal would refuse `self.value = v` all over
+  /// again by another route.
+  ///
+  /// ⚠⚠ THE AGGREGATE ARM IS CONSERVATIVE, NOT EXACT, AND IT IS A STRICT LOOSENING OF WHAT WAS
+  /// HERE. What the door genuinely needs is the binding — is the `T` of THIS instantiation the
+  /// value's type? — and the binding is not known here; it is known at monomorphization. A value's
+  /// runtime aggregate identity is only a PROXY for it, and the proxy is measurably imperfect:
+  /// `stdlib/Interfaces.maxon:230` hands a concrete `ByteIterator` to a parameter declared `Source`
+  /// and is CORRECT, because `Source` is bound (two levels up) to exactly that iterator. So this
+  /// arm can refuse a program that a binding-aware check would admit.
+  ///
+  /// It is admissible here for one reason only, and it does not generalize: this door refused
+  /// EVERYTHING before, by crashing. Every shape this still refuses was already refused; every
+  /// shape it now admits is a shape that could not compile. It cannot regress a program, and the
+  /// exact rule belongs where the binding lives.
+  ///
+  /// ⚠ THE ARGUMENT DOOR IS THE MIRROR CASE AND IS DELIBERATELY LEFT ALONE. It starts from the
+  /// opposite end — it SKIPS an unbound type parameter, so it accepts everything — and tightening
+  /// it with this same proxy is what the `Interfaces.maxon` measurement above came from: the build
+  /// went red on the stdlib. Its own hole is real (`put(Label.create(77))` for `put(v T)` inside
+  /// `Box with Num` compiles clean and passes a heap pointer into an integer slot) and it needs the
+  /// binding-aware check, not this proxy.
+  /// </remarks>
+  private static bool TypeParameterPositionAccepts(MaxonValue value) =>
+    value is not (MaxonStruct or MaxonEnum);
+
+  /// The words, kept beside the predicate that decides them so a second door adopting the rule
+  /// adopts its sentence too.
+  private static CompileError TypeParameterPositionError(
+      IrTypeParameterType declared, MaxonValue value, MaxonValueKind valueKind, string place,
+      int line, int column) =>
+    new CompileError(ErrorCode.SemanticTypeMismatch,
+      $"a value of type '{ValueTypeDisplayName(value, valueKind)}' cannot meet {place}, which holds "
+        + $"the type parameter '{declared.ParameterName}': one body serves every instantiation, so "
+        + $"the type '{declared.ParameterName}' stands for is not known here",
+      line, column);
+
+  /// <summary>
+  /// The refusal a DECLARED tuple over the enclosing generic's own type parameters gets when a tuple
+  /// VALUE built inside that shared body fails to match it by name. Null when the mismatch is a
+  /// genuine one, leaving the caller's own wording in place.
+  /// </summary>
+  /// <remarks>
+  /// ⚠ THE TWO NAMES ARE DERIVED DIFFERENTLY, AND THE OLD MESSAGE REPORTED THAT AS THE PROGRAM'S
+  /// MISTAKE. A declared `(A, B)` keeps the parameter names (`__Tuple2-A-B`), while a tuple literal's
+  /// structural name is minted from its elements' STORAGE types
+  /// (<see cref="IrStructType.TupleMangledName"/>) and a `T`-typed element is an i64 by the time the
+  /// mint sees it (`__Tuple2-i64-i64`). So the two sides can never agree, whatever the program says,
+  /// and `expects '__Tuple2-A-B' but got '__Tuple2-i64-i64'` named two spellings a reader cannot
+  /// reconcile and neither of which they wrote.
+  ///
+  /// ⚠ THE DECLARATION IS NOT WHAT IS REFUSED, and must not be. `stdlib/Map.maxon` declares
+  /// `typealias Entry = (Key, Value)` inside `type Map uses Key, Value`, `MapIterator.current()`
+  /// returns one, and every dictionary literal in the language rests on it — measured working end to
+  /// end. What cannot be expressed is the tuple VALUE, so that is where this reports.
+  ///
+  /// It is reached only from a comparison that has ALREADY failed, so it can re-word a refusal and
+  /// can never create one.
+  ///
+  /// ⚠ WHETHER THE SHAPE SHOULD BE REFUSED AT ALL IS OPEN, and this compiler does not currently
+  /// answer it consistently: <see cref="CheckReturnType"/> meets the identical shape and ACCEPTS it,
+  /// by an arm that exists precisely so `MapIterator.current()` compiles. These three doors are the
+  /// ones out of step with that, and re-wording them does not settle it — deliberately, because the
+  /// verdict is a language decision and not a diagnostic's. This method is the seam where it lands:
+  /// the three doors ask exactly one question in exactly one place, so ruling the shape LEGAL is
+  /// this method returning the value instead of an error, and ruling it ILLEGAL is the return door
+  /// adopting this method.
+  /// </remarks>
+  private CompileError? TupleDerivationMismatch(
+      IrType declaredType, MaxonValue value, string place, int line, int column) {
+    if (declaredType is not IrStructType { IsTuple: true } declaredTuple
+        || !IsOrContainsTypeParameter(declaredTuple)
+        || value is not MaxonStruct valueStruct
+        || !_typeRegistry.TryGetValue(valueStruct.TypeName, out var valueType)
+        || valueType is not IrStructType { IsTuple: true })
+      return null;
+
+    return new CompileError(ErrorCode.SemanticTypeMismatch,
+      "a tuple built inside a shared generic body carries its elements' storage types, not the type "
+        + $"parameters they came from, so it cannot meet {place}, declared "
+        + $"'{IrType.FormatAsSourceName(declaredTuple)}'",
+      line, column);
+  }
 
   /// <summary>
   /// The SIGNATURE a function value carries, or null when it is not a function value or its producer
@@ -22771,6 +22885,28 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   /// </remarks>
   private MaxonValue CoerceValueToDeclaredType(
       MaxonValue value, IrType declaredType, string place, Token errorToken) {
+    // An unbound type parameter is decided by IDENTITY and decided HERE, ahead of the kind door,
+    // because the kind door structurally cannot decide it — see TypeParameterPositionAccepts. It
+    // needs the TYPE and not the kind for the same reason `declaredFnType` travels as a type: a kind
+    // flattens every parameter of every generic to one, so it cannot name the `T` in the message.
+    if (declaredType is IrTypeParameterType typeParam) {
+      if (!TypeParameterPositionAccepts(value))
+        throw TypeParameterPositionError(typeParam, value, DetermineValueKind(value), place,
+          errorToken.Line, errorToken.Column);
+
+      return value;
+    }
+
+    // A declared tuple over the enclosing generic's own parameters and a tuple built inside that
+    // shared body can never agree by NAME, and the disagreement is the compiler's own. Asked through
+    // the identity predicate itself rather than a second comparison, so the two cannot drift, and
+    // asked BEFORE the identity check below so the honest sentence replaces its wording.
+    if (DeclaredTypeNameOf(declaredType) is string declaredName
+        && !DeclaredNameAccepts(declaredName, value)
+        && TupleDerivationMismatch(declaredType, value, place, errorToken.Line, errorToken.Column)
+             is CompileError tupleMismatch)
+      throw tupleMismatch;
+
     var declaredKind = declaredType.ToValueKind();
     var coerced = CoerceAssignedValue(value, declaredKind, DeclaredTypeNameOf(declaredType), place,
       errorToken.Line, errorToken.Column, declaredType as IrFunctionType);
@@ -22980,9 +23116,12 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
           expectedTypeName = selfArg.TypeName;
         }
         if (!IsStructTypeCompatible(argStruct.TypeName, expectedTypeName)) {
-          throw new CompileError(ErrorCode.SemanticTypeMismatch,
-            $"argument type mismatch for '{callee.ParamNames[i]}': expected '{expectedTypeName}', got '{argStruct.TypeName}'",
-            functionNameToken.Line, functionNameToken.Column);
+          throw TupleDerivationMismatch(paramStructType, args[i]!,
+              $"argument '{callee.ParamNames[i]}'",
+              functionNameToken.Line, functionNameToken.Column)
+            ?? new CompileError(ErrorCode.SemanticTypeMismatch,
+              $"argument type mismatch for '{callee.ParamNames[i]}': expected '{expectedTypeName}', got '{argStruct.TypeName}'",
+              functionNameToken.Line, functionNameToken.Column);
         }
         continue;
       }

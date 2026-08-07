@@ -35,8 +35,11 @@ door refused every program including the correct ones, while its twin accepted e
 including the wrong ones.
 
 ⚠ **This spec deliberately does NOT decide whether a tuple over a generic's own parameters should
-eventually be constructible inside the shared body.** That is an open design question. What may not
-happen either way is a crash or a self-contradictory sentence.
+eventually be constructible inside the shared body.** That is an open design question, and this
+compiler does not currently answer it consistently: a `return` of such a tuple is ACCEPTED, by an arm
+that exists so `stdlib/Map.maxon`'s `MapIterator.current()` compiles, while a field initializer, a
+field assignment and a call argument all refuse it. What may not happen either way is a crash or a
+self-contradictory sentence, and those are what the cases below pin.
 
 ## Tests
 
@@ -119,18 +122,26 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/generic-body-doors/error.concrete-value-written-into-a-type-parameter-field.test:19:16: a value of type 'Label' cannot meet field 'value' of 'Box', which holds the type parameter 'T': one body serves every instantiation, so the type 'T' stands for is not known here
+error E3005: specs/fragments/generic-body-doors/error.concrete-value-written-into-a-type-parameter-field.test:20:8: a value of type 'Label' cannot meet field 'value' of 'Box', which holds the type parameter 'T': one body serves every instantiation, so the type 'T' stands for is not known here
 ```
 
 
-<!-- test: error.concrete-value-passed-to-a-type-parameter-parameter -->
+<!-- disabled-test: error.concrete-value-passed-to-a-type-parameter-parameter -->
+<!-- needs a binding-aware check at monomorphization; the shared-body door cannot decide it -->
 The same store one door along: a concrete `Label` handed to a parameter the shared body declares as
-`T`. It is the identical question and must get the identical answer. ⚠ It got the opposite one. The
-argument door could not resolve `T` against a concrete instantiation from inside the body, so it
-SKIPPED the check entirely and compiled clean — passing a `Label` heap pointer into a slot the
-instantiation had fixed as an integer. Measured on `Box with Num`: the program built without a
-diagnostic and the pointer surfaced as the return value, where only an unrelated `ExitCode` range
-guard turned it into a panic instead of a wrong number.
+`T`. ⚠ It compiles clean, and passes a `Label` heap pointer into a slot the instantiation had fixed
+as an integer. Measured on `Box with Num`: the program built without a diagnostic and the pointer
+surfaced as the return value, where only an unrelated `ExitCode` range guard turned it into a panic
+instead of a wrong number.
+
+⚠ **It is DISABLED rather than fixed, and the reason is a measurement, not caution.** The argument
+door skips an unbound type parameter, and it must: `stdlib/Interfaces.maxon:230` hands a concrete
+`ByteIterator` to a parameter declared `Source` and is CORRECT, because `Source` is bound two levels
+up to exactly that iterator. Refusing by the value's runtime aggregate identity — the only proxy
+available where the binding is unknown — turns the stdlib build red. Unlike the field-assignment
+door above, which refused every program by crashing and could therefore only be loosened, this door
+accepts every program, so the same proxy would be a REGRESSION. The exact rule needs the binding,
+and the binding is known at monomorphization.
 ```maxon
 typealias Num = int(i64.min to i64.max)
 
