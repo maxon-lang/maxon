@@ -280,6 +280,12 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   /// parser tests for it in four unrelated places and each spelling is the same one fact.
   private const string SelfTypeName = "Self";
 
+  /// The name of an instance method's receiver PARAMETER, as it appears in the parameter list the
+  /// parser builds — distinct from <see cref="SelfTypeName"/>, which is the type. Named because the
+  /// overload mangle, the mangle-with-types and the signature renderer each have to leave it out,
+  /// and a diagnostic that names it names something the reader cannot find in their source.
+  private const string SelfParamName = "self";
+
   // Top-level compile-time constants (name -> evaluated value: long, double, or bool)
   private Dictionary<string, object> _topLevelConstants = [];
 
@@ -409,7 +415,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   /// Example: slice(self, start, endIndex) -> baseName$endIndex
   /// </summary>
   private static string MangleOverloadName(string baseName, List<string> paramNames) {
-    var nonSelf = paramNames.Where(n => n != "self").ToList();
+    var nonSelf = paramNames.Where(n => n != SelfParamName).ToList();
     if (nonSelf.Count == 0) return baseName;
     // For 1-param overloads, use param name directly; for 2+, skip the first positional
     var distinguishing = nonSelf.Count == 1 ? nonSelf : nonSelf.Skip(1);
@@ -424,7 +430,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   private static string MangleOverloadNameWithTypes(string baseName, List<string> paramNames, List<IrType> paramTypes) {
     var parts = new List<string>();
     for (int i = 0; i < paramNames.Count; i++) {
-      if (paramNames[i] == "self") continue;
+      if (paramNames[i] == SelfParamName) continue;
       parts.Add($"{paramNames[i]}_{TypeMangledSuffix(paramTypes[i])}");
     }
     if (parts.Count == 0) return baseName;
@@ -456,7 +462,8 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   /// dictionary when renaming existing functions.
   /// Supports both name-based and type-based disambiguation.
   /// </summary>
-  private string ResolveOverloadRegistrationName(IrModule<MaxonOp> module, string baseName, List<string> paramNames, List<IrType> paramTypes, bool isStatic = false) {
+  private string ResolveOverloadRegistrationName(IrModule<MaxonOp> module, string baseName,
+      List<string> paramNames, List<IrType> paramTypes, Token site, bool isStatic = false) {
     // Look up by overload base name (UnmangleName strips the $... tail), which the
     // IrModule base-name index matches directly. Also include any literal same-named
     // entry for parity with the prior `f.Name == baseName` clause.
@@ -502,7 +509,8 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
           // Name-based collision but different types — use type-augmented mangling
           var typeMangledExisting = MangleOverloadNameWithTypes(baseName, existing.ParamNames, existing.ParamTypes);
           if (typeMangledExisting == typeMangledForNew) {
-            return ResolveStaticInstanceCollision(module, existing, baseName, baseName, isStatic);
+            return ResolveStaticInstanceCollision(module, existing, baseName, baseName, isStatic,
+              paramNames, paramTypes, site);
           }
 
           var oldName2 = existing.Name;
@@ -526,7 +534,8 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
         // Name-based collision on already-mangled function — re-mangle both with types
         var typeMangledExisting = MangleOverloadNameWithTypes(baseName, existing.ParamNames, existing.ParamTypes);
         if (typeMangledExisting == typeMangledForNew) {
-          return ResolveStaticInstanceCollision(module, existing, registrationName, baseName, isStatic);
+          return ResolveStaticInstanceCollision(module, existing, registrationName, baseName, isStatic,
+            paramNames, paramTypes, site);
         }
 
         var oldName3 = existing.Name;
@@ -555,7 +564,8 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   /// </summary>
   private string ResolveStaticInstanceCollision(
       IrModule<MaxonOp> module, IrFunction<MaxonOp> existing,
-      string currentName, string baseName, bool isStatic) {
+      string currentName, string baseName, bool isStatic,
+      List<string> paramNames, List<IrType> paramTypes, Token site) {
     if (isStatic != existing.IsStatic) {
       var staticName = currentName + "~static";
       if (isStatic) {
@@ -569,8 +579,32 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       }
       return currentName;
     }
-    throw new InvalidOperationException(
-      $"Duplicate overload: '{baseName}' already has an overload with the same signature.");
+
+    // ⚠ A DISTINCT PAIR OF OVERLOADS ARRIVED HERE AND WAS REPORTED AS A REDECLARATION, out of an
+    // InvalidOperationException — E9001 plus a C# stack trace, which is what an INTERNAL failure
+    // looks like, on a program that has none.
+    //
+    // The overload mangle joins `{paramName}_{type}` parts with `_`, and `_` is legal inside both a
+    // parameter name and a type name, so the join is not injective: `f(x_i64_y P, w R)` and
+    // `f(x i64_y_P, w R)` are two distinct signatures that mangle to one name. Measured — the
+    // message said they "have the same signature", which is exactly what they do not have, and named
+    // neither. It is the same non-injective join as AdoptOrMintConcreteInstance's, one namespace
+    // along, and it is refused with the same code and the same shape of words.
+    //
+    // ⚠ A GENUINE REDECLARATION NEVER REACHES THIS, and the assertion below says so rather than
+    // carrying a second user-facing message that could not fire: both callers return early on
+    // exactly this predicate, and E3006 `Duplicate function` already refuses the same-signature pair
+    // (measured) further up.
+    if (existing.ParamNames.SequenceEqual(paramNames) && ParamTypesMatch(existing.ParamTypes, paramTypes))
+      throw new InvalidOperationException(
+        $"ResolveStaticInstanceCollision was called for '{currentName}' with the incumbent's own "
+        + "signature; both callers establish that the two signatures differ before calling.");
+
+    throw new CompileError(ErrorCode.SemanticDuplicateDefinition,
+      $"duplicate definition of '{currentName}' - the overloads "
+      + $"`{FormatParameterList(baseName, existing.ParamNames, existing.ParamTypes)}` and "
+      + $"`{FormatParameterList(baseName, paramNames, paramTypes)}` compile to that same name",
+      site.Line, site.Column);
   }
 
   /// <summary>
@@ -1695,7 +1729,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
           && !(_isRescanningTypeAliases && isLocallyDeclared)) continue;
       _typeRegistry.TryGetValue(aliasName, out var aliasType);
 
-      if (aliasType != null)
+      if (aliasType != null && PublishesBareNameToModule(aliasName))
         module.TypeDefs[aliasName] = aliasType;
       var typeParams = aliasType is IrStructType st && st.TypeParams.Count > 0
         ? new Dictionary<string, IrType>(st.TypeParams)
@@ -1764,35 +1798,41 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   }
 
   /// <summary>
-  /// Whether this parser's declaration of <paramref name="aliasName"/> is one only its own file may
-  /// write down. ONLY such a declaration is renamed under a contest, and the restriction is the
-  /// whole reason renaming is safe: a declaration another file MAY name is one that file's reference
-  /// resolves through BY NAME, so renaming it would break a reader doing nothing wrong. Two nameable
-  /// declarations of one name is the AMBIGUITY question instead (E3063 / AmbiguousTypeNames), which
-  /// this is not — leaving that pair exactly as it was.
+  /// Whether this parser's declaration of <paramref name="aliasName"/> is one no file OUTSIDE its
+  /// own scope may write down. ONLY such a declaration is renamed under a contest, and the
+  /// restriction is the whole reason renaming is safe: a declaration a file beyond the contest MAY
+  /// name is one that file's reference resolves through BY NAME, so renaming it would break a reader
+  /// doing nothing wrong. Two program-wide declarations of one name is the AMBIGUITY question
+  /// instead (E3063 / AmbiguousTypeNames), which this is not — leaving that pair exactly as it was.
   ///
   /// A stdlib alias counts as nameable however it is written, because SeedFromModule seeds every
   /// stdlib alias into every parser regardless of `export`: its file-privacy is not enforced, so it
   /// is not a fact the mint may rest on. A type-scoped inner alias is out for the same reason from
   /// the other side — it is not a file's declaration at all, but one copy per generic instance of
   /// its owner's.
+  ///
+  /// ⭐ A `module` DECLARATION IS IN, and it was out. `module` is the SAME rule one scope wider: an
+  /// alias scoped to its declarer's directory subtree, which — like a file-private one — nobody
+  /// outside that scope may name. Two subtrees are disjoint or one contains the other, so where two
+  /// `module` declarations of a name are in DIFFERENT subtrees no file can see both, and neither may
+  /// decide the other's storage. It did: a `module typealias Cells = Array with Cell` in
+  /// <c>scopeB/</c> truncated <c>scopeA/</c>'s 70000 to 112 through a range declared in another
+  /// directory, and reversing the file order gave the right answer — the wrong half being whichever
+  /// merged last. The contest was DETECTED (RecordAliasInstanceForContest is visibility-blind and
+  /// fires) and only the MINT was gated out, so the flat table decided. Measured against
+  /// <c>maxon-shv2</c>, which answers <c>wide=70000 narrow=200</c> for the same program.
+  ///
+  /// ⚠ WHAT THIS DOES NOT REACH, deliberately: a file in the SAME subtree that merely READS the
+  /// alias. That reader resolves through the module's alias tables, which are keyed by bare name and
+  /// hold ONE declaration, so with two subtrees declaring one name it is served whichever merged
+  /// last — and for a plain RANGED alias, which never reaches a contest at all, there is no mint to
+  /// settle it. Both compilers get that case wrong today (shv2 answers E3005 on the reader's own
+  /// legal value), and curing it means giving those tables a scope rather than changing a mint rule.
   /// </summary>
   private bool IsFileScopedAliasDeclaration(string aliasName) =>
     !_isStdlib
     && !_exportedTypeAliases.Contains(aliasName)
-    && !_moduleVisibleTypeAliases.Contains(aliasName)
     && !_typeAliasOwners.ContainsKey(aliasName);
-
-  /// <summary>
-  /// The name a generic instance carries when the alias name declaring it is CONTESTED: the
-  /// structural name the field-alias mint would have invented had no file declared one, except that
-  /// each type argument is spelled by <see cref="IrStructType.TypeArgIdentity"/> — otherwise the two
-  /// declarations the contest is ABOUT would mint one name between them, since it is precisely a
-  /// type argument's NAME they agree on and its meaning they do not.
-  /// </summary>
-  private static string ContestedInstanceName(string sourceName,
-      Dictionary<string, IrType> substitution, Dictionary<string, long>? constParams) =>
-    $"{sourceName}_{IrStructType.InstanceNameSuffix(constParams, substitution.Values.Select(IrStructType.TypeArgIdentity))}";
 
   // How widely a typealias declaration is visible, ordered so the widest declaration of a name owns
   // the module's single record for it (see the record guard in CopyTypeAliasesToModule).
@@ -1889,12 +1929,56 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   }
 
   /// <summary>
+  /// ⭐ WHETHER THIS PARSER'S ENTRY FOR <paramref name="name"/> IS THE WHOLE PROGRAM'S OR ONLY ITS
+  /// OWN FILE'S.
+  ///
+  /// A FILE-PRIVATE CONTESTED MINT publishes its structural name and never the bare one. Its
+  /// instance already has a name of its own (see <c>IrModule.ContestedGenericAliasNames</c>); the
+  /// bare name is kept alongside purely so THIS parser's remaining passes can still write
+  /// <c>Cells</c> and mean the declaration in front of them, and no other file may write it at all.
+  /// Copied into the module it CLOBBERS whatever else the flat table holds for that name, and which
+  /// of two files wins is which one merged last.
+  ///
+  /// ⚠ MEASURED: an <c>export typealias Cells = Array with Cell</c> over <c>int(0 to 100000)</c> was
+  /// silently given the storage of a file-private <c>Cells</c> over <c>int(0 to 255)</c> declared in
+  /// another file — <c>Cells.create</c> emitted returning <c>Array_Cell_i64_0to255</c>, and 70000
+  /// read back as 112 — purely because that file merged later. It is exactly ONE of the four
+  /// export/file-private pairings, the one where the EXPORTED declaration is the wide one, which is
+  /// what says the reason is order rather than visibility.
+  ///
+  /// ⚠⚠ A `module` CONTESTED MINT STILL PUBLISHES, AND WITHHOLDING IT CRASHED THE COMPILER. A
+  /// `module` declaration is precisely the one OTHER files may name — every file in its directory
+  /// subtree — and those files resolve it through the module's tables. Withheld, a sibling reader
+  /// finds only the empty placeholder the pre-scan wrote under every typealias name and emits an
+  /// orphan family against it: measured, `E9001 Lowering function 'Cells.create' failed: Object
+  /// reference not set` on a program the parent commit compiled. Its declarers are already served by
+  /// the rename itself, which is what makes their own storage correct; only the reader is left on
+  /// the flat table's last-writer-wins, exactly as before this rung.
+  ///
+  /// ⚠ NOT a visibility-rank guard on the module write, which is the OTHER cure and is measured
+  /// wrong: it makes this case right and turns <c>file-private-alias-still-governs-its-own-file</c>
+  /// from 70000 into 880, because that program's own declaration is the NARROWER one and must still
+  /// govern its own file. This asks a different question — may anything outside this file name the
+  /// entry? — and only a renamed file-private contestant answers no.
+  ///
+  /// ⚠ Asked at BOTH module writes. <c>CopyStateToModule</c>'s blanket registry copy runs first and
+  /// silently defeated the same guard when it was spelled only on the alias copy below.
+  /// </summary>
+  private bool PublishesBareNameToModule(string name) =>
+    !_contestedAliasInstanceNames.ContainsKey(name)
+    || _moduleVisibleTypeAliases.Contains(name)
+    || _exportedTypeAliases.Contains(name);
+
+  /// <summary>
   /// Copies parser-local state (type registry, function defaults, etc.) back to
   /// the module so subsequent parsers or downstream passes can access it.
   /// </summary>
   private void CopyStateToModule(IrModule<MaxonOp> module) {
-    foreach (var (name, type) in _typeRegistry)
+    foreach (var (name, type) in _typeRegistry) {
+      if (!PublishesBareNameToModule(name)) continue;
+
       module.TypeDefs[name] = type;
+    }
     foreach (var (name, defaults) in _functionDefaults)
       module.FunctionDefaults.TryAdd(name, defaults);
     CopyTypeAliasesToModule(module);
@@ -2521,7 +2605,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     var valueType = InferTypeFromTokens(pos, out _);
 
     var mapSourceTypeName = FindTypeImplementingInterface("BuiltinDictionaryLiteral") ?? "Map";
-    return FindOrCreateMapTypeAlias(mapSourceTypeName, keyType, valueType);
+    return FindOrCreateMapTypeAlias(mapSourceTypeName, keyType, valueType, _tokens[bracketPos]);
   }
 
   /// <summary>
@@ -2998,7 +3082,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
 
     var throwsType = ParseThrowsClause();
 
-    var registrationName = ResolveOverloadRegistrationName(module, funcName, paramNames, paramTypes, isStatic);
+    var registrationName = ResolveOverloadRegistrationName(module, funcName, paramNames, paramTypes, nameToken, isStatic);
 
     if (module.FindFunctionByExactName(registrationName) == null) {
       var func = new IrFunction<MaxonOp>(registrationName, paramNames, paramTypes, returnType, throwsType) {
@@ -3912,12 +3996,30 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   /// using source-level type names for readability.
   /// </summary>
   private static string FormatFunctionSignature(string methodName, IrFunction<MaxonOp> func) {
-    // Skip 'self' parameter
-    var paramNames = func.ParamNames.Skip(1).ToList();
-    var paramTypes = func.ParamTypes.Skip(1).ToList();
-    var paramsStr = string.Join(", ", paramNames.Zip(paramTypes, (n, t) => $"{n} {IrType.FormatAsSourceName(t)}"));
     var returnStr = func.ReturnType != null ? $" returns {IrType.FormatAsSourceName(func.ReturnType)}" : " returns void";
-    return $"{methodName}({paramsStr}){returnStr}";
+    return FormatParameterList(methodName, func.ParamNames, func.ParamTypes) + returnStr;
+  }
+
+  /// <summary>
+  /// One overload as the author wrote it — <c>Holder.f(x P, w R)</c>. <c>self</c> is left out: it is
+  /// not written at a declaration site and is the same for every instance overload, so a diagnostic
+  /// naming it would name something the reader cannot find in their source.
+  ///
+  /// Shared with <see cref="FormatFunctionSignature"/> rather than written a second time. The two had
+  /// diverged the moment there were two: one spelled a parameter's type <c>Cell</c> and the other
+  /// <c>int(0 to 255)</c>, and one dropped <c>self</c> by position where the other compared against
+  /// the literal string — so two diagnostics about one function disagreed about what it looked like.
+  /// The RETURN type is the only real difference and stays at the caller that wants it: a duplicate
+  /// definition is decided on the parameters alone, so printing a return type there would show a
+  /// difference that is not the reason.
+  /// </summary>
+  private static string FormatParameterList(string baseName, List<string> paramNames, List<IrType> paramTypes) {
+    var parameters = paramNames
+      .Select((name, i) => (Name: name, Type: paramTypes[i]))
+      .Where(p => p.Name != SelfParamName)
+      .Select(p => $"{p.Name} {IrType.FormatAsSourceName(p.Type)}");
+
+    return $"{baseName}({string.Join(", ", parameters)})";
   }
 
 
@@ -5314,15 +5416,11 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
 
     // Two declarations naming ONE instance. The index holds a single name per instance, so the
     // choice has to be made by a rule that cannot depend on the order the files were read in —
-    // otherwise this index reproduces the very defect it exists to close. stdlib outranks a project
-    // declaration (it is compiled first and every project already resolves against it); within one
-    // rank the ordinal-smallest name wins.
-    if (incumbent.IsStdlib != _isStdlib) {
-      if (_isStdlib) index[key] = declaration;
-      return;
-    }
-
-    if (string.CompareOrdinal(aliasName, incumbent.Name) < 0)
+    // otherwise this index reproduces the very defect it exists to close. The rule itself lives on
+    // InstanceNaming, because two other scans decide the same thing and used to decide it by
+    // whichever name a dictionary handed back first.
+    if (InstanceNaming.Outranks(new InstanceNameCandidate(aliasName, _isStdlib),
+        new InstanceNameCandidate(incumbent.Name, incumbent.IsStdlib)))
       index[key] = declaration;
   }
 
@@ -5366,6 +5464,130 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
 
     if (incumbent.Identity != identity)
       _currentModule.ContestedGenericAliasNames.Add(aliasName);
+  }
+
+  /// <summary>
+  /// Whether an alias name this parser can see belongs to <c>stdlib</c> — the higher rank in
+  /// <see cref="InstanceNaming"/>. A parser compiling stdlib declares stdlib aliases; a parser
+  /// compiling a project sees them only through <see cref="SeedFromModule"/>, which marks them.
+  /// </summary>
+  private bool IsStdlibAlias(string aliasName) =>
+    _isStdlib || _seededStdlibTypeAliases.Contains(aliasName);
+
+  /// <summary>
+  /// ⭐ THE NAME THIS FILE ALREADY HAS FOR THIS GENERIC INSTANCE, or null if it has none.
+  ///
+  /// Three sites asked exactly this — the field-alias reuse scan, the return-type search and the
+  /// map-literal search — each with its own hand-written loop, and every one of them returned the
+  /// FIRST entry <c>_typeAliasSources</c> happened to hand back. That dictionary is in insertion
+  /// order, which is file order, so which of several equally-valid names an instance carried into
+  /// the emitted symbols was a property of the checkout rather than of the program. The candidates
+  /// all denote one type, so choosing between them is purely a naming decision — which is precisely
+  /// why nothing ever caught it.
+  ///
+  /// Both the test and the tie-break are <see cref="InstanceNaming"/>'s, not spelled again here: the
+  /// twin of this scan is monomorphization's <c>FindConcreteAlias</c>, which reads its candidates
+  /// from the MODULE's tables rather than this parser's, and the two must not come to different
+  /// conclusions about one pair. Only the enumeration differs, which is all that legitimately does.
+  /// </summary>
+  private string? BestKnownNameForInstance(string sourceName,
+      Dictionary<string, IrType> substitution, Dictionary<string, long>? constArgs) {
+    InstanceNameCandidate? best = null;
+
+    foreach (var (aliasName, aliasSource) in _typeAliasSources) {
+      if (aliasSource != sourceName) continue;
+      if (!_typeRegistry.TryGetValue(aliasName, out var aliasType)) continue;
+      if (aliasType is not IrStructType aliasStruct) continue;
+      if (!InstanceNaming.CandidateDenotesInstance(aliasName, sourceName,
+            aliasStruct.TypeParams, aliasStruct.ConstParams, substitution, constArgs)) continue;
+
+      var candidate = new InstanceNameCandidate(aliasName, IsStdlibAlias(aliasName));
+      if (best is { } incumbent && !InstanceNaming.Outranks(candidate, incumbent)) continue;
+
+      best = candidate;
+    }
+
+    return best?.Name;
+  }
+
+  /// <summary>
+  /// ⭐ A SYNTHESIZED INSTANCE NAME IS ADOPTED ONLY IF IT ALREADY MEANS THIS INSTANCE.
+  ///
+  /// Every mint of a structural name (<see cref="MangleConcreteInstanceName"/> and the bare
+  /// <c>{Source}_{suffix}</c> forms) joins the source type and its arguments with <c>_</c> — and
+  /// <c>_</c> is inside the identifier alphabet, so the join is NOT INJECTIVE:
+  /// <c>Map with (A_B, C)</c> and <c>Map with (A, B_C)</c> spell one name between them. Each of
+  /// those sites then asked only whether the name was TAKEN, never whether it was taken by the same
+  /// instance, and silently handed the second instantiation the first one's type.
+  ///
+  /// ⚠ MEASURED, AND IT IS A WRONG ANSWER RATHER THAN A COSMETIC COLLISION: a program storing a
+  /// one-field <c>B_C</c> into <c>[A.create(2): B_C.create(77)]</c> read its value back through the
+  /// FIRST map's two-field <c>C</c> and printed <c>0</c> for <c>77</c> — compiling clean, with no
+  /// diagnostic anywhere. Underscores are legal in user type names (the lexer says so) and
+  /// <c>specs/tuples.md</c> already carries a passing program declaring <c>A_B</c>, <c>A</c>,
+  /// <c>C</c> and <c>B_C</c> together, so this is not an exotic shape.
+  ///
+  /// It is REFUSED rather than re-spelled, which is <c>maxon-shv2</c>'s ruling for the same fact
+  /// (<c>ParseStaging.maxon</c>'s <c>reportInstantiationPairCollision</c>, E3006 naming both
+  /// instantiations) and the ruling this follows. Re-spelling would mean escaping the separator in
+  /// every synthesized name in the tree — <c>__ManagedMemory</c> included — to cure a pair nothing
+  /// in the corpus writes.
+  ///
+  /// ⚠ The CHECK cannot live where shv2's does. shv2 asks it once, whole-program, over an
+  /// instantiation registry that has interned every instance; this compiler has no such registry —
+  /// the loser of a name contest is discarded by the name-keyed table the moment it loses, so by the
+  /// end of the parse there is nothing left to compare. The mint is the only moment both instances
+  /// exist.
+  /// </summary>
+  private string AdoptOrMintConcreteInstance(string mangledName, string sourceName,
+      IrStructType sourceStruct, Dictionary<string, IrType> substitution,
+      Dictionary<string, long>? constArgs, Token? site) {
+    if (_typeRegistry.TryGetValue(mangledName, out var existing)) {
+      RequireNameMeansThisInstance(mangledName, sourceName, substitution, constArgs, existing, site);
+      _typeAliasSources.TryAdd(mangledName, sourceName);
+      return mangledName;
+    }
+
+    RegisterConcreteTypeAlias(mangledName, sourceName, sourceStruct, substitution, constArgs);
+    _typeAliasSources.TryAdd(mangledName, sourceName);
+    return mangledName;
+  }
+
+  /// <summary>
+  /// The refusal <see cref="AdoptOrMintConcreteInstance"/> is built on, separated because the
+  /// map-literal door reaches this question along a path that has already decided not to register
+  /// anything.
+  ///
+  /// The two ways a name can fail to mean this instance are reported apart, because only one of them
+  /// is the author's doing. A name registered as a DIFFERENT instance is the non-injective join, and
+  /// names both instantiations. A name registered with no recorded alias source at all is a type of
+  /// that name standing where a synthesized instance name belongs — still the author's, still a
+  /// collision, but there is no second instantiation to name and pretending otherwise would print a
+  /// spelling nobody wrote.
+  /// </summary>
+  private void RequireNameMeansThisInstance(string mangledName, string sourceName,
+      Dictionary<string, IrType> substitution, Dictionary<string, long>? constArgs,
+      IrType existing, Token? site) {
+    if (!_typeAliasSources.TryGetValue(mangledName, out var incumbentSource))
+      throw new CompileError(ErrorCode.SemanticDuplicateDefinition,
+        $"duplicate definition of '{mangledName}' - the name is already declared as a type, and it is "
+        + $"the name the instantiation `{InstanceNaming.RenderInstantiation(sourceName, substitution, constArgs)}` "
+        + "compiles to",
+        site?.Line, site?.Column);
+
+    if (incumbentSource == sourceName && existing is IrStructType incumbent
+        && IrStructType.InstanceKey(sourceName, incumbent.TypeParams, incumbent.ConstParams)
+           == IrStructType.InstanceKey(sourceName, substitution, constArgs))
+      return;
+
+    var incumbentSpelling = existing is IrStructType st && st.TypeParams.Count > 0
+      ? InstanceNaming.RenderInstantiation(incumbentSource, st.TypeParams, st.ConstParams)
+      : incumbentSource;
+    throw new CompileError(ErrorCode.SemanticDuplicateDefinition,
+      $"duplicate definition of '{mangledName}' - the generic instantiations "
+      + $"`{incumbentSpelling}` and `{InstanceNaming.RenderInstantiation(sourceName, substitution, constArgs)}` "
+      + "compile to that same name",
+      site?.Line, site?.Column);
   }
 
   /// <summary>
@@ -5494,17 +5716,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
           && TryRegisterDeclaredAlias(declared, fieldAliasSource, fieldSourceStruct, localSub, instanceKey))
         existingAliasName = declared.Name;
 
-      if (existingAliasName == null) {
-        foreach (var (existName, existSource) in _typeAliasSources) {
-          if (existSource != fieldAliasSource) continue;
-          if (!_typeRegistry.TryGetValue(existName, out var existType)) continue;
-          if (existType is not IrStructType existStruct) continue;
-          if (IrStructType.InstanceKey(existSource, existStruct.TypeParams, existStruct.ConstParams) != instanceKey) continue;
-
-          existingAliasName = existName;
-          break;
-        }
-      }
+      existingAliasName ??= BestKnownNameForInstance(fieldAliasSource, localSub, localConstArgs);
 
       if (existingAliasName != null) {
         expandedSub[field.Type.Name] = _typeRegistry[existingAliasName];
@@ -5514,10 +5726,8 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       // Create concrete alias, e.g., __ManagedMemory_Pair
       // Recursive calls do NOT pass isExtensionAlias — only top-level extension aliases get mangled
       var concreteAliasName = $"{fieldAliasSource}_{IrStructType.InstanceNameSuffix(localConstArgs, localSub.Values.Select(t => t.Name))}";
-      if (!_typeRegistry.ContainsKey(concreteAliasName))
-        RegisterConcreteTypeAlias(concreteAliasName, fieldAliasSource, fieldSourceStruct, localSub, localConstArgs);
-      else
-        _typeAliasSources.TryAdd(concreteAliasName, fieldAliasSource);
+      AdoptOrMintConcreteInstance(concreteAliasName, fieldAliasSource, fieldSourceStruct, localSub,
+        localConstArgs, site: null);
       expandedSub[field.Type.Name] = _typeRegistry[concreteAliasName];
     }
 
@@ -5539,6 +5749,16 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
         _typeRegistry[aliasName] = value;
         return;
       }
+
+      // The name is registered for a DIFFERENT instance, and falling through would overwrite it
+      // below — the same non-injective `_` join AdoptOrMintConcreteInstance refuses, with the
+      // clobber silent instead of the adoption. Refused with the same code and words. There is no
+      // token here: an extension alias is minted per conforming type by a loop that is no longer at
+      // the declaration, so the diagnostic is whole-program, which is what CompileError's
+      // positionless form is for.
+      if (value != null)
+        RequireNameMeansThisInstance(effectiveAliasName, sourceName, substitution, constParams, value, site: null);
+
       _extensionAliasToMangled[aliasName] = effectiveAliasName;
     }
 
@@ -5554,7 +5774,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
         && _currentModule.ContestedGenericAliasNames.Contains(aliasName)
         && IsFileScopedAliasDeclaration(aliasName)
         && substitution.Values.All(IsFullyConcreteType)) {
-      effectiveAliasName = ContestedInstanceName(sourceName, substitution, constParams);
+      effectiveAliasName = IrStructType.ContestedInstanceName(sourceName, substitution, constParams);
       _contestedAliasInstanceNames[aliasName] = effectiveAliasName;
       isContestedMint = true;
     }
@@ -5769,7 +5989,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     var allParamTypes = new List<IrType> { selfType };
     allParamTypes.AddRange(paramTypes);
 
-    var registrationName = ResolveOverloadRegistrationName(module, methodName, allParamNames, allParamTypes);
+    var registrationName = ResolveOverloadRegistrationName(module, methodName, allParamNames, allParamTypes, nameToken);
 
     // Register if not already present (by mangled name)
     if (module.FindFunctionByExactName(registrationName) == null) {
@@ -19722,7 +19942,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     var valueType = InferIrTypeFromElements(valueKind, valueStructTypeName, bracketToken);
 
     // Create or find concrete Map type alias
-    var concreteMapTypeName = FindOrCreateMapTypeAlias(mapSourceTypeName, keyType, valueType);
+    var concreteMapTypeName = FindOrCreateMapTypeAlias(mapSourceTypeName, keyType, valueType, bracketToken);
 
     // Resolve Map.init method
     var sourceTypeName = _typeAliasSources.TryGetValue(concreteMapTypeName, out var src) ? src : concreteMapTypeName;
@@ -19765,35 +19985,39 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   /// Finds an existing Map type alias with matching Key/Value types, or creates one.
   /// Pattern follows FindArrayTypeAliasForElement.
   /// </summary>
-  private string FindOrCreateMapTypeAlias(string mapSourceTypeName, IrType keyType, IrType valueType) {
-    // Search for existing Map alias with matching Key and Value types
-    foreach (var (aliasName, sourceTypeName) in _typeAliasSources) {
-      if (sourceTypeName != mapSourceTypeName) continue;
-      if (_typeRegistry.TryGetValue(aliasName, out var aliasType)
-          && aliasType is IrStructType st
-          && st.TypeParams.TryGetValue("Key", out var kType) && kType.Name == keyType.Name
-          && st.TypeParams.TryGetValue("Value", out var vType) && vType.Name == valueType.Name) {
-        return aliasName;
-      }
-    }
+  private string FindOrCreateMapTypeAlias(string mapSourceTypeName, IrType keyType, IrType valueType,
+      Token site) {
+    // `Map` declares no const parameters, so there are none to carry into either the key or the name.
+    var substitution = new Dictionary<string, IrType> {
+      ["Key"] = keyType,
+      ["Value"] = valueType
+    };
+    // Asked as the instance key rather than a per-parameter Key/Value comparison, for the reason
+    // IrStructType.InstanceKey's header gives: a hand-written second answer to "is this the same
+    // instance" is free to drift from the one every other door uses.
+    if (BestKnownNameForInstance(mapSourceTypeName, substitution, constArgs: null) is { } existing) return existing;
 
-    // No existing alias — auto-create one
-    // `Map` declares no const parameters, so there are none to carry into the name.
     var autoAliasName = MangleConcreteInstanceName(mapSourceTypeName, [keyType.Name, valueType.Name], constArgs: null);
     if (!_typeRegistry.ContainsKey(autoAliasName)
         && _typeRegistry.TryGetValue(mapSourceTypeName, out var mapType)
         && mapType is IrStructType mapStruct) {
-      var substitution = new Dictionary<string, IrType> {
-        ["Key"] = keyType,
-        ["Value"] = valueType
-      };
-      RegisterConcreteTypeAlias(autoAliasName, mapSourceTypeName, mapStruct, substitution);
+      AdoptOrMintConcreteInstance(autoAliasName, mapSourceTypeName, mapStruct, substitution,
+        constArgs: null, site);
 
       // Ensure inner array type aliases exist for the Key and Value types
       // (e.g., __Array_TokenKind for Map<int, TokenKind>)
       EnsureArrayTypeAliasForType(keyType);
       EnsureArrayTypeAliasForType(valueType);
+      return autoAliasName;
     }
+
+    // The name is already registered, and the scan above did not adopt it — so it names some OTHER
+    // instance, and this literal's own instance has nowhere to go. Refused rather than handed the
+    // incumbent's type, which is what produced a wrong answer here.
+    if (_typeRegistry.TryGetValue(autoAliasName, out var incumbentType))
+      RequireNameMeansThisInstance(autoAliasName, mapSourceTypeName, substitution, constArgs: null,
+        incumbentType, site);
+
     // Ensure alias source is tracked even if the type was already registered
     // (e.g., from a prior parser pass via the shared type registry)
     _typeAliasSources.TryAdd(autoAliasName, mapSourceTypeName);
@@ -20786,13 +21010,12 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       var literalConstArgs = new Dictionary<string, long> { [IrStructType.CapacityConstParamName] = elementCount };
 
       concreteTypeName = $"__{typeName}_{IrStructType.InstanceNameSuffix(literalConstArgs, [elementType.Name])}";
-      if (!_typeRegistry.ContainsKey(concreteTypeName)) {
-        var substitution = new Dictionary<string, IrType>();
-        foreach (var assocName in sourceStruct.AssociatedTypeNames) {
-          substitution[assocName] = elementType;
-        }
-        RegisterConcreteTypeAlias(concreteTypeName, typeName, sourceStruct, substitution, literalConstArgs);
+      var substitution = new Dictionary<string, IrType>();
+      foreach (var assocName in sourceStruct.AssociatedTypeNames) {
+        substitution[assocName] = elementType;
       }
+      AdoptOrMintConcreteInstance(concreteTypeName, typeName, sourceStruct, substitution,
+        literalConstArgs, typeToken);
     }
 
     // BuiltinArrayLiteral fast path: by interface contract, init's body is
@@ -23910,10 +24133,8 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
           return (MaxonValueKind.Struct, returnStruct.Name);
         }
         var mangledName = $"__{returnSourceName}_{IrStructType.InstanceNameSuffix(returnConstArgs, returnStruct.TypeParams.Values.Select(t => t.Name))}";
-        if (!_typeRegistry.ContainsKey(mangledName)) {
-          RegisterConcreteTypeAlias(mangledName, returnSourceName, returnSourceStruct, new(returnStruct.TypeParams), returnConstArgs);
-        }
-        return (MaxonValueKind.Struct, mangledName);
+        return (MaxonValueKind.Struct, AdoptOrMintConcreteInstance(mangledName, returnSourceName,
+          returnSourceStruct, new(returnStruct.TypeParams), returnConstArgs, site: null));
       }
     }
 
@@ -24097,18 +24318,9 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     // they are part of the instance the search and the mint below both ask about. Without them the
     // search happily returns a declared `Vec3` for a capacity-4 return type.
     var returnConstArgs = returnStruct.ConstParams;
-    var returnInstanceKey = IrStructType.InstanceKey(returnSourceName, resolvedReturnParams, returnConstArgs);
 
     // Search for existing alias naming the same instance
-    foreach (var (aliasName, aliasSource) in _typeAliasSources) {
-      if (aliasSource != returnSourceName) continue;
-      if (!_typeRegistry.TryGetValue(aliasName, out var aliasRegType)) continue;
-      if (aliasRegType is not IrStructType aliasSt) continue;
-      if (aliasSt.TypeParams.Values.Any(t => t is IrTypeParameterType)) continue;
-      if (IrStructType.InstanceKey(aliasSource, aliasSt.TypeParams, aliasSt.ConstParams) != returnInstanceKey) continue;
-
-      return aliasName;
-    }
+    if (BestKnownNameForInstance(returnSourceName, resolvedReturnParams, returnConstArgs) is { } named) return named;
 
     // No existing alias — auto-create one.
     // FindArrayTypeAliasForElement is specialized for the BuiltinArrayLiteral type — it searches
@@ -24146,10 +24358,8 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     // Auto-create concrete alias for multi-param generic types (e.g., EnumeratedIterator with Source, Element)
     if (returnSourceStruct != null) {
       var mangledName = $"__{returnSourceName}_{IrStructType.InstanceNameSuffix(returnConstArgs, resolvedReturnParams.Values.Select(t => t.Name))}";
-      if (!_typeRegistry.ContainsKey(mangledName)) {
-        RegisterConcreteTypeAlias(mangledName, returnSourceName, returnSourceStruct, new(resolvedReturnParams), returnConstArgs);
-      }
-      return mangledName;
+      return AdoptOrMintConcreteInstance(mangledName, returnSourceName, returnSourceStruct,
+        new(resolvedReturnParams), returnConstArgs, site: null);
     }
 
     return null;

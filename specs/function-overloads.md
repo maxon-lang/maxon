@@ -764,3 +764,59 @@ end 'main'
 ```exitcode
 109
 ```
+
+
+<!-- test: error.overload-pair-compiling-to-one-name -->
+⭐ Two overloads whose signatures differ, chosen so their MANGLED names do not. An overload's
+disambiguating name joins `{parameter}_{type}` parts with `_`, and `_` is legal inside both a parameter
+name and a type name, so the join is not injective: `f(x_i64_y P, w R)` and `f(x i64_y_P, w R)` both
+mangle to `Holder.f$x_i64_y_P_w_R`. ⚠⚠ **THIS WAS AN INTERNAL FAILURE ON A LEGAL PROGRAM** — E9001 with
+a C# stack trace, saying the two overloads "have the same signature", which is precisely what they do
+not have, and naming neither of them. It is now the ordinary duplicate-definition diagnostic (E3006),
+positioned at the second declaration and naming both signatures, which is the same refusal
+`specs/generic-instance-names.md` gives for the same non-injective join in the TYPE namespace.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type P
+	export var v as Num
+
+	static function create(v Num) returns Self
+		return Self{v: v}
+	end 'create'
+end 'P'
+
+type i64_y_P
+	export var v as Num
+
+	static function create(v Num) returns Self
+		return Self{v: v}
+	end 'create'
+end 'i64_y_P'
+
+type R
+	export var v as Num
+
+	static function create(v Num) returns Self
+		return Self{v: v}
+	end 'create'
+end 'R'
+
+type Holder
+	export static function f(x_i64_y P, w R) returns Num
+		return x_i64_y.v + w.v
+	end 'f'
+
+	export static function f(x i64_y_P, w R) returns Num
+		return x.v * 10 + w.v
+	end 'f'
+end 'Holder'
+
+function main() returns ExitCode
+	print("{Holder.f(P.create(1), w: R.create(2))} {Holder.f(i64_y_P.create(3), w: R.create(4))}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3006: specs/fragments/function-overloads/error.overload-pair-compiling-to-one-name.test:33:25: duplicate definition of 'Holder.f' - the overloads `Holder.f(x_i64_y P, w R)` and `Holder.f(x i64_y_P, w R)` compile to that same name
+```

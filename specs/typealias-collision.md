@@ -519,3 +519,116 @@ end 'main'
 ```stdout
 wide=2.5 narrow=70000
 ```
+
+
+<!-- test: module-alias-does-not-govern-another-directory -->
+⭐ The `module` twin of `file-private-alias-does-not-govern-another-project-file`, and the SAME rule one
+scope wider. A `module` declaration is scoped to its declarer's directory subtree, so two subtrees are
+either nested or disjoint — and where two `module typealias` declarations of one name sit in DISJOINT
+subtrees no file can see both, so neither may decide the other's storage. ⚠ It did: `scopeB/`'s
+`Cell = int(0 to 255)` truncated `scopeA/`'s 70000 to 112 (= 70000 mod 256), and building the same
+directory under `MAXON_SOURCE_ORDER=reverse` printed 70000 — the wrong half being whichever file merged
+last into the one flat entry the name has. The contest was DETECTED and only the RENAME was gated out,
+because the gate asked "is this declaration file-private?" where the question is "may anything outside
+this contest name it?". `narrow=200` is a liveness marker only: it sits inside both ranges and can never
+tell them apart. ⚠⚠ TWO DIRECTORIES ON PURPOSE — a `module` declaration's scope IS its directory, so the
+case cannot be written in one.
+```maxon
+// --- file: scopeA/aa.maxon
+module typealias Cell = int(0 to 100000)
+module typealias Cells = Array with Cell
+
+export type Wide
+	export static function stash() returns Cell
+		var xs = Cells.create()
+		xs.push(70000)
+		let v = try xs.get(0) otherwise 0
+		return v
+	end 'stash'
+end 'Wide'
+
+// --- file: scopeB/zz.maxon
+module typealias Cell = int(0 to 255)
+module typealias Cells = Array with Cell
+
+export type Narrow
+	export static function stash() returns Cell
+		var xs = Cells.create()
+		xs.push(200)
+		let v = try xs.get(0) otherwise 0
+		return v
+	end 'stash'
+end 'Narrow'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	print("wide={Wide.stash()} narrow={Narrow.stash()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+wide=70000 narrow=200
+```
+
+
+<!-- test: exported-generic-alias-keeps-its-own-element -->
+⭐ An `export typealias` over a file-private element type keeps THAT element, even where another file
+declares its own file-private alias of the same name over a narrower one. ⚠⚠ **EXACTLY ONE OF THE FOUR
+export/file-private PAIRINGS WAS WRONG, WHICH IS WHAT SAYS THE REASON IS ORDER RATHER THAN VISIBILITY.**
+Measured before the fix: `export`-wide + file-private-narrow printed `wide=112`; the same program with
+the exported side narrow, or with the two modifiers swapped, printed 70000. The narrow file's `Cells` IS
+renamed under the contest — it is file-private, so it may be — but it went on publishing its BARE name
+into the whole-program type table alongside the structural one, and merging later it won: `Cells.create`
+was emitted returning `Array_Cell_i64_0to255` and the exported alias read its own 70000 back one byte
+wide. ⚠ The wide side is the EXPORTED one deliberately; written the other way round the program answers
+correctly and pins nothing. ⚠ Only `Cells` differs in visibility here — both files' `Cell` is
+file-private — so the case cannot pass by accident through the ranged alias's own rules; `wsize` prints
+`sizeof(Cell)` for the exported file, which stays 4 in every arrangement and is therefore the half that
+does NOT discriminate, kept because a silent disagreement between the two is exactly what reaches the
+backend. Prints `wide=70000 narrow=200 wsize=4`.
+```maxon
+// --- file: aa.maxon
+typealias Cell = int(0 to 100000)
+export typealias Cells = Array with Cell
+
+export type Wide
+	export static function stash() returns Cell
+		var xs = Cells.create()
+		xs.push(70000)
+		let v = try xs.get(0) otherwise 0
+		return v
+	end 'stash'
+
+	export static function width() returns Cell
+		return sizeof(Cell)
+	end 'width'
+end 'Wide'
+
+// --- file: zz.maxon
+typealias Cell = int(0 to 255)
+typealias Cells = Array with Cell
+
+export type Narrow
+	export static function stash() returns Cell
+		var xs = Cells.create()
+		xs.push(200)
+		let v = try xs.get(0) otherwise 0
+		return v
+	end 'stash'
+end 'Narrow'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	print("wide={Wide.stash()} narrow={Narrow.stash()} wsize={Wide.width()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+wide=70000 narrow=200 wsize=4
+```

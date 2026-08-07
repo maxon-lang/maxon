@@ -9,9 +9,10 @@ static class BuildCache {
   /// merely stale — it cannot be compared field for field — so it is rejected outright rather than
   /// half-read. Version 2 moved the compiler flags into <see cref="EmittedCodeFlags"/> and added
   /// <c>ExtraKey</c>; version 3 moved the compiler timestamp, the target and the source timestamps
-  /// into <see cref="SourceInputs"/>, the one both this cache and the test-discovery manifest read.
+  /// into <see cref="SourceInputs"/>, the one both this cache and the test-discovery manifest read;
+  /// version 4 made that source record an ORDERED sequence (see <see cref="SourceInputs.Sources"/>).
   /// </summary>
-  const int ManifestVersion = 3;
+  const int ManifestVersion = 4;
 
   /// <summary>
   /// The manifest slot for a project's own binary. The compiler keeps several caches per project
@@ -69,6 +70,12 @@ static class BuildCache {
     };
   }
 
+  /// <summary>One source file as the cache identifies it: which file, at which version.</summary>
+  internal record SourceVersion {
+    public required string Path { get; init; }
+    public required long Modified { get; init; }
+  }
+
   /// <summary>
   /// The INPUTS a cached artifact was produced from: which compiler, which target, and which source
   /// files at which versions.
@@ -87,32 +94,56 @@ static class BuildCache {
     public required long CompilerModified { get; init; }
     public required string TargetArch { get; init; }
     public required string TargetOs { get; init; }
-    public required Dictionary<string, long> Sources { get; init; }
+
+    /// <summary>
+    /// The sources IN THE ORDER THEY WERE HANDED TO THE COMPILER, which is part of the key because
+    /// it is part of the input: Maxon's top-level namespace is flat, so where two files contest one
+    /// name the winner is decided by which was merged last. Two orders of the same files are two
+    /// different programs, and the emitted bytes say so.
+    ///
+    /// ⚠ IT WAS AN UNORDERED <c>Dictionary</c>, AND THAT MADE THE PROJECT'S ONLY ORDER-INDEPENDENCE
+    /// SEAM SILENTLY INERT. <see cref="Compiler.SourceCollector.SourceOrderEnvVar"/> reverses the
+    /// file list, but a reversal changes no path and no timestamp, so a dictionary key compared by
+    /// lookup could not see it: the second build of a directory hit the cache and was handed the
+    /// FIRST order's binary while reporting success. Measured on a two-scope program whose answer
+    /// genuinely depends on order — <c>wide=112</c> from the cache with the variable set, against
+    /// <c>wide=70000</c> once the sources were touched and it was honoured. The seam is documented
+    /// as a VERIFICATION seam in <see cref="Compiler.FlatNamespaceCheck"/> and in the parser's
+    /// contested-alias comment, so its failure mode was to CONFIRM order-independence that had never
+    /// been tested.
+    ///
+    /// The order is DERIVED from the source array rather than keyed on the environment variable that
+    /// happens to set it today: any future cause of a different order — a manifest's explicit source
+    /// list, a changed walk, a platform whose directory listing differs — is then already covered,
+    /// and there is no second place to remember to update.
+    /// </summary>
+    public required List<SourceVersion> Sources { get; init; }
 
     /// <summary>The inputs a build of <paramref name="onDiskSources"/> would have right now.</summary>
     public static SourceInputs Current(SourceFile[] onDiskSources, CompileTarget target) => new() {
       CompilerModified = GetCompilerModifiedTicks(),
       TargetArch = target.Arch,
       TargetOs = target.Os,
-      Sources = SourceTimestamps(onDiskSources),
+      Sources = SourceVersions(onDiskSources),
     };
 
     /// <summary>
     /// Whether these RECORDED inputs still describe the current ones.
     ///
-    /// The cheap fields are compared first and the timestamps last, because
-    /// <see cref="SourceTimestamps"/> costs a stat per file (stdlib included) and a compiler or
+    /// The cheap fields are compared first and the sources last, because
+    /// <see cref="SourceVersions"/> costs a stat per file (stdlib included) and a compiler or
     /// target change has already settled the answer.
     /// </summary>
     public bool StillCurrent(SourceFile[] onDiskSources, CompileTarget target) {
       if (CompilerModified != GetCompilerModifiedTicks()) return false;
       if (TargetArch != target.Arch || TargetOs != target.Os) return false;
 
-      var expected = SourceTimestamps(onDiskSources);
+      var expected = SourceVersions(onDiskSources);
       if (Sources.Count != expected.Count) return false;
 
-      foreach (var (path, ticks) in expected) {
-        if (!Sources.TryGetValue(path, out var recorded) || recorded != ticks) return false;
+      for (var i = 0; i < expected.Count; i++) {
+        if (Sources[i].Path != expected[i].Path) return false;
+        if (Sources[i].Modified != expected[i].Modified) return false;
       }
 
       return true;
@@ -144,7 +175,7 @@ static class BuildCache {
   }
 
   /// <remarks>
-  /// Internal for the reason <see cref="SourceTimestamps"/> is: the test manifest must go stale on a
+  /// Internal for the reason <see cref="SourceVersions"/> is: the test manifest must go stale on a
   /// new compiler for exactly the same reason a cached binary does — the parse it recorded is the
   /// old compiler's answer.
   /// </remarks>
@@ -188,7 +219,8 @@ static class BuildCache {
   }
 
   /// <summary>
-  /// The cache-key contribution of the real, on-disk sources: full path to last-write ticks.
+  /// The cache-key contribution of the real, on-disk sources: full path and last-write ticks, IN
+  /// COMPILE ORDER (see <see cref="SourceInputs.Sources"/> for why the order is part of the key).
   ///
   /// Written once and used by BOTH sides, so the manifest cannot be built to one rule and checked
   /// against another.
@@ -207,8 +239,8 @@ static class BuildCache {
   /// "which files, at which versions" a second way is how the two would come to disagree about
   /// whether a change had happened.
   /// </remarks>
-  internal static Dictionary<string, long> SourceTimestamps(SourceFile[] onDiskSources) {
-    var timestamps = new Dictionary<string, long>();
+  internal static List<SourceVersion> SourceVersions(SourceFile[] onDiskSources) {
+    var versions = new List<SourceVersion>();
     foreach (var source in WithStdlibSources(onDiskSources)) {
       if (!File.Exists(source.Path)) {
         throw new InvalidOperationException(
@@ -217,9 +249,12 @@ static class BuildCache {
           + "source does not have. Pass only real files here and give the in-memory sources' "
           + "content hash as the cache's extraKey.");
       }
-      timestamps[Path.GetFullPath(source.Path)] = File.GetLastWriteTimeUtc(source.Path).Ticks;
+      versions.Add(new SourceVersion {
+        Path = Path.GetFullPath(source.Path),
+        Modified = File.GetLastWriteTimeUtc(source.Path).Ticks,
+      });
     }
-    return timestamps;
+    return versions;
   }
 
   /// <summary>

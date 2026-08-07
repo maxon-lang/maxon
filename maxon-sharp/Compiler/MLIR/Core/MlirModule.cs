@@ -53,6 +53,118 @@ public record TypeAliasInfo(string SourceTypeName, Dictionary<string, IrType>? T
 public record DeclaredGenericAlias(string Name, bool IsExported, bool IsModuleVisible, bool IsStdlib,
     string? SourceFilePath, Dictionary<string, long>? ConstArgs);
 
+/// <summary>
+/// One name a generic instance could be compiled under, with the only fact that outranks a
+/// spelling. A record rather than two loose parameters because
+/// <see cref="InstanceNaming.Outranks"/> is asymmetric: transposing candidate and incumbent inverts
+/// the rule, and four positional arguments make that a silent mistake instead of a compile error.
+/// </summary>
+public readonly record struct InstanceNameCandidate(string Name, bool IsStdlib);
+
+/// <summary>
+/// ⭐ WHICH NAME A GENERIC INSTANCE IS COMPILED UNDER — the whole of that rule, in one place, for
+/// every party that has to agree about it.
+///
+/// A generic instance may be named more than once: a project may declare <c>ValueIdArray</c> where
+/// another file declares <c>IdArray</c> for the same <c>Array with ValueId</c>, and the compiler may
+/// itself have minted the structural <c>__Array_ValueId</c> beside them. All of them denote the same
+/// type (<see cref="IrStructType.InstanceKey"/> is what says so), so the choice between them decides
+/// nothing but the name the emitted symbols carry — which is exactly why it was never noticed that
+/// the choice was made by FILE ORDER. Five sites asked it, four of them by taking the first entry a
+/// dictionary happened to hand back:
+/// <see cref="Passes.TypeSubstitution"/>'s <c>FindConcreteAlias</c>, the parser's return-type search,
+/// its field-alias reuse scan and its map-literal scan. Only <c>Parser.RecordDeclaredGenericAlias</c>
+/// answered it order-independently, and this is that answer, moved out so the other four share it
+/// rather than each keeping a copy.
+///
+/// MEASURED, on one unchanged program (two files declaring <c>ZIter</c> and <c>AIter</c> for one
+/// <c>ArrayIterator with String</c>, and a third file using the instance without naming it): the
+/// third file's emitted calls read <c>ZIter.index</c> in natural source order and <c>AIter.index</c>
+/// under <c>MAXON_SOURCE_ORDER=reverse</c>. Same program, same files, different binary.
+///
+/// THE RANK. <c>stdlib</c> outranks a project declaration — it is compiled first and every project
+/// already resolves against it — and within one rank the ordinal-smallest name wins.
+///
+/// ⚠ ORDINAL IS A TIE-BREAK, NOT A PREFERENCE FOR DECLARED NAMES OVER SYNTHESIZED ONES, and it does
+/// not always fall that way. It usually does — a synthesized name is <c>__</c>-prefixed and <c>_</c>
+/// (0x5F) sorts after every uppercase letter — but a declared name need not begin with a letter, and
+/// this rung's own regenerated goldens show the other outcome: a spec batch's rewritten
+/// <c>_b_push_and_get_BoolArray</c> LOSES to <c>__Array_i1</c>. That is fine and is the point. What
+/// this rule owes is one answer for one program, not a particular one; a rule that preferred declared
+/// names would still have to break ties between two of them, and would break them by file order
+/// again.
+/// </summary>
+public static class InstanceNaming {
+  /// <summary>
+  /// Whether <paramref name="candidate"/> should replace <paramref name="incumbent"/> as the name
+  /// for the instance both denote.
+  /// </summary>
+  public static bool Outranks(InstanceNameCandidate candidate, InstanceNameCandidate incumbent) {
+    if (candidate.IsStdlib != incumbent.IsStdlib) return candidate.IsStdlib;
+
+    return string.CompareOrdinal(candidate.Name, incumbent.Name) < 0;
+  }
+
+  /// <summary>
+  /// ⭐ WHETHER A REGISTERED ALIAS REALLY NAMES THE INSTANCE IN HAND — the whole test, asked by both
+  /// reuse scans (the parser's <c>BestKnownNameForInstance</c> and monomorphization's
+  /// <c>FindConcreteAlias</c>), which read their candidates from different tables and must not come
+  /// to different conclusions about the same pair.
+  ///
+  /// Three things disqualify a candidate, and the third is the subtle one:
+  /// <list type="number">
+  /// <item>A candidate still holding a type PARAMETER is a declaration caught mid-resolution, not a
+  ///   competing instance.</item>
+  /// <item>A different <see cref="IrStructType.InstanceKey"/> is a different instance.</item>
+  /// <item>⭐ A CONTESTED instance is adopted on its IDENTITY, never on the by-name key. Two files'
+  ///   <c>typealias Cells = Array with Cell</c> over different <c>Cell</c> ranges are ONE key —
+  ///   <c>Array&lt;Element=Cell&gt;</c>, because the key reads a type argument by NAME and must (see
+  ///   its header) — and TWO instances, which is exactly why the contested mint spells the argument's
+  ///   RANGE into the name it gives one of them. Matching such a candidate on the weaker spelling
+  ///   hands one file's storage to the other: measured, an <c>export typealias Cells</c> over
+  ///   <c>int(0 to 100000)</c> whose emitted <c>push</c>/<c>get</c> called a file-private neighbour's
+  ///   <c>Array_Cell_i64_0to255</c> and read its 70000 back one byte wide, as 112.</item>
+  /// </list>
+  ///
+  /// Which candidates are contested is DERIVED — a registered alias is one exactly when its name is
+  /// <see cref="IrStructType.ContestedInstanceName"/> for its own arguments — rather than kept in a
+  /// second set that could fall out of step with the mint. Every other candidate is unaffected: two
+  /// names for one uncontested instance really do denote it, and demanding identity of them would
+  /// mint a duplicate wherever a pass holds a differently-spelled but equivalent argument.
+  /// </summary>
+  public static bool CandidateDenotesInstance(string candidateName, string sourceName,
+      IReadOnlyDictionary<string, IrType> candidateArgs, IReadOnlyDictionary<string, long>? candidateConstArgs,
+      IReadOnlyDictionary<string, IrType> wantedArgs, IReadOnlyDictionary<string, long>? wantedConstArgs) {
+    if (candidateArgs.Values.Any(t => t is IrTypeParameterType)) return false;
+    if (IrStructType.InstanceKey(sourceName, candidateArgs, candidateConstArgs)
+        != IrStructType.InstanceKey(sourceName, wantedArgs, wantedConstArgs)) return false;
+    if (candidateName != IrStructType.ContestedInstanceName(sourceName, candidateArgs, candidateConstArgs))
+      return true;
+
+    return IrStructType.InstanceIdentity(sourceName, candidateArgs, candidateConstArgs)
+        == IrStructType.InstanceIdentity(sourceName, wantedArgs, wantedConstArgs);
+  }
+
+  /// <summary>
+  /// A generic instantiation as the author would have written it — <c>Map with (A_B, C)</c>. The
+  /// arguments are ordered by PARAMETER NAME rather than by declaration order, which is the one
+  /// ordering available from a substitution dictionary and the same one
+  /// <see cref="IrStructType.InstanceKey"/> uses, so the two halves of a collision report cannot
+  /// disagree about which argument is which.
+  /// </summary>
+  public static string RenderInstantiation(string sourceName,
+      IReadOnlyDictionary<string, IrType> typeArgs, IReadOnlyDictionary<string, long>? constArgs) {
+    var arguments = IrStructType.ConstArgSegments(constArgs)
+      .Concat(typeArgs.OrderBy(kv => kv.Key, StringComparer.Ordinal)
+        .Select(kv => IrType.FormatAsSourceName(kv.Value)))
+      .ToList();
+
+    return arguments.Count == 1
+      ? $"{sourceName} with {arguments[0]}"
+      : $"{sourceName} with ({string.Join(", ", arguments)})";
+  }
+}
+
 // Which generic INSTANCE one top-level alias NAME was declared over, and by which file — the two
 // facts the contest test needs (see IrModule.DeclaredAliasInstances). The instance is carried as
 // IrStructType.InstanceIdentity's spelling rather than as types, because the declaration pass runs

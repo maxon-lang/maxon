@@ -326,6 +326,24 @@ public class IrStructType : IrType {
       IReadOnlyDictionary<string, long>? constArgs) =>
     InstanceSpelling(sourceName, typeArgs, constArgs, TypeArgIdentity);
 
+  /// <summary>
+  /// The NAME a generic instance carries when the alias name declaring it is CONTESTED: the
+  /// structural name the field-alias mint would have invented had no file declared one, except that
+  /// each type argument is spelled by <see cref="TypeArgIdentity"/> — otherwise the two declarations
+  /// the contest is ABOUT would mint one name between them, since it is precisely a type argument's
+  /// NAME they agree on and its meaning they do not.
+  ///
+  /// It lives here rather than in the parser that mints it because a SECOND party has to recognise
+  /// one: every reuse scan keyed on <see cref="InstanceKey"/> would otherwise hand a contested
+  /// instance to the other file's spelling of the same by-name key, which is the defect the rename
+  /// exists to close, re-entered one door along. Recognising it is asking whether a registered alias
+  /// is spelled exactly this way for its own arguments — derived, so there is no second table to
+  /// keep in step.
+  /// </summary>
+  public static string ContestedInstanceName(string sourceName,
+      IReadOnlyDictionary<string, IrType> typeArgs, IReadOnlyDictionary<string, long>? constArgs) =>
+    $"{sourceName}_{InstanceNameSuffix(constArgs, typeArgs.Values.Select(TypeArgIdentity))}";
+
   /// The shared body of the two spellings above — they differ in HOW a type argument is named and in
   /// nothing else, and a second hand-written copy of the sort-and-join is exactly the drift
   /// <see cref="InstanceKey"/>'s own header warns about, one call site further out.

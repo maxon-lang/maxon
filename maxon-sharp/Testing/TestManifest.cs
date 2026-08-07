@@ -19,9 +19,10 @@ internal static class TestManifest {
   /// Bumped when the stored SHAPE changes. An older manifest is rejected outright rather than
   /// half-read, matching <see cref="BuildCache"/>'s rule for the same reason. Version 2 replaced
   /// this manifest's own copy of the key fields with the shared
-  /// <see cref="BuildCache.SourceInputs"/>.
+  /// <see cref="BuildCache.SourceInputs"/>; version 3 followed that shape's move to an ORDERED
+  /// source record.
   /// </summary>
-  private const int ManifestVersion = 2;
+  private const int ManifestVersion = 3;
 
   /// <summary>
   /// The file this cache lives in.

@@ -393,21 +393,30 @@ internal class TypeSubstitution {
       string sourceTypeName,
       Dictionary<string, IrType> resolvedParams,
       Dictionary<string, long>? constArgs) {
-    // Asked as the instance key rather than a per-parameter loop, because a loop written out here
-    // is a second answer to a question the parser already answers — and the two had drifted, this
-    // one silently ignoring capacity and handing a `Vec3` back for a capacity-4 alias.
-    var instanceKey = IrStructType.InstanceKey(sourceTypeName, resolvedParams, constArgs);
-
     // Look up only aliases that match this source — module keeps the reverse
     // index up to date, so this avoids the prior O(TypeAliasSources) scan.
+    //
+    // Both the test and the tie-break are InstanceNaming's, not written out here: this scan's twin is
+    // the parser's BestKnownNameForInstance, which reads its candidates from the PARSER's tables
+    // rather than the module's, and the two must not come to different conclusions about one pair —
+    // a divergence adopts a wrong TYPE and is a compile error at neither site. Every match names the
+    // same instance, so the scan also cannot stop at the first one: which name the index happens to
+    // hold first is a property of file order, and it is the name the emitted symbols then carry.
+    InstanceNameCandidate? best = null;
+    IrType? bestType = null;
     foreach (var (candidateName, candidateInfo) in module.GetAliasesBySource(sourceTypeName)) {
       if (candidateInfo.TypeParams == null) continue;
-      if (candidateInfo.TypeParams.Values.Any(t => t is IrTypeParameterType)) continue;
-      if (IrStructType.InstanceKey(sourceTypeName, candidateInfo.TypeParams, candidateInfo.ConstParams) != instanceKey) continue;
+      if (!InstanceNaming.CandidateDenotesInstance(candidateName, sourceTypeName,
+            candidateInfo.TypeParams, candidateInfo.ConstParams, resolvedParams, constArgs)) continue;
+      if (!module.TypeDefs.TryGetValue(candidateName, out var candidateType)) continue;
 
-      if (module.TypeDefs.TryGetValue(candidateName, out var candidateType))
-        return candidateType;
+      var candidate = new InstanceNameCandidate(candidateName, candidateInfo.IsStdlib);
+      if (best is { } incumbent && !InstanceNaming.Outranks(candidate, incumbent)) continue;
+
+      best = candidate;
+      bestType = candidateType;
     }
+    if (bestType != null) return bestType;
 
     // Auto-create a concrete alias if the source type exists and all params are resolved
     if (resolvedParams.Values.Any(t => t is IrTypeParameterType)) return null;
@@ -429,6 +438,13 @@ internal class TypeSubstitution {
 
     var autoAliasName = $"__{sourceTypeName}_{IrStructType.InstanceNameSuffix(constArgs, resolvedParams.Values.Select(t => t.Name))}";
     if (module.TypeDefs.TryGetValue(autoAliasName, out IrType? value)) {
+      // ⚠ ADOPTED ON THE NAME ALONE, DELIBERATELY, and it is the one door left open to the
+      // non-injective join Parser.AdoptOrMintConcreteInstance refuses. Every instantiation that
+      // reaches this pass has already passed through a parser mint that DID ask, so a pair colliding
+      // here has been refused upstream and this compile is already failing. Asking again would need
+      // this pass to carry the instance the incumbent was minted for, which the alias tables no
+      // longer hold by the time monomorphization runs — and the answer would be the same diagnostic
+      // twice on one program.
       return value;
     }
 
