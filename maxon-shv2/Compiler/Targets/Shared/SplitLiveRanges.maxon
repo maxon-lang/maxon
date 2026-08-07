@@ -2708,16 +2708,40 @@ export type SplitDriver
 			iterations = iterations + 1
 
 			let index = funcLiveness.useIndex
-			let choice = chooseVictim(module, index: index, liveness: funcLiveness, peak: peak, pool: self.pool, scratch: work)
+			// THE POINT THIS ITERATION ACTUALLY RELIEVES. Normally the analysis's own peak; but a FULL-POOL
+			// peak with no relievable value is not yet an E5001 — the same op may carry a CONFINED overflow
+			// the ranking discarded, and that one is always relievable by the bracket the ABI has already
+			// chosen (`confinedOverflowAtPeak`). Both peaks name the SAME op, so the anchor, the live row and
+			// the sequence number below are the same either way; only the placement and the witness differ.
+			var target = peak
+			var choice = chooseVictim(module, index: index, liveness: funcLiveness, peak: target, pool: self.pool, scratch: work)
+			if (not choiceFound(choice)) and (not peak.clobberOnly) 'theAbiHasNotFinishedYet'
+				let confined = confinedOverflowAtPeak(funcLiveness, peak: peak, pool: self.pool, scratch: work)
+				if confined.found 'dischargeTheForcedWorkFirst'
+					let bracketed = chooseVictim(module, index: index, liveness: funcLiveness, peak: confined, pool: self.pool, scratch: work)
+					if choiceFound(bracketed) 'relievable'
+						target = confined
+						choice = bracketed
+					end 'relievable' else 'nothingThereEither'
+						// The confined retry re-pointed the function's one anchor; put it back on the peak the
+						// E5001 below must describe. Falling back to the FULL-POOL peak rather than letting the
+						// confined one reach `victimAtPeak` is deliberate: an unrelievable confined peak panics as
+						// a splitter bug, and this one was synthesized here rather than found by the analysis, so
+						// it may not be held to that invariant. The honest report is the overflow that was ranked.
+						work.anchor.takePeak(peak)
+					end 'nothingThereEither'
+				end 'dischargeTheForcedWorkFirst'
+			end 'theAbiHasNotFinishedYet'
+
 			// A `none` choice does not come back: at a FULL-pool peak it is the E5001 this design exists to
 			// raise, and at a CONFINED one it is a splitter bug (`noVictimAtPeak`).
-			let victim = try victimAtPeak(choice, project: project, module: module, func: func, funcIndex: funcIndex, liveness: funcLiveness, peak: peak, pool: self.pool, lineage: self.lineage)
+			let victim = try victimAtPeak(choice, project: project, module: module, func: func, funcIndex: funcIndex, liveness: funcLiveness, peak: target, pool: self.pool, lineage: self.lineage)
 
 			// `chooseVictim` re-pointed the function's ONE anchor at this peak, and the mutation below cuts
 			// there. Asserted rather than assumed: the two are a few lines apart today, and a reorder that
 			// broke it would split at the PREVIOUS peak — a wrong cut in the right-looking place, not a crash.
-			if work.anchor.seq != peak.peakSeq 'anchorIsNotThisPeaks'
-				panic("SplitDriver.relievePressure: the split anchor is at sequence {work.anchor.seq} but this iteration's peak is at {peak.peakSeq} — `chooseVictim` re-points the function's one anchor and the mutation reads it back, so nothing may run between them that re-points it")
+			if work.anchor.seq != target.peakSeq 'anchorIsNotThisPeaks'
+				panic("SplitDriver.relievePressure: the split anchor is at sequence {work.anchor.seq} but this iteration's peak is at {target.peakSeq} — `chooseVictim` re-points the function's one anchor and the mutation reads it back, so nothing may run between them that re-points it")
 			end 'anchorIsNotThisPeaks'
 
 			// Only a SPILL of a value memory does not already hold consumes a slot: a value relieved again
@@ -2735,7 +2759,7 @@ export type SplitDriver
 			let freshFrom = self.nextValueId
 			match choice 'act'
 				none then panic("SplitDriver.relievePressure: `victimAtPeak` returned for a `none` choice — it must throw")
-				remat(v, scope) then self.nextValueId = rematerializeConstant(module, index: index, topo: self.cfg.topo, valueId: v, peakSeq: peak.peakSeq, scope: scope, nextValueId: self.nextValueId, stats: stats, lineage: self.lineage, scratch: work, opFacts: funcLiveness.opFacts)
+				remat(v, scope) then self.nextValueId = rematerializeConstant(module, index: index, topo: self.cfg.topo, valueId: v, peakSeq: target.peakSeq, scope: scope, nextValueId: self.nextValueId, stats: stats, lineage: self.lineage, scratch: work, opFacts: funcLiveness.opFacts)
 				spill(v, scope) then self.nextValueId = spillOneValue(module, index: index, cfg: self.cfg, liveness: funcLiveness, valueId: v, anchor: work.anchor, scope: scope, slot: slot, pool: self.pool, nextValueId: self.nextValueId, stats: stats, lineage: self.lineage, scratch: work)
 			end 'act'
 
@@ -3467,6 +3491,59 @@ function resweepBlock(module TargetModule, liveness LivenessResult, pool RegMask
 	scratch.tree.promote(blockLocal)
 end 'resweepBlock'
 
+// ⭐⭐ THE CONFINED OVERFLOW HIDING UNDERNEATH A FULL-POOL PEAK — the ABI's forced work, found where
+// the RANKING discarded it.
+//
+// `peakOutranks` puts every full-pool overflow above every confined one, so while one op anywhere
+// overflows its own pool no confined rank can ever be the function's peak. That ordering is right for
+// the normal path (it is what makes `storeFitsPool` sound by the time a confined peak is reached) but
+// it hides a fact when the full-pool peak turns out to have NO cold-spillable value: **the very values
+// that overflow the pool may also be confined, at that same op, to a subset far too small for them** —
+// and THAT overflow is relievable, at any loop depth, by the store/reload bracket Rule 2 calls forced.
+//
+// MEASURED, and it is the whole reason this exists (`generic-hash-table-regalloc`): a rehash loop in a
+// generic type holds 16 GPR values at one op against a pool of 14, and **14 of the 16 are live across a
+// method call inside the same loop**, hence confined to the 5 callee-saved registers. The program
+// cannot compile without ~9 forced brackets — the ABI decided that, not the allocator — and once they
+// are emitted the full-pool peak is gone. Refusing at the full-pool peak measured the loop's working
+// set BEFORE the ABI had finished shrinking it, and reported E5001 against a program the bootstrap
+// compiles and runs. A false E5001 is the worst bug this compiler can have.
+//
+// ⚠ THE WITNESS GATE IS WHAT KEEPS THIS FROM MOVING THE E5001 CLIFF. Hall at a point that is over the
+// full pool ALWAYS fails; what distinguishes the two cases is its WITNESS. A witness equal to the whole
+// file's pool is the pigeonhole restated — the loop genuinely wants more registers than exist, no
+// clobber is involved, and E5001 stands. Only a PROPER subset is a confinement, and `confinementOnly`
+// is where that line is drawn. Every committed E5001 case is a loop with no call in it, so no value is
+// confined to anything, and this returns `found: false` for all of them.
+//
+// It reuses the peak's OWN already-materialized live-before row and location, so it re-derives nothing
+// and costs one bipartite matching per register file. It is reached only where E5001 was about to be
+// raised, so the normal path pays nothing at all for it.
+//
+// ⚠ The `PeakRank` this fills carries a `forwardPos` of 0 and that field is deliberately never read:
+// `forwardPos` exists so `materializePeak` can re-walk a block to its peak op, and this peak needs no
+// such walk — its row, its sequence and its op index are the FULL-POOL peak's, which are already
+// materialized. The rank never leaves this function; only the `PressurePeak` built from it does.
+function confinedOverflowAtPeak(liveness LivenessResult, peak PressurePeak, pool RegMask, scratch SplitScratch) returns PressurePeak
+	var live = scratch.candidates
+	bitsetCollectRow(peak.liveBefore, base: 0, wordsPerRow: liveness.wordsPerRow, out: live)
+
+	var best = emptyRank()
+	confinedPeakAt(liveness, live: live, pool: pool, best: best, blockLocal: peak.blockLocal, forwardPos: 0, peakSeq: peak.peakSeq, atFixedRegisterOp: peak.atFixedRegisterOp, hall: scratch.hall)
+
+	return PressurePeak.create(best.found, pressure: best.pressure, blockLocal: peak.blockLocal, liveBefore: peak.liveBefore, peakSeq: peak.peakSeq, peakOpIdx: peak.peakOpIdx, clobberOnly: true, witness: best.witness, witnessClass: best.witnessClass, atFixedRegisterOp: peak.atFixedRegisterOp)
+end 'confinedOverflowAtPeak'
+
+// Did `chooseVictim` find one? A `none` choice is the only shape with no victim, and both of the
+// others carry one — so this is the question the driver asks before deciding whether the peak it just
+// examined is really the one to refuse.
+function choiceFound(choice SpillChoice) returns bool
+	return match choice 'k'
+		none gives false
+		remat to spill gives true
+	end 'k'
+end 'choiceFound'
+
 // Nothing crossing the peak can be relieved. What that MEANS depends on which overflow it is —
 // and keeping the two apart is the whole point of the amended Rule 2.
 //
@@ -4046,12 +4123,30 @@ function confinedPeakAt(liveness LivenessResult, live ValueIdArray, pool RegMask
 			continue
 		end 'noValuesOfThisFile'
 
-		match hallVerdictAt(liveness, live: hall.classLive, pool: poolOfClass(pool, class: class, file: liveness.registerFile), scratch: hall) 'verdict'
+		let classPool = poolOfClass(pool, class: class, file: liveness.registerFile)
+		match confinementOnly(hallVerdictAt(liveness, live: hall.classLive, pool: classPool, scratch: hall), classPool: classPool) 'verdict'
 			feasible then continue
 			overflow(witness, tight) then betterPeak(best, pressure: tight, blockLocal: blockLocal, forwardPos: forwardPos, peakSeq: peakSeq, clobberOnly: true, witness: witness, witnessClass: class, atFixedRegisterOp: atFixedRegisterOp)
 		end 'verdict'
 	end 'eachClass'
 end 'confinedPeakAt'
+
+// Hall's verdict with one shape reported as FEASIBLE: an overflow whose witness is the file's WHOLE
+// pool. Such a witness is not a CONFINEMENT — it says the values do not fit the pool at all, which is
+// the FULL-POOL overflow — and calling it `clobberOnly` would route the pigeonhole down the
+// forced-bracket path that exists for values the ABI has excluded from PART of the pool.
+//
+// In the block sweep the gate is vacuous, and provably so: Hall runs there only where no file
+// overflows its own pool, so each file's live count is at most its pool size and a saturating matching
+// is only blocked by a proper subset. It is load-bearing for `confinedOverflowAtPeak`, which asks Hall
+// AT a full-pool peak precisely to find the confinement hiding underneath it — and where a "witness"
+// of the whole pool is exactly the answer that must not come back.
+function confinementOnly(verdict HallVerdict, classPool RegMask) returns HallVerdict
+	return match verdict 'v'
+		feasible gives HallVerdict.feasible
+		overflow(witness, tight) gives HallVerdict.feasible if regMaskPopcount(witness) >= regMaskPopcount(classPool) else HallVerdict.overflow(witness, tight: tight)
+	end 'v'
+end 'confinementOnly'
 
 // The live values of ONE file, in the ascending id order `bitsetCollectRow` produced — so the
 // matching's augmenting order, and therefore its witness and every tie-break downstream of it, stay
@@ -4441,6 +4536,13 @@ end 'nextUseAfterPeak'
 // this gate cannot refuse anything).
 //
 // A value already IN a slot skips this gate entirely — its store exists and is not re-emitted.
+//
+// ⚠ THE "CANNOT REFUSE ANYTHING AT A CONFINED PEAK" CLAUSE ABOVE HOLDS FOR A PEAK THE ANALYSIS RANKED,
+// AND NOT FOR THE ONE `confinedOverflowAtPeak` SYNTHESIZES. That peak is asked for precisely because a
+// full-pool point still exists, so a def point CAN still be over-pool and this gate CAN refuse there.
+// That is not a hole: it is why the driver treats an unrelievable synthesized peak as "no relief
+// available" and reports the FULL-POOL overflow it originally ranked, rather than letting it reach
+// `noVictimAtPeak`'s confined panic, which asserts an invariant only a ranked peak carries.
 function storeFitsPool(liveness LivenessResult, pressure PressureIndex, valueId ValueId, poolSize RegCount) returns bool
 	return defPointPressure(liveness, pressure: pressure, valueId: valueId) <= (poolSize as PressureDelta)
 end 'storeFitsPool'

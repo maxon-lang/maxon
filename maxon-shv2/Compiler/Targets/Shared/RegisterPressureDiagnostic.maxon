@@ -42,6 +42,13 @@
 // `defRangeOf` PANICS naming it rather than emitting a misleading location. At M5 that is
 // unreachable — the routes cover every value that can block an allocation — so the panic is a
 // backstop that guards the invariant the whole contract rests on.
+//
+// ⚠ **THE PANIC IS A BACKSTOP, NOT THE ENFORCEMENT, AND IT NEVER WAS.** Reaching this file at all is
+// already the decision that the author must act; a value the author cannot act on has to be relieved
+// BEFORE that, by the splitter, which is the only party that can still emit code. The one class this
+// has actually cost — a hidden dictionary parameter held across a loop in a generic body — is relieved
+// by `SplitLiveRanges.confinedOverflowAtPeak`, which is what stops the full-pool ranking from refusing
+// a peak whose values the ABI had already sent to memory. See its header.
 
 // How many times a blocking value is USED inside the OVERFLOWING REGION — the move-cost rank key
 // (fewer uses in it => fewer reloads after the array rewrite). A count of USES, so it is neither a
@@ -128,7 +135,7 @@ function buildRegisterPressureMessage(project Project, module TargetModule, func
 	let peakInLoop = peakLoopDepth != 0
 
 	let regionOps = collectRegionOps(module, cfg: cfg, peak: peak, peakInLoop: peakInLoop)
-	let candidates = collectCandidates(project, module: module, cfg: cfg, funcIndex: funcIndex, peak: peak, lineage: lineage, regionOps: regionOps)
+	let candidates = collectCandidates(project, module: module, func: func, cfg: cfg, funcIndex: funcIndex, peak: peak, lineage: lineage, regionOps: regionOps)
 	let order = sortedOrder(candidates)
 	let anchorLine = pressureAnchorLine(module, project: project, funcIndex: funcIndex, peak: peak, peakInLoop: peakInLoop, candidates: candidates, regionOps: regionOps)
 
@@ -346,7 +353,7 @@ end 'firstOriginLineOfOp'
 // order); `sortedOrder` produces the ranked view — sorting a scalar index permutation rather
 // than moving the reference-typed candidates around (moving them would mutate the array while
 // an element borrow is live, which the borrow checker rejects).
-function collectCandidates(project Project, module TargetModule, cfg FuncCfg, funcIndex FuncIndex, peak PressurePeak, lineage SplitLineage, regionOps OpIndexArray) returns PressureCandidateArray
+function collectCandidates(project Project, module TargetModule, func IrFunction, cfg FuncCfg, funcIndex FuncIndex, peak PressurePeak, lineage SplitLineage, regionOps OpIndexArray) returns PressureCandidateArray
 	let wordsPerRow = bitsetWordsFor(cfg.valueCount)
 	var candidates = PressureCandidateArray.create()
 
@@ -354,7 +361,7 @@ function collectCandidates(project Project, module TargetModule, cfg FuncCfg, fu
 		if not bitsetTest(peak.liveBefore, base: 0, bit: v) 'notLive'
 			continue
 		end 'notLive'
-		let range = defRangeOf(project, module: module, topo: cfg.topo, funcIndex: funcIndex, valueId: v, wordsPerRow: wordsPerRow, lineage: lineage)
+		let range = defRangeOf(project, module: module, func: func, topo: cfg.topo, funcIndex: funcIndex, valueId: v, wordsPerRow: wordsPerRow, lineage: lineage)
 		let useCount = usesInRegion(module, regionOps: regionOps, valueId: v)
 		candidates.push(PressureCandidate.create(v, line: range.line, column: range.column, usesInRegion: useCount))
 	end 'eachValue'
@@ -472,14 +479,14 @@ end 'classifyValue'
 // forbids from blocking an allocation. This PANICS naming it rather than emitting a location
 // the user cannot act on. At M5 it is unreachable (the four routes cover every blocking value);
 // it is the backstop guarding the E5001 contract.
-function defRangeOf(project Project, module TargetModule, topo FuncTopology, funcIndex FuncIndex, valueId ValueId, wordsPerRow BitWordCount, lineage SplitLineage) returns SourceRange
+function defRangeOf(project Project, module TargetModule, func IrFunction, topo FuncTopology, funcIndex FuncIndex, valueId ValueId, wordsPerRow BitWordCount, lineage SplitLineage) returns SourceRange
 	var ranges = SourceRangeArray.create()
 	var visited = BitWordArray.create()
 	visited.resize(wordsPerRow)
 	collectReachableRanges(project, module: module, topo: topo, funcIndex: funcIndex, valueId: valueId, lineage: lineage, visited: visited, out: ranges)
 
 	if ranges.count() == 0 'ruleThree'
-		panic("register-pressure E5001: value {valueId} in '{topo.numBlocks}'-block function {funcIndex} is in the blocking set but resolves to NO source span — not a parameter, not op-defined, not a phi over source values, and not a reload/rematerialized value derived from one. It is a compiler-introduced value which RULE 3 forbids from ever blocking an allocation. This is a COMPILER BUG: the user cannot see or delete this value, so the diagnostic cannot ask them to. Fix the pass that let it occupy a register across a loop (it should be rematerialized or kept off the working set), not the user's code.")
+		panic("register-pressure E5001: value {valueId} of '{String.from(func.name)}' (function index {funcIndex}, {topo.numBlocks} blocks) is in the blocking set but resolves to NO source span — not a parameter, not op-defined, not a phi over source values, and not a reload/rematerialized value derived from one. It is a compiler-introduced value which RULE 3 forbids from ever blocking an allocation. This is a COMPILER BUG: the user cannot see or delete this value, so the diagnostic cannot ask them to. Fix the pass that let it occupy a register across a loop (it should be rematerialized or kept off the working set), not the user's code. If the value is one the ABI has already excluded from part of the pool, the relief it was owed is `SplitLiveRanges.confinedOverflowAtPeak`'s forced bracket, and the question is why that did not reach it.")
 	end 'ruleThree'
 
 	return earliestRange(ranges)
