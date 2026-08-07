@@ -342,14 +342,39 @@ end 'stdlibFunctionNames'
 // `witnessSlotImpls` is never empty), which is precisely the blanket-seed trap that comment measured at
 // 2223 moved fragments.
 //
-// ⚠ **WHAT IT STILL DOES NOT COVER, STATED RATHER THAN LEFT TO BE DISCOVERED: THE CONSTRAINED-GENERIC
-// WITNESS.** `LowerMaxonToStd.ensureWitnessTable` has a second caller — `materializeWitnessArg` /
-// `materializeWitnessTableAddr`, for a `where T: Hashable` call — and that reaches the Maxon tier as an
-// ordinary `call`, which this walk already credits but which does NOT imply a dispatch op. A witness impl
-// selected for such a constraint (`int.hash`, a user type's `equals`) whose body called a stdlib function
-// would still under-approximate. No corpus program does; distinguishing that `call` costs a signature
-// lookup per credited edge on this walk's hottest path, and the loud guard above is what will find it —
-// so it is REPORTED, not guessed at.
+// ⛔⛔ **WHAT IT STILL DOES NOT COVER, AND THE FIRST STATEMENT OF THIS WAS TOO NARROW — MEASURED AT THE
+// W35 REVIEW.** It said the one uncovered shape was the constrained-generic witness and that "no corpus
+// program does". Both halves needed correcting: **the uncovered shape is A WITNESS TABLE THAT IS
+// MATERIALIZED WITHOUT ANY DISPATCH OP**, the trigger above is the dispatch op, and
+// `LowerMaxonToStd.ensureWitnessTable` has TWO callers, NEITHER of which implies one.
+//
+//   • `materializeWitnessTableAddr` — an EXISTENTIAL WIDENING. A concrete conformer crossing into an
+//     interface-typed parameter, field or return builds `__witness_<Type>.<Iface>` and relocates every
+//     requirement slot; whether anything ever DISPATCHES through it is a separate question.
+//     MEASURED at `396370e0f`: `type Thing implements Printer` whose `show()` body is `print(…)`,
+//     boxed once into an interface-typed struct field and never dispatched, is
+//     `panic … requireUnreachableStdlibStayedDead: 'print' is in StdlibFacts.unreachable`.
+//   • `materializeWitnessArg` — a `where T is Iface` CONSTRAINT witness. Every instance method of a
+//     constrained type carries the witness argument, so the table is built even for a method whose body
+//     never touches `T`. MEASURED at the same commit, same panic, on a `type Box uses T where T is
+//     Taker` whose only method returns a constant.
+//
+// ⚠ **BOTH PRE-DATE W35 AND NEITHER IS `print`-SPECIFIC — THE CONTROL WAS RUN.** Substituting `sleep(1)`
+// for the `print(…)` in the first program panics identically on `'sleep'`, and `stdlib/Sleep.maxon` has
+// been listed since long before this rung, whose changes touch nothing on that route. Since the seed
+// above did not exist at all until W35, both programs panicked at the merge base too: what this rung
+// changed is the EXPOSURE, not the hole — `print` is the most-called stdlib function there is, so the
+// class went from "a witness impl that sleeps or reads the console" to "a witness impl that prints".
+//
+// ⇒ **CLOSING IT IS ITS OWN RUNG AND IS DELIBERATELY NOT ATTEMPTED HERE.** Both remaining triggers are
+// facts about a CALLEE'S SIGNATURE (does it declare an interface-typed parameter; does it carry `where`
+// constraints), not about an op, so covering them means a signature lookup per credited edge on this
+// walk — and the seed is blanket, so any widening newly BUILDS stdlib bodies for a whole class of
+// programs and moves goldens across the suite. That is a measured change, not a review edit.
+// ⚠ And the seed's cost is filed with it: it re-walks every conformance × interface × transitive slot
+// AT EVERY dispatch op, though the work is whole-program and idempotent after the first — O(dispatch
+// ops × conformances × slots) where O(conformances × slots) would do. The scale corpus declares no
+// interfaces, so no column of the ladder can see it.
 //
 // ⭐ The name index is the shared, CHECKED one (`FunctionNameIndex`, A1w). It used to resolve one
 // last-wins and unchecked, walking ONE of two same-named bodies and crediting the callees of whichever it

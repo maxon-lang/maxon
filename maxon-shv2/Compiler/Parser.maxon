@@ -47158,17 +47158,21 @@ export type Parser
 			return try self.emitSubpHandleOp(args, runtimeName: SubpReleaseName, builtinName: SubpReleaseBuiltinName, resultTag: ValueTypeTag.void, resultUsed: resultUsed, calleeTok: anchor)
 		end 'subpReleaseBuiltin'
 
-		// The four MATH INTRINSICS. Only the DISPATCH repeats — the emit itself (arity, operand class,
-		// the int→float promotion, the op) is written once in `emitMathIntrinsic`, so each of these is
-		// a single line naming its opcode. They are the same `if callee.equals(…)` entries the four
-		// builtins above are; this is the builtin table, and a table's rows are data.
+		// ⚠ **THE MATH-INTRINSIC DISPATCH NO LONGER STANDS HERE, AND THIS PARAGRAPH IS KEPT FOR ITS
+		// MEASUREMENT.** It used to be a run of `if callee.equals(…)` rows at this point, one per
+		// intrinsic; they were folded into the ONE roster read at the top of this chain
+		// (`calleeTakesPositionalArgsOnly` ⇒ `emitPositionalMathBuiltin`), which is what makes the label
+		// rule and the emit unable to disagree. The count in this paragraph read "four" while the roster
+		// named EIGHT — a prose copy of a roster, wrong for the reason this chain's other prose copies
+		// were (see `calleeTakesPositionalArgsOnly`); corrected at the W35 review, which is also where
+		// the sentence stopped naming a table that had moved.
 		//
 		// ⚠⚠ A `union MathIntrinsic{notAnIntrinsic, op(MaxonUnaryOp)}` returned by a name→op resolver
 		// would read better and was written first. It was REVERTED ON MEASUREMENT: **a payload-FREE
 		// union case still heap-allocates**, so returning `notAnIntrinsic` cost ONE allocation per
 		// PARSED CALL — +85/+153/+289/+561/+1105/+2193 allocations across the six scale rungs, a
 		// linear constant factor on the hottest path in the parser, for a call that is not an
-		// intrinsic 99.99% of the time. These four `equals` allocate nothing and `scale-test` returns
+		// intrinsic 99.99% of the time. A plain `equals` allocates nothing and `scale-test` returns
 		// to bit-for-bit parity with main. (The `flat union` rule in ARCHITECTURE.md is about NESTING
 		// costing a box per level; this is the same accounting one level down.)
 

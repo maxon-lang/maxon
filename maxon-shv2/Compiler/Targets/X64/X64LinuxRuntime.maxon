@@ -65,9 +65,13 @@ export let X64LinuxSyscallExitGroup = 231
 // `MmapAnonFd`/`MmapNoOffset`) live in `Targets/Shared/PosixMmap.maxon`, shared with the arm64 isel so
 // the mmap ABI is one fact, not two copies (OPEN #83).
 
-// `write(1, buf, len)` — the stdout primitive `lowerOsWriteStdout` emits on Linux. FAR simpler than
-// Windows's GetStdHandle+WriteFile: no handle call, no bytes-written out-param, no stack args.
-export let WriteStdoutFd = 0x1  // fd = 1 (STDOUT_FILENO).
+// STDOUT_FILENO used to be spelled HERE as well, as `WriteStdoutFd`, read by this backend's stdout
+// write. W35 gave that write a stderr twin and moved the descriptor to the ONE door both POSIX isels
+// ask (`StdLoweringShared.posixStreamFd`), which left this declaration exported and read by nothing —
+// a second spelling of a number whose only remaining purpose was to be able to disagree with the
+// first. Removed at that rung's review. It now sits beside its stderr sibling as
+// `StdLoweringShared.PosixStdoutFd`/`StderrFd`, both POSIX facts rather than x64-Linux ones for the
+// reason the note below `LinuxRtSigsetSize` gives.
 
 // --- Linux fault runtime (the SIGFPE handler for a divide-by-zero) ---
 //
@@ -91,7 +95,7 @@ export let LinuxSignalFpe = 8  // SIGFPE — the signal an integer #DE fault is 
 // runs, and even for a handler that never returns (measured: strace showed SIGFPE then SI_KERNEL SIGSEGV).
 export let LinuxSigactionFlags = 0x04000004
 export let LinuxRtSigsetSize = 8  // rt_sigaction's sigsetsize argument: the kernel's sigset_t is 8 bytes.
-// STDERR_FILENO — where the panic diagnostic goes — is `Targets/Shared/BacktraceFormat.StderrFd`. It
+// STDERR_FILENO — where the panic diagnostic goes — is `Targets/Shared/StdLoweringShared.StderrFd`. It
 // is not an x64-Linux fact: arm64's two OSes name the same descriptor from their own panic runtime.
 
 // x86-64 kernel `struct sigaction` field offsets (32 bytes).

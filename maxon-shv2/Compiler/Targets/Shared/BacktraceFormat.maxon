@@ -123,11 +123,12 @@ export let WalkFramesName = b"mrt_panic_walk_frames"
 // each backend's `lowerPanic` targets the SAME chunk its own runtime defines — one string, one fixup.
 export let PanicName = b"mrt_panic"
 
-// STDERR_FILENO. A POSIX fact, not a per-OS one: x64-linux's `write` syscall, arm64-linux's `svc`
-// and arm64-macOS's libSystem `_write` all name the same descriptor. (Windows has no fd for it —
-// its writer asks `GetStdHandle(STD_ERROR_HANDLE)` instead, which is why that constant stays with
-// the x64 Windows chunk that is its only reader.)
-export let StderrFd = 0x2
+// STDERR_FILENO used to be declared HERE, as this file's only non-vocabulary constant, back when the
+// panic writer was the only thing in the tree that named a standard stream. W35 gave the Std tier a
+// `printError`, which named the SAME descriptor from a second mechanism — so the constant moved to
+// `StdLoweringShared.StderrFd`, beside `PosixStdoutFd`, where the two descriptors of one POSIX family
+// sit together and `posixStreamFd` reads them as neighbours. This file's writers still ask for it by
+// that one name; what went away is the possibility of a second spelling.
 
 // Serialize the symbol table. `symbols` MUST already be in ascending `codeOffset` order:
 // the runtime's lookup keeps the LAST entry satisfying `text_offset >= codeOffset`, which

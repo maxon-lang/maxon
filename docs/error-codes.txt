@@ -492,13 +492,18 @@ E2067 ParserBuiltinArgNamed
 	doc from. It covers the arity-1 members as well as the arity-2 ones, because the same wrong noun
 	doc would otherwise survive one door over: 'abs(x: 1.0)' would keep answering E2052, whose
 	doc sentence invites the nonsense fix 'abs(1.0, x: ...)'.
-	doc It is NOT 'every builtin'. TWELVE bare builtins stay on the ordinary E2052/E2053 rule:
-	doc 'print', 'runProcess', 'spawnReadLine', the seven 'subp*' streaming-subprocess builtins, and
-	doc the two UAX #29 classifiers 'graphemeBreakProperty' / 'isExtendedPictographic'. Every one is
-	doc a STAND-IN for a stdlib declaration that will have real, labellable parameters --
-	doc 'subpWriteLine(h, line: s)' already LABELS its second argument on purpose, written the way
-	doc the eventual method call will be written, and the two classifiers are named in
-	doc 'Parser.maxon' as what must be retired first once the grapheme module can be loaded.
+	doc It is NOT 'every builtin'. The bare builtins that are NOT in that roster stay on the ordinary
+	doc E2052/E2053 rule -- today 'runProcess', 'spawnReadLine' and the seven 'subp*'
+	doc streaming-subprocess builtins. Every one is a STAND-IN for a stdlib declaration that will have
+	doc real, labellable parameters -- 'subpWriteLine(h, line: s)' already LABELS its second argument
+	doc on purpose, written the way the eventual method call will be written.
+	doc ⛔ DO NOT TRUST THAT LIST; READ 'Parser.parseCallNamed's CHAIN. This sentence is a PROSE COPY
+	doc of a roster and it has been wrong twice: it said TWELVE and named the two UAX #29 classifiers
+	doc after BATCH2 slice 6 retired them, and it went on naming 'print' after W35 retired that one
+	doc onto 'stdlib/Print.maxon'. It carries no count now for exactly that reason. The set that DOES
+	doc bind is stated in one place, 'Parser.calleeTakesPositionalArgsOnly'; everything else the chain
+	doc recognizes is the complement of it, and a builtin RETIRED onto a stdlib declaration leaves the
+	doc chain entirely and takes the ordinary declared-call rules with it.
 	doc ⚠ THE BOOTSTRAP DOES NOT AGREE, AND CANNOT. Measured: it answers all three of
 	doc 'min(3.0, b: 5.0)', 'min(a: 3.0, 5.0)' and 'abs(x: 1.0)' with E2004 "Undefined variable",
 	doc because its builtin path parses arguments with a bare expression parser and reads the label

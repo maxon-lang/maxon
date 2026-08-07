@@ -34,16 +34,22 @@ export enum OsOutputStream
 	standardError
 end 'OsOutputStream'
 
-// STDOUT_FILENO. `BacktraceFormat.StderrFd`'s twin, and a POSIX fact rather than a per-OS one for the
-// identical reason its comment gives: x64-linux's `write` syscall, arm64-linux's `svc` and arm64-macOS's
-// libSystem `_write` all name the same descriptor.
+// ⭐ **THE TWO POSIX STANDARD DESCRIPTORS, IN ONE PLACE — which is the whole point of the pair (W35
+// review).** Each is a POSIX fact rather than a per-OS one: x64-linux's `write` syscall, arm64-linux's
+// `svc` and arm64-macOS's libSystem `_write` all name the same two numbers. Windows has no descriptor
+// for either — its writers ask `GetStdHandle` for a selector instead (`X64Runtime.StdErrorHandle`,
+// `StdToX64Conversion.StdOutputHandle`), which is why that family is spelled in the x64 files.
 //
-// ⚠ **THE TREE HOLDS ANOTHER SPELLING OF THIS NUMBER — `X64LinuxRuntime.WriteStdoutFd` — AND IT IS NOW
-// UNREAD.** Its only reader was the x64 isel's stdout write, which asks the door below instead; the arm64
-// isel's private copy was deleted by this rung, since that file is in its slice. `X64LinuxRuntime.maxon` is
-// not, so the dead export is REPORTED rather than removed here, together with the observation that
-// `StderrFd` and this constant belong in ONE file (they are the same fact, one descriptor apart).
+// ⚠ **THEY WERE IN TWO FILES, AND EACH OF THEM ALSO HAD A SECOND SPELLING SOMEWHERE ELSE.** `StderrFd`
+// lived in `BacktraceFormat.maxon` because the hand-assembled panic writer was once its only reader;
+// stdout was `X64LinuxRuntime.WriteStdoutFd`, read by the x64 isel alone. W35 gave the Std tier a
+// `printError` and a shared `posixStreamFd`, which made each of those a fact with two homes — so the
+// descriptors were brought together here and the x64-Linux copy was deleted. `printError`'s descriptor
+// and the panic writer's are the same number and must stay one declaration; that they belong to two
+// unrelated MECHANISMS (see `StdOp.osWriteStderr`) is a fact about the code that reads them, not about
+// the number.
 export let PosixStdoutFd = 0x1  // fd = 1 (STDOUT_FILENO)
+export let StderrFd = 0x2  // fd = 2 (STDERR_FILENO) — also the panic/backtrace writer's destination
 
 // ⭐ THE ONE MAP from a standard stream to the POSIX descriptor a `write` names — asked by BOTH native
 // POSIX lowerings (x64-linux's raw syscall and arm64's syscall/libSystem call), so the two isels cannot come
