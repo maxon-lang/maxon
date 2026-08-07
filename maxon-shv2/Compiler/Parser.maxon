@@ -33559,21 +33559,23 @@ export type Parser
 	function requireSlotAggregateIdentity(storage MaxonType, value ValueId, assignedName String, voice SlotMismatchVoice, anchor Token) throws ParseError
 		let got = self.tagOf(value)
 		let wantTag = maxonTypeTag(storage)
-		// ⭐⭐ **AN OPAQUE `T` SLOT HAS NO IDENTITY TO COMPARE, AND SAYING SO IS NOT THE SAME AS ADMITTING
-		// ANYTHING.** A generic body's `export var value as T` arrives here UNSUBSTITUTED — this door is
-		// handed the layout's declared type and not the instance — so `aggregateNameOf` answers EMPTY for
-		// the slot while the concrete value answers `Label`, and the identity question would refuse the
-		// very write the instance exists to permit. **MEASURED 2026-08-06 (BATCH32):** without this,
-		// `b.value = Label.create(…)` on a `Box with Label` was `E3005 cannot assign 'Label' to variable
-		// 'Box.value' of type 'type parameter'` — `generic-types`' two `opaque-field-write-on-a-concrete-
-		// instance-drops-a-*-argument` cases, both of which the compiler ran green before and after.
+		// ⛔⛔ **AN OPAQUE `T` SLOT IS NOT EXEMPT FROM THIS QUESTION, AND EXEMPTING IT WAS A WILD WRITE
+		// (BATCH32 review).** This door briefly opened `if wantTag == typeParameter then return`, because the
+		// unsubstituted `T` answers an EMPTY aggregate name and so conflicted with the very `Label` a
+		// `Box with Label` exists to accept. The argument written beside it — *"the concrete identity is pinned
+		// at the CALL SITE by `SemanticCheck.checkTypeParameterArgsAt`"* — is FALSE, and falsifiable in one
+		// line: **a field WRITE has no call site**. `checkTypeParameterArgsAt` is reached only from
+		// `checkTypeParameterArgs` on a CALL's arguments, so `b.value = Other.create(99)` is pinned by nothing.
+		// **MEASURED 2026-08-06:** it compiled and exited **0xC0000005**, where the bootstrap refuses it.
 		//
-		// The concrete identity is NOT lost by skipping: it is pinned at the CALL SITE, by
-		// `SemanticCheck.checkTypeParameterArgsAt` against the instance's substituted argument — which is
-		// the same division of labour `aggregatesConflict`'s header records for a per-instance `Idx`.
-		if wantTag == ValueTypeTag.typeParameter 'opaqueSlot'
-			return
-		end 'opaqueSlot'
+		// ⇒ the cure is to SUBSTITUTE rather than to skip: `storedFieldType` binds `T` from the box before the
+		// check is asked, so a concrete instance arrives here already spelling `Label` and the two legal
+		// `generic-types` cases pass on the identity they actually have. What still reaches this line opaque is
+		// the SHARED BODY, where `self.value = v` meets a `T`-typed value — and there BOTH names are empty, so
+		// `namedAggregatesConflict` defers to the caller's tag check with no special case needed. A CONCRETE
+		// value in that body (`self.value = Label.create(77)` inside `Box uses T`) is a genuine mismatch the
+		// shared body cannot justify for every instantiation, and it is refused here: unguarded it had compiled
+		// and exited **101, a leak**, printing a box pointer as an integer.
 		let wantName = self.aggregateNameOf(wantTag, nameId: typeNameIdOf(storage))
 		let gotName = self.aggregateNameOf(got, nameId: self.valueNameId(value))
 		if self.signatures.aggregatesConflict(wantName, expectedTag: wantTag, expectedNameId: typeNameIdOf(storage), got: gotName, gotTag: got, gotNameId: self.valueNameId(value)) 'nameMismatch'
@@ -42666,7 +42668,7 @@ export type Parser
 		let parsed = try self.parseExpression(func, block: block)
 		// The COERCED value is what the store writes — `count = 3` into a `float` field stores the widened
 		// f64. Same door as the struct literal and the `p.v = 3` spelling.
-		let value = try self.requireFieldType(layout, index: index, fieldType: self.signatures.fieldTypeOf(layout, index: index, into: self.artifact.typeNames), value: parsed, anchor: fieldTok)
+		let value = try self.requireFieldType(layout, index: index, fieldType: self.storedFieldType(receiver, layout: layout, index: index), value: parsed, anchor: fieldTok)
 
 		// Routed through `emitFieldWrite`, exactly as `parseFieldAssignment` is: a MANAGED self-field
 		// (`name = n`) must drop its old value and MOVE the new one in (a borrowed String is promoted, a
@@ -42824,7 +42826,7 @@ export type Parser
 		let parsed = try self.parseExpression(func, block: block)
 		// The COERCED value is what the store writes — `p.v = 3` into a `float` field stores the widened
 		// f64. Same door as the struct literal and the bare self-field spelling.
-		let value = try self.requireFieldType(step.layout, index: index, fieldType: self.signatures.fieldTypeOf(step.layout, index: index, into: self.artifact.typeNames), value: parsed, anchor: step.lastFieldTok)
+		let value = try self.requireFieldType(step.layout, index: index, fieldType: self.storedFieldType(step.box, layout: step.layout, index: index), value: parsed, anchor: step.lastFieldTok)
 
 		try self.emitFieldWrite(step.box, layout: step.layout, index: index, value: value, argBareLocal: self.rhsWasBareLocalReference(valueStart), anchor: step.lastFieldTok, range: SourceRange.between(step.baseTok, last: step.lastFieldTok))
 	end 'parseFieldAssignment'
@@ -42842,22 +42844,50 @@ export type Parser
 	// caller's `let` an error in shv2 — see `receiverOwnerMask` for the ruling, the corpus case that pins it
 	// and the measured oracle inconsistency it settles. The rung that makes a struct PARAMETER's field
 	// writable inherits the question, and inherits it here.
+	// ⭐⭐ **THE TYPE A WRITE THROUGH *THIS BOX* ACTUALLY STORES — the ONE derivation, read by the TYPE CHECK
+	// and by the STORE.** A field's declared type is the SHARED layout's, so an opaque `export var value as T`
+	// answers `typeParameter` however concrete the receiver is; only the box says what `T` stands for. A
+	// `genericInstance` box binds it (`instanceSubstitutedType`, the same door `emitFieldLoad` retypes a READ
+	// through), a `structRef` box is the shared generic body and leaves it opaque.
+	//
+	// ⛔ **IT IS A HELPER BECAUSE THE STORE ALREADY DID THIS AND THE CHECK DID NOT, AND THAT SPLIT WAS A WILD
+	// WRITE (BATCH32 review).** `emitFieldWrite` resolved `T` → the instance's argument before classifying the
+	// slot, while `requireFieldType` — one line earlier at the very same doors — was handed the UNSUBSTITUTED
+	// `fieldTypeOf`. So the verdict was taken against `type parameter`, which admits everything, and the store
+	// was then performed against `Label`. **MEASURED 2026-08-06:** on `LabelBox = Box with Label`,
+	// `b.value = Other.create(99)` COMPILED, wrote an `Other` box into the `Label` slot, and reading
+	// `b.value.text` exited **0xC0000005** — where the bootstrap refuses it (`E3005 cannot assign a value of
+	// type 'Other' to field 'value' of 'LabelBox', which holds 'Label'`). Two derivations of one fact, and
+	// nothing made them agree; now there is one and both read it.
+	function storedFieldType(box ValueId, layout StructLayout, index FieldIndex) returns MaxonType
+		let declared = self.signatures.fieldTypeOf(layout, index: index, into: self.artifact.typeNames)
+		if maxonTypeTag(declared) != ValueTypeTag.typeParameter 'notOpaque'
+			return declared
+		end 'notOpaque'
+
+		if self.tagOf(box) != ValueTypeTag.genericInstance 'boxBindsNothing'
+			return declared
+		end 'boxBindsNothing'
+
+		return self.instanceSubstitutedType(box, opaque: declared)
+	end 'storedFieldType'
+
 	function emitFieldWrite(box ValueId, layout StructLayout, index FieldIndex, value ValueId, argBareLocal bool, anchor Token, range SourceRange) throws ParseError
 		// ⭐ **ESCAPE (P1.5-A2b): a capturing closure may not be stored in a struct FIELD** — a struct box is
 		// heap memory that outlives the frame, so the field would hold a closure whose env is gone. Positioned
 		// at the field name (`anchor`).
 		try self.rejectEscapingClosure(value, message: "cannot store a closure that captures in field '{String.from(anchor.value)}' of '{String.from(layout.name)}': {CapturingClosureEscapeSuffix}", tok: anchor)
 
-		var fieldType = self.signatures.fieldTypeOf(layout, index: index, into: self.artifact.typeNames)
+		let fieldType = self.storedFieldType(box, layout: layout, index: index)
 
 		// ⭐ **A BARE OPAQUE `T` FIELD REASSIGNMENT (P1.7 Finding A).** The field is typed opaque `T`
 		// (`typeParameter`) in the shared layout; how its OLD value drops depends on the box:
 		//   • the enclosing SELF (a `structRef`, the shared generic body) keeps the field opaque, so a MANAGED
 		//     instantiation's old value drops through the descriptor-gated `__drop_type_param` and the new value
 		//     transfers in — `emitOpaqueFieldReassign`, which also handles the trivial-inert store.
-		//   • a CONCRETE instance (`b.saved = …`, a `genericInstance`) knows its argument, so RETYPE the field to
-		//     that substituted concrete type (as `emitFieldLoad` retypes a READ) and fall through to the normal
-		//     write below — a managed concrete field drops the old through its own decref (`__str_decref` /
+		//   • a CONCRETE instance (`b.saved = …`, a `genericInstance`) knows its argument, so the field was
+		//     RETYPED to that substituted concrete type above (as `emitFieldLoad` retypes a READ) and never
+		//     reaches this arm — a managed concrete field drops the old through its own decref (`__str_decref` /
 		//     `__destruct_<T>`, Finding B) and moves the new in; a trivial one reclassifies to a scalar store.
 		//
 		// ⭐⭐ **"AS `emitFieldLoad` RETYPES A READ" IS NOW LITERALLY THE SAME CALL, AND THE DAY IT WAS ONLY A
@@ -42879,15 +42909,12 @@ export type Parser
 		// reaches the WRITE the same day it reaches the READ, which is exactly what nothing made true before.
 		if maxonTypeTag(fieldType) == ValueTypeTag.typeParameter 'opaqueTypeParamField'
 			let tag = self.tagOf(box)
-			if tag == ValueTypeTag.structRef 'sharedBody'
-				try self.emitOpaqueFieldReassign(box, layout: layout, index: index, value: value, fieldType: fieldType, argBareLocal: argBareLocal, anchor: anchor, range: range)
-				return
-			end 'sharedBody'
-			if tag == ValueTypeTag.genericInstance 'concreteInstance'
-				fieldType = self.instanceSubstitutedType(box, opaque: fieldType)
-			end 'concreteInstance' else 'unexpectedBox'
-				panic("emitFieldWrite: a `typeParameter` field write has a box of tag {tag.name} — only the enclosing self (a structRef) or a concrete generic instance (`b.f = …`) reaches an opaque field")
+			if tag != ValueTypeTag.structRef 'unexpectedBox'
+				panic("emitFieldWrite: a `typeParameter` field write has a box of tag {tag.name} — only the enclosing self (a structRef) or a concrete generic instance (`b.f = …`) reaches an opaque field, and `storedFieldType` has already substituted the latter")
 			end 'unexpectedBox'
+
+			try self.emitOpaqueFieldReassign(box, layout: layout, index: index, value: value, fieldType: fieldType, argBareLocal: argBareLocal, anchor: anchor, range: range)
+			return
 		end 'opaqueTypeParamField'
 
 		let class = classifyUnionPayload(self.signatures, typeNames: self.artifact.typeNames, fieldType: fieldType, slotScopeFilePath: layout.declFilePath)

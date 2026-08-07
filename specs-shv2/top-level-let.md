@@ -363,7 +363,7 @@ end 'main'
 ```
 
 <!-- disabled-test: from-literal-initializer -->
-<!-- P1.2 String — `FilePath from "literal"`, `print` and `.toString()` -->
+<!-- MEASURED 2026-08-06 (BATCH32 review), flipped and run: `error E2004: <fragment>:1:12: Undefined constant 'FilePath'`. The previous reason named a P1.2 String gap and was FALSE on every count — the SAME two lines inside a function compile and print `test.txt` (probed), so `from`, `print` and `.toString()` all work. The blocker is MODULE SCOPE alone: the global-constant folder has no `Type from "literal"` construction, so it reads `FilePath` as a constant NAME and finds none. It sits with this file's other module-scope initializer gaps, not with String. -->
 Top-level let with `Type from "literal"` syntax (runtime-initialized via `__module_init`).
 ```maxon
 let path = FilePath from "test.txt"

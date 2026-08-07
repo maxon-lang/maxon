@@ -781,9 +781,17 @@ allocation may only be released once BOTH the grow's copy and the blit have fini
 the expected output is the bootstrap oracle's, which produces `abcabc` for the same program.
 
 ⚠ The parenthetical here read *"the corpus has no self-append case"* until BATCH32, and it was wrong:
-`specs/ownership-edge-cases.md` carries `rc-repeated-self-append`, which is now ported beside it. That case
-appends TWICE, and the second round is the one this case cannot reach — the first append detaches a literal
-onto an owned buffer, so only the second grow FREES the block it is copying from. Keep both.
+`specs/ownership-edge-cases.md` carries `rc-repeated-self-append`, which is now ported beside it.
+
+⛔ **THE REASON BATCH32 GAVE FOR KEEPING BOTH WAS ALSO WRONG, AND THE REVIEW MEASURED IT (BATCH32 review).**
+It said the ported case's SECOND round *"frees the block it copies from"* where this one-round case cannot.
+It does not: growth is `2 * requiredLen` against a `capacity < requiredLen` test, so round 1 detaches the
+`.rdata` literal with no owed allocation to free (`len 6, cap 12`) and round 2 fits exactly and appends IN
+PLACE. **Neither this case nor a two-round one can fail on the read-after-free both describe** — verified by
+moving `emitReleaseOwedBase` ahead of the blit, which left rounds 1 and 2 clean and corrupted round 3.
+⇒ `rc-repeated-self-append` now runs THREE rounds and is the case that guards the hazard. This one stays as
+the ONE-round boundary — the detach off an unowned literal, which the three-round case passes through
+without ever asserting on its own.
 ```maxon
 function main() returns ExitCode
 	var s = "abc"

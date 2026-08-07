@@ -2241,6 +2241,86 @@ end 'main'
 8 4
 ```
 
+<!-- test: error.opaque-field-write-on-a-concrete-instance-refuses-another-struct -->
+⭐⭐ **THE REFUSAL THE TWO CASES ABOVE WERE MISSING, AND WITHOUT IT THE WRITE THEY PIN WAS A WILD ONE
+(BATCH32 review).** `b.value = <a Label>` is legal on a `Box with Label` because the instance binds `T`;
+`b.value = <an Other>` is the same door with the identity that binds it VIOLATED, and nothing was asking.
+The store already resolved `T` → `Label` (`emitFieldWrite`), while the type CHECK one line earlier was
+handed the unsubstituted `T` — which admits everything — so an `Other` box was written into a `Label` slot
+and reading it back exited **0xC0000005**. The bootstrap refuses the same program. Both readers now take
+the field type from one derivation (`storedFieldType`), so the verdict and the store cannot disagree
+about what the slot holds.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+type Label
+	export var text as String
+	export var n as Integer
+	export static function create(t String, n Integer) returns Self
+		return Self{text: t, n: n}
+	end 'create'
+end 'Label'
+type Other
+	export var k as Integer
+	export static function create(k Integer) returns Self
+		return Self{k: k}
+	end 'create'
+end 'Other'
+type Box uses T
+	export var value as T
+	export static function create(v T) returns Self
+		return Self{value: v}
+	end 'create'
+end 'Box'
+typealias LabelBox = Box with Label
+function main() returns ExitCode
+	var b = LabelBox.create(Label.create("hi", n: 3))
+	b.value = Other.create(99)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:25:4: cannot assign 'Other' to variable 'Box.value' of type 'Label'
+```
+
+<!-- test: error.opaque-field-write-in-the-shared-body-refuses-a-concrete-value -->
+⭐⭐ **THE OTHER HALF OF THAT DOOR: A SHARED BODY CANNOT NAME A CONCRETE TYPE FOR `T`.** `Box uses T`'s
+body is compiled ONCE for every instantiation, so `self.value = Label.create(77)` claims that every
+`Box with X` holds a `Label` — true of at most one instantiation and unjustifiable for the rest. Here the
+slot legitimately stays opaque (a `structRef` receiver binds nothing), so the cure is not substitution but
+the ordinary identity comparison: an empty aggregate name meeting `Label` is a conflict, exactly as
+`namedAggregatesConflict` has always said. It was reachable only because a blanket "an opaque slot has no
+identity, so return" stood in front of that comparison. **MEASURED:** unguarded, this program compiled and
+exited **101 — a leak** — after printing the `Label` box's ADDRESS as the integer the field is declared to
+hold. The bootstrap does not adjudicate it: it internal-errors (`E9001 Unknown value kind: TypeParameter`),
+which is its own defect and not a verdict.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+type Label
+	export var n as Integer
+	export static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Label'
+type Box uses T
+	export var value as T
+	export static function create(v T) returns Self
+		return Self{value: v}
+	end 'create'
+	export function clobber()
+		self.value = Label.create(77)
+	end 'clobber'
+end 'Box'
+typealias IntBox = Box with Integer
+function main() returns ExitCode
+	var b = IntBox.create(5)
+	b.clobber()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:15:8: cannot assign 'Label' to variable 'Box.value' of type 'type parameter'
+```
+
 <!-- test: generic-alias-union-payload-round-trips -->
 ⭐⭐ **A UNION PAYLOAD IS A SLOT TOO, AND ITS CASCADE ANSWERED THE SLOT QUESTION DIFFERENTLY (A4k).**
 `ProgramSignatures.declaredSlotType` re-tags a bare `named` that names a generic alias to the instance

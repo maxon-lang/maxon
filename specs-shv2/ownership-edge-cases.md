@@ -1336,7 +1336,7 @@ end 'main'
 ```
 
 <!-- test: rc-tuple-primitive-freed -->
-<!-- beyond P1.2: tuples not yet in shv2 -->
+<!-- MEASURED 2026-08-06 (BATCH32 review): this case is ENABLED and passing. The reason here read "beyond P1.2: tuples not yet in shv2" while the case ran green — the same false reason W22 swept out of the other 14, left behind on the eight it flipped ON. shv2 has tuples (`specs-shv2/tuples.md` runs 44/44). -->
 A tuple of primitives is heap-allocated and freed at scope exit.
 ```maxon
 function main() returns ExitCode
@@ -1349,7 +1349,7 @@ end 'main'
 ```
 
 <!-- test: rc-tuple-alias-incref -->
-<!-- beyond P1.2: tuples not yet in shv2 -->
+<!-- MEASURED 2026-08-06 (BATCH32 review): this case is ENABLED and passing. The reason here read "beyond P1.2: tuples not yet in shv2" while the case ran green — the same false reason W22 swept out of the other 14, left behind on the eight it flipped ON. shv2 has tuples (`specs-shv2/tuples.md` runs 44/44). -->
 Aliasing a tuple increfs it; both variables share the same tuple object.
 ```maxon
 function main() returns ExitCode
@@ -1363,7 +1363,7 @@ end 'main'
 ```
 
 <!-- test: rc-tuple-reassign-decrefs-old -->
-<!-- beyond P1.2: tuples not yet in shv2 -->
+<!-- MEASURED 2026-08-06 (BATCH32 review): this case is ENABLED and passing. The reason here read "beyond P1.2: tuples not yet in shv2" while the case ran green — the same false reason W22 swept out of the other 14, left behind on the eight it flipped ON. shv2 has tuples (`specs-shv2/tuples.md` runs 44/44). -->
 Reassigning a tuple var decrefs the old tuple before storing the new one.
 ```maxon
 function main() returns ExitCode
@@ -1377,7 +1377,7 @@ end 'main'
 ```
 
 <!-- test: rc-tuple-with-string-freed -->
-<!-- beyond P1.2: tuples not yet in shv2 -->
+<!-- MEASURED 2026-08-06 (BATCH32 review): this case is ENABLED and passing. The reason here read "beyond P1.2: tuples not yet in shv2" while the case ran green — the same false reason W22 swept out of the other 14, left behind on the eight it flipped ON. shv2 has tuples (`specs-shv2/tuples.md` runs 44/44). -->
 A tuple containing a managed type (String); the destructor must cascade to decref the String field.
 ```maxon
 function main() returns ExitCode
@@ -1390,7 +1390,7 @@ end 'main'
 ```
 
 <!-- test: rc-tuple-return-transfers-ownership -->
-<!-- beyond P1.2: tuples not yet in shv2 -->
+<!-- MEASURED 2026-08-06 (BATCH32 review): this case is ENABLED and passing. The reason here read "beyond P1.2: tuples not yet in shv2" while the case ran green — the same false reason W22 swept out of the other 14, left behind on the eight it flipped ON. shv2 has tuples (`specs-shv2/tuples.md` runs 44/44). -->
 Returning a tuple hands the caller a fully-owned value, with no reference left behind for
 either side to release twice or forget to release once.
 
@@ -1417,7 +1417,7 @@ end 'main'
 ```
 
 <!-- test: rc-tuple-destructuring-cleanup -->
-<!-- beyond P1.2: tuples not yet in shv2 -->
+<!-- MEASURED 2026-08-06 (BATCH32 review): this case is ENABLED and passing. The reason here read "beyond P1.2: tuples not yet in shv2" while the case ran green — the same false reason W22 swept out of the other 14, left behind on the eight it flipped ON. shv2 has tuples (`specs-shv2/tuples.md` runs 44/44). -->
 Destructuring a tuple frees the tuple wrapper while the bindings remain live.
 ```maxon
 function main() returns ExitCode
@@ -1431,7 +1431,7 @@ end 'main'
 ```
 
 <!-- test: rc-tuple-with-struct-freed -->
-<!-- beyond P1.2: tuples not yet in shv2 -->
+<!-- MEASURED 2026-08-06 (BATCH32 review): this case is ENABLED and passing. The reason here read "beyond P1.2: tuples not yet in shv2" while the case ran green — the same false reason W22 swept out of the other 14, left behind on the eight it flipped ON. shv2 has tuples (`specs-shv2/tuples.md` runs 44/44). -->
 A tuple containing a user-defined struct; the destructor cascades through the tuple into the struct.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -1482,7 +1482,7 @@ end 'main'
 ```
 
 <!-- test: rc-tuple-return-destructure-no-crash -->
-<!-- beyond P1.2: tuples not yet in shv2 -->
+<!-- MEASURED 2026-08-06 (BATCH32 review): this case is ENABLED and passing. The reason here read "beyond P1.2: tuples not yet in shv2" while the case ran green — the same false reason W22 swept out of the other 14, left behind on the eight it flipped ON. shv2 has tuples (`specs-shv2/tuples.md` runs 44/44). -->
 Returning a tuple from a function and destructuring it must not crash. Currently the cleanup code attempts to decref the already-freed tuple, causing a segfault.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -2477,10 +2477,21 @@ end 'main'
 
 
 <!-- test: rc-repeated-self-append -->
-Appending a string to ITSELF, twice. The second append must grow the buffer, and growing
-it frees the old one — so the bytes being copied in are the bytes that just moved. A copy
-that reads the pre-grow pointer reads freed memory, and the string silently ends in the
-freed block's contents rather than its own. Both rounds must double the string.
+Appending a string to ITSELF: the source of the blit IS the buffer the grow has just replaced, so a
+copy that reads the pre-grow pointer reads freed memory and the string silently ends in the freed
+block's contents rather than its own. Every round must double the string.
+
+⭐⭐ **THREE ROUNDS, AND THE THIRD IS THE ONLY ONE THAT REACHES THE HAZARD (BATCH32 review).** Canonical's
+version stops at two and this case was ported with two, under the reason that *"the second grow frees the
+block it copies from"*. **That reason is FALSE, and it was measured false** by moving
+`emitReleaseOwedBase` ahead of the blit in `buildStrAppend` and rebuilding: rounds 1 and 2 stayed clean
+and round 3 came back `abcabcabcabc????????????` — `0x3F`, the free poison. The arithmetic says why.
+Growth is `2 * requiredLen` and the grow test is `capacity < requiredLen`, so round 1 detaches an `.rdata`
+literal onto an owned buffer and frees NOTHING (there was no owed allocation), leaving `len 6, cap 12`;
+round 2 needs exactly 12, `12 < 12` is false, so it appends IN PLACE and frees nothing either. Round 3 is
+the first whose owed base is the record's own buffer. ⇒ a two-round case — this one as ported, and
+`string-type-2.md`'s one-round `string-append-self` — cannot fail on the bug either of them describes.
+The third round is what makes this case pin its own claim.
 ```maxon
 function main() returns ExitCode
 	var s = "abc"
@@ -2488,7 +2499,9 @@ function main() returns ExitCode
 	print("A={s}|{s.byteLength()}\n")
 	s.append(s)
 	print("B={s}|{s.byteLength()}\n")
-	print("C=done\n")
+	s.append(s)
+	print("C={s}|{s.byteLength()}\n")
+	print("D=done\n")
 	return 0
 end 'main'
 ```
@@ -2498,7 +2511,8 @@ end 'main'
 ```stdout
 A=abcabc|6
 B=abcabcabcabc|12
-C=done
+C=abcabcabcabcabcabcabcabc|24
+D=done
 ```
 
 <!-- test: rc-clone-survives-the-source-growing -->
