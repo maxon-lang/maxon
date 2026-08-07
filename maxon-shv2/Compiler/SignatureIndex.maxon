@@ -623,16 +623,24 @@ end 'TopLevelConstant'
 //
 //   * `ProgramSignatures.contributesStorage` reads the BOOLEAN — a global whose initializer calls keeps
 //     its slot however dead it looks, because the call may print, mutate or throw.
-//   * `StdlibSource.deriveStdlibFacts` reads the CALLEE — it must ROOT it, since the body that will make
-//     the call (`__module_init`) does not exist yet when the reachability walk runs, and is called by the
+//   * `StdlibSource.deriveStdlibFacts` reads the CALLEES — it must ROOT them, since the body that will make
+//     the calls (`__module_init`) does not exist yet when the reachability walk runs, and is called by the
 //     entry stub rather than from `main` even once it does.
 //
 // A boolean beside a separate callee scan would let an outcome appended past `factoryValue` be KEPT by the
 // first and left UNROOTED by the second — which is `lowerMaxonToStd` skipping a body that
 // `DeadFunctionElimination` then reaches, i.e. `requireUnreachableStdlibStayedDead`.
+//
+// ⚠ **A LIST, NOT ONE NAME, BECAUSE ONE INITIALIZER MAKES SEVERAL CALLS (W41).** It carried a single callee
+// while a factory call was the only calling form and every ARGUMENT was a constant or a runtime-built
+// container. A DECLARED generic's empty record is neither: `var db = Database.create(EntryMap.create(), …)`
+// calls `Map.create` as well as `Database.create`, and `__module_init` emits both. MEASURED with the single
+// name: the argument's `create` was left out of the root set and the compile died in
+// `requireUnreachableStdlibStayedDead` — the exact failure this union's header already described, arriving
+// through the ARGUMENT rather than through a new outcome arm.
 export union TopLevelInitializerCall
 	none
-	calls(callee ByteArray)
+	calls(callees ByteArrayArray)
 end 'TopLevelInitializerCall'
 
 // ONE folded ELEMENT of a top-level array literal (P1.7 slice 2b) — what `__module_init` materializes and
@@ -744,12 +752,12 @@ export union ManagedGlobalRecord
 	// A `b"…"` literal ALREADY materializes as an owned heap 48-byte `Array` record over an immortal `.rdata`
 	// blob, which is precisely what the slot must hold — so there is nothing to clone.
 	byteStringRecord(bytes ByteArray)
-	// ⭐ A BUILTIN CONTAINER (P1.7 slice 2b, widened by spec-port `map-struct-bytearray`) has no literal record
-	// at all: it is BUILT, `create` then one `__arr_push` per element. `create` carries which runtime entry and
-	// which stamps this instance fixes, resolved HERE (where the instance registry is) rather than re-derived
-	// by the synthesis — the same discipline `ManagedGlobal.dropCallee` follows. An array LITERAL has elements
-	// and every other container global has none, which is the same fact the container-factory arm has always
-	// stated: a container factory IS an array literal with no elements.
+	// ⭐ A CONTAINER (P1.7 slice 2b, widened by spec-port `map-struct-bytearray`, and to DECLARED generics at
+	// W41) has no literal record at all: it is BUILT, `create` then one `__arr_push` per element. `create`
+	// carries which callee and which stamps this instance fixes, resolved HERE (where the instance registry is)
+	// rather than re-derived by the synthesis — the same discipline `ManagedGlobal.dropCallee` follows. An
+	// array LITERAL has elements and every other container global has none, which is the same fact the
+	// container-factory arm has always stated: a container factory IS an array literal with no elements.
 	containerRecord(create ContainerCreateCall, elements ConstArrayElementArray)
 end 'ManagedGlobalRecord'
 
@@ -811,9 +819,16 @@ export type GlobalRecordAndType
 	end 'create'
 end 'GlobalRecordAndType'
 
-// ⭐ **THE RUNTIME `create` ONE BUILTIN CONTAINER INSTANCE IS BORN THROUGH** — which entry point, which
-// stamps it is born holding, and whether the record is then SIZED. ONE description, so a global `Array`, a
-// global `Map` and a global `List` reach `__module_init` through one emitter rather than one arm apiece.
+// ⭐ **THE `create` ONE CONTAINER INSTANCE IS BORN THROUGH** — which callee, which stamps it is born holding,
+// and whether the record is then SIZED. ONE description, so a global `Array`, a global `List` and a global
+// instance of a DECLARED generic reach `__module_init` through one emitter rather than one arm apiece.
+//
+// ⚠ **THE CALLEE IS A RUNTIME ENTRY *OR* A DECLARED STATIC, AND THE DESCRIPTION DOES NOT DISTINGUISH THEM**
+// (W41). It does not need to: `ModuleInit` emits `callee(stamps…)` either way, and the two differ only in
+// how many stamps there are — a runtime `create` cannot look up a stride or a column destructor and must be
+// handed both, while a declared `create()` builds its own fields from its own declaration and is handed none.
+// Who owns a given instance's `create` is `ProgramSignatures.instanceCreateIsDeclared`'s single answer, read
+// by the producer here and by the two liveness decisions, never re-derived from this callee's spelling.
 export type ContainerCreateCall
 	export let callee as ByteArray
 	export let stamps as ContainerCreateStampArray
@@ -8097,10 +8112,59 @@ export type ProgramSignatures
 	// `factoryValue` FAILS TO COMPILE here rather than being silently filed as "does not call".
 	function declInitializerCall(decl TopLevelDecl) returns TopLevelInitializerCall
 		match decl.outcome 'state'
-			pending to containerValue then return TopLevelInitializerCall.none
-			factoryValue(callee, _, _) then return TopLevelInitializerCall.calls(callee)
+			pending to arrayValue then return TopLevelInitializerCall.none
+			containerValue(giid) then return self.containerInitializerCall(giid)
+			factoryValue(callee, args, _) then return TopLevelInitializerCall.calls(self.factoryInitializerCallees(callee, args: args))
 		end 'state'
 	end 'declInitializerCall'
+
+	// ⭐ **A FACTORY CALLS ITSELF AND EVERY DECLARED GENERIC AMONG ITS ARGUMENTS (W41)** — the calls
+	// `ModuleInit.calledFactoryRecord` emits, in the order it emits them: each argument is materialized first,
+	// in source order, and then the factory itself. The list is built from the SAME folded values
+	// `globalInitArguments` resolves into records, so what is rooted and what is emitted are two readings of
+	// one outcome rather than two walks that could disagree.
+	//
+	// A range arm over every non-container argument kind, ending at the current last variant, so an arm
+	// appended past `containerCreate` FAILS TO COMPILE here rather than being silently filed as "calls nothing".
+	function factoryInitializerCallees(callee ByteArray, args ConstFactoryArgumentArray) returns ByteArrayArray
+		var callees = ByteArrayArray.create()
+		callees.push(callee)
+		for arg in args 'eachArgument'
+			match arg.value 'value'
+				scalar to arrayLiteral then continue
+				containerCreate(giid) then self.appendDeclaredInstanceCreateCallee(callees, giid: giid)
+			end 'value'
+		end 'eachArgument'
+		return callees
+	end 'factoryInitializerCallees'
+
+	// ⭐ **A CONTAINER GLOBAL CALLS IFF ITS `create` IS DECLARED CODE (W41)** — a BUILTIN container's record is
+	// compiler-synthesized allocation with no source body to reach and no user-visible effect, which is why
+	// this whole arm used to be `none`. Both halves of what `calls` then means are the union header's.
+	//
+	// It contributes through the same `appendDeclaredInstanceCreateCallee` the factory-ARGUMENT loop uses, and
+	// an EMPTY list is what "the runtime builds this one" reads as — so the decision has one home and a
+	// container rooted in one position cannot be missed in the other.
+	function containerInitializerCall(giid GenericInstanceId) returns TopLevelInitializerCall
+		var callees = ByteArrayArray.create()
+		self.appendDeclaredInstanceCreateCallee(callees, giid: giid)
+		if callees.count() == 0 'runtimeCreate'
+			return TopLevelInitializerCall.none
+		end 'runtimeCreate'
+
+		return TopLevelInitializerCall.calls(callees)
+	end 'containerInitializerCall'
+
+	// The `create()` an empty-container value contributes to the root set, or nothing when the runtime builds
+	// it. It asks `instanceCreateIsDeclared` rather than re-reading the base roster, so which callee this
+	// reports and which callee `containerCreateCall` emits are one derivation.
+	function appendDeclaredInstanceCreateCallee(callees ByteArrayArray, giid GenericInstanceId)
+		if not self.instanceCreateIsDeclared(giid) 'runtimeCreate'
+			return
+		end 'runtimeCreate'
+
+		callees.push(self.declaredInstanceCreateCallee(giid))
+	end 'appendDeclaredInstanceCreateCallee'
 
 	// ⭐ **EVERY FUNCTION A TOP-LEVEL INITIALIZER CALLS**, in ARENA order — the roots
 	// `StdlibSource.deriveStdlibFacts` walks from BESIDE `main`, because `__module_init` is synthesized
@@ -8118,7 +8182,7 @@ export type ProgramSignatures
 		for i in 0 upto self.decls.count() 'each'
 			match self.declInitializerCall(self.declAt(i)) 'initializer'
 				none then break 'initializer'
-				calls(callee) then callees.push(callee)
+				calls(names) then callees.append(names)
 			end 'initializer'
 		end 'each'
 		return callees
@@ -11673,6 +11737,31 @@ export type ProgramSignatures
 		return not self.isManagedListNodeInstance(id)
 	end 'instanceHasBuiltinCreate'
 
+	// ⭐⭐ **WHOSE CODE BUILDS THIS INSTANCE'S EMPTY RECORD — THE RUNTIME'S, OR THE PROGRAM'S? (W41)** The ONE
+	// derivation behind every decision a top-level `<Alias>.create()` turns on, and there are three of them:
+	// which callee `__module_init` emits (`containerCreateCall`), whether that callee must be ROOTED and its
+	// slot KEPT (`declInitializerCall`), and which gate the top-level door runs the instance through
+	// (`Parser.requireGlobalContainerIsCreatable`). Three readers, three different concerns, one fact — and
+	// re-spelling `isBuiltinGenericBaseName(genericInstanceBaseName(id))` at each is how two of them would come
+	// to disagree about who owns a `create`.
+	//
+	// ⚠ **IT IS THE COMPLEMENT OF THE BUILTIN ROSTER AND NOT A SECOND ROSTER**, which is what makes it
+	// self-maintaining: `stdlib/Map.maxon` being listed retires `Map` from `isBuiltinGenericBaseName` (see
+	// `isMapBaseName`) and this predicate starts answering true for every `Map with (K, V)` on the same day,
+	// with nothing here edited. A container promoted or demoted moves both answers at once.
+	export function instanceCreateIsDeclared(id GenericInstanceId) returns bool
+		return not self.isBuiltinGenericBaseName(self.genericInstanceBaseName(id))
+	end 'instanceCreateIsDeclared'
+
+	// The `create()` static a DECLARED generic's instance is born through — `Map.create` for every
+	// `Map with (K, V)` (W41). It is the SAME name a body's `StrMap.create()` links to
+	// (`Parser.qualifiedCallBaseName` mangles the alias to its base, then joins the method), so the record a
+	// global's slot holds and the record the identical call in a function body builds come out of one function.
+	// Precondition: `instanceCreateIsDeclared`.
+	export function declaredInstanceCreateCallee(id GenericInstanceId) returns ByteArray
+		return qualifiedMethodName(self.genericInstanceBaseName(id), methodName: CreateMethod)
+	end 'declaredInstanceCreateCallee'
+
 	// ⭐⭐ **MAY `readerFilePath` NAME `callee`?** The function half of `Visibility`, answered where a call in a
 	// FUNCTION BODY cannot ask it: a top-level initializer's call is decided inside `queryProgramSignatures`,
 	// before any file is parsed and long before `FunctionNameIndex` — which is what
@@ -11739,8 +11828,25 @@ export type ProgramSignatures
 	// (`isSetInstance`/`isMapInstance`/…), which column owns what (`slotTypeIsManaged`), which drop
 	// (`slotTypeDropCallee`) and which stride (`arrayElementSize`) are each answered in one place and read
 	// from both sides. This is asked ONCE PER MANAGED GLOBAL.
+	//
+	// ⭐⭐ **A DECLARED GENERIC IS THE SAME DESCRIPTION WITH NO STAMPS (W41)** — `var g = StrMap.create()` once
+	// `stdlib/Map.maxon` is listed and `Map` is an ordinary user generic. A builtin container's `create` is a
+	// RUNTIME entry that has to be handed the strides and column destructors it cannot look up; a declared
+	// generic's is a real `create()` static the compiler can simply CALL, and it needs none of them — it builds
+	// its own fields from its own declaration. So the widening is one arm and nothing downstream moves:
+	// `ModuleInit.builtContainerRecord` already emits `create.callee` with `create.stamps`, and an empty stamp
+	// list makes that a bare `call Map.create`.
+	//
+	// ⭐ **THE DICTIONARY COLUMNS ARE NOT THIS DESCRIPTION'S JOB, AND THAT IS WHY THE ARM IS ONE LINE** — the
+	// lowering threads them off the record's own type, which `foldedValueType` settles as `genericInstance(id)`
+	// for this very outcome. `ModuleInit.builtContainerRecord` states that handoff in full;
+	// `Parser.requireDeclaredGenericGlobalCreate` holds the instance to the `Self`-return it rests on.
 	function containerCreateCall(id GenericInstanceId) returns ContainerCreateCall
 		var stamps = ContainerCreateStampArray.create()
+
+		if self.instanceCreateIsDeclared(id) 'declaredGeneric'
+			return ContainerCreateCall.create(self.declaredInstanceCreateCallee(id), stamps: stamps, sizing: ContainerSizing.grown)
+		end 'declaredGeneric'
 
 		if self.isSetInstance(id) 'set'
 			stamps.push(self.columnDestroyStamp(self.setKeyType(id)))
@@ -11759,7 +11865,7 @@ export type ProgramSignatures
 		end 'chain'
 
 		if not (self.isArrayInstance(id) or self.isVectorInstance(id)) 'notACreatableContainer'
-			panic("ProgramSignatures.containerCreateCall: generic instance {id} is not a builtin container with a `create` — every caller has already admitted the instance through `Parser.requireContainerIsCreatable`, which refuses everything this router has no arm for")
+			panic("ProgramSignatures.containerCreateCall: generic instance {id} is not a builtin container with a `create` — a DECLARED generic returned one arm above, and every builtin reaching here was admitted through `Parser.requireContainerIsCreatable`, which refuses everything this router has no arm for")
 		end 'notACreatableContainer'
 
 		// `Array` and `Vector` share `__arr_create` and its two stamps; a `Vector`'s elements are addressable
