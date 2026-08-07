@@ -300,6 +300,12 @@ export function queryProgramSignatures(project Project) returns ProgramSignature
 	// Normalizing here — once, with every declaration in and no file yet parsed — makes `interfaceRef` the
 	// single spelling everything downstream sees. See `normalizeSweptInterfaceTypes`.
 	signatures.normalizeSweptInterfaceTypes()
+	// ⭐ And which methods carry the hidden LAYOUT-DESCRIPTOR parameter (P1.6-B1, W23c) — after the extension
+	// fold, which is what puts an extension's methods onto their conformers, and BEFORE `deriveInstanceNames`,
+	// because the scan's opaque-array seed asks `genericAliasInstanceFrom` and that INTERNS: an instance minted
+	// after the warming walk would have its two name memos derived lazily, by the parse, which must only ever
+	// read them. See `foldDescriptorNeeds`.
+	try foldDescriptorNeeds(project, signatures: signatures)
 	// ⭐ And every instantiation's COMPILED and CANONICAL names, for the same "the whole program is known
 	// now" reason — the parse READS both (a generic instance's nominal identity, P1.7) and each memo behind
 	// them is a WRITE, which a per-file fan-out must never make. See `deriveInstanceNames`.
@@ -603,6 +609,71 @@ function foldExtensionDeclarations(project Project, signatures ProgramSignatures
 		end 'eachSiteInFile'
 	end 'eachFile'
 end 'foldExtensionDeclarations'
+
+// ⭐⭐ **WHICH METHODS CARRY THE HIDDEN LAYOUT-DESCRIPTOR PARAMETER — solved ONCE, over the whole program
+// (P1.6-B1, W23c).** A generic type's methods are declared in two places that need not share a file: its own
+// `type` body, and every `extension` body over it. A method needs the descriptor if it directly needs one, or
+// if it calls — on `self`, transitively — a method that does, and that self-call graph crosses freely between
+// the two. So the fixpoint is one graph over the program, not one graph per declaration.
+//
+// ⛔ **IT WAS ONE GRAPH PER DECLARATION, AND THE MISSING EDGE WAS A COMPILER ABORT ON A LEGAL PROGRAM.**
+// `Parser.computeTypeDescriptorNeeds` ran from `parseTypeDeclaration` over the body it had just opened, so a
+// method an extension contributed sat in no graph, reserved nothing — and `LowerMaxonToStd` still asked it to
+// FORWARD a descriptor to a callee that had one: **MEASURED, `panic at LowerMaxonToStd.maxon:1587:
+// forwardCallerLayout: caller 'Bag.absorbTwice' has no layout descriptor to forward to 'Bag.absorb'`**, with
+// no position and no `error E….`, on a program the oracle compiles and runs.
+//
+// ⚠ **IT RUNS AFTER `foldExtensionDeclarations`, AND BOTH HALVES OF THAT ARE LOAD-BEARING.** After, because
+// only that pass puts an extension's methods onto their conformers; and after `allFilesFolded` generally,
+// because three of the scan's seeds are whole-program answers — `functionFeedsCalleeStorage`, an inner alias
+// naming an OPAQUE `Array`, a managed opaque type-parameter field — that read `false` for a declaration the
+// sweep has not reached. A descriptor parameter is ABI, so an answer that moved with declaration order would
+// be a silently different calling convention; taken here it cannot.
+//
+// ⭐ **A PROGRAM WITH NO GENERIC TYPE COSTS NOTHING.** Only a generic type records a `DescriptorScanSite`
+// (`recordScannedType`, `foldExtensionDeclarationInto`), so the whole pass is an empty-array test for the
+// entire generics-free corpus — the property `typeDescriptorNeeds`' own header demanded of the per-type map
+// it replaces, kept by moving the gate to the site list rather than to the walk.
+//
+// The sites arrive grouped by file — the sweep visits files in source-path order and appends within each, and
+// the extension fold appends after — so the grouping is a WALK and not a map, `foldInterfaceDeclarations`'
+// shape for its reason (one `Parser` per file, not per site).
+//
+// ⚠ Extension sites are appended AFTER every type site, so the run for one file may be split across two
+// stretches of the array. That costs at most a second `Parser` for that file and cannot change the answer:
+// the fixpoint is solved over the union, and the union is a set.
+function foldDescriptorNeeds(project Project, signatures ProgramSignatures) throws CompileError
+	let sites = signatures.descriptorScanSites
+	if sites.count() == 0 'noGenericTypeInThisProgram'
+		return
+	end 'noGenericTypeInThisProgram'
+
+	// The three columns of the fixpoint's input, accumulated across every site: each method's qualified name,
+	// its direct-need seed, and the siblings it calls on `self`. They are built here rather than per site so
+	// the solve sees one graph.
+	var methodNames = ByteArrayArray.create()
+	var directSeeds = DescriptorNeedMap.create()
+	var selfCallees = SelfCalleesMap.create()
+
+	var i = 0 as ElementCount
+	while i < sites.count() 'eachFile'
+		let path = (try sites.get(i) otherwise panic("foldDescriptorNeeds: sites.get OOB at {i} below count {sites.count()}")).path
+		let tokens = try queryActiveTokens(project, path: path)
+		var reader = fileReader(project, signatures: signatures, path: path, tokens: tokens, isStdlibSource: isStdlibSourceFile(project, path: path), buildsBodies: false)
+
+		while i < sites.count() 'eachSiteInFile'
+			let site = try sites.get(i) otherwise panic("foldDescriptorNeeds: sites.get OOB at {i} below count {sites.count()}")
+			if not site.path.equals(path) 'nextFile'
+				break
+			end 'nextFile'
+
+			reader.scanDescriptorNeedsInto(site, methodNames: methodNames, directSeeds: directSeeds, selfCallees: selfCallees)
+			i = i + 1
+		end 'eachSiteInFile'
+	end 'eachFile'
+
+	signatures.recordDescriptorNeeds(solveDescriptorNeeds(methodNames, directSeeds: directSeeds, selfCallees: selfCallees))
+end 'foldDescriptorNeeds'
 
 // --- Per-file query: parse into a FileParseArtifact ---
 export function queryParseOps(project Project, path FilePath) returns FileParseArtifact throws CompileError

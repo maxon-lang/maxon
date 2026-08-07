@@ -1365,8 +1365,10 @@ export function appendDeferredNameDiagnostic(list DeferredNameDiagnosticArray, e
 	return list
 end 'appendDeferredNameDiagnostic'
 
-// A generic type's bare-method-name -> "does it carry a layout-descriptor param?" map (P1.6-B1). See
-// `Parser.typeDescriptorNeeds`.
+// A generic method's QUALIFIED name -> "does it directly need a layout-descriptor param?" (P1.6-B1) — the
+// SEED column `scanDescriptorNeedsInto` fills and `solveDescriptorNeeds` closes over. Keyed qualified since
+// W23c: the fixpoint spans a type's own body AND every extension body over it, so a bare name would merge
+// two types' same-named methods into one node.
 typealias DescriptorNeedMap = Map with (ByteArray, bool)
 
 // The enclosing type's bare-method-name -> "does it take a receiver?" map (#65 implicit-self resolution).
@@ -1375,30 +1377,32 @@ typealias DescriptorNeedMap = Map with (ByteArray, bool)
 // `Parser.siblingReceiverMap`.
 typealias SiblingReceiverMap = Map with (ByteArray, bool)
 
-// A generic method's bare name -> the sibling methods it calls on `self` (P1.6-B1) — the self-call edges the
-// descriptor-need fixpoint (`solveDescriptorNeedFixpoint`) propagates over.
+// A generic method's QUALIFIED name -> the siblings it calls on `self`, qualified to the same type
+// (P1.6-B1) — the self-call edges the descriptor-need fixpoint (`solveDescriptorNeeds`) propagates over.
 typealias SelfCalleesMap = Map with (ByteArray, ByteArrayArray)
 
-// A generic method's bare name -> its dense index in the type's method list (P1.6-B1). The descriptor-need
+// A generic method's qualified name -> its dense index in the program's generic-method list (P1.6-B1). The
+// descriptor-need
 // fixpoint reverses the self-call graph into the shared CSR adjacency (`buildCsr`, over CsrGraph's dense
 // `CsrIndex` key space) keyed by this dense index, so it stays borrow-safe (the ownership model forbids
 // appending to an array stored inside a map).
 typealias MethodIndexMap = Map with (ByteArray, CsrIndex)
 
-// A single shared EMPTY descriptor-need map, held as the INITIAL `Parser.typeDescriptorNeeds` so a parser
-// allocates none of its own (a per-file sweep parser never touches the field at all). A generic type REPLACES
-// the field with a fresh map (`computeTypeDescriptorNeeds`), and a non-generic method never reads it (gated on
-// `enclosingTypeParams`), so this shared instance is only ever an unread placeholder and is never mutated —
-// safe to share across the per-file parse fan-out.
-let sharedEmptyDescriptorNeeds = DescriptorNeedMap.create()
+// The descriptor-scan site list a file that declares NO GENERIC TYPE contributes — none, shared. A
+// generics-free file is the whole scale corpus, and `foldDeclaredSignaturesInto` already creates fifteen
+// per-file out-arrays: a sixteenth, always empty, is exactly the per-file constant the descriptor index it
+// feeds was built to avoid. `recordScannedType` replaces it with a real array on the first generic type it
+// meets, so this instance is only ever an unread placeholder and is never mutated — safe to share across the
+// per-file sweep.
+let sharedEmptyDescriptorScanSites = DescriptorScanSiteArray.create()
 
 // The INITIAL `Parser.enclosingWhereConstraints` (P1.7a slice 2a), held here (like
-// `sharedEmptyDescriptorNeeds`) so a type with no `where` clause — every type on the generics-free corpus —
+// `sharedEmptyInnerAliases`) so a type with no `where` clause — every type on the generics-free corpus —
 // allocates nothing. `readWhereClause` REPLACES the field with a fresh list only when the clause is present,
 // and it is never mutated in place, so this shared instance is safe across the per-file parse fan-out.
 let sharedEmptyWhereConstraints = WhereConstraintArray.create()
 
-// The INITIAL `Parser.siblingReceivers`, held here (like `sharedEmptyDescriptorNeeds`) so a parser
+// The INITIAL `Parser.siblingReceivers`, held here (like `sharedEmptyTypeParamFeeds`) so a parser
 // allocates none of its own until a bare call inside a type body actually needs the map. The lazy builder
 // REPLACES the field with a fresh map — it never mutates in place — so this placeholder stays empty and is
 // safe to share across the per-file parse fan-out. A method-free file never touches the field at all.
@@ -1439,18 +1443,18 @@ let sharedEmptyRequirementSlots = CollectedInterfaceMethodArray.create()
 
 // The module-level shared empty type-parameter-FEED array (P1.6-B2) every non-generic consuming function's
 // `ParamConsumeInfo` holds — a feed requires a type parameter, so such a function never fills one and it is
-// never mutated. ONE allocation for the whole compile (like `sharedEmptyDescriptorNeeds`), so a generics-free
+// never mutated. ONE allocation for the whole compile (like `sharedEmptyTypeParamFeeds`), so a generics-free
 // program pays nothing per function OR per parser (`typeParamFeedOf` reads a missing index as `none`).
 let sharedEmptyTypeParamFeeds = TypeParamFeedArray.create()
 
 // The module-level shared EMPTY per-instance-alias placeholders (P1.6-C), held as the INITIAL value of the
 // `enclosingInnerAliases` / `valueInstanceAlias` working fields AND as the COW anchors the reset points at.
-// ONE allocation for the whole compile each (like `sharedEmptyDescriptorNeeds`), so a generics-free program
+// ONE allocation for the whole compile each (like `sharedEmptyTypeParamFeeds`), so a generics-free program
 // — which never declares a nested typealias nor constructs a generic instance — pays NOTHING per parser: a
 // parser INCREFS these rather than allocating its own. They are never mutated: `readNestedRangedAlias` and
 // `recordValueInstanceAlias` copy-on-write a fresh collection the first time they must write, keyed on the
 // `is`-identity of these very instances, so the shared ones stay empty and safe to share across the per-file
-// parse fan-out — exactly the invariant `sharedEmptyDescriptorNeeds`/`sharedEmptyTypeParamFeeds` rely on.
+// parse fan-out — exactly the invariant `sharedEmptyTypeParamFeeds` relies on.
 let sharedEmptyInnerAliases = InnerAliasNameSet.create()
 let sharedEmptyInstanceAliasMap = ValueInstanceAliasMap.create()
 
@@ -6965,6 +6969,112 @@ typealias DispatchIndexArray = Array with ElementCount
 // only thing asked of it (add, and "have I seen this?"), which is exactly a set's contract.
 typealias SeenPatternValues = Set with ParsedInt
 
+// ⭐⭐ **THE THREE PURE HALVES OF THE DESCRIPTOR-NEED FIXPOINT, LIFTED OUT OF THE PARSER TYPE (W23c).**
+// None of them reads a token, a cursor or any other parser state — they are functions of the three columns
+// the scan fills — and since the fixpoint is now solved ONCE for the whole program
+// (`Queries.foldDescriptorNeeds`) rather than once per type body, there is no `Parser` that naturally owns
+// the solve. Left as methods, the whole-program pass would have had to nominate an arbitrary reader to call
+// them on, which is a fiction about where the answer comes from.
+// ⭐⭐ **SOLVE THE WHOLE-PROGRAM DESCRIPTOR-NEED FIXPOINT** — given every method of every generic type in
+// the program (its own body's and every extension's, all keyed `Type.method`), which of them carry the
+// hidden layout-descriptor parameter. A method needs it iff it directly reads `sizeof(T)` — or one of the
+// four sibling seeds — OR it calls, on `self`, transitively, a method that does.
+//
+// It is solved ONCE over the whole program rather than once per type, and the difference is not
+// efficiency: an extension body's self-call reaches a method of the target type declared somewhere else
+// entirely, so a per-declaration solve drops exactly the edge that matters. See `scanDescriptorNeedsInto`
+// for the compiler abort that dropped edge cost.
+//
+// ⚠ Two methods of DIFFERENT types can share a bare name and never collide here, because the key is
+// qualified. Two methods of ONE type cannot share one (overloads register under one bare name and share
+// one answer, exactly as they did when the key was bare).
+export function solveDescriptorNeeds(methodNames ByteArrayArray, directSeeds DescriptorNeedMap, selfCallees SelfCalleesMap) returns DescriptorNeedNameSet
+	let methodCount = methodNames.count()
+
+	// Dense index per qualified method name, so the self-call graph reverses into the CSR's dense key space
+	// below.
+	var nameToIndex = MethodIndexMap.create()
+	for i in 0 upto methodCount 'index'
+		nameToIndex.upsert(try methodNames.get(i) otherwise panic("solveDescriptorNeeds: methodNames.get({i}) OOB below count {methodCount}"), value: i)
+	end 'index'
+
+	// The REVERSED self-call edges: a forward edge (caller `i` -> sibling callee `c`) is recorded as
+	// `c -> i`, so a BFS from a needing method reaches the siblings that call it. A self-call to a name that
+	// is not a method of that type is not a real edge and is dropped. `buildCsr` counting-sorts these into
+	// the reverse adjacency (`callersOf`) in O(edges + methods).
+	var edgeCallee = CsrColumn.create()
+	var edgeCaller = CsrColumn.create()
+	for i in 0 upto methodCount 'edges'
+		for calleeName in calleesOf(methodNames, selfCallees: selfCallees, callerIndex: i) 'edge'
+			if let c = try nameToIndex.get(calleeName) 'realEdge'
+				edgeCallee.push(c)
+				edgeCaller.push(i)
+			end 'realEdge'
+		end 'edge'
+	end 'edges'
+	let callersOf = buildCsr(edgeCallee, to: edgeCaller, nodeCount: methodCount)
+
+	// Seed each method's direct-need bit, then mark every method that REACHES a needing one over the
+	// reversed self-call edges.
+	var seeds = BoolArray.create()
+	for i in 0 upto methodCount 'seed'
+		seeds.push(try directSeeds.get(try methodNames.get(i) otherwise panic("methodNames.get({i}) in seed")) otherwise false)
+	end 'seed'
+	let needs = reverseReachabilityMark(callersOf, seeds: seeds)
+
+	// The MEMBERS are the answer, so a method that does not need a descriptor contributes nothing at all —
+	// which is what lets `functionNeedsLayoutDescriptor` read membership rather than a bool that could be
+	// absent for two different reasons.
+	var needing = DescriptorNeedNameSet.create()
+	for i in 0 upto methodCount 'publish'
+		let carriesOne = try needs.get(i) otherwise panic("solveDescriptorNeeds: needs.get({i}) in publish")
+		if carriesOne 'reserves'
+			needing.insert(try methodNames.get(i) otherwise panic("solveDescriptorNeeds: methodNames.get({i}) in publish"))
+		end 'reserves'
+	end 'publish'
+	return needing
+end 'solveDescriptorNeeds'
+
+// The sibling methods `methodNames[callerIndex]` calls on `self` — the forward self-call edges out of one
+// method. A thin read-only view onto `selfCallees` shared by the descriptor-need fixpoint's two CSR passes
+// (count, then scatter) so the edge iteration is written once, not twice.
+function calleesOf(methodNames ByteArrayArray, selfCallees SelfCalleesMap, callerIndex ElementCount) returns ByteArrayArray
+	return try selfCallees.get(try methodNames.get(callerIndex) otherwise panic("calleesOf: methodNames.get({callerIndex}) OOB")) otherwise ByteArrayArray.create()
+end 'calleesOf'
+
+// ⭐ **REVERSE-REACHABILITY BFS over a CSR adjacency** — return the bit per node that is set iff the node is a
+// seed OR reaches one over `graph`'s edges. The graph is the REVERSED relation (`buildCsr` with (callee,
+// caller) swapped), so a seed's row lists the nodes that point AT it and the BFS propagates the mark BACKWARD.
+// Each node enters the worklist at most once (the first time its bit flips on) and each edge is walked once,
+// for O(nodes + edges). The shared engine of the descriptor-need fixpoint (`solveDescriptorNeedFixpoint`) and
+// the transitive array-feed fixpoint (`solveAndPublishTransitiveFeeds`), so the two cannot drift on how
+// reachability is marked.
+function reverseReachabilityMark(graph CsrGraph, seeds BoolArray) returns BoolArray
+	var marked = BoolArray.create()
+	var worklist = CsrColumn.create()
+	for i in 0 upto seeds.count() 'seed'
+		let isSeed = try seeds.get(i) otherwise panic("reverseReachabilityMark: seeds.get({i}) OOB")
+		marked.push(isSeed)
+		if isSeed 'root'
+			worklist.push(i)
+		end 'root'
+	end 'seed'
+
+	var head = 0 as CsrIndex
+	while head < worklist.count() 'drain'
+		let node = try worklist.get(head) otherwise panic("reverseReachabilityMark: worklist.get({head}) OOB")
+		head = head + 1
+		for k in 0 upto graph.degree(node) 'neighbour'
+			let nbr = graph.neighbour(node, k: k)
+			if not (try marked.get(nbr) otherwise panic("reverseReachabilityMark: marked.get({nbr}) OOB")) 'newlyMarked'
+				try marked.set(nbr, value: true) otherwise panic("reverseReachabilityMark: marked.set({nbr}) OOB")
+				worklist.push(nbr)
+			end 'newlyMarked'
+		end 'neighbour'
+	end 'drain'
+	return marked
+end 'reverseReachabilityMark'
+
 export type Parser
 	var tokens as TokenArray
 	var pos as TokenIndex
@@ -7598,22 +7708,19 @@ export type Parser
 	// Memoized so a tuple type written N times in a file adopts one layout and files ONE contribution, rather
 	// than N identical ones for `commitStructTypes` to upsert over. Empty for a file with no tuples.
 	var tupleLayouts as StructLayoutMap
-	// ⭐ **WHICH METHODS OF THE GENERIC TYPE CURRENTLY BEING DECLARED NEED THE LAYOUT-DESCRIPTOR PARAM**
-	// (P1.6-B1), keyed by bare method name. Computed ONCE by `computeTypeDescriptorNeeds` when the type
-	// declaration opens — a TRANSITIVE fixpoint over the type's own methods: a method needs the descriptor
-	// if it directly reads `sizeof(T)` OR calls (on `self`) a sibling method that needs one. `parseFunction`
-	// reads it to reserve the descriptor param BEFORE numbering the method's body values (the slot must be a
-	// real parameter in `[0, paramCount)` for the backend's clobber guard). The self-call graph is LOCAL to
-	// one type declaration (a method self-calls only siblings, same file, contiguous), so no whole-program
-	// index is needed. Empty for a non-generic type.
-	var typeDescriptorNeeds as DescriptorNeedMap
+	// ⭐ Where each GENERIC type declared in THIS file begins its member list (W23c) — the sites
+	// `Queries.foldDescriptorNeeds` re-walks once the whole-program index is complete. A field rather than an
+	// out-parameter for one reason: a callee cannot swap a caller's local for a real array, and the point is
+	// that a file declaring no generic type never allocates one. Points at `sharedEmptyDescriptorScanSites`
+	// until `recordScannedType` meets the first generic type in the file.
+	var descriptorScanSites as DescriptorScanSiteArray
 	// ⭐ **DID THE FUNCTION BEING PARSED RESERVE THE LAYOUT-DESCRIPTOR PARAMETER, and did it nevertheless emit an
 	// opaque `__drop_type_param` (W10)?** The two halves of one disagreement, held per function so
 	// `parseFunction` can answer it where the answer is still positionable.
 	//
 	// The reservation is decided BEFORE the body is parsed (the slot must be numbered with the parameters), off a
 	// token pre-scan that concludes a straight-line body always MOVES its feed parameter
-	// (`computeTypeDescriptorNeeds`'s `hasControlFlow`). A body that hands the feed to a call which does NOT take
+	// (`scanDescriptorNeedsInto`'s `hasControlFlow`). A body that hands the feed to a call which does NOT take
 	// ownership leaves it live, and the drop then reads a descriptor the function never received — which
 	// `LowerMaxonToStd.appendDropTypeParamDescriptor` reports by ABORTING THE COMPILER, with no source position
 	// at all (measured: `self.sink.push(x)` where `sink` is a user generic type whose `push` borrows). No token
@@ -7624,18 +7731,23 @@ export type Parser
 	// ⚠ **IT DOES NOT ONLY CATCH BODIES THAT USED TO ABORT, AND THIS COMMENT CLAIMED IT DID (corrected at review).**
 	// A drop with no descriptor also arises where the RESERVATION side is the one that is missing, and there the
 	// predecessor compiled a correct program: MEASURED on `cad4cf30d`, a conditional `items.push(item)` inside a
-	// `extension Container` on a generic type compiles and exits 0, and on this tip it is refused — because
-	// `computeTypeDescriptorNeeds` is run for a `type` declaration's body and never for an EXTENSION's, so no
-	// extension method can reserve the slot. That is a REFUSAL, not a wrong answer, and the gap it stands on is
-	// filed rather than closed here (extension-scope descriptor needs is its own row). What must not stand is the
-	// claim: this guard's reach is "a drop the function has no descriptor for", whatever put it there.
+	// `extension Container` on a generic type compiles and exits 0, and on the tip that recorded this it was
+	// refused, because the descriptor-need fixpoint ran for a `type` declaration's body and never for an
+	// EXTENSION's, so no extension method could reserve the slot at all.
+	// ✅ **THAT HALF IS CLOSED (W23c): the need is now solved WHOLE-PROGRAM over a type's own body and every
+	// extension body over it (`ProgramSignatures.descriptorNeeds`), so an extension method reserves exactly as a
+	// body method does and that program compiles again** (`conditional-feed-inside-a-type-extension`). What this
+	// guard still catches is the case it was BUILT for — a body whose reservation was decided from a token
+	// pre-scan that concluded it always consumes its feed, and which then leaves it live at an exit. The claim
+	// that must not stand is the narrow one: this guard's reach is "a drop the function has no descriptor for",
+	// whatever put it there.
 	var functionCarriesLayoutParam as bool
 	var functionDroppedOpaqueWithoutDescriptor as bool
 	// ⭐ **THE ENCLOSING TYPE'S MEMBER METHODS, bare name -> takesReceiver (#65)** — the map that resolves a
 	// bare call `foo(…)` inside a method body to the sibling method `foo`, prepending `self` for an instance
 	// method and nothing for a `static` one. Built LAZILY (`siblingReceiverMap`) the first time a call inside a
 	// type body needs it and memoized on `siblingReceiverScanType`, so a type whose methods make no calls — all
-	// of the scale corpus — allocates NOTHING, exactly as `typeDescriptorNeeds` costs a non-generic type nothing.
+	// of the scale corpus — allocates NOTHING, exactly as the descriptor-need index costs such a program nothing.
 	// It is the type's WHOLE method set (static and instance), so `contains` answers "is this a sibling?" and the
 	// value answers "does it take a receiver?" from one source — no second decider to drift against the qualified
 	// name the signature index declares.
@@ -7692,7 +7804,7 @@ export type Parser
 	var emptyTypeParams as ByteArrayArray
 	// P1.6-C's shared-empty inner-alias / instance-alias placeholders are MODULE-LEVEL globals
 	// (`sharedEmptyInnerAliases`, `sharedEmptyInstanceAliasMap`, `sharedEmptyInstanceAliasNames`), not
-	// per-parser fields — one allocation for the whole compile, like `sharedEmptyDescriptorNeeds`. The
+	// per-parser fields — one allocation for the whole compile, like `sharedEmptyTypeParamFeeds`. The
 	// working fields `enclosingInnerAliases` / `valueInstanceAlias` INCREF a global as their initial value.
 	// The struct-typed bindings currently IN SCOPE, in declaration order — the values a `return`
 	// must DROP (`emitScopeDrops`). Held as the `VarInfo` objects, exactly as `mutableVars` is, and
@@ -8056,7 +8168,7 @@ export type Parser
 			lastWitnessDispatchThrows: ThrowsClause.none,
 			enclosingInnerAliases: sharedEmptyInnerAliases,
 			tupleLayouts: sharedEmptyTupleLayouts,
-			typeDescriptorNeeds: sharedEmptyDescriptorNeeds,
+			descriptorScanSites: sharedEmptyDescriptorScanSites,
 			functionCarriesLayoutParam: false,
 			functionDroppedOpaqueWithoutDescriptor: false,
 			siblingReceivers: sharedEmptySiblingReceivers,
@@ -8444,7 +8556,7 @@ export type Parser
 		end 'scan'
 		self.pos = resume
 
-		index.foldFile(entries, aliases: aliases, functionAliases: functionAliases, structs: structs, enums: enums, genericAliasEntries: genericAliases, innerAliasEntries: innerAliases, methodInnerAliasParamEntries: methodInnerAliasParams, interfaceSites: interfaceSites, extensionSites: extensionSites, bindings: bindings, paramConsumes: paramConsumes, paramDefaults: paramDefaults, throwsEntries: throwsEntries, freeFunctionNames: freeFunctionNames, moduleDirectory: index.moduleDirectoryOf(self.filePath), filePath: self.filePath, fileTypeNames: self.artifact.typeNames, isStdlibSource: self.isStdlibSource)
+		index.foldFile(entries, aliases: aliases, functionAliases: functionAliases, structs: structs, enums: enums, genericAliasEntries: genericAliases, innerAliasEntries: innerAliases, methodInnerAliasParamEntries: methodInnerAliasParams, interfaceSites: interfaceSites, extensionSites: extensionSites, scanSites: self.descriptorScanSites, bindings: bindings, paramConsumes: paramConsumes, paramDefaults: paramDefaults, throwsEntries: throwsEntries, freeFunctionNames: freeFunctionNames, moduleDirectory: index.moduleDirectoryOf(self.filePath), filePath: self.filePath, fileTypeNames: self.artifact.typeNames, isStdlibSource: self.isStdlibSource)
 
 		// Intern the `Array with integer` literal instance if this file materializes one — after `foldFile`,
 		// so its giid follows the file's named generic instances (a stable, source-path-ordered assignment).
@@ -9311,46 +9423,54 @@ export type Parser
 		return feeds
 	end 'initialTypeParamFeeds'
 
-	// ⭐ **THE TRANSITIVE LAYOUT-DESCRIPTOR-NEED FIXPOINT** (P1.6-B1) — populate `typeDescriptorNeeds` for the
-	// generic type whose body the cursor sits at. A method needs the hidden descriptor param iff it directly
-	// reads `sizeof(T)` OR calls a sibling method ON `self` that needs one — so `indirectSize` that only does
-	// `return self.directSize()` still carries (and forwards) the descriptor. The self-call graph is LOCAL to
-	// this one type declaration (a method self-calls only siblings, same file, contiguous), so the whole
-	// fixpoint is a single peek-only walk of the type body plus a cheap iterate-to-stable — no whole-program
-	// index. A non-generic type has no such methods, so it clears the map and returns.
+	// ⭐⭐ **ONE SITE'S CONTRIBUTION TO THE WHOLE-PROGRAM LAYOUT-DESCRIPTOR-NEED FIXPOINT (P1.6-B1, W23c)** —
+	// every method declared between `site.bodyStart` and the body's `end`, with its direct-need seed and the
+	// siblings it calls on `self`, keyed by the qualified `Type.method` name a call resolves to.
 	//
-	// The same framework `scanConsumeBits` uses (`opensBlockAt` / `closesBlockAt`) delimits each
-	// method body; a named `function <ident>` opens one (a closure is `function(` — no name, no `end`).
-	function computeTypeDescriptorNeeds()
-		// A NON-generic type has no method that can carry a descriptor, so it allocates NOTHING here (the
-		// scale corpus is all non-generic types — a per-type `Map` here would be a linear regression). The
-		// stale `typeDescriptorNeeds` from a previous type is never read for it: `parseFunction` gates its read
-		// on `enclosingTypeParams` being non-empty.
-		if self.enclosingTypeParams.isEmpty() 'notGeneric'
-			return
-		end 'notGeneric'
-		self.typeDescriptorNeeds = DescriptorNeedMap.create()
+	// ⛔⛔ **THE FIXPOINT USED TO BE LOCAL TO ONE `type` DECLARATION, AND THE LOCALITY CLAIM WAS FALSE.** Its
+	// header read *"the self-call graph is LOCAL to this one type declaration (a method self-calls only
+	// siblings, same file, contiguous), so … no whole-program index"* — and an `extension` body is outside
+	// that declaration and may be in another file. So a method an extension contributed was in no fixpoint,
+	// reserved nothing, and was still asked to FORWARD a descriptor to a callee that had one: **MEASURED,
+	// `panic at LowerMaxonToStd.maxon:1587: forwardCallerLayout: caller 'Bag.absorbTwice' has no layout
+	// descriptor to forward to 'Bag.absorb'`**, on a program the oracle runs. A sibling is a method of the
+	// same TYPE, which is not the same thing as a method of the same DECLARATION.
+	//
+	// ⚠ **IT RUNS AFTER `allFilesFolded` AND IT HAS TO**, which is the other half of why the walk cannot be
+	// the sweep's own. Three of its seeds are whole-program answers the sweep is still building while it walks
+	// a body: `functionFeedsCalleeStorage` (the consume/feed record), an inner alias naming an OPAQUE `Array`
+	// (`opaqueArrayConstructionAt` → `isGenericAlias`), and a managed opaque field (`opaqueFieldReassignAt`).
+	// Read mid-sweep they answer "no" for a declaration folded later, and a reservation is ABI — so the sweep
+	// records a POSITION and this walks it once the index is whole. That is also what makes the answer
+	// independent of declaration order, which a descriptor parameter must be.
+	//
+	// The same framework `scanConsumeBits` uses (`opensBlockAt` / `closesBlockAt`) delimits each method body;
+	// a named `function <ident>` opens one (a closure is `function(` — no name, no `end`). Peek-only: the
+	// cursor is positioned from the site and the `Parser` this runs on parses nothing.
+	export function scanDescriptorNeedsInto(site DescriptorScanSite, methodNames ByteArrayArray, directSeeds DescriptorNeedMap, selfCallees SelfCalleesMap)
+		// The type scope the seeds are read against: `sizeofOperandIsTypeParamAt` needs the `uses` list, and
+		// `opaqueArrayConstructionAt` / `opaqueFieldReassignAt` key on `enclosingType`. Taken from the
+		// whole-program layout rather than re-read from a header, so an EXTENSION body — which has no `uses`
+		// clause of its own — is scanned in exactly its target's scope.
+		self.enterTypeScope(site.typeName, isEnum: false)
+		self.enclosingTypeParams = self.signatures.structTypeParamsOf(site.typeName)
 
-		var directSizeof = DescriptorNeedMap.create()
-		var selfCallees = SelfCalleesMap.create()
-		var methodNames = ByteArrayArray.create()
-
-		var q = self.pos
+		var q = site.bodyStart
 		while self.kindAt(q) != TokenKind.eof 'walk'
-			if self.closesBlockAt(q) 'typeEnd'
+			if self.closesBlockAt(q) 'bodyEnd'
 				break
-			end 'typeEnd'
+			end 'bodyEnd'
 			// A named `function <name>` at the member level opens a method body (a closure is `function(` —
 			// no name, no `end`). Its whole body is scanned in one nested pass, and the walk resumes past its
 			// `end` — so this outer loop only ever sees member-level tokens. Asked through the SHARED
 			// `functionDeclarationAt` so a KEYWORD-named method (D8) is a method here too.
 			if self.functionDeclarationAt(q) 'method'
-				let methodName = self.tokenAt(q + 1).value
+				let qualified = qualifiedMethodName(site.typeName, methodName: self.tokenAt(q + 1).value)
 				let scan = self.scanOneMethodDescriptorSignals(q + 2)
 				// ⭐ A method that DROPS a consumed opaque CALLEE-STORAGE feed parameter needs the descriptor too
 				// (P1.7 slice 3b-v) — the runtime `__drop_type_param` reads the instance's `destroyFunc@40`. That
-				// drop happens only when a feed can be left LIVE at an exit: a feed parameter present AND the body is
-				// not straight-line (`hasControlFlow`). The whole-program feed fact
+				// drop happens only when a feed can be left LIVE at an exit: a feed parameter present AND the body
+				// is not straight-line (`hasControlFlow`). The whole-program feed fact
 				// (`functionFeedsCalleeStorage`, from the sweep) is joined with the local body shape; seeded like a
 				// direct `sizeof(T)` so the fixpoint propagates it to every method that forwards the descriptor.
 				//
@@ -9361,7 +9481,7 @@ export type Parser
 				// it would reserve a descriptor a multi-parameter generic constructor cannot materialize. That is
 				// now said directly — the sink `functionFeedsCalleeStorage` asks for is exactly the feed kind
 				// `bindParameters` enrols, so the reservation and the drop cannot disagree.
-				let dropsFeed = scan.hasControlFlow and self.signatures.functionFeedsCalleeStorage(qualifiedMethodName(self.enclosingType, methodName: methodName))
+				let dropsFeed = scan.hasControlFlow and self.signatures.functionFeedsCalleeStorage(qualified)
 				// ⭐ A method that MOVES an opaque array element OUT (`.pop()`/`.remove()`) drops the owned
 				// `typeParameter` result at scope exit through `__drop_type_param`, so it needs the descriptor too
 				// (P1.7 slice 3b-vi-a). `not isStatic` for `dropsFeed`'s reason — a generic constructor cannot
@@ -9377,24 +9497,38 @@ export type Parser
 				// generic body is sound; seeded like a direct `sizeof(T)` so the fixpoint forwards it to self-callers.
 				let copiesArrayElement = scan.hasArrayCopy and not self.functionDeclIsStatic(q)
 				// ⭐ A method that REASSIGNS a bare opaque MANAGED type-parameter field (`self.saved = next`, P1.7
-				// Finding A) drops the field's OLD value through the descriptor-gated `__drop_type_param`, so it needs
-				// the descriptor too. `not isStatic` mirrors the sibling signals — a static has no `self` to reach a
-				// field, and one that needed a descriptor would have no receiver to source it from. `scan.reassignsOpaqueField`
-				// is already gated on the field being managed for some instantiation (`isManagedOpaqueTypeParamField`),
-				// so a trivial-only instantiation reserves nothing and stays byte-identical; seeded like a direct
-				// `sizeof(T)` so the fixpoint gives every self-caller a descriptor to forward.
+				// Finding A) drops the field's OLD value through the descriptor-gated `__drop_type_param`, so it
+				// needs the descriptor. `not isStatic` mirrors the sibling signals — a static has no `self` to reach
+				// a field, and one that needed a descriptor would have no receiver to source it from.
+				// `scan.reassignsOpaqueField` is already gated on the field being managed for some instantiation
+				// (`isManagedOpaqueTypeParamField`), so a trivial-only instantiation reserves nothing and stays
+				// byte-identical; seeded like a direct `sizeof(T)` so the fixpoint gives every self-caller a
+				// descriptor to forward.
 				let reassignsOpaqueManagedField = scan.reassignsOpaqueField and not self.functionDeclIsStatic(q)
-				directSizeof.upsert(methodName, value: scan.direct or dropsFeed or movesOutArrayElement or reassignsOpaqueManagedField or copiesArrayElement)
-				selfCallees.upsert(methodName, value: scan.callees)
-				methodNames.push(methodName)
+				directSeeds.upsert(qualified, value: scan.direct or dropsFeed or movesOutArrayElement or reassignsOpaqueManagedField or copiesArrayElement)
+				selfCallees.upsert(qualified, value: self.qualifiedSelfCallees(site.typeName, callees: scan.callees))
+				methodNames.push(qualified)
 				q = scan.endPos
 				continue
 			end 'method'
 			q = q + 1
 		end 'walk'
 
-		self.solveDescriptorNeedFixpoint(methodNames, directSizeof: directSizeof, selfCallees: selfCallees)
-	end 'computeTypeDescriptorNeeds'
+		self.closeTypeParamScope()
+	end 'scanDescriptorNeedsInto'
+
+	// The bare sibling names a body calls on `self`, qualified to the type they are siblings OF — the join
+	// that makes a `self.appendOps(…)` written in `extension Mergeable`'s body and the `appendOps` declared in
+	// `type Container`'s body one node of one graph. A callee that is not a sibling at all (a free function, a
+	// builtin) survives the join as a name no method wears and is dropped by the fixpoint's own index filter,
+	// exactly as the bare form was.
+	function qualifiedSelfCallees(typeName ByteArray, callees ByteArrayArray) returns ByteArrayArray
+		var qualified = ByteArrayArray.create()
+		for callee in callees 'eachCallee'
+			qualified.push(qualifiedMethodName(typeName, methodName: callee))
+		end 'eachCallee'
+		return qualified
+	end 'qualifiedSelfCallees'
 
 	// Scan ONE method's body — from `bodyStart` (just past `function <name>`) to its own `end` — for the two
 	// descriptor signals: a direct `sizeof(T)`, and the sibling methods it calls on `self`. `depth` starts at 1
@@ -9630,7 +9764,7 @@ export type Parser
 	// enclosing generic type with a managed instantiation (`isManagedOpaqueTypeParamField`). Only such a
 	// reassignment drops the field's old opaque value through `__drop_type_param`, so it is what reserves the
 	// layout descriptor — the field-STORE twin of `arrayMoveOutMethodAt`'s move-out call. Runs in the real parse
-	// (`computeTypeDescriptorNeeds`, after the whole-program sweep), so the layout AND the instance registry the
+	// (`Queries.foldDescriptorNeeds`, after the whole-program sweep), so the layout AND the instance registry the
 	// managed-ness gate reads are complete.
 	function opaqueFieldReassignAt(selfPos TokenIndex) returns bool
 		if not self.fieldReassignHeadAt(selfPos) 'notReassignShape'
@@ -9639,98 +9773,8 @@ export type Parser
 		return self.signatures.isManagedOpaqueTypeParamField(self.enclosingType, fieldName: self.tokenAt(selfPos + 2).value)
 	end 'opaqueFieldReassignAt'
 
-	// Solve the descriptor-need relation to its least fixpoint: a method needs the descriptor iff it directly
-	// reads sizeof(T) (a seed) OR self-calls a method that needs one — equivalently, iff it can REACH a seed
-	// over the self-call edges. So REVERSE the graph once and mark reachability BACKWARD from the seeds:
-	// each method enters the worklist at most once (the first time its bit flips on) and each self-call edge
-	// is walked once, for O(methods + self-calls). The earlier iterate-to-stable re-scanned every method each
-	// round at O(methods x (methods + self-calls)) — QUADRATIC on a deep self-call chain (a machine-generated
-	// wide generic type: mN reads sizeof(T), m(i) calls m(i+1), so need propagates one hop per round against
-	// declaration order, forcing O(methods) rounds).
-	//
-	// The reversal is `buildCsr` — THE shared counting sort (CsrGraph), the same one the CFG's pred/succ lists
-	// and the register allocator's death lists build through — fed the self-call edges with (callee, caller)
-	// SWAPPED, exactly as `TargetLiveness` swaps (from, to) to turn successors into predecessors. Growing a
-	// fourth hand-rolled count/prefix-sum/scatter here is precisely what CsrGraph's header forbids.
-	function solveDescriptorNeedFixpoint(methodNames ByteArrayArray, directSizeof DescriptorNeedMap, selfCallees SelfCalleesMap)
-		let methodCount = methodNames.count()
 
-		// Dense index per method name, so the self-call graph reverses into the CSR's dense key space below.
-		var nameToIndex = MethodIndexMap.create()
-		for i in 0 upto methodCount 'index'
-			nameToIndex.upsert(try methodNames.get(i) otherwise panic("solveDescriptorNeedFixpoint: methodNames.get({i}) OOB below count {methodCount}"), value: i)
-		end 'index'
 
-		// The REVERSED self-call edges: a forward edge (caller `i` -> sibling callee `c`) is recorded as
-		// `c -> i`, so a BFS from a needing method reaches the siblings that call it. A self-call to a name that
-		// is not a sibling method is not a real edge and is dropped. `buildCsr` counting-sorts these into the
-		// reverse adjacency (`callersOf`) in O(edges + methods).
-		var edgeCallee = CsrColumn.create()
-		var edgeCaller = CsrColumn.create()
-		for i in 0 upto methodCount 'edges'
-			for calleeName in self.calleesOf(methodNames, selfCallees: selfCallees, callerIndex: i) 'edge'
-				if let c = try nameToIndex.get(calleeName) 'realEdge'
-					edgeCallee.push(c)
-					edgeCaller.push(i)
-				end 'realEdge'
-			end 'edge'
-		end 'edges'
-		let callersOf = buildCsr(edgeCallee, to: edgeCaller, nodeCount: methodCount)
-
-		// Seed each method's direct-sizeof bit, then mark every method that REACHES a needing one over the
-		// reversed self-call edges — a method needs the descriptor iff it directly reads sizeof(T) or self-calls
-		// (transitively) a method that does.
-		var seeds = BoolArray.create()
-		for i in 0 upto methodCount 'seed'
-			seeds.push(try directSizeof.get(try methodNames.get(i) otherwise panic("methodNames.get({i}) in seed")) otherwise false)
-		end 'seed'
-		let needs = self.reverseReachabilityMark(callersOf, seeds: seeds)
-
-		// Publish each method's final need bit, keyed by name — what `parseFunction` reads to reserve the slot.
-		for i in 0 upto methodCount 'publish'
-			self.typeDescriptorNeeds.upsert(try methodNames.get(i) otherwise panic("methodNames.get({i}) in publish"), value: try needs.get(i) otherwise panic("needs.get({i}) in publish"))
-		end 'publish'
-	end 'solveDescriptorNeedFixpoint'
-
-	// ⭐ **REVERSE-REACHABILITY BFS over a CSR adjacency** — return the bit per node that is set iff the node is a
-	// seed OR reaches one over `graph`'s edges. The graph is the REVERSED relation (`buildCsr` with (callee,
-	// caller) swapped), so a seed's row lists the nodes that point AT it and the BFS propagates the mark BACKWARD.
-	// Each node enters the worklist at most once (the first time its bit flips on) and each edge is walked once,
-	// for O(nodes + edges). The shared engine of the descriptor-need fixpoint (`solveDescriptorNeedFixpoint`) and
-	// the transitive array-feed fixpoint (`solveAndPublishTransitiveFeeds`), so the two cannot drift on how
-	// reachability is marked.
-	function reverseReachabilityMark(graph CsrGraph, seeds BoolArray) returns BoolArray
-		var marked = BoolArray.create()
-		var worklist = CsrColumn.create()
-		for i in 0 upto seeds.count() 'seed'
-			let isSeed = try seeds.get(i) otherwise panic("reverseReachabilityMark: seeds.get({i}) OOB")
-			marked.push(isSeed)
-			if isSeed 'root'
-				worklist.push(i)
-			end 'root'
-		end 'seed'
-
-		var head = 0 as CsrIndex
-		while head < worklist.count() 'drain'
-			let node = try worklist.get(head) otherwise panic("reverseReachabilityMark: worklist.get({head}) OOB")
-			head = head + 1
-			for k in 0 upto graph.degree(node) 'neighbour'
-				let nbr = graph.neighbour(node, k: k)
-				if not (try marked.get(nbr) otherwise panic("reverseReachabilityMark: marked.get({nbr}) OOB")) 'newlyMarked'
-					try marked.set(nbr, value: true) otherwise panic("reverseReachabilityMark: marked.set({nbr}) OOB")
-					worklist.push(nbr)
-				end 'newlyMarked'
-			end 'neighbour'
-		end 'drain'
-		return marked
-	end 'reverseReachabilityMark'
-
-	// The sibling methods `methodNames[callerIndex]` calls on `self` — the forward self-call edges out of one
-	// method. A thin read-only view onto `selfCallees` shared by the descriptor-need fixpoint's two CSR passes
-	// (count, then scatter) so the edge iteration is written once, not twice.
-	function calleesOf(methodNames ByteArrayArray, selfCallees SelfCalleesMap, callerIndex ElementCount) returns ByteArrayArray
-		return try selfCallees.get(try methodNames.get(callerIndex) otherwise panic("calleesOf: methodNames.get({callerIndex}) OOB")) otherwise ByteArrayArray.create()
-	end 'calleesOf'
 
 	// Is the `sizeof` at `sizeofPos` a `sizeof(<typeParam>)` — the 4 contiguous tokens `sizeof ( ident )`
 	// whose identifier names an enclosing type parameter? `parseSizeof` consumes exactly this shape with no
@@ -9968,7 +10012,7 @@ export type Parser
 	end 'recordTransitiveArrayFeeds'
 
 	// Walk the generic type's body once, returning one `MethodFeedScan` per method — its parameters, direct
-	// array-mutator feeds, and self-call forward edges. Mirrors `computeTypeDescriptorNeeds`' body walk: a
+	// array-mutator feeds, and self-call forward edges. Mirrors `scanDescriptorNeedsInto`' body walk: a
 	// named `function <name>` opens a method whose whole body is scanned in one nested pass
 	// (`scanOneMethodFeedSignals`), and the walk resumes past its `end`, so this outer loop only ever sees
 	// member-level tokens.
@@ -10153,7 +10197,7 @@ export type Parser
 				seeds.push((try scan.directFeeds.get(p) otherwise panic("solveAndPublishTransitiveFeeds: directFeeds.get({p}) OOB")).isFeed())
 			end 'param'
 		end 'seedNodes'
-		let isFeed = self.reverseReachabilityMark(feedersOf, seeds: seeds)
+		let isFeed = reverseReachabilityMark(feedersOf, seeds: seeds)
 
 		// A method must have its `paramConsumes` entry (re)written iff it GAINED a feed at a node that was not a
 		// direct seed — a method whose feeds are entirely direct already carries the right entry from the sweep.
@@ -10833,6 +10877,16 @@ export type Parser
 	// tell them apart. `depth` here is relative to the body — 0 is directly inside it — and
 	// `blockDepthAfter` is the same opener/closer rule the caller counts with, so a method's `if`
 	// and `while` nest correctly and its `end` cannot be mistaken for the type's.
+	// Replace the shared empty with a real array, once, on the first generic type this file declares. EMPTY
+	// IS THE TEST because the shared instance is never mutated — the field is the shared one exactly while it
+	// is empty — so the swap costs one comparison per generic type and one allocation per file that has any.
+	function growDescriptorScanSites()
+		if self.descriptorScanSites.count() != 0 'alreadyItsOwn'
+			return
+		end 'alreadyItsOwn'
+		self.descriptorScanSites = DescriptorScanSiteArray.create()
+	end 'growDescriptorScanSites'
+
 	function recordScannedType(structs StructLayoutArray, entries FuncReturnTypeEntryArray, paramConsumes ParamConsumeEntryArray, paramDefaults ParamDefaultEntryArray, throwsEntries ThrowsClauseEntryArray, innerAliasOut InnerAliasEntryArray, genericAliasOut GenericAliasEntryArray, functionAliasOut FunctionTypeAliasArray, methodInnerAliasParamOut MethodInnerAliasParamEntryArray, freeFunctionNameOut ByteArrayArray)
 		// ⚠ **THE SWEEP MUST READ THE MODIFIER ITSELF**, and BACKWARDS, exactly as `recordScannedBinding`
 		// does: the caller's loop meets `export`/`module` as an ordinary token and steps over it, so the
@@ -10876,6 +10930,13 @@ export type Parser
 		// the point in `paramConsumes` this type's own entries begin, so that post-pass patches only them.
 		let bodyStart = self.pos
 		let feedStart = paramConsumes.count()
+		// ⭐ **AND THE SAME POSITION IS THE DESCRIPTOR-NEED FIXPOINT'S SITE (W23c)** — recorded only for a
+		// GENERIC type, because a descriptor carries a TYPE PARAMETER's layout and a type with no `uses`
+		// clause can never need one. `openTypeParamScope` has just filled the list, so the test is free.
+		if not self.enclosingTypeParams.isEmpty() 'aGenericType'
+			self.growDescriptorScanSites()
+			self.descriptorScanSites.push(DescriptorScanSite.create(self.filePath, bodyStart: bodyStart, typeName: nameTok.value))
+		end 'aGenericType'
 
 		var depth = 0 as BlockDepth
 		while not self.isEof() 'body'
@@ -11172,6 +11233,11 @@ export type Parser
 		// nothing is ever pushed here — but `recordScannedSignature` writes through the parameter, and passing
 		// a shared empty to a routine that MAY push is how a shared empty stops being empty.
 		var freeFunctionNameOut = ByteArrayArray.create()
+		// ⭐ **AN EXTENSION BODY IS A DESCRIPTOR-NEED SITE TOO, AND ITS ABSENCE WAS A COMPILER ABORT (W23c).**
+		// One per (extension body, GENERIC conformer): the methods published here belong to that conformer, so
+		// they sit in the same fixpoint — under the same `Type.method` keys — as the methods of its own body.
+		// A non-generic conformer contributes none, for `recordScannedType`'s reason.
+		var descriptorScanSiteOut = DescriptorScanSiteArray.create()
 
 		self.pos = site.tokenPos
 		// It cannot fail — the site was recorded AT this keyword — but the sweep's discipline is that a read it
@@ -11188,6 +11254,9 @@ export type Parser
 			self.pos = bodyStart
 			self.enterTypeScope(conformer, isEnum: false)
 			self.openExtensionBodyScope(header, conformer: conformer, index: index)
+			if index.structDeclaresTypeParams(conformer) 'aGenericConformer'
+				descriptorScanSiteOut.push(DescriptorScanSite.create(self.filePath, bodyStart: bodyStart, typeName: conformer))
+			end 'aGenericConformer'
 
 			// ⭐ **THE CONDITIONAL FILTER, TAKEN ONCE PER CONFORMER.** An INTERFACE extension's `where` clause
 			// is checked against what this conformer binds the interface's associated types to; a TYPE
@@ -11281,7 +11350,7 @@ export type Parser
 		// there is one place that decides what a scanned signature means. Everything an extension does not
 		// contribute is passed empty; the type-name interner is this reader's own artifact's, exactly as the
 		// per-file sweep passes its own.
-		index.foldFile(entries, aliases: RangedTypeAliasArray.create(), functionAliases: functionAliasOut, structs: StructLayoutArray.create(), enums: EnumLayoutArray.create(), genericAliasEntries: genericAliasOut, innerAliasEntries: innerAliasOut, methodInnerAliasParamEntries: methodInnerAliasParamOut, interfaceSites: InterfaceDeclSiteArray.create(), extensionSites: ExtensionDeclSiteArray.create(), bindings: TopLevelDeclArray.create(), paramConsumes: paramConsumes, paramDefaults: paramDefaults, throwsEntries: throwsEntries, freeFunctionNames: freeFunctionNameOut, moduleDirectory: index.moduleDirectoryOf(self.filePath), filePath: self.filePath, fileTypeNames: self.artifact.typeNames, isStdlibSource: self.isStdlibSource)
+		index.foldFile(entries, aliases: RangedTypeAliasArray.create(), functionAliases: functionAliasOut, structs: StructLayoutArray.create(), enums: EnumLayoutArray.create(), genericAliasEntries: genericAliasOut, innerAliasEntries: innerAliasOut, methodInnerAliasParamEntries: methodInnerAliasParamOut, interfaceSites: InterfaceDeclSiteArray.create(), extensionSites: ExtensionDeclSiteArray.create(), scanSites: descriptorScanSiteOut, bindings: TopLevelDeclArray.create(), paramConsumes: paramConsumes, paramDefaults: paramDefaults, throwsEntries: throwsEntries, freeFunctionNames: freeFunctionNameOut, moduleDirectory: index.moduleDirectoryOf(self.filePath), filePath: self.filePath, fileTypeNames: self.artifact.typeNames, isStdlibSource: self.isStdlibSource)
 	end 'foldExtensionDeclarationInto'
 
 	// ⭐⭐ **`extension <Name> [where <constraints>]` — THE ONE READER OF THE HEADER, for the three passes that
@@ -13527,11 +13596,6 @@ export type Parser
 			layout.recordWhereConstraints(constraints)
 		end 'whereClause'
 
-		// Which of this type's methods carry a layout-descriptor param (P1.6-B1) — a TRANSITIVE fixpoint over
-		// the type's own methods, computed NOW (the cursor sits at the body start) so `parseFunction` can
-		// reserve the param before it numbers a method's body values. A peek-only walk; the cursor is untouched.
-		self.computeTypeDescriptorNeeds()
-
 		// The cursor sits at the type body start; remember it so the lazy sibling-receiver walk (#65) can begin
 		// here once a method body's bare call needs it. The memo is invalidated implicitly — its key still names
 		// the previous type, so the first call in this body rebuilds against this start.
@@ -14695,15 +14759,21 @@ export type Parser
 		// slot, so its ValueId lands in `[0, paramCount)` and the backend's param-capture clobber guard
 		// (`ParamCrossForbid`, which only protects `vid < paramCount`) covers it exactly like a user
 		// parameter; a fresh id past the dense space would be left unprotected and could be clobbered by a
-		// sibling capture. The need is the TRANSITIVE fixpoint `computeTypeDescriptorNeeds` computed when this
-		// type declaration opened (direct `sizeof(T)` OR a self-call to a sibling that needs one), keyed by the
-		// bare method name — decided BEFORE the body is parsed, because the slot must be reserved before any
+		// sibling capture. The need is the TRANSITIVE fixpoint `Queries.foldDescriptorNeeds` solved for the whole
+		// program (direct `sizeof(T)` OR a self-call to a sibling that needs one), keyed by the qualified method
+		// name — decided BEFORE the body is parsed, because the slot must be reserved before any
 		// body value is numbered. `LowerMaxonToStd` detects the reserved slot by param count, so a caller
 		// appends the descriptor argument for exactly the methods that carry the param.
+		// ⭐⭐ **THE WHOLE-PROGRAM ANSWER, NOT A PER-TYPE-BODY ONE (W23c).** The gate used to be
+		// `enclosingTypeParams` non-empty, and that field is deliberately EMPTY inside an INTERFACE
+		// extension's body (`openExtensionBodyScope` argues why), so the question could not even be asked for
+		// the methods that most needed it. `anyFunctionNeedsLayoutDescriptor` opens it because the qualified
+		// name has to be BUILT to ask, and a program with no generic type — the whole scale corpus — must not
+		// pay an allocation per method declaration to learn `false`.
 		var needsLayoutParam = false
-		if not self.enclosingTypeParams.isEmpty() 'genericMethod'
-			needsLayoutParam = try self.typeDescriptorNeeds.get(nameTok.value) otherwise false
-		end 'genericMethod'
+		if self.signatures.anyFunctionNeedsLayoutDescriptor() and not self.enclosingType.isEmpty() 'aMethodOfSomeType'
+			needsLayoutParam = self.signatures.functionNeedsLayoutDescriptor(qualifiedMethodName(self.enclosingType, methodName: nameTok.value))
+		end 'aMethodOfSomeType'
 
 		// ⛔ **A RECEIVERLESS (static) LAYOUT-NEEDING function must RETURN `Self` (P1.7 slice 3b-i).** A `static`
 		// has no `self` to carry the type parameter's layout descriptor; a caller sources it instead from the
@@ -14967,7 +15037,7 @@ export type Parser
 	// HERE rather than at the drop, because the descriptor slot is reserved before the body is parsed and a late
 	// discovery can only refuse, never reserve.
 	//
-	// The reservation (`computeTypeDescriptorNeeds`' `dropsFeed`) rests on a token pre-scan concluding that a
+	// The reservation (`scanDescriptorNeedsInto`' `dropsFeed`) rests on a token pre-scan concluding that a
 	// STRAIGHT-LINE body always MOVES its feed parameter. That holds when the fed receiver is a real opaque
 	// `Array`, which always takes ownership; it does not when the receiver is a USER type whose `push`/`set`/
 	// `insert` merely BORROWS, and the two are the same token shape one receiver TYPE apart, which the pre-scan
@@ -14980,7 +15050,7 @@ export type Parser
 	//     `movesOutArrayElement` carries `not isStatic`, so the static reserves nothing. On `cad4cf30d` this
 	//     ABORTED in `LowerMaxonToStd.appendDropTypeParamDescriptor`; here it is refused with a position.
 	//   • a conditional `items.push(item)` inside an `extension Container` on a generic type — a real opaque array,
-	//     a real move-in, and the RESERVATION side is what is missing: `computeTypeDescriptorNeeds` runs for a
+	//     a real move-in, and the RESERVATION side is what is missing: the descriptor-need fixpoint ran for a
 	//     `type` body and never for an EXTENSION's. On `cad4cf30d` this **compiles and exits 0**, so this guard
 	//     does turn one previously-compiling program red. It is a refusal rather than a wrong answer, and the gap
 	//     under it (extension-scope descriptor needs) is filed rather than closed here.
@@ -14991,7 +15061,7 @@ export type Parser
 		if not self.functionDroppedOpaqueWithoutDescriptor 'nothingOwed'
 			return
 		end 'nothingOwed'
-		throw ParseError.unsupported("'{String.from(nameTok.value)}' owns an opaque type-parameter value it must release on some path, but the method reserves no layout descriptor to release it through — the shared generic body compiles once for every instantiation, so the value's destructor is read from the enclosing instance's descriptor at run time, and the parameter carrying it is reserved only for the method shapes that are known ahead of the body to need one. Three shapes reach this: a type-parameter argument handed to a `push`/`set`/`insert` on something that is NOT an `Array` and so never takes ownership of it (move it into an `Array with <type parameter>` or a type-parameter field instead); a `pop`/`remove` of an opaque element in a `static function` (do it on an instance method, which can source the descriptor from `self`); and any of these inside an `extension` body, whose methods reserve no descriptor at all (declare the method in the type's own body)", line: nameTok.line, column: nameTok.column)
+		throw ParseError.unsupported("'{String.from(nameTok.value)}' owns an opaque type-parameter value it must release on some path, but the method reserves no layout descriptor to release it through — the shared generic body compiles once for every instantiation, so the value's destructor is read from the enclosing instance's descriptor at run time, and the parameter carrying it is reserved only for the method shapes that are known ahead of the body to need one. Two shapes reach this: a type-parameter argument handed to a `push`/`set`/`insert` on something that is NOT an `Array` and so never takes ownership of it (move it into an `Array with <type parameter>` or a type-parameter field instead); a `pop`/`remove` of an opaque element in a `static function` (do it on an instance method, which can source the descriptor from `self`)", line: nameTok.line, column: nameTok.column)
 	end 'requireDescriptorForOpaqueDrops'
 
 	// Commit this function's accumulated range-check sites to the artifact (P1.9), keyed by `name`.
@@ -15852,7 +15922,7 @@ export type Parser
 			// on some path `emitScopeDrops` / the join reconciliation drop it once through the descriptor-gated
 			// `__drop_type_param` (0 destructor for a trivial instantiation → inert). An always-moved feed
 			// (`push`) is `movedFrom` at exit, so no drop is emitted and the shared body's golden is unchanged —
-			// only a method that can drop reserves the descriptor (`computeTypeDescriptorNeeds`).
+			// only a method that can drop reserves the descriptor (`Queries.foldDescriptorNeeds`).
 			//
 			// ⚠⚠ **IT ASKS THE FEED'S SINK, AND IT USED TO ASK WHETHER THE FUNCTION HAD A RECEIVER (W10).** A
 			// `Self{value: v}` CONSTRUCTOR feed is settled entirely at the concrete call site — the value the call
@@ -35940,25 +36010,28 @@ export type Parser
 	// E2015 here rather than a lowering panic. A CONCRETE-instance receiver (`genericInstance`, not
 	// `structRef`) supplies its OWN descriptor and never reaches this guard.
 	function requireSelfForDescriptorForwarding(base StructBase, memberTok Token) throws ParseError
-		// Only a method INSIDE a generic type can forward a descriptor, so a non-generic context — every
-		// struct-method call in a program with no generics — short-circuits on this O(1) check BEFORE the
-		// `typeDescriptorNeeds` lookup below, which would otherwise box a `Maybe` on every method call.
-		if self.enclosingTypeParams.isEmpty() 'notGenericContext'
+		// ⚠ **THE GATE WAS `enclosingTypeParams`, AND THAT FIELD IS EMPTY INSIDE AN INTERFACE EXTENSION'S
+		// BODY BY DESIGN (W23c)** — so this refusal, which exists precisely to keep a non-`self` forward from
+		// reaching `forwardCallerLayout`'s panic, was skipped in exactly the bodies that could now reserve a
+		// descriptor. The whole-program bool is the right gate and is the cheaper one: every program with no
+		// descriptor-carrying method at all — the entire generics-free corpus — leaves here before the
+		// qualified name is built.
+		if not self.signatures.anyFunctionNeedsLayoutDescriptor() 'noDescriptorInThisProgram'
 			return
-		end 'notGenericContext'
+		end 'noDescriptorInThisProgram'
 		if self.tagOf(base.box) != ValueTypeTag.structRef 'notSameTypeValue'
 			return
 		end 'notSameTypeValue'
 		if base.box == 0 'isSelf'
 			return
 		end 'isSelf'
-		// A `structRef` receiver whose base is the enclosing generic type is a `Self`-returning result; every
-		// other `structRef` (a plain non-generic struct local) resolves against no `typeDescriptorNeeds` entry.
+		// A `structRef` receiver whose base is the enclosing type is a `Self`-typed value — a `Self`-returning
+		// result, or a `Self` PARAMETER (`merge(source Self)`); every other `structRef` (a plain non-generic
+		// struct local) names a type whose methods carry no descriptor at all.
 		if not base.layout.name.equals(self.enclosingType) 'notEnclosingType'
 			return
 		end 'notEnclosingType'
-		let needsDescriptor = try self.typeDescriptorNeeds.get(memberTok.value) otherwise false
-		if needsDescriptor 'reject'
+		if self.signatures.functionNeedsLayoutDescriptor(qualifiedMethodName(self.enclosingType, methodName: memberTok.value)) 'reject'
 			throw ParseError.unsupported("calling '{String.from(memberTok.value)}' (which reads sizeof of the type parameter) on a value of the enclosing type that is NOT `self` — B1 forwards the layout descriptor only from `self`, so read the size through `self` (or a concrete instance) instead; forwarding from a `Self`-returning result is a later slice", line: memberTok.line, column: memberTok.column)
 		end 'reject'
 	end 'requireSelfForDescriptorForwarding'
@@ -38374,7 +38447,7 @@ export type Parser
 	//
 	// ⛔ **A LIFTED CLOSURE HAS NO DESCRIPTOR TO READ, AND THE LOWERING PANICKED ON IT RATHER THAN SAYING SO
 	// (S2i).** The reserved descriptor parameter is a GENERIC TYPE'S METHOD's (`parseFunction`'s
-	// `needsLayoutParam`, seeded by `computeTypeDescriptorNeeds`, which walks METHODS). A closure literal is
+	// `needsLayoutParam`, seeded by `scanDescriptorNeedsInto`, which walks METHODS). A closure literal is
 	// lifted to a top-level function whose uniform `(userargs, env)` indirect ABI carries one machine word per
 	// argument and has no slot for a descriptor — so the fixpoint marks the enclosing METHOD and the
 	// construction is emitted into the LIFTED body, which carries nothing. MEASURED on BOTH spellings
@@ -41686,7 +41759,7 @@ export type Parser
 	//     array walk skips it), so the caller becomes the sole owner and the result is tracked owned — dropped by
 	//     the concrete destructor (concrete element) or the descriptor-gated `__drop_type_param` (opaque element,
 	//     inert for a trivial instantiation). The enclosing method reserves the descriptor for the opaque drop —
-	//     `computeTypeDescriptorNeeds` seeds it off any `.pop()`/`.remove()` move-out in the shared body.
+	//     `scanDescriptorNeedsInto` seeds it off any `.pop()`/`.remove()` move-out in the shared body.
 	//
 	// ⭐⭐ **AND IT IS WHERE AN E3070 BORROW IS MINTED (`BorrowCheck`), off the `owned` flag that already
 	// answers the question.** `owned` IS *"does the caller take the element OUT, or look at it in place?"*, so
@@ -43245,7 +43318,7 @@ export type Parser
 	// opaque `T`, so ownership transfers — `markOpaqueFieldReassignFeed` recorded the reassigned parameter as a
 	// feed, so `bindParameters` enrolled it owned and the concrete call site transferred it. The field's OLD value
 	// drops ONLY when some instantiation makes it MANAGED: then through the descriptor-gated `__drop_type_param`
-	// (`emitDecref`'s `typeParameter` arm, whose descriptor the method reserved via `computeTypeDescriptorNeeds`'s
+	// (`emitDecref`'s `typeParameter` arm, whose descriptor the method reserved via `scanDescriptorNeedsInto`'s
 	// `reassignsOpaqueField` signal, inert for a trivial instantiation whose `destroyFunc@40` is 0). An ALL-TRIVIAL
 	// field owns no heap, so no drop and no descriptor — the store is byte-identical to the pre-slice plain store.
 	// The new value then ALWAYS transfers into the field (a bare-local source is poisoned, E3102 on later use), so

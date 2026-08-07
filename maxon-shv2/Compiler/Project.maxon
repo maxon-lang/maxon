@@ -2638,13 +2638,37 @@ export function whereConstraintsMatch(constraints WhereConstraintArray, other Wh
 	for i in 0 upto constraints.count() 'eachConstraint'
 		let mine = try constraints.get(i) otherwise panic("whereConstraintsMatch: constraints.get OOB at {i} below count {constraints.count()}")
 		let theirs = try other.get(i) otherwise panic("whereConstraintsMatch: other.get OOB at {i} below count {other.count()}")
-		if mine.typeParamIndex != theirs.typeParamIndex or not mine.interfaceName.equals(theirs.interfaceName) 'differs'
+		if not whereConstraintsEqual(mine, other: theirs) 'differs'
 			return false
 		end 'differs'
 	end 'eachConstraint'
 
 	return true
 end 'whereConstraintsMatch'
+
+// ⭐ **WHEN TWO CONSTRAINTS ARE ONE WITNESS SLOT — the (parameter, interface) pair, spelled once.** Two
+// readers ask it and they must never disagree, because between them they decide the witness NUMBERING: the
+// ordered comparison above (do these two lists agree slot for slot?) and the de-duplication below (does this
+// list already reserve a slot for this constraint?). Written out at each, the pair test was the same
+// expression in two files.
+export function whereConstraintsEqual(constraint WhereConstraint, other WhereConstraint) returns bool
+	return constraint.typeParamIndex == other.typeParamIndex and constraint.interfaceName.equals(other.interfaceName)
+end 'whereConstraintsEqual'
+
+// Does `reserved` already carry a witness slot for `constraint`?
+// `ProgramSignatures.typeExtensionWitnessConstraints`' de-duplication, which is what keeps an extension that
+// restates one of its target's own constraints from reserving two slots for one witness.
+//
+// A linear scan for `whereConstraintsMatch`'s reason one level up: a `where` clause is a handful of entries,
+// and it is walked once per (extension, method) rather than per call.
+export function whereConstraintListReserves(reserved WhereConstraintArray, constraint WhereConstraint) returns bool
+	for existing in reserved 'eachReserved'
+		if whereConstraintsEqual(existing, other: constraint) 'sameSlot'
+			return true
+		end 'sameSlot'
+	end 'eachReserved'
+	return false
+end 'whereConstraintListReserves'
 
 // ⭐ **RENDER A CONSTRAINT LIST BACK TO THE CLAUSE THE AUTHOR WROTE** — `where T is A and B, U is C`. The
 // flattening `readWhereClause` performs is LOSSLESS in source order (one entry per (param, interface) pair,

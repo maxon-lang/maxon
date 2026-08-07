@@ -1790,7 +1790,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:25:18: Unsupported: 'add' owns an opaque type-parameter value it must release on some path, but the method reserves no layout descriptor to release it through — the shared generic body compiles once for every instantiation, so the value's destructor is read from the enclosing instance's descriptor at run time, and the parameter carrying it is reserved only for the method shapes that are known ahead of the body to need one. Three shapes reach this: a type-parameter argument handed to a `push`/`set`/`insert` on something that is NOT an `Array` and so never takes ownership of it (move it into an `Array with <type parameter>` or a type-parameter field instead); a `pop`/`remove` of an opaque element in a `static function` (do it on an instance method, which can source the descriptor from `self`); and any of these inside an `extension` body, whose methods reserve no descriptor at all (declare the method in the type's own body)
+error E2015: <fragment>:25:18: Unsupported: 'add' owns an opaque type-parameter value it must release on some path, but the method reserves no layout descriptor to release it through — the shared generic body compiles once for every instantiation, so the value's destructor is read from the enclosing instance's descriptor at run time, and the parameter carrying it is reserved only for the method shapes that are known ahead of the body to need one. Two shapes reach this: a type-parameter argument handed to a `push`/`set`/`insert` on something that is NOT an `Array` and so never takes ownership of it (move it into an `Array with <type parameter>` or a type-parameter field instead); a `pop`/`remove` of an opaque element in a `static function` (do it on an instance method, which can source the descriptor from `self`)
 ```
 
 ### A TYPE EXTENSION's array mutator feeds the opaque element exactly as the type's own body does
@@ -2344,4 +2344,192 @@ end 'main'
 a=true
 copy=true
 done
+```
+
+### An INTERFACE extension's body self-calling a descriptor-needing method of a GENERIC conformer
+
+⭐⭐ **THE THIRD FACE OF THE RESERVE/SUPPLY DRIFT, AND THE ONE THAT ABORTS THE COMPILER (W23c).** The
+layout-descriptor need was a fixpoint over ONE type declaration's own body — `computeTypeDescriptorNeeds`
+ran from `parseTypeDeclaration` and from nowhere else — so no method contributed by an `extension` could
+ever reserve the slot. `Bag.absorb` copies an opaque array and reserves a descriptor; `Bag.absorbTwice`,
+declared in an `extension Appendable`, calls it on `self` and reserves nothing. **MEASURED on the merge
+base: `panic at LowerMaxonToStd.maxon:1587: forwardCallerLayout: caller 'Bag.absorbTwice' has no layout
+descriptor to forward to 'Bag.absorb'`**, no position, no `error E….` — on a program the oracle compiles
+and runs to exit 0.
+
+⚠ An INTERFACE extension is the sharpest form of it: its body is monomorphized per conformer, and
+`openExtensionBodyScope` deliberately leaves `enclosingTypeParams` EMPTY there (its own header argues why —
+an associated type is bound concretely per conformer and must not resolve as the conformer's type
+parameter). So the reservation gate, which tested exactly that field, could not even ask the question. The
+need is now a WHOLE-PROGRAM fixpoint keyed by qualified method name, and `Bag.absorbTwice`'s self-call edge
+to `Bag.absorb` is an edge like any other.
+
+<!-- test: interface-extension-body-forwards-a-descriptor -->
+```maxon
+typealias Count = int(0 to u64.max)
+typealias Integer = int(i64.min to i64.max)
+
+interface Appendable uses Func
+	function opsCount() returns Count
+	function absorb(other Func)
+end 'Appendable'
+
+extension Appendable
+	export function absorbTwice(a Func, b Func)
+		self.absorb(a)
+		self.absorb(b)
+	end 'absorbTwice'
+end 'Appendable'
+
+type Bag uses Op implements Appendable with Integer
+	typealias OpArray = Array with Op
+	export var ops as OpArray
+
+	export static function create() returns Self
+		return Self{ops: OpArray.create()}
+	end 'create'
+
+	export function opsCount() returns Count
+		return self.ops.count()
+	end 'opsCount'
+
+	export function absorb(other Integer)
+		self.ops.append(self.ops)
+		_ = other
+	end 'absorb'
+end 'Bag'
+
+typealias IntBag = Bag with Integer
+
+function main() returns ExitCode
+	var a = IntBag.create()
+	a.absorbTwice(1, b: 2)
+	if a.opsCount() == 0 'ok'
+		return 0
+	end 'ok'
+	return 1
+end 'main'
+```
+```exitcode
+0
+```
+
+### A CONDITIONAL feed inside a TYPE extension — the regression the W10 note recorded and could not close
+
+⛔ **`functionCarriesLayoutParam`'s own header carried this as a MEASURED regression against `cad4cf30d`,
+filed rather than closed**: a conditional `items.push(item)` inside an `extension Container` on a generic
+type compiled and exited 0 on the predecessor and was REFUSED on the tip. The refusal is W10's residual
+check firing correctly — the body drops an opaque feed at the guarded exit and the function has no
+descriptor to drop it through — but the half that was actually missing is the RESERVATION: no extension
+method could reserve the slot at all. With the need computed whole-program, `Container.stashIf` reserves it
+and the program compiles again.
+
+⚠ It is deliberately the CONDITIONAL form. The straight-line twin
+(`extension-body-push-feeds-opaque-element`, above) always consumes its feed and needs no descriptor, which
+is why that one was green throughout and this one was not — the guard is the whole difference.
+
+<!-- test: conditional-feed-inside-a-type-extension -->
+```maxon
+typealias ExitCode = int(0 to 125)
+typealias Count = int(0 to u64.max)
+
+type Container uses Element
+	typealias ElementArray = Array with Element
+
+	export var items as ElementArray
+
+	export static function create() returns Self
+		return Self{ items: ElementArray.create() }
+	end 'create'
+
+	export function count() returns Count
+		return items.count()
+	end 'count'
+end 'Container'
+
+extension Container
+	export function stashIf(item Element, keep bool)
+		if keep 'wanted'
+			items.push(item)
+		end 'wanted'
+	end 'stashIf'
+end 'Container'
+
+typealias StringContainer = Container with String
+
+function main() returns ExitCode
+	var seed = 0
+	while seed < 3 'grow'
+		seed = seed + 1
+	end 'grow'
+
+	var sc = StringContainer.create()
+	sc.stashIf("heap-built element number {seed} long enough to escape any small-string envelope", keep: true)
+	sc.stashIf("heap-built element number {seed + 1} long enough to escape any small-string envelope", keep: false)
+	if sc.count() == 1 'check'
+		return 0
+	end 'check'
+	return 1
+end 'main'
+```
+```exitcode
+0
+```
+
+### The extension declared BEFORE the type it extends, IN ANOTHER FILE — the descriptor's order proof
+
+⭐⭐ **A DESCRIPTOR PARAMETER IS ABI, SO IT MAY NOT BE DECIDED BY WHICH DECLARATION THE COMPILER MET
+FIRST** — the same demand the witness union answers one mechanism over, and a sharper one here, because the
+old fixpoint was *structurally* order-bound: it ran at the moment `parseTypeDeclaration` opened a body, from
+that body's own tokens, so a method declared anywhere else could not be in it whatever the order. The need
+is now solved once, after `ProgramSignatures.allFilesFolded`, over every generic type body AND every
+extension body in the program — so this case, whose extension precedes its type and sits in a file the
+sweep reaches first, reserves exactly what the same program written the other way round reserves.
+
+<!-- test: cross-file-extension-before-its-type-reserves-a-descriptor -->
+```maxon
+// --- file: a_ext.maxon
+extension Vault
+	export function stashIf(item Element, keep bool)
+		if keep 'wanted'
+			items.push(item)
+		end 'wanted'
+	end 'stashIf'
+end 'Vault'
+// --- file: b_type.maxon
+export typealias Count = int(0 to u64.max)
+
+export type Vault uses Element
+	typealias ElementArray = Array with Element
+
+	export var items as ElementArray
+
+	export static function create() returns Self
+		return Self{ items: ElementArray.create() }
+	end 'create'
+
+	export function count() returns Count
+		return items.count()
+	end 'count'
+end 'Vault'
+// --- file: main.maxon
+typealias StringVault = Vault with String
+
+function main() returns ExitCode
+	var seed = 0
+	while seed < 3 'grow'
+		seed = seed + 1
+	end 'grow'
+
+	var sv = StringVault.create()
+	sv.stashIf("heap-built element number {seed} long enough to escape any small-string envelope", keep: true)
+	sv.stashIf("heap-built element number {seed + 1} long enough to escape any small-string envelope", keep: false)
+	if sv.count() == 1 'check'
+		return 0
+	end 'check'
+	return 1
+end 'main'
+```
+```exitcode
+0
 ```

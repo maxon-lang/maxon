@@ -1,0 +1,168 @@
+// Test: interface-extension-body-forwards-a-descriptor
+typealias Count = int(0 to u64.max)
+typealias Integer = int(i64.min to i64.max)
+
+interface Appendable uses Func
+	function opsCount() returns Count
+	function absorb(other Func)
+end 'Appendable'
+
+extension Appendable
+	export function absorbTwice(a Func, b Func)
+		self.absorb(a)
+		self.absorb(b)
+	end 'absorbTwice'
+end 'Appendable'
+
+type Bag uses Op implements Appendable with Integer
+	typealias OpArray = Array with Op
+	export var ops as OpArray
+
+	export static function create() returns Self
+		return Self{ops: OpArray.create()}
+	end 'create'
+
+	export function opsCount() returns Count
+		return self.ops.count()
+	end 'opsCount'
+
+	export function absorb(other Integer)
+		self.ops.append(self.ops)
+		_ = other
+	end 'absorb'
+end 'Bag'
+
+typealias IntBag = Bag with Integer
+
+function main() returns ExitCode
+	var a = IntBag.create()
+	a.absorbTwice(1, b: 2)
+	if a.opsCount() == 0 'ok'
+		return 0
+	end 'ok'
+	return 1
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @Bag.absorbTwice {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.movRegReg r12, rax
+    x64.movRegReg r13, r9
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rax, r13
+    x64.callDirect Bag.absorb
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
+    x64.movRegReg rax, r13
+    x64.callDirect Bag.absorb
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Bag.create {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegImm32 rax, 8
+    x64.loadRegBaseDisp.word64 rdx, [rcx + 40]
+    x64.movRegReg rcx, rax
+    x64.callDirect __arr_create
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Bag.opsCount {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
+    x64.callDirect __arr_count
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Bag.absorb {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.loadRegBaseDisp.word64 rdx, [rcx + 0]
+    x64.loadRegBaseDisp.word64 rsi, [rcx + 0]
+    x64.movRegReg rcx, rdx
+    x64.movRegReg rdx, rsi
+    x64.callDirect __arr_append_opaque
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.leaRegRdata rcx, [rip + __layout_Bag_Integer]
+    x64.callDirect Bag.create
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rdx, 1
+    x64.movRegImm32 rax, 2
+    x64.leaRegRdata r9, [rip + __layout_Bag_Integer]
+    x64.movRegReg rcx, rbx
+    x64.callDirect Bag.absorbTwice
+    x64.movRegReg rcx, rbx
+    x64.callDirect Bag.opsCount
+    x64.cmpRegImm32 r8, 0
+    x64.jcc equal, ok
+    x64.jmp ifcont
+  ok:
+    x64.movRegImm32 r12, 0
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_Bag_Integer
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r12, 1
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_Bag_Integer
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

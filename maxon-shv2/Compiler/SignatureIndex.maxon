@@ -1843,7 +1843,7 @@ export union TypeParamFeed
 	end 'isFeed'
 
 	// Does the fed value land in storage the CALLEE owns and releases (W10)? The one question the callee-side
-	// enrolment (`bindParameters`), the descriptor-need seed (`computeTypeDescriptorNeeds`) and the
+	// enrolment (`bindParameters`), the descriptor-need seed (`Queries.foldDescriptorNeeds`) and the
 	// borrowed-argument promotion (`handleEscapingBorrowFeed`) all ask, so the sink is read through ONE door
 	// and the three cannot come to disagree about who frees the value.
 	export function sinkIsCalleeStorage() returns bool
@@ -4503,6 +4503,46 @@ end 'ExtensionDeclSite'
 
 export typealias ExtensionDeclSiteArray = Array with ExtensionDeclSite
 
+// ⭐⭐ **WHERE ONE SET OF A GENERIC TYPE'S METHODS BEGINS — the site list the whole-program
+// LAYOUT-DESCRIPTOR-NEED fixpoint walks (`Queries.foldDescriptorNeeds`).** A generic `type`'s own body is
+// one site; every `extension` body over a generic target is another, one per conformer it publishes onto.
+// `typeName` is the type those methods belong to — the CONFORMER for an extension — so every method the
+// fixpoint collects is keyed by the same `Type.method` name a call resolves to.
+//
+// ⭐ **ONLY A GENERIC TYPE IS RECORDED, AND THAT IS WHAT KEEPS THE COST OFF EVERY OTHER PROGRAM.** A
+// descriptor exists to carry a TYPE PARAMETER's layout at run time, so a type with no `uses` clause can
+// never need one — and a program that declares no generic type records no site, which makes
+// `foldDescriptorNeeds` an empty-array test that allocates nothing. That is `typeDescriptorNeeds`' old
+// "a non-generic type allocates NOTHING here" property, moved up a level and made whole-program.
+export type DescriptorScanSite
+	export var path as FilePath
+	// The first token of the member list — a `type` body's first token, or an extension body's. Recorded by
+	// the walk that already stands there (`recordScannedType`, `foldExtensionDeclarationInto`), so the
+	// fixpoint's later walk starts exactly where a member walk starts and needs no header re-read.
+	export var bodyStart as TokenIndex
+	export var typeName as ByteArray
+
+	export static function create(path FilePath, bodyStart TokenIndex, typeName ByteArray) returns DescriptorScanSite
+		return Self{path: path, bodyStart: bodyStart, typeName: typeName}
+	end 'create'
+end 'DescriptorScanSite'
+
+export typealias DescriptorScanSiteArray = Array with DescriptorScanSite
+
+// The qualified names of the methods that carry the hidden layout-descriptor parameter (P1.6-B1), solved
+// whole-program. A Set rather than a name->bool map for the reason the answer is one bit: membership IS the
+// need, so there is no `false` entry to disagree with an absence.
+export typealias DescriptorNeedNameSet = Set with ByteArray
+
+// The descriptor-need set a program with no generic type carries — none, shared, for
+// `sharedEmptyWhereConstraints`' reason: the whole scale corpus declares no generic type, and one allocation
+// per compile for an answer that is always empty is exactly the linear regression `typeDescriptorNeeds`'
+// own header refused.
+let sharedEmptyDescriptorNeeds = DescriptorNeedNameSet.create()
+
+// The `uses` list an UNDECLARED name answers with — none, shared, for `sharedEmptyDescriptorNeeds`' reason.
+let sharedEmptyTypeParamNames = ByteArrayArray.create()
+
 // ⭐⭐ **THE TWO DOORS INTO THE EXTENSION MECHANISM, told apart once** (conditional extensions). `extension`
 // takes an INTERFACE name or a declared TYPE name, and the difference is not cosmetic — it decides what the
 // conformer set is, what a `where` clause's parameter names mean, and WHEN the constraint can be checked:
@@ -4630,20 +4670,6 @@ export function maxonTypesDenoteSame(a MaxonType, b MaxonType) returns bool
 	return maxonTypeTag(a) == maxonTypeTag(b) and typeNameIdOf(a) == typeNameIdOf(b)
 end 'maxonTypesDenoteSame'
 
-// Does `reserved` already carry a witness slot for `constraint` — the same (parameter, interface) pair?
-// `ProgramSignatures.typeExtensionWitnessConstraints`' de-duplication, which is what keeps an extension that
-// restates one of its target's own constraints from reserving two slots for one witness.
-//
-// A linear scan for `whereConstraintsMatch`'s reason one level up: a `where` clause is a handful of entries,
-// and it is walked once per (extension, method) rather than per call.
-function whereConstraintListReserves(reserved WhereConstraintArray, constraint WhereConstraint) returns bool
-	for existing in reserved 'eachReserved'
-		if existing.typeParamIndex == constraint.typeParamIndex and existing.interfaceName.equals(constraint.interfaceName) 'sameSlot'
-			return true
-		end 'sameSlot'
-	end 'eachReserved'
-	return false
-end 'whereConstraintListReserves'
 
 // ⭐ **AN INTERFACE'S POSITION IN DECLARATION ORDER — the whole-program, interner-FREE handle a
 // `witnessDispatch` names its requirement's interface by.** See `ProgramSignatures.interfaceNamesInDeclOrder`
@@ -5431,6 +5457,28 @@ export type ProgramSignatures
 	// `ExtensionDeclSite`. Read once, by `foldExtensionDeclarations`, after the last file folds, because an
 	// extension's methods belong to conformers the per-file sweep has not necessarily met yet.
 	export var extensionDeclSites as ExtensionDeclSiteArray
+	// ⭐ Where each GENERIC type's method list begins — its own body, and every extension body over it. See
+	// `DescriptorScanSite`. Read once, by `Queries.foldDescriptorNeeds`, after the extension fold has put
+	// every extension method into the program.
+	export var descriptorScanSites as DescriptorScanSiteArray
+	// ⭐⭐ **WHICH METHODS CARRY THE HIDDEN LAYOUT-DESCRIPTOR PARAMETER (P1.6-B1) — the ONE answer, keyed by
+	// the qualified `Type.method` name a call resolves to.** Solved whole-program by
+	// `Queries.foldDescriptorNeeds` after `allFilesFolded`; read by `Parser.parseFunction` to reserve the slot
+	// before it numbers a method's body values, and by nothing else.
+	//
+	// ⛔ **IT WAS A PER-TYPE-BODY MAP ON THE PARSER, AND THAT COST A COMPILER ABORT ON A LEGAL PROGRAM
+	// (W23c).** The fixpoint ran from `parseTypeDeclaration` over the tokens of the one body it had just
+	// opened, so a method an `extension` contributed was in no fixpoint at all and could never reserve the
+	// slot — while `LowerMaxonToStd` still asked it to FORWARD one to a callee that had. **MEASURED on the
+	// merge base: `panic at LowerMaxonToStd.maxon:1587: forwardCallerLayout: caller 'Bag.absorbTwice' has no
+	// layout descriptor to forward to 'Bag.absorb'`**, no position and no `error E….`, on a program the oracle
+	// runs. The self-call graph is NOT local to a type declaration — an extension body is outside it and may
+	// be in another file — so the fixpoint cannot be either.
+	//
+	// It points at the SHARED EMPTY until a program actually declares a generic type, so a program with none
+	// allocates nothing for it; `recordDescriptorNeeds` replaces it wholesale, copy-on-write, exactly as
+	// `whereConstraints` does on a `StructLayout`.
+	var descriptorNeeds as DescriptorNeedNameSet
 	// ⭐ Every (conformer, method) a CONDITIONAL extension was withheld from, under the qualified name a call
 	// to it resolves to — see `ConditionalExtensionSkip`. Written by `foldExtensionDeclarations`, read at the
 	// one door a call to a missing method goes through.
@@ -5734,7 +5782,7 @@ export type ProgramSignatures
 	// Every index, empty. Split out of `create` only so the seed stamping above reads as the two steps it
 	// is; this is its one caller.
 	static function freshIndexes(os Os) returns ProgramSignatures
-		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(os), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), structNamesInDeclOrder: ByteArrayArray.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), instanceDisplayNames: InstanceDisplayNameMap.create(), canonicalInstanceNameIndex: CanonicalInstanceNameSet.create(), canonicalNamesIndexedThrough: 0, tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleElementTokens: TupleElementTokenMap.create(), tupleElementTokenOwners: TupleElementTokenOwnerMap.create(), typeParamOwners: TypeParamOwnerMap.create(), tupleAliases: TupleCanonicalNameMap.create(), sawAggregateArrayLiteral: false, sawListFromConstruction: false, genericAliases: GenericAliasMap.create(), contestedGenericAliases: sharedEmptyGenericAliasContests, multiplyDeclaredGenericAliases: sharedEmptyDisagreeingAliasNames, divergedGenericAliasDecl: AliasCycleResult.none, nameableGenericAliases: sharedEmptyNameableGenericAliases, genericAliasSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceNamesInDeclOrder: builtinInterfaceNames(), interfaceDeclIndexByName: builtinInterfaceDeclIndices(), interfaceDeclSites: InterfaceDeclSiteArray.create(), extensionDeclSites: ExtensionDeclSiteArray.create(), conditionalExtensionSkips: ConditionalExtensionSkipMap.create(), sweptConformances: DeclaredConformanceMap.create(), sweptConformancesBuilt: false, extensionMethodConstraints: ExtensionMethodConstraintMap.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcThrows: FuncThrowsMap.create(), funcParamDefaults: ParamDefaultMap.create(), collidingParamDefaults: CollidingParamDefaultNameSet.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), funcReturnDeclFiles: FuncReturnDeclFileMap.create(), funcDeclSites: FunctionDeclSiteMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), hash: fnvOffsetBasis(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, allFilesFolded: false, rootIsUnderStdlibDirectory: false, constInitializerTypeNames: ConstInitializerTypeNameSet.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibShadowRenames: StdlibShadowRenameMap.create(), fileModuleDirectories: FileModuleDirectoryMap.create(), namespaceQualifiedFunctions: NamespaceQualifiedFunctionSet.create(), freeFunctionDirectories: FreeFunctionDirectoryMap.create(), contestedFreeFunctions: ContestedFreeFunctionMap.create(), contestedRegistrationNames: ContestedRegistrationNameSet.create()}
+		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(os), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), structNamesInDeclOrder: ByteArrayArray.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), instanceDisplayNames: InstanceDisplayNameMap.create(), canonicalInstanceNameIndex: CanonicalInstanceNameSet.create(), canonicalNamesIndexedThrough: 0, tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleElementTokens: TupleElementTokenMap.create(), tupleElementTokenOwners: TupleElementTokenOwnerMap.create(), typeParamOwners: TypeParamOwnerMap.create(), tupleAliases: TupleCanonicalNameMap.create(), sawAggregateArrayLiteral: false, sawListFromConstruction: false, genericAliases: GenericAliasMap.create(), contestedGenericAliases: sharedEmptyGenericAliasContests, multiplyDeclaredGenericAliases: sharedEmptyDisagreeingAliasNames, divergedGenericAliasDecl: AliasCycleResult.none, nameableGenericAliases: sharedEmptyNameableGenericAliases, genericAliasSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceNamesInDeclOrder: builtinInterfaceNames(), interfaceDeclIndexByName: builtinInterfaceDeclIndices(), interfaceDeclSites: InterfaceDeclSiteArray.create(), extensionDeclSites: ExtensionDeclSiteArray.create(), descriptorScanSites: DescriptorScanSiteArray.create(), descriptorNeeds: sharedEmptyDescriptorNeeds, conditionalExtensionSkips: ConditionalExtensionSkipMap.create(), sweptConformances: DeclaredConformanceMap.create(), sweptConformancesBuilt: false, extensionMethodConstraints: ExtensionMethodConstraintMap.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcThrows: FuncThrowsMap.create(), funcParamDefaults: ParamDefaultMap.create(), collidingParamDefaults: CollidingParamDefaultNameSet.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), funcReturnDeclFiles: FuncReturnDeclFileMap.create(), funcDeclSites: FunctionDeclSiteMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), hash: fnvOffsetBasis(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, allFilesFolded: false, rootIsUnderStdlibDirectory: false, constInitializerTypeNames: ConstInitializerTypeNameSet.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibShadowRenames: StdlibShadowRenameMap.create(), fileModuleDirectories: FileModuleDirectoryMap.create(), namespaceQualifiedFunctions: NamespaceQualifiedFunctionSet.create(), freeFunctionDirectories: FreeFunctionDirectoryMap.create(), contestedFreeFunctions: ContestedFreeFunctionMap.create(), contestedRegistrationNames: ContestedRegistrationNameSet.create()}
 	end 'freshIndexes'
 
 	// --- MODULE DIRECTORIES and the ONE visibility decision (N1a) ---
@@ -5972,7 +6020,7 @@ export type ProgramSignatures
 	// machinery `mergeArtifact` uses for the identical job — `TypeNameInterner.foldInto` +
 	// `remapMaxonReturnType`. One mechanism, two callers: a second copy of "reconcile a file's ids
 	// into a bigger table" would be free to disagree with this one about what an id means.
-	export function foldFile(scanned FuncReturnTypeEntryArray, aliases RangedTypeAliasArray, functionAliases FunctionTypeAliasArray, structs StructLayoutArray, enums EnumLayoutArray, genericAliasEntries GenericAliasEntryArray, innerAliasEntries InnerAliasEntryArray, methodInnerAliasParamEntries MethodInnerAliasParamEntryArray, interfaceSites InterfaceDeclSiteArray, extensionSites ExtensionDeclSiteArray, bindings TopLevelDeclArray, paramConsumes ParamConsumeEntryArray, paramDefaults ParamDefaultEntryArray, throwsEntries ThrowsClauseEntryArray, freeFunctionNames ByteArrayArray, moduleDirectory String, filePath FilePath, fileTypeNames TypeNameInterner, isStdlibSource bool)
+	export function foldFile(scanned FuncReturnTypeEntryArray, aliases RangedTypeAliasArray, functionAliases FunctionTypeAliasArray, structs StructLayoutArray, enums EnumLayoutArray, genericAliasEntries GenericAliasEntryArray, innerAliasEntries InnerAliasEntryArray, methodInnerAliasParamEntries MethodInnerAliasParamEntryArray, interfaceSites InterfaceDeclSiteArray, extensionSites ExtensionDeclSiteArray, scanSites DescriptorScanSiteArray, bindings TopLevelDeclArray, paramConsumes ParamConsumeEntryArray, paramDefaults ParamDefaultEntryArray, throwsEntries ThrowsClauseEntryArray, freeFunctionNames ByteArrayArray, moduleDirectory String, filePath FilePath, fileTypeNames TypeNameInterner, isStdlibSource bool)
 		// ⭐ **THE USER HALF OF THE SHADOW CONTEST (A1s wave 2)** — recorded from the SAME declaration arrays
 		// the registries below are built from, so "what the user declared" and "what the index holds" are one
 		// walk. Every KIND is noted, not just the four nominal ones: the contest is asymmetric on purpose (see
@@ -6072,6 +6120,13 @@ export type ProgramSignatures
 		for site in extensionSites 'eachExtensionSite'
 			self.extensionDeclSites.push(site)
 		end 'eachExtensionSite'
+
+		// The generic-type method-list sites the descriptor-need fixpoint walks — see `DescriptorScanSite`.
+		// A program that declares no generic type contributes none, which is what leaves
+		// `Queries.foldDescriptorNeeds` an empty-array test.
+		for site in scanSites 'eachDescriptorScanSite'
+			self.descriptorScanSites.push(site)
+		end 'eachDescriptorScanSite'
 
 		// Bindings — `let` and `var` alike — are RECORDED here and EVALUATED later
 		// (`evaluateInitializers`), and the gap between the two is the whole reason a forward
@@ -8971,6 +9026,54 @@ export type ProgramSignatures
 		let layout = try self.structTypes.get(typeName) otherwise return sharedEmptyMethodWitnessConstraints
 		return layout.whereConstraints
 	end 'structWhereConstraints'
+
+	// The `uses` parameter names of a declared type, in declaration order — the list a `typeParameter` token
+	// is resolved against. Read by `Parser.scanDescriptorNeedsInto`, which scans an EXTENSION body in its
+	// TARGET's scope and so has no `uses` clause of its own to parse. An undeclared name answers the SHARED
+	// empty, which is also what a non-generic type's layout already holds.
+	export function structTypeParamsOf(typeName ByteArray) returns ByteArrayArray
+		let layout = try self.structTypes.get(typeName) otherwise return sharedEmptyTypeParamNames
+		return layout.typeParamNames
+	end 'structTypeParamsOf'
+
+	// ⭐ **DOES `typeName` DECLARE TYPE PARAMETERS — i.e. is it GENERIC?** The whole-program form of the
+	// question `Parser.openTypeParamScope` answers locally, asked by the two recorders of a
+	// `DescriptorScanSite`: an extension's conformer is a name, not a layout the recorder holds, and a
+	// descriptor carries a TYPE PARAMETER's layout, so a non-generic target can never need one. An UNDECLARED
+	// name answers `false` — an extension over a name no file declares publishes onto no conformer at all.
+	export function structDeclaresTypeParams(typeName ByteArray) returns bool
+		let layout = try self.structTypes.get(typeName) otherwise return false
+		return not layout.typeParamNames.isEmpty()
+	end 'structDeclaresTypeParams'
+
+	// ⭐⭐ **DOES `callee` CARRY THE HIDDEN LAYOUT-DESCRIPTOR PARAMETER (P1.6-B1)? — the ONE answer, read by
+	// the RESERVATION side (`Parser.parseFunction`) and derived once by `Queries.foldDescriptorNeeds`.** The
+	// SUPPLY side does not ask it by name at all: `LowerMaxonToStd.buildLayoutNeedingFuncs` recovers the same
+	// fact from the emitted parameter COUNT, which is the strongest form of one-fact — the reservation is not
+	// merely agreed with, it is the only thing the supply side reads.
+	//
+	// Asked with the qualified `Type.method` name, so a method contributed by an `extension` is the same key
+	// as one declared in the type's own body. See `descriptorNeeds` for the compiler abort the per-type-body
+	// version cost.
+	export function functionNeedsLayoutDescriptor(callee ByteArray) returns bool
+		return self.descriptorNeeds.contains(callee)
+	end 'functionNeedsLayoutDescriptor'
+
+	// Does ANY method in the whole program carry a descriptor — the allocation-free gate `parseFunction` opens
+	// with, and it is not an optimization. Asking the question above needs the qualified name BUILT, and a
+	// method's qualified name is a fresh `ByteArray`: spent per method declaration in a program that declares
+	// no generic type — the entire scale corpus — that is a per-declaration allocation bought to learn `false`.
+	// `SemanticCheck.hasInnerAliasParams` is the same guard over the same shape.
+	export function anyFunctionNeedsLayoutDescriptor() returns bool
+		return self.descriptorNeeds.count() != 0
+	end 'anyFunctionNeedsLayoutDescriptor'
+
+	// Publish the solved fixpoint. Wholesale, copy-on-write over the shared empty, and called at most once per
+	// compile — `foldDescriptorNeeds` solves over every site in the program at one moment, so there is no
+	// partial answer any reader could observe.
+	export function recordDescriptorNeeds(needs DescriptorNeedNameSet)
+		self.descriptorNeeds = needs
+	end 'recordDescriptorNeeds'
 
 	// ⭐⭐ **THE WITNESS CONSTRAINTS THE INSTANCE METHOD `callee` CARRIES — the ONE answer both the reservation
 	// side and the supply side of the dictionary-passing ABI resolve a callee by.** Its enclosing type's own
