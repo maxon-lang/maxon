@@ -108,9 +108,10 @@ static class BuildCache {
     /// FIRST order's binary while reporting success. Measured on a two-scope program whose answer
     /// genuinely depends on order — <c>wide=112</c> from the cache with the variable set, against
     /// <c>wide=70000</c> once the sources were touched and it was honoured. The seam is documented
-    /// as a VERIFICATION seam in <see cref="Compiler.FlatNamespaceCheck"/> and in the parser's
-    /// contested-alias comment, so its failure mode was to CONFIRM order-independence that had never
-    /// been tested.
+    /// as a VERIFICATION seam in <see cref="Compiler.FlatNamespaceCheck"/> and in
+    /// <see cref="Compiler.SourceCollector"/>'s own header, so its failure mode was to CONFIRM
+    /// order-independence that had never been tested — and both of those now carry the caveat that a
+    /// SAMENESS row recorded before this change was measured through a blind instrument.
     ///
     /// The order is DERIVED from the source array rather than keyed on the environment variable that
     /// happens to set it today: any future cause of a different order — a manifest's explicit source

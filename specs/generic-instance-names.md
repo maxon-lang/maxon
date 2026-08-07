@@ -237,3 +237,112 @@ end 'main'
 ```maxoncstderr
 error E3006: specs/fragments/generic-instance-names/error.instantiation-pair-compiling-to-one-name.test:55:15: duplicate definition of '__Map_A_B_C' - the generic instantiations `Map with (A_B, C)` and `Map with (A, B_C)` compile to that same name
 ```
+
+
+<!-- test: error.extension-alias-pair-compiling-to-one-name -->
+⭐ The SAME non-injective join, reached through the door the case above cannot reach: a `typealias`
+declared INSIDE an `extension`, which is minted once per conforming type rather than once where it is
+written. `Both = Pair with (K, V)` is one line of source; `One implements Duo with (A_B, C)` and
+`Two implements Duo with (A, B_C)` make it two instantiations, and both join to `__Pair_A_B_C`.
+⚠⚠ **THIS COMPILED CLEAN AND PRINTED A WRONG ANSWER**: measured before the fix, `2 77` where the
+program packs `20 77` — the second mint silently CLOBBERED the first registration, so `One`'s `Both`
+was laid out as `Pair with (A, B_C)` and `p.y.only` read the wrong field. ⚠ The diagnostic is
+POSITIONLESS on purpose, and that is the one thing that differs from the case above: an extension
+alias is minted by a loop that is no longer standing at any declaration the author wrote, so there is
+no honest token to point at — the whole-program form is what `CompileError` carries for exactly that.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type A_B
+	export var only as Num
+
+	static function create(only Num) returns Self
+		return Self{only: only}
+	end 'create'
+end 'A_B'
+
+type A
+	export var pad as Num
+	export var only as Num
+
+	static function create(pad Num, only Num) returns Self
+		return Self{pad: pad, only: only}
+	end 'create'
+end 'A'
+
+type C
+	export var pad as Num
+	export var only as Num
+
+	static function create(pad Num, only Num) returns Self
+		return Self{pad: pad, only: only}
+	end 'create'
+end 'C'
+
+type B_C
+	export var only as Num
+
+	static function create(only Num) returns Self
+		return Self{only: only}
+	end 'create'
+end 'B_C'
+
+type Pair uses X, Y
+	export var x as X
+	export var y as Y
+
+	static function make(x X, y Y) returns Self
+		return Pair{x: x, y: y}
+	end 'make'
+end 'Pair'
+
+interface Duo uses K, V
+	function first() returns K
+	function second() returns V
+end 'Duo'
+
+extension Duo
+	typealias Both = Pair with (K, V)
+
+	export function packedSecond() returns Num
+		let p = Both{x: first(), y: second()}
+		return p.y.only
+	end 'packedSecond'
+end 'Duo'
+
+type One implements Duo with (A_B, C)
+	function first() returns A_B
+		return A_B.create(1)
+	end 'first'
+
+	function second() returns C
+		return C.create(2, only: 20)
+	end 'second'
+
+	static function create() returns Self
+		return Self{}
+	end 'create'
+end 'One'
+
+type Two implements Duo with (A, B_C)
+	function first() returns A
+		return A.create(3, only: 30)
+	end 'first'
+
+	function second() returns B_C
+		return B_C.create(77)
+	end 'second'
+
+	static function create() returns Self
+		return Self{}
+	end 'create'
+end 'Two'
+
+function main() returns ExitCode
+	print("{One.create().packedSecond()} {Two.create().packedSecond()}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3006: duplicate definition of '__Pair_A_B_C' - the generic instantiations `Pair with (A_B, C)` and `Pair with (A, B_C)` compile to that same name
+```

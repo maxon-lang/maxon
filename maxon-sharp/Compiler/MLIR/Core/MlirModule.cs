@@ -689,10 +689,27 @@ public class IrModule<TOp> where TOp : IPrintableOp {
   /// own array and read back 112, because another file's one-byte <c>Cell</c> had decided the
   /// stride, and the same program with the files renamed answered correctly.
   ///
-  /// A name in here therefore names no type at all: every declaring file registers its instance
-  /// under the STRUCTURAL name that instance would have had if nothing declared it
-  /// (<see cref="IrStructType.InstanceIdentity"/>'s spelling), and the alias stays a per-file
-  /// spelling of it.
+  /// A declaring file therefore registers its instance under the STRUCTURAL name that instance would
+  /// have had if nothing declared it (<see cref="IrStructType.InstanceIdentity"/>'s spelling), and
+  /// the alias stays a per-file spelling of it.
+  ///
+  /// ⚠ WHETHER THE BARE NAME STILL NAMES A TYPE IN HERE DEPENDS ON THE DECLARATION'S VISIBILITY, and
+  /// this said flatly that it never did. Only a FILE-PRIVATE declarer withholds it
+  /// (<c>Parser.PublishesBareNameToModule</c>): nothing outside that file may write the name, so
+  /// nothing outside it needs the entry. A <c>module</c> or <c>export</c> declarer is renamed for its
+  /// own code but goes on publishing the bare name, because a file in its scope may write that name
+  /// and resolves it through this table — withheld, such a reader found only the pre-scan's empty
+  /// placeholder and died in lowering. Which instance those readers get is still the flat table's
+  /// last write, and is this rung's acknowledged residual, not its cure.
+  ///
+  /// ⚠ NOT EVERY CONTEST IS SETTLED BY A RENAME. A declaration nameable from outside its own scope is
+  /// never renamed — renaming it would break a reader doing nothing wrong — so where BOTH contestants
+  /// are <c>export</c> (or one <c>export</c> and one <c>module</c>) neither moves, and the bare entry
+  /// below is once again decided by which file merged last. MEASURED on the fixed build cache: an
+  /// exported <c>Cells</c> over <c>int(0 to 100000)</c> declared before an exported or module-visible
+  /// <c>Cells</c> over <c>int(0 to 255)</c> reads its own 70000 back as 112, with no diagnostic. That
+  /// pair is the AMBIGUITY question (E3063), which does NOT fire for it today — see
+  /// <c>Parser.IsFileScopedAliasDeclaration</c>.
   ///
   /// ⚠ RECORDED BY THE WHOLE-PROJECT DECLARATION PASS (<see cref="DeclaredAliasInstances"/>), which
   /// is the ONLY pass that has read every file and minted nothing — so both declarations are renamed,

@@ -30,14 +30,25 @@ public enum SourceSelection {
 /// Resolution of top-level CONSTANTS does not depend on this order: every file's
 /// constant declarations are collected before any of them is folded (see
 /// Parser.PreScanTopLevelConstantDecls). Other pre-scan passes still carry
-/// ordering dependencies — a duplicate type name resolves first-file-wins, and
-/// auto-conformance synthesis only sees the files pre-scanned before it — so a
-/// divergence in this order can still produce a diagnostic in one client and not
-/// the other, until those are order-independent too.
+/// ordering dependencies — a duplicate type name resolves LAST-writer-wins (the
+/// flat tables are assigned into, never TryAdd'd: see Parser.CopyStateToModule
+/// and IrModule.Merge), and auto-conformance synthesis only sees the files
+/// pre-scanned before it — so a divergence in this order can still produce a
+/// diagnostic in one client and not the other, until those are order-independent
+/// too. A CONTESTED generic-instance alias is now neither, where the losing
+/// declaration may be renamed (IrModule.ContestedGenericAliasNames).
 ///
 /// <see cref="SourceOrderEnvVar"/> is the seam that proves the claim rather than
 /// asserting it: a real project built forwards and backwards must produce
 /// byte-identical output and diagnostics.
+///
+/// ⚠ IT PROVED NOTHING ON A WARM TREE UNTIL BATCH34. Reversing the list changes no
+/// path and no timestamp, and the build cache keyed sources as an unordered
+/// dictionary, so the second build of a directory HIT the cache and re-ran the
+/// first order's binary while reporting success — the seam could return a false
+/// "order-independent" and never a false positive. The cache now keys the order
+/// (BuildCache.SourceInputs.Sources); a sameness result recorded before that date
+/// was measured through a blind instrument.
 /// </summary>
 public static class SourceCollector {
   /// <summary>

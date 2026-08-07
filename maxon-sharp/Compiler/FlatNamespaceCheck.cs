@@ -19,8 +19,8 @@ namespace MaxonSharp.Compiler;
 ///
 /// WHY IT IS A PROJECT CHECK AND NOT A COMPILER DIAGNOSTIC. Whether a Maxon PROGRAM may declare one
 /// exported name in two files is a language question <c>/specs</c> has not settled —
-/// <c>specs/global-file-private-same-name.md</c> specifies the FILE-PRIVATE case as legal and says
-/// nothing about the exported one — so emitting an error from the compiler would decide it by
+/// <c>specs-shv2/global-file-private-same-name.md</c> specifies the FILE-PRIVATE case as legal and
+/// says nothing about the exported one — so emitting an error from the compiler would decide it by
 /// implementation. That decision is its own rung (A2d), gated by the whole C# suite. Refusing it in
 /// THIS repository's own sources decides nothing about the language and still closes the class, which
 /// is why this runs from <c>dotnet build</c> beside <c>maxon error-codes check</c> and never from a
@@ -28,7 +28,18 @@ namespace MaxonSharp.Compiler;
 ///
 /// WHAT IT ASKS, AND WHY THAT IS THE RULE. Measured against the bootstrap by building a two-file
 /// project forwards and then with <c>MAXON_SOURCE_ORDER=reverse</c> (SourceCollector's own seam), for
-/// every declaration kind:
+/// every declaration kind.
+///
+/// ⚠ READ THE POSITIVE AND NEGATIVE ROWS DIFFERENTLY, because the instrument was HALF BLIND when they
+/// were taken: until BATCH34 the build cache did not key the source ORDER, so a reversal over
+/// untouched sources hit the cache and re-ran the FIRST order's binary (see
+/// <see cref="BuildCache.SourceInputs.Sources"/>). A row reporting a DIFFERENCE is unaffected — a
+/// cache hit cannot manufacture one — so every bullet below that names two outcomes stands. A row
+/// reporting SAMENESS ("identically both ways", "byte-identical binaries both orders") may be
+/// reporting the cache, and is a claim rather than a measurement until re-taken on a cold tree.
+/// BATCH34 re-took the closest one and it did NOT hold: a file-private <c>typealias</c> shadowing a
+/// foreign exported one of the same name answered <c>wide=112</c> one way and <c>wide=70000</c> the
+/// other (<c>specs/typealias-collision.md</c>'s <c>exported-generic-alias-keeps-its-own-element</c>).
 /// <list type="bullet">
 /// <item><c>export let</c> — exit 22 forwards, 11 reversed. SILENT and order-dependent.</item>
 /// <item><c>export var</c> — exit 22 forwards, 11 reversed. Same.</item>
@@ -36,7 +47,9 @@ namespace MaxonSharp.Compiler;
 /// <item><c>export union</c> — same exit code, DIFFERENT binary: the case ordinals follow file order.</item>
 /// <item><c>export typealias</c> — accepted one way, E3005 out-of-range the other.</item>
 /// <item><c>export interface</c> — E3016 naming a different missing method each way.</item>
-/// <item><c>module</c> visibility behaves exactly as <c>export</c> within its subtree, so it is in.</item>
+/// <item><c>module</c> visibility behaves exactly as <c>export</c> within its subtree, so it is in.
+///   ⚠ And outside its subtree it behaves like <c>export</c> for STORAGE, which is the half this
+///   list did not say — see <see cref="AnyPairIsMutuallyVisible"/>.</item>
 /// <item><c>export function</c> — E3006 <c>Duplicate function</c> BOTH ways. Already loud, so it is
 ///   OUT: this gate is for the silent class, and a second refusal of the same thing would be a second
 ///   place to keep the rule.</item>
@@ -283,10 +296,24 @@ public static class FlatNamespaceCheck {
 
   /// <summary>
   /// Do at least two of these declarations actually see each other? An <c>export</c> is visible
-  /// program-wide, so it collides with anything of its name. Two <c>module</c> declarations collide
-  /// only where their directory subtrees overlap, which is <see cref="Parser.IsFileInModuleScope"/>'s
-  /// rule and not restated here — sibling subtrees each keep their own name, and refusing that would
-  /// be this check inventing a language rule rather than protecting against a measured one.
+  /// program-wide, so it collides with anything of its name. Two <c>module</c> declarations are
+  /// mutually NAMEABLE only where their directory subtrees overlap, which is
+  /// <see cref="Parser.IsFileInModuleScope"/>'s rule and not restated here.
+  ///
+  /// ⚠ "SIBLING SUBTREES EACH KEEP THEIR OWN NAME" IS WHAT THIS USED TO SAY, AND IT IS FALSE. Being
+  /// unable to NAME each other's declaration is not the same as each having its own; the module's
+  /// type tables are keyed by bare name and hold ONE entry per name program-wide, so two
+  /// <c>module</c> declarations in DISJOINT subtrees still share it. Measured (BATCH34's
+  /// <c>module-alias-does-not-govern-another-directory</c>): <c>scopeB/</c>'s
+  /// <c>Cell = int(0 to 255)</c> truncated <c>scopeA/</c>'s 70000 to 112, and reversing the file
+  /// order gave the other answer. <c>module</c> governs who may WRITE a name down, never who decides
+  /// its STORAGE.
+  ///
+  /// The check still does not report that pair, and the reason is the one this file opens with
+  /// rather than the false premise: whether it is legal is a language question (rung A2d), and the
+  /// compiler-side cure for the storage half already landed — a contested <c>module</c> alias is
+  /// renamed per declarer, so each subtree's own code is correct. What remains is a READER in one of
+  /// those subtrees, which is a scoping change to the alias tables and not a name-collision report.
   /// </summary>
   static bool AnyPairIsMutuallyVisible(List<Site> perFile) {
     if (perFile.Any(s => s.IsExported)) return true;

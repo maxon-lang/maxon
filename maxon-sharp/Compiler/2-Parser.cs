@@ -1771,6 +1771,18 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
           && AliasVisibilityRank(ownerInfo) > AliasVisibilityRank(isExported, isModuleVisible, _isStdlib))
         continue;
 
+      // ⚠ THE SAME GUARD AS THE TYPE WRITE ABOVE, AND IT IS A THIRD WRITE OF THE BARE NAME. This
+      // record is what SeedFromModule hands to every OTHER parser, so publishing it while
+      // withholding the type above tells a foreign file that `Cells` is an alias for a concrete
+      // generic instance while the whole-program type table still holds only the pre-scan's empty
+      // placeholder for that name. MEASURED: a third file naming a `Cells` that BOTH its declarers
+      // declared file-private and contested reached lowering against the placeholder and died as
+      // `E9001 Lowering function 'Cells.create' failed: Object reference not set` — an internal
+      // failure, with a C# stack trace, on a program the parent commit compiled. Withheld here too,
+      // the name simply is not a type outside its declarers, which is what file-private means, and
+      // the reference is refused the way any undeclared name is (E2004, positioned at the reader).
+      if (!PublishesBareNameToModule(aliasName)) continue;
+
       module.TypeAliasSources[aliasName] = new TypeAliasInfo(sourceTypeName, typeParams,
           isExported, _isStdlib, declaringFilePath, ownerTypeName, isModuleVisible, constParams);
       if (declaringFilePath != null)
@@ -1803,7 +1815,19 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   /// restriction is the whole reason renaming is safe: a declaration a file beyond the contest MAY
   /// name is one that file's reference resolves through BY NAME, so renaming it would break a reader
   /// doing nothing wrong. Two program-wide declarations of one name is the AMBIGUITY question
-  /// instead (E3063 / AmbiguousTypeNames), which this is not — leaving that pair exactly as it was.
+  /// instead (E3063 / AmbiguousTypeNames), and that pair is left exactly as it was.
+  ///
+  /// ⚠ "LEFT EXACTLY AS IT WAS" IS A SCOPE STATEMENT, NOT A CLAIM THAT SOMETHING ELSE CATCHES IT, and
+  /// this read as the latter. E3063 fires from <c>ParseTypeRef</c> against <c>seedModule</c>'s
+  /// <c>AmbiguousTypeNames</c> — a name a LATER-parsed file writes down. The two declaring files each
+  /// resolve their own declaration locally and never consult it, so a contest between two
+  /// program-wide declarations reaches no diagnostic at all. MEASURED on the fixed build cache, both
+  /// orders, at HEAD: an <c>export typealias Cells</c> over <c>int(0 to 100000)</c> declared before an
+  /// <c>export</c> (or <c>module</c>) <c>Cells</c> over <c>int(0 to 255)</c> compiles clean, exit 0,
+  /// and reads its own 70000 back as 112 — the same wrong answer this rung closed for every pairing
+  /// where ONE side may be renamed, still live for the pairing where NEITHER may. Curing it means
+  /// deciding whether two program-wide declarations of one name are legal (rung A2d's question) and
+  /// then refusing them; it is not a mint rule and cannot be reached from here.
   ///
   /// A stdlib alias counts as nameable however it is written, because SeedFromModule seeds every
   /// stdlib alias into every parser regardless of `export`: its file-privacy is not enforced, so it
@@ -1961,8 +1985,15 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   /// govern its own file. This asks a different question — may anything outside this file name the
   /// entry? — and only a renamed file-private contestant answers no.
   ///
-  /// ⚠ Asked at BOTH module writes. <c>CopyStateToModule</c>'s blanket registry copy runs first and
-  /// silently defeated the same guard when it was spelled only on the alias copy below.
+  /// ⚠ Asked at ALL THREE module writes. <c>CopyStateToModule</c>'s blanket registry copy runs first
+  /// and silently defeated the same guard when it was spelled only on the alias copy below; and
+  /// <c>CopyTypeAliasesToModule</c> writes the bare name TWICE — once as a type in
+  /// <c>module.TypeDefs</c> and once as a RECORD in <c>module.TypeAliasSources</c>, which
+  /// <c>SeedFromModule</c> hands to every other parser. Guarding only the type left foreign files
+  /// told that <c>Cells</c> was an alias for a concrete instance while no type of that name existed,
+  /// and the reference died in lowering as <c>E9001 … Object reference not set</c> on a program the
+  /// parent commit compiled. Guarded at all three, "no other file may write it at all" is true of the
+  /// module's tables as well as of the language.
   /// </summary>
   private bool PublishesBareNameToModule(string name) =>
     !_contestedAliasInstanceNames.ContainsKey(name)
@@ -24389,21 +24420,17 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     // The inner alias's CONST arguments are fixed where it was declared and are not substituted
     // through — `typealias Row = Vector with 4 Element` is the capacity-4 instance whatever Element
     // resolves to — so they are part of the instance this search asks about.
-    var innerInstanceKey = IrStructType.InstanceKey(innerSourceName, resolvedInnerParams, innerStruct.ConstParams);
-
-    // Asked as the instance key, not a hand-written per-parameter loop: written out, this was the
-    // SAME count-plus-per-parameter-name comparison the rest of this family was consolidated onto,
-    // and it silently dropped the const arguments — so a conformance-bound `Row` of capacity 4
-    // could adopt a declared capacity-3 alias, which is this rung's defect one level in.
-    foreach (var (aliasName, aliasSource) in _typeAliasSources) {
-      if (aliasSource != innerSourceName) continue;
-      if (!_typeRegistry.TryGetValue(aliasName, out var aliasRegType)) continue;
-      if (aliasRegType is not IrStructType aliasSt) continue;
-      if (aliasSt.TypeParams.Values.Any(t => t is IrTypeParameterType)) continue;
-      if (IrStructType.InstanceKey(aliasSource, aliasSt.TypeParams, aliasSt.ConstParams) != innerInstanceKey) continue;
-
-      return aliasSt;
-    }
+    //
+    // ⚠ THE FIFTH ASKER, AND IT WAS STILL ANSWERING BY FILE ORDER. This was the same hand-written
+    // loop over `_typeAliasSources` the other four sites were lifted onto BestKnownNameForInstance,
+    // left behind seventy lines below one of them: an inline type-parameter test, an inline
+    // InstanceKey comparison, and a `return` on the first entry an insertion-ordered dictionary
+    // handed back. Worse than the others, because this one returns a TYPE rather than a name — so
+    // its missing third clause (a CONTESTED instance is adopted on its identity, never on the
+    // by-name key) hands one file's storage to another exactly as the mint's did, one door along.
+    if (BestKnownNameForInstance(innerSourceName, resolvedInnerParams, innerStruct.ConstParams) is { } named
+        && _typeRegistry[named] is IrStructType namedStruct)
+      return namedStruct;
 
     return null;
   }

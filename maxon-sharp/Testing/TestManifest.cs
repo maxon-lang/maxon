@@ -8,8 +8,10 @@ namespace MaxonSharp.Testing;
 /// <c>maxon test --list</c> — or a warm run whose binary is already cached — does not re-parse the
 /// project to learn something that has not changed.
 ///
-/// It is keyed on exactly what a BUILD is keyed on: the compiler's own timestamp and every source
-/// file's last-write time, both taken from <see cref="BuildCache"/> rather than recomputed. Two
+/// It is keyed on exactly what a BUILD is keyed on: the compiler's own timestamp, and every source
+/// file's last-write time IN COMPILE ORDER (the order is part of the input — see
+/// <see cref="BuildCache.SourceInputs.Sources"/>), all taken from <see cref="BuildCache"/> rather
+/// than recomputed. Two
 /// caches over the same inputs that decided staleness their own way would eventually disagree, and
 /// the one that was wrong would be this one — reporting a test that no longer exists, or missing one
 /// that does.
