@@ -156,7 +156,7 @@
 //     a module that redeclares a builtin.
 //   • ⚠ FUNCTION-name-vs-BARE-BUILTIN collisions are SILENT — which is why the builtin is RETIRED FIRST,
 //     and `stdlib/Sleep.maxon` is the entry that was added that way. `Parser.parseCallNamed` recognizes a
-//     set of BARE names — `print` and `trunc` among them — BEFORE `emitCall`
+//     set of BARE names — `trunc` and `runProcess` among them — BEFORE `emitCall`
 //     consults any registry, so while one of them claims a name, a CALL to that name never reaches a
 //     declaration of it: listing such a module loads code no ordinary call site can reach — `sleep(5)`
 //     still emitted the builtin's `__gt_sleep` — while charging the per-module load cost for zero
@@ -823,9 +823,13 @@ function whitelistedStdlibModules(stdlibDir FilePath) returns MaxonSourcePathSet
 	// It clears every entry in this file's collision rule, each CHECKED rather than assumed:
 	//   • FREE FUNCTIONS (E3006): it declares NONE — all four functions are `static`s of `Build` or
 	//     `BuildConfig` — so the free-function clause and its silent bare-builtin shadow are vacuous. Checked
-	//     against `Parser.parseCallNamed`'s chain AT THE CHAIN. ⚠ It CONSUMES one: `emitBuildConfig` calls
-	//     `print` by bare name, which the chain answers. That direction is sound and is what the builtins are
-	//     for — what a bare builtin reserves is a DECLARATION no call site can reach, and there is none here.
+	//     against `Parser.parseCallNamed`'s chain AT THE CHAIN. ⚠ It calls `print` by bare name twelve times.
+	//     When this entry was written the CHAIN answered those calls, and that direction was sound — what a
+	//     bare builtin reserves is a DECLARATION no call site can reach, and there is none here. ⚠⚠ **W35
+	//     RETIRED THAT BUILTIN, so those twelve calls are now ordinary calls to `stdlib/Print.maxon`'s
+	//     declaration and this entry DEPENDS on that module being listed.** A listed module consuming another
+	//     listed module's free function is new here — the clause below about calling into other modules is
+	//     what carries it — and it is why the retirement and the two `Print` entries are one change.
 	//   • TYPE NAMES: `Build` and `BuildConfig` are nominal declarations, so a user program spelling either
 	//     wins and these move into the reserved space (A1s wave 2). No other listed module declares either,
 	//     checked AT THE SOURCE.
@@ -1301,6 +1305,65 @@ function whitelistedStdlibModules(stdlibDir FilePath) returns MaxonSourcePathSet
 	// there. That predicts a constant STEP on the scale ladder rather than a bend, which is the reading the
 	// ladder can confirm and this A/B cannot.
 	try listWhitelistedModule(stdlibDir, relative: "Console.maxon", into: listed)
+	// ⭐⭐ **W35 — `stdlib/Print.maxon` AND `stdlib/PrintError.maxon`, AND THIS IS THE THIRD APPLICATION OF
+	// THE BARE-BUILTIN RULE ABOVE.** Eleven lines and six between them: one `export function` each, over one
+	// intrinsic. Their blockers were `__Builtins.writeStdout`/`writeStderr`, which did not exist — MEASURED
+	// at HEAD before this rung, `E3004 stdlib\PrintError.maxon:5:2` — and, for `Print.maxon` alone, a
+	// bare-name `print` BUILTIN that claimed the call before any registry was consulted.
+	//
+	// ⚠⚠ **THE BUILTIN IS THE ENTRY, NOT A FOOTNOTE, AND THE ROW THAT FILED THIS RUNG GOT THE HARM WRONG.**
+	// It predicted an `E3006` collision. MEASURED with both entries added and the builtin still live:
+	// `print("hi\n")` compiled CLEAN — 1,703 bytes, no diagnostic — while `printError(…)` one file over
+	// raised the `E3004` above, which proves `PrintError.maxon` WAS analyzed and `Print.maxon` was NEVER
+	// REACHED. So the harm was not a refusal: it was a NO-OP entry that counts +1 on the cone and changes
+	// nothing, which is this project's own recurring class. The rule's conclusion survives its wrong
+	// premise, because the rule is about REACHABILITY and not about diagnostics. The builtin is retired
+	// (see `Parser.maxon`, where `PrintBuiltinName` was declared).
+	//
+	// ⭐ **AND THE DEPENDENCY RUNS THE OTHER WAY TOO: `stdlib/Build.maxon` — ALREADY LISTED — CALLS `print`
+	// TWELVE TIMES.** While the builtin stood, the chain answered those calls; the moment it is retired they
+	// need a declaration, so `Print.maxon` is not merely unblocked by the retirement, it is REQUIRED by it.
+	// That is the pair of edits this entry and the builtin's deletion have to land in one commit.
+	//
+	// They clear every entry in this file's collision rule, each CHECKED rather than assumed. Most clauses
+	// are vacuous here, and saying WHY is cheaper than leaving a reader to wonder which were skipped:
+	//   • FREE FUNCTIONS: each declares exactly ONE, `print` and `printError`, and nothing else at all — no
+	//     type, no typealias, no top-level binding. Checked against `Parser.parseCallNamed`'s bare-name `if`
+	//     chain AT THE CHAIN, as that rule's last bullet insists, and in BOTH directions. INWARD: after this
+	//     rung the chain claims `runProcess spawnReadLine` + the seven `subp*` + `trunc floor ceil round sqrt
+	//     abs min max`, and neither name is among them — `print` was, which is the whole first half of this
+	//     entry. OUTWARD: `Print.maxon`'s body consumes NO bare name (`value.addressableBytes()` is
+	//     receiver-dot, `__Builtins.writeStdout` is prefix-qualified), and neither does `PrintError.maxon`'s.
+	//   • ⚠ THE SIXTH SURFACE — the LISTED SET's OWN free functions (W5 review) — is the one clause that can
+	//     bite a module declaring only free functions, so it was checked at the source across all 50 stdlib
+	//     files rather than against a roster: `print` and `printError` are declared by these two files and by
+	//     NOTHING else in `stdlib/`, listed or not. There is no `stripTrailingCR`-shaped collision waiting.
+	//   • TYPE NAMES (user shadowing, listed-vs-listed, and the still-SILENT builtin case): all three are
+	//     vacuous — neither module declares a type at all.
+	//   • The RANGED-TYPEALIAS clause, the one that moved `File.maxon`'s golden through `Byte` and that
+	//     `Process.maxon` met through `ExitCode`: vacuous, neither declares a `typealias`.
+	//   • E3112 fires only when a user program actually contests a spelling. The surface is ONE parameter
+	//     name, `value`, shared by both — and it is a FIRST parameter, so no call site ever spells it as a
+	//     label. It is contested by the listed set already in any case (`Sha256.maxon`'s `value:`).
+	//   • ⚠ THE "TYPE-PARAMETERIZED BY A USER DECLARATION" CLAUSE IS LIVE, and it is the one that broke
+	//     `URL.maxon`, then `CommandLine.maxon`, then `Console.maxon`. `addressableBytes()` hands the
+	//     intrinsic a byte buffer, which is exactly the `__ManagedMemory`/`Byte` shape those three met. It is
+	//     clear on BOTH sides: the PRODUCER mints `SignatureIndex.SynthesizedByteElementName` (the compiler's
+	//     own element, not one spelled out of user-declarable names), and the CONSUMER is
+	//     `Parser.valueIsByteArray` — the shared byte-packed-buffer predicate, which admits that mint. The
+	//     clause says checking it is a BUILD and not a reading, so it was built: a program declaring
+	//     `typealias Byte = int(0 to 1000)` that calls neither module compiles and runs clean, and one that
+	//     calls `print` does too.
+	//   • NO top-level binding, so the `S2h` reachability term has nothing of theirs to keep or drop — and
+	//     the byte A/B this file makes mandatory for a module with state is therefore not owed. It was run
+	//     anyway, because these two are reached by far more of the corpus than any previous entry.
+	//   • NO imports. Their only outward reference is the intrinsic, which is the compiler.
+	//
+	// MEASURED before listing, which is the check this file's rule prescribes: with both intrinsics built,
+	// `maxon-shv2 build stdlib/Print.maxon` and `… stdlib/PrintError.maxon` each exit 1 with
+	// `E3001: No 'main' function found` AND NOTHING ELSE.
+	try listWhitelistedModule(stdlibDir, relative: "Print.maxon", into: listed)
+	try listWhitelistedModule(stdlibDir, relative: "PrintError.maxon", into: listed)
 	return listed
 end 'whitelistedStdlibModules'
 

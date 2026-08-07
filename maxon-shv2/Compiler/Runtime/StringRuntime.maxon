@@ -127,11 +127,29 @@ export let BoolToStringScratchBytes = 5 as ParsedInt
 let StringBlobPrefix = "__str_blob_"
 let StringRecordPrefix = "__str_rec_"
 
-// The two runtime entry points this file installs. `__`-prefixed (`isCompilerInternalCallee` treats
-// them as the compiler's own — no E3004, no signature slotting), but NOT `__mm_`-prefixed, so
-// `isRuntimeCallee` leaves them out of the heap-runtime decision: a program that only prints or only
-// compares strings carries neither the allocator nor the leak check.
-export let PrintStringName = b"__print_string"
+// ⭐⭐ **THE TWO STREAM WRITERS — `stdlib/Print.maxon`'s and `stdlib/PrintError.maxon`'s ONLY floor (W35),
+// and they REPLACE `__print_string`.** That entry point existed to serve a bare-name `print` BUILTIN,
+// which is retired: `print` is now an ordinary call to the corpus declaration, whose body is
+// `__Builtins.writeStdout(value.addressableBytes())`, and `printError` is its twin one stream over. So the
+// graph did not go away — it gained a stderr sibling, a `__ManagedMemory` argument in place of a String
+// pointer (the two records agree at `buffer@0`/`length@8`, which is all either reads) and a RESULT.
+//
+// `__`-prefixed (`isCompilerInternalCallee` treats them as the compiler's own — no E3004, no signature
+// slotting), but NOT `__mm_`-prefixed, so `isRuntimeCallee` leaves them out of the heap-runtime decision.
+//
+// ⚠⚠ **AND THAT NARROWNESS IS A MEASURED POLICY, NOT AN OVERSIGHT — see `MmRuntime.isRuntimeCallee`.**
+// Every W5-era runtime family declares `usesHeap` AND `usesArray` transitively, because its Std body calls
+// `__arr_create`/`__mm_alloc` one tier down. These two bodies call NOTHING: two loads and one system op.
+// Giving them a W5-shaped usage bit by reflex would drag the allocator and the leak gate into every
+// program that writes a byte to a stream.
+//
+// ⚠ **`StreamWrite…`, NOT `WriteStderrName` — that spelling IS TAKEN, by the thing these must not be
+// confused with.** `BacktraceFormat.WriteStderrName` is `mrt_write_cstr_stderr`, the hand-assembled
+// NUL-terminated panic writer (see `StdOp.osWriteStderr` for why it cannot serve this). Naming a second
+// constant that would be the same near-name trap as `X64Runtime.emitPrintString` against
+// `buildPrintString`, one namespace collision closer.
+export let StreamWriteStdoutName = b"__write_stdout"
+export let StreamWriteStderrName = b"__write_stderr"
 export let StrEqName = b"__str_eq"
 
 // The two runtime entry points an interpolation lowers CALLS to (`Parser.emitStringInterp`). `__str_copy`
@@ -468,7 +486,11 @@ export type RuntimeUsage
 	// of `usesIocp` (the yielding line read rides the completion thread), set by `recordCallUsage` on any
 	// `__gt_subp_*` call. Drives `installSubpRuntime` + the `__subp_table` `.data` slot.
 	export var usesStreaming as bool
-	export var usesPrint as bool
+	// W35: the two stream writers, each with its OWN bit under this file's one-bit-per-entry-point
+	// discipline — a program that only prints must not carry the stderr writer, and neither declares any
+	// transitive floor (see `StreamWriteStdoutName`).
+	export var usesWriteStdout as bool
+	export var usesWriteStderr as bool
 	export var usesStrEq as bool
 	export var usesStrCopy as bool
 	export var usesIntToString as bool
@@ -705,7 +727,7 @@ export type RuntimeUsage
 	export var usesProcessIntrospection as bool
 
 	static function create() returns RuntimeUsage
-		return Self{usesHeap: false, usesGt: false, usesIocp: false, usesStreaming: false, usesPrint: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesUIntToString: false, usesBoolToString: false, usesStrAppend: false, usesStrDecref: false, usesArray: false, usesSet: false, usesMap: false, usesList: false, usesDropTypeParam: false, usesDropExistential: false, usesRetainExistential: false, usesIncref: false, usesRetain: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrRangeEq: false, usesStrFind: false, usesStrRFind: false, usesStrStartsWith: false, usesStrEndsWith: false, usesStrContains: false, usesStrMapCase: false, usesStrReplace: false, usesStrSplit: false, usesStrReplaceFirst: false, usesStrFromBytes: false, usesStrBytesView: false, usesStrByteAt: false, usesStrByteAtOrPanic: false, usesManagedArrayCopy: false, usesOpaqueArrayCopy: false, neededCloners: ClonerSet.create(), usesWallClock: false, usesCharAt: false, usesCharCmp: false, usesCharFromCodepoint: false, usesCharAsciiValue: false, usesStrToBytes: false, usesStrToCodepoints: false, usesStrToUtf16: false, usesStrIndexMake: false, usesStrIndexEnd: false, usesStrIndexByteToGrapheme: false, usesStrIndexAdvance: false, usesStrIndexFirst: false, usesStrIndexLast: false, usesStrIndexSlice: false, usesStrIndexAfter: false, usesUcdCategory: false, usesCharSetMake: false, usesCharSetDecref: false, usesCharSetContains: false, usesStrTrim: false, usesManagedFile: false, usesManagedDirectory: false, usesCommandLine: false, usesConsoleStdin: false, usesProcessIntrospection: false}
+		return Self{usesHeap: false, usesGt: false, usesIocp: false, usesStreaming: false, usesWriteStdout: false, usesWriteStderr: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesUIntToString: false, usesBoolToString: false, usesStrAppend: false, usesStrDecref: false, usesArray: false, usesSet: false, usesMap: false, usesList: false, usesDropTypeParam: false, usesDropExistential: false, usesRetainExistential: false, usesIncref: false, usesRetain: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrRangeEq: false, usesStrFind: false, usesStrRFind: false, usesStrStartsWith: false, usesStrEndsWith: false, usesStrContains: false, usesStrMapCase: false, usesStrReplace: false, usesStrSplit: false, usesStrReplaceFirst: false, usesStrFromBytes: false, usesStrBytesView: false, usesStrByteAt: false, usesStrByteAtOrPanic: false, usesManagedArrayCopy: false, usesOpaqueArrayCopy: false, neededCloners: ClonerSet.create(), usesWallClock: false, usesCharAt: false, usesCharCmp: false, usesCharFromCodepoint: false, usesCharAsciiValue: false, usesStrToBytes: false, usesStrToCodepoints: false, usesStrToUtf16: false, usesStrIndexMake: false, usesStrIndexEnd: false, usesStrIndexByteToGrapheme: false, usesStrIndexAdvance: false, usesStrIndexFirst: false, usesStrIndexLast: false, usesStrIndexSlice: false, usesStrIndexAfter: false, usesUcdCategory: false, usesCharSetMake: false, usesCharSetDecref: false, usesCharSetContains: false, usesStrTrim: false, usesManagedFile: false, usesManagedDirectory: false, usesCommandLine: false, usesConsoleStdin: false, usesProcessIntrospection: false}
 	end 'create'
 end 'RuntimeUsage'
 
@@ -883,9 +905,12 @@ export function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 		usage.usesHeap = true
 		usage.usesArray = true
 	end 'processIntrospection'
-	if callee.equals(PrintStringName) 'print'
-		usage.usesPrint = true
-	end 'print'
+	if callee.equals(StreamWriteStdoutName) 'writestdout'
+		usage.usesWriteStdout = true
+	end 'writestdout'
+	if callee.equals(StreamWriteStderrName) 'writestderr'
+		usage.usesWriteStderr = true
+	end 'writestderr'
 	if callee.equals(StrEqName) 'streq'
 		usage.usesStrEq = true
 	end 'streq'
@@ -1329,9 +1354,12 @@ end 'closeStringMethodNeeds'
 // pipeline (like `installMmRuntime`), so these are appended already-lowered and never re-optimized.
 // Each is installed ONLY when referenced — vocabulary does not ship ahead of its consumer.
 export function installStringRuntime(module StdModule, usage RuntimeUsage)
-	if usage.usesPrint 'print'
-		buildPrintString(module)
-	end 'print'
+	if usage.usesWriteStdout 'writestdout'
+		buildStreamWrite(module, name: StreamWriteStdoutName, stream: OsOutputStream.standardOutput)
+	end 'writestdout'
+	if usage.usesWriteStderr 'writestderr'
+		buildStreamWrite(module, name: StreamWriteStderrName, stream: OsOutputStream.standardError)
+	end 'writestderr'
 	if usage.usesStrEq 'streq'
 		buildStrEq(module, name: StrEqName)
 	end 'streq'
@@ -1400,32 +1428,49 @@ export function installStringRuntime(module StdModule, usage RuntimeUsage)
 	end 'strbyteatorpanic'
 end 'installStringRuntime'
 
-// `__print_string(strPtr)` — write a String's bytes to stdout, no trailing newline.
+// `__write_stdout(mm)` / `__write_stderr(mm)` — write a `__ManagedMemory`'s bytes to a standard stream, no
+// trailing newline, answering the byte count the OS reports.
 //
-// It loads `buffer@0` and `length@8` from the record and hands them to the `osWriteStdout` system op,
-// which lowers per target — x64-windows to `GetStdHandle` + `WriteFile` through the IAT, arm64-macOS to
-// a POSIX `write` through the GOT. The op is target-neutral, so this function names no OS symbol AND
-// sets no frame size: `outgoingArgSize` (WriteFile's stack-arg space on x64, ZERO on arm64's all-register
-// `write`) is a TARGET ABI fact, so each backend's isel sets it from the op it actually lowers
-// (`StdToX64Conversion` bumps it for `osWriteStdout`; arm64 needs none). Setting it here would bake an
-// x64 frame size into a target-neutral function — the leak that made the arm64 prologue panic.
-function buildPrintString(module StdModule)
-	var func = IrFunction.createFromStd(PrintStringName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+// It loads `buffer@0` and `length@8` from the record and hands them to the stream's system op, which lowers
+// per target — x64-windows to `GetStdHandle` + `WriteFile` through the IAT, arm64-macOS to a POSIX `write`
+// through the GOT, wasm to a `wasi:cli` accessor plus `blocking-write-and-flush`. The op is target-neutral,
+// so this function names no OS symbol AND sets no frame size: `outgoingArgSize` (WriteFile's stack-arg space
+// on x64, ZERO on arm64's all-register `write`) is a TARGET ABI fact, so each backend's isel sets it from the
+// op it actually lowers. Setting it here would bake an x64 frame size into a target-neutral function — the
+// leak that made the arm64 prologue panic.
+//
+// ⭐ **PARAMETERIZED so ONE graph serves TWO symbols**, exactly as `buildStrEq` serves `__str_eq` and the
+// `Equatable` witness: the stream is the only difference, and the record read is not a fact worth writing
+// twice.
+//
+// ⚠ **THE ARGUMENT IS A `__ManagedMemory`, NOT A String — and the offsets are the same ones because the two
+// RECORDS agree there.** `stdlib/Print.maxon` hands over `value.addressableBytes()`, an `Array with Byte`
+// view; a String record and an Array record share `buffer@0`/`length@8` (they part company at `@40`, which
+// nothing here reads — see `buildStrBytesView` for why that one slot matters elsewhere). The bytes are
+// BORROWED: this reads through them and never frees, so a literal argument needs no decref.
+function buildStreamWrite(module StdModule, name ByteArray, stream OsOutputStream)
+	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry")
 	emitParams(module, block: entry, count: 1)
-	let strPtr = 0 as ValueId
+	let record = 0 as ValueId
 
 	let buffer = ids.mint()
-	module.appendOp(entry, op: StdOp.loadIndirect(buffer, addrId: strPtr, offset: StringBufferOffset, valueType: StdType.i64))
+	module.appendOp(entry, op: StdOp.loadIndirect(buffer, addrId: record, offset: StringBufferOffset, valueType: StdType.i64))
 	let length = ids.mint()
-	module.appendOp(entry, op: StdOp.loadIndirect(length, addrId: strPtr, offset: StringLengthOffset, valueType: StdType.i64))
-	module.appendOp(entry, op: StdOp.osWriteStdout(buffer, lenId: length))
-	module.setTerminator(entry, op: StdOp.retVoid)
+	module.appendOp(entry, op: StdOp.loadIndirect(length, addrId: record, offset: StringLengthOffset, valueType: StdType.i64))
+
+	let written = ids.mint()
+	match stream 's'
+		standardOutput then module.appendOp(entry, op: StdOp.osWriteStdout(written, bufId: buffer, lenId: length))
+		standardError then module.appendOp(entry, op: StdOp.osWriteStderr(written, bufId: buffer, lenId: length))
+	end 's'
+
+	module.setTerminator(entry, op: StdOp.ret(written))
 
 	module.functions.push(func)
-end 'buildPrintString'
+end 'buildStreamWrite'
 
 // `<name>(a, b) -> i64(bool)` — content equality: equal LENGTHS and equal BYTES. BOTH String operands are
 // BORROWED (read through, never freed), so this allocation-free body is the equality both the `==` operator

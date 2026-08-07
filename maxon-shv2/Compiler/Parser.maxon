@@ -3095,22 +3095,23 @@ let BinaryNumericBuiltinArity = 2 as ParamCount
 // spelling of `IrInterface`'s canonical constant — the thing `BoolConformerName`'s header forbids outright.
 // Deleted at the W1 review; `Character`'s twin went the same way. See `StringConformerName`.
 
-// **THE `print` BUILTIN'S NAME** (P1.2 wave A). Like `trunc`, recognized by name after its arguments
-// are parsed (`parseCallNamed`): it takes ordinary call syntax but emits no `MaxonOp.call` to a user
-// function — it routes to the `__print_string` runtime entry.
-let PrintBuiltinName = b"print"
-
-// `print` takes exactly one argument (a String). Named for the same reason `TruncArity` is: `emitPrint`
-// states it as both the check and the diagnostic's `expected`.
-let PrintArity = 1 as ParamCount
-
-// What that one argument is CALLED. `print` is compiler-recognized and so has no `stdlib` declaration to read
-// the name off, but it has a parameter all the same and its type refusal names it — `specs/type-checking.md`'s
-// `stdlib-function-call-wrong-type` pins `argument type mismatch for 'value'`, and the C# bootstrap answers
-// with the same word. It is its OWN constant and not a share of `ArrayValueLabel` or
-// `ManagedMemoryValueParamName`: three unrelated declarations happening to agree on a word is not one fact,
-// and a shared home would make renaming any one of them silently rename the others.
-let PrintValueParamName = b"value"
+// ⭐⭐ **THERE IS NO BARE-NAME `print` BUILTIN ANY MORE (W35), AND ITS ABSENCE IS THE POINT.** P1.2 wave A
+// recognized `print` here by name, the way `trunc` still is, and routed it to a `__print_string` runtime
+// entry. That made shv2 the ONLY one of the three compilers to treat `print` as a compiler-recognized bare
+// name — the bootstrap resolves every `print(...)` through ordinary overload resolution to
+// `stdlib/Print.maxon`, and v1 deleted its own `parsePrintStatement` and `TokenKind.print` to do the same.
+//
+// It also made `stdlib/Print.maxon` UNLISTABLE, by this file's own rule
+// (`StdlibLoader`'s "do not list a module whose function name a bare builtin claims"): with the builtin
+// live, a `print` call never reached a declaration, so listing the module would have loaded code no call
+// site could get to — MEASURED, and the third time that rule has been applied (after `sleep` and the two
+// UAX #29 classifiers). `print` is now an ordinary call to that module's declaration, `printError` arrives
+// with its twin, and the floor under both is `__Builtins.writeStdout`/`writeStderr` below.
+//
+// ⇒ Nothing replaces the three constants that stood here (`PrintBuiltinName`, `PrintArity`,
+// `PrintValueParamName`): the arity, the parameter NAME and the parameter TYPE are all read off
+// `stdlib/Print.maxon`'s `print(value String)` by the ORDINARY checks now, which is what makes the
+// transcription unnecessary rather than merely duplicated.
 
 // **THE `runProcess` BUILTIN** (P1.5 subprocess seed). Like `print`, recognized by name after its arguments are
 // parsed: ordinary call syntax, but it emits no `MaxonOp.call` to a user function — it routes to the
@@ -3243,7 +3244,7 @@ let MaxBuiltinName = b"max"
 // this predicate from collapsing into "is it a builtin". `subpWriteLine(h, line: s)` LABELS its second
 // argument on purpose: it is a stand-in for a stdlib method that will one day have a real declaration
 // with a real `line` parameter, and it is written the way that call will eventually be written. Ditto
-// `print`/`runProcess`/`spawnReadLine`, whose one argument is a String rather than a number and whose
+// `runProcess`/`spawnReadLine`, whose one argument is a String rather than a number and whose
 // eventual homes are stdlib declarations too. So the set is neither 'the builtins' nor 'the arity-2
 // builtins' — it is the MATH intrinsics, the builtins that are permanently compiler-owned because each
 // IS a machine instruction and will never acquire a declaration to take labels from.
@@ -3258,10 +3259,15 @@ let MaxBuiltinName = b"max"
 // questions ('does this name take labels' and 'which op does it emit') stay distinct; what is shared is
 // the one thing that must not be written twice, the SET.
 //
-// A builtin can still be a bare builtin without being here — TWELVE are: `print`, `runProcess`,
-// `spawnReadLine`, the seven `subp*` streaming-subprocess builtins, and the two UAX #29 classifiers.
-// Every one of them is a stand-in for a declaration that does not exist yet, which is exactly why they
-// keep the ordinary label rule.
+// A builtin can still be a bare builtin without being here — NINE are: `runProcess`, `spawnReadLine` and
+// the seven `subp*` streaming-subprocess builtins. Every one of them is a stand-in for a declaration that
+// does not exist yet, which is exactly why they keep the ordinary label rule.
+//
+// ⚠ **THAT COUNT IS A PROSE COPY OF `parseCallNamed`'s CHAIN AND IT WAS WRONG FOR TWO RUNGS**, which is
+// the very failure `StdlibLoader`'s collision rule tells a maintainer to guard against by reading the
+// CHAIN and never a list. It said *"TWELVE … and the two UAX #29 classifiers"* after BATCH2 slice 6 had
+// retired those two, and it still said `print` after W35 retired that one. Corrected in the rung that
+// moved it; if you are here to check whether a name is claimed, go read the chain anyway.
 function calleeTakesPositionalArgsOnly(callee ByteArray) returns bool
 	return callee.equals(TruncBuiltinName) or callee.equals(FloorBuiltinName) or callee.equals(CeilBuiltinName) or callee.equals(RoundBuiltinName) or callee.equals(SqrtBuiltinName) or callee.equals(AbsBuiltinName) or callee.equals(MinBuiltinName) or callee.equals(MaxBuiltinName)
 end 'calleeTakesPositionalArgsOnly'
@@ -3304,6 +3310,14 @@ let BuiltinsCommandLineArgName = b"__Builtins.commandLineArg"
 // `ConsoleRuntime` and `ProcessRuntime` for the entry points they lower to.
 let BuiltinsReadStdinName = b"__Builtins.readStdin"
 let BuiltinsExecutablePathName = b"__Builtins.executablePath"
+
+// ⭐ **THE TWO STREAM-WRITE INTRINSICS (W35)**, `stdlib/Print.maxon`'s and `stdlib/PrintError.maxon`'s only
+// floors, and the pair that let the bare-name `print` builtin be retired. `/specs/builtins-type.md:24-25`
+// declares exactly these two names with exactly this shape — one `__ManagedMemory` in, the byte count
+// written out — and the bootstrap's own table matches (`2-Parser.cs:11448`/`:11457`). See
+// `StringRuntime.StreamWriteStdoutName` for the entry points they lower to.
+let BuiltinsWriteStdoutName = b"__Builtins.writeStdout"
+let BuiltinsWriteStderrName = b"__Builtins.writeStderr"
 
 // ⭐ **`__Builtins.floatToBits(x)` — AN f64's IEEE-754 ENCODING AS AN i64, THE ONLY WAY TO TAKE A FLOAT
 // APART IN MAXON.** `stdlib/Builtins.maxon`'s `__float_toString` needs the sign, the exponent field and
@@ -3349,6 +3363,12 @@ let CommandLineArgArity = 1 as ParamCount
 // ordinary arity check to read, because no file declares it.
 let ReadStdinArity = 1 as ParamCount
 let ExecutablePathArity = 0 as ParamCount
+
+// `writeStdout(mm)`/`writeStderr(mm)` each take exactly one `__ManagedMemory`. ONE constant for both, not
+// two: it is a single fact about a single shape, and the two names are the same intrinsic on two streams.
+// Stated here for `CommandLineArgArity`'s reason — an intrinsic has no signature for SemanticCheck's
+// ordinary arity check to read, because no file declares it.
+let StreamWriteArity = 1 as ParamCount
 
 // ⭐ **IS THIS CALLEE A MEMBER OF THE `__Builtins` TYPE?** THE one test, and it has two askers that
 // must never disagree: the intrinsic table in `parseCallNamed` (which dispatches on it) and the
@@ -47015,10 +47035,6 @@ export type Parser
 			return try self.emitPositionalMathBuiltin(args, callee: callee, calleeTok: anchor)
 		end 'mathBuiltin'
 
-		if callee.equals(PrintBuiltinName) 'printBuiltin'
-			return try self.emitPrint(args, calleeTok: anchor, resultUsed: resultUsed)
-		end 'printBuiltin'
-
 		if callee.equals(RunProcessBuiltinName) 'runProcessBuiltin'
 			return try self.emitRunProcess(args, calleeTok: anchor)
 		end 'runProcessBuiltin'
@@ -47160,6 +47176,16 @@ export type Parser
 
 				return self.emitOwnedManagedMemoryResult(ProcessExecutablePathName, args: ValueIdArray.create(), range: SourceRange.ofToken(anchor))
 			end 'executablePath'
+
+			// ⭐ W35. The two stream writers — one emit, parameterized by the stream's runtime entry point,
+			// because the argument rule and the result are identical and only the destination differs.
+			if callee.equals(BuiltinsWriteStdoutName) 'writeStdout'
+				return try self.emitBuiltinsStreamWrite(args, callee: callee, runtimeName: StreamWriteStdoutName, calleeTok: anchor)
+			end 'writeStdout'
+
+			if callee.equals(BuiltinsWriteStderrName) 'writeStderr'
+				return try self.emitBuiltinsStreamWrite(args, callee: callee, runtimeName: StreamWriteStderrName, calleeTok: anchor)
+			end 'writeStderr'
 
 			if callee.equals(BuiltinsFloatToBitsName) 'floatToBits'
 				return try self.emitFloatToBits(args, calleeTok: anchor)
@@ -47475,38 +47501,45 @@ export type Parser
 		return self.emitBinOpOverCheckedOperands(lhs, rhs: rhs, op: op, leftTag: ValueTypeTag.float, rightTag: ValueTypeTag.float, opTok: calleeTok)
 	end 'emitBinaryMathIntrinsic'
 
-	// `print(s)` — **WRITE A STRING TO STDOUT**, no trailing newline (P1.2 wave A). A compiler BUILTIN
-	// like `trunc`: it takes ordinary call syntax but emits no `MaxonOp.call` to a user function — it
-	// routes to the `__print_string` runtime entry (which loads `buffer@0`/`length@8` and writes them).
+	// `__Builtins.writeStdout(mm)` / `__Builtins.writeStderr(mm)` — **WRITE A MANAGED BUFFER'S BYTES TO A
+	// STANDARD STREAM** and answer the byte count (W35). `stdlib/Print.maxon`'s and
+	// `stdlib/PrintError.maxon`'s only floor: each module's one-line body hands over
+	// `value.addressableBytes()` and this is what it reaches.
 	//
-	// It requires exactly one `String` argument and returns VOID, so a call in VALUE position is
-	// rejected exactly as a void user-call is (`mintDeclaredCallResult`'s `voidCallResultUsed`), and at
-	// the same anchor.
-	function emitPrint(args ValueIdArray, calleeTok Token, resultUsed bool) returns ValueId throws ParseError
-		if args.count() != PrintArity 'arity'
-			throw ParseError.builtinArity(String.from(PrintBuiltinName), expected: PrintArity, got: args.count(), line: calleeTok.line, column: calleeTok.column)
+	// ⚠ **THE INTRINSIC IS STDLIB'S FLOOR, NOT THE SURFACE** — `emitSleep`'s paragraph, one family over.
+	// What a user writes is `print(s)`, an ordinary call to a corpus declaration, and the rules it meets
+	// are that declaration's (its parameter type, its absent return), checked by SemanticCheck against
+	// its signature like every other call's. The check below is what an intrinsic needs BECAUSE no file
+	// declares it: there is no signature for the ordinary check to read.
+	//
+	// ⭐ **IT VALIDATES ITS ARGUMENT, AND THAT IS A CHOICE BETWEEN THE TWO REFERENCES.** The bootstrap's
+	// intrinsic handler type-checks nothing (`2-Parser.cs:11451` takes any expression), so a non-managed
+	// argument dies as an `InvalidOperationException` at ITS lowering rather than as a diagnostic; v1
+	// checks (`SemanticCheck.validateBuiltinsIntrinsicArgs`). shv2 follows v1 — "the oracle does it" is a
+	// description of a hole, not a design — through `valueIsByteArray`, the SHARED predicate
+	// `String.from` and every `__Managed*` parameter already ask, rather than a fourth spelling of
+	// "is this a byte-packed buffer".
+	//
+	// The refusal NAMES THE CALLEE (`builtinOperandType`), which is the `__Builtins.*` family's spelling
+	// and the right one here: an intrinsic has no declaration, so there is no parameter name to quote that
+	// the author could have written.
+	function emitBuiltinsStreamWrite(args ValueIdArray, callee ByteArray, runtimeName ByteArray, calleeTok Token) returns ValueId throws ParseError
+		if args.count() != StreamWriteArity 'arity'
+			throw ParseError.builtinArity(String.from(callee), expected: StreamWriteArity, got: args.count(), line: calleeTok.line, column: calleeTok.column)
 		end 'arity'
 
-		let arg = try args.get(0) otherwise panic("emitPrint: args.count() == PrintArity just checked but get(0) failed")
-		let argTag = self.tagOf(arg)
-		if not tagIsText(argTag) 'notAString'
-			// `got` NAMES THE TYPE (review, 2026-08-04): the `arg` value is in hand, so `print(somePoint)`
-			// says `got 'Point'` — what the bootstrap says — and not the tag's class word `struct`. The
-			// EXPECTED side stays a tag name because `print` accepts the `String` builtin itself and there is
-			// no declaration whose spelling could differ from it.
-			throw ParseError.builtinArgumentType(String.from(PrintValueParamName), expected: typeTagName(ValueTypeTag.string), got: self.valueDisplayTypeName(arg), line: calleeTok.line, column: calleeTok.column)
-		end 'notAString'
+		let arg = try args.get(0) otherwise panic("emitBuiltinsStreamWrite: args.count() == StreamWriteArity just checked but get(0) failed")
+		if not self.valueIsByteArray(arg) 'notAManagedBuffer'
+			throw ParseError.builtinOperandType(String.from(callee), required: String.from(ManagedMemoryTypeName), got: self.valueDisplayTypeName(arg), line: calleeTok.line, column: calleeTok.column)
+		end 'notAManagedBuffer'
 
-		// `print` returns nothing, so using its result is using a value that is not there — the same
-		// error a void user-call gets in value position.
-		if resultUsed 'noValueToUse'
-			throw ParseError.voidCallResultUsed(String.from(PrintBuiltinName), line: calleeTok.line, column: calleeTok.column)
-		end 'noValueToUse'
-
+		// The buffer is BORROWED — the runtime entry reads `buffer@0`/`length@8` through it and never takes
+		// ownership — so there is no owned temporary to enrol and a literal argument needs no decref. This is
+		// exactly how `runProcess` borrows its command line.
 		var callArgs = ValueIdArray.create()
 		callArgs.push(arg)
-		return self.emitRuntimeCall(PrintStringName, args: callArgs, resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(calleeTok))
-	end 'emitPrint'
+		return self.emitRuntimeCall(runtimeName, args: callArgs, resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(calleeTok))
+	end 'emitBuiltinsStreamWrite'
 
 	// `__Builtins.sleep(ms)` — **SUSPEND THE CURRENT GREEN THREAD** for `ms` milliseconds, yielding to the
 	// scheduler (P1.5 mid-body-yield). It emits no `MaxonOp.call` to a user function — it routes to the

@@ -83,10 +83,6 @@ function mmapAnonPrivateFlags(os Os) returns MachineWord
 	end 'route'
 end 'mmapAnonPrivateFlags'
 
-// `write(1, buf, len)` — the stdout primitive `lowerOsWriteStdout` emits. FAR simpler than x64's
-// GetStdHandle+WriteFile: no handle call, no bytes-written out-param, no stack args.
-let WriteStdoutFd = 0x1  // fd = 1 (STDOUT_FILENO).
-
 // The IP scratch register the isel materialises an immediate — or a folded `base + offset` address —
 // into when no immediate op-form fits: a multiplier (arm64 has no multiply-by-immediate), a non-bitmask
 // logical immediate (AArch64 `and`/`or`/`xor` #imm encode only rotated bitmasks), an add/sub immediate
@@ -478,6 +474,8 @@ type StdToArm64Lowering
 			// W5: x64-windows only too — refused at the CALL SITE by E3104, so neither reaches this backend.
 			osStdinHandle gives 0
 			osExecutablePath gives 0
+			// W35: an all-register `write` — no stack argument on either stream.
+			osWriteStderr gives 0
 		end 'o'
 	end 'stdOpOutgoingArgBytes'
 
@@ -560,7 +558,7 @@ type StdToArm64Lowering
 			loadIndirect(resultId, addrId, offset, valueType) then self.lowerLoadIndirect(resultId, addrId: addrId, offset: offset, valueType: valueType, dstRef: dstRef)
 			storeIndirect(addrId, offset, valueId, valueType) then self.lowerStoreIndirect(addrId, offset: offset, valueId: valueId, valueType: valueType, dstRef: dstRef)
 			osAllocPages(resultId, sizeId) then self.lowerOsAllocPages(resultId, sizeId: sizeId, dstRef: dstRef)
-			osWriteStdout(bufId, lenId) then self.lowerOsWriteStdout(bufId, lenId: lenId, dstRef: dstRef)
+			osWriteStdout(resultId, bufId, lenId) then self.lowerOsWriteStream(resultId, bufId: bufId, lenId: lenId, stream: OsOutputStream.standardOutput, dstRef: dstRef)
 			rdataAddr(resultId, label) then self.emit(dstRef, op: TargetOp.arm64LeaRdata(TargetVReg.virtual(resultId), label: label))
 			tryCall(resultId, errorFlagId, callee, args) then self.lowerTryCall(resultId, errorFlagId: errorFlagId, callee: callee, args: args, dstRef: dstRef)
 			errorReturn(retValId, errorFlagId) then self.lowerErrorReturn(retValId, errorFlagId: errorFlagId, dstRef: dstRef, returnType: returnType, asTerminator: false)
@@ -624,6 +622,9 @@ type StdToArm64Lowering
 			// user-facing rejection.
 			osStdinHandle then panic("lowerStdToArm64: `osStdinHandle` is x64-windows only — standard input is x64-windows-gated, and SemanticCheck refuses such a program at its source span (E3104), so this is the backstop for a compiler bug rather than the user-facing rejection")
 			osExecutablePath then panic("lowerStdToArm64: `osExecutablePath` is x64-windows only — the executable path is read through a different OS API on every platform, and SemanticCheck refuses such a program at its source span (E3104), so this is the backstop for a compiler bug rather than the user-facing rejection")
+			// W35: the same graph as the stdout write, one descriptor over. Unlike its W5 neighbours above this
+			// is NOT x64-windows-gated — a POSIX `write` serves both streams, so `printError` runs here.
+			osWriteStderr(resultId, bufId, lenId) then self.lowerOsWriteStream(resultId, bufId: bufId, lenId: lenId, stream: OsOutputStream.standardError, dstRef: dstRef)
 		end 'lower'
 	end 'lowerBodyOp'
 
@@ -670,6 +671,7 @@ type StdToArm64Lowering
 			osCommandLine then panic("lowerStdToArm64: an `osCommandLine` op appeared as a block terminator (lowering bug — a command-line read is a value-consuming body op; also x64-windows only)")
 			osStdinHandle then panic("lowerStdToArm64: an `osStdinHandle` op appeared as a block terminator (lowering bug — a standard-handle read is a value-producing body op; also x64-windows only)")
 			osExecutablePath then panic("lowerStdToArm64: an `osExecutablePath` op appeared as a block terminator (lowering bug — an executable-path read is a value-producing body op; also x64-windows only)")
+			osWriteStderr then panic("lowerStdToArm64: an `osWriteStderr` op appeared as a block terminator (lowering bug — a stderr write is a body op, exactly like its stdout twin)")
 		end 'lower'
 	end 'lowerTerminatorOp'
 
@@ -1374,16 +1376,24 @@ type StdToArm64Lowering
 		self.emit(dstRef, op: TargetOp.movRegReg(TargetVReg.virtual(resultId), srcReg: arm64PhysReg(Arm64IntReturnReg)))
 	end 'lowerOsAllocPages'
 
-	// Lower `osWriteStdout(buf, len)` to `write(1, buf, len)`; the result is ignored. FAR simpler than
-	// x64's `lowerOsWriteStdout` (GetStdHandle then WriteFile with a handle, an out-param and a stack
+	// Lower `osWriteStdout`/`osWriteStderr(result, buf, len)` to `write(fd, buf, len)`. FAR simpler than
+	// x64's `lowerOsWriteStream` (GetStdHandle then WriteFile with a handle, an out-param and a stack
 	// argument): a single POSIX `write` with three register arguments, and the Linux syscall takes them
 	// in the same x0/x1/x2 the libSystem call does. `buf`/`len` move forward into x1/x2 — a `len`
 	// colouring x1 is forbidden by the physical def of x1 that reads `buf`, exactly as `lowerCall`'s arg
 	// moves are sound in order.
-	function lowerOsWriteStdout(bufId ValueId, lenId ValueId, dstRef BlockRef)
-		self.emit(dstRef, op: TargetOp.arm64MovImm(arm64PhysReg(Arm64Register.x0), value: WriteStdoutFd))
+	//
+	// ⭐ ONE GRAPH FOR BOTH STREAMS, x64's reason: the descriptor is the whole difference, and it comes from
+	// the shared `posixStreamFd` so the two POSIX isels cannot disagree about it. The SAME
+	// `OsImportSlot.write` serves both — a descriptor is an argument, not a symbol.
+	//
+	// The result is `write`'s own answer in x0 (the byte count, or a negative errno), captured exactly as
+	// `lowerOsAllocPages` captures `mmap`'s base.
+	function lowerOsWriteStream(resultId ValueId, bufId ValueId, lenId ValueId, stream OsOutputStream, dstRef BlockRef)
+		self.emit(dstRef, op: TargetOp.arm64MovImm(arm64PhysReg(Arm64Register.x0), value: posixStreamFd(stream)))
 		self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(Arm64Register.x1), srcReg: TargetVReg.virtual(bufId)))
 		self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(Arm64Register.x2), srcReg: TargetVReg.virtual(lenId)))
 		self.emitOsPrimitiveCall(dstRef, importSlot: OsImportSlot.write, syscallNumber: Arm64LinuxSyscallWrite)
-	end 'lowerOsWriteStdout'
+		self.emit(dstRef, op: TargetOp.movRegReg(TargetVReg.virtual(resultId), srcReg: arm64PhysReg(Arm64IntReturnReg)))
+	end 'lowerOsWriteStream'
 end 'StdToArm64Lowering'

@@ -131,9 +131,30 @@ export let VirtualFreeMemRelease = 0x8000  // MEM_RELEASE
 export let VirtualFreeSizeMustBeZero = 0x0  // dwSize is 0 for a MEM_RELEASE (release the whole reservation)
 
 // `GetStdHandle(STD_OUTPUT_HANDLE)` — the handle `osWriteStdout` writes to (P1.2 wave A). The
-// parameter is a DWORD, so the 32-bit `mov` (which zero-extends) puts exactly (DWORD)-11 in ECX. The
-// panic path's `StdErrorHandle` is (DWORD)-12; this is its stdout sibling.
+// parameter is a DWORD, so the 32-bit `mov` (which zero-extends) puts exactly (DWORD)-11 in ECX.
 let StdOutputHandle = 0xFFFFFFF5  // (DWORD)-11 — GetStdHandle's STD_OUTPUT_HANDLE
+// `GetStdHandle(STD_ERROR_HANDLE)` — the handle `osWriteStderr` writes to (W35). The third of the family
+// the isel materializes, named for the same reason its two siblings are.
+//
+// ⚠ **`X64Runtime.maxon` HOLDS A SECOND `StdErrorHandle`, AND THIS RUNG IS WHAT MADE THAT A DUPLICATE.**
+// `BacktraceFormat.StderrFd`'s comment records why the Windows selector stayed with that file — *"the x64
+// Windows chunk that is its only reader"* — and `printError` makes the ISEL a second reader, so the premise
+// that sentence rests on has stopped holding. The two are not interchangeable TODAY only because they serve
+// two mechanisms that share nothing else (a hand-assembled panic chunk with no register allocator against
+// this register-allocated isel), which is the same split that already puts `StdOutputHandle`/`StdInputHandle`
+// here rather than there. Unifying them means exporting from `X64Runtime.maxon`, a file outside this rung's
+// slice; REPORTED to the coordinator rather than done silently.
+let StdErrorHandle = 0xFFFFFFF4  // (DWORD)-12 — GetStdHandle's STD_ERROR_HANDLE
+
+// ⭐ The Win64 half of `StdLoweringShared.posixStreamFd` — which of the two selectors above a stream asks
+// `GetStdHandle` for. Exhaustive over `OsOutputStream` for that door's reason: a third stream must fail to
+// compile here rather than silently pick one.
+function win64StdHandleSelector(stream OsOutputStream) returns ParsedInt
+	return match stream 's'
+		standardOutput gives StdOutputHandle
+		standardError gives StdErrorHandle
+	end 's'
+end 'win64StdHandleSelector'
 
 // `GetStdHandle(STD_INPUT_HANDLE)` — the handle `osStdinHandle` answers with (W5). The third member of
 // the same DWORD-negative family as `StdOutputHandle` above and `X64Runtime`'s `StdErrorHandle`
@@ -808,7 +829,9 @@ type StdToX64Lowering
 	// `self.calleeParamClasses`.
 	function stdOpOutgoingArgBytes(op StdOp) returns StackSize
 		return match op 'o'
+			// Both stream writes marshal the SAME `WriteFile` call, so both reserve the same two slots.
 			osWriteStdout gives win64OutgoingArgBytes(WriteFileOutgoingSlots)
+			osWriteStderr gives win64OutgoingArgBytes(WriteFileOutgoingSlots)
 			// The ONLY subprocess op with outgoing stack args: CreateProcessA passes its last six of ten arguments
 			// on the stack (see `win64OutgoingArgDisp`). The other four subprocess ops are ≤4-argument, register-only.
 			osProcessSpawn gives win64OutgoingArgBytes(CreateProcessOutgoingSlots)
@@ -1045,6 +1068,8 @@ type StdToX64Lowering
 				// W5: a handle read and a path fill are value-producing body ops, never terminators.
 				osStdinHandle then break 'term'
 				osExecutablePath then break 'term'
+				// W35: a stream write is a value-producing body op, never a terminator.
+				osWriteStderr then break 'term'
 			end 'term'
 		end 'eachBlock'
 	end 'computeFusedCmps'
@@ -1120,6 +1145,8 @@ type StdToX64Lowering
 				// W5: import calls too, and not the compare — the scan stops.
 				osStdinHandle then break 'isTheCompare'
 				osExecutablePath then break 'isTheCompare'
+				// W35: an import call or a syscall, not the compare — the scan stops.
+				osWriteStderr then break 'isTheCompare'
 			end 'isTheCompare'
 			return
 		end 'scanBackward'
@@ -1214,7 +1241,7 @@ type StdToX64Lowering
 			loadIndirect(resultId, addrId, offset, valueType) then self.lowerLoadIndirect(resultId, addrId: addrId, offset: offset, valueType: valueType, dstBlock: dstBlock)
 			storeIndirect(addrId, offset, valueId, valueType) then self.lowerStoreIndirect(addrId, offset: offset, valueId: valueId, valueType: valueType, dstBlock: dstBlock)
 			osAllocPages(resultId, sizeId) then self.lowerOsAllocPages(resultId, sizeId: sizeId, dstBlock: dstBlock)
-			osWriteStdout(bufId, lenId) then self.lowerOsWriteStdout(bufId, lenId: lenId, dstBlock: dstBlock)
+			osWriteStdout(resultId, bufId, lenId) then self.lowerOsWriteStream(resultId, bufId: bufId, lenId: lenId, stream: OsOutputStream.standardOutput, dstBlock: dstBlock)
 			rdataAddr(resultId, label) then self.targetModule.appendOp(dstBlock, op: TargetOp.leaRegRdata(TargetVReg.virtual(resultId), label: label))
 			tryCall(resultId, errorFlagId, callee, args) then self.lowerTryCall(resultId, errorFlagId: errorFlagId, callee: callee, args: args, dstBlock: dstBlock)
 			errorReturn(retValId, errorFlagId) then self.lowerErrorReturn(retValId, errorFlagId: errorFlagId, dstBlock: dstBlock, returnType: returnType, asTerminator: false)
@@ -1280,6 +1307,8 @@ type StdToX64Lowering
 			osCommandLine(resultId) then self.lowerOsCommandLine(resultId, dstBlock: dstBlock)
 			osStdinHandle(resultId) then self.lowerOsStdinHandle(resultId, dstBlock: dstBlock)
 			osExecutablePath(resultId, bufLenId, bufPtrId) then self.lowerOsExecutablePath(resultId, bufLenId: bufLenId, bufPtrId: bufPtrId, dstBlock: dstBlock)
+			// W35: the same graph as the stdout write, one selector/descriptor over.
+			osWriteStderr(resultId, bufId, lenId) then self.lowerOsWriteStream(resultId, bufId: bufId, lenId: lenId, stream: OsOutputStream.standardError, dstBlock: dstBlock)
 		end 'lower'
 	end 'lowerBodyOp'
 
@@ -1331,6 +1360,7 @@ type StdToX64Lowering
 			osCommandLine then panic("lowerStdToX64: an `osCommandLine` op appeared as a block terminator (lowering bug — a command-line read is a value-producing body op)")
 			osStdinHandle then panic("lowerStdToX64: an `osStdinHandle` op appeared as a block terminator (lowering bug — a standard-handle read is a value-producing body op)")
 			osExecutablePath then panic("lowerStdToX64: an `osExecutablePath` op appeared as a block terminator (lowering bug — an executable-path read is a value-producing body op)")
+			osWriteStderr then panic("lowerStdToX64: an `osWriteStderr` op appeared as a block terminator (lowering bug — a stderr write is a body op, exactly like its stdout twin)")
 		end 'lower'
 	end 'lowerTerminatorOp'
 
@@ -2027,8 +2057,14 @@ type StdToX64Lowering
 		self.targetModule.appendOp(dstBlock, op: TargetOp.x64Syscall(X64LinuxSyscallMmap))
 	end 'lowerOsAllocPagesLinux'
 
-	// Lower `osWriteStdout(buf, len)` to `GetStdHandle(STD_OUTPUT_HANDLE)` + `WriteFile(handle, buf,
-	// len, &written, NULL)`, both through the IAT (P1.2 wave A — `print`).
+	// Lower `osWriteStdout`/`osWriteStderr(result, buf, len)` to `GetStdHandle(<selector>)` +
+	// `WriteFile(handle, buf, len, &written, NULL)`, both through the IAT (P1.2 wave A — `print`;
+	// W35 — `printError`).
+	//
+	// ⭐ ONE GRAPH FOR BOTH STREAMS. They differ by the `GetStdHandle` selector on Windows and by the
+	// descriptor on Linux, and by nothing else — so the stream is a parameter and the marshalling is
+	// written once. A second copy would be free to drift on the out-param slot, which is exactly the
+	// duplication `osReadFile`'s header refuses for `ReadFile`.
 	//
 	// ⭐ EVERYTHING GOES THROUGH THE CLOBBER-CORRECT `iatCall`. `iatCall` declares `implicitDefs:
 	// 0xFFFF0FC7` (the caller-saved set), so `buf`/`len` — the two virtual registers live ACROSS the
@@ -2039,25 +2075,33 @@ type StdToX64Lowering
 	// Win64 ABI (NOT Maxon's): args rcx/rdx/r8/r9 then stack, result in RAX. The 5th arg (`lpOverlapped
 	// = NULL`) is a stack argument at `[rsp + win64OutgoingArgDisp(WriteFileOverlappedSlot)]`; the 4th
 	// (`lpNumberOfBytesWritten`) must be a valid pointer (WriteFile writes the count there), so r9 points
-	// at a scratch slot at `[rsp + win64OutgoingArgDisp(WriteFileBytesWrittenSlot)]`. Both live in
-	// `__print_string`'s `outgoingArgSize` region.
-	// ⭐ ON LINUX THE PRIMITIVE IS A SINGLE `write(1, buf, len)` syscall — no handle call, no bytes-written
+	// at a scratch slot at `[rsp + win64OutgoingArgDisp(WriteFileBytesWrittenSlot)]`. Both live in the
+	// writer's `outgoingArgSize` region.
+	// ⭐ ON LINUX THE PRIMITIVE IS A SINGLE `write(fd, buf, len)` syscall — no handle call, no bytes-written
 	// out-param, no stack argument, so none of the WriteFile apparatus above (`win64OutgoingArgDisp`, the
 	// outgoing-arg slots, the RAX NULL scratch). The three arguments move into rdi/rsi/rdx (the Linux
 	// syscall's first three), where Win64 uses rcx/rdx/r8; `buf`/`len` move forward soundly because each
-	// physical arg-register def liveness forbids to a value live across it. The result is ignored.
-	function lowerOsWriteStdout(bufId ValueId, lenId ValueId, dstBlock IrBlock)
+	// physical arg-register def liveness forbids to a value live across it.
+	function lowerOsWriteStream(resultId ValueId, bufId ValueId, lenId ValueId, stream OsOutputStream, dstBlock IrBlock)
 		match x64OsCallKind(self.target.os) 'route'
-			importCall then self.lowerOsWriteStdoutWin64(bufId, lenId: lenId, dstBlock: dstBlock)
-			syscall then self.lowerOsWriteStdoutLinux(bufId, lenId: lenId, dstBlock: dstBlock)
+			importCall then self.lowerOsWriteStreamWin64(resultId, bufId: bufId, lenId: lenId, stream: stream, dstBlock: dstBlock)
+			syscall then self.lowerOsWriteStreamLinux(resultId, bufId: bufId, lenId: lenId, stream: stream, dstBlock: dstBlock)
 		end 'route'
-	end 'lowerOsWriteStdout'
+	end 'lowerOsWriteStream'
 
-	// Win64: `GetStdHandle(STD_OUTPUT_HANDLE)` then `WriteFile(handle, buf, len, &written, NULL)`, both
+	// Win64: `GetStdHandle(<selector>)` then `WriteFile(handle, buf, len, &written, NULL)`, both
 	// through the IAT, with the 4th/5th arguments on the reserved outgoing-arg stack slots.
-	function lowerOsWriteStdoutWin64(bufId ValueId, lenId ValueId, dstBlock IrBlock)
-		// GetStdHandle(STD_OUTPUT_HANDLE) -> RAX (the handle).
-		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rcx), value: StdOutputHandle))
+	//
+	// ⚠ **THE BYTES-WRITTEN SLOT IS PRE-ZEROED AND READ BACK AS A FULL WORD, AND BOTH HALVES ARE
+	// LOAD-BEARING.** `lpNumberOfBytesWritten` is a `DWORD*` — WriteFile writes FOUR bytes — while the slot
+	// is one of `win64OutgoingArgDisp`'s eight-byte words and `X64AccessWidth` carries no 32-bit form. So
+	// the whole word is zeroed BEFORE the call (from the same rax NULL the `lpOverlapped` store uses, which
+	// is why the materialization moved above both stores) and read back as `word64` after: the high half is
+	// provably zero, so the count arrives zero-extended and exact. Reading a 4-byte answer out of an
+	// uninitialized 8-byte slot would carry whatever the previous frame left in the high half.
+	function lowerOsWriteStreamWin64(resultId ValueId, bufId ValueId, lenId ValueId, stream OsOutputStream, dstBlock IrBlock)
+		// GetStdHandle(<selector>) -> RAX (the handle).
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rcx), value: win64StdHandleSelector(stream)))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.GetStdHandle)))
 
 		// WriteFile(handle, buffer, length, &written, NULL). The handle move (rcx <- rax) FIRST, before
@@ -2068,16 +2112,21 @@ type StdToX64Lowering
 		self.targetModule.appendOp(dstBlock, op: TargetOp.leaRegRegImm32(x64PhysReg(X64Register.r9), base: x64PhysReg(X64Register.rsp), disp: win64OutgoingArgDisp(WriteFileBytesWrittenSlot)))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rax), value: NullPointer))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.storeBaseDispReg(x64PhysReg(X64Register.rsp), disp: win64OutgoingArgDisp(WriteFileOverlappedSlot), src: x64PhysReg(X64Register.rax), width: X64AccessWidth.word64))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.storeBaseDispReg(x64PhysReg(X64Register.rsp), disp: win64OutgoingArgDisp(WriteFileBytesWrittenSlot), src: x64PhysReg(X64Register.rax), width: X64AccessWidth.word64))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.WriteFile)))
-	end 'lowerOsWriteStdoutWin64'
+		self.targetModule.appendOp(dstBlock, op: TargetOp.loadRegBaseDisp(TargetVReg.virtual(resultId), base: x64PhysReg(X64Register.rsp), disp: win64OutgoingArgDisp(WriteFileBytesWrittenSlot), width: X64AccessWidth.word64))
+	end 'lowerOsWriteStreamWin64'
 
-	// Linux: a single `write(1, buf, len)` syscall, args rdi/rsi/rdx — no handle, no out-param, no stack.
-	function lowerOsWriteStdoutLinux(bufId ValueId, lenId ValueId, dstBlock IrBlock)
-		self.targetModule.appendOp(dstBlock, op: constMaterializationOp(x64PhysReg(X64Register.rdi), value: WriteStdoutFd))
+	// Linux: a single `write(fd, buf, len)` syscall, args rdi/rsi/rdx — no handle, no out-param, no stack.
+	// The syscall answers the byte count (or a negative errno) in RAX, exactly as `lowerOsAllocPages`'s
+	// `mmap` answers its base there.
+	function lowerOsWriteStreamLinux(resultId ValueId, bufId ValueId, lenId ValueId, stream OsOutputStream, dstBlock IrBlock)
+		self.targetModule.appendOp(dstBlock, op: constMaterializationOp(x64PhysReg(X64Register.rdi), value: posixStreamFd(stream)))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rsi), srcReg: TargetVReg.virtual(bufId)))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rdx), srcReg: TargetVReg.virtual(lenId)))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.x64Syscall(X64LinuxSyscallWrite))
-	end 'lowerOsWriteStdoutLinux'
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(TargetVReg.virtual(resultId), srcReg: x64PhysReg(X64Register.rax)))
+	end 'lowerOsWriteStreamLinux'
 
 	// Lower `osReadClock(ticksPtr, freqPtr)` to the x64-windows MONOTONIC clock reads (P1.5 mid-body-yield):
 	// `QueryPerformanceFrequency(&freq)` then `QueryPerformanceCounter(&ticks)`, both through the IAT. Each
@@ -3082,6 +3131,8 @@ type StdToX64Lowering
 			// W5: nor is a standard-handle read or an executable-path fill.
 			osStdinHandle gives false
 			osExecutablePath gives false
+			// W35: nor is a stream write.
+			osWriteStderr gives false
 		end 'term'
 	end 'settleFloatEqualityBranch'
 
@@ -3228,6 +3279,7 @@ type StdToX64Lowering
 			osCommandLine panic("condBranchFieldsOf: the terminator of block ref {blockRef} is an `osCommandLine`, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 			osStdinHandle panic("condBranchFieldsOf: the terminator of block ref {blockRef} is an `osStdinHandle`, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 			osExecutablePath panic("condBranchFieldsOf: the terminator of block ref {blockRef} is an `osExecutablePath`, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
+			osWriteStderr panic("condBranchFieldsOf: the terminator of block ref {blockRef} is an `osWriteStderr`, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 		end 'term'
 	end 'condBranchFieldsOf'
 

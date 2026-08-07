@@ -326,10 +326,30 @@ end 'stdlibFunctionNames'
 // helper, which is added only during/after lowering — is simply not queued, exactly as
 // `DeadFunctionElimination.markLiveFunction` handles the same case.
 //
-// ⚠ Reachability by direct `call`/`funcAddr` edges is EXACT for stdlib source at this rung because no
-// stdlib function is reached by a witness dispatch or an `.rdata` reloc. A Maxon-tier reachability that
-// missed such an edge would be unsound in general, which is why what it decides is scoped to stdlib
-// source rather than applied to every function.
+// ⛔⛔ **"REACHABILITY BY DIRECT `call`/`funcAddr` EDGES IS EXACT FOR STDLIB SOURCE ... BECAUSE NO STDLIB
+// FUNCTION IS REACHED BY A WITNESS DISPATCH OR AN `.rdata` RELOC" IS WHAT THIS PARAGRAPH SAID, AND W35
+// MADE IT FALSE.** That premise held only while `print` was a compiler-recognized BARE NAME rather than
+// `stdlib/Print.maxon`'s declaration. The moment it became ordinary stdlib source, an interface method
+// implementation that prints put a stdlib function behind a DATA edge — and
+// `specs-shv2/interface-dispatch.md`'s `dispatch-void-method` (a `Thing.show()` whose body is
+// `print("{label}\n")`, reached only through `__witness_Thing.Printer`) went from passing to a COMPILER
+// PANIC: `requireUnreachableStdlibStayedDead: 'print' is in StdlibFacts.unreachable`. The guard was right
+// and the walk was wrong, which is what a guard stating a premise is for.
+//
+// ⇒ **THE WITNESS EDGE IS NOW SEEDED AT THE OP THAT IMPLIES IT** — `markWitnessTableImpls`, the same shape
+// `markCorpusCalleesOfSynthesizedRuntime` uses one screen down and for the same reason: a pre-pass over the
+// module would fire on every program (every listed stdlib module declares conformances, so
+// `witnessSlotImpls` is never empty), which is precisely the blanket-seed trap that comment measured at
+// 2223 moved fragments.
+//
+// ⚠ **WHAT IT STILL DOES NOT COVER, STATED RATHER THAN LEFT TO BE DISCOVERED: THE CONSTRAINED-GENERIC
+// WITNESS.** `LowerMaxonToStd.ensureWitnessTable` has a second caller — `materializeWitnessArg` /
+// `materializeWitnessTableAddr`, for a `where T: Hashable` call — and that reaches the Maxon tier as an
+// ordinary `call`, which this walk already credits but which does NOT imply a dispatch op. A witness impl
+// selected for such a constraint (`int.hash`, a user type's `equals`) whose body called a stdlib function
+// would still under-approximate. No corpus program does; distinguishing that `call` costs a signature
+// lookup per credited edge on this walk's hottest path, and the loud guard above is what will find it —
+// so it is REPORTED, not guessed at.
 //
 // ⭐ The name index is the shared, CHECKED one (`FunctionNameIndex`, A1w). It used to resolve one
 // last-wins and unchecked, walking ONE of two same-named bodies and crediting the callees of whichever it
@@ -460,6 +480,7 @@ function markMaxonCallees(module MaxonModule, project Project, func IrFunction, 
 		for opIdx in block.opRefs 'eachOp'
 			let op = try module.ops.get(opIdx) otherwise panic("markMaxonCallees: opRef {opIdx} not in module.ops")
 			markMaxonCalleeEdge(op, project: project, byName: byName, reached: reached, worklist: worklist, names: names)
+			markWitnessTableImpls(op, project: project, byName: byName, reached: reached, worklist: worklist, names: names)
 			markCorpusCalleesOfSynthesizedRuntime(op, project: project, byName: byName, reached: reached, worklist: worklist, names: names)
 		end 'eachOp'
 	end 'eachBlock'
@@ -486,6 +507,74 @@ function markMaxonCalleeEdge(op MaxonOp, project Project, byName FuncIndexByName
 		noCallee then break 'kind'
 	end 'kind'
 end 'markMaxonCalleeEdge'
+
+// ⭐⭐ **THE DATA EDGE THIS WALK CANNOT SEE — A WITNESS TABLE'S METHOD SLOTS — SEEDED AT THE OP THAT
+// IMPLIES IT (W35).** A `witnessDispatch` loads a code pointer out of `__witness_<Type>.<Iface>` and jumps,
+// so the implementation it reaches is named by no `call` anywhere in the module. Without this, an interface
+// method whose body calls a stdlib function leaves that function filed `unreachable` while
+// `DeadFunctionElimination` — which DOES follow the `.rdata` relocs — reaches it, and the two derivations
+// disagree exactly as `requireUnreachableStdlibStayedDead` says. See this walk's header for the measured
+// case and for the one shape this still does not cover.
+//
+// ⭐ **IT CREDITS EVERY CONFORMANCE IN THE PROGRAM, NOT JUST THIS DISPATCH'S** — an OVER-approximation, and
+// a deliberate one. The op carries an `interfaceDeclIndex` but not the CONCRETE conformer, which is the
+// whole point of an existential: which table is loaded is a run-time fact. Over-approximating is sound here
+// for the reason the provisional-callee rule above is sound — it only ever REMOVES names from `unreachable`,
+// and every consumer of that set treats absence as "compile it normally". Under-approximating is the panic.
+//
+// ⚠⚠ **IT JOINS `<Type>.<requirement>` RATHER THAN READING `project.witnessSlotImpls`, AND THE FIRST CUT
+// READ THAT MAP AND WAS WRONG. MEASURED:** the map is filled by `checkConformance`, which runs AFTER
+// `queryAllModule` — and `growStdlibBodyDemand`'s fixpoint, which decides which stdlib bodies are BUILT AT
+// ALL, runs INSIDE it. So the map is empty for every round of the fixpoint and full only by the time
+// `deriveStdlibFacts` asks: the panic went away (the facts were right) and the emitted `@print` was an
+// EMPTY function the program called — a silent wrong answer in place of a loud one, which is strictly
+// worse. `conformances`/`interfaces` are merge-time stores (`Queries.resetMergeTargets` resets all three
+// together), so they answer the same in both askers, which is the property this walk's header demands.
+// ⇒ The `<Type>.<method>` join `ensureWitnessTable` is forbidden to make (R10) is correct HERE for the
+// reason it is wrong there: a name no module function carries is silently skipped by `markReachable`, so a
+// join that names nothing costs nothing, where a RELOCATION that names nothing is a wrong code pointer.
+// Overloads are covered because `markReachable` credits the whole set.
+//
+// ⚠ **AND IT IS BOUNDED BY THE OP, WHICH IS WHY IT IS NOT A PRE-PASS.** EVERY listed stdlib module declares
+// conformances (`Builtins.maxon` alone has seven), so a seed that ran unconditionally would fire on a
+// `return 1 + 1` — the 2223-fragment trap the next function's header measured. A program that never
+// dispatches through an existential reaches no such op and pays one enum compare per op. MEASURED: `return
+// 7` and a 5,406-line generated program are byte-identical with and without this seed.
+function markWitnessTableImpls(op MaxonOp, project Project, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet)
+	if not opLoadsAWitnessTableSlot(op) 'noWitnessTable'
+		return
+	end 'noWitnessTable'
+
+	for conformance in project.conformances 'eachConformer'
+		for conformed in conformance.interfaces 'eachInterface'
+			let iface = try project.interfaces.get(conformed.interfaceName) otherwise 'noSuchInterface'
+				// A conformance naming an interface the program does not declare is E3017's, reported by
+				// `checkConformance` one pass later; a reachability walk has nothing to add and nothing to
+				// credit.
+				continue
+			end 'noSuchInterface'
+
+			// The TRANSITIVE requirement set, `ensureWitnessTable`'s own list — `iface.methods` alone
+			// would miss every `extends`-inherited slot, which is a slot like any other.
+			for slot in interfaceWitnessSlots(project.interfaces, iface: iface) 'eachSlot'
+				markReachable(qualifiedMethodName(conformance.typeName, methodName: slot.method.name), project: project, byName: byName, reached: reached, worklist: worklist, names: names)
+			end 'eachSlot'
+		end 'eachInterface'
+	end 'eachConformer'
+end 'markWitnessTableImpls'
+
+// Does this op reach a function through a witness table's method slot? The band structure — and the
+// band-append protection — is `markMaxonCalleeEdge`'s and `noteSubstrateEdge`'s, the family this joins as a
+// fourth member: a variant appended past `panicAbortValue` fails to compile in all four rather than being
+// silently swallowed by any of them.
+function opLoadsAWitnessTableSlot(op MaxonOp) returns bool
+	return match op 'op'
+		call to switch gives false
+		witnessDispatch gives true
+		witnessTryDispatch gives true
+		panicAbortValue gives false
+	end 'op'
+end 'opLoadsAWitnessTableSlot'
 
 // ⭐⭐ **THE ONE CALL EDGE THIS WALK CANNOT SEE, SEEDED AT THE OP THAT IMPLIES IT.**
 // `__str_trim`, `__cs_contains`, the `__strix_*` walks and the two decoding views are SYNTHESIZED Std

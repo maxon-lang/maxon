@@ -438,7 +438,19 @@ end 'main'
 error E3055: specs/fragments/try-postfix-target/error.non-throwing-builtin-static-constructor.test:6:10: try requires a throwing function: this builtin call cannot fail
 ```
 
-<!-- test: error.non-throwing-builtin-print -->
+<!-- test: error.non-throwing-stdlib-print -->
+
+⚠ **THIS CASE CHANGED PRODUCER AT W35, AND THE SENTENCE IT PINS CHANGED WITH IT.** It used to be
+`error.non-throwing-builtin-print` and pinned *"this builtin call cannot fail"*, because `print` was a
+compiler-recognized BARE NAME with no declaration behind it. W35 retired that builtin — `print` is an
+ordinary call to `stdlib/Print.maxon`'s `print(value String)` — so the very same program now meets the
+ORDINARY non-throwing rule and is told which function does not throw. The rejection is unchanged in code
+(E3055), position and verdict; only the voice moved, and it moved to the better one, which is why the case
+is re-pinned rather than deleted. It is now the direct pin on the retirement: a compiler that still carried
+a bare-name `print` would fail here.
+
+⚠ The reference oracle answers `'stdlib.print' does not throw'` for the identical program — same rule, same
+trailing quote, and a module-qualified name where shv2 prints the bare one.
 ```maxon
 function main() returns ExitCode
 	try print("x\n") otherwise ignore
@@ -446,7 +458,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3055: specs/fragments/try-postfix-target/error.non-throwing-builtin-print.test:3:2: try requires a throwing function: this builtin call cannot fail
+error E3055: specs/fragments/try-postfix-target/error.non-throwing-stdlib-print.test:3:2: try requires a throwing function: 'print' does not throw'
 ```
 
 <!-- test: error.throwing-argument-non-throwing-callee -->

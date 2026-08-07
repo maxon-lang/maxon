@@ -17,6 +17,45 @@
 // define a value, one target would have silently misclassified it (a float into a GPR) while the other
 // stayed correct. One walk, checked once by the compiler's exhaustiveness, cannot drift.
 
+// ⭐ **WHICH STANDARD STREAM — the ONLY thing `osWriteStdout` and `osWriteStderr` differ by (W35).**
+// The two ops carry the same operands, the same metadata and the same result; every backend therefore
+// lowers ONE graph and reads its own ABI's spelling of the stream off this — a `GetStdHandle` selector on
+// Windows, a POSIX descriptor on Linux and macOS, a `wasi:cli` accessor import on wasm. Stating it as one
+// enum is what keeps a backend from serving one stream and forgetting the other: the map from this to that
+// backend's constant is exhaustive, so the day a THIRD stream exists every backend fails to compile.
+//
+// ⚠ It lives HERE and not in a target file for `buildValueClassColumns`'s reason — it is target-independent
+// by construction (it names a stream, never an ISA) and it has three readers, so a per-backend copy is the
+// fork that file's header warns about. It is deliberately NOT the panic writer's stderr:
+// `BacktraceFormat.WriteStderrName` is a hand-assembled cstring chunk, a different mechanism (see
+// `StdOp.osWriteStderr`).
+export enum OsOutputStream
+	standardOutput
+	standardError
+end 'OsOutputStream'
+
+// STDOUT_FILENO. `BacktraceFormat.StderrFd`'s twin, and a POSIX fact rather than a per-OS one for the
+// identical reason its comment gives: x64-linux's `write` syscall, arm64-linux's `svc` and arm64-macOS's
+// libSystem `_write` all name the same descriptor.
+//
+// ⚠ **THE TREE HOLDS ANOTHER SPELLING OF THIS NUMBER — `X64LinuxRuntime.WriteStdoutFd` — AND IT IS NOW
+// UNREAD.** Its only reader was the x64 isel's stdout write, which asks the door below instead; the arm64
+// isel's private copy was deleted by this rung, since that file is in its slice. `X64LinuxRuntime.maxon` is
+// not, so the dead export is REPORTED rather than removed here, together with the observation that
+// `StderrFd` and this constant belong in ONE file (they are the same fact, one descriptor apart).
+export let PosixStdoutFd = 0x1  // fd = 1 (STDOUT_FILENO)
+
+// ⭐ THE ONE MAP from a standard stream to the POSIX descriptor a `write` names — asked by BOTH native
+// POSIX lowerings (x64-linux's raw syscall and arm64's syscall/libSystem call), so the two isels cannot come
+// to disagree about which descriptor `printError` writes to. Exhaustive over `OsOutputStream`, which is what
+// makes a third stream a compile error at every backend rather than a silent default.
+export function posixStreamFd(stream OsOutputStream) returns ParsedInt
+	return match stream 's'
+		standardOutput gives PosixStdoutFd
+		standardError gives StderrFd
+	end 's'
+end 'posixStreamFd'
+
 // ⭐ THE ONE DOOR from a Std type to a memory-access WIDTH. `i1`/`u8` are one byte, `i64`/`f64` the
 // full word; those are what the language can put behind a load/store today. Every other type panics
 // rather than picking a nearby width — a narrow integer needs the `as` cast (P1.9), and its SIGNEDNESS
@@ -507,7 +546,6 @@ function recordOpResultClass(op StdOp, column ValueClassColumn, funcNames Functi
 		ret then break 'result'
 		retVoid then break 'result'
 		storeIndirect then break 'result'
-		osWriteStdout then break 'result'
 		// `errorReturn` (a terminator) and `osExit` define no value (P1.4b).
 		errorReturn to osExit then break 'result'
 		// The subprocess wait result is a GPR i64 (the `WaitForSingleObject` return code `proc_check` reads).
@@ -575,6 +613,10 @@ function recordOpResultClass(op StdOp, column ValueClassColumn, funcNames Functi
 		// GPR result.
 		osStdinHandle(resultId) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 		osExecutablePath(resultId, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
+		// W35: both stream writes define the OS's byte COUNT — an integer, so a GPR. `osWriteStdout` used to
+		// sit in the defines-nothing group above; it moved here when it acquired that result.
+		osWriteStdout(resultId, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
+		osWriteStderr(resultId, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 	end 'result'
 end 'recordOpResultClass'
 

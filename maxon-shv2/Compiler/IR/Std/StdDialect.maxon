@@ -968,10 +968,25 @@ export union StdOp
 	// backend say HOW (x64-windows: `GetStdHandle`+`WriteFile` through the IAT; a wasm backend would
 	// name its own), keeping the Win32 import table out of the target-neutral tier; and it appends at
 	// the END of the union, where the append is LOUD (every `… to osAllocPages` range arm fails to
-	// compile until consciously extended). It DEFINES NO VALUE — `print` returns void — so it carries
-	// no result id. Full call-barrier metadata (it IS an indirect call once lowered), exactly like
-	// `osAllocPages`.
-	osWriteStdout(bufId ValueId, lenId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+	// compile until consciously extended). Full call-barrier metadata (it IS an indirect call once
+	// lowered), exactly like `osAllocPages`.
+	//
+	// ⭐⭐ **IT DEFINES THE BYTE COUNT THE OS REPORTS, AND IT USED TO DEFINE NOTHING (W35).** The
+	// comment here said *"`print` returns void — so it carries no result id"*, which was true of the
+	// only consumer it then had: a bare-name `print` builtin routing to `__print_string`. That builtin
+	// is retired, `print` is `stdlib/Print.maxon`'s ordinary declaration, and the floor under it is
+	// `__Builtins.writeStdout` — whose canonical contract is *"returns the byte count written"*
+	// (`/specs/builtins-type.md:24`) and which the bootstrap honours by capturing `WriteFile`'s
+	// `lpNumberOfBytesWritten`. So the count had to come from the OS rather than from the length the
+	// caller asked for, and the op is where each ABI's own answer is picked up.
+	//
+	// ⚠ **IT IS THE OS's ANSWER, NOT A VERDICT** — the same division `osFileOpenRead` draws for its raw
+	// handle and `osReadFile` for its raw BOOL: three of the four lanes report a short or failed write
+	// in the value itself (Win32 writes 0 into the out-param, a POSIX `write` answers a negative errno)
+	// and classifying that is the caller's, one tier up. The fourth lane has no count to report at all:
+	// WASI Preview2's `blocking-write-and-flush` writes the WHOLE contents or fails, so `lenId` IS the
+	// count it wrote, and that is the ABI's guarantee rather than a synthesized stand-in.
+	osWriteStdout(resultId ValueId, bufId ValueId, lenId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
 	// The RIP-relative ADDRESS of an `.rdata` constant — a String literal's 48-byte record (P1.2 wave
 	// A). The `.rdata` twin of `globalAddr`: identical operand shape (a `label` NAME, one plain def, no
 	// value use) and identical metadata (`isPure: true` — it recomputes an address that cannot change,
@@ -1576,6 +1591,24 @@ export union StdOp
 	// owned the loop would own two different loops, and the classification would be invisible to every pass
 	// between here and the encoder.
 	osExecutablePath(resultId ValueId, bufLenId ValueId, bufPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+	// --- W35: the OTHER standard stream ---
+	//
+	// ⚠ APPENDED AT THE VERY END OF THE UNION, per the band-append invariant `osPanicValue` states
+	// above. `category: system` places it logically beside `osWriteStdout`, independent of this tail
+	// position — it is that op one handle/fd over, with the same operands, the same metadata and the
+	// same OS answer.
+	//
+	// ⭐⭐ **shv2's ONLY OTHER WRITER TO STDERR IS NOT THIS MECHANISM AND MUST NOT BE REACHED FOR.**
+	// `mrt_write_cstr_stderr` (`Targets/Shared/BacktraceFormat.maxon`) is the HAND-ASSEMBLED panic and
+	// backtrace writer: per-target chunks emitted with no register allocator, taking a NUL-TERMINATED
+	// cstring because a panic line is assembled from immortal fragments and has no length to carry. A
+	// `printError` has a ptr AND a len, must go through the clobber-correct `iatCall`/`emitOsPrimitiveCall`
+	// path because its two operands are live virtuals across the handle call, and is reached from ordinary
+	// user code rather than from a diverging abort. Extending the panic writer to serve both would put a
+	// register-allocated call inside a chunk assembler that has none. (Same near-name trap as
+	// `X64Runtime.emitPrintString` against `StringRuntime.buildPrintString`: two unrelated mechanisms one
+	// letter apart.)
+	osWriteStderr(resultId ValueId, bufId ValueId, lenId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
 end 'StdOp'
 
 export typealias StdOpArray = Array with StdOp
@@ -1657,8 +1690,8 @@ export function collectStdOpUses(op StdOp, referenced StdValueUseSet)
 		storeIndirect(addrId, _, valueId, _) then insertUsePair(referenced, a: addrId, b: valueId)
 		// The size is a real value operand — the only one this op reads; its result is a def.
 		osAllocPages(_, sizeId) then referenced.insert(sizeId)
-		// Both the buffer and the length are real value operands; this op defines nothing.
-		osWriteStdout(bufId, lenId) then insertUsePair(referenced, a: bufId, b: lenId)
+		// Both the buffer and the length are real value operands; the byte count is a def.
+		osWriteStdout(_, bufId, lenId) then insertUsePair(referenced, a: bufId, b: lenId)
 		// `rdataAddr` reads nothing — its `label` is a NAME, not a value (its result is a def), exactly
 		// like `globalAddr`.
 		rdataAddr then break 'u'
@@ -1755,6 +1788,8 @@ export function collectStdOpUses(op StdOp, referenced StdValueUseSet)
 		// Both the buffer ADDRESS and the LENGTH are live value operands, for the reason `osDirCurrentPath`'s
 		// pair are: the allocator must not free either register before the OS writes through the first.
 		osExecutablePath(_, bufLen, bufPtr) then insertUsePair(referenced, a: bufLen, b: bufPtr)
+		// W35: `osWriteStdout`'s arm one stream over, and it reads exactly what that one reads.
+		osWriteStderr(_, bufId, lenId) then insertUsePair(referenced, a: bufId, b: lenId)
 	end 'u'
 end 'collectStdOpUses'
 
@@ -1842,8 +1877,9 @@ module function remapStdOpUses(op StdOp, subst ValueIdArray) returns StdOp
 		storeIndirect(addrId, offset, valueId, valueType) gives StdOp.storeIndirect(remappedValue(addrId, subst: subst), offset: offset, valueId: remappedValue(valueId, subst: subst), valueType: valueType)
 		// The exact mirror of `collectStdOpUses`'s arm: the size is the one read, so it is the one rewrite.
 		osAllocPages(resultId, sizeId) gives StdOp.osAllocPages(resultId, sizeId: remappedValue(sizeId, subst: subst))
-		// The mirror of `collectStdOpUses`: both operands are reads, so both are rewritten.
-		osWriteStdout(bufId, lenId) gives StdOp.osWriteStdout(remappedValue(bufId, subst: subst), lenId: remappedValue(lenId, subst: subst))
+		// The mirror of `collectStdOpUses`: both operands are reads, so both are rewritten; `resultId` is a
+		// def and is carried through unremapped, exactly as every other defining system op's is.
+		osWriteStdout(resultId, bufId, lenId) gives StdOp.osWriteStdout(resultId, bufId: remappedValue(bufId, subst: subst), lenId: remappedValue(lenId, subst: subst))
 		// `rdataAddr` reports no use (its `label` is a name), so it rewrites nothing and is handed back
 		// unchanged — the exact mirror of `collectStdOpUses`'s `globalAddr`/`rdataAddr` arms.
 		rdataAddr gives op
@@ -1928,6 +1964,8 @@ module function remapStdOpUses(op StdOp, subst ValueIdArray) returns StdOp
 		// rewrite, and the path fill rewrites exactly the pair it reads.
 		osStdinHandle(resultId) gives StdOp.osStdinHandle(resultId)
 		osExecutablePath(resultId, bufLen, bufPtr) gives StdOp.osExecutablePath(resultId, bufLenId: remappedValue(bufLen, subst: subst), bufPtrId: remappedValue(bufPtr, subst: subst))
+		// W35: `osWriteStdout`'s arm one stream over.
+		osWriteStderr(resultId, bufId, lenId) gives StdOp.osWriteStderr(resultId, bufId: remappedValue(bufId, subst: subst), lenId: remappedValue(lenId, subst: subst))
 	end 'r'
 end 'remapStdOpUses'
 

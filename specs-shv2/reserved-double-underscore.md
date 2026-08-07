@@ -529,19 +529,34 @@ end 'main'
 error E4015: <fragment>:3:17: declaration of '__module_init' collides with a symbol the compiler EMITS into this program, and a program cannot hold two functions of one name. The compiler's own definition is the one its emitted code is bound to — the entry stub's calls, the runtime's own call sites, and every call it lowers to that name — so the declaration is the side that must move: rename it
 ```
 
-<!-- test: error.stdlib-overlay-print-string-collides-at-the-std-tier -->
+<!-- test: error.stdlib-overlay-write-stdout-collides-at-the-std-tier -->
 
 ⭐ **THE STD-TIER `FunctionNameIndex` DOOR — the one A1t was written for, and the only one no earlier
-index can reach.** `__print_string` is USAGE-GATED: the compiler installs its own copy because the program
-calls `print`, and that installer runs after the whole Maxon tier, so the pair first exists at
-`DeadFunctionElimination`'s index. The declaration must carry the real signature — resolution binds
-`print("hi")` to whatever is declared, so a nullary one is refused for its ARITY (E3036) and never reaches
-the tier this case is about.
+index can reach.** `__write_stdout` is USAGE-GATED: the compiler installs its own copy because the program
+calls `print` (whose corpus body's only floor is `__Builtins.writeStdout`), and that installer runs after
+the whole Maxon tier, so the pair first exists at `DeadFunctionElimination`'s index.
+
+⚠ **THE EXEMPLAR WAS `__print_string` UNTIL W35, AND IT HAD TO MOVE BECAUSE THE SYMBOL DID.** That entry
+point existed only to serve a bare-name `print` builtin; retiring the builtin retired it, and a case naming
+a symbol nothing emits would pin nothing while still passing — which is the failure mode this whole file is
+about. `__write_stdout` is its successor at the same tier through the same gate, so the case is the same
+statement about the same door. (The empty body in the A1t transcript no longer compiles on its own — an
+unused parameter is E3012 — so the case gives `value` a use.)
+
+⚠⚠ **THE DECLARATION MUST CARRY THE SIGNATURE THE COMPILER'S OWN EMITTED CALL PASSES, and getting that
+wrong moves the answer to a DIFFERENT DOOR** — the sentence the retired version of this case made about
+arity, MEASURED again here about types. A declaration exists, so `SemanticCheck` stops skipping the
+parser-emitted `__write_stdout` call inside `stdlib/Print.maxon` and type-checks it: with
+`(value String)` the program is refused `E3005 … expected 'String', got 'Array___ManagedByte'` at
+`stdlib/Print.maxon:10` and never reaches the tier this case is about. The buffer-and-count signature below
+is what lets every earlier check pass so the Std-tier index is what answers.
 ```maxon
 // --- stdlib-overlay: Builtins.maxon
-export function __print_string(value String)
-	_ = value.byteLength()
-end '__print_string'
+export typealias WrittenByteCount = int(0 to u64.max)
+
+export function __write_stdout(value __ManagedMemory) returns WrittenByteCount
+	return value.length()
+end '__write_stdout'
 // --- file: main.maxon
 function main() returns ExitCode
 	print("hi")
@@ -549,16 +564,20 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E4015: <fragment>:3:17: declaration of '__print_string' collides with a symbol the compiler EMITS into this program, and a program cannot hold two functions of one name. The compiler's own definition is the one its emitted code is bound to — the entry stub's calls, the runtime's own call sites, and every call it lowers to that name — so the declaration is the side that must move: rename it
+error E4015: <fragment>:5:17: declaration of '__write_stdout' collides with a symbol the compiler EMITS into this program, and a program cannot hold two functions of one name. The compiler's own definition is the one its emitted code is bound to — the entry stub's calls, the runtime's own call sites, and every call it lowers to that name — so the declaration is the side that must move: rename it
 ```
 
-<!-- test: stdlib-overlay-print-string-alone-is-legal -->
+<!-- test: stdlib-overlay-write-stdout-alone-is-legal -->
 
 ⭐ **THE OTHER HALF OF THE USAGE GATE, and it is what makes the case above a statement about the PAIR
-rather than about the prefix.** The same `__print_string` declaration, in a program that never prints: no
-installer runs, there is no second `__print_string`, the declaration is unreachable and is pruned. A rule
+rather than about the prefix.** The same `__write_stdout` declaration, in a program that never prints: no
+installer runs, there is no second `__write_stdout`, the declaration is unreachable and is pruned. A rule
 that refused the NAME would refuse this too — and that is exactly the rule A1w applies to the four ROOTED names, which is
 why the next case's message is a different sentence about a different thing.
+
+⚠ It is also the pin that `stdlib/Print.maxon` being LISTED (W35) did not quietly widen the runtime floor:
+the corpus module is loaded into this program like every other, and `__write_stdout` is STILL not installed,
+because `scanRuntimeUsage` skips a stdlib body no path from `main` reaches (`StdlibFacts.unreachable`).
 
 ⚠ The exit code is routed through a SECOND declaration in the same overlay, and that is deliberate: a
 program returning a bare `42` would compile with the overlay dropped on the floor, so the case would go on
@@ -566,9 +585,11 @@ passing for a compiler that had never staged one. What a case asserts has to be 
 skipped the mechanism.
 ```maxon
 // --- stdlib-overlay: Builtins.maxon
-export function __print_string(value String)
-	_ = value.byteLength()
-end '__print_string'
+export typealias WrittenByteCount = int(0 to u64.max)
+
+export function __write_stdout(value __ManagedMemory) returns WrittenByteCount
+	return value.length()
+end '__write_stdout'
 
 export enum __UnprintedProbe
 	answer

@@ -737,3 +737,102 @@ end 'main'
 2 3
 6 6
 ```
+
+### `print` and `printError` — the third bare-name retirement (W35)
+
+`stdlib/Print.maxon` and `stdlib/PrintError.maxon` are the third pair listed by retiring a builtin
+first, after `sleep` and the two UAX #29 classifiers. Until W35, `print` was a compiler-recognized
+BARE NAME matched in `parseCallNamed` before any registry is consulted — which made shv2 the only one
+of the three compilers to treat it that way (the bootstrap resolves every `print(...)` through
+ordinary overload resolution; v1 deleted its own `parsePrintStatement` and `TokenKind.print` to do the
+same), and which made the module unlistable by this file's own rule: a call to the name could never
+reach a declaration of it.
+
+⚠ **The harm was NOT a refusal, which is what the rung that filed this predicted.** MEASURED with both
+entries added and the builtin still live: `print("hi\n")` compiled clean and `Print.maxon` was never
+reached, while its twin one file over raised `E3004` for `__Builtins.writeStderr` — proving the module
+WOULD have been analyzed. So the entry would have been a no-op counting +1 on the cone.
+
+The four cases below are what the retirement bought, each measured on this tree.
+
+The first is the differing-declarations control this file demands: a user's own `print` that does
+something the listed module's cannot be mistaken for — writing to the OTHER stream. While the builtin
+stood, the call site could not see this declaration at all and the text went to stdout.
+
+<!-- test: stdlib-whitelist.a-user-print-outranks-the-listed-module -->
+```maxon
+function print(value String)
+	printError("mine: {value}")
+end 'print'
+
+function main() returns ExitCode
+	print("x\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+```
+```stderr
+mine: x
+```
+
+The ARITY refusal, which no spec anywhere pinned before this rung — and it is the one message the
+retirement CHANGED. The builtin raised its own `'print' takes exactly 1 argument, but 0 were given`
+from a transcribed arity constant; the ordinary check reads `stdlib/Print.maxon`'s signature and says
+so in the voice every other call gets. Same code, same position, same verdict, different producer:
+this is the `sleep` precedent's "one golden holding the builtin's bespoke argument rejection,
+replaced by the ordinary one" in its diagnostic form.
+
+<!-- test: stdlib-whitelist.error.print-arity-comes-from-the-listed-declaration -->
+```maxon
+function main() returns ExitCode
+	print()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3036: specs/fragments/stdlib-whitelist/stdlib-whitelist.error.print-arity-comes-from-the-listed-declaration.test:3:2: 'print' expects 1 argument(s) but 0 were provided
+```
+
+The VOID-RESULT refusal, also pinned by nothing before this rung (`void-call-result.md` covers
+`noop`/`push`/`insert`/`append`/`reserve` and never `print`). This one is UNCHANGED by the
+retirement — the builtin raised the identical sentence — which is worth a case precisely because it
+is the half that did not move: a reader comparing it against the arity case above can see which of
+the two the change touched.
+
+<!-- test: stdlib-whitelist.error.print-void-result-comes-from-the-listed-declaration -->
+```maxon
+function main() returns ExitCode
+	let x = print("a")
+	return x
+end 'main'
+```
+```maxoncstderr
+error E2004: specs/fragments/stdlib-whitelist/stdlib-whitelist.error.print-void-result-comes-from-the-listed-declaration.test:3:10: Function 'print' does not return a value
+```
+
+And the two streams are INDEPENDENT, asserted separately in one program — a spec that only checked
+that the text appeared somewhere would pass just as happily if `printError` were an alias for
+`print`. (`print-error-function.md` is that feature's own file; this case is here because the two
+modules are ONE whitelist entry and this is the entry's end-to-end proof.)
+
+<!-- test: stdlib-whitelist.both-print-modules-from-the-whitelist -->
+```maxon
+function main() returns ExitCode
+	print("out {1 + 1}\n")
+	printError("err {2 + 2}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+out 2
+```
+```stderr
+err 4
+```

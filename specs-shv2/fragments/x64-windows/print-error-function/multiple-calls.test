@@ -1,0 +1,50 @@
+// Test: multiple-calls
+function main() returns ExitCode
+	printError("a\n")
+	printError("b\n")
+	printError("c\n")
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.leaRegRdata rcx, [rip + __str_rec_1]
+    x64.callDirect printError
+    x64.leaRegRdata rcx, [rip + __str_rec_3]
+    x64.callDirect printError
+    x64.leaRegRdata rcx, [rip + __str_rec_5]
+    x64.callDirect printError
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @printError {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.callDirect __str_bytes_view
+    x64.movRegReg rbx, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __write_stderr
+    x64.movRegReg rcx, rbx
+    x64.callDirect __arr_decref
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

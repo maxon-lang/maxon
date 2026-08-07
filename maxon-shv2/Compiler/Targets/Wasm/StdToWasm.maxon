@@ -109,6 +109,16 @@ let GetStdoutImportFuncIdx = 1 as Wasm32Index
 let BlockingWriteFlushImportFuncIdx = 2 as Wasm32Index
 let GetStderrImportFuncIdx = 3 as Wasm32Index
 
+// ⭐ The wasm half of `StdLoweringShared.posixStreamFd` — which `wasi:cli` accessor hands over the
+// output-stream a write targets (W35). Exhaustive over `OsOutputStream` for that door's reason: a third
+// stream must fail to compile here rather than silently take one of these two.
+function wasmStreamAccessorImportFuncIdx(stream OsOutputStream) returns Wasm32Index
+	return match stream 's'
+		standardOutput gives GetStdoutImportFuncIdx
+		standardError gives GetStderrImportFuncIdx
+	end 's'
+end 'wasmStreamAccessorImportFuncIdx'
+
 // The canonical-ABI RETURN AREA `osWriteStdout` hands `blocking-write-and-flush` its
 // `result<_, stream-error>` into. It sits in the low scratch region BELOW the `.data` base
 // (1024) and within page 0, so it never overlaps real data. The write result is ignored
@@ -675,6 +685,8 @@ function internIndirectCallTypeFor(op StdOp, map IndirectCallTypeIdxMap, builder
 		// W5: x64-windows only too, and neither pulls in a wasm import.
 		osStdinHandle then break 'k'
 		osExecutablePath then break 'k'
+		// W35: a stream write makes no INDIRECT call — it calls two IMPORTS by index.
+		osWriteStderr then break 'k'
 	end 'k'
 end 'internIndirectCallTypeFor'
 
@@ -1151,7 +1163,9 @@ function recordDefValtype(op StdOp, valtypes WasmValTypeArray, funcNames Functio
 		loadIndirect(resultId, _, _, valueType) then setValtype(valtypes, v: resultId, vt: wasmValTypeOf(valueType))
 		storeIndirect then break 'def'
 		osAllocPages(resultId, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
-		osWriteStdout then break 'def'
+		// W35: a stream write defines the BYTE COUNT — an i64 like every other Std-tier integer, so the
+		// emitter widens the i32 length it wrote back to the machine width (see `emitOsWriteStream`).
+		osWriteStdout(resultId, _, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
 		// A wasm linear-memory ADDRESS IS AN i32 (like `globalAddr`), not the i64 pointer width the
 		// native backends carry. `rdataAddr` materializes an `i32.const`, so its result local is i32 —
 		// the width `loadIndirect`/`osWriteStdout` then consume as the base address.
@@ -1194,6 +1208,8 @@ function recordDefValtype(op StdOp, valtypes WasmValTypeArray, funcNames Functio
 		// W5: x64-windows only too, so no wasm valtype is ever recorded for either def.
 		osStdinHandle then break 'def'
 		osExecutablePath then break 'def'
+		// W35: the stderr write defines the byte count at the Std tier width, exactly as its stdout twin does.
+		osWriteStderr(resultId, _, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
 	end 'def'
 end 'recordDefValtype'
 
@@ -1408,6 +1424,7 @@ type WasmFuncEmitter
 			osCommandLine then panic("emitStraightLineTerminator: an `osCommandLine` is a body op, never a terminator")
 			osStdinHandle then panic("emitStraightLineTerminator: an `osStdinHandle` is a body op, never a terminator")
 			osExecutablePath then panic("emitStraightLineTerminator: an `osExecutablePath` is a body op, never a terminator")
+			osWriteStderr then panic("emitStraightLineTerminator: an `osWriteStderr` is a body op, never a terminator")
 		end 'term'
 	end 'emitStraightLineTerminator'
 
@@ -1486,6 +1503,7 @@ type WasmFuncEmitter
 			osCommandLine then panic("emitDispatcherTerminator: an `osCommandLine` is a body op, never a terminator")
 			osStdinHandle then panic("emitDispatcherTerminator: an `osStdinHandle` is a body op, never a terminator")
 			osExecutablePath then panic("emitDispatcherTerminator: an `osExecutablePath` is a body op, never a terminator")
+			osWriteStderr then panic("emitDispatcherTerminator: an `osWriteStderr` is a body op, never a terminator")
 		end 'term'
 	end 'emitDispatcherTerminator'
 
@@ -1516,7 +1534,7 @@ type WasmFuncEmitter
 			loadIndirect(resultId, addrId, offset, valueType) then self.emitLoadIndirect(resultId, addrId: addrId, offset: offset, valueType: valueType)
 			storeIndirect(addrId, offset, valueId, valueType) then self.emitStoreIndirect(addrId, offset: offset, valueId: valueId, valueType: valueType)
 			osAllocPages(resultId, sizeId) then self.emitOsAllocPages(resultId, sizeId: sizeId)
-			osWriteStdout(bufId, lenId) then self.emitOsWriteStdout(bufId, lenId: lenId)
+			osWriteStdout(resultId, bufId, lenId) then self.emitOsWriteStream(resultId, bufId: bufId, lenId: lenId, stream: OsOutputStream.standardOutput)
 			rdataAddr(resultId, label) then self.emitRdataAddr(resultId, label: label)
 			tryCall(resultId, errorFlagId, callee, args) then self.emitTryCall(resultId, errorFlagId: errorFlagId, callee: callee, args: args)
 			// An `errorReturn` is normally the block terminator (like `ret`), but is handled here too for
@@ -1576,6 +1594,10 @@ type WasmFuncEmitter
 			//     would be a plausible wrong answer, which is the one thing worse than a refusal.
 			osStdinHandle then panic("emitBodyOp: `osStdinHandle` is x64-windows only — standard input is x64-windows-gated, and SemanticCheck refuses such a program on wasm at its own source span (E3104), so this panic is the backstop for a compiler bug that got one past that gate, not the user-facing rejection")
 			osExecutablePath then panic("emitBodyOp: `osExecutablePath` is x64-windows only — WASI has no executable-path primitive at all, and SemanticCheck refuses such a program on wasm at its own source span (E3104), so this panic is the backstop for a compiler bug that got one past that gate, not the user-facing rejection")
+			// W35: the same emitter as the stdout write, one `wasi:cli` accessor over. Unlike its two W5
+			// neighbours above this is NOT x64-windows-gated — Preview2 exports `get-stderr` beside
+			// `get-stdout` and the writer is the same method, so `printError` runs on this lane.
+			osWriteStderr(resultId, bufId, lenId) then self.emitOsWriteStream(resultId, bufId: bufId, lenId: lenId, stream: OsOutputStream.standardError)
 		end 'body'
 	end 'emitBodyOp'
 
@@ -2381,21 +2403,35 @@ type WasmFuncEmitter
 		self.body.localSet(resultId as Wasm32Index)
 	end 'emitOsAllocPages'
 
-	// `osWriteStdout(buf, len)` → the WASI-Preview2 stdout write, fire-and-forget (the result is
-	// ignored). Stack-balanced: `get-stdout` pushes the i32 stream handle; the buffer address and the
-	// byte length are each wrapped to i32 (a String's `buffer@0`/`length@8` are i64 in the Std IR — a
-	// 64-bit pointer/count in a register on the native backends — but a wasm address/length is i32);
-	// the canonical-ABI return area is a constant i32. `blocking-write-and-flush` writes its
-	// `result<_, stream-error>` into that area and returns nothing, so the stack is empty after —
-	// `osWriteStdout` defines no value. The stream handle leaks, which is acceptable: stdout is
-	// process-lived and the host reclaims it on exit (matches v1's `emitOsWrite`).
-	function emitOsWriteStdout(bufId ValueId, lenId ValueId)
-		self.body.call(GetStdoutImportFuncIdx)
+	// `osWriteStdout`/`osWriteStderr(result, buf, len)` → the WASI-Preview2 stream write. Stack-balanced:
+	// the stream accessor pushes the i32 handle; the buffer address and the byte length are each wrapped
+	// to i32 (a String's `buffer@0`/`length@8` are i64 in the Std IR — a 64-bit pointer/count in a
+	// register on the native backends — but a wasm address/length is i32); the canonical-ABI return area
+	// is a constant i32. `blocking-write-and-flush` writes its `result<_, stream-error>` into that area
+	// and returns nothing, so the stack is empty after the call. The stream handle leaks, which is
+	// acceptable: both streams are process-lived and the host reclaims them on exit (matches v1's
+	// `emitOsWrite`).
+	//
+	// ⭐ ONE EMITTER FOR BOTH STREAMS: the accessor import is the whole difference — a `wasi:io/streams`
+	// output-stream is one type whichever `wasi:cli` accessor produced it, which is why W3's `get-stderr`
+	// needed no second writer and why this one needs no second emitter either.
+	//
+	// ⚠⚠ **THE BYTE COUNT IS `lenId`, AND ON THIS LANE THAT IS THE ABI'S ANSWER RATHER THAN A STAND-IN.**
+	// The other three lanes read a count the OS reports (`WriteFile`'s out-param, `write`'s return);
+	// `blocking-write-and-flush` reports none, because its contract is to write the WHOLE contents or fail
+	// — so on success the count written IS the length asked for. The result is re-pushed from the operand
+	// at the Std tier's i64 width, not from the i32 already consumed by the call, so no truncation is
+	// carried into the count.
+	function emitOsWriteStream(resultId ValueId, bufId ValueId, lenId ValueId, stream OsOutputStream)
+		self.body.call(wasmStreamAccessorImportFuncIdx(stream))
 		self.pushOperandAt(bufId, targetVt: WasmValType.i32)
 		self.pushOperandAt(lenId, targetVt: WasmValType.i32)
 		self.body.i32Const(WasmRetAreaBase)
 		self.body.call(BlockingWriteFlushImportFuncIdx)
-	end 'emitOsWriteStdout'
+
+		self.pushOperandAt(lenId, targetVt: WasmValType.i64)
+		self.body.localSet(resultId as Wasm32Index)
+	end 'emitOsWriteStream'
 
 	// ----------------------------------------------------------------------
 	// Dispatcher terminators: branch / cond-branch (with phi copies)
@@ -2789,6 +2825,7 @@ function decideDispatcher(module StdModule, func IrFunction) returns bool
 		osCommandLine then panic("decideDispatcher: an `osCommandLine` is a body op, never a terminator")
 		osStdinHandle then panic("decideDispatcher: an `osStdinHandle` is a body op, never a terminator")
 		osExecutablePath then panic("decideDispatcher: an `osExecutablePath` is a body op, never a terminator")
+		osWriteStderr then panic("decideDispatcher: an `osWriteStderr` is a body op, never a terminator")
 	end 'k'
 	return false
 end 'decideDispatcher'
