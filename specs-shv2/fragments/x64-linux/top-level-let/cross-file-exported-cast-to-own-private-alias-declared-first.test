@@ -1,0 +1,22 @@
+// Test: cross-file-exported-cast-to-own-private-alias-declared-first
+// --- file: api/base.maxon
+typealias Small = int(0 to 100)
+export let BASE = 21 as Small
+
+// --- file: app/main.maxon
+let VALUE = BASE
+
+function main() returns ExitCode
+	return VALUE
+end 'main'
+---
+ExitCode: 21
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 r8, 21
+    x64.popReg rbp
+    x64.ret
+}
