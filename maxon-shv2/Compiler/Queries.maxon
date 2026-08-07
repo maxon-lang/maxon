@@ -333,7 +333,7 @@ function foldOneFileInto(project Project, signatures ProgramSignatures, path Fil
 	// reads it; nothing else in the Parser needs a signature. Built through `fileReader` like every
 	// other pass's — including its namespace, which is why the module directory is FILED just above and
 	// read back rather than handed straight over: one derivation, one reader.
-	var scanner = fileReader(project, signatures: signatures, path: path, tokens: tokens, isStdlibSource: isStdlibSource)
+	var scanner = fileReader(project, signatures: signatures, path: path, tokens: tokens, isStdlibSource: isStdlibSource, buildsBodies: true)
 	scanner.foldDeclaredSignaturesInto(signatures)
 	recordPhase(project, phase: CompilePhase.signatures, probe: probe)
 end 'foldOneFileInto'
@@ -556,7 +556,7 @@ function foldInterfaceDeclarations(project Project, signatures ProgramSignatures
 	while i < sites.count() 'eachFile'
 		let path = (try sites.get(i) otherwise panic("foldInterfaceDeclarations: sites.get OOB at {i} below count {sites.count()}")).path
 		let tokens = try queryActiveTokens(project, path: path)
-		var reader = fileReader(project, signatures: signatures, path: path, tokens: tokens, isStdlibSource: isStdlibSourceFile(project, path: path))
+		var reader = fileReader(project, signatures: signatures, path: path, tokens: tokens, isStdlibSource: isStdlibSourceFile(project, path: path), buildsBodies: true)
 
 		while i < sites.count() 'eachSiteInFile'
 			let site = try sites.get(i) otherwise panic("foldInterfaceDeclarations: sites.get OOB at {i} below count {sites.count()}")
@@ -590,7 +590,7 @@ function foldExtensionDeclarations(project Project, signatures ProgramSignatures
 	while i < sites.count() 'eachFile'
 		let path = (try sites.get(i) otherwise panic("foldExtensionDeclarations: sites.get OOB at {i} below count {sites.count()}")).path
 		let tokens = try queryActiveTokens(project, path: path)
-		var reader = fileReader(project, signatures: signatures, path: path, tokens: tokens, isStdlibSource: isStdlibSourceFile(project, path: path))
+		var reader = fileReader(project, signatures: signatures, path: path, tokens: tokens, isStdlibSource: isStdlibSourceFile(project, path: path), buildsBodies: true)
 
 		while i < sites.count() 'eachSiteInFile'
 			let site = try sites.get(i) otherwise panic("foldExtensionDeclarations: sites.get OOB at {i} below count {sites.count()}")
@@ -615,7 +615,13 @@ export function queryParseOps(project Project, path FilePath) returns FileParseA
 	// The key this parse must carry, computed ONCE: it validates the memo below and stamps the new one
 	// at the end of the query, so the check and the stamp are the same value rather than two
 	// computations that have to agree. See `currentParseMemoKey`.
-	let keyHash = try currentParseMemoKey(project, path: path, signatureHash: signatures.hash)
+	// Classified ONCE for the whole query — the memo KEY and the reader both need it, and
+	// `isStdlibSourceFile` costs about four String allocations a call on Windows (`canonicalForCompare`
+	// clones and lower-cases both sides), the number `queryProgramSignatures`' partition refuses to pay
+	// twice per file. It must be settled BEFORE the key, because the key carries the body demand it decides.
+	let isStdlibSource = isStdlibSourceFile(project, path: path)
+	let buildsBodies = buildsBodiesFor(project, path: path, isStdlibSource: isStdlibSource)
+	let keyHash = try currentParseMemoKey(project, path: path, signatureHash: signatures.hash, buildsBodies: buildsBodies)
 
 	if let memo = try project.db.parseCache.get(path) 'memoized'
 		if memo.keyHash == keyHash 'hit'
@@ -635,7 +641,7 @@ export function queryParseOps(project Project, path FilePath) returns FileParseA
 	// proper, the termination assert, and the memo write.
 	let parseProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.parse)
 
-	var parser = fileReader(project, signatures: signatures, path: path, tokens: tokens, isStdlibSource: isStdlibSourceFile(project, path: path))
+	var parser = fileReader(project, signatures: signatures, path: path, tokens: tokens, isStdlibSource: isStdlibSource, buildsBodies: buildsBodies)
 	let errorCountBefore = project.diagnostics.count()
 	let artifact = try parser.parseModule() otherwise (parseErr) 'parseFail'
 		reportParseError(project, path: path, error: parseErr)
@@ -669,23 +675,34 @@ export function queryAllModule(project Project) returns MaxonModule throws Compi
 	end 'hit'
 	project.db.allModuleMisses = project.db.allModuleMisses + 1
 
-	// Artifacts are the source of truth for the derived registries; a miss
-	// rebuilds them from scratch so a warm re-run never double-commits. This is
-	// the shv2 replacement for v1's per-file beginFileParse rollback — a clean
-	// reset, since the parser wrote nothing to Project speculatively.
-	resetMergeTargets(project)
-
-	// `merge` is probed around `mergeArtifact` ALONE: `queryParseOps` is called outside
-	// the probe on each iteration, so the fold's cost never absorbs the parse's (the
-	// leaf-timing discipline in CompileTimings' header).
-	var merged = MaxonModule.create()
-	for path in project.db.sourcePaths 'eachFile'
-		let artifact = try queryParseOps(project, path: path)
-
-		let mergeProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.merge)
-		mergeArtifact(project, target: merged, artifact: artifact)
-		recordPhase(project, phase: CompilePhase.merge, probe: mergeProbe)
-	end 'eachFile'
+	// ⭐⭐ **THE MERGE IS A FIXPOINT NOW, BECAUSE A STDLIB BODY IS BUILT ONLY IF SOMETHING REACHES IT.**
+	// Round 0 folds every file with no stdlib body built at all; each later round has the bodies the
+	// previous round's reachability walk demanded, so the walk goes one call deeper. See
+	// `StdlibSource.growStdlibBodyDemand` for why it terminates and why the FIRST round settles it for a
+	// program that names no stdlib function — which is most of `specs-shv2`, and the whole saving.
+	//
+	// ⚠ A round re-folds EVERY file rather than patching the previous module, and that is not a shortcut
+	// to tighten later: `mergeArtifact`'s registries are first-wins and push-append (`resetMergeTargets`
+	// lists them one by one), and its `opRanges`/`valueOrigins` are parallel to the module's op array by
+	// OFFSET. Splicing one file's newly-built bodies into a merged module would have to re-derive every
+	// one of those, which is precisely what re-folding does. The re-fold is cheap because every parse it
+	// asks for is a memo HIT except the files whose demand actually moved.
+	var merged = try foldEveryFileIntoAModule(project)
+	while try growStdlibBodyDemand(project, module: merged, signatures: try queryProgramSignatures(project)) 'demandGrew'
+		// ⛔⛔ **THE PARSE MEMOS MUST GO BEFORE A SECOND FOLD, BECAUSE `mergeArtifact` MUTATES THE ARTIFACT
+		// IT FOLDS.** `remapArtifact` rewrites an artifact's `named(id)` type ids from the FILE's interner
+		// into the PROJECT's, in place. Fold the same artifact again against the interner
+		// `resetMergeTargets` has just emptied and its ids are already project-global: measured, the
+		// second round dies on `TypeNameRemap.apply: id 2 out of range (this remap was built from a
+		// smaller interner)` compiling `Math.exp(0.0)`.
+		//
+		// ⚠ It is not a defect this rung introduced and it is not one it repairs — `queryAllModule` simply
+		// had no second fold before, so nothing ever asked the artifacts to be re-foldable. Dropping the
+		// memos is what asks the parser for artifacts that are, and it is cheap for the reason the whole
+		// change exists: a file whose bodies are still unreached re-parses as DECLARATIONS ONLY.
+		project.db.parseCache = ParseCacheMap.create()
+		merged = try foldEveryFileIntoAModule(project)
+	end 'demandGrew'
 
 	// ⭐ **THE PROJECT'S RANGED-ALIAS REGISTRY GETS THE SAME RANGE-CONTEST SETTLEMENT `ProgramSignatures`'
 	// DID (N2), and it has to be settled HERE because this is where its last declaration lands.** The two
@@ -700,6 +717,32 @@ export function queryAllModule(project Project) returns MaxonModule throws Compi
 	project.db.allModuleCache = ModuleMemo.create(merged, keyHash: compositeSourceHash(project), computed: true)
 	return merged
 end 'queryAllModule'
+
+// ONE ROUND of the merge: every file's artifact folded into a fresh module, with the registries
+// `mergeArtifact` builds reset first.
+//
+// Artifacts are the source of truth for those registries; a miss rebuilds them from scratch so a warm
+// re-run never double-commits. This is the shv2 replacement for v1's per-file beginFileParse rollback — a
+// clean reset, since the parser wrote nothing to Project speculatively — and it is what makes a SECOND
+// round of the body-demand fixpoint above safe to run over the same project.
+//
+// `merge` is probed around `mergeArtifact` ALONE: `queryParseOps` is called outside the probe on each
+// iteration, so the fold's cost never absorbs the parse's (the leaf-timing discipline in CompileTimings'
+// header).
+function foldEveryFileIntoAModule(project Project) returns MaxonModule throws CompileError
+	resetMergeTargets(project)
+
+	var merged = MaxonModule.create()
+	for path in project.db.sourcePaths 'eachFile'
+		let artifact = try queryParseOps(project, path: path)
+
+		let mergeProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.merge)
+		mergeArtifact(project, target: merged, artifact: artifact)
+		recordPhase(project, phase: CompilePhase.merge, probe: mergeProbe)
+	end 'eachFile'
+
+	return merged
+end 'foldEveryFileIntoAModule'
 
 // ⭐ **WHOLE-PROGRAM FUNCTION-VALUE MERGE SIGNATURE AGREEMENT (P1.5 #81).** Every function-value ternary /
 // match EXPRESSION recorded a `PendingFnMergeCheck` at parse — its arms' governing names, the anchor, and
@@ -959,9 +1002,25 @@ end 'declaresCompilerInternalNames'
 // `tokens` is a parameter rather than a `queryActiveTokens` call in here because two callers deliberately
 // fetch them OUTSIDE their phase probe, so that a `signatures` or `parse` phase never absorbs the lexing it
 // depends on. Called with them in hand, this routine cannot re-introduce that.
-function fileReader(project Project, signatures ProgramSignatures, path FilePath, tokens TokenArray, isStdlibSource bool) returns Parser
-	return Parser.create(tokens, filePath: path, namespace: signatures.namespaceOf(path), signatures: signatures, isStdlibSource: isStdlibSource, declaresCompilerInternalNames: declaresCompilerInternalNames(project, path: path), livesUnderStdlibDirectory: livesUnderStdlibDirectory(signatures, isStdlibSource: isStdlibSource))
+function fileReader(project Project, signatures ProgramSignatures, path FilePath, tokens TokenArray, isStdlibSource bool, buildsBodies bool) returns Parser
+	return Parser.create(tokens, filePath: path, namespace: signatures.namespaceOf(path), signatures: signatures, isStdlibSource: isStdlibSource, declaresCompilerInternalNames: declaresCompilerInternalNames(project, path: path), livesUnderStdlibDirectory: livesUnderStdlibDirectory(signatures, isStdlibSource: isStdlibSource), buildsBodies: buildsBodies)
 end 'fileReader'
+
+// ⭐ **DOES THIS FILE'S PARSE BUILD FUNCTION BODIES?** A USER file always does — its bodies are the
+// program, and a diagnostic in unreached user code is still the user's bug (`StdlibFacts.unreachable`'s
+// field comment draws the same line for the same reason). A stdlib file does once ANY function it declares
+// has been reached, and then it builds all of them — see `BuildsBodies` for why the unit is the file.
+//
+// ⚠ It is a SET LOOKUP and reads no artifact, which is what lets `queryAllModule` drop the parse memos
+// between rounds: `growStdlibBodyDemand` records the answer while the artifacts still exist, and this
+// reads it back after they are gone.
+function buildsBodiesFor(project Project, path FilePath, isStdlibSource bool) returns bool
+	if not isStdlibSource 'theUsersOwnCode'
+		return true
+	end 'theUsersOwnCode'
+
+	return project.db.demandedStdlibBodyFiles.contains(path)
+end 'buildsBodiesFor'
 
 // Clear the registries that `mergeArtifact` rebuilds from artifacts, so a
 // queryAllModule miss re-derives them cleanly rather than compounding a prior

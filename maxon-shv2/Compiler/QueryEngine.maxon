@@ -55,11 +55,16 @@ export function sourceEntryOf(project Project, path FilePath) returns SourceFile
 	return try project.db.sourceFiles.get(path) otherwise throw CompileError.fileNotFound(path)
 end 'sourceEntryOf'
 
-// **A PARSE MEMO IS KEYED ON TWO FACTS, BECAUSE A PARSE READS TWO INPUTS.**
+// **A PARSE MEMO IS KEYED ON THREE FACTS, BECAUSE A PARSE READS THREE INPUTS.**
 //
 //   1. the file's OWN bytes — its tokens;
 //   2. the WHOLE-PROGRAM SIGNATURE INDEX — every OTHER file's declarations, which the parser
-//      needs to type a call's result (SignatureIndex.maxon).
+//      needs to type a call's result (SignatureIndex.maxon);
+//   3. whether this parse BUILDS FUNCTION BODIES at all (`BuildsBodies`).
+//      Keying on (1) and (2) alone serves a round that has just discovered it needs `Math.pow`'s body the
+//      artifact built when nothing needed it, and the program then calls a function whose only op is the
+//      `retVoid` `skipUnreachedFunctionBody` left. It is the same failure as (2)'s, one tier down: the
+//      file did not change, and what the COMPILE wants from it did.
 //
 // Keying on (1) alone — which is what shipped, and was correct only while a parse read nothing
 // but its own file — SERVES A STALE PARSE the moment a signature moves: change `isReady`'s
@@ -71,8 +76,14 @@ end 'sourceEntryOf'
 // The two halves are mixed rather than compared separately so validity stays what it has always
 // been: ONE stamped hash, ONE equality test (see this file's header). The `mix` is FNV's own
 // step, so the composite is as collision-resistant as either half.
-function parseMemoKey(contentHash ContentHash, signatureHash ContentHash) returns ContentHash
-	return mix(contentHash, value: signatureHash)
+// The third half's two values. Arbitrary DISTINCT constants rather than 0 and 1 because `mix` is FNV's
+// own step and feeding it 0 is feeding it nothing: two files whose other halves differ by exactly one
+// would then collide across the split.
+let BodiesBuiltKeySalt = 0x9E3779B97F4A7C15 as ContentHash
+let BodiesSkippedKeySalt = 0xC2B2AE3D27D4EB4F as ContentHash
+
+function parseMemoKey(contentHash ContentHash, signatureHash ContentHash, buildsBodies bool) returns ContentHash
+	return mix(mix(contentHash, value: signatureHash), value: BodiesBuiltKeySalt if buildsBodies else BodiesSkippedKeySalt)
 end 'parseMemoKey'
 
 // The key a parse memo for `path` must carry to be valid right now. `signatureHash` is
@@ -83,8 +94,8 @@ end 'parseMemoKey'
 // `queryParseOps` computes it ONCE and uses that one value to both validate its memo and stamp the
 // new one, for `sourceEntryOf`'s reason: the two must be the same key, and each computation of it is
 // another `FilePath` map probe.
-export function currentParseMemoKey(project Project, path FilePath, signatureHash ContentHash) returns ContentHash throws CompileError
-	return parseMemoKey((try sourceEntryOf(project, path: path)).contentHash, signatureHash: signatureHash)
+export function currentParseMemoKey(project Project, path FilePath, signatureHash ContentHash, buildsBodies bool) returns ContentHash throws CompileError
+	return parseMemoKey((try sourceEntryOf(project, path: path)).contentHash, signatureHash: signatureHash, buildsBodies: buildsBodies)
 end 'currentParseMemoKey'
 
 // The composite whole-program hash: every source file's content hash folded in source-path order.

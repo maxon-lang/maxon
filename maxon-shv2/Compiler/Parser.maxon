@@ -7843,6 +7843,23 @@ export type Parser
 	// it broke the one command that finds a module's blockers before it is listed. See
 	// `Queries.livesUnderStdlibDirectory`.
 	let livesUnderStdlibDirectory as bool
+	// ⭐⭐ **WHICH OF THIS FILE'S FUNCTION BODIES THIS PARSE BUILDS OPS FOR — and it is a set only for
+	// stdlib source.** A user file always builds every body: its bodies are the program. A stdlib file
+	// builds only the bodies some path from `main` REACHES, which `queryAllModule` discovers by fixpoint
+	// and hands back here (see `BodyDemand`).
+	//
+	// ⚠ **IT PRUNES OPS AND NOTHING ELSE. Every DECLARATION is still read, from every file, exactly as
+	// before** — the signature, the parameter types, the struct layout, the ranged `typealias` and its
+	// bounds, the conformance. That split is the whole soundness argument: `StdlibLoader`'s header records
+	// that listing `File.maxon` moved a committed golden through its `typealias Byte`, i.e. that a
+	// DECLARATION reaches a program which never names the module. A declaration this parse skipped would
+	// silently un-move that golden. A BODY cannot: `lowerMaxonToStd` already skips an unreachable stdlib
+	// body (`StdlibFacts.unreachable`) and `DeadFunctionElimination` already drops it, so an op built here
+	// for a function nothing reaches is work the back end throws away.
+	//
+	// ⭐ MEASURED on `print("hi")` against the same tree with every body built: **139.5 ms → 82.6 ms of
+	// compile, 412.0M → 234.0M CPU ticks, `parse` 54.2 → 13.6 ms, and the emitted executable BYTE-IDENTICAL.**
+	let buildsBodies as bool
 	var usedTypeNames as UsedTypeNameSet
 	// ⭐ **DOES THIS WALK COLLECT USES AT ALL?** Set by `parseModule` and false everywhere else, because
 	// `parseModule` is the only entry point that ever REPORTS (`reportUnusedTypeAliases`). The
@@ -7925,7 +7942,7 @@ export type Parser
 		return renamed
 	end 'shadowRenamedTokens'
 
-	export static function create(tokens TokenArray, filePath FilePath, namespace String, signatures ProgramSignatures, isStdlibSource bool, declaresCompilerInternalNames bool, livesUnderStdlibDirectory bool) returns Parser
+	export static function create(tokens TokenArray, filePath FilePath, namespace String, signatures ProgramSignatures, isStdlibSource bool, declaresCompilerInternalNames bool, livesUnderStdlibDirectory bool, buildsBodies bool) returns Parser
 		return Self{
 			tokens: shadowRenamedTokens(tokens, signatures: signatures, isStdlibSource: isStdlibSource),
 			pos: 0,
@@ -8022,6 +8039,7 @@ export type Parser
 			closureParamHint: ClosureParamTypeHint.none,
 			emptyMoveMark: MoveMark.create(BoolArray.create(), values: ValueIdArray.create()),
 			isStdlibSource: isStdlibSource,
+			buildsBodies: buildsBodies,
 			declaresCompilerInternalNames: declaresCompilerInternalNames,
 			livesUnderStdlibDirectory: livesUnderStdlibDirectory,
 			usedTypeNames: sharedEmptyUsedTypeNames,
@@ -14748,18 +14766,25 @@ export type Parser
 		try self.bindParameters(sourceName, paramNames: paramNames, paramTypes: paramTypes, paramRanges: paramRanges, paramSurfaces: paramSurfaces)
 
 		self.skipNewlines()
-		// parseStatements threads a "current block" that control-flow statements can
-		// move forward (an `if` leaves subsequent statements in its continuation block),
-		// so the block it RETURNS — not `entry` — is the one control falls out of.
-		var bodyEnd = try self.parseStatements(func, block: entry)
-		try self.closeFunctionBody(func, bodyEnd: bodyEnd, nameTok: nameTok)
-		// ⚠ The BARE name off the token, not `sourceName` and not `name`: the interface-requirement waiver
-		// matches against the requirement an `interface` body spells, which is the method name alone.
-		// `sourceName` is already qualified for a method (`Silent.greet` — `declaredMethodName`) and `name`
-		// may be mangled on top of that for an overload; either would match no contract, silently, and the
-		// waiver would simply never fire (measured: `interface-method-local-var-still-errors` reported the
-		// contract's own `volume`).
-		self.reportUnusedBindings(nameTok.value)
+		// ⭐⭐ **A STDLIB BODY NO PATH FROM `main` REACHES IS SKIPPED WHOLE — the ops, and with them every
+		// diagnostic that is a property of the ops.** See `Parser.bodyDemand` for the measurement and for why
+		// the DECLARATION above this line is never skipped.
+		if not self.buildsBodies 'bodyNotReached'
+			self.skipUnreachedFunctionBody(entry, nameTok: nameTok)
+		end 'bodyNotReached' else 'bodyReached'
+			// parseStatements threads a "current block" that control-flow statements can
+			// move forward (an `if` leaves subsequent statements in its continuation block),
+			// so the block it RETURNS — not `entry` — is the one control falls out of.
+			var bodyEnd = try self.parseStatements(func, block: entry)
+			try self.closeFunctionBody(func, bodyEnd: bodyEnd, nameTok: nameTok)
+			// ⚠ The BARE name off the token, not `sourceName` and not `name`: the interface-requirement waiver
+			// matches against the requirement an `interface` body spells, which is the method name alone.
+			// `sourceName` is already qualified for a method (`Silent.greet` — `declaredMethodName`) and `name`
+			// may be mangled on top of that for an overload; either would match no contract, silently, and the
+			// waiver would simply never fire (measured: `interface-method-local-var-still-errors` reported the
+			// contract's own `volume`).
+			self.reportUnusedBindings(nameTok.value)
+		end 'bodyReached'
 
 		try self.consume(TokenKind.end)
 		self.skipOptionalLabel()
@@ -14959,6 +14984,40 @@ export type Parser
 		self.emitScopeDrops(bodyEnd, floor: WholeFunctionScopeFloor, anchor: nameTok)
 		self.artifact.emitTerminator(bodyEnd, op: MaxonOp.retVoid, range: SourceRange.ofToken(nameTok))
 	end 'closeFunctionBody'
+
+	// ⭐⭐ **WALK THE CURSOR PAST A BODY THIS PARSE IS NOT BUILDING, leaving it ON the function's own `end`**
+	// — exactly where `parseStatements` leaves it, so the caller's `consume(TokenKind.end)` and its optional
+	// label are untouched and this is invisible to everything after the call.
+	//
+	// ⚠ **IT IS A THIRD READER OF THE BLOCK RULE, NOT A THIRD COPY OF IT.** Maxon's block structure is
+	// written in `parseStatement`/`parseBlockBody` and re-derived once in `opensBlockAt`/`closesBlockAt`;
+	// this asks those predicates, exactly as `ensureSiblingReceivers` does, so a construct added to the
+	// grammar is learned here through the same door. The `functionDeclarationAt` term is that walk's
+	// documented +1: a NAMED function opens a block `opensBlockAt` does not count (it knows
+	// `if`/`while`/`match`/`try`), while a CLOSURE is `function(` — no name, no `end` — so it needs none.
+	//
+	// ⚠ The entry block still needs a terminator or the module is malformed, and `retVoid` is what it gets
+	// whatever the declared return type is. That is sound ONLY because a skipped body is by construction one
+	// no path from `main` reaches: `queryAllModule`'s fixpoint demands every body the reachability walk
+	// touches, and `requireEveryReachedStdlibBodyWasBuilt` turns a disagreement into a panic rather than
+	// letting a `retVoid` stand in for a value the program would have read.
+	function skipUnreachedFunctionBody(entry IrBlock, nameTok Token)
+		var depth = 0 as BlockDepth
+		while self.kindAt(self.pos) != TokenKind.eof 'scan'
+			if self.functionDeclarationAt(self.pos) or self.opensBlockAt(self.pos) 'opens'
+				depth = depth + 1
+			end 'opens' else if self.closesBlockAt(self.pos) 'closes'
+				if depth == 0 'ownEnd'
+					break
+				end 'ownEnd'
+				depth = depth - 1
+			end 'closes'
+
+			self.advance()
+		end 'scan'
+
+		self.artifact.emitTerminator(entry, op: MaxonOp.retVoid, range: SourceRange.ofToken(nameTok))
+	end 'skipUnreachedFunctionBody'
 
 	// ⭐⭐ **E3012 — THE FIRST BINDING THIS FUNCTION DECLARED AND NEVER MENTIONED.** Called at the `end` of
 	// a function, once the whole body has been seen, because "never mentioned" is a fact about the WHOLE

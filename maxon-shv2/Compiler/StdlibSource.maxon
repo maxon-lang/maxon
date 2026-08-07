@@ -99,6 +99,31 @@ end 'stdlibDirAbove'
 // stdlib source", exactly like `DestructorSet`.
 export typealias FunctionNameSet = Set with ByteArray
 
+// ⭐⭐ **THE BODY DEMAND IS PER FILE AND HAS TWO STATES — all of this file's bodies, or none of them.**
+// A user file always builds. A stdlib file builds once ANY function it declares is reached, and then it
+// builds ALL of them.
+//
+// ⚠ **PER FILE RATHER THAN PER FUNCTION, AND BOTH REASONS ARE LOAD-BEARING:**
+//
+//   • **CORRECTNESS.** A per-function demand has to be asked in the parser, mid-declaration, of a name —
+//     and there are TWO spellings of a function's name there. `sourceName` is what the source wrote
+//     (`Math.exp`); `overloadRegistrationNameFor` may mangle it (`FilePath.join#FilePath`), and it is the
+//     MANGLED one that reaches `IrFunction.name` and therefore the reachability walk's answer. Asking with
+//     the wrong one skips a body the program calls, and the call then lands on the bare `retVoid`
+//     `skipUnreachedFunctionBody` left — a SILENT WRONG ANSWER, in exactly the family
+//     `deriveStdlibFacts` already warns about ("it runs BEFORE overload resolution, so a callee name here
+//     is provisional"). A per-FILE demand never asks about a name at all.
+//   • **COST.** The demand is discovered round by round, so a per-function demand re-parses a file once per
+//     function of it that is reached — and, because a memo key built from the whole-program demand moves
+//     for EVERY file whenever ANY name is added, it re-parses all twenty-one of them each round. MEASURED
+//     before this was per-file: `Math.exp(0.0)` spent **125.9 ms in `parse`** against 54.2 ms for the
+//     unmodified compiler — a REGRESSION on the programs the change exists to speed up.
+//
+// The cost of the coarser unit is building the unreached bodies of a file that is already being used, and
+// `DeadFunctionElimination` drops those exactly as it dropped them before.
+// (There is no typealias for it: `typealias X = bool` is not legal Maxon, and a one-word alias for a
+// primitive would be a name to keep in step rather than a fact to state. The header above is the fact.)
+
 // A stdlib function name -> the x64-windows-only runtime entry its body reaches, directly or through
 // other stdlib functions. Membership IS "this function needs the Win32 substrate", so the map is its own
 // mark column and there is no second set to keep in step with it.
@@ -206,6 +231,75 @@ export function deriveStdlibFacts(project Project, module MaxonModule, signature
 
 	return StdlibFacts.create(stdlibSet, unreachable: unreachable, substrateEntries: stdlibSubstrateEntries(module, stdlibNames: stdlibNames, unreachable: unreachable))
 end 'deriveStdlibFacts'
+
+// ⭐⭐ **GROW THE BODY DEMAND BY ONE ROUND — the fixpoint step `queryAllModule` iterates.**
+//
+// It asks the SAME question `deriveStdlibFacts` asks, of the same walk, and that is deliberate rather
+// than convenient: the set of bodies this compile BUILDS and the set `lowerMaxonToStd` LOWERS must be
+// decided by one derivation, or a body could be lowered that was never parsed. Round 0 merges every
+// file with no stdlib body built, so the walk sees the user's own edges into stdlib and stops there;
+// each later round has the bodies the previous one demanded, so the walk goes one call deeper. It
+// terminates because the demand only ever grows and is bounded by the stdlib functions that exist.
+//
+// ⚠ **A ROUND THAT ADDS NOTHING IS THE COMMON CASE, AND IT IS THE FIRST ONE.** A program whose user
+// code names no stdlib function at all — most of `specs-shv2` — settles here, having built not one
+// stdlib body. That is exactly `userCodeReachesStdlib`'s short-circuit reached one tier earlier.
+//
+// Returns whether the demand actually grew, which is the caller's loop condition.
+export function growStdlibBodyDemand(project Project, module MaxonModule, signatures ProgramSignatures) returns bool throws CompileError
+	// A prior diagnostic leaves the merged module describing a program that is already refused, so a
+	// reachability walk over it can only be noise — `deriveStdlibFacts` declines for the same reason, one
+	// screen down, and a compile that stops here simply builds no further bodies.
+	if projectHasErrors(project) 'malformedModule'
+		return false
+	end 'malformedModule'
+
+	let stdlibNames = try stdlibFunctionNames(project)
+	if stdlibNames.count() == 0 'noStdlibSource'
+		return false
+	end 'noStdlibSource'
+
+	var stdlibSet = FunctionNameSet.create()
+	for name in stdlibNames 'seed'
+		stdlibSet.insert(name)
+	end 'seed'
+
+	let initCallees = signatures.globalInitCallees()
+	// The same short-circuit `deriveStdlibFacts` opens with, and it is the whole saving: no op in code
+	// this program reaches names a stdlib function, so no stdlib body can be reached and the walk's
+	// O(functions) name->index map is never built.
+	if not userCodeReachesStdlib(module, stdlib: stdlibSet, initCallees: initCallees) 'noneReferenced'
+		return false
+	end 'noneReferenced'
+
+	let reachable = try reachableMaxonFunctionNames(module, project: project, initCallees: initCallees)
+
+	// ⚠ **THE ANSWER IS RECORDED AS A SET OF FILES, NOT OF NAMES, AND THAT IS WHAT SURVIVES THE MEMO
+	// DROP.** `queryAllModule` clears `parseCache` before it re-folds, so nothing may ask a later round
+	// "which functions does this file declare?" — the artifact that knew is gone. A file recorded here is
+	// still recorded then. (Measured the other way round: keyed on names and read back through the parse
+	// cache, every file answered "declares nothing reached" after the drop, every body stayed skipped, and
+	// `lowerStdToX64` panicked on the `retVoid` of a function the program calls.)
+	var grew = false
+	for path in project.stdlibSourcePaths 'eachFile'
+		if project.db.demandedStdlibBodyFiles.contains(path) 'alreadyBuilding'
+			continue
+		end 'alreadyBuilding'
+
+		let artifact = try queryParseOps(project, path: path)
+		for func in artifact.module.functions 'eachFunc'
+			if not reachable.contains(func.name) 'notReached'
+				continue
+			end 'notReached'
+
+			project.db.demandedStdlibBodyFiles.insert(path)
+			grew = true
+			break
+		end 'eachFunc'
+	end 'eachFile'
+
+	return grew
+end 'growStdlibBodyDemand'
 
 // Every function the merged module got from stdlib source, in load order. Read back from each stdlib
 // file's PARSE ARTIFACT — a memo HIT, since `queryAllModule` has already parsed it — so the cost is

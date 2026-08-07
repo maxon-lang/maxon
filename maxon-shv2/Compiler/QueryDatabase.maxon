@@ -145,6 +145,14 @@ export type QueryDatabase
 	export var activeTokenCache as TokenCacheMap
 	export var parseCache as ParseCacheMap
 
+	// ⭐⭐ **THE STDLIB FILES THIS COMPILE BUILDS FUNCTION BODIES FOR** — empty until `queryAllModule`'s
+	// fixpoint has walked a module, and grown by it once per round (`growStdlibBodyDemand`).
+	//
+	// It lives on the DATABASE rather than on `Project` because it is the third half of a parse memo's KEY:
+	// an artifact built when nothing reached this file is missing every body, and serving it to the round
+	// that has just reached one is the stale-memo failure `parseMemoKey`'s header is about.
+	export var demandedStdlibBodyFiles as MaxonSourcePathSet
+
 	// Whole-program signature-index memo. Sits BETWEEN tokens and parse in the chain:
 	// every parse reads it, and a parse memo is keyed on it (QueryEngine.parseMemoKey).
 	export var signatureCache as SignatureMemo
@@ -178,6 +186,7 @@ export type QueryDatabase
 			tokenCache: TokenCacheMap.create(),
 			activeTokenCache: TokenCacheMap.create(),
 			parseCache: ParseCacheMap.create(),
+			demandedStdlibBodyFiles: MaxonSourcePathSet.create(),
 			signatureCache: SignatureMemo.empty(os),
 			allModuleCache: ModuleMemo.empty(),
 			tokenHits: 0, tokenMisses: 0,
