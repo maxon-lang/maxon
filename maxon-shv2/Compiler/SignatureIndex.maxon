@@ -3809,20 +3809,35 @@ function foreignNameOf(typeNames TypeNameInterner, id TypeNameId) returns ByteAr
 	return try typeNames.nameOf(id) otherwise panic("foreignNameOf: type-name id {id} is not in the interner it was passed with — a type crossing INTO the signature index must carry ids minted against the interner named alongside it")
 end 'foreignNameOf'
 
-// Is `element` a type a tuple can be keyed on? A `typeParameter` is not: the shared generic body has no
-// concrete type to build a layout or a drop cascade against. An `unresolved` is not: there is nothing to
-// mangle. A `void` is not: it is no value at all. All three are reachable from source, so each is a
-// positioned rejection rather than a panic.
+// Is `element` a type a tuple can be keyed on? An `unresolved` is not: there is nothing to mangle. A `void`
+// is not: it is no value at all. Both are reachable from source, so each is a positioned rejection rather
+// than a panic.
 //
-// ⚠ **ONE OF THE THREE REASONS THIS REFUSAL CARRIED IS GONE, AND THE REFUSAL IS NOT (W14).** It used to add
-// that `mangleTypeArg` "would spell it by POSITION, so two instantiations would silently share one layout".
-// That was true of a position and is false of the token that replaced it — two distinct parameters now mangle
-// and intern apart. What survives is the reason above, which the identity change does not touch: an opaque
-// element has no concrete type for the LAYOUT or the DROP CASCADE, whatever it is named. Lifting the refusal
-// is a separate rung with its own measurements; deleting the stale half of its justification is not.
+// ⭐⭐ **A `typeParameter` IS ONE NOW (W43), AND ALL THREE OF THE REASONS IT WAS NOT HAVE BEEN ANSWERED —
+// EACH BY A DIFFERENT RUNG, WHICH IS WHY THIS TOOK SIX ATTRIBUTION ROUNDS TO SEE.**
+//
+//   • **IDENTITY — answered by `W14`.** The refusal used to argue that `mangleTypeArg` "would spell it by
+//     POSITION, so two instantiations would silently share one layout". True of a position, false of the
+//     digest token that replaced it: two distinct parameters mangle and intern apart. `W14`'s own note
+//     retired this half and left the rest standing.
+//   • **LAYOUT — answered by `W6`'s premise 1, measured not argued.** `LowerMaxonToStd.maxon:146` lowers a
+//     type parameter to `StdType.i64`, "AN OPAQUE MACHINE WORD (P1.6-A)", and `Project.fieldSlotCount` gives
+//     every non-existential field exactly one 8-byte slot. So `(Key, Value)` has a statically known 16-byte
+//     layout. There was never a layout to be missing.
+//   • **DROP CASCADE — the one that actually survived, and it is answered by the LAYOUT DESCRIPTOR the
+//     instance already carries**, not by knowing the concrete type here. A tuple over parameters is dropped
+//     the way every other opaque aggregate is: through the per-instance descriptor. Refusing the TYPE to
+//     avoid a question about a VALUE was the category error — the two are separable, and the value-side
+//     hazard keeps its own refusal at the construction site (see the borrowed-opaque rule), which is where
+//     ownership is actually decided.
+//
+// ⚠ **The value-side refusal is NOT lifted here and must not be**: aliasing a BORROWED opaque element into a
+// tuple is still refused where it is built, because the tuple would store the borrow without a reference and
+// its caller's concrete drop would release it twice. That is a claim about a construction, and this function
+// is asked about a TYPE.
 function requireTupleElementType(element MaxonType, position FieldIndex) throws TupleElementRejection
 	let tag = maxonTypeTag(element)
-	if tag == ValueTypeTag.typeParameter or tag == ValueTypeTag.unresolved or tag == ValueTypeTag.void 'unsupported'
+	if tag == ValueTypeTag.unresolved or tag == ValueTypeTag.void 'unsupported'
 		throw TupleElementRejection.unsupportedTag(position, tagName: typeTagName(tag))
 	end 'unsupported'
 end 'requireTupleElementType'
