@@ -519,11 +519,20 @@ end 'HallVerdict'
 // matching SATURATES the values. The DEFICIT is `|live| - |matching|` (König–Ore deficiency), and the
 // witness falls out of the same alternating-path search that proved the matching maximum.
 //
-// It runs only where the cardinality screen already fired AND the point does not overflow the full
-// pool, so `live.count() <= poolSize <= RegisterFileSize`: the search is bounded by
+// ON THE HOT PATH it runs only where the cardinality screen already fired AND the point does not
+// overflow the full pool, so `live.count() <= poolSize <= RegisterFileSize`: the search is bounded by
 // `RegisterFileSize` values × `RegisterFileSize` registers and cannot be a hot-path cost. (The
 // register side is `valueOfReg`'s width, which is that same constant — spelling it as a literal is
 // what left this paragraph claiming 16 across the rung that made it 32.)
+//
+// ⚠ **`live.count() <= poolSize` IS A COST PREMISE, NOT A CORRECTNESS ONE, and there is now one caller
+// that does not meet it.** `SplitLiveRanges.confinedOverflowAtPeak` asks this AT a full-pool peak —
+// deliberately, to find the confinement the ranking hid underneath one — so its live list is larger
+// than the pool and the matching cannot saturate. The answer is still exact: what a bigger live set
+// costs is a longer augmenting search, and what it CHANGES is that a witness of the whole pool becomes
+// reachable (the plain pigeonhole, which is not a confinement at all). That caller filters it out with
+// `confinementOnly`; nothing else may treat such a witness as `clobberOnly`. And the call is on the
+// path where E5001 was about to be raised, i.e. once per refused peak, never per op.
 //
 // It answers FEASIBILITY, not the colorer's CHOICE — and ⛔⛔ **FEASIBLE DOES NOT MEAN THE COLORER
 // WILL FIND IT.** This paragraph used to end *"a point this call declares feasible is one the colorer
