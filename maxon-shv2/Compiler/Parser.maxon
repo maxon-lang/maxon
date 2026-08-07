@@ -1495,6 +1495,12 @@ let sharedEmptyTupleLayouts = StructLayoutMap.create()
 // programs that never mark also never pay to ask.
 let sharedEmptyImmutableGlobalReads = ValueMarkSet.create()
 
+// The module-level shared EMPTY rebindable-slot-read set (W41), held as the initial value of
+// `rebindableSlotReads` AND as the COW anchor its per-function reset points at —
+// `sharedEmptyImmutableGlobalReads`'s pattern, for its reason and with its invariant. A function that binds
+// no name to a managed value read out of a writable slot never writes it.
+let sharedEmptyRebindableSlotReads = ValueMarkSet.create()
+
 // The module-level shared EMPTY buffer-surface mark set (R4.4), held as the initial value of
 // `bufferSurfaceValues` AND as the COW anchor its per-function reset points at —
 // `sharedEmptyImmutableGlobalReads`'s pattern, for its reason and with its invariant. Every program that
@@ -7606,6 +7612,38 @@ export type Parser
 	// stayed flat at x1.99. It allocates almost nothing (the list's own geometric growth, +21 allocations at
 	// K = 16,000), so `scale-test` is structurally blind to it and it had to be found by reading.
 	var immutableGlobalReads as ValueMarkSet
+	// ⭐⭐ **WHICH VALUES WERE READ OUT OF A SLOT THAT CAN BE REBOUND WHILE A NAME STILL HOLDS THE VALUE
+	// (W41)** — a MUTABLE struct field (`self.items`, `h.items`) or a MUTABLE top-level global (`var G`).
+	// The fact that makes such a read OWE A REFERENCE the moment it is bound to a name.
+	//
+	// ⚠ **THE BORROW MODEL'S STRUCTURAL ARGUMENT DOES NOT REACH A WRITABLE SLOT, AND THAT WAS THE HOLE.**
+	// `declareInitializedBinding` leaves an immutable binding of a borrowed managed value BORROWED — no
+	// retain, no scope-exit drop — on the reasoning stated at its `aliasImmutableSource` arm: "the owner
+	// always outlives every alias of it, structurally". That holds for the borrows it was written against —
+	// a PARAMETER (the caller owns the box and cannot be rebound from here) and an immortal `.rdata` literal
+	// — because their owner is not storage this function can overwrite. A field and a `var` global ARE:
+	// the STORAGE outlives the alias, but the VALUE in it does not, and the store that replaces it drops
+	// exactly the record the alias still names.
+	//
+	// MEASURED, both spellings, against the runnable oracle: `let old = items` + `items = fresh` inside a
+	// method, and `let old = G` + `G = fresh` at top level, each read back afterwards — the bootstrap prints
+	// `sum 10` / `sum 3` and exits 0, shv2 emitted a bare `loadIndirect` with no retain and died **0xC0000005**
+	// on the next read, because the field store's `__arr_decref` had freed the record. It is the one thing
+	// between here and a working corpus `Map`: `Map.grow()` is four `let old… = <field>` binds followed by
+	// four field stores.
+	//
+	// ⚠ **A `var` OF THE SAME READ WAS ALREADY CORRECT**, which is what pins the cure: the mutable arm
+	// promotes through `promoteBorrowedToOwned` and the identical program RUNS. So this mark does not invent
+	// an ownership rule — it says which IMMUTABLE bindings owe the promotion the mutable ones already take.
+	//
+	// ⚠ **AN IMMUTABLE FIELD IS DELIBERATELY NOT MARKED.** `let` storage refuses the store (E2013 at
+	// `emitCheckedSelfFieldStore` / `parseFieldAssignment`), so no write can replace its occupant and the
+	// borrow's owner outlives it for the original structural reason. The mark is about REBINDABILITY, not
+	// about being a slot.
+	//
+	// A SPARSE set, reset per function and SWAPPED across a closure body, exactly like the sibling value
+	// marks — a mark names an id in THIS function's SSA space.
+	var rebindableSlotReads as ValueMarkSet
 	// ⭐⭐ **WHICH SSA VALUES DENOTE A `__ManagedMemory` BUFFER RATHER THAN THE `Array` AROUND IT (R4.4)** —
 	// the fact `SignatureIndex.ManagedMemoryTypeName` says the binding costs, kept where shv2 keeps such facts.
 	//
@@ -8283,6 +8321,7 @@ export type Parser
 			charLiteralOps: sharedEmptyCharLiteralOps,
 			stringBytesViewOps: sharedEmptyStringBytesViewOps,
 			immutableGlobalReads: sharedEmptyImmutableGlobalReads,
+			rebindableSlotReads: sharedEmptyRebindableSlotReads,
 			bufferSurfaceValues: sharedEmptyBufferSurfaceValues,
 			bufferSurfaceSlots: sharedEmptyBufferSurfaceSlots,
 			bufferSurfaceElements: sharedEmptyBufferSurfaceElements,
@@ -15634,6 +15673,8 @@ export type Parser
 		// Per-function for the identical reason (P1.7 slice 2b): a marked value names an id in THIS
 		// function's SSA space, so a mark carried over would name an unrelated value in the next one.
 		self.immutableGlobalReads = sharedEmptyImmutableGlobalReads
+		// The rebindable-slot reads (W41) are per-function for that same reason — see `rebindableSlotReads`.
+		self.rebindableSlotReads = sharedEmptyRebindableSlotReads
 		// The buffer-surface marks (R4.4, A2m) are per-function for exactly that reason too — see
 		// `bufferSurfaceValues`. All THREE reset together, because they describe one value space.
 		self.bufferSurfaceValues = sharedEmptyBufferSurfaceValues
@@ -16600,6 +16641,8 @@ export type Parser
 		self.charLiteralOps = sharedEmptyCharLiteralOps
 		self.stringBytesViewOps = sharedEmptyStringBytesViewOps
 		self.immutableGlobalReads = sharedEmptyImmutableGlobalReads
+		// W41's mark crosses the same boundary and for the same reason — see `rebindableSlotReads`.
+		self.rebindableSlotReads = sharedEmptyRebindableSlotReads
 		// ⭐ **ALL THREE, for `parseFunction`'s stated reason — "they describe one value space" (BATCH22
 		// review).** This site reset `bufferSurfaceValues` alone, and the other two crossed the boundary: a
 		// default helper is a whole FUNCTION drained at the end of `parseModule`, so what reaches it is the
@@ -18067,11 +18110,25 @@ export type Parser
 		// retain/copy balances on every path: a reassignment decrefs/drops the promoted value, and an untaken
 		// branch leaves the scope-exit drop to reclaim it — net zero, so the caller stays the owner of an
 		// aggregate box. An already-OWNED initializer (`var s = "{x}"`, `var p = Point.create(…)`, a move
-		// `var q = t`) is left untouched by the `not valueIsOwnedHeap` guard, and a `let` is never reassigned,
-		// so only a `var` needs this. The promotion makes the binding a fresh CONSUME, not a bare-local move.
+		// `var q = t`) is left untouched by the `not valueIsOwnedHeap` guard. The promotion makes the binding
+		// a fresh CONSUME, not a bare-local move.
+		//
+		// ⭐⭐ **AND A `let` NEEDS IT TOO WHEN THE VALUE CAME OUT OF A REBINDABLE SLOT (W41).** The `mutable`
+		// gate alone rested on "a `let` is never reassigned", which answers the wrong half: the hazard is not
+		// this BINDING being rebound, it is the STORAGE the value was read out of being rebound underneath it.
+		// A mutable field or `var` global is exactly that storage, its store drops the old occupant, and the
+		// immutable binding then names freed memory — the segfault `Map.grow()`'s four `let old… = <field>`
+		// binds hit, where the runnable oracle increfs at the same point and prints the answer. The two gates
+		// are ONE question asked of two things — "can the value under this name be dropped while the name is
+		// live" — so they share the one promotion door and the one `not valueIsOwnedHeap` guard.
+		//
+		// ⚠ **THE MARK IS NOT THE AUTHORITY ON WHAT PROMOTION MEANS.** `promoteBorrowedToOwned` keeps that:
+		// a String COPIES (an `__mm_retain` of a byte record is the measured wrong cure — an immortal `.rdata`
+		// literal admits no incref), an aggregate INCREFS, an existential goes through its witness's
+		// `retainFunc@16`. This decides only WHETHER a promotion is owed.
 		var boundValue = value
 		var boundBareLocal = rhsWasBareLocal
-		if mutable and self.valueIsManagedHeap(value) and not self.valueIsOwnedHeap(value) 'promoteBorrowedBinding'
+		if (mutable or self.rebindableSlotReads.contains(value)) and self.valueIsManagedHeap(value) and not self.valueIsOwnedHeap(value) 'promoteBorrowedBinding'
 			boundValue = try self.promoteBorrowedToOwned(value, door: BorrowLaunderDoor.binding, range: SourceRange.ofToken(nameTok))
 			boundBareLocal = false
 		end 'promoteBorrowedBinding'
@@ -23309,6 +23366,45 @@ export type Parser
 		self.pairInterfaceWitness(retained, witness: self.witnessOfValue(from))
 	end 'carryInterfaceWitness'
 
+	// ⭐⭐ **A PROMOTION'S FRESH NAME KEEPS THE SOURCE'S DECLARED SURFACE (W41)** — `carryInterfaceWitness`'s
+	// twin, for the other per-value column a fresh SSA name would otherwise drop on the floor.
+	// `__ManagedMemory` and the `Array` around it are ONE record told apart by PROVENANCE (see
+	// `bufferSurfaceValues`), and that provenance is keyed by ValueId — so a promotion that mints a new id
+	// hands back a value the buffer members no longer serve, and `m.length()` becomes
+	// `E2015: Array member 'length'` on a name whose initializer plainly denoted the buffer.
+	//
+	// ⚠ **MEASURED, and it is what W41's own promotion woke.** `let (m, n) = pair()` over
+	// `returns (__ManagedMemory, Int)` binds `m` to a field load off the hidden tuple temp; that load is now a
+	// rebindable-slot read, so the binding promotes — and
+	// `managed-memory-methods.tuple-destructuring-serves-the-roster` went red on exactly that E2015. The gap
+	// was always there (a `var` of the same read took the same door); nothing had reached it.
+	//
+	// ⛔⛔ **IT BELONGS TO THE PROMOTION AND NOT TO THE RETAIN, AND PUTTING IT ON THE RETAIN IS A MEASURED
+	// WRONG ANSWER.** `retainBorrowedAggregate` is shared with the ADOPTION door (`ByteArray.init(mm)`), and
+	// there the fresh unmarked name is the whole POINT — the surface deliberately FLIPS, so that `a.push(5)`
+	// is served on the array roster while `mm.setByte(…)` goes on being served on the buffer roster over the
+	// same record. `specs-shv2/array-init.md`'s `the-surface-flips` states it outright: *"It compiles because
+	// the retain mints a fresh, unmarked name."* Carried there, NINE `array-init` cases turned red with the
+	// roster exactly inverted. A promotion says "the same value under a new name"; an adoption says "a
+	// different view of the same record" — two operations that share an incref and must not share this.
+	//
+	// It carries all THREE carriers, because they describe one value space and a promotion preserves all
+	// three: what the value DENOTES, what its tuple SLOTS denote and what its array ELEMENTS denote are
+	// unchanged by taking a second owner (or, for a String, a copy). `markDeclaredSurface` cannot serve
+	// here — it reads a DECLARATION, and a promotion has none to read; the source value is the only thing
+	// that knows.
+	function carryDeclaredSurface(promoted ValueId, from ValueId)
+		if self.valueIsBufferSurface(from) 'sourceDenotesTheBuffer'
+			self.markBufferSurface(promoted)
+		end 'sourceDenotesTheBuffer'
+
+		if self.valueElementIsBufferSurface(from) 'sourceHoldsBuffers'
+			self.markBufferSurfaceElements(promoted)
+		end 'sourceHoldsBuffers'
+
+		self.markBufferSurfaceSlots(promoted, surface: try self.bufferSurfaceSlots.get(from) otherwise sharedEmptyDeclaredSurface)
+	end 'carryDeclaredSurface'
+
 	// ⭐⭐ **WHICH RETAIN A BORROWED AGGREGATE TAKES — and an EXISTENTIAL takes a DIFFERENT one, because a
 	// CONCRETE type's protocol is a compile-time fact and a conformer's is not (P1.7a-existentials slice 2).**
 	// `__mm_retain` is the answer for exactly one shape: a heap aggregate whose alias is observable. A
@@ -23443,7 +23539,24 @@ export type Parser
 	// (measured: the oracle returns 3 for a `var` global and for a parameter, exactly as shv2 does), so
 	// copying would break an agreement rather than fix a disagreement. Immutability of the SOURCE is the
 	// whole discriminator.
+	//
+	// ⭐ **THE PER-VALUE SURFACE COLUMN RIDES ACROSS, HERE AND NOT IN ANY ARM (W41).** All three arms mint a
+	// ValueId distinct from `value` — that is what makes them promotions — and the buffer-surface provenance
+	// is keyed by ValueId, so it must be carried or a promoted `__ManagedMemory` stops answering on its own
+	// roster. One line at the door rather than one per arm, and deliberately NOT one level down at
+	// `retainBorrowedAggregate`, which the ADOPTION also uses and which needs the opposite: see
+	// `carryDeclaredSurface`, where both halves are recorded with the measurement that separates them.
 	function promoteBorrowedToOwned(value ValueId, door BorrowLaunderDoor, range SourceRange) returns ValueId throws ParseError
+		let promoted = try self.ownedFormOfBorrowedValue(value, door: door, range: range)
+		self.carryDeclaredSurface(promoted, from: value)
+		return promoted
+	end 'promoteBorrowedToOwned'
+
+	// The three-way protocol choice `promoteBorrowedToOwned` is written around — copy a String, copy a
+	// trivial tuple at a hand-off, incref anything else — split out so the surface carry above can wrap all
+	// three without being written into each. Every word of that door's header describes this body; it is
+	// called from nowhere else.
+	function ownedFormOfBorrowedValue(value ValueId, door BorrowLaunderDoor, range SourceRange) returns ValueId throws ParseError
 		if tagIsByteRecord(self.tagOf(value)) 'byteRecord'
 			return self.promoteToOwnedString(value, range: range)
 		end 'byteRecord'
@@ -23496,8 +23609,8 @@ export type Parser
 			return self.retainBorrowedAggregate(value, range: range)
 		end 'aggregate'
 
-		panic("promoteBorrowedToOwned: v{value} is neither text nor a managed aggregate — the caller has already gated on `valueIsManagedHeap`, so a borrowed value promoted to owned is always a String (copy) or a struct/union box (retain); a scalar owns no heap and never reaches an owned binding's promotion")
-	end 'promoteBorrowedToOwned'
+		panic("ownedFormOfBorrowedValue: v{value} is neither text nor a managed aggregate — the caller has already gated on `valueIsManagedHeap`, so a borrowed value promoted to owned is always a String (copy) or a struct/union box (retain); a scalar owns no heap and never reaches an owned binding's promotion")
+	end 'ownedFormOfBorrowedValue'
 
 	// ⭐⭐ **MINT THE ONE OWNED REFERENCE A RESULT PHI'S BORROWED EDGE OWES IT, INTO THAT EDGE'S OWN BLOCK.**
 	// The `merged` door has TWO callers — a `match`/ternary arm (`promoteBorrowedGive`) and a
@@ -45155,6 +45268,26 @@ export type Parser
 		// element in the language funnels through this mint.
 		self.markDeclaredSurface(result, declared: self.valueSlotSurface(box, slot: index))
 
+		// ⭐⭐ **A MANAGED VALUE OUT OF A WRITABLE FIELD OWES A REFERENCE THE MOMENT IT IS BOUND TO A NAME
+		// (W41).** The retype note above states this read's ownership rule — "the read is a BORROW
+		// (`emitFieldLoad` never marks it owned-heap), so the box keeps its +1 and drops the value at ITS
+		// scope exit" — and that is still true of the READ. What it does not survive is the field being
+		// REBOUND while a name still holds the value: `emitFieldWrite` drops the old occupant, so `let old =
+		// items` followed by `items = fresh` leaves `old` naming freed memory (MEASURED 0xC0000005 where the
+		// oracle prints `sum 10`). The mark rides the VALUE to `declareInitializedBinding`, which promotes it
+		// there — see `rebindableSlotReads` for why the mark and not a token re-walk, and why the promotion
+		// belongs at the BINDING rather than here (a receiver load, an argument, a chain hop are all transient
+		// and owe nothing).
+		//
+		// It sits at THIS mint rather than at the doors that reach it, for `markDeclaredSurface`'s reason
+		// stated two lines up: every field read in the language funnels through this line, and a per-door mark
+		// is the enumeration that misses one. Gated on the field being WRITABLE (an immutable field's occupant
+		// cannot be replaced — E2013) and on the value being MANAGED (a scalar is freed by nothing), so the
+		// set stays empty for the overwhelming majority of reads.
+		if layout.fieldIsMutable(index) and self.valueIsManagedHeap(result) 'writableManagedSlot'
+			self.markRebindableSlotRead(result)
+		end 'writableManagedSlot'
+
 		return result
 	end 'emitFieldLoad'
 
@@ -45747,7 +45880,17 @@ export type Parser
 		// top-level read reach `lastBareBindingImmutableName` through one decision each.
 		self.publishBareBindingName(tok, immutable: not mutable)
 
+		// ⭐ **THE WRITABLE ARM IS NOT "NOTHING TO RECORD" (W41).** A `var` global's slot is rebindable
+		// storage exactly as a `var` field is, and `emitCheckedGlobalStore` decrefs the old occupant on the
+		// way past — so `let old = G` + `G = fresh` dangles for the identical reason and died with the
+		// identical 0xC0000005 (the oracle prints `sum 3`). The two arms now carry the two halves of one
+		// question — can this slot be REBOUND — and the answer feeds the binding promotion rather than the
+		// aliasing refusal. See `rebindableSlotReads`.
 		if mutable 'writableSlot'
+			if self.valueIsManagedHeap(value) 'managedOccupant'
+				self.markRebindableSlotRead(value)
+			end 'managedOccupant'
+
 			return value
 		end 'writableSlot'
 
@@ -45766,6 +45909,19 @@ export type Parser
 		self.immutableGlobalReads = privateValueMarkSet(self.immutableGlobalReads, anchor: sharedEmptyImmutableGlobalReads)
 		self.immutableGlobalReads.insert(value)
 	end 'markImmutableGlobalRead'
+
+	// ⭐⭐ **THE ONE WRITER OF `rebindableSlotReads` (W41)** — `markImmutableGlobalRead`'s twin, for the
+	// identical copy-on-write hazard and through the same one home for it (`privateValueMarkSet`).
+	//
+	// Its TWO producers are the two ways a managed value comes out of storage a later statement can
+	// overwrite: `emitFieldLoad` (every `self.items`, `h.items` and chain hop funnels through it) and
+	// `recordGlobalReadValue`'s WRITABLE arm (the exact complement of the immutable arm one function up).
+	// Both gate on the value being MANAGED, so a scalar field — which owns no heap and can be freed by
+	// nothing — never enters the set and never costs a hash.
+	function markRebindableSlotRead(value ValueId)
+		self.rebindableSlotReads = privateValueMarkSet(self.rebindableSlotReads, anchor: sharedEmptyRebindableSlotReads)
+		self.rebindableSlotReads.insert(value)
+	end 'markRebindableSlotRead'
 
 	// ⭐ **THE ONE WRITER OF `bufferSurfaceValues` (R4.4)** — `markImmutableGlobalRead`'s twin, for the
 	// identical copy-on-write reason, through the same one home for it (`privateValueMarkSet`).
@@ -46386,6 +46542,7 @@ export type Parser
 		let savedWitnessParamBase = self.currentWitnessParamBase
 		let savedWitnessParamCount = self.currentWitnessParamCount
 		let savedImmutableGlobalReads = self.immutableGlobalReads
+		let savedRebindableSlotReads = self.rebindableSlotReads
 		let savedBufferSurfaceValues = self.bufferSurfaceValues
 		let savedBufferSurfaceSlots = self.bufferSurfaceSlots
 		let savedBufferSurfaceElements = self.bufferSurfaceElements
@@ -46479,6 +46636,7 @@ export type Parser
 		self.charLiteralOps = sharedEmptyCharLiteralOps
 		self.stringBytesViewOps = sharedEmptyStringBytesViewOps
 		self.immutableGlobalReads = sharedEmptyImmutableGlobalReads
+		self.rebindableSlotReads = sharedEmptyRebindableSlotReads
 		self.bufferSurfaceValues = sharedEmptyBufferSurfaceValues
 		self.bufferSurfaceSlots = sharedEmptyBufferSurfaceSlots
 		self.bufferSurfaceElements = sharedEmptyBufferSurfaceElements
@@ -46649,6 +46807,7 @@ export type Parser
 		self.currentWitnessParamBase = savedWitnessParamBase
 		self.currentWitnessParamCount = savedWitnessParamCount
 		self.immutableGlobalReads = savedImmutableGlobalReads
+		self.rebindableSlotReads = savedRebindableSlotReads
 		self.bufferSurfaceValues = savedBufferSurfaceValues
 		self.bufferSurfaceSlots = savedBufferSurfaceSlots
 		self.bufferSurfaceElements = savedBufferSurfaceElements
