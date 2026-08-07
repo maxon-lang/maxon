@@ -632,3 +632,112 @@ end 'main'
 ```stdout
 wide=70000 narrow=200 wsize=4
 ```
+
+
+<!-- test: exported-typealias-collision-unnamed-still-compiles -->
+⭐ Two files export `Score` over different ranges and the program never writes the bare name. It
+compiles and runs. The collision is a USE-SITE error — `Documentation` above says so, and this is the
+half that says so from the other side: the two declarations are individually legal, and refusing them
+where they stand would refuse a program that has no ambiguity in it. Returns `7 + 3`.
+```maxon
+// --- file: api/types.maxon
+export typealias Score = int(0 to 100)
+
+export function fromApi() returns ExitCode
+	return 7
+end 'fromApi'
+
+// --- file: legacy/types.maxon
+export typealias Score = int(0 to 200)
+
+export function fromLegacy() returns ExitCode
+	return 3
+end 'fromLegacy'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	return fromApi() + fromLegacy()
+end 'main'
+```
+```exitcode
+10
+```
+
+
+<!-- test: error.exported-typealias-collision-bare-cast -->
+⭐ The bootstrap's own E3063 for the shape `error.exported-typealias-collision` pins for the
+self-hosted compiler, written so this compiler runs it: the ambiguous name is reached through an `as`
+CAST, and the use sits at the project root so the reported path carries no directory prefix.
+⚠⚠ **THE ONE CASE IN THE CORPUS THAT EXISTS TO PIN THIS DIAGNOSTIC WENT THROUGH THE ONE DOOR THAT
+COULD NOT RAISE IT.** `ParseTypeRef` consulted the ambiguity set; `ParseTypeKeyword` — the `as` target
+— resolved straight out of the type registry and never asked, so the program compiled and returned 50.
+⚠ And the set it consults had never held a name: it was computed in `IrModule.Merge`, which a project
+build does not reach, because the alias table is written directly. Both halves are fixed, so the
+diagnostic that was written, wired and reachable now actually fires.
+```maxon
+// --- file: api/types.maxon
+export typealias Score = int(0 to 100)
+
+// --- file: legacy/types.maxon
+export typealias Score = int(0 to 200)
+
+// --- file: main.maxon
+function main() returns ExitCode
+	let x = 50 as Score
+	return x
+end 'main'
+```
+```maxoncstderr
+error E3063: specs/fragments/typealias-collision/error.exported-typealias-collision-bare-cast.test:10:16: Ambiguous typealias 'Score': multiple visible definitions found. Qualify with a directory name. Candidates: api.Score, legacy.Score
+```
+
+
+<!-- test: error.exported-and-module-alias-of-one-name -->
+⭐ An `export typealias` and a `module typealias` of one name in directories neither of which contains
+the other. ⚠⚠ **THIS WAS A SILENT WRONG ANSWER, AND ONLY IN ONE SOURCE ORDER**, which is what says the
+reason was order rather than visibility: the two `Cell`s are both ONE BYTE and disagree only on
+SIGNEDNESS, so neither value survives the other's storage — 200 read through `int(-100 to 100)` is
+−56, −50 read through `int(0 to 255)` is 206 — and the pair printed `b=206` forwards and answered
+correctly reversed. The `module` half is renamed under the contest and keeps its own storage, but it
+still publishes its bare name for its own subtree to read, and the `export` half cannot be renamed at
+all, so the flat type table hands one of them the other's element. Neither declaration reaches past a
+directory the other can see, and no file can say which `Cell` it means: E3063. ⚠ It is refused in BOTH
+orders. Refusing only the order that answered wrongly would make legality a property of the checkout,
+which is the defect, wearing the fix's clothes.
+```maxon
+// --- file: dirA/a.maxon
+export typealias Cell = int(0 to 255)
+export typealias Cells = Array with Cell
+
+export type Alpha
+	export static function stash() returns Cell
+		var xs = Cells.create()
+		xs.push(200)
+		let v = try xs.get(0) otherwise 0
+		return v
+	end 'stash'
+end 'Alpha'
+
+// --- file: dirB/z.maxon
+module typealias Cell = int(-100 to 100)
+module typealias Cells = Array with Cell
+
+export type Beta
+	export static function stash() returns Cell
+		var xs = Cells.create()
+		xs.push(-50)
+		let v = try xs.get(0) otherwise 0
+		return v
+	end 'stash'
+end 'Beta'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	print("a={Alpha.stash()} b={Beta.stash()}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3063: dirA/specs/fragments/typealias-collision/error.exported-and-module-alias-of-one-name.test:4:37: Ambiguous typealias 'Cell': multiple visible definitions found. Qualify with a directory name. Candidates: dirA.Cell, dirB.Cell
+error E3063: dirB/specs/fragments/typealias-collision/error.exported-and-module-alias-of-one-name.test:17:37: Ambiguous typealias 'Cell': multiple visible definitions found. Qualify with a directory name. Candidates: dirA.Cell, dirB.Cell
+```

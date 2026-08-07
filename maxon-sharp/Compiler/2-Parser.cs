@@ -221,26 +221,11 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     return false;
   }
 
-  // True if `accessorPath` is in the same directory as `declarerPath` or in any
-  // subdirectory of it. This is the heart of `module`-keyword visibility, and the reason
-  // FlatNamespaceCheck calls it rather than restating it: two `module` declarations of one
-  // name collide only where their subtrees overlap, and a second copy of that rule could
-  // say otherwise.
-  internal static bool IsFileInModuleScope(string declarerPath, string accessorPath) {
-    var dDir = NormalizeDir(declarerPath);
-    var aDir = NormalizeDir(accessorPath);
-    if (dDir == null || aDir == null) return false;
-    if (string.Equals(dDir, aDir, StringComparison.OrdinalIgnoreCase)) return true;
-    return aDir.StartsWith(dDir + "/", StringComparison.OrdinalIgnoreCase);
-  }
-
-  private static string? NormalizeDir(string path) {
-    string fullPath;
-    try { fullPath = Path.GetFullPath(path); } catch { fullPath = path; }
-    var dir = Path.GetDirectoryName(fullPath);
-    if (dir == null) return null;
-    return dir.Replace('\\', '/').TrimEnd('/');
-  }
+  // Directory scope is a LANGUAGE fact, not a parser one, and it moved to AliasScope when a third
+  // party had to ask it. Kept as a name here because the parser asks it in five places and
+  // `IsFileInModuleScope` says at each of them which question is being asked.
+  internal static bool IsFileInModuleScope(string declarerPath, string accessorPath) =>
+    AliasScope.IsInDirectoryScopeOf(declarerPath, accessorPath);
   // Types registered during this parser's PreScan — only these get auto-conformance synthesis
   private readonly HashSet<string> _locallyDefinedTypes = [];
   // Function values that carry a capture ENVIRONMENT, mapped to the name of the function
@@ -1714,6 +1699,41 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   }
 
   /// <summary>
+  /// ⭐ TWO DECLARATIONS OF ONE NAME THAT NO FILE CAN CHOOSE BETWEEN ARE AMBIGUOUS, and this is the
+  /// one place both are in hand: the module already carries the earlier declaration's record and this
+  /// parser is holding its own.
+  ///
+  /// RECORDED, NOT RAISED. The declarations are individually legal and a program that never writes
+  /// the bare name still compiles, which is what <c>/specs/typealias-collision.md</c> means by a
+  /// USE-SITE error. <see cref="ParseTypeRef"/> raises E3063 against this set, ahead of its own
+  /// registry lookup, so the DECLARING files' own references are refused too.
+  ///
+  /// ⚠ REFUSING THE DECLARER'S OWN REFERENCE IS A DIVERGENCE FROM CANONICAL, AND A DELIBERATE ONE.
+  /// Canonical's model is directory precedence: a file's own declaration is nearest, so its own use
+  /// is unambiguous. This compiler cannot honour that — its type tables are keyed by bare name and
+  /// hold ONE entry, so of two declarations neither of which may be renamed, the one that merged last
+  /// takes the other's storage. Measured with two one-byte ranges that disagree on signedness, an
+  /// `export typealias Cell = int(0 to 255)` holding 200 read its own value back as −56. There is no
+  /// use site at which a use-site rule could catch that: the file's own use is the wrong answer, and
+  /// canonical calls it unambiguous. So the choice is a wrong answer or a refusal, and it is a
+  /// refusal. Giving the tables a scope is the other cure and is not a mint rule.
+  ///
+  /// ⚠ IT WAS COMPUTED IN <c>IrModule.Merge</c> AND NOWHERE ELSE, which a project build never
+  /// reaches — <see cref="CopyTypeAliasesToModule"/> writes that table directly. So the ambiguity
+  /// machinery existed, was wired to <see cref="ParseTypeRef"/>, and had never once been given a name:
+  /// canonical's own <c>error.exported-typealias-collision</c> compiled clean and returned 50.
+  /// </summary>
+  private void RecordAmbiguousAliasName(IrModule<MaxonOp> module, string aliasName, bool isLocallyDeclared) {
+    if (!isLocallyDeclared || _sourceFilePath == null) return;
+    if (!module.TypeAliasSources.TryGetValue(aliasName, out var incumbent)) return;
+    if (incumbent.SourceFilePath == null || incumbent.SourceFilePath == _sourceFilePath) return;
+
+    var declaration = new AliasSite(ReachOfLocalAlias(aliasName), _isStdlib, _sourceFilePath);
+    if (AliasScope.AreAmbiguous(AliasSite.Of(incumbent, incumbent.SourceFilePath), declaration))
+      module.AddAmbiguousTypeDeclarers(aliasName, incumbent.SourceFilePath, _sourceFilePath);
+  }
+
+  /// <summary>
   /// Copies only typealias-related state to the module. Unlike CopyStateToModule,
   /// this avoids re-evaluating export status of non-typealias types.
   /// </summary>
@@ -1725,6 +1745,18 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       // entries in module.TypeDefs.
       var isLocallyDeclared = _localTypeAliases.Contains(aliasName)
           || _typeAliasOwners.ContainsKey(aliasName);
+
+      // ⭐ ASKED BEFORE THE SEEDED-ALIAS SKIP, WHICH IS THE WHOLE REASON IT SEES THE PAIR AT ALL.
+      // A file that declares a name the module already carries from ANOTHER file is one half of a
+      // contest — but if that other declaration was seeded INTO this parser, the skip below drops
+      // this file's record and the two are never compared. The type table has no such skip
+      // (CopyStateToModule copies the whole registry), so it takes this file's declaration while the
+      // alias record keeps the other's: the two tables end up describing different declarations, and
+      // the storage follows the type table. MEASURED — an `export Cell` beside a `module Cell` in a
+      // sibling directory answered 206 for −50, silently, in one source order and correctly in the
+      // other, purely because the seeded name was skipped here.
+      RecordAmbiguousAliasName(module, aliasName, isLocallyDeclared);
+
       if (_seededTypeAliases.Contains(aliasName)
           && !(_isRescanningTypeAliases && isLocallyDeclared)) continue;
       _typeRegistry.TryGetValue(aliasName, out var aliasType);
@@ -1764,11 +1796,12 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       // file's reference re-derives a bare `Array` (element defaulting to int) instead of
       // `Array with FilePath`. Which file wins was decided by readdir order — sorted on NTFS,
       // hash-ordered on APFS — so the same tree built on Windows and was refused on macOS. The
-      // widest declaration owns the record; equal ranks keep the later write, leaving two exported
-      // declarations of a name to the namespace-qualification path (AmbiguousTypeNames).
+      // widest declaration owns the record; equal reaches keep the later write, which is harmless
+      // because a pair that reaches equally far and has nothing to choose between them has already
+      // been marked ambiguous above and is refused at every bare use of the name.
       if (module.TypeAliasSources.TryGetValue(aliasName, out var ownerInfo)
           && ownerInfo.SourceFilePath != declaringFilePath
-          && AliasVisibilityRank(ownerInfo) > AliasVisibilityRank(isExported, isModuleVisible, _isStdlib))
+          && RecordOwnershipReach(ownerInfo) > RecordOwnershipReach(isExported, isModuleVisible, _isStdlib))
         continue;
 
       // ⚠ THE SAME GUARD AS THE TYPE WRITE ABOVE, AND IT IS A THIRD WRITE OF THE BARE NAME. This
@@ -1814,20 +1847,16 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   /// own scope may write down. ONLY such a declaration is renamed under a contest, and the
   /// restriction is the whole reason renaming is safe: a declaration a file beyond the contest MAY
   /// name is one that file's reference resolves through BY NAME, so renaming it would break a reader
-  /// doing nothing wrong. Two program-wide declarations of one name is the AMBIGUITY question
-  /// instead (E3063 / AmbiguousTypeNames), and that pair is left exactly as it was.
+  /// doing nothing wrong. A pair NEITHER of which may be renamed is the AMBIGUITY question instead,
+  /// and it is now genuinely answered: <see cref="RecordAmbiguousAliasName"/> marks it and E3063
+  /// refuses every bare use of the name, including the declarers' own.
   ///
-  /// ⚠ "LEFT EXACTLY AS IT WAS" IS A SCOPE STATEMENT, NOT A CLAIM THAT SOMETHING ELSE CATCHES IT, and
-  /// this read as the latter. E3063 fires from <c>ParseTypeRef</c> against <c>seedModule</c>'s
-  /// <c>AmbiguousTypeNames</c> — a name a LATER-parsed file writes down. The two declaring files each
-  /// resolve their own declaration locally and never consult it, so a contest between two
-  /// program-wide declarations reaches no diagnostic at all. MEASURED on the fixed build cache, both
-  /// orders, at HEAD: an <c>export typealias Cells</c> over <c>int(0 to 100000)</c> declared before an
-  /// <c>export</c> (or <c>module</c>) <c>Cells</c> over <c>int(0 to 255)</c> compiles clean, exit 0,
-  /// and reads its own 70000 back as 112 — the same wrong answer this rung closed for every pairing
-  /// where ONE side may be renamed, still live for the pairing where NEITHER may. Curing it means
-  /// deciding whether two program-wide declarations of one name are legal (rung A2d's question) and
-  /// then refusing them; it is not a mint rule and cannot be reached from here.
+  /// ⚠ THAT SENTENCE USED TO SAY "left exactly as it was", WHICH READ AS A CLAIM THAT SOMETHING ELSE
+  /// CAUGHT IT, and nothing did. Measured on the fixed build cache, both orders: an <c>export
+  /// typealias Cells</c> declared beside an <c>export</c> (or <c>module</c>) <c>Cells</c> over a
+  /// different range compiled clean, exit 0, and read its own value back through the other's storage.
+  /// The pairings where ONE side may be renamed are cured by the rename; this one had no cure until
+  /// the pair itself was refused.
   ///
   /// A stdlib alias counts as nameable however it is written, because SeedFromModule seeds every
   /// stdlib alias into every parser regardless of `export`: its file-privacy is not enforced, so it
@@ -1846,29 +1875,51 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   /// fires) and only the MINT was gated out, so the flat table decided. Measured against
   /// <c>maxon-shv2</c>, which answers <c>wide=70000 narrow=200</c> for the same program.
   ///
-  /// ⚠ WHAT THIS DOES NOT REACH, deliberately: a file in the SAME subtree that merely READS the
-  /// alias. That reader resolves through the module's alias tables, which are keyed by bare name and
-  /// hold ONE declaration, so with two subtrees declaring one name it is served whichever merged
-  /// last — and for a plain RANGED alias, which never reaches a contest at all, there is no mint to
-  /// settle it. Both compilers get that case wrong today (shv2 answers E3005 on the reader's own
-  /// legal value), and curing it means giving those tables a scope rather than changing a mint rule.
+  /// ⚠ WHAT NEITHER THE RENAME NOR THE REFUSAL REACHES, deliberately: a file in the SAME subtree that
+  /// merely READS a `module` alias two DISJOINT subtrees declare. That pair is not ambiguous — no
+  /// file can see both, which is why it is legal — but the reader resolves through the module's alias
+  /// tables, which are keyed by bare name and hold ONE declaration, so it is served whichever merged
+  /// last. Both compilers get it wrong today (shv2 answers E3005 on the reader's own legal value),
+  /// it is equally wrong on the parent commit, and curing it means giving those tables a scope rather
+  /// than changing a mint rule or refusing a pair the language allows.
   /// </summary>
   private bool IsFileScopedAliasDeclaration(string aliasName) =>
-    !_isStdlib
-    && !_exportedTypeAliases.Contains(aliasName)
+    ReachOfLocalAlias(aliasName) != AliasReach.Program
+    // ⚠ The stdlib caveat is HERE and not in the reach, because it is not about reach: a stdlib alias
+    // is seeded into every parser however it is written, so its file-privacy is not enforced and is
+    // not a fact the mint may rest on. See AliasScope.ReachOf, which refused the whole standard
+    // library the one time this was folded in with it.
+    && !_isStdlib
+    // A type-scoped inner alias is out for a third reason, also not about reach: it is not a file's
+    // declaration at all, but one copy per generic instance of its owner's.
     && !_typeAliasOwners.ContainsKey(aliasName);
 
-  // How widely a typealias declaration is visible, ordered so the widest declaration of a name owns
-  // the module's single record for it (see the record guard in CopyTypeAliasesToModule).
-  private static TypeAliasVisibilityRank AliasVisibilityRank(bool isExported, bool isModuleVisible, bool isStdlib) =>
-    isModuleVisible ? TypeAliasVisibilityRank.ModuleVisible
-    : isExported || isStdlib ? TypeAliasVisibilityRank.Exported
-    : TypeAliasVisibilityRank.FileScoped;
+  /// <summary>
+  /// How far this parser's own declaration of <paramref name="aliasName"/> reaches — the one reading
+  /// of scope (see <see cref="AliasScope"/>), taken from this parser's visibility marks.
+  /// </summary>
+  private AliasReach ReachOfLocalAlias(string aliasName) =>
+    AliasScope.ReachOf(_exportedTypeAliases.Contains(aliasName),
+      _moduleVisibleTypeAliases.Contains(aliasName));
 
-  private static TypeAliasVisibilityRank AliasVisibilityRank(TypeAliasInfo info) =>
-    AliasVisibilityRank(info.IsExported, info.IsModuleVisible, info.IsStdlib);
+  /// <summary>
+  /// How widely a typealias declaration is visible for the purpose of deciding WHICH DECLARATION OWNS
+  /// the module's single record for a name — the widest wins (see the record guard in
+  /// <see cref="CopyTypeAliasesToModule"/>).
+  ///
+  /// It is <see cref="AliasReach"/>, and it was a private enum with the same three members in the
+  /// same order and its own derivation beside it — a second reading of scope, in the file whose whole
+  /// subject is one fact read twice. The ONE genuine difference is named here rather than folded into
+  /// the reach: a stdlib alias is seeded into every parser however it is written, so for OWNERSHIP it
+  /// is as wide as an export. That is the same implementation fact
+  /// <see cref="IsFileScopedAliasDeclaration"/> names, and it is deliberately NOT part of
+  /// <see cref="AliasScope.ReachOf"/> — folded in there it refused the entire standard library.
+  /// </summary>
+  private static AliasReach RecordOwnershipReach(bool isExported, bool isModuleVisible, bool isStdlib) =>
+    isStdlib ? AliasReach.Program : AliasScope.ReachOf(isExported, isModuleVisible);
 
-  private enum TypeAliasVisibilityRank { FileScoped, ModuleVisible, Exported }
+  private static AliasReach RecordOwnershipReach(TypeAliasInfo info) =>
+    RecordOwnershipReach(info.IsExported, info.IsModuleVisible, info.IsStdlib);
 
   /// <summary>
   /// Seeds the parser's internal dictionaries from a previously-parsed module so that
@@ -1997,8 +2048,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   /// </summary>
   private bool PublishesBareNameToModule(string name) =>
     !_contestedAliasInstanceNames.ContainsKey(name)
-    || _moduleVisibleTypeAliases.Contains(name)
-    || _exportedTypeAliases.Contains(name);
+    || ReachOfLocalAlias(name) != AliasReach.File;
 
   /// <summary>
   /// Copies parser-local state (type registry, function defaults, etc.) back to
@@ -8594,28 +8644,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       throw new CompileError(ErrorCode.ParserCircularDependency,
         $"Circular typealias dependency: {typeName}",
         _tokens[typeNamePos].Line, _tokens[typeNamePos].Column);
-    if (seedModule?.AmbiguousTypeNames.Contains(typeName) == true) {
-      // E3063 ambiguous typealias: bare-name type reference with two or more
-      // reachable typealias declarations under directory-as-module rules.
-      // Mirrors the self-hosted compiler's E3063. The user must write
-      // `dir.Name` to disambiguate. Build the candidate list from
-      // TypeAliasSources entries that declared this name as exported/stdlib.
-      var candidates = new List<string>();
-      var seenPaths = new HashSet<string>();
-      foreach (var (aliasName, info) in seedModule.TypeAliasSources) {
-        if (aliasName != typeName) continue;
-        if (!(info.IsExported || info.IsStdlib)) continue;
-        if (info.SourceFilePath == null) continue;
-        if (!seenPaths.Add(info.SourceFilePath)) continue;
-        var ns = TypeAliasNamespaceForCandidate(info.SourceFilePath);
-        candidates.Add(ns.Length == 0 ? $"(root).{typeName}" : $"{ns}.{typeName}");
-      }
-      candidates.Sort(StringComparer.Ordinal);
-      var candidateList = string.Join(", ", candidates);
-      throw new CompileError(ErrorCode.SemanticAmbiguousTypeAlias,
-        $"Ambiguous typealias '{typeName}': multiple visible definitions found. Qualify with a directory name. Candidates: {candidateList}",
-        _tokens[typeNamePos].Line, _tokens[typeNamePos].Column);
-    }
+    RequireUnambiguousTypeName(typeName, _tokens[typeNamePos]);
     if (IsNonExportedCrossFileType(typeName))
       throw new CompileError(ErrorCode.ParserExpectedType, $"Unknown type: {typeName}",
         _tokens[typeNamePos].Line, _tokens[typeNamePos].Column);
@@ -8744,6 +8773,35 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     throw new CompileError(ErrorCode.ParserExpectedType, "Expected type name", typeTok.Line, typeTok.Column);
   }
 
+  /// <summary>
+  /// ⭐ E3063: A BARE TYPE NAME WITH TWO REACHABLE DECLARATIONS AND NOTHING TO CHOOSE BETWEEN THEM.
+  /// The author must write <c>dir.Name</c>; which pairs are ambiguous is <see cref="AliasScope"/>'s
+  /// answer, recorded whole-project before any file is fully parsed.
+  ///
+  /// ⚠ ASKED AT EVERY DOOR A TYPE NAME ENTERS BY, and it was asked at one. <see cref="ParseTypeRef"/>
+  /// had it; <see cref="ParseTypeKeyword"/> — the <c>as</c> CAST target — resolved straight out of
+  /// <c>_typeRegistry</c> and never asked. Canonical's own `error.exported-typealias-collision` is
+  /// written `50 as Score`, so the one case in the corpus that exists to pin this diagnostic went
+  /// through the door that could not raise it, and the program compiled and returned 50.
+  ///
+  /// ⚠ THE CANDIDATES COME FROM THE RECORD OF THE AMBIGUITY, not from a second scan of
+  /// <c>TypeAliasSources</c> — which holds ONE entry per name and so could only ever name one
+  /// candidate, in a message whose entire purpose is to list them all.
+  /// </summary>
+  private void RequireUnambiguousTypeName(string typeName, Token site) {
+    if (seedModule == null) return;
+    if (!seedModule.AmbiguousTypeDeclarers.TryGetValue(typeName, out var declarers)) return;
+
+    var candidates = declarers
+      .Select(TypeAliasNamespaceForCandidate)
+      .Select(ns => ns.Length == 0 ? $"(root).{typeName}" : $"{ns}.{typeName}")
+      .Distinct()
+      .OrderBy(candidate => candidate, StringComparer.Ordinal);
+    throw new CompileError(ErrorCode.SemanticAmbiguousTypeAlias,
+      $"Ambiguous typealias '{typeName}': multiple visible definitions found. Qualify with a directory name. Candidates: {string.Join(", ", candidates)}",
+      site.Line, site.Column);
+  }
+
   private MaxonValueKind ParseTypeKeyword() {
     // Bare `int`/`float`/`byte` cast targets are not allowed — every primitive
     // value flowing through the compiler must travel as a named ranged type so
@@ -8758,6 +8816,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     // Accept ranged typealias names (e.g., "value as Age" or "value as FunctionPool.Index")
     if (Check(TokenType.Identifier)) {
       var name = Current().Value;
+      RequireUnambiguousTypeName(name, Current());
       if (_typeRegistry.TryGetValue(name, out var type) && type is IrRangedPrimitiveType rpt) {
         Advance();
         _usedTypeAliases.Add(name);

@@ -674,8 +674,28 @@ public class IrModule<TOp> where TOp : IPrintableOp {
   // Source file path for each type/enum/typealias (for file-scoped visibility checks)
   public Dictionary<string, string> TypeDefSourceFiles { get; } = [];
 
-  // Ambiguous exported type names (same name from different files)
-  public HashSet<string> AmbiguousTypeNames { get; } = [];
+  /// <summary>
+  /// ⭐ TYPEALIAS NAMES NO FILE CAN CHOOSE BETWEEN, AND — THE PART THAT MADE IT A MAP — WHICH FILES
+  /// DECLARED THEM. E3063's whole job is to tell the author what to qualify with, so it must name
+  /// EVERY candidate; a bare set of names left <see cref="Passes"/>' caller rebuilding the candidate
+  /// list from <see cref="TypeAliasSources"/>, which holds ONE record per name and therefore
+  /// structurally cannot answer. Measured: a program with two exported <c>Cell</c>s was told
+  /// "Candidates: dirB.Cell" — one candidate, and not always the one the reader was looking at.
+  ///
+  /// Membership is DERIVED from this map rather than tracked beside it, so a name cannot be ambiguous
+  /// with nothing to qualify with, nor have candidates while nothing refuses it.
+  /// </summary>
+  public Dictionary<string, SortedSet<string>> AmbiguousTypeDeclarers { get; } = [];
+
+  /// <summary>Record that <paramref name="declarerPath"/> is one of the files whose declaration of
+  /// <paramref name="typeName"/> makes it ambiguous.</summary>
+  public void AddAmbiguousTypeDeclarers(string typeName, params string[] declarerPaths) {
+    if (!AmbiguousTypeDeclarers.TryGetValue(typeName, out var declarers)) {
+      declarers = new SortedSet<string>(StringComparer.Ordinal);
+      AmbiguousTypeDeclarers[typeName] = declarers;
+    }
+    foreach (var path in declarerPaths) declarers.Add(path);
+  }
 
   /// <summary>
   /// ⭐ THE GENERIC-INSTANCE TYPEALIAS NAMES TWO FILES DECLARE OVER DIFFERENT INSTANCES.
@@ -839,7 +859,7 @@ public class IrModule<TOp> where TOp : IPrintableOp {
     foreach (var n in ModuleVisibleGlobalVarNames) clone.ModuleVisibleGlobalVarNames.Add(n);
     foreach (var (k, v) in GlobalVarSourceFiles) clone.GlobalVarSourceFiles[k] = v;
     foreach (var (k, v) in TypeDefSourceFiles) clone.TypeDefSourceFiles[k] = v;
-    foreach (var n in AmbiguousTypeNames) clone.AmbiguousTypeNames.Add(n);
+    foreach (var (n, declarers) in AmbiguousTypeDeclarers) clone.AddAmbiguousTypeDeclarers(n, [.. declarers]);
     foreach (var n in ContestedGenericAliasNames) clone.ContestedGenericAliasNames.Add(n);
     clone.TagTable.AddRange(TagTable);
     clone.TagNames.AddRange(TagNames);
@@ -914,11 +934,17 @@ public class IrModule<TOp> where TOp : IPrintableOp {
       TypeDefs[k] = v;
     foreach (var (k, v) in other.FunctionDefaults) FunctionDefaults.TryAdd(k, v);
     foreach (var (k, v) in other.TypeAliasSources) {
+      // The same question CopyTypeAliasesToModule asks, asked of the same rule rather than of a
+      // second hand-written one. The copy that lived here read "both exported or stdlib, different
+      // files", which marks a project export beside a stdlib export of one name — a pair
+      // `project-export-shadows-stdlib-export` requires to be legal — and misses every `module`
+      // declaration, whose subtree meets an export's whole-program reach just as squarely.
       if (TypeAliasSources.TryGetValue(k, out var existing)
-          && (existing.IsExported || existing.IsStdlib)
-          && (v.IsExported || v.IsStdlib)
-          && existing.SourceFilePath != v.SourceFilePath)
-        AmbiguousTypeNames.Add(k);
+          && existing.SourceFilePath != null && v.SourceFilePath != null
+          && existing.SourceFilePath != v.SourceFilePath
+          && AliasScope.AreAmbiguous(AliasSite.Of(existing, existing.SourceFilePath),
+               AliasSite.Of(v, v.SourceFilePath)))
+        AddAmbiguousTypeDeclarers(k, existing.SourceFilePath, v.SourceFilePath);
       TypeAliasSources.TryAdd(k, v);
     }
     foreach (var n in other.NonExportedTypeNames) NonExportedTypeNames.Add(n);
@@ -928,7 +954,7 @@ public class IrModule<TOp> where TOp : IPrintableOp {
     foreach (var n in other.ModuleVisibleGlobalVarNames) ModuleVisibleGlobalVarNames.Add(n);
     foreach (var (k, v) in other.GlobalVarSourceFiles) GlobalVarSourceFiles.TryAdd(k, v);
     foreach (var (k, v) in other.TypeDefSourceFiles) TypeDefSourceFiles.TryAdd(k, v);
-    foreach (var n in other.AmbiguousTypeNames) AmbiguousTypeNames.Add(n);
+    foreach (var (n, declarers) in other.AmbiguousTypeDeclarers) AddAmbiguousTypeDeclarers(n, [.. declarers]);
     foreach (var n in other.ContestedGenericAliasNames) ContestedGenericAliasNames.Add(n);
     foreach (var (k, v) in other.ModuleVisibleConstants) ModuleVisibleConstants.TryAdd(k, v);
     foreach (var (k, v) in other.ModuleConstantSourceFiles) ModuleConstantSourceFiles.TryAdd(k, v);
