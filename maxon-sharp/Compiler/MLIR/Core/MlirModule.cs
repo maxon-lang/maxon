@@ -711,6 +711,13 @@ public class IrModule<TOp> where TOp : IPrintableOp {
   /// ambiguous against every declaration of it already known. Membership in
   /// <see cref="AmbiguousTypeDeclarers"/> is therefore DERIVED from the sites and cannot describe a
   /// different set of declarations than the sites do.
+  ///
+  /// ⚠ A LATER RECORD MAY NOT ERASE A TYPE AN EARLIER ONE KNEW. One file's declaration is recorded
+  /// by several paths across the pre-scans and the merge, and only some of them hold the type it
+  /// binds — <see cref="Merge"/> reads it out of the incoming module's <see cref="TypeDefs"/>, which
+  /// is exactly where a file-private contested mint deliberately withholds the bare name. Taking the
+  /// last write wholesale would let that path blank out what the parser recorded, and the reader
+  /// would silently fall back to the flat table for a declaration the compiler knows the type of.
   /// </summary>
   public void RecordAliasDeclaration(string typeName, AliasSite site) {
     if (!AliasDeclarationSites.TryGetValue(typeName, out var sites)) {
@@ -724,6 +731,9 @@ public class IrModule<TOp> where TOp : IPrintableOp {
 
       AddAmbiguousTypeDeclarers(typeName, otherFile, site.File);
     }
+
+    if (site.DeclaredType == null && sites.TryGetValue(site.File, out var known))
+      site = site with { DeclaredType = known.DeclaredType };
 
     sites[site.File] = site;
   }
@@ -760,17 +770,16 @@ public class IrModule<TOp> where TOp : IPrintableOp {
   /// nothing outside it needs the entry. A <c>module</c> or <c>export</c> declarer is renamed for its
   /// own code but goes on publishing the bare name, because a file in its scope may write that name
   /// and resolves it through this table — withheld, such a reader found only the pre-scan's empty
-  /// placeholder and died in lowering. Which instance those readers get is still the flat table's
-  /// last write, and is this rung's acknowledged residual, not its cure.
+  /// placeholder and died in lowering.
   ///
-  /// ⚠ NOT EVERY CONTEST IS SETTLED BY A RENAME. A declaration nameable from outside its own scope is
-  /// never renamed — renaming it would break a reader doing nothing wrong — so where BOTH contestants
-  /// are <c>export</c> (or one <c>export</c> and one <c>module</c>) neither moves, and the bare entry
-  /// below is once again decided by which file merged last. MEASURED on the fixed build cache: an
-  /// exported <c>Cells</c> over <c>int(0 to 100000)</c> declared before an exported or module-visible
-  /// <c>Cells</c> over <c>int(0 to 255)</c> reads its own 70000 back as 112, with no diagnostic. That
-  /// pair is the AMBIGUITY question (E3063), which does NOT fire for it today — see
-  /// <c>Parser.IsFileScopedAliasDeclaration</c>.
+  /// ⭐ WHICH INSTANCE THOSE READERS GET IS NO LONGER THE FLAT TABLE'S LAST WRITE. It was, and that
+  /// was this record's acknowledged residual for two rungs: an exported <c>Cells</c> over
+  /// <c>int(0 to 100000)</c> declared beside an exported or module-visible <c>Cells</c> over
+  /// <c>int(0 to 255)</c> read its own 70000 back as 112, with no diagnostic, whichever of them merged
+  /// last. A reader now resolves the bare name to the declaration that governs IT
+  /// (<see cref="AliasScope.NearestDeclarationFor"/>), and because it does, EVERY contested
+  /// declaration this compilation owns is renamed rather than only the ones no foreign file may name
+  /// — see <c>Parser.IsRenameableAliasDeclaration</c>, whose reach test that cure retired.
   ///
   /// ⚠ RECORDED BY THE WHOLE-PROJECT DECLARATION PASS (<see cref="DeclaredAliasInstances"/>), which
   /// is the ONLY pass that has read every file and minted nothing — so both declarations are renamed,
@@ -903,8 +912,18 @@ public class IrModule<TOp> where TOp : IPrintableOp {
     // Both tables are copied rather than the membership being re-derived from the sites: a clone is
     // the same module, and re-deriving would make the copy disagree with the original wherever the
     // rule has changed since the original was built.
-    foreach (var (n, sites) in AliasDeclarationSites)
-      clone.AliasDeclarationSites[n] = new Dictionary<string, AliasSite>(sites, StringComparer.Ordinal);
+    //
+    // ⚠ A site's DeclaredType goes through the SAME TypeGraphCopier as the TypeDefs entry above, so
+    // the clone's scoped declaration and its type table are ONE object exactly as they were one
+    // object in the original. Copied by reference it would hand every compile in the process the
+    // cached stdlib module's own types to write to, which is the A4r bug this whole method exists
+    // to close, re-entered through the scope table.
+    foreach (var (n, sites) in AliasDeclarationSites) {
+      var clonedSites = new Dictionary<string, AliasSite>(sites.Count, StringComparer.Ordinal);
+      foreach (var (file, site) in sites)
+        clonedSites[file] = site with { DeclaredType = typeCopier.Copy(site.DeclaredType) };
+      clone.AliasDeclarationSites[n] = clonedSites;
+    }
     foreach (var (n, declarers) in AmbiguousTypeDeclarers) clone.AddAmbiguousTypeDeclarers(n, [.. declarers]);
     foreach (var n in ContestedGenericAliasNames) clone.ContestedGenericAliasNames.Add(n);
     clone.TagTable.AddRange(TagTable);
@@ -987,7 +1006,8 @@ public class IrModule<TOp> where TOp : IPrintableOp {
       // declaration, whose subtree meets an export's whole-program reach just as squarely. It also
       // compared the incoming record against ONE incumbent, which is the hole AliasDeclarationSites
       // exists to close; going through the recorder means this path cannot keep its own answer.
-      if (v.SourceFilePath != null) RecordAliasDeclaration(k, AliasSite.Of(v));
+      if (v.SourceFilePath != null)
+        RecordAliasDeclaration(k, AliasSite.Of(v, other.TypeDefs.GetValueOrDefault(k)));
 
       TypeAliasSources.TryAdd(k, v);
     }

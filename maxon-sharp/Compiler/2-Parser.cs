@@ -196,14 +196,54 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   // `function(...) returns T` types are only valid when this flag is set.
   private bool _atTopOfTypeAliasRhs;
   private bool _skipWhereValidation;
-  private readonly Dictionary<string, IrType> _typeRegistry = seedModule != null
-    ? new(seedModule!.TypeDefs.Where(kv =>
-        IsTypeVisibleAcrossFiles(seedModule!, kv.Key, sourceFilePath))) : [];
+  private readonly Dictionary<string, IrType> _typeRegistry = SeedTypeRegistry(seedModule, sourceFilePath);
+
+  /// <summary>
+  /// ⭐ WHAT EACH TYPE NAME MEANS TO THIS FILE — the one seam at which a reading file is handed
+  /// another file's declaration, and therefore the one place a SCOPE can be given to a table that has
+  /// none.
+  ///
+  /// <c>IrModule.TypeDefs</c> is keyed by bare name and holds ONE entry, so where a name is declared
+  /// in two files it answers for every reader with whichever declaration merged last. MEASURED at
+  /// this rung's merge base, both directions of the same fact: a file in <c>Compiler/</c> casting to
+  /// its own directory's <c>Tally</c> got <c>Compiler/Coverage/</c>'s range (<c>E3005: Value 200 is
+  /// outside the range of 'Tally' (int(-100 to 100))</c>), and a file in <c>scopeA/</c> naming its own
+  /// subtree's <c>module</c> alias was told <c>E2003: Unknown type: Cell</c>, because the single
+  /// <c>TypeDefSourceFiles</c> entry named the other subtree's declarer and the visibility test read
+  /// it.
+  ///
+  /// ⚠ THE SCOPED PATH IS TAKEN ONLY WHERE THE FLAT TABLE CANNOT HOLD BOTH — a name with two or more
+  /// declaring files. With one declaration there is nothing to choose between, and the existing
+  /// visibility filter is the whole answer; routing every name through the scope rule would be a
+  /// second, wider reading of visibility standing beside <see cref="IsTypeVisibleAcrossFiles"/>,
+  /// which is the shape this rung exists to remove rather than to add.
+  /// </summary>
+  private static Dictionary<string, IrType> SeedTypeRegistry(IrModule<MaxonOp>? seedModule, string? sourceFilePath) {
+    var registry = new Dictionary<string, IrType>();
+    if (seedModule == null) return registry;
+
+    foreach (var (typeName, type) in seedModule.TypeDefs) {
+      if (TryGoverningDeclaration(seedModule, typeName, sourceFilePath, out var governing)) {
+        // A name with no governing declaration is not a fallback to the flat entry: it is this reader
+        // standing outside every scope the name was declared in, and the name is not a type here.
+        if (governing is not { } nearest) continue;
+
+        registry[typeName] = nearest.DeclaredType ?? type;
+        continue;
+      }
+
+      if (IsTypeVisibleAcrossFiles(seedModule, typeName, sourceFilePath)) registry[typeName] = type;
+    }
+
+    return registry;
+  }
 
   // Cross-file type visibility used by the parser-ctor seed filter and by
   // IsNonExportedCrossFileType. Returns true if a type with the given name
   // declared in `seedModule` should be visible to a parser running on
   // `accessorPath`. The rules:
+  //   - A name TWO OR MORE files declare is the scope table's question, not
+  //     these three tables' — see the note below.
   //   - Exported types (not in NonExportedTypeNames and not in
   //     ModuleVisibleTypeNames) are always visible.
   //   - File-scoped types (in NonExportedTypeNames) are visible only if the
@@ -211,6 +251,13 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   //   - Module-scoped types are visible if same file OR accessor is within
   //     the declarer's directory subtree.
   private static bool IsTypeVisibleAcrossFiles(IrModule<MaxonOp> seedModule, string typeName, string? accessorPath) {
+    // ⭐ The three tables below hold ONE record per name, so for a name two files declare they
+    // describe one declaration and answer for readers of the other: `TypeDefSourceFiles` named the
+    // OTHER subtree's declarer, and a file naming its own subtree's `module typealias Cell` was told
+    // `E2003: Unknown type: Cell`.
+    if (TryGoverningDeclaration(seedModule, typeName, accessorPath, out var governing))
+      return governing != null;
+
     bool isFileScoped = seedModule.NonExportedTypeNames.Contains(typeName);
     bool isModuleVisible = seedModule.ModuleVisibleTypeNames.Contains(typeName);
     if (!isFileScoped && !isModuleVisible) return true; // exported / public
@@ -219,6 +266,35 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     if (declarerPath == accessorPath) return true;
     if (isModuleVisible && AliasScope.IsInDirectoryScopeOf(declarerPath, accessorPath)) return true;
     return false;
+  }
+
+  /// <summary>
+  /// ⭐ WHETHER <paramref name="typeName"/> IS A QUESTION ONLY THE SCOPE TABLE CAN ANSWER, and if so
+  /// which declaration of it governs <paramref name="accessorPath"/> — the ONE spelling of that, for
+  /// the two readers that need it.
+  ///
+  /// There are three answers here and they must not be collapsed into two. <c>false</c> means the
+  /// name has at most one declaration, so the flat, bare-name-keyed tables describe it exactly and
+  /// are the answer. <c>true</c> with a site means that declaration governs this reader. <c>true</c>
+  /// with none means the reader stands outside every scope the name was declared in, and the name is
+  /// not a type here at all — which is NOT the same as falling back to a flat entry describing
+  /// somebody else's declaration.
+  ///
+  /// ⚠ IT EXISTS BECAUSE THE SEED AND THE VISIBILITY TEST ARE ONE FACT AND WERE TWO READERS OF IT.
+  /// The registry seed was made scope-aware first and the program was still refused: `ParseTypeRef`
+  /// asks <see cref="IsNonExportedCrossFileType"/> BEFORE its own registry lookup, and that path went
+  /// on reading <c>TypeDefSourceFiles</c>'s single entry. A cure applied at one of two readers of one
+  /// fact survives at the other, which is this rung's own family.
+  /// </summary>
+  private static bool TryGoverningDeclaration(IrModule<MaxonOp> seedModule, string typeName,
+      string? accessorPath, out AliasSite? governing) {
+    governing = null;
+    if (accessorPath == null) return false;
+    if (!seedModule.AliasDeclarationSites.TryGetValue(typeName, out var sites) || sites.Count <= 1)
+      return false;
+
+    governing = AliasScope.NearestDeclarationFor(sites, accessorPath);
+    return true;
   }
 
   // Types registered during this parser's PreScan — only these get auto-conformance synthesis
@@ -1284,7 +1360,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
         }
 
         if (Check(TokenType.TypeAlias)) {
-          PreScanTypeAlias(isExported);
+          PreScanTypeAlias(isExported, isModuleVisible);
         } else {
           SkipToEndOfLine();
         }
@@ -1728,11 +1804,12 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   /// each of them, and wide enough to keep the record) was added. The set now lives in
   /// <see cref="IrModule{TOp}.AliasDeclarationSites"/> and the recorder asks every pair.
   /// </summary>
-  private void RecordLocalAliasDeclaration(IrModule<MaxonOp> module, string aliasName, bool isLocallyDeclared) {
+  private void RecordLocalAliasDeclaration(IrModule<MaxonOp> module, string aliasName,
+      bool isLocallyDeclared, IrType? declaredType) {
     if (!isLocallyDeclared || _sourceFilePath == null) return;
 
     module.RecordAliasDeclaration(aliasName,
-      new AliasSite(ReachOfLocalAlias(aliasName), _isStdlib, _sourceFilePath));
+      new AliasSite(ReachOfLocalAlias(aliasName), _isStdlib, _sourceFilePath, declaredType));
   }
 
   /// <summary>
@@ -1757,11 +1834,16 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       // the storage follows the type table. MEASURED — an `export Cell` beside a `module Cell` in a
       // sibling directory answered 206 for −50, silently, in one source order and correctly in the
       // other, purely because the seeded name was skipped here.
-      RecordLocalAliasDeclaration(module, aliasName, isLocallyDeclared);
+      // Read out ahead of the record below, not merely ahead of the write further down: the record is
+      // what a READING file resolves this declaration through, so it has to carry what the
+      // declaration MEANS as well as where it stands. Two tables asked separately can answer about
+      // two different declarations, which is the defect (see AliasSite.DeclaredType).
+      _typeRegistry.TryGetValue(aliasName, out var aliasType);
+
+      RecordLocalAliasDeclaration(module, aliasName, isLocallyDeclared, aliasType);
 
       if (_seededTypeAliases.Contains(aliasName)
           && !(_isRescanningTypeAliases && isLocallyDeclared)) continue;
-      _typeRegistry.TryGetValue(aliasName, out var aliasType);
 
       if (aliasType != null && PublishesBareNameToModule(aliasName))
         module.TypeDefs[aliasName] = aliasType;
@@ -1804,9 +1886,13 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       //
       // ⚠ IT IS THE SEEDED REACH — AliasScope.ReachOfSeeded, whose enum's member ORDER is what `>`
       // reads. A stdlib alias owns the record as widely as an export because it is handed to every
-      // parser however it is written, which is the same sentence IsFileScopedAliasDeclaration rests
-      // on, and NOT the reach the declaration wrote down (AliasScope.ReachOf) — folded in there it
-      // refused the entire standard library.
+      // parser however it is written, and NOT the reach the declaration wrote down
+      // (AliasScope.ReachOf) — folded in there it refused the entire standard library.
+      //
+      // ⚠ THIS RECORD IS NOT WHAT A READER RESOLVES THROUGH ANY MORE, and reading it as if it were is
+      // the mistake this rung closed. It decides who owns the module's SINGLE TypeAliasInfo; which
+      // declaration governs a given READING FILE is AliasScope.NearestDeclarationFor, asked of the
+      // per-declaring-file sites recorded just above.
       if (module.TypeAliasSources.TryGetValue(aliasName, out var ownerInfo)
           && ownerInfo.SourceFilePath != declaringFilePath
           && AliasScope.ReachOfSeeded(ownerInfo)
@@ -1852,58 +1938,32 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   }
 
   /// <summary>
-  /// Whether this parser's declaration of <paramref name="aliasName"/> is one no file OUTSIDE its
-  /// own scope may write down. ONLY such a declaration is renamed under a contest, and the
-  /// restriction is the whole reason renaming is safe: a declaration a file beyond the contest MAY
-  /// name is one that file's reference resolves through BY NAME, so renaming it would break a reader
-  /// doing nothing wrong. A pair NEITHER of which may be renamed is the AMBIGUITY question instead,
-  /// and it is now genuinely answered: <see cref="RecordAmbiguousAliasName"/> marks it and E3063
-  /// refuses every bare use of the name, including the declarers' own.
+  /// Whether this parser's declaration of <paramref name="aliasName"/> may be given a name of its own
+  /// under a contest — which is what stops two declarations of one name sharing one family of emitted
+  /// methods, and therefore one storage.
   ///
-  /// ⚠ THAT SENTENCE USED TO SAY "left exactly as it was", WHICH READ AS A CLAIM THAT SOMETHING ELSE
-  /// CAUGHT IT, and nothing did. Measured on the fixed build cache, both orders: an <c>export
-  /// typealias Cells</c> declared beside an <c>export</c> (or <c>module</c>) <c>Cells</c> over a
-  /// different range compiled clean, exit 0, and read its own value back through the other's storage.
-  /// The pairings where ONE side may be renamed are cured by the rename; this one had no cure until
-  /// the pair itself was refused.
+  /// ⭐⭐ THE REACH USED TO BE THE TEST, AND THIS RUNG IS THAT TEST BEING WRONG. It read: only a
+  /// declaration no file OUTSIDE its own scope may write down may be renamed, because a declaration a
+  /// foreign file MAY name is one that file's reference resolves through BY NAME. That premise died
+  /// the moment a reader stopped resolving by bare name: <see cref="AliasScope.NearestDeclarationFor"/>
+  /// hands every reading file the declaration that governs IT, so a rename cannot reach a reader
+  /// doing nothing wrong — it reaches the reader's own declaration, renamed, which is the point.
   ///
-  /// A stdlib alias counts as nameable however it is written, because SeedFromModule seeds every
-  /// stdlib alias into every parser regardless of `export`: its file-privacy is not enforced, so it
-  /// is not a fact the mint may rest on. A type-scoped inner alias is out for the same reason from
-  /// the other side — it is not a file's declaration at all, but one copy per generic instance of
-  /// its owner's.
+  /// ⚠ WHILE THE REACH WAS THE TEST, TWO `export` DECLARATIONS OF ONE NAME WERE THE ONE CONTEST WITH
+  /// NO CURE AT ALL, and canonical BLESSES the shape, so refusing it was never available: an
+  /// <c>outer/</c> file's <c>export typealias Cell = int(0 to 100000)</c> read its own 70000 back as
+  /// <b>112</b> through an <c>outer/inner/</c> declaration, silently and exit 0, and the same shape
+  /// over two one-byte ranges that disagree on signedness PANICKED instead. One defect, two faces,
+  /// separated only by whether a range check caught the truncation
+  /// (<c>enclosing-and-nested-export-keep-their-own-element</c>).
   ///
-  /// ⭐ A `module` DECLARATION IS IN, and it was out. `module` is the SAME rule one scope wider: an
-  /// alias scoped to its declarer's directory subtree, which — like a file-private one — nobody
-  /// outside that scope may name. Two subtrees are disjoint or one contains the other, so where two
-  /// `module` declarations of a name are in DIFFERENT subtrees no file can see both, and neither may
-  /// decide the other's storage. It did: a `module typealias Cells = Array with Cell` in
-  /// <c>scopeB/</c> truncated <c>scopeA/</c>'s 70000 to 112 through a range declared in another
-  /// directory, and reversing the file order gave the right answer — the wrong half being whichever
-  /// merged last. The contest was DETECTED (RecordAliasInstanceForContest is visibility-blind and
-  /// fires) and only the MINT was gated out, so the flat table decided. Measured against
-  /// <c>maxon-shv2</c>, which answers <c>wide=70000 narrow=200</c> for the same program.
-  ///
-  /// ⚠ WHAT NEITHER THE RENAME NOR THE REFUSAL REACHES, deliberately: a file in the SAME subtree that
-  /// merely READS a `module` alias two DISJOINT subtrees declare. That pair is not ambiguous — no
-  /// file can see both, which is why it is legal — but the reader resolves through the module's alias
-  /// tables, which are keyed by bare name and hold ONE declaration, so it is served whichever merged
-  /// last. Both compilers get it wrong today (shv2 answers E3005 on the reader's own legal value),
-  /// it is equally wrong on the parent commit, and curing it means giving those tables a scope rather
-  /// than changing a mint rule or refusing a pair the language allows.
+  /// What remains is not about reach at all. A STDLIB declaration may not be renamed because its
+  /// method families are emitted by a separate, cached compile that a project build cannot re-mint —
+  /// this compilation does not own the name. A TYPE-SCOPED inner alias is out because it is not a
+  /// file's declaration at all, but one copy per generic instance of its owner's.
   /// </summary>
-  private bool IsFileScopedAliasDeclaration(string aliasName) =>
-    // ⚠ SEEDED reach, not declared reach: a stdlib alias is handed to every parser however it is
-    // written, so its file-privacy is not enforced and is not a fact the mint may rest on. That is
-    // the SAME sentence the record-ownership guard rests on, and it used to be spelled here as a
-    // separate `&& !_isStdlib` beside a separate `isStdlib ? Program` there — see
-    // AliasScope.ReachOfSeeded, and see AliasScope.ReachOf for the one time it was folded into the
-    // DECLARED reach instead, which refused the whole standard library.
-    AliasScope.ReachOfSeeded(_exportedTypeAliases.Contains(aliasName),
-      _moduleVisibleTypeAliases.Contains(aliasName), _isStdlib) != AliasReach.Program
-    // A type-scoped inner alias is out for a second reason, not about reach at all: it is not a
-    // file's declaration, but one copy per generic instance of its owner's.
-    && !_typeAliasOwners.ContainsKey(aliasName);
+  private bool IsRenameableAliasDeclaration(string aliasName) =>
+    !_isStdlib && !_typeAliasOwners.ContainsKey(aliasName);
 
   /// <summary>
   /// How far this parser's own declaration of <paramref name="aliasName"/> reaches — the one reading
@@ -4962,7 +5022,10 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
 
       foreach (var pos in typealiasPositions) {
         _pos = pos;
-        PreScanTypeAlias();
+        // A type-scoped alias inside an `extension` block carries no file-level modifier of its own:
+        // its visibility is the extension's. Stated rather than defaulted, so the one caller that
+        // legitimately means "neither" cannot be mistaken for one that forgot a half.
+        PreScanTypeAlias(isExported: false, isModuleVisible: false);
       }
 
       var addedConstraints = InjectWhereConstraints(targetStruct, extensionWhereConstraints);
@@ -5033,7 +5096,10 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
 
       foreach (var pos in typealiasPositions) {
         _pos = pos;
-        PreScanTypeAlias();
+        // A type-scoped alias inside an `extension` block carries no file-level modifier of its own:
+        // its visibility is the extension's. Stated rather than defaulted, so the one caller that
+        // legitimately means "neither" cannot be mistaken for one that forgot a half.
+        PreScanTypeAlias(isExported: false, isModuleVisible: false);
       }
 
       var addedConstraints = InjectWhereConstraints(structType, extensionWhereConstraints);
@@ -5199,7 +5265,16 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   private bool IsTypeAlias(string name) =>
     _localTypeAliases.Contains(name) || _seededTypeAliases.Contains(name);
 
-  private void PreScanTypeAlias(bool isExported = false, bool isModuleVisible = false) {
+  /// <summary>
+  /// ⚠ BOTH HALVES OF THE VISIBILITY ARE REQUIRED, AND THEY USED TO DEFAULT TO FALSE. A caller
+  /// holding the pair from <see cref="ParseVisibilityModifier"/> passed only the <c>export</c> half —
+  /// <see cref="PreScanTypeAliasesOnly"/> did exactly that — and a <c>module typealias</c> was
+  /// recorded as FILE-scoped for the whole pre-scan window: invisible to every file but its own, so a
+  /// sibling pre-scanned before its declarer was refused <c>E2003: Unknown type</c> for a name
+  /// declared beside it, while one pre-scanned after it compiled. A visibility is ONE fact with two
+  /// spellings; passable in halves, the half nobody passes is silently false.
+  /// </summary>
+  private void PreScanTypeAlias(bool isExported, bool isModuleVisible) {
     Advance(); // consume 'typealias'
     var aliasNameToken = Expect(TokenType.Identifier);
     CheckReservedDeclName(aliasNameToken);
@@ -5845,7 +5920,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     if (effectiveAliasName == aliasName
         && _currentModule != null
         && _currentModule.ContestedGenericAliasNames.Contains(aliasName)
-        && IsFileScopedAliasDeclaration(aliasName)
+        && IsRenameableAliasDeclaration(aliasName)
         && substitution.Values.All(IsFullyConcreteType)) {
       effectiveAliasName = IrStructType.ContestedInstanceName(sourceName, substitution, constParams);
       _contestedAliasInstanceNames[aliasName] = effectiveAliasName;
@@ -8712,6 +8787,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     if (_localTypeAliases.Contains(typeName) || _locallyDefinedTypes.Contains(typeName)) return false;
     // Inner typealiases of types defined in this file are also local.
     if (_typeAliasOwners.ContainsKey(typeName)) return false;
+
     return !IsTypeVisibleAcrossFiles(seedModule, typeName, _sourceFilePath);
   }
 
@@ -26939,10 +27015,28 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   /// extension loop in that file. One reader is what stops the two answering one call site
   /// differently — which would not be a compile error at any of them, just an op naming a type that
   /// is not the one in hand.
+  ///
+  /// ⚠ BOTH MAPS ARE A DECLARER'S OWN MINTS, AND A READER HAS NEITHER. A file that merely writes a
+  /// contested alias's name went on emitting the BARE name, which is one family belonging to whichever
+  /// declaration kept it: measured, a `scopeA/` file reading its own subtree's `module typealias
+  /// Cells` called `Cells.push`, whose body the monomorphizer had wired to `scopeB/`'s one-byte
+  /// helpers, and read 65000 back as 232. The third arm asks the only party that always knows — the
+  /// TYPE this parser resolved the name to, which carries its own minted name. It is not a fourth
+  /// table, precisely so a reader's spelling cannot drift from the declaration it resolved.
   /// </summary>
   private bool TryResolveAliasSpelling(string aliasName, [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out string? typeName) {
     if (_extensionAliasToMangled.TryGetValue(aliasName, out typeName)) return true;
-    return _contestedAliasInstanceNames.TryGetValue(aliasName, out typeName);
+    if (_contestedAliasInstanceNames.TryGetValue(aliasName, out typeName)) return true;
+
+    if (_currentModule?.ContestedGenericAliasNames.Contains(aliasName) == true
+        && _typeRegistry.TryGetValue(aliasName, out var governing)
+        && governing.Name != aliasName) {
+      typeName = governing.Name;
+      return true;
+    }
+
+    typeName = null;
+    return false;
   }
 
   /// If the callee was resolved through a type alias, override it with the alias-qualified name
