@@ -336,45 +336,56 @@ end 'stdlibFunctionNames'
 // PANIC: `requireUnreachableStdlibStayedDead: 'print' is in StdlibFacts.unreachable`. The guard was right
 // and the walk was wrong, which is what a guard stating a premise is for.
 //
-// ⇒ **THE WITNESS EDGE IS NOW SEEDED AT THE OP THAT IMPLIES IT** — `markWitnessTableImpls`, the same shape
-// `markCorpusCalleesOfSynthesizedRuntime` uses one screen down and for the same reason: a pre-pass over the
-// module would fire on every program (every listed stdlib module declares conformances, so
-// `witnessSlotImpls` is never empty), which is precisely the blanket-seed trap that comment measured at
-// 2223 moved fragments.
+// ⇒ **THE WITNESS EDGE IS CREDITED AT THE CONFORMER THIS WALK REACHES** — `markConformerWitnessImpls`,
+// below, which carries the whole argument and the two cuts that were wrong before it. ⚠ This paragraph
+// named a `markWitnessTableImpls` keyed on the DISPATCH OP for one commit, and that function is gone: it
+// covered one of the three `ensureWitnessTable` routes and left the other two panicking on programs the
+// merge base compiles. **If you are reading a description of the design here rather than at the function,
+// distrust it** — this is the copy that rots.
 //
-// ⛔⛔ **WHAT IT STILL DOES NOT COVER, AND THE FIRST STATEMENT OF THIS WAS TOO NARROW — MEASURED AT THE
-// W35 REVIEW.** It said the one uncovered shape was the constrained-generic witness and that "no corpus
-// program does". Both halves needed correcting: **the uncovered shape is A WITNESS TABLE THAT IS
-// MATERIALIZED WITHOUT ANY DISPATCH OP**, the trigger above is the dispatch op, and
-// `LowerMaxonToStd.ensureWitnessTable` has TWO callers, NEITHER of which implies one.
+// ⚠⚠ **THE CONFORMER KEY RESTS ON TWO PREMISES, NOT ONE, AND ONLY THE FIRST IS SELF-EVIDENT. BOTH WERE
+// PROBED AT THE W35 REVIEW.**
 //
-//   • `materializeWitnessTableAddr` — an EXISTENTIAL WIDENING. A concrete conformer crossing into an
-//     interface-typed parameter, field or return builds `__witness_<Type>.<Iface>` and relocates every
-//     requirement slot; whether anything ever DISPATCHES through it is a separate question.
-//     MEASURED at `396370e0f`: `type Thing implements Printer` whose `show()` body is `print(…)`,
-//     boxed once into an interface-typed struct field and never dispatched, is
-//     `panic … requireUnreachableStdlibStayedDead: 'print' is in StdlibFacts.unreachable`.
-//   • `materializeWitnessArg` — a `where T is Iface` CONSTRAINT witness. Every instance method of a
-//     constrained type carries the witness argument, so the table is built even for a method whose body
-//     never touches `T`. MEASURED at the same commit, same panic, on a `type Box uses T where T is
-//     Taker` whose only method returns a constant.
+//   • **P1 — a value of a user-declared type `T` implies a reached function OF `T`.** This is E3076, and it
+//     is enforced: `Thing{tag: 1}` written outside `Thing` is *"'Thing' can only be constructed inside its
+//     own methods"*. The value kinds that could evade it are the ones that are not built by a call —
+//     an ENUM case, a generic INSTANCE — and both are REFUSED at the only place a table gets built, the
+//     widening: `enum Step implements Coded` with a method-carrying `Coded` is `E3005 … type 'Step' does
+//     not implement interface 'Coded'`, and `Box with ExitCode` into a `Printer` place is the same refusal.
+//     An `Error` enum DOES widen, and `Error` has zero requirements, so there is no slot to credit.
+//     ⇒ P1 holds today because the conformers that can reach a table are exactly the ones E3076 governs.
 //
-// ⚠ **BOTH PRE-DATE W35 AND NEITHER IS `print`-SPECIFIC — THE CONTROL WAS RUN.** Substituting `sleep(1)`
-// for the `print(…)` in the first program panics identically on `'sleep'`, and `stdlib/Sleep.maxon` has
-// been listed since long before this rung, whose changes touch nothing on that route. Since the seed
-// above did not exist at all until W35, both programs panicked at the merge base too: what this rung
-// changed is the EXPOSURE, not the hole — `print` is the most-called stdlib function there is, so the
-// class went from "a witness impl that sleeps or reads the console" to "a witness impl that prints".
+//   • **P2 — a BUILTIN conformer's requirement impls are never stdlib SOURCE.** This one is load-bearing
+//     and easy to miss, because the conformer key structurally CANNOT credit a builtin: no `String.<method>`
+//     or `int.<method>` module function is ever reached, since those calls lower to `__str_*`/inline ops.
+//     MEASURED that builtin conformers really do reach tables, and not only through the container route
+//     `markConformerWitnessImpls`'s last paragraph covers: `type Keyed uses T where T is Hashable`
+//     instantiated at `String` and at `int` compiles and runs (exit 14 = `9 + 5`), building
+//     `__witness_String.Hashable` and `__witness_int.Hashable`. It is harmless ONLY because
+//     `BuiltinConformanceRuntime` SYNTHESIZES those impls, so nothing behind those tables is stdlib source.
+//     ⇒ **The day a LISTED module declares `extension <builtin> implements <Iface>` with a corpus body,
+//     this key misses it.** That is not hypothetical: `stdlib/Array.maxon:637` already declares
+//     `extension Array implements Hashable, Equatable where Element is Hashable and Equatable`, and is
+//     saved only by not being on the whitelist. Listing it is the change that would need this revisited.
 //
-// ⇒ **CLOSING IT IS ITS OWN RUNG AND IS DELIBERATELY NOT ATTEMPTED HERE.** Both remaining triggers are
-// facts about a CALLEE'S SIGNATURE (does it declare an interface-typed parameter; does it carry `where`
-// constraints), not about an op, so covering them means a signature lookup per credited edge on this
-// walk — and the seed is blanket, so any widening newly BUILDS stdlib bodies for a whole class of
-// programs and moves goldens across the suite. That is a measured change, not a review edit.
-// ⚠ And the seed's cost is filed with it: it re-walks every conformance × interface × transitive slot
-// AT EVERY dispatch op, though the work is whole-program and idempotent after the first — O(dispatch
-// ops × conformances × slots) where O(conformances × slots) would do. The scale corpus declares no
-// interfaces, so no column of the ladder can see it.
+// ⭐⭐ **AND THIS IS WHY A RESIDUAL HERE IS TOLERABLE: AN UNDER-APPROXIMATION IS LOUD, ALWAYS.** The same
+// walk decides both what is BUILT (`growStdlibBodyDemand`) and what is filed `unreachable`, so the two can
+// never disagree in the silent direction — a function this walk misses is unbuilt AND in that set, and
+// `requireUnreachableStdlibStayedDead` panics the moment elimination reaches it through the reloc. The
+// SILENT failure — filed reachable, body never built, an empty function the program calls — is a different
+// mistake, it was the `witnessSlotImpls` cut, and this key cannot make it. Treat a panic from that guard as
+// this premise list having acquired a third entry, and add it here.
+//
+// ⚠ **A NARROWER GATE EXISTS AND IS NAMED RATHER THAN DENIED — it was not taken, and the reason is not
+// that it is unsound.** `ensureWitnessTable`'s `interfaceName` argument is ALWAYS statically known: a
+// declared interface-typed parameter, a declared interface RETURN, a `where T is I` constraint, or the
+// container key/element's `Hashable`/`Equatable`. Gating on the PAIR — a reached conformer `T` AND an
+// interface the program can statically name — would drop the over-approximation
+// `markConformerWitnessImpls`'s last paragraph measures (a `FilePath` program crediting four impls it never
+// boxes) to nothing. It was left alone because it re-introduces predicting the CALL SITES, which is the shape the
+// measured `+81%` cut got wrong, for +1.1% allocations and zero emitted bytes; and because the `extends`
+// case needs care (a `Base`-typed place against `T implements Derived` builds `__witness_T.Base`, so the
+// filter must walk `extends` rather than test set membership). A rung, with the ladder read, not a review edit.
 //
 // ⭐ The name index is the shared, CHECKED one (`FunctionNameIndex`, A1w). It used to resolve one
 // last-wins and unchecked, walking ONE of two same-named bodies and crediting the callees of whichever it
@@ -587,6 +598,20 @@ end 'markMaxonCalleeEdge'
 // stdlib source, so nothing behind that table can be filed unreachable. The day user-type keys land, the
 // conformer key above already covers them — reaching `Point.create` to put one in a `Set` credits
 // `Point.hash` — which is a third reason to key on the conformer rather than on the three call sites.
+// ⚠ That premise is about the CONTAINER route only because the container route is where it was first
+// needed; it is load-bearing for the CONSTRAINT route too, and this walk's header states it there as P2
+// with the measurement (`Keyed with String` under `where T is Hashable` builds `__witness_String.Hashable`
+// while no `String.<method>` is ever reached). Read it as one premise with two customers, not two.
+//
+// ⚠ **THE PRICE IT DOES PAY, MEASURED AND KEPT HERE RATHER THAN IN A REPORT.** Reaching a conformer is
+// weaker than boxing one, so a program that merely USES a conforming stdlib type credits impls it can never
+// jump to: a `Directory`/`FilePath` program pays `FilePath`'s four requirement impls though it widens
+// nothing — **+15,444 allocations (+1.1%), emitted code size UNCHANGED, and 11 committed fragments permute
+// an `.rdata` label INDEX** (`__str_blob_44` ⇒ `__str_blob_54` and the like: more stdlib bodies are lowered,
+// so the pool numbers differently). Verified meaning-free the only way a spec can verify it — the
+// behavioural assertions in those same fragments still pass (`--filter=filepath` 40/0, `directory` 61/0,
+// `url` 47/0), so no `lea` came to name a different string. The narrower gate that would remove this cost
+// is named in this walk's header; it was weighed and not taken.
 function markConformerWitnessImpls(func IrFunction, project Project, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet)
 	match splitQualifiedName(func.name) 'owner'
 		// A FREE function belongs to no type, so reaching it produces no conformer and implies no table.
