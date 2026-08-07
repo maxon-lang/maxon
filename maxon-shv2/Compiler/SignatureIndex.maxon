@@ -1289,6 +1289,44 @@ export union CalleeReturn
 	undeclared
 end 'CalleeReturn'
 
+// ⭐ **THE INSTANCE A BARE GENERIC TYPE NAME DENOTES IN A TYPE-PARAMETER SCOPE, or `notInScope`** —
+// see `ProgramSignatures.scopedGenericInstanceOf`. A union rather than a sentinel for `DeclaredAlias`'s
+// reason: "this scope binds nothing for that name" is an ANSWER — the name then means exactly what it always
+// meant — and `GenericInstanceId` has no value free to say it with.
+export union ScopedGenericInstance
+	instance(id GenericInstanceId)
+	notInScope
+end 'ScopedGenericInstance'
+
+// ⭐ **DOES `scopeParamNames` BIND EVERY ONE OF `paramNames`? — the ALL-OR-NOTHING half of
+// `ProgramSignatures.scopedGenericInstanceOf`, and v1's own rule**
+// (`maxon-selfhosted/Compiler/TypeResolution.maxon:4366-4374`). A PARTIAL overlap binds
+// nothing rather than binding what it can: `type Pair uses A, B` named inside `type Outer uses A` has no `B`
+// for the scope to stand for, and inventing one would give the instance an argument the author never wrote.
+// The name then stays what it was, and the ordinary refusals speak for it — which for the reaching program
+// is a positioned `E3005` where the C# bootstrap accepts it silently and dies in the assembler
+// (`E9001: Unresolved label`).
+//
+// A linear scan over both, for `Parser.typeParamPositionOf`'s reason: a type declares a handful of
+// parameters, so a name→index map would be a heap object bought to serve one or two lookups.
+function scopeBindsEveryTypeParam(paramNames ByteArrayArray, scopeParamNames ByteArrayArray) returns bool
+	for paramName in paramNames 'eachParam'
+		var bound = false
+		for scopeName in scopeParamNames 'eachScopeName'
+			if scopeName.equals(paramName) 'hit'
+				bound = true
+				break
+			end 'hit'
+		end 'eachScopeName'
+
+		if not bound 'notInScope'
+			return false
+		end 'notInScope'
+	end 'eachParam'
+
+	return true
+end 'scopeBindsEveryTypeParam'
+
 // What the index knows about a NAMED type — `CalleeReturn`'s twin, and a union for the same
 // reason: "no file declares this" is an ANSWER, not a failure, and spelling it as a sentinel range
 // (`low: 0`) would make an undeclared name read as UNSIGNED, which is the one thing it must never
@@ -10365,6 +10403,78 @@ export type ProgramSignatures
 		return self.nameOfId(self.genericInstances.instanceBaseId(id))
 	end 'genericInstanceBaseName'
 
+	// ⭐⭐ **THE INSTANCE A BARE GENERIC TYPE NAME DENOTES INSIDE A TYPE-PARAMETER SCOPE** — `Inner`
+	// written in `type Outer uses T`'s body IS `Inner with Outer.T`. shv2 compiles ONE body per generic type,
+	// so a member of `Outer` that names another generic type without arguments names it at the parameters the
+	// body itself is written in: the arguments are not ABSENT, they are the enclosing scope's. It is the
+	// declaration-view sibling of `genericAliasInstanceFrom` — that door answers for a name a `typealias`
+	// bound to CONCRETE arguments, this one for a name the SCOPE binds.
+	//
+	// ⭐ **THE BINDING IS BY PARAMETER NAME, ALL-OR-NOTHING, AND THAT IS v1's RULE VERBATIM**
+	// (`maxon-selfhosted/Compiler/TypeResolution.maxon:4358-4385`, `promoteBareGenericReturnToScope`): each of
+	// the named type's own `uses` names must be one the scope declares, or nothing is minted at all. The
+	// MEMBERSHIP test is the caller's (`Parser.scopeBindsEveryTypeParam`) because only the caller holds the
+	// scope; this door mints, and mints only. v1 writes that algorithm out THREE times
+	// (`TypeResolution.maxon:4358`, `LowerMaxonToStd.maxon:16198` and `:7065`, the last two its own comments
+	// call mirrors); one copy is the whole reason it lives in the index rather than at a use site.
+	//
+	// ⚠ **THE ARGUMENT AT POSITION `i` CITES THE SCOPE PARAMETER OF THE SAME SPELLING, NEVER POSITION `i` OF
+	// THE SCOPE.** Since W14 a parameter's identity is a digest of `(declaring type, parameter name)`, so the
+	// argument list is built by looking each of the BASE's names up in the scope — a positional pairing would
+	// bind `Inner`'s sole `T` to whatever the enclosing type happens to declare first, which for
+	// `type MyMap uses Key, Value` naming a one-parameter helper is a silently wrong type.
+	//
+	// ⚠ No `fixedSize`: a sized base (`Vector`) is a BUILTIN with no `StructLayout`, so it never reaches the
+	// mint — the gate is `structTypeParamsOf`, which answers the shared empty for every name no `type`
+	// declares.
+	//
+	// ⭐⭐ **THREE SCOPES ASK IT AND THEY ARE NOT THE SAME SCOPE**, which is why the scope arrives as a pair of
+	// parameters rather than being read off any one of them:
+	//   • the DECLARATION the cursor is inside — `Parser.bareGenericInstanceInScope`, for a written type
+	//     reference (`returns Inner`) and a static-call base (`Inner.make(…)`);
+	//   • the CALLEE's declaring type — `Parser.promoteBareGenericResultToCalleeScope`, because a call is typed
+	//     from the token SWEEP's `returnTypeOf`, which records every bare generic name as a plain `named`;
+	//   • the FIELD's declaring struct — `fieldTypeOf`, for the same reason one layer down: the layout this
+	//     index holds is the SWEPT one.
+	// v1 writes that algorithm out three times over (`TypeResolution.maxon:4358`, `LowerMaxonToStd.maxon:16198`
+	// and `:7065`, the last two its own comments call mirrors); one door with the scope as an argument is that
+	// trio with the mirrors removed.
+	export function scopedGenericInstanceOf(name ByteArray, declaringTypeName ByteArray, scopeParamNames ByteArrayArray) returns ScopedGenericInstance
+		// ⛔ **THE SCOPE'S OWN TYPE MEANS `Self`, NOT AN INSTANCE OVER ITS OWN PARAMETERS**, and that holds for
+		// all three askers at once: the type's own name in its own body, a `Self`-returning method reached
+		// through a receiver of that type, and a field of the very type declaring it. It is
+		// `Parser.parseTypeReference`'s ARM ORDER — `namesEnclosingType` answers well above the scoped arm —
+		// stated once for the doors that have no arms to order. ⚠ MEASURED without it
+		// (`self-type-member-expression/static-call-through-Self-in-a-generic-type`): `Self.make(x)` inside
+		// `type Box uses T` minted `Box with Box.T` and its result stopped satisfying `twice() returns Self` —
+		// **`E3005: Cannot return 'Box_Tae9ed0372d6f16dc' from function declared to return 'Box'`**.
+		if name.equals(declaringTypeName) 'ownNameMeansSelf'
+			return ScopedGenericInstance.notInScope
+		end 'ownNameMeansSelf'
+
+		// ⚠ **GATED ON `allFilesFolded` for `Parser.parseTypeReference`'s stated reason**: the struct registry
+		// is one the declaration SWEEP is still filling, so an ungated answer would depend on the order the
+		// loader walked the disk. During the sweep every one of these names stays the bare `named` it always
+		// was — which is exactly the answer the READ doors above exist to repair.
+		if not self.allFilesFolded 'registryStillFilling'
+			return ScopedGenericInstance.notInScope
+		end 'registryStillFilling'
+
+		// A NON-GENERIC declared type, and every name no `type` declares at all, answer the shared empty here —
+		// so the whole generics-free corpus pays one map probe and allocates nothing.
+		let baseParams = self.structTypeParamsOf(name)
+		if baseParams.isEmpty() or not scopeBindsEveryTypeParam(baseParams, scopeParamNames: scopeParamNames) 'notBoundByThisScope'
+			return ScopedGenericInstance.notInScope
+		end 'notBoundByThisScope'
+
+		var args = MaxonTypeArray.create()
+		for paramName in baseParams 'eachParam'
+			args.push(MaxonType.typeParameter(typeParamTokenFor(declaringTypeName, paramName: paramName)))
+		end 'eachParam'
+
+		return ScopedGenericInstance.instance(self.genericInstances.intern(self.typeNames.intern(name), args: args))
+	end 'scopedGenericInstanceOf'
+
 	// --- The `Array` builtin generic (P1.7 slice 1) ---
 	//
 	// `Array` is a BUILTIN generic type with one type parameter `Element` — there is no `type Array uses
@@ -13629,6 +13739,51 @@ export type ProgramSignatures
 		return MaxonType.genericInstance(self.genericInstances.intern(self.genericInstances.instanceBaseId(nested), args: substituted, fixedSize: self.genericInstances.instanceFixedSize(nested)))
 	end 'substituteInstanceArgsThrough'
 
+	// ⭐⭐ **A TUPLE'S INSTANCE VIEW — the third declaration-view shape, and the ONE that cannot ride
+	// `substituteThroughInstance`.** `type MyMap uses Key, Value` and `type MyMapIterator uses Key, Value`
+	// each write `typealias Entry = (Key, Value)`, and since W14 those are two DIFFERENT tuple types —
+	// correctly so, because each cites its own declaring type's parameters (`__Tuple2.T7ec….T240…` against
+	// `__Tuple2.Tf5a….T8af…`). They are the SAME type only at an instantiation that fixes both, which is
+	// exactly what this reduces: `MyMapIterator.Entry` through a `MyMapIterator with (MyMap.Key, MyMap.Value)`
+	// receiver IS `MyMap.Entry`. Measured before it existed, on the renamed `stdlib/Map.maxon`:
+	// **`E3005 stdlib/Interfaces.maxon:211:12: argument type mismatch for 'value': expected
+	// '__Tuple2.T7ec7c1d76425e7ce.T240e2d961d3637ba', got '__Tuple2.Tf5ab22f57cf9dbd8.T8afb890bfc18c8d0'`** —
+	// a sentence naming one type twice, the signature of a missing substitution.
+	//
+	// ⚠ **IT TAKES A NAME AND ANSWERS A NAME, AND THAT IS WHAT KEEPS `substituteThroughInstance` INTERNER-FREE.**
+	// A tuple is a `structRef`, whose payload is an INTERNER-LOCAL id — the one arm that substitution passes
+	// through untouched precisely because it would need a name table, and its three callers hold three
+	// different ones. A tuple's IDENTITY is its canonical NAME, which is whole-program, so the name is what
+	// crosses and the ids stay home. It is `typeArgAggregateName`'s discipline: both steps inside, so the
+	// pairing is structural rather than conventional.
+	//
+	// ⚠ The elements are re-interned through `internTupleType`, which is what makes the answer the SAME name
+	// every other door reaches for that element list rather than a second spelling of it. A rejection is an
+	// invariant break, not a user error: every element came out of a layout this index already registered and
+	// was only substituted, so an element that fails the tuple-element rule now failed it at the declaration.
+	export function substituteTupleThroughInstance(tupleName ByteArray, id GenericInstanceId) returns ByteArray
+		let layout = try self.structTypes.get(tupleName) otherwise panic("ProgramSignatures.substituteTupleThroughInstance: `{String.from(tupleName)}` is not registered — every tuple `structRef` in the compiler was minted by `internTupleType`, which registers the layout before it hands the name back")
+
+		var substituted = MaxonTypeArray.create()
+		var moved = false
+		for element in layout.fieldTypes 'eachElement'
+			let next = self.substituteThroughInstance(element, id: id)
+			if not maxonTypesDenoteSame(next, b: element) 'elementMoved'
+				moved = true
+			end 'elementMoved'
+			substituted.push(next)
+		end 'eachElement'
+
+		// The ORIGINAL name when nothing moved — `substituteInstanceArgsThrough`'s early return, one shape over,
+		// and for its reason: a fully concrete tuple neither re-interns nor builds a name, and the caller can
+		// tell "this needed no instance view" from the answer being the same bytes it asked about.
+		if not moved 'noElementMoved'
+			return tupleName
+		end 'noElementMoved'
+
+		return try self.internTupleType(substituted, from: self.typeNames, slotScopeFilePath: layout.declFilePath) otherwise panic("ProgramSignatures.substituteTupleThroughInstance: the instance view of `{String.from(tupleName)}` was refused as a tuple element list, which its declaration view already passed")
+	end 'substituteTupleThroughInstance'
+
 	// The base struct's field `index` type as instance `id` sees it — `substituteThroughInstance` applied to the
 	// declared field type. This is what turns `Box`'s opaque `value as T` into `String` for a `Box with String`,
 	// and `HoldA`'s `items as Items` into `Array with Num` for a `HoldA with Num`, so the cascade can classify
@@ -14306,8 +14461,28 @@ export type ProgramSignatures
 	// with its arity, that made a W-slot tuple read W times cost O(W²) bytes hashed.
 	//
 	// The index is a precondition, not a case: `index` is one `indexOfField` handed out.
+	// ⭐ **A FIELD TYPED BY A BARE GENERIC NAME IS READ AT ITS DECLARING TYPE'S PARAMETERS** — `var cell as
+	// Cell` inside `type Holder uses T` is a `Cell with Holder.T`, and the layout THIS index holds is the
+	// SWEPT one, which records it as a plain `named`. The scope is the layout's own, which is what makes this
+	// the right door for it: `scopedGenericInstanceOf` needs the declaring type and its parameter names, and
+	// this function is handed the one record carrying both. Measured before it: `Self{cell: cell}` was
+	// **`E3005: cannot assign 'Cell_Ta8fe889e854d6824' to variable 'Holder.cell' of type 'struct'`** — the
+	// value's instance against the field's un-instantiated base.
 	export function fieldTypeOf(layout StructLayout, index FieldIndex, into TypeNameInterner) returns MaxonType
 		let declared = try layout.fieldTypes.get(index) otherwise panic("ProgramSignatures.fieldTypeOf: field {index} is out of range for `type {String.from(layout.name)}`, which declares {layout.fieldCount()} — every index handed out came from `indexOfField`")
+
+		// ⚠ **BOTH HALVES OF THE GATE ARE COST, AND THE SECOND IS THE LOAD-BEARING ONE.** This runs at every
+		// field access in the program and `scopedGenericInstanceOf` returns a UNION, which Maxon heap-boxes even
+		// for its payload-free arm — the +24,396 allocations `parseTypeReference` measured between
+		// `isInterfaceName` and `lookupInterface`. A NON-GENERIC declaring type can bind nothing, so the whole
+		// generics-free corpus must not reach the call at all; asking the door and letting it answer
+		// `notInScope` would be correct and would allocate once per field read.
+		if maxonTypeTag(declared) == ValueTypeTag.named and not layout.typeParamNames.isEmpty() 'maybeABareGenericName'
+			match self.scopedGenericInstanceOf(self.nameOfId(typeNameIdOf(declared)), declaringTypeName: layout.name, scopeParamNames: layout.typeParamNames) 'scoped'
+				notInScope then break 'scoped'
+				instance(gid) then return MaxonType.genericInstance(gid)
+			end 'scoped'
+		end 'maybeABareGenericName'
 
 		return self.declaredSlotType(declared, into: into, slotScopeFilePath: layout.declFilePath)
 	end 'fieldTypeOf'
