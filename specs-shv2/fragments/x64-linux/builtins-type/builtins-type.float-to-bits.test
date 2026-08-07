@@ -1,0 +1,31 @@
+// Test: builtins-type.float-to-bits
+function main() returns ExitCode
+	let bits = __Builtins.floatToBits(1.0)
+	// IEEE 754: 1.0 = 0x3FF0000000000000 = 4607182418800017408
+	if bits == 4607182418800017408 'check'
+		return 0
+	end 'check'
+	return 1
+end 'main'
+---
+ExitCode: 0
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movsdRegRip xmm0, [rip + __fconst_0]
+    x64.movqGprXmm rax, xmm0
+    x64.movRegImm rcx, 4607182418800017408
+    x64.cmpRegReg rax, rcx
+    x64.jcc equal, check
+    x64.jmp ifcont
+  check:
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 1
+    x64.popReg rbp
+    x64.ret
+}

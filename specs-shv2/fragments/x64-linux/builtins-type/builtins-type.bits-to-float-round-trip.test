@@ -1,0 +1,172 @@
+// Test: builtins-type.bits-to-float-round-trip
+// Negative zero's pattern is 0x8000000000000000, so the alias must span the
+// full signed 64-bit range to carry every IEEE 754 double's bits.
+typealias FloatBits = int(i64.min to i64.max)
+
+function roundTripBits(bits FloatBits) returns FloatBits
+	return __Builtins.floatToBits(__Builtins.bitsToFloat(bits))
+end 'roundTripBits'
+
+function main() returns ExitCode
+	// Smallest positive subnormal (0x0000000000000001). Numeric conversion of
+	// the integer 1 would give 1.0, whose bits are 4607182418800017408.
+	if roundTripBits(1) != 1 'subnormalMin'
+		return 1
+	end 'subnormalMin'
+
+	// Largest subnormal (0x000FFFFFFFFFFFFF).
+	if roundTripBits(4503599627370495) != 4503599627370495 'subnormalMax'
+		return 2
+	end 'subnormalMax'
+
+	// Positive zero (0x0000000000000000).
+	if roundTripBits(0) != 0 'positiveZero'
+		return 3
+	end 'positiveZero'
+
+	// 1.0 (0x3FF0000000000000).
+	if roundTripBits(4607182418800017408) != 4607182418800017408 'one'
+		return 4
+	end 'one'
+
+	// Negative zero: its bit pattern is 0x8000000000000000, which `==` on
+	// floats cannot detect because -0.0 == 0.0. Comparing bits does.
+	let negativeZeroBits = __Builtins.floatToBits(-0.0)
+	if roundTripBits(negativeZeroBits) != negativeZeroBits 'negativeZero'
+		return 5
+	end 'negativeZero'
+
+	// Sign bit through the float-first composition.
+	if __Builtins.bitsToFloat(__Builtins.floatToBits(-2.5)) != -2.5 'negativeValue'
+		return 6
+	end 'negativeValue'
+
+	if __Builtins.bitsToFloat(__Builtins.floatToBits(0.5)) != 0.5 'half'
+		return 7
+	end 'half'
+
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+func @roundTripBits {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movqXmmGpr xmm0, rcx
+    x64.movqGprXmm r8, xmm0
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegImm32 rcx, 1
+    x64.callDirect roundTripBits
+    x64.cmpRegImm32 r8, 1
+    x64.jcc notEqual, subnormalMin
+    x64.jmp ifcont
+  subnormalMin:
+    x64.movRegImm32 r8, 1
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm rcx, 4503599627370495
+    x64.callDirect roundTripBits
+    x64.movRegImm rax, 4503599627370495
+    x64.cmpRegReg r8, rax
+    x64.jcc notEqual, subnormalMax
+    x64.jmp ifcont
+  subnormalMax:
+    x64.movRegImm32 r8, 2
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 rcx, 0
+    x64.callDirect roundTripBits
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, positiveZero
+    x64.jmp ifcont
+  positiveZero:
+    x64.movRegImm32 r8, 3
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm rcx, 4607182418800017408
+    x64.callDirect roundTripBits
+    x64.movRegImm rax, 4607182418800017408
+    x64.cmpRegReg r8, rax
+    x64.jcc notEqual, one
+    x64.jmp ifcont
+  one:
+    x64.movRegImm32 r8, 4
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movsdRegRip xmm0, [rip + __fconst_0]
+    x64.movqGprXmm rbx, xmm0
+    x64.movRegReg rcx, rbx
+    x64.callDirect roundTripBits
+    x64.cmpRegReg r8, rbx
+    x64.jcc notEqual, negativeZero
+    x64.jmp ifcont
+  negativeZero:
+    x64.movRegImm32 r8, 5
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movsdRegRip xmm0, [rip + __fconst_1]
+    x64.movqGprXmm rax, xmm0
+    x64.movqXmmGpr xmm0, rax
+    x64.movsdRegRip xmm1, [rip + __fconst_1]
+    x64.ucomisdRegReg xmm0, xmm1
+    x64.jcc parity, negativeValue
+    x64.jmp fordered
+  fordered:
+    x64.jcc notEqual, negativeValue
+    x64.jmp ifcont
+  negativeValue:
+    x64.movRegImm32 r8, 6
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movsdRegRip xmm0, [rip + __fconst_2]
+    x64.movqGprXmm rax, xmm0
+    x64.movqXmmGpr xmm0, rax
+    x64.movsdRegRip xmm1, [rip + __fconst_2]
+    x64.ucomisdRegReg xmm0, xmm1
+    x64.jcc parity, half
+    x64.jmp fordered
+  fordered:
+    x64.jcc notEqual, half
+    x64.jmp ifcont
+  half:
+    x64.movRegImm32 r8, 7
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
