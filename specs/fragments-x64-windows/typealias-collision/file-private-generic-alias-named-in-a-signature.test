@@ -1,14 +1,18 @@
-// Test: file-private-alias-does-not-govern-another-project-file
+// Test: file-private-generic-alias-named-in-a-signature
 // --- file: aa.maxon
 typealias Cell = int(0 to 100000)
 typealias Cells = Array with Cell
 
+function wideFill(xs Cells) returns Cell
+	xs.push(70000)
+	let v = try xs.get(0) otherwise 0
+	return v
+end 'wideFill'
+
 export type Wide
 	export static function stash() returns Cell
 		var xs = Cells.create()
-		xs.push(70000)
-		let v = try xs.get(0) otherwise 0
-		return v
+		return wideFill(xs)
 	end 'stash'
 end 'Wide'
 
@@ -16,12 +20,16 @@ end 'Wide'
 typealias Cell = int(0 to 255)
 typealias Cells = Array with Cell
 
+function narrowFill(xs Cells) returns Cell
+	xs.push(200)
+	let v = try xs.get(0) otherwise 0
+	return v
+end 'narrowFill'
+
 export type Narrow
 	export static function stash() returns Cell
 		var xs = Cells.create()
-		xs.push(200)
-		let v = try xs.get(0) otherwise 0
-		return v
+		return narrowFill(xs)
 	end 'stash'
 end 'Narrow'
 
@@ -38,11 +46,10 @@ wide=70000 narrow=200
 ---
 // CompiledIR
 module {
-  func @Wide.stash() -> u32 {
+  func @wideFill(xs: i64) -> u32 {
   entry:
     x64.prologue stack_size=32
-    x64.call Array_Cell_i64_0to100000.create
-    x64.mov [rbp-8], rax
+    x64.mov [rbp-8], rcx
     x64.mov rax, [rbp-8]
     x64.mov rcx, [rbp-8]
     x64.mov rdx, 70000
@@ -56,40 +63,64 @@ module {
     x64.mov [rbp-24], rcx
     x64.xor eax, eax
     x64.cmp rdx, rax
-    x64.je Wide.stash.otherwise_default_continue_0
+    x64.je wideFill.otherwise_default_continue_0
   otherwise_default_error_0:
     x64.mov rax, [rbp-16]
     x64.mov [rbp-24], rax
-    x64.jmp Wide.stash.otherwise_default_continue_0
+    x64.jmp wideFill.otherwise_default_continue_0
   otherwise_default_continue_0:
     x64.mov rax, [rbp-24]
     x64.xor ecx, ecx
     x64.mov rdx, 100000
     x64.cmp rax, rdx
-    x64.jg Wide.stash.__range_panic_0
+    x64.jg wideFill.__range_panic_0
     x64.cmp rax, rcx
-    x64.jl Wide.stash.__range_panic_0
-    x64.jmp Wide.stash.__range_ok_0
+    x64.jl wideFill.__range_panic_0
+    x64.jmp wideFill.__range_ok_0
   __range_panic_0:
     x64.lea_symdata rax, [__panic_msg_0]
     x64.mov rcx, rax
     x64.call mrt_panic
   __range_ok_0:
-    x64.mov rbx, [rbp-8]
-    x64.test rbx, rbx
+    x64.epilogue
+    x64.ret
+  }
+  func @Wide.stash() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.call Array_Cell_i64_0to100000.create
+    x64.mov [rbp-8], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call wideFill
+    x64.mov ecx, rax
+    x64.xor edx, edx
+    x64.mov rbx, 100000
+    x64.cmp rcx, rbx
+    x64.jg Wide.stash.__range_panic_0
+    x64.cmp rcx, rdx
+    x64.jl Wide.stash.__range_panic_0
+    x64.jmp Wide.stash.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_1]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov rax, [rbp-8]
+    x64.mov [rbp-16], rcx
+    x64.test rax, rax
     x64.jz __nonnull_skip_0
     x64.mov rcx, [rbp-8]
     x64.call mm_decref
     x64.label __nonnull_skip_0
-    x64.mov rax, [rbp-24]
+    x64.mov rax, [rbp-16]
     x64.epilogue
     x64.ret
   }
-  func @Narrow.stash() -> u8 {
+  func @narrowFill(xs: i64) -> u8 {
   entry:
     x64.prologue stack_size=32
-    x64.call Array_Cell_i64_0to255.create
-    x64.mov [rbp-8], rax
+    x64.mov [rbp-8], rcx
     x64.mov rax, [rbp-8]
     x64.mov rcx, [rbp-8]
     x64.mov rdx, 200
@@ -102,13 +133,36 @@ module {
     x64.mov [rbp-24], rax
     x64.xor eax, eax
     x64.cmp rdx, rax
-    x64.je Narrow.stash.otherwise_default_continue_0
+    x64.je narrowFill.otherwise_default_continue_0
   otherwise_default_error_0:
     x64.mov rax, [rbp-16]
     x64.mov [rbp-24], rax
-    x64.jmp Narrow.stash.otherwise_default_continue_0
+    x64.jmp narrowFill.otherwise_default_continue_0
   otherwise_default_continue_0:
     x64.mov rax, [rbp-24]
+    x64.xor ecx, ecx
+    x64.mov rdx, 255
+    x64.cmp rax, rdx
+    x64.jg narrowFill.__range_panic_0
+    x64.cmp rax, rcx
+    x64.jl narrowFill.__range_panic_0
+    x64.jmp narrowFill.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_2]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.epilogue
+    x64.ret
+  }
+  func @Narrow.stash() -> u8 {
+  entry:
+    x64.prologue stack_size=16
+    x64.call Array_Cell_i64_0to255.create
+    x64.mov [rbp-8], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call narrowFill
     x64.xor ecx, ecx
     x64.mov rdx, 255
     x64.cmp rax, rdx
@@ -117,17 +171,18 @@ module {
     x64.jl Narrow.stash.__range_panic_0
     x64.jmp Narrow.stash.__range_ok_0
   __range_panic_0:
-    x64.lea_symdata rax, [__panic_msg_1]
+    x64.lea_symdata rax, [__panic_msg_3]
     x64.mov rcx, rax
     x64.call mrt_panic
   __range_ok_0:
     x64.mov rbx, [rbp-8]
+    x64.mov [rbp-16], rax
     x64.test rbx, rbx
     x64.jz __nonnull_skip_0
     x64.mov rcx, [rbp-8]
     x64.call mm_decref
     x64.label __nonnull_skip_0
-    x64.mov rax, [rbp-24]
+    x64.mov rax, [rbp-16]
     x64.epilogue
     x64.ret
   }
