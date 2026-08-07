@@ -546,16 +546,20 @@ unused parameter is E3012 — so the case gives `value` a use.)
 ⚠⚠ **THE DECLARATION MUST CARRY THE SIGNATURE THE COMPILER'S OWN EMITTED CALL PASSES, and getting that
 wrong moves the answer to a DIFFERENT DOOR** — the sentence the retired version of this case made about
 arity, MEASURED again here about types. A declaration exists, so `SemanticCheck` stops skipping the
-parser-emitted `__write_stdout` call inside `stdlib/Print.maxon` and type-checks it: with
-`(value String)` the program is refused `E3005 … expected 'String', got 'Array___ManagedByte'` at
-`stdlib/Print.maxon:10` and never reaches the tier this case is about. The buffer-and-count signature below
-is what lets every earlier check pass so the Std-tier index is what answers.
+parser-emitted `__write_stdout` call inside `stdlib/Print.maxon` and type-checks it; a signature that does
+not match is `E3005` at `stdlib/Print.maxon:10` and never reaches the tier this case is about.
+
+⇒ **SO THIS CASE ALSO PINS THE BYTE-VIEW FOLD, from the one angle a spec can see it.** The emitted call
+passes the `String` ITSELF, because `foldByteViewIntoStreamWrite` rewrites `__str_bytes_view`'s call into
+the write rather than letting the view be built — so `(value String)` is what type-checks here. Before the
+fold the argument was the view and this declaration had to be `(value __ManagedMemory)`; MEASURED, with the
+buffer signature it is now `E3005 … expected 'ByteArray', got 'String'`. Undo the fold and this case fails.
 ```maxon
 // --- stdlib-overlay: Builtins.maxon
 export typealias WrittenByteCount = int(0 to u64.max)
 
-export function __write_stdout(value __ManagedMemory) returns WrittenByteCount
-	return value.length()
+export function __write_stdout(value String) returns WrittenByteCount
+	return value.byteLength()
 end '__write_stdout'
 // --- file: main.maxon
 function main() returns ExitCode
@@ -587,8 +591,8 @@ skipped the mechanism.
 // --- stdlib-overlay: Builtins.maxon
 export typealias WrittenByteCount = int(0 to u64.max)
 
-export function __write_stdout(value __ManagedMemory) returns WrittenByteCount
-	return value.length()
+export function __write_stdout(value String) returns WrittenByteCount
+	return value.byteLength()
 end '__write_stdout'
 
 export enum __UnprintedProbe

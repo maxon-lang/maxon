@@ -103,3 +103,78 @@ a
 b
 c
 ```
+
+### The view the write consumes is FOLDED AWAY — and only when the write is its sole consumer
+
+`stdlib/Print.maxon`'s body is `__Builtins.writeStdout(value.addressableBytes())`, and
+`addressableBytes()` is `__str_bytes_view`, which `__arr_create`s a 48-byte `Array` record so the
+value can be TYPED as one. The write reads `buffer@0` and `length@8` — the two slots a String
+record already carries, at the same offsets — so that record is minted and destroyed for a consumer
+that never looks at the one slot the two disagree on. Left in, it put the allocator, the array
+runtime and the leak gate into a hello-world: **3,178 code bytes against 1,703** for a program whose
+only call is `print`.
+
+The parser therefore rewrites the producer INTO the consumer — one op, one field, the callee — but
+**only when the view is still an unconsumed owned temporary**, which is exactly "no binding has taken
+it". The two cases below are the same intrinsic on both sides of that condition, staged through the
+stdlib overlay because `addressableBytes()` is stdlib-only. Neither can see an allocation; what they
+pin is that the ANSWER is the same either way, which is the property a fold may not change.
+
+<!-- test: folded-and-unfolded-agree -->
+```maxon
+// --- stdlib-overlay: Builtins.maxon
+export typealias WrittenBytes = int(0 to u64.max)
+
+export function writeFolded(text String) returns WrittenBytes
+	return __Builtins.writeStdout(text.addressableBytes())
+end 'writeFolded'
+
+export function writeThroughABinding(text String) returns WrittenBytes
+	let bytes = text.addressableBytes()
+	return __Builtins.writeStdout(bytes)
+end 'writeThroughABinding'
+// --- file: main.maxon
+function main() returns ExitCode
+	let a = writeFolded("ab\n")
+	let b = writeThroughABinding("cde\n")
+	return (a + b) as ExitCode
+end 'main'
+```
+```exitcode
+7
+```
+```stdout
+ab
+cde
+```
+
+The same pair on the OTHER stream, because the fold is written once and keyed on the runtime entry
+the intrinsic names — so a rewrite that folded only stdout would pass the case above.
+
+<!-- test: folded-and-unfolded-agree-on-stderr -->
+```maxon
+// --- stdlib-overlay: Builtins.maxon
+export typealias WrittenBytes = int(0 to u64.max)
+
+export function errFolded(text String) returns WrittenBytes
+	return __Builtins.writeStderr(text.addressableBytes())
+end 'errFolded'
+
+export function errThroughABinding(text String) returns WrittenBytes
+	let bytes = text.addressableBytes()
+	return __Builtins.writeStderr(bytes)
+end 'errThroughABinding'
+// --- file: main.maxon
+function main() returns ExitCode
+	let a = errFolded("xy\n")
+	let b = errThroughABinding("z\n")
+	return (a + b) as ExitCode
+end 'main'
+```
+```exitcode
+5
+```
+```stderr
+xy
+z
+```

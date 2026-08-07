@@ -1474,6 +1474,11 @@ let sharedEmptyDeclaredAliasMap = ValueDeclaredAliasMap.create()
 // `recordCharLiteralOp` copies on its first write keyed on this instance's identity.
 let sharedEmptyCharLiteralOps = CharLiteralOpMap.create()
 
+// The same COW anchor for the byte-view op map (`StringBytesViewOpMap`), with the same invariant: a function
+// that never calls `addressableBytes()` INCREFS this one rather than allocating. That is every function of
+// every USER program — the method is stdlib-only — and all but four of the corpus's own.
+let sharedEmptyStringBytesViewOps = StringBytesViewOpMap.create()
+
 // The module-level shared EMPTY tuple-layout table (P1.10), held as the INITIAL value of `Parser.tupleLayouts`
 // AND as the COW anchor `internTupleLayout` keys on — `sharedEmptyInstanceAliasMap`'s pattern, for its reason
 // and with its invariant. A file that writes no tuple INCREFS this one rather than allocating a map of its
@@ -2173,6 +2178,21 @@ let MethodNameSeparatorBytes = b"."
 // `Point.create` — the name a type's method is declared and called under. ONE spelling, read by
 // `Parser.declaredMethodName` (the declaration) and `Parser.parseQualifiedCall` (the use). See
 // `MethodNameSeparator` for what a second spelling would cost.
+// ⭐ **ONE FIELD OF A `call` REPLACED — ITS CALLEE — AND EVERY OTHER CARRIED THROUGH.** The whole edit
+// `Parser.foldByteViewIntoStreamWrite` makes is this substitution: the byte view's producer becomes the
+// consumer that was going to read it, on the same result value, the same argument, the same labels, ranges
+// and mint. Written as one function so a rewrite cannot silently drop a field the op grows later — a
+// `MaxonOp.call` respelled at the rewrite site would have to be revisited every time the variant does.
+//
+// The `default` panics because the only caller reads an op INDEX its own filing site recorded as it appended
+// a `call` there; anything else is that pairing broken, which is a compiler bug and not a program's.
+function callWithCallee(op MaxonOp, callee ByteArray) returns MaxonOp
+	return match op 'c'
+		call(result, _, args, argLabels, argRanges, argImmutableNames, argDefaultSlots, mint) gives MaxonOp.call(result, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, argDefaultSlots: argDefaultSlots, mint: mint)
+		default panic("callWithCallee: the op is not a `call`, so it has no callee to replace — every caller reads an index filed by the site that appended a call at it")
+	end 'c'
+end 'callWithCallee'
+
 export function qualifiedMethodName(typeName ByteArray, methodName ByteArray) returns ByteArray
 	return "{String.from(typeName)}{MethodNameSeparator}{String.from(methodName)}".toByteArray()
 end 'qualifiedMethodName'
@@ -5938,6 +5958,22 @@ typealias ValueDeclaredAliasMap = Map with (ValueId, TypeNameId)
 // closure body (its value ids are a fresh SSA space), exactly like the sibling value columns.
 typealias CharLiteralOpMap = Map with (ValueId, OpIndex)
 
+// ⭐⭐ **WHICH OP MINTED EACH `addressableBytes()` BYTE VIEW — the map that lets a write intrinsic CONSUME the
+// String instead of the view (W35).** `__str_bytes_view` `__arr_create`s a 48-byte `Array` record so the
+// value can be TYPED as one; `__Builtins.writeStdout`/`writeStderr` read `buffer@0` and `length@8` and
+// NOTHING else — the two slots a String record already carries, at the same offsets. So when the view's sole
+// consumer is the write, the record is minted and destroyed to satisfy a type nobody reads: the allocator,
+// the array runtime and the leak gate arrive in a hello-world for it (MEASURED at 1,703 ⇒ 3,178 code bytes
+// before the fold below existed).
+//
+// The op is REWRITTEN IN PLACE for `CharLiteralOpMap`'s reason and this is how its index is found in O(1) —
+// leaving the view call behind and emitting a second one would keep the allocation this exists to remove.
+//
+// A Map rather than a dense column for `CharLiteralOpMap`'s reason: the population is a function's
+// `addressableBytes()` calls, which is zero for every user function (the method is stdlib-only) and for
+// almost every stdlib one. Reset per function and SWAPPED across a closure body, exactly like the siblings.
+typealias StringBytesViewOpMap = Map with (ValueId, OpIndex)
+
 // ⭐ **ONE PARSER MARK OVER THIS FUNCTION'S SSA VALUES — a set of the values that carry it.** The two marks
 // that wear this shape are `Parser.immutableGlobalReads` (loaded out of an IMMUTABLE top-level global's slot,
 // P1.7 slice 2b) and `Parser.bufferSurfaceValues` (denotes a `__ManagedMemory` BUFFER rather than the `Array`
@@ -7464,6 +7500,10 @@ export type Parser
 	// what an integer position does with it and why the op must be REPLACED rather than orphaned.
 	// Reset per function and SWAPPED across a closure body, exactly like the sibling value columns.
 	var charLiteralOps as CharLiteralOpMap
+	// ⭐⭐ **WHICH OP MINTED EACH `addressableBytes()` BYTE VIEW (W35)** — see `StringBytesViewOpMap` for what
+	// the stream-write fold does with it and for the allocation it removes.
+	// Reset per function and SWAPPED across a closure body, exactly like the sibling value columns.
+	var stringBytesViewOps as StringBytesViewOpMap
 	// ⭐⭐ **WHICH VALUES WERE READ OUT OF AN IMMUTABLE TOP-LEVEL GLOBAL (P1.7 slice 2b)** — the fact that
 	// stops a `let`-declared array's record from being written through a mutable ALIAS.
 	//
@@ -8167,6 +8207,7 @@ export type Parser
 			valueInstanceAlias: sharedEmptyInstanceAliasMap,
 			valueDeclaredAlias: sharedEmptyDeclaredAliasMap,
 			charLiteralOps: sharedEmptyCharLiteralOps,
+			stringBytesViewOps: sharedEmptyStringBytesViewOps,
 			immutableGlobalReads: sharedEmptyImmutableGlobalReads,
 			bufferSurfaceValues: sharedEmptyBufferSurfaceValues,
 			bufferSurfaceSlots: sharedEmptyBufferSurfaceSlots,
@@ -14964,6 +15005,7 @@ export type Parser
 		// function's SSA space (see `ValueDeclaredAliasMap`), and shares the same copy-on-write anchor.
 		self.valueDeclaredAlias = sharedEmptyDeclaredAliasMap
 		self.charLiteralOps = sharedEmptyCharLiteralOps
+		self.stringBytesViewOps = sharedEmptyStringBytesViewOps
 		// Per-function for the identical reason (P1.7 slice 2b): a marked value names an id in THIS
 		// function's SSA space, so a mark carried over would name an unrelated value in the next one.
 		self.immutableGlobalReads = sharedEmptyImmutableGlobalReads
@@ -15851,6 +15893,7 @@ export type Parser
 		self.valueInstanceAlias = sharedEmptyInstanceAliasMap
 		self.valueDeclaredAlias = sharedEmptyDeclaredAliasMap
 		self.charLiteralOps = sharedEmptyCharLiteralOps
+		self.stringBytesViewOps = sharedEmptyStringBytesViewOps
 		self.immutableGlobalReads = sharedEmptyImmutableGlobalReads
 		// ⭐ **ALL THREE, for `parseFunction`'s stated reason — "they describe one value space" (BATCH22
 		// review).** This site reset `bufferSurfaceValues` alone, and the other two crossed the boundary: a
@@ -21787,6 +21830,20 @@ export type Parser
 		self.markValueOwnsHeap(value)
 		self.pendingTempDrops.push(value)
 	end 'trackOwnedTemp'
+
+	// ⭐ **`trackOwnedTemp`'s EXACT INVERSE — the value is no longer a managed temporary at all (W35).** Its
+	// one caller is `foldByteViewIntoStreamWrite`, which rewrites the `__str_bytes_view` call that minted the
+	// record INTO the write that consumed it: there is no record any more, so both halves of the enrolment
+	// have to go. Dropping only the pending entry would leave `valueOwnsHeap` set on what is now an integer
+	// byte count, and a `let n = __Builtins.writeStdout(…)` would then bind a value the scope exit tries to
+	// DECREF — which is why this is the inverse of the whole two-step and not of its second half.
+	//
+	// ⚠ It is NOT a general "cancel an ownership" door and must not become one: releasing a temporary whose
+	// record still EXISTS is a leak. The caller's obligation is that the producing op is gone.
+	function releaseOwnedTemp(value ValueId)
+		try self.valueOwnsHeap.set(value, value: false) otherwise panic("releaseOwnedTemp: v{value} has no owned-heap slot — every SSA value must be minted through mintValue, which seeds the column")
+		self.removeFromPendingTemps(value)
+	end 'releaseOwnedTemp'
 
 	// Set `value`'s owned-heap provenance bit WITHOUT enrolling it as a statement-scoped pending temporary
 	// — the half of `trackOwnedTemp` a CONSUMED PARAMETER needs (P1.4a wave 2). The param already drops at
@@ -32859,6 +32916,14 @@ export type Parser
 	end 'emitCharacterLiteral'
 
 	// File the op a character-literal value was materialized by, so an integer position can rewrite it.
+	// `recordCharLiteralOp`'s twin for a byte view — same COW-off-the-shared-empty discipline, same reason.
+	function recordStringBytesViewOp(value ValueId, opIndex OpIndex)
+		if self.stringBytesViewOps is sharedEmptyStringBytesViewOps 'stillShared'
+			self.stringBytesViewOps = StringBytesViewOpMap.create()
+		end 'stillShared'
+		self.stringBytesViewOps.upsert(value, value: opIndex)
+	end 'recordStringBytesViewOp'
+
 	function recordCharLiteralOp(value ValueId, opIndex OpIndex)
 		// COPY-ON-WRITE off the shared empty map, exactly as `recordValueInstanceAlias` does and for its
 		// reason: a function that writes no character literal never allocates one.
@@ -36312,8 +36377,13 @@ export type Parser
 			// `ByteMemory` (`__ManagedMemory with Byte`) means here — and it is what makes the corpus's
 			// `urlBytes.slice(0, colonPos)` resolve: the buffer surface is where `slice`'s `endIndex:` label
 			// is OPTIONAL, and the corpus writes both indices positionally.
+			// The index the call below will occupy, read BEFORE the emit — `emitRuntimeCall`'s own discipline
+			// for the same reason, and what `foldByteViewIntoStreamWrite` rewrites in place. It appends
+			// exactly one op, and the fold site re-matches what it finds here rather than trusting the index.
+			let viewOpIdx = self.artifact.module.ops.count()
 			let view = self.emitOwnedRuntimeResult(StrBytesViewName, args: singletonArgs(recv.value), resultTag: ValueTypeTag.genericInstance, resultNameId: self.signatures.internSynthesizedByteInstance(), range: range)
 			self.markBufferSurface(view)
+			self.recordStringBytesViewOp(view, opIndex: viewOpIdx)
 			return view
 		end 'addressableBytes'
 		// ⚠ The RECORD is what the caller owns and drops, never the bytes — `__str_bytes_view` counts the
@@ -44732,6 +44802,18 @@ export type Parser
 		self.bufferSurfaceValues.insert(value)
 	end 'markBufferSurface'
 
+	// ⭐ `markBufferSurface`'s inverse — the value no longer denotes a buffer because the record it denoted no
+	// longer exists (W35, `foldByteViewIntoStreamWrite`). It is CLEARED rather than left to be unreachable by
+	// construction: "no integer-tagged value ever reaches a buffer-surface question" is exactly the kind of
+	// premise this compiler keeps finding false, and the mark is one `remove` to retire honestly. No
+	// copy-on-write is needed — a value can only be UNMARKED in a function that already marked one, so the
+	// set is this function's own by then.
+	function unmarkBufferSurface(value ValueId)
+		// The removal's "was it there?" answer is not a fact worth asking: the caller has just proved the
+		// value IS a byte view, and this door exists to make the mark's absence true, not to report on it.
+		_ = self.bufferSurfaceValues.remove(value)
+	end 'unmarkBufferSurface'
+
 	// ⭐ **THE ONE WRITER OF `bufferSurfaceSlots` (A2m)** — `markBufferSurface`'s twin for a TUPLE value,
 	// through the same one home for the copy-on-write (`privateValueSlotSurfaceMap`) and with the same hazard:
 	// the anchor is module-level, so a write into it names slots of an unrelated function's SSA space.
@@ -45256,6 +45338,7 @@ export type Parser
 		// The invariant is the one `CharLiteralOpMap`'s header already states ("SWAPPED across a closure body,
 		// exactly like the sibling value columns"); this is what makes it true.
 		let savedCharLiteralOps = self.charLiteralOps
+		let savedStringBytesViewOps = self.stringBytesViewOps
 		// ⛔⛔ **THE SAME DEFECT, TWICE MORE — FOUND BY SWEEPING THE RESET LIST AGAINST THIS ONE (BATCH23
 		// review).** Both are RESET below, correctly, and neither was restored, and each is a compiler PANIC
 		// on an ordinary program. They are listed here rather than beside their resets because the reset is
@@ -45371,6 +45454,7 @@ export type Parser
 		self.valueInstanceAlias = sharedEmptyInstanceAliasMap
 		self.valueDeclaredAlias = sharedEmptyDeclaredAliasMap
 		self.charLiteralOps = sharedEmptyCharLiteralOps
+		self.stringBytesViewOps = sharedEmptyStringBytesViewOps
 		self.immutableGlobalReads = sharedEmptyImmutableGlobalReads
 		self.bufferSurfaceValues = sharedEmptyBufferSurfaceValues
 		self.bufferSurfaceSlots = sharedEmptyBufferSurfaceSlots
@@ -45537,6 +45621,7 @@ export type Parser
 		self.valueInstanceAlias = savedValueInstanceAlias
 		self.valueDeclaredAlias = savedValueDeclaredAlias
 		self.charLiteralOps = savedCharLiteralOps
+		self.stringBytesViewOps = savedStringBytesViewOps
 		self.iterationLockedBindings = savedIterationLockedBindings
 		self.currentWitnessParamBase = savedWitnessParamBase
 		self.currentWitnessParamCount = savedWitnessParamCount
@@ -47533,6 +47618,14 @@ export type Parser
 			throw ParseError.builtinOperandType(String.from(callee), required: String.from(ManagedMemoryTypeName), got: self.valueDisplayTypeName(arg), line: calleeTok.line, column: calleeTok.column)
 		end 'notAManagedBuffer'
 
+		// ⭐⭐ **THE VIEW THIS WRITE WOULD HAVE CONSUMED IS FOLDED AWAY WHEN THE WRITE IS ITS ONLY CONSUMER.**
+		// See `foldByteViewIntoStreamWrite` for the two conditions and for what the fold is worth.
+		if let viewOpIdx = try self.stringBytesViewOps.get(arg) 'aByteViewOfAString'
+			if self.pendingTempsContain(arg) 'thisWriteIsItsSoleConsumer'
+				return self.foldByteViewIntoStreamWrite(arg, viewOpIdx: viewOpIdx, runtimeName: runtimeName)
+			end 'thisWriteIsItsSoleConsumer'
+		end 'aByteViewOfAString'
+
 		// The buffer is BORROWED — the runtime entry reads `buffer@0`/`length@8` through it and never takes
 		// ownership — so there is no owned temporary to enrol and a literal argument needs no decref. This is
 		// exactly how `runProcess` borrows its command line.
@@ -47540,6 +47633,43 @@ export type Parser
 		callArgs.push(arg)
 		return self.emitRuntimeCall(runtimeName, args: callArgs, resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(calleeTok))
 	end 'emitBuiltinsStreamWrite'
+
+	// ⭐⭐⭐ **`__Builtins.writeStdout(s.addressableBytes())` BECOMES `__write_stdout(s)` — ONE OP REWRITTEN, ONE
+	// FIELD CHANGED (W35).** The view exists to satisfy a TYPE, not a USE: `__str_bytes_view` `__arr_create`s a
+	// 48-byte `Array` record so the value can be an `Array with Byte`, and the write reads `buffer@0` and
+	// `length@8` — the two slots a String record already carries, at the SAME offsets (see
+	// `StringRuntime.buildStreamWrite`). So the record is minted and destroyed for a consumer that never looks
+	// at the one slot the two records disagree on (`@40`, `element_destroy` against `isAsciiFlag`), and with it
+	// arrive `__arr_create`/`__arr_decref`, the whole allocator and the leak gate.
+	//
+	// MEASURED, on a program whose only call is `print`: **3,178 code bytes with the view, 1,703 without** —
+	// which is exactly what the bare-name `print` builtin used to emit, because `buildPrintString` did these
+	// same two loads off the String record directly.
+	//
+	// ⭐ **THE REWRITE CHANGES THE CALLEE AND NOTHING ELSE.** Same result value, same single argument, same
+	// labels, ranges and mint — so the shape cannot drift and there is no second op to keep in step. The
+	// value's TYPE moves from the byte instance to `integer` (it is now the write's byte count) and its OWNED
+	// enrolment is released, which is what removes the `__arr_decref` the statement would otherwise emit.
+	//
+	// ⚠⚠ **THE NON-ESCAPE CONDITION IS `pendingTempsContain`, AND IT IS A PROOF RATHER THAN A GUESS.** That
+	// list holds exactly the owned temporaries no binding has taken (`removeFromPendingTemps` runs at every
+	// transfer, and its own header states the two homes are disjoint by construction). So a view that reached
+	// a `let`, a field, a return or a promoted scope is NOT in it and the fold declines — `arr.managed` and
+	// `let b = s.addressableBytes()` both keep the record they legitimately need. The only other reader a
+	// value in that list can have is the statement-end drop, which is the very op this removes.
+	// ⚠ The receiver's own ownership is UNTOUCHED: the write BORROWS the String exactly as `__print_string`
+	// borrowed it and as `__gt_process_run` borrows its command line, and the String is this call's argument
+	// so it outlives the call by construction — the shape `stdlib/Subprocess.maxon:529-536` records a UAF for
+	// (a byte view outliving its String) cannot arise, because nothing survives the call at all.
+	function foldByteViewIntoStreamWrite(view ValueId, viewOpIdx OpIndex, runtimeName ByteArray) returns ValueId
+		let viewOp = try self.artifact.module.ops.get(viewOpIdx) otherwise panic("foldByteViewIntoStreamWrite: ops.get({viewOpIdx}) OOB — the index was filed by `dispatchStringMethod`'s `addressableBytes` arm as it appended that very op")
+		try self.artifact.module.ops.set(viewOpIdx, value: callWithCallee(viewOp, callee: runtimeName)) otherwise panic("foldByteViewIntoStreamWrite: ops.set({viewOpIdx}) OOB — the index was read one line above")
+
+		self.releaseOwnedTemp(view)
+		self.unmarkBufferSurface(view)
+		self.retypeValue(view, valueType: MaxonType.integer)
+		return view
+	end 'foldByteViewIntoStreamWrite'
 
 	// `__Builtins.sleep(ms)` — **SUSPEND THE CURRENT GREEN THREAD** for `ms` milliseconds, yielding to the
 	// scheduler (P1.5 mid-body-yield). It emits no `MaxonOp.call` to a user function — it routes to the

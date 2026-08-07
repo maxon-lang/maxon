@@ -133,18 +133,10 @@ export let VirtualFreeSizeMustBeZero = 0x0  // dwSize is 0 for a MEM_RELEASE (re
 // `GetStdHandle(STD_OUTPUT_HANDLE)` — the handle `osWriteStdout` writes to (P1.2 wave A). The
 // parameter is a DWORD, so the 32-bit `mov` (which zero-extends) puts exactly (DWORD)-11 in ECX.
 let StdOutputHandle = 0xFFFFFFF5  // (DWORD)-11 — GetStdHandle's STD_OUTPUT_HANDLE
-// `GetStdHandle(STD_ERROR_HANDLE)` — the handle `osWriteStderr` writes to (W35). The third of the family
-// the isel materializes, named for the same reason its two siblings are.
-//
-// ⚠ **`X64Runtime.maxon` HOLDS A SECOND `StdErrorHandle`, AND THIS RUNG IS WHAT MADE THAT A DUPLICATE.**
-// `BacktraceFormat.StderrFd`'s comment records why the Windows selector stayed with that file — *"the x64
-// Windows chunk that is its only reader"* — and `printError` makes the ISEL a second reader, so the premise
-// that sentence rests on has stopped holding. The two are not interchangeable TODAY only because they serve
-// two mechanisms that share nothing else (a hand-assembled panic chunk with no register allocator against
-// this register-allocated isel), which is the same split that already puts `StdOutputHandle`/`StdInputHandle`
-// here rather than there. Unifying them means exporting from `X64Runtime.maxon`, a file outside this rung's
-// slice; REPORTED to the coordinator rather than done silently.
-let StdErrorHandle = 0xFFFFFFF4  // (DWORD)-12 — GetStdHandle's STD_ERROR_HANDLE
+// ⚠ **THE THIRD OF THIS FAMILY, `StdErrorHandle`, IS `X64Runtime`'s AND IS READ FROM THERE.** It was the
+// panic writer's alone until `printError` made this isel a second reader; it is now `export`ed rather than
+// respelled here, because one number with two spellings is the duplication a second reader creates. See its
+// declaration for why it stays in that file.
 
 // ⭐ The Win64 half of `StdLoweringShared.posixStreamFd` — which of the two selectors above a stream asks
 // `GetStdHandle` for. Exhaustive over `OsOutputStream` for that door's reason: a third stream must fail to

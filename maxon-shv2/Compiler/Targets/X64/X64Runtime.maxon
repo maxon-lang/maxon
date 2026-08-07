@@ -78,7 +78,14 @@
 let FirstStackArgDisp = ShadowSpaceBytes as Imm32
 
 // --- kernel32 ---
-let StdErrorHandle = 0xFFFFFFF4  // (DWORD)-12 — GetStdHandle's STD_ERROR_HANDLE
+//
+// ⭐ **EXPORTED AT W35, WHEN THE ISEL BECAME A SECOND READER.** `BacktraceFormat.StderrFd`'s comment records
+// why this selector lived here rather than beside its POSIX twin — *"the x64 Windows chunk that is its only
+// reader"* — and `printError` ended that: `StdToX64Conversion.win64StdHandleSelector` materializes it for
+// `osWriteStderr` exactly as it materializes `StdOutputHandle`/`StdInputHandle`. The two mechanisms still
+// share nothing else (this file hand-assembles chunks with no register allocator; the isel is
+// register-allocated), so the constant is exported rather than moved — one spelling, read from both.
+export let StdErrorHandle = 0xFFFFFFF4  // (DWORD)-12 — GetStdHandle's STD_ERROR_HANDLE
 
 // AddVectoredExceptionHandler(First = 1, handler): 1 = call this handler BEFORE any
 // previously registered one.
