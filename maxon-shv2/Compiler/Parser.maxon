@@ -7619,8 +7619,16 @@ export type Parser
 	// at all (measured: `self.sink.push(x)` where `sink` is a user generic type whose `push` borrows). No token
 	// signal separates that body from `Container.push`'s — the two are the same shape, one receiver type apart —
 	// so the disagreement is caught at the end of the body and REFUSED, the exact sibling of
-	// `emitOpaqueArrayCreateOp`'s closure refusal and `parseFunction`'s `staticLayoutNeedsSelfReturn`. Like both,
-	// it can reject nothing that used to compile: everything it rejects used to abort the compiler.
+	// `emitOpaqueArrayCreateOp`'s closure refusal and `parseFunction`'s `staticLayoutNeedsSelfReturn`.
+	//
+	// ⚠ **IT DOES NOT ONLY CATCH BODIES THAT USED TO ABORT, AND THIS COMMENT CLAIMED IT DID (corrected at review).**
+	// A drop with no descriptor also arises where the RESERVATION side is the one that is missing, and there the
+	// predecessor compiled a correct program: MEASURED on `cad4cf30d`, a conditional `items.push(item)` inside a
+	// `extension Container` on a generic type compiles and exits 0, and on this tip it is refused — because
+	// `computeTypeDescriptorNeeds` is run for a `type` declaration's body and never for an EXTENSION's, so no
+	// extension method can reserve the slot. That is a REFUSAL, not a wrong answer, and the gap it stands on is
+	// filed rather than closed here (extension-scope descriptor needs is its own row). What must not stand is the
+	// claim: this guard's reach is "a drop the function has no descriptor for", whatever put it there.
 	var functionCarriesLayoutParam as bool
 	var functionDroppedOpaqueWithoutDescriptor as bool
 	// ⭐ **THE ENCLOSING TYPE'S MEMBER METHODS, bare name -> takesReceiver (#65)** — the map that resolves a
@@ -8942,7 +8950,7 @@ export type Parser
 		// ⭐ Whether the declaration takes a receiver decides where its own parameters sit in a CALL's
 		// argument list, so it is read here, once, and shared by the default scan below and the consume scan
 		// at the end of this routine — the two facts that are recorded CALL-ALIGNED.
-		let takesReceiver = not self.enclosingType.isEmpty() and not hasStaticModifier
+		let takesReceiver = self.declarationTakesReceiver(hasStaticModifier)
 		// ⭐ **PARAMETER DEFAULTS (BATCH2 slice 4)** — recorded from the SAME token walk, and the ONLY place
 		// the whole program learns that a call may legally omit an argument. It also publishes each
 		// synthesized helper's RETURN TYPE into `entries`, which is what lets a call site in another file
@@ -9245,8 +9253,20 @@ export type Parser
 			//
 			// An array MUTATOR call (`markOpaqueArrayMutatorFeeds`, receiver-blind) and a bare-field REASSIGNMENT
 			// `self.saved = item` (`markOpaqueFieldReassignFeed`, P1.7 Finding A) are the two opaque-`T`
-			// callee-storage shapes; the reassignment is `self`-headed because a field WRITE is the one shape
-			// implicit self does not spell (a bare `saved = item` is a local assignment).
+			// callee-storage shapes.
+			//
+			// ⚠ **THE REASSIGNMENT IS STILL `self`-HEADED, AND NOT BECAUSE IMPLICIT SELF CANNOT SPELL IT**
+			// (this said *"a bare `saved = item` is a local assignment"* — corrected at review; a bare field name
+			// on the left of an `=` inside an instance method IS a store through the receiver, routed to
+			// `parseSelfFieldAssignment` at the `binding.isSelfField` arm of the assignment parse). It is
+			// `self`-headed because the SWEEP cannot tell the two apart: `self . <ident> =` is self-identifying,
+			// while a bare `<ident> =` needs the enclosing type's FIELD NAMES, which are not merged into
+			// `self.signatures` when this runs — and marking a local assignment as a feed would enrol a parameter
+			// owned that nothing moves. So the implicit spelling records no feed. MEASURED, on this tip and on
+			// `cad4cf30d` alike, that is a FALSE REJECT and not a memory-safety hole: `emitOpaqueFieldReassign`
+			// demands an owned value at the store and refuses the un-fed parameter cleanly (E2015), where the
+			// `self.`-spelled twin compiles and runs. Widening it needs a sweep-time opaque-field roster — filed,
+			// not built here.
 			//
 			// ⚡ Gated on `genericScope` because a feed needs a type-parameter-typed parameter and outside a
 			// generic type there is none (`paramIsTypeParamTyped` is false for every index when
@@ -9502,6 +9522,19 @@ export type Parser
 	function functionDeclIsStatic(functionTok TokenIndex) returns bool
 		return functionTok > 0 and self.kindAt((functionTok - 1) as TokenIndex) == TokenKind.static
 	end 'functionDeclIsStatic'
+
+	// ⛔ **DOES A DECLARATION CARRYING `hasStaticModifier` TAKE A RECEIVER — the ONE place that conjunction is
+	// spelled.** `static` alone does not answer it: a TOP-LEVEL function carries no modifier and takes no
+	// receiver either, so the enclosing type has to be in the test. It is the fact both scans of a generic type's
+	// methods align their per-parameter facts to — `recordScannedSignature` prepends `SelfParamName` at slot 0
+	// iff this is true, and `feedScanParams` must prepend it in exactly the same cases or the transitive fixpoint
+	// republishes a method's feeds one slot off its call site. Written twice, the two spellings agreed only
+	// because `scanTypeMethodFeeds` runs where `enclosingType` is never empty — an accident of the caller, not a
+	// property of the rule, and `callAlignedInstanceParams`' own header names the price of losing it (a feed that
+	// fires on the wrong parameter, so a leak or a double-move).
+	function declarationTakesReceiver(hasStaticModifier bool) returns bool
+		return not self.enclosingType.isEmpty() and not hasStaticModifier
+	end 'declarationTakesReceiver'
 
 	// Is the identifier at `aliasPos` a member-level opaque-`T` array alias being CONSTRUCTED — the
 	// construction that seeds the descriptor need (P1.7 slice 3b-i)? `X` qualifies (`Container.X`) to a
@@ -9958,7 +9991,7 @@ export type Parser
 			end 'typeEnd'
 			if self.functionDeclarationAt(q) 'method'
 				var typeParamPositions = TypeParamPositionArray.create()
-				let takesReceiver = not self.functionDeclIsStatic(q)
+				let takesReceiver = self.declarationTakesReceiver(self.functionDeclIsStatic(q))
 				let paramNames = self.feedScanParams((q + 2) as TokenIndex, takesReceiver: takesReceiver, typeParamPositionsOut: typeParamPositions)
 				let scan = self.scanOneMethodFeedSignals(q + 2, funcName: qualifiedMethodName(self.enclosingType, methodName: self.tokenAt(q + 1).value), paramNames: paramNames, typeParamPositions: typeParamPositions, takesReceiver: takesReceiver)
 				scans.push(scan)
@@ -10150,11 +10183,7 @@ export type Parser
 	end 'forwardEdgeCalleePos'
 
 	// Write each transitively-fed method's final feeds into `paramConsumes`. Only a method that GAINED a feed at a
-	// non-directly-fed parameter is touched: replace the sweep's DIRECT-feed entry in place (a forwarder that ALSO
-	// directly feeds), or append a fresh one (a PURE forwarder the sweep recorded no entry for). An instance method
-	// has no plain consume bit (`detectFieldStores: false`), so the bits are all false; the feeds are read straight
-	// off the solved `isFeed` nodes. A method whose feeds are entirely direct is left as the sweep recorded it, so a
-	// type with no forwarder is byte-identical.
+	// non-directly-fed parameter is touched, so a type with no forwarder is byte-identical.
 	//
 	// ⚠ EVERY feed published here is a CALLEE-STORAGE one, and structurally so: the fixpoint's seeds are exactly
 	// the two direct callee-storage shapes (`markOpaqueArrayMutatorFeeds`, `markOpaqueFieldReassignFeed`), and a
@@ -10166,35 +10195,58 @@ export type Parser
 				continue
 			end 'noGain'
 			let scan = try scans.get(i) otherwise panic("publishTransitiveFeeds: scans.get({i}) OOB")
-			let base = try paramBase.get(i) otherwise panic("publishTransitiveFeeds: paramBase.get({i}) OOB")
-			var bits = BoolArray.create()
-			var feeds = TypeParamFeedArray.create()
-			for p in 0 upto scan.paramNames.count() 'buildFeeds'
-				bits.push(false)
-				let feedParam = try isFeed.get(base + p) otherwise panic("publishTransitiveFeeds: isFeed.get OOB at ({base}+{p})")
-				if feedParam 'feedParam'
-					feeds.push(TypeParamFeed.feeds(self.paramTypeParamPositionAt(scan.typeParamPositions, index: p), sink: FeedSink.calleeStorage))
-				end 'feedParam' else 'plainParam'
-					feeds.push(TypeParamFeed.none)
-				end 'plainParam'
-			end 'buildFeeds'
-			self.replaceOrAppendParamConsume(paramConsumes, feedStart: feedStart, entry: ParamConsumeEntry.create(scan.funcName, info: ParamConsumeInfo.create(scan.paramNames, bits: bits, feeds: feeds)))
+			self.mergeGainedFeedsInto(paramConsumes, feedStart: feedStart, scan: scan, nodeBase: try paramBase.get(i) otherwise panic("publishTransitiveFeeds: paramBase.get({i}) OOB"), isFeed: isFeed)
 		end 'publish'
 	end 'publishTransitiveFeeds'
 
-	// Publish one transitively-fed method's consume entry: REPLACE the sweep's direct-feed entry for this method in
-	// place, or APPEND a fresh one when the sweep recorded none (a pure forwarder). Only entries added since
-	// `feedStart` — this type's own methods — are searched, and method names are whole-program unique, so the match
-	// is exact.
-	function replaceOrAppendParamConsume(paramConsumes ParamConsumeEntryArray, feedStart ElementCount, entry ParamConsumeEntry)
+	// ⛔⛔ **THE SWEEP'S ENTRY IS THE BASE THE SOLVED FEEDS ARE MERGED ONTO — NOT A DRAFT TO BE THROWN AWAY.**
+	// Replace this method's swept entry in place, or append a fresh one when the sweep filed none (a pure
+	// forwarder). Only entries added since `feedStart` — this declaration's own methods — are searched, and method
+	// names are whole-program unique, so the match is exact; ONE search serves both the READ of the swept facts and
+	// the WRITE of the merged entry, so the two cannot come to disagree about which entry is this method's.
+	//
+	// ⚠ **IT USED TO REBUILD THE ENTRY FROM THE SOLVED NODES ALONE, ON A PREMISE W10 RETIRED.** The premise was
+	// *"an instance method has no plain consume bit (`detectFieldStores: false`), so the bits are all false"* — and
+	// it held only while a RECEIVERLESS function could never be published here (`scanTypeMethodFeeds` called a
+	// `static` "inert in the fixpoint"). A receiverless function is the one kind scanned with
+	// `detectFieldStores: true`, so it is the one kind that carries facts this fixpoint never computes — its plain
+	// consume bits AND its `Self{f: p}` CONSTRUCTOR feeds, which have no node here and so read as `none` off the
+	// solved column. MEASURED: a `static of(first Element, single Element)` that FORWARDS `first` to a sibling that
+	// pushes, and stores `single` into a type-parameter field, lost `single`'s constructor feed the moment `first`
+	// made the method `gained` — the concrete call site then borrowed a `String` the box destroys, `0xC0000005`.
+	// (Its direct-feed twin, one `xs.push(first)` instead of the forward, never entered here and was correct — a
+	// difference no rule could justify.) So the fixpoint may only turn feeds ON.
+	function mergeGainedFeedsInto(paramConsumes ParamConsumeEntryArray, feedStart ElementCount, scan MethodFeedScan, nodeBase CsrIndex, isFeed BoolArray)
 		for i in feedStart upto paramConsumes.count() 'find'
-			if (try paramConsumes.get(i) otherwise panic("replaceOrAppendParamConsume: paramConsumes.get({i}) OOB")).name.equals(entry.name) 'match'
-				try paramConsumes.set(i, value: entry) otherwise panic("replaceOrAppendParamConsume: paramConsumes.set({i}) OOB")
+			let filed = try paramConsumes.get(i) otherwise panic("mergeGainedFeedsInto: paramConsumes.get({i}) OOB")
+			if filed.name.equals(scan.funcName) 'match'
+				try paramConsumes.set(i, value: ParamConsumeEntry.create(scan.funcName, info: self.feedsMergedOnto(filed.info, scan: scan, nodeBase: nodeBase, isFeed: isFeed))) otherwise panic("mergeGainedFeedsInto: paramConsumes.set({i}) OOB")
 				return
 			end 'match'
 		end 'find'
-		paramConsumes.push(entry)
-	end 'replaceOrAppendParamConsume'
+
+		// The sweep filed NOTHING for this method — a PURE forwarder, which neither consumes nor directly feeds.
+		// An EMPTY facts record says exactly that and is not a placeholder: `isConsumed` / `typeParamFeedOf` read
+		// every index past their own column as `false` / `none`, which is the content of "the sweep recorded
+		// nothing here".
+		paramConsumes.push(ParamConsumeEntry.create(scan.funcName, info: self.feedsMergedOnto(ParamConsumeInfo.create(scan.paramNames, bits: BoolArray.create(), feeds: TypeParamFeedArray.create()), scan: scan, nodeBase: nodeBase, isFeed: isFeed)))
+	end 'mergeGainedFeedsInto'
+
+	// `prior` with this method's solved feed nodes turned ON: a node the fixpoint marked becomes a CALLEE-STORAGE
+	// feed, every other position keeps whatever the sweep put there. The plain consume bits ride across untouched —
+	// the fixpoint has no opinion about them, and an opinion it does not hold must not be published as `false`.
+	function feedsMergedOnto(prior ParamConsumeInfo, scan MethodFeedScan, nodeBase CsrIndex, isFeed BoolArray) returns ParamConsumeInfo
+		var feeds = TypeParamFeedArray.create()
+		for p in 0 upto scan.paramNames.count() 'buildFeeds'
+			let feedParam = try isFeed.get(nodeBase + p) otherwise panic("feedsMergedOnto: isFeed.get OOB at ({nodeBase}+{p})")
+			if feedParam 'feedParam'
+				feeds.push(TypeParamFeed.feeds(self.paramTypeParamPositionAt(scan.typeParamPositions, index: p), sink: FeedSink.calleeStorage))
+			end 'feedParam' else 'sweptParam'
+				feeds.push(prior.typeParamFeedOf(p))
+			end 'sweptParam'
+		end 'buildFeeds'
+		return ParamConsumeInfo.create(scan.paramNames, bits: prior.bits, feeds: feeds)
+	end 'feedsMergedOnto'
 
 	// ⭐ **READ A PARAMETER LIST IN ONE WALK (P1.6-A/B2)** — the ordered NAMES out of the `(…)` beginning at
 	// `parenPos` (returned), and IN THE SAME PASS the type-parameter POSITION each parameter's declared type
@@ -14904,15 +14956,25 @@ export type Parser
 	// `insert` merely BORROWS, and the two are the same token shape one receiver TYPE apart, which the pre-scan
 	// (running before any body is parsed) cannot resolve. So the over-detected case is refused here.
 	//
-	// It rejects nothing that used to compile: without this the drop reached
-	// `LowerMaxonToStd.appendDropTypeParamDescriptor`, which ABORTS THE COMPILER on it — naming the function and
-	// no source position (measured on `self.sink.push(x)` for a user-type `sink`, and reachable equally through
-	// the local and implicit-self receivers W10 added).
+	// ⚠⚠ **THAT IS ITS ORIGINATING CASE AND NOT ITS REACH, AND THE MESSAGE USED TO ASSERT THE CASE AS THE CAUSE**
+	// (corrected at review, both measured on this tip):
+	//
+	//   • `static shrink(xs ElementArray)` doing `xs.pop()` — a drop of a MOVED-OUT element, no `push` anywhere.
+	//     `movesOutArrayElement` carries `not isStatic`, so the static reserves nothing. On `cad4cf30d` this
+	//     ABORTED in `LowerMaxonToStd.appendDropTypeParamDescriptor`; here it is refused with a position.
+	//   • a conditional `items.push(item)` inside an `extension Container` on a generic type — a real opaque array,
+	//     a real move-in, and the RESERVATION side is what is missing: `computeTypeDescriptorNeeds` runs for a
+	//     `type` body and never for an EXTENSION's. On `cad4cf30d` this **compiles and exits 0**, so this guard
+	//     does turn one previously-compiling program red. It is a refusal rather than a wrong answer, and the gap
+	//     under it (extension-scope descriptor needs) is filed rather than closed here.
+	//
+	// So the message states the FACT it is certain of — a drop with no descriptor to drop through — and offers the
+	// causes as causes.
 	function requireDescriptorForOpaqueDrops(nameTok Token) throws ParseError
 		if not self.functionDroppedOpaqueWithoutDescriptor 'nothingOwed'
 			return
 		end 'nothingOwed'
-		throw ParseError.unsupported("'{String.from(nameTok.value)}' owns an opaque type-parameter value it must release on some path, but the method reserves no layout descriptor to release it through — the shared generic body compiles once for every instantiation, so the element's destructor is read from the enclosing instance's descriptor at run time, and the parameter carrying it is reserved only for a method whose feed can be left live. This happens when a type-parameter argument is handed to a `push`/`set`/`insert` on something that is NOT an `Array` and does not take ownership of it: move it into an `Array with <type parameter>` (or a type-parameter field), or take the argument on a method that consumes it", line: nameTok.line, column: nameTok.column)
+		throw ParseError.unsupported("'{String.from(nameTok.value)}' owns an opaque type-parameter value it must release on some path, but the method reserves no layout descriptor to release it through — the shared generic body compiles once for every instantiation, so the value's destructor is read from the enclosing instance's descriptor at run time, and the parameter carrying it is reserved only for the method shapes that are known ahead of the body to need one. Three shapes reach this: a type-parameter argument handed to a `push`/`set`/`insert` on something that is NOT an `Array` and so never takes ownership of it (move it into an `Array with <type parameter>` or a type-parameter field instead); a `pop`/`remove` of an opaque element in a `static function` (do it on an instance method, which can source the descriptor from `self`); and any of these inside an `extension` body, whose methods reserve no descriptor at all (declare the method in the type's own body)", line: nameTok.line, column: nameTok.column)
 	end 'requireDescriptorForOpaqueDrops'
 
 	// Commit this function's accumulated range-check sites to the artifact (P1.9), keyed by `name`.
@@ -43170,6 +43232,12 @@ export type Parser
 	// (which would need a descriptor a trivial method does not carry). A non-owned RHS (aliasing one opaque field
 	// into another, whose descriptor-gated copy is a later slice) is refused cleanly rather than storing a borrow.
 	function emitOpaqueFieldReassign(box ValueId, layout StructLayout, index FieldIndex, value ValueId, fieldType MaxonType, argBareLocal bool, anchor Token, range SourceRange) throws ParseError
+		// ⚠ **THE SAME DEMAND `requireOwnedOpaqueElement` MAKES AT THE ARRAY MOVE-IN (W10), and the two are one
+		// rule enforced at two doors ~1,000 lines apart: an opaque sink destroys what it is given exactly once and
+		// the shared body cannot COPY an opaque `T` to balance that.** Kept as two THROWS because each names its
+		// own sink, but the PREDICATE must stay one: a widening — W20's borrowed-opaque retain is exactly one —
+		// landing on only one of them is not a diagnostic, it is one sink taking a reference nobody transferred
+		// while the other refuses the identical program.
 		if not self.valueIsOwnedHeap(value) 'notOwned'
 			throw ParseError.unsupported("reassigning the opaque type-parameter field '{String.from(anchor.value)}' of '{String.from(layout.name)}' from a value that is not an owned parameter — the shared generic body cannot copy an opaque `T` value, so assign it from a parameter the method consumes; aliasing one opaque field into another needs the descriptor-gated copy a later slice adds", line: anchor.line, column: anchor.column)
 		end 'notOwned'

@@ -1702,7 +1702,7 @@ array would make two arrays each destroy it once, so the array move-in door refu
 refuses a `get`: the shared body has no way to copy an opaque `T`, and this is the copy the program is asking
 for.
 
-⚠ **THIS IS THE ONE NEW REFUSAL IN THIS RUNG THAT TURNS A COMPILING PROGRAM RED, AND THE COORDINATOR MEASURED IT RATHER THAN TAKING THE CLAIM.** On the merge base (`cad4cf30d`) this exact program **compiles and exits 0** — not because it is sound, but because `main` never calls `copyInto`, so the unsound body is never reached. Its two siblings in this rung are strict improvements by comparison: `feed-into-borrowing-user-push-rejected` **panicked the compiler** on the base (`appendDropTypeParamDescriptor`), and `push-borrowed-opaque-element-rejected` **compiled and segfaulted** (exit 139). ⭐ **The body is refused rather than the CALL, and that is deliberate and consistent**: `emitOpaqueFieldReassign` already refuses the identical borrow at a FIELD store, and shv2 refuses an unsound opaque body at the statement (the owned-opaque `return`) rather than compiling it and hoping nothing reaches it. ⚠ Measured blast radius INSIDE the corpus: **zero** — the full suite is green, which builds the whitelisted stdlib for every case. Outside it, what this newly refuses is a body that could not be called anyway: the base answers `E3005 expected 'Container.ElementArray', got 'StringArray'` at any external call site (board row `W25`), and emits that diagnostic twice (`W24`).
+⚠ **THIS IS ONE OF THE TWO NEW REFUSALS IN THIS RUNG THAT TURN A COMPILING PROGRAM RED, AND THE COORDINATOR MEASURED IT RATHER THAN TAKING THE CLAIM.** *(It read as the only one until review measured the second: `requireDescriptorForOpaqueDrops` also turns red a conditional `items.push(item)` inside an `extension` on a generic type, which on `cad4cf30d` compiles and exits 0 — see that guard's own header. The claim it carried, "everything it rejects used to abort the compiler", was false; the guard is kept and the claim is not.)* On the merge base (`cad4cf30d`) this exact program **compiles and exits 0** — not because it is sound, but because `main` never calls `copyInto`, so the unsound body is never reached. Its two siblings in this rung are strict improvements by comparison: `feed-into-borrowing-user-push-rejected` **panicked the compiler** on the base (`appendDropTypeParamDescriptor`), and `push-borrowed-opaque-element-rejected` **compiled and segfaulted** (exit 139). ⭐ **The body is refused rather than the CALL, and that is deliberate and consistent**: `emitOpaqueFieldReassign` already refuses the identical borrow at a FIELD store, and shv2 refuses an unsound opaque body at the statement (the owned-opaque `return`) rather than compiling it and hoping nothing reaches it. ⚠ Measured blast radius INSIDE the corpus: **zero** — the full suite is green, which builds the whitelisted stdlib for every case. Outside it, what this newly refuses is a body that could not be called anyway: the base answers `E3005 expected 'Container.ElementArray', got 'StringArray'` at any external call site (board row `W25`), and emits that diagnostic twice (`W24`).
 
 <!-- test: push-for-element-into-second-opaque-array-rejected -->
 ```maxon
@@ -1790,5 +1790,176 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:25:18: Unsupported: 'add' owns an opaque type-parameter value it must release on some path, but the method reserves no layout descriptor to release it through — the shared generic body compiles once for every instantiation, so the element's destructor is read from the enclosing instance's descriptor at run time, and the parameter carrying it is reserved only for a method whose feed can be left live. This happens when a type-parameter argument is handed to a `push`/`set`/`insert` on something that is NOT an `Array` and does not take ownership of it: move it into an `Array with <type parameter>` (or a type-parameter field), or take the argument on a method that consumes it
+error E2015: <fragment>:25:18: Unsupported: 'add' owns an opaque type-parameter value it must release on some path, but the method reserves no layout descriptor to release it through — the shared generic body compiles once for every instantiation, so the value's destructor is read from the enclosing instance's descriptor at run time, and the parameter carrying it is reserved only for the method shapes that are known ahead of the body to need one. Three shapes reach this: a type-parameter argument handed to a `push`/`set`/`insert` on something that is NOT an `Array` and so never takes ownership of it (move it into an `Array with <type parameter>` or a type-parameter field instead); a `pop`/`remove` of an opaque element in a `static function` (do it on an instance method, which can source the descriptor from `self`); and any of these inside an `extension` body, whose methods reserve no descriptor at all (declare the method in the type's own body)
+```
+
+### A TYPE EXTENSION's array mutator feeds the opaque element exactly as the type's own body does
+
+An `extension Container` on a generic type is inside that type's parameter scope, so `items.push(item)`
+written there is the same store, marks the same feed and must emit the same program. It did not: the
+extension body's mutator went unrecognized for the same reason the type body's implicit spelling did, and the
+concrete call site handed the array a String it had not transferred (**measured on `cad4cf30d`: exit 139**;
+the `self.`-spelled twin in the same body exits 0, which is how narrow the hole was).
+
+⚠ **THE ELEMENTS ARE BUILT AT RUN TIME AND NOT WRITTEN AS LITERALS, DELIBERATELY.** A literal String can live
+in `.rdata` and never be freed at all, so a missed transfer over one is silent — a case spelled that way would
+pass for the wrong reason. Interpolating a loop-carried `var` gives a genuinely heap-owned record, so a missed
+transfer is a double free (SIGSEGV) or an unbalanced drop (exit 101), and the run says which.
+
+⚠ Extension scope is only pinned here for a DIRECT feed. A forwarder in an extension body
+(`add(item)` → `store(item)`) still segfaults on this tip and on `cad4cf30d` alike — the transitive feed
+fixpoint (`recordTransitiveArrayFeeds`) is run for a `type` declaration's body and never for an extension's —
+and so is a conditional one, which is refused because `computeTypeDescriptorNeeds` is likewise never run
+there. Both are filed, not closed here.
+
+<!-- test: extension-body-push-feeds-opaque-element -->
+```maxon
+typealias ExitCode = int(0 to 125)
+typealias Count = int(0 to u64.max)
+
+type Container uses Element
+	typealias ElementArray = Array with Element
+
+	export var items as ElementArray
+
+	export static function create() returns Self
+		return Self{ items: ElementArray.create() }
+	end 'create'
+
+	export function count() returns Count
+		return items.count()
+	end 'count'
+end 'Container'
+
+extension Container
+	export function stash(item Element)
+		items.push(item)
+	end 'stash'
+end 'Container'
+
+typealias StringContainer = Container with String
+
+function main() returns ExitCode
+	var seed = 0
+	while seed < 3 'grow'
+		seed = seed + 1
+	end 'grow'
+
+	var sc = StringContainer.create()
+	let owned = "heap-built element number {seed} long enough to escape any small-string envelope"
+	sc.stash(owned)
+	let second = "heap-built element number {seed + 1} long enough to escape any small-string envelope"
+	sc.stash(second)
+	if sc.count() == 2 'check'
+		return 0
+	end 'check'
+	return 1
+end 'main'
+```
+```exitcode
+0
+```
+
+### A static that GAINS a forwarded feed keeps the constructor feed it already had
+
+The transitive fixpoint republishes a method's whole consume record, and W10 made a receiverless function
+reachable there for the first time — a `static` is the one kind of function scanned with
+`detectFieldStores: true`, so it is the one kind carrying facts the fixpoint never computes: its plain consume
+bits, and its `Self{f: p}` CONSTRUCTOR feeds. Rebuilt from the solved nodes alone, `single`'s constructor feed
+vanished the moment `first` made the method a gainer, and the concrete call site then borrowed a String the
+box destroys (**measured: exit 139**). Its direct-feed twin — `xs.push(first)` in place of the forward, so the
+method never enters the fixpoint's publish path at all — was correct throughout, which is the giveaway: one
+spelling of the same store cannot cost another parameter its ownership. The fixpoint may only turn feeds ON.
+
+<!-- test: static-forward-keeps-its-constructor-feed -->
+```maxon
+typealias ExitCode = int(0 to 125)
+typealias Count = int(0 to u64.max)
+
+type Holder uses Element
+	typealias ElementArray = Array with Element
+
+	export var items as ElementArray
+	export var single as Element
+
+	static function fill(xs ElementArray, first Element)
+		xs.push(first)
+	end 'fill'
+
+	export static function of(first Element, single Element) returns Self
+		var xs = ElementArray.create()
+		fill(xs, first: first)
+		return Self{ items: xs, single: single }
+	end 'of'
+
+	export function count() returns Count
+		return items.count()
+	end 'count'
+end 'Holder'
+
+typealias StringHolder = Holder with String
+
+function main() returns ExitCode
+	var seed = 0
+	while seed < 3 'grow'
+		seed = seed + 1
+	end 'grow'
+
+	let h = StringHolder.of("forwarded element number {seed} long enough to escape the envelope", single: "constructed element number {seed} long enough to escape the envelope")
+	if h.count() == 1 'check'
+		return 0
+	end 'check'
+	return 1
+end 'main'
+```
+```exitcode
+0
+```
+
+### The same static WITHOUT the forward — the control that was always green
+
+The direct-feed spelling of the case above: `of` pushes into the local array itself rather than through
+`fill`, so it never becomes a gainer and the fixpoint never republishes it. It passes on `cad4cf30d`'s
+successor and on this tip, and it is what makes the case above a REGRESSION rather than a missing feature —
+the two programs differ only in which method spells the push.
+
+<!-- test: static-direct-feed-keeps-its-constructor-feed -->
+```maxon
+typealias ExitCode = int(0 to 125)
+typealias Count = int(0 to u64.max)
+
+type Holder uses Element
+	typealias ElementArray = Array with Element
+
+	export var items as ElementArray
+	export var single as Element
+
+	export static function of(first Element, single Element) returns Self
+		var xs = ElementArray.create()
+		xs.push(first)
+		return Self{ items: xs, single: single }
+	end 'of'
+
+	export function count() returns Count
+		return items.count()
+	end 'count'
+end 'Holder'
+
+typealias StringHolder = Holder with String
+
+function main() returns ExitCode
+	var seed = 0
+	while seed < 3 'grow'
+		seed = seed + 1
+	end 'grow'
+
+	let h = StringHolder.of("pushed element number {seed} long enough to escape the envelope", single: "constructed element number {seed} long enough to escape the envelope")
+	if h.count() == 1 'check'
+		return 0
+	end 'check'
+	return 1
+end 'main'
+```
+```exitcode
+0
 ```
