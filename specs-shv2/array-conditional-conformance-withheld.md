@@ -94,6 +94,19 @@ error E4006: <fragment>:19:7: Type 'Array' has no field named 'equals' ('equals'
 
 <!-- test: error.a-map-key-array-is-refused-for-its-element -->
 ### A `Map` key array is refused for its ELEMENT, not as an unserved key type
+
+⭐ **THE SENTENCE MOVED WHEN `Map` STOPPED BEING SYNTHESIZED (W41), AND THE RULE IT NOW QUOTES IS THE
+GENERAL ONE.** This used to be a bespoke `E2015` the builtin map's own key gate wrote. `Map` is
+`stdlib/Map.maxon` now, declared `where Key is Hashable and Equatable` — so the refusal is the
+ordinary `where`-constraint refusal every generic gets, at the instantiation rather than at the
+`create()`. That is a better answer twice over: it NAMES the constraint that failed, and it is one
+rule instead of a container-specific copy of one.
+
+⚠ **BOTH constraints are reported, and that is the clause count rather than a duplicate.** `Key` is
+constrained twice; `OpaqueArr` discharges neither, so `checkOneInstantiation` reports each. The
+`Array`-element reasoning this case is named for has not gone anywhere — it is why `OpaqueArr`
+reduces to a conformer name nothing claims (`instanceConformerName`'s conditional `Array` arm), and
+the sibling `E4006` cases above still state it in full.
 ```maxon
 typealias Val = int(i64.min to i64.max)
 
@@ -114,7 +127,8 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:16:10: Unsupported: `Map` hashes and compares its keys through their `Hashable`/`Equatable` witnesses, and `Array` supplies those only as a conditional extension (where Element is Hashable and Equatable) — this key's element 'Opaque' does not implement 'Hashable'
+error E3017: <fragment>:13:11: Type 'OpaqueArr' does not satisfy constraint 'Hashable' required by type parameter 'Key' of 'Map'
+error E3017: <fragment>:13:11: Type 'OpaqueArr' does not satisfy constraint 'Equatable' required by type parameter 'Key' of 'Map'
 ```
 
 <!-- test: error.a-set-key-array-spelled-inline-is-refused-the-same-way -->
@@ -142,7 +156,21 @@ error E2015: <fragment>:15:10: Unsupported: `Set` hashes and compares its keys t
 ```
 
 <!-- test: error.a-key-type-nothing-conforms-for-still-reads-as-a-later-slice -->
-### A key that is not an array at all keeps the roster sentence
+### A key that is not an array at all is refused by its CONSTRAINT
+
+⚠⚠ **THIS CASE'S ID IS HISTORICAL AND ITS SECOND HALF IS NOW FALSE — read the heading, not the
+name.** It was minted when `Map` was synthesized and its keys were a fixed roster of four
+(`int`, `String`, `Character`, `Array`), so anything else "is a later slice". W41 listed
+`stdlib/Map.maxon` and retired the builtin: **the roster is gone, and any `Hashable + Equatable` type
+is a key** — `map.md`'s `a-user-type-can-be-a-map-key` pins a user `Point` doing exactly that, agreed
+with the oracle. What is left to refuse here is a type that implements NEITHER, which the ordinary
+`where`-constraint check reports against `Map`'s own declared clause.
+
+The id is kept rather than corrected because it names two COMMITTED golden fragments, one of them
+`x64-linux`, which cannot be regenerated on this host — orphaning a cross-target golden to fix a
+name would trade a stale word for a lost measurement. The note is the cheaper honest fix; see
+`spec-marker-can-be-a-sentence` for why the wording is called out at all rather than left to be
+believed.
 ```maxon
 typealias Val = int(i64.min to i64.max)
 
@@ -162,7 +190,8 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:15:10: Unsupported: `Map` hashes and compares its keys through their `Hashable`/`Equatable` witnesses, so a key must be one of `int`, `String`, `Character`, `Array` — a 'Opaque' key is a later slice
+error E3017: <fragment>:12:11: Type 'Opaque' does not satisfy constraint 'Hashable' required by type parameter 'Key' of 'Map'
+error E3017: <fragment>:12:11: Type 'Opaque' does not satisfy constraint 'Equatable' required by type parameter 'Key' of 'Map'
 ```
 
 <!-- test: error.an-array-of-non-conforming-arrays-names-the-inner-array -->
