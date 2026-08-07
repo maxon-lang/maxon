@@ -1120,6 +1120,55 @@ end 'noteRelocatedFunctionUsage'
 // instance merely installs a leaf runtime function it never calls.
 function rootManagedOpaqueArrayElementDrops(usage RuntimeUsage, signatures ProgramSignatures)
 	for id in 0 upto signatures.genericInstanceCount() 'eachInstance'
+		// ⭐⭐ **A DECLARATION-VIEW INSTANCE IS NOT A PROGRAM'S INSTANCE, AND ROOTING OFF ONE IS THE
+		// REACHABILITY HOLE THIS WALK HAD (W41).** Interning is what parsing a generic's own body does:
+		// `type Map uses Key, Value` with a `var keys as Array with Key` field interns `Map` AT ITS OWN OPAQUE
+		// PARAMETERS the moment the module is read, whether or not any program names a map. That instance
+		// satisfies the predicate below — its element IS a managed opaque `T` — so merely LISTING a stdlib
+		// module rooted a drop, which put a symbol in `neededDestructors`, which set `usesHeap`, which laid out
+		// the three `__slab_*` `.data` globals in EVERY program.
+		//
+		// ⚠ **MEASURED, and it is the identical failure `noteRelocatedFunctionUsage`'s header already records
+		// one function down** — *"`var flag = true` grew the three `__slab_*` `.data` globals and five
+		// `static-variables/data-section-*` cases read their bool 24 bytes off its true offset"*. Same five
+		// cases, same three globals, same +80 code bytes on `function main() returns ExitCode return 7 end`;
+		// that header cured its own copy by reading the rooted set off the RELOCATIONS, and this one is the
+		// sibling it names.
+		//
+		// ⛔ **THE CURE IS THIS TERM AND NOT DELETING THE WALK — MEASURED BOTH WAYS.** Deleting it and leaning
+		// on `noteRelocatedFunctionUsage` restores byte-neutrality exactly (1,592 bytes, and all six cases go
+		// green) and then panics `resolveCallFixups: call to unknown function '__str_decref'` on
+		// `generic-type-nested-array-typealias/{pop,opaque-clone}-opaque-struct-element`: that pass roots the
+		// SYMBOL late and re-closes the cascade, but the bit derivation that turns "this struct is referenced
+		// and holds a String" into `usesStrDecref` lives in `noteDestructorUsage`'s own struct loop, which has
+		// already run. Rooting a CONCRETE instance early is exactly what that loop needs; what it never needed
+		// was an instance no program can construct.
+		//
+		// A declaration-view instance mints no layout descriptor — a shared generic body reads its layout from
+		// the descriptor PASSED IN, never from one of its own — so no reloc goes unrooted by skipping it, which
+		// is the invariant this walk exists to hold. See `instanceMentionsTypeParameter` for why the test is a
+		// TREE walk (the instance that actually rooted here hides its opacity one level in) and why ANY mention
+		// rather than every argument.
+		//
+		// ⚠⚠ **NOTHING IN THE COMMITTED TREE OBSERVES THIS TERM TODAY, AND THAT IS SAID HERE RATHER THAN LEFT
+		// TO BE DISCOVERED.** Every listed stdlib module is either non-generic or generic over nothing managed,
+		// and a USER program's own generic is not reachability-pruned at all (measured: the declared-but-unused
+		// `Holder uses Element` program emits 1,672 bytes with this term and 1,672 without, on both trees) — so
+		// no spec case can currently go red if this line is deleted. **The one-line experiment that observes
+		// it** is `listWhitelistedModule(stdlibDir, relative: "Map.maxon", into: listed)` in
+		// `StdlibLoader.whitelistedStdlibModules`: with it, and without this term, `function main() returns
+		// ExitCode return 7 end` grows 1,592 → **1,672** bytes and SIX cases go red — the five
+		// `static-variables/data-section-*` and `reserved-double-underscore/error.stdlib-overlay-mm-leak-check-
+		// takes-a-rooted-name`. With this term the same tree is byte-IDENTICAL to the base at 1,592 and the
+		// suite is 4,754/0. The listing is not here because the corpus `Map` is still shadowed by the
+		// synthesized one (see `ProgramSignatures.isMapBaseName`), so it would cost **+6.7% compile CPU per
+		// program** — measured across the suite, 734.4M → 783.6M ticks per test compile — for a type nothing
+		// can reach. The term lands ahead of it because it is correct on its own and because the listing must
+		// not have to rediscover this.
+		if signatures.instanceMentionsTypeParameter(id) 'declarationViewOnly'
+			continue
+		end 'declarationViewOnly'
+
 		// ⭐ Once per TYPE PARAMETER, because the descriptor carries one dictionary block per parameter and
 		// stamps each independently (W43b) — a `Map with (String, int)` roots `__str_decref` for its key
 		// column and nothing for its value column.

@@ -2488,6 +2488,25 @@ export let SetTypeParamCount = 1 as FieldIndex
 // `MapRecordBytes` fused record and it drops through `__map_decref`. One speller, shared by the parser's
 // `Base with Args` arity check and every `Map`-instance query. See `ProgramSignatures.isMapBaseName` for why
 // it is synthesized rather than read from `stdlib/Map.maxon`.
+// ⭐⭐ **WHAT A GENERIC INSTANCE REDUCES TO FOR A CONFORMANCE QUESTION (W41)** — the answer
+// `ProgramSignatures.instanceConformerReduction` gives its two doors, as a CASE rather than a name.
+//
+// `unreduced` is a real state of the world and not a sentinel: it means "no conformer name claims this
+// instance", which is precisely how a non-conforming `Array with <element>` goes on being refused by E3017
+// with no second predicate to keep in step. What each door then ANSWERS with differs — the mangled instance
+// name where there is no source spelling, the typealias's own name where there is — and folding those two
+// into one `String` return is what put a mangled `Array_Opaque` into a diagnostic that pins `OpaqueArr`.
+export union GenericInstanceConformer
+	// A conforming `Array with E`: every one of them reduces to the ONE `Array` conformer, whose impls walk
+	// raw bytes and are element-independent.
+	arrayBuiltin
+	// A DECLARED generic (`type Wrapper uses T implements Named`): its conformance is a property of the
+	// declaration and its impls are one shared body, so the base name is the conformer for every instance.
+	declaredBase(name ByteArray)
+	// Neither — a non-conforming array, or an instance of a BUILTIN base that declares nothing.
+	unreduced
+end 'GenericInstanceConformer'
+
 export let MapBuiltinBaseName = b"Map"
 
 // The two type parameters `Map` declares (`Map with (Key, Value)`) — the arity `checkGenericInstance`
@@ -10777,6 +10796,64 @@ export type ProgramSignatures
 	// measured to ACCESS-VIOLATE at teardown where the bootstrap exits 0. Synthesizing is what `Array`,
 	// `String`, `Character` and `Set` already do, and it is the only route with no wrong answer in it.
 
+	// ⭐⭐ **DOES INSTANCE `id`'s ARGUMENT TREE STILL MENTION AN OPAQUE TYPE PARAMETER — i.e. is this the
+	// DECLARATION VIEW of a generic rather than an instance a program actually named (W41)?**
+	//
+	// Parsing `type Container uses Element` with a `var items as Array with Element` field interns
+	// `Container` AT ITS OWN PARAMETERS, and interns everything its body's types mention, before any program
+	// has said `Container with Pair`. Those are real registry entries that no program constructs: there is no
+	// box of that shape at run time, and a shared generic body reads its layout from the descriptor PASSED IN
+	// rather than from one of its own. A whole-registry walk that means *"every instance this program builds"*
+	// has to exclude them — see `MmRuntime.rootManagedOpaqueArrayElementDrops`, the walk that measured what
+	// including them costs.
+	//
+	// ⚠⚠ **IT IS A TREE WALK AND NOT A TEST OF THE TOP-LEVEL ARGUMENTS, WHICH IS THE WHOLE OF WHY THE FIRST
+	// CUT DID NOTHING.** The instance that actually rooted on a listed `stdlib/Map.maxon` is
+	// `WithIterIterator with (MapIterator with (Key, Value), (Key, Value))` — minted by expanding `Iterable`'s
+	// own `typealias WithIterSelf = WithIterIterator with Iter, Element` onto `Map`'s conformance at Map's
+	// opaque parameters. Its top-level arguments are a `genericInstance` and a TUPLE, neither of them a bare
+	// `typeParameter`, so an "are all the arguments opaque" test answered FALSE and the byte count did not
+	// move. The opacity is one level in.
+	//
+	// ⭐ **ANY mention, not EVERY argument.** A partly-substituted instance is just as unconstructible as a
+	// wholly opaque one: nothing can build a `Map with (String, Value)` while `Value` is still a parameter. A
+	// program that writes one writes it FULLY concrete, so "mentions no parameter anywhere" is exactly the set
+	// of instances a program can hold a box of.
+	//
+	// ⚠ It walks the TAGS and does not resolve a `named` argument that might alias an instance mentioning a
+	// parameter, so it can answer FALSE where a deeper resolution would answer TRUE. That is the SAFE
+	// direction and is deliberate: a false answer merely keeps the old rooting, and over-rooting a leaf
+	// destructor is what this walk's own header already licenses ("an over-rooted declared-but-unused instance
+	// merely installs a leaf runtime function it never calls"). A false TRUE would leave a baked reloc naming
+	// a `.text` VA that was never installed — the `resolveCallFixups` panic — which is why the walk may only
+	// ever be narrowed by something structural.
+	export function instanceMentionsTypeParameter(id GenericInstanceId) returns bool
+		for position in 0 upto self.genericInstanceArgCount(id) 'eachArg'
+			if self.typeMentionsTypeParameter(self.substitutedInstanceArg(id, position: position)) 'opaqueSomewhere'
+				return true
+			end 'opaqueSomewhere'
+		end 'eachArg'
+
+		return false
+	end 'instanceMentionsTypeParameter'
+
+	// One node of `instanceMentionsTypeParameter`'s walk: the parameter itself is the answer, a nested
+	// instance recurses, and every other tag is a concrete leaf. The two are mutually recursive over the
+	// argument TREE, which is finite because `TypeCycleCheck` has already refused a type that owns itself
+	// (E4014).
+	function typeMentionsTypeParameter(t MaxonType) returns bool
+		let tag = maxonTypeTag(t)
+		if tag == ValueTypeTag.typeParameter 'theParameterItself'
+			return true
+		end 'theParameterItself'
+
+		if tag == ValueTypeTag.genericInstance 'nestedInstance'
+			return self.instanceMentionsTypeParameter(typeNameIdOf(t))
+		end 'nestedInstance'
+
+		return false
+	end 'typeMentionsTypeParameter'
+
 	// Is `name` the builtin `Map` type — the base of every map instance.
 	export function isMapBaseName(name ByteArray) returns bool
 		return name.equals(MapBuiltinBaseName)
@@ -12858,12 +12935,70 @@ export type ProgramSignatures
 		// continues into the conformance half: routing it through that door would ask `isArrayInstance` twice
 		// over one id. It is the same two-part test and the same reason for it — a `TypeNameId` and a
 		// `GenericInstanceId` share a numeric space, so the tag is what makes the id question meaningful.
-		if maxonTypeTag(t) == ValueTypeTag.genericInstance and self.instanceReducesToArrayConformer(typeNameIdOf(t)) 'conformingArray'
-			return String.from(ArrayBuiltinBaseName)
-		end 'conformingArray'
+		if maxonTypeTag(t) == ValueTypeTag.genericInstance 'anInstance'
+			// The UNREDUCED fallback here is the mangled instance name — a name no `implements` and no
+			// intrinsic row claims — which is exactly how a non-conforming `Array with E` goes on being
+			// refused through the ordinary E3017 door. This door holds no source spelling to answer with.
+			match self.instanceConformerReduction(typeNameIdOf(t)) 'reduction'
+				arrayBuiltin then return String.from(ArrayBuiltinBaseName)
+				declaredBase(baseName) then return String.from(baseName)
+				unreduced then return self.mangleTypeArg(t)
+			end 'reduction'
+		end 'anInstance'
 
 		return self.mangleTypeArg(t)
 	end 'conformerNameOfType'
+
+	// ⭐⭐ **THE CONFORMER NAME OF A GENERIC INSTANCE — the ONE answer, for the two doors that arrive with
+	// different things in hand (W41).** `conformerNameOfType` holds a resolved `genericInstance`;
+	// `conformerNameOfDeclaredName` holds the NAME of a generic-instance typealias. That split is exactly the
+	// one `instanceReducesToArrayConformer` already exists for, and the reduction below has to live on both
+	// sides of it for the same measured reason — see the note there.
+	//
+	// ⭐ **A DECLARED GENERIC REDUCES TO ITS BASE, because under dictionary-passing its conformance is a
+	// property of the DECLARATION and its impls are ONE shared body.** `type MapIterator uses Key, Value
+	// implements Iterator with Entry` compiles `MapIterator.current` once, over an opaque layout, and every
+	// instantiation dispatches into that one symbol — so one `__witness_MapIterator.Iterator` table answers
+	// for all of them, exactly as one `__witness_Array.*` pair answers for every array. A per-instance
+	// conformer name would mint an identical table per instantiation AND, worse, name a conformer that no
+	// `implements` clause claims: the registry is keyed by the DECLARED struct name, so a mangled instance
+	// name misses it and a legal program is refused.
+	//
+	// ⚠ **MEASURED, on a program with no stdlib in it at all**: `type Wrapper uses T implements Named` +
+	// `type Holder uses N where N is Named` + `Holder with (Wrapper with Integer)` is refused at `HEAD` with
+	// *"E3017: Type 'IntWrapper' does not satisfy constraint 'Named' required by type parameter 'N' of
+	// 'Holder'"* and runs here, printing `wrapped`. It is what `stdlib/Map.maxon`'s `Iterable` conformance
+	// dies on too, one instance in — `WithIterIterator with (MapIterator with (Key, Value), …)`.
+	//
+	// ⚠⚠ **THE `where` CONSTRAINTS OF THE BASE ARE NOT WAIVED BY THIS, AND THAT IS WHY IT MAY BE
+	// UNCONDITIONAL WHERE THE `Array` ARM IS NOT.** `MapIterator` carries its own `where Key is Hashable`, and
+	// that clause is checked at the `MapIterator with (K, V)` instantiation SITE by `checkOneInstantiation`,
+	// which walks every site in the program. The question here is a different one — *"does this declaration
+	// implement that interface"* — and the answer to it does not depend on the arguments. `Array`'s arm is
+	// conditional because `Array` has no declaration to read a `where` clause off: shv2 synthesizes it, so
+	// its conditional conformance has nowhere else to live.
+	//
+	// A BUILTIN base (`Array`, `Set`, `List`, a `Map` while it is still synthesized) has no `StructLayout` to
+	// declare anything, so it keeps the mangled name it always had and the arms above stay authoritative.
+	// ⚠⚠ **IT ANSWERS THE REDUCTION, NOT THE NAME, AND THE DIFFERENCE IS A DIAGNOSTIC THAT REGRESSED WHEN IT
+	// DID ANSWER THE NAME.** The two doors share the RULE and emphatically do not share the FALLBACK: an
+	// unreduced instance is its MANGLED name at `conformerNameOfType` (which holds no source spelling) and its
+	// ALIAS's own name at `conformerNameOfDeclaredName` (which does, and whose name reaches an author).
+	// MEASURED, with a single `String` return folding the two: `array-conditional-conformance-withheld`'s
+	// nested case began reporting *"but 'Array_Opaque' does not implement 'Hashable'"* where the corpus pins
+	// *"but 'OpaqueArr' does not implement 'Hashable'"* — the compiler's mangling shown to someone who wrote
+	// a typealias. So the miss is a CASE the caller must handle, not a default this may pick.
+	function instanceConformerReduction(id GenericInstanceId) returns GenericInstanceConformer
+		if self.instanceReducesToArrayConformer(id) 'conformingArray'
+			return GenericInstanceConformer.arrayBuiltin
+		end 'conformingArray'
+
+		let baseName = self.genericInstanceBaseName(id)
+		return match self.structOf(baseName) 'base'
+			declared gives GenericInstanceConformer.declaredBase(baseName)
+			undeclared gives GenericInstanceConformer.unreduced
+		end 'base'
+	end 'instanceConformerReduction'
 
 	// ⭐ **DOES INSTANCE `id` REDUCE TO THE `Array` CONFORMER?** — an `Array with E` whose `E` satisfies the
 	// conditional conformance. TWO doors reduce to it and each arrives with a different thing in hand: this
@@ -12896,9 +13031,17 @@ export type ProgramSignatures
 		// a spelling two files contest, and a whole-program reader must ask this first (see there); a
 		// superseded spelling falls through to its own name, which conforms to nothing — the same answer a
 		// non-conforming array gets, and the safe direction.
-		if self.isGenericAlias(name) and not self.genericAliasSpellingIsSuperseded(name) and self.instanceReducesToArrayConformer(self.genericAliasInstance(name)) 'conformingArrayAlias'
-			return String.from(ArrayBuiltinBaseName)
-		end 'conformingArrayAlias'
+		if self.isGenericAlias(name) and not self.genericAliasSpellingIsSuperseded(name) 'genericInstanceAlias'
+			// ⚠ The UNREDUCED fallback is the ALIAS's OWN NAME and never the mangled instance — this door has
+			// the spelling the author wrote, and that spelling reaches an author through the withheld-extension
+			// diagnostic (`array-conditional-conformance-withheld`, which measured the regression when this
+			// fell through to the mangler). It conforms to nothing either way, which is the answer that matters.
+			match self.instanceConformerReduction(self.genericAliasInstance(name)) 'reduction'
+				arrayBuiltin then return String.from(ArrayBuiltinBaseName)
+				declaredBase(baseName) then return String.from(baseName)
+				unreduced then return String.from(name)
+			end 'reduction'
+		end 'genericInstanceAlias'
 
 		return String.from(name)
 	end 'conformerNameOfDeclaredName'
