@@ -741,3 +741,48 @@ end 'main'
 error E3063: dirA/specs/fragments/typealias-collision/error.exported-and-module-alias-of-one-name.test:4:37: Ambiguous typealias 'Cell': multiple visible definitions found. Qualify with a directory name. Candidates: dirA.Cell, dirB.Cell
 error E3063: dirB/specs/fragments/typealias-collision/error.exported-and-module-alias-of-one-name.test:17:37: Ambiguous typealias 'Cell': multiple visible definitions found. Qualify with a directory name. Candidates: dirA.Cell, dirB.Cell
 ```
+
+
+<!-- test: error.ambiguity-does-not-depend-on-a-third-declaration -->
+⭐ Two `module typealias Cell`s in ONE directory are a pair no file in that directory can choose
+between, and adding a THIRD declaration elsewhere does not resolve them. ⚠⚠ **IT USED TO.** The rule
+was asked of a new declaration against whichever declaration held the module's single alias record,
+and that holder is picked by a different rule — the widest reach wins — while ambiguity is not a
+transitive relation. A project-root `export typealias Cell` is exempt against each `module` one by
+the enclosure rule AND is wide enough to keep the record, so with it present the two files were never
+compared with each other and the program compiled; without it the same two files were refused.
+Legality of a pair must not depend on what else the program declares. ⚠ The candidate list names the
+declaring FILE where two declarations share a directory: no directory qualifier can separate them,
+and collapsing them by that qualifier printed a list of one.
+```maxon
+// --- file: dirA/one.maxon
+module typealias Cell = int(0 to 255)
+
+export type One
+	export static function stash() returns Cell
+		let v = 200 as Cell
+		return v
+	end 'stash'
+end 'One'
+
+// --- file: dirA/two.maxon
+module typealias Cell = int(0 to 100)
+
+export type Two
+	export static function stash() returns Cell
+		let v = 50 as Cell
+		return v
+	end 'stash'
+end 'Two'
+
+// --- file: main.maxon
+export typealias Cell = int(0 to 300)
+
+function main() returns ExitCode
+	return One.stash() + Two.stash()
+end 'main'
+```
+```maxoncstderr
+error E3063: dirA/specs/fragments/typealias-collision/error.ambiguity-does-not-depend-on-a-third-declaration.test:6:41: Ambiguous typealias 'Cell': multiple visible definitions found. Qualify with a directory name. Candidates: dirA.Cell (one.maxon), dirA.Cell (two.maxon)
+error E3063: dirA/specs/fragments/typealias-collision/error.ambiguity-does-not-depend-on-a-third-declaration.test:16:41: Ambiguous typealias 'Cell': multiple visible definitions found. Qualify with a directory name. Candidates: dirA.Cell (one.maxon), dirA.Cell (two.maxon)
+```

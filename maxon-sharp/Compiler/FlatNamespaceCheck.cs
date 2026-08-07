@@ -298,7 +298,7 @@ public static class FlatNamespaceCheck {
   /// Do at least two of these declarations actually see each other? An <c>export</c> is visible
   /// program-wide, so it collides with anything of its name. Two <c>module</c> declarations are
   /// mutually NAMEABLE only where their directory subtrees overlap, which is
-  /// <see cref="Parser.IsFileInModuleScope"/>'s rule and not restated here.
+  /// <see cref="AliasScope.IsInDirectoryScopeOf"/>'s rule and not restated here.
   ///
   /// ⚠ "SIBLING SUBTREES EACH KEEP THEIR OWN NAME" IS WHAT THIS USED TO SAY, AND IT IS FALSE. Being
   /// unable to NAME each other's declaration is not the same as each having its own; the module's
@@ -320,8 +320,8 @@ public static class FlatNamespaceCheck {
 
     for (var i = 0; i < perFile.Count; i++)
       for (var j = i + 1; j < perFile.Count; j++)
-        if (Parser.IsFileInModuleScope(perFile[i].File, perFile[j].File)
-            || Parser.IsFileInModuleScope(perFile[j].File, perFile[i].File))
+        if (AliasScope.IsInDirectoryScopeOf(perFile[i].File, perFile[j].File)
+            || AliasScope.IsInDirectoryScopeOf(perFile[j].File, perFile[i].File))
           return true;
 
     return false;

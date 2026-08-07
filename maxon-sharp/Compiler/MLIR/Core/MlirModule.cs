@@ -687,9 +687,50 @@ public class IrModule<TOp> where TOp : IPrintableOp {
   /// </summary>
   public Dictionary<string, SortedSet<string>> AmbiguousTypeDeclarers { get; } = [];
 
+  /// <summary>
+  /// ⭐ EVERY DECLARATION OF EACH TYPEALIAS NAME, one per declaring file — the SET the ambiguity rule
+  /// is a relation over.
+  ///
+  /// ⚠ IT EXISTS BECAUSE ONE INCUMBENT CANNOT STAND FOR THE SET. The rule was asked of the new
+  /// declaration against whichever declaration currently owned <see cref="TypeAliasSources"/>'s single
+  /// record — and that owner is picked by a DIFFERENT rule (the widest reach wins), while
+  /// <see cref="AliasScope.AreAmbiguous"/> is not transitive. MEASURED: two <c>module typealias
+  /// Cell</c>s in one directory are refused on their own, and adding an unrelated project-root
+  /// <c>export typealias Cell</c> — which is exempt against each of them by the enclosure rule, and
+  /// which is strictly wider so it keeps the record — made the same two files compile. Whether a pair
+  /// is legal must not depend on what ELSE the program declares.
+  ///
+  /// Keyed file-then-name so a file has exactly one declaration of a name here, however many passes
+  /// re-walk it: a second entry for one file would be compared against the first as if two files had
+  /// declared it.
+  /// </summary>
+  public Dictionary<string, Dictionary<string, AliasSite>> AliasDeclarationSites { get; } = [];
+
+  /// <summary>
+  /// ⭐ THE ONE WRITER of both alias-scope tables: record this declaration, and mark the name
+  /// ambiguous against every declaration of it already known. Membership in
+  /// <see cref="AmbiguousTypeDeclarers"/> is therefore DERIVED from the sites and cannot describe a
+  /// different set of declarations than the sites do.
+  /// </summary>
+  public void RecordAliasDeclaration(string typeName, AliasSite site) {
+    if (!AliasDeclarationSites.TryGetValue(typeName, out var sites)) {
+      sites = new Dictionary<string, AliasSite>(StringComparer.Ordinal);
+      AliasDeclarationSites[typeName] = sites;
+    }
+
+    foreach (var (otherFile, other) in sites) {
+      if (otherFile == site.File) continue;
+      if (!AliasScope.AreAmbiguous(other, site)) continue;
+
+      AddAmbiguousTypeDeclarers(typeName, otherFile, site.File);
+    }
+
+    sites[site.File] = site;
+  }
+
   /// <summary>Record that <paramref name="declarerPath"/> is one of the files whose declaration of
   /// <paramref name="typeName"/> makes it ambiguous.</summary>
-  public void AddAmbiguousTypeDeclarers(string typeName, params string[] declarerPaths) {
+  private void AddAmbiguousTypeDeclarers(string typeName, params string[] declarerPaths) {
     if (!AmbiguousTypeDeclarers.TryGetValue(typeName, out var declarers)) {
       declarers = new SortedSet<string>(StringComparer.Ordinal);
       AmbiguousTypeDeclarers[typeName] = declarers;
@@ -859,6 +900,11 @@ public class IrModule<TOp> where TOp : IPrintableOp {
     foreach (var n in ModuleVisibleGlobalVarNames) clone.ModuleVisibleGlobalVarNames.Add(n);
     foreach (var (k, v) in GlobalVarSourceFiles) clone.GlobalVarSourceFiles[k] = v;
     foreach (var (k, v) in TypeDefSourceFiles) clone.TypeDefSourceFiles[k] = v;
+    // Both tables are copied rather than the membership being re-derived from the sites: a clone is
+    // the same module, and re-deriving would make the copy disagree with the original wherever the
+    // rule has changed since the original was built.
+    foreach (var (n, sites) in AliasDeclarationSites)
+      clone.AliasDeclarationSites[n] = new Dictionary<string, AliasSite>(sites, StringComparer.Ordinal);
     foreach (var (n, declarers) in AmbiguousTypeDeclarers) clone.AddAmbiguousTypeDeclarers(n, [.. declarers]);
     foreach (var n in ContestedGenericAliasNames) clone.ContestedGenericAliasNames.Add(n);
     clone.TagTable.AddRange(TagTable);
@@ -934,19 +980,19 @@ public class IrModule<TOp> where TOp : IPrintableOp {
       TypeDefs[k] = v;
     foreach (var (k, v) in other.FunctionDefaults) FunctionDefaults.TryAdd(k, v);
     foreach (var (k, v) in other.TypeAliasSources) {
-      // The same question CopyTypeAliasesToModule asks, asked of the same rule rather than of a
-      // second hand-written one. The copy that lived here read "both exported or stdlib, different
-      // files", which marks a project export beside a stdlib export of one name — a pair
+      // The same question CopyTypeAliasesToModule asks, asked through the same RECORDER rather than
+      // of a second hand-written rule. The copy that lived here read "both exported or stdlib,
+      // different files", which marks a project export beside a stdlib export of one name — a pair
       // `project-export-shadows-stdlib-export` requires to be legal — and misses every `module`
-      // declaration, whose subtree meets an export's whole-program reach just as squarely.
-      if (TypeAliasSources.TryGetValue(k, out var existing)
-          && existing.SourceFilePath != null && v.SourceFilePath != null
-          && existing.SourceFilePath != v.SourceFilePath
-          && AliasScope.AreAmbiguous(AliasSite.Of(existing, existing.SourceFilePath),
-               AliasSite.Of(v, v.SourceFilePath)))
-        AddAmbiguousTypeDeclarers(k, existing.SourceFilePath, v.SourceFilePath);
+      // declaration, whose subtree meets an export's whole-program reach just as squarely. It also
+      // compared the incoming record against ONE incumbent, which is the hole AliasDeclarationSites
+      // exists to close; going through the recorder means this path cannot keep its own answer.
+      if (v.SourceFilePath != null) RecordAliasDeclaration(k, AliasSite.Of(v));
+
       TypeAliasSources.TryAdd(k, v);
     }
+    foreach (var (k, sites) in other.AliasDeclarationSites)
+      foreach (var site in sites.Values) RecordAliasDeclaration(k, site);
     foreach (var n in other.NonExportedTypeNames) NonExportedTypeNames.Add(n);
     foreach (var n in other.ModuleVisibleTypeNames) ModuleVisibleTypeNames.Add(n);
     foreach (var (k, v) in other.GlobalVarInfos) GlobalVarInfos.TryAdd(k, v);

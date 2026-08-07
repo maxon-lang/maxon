@@ -5,6 +5,13 @@ namespace MaxonSharp.Compiler;
 /// <summary>
 /// How far a typealias declaration reaches — the one fact three separate questions about a
 /// declaration are answers to.
+///
+/// ⚠ THE MEMBER ORDER IS LOAD-BEARING AND IS COMPARED WITH <c>&gt;</c>, at the record guard in
+/// <c>Parser.CopyTypeAliasesToModule</c>: the WIDEST declaration owns the module's single
+/// record for a name. Declared narrowest-first for that reason. Reordering or inserting a member
+/// changes which declaration wins that record, and nothing would fail to compile — it was a private
+/// enum beside its own comparison until BATCH34 moved it here, so the dependency is now across files
+/// and this note is the only thing carrying it.
 /// </summary>
 public enum AliasReach {
   /// <summary>A plain <c>typealias</c>: its own file and nowhere else.</summary>
@@ -25,8 +32,21 @@ public enum AliasReach {
 /// <param name="File">The declaring file's path, from which its directory — and therefore whether it
 /// is nearer than the other declaration — is derived.</param>
 public readonly record struct AliasSite(AliasReach Reach, bool IsStdlib, string File) {
-  public static AliasSite Of(TypeAliasInfo info, string file) =>
-    new(AliasScope.ReachOf(info), info.IsStdlib, file);
+  /// <summary>
+  /// The site a module's alias RECORD describes. The path is taken from the record rather than
+  /// accepted beside it: both callers passed <c>info.SourceFilePath</c> and nothing made them, so a
+  /// third caller could hand this a reach and a stdlib flag from one declaration and a path from
+  /// another — one fact from two hands, in the file whose subject is exactly that.
+  ///
+  /// Throws rather than returning a site with an empty path: a record with no declaring file cannot
+  /// be positioned against another declaration at all, and every caller already has to decide what
+  /// to do about that before it asks.
+  /// </summary>
+  public static AliasSite Of(TypeAliasInfo info) =>
+    info.SourceFilePath == null
+      ? throw new InvalidOperationException(
+          $"typealias record for '{info.SourceTypeName}' has no declaring file, so its scope cannot be placed")
+      : new(AliasScope.ReachOf(info), info.IsStdlib, info.SourceFilePath);
 }
 
 /// <summary>
@@ -72,6 +92,29 @@ public static class AliasScope {
     ReachOf(info.IsExported, info.IsModuleVisible);
 
   /// <summary>
+  /// How far a declaration reaches ONCE SEEDING IS COUNTED — the language's reach for anyone but the
+  /// stdlib, and <see cref="AliasReach.Program"/> for a stdlib alias however it is written, because
+  /// <c>SeedFromModule</c> hands every stdlib alias to every parser regardless of <c>export</c>.
+  ///
+  /// ⚠ ONE FACT, AND IT WAS SPELLED TWICE — as <c>&amp;&amp; !_isStdlib</c> in
+  /// <c>Parser.IsFileScopedAliasDeclaration</c> (a stdlib alias may not be RENAMED under a contest)
+  /// and as <c>isStdlib ? Program</c> in <c>Parser.RecordOwnershipReach</c> (a stdlib alias OWNS the
+  /// module record as widely as an export). Both are the same sentence about seeding, and each
+  /// carried its own prose saying so, which is how one of them gets edited alone.
+  ///
+  /// It is deliberately NOT <see cref="ReachOf"/>: that is the reach the DECLARATION wrote down, and
+  /// folding seeding into it said <c>Json.maxon</c>'s file-private <c>BytePos</c> reaches the whole
+  /// program and is ambiguous against <c>String.maxon</c>'s exported one — which refused the entire
+  /// standard library, on a rule whose own first exemption is that a file-private declaration never
+  /// participates.
+  /// </summary>
+  public static AliasReach ReachOfSeeded(bool isExported, bool isModuleVisible, bool isStdlib) =>
+    isStdlib ? AliasReach.Program : ReachOf(isExported, isModuleVisible);
+
+  public static AliasReach ReachOfSeeded(TypeAliasInfo info) =>
+    ReachOfSeeded(info.IsExported, info.IsModuleVisible, info.IsStdlib);
+
+  /// <summary>
   /// ⭐ WHETHER TWO DECLARATIONS OF ONE TYPEALIAS NAME LEAVE ANY FILE UNABLE TO SAY WHICH IT MEANS.
   ///
   /// Two declarations are ambiguous when their reaches INTERSECT and neither is strictly NEARER.
@@ -86,8 +129,19 @@ public static class AliasScope {
   ///   (<c>project-export-shadows-stdlib-export</c>: "seeded as a lower-precedence library layer, so
   ///   they never participate in cross-file ambiguity").</item>
   /// <item><b>Strict directory enclosure disambiguates.</b> The nearer declaration wins inside its own
-  ///   subtree and the enclosing one everywhere else, so neither file is left choosing
-  ///   (<c>nested-export-shadowed-by-enclosing-dir</c>).</item>
+  ///   subtree and the enclosing one everywhere else, so no file is left without a rule to apply
+  ///   (<c>nested-export-shadowed-by-enclosing-dir</c>).
+  ///   ⚠ THAT IS CANONICAL'S MODEL, AND THIS COMPILER DOES NOT IMPLEMENT IT — the exemption is
+  ///   inherited, not earned. The alias tables are keyed by bare name and hold ONE entry, so the
+  ///   DEEPER declaration takes the name everywhere, including inside the ENCLOSING declarer's own
+  ///   file. MEASURED at this tip, and identically at the rung's merge base (369e8c812b), so the
+  ///   rung neither caused it nor cures it: <c>Compiler/types.maxon</c>'s
+  ///   <c>export typealias Tally = int(0 to 100000)</c> with <c>Tallies = Array with Tally</c> read
+  ///   its own 70000 back as <b>112</b> through <c>Compiler/Coverage/</c>'s
+  ///   <c>int(0 to 255)</c> — exit 0, silent. The committed case cannot see it: it casts 42, a value
+  ///   BOTH ranges hold. Refusing the pair is not the cure, because canonical explicitly blesses it;
+  ///   the cure is giving those tables a scope, which is the same cure the disjoint-<c>module</c>
+  ///   reader case in <c>Parser.IsFileScopedAliasDeclaration</c> is waiting on.</item>
   /// <item><b>Two subtrees that do not contain one another never meet</b>, so two <c>module</c>
   ///   declarations in sibling directories are not ambiguous — no file can see both
   ///   (<c>module-alias-does-not-govern-another-directory</c>).</item>
