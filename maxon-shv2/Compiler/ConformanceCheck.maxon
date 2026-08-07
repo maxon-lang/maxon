@@ -414,6 +414,21 @@ end 'extensionMethodsWithheld'
 // separately refuses (E3016 names the unbound associated type), so it is a phrase and never a type name.
 let UnboundAssociatedTypePhrase = b"(nothing)"
 
+// ⭐ **A CONFORMER'S `with` BINDINGS, OR NOTHING — THE POSITIONAL-PAIRING GATE (W43).** Every reader of
+// `StructLayout.conformanceBindings` pairs it against the interface's associated-type names BY INDEX, so a
+// list of a different LENGTH has no positional meaning at all: reading position `i` out of it answers about
+// a neighbour rather than about the name it was asked for. Emptying it is what makes the two readers agree —
+// a body parsed with no substitution, a `where` clause reported UNMET — instead of one going missing while
+// the other goes wrong. See `Parser.conformerAssociatedBindings` for how the two lists come to disagree at
+// all (the declaration sweep cannot know an interface's arity).
+export function pairableConformanceBindings(bindings ByteArrayArray, associatedTypeNames ByteArrayArray) returns ByteArrayArray
+	if bindings.count() != associatedTypeNames.count() 'noPositionalMeaning'
+		return sharedEmptyDeclaredConformances
+	end 'noPositionalMeaning'
+
+	return bindings
+end 'pairableConformanceBindings'
+
 // ⭐⭐ **DOES `bindings` SATISFY A CONDITIONAL EXTENSION'S `where` CLAUSE? (conditional extensions)** —
 // asked once per (extension, conformer) by `Parser.foldExtensionDeclarationInto`, whose answer decides
 // whether the extension's methods exist on that conformer at all.

@@ -1779,6 +1779,11 @@ let ReservedNamePrefix = b"__"
 // it is a deliberate default copied from both reference compilers, not an incidental literal.
 let UnresolvableInterfaceUsesArity = 1 as ElementCount
 
+// The one `uses` arity at which a parenthesized `with (…)` list is read as a single TUPLE argument rather
+// than as a list of bindings (W43) — see `parenthesizedWithBindsOneTuple`, which is where the choice is
+// argued. Named because it is the arity the rule TURNS ON, not an incidental comparison against one.
+let SingleAssociatedType = 1 as ElementCount
+
 // ⭐ **HOW MANY ASSOCIATED TYPES A CONFORMANCE `with` CLAUSE BINDS FOR ONE INTERFACE — WHEN THE PROGRAM
 // SAYS (R6).** A union rather than a count carrying a default, because the two readers of that number
 // need OPPOSITE answers to the unresolvable case and a shared default can only serve one of them:
@@ -1848,8 +1853,41 @@ end 'ConstructorInstance'
 union NestedAliasResult
 	ranged(alias RangedTypeAlias)
 	genericInstance(entry GenericAliasEntry)
+	// ⭐ **A TUPLE inner alias (W43)** — `typealias Entry = (Key, Value)` inside `type Map uses Key, Value`,
+	// the shape `stdlib/Map.maxon:20` opens with. It carries NO payload where the three above carry one,
+	// because a tuple alias mints no declaration of its own to hand back: its whole effect is the
+	// `tupleAliases` entry `readTypeAliasDeclaration` has already written under the name `TupleAliasOwner`
+	// decided, plus the `enclosingInnerAliases` membership every per-instance form records. A `Map.Entry`
+	// reference resolves STRAIGHT THROUGH to the interned tuple's `structRef` — the file-scope form's rule,
+	// one nesting level down — so there is nothing per-declaration left for a caller to file.
+	tupleAlias
 	functionAlias(alias FunctionTypeAlias)
 end 'NestedAliasResult'
+
+// ⭐⭐ **WHICH WHOLE-PROGRAM NAME A TUPLE TYPEALIAS IS PUBLISHED UNDER — OR THAT THIS READ PUBLISHES NONE
+// (W43).** The other three alias forms are routed by their OUT-ARRAY and the caller keys what it takes; a
+// tuple alias has no such array, because `recordTupleAlias` must write DURING the walk rather than at
+// `foldFile` (see `parseTypeReference`'s tuple arm for the measurement that pins that). So the KEY travels
+// down instead of the entry travelling up, and the three cases are the three answers its readers need:
+//
+//   • `fileScope` — a top-level `typealias Pair = (Num, Num)`, published under its bare name.
+//   • `enclosingType` — a nested one, published as `<Type>.<member>` exactly as a ranged or
+//     generic-instance inner alias is keyed, because the bare member genuinely collides (two types in one
+//     file may each declare an `Entry`) and because the tuple it names is over THAT type's parameters.
+//   • `unpublished` — read, validated and entered into `enclosingInnerAliases`, but keyed nowhere. Two
+//     callers need it and neither is an optimization: an `interface` BODY, whose members the declaration
+//     sweep never reads (so a name published from the real parse alone would resolve or not depending on
+//     file order — the very reason a FUNCTION alias is refused there); and an extension body being read for
+//     a conformer the extension is WITHHELD from, where publishing would make the extension's private
+//     vocabulary nameable on a type that receives none of its methods.
+//
+// A union rather than a name-that-may-be-empty, because "no owner" and "the file" are different answers and
+// a shared empty string can only carry one of them.
+union TupleAliasOwner
+	fileScope
+	enclosingType(name ByteArray)
+	unpublished
+end 'TupleAliasOwner'
 
 // What `materializeIterableIterationSource` made of a `for … in` source (W3). BOTH halves or neither: the
 // cursor the loop walks and the value its header starts from are decided by the same `createIterator`
@@ -10875,7 +10913,7 @@ export type Parser
 	// the fewer places that read a declaration, the fewer can disagree.
 	function recordScannedTypeAlias(aliases RangedTypeAliasArray, functionAliases FunctionTypeAliasArray, genericAliases GenericAliasEntryArray)
 		let visibility = try self.consumeOptionalVisibility() otherwise return
-		_ = try self.readTypeAliasDeclaration(aliases, functionOut: functionAliases, genericOut: genericAliases, recordFunctionSignature: false, visibility: visibility) otherwise return
+		_ = try self.readTypeAliasDeclaration(aliases, functionOut: functionAliases, genericOut: genericAliases, tupleOwner: TupleAliasOwner.fileScope, recordFunctionSignature: false, visibility: visibility) otherwise return
 	end 'recordScannedTypeAlias'
 
 	// Consume an optional leading `export` / `module` modifier and answer what it means. THE one reader of
@@ -11063,10 +11101,14 @@ export type Parser
 			// stopping here leaves the remaining tokens to the robust outer walk.
 			if depth == 0 and self.atTypeAliasDeclaration() 'isInnerAlias'
 				let nestedVisibility = try self.consumeOptionalVisibility() otherwise break
-				let nested = try self.readNestedTypeAlias(nestedVisibility, recordFunctionSignature: false) otherwise break
+				let nested = try self.readNestedTypeAlias(nestedVisibility, recordFunctionSignature: false, tupleOwner: TupleAliasOwner.enclosingType(self.enclosingType)) otherwise break
 				match nested 'nested'
 					ranged(alias) then innerAliasOut.push(InnerAliasEntry.create(self.enclosingType, alias: alias))
 					genericInstance(entry) then genericAliasOut.push(self.qualifiedInnerGenericAlias(entry))
+					// A TUPLE alias is keyed whole-program by the reader itself, under the `<Type>.<member>` name
+					// `TupleAliasOwner.enclosingType` just gave it — there is no per-declaration column for it to
+					// land in, because it mints no identity of its own (see `NestedAliasResult`).
+					tupleAlias then break 'nested'
 					// Into the FILE's function-alias array, the one a top-level `typealias Fn = function(…)`
 					// lands in — unqualified, because that is the scope it declares (see `NestedAliasResult`).
 					functionAlias(alias) then functionAliasOut.push(alias)
@@ -11405,7 +11447,12 @@ export type Parser
 				// Tolerant like every other read on this walk: a malformed alias publishes nothing and leaves the
 				// positioned diagnostic to the real parse.
 				if self.atTypeAliasDeclaration() 'nestedTypeAlias'
-					let nested = try self.readNestedTypeAlias(memberVisibility, recordFunctionSignature: false) otherwise break
+					// ⚠ **THE TUPLE FORM'S KEY IS DECIDED BY THE VERDICT, BEFORE THE READ, AND IT MUST BE** — the
+					// `unpublished` owner is the "READ ALWAYS, PUBLISH ONLY WHEN THE EXTENSION IS THIS CONFORMER'S"
+					// rule below, applied to the one alias form the READER publishes rather than the caller
+					// (see `TupleAliasOwner`). Every other form is filed after the withheld test; this one cannot be.
+					let nestedTupleOwner = TupleAliasOwner.unpublished if extensionMethodsWithheld(verdict) else TupleAliasOwner.enclosingType(conformer)
+					let nested = try self.readNestedTypeAlias(memberVisibility, recordFunctionSignature: false, tupleOwner: nestedTupleOwner) otherwise break
 
 					// ⚠ **READ ALWAYS, PUBLISH ONLY WHEN THE EXTENSION IS THIS CONFORMER'S** — the withheld
 					// method rule applied to a declaration instead of a signature, and for its reason. The READ
@@ -11422,6 +11469,8 @@ export type Parser
 					match nested 'nested'
 						ranged(alias) then innerAliasOut.push(InnerAliasEntry.create(self.enclosingType, alias: alias))
 						genericInstance(entry) then genericAliasOut.push(self.qualifiedInnerGenericAlias(entry))
+						// Already keyed (or deliberately not) by the reader, off `nestedTupleOwner` above.
+						tupleAlias then break 'nested'
 						// A FUNCTION alias declares a FILE-scope name (see `NestedAliasResult`), so it is filed
 						// unqualified exactly as `recordScannedTypeAlias` files a top-level one. It is the one form
 						// whose meaning is NOT per-conformer-distinct in the name space: `ElementTransform` written
@@ -11549,12 +11598,10 @@ export type Parser
 			typeExtension then return self.openTypeExtensionBodyScope(header, index: index)
 		end 'target'
 
-		// ⚠ **BOTH COLUMNS OR NEITHER, and the length agreement is the gate.** The interface's associated names
-		// and the conformer's `with` arguments are paired POSITIONALLY, so a conformer that bound the wrong
-		// number of them — an `implements` clause with no `with` at all, or one arity short — has no positional
-		// meaning to offer and gets no substitution. That program is separately refused with a position by
-		// `checkOneInterfaceConformance` (E3016 names the unbound associated type); withholding here just keeps
-		// this door from inventing a pairing to fill the gap, which would resolve `Element` to a neighbour.
+		// BOTH COLUMNS OR NEITHER — the length agreement `conformerAssociatedBindings` enforces has already
+		// emptied a list that cannot be paired, so an empty one here means only "this conformer binds nothing
+		// positionally" and installing it against a non-empty `associated` would invent the pairing that door
+		// just refused.
 		let associated = extensionTargetParamNames(header.target)
 		let bindings = self.conformerAssociatedBindings(header, conformer: conformer, index: index)
 		if associated.count() != bindings.count() 'noPositionalPairing'
@@ -11587,9 +11634,25 @@ export type Parser
 	// `extensionConformerVerdict` evaluates the `where` clause against (`StructLayout.bindingsForInterface`),
 	// read through one accessor so the CONDITION a method is withheld under and the TYPES its body is parsed
 	// with can never come from two different readings of one `implements` clause.
+	//
+	// ⚠⚠ **A LIST WHOSE LENGTH DISAGREES WITH THE INTERFACE'S ARITY IS EMPTIED HERE, AND THAT IS THE ONE
+	// GATE — it used to be `openExtensionBodyScope`'s alone, which left `extensionConformerVerdict` reading
+	// the same column UNGATED.** Both pair POSITIONALLY (a body's substitution by index, a
+	// `WhereConstraint.typeParamIndex` by index), so a surplus list makes the verdict read a NEIGHBOUR's
+	// binding — `extension One where A is Comparable` asking about the first of two items rather than about
+	// what `A` actually is. That is a wrong answer where the body scope's own gate gives a missing one, and
+	// the two must not differ: this accessor's whole stated purpose is that the CONDITION and the TYPES come
+	// from one reading.
+	//
+	// It is reachable because the DECLARATION SWEEP cannot know an arity — `Queries.foldInterfaceDeclarations`
+	// runs after the last file is folded — so `with (Source, Element)` against a one-`uses` `Iterator` is
+	// recorded as two items by the sweep and as one interned tuple by the real parse
+	// (`parenthesizedWithBindsOneTuple`, which argues why that cannot be settled later). Emptied here, the
+	// consequence is a conditional extension WITHHELD from that conformer and a body parsed with no
+	// substitution — `readOptionalImplementsClause`'s standard, bounded and missing rather than wrong.
 	function conformerAssociatedBindings(header ExtensionHeader, conformer ByteArray, index ProgramSignatures) returns ByteArrayArray
 		match index.structOf(conformer) 'conformerLayout'
-			declared(layout) then return layout.bindingsForInterface(header.nameTok.value)
+			declared(layout) then return pairableConformanceBindings(layout.bindingsForInterface(header.nameTok.value), associatedTypeNames: extensionTargetParamNames(header.target))
 			undeclared then panic("Parser.conformerAssociatedBindings: conformer '{String.from(conformer)}' came out of `extensionTargetConformers`, which walks the struct registry this lookup misses")
 		end 'conformerLayout'
 	end 'conformerAssociatedBindings'
@@ -11611,10 +11674,10 @@ export type Parser
 			interfaceExtension then break 'target'
 		end 'target'
 
-		match index.structOf(conformer) 'conformerLayout'
-			declared(layout) then return checkExtensionConstraints(index, constraints: header.constraints, bindings: layout.bindingsForInterface(header.nameTok.value))
-			undeclared then panic("Parser.extensionConformerVerdict: conformer '{String.from(conformer)}' came out of `extensionTargetConformers`, which walks the struct registry this lookup misses")
-		end 'conformerLayout'
+		// Through `conformerAssociatedBindings`, NOT a second `bindingsForInterface` of its own: that accessor
+		// is where the positional-pairing gate lives, and this reader indexes the column exactly as the body
+		// scope does. Reading the column directly is what let the two answer differently — see its header.
+		return checkExtensionConstraints(index, constraints: header.constraints, bindings: self.conformerAssociatedBindings(header, conformer: conformer, index: index))
 	end 'extensionConformerVerdict'
 
 	// File the witness constraints a TYPE-extension method adds ON TOP of its target type's own, under the
@@ -11786,11 +11849,32 @@ export type Parser
 				continue
 			end 'notThisOne'
 
-			return try self.extensionAssociatedTypeBindings.get(i) otherwise panic("extensionAssociatedTypeBinding: the conformer binds nothing at associated-type position {i}, where the interface declares {self.extensionAssociatedTypeNames.count()} — `openExtensionBodyScope` installs the two columns only when their lengths agree")
+			return self.conformerScopedBinding(try self.extensionAssociatedTypeBindings.get(i) otherwise panic("extensionAssociatedTypeBinding: the conformer binds nothing at associated-type position {i}, where the interface declares {self.extensionAssociatedTypeNames.count()} — `openExtensionBodyScope` installs the two columns only when their lengths agree"))
 		end 'eachAssociated'
 
 		return name
 	end 'extensionAssociatedTypeBinding'
+
+	// ⭐⭐ **A BINDING THAT NAMES ONE OF THE CONFORMER'S OWN NESTED TYPEALIASES MEANS *THAT* ALIAS (W43).**
+	// `stdlib/Map.maxon` writes `implements Iterable with (Entry, MapIterator)` and declares
+	// `typealias Entry = (Key, Value)` in its body, so the binding recorded for `Element` is the BARE member
+	// `Entry` — and a nested alias is keyed whole-program under `Map.Entry`, never under its bare member
+	// (which two types in one file may both declare). Substituted unqualified into `extension Iterable`'s
+	// body, `typealias ElementArray = Array with Element` became `Array with Entry`, a name no file declares:
+	// **MEASURED, `error E3011 … Unknown type 'Entry'` at `stdlib/Interfaces.maxon:195:38` and `:226:55`.**
+	//
+	// ⚠ **IT CANNOT BE FIXED WHERE THE BINDING IS RECORDED, AND THAT IS AN ORDERING FACT.** An `implements`
+	// clause is part of the type's HEADER: at the moment `readConformanceWithArg` renders `Entry`, the body
+	// that declares it has not been read, in EITHER pass. So the qualification belongs at the READ — here,
+	// where the conformer is `self.enclosingType` and the whole-program registries are complete.
+	//
+	// ⚠ It fires only on a name the substitution actually MATCHED, never on an arbitrary name the extension
+	// body wrote: an extension's own vocabulary is its own, and a written `Entry` that is not an associated
+	// type must not silently acquire the conformer's meaning.
+	function conformerScopedBinding(binding ByteArray) returns ByteArray
+		let qualified = joinQualifiedName(self.enclosingType, member: binding)
+		return qualified if self.signatures.declaresInnerAlias(qualified) else binding
+	end 'conformerScopedBinding'
 
 	// ⭐ **OPEN A GENERIC TYPE'S PARAMETER SCOPE (P1.6-A)** — `type Box uses T` / `type Pair uses A, B`.
 	// Called by BOTH `parseTypeDeclaration` and the tolerant sweep `recordScannedType` right after
@@ -12299,7 +12383,7 @@ export type Parser
 			// A FILE-scope function takes no receiver: there is no enclosing type for one to be.
 			try self.parseFunction(visibility, takesReceiver: false)
 		end 'isFunction' else if self.at(TokenKind.typealias) 'isTypeAlias'
-			let form = try self.readTypeAliasDeclaration(self.artifact.typeAliases, functionOut: self.artifact.functionTypeAliases, genericOut: self.genericAliasScratch, recordFunctionSignature: true, visibility: visibility)
+			let form = try self.readTypeAliasDeclaration(self.artifact.typeAliases, functionOut: self.artifact.functionTypeAliases, genericOut: self.genericAliasScratch, tupleOwner: TupleAliasOwner.fileScope, recordFunctionSignature: true, visibility: visibility)
 			self.recordTypeName(nameIndex, kind: form, visibility: self.typeAliasVisibility(visibility))
 		end 'isTypeAlias' else if self.at(TokenKind.type) 'isTypeDecl'
 			try self.parseTypeDeclaration(visibility)
@@ -12592,7 +12676,7 @@ export type Parser
 	// has the defect N3 cured here, but curing it needs more than a scoped lookup: a function alias resolves
 	// to `MaxonType.function(<the alias NAME>)`, so two files' declarations stay ONE type however the lookup
 	// is scoped. See `ProgramSignatures.contestedGenericAliases`.
-	function readTypeAliasDeclaration(rangedOut RangedTypeAliasArray, functionOut FunctionTypeAliasArray, genericOut GenericAliasEntryArray, recordFunctionSignature bool, visibility Visibility) returns TypeDeclKind throws ParseError
+	function readTypeAliasDeclaration(rangedOut RangedTypeAliasArray, functionOut FunctionTypeAliasArray, genericOut GenericAliasEntryArray, tupleOwner TupleAliasOwner, recordFunctionSignature bool, visibility Visibility) returns TypeDeclKind throws ParseError
 		try self.consume(TokenKind.typealias)
 		let nameTok = try self.consume(TokenKind.identifier)
 		try self.requireUnreservedName(nameTok)
@@ -12631,7 +12715,16 @@ export type Parser
 		// `requireTypeNameNotCompilerOwned` does not apply to it either.
 		if self.at(TokenKind.leftParen) 'tupleAlias'
 			let tupleType = try self.parseTupleTypeReference()
-			self.signatures.recordTupleAlias(nameTok.value, tupleName: try self.artifact.typeNames.nameOf(typeNameIdOf(tupleType)) otherwise panic("readTypeAliasDeclaration: the tuple type just minted for this alias carries an id that is not in this file's interner — `parseTupleTypeReference` interns its name into exactly that table"))
+			let target = try self.artifact.typeNames.nameOf(typeNameIdOf(tupleType)) otherwise panic("readTypeAliasDeclaration: the tuple type just minted for this alias carries an id that is not in this file's interner — `parseTupleTypeReference` interns its name into exactly that table")
+
+			// The KEY is the caller's, never this reader's (W43) — see `TupleAliasOwner`. The tuple itself is
+			// interned above whatever the owner says, because the ELEMENTS have to be validated on every read
+			// or a malformed nested alias inside a withheld extension body would go unreported.
+			match tupleOwner 'owner'
+				fileScope then self.signatures.recordTupleAlias(nameTok.value, tupleName: target)
+				enclosingType(owner) then self.signatures.recordTupleAlias(joinQualifiedName(owner, member: nameTok.value), tupleName: target)
+				unpublished then break 'owner'
+			end 'owner'
 			return TypeDeclKind.tupleAlias
 		end 'tupleAlias'
 
@@ -12763,30 +12856,40 @@ export type Parser
 		return self.at(TokenKind.typealias)
 	end 'atTypeAliasDeclaration'
 
-	// ⭐ **READ ONE NESTED (INNER) TYPEALIAS (P1.6-C / P1.7 slice 3b-i)** — `typealias Idx = int(0 to u64.max)`,
-	// `typealias ElementArray = Array with T` or `typealias Fn = function(Integer) returns Integer` inside a
-	// type body. The cursor sits at `typealias` (any `export` is consumed by the caller, which is why the
-	// visibility is passed rather than read). It reuses `readTypeAliasDeclaration` — the ONE typealias grammar
-	// the sweep and the real parse share — which routes each RHS into its own out-array. A nested TUPLE alias
-	// is rejected cleanly (a later slice). The two PER-INSTANCE forms record their bare member into
-	// `enclosingInnerAliases` so the rest of the body's bare references resolve; the FUNCTION form does not,
-	// because it is a file-scope declaration written inside a body and its name must mean the same thing on
-	// both sides of the type's `end` (see `NestedAliasResult`). The caller keys the returned shape.
+	// ⭐ **READ ONE NESTED (INNER) TYPEALIAS (P1.6-C / P1.7 slice 3b-i / W43)** — `typealias Idx = int(0 to
+	// u64.max)`, `typealias ElementArray = Array with T`, `typealias Entry = (Key, Value)` or
+	// `typealias Fn = function(Integer) returns Integer` inside a type body. The cursor sits at `typealias`
+	// (any `export` is consumed by the caller, which is why the visibility is passed rather than read). It
+	// reuses `readTypeAliasDeclaration` — the ONE typealias grammar the sweep and the real parse share —
+	// which routes each RHS into its own out-array. The three PER-INSTANCE forms record their bare member
+	// into `enclosingInnerAliases` so the rest of the body's bare references resolve; the FUNCTION form does
+	// not, because it is a file-scope declaration written inside a body and its name must mean the same thing
+	// on both sides of the type's `end` (see `NestedAliasResult`). The caller keys the returned shape.
 	//
 	// ⚠ **NOTHING HERE IS GATED ON THE ENCLOSING TYPE BEING GENERIC, AND NOTHING EVER WAS** — `parseTypeMember`
 	// and the sweep's body walk reach this for a plain `type Config` exactly as for a `type Container uses T`.
 	// The refusal below said "inside a generic type" for a year and was read as a statement about which types
 	// admit a nested alias; it was only ever a statement about which RHS FORMS are built.
-	function readNestedTypeAlias(visibility Visibility, recordFunctionSignature bool) returns NestedAliasResult throws ParseError
-		let aliasTok = self.current()
+	//
+	// ⭐⭐ **THE TUPLE FORM WAS THE LAST OF THE FOUR AND IS NO LONGER REFUSED (W43).** Its refusal said "a
+	// later slice", and what that slice turned out to be was a ROUTING job: a FILE-SCOPE tuple alias already
+	// compiled and ran, so the reader, the interning and the resolution all existed — what was missing was the
+	// per-type KEY (`TupleAliasOwner`), the `enclosingInnerAliases` membership, and the tuple arm in
+	// `parseTypeReference`'s inner-alias lookup. It is `stdlib/Map.maxon:20`'s first line of body.
+	function readNestedTypeAlias(visibility Visibility, recordFunctionSignature bool, tupleOwner TupleAliasOwner) returns NestedAliasResult throws ParseError
+		// The MEMBER name, peeked before the shared reader consumes it — the grammar `atTypeAliasDeclaration`
+		// already rests on (`typealias` then the name), and `recordScannedExtension` reads its target the same
+		// way. The tuple form is the one shape that hands back no declaration to take a name off, and it needs
+		// one for exactly the reason the other two per-instance forms do: `enclosingInnerAliases`.
+		let memberNameIndex = (self.pos + 1) as TokenIndex
 		var ranged = RangedTypeAliasArray.create()
 		var functionAliases = FunctionTypeAliasArray.create()
 		var generics = GenericAliasEntryArray.create()
 
 		// The FORM comes from the reader that decided it, never from which array grew: that inference
 		// would be a second copy of a discrimination `readTypeAliasDeclaration` already makes, free to
-		// drift the day a fourth form appears.
-		let form = try self.readTypeAliasDeclaration(ranged, functionOut: functionAliases, genericOut: generics, recordFunctionSignature: recordFunctionSignature, visibility: visibility)
+		// drift the day a fifth form appears.
+		let form = try self.readTypeAliasDeclaration(ranged, functionOut: functionAliases, genericOut: generics, tupleOwner: tupleOwner, recordFunctionSignature: recordFunctionSignature, visibility: visibility)
 
 		// A generic-instance nested alias (`Array with T`) — recorded by `readGenericInstanceAlias` into
 		// `generics`. Its instance is PARTIALLY OPAQUE (`Array with typeParameter(token)`), keyed whole-program by
@@ -12798,6 +12901,13 @@ export type Parser
 			return NestedAliasResult.genericInstance(entry)
 		end 'genericInstance'
 
+		// A TUPLE nested alias (`(Key, Value)`) — already keyed whole-program by the reader under the name
+		// `tupleOwner` names, so all that is left is the membership every per-instance form records.
+		if form == TypeDeclKind.tupleAlias 'tupleAlias'
+			self.recordInnerAliasName(self.identifierNameAt(memberNameIndex))
+			return NestedAliasResult.tupleAlias
+		end 'tupleAlias'
+
 		// A FUNCTION nested alias. It is NOT entered into `enclosingInnerAliases`: an inner-alias name is
 		// stamped `Type.Member` wherever the body writes it (`parseTypeReference`'s inner-alias arm), and a
 		// function alias must read back as the same file-scope `MaxonType.function(<name>)` inside the body
@@ -12806,13 +12916,12 @@ export type Parser
 			return NestedAliasResult.functionAlias(try functionAliases.get(0) otherwise panic("readNestedTypeAlias: the function form was read but functionAliases.get(0) failed"))
 		end 'functionAlias'
 
-		// The TUPLE form is the one remaining nested shape. A nominal kind cannot reach here at all,
-		// `typealias` being the only keyword this reader consumes. The enumeration is kept exhaustive
-		// deliberately: it is the reader's only statement of what a nested alias may be, so a form added to
-		// `readTypeAliasDeclaration` and not added here would be reported as if it did not exist.
-		if form != TypeDeclKind.rangedAlias 'notSupported'
-			throw ParseError.unsupported("a nested typealias must be a ranged `int`/`float` alias (`typealias Idx = int(0 to u64.max)`), a generic-instance alias (`typealias ElementArray = Array with T`) or a function alias (`typealias Fn = function(Integer) returns Integer`); a nested TUPLE alias is a later slice", line: aliasTok.line, column: aliasTok.column)
-		end 'notSupported'
+		// The RANGED form is the one remaining nested shape. A nominal kind cannot reach here at all,
+		// `typealias` being the only keyword this reader consumes, so anything else is a form
+		// `readTypeAliasDeclaration` grew and this enumeration did not.
+		if form != TypeDeclKind.rangedAlias 'unroutedForm'
+			panic("readNestedTypeAlias: `readTypeAliasDeclaration` read the form '{form.rawValue}', which this reader routes nowhere — every RHS form it can return needs an arm here or a nested declaration of it is silently dropped")
+		end 'unroutedForm'
 
 		let alias = try ranged.get(0) otherwise panic("readNestedTypeAlias: the ranged form was read but ranged.get(0) failed")
 		self.recordInnerAliasName(alias.name)
@@ -14004,8 +14113,14 @@ export type Parser
 			// unknown type to `parseTypeReference`, which is a wrong answer rather than a missing feature.
 			if self.atTypeAliasDeclaration() 'associatedTypeAlias'
 				let aliasTok = self.current()
-				let declaresFunctionType = match try self.readNestedTypeAlias(try self.consumeOptionalVisibility(), recordFunctionSignature: false) 'nested'
-					ranged to genericInstance gives false
+				// ⚠ **`unpublished`, and for the very reason the FUNCTION form is refused two paragraphs down**
+				// (see `TupleAliasOwner`): the declaration sweep reads no interface BODY, so a tuple alias keyed
+				// from the real parse alone would be a name whose resolution depended on which file the walk
+				// reached first. Read and validated here — `parseTupleTypeReference` checks its elements — and
+				// entered into `enclosingInnerAliases`, which is all an interface requirement's RENDERED
+				// signature needs.
+				let declaresFunctionType = match try self.readNestedTypeAlias(try self.consumeOptionalVisibility(), recordFunctionSignature: false, tupleOwner: TupleAliasOwner.unpublished) 'nested'
+					ranged to tupleAlias gives false
 					functionAlias gives true
 				end 'nested'
 
@@ -14228,6 +14343,16 @@ export type Parser
 	// looking straight at would be plumbing a parse fact through the whole tier for no gain.
 	function parseConformanceWithArgs(interfaceName ByteArray) returns ByteArrayArray throws ParseError
 		var args = ByteArrayArray.create()
+		if self.at(TokenKind.leftParen) and self.parenthesizedWithBindsOneTuple(interfaceName) 'oneTupleArgument'
+			// ONE argument, read by the ordinary reference reader — `parseTypeReference` meets the `(` and
+			// routes to `parseTupleTypeReference`, which is what mints and interns the tuple's layout. So the
+			// binding this records is character-for-character the name `WithIterIterator.current`'s declared
+			// `returns (Source, Element)` renders to, which is the whole point: `ConformanceCheck` compares
+			// the two as strings.
+			args.push(try self.readConformanceWithArg())
+			return args
+		end 'oneTupleArgument'
+
 		if self.at(TokenKind.leftParen) 'parenthesized'
 			// The `(` is the anchor for a surplus: it is the token that opens the list whose LENGTH is
 			// the assertion being refused, and it is on the `implements` line the author must edit.
@@ -14271,6 +14396,66 @@ export type Parser
 	function readConformanceWithArg() returns ByteArray throws ParseError
 		return renderDeclaredTypeName(try self.parseTypeReference(), declarationName: self.enclosingType, typeParamNames: self.enclosingTypeParams, typeNames: self.artifact.typeNames, signatures: self.signatures)
 	end 'readConformanceWithArg'
+
+	// ⭐⭐ **`with (A, B)` AGAINST A ONE-ASSOCIATED-TYPE INTERFACE IS ONE TUPLE ARGUMENT, NOT TWO BINDINGS
+	// (W43), AND THAT IS BOTH REFERENCES' RULE.** The bootstrap discriminates on the arity outright —
+	// *"when expecting a single type arg, let ParseTypeRef handle it — (A, B) is a tuple type, not two
+	// separate type arguments"* (`2-Parser.cs:3129-3137`) — and v1 records `parenForm` on each `Conformance`
+	// so `TypeResolution` can *"collapse a parenthesized multi-arg list against a single-`uses` interface into
+	// one `__TupleN` generic-instance"* (`Parser.maxon:1944-1949`). shv2's R6 settled on a pure LIST reading
+	// with `((A, B))` as the tuple spelling, and R6's own spec text named the day this would collide:
+	// *"It is also the spelling `stdlib/helpers/itertools/withIterator.maxon` needs the day it is loadable"*.
+	// That file writes `implements Iterator with (Source, Element)` against a one-`uses` `Iterator` and
+	// declares `current() returns (Source, Element)`, so NO list reading can make it conform — the LIST
+	// reading is not a stricter shv2 rule here, it is a rejection of a program the corpus writes and both
+	// references compile. The corpus is the reference, so the arity discrimination is.
+	//
+	// ⚠ **A COMMA IS REQUIRED, WHICH IS WHAT KEEPS THE TWO SPELLINGS R6 PINNED ALIVE.** `with (T)` holds no
+	// top-level comma and stays ONE ordinary binding — `parseTupleTypeReference` would refuse it as a
+	// one-element tuple, which is exactly the rejection the bootstrap gives that spelling (`E2003`) and which
+	// shv2 deliberately does not. `with ((A, B))` holds its comma one level DOWN, so it too stays one
+	// binding, whose single item is the tuple. Only `with (A, B)` moves, and only at arity one.
+	//
+	// ⚠ **IT ANSWERS `false` FOR THE WHOLE DECLARATION SWEEP, BECAUSE THE ARITY IS NOT KNOWN THERE** —
+	// `Queries.foldInterfaceDeclarations` runs after the last file is folded, so `conformanceUsesArity` reads
+	// `unresolvable` for every interface while the sweep is walking. The sweep therefore records the ITEM
+	// LIST where the real parse records one tuple, and the two disagreeing is contained rather than tolerated:
+	// `conformerAssociatedBindings` refuses to pair a bindings list against an associated-type list of a
+	// different LENGTH, so the consequence is a conditional extension WITHHELD from that conformer and a body
+	// parsed with no substitution — `readOptionalImplementsClause`'s own standard, *"bounded, and a missing
+	// extension, never a wrong one"*. It cannot be fixed by asking earlier: the binding a tuple carries is the
+	// INTERNED tuple layout's name, whose elements are canonicalized through `mangleTypeArg` (a type
+	// parameter's is a W14 digest), so it cannot be reconstructed later from the argument SPELLINGS.
+	function parenthesizedWithBindsOneTuple(interfaceName ByteArray) returns bool
+		match self.conformanceUsesArity(interfaceName) 'arity'
+			declared(count) then return count == SingleAssociatedType and self.parenGroupHoldsTopLevelComma(self.pos)
+			unresolvable then return false
+		end 'arity'
+	end 'parenthesizedWithBindsOneTuple'
+
+	// Does the balanced `( … )` opening at `index` hold a comma at ITS OWN level? Nested groups are stepped
+	// over through `matchingRightParenOf` — the one balanced-extent door — rather than by a second depth
+	// counter, so "which `)` closes this `(`" has one answer in this file. An UNBALANCED group answers false
+	// and leaves the real parse to report it with a position, exactly as `skipBalancedParens` does.
+	function parenGroupHoldsTopLevelComma(index TokenIndex) returns bool
+		let closeIndex = self.matchingRightParenOf(index)
+		if self.kindAt(closeIndex) != TokenKind.rightParen 'unbalanced'
+			return false
+		end 'unbalanced'
+
+		var i = (index + 1) as TokenIndex
+		while i < closeIndex 'scan'
+			if self.kindAt(i) == TokenKind.comma 'topLevelComma'
+				return true
+			end 'topLevelComma'
+			if self.kindAt(i) == TokenKind.leftParen 'nestedGroup'
+				i = self.matchingRightParenOf(i) + 1
+				continue
+			end 'nestedGroup'
+			i = i + 1
+		end 'scan'
+		return false
+	end 'parenGroupHoldsTopLevelComma'
 
 	// ⚖ **A PARENTHESIZED `with (…)` LIST MAY NOT BE LONGER THAN THE INTERFACE'S `uses` ARITY (R6).**
 	// Before this, `implements One with (Integer, Float)` against `interface One uses A` bound
@@ -14739,13 +14924,15 @@ export type Parser
 				throw ParseError.unsupported("a nested typealias cannot be `static` — it is a per-type declaration, not a member function", line: tok.line, column: tok.column)
 			end 'staticInnerAlias'
 
-			// The two PER-INSTANCE forms are keyed whole-program by the sweep (`innerAliases`/`genericAliases`)
-			// and the real parse needs only the local `enclosingInnerAliases` population `readNestedTypeAlias`
-			// performs — so their shapes are discarded here. A FUNCTION alias is not a member, and its declared
-			// SIGNATURE lives only in the real parse's artifact (`readFunctionTypeAlias`'s `recordSignature`
-			// note), so it is filed here in the array a top-level `typealias Fn = function(…)` files into.
-			match try self.readNestedTypeAlias(visibility, recordFunctionSignature: true) 'nested'
-				ranged to genericInstance then return
+			// The three PER-INSTANCE forms are keyed whole-program by the sweep (`innerAliases`/`genericAliases`
+			// /`tupleAliases`) and the real parse needs only the local `enclosingInnerAliases` population
+			// `readNestedTypeAlias` performs — so their shapes are discarded here, and the TUPLE form's owner is
+			// `unpublished` for the same reason (the sweep already keyed it, from the same tokens). A FUNCTION
+			// alias is not a member, and its declared SIGNATURE lives only in the real parse's artifact
+			// (`readFunctionTypeAlias`'s `recordSignature` note), so it is filed here in the array a top-level
+			// `typealias Fn = function(…)` files into.
+			match try self.readNestedTypeAlias(visibility, recordFunctionSignature: true, tupleOwner: TupleAliasOwner.unpublished) 'nested'
+				ranged to tupleAlias then return
 				functionAlias(alias) then self.artifact.functionTypeAliases.push(alias)
 			end 'nested'
 			return
@@ -16473,6 +16660,14 @@ export type Parser
 				if self.signatures.allFilesFolded and self.signatures.isGenericAlias(qualifiedInner) 'genericInnerAlias'
 					return MaxonType.genericInstance(self.signatures.genericAliasInstanceFrom(qualifiedInner, readerFilePath: self.filePath))
 				end 'genericInnerAlias'
+				// A TUPLE inner alias (W43) — `Entry` inside `type Map uses Key, Value`. It resolves STRAIGHT
+				// THROUGH to the interned tuple's own `structRef`, exactly as the file-scope tuple-alias arm far
+				// below does, which is what makes an `Entry`-typed slot and a `(Key, Value)`-typed one one type.
+				// UNGATED by `allFilesFolded` for that arm's stated reason: `recordTupleAlias` writes DURING the
+				// walk, so the resolved answer is the common case here and the bare `named` the rare one.
+				if self.signatures.isTupleAlias(qualifiedInner) 'tupleInnerAlias'
+					return MaxonType.structRef(self.artifact.typeNames.intern(self.signatures.tupleAliasTarget(qualifiedInner)))
+				end 'tupleInnerAlias'
 				return MaxonType.named(self.artifact.typeNames.intern(qualifiedInner))
 			end 'innerAlias'
 

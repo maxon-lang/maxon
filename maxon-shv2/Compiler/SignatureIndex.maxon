@@ -8761,6 +8761,19 @@ export type ProgramSignatures
 		return self.innerAliases.contains(name)
 	end 'isInnerAlias'
 
+	// ⭐ **DOES THE BASE-QUALIFIED NAME `qualified` NAME A NESTED TYPEALIAS OF *ANY* PER-INSTANCE FORM
+	// (W43)?** Three registries carry those — a RANGED one lands in `innerAliases`, a GENERIC-INSTANCE one in
+	// `genericAliases` and a TUPLE one in `tupleAliases` — and every one of them is keyed `<Type>.<member>`,
+	// so "did this type declare a nested alias called X?" is one question with three places to look. Spelled
+	// once here rather than at the asker, because the day a fifth alias form arrives the asker would be the
+	// copy that did not learn about it.
+	//
+	// A FUNCTION alias is deliberately absent: it declares a FILE-scope name and is never qualified by its
+	// enclosing type (`Parser.NestedAliasResult`), so `<Type>.<member>` could not name one.
+	export function declaresInnerAlias(qualified ByteArray) returns bool
+		return self.innerAliases.contains(qualified) or self.genericAliases.contains(qualified) or self.tupleAliases.contains(qualified)
+	end 'declaresInnerAlias'
+
 	// The inner alias `name` names ("Wrapper.Idx"), or `undeclared`. Its stored `.name` is the BARE member
 	// (`Idx`) the method-return retype re-qualifies with a concrete receiver's instance alias.
 	export function innerAliasOf(name ByteArray) returns DeclaredAlias
