@@ -1543,6 +1543,15 @@ type MaxonToStdLowering
 			let receiver = try argIds.get(0) otherwise panic("materializeLayoutArgFor: layout-needing instance method '{String.from(callee)}' has no receiver argument — its first parameter is `self`")
 			return self.materializeLayoutArg(receiver, callee: callee, dstBlock: dstBlock)
 		end 'instanceMethod'
+		// ⭐ **A FIELD-DEFAULT HELPER IS THE ONE RECEIVERLESS LAYOUT-NEEDING CALLEE WHOSE DESCRIPTOR COMES
+		// FROM THE CALLER (W43b).** Its result is the FIELD's type (`Array with Key`), not the enclosing
+		// instance, so there is nothing to read a descriptor off — but its only call site is a `Self{…}`
+		// inside the declaring type's own body (`requireConstructible`'s E3076), which is a method of that
+		// type and therefore holds the descriptor to forward. `Parser.scanDescriptorNeedsInto` gives that
+		// method the slot for exactly this reason, so `forwardCallerLayout` always finds one.
+		if isFieldDefaultHelperName(callee) 'fieldDefault'
+			return self.forwardCallerLayout(callee)
+		end 'fieldDefault'
 		return self.materializeStaticConstructorLayout(result, callee: callee, dstBlock: dstBlock)
 	end 'materializeLayoutArgFor'
 
