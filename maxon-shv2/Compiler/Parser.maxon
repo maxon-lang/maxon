@@ -49322,7 +49322,7 @@ export type Parser
 	// minted through `mintCallResult`, which can REFUSE (a void call in value position), so nothing
 	// is emitted for a call the program is not allowed to make.
 	//
-	// ⚠ **WHAT IT RETURNS IS NOT ALWAYS THE OP'S RESULT.** A SUBSTITUTED opaque return is a borrow the shared
+	// ⚠ **WHAT IT RETURNS IS NOT ALWAYS THE OP'S RESULT.** A substituted BARE-`T` return is a borrow the shared
 	// body handed back, and the value the expression goes on to use is the caller's own reference to it
 	// (`coOwnSubstitutedCallResult`) — a different ValueId, deliberately, so a later re-borrow of the source
 	// cannot `poisonMoveSource`-match it. The op still defines the borrow.
@@ -49339,7 +49339,7 @@ export type Parser
 		// it with no change to any of them.
 		let argDefaultSlots = try self.fillOmittedArgDefaults(callee, anchor: anchor, args: args, argLabels: argLabels, argRanges: argRanges)
 		let result = try self.mintCallResult(callee, anchor: anchor, resultUsed: resultUsed)
-		let substituted = self.retypeOpaqueMethodResult(result, callee: callee, args: args)
+		let handedBackABorrow = self.retypeOpaqueMethodResult(result, callee: callee, args: args)
 		// ⭐⭐ **THE DROP ENROLMENT COMES AFTER THE RETYPE, AND THAT ORDER IS THE WHOLE OF A5o.** It used to sit
 		// in the mint's own tail, where the tag was still the opaque `T` — and an opaque tag ALWAYS answers "owns
 		// nothing" (`valueIsManagedHeap` tests byte-record and aggregate tags, and `typeParameter` is neither).
@@ -49348,14 +49348,18 @@ export type Parser
 		// a value whose type the instance fixes. Asked HERE the tag is the concrete one, so the two halves agree.
 		// See `enrolOwnedCallTemp` for why re-ordering it can only ADD enrolments.
 		//
-		// ⛔⛔ **A SUBSTITUTED RESULT IS THE ONE KIND THE CALLEE DID NOT CO-OWN, SO IT IS NOT ADOPTED HERE.**
-		// Adoption assumes the `+1` a `returns <managed>` callee hands back (`emitOwnedValueReturn` retains
-		// before the `ret` — MEASURED: a concrete `Holder.get` returning `self.value` emits `__mm_retain`). A
-		// SHARED generic body emits none, because it cannot classify `T`, so its `T` return is a BORROW.
-		// Adopting it drops a reference nobody took: MEASURED, `back.a` on a `Box with Alpha` round trip read
-		// `4557430888798830399` — `0x3F3F…`, the free poison — with the box then freed twice. The caller takes
-		// its own reference instead, below, where the value exists (`coOwnSubstitutedCallResult`).
-		if not substituted 'calleeAlreadyCoOwnedIt'
+		// ⛔⛔ **AN OPAQUE SUBSTITUTED RESULT IS THE ONE KIND THE CALLEE DID NOT CO-OWN, SO IT IS NOT ADOPTED
+		// HERE.** Adoption assumes the `+1` a `returns <managed>` callee hands back (`emitOwnedValueReturn`
+		// retains before the `ret` — MEASURED: a concrete `Holder.get` returning `self.value` emits
+		// `__mm_retain`). A SHARED generic body emits none for a BARE `T`, because it cannot classify one, so
+		// that return is a BORROW. Adopting it drops a reference nobody took: MEASURED, `back.a` on a
+		// `Box with Alpha` round trip read `4557430888798830399` — `0x3F3F…`, the free poison — with the box
+		// then freed twice. The caller takes its own reference instead, below (`coOwnSubstitutedCallResult`).
+		//
+		// ⚠ **THE TEST IS THE OPAQUE RETURN, NOT THE SUBSTITUTION** — a substituted return of a CONCRETE
+		// managed record (a tuple, an instance) IS referenced by the body and is adopted here like any other.
+		// See `retypeOpaqueReturnValue`, where the two questions come apart and W41 measured the leak.
+		if not handedBackABorrow 'calleeAlreadyCoOwnedIt'
 			self.enrolOwnedCallTemp(result)
 		end 'calleeAlreadyCoOwnedIt'
 		// ⭐ **A CALLEE THAT DECLARED `returns __ManagedMemory` YIELDS THE BUFFER SURFACE (A2j).** Read HERE
@@ -49375,11 +49379,11 @@ export type Parser
 		// spelled (free, method, static), so a bare call to a declared throwing function inside such a body
 		// reaches the shared handler. `result` rides along because an ADOPTED managed one is already enrolled
 		// as an owned temp by `enrolOwnedCallTemp` above, and it must not be dropped on the error edge — see
-		// `routeBareThrowingCallToTryBlock`. A SUBSTITUTED one is not enrolled at all when this runs, so that
-		// function's test simply answers no and the co-ownership below lands on the ok continuation, which is
-		// the only edge the `tryCall` wrote the result register on.
+		// `routeBareThrowingCallToTryBlock`. An OPAQUE substituted one is not enrolled at all when this runs, so
+		// that function's test simply answers no and the co-ownership below lands on the ok continuation, which
+		// is the only edge the `tryCall` wrote the result register on.
 		self.routeBareThrowingCallToTryBlock(callee, opIdx: opIdx, result: result)
-		if substituted 'sharedBodyHandedBackABorrow'
+		if handedBackABorrow 'sharedBodyHandedBackABorrow'
 			return try self.coOwnSubstitutedCallResult(result, callee: callee, range: SourceRange.between(anchor, last: rparenTok))
 		end 'sharedBodyHandedBackABorrow'
 
@@ -49401,6 +49405,15 @@ export type Parser
 	//
 	// A TRIVIAL instantiation owns no heap, so this is a no-op for `Box with Integer` and the emitted code is
 	// unchanged for it.
+	//
+	// ⛔⛔ **IT IS REACHED FOR A BARE `T` AND FOR NOTHING ELSE, AND THAT GATE IS THE WHOLE OF W41.** The
+	// premise above — *the body could not classify it, so it took no reference* — is true of an OPAQUE return
+	// and false of every CONCRETE managed record a generic method can hand back. A `returns Pair`
+	// (`Pair = (T, T)`) substitutes exactly as a bare `T` does, but a tuple is a `structRef` on every
+	// instantiation, so the body DID classify it and `emitOwnedValueReturn` already discharged the hand-off.
+	// Reached on one of those, this function mints a SECOND reference to a record that already had exactly one
+	// owner, drops that one, and leaks the body's. See `retypeOpaqueReturnValue`, which is where the two
+	// questions are told apart.
 	//
 	// ⚠ **IT IS ALSO THE ONE WRITER OF `lastSubstitutedCoOwn`, AND THE EARLY RETURN ABOVE IS WHAT MAKES THAT
 	// RECORD EXACT.** The `try` lift that reads it must fire for a managed result and must NOT fire for a
@@ -49549,10 +49562,17 @@ export type Parser
 	// The gate is ordered cheapest-first: almost every call in a program has a non-generic first argument, and
 	// that test is one array read. Only past it is the callee's return type looked up.
 	//
-	// ⭐ **IT REPORTS WHETHER IT FIRED, AND THAT ANSWER IS AN OWNERSHIP FACT, NOT A CONVENIENCE.** A
-	// substituted result is the one call result whose callee took no reference for it, so `emitCall` needs
-	// exactly this bit to tell the two hand-offs apart — see `coOwnSubstitutedCallResult`. Re-deriving it
-	// there would be the same question asked twice, of a value whose tag the substitution has just changed.
+	// ⭐ **WHAT IT REPORTS IS AN OWNERSHIP FACT, NOT "DID THE RETYPE FIRE".** `emitCall` needs exactly one bit
+	// — *did the shared body hand this back without taking a reference for it?* — to tell the two hand-offs
+	// apart (`coOwnSubstitutedCallResult`), and it is answered here because this is where the callee's
+	// DECLARED return type is already in hand; re-deriving it in `emitCall` would cost a second
+	// `returnTypeOf` lookup on the hottest path in the parser.
+	//
+	// ⛔ **THE TWO WERE ONE ANSWER UNTIL W25 AND HAVE NOT BEEN SINCE.** While the gate below was
+	// `typeParameter`-only they coincided; widening it to `returns Items` / `returns Pair` made "substituted"
+	// strictly broader than "unreferenced", and the bit went on being read as the latter — one leaked record
+	// per call, measured. `retypeOpaqueReturnValue` derives the ownership half from the declared type and
+	// carries the argument in full.
 	function retypeOpaqueMethodResult(result ValueId, callee ByteArray, args ValueIdArray) returns bool
 		if args.isEmpty() 'noReceiver'
 			return false
@@ -49615,7 +49635,30 @@ export type Parser
 		end 'theInstanceFixesNothingHere'
 
 		self.retypeValue(result, valueType: fixedByTheInstance)
-		return true
+
+		// ⭐⭐ **THE RETYPE FIRED — WHETHER THE CALLER OWES A REFERENCE IS A SECOND QUESTION, AND IT IS ASKED OF
+		// THE DECLARED TYPE (W41).** The two were ONE answer while this gate was `typeParameter`-only, and W25
+		// widened the gate without revisiting what rode on it: a method declared `returns Items` / `returns Pair`
+		// substitutes just as a bare `T` does, so "the substitution fired" stopped meaning "the body took no
+		// reference" and every such result was co-owned as if it were a borrow.
+		//
+		// ⛔ **The premise belongs to the OPAQUE return alone.** A shared body cannot classify a bare `T` — an
+		// unconditional retain would fault on a trivial instantiation's raw scalar — so `emitOwnedValueReturn`'s
+		// promotion declines (`valueIsManagedHeap` is false for a `typeParameter` tag) and the value leaves
+		// UNREFERENCED. A CONCRETE managed record is a shape the body knows whichever type `T` is: a tuple is a
+		// `structRef` on every instantiation, so that same promotion classifies it, copies-or-increfs a borrowed
+		// one, passes an already-owned one through, and hands the caller a real `+1` exactly as a non-generic
+		// callee does. There is nothing left for the caller to take.
+		//
+		// ⛔⛔ **MEASURED (W41): taking it anyway LEAKS ONE RECORD PER CALL, and only the leak gate can see it.**
+		// `MapIterator.current()`'s `Entry = (Key, Value)` is the reaching program — `for (_, value) in m` walked
+		// `current()`, the caller minted a second reference to the pair the body had just built (a whole fresh
+		// record through `copyTupleValue` for a trivial tuple, an `__mm_retain` for a managed-element one),
+		// destructured THAT and dropped THAT, and the body's own record was adopted by nobody. Every answer
+		// stayed correct; five cases exited 101. `generic-type-substitution.md`'s two
+		// `substituted-return-of-…-is-already-owned` cases pin both arms with no loop, iterator or `Map` in
+		// sight, which is what localizes the defect to this line rather than to the traversal protocol.
+		return maxonTypeTag(inner) == ValueTypeTag.typeParameter
 	end 'retypeOpaqueReturnValue'
 
 	// ⭐ **A CALL ARGUMENT MEETS THE PARAMETER'S DECLARED RANGE (P1.9), and this is the door that used to
@@ -50156,10 +50199,11 @@ export type Parser
 	// void / unresolved result owns no heap and is enrolled in nothing, so a call door with nothing to
 	// classify may ask unconditionally.
 	//
-	// ⛔ **THE ONE RESULT THAT IS NOT ADOPTED is a SUBSTITUTED opaque return** — a shared generic body takes
-	// no reference, so there is no `+1` to adopt and the caller mints its own instead
+	// ⛔ **THE ONE RESULT THAT IS NOT ADOPTED is a substituted BARE-`T` return** — a shared generic body cannot
+	// classify one, so it takes no reference, there is no `+1` to adopt, and the caller mints its own instead
 	// (`coOwnSubstitutedCallResult`). That is the single gate on this call, at the single door that can reach
-	// one; the witness and indirect doors have no substitution and ask unconditionally.
+	// one; the witness and indirect doors have no substitution and ask unconditionally. A substituted return of
+	// a CONCRETE managed record carries a real `+1` and IS adopted here — see `retypeOpaqueReturnValue` (W41).
 	//
 	// ⛔⛔ **IT IS ASKED ONCE PER CALL DOOR, AND IT MUST BE ASKED OF THE FINAL TAG.** `valueIsManagedHeap`
 	// reads the value's TAG, and an OPAQUE tag is none of `string` / `character` / `structRef` /
@@ -50170,8 +50214,10 @@ export type Parser
 	// `retypeOpaqueMethodResult`; the WITNESS door (`mintWitnessDispatchResult`) and the INDIRECT one
 	// (`parseIndirectCall`) have no retype to wait for and ask as soon as the value exists.
 	//
-	// ⚠ **THE RE-ORDER CAN ONLY ADD ENROLMENTS, NEVER REMOVE ONE.** The retype fires only on a
-	// `typeParameter` tag, which answers `false` here; and the three lifts inside `mintOwnedCallResult`
+	// ⚠ **THE RE-ORDER CAN ONLY ADD ENROLMENTS, NEVER REMOVE ONE.** The retype declines unless the instance
+	// fixes something the declaration left open, and the tags it can rewrite (a bare `typeParameter`, and since
+	// W25 a `genericInstance`/`structRef` whose arguments the receiver settles) each answer this question at
+	// least as generously afterwards as before; and the three lifts inside `mintOwnedCallResult`
 	// (`resolveNamedStruct`, `resolveFloatAliasType`, `resolveNamedAlias`) each return their argument
 	// unchanged unless the tag is `named`. So the retype is strictly not-managed → maybe-managed, and for
 	// every non-generic call it is a no-op and this answer is bit-identical to the pre-A5o one.
