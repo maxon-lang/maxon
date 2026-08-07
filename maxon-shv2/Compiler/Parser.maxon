@@ -3923,7 +3923,13 @@ end 'quadArgs'
 // matches on — a map cannot name a constant its file cannot see, and a second `b"set"` beside the first is
 // the drift these blocks exist to prevent. Nothing about the dispatch changed: it still matches the same byte
 // strings.
-let CreateMethod = b"create"
+//
+// ⚠ **`create` IS EXPORTED, AND ONLY IT (W41).** A DECLARED generic's instance is born through the `create()`
+// static the program itself wrote, so `ProgramSignatures.declaredInstanceCreateCallee` mangles `Map.create`
+// from this very spelling — the one a body's `StrMap.create()` already mangles to. The rest stay file-private
+// because nothing outside this file names them; a second `b"create"` in `SignatureIndex` would be exactly the
+// drift the block above exists to prevent, one file over.
+export let CreateMethod = b"create"
 let ArrayPushMethod = b"push"
 let ArrayCapacityMethod = b"capacity"
 let ArrayReserveMethod = b"reserve"
@@ -40044,29 +40050,21 @@ export type Parser
 		panic("Parser.gateAndEmitContainerCreate: generic instance {giid} is not a create-only builtin container — every caller opens with the builtin-base test `requireContainerIsCreatable` makes, and a container admitted there owes a gate and an emit here")
 	end 'gateAndEmitContainerCreate'
 
-	// ⭐⭐ **MAY `<Alias>.create()` BE WRITTEN FOR THIS INSTANCE — the WHOLE gate, asked from BOTH positions.**
-	// A body's `create()` and a top-level `var g = Alias.create()` reach it through
-	// `gateAndEmitContainerCreate` and `evalConstContainerCreate` respectively, so what one refuses cannot
-	// become admissible by being written at the other. It anchors every diagnostic on the ALIAS token: the
-	// type the author wrote is what is inadmissible. Three steps, in the order a reader would ask them — is
-	// this a builtin container at all, does that container have a `create`, and are its columns admissible.
+	// ⭐⭐ **MAY `<Alias>.create()` BE WRITTEN FOR THIS BUILTIN CONTAINER — the WHOLE gate, asked from BOTH
+	// positions.** A body's `create()` and a top-level `var g = Alias.create()` reach it through
+	// `gateAndEmitContainerCreate` and `requireGlobalContainerIsCreatable` respectively, so what one refuses
+	// cannot become admissible by being written at the other. It anchors every diagnostic on the ALIAS token:
+	// the type the author wrote is what is inadmissible. Two steps, in the order a reader would ask them —
+	// does this container have a `create`, and are its columns admissible.
+	//
+	// ⚠ **PRECONDITION: THE INSTANCE'S BASE IS A BUILTIN CONTAINER**, which both callers establish
+	// (`isBuiltinGenericBaseName` at `parseBuiltinContainerStaticCall`'s call sites; the router's own arm at
+	// the top-level door). It used to carry that test itself and refuse a DECLARED generic outright — the
+	// refusal W41 removed, because a declared generic now has something better than the builtin registry's
+	// description: a real `create()` static `__module_init` can CALL (`ProgramSignatures.containerCreateCall`).
+	// A break of the precondition is not silent: `instanceHasBuiltinCreate` admits anything that is not a node
+	// handle, and `requireContainerColumnTypes` below then meets its named panic.
 	function requireContainerIsCreatable(giid GenericInstanceId, aliasTok Token) throws ParseError
-		// ⛔⛔ **A USER GENERIC'S INSTANCE ALIAS REACHES THE TOP-LEVEL DOOR AND MUST BE REFUSED HERE.** That
-		// door claims the shape on `isGenericAlias` alone (`evalConstFoldedValue`), and `genericAliases` holds
-		// USER instances (`typealias IntBox = Box with Count`) beside the builtin ones — so without this test
-		// a user generic fell through `instanceHasBuiltinCreate`, whose header states "this is a builtin
-		// container" as a PRECONDITION, and reached `ProgramSignatures.containerCreateCall`'s named panic.
-		// The body door establishes the same fact one line before it dispatches
-		// (`isBuiltinGenericBaseName` at `parseBuiltinContainerStaticCall`'s call sites), which is why it is
-		// asked here rather than there: one home for it, on the path that had none.
-		//
-		// ⚠ **THE SENTENCE NAMES THE TOP-LEVEL POSITION BECAUSE THAT IS THE ONLY DOOR THAT CAN RAISE IT**, and
-		// what it says is MEASURED: the very same `IntBox.create()` compiles and runs inside a function, so the
-		// refusal is about where it was written and not about the call.
-		if not self.signatures.isBuiltinGenericBaseName(self.signatures.genericInstanceBaseName(giid)) 'notABuiltinContainer'
-			throw ParseError.unsupported("a top-level `{String.from(aliasTok.value)}.{String.from(CreateMethod)}()` — `{String.from(aliasTok.value)}` instantiates the user generic `{String.from(self.signatures.genericInstanceBaseName(giid))}`, and a global's record is built before `main` by `__module_init` from the BUILTIN container registry's description, which a user generic has none of. Declare it inside a function", line: aliasTok.line, column: aliasTok.column)
-		end 'notABuiltinContainer'
-
 		// ⛔ A NODE HANDLE IS NOT CONSTRUCTIBLE — only an insertion mints one — so a `typealias N =
 		// __ManagedListNode with T` + `N.create()` is refused with the sentence
 		// `containerStaticSurfaceSentence` owns, rather than reaching either router's panic, which is about a
@@ -40077,6 +40075,101 @@ export type Parser
 
 		try self.requireContainerColumnTypes(giid, aliasTok: aliasTok)
 	end 'requireContainerIsCreatable'
+
+	// ⭐⭐ **MAY A GLOBAL HOLD `<Alias>.create()`'s EMPTY RECORD — THE TOP-LEVEL DOOR'S WHOLE GATE, AND IT
+	// ROUTES ON WHO OWNS THE `create` (W41).** `genericAliases` holds DECLARED instances
+	// (`typealias StrMap = Map with (String, Integer)`, now that `stdlib/Map.maxon` is listed) beside the
+	// builtin ones, and the two are admissible for different reasons: a builtin container's record is the
+	// runtime's and must pass the column rules that runtime's stamps encode, while a declared generic's is
+	// built by a `create()` static the program wrote and must pass the rules a CALL to that static rests on.
+	// One question — *may this instance's empty record be a global?* — with the answer routed on
+	// `instanceCreateIsDeclared`, the same derivation the emitted description is routed on
+	// (`ProgramSignatures.containerCreateCall`), so a gate can never approve a shape the emitter has no arm for.
+	function requireGlobalContainerIsCreatable(giid GenericInstanceId, aliasTok Token) throws ParseError
+		if self.signatures.instanceCreateIsDeclared(giid) 'declaredGeneric'
+			try self.requireDeclaredGenericGlobalCreate(giid, aliasTok: aliasTok)
+			return
+		end 'declaredGeneric'
+
+		try self.requireContainerIsCreatable(giid, aliasTok: aliasTok)
+	end 'requireGlobalContainerIsCreatable'
+
+	// ⭐⭐ **WHAT A DECLARED GENERIC'S `create()` MUST BE FOR `__module_init` TO CALL IT (W41).** The whole of
+	// what replaced the blanket refusal. Three clauses, each a premise of the emitted call rather than a
+	// defensive check:
+	//
+	//   * **IT MUST EXIST.** `Base.create` is the name the emitted call carries
+	//     (`declaredInstanceCreateCallee`); a generic that declares no `create()` would emit a call to nothing
+	//     and die at the backend's unresolved symbol, so it is refused here with the base named.
+	//   * **IT MUST BE NAMEABLE FROM THIS FILE** — `requireGlobalInitCalleeIsVisible`'s rule, which the user
+	//     factory form asks too and which carries the measurement for both.
+	//   * **IT MUST RETURN ITS OWN TYPE.** The slot is typed `genericInstance(giid)` and the record's layout
+	//     descriptor and constraint witnesses are sourced from the call's RESULT, which is the concrete
+	//     instance only for a `Self`-returning static (`ProgramSignatures.calleeReturnsItsDeclaringType`, whose
+	//     header states both sides of that ABI). A `create()` returning anything else would have its result
+	//     minted as a record the callee never built — a wrong answer at run time and a decref of it at exit.
+	//     Asked through the SAME predicate `LowerMaxonToStd.witnessParamCountForCallee` sizes the hidden block
+	//     by, so the gate and the ABI cannot disagree about which statics are constructors.
+	//
+	// ⚠ **ARITY IS DELIBERATELY NOT HERE — IT IS `SemanticCheck.validateCall`'s, for every top-level
+	// initializer alike.** `installManagedGlobalInit` runs before the pipeline, so the emitted call is slotted
+	// against the callee's signature by the same pass that slots a body's, and a `create()` with a required
+	// parameter is E3036 at the global's own range. The user factory form (`evalConstFactoryCall`) leaves it
+	// there for the same reason; re-asking it here would be a second arity rule, free to disagree with the one
+	// the call is actually checked by.
+	//
+	// ⛔ **AN UNDECLARED BASE IS NOT THIS DOOR'S TO DESCRIBE.** `typealias B = Nonexistent with Count` interns
+	// an instance like any other, and `instanceCreateIsDeclared` — the complement of the BUILTIN roster —
+	// answers true for it. Saying "`Nonexistent` declares no `create()`" would describe the program wrongly:
+	// its fault is that nothing declares the base at all, which `checkGenericInstance` has already recorded as
+	// E2055. `genericInstanceBaseIsKnown` is the split that exists to keep those two apart, and its header
+	// says they must not be collapsed.
+	//
+	// Every refusal is anchored on the ALIAS token: the type the author wrote is what is inadmissible, which
+	// is where `requireContainerIsCreatable` anchors its own.
+	function requireDeclaredGenericGlobalCreate(giid GenericInstanceId, aliasTok Token) throws ParseError
+		if not self.signatures.genericInstanceBaseIsKnown(giid) 'undeclaredBase'
+			return
+		end 'undeclaredBase'
+
+		let baseName = self.signatures.genericInstanceBaseName(giid)
+		let callee = self.signatures.declaredInstanceCreateCallee(giid)
+
+		if not self.signatures.declaresCallee(callee) 'noCreateStatic'
+			throw ParseError.unsupported("a top-level `{String.from(aliasTok.value)}.{String.from(CreateMethod)}()` — `{String.from(aliasTok.value)}` instantiates the generic `{String.from(baseName)}`, which declares no `{String.from(CreateMethod)}()` static, so `__module_init` has nothing to call before `main`. Give `{String.from(baseName)}` one, or build the value inside a function", line: aliasTok.line, column: aliasTok.column)
+		end 'noCreateStatic'
+
+		try self.requireGlobalInitCalleeIsVisible(callee, anchor: aliasTok)
+
+		if not self.signatures.calleeReturnsItsDeclaringType(callee) 'notAConstructor'
+			throw ParseError.unsupported("a top-level `{String.from(aliasTok.value)}.{String.from(CreateMethod)}()` — `{String.from(baseName)}.{String.from(CreateMethod)}` does not return `Self`, and a global declared this way holds the INSTANCE its alias names. A generic's layout descriptor and witnesses are read off what its `{String.from(CreateMethod)}()` hands back, so only a `Self`-returning one can build `{String.from(aliasTok.value)}`. Build the value inside a function", line: aliasTok.line, column: aliasTok.column)
+		end 'notAConstructor'
+	end 'requireDeclaredGenericGlobalCreate'
+
+	// ⭐⭐ **MAY THE DECLARING FILE NAME A FUNCTION `__module_init` WILL CALL ON ITS BEHALF? — the ONE home,
+	// asked by BOTH calling initializer forms.** A body's call site gets this from
+	// `SemanticCheck.calleeVisibleFrom`; this position cannot, because `__module_init` is a function no file
+	// wrote and that pass therefore EXEMPTS every call it makes — there is no reader path to hold them to
+	// (see `SemanticCheck.calleeVisibleFrom`'s synthesized-caller arm, which names both doors). Without the
+	// question asked here, an exported type's file-private `static` would be reachable from any file that
+	// writes `var db = Database.create()`. MEASURED before the guard existed: a cross-file file-private
+	// `Database.create` built and returned 7, where the byte-identical call from inside a function is E3008.
+	//
+	// It is asked HERE, where the reader file is known exactly, against the sweep's own visibility column and
+	// through the very same `isVisibleFrom` the body door uses — so the two askers can disagree about no
+	// declaration they both see. The refusing TIER rides back with the verdict because it picks the CODE
+	// (E3008 vs E3088).
+	//
+	// ⚠ **ONE RULE, TWO ANCHORS.** The factory form blames the METHOD token it wrote; the container form has
+	// no method token worth blaming — `create` is the only static that door admits — so it blames the ALIAS,
+	// which is where every other refusal on that path is anchored. That is why the anchor is the caller's and
+	// the rule is not.
+	function requireGlobalInitCalleeIsVisible(callee ByteArray, anchor Token) throws ParseError
+		match self.signatures.calleeVisibilityFrom(callee, readerFilePath: self.filePath) 'calleeVisibility'
+			visible then return
+			hidden(tier) then throw ParseError.calleeNotVisible(String.from(callee), tier: tier, line: anchor.line, column: anchor.column)
+		end 'calleeVisibility'
+	end 'requireGlobalInitCalleeIsVisible'
 
 	// ⭐ **THE ELEMENT/COLUMN GATE ONE CONTAINER'S `create` PASSES.** Its caller has already established that
 	// the instance is a builtin container with a `create`, so this is a TOTAL router over the five that have
@@ -47208,18 +47301,11 @@ export type Parser
 			throw ConstEvalError.defective(ParseError.undefinedVariable(String.from(typeTok.value), line: typeTok.line, column: typeTok.column))
 		end 'hiddenFactoryType'
 
-		// ⭐⭐ **AND THE METHOD HALF, which a body's call site gets from `SemanticCheck.calleeVisibleFrom` and
-		// this position cannot.** `__module_init` is a function no file wrote, so that pass exempts every call
-		// it makes (there is no reader path to hold them to) — which would leave an exported type's
-		// file-private `static` reachable from any file that writes `var db = Database.create()`, permanently
-		// and silently. MEASURED before this guard: a cross-file file-private `Database.create` built and
-		// returned 7, where the byte-identical call from inside a function is E3008. So the question is asked
-		// HERE, where the reader file is known exactly, against the sweep's own visibility column and through
-		// the very same `isVisibleFrom` the body door uses.
-		match self.signatures.calleeVisibilityFrom(callee, readerFilePath: self.filePath) 'factoryMethodVisibility'
-			visible then break 'factoryMethodVisibility'
-			hidden(tier) then throw ConstEvalError.defective(ParseError.calleeNotVisible(String.from(callee), tier: tier, line: methodTok.line, column: methodTok.column))
-		end 'factoryMethodVisibility'
+		// AND THE METHOD HALF, anchored at the method the author wrote. The rule itself is
+		// `requireGlobalInitCalleeIsVisible`'s — see there for why this position has to ask it at all.
+		try self.requireGlobalInitCalleeIsVisible(callee, anchor: methodTok) otherwise (err) 'hiddenFactoryMethod'
+			throw ConstEvalError.defective(err)
+		end 'hiddenFactoryMethod'
 
 		try self.requireGlobalFactoryReturnsARecord(callee, typeTok: typeTok, methodTok: methodTok)
 
@@ -47345,8 +47431,14 @@ export type Parser
 	// ⭐ **EVERY BUILTIN CONTAINER, not just `Array`** (spec-port `map-struct-bytearray`). The `Array`-only
 	// limit this door used to carry was a property of `__module_init`, which knew one `create`; the routing
 	// now lives on the instance registry (`ProgramSignatures.containerCreateCall`), so a `Set` / `Map` /
-	// `List` / `Vector` global is built from the same description an `Array` global is. What remains
-	// refused is a container with NO `create` at all, which is a fact about the container.
+	// `List` / `Vector` global is built from the same description an `Array` global is.
+	//
+	// ⭐⭐ **AND EVERY DECLARED GENERIC (W41)** — `var g = StrMap.create()` once `stdlib/Map.maxon` is listed and
+	// `Map` is an ordinary user generic. That widening cost this door ONE routed gate and the emitter NOTHING:
+	// a builtin's `create` is a runtime entry needing stamps and a declared generic's is a static needing none,
+	// which `ContainerCreateCall` was already the description of. What remains refused is a `create` this
+	// position genuinely cannot call — absent, invisible from here, or not returning `Self` — plus arguments,
+	// which no `containerCreate` outcome carries. See `requireDeclaredGenericGlobalCreate`.
 	function evalConstContainerCreate() returns ConstFoldedValue throws ConstEvalError
 		let aliasTok = try self.consumeConst(TokenKind.identifier)
 		// This walk is the ONLY reader of a top-level initializer's tokens, so it is the only thing that can
@@ -47362,18 +47454,25 @@ export type Parser
 		end 'notTheFactory'
 
 		try self.consumeConstToken(TokenKind.leftParen)
+		// ⚠ **THE EMPTY RECORD IS THE WHOLE OF WHAT THIS OUTCOME DESCRIBES**, for a builtin container and a
+		// declared generic alike: `ConstFoldedValue.containerCreate` carries an INSTANCE and nothing else, which
+		// is exactly what lets it serve a factory ARGUMENT as well as a global's own slot. An argument would
+		// have to travel in the outcome, and the arm that carries arguments (`factoryValue`) types its slot from
+		// the callee's DECLARED return — the BASE for a generic, not this instance — so it cannot take this
+		// shape either. See `requireDeclaredGenericGlobalCreate` for why the instance identity is load-bearing.
 		if not self.at(TokenKind.rightParen) 'hasArguments'
 			let argTok = self.current()
-			throw ConstEvalError.defective(ParseError.unsupported("arguments to `{String.from(aliasTok.value)}.{String.from(CreateMethod)}()` in a top-level initializer — a global container starts EMPTY, and an argument would have to be evaluated before `main` runs", line: argTok.line, column: argTok.column))
+			throw ConstEvalError.defective(ParseError.unsupported("arguments to `{String.from(aliasTok.value)}.{String.from(CreateMethod)}()` in a top-level initializer — a global declared through a generic-instance alias holds the EMPTY record that alias's `{String.from(CreateMethod)}()` builds, and that is the whole of what its slot description carries. Build a populated one inside a function", line: argTok.line, column: argTok.column))
 		end 'hasArguments'
 		try self.consumeConstToken(TokenKind.rightParen)
 
 		let giid = self.signatures.genericAliasInstanceFrom(aliasTok.value, readerFilePath: self.filePath)
-		// The SAME gate a body's `create()` passes, reached through the same function so a container this
-		// index refuses cannot become admissible by being written at file scope. Only the error TYPE differs —
-		// a constant initializer's refusals travel as `ConstEvalError` — which is one wrap and not a second
-		// decider.
-		try self.requireContainerIsCreatable(giid, aliasTok: aliasTok) otherwise (err) 'inadmissibleContainer'
+		// The gate for whichever kind of `create` this instance has — a builtin container's is the SAME
+		// function a body's `create()` passes, so a container this index refuses cannot become admissible by
+		// being written at file scope; a declared generic's is the top-level door's own, because a body's call
+		// site has no `.data` slot and no `__module_init` to satisfy. Only the error TYPE differs — a constant
+		// initializer's refusals travel as `ConstEvalError` — which is one wrap and not a second decider.
+		try self.requireGlobalContainerIsCreatable(giid, aliasTok: aliasTok) otherwise (err) 'inadmissibleContainer'
 			throw ConstEvalError.defective(err)
 		end 'inadmissibleContainer'
 

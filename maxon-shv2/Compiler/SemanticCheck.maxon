@@ -2309,12 +2309,14 @@ function calleeVisibleFrom(signatures ProgramSignatures, funcNames FunctionNameI
 	// beside a file-private `static function create` reported `E3008 function 'Database.create' is not
 	// exported` — about a program with one file in it.
 	//
-	// ⛔⛔ **AND IT IS NOT A HOLE, BECAUSE THE ONE USER-WRITTEN CALL `__module_init` MAKES IS CHECKED WHERE
-	// ITS READER FILE STILL EXISTS.** Every other op in that function is a runtime call the arm above
-	// exempts; the exception is a top-level factory (`var db = Database.create(…)`), and its visibility —
-	// both halves, the type's and the METHOD's — is decided by `Parser.evalConstFactoryCall` against the
-	// declaring file of the BINDING, through this same `isVisibleFrom`. Widening this exemption without that
-	// door in place makes method visibility unaskable for every factory-built global in the program.
+	// ⛔⛔ **AND IT IS NOT A HOLE, BECAUSE EVERY USER-WRITTEN CALL `__module_init` MAKES IS CHECKED WHERE ITS
+	// READER FILE STILL EXISTS.** Every other op in that function is a runtime call the arm above exempts.
+	// TWO initializer forms write a user call, and both are decided against the declaring file of the BINDING
+	// through this same `isVisibleFrom`: a top-level factory (`var db = Database.create(…)`), whose TYPE half
+	// is `Parser.evalConstFactoryCall`'s own, and a DECLARED generic's empty record
+	// (`var g = StrMap.create()`, W41). Their shared METHOD half is `Parser.requireGlobalInitCalleeIsVisible`.
+	// Widening this exemption without those doors in place makes method visibility unaskable for every
+	// globally-built record in the program.
 	//
 	// ⚠ It is asked BEFORE the callee's own path for the caller's-mistake-first reason the header states,
 	// and it is exact rather than defensive: `SourcePosition.synthesized()` is `IrFunction`'s positive claim

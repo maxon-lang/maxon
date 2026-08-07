@@ -17,10 +17,26 @@ before `main` by `__module_init`, which materializes each argument and then make
 that form has to obey and that its own programs cannot reach, because all of its arguments are
 consumed and all of its declarations are in one file:
 
-**1. The callee must be a function, not a builtin container's `create`.** A generic-instance alias
-(`typealias IntBox = Box with Count`) is claimed by the CONTAINER door, which routes off the builtin
-container registry — `Array` / `Set` / `Map` / `List` / `Vector`. A **user** generic has no entry
-there, so it is refused with a sentence naming that, and the same call inside a function is legal.
+**1. A generic-instance alias goes through the CONTAINER door, and that door serves a DECLARED generic
+by CALLING the `create()` static the program wrote.** `typealias IntBox = Box with Count` is claimed by
+that door whether `Box` is a builtin container (`Array` / `Set` / `List` / `Vector`) or an ordinary
+declared generic, and the two differ in exactly one thing: a builtin's `create` is a runtime entry that
+must be handed the strides and column destructors it cannot look up, while a declared generic's builds
+its own fields from its own declaration and is handed nothing. So one description — a callee and a
+stamp list — covers both, and a declared generic's stamp list is empty.
+
+The hidden dictionary arguments are NOT part of that description and are not synthesized here: a
+generic's `create()` carries a layout descriptor and one witness per `where` constraint, and both are
+sourced at the CALL SITE from the call's RESULT for a `Self`-returning static. The record
+`__module_init` mints is typed as the INSTANCE, so the lowering threads them unasked — the emitted call
+is the one the identical `IntBox.create()` inside a function lowers to.
+
+**Three things about a declared `create()` are therefore checked at the declaration**, because each is a
+premise that emitted call rests on: it must EXIST (or the call names no symbol), it must be NAMEABLE
+from the declaring file (rule 3 below applies to it for rule 3's reason), and it must return `Self` (or
+the result is minted as a record the callee never built, and dropped at exit). Arguments are refused
+separately: what this door describes is an instance's EMPTY record, which is what lets one description
+serve a global's own slot AND a factory ARGUMENT.
 
 **2. An argument the callee only BORROWS is still the initializer's to free.** A body's call site
 materializes an argument as an owned temporary and drops it at the end of the statement unless the
@@ -82,10 +98,10 @@ in the same words and with the same panic.
 
 ## Tests
 
-<!-- test: error.user-generic-instance-factory-at-file-scope -->
-A generic-instance alias over a USER generic is not a builtin container, so it cannot be built before
-`main`. The refusal names the base generic and the position, because the identical call is legal
-inside a function (see the next test).
+<!-- test: user-generic-instance-factory-at-file-scope -->
+A generic-instance alias over a DECLARED generic is built before `main` by calling the `create()`
+static the program wrote. Its `create` is file-private and the binding is in the same file, which is
+all rule 3 asks.
 ```maxon
 typealias Count = int(0 to u64.max)
 
@@ -93,7 +109,7 @@ type Box uses T
 	export var n as Count
 
 	static function create() returns Self
-		return Self{n: 0}
+		return Self{n: 9}
 	end 'create'
 end 'Box'
 
@@ -105,13 +121,94 @@ function main() returns ExitCode
 	return b.n
 end 'main'
 ```
+```exitcode
+9
+```
+
+<!-- test: error.user-generic-instance-with-no-create-at-file-scope -->
+`create()` is the name this door emits, so a generic that declares none is refused at the alias the
+author wrote rather than at a symbol the backend cannot resolve.
+```maxon
+typealias Count = int(0 to u64.max)
+
+type Box uses T
+	export var n as Count
+
+	static function make() returns Self
+		return Self{n: 9}
+	end 'make'
+end 'Box'
+
+typealias IntBox = Box with Count
+
+var b = IntBox.create()
+
+function main() returns ExitCode
+	return b.n
+end 'main'
+```
 ```maxoncstderr
-error E2015: <fragment>:14:9: Unsupported: a top-level `IntBox.create()` — `IntBox` instantiates the user generic `Box`, and a global's record is built before `main` by `__module_init` from the BUILTIN container registry's description, which a user generic has none of. Declare it inside a function
+error E2015: <fragment>:14:9: Unsupported: a top-level `IntBox.create()` — `IntBox` instantiates the generic `Box`, which declares no `create()` static, so `__module_init` has nothing to call before `main`. Give `Box` one, or build the value inside a function
+```
+
+<!-- test: error.user-generic-instance-create-not-returning-self-at-file-scope -->
+The slot holds the INSTANCE, and a generic's layout descriptor and witnesses are read off what its
+`create()` hands back — so a `create` returning anything else would mint a record the callee never
+built and decref it at exit. Refused at the declaration instead.
+```maxon
+typealias Count = int(0 to u64.max)
+
+type Box uses T
+	export var n as Count
+
+	static function create() returns Count
+		return 5
+	end 'create'
+end 'Box'
+
+typealias IntBox = Box with Count
+
+var b = IntBox.create()
+
+function main() returns ExitCode
+	return 3
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:14:9: Unsupported: a top-level `IntBox.create()` — `Box.create` does not return `Self`, and a global declared this way holds the INSTANCE its alias names. A generic's layout descriptor and witnesses are read off what its `create()` hands back, so only a `Self`-returning one can build `IntBox`. Build the value inside a function
+```
+
+<!-- test: error.arguments-to-a-generic-instance-create-at-file-scope -->
+What this door describes is an instance's EMPTY record, which is what lets one description serve a
+global's own slot and a factory ARGUMENT alike. An argument has nowhere to travel in it, and the
+initializer form that does carry arguments types its slot from the callee's DECLARED return — the
+BASE for a generic, not this instance.
+```maxon
+typealias Count = int(0 to u64.max)
+
+type Box uses T
+	export var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+typealias IntBox = Box with Count
+
+var b = IntBox.create(9)
+
+function main() returns ExitCode
+	return b.n
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:14:23: Unsupported: arguments to `IntBox.create()` in a top-level initializer — a global declared through a generic-instance alias holds the EMPTY record that alias's `create()` builds, and that is the whole of what its slot description carries. Build a populated one inside a function
 ```
 
 <!-- test: user-generic-instance-factory-in-a-function -->
-The control for the refusal above: the same `IntBox.create()` written inside a function compiles and
-runs. What is refused is the POSITION, not the call.
+The same `IntBox.create()` written inside a function, which answers identically — the file-scope form
+above emits the same call, dictionary arguments included.
 ```maxon
 typealias Count = int(0 to u64.max)
 
@@ -159,6 +256,36 @@ end 'main'
 ```
 ```exitcode
 0
+```
+
+<!-- test: error.cross-file-file-private-generic-create -->
+Rule 3 reaches the CONTAINER door too, and by the same route: `__module_init` is a function no file
+wrote, so the pass that checks a call's visibility exempts every call it makes. Without the check here
+an exported generic's file-private `create` would be reachable from any file that writes
+`var b = Alias.create()`, while the byte-identical call in a function body is E3008.
+```maxon
+// --- file: api/box.maxon
+export typealias Count = int(0 to u64.max)
+
+export type Box uses T
+	export var n as Count
+
+	static function create() returns Self
+		return Self{n: 7}
+	end 'create'
+end 'Box'
+
+export typealias IntBox = Box with Count
+
+// --- file: bin/main.maxon
+var b = IntBox.create()
+
+function main() returns ExitCode
+	return b.n
+end 'main'
+```
+```maxoncstderr
+error E3008: bin/<fragment>:16:9: function 'Box.create' is not exported
 ```
 
 <!-- test: consumed-and-borrowed-arguments-in-one-call -->
@@ -590,4 +717,34 @@ end 'main'
 ```
 ```exitcode
 0
+```
+
+<!-- test: stdlib-generic-create-reached-as-a-factory-argument -->
+Rule 4 through the ARGUMENT rather than through the binding: `Map` is a listed stdlib generic, so
+`StrMap.create()` is a call on a stdlib body — and here it is nowhere in the program but INSIDE another
+initializer's argument list. The declaration that causes the call therefore has to contribute BOTH
+callees to the root set, not just the one it names first. MEASURED with only the outer one rooted:
+`panic … requireUnreachableStdlibStayedDead: 'Map.create' is in StdlibFacts.unreachable`, on a program
+with nothing wrong with it.
+```maxon
+typealias Count = int(0 to u64.max)
+typealias StrMap = Map with (String, Count)
+
+type Holder
+	export var table as StrMap
+
+	static function create(table StrMap) returns Self
+		return Self{table: table}
+	end 'create'
+end 'Holder'
+
+var h = Holder.create(StrMap.create())
+
+function main() returns ExitCode
+	h.table.upsert("a", value: 6)
+	return h.table.count() as ExitCode
+end 'main'
+```
+```exitcode
+1
 ```
