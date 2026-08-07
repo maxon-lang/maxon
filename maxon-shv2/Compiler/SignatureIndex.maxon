@@ -12551,10 +12551,32 @@ export type ProgramSignatures
 	export function genericInstanceSoleArgLogicalSize(id GenericInstanceId) returns ByteOffset
 		let args = self.genericInstances.instanceArgs(id)
 		if args.count() != 1 'notSingle'
-			panic("genericInstanceSoleArgLogicalSize: instance {id} has {args.count()} type arguments — the B1 layout descriptor carries a single element size; parseSizeof rejects sizeof(T) on a multi-parameter generic before a descriptor is asked for")
+			panic("genericInstanceSoleArgLogicalSize: instance {id} has {args.count()} type arguments — ask `genericInstanceSoleArgLogicalSizeOrNone` if the caller builds a descriptor for instances of any arity; this door answers only where `sizeof(T)` has one T to mean")
 		end 'notSingle'
 		return self.typeLogicalByteSize(try args.get(0) otherwise panic("genericInstanceSoleArgLogicalSize: instanceArgs.get(0) failed despite count == 1"))
 	end 'genericInstanceSoleArgLogicalSize'
+
+	// ⭐⭐ **THE SAME QUESTION, ASKED WHERE THE INSTANCE MAY HAVE ANY ARITY** — the layout-descriptor builder,
+	// which needs a blob for `Map with (Key, Value)` just as much as for `Sizer with bool`.
+	//
+	// A multi-parameter instance has no single element to size, so it answers `LAYOUT_NO_SOLE_ELEMENT`. That
+	// is not a sentinel a reader must remember to test: **`parseSizeof` REFUSES `sizeof` of a
+	// multi-parameter generic's type parameter** with a positioned `E2015`, so the one consumer of this field
+	// cannot be reached for exactly the instances that write it. The refusal is the guarantee — if it is ever
+	// relaxed, this becomes a wrong answer, which is why each names the other.
+	//
+	// ⚠ **THE PANIC THIS REPLACES WAS NOT PROTECTING ANYTHING — IT WAS DENYING THREE GOOD FIELDS BECAUSE A
+	// FOURTH HAD NO ANSWER.** Box size, alignment and slot width are per-instance facts a two-parameter
+	// generic needs exactly as much, and the element-destructor relocation hangs off the same blob. It made
+	// every two-parameter generic holding a container over one of its own parameters uncompilable —
+	// `type Map uses Key, Value` with `var keys as Array with Key`, which is `stdlib/Map.maxon`'s own shape.
+	export function genericInstanceSoleArgLogicalSizeOrNone(id GenericInstanceId) returns ByteOffset
+		let args = self.genericInstances.instanceArgs(id)
+		if args.count() != 1 'noSingleElement'
+			return LAYOUT_NO_SOLE_ELEMENT
+		end 'noSingleElement'
+		return self.genericInstanceSoleArgLogicalSize(id)
+	end 'genericInstanceSoleArgLogicalSizeOrNone'
 
 	// The full source-level byte size of a type argument, resolved against THIS index's own interner. A
 	// declared struct (stored `named` by the sweep, which does not resolve `structRef`) is its full box; a

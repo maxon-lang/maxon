@@ -410,8 +410,43 @@ export type InterfaceMethodSig
 	// written by one end and not read by the other.
 	export let throwsClause as ThrowsClause
 
-	export static function create(name ByteArray, paramNames ByteArrayArray, paramTypeNames ByteArrayArray, returnTypeName ByteArray, isStatic bool, throwsClause ThrowsClause) returns InterfaceMethodSig
-		return Self{name: name, paramNames: paramNames, paramTypeNames: paramTypeNames, returnTypeName: returnTypeName, isStatic: isStatic, throwsClause: throwsClause}
+	// ⭐⭐ **WAS THIS PARAMETER SPELLED BARE `__ManagedMemory`? — ONE BOOL PER PARAMETER, PARALLEL TO
+	// `paramTypeNames`, AND IT IS THE ONLY PLACE THE SPELLING SURVIVES.**
+	//
+	// `paramTypeNames` is rendered from `MaxonType`s, and by then a bare `__ManagedMemory` has already
+	// resolved to the CONCRETE byte instance and prints `Array_Byte` — indistinguishable from a genuine
+	// `ByteArray` requirement. So the fact cannot be recovered downstream and has to be carried from the
+	// tokens; `parseInterfaceMethod` already computes it as the `paramSurfaces` column (A2j) and used to
+	// DROP it on the floor.
+	//
+	// ⚠ **WHY THE DISTINCTION IS LOAD-BEARING RATHER THAN COSMETIC.** In the reference, `__ManagedMemory` is
+	// GENERIC over one `Element`, so a bare spelling inside a REQUIREMENT is that unbound parameter — it
+	// means *any* buffer, not *a buffer of bytes*. `stdlib/Builtins.maxon`'s `BuiltinDictionaryLiteral`
+	// declares `init(keys __ManagedMemory, values __ManagedMemory)` and `stdlib/Map.maxon` satisfies it with
+	// `__ManagedMemory with Key` / `with Value`. Read as `Array_Byte` those disagree, and `Map` is refused
+	// against the interface that exists for it.
+	//
+	// ⛔ **THE FIX MAY NOT BE "COMPARE MORE LOOSELY".** Widening the comparison for every `Array_Byte`
+	// requirement would silently accept a real `ByteArray` mismatch — a wrong ACCEPTANCE, which no
+	// diagnostic reports. This column is what keeps the widening scoped to the spelling that actually meant
+	// "any element".
+	export let paramIsBuffer as BoolArray
+
+	// A signature whose parameters carry no buffer spelling — every position plainly declared. The
+	// synthesized interfaces build one of these rather than passing an empty array, because a column that
+	// is SHORTER than `paramNames` would make "absent" and "false" two different things at every reader.
+	export static function noBufferParams(count ParamCount) returns BoolArray
+		var out = BoolArray.create()
+		var filled = 0 as ParamCount
+		while filled < count 'each'
+			out.push(false)
+			filled = filled + 1
+		end 'each'
+		return out
+	end 'noBufferParams'
+
+	export static function create(name ByteArray, paramNames ByteArrayArray, paramTypeNames ByteArrayArray, returnTypeName ByteArray, isStatic bool, throwsClause ThrowsClause, paramIsBuffer BoolArray) returns InterfaceMethodSig
+		return Self{name: name, paramNames: paramNames, paramTypeNames: paramTypeNames, returnTypeName: returnTypeName, isStatic: isStatic, throwsClause: throwsClause, paramIsBuffer: paramIsBuffer}
 	end 'create'
 end 'InterfaceMethodSig'
 
@@ -1136,7 +1171,7 @@ end 'witnessTargetIsProtocol'
 // non-throwing — the builtin conformances (`int.hash()`, `String.equals(other)`) are compiler-emitted
 // runtime chunks with no error channel — so the throws clause is `none` at both helpers.
 function nullaryInterfaceMethod(name ByteArray, returnTypeName ByteArray) returns InterfaceMethodSig
-	return InterfaceMethodSig.create(name, paramNames: ByteArrayArray.create(), paramTypeNames: ByteArrayArray.create(), returnTypeName: returnTypeName, isStatic: false, throwsClause: ThrowsClause.none)
+	return InterfaceMethodSig.create(name, paramNames: ByteArrayArray.create(), paramTypeNames: ByteArrayArray.create(), returnTypeName: returnTypeName, isStatic: false, throwsClause: ThrowsClause.none, paramIsBuffer: InterfaceMethodSig.noBufferParams(0))
 end 'nullaryInterfaceMethod'
 
 // A one-parameter interface method (`equals(other Self)`, `toString(format String)`).
@@ -1145,7 +1180,7 @@ function unaryInterfaceMethod(name ByteArray, paramName ByteArray, paramTypeName
 	paramNames.push(paramName)
 	var paramTypeNames = ByteArrayArray.create()
 	paramTypeNames.push(paramTypeName)
-	return InterfaceMethodSig.create(name, paramNames: paramNames, paramTypeNames: paramTypeNames, returnTypeName: returnTypeName, isStatic: false, throwsClause: ThrowsClause.none)
+	return InterfaceMethodSig.create(name, paramNames: paramNames, paramTypeNames: paramTypeNames, returnTypeName: returnTypeName, isStatic: false, throwsClause: ThrowsClause.none, paramIsBuffer: InterfaceMethodSig.noBufferParams(paramNames.count()))
 end 'unaryInterfaceMethod'
 
 // An interface with exactly one method and no `extends`/`uses` — every synthesized

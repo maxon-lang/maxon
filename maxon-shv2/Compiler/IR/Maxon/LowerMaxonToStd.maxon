@@ -1616,7 +1616,28 @@ type MaxonToStdLowering
 			return self.layoutDescriptors.labelFor(gid)
 		end 'cached'
 
-		let descriptor = LayoutDescriptor.create(self.signatures.genericInstanceBoxSize(gid), alignment: LAYOUT_MIN_ALIGNMENT, elementSize: LAYOUT_TYPE_PARAM_SLOT_BYTES, elementLogicalSize: self.signatures.genericInstanceSoleArgLogicalSize(gid))
+		// ⭐⭐ **`elementLogicalSize` IS A QUESTION ONLY A SINGLE-PARAMETER INSTANCE HAS AN ANSWER TO, AND A
+		// MULTI-PARAMETER ONE STILL NEEDS THE REST OF THE DESCRIPTOR.**
+		//
+		// The slot exists for `sizeof(T)` — one type parameter, one size. `Map with (Key, Value)` has two, so
+		// there is no single element to size, and asking used to PANIC (`genericInstanceSoleArgLogicalSize`).
+		// That panic made every two-parameter generic holding a container over one of its parameters
+		// uncompilable — `type Map uses Key, Value` with `var keys as Array with Key` is exactly that shape,
+		// and it is why `stdlib/Map.maxon` could not be instantiated at all.
+		//
+		// ⚠ **THE OTHER THREE FIELDS ARE STILL MEANINGFUL AND STILL NEEDED**: the box size, the alignment and
+		// the type-parameter slot width are per-INSTANCE facts, and the destructor relocation below hangs off
+		// this same blob. Refusing to build a descriptor because ONE of its four fields has no answer denied
+		// the instance the three that do.
+		//
+		// ⚠ **WHY WRITING `LAYOUT_NO_SOLE_ELEMENT` HERE IS SOUND RATHER THAN A SENTINEL NOBODY CHECKS**: the
+		// only reader of this field is a shared body's `sizeof(T)`, and `parseSizeof` REFUSES `sizeof` of a
+		// multi-parameter generic's type parameter with a positioned `E2015` — before any descriptor is asked
+		// for. So the field is unreachable for exactly the instances that write it. The guarantee is the
+		// refusal, not a convention: delete that refusal and this becomes a wrong answer, which is why the two
+		// are named in each other's comments.
+		let soleArgLogicalSize = self.signatures.genericInstanceSoleArgLogicalSizeOrNone(gid)
+		let descriptor = LayoutDescriptor.create(self.signatures.genericInstanceBoxSize(gid), alignment: LAYOUT_MIN_ALIGNMENT, elementSize: LAYOUT_TYPE_PARAM_SLOT_BYTES, elementLogicalSize: soleArgLogicalSize)
 		let label = self.globalData.registerRdataConstantLabeled("__layout_{String.from(self.signatures.mangleGenericInstance(gid))}", bytes: encodeLayoutDescriptor(descriptor))
 		self.layoutDescriptors.record(gid, label: label)
 

@@ -14410,10 +14410,28 @@ export type Parser
 		// the impl's throw-path primary (0) came back as a real answer.
 		let throwsClause = try self.parseOptionalThrowsClause()
 
-		return InterfaceMethodSig.create(nameTok.value, paramNames: paramNames, paramTypeNames: self.renderInterfaceParamTypes(paramTypes, interfaceName: interfaceName), returnTypeName: self.renderInterfaceReturnType(returnType, interfaceName: interfaceName), isStatic: isStatic, throwsClause: throwsClause)
+		return InterfaceMethodSig.create(nameTok.value, paramNames: paramNames, paramTypeNames: self.renderInterfaceParamTypes(paramTypes, interfaceName: interfaceName), returnTypeName: self.renderInterfaceReturnType(returnType, interfaceName: interfaceName), isStatic: isStatic, throwsClause: throwsClause, paramIsBuffer: interfaceParamBufferSpellings(paramSurfaces))
 	end 'parseInterfaceMethod'
 
 	// Render each of an interface method's parameter types to its source string, parallel to `paramTypes`.
+	// ⭐ **THE `__ManagedMemory` SPELLING, LIFTED OUT OF THE SURFACE COLUMN BEFORE IT IS DROPPED.** Bit 0 of
+	// a position's root node is `SurfaceBitIsBuffer` — set when the source wrote the buffer's own name
+	// rather than `ByteArray` or an `Array` alias. `parseInterfaceMethod` computes this column for every
+	// requirement already (`parseFunctionParameters` fills every column in lockstep) and, until now, threw
+	// it away; `InterfaceMethodSig.paramIsBuffer` says why it must survive.
+	//
+	// A position whose surface tree is the shared EMPTY one is plainly declared, which is every parameter in
+	// the corpus but the two `BuiltinDictionaryLiteral` writes — so the common path reads one count and
+	// pushes `false`.
+	function interfaceParamBufferSpellings(paramSurfaces DeclaredSurfaceArray) returns BoolArray
+		var out = BoolArray.create()
+		for i in 0 upto paramSurfaces.count() 'each'
+			let surface = try paramSurfaces.get(i) otherwise panic("interfaceParamBufferSpellings: paramSurfaces.get OOB at {i} of {paramSurfaces.count()} — parseFunctionParameters fills this column in lockstep with the names")
+			out.push(surfaceIsBuffer(surface))
+		end 'each'
+		return out
+	end 'interfaceParamBufferSpellings'
+
 	function renderInterfaceParamTypes(paramTypes MaxonTypeArray, interfaceName ByteArray) returns ByteArrayArray
 		var out = ByteArrayArray.create()
 		for i in 0 upto paramTypes.count() 'each'

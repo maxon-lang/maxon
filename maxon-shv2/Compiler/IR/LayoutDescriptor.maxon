@@ -73,6 +73,20 @@ export let LAYOUT_MIN_ALIGNMENT = 8 as MachineWord
 // says the two concepts must stay separate.
 export let LAYOUT_TYPE_PARAM_SLOT_BYTES = 8 as MachineWord
 
+// ⭐⭐ **WHAT `elementLogicalSize@56` HOLDS FOR AN INSTANCE THAT HAS NO SINGLE ELEMENT** — `Map with (Key,
+// Value)` and every other multi-parameter generic.
+//
+// The field answers `sizeof(T)`, which presupposes ONE `T`. A two-parameter instance has no such size, and
+// the other three fields of its descriptor (box size, alignment, slot width) are needed exactly as much as
+// a one-parameter instance's — the element-destructor relocation hangs off the same blob.
+//
+// ⚠ **THIS IS UNREADABLE RATHER THAN MERELY UNREAD, AND THAT IS THE WHOLE ARGUMENT.** `parseSizeof` refuses
+// `sizeof` of a multi-parameter generic's type parameter with a positioned `E2015`, so the one consumer of
+// this field cannot be reached for the instances that write this value. It is a guarantee held by a
+// refusal, not a convention — relax that refusal and this becomes a wrong answer, so the two are named in
+// each other's comments (`ProgramSignatures.genericInstanceSoleArgLogicalSizeOrNone`).
+export let LAYOUT_NO_SOLE_ELEMENT = 0 as MachineWord
+
 // The MACHINE WORD every value with no narrower home occupies — a bare `int`, a `float`, a function
 // pointer, a managed box's pointer, and a ranged alias whose range does not fit a narrower slot. Named
 // because `rangedAliasStorageBytes` returns it as an ANSWER ("nothing narrower holds this range") rather

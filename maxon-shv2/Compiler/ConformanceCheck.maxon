@@ -727,7 +727,7 @@ function substituteAssociatedTypes(method InterfaceMethodSig, associatedTypeName
 		paramTypeNames.push(boundTypeName(try method.paramTypeNames.get(i) otherwise panic("substituteAssociatedTypes: paramTypeNames.get OOB at {i}"), associatedTypeNames: associatedTypeNames, boundTypeNames: boundTypeNames))
 	end 'eachParam'
 
-	return InterfaceMethodSig.create(method.name, paramNames: method.paramNames, paramTypeNames: paramTypeNames, returnTypeName: boundTypeName(method.returnTypeName, associatedTypeNames: associatedTypeNames, boundTypeNames: boundTypeNames), isStatic: method.isStatic, throwsClause: substituteThrowsClause(method.throwsClause, associatedTypeNames: associatedTypeNames, boundTypeNames: boundTypeNames))
+	return InterfaceMethodSig.create(method.name, paramNames: method.paramNames, paramTypeNames: paramTypeNames, returnTypeName: boundTypeName(method.returnTypeName, associatedTypeNames: associatedTypeNames, boundTypeNames: boundTypeNames), isStatic: method.isStatic, throwsClause: substituteThrowsClause(method.throwsClause, associatedTypeNames: associatedTypeNames, boundTypeNames: boundTypeNames), paramIsBuffer: method.paramIsBuffer)
 end 'substituteAssociatedTypes'
 
 // What ONE written type name in a requirement denotes under this conformance's bindings: the argument bound
@@ -1250,8 +1250,33 @@ function signatureMatches(project Project, method InterfaceMethodSig, conforming
 	end 'arityDiffers'
 
 	for i in 0 upto method.paramNames.count() 'eachParam'
+		let implType = try implFunc.maxonParamTypes.get(i + selfOffset) otherwise panic("signatureMatches: maxonParamTypes.get OOB at {i + selfOffset}")
+
+		// ⭐⭐ **A REQUIREMENT SPELLED BARE `__ManagedMemory` MEANS *ANY* BUFFER, NOT A BUFFER OF BYTES.**
+		// In the reference the buffer is GENERIC over one `Element`, so the bare spelling inside a
+		// requirement is that unbound parameter. shv2 resolves it to the CONCRETE byte instance, so by the
+		// time `paramTypeNames` is rendered it reads `Array_Byte` and an impl declaring
+		// `__ManagedMemory with Key` is refused against the very interface written for it —
+		// `BuiltinDictionaryLiteral` against `stdlib/Map.maxon`.
+		//
+		// ⛔ **THIS MAY NOT BE DONE BY COMPARING MORE LOOSELY.** Widening every `Array_Byte` requirement
+		// would silently accept a genuine `ByteArray` mismatch — a wrong ACCEPTANCE, which nothing reports.
+		// The gate is `paramIsBuffer`, the SPELLING carried from `parseInterfaceMethod`'s tokens, so the
+		// widening reaches exactly the positions that meant "any element" and no others.
+		//
+		// The impl side must still BE a buffer instance: any `Array with T` qualifies (in shv2 a buffer and
+		// an `Array` are one record — the spelling picks the member surface, not the layout), and anything
+		// else — a struct, a primitive, a `String` — does not.
+		let requirementTakesAnyBuffer = try method.paramIsBuffer.get(i) otherwise false
+		if requirementTakesAnyBuffer 'requirementTakesAnyBuffer'
+			if not signatures.isArrayInstanceAt(maxonTypeTag(implType), nameId: typeNameIdOf(implType)) 'implIsNotABuffer'
+				return false
+			end 'implIsNotABuffer'
+			continue
+		end 'requirementTakesAnyBuffer'
+
 		let expected = substituteSelf(try method.paramTypeNames.get(i) otherwise panic("signatureMatches: paramTypeNames.get OOB at {i}"), conformingType: conformingType)
-		let actual = renderDeclaredTypeName(try implFunc.maxonParamTypes.get(i + selfOffset) otherwise panic("signatureMatches: maxonParamTypes.get OOB at {i + selfOffset}"), declarationName: conformingType, typeParamNames: typeParamNames, typeNames: project.typeNames, signatures: signatures)
+		let actual = renderDeclaredTypeName(implType, declarationName: conformingType, typeParamNames: typeParamNames, typeNames: project.typeNames, signatures: signatures)
 		if not canonicalTypeName(project, name: expected).equals(canonicalTypeName(project, name: actual)) 'paramDiffers'
 			return false
 		end 'paramDiffers'
