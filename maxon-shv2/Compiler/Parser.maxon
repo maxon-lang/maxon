@@ -22949,7 +22949,8 @@ export type Parser
 	// `retainThrownField` (#64 — a thrown borrowed-container field), `retainBorrowedPayload` (D1b — a managed
 	// payload bound out of a borrowed union), the two `try … otherwise` phi reconciliations (the ok-edge
 	// borrow that merges with an owned fallback, and `transferFallbackToPhi`'s aliased-binding error edge),
-	// and `handleEscapingBorrowFeed`'s static-constructor feed of a co-owned aggregate. `__mm_retain` is the RETURNING twin
+	// and `coOwnConcreteAggregateFeed`, which both of `handleEscapingBorrowFeed`'s sinks take a co-owned
+	// aggregate's reference through. `__mm_retain` is the RETURNING twin
 	// (`retainBorrowedAggregate`) for when a FRESH SSA name is needed; this void form is for when the box is
 	// increfed in place and the caller already holds the ValueId it means.
 	function emitIncref(value ValueId, range SourceRange)
@@ -36084,10 +36085,16 @@ export type Parser
 		// all — see `genericTypeIsInstantiated`, which carries the measurement. Asking the weaker question at
 		// both ends is what keeps them the same question.
 		//
-		// The zero word is what makes the retain free where it is not needed: `retainFunc@64` is 0 for a
-		// trivial instantiation, so `__retain_type_param` loads it, skips the `callIndirect` and hands back
-		// exactly the value it was given. WHICH protocol applies stays the DESCRIPTOR's to say — minted per
-		// instance after every file is parsed — and is never re-decided here.
+		// The zero word is what makes the retain free where it is not needed: `retainFunc@64` is 0 for an
+		// instantiation whose argument owns NO RECORD — an `int`/`bool`/`float`, a ranged alias, a payload-free
+		// enum — so `__retain_type_param` loads it, skips the `callIndirect` and hands back exactly the value
+		// it was given. WHICH protocol applies stays the DESCRIPTOR's to say — minted per instance after every
+		// file is parsed — and is never re-decided here.
+		//
+		// ⚠ **"TRIVIAL" IS NOT THE LINE, AND THIS SAID IT WAS (W41-trivial).** An all-scalar STRUCT is trivial
+		// in the CONSUME sense (`typeArgIsOwned` false — the call site borrows it and the caller keeps it) and
+		// is a refcounted heap box all the same, so its word is `__mm_retain` and always was. The two senses
+		// share a word and do not share a boundary; `typeOwnershipProtocol` is the one that decides this slot.
 		if not self.signatures.typeParamOwnerIsInstantiated(self.valueNameId(arg)) 'noInstantiationToReference'
 			return arg
 		end 'noInstantiationToReference'
@@ -45255,12 +45262,22 @@ export type Parser
 		// ⭐ A CO-OWNED TRIVIAL STRUCT instantiation (`Box with Point`, the retain-escaping rung) cannot be
 		// reassigned in a shared body: the box CO-OWNS its trivial `T` field (retained at the constructor feed,
 		// dropped by its destructor), but this opaque reassignment has no way to drop the field's OLD co-owned
-		// value — a trivial struct's `__mm_decref` cannot be emitted from the opaque body, and the descriptor-
-		// gated `__drop_type_param` is inert for a trivial instantiation (`destroyFunc@40` is 0). Storing the
-		// new value over the old would LEAK it. Rejected cleanly rather than shipping the leak; the trivial-
-		// struct single-value drop is a later slice (the descriptor infrastructure this rung deliberately leaves
-		// untouched). A managed instantiation reassigns through the descriptor as before, and a scalar is inert —
-		// neither is a co-owned trivial, so this fires on exactly the co-ownership gap.
+		// value — a trivial struct's `__mm_decref` cannot be emitted from the opaque body. Storing the new value
+		// over the old would LEAK it. Rejected cleanly rather than shipping the leak. A managed instantiation
+		// reassigns through the descriptor as before, and a scalar is inert — neither is a co-owned trivial, so
+		// this fires on exactly the co-ownership gap.
+		//
+		// ⚠ **THE REASON IS NOW THE *SITE'S* WIRING, NOT THE DESCRIPTOR'S CONTENTS, AND THIS SAID OTHERWISE
+		// (W41-trivial).** It read *"the descriptor-gated `__drop_type_param` is inert for a trivial
+		// instantiation (`destroyFunc@40` is 0)"* — and that word is no longer 0: it is stamped for every
+		// argument owning a record, co-owned trivial aggregates included, which is what makes the container
+		// column below releasable. What is still missing here is the two gates BELOW this one: the old-value
+		// drop and the descriptor-need seed (`isManagedOpaqueTypeParamField`) both read
+		// `genericTypeFieldHasManagedInstantiation`, the CONSUME boundary, so a co-owned-trivial instantiation
+		// emits no drop and reserves no descriptor to drop through. Widening those two is what would lift this
+		// refusal; it is a separate change with three committed `error.` cases pinning this message, and it is
+		// REPORTED rather than taken here. The refusal remains TRUE as written — a positioned diagnostic, never
+		// a leak — but a reader must not re-derive its old rationale from a zero that has moved.
 		if self.signatures.genericTypeFieldHasCoOwnedTrivialInstantiation(typeNameIdOf(fieldType)) 'coOwnedTrivialReassign'
 			throw ParseError.unsupported("reassigning the type-parameter field '{String.from(anchor.value)}' of '{String.from(layout.name)}' in a shared generic body, where a trivial-struct instantiation co-owns the field — the box retains a co-owned trivial struct at construction and drops it once at destruction, but a shared-body reassignment cannot drop the old co-owned value (the descriptor-gated single-value drop for a trivial struct is a later slice); reassign the field on a concrete instance, or use a managed element type", line: anchor.line, column: anchor.column)
 		end 'coOwnedTrivialReassign'
@@ -50539,8 +50556,10 @@ export type Parser
 			// never opaque-owned, so it stays on the existing instance-feed path untouched.
 			if not self.argIsConsumedAt(info, position: position, constructorInstance: constructorInstance) and not self.isOpaqueOwnedFeedArg(info, position: position, argValue: argValue) 'borrowed'
 				// ⭐ A borrowed argument whose borrow ESCAPES into a durable instance field must not dangle when the
-				// container OUTLIVES the source (the retain-escaping rung — the RED cross-scope UAF): a static
-				// constructor feed RETAINS a co-owned trivial struct, an instance-method feed materializes a temp.
+				// container OUTLIVES the source (the retain-escaping rung — the RED cross-scope UAF): BOTH feed
+				// sinks RETAIN a co-owned trivial aggregate, and the callee-storage one also gives a temporary a
+				// scope lifetime. Materializing a temp was the callee-storage sink's WHOLE protection until
+				// W41-trivial, and a loop body's scope is shorter than the container's — see there.
 				// ⚠ Its RESULT replaces the argument, exactly as `transferConsumedArg`'s does and for the identical
 				// reason: an OPAQUE callee-storage feed takes its reference through the descriptor, and for a
 				// byte-record type argument that reference is a `__str_clone` — a DIFFERENT record (W41-fix).
@@ -50616,13 +50635,28 @@ export type Parser
 	//     all uniformly, which is why no scope-local materialization is needed for this shape. A SCALAR feed
 	//     owns no heap and needs no retain.
 	//   • A CALLEE-STORAGE feed (`items.push(item)`, `self.saved = next` — the slice-3b mechanism) moves
-	//     the argument into durable storage the CALLEE owns. A trivial `Array with T` element the array does not
-	//     per-element drop is still a BORROW the caller keeps; a borrowed TEMPORARY of it is otherwise freed at
-	//     statement end while the array points at it, so it is given a SCOPE lifetime
-	//     (`giveTemporaryScopeLifetime` — the same door a temporary `match` scrutinee and a borrowed-out-of
-	//     container go through); reverse drop order then frees the element after the container that borrowed it.
-	//     (A shared-body REASSIGN feed of a co-owned trivial struct is rejected up front at
-	//     `emitOpaqueFieldReassign`, so it never reaches this promotion.)
+	//     the argument into durable storage the CALLEE owns, and a borrowed CONCRETE aggregate takes the SAME
+	//     `__mm_retain` its constructor sibling above takes, through the same door. It is the same
+	//     co-ownership: the container holds a real second reference, released by its own column/field drop.
+	//
+	//     ⛔⛔ **IT USED TO TAKE NO REFERENCE AT ALL, AND A SCOPE-LIFETIME EXTENSION WAS ITS WHOLE PROTECTION
+	//     — WHICH IS SOUND ONLY WHILE THE CONTAINER DOES NOT OUTLIVE THE SCOPE, AND A LOOP GUARANTEES IT DOES
+	//     (W41-trivial).** `giveTemporaryScopeLifetime` promotes the temporary to the ENCLOSING FRAME, so a
+	//     `m.upsert(Point.create(i), value: i)` written in a loop body is freed at the end of ITS ITERATION
+	//     while the map still points at it. MEASURED: `Map with (Point, Val)` filled in a loop printed
+	//     `total 0` against the oracle's `total 15` — exit 0, no diagnostic, `count()` correct and every key
+	//     in the column dangling. The straight-line spelling of the identical program passed, because
+	//     `main`'s own frame is the scope there; that is why `specs-shv2/map.md`'s
+	//     `a-user-type-can-be-a-map-key` advertised a capability it did not have.
+	//
+	//     ⚠ **A NAMED BINDING FAILED IDENTICALLY, so the lifetime extension was never the missing half.**
+	//     `let k = Point.create(i)` inside the loop measured `total 0` too — the binding owns the box and
+	//     drops it at the body's end exactly as the promoted temporary does. What was missing is a REFERENCE,
+	//     which only the retain can supply, and it is taken for a named source and a temporary alike.
+	//
+	//     The extension still runs and is still correct — it is a no-op on anything no statement owns, and it
+	//     is what protects the one shape that takes no reference (an opaque argument whose owner nothing
+	//     instantiates, below). Reverse drop order frees the source after the container either way.
 	//
 	// ⛔⛔ **AND AN OPAQUE `T` ARGUMENT AT A CALLEE-STORAGE POSITION TAKES A REAL REFERENCE HERE — THE OTHER
 	// HALF OF THE `Map.grow()` DOUBLE FREE (W41-fix).** A callee-storage feed parameter is enrolled OWNED
@@ -50642,28 +50676,27 @@ export type Parser
 	// instead is cancelled by the parameter's own scope drop, and that paying for the descriptor such a
 	// widening needs trades a clean refusal for a leak.)
 	//
-	// ⚠ **BOTH ACTS RUN, and the lifetime extension is not made redundant by the retain**: a TRIVIAL
-	// instantiation's `retainFunc@64` is 0, so `__retain_type_param` hands back the value unchanged and the
-	// callee's storage keeps a bare borrow — exactly what the extension protects. It is a silent no-op on a
-	// value no statement owns, so it costs nothing on the managed path.
+	// ⚠ **THE TWO SINKS NOW DIFFER ONLY IN THE LIFETIME EXTENSION AND IN THE OPAQUE ARM** — the reference
+	// itself is one act with one spelling (`coOwnConcreteAggregateFeed`), because "a borrowed CONCRETE
+	// aggregate escaping into something that outlives this statement takes an `__mm_retain`" is one fact, and
+	// it was written at one sink and not the other for as long as both existed.
 	function handleEscapingBorrowFeed(info ParamConsumeInfo, position ParamCount, argValue ValueId, anchor Token) returns ValueId
 		let feed = info.typeParamFeedOf(position)
 		if not feed.isFeed() 'notEscapingFeed'
 			return argValue
 		end 'notEscapingFeed'
 		if not feed.sinkIsCalleeStorage() 'constructorFeed'
-			if self.valueIsNonTextAggregate(argValue) 'coOwnedAggregate'
-				self.emitIncref(argValue, range: SourceRange.ofToken(anchor))
-			end 'coOwnedAggregate'
+			self.coOwnConcreteAggregateFeed(argValue, anchor: anchor)
 			return argValue
 		end 'constructorFeed'
 
 		self.giveTemporaryScopeLifetime(argValue, name: EscapingFeedSourceBindingName)
 		// A CONCRETE argument at a feed position is the call site's own value, whose consume/borrow decision
-		// `argIsConsumedAt` already made off the instance's type argument — a trivial one is deliberately
-		// borrowed, and the extension above is its whole protection. Only the OPAQUE shared-body borrow, which
-		// no instance test can see, owes a reference.
+		// `argIsConsumedAt` already made off the instance's type argument — a trivial aggregate is deliberately
+		// BORROWED (the caller keeps it usable) and CO-OWNED, so the reference is taken here. An OPAQUE
+		// shared-body borrow, which no instance test can see, takes its own through the descriptor below.
 		if self.tagOf(argValue) != ValueTypeTag.typeParameter 'concreteArgument'
+			self.coOwnConcreteAggregateFeed(argValue, anchor: anchor)
 			return argValue
 		end 'concreteArgument'
 		if not self.signatures.typeParamOwnerIsInstantiated(self.valueNameId(argValue)) 'noInstantiationToReference'
@@ -50672,6 +50705,26 @@ export type Parser
 
 		return self.coOwnBorrowedOpaqueForConsume(argValue, range: SourceRange.ofToken(anchor))
 	end 'handleEscapingBorrowFeed'
+
+	// ⭐ **TAKE THE SECOND REFERENCE A BORROWED CONCRETE AGGREGATE OWES ITS DURABLE SINK** — the one act both
+	// feed sinks perform, so a third sink cannot inherit half of it. Only a NON-CONSUMED argument reaches
+	// `handleEscapingBorrowFeed` at all (`argIsConsumedAt` diverted every owning one), so what arrives here is
+	// exactly the co-owned trivial class (`typeArgIsCoOwnedTrivial`: a struct box, a trivial generic instance)
+	// plus the scalars — and a SCALAR is not a pointer, owns no record and needs nothing, which is what
+	// `valueIsNonTextAggregate` answers `false` for. A byte record cannot arrive: a `String` type argument is
+	// `typeArgIsOwned` and is consumed, never borrowed.
+	//
+	// The released end is the container's own drop, on the SAME `typeIsManaged` boundary this retain implies —
+	// a direct field through `genericInstanceFieldIsManaged`, an opaque column through the descriptor's
+	// `destroyFunc@40` (`managedOpaqueArrayElementOf`, which carries the measurement of what the two reading
+	// different boundaries cost).
+	function coOwnConcreteAggregateFeed(argValue ValueId, anchor Token)
+		if not self.valueIsNonTextAggregate(argValue) 'scalarOwnsNoRecord'
+			return
+		end 'scalarOwnsNoRecord'
+
+		self.emitIncref(argValue, range: SourceRange.ofToken(anchor))
+	end 'coOwnConcreteAggregateFeed'
 
 	// Does the concrete instance's argument at parameter `position`'s type-parameter feed own managed heap
 	// (P1.6-B2)? Only a generic-alias constructor carries an instance; only a fed parameter has a position; a

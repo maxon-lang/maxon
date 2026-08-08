@@ -1690,12 +1690,20 @@ type MaxonToStdLowering
 
 	// The `.rdata` label of `gid`'s descriptor blob, emitting it on first reference. The blob is PURE DATA —
 	// box size, alignment, the T-slot storage width, and the source-level `elementLogicalSize` that
-	// `sizeof(T)` reads. `destroyFunc@40` is 0 on disk; when `gid` holds a MANAGED opaque-`T` `Array` field
-	// (`Container with String`, P1.7 slice 3b-ii), a `funcAbs64InRdata` relocation is recorded so the x64
-	// writer patches that slot with the element destructor's `.text` VA — the value the shared opaque
-	// `__arr_create` reads back into its record's `element_destroy@40`. A TRIVIAL argument records nothing and
-	// the slot stays 0 (no element walk). Idempotent: a gid referenced at several call sites registers one blob
-	// and one reloc and shares the label.
+	// `sizeof(T)` reads. Every function-pointer slot is 0 on disk; when `gid` holds an opaque-`T` `Array` or
+	// bare field whose SUBSTITUTED argument owns a record (`Container with String`, P1.7 slice 3b-ii), a
+	// `funcAbs64InRdata` relocation is recorded so the x64 writer patches `destroyFunc@40` with that
+	// argument's destructor `.text` VA — the value the shared opaque `__arr_create` reads back into its
+	// record's `element_destroy@40`. An argument owning NO record (a scalar, a ranged alias, a payload-free
+	// enum) records nothing and the slot stays 0, so its walk is skipped. Idempotent: a gid referenced at
+	// several call sites registers one blob and one reloc and shares the label.
+	//
+	// ⚠ **THE GATE IS THE ARGUMENT'S OWNERSHIP PROTOCOL, NOT ITS CONSUME CLASS, AND THIS COMMENT SAID
+	// "A TRIVIAL ARGUMENT RECORDS NOTHING" WHILE THE CODE MEANT SOMETHING NARROWER (W41-trivial).** An
+	// all-scalar STRUCT argument is trivial to CONSUME and is still a refcounted box: it now stamps both
+	// `destroyFunc@40` and `retainFunc@64`, which is what makes the reference a container takes releasable.
+	// See `ProgramSignatures.managedOpaqueArrayElementOf` for the wrong answer the two words' old, differing
+	// gates produced.
 	function ensureLayoutDescriptor(gid GenericInstanceId) returns String
 		if self.layoutDescriptors.contains(gid) 'cached'
 			return self.layoutDescriptors.labelFor(gid)

@@ -625,6 +625,16 @@ and a user type that declares both conformances is a key like any other.
 
 Measured against the C# bootstrap on this exact program: **both compilers exit 42.**
 
+⛔⛔ **THE UPSERTS ARE IN A LOOP, AND THAT IS THE WHOLE POINT OF THE SHAPE (W41-trivial).** This case
+was written with two STRAIGHT-LINE `upsert`s, and it passed for a reason that had nothing to do with
+the capability it advertised: a straight-line `Point.create(…)` temporary is promoted to a binding of
+`main`'s OWN frame (`giveTemporaryScopeLifetime`), so it happens to outlive every read that follows.
+Put the identical inserts in a loop and the promotion scopes them to the **loop body**, which frees
+each key at the end of its iteration while the map still points at it — **`total 0` where the oracle
+prints `total 15`, exit 0, no diagnostic**. The map's `count()` was right the whole time; every key in
+it was dangling. A capability that evaporates the moment its subject is written in a loop was not a
+capability, and a case that cannot tell the difference was not testing one.
+
 ⚠ The `hash()` return type must be `HashValue` and not merely some `int` alias of the same span. The
 oracle refuses `returns Val` with `E3016: Partial interface implementation … expected hash() returns
 HashValue`; shv2 accepts it, because its signature match erases a ranged alias to its underlying
@@ -655,13 +665,138 @@ typealias PointMap = Map with (Point, Val)
 
 function main() returns ExitCode
 	var m = PointMap.create()
-	m.upsert(Point.create(1, y: 2), value: 40)
-	m.upsert(Point.create(3, y: 4), value: 2)
-	return (try m.get(Point.create(1, y: 2)) otherwise 0) + (try m.get(Point.create(3, y: 4)) otherwise 0)
+	for i in 1 upto 4 'fill'
+		m.upsert(Point.create(i, y: i * 2), value: i * 7)
+	end 'fill'
+	return (try m.get(Point.create(1, y: 2)) otherwise 0) + (try m.get(Point.create(2, y: 4)) otherwise 0) + (try m.get(Point.create(3, y: 6)) otherwise 0)
 end 'main'
 ```
 ```exitcode
 42
+```
+
+### A TRIVIAL key column is co-owned, and survives every rehash its load factor triggers
+
+⭐⭐ **THE TRIVIAL-KEY TWIN OF THE TWO MANAGED-COLUMN CASES BELOW, AND IT WAS THE ONE THAT WAS
+MISSING (W41-trivial).** A `String` key and a `String`-owning-struct key both reach the map by being
+**CONSUMED** — `typeArgIsOwned` says they own heap, so the call site MOVES them in and the column's
+own element walk frees them. An all-scalar struct key answers that question `false` and was therefore
+**BORROWED**, with a scope-lifetime extension as its entire protection; the container outlives the
+scope in every loop, so the column held dangling keys and every `get` missed.
+
+The cure is that a trivial aggregate key is **CO-OWNED**, exactly as a trivial `Box with Point`
+constructor field already was: the call site takes a real `__mm_retain`, and the column's element walk
+releases it. Both ends read `typeIsManaged`, so the descriptor's `retainFunc@64` and its
+`destroyFunc@40` are non-zero together — they used to read two DIFFERENT questions, which is the same
+defect stated at the descriptor.
+
+The three sizes are not decoration. **5** is below the first `grow()`, **50** crosses it three times
+(16 → 32 → 64 → 128) and **500** eight; a rehash re-inserts every key through the shared body's
+BORROWED path, so a fix that landed only on the concrete call site would be green at 5 and red at 50.
+
+<!-- test: trivial-key-column-survives-rehash -->
+```maxon
+typealias Val = int(i64.min to i64.max)
+
+type Point implements Hashable, Equatable
+	export var x as Val
+	export var y as Val
+
+	export static function create(x Val, y Val) returns Self
+		return Self{x: x, y: y}
+	end 'create'
+
+	export function hash() returns HashValue
+		return x * 31 + y
+	end 'hash'
+
+	export function equals(other Self) returns bool
+		return x == other.x and y == other.y
+	end 'equals'
+end 'Point'
+
+typealias PointMap = Map with (Point, Val)
+
+function build(n Val) returns Val
+	var m = PointMap.create()
+	for i in 0 upto n 'fill'
+		m.upsert(Point.create(i, y: i * 3), value: i)
+	end 'fill'
+	var seen = 0 as Val
+	for i in 0 upto n 'read'
+		seen = seen + (try m.get(Point.create(i, y: i * 3)) otherwise -1)
+	end 'read'
+	if seen != (n * (n - 1)) / 2 'sum'
+		return -1
+	end 'sum'
+	return m.count() as Val
+end 'build'
+
+function main() returns ExitCode
+	print("5 {build(5)} 50 {build(50)} 500 {build(500)}")
+	return 0
+end 'main'
+```
+```stdout
+5 5 50 50 500 500
+```
+```exitcode
+0
+```
+
+### A trivial KEY beside a managed VALUE — the two columns take different protocols in one map
+
+The pair that proves the descriptor is read **per type parameter** and not once per instance: the key
+column co-owns a trivial aggregate by `__mm_retain`, the value column consumes a `String` outright, and
+the two blocks sit at `layoutBlockOffsetFor(0)` and `(1)` of one `__layout_Map_Point_String`. Stamping
+one column's protocol into the other's block is the wild free `managedOpaqueArrayElementOf` already
+carries the measurement for (W43b), so a map whose two arguments DISAGREE about their protocol is the
+program that would find it again. The value is read back and compared, so a rehash that merely
+survived without faulting would still fail here.
+
+<!-- test: trivial-key-with-managed-value-column -->
+```maxon
+typealias Val = int(i64.min to i64.max)
+
+type Point implements Hashable, Equatable
+	export var x as Val
+	export var y as Val
+
+	export static function create(x Val, y Val) returns Self
+		return Self{x: x, y: y}
+	end 'create'
+
+	export function hash() returns HashValue
+		return x * 31 + y
+	end 'hash'
+
+	export function equals(other Self) returns bool
+		return x == other.x and y == other.y
+	end 'equals'
+end 'Point'
+
+typealias PointStrMap = Map with (Point, String)
+
+function main() returns ExitCode
+	var m = PointStrMap.create()
+	for i in 0 upto 40 'fill'
+		m.upsert(Point.create(i, y: i * 3), value: "value number {i}, long enough to escape any small-string envelope")
+	end 'fill'
+	var seen = 0
+	for i in 0 upto 40 'read'
+		if (try m.get(Point.create(i, y: i * 3)) otherwise "").equals("value number {i}, long enough to escape any small-string envelope") 'hit'
+			seen = seen + 1
+		end 'hit'
+	end 'read'
+	print("hits {seen} count {m.count()}")
+	return 0
+end 'main'
+```
+```stdout
+hits 40 count 40
+```
+```exitcode
+0
 ```
 
 ### A managed KEY column survives the rehash its load factor triggers
