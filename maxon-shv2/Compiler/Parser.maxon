@@ -50688,6 +50688,26 @@ export type Parser
 		if not feed.isFeed() 'notEscapingFeed'
 			return argValue
 		end 'notEscapingFeed'
+		// ⛔⛔ **AN OPAQUE ARGUMENT AT *THIS* SINK STILL TAKES NO REFERENCE, AND THAT IS A USE-AFTER-FREE —
+		// MEASURED AT REVIEW, PRE-EXISTING, AND DELIBERATELY NOT CLOSED HERE.** `coOwnConcreteAggregateFeed`
+		// is inert on a `typeParameter` tag (`valueIsNonTextAggregate` is false), so a SHARED body forwarding
+		// its own borrowed `T` into another generic's `create()` hands the new box a reference nobody took:
+		// `type Outer uses E` doing `return (Inner with E).create(try items.get(i) otherwise …)` at
+		// `Outer with String` prints the right answer and dies **0xC0000005**, where the bootstrap exits 0 and
+		// the CONCRETE spelling of the same program runs (there `argIsConsumedAt` transfers). It is
+		// byte-identical at the merge base — this wave neither caused it nor widened it.
+		//
+		// ⛔ **THE SYMMETRIC FIX WAS TRIED AND MEASURED WORSE: it refuses FOUR committed programs that need
+		// nothing.** Routing the opaque arm below through this sink turns
+		// `generic-type-substitution/own-name-in-a-generic-body-is-still-Self`,
+		// `inner-alias-construction/generic-body-user-generic-inner-alias-create` and two
+		// `self-type-member-expression` cases into E2015 — every one of them a `Box with Integer`, a TRIVIAL
+		// instantiation owing no reference, in a `static function` that structurally has no `self` to source a
+		// descriptor from. The retain must be reserved statically and can only be needed dynamically, and
+		// `genericTypeIsInstantiated`'s header says why the seed cannot ask the stronger question: it runs
+		// before any body is parsed, so a CONCRETE instantiation is not yet interned. ⇒ Closing this needs a
+		// descriptor-need seed for "forwards a borrowed opaque `T` to a feed position" that the token pre-scan
+		// cannot produce — a rung, not a review edit. FILED, with this reproducer, rather than half-taken.
 		if not feed.sinkIsCalleeStorage() 'constructorFeed'
 			self.coOwnConcreteAggregateFeed(argValue, anchor: anchor)
 			return argValue
