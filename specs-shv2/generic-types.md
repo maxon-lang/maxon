@@ -733,7 +733,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:33:9: argument type mismatch for '_': expected 'LeafBox', got 'OtherBox'
+error E3005: <fragment>:33:11: argument type mismatch for '_': expected 'LeafBox', got 'OtherBox'
 ```
 
 <!-- test: error.return-wrong-instance -->
@@ -3462,7 +3462,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:40:9: argument type mismatch for 'other': expected 'Nums', got 'Strs'
+error E3005: <fragment>:40:11: argument type mismatch for 'other': expected 'Nums', got 'Strs'
 ```
 
 <!-- test: error.a-type-parameter-belongs-to-the-type-that-declares-it-swapped -->
@@ -3513,7 +3513,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:40:9: argument type mismatch for 'other': expected 'Nums', got 'Strs'
+error E3005: <fragment>:40:11: argument type mismatch for 'other': expected 'Nums', got 'Strs'
 ```
 
 <!-- test: an-inner-alias-field-crosses-into-a-parameter-of-its-own-instance -->

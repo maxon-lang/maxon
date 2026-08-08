@@ -140,7 +140,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/per-instance-typealias/wrong-instance-error.test:30:2: argument type mismatch for 't': expected 'WrapperB.Idx', got 'WrapperA.Idx'
+error E3005: specs/fragments/per-instance-typealias/wrong-instance-error.test:30:4: argument type mismatch for 't': expected 'WrapperB.Idx', got 'WrapperA.Idx'
 ```
 
 ### Literal in range is accepted
@@ -348,7 +348,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/per-instance-typealias/error.cast-does-not-launder-source.test:32:2: argument type mismatch for 't': expected 'WB.Idx', got 'WA.Idx'
+error E3005: specs/fragments/per-instance-typealias/error.cast-does-not-launder-source.test:32:4: argument type mismatch for 't': expected 'WB.Idx', got 'WA.Idx'
 ```
 
 ### Per-instance Idx decays to plain int on return

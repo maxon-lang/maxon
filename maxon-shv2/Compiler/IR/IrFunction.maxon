@@ -288,6 +288,15 @@ export type IrFunction
 	// only appends to `b.name`. ⚠ **Do not "simplify" E3019's call-site check to read the storage column** —
 	// it would silently stop diagnosing those two rows, with no compile error anywhere.
 	//
+	// ⭐⭐ **THE FIRST ROW HAS AN EXCEPTION AS OF W49 WAVE 8, AND IT IS THE ONE SELF-FIELD THAT IS NOT A
+	// FIELD OF ANYTHING**: the inline `managed` of a fused builtin wrapper (`String`, `Character`, `Array`,
+	// `Vector`) is the receiver's record EMBEDDED WHOLE at offset 0, so `managed.append(…)` inside
+	// `String.append` writes the caller's own record and answers **yes / yes**. It is keyed on
+	// `StructLayout.conformsToBuiltinManagedWrapper`, NOT on the field being managed — `Bag.items` is
+	// managed too and must keep answering **no / yes**, which
+	// `parameter-mutation:let-struct-with-array-field-to-mutating-method-ok` pins. `Parser.receiverOwnerMask`
+	// carries the argument; this table carries the shape.
+	//
 	// They look alike and are not, and the divergence is a RULING the corpus pins. E3070 needs the opposite
 	// answer about the very same call, because `b.wipe()` clearing `self.items` frees an element a caller
 	// borrowed out of `b.items` (measured: the oracle prints 44, shv2 read freed memory and printed

@@ -76,7 +76,7 @@ export let MmFreeName = b"__mm_free"
 export let MmLeakCheckName = b"__mm_leak_check"
 
 // ⭐ **THE COPY-ON-WRITE DETACH, SHARED BY THE STRING AND ARRAY RECORDS** — `__arr_cow_detach` and
-// `__str_append` both call it rather than each spelling the detach itself. Its NAME lives here, with the
+// `__arr_append` both reach it rather than each spelling the detach itself. Its NAME lives here, with the
 // other `__mm_*` names, because this is the one list of them and `isRuntimeCallee`'s prefix rule is stated
 // three lines below; its BODY is built in `BufferOwnership`, which owns the record layout it reads and the
 // ownership encoding it republishes. See `buildMmCowDetach` for why it is an `__mm_` operation at all.
@@ -289,13 +289,17 @@ export function installMmRuntime(module StdModule, usage RuntimeUsage)
 		buildMmRetain(module)
 	end 'retain'
 
-	// ⚠ `__mm_cow_detach` IS CONDITIONAL under EITHER of its two callers' bits, for the same reason
-	// `__mm_incref` is: its consumers sit in two different files (`__arr_cow_detach` under `usesArray`,
-	// `__str_append` under `usesStrAppend`), and a program that reaches neither would carry it dead. Built
-	// here rather than by whichever runtime happens to be installed first — installing it twice would emit
-	// two copies of one function, and installing it from one side only would leave the other's call
-	// unresolved in a program that uses just that side.
-	if usage.usesArray or usage.usesStrAppend 'cowDetach'
+	// ⚠ `__mm_cow_detach` IS CONDITIONAL under its ONE remaining caller's bit — `__arr_cow_detach`, under
+	// `usesArray` — so that a program reaching no array does not carry it dead. It is still built HERE
+	// rather than by the array runtime: installing it twice would emit two copies of one function, and the
+	// home is what makes a SECOND caller one `or` rather than a second installation.
+	//
+	// ⚠ **IT WAS `usesArray or usesStrAppend` UNTIL W49 WAVE 8, AND THE TERM WENT ONLY BECAUSE THE PRODUCER
+	// DID.** `__str_append` retired whole with `String.append`; the corpus reaches this detach through
+	// `__arr_append` -> `__arr_reserve` -> `__arr_grow`, which is under `usesArray` already. Shedding a term
+	// whose producer still existed would leave a call unresolved in exactly the program that uses only that
+	// side, which is the failure this `or` was built to prevent.
+	if usage.usesArray 'cowDetach'
 		buildMmCowDetach(module)
 	end 'cowDetach'
 end 'installMmRuntime'

@@ -442,7 +442,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3036: specs/fragments/method-calls/error-instance-method-too-many-args.test:19:2: 'Counter.increment' expects 1 argument(s) but 2 were provided
+error E3036: specs/fragments/method-calls/error-instance-method-too-many-args.test:19:4: 'Counter.increment' expects 1 argument(s) but 2 were provided
 ```
 
 ### Calling a method that does not exist
@@ -473,7 +473,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3004: specs/fragments/method-calls/error-no-such-method-on-user-type.test:15:2: call to undefined function 'Counter.incrementt'
+error E3004: specs/fragments/method-calls/error-no-such-method-on-user-type.test:15:4: call to undefined function 'Counter.incrementt'
 ```
 
 <!-- disabled-test: error-no-such-method-on-stdlib-generic -->

@@ -32,11 +32,18 @@ LOCATION. The reason is not that four were tidied and one was missed:
   corpus WROTE. No second statement of it exists to disagree.
 
 Wave 7 retired the four READ doors, so they moved from the first case to the second. `setByte` cannot
-follow, and not for want of a declaration: it WRITES its receiver, and shv2 derives no
-`writtenParamMask` for a method writing its own receiver's data (`ARCHITECTURE.md:1121-1132` rules that
-this is not a parameter mutation). Routed to the corpus today it would admit
-`let s = "abc"; s.setByte(0, value: 65)` — a write through a receiver the caller may only have
-borrowed. `append` is held back at the same door for the same reason.
+follow — but the reason this paragraph gave was wrong, and wave 8 is what showed it. It read: *"it
+WRITES its receiver, and shv2 derives no `writtenParamMask` for a method writing its own receiver's
+data, so routed to the corpus today it would admit `let s = "abc"; s.setByte(0, value: 65)`"*, with
+`append` held back on the same sentence.
+
+That reason is DISCHARGED. `Parser.receiverOwnerMask` derives the bit from the ENVELOPE COLLAPSE — a
+fused wrapper's inline `managed` IS the receiver's record, so writing it writes the caller's own — and
+`append` retired on it at wave 8, with `let s = "hello"; s.append(" world")` still E3019. `setByte`'s
+real blocker is `stdlib/String.maxon:658`, where `mapAsciiCase` writes `try work.setByte(i, b + delta)`
+with the second argument POSITIONAL. `specs/parameter-labels.md` rules that every argument after the
+first must be named; shv2 enforces it (E2053) and the bootstrap does not, so routing that call to the
+declared `String.setByte` refuses it inside `stdlib/` itself. The fix is one token in the corpus.
 
 ⚠ **THE COUNT SAID "FOUR" UNTIL W49 WAVE 2, IN THIS FILE AND IN THE REFUSAL ITSELF, WHILE FIVE ARMS TOOK
 THE GATE.** `setByte` was the missing one — and it had no case here either, so a user who wrote it was
@@ -92,7 +99,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3088: <fragment>:3:15: function 'String.addressableBytes' is module-scoped and not visible from this directory
+error E3088: <fragment>:3:16: function 'String.addressableBytes' is module-scoped and not visible from this directory
 ```
 
 <!-- test: error.byte-at-or-panic-is-stdlib-only -->
@@ -102,7 +109,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3088: <fragment>:3:14: function 'String.byteAtOrPanic' is module-scoped and not visible from this directory
+error E3088: <fragment>:3:15: function 'String.byteAtOrPanic' is module-scoped and not visible from this directory
 ```
 
 <!-- test: error.byte-at-is-stdlib-only -->
@@ -112,7 +119,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3088: <fragment>:3:18: function 'String.byteAt' is module-scoped and not visible from this directory
+error E3088: <fragment>:3:19: function 'String.byteAt' is module-scoped and not visible from this directory
 ```
 
 <!-- test: error.has-single-byte-graphemes-is-stdlib-only -->
@@ -125,7 +132,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3088: <fragment>:3:10: function 'String.hasSingleByteGraphemes' is module-scoped and not visible from this directory
+error E3088: <fragment>:3:11: function 'String.hasSingleByteGraphemes' is module-scoped and not visible from this directory
 ```
 
 <!-- test: error.set-byte-is-stdlib-only -->
@@ -156,7 +163,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3088: <fragment>:5:10: function 'String.addressableBytes' is module-scoped and not visible from this directory
+error E3088: <fragment>:5:12: function 'String.addressableBytes' is module-scoped and not visible from this directory
 ```
 
 A NEAR MISS of a served member — `addressableByte` for `addressableBytes` — is a typo and must be
@@ -197,7 +204,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:3:15: Unsupported: `String` member 'addressableByte' — shv2 provides append/setByte/hash/equals; that list IS the surface, so nothing else is served here
+error E2015: <fragment>:3:15: Unsupported: `String` member 'addressableByte' — shv2 provides setByte/hash/equals; that list IS the surface, so nothing else is served here
 ```
 
 And the roster a user program is handed NAMES the stdlib-only method it still serves. This is the case
@@ -212,5 +219,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:3:15: Unsupported: `String` member 'frobnicate' — shv2 provides append/setByte/hash/equals; that list IS the surface, so nothing else is served here
+error E2015: <fragment>:3:15: Unsupported: `String` member 'frobnicate' — shv2 provides setByte/hash/equals; that list IS the surface, so nothing else is served here
 ```

@@ -738,13 +738,21 @@ export union ParseError implements Error
 	unexportedFieldAccess(typeName String, fieldName String, line LineNumber, column ColumnNumber)
 	// --- The String-method arm (P1.2 wave D) ---
 	//
-	// A MUTATING String method (append) called on an IMMUTABLE (let-bound) receiver. Renders as
+	// A MUTATING container method called on an IMMUTABLE (let-bound) receiver. Renders as
 	// E3019 with the bootstraps exact framing -- cannot pass <name> to function that mutates
 	// parameter self (in <function>) -- positioned at the METHOD name (the bootstraps anchor). The
 	// bootstrap reaches this because it lowers a method to append(self, ...) and checks the receiver
 	// against selfs mutation, machinery shv2 does not have for a builtin -- but the DEFECT and the
 	// message are identical, so the code and words are the same. functionName rides along for the
 	// (in ...) suffix, which names the enclosing function.
+	//
+	// ⚠ **IT SAID "String method (append)" AND `String` IS THE ONE RECEIVER IT NO LONGER SERVES (W49
+	// wave 8).** `append` retired onto `stdlib/String.maxon`, so a String receiver now takes the
+	// CALL-SITE half of the same rule (`SemanticCheck.checkImmutableArgToMutatingParam`), which renders
+	// the identical sentence off the callee's own `writtenParamMask`. This variant is the RECEIVER half
+	// and is raised for `Array`, `Set`, `Map` and `List` receivers, whose methods are still arms. ⭐ The
+	// two halves agreeing on the METHOD-NAME anchor is why `dispatchMethodOnBase` anchors a corpus call
+	// there: the position is a property of the RULE, not of which half happened to raise it.
 	immutableMutatingCall(name String, functionName String, line LineNumber, column ColumnNumber)
 	// A token left over where a construct has FINISHED — it opens nothing, continues nothing, and
 	// the grammar has no position for it here. Renders as **E2001** `unexpected token: '<got>'`,
@@ -1837,7 +1845,14 @@ union ReceiverArg
 	// name at all, and `b.wipe()` on a `var b` is exactly the conflict this rung closes. It rides here for
 	// the reason the blame name does: `parseCallNamed` prepends the receiver as ARGUMENT 0, and a caller
 	// holding only the box has lost which binding it came from.
-	value(id ValueId, immutableName ByteArray, subjectName ByteArray)
+	//
+	// ⭐ **`anchor` IS THE RECEIVER'S OWN TOKEN, AND IT RIDES HERE BECAUSE THE CALL'S ANCHOR IS NO LONGER
+	// THE SAME TOKEN (W49 wave 8).** `parseCallNamed` took ONE anchor and used it for both the call op's
+	// span and this argument's span; a method call needs two, because the call is anchored at the METHOD
+	// NAME (`SourceRange.between`'s stated convention — *"the construct's leading keyword or callee name"*)
+	// while a diagnostic about the RECEIVER argument still has to point at the receiver. One token could
+	// not be both, and which of the two it was depended on which caller built the `ReceiverArg`.
+	value(id ValueId, immutableName ByteArray, subjectName ByteArray, anchor Token)
 end 'ReceiverArg'
 
 // ⭐ **THE CONCRETE GENERIC INSTANCE A STATIC CONSTRUCTOR CALL BUILDS (P1.6-B2)**, or `none`. Only a
@@ -3872,7 +3887,7 @@ export function singletonArgs(value ValueId) returns ValueIdArray
 	return args
 end 'singletonArgs'
 
-// A two-element call argument list — `__str_append(self, other)`'s pair. `singletonArgs`' sibling.
+// A two-element call argument list — `__arr_append(dest, src)`'s pair. `singletonArgs`' sibling.
 export function pairArgs(first ValueId, second ValueId) returns ValueIdArray
 	var args = ValueIdArray.create()
 	args.push(first)
@@ -4367,7 +4382,7 @@ end 'arrayWhereClause'
 // `findFirst`, `findLast`, `startIndex`, `endIndex` and `indexAfter` (wave 3), then `contains`, `slice`,
 // `trim`, `trimStart` and `trimEnd` (wave 4), then `split` (wave 5), then `bytes`, `toByteArray`,
 // `codepoints` and `utf16` (wave 6), then `byteLength`, `isEmpty`, `clone`, `addressableBytes`, `byteAt`,
-// `byteAtOrPanic` and `hasSingleByteGraphemes` (wave 7), were struck here, and that
+// `byteAtOrPanic` and `hasSingleByteGraphemes` (wave 7), and finally `append` (wave 8), were struck here, and that
 // single deletion is the whole of what moved each onto `stdlib/String.maxon`:
 // `memberBelongsToTheCorpus` is asked ahead of `dispatchStringMethod` and consults the corpus
 // for exactly the names this roster does NOT carry, so each is now an ordinary qualified
@@ -4376,14 +4391,23 @@ end 'arrayWhereClause'
 // `:730`, `:745`, `:606`, `:253`, `:340`, `:226`, `:181`, `:266`, `:281` and `:107`). Their arms, their
 // runtime builders and their usage bits went with them.
 //
-// ⭐⭐ **WHAT IS LEFT IS THE TWO MEMBERS THAT MUTATE THE RECEIVER, AND THAT IS NOT WHERE THE LIST HAPPENED
-// TO STOP — IT IS THE ONE PROPERTY A RETIREMENT CANNOT CARRY TODAY.** `append` and `setByte` both WRITE
-// their receiver's data, and `parseStringAppend` is the only caller of `noteReceiverWrite`, which is what
-// refuses `let s = "hello"; s.append(" world")` with E3019. The corpus bodies' `writtenParamMask` is ZERO,
-// because `ARCHITECTURE.md:1121-1132` RULES that a method writing its OWN receiver's data is not a
-// parameter mutation. ⇒ Retiring either today would delete a live refusal and let a `let` String be
-// mutated through a borrowed receiver — a memory-safety fault, not a diagnostic regression. Deriving that
-// mask from a managed self-field write is the rung that unblocks them.
+// ⭐⭐⭐ **THE TWO RECEIVER-WRITING MEMBERS WERE HELD FOR A MISSING MASK, AND WAVE 8 BUILT IT.** This block
+// read *"`append` and `setByte` both WRITE their receiver's data … the corpus bodies' `writtenParamMask` is
+// ZERO … retiring either today would delete a live refusal and let a `let` String be mutated through a
+// borrowed receiver"*, and named the cure: derive the mask from a managed self-field write.
+//
+// ⚠ **THE CURE AS NAMED WOULD HAVE BEEN WRONG, AND THE CASE THAT SAYS SO IS COMMITTED AND GREEN.** "A
+// managed self-field write" covers `items.push(v)` inside an ordinary `type Bag`, which
+// `parameter-mutation:let-struct-with-array-field-to-mutating-method-ok` requires to COMPILE through a
+// `let` receiver — the very ruling `receiverOwnerMask` exists to state. What separates `String.append` from
+// `Bag.add` is not that the field is managed; it is the ENVELOPE COLLAPSE: a String's `managed` is the
+// 40-byte record EMBEDDED WHOLE at offset 0, so writing it writes the record the CALLER's binding denotes,
+// where `Bag.items` is an 8-byte pointer to storage the Bag owns. `receiverOwnerMask` draws exactly that
+// line, off `StructLayout.conformsToBuiltinManagedWrapper` — see its header.
+//
+// ⇒ `append` retired at wave 8 on that mask. **`setByte` did NOT, and its blocker was never the mask** —
+// it is `stdlib/String.maxon:658`, a corpus call site that violates `specs/parameter-labels.md`. Its arm
+// carries the measurement.
 //
 // ⚠⚠ **WAVE 3 IS THE ONE THAT EDITED SOMETHING ELSE, AND IT HAD TO.** The eleven members retired around it
 // answer with a `String`, a `bool` or an `int` — types the program already agrees on. These five PRODUCE a
@@ -4452,7 +4476,6 @@ end 'arrayWhereClause'
 // "once its corpus declaration is unambiguous".** A future overload pair is refused, not miscompiled.
 function stringSurfaceMemberNames() returns ByteArrayArray
 	var names = ByteArrayArray.create()
-	names.push(AppendMethod)
 	names.push(ManagedMemorySetByteMethod)
 	for conformanceMethod in builtinConformerMethodNameList(StringConformerName) 'eachConformance'
 		names.push(conformanceMethod)
@@ -20962,7 +20985,7 @@ export type Parser
 	// which is why it lives here and not in SemanticCheck (see `ParseError.tryOnNonThrowing`).
 	//
 	// ⭐ **THERE ARE TWO CALLEE CLASSES, AND ONLY ONE OF THEM WAS BEING ASKED.** A COMPILER-EMITTED callee
-	// (`__arr_count`, `__print_string`, `__str_append`) is in no signature registry, so `declaresCallee`
+	// (`__arr_count`, `__print_string`, `__arr_append`) is in no signature registry, so `declaresCallee`
 	// answers `false` for it and the check used to wave every non-throwing builtin through: `try arr.count()`
 	// and `try print("x")` compiled, and the desugar then branched on an error-flag register the callee never
 	// wrote — a `try` that takes its error path on whatever the ABI left in R10. The reference compiler
@@ -31200,7 +31223,7 @@ export type Parser
 	// member).
 	//
 	// ⚠ **THAT ARGUMENT DOES NOT COVER THE CONTAINER VOID MUTATORS, AND THE GAP IS AN OVER-ACCEPTANCE
-	// RATHER THAN A WRONG VALUE** (measured in review of D11). `emitArrayVoidCall`, `parseStringAppend` and
+	// RATHER THAN A WRONG VALUE** (measured in review of D11). `emitArrayVoidCall` and
 	// `Set.insert` deliberately hand back the RECEIVER — "what the statement still denotes" — so their
 	// result is NOT void-tagged and the next hop is perfectly happy: `arr.push(2).count()` as a STATEMENT
 	// compiles here, where the oracle refuses it (`E2001 unexpected token: '.'`). Nothing wrong is
@@ -34287,8 +34310,11 @@ export type Parser
 		// ⭐ **`capacity@16 = InlineBufferCapacity` — the buffer-ownership encoding's INLINE provenance**
 		// (`BufferOwnership`), and the one fact the whole record has to publish about its bytes: they are
 		// part of this box, so they are neither writable in place beyond their exact length nor separately
-		// releasable. `__str_append` reads it (any negative capacity is below every required length, so an
-		// inline String always detaches into a private buffer before it grows) and `__str_decref` reads it
+		// releasable. `__arr_grow` reads it — the growth every String append now reaches through
+		// `String.append` -> `managed.append` -> `__arr_append` -> `__arr_reserve` — and any negative capacity
+		// is below every required length, so an inline String always detaches into a private buffer before it
+		// grows. (`__str_append` read it directly until W49 wave 8 retired it; the encoding is unchanged, and
+		// that it survived the change of reader is the point of putting it in `BufferOwnership`.) `__str_decref` reads it
 		// (a negative capacity sends it to `parent@32`, which is `NoOwedAllocation` here, so the record's
 		// own free reclaims record and bytes together). It used to publish `length` — an ordinary
 		// NON-NEGATIVE capacity, which the shared encoding reads as "I own a separate buffer" — and marked
@@ -36338,8 +36364,8 @@ export type Parser
 		// own `false` at the one impossible-state panic below rather than getting an arm of its own.
 		//
 		// ⭐ **A `var` RECEIVER IS THE SLOT'S CURRENT OCCUPANT, LOADED — AND IT IS NOT STORED BACK.** Every
-		// receiver-writing method rewrites the RECORD in place and never moves it: `__str_append` grows a
-		// String through `buffer@0`/`length@8`, and an `Array`'s `push`/`set`/`clear` detach or rewrite the
+		// receiver-writing method rewrites the RECORD in place and never moves it: `__arr_append` grows a
+		// String's fused record through `buffer@0`/`length@8`, and an `Array`'s `push`/`set`/`clear` detach or rewrite the
 		// element buffer while the 48-byte record stays put (`dispatchArrayMethod` states the same
 		// invariant for a local receiver). So the pointer in the `.data` slot is still the right pointer
 		// after the call, and a store-back would be a second write of a value that did not change. The
@@ -36397,7 +36423,7 @@ export type Parser
 		// ⚠ The OWNER mask is read off the binding as it ARRIVED, before `methodReceiverBinding` materializes
 		// a self-field alias into an ordinary value binding — materializing is exactly what erases the fact
 		// that the record belongs to `self`. See `receiverOwnerMask`.
-		let owner = self.receiverOwnerMask(func, binding: binding)
+		let owner = try self.receiverOwnerMask(func, binding: binding, baseTok: baseTok)
 		// Read BEFORE the materialization too: `methodReceiverBinding` hands back an ordinary value binding,
 		// which is exactly the fact the struct fallthrough still has to refuse on.
 		let selfFieldName = baseTok.value if binding.isSelfField else EmptySourceText
@@ -36725,7 +36751,7 @@ export type Parser
 		// The enum's name comes from the receiver's TYPE, never from the anchor token: the anchor is a
 		// variable's name (`d`), a `.` for a temporary, and `self` is not even an identifier.
 		let memberTok = self.current()
-		return try self.parseCallNamed(func, callee: qualifiedMethodName(self.internedName(recv.nameId), methodName: memberTok.value), anchor: recv.anchor, receiver: ReceiverArg.value(recv.value, immutableName: recv.immutableName, subjectName: recv.subjectName), resultUsed: resultUsed, constructorInstance: ConstructorInstance.none, mint: CalleeMint.notMinted)
+		return try self.parseCallNamed(func, callee: qualifiedMethodName(self.internedName(recv.nameId), methodName: memberTok.value), anchor: memberTok, receiver: ReceiverArg.value(recv.value, immutableName: recv.immutableName, subjectName: recv.subjectName, anchor: recv.anchor), resultUsed: resultUsed, constructorInstance: ConstructorInstance.none, mint: CalleeMint.notMinted)
 	end 'dispatchEnumMethod'
 
 	// ⭐⭐ **THE BINDING A METHOD DISPATCH ACTS ON — and a SELF-FIELD ALIAS is the one that has to be
@@ -36996,7 +37022,15 @@ export type Parser
 		let byteViewOpFloor = self.artifact.module.opCount()
 		let producesAByteView = base.layout.conformsToBuiltinManagedWrapper() and memberTok.value.equals(CorpusAddressableBytes)
 
-		let result = try self.parseCallNamed(func, callee: callee, anchor: baseTok, receiver: ReceiverArg.value(base.box, immutableName: base.immutableName, subjectName: base.subjectName), resultUsed: resultUsed, constructorInstance: self.receiverConstructorInstance(base.box), mint: CalleeMint.notMinted)
+		// ⭐ **THE CALL IS ANCHORED AT THE METHOD NAME, THE RECEIVER ARGUMENT AT THE RECEIVER (W49 wave 8).**
+		// Both were `baseTok`, which put every diagnostic about this call on the receiver — `s.append(t)`
+		// reported at `s`. That is not the convention `SourceRange.between` states (*"the construct's
+		// leading keyword or callee name"*) and it is not what the canonical corpus prints: `/specs`
+		// positions E3019 at the method name (`immutable-method-call:5:4` over `\ts.append(" world")`) and
+		// E3036 there too (`method-calls:19:4` over `\tc.increment(5)`), where shv2 read `:2` for both.
+		// ⚠ It was invisible while `append` had a synthesized arm, because that arm threw at `methodTok`
+		// itself; retiring the member moved the refusal to the call-site half and exposed it.
+		let result = try self.parseCallNamed(func, callee: callee, anchor: memberTok, receiver: ReceiverArg.value(base.box, immutableName: base.immutableName, subjectName: base.subjectName, anchor: baseTok), resultUsed: resultUsed, constructorInstance: self.receiverConstructorInstance(base.box), mint: CalleeMint.notMinted)
 		self.retypeInstanceMethodResult(result, receiver: base.box)
 
 		if producesAByteView 'aFoldableByteView'
@@ -37297,10 +37331,6 @@ export type Parser
 		// refusal, a near miss of it gets this roster.
 		let roster = try self.requireSurfaceMember(MemberSurface.string, methodTok: methodTok)
 
-		if methodTok.value.equals(AppendMethod) 'append'
-			return try self.parseStringAppend(func, recv: recv, methodTok: methodTok, resultUsed: resultUsed)
-		end 'append'
-
 		// ⚠ **THE WHOLE P1.8 SLICE C BYTE/ASCII FAMILY USED TO SIT HERE AND NONE OF IT DOES** —
 		// `startsWith`/`endsWith` (W49 wave 1), `toLower`/`toUpper`/`replace`/`replaceFirst` (wave 2),
 		// `contains` (wave 4) and `split` (wave 5). Each was struck from `stringSurfaceMemberNames`, which is
@@ -37333,6 +37363,18 @@ export type Parser
 		// synthesized arm answers ahead of the corpus, so the `module` keyword the corpus WROTE could never be
 		// reached; retired, each is refused by its own declaration through `SemanticCheck.calleeVisibleFrom`.
 		// `setByte` is the one member that cannot follow — see its arm, and the roster's header.
+		//
+		// ⭐⭐⭐ **AND WAVE 8 TOOK `append`, THE ONE MEMBER EVERY EARLIER WAVE HAD TO LEAVE, BECAUSE THE THING
+		// HOLDING IT BACK WAS A MISSING MASK RATHER THAN A MISSING BODY.** `parseStringAppend` was the only
+		// caller of `noteReceiverWrite(mutatesReceiver: true)` for a `String`, so retiring it as a plain roster
+		// deletion would have deleted E3019 for `let s = "hello"; s.append(" world")` — a write through a
+		// receiver the caller may only have BORROWED, which is a memory-safety fault rather than a lost
+		// message. The corpus body's `writtenParamMask` was ZERO because both its writes are self-field writes.
+		// `receiverOwnerMask` now derives that bit from the ENVELOPE COLLAPSE — see its header — so
+		// `String.append` states its own receiver write and the call-site half
+		// (`SemanticCheck.checkImmutableArgToMutatingParam`) refuses exactly what this arm used to, naming the
+		// corpus's own parameter. ⚠ **VERIFIED RED**: with the roster line struck and the mask arm absent, all
+		// four committed `immutable-method-call` String cases compiled clean.
 		let range = SourceRange.between(baseTok, last: methodTok)
 
 		// ⭐⭐ **`setByte(index, value)` — THE ONE BYTE PRIMITIVE THAT WRITES, AND THE LAST STDLIB-ONLY BYTE
@@ -37340,20 +37382,26 @@ export type Parser
 		// retired them). Its one corpus caller is `mapAsciiCase`, which takes a private copy of the bytes and
 		// maps it in place.
 		//
-		// ⛔ **IT IS THE ONE THAT MAY NOT RETIRE, AND THE REASON IS OWNERSHIP RATHER THAN LOWERING.** It
-		// WRITES its receiver, and shv2 derives no `writtenParamMask` for a method writing its own receiver's
-		// data (`ARCHITECTURE.md:1121-1132` RULES that this is not a parameter mutation, pinned by
-		// `specs-shv2/self-keyword.md`). So the corpus body's mask is ZERO, and routing the call there would
-		// admit `let s = "abc"; s.setByte(0, value: 65)` — a write through a receiver the caller may only have
-		// borrowed. `append` is the same shape one arm up and is held back for the same reason.
+		// ⛔⛔ **IT IS THE ONE THAT MAY NOT RETIRE, AND THE REASON IS A CORPUS CALL SITE — NOT OWNERSHIP.**
+		// This paragraph read *"the reason is OWNERSHIP rather than lowering: shv2 derives no
+		// `writtenParamMask` for a method writing its own receiver's data, so routing the call there would
+		// admit `let s = "abc"; s.setByte(0, value: 65)`"*, and `append` one arm up was held back on the same
+		// sentence. **That reason is DISCHARGED**: `receiverOwnerMask` derives the bit from the envelope
+		// collapse, `append` retired on it at wave 8, and `String.setByte`'s own corpus body carries the mask
+		// today — a `let` receiver would be refused by the call-site half exactly as `append`'s is.
 		//
-		// ⚠ **IT IS AN ARM RATHER THAN A CORPUS CALL FOR A REASON THE LANGUAGE FORCES.** The corpus writes
-		// `work.setByte(i, b + delta)` — POSITIONAL — and shv2 requires the second and later arguments to be
-		// named (E2053) where the bootstrap does not. Routed to the declared `String.setByte`, that call is
-		// refused inside `stdlib/` itself. The BUFFER's `setByte` already accepts both spellings
+		// ⛔ **WHAT ACTUALLY BLOCKS IT IS `stdlib/String.maxon:658`, AND IT IS A SPEC VIOLATION IN THE
+		// CORPUS.** `mapAsciiCase` writes `try work.setByte(i, b + delta)` — the second argument POSITIONAL —
+		// where `specs/parameter-labels.md` rules that *"the first argument is positional and every subsequent
+		// argument must be named"*. shv2 enforces that (E2053); the bootstrap does not, which is the only
+		// reason the line compiles at all. Routed to the declared `String.setByte`, that call is refused
+		// inside `stdlib/` itself — MEASURED on the retired two-parameter `slice`, which answers
+		// `E2053 … the second and later arguments must be named` for the identical spelling. The one-token
+		// fix (`value:`) belongs to `stdlib/`, which this wave does not own.
+		//
+		// ⇒ The arm stays, and it serves BOTH spellings through the buffer's own arg-list protocol
 		// (`consumeArrayArgLabel(required: false)`, because both are in the canonical corpus for that member),
-		// so serving the String's through the same arg-list protocol is what makes the two spellings agree
-		// rather than a special case for this file.
+		// which is what makes the two spellings agree rather than a special case for this file.
 		//
 		// ⭐ It hands the RECEIVER'S OWN RECORD to `__arr_set_byte`, which is exactly what the corpus body's
 		// `managed.setByte(…)` means on a FUSED record: a String record and an Array record agree on all five
@@ -38910,10 +38958,15 @@ export type Parser
 		try self.consume(TokenKind.rightParen)
 	end 'consumeEmptyArgList'
 
-	// `( expr )` — the single argument of a one-argument BUILTIN method, required to be of one TAG: a
-	// `String` for `append`, `contains`, `split` and the two searches, a `Character` for a
-	// `CharacterSet`'s `contains`. One home for the paren pair and the type check, so a new method cannot
-	// arrive with its own idea of what a typed argument is.
+	// `( expr )` — the single argument of a one-argument BUILTIN method, required to be of one TAG. One home
+	// for the paren pair and the type check, so a new method cannot arrive with its own idea of what a typed
+	// argument is.
+	//
+	// ⚠ **ITS `String` CALLERS ARE ALL GONE, AND IT IS DOWN TO ONE — a `Character` for a `CharacterSet`'s
+	// `contains`.** It served `contains`, `split` and the two searches until waves 3-5 retired them, and
+	// `append` until wave 8. It is kept as a shared home rather than inlined into its last caller because
+	// the `required` TAG is a parameter and the next typed one-argument member is a push, not a rewrite —
+	// which is exactly how it came to be shared in the first place (it was three functions before wave 2).
 	//
 	// ⚠ **IT WAS THREE FUNCTIONS UNTIL W49 WAVE 2 — `parseStringArg` over a `requireStringArgValue`, plus a
 	// transcribed `requireCharacterArgValue` whose caller spelled the parens itself.** The split existed for
@@ -38935,33 +38988,13 @@ export type Parser
 		return arg
 	end 'parseTaggedArg'
 
-	// s.append(t) -- grow the String s by t's bytes, IN PLACE (a __str_append(s, t) runtime call). s must
-	// be a var (append mutates the receiver), else E3019 with the bootstrap's exact framing. s is already
-	// an owned WRITABLE heap record -- a var String initializer is promoted at its declaration
-	// (parseBinding) -- so there is nothing to make writable here. t is BORROWED and COPIED (its bytes are
-	// blitted), so it is neither moved nor consumed: an owned interpolation argument stays a pending temp
-	// and drops at statement end, AFTER the copy. append is void, so a value-position call is rejected.
-	function parseStringAppend(func IrFunction, recv MethodReceiver, methodTok Token, resultUsed bool) returns ValueId throws ParseError
-		// `append` IS the String's one receiver-writing method — the caller matched it to get here — so the
-		// per-container half of the rule is a constant `true` and everything else is the shared home's.
-		// It used to ask `not binding.mutable` on its own, which made a String PARAMETER receiver a false
-		// rejection: see `noteReceiverWrite` for the measurement.
-		// `receiverStorage: NoMutatedParams` is E3070's SCOPE, not an omission: only an ARRAY write can free
-		// an array element, so a `String` method writing its receiver cannot invalidate a borrow. Recording it
-		// would refuse `b.wipe()` while `b.items` is borrowed for a `wipe` that only appends to `b.name`.
-		try self.noteReceiverWrite(func, immutableReceiverName: recv.immutableName, receiverOwner: recv.owner, receiverStorage: NoMutatedParams, methodTok: methodTok, mutatesReceiver: true)
-
-		// `append` is void, so a value-position call is refused — through the same one home the `Array` and
-		// `Set` void mutators use. It spelled the rule out here instead, and the name it blamed was the
-		// CONSTANT it had matched (`AppendMethod`), which is the same bytes `methodTok.value` carries.
-		try self.requireVoidMethodIsStatement(resultUsed, methodTok: methodTok)
-
-		let arg = try self.parseTaggedArg(func, methodName: AppendMethod, required: ValueTypeTag.string)
-		_ = self.emitRuntimeCall(StrAppendName, args: pairArgs(recv.value, second: arg), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: SourceRange.between(recv.anchor, last: methodTok))
-		// append is a statement (resultUsed false, checked above); the returned id is discarded by the
-		// caller. The receiver value is the honest thing to hand back -- it is what s still denotes.
-		return recv.value
-	end 'parseStringAppend'
+	// ⚠⚠ **`parseStringAppend` STOOD HERE AND WENT WITH `String.append` (W49 wave 8), AND IT WAS THE LAST
+	// `String` CALLER OF `noteReceiverWrite`.** Its whole job was the receiver-write refusal — the corpus body
+	// (`stdlib/String.maxon:414-419`) has always carried the append itself — so retiring the member meant
+	// moving that refusal rather than deleting it: `receiverOwnerMask` derives the bit from the envelope
+	// collapse and `SemanticCheck.checkImmutableArgToMutatingParam` raises the same E3019 at the same token.
+	// `__str_append` and its usage bit went with it; the corpus reaches `__arr_append` through
+	// `managed.append(other.managed)`, whose growth is `__arr_grown_cap`'s and so stays geometric.
 
 	// ⚠ **`parseStringByteLength` STOOD HERE AND WENT WITH `String.byteLength` (W49 wave 7).** It was two
 	// lines — consume `()`, load `length@8` — and had exactly ONE caller, so retiring the member took the
@@ -42554,7 +42587,7 @@ export type Parser
 	// function. Refusing the write and recording it are the same question asked of the same receiver at the
 	// same instant — `mutatesReceiver` is the per-container authority's answer and is read ONCE — so they
 	// are answered together rather than by two passes that would then have to agree for ever. A summary
-	// built by re-reading the LOWERED callee names (`__arr_push`, `__str_append`, `__set_insert`) would be
+	// built by re-reading the LOWERED callee names (`__arr_push`, `__arr_append`, `__set_insert`) would be
 	// precisely that second list, three tiers away from the one the parser already consults.
 	//
 	// ⭐⭐ **IT RECORDS TWO MASKS, BECAUSE ONE WRITE ANSWERS TWO QUESTIONS AND shv2 ANSWERS THEM
@@ -42623,13 +42656,60 @@ export type Parser
 	// with a parameter's id. ⭐ It is `paramMaskOfValue` and no longer inline: E3070's `receiverStorageMask`
 	// asks the identical question of the identical value, and so does the self-field STORE door, so what had
 	// exactly ONE asker now has three.
-	function receiverOwnerMask(func IrFunction, binding VarInfo) returns MutatedParamMask
+	//
+	// ⭐⭐⭐ **THE ONE SELF-FIELD THE RULING ABOVE DOES NOT COVER: A FUSED WRAPPER'S INLINE `managed` (W49
+	// wave 8).** The ruling rests on a `let`-bound struct HOLDING a record — `acc` names an `Accumulator`
+	// box, `b` names a `Bag` box — so a write inside the type reaches storage that box owns and the caller's
+	// `let` never promised anything about it. **A fused wrapper has no such box.** `type String`'s `managed`
+	// is the 40-byte `__ManagedMemory` EMBEDDED WHOLE at offset 0 — the ENVELOPE COLLAPSE
+	// (`StructLayout.isInlineManagedField`), whose whole point is that **a String IS its own
+	// `__ManagedMemory`** — so `managed.append(…)` inside `String.append` writes the very record the
+	// CALLER's binding denotes, byte for byte. That is not "reaching inside the type's own methods"; it is
+	// the write `let s = "hello"` exists to refuse, and refusing it is what keeps `s.append(" world")` off
+	// an `.rdata` literal and off an array element some other name still borrows.
+	//
+	// ⛔⛔ **AND THE LINE IS THE ENVELOPE COLLAPSE, NOT "THE FIELD IS MANAGED" — THAT WIDER RULE WAS THE
+	// PLANNED CURE AND A COMMITTED CASE REFUTES IT.** `items.push(v)` inside an ordinary `type Bag` is a
+	// managed self-field write too, and `parameter-mutation:let-struct-with-array-field-to-mutating-method-ok`
+	// requires `let b = Bag.create(); b.add(1)` to COMPILE and answer 1. `Bag.items` is an 8-byte POINTER to
+	// storage the Bag owns; `String.managed` is the record itself. Keyed on managed-ness this arm would
+	// redden that case; keyed on the collapse it cannot see `Bag` at all, because `Bag` declares no builtin
+	// literal marker. **The four conformers are `String`, `Character`, `Array` and `Vector`** — exactly the
+	// types whose `let` discipline `specs-shv2/immutable-method-call.md` documents by name.
+	//
+	// ⚠ **IT SETS E3019's COLUMN ONLY. `receiverStorageMask` below is unchanged and still answers for
+	// E3070**, which is the same independence `IrFunction`'s table already records for a `String` receiver
+	// that is a parameter: a String write frees no ARRAY element, and an array element is the only borrow
+	// E3070 tracks. `borrow-liveness:method-writing-a-string-or-set-field-is-not-a-conflict` is the case
+	// that fails the instant the two are fused, and it was watched green before, during and after this arm.
+	function receiverOwnerMask(func IrFunction, binding VarInfo, baseTok Token) returns MutatedParamMask throws ParseError
 		if binding.isSelfField 'ownedByTheTypeNotTheCaller'
+			// ⛔ **BOUND FIRST, NEVER `if try …` — MEASURED, AND IT IS A SILENT WRONG ANSWER.** Written as
+			// `if try self.selfFieldIsInlineManaged(…) 'label'` this arm fired for `type Bag`'s plain
+			// `items` field, on which the predicate is provably FALSE (probed: `conforms=false`,
+			// `fieldIndex=0`, `inlineIdx=1`) — so every `let`-bound struct with a container field was
+			// refused with E3019. `dispatchMethodOnBinding`'s own use of this predicate already states the
+			// rule — *"which needs a `try` and so cannot join a condition chain"* — and this is the
+			// measurement behind it.
+			let theRecordIsTheReceiver = try self.selfFieldIsInlineManaged(binding, baseTok: baseTok)
+			if theRecordIsTheReceiver 'theFieldIsTheReceiversOwnRecord'
+				return self.enclosingSelfParamMask(func)
+			end 'theFieldIsTheReceiversOwnRecord'
+
 			return NoMutatedParams
 		end 'ownedByTheTypeNotTheCaller'
 
 		return paramMaskOfValue(func, value: binding.boundValue)
 	end 'receiverOwnerMask'
+
+	// ⭐ **THE ENCLOSING METHOD'S RECEIVER, AS A MASK** — shared by the two masks above and below, which both
+	// reach it for a self-field alias and would otherwise spell one lookup and one panic twice. The
+	// parameter INDEX is DERIVED (`self` resolved through the scope) rather than assumed to be 0: the
+	// convention that binds it there lives in `bindParameters`, and restating it here would be a second copy
+	// of it.
+	function enclosingSelfParamMask(func IrFunction) returns MutatedParamMask
+		return paramMaskOfValue(func, value: try self.scope.lookupValue(SelfParamName) otherwise panic("enclosingSelfParamMask: a self-field alias is in scope but `self` is not — `declareSelfFieldAliases` and `bindParameters` both run at method entry before a body token is read, and neither other path can hold an alias in THIS scope without a receiver (a closure body gets a FRESH scope carrying no alias — a bare self-field name inside one resolves through the CAPTURE path instead, off the enclosing scope; a `static function` installs no alias at all)"))
+	end 'enclosingSelfParamMask'
 
 	// ⭐⭐ **THE E3070 TWIN OF THE MASK ABOVE: WHICH PARAMETER'S STORAGE A WRITE THROUGH THIS RECEIVER
 	// REACHES.** It differs from `receiverOwnerMask` in EXACTLY ONE ARM — a SELF-FIELD alias — and that one
@@ -42641,12 +42721,11 @@ export type Parser
 	// element `s` holds. MEASURED before this arm existed — the oracle prints 44 (it RETAINS), shv2 ran and
 	// printed **4557430888798830399** out of freed memory, with no diagnostic anywhere.
 	//
-	// The receiver's parameter index is DERIVED (`self` resolved through the scope), not assumed to be 0:
-	// the convention that binds it there lives in `bindParameters`, and restating it here would be a second
-	// copy of it.
+	// The receiver's parameter index is DERIVED rather than assumed to be 0 — see `enclosingSelfParamMask`,
+	// the one home that lookup and its panic now have.
 	function receiverStorageMask(func IrFunction, binding VarInfo) returns MutatedParamMask
 		if binding.isSelfField 'fieldOfTheEnclosingReceiver'
-			return paramMaskOfValue(func, value: try self.scope.lookupValue(SelfParamName) otherwise panic("receiverStorageMask: a self-field alias is in scope but `self` is not — `declareSelfFieldAliases` and `bindParameters` both run at method entry before a body token is read, and neither other path can hold an alias in THIS scope without a receiver (a closure body gets a FRESH scope carrying no alias — a bare self-field name inside one resolves through the CAPTURE path instead, off the enclosing scope; a `static function` installs no alias at all)"))
+			return self.enclosingSelfParamMask(func)
 		end 'fieldOfTheEnclosingReceiver'
 
 		// ⚠ **MODULE STORAGE REACHES NO PARAMETER, AND THE ARM IS EXPLICIT FOR `receiverOwnerMask`'s OWN
@@ -42937,8 +43016,7 @@ export type Parser
 		end 'uncopyable'
 	end 'requireOpaqueArrayCopyable'
 
-	// Emit a VOID array mutator call; return the receiver (what the statement still denotes, like
-	// `parseStringAppend`).
+	// Emit a VOID array mutator call; return the receiver (what the statement still denotes).
 	function emitArrayVoidCall(callee ByteArray, args ValueIdArray, receiver ValueId, range SourceRange) returns ValueId
 		_ = self.emitRuntimeCall(callee, args: args, resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
 		return receiver
@@ -48097,7 +48175,9 @@ export type Parser
 		if not (self.scope.contains(SelfParamName) or self.captureBinds(SelfParamName)) 'noReceiver'
 			return ReceiverArg.none
 		end 'noReceiver'
-		return ReceiverArg.value(try self.requireReceiverValue(anchor), immutableName: EmptySourceText, subjectName: EmptySourceText)
+		// The anchor IS the callee token here — an implicit-self sibling call writes no receiver, so the
+		// only token either half of the call can point at is the name the author wrote.
+		return ReceiverArg.value(try self.requireReceiverValue(anchor), immutableName: EmptySourceText, subjectName: EmptySourceText, anchor: anchor)
 	end 'implicitSelfReceiver'
 
 	// Populate `siblingReceivers` (the enclosing type's member methods, bare name -> takesReceiver) unless it is
@@ -48334,11 +48414,12 @@ export type Parser
 		// for parameter 'value'") instead of by count. The honest fix is a diagnostic that speaks in
 		// the SOURCE's arity, and no corpus case covers one — so it is recorded, not invented here.
 		//
-		// Its span is the receiver EXPRESSION's anchor (`acc`, or the `self` keyword), which is the
-		// token a diagnostic about the receiver has to point at.
+		// Its span is the receiver EXPRESSION's OWN anchor (`acc`, or the `self` keyword), which is the
+		// token a diagnostic about the receiver has to point at — and it is the receiver's rather than this
+		// function's `anchor` because a method call anchors the CALL at the method name. See `ReceiverArg`.
 		match receiver 'prependReceiver'
 			none then break 'prependReceiver'
-			value(id, immutableName, subjectName) then try self.prependReceiverArg(func, callee: callee, anchor: anchor, id: id, immutableName: immutableName, subjectName: subjectName, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames)
+			value(id, immutableName, subjectName, receiverTok) then try self.prependReceiverArg(func, callee: callee, anchor: receiverTok, id: id, immutableName: immutableName, subjectName: subjectName, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames)
 		end 'prependReceiver'
 
 		// ⭐ THE ONE DOOR WHERE A BARE BUILTIN CAN ARRIVE, so it is the one door that asks which label

@@ -39,8 +39,8 @@
 // out a byte view that counts the record instead of wherever the bytes really are: a dangling pointer or
 // a leak. There is still no COMPILE error for it. This note is the obligation, written at the declaration
 // because that is where the fourth value will be added. The runtime does NOT guard it with an abort arm,
-// for this file's own stated reason: it refuses to emit a branch no input reaches (see
-// `emitBufferCannotHold`).
+// for this file's own stated reason: it refuses to emit a branch no input reaches (stated where
+// `emitBufferCannotHold` stood, below).
 //
 // ⚠ **WHAT IS NO LONGER TRUE: "with nothing to catch it".** This note used to argue that the suite
 // STRUCTURALLY could not reach the door, because `addressableBytes` is stdlib-only and the spec runner
@@ -90,8 +90,9 @@
 //
 // ⭐⭐ **THE TYPE IS WHAT MAKES "NOT MINE ⇒ NEGATIVE" A RULE RATHER THAN A HABIT.** Every provenance below
 // is declared at this type, whose range STOPS at `-1`, so a fourth one written `= 4` — or `= 0` — does not
-// compile. That matters because `StringRuntime.__str_append` does not test the sign at all: it tests
-// `capacity < requiredLen` and relies on every non-owned capacity being below every byte count. Under a
+// compile. That matters because a GROWER need not test the sign at all: it can test
+// `capacity < requiredLen` and rely on every non-owned capacity being below every byte count (the fused
+// test `__str_append` used until W49 wave 8 — see the note where its emitter stood). Under a
 // bare `ParsedInt` that reliance rested on three separate literals staying negative by convention, and a
 // convention that is only written in a comment is a test nobody wrote — the exact shape of every bug this
 // file exists to end. Here the compiler that builds shv2 checks it, once per provenance, at the
@@ -148,35 +149,32 @@ export let ManagedRecordBytes = 48 as ByteCount
 // `__mm_alloc` header must clear this test first. `__arr_cow_detach` is exactly such a reader, and its
 // arms are ordered accordingly.
 //
-// ⚠ `emitBufferCannotHold` below is the same question ASKED WIDER, not a second copy of it — see there.
+// ⚠ It is the ONLY buffer-provenance test left. `emitBufferCannotHold` below asked the same question
+// WIDER — fused with "and is it big enough?" — and retired with its one caller at W49 wave 8; the note
+// where it stood keeps the property that made the fusion sound, for a future grower to re-derive from.
 export function emitBufferNotOwned(module StdModule, block IrBlock, record ValueId, ids ValueMinter) returns ValueId
 	let capacity = emitLoadField(module, block: block, record: record, offset: ManagedRecordCapacityOffset, ids: ids)
 	let zero = emitConst(module, block: block, value: 0, ids: ids)
 	return emitCmp(module, block: block, a: capacity, b: zero, pred: StdCmpPred.lt, ids: ids)
 end 'emitBufferNotOwned'
 
-// `capacity@16 < requiredLen` — ⭐ **"MUST THESE BYTES MOVE TO A PRIVATE BUFFER BIG ENOUGH TO HOLD
-// `requiredLen` OF THEM?"** — `emitBufferNotOwned`'s question widened, and the ONE place a caller is
-// allowed to fuse the two. It answers YES for an owner that is merely too small (an ordinary grow) AND
-// for every non-owned buffer whatever the sizes, because:
+// ⚠⚠ **`emitBufferCannotHold` STOOD HERE AND WENT WITH ITS ONE CALLER (W49 wave 8).** It emitted
+// `capacity@16 < requiredLen` — the ONE place a caller was allowed to FUSE "is this buffer mine?" with
+// "is it big enough?" — and its only caller was `StringRuntime.__str_append`, which retired with
+// `String.append`. A zero-caller emitter is deleted rather than kept warm: this file's own rule is that
+// vocabulary does not ship ahead of its consumer.
 //
-//   `requiredLen` is a byte COUNT, so it is `>= 0`; `NotOwnedBufferCapacity` stops at `-1`, so every
-//   non-owned capacity is `< 0`. Every negative is below every non-negative, so the comparison is
-//   UNCONDITIONALLY true for an inline String, for a literal's immortal `.rdata` blob, for a view, and
-//   for any provenance added later — which cannot opt out, because it cannot be declared non-negative.
+// ⭐ **THE PROPERTY IT RESTED ON IS NOT DELETED, BECAUSE IT IS THE TYPE'S AND NOT THE HELPER'S**, and the
+// next grower written against this encoding needs it:
 //
-// ⭐ **IT LIVES HERE, NEXT TO THE VALUES IT RESTS ON, AND THAT SITING IS THE POINT.** Its one caller is
-// `StringRuntime.__str_append`, and a single-caller helper would normally just move code; this one moves
-// a DEPENDENCY to where it can be seen. Left open-coded in the String runtime, "the sign test is already
-// inside the size test" was a claim in one file about constants declared in another — so whoever added a
-// fourth provenance had no reason to read it. Here it is three lines under them.
+//   a byte COUNT is `>= 0`; `NotOwnedBufferCapacity` STOPS at `-1`, so every non-owned capacity is `< 0`.
+//   Every negative is below every non-negative, so `capacity < requiredLen` is UNCONDITIONALLY true for
+//   an inline String, for a literal's immortal `.rdata` blob, for a view, and for any provenance added
+//   later — which cannot opt out, because it cannot be declared non-negative.
 //
-// ⚠ It deliberately does NOT also call `emitBufferNotOwned`: an `OR` whose left arm can never be the
-// deciding one is a branch no input reaches, and this file already refuses to emit those.
-export function emitBufferCannotHold(module StdModule, block IrBlock, record ValueId, requiredLen ValueId, ids ValueMinter) returns ValueId
-	let capacity = emitLoadField(module, block: block, record: record, offset: ManagedRecordCapacityOffset, ids: ids)
-	return emitCmp(module, block: block, a: capacity, b: requiredLen, pred: StdCmpPred.lt, ids: ids)
-end 'emitBufferCannotHold'
+// ⇒ A future fused test may be re-derived from that sentence in one line. What it may NOT do is pair it
+// with `emitBufferNotOwned` in an `OR`: an `OR` whose left arm can never be the deciding one is a branch
+// no input reaches, and this file refuses to emit those.
 
 // ⭐ **THE SEPARATE ALLOCATION THIS RECORD OWES A RELEASE TO — `NoOwedAllocation` when it owes nothing.**
 // An OWNER's is its own `buffer@0` (the pointer `__mm_alloc` returned, which may be 0 if the record never
@@ -254,7 +252,7 @@ end 'emitReleaseOwedBase'
 //
 // **Give this record a PRIVATE buffer of `askElements` elements holding its live ones, and hand back the
 // allocation it used to owe a release to.** It is the ACTION half of copy-on-write; the QUESTION half stays
-// exactly where it already was (`emitBufferNotOwned` / `emitBufferCannotHold` above), and each caller goes
+// exactly where it already was (`emitBufferNotOwned` above), and each caller goes
 // on asking its own — their conditions genuinely differ and are not this function's business.
 //
 // ⚠ **THE QUESTION WAS UNIFIED HERE LONG BEFORE THE ACTION WAS, AND THAT GAP IS WHAT THIS CLOSES.** This
@@ -278,23 +276,37 @@ end 'emitReleaseOwedBase'
 // both records already keep it in. A detach that assumed a stride of 1 would be right for every String and
 // would under-allocate every wide-element array by exactly its stride.
 //
-// ⭐ **GROWTH POLICY STAYS WITH THE CALLER, DELIBERATELY, BECAUSE THE TWO CALLERS GENUINELY DIFFER.** Array
-// SEPARATES detaching from growing — `__arr_cow_detach` asks for exactly `length`, because slack is
-// `__arr_grow`/`__arr_grown_cap`'s business — while `__str_append` FUSES the two and asks for
-// `2 * requiredLen`. That doubling is not a preference: exact growth made `var s = ""` plus a loop of
-// appends QUADRATIC (measured ×3.94/×4.07/×3.82/×3.88 per doubling, and 5.0 s to build a 288 KB string),
-// and `StringRuntime.buildStrAppend` still owns that reasoning because it still owns that decision. Pulling
-// either policy in here would have to pick one of the two, so the ask is a parameter and neither is lost.
+// ⭐ **GROWTH POLICY STAYS WITH THE CALLER, DELIBERATELY.** `__arr_cow_detach` — the one caller left — asks
+// for exactly `length`, because slack is `__arr_grow`/`__arr_grown_cap`'s separate business, and a detach
+// that also grew would give one record two growth policies. The ask is therefore a PARAMETER rather than a
+// rule written here.
+//
+// ⚠ **`__str_append` WAS THE SECOND CALLER AND FUSED THE TWO, ASKING `2 * requiredLen`; IT RETIRED WITH
+// `String.append` (W49 wave 8) AND ITS REASONING DID NOT.** That doubling was never a preference: exact
+// growth made `var s = ""` plus a loop of appends QUADRATIC (measured ×3.94/×4.07/×3.82/×3.88 per doubling,
+// and 5.0 s to build a 288 KB string). The corpus body appends through `managed.append(other.managed)` now,
+// so the geometric growth a String depends on is `__arr_grown_cap`'s — the same policy, reached one layer
+// out. ⇒ **A caller of this function that neither grows geometrically itself nor routes through
+// `__arr_grow` restores that quadratic**, and it restores it silently, because a detach is correct however
+// small the ask.
 //
 // ⚠⚠ **IT RETURNS THE OWED BASE INSTEAD OF RELEASING IT, AND THAT IS LOAD-BEARING RATHER THAN TIDY.**
 // `emitOwedAllocationBase` and `emitReleaseOwedBase` are deliberately unfused (see their headers) because a
-// detach must SPLIT them across its byte copy — and the two callers do not agree on where the far side of
-// that split is. `__arr_cow_detach` may pay the debt the instant this returns. `__str_append` may NOT:
-// `s.append(s)` aliases its `other` operand to `self`'s OLD buffer, so the release must wait until the BLIT
-// has also finished reading, one block later. Releasing inside here would reintroduce exactly the
-// read-after-free that `string-type-2/rc-repeated-self-append` exists to guard — and, per that case's own
-// note, NO TEST COULD CATCH IT TODAY, because `__mm_free` reclaims nothing under the bump allocator. So the
-// debt comes back out as a return value and each caller pays it when its own reads are done.
+// detach must SPLIT them across its byte copy, and the far side of that split is the CALLER's to name.
+// `__arr_cow_detach` may pay the debt the instant this returns. `__str_append` may NOT, which is why the
+// split exists at all: `s.append(s)` aliased its `other` operand to `self`'s OLD buffer, so the release had
+// to wait until the BLIT had also finished reading, one block later. Releasing inside here would
+// reintroduce exactly the read-after-free that `string-type-2/rc-repeated-self-append` exists to guard —
+// and, per that case's own note, NO TEST COULD CATCH IT TODAY, because `__mm_free` reclaims nothing under
+// the bump allocator. The debt therefore still comes back out as a return value, and the caller pays it
+// when its own reads are done.
+//
+// ⭐ **`s.append(s)` IS STILL SAFE ON THE CORPUS ROUTE, AND BY A DIFFERENT MECHANISM — TRACED, NOT ASSUMED.**
+// `__arr_append` loads BOTH buffers *after* its `__arr_reserve`, and `__arr_grow` detaches and reallocates
+// BEFORE returning, copying the live bytes into the new allocation and releasing the old one there. So the
+// aliased read lands in the NEW buffer, which already holds the original contents, and the two ranges do
+// not overlap (`[0, n)` read into `[n, 2n)` written). `__str_append` needed the split because it blitted
+// out of the buffer the detach had just released; this route never reads the released one at all.
 //
 // The traps `buildArrCowDetach`'s header lists are kept here rather than restated there: the old buffer is
 // loaded AFTER the owed base is read, a ZERO-LENGTH record still detaches (no early-out — `__mm_alloc(0, 0)`

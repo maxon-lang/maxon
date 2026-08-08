@@ -58,7 +58,7 @@ export let StringParentPtrOffset = ManagedRecordParentOffset
 // propagation sites"*. That is what this is.
 //
 // ⭐ **CR-FREE RATHER THAN CRLF-FREE, AND THAT IS WHAT MAKES IT COMPOSABLE** — *"no CR"* is a property of
-// each byte ON ITS OWN, so it survives both slicing and concatenation and `__str_append` may simply AND the
+// each byte ON ITS OWN, so it survives both slicing and concatenation and a concatenation may simply AND the
 // two flags. *"No CRLF pair"* would not: `"a\r"` and `"\nb"` each lack one and their join has one.
 export let StringSingleByteGraphemesOffset = 40 as ByteOffset
 export let StringRecordBytes = ManagedRecordBytes
@@ -240,13 +240,20 @@ export function integerToStringScratchBytes(signedness DivideSignedness) returns
 	end 'reading'
 end 'integerToStringScratchBytes'
 
-// The two Wave-D entry points. `__str_append(self, other)` grows a String in place; `__str_decref(record)`
-// is a String's drop — a `__mm_decref` that ALSO frees the external buffer of a detached String. Both are
-// `__`-prefixed compiler-internal (no E3004, no signature slotting) but NOT `__mm_`-prefixed, so on their
-// own they do not widen the heap decision. They DO call `__mm_alloc`/`__mm_free`/`__str_copy` inside their
-// Std bodies — which `scanRuntimeUsage` cannot see, since those calls are not in the Maxon module — so a
-// reference to either explicitly turns on `usesHeap` (and `__str_append` turns on `usesStrCopy`).
-export let StrAppendName = b"__str_append"
+// The surviving Wave-D entry point. `__str_decref(record)` is a String's drop — a `__mm_decref` that ALSO
+// frees the external buffer of a detached String. It is `__`-prefixed compiler-internal (no E3004, no
+// signature slotting) but NOT `__mm_`-prefixed, so on its own it does not widen the heap decision. It DOES
+// call `__mm_alloc`/`__mm_free` inside its Std body — which `scanRuntimeUsage` cannot see, since those
+// calls are not in the Maxon module — so a reference to it explicitly turns on `usesHeap`.
+//
+// ⚠ **`__str_append` STOOD BESIDE IT AND RETIRED WITH `String.append` (W49 wave 8).** The corpus body
+// appends through `managed.append(other.managed)`, which is `__arr_append` over the receiver's own record,
+// so the String-specific grower had no producer left. Its two behaviours survive in the corpus rather than
+// being lost: the `singleByteGraphemesFlag` maintenance is the body's own `if`, and the GEOMETRIC growth it
+// spelled as `2 * requiredLen` is `__arr_grown_cap`'s, which `__arr_append` reaches through
+// `__arr_reserve`. That second one is load-bearing — exact growth made `var s = ""` plus a loop of appends
+// quadratic, MEASURED at ×3.94 ×4.07 ×3.82 ×3.88 per doubling — so a retirement onto a runtime with no
+// growth policy would have restored the quadratic silently.
 export let StrDecrefName = b"__str_decref"
 
 // ⭐⭐ **THE P1.8 SLICE C BYTE/ASCII METHOD FAMILY IS GONE — ALL EIGHT ENTRY POINTS, ALL SEVEN MEMBERS**
@@ -546,7 +553,6 @@ export type RuntimeUsage
 	// its consumer" rule `installStringRuntime` states, applied to a second entry point of one builder.
 	export var usesUIntToString as bool
 	export var usesBoolToString as bool
-	export var usesStrAppend as bool
 	export var usesStrDecref as bool
 	// The program touches an `Array` (P1.7 slice 1). Any `__arr_*` runtime call turns this on — and, like
 	// the String helpers, turns on `usesHeap` too, because the array helpers `__mm_alloc`/`__mm_free` the
@@ -761,7 +767,7 @@ export type RuntimeUsage
 	export var usesProcessIntrospection as bool
 
 	static function create() returns RuntimeUsage
-		return Self{usesHeap: false, usesGt: false, usesIocp: false, usesStreaming: false, usesWriteStdout: false, usesWriteStderr: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesUIntToString: false, usesBoolToString: false, usesStrAppend: false, usesStrDecref: false, usesArray: false, usesSet: false, usesMap: false, usesList: false, usesDropTypeParam: false, usesDropExistential: false, usesRetainExistential: false, usesIncref: false, usesRetain: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrFromBytes: false, usesStrOfBuffer: false, usesMmToCString: false, usesStrBytesView: false, usesManagedArrayCopy: false, usesOpaqueArrayCopy: false, neededCloners: ClonerSet.create(), usesWallClock: false, usesCharAt: false, usesCharCmp: false, usesCharFromCodepoint: false, usesCharAsciiValue: false, usesStrToBytes: false, usesUcdCategory: false, usesCharSetMake: false, usesCharSetDecref: false, usesCharSetContains: false, usesManagedFile: false, usesManagedDirectory: false, usesCommandLine: false, usesConsoleStdin: false, usesProcessIntrospection: false}
+		return Self{usesHeap: false, usesGt: false, usesIocp: false, usesStreaming: false, usesWriteStdout: false, usesWriteStderr: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesUIntToString: false, usesBoolToString: false, usesStrDecref: false, usesArray: false, usesSet: false, usesMap: false, usesList: false, usesDropTypeParam: false, usesDropExistential: false, usesRetainExistential: false, usesIncref: false, usesRetain: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrFromBytes: false, usesStrOfBuffer: false, usesMmToCString: false, usesStrBytesView: false, usesManagedArrayCopy: false, usesOpaqueArrayCopy: false, neededCloners: ClonerSet.create(), usesWallClock: false, usesCharAt: false, usesCharCmp: false, usesCharFromCodepoint: false, usesCharAsciiValue: false, usesStrToBytes: false, usesUcdCategory: false, usesCharSetMake: false, usesCharSetDecref: false, usesCharSetContains: false, usesManagedFile: false, usesManagedDirectory: false, usesCommandLine: false, usesConsoleStdin: false, usesProcessIntrospection: false}
 	end 'create'
 end 'RuntimeUsage'
 
@@ -960,15 +966,8 @@ export function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 	if callee.equals(BoolToStringName) 'booltostr'
 		usage.usesBoolToString = true
 	end 'booltostr'
-	// `__str_append` and `__str_decref` call `__mm_alloc`/`__mm_free` inside their Std bodies, which
-	// this Maxon-module scan cannot see — so their TRANSITIVE heap dependency is declared here rather
-	// than discovered. `__str_append` also blits with `__str_copy`. Turning these bits on is what
-	// keeps a program that appends from missing its allocator or its copy loop.
-	if callee.equals(StrAppendName) 'strappend'
-		usage.usesStrAppend = true
-		usage.usesHeap = true
-		usage.usesStrCopy = true
-	end 'strappend'
+	// `__str_decref` calls `__mm_alloc`/`__mm_free` inside its Std body, which this Maxon-module scan
+	// cannot see — so its TRANSITIVE heap dependency is declared here rather than discovered.
 	if callee.equals(StrDecrefName) 'strdecref'
 		usage.usesStrDecref = true
 		usage.usesHeap = true
@@ -990,7 +989,7 @@ export function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 	// Any `__arr_*` call carries the whole array runtime, and the heap under it: `__arr_create`/`__arr_grow`
 	// `__mm_alloc` the record and the element buffer, `__arr_decref` `__mm_free`s them — none of which this
 	// Maxon-module scan sees, since those calls live in the synthesized Std bodies. So a single reference
-	// declares both bits, exactly as `__str_append`/`__str_decref` do for their own transitive heap use.
+	// declares both bits, exactly as `__str_decref` does for its own transitive heap use.
 	if isArrayRuntimeCallee(callee) 'array'
 		usage.usesArray = true
 		usage.usesHeap = true
@@ -1058,7 +1057,7 @@ export function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 	end 'uniondtor'
 	// A String DEEP-CLONE (`__str_clone`, P1.7 slice 3b-vi-b) — a managed array/struct copy cloning a String
 	// element/field. It `__mm_alloc`s a fresh fused record and `__str_copy`s the bytes in, inside its SYNTHESIZED
-	// body this scan cannot see, so those transitive bits are declared here (the `__str_append` shape).
+	// body this scan cannot see, so those transitive bits are declared here (the `__str_decref` shape).
 	if callee.equals(StrCloneName) 'strclone'
 		usage.usesStrClone = true
 		usage.usesHeap = true
@@ -1225,7 +1224,7 @@ end 'recordStringMethodUsage'
 
 // ⭐ **WHAT EACH REFERENCED BODY CALLS THAT THIS SCAN CANNOT SEE.** These entry points call the heap
 // helpers from inside their SYNTHESIZED Std bodies, which walk no Maxon module — so the dependency is
-// DECLARED here rather than discovered, exactly as `__str_append` declares its `__mm_alloc`/`__str_copy`.
+// DECLARED here rather than discovered, exactly as `__str_decref` declares its `__mm_alloc`/`__mm_free`.
 // Run as a CLOSURE after every record (rather than each arm listing its own transitive set) so the answer
 // cannot depend on the order in which the module happens to name its entry points.
 function closeStringMethodNeeds(usage RuntimeUsage)
@@ -1281,9 +1280,6 @@ export function installStringRuntime(module StdModule, usage RuntimeUsage)
 	if usage.usesBoolToString 'booltostr'
 		buildBoolToString(module)
 	end 'booltostr'
-	if usage.usesStrAppend 'strappend'
-		buildStrAppend(module)
-	end 'strappend'
 	if usage.usesStrDecref 'strdecref'
 		buildStrDecref(module)
 	end 'strdecref'
@@ -1780,131 +1776,6 @@ function buildBoolToString(module StdModule)
 	module.functions.push(func)
 end 'buildBoolToString'
 
-// `__str_append(self, other)` — grow `self` in place by `other`'s bytes. The first time a shv2 String's
-// bytes leave the inline/rdata region (Wave D), so the FIRST real exercise of the leak gate on a non-inline
-// allocation. Adapted from v1's `__managed_mem_cow_check`+`grow` (`stdlib/Internals.maxon:3432-3491`) to
-// shv2's fused record and static single-owner model (no refcount on the detach path).
-//
-// ⭐ **ONE TEST DECIDES THE DETACH — `emitBufferCannotHold`, WHICH IS THE SHARED ENCODING'S OWN, NOT A
-// SECOND SPELLING OF "IS THIS BUFFER MINE?".** The bytes must move to a fresh external buffer whenever
-// `capacity@16 < requiredLen`, and that single comparison covers the ordinary grow AND every non-owned
-// buffer at once. WHY it covers the second is not stated here: it is a property of the capacity values,
-// so it is written where they are declared (`BufferOwnership`), against a type that stops at `-1` so a
-// provenance CANNOT be added that slips past this test. `requiredLen = selfLen + otherLen` is this
-// function's half of that contract — a sum of two `length@8` byte counts, hence never negative.
-//
-// ⚠ **THE OLD ALLOCATION IS RELEASED THROUGH THE SHARED PAIR, AND ONLY AFTER BOTH COPIES ARE DONE.**
-// `__mm_cow_detach` reads WHICH allocation the record owes a release to (via `emitOwedAllocationBase`)
-// before it republishes the fields that answer it, and RETURNS it rather than paying it — an inline String
-// owes nothing, its bytes being in its own box — and `emitReleaseOwedBase` pays it here, null-guarded, once
-// the blit has finished reading. That split across the two functions is this caller's doing: see
-// `buildMmCowDetach`, where the aliasing below is the stated reason the debt comes back out at all. ⭐ The release rides a
-// BLOCK ARG into `blit` (0 on the in-place edge) rather than happening in the detach block, and that is
-// load-bearing rather than tidy: `s.append(s)` aliases `other` to `self`'s OLD buffer, so releasing before
-// the blit is a read-after-release. It is invisible today — `__mm_free` reclaims nothing under the bump
-// allocator (PLAN.md #108) — and it is a use-after-free the day it does.
-//
-// ⚠ **THE INVARIANT THIS RUNG USED TO SPELL AS `parent@32 == -1` IS UNCHANGED IN BEHAVIOUR**: a String
-// that has detached owns an external buffer and must release it, and one whose bytes are inline or in
-// `.rdata` must not. What changed is only WHERE that is written down — `capacity@16 >= 0` plus
-// `emitOwedAllocationBase`, the same encoding the Array record reads — so a String and an Array can no longer
-// disagree about what a record owns. Leave it wrong and the external buffer is never freed (a leak, exit
-// 101) or an interior pointer is released (an over-release, also 101).
-//
-// ⭐⭐ **GROWTH IS GEOMETRIC (`2 * requiredLen`), AND IT HAD TO BECOME SO: EXACT GROWTH MADE THE
-// COMMONEST STRING IDIOM IN THE LANGUAGE QUADRATIC.** Exact growth means the buffer is full the instant
-// it is published, so the NEXT append fails `capacity < requiredLen` again, reallocates, and re-copies
-// every byte written so far — `var s = ""` plus a loop of appends copies O(n²) bytes and makes one
-// allocation per append. MEASURED, before this, with `Testing/ladders/genstring.sh <n> data-appendloop`:
-// 2,048 → 32,768 chunks of 9 bytes read **×3.94 ×4.07 ×3.82 ×3.88** per doubling — a clean quadratic —
-// and the top rung took **5.0 seconds to build a 288 KB string**. Doubling the ask makes the copies
-// geometric and the whole build amortized O(n); the same ladder reads ×2 after.
-//
-// ⭐ **`2 * requiredLen` RATHER THAN `max(requiredLen, 2 * capacity)`, AND THE REASON IS THE BRANCH.**
-// `requiredLen = selfLen + otherLen >= selfLen`, so doubling it is unconditionally big enough for both the
-// bytes being written now and a growth factor over what was there before — no comparison, no extra block,
-// no phi, in a runtime graph that gets real register allocation. A `max` would buy a tighter bound on one
-// enormous single append and pay for it on every ordinary one.
-//
-// ⚠ **NOTHING ELSE READS `capacity@16` AS "THE SIZE OF THE ALLOCATION"** — that is what makes an
-// over-allocation safe rather than merely convenient. `emitBufferNotOwned` asks only its SIGN, and
-// `2 * requiredLen` of a non-negative sum stays non-negative; `emitBufferCannotHold` asks only whether it
-// is below the next `requiredLen`; and the release path takes `buffer@0` (the pointer `__mm_alloc`
-// returned) through `emitOwedAllocationBase`, so `__mm_free` reclaims whatever was actually allocated and
-// never consults this field. `length@8` remains the byte count every reader uses, so the slack bytes are
-// invisible to `print`, to `==`, and to every method in this file. The alloc/free COUNT is still trivially
-// balanced — one allocation per detach, as before; there are simply far fewer detaches.
-function buildStrAppend(module StdModule)
-	var func = IrFunction.createFromStd(StrAppendName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
-	var ids = ValueMinter.create(2)
-
-	var entry = module.addBlock(func, label: b"entry")
-	var inPlace = module.addBlock(func, label: b"inPlace")
-	var detach = module.addBlock(func, label: b"detach")
-	var blit = module.addBlock(func, label: b"blit")
-	var clearSingleByte = module.addBlock(func, label: b"clearSingleByte")
-	let done = module.addBlock(func, label: b"done")
-
-	emitParams(module, block: entry, count: 2)
-	let selfPtr = 0 as ValueId
-	let otherPtr = 1 as ValueId
-
-	// entry: load the fields every block reads (entry dominates all of them, so these need no phi),
-	// compute the required length, and branch on whether the buffer already has room for it.
-	let selfLen = emitLoadField(module, block: entry, record: selfPtr, offset: StringLengthOffset, ids: ids)
-	let otherLen = emitLoadField(module, block: entry, record: otherPtr, offset: StringLengthOffset, ids: ids)
-	let otherBuf = emitLoadField(module, block: entry, record: otherPtr, offset: StringBufferOffset, ids: ids)
-	let otherSingleByte = emitLoadField(module, block: entry, record: otherPtr, offset: StringSingleByteGraphemesOffset, ids: ids)
-	let requiredLen = emitBin(module, block: entry, a: selfLen, b: otherLen, opcode: StdBinOpcode.add, ids: ids)
-	let tooSmall = emitBufferCannotHold(module, block: entry, record: selfPtr, requiredLen: requiredLen, ids: ids)
-	module.setTerminator(entry, op: StdOp.condBranch(tooSmall, thenBlockId: detach.id, elseBlockId: inPlace.id))
-
-	// The allocation the blit owes a release to once it has finished reading: the pre-detach one, or none
-	// at all when the bytes go into the buffer that is already there.
-	let owedBase = ids.mint()
-	blit.blockArgs.push(IrBlockArg.create(owedBase, argType: StdType.i64))
-
-	let owesNothing = emitConst(module, block: inPlace, value: NoOwedAllocation, ids: ids)
-	module.setTerminator(inPlace, op: StdOp.branch(blit.id))
-	inPlace.branchEdges.push(BranchEdge.create(blit.id, argIds: argsOf(owesNothing)))
-
-	// detach: the shared copy-on-write action. The ask is GEOMETRIC — see the growth note above — and it is
-	// passed in ELEMENTS, which for a String (`element_size@24 == 1`) is the same number as bytes; the same
-	// value lands in `capacity@16`, so the field says exactly how far the next append may write in place.
-	//
-	// ⚠ The owed base comes BACK rather than being released inside, and this caller is the reason that is so:
-	// `s.append(s)` aliases `otherBuf` to `self`'s OLD buffer, so the release may not happen until the BLIT
-	// below has also finished reading. It rides a block arg into `blit` (0 on the in-place edge) and is paid
-	// there. `__arr_cow_detach`, which has no such aliasing, pays it immediately instead.
-	let grownLen = emitBin(module, block: detach, a: requiredLen, b: requiredLen, opcode: StdBinOpcode.add, ids: ids)
-	let base = ids.mint()
-	module.appendOp(detach, op: StdOp.call(base, callee: MmCowDetachName, args: twoArgs(selfPtr, second: grownLen)))
-	module.setTerminator(detach, op: StdOp.branch(blit.id))
-	detach.branchEdges.push(BranchEdge.create(blit.id, argIds: argsOf(base)))
-
-	// blit: append `other`'s bytes at the end of `self`'s CURRENT buffer (reloaded, since detach may have
-	// replaced it) using the OLD length as the write cursor, then publish the new length. Reached in place
-	// and grown alike. Only now is the old allocation released — see the aliasing note above.
-	let curBuf = emitLoadField(module, block: blit, record: selfPtr, offset: StringBufferOffset, ids: ids)
-	let dstAddr = emitBin(module, block: blit, a: curBuf, b: selfLen, opcode: StdBinOpcode.add, ids: ids)
-	let blitted = ids.mint()
-	module.appendOp(blit, op: StdOp.call(blitted, callee: StrCopyName, args: threeArgs(dstAddr, second: otherBuf, third: otherLen)))
-	emitStoreField(module, block: blit, record: selfPtr, offset: StringLengthOffset, value: requiredLen)
-	var afterRelease = emitReleaseOwedBase(module, func: func, cur: blit, base: owedBase, callee: MmDecrefName, ids: ids)
-
-	// afterRelease: `singleByteGraphemes` is maintained incrementally — the concatenation stays ASCII only if `other` is.
-	let notSingleByte = emitConst(module, block: afterRelease, value: SingleByteGraphemesFalse, ids: ids)
-	let otherNotSingleByte = emitCmp(module, block: afterRelease, a: otherSingleByte, b: notSingleByte, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(afterRelease, op: StdOp.condBranch(otherNotSingleByte, thenBlockId: clearSingleByte.id, elseBlockId: done.id))
-
-	// clearSingleByte: `other` carried a non-ASCII byte, so the result is not ASCII.
-	emitStoreField(module, block: clearSingleByte, record: selfPtr, offset: StringSingleByteGraphemesOffset, value: notSingleByte)
-	module.setTerminator(clearSingleByte, op: StdOp.branch(done.id))
-
-	module.setTerminator(done, op: StdOp.retVoid)
-
-	module.functions.push(func)
-end 'buildStrAppend'
 
 // `__str_decref(record)` — a String's DROP. It is `__mm_decref` (dec the refcount; free at the last
 // owner) plus the one thing the generic decref structurally cannot do: release the EXTERNAL buffer of a

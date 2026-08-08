@@ -41,12 +41,17 @@
 #              and `__str_find` is a NAIVE search, so it has a genuine O(hay x needle) term that a
 #              first-byte fast reject hides on every realistic input.
 #
-# ⚠ **THE SETUP IS DELIBERATELY `s.append(s)`, NOT AN APPEND LOOP, AND THAT IS LOAD-BEARING.**
-# `__str_append` allocates a buffer of EXACTLY the required length on every grow (`buildStrAppend`'s
-# `baseJoin` stores `capacity = requiredLen`) — there is no capacity doubling — so building an N-byte
-# string by N appends of a fixed chunk copies O(N^2) bytes and would swamp every reading below with a
-# quadratic that is not the one being measured. SELF-append doubles the length per step, so `<n>` steps
-# cost O(final length) in total and the setup is linear however far the ladder is climbed.
+# ⚠ **THE SETUP IS `s.append(s)`, NOT AN APPEND LOOP — AND THE REASON GIVEN HERE WAS STALE FOR A LONG
+# TIME.** It read: *"`__str_append` allocates a buffer of EXACTLY the required length on every grow, so
+# building an N-byte string by N appends copies O(N^2) bytes"*. That was true of the FIRST `__str_append`
+# and was cured inside it (growth became `2 * requiredLen`) long before wave 8 retired the entry point
+# altogether; `String.append` reaches `__arr_append` -> `__arr_reserve` -> `__arr_grow` ->
+# `__arr_grown_cap` now, which is geometric too. **MEASURED (W49 wave 8, min-of-7, both binaries in one
+# path)**: `data-appendloop` reads x1.93 x2.06 x1.95 per doubling on the BASE compiler and x1.94 x2.07
+# x1.95 on the tip — LINEAR on both sides, not the quadratic this paragraph predicted.
+# ⇒ The self-append setup is kept anyway, and now for an honest reason: it reaches the final length in
+# `<n>` STEPS rather than `<n>` doublings' worth of them, so the SETUP cost stays off the timed region
+# whatever the growth policy is. A future policy change cannot make the setup quadratic again.
 #
 # Usage: genstring.sh <n> <mode> <out>
 #   sites-predicates | sites-case | sites-replace | sites-split | sites-control   (<n> = CALL SITES)
@@ -247,9 +252,9 @@ emit_data_program() {
 	data-appendloop)
 		# ⚠ NOT A SLICE C METHOD — the P1.2 wave D `append`, here because it is the one shape the rest of
 		# this generator has to ROUTE AROUND (see the self-append note in the header) and a claim about it
-		# should carry a number. `__str_append` reallocates to the EXACT required length on every grow, so
-		# a chunk-at-a-time build copies the whole string at every step. Doubling the CHUNK COUNT is the
-		# knob: linear growth would read x2, and this reads x4.
+		# should carry a number. Doubling the CHUNK COUNT is the knob: linear growth reads x2 and a
+		# reallocate-to-exact-length policy would read x4. **It reads x2**, and that is the instrument for
+		# the one property a `String.append` retirement could silently destroy — see the header.
 		echo -e "\tvar chunks = 1024"
 		echo -e "\tvar d = 0"
 		echo -e "\twhile d < $N 'dbl'"

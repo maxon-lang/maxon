@@ -582,7 +582,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:4:12: argument type mismatch for 'start': expected 'StringIndex', got 'int'
+error E3005: <fragment>:4:14: argument type mismatch for 'start': expected 'StringIndex', got 'int'
 ```
 
 <!-- test: error.slice-rejects-an-unknown-argument-label -->
@@ -641,5 +641,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3057: specs/fragments/string-index/error.find-first-without-try.test:4:6: throwing function requires try: 'String.findFirst'
+error E3057: specs/fragments/string-index/error.find-first-without-try.test:4:8: throwing function requires try: 'String.findFirst'
 ```

@@ -303,8 +303,13 @@ error E2004: <fragment>:7:12: Function 'insert' does not return a value
 ```
 
 <!-- test: error.string-void-mutator-in-value-position -->
-⚠ THE CONTROL for `String`, the container that was already correct here and is the pattern the other
-two now follow: its void refusal has always lived inside the arm `append` matched.
+⚠ THE CONTROL for `String`, and the one of the three whose refusal NO LONGER COMES FROM AN ARM. Its void
+guard used to live inside the arm `append` matched — which is why it was correct first and why the other
+two were written to follow it — but `append` retired onto `stdlib/String.maxon` at W49 wave 8, so this is
+now the ORDINARY refusal every void call gets. ⭐ **That is why it names `String.append` where its two
+neighbours name a bare `insert`/`push`**: an arm blames the member the author wrote, while a corpus call
+names the function it actually resolved to, exactly as `stdlib-only-string-methods`' E3088 does. The
+code, the position and the answer are unchanged.
 ```maxon
 function main() returns ExitCode
 	var s = "ab"
@@ -313,7 +318,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2004: <fragment>:4:12: Function 'append' does not return a value
+error E2004: <fragment>:4:12: Function 'String.append' does not return a value
 ```
 
 ### One control PER VOID ARM — because the guard is now written once per arm

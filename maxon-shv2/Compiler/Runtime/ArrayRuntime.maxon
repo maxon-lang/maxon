@@ -2280,8 +2280,10 @@ function buildArrCowDetach(module StdModule)
 
 	// The old allocation is released only now, after the shared detach has finished copying out of it — the
 	// split `emitOwedAllocationBase`/`emitReleaseOwedBase` exist to make (trap 5). An array may pay the debt
-	// the instant the detach returns; `__str_append`, the other caller, may not, which is why the base comes
-	// back as a return value instead of being released inside.
+	// the instant the detach returns, and since W49 wave 8 it is the ONLY caller — `__str_append`, which could
+	// NOT (its blit read the buffer the detach had just released), retired with `String.append`. The base
+	// still comes back as a return value rather than being released inside, because the split is what makes a
+	// second caller possible at all; see `BufferOwnership`'s header for the aliasing that forced it.
 	var afterRelease = emitReleaseOwedBase(module, func: func, cur: detach, base: base, callee: MmDecrefName, ids: ids)
 	module.setTerminator(afterRelease, op: StdOp.branch(done.id))
 
