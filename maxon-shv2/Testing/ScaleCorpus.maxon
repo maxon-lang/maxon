@@ -129,6 +129,17 @@
 //     was NAMED BY ITS OWN IMPLEMENTER before it shipped ("the ladder is structurally blind to the USER
 //     half of this rung"), which is why it is the first that cost nothing to find. See
 //     `NamespacedModulesBase`.
+//   • ⭐ AND THE EIGHTH IS THE ONE THAT LOOKED COVERED, WHICH IS THE HARDEST KIND. There WAS a String
+//     knob — the fifth recurrence's own fix — and it generated a literal, an interpolation, `.append`,
+//     `.byteLength()` and `==`. `dispatchStringMethod` answers about twenty-five members; the other
+//     twenty generated NOTHING at any rung: no predicate, no case conversion, no `replace`/`split`, no
+//     trim, no `StringIndex` producer or consumer, no materializer, no `isEmpty`/`clone`. Every one has
+//     live spec cases, and every one is being RETIRED onto `stdlib/String.maxon`'s bodies one wave at a
+//     time — so every wave would have read Δ0 in all three columns off a knob whose name says "String".
+//     A knob is not coverage of the TYPE it is named for; it is coverage of the members it spells. See
+//     `StringSearchOpsBase`, and note that the very first ladder run after the four knobs landed found a
+//     cost nobody had priced: `CharacterSet.whitespacesAndNewlines()` is materialized INLINE at every
+//     trim site, 194 ops a call, enough to take the register allocator out of memory at rung 4.
 //
 // The manifest named the first two as blind spots the whole time and they were read as footnotes. It
 // did not name the third and fourth AT ALL. And for the fifth it did worse than either: it named the
@@ -1029,6 +1040,92 @@ let MatchSparseCaseStride = 100
 // String dimension away again.
 let StringOpsBase = 8 as KnobSize
 
+// ===========================================================================================
+// THE FOUR KNOBS FOR THE REST OF `String`'S MEMBER SURFACE (P1.8 slices B, B2, C, D, E)
+// ===========================================================================================
+//
+// ⚠ **THIS FILE'S FOUNDING DEFECT, FOR THE EIGHTH TIME, AND IT IS ABOUT TO BE PAID FOR ONE WAVE AT A
+// TIME.** `stringOps` above generates a literal, an interpolation, `.append`, `.byteLength()` and `==`.
+// It generates NOT ONE of the twenty-odd other members `dispatchStringMethod` answers — no predicate, no
+// case conversion, no `replace`/`split`, no trim, no `StringIndex` producer or consumer, no materializer,
+// no `isEmpty`/`clone`. Every one of them is in the subset (each has live, enabled cases in
+// `specs-shv2/string-methods-ascii.md`, `string-index.md`, `string-trim.md` and `string-views.md`), and
+// every one of them is about to be RETIRED from the compiler's synthesized surface onto
+// `stdlib/String.maxon`'s bodies. Without these knobs every retirement wave would read a flat delta of
+// ZERO in allocations, in bytes AND in CPU alike — the reading the header's seven other entries all
+// describe, arriving in a programme whose whole point is that the cost be readable.
+//
+// ⭐ **FOUR KNOBS RATHER THAN ONE, AND THE SPLIT IS `dispatchStringMethod`'S OWN.** Its arms are grouped
+// and labelled by the slice that built them, and the grouping is not cosmetic: each is a different piece
+// of the compiler, and the retirement programme moves them ONE FAMILY AT A TIME. After a family is
+// retired its per-site cost changes character completely — a synthesized runtime graph becomes an
+// ordinary Maxon call into a body that must be parsed, typed and lowered — so a reader will need to move
+// these counts independently of each other. That is exactly the test `EnumTypesBase` states for when two
+// knobs are not one knob.
+
+// Slice C — the seven BYTE/ASCII members, plus `replaceFirst` (slice E, which is `replace`'s emitter with
+// one flag). No Unicode character database, no grapheme segmentation, no `StringIndex`: `startsWith`,
+// `endsWith`, `contains`, `toLower`, `toUpper`, `replace`, `replaceFirst`, `split`.
+let StringSearchOpsBase = 8 as KnobSize
+
+// Slice B2 — the `StringIndex` family: the two ends (`startIndex`/`endIndex`), the two THROWING searches
+// (`findFirst`/`findLast`), the third throwing method (`indexAfter`), both `slice` overloads and the
+// index's own two accessors (`charIndex`/`bytePos`).
+//
+// ⚠ ITS PER-SITE COST IS BLOCKS, NOT MERELY OPS — every throwing member sits under a `try`, which forks —
+// so it is the String family that moves the CFG columns, exactly as `CheckedDivideBase` is for divide.
+//
+// HALF ITS TWO ASCII SIBLINGS' BASE, for that reason and MEASURED: at an EQUAL base this one file compiled
+// in 4.78s at the top rung against 2.23s for the search family and 0.94s for the materializers — four `try`
+// forks per group buy BLOCKS where those two buy ops. (Each figure is a standalone `build` of that one rung-5
+// file net of a 147 ms compiler startup, measured on this tree; the ladder compiles them together.)
+let StringIndexOpsBase = 4 as KnobSize
+
+// Slice D — the three trims, over BOTH argument forms: the default `CharacterSet` (built by the compiler
+// when the call presents none) and an explicit one. They are one runtime graph and two flags, so what
+// grows here is how many places that graph is REACHED from.
+//
+// ⭐⭐ **A QUARTER OF ITS THREE SIBLINGS' BASE, AND THE NUMBER IS MEASURED RATHER THAN CHOSEN.** A trim
+// against `CharacterSet.whitespacesAndNewlines()` emits **194 x64 ops into the calling block** — the set is
+// materialized INLINE at the call site, once per site. Counted on this tree with `--emit-ir`, in one `if`
+// block each:
+//
+//     s.trim()                                    194 ops   <- the DEFAULT form
+//     s.trim(CharacterSet.whitespacesAndNewlines())  194 ops   <- IDENTICAL: it is the SET, not the default
+//     s.trim(CharacterSet.decimalDigits())         50 ops
+//     s.trim(CharacterSet.letters())               50 ops
+//     s.toUpper()                                  12 ops
+//
+// ⇒ ~144 of those ops are the whitespace set's own construction, and they are per-SITE. That is 16x a
+// `toUpper` and it lands in ONE basic block, which is what the number has to be read against: the register
+// allocator's pressure index gives each block a run of `roundUpToPowerOfTwo((ops + 1) * SlotGap + 1)` SLOTS
+// (`SplitLiveRanges.placeRuns`), so a 194-op block costs 1,024 slots and a block holding three such trims
+// costs 4,096. At `8 << 4` groups with all three trims in one block, `slotCount` reached ~4.2M and
+// `PressureDeltaColumn.reserve` exhausted committed memory: **rung 4 did not compile at all** — a BROKEN
+// RUN, which is the one thing this instrument exits non-zero for.
+//
+// ⇒ TWO responses, and they are different in kind. The corpus's own half is `trimSiteBlock`: ONE SITE PER
+// BLOCK, so no block in this family carries more than one whitespace set and the padding a power-of-two run
+// wastes falls from 1.77x to 1.31x. The base is the other half — this family simply buys 16x the ops per
+// site that its neighbours do, so an equal base would make one knob the ladder's whole cost.
+//
+// ⚠ **THIS IS A BUDGET, NOT A BLIND SPOT, AND THE DISTINCTION IS THIS FILE'S OWN.** All three members and
+// both argument forms are generated at EVERY rung and the count still DOUBLES with the rung, so nothing
+// here reads a flat zero. What the low base buys is that a rung compiles at all. At ONE, the top rung still
+// holds 32 groups — 96 whitespace-set sites and 96 explicit ones — and this file alone still costs 2.53s
+// there, the most of the four, against 0.94s for the materializer knob at EIGHT times the base. (Standalone
+// rung-5 `build` times net of a 147 ms startup, measured on this tree.)
+let StringTrimOpsBase = 1 as KnobSize
+
+// Slices B and E — the MATERIALIZERS and the two leftovers: `count()` (the UAX #29 grapheme walk),
+// `bytes()`, `toByteArray()`, `codepoints()`, `utf16()`, `isEmpty()` and `clone()`.
+//
+// ⚠ THIS IS THE ONLY KNOB IN THE WHOLE CORPUS WHOSE PAYLOAD IS NOT ALL-ASCII, and it has to be: the four
+// counts a materializer answers are EQUAL on ASCII text, so an ASCII corpus cannot tell `count()` from
+// `codepoints().count()` from `bytes().count()` and a materializer answering with its neighbour's walk
+// would measure and witness identically. See `ViewSegmentText`.
+let StringViewOpsBase = 8 as KnobSize
+
 // ONE file, M `Character` operation groups — the per-SITE cost of the OTHER byte record.
 //
 // ⚠ **IT EXISTS BECAUSE A WHOLE LANGUAGE MODEL LANDED INTO A CORPUS THAT COULD NOT SPELL IT.** BATCH23
@@ -1440,6 +1537,14 @@ function generateRung(root FilePath, rung RungIndex) returns ScaleRung throws Sc
 	sourceBytes = sourceBytes + try writeRungFile(dir, name: "q_enums", source: enumTypesSource(knobAt(EnumTypesBase, rung: rung)), written: written, drivers: drivers, driver: RungDriver.threads(EnumTypesDriver))
 	sourceBytes = sourceBytes + try writeRungFile(dir, name: "r_match", source: matchSitesSource(knobAt(MatchSitesBase, rung: rung)), written: written, drivers: drivers, driver: RungDriver.threads(MatchSitesDriver))
 	sourceBytes = sourceBytes + try writeRungFile(dir, name: "s_strings", source: stringOpsSource(knobAt(StringOpsBase, rung: rung)), written: written, drivers: drivers, driver: RungDriver.threads(StringOpsDriver))
+	// The REST of `String`'s member surface, on FOUR knobs — one per `dispatchStringMethod` family. Four
+	// FILES rather than four drivers in one, because a knob's growth is expressed as a rung file and
+	// because each of these is a separately-sized dimension; see `StringSearchOpsBase` for why the
+	// families are not one knob.
+	sourceBytes = sourceBytes + try writeRungFile(dir, name: "s_strsearch", source: stringSearchOpsSource(knobAt(StringSearchOpsBase, rung: rung)), written: written, drivers: drivers, driver: RungDriver.threads(StringSearchOpsDriver))
+	sourceBytes = sourceBytes + try writeRungFile(dir, name: "s_strindex", source: stringIndexOpsSource(knobAt(StringIndexOpsBase, rung: rung)), written: written, drivers: drivers, driver: RungDriver.threads(StringIndexOpsDriver))
+	sourceBytes = sourceBytes + try writeRungFile(dir, name: "s_strtrim", source: stringTrimOpsSource(knobAt(StringTrimOpsBase, rung: rung)), written: written, drivers: drivers, driver: RungDriver.threads(StringTrimOpsDriver))
+	sourceBytes = sourceBytes + try writeRungFile(dir, name: "s_strview", source: stringViewOpsSource(knobAt(StringViewOpsBase, rung: rung)), written: written, drivers: drivers, driver: RungDriver.threads(StringViewOpsDriver))
 	sourceBytes = sourceBytes + try writeRungFile(dir, name: "s_chars", source: charOpsSource(knobAt(CharOpsBase, rung: rung)), written: written, drivers: drivers, driver: RungDriver.threads(CharOpsDriver))
 	sourceBytes = sourceBytes + try writeRungFile(dir, name: "t_mstruct", source: managedStructTypesSource(knobAt(ManagedStructTypesBase, rung: rung)), written: written, drivers: drivers, driver: RungDriver.threads(ManagedStructsDriver))
 	sourceBytes = sourceBytes + try writeRungFile(dir, name: "u_arrays", source: arrayOpsSource(knobAt(ArrayOpsBase, rung: rung)), written: written, drivers: drivers, driver: RungDriver.threads(ArrayOpsDriver))
@@ -2605,6 +2710,39 @@ end 'ownedSiteBlock'
 // twice cannot cancel against one that was skipped.
 let SiteEnteredMark = 1
 
+// ⭐⭐ **THE TWO SHAPES EVERY PREDICATE SITE IN THIS FILE IS WRITTEN AS, AND THEY ARE A PAIR ON PURPOSE.**
+// A predicate has two directions and only one of them is witnessed by the true arm: a `contains` stuck at
+// `true` and a correct one are indistinguishable from a site that only ever asks a question whose answer
+// is yes. So every predicate the generator can build FALSE gets `falsePredicateProbe` beside its true one,
+// and that half is the half a corpus forgets.
+//
+// Both emit at TWO tabs, because both are `ownedSiteBlock` BODY helpers by construction — every caller
+// hands its output to `ownedSiteBlock`, whose body is one level inside the driver's own. That is why they
+// take no `indent` where `witnessProbe` does: an unused parameter to make them look like their neighbour
+// would be a shape nothing asks for.
+//
+// ⚠ FOUR KNOBS WROTE ONE OF THESE INLINE BEFORE THEY EXISTED — `charOpsSource` twice, `stringOpsSource`
+// and `managedStructTypesSource` once each — which is four places for the `+ mark` / `- mark` pairing to
+// lose a sign, in a file where an inverted sign pins `acc` to the wrong value at every rung at once.
+function truePredicateProbe(condition String, label String) returns String
+	var out = StringBuilder.create()
+	out.append("\t\tif {condition} '{label}'\n")
+	out.append("\t\t\tacc = acc + {SiteEnteredMark}\n")
+	out.append("\t\tend '{label}'\n")
+	out.append("\t\tacc = acc - {SiteEnteredMark}\n")
+	return out.build()
+end 'truePredicateProbe'
+
+// The FALSE twin. There is nothing to take off afterwards: the arm must not run at all, so its body IS the
+// failure marker — the same shape `charOpsSource`'s `match` default arm uses for the same reason.
+function falsePredicateProbe(condition String, label String) returns String
+	var out = StringBuilder.create()
+	out.append("\t\tif {condition} '{label}'\n")
+	out.append("\t\t\tacc = acc + {CorpusWitnessFailedOffset}\n")
+	out.append("\t\tend '{label}'\n")
+	return out.build()
+end 'falsePredicateProbe'
+
 // The managed field the THREE String-owning knobs declare — named once, because the field name is
 // spelled in the declaration, in `create`'s parameter and in the `Self{}` literal, and the buffer knob's
 // holder proves the emitter can spell a different one.
@@ -3337,6 +3475,10 @@ let MatchSparsePickName = "scaleMatchSparsePick"
 let MatchSitesDriver = "scaleMatchSites"
 
 let StringOpsDriver = "scaleStringOps"
+let StringSearchOpsDriver = "scaleStringSearchOps"
+let StringIndexOpsDriver = "scaleStringIndexOps"
+let StringTrimOpsDriver = "scaleStringTrimOps"
+let StringViewOpsDriver = "scaleStringViewOps"
 
 let CharOpsDriver = "scaleCharOps"
 
@@ -3676,15 +3818,446 @@ function stringOpsSource(groupCount KnobSize) returns String
 		body.append("\t\tsv{i}.append(st{i})\n")
 		body.append("\t\tacc = acc + sv{i}.byteLength() - st{i}.byteLength(){neutralizeText(literal.byteLength())}\n")
 		body.append(accProbe("\t\t"))
-		body.append("\t\tif sv{i} == \"{literal}\" 'se{i}'\n")
-		body.append("\t\t\tacc = acc + {CorpusWitnessFailedOffset}\n")
-		body.append("\t\tend 'se{i}'\n")
+		body.append(falsePredicateProbe("sv{i} == \"{literal}\"", label: "se{i}"))
 		out.append(ownedSiteBlock("sg{i}", body: body.build()))
 	end 'eachGroup'
 
 	out.append(accWitnessTail(StringOpsDriver))
 	return out.build()
 end 'stringOpsSource'
+
+// ===========================================================================================
+// THE REST OF `String`'S MEMBER SURFACE — four knobs, one per `dispatchStringMethod` family
+// ===========================================================================================
+//
+// See `StringSearchOpsBase` for why there are four of these and not one. Three rules hold across all
+// four, and each is a way this family could have generated code that measured nothing:
+//
+//   • EVERY PAYLOAD IS BUILT FROM PIECES THIS GENERATOR JOINS, and every expectation is stated from
+//     those pieces. Nothing here measures a joined result to discover what it should be — that would
+//     make the witness agree with whatever the compiler did, which is the one thing a witness may not
+//     do. (The single exception is `byteLength()` of an escape-free literal, which `stringOpsSource`
+//     already relies on and which is arithmetic on the pieces by another name.)
+//   • EVERY MEMBER'S RESULT REACHES `acc`, either as an integer fold or through an `if` whose arm
+//     contributes. A member whose result went nowhere is dead code a future DCE pass may legitimately
+//     delete, taking its dimension with it — the property `RungDriver` exists to defend.
+//   • EVERY PREDICATE IS GENERATED IN BOTH DIRECTIONS where a direction exists. A `contains` that always
+//     answered true and one that answered correctly are indistinguishable from the true arm alone, so
+//     the false arm is emitted with `CorpusWitnessFailedOffset` in it and the rung's exit code is the
+//     difference.
+
+// ⭐ SLICE C's payload, in the pieces every witness below is stated from: `<head> segment <i>` followed by
+// `<needle> <gap>` repeated, then `<tail>`. Escape-free by construction, so this generator's
+// `byteLength()` of a joined payload IS the generated program's — which is not true one family down; see
+// `TrimWhitespaceLead`.
+let SearchHeadWord = "head"
+let SearchTailWord = "tail"
+let SearchGapText = " gap "
+let SearchNeedle = "MID"
+let SearchReplacement = "MIDDLE"
+
+// A needle no payload contains, so its predicate is FALSE by construction and its search THROWS.
+let SearchAbsentNeedle = "zzq"
+
+// ⭐ **THE TWO CASE PROBES, AND WHY THEY ARE NEEDLES RATHER THAN LENGTHS.** An ASCII case conversion does
+// not change a string's length, so `toLower().byteLength()` is witnessed identically by a conversion that
+// did its job and by one that handed the receiver straight back. These two are the difference: the payload
+// holds `MID` in upper case and `head` in lower, so `mid` appears ONLY after a `toLower` and `HEAD` ONLY
+// after a `toUpper` — and each is asked of the receiver first, where it must be absent.
+let SearchLowerProbe = "mid"
+let SearchUpperProbe = "HEAD"
+
+// How many needles a payload carries — the count `replace` rewrites, `split` cuts at, and `findLast`
+// walks past. It is the LOOP BOUND `searchPayloadText` writes them with rather than a fact stated beside
+// it, so the number and the text cannot drift apart.
+let SearchNeedleOccurrences = 3 as KnobIndex
+
+// The piece before the FIRST needle — `split`'s element 0, and therefore that element's own expectation.
+function searchPayloadFirstPart(index KnobIndex) returns String
+	return "{SearchHeadWord} segment {index} "
+end 'searchPayloadFirstPart'
+
+function searchPayloadText(index KnobIndex) returns String
+	var out = StringBuilder.create()
+	out.append(searchPayloadFirstPart(index))
+	for _ in 0 upto SearchNeedleOccurrences 'eachNeedle'
+		out.append(SearchNeedle)
+		out.append(SearchGapText)
+	end 'eachNeedle'
+	out.append(SearchTailWord)
+	return out.build()
+end 'searchPayloadText'
+
+// The `stringSearchOps` knob: M groups of the BYTE/ASCII family, in two blocks per group.
+//
+// TWO BLOCKS, because they are two halves of the family and a change may move one without the other: the
+// PREDICATES and case conversions read the receiver and answer a bool or a same-length String, while the
+// REWRITES build a new String (or an Array of them) whose size the receiver's does not determine. The
+// first half is `bytesEqual` and a byte-range map; the second is `findIn` plus a `StringBuilder` that is
+// told its answer in advance.
+function stringSearchOpsSource(groupCount KnobSize) returns String
+	var out = StringBuilder.create()
+	out.append("// Generated by ScaleCorpus: the string-search knob — {groupCount} groups of startsWith/endsWith/contains + toLower/toUpper, then replace/replaceFirst/split.\n")
+	out.append("\n")
+	out.append(witnessedDriverHeader(StringSearchOpsDriver))
+
+	for i in 0 upto groupCount 'eachGroup'
+		let payload = searchPayloadText(i)
+		let payloadBytes = payload.byteLength()
+
+		var predicates = StringBuilder.create()
+		predicates.append("\t\tlet qv{i} = \"{payload}\"\n")
+		predicates.append(truePredicateProbe("qv{i}.startsWith(\"{SearchHeadWord}\")", label: "qsw{i}"))
+		predicates.append(truePredicateProbe("qv{i}.endsWith(\"{SearchTailWord}\")", label: "qew{i}"))
+		predicates.append(truePredicateProbe("qv{i}.contains(\"{SearchNeedle}\")", label: "qct{i}"))
+		// ⭐ THE THREE PREDICATES' FALSE DIRECTION, AND THE FIRST TWO ARE ASKED WITH EACH OTHER'S WORD ON
+		// PURPOSE. `head` really is in the payload and `tail` really is in the payload — just not at the end
+		// the question names — so these two catch a `startsWith`/`endsWith` that searched ANYWHERE, which an
+		// absent needle could never do: it would answer false for a wrong reason and read as a pass.
+		// `contains` has no position to get wrong, so it is the one that takes the genuinely absent needle.
+		predicates.append(falsePredicateProbe("qv{i}.startsWith(\"{SearchTailWord}\")", label: "qsf{i}"))
+		predicates.append(falsePredicateProbe("qv{i}.endsWith(\"{SearchHeadWord}\")", label: "qef{i}"))
+		predicates.append(falsePredicateProbe("qv{i}.contains(\"{SearchAbsentNeedle}\")", label: "qab{i}"))
+		// The case probes' "before" half — see `SearchLowerProbe`.
+		predicates.append(falsePredicateProbe("qv{i}.contains(\"{SearchLowerProbe}\")", label: "qlb{i}"))
+		predicates.append(falsePredicateProbe("qv{i}.contains(\"{SearchUpperProbe}\")", label: "qub{i}"))
+		predicates.append(truePredicateProbe("qv{i}.toLower().contains(\"{SearchLowerProbe}\")", label: "qlo{i}"))
+		predicates.append(truePredicateProbe("qv{i}.toUpper().contains(\"{SearchUpperProbe}\")", label: "qup{i}"))
+		// ...and the conversions' LENGTHS, which the probes above cannot pin: an ASCII case map rewrites
+		// bytes in place, so a result that lost or gained one lands here and nowhere else.
+		predicates.append("\t\tacc = acc + qv{i}.toLower().byteLength() + qv{i}.toUpper().byteLength(){neutralizeText(2 * payloadBytes)}\n")
+		predicates.append(accProbe("\t\t"))
+		out.append(ownedSiteBlock("qg{i}", body: predicates.build()))
+
+		var rewrites = StringBuilder.create()
+		rewrites.append("\t\tlet rv{i} = \"{payload}\"\n")
+		// The replacement is LONGER than the needle on purpose. Equal widths would witness a `replace` that
+		// found every match and one that found none identically, since both answer at the receiver's length.
+		rewrites.append("\t\tacc = acc + rv{i}.replace(\"{SearchNeedle}\", with: \"{SearchReplacement}\").byteLength(){neutralizeText(payloadBytes + SearchNeedleOccurrences * searchReplacementDelta())}\n")
+		rewrites.append(accProbe("\t\t"))
+		rewrites.append("\t\tacc = acc + rv{i}.replaceFirst(\"{SearchNeedle}\", with: \"{SearchReplacement}\").byteLength(){neutralizeText(payloadBytes + searchReplacementDelta())}\n")
+		rewrites.append(accProbe("\t\t"))
+		// `split` at the same needle: N cuts make N+1 pieces, and element 0 is the head this generator
+		// wrote. The COUNT alone would be witnessed identically by a split that handed back N+1 empty
+		// strings, which is why the element's length is folded beside it — and reading a MANAGED element
+		// out of an Array owes a retain, so the read is load-bearing twice over.
+		rewrites.append("\t\tlet rp{i} = rv{i}.split(\"{SearchNeedle}\")\n")
+		rewrites.append("\t\tacc = acc + rp{i}.count() + (try rp{i}.get(0) otherwise \"\").byteLength(){neutralizeText(SearchNeedleOccurrences + 1 + searchPayloadFirstPart(i).byteLength())}\n")
+		rewrites.append(accProbe("\t\t"))
+		out.append(ownedSiteBlock("rg{i}", body: rewrites.build()))
+	end 'eachGroup'
+
+	out.append(accWitnessTail(StringSearchOpsDriver))
+	return out.build()
+end 'stringSearchOpsSource'
+
+// How many bytes one `replace` of `SearchNeedle` by `SearchReplacement` adds. Derived from the two
+// spellings rather than written down, so a longer needle cannot leave a stale delta behind.
+function searchReplacementDelta() returns TrackedValue
+	return SearchReplacement.byteLength() - SearchNeedle.byteLength()
+end 'searchReplacementDelta'
+
+// ⭐ SLICE B2's payload: `<head><needle><middle><needle><tail>`, ALL-ASCII on purpose. A grapheme index and
+// a byte position coincide over ASCII, which is what lets every expectation below be a byte arithmetic
+// this generator can state — and the family that needs them to DIVERGE is the materializer knob, which
+// carries the non-ASCII payload for exactly that reason.
+let IndexHeadPrefix = "index payload "
+let IndexNeedle = "FIND"
+let IndexMiddleText = " middle "
+let IndexTailText = " tail"
+
+// How many clusters the `length:` overload of `slice` asks for. Small enough to sit inside the head piece
+// at every rung, so the answer is the count itself rather than a clamp at the end of the string.
+let IndexSliceClusters = 5
+
+function indexPayloadHead(index KnobIndex) returns String
+	return "{IndexHeadPrefix}{index} "
+end 'indexPayloadHead'
+
+function indexPayloadText(index KnobIndex) returns String
+	return "{indexPayloadHead(index)}{IndexNeedle}{IndexMiddleText}{IndexNeedle}{IndexTailText}"
+end 'indexPayloadText'
+
+// The `stringIndexOps` knob: M groups of the `StringIndex` family, in three blocks per group.
+//
+// THREE BLOCKS, and the split is by what the compiler must do rather than by member count: the two ENDS
+// are pure construction (`startIndex` is two literals and no call at all), the two SEARCHES and
+// `indexAfter` are THROWING runtime calls that each fork the CFG under their `try`, and `slice` is the
+// only CONSUMER of an index and the only member with two overloads told apart by an argument LABEL.
+//
+// ⚠ **EVERY THROWING MEMBER IS GENERATED ON BOTH EDGES.** A `try` whose error edge is never taken emits
+// the fork and never runs it, so a wrong lowering of the failure path costs nothing and witnesses nothing.
+// `SearchAbsentNeedle` is what takes it: the payload cannot contain it, so that search throws at every
+// site and the `otherwise` value is the one this generator predicts.
+function stringIndexOpsSource(groupCount KnobSize) returns String
+	var out = StringBuilder.create()
+	out.append("// Generated by ScaleCorpus: the string-index knob — {groupCount} groups of startIndex/endIndex + findFirst/findLast/indexAfter (both edges) + both slice overloads.\n")
+	out.append("\n")
+	out.append(witnessedDriverHeader(StringIndexOpsDriver))
+
+	for i in 0 upto groupCount 'eachGroup'
+		let payload = indexPayloadText(i)
+		let payloadBytes = payload.byteLength()
+		let firstNeedleAt = indexPayloadHead(i).byteLength()
+		let lastNeedleAt = firstNeedleAt + IndexNeedle.byteLength() + IndexMiddleText.byteLength()
+
+		// THE TWO ENDS, and both accessors on each. `startIndex()` is zero in both columns, so it is the
+		// end whose expectation is a constant and the one a lowering could not accidentally satisfy from
+		// the receiver; `endIndex()` answers the grapheme count and the byte length, equal over ASCII.
+		var ends = StringBuilder.create()
+		ends.append("\t\tlet xv{i} = \"{payload}\"\n")
+		ends.append("\t\tlet xs{i} = xv{i}.startIndex()\n")
+		ends.append("\t\tlet xe{i} = xv{i}.endIndex()\n")
+		ends.append("\t\tacc = acc + xs{i}.charIndex() + xs{i}.bytePos() + xe{i}.charIndex() + xe{i}.bytePos(){neutralizeText(2 * payloadBytes)}\n")
+		ends.append(accProbe("\t\t"))
+		out.append(ownedSiteBlock("xg{i}", body: ends.build()))
+
+		// THE THREE THROWING MEMBERS. `findFirst` and `findLast` land on the two needles this generator
+		// placed, and reading a DIFFERENT accessor off each (`bytePos` from one, `charIndex` from the
+		// other) is what stops a search that answered with its twin's offset from cancelling.
+		var searches = StringBuilder.create()
+		searches.append("\t\tlet yv{i} = \"{payload}\"\n")
+		searches.append("\t\tlet yf{i} = try yv{i}.findFirst(\"{IndexNeedle}\") otherwise yv{i}.endIndex()\n")
+		searches.append("\t\tlet yl{i} = try yv{i}.findLast(\"{IndexNeedle}\") otherwise yv{i}.startIndex()\n")
+		searches.append("\t\tacc = acc + yf{i}.bytePos() + yl{i}.charIndex(){neutralizeText(firstNeedleAt + lastNeedleAt)}\n")
+		searches.append(accProbe("\t\t"))
+		// The ERROR EDGE, taken at every site — see this function's header.
+		searches.append("\t\tlet ym{i} = try yv{i}.findFirst(\"{SearchAbsentNeedle}\") otherwise yv{i}.endIndex()\n")
+		searches.append("\t\tacc = acc + ym{i}.bytePos(){neutralizeText(payloadBytes)}\n")
+		searches.append(accProbe("\t\t"))
+		// `indexAfter` off the START, which is the one position whose answer needs no search: the payload's
+		// first cluster is one ASCII byte, so the step is exactly one in both columns.
+		searches.append("\t\tlet yn{i} = try yv{i}.indexAfter(yv{i}.startIndex()) otherwise yv{i}.endIndex()\n")
+		searches.append("\t\tacc = acc + yn{i}.charIndex() + yn{i}.bytePos() - 2\n")
+		searches.append(accProbe("\t\t"))
+		out.append(ownedSiteBlock("yg{i}", body: searches.build()))
+
+		// BOTH `slice` OVERLOADS. They are told apart by the argument LABEL and not by the argument's type,
+		// so a corpus with one of them measures neither the resolution nor the second body.
+		var slices = StringBuilder.create()
+		slices.append("\t\tlet zv{i} = \"{payload}\"\n")
+		slices.append("\t\tlet zs{i} = zv{i}.startIndex()\n")
+		slices.append("\t\tlet zf{i} = try zv{i}.findFirst(\"{IndexNeedle}\") otherwise zv{i}.endIndex()\n")
+		slices.append("\t\tacc = acc + zv{i}.slice(zs{i}, endIndex: zf{i}).byteLength(){neutralizeText(firstNeedleAt)}\n")
+		slices.append(accProbe("\t\t"))
+		slices.append("\t\tacc = acc + zv{i}.slice(zs{i}, length: {IndexSliceClusters}).byteLength(){neutralizeText(IndexSliceClusters)}\n")
+		slices.append(accProbe("\t\t"))
+		out.append(ownedSiteBlock("zg{i}", body: slices.build()))
+	end 'eachGroup'
+
+	out.append(accWitnessTail(StringIndexOpsDriver))
+	return out.build()
+end 'stringIndexOpsSource'
+
+// ⭐⭐ **SLICE D's WHITESPACE PADDING — AND THE ONE PLACE IN THIS FILE WHERE `byteLength()` OF A PAYLOAD
+// PIECE IS THE WRONG NUMBER.** These are SOURCE SPELLINGS: `\t` is two characters to this generator and
+// ONE byte to the program it writes. So the emitted-byte count is stated beside each spelling rather than
+// measured off it — deriving it the way every other payload here safely does would make every trim
+// expectation three bytes too long and fail every rung.
+//
+// They are escapes rather than plain spaces deliberately: nothing else in this corpus emits a string
+// ESCAPE at all, so the generated program's lexer never decoded one until this knob.
+let TrimWhitespaceLead = "  \\t"
+let TrimWhitespaceLeadBytes = 3
+let TrimWhitespaceTrail = "\\n  "
+let TrimWhitespaceTrailBytes = 3
+
+// The DIGIT padding the explicit-`CharacterSet` form cuts, which needs no escape and so is measured.
+let TrimDigitPad = "123"
+
+// ⭐ **THE CORE OPENS AND CLOSES ON A MULTI-BYTE CLUSTER, WHICH IS WHERE A TRIM ACTUALLY WORKS.** Both
+// trims stop at the FIRST KEPT cluster (`CharacterSetRuntime`'s `stopsAtFirstKept`, the property that
+// keeps a no-op trim from costing a full walk), so the only cluster either one has to CLASSIFY rather
+// than skip is the one at the boundary. An all-ASCII core would settle that decision on a single byte and
+// never decode a sequence.
+let TrimCoreLead = "é"
+let TrimCoreTrail = "😀"
+
+function trimCoreText(index KnobIndex) returns String
+	return "{TrimCoreLead}trim payload {index} body{TrimCoreTrail}"
+end 'trimCoreText'
+
+// The three members' spellings. They differ only in which end they cut, which is why they are a rotation
+// over one emitter rather than three near-copies of it.
+let TrimBothMethod = "trim"
+let TrimStartMethod = "trimStart"
+let TrimEndMethod = "trimEnd"
+
+// The `CharacterSet` an EXPLICIT trim names. `decimalDigits()` and not `whitespacesAndNewlines()`, and the
+// choice is measured: see `StringTrimOpsBase`.
+let TrimExplicitCharacterSet = "CharacterSet.decimalDigits()"
+
+// ⭐ **ONE PADDING SCHEME — what a trim CUTS, what it LEAVES, and how the call names the set.** It is a
+// record rather than six parameters because a trim site needs all of it at once and `requireAbiParamCount`
+// caps a signature at six slots; it is ONE record rather than two because the two schemes differ in their
+// VALUES and not in their shape, which is the whole reason one emitter can serve both forms.
+type TrimPadding
+	// The padding's SOURCE SPELLING, and what it is worth in the generated program's BYTES. The two are
+	// not the same number for the whitespace scheme — see `TrimWhitespaceLead`.
+	export let lead as String
+	export let leadBytes as TrackedValue
+	export let trail as String
+	export let trailBytes as TrackedValue
+
+	// The argument text the call presents, EMPTY for the default form. The default is not a third member:
+	// it is the same three calls with the argument list left empty, which is exactly the distinction this
+	// field carries.
+	export let argument as String
+
+	// The prefix every block label and binding under this scheme is minted from, so the two schemes cannot
+	// collide in one driver.
+	export let tag as String
+
+	export static function create(lead String, leadBytes TrackedValue, trail String, trailBytes TrackedValue, argument String, tag String) returns TrimPadding
+		return Self{lead: lead, leadBytes: leadBytes, trail: trail, trailBytes: trailBytes, argument: argument, tag: tag}
+	end 'create'
+end 'TrimPadding'
+
+function trimWhitespacePadding() returns TrimPadding
+	return TrimPadding.create(TrimWhitespaceLead, leadBytes: TrimWhitespaceLeadBytes, trail: TrimWhitespaceTrail, trailBytes: TrimWhitespaceTrailBytes, argument: "", tag: "t")
+end 'trimWhitespacePadding'
+
+function trimDigitPadding() returns TrimPadding
+	return TrimPadding.create(TrimDigitPad, leadBytes: TrimDigitPad.byteLength(), trail: TrimDigitPad, trailBytes: TrimDigitPad.byteLength(), argument: TrimExplicitCharacterSet, tag: "u")
+end 'trimDigitPadding'
+
+// ONE trim SITE, in ONE `ownedSiteBlock`. See `StringTrimOpsBase` for why a site gets a block to itself
+// here where every other knob in this file puts a whole group in one.
+function trimSiteBlock(label String, binding String, payload String, member String, padding TrimPadding, expectedBytes TrackedValue) returns String
+	var body = StringBuilder.create()
+	body.append("\t\tlet {binding} = \"{payload}\"\n")
+	body.append("\t\tacc = acc + {binding}.{member}({padding.argument}).byteLength(){neutralizeText(expectedBytes)}\n")
+	body.append(accProbe("\t\t"))
+	return ownedSiteBlock(label, body: body.build())
+end 'trimSiteBlock'
+
+// The three trims under ONE padding scheme. Each is witnessed by what it LEFT — the core for the two-ended
+// form, and the core plus the padding at the end it did not touch for each one-ended form — so a trim that
+// cut the wrong end lands on the other one-ended form's expectation and the two do not cancel, because
+// they are folded in separate blocks against the same pinned accumulator.
+function trimSchemeBlocks(index KnobIndex, padding TrimPadding, core String) returns String
+	let coreBytes = core.byteLength()
+	let payload = "{padding.lead}{core}{padding.trail}"
+	var out = StringBuilder.create()
+	out.append(trimSiteBlock("{padding.tag}b{index}", binding: "{padding.tag}vb{index}", payload: payload, member: TrimBothMethod, padding: padding, expectedBytes: coreBytes))
+	out.append(trimSiteBlock("{padding.tag}s{index}", binding: "{padding.tag}vs{index}", payload: payload, member: TrimStartMethod, padding: padding, expectedBytes: coreBytes + padding.trailBytes))
+	out.append(trimSiteBlock("{padding.tag}e{index}", binding: "{padding.tag}ve{index}", payload: payload, member: TrimEndMethod, padding: padding, expectedBytes: padding.leadBytes + coreBytes))
+	return out.build()
+end 'trimSchemeBlocks'
+
+// The `stringTrimOps` knob: M groups of the three trims, over BOTH argument forms.
+//
+// The two schemes are the two argument FORMS rather than two of the members: with no argument the call
+// site builds the default `CharacterSet.whitespacesAndNewlines()`, and with one it does not. That is a
+// difference in what is EMITTED — and, measured, by far the largest per-site difference in this family.
+function stringTrimOpsSource(groupCount KnobSize) returns String
+	var out = StringBuilder.create()
+	out.append("// Generated by ScaleCorpus: the string-trim knob — {groupCount} groups of trim/trimStart/trimEnd, in both the default-CharacterSet and explicit-CharacterSet forms, one site per block.\n")
+	out.append("\n")
+	out.append(witnessedDriverHeader(StringTrimOpsDriver))
+
+	for i in 0 upto groupCount 'eachGroup'
+		let core = trimCoreText(i)
+		out.append(trimSchemeBlocks(i, padding: trimWhitespacePadding(), core: core))
+		out.append(trimSchemeBlocks(i, padding: trimDigitPadding(), core: core))
+	end 'eachGroup'
+
+	out.append(accWitnessTail(StringTrimOpsDriver))
+	return out.build()
+end 'stringTrimOpsSource'
+
+// ⭐⭐ **THE ONE NON-ASCII PAYLOAD IN THE CORPUS, AND EVERY DIGIT OF IT IS LOAD-BEARING.** Over ASCII text
+// a String's grapheme count, codepoint count, UTF-16 length and byte length are ALL THE SAME NUMBER, so an
+// ASCII corpus cannot tell the four materializers apart: `count()` answering with `bytes().count()`'s walk
+// would witness perfectly. These three characters make all four differ at once —
+//
+//   `é`        2 bytes, 1 grapheme, 1 codepoint,  1 UTF-16 unit   (a two-byte sequence)
+//   `😀`       4 bytes, 1 grapheme, 1 codepoint,  2 UTF-16 units  (a surrogate PAIR)
+//   `👨‍👩‍👧`  18 bytes, 1 grapheme, 5 codepoints, 8 UTF-16 units  (a ZWJ sequence: three emoji, two joiners)
+//
+// — 24, 3, 7 and 11, four distinct numbers, and the ZWJ sequence is what separates the GRAPHEME count from
+// the CODEPOINT count, which the first two alone cannot do.
+//
+// ⚠ THEY ARE MEASURED FACTS ABOUT UTF-8 AND UAX #29, NOT ABOUT THIS COMPILER, which is why they are
+// written down rather than computed: asking this generator's own `count()` for them would state the
+// expectation from the very implementation the emitted program is meant to check, and the two would agree
+// however wrong they were.
+let ViewSegmentText = "é😀👨‍👩‍👧"
+let ViewSegmentBytes = 24
+let ViewSegmentGraphemes = 3
+let ViewSegmentCodepoints = 7
+let ViewSegmentUtf16Units = 11
+
+// What a `clone` is grown by after it is taken, so that a clone which ALIASED its source is caught. Escape
+// -free, so its length is measured.
+let ViewCloneTail = "TAIL"
+
+function viewPayloadText(index KnobIndex) returns String
+	return "view {index} {ViewSegmentText} tail"
+end 'viewPayloadText'
+
+// The `stringViewOps` knob: M groups of the materializers, plus `isEmpty` and `clone`.
+//
+// TWO BLOCKS: the four COUNTS, which each walk the receiver's bytes under a different rule, and the two
+// LEFTOVERS, which do not walk at all — `isEmpty()` is a field load and a compare, and `clone()` is a
+// record copy. Folding them into one block would price a field load beside four full walks.
+function stringViewOpsSource(groupCount KnobSize) returns String
+	// The CHECK between this file's bytes and the roster above it. `ViewSegmentBytes` is the one of the
+	// four constants that is cheap to verify here and the one that a re-encoding of this source file would
+	// move — a normalizer decomposing `é` into `e` + U+0301 changes all four at once, and this is where a
+	// reader would be told rather than left with a ladder that fails at every rung for no stated reason.
+	if ViewSegmentText.byteLength() != ViewSegmentBytes 'segmentDrifted'
+		panic("ScaleCorpus.stringViewOpsSource: ViewSegmentText is {ViewSegmentText.byteLength()} bytes but ViewSegmentBytes says {ViewSegmentBytes} — this source file's encoding has changed under the roster, and the grapheme / codepoint / UTF-16 counts beside it are wrong too. Re-measure all four against the new bytes.")
+	end 'segmentDrifted'
+
+	var out = StringBuilder.create()
+	out.append("// Generated by ScaleCorpus: the string-view knob — {groupCount} groups of count/bytes/toByteArray/codepoints/utf16, then isEmpty and clone.\n")
+	out.append("\n")
+	out.append(witnessedDriverHeader(StringViewOpsDriver))
+
+	for i in 0 upto groupCount 'eachGroup'
+		let payload = viewPayloadText(i)
+		let payloadBytes = payload.byteLength()
+		// The payload is the segment with ASCII on both sides, and every count is additive over it: an
+		// ASCII byte is one byte, one grapheme, one codepoint and one UTF-16 unit alike.
+		let asciiBytes = payloadBytes - ViewSegmentBytes
+
+		var counts = StringBuilder.create()
+		counts.append("\t\tlet vv{i} = \"{payload}\"\n")
+		// Each of the four is folded in its OWN line with its OWN expectation. Summing them would let two
+		// materializers answering each other's number cancel, which is precisely the confusion this
+		// payload was built to detect.
+		counts.append("\t\tacc = acc + vv{i}.count(){neutralizeText(asciiBytes + ViewSegmentGraphemes)}\n")
+		counts.append(accProbe("\t\t"))
+		counts.append("\t\tacc = acc + vv{i}.codepoints().count(){neutralizeText(asciiBytes + ViewSegmentCodepoints)}\n")
+		counts.append(accProbe("\t\t"))
+		counts.append("\t\tacc = acc + vv{i}.utf16().count(){neutralizeText(asciiBytes + ViewSegmentUtf16Units)}\n")
+		counts.append(accProbe("\t\t"))
+		// `bytes()` and `toByteArray()` are ONE emitter in shv2 and two members in the reference, so both
+		// spellings are written: the day they stop being one answer, the day they part is here.
+		counts.append("\t\tacc = acc + vv{i}.bytes().count() + vv{i}.toByteArray().count(){neutralizeText(2 * payloadBytes)}\n")
+		counts.append(accProbe("\t\t"))
+		out.append(ownedSiteBlock("vg{i}", body: counts.build()))
+
+		var leftovers = StringBuilder.create()
+		leftovers.append("\t\tlet wv{i} = \"{payload}\"\n")
+		leftovers.append(falsePredicateProbe("wv{i}.isEmpty()", label: "wne{i}"))
+		leftovers.append("\t\tlet we{i} = \"\"\n")
+		leftovers.append(truePredicateProbe("we{i}.isEmpty()", label: "wie{i}"))
+		// ⭐ THE CLONE IS WITNESSED BY ITS INDEPENDENCE, NOT BY ITS LENGTH. A `clone()` that handed back the
+		// receiver would answer the right byte count all day; growing the copy and then asking BOTH is what
+		// tells the two apart, because an alias would have grown the source with it and the difference
+		// would read zero.
+		leftovers.append("\t\tvar wc{i} = wv{i}.clone()\n")
+		leftovers.append("\t\twc{i}.append(\"{ViewCloneTail}\")\n")
+		leftovers.append("\t\tacc = acc + wc{i}.byteLength() - wv{i}.byteLength(){neutralizeText(ViewCloneTail.byteLength())}\n")
+		leftovers.append(accProbe("\t\t"))
+		out.append(ownedSiteBlock("wg{i}", body: leftovers.build()))
+	end 'eachGroup'
+
+	out.append(accWitnessTail(StringViewOpsDriver))
+	return out.build()
+end 'stringViewOpsSource'
 
 // ⭐ **EVERYTHING THE GENERATOR MUST KNOW ABOUT ONE CHARACTER TO WITNESS THE SITES IT WRITES FOR IT.**
 // Every field is a fact this file can only state because it chose the character: a site whose answer the
@@ -3809,16 +4382,10 @@ function charOpsSource(groupCount KnobSize) returns String
 		// is the BINDING-versus-literal shape a real program writes, not two literals a constant folder
 		// could in principle settle.
 		body.append("\t\tlet cv{i} = '{sample.text}'\n")
-		body.append("\t\tif cv{i} == '{sample.text}' 'ceq{i}'\n")
-		body.append("\t\t\tacc = acc + {SiteEnteredMark}\n")
-		body.append("\t\tend 'ceq{i}'\n")
-		body.append("\t\tacc = acc - {SiteEnteredMark}\n")
+		body.append(truePredicateProbe("cv{i} == '{sample.text}'", label: "ceq{i}"))
 
 		// ORDERING through `__char_cmp`.
-		body.append("\t\tif cv{i} > '{sample.below}' 'cgt{i}'\n")
-		body.append("\t\t\tacc = acc + {SiteEnteredMark}\n")
-		body.append("\t\tend 'cgt{i}'\n")
-		body.append("\t\tacc = acc - {SiteEnteredMark}\n")
+		body.append(truePredicateProbe("cv{i} > '{sample.below}'", label: "cgt{i}"))
 
 		// THE CODEPOINT COERCION. `acc` is the opaque accumulator, so the add survives `foldConstOperands`
 		// and the literal genuinely has to become an integer operand for it to compile at all.
@@ -3877,19 +4444,16 @@ function managedStructTypesSource(typeCount KnobSize) returns String
 	out.append("\n")
 	out.append(witnessedDriverHeader(ManagedStructsDriver))
 	// ⭐ THIS `==` IS THE OTHER WAY ROUND FROM `stringOpsSource`'S: the field holds exactly the literal it
-	// was built with, so the arm MUST be taken, and the compensation sits after the `if` rather than
-	// inside it. A comparison that answered false would skip the `+ 1` and leave the accumulator one
-	// short — which is a witness, where an arm quietly contributing zero would not have been.
+	// was built with, so the arm MUST be taken — which is `truePredicateProbe`, where that one is the
+	// FALSE twin. A comparison that answered false skips the mark and leaves the accumulator one short,
+	// where an arm quietly contributing zero would not have been a witness at all.
 	for t in 0 upto typeCount 'eachUse'
 		let literal = "managed struct label number {t} long enough to reach the heap"
 		var body = StringBuilder.create()
 		body.append("\t\tlet nv{t} = {ManagedStructPrefix}{t}.create(\"{literal}\", value: a)\n")
 		body.append("\t\tacc = acc + nv{t}.value{neutralizeText(corpusSeedValue())}\n")
 		body.append(accProbe("\t\t"))
-		body.append("\t\tif nv{t}.label == \"{literal}\" 'ml{t}'\n")
-		body.append("\t\t\tacc = acc + 1\n")
-		body.append("\t\tend 'ml{t}'\n")
-		body.append("\t\tacc = acc - 1\n")
+		body.append(truePredicateProbe("nv{t}.label == \"{literal}\"", label: "ml{t}"))
 		out.append(ownedSiteBlock("mn{t}", body: body.build()))
 	end 'eachUse'
 	out.append(accWitnessTail(ManagedStructsDriver))
@@ -5093,6 +5657,41 @@ export function printCorpusManifest()
 	print("      opaque accumulator (an int->String conversion that allocates), `.append` (which detaches\n")
 	print("      onto a private buffer), `==` through __str_eq, `.byteLength()` as the way back out to int,\n")
 	print("      and a struct owning a String field dropped through its synthesized __destruct_<T> cascade\n")
+	print("    STRING, THE REST OF THE MEMBER SURFACE — four knobs, one per `dispatchStringMethod` family,\n")
+	print("      because the retirement of these members onto `stdlib/String.maxon`'s bodies moves ONE\n")
+	print("      family at a time and each wave's cost has to be readable on its own:\n")
+	print("        BYTE/ASCII (slice C): startsWith / endsWith / contains — each in BOTH directions, since a\n")
+	print("          predicate stuck at `true` is witnessed identically by its true arm alone — toLower /\n")
+	print("          toUpper (pinned by a needle that exists only AFTER the conversion, because an ASCII case\n")
+	print("          map does not change a length), replace / replaceFirst (whose replacement is deliberately\n")
+	print("          WIDER than the needle) and split (count AND element 0, so a split into empty pieces fails)\n")
+	print("        STRINGINDEX (slice B2): startIndex / endIndex / charIndex / bytePos, the two THROWING\n")
+	print("          searches findFirst / findLast, the third throwing member indexAfter, and BOTH `slice`\n")
+	print("          overloads — which are told apart by an argument LABEL rather than by a type. ⚠ EVERY\n")
+	print("          throwing member is generated on BOTH EDGES: a needle no payload contains throws at every\n")
+	print("          site, so the `otherwise` fork is emitted AND taken\n")
+	print("        TRIMS (slice D): trim / trimStart / trimEnd, in BOTH argument forms — the default\n")
+	print("          CharacterSet and an explicit one — over a core that opens and closes on a MULTI-BYTE\n")
+	print("          cluster, which is the only cluster either end has to classify rather than skip.\n")
+	print("          ⚠ ONE SITE PER BLOCK here, alone in this corpus, and its knob base is an EIGHTH of its\n")
+	print("          siblings': a trim against `CharacterSet.whitespacesAndNewlines()` materializes that set\n")
+	print("          INLINE and costs 194 x64 ops in the calling block against 50 for `decimalDigits()` and 12\n")
+	print("          for a `toUpper`. Three of them in one block took `slotCount` to ~4.2M and exhausted\n")
+	print("          committed memory in `PressureDeltaColumn` — rung 4 would not compile. See StringTrimOpsBase\n")
+	print("        MATERIALIZERS (slices B and E): count() (the UAX #29 grapheme walk), bytes(),\n")
+	print("          toByteArray(), codepoints(), utf16(), isEmpty() and clone(). ⚠ THIS IS THE CORPUS'S ONLY\n")
+	print("          NON-ASCII PAYLOAD, and it has to be: over ASCII all four of those counts are THE SAME\n")
+	print("          NUMBER, so a materializer answering with its neighbour's walk would witness perfectly.\n")
+	print("          Its `é` + emoji + ZWJ-family segment reads 24 bytes / 3 graphemes / 7 codepoints / 11\n")
+	print("          UTF-16 units — four distinct numbers, and the ZWJ sequence is what parts the first two.\n")
+	print("          `clone()` is witnessed by INDEPENDENCE rather than by length: the copy is grown and both\n")
+	print("          are then measured, so a clone that aliased its source reads a difference of zero\n")
+	print("    ⚠ BEFORE THOSE FOUR KNOBS THE STRING KNOB GENERATED A LITERAL, AN INTERPOLATION, `.append`,\n")
+	print("      `.byteLength()` AND `==`, AND NOTHING ELSE — not one predicate, case conversion, trim,\n")
+	print("      StringIndex producer or materializer, at rung 0 or rung 5. Every one of them was in the\n")
+	print("      subset with live spec cases, so every retirement wave would have read a flat delta of ZERO\n")
+	print("      in allocations, in bytes and in CPU alike. That is this file's founding defect for the\n")
+	print("      EIGHTH time; see `StringSearchOpsBase`\n")
 	print("    CHARACTER (the OTHER byte record, BATCH23): character LITERALS at both widths (one ASCII byte\n")
 	print("      and two, sharing a lead byte), a `let`-bound Character, `==` through __str_eq (where a\n")
 	print("      one-byte literal used to be an immediate integer compare), `>` through __char_cmp plus the\n")
@@ -5178,7 +5777,13 @@ export function printCorpusManifest()
 	print("    the column carries the sites x blocks-in-the-function product a per-site scan would cost,\n")
 	print("    `enum` declaration COUNT (per-TYPE) and `match` SITE count (per-SITE, over a fixed pair of\n")
 	print("    enums, so a change to tag layout and a change to dispatch strategy move different columns),\n")
-	print("    String op-group count, CHARACTER op-group count (per-SITE, over a FIXED roster of four\n")
+	print("    String op-group count, plus FOUR more String knobs — the BYTE/ASCII, StringIndex, TRIM and\n")
+	print("    MATERIALIZER families, all per-SITE over a FIXED payload shape, and deliberately NOT all at\n")
+	print("    one base: the index family is halved because its four `try` forks per group buy BLOCKS where\n")
+	print("    its neighbours buy ops, and the trim family is an EIGHTH because one whitespace-set trim site\n")
+	print("    costs 16x a `toUpper`. Both are BUDGETS, not blind spots — every member is generated at every\n")
+	print("    rung and every count still doubles,\n")
+	print("    CHARACTER op-group count (per-SITE, over a FIXED roster of four\n")
 	print("    characters, so it grows how many character sites a program holds and not how many distinct\n")
 	print("    characters exist), managed-struct TYPE count (per synthesized __destruct_<T> body),\n")
 	print("    trivial-element Array group count and MANAGED-element Array group count (the element-drop\n")
@@ -5215,6 +5820,15 @@ export function printCorpusManifest()
 	print("    The per-type deep CLONER cascade (__clone_<T>, and `noteClonerUsage`'s needs-fixpoint) is\n")
 	print("    absent too: nothing here deep-clones a MANAGED-element array, so `neededCloners` stays\n")
 	print("    empty and that fixpoint early-outs at every rung.\n")
+	print("    ⚠ AND `String.byteAt` IS UNREACHABLE FROM A GENERATED RUNG, for the SAME reason as\n")
+	print("    `addressableBytes` below and not for any reason a knob could fix: it is one of the four\n")
+	print("    STDLIB-ONLY String members (`module function` in the corpus), refused by\n")
+	print("    `requireStdlibOnlyStringMethod` to any file not under `stdlib/` — which a rung directory by\n")
+	print("    construction is not. It is named here rather than left out of the roster silently, because a\n")
+	print("    member missing from a list of what is covered is exactly the defect the four String knobs\n")
+	print("    above exist to end. Its two stdlib-only siblings `byteAtOrPanic` and `hasSingleByteGraphemes`\n")
+	print("    are absent for the identical reason. User code reaches those bytes through `toByteArray()`,\n")
+	print("    which IS generated.\n")
 	print("    ⚠ AND TWO OF THE BUFFER SURFACE'S EIGHT PRODUCERS ARE UNREACHABLE FROM A GENERATED RUNG, each\n")
 	print("    for a reason that is a property of the DOOR and not of this generator, so no knob can close\n")
 	print("    either: `String.addressableBytes()` is STDLIB-ONLY (refused to any file not under `stdlib/`,\n")
