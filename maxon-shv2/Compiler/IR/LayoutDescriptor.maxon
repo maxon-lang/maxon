@@ -101,19 +101,26 @@ export let LAYOUT_OFFSET_DESTROY_FUNC = 40 as ByteOffset
 // write through one would not show through the other, and their identities would differ. That is an
 // observable wrong answer, which outranks any allocation argument.
 //
-// ⛔⛔ **IT AND `destroyFunc@40` ARE NON-ZERO TOGETHER, AND THEY READ ONE PREDICATE TO STAY THAT WAY
-// (W41-trivial).** Both are ultimately `instanceArgIsManaged` — *"does this parameter's substituted argument
-// own a record?"* — asked of the same argument, because **a reference is taken through this word and released
-// through that one**. The release is the CONCRETE record's own destructor for a bare field (a tuple's
-// `__destruct___Tuple2.String.int`, an instance's `__destruct_Box_String`) and the COLUMN's element walk for
-// an opaque `Array with T`, and the second of those reads `destroyFunc@40` directly.
+// ⛔⛔ **IT AND `destroyFunc@40` ARE NON-ZERO TOGETHER, AND THEY ARE TWO SPELLINGS OF ONE ANSWER TO STAY
+// THAT WAY.** Both come off `ProgramSignatures.typeParamOwnershipProtocol` — *"which ownership protocol does
+// this parameter's substituted argument take?"* — asked of one argument and answered once, because **a
+// reference is taken through this word and released through that one**. The release is the CONCRETE record's
+// own destructor for a bare field (a tuple's `__destruct___Tuple2.String.int`, an instance's
+// `__destruct_Box_String`) and the COLUMN's element walk for an opaque `Array with T`, and the second of
+// those reads `destroyFunc@40` directly.
 //
-// ⚠ **THEY USED TO READ TWO DIFFERENT QUESTIONS, AND THIS COMMENT DEFENDED IT.** This word was stamped
-// whenever the ARGUMENT owned heap (`typeIsManaged`) while that one was stamped only when the instance's
-// argument was CONSUMED (`typeArgIsOwned`) — boundaries that differ on exactly the co-owned trivial aggregate,
-// which therefore got a working `__mm_retain` and an inert drop. `Map.grow()` retained every rehashed
-// all-scalar-struct key through `__retain_type_param` and released none of them. See
-// `ProgramSignatures.managedOpaqueArrayElementOf` for the measurement.
+// ⚠⚠ **THEY HAVE COME APART TWICE, IN TWO DIFFERENT HALVES, AND A COMMENT HERE DEFENDED BOTH.** First on
+// the ARGUMENT question: this word was stamped whenever the argument owned heap (`typeIsManaged`) while that
+// one was stamped only when the argument was CONSUMED (`typeArgIsOwned`) — boundaries that differ on exactly
+// the co-owned trivial aggregate, so `Map.grow()` retained every rehashed all-scalar-struct key and released
+// none. Then on the INSTANCE question, which the fix for the first left standing: this word was stamped off
+// the ARGUMENT while that one was still gated on the base declaring an `Array with T` or bare `T` FIELD, so a
+// generic with no `T`-typed field at all — one that merely BUILDS a record out of a borrowed `T` — retained
+// through a live word and released through a zero. MEASURED at review: `type Pack uses T` with only
+// `var n as Integer`, at `Pack with String`, printed the right answer and exited **101** where both the
+// oracle and the merge base exit 0. ⇒ **Neither half of "one answer" is optional, and a claim in this comment
+// that they read one predicate is worth nothing unless the code has one expression for it.** See
+// `ProgramSignatures.typeParamOwnershipProtocol`, which is now that expression.
 export let LAYOUT_OFFSET_RETAIN_FUNC = 64 as ByteOffset
 
 // The number of little-endian bytes in one descriptor field.

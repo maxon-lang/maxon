@@ -23170,13 +23170,16 @@ export type Parser
 	// precisely the owned values NO binding owns (`pendingTempsContain`), which is the question being asked —
 	// so a non-temporary source is a silent, correct no-op and every caller may ask unconditionally.
 	//
-	// ⚠ **FIVE CALLERS, AND IT WAS WRITTEN OUT THREE TIMES BEFORE THIS RUNG NEEDED THE FOURTH AND FIFTH.** The
-	// `for … in` source, the temporary `match` scrutinee, the escaping instance-method feed argument, a
-	// container an element BORROW was taken out of, and a box a managed FIELD was read out of are one fact —
-	// *"something outlives this statement and points into this record"* — and a sixth copy of the two-line
-	// remove-and-enrol is how one of them would come to do only half of it. `name` is inert (the binding is
-	// never installed in a `Scope`, so no source line can name it) and each caller states its own, so a dump
-	// of `ownedBindings` still says WHY each nameless entry is there.
+	// ⚠ **SEVEN CALLERS, AND THIS SAID FIVE WHILE THERE WERE SEVEN (recounted at review).** They are: the
+	// `for … in` SOURCE and, separately, the per-trip ELEMENT an `Iterable` cursor's `current()` mints; the
+	// temporary `match` scrutinee; the box a member BORROW was taken off (`dispatchMethodOnBase`); the
+	// container an ARRAY element borrow was taken out of and the container a `__ManagedList` node HANDLE
+	// points into; and the callee-storage escaping feed argument. All one fact — *"something outlives this
+	// statement and points into this record"* — and an eighth copy of the two-line remove-and-enrol is how one
+	// of them would come to do only half of it. ⚠ A COUNT in a header is a claim like any other: keep it true
+	// or do not write it, because a reader who trusts a stale one stops looking for the sites it omits.
+	// `name` is inert (the binding is never installed in a `Scope`, so no source line can name it) and each
+	// caller states its own, so a dump of `ownedBindings` still says WHY each nameless entry is there.
 	function giveTemporaryScopeLifetime(value ValueId, name ByteArray)
 		if not self.pendingTempsContain(value) 'notATemporary'
 			return
@@ -41134,7 +41137,7 @@ export type Parser
 		var args = ValueIdArray.create()
 		var argLabels = emptyArgLabels(args)
 		var argRanges = uniformArgRanges(args, range: range)
-		let map = try self.emitCall(qualifiedMethodName(MapBuiltinBaseName, methodName: CreateMethodName), anchor: anchor, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: NoImmutableArgNames, rparenTok: anchor, resultUsed: true, constructorInstance: ConstructorInstance.instance(giid), mint: CalleeMint.notMinted)
+		let map = try self.emitCall(qualifiedMethodName(MapBuiltinBaseName, methodName: CreateMethod), anchor: anchor, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: NoImmutableArgNames, rparenTok: anchor, resultUsed: true, constructorInstance: ConstructorInstance.instance(giid), mint: CalleeMint.notMinted)
 		// ⭐ **THE RESULT IS THE INSTANCE, AND SAYING SO IS THE CALLER'S JOB — `emitCall` does not do it.**
 		// `constructorInstance` is read by the CONSUME side alone; the type half is this separate step, exactly
 		// as `parseQualifiedCall` does it after its own `parseCallNamed`. Without it `Map.create` hands back
@@ -41160,7 +41163,7 @@ export type Parser
 		var argLabels = emptyArgLabels(args)
 		try argLabels.set(MapUpsertValueArgSlot, value: MapUpsertValueLabel) otherwise panic("emitMapLiteralUpsert: the label column for a three-argument call has no slot {MapUpsertValueArgSlot} — `emptyArgLabels` mints one entry per argument")
 		var argRanges = uniformArgRanges(args, range: range)
-		_ = try self.emitCall(qualifiedMethodName(MapBuiltinBaseName, methodName: UpsertMethodName), anchor: anchor, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: NoImmutableArgNames, rparenTok: anchor, resultUsed: false, constructorInstance: self.receiverConstructorInstance(map), mint: CalleeMint.notMinted)
+		_ = try self.emitCall(qualifiedMethodName(MapBuiltinBaseName, methodName: UpsertMethod), anchor: anchor, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: NoImmutableArgNames, rparenTok: anchor, resultUsed: false, constructorInstance: self.receiverConstructorInstance(map), mint: CalleeMint.notMinted)
 	end 'emitMapLiteralUpsert'
 
 	function emitMapCreateOp(giid GenericInstanceId, range SourceRange) returns ValueId
@@ -50685,6 +50688,26 @@ export type Parser
 		if not feed.isFeed() 'notEscapingFeed'
 			return argValue
 		end 'notEscapingFeed'
+		// ⛔⛔ **AN OPAQUE ARGUMENT AT *THIS* SINK STILL TAKES NO REFERENCE, AND THAT IS A USE-AFTER-FREE —
+		// MEASURED AT REVIEW, PRE-EXISTING, AND DELIBERATELY NOT CLOSED HERE.** `coOwnConcreteAggregateFeed`
+		// is inert on a `typeParameter` tag (`valueIsNonTextAggregate` is false), so a SHARED body forwarding
+		// its own borrowed `T` into another generic's `create()` hands the new box a reference nobody took:
+		// `type Outer uses E` doing `return (Inner with E).create(try items.get(i) otherwise …)` at
+		// `Outer with String` prints the right answer and dies **0xC0000005**, where the bootstrap exits 0 and
+		// the CONCRETE spelling of the same program runs (there `argIsConsumedAt` transfers). It is
+		// byte-identical at the merge base — this wave neither caused it nor widened it.
+		//
+		// ⛔ **THE SYMMETRIC FIX WAS TRIED AND MEASURED WORSE: it refuses FOUR committed programs that need
+		// nothing.** Routing the opaque arm below through this sink turns
+		// `generic-type-substitution/own-name-in-a-generic-body-is-still-Self`,
+		// `inner-alias-construction/generic-body-user-generic-inner-alias-create` and two
+		// `self-type-member-expression` cases into E2015 — every one of them a `Box with Integer`, a TRIVIAL
+		// instantiation owing no reference, in a `static function` that structurally has no `self` to source a
+		// descriptor from. The retain must be reserved statically and can only be needed dynamically, and
+		// `genericTypeIsInstantiated`'s header says why the seed cannot ask the stronger question: it runs
+		// before any body is parsed, so a CONCRETE instantiation is not yet interned. ⇒ Closing this needs a
+		// descriptor-need seed for "forwards a borrowed opaque `T` to a feed position" that the token pre-scan
+		// cannot produce — a rung, not a review edit. FILED, with this reproducer, rather than half-taken.
 		if not feed.sinkIsCalleeStorage() 'constructorFeed'
 			self.coOwnConcreteAggregateFeed(argValue, anchor: anchor)
 			return argValue

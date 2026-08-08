@@ -1549,9 +1549,11 @@ type MaxonToStdLowering
 	// because the empty test IS the encoding, and a second copy of it is where one word would come to be
 	// stamped on a rule another had already stopped using.
 	//
-	// ⚠ It serves the WITNESS TABLE's two words and the LAYOUT DESCRIPTOR's `retainFunc@64` (W41-opaque) —
-	// which is why it names neither blob. The descriptor's other two stamps predate it and are unconditional
-	// on their own predicates, so they do not come through here.
+	// ⚠ It serves the WITNESS TABLE's two ownership words and the LAYOUT DESCRIPTOR's two
+	// (`destroyFunc@40`, `retainFunc@64`) — which is why it names neither blob. Both pairs are non-zero
+	// TOGETHER precisely because each pair's two callees come off one protocol answer and meet the one EMPTY
+	// test here; the descriptor's `copyFunc@32` is a fact about an opaque `Array` COLUMN rather than about the
+	// type argument, so it keeps its own predicate and does not come through here.
 	function stampOwnershipWord(callee ByteArray, label String, offsetInLabel ByteOffset)
 		if callee.isEmpty() 'ownsNothing'
 			return
@@ -1756,19 +1758,21 @@ type MaxonToStdLowering
 		// reloc never names a `.text` VA that was not installed.
 		for position in 0 upto paramCount 'eachTypeParam'
 			let blockBase = layoutBlockOffsetFor(position)
-			if self.signatures.genericInstanceHasManagedOpaqueArrayField(gid, position: position) 'managedOpaqueElement'
-				self.globalData.recordFuncAbs64InRdata(self.signatures.managedOpaqueArrayElementDropCallee(gid, position: position), rdataLabel: label, offsetInLabel: (blockBase + LAYOUT_OFFSET_DESTROY_FUNC) as ByteOffset)
-			end 'managedOpaqueElement'
+			// ⭐⭐ **THE `destroyFunc@40` STAMP AND THE `retainFunc@64` STAMP ARE ONE PAIR OF LINES OVER ONE
+			// PREDICATE, AND SPLITTING THEM LEAKED (found at review).** Both are `stampOwnershipWord` over a
+			// per-argument callee that answers EMPTY when the argument owns no record, so the two words are
+			// non-zero together by construction — see `ProgramSignatures.typeParamDropCallee` for the measured
+			// exit-101 the old FIELD-shaped drop gate produced beside this ARGUMENT-shaped retain gate.
+			self.stampOwnershipWord(self.signatures.typeParamDropCallee(gid, position: position), label: label, offsetInLabel: (blockBase + LAYOUT_OFFSET_DESTROY_FUNC) as ByteOffset)
 			if self.signatures.genericInstanceOpaqueArrayElementIsCopyable(gid, position: position) 'copyableOpaqueElement'
 				self.globalData.recordFuncAbs64InRdata(self.signatures.managedOpaqueArrayElementCloneCallee(gid, position: position), rdataLabel: label, offsetInLabel: (blockBase + LAYOUT_OFFSET_COPY_FUNC) as ByteOffset)
 			end 'copyableOpaqueElement'
 			// ⭐⭐ **THE `retainFunc@64` STAMP — how a shared body takes the reference a record it BUILDS owes on
-			// a borrowed opaque `T` (W41-opaque).** Its GATE is the argument's own ownership and NOT the two
-			// above: `destroyFunc@40`/`copyFunc@32` describe an instance's opaque `Array`/bare FIELD, while this
-			// describes the type ARGUMENT itself, because what releases this reference is the CONCRETE record's
-			// destructor at the caller. `typeParamRetainCallee` answers EMPTY for a trivial argument and
-			// `stampOwnershipWord` then leaves the zero `__retain_type_param` treats as inert — so a trivial
-			// instantiation's descriptor is unchanged but for the eight zero bytes the block grew.
+			// a borrowed opaque `T` (W41-opaque).** Its GATE is the argument's own ownership, which the drop
+			// word above now shares; only `copyFunc@32` between them is a fact about the instance's opaque
+			// `Array` FIELD, because a clone is about that column and not about the argument.
+			// `typeParamRetainCallee` answers EMPTY for an argument owning no record and `stampOwnershipWord`
+			// then leaves the zero `__retain_type_param` treats as inert.
 			self.stampOwnershipWord(self.signatures.typeParamRetainCallee(gid, position: position), label: label, offsetInLabel: (blockBase + LAYOUT_OFFSET_RETAIN_FUNC) as ByteOffset)
 		end 'eachTypeParam'
 
