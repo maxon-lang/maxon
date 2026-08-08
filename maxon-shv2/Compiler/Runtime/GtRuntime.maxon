@@ -630,7 +630,7 @@ end 'isThrowingGtRuntimeCallee'
 // changes nothing here: this predicate answers "must a `try` wrap it", which is a property of the OPERATION, and
 // both gates that read it run on the MAXON tier where the callee is still a call.
 export function isThrowingRuntimeCallee(callee ByteArray) returns bool
-	return isThrowingArrayRuntimeCallee(callee) or isThrowingGtRuntimeCallee(callee) or isThrowingStringIndexRuntimeCallee(callee) or isThrowingManagedFileRuntimeCallee(callee) or isThrowingManagedDirectoryRuntimeCallee(callee) or isThrowingCharacterRuntimeCallee(callee) or isThrowingMapRuntimeCallee(callee) or isThrowingListRuntimeCallee(callee) or isThrowingDivisionRuntimeCallee(callee) or isThrowingStringRuntimeCallee(callee)
+	return isThrowingArrayRuntimeCallee(callee) or isThrowingGtRuntimeCallee(callee) or isThrowingManagedFileRuntimeCallee(callee) or isThrowingManagedDirectoryRuntimeCallee(callee) or isThrowingCharacterRuntimeCallee(callee) or isThrowingMapRuntimeCallee(callee) or isThrowingListRuntimeCallee(callee) or isThrowingDivisionRuntimeCallee(callee) or isThrowingStringRuntimeCallee(callee)
 end 'isThrowingRuntimeCallee'
 
 // ⭐ **THE ONE HOME OF "WHICH ERROR TYPE A COMPILER-INTERNAL RUNTIME CALLEE THROWS"** — the composer beside
@@ -828,10 +828,13 @@ export function runtimeCalleeSourceMethod(callee ByteArray) returns RuntimeCalle
 		return managedFileSourceMethod(callee)
 	end 'fileFamily'
 
-	if isThrowingStringIndexRuntimeCallee(callee) 'stringIndexFamily'
-		return RuntimeCalleeSourceMethod.found(stringIndexSourceMethodName(callee))
-	end 'stringIndexFamily'
-
+	// ⚠ **THE `StringIndex` FAMILY HAD AN ARM HERE UNTIL W49 WAVE 3, AND IT WENT WITH ITS MEMBERS.**
+	// `__strix_first`/`__strix_last`/`__strix_after` were the throwing callees behind
+	// `findFirst`/`findLast`/`indexAfter`, and D12 added `stringIndexSourceMethodName` so a missing `try`
+	// named the author's own search rather than "a throwing array accessor". All three members are
+	// `stdlib/String.maxon`'s now: an E3057 against one is raised against an ordinary DECLARED function,
+	// whose name the diagnostic already has, so the map that translated a synthesized callee back into a
+	// source spelling has nothing left to translate.
 	if isManagedMemoryRuntimeCallee(callee) 'memoryFamily'
 		return RuntimeCalleeSourceMethod.found(managedMemorySourceMethodName(callee))
 	end 'memoryFamily'

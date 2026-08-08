@@ -286,13 +286,6 @@ export let StrDecrefName = b"__str_decref"
 export let StrRangeEqName = b"__str_range_eq"
 export let StrFindName = b"__str_find"
 
-// ⭐ **`__str_rfind(hay, needle)` — THE BACKWARD BYTE SEARCH (P1.8 Slice B2), `__str_find`'s mirror.** The
-// stdlib's `findLastIn` (`stdlib/String.maxon:1003-1028`), including its first-byte fast reject, scanning
-// DOWN from `hayLen - needleLen`. It is a BYTE search and needs no backward grapheme segmentation: the
-// grapheme index a `findLast` reports is derived from the byte position it lands on, by the SAME forward
-// `__strix_bidx` walk the forward search uses. It takes no start position where `__str_find` does — every
-// caller wants the whole haystack, and a backward window has no consumer to shape it.
-export let StrRFindName = b"__str_rfind"
 export let StrContainsName = b"__str_contains"
 export let StrSplitName = b"__str_split"
 
@@ -398,17 +391,23 @@ export function isThrowingStringRuntimeCallee(callee ByteArray) returns bool
 	return callee.equals(StrByteAtName)
 end 'isThrowingStringRuntimeCallee'
 
-// ⭐ **`__str_find`/`__str_rfind`'s "no occurrence" answer, and it is a NEGATIVE INDEX rather than a thrown
-// error on purpose.** The stdlib spells both searches `throws StringError.notFound`, and a Std graph CAN
-// throw — `StdOp.errorReturn`'s dual-register flag is exactly that, and `__strix_first`/`__strix_last` use
-// it one file over. What these two must not do is throw, because most of their callers are NOT throwing:
-// `contains` wants a bool, `split` walks a tail until the search stops finding, and a `tryCall` at either of
-// those sites would be a control-flow join per iteration to answer a question the caller already treats as
-// ordinary. So the BYTE search answers in the byte domain and the LANGUAGE-level `findFirst`/
-// `findLast` do the one sentinel→throw translation, in `buildStringIndexSearch` and nowhere else.
+// ⭐ **`__str_find`'s "no occurrence" answer, and it is a NEGATIVE INDEX rather than a thrown error on
+// purpose.** The stdlib spells its searches `throws StringError.notFound`, and a Std graph CAN throw —
+// `StdOp.errorReturn`'s dual-register flag is exactly that. What this one must not do is throw, because its
+// callers are NOT throwing: `contains` wants a bool and `split` walks a tail until the search stops finding,
+// and a `tryCall` at either site would be a control-flow join per iteration to answer a question the caller
+// already treats as ordinary. So the BYTE search answers in the byte domain.
 // A byte position is non-negative by construction, so `-1` is outside the answer domain rather than inside
-// it, and every caller tests `>= 0`. Named, so the call sites and the two producers cannot drift on which
-// number means "nothing here".
+// it, and every caller tests `>= 0`. Named, so the call sites and the producer cannot drift on which number
+// means "nothing here".
+//
+// ⚠ **IT HAD A BACKWARD MIRROR, `__str_rfind`, AND W49 WAVE 3 TOOK IT.** That graph existed for exactly one
+// consumer — `__strix_last`, behind `String.findLast` — and the sentinel→throw translation lived in
+// `buildStringIndexSearch`. Both are `stdlib/String.maxon`'s now (`findLastIn` is the corpus's own downward
+// scan), and NOTHING else ever called it: `contains` and `split` walk FORWARD. ⛔ This wave's brief said the
+// pair `__str_find`/`__str_rfind` must both survive because "contains and split still consume them"; that is
+// true of the forward one and was never true of the backward one, which is why it went with its last
+// consumer as the same brief's own rule prescribes.
 let StrFindNotFound = -1 as ParsedInt
 
 // `__str_clone(src) -> newStr` — a String's DEEP CLONE (P1.7 slice 3b-vi-b): a fresh OWNED heap String, an
@@ -674,11 +673,6 @@ export type RuntimeUsage
 	// cannot see inside it" rule `__str_append` and `__str_clone` already follow.
 	export var usesStrRangeEq as bool
 	export var usesStrFind as bool
-	// The BACKWARD byte search (P1.8 Slice B2). Its own bit beside `usesStrFind`, following this file's
-	// one-bit-per-entry-point discipline: a program that only asks `s.contains(p)` must not carry a second
-	// search loop. It calls `__str_range_eq` inside its synthesized body, which this Maxon-module scan
-	// cannot see, so that need is declared by `closeStringMethodNeeds` exactly as `__str_find`'s is.
-	export var usesStrRFind as bool
 	// ⚠ **SEVEN OF THIS FAMILY'S BITS WENT WITH THEIR BUILDERS**: `usesStrStartsWith`/`usesStrEndsWith` in W49
 	// wave 1, then `usesStrMapCase`/`usesStrReplace`/`usesStrReplaceFirst` in wave 2. `startsWith`, `endsWith`,
 	// `toLower`, `toUpper`, `replace` and `replaceFirst` are the CORPUS's now (struck from
@@ -755,20 +749,13 @@ export type RuntimeUsage
 	// `closeGraphemeNeeds` and seeds the corpus decoders' reachability in `StdlibSource`.
 	export var usesStrToCodepoints as bool
 	export var usesStrToUtf16 as bool
-	// ⭐ **THE P1.8 SLICE B2 `StringIndex` FAMILY — ONE BIT PER ENTRY POINT**, following this file's
-	// existing discipline: a program that only asks `s.startIndex()` must carry neither the searches nor
-	// the segmenter under them. Each is set TRANSITIVELY by `recordCallUsage` from whichever entry point
-	// the module actually names (a `__strix_first` reference turns on `__strix_make`, `__strix_bidx` and
-	// `__str_find`, and `__strix_bidx` turns on `__gr_end` and the whole grapheme family under it).
-	export var usesStrIndexMake as bool
-	export var usesStrIndexEnd as bool
-	export var usesStrIndexByteToGrapheme as bool
+	// ⭐ **WHAT IS LEFT OF THE P1.8 SLICE B2 `StringIndex` FAMILY — ONE BIT PER ENTRY POINT**, following this
+	// file's existing discipline: a program that slices by `endIndex:` must not carry the cluster walk that
+	// only `length:` needs. Six sibling bits (`Make`/`End`/`ByteToGrapheme`/`First`/`Last`/`After`) went with
+	// the five members that retired onto `stdlib/String.maxon` at W49 wave 3 — the corpus bodies behind them
+	// are ordinary Maxon call edges now, which the reachability walk FINDS rather than being told.
 	export var usesStrIndexAdvance as bool
-	export var usesStrIndexFirst as bool
-	export var usesStrIndexLast as bool
 	export var usesStrIndexSlice as bool
-	// `String.indexAfter` — its own bit, so a program that only searches carries no `__strix_after`.
-	export var usesStrIndexAfter as bool
 	// ⭐ **THE UNICODE `General_Category` TABLE (P1.8 Slice D, R2).** Its own bit, and DECOUPLED from every
 	// String bit: `__ucd_cat` is a LEAF that reads two `.rdata` blobs and does integer arithmetic — no heap,
 	// no copy loop, no segmenter — so a program that classifies a codepoint carries nothing else, and a
@@ -812,7 +799,7 @@ export type RuntimeUsage
 	export var usesProcessIntrospection as bool
 
 	static function create() returns RuntimeUsage
-		return Self{usesHeap: false, usesGt: false, usesIocp: false, usesStreaming: false, usesWriteStdout: false, usesWriteStderr: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesUIntToString: false, usesBoolToString: false, usesStrAppend: false, usesStrDecref: false, usesArray: false, usesSet: false, usesMap: false, usesList: false, usesDropTypeParam: false, usesDropExistential: false, usesRetainExistential: false, usesIncref: false, usesRetain: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrRangeEq: false, usesStrFind: false, usesStrRFind: false, usesStrContains: false, usesStrSplit: false, usesStrFromBytes: false, usesStrOfBuffer: false, usesMmToCString: false, usesStrBytesView: false, usesStrByteAt: false, usesStrByteAtOrPanic: false, usesManagedArrayCopy: false, usesOpaqueArrayCopy: false, neededCloners: ClonerSet.create(), usesWallClock: false, usesCharAt: false, usesCharCmp: false, usesCharFromCodepoint: false, usesCharAsciiValue: false, usesStrToBytes: false, usesStrToCodepoints: false, usesStrToUtf16: false, usesStrIndexMake: false, usesStrIndexEnd: false, usesStrIndexByteToGrapheme: false, usesStrIndexAdvance: false, usesStrIndexFirst: false, usesStrIndexLast: false, usesStrIndexSlice: false, usesStrIndexAfter: false, usesUcdCategory: false, usesCharSetMake: false, usesCharSetDecref: false, usesCharSetContains: false, usesStrTrim: false, usesManagedFile: false, usesManagedDirectory: false, usesCommandLine: false, usesConsoleStdin: false, usesProcessIntrospection: false}
+		return Self{usesHeap: false, usesGt: false, usesIocp: false, usesStreaming: false, usesWriteStdout: false, usesWriteStderr: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesUIntToString: false, usesBoolToString: false, usesStrAppend: false, usesStrDecref: false, usesArray: false, usesSet: false, usesMap: false, usesList: false, usesDropTypeParam: false, usesDropExistential: false, usesRetainExistential: false, usesIncref: false, usesRetain: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrRangeEq: false, usesStrFind: false, usesStrContains: false, usesStrSplit: false, usesStrFromBytes: false, usesStrOfBuffer: false, usesMmToCString: false, usesStrBytesView: false, usesStrByteAt: false, usesStrByteAtOrPanic: false, usesManagedArrayCopy: false, usesOpaqueArrayCopy: false, neededCloners: ClonerSet.create(), usesWallClock: false, usesCharAt: false, usesCharCmp: false, usesCharFromCodepoint: false, usesCharAsciiValue: false, usesStrToBytes: false, usesStrToCodepoints: false, usesStrToUtf16: false, usesStrIndexAdvance: false, usesStrIndexSlice: false, usesUcdCategory: false, usesCharSetMake: false, usesCharSetDecref: false, usesCharSetContains: false, usesStrTrim: false, usesManagedFile: false, usesManagedDirectory: false, usesCommandLine: false, usesConsoleStdin: false, usesProcessIntrospection: false}
 	end 'create'
 end 'RuntimeUsage'
 
@@ -1120,9 +1107,10 @@ export function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 	if callee.equals(UcdCategoryName) 'ucdcategory'
 		usage.usesUcdCategory = true
 	end 'ucdcategory'
-	// ⚠ FIRST of the three family closures: the `StringIndex` family's members call into the OTHER two
-	// (`__gr_end`, `__str_find`/`__str_rfind`), so the bits it turns on must themselves be closed over by
-	// the closures below — see `closeStringIndexNeeds`.
+	// ⚠ FIRST of the three family closures: the `StringIndex` family's members used to call into the OTHER
+	// two, so the bits it turns on must themselves be closed over by the closures below — see
+	// `closeStringIndexNeeds`, whose remaining arm reaches only the heap and `__str_copy`. The ORDER is kept
+	// because it is a rule about families rather than about today's arms.
 	// ⚠ The `CharacterSet` family closes into the THREE below it — `__str_trim` walks `__gr_end` and mints
 	// through `__char_at`, and `__cs_contains` decodes a codepoint — so it must record FIRST, exactly as the
 	// `StringIndex` family does and for the identical reason: a bit turned on after its family's closure has
@@ -1238,30 +1226,12 @@ end 'recordGraphemeUsage'
 // families. Direct references only; what each referenced body in turn needs is closed by
 // `closeStringIndexNeeds`.
 function recordStringIndexUsage(callee ByteArray, usage RuntimeUsage)
-	if callee.equals(StrIndexMakeName) 'make'
-		usage.usesStrIndexMake = true
-	end 'make'
-	if callee.equals(StrIndexEndName) 'end'
-		usage.usesStrIndexEnd = true
-	end 'end'
-	if callee.equals(StrIndexByteToGraphemeName) 'bidx'
-		usage.usesStrIndexByteToGrapheme = true
-	end 'bidx'
 	if callee.equals(StrIndexAdvanceName) 'advance'
 		usage.usesStrIndexAdvance = true
 	end 'advance'
-	if callee.equals(StrIndexFirstName) 'first'
-		usage.usesStrIndexFirst = true
-	end 'first'
-	if callee.equals(StrIndexLastName) 'last'
-		usage.usesStrIndexLast = true
-	end 'last'
 	if callee.equals(StrIndexSliceName) 'slice'
 		usage.usesStrIndexSlice = true
 	end 'slice'
-	if callee.equals(StrIndexAfterName) 'after'
-		usage.usesStrIndexAfter = true
-	end 'after'
 	closeStringIndexNeeds(usage)
 end 'recordStringIndexUsage'
 
@@ -1273,37 +1243,18 @@ end 'recordStringIndexUsage'
 //
 // ⚠ It is run BEFORE the grapheme and string-method closures in `recordCallUsage`, so the bits it turns on
 // there are themselves closed over by those two. **The cluster walk it used to declare is gone from this
-// argument**: `emitGraphemeWalk` now calls the CORPUS segmenter, whose own needs are ordinary Maxon call
+// argument**: `__strix_advance` calls the CORPUS segmenter, whose own needs are ordinary Maxon call
 // edges rather than bits any closure has to turn on in the right order.
 function closeStringIndexNeeds(usage RuntimeUsage)
-	// `__strix_end` counts the clusters; both searches turn a byte position into a grapheme index; and
-	// every one of the four producers mints its box through the one door.
-	if usage.usesStrIndexEnd 'countsClusters'
-		usage.usesStrIndexMake = true
-	end 'countsClusters'
-	if usage.usesStrIndexFirst 'searchesForward'
-		usage.usesStrFind = true
-		usage.usesStrIndexByteToGrapheme = true
-		usage.usesStrIndexMake = true
-	end 'searchesForward'
-	if usage.usesStrIndexLast 'searchesBackward'
-		usage.usesStrRFind = true
-		usage.usesStrIndexByteToGrapheme = true
-		usage.usesStrIndexMake = true
-	end 'searchesBackward'
-	// `indexAfter` steps ONE cluster through `__strix_advance` and mints its answer through the one door —
-	// two calls its own body makes that no Maxon-module scan can see (`buildStringIndexAfter`).
-	if usage.usesStrIndexAfter 'stepsOneCluster'
-		usage.usesStrIndexAdvance = true
-		usage.usesStrIndexMake = true
-	end 'stepsOneCluster'
-	// Both conversions ARE the cluster walk (`emitGraphemeWalk`), so each pulls in the segmenter. Asked AFTER
-	// the arm above, whose `usesStrIndexAdvance` this must then close over — the ordering discipline this
-	// whole closure exists to make order-independent, applied within it.
-	// The box is one `__mm_alloc`; the slice builds a fused record and blits its bytes in.
-	if usage.usesStrIndexMake 'allocatesABox'
-		usage.usesHeap = true
-	end 'allocatesABox'
+	// The slice builds a fused record and blits its bytes in. `__strix_advance` declares nothing: its one
+	// callee is the CORPUS segmenter, which is an ordinary Maxon call edge the reachability walk finds
+	// (seeded at the op by `StdlibSource.markCorpusCalleesOfSynthesizedRuntime`, since the synthesized
+	// caller does not exist yet when that walk runs).
+	//
+	// ⚠ Six arms went with the six entry points W49 wave 3 deleted. The ORDERING discipline this closure
+	// exists for is unchanged and is why it stays a closure rather than becoming one `if`: `indexAfter`
+	// turned on `__strix_advance` and a later arm then had to close over THAT, which is exactly the
+	// order-dependence a per-arm transitive list cannot avoid.
 	if usage.usesStrIndexSlice 'buildsAString'
 		usage.usesHeap = true
 		usage.usesStrCopy = true
@@ -1358,9 +1309,6 @@ function recordStringMethodUsage(callee ByteArray, usage RuntimeUsage)
 	if callee.equals(StrFindName) 'find'
 		usage.usesStrFind = true
 	end 'find'
-	if callee.equals(StrRFindName) 'rfind'
-		usage.usesStrRFind = true
-	end 'rfind'
 	if callee.equals(StrContainsName) 'contains'
 		usage.usesStrContains = true
 	end 'contains'
@@ -1398,7 +1346,7 @@ function closeStringMethodNeeds(usage RuntimeUsage)
 	if usage.usesStrContains or usage.usesStrSplit 'needsFind'
 		usage.usesStrFind = true
 	end 'needsFind'
-	if usage.usesStrFind or usage.usesStrRFind 'needsRangeEq'
+	if usage.usesStrFind 'needsRangeEq'
 		usage.usesStrRangeEq = true
 	end 'needsRangeEq'
 	// `split` answers a degenerate (empty) delimiter with a CLONE of the receiver — the one shape its loop
@@ -1472,9 +1420,6 @@ export function installStringRuntime(module StdModule, usage RuntimeUsage)
 	if usage.usesStrFind 'strfind'
 		buildStrFind(module)
 	end 'strfind'
-	if usage.usesStrRFind 'strrfind'
-		buildStrRFind(module)
-	end 'strrfind'
 	if usage.usesStrContains 'strcontains'
 		buildStrContains(module)
 	end 'strcontains'
@@ -2358,87 +2303,6 @@ function buildStrFind(module StdModule)
 
 	module.functions.push(func)
 end 'buildStrFind'
-
-// ⭐ **`__str_rfind(hay, needle) -> BytePos` — THE ABSOLUTE INDEX OF THE LAST OCCURRENCE, or
-// `StrFindNotFound`.** The stdlib's `findLastIn` (`stdlib/String.maxon:1003-1028`): scan DOWN from the last
-// position a match could start at, first-byte-reject each candidate, and verify a hit with
-// `__str_range_eq`. `__str_find`'s mirror in every respect but the direction, and it keeps the same
-// first-byte check for the same measured reason (`__str_range_eq` is a real call and nearly every
-// candidate mismatches on byte 0).
-//
-// ⭐ **THE DOWNWARD SCAN IS WHAT MAKES AN OVERLAPPING NEEDLE ANSWER THE RIGHTMOST START**, which is the
-// behaviour `find-last-overlapping` pins: `"aaa".findLast("aa")` is 1, not 0. A forward scan keeping the
-// last hit would give the same answer here but pay the whole haystack every time.
-//
-// ⚠ **THE EMPTY NEEDLE ANSWERS THE BYTE LENGTH, NOT 0**, and that is the stdlib's answer
-// (`findLastIn:1006-1008`) rather than a choice: the empty string occurs at every position, and the LAST
-// such position is the end. `__str_find`'s empty-needle arm answers its `startPos` for the same reason
-// read forwards. Both are answered before the loop because the loop loads `needle[0]`, which an empty
-// String's buffer has no byte for.
-//
-// ⚠ **THE LOOP BOUND GOES NEGATIVE FOR A NEEDLE LONGER THAN THE HAYSTACK**, and the header's `i < 0` test
-// answers that correctly on the first iteration — so there is no separate too-long case, exactly as
-// `__str_find`'s `i > last` needs none.
-function buildStrRFind(module StdModule)
-	var func = IrFunction.createFromStd(StrRFindName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
-	var ids = ValueMinter.create(2)
-
-	var entry = module.addBlock(func, label: b"entry")
-	var emptyNeedle = module.addBlock(func, label: b"emptyNeedle")
-	var scan = module.addBlock(func, label: b"scan")
-	var header = module.addBlock(func, label: b"header")
-	var probe = module.addBlock(func, label: b"probe")
-	var verify = module.addBlock(func, label: b"verify")
-	var step = module.addBlock(func, label: b"step")
-	var found = module.addBlock(func, label: b"found")
-	var notFound = module.addBlock(func, label: b"notFound")
-
-	emitParams(module, block: entry, count: 2)
-	let hay = 0 as ValueId
-	let needle = 1 as ValueId
-
-	let hayLen = emitLoadField(module, block: entry, record: hay, offset: StringLengthOffset, ids: ids)
-	let hayBuf = emitLoadField(module, block: entry, record: hay, offset: StringBufferOffset, ids: ids)
-	let needleLen = emitLoadField(module, block: entry, record: needle, offset: StringLengthOffset, ids: ids)
-	let needleBuf = emitLoadField(module, block: entry, record: needle, offset: StringBufferOffset, ids: ids)
-	let zero = emitConst(module, block: entry, value: 0, ids: ids)
-	let isEmpty = emitCmp(module, block: entry, a: needleLen, b: zero, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(entry, op: StdOp.condBranch(isEmpty, thenBlockId: emptyNeedle.id, elseBlockId: scan.id))
-
-	module.setTerminator(emptyNeedle, op: StdOp.ret(hayLen))
-
-	let firstByte = emitLoadByteAt(module, block: scan, addr: needleBuf, ids: ids)
-	let last = emitBin(module, block: scan, a: hayLen, b: needleLen, opcode: StdBinOpcode.sub, ids: ids)
-	module.setTerminator(scan, op: StdOp.branch(header.id))
-
-	let i = ids.mint()
-	header.blockArgs.push(IrBlockArg.create(i, argType: StdType.i64))
-	scan.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(last)))
-
-	let before = emitCmp(module, block: header, a: i, b: zero, pred: StdCmpPred.lt, ids: ids)
-	module.setTerminator(header, op: StdOp.condBranch(before, thenBlockId: notFound.id, elseBlockId: probe.id))
-
-	let candidate = emitLoadByteIndexed(module, block: probe, base: hayBuf, index: i, ids: ids)
-	let firstMatches = emitCmp(module, block: probe, a: candidate, b: firstByte, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(probe, op: StdOp.condBranch(firstMatches, thenBlockId: verify.id, elseBlockId: step.id))
-
-	let hayAddr = emitBin(module, block: verify, a: hayBuf, b: i, opcode: StdBinOpcode.add, ids: ids)
-	let whole = ids.mint()
-	module.appendOp(verify, op: StdOp.call(whole, callee: StrRangeEqName, args: threeArgs(hayAddr, second: needleBuf, third: needleLen)))
-	module.setTerminator(verify, op: StdOp.condBranch(whole, thenBlockId: found.id, elseBlockId: step.id))
-
-	let one = emitConst(module, block: step, value: 1, ids: ids)
-	let iPrev = emitBin(module, block: step, a: i, b: one, opcode: StdBinOpcode.sub, ids: ids)
-	module.setTerminator(step, op: StdOp.branch(header.id))
-	step.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(iPrev)))
-
-	module.setTerminator(found, op: StdOp.ret(i))
-
-	let missing = emitConst(module, block: notFound, value: StrFindNotFound, ids: ids)
-	module.setTerminator(notFound, op: StdOp.ret(missing))
-
-	module.functions.push(func)
-end 'buildStrRFind'
 
 // `__str_contains(self, needle) -> bool` — the stdlib's `contains(needle String)` (`:385-390`): a whole-string
 // `find`, turned from an INDEX into a PREDICATE. Not a wrapper around `__str_find` but a change of answer

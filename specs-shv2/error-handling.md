@@ -2132,9 +2132,22 @@ end 'main'
 ```
 
 <!-- test: throws-a-stdlib-error-has-a-user-declared-spelling -->
-⭐ **THE CONTROL FOR THE CASE ABOVE**: the identical program with the author's own `enum SearchFailed
-implements Error` compiles and answers 2 — the byte position of the space in `"ab cd"` — so nothing this
-rung refuses leaves a program with no way to say what it meant.
+⭐ **THE CONTROL FOR THE CASE ABOVE**: the author's own `enum SearchFailed implements Error` compiles and
+answers 2 — the byte position of the space in `"ab cd"` — so nothing that rung refuses leaves a program with
+no way to say what it meant.
+
+⛔⛔ **THIS CASE SPENT ITS WHOLE LIFE ASSERTING A WRONG ANSWER, AND W49 WAVE 3 IS WHAT MADE THE COMPILER
+DISAGREE WITH IT.** It was authored with `let idx = try s.findFirst(" ")` and NO `otherwise` under a
+`throws SearchFailed` clause — i.e. propagating a `StringError` out of a function that declares it throws
+something else. **The runnable oracle refuses exactly that, and always has:** `error E3059: try propagates
+'StringError' but enclosing function throws 'SearchFailed' — add 'otherwise' to convert` (MEASURED on the
+C# bootstrap, this exact program). shv2 compiled it and exited 2, because `findFirst` was a SYNTHESIZED
+runtime callee (`__strix_first`) and E3059's `try` gate reads the thrown type off a DECLARED signature,
+which a synthesized callee does not have. Retiring `findFirst` onto `stdlib/String.maxon` gives it one, and
+shv2 now raises the oracle's diagnostic at the oracle's position.
+⇒ **The fix is the `otherwise` the diagnostic asks for, which is also what the case's own prose describes**
+— converting a stdlib error into the author's own spelling is the whole point of the control, and it was
+never actually doing it. Both compilers answer 2 on the program below.
 ```maxon
 typealias Num = int(0 to 1000)
 
@@ -2143,7 +2156,7 @@ enum SearchFailed implements Error
 end 'SearchFailed'
 
 function firstSpace(s String) returns Num throws SearchFailed
-	let idx = try s.findFirst(" ")
+	let idx = try s.findFirst(" ") otherwise throw SearchFailed.notFound
 	return idx.bytePos() as Num
 end 'firstSpace'
 

@@ -56,7 +56,7 @@ better answer, and it costs nothing: no `union`/`enum` in `stdlib/` declares a s
 ⚠ **Known cosmetic debt, recorded rather than fixed here:** the borrowed-return refusal below renders
 the receiver's type as `` `int` ``, because a declared enum erases to `integer` in `TypeResolution`.
 It is confusing, never wrong at runtime, and its one-place cure is the same display-name funnel for
-compiler-owned and erased types that `__StringIndex` already needs.
+compiler-owned and erased types that `__CharacterSet` already needs.
 
 ## An enum BODY now has two kinds of member, and THREE readers walk it
 

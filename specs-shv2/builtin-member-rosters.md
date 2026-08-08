@@ -9,7 +9,7 @@ category: language
 
 ## Documentation
 
-Every builtin type shv2 carries methods for — `String`, `Character`, `__StringIndex`, `Array`,
+Every builtin type shv2 carries methods for — `String`, `Character`, `StringIndex`, `Array`,
 `__ManagedMemory` — refuses an unknown member with a sentence that names the members it *does* serve.
 That sentence used to be a hand-written second copy of the dispatch's own arm list, and one copy of one
 fact is the whole of what this file is about: the list is now built by pushing **the very constants the
@@ -25,7 +25,9 @@ Two directions of drift are closed by the pair, and neither is closed by the oth
 `String`'s half is pinned in `specs-shv2/stdlib-only-string-methods.md` — the defect the derivation was
 built for was that its roster omitted `addressableBytes` and `byteAtOrPanic`, two real dispatched
 methods, so the case that names them lives beside the visibility rule they are refused under.
-`__StringIndex`'s is pinned by `string-index.md`'s `error.a-string-index-has-two-methods`.
+`StringIndex`'s is pinned by `string-index.md`'s `error.a-string-index-has-two-methods`. That type is
+no longer the COMPILER's — `stdlib/String.maxon` declares it and W49 wave 3 struck shv2's second layout —
+but its two accessors keep their arms under the roster-wins rule, so the roster keeps its obligation.
 
 `Character`'s is here, because it had none at all and its own spec file (`specs-shv2/character-type.md`)
 is ported byte-identical from `/specs` and may not gain an shv2-authored case.

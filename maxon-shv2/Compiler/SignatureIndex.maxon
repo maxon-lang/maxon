@@ -2830,73 +2830,62 @@ end 'rangeHoldsEverySlotValue'
 // which aliases the program happens to declare.
 let SynthesizedByteElementName = b"__ManagedByte"
 
-// ⭐⭐ **THE COMPILER-OWNED `StringIndex` TYPE (P1.8 slice B2), AND WHY IT WEARS A RESERVED NAME.**
+// ⭐⭐ **THE `StringIndex` TYPE — THE CORPUS'S DECLARATION, AND SINCE W49 WAVE 3 THE ONLY ONE.**
 //
-// The reference declares it as an ordinary two-field `type` (`stdlib/String.maxon:917-946`: `var charIdx as
-// GraphemeIndex`, `var bytePosition as BytePos`), so shv2 registers an ordinary two-field `StructLayout`
-// and gets the whole struct-value machinery for it — a binding's type, aggregate identity on a reassign,
-// and a scope-exit drop through the trivial-struct `__mm_decref` — with no new `ValueTypeTag` and no new
-// ownership rule. shv2 has struct VALUES; what it does not have is a `type` declaration for this one, and
-// this is that declaration, made by the compiler.
+// `stdlib/String.maxon:917-946` declares it as an ordinary two-field `type` (`var charIdx as
+// GraphemeIndex`, `var bytePosition as BytePos`), so the ordinary declaration sweep registers its
+// `StructLayout` and the whole struct-value machinery follows — a binding's type, aggregate identity on a
+// reassign, and a scope-exit drop through the trivial-struct `__mm_decref` — with no new `ValueTypeTag`
+// and no new ownership rule.
 //
-// ⚠ **IT IS NAMED `__StringIndex`, NOT `StringIndex`, AND THAT IS A SAFETY PROPERTY RATHER THAN A STYLE.**
-// The registry is a MAP keyed by name: a user program declaring its own `type StringIndex` would land in
-// the same bucket, and whichever write ran last would win — after which `s.startIndex()` mints a 16-byte
-// box the parser then reads through the USER's field table, at the user's offsets and widths. Silent
-// memory corruption, decided by file order. The `__` prefix makes the contest unrepresentable instead of
-// merely unlikely: `Parser.requireUnreservedName` refuses (E2051) every declaration of a `__`-prefixed
-// name, so no source can spell this one. It is the SAME reserved space `mangleGenericInstance` mints a
-// contested instance name into, applied one level up — and the cost is nil, because the corpus never
-// writes `StringIndex` in a type position at all (measured: zero occurrences across `specs/`). A
-// `StringIndex` is only ever a value flowing from `startIndex`/`endIndex`/`findFirst`/`findLast` into
-// `slice`/`charIndex()`/`bytePos()`/`==`, none of which name the type.
-// ⇒ The consequence to know: a `StringIndex` cannot cross a function boundary, because a parameter or
-// return type would have to name it. The reference allows that and shv2 does not, until the type gains a
-// user-visible spelling and, with it, a builtin-redeclaration diagnostic to defend it.
-export let StringIndexTypeName = b"__StringIndex"
+// ⛔⛔ **IT WAS SPELLED `__StringIndex` AND THAT WAS A SECOND DECLARATION OF ONE TYPE, WHICH IS THIS
+// PROJECT'S SIGNATURE BUG WEARING A SAFETY PROPERTY'S CLOTHES.** shv2 registered its own two-field layout
+// under the RESERVED name because *"what it does not have is a `type` declaration for this one"* — true
+// when it was written, and false since W17 listed `stdlib/String.maxon`. What the second declaration then
+// bought was not safety but an UNSATISFIABLE argument type: the corpus's own `charAt(idx StringIndex)` and
+// `indexBefore(idx StringIndex)` were reachable through `memberBelongsToTheCorpus`, and every
+// call to one was **`E3005 argument type mismatch for 'idx': expected 'StringIndex', got '__StringIndex'`**
+// — a program could hold an index of one declaration or the other and never one that satisfied both. Wave
+// 3 retires the five producers (`startIndex`, `endIndex`, `findFirst`, `findLast`, `indexAfter`) onto the
+// corpus, which leaves the corpus's declaration alone, and both members resolve with nothing added.
+//
+// ⭐ **THE SAFETY PROPERTY THE RESERVED SPELLING BOUGHT IS KEPT, BY THE ROUTE `String` AND `Character`
+// ALREADY USE.** The registry is a MAP keyed by name, so a user's `type StringIndex` would land in the
+// corpus's bucket and `slice` would then read a box through the USER's field table — silent memory
+// corruption decided by file order, and MEASURED to compile on the tree before this rung. `StringIndex` is
+// therefore on `TypeResolution.isCompilerOwnedTypeName` now: `declarationContestsACompilerOwnedName`
+// admits the corpus's declaration and drops a user's, and `requireTypeNameNotCompilerOwned` reports E2015
+// at it. One declaration, one bucket, and the contest is unrepresentable rather than merely diagnosed —
+// which is what the `__` prefix was doing, minus the second layout.
+//
+// ⇒ And the consequence the reserved name carried is GONE with it: a `StringIndex` can now cross a
+// function boundary, because the name it needs in a parameter or return type is the one the program has.
+export let StringIndexTypeName = b"StringIndex"
 
-// Its two fields, in the reference's own declaration ORDER — which is the layout, since
-// `StructLayout.offsetOfField` derives an offset from the index. Both are `var` in the reference and
-// NEITHER is exported: the reference reaches them through the `charIndex()`/`bytePos()` accessors, and a
-// non-exported field is E3014 from anywhere but the declaring type, which here is nowhere. Immutable
-// because nothing writes a `StringIndex` after it is minted.
-let StringIndexCharIdxFieldName = b"charIdx"
-let StringIndexBytePosFieldName = b"bytePosition"
-
-// ⭐ **THE LAYOUT, AND THE CHECK THAT IT MATCHES THE BOX THE RUNTIME BUILDS.** Two readers describe this
-// one shape and they must not drift: the PARSER reads the fields through `emitFieldLoad`, which derives
-// offsets from this layout, while `__strix_make` WRITES them through `StringIndexRuntime`'s own
-// constants. The assertions below are what make that pair a checked invariant rather than a promise —
-// `buildStringRecordBytes`'s `appendRecordField` discipline, applied to a struct box.
-function stringIndexLayout() returns StructLayout
-	var layout = StructLayout.createCompilerOwned(StringIndexTypeName)
-	layout.addField(StringIndexCharIdxFieldName, declaredType: MaxonType.integer, mutable: false, tier: Visibility.file, defaultValue: FieldDefault.none, declaredSurface: sharedEmptyDeclaredSurface)
-	layout.addField(StringIndexBytePosFieldName, declaredType: MaxonType.integer, mutable: false, tier: Visibility.file, defaultValue: FieldDefault.none, declaredSurface: sharedEmptyDeclaredSurface)
-
-	if layout.offsetOfField(StringIndexCharIdxFieldIndex) != StringIndexCharIdxOffset or layout.offsetOfField(StringIndexBytePosFieldIndex) != StringIndexBytePosOffset 'offsetDrift'
-		panic("stringIndexLayout: the struct layout puts `charIdx`/`bytePosition` at {layout.offsetOfField(StringIndexCharIdxFieldIndex)}/{layout.offsetOfField(StringIndexBytePosFieldIndex)} but `__strix_make` writes them at {StringIndexCharIdxOffset}/{StringIndexBytePosOffset} — the parser's field reads and the runtime's field writes have drifted")
-	end 'offsetDrift'
-	if layout.sizeBytes() as ParsedInt != StringIndexBoxBytes 'sizeDrift'
-		panic("stringIndexLayout: the struct layout is {layout.sizeBytes()} bytes but `__strix_make` allocates {StringIndexBoxBytes} — the box the runtime builds and the box the parser reads have drifted")
-	end 'sizeDrift'
-	return layout
-end 'stringIndexLayout'
-
-// The two fields' declaration indices — what `Parser.dispatchStringIndexMethod` hands `emitFieldLoad`,
-// and what the drift check above reads the offsets at. Named because an index IS the identity here (see
-// `StructLayout.offsetOfField`), so a bare `0`/`1` at a read site is exactly the magic value the rule
-// against them is for.
+// The two fields' declaration indices — what `Parser.dispatchStringIndexMethod` and `parseStringSlice`
+// hand `emitFieldLoad`, against the layout the corpus's declaration registered. Named because an index IS
+// the identity here (see `StructLayout.offsetOfField`), so a bare `0`/`1` at a read site is exactly the
+// magic value the rule against them is for; and they are the CORPUS's declaration order
+// (`stdlib/String.maxon:918-919`), which is the only thing that decides an offset.
 export let StringIndexCharIdxFieldIndex = 0 as FieldIndex
 export let StringIndexBytePosFieldIndex = 1 as FieldIndex
 
 // ⭐ **THE COMPILER-OWNED `CharacterSet` TYPE (P1.8 Slice D).** Registered under the RESERVED name
-// `__CharacterSet` for the reason `__StringIndex` is (see that constant): a user `type CharacterSet` and
-// this synthesized layout would otherwise contest one bucket, and the loser's box would be read through
-// the winner's field table. `Parser.requireUnreservedName` refuses (E2051) every `__`-prefixed
-// declaration, so no source can spell this one.
-// ⇒ The consequence to know, and it is `StringIndex`'s: a `CharacterSet` cannot cross a function
-// boundary, because a parameter or return type would have to NAME it. Every corpus use is a value flowing
-// from a `CharacterSet.<accessor>()` straight into `contains`/`trim` or a local `let`, which names nothing.
+// `__CharacterSet`: a user `type CharacterSet` and this synthesized layout would otherwise contest one
+// bucket, and the loser's box would be read through the winner's field table.
+// `Parser.requireUnreservedName` refuses (E2051) every `__`-prefixed declaration, so no source can spell
+// this one.
+// ⇒ The consequence to know: a `CharacterSet` cannot cross a function boundary, because a parameter or
+// return type would have to NAME it. Every corpus use is a value flowing from a
+// `CharacterSet.<accessor>()` straight into `contains`/`trim` or a local `let`, which names nothing.
+//
+// ⚠⚠ **`StringIndex` USED TO BE ITS TWIN AND IS THE CAUTIONARY TALE NOW (W49 wave 3).** It carried this
+// exact arrangement — reserved `__StringIndex` beside a bare source spelling — until the corpus's own
+// `type StringIndex` made it a SECOND DECLARATION of one type, at which point the reserved name stopped
+// buying safety and started making the corpus's `charAt(idx StringIndex)` unsatisfiable. The cure was to
+// keep the RESERVATION and drop the second LAYOUT (`StringIndexTypeName`), which is the shape to reach for
+// the day `stdlib/CharacterSet.maxon` is listed — see `ProgramSignatures.recordStruct`, which already
+// names that listing as the decision it no longer refuses for you.
 export let CharacterSetTypeName = b"__CharacterSet"
 
 // The user-visible spelling -- what a source `CharacterSet.letters()` writes, and the ONLY door the type
@@ -2907,18 +2896,21 @@ export let CharacterSetBuiltinName = b"CharacterSet"
 // with a runtime-owned destructor that closes it on drop — `specs/managed-file.md`'s "Type Structure"
 // states the single `_handle` field and the RAII contract.
 //
-// ⚠ **UNLIKE `__StringIndex` AND `__CharacterSet`, THE REGISTRY NAME AND THE USER-FACING NAME ARE THE
-// SAME BYTES, AND THAT IS THE WHOLE REASON THIS TYPE CAN DO WHAT THEY CANNOT.** Those two are registered
-// under a reserved `__`-prefixed name while the source spells a bare one, and `CharacterSetTypeName`'s
-// comment draws the consequence: such a type "cannot cross a function boundary, because a parameter or
-// return type would have to NAME it". The corpus REQUIRES this one to cross — `specs/managed-file.md`
-// writes `path __ManagedMemory` as a declared parameter and `export var file as __ManagedFile` as a
-// field — and it can, because the name a user writes IS the name the layout is registered under, so
-// there is no second spelling to fail to resolve.
+// ⚠ **UNLIKE `__CharacterSet`, THE REGISTRY NAME AND THE USER-FACING NAME ARE THE SAME BYTES, AND THAT IS
+// THE WHOLE REASON THIS TYPE CAN DO WHAT IT CANNOT.** That one is registered under a reserved
+// `__`-prefixed name while the source spells a bare one, and `CharacterSetTypeName`'s comment draws the
+// consequence: such a type "cannot cross a function boundary, because a parameter or return type would
+// have to NAME it". The corpus REQUIRES this one to cross — `specs/managed-file.md` writes
+// `path __ManagedMemory` as a declared parameter and `export var file as __ManagedFile` as a field — and
+// it can, because the name a user writes IS the name the layout is registered under, so there is no
+// second spelling to fail to resolve.
 // ⇒ **The `__` prefix is therefore NOT a barrier here, and that was MEASURED rather than assumed:**
 // `requireUnreservedName`'s E2051 refuses a `__`-prefixed DECLARATION (`type __Foo`), not a `__`-prefixed
-// name in a TYPE POSITION. A field declared `as __StringIndex` today reports `E3011 Unknown type`, not
+// name in a TYPE POSITION. A field declared `as __CharacterSet` today reports `E3011 Unknown type`, not
 // E2051 — it fails to RESOLVE, and resolving is exactly what registering the layout fixes.
+// ⇒ And `StringIndex` is the third answer to the same question: it took the bare name outright at W49
+// wave 3 and crosses a boundary now, because the CORPUS declares it and a reservation over *whose*
+// declaration wins needs no second spelling at all (`StringIndexTypeName`).
 export let ManagedFileTypeName = b"__ManagedFile"
 
 // ⭐ **`__ManagedMemory` IS AN `Array`, NOT A TYPE OF ITS OWN (R4.1, generalized by R4.4).** Registered as
@@ -3435,24 +3427,19 @@ export let ManagedMemoryInvalidAllocationCaseName = b"invalidAllocation"
 export let StringInitMethod = b"init"
 export let StringInitManagedParamName = b"managed"
 
-// ⭐ **THE TWO THROWING `String` SEARCHES (P1.8 slice B2), MOVED OUT OF `Parser.maxon` AT D12.** They are the
-// only `String` methods whose runtime callee can reach an E3057, so `StringIndexRuntime` needs their source
-// spelling to name the construct the author wrote — and every sibling family's method constants already live
-// here. A file-private `let` in the parser forced the alternative: a second `b"findFirst"` in the runtime
-// file, one spelling of one fact in two places.
-export let StringFindFirstMethod = b"findFirst"
-export let StringFindLastMethod = b"findLast"
-
-// `s.indexAfter(idx)` — `stdlib/String.maxon:387-392`, the FORWARD step to the next grapheme boundary. It
-// lives here for the same reason its two neighbours do and no other: it is the third `String` method whose
-// runtime callee can reach an E3057, so `stringIndexSourceMethodName` has to answer with the very constant
-// `dispatchStringMethod` matches the source token against.
-export let StringIndexAfterMethod = b"indexAfter"
-
-// `c.asciiValue()` — `stdlib/Character.maxon:154-166`, the one THROWING `Character` member. It lives here
-// for `StringIndexAfterMethod`'s reason and no other: `GtRuntime.runtimeCalleeSourceMethod` has to answer
-// E3057 with the very constant `dispatchCharacterMethod` matches the source token against, and a
-// file-private `let` in the parser would force a second `b"asciiValue"` in the runtime layer.
+// ⭐ **`c.asciiValue()` — `stdlib/Character.maxon:154-166`, the one THROWING member left with a SYNTHESIZED
+// arm.** It lives here rather than as a file-private `let` in the parser because
+// `GtRuntime.runtimeCalleeSourceMethod` has to answer E3057 with the very constant
+// `dispatchCharacterMethod` matches the source token against, and a parser-private spelling would force a
+// second `b"asciiValue"` in the runtime layer — one fact in two places.
+//
+// ⚠ **IT USED TO HAVE THREE NEIGHBOURS, AND THEY LEFT WITH THEIR ARMS (W49 wave 3).**
+// `StringFindFirstMethod`/`StringFindLastMethod` (D12) and `StringIndexAfterMethod` were here for exactly
+// this reason and no other: `__strix_first`/`__strix_last`/`__strix_after` were the throwing runtime
+// callees behind `findFirst`/`findLast`/`indexAfter`, and `stringIndexSourceMethodName` mapped each back
+// to the source spelling so the E3057 named the author's own construct. All three members are the corpus's
+// now, so their E3057 comes from the ORDINARY declared-function path, which reads the callee's real name
+// and needs no map — the three constants, the map and the predicate over it are gone together.
 export let CharacterAsciiValueMethod = b"asciiValue"
 
 // ⭐ **THE ERROR EVERY `__ManagedFile` OPERATION THROWS (R4.1)**, and the type a handler's `match e`
@@ -9665,25 +9652,19 @@ export type ProgramSignatures
 		return true
 	end 'structIsConstructibleWithin'
 
-	// ⭐ **REGISTER THE COMPILER-OWNED `StringIndex` TYPE (P1.8 slice B2).** Called by the declaration
-	// SWEEP when a file's tokens name one of the four methods that PRODUCE a `StringIndex`
-	// (`Parser.atStringIndexProducer`) — the same shape `internArrayByteInstance` and
-	// `internBuiltinIntegerInstance` are reached in, and for the same reason: the type has no declaration
-	// to register from, and a program that never takes a String index must not carry the entry. Idempotent,
-	// so the sweep is the WRITE and every parser read is a pure read; a per-file parse is therefore never
-	// the first to mutate the shared registry.
-	export function registerStringIndexType()
-		if self.structTypes.contains(StringIndexTypeName) 'alreadyRegistered'
-			return
-		end 'alreadyRegistered'
-		self.structTypes.upsert(StringIndexTypeName, value: stringIndexLayout())
-	end 'registerStringIndexType'
-
-	// The compiler-owned `StringIndex` layout, for the parser's field reads. It PANICS rather than
-	// answering when the type is unregistered, because every caller reaches it through a value the parser
-	// itself minted with the `structRef` tag — which the sweep must already have registered the layout for.
+	// The `StringIndex` layout, for the parser's field reads (`slice`'s two byte positions, and the two
+	// accessor arms). It PANICS rather than answering when the type is absent, because the declaration it
+	// comes from is `stdlib/String.maxon`'s and that module is LISTED unconditionally — so a miss is not a
+	// program that happens not to use indices, it is a corpus the loader failed to fold.
+	//
+	// ⚠ **THERE IS NO `registerStringIndexType` ANY MORE, AND ITS ABSENCE IS THE POINT (W49 wave 3).** The
+	// sweep used to walk every token of every file looking for one of the four producer method names, purely
+	// to decide whether to upsert a compiler-owned layout the compiler itself had written
+	// (`Parser.atStringIndexProducer`, `StringIndexProducerBit`). The corpus declares the type, so the
+	// ordinary declaration fold registers it in every program and there is nothing to decide — the whole
+	// probe, its bit, and the second layout it wrote are gone.
 	export function stringIndexLayoutOrPanic() returns StructLayout
-		return try self.structTypes.get(StringIndexTypeName) otherwise panic("ProgramSignatures.stringIndexLayoutOrPanic: `{String.from(StringIndexTypeName)}` is not registered — every StringIndex value is minted by a method the sweep's `atStringIndexProducer` scan sees, and that scan is what calls `registerStringIndexType`")
+		return try self.structTypes.get(StringIndexTypeName) otherwise panic("ProgramSignatures.stringIndexLayoutOrPanic: `{String.from(StringIndexTypeName)}` is not registered — it is declared by `stdlib/String.maxon`, which `StdlibLoader` lists in every program, so the declaration fold has not run or has dropped it")
 	end 'stringIndexLayoutOrPanic'
 
 	// ⭐ **REGISTER THE COMPILER-OWNED `CharacterSet` TYPE (P1.8 Slice D)** — the `StringIndex` twin, called
@@ -9709,9 +9690,11 @@ export type ProgramSignatures
 		self.structTypes.upsert(CharacterSetTypeName, value: characterSetLayout(charsInstance))
 	end 'registerCharacterSetType'
 
-	// ⭐ **THE LAYOUT, AND THE CHECK THAT IT MATCHES THE BOX THE RUNTIME BUILDS** — `stringIndexLayout`'s
-	// discipline, for the same reason: the front end states this type's shape here and `__cs_make` writes it
-	// through `CharacterSetRuntime`'s constants, and two readers of one shape is the pair that drifts.
+	// ⭐ **THE LAYOUT, AND THE CHECK THAT IT MATCHES THE BOX THE RUNTIME BUILDS** — the last compiler-owned
+	// layout that needs one, and the reason is the pair it is one half of: the front end states this type's
+	// shape here and `__cs_make` writes it through `CharacterSetRuntime`'s constants, so two readers describe
+	// one shape. (`__StringIndex` was the other, until W49 wave 3 gave the type back to its corpus
+	// declaration and left it with one reader.)
 	function characterSetLayout(charsInstance GenericInstanceId) returns StructLayout
 		var layout = StructLayout.createCompilerOwned(CharacterSetTypeName)
 		layout.addField(CharacterSetCharsFieldName, declaredType: MaxonType.genericInstance(charsInstance), mutable: false, tier: Visibility.file, defaultValue: FieldDefault.none, declaredSurface: sharedEmptyDeclaredSurface)
@@ -9850,9 +9833,9 @@ export type ProgramSignatures
 
 	// --- Synthesized TUPLE types (P1.10) ---
 	//
-	// ⭐ **THE PARSER IS THE ONLY PRODUCER, AND IT REGISTERS INTO THIS INDEX DIRECTLY.** Every other
-	// compiler-owned layout (`__StringIndex`, `__CharacterSet`) is registered by the declaration SWEEP,
-	// because a TOKEN scan can see the method that produces one. A tuple's identity is its ELEMENT TYPES, and
+	// ⭐ **THE PARSER IS THE ONLY PRODUCER, AND IT REGISTERS INTO THIS INDEX DIRECTLY.** The other
+	// compiler-owned layout (`__CharacterSet`) is registered by the declaration SWEEP, because a TOKEN scan
+	// can see the method that produces one. A tuple's identity is its ELEMENT TYPES, and
 	// those are known only where the expression is parsed — `let t = (10, 32)` is two `integer`s and a token
 	// scan cannot say so — so the sweep cannot pre-register the set. The registration is nevertheless safe on
 	// exactly the terms that make the sweep-then-read discipline work elsewhere: the layout is a PURE FUNCTION

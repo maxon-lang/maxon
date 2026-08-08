@@ -390,12 +390,14 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 		verifyManagedDirectoryOrdinals(project)
 		verifyArrayRuntimeOrdinals(project)
 		verifyDivisionByZeroOrdinals(project)
-		// ⚠ `StringError` is the SIXTH, and it joined the day the command-line rung made it a seeded
-		// DECLARATION (`Project.builtinStringErrorEnum`) rather than the bytes of a `throws` clause. Before
-		// that its two ordinals in `StringIndexRuntime` answered to nothing; now they are one half of a wire
-		// format whose other half is that enum's case order. See `verifyStringErrorOrdinals`.
-		verifyStringErrorOrdinals(project)
-		// `MapError` is the seventh, and it is here for the same reason: `MapRuntime` transcribes
+		// ⚠ **`StringError` WAS THE SIXTH AND IS NO LONGER CHECKED, BECAUSE NOTHING TRANSCRIBES ITS ORDINALS
+		// ANY MORE (W49 wave 3).** A check here holds a runtime's LITERAL error flag against the enum's case
+		// ORDER; `StringIndexRuntime` spelled `notFound` as 0 and `invalidIndex` as 1 to build the failure
+		// edges of `__strix_first`/`__strix_last`/`__strix_after`. All three members are `stdlib/String.maxon`'s
+		// now, so the corpus `throw StringError.notFound` resolves its ordinal from the declaration itself and
+		// there is no second half to drift from. Re-adding a throwing `__strix_` graph brings the claim back
+		// with it.
+		// `MapError` is here for the reason `StringError` used to be: `MapRuntime` transcribes
 		// `keyNotFound`'s ordinal as a literal to build `__map_get`'s failure edge, while
 		// `Project.builtinMapErrorEnum` declares it by POSITION. See `verifyMapErrorOrdinals`.
 		verifyMapErrorOrdinals(project)

@@ -3660,7 +3660,7 @@ let StringToByteArrayMethod = b"toByteArray"
 // HALVES HAVE BEEN FALSE SINCE W17.** `module` is a contextual modifier this parser recognizes and records
 // (`ModuleModifierName`, `atModuleModifier`, `Visibility.module`), and `stdlib/String.maxon` is a LISTED
 // module whose declarations this compiler reads — that listing is what
-// `byteRecordMemberBelongsToTheCorpus` exists to consult. The gate is still the file's location for a
+// `memberBelongsToTheCorpus` exists to consult. The gate is still the file's location for a
 // different and still-true reason: these four members are served by shv2's own SYNTHESIZED arms, and the
 // roster is asked ahead of the corpus door, so the call never reaches the corpus declaration whose
 // visibility could otherwise have answered. A member retired onto the corpus — `startsWith`, `endsWith`,
@@ -3799,18 +3799,16 @@ let StringTrimMethod = b"trim"
 let StringTrimStartMethod = b"trimStart"
 let StringTrimEndMethod = b"trimEnd"
 
-// ⭐ **THE P1.8 SLICE B2 `StringIndex` METHODS.** Four `String` methods PRODUCE a `StringIndex` — the two
-// ends and the two searches — `slice` CONSUMES two of them, and the index itself answers two accessors.
-// That producer/consumer split is not incidental: it is what the declaration sweep scans for
-// (`atStringIndexProducer`), because a program with no producer can hold no index and needs no layout.
+// ⭐ **WHAT IS LEFT OF THE P1.8 SLICE B2 `StringIndex` FAMILY: THE INDEX'S OWN TWO ACCESSORS.**
+// `charIndex`/`bytePos` are the reference's own names (`stdlib/String.maxon:925-931`), and they are
+// METHODS rather than field reads there and here alike — the two fields are non-exported.
 //
-// `charIndex`/`bytePos` are the reference's own accessor names (`stdlib/String.maxon:925-931`), and they
-// are METHODS rather than field reads there and here alike — the two fields are non-exported.
-// ⚠ `StringFindFirstMethod`/`StringFindLastMethod` are `SignatureIndex`'s (D12) — the two searches are the
-// only `String` methods whose runtime callee reaches an E3057, and the diagnostic's source-method map has to
-// answer with the very constant this dispatch matches on.
-let StringStartIndexMethod = b"startIndex"
-let StringEndIndexMethod = b"endIndex"
+// ⚠ **ALL FIVE PRODUCERS RETIRED ONTO THE CORPUS AT W49 WAVE 3** — `startIndex`, `endIndex`, `findFirst`,
+// `findLast` and `indexAfter` — so no constant for any of them survives here, and neither does the
+// declaration-sweep producer probe they existed for (`atStringIndexProducer`, `StringIndexProducerBit`):
+// the type's layout comes from the corpus's own declaration in every program, so there is nothing left to
+// decide per file. These two arms STAY under the roster-wins rule, which is what keeps `idx.bytePos()` a
+// field load rather than a call on the hottest path the corpus walks.
 let StringIndexCharIndexMethod = b"charIndex"
 let StringIndexBytePosMethod = b"bytePos"
 
@@ -4303,10 +4301,10 @@ end 'arrayWhereClause'
 // through `builtinConformerMethod`, so a name it can supply must be a name this gate admits — one list
 // serving the gate, the message and the drift panic at once.
 //
-// ⚠ **THE RUNG THAT BUILDS ONE OF THE ABSENT NAMES ADDS ITS LINE HERE AND HAS NOTHING ELSE TO REMEMBER.**
-// `indexBefore` waits on a BACKWARD UAX#29 segmenter, `charAt` on `makeCharFromBytes`, and `graphemes` has no
-// consumer yet — facts worth recording, and recorded HERE rather than in the refusal, which no longer
-// enumerates what it lacks (`rosterRefusalSentence`).
+// ⚠ **THE RUNG THAT BUILDS ONE OF THE ABSENT NAMES ADDS ITS LINE HERE AND HAS NOTHING ELSE TO REMEMBER**
+// — `graphemes` is the last one still waiting, on a consumer rather than on a mechanism, and it is
+// recorded HERE rather than in the refusal, which no longer enumerates what it lacks
+// (`rosterRefusalSentence`).
 //
 // ⚠ `addressableBytes` and `byteAtOrPanic` ARE built and ARE on this roster; what they are not is callable
 // from outside `stdlib/`, which is a different gate's rule and is refused by that gate with its own sentence.
@@ -4324,14 +4322,35 @@ end 'arrayWhereClause'
 // does not get built**, which is worse than the two earlier roster omissions: those denied a member that
 // existed, this one denied a member that was fifteen lines away.
 //
+// ⭐⭐ **AND THE FOURTH REVISION IS THAT NEITHER OF THE TWO SURVIVING REASONS WAS THE BLOCKER EITHER (W49
+// wave 3).** `findGraphemeStart` is in `stdlib/helpers/string/grapheme.maxon` and always was; so is
+// `makeCharFromBytes`, in `stdlib/String.maxon` — both members were sitting behind
+// `memberBelongsToTheCorpus`, reachable, and every call to one was refused by **`E3005 argument
+// type mismatch for 'idx': expected 'StringIndex', got '__StringIndex'`**. The blocker was never a
+// missing mechanism at all: it was that shv2 declared its OWN `StringIndex` type beside the corpus's, and
+// the roster's five producers minted the compiler's one. Retiring them leaves a single declaration, and
+// `charAt` and `indexBefore` resolve with nothing added anywhere — pinned by
+// `specs-shv2/string-index.md`'s two walk cases. ⇒ Three revisions of this paragraph each replaced one
+// guessed reason with another; what finally answered it was COMPILING the call and reading the refusal.
+//
 // ⭐⭐⭐ **AND A NAME LEAVING THIS LIST IS NOW A RETIREMENT RATHER THAN A HOLE.** `startsWith`, `endsWith`
-// and `count` (wave 1), then `toLower`, `toUpper`, `replace` and `replaceFirst` (wave 2), were struck
-// here, and that single deletion is the whole of what moved each onto `stdlib/String.maxon`:
-// `byteRecordMemberBelongsToTheCorpus` is asked ahead of `dispatchStringMethod` and consults the corpus
-// for exactly the names this roster does NOT carry, so each of the seven is now an ordinary qualified call
-// to the ordinary declared function the corpus already had (`stdlib/String.maxon:422`, `:430`, `:347`,
-// `:665`, `:670`, `:494` and `:565`). Their arms, their runtime builders and their usage bits went with
-// them; nothing else was edited.
+// and `count` (wave 1), then `toLower`, `toUpper`, `replace` and `replaceFirst` (wave 2), then
+// `findFirst`, `findLast`, `startIndex`, `endIndex` and `indexAfter` (wave 3), were struck here, and that
+// single deletion is the whole of what moved each onto `stdlib/String.maxon`:
+// `memberBelongsToTheCorpus` is asked ahead of `dispatchStringMethod` and consults the corpus
+// for exactly the names this roster does NOT carry, so each of the twelve is now an ordinary qualified
+// call to the ordinary declared function the corpus already had (`stdlib/String.maxon:422`, `:430`,
+// `:347`, `:665`, `:670`, `:494`, `:565`, `:460`, `:464`, `:371`, `:374` and `:387`). Their arms, their
+// runtime builders and their usage bits went with them.
+//
+// ⚠⚠ **WAVE 3 IS THE ONE THAT EDITED SOMETHING ELSE, AND IT HAD TO.** The other eleven members answer with
+// a `String`, a `bool` or an `int` — types the program already agrees on. These five PRODUCE a
+// `StringIndex`, and shv2 held a SECOND declaration of that type under the reserved spelling
+// `__StringIndex` (`SignatureIndex.StringIndexTypeName`, where the whole measurement is recorded). Retiring
+// the producers alone would have left `slice` — which stays, for the overload reason below — demanding the
+// compiler's declaration while every index a program could make was the corpus's. So the second
+// declaration retired with them: the corpus's is the only one now, `slice` reads its layout, and
+// `StringIndex` joins `TypeResolution.isCompilerOwnedTypeName` to keep the one bucket uncontested.
 //
 // ⚠⚠ **A RETIREMENT MOVES THE COST AS WELL AS THE BODY, AND WAVE 2 IS WHERE THAT FIRST BIT.** The corpus
 // `replace`/`replaceFirst` reach `findIn` (`stdlib/String.maxon:980`), which asks `byteAt` — a THROWING,
@@ -4369,11 +4388,6 @@ function stringSurfaceMemberNames() returns ByteArrayArray
 	names.push(Utf16ViewMethod)
 	names.push(IsEmptyMethod)
 	names.push(CloneMethodName)
-	names.push(StringStartIndexMethod)
-	names.push(StringEndIndexMethod)
-	names.push(StringFindFirstMethod)
-	names.push(StringFindLastMethod)
-	names.push(StringIndexAfterMethod)
 	names.push(SliceMethod)
 	names.push(StringTrimMethod)
 	names.push(StringTrimStartMethod)
@@ -4937,13 +4951,19 @@ end 'comparisonOpSpelling'
 
 // Which compiler-owned layouts a file names — the answer `fileNamesProducerMask` walks the tokens once to
 // build, where a walk per probe used to build it one at a time.
-typealias ProducerMask = int(0 to 15)
+//
+// ⚠ **THERE WAS A FOURTH BIT, AND W49 WAVE 3 DID NOT MOVE IT — IT DELETED THE QUESTION.**
+// `StringIndexProducerBit` asked "does this file name `startIndex`/`endIndex`/`findFirst`/`findLast`?",
+// purely so the sweep could decide whether to register a `StringIndex` layout the compiler itself wrote.
+// The corpus declares that type (`stdlib/String.maxon:917`), so the ordinary declaration fold registers it
+// in every program and there is nothing per-file left to answer. The remaining three name types the
+// compiler still owns outright.
+typealias ProducerMask = int(0 to 7)
 
-let StringIndexProducerBit = 1 as ProducerMask
-let CharacterSetProducerBit = 2 as ProducerMask
-let ManagedFileProducerBit = 4 as ProducerMask
-let ManagedDirectoryProducerBit = 8 as ProducerMask
-let AllProducerBits = 15 as ProducerMask
+let CharacterSetProducerBit = 1 as ProducerMask
+let ManagedFileProducerBit = 2 as ProducerMask
+let ManagedDirectoryProducerBit = 4 as ProducerMask
+let AllProducerBits = 7 as ProducerMask
 
 // --- Character literals ---
 //
@@ -8705,28 +8725,25 @@ export type Parser
 		// unreferenced instance has no descriptor or destructor synthesized (both gate on usage), so it
 		// costs a registry entry and no codegen.
 		var hasByteViewCall = false
-		// A `.startIndex` / `.endIndex` / `.findFirst` / `.findLast` — the four String methods that PRODUCE a
-		// `StringIndex` (P1.8 Slice B2), whose compiler-owned `StructLayout` the sweep registers. The
-		// PRODUCERS alone are the trigger and that is exact, not an approximation: `slice`, `charIndex()` and
-		// `bytePos()` all CONSUME an index, and an index can only have come from one of these four — there is
-		// no other way to make one, and no way to name the type in a signature (see `StringIndexTypeName`).
-		// Like every probe here it reads TOKENS and cannot know the receiver is a String, so it OVER-registers;
-		// an unreferenced layout is a registry entry with no codegen behind it (every runtime function gates on
-		// `RuntimeUsage`).
-		//
-		// ⚠⚠ **IT MAY NOT RIDE THE DECLARATION WALK BELOW, BECAUSE THAT WALK DOES NOT SEE EVERY TOKEN.**
-		// `recordScannedType` consumes a whole `type` declaration — METHOD BODIES INCLUDED — and the loop
-		// resumes past its `end` (`recordScannedEnum` is the same). A producer inside a method body is
-		// therefore invisible to an arm written inside the loop, the layout goes unregistered, and the
-		// parser reaches the box with no shape for it. MEASURED, on three separate programs and two
-		// separate crash sites: `return text.slice(text.startIndex(), length: 2)` in a method took the
-		// compiler down at `stringIndexLayoutOrPanic`, and a method that merely BOUND an index took it down
-		// at `managedNameDropCallee` ("neither a declared struct nor a declared enum/union"). So the probe
-		// gets its OWN complete walk of the token array, which nothing can skip.
-		// ⇒ ONE such walk answers all three (`fileNamesProducerMask`, R4.1). The completeness the paragraph
+		// ⚠⚠ **A LAYOUT PROBE MAY NOT RIDE THE DECLARATION WALK BELOW, BECAUSE THAT WALK DOES NOT SEE EVERY
+		// TOKEN.** `recordScannedType` consumes a whole `type` declaration — METHOD BODIES INCLUDED — and the
+		// loop resumes past its `end` (`recordScannedEnum` is the same). A producer inside a method body is
+		// therefore invisible to an arm written inside the loop, the layout goes unregistered, and the parser
+		// reaches the box with no shape for it. MEASURED, on three separate programs and two separate crash
+		// sites, back when `StringIndex` was one of these probes: `return text.slice(text.startIndex(),
+		// length: 2)` in a method took the compiler down at `stringIndexLayoutOrPanic`, and a method that
+		// merely BOUND an index took it down at `managedNameDropCallee` ("neither a declared struct nor a
+		// declared enum/union"). So the probes get their OWN complete walk of the token array, which nothing
+		// can skip.
+		// ⇒ ONE such walk answers all of them (`fileNamesProducerMask`, R4.1). The completeness the paragraph
 		// above demands is a property of what the walk VISITS, not of how many walks there are.
+		//
+		// ⭐ **AND `StringIndex` IS NO LONGER AMONG THEM (W49 wave 3).** Its four producers retired onto
+		// `stdlib/String.maxon`, which also DECLARES the type — so the layout arrives through the ordinary
+		// declaration fold, in every program, and the question this probe existed to answer is gone rather
+		// than moved. The crash it was written against cannot recur for that type: there is no per-file
+		// decision left to get wrong. The three below still name types the compiler owns outright.
 		let producers = self.fileNamesProducerMask()
-		let hasStringIndexProducer = (producers and StringIndexProducerBit) != 0
 		let hasCharacterSetProducer = (producers and CharacterSetProducerBit) != 0
 		let hasManagedFileProducer = (producers and ManagedFileProducerBit) != 0
 		let hasManagedDirectoryProducer = (producers and ManagedDirectoryProducerBit) != 0
@@ -8911,17 +8928,10 @@ export type Parser
 			_ = index.vectorInstanceForElement(MaxonType.boolean, size: size)
 		end 'internVectorFromLiteral'
 
-		// Register the compiler-owned `StringIndex` type if this file names a method that produces one
-		// (P1.8 Slice B2). After `foldFile`, exactly as the instance interns above are, so a user
-		// declaration folded from this file is already in the registry when the reserved name is added —
-		// and the two can never contest a bucket anyway (see `StringIndexTypeName`).
-		if hasStringIndexProducer 'registerStringIndex'
-			index.registerStringIndexType()
-		end 'registerStringIndex'
-
 		// Register the compiler-owned `CharacterSet` type (and, with it, intern the `Set with Character` its
 		// members live in) if this file names a producer (P1.8 Slice D) — after `foldFile`, exactly as the
-		// `StringIndex` registration above is and for the same reasons.
+		// instance interns above are, so a user declaration folded from this file is already in the registry
+		// when the reserved name is added.
 		if hasCharacterSetProducer 'registerCharacterSet'
 			index.registerCharacterSetType()
 		end 'registerCharacterSet'
@@ -9054,9 +9064,8 @@ export type Parser
 
 	// A `.bytes(` or `.toByteArray(` at the cursor — the TWO spellings of the byte view, whose one
 	// `Array with Byte` the sweep interns. Both are asked in ONE predicate because they are one question
-	// ("can this file materialize a byte array?"), which is the same reason `atStringIndexProducer` asks
-	// about its four methods together — and because they reach one emitter (`parseByteView`), so a
-	// predicate that knew only `bytes` would leave `toByteArray`'s instance to be interned mid-parse.
+	// ("can this file materialize a byte array?"), and because they reach one emitter (`parseByteView`), so
+	// a predicate that knew only `bytes` would leave `toByteArray`'s instance to be interned mid-parse.
 	function atByteViewCall() returns bool
 		return self.atBuiltinMethodCall(ByteViewMethod) or self.atBuiltinMethodCall(StringToByteArrayMethod)
 	end 'atByteViewCall'
@@ -9068,31 +9077,18 @@ export type Parser
 		return self.atBuiltinMethodCall(CodepointViewMethod) or self.atBuiltinMethodCall(Utf16ViewMethod)
 	end 'atDecodedViewCall'
 
-	// A `.startIndex` / `.endIndex` / `.findFirst` / `.findLast` at the cursor — the four methods that
-	// PRODUCE a `StringIndex` (P1.8 Slice B2), for whose compiler-owned layout the sweep is the write.
-	// The four are asked in ONE predicate because they are one question ("can this file make an index?"),
-	// and a fifth producer added to `dispatchStringMethod` without a line here would register no layout —
-	// which is why `stringIndexLayoutOrPanic` panics rather than answering when the entry is missing.
-	function atStringIndexProducer() returns bool
-		return self.atBuiltinMethodCall(StringStartIndexMethod) or self.atBuiltinMethodCall(StringEndIndexMethod) or self.atBuiltinMethodCall(StringFindFirstMethod) or self.atBuiltinMethodCall(StringFindLastMethod)
-	end 'atStringIndexProducer'
-
-	// ⭐ **DOES THIS FILE NAME A `StringIndex` PRODUCER ANYWHERE? — its OWN walk of the token array, and
-	// that is the whole point.** `foldDeclaredSignaturesInto`'s loop is a DECLARATION walk: three of its
-	// arms (`recordScannedType`, `recordScannedEnum`, `recordScannedBinding`) consume a construct whole
-	// and resume past its `end`, so the tokens inside a `type`'s method bodies never reach the loop body.
-	// Every other probe there is an over-approximation whose miss costs an un-interned generic instance
-	// the parser can still intern later; this one's miss costs the compiler's LIFE, because the layout is
-	// the only description of the box's shape and both the field read and the drop demand it.
+	// ⭐ **DOES THIS FILE NAME A `CharacterSet` PRODUCER ANYWHERE? (P1.8 Slice D)** — it needs its OWN
+	// complete walk of the token array, because `foldDeclaredSignaturesInto`'s loop is a DECLARATION walk:
+	// three of its arms (`recordScannedType`, `recordScannedEnum`, `recordScannedBinding`) consume a
+	// construct whole and resume past its `end`, so a `CharacterSet` built inside a `type`'s method body
+	// never reaches the loop body. A question about the whole file is answered by reading the whole file.
+	// ⇒ That walk is shared: `fileNamesProducerMask` asks this probe and the two below on one pass.
 	//
-	// A question about the whole file is therefore answered by reading the whole file. It restores the
-	// cursor, so it is invisible to the caller, and it stops at the first hit — the answer is a bool.
-	// ⇒ That walk is now shared: `fileNamesProducerMask` asks this probe and the two below on one pass.
-
-	// ⭐ **DOES THIS FILE NAME A `CharacterSet` PRODUCER ANYWHERE? (P1.8 Slice D)** — the `StringIndex`
-	// twin, and it needs its OWN complete walk for the identical reason (see above): a `CharacterSet` built
-	// inside a `type`'s method body is invisible to the declaration loop, which consumes a `type` whole and
-	// resumes past its `end`.
+	// ⚠ It had a `StringIndex` sibling (`atStringIndexProducer`) whose miss was measured to cost the
+	// compiler's LIFE rather than an interning opportunity — that is the crash recorded at
+	// `foldDeclaredSignaturesInto`'s probe block. W49 wave 3 retired the four producers it scanned for onto
+	// `stdlib/String.maxon`, which declares the type too, so the layout now arrives through the ordinary
+	// declaration fold and the probe is gone rather than moved.
 	//
 	// ⚠ **WHAT AN UNREGISTERED FILE ACTUALLY COSTS IS THE ALIAS AND THE GID, NOT A CRASH** — MEASURED, by
 	// making this answer `false` for every file: **8 red, every one of them a file that SPELLS `CharSet`**
@@ -9113,16 +9109,14 @@ export type Parser
 	// The `__ManagedFile` probe (R4.1) is `atManagedFileProducer` and the `__ManagedDirectory` one (R4.3) is
 	// `atManagedDirectoryProducer`, both asked on the same shared walk.
 
-	// ⭐ **ONE COMPLETE WALK OF THE TOKEN ARRAY, ASKING ONE PROBE** — the shared body of the two whole-file
-	// questions above. It restores the cursor, so it is invisible to the caller, and stops at the first hit
-	// because the answer is a bool. Written once so a third such question cannot arrive with its own idea of
-	// how to walk a file.
-	// ⭐ **ALL FOUR LAYOUT PROBES IN ONE WALK (R4.1, and a fourth joined at R4.3 by adding a BIT, not a
-	// pass).** Each probe needs its own COMPLETE pass over the tokens — the reason is stated at the call site
-	// and it is a measured crash, not caution — but "complete" constrains WHAT is visited, not HOW MANY
-	// TIMES. Sequential `fileNamesAnyToken` calls walked the array once per question about the same tokens;
-	// this asks every question per token and walks once, so the cost of the next probe is a compare rather
-	// than a scan.
+	// ⭐ **EVERY LAYOUT PROBE IN ONE WALK (R4.1, and a third joined at R4.3 by adding a BIT, not a pass).**
+	// Each probe needs its own COMPLETE pass over the tokens — the reason is stated at the call site and it
+	// is a measured crash, not caution — but "complete" constrains WHAT is visited, not HOW MANY TIMES.
+	// Sequential `fileNamesAnyToken` calls walked the array once per question about the same tokens; this
+	// asks every question per token and walks once, so the cost of the next probe is a compare rather than a
+	// scan. It restores the cursor, so it is invisible to the caller.
+	//
+	// ⚠ It asked FOUR until W49 wave 3 struck the `StringIndex` one, whose type the corpus now declares.
 	//
 	// ⚠ It cannot stop at the first hit the way a single-probe walk does, because a later token may be the
 	// only producer for a DIFFERENT probe — so it exits early only once every bit is satisfied. That makes
@@ -9136,9 +9130,6 @@ export type Parser
 		var mask = 0 as ProducerMask
 
 		while not self.isEof() 'scan'
-			if (mask and StringIndexProducerBit) == 0 and self.atStringIndexProducer() 'si'
-				mask = (mask or StringIndexProducerBit) as ProducerMask
-			end 'si'
 			if (mask and CharacterSetProducerBit) == 0 and self.atCharacterSetProducer() 'cs'
 				mask = (mask or CharacterSetProducerBit) as ProducerMask
 			end 'cs'
@@ -36384,9 +36375,9 @@ export type Parser
 		try self.consume(TokenKind.dot)
 		self.noteMemberDispatch(recv)
 
-		// ⭐⭐⭐ **A BYTE-RECORD MEMBER THE CORPUS DECLARES AND THE ROSTER DOES NOT GOES TO THE CORPUS (W17).**
-		// Asked AHEAD of the two builtin dispatchers, and gated so it can only ever catch what they would
-		// REFUSE: `corpusDeclaresByteRecordMember` is consulted only for a name the roster does not carry, so
+		// ⭐⭐⭐ **A MEMBER THE CORPUS DECLARES AND THE ROSTER DOES NOT GOES TO THE CORPUS (W17).**
+		// Asked AHEAD of the builtin dispatchers, and gated so it can only ever catch what they would
+		// REFUSE: `memberBelongsToTheCorpus` is consulted only for a name the roster does not carry, so
 		// every arm below keeps every member it already served and the order rule in this header is untouched.
 		// What changes is the fall-through — `Character.toString()` was *"shv2 provides
 		// bytes/byteLength/asciiValue; that list IS the surface"* (76 failures the moment the module was
@@ -36394,10 +36385,11 @@ export type Parser
 		//
 		// ⇒ **THIS IS HOW THE SYNTHESIZED SURFACE RETIRES, ONE MEMBER AT A TIME AND MEASURABLY**: strike a
 		// name from `stringSurfaceMemberNames`, and the corpus body behind it takes over here with no other
-		// edit. See `corpusDeclaresByteRecordMember`.
-		if self.byteRecordMemberBelongsToTheCorpus(recv) 'corpusByteRecordMethod'
+		// edit. See `memberBelongsToTheCorpus`, which serves the `StringIndex` surface as well as the two
+		// byte records.
+		if self.memberBelongsToTheCorpus(recv) 'corpusMethod'
 			return try self.dispatchMethodOnBase(func, base: try self.structBaseOfReceiver(recv), baseTok: recv.anchor, resultUsed: resultUsed)
-		end 'corpusByteRecordMethod'
+		end 'corpusMethod'
 
 		// A STRING RECEIVER takes the builtin String methods rather than the struct path, which would reject
 		// it as not a struct. String is the one non-struct type carrying a method table of its own.
@@ -36463,9 +36455,10 @@ export type Parser
 		end 'vectorMethod'
 
 		// A `StringIndex` RECEIVER (`idx.charIndex()`, `idx.bytePos()`, P1.8 slice B2) takes its own two
-		// accessors rather than the struct path — which would accept the box (the layout IS registered) and
-		// then resolve the method name against `funcSignatures`, where no file declares
-		// `__StringIndex.charIndex`.
+		// accessors rather than the struct path, under the SAME roster-wins rule that keeps `s.byteLength()`
+		// a field load: the corpus declares both accessors and the struct path would resolve them, but each
+		// would then be a real CALL on the byte-position read every `slice` and every corpus grapheme walk
+		// makes. Two field loads instead — see `dispatchStringIndexMethod`.
 		if self.isStringIndexType(recv.tag, nameId: recv.nameId) 'stringIndexMethod'
 			return try self.dispatchStringIndexMethod(recv)
 		end 'stringIndexMethod'
@@ -37221,32 +37214,16 @@ export type Parser
 			try self.consumeEmptyArgList()
 			return self.emitOwnedRuntimeResult(StrCloneName, args: singletonArgs(recv.value), resultTag: ValueTypeTag.string, resultNameId: UnnamedTypeId, range: range)
 		end 'clone'
-		// ⭐ P1.8 Slice B2 — the `StringIndex` family. Four producers and one consumer; every one of them
-		// READS the receiver and writes a fresh value, so none takes `append`'s `noteReceiverWrite` path and
-		// a `let` receiver is fine throughout.
-		if methodTok.value.equals(StringStartIndexMethod) 'startIndex'
-			try self.consumeEmptyArgList()
-			return self.emitStringIndex(self.emitLiteral(0, valueType: MaxonType.integer, range: range), bytePos: self.emitLiteral(0, valueType: MaxonType.integer, range: range), range: range)
-		end 'startIndex'
-		if methodTok.value.equals(StringEndIndexMethod) 'endIndex'
-			try self.consumeEmptyArgList()
-			return self.emitOwnedRuntimeResult(StrIndexEndName, args: singletonArgs(recv.value), resultTag: ValueTypeTag.structRef, resultNameId: self.stringIndexNameId(), range: range)
-		end 'endIndex'
-		// The two searches are THROWING (`StringError.notFound`), so the runtime call must be the LAST op
-		// this arm emits — an enclosing `try` rewrites exactly that op (`rewriteLastCallToTryCall`).
-		// `emitOwnedRuntimeResult` emits nothing after the call, which is what makes it usable here.
-		// `s.indexAfter(idx)` — the third THROWING `String` method, and the third whose runtime call must be
-		// the arm's LAST op for the same reason the two searches' must be. Its two field reads come off the
-		// argument BEFORE the call, so nothing follows it.
-		if methodTok.value.equals(StringIndexAfterMethod) 'indexAfter'
-			return try self.parseStringIndexAfter(func, receiver: recv.value, range: range)
-		end 'indexAfter'
-		if methodTok.value.equals(StringFindFirstMethod) 'findFirst'
-			return try self.parseStringSearch(func, receiver: recv.value, callee: StrIndexFirstName, methodName: StringFindFirstMethod, range: range)
-		end 'findFirst'
-		if methodTok.value.equals(StringFindLastMethod) 'findLast'
-			return try self.parseStringSearch(func, receiver: recv.value, callee: StrIndexLastName, methodName: StringFindLastMethod, range: range)
-		end 'findLast'
+		// ⭐ P1.8 Slice B2 — what is left of the `StringIndex` family here is its one CONSUMER. It READS the
+		// receiver and writes a fresh value, so it does not take `append`'s `noteReceiverWrite` path and a
+		// `let` receiver is fine.
+		//
+		// ⚠ **THE FIVE PRODUCERS USED TO SIT HERE AND ARE NOW THE CORPUS'S (wave 3)** — `startIndex`,
+		// `endIndex`, `findFirst`, `findLast` and `indexAfter`, struck from `stringSurfaceMemberNames` like
+		// every other retirement. What made this wave different from the two before it is that they answer
+		// with a `StringIndex`, and shv2 held a second declaration of that type: retiring them is what
+		// leaves the corpus's declaration alone, which is what this arm's `requireStringIndexValue` now
+		// asks about. See the roster's header.
 		if methodTok.value.equals(SliceMethod) 'slice'
 			return try self.parseStringSlice(func, receiver: recv.value, range: range)
 		end 'slice'
@@ -37495,42 +37472,6 @@ export type Parser
 		throw ParseError.unsupported("`{String.from(ManagedMemoryTypeName)}` member '{String.from(methodTok.value)}' — it is STDLIB-ONLY (`module function` in `stdlib/String.maxon`, which the reference compiler refuses to user code as a not-exported error) and this file is not under `stdlib/`. `{String.from(ManagedMemoryToCStringMethod)}` hands back a raw address with no length, no owner and no refcount, so the copy it makes when the receiver's bytes are not already NUL-terminated is reclaimed by nothing; `{String.from(ManagedMemoryMakeCharFromBytesMethod)}` trusts its caller for `pos + len <= {String.from(ManagedMemoryLengthMethod)}()` and reads off the end of the buffer otherwise. User code reaches a buffer's bytes through `{String.from(ByteAtMethod)}`, which is bounds-checked and throwing", line: methodTok.line, column: methodTok.column)
 	end 'requireStdlibOnlyBufferMethod'
 
-	// ⭐ **`s.findFirst(n)` / `s.findLast(n)` — the two THROWING searches, which differ ONLY in which runtime
-	// entry point they name**: same receiver, same single String argument, same `StringIndex` result, same
-	// `StringError.notFound` on a miss. One home, so a third search cannot arrive with a different idea of
-	// any of those. (This arrangement had three other users — `parseStringPredicate`, then
-	// `parseStringCaseConversion` and `parseStringReplace` — and each went with the members it served as they
-	// retired onto `stdlib/String.maxon`. It is the last one left.)
-	//
-	// The result is an OWNED `StringIndex` box on the SUCCESS path only; on the error path the callee's
-	// primary register is unread and the `otherwise` value takes its place, so nothing is dropped twice.
-	function parseStringSearch(func IrFunction, receiver ValueId, callee ByteArray, methodName ByteArray, range SourceRange) returns ValueId throws ParseError
-		let needle = try self.parseTaggedArg(func, methodName: methodName, required: ValueTypeTag.string)
-		return self.emitOwnedRuntimeResult(callee, args: pairArgs(receiver, second: needle), resultTag: ValueTypeTag.structRef, resultNameId: self.stringIndexNameId(), range: range)
-	end 'parseStringSearch'
-
-	// ⭐ **`s.indexAfter(idx)` — THE FORWARD STEP TO THE NEXT GRAPHEME BOUNDARY** (`stdlib/String.maxon:387-392`).
-	//
-	// ⚠ **THE BOX IS UNPACKED HERE, NOT PASSED WHOLE, AND THAT IS THIS TIER'S RULE RATHER THAN A CHOICE.**
-	// `__strix_after` is a Std function over i64s; handing it the box would make it read the two fields
-	// itself, i.e. a SECOND site that knows where `charIdx` and `bytePos` live. `emitStringIndexField` is the
-	// one derivation of that (five readers already), so the runtime is handed the two values and the layout
-	// stays known in one place.
-	//
-	// The result is an OWNED `StringIndex` on the SUCCESS path only; on the throw edge the callee's primary
-	// register is unread and the `otherwise` value takes its place, so nothing is dropped twice —
-	// `parseStringSearch`'s convention, and the reason both use `emitOwnedRuntimeResult`.
-	function parseStringIndexAfter(func IrFunction, receiver ValueId, range SourceRange) returns ValueId throws ParseError
-		try self.consume(TokenKind.leftParen)
-		let idxTok = self.current()
-		let idx = try self.requireStringIndexValue(func, methodName: StringIndexAfterMethod, anchor: idxTok)
-		try self.consume(TokenKind.rightParen)
-
-		let charIdx = self.emitStringIndexField(idx, index: StringIndexCharIdxFieldIndex, range: range)
-		let bytePos = self.emitStringIndexField(idx, index: StringIndexBytePosFieldIndex, range: range)
-		return self.emitOwnedRuntimeResult(StrIndexAfterName, args: tripleArgs(receiver, second: charIdx, third: bytePos), resultTag: ValueTypeTag.structRef, resultNameId: self.stringIndexNameId(), range: range)
-	end 'parseStringIndexAfter'
-
 	// ⭐⭐ **`s.slice(start, endIndex: e)` AND `s.slice(start, length: n)` — TWO OVERLOADS TOLD APART BY THE
 	// ARGUMENT LABEL, NEVER BY A PARAMETER TYPE.** That is the oracle's own arrangement — its mangled name
 	// for the first is `String.slice$endIndex` — and it is what makes the pair resolvable here at all:
@@ -37547,7 +37488,7 @@ export type Parser
 	function parseStringSlice(func IrFunction, receiver ValueId, range SourceRange) returns ValueId throws ParseError
 		try self.consume(TokenKind.leftParen)
 		let startTok = self.current()
-		let startBytePos = self.emitStringIndexField(try self.requireStringIndexValue(func, methodName: SliceMethod, anchor: startTok), index: StringIndexBytePosFieldIndex, range: range)
+		let startBytePos = self.emitStringIndexField(try self.requireStringIndexValue(func, anchor: startTok), index: StringIndexBytePosFieldIndex, range: range)
 		let labelTok = try self.consumeArgLabel()
 		let endBytePos = try self.parseStringSliceEnd(func, receiver: receiver, startBytePos: startBytePos, labelTok: labelTok, range: range)
 		try self.consume(TokenKind.rightParen)
@@ -37561,7 +37502,7 @@ export type Parser
 	function parseStringSliceEnd(func IrFunction, receiver ValueId, startBytePos ValueId, labelTok Token, range SourceRange) returns ValueId throws ParseError
 		if labelTok.value.equals(EndIndexArgLabel) 'byEndIndex'
 			let endTok = self.current()
-			return self.emitStringIndexField(try self.requireStringIndexValue(func, methodName: SliceMethod, anchor: endTok), index: StringIndexBytePosFieldIndex, range: range)
+			return self.emitStringIndexField(try self.requireStringIndexValue(func, anchor: endTok), index: StringIndexBytePosFieldIndex, range: range)
 		end 'byEndIndex'
 		if labelTok.value.equals(SliceLengthArgLabel) 'byLength'
 			let countTok = self.current()
@@ -37577,18 +37518,19 @@ export type Parser
 
 	// Parse one argument expression and require it to be a `StringIndex`, blaming the argument's own first
 	// token. `parseTaggedArg`'s type check, one type over, and it needs its own body because a `StringIndex`
-	// is not identified by a TAG — every struct shares `structRef` — but by the compiler-owned name behind
-	// it. It is also asked WITHOUT the parens, because `slice` takes two indices inside one pair.
+	// is not identified by a TAG — every struct shares `structRef` — but by the NAME behind it. It is also
+	// asked WITHOUT the parens, because `slice` takes two indices inside one pair.
 	//
-	// ⚠ **`methodName` IS A PARAMETER BECAUSE THERE IS NOW MORE THAN ONE ASKER.** It spelled `SliceMethod`
-	// inline while `slice` was the only consumer of an index; `indexAfter` is the second, and an inline
-	// literal would have told its author about `'slice'` — a diagnostic naming a construct their program does
-	// not contain. That is D12's wrong-noun defect exactly, and it recurs at every helper that outlives its
-	// first caller, so the noun travels with the call.
-	function requireStringIndexValue(func IrFunction, methodName ByteArray, anchor Token) returns ValueId throws ParseError
+	// ⚠ **THE NOUN IS `slice`'S AGAIN, BECAUSE `slice` IS THE ONLY ASKER AGAIN (W49 wave 3).** It carried a
+	// `methodName` parameter while `indexAfter` was a second consumer — D12's rule, that a helper outliving
+	// its first caller must not name a construct the author did not write. `indexAfter` retired onto
+	// `stdlib/String.maxon` with the four producers, so the parameter had one constant argument at both
+	// remaining call sites and the rule now points the other way: a parameter nothing varies is a second
+	// place for the noun to be wrong. A third consumer takes it back.
+	function requireStringIndexValue(func IrFunction, anchor Token) returns ValueId throws ParseError
 		let value = try self.parseExpression(func, block: self.currentBlock)
 		if not self.valueIsStringIndex(value) 'notAnIndex'
-			throw ParseError.builtinOperandType(String.from(methodName), required: String.from(StringIndexTypeName), got: self.valueDisplayTypeName(value), line: anchor.line, column: anchor.column)
+			throw ParseError.builtinOperandType(String.from(SliceMethod), required: String.from(StringIndexTypeName), got: self.valueDisplayTypeName(value), line: anchor.line, column: anchor.column)
 		end 'notAnIndex'
 		return value
 	end 'requireStringIndexValue'
@@ -38396,7 +38338,7 @@ export type Parser
 
 		// ⭐⭐⭐ **A `String` STATIC THE CORPUS DECLARES AND THE ROSTER DOES NOT GOES TO THE CORPUS — W17's
 		// FALL-THROUGH IN THE STATIC DIRECTION.** The MEMBER half has existed since W17
-		// (`byteRecordMemberBelongsToTheCorpus`); this door had no twin, so its roster answered and REFUSED,
+		// (`memberBelongsToTheCorpus`); this door had no twin, so its roster answered and REFUSED,
 		// and a static the corpus declares on a compiler-owned type name could never be reached. MEASURED with
 		// the three `String` cone modules temporarily listed: `stdlib/String.maxon:861`'s
 		// `String.fromOwnedBytes(self.bytes, singleByteGraphemes: …)` — a static `stdlib/String.maxon:136`
@@ -38809,16 +38751,24 @@ export type Parser
 		return given
 	end 'parseTrimCharacterSet'
 
-	// ⭐ **A `StringIndex`'S BUILTIN METHODS (P1.8 slice B2)** — `charIndex()` and `bytePos()`, the reference's
-	// own two accessors (`stdlib/String.maxon:925-931`). Its own dispatcher for `dispatchCharacterMethod`'s
-	// reason: sharing the struct dispatcher would send these to `dispatchMethodOnBase`, which resolves a
-	// method NAME against `funcSignatures` — and no file declares `__StringIndex.charIndex`, so every call
-	// would be E3004 against a method that is right there in the type.
+	// ⭐ **A `StringIndex`'S BUILTIN METHODS (P1.8 slice B2)** — `charIndex()` and `bytePos()`, the corpus's
+	// own two accessors (`stdlib/String.maxon:925-931`). Its own dispatcher rather than the struct path, for
+	// the ROSTER-WINS reason `s.byteLength()` keeps its arm: `dispatchMethodOnBase` would resolve both names
+	// against `funcSignatures` and find the corpus's real bodies, so this is not about reachability — it is
+	// that each would then be a CALL, and `bytePos()` is read twice per `slice`, once per `charAt`, once per
+	// `indexAfter` and once per step of every corpus loop that walks an index.
+	//
+	// ⚠ **THAT ARGUMENT REPLACED A LOAD-BEARING ONE AT W49 WAVE 3, AND THE OLD ONE IS WORTH KEEPING
+	// VISIBLE.** It read *"no file declares `__StringIndex.charIndex`, so every call would be E3004 against
+	// a method that is right there in the type"* — true while shv2 registered its OWN layout under a
+	// reserved name no source could spell. The corpus's declaration is the only one now, so the fall-through
+	// this guarded against is gone and what is left is a cost argument. **A dispatcher kept for a reason
+	// that has expired is a dispatcher nobody re-justifies**; this one still earns its place, and now says
+	// on what grounds.
 	//
 	// Both are FIELD READS through the layout's own door (`emitFieldLoad`), not hand-written offsets: the
-	// registered `StructLayout` is where a `StringIndex`'s shape is stated for the front end, and reading it
-	// any other way would be a second copy of the offsets (`StringIndexRuntime`'s constants are the third
-	// reader, and `stringIndexLayout` asserts the two agree).
+	// layout the corpus's declaration registered is where a `StringIndex`'s shape is stated, and reading it
+	// any other way would be a second copy of the offsets.
 	//
 	// The cursor sits on the method NAME (`dispatchMethodOnReceiver` consumed the `.`). It takes no
 	// `resultUsed`: both methods return a value, so there is no void result for a value position to misuse.
@@ -38842,34 +38792,21 @@ export type Parser
 		panic("{drift}")
 	end 'dispatchStringIndexMethod'
 
-	// ⭐ **MINT A `StringIndex` — the parser's half of the one door.** `startIndex()` is the only producer the
-	// PARSER builds directly (its answer is two constants, so a runtime call would be a graph that computes
-	// nothing); the other three are runtime functions that mint through `__strix_make` themselves. Both
-	// halves reach the same entry point, so there is exactly one place a box's two fields are written.
-	//
-	// The result is an OWNED heap box, tracked so an unbound one drops at statement end and a bound one at
-	// scope exit — through the trivial-struct `__mm_decref` (`decrefCalleeFor`'s `structRef` arm, which
-	// reads the registered layout and finds no managed field).
-	function emitStringIndex(charIdx ValueId, bytePos ValueId, range SourceRange) returns ValueId
-		return self.emitOwnedRuntimeResult(StrIndexMakeName, args: pairArgs(charIdx, second: bytePos), resultTag: ValueTypeTag.structRef, resultNameId: self.stringIndexNameId(), range: range)
-	end 'emitStringIndex'
-
-	// One field of a `StringIndex` box, read through the layout — the shared body of `charIndex()`,
-	// `bytePos()`, `slice`'s two byte-position reads and the `==` comparison. Five readers, one derivation
-	// of where a field lives.
+	// One field of a `StringIndex` box, read through the layout the CORPUS's declaration registered — the
+	// shared body of `charIndex()`, `bytePos()`, `slice`'s two byte-position reads and the `==` comparison.
+	// Five readers, one derivation of where a field lives, and since W49 wave 3 that derivation runs off the
+	// same `type StringIndex` a program can name.
 	function emitStringIndexField(box ValueId, index FieldIndex, range SourceRange) returns ValueId
 		return self.emitFieldLoad(box, layout: self.signatures.stringIndexLayoutOrPanic(), index: index, range: range)
 	end 'emitStringIndexField'
 
-	// The compiler-owned `StringIndex` name, adopted into THIS FILE's interner — which is what a value's
-	// name column holds (`mintValue`), so it must be the local id and not the whole-program one.
-	// Interning is idempotent, and it happens only in a file that actually mints an index.
-	function stringIndexNameId() returns TypeNameId
-		return self.artifact.typeNames.intern(StringIndexTypeName)
-	end 'stringIndexNameId'
-
-	// The `__ManagedFile` type's interned name (R4.1) — `stringIndexNameId`'s twin, and interned against
-	// the ARTIFACT's interner for its reason: that is the one a value's `nameId` column is read against.
+	// The `__ManagedFile` type's interned name (R4.1) — adopted into THIS FILE's interner, because that is
+	// the one a value's `nameId` column is read against (`mintValue`), not the whole-program one.
+	//
+	// ⚠ It had a `stringIndexNameId` twin until W49 wave 3, and that one went with the members that minted
+	// an index: `startIndex`/`endIndex`/`findFirst`/`findLast`/`indexAfter` are `stdlib/String.maxon`'s
+	// now, so every `StringIndex` value in a program is a CALL RESULT whose name comes off the callee's
+	// declared return type — nothing in this file mints one, and nothing needs the id.
 	function managedFileNameId() returns TypeNameId
 		return self.artifact.typeNames.intern(ManagedFileTypeName)
 	end 'managedFileNameId'
@@ -38902,10 +38839,7 @@ export type Parser
 	// is not touched for a receiver that is not its business. The mint site (`parseManagedFileOpen`) still
 	// interns, which is where the id genuinely has to exist.
 	function isManagedFileType(tag ValueTypeTag, nameId TypeNameId) returns bool
-		if not (tagIsStructRef(tag) or tag == ValueTypeTag.named) 'notAnAggregateRef'
-			return false
-		end 'notAnAggregateRef'
-		return self.internedName(nameId).equals(ManagedFileTypeName)
+		return self.receiverIsNamedAggregate(tag, nameId: nameId, typeName: ManagedFileTypeName)
 	end 'isManagedFileType'
 
 	// Is this receiver a `__ManagedDirectory`? `isManagedFileType`'s twin, in every respect including WHY it
@@ -38914,11 +38848,26 @@ export type Parser
 	// It reads the name behind the id rather than interning one, so a receiver that is not its business
 	// costs a dense-column index and a byte compare.
 	function isManagedDirectoryType(tag ValueTypeTag, nameId TypeNameId) returns bool
-		if not (tagIsStructRef(tag) or tag == ValueTypeTag.named) 'notAnAggregateRef'
+		return self.receiverIsNamedAggregate(tag, nameId: nameId, typeName: ManagedDirectoryTypeName)
+	end 'isManagedDirectoryType'
+
+	// ⭐ **"IS THIS RECEIVER THE AGGREGATE CALLED `typeName`?" — THE SHARED BODY OF THE THREE TYPE TESTS
+	// ABOVE AND BELOW** (`__ManagedFile`, `__ManagedDirectory`, `StringIndex`). Each spelled the tag gate and
+	// the name compare out for itself, which is three copies of one rule — and the rule is not obvious in
+	// either half: the TAG gate must admit `named` as well as `structRef` (R4.2's measured defect, recorded
+	// at `isManagedFileType`), and the NAME must be read behind the id rather than interned (which would
+	// insert on a miss, giving every file that calls any struct method an entry it has no use for).
+	// A fourth such type gets both facts by asking, rather than by copying whichever neighbour it read.
+	//
+	// ⚠ The tag half is `SignatureIndex.tagMayNameAggregate`, not a fourth spelling of it: that function's
+	// own header records the FOUR ways this same test had come to be written, and adding a fifth here would
+	// be the thing it was written to stop.
+	function receiverIsNamedAggregate(tag ValueTypeTag, nameId TypeNameId, typeName ByteArray) returns bool
+		if not self.signatures.tagMayNameAggregate(tag) 'notAnAggregateRef'
 			return false
 		end 'notAnAggregateRef'
-		return self.internedName(nameId).equals(ManagedDirectoryTypeName)
-	end 'isManagedDirectoryType'
+		return self.internedName(nameId).equals(typeName)
+	end 'receiverIsNamedAggregate'
 
 	// ⭐ **THE FOUR `__ManagedFile` INSTANCE METHODS — `close`, `size`, `read`, `write` (R4.2 completes
 	// R4.1's one).** The cursor sits on the method NAME (`dispatchMethodOnReceiver` consumed the `.`).
@@ -38975,18 +38924,26 @@ export type Parser
 
 	// ⭐ **IS THIS THE `StringIndex` TYPE?** A TAG cannot answer it — every struct box is `structRef` — so it
 	// is the interned NAME behind the tag, which is the same identity `aggregateNameOf` publishes for a
-	// reassign check. The `structRef` test is not merely a fast path: a non-struct tag carries
-	// `UnnamedTypeId` in the name column, which no interner is obliged to hold.
+	// reassign check. The tag gate is not merely a fast path: a non-aggregate tag carries `UnnamedTypeId` in
+	// the name column, which no interner is obliged to hold.
 	//
-	// Its two askers read the two DIFFERENT records a type can live in, which is why the shared body takes
+	// Its askers read the two DIFFERENT records a type can live in, which is why the shared body takes
 	// the pair rather than either one: `dispatchMethodOnBinding` asks a BINDING's declared type (a
 	// self-field alias holds no value, so its `boundValue` is the receiver's box and would answer for the
 	// wrong type), and `emitCompare`/`slice` ask a VALUE's columns (a call result is bound to no name).
+	//
+	// ⚠ **IT ADMITS `named` BESIDE `structRef` AS OF W49 WAVE 3, AND THE RETIREMENT IS WHAT MADE THAT
+	// REACHABLE.** While the type was the compiler's own `__StringIndex`, no source could NAME it, so a
+	// `StringIndex` could not be a parameter, a return type or a struct field and `structRef` was the only
+	// tag one could ever arrive under. The corpus's declaration can be written, so `function byteOf(idx
+	// StringIndex)` and `var pos as StringIndex` are both programs now — and a struct field read carries
+	// `named`, which is R4.2's measured lesson one type over (`isManagedFileType`). Left narrow, those two
+	// receivers fell past this arm to the struct path, which RESOLVES both accessors against the corpus and
+	// answers correctly — so the cost of the omission was a silent CALL where every other spelling gets a
+	// field load, not a wrong answer. Consistency is the reason it is widened, and it is stated because the
+	// absence of a wrong answer is exactly what would have let it sit.
 	function isStringIndexType(tag ValueTypeTag, nameId TypeNameId) returns bool
-		if not tagIsStructRef(tag) 'notAStructBox'
-			return false
-		end 'notAStructBox'
-		return self.internedName(nameId).equals(StringIndexTypeName)
+		return self.receiverIsNamedAggregate(tag, nameId: nameId, typeName: StringIndexTypeName)
 	end 'isStringIndexType'
 
 	function valueIsStringIndex(value ValueId) returns bool
@@ -41943,26 +41900,49 @@ export type Parser
 	// `s.hash()`/`s.equals()` still reach the synthesized conformance impls a witness slot is stamped with.
 	// Retiring an arm is therefore a DELETION from the roster and nothing else — the corpus catches it here,
 	// which is what makes the retirement incremental and measurable one member at a time.
-	function byteRecordMemberBelongsToTheCorpus(recv MethodReceiver) returns bool
-		if not tagIsByteRecord(recv.tag) 'notAByteRecord'
-			return false
-		end 'notAByteRecord'
+	//
+	// ⭐⭐ **AND IT IS ASKED FOR TWO RECEIVER KINDS, NOT ONE (W49 wave 3).** `StringIndex` joined the moment
+	// its type stopped being the compiler's own: while the layout was `__StringIndex`, a name no source
+	// could spell, the type had exactly the two members shv2 gave it and the roster WAS the surface. The
+	// corpus's `type StringIndex` (`stdlib/String.maxon:917`) declares `equals` and `compare` as well — it
+	// `implements Equatable, Comparable` — so the roster refusal became the very sentence this door exists
+	// to retire: **MEASURED on this tree before the arm was added, `d.equals(e)` on two indices reported
+	// `E2015 … 'equals' — shv2 provides charIndex/bytePos; that list IS the surface`** about a method the
+	// program plainly has. The two accessors keep their arms (roster wins, for the field-load reason
+	// `dispatchStringIndexMethod` states); everything else the corpus declares is served from source.
+	function memberBelongsToTheCorpus(recv MethodReceiver) returns bool
+		if tagIsByteRecord(recv.tag) 'aByteRecord'
+			return self.corpusServesMemberOffRoster(byteRecordSurface(recv.tag), typeName: self.byteRecordLayoutName(recv.tag))
+		end 'aByteRecord'
+		if self.isStringIndexType(recv.tag, nameId: recv.nameId) 'aStringIndex'
+			return self.corpusServesMemberOffRoster(MemberSurface.stringIndex, typeName: StringIndexTypeName)
+		end 'aStringIndex'
 
-		// The cursor sits on the member name — the `.` is already consumed and no arm has read it yet, so
-		// this must PEEK. A member the roster carries is the synthesized surface's, whatever the corpus also
-		// says about it, and is left to the dispatcher below.
+		return false
+	end 'memberBelongsToTheCorpus'
+
+	// The shared test behind the door above and its STATIC twin: "the roster does not carry this member and
+	// the corpus declares it on this type". Written once because the three askers differ only in which
+	// surface and which type name they mean — and getting that ORDER wrong in one of them is exactly the
+	// drift this whole arrangement exists to prevent.
+	//
+	// ⚠ It PEEKS: the cursor sits on the member name — the `.` is already consumed and no arm has read it —
+	// because the caller hands that token to the dispatcher, which consumes it. `tokenCanBeAName` guards a
+	// measured hazard rather than a hypothetical one: a literal carries its CONTENT in `.value`, so
+	// `String."fromOwnedBytes"` would otherwise be tested against the corpus's declaration by bytes alone.
+	function corpusServesMemberOffRoster(surface MemberSurface, typeName ByteArray) returns bool
 		let memberTok = self.current()
 		if not tokenCanBeAName(memberTok) 'notAMemberName'
 			return false
 		end 'notAMemberName'
-		if rosterHasMember(memberTok.value, roster: self.surfaceMemberNames(byteRecordSurface(recv.tag))) 'theSynthesizedSurfaceServesIt'
+		if rosterHasMember(memberTok.value, roster: self.surfaceMemberNames(surface)) 'theSynthesizedSurfaceServesIt'
 			return false
 		end 'theSynthesizedSurfaceServesIt'
 
-		return self.signatures.conformerDeclaresOwnMethod(qualifiedMethodName(self.byteRecordLayoutName(recv.tag), methodName: memberTok.value))
-	end 'byteRecordMemberBelongsToTheCorpus'
+		return self.signatures.conformerDeclaresOwnMethod(qualifiedMethodName(typeName, methodName: memberTok.value))
+	end 'corpusServesMemberOffRoster'
 
-	// ⭐⭐⭐ **THE SAME QUESTION ABOUT A `String` STATIC — `byteRecordMemberBelongsToTheCorpus`'s twin, one
+	// ⭐⭐⭐ **THE SAME QUESTION ABOUT A `String` STATIC — `memberBelongsToTheCorpus`'s twin, one
 	// call shape over.** A static has no RECEIVER, so there is no tag to classify and no layout name to
 	// derive: the type is written at the call (`parseQualifiedCall`'s `stringStatic` arm matched it), which
 	// is why this takes a token where its sibling takes a `MethodReceiver`. Everything else is that
@@ -41978,6 +41958,12 @@ export type Parser
 	// token to `parseCallNamed`, which consumes it. `tokenCanBeAName` is the same guard the member twin
 	// applies and for the identical measured reason: a literal carries its CONTENT in `.value`, so
 	// `String."fromOwnedBytes"` would otherwise be tested against the corpus's declaration by bytes alone.
+	//
+	// ⚠ **IT CANNOT SHARE `corpusServesMemberOffRoster`'s BODY, AND THE REASON IS THE TOKEN.** That helper
+	// PEEKS at `self.current()`, which is where a member name sits when a RECEIVER dispatch asks; this door
+	// is handed its token by `parseQualifiedCall`, which has already read past it. Routing this through the
+	// peeking form would re-read the wrong position. The three lines it duplicates are the price of that,
+	// and it is the ORDER that matters and is preserved: roster first, corpus second.
 	function stringStaticBelongsToTheCorpus(memberTok Token) returns bool
 		if not tokenCanBeAName(memberTok) 'notAMemberName'
 			return false
@@ -48213,7 +48199,7 @@ export type Parser
 		// ⇒ Asked BEFORE the implicit-self arm and gated to the roster, so it can only ever catch a member the
 		// arm below would have sent to a corpus body that duplicates one. A member the roster does NOT serve
 		// falls through and reaches the corpus exactly as it should — the same split
-		// `byteRecordMemberBelongsToTheCorpus` makes one door over, from the other side.
+		// `memberBelongsToTheCorpus` makes one door over, from the other side.
 		if self.implicitSelfTakesTheByteRecordRoster(calleeTok) 'byteRecordRosterMember'
 			let recv = try self.implicitSelfByteRecordReceiver(calleeTok)
 			if recv.tag == ValueTypeTag.character 'aCharacter'
