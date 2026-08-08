@@ -1430,3 +1430,26 @@ export function withRewrittenCallee(op MaxonOp, callee ByteArray) returns MaxonO
 		default panic("withRewrittenCallee: asked of an op that binds no direct callee — `maxonOpCalleeKind` answers `direct` for exactly three variants and every caller gates on it")
 	end 'op'
 end 'withRewrittenCallee'
+
+// The same op with its ARGUMENT LIST replaced — every other operand, the parallel label / range /
+// blame-name / default-slot columns included, carried through verbatim. `withRewrittenCallee`'s twin one
+// operand over, and it exists for the same reason: `LiteralArgPromotion` substitutes a writable record for
+// an immortal one at a call, and doing that at the two call variants' own match arms would put the
+// eight-operand reconstruction in two places, where a field added to `MaxonOp.call` could be carried by one
+// and dropped by the other.
+//
+// ⚠ **IT REBUILDS RATHER THAN WRITING THROUGH THE OLD `args` ARRAY, AND THAT IS THE POINT.** A Maxon op is
+// a heap box that `IrModule.merge` copies BY REFERENCE out of the file's parse artifact, so an argument
+// list edited in place is the artifact's own and would corrupt the memo for every later compile of the
+// project. The caller pairs this with `module.ops.set`, which replaces only the merged module's slot.
+//
+// ⚠ `asyncCall` is deliberately absent where `withRewrittenCallee` admits it: shv2 refuses a managed
+// `async` argument outright (`requireAsyncScalarParams`), so no spawn has a record-typed argument to
+// substitute, and admitting it would claim a capability nothing has tested.
+export function withRewrittenArgs(op MaxonOp, args ValueIdArray) returns MaxonOp
+	return match op 'op'
+		call(result, callee, _, argLabels, argRanges, argImmutableNames, argDefaultSlots, mint) gives MaxonOp.call(result, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, argDefaultSlots: argDefaultSlots, mint: mint)
+		tryCall(result, errorFlag, callee, _, argLabels, argRanges, argImmutableNames, argDefaultSlots, mint) gives MaxonOp.tryCall(result, errorFlag: errorFlag, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, argDefaultSlots: argDefaultSlots, mint: mint)
+		default panic("withRewrittenArgs: asked of an op that supplies no substitutable argument list — only the two direct-call variants carry one, and every caller reaches this from their own match arms")
+	end 'op'
+end 'withRewrittenArgs'

@@ -68,19 +68,23 @@ end 'main'
 4
 ```
 
-<!-- disabled-test: pass-let-string-through-inline-if-error -->
-<!-- `checkImmutableArgToMutatingParam` blames an argument by NAME, and the name comes from `Parser.bareArgImmutableName`, which requires the argument to have consumed EXACTLY ONE token. `g if flag else g` is the same `let` binding but three tokens, so the blame name is empty and the check `continue`s before it ever consults the mutation mask. Needs the immutable-blame name to survive a merge (inline-if / match `gives` / `try otherwise`); the message's NOUN is undecided too — the bootstrap says "immutable 'let' variable" where shv2 names the binding. Its own rung -->
+<!-- test: pass-let-string-through-inline-if-error -->
 ### Passing a `let` String Through an Inline `if`
 
 ⭐ **A LAUNDER IS NOT A LOOPHOLE.** `grow(g)` on a `let` is refused, so `grow(g if flag else g)` — the SAME
-binding, reached through a merge that copies nothing — must be refused too. It is not refused today: the
-blame name is keyed on the argument being a single bare token, and an inline `if` is three, so the check
-skips the argument entirely and the write goes through into a `let`.
+binding, reached through a merge that copies nothing — must be refused too. The blame name is keyed on the
+argument being a single bare token, and an inline `if` is three, so the argument's own name says nothing;
+the MERGE carries its arms' blame onto the result phi instead.
 
-⚠ **UNTIL IT IS REFUSED THIS IS A MEMORY-SAFETY DEFECT, NOT A MESSAGE ONE**, which is why it is pinned
-here rather than left as a nicety: on x64 the accepted program writes into the literal's read-only `.rdata`
-record and takes an ACCESS VIOLATION, and on wasm32-wasi the same write succeeds into a record shared by
-every use of that literal. The expected text below is the bootstrap oracle's, measured.
+⚠ **THIS IS A MEMORY-SAFETY RULE, NOT A MESSAGE ONE**, which is why it is pinned here rather than left as a
+nicety: accepted, the program writes into the literal's read-only `.rdata` record and takes an ACCESS
+VIOLATION on x64, and on wasm32-wasi the same write succeeds into a record shared by every use of that
+literal.
+
+⚠ **shv2 NAMES THE BINDING** (user ruling). The bootstrap prints `immutable 'let' variable` here, but that
+is its FALLBACK for having lost the name — `2-Parser.cs` keeps `_lastExprWasMutableVar` set while it clears
+`_lastExprVarName` — and every other E3019 in the canonical corpus names the binding, this file's own
+`push-on-let-array-error` and `append-on-let-string-error` included.
 ```maxon
 function grow(s String)
 	s.append("XY")
@@ -94,11 +98,10 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3019: specs/fragments/immutable-method-call/pass-let-string-through-inline-if-error.test:8:2: cannot pass immutable 'let' variable to function that mutates parameter 's' (in main)
+error E3019: specs/fragments/immutable-method-call/pass-let-string-through-inline-if-error.test:9:2: cannot pass 'g' to function that mutates parameter 's' (in main)
 ```
 
-<!-- disabled-test: pass-let-string-through-try-otherwise-error -->
-<!-- same missing mechanism as `pass-let-string-through-inline-if-error` above — the blame name does not survive a merge. Kept separate because reaching it needs BOTH merge edges borrowed: a throwing function that RETURNS a String promotes at its `return`, which makes the try edge owned and the literal edge promoted to match, so only a borrowed try edge (an `Array with String` element) leaves the merge borrowed -->
+<!-- test: pass-let-string-through-try-otherwise-error -->
 ### Passing a `let` String Through `try … otherwise`
 
 The merge doors are shared, so `try … otherwise` must refuse exactly where the inline `if` does. ⚠ Reaching
@@ -121,7 +124,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3019: specs/fragments/immutable-method-call/pass-let-string-through-try-otherwise-error.test:10:2: cannot pass immutable 'let' variable to function that mutates parameter 's' (in main)
+error E3019: specs/fragments/immutable-method-call/pass-let-string-through-try-otherwise-error.test:11:2: cannot pass 'g' to function that mutates parameter 's' (in main)
 ```
 
 <!-- test: push-on-let-alias-of-parameter-error -->

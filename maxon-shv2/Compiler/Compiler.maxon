@@ -470,25 +470,37 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// gate their two calls on. A program with none builds nothing and is byte-identical to before this rung.
 	let usesManagedGlobals = installManagedGlobalInit(module, project: project, globals: signatures.managedGlobals(liveGlobals))
 
+	recordPhase(project, phase: CompilePhase.deriveRuntimeNeeds, probe: needsProbe)
+
+	// ⭐⭐ **THE PIPELINE RUNS IN TWO STAGES, AND WHAT SITS BETWEEN THEM IS THIS RUNG (the literal-arg rung).**
+	// The Maxon-tier stage ends at `semanticCheck`, which is where `promoteImmortalLiteralArgs` inserts the
+	// `__str_clone` / `__str_decref` calls that give a String literal handed to a writing parameter a record
+	// the write may land in. The runtime-needs scan below then walks the FINAL Maxon module, and the lowering
+	// stage runs after it. Both neighbours are forced, and both were measured — see `buildMaxonTierPasses`.
+	var pipeline = try PassPipeline.create(project, maxonModule: module, signatures: signatures) otherwise 'duplicateFunctionName'
+		try refuseCompile(project)
+	end 'duplicateFunctionName'
+	try pipeline.run(buildMaxonTierPasses()) otherwise 'maxonTierFailed'
+		try refuseCompile(project)
+	end 'maxonTierFailed'
+
+	let scanProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.deriveRuntimeNeeds)
+
 	// ⭐ THE HEAP IS CARRIED ONLY BY PROGRAMS THAT REACH IT (P1.0r). A `return 42` program
 	// allocates nothing, so it gets no allocator, no `.data` slots and no leak check — and its
 	// committed golden is byte-for-byte what it was before this rung existed. That is not an
 	// optimization, it is what BackendDispatch's header already promised: the runtime floor GROWS
 	// with the program's needs rather than being unconditional.
 	//
-	// The question is asked of the MAXON module because the answer is needed HERE, before the
-	// layout — the `.data` slots must exist before the backend resolves a `globalAddr` against
-	// them. The parser has already emitted the `__mm_alloc` call by this point, so the fact is
-	// available one tier up from where it is consumed.
-	//
 	// ONE walk of the Maxon module answers all three "which runtime does this program carry?" questions
 	// (heap / print / string-`==`). The HEAP answer alone drives `.data` layout — the `.data` slots must
-	// exist before the backend resolves a `globalAddr`, so it is needed here, before lowering — and it
-	// stays `__mm_`-specific: a print-only program adds no `.data` slots and no leak check.
+	// exist before the BACKEND resolves a `globalAddr`, which is what fixes this pair's position relative to
+	// everything below — and it stays `__mm_`-specific: a print-only program adds no `.data` slots and no
+	// leak check.
 	// `funcSignatures` rides along for ONE decision inside the walk — whether a `functionRef`'s `__` target is a
 	// compiler-emitted symbol or a `stdlib/Builtins.maxon` DECLARATION (`recordFunctionRefUsage`). Its KEY SET
 	// is final here: `mergeArtifact` filled it during the module build and `TypeResolution` only `upsert`s keys
-	// it already holds, so no later pass can change the answer this walk reads.
+	// it already holds, so no pass can change the answer this walk reads.
 	var usage = scanRuntimeUsage(module, unreachableStdlib: project.stdlibFacts.unreachable, funcSignatures: project.funcSignatures)
 	usage.usesManagedGlobals = usesManagedGlobals
 	// A managed-payload union's `__destruct_<U>` (P1.3 slice 2) and a managed-field struct's
@@ -505,11 +517,11 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	noteClonerUsage(usage, project: project, signatures: signatures)
 	// Every plain function used as a first-class value (`let f = triple`, `apply(triple, …)`) is called
 	// through the uniform `(userargs, env)` indirect ABI, whose signature its own `(userargs) -> R` shape does
-	// not match. Its `__fnref_` env-thunk targets are collected from the Maxon module NOW — before the pipeline
-	// lowers it — and the thunks are installed already-lowered AFTER the pipeline, like the destructor cascades
+	// not match. Its `__fnref_` env-thunk targets are collected from the MAXON module — which the pipeline
+	// leaves intact — and the thunks are installed already-lowered below, like the destructor cascades
 	// (P1.5-A2b-2).
 	let fnRefThunkTargets = collectFnRefThunkTargets(module, funcSignatures: project.funcSignatures)
-	recordPhase(project, phase: CompilePhase.deriveRuntimeNeeds, probe: needsProbe)
+	recordPhase(project, phase: CompilePhase.deriveRuntimeNeeds, probe: scanProbe)
 
 	// The `.data` slot list assembled from those answers, and the section laid out. Its own phase
 	// because it is the only step in this run whose cost is O(globals) rather than O(module).
@@ -553,11 +565,9 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	project.globalData.layOut(declaredGlobals)
 	recordPhase(project, phase: CompilePhase.layOutGlobals, probe: layoutProbe)
 
-	var pipeline = PassPipeline.create(project, maxonModule: module, signatures: signatures)
-	pipeline.addPasses(buildDefaultPipeline())
-	try pipeline.run() otherwise 'pipelineFailed'
+	try pipeline.run(buildLoweringPasses()) otherwise 'loweringFailed'
 		try refuseCompile(project)
-	end 'pipelineFailed'
+	end 'loweringFailed'
 
 	// ⭐ **`Ordering`'s DECLARATION, READ ONCE FOR THE WHOLE BACK END (W3).** The two runtime installs below
 	// that emit a `compare` — the builtin-conformance impls and the grapheme runtime's `__char_cmp` — turn

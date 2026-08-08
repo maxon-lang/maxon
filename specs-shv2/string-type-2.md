@@ -865,8 +865,7 @@ entirely on the target:
 ⇒ the cases below run on EVERY target deliberately. A check that only watches for the fault cannot see the
 wasm half, and the wasm half is the one that returns a wrong ANSWER.
 
-<!-- disabled-test: string-literal-through-a-mutating-parameter -->
-<!-- a String literal's 48-byte RECORD is still immortal `.rdata` (`LowerMaxonToStd.lowerStringLiteral`), so `__str_append`'s detach has nowhere writable to publish `buffer@0`/`capacity@16`/`length@8`. Needs the literal to lower to a HEAP record over the immortal blob, as `lowerConstArrayLiteral` already does for `b"…"` — which makes every literal an owned temp and pulls in six ownership sites (`scanRuntimeUsage`'s `usesHeap` arm, the character-literal retype, the non-dominating match-pattern test block, `ModuleInit`'s drop-less synthesized functions, `emitManagedConstant`, interpolation fragments). Its own rung -->
+<!-- test: string-literal-through-a-mutating-parameter -->
 ### A Literal Passed to a Mutating Parameter
 The minimal shape. `grow` writes through a borrowed `String` parameter, and the argument is a bare literal —
 so nothing about the CALL SITE is unusual and nothing about the callee is: the record it is handed simply
@@ -889,8 +888,7 @@ end 'main'
 survived
 ```
 
-<!-- disabled-test: string-literal-bytes-outlive-a-write-through-another-use -->
-<!-- same missing mechanism as `string-literal-through-a-mutating-parameter` above: the literal RECORD is immortal `.rdata` AND deduped across uses, so there is no per-use record for a detach to land in. This is the case that pins the wasm32-wasi half of the defect (a successful write into a shared record rather than a fault), so it must go green on BOTH lanes -->
+<!-- test: string-literal-bytes-outlive-a-write-through-another-use -->
 ### A Write Through One Use Leaves Every Other Use Alone
 ⭐ **THIS IS THE COW PROPERTY ITSELF, and it is the case the x64 fault could never have shown.** The two
 `"hello"`s share one interned blob; the first is written through and must detach onto a private buffer,
@@ -915,8 +913,7 @@ end 'main'
 hello
 ```
 
-<!-- disabled-test: string-literal-through-two-call-levels -->
-<!-- same missing mechanism as `string-literal-through-a-mutating-parameter` above. Kept separate because it is the case that refutes a NARROWER cure: promoting the literal at the immediate call site would fix the one-level case and still fault here, where the record is written two frames from the literal that produced it -->
+<!-- test: string-literal-through-two-call-levels -->
 ### A Literal Through Two Call Levels
 The borrow is transitive: `outer` passes its own borrowed parameter on to `grow`, so the record that is
 finally written is two frames away from the literal that produced it. Nothing along the way copies it, which

@@ -1495,6 +1495,12 @@ let sharedEmptyTupleLayouts = StructLayoutMap.create()
 // programs that never mark also never pay to ask.
 let sharedEmptyImmutableGlobalReads = ValueMarkSet.create()
 
+// The module-level shared EMPTY merge-blame table, held as the initial value of `mergeImmutableBlame` AND as
+// the COW anchor its per-function reset points at — `sharedEmptyImmutableGlobalReads`' pattern, for its
+// reason and with its invariant. A program with no `let` binding reaching a call argument THROUGH a merge
+// leaves it empty, which is nearly every program, and `Map.count()` on it answers 0 before anything hashes.
+let sharedEmptyMergeBlames = MergeBlameMap.create()
+
 // The module-level shared EMPTY buffer-surface mark set (R4.4), held as the initial value of
 // `bufferSurfaceValues` AND as the COW anchor its per-function reset points at —
 // `sharedEmptyImmutableGlobalReads`'s pattern, for its reason and with its invariant. Every program that
@@ -5676,7 +5682,11 @@ end 'moveMarksAgree'
 //   • `fellThrough`   — `otherwise ignore` or a block handler that falls through: both edges reach the
 //                       continuation with no try-value (a statement form), merging only carried vars.
 union TryHandler
-	value(otherwiseValue ValueId)
+	// `blame` is the E3019 name a write through the merged result would land in when the fallback is a bare
+	// immutable binding — the `try` merge's share of the rule the ternary and `match … gives` arms carry on
+	// `MatchArmExit.blame`. It rides the union arm rather than a parser field so the fact travels with the
+	// value it is about; the OK edge is the callee's own result and can blame nothing.
+	value(otherwiseValue ValueId, blame ByteArray)
 	terminated
 	fellThrough
 end 'TryHandler'
@@ -6137,6 +6147,18 @@ typealias StringBytesViewOpMap = Map with (ValueId, OpIndex)
 // per-mark purpose is carried by the FIELD name, which is where it varies.
 typealias ValueMarkSet = Set with ValueId
 
+// ⭐⭐ **THE E3019 BLAME NAME A MERGE PHI INHERITS FROM ITS ARMS** — the binding a write through the merged
+// value would land in. Keyed by the phi's ValueId, and that is sound HERE where a per-value mark in general
+// is NOT: a phi is minted fresh at the merge and denotes nothing else, whereas an ordinary binding SHARES
+// its initializer's ValueId (`let a = p` binds `p`'s value), so marking THAT value "immutable, blame `a`"
+// would refuse `grow(p)` one line later — a legal program, measured on both reference compilers.
+//
+// The payload is a NAME rather than a bit because the diagnostic names the binding (`cannot pass 'g' to …`);
+// the bootstrap prints `immutable 'let' variable` there, but that is its FALLBACK for having lost the name
+// (`2-Parser.cs`'s `_lastExprWasMutableVar` stays set while `_lastExprVarName` is cleared), and no case in
+// `/specs/immutable-method-call.md` uses that phrasing.
+typealias MergeBlameMap = Map with (ValueId, ByteArray)
+
 // ⭐ **A PER-VALUE TUPLE-SLOT SURFACE (A2m)** — an SSA value that is a TUPLE ⇒ the `DeclaredSurface` word
 // whose slot bits say which of its ELEMENTS the declaration spelled `__ManagedMemory`. A keyed payload
 // rather than bare membership, which is what separates it from `ValueMarkSet`: "this value is a buffer" is
@@ -6180,6 +6202,17 @@ function privateValueSlotSurfaceMap(current ValueSlotSurfaceMap, anchor ValueSlo
 
 	return current
 end 'privateValueSlotSurfaceMap'
+
+// `privateValueMarkSet` for the MERGE-BLAME table — the third and last of these, for the identical
+// discipline and the identical hazard over a third element type. Maxon cannot abstract the three into one
+// here, and every word of `privateValueMarkSet`'s header applies unchanged.
+function privateMergeBlameMap(current MergeBlameMap, anchor MergeBlameMap) returns MergeBlameMap
+	if current is anchor 'stillShared'
+		return MergeBlameMap.create()
+	end 'stillShared'
+
+	return current
+end 'privateMergeBlameMap'
 
 // One enclosing loop on the parser's loop-context stack. `break`/`continue` read it
 // to find their targets (innermost, or by label) and to build the block-arg value
@@ -6595,9 +6628,15 @@ type MatchArmExit
 	// drop-gating bit, reconciled across the reaching arms so a value moved in one arm but left live in
 	// another is dropped on the live arms' edges (`finalizeMatchMerge` → `reconcileMovesAtMerge`).
 	export var moveMark as MoveMark
+	// ⭐ **THE E3019 BLAME THIS ARM'S `gives` EXPRESSION WOULD CARRY** — the `let` binding a write through the
+	// merged value would land in, or empty. It travels per ARM rather than per VALUE for the reason
+	// `MergeBlameMap` states, and `finalizeMatchMerge` folds the reaching arms' blames onto the result phi.
+	// A STATEMENT arm and a `break` exit give no value and can blame nothing, and each says so at its own
+	// construction rather than through a default nobody reads.
+	export var blame as ByteArray
 
-	export static function create(exitBlock IrBlock, exitVals ValueIdArray, give MatchGiveValue, moveMark MoveMark) returns MatchArmExit
-		return Self{exitBlock: exitBlock, exitVals: exitVals, give: give, moveMark: moveMark}
+	export static function create(exitBlock IrBlock, exitVals ValueIdArray, give MatchGiveValue, moveMark MoveMark, blame ByteArray) returns MatchArmExit
+		return Self{exitBlock: exitBlock, exitVals: exitVals, give: give, moveMark: moveMark, blame: blame}
 	end 'create'
 end 'MatchArmExit'
 
@@ -7050,9 +7089,13 @@ type MatchArmBody
 	export var exitBlock as IrBlock
 	export var exitVals as ValueIdArray
 	export var give as MatchGiveValue
+	// The E3019 blame this arm's `gives` expression carries, or empty — `MatchArmExit.blame`'s source, taken
+	// while the arm's own tokens are still the ones the cursor last moved over. A STATEMENT arm gives no
+	// value and blames nothing, which every such site states rather than inherits from a default.
+	export var blame as ByteArray
 
-	export static function create(fellThrough bool, reachesMerge bool, exitBlock IrBlock, exitVals ValueIdArray, give MatchGiveValue) returns MatchArmBody
-		return Self{fellThrough: fellThrough, reachesMerge: reachesMerge, exitBlock: exitBlock, exitVals: exitVals, give: give}
+	export static function create(fellThrough bool, reachesMerge bool, exitBlock IrBlock, exitVals ValueIdArray, give MatchGiveValue, blame ByteArray) returns MatchArmBody
+		return Self{fellThrough: fellThrough, reachesMerge: reachesMerge, exitBlock: exitBlock, exitVals: exitVals, give: give, blame: blame}
 	end 'create'
 end 'MatchArmBody'
 
@@ -7690,6 +7733,14 @@ export type Parser
 	// stayed flat at x1.99. It allocates almost nothing (the list's own geometric growth, +21 allocations at
 	// K = 16,000), so `scale-test` is structurally blind to it and it had to be found by reading.
 	var immutableGlobalReads as ValueMarkSet
+	// ⭐ **THE MERGE ARMS' E3019 BLAME, CARRIED ONTO THE RESULT PHI** (see `MergeBlameMap`). Written at the
+	// three merges that can join a bare binding reference — the ternary, a `match … gives`, and a
+	// `try … otherwise <expr>` — and read at the one consumer, `expressionImmutableBlame`, whenever the
+	// expression it is asked about is not itself a bare name.
+	//
+	// Sparse, reset per function and SWAPPED across a closure body, exactly like `immutableGlobalReads`: a
+	// phi id names a value in THIS function's SSA space.
+	var mergeImmutableBlame as MergeBlameMap
 	// ⭐⭐ **WHICH SSA VALUES DENOTE A `__ManagedMemory` BUFFER RATHER THAN THE `Array` AROUND IT (R4.4)** —
 	// the fact `SignatureIndex.ManagedMemoryTypeName` says the binding costs, kept where shv2 keeps such facts.
 	//
@@ -8367,6 +8418,7 @@ export type Parser
 			charLiteralOps: sharedEmptyCharLiteralOps,
 			stringBytesViewOps: sharedEmptyStringBytesViewOps,
 			immutableGlobalReads: sharedEmptyImmutableGlobalReads,
+			mergeImmutableBlame: sharedEmptyMergeBlames,
 			bufferSurfaceValues: sharedEmptyBufferSurfaceValues,
 			bufferSurfaceSlots: sharedEmptyBufferSurfaceSlots,
 			bufferSurfaceElements: sharedEmptyBufferSurfaceElements,
@@ -15501,6 +15553,7 @@ export type Parser
 		// Per-function for the identical reason (P1.7 slice 2b): a marked value names an id in THIS
 		// function's SSA space, so a mark carried over would name an unrelated value in the next one.
 		self.immutableGlobalReads = sharedEmptyImmutableGlobalReads
+		self.mergeImmutableBlame = sharedEmptyMergeBlames
 		// The buffer-surface marks (R4.4, A2m) are per-function for exactly that reason too — see
 		// `bufferSurfaceValues`. All THREE reset together, because they describe one value space.
 		self.bufferSurfaceValues = sharedEmptyBufferSurfaceValues
@@ -16439,6 +16492,7 @@ export type Parser
 		self.charLiteralOps = sharedEmptyCharLiteralOps
 		self.stringBytesViewOps = sharedEmptyStringBytesViewOps
 		self.immutableGlobalReads = sharedEmptyImmutableGlobalReads
+		self.mergeImmutableBlame = sharedEmptyMergeBlames
 		// ⭐ **ALL THREE, for `parseFunction`'s stated reason — "they describe one value space" (BATCH22
 		// review).** This site reset `bufferSurfaceValues` alone, and the other two crossed the boundary: a
 		// default helper is a whole FUNCTION drained at the end of `parseModule`, so what reaches it is the
@@ -21004,7 +21058,7 @@ export type Parser
 
 		return match handler 'h'
 			terminated gives self.finishTerminatedTry(okBlock, entryVals: entryVals, entryMoveMark: entryMoveMark, result: result)
-			value(otherwiseValue) gives try self.finishValueTry(func, okBlock: okBlock, errEnd: errEnd, result: result, otherwiseValue: otherwiseValue, entryMoveMark: entryMoveMark, errMoveMark: errMoveMark, tryTok: tryTok)
+			value(otherwiseValue, blame) gives try self.finishValueTry(func, okBlock: okBlock, errEnd: errEnd, result: result, otherwiseValue: otherwiseValue, otherwiseBlame: blame, entryMoveMark: entryMoveMark, errMoveMark: errMoveMark, tryTok: tryTok)
 			fellThrough gives try self.finishFellThroughTry(func, okBlock: okBlock, errEnd: errEnd, entryVals: entryVals, result: result, resultUsed: resultUsed, entryMoveMark: entryMoveMark, errMoveMark: errMoveMark, tryTok: tryTok)
 		end 'h'
 	end 'desugarTry'
@@ -21051,7 +21105,7 @@ export type Parser
 	// `otherwise <expr>` — both edges reach a fresh continuation carrying a result phi of `result` (ok)
 	// and `otherwiseValue` (err). No carried-var phis: an `otherwise` VALUE is an expression, which
 	// assigns no binding, so the ok and err edges agree on every carried var.
-	function finishValueTry(func IrFunction, okBlock IrBlock, errEnd IrBlock, result ValueId, otherwiseValue ValueId, entryMoveMark MoveMark, errMoveMark MoveMark, tryTok Token) returns ValueId throws ParseError
+	function finishValueTry(func IrFunction, okBlock IrBlock, errEnd IrBlock, result ValueId, otherwiseValue ValueId, otherwiseBlame ByteArray, entryMoveMark MoveMark, errMoveMark MoveMark, tryTok Token) returns ValueId throws ParseError
 		// CONSUMER GUARD for the void-result invariant OPEN #55 fixed at the producer: a void `try`-result
 		// has no width, so a value merge is ill-formed and `mintPhi` below would build a void phi block-arg
 		// lowering can't type. `parseUnboundOtherwiseForm`'s value-form guard already rejects it (E3059) —
@@ -21171,6 +21225,11 @@ export type Parser
 		if phiOwned 'enrolPhi'
 			self.trackOwnedTemp(phiId)
 		end 'enrolPhi'
+
+		// ⭐ **THE THIRD MERGE'S SHARE OF THE E3019 BLAME** — `finalizeMatchMerge`'s rule, one construct over,
+		// ungated for its measured reason: a fallback naming an immutable binding is refused whatever the phi's
+		// ownership turns out to be, because the oracle refuses both shapes.
+		self.recordMergeBlame(phiId, blamed: otherwiseBlame)
 
 		// A VALUE fallback is an expression, but an expression can still CONSUME (`otherwise takeIt(s)`), so
 		// the two edges are reconciled here for the same reason the fell-through form reconciles.
@@ -21400,7 +21459,7 @@ export type Parser
 			throw ParseError.errorTypeMismatch("otherwise type '{typeTagName(self.tagOf(otherwiseValue))}' does not match expected type '{typeTagName(self.tagOf(result))}'", line: tryTok.line, column: tryTok.column)
 		end 'managedOtherwiseTypeMismatch'
 
-		return TryHandler.value(otherwiseValue)
+		return TryHandler.value(otherwiseValue, blame: self.expressionImmutableBlame(otherwiseTok, valueStart: otherwiseStart, value: otherwiseValue))
 	end 'parseUnboundOtherwiseForm'
 
 	// ⭐ **AN `otherwise` FALLBACK LITERAL MUST LIE INSIDE THE TRY RESULT'S RANGED TYPE.** The fallback
@@ -26780,7 +26839,7 @@ export type Parser
 		// binding is immutable, so `parseBreakStatement` could not then pass `ctx` at all (E3019). The
 		// alias is the same array the live stack entry holds, so the push lands where it must.
 		var breakExits = ctx.breakExits
-		breakExits.push(MatchArmExit.create(block, exitVals: self.snapshotBindings(ctx.carried), give: MatchGiveValue.none, moveMark: moveMarkPrefix(self.captureMoveMark(), height: ctx.ownedFloor)))
+		breakExits.push(MatchArmExit.create(block, exitVals: self.snapshotBindings(ctx.carried), give: MatchGiveValue.none, moveMark: moveMarkPrefix(self.captureMoveMark(), height: ctx.ownedFloor), blame: EmptySourceText))
 
 		// ⭐ **CONTROL LEAVES, YET `block` MUST STAY UNTERMINATED** — terminating a reaching arm's exit is
 		// `finalizeMatchMerge`'s job, and it has not run. So the statement continues in a fresh DEAD block,
@@ -27269,7 +27328,7 @@ export type Parser
 					// `default` is the last arm, so a fall-through has no next arm to reach — it simply
 					// continues to the merge. So the test is "did control leave?", not `reachesMerge`.
 					if not defaultArmBody.exitBlock.isTerminated() 'defaultReaches'
-						reachingArms.push(MatchArmExit.create(defaultArmBody.exitBlock, exitVals: defaultArmBody.exitVals, give: defaultArmBody.give, moveMark: self.captureMoveMark()))
+						reachingArms.push(MatchArmExit.create(defaultArmBody.exitBlock, exitVals: defaultArmBody.exitVals, give: defaultArmBody.give, moveMark: self.captureMoveMark(), blame: defaultArmBody.blame))
 					end 'defaultReaches'
 				end 'plainDefault'
 				sawDefault = true
@@ -27383,7 +27442,7 @@ export type Parser
 				end 'fellThrough' else 'notFallThrough'
 					prevFallthrough = false
 					if armBody.reachesMerge 'armReaches'
-						reachingArms.push(MatchArmExit.create(armBody.exitBlock, exitVals: armBody.exitVals, give: armBody.give, moveMark: self.captureMoveMark()))
+						reachingArms.push(MatchArmExit.create(armBody.exitBlock, exitVals: armBody.exitVals, give: armBody.give, moveMark: self.captureMoveMark(), blame: armBody.blame))
 					end 'armReaches'
 				end 'notFallThrough'
 
@@ -27424,7 +27483,7 @@ export type Parser
 			// give is `none`. A SCALAR match cannot reach this with `prevFallthrough`: a trailing
 			// fallthrough with no `default` is rejected by the `notExhaustive` throw below.
 			if prevFallthrough 'trailingFallthrough'
-				reachingArms.push(MatchArmExit.create(prevExitBlock, exitVals: prevExitVals, give: MatchGiveValue.none, moveMark: self.captureMoveMark()))
+				reachingArms.push(MatchArmExit.create(prevExitBlock, exitVals: prevExitVals, give: MatchGiveValue.none, moveMark: self.captureMoveMark(), blame: EmptySourceText))
 			end 'trailingFallthrough'
 		end 'enumFallOffUnreachable'
 
@@ -27603,6 +27662,7 @@ export type Parser
 		if isExpression 'givesArm'
 			try self.consume(TokenKind.gives)
 			let valueTok = self.current()
+			let valueStart = self.pos
 			let value = try self.parseExpression(func, block: self.currentBlock)
 
 			// ⭐ **MERGE (P1.5-A2b): a capturing closure may not be a `gives` arm of a match EXPRESSION** —
@@ -27620,7 +27680,7 @@ export type Parser
 				let andTok = self.current()
 				throw ParseError.strayToken(tokenDisplayText(andTok), line: andTok.line, column: andTok.column)
 			end 'strayAnd'
-			return MatchArmBody.create(false, reachesMerge: not exitBlock.isTerminated(), exitBlock: exitBlock, exitVals: self.snapshotBindings(carried), give: MatchGiveValue.value(value))
+			return MatchArmBody.create(false, reachesMerge: not exitBlock.isTerminated(), exitBlock: exitBlock, exitVals: self.snapshotBindings(carried), give: MatchGiveValue.value(value), blame: self.expressionImmutableBlame(valueTok, valueStart: valueStart, value: value))
 		end 'givesArm'
 
 		try self.consume(TokenKind.then)
@@ -27655,7 +27715,7 @@ export type Parser
 		end 'fallthroughSuffix'
 
 		let reachesMerge = not exitBlock.isTerminated() and not fellThrough
-		return MatchArmBody.create(fellThrough, reachesMerge: reachesMerge, exitBlock: exitBlock, exitVals: self.snapshotBindings(carried), give: MatchGiveValue.none)
+		return MatchArmBody.create(fellThrough, reachesMerge: reachesMerge, exitBlock: exitBlock, exitVals: self.snapshotBindings(carried), give: MatchGiveValue.none, blame: EmptySourceText)
 	end 'parseArmBody'
 
 	// The block-opening statement keywords — an arm body may not start with one (E2049). `try`'s
@@ -27919,6 +27979,23 @@ export type Parser
 			// is the complete reaching set — a returning/breaking arm contributes no entry and no edge — so
 			// this merge is one of the two that may ask at all.
 			self.recordMergeAliasProof(phiId, incoming: finalGives)
+
+			// ⭐⭐ **AN E3019 BLAME SURVIVES THE MERGE, on the same reasoning `propagateImmutableGlobalReadToPhi`
+			// above rests on and for the same construct pair.** `grow(g)` on a `let` is refused, so
+			// `grow(g if flag else g)` must be too — the merge copies nothing, so the record a callee writes
+			// through the phi IS the record the binding names. ANY blamed arm blames the phi, exactly as any
+			// marked arm marks it: the phi stands for every arm's value, so one path reaching it holding an
+			// immutable binding's record is enough.
+			//
+			// ⚠ **IT IS NOT GATED ON THE PHI BEING BORROWED, AND THE GATE WAS WRITTEN AND THEN MEASURED AWAY.**
+			// The argument for one was that an OWNED phi copies a borrowed byte-record arm
+			// (`promoteBorrowedToOwned`), so a write through it could not reach the binding — which is true of
+			// the RECORD and false of the RULE. MEASURED on the oracle, both shapes it would have exempted:
+			// `grow(makeStr() if c else <a `let` String>)` and `grow(make() if c else <a `let` Array>)` are
+			// **E3019 on the bootstrap**, and the second aliases outright (a `let` array binding is OWNED, so
+			// nothing promotes or copies it and the push lands in the binding). A gate here would have kept
+			// that second one accepted, which is the hole this rule exists to close.
+			self.recordMergeBlame(phiId, blamed: firstArmBlame(reachingArms))
 
 			result = MatchGiveValue.value(phiId)
 		end 'resultPhi'
@@ -28195,6 +28272,17 @@ export type Parser
 			end 'markedArm'
 		end 'eachGive'
 	end 'propagateImmutableGlobalReadToPhi'
+
+	// The first reaching arm that names an immutable binding, or empty — the fold `finalizeMatchMerge` puts
+	// on the result phi. ANY blamed arm is enough, so the first is the answer and the walk stops there.
+	function firstArmBlame(reachingArms MatchArmExitArray) returns ByteArray
+		for arm in reachingArms 'eachArm'
+			if not arm.blame.isEmpty() 'blamedArm'
+				return arm.blame
+			end 'blamedArm'
+		end 'eachArm'
+		return EmptySourceText
+	end 'firstArmBlame'
 
 	function resolveGivesOwnership(reachingArms MatchArmExitArray, isExpression bool, matchTok Token, finalGives ValueIdArray) returns bool throws ParseError
 		if not isExpression 'statementMatch'
@@ -30155,6 +30243,16 @@ export type Parser
 	function parseValueExpression(func IrFunction) returns ValueId throws ParseError
 		let block = self.currentBlock
 
+		// ⭐ **THE E3019 BLAME NAME IS CLEARED HERE, at the one door every value expression enters through.**
+		// A one-token identifier that resolved via a primary path publishing nothing must read "writable"
+		// rather than inherit a NEIGHBOURING expression's answer, and the clear used to live at the call
+		// ARGUMENT site alone — which was correct for arguments and left a ternary ARM, one construct over,
+		// reading whatever the last argument had published. The arm token and cursor are captured for the
+		// same question, allocation-free, exactly as an argument's are.
+		self.lastBareBindingImmutableName = EmptySourceText
+		let armTok = self.current()
+		let armStart = self.pos
+
 		let markOpRefCount = block.opRefs.count()
 		let markBlockRefCount = func.blockRefs.count()
 		// The pending-temporary height at the same instant as the op/block marks — everything enrolled above
@@ -30175,7 +30273,9 @@ export type Parser
 		let value = try self.parseBinary(func, minPrec: OrPrecedence)
 
 		if self.at(TokenKind.if) 'ternary'
-			return try self.parseTernaryExpression(func, trueValue: value, startBlock: block, markOpRefCount: markOpRefCount, markBlockRefCount: markBlockRefCount, markTempCount: markTempCount, markOwnedCount: markOwnedCount, preMoveMark: preMoveMark)
+			// The TRUE arm's blame, taken while its own tokens are still the ones the cursor last moved over
+			// — the condition and the false arm both clobber that answer, and both parse below.
+			return try self.parseTernaryExpression(func, trueValue: value, trueBlame: self.expressionImmutableBlame(armTok, valueStart: armStart, value: value), startBlock: block, markOpRefCount: markOpRefCount, markBlockRefCount: markBlockRefCount, markTempCount: markTempCount, markOwnedCount: markOwnedCount, preMoveMark: preMoveMark)
 		end 'ternary'
 
 		return value
@@ -30202,7 +30302,7 @@ export type Parser
 	// environment (the same merge hazard the match `gives` arm and the `otherwise` fallback are refused for),
 	// so it is rejected E3099 at the `if` — the shared anchor for both arms, where each reference compiler
 	// anchors it.
-	function parseTernaryExpression(func IrFunction, trueValue ValueId, startBlock IrBlock, markOpRefCount ElementCount, markBlockRefCount ElementCount, markTempCount TempDropMark, markOwnedCount BindingMark, preMoveMark MoveMark) returns ValueId throws ParseError
+	function parseTernaryExpression(func IrFunction, trueValue ValueId, trueBlame ByteArray, startBlock IrBlock, markOpRefCount ElementCount, markBlockRefCount ElementCount, markTempCount TempDropMark, markOwnedCount BindingMark, preMoveMark MoveMark) returns ValueId throws ParseError
 		let ifTok = try self.consume(TokenKind.if)
 
 		// The E3099 refusal for a capturing closure in EITHER arm — the route-specific prefix over the
@@ -30316,7 +30416,10 @@ export type Parser
 		// survive both arms. The true arm's floor is the pre-condition height for exactly the same reason read
 		// the other way — it parsed before the condition existed.
 		let falseArmOwnedCount = self.ownedBindings.count()
+		let falseArmTok = self.current()
+		let falseArmStart = self.pos
 		let falseValue = try self.parseExpression(func, block: falseBranch)
+		let falseBlame = self.expressionImmutableBlame(falseArmTok, valueStart: falseArmStart, value: falseValue)
 		try self.rejectEscapingClosure(falseValue, message: armEscapeMessage, tok: ifTok)
 		let falseExit = self.currentBlock
 
@@ -30332,8 +30435,8 @@ export type Parser
 		// `condExit` is still open when the merge's per-arm reconciliation runs.
 		let carried = VarInfoArray.create()
 		var reachingArms = MatchArmExitArray.create()
-		reachingArms.push(MatchArmExit.create(trueExit, exitVals: ValueIdArray.create(), give: settledTrue, moveMark: trueMoveMark))
-		reachingArms.push(MatchArmExit.create(falseExit, exitVals: ValueIdArray.create(), give: settledFalse, moveMark: falseMoveMark))
+		reachingArms.push(MatchArmExit.create(trueExit, exitVals: ValueIdArray.create(), give: settledTrue, moveMark: trueMoveMark, blame: trueBlame))
+		reachingArms.push(MatchArmExit.create(falseExit, exitVals: ValueIdArray.create(), give: settledFalse, moveMark: falseMoveMark, blame: falseBlame))
 		let outcome = try self.finalizeMatchMerge(func, matchTok: ifTok, carried: carried, reachingArms: reachingArms, construct: MergeConstruct.ternary)
 
 		self.emitCondBranch(condExit, cond: cond, thenId: trueBranch.id, elseId: falseBranch.id, ifTok: ifTok)
@@ -45808,6 +45911,29 @@ export type Parser
 		self.immutableGlobalReads.insert(value)
 	end 'markImmutableGlobalRead'
 
+	// ⭐ **THE ONE WRITER OF `mergeImmutableBlame`** — `markImmutableGlobalRead`'s twin, for the identical
+	// copy-on-write reason and through the same one home for it. An EMPTY name is not recorded: absence is
+	// what "this merge blames nothing" means, and a stored empty would make the reader answer the same
+	// question twice.
+	function recordMergeBlame(phi ValueId, blamed ByteArray)
+		if blamed.isEmpty() 'nothingToBlame'
+			return
+		end 'nothingToBlame'
+
+		self.mergeImmutableBlame = privateMergeBlameMap(self.mergeImmutableBlame, anchor: sharedEmptyMergeBlames)
+		self.mergeImmutableBlame.upsert(phi, value: blamed)
+	end 'recordMergeBlame'
+
+	// The blame a merge phi carries, or empty. Gated on the table being non-empty so a program with no
+	// blamed merge — nearly every program — answers with one field read and never hashes.
+	function mergeBlameOf(value ValueId) returns ByteArray
+		if self.mergeImmutableBlame.count() == 0 'noMergeBlamedAnything'
+			return EmptySourceText
+		end 'noMergeBlamedAnything'
+
+		return try self.mergeImmutableBlame.get(value) otherwise EmptySourceText
+	end 'mergeBlameOf'
+
 	// ⭐ **THE ONE WRITER OF `bufferSurfaceValues` (R4.4)** — `markImmutableGlobalRead`'s twin, for the
 	// identical copy-on-write reason, through the same one home for it (`privateValueMarkSet`).
 	//
@@ -46435,6 +46561,7 @@ export type Parser
 		let savedWitnessParamBase = self.currentWitnessParamBase
 		let savedWitnessParamCount = self.currentWitnessParamCount
 		let savedImmutableGlobalReads = self.immutableGlobalReads
+		let savedMergeImmutableBlame = self.mergeImmutableBlame
 		let savedBufferSurfaceValues = self.bufferSurfaceValues
 		let savedBufferSurfaceSlots = self.bufferSurfaceSlots
 		let savedBufferSurfaceElements = self.bufferSurfaceElements
@@ -46528,6 +46655,7 @@ export type Parser
 		self.charLiteralOps = sharedEmptyCharLiteralOps
 		self.stringBytesViewOps = sharedEmptyStringBytesViewOps
 		self.immutableGlobalReads = sharedEmptyImmutableGlobalReads
+		self.mergeImmutableBlame = sharedEmptyMergeBlames
 		self.bufferSurfaceValues = sharedEmptyBufferSurfaceValues
 		self.bufferSurfaceSlots = sharedEmptyBufferSurfaceSlots
 		self.bufferSurfaceElements = sharedEmptyBufferSurfaceElements
@@ -46698,6 +46826,7 @@ export type Parser
 		self.currentWitnessParamBase = savedWitnessParamBase
 		self.currentWitnessParamCount = savedWitnessParamCount
 		self.immutableGlobalReads = savedImmutableGlobalReads
+		self.mergeImmutableBlame = savedMergeImmutableBlame
 		self.bufferSurfaceValues = savedBufferSurfaceValues
 		self.bufferSurfaceSlots = savedBufferSurfaceSlots
 		self.bufferSurfaceElements = savedBufferSurfaceElements
@@ -49056,10 +49185,9 @@ export type Parser
 			let label = try self.consumeArgLabel(argIndex, rule: rule)
 			let valueTok = self.current()
 			let valueStart = self.pos
-			// Cleared HERE, before the argument is parsed, so an argument whose one identifier token resolved
-			// through a primary path that publishes nothing reads "writable" rather than a previous
-			// argument's answer. See `bareArgImmutableName`.
-			self.lastBareBindingImmutableName = EmptySourceText
+			// ⚠ The blame name is CLEARED before the argument is parsed — by `parseValueExpression` itself,
+			// which is the one door every value expression comes through and therefore the one place that
+			// clear can be stated once. See `bareArgImmutableName` for what the clear is for.
 			// `parseValueExpression` (the climber plus a trailing ternary — `f(a if c else b)`), not
 			// `parseExpression`: an argument is parsed INSIDE an expression that has already seeded
 			// `currentBlock`, and re-seeding it would discard a short-circuit an EARLIER argument performed.
@@ -49074,7 +49202,7 @@ export type Parser
 			// `argSlotPosition` maps to a parameter position (`noteBorrowSubjectCallArg`).
 			self.noteBorrowSubjectCallArg(func, callee: callee, anchor: anchor, argColumn: args.count(), argLabel: label, valueStart: valueStart)
 
-			pushCallArg(args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, value: value, label: label, range: SourceRange.ofToken(argFirstTok), immutableName: self.bareArgImmutableName(valueTok, valueStart: valueStart))
+			pushCallArg(args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, value: value, label: label, range: SourceRange.ofToken(argFirstTok), immutableName: self.expressionImmutableBlame(valueTok, valueStart: valueStart, value: value))
 			argIndex = argIndex + 1
 
 			if not self.at(TokenKind.comma) 'endArgs'
@@ -49118,6 +49246,32 @@ export type Parser
 
 		return self.lastBareBindingImmutableName
 	end 'bareArgImmutableName'
+
+	// ⭐⭐ **THE E3019 BLAME OF AN EXPRESSION JUST PARSED — the one-token test, OR the merge it came out of.**
+	//
+	// ⭐ **A LAUNDER IS NOT A LOOPHOLE.** `grow(g)` on a `let` is refused, so `grow(g if flag else g)` — the
+	// SAME binding, reached through a merge that copies nothing — must be refused too. The one-token test
+	// alone cannot say so: an inline `if` is three tokens, so `bareArgImmutableName` answers empty and the
+	// check skips the argument entirely. Until it was refused this was a MEMORY-SAFETY defect and not a
+	// message one: the accepted program wrote into the literal's read-only `.rdata` record on x64 (an access
+	// violation) and into a record shared by every use of that literal on wasm32-wasi.
+	//
+	// So the answer has two sources, asked in the order the language means them: the expression IS a bare
+	// immutable name, or it is a MERGE that joined one (`mergeImmutableBlame`, recorded per ARM at the three
+	// merge sites). ⚠ **The merge half must be keyed on the phi and never on the arm's own value** — see
+	// `MergeBlameMap` for the measured reason a per-value mark is unsound.
+	//
+	// It is the same three call sites' one question: a call ARGUMENT, a ternary ARM, and a `match … gives`
+	// arm each ask "what would a write through this value be blamed on?", and an arm may itself be a nested
+	// merge — which is exactly what the second source answers.
+	function expressionImmutableBlame(valueTok Token, valueStart TokenIndex, value ValueId) returns ByteArray
+		let bare = self.bareArgImmutableName(valueTok, valueStart: valueStart)
+		if not bare.isEmpty() 'blamedByName'
+			return bare
+		end 'blamedByName'
+
+		return self.mergeBlameOf(value)
+	end 'expressionImmutableBlame'
 
 	// Consume and validate an optional `name:` label on the next argument, returning the
 	// label text (the empty string when unlabelled). The FIRST argument (`argIndex == 0`)

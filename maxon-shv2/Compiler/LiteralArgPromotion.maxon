@@ -1,0 +1,370 @@
+// LiteralArgPromotion — **A STRING LITERAL HANDED TO A PARAMETER THE CALLEE WRITES GETS A RECORD THE
+// WRITE MAY LAND IN.**
+//
+// `LowerMaxonToStd.lowerStringLiteral` materialises a literal as the address of an IMMORTAL 48-byte
+// `.rdata` record (`buffer@0` / `length@8` / `capacity@16 = RdataBufferCapacity`). `__str_append`'s
+// copy-on-write detach (`MmRuntime.__mm_cow_detach`) already gets the BYTES half right — it sees the
+// sentinel capacity, allocates a private buffer and copies into it — but it must then PUBLISH the new
+// `buffer@0` / `capacity@16` / `length@8` back into the record, and a `.rdata` record is not writable:
+//
+//   * x64 / arm64 — the store faults. `grow("hello")` was `0xC0000005`, exit 3221225477, empty stdout.
+//   * wasm32-wasi — linear memory has no read-only segment, so the identical store SUCCEEDS, and
+//     because `GlobalDataTable` dedupes identical blobs the write is visible through every other use of
+//     that literal. A wrong ANSWER, not a crash — which is why the pinning specs run on every target.
+//
+// ⭐ **THE PROGRAM IS LEGAL — the bootstrap oracle compiles it, prints `survived` and exits 0** — so
+// refusing it is not available. The record simply has to be one a write may land in, and that is what
+// this pass hands it: at every `call` / `tryCall` argument that BOTH is defined by a `stringLiteral` op
+// AND fills a parameter the callee writes, the literal is replaced by `__str_clone`'s fresh owned heap
+// record, released by a `__str_decref` immediately after the call. Both are ordinary `MaxonOp.call`s, so
+// no op variant is added and no tier below learns a new shape.
+//
+// ⭐⭐ **WHY A REWRITE HERE AND NOT A DIFFERENT LOWERING FOR EVERY LITERAL.** The wider cure — lowering
+// EVERY `stringLiteral` to a per-use HEAP record over the immortal blob, as `lowerConstArrayLiteral`
+// already does for `b"…"` — makes every literal an owned temp and pulls in six ownership sites
+// (`scanRuntimeUsage`'s `usesHeap` arm, the character-literal retype, the non-dominating match-pattern
+// test block, `ModuleInit`'s drop-less synthesized functions, `emitManagedConstant`, interpolation
+// fragments). It is recorded as its own rung in `specs-shv2/string-type-2.md`. This is the narrow cure:
+// it costs one allocation on exactly the calls that would otherwise fault, and a program that hands no
+// literal to a writing parameter emits byte-identical code.
+//
+// ⚠ **THE PREDICATE IS "PROVABLY AN IMMORTAL RECORD", NOT "BORROWED", AND THE DIFFERENCE IS A WRONG
+// ANSWER.** A blanket "promote every borrowed byte-record argument" rule would rewrite `grow(t)` inside
+// `outer(t String)` into a write on a COPY, and `outer`'s own caller — whose `var` really does own that
+// record — would never see the append. Only a value the compiler can PROVE is `.rdata` may be
+// substituted, and a `stringLiteral` op's result is the one such value. The TWO-CALL-LEVEL case needs no
+// second rule: `buildParamMutationSummary`'s least fixpoint puts the written bit on `outer`'s parameter
+// because `grow` writes what it was handed, so the literal is promoted at `outer("hello")` — the frame
+// that owns it — and `grow` writes the clone two frames down.
+//
+// ⚠ **WHAT IT DELIBERATELY DOES NOT REACH: A MERGE PHI.** `grow("a" if c else "b")` and
+// `grow(try arr.get(0) otherwise "lit")` hand the callee a BLOCK ARG, not a `stringLiteral` result, and
+// a phi is not provably `.rdata`: one edge of the second is a real heap element whose write MUST reach
+// the array. A single clone at the call site cannot be right on both edges, and promoting the phi to
+// uniformly owned would COPY the non-literal edge — the wrong answer the paragraph above describes
+// (MEASURED against the oracle, which prints `t=abXY` through exactly such a merge). Those shapes fault
+// as they did before this pass; the per-use heap record is what closes them, and it is the rung above.
+
+// ⭐ **PROMOTE EVERY IMMORTAL-RECORD ARGUMENT THAT FILLS A WRITTEN PARAMETER, WHOLE PROGRAM.**
+//
+// It runs at the tail of `semanticCheck` because that is the one pass holding BOTH halves of the
+// question: the whole-program `ParamMutationSummary` — a least fixpoint over the call graph, and itself
+// only correct once `resolveOverloadedCalls` has rewritten every overloaded callee name — and a Maxon
+// module still one tier above lowering. It is a REWRITE inside a checking pass for the reason
+// `resolveOverloadedCalls` is one: a rewrite keyed on a whole-program summary has nowhere earlier to
+// stand, and rebuilding the summary in a pass of its own would be a second fixpoint over the same graph.
+//
+// ⚠ **THE OPS IT INSERTS ARE WHY `scanRuntimeUsage` MOVED BELOW THE PIPELINE** (see
+// `Compiler.compileToCodeResult`). A `__str_clone` appended after the usage scan had already run would
+// be a call to a runtime entry nothing installed — an unresolved relocation, not a leak.
+//
+// ⚠ **A PROGRAM THAT HAS ALREADY REPORTED AN ERROR IS LEFT ALONE.** `PassPipeline.run` throws on the
+// diagnostics this pass's own file has just filed, so the module is about to be discarded; rewriting it
+// could only risk a panic on malformed input in front of the diagnostic that explains it.
+export function promoteImmortalLiteralArgs(project Project, module MaxonModule, mutationSummary ParamMutationSummary)
+	if projectHasErrors(project) 'alreadyRefused'
+		return
+	end 'alreadyRefused'
+
+	for i in 0 upto module.functions.count() 'eachFunc'
+		let func = try module.functions.get(i) otherwise panic("promoteImmortalLiteralArgs: functions.get OOB at {i}")
+		// The same reachability gate `scanRuntimeUsage` and `lowerMaxonToStd` apply: a stdlib body no back
+		// end will receive is not worth rewriting, and an op inserted into one would sit in front of a scan
+		// that deliberately skips the function.
+		if project.stdlibFacts.unreachable.contains(func.name) 'notInTheProgram'
+			continue
+		end 'notInTheProgram'
+
+		promoteInFunction(project, module: module, func: func, funcIndex: i, mutationSummary: mutationSummary)
+	end 'eachFunc'
+end 'promoteImmortalLiteralArgs'
+
+// One function, in three walks — and every function in almost every program leaves after the first,
+// having allocated nothing.
+//
+// ⭐ **THE GATE IS "DOES THIS BODY CALL ANYTHING THAT WRITES A PARAMETER?", AND IT IS WHAT KEEPS THIS
+// FREE.** It is asked first and on its own, before any storage is claimed, because both other orders make
+// a compile that changes nothing pay for it: seeding the literal column first would allocate one dense
+// column for every `print("hello")` in the program, and folding the two walks together would allocate it
+// before knowing whether anything can consume it.
+function promoteInFunction(project Project, module MaxonModule, func IrFunction, funcIndex FuncIndex, mutationSummary ParamMutationSummary)
+	if not callsAWritingCallee(module, func: func, mutationSummary: mutationSummary) 'writesNothingItWasHanded'
+		return
+	end 'writesNothingItWasHanded'
+
+	let immortal = immortalRecordValues(module, func: func)
+	var minter = PromotedValueMinter.over(func)
+	for blockRef in func.blockRefs 'eachBlock'
+		promoteInBlock(project, module: module, block: try module.blocks.get(blockRef) otherwise panic("promoteInFunction: blockRef from func.blockRefs not in module.blocks"), func: func, funcIndex: funcIndex, immortal: immortal, minter: minter, mutationSummary: mutationSummary)
+	end 'eachBlock'
+end 'promoteInFunction'
+
+// The gate walk. Only a callee with a non-empty written-parameter mask can give an argument a reason to
+// be promoted, so a body that calls none is finished here.
+function callsAWritingCallee(module MaxonModule, func IrFunction, mutationSummary ParamMutationSummary) returns bool
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("callsAWritingCallee: blockRef from func.blockRefs not in module.blocks")
+		for opIdx in block.opRefs 'eachOp'
+			if opCallsAWritingCallee(try module.ops.get(opIdx) otherwise panic("callsAWritingCallee: opIdx {opIdx} not in module.ops"), mutationSummary: mutationSummary) 'found'
+				return true
+			end 'found'
+		end 'eachOp'
+	end 'eachBlock'
+	return false
+end 'callsAWritingCallee'
+
+// The per-op arm of the gate. `collectMutationEdgesAt`'s arm list, asked of the same two variants for the
+// same reason — its `asyncCall` exclusion included: shv2 refuses a managed `async` argument outright
+// (`requireAsyncScalarParams`), so no spawn can carry a String record at all. The non-call bands range to
+// `false`, so a newly appended op fails to compile here rather than silently dropping out of the gate
+// (the band-append invariant).
+function opCallsAWritingCallee(op MaxonOp, mutationSummary ParamMutationSummary) returns bool
+	return match op 'op'
+		call(_, callee, _, _, _, _, _, _) gives mutationSummary.maskOf(callee) != NoMutatedParams
+		literal to stringLiteral gives false
+		tryCall(_, _, callee, _, _, _, _, _, _) gives mutationSummary.maskOf(callee) != NoMutatedParams
+		throwError to indirectCall gives false
+		asyncCall gives false
+		await to tryAwait gives false
+		sizeofType gives false
+		constArrayLiteral gives false
+		switch gives false
+		witnessDispatch to witnessTryDispatch gives false
+		panicAbortValue gives false
+	end 'op'
+end 'opCallsAWritingCallee'
+
+// Which of this function's SSA values ARE the address of an immortal `.rdata` record — dense by ValueId,
+// so the argument test below is one array read.
+//
+// A `stringLiteral` op is the only producer, and that is a claim about every other route rather than an
+// omission: an interpolation, a `__str_clone`, a `var` String's promotion at its declaration and a
+// `returns String` hand-off all ALLOCATE, and everything else is a borrow of something that did. A BLOCK
+// ARG is deliberately absent — see this file's header for why a phi is not provably immortal.
+function immortalRecordValues(module MaxonModule, func IrFunction) returns BoolArray
+	var isImmortal = BoolArray.create()
+	isImmortal.resize(func.valueTags.count())
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("immortalRecordValues: blockRef from func.blockRefs not in module.blocks")
+		for opIdx in block.opRefs 'eachOp'
+			match try module.ops.get(opIdx) otherwise panic("immortalRecordValues: opIdx {opIdx} not in module.ops") 'op'
+				call then break 'op'
+				literal to storeIndirect then break 'op'
+				stringLiteral(result, _) then try isImmortal.set(result, value: true) otherwise panic("immortalRecordValues: v{result} of '{String.from(func.name)}' is outside its own value space of {func.valueTags.count()} — every SSA value is minted through Parser.mintValue")
+				tryCall to indirectCall then break 'op'
+				asyncCall to tryAwait then break 'op'
+				sizeofType then break 'op'
+				constArrayLiteral then break 'op'
+				switch then break 'op'
+				witnessDispatch to witnessTryDispatch then break 'op'
+				panicAbortValue then break 'op'
+			end 'op'
+		end 'eachOp'
+	end 'eachBlock'
+	return isImmortal
+end 'immortalRecordValues'
+
+// Rebuild one block's `opRefs`, splicing a `__str_clone` in front of every call that hands an immortal
+// record to a written parameter and a `__str_decref` behind it. A block with no such call keeps the array
+// it already had, so no block of a function this pass does not change is rewritten.
+//
+// ⚠ **`opRefs` IS REBUILT AND FIELD-ASSIGNED, and the call op is REPLACED through `module.ops.set`
+// rather than edited — both forced by the PARSE MEMO.** `IrModule.merge` copies op REFERENCES into the
+// merged module (a Maxon op is a heap box), so an argument list edited in place would be the file
+// artifact's own list and would corrupt every later compile of the project; `opRefs`, by contrast, is
+// rebuilt fresh by `relocateIrBlock`, so this block's belongs to the merged module alone. It is the same
+// split `IrBlock`'s header states for the phi model.
+function promoteInBlock(project Project, module MaxonModule, block IrBlock, func IrFunction, funcIndex FuncIndex, immortal BoolArray, minter PromotedValueMinter, mutationSummary ParamMutationSummary)
+	var newRefs = OpIndexArray.create()
+	var promotedAny = false
+	for opIdx in block.opRefs 'eachOp'
+		promotedAny = promoteCallAt(project, module: module, opIdx: opIdx, func: func, funcIndex: funcIndex, immortal: immortal, minter: minter, mutationSummary: mutationSummary, newRefs: newRefs) or promotedAny
+	end 'eachOp'
+
+	if not promotedAny 'unchanged'
+		return
+	end 'unchanged'
+
+	block.opRefs = newRefs
+end 'promoteInBlock'
+
+// The per-op arm of the rewrite walk. Appends `opIdx` to `newRefs` — preceded by its clones and followed
+// by its releases when this op is a call that needs them — and answers whether anything was spliced in.
+// Same arm list, same band discipline and same `asyncCall` exclusion as the gate above.
+function promoteCallAt(project Project, module MaxonModule, opIdx OpIndex, func IrFunction, funcIndex FuncIndex, immortal BoolArray, minter PromotedValueMinter, mutationSummary ParamMutationSummary, newRefs OpIndexArray) returns bool
+	let op = try module.ops.get(opIdx) otherwise panic("promoteCallAt: opIdx {opIdx} not in module.ops")
+	match op 'op'
+		call(_, callee, args, argLabels, _, _, _, _) then return promoteArgsOf(project, module: module, op: op, opIdx: opIdx, func: func, funcIndex: funcIndex, callee: callee, args: args, argLabels: argLabels, immortal: immortal, minter: minter, mutationSummary: mutationSummary, newRefs: newRefs)
+		literal to stringLiteral then break 'op'
+		tryCall(_, _, callee, args, argLabels, _, _, _, _) then return promoteArgsOf(project, module: module, op: op, opIdx: opIdx, func: func, funcIndex: funcIndex, callee: callee, args: args, argLabels: argLabels, immortal: immortal, minter: minter, mutationSummary: mutationSummary, newRefs: newRefs)
+		throwError to indirectCall then break 'op'
+		asyncCall then break 'op'
+		await to tryAwait then break 'op'
+		sizeofType then break 'op'
+		constArrayLiteral then break 'op'
+		switch then break 'op'
+		witnessDispatch to witnessTryDispatch then break 'op'
+		panicAbortValue then break 'op'
+	end 'op'
+
+	newRefs.push(opIdx)
+	return false
+end 'promoteCallAt'
+
+// The shared body of the two call arms: decide which argument positions need a writable record, emit the
+// clones ahead of the call, rewrite the op's argument list, and emit the releases behind it.
+//
+// A callee with NO signature is left alone for `addMutationEdges`' reason — it is compiler-internal
+// (`__str_append` and friends, whose receiver writes the parser recorded directly) or undeclared, which
+// is E3004 and so cannot reach a pass that runs only on an error-free project.
+function promoteArgsOf(project Project, module MaxonModule, op MaxonOp, opIdx OpIndex, func IrFunction, funcIndex FuncIndex, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, immortal BoolArray, minter PromotedValueMinter, mutationSummary ParamMutationSummary, newRefs OpIndexArray) returns bool
+	let mask = mutationSummary.maskOf(callee)
+	// Short-circuited, so the second lookup is paid only by the handful of calls whose callee writes
+	// anything at all.
+	if mask == NoMutatedParams or not project.funcSignatures.contains(callee) 'noWrittenPositionToFill'
+		newRefs.push(opIdx)
+		return false
+	end 'noWrittenPositionToFill'
+
+	let sig = try project.funcSignatures.get(callee) otherwise panic("promoteArgsOf: funcSignatures has no entry for '{String.from(callee)}' one line after `contains` answered true for it")
+	// Asked before anything is built, because a call to a writing callee is common and a literal AT one of
+	// its written positions is not: without it every such call would claim three arrays to discover it had
+	// nothing to put in them.
+	if not anyArgNeedsAWritableRecord(sig, mask: mask, args: args, argLabels: argLabels, immortal: immortal) 'nothingToPromote'
+		newRefs.push(opIdx)
+		return false
+	end 'nothingToPromote'
+
+	var promotedArgs = ValueIdArray.create()
+	var clones = ValueIdArray.create()
+	var sources = ValueIdArray.create()
+	for i in 0 upto args.count() 'eachArg'
+		let argId = try args.get(i) otherwise panic("promoteArgsOf: args.get OOB at {i}")
+		if not writtenPositionHoldsImmortalRecord(sig, mask: mask, argIndex: i, argId: argId, argLabels: argLabels, immortal: immortal) 'keepArgument'
+			promotedArgs.push(argId)
+			continue
+		end 'keepArgument'
+
+		let clone = minter.mint(try func.valueTags.get(argId) otherwise panic("promoteArgsOf: value v{argId} of '{String.from(func.name)}' has no recorded type — every SSA value is minted through Parser.mintValue"))
+		promotedArgs.push(clone)
+		clones.push(clone)
+		sources.push(argId)
+	end 'eachArg'
+
+	// The clone and the release are the compiler's own ops, so they ride the span of the statement that
+	// made them necessary — `emitRuntimeCall`'s convention for every synthesized retain and release.
+	let range = project.opRanges.get(opIdx)
+
+	// Clones first, in argument order — each must dominate the use it feeds; then the call; then the
+	// releases. For a `tryCall` the releases still land among this block's BODY ops, i.e. ahead of the
+	// error-flag branch the parser emits as the terminator, so they run whichever way the call left.
+	for i in 0 upto clones.count() 'eachClone'
+		newRefs.push(appendPromotionRuntimeCall(module, project: project, funcIndex: funcIndex, result: try clones.get(i) otherwise panic("promoteArgsOf: clones.get OOB at {i}"), callee: StrCloneName, arg: try sources.get(i) otherwise panic("promoteArgsOf: sources.get OOB at {i} — the two columns are pushed together"), range: range))
+	end 'eachClone'
+
+	try module.ops.set(opIdx, value: withRewrittenArgs(op, args: promotedArgs)) otherwise panic("promoteArgsOf: module.ops.set OOB at {opIdx}")
+	newRefs.push(opIdx)
+
+	for clone in clones 'eachRelease'
+		newRefs.push(appendPromotionRuntimeCall(module, project: project, funcIndex: funcIndex, result: minter.mint(ValueTypeTag.void), callee: StrDecrefName, arg: clone, range: range))
+	end 'eachRelease'
+
+	return true
+end 'promoteArgsOf'
+
+// Does ANY of this call's arguments need a writable record? The plan loop's own predicate, asked over the
+// whole argument list first — one question, two askers, so the cheap gate cannot drift from what it gates.
+function anyArgNeedsAWritableRecord(sig FuncSignature, mask MutatedParamMask, args ValueIdArray, argLabels ByteArrayArray, immortal BoolArray) returns bool
+	for i in 0 upto args.count() 'eachArg'
+		if writtenPositionHoldsImmortalRecord(sig, mask: mask, argIndex: i, argId: try args.get(i) otherwise panic("anyArgNeedsAWritableRecord: args.get OOB at {i}"), argLabels: argLabels, immortal: immortal) 'needsOne'
+			return true
+		end 'needsOne'
+	end 'eachArg'
+	return false
+end 'anyArgNeedsAWritableRecord'
+
+// Does source argument `argIndex` hold an immortal record AND fill a parameter the callee writes?
+//
+// ⚠ **IT READS THE SOURCE-ORDER COLUMNS AND BRIDGES THEM WITH `argSlotPosition`, exactly as
+// `checkImmutableArgToMutatingParam` must** — the value is a fact about the argument the SOURCE wrote,
+// while the mask is indexed by DECLARATION position, and `grow(1, dest: "x")` writes parameter 1 with the
+// offending argument at source position 1 only by coincidence. Inverting the permutation by hand would be
+// a second slotting.
+//
+// A ValueId past the column's end is one this pass itself minted — a clone, or a release's `void` result
+// — which is by construction not immortal, so the short read IS the answer.
+function writtenPositionHoldsImmortalRecord(sig FuncSignature, mask MutatedParamMask, argIndex ParamCount, argId ValueId, argLabels ByteArrayArray, immortal BoolArray) returns bool
+	if not (try immortal.get(argId) otherwise false) 'notAnImmortalRecord'
+		return false
+	end 'notAnImmortalRecord'
+
+	let pos = argSlotPosition(sig.paramNames, argIndex: argIndex, label: try argLabels.get(argIndex) otherwise panic("writtenPositionHoldsImmortalRecord: argLabels.get OOB at {argIndex} — a call's argument columns are parallel by construction"))
+	return pos < sig.paramCount() and paramIsMutated(mask, param: pos)
+end 'writtenPositionHoldsImmortalRecord'
+
+// Append a one-argument runtime call to the module and return the index it landed at, recording its span
+// and the origin of the value it defines in the SAME lockstep `FileParseArtifact.emitOp` keeps: the span
+// table asserts it is appended in step with `module.ops`, so an op that skipped it would misattribute
+// every later span by one.
+//
+// It appends to `module.ops` and hands the index back rather than going through `IrModule.appendOp`,
+// because the caller SPLICES the index into a rebuilt `opRefs` at a chosen position — where `appendOp`
+// would push it onto the block's tail, which is past the call it must precede.
+function appendPromotionRuntimeCall(module MaxonModule, project Project, funcIndex FuncIndex, result ValueId, callee ByteArray, arg ValueId, range SourceRange) returns OpIndex
+	let args = singletonArgs(arg)
+	let opIndex = module.opCount()
+	module.ops.push(MaxonOp.call(result, callee: callee, args: args, argLabels: emptyArgLabels(args), argRanges: uniformArgRanges(args, range: range), argImmutableNames: NoImmutableArgNames, argDefaultSlots: NoDefaultArgSlots, mint: CalleeMint.notMinted))
+	project.opRanges.record(opIndex, range: range)
+	project.valueOrigins.record(funcIndex, valueId: result, opIndex: opIndex)
+	return opIndex
+end 'appendPromotionRuntimeCall'
+
+// ⭐⭐ **MINT A POST-PARSE SSA VALUE WITHOUT WRITING INTO THE PARSE MEMO.**
+//
+// `LowerMaxonToStd` reads a value's tag out of `IrFunction.valueTags` for every op it lowers and seeds its
+// own numbering from `valueTags.count()`, so a ValueId allocated without an entry in all four dense
+// columns would shift every later value's type by one — the invariant `Parser.mintValue` and
+// `ModuleInit.SynthesizedFunction.mint` each keep for their own tier.
+//
+// ⚠ **AND THE FOUR COLUMNS ARE ALIASED WITH THE FILE'S PARSE ARTIFACT.** `IrFunction.shallowCopy` —
+// which `IrModule.merge` relocates every function through — carries `valueTags`, `valueNameIds`,
+// `valueClosureEnv` and `valueIsCapturingClosure` across BY REFERENCE, and the artifact is memoized:
+// `queryAllModule` hands the same object back on a cache hit, and the stdlib body-demand fixpoint re-folds
+// artifacts within a single compile. Pushing onto the merged function's column would therefore lengthen
+// the ARTIFACT's column, and every later fold would inherit values no op defines. So the first mint
+// DE-ALIASES: it replaces each column with a private copy, and only that copy grows. A function this pass
+// does not change never mints, so it never copies.
+//
+// `valueWitnessIds` is deliberately not among them: it is grown on demand and stops at its highest paired
+// value, so a ValueId past its end already reads as unpaired — which is what a clone of a byte record is.
+type PromotedValueMinter
+	var func as IrFunction
+	var deAliased as bool
+
+	static function over(func IrFunction) returns PromotedValueMinter
+		return Self{func: func, deAliased: false}
+	end 'over'
+
+	// Allocate a fresh ValueId on the function and record its type, in lockstep. The id IS the column
+	// height before the push — the same dense numbering `LowerMaxonToStd` resumes from.
+	//
+	// The name id is `UnnamedTypeId` for both callees this pass emits, and that is exact rather than a
+	// filler: `__str_clone` hands back a `String`/`Character` record and `__str_decref` returns `void`,
+	// none of which is a `named`/`structRef` value — the only tags whose name column is ever read.
+	function mint(tag ValueTypeTag) returns ValueId
+		if not self.deAliased 'stillSharedWithTheArtifact'
+			self.func.valueTags = self.func.valueTags.clone()
+			self.func.valueNameIds = self.func.valueNameIds.clone()
+			self.func.valueClosureEnv = self.func.valueClosureEnv.clone()
+			self.func.valueIsCapturingClosure = self.func.valueIsCapturingClosure.clone()
+			self.deAliased = true
+		end 'stillSharedWithTheArtifact'
+
+		let id = self.func.valueTags.count()
+		self.func.valueTags.push(tag)
+		self.func.valueNameIds.push(UnnamedTypeId)
+		self.func.valueClosureEnv.push(0)
+		self.func.valueIsCapturingClosure.push(false)
+		return id
+	end 'mint'
+end 'PromotedValueMinter'

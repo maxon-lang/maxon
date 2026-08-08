@@ -130,29 +130,45 @@ export function passKindToString(pass PassKind) returns String
 	end 'name'
 end 'passKindToString'
 
-// The full pipeline (phases 2-3): the Maxon-level passes plus the Maxon→Std
-// lowering. This is the schedule the driver runs to take a parsed MaxonModule
-// down to a StdModule, which it then hands to the backend.
+// ⭐⭐ **THE PIPELINE IS SCHEDULED IN TWO STAGES, AND THE SEAM BETWEEN THEM IS A HARD IR BOUNDARY, NOT A
+// CONVENIENCE.** Everything up to and including `semanticCheck` operates on the MAXON module and may still
+// rewrite it; `lowerMaxonToStd` and everything after it operate on the Std one. The driver derives the
+// program's RUNTIME NEEDS and lays out `.data` in the seam, because that derivation is a walk of the FINAL
+// Maxon module and both of its neighbours' positions are forced:
 //
-// The Std-tier passes GROW in HERE, appended after `lowerMaxonToStd`: the
-// optimizations (mem2reg/canonicalize/cse/… at M3+), the Own-tier refcount passes
-// (M6), and `lowerToMachineForm` (M6) — which in v1 would have been a separate
-// "backend pipeline" over the MIR tier. Phase 7 (target lowering / regalloc /
-// prologue-epilogue) stays backend-direct: it produces a CodeResult, which is not
-// an IR module and so does not fit the module-field dispatch model.
+//   • it must run AFTER `semanticCheck`, because `promoteImmortalLiteralArgs` inserts `__str_clone` /
+//     `__str_decref` calls there, and a runtime entry the scan walked past is one nothing installs — an
+//     unresolved relocation;
+//   • it must run BEFORE `lowerMaxonToStd`, and that is not a preference. **MEASURED:** the lowering pushes
+//     the SAME `IrFunction` objects into the Std module (`transferFuncs`) and then `stdModule.addBlock`s
+//     onto their shared `blockRefs`, so after it runs a Maxon function's block refs name STD blocks — a
+//     Maxon-module walk then panics on `blockRef … not in module.blocks`, which is exactly what a scan
+//     placed below the whole pipeline did, on seven cases.
+//
+// The Std-tier passes GROW into the SECOND stage, appended after `lowerMaxonToStd`: the optimizations
+// (mem2reg/canonicalize/cse/… at M3+), the Own-tier refcount passes (M6), and `lowerToMachineForm` (M6) —
+// which in v1 would have been a separate "backend pipeline" over the MIR tier. Phase 7 (target lowering /
+// regalloc / prologue-epilogue) stays backend-direct: it produces a CodeResult, which is not an IR module
+// and so does not fit the module-field dispatch model.
 //
 // (v1 threads `project` here for `coverageEnabled`; M1's passes do not need it.)
-export function buildDefaultPipeline() returns PassKindArray
+export function buildMaxonTierPasses() returns PassKindArray
 	var passes = PassKindArray.create()
 	passes.push(PassKind.resolveTypes)
 	passes.push(PassKind.semanticCheck)
+	return passes
+end 'buildMaxonTierPasses'
+
+// The second stage — see `buildMaxonTierPasses` for what the seam between them is for.
+export function buildLoweringPasses() returns PassKindArray
+	var passes = PassKindArray.create()
 	passes.push(PassKind.lowerMaxonToStd)
 	passes.push(PassKind.insertRangeChecks)
 	passes.push(PassKind.pruneDeadBlockArgs)
 	passes.push(PassKind.elimTrivialBlockArgs)
 	passes.push(PassKind.foldConstOperands)
 	return passes
-end 'buildDefaultPipeline'
+end 'buildLoweringPasses'
 
 // The pipeline owns the IR modules across their successive phases. It starts with
 // `maxonModule` populated by the parser (Chunk C); the lowering pass reads one
@@ -172,7 +188,6 @@ export type PassPipeline
 	export var project as Project
 	export var maxonModule as MaxonModule
 	export var stdModule as StdModule
-	export var passes as PassKindArray
 	// The whole-program declaration index. `semanticCheck` reads its ENUM registry (E3113, A1s-throwsbox):
 	// `Parser.throwsTypeIsBoxedUnion` — the catch-site DECODE that decides whether an error flag is an ordinal
 	// or a box pointer — resolves a `throws` clause through `ProgramSignatures.enumOf`, so the check that a
@@ -185,31 +200,19 @@ export type PassPipeline
 	// arrangement for cross-cutting state, and because the query is memoized: `compileToCodeResult` has
 	// already forced it, so binding it here costs a reference and no work.
 	export var signatures as ProgramSignatures
+	// ⭐ **THE CHECKED NAME INDEX, BUILT ONCE FOR BOTH STAGES.** It is a FIELD rather than a `run`-local
+	// because the pipeline is now RUN TWICE — the Maxon-tier stage, then the lowering stage, with the
+	// runtime-needs derivation in the seam (`buildMaxonTierPasses`) — and one index is exactly what its own
+	// header claims: the Maxon function array is frozen across the whole pipeline, so a second build would
+	// re-derive an identical answer and re-run its duplicate refusal at a point nothing can have changed.
+	export var funcNames as FunctionNameIndex
 
-	export static function create(project Project, maxonModule MaxonModule, signatures ProgramSignatures) returns PassPipeline
-		return Self{
-			project: project,
-			maxonModule: maxonModule,
-			stdModule: StdModule.create(),
-			passes: PassKindArray.create(),
-			signatures: signatures
-		}
-	end 'create'
-
-	export function addPass(pass PassKind)
-		self.passes.push(pass)
-	end 'addPass'
-
-	export function addPasses(more PassKindArray)
-		self.passes.append(more)
-	end 'addPasses'
-
-	// Run each scheduled pass in order, gating on diagnostics after each: once a
-	// pass reports an error (semanticCheck's E3001/E3002), the pipeline throws
-	// rather than lower an invalid module (e.g. one with no `main` for the entry
-	// stub to call). The driver catches this, prints the diagnostics, and exits
-	// non-zero. Per-pass IR compaction/dump grows in with the backend cache.
-	export function run() throws CompileError
+	// ⚠ **IT THROWS, BECAUSE BUILDING THE NAME INDEX IS THE COMPILE'S DUPLICATE-FUNCTION-NAME REFUSAL**
+	// (E4015 / `refuseDuplicateFunctionName`). The gate used to be `run`'s; with two runs it belongs to the
+	// one construction they share, and the driver wraps it in the same `refuseCompile` it wraps `run` in.
+	// Nothing is refused later than before: the index was already built ahead of `resolveTypes`, which is
+	// still the first pass to report anything.
+	export static function create(project Project, maxonModule MaxonModule, signatures ProgramSignatures) returns PassPipeline throws CompileError
 		// ⭐⭐ **ONE CHECKED NAME INDEX FOR THE WHOLE PIPELINE (A2l).** Three passes derive a name-keyed map
 		// from this module's function array — `semanticCheck`'s throws map and escape summary, and
 		// `lowerMaxonToStd`'s layout-descriptor set — and each used to hand-roll its own bare `upsert` loop.
@@ -224,10 +227,7 @@ export type PassPipeline
 		// them take the index instead of the module, and stop resting on a guarantee none of them stated.
 		//
 		// It replaces `buildParamMutationSummary`'s build rather than adding one, so the duplicate refusal
-		// simply moves EARLIER — ahead of `resolveTypes` instead of the middle of `semanticCheck` — and
-		// `run`'s own `throws` is the gate it lands on.
-		// `var` because the passes below STORE it (the lowering keeps it as a field), and a binding handed to a
-		// storage-writing parameter must be mutable (E3019).
+		// simply moves EARLIER — ahead of `resolveTypes` instead of the middle of `semanticCheck`.
 		//
 		// ⚠ **IT USED TO BE BILLED TO `phase:semanticCheck`, AND THEN TO NOTHING AT ALL.** Its SIZE is no
 		// longer written down here, because it is now a row: `phase:pipelineNameIndex` in `--metrics`, read
@@ -237,9 +237,9 @@ export type PassPipeline
 		// 47 allocations, rung 5 at 79, i.e. **×1.68 across a 32× ladder**. That is the MAP's geometric
 		// buffer growth rather than a per-entry cost, which is why it does not track the program.
 		//
-		// **It cannot go inside the existing bracket, so it has one of its own.** `dispatch` opens one bracket
-		// PER PASS, while this must exist before the loop and is read by TWO of them, so billing it to either
-		// would make that pass's row mean two things — the defect `CompileTimings`' header exists to prevent.
+		// **It cannot go inside a pass's bracket, so it has one of its own.** `dispatch` opens one bracket
+		// PER PASS, while this exists before any of them and is read by several, so billing it to one would
+		// make that pass's row mean two things — the defect `CompileTimings`' header exists to prevent.
 		//
 		// ⭐ **AND THE PHASE IS NAMED `pipelineNameIndex`, NOT `nameIndex`, BECAUSE A ROW MUST NOT CLAIM MORE
 		// THAN IT BRACKETS.** There are THREE Maxon-tier `FunctionNameIndex.create` calls; this is one of
@@ -249,13 +249,31 @@ export type PassPipeline
 		// `ConformanceCheck.checkConformance`'s and `deriveStdlibFacts`' — are now inside
 		// `CompilePhase.checkDeclarations` and `CompilePhase.deriveRuntimeNeeds`, billed to the passes whose
 		// own cost they are.
-		let nameIndexProbe = PhaseProbe.beginPhase(self.project, phase: CompilePhase.pipelineNameIndex)
-		var funcNames = try FunctionNameIndex.create(self.maxonModule.functions, project: self.project)
-		recordPhase(self.project, phase: CompilePhase.pipelineNameIndex, probe: nameIndexProbe)
+		let nameIndexProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.pipelineNameIndex)
+		let funcNames = try FunctionNameIndex.create(maxonModule.functions, project: project)
+		recordPhase(project, phase: CompilePhase.pipelineNameIndex, probe: nameIndexProbe)
 
-		for pass in self.passes 'eachPass'
+		return Self{
+			project: project,
+			maxonModule: maxonModule,
+			stdModule: StdModule.create(),
+			signatures: signatures,
+			funcNames: funcNames
+		}
+	end 'create'
+
+	// Run `passes` in order, gating on diagnostics after each: once a
+	// pass reports an error (semanticCheck's E3001/E3002), the pipeline throws
+	// rather than lower an invalid module (e.g. one with no `main` for the entry
+	// stub to call). The driver catches this, prints the diagnostics, and exits
+	// non-zero. Per-pass IR compaction/dump grows in with the backend cache.
+	//
+	// The schedule is an ARGUMENT rather than accumulated state because the driver runs the pipeline in two
+	// stages and each stage is one list — see `buildMaxonTierPasses` for what sits between them.
+	export function run(passes PassKindArray) throws CompileError
+		for pass in passes 'eachPass'
 			logDebug(LogCategory.ir, message: function() gives "=== Running pass: {passKindToString(pass)} ===")
-			self.dispatch(pass, funcNames: funcNames)
+			self.dispatch(pass)
 			if projectHasErrors(self.project) 'errorGate'
 				throw CompileError.compileError
 			end 'errorGate'
@@ -272,13 +290,15 @@ export type PassPipeline
 	// runs through here, so no pass can be scheduled and go unmeasured, and the passes
 	// stay free functions that know nothing about the clock or the allocator. No pass
 	// calls another, so the phases are disjoint with nothing to subtract.
-	function dispatch(pass PassKind, funcNames FunctionNameIndex)
+	// The name index comes off `self` rather than riding a parameter: it is the PIPELINE's, built once for
+	// both stages, and threading it would have made a per-run copy of a fact the type already owns.
+	function dispatch(pass PassKind)
 		let probe = PhaseProbe.beginPhase(self.project, phase: compilePhaseOfPass(pass))
 
 		match pass 'dispatch'
 			resolveTypes then resolveTypes(self.project, module: self.maxonModule)
-			semanticCheck then semanticCheck(self.project, module: self.maxonModule, signatures: self.signatures, funcNames: funcNames)
-			lowerMaxonToStd then self.stdModule = lowerMaxonToStd(self.maxonModule, project: self.project, funcNames: funcNames)
+			semanticCheck then semanticCheck(self.project, module: self.maxonModule, signatures: self.signatures, funcNames: self.funcNames)
+			lowerMaxonToStd then self.stdModule = lowerMaxonToStd(self.maxonModule, project: self.project, funcNames: self.funcNames)
 			insertRangeChecks then insertRangeChecks(self.project, module: self.stdModule)
 			pruneDeadBlockArgs then pruneDeadBlockArgs(self.stdModule)
 			elimTrivialBlockArgs then elimTrivialBlockArgs(self.stdModule)
