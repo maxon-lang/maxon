@@ -41120,6 +41120,76 @@ export type Parser
 		try self.requireOneWordSlotType(self.signatures.mapValueType(giid), containerName: String.from(MapBuiltinBaseName), columnNoun: HashTableValueColumnNoun, tok: tok)
 	end 'requireMapColumnTypes'
 
+	// ⭐⭐ **A LITERAL'S COLUMNS ARE HELD TO WHOEVER SERVES THE MAP (W41-lit) — the door the retirement
+	// missed.** Every other `Map` door asks its column question through `requireContainerColumnTypes`, whose
+	// `map` arm is `isMapInstance`, so a corpus `Map` reaches none of the builtin's rules and is governed by
+	// its own declared `where` clause instead. This door called `requireMapColumnTypes` DIRECTLY and went on
+	// enforcing the retired record's four-name key roster: a user `Hashable`/`Equatable` type was
+	// **`E2015 … a key must be one of int, String, Character, Array`** in a `[k: v]` while the identical key
+	// through `PointMap.create()` + `upsert` worked (`map.md`'s `a-user-type-can-be-a-map-key`).
+	//
+	// ⚠ **IT CANNOT ROUTE THROUGH `requireContainerColumnTypes` ITSELF**: that function is a TOTAL router over
+	// the BUILTIN containers and meets its named panic on anything else, which is exactly what a corpus `Map`
+	// now is. What it shares with this is the SWITCH, not the body.
+	//
+	// ⚠ **TWO SIBLING DOORS HAVE THIS SHAPE AND ARE NOT YET THIS DEFECT — `List from […]`
+	// (`requireListElementType`) and `Vector from […]` (`requireVectorElementType`) call their column gate
+	// directly too.** They are CORRECT today for a reason that is one measurement and not an assumption:
+	// `isMapBaseName` is the ONLY container predicate carrying the `structOf` retirement switch — `isArray`/
+	// `isSet`/`isList`/`isVector`/`isManagedList` are all bare `name.equals(…)` — so those containers have no
+	// second regime to route to, and their construction still emits the runtime ops their gate describes. The
+	// day one of them is listed the way `stdlib/Map.maxon` was, its `from` door needs exactly this arm and its
+	// literal-born values need `moveMapLiteralColumnValue`'s, or it inherits both halves of W41-lit.
+	//
+	// ⛔⛔ **DROPPING THE ROSTER IS ONLY HALF, BECAUSE A LITERAL IS THE ONE DOOR A MAP IS BORN THROUGH WITH NO
+	// `with (K, V)` TO ANCHOR AN E3017 ON.** `ProgramSignatures.instantiationSites` is built by the token
+	// sweep out of `typealias` declarations, so nothing in it names an instance a literal inferred, and a key
+	// implementing NEITHER interface would be admitted in silence — a witness dispatch through a table nothing
+	// stamped. So the literal RECORDS its instantiation, at its first key, and the ordinary whole-program
+	// check reports `Map`'s own `where Key is Hashable and Equatable` against it: the same code, sentence and
+	// anchor a written alias gets, from one rule rather than two.
+	//
+	// ⚠ **THE VERDICT CANNOT BE TAKEN HERE, and that is structural rather than tidiness.** A type's
+	// `implements` clause is recorded when its OWN file is parsed and shv2 orders files only by source path,
+	// so the answer at this cursor depends on which file came first — `checkLiteralInitConformance`'s reason,
+	// one door over, for the identical deferral.
+	function gateMapLiteralColumns(giid GenericInstanceId, tok Token) throws ParseError
+		if self.signatures.isMapInstance(giid) 'synthesizedRecord'
+			try self.requireMapColumnTypes(giid, tok: tok)
+			return
+		end 'synthesizedRecord'
+
+		self.artifact.recordInferredInstantiationSite(GenericInstantiationSite.create(giid, nameLine: tok.line, nameColumn: tok.column, filePath: self.filePath))
+	end 'gateMapLiteralColumns'
+
+	// ⭐⭐ **A `[k: v]` LITERAL'S COLUMN VALUE MOVES IN AT THE PARSE ONLY WHILE THE TABLE *IS* THE SYNTHESIZED
+	// RECORD (W41-lit) — the OWNERSHIP half of the switch `gateMapLiteralColumns` above is the RULE half of.**
+	// A synthesized table takes ownership here, because `__map_upsert` is a runtime call with no signature for
+	// `applyCallerConsume` to read. The corpus `Map.upsert` has one, so the ORDINARY call machinery decides:
+	// it MOVES an owned managed argument at a consuming position, and CO-OWNS a borrowed one with a real
+	// `__mm_retain` (`handleEscapingBorrowFeed`). Doing BOTH is not belt-and-braces, it is a LEAK —
+	// `moveColumnValueIntoTable` drains the value from the statement's pending drops, so the map takes its
+	// reference and the statement then releases nothing.
+	//
+	// ⚠ **ONLY ONE COLUMN CLASS EVER SHOWED IT, which is why the suite was green over the whole defect.** The
+	// two protocols AGREE wherever the call CONSUMES: an `int` column owns no record, and a `String` column is
+	// `typeArgIsOwned` TRUE, so the ordinary machinery moves exactly what the literal had already moved. An
+	// all-scalar STRUCT answers that question `false` and is BORROWED — and there the drained temporary is a
+	// reference nobody releases (MEASURED: `let m = [1: Pair.create(3, b: 4)]` exited **101** against the
+	// oracle's 1; `specs-shv2/map.md`'s `literal.aggregate-value-column` is that program).
+	//
+	// ⚠ **ASKED OF THE BASE NAME AND NOT OF A giid, because the KEY moves in before the VALUE has been
+	// parsed** — the two-column instance does not exist yet, and the move may not wait for it
+	// (`parseMapLiteralBody`'s ordering contract). It is the same answer `isMapInstance(giid)` gives at the
+	// gate, the create and the upsert: a map literal's base is `Map` by construction.
+	function moveMapLiteralColumnValue(value ValueId, columnType MaxonType, valueStart TokenIndex) returns ValueId throws ParseError
+		if not self.signatures.isMapBaseName(MapBuiltinBaseName) 'theUpsertCallTakesOwnership'
+			return value
+		end 'theUpsertCallTakesOwnership'
+
+		return try self.moveColumnValueIntoTable(value, columnType: columnType, valueStart: valueStart)
+	end 'moveMapLiteralColumnValue'
+
 	// Emit `__map_create(keyDrop, valueDrop)` for instance `giid`, yielding the empty map record. The record is
 	// zeroed by `__mm_alloc`, so the first `upsert` lazily allocates the four buffers; the two destructor stamps
 	// carry the key's and the value's drop callees (`__str_decref` for a managed column, 0 for a trivial one) so
@@ -41189,7 +41259,7 @@ export type Parser
 	// each move-in has everything it needs at that point; only the two-column INSTANCE has to wait.
 	function parseMapLiteralBody(func IrFunction, firstKey ValueId, firstKeyStart TokenIndex, firstKeyTok Token, range SourceRange) returns ValueId throws ParseError
 		let keyType = try self.literalColumnTypeFor(firstKey, literalKind: MapLiteralSubject, columnNoun: HashTableKeyColumnNoun, valueTok: firstKeyTok)
-		let storedKey = try self.moveColumnValueIntoTable(firstKey, columnType: keyType, valueStart: firstKeyStart)
+		let storedKey = try self.moveMapLiteralColumnValue(firstKey, columnType: keyType, valueStart: firstKeyStart)
 
 		try self.consume(TokenKind.colon)
 		self.skipNewlines()
@@ -41197,12 +41267,12 @@ export type Parser
 		let firstValueStart = self.pos
 		let firstValue = try self.parseExpression(func, block: self.currentBlock)
 		let valueType = try self.literalColumnTypeFor(firstValue, literalKind: MapLiteralSubject, columnNoun: HashTableValueColumnNoun, valueTok: firstValueTok)
-		let storedValue = try self.moveColumnValueIntoTable(firstValue, columnType: valueType, valueStart: firstValueStart)
+		let storedValue = try self.moveMapLiteralColumnValue(firstValue, columnType: valueType, valueStart: firstValueStart)
 
 		let giid = self.signatures.builtinInstanceForColumns(MapBuiltinBaseName, key: keyType, value: valueType)
 		// The literal is the one door a map can be born through without a `with (K, V)` annotation, so it owes
 		// the same column gate the annotated door owes — asked BEFORE the create, so a refused literal emits no op.
-		try self.requireMapColumnTypes(giid, tok: firstKeyTok)
+		try self.gateMapLiteralColumns(giid, tok: firstKeyTok)
 
 		// ⭐⭐ **ONCE `Map` IS THE CORPUS TYPE, THE LITERAL CALLS ITS METHODS (W41).** The desugar is
 		// UNCHANGED in shape — an empty map plus one insert-or-replace per pair — and changes only in what
@@ -41226,10 +41296,14 @@ export type Parser
 			// `requireArrayLiteralElementMatches` — and rides the ordinary column-argument door, which
 			// characterizes a lone literal, refuses a mismatched tag and moves the value in. A mixed literal is
 			// therefore refused by the same sentence a mismatched `upsert` argument is.
-			let key = try self.parseMapColumnValue(func, giid: giid, position: HashTableKeyArgPosition, columnNoun: HashTableKeyColumnNoun, consume: true)
+			// ⚠ `consume` is the FIRST PAIR's question one door along, and it is asked with the giid in hand
+			// rather than off the base name: the table takes ownership at the parse only while it IS the
+			// synthesized record, else the desugared `Map.upsert` call takes it — see `moveMapLiteralColumnValue`.
+			let takesOwnershipAtTheParse = self.signatures.isMapInstance(giid)
+			let key = try self.parseMapColumnValue(func, giid: giid, position: HashTableKeyArgPosition, columnNoun: HashTableKeyColumnNoun, consume: takesOwnershipAtTheParse)
 			try self.consume(TokenKind.colon)
 			self.skipNewlines()
-			let value = try self.parseMapColumnValue(func, giid: giid, position: MapValueArgPosition, columnNoun: HashTableValueColumnNoun, consume: true)
+			let value = try self.parseMapColumnValue(func, giid: giid, position: MapValueArgPosition, columnNoun: HashTableValueColumnNoun, consume: takesOwnershipAtTheParse)
 			try self.emitMapLiteralUpsert(map, key: key, value: value, anchor: firstKeyTok, range: range)
 			self.skipNewlines()
 		end 'morePairs'
