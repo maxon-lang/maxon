@@ -42,6 +42,10 @@ let sharedEmptyConformances = ConformanceDeclArray.create()
 // only the REAL parse can build one, so the tolerant declaration sweep and every top-level constant's
 // transient `Parser` would otherwise each pay for an array with no writer.
 let sharedEmptyLiteralInitSites = LiteralInitSiteArray.create()
+
+// An instantiation the compiler INFERRED from a bracketed literal is rarer still, and shares both
+// reasons above: only the REAL parse reaches a literal body, and the overwhelming file writes none.
+let sharedEmptyInferredInstantiationSites = GenericInstantiationSiteArray.create()
 let sharedEmptyTypeNameDecls = TypeNameDeclArray.create()
 let sharedEmptyFunctionTypeDoors = PendingFunctionTypeDoorArray.create()
 let sharedEmptyTransformArities = PendingTransformArityArray.create()
@@ -235,6 +239,14 @@ export type FileParseArtifact
 	// `project.literalInitSites` by `commitLiteralInitSites`; the conformance they require is decided
 	// after the merge, by `checkLiteralInitConformance`.
 	export var literalInitSites as LiteralInitSiteArray
+	// ⭐⭐ **THIS FILE'S INSTANTIATIONS THAT NO `typealias` WROTE (W41-lit).** A `[k: v]` literal interns a
+	// `Map with (K, V)` from its first pair, so it is a genuine instantiation with a genuine source
+	// position and no declaration to anchor on — which is exactly what `ProgramSignatures.instantiationSites`
+	// (built by the token SWEEP, from `typealias` entries) structurally cannot hold. Appended to
+	// `project.inferredInstantiationSites` by `commitInferredInstantiationSites`; the `where` constraints
+	// they must satisfy are decided after the merge, by `checkWhereConstraints`, for the reason
+	// `literalInitSites` above is decided there.
+	export var inferredInstantiationSites as GenericInstantiationSiteArray
 	// This file's LOCAL type-name interner. Its ids are file-local; `mergeArtifact`
 	// folds them into the project interner and remaps this artifact's ids.
 	export var typeNames as TypeNameInterner
@@ -295,6 +307,7 @@ export type FileParseArtifact
 			typeNameDecls: sharedEmptyTypeNameDecls,
 			conformances: sharedEmptyConformances,
 			literalInitSites: sharedEmptyLiteralInitSites,
+			inferredInstantiationSites: sharedEmptyInferredInstantiationSites,
 			typeNames: TypeNameInterner.create(),
 			currentFuncIndex: 0,
 			diagnostics: DiagnosticArray.create(),
@@ -474,6 +487,15 @@ export type FileParseArtifact
 		self.literalInitSites.push(site)
 	end 'recordLiteralInitSite'
 
+	// Record an instantiation a bracketed literal inferred (W41-lit) — see `inferredInstantiationSites`.
+	// Copy-on-write off the shared empty on the first push, exactly as `recordLiteralInitSite`.
+	export function recordInferredInstantiationSite(site GenericInstantiationSite)
+		if self.inferredInstantiationSites.count() == 0 'firstSite'
+			self.inferredInstantiationSites = GenericInstantiationSiteArray.create()
+		end 'firstSite'
+		self.inferredInstantiationSites.push(site)
+	end 'recordInferredInstantiationSite'
+
 	// Record a function VALUE meeting a function-typed PLACE (see PendingFunctionTypeDoor). Copy-on-write
 	// off the shared empty on the first push, for the reason `recordTypeNameDecl` is: only the REAL parse
 	// can reach a door, so eagerly creating the array would bill one allocation to every declaration SWEEP
@@ -563,6 +585,7 @@ export function mergeArtifact(project Project, target MaxonModule, artifact File
 	commitInterfaces(project, artifact: artifact)
 	commitConformances(project, artifact: artifact)
 	commitLiteralInitSites(project, artifact: artifact)
+	commitInferredInstantiationSites(project, artifact: artifact)
 	commitDiagnostics(project, artifact: artifact)
 	commitDeferredNameDiagnostics(project, artifact: artifact)
 end 'mergeArtifact'
@@ -935,6 +958,21 @@ function commitLiteralInitSites(project Project, artifact FileParseArtifact)
 		project.literalInitSites.push(site)
 	end 'each'
 end 'commitLiteralInitSites'
+
+// Commit the artifact's literal-inferred instantiation sites into `project.inferredInstantiationSites`
+// (W41-lit) — a PUSH, for `commitLiteralInitSites`' reason: two literals over one instance are two
+// positions to report, and `checkWhereConstraints` drains them all.
+//
+// ⚠ **THE gid NEEDS NO FILE SCOPING, unlike the alias sites `rekeyScopedGenericAliases` rebuilds.** That
+// re-keying exists because two files may declare the same alias NAME over different instances, so a site
+// recorded during the sweep may name the wrong one. A literal has no alias name at all: its instance is
+// interned from the column types the parser itself resolved in the reading file, so the gid it carries is
+// already the one that file means.
+function commitInferredInstantiationSites(project Project, artifact FileParseArtifact)
+	for site in artifact.inferredInstantiationSites 'each'
+		project.inferredInstantiationSites.push(site)
+	end 'each'
+end 'commitInferredInstantiationSites'
 
 // Commit the artifact's range-check contributions into `project.rangeChecks` (P1.9) — a plain
 // upsert keyed by function name, which is UNIQUE per program (the whole-program E3006 check runs

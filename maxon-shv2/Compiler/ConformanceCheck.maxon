@@ -285,9 +285,17 @@ export typealias DeclaredConformanceMap = Map with (ByteArray, InterfaceNameSet)
 // instantiation. Runs AFTER `queryProgramSignatures` (the instances are interned by then) and reads the
 // DECLARED conformances `checkConformance` already validated (E3016), so a type reaching here as conforming has
 // a complete, correct implementation. A program with no constrained instantiation short-circuits allocation-free.
+//
+// ⭐⭐ **AN INSTANTIATION NEED NOT HAVE BEEN WRITTEN AS A `typealias`, AND THE ONE THAT IS NOT WAS THE ONE
+// GOING UNCHECKED (W41-lit).** `[k: v]` interns a `Map with (K, V)` from its first pair — a real
+// instantiation of a real constrained generic, with a real source position and no type name anywhere in the
+// program. The token SWEEP that fills `instantiationSites` reads `typealias` declarations, so it structurally
+// cannot see one; the PARSER records it instead (`Project.inferredInstantiationSites`). Both lists are walked
+// here, by one loop over one rule, because *"does this type argument satisfy the base's `where` clause"* is
+// one question and a second copy of it would be free to answer the literal differently from the alias.
 export function checkWhereConstraints(project Project, signatures ProgramSignatures)
-	let sites = signatures.instantiationSites()
-	if sites.count() == 0 'noSites'
+	let aliasSites = signatures.instantiationSites()
+	if aliasSites.count() == 0 and project.inferredInstantiationSites.count() == 0 'noSites'
 		return
 	end 'noSites'
 
@@ -300,10 +308,20 @@ export function checkWhereConstraints(project Project, signatures ProgramSignatu
 	end 'malformedProject'
 
 	let declared = declaredConformanceIndex(project)
+	// The DECLARED sites first, so a program whose alias and whose literal both name an inadmissible argument
+	// is reported against the declaration the author wrote before the one the compiler inferred.
+	checkInstantiationSites(project, signatures: signatures, declared: declared, sites: aliasSites)
+	checkInstantiationSites(project, signatures: signatures, declared: declared, sites: project.inferredInstantiationSites)
+end 'checkWhereConstraints'
+
+// Validate every site in one list. The two lists this check reads differ in where they were RECORDED — a
+// `typealias` by the token sweep, a bracketed literal by the parser — and in nothing the rule can see, so
+// the walk is written once rather than once per provenance.
+function checkInstantiationSites(project Project, signatures ProgramSignatures, declared DeclaredConformanceMap, sites GenericInstantiationSiteArray)
 	for site in sites 'eachSite'
 		checkOneInstantiation(project, signatures: signatures, declared: declared, site: site)
 	end 'eachSite'
-end 'checkWhereConstraints'
+end 'checkInstantiationSites'
 
 // ⭐ **`<Type> from "…"` REQUIRES `implements InitableFromStringLiteral` — checked HERE, at the merge, for
 // `checkWhereConstraints`' reason (BATCH2 slice 3).** The construction is sugar for `<Type>.init(<literal>)`

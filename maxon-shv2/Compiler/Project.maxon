@@ -4620,6 +4620,12 @@ export type Project
 	// merge order. An ARRAY for `conformances`' reason: the check drains it once whole-program and two
 	// constructions of one type are two positions to report. Read by `checkLiteralInitConformance`.
 	export var literalInitSites as LiteralInitSiteArray
+	// ⭐ **EVERY INSTANTIATION A BRACKETED LITERAL INFERRED (W41-lit)** — one per literal, in merge order,
+	// an ARRAY for `literalInitSites`' reason. It is the PARSER-side half of
+	// `ProgramSignatures.instantiationSites`, which holds the ones a `typealias` wrote; the two are read
+	// together by `checkWhereConstraints`, because a `where` clause binds an instance however it was
+	// spelled and a literal is the one spelling that writes no type name.
+	export var inferredInstantiationSites as GenericInstantiationSiteArray
 	// id <-> name table behind every `MaxonType.named`. Folded from per-file
 	// artifact interners at merge time (see TypeNameInterner.maxon).
 	export var typeNames as TypeNameInterner
@@ -4701,6 +4707,7 @@ export type Project
 			declaredConformances: DeclaredConformanceMap.create(),
 			declaredConformanceIndexBuilt: false,
 			literalInitSites: LiteralInitSiteArray.create(),
+			inferredInstantiationSites: GenericInstantiationSiteArray.create(),
 			typeNames: TypeNameInterner.create(),
 			opRanges: SourceRangeTable.create(),
 			valueOrigins: ValueOriginTable.create(),

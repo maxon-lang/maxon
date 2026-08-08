@@ -1,0 +1,19 @@
+// Test: error.literal-key-conforming-to-neither
+typealias Val = int(i64.min to i64.max)
+
+type Opaque
+	export var x as Val
+
+	export static function create(x Val) returns Self
+		return Self{x: x}
+	end 'create'
+end 'Opaque'
+
+function main() returns ExitCode
+	let m = [Opaque.create(1): 5]
+	return m.count() as ExitCode
+end 'main'
+---
+CompilerError:
+error E3017: <fragment>:13:11: Type 'Opaque' does not satisfy constraint 'Hashable' required by type parameter 'Key' of 'Map'
+error E3017: <fragment>:13:11: Type 'Opaque' does not satisfy constraint 'Equatable' required by type parameter 'Key' of 'Map'
