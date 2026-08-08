@@ -841,29 +841,38 @@ q|1
 
 ### String literals are COPY-ON-WRITE
 
-⭐⭐ **A STRING LITERAL'S BYTES ARE SHARED; ITS RECORD IS NOT.** Every use of `"hello"` in a program reads
-ONE immortal `.rdata` blob — the bytes are interned, so a literal written a hundred times costs one copy of
-its text. What each use gets of its OWN is the 48-byte record that describes those bytes (`buffer@0`,
-`length@8`, `capacity@16`), heap-allocated per use over the shared blob with `capacity@16 =
-RdataBufferCapacity`. The first write through any such record detaches it onto a private buffer
-(`BufferOwnership.emitBufferCannotHold` is unconditionally true against a negative capacity), and the blob
-is left untouched for every other use.
+⭐⭐ **A STRING LITERAL'S BYTES ARE SHARED; A WRITE THROUGH ONE USE IS NOT.** Every use of `"hello"` in a
+program reads ONE immortal `.rdata` blob — the bytes are interned, so a literal written a hundred times
+costs one copy of its text. Each use describes those bytes through its own 48-byte record (`buffer@0`,
+`length@8`, `capacity@16 = RdataBufferCapacity`), and the first write through one detaches it onto a private
+buffer (`BufferOwnership.emitBufferCannotHold` is unconditionally true against a negative capacity), leaving
+the blob untouched for every other use.
 
-⚠ **BOTH HALVES OF THAT ARE LOAD-BEARING, AND THE RECORD HALF IS WHAT WAS MISSING.** `__str_append` already
-detached the BUFFER; what it had nowhere to publish the detach INTO was a writable record. A literal's
-record used to live in `.rdata` alongside its blob and be DEDUPED across every use, so the write-back of
-`buffer@0`/`capacity@16`/`length@8` had two separate defects at once, and which one you saw depended
-entirely on the target:
+⚠ **THE DETACH NEEDS SOMEWHERE WRITABLE TO PUBLISH ITSELF, AND THAT IS THE HALF THAT WAS MISSING.**
+`__str_append` already detached the BUFFER; what it had nowhere to write back was the new
+`buffer@0`/`capacity@16`/`length@8`, because a literal's record is emitted into `.rdata` beside its blob.
+The symptom split by target, and BOTH readings below are measured at `4e2b0b2b38`:
 
 - **x64/arm64** — the record is in a read-only image section, so the store faulted. `grow("hello")` was an
   ACCESS VIOLATION (`0xC0000005`, exit 3221225477) with an empty stdout.
-- **wasm32-wasi** — linear memory has no read-only segment, so the identical store SUCCEEDED, and because
-  every use shared one record the write was visible through all of them: `grow("hello")` followed by an
-  entirely independent `print("hello")` printed `helloXY`. Silent corruption of a shared constant, with the
-  leak gate's orphaned-buffer 101 as the only signal.
+- **wasm32-wasi** — linear memory has no read-only segment, so the identical store SUCCEEDED and the program
+  ran to completion. **MEASURED: exit 101 with stdout CORRECT** — `grow("hello")` then `print("hello")`
+  printed `hello`, and doubling the pair printed `hello` twice. The leak gate's orphaned detached buffer is
+  the whole signal. It does NOT print `helloXY`: `GlobalDataTable` dedupes identical BLOBS but mints a
+  record per literal OCCURRENCE (`__str_rec_1`, `__str_rec_3`, … in any golden), so the repointed record is
+  the writing use's own and no reader can see it.
 
-⇒ the cases below run on EVERY target deliberately. A check that only watches for the fault cannot see the
-wasm half, and the wasm half is the one that returns a wrong ANSWER.
+⇒ the cases below run on EVERY target deliberately. A check that only watched for the fault would call the
+wasm lane green while it leaked, and a check that only watched stdout would call the x64 lane green while it
+crashed.
+
+⭐ **WHAT MAKES THEM PASS: the literal at a WRITTEN parameter position is given a heap record of its own**
+(`LiteralArgPromotion` — `__str_clone` before the call, `__str_decref` after). A literal that no callee
+writes still lowers to its immortal `.rdata` record and costs nothing. ⚠ A literal reaching such a position
+THROUGH A MERGE (`grow("a" if c else "b")`, `grow(try arr.get(0) otherwise "lit")`) is NOT covered — the
+argument is a block-arg, and one edge of the second is a real heap element whose write must reach the array,
+so no single substitution at the call can be right on both edges. That needs every literal use to lower to
+its own heap record, which is a separate rung; those shapes still fault.
 
 <!-- test: string-literal-through-a-mutating-parameter -->
 ### A Literal Passed to a Mutating Parameter
