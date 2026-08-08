@@ -22,10 +22,10 @@ language a user program may write.
 an id is renamed at the cost of orphaning a golden in every target directory; the count that matters is
 the one the refusal itself renders, from the arms' own constants.
 
-The reference compiler refuses a user call to either with its not-exported diagnostic. shv2 enforces the
-same visibility on whether the calling file is physically **under `stdlib/`**. The refusal names the reason
-rather than falling through to the unknown-method roster — the method exists, it is simply not the
-caller's to reach.
+The reference compiler refuses a user call to any of the four with its not-exported diagnostic. shv2
+enforces the same visibility on whether the calling file is physically **under `stdlib/`**. The refusal
+names the reason rather than falling through to the unknown-method roster — the method exists, it is
+simply not the caller's to reach.
 
 ⚠ This paragraph used to give the reason as *"shv2 has no `module` keyword and never parses
 `stdlib/String.maxon`"*, and **both halves have been false since W17**: `module` is a contextual modifier
@@ -118,7 +118,7 @@ end 'main'
 error E2015: <fragment>:5:12: Unsupported: String method 'addressableBytes' — it is STDLIB-ONLY (`module function` in `stdlib/String.maxon`, which the reference compiler refuses to user code as a not-exported error) and this file is not under `stdlib/`. `addressableBytes` hands out a live view of a String's own bytes, and `byteAt`/`byteAtOrPanic` each read one of them — the first through a catchable failure, the second through none — and `hasSingleByteGraphemes` reports a private flag of the record; user code reaches the bytes through `toByteArray()`, which copies
 ```
 
-A NEAR MISS of one of the two — `addressableByte` for `addressableBytes` — is a typo and must be answered
+A NEAR MISS of one of the four — `addressableByte` for `addressableBytes` — is a typo and must be answered
 as one. The visibility refusal is reachable only once a real method NAME has matched, so the roster
 answers here and nobody is told they lack permission for a method nobody has.
 
@@ -140,9 +140,10 @@ end 'main'
 error E2015: <fragment>:3:15: Unsupported: `String` member 'addressableByte' — shv2 provides append/byteLength/contains/toLower/toUpper/replace/split/bytes/toByteArray/codepoints/utf16/isEmpty/clone/replaceFirst/startIndex/endIndex/findFirst/findLast/indexAfter/slice/trim/trimStart/trimEnd/addressableBytes/byteAt/byteAtOrPanic/hasSingleByteGraphemes/setByte/hash/equals; that list IS the surface, so nothing else is served here
 ```
 
-And the roster a user program is handed NAMES both stdlib-only methods. This is the case the derivation
-exists for: before it, the sentence listed twenty-six members by hand and omitted exactly these two, so a
-user searching it for a way at a String's bytes was told — by silence — that neither existed.
+And the roster a user program is handed NAMES every stdlib-only method. This is the case the derivation
+exists for: before it, the sentence listed twenty-six members by hand and omitted exactly the two that
+existed then, so a user searching it for a way at a String's bytes was told — by silence — that neither
+existed.
 
 <!-- test: error.unknown-string-method-names-the-stdlib-only-pair -->
 ```maxon

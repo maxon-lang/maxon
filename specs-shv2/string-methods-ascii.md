@@ -33,6 +33,20 @@ Two consequences follow from "bytes and ASCII only", and they are what these tes
 `toLower`/`toUpper`/`replace` return a NEW `String` and `split` a NEW `Array with String` whose elements
 are new `String`s; the receiver is never modified and never aliased by a result.
 
+⚠ **`startsWith` AND `endsWith` ARE SERVED BY `stdlib/String.maxon` AND THE OTHER FIVE ARE SHV2's OWN,
+AND EVERY ANSWER BELOW IS THE SAME ON EITHER SIDE OF THAT LINE.** The two were struck from
+`Parser.stringSurfaceMemberNames`, which is the whole of what moved them: an unrostered member of a byte
+record is put to the corpus, and the corpus already declared both. This file is where that is checked to
+have changed NOTHING a program can observe — which is the only claim a retirement is allowed to make.
+
+The one thing it genuinely does change is the OWNERSHIP ROUTE. A synthesized arm emits an inline runtime
+call and borrows its argument; a corpus call goes through the ordinary call door, which is where a result
+is minted, an owned temporary is enrolled and a consumed parameter is applied. Both end up borrowing
+here — the caller drops the temporary after the call returns — but they arrive there by different code,
+so the last two cases pin the two shapes that could tell them apart: an argument that is an owned
+TEMPORARY with nobody else to free it, and an argument that is a live BINDING the caller uses again
+afterwards.
+
 ## Tests
 
 <!-- test: case-conversion-leaves-non-ascii-bytes-untouched -->
@@ -360,4 +374,72 @@ hello, world
 a+b+c
 ok
 [Hello][World]
+```
+
+<!-- test: affix-predicate-argument-is-an-owned-temporary -->
+### An affix argument nobody else owns is freed exactly once
+`makeAffix` returns a freshly built `String`, so the value handed to `startsWith` / `endsWith` is an
+owned temporary with no binding behind it. Whoever the predicate is served by, the temporary must be
+released once — a second owner leaks it and a double drop frees the caller's bytes underneath it. The
+suite fails the case outright if either happens, because a leak is an exit code and not a printed
+difference.
+```maxon
+function makeAffix(head bool) returns String
+	var s = "af"
+	s.append("fix" if head else "ter")
+	return s
+end 'makeAffix'
+
+function main() returns ExitCode
+	let s = "affix-in-the-middle-after"
+	if s.startsWith(makeAffix(true)) 'a'
+		print("start\n")
+	end 'a'
+	if s.endsWith(makeAffix(false)) 'b'
+		print("end\n")
+	end 'b'
+	if s.startsWith(makeAffix(false)) 'c'
+		print("badStart\n")
+	end 'c'
+	print("{s.count()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+start
+end
+25
+```
+
+<!-- test: affix-predicate-argument-is-a-live-binding -->
+### An affix argument that is a live binding survives the call
+The mirror of the case above: the argument is NAMED, so the predicate must borrow it and leave the
+caller's ownership alone. Every use after the call is what proves it — the binding is read again, passed
+again, and finally printed.
+```maxon
+function main() returns ExitCode
+	let s = "prefix-body-suffix"
+	let p = "prefix"
+	if s.startsWith(p) 'a'
+		print("first\n")
+	end 'a'
+	if s.startsWith(p) 'b'
+		print("second\n")
+	end 'b'
+	print("{p.byteLength()}\n")
+	print("[{p}]\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+first
+second
+6
+[prefix]
 ```
