@@ -2022,9 +2022,11 @@ end 'buildBoolToString'
 // function's half of that contract — a sum of two `length@8` byte counts, hence never negative.
 //
 // ⚠ **THE OLD ALLOCATION IS RELEASED THROUGH THE SHARED PAIR, AND ONLY AFTER BOTH COPIES ARE DONE.**
-// `emitOwedAllocationBase` says WHICH allocation the record owes a release to before the detach republishes
-// the fields that answer it (an inline String owes nothing — its bytes are in its own box), and
-// `emitReleaseOwedBase` pays it, null-guarded, once the blit has finished reading. ⭐ The release rides a
+// `__mm_cow_detach` reads WHICH allocation the record owes a release to (via `emitOwedAllocationBase`)
+// before it republishes the fields that answer it, and RETURNS it rather than paying it — an inline String
+// owes nothing, its bytes being in its own box — and `emitReleaseOwedBase` pays it here, null-guarded, once
+// the blit has finished reading. That split across the two functions is this caller's doing: see
+// `buildMmCowDetach`, where the aliasing below is the stated reason the debt comes back out at all. ⭐ The release rides a
 // BLOCK ARG into `blit` (0 on the in-place edge) rather than happening in the detach block, and that is
 // load-bearing rather than tidy: `s.append(s)` aliases `other` to `self`'s OLD buffer, so releasing before
 // the blit is a read-after-release. It is invisible today — `__mm_free` reclaims nothing under the bump
