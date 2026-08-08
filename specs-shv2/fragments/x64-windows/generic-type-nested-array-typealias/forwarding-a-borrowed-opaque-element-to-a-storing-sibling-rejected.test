@@ -1,0 +1,38 @@
+// Test: forwarding-a-borrowed-opaque-element-to-a-storing-sibling-rejected
+typealias ExitCode = int(0 to 125)
+typealias Idx = int(0 to u64.max)
+
+type GHolder uses T
+	typealias TArray = Array with T
+
+	export var items as TArray
+	export var spare as TArray
+
+	export static function create() returns Self
+		return Self{ items: TArray.create(), spare: TArray.create() }
+	end 'create'
+
+	export function seed(s T)
+		items.push(s)
+	end 'seed'
+
+	function stash(v T)
+		spare.push(v)
+	end 'stash'
+
+	export function relay(i Idx)
+		stash(try items.get(i) otherwise panic("out of range"))
+	end 'relay'
+end 'GHolder'
+
+typealias StringHolder = GHolder with String
+
+function main() returns ExitCode
+	var h = StringHolder.create()
+	h.seed("a value long enough to force a heap allocation")
+	h.relay(0)
+	return 0
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:23:18: Unsupported: 'relay' takes a reference to a borrowed type-parameter value, but the method reserves no layout descriptor to take that reference through — the shared generic body compiles once for every instantiation, so how a `T` is referenced (a copy for a `String`, an incref for a struct, nothing for an `int`) is read from the enclosing instance's descriptor at run time, and the parameter carrying it is reserved only for the method shapes that are known ahead of the body to need one. Two shapes reach this: a `static function` that builds a record out of a borrowed `T`, which has no `self` to source the descriptor from (build the record in an instance method instead); and a method that FORWARDS a borrowed `T` — a `get`/`first`/`last`, a `for` element, an opaque field read — to a sibling that moves it into durable storage, which is not built yet (read the value in the sibling itself, or pass it a value this method owns)

@@ -16038,11 +16038,27 @@ export type Parser
 	// so a body whose only record construction is a `Self{…}` in a `static` reserves nothing (a static generic
 	// constructor has no descriptor to source, `dropsFeed`'s stated bound), and such a body storing a borrowed
 	// opaque value is refused here rather than aborting the compiler in `appendTypeParamDescriptor`.
+	//
+	// ⚠⚠ **A SECOND SHAPE REACHES IT SINCE W41-fix, AND I WROTE THE OPPOSITE HERE BEFORE MEASURING IT.**
+	// `handleEscapingBorrowFeed` takes a reference through this same descriptor when a body FORWARDS a borrowed
+	// opaque `T` to a sibling that stores it, so such a body owes a descriptor too — and the claim that *"the
+	// descriptor-need fixpoint already gives a caller whatever its self-callee needs"* is FALSE for exactly
+	// this case: the storing sibling MOVES its parameter, so it needs no descriptor itself, so there is no need
+	// to propagate and the forwarding caller is left with none. MEASURED on a `relay(i)` doing
+	// `stash(try items.get(i) otherwise panic(…))` — refused here, where the oracle runs it.
+	//
+	// ⭐ That refusal REPLACES A MISCOMPILE rather than a working program: before W41-fix the same body handed
+	// the sibling a borrow it moved into durable storage, which is the `Map.grow()` double free itself. So the
+	// direction is sound and the shape is simply not built yet — a descriptor seed for "forwards a borrowed
+	// opaque value to a storing sibling" is what would let it compile, and the token pre-scan cannot see that
+	// forward (the value is an expression, not a parameter, so the feed-edge scanner does not record it
+	// either). Measured corpus reach: ZERO — the suite is 4771/0 and every case builds the whitelisted stdlib.
+	// The MESSAGE therefore names both shapes rather than asserting the `static` one as the cause.
 	function requireDescriptorForOpaqueStores(nameTok Token) throws ParseError
 		if not self.functionStoredOpaqueWithoutDescriptor 'nothingOwed'
 			return
 		end 'nothingOwed'
-		throw ParseError.unsupported("'{String.from(nameTok.value)}' stores a borrowed type-parameter value into a record it builds, but the method reserves no layout descriptor to take that reference through — the shared generic body compiles once for every instantiation, so how a `T` is referenced (a copy for a `String`, an incref for a struct, nothing for an `int`) is read from the enclosing instance's descriptor at run time, and the parameter carrying it is reserved only for the method shapes that are known ahead of the body to need one. A `static function` is the shape that reaches this: it has no `self` to source the descriptor from, so build the record in an instance method instead", line: nameTok.line, column: nameTok.column)
+		throw ParseError.unsupported("'{String.from(nameTok.value)}' takes a reference to a borrowed type-parameter value, but the method reserves no layout descriptor to take that reference through — the shared generic body compiles once for every instantiation, so how a `T` is referenced (a copy for a `String`, an incref for a struct, nothing for an `int`) is read from the enclosing instance's descriptor at run time, and the parameter carrying it is reserved only for the method shapes that are known ahead of the body to need one. Two shapes reach this: a `static function` that builds a record out of a borrowed `T`, which has no `self` to source the descriptor from (build the record in an instance method instead); and a method that FORWARDS a borrowed `T` — a `get`/`first`/`last`, a `for` element, an opaque field read — to a sibling that moves it into durable storage, which is not built yet (read the value in the sibling itself, or pass it a value this method owns)", line: nameTok.line, column: nameTok.column)
 	end 'requireDescriptorForOpaqueStores'
 
 	// Commit this function's accumulated range-check sites to the artifact (P1.9), keyed by `name`.
@@ -44371,7 +44387,7 @@ export type Parser
 	end 'containerElementIsFloatWord'
 
 	// ⛔ **AN OPAQUE-`T` ARRAY ELEMENT MUST BE A VALUE THIS FRAME OWNS (W10) — the array move-in twin of
-	// `emitOpaqueFieldReassign`'s refusal, and the two doors now make the same demand.** The array destroys each
+	// `emitOpaqueFieldReassign`'s refusal, and the two doors make the same demand.** The array destroys each
 	// element exactly once, so a BORROWED element would hand the array a reference nobody transferred — freed
 	// once by the array's walk and never acquired, which is `0xC0000005` on an `.rdata` record and a double
 	// free on a heap one.
@@ -44383,32 +44399,31 @@ export type Parser
 	// remaining owned sources are exactly the two the body can produce: an enrolled feed parameter, and a
 	// `pop`/`remove` result the runtime already moved out.
 	//
-	// ⛔⛔ **THIS REFUSAL IS INTRA-PROCEDURAL, AND ONE METHOD HOP DEFEATS IT — A LIVE MISCOMPILE, MEASURED
-	// 2026-08-07 (W41 optimization pass).** The demand is made of the value AT THE STORE. Inside a helper the
-	// stored value is a PARAMETER, which `valueIsOwnedHeap` answers true for, so the store is admitted; and
-	// nothing then checks that the helper's CALLER handed that parameter an owned value. So the identical
-	// borrow is refused when it is stored directly and silently miscompiled when it is stored one call away:
+	// ⛔⛔ **IT IS THE STORE THAT IS ASKED, AND A PARAMETER ANSWERS "OWNED" WHATEVER ITS CALLER DID — SO ONE
+	// METHOD HOP USED TO DEFEAT THIS ENTIRELY (MEASURED 2026-08-07).** `stdlib/Map.maxon`'s `grow()` →
+	// `insertAtSlot()` is that hop, and a `Map` with ANY managed column double-freed every entry as soon as it
+	// crossed its load factor: `Map with (String, Count)` printed the right answer for 12 entries and
+	// segfaulted at 13 (`cap` 16 → 32) where the oracle prints `count 200`. The suite was 4769/0 over it — no
+	// spec case built a managed-column map past the load factor.
 	//
-	//     function storeAt(slot SlotIdx, v T)      // `v` is a parameter ⇒ admitted here
-	//         try items.set(slot, value: v) otherwise panic("oob")
-	//     end 'storeAt'
-	//     let borrowed = try old.get(0) otherwise panic("oob")
-	//     try items.set(0, value: borrowed) …      // E2015, correctly
-	//     storeAt(0, v: borrowed)                  // ADMITTED — exit 139 at teardown
+	// ⭐⭐ **THE HOLE IS CLOSED AT THE CALLER, NOT HERE, AND THAT IS THE ONLY FRAME THAT COULD CLOSE IT.**
+	// `handleEscapingBorrowFeed` now takes a real reference through the descriptor for a BORROWED opaque
+	// argument at a callee-storage feed position, so this door's "the value is owned" answer is TRUE by
+	// construction rather than by an inference across a boundary. The rule both frames keep is one sentence —
+	// *whoever hands a value to an opaque sink hands over a reference IT owns; if it does not own one, it takes
+	// one first* — and the refusal below is this frame's half of it.
 	//
-	// **`stdlib/Map.maxon`'s `grow()` → `insertAtSlot()` is exactly that hop**, so a `Map` with ANY managed
-	// column double-frees every entry as soon as it crosses its load factor: `Map with (String, Count)` prints
-	// the right answer for 12 entries and segfaults at 13 (`cap` 16 → 32). Reproduced identically on
-	// `69e655d38`, so the DEFECT predates W41 — but W41 is what made it reachable, because the synthesized
-	// `Map` it retired had no such body (the same program is exit 0 at 128,000 entries on that binary).
-	// The suite is 4769/0 over it: no spec case builds a managed-column map past the load factor.
-	//
-	// ⚠ **AND THE PARENTHETICAL THAT USED TO SIT IN THE PARAGRAPH ABOVE — *"there is no
-	// `__retain_type_param`, and the layout descriptor carries no retain word"* — WAS TRUE AT W10 AND FALSE
-	// FROM W41.** Both exist now (`ArrayRuntime.RetainTypeParamName`, `retainFunc@64`), and `moveOpaqueValueInto`
-	// already spends them on the FIELD-store side through `coOwnBorrowedOpaqueForConsume`. It is left recorded
-	// here rather than deleted because it is the cure this door still does not take, and a reader sent to fix
-	// the miscompile above was previously told the mechanism did not exist.
+	// ⚠ **WIDENING THIS DOOR TO CO-OWN A BORROW INSTEAD WAS TRIED AND MEASURED WORSE, TWICE.** (a) Alone it
+	// changes nothing: a feed parameter is enrolled OWNED, so `emitScopeDrops` releases it at the method's exit
+	// and that release cancels the retain the store just took — read off the emitted x64 as
+	// `__retain_type_param` … `__arr_set` … `__drop_type_param`, with the `Map` still segfaulting at 13.
+	// (b) Reserving the descriptor such a co-own needs (a `push`/`set`/`insert` token seed) turns
+	// `feed-into-borrowing-user-push-rejected` from a clean REFUSAL into a compiling program that LEAKS
+	// (exit 101) — the descriptor it gains has a ZERO `destroyFunc@40`, because that word is stamped only for an
+	// instance holding a managed opaque `Array` FIELD while `retainFunc@64` is stamped off the type ARGUMENT.
+	// A refusal traded for a leak is not a widening. That asymmetry is a defect of its own and is filed, not
+	// worked around here: the identical leak reproduces with the descriptor sourced from a plain `sizeof(T)`,
+	// so it predates any of this.
 	function requireOwnedOpaqueElement(value ValueId, valueStart TokenIndex) throws ParseError
 		if self.valueIsOwnedHeap(value) 'owned'
 			return
@@ -45227,6 +45242,12 @@ export type Parser
 		// own sink, but the PREDICATE must stay one: a widening — W20's borrowed-opaque retain is exactly one —
 		// landing on only one of them is not a diagnostic, it is one sink taking a reference nobody transferred
 		// while the other refuses the identical program.
+		//
+		// ⚠ **BOTH DOORS ASK IT OF THE VALUE AT THE STORE, AND A PARAMETER ANSWERS "OWNED" WHATEVER ITS CALLER
+		// DID — SO ONE METHOD HOP USED TO DEFEAT BOTH (W41-fix).** That is closed at the CALLER rather than
+		// here: `handleEscapingBorrowFeed` takes a real reference for a borrowed opaque argument at a
+		// callee-storage feed position, so the "owned" answer both doors read is now TRUE by construction. See
+		// `requireOwnedOpaqueElement` for the measurement, and for why widening either door instead was worse.
 		if not self.valueIsOwnedHeap(value) 'notOwned'
 			throw ParseError.unsupported("reassigning the opaque type-parameter field '{String.from(anchor.value)}' of '{String.from(layout.name)}' from a value that is not an owned parameter — the shared generic body cannot copy an opaque `T` value, so assign it from a parameter the method consumes; aliasing one opaque field into another needs the descriptor-gated copy a later slice adds", line: anchor.line, column: anchor.column)
 		end 'notOwned'
@@ -50520,7 +50541,10 @@ export type Parser
 				// ⭐ A borrowed argument whose borrow ESCAPES into a durable instance field must not dangle when the
 				// container OUTLIVES the source (the retain-escaping rung — the RED cross-scope UAF): a static
 				// constructor feed RETAINS a co-owned trivial struct, an instance-method feed materializes a temp.
-				self.handleEscapingBorrowFeed(info, position: position, argValue: argValue, anchor: anchor)
+				// ⚠ Its RESULT replaces the argument, exactly as `transferConsumedArg`'s does and for the identical
+				// reason: an OPAQUE callee-storage feed takes its reference through the descriptor, and for a
+				// byte-record type argument that reference is a `__str_clone` — a DIFFERENT record (W41-fix).
+				try args.set(i, value: self.handleEscapingBorrowFeed(info, position: position, argValue: argValue, anchor: anchor)) otherwise panic("transferConsumedArgs: args.set OOB at {i}")
 				continue
 			end 'borrowed'
 			// Only an OWNED managed value can double-free: it MOVES (no per-position copy), so the same value at a
@@ -50599,18 +50623,54 @@ export type Parser
 	//     container go through); reverse drop order then frees the element after the container that borrowed it.
 	//     (A shared-body REASSIGN feed of a co-owned trivial struct is rejected up front at
 	//     `emitOpaqueFieldReassign`, so it never reaches this promotion.)
-	function handleEscapingBorrowFeed(info ParamConsumeInfo, position ParamCount, argValue ValueId, anchor Token)
+	//
+	// ⛔⛔ **AND AN OPAQUE `T` ARGUMENT AT A CALLEE-STORAGE POSITION TAKES A REAL REFERENCE HERE — THE OTHER
+	// HALF OF THE `Map.grow()` DOUBLE FREE (W41-fix).** A callee-storage feed parameter is enrolled OWNED
+	// (`bindParameters`) and its sink MOVES it, so the callee's whole ownership story rests on the caller
+	// having handed over a reference. Every other path into that position does hand one over —
+	// `argIsConsumedAt` transfers, `isOpaqueOwnedFeedArg` moves — and this one, the SHARED-body borrow, handed
+	// over nothing at all: a lifetime extension keeps the caller's own value alive, it does not give the callee
+	// a reference to keep. `stdlib/Map.maxon`'s `grow()` → `insertAtSlot(key: <borrowed>)` is exactly that
+	// path, and the entry was then freed by the NEW array's element walk and by the OLD array's (measured:
+	// `0xC0000005` at 13 entries where the oracle prints `count 200`).
+	//
+	// ⚠ **IT IS TAKEN HERE AND NOT AT THE STORE, BECAUSE THIS IS THE ONLY FRAME THAT CAN SEE THE BORROW.**
+	// Inside the callee the value is a PARAMETER and answers "owned" whatever the caller did — which is the
+	// inference that was wrong. Taking it here makes that answer TRUE by construction, and needs no
+	// cross-procedural analysis: the rule is local and total — a feed position always receives a reference the
+	// callee may keep. (`requireOwnedOpaqueElement` carries the measurement showing that widening the STORE
+	// instead is cancelled by the parameter's own scope drop, and that paying for the descriptor such a
+	// widening needs trades a clean refusal for a leak.)
+	//
+	// ⚠ **BOTH ACTS RUN, and the lifetime extension is not made redundant by the retain**: a TRIVIAL
+	// instantiation's `retainFunc@64` is 0, so `__retain_type_param` hands back the value unchanged and the
+	// callee's storage keeps a bare borrow — exactly what the extension protects. It is a silent no-op on a
+	// value no statement owns, so it costs nothing on the managed path.
+	function handleEscapingBorrowFeed(info ParamConsumeInfo, position ParamCount, argValue ValueId, anchor Token) returns ValueId
 		let feed = info.typeParamFeedOf(position)
 		if not feed.isFeed() 'notEscapingFeed'
-			return
+			return argValue
 		end 'notEscapingFeed'
 		if not feed.sinkIsCalleeStorage() 'constructorFeed'
 			if self.valueIsNonTextAggregate(argValue) 'coOwnedAggregate'
 				self.emitIncref(argValue, range: SourceRange.ofToken(anchor))
 			end 'coOwnedAggregate'
-			return
+			return argValue
 		end 'constructorFeed'
+
 		self.giveTemporaryScopeLifetime(argValue, name: EscapingFeedSourceBindingName)
+		// A CONCRETE argument at a feed position is the call site's own value, whose consume/borrow decision
+		// `argIsConsumedAt` already made off the instance's type argument — a trivial one is deliberately
+		// borrowed, and the extension above is its whole protection. Only the OPAQUE shared-body borrow, which
+		// no instance test can see, owes a reference.
+		if self.tagOf(argValue) != ValueTypeTag.typeParameter 'concreteArgument'
+			return argValue
+		end 'concreteArgument'
+		if not self.signatures.typeParamOwnerIsInstantiated(self.valueNameId(argValue)) 'noInstantiationToReference'
+			return argValue
+		end 'noInstantiationToReference'
+
+		return self.coOwnBorrowedOpaqueForConsume(argValue, range: SourceRange.ofToken(anchor))
 	end 'handleEscapingBorrowFeed'
 
 	// Does the concrete instance's argument at parameter `position`'s type-parameter feed own managed heap
