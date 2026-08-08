@@ -247,6 +247,135 @@ end 'main'
 ```
 
 
+<!-- test: dispatch-error-missing-arg-label -->
+The label grammar is the SAME rule at an interface dispatch as at a direct call:
+`parameter-labels` rules that the first argument is positional and every argument
+after it must carry a `name:` label. Only the FIRST argument's label is optional
+here (see `dispatch-named-first-arg` for why); the rest are not, and a dispatch is
+not a hole in the grammar.
+
+shv2 refuses this with its OWN registered code and wording — `E2053`, anchored on the
+offending ARGUMENT rather than on the call, where `/specs` records the bootstrap's
+`E3005` on the call. Same rule, same program refused: a code/anchor difference, not a
+missing check, and the same one `specs-shv2/enum-full.md` names as belonging to a
+diagnostic-parity rung rather than to this one.
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+interface Combiner
+	function combine(first Integer, second Integer) returns Integer
+end 'Combiner'
+
+type Summer implements Combiner
+	let bias as Integer
+
+	function combine(first Integer, second Integer) returns Integer
+		return bias + first + second
+	end 'combine'
+
+	static function create(bias Integer) returns Self
+		return Self{bias: bias}
+	end 'create'
+end 'Summer'
+
+function combineVia(c Combiner) returns Integer
+	return c.combine(12, 30)
+end 'combineVia'
+
+function main() returns ExitCode
+	let s = Summer.create(0)
+	return combineVia(s)
+end 'main'
+```
+```maxoncstderr
+error E2053: <fragment>:22:23: the second and later arguments must be named ('name: value')
+```
+
+
+<!-- test: dispatch-error-unknown-arg-label -->
+A label that names no parameter of the dispatched requirement is the same error it
+is at a direct call. The dispatch path used to CONSUME a label without reading it,
+so `bogus:` bound to `second` positionally and the program compiled and ran — a
+wrong answer with no diagnostic, which is the worst of the three ways this can go.
+
+shv2 answers `E3037`, which names the requirement the label failed against; the
+bootstrap reuses its direct-call answer, `E3003 unknown parameter name`. Same rule,
+two spellings — the diagnostic-parity rung's business, not this one's.
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+interface Combiner
+	function combine(first Integer, second Integer) returns Integer
+end 'Combiner'
+
+type Summer implements Combiner
+	let bias as Integer
+
+	function combine(first Integer, second Integer) returns Integer
+		return bias + first + second
+	end 'combine'
+
+	static function create(bias Integer) returns Self
+		return Self{bias: bias}
+	end 'create'
+end 'Summer'
+
+function combineVia(c Combiner) returns Integer
+	return c.combine(12, bogus: 30)
+end 'combineVia'
+
+function main() returns ExitCode
+	let s = Summer.create(0)
+	return combineVia(s)
+end 'main'
+```
+```maxoncstderr
+error E3037: <fragment>:22:23: 'Combiner.combine' has no parameter named 'bogus'
+```
+
+
+<!-- test: dispatch-named-args-out-of-order -->
+`parameter-labels` rules that named arguments may be supplied in ANY order, and a
+dispatch binds each label to the parameter it NAMES rather than to the parameter at
+the argument's source position. Subtraction is deliberately non-commutative so the
+binding is observable in the exit code: bound by LABEL this returns 8, bound by
+source POSITION it would return -8, which is not an exit code at all.
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+interface Subtractor
+	function subtract(minuend Integer, subtrahend Integer) returns Integer
+end 'Subtractor'
+
+type Difference implements Subtractor
+	let bias as Integer
+
+	function subtract(minuend Integer, subtrahend Integer) returns Integer
+		return minuend - subtrahend + bias
+	end 'subtract'
+
+	static function create(bias Integer) returns Self
+		return Self{bias: bias}
+	end 'create'
+end 'Difference'
+
+function subtractVia(s Subtractor) returns Integer
+	return s.subtract(subtrahend: 2, minuend: 10)
+end 'subtractVia'
+
+function main() returns ExitCode
+	let d = Difference.create(0)
+	return subtractVia(d)
+end 'main'
+```
+```exitcode
+8
+```
+
+
 <!-- test: dispatch-multiple-methods -->
 ```maxon
 

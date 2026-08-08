@@ -1,0 +1,115 @@
+// Test: dispatch-named-args-out-of-order
+
+typealias Integer = int(i64.min to i64.max)
+
+interface Subtractor
+	function subtract(minuend Integer, subtrahend Integer) returns Integer
+end 'Subtractor'
+
+type Difference implements Subtractor
+	let bias as Integer
+
+	function subtract(minuend Integer, subtrahend Integer) returns Integer
+		return minuend - subtrahend + bias
+	end 'subtract'
+
+	static function create(bias Integer) returns Self
+		return Self{bias: bias}
+	end 'create'
+end 'Difference'
+
+function subtractVia(s Subtractor) returns Integer
+	return s.subtract(subtrahend: 2, minuend: 10)
+end 'subtractVia'
+
+function main() returns ExitCode
+	let d = Difference.create(0)
+	return subtractVia(d)
+end 'main'
+---
+ExitCode: 8
+---
+// CompiledIR
+module {
+  func @Difference.subtract(__self_ptr: i64, minuend: i64, subtrahend: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rbx, [rax+0]
+    x64.sub rdx, r8
+    x64.lea rax, [rdx + rbx]
+    x64.epilogue
+    x64.ret
+  }
+  func @Difference.create(bias: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-16], rcx
+    x64.mov rcx, 8
+    x64.xor edx, edx
+    x64.mov r8, 8
+    x64.call mm_alloc
+    x64.mov [rbp-8], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-16]
+    x64.mov [rax+0], rcx
+    x64.mov rdx, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call mm_incref
+    x64.mov rax, [rbp-8]
+    x64.epilogue
+    x64.ret
+  }
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.xor ecx, ecx
+    x64.call Difference.create
+    x64.mov [rbp-8], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call subtractVia$Difference
+    x64.xor ecx, ecx
+    x64.mov edx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg main.__range_panic_0
+    x64.cmp rax, rcx
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov rbx, [rbp-8]
+    x64.mov [rbp-16], rax
+    x64.test rbx, rbx
+    x64.jz __nonnull_skip_0
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.mov rax, [rbp-16]
+    x64.epilogue
+    x64.ret
+  }
+  func @subtractVia$Difference(s: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rdx, 10
+    x64.mov rbx, 2
+    x64.mov rcx, rax
+    x64.mov r8, rbx
+    x64.epilogue
+    x64.jmp Difference.subtract
+  }
+  func @__destruct_Difference(ptr: i64) {
+  entry:
+    x64.jmp __destruct_Difference.done
+  done:
+    x64.ret
+  }
+}
+---

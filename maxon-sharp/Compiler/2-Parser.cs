@@ -12507,10 +12507,35 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     }
 
     if (!Check(TokenType.RightParen)) {
-      ParseArgList(methodToken, callee, args, firstPositionalIndex, typeParams, allowAllPositional: true);
+      ParseArgList(methodToken, callee, args, firstPositionalIndex, typeParams,
+        allowAllPositional: !IsCorpusDeclaredBuiltinCallee(resolvedName));
     }
     Expect(TokenType.RightParen);
     return FillDefaultArgs(methodToken, callee, args);
+  }
+
+  /// ⭐⭐ Does this builtin callee have a DECLARATION in the corpus that the author can name
+  /// parameters from? That is the whole of what decides whether `parameter-labels`' "every argument
+  /// after the first must be named" applies to a call parsed here, and it is not the same question as
+  /// "is this call emitted inline".
+  ///
+  /// A `__Managed*` / `__DebugStream` member is a compiler builtin with NO source declaration
+  /// anywhere: its parameter names are minted by <c>RegisterBuiltinMethod</c>, so a label has nothing
+  /// to name and the rule has nothing to apply to. Both reference compilers accept `mm.set(0, 99)`
+  /// AND `mm.set(0, value: 99)` for exactly that reason, and the corpus writes both
+  /// (`specs/managed-memory-methods.md` positionally, `specs/managed-memory-builtin.md` labelled), so
+  /// the exemption is load-bearing and stays.
+  ///
+  /// The FOUR inlined `String` byte methods are not that. They are declared in `stdlib/String.maxon`
+  /// with real parameter names, and INLINING is a codegen decision — it must not change what the
+  /// language accepts. Routing them through the builtin parser gave them the builtin's exemption by
+  /// accident, and that is the only reason `stdlib/String.maxon`'s `mapAsciiCase` could write
+  /// `work.setByte(i, b + delta)` in violation of the shared spec.
+  private static bool IsCorpusDeclaredBuiltinCallee(string resolvedName) {
+    var dotIdx = resolvedName.IndexOf('.');
+    if (dotIdx < 0) return false;
+
+    return IsInlinedStringByteMethod(resolvedName[..dotIdx], resolvedName[(dotIdx + 1)..]);
   }
 
   private List<MaxonValue> ParseBuiltinMethodArgs(Token methodToken, string qualifiedName, MaxonValue selfValue)
@@ -13705,14 +13730,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       IrInterfaceMethodSignature ifaceMethod, Token siteToken) {
     var qualifiedMethodName = $"{userTypeName}.{fieldName}";
     var args = new List<MaxonValue> { selfVal };
-    if (!Check(TokenType.RightParen)) {
-      while (true) {
-        TrySkipArgLabel();
-        args.Add(ResolveExprValue(ParseExpression()));
-        if (!Check(TokenType.Comma)) break;
-        Advance(); // consume ','
-      }
-    }
+    args.AddRange(ParseDispatchedArgs(ifaceMethod, siteToken));
     Expect(TokenType.RightParen);
 
     var (resultKind, resultStructTypeName) = ResolveInterfaceMethodReturn(ifaceMethod, userTypeName, fieldName, siteToken);
@@ -13724,6 +13742,64 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     InvalidateCachedSelfFields();
 
     return callOp;
+  }
+
+  /// The trailing arguments of a dispatched call, bound to the requirement's parameters BY LABEL.
+  ///
+  /// ⭐⭐ A DISPATCH IS NOT A HOLE IN THE ARGUMENT GRAMMAR, AND IT WAS ONE. This loop used to consume
+  /// a label with <c>TrySkipArgLabel</c> — SKIP, never read — and append every argument in source
+  /// order, so a dispatched call answered two questions wrongly and silently:
+  /// `c.combine(12, bogus: 30)` bound `bogus` to `second` and compiled, and
+  /// `s.subtract(subtrahend: 2, minuend: 10)` computed `2 - 10`. Neither raised anything. The
+  /// requirement has carried the parameter names all along
+  /// (<see cref="IrInterfaceMethodSignature.ParamNames"/>); nothing here read them.
+  ///
+  /// Only the FIRST argument's label is optional, and that asymmetry is deliberate: a dispatch cannot
+  /// rule a first-arg label out syntactically because the receiver's concrete type is not known until
+  /// monomorphization, which is what `interface-dispatch/dispatch-named-first-arg` pins. Every LATER
+  /// argument takes the ordinary rule, from the one place that states it.
+  ///
+  /// ⚠ ARITY IS DELIBERATELY NOT DECIDED HERE, and this method must not grow into it. A dispatch that
+  /// supplies too few arguments still emits the ones it was given, and one that supplies an argument
+  /// no parameter can hold still passes it along — both bit-for-bit as before. A dispatched call's
+  /// arity has no diagnostic in this compiler (shv2 answers E3036), and inventing one here would be a
+  /// second rule riding in on a label fix.
+  private List<MaxonValue> ParseDispatchedArgs(IrInterfaceMethodSignature ifaceMethod, Token siteToken) {
+    if (Check(TokenType.RightParen)) return [];
+
+    var slots = new MaxonValue?[ifaceMethod.ParamNames.Count];
+    var unslotted = new List<MaxonValue>();
+
+    for (int position = 0; ; position++) {
+      int slot = position;
+
+      if (CheckIdentifierLike() && PeekNext().Type == TokenType.Colon) {
+        var nameToken = Advance();
+        Advance(); // consume ':'
+        slot = ifaceMethod.ParamNames.IndexOf(nameToken.Value);
+        if (slot < 0) throw UnknownArgLabel(nameToken);
+        if (slots[slot] != null) throw ArgLabelTargetsFilledParam(nameToken);
+      } else if (position > 0) {
+        throw MissingArgLabel(siteToken);
+      }
+
+      var value = ResolveExprValue(ParseExpression());
+
+      // Only an unlabelled first argument can miss the slot array, and only when the requirement
+      // declares no parameters at all — an arity fault, which is not this method's to answer.
+      if (slot < slots.Length) slots[slot] = value;
+      else unslotted.Add(value);
+
+      if (!Check(TokenType.Comma)) break;
+      Advance(); // consume ','
+    }
+
+    var supplied = new List<MaxonValue>();
+    foreach (var slotted in slots)
+      if (slotted != null) supplied.Add(slotted);
+    supplied.AddRange(unslotted);
+
+    return supplied;
   }
 
   /// The two obligations a call carrying a `throws` puts on its SITE, applied wherever a call is
@@ -24052,9 +24128,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
         argLocations[nextPositionalIndex] = (_currentBlock!, _currentBlock!.Operations.Count);
         nextPositionalIndex++;
       } else {
-        throw new CompileError(ErrorCode.SemanticTypeMismatch,
-          $"Second and subsequent arguments must be named. Use 'name: value' syntax",
-          callToken.Line, callToken.Column);
+        throw MissingArgLabel(callToken);
       }
     }
 
@@ -24078,14 +24152,42 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     }
   }
 
+  /// ⭐ THE ONE SENTENCE for an argument after the first that carries no `name:` label, and the one
+  /// code. `specs/parameter-labels.md` rules the first argument positional and every later one named;
+  /// FOUR doors now enforce it — a direct call, an enum payload, a dispatched (interface or
+  /// type-parameter) call, and the inlined `String` byte methods — and it was written out at two of
+  /// them the day there were two. A rule spelled once cannot drift between the doors that answer it.
+  ///
+  /// ⚠ The code is E3005 rather than the registry's purpose-built `ParserCallArgMissingLabel`
+  /// (E2053, which only shv2 claims) because six `maxoncstderr` blocks across BOTH suites pin E3005
+  /// for this rule today. Aligning the two compilers on one number is a diagnostic-parity rung, and
+  /// `specs-shv2/enum-full.md`'s disabled-test note already names it as one; a second code raised at
+  /// the two new doors alone would be this project's signature defect, not a step towards parity.
+  private static CompileError MissingArgLabel(Token callToken) =>
+    new CompileError(ErrorCode.SemanticTypeMismatch,
+      "Second and subsequent arguments must be named. Use 'name: value' syntax",
+      callToken.Line, callToken.Column);
+
+  /// A `name:` label that matches no parameter of the callee — the same answer whether the callee is
+  /// a function, an enum case or a dispatched requirement, so it is written here rather than at each.
+  private static CompileError UnknownArgLabel(Token nameToken) =>
+    new CompileError(ErrorCode.SemanticUndefinedVariable,
+      $"unknown parameter name: '{nameToken.Value}'", nameToken.Line, nameToken.Column);
+
+  /// A label that targets a parameter some earlier argument already filled.
+  private static CompileError ArgLabelTargetsFilledParam(Token nameToken) =>
+    new CompileError(ErrorCode.SemanticTypeMismatch,
+      $"parameter '{nameToken.Value}' already has a value (passed positionally)",
+      nameToken.Line, nameToken.Column);
+
   private void ParseNamedArg(IrFunction<MaxonOp> callee, MaxonValue?[] args, Dictionary<string, IrType>? typeParams = null, bool[]? argMutabilities = null, string?[]? argVarNames = null) {
     var nameToken = Advance();
     Advance(); // consume ':'
     var idx = callee.ParamNames.IndexOf(nameToken.Value);
     if (idx < 0)
-      throw new CompileError(ErrorCode.SemanticUndefinedVariable, $"unknown parameter name: '{nameToken.Value}'", nameToken.Line, nameToken.Column);
+      throw UnknownArgLabel(nameToken);
     if (args[idx] != null)
-      throw new CompileError(ErrorCode.SemanticTypeMismatch, $"parameter '{nameToken.Value}' already has a value (passed positionally)", nameToken.Line, nameToken.Column);
+      throw ArgLabelTargetsFilledParam(nameToken);
     args[idx] = ParseCallArgValue(callee.ParamTypes[idx], typeParams);
     argMutabilities?[idx] = _lastExprWasMutableVar;
     argVarNames?[idx] = _lastExprVarName;
@@ -24119,9 +24221,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       if (CheckIdentifierLike() && PeekNext().Type == TokenType.Colon) {
         ParseEnumNamedArg(enumCase, args);
       } else {
-        throw new CompileError(ErrorCode.SemanticTypeMismatch,
-          $"Second and subsequent arguments must be named. Use 'name: value' syntax",
-          callToken.Line, callToken.Column);
+        throw MissingArgLabel(callToken);
       }
     }
 
@@ -24153,7 +24253,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       }
     }
     if (idx < 0)
-      throw new CompileError(ErrorCode.SemanticUndefinedVariable, $"unknown parameter name: '{nameToken.Value}'", nameToken.Line, nameToken.Column);
+      throw UnknownArgLabel(nameToken);
     if (args[idx] != null)
       throw new CompileError(ErrorCode.SemanticTypeMismatch, $"duplicate argument for parameter '{nameToken.Value}'", nameToken.Line, nameToken.Column);
     var argExpr = ParseExpression();
