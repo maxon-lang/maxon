@@ -663,3 +663,100 @@ end 'main'
 ```exitcode
 42
 ```
+
+### A managed KEY column survives the rehash its load factor triggers
+
+⛔ **The rehash double-freed every entry, and the suite was 4769/0 over it because no case had ever
+built a managed-column map past its load factor.** `Map.grow()` reads a BORROWED key out of the old
+column and hands it to `insertAtSlot`, whose parameter is enrolled OWNED and moved into the new one — so
+the new array's element walk and the old array's each destroyed the same record. `Map with (String, …)`
+printed the right answer for 12 entries and **segfaulted at 13**, which is exactly `trunc(16 * 3/4) + 1`:
+the first insert that calls `grow()`. The oracle prints `count 200` on the identical program.
+
+The guard is the ENTRY COUNT and nothing else, so this case crosses the threshold three times over
+(16 → 32 → 64 → 128 → 256): a case that stopped at 12 would be green on the defect.
+
+<!-- test: managed-key-column-survives-rehash -->
+```maxon
+typealias Count = int(i64.min to i64.max)
+typealias StrMap = Map with (String, Count)
+
+function build(n Count) returns Count
+	var m = StrMap.create()
+	for i in 0 upto n 'fill'
+		m.upsert("key number {i}, long enough to escape any small-string envelope", value: i)
+	end 'fill'
+	var seen = 0 as Count
+	for i in 0 upto n 'read'
+		seen = seen + (try m.get("key number {i}, long enough to escape any small-string envelope") otherwise 0)
+	end 'read'
+	if seen != (n * (n - 1)) / 2 'sum'
+		return -1
+	end 'sum'
+	return m.count() as Count
+end 'build'
+
+function main() returns ExitCode
+	print("count {build(200)}")
+	return 0
+end 'main'
+```
+```stdout
+count 200
+```
+```exitcode
+0
+```
+
+### A managed AGGREGATE column survives the rehash too — the retain arm, not the clone arm
+
+The same store, one ownership protocol along: a `String` column takes its reference by COPYING
+(`__str_clone`, because an immortal `.rdata` record admits no incref) and an aggregate takes it with a
+real `__mm_retain`. Both words are read out of the same layout descriptor, so a fix landing on only one
+of them would leave this red — and it was red identically (`0xC0000005` at the first `grow()`) where the
+oracle prints `total 21190`. The value is read back and summed, so a rehash that merely survived without
+faulting would still fail here.
+
+<!-- test: managed-aggregate-column-survives-rehash -->
+```maxon
+typealias Count = int(i64.min to i64.max)
+
+type Tagged
+	var label as String
+	var n as Count
+
+	export static function create(label String, n Count) returns Self
+		return Self{label: label, n: n}
+	end 'create'
+
+	export function score() returns Count
+		return n + label.byteLength() as Count
+	end 'score'
+end 'Tagged'
+
+typealias TaggedMap = Map with (Count, Tagged)
+
+function build(n Count) returns Count
+	var m = TaggedMap.create()
+	for i in 0 upto n 'fill'
+		m.upsert(i, value: Tagged.create("tag {i}", n: i))
+	end 'fill'
+	var total = 0 as Count
+	for i in 0 upto n 'read'
+		let t = try m.get(i) otherwise panic("Map lost an entry across its rehash")
+		total = total + t.score()
+	end 'read'
+	return total
+end 'build'
+
+function main() returns ExitCode
+	print("total {build(200)}")
+	return 0
+end 'main'
+```
+```stdout
+total 21190
+```
+```exitcode
+0
+```
