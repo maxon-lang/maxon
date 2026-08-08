@@ -28,6 +28,45 @@
 # compile: they now price the CORPUS bodies rather than the synthesized ones, which is exactly the A/B a
 # retirement owes.
 #
+# --- W49 WAVE 7 A/B (2026-08-08). `isEmpty` and `clone` are TWO OF THIS FILE'S OWN MODES, and wave 7 is
+#     the wave that retired them — so their second reading belongs here beside the first. Same SOURCE,
+#     two compilers swapped into ONE path, interleaved, min-of-7. base = ddfc4278ad. ---
+#
+#   ⛔⛔⛔ **THE COST IS A HEAP ALLOCATION PER CALL, NOT A CALL FRAME — AND THE SIZE OF THE RATIO IS WHAT
+#   FOUND THAT.** A frame would have read 2-4x; these read up to 87x, which is the gap that made it worth
+#   dumping `func @String.byteLength` instead of filing the number.
+#
+#     s.byteLength()  4,000,000 trips        3.40 ms ->   294.81 ms   **86.7x**
+#     s.isEmpty()     4,000,000 trips        5.18 ms ->   308.17 ms   **59.5x**  (its body IS byteLength)
+#     hashString(s)   524,288 bytes x 8      8.88 ms ->   318.62 ms   **35.9x**  (byteAt, once per byte)
+#     short.clone()   4,000,000 trips      265.66 ms -> 1,459.92 ms    **5.5x**  (`sliceBytes` allocated
+#                                                                                on BOTH sides already)
+#     integer control, none of the surface   5.91 ms ->     5.87 ms     0.99x    THE NOISE FLOOR
+#
+#   **WHY**: `String.byteLength`'s corpus body is `return managed.length()`, and reading a fused wrapper's
+#   inline `managed` mints `__str_bytes_view` — a 48-byte `Array` record plus an `__mm_incref`. So that ONE
+#   expression emits `__str_bytes_view` / `__arr_count` / `__arr_decref` to read `length@8`, and
+#   `String.byteAt` is the same shape once PER BYTE. The full account, and the shape of the cure, is at
+#   `Parser.emitFieldLoad`'s `inlineManagedIsTheReceiver` arm. ⇒ `--emit-ir` one `s.byteLength()` and read
+#   the body rather than trusting this note.
+#
+#   ⚠ **A SLOWDOWN IS A CHANGED PROGRAM UNTIL A CHECKSUM SAYS OTHERWISE** — wave 6's rule, in the other
+#   direction. Every mode accumulates into a printed sink and base and tip agree to the digit on all five
+#   (byteLength 2097152000000, isEmpty 0, clone 32000000, bytewalk 11897186344, control 11999994).
+#
+#   ⚠ **`ScaleCorpus` IS NOT BLIND TO WAVE 7, UNLIKE THE SIX BEFORE IT, AND ITS READING IS A DIFFERENT
+#   QUESTION.** The 2026-08-08 corpus change gave the String knob `.byteLength()` and the materializer knob
+#   `.isEmpty()`/`.clone()`, so a default `scale-test` prices this wave at **+2.51% allocations at rung 0
+#   falling to +2.40% at rung 5, every growth ratio identical to three digits**. That is the COMPILER's
+#   cost of compiling programs containing more calls. It says nothing about what those programs then DO.
+#
+#   ⚠ **THE `print` PATH IS AN INDEPENDENT COST OF THE SAME WAVE AND IS DELIBERATELY NOT TIMED.** Retiring
+#   `addressableBytes` killed `foldByteViewIntoStreamWrite` (`Parser.emitBuiltinsStreamWrite`). A
+#   wall-clock A/B of `print` measures `WriteFile` at ~450 us per call and swamps the difference; the
+#   instruments that CAN see it are CODE SIZE and the IR — `print("hi\n")` alone reads **1,749 -> 3,226
+#   code bytes (+84.4%)** and regains a `.data` section. The runtime FLOOR is unaffected: a bare
+#   `return 0 as ExitCode` still emits no data section, because it calls no `print`.
+#
 # --- W49 WAVE 6 A/B (2026-08-08). Same SOURCE, two compilers, interleaved, min-of-5, 524,288 bytes x 5
 #     reps, ascii seed. base = 38fb221b0c, tip = the retirement. ---
 #

@@ -334,49 +334,38 @@ export let StrOfBufferName = b"__str_of_buffer"
 // `cstr()` has no caller, so dead-function elimination drops both.
 export let MmToCStringName = b"__mm_to_cstring"
 
-// ⭐⭐ **THE THREE STDLIB-ONLY BYTE DOORS — what `stdlib/`'s own byte walkers actually ask a String for.**
-// All three are `module function` in the corpus (`stdlib/String.maxon:181`, `:266` and `:281`), so no user
-// program may reach any of them; the visibility is enforced at the PARSER, on stdlib provenance
-// (`Parser.requireStdlibOnlyStringMethod`), because shv2 has no `module` keyword.
+// ⭐⭐ **THE ONE BYTE DOOR LEFT — what a FUSED WRAPPER's inline `managed` read mints.**
 //
-//   * `__str_bytes_view(str) -> arrRecord` — `addressableBytes()`. A ZERO-COPY `Array with Byte` VIEW over
-//     the receiver's live bytes: nothing is copied and the cost does not depend on the length. See
-//     `buildStrBytesView` for why it is a fresh record rather than the String pointer retagged.
-//   * `__str_byte_at(str, index) -> (byte, flag)` — `byteAt(index)`. One bounds-checked byte read that
-//     THROWS `__ManagedMemoryError.invalidByteRange`, which is what the corpus declares
-//     (`stdlib/String.maxon:266`) and what its own doc argues for: the bounds contract stays the CALLER's
-//     to state. It is the primitive `utf8.maxon`, `hash.maxon` and `grapheme.maxon` walk bytes through.
-//   * `__str_byte_at_or_panic(str, index) -> byte` — `byteAtOrPanic(index)`. The SAME read with the other
-//     failure exit: it ABORTS, because its 17 corpus call sites read bytes inside nested conditions
-//     (`if trimmed.byteAtOrPanic(pos) == 47`) where a `try` cannot go — the reference's own reason for the
-//     method existing (`stdlib/String.maxon:272-283`).
+//   * `__str_bytes_view(str) -> arrRecord` — a ZERO-COPY `Array with Byte` VIEW over the receiver's live
+//     bytes: nothing is copied and the cost does not depend on the length. See `buildStrBytesView` for why
+//     it is a fresh record rather than the String pointer retagged.
 //
-// ⚠ **THE LAST TWO ARE TWO FUNCTIONS BECAUSE THEY DIFFER ON THEIR FAILURE EXIT, AND ON NOTHING ELSE.** The
-// load path and the range test are identical and are written once (`emitIndexOutOfRange`); what a `throws`
-// stamp buys is a callee whose caller must write `try`, and a panicking one cannot be given that stamp
-// without making every `byteAtOrPanic` call site a `tryCall` for a failure that never returns.
+// ⚠⚠ **ITS PRODUCER MOVED AT W49 WAVE 7 AND THE DOOR DID NOT DIE WITH IT.** `String.addressableBytes()` was a
+// synthesized arm minting this callee; the member retired onto `stdlib/String.maxon:181`, whose entire body
+// is `return managed` — and `Parser.emitFieldLoad`'s inline-managed arm lowers exactly that to exactly this.
+// So the corpus body IS the arm, one frame down, and the entry point has a live producer for the same reason
+// it always did. (The `addressableBytes` name no longer appears in this compiler at all, which is why this
+// header describes the LOWERING rather than the member.)
 //
-// All three are `__`-prefixed compiler-internal (no E3004, no signature slotting) and none is
-// `__mm_`-prefixed, so each declares its own transitive floor in `closeStringMethodNeeds`.
+// ⛔⛔ **`__str_byte_at` AND `__str_byte_at_or_panic` STOOD HERE AND ARE GONE (W49 wave 7).** They were
+// `byteAt(index)` and `byteAtOrPanic(index)` — one bounds-checked read with two failure exits, built by one
+// `buildStrByteRead` — and both members retired onto the corpus (`stdlib/String.maxon:266`, `:281`), whose
+// bodies forward to `__ManagedMemory.byteAt`. With the two arms gone nothing in this compiler can emit
+// either callee, so `usesStrByteAt`/`usesStrByteAtOrPanic` could never turn true, `buildStrByteRead` could
+// never run, and `isThrowingStringRuntimeCallee` — whose ONE term was `__str_byte_at` — could never answer
+// `true`. All four went in one edit, which is the order this family's own rule demands: an entry point dies
+// only once EVERY producer of its callee is gone.
+//
+// ⭐ **AND ONE ABORT DISSOLVED WITH THEM RATHER THAN MOVING.** `RuntimeAbort.stringByteAtOutOfRange` existed
+// because the panicking read was a SYNTHESIZED function with *"no source line and no message to bake"*, so
+// it could not reach `osPanic` and reported a number instead. The corpus's `byteAtOrPanic` is
+// `try byteAt(index) otherwise panic("String.byteAtOrPanic: index out of bounds …")` — ordinary Maxon with a
+// real line and a real message — so that failure now prints the reference's own text on every target. The
+// abort's whole justification was the absence this retirement removed.
+//
+// `__str_bytes_view` is `__`-prefixed compiler-internal (no E3004, no signature slotting) and not
+// `__mm_`-prefixed, so it declares its own transitive floor in `closeStringMethodNeeds`.
 export let StrBytesViewName = b"__str_bytes_view"
-export let StrByteAtName = b"__str_byte_at"
-export let StrByteAtOrPanicName = b"__str_byte_at_or_panic"
-
-// ⭐ **THE THROWING `String` RUNTIME CALLEES — one, and this file's first.** `__str_byte_at` returns through
-// the dual-register `errorReturn` ABI, so a call to it MUST become a `tryCall`; the parser's E3055 accept and
-// SemanticCheck's E3057 reject both read `GtRuntime.isThrowingRuntimeCallee`, which composes this.
-//
-// ⚠ It ships WITHOUT an install-time drift guard, and `GraphemeRuntime.isThrowingCharacterRuntimeCallee`'s
-// three conditions are why — all three hold here. There is exactly ONE member; `buildStrByteRead` DERIVES the
-// `throws` stamp it emits by ASKING THIS PREDICATE, so the stamp and the parser's `try` requirement are one
-// statement rather than two that agree today (they were two until the slice-8 review, which measured the
-// divergence green over the whole corpus — see `buildStrByteRead`); and `runtimeCalleeSourceMethod` answers it
-// from `ByteAtMethod` directly rather than through a map that could lose an arm. A SECOND throwing `__str_`
-// callee makes this an `or`, and at that same edit it needs the guard `installManagedDirectoryRuntime`
-// carries, for the moment a family stops being built by one builder.
-export function isThrowingStringRuntimeCallee(callee ByteArray) returns bool
-	return callee.equals(StrByteAtName)
-end 'isThrowingStringRuntimeCallee'
 
 // ⚠ **`StrFindNotFound` WAS HERE AND WENT WITH `__str_find`** (W49 wave 5). It was that search's "no
 // occurrence" answer — a NEGATIVE INDEX rather than a thrown error, because its callers were not throwing
@@ -660,17 +649,16 @@ export type RuntimeUsage
 	export var usesStrFromBytes as bool
 	export var usesStrOfBuffer as bool
 	export var usesMmToCString as bool
-	// The three stdlib-only byte doors, each with its OWN bit under this file's one-bit-per-entry-point
-	// discipline: a program whose stdlib cone reads bytes must not carry the view builder, and one that takes
-	// a byte view must not carry a bounds check it never reaches. `usesStrBytesView` declares
+	// The byte-view door, with its OWN bit under this file's one-bit-per-entry-point discipline: a program
+	// that never reads a fused wrapper's inline `managed` must not carry the view builder. It declares
 	// `usesArray`/`usesHeap` in `closeStringMethodNeeds` — it calls `__arr_create` and `__mm_incref` inside
-	// its synthesized body, which this Maxon-module scan cannot see. `usesStrByteAt` and
-	// `usesStrByteAtOrPanic` declare NOTHING: each body loads two words and then either reads a byte or
-	// leaves. The two byte reads keep SEPARATE bits although their graphs are near-identical, because a
-	// program that only reaches the throwing one must not carry the panicking one's `mrt_panic` call site.
+	// its synthesized body, which this Maxon-module scan cannot see.
+	//
+	// ⚠ **`usesStrByteAt` AND `usesStrByteAtOrPanic` SAT BESIDE IT AND WENT WITH THEIR ENTRY POINTS (W49
+	// wave 7)** — see the byte-door header at the head of this file. They were the file's example of two bits
+	// for two near-identical graphs (so a program reaching only the throwing read did not carry the other's
+	// `mrt_panic` call site); with both members retired onto the corpus, neither bit had a writer.
 	export var usesStrBytesView as bool
-	export var usesStrByteAt as bool
-	export var usesStrByteAtOrPanic as bool
 	// The program copies a MANAGED-element array (`__arr_slice_managed`/`__arr_clone_managed`/
 	// `__arr_append_managed`, P1.7 slice 3b-vi-b). Its OWN bit, DECOUPLED from `usesArray`, so a program that
 	// only uses TRIVIAL arrays does not carry the three managed-copy helpers. Set alongside `usesArray`/
@@ -773,7 +761,7 @@ export type RuntimeUsage
 	export var usesProcessIntrospection as bool
 
 	static function create() returns RuntimeUsage
-		return Self{usesHeap: false, usesGt: false, usesIocp: false, usesStreaming: false, usesWriteStdout: false, usesWriteStderr: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesUIntToString: false, usesBoolToString: false, usesStrAppend: false, usesStrDecref: false, usesArray: false, usesSet: false, usesMap: false, usesList: false, usesDropTypeParam: false, usesDropExistential: false, usesRetainExistential: false, usesIncref: false, usesRetain: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrFromBytes: false, usesStrOfBuffer: false, usesMmToCString: false, usesStrBytesView: false, usesStrByteAt: false, usesStrByteAtOrPanic: false, usesManagedArrayCopy: false, usesOpaqueArrayCopy: false, neededCloners: ClonerSet.create(), usesWallClock: false, usesCharAt: false, usesCharCmp: false, usesCharFromCodepoint: false, usesCharAsciiValue: false, usesStrToBytes: false, usesUcdCategory: false, usesCharSetMake: false, usesCharSetDecref: false, usesCharSetContains: false, usesManagedFile: false, usesManagedDirectory: false, usesCommandLine: false, usesConsoleStdin: false, usesProcessIntrospection: false}
+		return Self{usesHeap: false, usesGt: false, usesIocp: false, usesStreaming: false, usesWriteStdout: false, usesWriteStderr: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesUIntToString: false, usesBoolToString: false, usesStrAppend: false, usesStrDecref: false, usesArray: false, usesSet: false, usesMap: false, usesList: false, usesDropTypeParam: false, usesDropExistential: false, usesRetainExistential: false, usesIncref: false, usesRetain: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrFromBytes: false, usesStrOfBuffer: false, usesMmToCString: false, usesStrBytesView: false, usesManagedArrayCopy: false, usesOpaqueArrayCopy: false, neededCloners: ClonerSet.create(), usesWallClock: false, usesCharAt: false, usesCharCmp: false, usesCharFromCodepoint: false, usesCharAsciiValue: false, usesStrToBytes: false, usesUcdCategory: false, usesCharSetMake: false, usesCharSetDecref: false, usesCharSetContains: false, usesManagedFile: false, usesManagedDirectory: false, usesCommandLine: false, usesConsoleStdin: false, usesProcessIntrospection: false}
 	end 'create'
 end 'RuntimeUsage'
 
@@ -1214,10 +1202,11 @@ function closeGraphemeNeeds(usage RuntimeUsage)
 	end 'pushesBytes'
 end 'closeGraphemeNeeds'
 
-// The String-building and byte-reading entry points' own arm of the callee → usage-bit map, split out so
-// `recordCallUsage` stays a readable list of families rather than growing six more inline arms. Direct
+// The String-building and byte-viewing entry points' own arm of the callee → usage-bit map, split out so
+// `recordCallUsage` stays a readable list of families rather than growing four more inline arms. Direct
 // references only; what each referenced body in turn needs is closed by `closeStringMethodNeeds`. (It was
-// NINE arms until the P1.8 Slice C family retired onto the corpus — see the grave at the head of this file.)
+// NINE arms until the P1.8 Slice C family retired onto the corpus, and SIX until wave 7 took the two byte
+// READS with `byteAt`/`byteAtOrPanic` — see the grave at the head of this file.)
 function recordStringMethodUsage(callee ByteArray, usage RuntimeUsage)
 	if callee.equals(StrFromBytesName) 'frombytes'
 		usage.usesStrFromBytes = true
@@ -1231,12 +1220,6 @@ function recordStringMethodUsage(callee ByteArray, usage RuntimeUsage)
 	if callee.equals(StrBytesViewName) 'bytesview'
 		usage.usesStrBytesView = true
 	end 'bytesview'
-	if callee.equals(StrByteAtName) 'byteat'
-		usage.usesStrByteAt = true
-	end 'byteat'
-	if callee.equals(StrByteAtOrPanicName) 'byteatorpanic'
-		usage.usesStrByteAtOrPanic = true
-	end 'byteatorpanic'
 	closeStringMethodNeeds(usage)
 end 'recordStringMethodUsage'
 
@@ -1319,12 +1302,6 @@ export function installStringRuntime(module StdModule, usage RuntimeUsage)
 	if usage.usesStrBytesView 'strbytesview'
 		buildStrBytesView(module)
 	end 'strbytesview'
-	if usage.usesStrByteAt 'strbyteat'
-		buildStrByteRead(module, name: StrByteAtName)
-	end 'strbyteat'
-	if usage.usesStrByteAtOrPanic 'strbyteatorpanic'
-		buildStrByteRead(module, name: StrByteAtOrPanicName)
-	end 'strbyteatorpanic'
 end 'installStringRuntime'
 
 // `__write_stdout(mm)` / `__write_stderr(mm)` — write a `__ManagedMemory`'s bytes to a standard stream, no
@@ -2340,84 +2317,21 @@ function emitStringBytesAllocation(module StdModule, func IrFunction, cur IrBloc
 	return base
 end 'emitStringBytesAllocation'
 
-// ⭐⭐ **`byteAt` AND `byteAtOrPanic` ARE ONE BOUNDS-CHECKED BYTE READ WITH TWO FAILURE EXITS — ONE GRAPH,
-// AND THE EXIT IS THE ONLY PARAMETER.** The corpus says so at the declarations themselves: `byteAtOrPanic`
-// (`stdlib/String.maxon:281-283`) IS `try byteAt(index) otherwise panic(…)`, i.e. the same read wearing the
-// other exit. Two transcriptions would be two chances to get the bound wrong, and the bound is where every
-// signed range check in this compiler has been caught missing.
+// ⚠⚠ **`buildStrByteRead` WAS HERE AND WENT WITH BOTH ITS CALLEES (W49 wave 7).** It was ONE bounds-checked
+// byte read serving `__str_byte_at` and `__str_byte_at_or_panic` — the same graph wearing two failure exits,
+// with the exit DERIVED from the name via `isThrowingStringRuntimeCallee` rather than passed beside it. That
+// derivation is worth remembering even though the function is gone: it replaced a `throwing bool` parameter
+// after the review MEASURED the divergent shape (stamp removed, predicate unchanged) leaving **all 13
+// `stdlib-whitelist` cases GREEN**, because no committed input reached an out-of-range index. **A `throws`
+// stamp that disagrees with the predicate deciding `try`-ness is invisible to a suite** — build the fact
+// once and derive the rest.
 //
-//   * `__str_byte_at(str, index) -> (byte, flag)` THROWS `__ManagedMemoryError.invalidByteRange`, which is
-//     what `stdlib/String.maxon:266-268` declares and what its doc argues for — *"the bounds contract stays
-//     the CALLER's to state"*. Every stdlib byte walker outside `String.maxon` reads bytes through it.
-//   * `__str_byte_at_or_panic(str, index) -> byte` ABORTS. Its 17 corpus call sites read bytes inside NESTED
-//     CONDITIONS (`if trimmed.byteAtOrPanic(pos) == 47`), a position a `try` cannot occupy, so the failure
-//     has to leave through the process; `RuntimeAbort.stringByteAtOutOfRange` is the same CLASS of answer the
-//     oracle gives (the process ends), not the same message.
+// Both members are `stdlib/String.maxon:266` and `:281` now, and their bodies forward to
+// `__ManagedMemory.byteAt`, whose own `__arr_byte_at` carries the identical bound and the identical
+// `managedMemoryThrows()` clause. So the read did not lose its check; it moved to the one buffer entry point
+// that always had it.
 //
-// ⚠ **THEY STAY TWO EMITTED FUNCTIONS, and the `throws` stamp is why.** That stamp is what makes a caller
-// write `try` (`isThrowingStringRuntimeCallee` → E3055 accept, E3057 reject); one stamped function serving
-// both would make all 17 panicking sites `tryCall` a failure that never returns, and one unstamped function
-// serving both would silently drop the error flag at the throwing sites.
-//
-// ⚠ **AND NEITHER IS AN ALIAS OF `__arr_byte_at`, THOUGH THE BYTES IT READS ARE THE SAME** (`buffer@0`,
-// `length@8`, no detach, no ownership). `managedMemorySourceMethodName` maps CALLEE → source method and has
-// NO receiver, so routing a String read through the buffer family would tell an author who forgot a `try`
-// about `__ManagedMemory.byteAt` — the right E3057 naming a construct their program does not contain, the
-// D12 defect this tree has already paid for once.
-//
-// ⚠ The read goes through `buffer@0` with NO detach and NO ownership, right for the identical reason
-// `__arr_byte_at` gives: a read does not write, so an `.rdata` blob, an inline String's bytes and a viewed
-// buffer are all perfectly good things to read THROUGH.
-function buildStrByteRead(module StdModule, name ByteArray)
-	// ⭐⭐ **WHICH EXIT THIS BUILD GETS IS DERIVED FROM THE NAME, NOT PASSED BESIDE IT (review, BATCH2
-	// slice 8).** It arrived as a `throwing bool` argument, which made "`__str_byte_at` throws and
-	// `__str_byte_at_or_panic` does not" a fact written in TWO places — here at the two install sites, and
-	// again in `isThrowingStringRuntimeCallee`, which is what the parser's E3055 accept and SemanticCheck's
-	// E3057 reject read. Nothing made the two agree.
-	//
-	// ⛔ **MEASURED at the review**: building `StrByteAtName` with `throwing: false` — the stamp gone while
-	// the predicate still claims it throws — left **all 13 `stdlib-whitelist` cases GREEN**, every corpus
-	// byte walker included. A `tryCall` onto a callee that returns through the single-register ABI reads an
-	// error flag nothing wrote; the suite is green because no committed input reaches an out-of-range index,
-	// which is precisely the shape of divergence a test cannot be relied on to catch.
-	//
-	// ⇒ The predicate is now the ONE statement, and the divergence is no longer expressible: an install site
-	// supplies a name and gets that name's exit.
-	let throwing = isThrowingStringRuntimeCallee(name)
-	let throwsClause = managedMemoryThrows() if throwing else ThrowsClause.none
-
-	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0, throwsTypeName: throwsClause)
-	var ids = ValueMinter.create(2)
-
-	var entry = module.addBlock(func, label: b"entry")
-	var bad = module.addBlock(func, label: b"oob")
-	var load = module.addBlock(func, label: b"load")
-
-	emitParams(module, block: entry, count: 2)
-	let record = 0 as ValueId
-	let index = 1 as ValueId
-
-	let length = emitLoadField(module, block: entry, record: record, offset: StringLengthOffset, ids: ids)
-	let outOfRange = emitIndexOutOfRange(module, block: entry, index: index, length: length, ids: ids)
-	module.setTerminator(entry, op: StdOp.condBranch(outOfRange, thenBlockId: bad.id, elseBlockId: load.id))
-
-	let buffer = emitLoadField(module, block: load, record: record, offset: StringBufferOffset, ids: ids)
-	let byteValue = emitLoadByteIndexed(module, block: load, base: buffer, index: index, ids: ids)
-
-	// The two exits, and the SUCCESS path differs with them: a throwing callee returns through the
-	// dual-register `errorReturn` ABI, so its ok-path has a flag to clear that the plain one has no room for.
-	if throwing 'throwsOnBadIndex'
-		emitMemoryThrow(module, block: bad, flag: MemoryInvalidByteRangeFlag, ids: ids)
-		emitOkReturn(module, block: load, value: byteValue, ids: ids)
-	end 'throwsOnBadIndex' else 'abortsOnBadIndex'
-		emitRuntimeAbort(module, func: func, block: bad, abort: RuntimeAbort.stringByteAtOutOfRange, ids: ids)
-		module.setTerminator(load, op: StdOp.ret(byteValue))
-	end 'abortsOnBadIndex'
-
-	module.functions.push(func)
-end 'buildStrByteRead'
-
-// ⚠ **`buildStrSplit` WAS HERE, WITH THE FOUR EMITTERS IT WAS THE LAST CALLER OF** (W49 wave 5):
+// ⚠ **`buildStrSplit` WAS HERE TOO, WITH THE FOUR EMITTERS IT WAS THE LAST CALLER OF** (W49 wave 5):
 // `emitPushSliceSegment`, `emitSliceSegment`, `emitPushSegment` and `emitStrFindCall`. It filled a
 // caller-created `Array with String` whose element size and `element_destroy@40` stamp the PARSER decided
 // through `emitArrayCreateOp`; the corpus decides both through the ordinary generic-instance path and

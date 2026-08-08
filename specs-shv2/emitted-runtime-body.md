@@ -74,10 +74,17 @@ pins is therefore the ASSEMBLER's output, exactly as the IR form pins the loweri
 ## Tests
 
 <!-- test: string-bytes-view-body -->
-The `addressableBytes()` / `byteAtOrPanic()` runtime pair, reached through
-`stdlib/FilePath.maxon`'s own cone. `__str_bytes_view`'s `bvsep` block is a DETACHED
-String's owed-base arm: it carries the incref that keeps the bytes alive for as long as
-the view exists.
+The byte-view runtime entry, reached through `stdlib/FilePath.maxon`'s own cone.
+`__str_bytes_view`'s `bvsep` block is a DETACHED String's owed-base arm: it carries the
+incref that keeps the bytes alive for as long as the view exists.
+
+⚠ **THIS CASE NAMED A PAIR UNTIL W49 WAVE 7, AND ITS SECOND HALF NO LONGER EXISTS AS A RUNTIME
+BODY.** `__str_byte_at_or_panic` was `String.byteAtOrPanic`'s synthesized body; that member retired
+onto `stdlib/String.maxon:281`, whose own body is `try byteAt(index) otherwise panic(…)` — ordinary
+Maxon, compiled as an ordinary function, with no runtime chunk to render. The surviving name is not
+an accident of the same retirement: `String.addressableBytes()` retired too, but its corpus body is
+`return managed`, and reading a fused wrapper's inline `managed` is exactly what mints this entry
+(`Parser.emitFieldLoad`). So the producer moved one call frame down and the body is unchanged.
 
 ```maxon
 function main() returns ExitCode
@@ -93,7 +100,6 @@ end 'main'
 ```
 ```RequiredRuntime
 __str_bytes_view
-__str_byte_at_or_panic
 ```
 
 <!-- test: error-ordinal-in-an-emitted-body -->
@@ -183,11 +189,18 @@ __gt_morestack
 ```
 
 <!-- test: string-byte-at-body -->
-`__str_byte_at` — `String.byteAt`'s body, and the THROWING twin of `__str_byte_at_or_panic` above.
-The two differ on their failure EXIT and on nothing else: this one leaves through the dual-register
-`errorReturn` ABI carrying `__ManagedMemoryError.invalidByteRange`, where the panicking twin calls
-`mrt_panic` and never returns. It is STDLIB-ONLY, so no user program can call it and no exit code can
-reach it; the corpus's `hashString` is what installs it here, and this block is its only gate.
+`__arr_byte_at` — the THROWING, bounds-checked byte read behind `String.byteAt`. It leaves through the
+dual-register `errorReturn` ABI carrying `__ManagedMemoryError.invalidByteRange`, which is exactly what
+`stdlib/String.maxon:266` declares. The corpus's `hashString` is what installs it here, and this block is
+its only gate.
+
+⚠ **IT WAS `__str_byte_at` UNTIL W49 WAVE 7, AND THE SUBJECT SURVIVED THE SYMBOL.** `String.byteAt` was a
+synthesized arm with its own runtime body; retiring it onto the corpus made the declaration's own
+`try managed.byteAt(index)` the real call, so the read now happens where the BUFFER's `byteAt` always
+happened — one entry point with one bound, rather than two graphs to keep in step. The
+`RequiredRuntime` guard is what forced this edit rather than letting the case quietly pin nothing: a
+name no program emits is a loud panic (`TargetPrinter.requireEveryNameRendered`), which is the whole
+reason that guard exists.
 
 ```maxon
 function main() returns ExitCode
@@ -198,5 +211,5 @@ end 'main'
 3
 ```
 ```RequiredRuntime
-__str_byte_at
+__arr_byte_at
 ```

@@ -436,8 +436,12 @@ function whitelistedStdlibModules(stdlibDir FilePath) returns MaxonSourcePathSet
 	// ⚠ Its blockers were TWO `String` methods, and neither was a missing type: `addressableBytes()` and
 	// `byteAtOrPanic()` are `module function`s of `stdlib/String.maxon` — a file this loader does not list —
 	// so they are answered as dispatch arms gated on the caller's
-	// file being physically under `stdlib/` (`Parser.requireStdlibOnlyStringMethod`), which is what keeps a
+	// file being physically under `stdlib/`, which is what keeps a
 	// user program's `"x".addressableBytes()` refused exactly as the oracle refuses it.
+	// ⚠ **THAT GATE IS GONE AS OF W49 WAVE 7 AND THE REFUSAL IS NOT**: both members retired onto
+	// `stdlib/String.maxon`, so the same user program is now refused by `SemanticCheck.calleeVisibleFrom`
+	// reading the corpus's own `module` keyword (E3088). The paragraph is kept because it records what this
+	// entry's blockers actually WERE.
 	// ⚠ **"and will not parse, since `String` is compiler-owned" is what this line used to say, and W16
 	// measured it false**: shv2 parses that module today (to an `E3005` about String's representation, not to
 	// a refusal about its name). These two arms stay exactly as they are until the module is LISTED, which
@@ -728,8 +732,12 @@ function whitelistedStdlibModules(stdlibDir FilePath) returns MaxonSourcePathSet
 	// twin of `byteAtOrPanic`, which BATCH2 slice 1 already served — is how every byte walker outside
 	// `stdlib/String.maxon` reaches a String's bytes, and its own doc says why it takes the String rather than
 	// the `__ManagedMemory`: a `__ManagedMemory` parameter would MATERIALIZE a record per call once a small
-	// String becomes a 16-byte value, i.e. one allocation per codepoint decoded. It is now `__str_byte_at`
-	// (`StringRuntime.buildStrByteAt`), stdlib-only at the parser exactly as the other two byte doors are.
+	// String becomes a 16-byte value, i.e. one allocation per codepoint decoded. It was served by
+	// `__str_byte_at`, stdlib-only at the parser exactly as the other two byte doors were.
+	// ⚠ **W49 wave 7 RETIRED IT AND DELETED THAT ENTRY POINT**: `String.byteAt` is
+	// `stdlib/String.maxon:266` now, forwarding to `__ManagedMemory.byteAt`, which carries the identical
+	// bound and the identical `managedMemoryThrows()` clause. The reason recorded above — that the method
+	// takes the String rather than the `__ManagedMemory` — is the corpus's own and is untouched by that.
 	//
 	// It clears every entry in this file's collision rule, each CHECKED rather than assumed:
 	//   • FREE FUNCTIONS (E3006): these are the first listed modules since `Sleep.maxon` that declare a
@@ -779,9 +787,9 @@ function whitelistedStdlibModules(stdlibDir FilePath) returns MaxonSourcePathSet
 	//     expose to it is just their argument labels (`pos`, `startPos`, `beforePos`, `byteIdx`, `count`,
 	//     `cp`, `s`).
 	//
-	// MEASURED before listing, which is the check this file's rule prescribes: with `__str_byte_at` built,
-	// `maxon-shv2 build stdlib/helpers/string/utf8.maxon` (and `hash.maxon`, and `grapheme.maxon`) each exit 1
-	// with `E3001: No 'main' function found` AND NOTHING ELSE.
+	// MEASURED before listing, which is the check this file's rule prescribes: with the throwing byte read
+	// built, `maxon-shv2 build stdlib/helpers/string/utf8.maxon` (and `hash.maxon`, and `grapheme.maxon`)
+	// each exit 1 with `E3001: No 'main' function found` AND NOTHING ELSE.
 	try listWhitelistedModule(stdlibDir, relative: "helpers/string/utf8.maxon", into: listed)
 	try listWhitelistedModule(stdlibDir, relative: "helpers/string/hash.maxon", into: listed)
 	try listWhitelistedModule(stdlibDir, relative: "helpers/string/grapheme.maxon", into: listed)

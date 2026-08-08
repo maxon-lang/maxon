@@ -32,6 +32,27 @@
 // nothing emits 134 any longer. A case nothing emits is a DEAD CLAIM, the same rot as a code that
 // reports another abort's number, so it was deleted rather than kept as a number this space defends
 // against a claimant that no longer exists.
+//
+// ⚠⚠ **77 AND 80 ARE NOT HERE EITHER, FOR THAT SAME RULE APPLIED TWICE MORE (W49 wave 7)** — and the
+// second of them is why the first was found, because a comment reserving 80 tried to cite 77 as its
+// precedent and 77 turned out to be rot itself.
+//   • **80 was `stringByteAtOutOfRange`**, an out-of-range `__str_byte_at_or_panic`. It got a NUMBER
+//     rather than a message for exactly one recorded reason: shv2 answered that failure from a
+//     SYNTHESIZED runtime function *"which has no source line and no message to bake"*, so it could not
+//     reach `osPanic`. Wave 7 retired `String.byteAtOrPanic` onto `stdlib/String.maxon:281`, whose body
+//     IS `try byteAt(index) otherwise panic("String.byteAtOrPanic: index out of bounds — …")` — ordinary
+//     Maxon with a real line and a real message. ⇒ The abort's whole justification dissolved: that
+//     failure now reaches `osPanic` and prints the REFERENCE's own text, so shv2 moved from "the same
+//     CLASS of answer" to the same answer.
+//   • **77 was `stringSliceInvalidRange`**, and it had been a dead claim since W49 wave 4 deleted
+//     `Runtime/StringIndexRuntime.maxon` — its documented emitter `__strix_slice` went with that file and
+//     nothing has referenced the case since. It is retired here rather than left, because this file
+//     defines a case nothing emits as rot and a registry that tolerates one instance of its own defect
+//     cannot be cited about the next.
+// ⇒ **THE PICKING RULE ABOVE IS UNCHANGED AND STILL MEANS WHAT IT SAYS**: the next entry takes the next
+// FREE number above 70, which is now 77. Nothing here reserves a vacated number, because reserving one
+// would be this space defending against a claimant that no longer exists — the very thing the paragraph
+// above rejects.
 export enum RuntimeAbort
 	// `__arr_grow`: `capacity·element_size` overflowed i64. Without the guard the wrapped byte count
 	// under-allocates and the next element write runs off the buffer — a silent heap overflow.
@@ -68,16 +89,6 @@ export enum RuntimeAbort
 	// the set's and the map's from the same graph, so a second number here would be two claimants on one
 	// `osExit` site, which is this registry's founding complaint wearing the opposite hat.
 	hashTableInsertNoFreeSlot = 76
-	// `__strix_slice`: the byte range `s.slice(start, endIndex: end)` resolved to is not a range of this
-	// string — a negative start, an INVERTED range, or an end past `length@8`. Reachable from source
-	// (`s.slice(idx, endIndex: s.startIndex())`, or an index taken from a LONGER string), and without the
-	// guard the negative length reaches `__mm_alloc` as an under-sized request followed by an
-	// out-of-buffer read. The reference dies on the same input: `String.sliceBytes` forwards to a throwing
-	// `managed.slice` under an `otherwise panic(…)`, so this abort matches the oracle's CLASS of answer
-	// (the process ends) though not its message — shv2's `mrt_panic` prints on the two x64 lanes (rung
-	// A1j added x64-linux), on both arm64 lanes (A3n) and on wasm (W3) — so the message now reaches
-	// stderr on EVERY target, and the difference from the oracle is the message TEXT alone.
-	stringSliceInvalidRange = 77
 	// `__mf_stat_field` / `__mf_stat_free`: a NULL stat buffer. Both references treat it as a stdlib-only
 	// INVARIANT violation rather than a catchable error (`__ManagedFile.statField`/`statFree` are registered
 	// non-throwing in each), and `__mm_free` is not null-safe — without the guard the free writes to the
@@ -87,15 +98,6 @@ export enum RuntimeAbort
 	// NEGATIVE one, which the signed `StdCmpPred` makes a separate compare. Without the guard the read
 	// returns whatever sits past a 48-byte allocation: a silent wrong answer, not a crash.
 	managedFileStatIndexOutOfRange = 79
-	// `__str_byte_at_or_panic`: the index is not a byte position of this string — negative, or at or past
-	// `length@8`. The method's whole contract is that the CALLER has already bounds-checked
-	// (`stdlib/String.maxon:281-283` is `try byteAt(index) otherwise panic(…)`), so an out-of-range index is
-	// a stdlib bug and the process ends. ⭐ It gets its own number rather than riding the user-panic route for
-	// the reason `stringSliceInvalidRange` above got one: the reference's abort is spelled `panic(…)` in stdlib
-	// SOURCE, but shv2 answers it from a SYNTHESIZED runtime function, which has no source line and no message
-	// to bake — so it cannot reach `osPanic` and reports its own number instead. Same CLASS of answer as the
-	// oracle (the process ends), not the same message.
-	stringByteAtOutOfRange = 80
 	// `__mm_leak_check`: the live allocation count was not zero at exit — a LEAK, or (a negative count)
 	// an over-release. ⚠ **`Testing/SpecWorkerPool.LeakCheckExitCode` SPELLS 101 TOO, AND FOLDING IT INTO
 	// THIS CASE WOULD BE WRONG.** That constant reads the exit code of a WORKER, and a worker is the shv2

@@ -582,7 +582,13 @@ let MemoryInvalidAllocationOrdinal = 7 as ParsedInt
 let MemoryIndexOutOfBoundsFlag = MemoryIndexOutOfBoundsOrdinal + ErrorFlagOrdinalBias
 let MemoryInvalidLengthFlag = MemoryInvalidLengthOrdinal + ErrorFlagOrdinalBias
 let MemoryInvalidCapacityFlag = MemoryInvalidCapacityOrdinal + ErrorFlagOrdinalBias
-export let MemoryInvalidByteRangeFlag = MemoryInvalidByteRangeOrdinal + ErrorFlagOrdinalBias
+// ⚠ **THIS ONE WAS `export` AND ITS FOUR SIBLINGS NEVER WERE, AND NOTHING EVER WROTE DOWN WHY.** Its only
+// cross-file consumer was `StringRuntime.buildStrByteRead`, which passed it to `emitMemoryThrow` at the byte
+// read's out-of-range exit; W49 wave 7 retired `String.byteAt`/`byteAtOrPanic` onto the corpus and deleted
+// that builder, so the keyword lost the caller that was its whole evidence. It goes at the same edit that
+// de-exported `emitMemoryThrow` — the CALLEE and the ARGUMENT travelled through one deleted call site, and
+// taking only one of them would leave the second half of one fact unchecked.
+let MemoryInvalidByteRangeFlag = MemoryInvalidByteRangeOrdinal + ErrorFlagOrdinalBias
 let MemoryInvalidAllocationFlag = MemoryInvalidAllocationOrdinal + ErrorFlagOrdinalBias
 
 // ⭐ **THE NAME OF A CONCRETE TYPE'S SYNTHESIZED DEEP-CLONER — `__clone_<TypeName>`** (P1.7 slice 3b-vi-b), the
@@ -1973,10 +1979,16 @@ end 'emitIsNegative'
 
 // A user index is OUT OF RANGE for a length-`length` array when it is NEGATIVE or at/above the length — the
 // ONE home of the "reject this index" test `__arr_get`/`__arr_set`/`__arr_remove` share, and (exported for
-// it) `StringRuntime.__str_byte_at_or_panic`, whose index is a BYTE position into a `length@8`-byte string:
-// the same question over the same two words, differing only in what the caller does with the answer. The
+// it) `ListRuntime.__list_get`, whose index is a position into a `count`-long chain: the same question over
+// the same two words, differing only in what the caller does with the answer. The
 // negative guard is OR-ed into the existing at-or-over-length test (both are 0/1 booleans, so the `bitOr` is
 // a 0/1 boolean the `condBranch` to the OOB block truth-tests directly).
+//
+// ⚠ **A BUFFER BYTE INDEX IS NOT ONE OF ITS CALLERS AND NEVER WAS** — `__arr_byte_at` bounds-checks through
+// `emitBufferAccessGuard`, not through this. That distinction survived W49 wave 7 unchanged, and it is worth
+// stating because that wave retired `String.byteAt`/`byteAtOrPanic` onto the corpus, whose bodies forward to
+// `__ManagedMemory.byteAt`: the String byte read moved to `__arr_byte_at`, and therefore to the BUFFER
+// guard, never to this one. `StringRuntime.__str_byte_at_or_panic` — which DID call this — is gone with it.
 export function emitIndexOutOfRange(module StdModule, block IrBlock, index ValueId, length ValueId, ids ValueMinter) returns ValueId
 	let negative = emitIsNegative(module, block: block, value: index, ids: ids)
 	let atOrOver = emitCmp(module, block: block, a: index, b: length, pred: StdCmpPred.ge, ids: ids)
@@ -3946,10 +3958,15 @@ end 'managedMemoryThrows'
 // other enum. (A VOID throwing function's value register is never moved, so the 0 is a formality the ABI
 // discards; `emitOkReturn` says the same about its success value.)
 //
-// ⚠ EXPORTED because `StringRuntime.buildStrByteAt` raises the very same case — `String.byteAt` is declared
-// `throws __ManagedMemoryError` by the corpus (`stdlib/String.maxon:266`) and forwards to `managed.byteAt`,
-// so the two must not be two spellings of one wire format. It is the FAMILY's exit, not this file's.
-export function emitMemoryThrow(module StdModule, block IrBlock, flag ParsedInt, ids ValueMinter)
+// ⚠ **IT WAS EXPORTED AND IS NOT ANY MORE (W49 wave 7), AND THE `export` OUTLIVING ITS REASON IS THE POINT.**
+// The keyword was justified here in writing: *"`StringRuntime.buildStrByteAt` raises the very same case —
+// `String.byteAt` is declared `throws __ManagedMemoryError` by the corpus and forwards to `managed.byteAt`,
+// so the two must not be two spellings of one wire format."* That was exactly right, and wave 7 made the
+// forwarding REAL: `String.byteAt` retired onto `stdlib/String.maxon:266`, its synthesized body was deleted,
+// and every caller of this exit is now in this file. A cross-file keyword with no cross-file caller is a
+// claim nothing checks — and the underlying fact is UNCHANGED, because there is only one raiser now instead
+// of two agreeing ones.
+function emitMemoryThrow(module StdModule, block IrBlock, flag ParsedInt, ids ValueMinter)
 	emitErrorReturn(module, block: block, flag: flag, ids: ids)
 end 'emitMemoryThrow'
 

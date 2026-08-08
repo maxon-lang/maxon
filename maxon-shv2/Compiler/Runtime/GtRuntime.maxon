@@ -629,8 +629,15 @@ end 'isThrowingGtRuntimeCallee'
 // are expanded in place at the Std tier rather than called (`CheckedDivisionRuntime`'s header says why). That
 // changes nothing here: this predicate answers "must a `try` wrap it", which is a property of the OPERATION, and
 // both gates that read it run on the MAXON tier where the callee is still a call.
+// ⚠ **THE `String` FAMILY WAS A NINTH DISJUNCT AND WENT WITH ITS ONE CALLEE (W49 wave 7).**
+// `isThrowingStringRuntimeCallee`'s only term was `__str_byte_at`, minted only by `dispatchStringMethod`'s
+// `byteAt` arm; that member retired onto `stdlib/String.maxon:266`, so nothing can emit the callee and the
+// predicate could only ever answer `false`. The corpus body's `try managed.byteAt(index)` reaches
+// `isThrowingArrayRuntimeCallee` — the FIRST disjunct here — which is where a buffer byte read always
+// belonged: `managedMemorySourceMethodName` names `__ManagedMemory.byteAt`, and after the retirement that
+// IS the construct the author wrote.
 export function isThrowingRuntimeCallee(callee ByteArray) returns bool
-	return isThrowingArrayRuntimeCallee(callee) or isThrowingGtRuntimeCallee(callee) or isThrowingManagedFileRuntimeCallee(callee) or isThrowingManagedDirectoryRuntimeCallee(callee) or isThrowingCharacterRuntimeCallee(callee) or isThrowingMapRuntimeCallee(callee) or isThrowingListRuntimeCallee(callee) or isThrowingDivisionRuntimeCallee(callee) or isThrowingStringRuntimeCallee(callee)
+	return isThrowingArrayRuntimeCallee(callee) or isThrowingGtRuntimeCallee(callee) or isThrowingManagedFileRuntimeCallee(callee) or isThrowingManagedDirectoryRuntimeCallee(callee) or isThrowingCharacterRuntimeCallee(callee) or isThrowingMapRuntimeCallee(callee) or isThrowingListRuntimeCallee(callee) or isThrowingDivisionRuntimeCallee(callee)
 end 'isThrowingRuntimeCallee'
 
 // ⭐ **THE ONE HOME OF "WHICH ERROR TYPE A COMPILER-INTERNAL RUNTIME CALLEE THROWS"** — the composer beside
@@ -674,16 +681,14 @@ export function runtimeThrowsClause(callee ByteArray) returns ThrowsClause
 		return managedMemoryThrows()
 	end 'memoryFamily'
 
-	// ⭐ **THE `String` FAMILY — ONE MEMBER (`__str_byte_at`), AND IT SHARES THE ARM ABOVE'S ERROR TYPE
-	// WITHOUT SHARING ITS PREDICATE.** `String.byteAt` is declared `throws __ManagedMemoryError` by the corpus
-	// (`stdlib/String.maxon:266`) because the reference INLINES it to the `managed.byteAt` it forwards to, so
-	// the two families genuinely raise one enum — while remaining two families, because
-	// `runtimeCalleeSourceMethod` must be able to tell them apart and `isThrowingArrayRuntimeCallee` must not
-	// come to claim a `__str_`-prefixed callee.
-	if isThrowingStringRuntimeCallee(callee) 'stringFamily'
-		return managedMemoryThrows()
-	end 'stringFamily'
-
+	// ⚠ **THE `String` FAMILY HAD AN ARM HERE UNTIL W49 WAVE 7, AND IT COLLAPSED INTO THE MEMORY ARM ABOVE
+	// RATHER THAN VANISHING.** Its one member was `__str_byte_at`, and it answered `managedMemoryThrows()` —
+	// the SAME clause the memory family answers — because `String.byteAt` is declared
+	// `throws __ManagedMemoryError` by the corpus (`stdlib/String.maxon:266`) for the stated reason that the
+	// reference INLINES it to the `managed.byteAt` it forwards to. Retiring the member makes that forwarding
+	// REAL rather than notional: the corpus body's `try managed.byteAt(index)` is a call to
+	// `__ManagedMemory.byteAt`, which the memory arm already types. Two families that shared an error type
+	// became one family, which is what the corpus declaration meant all along.
 	// ⭐ **THE ARRAY FAMILY, ADDED WITH THE CASE THAT NEEDED IT (R4.4)** — precisely as the note above
 	// prescribes. `specs-shv2/array-slots.md` discriminates `ArrayError.emptySlot` from
 	// `ArrayError.indexOutOfBounds` on an `arr.get` failure, so this family's ordinals are now a checked claim
@@ -855,15 +860,12 @@ export function runtimeCalleeSourceMethod(callee ByteArray) returns RuntimeCalle
 		return RuntimeCalleeSourceMethod.found(CharacterAsciiValueMethod)
 	end 'characterFamily'
 
-	// The `String` family answers from the CONSTANT, exactly as the `Character` family above does and for the
-	// identical reason: its predicate IS `callee.equals(StrByteAtName)`, so a map would be the identity written
-	// as a one-arm dispatcher with an unreachable panic. `ByteAtMethod` is the very byte string
-	// `dispatchStringMethod` matched the source token against — the same one the buffer's `byteAt` is
-	// dispatched on, since ONE spelling serves both surfaces.
-	if isThrowingStringRuntimeCallee(callee) 'stringFamily'
-		return RuntimeCalleeSourceMethod.found(ByteAtMethod)
-	end 'stringFamily'
-
+	// ⚠ **THE `String` FAMILY HAD AN ARM HERE UNTIL W49 WAVE 7, AND IT WENT WITH ITS MEMBER** — the same
+	// shape wave 3's `StringIndex` arm retired in, two paragraphs up. It answered `ByteAtMethod` for
+	// `__str_byte_at`, the callee behind `String.byteAt`; that member is `stdlib/String.maxon:266`'s now, so
+	// an E3057 against it is raised on an ordinary DECLARED function whose name the diagnostic already has.
+	// What the corpus body calls IS `__ManagedMemory.byteAt`, which the `memoryFamily` arm above already
+	// names correctly — so this was the one family whose removal needed no replacement noun at all.
 	// The `Map` family answers through a MAP where the `Character` family above answers from its constant,
 	// and the asymmetry is argued at `MapRuntime.mapSourceMethodName` rather than here: both predicates name
 	// one callee today, but the map's second name (`insert`, refusing a duplicate) is already declared in

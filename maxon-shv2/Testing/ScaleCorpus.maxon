@@ -5379,10 +5379,12 @@ let BufferElementPushCount = 1
 //
 // SIX of `markBufferSurface`'s EIGHT call sites are reached, and the two that are not are named here rather
 // than left to read as coverage:
-//   • `String.addressableBytes()` (`Parser.dispatchStringMethod`) is STDLIB-ONLY —
-//     `Parser.requireStdlibOnlyStringMethod` refuses it to any file not under `stdlib/`, and a generated
-//     rung is by construction not one. No knob can close this; it is a property of the door, not of the
-//     corpus.
+//   • A FUSED WRAPPER's inline `managed` read (`Parser.emitFieldLoad`), which is what serves the corpus's
+//     `String.addressableBytes()` — a `module function` no file outside `stdlib/` may call, and reachable
+//     only from a type implementing one of `stdlib/Builtins.maxon`'s literal markers, which a generated rung
+//     cannot declare either. No knob can close this; it is a property of the door, not of the corpus.
+//     ⚠ It was `dispatchStringMethod`'s own `addressableBytes` arm until W49 wave 7 retired that member;
+//     the arm's site died and this one took the mint, so the COUNT is unchanged and the NAME is not.
 //   • `__ManagedDirectory.filename` / `currentPath` (`Parser.emitOwnedManagedMemoryResult`) lowers to the
 //     `__md_*` runtime entries, which are x64-windows only — MEASURED as **E3104 `this construct is
 //     x64-windows only at this rung: it lowers to the runtime entry '__md_current_path', which has no
@@ -5821,18 +5823,20 @@ export function printCorpusManifest()
 	print("    absent too: nothing here deep-clones a MANAGED-element array, so `neededCloners` stays\n")
 	print("    empty and that fixpoint early-outs at every rung.\n")
 	print("    ⚠ AND `String.byteAt` IS UNREACHABLE FROM A GENERATED RUNG, for the SAME reason as\n")
-	print("    `addressableBytes` below and not for any reason a knob could fix: it is one of the four\n")
-	print("    STDLIB-ONLY String members (`module function` in the corpus), refused by\n")
-	print("    `requireStdlibOnlyStringMethod` to any file not under `stdlib/` — which a rung directory by\n")
-	print("    construction is not. It is named here rather than left out of the roster silently, because a\n")
-	print("    member missing from a list of what is covered is exactly the defect the four String knobs\n")
-	print("    above exist to end. Its two stdlib-only siblings `byteAtOrPanic` and `hasSingleByteGraphemes`\n")
-	print("    are absent for the identical reason. User code reaches those bytes through `toByteArray()`,\n")
-	print("    which IS generated.\n")
+	print("    `addressableBytes` below and not for any reason a knob could fix: it is one of the five\n")
+	print("    STDLIB-ONLY String members (`module function` in the corpus). Since W49 wave 7 the refusal is\n")
+	print("    the corpus declaration's own — E3088 from `SemanticCheck.calleeVisibleFrom` — rather than a\n")
+	print("    parser gate on the calling file's location, which changes the diagnostic and not the reach:\n")
+	print("    a rung directory is outside `stdlib/` either way. It is named here rather than left out of\n")
+	print("    the roster silently, because a member missing from a list of what is covered is exactly the\n")
+	print("    defect the four String knobs above exist to end. Its stdlib-only siblings `byteAtOrPanic`,\n")
+	print("    `hasSingleByteGraphemes` and `setByte` are absent for the identical reason. User code reaches\n")
+	print("    those bytes through `toByteArray()`, which IS generated.\n")
 	print("    ⚠ AND TWO OF THE BUFFER SURFACE'S EIGHT PRODUCERS ARE UNREACHABLE FROM A GENERATED RUNG, each\n")
 	print("    for a reason that is a property of the DOOR and not of this generator, so no knob can close\n")
-	print("    either: `String.addressableBytes()` is STDLIB-ONLY (refused to any file not under `stdlib/`,\n")
-	print("    which a rung directory by construction is not), and `__ManagedDirectory.filename`/\n")
+	print("    either: a fused wrapper's inline `managed` read (which serves the corpus's own\n")
+	print("    `String.addressableBytes()`, and which no rung can declare a fused wrapper to reach), and\n")
+	print("    `__ManagedDirectory.filename`/\n")
 	print("    `currentPath` lower to the `__md_*` runtime entries, which are x64-windows only — E3104, so a\n")
 	print("    rung that generated one would FAIL TO COMPILE on any other host and take the whole run down as\n")
 	print("    a BROKEN RUN, exactly as a witness table would.\n")

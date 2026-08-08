@@ -1474,11 +1474,6 @@ let sharedEmptyDeclaredAliasMap = ValueDeclaredAliasMap.create()
 // `recordCharLiteralOp` copies on its first write keyed on this instance's identity.
 let sharedEmptyCharLiteralOps = CharLiteralOpMap.create()
 
-// The same COW anchor for the byte-view op map (`StringBytesViewOpMap`), with the same invariant: a function
-// that never calls `addressableBytes()` INCREFS this one rather than allocating. That is every function of
-// every USER program — the method is stdlib-only — and all but four of the corpus's own.
-let sharedEmptyStringBytesViewOps = StringBytesViewOpMap.create()
-
 // The module-level shared EMPTY tuple-layout table (P1.10), held as the INITIAL value of `Parser.tupleLayouts`
 // AND as the COW anchor `internTupleLayout` keys on — `sharedEmptyInstanceAliasMap`'s pattern, for its reason
 // and with its invariant. A file that writes no tuple INCREFS this one rather than allocating a map of its
@@ -2235,21 +2230,11 @@ let MethodNameSeparatorBytes = b"."
 // `Point.create` — the name a type's method is declared and called under. ONE spelling, read by
 // `Parser.declaredMethodName` (the declaration) and `Parser.parseQualifiedCall` (the use). See
 // `MethodNameSeparator` for what a second spelling would cost.
-// ⭐ **ONE FIELD OF A `call` REPLACED — ITS CALLEE — AND EVERY OTHER CARRIED THROUGH.** The whole edit
-// `Parser.foldByteViewIntoStreamWrite` makes is this substitution: the byte view's producer becomes the
-// consumer that was going to read it, on the same result value, the same argument, the same labels, ranges
-// and mint. Written as one function so a rewrite cannot silently drop a field the op grows later — a
-// `MaxonOp.call` respelled at the rewrite site would have to be revisited every time the variant does.
-//
-// The `default` panics because the only caller reads an op INDEX its own filing site recorded as it appended
-// a `call` there; anything else is that pairing broken, which is a compiler bug and not a program's.
-function callWithCallee(op MaxonOp, callee ByteArray) returns MaxonOp
-	return match op 'c'
-		call(result, _, args, argLabels, argRanges, argImmutableNames, argDefaultSlots, mint) gives MaxonOp.call(result, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, argDefaultSlots: argDefaultSlots, mint: mint)
-		default panic("callWithCallee: the op is not a `call`, so it has no callee to replace — every caller reads an index filed by the site that appended a call at it")
-	end 'c'
-end 'callWithCallee'
-
+// ⚠ **`callWithCallee` STOOD HERE AND WENT WITH ITS ONE CALLER (W49 wave 7).** It replaced one field of an
+// emitted `call` — its CALLEE — carrying every other through, which was the whole of the edit
+// `foldByteViewIntoStreamWrite` made; that peephole lost its only producer when `String.addressableBytes`
+// retired onto the corpus (see `emitBuiltinsStreamWrite`). Nothing else in this compiler rewrites a call in
+// place, so the helper had no second reader to keep it alive.
 export function qualifiedMethodName(typeName ByteArray, methodName ByteArray) returns ByteArray
 	return "{String.from(typeName)}{MethodNameSeparator}{String.from(methodName)}".toByteArray()
 end 'qualifiedMethodName'
@@ -3621,10 +3606,17 @@ function requireAbiParamCount(paramCount ParamCount, anchor Token) throws ParseE
 	throw ParseError.unsupported("a function with {paramCount} argument slots — more than the {MaxAbiArgs} a call can carry. A signature's slots are its declared parameters plus the hidden ones the ABI adds (a companion environment per function-typed parameter, a layout descriptor for a generic that reads `sizeof`, one witness per `where` constraint), and the limit is the width of the per-argument float mask that routes each one to its register file", line: anchor.line, column: anchor.column)
 end 'requireAbiParamCount'
 
-// **THE BUILTIN STRING METHODS** (P1.2 wave D; the byte/ASCII family P1.8 Slice C). `append` grows a `var`
-// String in place; `byteLength` reads its byte count. String is the one non-struct type with methods at this
-// rung, dispatched by name in `dispatchStringMethod` off a String-typed receiver.
-let StringByteLengthMethod = b"byteLength"
+// ⭐ **`byteLength` — THE `Character` SURFACE'S BYTE COUNT, AND SINCE W49 WAVE 7 ONLY THAT** (P1.2 wave D,
+// where it arrived as String's). Its two consumers are `characterSurfaceMemberNames` and
+// `dispatchCharacterMethod`'s arm, which reads `length@8` off the fused record inline.
+//
+// ⚠ **IT WAS `StringByteLengthMethod` UNTIL THE MEMBER IT WAS NAMED FOR RETIRED, AND THE NAME WAS THE LAST
+// THING SAYING OTHERWISE.** `String.byteLength` is `stdlib/String.maxon:253`'s now, so a constant carrying
+// `String` in its name and served on `Character` alone pointed a reader at the one surface that no longer
+// uses it. Renamed to match its surface-neutral siblings `ByteAtMethod` / `IsEmptyMethod` /
+// `CloneMethodName`, each of which is one spelling shared by whichever surfaces still serve it — the same
+// arrangement `ByteViewMethod` below records for `bytes`.
+let ByteLengthMethod = b"byteLength"
 
 // ⭐ **THE P1.8 SLICE B METHOD NAME.** `bytes` was String's and Character's, dispatched from both receivers
 // to one emitter; **W49 wave 6 retired the `String` half onto `stdlib/String.maxon:481`**, so it is now
@@ -3637,42 +3629,30 @@ let StringByteLengthMethod = b"byteLength"
 // needs the very constant this dispatcher matches on and a file-private `let` would force a second copy.
 let ByteViewMethod = b"bytes"
 
-// ⭐ **THE CORPUS MEMBER THE STDLIB-ONLY REFUSAL POINTS USER CODE AT**, and no longer a roster entry of any
-// surface (W49 wave 6). `requireStdlibOnlyStringMethod`'s sentence tells an author who reached for
-// `addressableBytes`/`byteAt`/`setByte` where the public door is, and it must name that door in the ONE
-// spelling the corpus declares it under (`stdlib/String.maxon:156`) — a literal in the message would be a
-// second copy of the name, free to survive a rename the compiler no longer has any other reason to notice.
+// ⭐⭐⭐ **FOUR `String` MEMBER CONSTANTS STOOD HERE AND WAVE 7 TOOK ALL OF THEM (BATCH2 slices 1 and 6).**
+// `StringAddressableBytesMethod`, `StringByteAtOrPanicMethod` and `StringHasSingleByteGraphemesMethod` each
+// named an arm of `dispatchStringMethod` guarded by a location gate, and all three arms retired onto
+// `stdlib/String.maxon:181`, `:281` and `:107` — the `module function` declarations they had been
+// transcribed from. `StringToByteArrayMethod` was not an arm at all after wave 6: it survived only because
+// the stdlib-only REFUSAL rendered it, as the public door it pointed an author at. Wave 7 retired the four
+// READ doors onto declarations that carry their own `module` visibility, so those refusals are
+// `SemanticCheck`'s now and quote nothing from here — and `setByte`'s, the one refusal left, points at no
+// alternative because there is no public way to WRITE a String's bytes. ⇒ Nothing in this compiler spells
+// any of the four, so a constant for them could only ever be a second copy of a name the corpus owns.
+// (`ByteAtMethod` survives in `SignatureIndex` because the BUFFER surface still serves it, and
+// `ManagedMemorySetByteMethod` because `setByte` is the one arm that stays.)
 //
-// ⚠ **IT WAS `parseByteView`'s SECOND SPELLING UNTIL WAVE 6, AND THE ARGUMENT FOR THAT IS NOW ITS OPPOSITE.**
-// The reference distinguishes `bytes()` from `toByteArray()` by LAZINESS and by nothing else — `bytes()` is a
-// lazy `ByteView` over the receiver's buffer, `toByteArray()` an independent `Array with Byte` copy
-// (`stdlib/String.maxon:143-161`, which must `managed.slice` because a plain view onto an OWNED buffer is
-// read-after-free the moment the owner appends). shv2 had no lazy view, so both materialized and one emitter
-// served both. It has one now, and the corpus serves each with the body its own doc describes.
-let StringToByteArrayMethod = b"toByteArray"
-
-// ⭐⭐ **THE TWO STDLIB-ONLY `String` METHODS (BATCH2 slice 1)** — `module function` in the corpus
-// (`stdlib/String.maxon:181` and `:281`), which is a real visibility and not a convention: the oracle
-// refuses a user program with its NOT-EXPORTED diagnostic. It is enforced on the file's PHYSICAL LOCATION
-// instead (`requireStdlibOnlyStringMethod`, reading `livesUnderStdlibDirectory`) — and emphatically NOT on
-// `isStdlibSource`, which answers a different question and broke `maxon-shv2 build stdlib/URL.maxon` when
-// this gate first borrowed it.
+// ⚠⚠ **AND THAT IS THE PARAGRAPH THIS BLOCK EXISTED FOR, ARRIVING AT ITS OWN CONCLUSION.** It used to
+// explain why a LOCATION gate stood in for the corpus's `module` keyword: *"these members are served by
+// shv2's own SYNTHESIZED arms, and the roster is asked ahead of the corpus door, so the call never reaches
+// the corpus declaration whose visibility could otherwise have answered."* That was a true statement about
+// an arrangement, and the arrangement is what wave 7 removed — the call reaches the declaration now, and
+// `SemanticCheck.calleeVisibleFrom` answers with the visibility the corpus WROTE.
 //
-// ⚠⚠ **THE REASON USED TO BE "shv2 HAS NO `module` KEYWORD AND PARSES NO `stdlib/String.maxon`", AND BOTH
-// HALVES HAVE BEEN FALSE SINCE W17.** `module` is a contextual modifier this parser recognizes and records
-// (`ModuleModifierName`, `atModuleModifier`, `Visibility.module`), and `stdlib/String.maxon` is a LISTED
-// module whose declarations this compiler reads — that listing is what
-// `memberBelongsToTheCorpus` exists to consult. The gate is still the file's location for a
-// different and still-true reason: these four members are served by shv2's own SYNTHESIZED arms, and the
-// roster is asked ahead of the corpus door, so the call never reaches the corpus declaration whose
-// visibility could otherwise have answered. A member retired onto the corpus — `startsWith`, `endsWith`,
-// `count` — DOES take its visibility from its declaration, because from then on that declaration is the
-// only thing serving it.
-//
-// They are listed apart from the method families above because that is what they are: not a slice of the
-// language's String surface, but the two doors `stdlib/URL.maxon` and `stdlib/helpers/url/urlHelpers.maxon`
-// need in order to compile AS WRITTEN — which is the whole point of whitelisting a module rather than
-// transcribing it.
+// ⚠ It never was a slice of the language's String surface: it was the doors `stdlib/URL.maxon`,
+// `stdlib/helpers/url/urlHelpers.maxon` and the `helpers/string/` walks need in order to compile AS
+// WRITTEN — which is the whole point of whitelisting a module rather than transcribing it. Those files
+// still compile as written; they simply reach the declaration instead of an arm.
 // The `module` visibility modifier's spelling. It is matched as an IDENTIFIER, never as a keyword — see
 // `Parser.atModuleModifier` for the measurement that forbids a `keywordMap` entry.
 let ModuleModifierName = b"module"
@@ -3688,25 +3668,16 @@ function declarationOpensAt(kind TokenKind) returns bool
 	return kind == TokenKind.function or kind == TokenKind.type or kind == TokenKind.enum or kind == TokenKind.union or kind == TokenKind.interface or kind == TokenKind.typealias or kind == TokenKind.let or kind == TokenKind.var or kind == TokenKind.static
 end 'declarationOpensAt'
 
-let StringAddressableBytesMethod = b"addressableBytes"
-let StringByteAtOrPanicMethod = b"byteAtOrPanic"
-
-// The fourth STDLIB-ONLY `String` member (BATCH2 slice 6) — `stdlib/String.maxon:107`, a `module function`
-// reading the private `singleByteGraphemesFlag`. `stdlib/helpers/string/grapheme.maxon` asks it at three
-// sites (`countGraphemes`, `byteIndexToGraphemeIndex`, `graphemeOffsetToBytePos`), each purely as a fast
-// path past the UAX #29 walk. See `dispatchStringMethod`'s arm for what shv2 answers and why.
-let StringHasSingleByteGraphemesMethod = b"hasSingleByteGraphemes"
-
 // ⭐ **THE CORPUS'S NAME FOR SLOT@40, READ BACK RATHER THAN INVENTED** (`stdlib/String.maxon:86`). It is
 // what `emitFusedWrapperLiteral` finds the flag's VALUE by, so it is the corpus's spelling or the flag is
 // silently classified instead of used. `type Character` declares no such field, which is not an error but
 // the very thing this lookup distinguishes — see that function.
 let SingleByteGraphemesFieldName = b"singleByteGraphemesFlag"
 
-// ⚠ **`CodepointViewMethod` AND `Utf16ViewMethod` STOOD HERE AND WENT WITH THEIR ARMS (W49 wave 6).**
-// Unlike `StringToByteArrayMethod` above, nothing left in this compiler names either spelling: they were
-// matched in one dispatcher and one token probe, both deleted, and `stdlib/String.maxon:485,489` is now the
-// only statement of what those two members are called.
+// ⚠ **`CodepointViewMethod` AND `Utf16ViewMethod` STOOD HERE AND WENT WITH THEIR ARMS (W49 wave 6)**, as
+// `StringToByteArrayMethod` went with the refusal that rendered it one wave later: nothing left in this
+// compiler names any of the three spellings, and `stdlib/String.maxon:156,485,489` is now the only
+// statement of what those members are called.
 
 // The `Character` BUILTIN's type name is `CharacterConformerName` — the `String` twin
 // (`StringConformerName`), recognized syntactically in a type position, and also the name a `for c in s`
@@ -4284,11 +4255,18 @@ end 'arrayWhereClause'
 // alone would have caught neither**; both were the *arm added, roster not updated* direction, which is what
 // the gate and the panic close.
 //
-// ⚠ **THE TWO STDLIB-ONLY NAMES ARE ON THE ROSTER, and that is deliberate.** A roster says what the
-// dispatch SERVES; who may call it is the arms' own business, already stated by
-// `requireStdlibOnlyStringMethod` at its own span. Leaving a real member off to signal "you cannot have
-// this" is exactly the lie above — so the refusal's tail clause says they are stdlib-only instead, and a
-// reader is not sent at a door that will refuse them.
+// ⚠ **THE ONE STDLIB-ONLY NAME LEFT IS ON THE ROSTER, and that is deliberate.** A roster says what the
+// dispatch SERVES; who may call it is the arm's own business, already stated by `setByte`'s refusal at its
+// own span. Leaving a real member off to signal "you cannot have this" is exactly the lie above — so the
+// arm says it is stdlib-only instead, and a reader is not sent at a door that will refuse them.
+//
+// ⚠⚠ **THE OTHER FOUR STDLIB-ONLY NAMES LEFT THIS ROSTER AT WAVE 7, AND A RETIRED `module` MEMBER IS
+// REFUSED BY ITS OWN DECLARATION RATHER THAN BY A LOCATION GATE.** `addressableBytes`, `byteAt`,
+// `byteAtOrPanic` and `hasSingleByteGraphemes` are `module function`s in the corpus, so once the roster
+// stops carrying them the call reaches the declaration and `SemanticCheck.calleeVisibleFrom` answers with
+// the visibility the corpus actually WROTE. That is strictly better than the gate it replaces: the gate
+// asked where the CALLING FILE lives and inferred the member's visibility from shv2's own arm list, where
+// this asks the declaration. `setByte` cannot follow them, and not for want of a declaration — see its arm.
 //
 // ⚠ **THE CONFORMANCE PAIR IS APPENDED FROM ITS OWN SOURCE, NOT TYPED OUT** (`hash`/`equals`, and
 // `compare` the day `String` becomes `Comparable`). `dispatchStringMethod`'s last door resolves by LOOKUP
@@ -4300,9 +4278,9 @@ end 'arrayWhereClause'
 // recorded HERE rather than in the refusal, which no longer enumerates what it lacks
 // (`rosterRefusalSentence`).
 //
-// ⚠ `addressableBytes` and `byteAtOrPanic` ARE built and ARE on this roster; what they are not is callable
-// from outside `stdlib/`, which is a different gate's rule and is refused by that gate with its own sentence.
-// The roster refusal used to say so too, which is how one fact came to be maintained in two places.
+// ⚠ `setByte` IS built and IS on this roster; what it is not is callable from outside `stdlib/`, which is a
+// different rule and is refused by its own arm with its own sentence. The roster refusal used to say so too,
+// which is how one fact came to be maintained in two places.
 //
 // ⚠⚠ **AND THAT IS THE THIRD TIME THIS SENTENCE WAS WRONG — the first two are recorded above, and this one
 // was WRONG ABOUT WHY RATHER THAN ABOUT WHAT.** It named `charAt`/`indexAfter`/`indexBefore` as one group
@@ -4330,13 +4308,25 @@ end 'arrayWhereClause'
 // ⭐⭐⭐ **AND A NAME LEAVING THIS LIST IS NOW A RETIREMENT RATHER THAN A HOLE.** `startsWith`, `endsWith`
 // and `count` (wave 1), then `toLower`, `toUpper`, `replace` and `replaceFirst` (wave 2), then
 // `findFirst`, `findLast`, `startIndex`, `endIndex` and `indexAfter` (wave 3), then `contains`, `slice`,
-// `trim`, `trimStart` and `trimEnd` (wave 4), then `split` (wave 5), were struck here, and that
+// `trim`, `trimStart` and `trimEnd` (wave 4), then `split` (wave 5), then `bytes`, `toByteArray`,
+// `codepoints` and `utf16` (wave 6), then `byteLength`, `isEmpty`, `clone`, `addressableBytes`, `byteAt`,
+// `byteAtOrPanic` and `hasSingleByteGraphemes` (wave 7), were struck here, and that
 // single deletion is the whole of what moved each onto `stdlib/String.maxon`:
 // `memberBelongsToTheCorpus` is asked ahead of `dispatchStringMethod` and consults the corpus
-// for exactly the names this roster does NOT carry, so each of the eighteen is now an ordinary qualified
+// for exactly the names this roster does NOT carry, so each is now an ordinary qualified
 // call to the ordinary declared function the corpus already had (`stdlib/String.maxon:422`, `:430`,
 // `:347`, `:665`, `:670`, `:494`, `:565`, `:460`, `:464`, `:371`, `:374`, `:387`, `:439`, `:470`, `:714`,
-// `:730`, `:745` and `:606`). Their arms, their runtime builders and their usage bits went with them.
+// `:730`, `:745`, `:606`, `:253`, `:340`, `:226`, `:181`, `:266`, `:281` and `:107`). Their arms, their
+// runtime builders and their usage bits went with them.
+//
+// ⭐⭐ **WHAT IS LEFT IS THE TWO MEMBERS THAT MUTATE THE RECEIVER, AND THAT IS NOT WHERE THE LIST HAPPENED
+// TO STOP — IT IS THE ONE PROPERTY A RETIREMENT CANNOT CARRY TODAY.** `append` and `setByte` both WRITE
+// their receiver's data, and `parseStringAppend` is the only caller of `noteReceiverWrite`, which is what
+// refuses `let s = "hello"; s.append(" world")` with E3019. The corpus bodies' `writtenParamMask` is ZERO,
+// because `ARCHITECTURE.md:1121-1132` RULES that a method writing its OWN receiver's data is not a
+// parameter mutation. ⇒ Retiring either today would delete a live refusal and let a `let` String be
+// mutated through a borrowed receiver — a memory-safety fault, not a diagnostic regression. Deriving that
+// mask from a managed self-field write is the rung that unblocks them.
 //
 // ⚠⚠ **WAVE 3 IS THE ONE THAT EDITED SOMETHING ELSE, AND IT HAD TO.** The eleven members retired around it
 // answer with a `String`, a `bool` or an `int` — types the program already agrees on. These five PRODUCE a
@@ -4374,10 +4364,14 @@ end 'arrayWhereClause'
 // bootstrap, which is the compiler that builds shv2). ⇒ **ACCEPTED and recorded** (user ruling), with the
 // real cure filed as a bootstrap rung. Do not attempt a stdlib fix here.
 //
-// ⚠ **WHAT A RETIREMENT MUST NOT DO IS DRAG ITS NEIGHBOURS OUT WITH IT.** `byteAt` and `setByte` are still
-// on this roster and still lowered inline, which is exactly what keeps the corpus `mapAsciiCase`
-// (`:647-662`, now the only body behind `toLower`/`toUpper`) allocation-free on a short string: it maps a
-// private copy through those two primitives rather than materializing a buffer.
+// ⚠⚠ **WAVE 7 IS THE ONE THAT RETIRED THE BYTE READ ITSELF, WHICH IS THE COST PARAGRAPH ABOVE ARRIVING AT
+// ITS OWN SUBJECT.** Every accepted cost in this family was *"the corpus body asks `byteAt` where the
+// synthesized one loaded a byte inline"* — and `byteAt` was the thing still being lowered inline. It is the
+// corpus's now, so a byte read is TWO real calls (`String.byteAt` -> `__ManagedMemory.byteAt`) where it was
+// an inline bounds test and a load. `mapAsciiCase` (`stdlib/String.maxon:647-662`) still ALLOCATES nothing
+// per byte — `setByte` keeps its arm, so no mutable buffer is materialized and SSO survives — but its read
+// half now pays the call. The measurement belongs to the wave that made it, and this file does not carry a
+// number that the next edit would falsify.
 //
 // ⭐⭐ **AN OVERLOAD PAIR IS RETIRABLE, AND FOR THREE WAVES THIS COMMENT SAID IT WAS NOT (W49 wave 4).** It
 // read: *"Retired today, `s.contains(c)` would leak in one direction and use-after-free in the other, and
@@ -4402,13 +4396,6 @@ end 'arrayWhereClause'
 function stringSurfaceMemberNames() returns ByteArrayArray
 	var names = ByteArrayArray.create()
 	names.push(AppendMethod)
-	names.push(StringByteLengthMethod)
-	names.push(IsEmptyMethod)
-	names.push(CloneMethodName)
-	names.push(StringAddressableBytesMethod)
-	names.push(ByteAtMethod)
-	names.push(StringByteAtOrPanicMethod)
-	names.push(StringHasSingleByteGraphemesMethod)
 	names.push(ManagedMemorySetByteMethod)
 	for conformanceMethod in builtinConformerMethodNameList(StringConformerName) 'eachConformance'
 		names.push(conformanceMethod)
@@ -4425,7 +4412,7 @@ end 'stringSurfaceMemberNames'
 function characterSurfaceMemberNames() returns ByteArrayArray
 	var names = ByteArrayArray.create()
 	names.push(ByteViewMethod)
-	names.push(StringByteLengthMethod)
+	names.push(ByteLengthMethod)
 	names.push(CharacterAsciiValueMethod)
 	return names
 end 'characterSurfaceMemberNames'
@@ -6166,21 +6153,13 @@ typealias ValueDeclaredAliasMap = Map with (ValueId, TypeNameId)
 // closure body (its value ids are a fresh SSA space), exactly like the sibling value columns.
 typealias CharLiteralOpMap = Map with (ValueId, OpIndex)
 
-// ⭐⭐ **WHICH OP MINTED EACH `addressableBytes()` BYTE VIEW — the map that lets a write intrinsic CONSUME the
-// String instead of the view (W35).** `__str_bytes_view` `__arr_create`s a 48-byte `Array` record so the
-// value can be TYPED as one; `__Builtins.writeStdout`/`writeStderr` read `buffer@0` and `length@8` and
-// NOTHING else — the two slots a String record already carries, at the same offsets. So when the view's sole
-// consumer is the write, the record is minted and destroyed to satisfy a type nobody reads: the allocator,
-// the array runtime and the leak gate arrive in a hello-world for it (MEASURED at 1,703 ⇒ 3,178 code bytes
-// before the fold below existed).
-//
-// The op is REWRITTEN IN PLACE for `CharLiteralOpMap`'s reason and this is how its index is found in O(1) —
-// leaving the view call behind and emitting a second one would keep the allocation this exists to remove.
-//
-// A Map rather than a dense column for `CharLiteralOpMap`'s reason: the population is a function's
-// `addressableBytes()` calls, which is zero for every user function (the method is stdlib-only) and for
-// almost every stdlib one. Reset per function and SWAPPED across a closure body, exactly like the siblings.
-typealias StringBytesViewOpMap = Map with (ValueId, OpIndex)
+// ⚠ **`StringBytesViewOpMap` STOOD HERE AND WENT WITH THE STREAM-WRITE FOLD (W49 wave 7).** It was
+// `CharLiteralOpMap`'s twin — which op minted each `addressableBytes()` byte view — so that a write
+// intrinsic could CONSUME the String instead of the view, worth 3,178 ⇒ 1,703 code bytes on a hello-world.
+// The fold's producer was `dispatchStringMethod`'s arm; retiring that member onto `stdlib/String.maxon:181`
+// puts the mint one call frame away, where an in-place op rewrite cannot reach it, so the map had no writer
+// left. `emitBuiltinsStreamWrite` carries the full account and the cost. Nothing else ever read it, which
+// is why the field, its COW anchor and its four per-function/closure plumbing sites all went in one edit.
 
 // ⭐ **ONE PARSER MARK OVER THIS FUNCTION'S SSA VALUES — a set of the values that carry it.** The two marks
 // that wear this shape are `Parser.immutableGlobalReads` (loaded out of an IMMUTABLE top-level global's slot,
@@ -7741,10 +7720,6 @@ export type Parser
 	// what an integer position does with it and why the op must be REPLACED rather than orphaned.
 	// Reset per function and SWAPPED across a closure body, exactly like the sibling value columns.
 	var charLiteralOps as CharLiteralOpMap
-	// ⭐⭐ **WHICH OP MINTED EACH `addressableBytes()` BYTE VIEW (W35)** — see `StringBytesViewOpMap` for what
-	// the stream-write fold does with it and for the allocation it removes.
-	// Reset per function and SWAPPED across a closure body, exactly like the sibling value columns.
-	var stringBytesViewOps as StringBytesViewOpMap
 	// ⭐⭐ **WHICH VALUES WERE READ OUT OF AN IMMUTABLE TOP-LEVEL GLOBAL (P1.7 slice 2b)** — the fact that
 	// stops a `let`-declared array's record from being written through a mutable ALIAS.
 	//
@@ -8314,8 +8289,9 @@ export type Parser
 	let declaresCompilerInternalNames as bool
 	// ⭐ **IS THIS FILE PHYSICALLY INSIDE `stdlib/` (BATCH2 slice 1)?** True for every module the loader
 	// lists AND for a module named directly on the command line (`maxon-shv2 build stdlib/URL.maxon`),
-	// because being under `stdlib/` is a property of the FILE. Read by the one gate on the two
-	// `module`-visible `String` methods (`requireStdlibOnlyStringMethod`).
+	// because being under `stdlib/` is a property of the FILE. Read by the two remaining stdlib-only doors —
+	// `dispatchStringMethod`'s `setByte` arm and `requireStdlibOnlyBufferMethod` — each of which serves a
+	// `module function` shv2 SYNTHESIZES, and so has no declaration whose visibility could answer instead.
 	//
 	// ⭐ It is DERIVED, not probed: `isStdlibSource` already answers it except when the project ROOT is
 	// itself under `stdlib/`, and that is a fact about the COMPILE, asked once
@@ -8462,7 +8438,6 @@ export type Parser
 			valueInstanceAlias: sharedEmptyInstanceAliasMap,
 			valueDeclaredAlias: sharedEmptyDeclaredAliasMap,
 			charLiteralOps: sharedEmptyCharLiteralOps,
-			stringBytesViewOps: sharedEmptyStringBytesViewOps,
 			immutableGlobalReads: sharedEmptyImmutableGlobalReads,
 			mergeImmutableBlame: sharedEmptyMergeBlames,
 			bufferSurfaceValues: sharedEmptyBufferSurfaceValues,
@@ -15563,7 +15538,6 @@ export type Parser
 		// function's SSA space (see `ValueDeclaredAliasMap`), and shares the same copy-on-write anchor.
 		self.valueDeclaredAlias = sharedEmptyDeclaredAliasMap
 		self.charLiteralOps = sharedEmptyCharLiteralOps
-		self.stringBytesViewOps = sharedEmptyStringBytesViewOps
 		// Per-function for the identical reason (P1.7 slice 2b): a marked value names an id in THIS
 		// function's SSA space, so a mark carried over would name an unrelated value in the next one.
 		self.immutableGlobalReads = sharedEmptyImmutableGlobalReads
@@ -16504,7 +16478,6 @@ export type Parser
 		self.valueInstanceAlias = sharedEmptyInstanceAliasMap
 		self.valueDeclaredAlias = sharedEmptyDeclaredAliasMap
 		self.charLiteralOps = sharedEmptyCharLiteralOps
-		self.stringBytesViewOps = sharedEmptyStringBytesViewOps
 		self.immutableGlobalReads = sharedEmptyImmutableGlobalReads
 		self.mergeImmutableBlame = sharedEmptyMergeBlames
 		// ⭐ **ALL THREE, for `parseFunction`'s stated reason — "they describe one value space" (BATCH22
@@ -19004,7 +18977,7 @@ export type Parser
 	// WORKSTREAM RUNS.** `isStdlibSource` answers a VISIBILITY question and deliberately hands a project ROOTED
 	// under `stdlib/` its own files back as the USER's, so gated on it, `maxon-shv2 build stdlib/Interfaces.maxon`
 	// — the readiness probe `StdlibLoader`'s collision rule prescribes — would refuse the module it is checking.
-	// D6 drew this distinction for `stdlib/Builtins.maxon` and `requireStdlibOnlyStringMethod` paid for missing
+	// D6 drew this distinction for `stdlib/Builtins.maxon` and the stdlib-only `String` gate paid for missing
 	// it; being the declaring site of a compiler-owned name is a property of the FILE, never of how a command
 	// line spelled the project.
 	//
@@ -22574,19 +22547,13 @@ export type Parser
 		self.pendingTempDrops.push(value)
 	end 'trackOwnedTemp'
 
-	// ⭐ **`trackOwnedTemp`'s EXACT INVERSE — the value is no longer a managed temporary at all (W35).** Its
-	// one caller is `foldByteViewIntoStreamWrite`, which rewrites the `__str_bytes_view` call that minted the
-	// record INTO the write that consumed it: there is no record any more, so both halves of the enrolment
-	// have to go. Dropping only the pending entry would leave `valueOwnsHeap` set on what is now an integer
-	// byte count, and a `let n = __Builtins.writeStdout(…)` would then bind a value the scope exit tries to
-	// DECREF — which is why this is the inverse of the whole two-step and not of its second half.
-	//
-	// ⚠ It is NOT a general "cancel an ownership" door and must not become one: releasing a temporary whose
-	// record still EXISTS is a leak. The caller's obligation is that the producing op is gone.
-	function releaseOwnedTemp(value ValueId)
-		try self.valueOwnsHeap.set(value, value: false) otherwise panic("releaseOwnedTemp: v{value} has no owned-heap slot — every SSA value must be minted through mintValue, which seeds the column")
-		self.removeFromPendingTemps(value)
-	end 'releaseOwnedTemp'
+	// ⚠ **`releaseOwnedTemp` STOOD HERE AND WENT WITH ITS ONE CALLER (W49 wave 7).** It was
+	// `trackOwnedTemp`'s exact inverse — clear `valueOwnsHeap` AND drop the pending entry — for the one
+	// situation in which a record ceased to exist after being enrolled: `foldByteViewIntoStreamWrite`
+	// rewriting a `__str_bytes_view` mint into the write that consumed it. That peephole lost its producer
+	// when `String.addressableBytes` retired onto the corpus, and its own header recorded why this door must
+	// never become a general "cancel an ownership" — releasing a temporary whose record still EXISTS is a
+	// leak. With no caller left, the safest shape is not to offer it.
 
 	// Set `value`'s owned-heap provenance bit WITHOUT enrolling it as a statement-scoped pending temporary
 	// — the half of `trackOwnedTemp` a CONSUMED PARAMETER needs (P1.4a wave 2). The param already drops at
@@ -33702,15 +33669,6 @@ export type Parser
 		return result
 	end 'emitCharacterLiteral'
 
-	// File the op a character-literal value was materialized by, so an integer position can rewrite it.
-	// `recordCharLiteralOp`'s twin for a byte view — same COW-off-the-shared-empty discipline, same reason.
-	function recordStringBytesViewOp(value ValueId, opIndex OpIndex)
-		if self.stringBytesViewOps is sharedEmptyStringBytesViewOps 'stillShared'
-			self.stringBytesViewOps = StringBytesViewOpMap.create()
-		end 'stillShared'
-		self.stringBytesViewOps.upsert(value, value: opIndex)
-	end 'recordStringBytesViewOp'
-
 	function recordCharLiteralOp(value ValueId, opIndex OpIndex)
 		// COPY-ON-WRITE off the shared empty map, exactly as `recordValueInstanceAlias` does and for its
 		// reason: a function that writes no character literal never allocates one.
@@ -37153,19 +37111,16 @@ export type Parser
 		// refused here, because every entry matches an arm or the conformance lookup (the panic at the end of
 		// this function is what says so).
 		//
-		// ⚠ **THE TWO STDLIB-ONLY NAMES PASS THIS GATE AND ARE REFUSED BY THEIR OWN ARMS.** That ordering is
-		// the point of putting them on the roster at all: "shv2 has no such method" and "this method exists
+		// ⚠ **THE ONE STDLIB-ONLY NAME PASSES THIS GATE AND IS REFUSED BY ITS OWN ARM.** That ordering is
+		// the point of putting it on the roster at all: "shv2 has no such method" and "this method exists
 		// and is not yours to call" are different statements, and the gate must not turn the second into the
-		// first. `stdlib-only-string-methods.md` pins both directions — the two real names get the visibility
-		// refusal, a near miss of one of them gets this roster.
+		// first. `stdlib-only-string-methods.md` pins both directions — the real name gets the visibility
+		// refusal, a near miss of it gets this roster.
 		let roster = try self.requireSurfaceMember(MemberSurface.string, methodTok: methodTok)
 
 		if methodTok.value.equals(AppendMethod) 'append'
 			return try self.parseStringAppend(func, recv: recv, methodTok: methodTok, resultUsed: resultUsed)
 		end 'append'
-		if methodTok.value.equals(StringByteLengthMethod) 'byteLength'
-			return try self.parseStringByteLength(recv.value, methodTok: methodTok)
-		end 'byteLength'
 
 		// ⚠ **THE WHOLE P1.8 SLICE C BYTE/ASCII FAMILY USED TO SIT HERE AND NONE OF IT DOES** —
 		// `startsWith`/`endsWith` (W49 wave 1), `toLower`/`toUpper`/`replace`/`replaceFirst` (wave 2),
@@ -37184,108 +37139,34 @@ export type Parser
 		//
 		// ⚠ `Character.bytes()` is NOT retired and still reaches `parseByteView` from
 		// `dispatchCharacterMethod` — `type Character` has no view accessor to fall through to.
+		//
+		// ⭐⭐⭐ **AND WAVE 7 TOOK THE SCALAR MEMBERS AND ALL FOUR READ-ONLY BYTE DOORS — `byteLength`,
+		// `isEmpty`, `clone`, `addressableBytes`, `byteAt`, `byteAtOrPanic` AND `hasSingleByteGraphemes`.**
+		// Six of the seven were the CHEAPEST arms in this file — a field load, a load plus a compare, one
+		// runtime call — which is exactly why they were the last to go and why this wave is where the
+		// accepted cost is largest per call: there is no work here for a corpus body to be *as fast as*, only
+		// a call frame to add. The corpus bodies are the normative definitions these arms were transcribed
+		// FROM (`stdlib/String.maxon:248-252` says so outright of the byte primitives), so the answers are
+		// unchanged and only the frame is new.
+		//
+		// ⚠ **THE FOUR `module` MEMBERS AMONG THEM NO LONGER TAKE A LOCATION GATE, AND THAT IS A STRICT
+		// IMPROVEMENT RATHER THAN A LOST CHECK.** `requireStdlibOnlyStringMethod` existed because a
+		// synthesized arm answers ahead of the corpus, so the `module` keyword the corpus WROTE could never be
+		// reached; retired, each is refused by its own declaration through `SemanticCheck.calleeVisibleFrom`.
+		// `setByte` is the one member that cannot follow — see its arm, and the roster's header.
 		let range = SourceRange.between(baseTok, last: methodTok)
 
-		// ⚠ **`count()` USED TO SIT HERE AND IS NOW THE CORPUS'S TOO, AND IT WAS THE CHEAPEST OF THE THREE TO
-		// GIVE BACK**: this arm already called `CorpusCountGraphemes` directly, so the corpus's own
-		// `count()` — whose entire body is `return countGraphemes(self)` (`stdlib/String.maxon:347-349`) —
-		// reaches the identical callee through one more frame, and no builder died with the arm.
+		// ⭐⭐ **`setByte(index, value)` — THE ONE BYTE PRIMITIVE THAT WRITES, AND THE LAST STDLIB-ONLY BYTE
+		// DOOR** (`stdlib/String.maxon:316`, a `module function` as the three READ doors were before wave 7
+		// retired them). Its one corpus caller is `mapAsciiCase`, which takes a private copy of the bytes and
+		// maps it in place.
 		//
-		// `isEmpty()` is `byteLength() == 0` — the reference's own body (`stdlib/String.maxon:340-342`), which
-		// is why it is the field load this file already emits plus the ordinary integer compare, and not a
-		// runtime entry point of its own. A String with no bytes has no graphemes either, so asking the length
-		// rather than `count()` answers the same question without the O(n) walk.
-		if methodTok.value.equals(IsEmptyMethod) 'isEmpty'
-			try self.consumeEmptyArgList()
-			return try self.emitCompare(self.emitLoadStringField(recv.value, offset: StringLengthOffset, range: range), rhs: self.emitLiteral(0, valueType: MaxonType.integer, range: range), op: MaxonCmpOp.eq, opTok: methodTok)
-		end 'isEmpty'
-		// `clone()` is `__str_clone`, the deep copy P1.7 slice 3b-vi-b already built for the managed-array
-		// element walk — a fresh OWNED inline record holding a copy of these bytes. It is emphatically NOT
-		// `return self`: that hands the caller a second owner of the receiver's box, and the caller's drop
-		// takes the receiver's bytes with it (the reference refuses it for the identical reason at its own
-		// `clone()`, where the note is the Stage 0 bug `let b = a.toLower()` lowercasing `a`).
-		if methodTok.value.equals(CloneMethodName) 'clone'
-			try self.consumeEmptyArgList()
-			return self.emitOwnedRuntimeResult(StrCloneName, args: singletonArgs(recv.value), resultTag: ValueTypeTag.string, resultNameId: UnnamedTypeId, range: range)
-		end 'clone'
-		// ⭐ P1.8 Slice B2 — what is left of the `StringIndex` family here is its one CONSUMER. It READS the
-		// receiver and writes a fresh value, so it does not take `append`'s `noteReceiverWrite` path and a
-		// `let` receiver is fine.
-		//
-		// ⚠ **THE FIVE PRODUCERS USED TO SIT HERE AND ARE NOW THE CORPUS'S (wave 3)** — `startIndex`,
-		// `endIndex`, `findFirst`, `findLast` and `indexAfter`, struck from `stringSurfaceMemberNames` like
-		// every other retirement. What made this wave different from the two before it is that they answer
-		// with a `StringIndex`, and shv2 held a second declaration of that type: retiring them is what
-		// leaves the corpus's declaration alone. `slice`, their one remaining consumer here, followed them at
-		// wave 4. See the roster's header.
-		// ⭐⭐ **THE TWO STDLIB-ONLY BYTE DOORS (BATCH2 slice 1)**, each opening with the provenance gate for
-		// the reason `requireVoidMethodIsStatement` opens its arms: the refusal must beat every argument
-		// diagnostic, and it must be reachable only once a real method NAME has matched — a user's TYPO must
-		// still be handed the roster below, not told it lacks permission for a method nobody has.
-		if methodTok.value.equals(StringAddressableBytesMethod) 'addressableBytes'
-			try self.requireStdlibOnlyStringMethod(methodTok)
-			try self.consumeEmptyArgList()
-			// ⭐ The result wears the `__ManagedMemory` SURFACE, which is the whole of what the declared
-			// `ByteMemory` (`__ManagedMemory with Byte`) means here — and it is what makes the corpus's
-			// `urlBytes.slice(0, colonPos)` resolve: the buffer surface is where `slice`'s `endIndex:` label
-			// is OPTIONAL, and the corpus writes both indices positionally.
-			// The index the call below will occupy, read BEFORE the emit — `emitRuntimeCall`'s own discipline
-			// for the same reason, and what `foldByteViewIntoStreamWrite` rewrites in place. It appends
-			// exactly one op, and the fold site re-matches what it finds here rather than trusting the index.
-			let viewOpIdx = self.artifact.module.ops.count()
-			let view = self.emitOwnedRuntimeResult(StrBytesViewName, args: singletonArgs(recv.value), resultTag: ValueTypeTag.genericInstance, resultNameId: self.signatures.internSynthesizedByteInstance(), range: range)
-			self.markBufferSurface(view)
-			self.recordStringBytesViewOp(view, opIndex: viewOpIdx)
-			return view
-		end 'addressableBytes'
-		// ⚠ The RECORD is what the caller owns and drops, never the bytes — `__str_bytes_view` counts the
-		// allocation those live in, so the drop releases one reference and frees nothing the String still
-		// needs (see `StringRuntime.emitStringBytesAllocation`). That is why this goes through
-		// `emitOwnedRuntimeResult` at all: leaving the 48-byte record untracked would leak it.
-		// ⚠ **`byteAt` AND `byteAtOrPanic` ARE ONE READ WITH TWO FAILURE EXITS, AND THE ONLY THING THAT DIFFERS
-		// HERE IS THE CALLEE.** `__str_byte_at` carries a `throws` clause, so `isThrowingRuntimeCallee` makes the
-		// parser ACCEPT a `try` on it (E3055) and SemanticCheck REJECT a bare one (E3057) — neither decided at
-		// this site. `emitRuntimeCall` emits nothing after the call, which is what lets an enclosing `try`
-		// rewrite it (`rewriteLastCallToTryCall`).
-		if methodTok.value.equals(ByteAtMethod) 'byteAt'
-			try self.requireStdlibOnlyStringMethod(methodTok)
-			let index = try self.parseOneBuiltinIntegerArgList(func, paramName: ManagedMemoryIndexParamName, methodTok: methodTok)
-			return self.emitRuntimeCall(StrByteAtName, args: pairArgs(recv.value, second: index), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
-		end 'byteAt'
-		if methodTok.value.equals(StringByteAtOrPanicMethod) 'byteAtOrPanic'
-			try self.requireStdlibOnlyStringMethod(methodTok)
-			let index = try self.parseOneBuiltinIntegerArgList(func, paramName: ManagedMemoryIndexParamName, methodTok: methodTok)
-			return self.emitRuntimeCall(StrByteAtOrPanicName, args: pairArgs(recv.value, second: index), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
-		end 'byteAtOrPanic'
-		// ⭐⭐ **`hasSingleByteGraphemes()` IS THE RECORD'S OWN `@40` FIELD, AND UNTIL THE FLAG WAS
-		// STRENGTHENED IT HAD TO BE ANSWERED A CONSERVATIVE `false` OUTRIGHT.** The corpus field means
-		// *"every grapheme is one byte"*; shv2's slot@40 used to hold the strictly WEAKER `isAscii`, and
-		// **CR+LF is a single cluster under UAX #29 GB3**, so an all-ASCII string is not necessarily one byte
-		// per cluster. `stdlib/String.maxon:72-77` records the corpus paying for exactly that confusion once
-		// — *"this field used to say only 'is ASCII', and ten methods read THAT as 'one byte per character' …
-		// all ten split the cluster"*. Serving the weaker field here would have been a SILENT WRONG ANSWER:
-		// `countGraphemes` of a CR+LF string would take the shortcut and return the BYTE length, 2, where
-		// every other path in all three compilers says 1.
-		//
-		// ⇒ The cure named at that refusal — *"strengthening the record's `@40` flag to the corpus's meaning
-		// at its literal scan and at all nine of its propagation sites"* — is what `StringRuntime`'s
-		// `StringSingleByteGraphemesOffset` now declares and what `bytesAreSingleByteGraphemes`,
-		// `__str_from_bytes`'s runtime scan and `__char_from_cp`'s CR arm compute. The two predicates are one
-		// predicate, so the field IS the answer and the `false` is retired.
-		//
-		// ⭐ **AND SERVING IT IS WHAT TURNS THE CORPUS'S OWN FAST PATHS ON** — `countGraphemes`,
-		// `byteIndexToGraphemeIndex` and `graphemeOffsetToBytePos` each open with this predicate
-		// (`grapheme.maxon:349-361`, which measured ×2.4 at 64 bytes rising to ×6.5 at 100k without it). The
-		// shortcut lives THERE, in the file that owns UAX #29 and knows what the flag licenses; nothing here
-		// takes one.
-		// ⚠ The field is an i64 0/1 (the width every record slot is stored at), and this method returns a
-		// `bool`, which is an i1 — so the load is followed by a `!= 0` rather than handed back as-is. That is
-		// the same shape `__str_from_bytes` writes the flag with at the other end, and the reason it is a
-		// compare and not a cast is stated there: the two are different Std types and the field must be the
-		// record's width.
-		// ⭐⭐ **`setByte(index, value)` — THE ONE BYTE PRIMITIVE THAT WRITES, AND THE THIRD STDLIB-ONLY BYTE
-		// DOOR** (`stdlib/String.maxon:316`, a `module function` like `byteAt` and `addressableBytes`). Its
-		// one corpus caller is `mapAsciiCase`, which takes a private copy of the bytes and maps it in place.
+		// ⛔ **IT IS THE ONE THAT MAY NOT RETIRE, AND THE REASON IS OWNERSHIP RATHER THAN LOWERING.** It
+		// WRITES its receiver, and shv2 derives no `writtenParamMask` for a method writing its own receiver's
+		// data (`ARCHITECTURE.md:1121-1132` RULES that this is not a parameter mutation, pinned by
+		// `specs-shv2/self-keyword.md`). So the corpus body's mask is ZERO, and routing the call there would
+		// admit `let s = "abc"; s.setByte(0, value: 65)` — a write through a receiver the caller may only have
+		// borrowed. `append` is the same shape one arm up and is held back for the same reason.
 		//
 		// ⚠ **IT IS AN ARM RATHER THAN A CORPUS CALL FOR A REASON THE LANGUAGE FORCES.** The corpus writes
 		// `work.setByte(i, b + delta)` — POSITIONAL — and shv2 requires the second and later arguments to be
@@ -37317,27 +37198,59 @@ export type Parser
 		//
 		// ⭐ It also deletes an allocation PER BYTE WRITTEN: the view record was 48 bytes plus an `__mm_incref`,
 		// minted and dropped once per `setByte`, where a detach happens at most once per String.
+		//
+		// ⚠⚠ **THE VISIBILITY REFUSAL IS WRITTEN HERE RATHER THAN IN A GATE, AND WAVE 7 IS WHY.** It was
+		// `requireStdlibOnlyStringMethod`, a shared guard whose sentence had to enumerate every arm that
+		// called it — a standing obligation that had already been broken once, saying *"THE FOUR"* with five
+		// callers and never naming `setByte`, the very member most worth naming (W49 wave 2). Wave 7 retired
+		// the other four onto declarations that carry their own `module` visibility, leaving ONE caller: the
+		// obligation is discharged by CONSTRUCTION now, because the sentence sits inside the only arm it can
+		// ever be about and there is no list to keep in step.
+		//
+		// ⭐ It comes FIRST in the arm, for the reason `requireVoidMethodIsStatement` opens the arms it
+		// guards: the refusal must beat every argument diagnostic, and it must be reachable only once a real
+		// method NAME has matched — a user's TYPO is still handed the roster below, never told it lacks
+		// permission for a method nobody has.
+		//
+		// ⚠ **ONLY THE NOUN AND THE REASON ARE WRITTEN HERE** — the sentence's opening is `stdlibOnlyRefusal`'s,
+		// shared with `requireStdlibOnlyBufferMethod`, and that is where the argument for naming the oracle's
+		// ANSWER rather than its CODE NUMBER lives. It is also where the `livesUnderStdlibDirectory`-not-
+		// `isStdlibSource` fact is recorded: gated on the latter, this refusal once told
+		// `maxon-shv2 build stdlib/URL.maxon` that `stdlib\URL.maxon` "is not stdlib source".
 		if methodTok.value.equals(ManagedMemorySetByteMethod) 'setByte'
-			try self.requireStdlibOnlyStringMethod(methodTok)
+			if not self.livesUnderStdlibDirectory 'notTheStdlibsOwn'
+				throw stdlibOnlyRefusal("String method", methodTok: methodTok, reason: "It WRITES one of a String's own bytes, which would mutate a String the caller may only have borrowed; every other `module` member of `String` is refused by its own declaration, and this one is served here instead because a synthesized arm is what carries the receiver-write refusal")
+			end 'notTheStdlibsOwn'
+
 			try self.requireVoidMethodIsStatement(resultUsed, methodTok: methodTok)
 			var setArgs = try self.parseTwoBuiltinIntegerArgList(func, firstParam: ManagedMemoryOffsetParamName, secondParam: ManagedMemoryValueParamName, methodTok: methodTok)
 			setArgs.insert(0, value: recv.value)
 			return self.emitRuntimeCall(ArrSetByteName, args: setArgs, resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
 		end 'setByte'
-		if methodTok.value.equals(StringHasSingleByteGraphemesMethod) 'hasSingleByteGraphemes'
-			try self.requireStdlibOnlyStringMethod(methodTok)
-			try self.consumeEmptyArgList()
-			let flag = self.emitLoadStringField(recv.value, offset: StringSingleByteGraphemesOffset, range: range)
-			return self.emitCompareAgainstLiteral(flag, literal: BoolFalseValue, op: MaxonCmpOp.ne, opTok: methodTok)
-		end 'hasSingleByteGraphemes'
 
 		// ⭐⭐ **`hash()` AND `equals(other)` ARE NOT STRING METHODS — THEY ARE THE BUILTIN CONFORMANCES, AND
-		// THIS IS THE DIRECT-CALL DOOR ONTO THE IMPLS THAT ALREADY EXIST (BATCH2 slice 2).**
-		// `BuiltinConformanceRuntime` synthesizes `String.hash` (djb2) and `String.equals` (`__str_eq`'s
-		// content compare) for `Hashable`/`Equatable`, and a `__witness_String.*` slot is already stamped with
-		// a `funcAbs64` reloc naming those exact symbols. So this emits the SAME callee the witness dispatch
-		// loads and the `Set with String` probe calls — one body, three doors, and emphatically not a second
-		// djb2 written at a call site.
+		// THIS IS THE DIRECT-CALL DOOR ONTO THE IMPLS THAT ALREADY EXIST (BATCH2 slice 2).** A
+		// `__witness_String.*` slot is stamped with a `funcAbs64` reloc naming `String.hash`/`String.equals`,
+		// and this emits those SAME symbols — one body, three doors, and emphatically not a second djb2
+		// written at a call site.
+		//
+		// ⛔⛔ **AND THE BODY BEHIND THOSE SYMBOLS IS THE CORPUS'S, NOT A SYNTHESIZED ONE — THIS COMMENT SAID
+		// THE OPPOSITE UNTIL W49 WAVE 7 MEASURED IT.** It read *"`BuiltinConformanceRuntime` synthesizes
+		// `String.hash` (djb2) and `String.equals` (`__str_eq`'s content compare)"*. That installer builds an
+		// impl only for a candidate the module NAMES and does not DEFINE, and `stdlib/String.maxon:351,355`
+		// declare both — so the synthesized pair has not been installed since the module was listed. Measured
+		// on the emitted IR: `s.hash()` is `call String.hash`, whose body is `call hashString`
+		// (`stdlib/helpers/string/hash.maxon:22`).
+		//
+		// ⇒ **SO THERE IS NOTHING HERE FOR A RETIREMENT WAVE TO MOVE, AND THAT IS WHY WAVE 7 LEFT THIS DOOR
+		// ALONE WHILE RETIRING SEVEN MEMBERS AROUND IT.** A retirement exists to make the corpus body serve
+		// the member; for this pair the corpus body ALREADY serves it, and the only thing striking the two
+		// names off the roster would change is which door routes the call — `memberBelongsToTheCorpus`
+		// instead of the lookup below — to the identical symbol. That is churn with a return-type risk
+		// (`HashValue` is `int(0 to u32.max)`; this door types the result off the `InterfaceMethodSig`) and no
+		// benefit. The two hashes AGREE — same djb2, same seed, same multiplier, same low-32 mask — which is
+		// what a `Set with String`'s bucket layout rides on; `BuiltinConformanceRuntime`'s header records the
+		// full measurement.
 		//
 		// ⭐ **ASKED LAST, AND BY LOOKUP RATHER THAN BY TWO MORE `if`s.** Last, because the String method
 		// table above must win — the arm-order rule `dispatchMethodOnReceiver` states, one level down. By
@@ -37364,65 +37277,17 @@ export type Parser
 		panic("{drift}")
 	end 'dispatchStringMethod'
 
-	// ⭐⭐ **A `module`-VISIBLE STRING METHOD IS `stdlib/`'s ALONE, AND THIS IS THE ONE PLACE THAT SAYS SO.**
-	// `addressableBytes` hands out a live view of a String's bytes, `byteAt`/`byteAtOrPanic` read one of them
-	// (the first throwing, the second aborting) and `hasSingleByteGraphemes` reports a private field; the
-	// corpus declares ALL FOUR `module function`, so a user program calling any of them is refused by the
-	// oracle's NOT-EXPORTED diagnostic. shv2 cannot answer with that code — it has no `module`
-	// keyword and no declaration of these to attach a visibility to — so it refuses on the fact it does have:
-	// WHERE the file being parsed physically lives.
-	//
-	// ⚠ **THE MESSAGE STATES THE ORACLE'S ANSWER AND DELIBERATELY DOES NOT SPELL ITS NUMBER.** A 4-digit code
-	// written outside `docs/error-codes.txt` is a copy of the number space, and this one could not even be a
-	// checked copy: it names a code shv2 does not claim, so shv2's generated `ErrorCodeRegistry` has no member
-	// for it and nothing here could be derived from the registry. Renumber that code and the literal would
-	// survive as a confident sentence about another compiler that had quietly become false — in the message,
-	// in `specs-shv2/stdlib-only-string-methods.md` and in three goldens at once.
-	//
-	// ⚠⚠ **THE FACT IS `livesUnderStdlibDirectory`, NOT `isStdlibSource`, AND THE DIFFERENCE COST THE
-	// WORKSTREAM ITS MEASUREMENT COMMAND FOR ONE COMMIT.** `isStdlibSource` answers a VISIBILITY question,
-	// and it deliberately hands a project ROOTED under `stdlib/` its own files back as the USER's — so
-	// gated on it, this refusal told `maxon-shv2 build stdlib/URL.maxon` that `stdlib\URL.maxon` "is not
-	// stdlib source", which is false about that path and breaks the command `StdlibLoader`'s own collision
-	// rule prescribes for deciding whether a module is ready to be listed. D6 had already drawn this
-	// distinction and NAMED this consequence for `stdlib/Builtins.maxon`
-	// (`declaresCompilerInternalNames`); this door repeated it one file over. Being reachable by a
-	// `module`-visible method is a property of the FILE, never of how a command line spelled the project.
-	//
-	// ⚠ **IT NAMES THE REASON RATHER THAN FALLING THROUGH TO THE UNKNOWN-MEMBER ROSTER.** "shv2 does not
-	// have this method" and "this method exists and is not yours to call" are different statements, and the
-	// first one about a method the compiler DOES implement is exactly the false claim D11 was about. Both
-	// names are ON the roster (`stringSurfaceMemberNames`), so the gate ahead of the arms admits them and
-	// they arrive HERE — which is what makes that distinction observable rather than merely intended.
-	//
-	// ⚠ **THE METHOD NAMES ARE RENDERED FROM THE ARMS' OWN CONSTANTS, NOT TYPED OUT (A2q)**, because
-	// this sentence and the roster's tail clause name the same members and a rename that reached one would
-	// leave the other confidently wrong. It stays a VISIBILITY sentence rather than becoming a roster: it
-	// answers "who may call this?", not "what is there?", and the two questions have different lists.
-	//
-	// ⛔ **IT SAID "THE FOUR" AND HAD FIVE CALLERS, AND THE ONE IT LEFT OUT WAS `setByte`** — found at W49
-	// wave 2, which is the rung that gave that member its first corpus caller. A user writing
-	// `s.setByte(0, value: 65)` was refused by a sentence enumerating four OTHER members and never their
-	// own: the D12 wrong-noun defect, in the one message whose whole job is to say which member is being
-	// refused and why. It is the member most worth naming, too — it is the only one of the five that
-	// WRITES, so the reason it is stdlib-only is not "you would read something private" but "you would
-	// mutate a String through a `let`". Every arm that calls this gate must appear in this sentence; five
-	// do, and `stdlib-only-string-methods.md` has a case per member so a sixth arriving without one is a
-	// red case rather than a silent omission.
-	function requireStdlibOnlyStringMethod(methodTok Token) throws ParseError
-		if self.livesUnderStdlibDirectory 'thestdlibsOwn'
-			return
-		end 'thestdlibsOwn'
-
-		throw ParseError.unsupported("String method '{String.from(methodTok.value)}' — it is STDLIB-ONLY (`module function` in `stdlib/String.maxon`, which the reference compiler refuses to user code as a not-exported error) and this file is not under `stdlib/`. `{String.from(StringAddressableBytesMethod)}` hands out a live view of a String's own bytes, and `{String.from(ByteAtMethod)}`/`{String.from(StringByteAtOrPanicMethod)}` each read one of them — the first through a catchable failure, the second through none — while `{String.from(ManagedMemorySetByteMethod)}` WRITES one, which would mutate a String the caller may only have borrowed — and `{String.from(StringHasSingleByteGraphemesMethod)}` reports a private flag of the record; user code reaches the bytes through `{String.from(StringToByteArrayMethod)}()`, which copies", line: methodTok.line, column: methodTok.column)
-	end 'requireStdlibOnlyStringMethod'
-
-	// ⭐⭐ **THE BUFFER'S TWO STDLIB-ONLY MEMBERS — the `requireStdlibOnlyStringMethod` twin, one surface over,
-	// and it exists because the two of them shipped UNGATED and each was a memory-safety hole reachable from an
+	// ⭐⭐ **THE BUFFER'S TWO STDLIB-ONLY MEMBERS — the `setByte` arm's twin, one surface over, and it exists
+	// because the two of them shipped UNGATED and each was a memory-safety hole reachable from an
 	// ordinary user program.** Both are `module function`s in the corpus (`stdlib/String.maxon:195`'s `cstr()`
 	// forwards to `toCString`, `:301` IS `makeCharFromBytes`), so the visibility is the corpus's own and is
 	// enforced on the file's PHYSICAL LOCATION for the reason its String twin states — shv2 has no `module`
 	// keyword, and `livesUnderStdlibDirectory` is emphatically not `isStdlibSource`.
+	//
+	// ⚠ **IT IS STILL A FUNCTION WHERE THE `String` SIDE BECAME AN INLINE THROW (W49 wave 7), AND THE
+	// DIFFERENCE IS THE CALLER COUNT.** That side is down to ONE arm, so its sentence sits inside the arm it
+	// is about and cannot go stale; this one is shared by TWO arms with two different reasons, so it keeps the
+	// standing obligation its own last paragraph states — every arm that calls it must appear in its sentence.
 	//
 	// **What the gate is worth, measured on this tree before it existed:**
 	//   * `sub.managed.toCString()` on a zero-copy view — **exit 101**, the leak gate. A `cstring` is a raw
@@ -37439,15 +37304,51 @@ export type Parser
 	// what the surface HAS rather than who may reach it — the same split `dispatchStringMethod`'s roster and its
 	// stdlib-only gate already keep one surface over.
 	//
-	// It is a second function rather than a `message` parameter on the first because the message is built ONLY
-	// on the throw path; a shared entry point would have to render one at every admitted call.
+	// It is a second GATE rather than a `message` parameter on the first because the gate is asked at every
+	// admitted call and only the throw path may pay for a message.
+	//
+	// ⚠ **THE SENTENCE'S OPENING IS SHARED WITH `setByte`'s ARM AND IS WRITTEN ONCE** — see
+	// `stdlibOnlyRefusal` below. The two refusals differ in their NOUN and their REASON and agree on
+	// everything between, which is exactly the shape that becomes two sentences drifting apart: the stem
+	// names `stdlib/String.maxon`, the oracle's answer and the location rule, and all three are one fact.
 	function requireStdlibOnlyBufferMethod(methodTok Token) throws ParseError
 		if self.livesUnderStdlibDirectory 'thestdlibsOwn'
 			return
 		end 'thestdlibsOwn'
 
-		throw ParseError.unsupported("`{String.from(ManagedMemoryTypeName)}` member '{String.from(methodTok.value)}' — it is STDLIB-ONLY (`module function` in `stdlib/String.maxon`, which the reference compiler refuses to user code as a not-exported error) and this file is not under `stdlib/`. `{String.from(ManagedMemoryToCStringMethod)}` hands back a raw address with no length, no owner and no refcount, so the copy it makes when the receiver's bytes are not already NUL-terminated is reclaimed by nothing; `{String.from(ManagedMemoryMakeCharFromBytesMethod)}` trusts its caller for `pos + len <= {String.from(ManagedMemoryLengthMethod)}()` and reads off the end of the buffer otherwise. User code reaches a buffer's bytes through `{String.from(ByteAtMethod)}`, which is bounds-checked and throwing", line: methodTok.line, column: methodTok.column)
+		throw stdlibOnlyRefusal("`{String.from(ManagedMemoryTypeName)}` member", methodTok: methodTok, reason: "`{String.from(ManagedMemoryToCStringMethod)}` hands back a raw address with no length, no owner and no refcount, so the copy it makes when the receiver's bytes are not already NUL-terminated is reclaimed by nothing; `{String.from(ManagedMemoryMakeCharFromBytesMethod)}` trusts its caller for `pos + len <= {String.from(ManagedMemoryLengthMethod)}()` and reads off the end of the buffer otherwise. User code reaches a buffer's bytes through `{String.from(ByteAtMethod)}`, which is bounds-checked and throwing")
 	end 'requireStdlibOnlyBufferMethod'
+
+	// ⭐⭐ **WHAT "STDLIB-ONLY" MEANS, WRITTEN ONCE (W49 wave 7).** Both surviving location gates —
+	// `dispatchStringMethod`'s `setByte` arm and `requireStdlibOnlyBufferMethod` above — refuse a member the
+	// corpus declares `module function` and shv2 SYNTHESIZES, so neither has a declaration whose visibility
+	// could answer instead. They differ in exactly two things, which are the two parameters here: the NOUN
+	// the receiver's surface is called, and the REASON that particular member is not the user's to reach.
+	// Everything between was a ~150-character opening spelled out at both sites — one statement about
+	// `stdlib/String.maxon`, about the oracle's not-exported answer, and about the location rule.
+	//
+	// ⚠ **IT TAKES A RENDERED `reason` AND THAT IS NOT AN EAGER-COST BUG**: every caller is already INSIDE
+	// its own `livesUnderStdlibDirectory` refusal branch, so nothing is built on an admitted call. That is
+	// the same property the two-gates-not-one-parameter arrangement above exists to preserve, kept by
+	// putting the shared text below the branch rather than above it.
+	//
+	// ⚠ It names the oracle's ANSWER and deliberately not its CODE NUMBER — a 4-digit code written outside
+	// `docs/error-codes.txt` is a copy of the number space, and this one could not even be a CHECKED copy
+	// because shv2 does not claim that code and its generated `ErrorCodeRegistry` has no member for it.
+	// ⇒ Written here, that argument is made once for both messages rather than at each of them.
+	//
+	// ⚠⚠ **AND THE FACT THE STEM ASSERTS IS `livesUnderStdlibDirectory`, NOT `isStdlibSource` — THE
+	// DIFFERENCE COST THE WORKSTREAM ITS MEASUREMENT COMMAND FOR ONE COMMIT.** `isStdlibSource` answers a
+	// VISIBILITY question and deliberately hands a project ROOTED under `stdlib/` its own files back as the
+	// USER's — so gated on it, this sentence told `maxon-shv2 build stdlib/URL.maxon` that `stdlib\URL.maxon`
+	// "is not stdlib source", which is false about that path and breaks the command `StdlibLoader`'s own
+	// collision rule prescribes for deciding whether a module is ready to be listed. D6 had already drawn
+	// this distinction and NAMED that consequence for `stdlib/Builtins.maxon`. Being reachable by a
+	// `module`-visible method is a property of the FILE, never of how a command line spelled the project.
+	// ⇒ Both gates read that bit; this is the one sentence that CLAIMS it, so it is stated once here.
+	function stdlibOnlyRefusal(noun String, methodTok Token, reason String) returns ParseError
+		return ParseError.unsupported("{noun} '{String.from(methodTok.value)}' — it is STDLIB-ONLY (`module function` in `stdlib/String.maxon`, which the reference compiler refuses to user code as a not-exported error) and this file is not under `stdlib/`. {reason}", line: methodTok.line, column: methodTok.column)
+	end 'stdlibOnlyRefusal'
 
 	// ⚠ **`parseStringSplit` WAS HERE AND WENT WITH `String.split`** (W49 wave 5). It was the one builtin
 	// method that CONSTRUCTED an `Array with String`, creating the array here through `emitArrayCreateOp` and
@@ -37872,7 +37773,7 @@ export type Parser
 		// `byteLength()` is `length@8` — the UTF-8 width of the whole cluster, which for an EGC is the sum
 		// of its codepoints' widths (a family emoji is 18). The same field load a String's `byteLength()`
 		// is, because it is the same field of the same record.
-		if methodTok.value.equals(StringByteLengthMethod) 'byteLength'
+		if methodTok.value.equals(ByteLengthMethod) 'byteLength'
 			try self.consumeEmptyArgList()
 			return self.emitLoadStringField(recv.value, offset: StringLengthOffset, range: range)
 		end 'byteLength'
@@ -38259,9 +38160,11 @@ export type Parser
 		// WITHOUT `export` on purpose (*"take these bytes and trust me about them" is not a promise the stdlib
 		// makes to arbitrary code*), and a receiverless `CalleeMint.notMinted` call is exactly what
 		// `SemanticCheck.calleeVisibleFrom` holds to `ProgramSignatures.isVisibleFrom` — so a user program gets
-		// E3008 off the corpus's own missing keyword. A `requireStdlibOnlyStringMethod`-shaped gate here would be
-		// a SECOND statement of a visibility the declaration already makes, free to disagree with it; that gate
-		// exists for members shv2 SYNTHESIZES, which have no declaration to read.
+		// E3008 off the corpus's own missing keyword. A LOCATION-gate here would be a SECOND statement of a
+		// visibility the declaration already makes, free to disagree with it; the two such gates left
+		// (`setByte`'s arm, `requireStdlibOnlyBufferMethod`) exist for members shv2 SYNTHESIZES, which have no
+		// declaration to read. ⭐ **W49 wave 7 IS THAT ARGUMENT APPLIED RATHER THAN QUOTED**: the four
+		// stdlib-only `String` READ doors got declarations to read, and their gate went.
 		let memberTok = self.current()
 		if self.stringStaticBelongsToTheCorpus(memberTok) 'corpusStringStatic'
 			return try self.parseCallNamed(func, callee: qualifiedMethodName(StringConformerName, methodName: memberTok.value), anchor: typeTok, receiver: ReceiverArg.none, resultUsed: resultUsed, constructorInstance: ConstructorInstance.none, mint: CalleeMint.notMinted)
@@ -38881,13 +38784,11 @@ export type Parser
 		return recv.value
 	end 'parseStringAppend'
 
-	// s.byteLength() -- the String's byte count, length@8. A non-mutating accessor, so a let or var
-	// receiver alike, and it takes no arguments. The value is integer-tagged (a byte count), exactly as a
-	// field read is, and returns through the one String-field load site.
-	function parseStringByteLength(receiver ValueId, methodTok Token) returns ValueId throws ParseError
-		try self.consumeEmptyArgList()
-		return self.emitLoadStringField(receiver, offset: StringLengthOffset, range: SourceRange.ofToken(methodTok))
-	end 'parseStringByteLength'
+	// ⚠ **`parseStringByteLength` STOOD HERE AND WENT WITH `String.byteLength` (W49 wave 7).** It was two
+	// lines — consume `()`, load `length@8` — and had exactly ONE caller, so retiring the member took the
+	// helper whole. `dispatchCharacterMethod`'s own `byteLength` arm never called it (it writes the same two
+	// lines inline over `type Character`'s record) and is untouched; `StringLengthOffset` and
+	// `emitLoadStringField` keep that caller and five others.
 
 	// --- Direct builtin-conformance dispatch (P1.7a): `i.compare(j)` / `i.hash()` / `i.equals(j)`,
 	// and since BATCH2 slice 2 a `String` receiver's `s.hash()` / `s.equals(t)` through the same body ---
@@ -45083,6 +44984,39 @@ export type Parser
 		// they live in — so the ownership is the debugged one rather than a second answer invented here, and
 		// the two spellings of one question land in one producer. Handing back the receiver's own `ValueId`
 		// instead is the double free `bufferSurfaceOf`'s header measures.
+		//
+		// ⛔⛔⛔ **THIS MINT IS A HEAP ALLOCATION PER `managed.<member>` READ, AND SINCE W49 WAVE 7 IT IS ON THE
+		// HOTTEST PATH IN THE LANGUAGE. MEASURED, min-of-7 interleaved, same source, base vs tip:**
+		//
+		//     s.byteLength()  in a 4,000,000-trip loop     3.40 ms ->   294.81 ms   **86.7x**
+		//     s.isEmpty()     (which calls byteLength)      5.18 ms ->   308.17 ms   **59.5x**
+		//     hashString(s)   over 524,288 bytes x 8        8.88 ms ->   318.62 ms   **35.9x**
+		//     integer control, none of the surface          5.91 ms ->     5.87 ms   0.99x
+		//
+		// **WHY IT IS SO MUCH MORE THAN A CALL FRAME**: `String.byteLength`'s corpus body is
+		// `return managed.length()`, and that ONE expression emits `__str_bytes_view` (a 48-byte `Array`
+		// record + `__mm_incref`), then `__arr_count`, then `__arr_decref` — a heap allocation and two
+		// refcount operations to read `length@8`. `String.byteAt` is the same shape once PER BYTE, which is
+		// what turns a byte walk into one allocation per byte. Neither is a leak (`__arr_decref` runs, no run
+		// exits 101) and neither is a wrong answer (every A/B mode returns a bit-identical accumulator on
+		// both compilers) — it is pure cost.
+		//
+		// ⇒ **THE CURE IS NOT AN INLINER, AND THAT IS WHY IT IS WORTH NAMING HERE**: the record is minted to
+		// satisfy a TYPE, and the two members that dominate the cost read slots the receiver's OWN record
+		// already carries at the SAME offsets. That is the identical argument wave 2 used to fix `setByte` —
+		// a String record and an `Array` record agree on all five slots those entries read
+		// (`BufferOwnership`'s shared prefix, whose whole reason is one emitted function reading both) — and
+		// it is applied there on the WRITE side already. Applying it to the READ side means `managed.length()`
+		// and `managed.byteAt(i)` on a FUSED WRAPPER pass the receiver's record instead of a fresh view.
+		// ⚠ It is NOT a blanket removal of this mint: `managed.slice`, `managed.append`, `managed.toCString`
+		// and `managed.makeCharFromBytes` all hand the record onward or take ownership decisions on it, and
+		// `let b = s.addressableBytes()` legitimately binds one. The fix is per-MEMBER, on the reads that
+		// consume the record within the statement and drop it.
+		//
+		// ⚖ **REPORTED, NOT CURED, AND DELIBERATELY SO** (user ruling: accept, record, continue). It is a
+		// COST rather than a wrong answer or a leak, it is a change to the BUFFER surface rather than to the
+		// retirement, and it wants its own red-before-green. See `emitBuiltinsStreamWrite` for the second,
+		// independent cost this wave accepted.
 		if layout.conformsToBuiltinManagedWrapper() and index == layout.inlineManagedFieldIndex() 'inlineManagedIsTheReceiver'
 			let view = self.emitOwnedRuntimeResult(StrBytesViewName, args: singletonArgs(box), resultTag: ValueTypeTag.genericInstance, resultNameId: self.signatures.internSynthesizedByteInstance(), range: range)
 			self.markBufferSurface(view)
@@ -45776,22 +45710,26 @@ export type Parser
 	// ⭐ **THE ONE WRITER OF `bufferSurfaceValues` (R4.4)** — `markImmutableGlobalRead`'s twin, for the
 	// identical copy-on-write reason, through the same one home for it (`privateValueMarkSet`).
 	//
-	// Its EIGHT call sites in SEVEN functions, DERIVED by grepping `markBufferSurface(` rather than
+	// Its EIGHT call sites in SEVEN functions, DERIVED by grepping `self.markBufferSurface(` rather than
 	// remembered — the six producers of a buffer VALUE:
 	//   • `__ManagedMemory.create` (`parseManagedMemoryStaticCall`);
 	//   • a `slice` taken THROUGH the buffer surface (`parseArraySlice`);
 	//   • `__ManagedDirectory.filename`/`currentPath` (`emitOwnedManagedMemoryResult`, R4.3);
-	//   • `String.addressableBytes()` (`dispatchStringMethod`, BATCH2 slice 1);
+	//   • a FUSED WRAPPER's inline `managed` read (`emitFieldLoad`) — which since W49 wave 7 is what serves
+	//     the corpus's own `String.addressableBytes()`, whose entire body is `return managed`;
 	//   • an ELEMENT read out of an array whose elements are buffers (`markElementReadSurface`, A2m) —
 	//     the one producer that reads a DIFFERENT column (`bufferSurfaceElements`) to decide;
 	//   • `arr.managed` in VALUE position (`bufferSurfaceOf`, BATCH2 slice 6), which is TWO call sites in
 	//     one function because its two ownership arms mark two different values;
 	// — plus `markDeclaredSurface` below, which A2j reaches from the three sites that bind a value whose
 	// DECLARED type spelled the alias.
-	// ⚠⚠ **THIS COUNT HAS NOW BEEN WRONG FOUR TIMES** — TWO while there were three, THREE while there were
-	// four, FIVE while there were six (`markElementReadSurface` had never been counted), and SIX while there
-	// were eight. Every correction so far restated the sentence from the previous one instead of from the
-	// grep, which is why the same omission survived three of them. **Count them, do not copy this sentence** —
+	// ⚠⚠ **THIS SENTENCE HAS NOW BEEN WRONG FIVE TIMES, AND THE FIFTH WAS THE FIRST WHERE THE *NUMBER* WAS
+	// RIGHT AND THE *LIST* WAS NOT** — TWO while there were three, THREE while there were four, FIVE while
+	// there were six (`markElementReadSurface` had never been counted), SIX while there were eight, and then
+	// EIGHT while there were NINE: `emitFieldLoad` had been minting and marking a view since W17 and was
+	// never listed, while `dispatchStringMethod`'s `addressableBytes` arm was listed until wave 7 retired it.
+	// The two errors cancelled in the count and not in the list, so a reader checking the total would have
+	// been reassured by it. **Count them, do not copy this sentence — and read the NAMES off the grep too**;
 	// and count CALL SITES, not producers: `bufferSurfaceOf` is one producer with two of them.
 	// ⚠ The CHAINED `.managed` (`arr.managed.setLength(2)`) is still the producer that mints NO value to mark
 	// — D11b measured it as one — and it passes the surface along the dispatch instead (`viaManagedField`).
@@ -45814,18 +45752,11 @@ export type Parser
 		self.bufferSurfaceValues.insert(value)
 	end 'markBufferSurface'
 
-	// ⭐ `markBufferSurface`'s inverse — the value no longer denotes a buffer because the record it denoted no
-	// longer exists (W35, `foldByteViewIntoStreamWrite`). It is CLEARED rather than left to be unreachable by
-	// construction: "no integer-tagged value ever reaches a buffer-surface question" is exactly the kind of
-	// premise this compiler keeps finding false, and the mark is one `remove` to retire honestly. No
-	// copy-on-write is needed — a value can only be UNMARKED in a function that already marked one, so the
-	// set is this function's own by then.
-	function unmarkBufferSurface(value ValueId)
-		// The removal's "was it there?" answer is not a fact worth asking: the caller has just proved the
-		// value IS a byte view, and this door exists to make the mark's absence true, not to report on it.
-		_ = self.bufferSurfaceValues.remove(value)
-	end 'unmarkBufferSurface'
-
+	// ⚠ **`unmarkBufferSurface` STOOD HERE AND WENT WITH THE FOLD IT SERVED (W49 wave 7).** It was
+	// `markBufferSurface`'s inverse, for the one value whose record `foldByteViewIntoStreamWrite` had just
+	// deleted; that peephole lost its only producer when `String.addressableBytes` retired onto the corpus
+	// (see `emitBuiltinsStreamWrite`), and nothing else has ever needed to retract a mark. There is no
+	// standing claim to defend here now: a mark is made once, at the mint, and lives as long as the value.
 	// ⭐ **THE ONE WRITER OF `bufferSurfaceSlots` (A2m)** — `markBufferSurface`'s twin for a TUPLE value,
 	// through the same one home for the copy-on-write (`privateValueSlotSurfaceMap`) and with the same hazard:
 	// the anchor is module-level, so a write into it names slots of an unrelated function's SSA space.
@@ -46375,7 +46306,6 @@ export type Parser
 		// The invariant is the one `CharLiteralOpMap`'s header already states ("SWAPPED across a closure body,
 		// exactly like the sibling value columns"); this is what makes it true.
 		let savedCharLiteralOps = self.charLiteralOps
-		let savedStringBytesViewOps = self.stringBytesViewOps
 		// ⛔⛔ **THE SAME DEFECT, TWICE MORE — FOUND BY SWEEPING THE RESET LIST AGAINST THIS ONE (BATCH23
 		// review).** Both are RESET below, correctly, and neither was restored, and each is a compiler PANIC
 		// on an ordinary program. They are listed here rather than beside their resets because the reset is
@@ -46492,7 +46422,6 @@ export type Parser
 		self.valueInstanceAlias = sharedEmptyInstanceAliasMap
 		self.valueDeclaredAlias = sharedEmptyDeclaredAliasMap
 		self.charLiteralOps = sharedEmptyCharLiteralOps
-		self.stringBytesViewOps = sharedEmptyStringBytesViewOps
 		self.immutableGlobalReads = sharedEmptyImmutableGlobalReads
 		self.mergeImmutableBlame = sharedEmptyMergeBlames
 		self.bufferSurfaceValues = sharedEmptyBufferSurfaceValues
@@ -46660,7 +46589,6 @@ export type Parser
 		self.valueInstanceAlias = savedValueInstanceAlias
 		self.valueDeclaredAlias = savedValueDeclaredAlias
 		self.charLiteralOps = savedCharLiteralOps
-		self.stringBytesViewOps = savedStringBytesViewOps
 		self.iterationLockedBindings = savedIterationLockedBindings
 		self.currentWitnessParamBase = savedWitnessParamBase
 		self.currentWitnessParamCount = savedWitnessParamCount
@@ -48710,14 +48638,36 @@ export type Parser
 			throw ParseError.builtinOperandType(String.from(callee), required: String.from(ManagedMemoryTypeName), got: self.valueDisplayTypeName(arg), line: calleeTok.line, column: calleeTok.column)
 		end 'notAManagedBuffer'
 
-		// ⭐⭐ **THE VIEW THIS WRITE WOULD HAVE CONSUMED IS FOLDED AWAY WHEN THE WRITE IS ITS ONLY CONSUMER.**
-		// See `foldByteViewIntoStreamWrite` for the two conditions and for what the fold is worth.
-		if let viewOpIdx = try self.stringBytesViewOps.get(arg) 'aByteViewOfAString'
-			if self.pendingTempsContain(arg) 'thisWriteIsItsSoleConsumer'
-				return self.foldByteViewIntoStreamWrite(arg, viewOpIdx: viewOpIdx, runtimeName: runtimeName)
-			end 'thisWriteIsItsSoleConsumer'
-		end 'aByteViewOfAString'
-
+		// ⛔⛔ **A PEEPHOLE STOOD HERE AND W49 WAVE 7 TOOK ITS ONLY PRODUCER AWAY — READ THIS BEFORE ASSUMING
+		// THE COST IT REMOVED IS STILL REMOVED.** `foldByteViewIntoStreamWrite` rewrote
+		// `__Builtins.writeStdout(s.addressableBytes())` into `__write_stdout(s)` by editing the one op the
+		// `addressableBytes` ARM had just appended, and it was worth **3,178 -> 1,703 code bytes on a program
+		// whose only call is `print`** (W35's measurement): the view is a 48-byte `Array` record minted purely
+		// to satisfy a TYPE, and with it arrive `__arr_create`, `__arr_decref`, the allocator and the leak gate.
+		//
+		// **The fold needed the view op to be IN THIS FUNCTION, and it no longer can be.** `addressableBytes`
+		// retired onto `stdlib/String.maxon:181`, whose body is `return managed` — so the view is minted inside
+		// THAT function (by `emitFieldLoad`'s inline-managed arm) and arrives here as a CALL RESULT. There are
+		// exactly two stream-write call sites in the whole corpus (`Print.maxon:10`, `PrintError.maxon:5`) and
+		// both spell the argument that way, so no rewrite reachable from this site can see the mint. Refiling
+		// the op index from `emitFieldLoad` would not help: the fold's other condition is that this write is
+		// the view's SOLE consumer, and a value returned across a call boundary never is.
+		//
+		// ⇒ **`print` COSTS ONE HEAP RECORD AND TWO CALL FRAMES AGAIN** (user ruling: accept, record,
+		// continue). **RE-MEASURED at wave 7, and W35's number came back almost to the byte**: a program whose
+		// only call is `print("hi\n")` emits **1,749 code bytes on the base compiler and 3,226 on this one,
+		// +84.4%** — against W35's original 1,703 / 3,178, the two sides each grown by the corpus since. The
+		// data section returns with it, which is what moved ~20 committed goldens from `func @main {` to
+		// `data {` (the allocator's own `__slab_cursor`/`__slab_end`/`__mm_alloc_count` slots). ⚠ The RUNTIME
+		// FLOOR is untouched and was re-checked: `--emit-ir` on a bare `return 0 as ExitCode` still emits NO
+		// data section at all, because that program calls no `print`.
+		//
+		// ⚠ **THE REAL CURE IS AN INLINER, AND A SECOND, LARGER COST SHARES ITS ROOT** — see
+		// `emitFieldLoad`'s inline-managed arm, where the same mint costs a heap record per `byteLength()`
+		// and per `byteAt()`. With an inliner, `String.addressableBytes`'s single-expression body folds into
+		// its caller and this peephole becomes a special case of a general pass. Re-introducing a by-name
+		// peephole on `String.addressableBytes` here would put back exactly the parser/corpus coupling the
+		// retirement removed.
 		// The buffer is BORROWED — the runtime entry reads `buffer@0`/`length@8` through it and never takes
 		// ownership — so there is no owned temporary to enrol and a literal argument needs no decref. This is
 		// exactly how `runProcess` borrows its command line.
@@ -48725,43 +48675,6 @@ export type Parser
 		callArgs.push(arg)
 		return self.emitRuntimeCall(runtimeName, args: callArgs, resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(calleeTok))
 	end 'emitBuiltinsStreamWrite'
-
-	// ⭐⭐⭐ **`__Builtins.writeStdout(s.addressableBytes())` BECOMES `__write_stdout(s)` — ONE OP REWRITTEN, ONE
-	// FIELD CHANGED (W35).** The view exists to satisfy a TYPE, not a USE: `__str_bytes_view` `__arr_create`s a
-	// 48-byte `Array` record so the value can be an `Array with Byte`, and the write reads `buffer@0` and
-	// `length@8` — the two slots a String record already carries, at the SAME offsets (see
-	// `StringRuntime.buildStreamWrite`). So the record is minted and destroyed for a consumer that never looks
-	// at the one slot the two records disagree on (`@40`, `element_destroy` against `singleByteGraphemes`), and with it
-	// arrive `__arr_create`/`__arr_decref`, the whole allocator and the leak gate.
-	//
-	// MEASURED, on a program whose only call is `print`: **3,178 code bytes with the view, 1,703 without** —
-	// which is exactly what the bare-name `print` builtin used to emit, because `buildPrintString` did these
-	// same two loads off the String record directly.
-	//
-	// ⭐ **THE REWRITE CHANGES THE CALLEE AND NOTHING ELSE.** Same result value, same single argument, same
-	// labels, ranges and mint — so the shape cannot drift and there is no second op to keep in step. The
-	// value's TYPE moves from the byte instance to `integer` (it is now the write's byte count) and its OWNED
-	// enrolment is released, which is what removes the `__arr_decref` the statement would otherwise emit.
-	//
-	// ⚠⚠ **THE NON-ESCAPE CONDITION IS `pendingTempsContain`, AND IT IS A PROOF RATHER THAN A GUESS.** That
-	// list holds exactly the owned temporaries no binding has taken (`removeFromPendingTemps` runs at every
-	// transfer, and its own header states the two homes are disjoint by construction). So a view that reached
-	// a `let`, a field, a return or a promoted scope is NOT in it and the fold declines — `arr.managed` and
-	// `let b = s.addressableBytes()` both keep the record they legitimately need. The only other reader a
-	// value in that list can have is the statement-end drop, which is the very op this removes.
-	// ⚠ The receiver's own ownership is UNTOUCHED: the write BORROWS the String exactly as `__print_string`
-	// borrowed it and as `__gt_process_run` borrows its command line, and the String is this call's argument
-	// so it outlives the call by construction — the shape `stdlib/Subprocess.maxon:529-536` records a UAF for
-	// (a byte view outliving its String) cannot arise, because nothing survives the call at all.
-	function foldByteViewIntoStreamWrite(view ValueId, viewOpIdx OpIndex, runtimeName ByteArray) returns ValueId
-		let viewOp = try self.artifact.module.ops.get(viewOpIdx) otherwise panic("foldByteViewIntoStreamWrite: ops.get({viewOpIdx}) OOB — the index was filed by `dispatchStringMethod`'s `addressableBytes` arm as it appended that very op")
-		try self.artifact.module.ops.set(viewOpIdx, value: callWithCallee(viewOp, callee: runtimeName)) otherwise panic("foldByteViewIntoStreamWrite: ops.set({viewOpIdx}) OOB — the index was read one line above")
-
-		self.releaseOwnedTemp(view)
-		self.unmarkBufferSurface(view)
-		self.retypeValue(view, valueType: MaxonType.integer)
-		return view
-	end 'foldByteViewIntoStreamWrite'
 
 	// `__Builtins.sleep(ms)` — **SUSPEND THE CURRENT GREEN THREAD** for `ms` milliseconds, yielding to the
 	// scheduler (P1.5 mid-body-yield). It emits no `MaxonOp.call` to a user function — it routes to the

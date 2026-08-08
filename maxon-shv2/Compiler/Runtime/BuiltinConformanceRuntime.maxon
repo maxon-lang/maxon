@@ -48,6 +48,43 @@
 // (`buildFloatCompare`); `String.hash() = djb2` over the bytes; `String.equals(other) = __str_eq`'s content
 // compare. The witness reloc these ride is baked by EVERY writer: the x64 one, the wasm one as a
 // funcref-table index (P1.7a slice 2b-iv-B) and the arm64 Mach-O/ELF one (slice 2b-iv-C).
+//
+// ⛔⛔ **FIVE OF THE FOURTEEN CANDIDATES CAN NO LONGER BE INSTALLED IN ANY COMPILE, AND THAT IS THE
+// "does not already DEFINE it" HALF WORKING RATHER THAN A HOLE (MEASURED, W49 wave 7).**
+// `String.hash`/`String.equals` and `Character.hash`/`Character.equals`/`Character.compare` are all
+// DECLARED by corpus modules the loader lists UNCONDITIONALLY (`stdlib/String.maxon:351`, `:355`;
+// `stdlib/Character.maxon:107`, `:62`, `:80`), and `LowerMaxonToStd` pushes every stdlib function into
+// `module.functions` even when it skips the BODY — so `undefinedImplNames` finds each of the five DEFINED in
+// every compile and never offers it here.
+//
+// **Measured, not inferred, on the base binary before a line of wave 7 was written:** `s.hash()` on a
+// `String` emits `call String.hash`, and the emitted `String.hash` is `call hashString` — the corpus's
+// `helpers/string/hash.maxon:22`. A `Set with String` reaches the same body through its witness slot, and a
+// `Set with Character` emits a `Character.hash` that calls `__str_bytes_view`/`__arr_count` — the corpus's
+// `bytes()` walk, not the djb2 above. Three doors, one body, and the body is the CORPUS's.
+//
+// ⚠⚠ **DO NOT PRUNE THE FIVE.** The candidate list is DERIVED from `isIntrinsicBuiltinConformance` — one
+// entry per (type, protocol) pair it admits — and which of them a corpus module happens to define is a fact
+// owned by `StdlibLoader.whitelistedStdlibModules`. Deleting entries here would be that whitelist written a
+// SECOND time, in a file with no test between it and the original: unlist a module and the entries would
+// have to come back, silently, or the program dies at link time naming a symbol whose builder was deleted.
+// The runtime filter already answers the question exactly, per compile, and costs one walk.
+//
+// ⇒ The two hashes AGREE where it would matter if they did not: `hashString` is the same djb2 with the same
+// `5381`/`33`/low-32 mask as `emitDjb2HashOverByteRange`, so a `Set with String`'s bucket layout would be
+// identical whichever body a compile ended up with. `Character`'s pair do NOT agree on cost (the corpus
+// walks a materialized `bytes()` view where the synthesized one reads `buffer@0` directly), which is a
+// trade belonging to whichever rung retires `Character.bytes()`, and is recorded at `ByteViewMethod`.
+//
+// ⚠⚠ **THAT AGREEMENT IS A READING OF TWO SOURCES AND IS CHECKED BY NOTHING — DO NOT PROMOTE IT TO A
+// GUARANTEE.** It cannot be tested, and the reason is the very fact above: the synthesized `String.hash`
+// is unreachable in every compile, so no program can be made to run it and disagree. That is not a hole to
+// plug with a test — a case that could witness the divergence would first have to make the impossible
+// branch happen. What it means practically is narrower and safer than "they agree": **only the corpus body
+// ever runs**, so a `Set with String`'s bucket layout depends on `hashString` ALONE, and the djb2 here is
+// documentation of a shape rather than a second implementation anything compares against. ⇒ The day a
+// conformer's declaring module stops being listed, this arm becomes live and the agreement becomes a real
+// obligation — and there would still be no test. Read both bodies then.
 
 // The low-32-bit mask EVERY builtin hasher folds its result through — `HashValue` is `int(0 to u32.max)`,
 // so a hash is the low 32 bits. The one place the mask is spelled (it IS `HashValue`'s width, one fact);
