@@ -90,15 +90,16 @@ export function isSetWitnessCallee(callee ByteArray) returns bool
 	return callee.equals(SetInsertName) or callee.equals(SetContainsName) or callee.equals(SetRemoveName) or callee.equals(SetFromName)
 end 'isSetWitnessCallee'
 
-// ⭐ **THE RUNTIME CALLEES THAT PROBE A `Set with Character` THEY DO NOT HOLD (P1.8 Slice D).** A
-// `CharacterSet` keeps its members in a `Set` FIELD, so `__cs_contains` and the trim above it need the
-// key's `Hashable`/`Equatable` tables as ordinary arguments — but there is no set among their arguments to
-// read a key type off. Their key is `Character` by construction (`SignatureIndex.characterSetLayout`), so
-// they take the SAME threading through the SAME `appendSetWitnessArgs`, with the type named rather than
-// derived. It lives here, beside its sibling, so "which callees carry witness tables?" is one question
-// asked in one file.
+// ⭐ **THE RUNTIME CALLEE THAT PROBES A `Set with Character` IT DOES NOT HOLD (P1.8 Slice D).** A
+// `CharacterSet` keeps its members in a `Set` FIELD, so `__cs_contains` needs the key's
+// `Hashable`/`Equatable` tables as ordinary arguments — but there is no set among its arguments to read a
+// key type off. Its key is `Character` by construction (`SignatureIndex.characterSetLayout`), so it takes
+// the SAME threading through the SAME `appendSetWitnessArgs`, with the type named rather than derived. It
+// lives here, beside its sibling, so "which callees carry witness tables?" is one question asked in one
+// file — and it stays a FUNCTION rather than becoming a bare comparison at its call sites for that reason,
+// which is also why `__str_trim` leaving at W49 wave 4 shed a term and not the predicate.
 export function isCharacterKeyedWitnessCallee(callee ByteArray) returns bool
-	return callee.equals(CharSetContainsName) or callee.equals(StrTrimName)
+	return callee.equals(CharSetContainsName)
 end 'isCharacterKeyedWitnessCallee'
 
 // Install the set runtime into the lowered Std module — ALL of it, when the program touches any set

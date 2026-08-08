@@ -853,11 +853,14 @@ function opNamesGraphemeRuntimeEntry(op MaxonOp) returns bool
 	end 'kind'
 end 'opNamesGraphemeRuntimeEntry'
 
-// ⚠ **`isStringIndexRuntimeCallee` IS READ, NOT TRANSCRIBED.** That predicate is `StringIndexRuntime`'s own
-// answer to "is this one of my entry points", already a prefix test for the reason a roster would be wrong;
-// spelling `__strix_` a second time here would be this project's signature bug in the file that seeds it.
+// ⚠ **TWO TERMS WENT AT W49 WAVE 4, AND EACH ONLY BECAUSE EVERY PRODUCER OF ITS CALLEE WENT WITH IT.**
+// `StrTrimName` left with the three trims and `isStringIndexRuntimeCallee` left with `String.slice` — that
+// whole runtime file is deleted, so the prefix test it owned has nothing to answer for. Shedding a term
+// EARLY is the failure mode this seed has: the corpus grapheme functions it names would be filed
+// unreachable, `skipUnreachedFunctionBody` would leave a bare `retVoid` behind, and a synthesized body's
+// call would land on it. A term goes only when nothing can emit its callee any more.
 function calleeIsGraphemeRuntimeEntry(callee ByteArray) returns bool
-	return callee.equals(StrTrimName) or callee.equals(CharSetContainsName) or callee.equals(StrToCodepointsName) or callee.equals(StrToUtf16Name) or isStringIndexRuntimeCallee(callee)
+	return callee.equals(CharSetContainsName) or callee.equals(StrToCodepointsName) or callee.equals(StrToUtf16Name)
 end 'calleeIsGraphemeRuntimeEntry'
 
 // True iff any live op in USER code names a STDLIB callee, or a TOP-LEVEL INITIALIZER does — the

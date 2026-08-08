@@ -286,7 +286,6 @@ export let StrDecrefName = b"__str_decref"
 export let StrRangeEqName = b"__str_range_eq"
 export let StrFindName = b"__str_find"
 
-export let StrContainsName = b"__str_contains"
 export let StrSplitName = b"__str_split"
 
 // ⚠ **`__str_map_case`, `__str_replace` AND `__str_replace_first` WERE HERE AND WENT WITH THEIR BUILDERS**
@@ -385,8 +384,8 @@ export let StrByteAtOrPanicName = b"__str_byte_at_or_panic"
 // statement rather than two that agree today (they were two until the slice-8 review, which measured the
 // divergence green over the whole corpus — see `buildStrByteRead`); and `runtimeCalleeSourceMethod` answers it
 // from `ByteAtMethod` directly rather than through a map that could lose an arm. A SECOND throwing `__str_`
-// callee makes this an `or`, and at that same edit it needs the guard `installStringIndexRuntime` grew the
-// moment its family stopped being built by one builder.
+// callee makes this an `or`, and at that same edit it needs the guard `installManagedDirectoryRuntime`
+// carries, for the moment a family stops being built by one builder.
 export function isThrowingStringRuntimeCallee(callee ByteArray) returns bool
 	return callee.equals(StrByteAtName)
 end 'isThrowingStringRuntimeCallee'
@@ -679,7 +678,8 @@ export type RuntimeUsage
 	// `Parser.stringSurfaceMemberNames`), so nothing names their entry points and a bit for any of them could
 	// only ever read false. The corpus bodies reach `byteAt`, `setByte`, `addressableBytes` and
 	// `__ManagedMemory.slice`, whose own doors are still shv2's and keep their own bits below.
-	export var usesStrContains as bool
+	// ⚠ An EIGHTH, `usesStrContains`, went the same way at W49 wave 4. `contains` is an OVERLOAD PAIR in the
+	// corpus (`String` and `Character`) and serving it here served only the first of them.
 	export var usesStrSplit as bool
 	// The P1.8 Slice E entry point that remains, with its OWN bit under this file's one-bit-per-entry-point
 	// discipline: a program that builds no String from bytes must not carry the classifying scan.
@@ -749,13 +749,12 @@ export type RuntimeUsage
 	// `closeGraphemeNeeds` and seeds the corpus decoders' reachability in `StdlibSource`.
 	export var usesStrToCodepoints as bool
 	export var usesStrToUtf16 as bool
-	// ⭐ **WHAT IS LEFT OF THE P1.8 SLICE B2 `StringIndex` FAMILY — ONE BIT PER ENTRY POINT**, following this
-	// file's existing discipline: a program that slices by `endIndex:` must not carry the cluster walk that
-	// only `length:` needs. Six sibling bits (`Make`/`End`/`ByteToGrapheme`/`First`/`Last`/`After`) went with
-	// the five members that retired onto `stdlib/String.maxon` at W49 wave 3 — the corpus bodies behind them
-	// are ordinary Maxon call edges now, which the reachability walk FINDS rather than being told.
-	export var usesStrIndexAdvance as bool
-	export var usesStrIndexSlice as bool
+	// ⚠ **THE P1.8 SLICE B2 `StringIndex` FAMILY HAS NO BITS LEFT, AND NO FILE EITHER.** Six went with the
+	// five members that retired onto `stdlib/String.maxon` at W49 wave 3; the last two
+	// (`usesStrIndexAdvance`/`usesStrIndexSlice`) went at wave 4 with `String.slice`, which was the only
+	// caller `__strix_advance` and `__strix_slice` had. `Runtime/StringIndexRuntime.maxon` is deleted, not
+	// emptied — the corpus bodies behind every one of them are ordinary Maxon call edges now, which the
+	// reachability walk FINDS rather than being told.
 	// ⭐ **THE UNICODE `General_Category` TABLE (P1.8 Slice D, R2).** Its own bit, and DECOUPLED from every
 	// String bit: `__ucd_cat` is a LEAF that reads two `.rdata` blobs and does integer arithmetic — no heap,
 	// no copy loop, no segmenter — so a program that classifies a codepoint carries nothing else, and a
@@ -763,15 +762,17 @@ export type RuntimeUsage
 	// `recordCallUsage` on a `__ucd_cat` reference, which is what `CharacterSet.contains` emits.
 	export var usesUcdCategory as bool
 	// ⭐ **THE P1.8 SLICE D `CharacterSet` FAMILY — ONE BIT PER ENTRY POINT**, following this file's
-	// existing discipline: a program that only builds a `CharacterSet` must not carry the trim scan, and a
-	// program that only trims must not carry a second copy of anything. Each is set TRANSITIVELY by
-	// `recordCharacterSetUsage` from whichever entry point the module actually names (a `__str_trim`
-	// reference turns on `__cs_contains`, which turns on `__set_contains` and `__ucd_cat`, and the segmenter
-	// and `__char_at` under the walk itself).
+	// existing discipline: a program that only builds a `CharacterSet` must not carry the membership probe.
+	// Each is set by `recordCharacterSetUsage` from whichever entry point the module actually names, and
+	// `__cs_contains` in turn declares `__set_contains` and `__ucd_cat` through `closeCharacterSetNeeds`.
+	//
+	// ⚠ A FOURTH, `usesStrTrim`, went at W49 wave 4 with the three trims, which are `stdlib/String.maxon`'s
+	// now. It was the one bit here that reached into all THREE sibling families, which is what fixed this
+	// family's recording ORDER — the order is kept, because it is a rule about families and not about the arm
+	// that first needed it.
 	export var usesCharSetMake as bool
 	export var usesCharSetDecref as bool
 	export var usesCharSetContains as bool
-	export var usesStrTrim as bool
 	// R4.1: the program opens a file. Unlike the wall clock it DOES declare a transitive dependency —
 	// `__mf_open_read` allocates a NUL-terminated scratch copy of the path and the handle box through
 	// `__mm_alloc`/`__mm_free`, so it carries `usesHeap` too (set together below).
@@ -799,7 +800,7 @@ export type RuntimeUsage
 	export var usesProcessIntrospection as bool
 
 	static function create() returns RuntimeUsage
-		return Self{usesHeap: false, usesGt: false, usesIocp: false, usesStreaming: false, usesWriteStdout: false, usesWriteStderr: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesUIntToString: false, usesBoolToString: false, usesStrAppend: false, usesStrDecref: false, usesArray: false, usesSet: false, usesMap: false, usesList: false, usesDropTypeParam: false, usesDropExistential: false, usesRetainExistential: false, usesIncref: false, usesRetain: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrRangeEq: false, usesStrFind: false, usesStrContains: false, usesStrSplit: false, usesStrFromBytes: false, usesStrOfBuffer: false, usesMmToCString: false, usesStrBytesView: false, usesStrByteAt: false, usesStrByteAtOrPanic: false, usesManagedArrayCopy: false, usesOpaqueArrayCopy: false, neededCloners: ClonerSet.create(), usesWallClock: false, usesCharAt: false, usesCharCmp: false, usesCharFromCodepoint: false, usesCharAsciiValue: false, usesStrToBytes: false, usesStrToCodepoints: false, usesStrToUtf16: false, usesStrIndexAdvance: false, usesStrIndexSlice: false, usesUcdCategory: false, usesCharSetMake: false, usesCharSetDecref: false, usesCharSetContains: false, usesStrTrim: false, usesManagedFile: false, usesManagedDirectory: false, usesCommandLine: false, usesConsoleStdin: false, usesProcessIntrospection: false}
+		return Self{usesHeap: false, usesGt: false, usesIocp: false, usesStreaming: false, usesWriteStdout: false, usesWriteStderr: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesUIntToString: false, usesBoolToString: false, usesStrAppend: false, usesStrDecref: false, usesArray: false, usesSet: false, usesMap: false, usesList: false, usesDropTypeParam: false, usesDropExistential: false, usesRetainExistential: false, usesIncref: false, usesRetain: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrRangeEq: false, usesStrFind: false, usesStrSplit: false, usesStrFromBytes: false, usesStrOfBuffer: false, usesMmToCString: false, usesStrBytesView: false, usesStrByteAt: false, usesStrByteAtOrPanic: false, usesManagedArrayCopy: false, usesOpaqueArrayCopy: false, neededCloners: ClonerSet.create(), usesWallClock: false, usesCharAt: false, usesCharCmp: false, usesCharFromCodepoint: false, usesCharAsciiValue: false, usesStrToBytes: false, usesStrToCodepoints: false, usesStrToUtf16: false, usesUcdCategory: false, usesCharSetMake: false, usesCharSetDecref: false, usesCharSetContains: false, usesManagedFile: false, usesManagedDirectory: false, usesCommandLine: false, usesConsoleStdin: false, usesProcessIntrospection: false}
 	end 'create'
 end 'RuntimeUsage'
 
@@ -1107,16 +1108,12 @@ export function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 	if callee.equals(UcdCategoryName) 'ucdcategory'
 		usage.usesUcdCategory = true
 	end 'ucdcategory'
-	// ⚠ FIRST of the three family closures: the `StringIndex` family's members used to call into the OTHER
-	// two, so the bits it turns on must themselves be closed over by the closures below — see
-	// `closeStringIndexNeeds`, whose remaining arm reaches only the heap and `__str_copy`. The ORDER is kept
-	// because it is a rule about families rather than about today's arms.
-	// ⚠ The `CharacterSet` family closes into the THREE below it — `__str_trim` walks `__gr_end` and mints
-	// through `__char_at`, and `__cs_contains` decodes a codepoint — so it must record FIRST, exactly as the
-	// `StringIndex` family does and for the identical reason: a bit turned on after its family's closure has
-	// run installs an entry point without what it calls.
+	// ⚠ **THE ORDER IS A RULE ABOUT FAMILIES, NOT ABOUT TODAY'S ARMS, WHICH IS WHY IT SURVIVES THE ARM THAT
+	// FORCED IT.** The `CharacterSet` family closes into the two below it — `__cs_contains` decodes a
+	// codepoint — so it must record FIRST: a bit turned on after its own family's closure has run installs an
+	// entry point without what it calls. A `StringIndex` family recorded here too, ahead of these, for the
+	// identical reason; W49 wave 4 retired `String.slice` and its last two entry points went with it.
 	recordCharacterSetUsage(callee, usage: usage)
-	recordStringIndexUsage(callee, usage: usage)
 	recordStringMethodUsage(callee, usage: usage)
 	recordGraphemeUsage(callee, usage: usage)
 	// The three MANAGED-element array copies (`__arr_slice_managed`/`__arr_clone_managed`/`__arr_append_managed`,
@@ -1157,26 +1154,18 @@ function recordCharacterSetUsage(callee ByteArray, usage RuntimeUsage)
 	if callee.equals(CharSetContainsName) 'contains'
 		usage.usesCharSetContains = true
 	end 'contains'
-	if callee.equals(StrTrimName) 'trim'
-		usage.usesStrTrim = true
-	end 'trim'
 	closeCharacterSetNeeds(usage)
 end 'recordCharacterSetUsage'
 
 // ⭐ **WHAT EACH `CharacterSet` BODY CALLS THAT THIS SCAN CANNOT SEE.** Declared here rather than
 // discovered, exactly as the three sibling closures declare their families'. Run as a CLOSURE after every
 // record so the answer cannot depend on the order in which the module happens to name its entry points.
+// ⚠ **A `__str_trim` ARM STOOD HERE UNTIL W49 WAVE 4** — it declared the cluster walk, the `Character` mint,
+// the per-cluster drop, the set probe and the slice producer that the SYNTHESIZED trim reached from inside a
+// body this scan cannot read. The three trims are `stdlib/String.maxon`'s now, so every one of those is an
+// ordinary Maxon call edge the reachability walk finds for itself, and a declared list of them could only go
+// stale. Its `usesCharSetContains` feed is why the `probes` arm below must still run after it did.
 function closeCharacterSetNeeds(usage RuntimeUsage)
-	// The trim walks CLUSTERS (`__gr_end`), mints a `Character` per cluster (`__char_at`), drops each one
-	// (`__str_decref`), probes the set (`__cs_contains`) and builds its result through the shared slice
-	// producer (`__mm_alloc` + `__str_copy`).
-	if usage.usesStrTrim 'trims'
-		usage.usesCharSetContains = true
-		usage.usesCharAt = true
-		usage.usesStrDecref = true
-		usage.usesHeap = true
-		usage.usesStrCopy = true
-	end 'trims'
 	// `__cs_contains` probes the member set, decodes the character's first codepoint, and classifies it.
 	if usage.usesCharSetContains 'probes'
 		usage.usesSet = true
@@ -1220,46 +1209,6 @@ function recordGraphemeUsage(callee ByteArray, usage RuntimeUsage)
 	end 'toutf16'
 	closeGraphemeNeeds(usage)
 end 'recordGraphemeUsage'
-
-// ⭐ The P1.8 Slice B2 `StringIndex` family's arm of the callee → usage-bit map — the
-// `recordGraphemeUsage` twin, split out for the same reason: `recordCallUsage` stays a readable list of
-// families. Direct references only; what each referenced body in turn needs is closed by
-// `closeStringIndexNeeds`.
-function recordStringIndexUsage(callee ByteArray, usage RuntimeUsage)
-	if callee.equals(StrIndexAdvanceName) 'advance'
-		usage.usesStrIndexAdvance = true
-	end 'advance'
-	if callee.equals(StrIndexSliceName) 'slice'
-		usage.usesStrIndexSlice = true
-	end 'slice'
-	closeStringIndexNeeds(usage)
-end 'recordStringIndexUsage'
-
-// ⭐ **WHAT EACH `StringIndex` BODY CALLS THAT THIS SCAN CANNOT SEE.** Declared here rather than
-// discovered, exactly as `closeStringMethodNeeds` and `closeGraphemeNeeds` declare their families'.
-// Run as a CLOSURE after every record so the answer cannot depend on the order in which the module
-// happens to name its entry points — and the order still matters here, because this family reaches into
-// the string-method one beside it (`__str_find`).
-//
-// ⚠ It is run BEFORE the grapheme and string-method closures in `recordCallUsage`, so the bits it turns on
-// there are themselves closed over by those two. **The cluster walk it used to declare is gone from this
-// argument**: `__strix_advance` calls the CORPUS segmenter, whose own needs are ordinary Maxon call
-// edges rather than bits any closure has to turn on in the right order.
-function closeStringIndexNeeds(usage RuntimeUsage)
-	// The slice builds a fused record and blits its bytes in. `__strix_advance` declares nothing: its one
-	// callee is the CORPUS segmenter, which is an ordinary Maxon call edge the reachability walk finds
-	// (seeded at the op by `StdlibSource.markCorpusCalleesOfSynthesizedRuntime`, since the synthesized
-	// caller does not exist yet when that walk runs).
-	//
-	// ⚠ Six arms went with the six entry points W49 wave 3 deleted. The ORDERING discipline this closure
-	// exists for is unchanged and is why it stays a closure rather than becoming one `if`: `indexAfter`
-	// turned on `__strix_advance` and a later arm then had to close over THAT, which is exactly the
-	// order-dependence a per-arm transitive list cannot avoid.
-	if usage.usesStrIndexSlice 'buildsAString'
-		usage.usesHeap = true
-		usage.usesStrCopy = true
-	end 'buildsAString'
-end 'closeStringIndexNeeds'
 
 // ⭐ **WHAT EACH GRAPHEME BODY CALLS THAT THIS SCAN CANNOT SEE.** The family's members call each other from
 // inside their SYNTHESIZED Std bodies, which walk no Maxon module — so the dependency is DECLARED here
@@ -1309,9 +1258,6 @@ function recordStringMethodUsage(callee ByteArray, usage RuntimeUsage)
 	if callee.equals(StrFindName) 'find'
 		usage.usesStrFind = true
 	end 'find'
-	if callee.equals(StrContainsName) 'contains'
-		usage.usesStrContains = true
-	end 'contains'
 	if callee.equals(StrSplitName) 'split'
 		usage.usesStrSplit = true
 	end 'split'
@@ -1341,9 +1287,13 @@ end 'recordStringMethodUsage'
 // is DECLARED here rather than discovered, exactly as `__str_append` declares its `__mm_alloc`/`__str_copy`.
 // Run as a CLOSURE after every record (rather than each arm listing its own transitive set) so the answer
 // cannot depend on the order in which the module happens to name its methods: `find`'s need for
-// `__str_range_eq` is stated once and reached whether `find` was named directly or pulled in by `contains`.
+// `__str_range_eq` is stated once and reached whether `find` was named directly or pulled in by `split`.
 function closeStringMethodNeeds(usage RuntimeUsage)
-	if usage.usesStrContains or usage.usesStrSplit 'needsFind'
+	// ⚠ **`usesStrContains` WAS THE OTHER TERM HERE AND WENT WITH ITS ENTRY POINT (W49 wave 4). THE CLAUSE
+	// STAYS**: `split` is still synthesized and still reaches `__str_find`, so shedding the whole `if` with
+	// the retired term would leave `__str_find` — and `__str_range_eq` under it — uninstalled for every
+	// program that splits. Retiring a member sheds its TERM, never its clause.
+	if usage.usesStrSplit 'needsFind'
 		usage.usesStrFind = true
 	end 'needsFind'
 	if usage.usesStrFind 'needsRangeEq'
@@ -1420,9 +1370,6 @@ export function installStringRuntime(module StdModule, usage RuntimeUsage)
 	if usage.usesStrFind 'strfind'
 		buildStrFind(module)
 	end 'strfind'
-	if usage.usesStrContains 'strcontains'
-		buildStrContains(module)
-	end 'strcontains'
 	if usage.usesStrSplit 'strsplit'
 		buildStrSplit(module)
 	end 'strsplit'
@@ -2303,33 +2250,6 @@ function buildStrFind(module StdModule)
 
 	module.functions.push(func)
 end 'buildStrFind'
-
-// `__str_contains(self, needle) -> bool` — the stdlib's `contains(needle String)` (`:385-390`): a whole-string
-// `find`, turned from an INDEX into a PREDICATE. Not a wrapper around `__str_find` but a change of answer
-// domain — a `BytePos` (with a `StrFindNotFound` outside it) becomes the bool the language method returns, and
-// no caller of `contains` should have to know which number means "nothing here".
-function buildStrContains(module StdModule)
-	var func = IrFunction.createFromStd(StrContainsName, returnType: StdReturnType.value(StdType.i1), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
-	var ids = ValueMinter.create(2)
-
-	var entry = module.addBlock(func, label: b"entry")
-	var yes = module.addBlock(func, label: b"yes")
-	var no = module.addBlock(func, label: b"no")
-
-	emitParams(module, block: entry, count: 2)
-	let selfPtr = 0 as ValueId
-	let needle = 1 as ValueId
-
-	let zero = emitConst(module, block: entry, value: 0, ids: ids)
-	let idx = emitStrFindCall(module, block: entry, hay: selfPtr, startPos: zero, needle: needle, ids: ids)
-	let wasFound = emitCmp(module, block: entry, a: idx, b: zero, pred: StdCmpPred.ge, ids: ids)
-	module.setTerminator(entry, op: StdOp.condBranch(wasFound, thenBlockId: yes.id, elseBlockId: no.id))
-
-	emitConstReturn(module, block: yes, value: PredicateTrue, ids: ids)
-	emitConstReturn(module, block: no, value: PredicateFalse, ids: ids)
-
-	module.functions.push(func)
-end 'buildStrContains'
 
 // ⭐ **`__str_from_bytes(arr) -> newStr` — `String.from(bytes)` (`stdlib/String.maxon:119-121`).** The
 // array's buffer holds exactly the UTF-8 bytes the String is to have, so the whole of the work is the

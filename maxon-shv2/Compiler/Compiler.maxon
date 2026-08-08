@@ -632,13 +632,6 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// functions are appended to one module and the backend resolves calls by name.
 	installGraphemeRuntime(pipeline.stdModule, usage: usage, ordering: orderingEnum)
 
-	// The `StringIndex` runtime (`__strix_*`, P1.8 slice B2) — installed the same already-lowered way,
-	// keyed on its OWN per-entry-point bits so a program that never takes a String index carries none of
-	// it. It sits after the grapheme install because its two conversions walk `__gr_end`; as above, the
-	// bit was settled by `scanRuntimeUsage` before any install ran, so the order is readability rather
-	// than a dependency.
-	installStringIndexRuntime(pipeline.stdModule, usage: usage)
-
 	// The Unicode `General_Category` lookup (`__ucd_cat`, P1.8 Slice D / R2) — installed the same
 	// already-lowered way, on its own `usesUcdCategory` bit. Unlike every install above it, it also
 	// REGISTERS `.rdata`: the two checked-in tables it reads are ordinary read-only constants (v1's route,

@@ -422,6 +422,66 @@ end 'main'
 1
 ```
 
+<!-- test: contains-both-overloads -->
+### BOTH members of the corpus `contains` pair, from one program
+`contains` is an OVERLOAD PAIR in the corpus — `contains(needle String)` (`stdlib/String.maxon:439`) and
+`contains(character Character)` (`:446`) — and until W49 wave 4 shv2 served the `String` form from a
+synthesized `__str_contains` arm, so the `Character` form did not exist here at all. Retiring the member
+hands both to `SemanticCheck.resolveOverloadedCalls`.
+
+⚠ **THE CHARACTER MEMBER WAS DOCUMENTED IN THIS FILE'S PROSE AND PINNED BY NOTHING**, which is why "the
+suite stayed green" could not have been evidence that retiring the pair was safe. It is pinned here, with
+the non-ASCII case that distinguishes a GRAPHEME search from a byte one: the `Character` member's body
+converts to a String and searches, so a multi-byte cluster must match itself and not its first byte.
+```maxon
+function main() returns ExitCode
+	let s = "hello world"
+	let a = s.contains("lo wo")
+	let b = s.contains("xyz")
+	let c = s.contains('o')
+	let d = s.contains('z')
+	let e = "café naïve"
+	let f = e.contains('é')
+	let g = e.contains('ü')
+	print("{a} {b} {c} {d} {f} {g}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+true false true false true false
+```
+
+<!-- test: contains-in-a-loop-does-not-leak -->
+### Neither member leaks its temporary
+The `Character` member builds a `String` from its argument (`character.toString()`) and the `String`
+member borrows its needle. Both are the CORPUS's bodies now, so the drops are the ones its declarations
+own rather than ones a synthesized arm enrolled — a loop is what makes a missing one exit 101.
+```maxon
+function main() returns ExitCode
+	var hits = 0
+	for i in 0 upto 200 'each'
+		let s = "hello world {i}"
+		if s.contains('o') 'ch'
+			hits = hits + 1
+		end 'ch'
+		if s.contains("wor") 'st'
+			hits = hits + 1
+		end 'st'
+	end 'each'
+	print("{hits}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+400
+```
+
 <!-- test: find -->
 ```maxon
 function main() returns ExitCode

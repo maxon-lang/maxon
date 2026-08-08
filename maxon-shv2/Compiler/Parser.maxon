@@ -3793,11 +3793,9 @@ let ContainsMethod = b"contains"
 // line to delete beside five members that answer with a String.
 let StringSplitMethod = b"split"
 
-// The three trims (P1.8 Slice D). Each takes an OPTIONAL `CharacterSet`, and they differ only in which end
-// they cut — which is what makes them one runtime graph and two flags rather than three transcriptions.
-let StringTrimMethod = b"trim"
-let StringTrimStartMethod = b"trimStart"
-let StringTrimEndMethod = b"trimEnd"
+// ⚠ **THE THREE TRIMS (P1.8 Slice D) WERE HERE AND ARE THE CORPUS'S NOW** (W49 wave 4) — struck from
+// `stringSurfaceMemberNames` with `contains` and `slice`, so nothing names them and a constant for any of
+// the three could only spell a member no dispatcher serves.
 
 // ⭐ **WHAT IS LEFT OF THE P1.8 SLICE B2 `StringIndex` FAMILY: THE INDEX'S OWN TWO ACCESSORS.**
 // `charIndex`/`bytePos` are the reference's own names (`stdlib/String.maxon:925-931`), and they are
@@ -3812,11 +3810,11 @@ let StringTrimEndMethod = b"trimEnd"
 let StringIndexCharIndexMethod = b"charIndex"
 let StringIndexBytePosMethod = b"bytePos"
 
-// The label `slice`'s SECOND argument gives when it is a grapheme COUNT rather than an end index:
-// `s.slice(start, length: 4)`. It is the LABEL, not the parameter's type, that tells the two `slice`
-// overloads apart — the oracle's own mangled name says so (`String.slice$endIndex`) — which is what lets
-// shv2 resolve them at all: `SignatureIndex` stores parameter NAMES and no parameter types.
-let SliceLengthArgLabel = b"length"
+// ⚠ **`SliceLengthArgLabel` WAS HERE AND WENT WITH `String.slice`** (W49 wave 4). It existed because a
+// SYNTHESIZED arm had to tell `endIndex:` from `length:` by reading the label off a token. The corpus
+// declares the pair outright (`stdlib/String.maxon:470,474`), so the two are told apart by
+// `SemanticCheck.resolveOverloadedCalls` from real parameter types — which is the mechanism, rather than a
+// label spelled a second time in the parser. The ARRAY's `endIndex:` label survives as `EndIndexArgLabel`.
 
 // The argument slot a builtin-conformance dispatch spends on its RECEIVER (P1.7a direct dispatch). The
 // synthesized impls take `self` positionally in argument 0 — `int.compare(self, other)` — exactly as an
@@ -4366,21 +4364,30 @@ end 'arrayWhereClause'
 // (`:647-662`, now the only body behind `toLower`/`toUpper`) allocation-free on a short string: it maps a
 // private copy through those two primitives rather than materializing a buffer.
 //
-// ⚠ **A MEMBER IS ONLY RETIRABLE ONCE ITS CORPUS DECLARATION IS UNAMBIGUOUS**, which is why `contains` is
-// still here beside them. It is an OVERLOAD PAIR in the corpus (`String` and `Character`,
-// `stdlib/String.maxon:439` and `:446`), and the whole-program declaration sweep cannot see parameter
-// types, so it publishes the pair's facts under the BARE name — the FIRST declaration's. `emitCall` reads
-// that when it mints the result, enrols the owned temp and applies caller-consume, and
-// `SemanticCheck.resolveOverloadedCalls` picks the real member a whole pass later (see
-// `parseFunctionDeclaration`'s `sourceName`, which states the boundary, and `requireOverloadableName`,
-// which refuses the overload shapes this DOES break outright). Retired today, `s.contains(c)` would leak
-// in one direction and use-after-free in the other, and neither is a diagnosable event later. The
-// retirement is incremental precisely so that a member whose door is not ready keeps its arm.
+// ⭐⭐ **AN OVERLOAD PAIR IS RETIRABLE, AND FOR THREE WAVES THIS COMMENT SAID IT WAS NOT (W49 wave 4).** It
+// read: *"Retired today, `s.contains(c)` would leak in one direction and use-after-free in the other, and
+// neither is a diagnosable event later"* — of `contains`, `slice` and the three trims, on the ground that
+// the declaration sweep publishes an overload set's facts under the BARE name and `emitCall` spends them
+// before `SemanticCheck.resolveOverloadedCalls` picks a member.
+//
+// **The boundary is real; the conclusion was never MEASURED, and it is false for these five.** What
+// `emitCall` decides by bare name is a closed list — `fillOmittedArgDefaults`, `mintCallResult`,
+// `enrolOwnedCallTemp`, `markDeclaredSurface`, `applyCallerConsume`, `routeBareThrowingCallToTryBlock` —
+// and four of the six facts behind it are ALREADY refused outright for any overload set by
+// `requireOverloadableName` (a consuming parameter, a `throws` clause, a `__ManagedMemory` return surface,
+// a defaulted parameter). The fifth, the return TYPE, is reconciled or refused per call by
+// `SemanticCheck.reconcileOverloadResultType`. Every one of these five pairs agrees on all six, so the
+// early choice cannot differ from the late one — which is not an argument to be re-derived by the next
+// reader, because each of the six is now a CHECKED refusal rather than a claim. Wave 4 closed the one
+// quadrant that was neither: an overload set disagreeing about whether it returns a value AT ALL, which
+// compiled clean and died with an access violation (`requireOverloadVoidResult`).
+//
+// ⇒ **The rule is "a member is retirable once every fact `emitCall` reads by its name is guarded", not
+// "once its corpus declaration is unambiguous".** A future overload pair is refused, not miscompiled.
 function stringSurfaceMemberNames() returns ByteArrayArray
 	var names = ByteArrayArray.create()
 	names.push(AppendMethod)
 	names.push(StringByteLengthMethod)
-	names.push(ContainsMethod)
 	names.push(StringSplitMethod)
 	names.push(ByteViewMethod)
 	names.push(StringToByteArrayMethod)
@@ -4388,10 +4395,6 @@ function stringSurfaceMemberNames() returns ByteArrayArray
 	names.push(Utf16ViewMethod)
 	names.push(IsEmptyMethod)
 	names.push(CloneMethodName)
-	names.push(SliceMethod)
-	names.push(StringTrimMethod)
-	names.push(StringTrimStartMethod)
-	names.push(StringTrimEndMethod)
 	names.push(StringAddressableBytesMethod)
 	names.push(ByteAtMethod)
 	names.push(StringByteAtOrPanicMethod)
@@ -9100,10 +9103,14 @@ export type Parser
 	// `Set with Character` is interned by the SWEEP so the parser's own read is never the first write to
 	// the shared registry mid-parse, which would make its gid depend on parse order.
 	//
-	// TWO producers, because there are two ways to make one: naming the type (`CharacterSet.letters()`,
-	// `CharacterSet.from(…)`) and calling a NO-ARGUMENT trim, which builds
-	// `CharacterSet.whitespacesAndNewlines()` for the caller. A trim that PASSES a set names the type
-	// anyway, so the second probe is exactly the no-argument case.
+	// ONE producer: naming the type (`CharacterSet.letters()`, `CharacterSet.from(…)`).
+	//
+	// ⚠ **IT SCANNED FOR A NO-ARGUMENT TRIM TOO UNTIL W49 WAVE 4, AND THAT PROBE RETIRED WITH ITS SUBJECT.**
+	// `s.trim()` was a SYNTHESIZED arm that built `CharacterSet.whitespacesAndNewlines()` *in the calling
+	// file*, which is what made the call a producer there. The member is now `stdlib/String.maxon`'s
+	// (`:760-772`), so the set is built inside the corpus body — in a file that names the type outright and
+	// registers through the clause above. Kept, the probe would scan every file for a construction that no
+	// longer happens in any of them. Same shape as wave 3's `atStringIndexProducer`, and the same reason.
 	// ⇒ Asked on the shared walk (`fileNamesProducerMask`), not on one of its own.
 
 	// The `__ManagedFile` probe (R4.1) is `atManagedFileProducer` and the `__ManagedDirectory` one (R4.3) is
@@ -9149,16 +9156,13 @@ export type Parser
 		return mask
 	end 'fileNamesProducerMask'
 
-	// A `CharacterSet` identifier, or a `.trim`/`.trimStart`/`.trimEnd` — see
-	// `fileNamesCharacterSetProducer` for why those are the two. Deliberately TOLERANT, like every sweep
-	// probe: it sees tokens, not types, so it over-registers rather than missing.
+	// A `CharacterSet` identifier — see `fileNamesCharacterSetProducer` for why that is now the only one.
+	// Deliberately TOLERANT, like every sweep probe: it sees tokens, not types, so it over-registers rather
+	// than missing.
 	function atCharacterSetProducer() returns bool
 		// The TYPE's own name, or its member-set ALIAS: `CharSet` is registered by the same call, so a file
 		// that only writes `CharSet from ['x']` must trigger it too or the alias would not exist.
-		if self.at(TokenKind.identifier) and (self.current().value.equals(CharacterSetBuiltinName) or self.current().value.equals(CharacterMemberSetAliasName)) 'namesTheType'
-			return true
-		end 'namesTheType'
-		return self.atBuiltinMethodCall(StringTrimMethod) or self.atBuiltinMethodCall(StringTrimStartMethod) or self.atBuiltinMethodCall(StringTrimEndMethod)
+		return self.at(TokenKind.identifier) and (self.current().value.equals(CharacterSetBuiltinName) or self.current().value.equals(CharacterMemberSetAliasName))
 	end 'atCharacterSetProducer'
 
 	// The `__ManagedFile` type name (R4.1). Deliberately TOLERANT like every sweep probe: it sees the
@@ -37165,10 +37169,6 @@ export type Parser
 		// of the retirement, so none of the six reaches this dispatcher at all. `contains` stays: it is an
 		// overload PAIR in the corpus and the call door does not yet resolve one (see the roster's own header
 		// for the leak/use-after-free that would follow, and for why `split` stays beside it).
-		if methodTok.value.equals(ContainsMethod) 'contains'
-			let needle = try self.parseTaggedArg(func, methodName: ContainsMethod, required: ValueTypeTag.string)
-			return self.emitRuntimeCall(StrContainsName, args: pairArgs(recv.value, second: needle), resultTag: ValueTypeTag.boolean, resultNameId: UnnamedTypeId, range: range)
-		end 'contains'
 		if methodTok.value.equals(StringSplitMethod) 'split'
 			return try self.parseStringSplit(func, receiver: recv.value, range: range)
 		end 'split'
@@ -37222,25 +37222,8 @@ export type Parser
 		// `endIndex`, `findFirst`, `findLast` and `indexAfter`, struck from `stringSurfaceMemberNames` like
 		// every other retirement. What made this wave different from the two before it is that they answer
 		// with a `StringIndex`, and shv2 held a second declaration of that type: retiring them is what
-		// leaves the corpus's declaration alone, which is what this arm's `requireStringIndexValue` now
-		// asks about. See the roster's header.
-		if methodTok.value.equals(SliceMethod) 'slice'
-			return try self.parseStringSlice(func, receiver: recv.value, range: range)
-		end 'slice'
-
-		// ⭐ P1.8 Slice D — the three trims. Each takes an OPTIONAL `CharacterSet`; with none, the reference's
-		// own default is `CharacterSet.whitespacesAndNewlines()` (`stdlib/String.maxon:760-772`), built here.
-		// They differ only in which end they cut, which is what the two flags carry.
-		if methodTok.value.equals(StringTrimMethod) 'trim'
-			return try self.parseStringTrim(func, receiver: recv.value, fromStart: true, fromEnd: true, range: range)
-		end 'trim'
-		if methodTok.value.equals(StringTrimStartMethod) 'trimStart'
-			return try self.parseStringTrim(func, receiver: recv.value, fromStart: true, fromEnd: false, range: range)
-		end 'trimStart'
-		if methodTok.value.equals(StringTrimEndMethod) 'trimEnd'
-			return try self.parseStringTrim(func, receiver: recv.value, fromStart: false, fromEnd: true, range: range)
-		end 'trimEnd'
-
+		// leaves the corpus's declaration alone. `slice`, their one remaining consumer here, followed them at
+		// wave 4. See the roster's header.
 		// ⭐⭐ **THE TWO STDLIB-ONLY BYTE DOORS (BATCH2 slice 1)**, each opening with the provenance gate for
 		// the reason `requireVoidMethodIsStatement` opens its arms: the refusal must beat every argument
 		// diagnostic, and it must be reachable only once a real method NAME has matched — a user's TYPO must
@@ -37471,69 +37454,6 @@ export type Parser
 
 		throw ParseError.unsupported("`{String.from(ManagedMemoryTypeName)}` member '{String.from(methodTok.value)}' — it is STDLIB-ONLY (`module function` in `stdlib/String.maxon`, which the reference compiler refuses to user code as a not-exported error) and this file is not under `stdlib/`. `{String.from(ManagedMemoryToCStringMethod)}` hands back a raw address with no length, no owner and no refcount, so the copy it makes when the receiver's bytes are not already NUL-terminated is reclaimed by nothing; `{String.from(ManagedMemoryMakeCharFromBytesMethod)}` trusts its caller for `pos + len <= {String.from(ManagedMemoryLengthMethod)}()` and reads off the end of the buffer otherwise. User code reaches a buffer's bytes through `{String.from(ByteAtMethod)}`, which is bounds-checked and throwing", line: methodTok.line, column: methodTok.column)
 	end 'requireStdlibOnlyBufferMethod'
-
-	// ⭐⭐ **`s.slice(start, endIndex: e)` AND `s.slice(start, length: n)` — TWO OVERLOADS TOLD APART BY THE
-	// ARGUMENT LABEL, NEVER BY A PARAMETER TYPE.** That is the oracle's own arrangement — its mangled name
-	// for the first is `String.slice$endIndex` — and it is what makes the pair resolvable here at all:
-	// `SignatureIndex` stores parameter NAMES and no parameter types, so a type-directed overload choice has
-	// nothing to read. The label is a token this function has in hand.
-	//
-	// Both forms reduce to ONE runtime call over a half-open BYTE range, which is the whole point of doing
-	// the conversion here: `length:` turns its grapheme count into an end byte position through
-	// `__strix_advance` and then asks the identical question `endIndex:` asks. So there is one definition of
-	// what a String slice IS, and the `length:` form cannot come to disagree with it about end-exclusivity.
-	//
-	// The result is a FRESH OWNED String that aliases nothing (`__strix_slice` copies — see there), so it
-	// outlives its parent and drops through the ordinary `__str_decref`.
-	function parseStringSlice(func IrFunction, receiver ValueId, range SourceRange) returns ValueId throws ParseError
-		try self.consume(TokenKind.leftParen)
-		let startTok = self.current()
-		let startBytePos = self.emitStringIndexField(try self.requireStringIndexValue(func, anchor: startTok), index: StringIndexBytePosFieldIndex, range: range)
-		let labelTok = try self.consumeArgLabel()
-		let endBytePos = try self.parseStringSliceEnd(func, receiver: receiver, startBytePos: startBytePos, labelTok: labelTok, range: range)
-		try self.consume(TokenKind.rightParen)
-		return self.emitOwnedRuntimeResult(StrIndexSliceName, args: tripleArgs(receiver, second: startBytePos, third: endBytePos), resultTag: ValueTypeTag.string, resultNameId: UnnamedTypeId, range: range)
-	end 'parseStringSlice'
-
-	// The END BYTE POSITION `slice`'s second argument denotes, per its label — the one place the two
-	// overloads differ. `endIndex:` reads it off a second `StringIndex`; `length:` walks that many clusters
-	// forward from the start (`__strix_advance`, the reference's `graphemeOffsetToBytePos`). Any other label
-	// is a positioned reject rather than a silent reading of one form as the other.
-	function parseStringSliceEnd(func IrFunction, receiver ValueId, startBytePos ValueId, labelTok Token, range SourceRange) returns ValueId throws ParseError
-		if labelTok.value.equals(EndIndexArgLabel) 'byEndIndex'
-			let endTok = self.current()
-			return self.emitStringIndexField(try self.requireStringIndexValue(func, anchor: endTok), index: StringIndexBytePosFieldIndex, range: range)
-		end 'byEndIndex'
-		if labelTok.value.equals(SliceLengthArgLabel) 'byLength'
-			let countTok = self.current()
-			let count = try self.parseExpression(func, block: self.currentBlock)
-			if not tagIsInteger(self.tagOf(count)) 'notACount'
-				throw ParseError.builtinOperandType(String.from(SliceMethod), required: typeTagName(ValueTypeTag.integer), got: typeTagName(self.tagOf(count)), line: countTok.line, column: countTok.column)
-			end 'notACount'
-			return self.emitRuntimeCall(StrIndexAdvanceName, args: tripleArgs(receiver, second: startBytePos, third: count), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
-		end 'byLength'
-
-		throw ParseError.unsupported("argument label '{String.from(labelTok.value)}' on `slice` — a `String`'s slice takes `endIndex:` (a second `StringIndex`, exclusive) or `length:` (a grapheme count)", line: labelTok.line, column: labelTok.column)
-	end 'parseStringSliceEnd'
-
-	// Parse one argument expression and require it to be a `StringIndex`, blaming the argument's own first
-	// token. `parseTaggedArg`'s type check, one type over, and it needs its own body because a `StringIndex`
-	// is not identified by a TAG — every struct shares `structRef` — but by the NAME behind it. It is also
-	// asked WITHOUT the parens, because `slice` takes two indices inside one pair.
-	//
-	// ⚠ **THE NOUN IS `slice`'S AGAIN, BECAUSE `slice` IS THE ONLY ASKER AGAIN (W49 wave 3).** It carried a
-	// `methodName` parameter while `indexAfter` was a second consumer — D12's rule, that a helper outliving
-	// its first caller must not name a construct the author did not write. `indexAfter` retired onto
-	// `stdlib/String.maxon` with the four producers, so the parameter had one constant argument at both
-	// remaining call sites and the rule now points the other way: a parameter nothing varies is a second
-	// place for the noun to be wrong. A third consumer takes it back.
-	function requireStringIndexValue(func IrFunction, anchor Token) returns ValueId throws ParseError
-		let value = try self.parseExpression(func, block: self.currentBlock)
-		if not self.valueIsStringIndex(value) 'notAnIndex'
-			throw ParseError.builtinOperandType(String.from(SliceMethod), required: String.from(StringIndexTypeName), got: self.valueDisplayTypeName(value), line: anchor.line, column: anchor.column)
-		end 'notAnIndex'
-		return value
-	end 'requireStringIndexValue'
 
 	// ⭐ **`s.split(delimiter)` — the first builtin method that CONSTRUCTS an `Array with String` at runtime.**
 	// The array is created HERE, through `emitArrayCreateOp` — the one array-creation door — and handed to
@@ -38718,39 +38638,6 @@ export type Parser
 		return self.internedName(nameId).equals(CharacterSetTypeName)
 	end 'isCharacterSetType'
 
-	// ⭐ **`s.trim()` / `s.trimStart(cs)` / `s.trimEnd()` — all three, from one place.** The optional
-	// argument is the whole difference between the two forms: given one, it must be a `CharacterSet`; given
-	// none, the reference's own default is built here (`stdlib/String.maxon:760-772`).
-	//
-	// The result is an OWNED String; the `CharacterSet` is BORROWED by the scan, so a set built for a
-	// no-argument trim is an owned temp that drops at statement end.
-	function parseStringTrim(func IrFunction, receiver ValueId, fromStart bool, fromEnd bool, range SourceRange) returns ValueId throws ParseError
-		try self.consume(TokenKind.leftParen)
-		let charSet = try self.parseTrimCharacterSet(func, range: range)
-		try self.consume(TokenKind.rightParen)
-
-		var args = ValueIdArray.create()
-		args.push(receiver)
-		args.push(charSet)
-		args.push(self.emitLiteral(trimFlagValue(fromStart), valueType: MaxonType.integer, range: range))
-		args.push(self.emitLiteral(trimFlagValue(fromEnd), valueType: MaxonType.integer, range: range))
-		return self.emitOwnedRuntimeResult(StrTrimName, args: args, resultTag: ValueTypeTag.string, resultNameId: UnnamedTypeId, range: range)
-	end 'parseStringTrim'
-
-	// The set a trim cuts against: the caller's, or the reference's default when the argument list is empty.
-	function parseTrimCharacterSet(func IrFunction, range SourceRange) returns ValueId throws ParseError
-		if self.at(TokenKind.rightParen) 'defaultSet'
-			return try self.emitPredefinedCharacterSet(defaultTrimPreset(), range: range)
-		end 'defaultSet'
-
-		let argTok = self.current()
-		let given = try self.parseExpression(func, block: self.currentBlock)
-		if not self.isCharacterSetType(self.tagOf(given), nameId: self.valueNameId(given)) 'notACharacterSet'
-			throw ParseError.builtinOperandType(String.from(StringTrimMethod), required: String.from(CharacterSetBuiltinName), got: typeTagName(self.tagOf(given)), line: argTok.line, column: argTok.column)
-		end 'notACharacterSet'
-		return given
-	end 'parseTrimCharacterSet'
-
 	// ⭐ **A `StringIndex`'S BUILTIN METHODS (P1.8 slice B2)** — `charIndex()` and `bytePos()`, the corpus's
 	// own two accessors (`stdlib/String.maxon:925-931`). Its own dispatcher rather than the struct path, for
 	// the ROSTER-WINS reason `s.byteLength()` keeps its arm: `dispatchMethodOnBase` would resolve both names
@@ -38972,8 +38859,8 @@ export type Parser
 	// point the only thing separating the three was the tag. It is a parameter now.
 	//
 	// The blame token is the ARGUMENT's own first token, not the method's, which is why it is read before the
-	// expression is parsed. (`requireStringIndexValue` stays apart: a `StringIndex` is not identified by a
-	// tag at all, and `slice` still asks for two of them inside one paren pair.)
+	// expression is parsed. A `requireStringIndexValue` stayed apart from it — a `StringIndex` is not
+	// identified by a tag at all — until `slice`, its only caller, retired at W49 wave 4.
 	function parseTaggedArg(func IrFunction, methodName ByteArray, required ValueTypeTag) returns ValueId throws ParseError
 		try self.consume(TokenKind.leftParen)
 		let argTok = self.current()
@@ -43551,10 +43438,11 @@ export type Parser
 	end 'consumeArrayArgLabel'
 
 	// `, <name> :` — the token shape an argument LABEL is spelled as, and the NAME token it carries.
-	// Written once because the two readers differ in their VERDICT, not in the shape: an array method
-	// asserts the ONE label it expects (`consumeArrayArgLabel`), while a `String`'s `slice` DISPATCHES on
-	// which of its two it got (`parseStringSliceEnd`) — and a second copy of "this is what a label looks
-	// like" is a copy that can come to disagree about it.
+	// Written once because a reader's VERDICT is its own while the SHAPE is shared: `consumeArrayArgLabel`
+	// asserts the ONE label it expects, and this returns the token for a caller that decides for itself. A
+	// String's `slice` DISPATCHED on which of its two labels it got until W49 wave 4 retired it; that reader
+	// is gone, and the split is kept because a second copy of "this is what a label looks like" is a copy
+	// that can come to disagree about it.
 	function consumeArgLabel() returns Token throws ParseError
 		try self.consume(TokenKind.comma)
 		let labelTok = try self.consume(TokenKind.identifier)

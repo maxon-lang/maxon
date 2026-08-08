@@ -368,8 +368,14 @@ end 'main'
 
 <!-- test: an-inverted-slice-range-aborts -->
 ### An inverted range ends the process
-`end` before `start` would ask for a negative number of bytes. The reference panics on the same program;
-shv2 aborts with the exit code its runtime reserves for it.
+`end` before `start` would ask for a negative number of bytes.
+
+⚠ **THIS CASE PINNED A DIVERGENCE FROM THE REFERENCE UNTIL W49 WAVE 4, AND THE DIVERGENCE IS GONE.** It
+read *"the reference panics on the same program; shv2 aborts with the exit code its runtime reserves for
+it"* — exit **77**, from the SYNTHESIZED `slice` arm's own bounds check. `slice` is `stdlib/String.maxon`'s
+now, so the guard that answers is the corpus's own `sliceBytes` precondition (`:336`), which is the guard
+BOTH reference compilers execute. Verified against the bootstrap on this exact program: same exit code,
+same message, same stack. The expectation below is therefore the ORACLE's, not a new shv2 behaviour.
 ```maxon
 function main() returns ExitCode
 	let s = "hello world"
@@ -380,14 +386,23 @@ function main() returns ExitCode
 end 'main'
 ```
 ```exitcode
-77
+1
+```
+```stderr
+panic at String.maxon:336: String.sliceBytes: caller guarantees 0 <= start <= end <= byteLength()
+Stack trace:
+  in String.sliceBytes
+  in String.slice
+  in main
+  in mrt_start
 ```
 
 <!-- test: an-index-from-a-longer-string-aborts -->
 ### An index of ANOTHER string is out of range here
 An index is an ordinary value and nothing ties it to the string it came from, so this is reachable from
 source rather than hypothetical: byte 20 of a 24-byte string is past the end of a 2-byte one, and slicing
-to it would read out of the buffer.
+to it would read out of the buffer. Its twin above records why the guard that answers is now the corpus's,
+and that this is the ORACLE's exit code rather than a new shv2 behaviour.
 ```maxon
 function main() returns ExitCode
 	let long = "hello world that is long"
@@ -399,7 +414,15 @@ function main() returns ExitCode
 end 'main'
 ```
 ```exitcode
-77
+1
+```
+```stderr
+panic at String.maxon:336: String.sliceBytes: caller guarantees 0 <= start <= end <= byteLength()
+Stack trace:
+  in String.sliceBytes
+  in String.slice
+  in main
+  in mrt_start
 ```
 
 <!-- test: an-index-inside-a-type-method -->
@@ -546,6 +569,10 @@ error E2015: <fragment>:2:6: Unsupported: a declaration of the type name 'String
 
 <!-- test: error.slice-needs-an-index-not-an-integer -->
 ### `slice`'s start must be a `StringIndex`
+⚠ **THE SENTENCE IS THE ORACLE'S SINCE W49 WAVE 4.** It was `'slice' requires a StringIndex, but its
+argument is int` — the SYNTHESIZED arm's bespoke wording, from a hand-written type test. The member is
+`stdlib/String.maxon:470`'s now, so the refusal is the ordinary declared-parameter check, which is the
+sentence the bootstrap prints for this program verbatim.
 ```maxon
 function main() returns ExitCode
 	let s = "hello"
@@ -555,11 +582,18 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:4:20: 'slice' requires a StringIndex, but its argument is int
+error E3005: <fragment>:4:12: argument type mismatch for 'start': expected 'StringIndex', got 'int'
 ```
 
 <!-- test: error.slice-rejects-an-unknown-argument-label -->
 ### `slice`'s second argument is `endIndex:` or `length:`
+⚠ **W49 WAVE 4 MOVED THIS FROM A BESPOKE REFUSAL TO THE ORDINARY ONE.** The synthesized arm read the
+label off a token and named both spellings itself. With `slice` retired the call matches NEITHER corpus
+overload, so `resolveOverloadedCalls` leaves the op alone (its documented step 5) and `checkCalls` reports
+against the first-declared member's parameter list. The bootstrap answers `E3007 No overload of
+'stdlib.String.slice' matches the named arguments`; shv2's E3037 names the offending label instead. Both
+refuse the program at the same token — the code and the noun differ, which is the same latitude
+`overloadTypeSuffix` records for a declaration-site-vs-call-site split.
 ```maxon
 function main() returns ExitCode
 	let s = "hello"
@@ -569,7 +603,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:4:36: Unsupported: argument label 'ending' on `slice` — a `String`'s slice takes `endIndex:` (a second `StringIndex`, exclusive) or `length:` (a grapheme count)
+error E3037: <fragment>:4:36: 'String.slice' has no parameter named 'ending'
 ```
 
 <!-- test: error.a-string-index-has-two-methods -->

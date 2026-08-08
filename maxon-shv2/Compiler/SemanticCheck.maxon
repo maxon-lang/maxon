@@ -515,11 +515,36 @@ function reconcileOverloadResultTag(project Project, func IrFunction, opIndex Op
 	let declared = try project.funcReturnTypes.get(member) otherwise return
 	match declared 'declared'
 		value(returnType) then requireOverloadResultTagAgrees(project, func: func, opIndex: opIndex, result: result, member: member, declared: returnType)
-		// A VOID member cannot have been chosen for a call whose result is read: the parser refuses a void
-		// call in value position, and in statement position the result tag is `void` already.
-		void then break 'declared'
+		void then requireOverloadVoidResult(project, func: func, opIndex: opIndex, result: result, member: member)
 	end 'declared'
 end 'reconcileOverloadResultTag'
+
+// ⭐⭐ **THE VOID SIDE OF THE SAME DISAGREEMENT, AND IT IS THE ONE QUADRANT NOTHING GUARDED (W49 wave 4).**
+//
+// This arm used to `break` on the stated grounds that *"a VOID member cannot have been chosen for a call
+// whose result is read: the parser refuses a void call in value position, and in statement position the
+// result tag is `void` already"*. **Both halves assume the SWEEP recorded the void member**, and the sweep
+// is LAST-WINS over one entry per NAME — so when the VALUE member is the one it recorded, every call to the
+// name was typed from it: the result carries that member's tag, and `enrolOwnedCallTemp` has already
+// enrolled the scope-exit drop a managed return owes. A call that then resolves HERE, to the void member,
+// spends that drop on a register the callee never wrote.
+//
+// MEASURED, `emit(flag bool)` declared ahead of `emit(tag int) returns String`, called `emit(true)` in
+// statement position: compiled clean, no diagnostic at any stage, and died with an ACCESS VIOLATION
+// (0xC0000005). The mirror — void recorded, a value member called — was already refused by the sibling
+// below, which is why this read as guarded for as long as it did: the family fired, just not in this
+// quadrant. Pinned both ways by `function-overloads.md`'s two `overloads-disagree-*` cases.
+//
+// A `void`-tagged result is the agreement, and it is the only one: no repair is possible in either
+// direction, because the divergence is over whether there is a value AT ALL.
+function requireOverloadVoidResult(project Project, func IrFunction, opIndex OpIndex, result ValueId, member ByteArray)
+	let currentTag = try func.valueTags.get(result) otherwise panic("requireOverloadVoidResult: value v{result} of '{String.from(func.name)}' has no recorded type — every SSA value is minted through Parser.mintValue")
+	if currentTag == ValueTypeTag.void 'alreadyRight'
+		return
+	end 'alreadyRight'
+
+	reportOverloadReturnDisagreement(project, func: func, opIndex: opIndex, member: member, current: currentTag, declared: ValueTypeTag.void)
+end 'requireOverloadVoidResult'
 
 function requireOverloadResultTagAgrees(project Project, func IrFunction, opIndex OpIndex, result ValueId, member ByteArray, declared MaxonType)
 	let currentTag = try func.valueTags.get(result) otherwise panic("requireOverloadResultTagAgrees: value v{result} of '{String.from(func.name)}' has no recorded type — every SSA value is minted through Parser.mintValue")
@@ -529,14 +554,21 @@ function requireOverloadResultTagAgrees(project Project, func IrFunction, opInde
 	end 'alreadyRight'
 
 	if not tagIsPlainOverloadScalar(currentTag) or not tagIsPlainOverloadScalar(declaredTag) 'notRepairable'
-		let range = project.opRanges.get(opIndex)
-		reportPositioned(project, code: ErrorCode.parserUnsupportedFeature, message: "the overloads of '{String.from(member)}' do not agree on their return type ('{typeTagName(currentTag)}' and '{typeTagName(declaredTag)}'), and this call needed the one they disagree about. A call's result type is fixed while its file is parsed, from a whole-program index that records one return type per NAME, so only a difference between plain scalars can be corrected once the overload is known. Make the overloads return the same type", line: range.line, column: range.column, filePath: func.sourceFilePath)
+		reportOverloadReturnDisagreement(project, func: func, opIndex: opIndex, member: member, current: currentTag, declared: declaredTag)
 		return
 	end 'notRepairable'
 
 	try func.valueTags.set(result, value: declaredTag) otherwise panic("requireOverloadResultTagAgrees: valueTags.set({result}) OOB inside its own count()")
 	try func.valueNameIds.set(result, value: typeNameIdOf(declared)) otherwise panic("requireOverloadResultTagAgrees: valueNameIds.set({result}) OOB — the two type columns are minted in lockstep")
 end 'requireOverloadResultTagAgrees'
+
+// ONE sentence for every quadrant of the disagreement — value-vs-value that no retype can repair, and
+// value-vs-void which nothing can. Spelling it in each arm is how the two would drift into two accounts of
+// one rule, and the void arm's own history is that a second account of it was simply MISSING.
+function reportOverloadReturnDisagreement(project Project, func IrFunction, opIndex OpIndex, member ByteArray, current ValueTypeTag, declared ValueTypeTag)
+	let range = project.opRanges.get(opIndex)
+	reportPositioned(project, code: ErrorCode.parserUnsupportedFeature, message: "the overloads of '{String.from(member)}' do not agree on their return type ('{typeTagName(current)}' and '{typeTagName(declared)}'), and this call needed the one they disagree about. A call's result type is fixed while its file is parsed, from a whole-program index that records one return type per NAME, so only a difference between plain scalars can be corrected once the overload is known. Make the overloads return the same type", line: range.line, column: range.column, filePath: func.sourceFilePath)
+end 'reportOverloadReturnDisagreement'
 
 // ⭐ **IS THE PARSER'S TAG STILL RIGHT FOR THIS MEMBER'S DECLARED RETURN? — asked so that RESOLUTION cannot
 // be mistaken for disagreement.** The value's tag was minted PRE-resolution and the member's return type is

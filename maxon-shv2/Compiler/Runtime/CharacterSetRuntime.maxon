@@ -1,11 +1,14 @@
-// Runtime/CharacterSetRuntime.maxon — the `CharacterSet` box, its membership test, and the three
-// `String` trims that consume one (P1.8 Slice D).
+// Runtime/CharacterSetRuntime.maxon — the `CharacterSet` box and its membership test (P1.8 Slice D).
 //
-// ⭐ **PORTED FROM `stdlib/CharacterSet.maxon` AND `stdlib/String.maxon:674-772`, WHICH ARE THE ORACLE.**
-// Both reference compilers execute that same stdlib source — the bootstrap inlines no trim and v1 has no
-// CharacterSet-specific lowering — so there is no divergence between them to resolve. What changes is the
-// SHAPE: shv2 reads no stdlib, so the type is synthesized like `Array`/`Set`/`StringIndex` and each helper
-// is a hand-built `StdOp` graph.
+// ⚠ **THE THREE `String` TRIMS THAT CONSUME ONE WERE HERE TOO, UNTIL W49 WAVE 4 RETIRED THEM ONTO
+// `stdlib/String.maxon`.** What is left is the type the corpus trims still take as a PARAMETER — which is
+// the arrangement this file now demonstrates: a compiler-owned type, named by a corpus declaration whose
+// own file the corpus never sees, works.
+//
+// ⭐ **PORTED FROM `stdlib/CharacterSet.maxon`, WHICH IS THE ORACLE.** Both reference compilers execute that
+// same stdlib source — neither has CharacterSet-specific lowering — so there is no divergence between them
+// to resolve. What changes is the SHAPE: `stdlib/CharacterSet.maxon` is not whitelisted, so the type is
+// synthesized like `Array`/`Set` and each helper is a hand-built `StdOp` graph.
 //
 // ⭐ **THE REPRESENTATION IS THE REFERENCE'S, FIELD FOR FIELD** (`stdlib/CharacterSet.maxon:22-24`): a
 // `Set with Character` of EXPLICIT members, plus a `categoryMask` of OR'd `General_Category` bits. A
@@ -15,15 +18,15 @@
 // ⚠⚠ **PLAIN SPACE U+0020 IS NOT AN EXPLICIT MEMBER OF ANY PREDEFINED SET, AND THAT IS LOAD-BEARING.**
 // `whitespacesAndNewlines()` seeds only HT/LF/CR/CRLF/VT/FF/NEL (`stdlib/CharacterSet.maxon:36-37`);
 // U+0020 is whitespace ONLY through the mask's `Zs` bit. So **even `"  hello  ".trim()` goes through the
-// UCD table** — `specs/string-trim.md`'s very first case is exactly that, and the oracle passes it only
+// UCD table** — through `__cs_contains`, which the corpus trims call for every cluster they test — — `specs/string-trim.md`'s very first case is exactly that, and the oracle passes it only
 // via that lookup. There is a dead `stdlib/Unicode.maxon:3-52` `isWhitespace` with zero callers anywhere
 // in the tree and an ASCII-only `stdlib/Ascii.maxon:32-41`; wiring trim to either would be a silent
 // divergence from the oracle and would make the whole UCD table look unnecessary. Do not.
 
 // ⭐ **THE BOX'S FIELD OFFSETS AND ITS SIZE** — asserted against the registered `StructLayout`
-// (`SignatureIndex.characterSetLayout`) rather than merely agreeing with it by inspection, exactly as
-// `StringIndexRuntime`'s are: the type's SHAPE is stated for the front end by that layout and written here
-// by these constants, and two readers of one shape is the pair this project keeps finding drifted.
+// (`SignatureIndex.characterSetLayout`) rather than merely agreeing with it by inspection: the type's SHAPE
+// is stated for the front end by that layout and written here by these constants, and two readers of one
+// shape is the pair this project keeps finding drifted.
 export let CharSetCharsOffset = 0 as ByteOffset
 export let CharSetMaskOffset = 8 as ByteOffset
 export let CharSetBoxBytes = 16 as ParsedInt
@@ -41,31 +44,19 @@ export let CharSetBoxBytes = 16 as ParsedInt
 //     to walk.
 //   * `__cs_contains(csRec, charRec, hashWitness, eqWitness)` — the reference's `contains`
 //     (`stdlib/CharacterSet.maxon:124-136`): explicit membership first, then the category bit.
-//   * `__str_trim(strRec, csRec, fromStart, fromEnd, hashWitness, eqWitness)` — all THREE reference trims
-//     (`stdlib/String.maxon:714-757`) behind two flags; see `buildStrTrim`.
+//
+// ⚠ **A FIFTH, `__str_trim`, STOOD HERE UNTIL W49 WAVE 4.** It served all three reference trims
+// (`stdlib/String.maxon:714-772`) behind two end flags. They are the corpus's own now, so the graph, its
+// flags, its default-set lookup and its `RuntimeUsage` bit are all gone rather than unreferenced.
 export let CharSetMakeName = b"__cs_make"
 export let CharSetDecrefName = b"__cs_decref"
 export let CharSetContainsName = b"__cs_contains"
-export let StrTrimName = b"__str_trim"
 
 // The mask value that means "this set has NO category members" — `CharacterSet.from(…)`'s mask
 // (`stdlib/CharacterSet.maxon:120`). It is what lets a purely explicit set skip the codepoint decode and
 // the table read altogether, which is the reference's own short-circuit (`:128`). Exported because the
 // PARSER stamps it into a `from`-built box and this graph tests it — one number, two readers.
 export let CharSetNoCategories = 0
-
-// The two values `__str_trim`'s end flags take. A Std parameter is a machine word, so a source `bool` is
-// 1 or 0 here; named because a bare `1` at an argument site is exactly the magic value the rule is for.
-let TrimFlagSet = 1 as ParsedInt
-let TrimFlagClear = 0 as ParsedInt
-
-// One of a trim's two end flags, as the argument the parser passes.
-export function trimFlagValue(cut bool) returns ParsedInt
-	if cut 'cutThisEnd'
-		return TrimFlagSet
-	end 'cutThisEnd'
-	return TrimFlagClear
-end 'trimFlagValue'
 
 // How a `Set with Character` is SPELLED in a diagnostic — for the one message that has to say what
 // `CharacterSet.from` wanted. `typeTagName` cannot say it (a generic instance's tag names no arguments),
@@ -74,13 +65,6 @@ export let CharacterMemberSetDisplayName = b"Set with Character"
 
 // The low bit a category test isolates: `(categoryMask shr cat) and 1` (`stdlib/CharacterSet.maxon:130`).
 let CharSetCategoryBit = 1
-
-// ⭐ **THE SENTINEL `__str_trim`'s FORWARD SCAN CARRIES FOR "NO NON-MATCHING CLUSTER SEEN YET".** A byte
-// position is non-negative, so `-1` cannot be one — this is a loop-carried STATE, not a returned sentinel
-// (the function returns a String), and it is the one value that distinguishes "every cluster matched" from
-// "the first non-matching cluster is at byte 0". Both answers are reachable and they are not the same
-// string.
-let TrimNoMatchYet = 0 - 1
 
 // ============================================================================================
 // THE ELEVEN PREDEFINED SETS — data, transcribed from `stdlib/CharacterSet.maxon:31-116`
@@ -119,7 +103,8 @@ let LineFeedBytes = b"\n"
 let CarriageReturnBytes = b"\r"
 
 // CR+LF is ONE grapheme under UAX#29 GB3, and it is an explicit member in its own right — which is
-// precisely why `__str_trim` walks CLUSTERS: a byte walk would meet the CR alone and the LF alone.
+// precisely why a trim walks CLUSTERS: a byte walk would meet the CR alone and the LF alone. The corpus
+// `scanTrimStart`/`scanTrimEnd` do exactly that (`stdlib/String.maxon:674-711`).
 let CarriageReturnLineFeedBytes = b"\r\n"
 let VerticalTabBytes = b"\x0B"
 let FormFeedBytes = b"\x0C"
@@ -216,19 +201,6 @@ function whitespaceAndNewlineMembers() returns ByteArrayArray
 	return members
 end 'whitespaceAndNewlineMembers'
 
-// ⭐ **THE SET A NO-ARGUMENT TRIM CUTS AGAINST** — `CharacterSet.whitespacesAndNewlines()`, the
-// reference's own default for all three (`stdlib/String.maxon:760-772`). Looked up IN the preset table
-// rather than declared beside it, so the default and the accessor of the same name are one row: a
-// correction to the mask or the seeds reaches both, and neither can be edited without the other.
-export function defaultTrimPreset() returns CharacterSetPreset
-	for preset in characterSetPresets() 'eachPreset'
-		if preset.method.equals(CharSetWhitespacesAndNewlinesMethod) 'match'
-			return preset
-		end 'match'
-	end 'eachPreset'
-	panic("defaultTrimPreset: `{String.from(CharSetWhitespacesAndNewlinesMethod)}` is not in `characterSetPresets` — the eleven accessors and the trim default are one table, and the default names a row of it")
-end 'defaultTrimPreset'
-
 // Install the `CharacterSet` runtime into the lowered Std module. Called AFTER the pipeline (like
 // `installStringRuntime`), so these are appended already-lowered and never re-optimized. Each is installed
 // ONLY when referenced — vocabulary does not ship ahead of its consumer.
@@ -242,9 +214,6 @@ export function installCharacterSetRuntime(module StdModule, usage RuntimeUsage)
 	if usage.usesCharSetContains 'contains'
 		buildCharSetContains(module)
 	end 'contains'
-	if usage.usesStrTrim 'trim'
-		buildStrTrim(module)
-	end 'trim'
 end 'installCharacterSetRuntime'
 
 // `__cs_make(charsRec, categoryMask) -> CharacterSet` — one `__mm_alloc` of `CharSetBoxBytes`, then the two
@@ -363,222 +332,18 @@ function buildCharSetContains(module StdModule)
 	module.functions.push(func)
 end 'buildCharSetContains'
 
-// ⭐⭐ **`__str_trim(strRec, csRec, fromStart, fromEnd, hashWitness, eqWitness) -> String` — ALL THREE
-// REFERENCE TRIMS** (`stdlib/String.maxon:714-757`), behind two flags. The three differ only in which END
-// they cut, so they are one graph and two booleans rather than three transcriptions of one scan; the flags
-// are compile-time constants at every call site, which is what makes that free.
+// ⚠⚠ **`__str_trim` STOOD HERE AND IS THE CORPUS'S NOW (W49 wave 4).** One graph and two end flags
+// served all three reference trims (`stdlib/String.maxon:714-772`); with them retired it had no caller,
+// and `emitTrimResult`/`emitSelected` had no second one. Two facts from it are worth keeping, because
+// they are what the retirement BUYS and what it COSTS, and neither is visible from the corpus:
 //
-// ⭐ **IT IS A GRAPHEME-CLUSTER WALK, NOT A BYTE WALK, AND THE REFERENCE SAYS WHY** (`String.maxon:677-682`):
-// CR+LF is ONE cluster under UAX#29 GB3, so a byte-at-a-time trim SPLITS it — wrong for any whitespace set
-// holding one and not the other. Every cluster is minted as a real `Character` through `__char_at` (the one
-// door) and tested with `__cs_contains`, exactly as the reference tests `chars.contains(ch)`.
-//
-// ⚠⚠ **THE SCAN IS FORWARD-ONLY, AND THAT IS A DELIBERATE DIVERGENCE FROM THE REFERENCE'S SHAPE — BECAUSE
-// THE REFERENCE'S BACKWARD SEGMENTER CONTRADICTS ITS FORWARD ONE.** `scanTrimEnd` walks backwards through
-// `findGraphemeStart` (`stdlib/helpers/string/grapheme.maxon:144-260`), which is a SECOND implementation of
-// UAX#29 — and an incomplete one: it has **no GB12/GB13 rule at all**, so a regional-indicator pair that
-// `findGraphemeEnd` joins into one flag, `findGraphemeStart` splits into two. Porting it would mean shv2
-// answered "where does this cluster begin?" differently depending on which direction it was asked, which is
-// exactly the class of defect `GraphemeRuntime`'s header describes for the CRLF shortcut. shv2 has ONE
-// segmenter, forward, and derives both bounds from it: the end of the last NON-matching cluster is recorded
-// as the walk passes it.
-//
-// ⚠ The cost of that choice, stated plainly and MEASURED (`Testing/ladders/gentrim.sh`, `data-*`): a trim
-// that must know where the LAST non-matching cluster is has to reach the end, so `trim` and `trimEnd` are
-// O(n) in the whole string where the reference's backward `trimEnd` is O(trimmed suffix). That is the price
-// of one segmenter, and it is linear — measured ×2.00 per doubling out to 524,288 bytes, in every seed.
-//
-// ⭐⭐ **BUT `trimStart` IS NOT, AND MUST NOT BE, AND THAT IS WHAT `stopsAtFirstKept` IS FOR.** With
-// `fromEnd` clear the result's high bound is the byte LENGTH (see `emitTrimResult`) — `keptEnd` is never
-// read — so every cluster the walk visits after the first NON-matching one is pure waste: a `__gr_end`, a
-// `__char_at` MINT (an `__mm_alloc` + blit the slab never gives back), a `__cs_contains` and a
-// `__str_decref`, all to compute a bound that is then discarded. Measured before this exit existed:
-// `"abcdefgh"×65,536`.trimStart(), which has NOTHING to cut, cost **56.2 ms and 45 MB of peak RSS** to
-// answer "byte 0". The test is made on the `firstKept` arm, which runs AT MOST ONCE per trim, so it costs
-// nothing on the matched path, nothing on later kept clusters, and nothing to `trim`/`trimEnd` at all.
-function buildStrTrim(module StdModule)
-	var func = IrFunction.createFromStd(StrTrimName, returnType: StdReturnType.value(StdType.i64), paramCount: 6, paramTypes: sixI64Params(), returnLine: 0)
-	var ids = ValueMinter.create(6)
-
-	var entry = module.addBlock(func, label: b"entry")
-	var header = module.addBlock(func, label: b"scan")
-	// The string ran out. Its own block because the edge into `done` CARRIES the two bounds, and an edge
-	// with block args may not hang off a `condBranch` — the discipline noted at the `kept` arm below.
-	var scanned = module.addBlock(func, label: b"scanned")
-	var probe = module.addBlock(func, label: b"probe")
-	var matched = module.addBlock(func, label: b"matched")
-	var kept = module.addBlock(func, label: b"kept")
-	var firstKeptBlock = module.addBlock(func, label: b"firstKept")
-	var firstKeptCarry = module.addBlock(func, label: b"firstKeptCarry")
-	var firstKeptStop = module.addBlock(func, label: b"firstKeptStop")
-	var laterKeptBlock = module.addBlock(func, label: b"laterKept")
-	var keptJoin = module.addBlock(func, label: b"keptJoin")
-	var advance = module.addBlock(func, label: b"advance")
-	var done = module.addBlock(func, label: b"done")
-
-	emitParams(module, block: entry, count: 6)
-	let record = 0 as ValueId
-	let charSet = 1 as ValueId
-	let fromStart = 2 as ValueId
-	let fromEnd = 3 as ValueId
-	let hashWitness = 4 as ValueId
-	let eqWitness = 5 as ValueId
-
-	let length = emitLoadField(module, block: entry, record: record, offset: StringLengthOffset, ids: ids)
-	let firstPos = emitConst(module, block: entry, value: 0, ids: ids)
-	let firstKeptStart = emitConst(module, block: entry, value: TrimNoMatchYet, ids: ids)
-	let firstKeptEnd = emitConst(module, block: entry, value: 0, ids: ids)
-	module.setTerminator(entry, op: StdOp.branch(header.id))
-
-	// Three loop-carried values: the byte position, the START of the first non-matching cluster
-	// (`TrimNoMatchYet` until one is seen), and the END of the last one.
-	let pos = ids.mint()
-	let keptStart = ids.mint()
-	let keptEnd = ids.mint()
-	header.blockArgs.push(IrBlockArg.create(pos, argType: StdType.i64))
-	header.blockArgs.push(IrBlockArg.create(keptStart, argType: StdType.i64))
-	header.blockArgs.push(IrBlockArg.create(keptEnd, argType: StdType.i64))
-	entry.branchEdges.push(BranchEdge.create(header.id, argIds: threeArgs(firstPos, second: firstKeptStart, third: firstKeptEnd)))
-
-	let exhausted = emitCmp(module, block: header, a: pos, b: length, pred: StdCmpPred.ge, ids: ids)
-	module.setTerminator(header, op: StdOp.condBranch(exhausted, thenBlockId: scanned.id, elseBlockId: probe.id))
-
-	// ⭐ **THE WALK HAS TWO EXITS, SO `done` TAKES ITS TWO BOUNDS AS BLOCK ARGS** rather than reading the
-	// header's phis directly: the string ran out (`scanned`, carrying whatever the walk accumulated), or a
-	// `trimStart` settled at its first kept cluster and stopped there (`firstKeptStop`, carrying that
-	// cluster). Two predecessors cannot share one dominating definition, and the bounds differ between them.
-	let finalKeptStart = ids.mint()
-	let finalKeptEnd = ids.mint()
-	done.blockArgs.push(IrBlockArg.create(finalKeptStart, argType: StdType.i64))
-	done.blockArgs.push(IrBlockArg.create(finalKeptEnd, argType: StdType.i64))
-	module.setTerminator(scanned, op: StdOp.branch(done.id))
-	scanned.branchEdges.push(BranchEdge.create(done.id, argIds: twoArgs(keptStart, second: keptEnd)))
-
-	// One cluster: its end, the `Character` it spans, and whether the set holds it. The minted Character is
-	// OWNED by this frame and dropped on BOTH arms below — a trim over an all-matching string mints one per
-	// cluster, so leaking it would leak per character trimmed.
-	let clusterEnd = ids.mint()
-	module.appendOp(probe, op: StdOp.call(clusterEnd, callee: CorpusFindGraphemeEnd, args: twoArgs(record, second: pos)))
-	let cluster = ids.mint()
-	module.appendOp(probe, op: StdOp.call(cluster, callee: CharAtName, args: threeArgs(record, second: pos, third: clusterEnd)))
-	let inSet = ids.mint()
-	module.appendOp(probe, op: StdOp.call(inSet, callee: CharSetContainsName, args: fourArgs(charSet, second: cluster, third: hashWitness, fourth: eqWitness)))
-	let releasedProbe = ids.mint()
-	module.appendOp(probe, op: StdOp.call(releasedProbe, callee: StrDecrefName, args: argsOf(cluster)))
-	module.setTerminator(probe, op: StdOp.condBranch(inSet, thenBlockId: matched.id, elseBlockId: kept.id))
-
-	// A MATCHED cluster changes neither bound — it is trimmable from whichever end it turns out to touch.
-	module.setTerminator(matched, op: StdOp.branch(advance.id))
-
-	// A KEPT cluster is the last one seen so far, and the FIRST one if none was seen before: `keptStart`
-	// takes its position only while still `TrimNoMatchYet`, `keptEnd` takes its end unconditionally.
-	//
-	// ⚠ **EVERY EDGE THAT CARRIES BLOCK ARGS LEAVES A PLAIN `branch`**, never a `condBranch` — the
-	// discipline every hand-built runtime graph in this compiler follows (`GraphemeRuntime.buildGraphemeState`
-	// splits into two `branch`-terminated arms for exactly this), so a two-way choice costs one extra block
-	// per arm rather than an edge hanging off a conditional terminator.
-	let sentinel = emitConst(module, block: kept, value: TrimNoMatchYet, ids: ids)
-	let firstKept = emitCmp(module, block: kept, a: keptStart, b: sentinel, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(kept, op: StdOp.condBranch(firstKept, thenBlockId: firstKeptBlock.id, elseBlockId: laterKeptBlock.id))
-
-	// ⭐⭐ **THE FIRST KEPT CLUSTER IS WHERE A `trimStart` IS ALREADY FINISHED.** With `fromEnd` clear the
-	// high bound is the byte length and `keptEnd` is never read, so nothing after this cluster can change
-	// the answer — every further trip would mint and drop a `Character` to compute a discarded bound. This
-	// arm is reached AT MOST ONCE per trim (it is guarded by `keptStart == sentinel`, which this trip
-	// clears), so the test is O(1) for the whole call and no other path pays for it.
-	let cutsEnd = emitCmp(module, block: firstKeptBlock, a: fromEnd, b: emitConst(module, block: firstKeptBlock, value: TrimFlagClear, ids: ids), pred: StdCmpPred.ne, ids: ids)
-	module.setTerminator(firstKeptBlock, op: StdOp.condBranch(cutsEnd, thenBlockId: firstKeptCarry.id, elseBlockId: firstKeptStop.id))
-	module.setTerminator(firstKeptCarry, op: StdOp.branch(keptJoin.id))
-	module.setTerminator(firstKeptStop, op: StdOp.branch(done.id))
-	firstKeptStop.branchEdges.push(BranchEdge.create(done.id, argIds: twoArgs(pos, second: clusterEnd)))
-	module.setTerminator(laterKeptBlock, op: StdOp.branch(keptJoin.id))
-
-	let nextKeptStart = ids.mint()
-	keptJoin.blockArgs.push(IrBlockArg.create(nextKeptStart, argType: StdType.i64))
-	firstKeptCarry.branchEdges.push(BranchEdge.create(keptJoin.id, argIds: argsOf(pos)))
-	laterKeptBlock.branchEdges.push(BranchEdge.create(keptJoin.id, argIds: argsOf(keptStart)))
-	module.setTerminator(keptJoin, op: StdOp.branch(advance.id))
-
-	let carriedStart = ids.mint()
-	let carriedEnd = ids.mint()
-	advance.blockArgs.push(IrBlockArg.create(carriedStart, argType: StdType.i64))
-	advance.blockArgs.push(IrBlockArg.create(carriedEnd, argType: StdType.i64))
-	matched.branchEdges.push(BranchEdge.create(advance.id, argIds: twoArgs(keptStart, second: keptEnd)))
-	keptJoin.branchEdges.push(BranchEdge.create(advance.id, argIds: twoArgs(nextKeptStart, second: clusterEnd)))
-	module.setTerminator(advance, op: StdOp.branch(header.id))
-	advance.branchEdges.push(BranchEdge.create(header.id, argIds: threeArgs(clusterEnd, second: carriedStart, third: carriedEnd)))
-
-	emitTrimResult(module, func: func, done: done, record: record, length: length, keptStart: finalKeptStart, keptEnd: finalKeptEnd, fromStart: fromStart, fromEnd: fromEnd, ids: ids)
-	module.functions.push(func)
-end 'buildStrTrim'
-
-// ⭐ **THE SLICE THE WALK'S TWO BOUNDS AND THE TWO FLAGS PICK OUT.**
-//
-// ⚠ **EVERY CLUSTER MATCHING THE SET IS ITS OWN ARM, AND THE FLAGS ARE NOT CONSULTED ON IT.** All three
-// trims answer `""` there — the reference states it twice, as `start >= len` (`stdlib/String.maxon:721-723`)
-// and as `endPos == 0` (`:751-753`) — and the flags cannot express it: with `keptStart`/`keptEnd` collapsed
-// to 0, an untrimmed END would reopen the range to the whole string and `"   ".trimStart()` would answer
-// `"   "`. So the all-matched path branches in with both bounds already 0 and takes no selection.
-//
-// On the other path each end is cut only if its flag says so — an untrimmed start is 0 and an untrimmed end
-// is the byte length — which is what makes ONE graph serve `trim`, `trimStart` and `trimEnd`.
-//
-// The result is built through `emitSliceSegment` — the same producer `__str_split`'s segments and
-// `__strix_slice`'s result come from — so a trimmed String is byte-for-byte the record every other slice
-// is, and is independently droppable through `__str_decref` with nothing aliased.
-function emitTrimResult(module StdModule, func IrFunction, done IrBlock, record ValueId, length ValueId, keptStart ValueId, keptEnd ValueId, fromStart ValueId, fromEnd ValueId, ids ValueMinter)
-	var allTrimmed = module.addBlock(func, label: b"allTrimmed")
-	var keepBounds = module.addBlock(func, label: b"keepBounds")
-	var build = module.addBlock(func, label: b"build")
-
-	let sentinel = emitConst(module, block: done, value: TrimNoMatchYet, ids: ids)
-	let nothingKept = emitCmp(module, block: done, a: keptStart, b: sentinel, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(done, op: StdOp.condBranch(nothingKept, thenBlockId: allTrimmed.id, elseBlockId: keepBounds.id))
-
-	let empty = emitConst(module, block: allTrimmed, value: 0, ids: ids)
-	module.setTerminator(allTrimmed, op: StdOp.branch(build.id))
-	allTrimmed.branchEdges.push(BranchEdge.create(build.id, argIds: twoArgs(empty, second: empty)))
-
-	let zero = emitConst(module, block: keepBounds, value: 0, ids: ids)
-	// The two joins are created HERE rather than inside `emitSelected`, because the second choice is emitted
-	// INTO the first one's join block: a callee that created its own would hand it back as a FIELD of its
-	// result, and a field of a `let` binding cannot be passed to a mutating parameter (E3019/E3078). Naming
-	// them here also puts their creation ORDER — which is their emission order — at one place.
-	var afterFrom = module.addBlock(func, label: b"trimFrom")
-	var afterTo = module.addBlock(func, label: b"trimTo")
-	let fromByte = emitSelected(module, func: func, cur: keepBounds, taken: fromStart, whenSet: keptStart, whenClear: zero, join: afterFrom, ids: ids)
-	let toByte = emitSelected(module, func: func, cur: afterFrom, taken: fromEnd, whenSet: keptEnd, whenClear: length, join: afterTo, ids: ids)
-	module.setTerminator(afterTo, op: StdOp.branch(build.id))
-	afterTo.branchEdges.push(BranchEdge.create(build.id, argIds: twoArgs(fromByte, second: toByte)))
-
-	let lowBound = ids.mint()
-	let highBound = ids.mint()
-	build.blockArgs.push(IrBlockArg.create(lowBound, argType: StdType.i64))
-	build.blockArgs.push(IrBlockArg.create(highBound, argType: StdType.i64))
-
-	let buffer = emitLoadField(module, block: build, record: record, offset: StringBufferOffset, ids: ids)
-	let singleByteGraphemes = emitLoadField(module, block: build, record: record, offset: StringSingleByteGraphemesOffset, ids: ids)
-	module.setTerminator(build, op: StdOp.ret(emitSliceSegment(module, block: build, srcBuf: buffer, from: lowBound, endPos: highBound, singleByteGraphemes: singleByteGraphemes, ids: ids)))
-end 'emitTrimResult'
-
-// One value chosen by a runtime flag, as `join`'s block-arg phi. There is no `select` op at the Std tier,
-// so a choice is a branch and a phi; both of `__str_trim`'s ends need one, so the shape is written once.
-// The JOIN block is the caller's — see `emitTrimResult` for why it cannot be this function's.
-function emitSelected(module StdModule, func IrFunction, cur IrBlock, taken ValueId, whenSet ValueId, whenClear ValueId, join IrBlock, ids ValueMinter) returns ValueId
-	var setBlock = module.addBlock(func, label: b"selSet")
-	var clearBlock = module.addBlock(func, label: b"selClear")
-
-	// The flag arrives as a machine-word PARAMETER, not as a compare's verdict, so it is tested against 0
-	// rather than branched on directly — every `condBranch` in the hand-built runtime is fed by a `cmp` or by
-	// an `i1`-returning call, and the isel that fuses the two is what makes that the shape.
-	let isSet = emitCmp(module, block: cur, a: taken, b: emitConst(module, block: cur, value: TrimFlagClear, ids: ids), pred: StdCmpPred.ne, ids: ids)
-	module.setTerminator(cur, op: StdOp.condBranch(isSet, thenBlockId: setBlock.id, elseBlockId: clearBlock.id))
-	module.setTerminator(setBlock, op: StdOp.branch(join.id))
-	module.setTerminator(clearBlock, op: StdOp.branch(join.id))
-
-	let chosen = ids.mint()
-	join.blockArgs.push(IrBlockArg.create(chosen, argType: StdType.i64))
-	setBlock.branchEdges.push(BranchEdge.create(join.id, argIds: argsOf(whenSet)))
-	clearBlock.branchEdges.push(BranchEdge.create(join.id, argIds: argsOf(whenClear)))
-	return chosen
-end 'emitSelected'
+//   * **IT WAS FORWARD-ONLY, SO `trim`/`trimEnd` WERE O(WHOLE STRING)** — measured ×2.00 per doubling out
+//     to 524,288 bytes. The corpus `scanTrimEnd` (`stdlib/String.maxon:700`) walks BACKWARD through
+//     `findGraphemeStart`, so `trimEnd` is O(trimmed suffix). Retiring is an asymptotic WIN, not a cost.
+//   * **THE PRICE IS THE SECOND SEGMENTER shv2 REFUSED TO PORT.** `findGraphemeStart` is a separate
+//     implementation of UAX#29 with **no GB12/GB13**, so a regional-indicator pair that `findGraphemeEnd`
+//     joins into one flag it splits into two. shv2 had ONE segmenter, forward, and derived both bounds
+//     from it precisely to avoid answering "where does this cluster begin?" two ways. Serving the trims
+//     from the corpus adopts the backward walk — which is what BOTH reference compilers already execute,
+//     so this is convergence on the oracle rather than a divergence from it. It is observable only when
+//     the trimmed SET itself holds a regional indicator; `string-trim.md` pins the boundary case.

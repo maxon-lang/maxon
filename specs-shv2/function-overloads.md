@@ -131,6 +131,55 @@ end 'main'
 error E3007: specs/fragments/function-overloads/error.ambiguous-same-signature.test:13:9: Ambiguous overload for 'create': multiple overloads match. Candidates: (name String), (label String)
 ```
 
+<!-- test: error.overloads-disagree-on-returning-a-value-at-all -->
+<!-- W49 wave 4. THE ONE QUADRANT OF THE RETURN-TYPE DISAGREEMENT NOTHING GUARDED, AND IT REACHED THE
+MACHINE. The declaration sweep records ONE return type per NAME and is LAST-WINS, so here it records the
+`String` of the second declaration; `mintCallResult` then types EVERY call to `emit` as a String and
+`enrolOwnedCallTemp` enrols the scope-exit drop that a managed result owes. This call resolves to the VOID
+member a whole pass later, so the drop is spent on a register the callee never wrote. MEASURED before the
+refusal existed: this exact program compiled clean and died with an access violation (0xC0000005). The
+mirror direction — void recorded, a value member called — was already refused, which is the case below. -->
+```maxon
+function emit(flag bool)
+	print("flag {flag}")
+end 'emit'
+
+function emit(tag int) returns String
+	return "tag{tag}"
+end 'emit'
+
+function main() returns ExitCode
+	emit(true)
+	return 0 as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: specs/fragments/function-overloads/error.overloads-disagree-on-returning-a-value-at-all.test:11:2: the overloads of 'emit' do not agree on their return type ('String' and 'void'), and this call needed the one they disagree about. A call's result type is fixed while its file is parsed, from a whole-program index that records one return type per NAME, so only a difference between plain scalars can be corrected once the overload is known. Make the overloads return the same type
+```
+
+<!-- test: error.overloads-disagree-with-the-void-member-recorded -->
+<!-- The MIRROR of the case above, and the NEGATIVE CONTROL for it: the sweep records the void member (it
+is declared last), so the call to the value member is typed `void`, no drop is enrolled, and the `+1` the
+`String` member returns would LEAK. This direction was already refused; it is pinned so that the pair is
+one guarded fact rather than one guarded half. -->
+```maxon
+function emit(tag int) returns String
+	return "tag{tag}"
+end 'emit'
+
+function emit(flag bool)
+	print("flag {flag}")
+end 'emit'
+
+function main() returns ExitCode
+	emit(1)
+	return 0 as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: specs/fragments/function-overloads/error.overloads-disagree-with-the-void-member-recorded.test:11:2: the overloads of 'emit' do not agree on their return type ('void' and 'String'), and this call needed the one they disagree about. A call's result type is fixed while its file is parsed, from a whole-program index that records one return type per NAME, so only a difference between plain scalars can be corrected once the overload is known. Make the overloads return the same type
+```
+
 <!-- test: method-type-disambiguation -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -179,8 +228,11 @@ end 'main'
 42
 ```
 
-<!-- disabled-test: string-contains-char -->
-<!-- THE `Character` OVERLOAD OF `String.contains` — shv2 supplies the String form only, so `text.contains('e')` is `E3005: 'contains' requires a String, but its argument is int`. A String-method-set gap, NOT an overloading one: D7 resolves overloads of DECLARED functions, and a builtin method's overload set is synthesized rather than declared. The case below pins `text.contains("e")`. -->
+<!-- test: string-contains-char -->
+<!-- W49 wave 4 UNLOCKED THIS. It was disabled because `String.contains` was a SYNTHESIZED arm that served
+the `String` form only, so `text.contains('e')` was `E3005: 'contains' requires a String`. Retiring the
+member onto `stdlib/String.maxon:439,446` makes it an ordinary DECLARED overload set, which is exactly what
+`resolveOverloadedCalls` has always been able to pick from. -->
 ```maxon
 function main() returns ExitCode
 	let text = "hello"
