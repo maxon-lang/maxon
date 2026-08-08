@@ -1112,6 +1112,36 @@ end 'main'
 0
 ```
 
+<!-- test: cow-detach-copies-a-wide-elements-full-stride -->
+⭐ **THE DETACH COPIES `length · element_size` BYTES, NOT `length`** — and nothing else in this file was
+asking. The cases above slice a wide-element array and WRITE to it, which forces the copy-on-write detach,
+but each then reads only the element it wrote or an element of the OTHER array; none reads back a surviving
+neighbour of the one it overwrote. A detach that copied a byte per element instead of a stride per element
+would satisfy every one of them, because the elements it failed to copy are never read.
+
+Here they are. `sub` is `[20, 30, 40]` over 8-byte elements, so the detach owes 24 bytes; at a stride of 1
+it would copy 3, and elements 1 and 2 would come back as the ZEROES `__mm_alloc` supplies rather than as
+`30` and `40`. This is the case that pins `__mm_cow_detach` reading `element_size@24` off the record instead
+of assuming the String's stride of 1 — one emitted function serves both records, and String is the only one
+of the two for which 1 is right.
+```maxon
+function main() returns ExitCode
+	let arr = [10, 20, 30, 40, 50]
+	var sub = try arr.slice(1, endIndex: 4) otherwise return 1
+	try sub.set(0, value: 99) otherwise panic("index 0 is in bounds")
+	let a = try sub.get(0) otherwise 0
+	let b = try sub.get(1) otherwise 0
+	let c = try sub.get(2) otherwise 0
+	if a == 99 and b == 30 and c == 40 'ok'
+		return 0
+	end 'ok'
+	return 2
+end 'main'
+```
+```exitcode
+0
+```
+
 <!-- test: slice-of-a-dead-slice-still-reads -->
 Flattening, pinned by killing the record in the middle. The inner slice is cut from a slice that dies
 inside the callee, and the array both were cut from dies with it — yet the inner one still reads. This is

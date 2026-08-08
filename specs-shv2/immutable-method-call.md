@@ -68,6 +68,62 @@ end 'main'
 4
 ```
 
+<!-- disabled-test: pass-let-string-through-inline-if-error -->
+<!-- `checkImmutableArgToMutatingParam` blames an argument by NAME, and the name comes from `Parser.bareArgImmutableName`, which requires the argument to have consumed EXACTLY ONE token. `g if flag else g` is the same `let` binding but three tokens, so the blame name is empty and the check `continue`s before it ever consults the mutation mask. Needs the immutable-blame name to survive a merge (inline-if / match `gives` / `try otherwise`); the message's NOUN is undecided too — the bootstrap says "immutable 'let' variable" where shv2 names the binding. Its own rung -->
+### Passing a `let` String Through an Inline `if`
+
+⭐ **A LAUNDER IS NOT A LOOPHOLE.** `grow(g)` on a `let` is refused, so `grow(g if flag else g)` — the SAME
+binding, reached through a merge that copies nothing — must be refused too. It is not refused today: the
+blame name is keyed on the argument being a single bare token, and an inline `if` is three, so the check
+skips the argument entirely and the write goes through into a `let`.
+
+⚠ **UNTIL IT IS REFUSED THIS IS A MEMORY-SAFETY DEFECT, NOT A MESSAGE ONE**, which is why it is pinned
+here rather than left as a nicety: on x64 the accepted program writes into the literal's read-only `.rdata`
+record and takes an ACCESS VIOLATION, and on wasm32-wasi the same write succeeds into a record shared by
+every use of that literal. The expected text below is the bootstrap oracle's, measured.
+```maxon
+function grow(s String)
+	s.append("XY")
+end 'grow'
+
+function main() returns ExitCode
+	let flag = true
+	let g = "hello"
+	grow(g if flag else g)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3019: specs/fragments/immutable-method-call/pass-let-string-through-inline-if-error.test:8:2: cannot pass immutable 'let' variable to function that mutates parameter 's' (in main)
+```
+
+<!-- disabled-test: pass-let-string-through-try-otherwise-error -->
+<!-- same missing mechanism as `pass-let-string-through-inline-if-error` above — the blame name does not survive a merge. Kept separate because reaching it needs BOTH merge edges borrowed: a throwing function that RETURNS a String promotes at its `return`, which makes the try edge owned and the literal edge promoted to match, so only a borrowed try edge (an `Array with String` element) leaves the merge borrowed -->
+### Passing a `let` String Through `try … otherwise`
+
+The merge doors are shared, so `try … otherwise` must refuse exactly where the inline `if` does. ⚠ Reaching
+the borrowed merge takes care: `emitOwnedValueReturn` promotes at a `return`, so a String-returning throwing
+function gives an OWNED try edge and `promoteBorrowedMergeEdge` then promotes the fallback to match — a
+shape that was always safe. It takes a try edge that is itself a borrow, like the `Array with String`
+element `get` hands back without copying, for the merge to stay borrowed all the way to the callee.
+```maxon
+typealias StringArray = Array with String
+
+function grow(s String)
+	s.append("XY")
+end 'grow'
+
+function main() returns ExitCode
+	let g = "hello"
+	var arr = StringArray.create()
+	grow(try arr.get(0) otherwise g)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3019: specs/fragments/immutable-method-call/pass-let-string-through-try-otherwise-error.test:10:2: cannot pass immutable 'let' variable to function that mutates parameter 's' (in main)
+```
+
 <!-- test: push-on-let-alias-of-parameter-error -->
 A `let` that merely ALIASES a parameter is still a `let`. The alias carries the parameter's own value,
 so a rule derived from that value rather than from the binding would wrongly accept this.

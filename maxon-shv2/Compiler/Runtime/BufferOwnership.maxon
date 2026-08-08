@@ -108,20 +108,31 @@ export let InlineBufferCapacity = (0 - 3) as NotOwnedBufferCapacity
 // step is null-guarded.
 export let NoOwedAllocation = 0 as ParsedInt
 
-// ⭐ **WHICH SLOTS A RECORD KIND KEEPS THE ENCODING IN.** Every emitter below takes this rather than
-// a record pointer alone, because the String record and the Array record are different types that each
-// declare their own offsets (`StringRuntime`, `ArrayRuntime`) — the two sets coincide today and nothing
-// here relies on that. Each runtime builds this ONCE, from its own constants, so the shared question is
-// asked over explicit arguments and the layout knowledge stays where the layout is declared.
-export type BufferRecordSlots
-	export var bufferOffset as ByteOffset
-	export var capacityOffset as ByteOffset
-	export var parentOffset as ByteOffset
+// --- ⭐⭐ THE SHARED PREFIX OF THE TWO 48-BYTE RECORDS, DECLARED ONCE ---
+//
+// **The String record and the Array record agree on their first FIVE slots, and `__mm_cow_detach` is what
+// turned that agreement from a coincidence into a rule.** Until it existed, the emitters below took a
+// `BufferRecordSlots` value that each runtime built from its own constants, and the header here said the
+// two sets "coincide today and nothing here relies on that". Something does now: ONE emitted runtime
+// function reads these offsets out of BOTH records, so a divergence would not be a second value flowing
+// through a parameter — it would be a wrong load in a function that cannot tell which record it was
+// handed. ⇒ the offsets are declared HERE and the two runtimes DERIVE their own names from them
+// (`StringRuntime.StringBufferOffset`, `ArrayRuntime.ArrBufferOffset`, …), so the numbers exist once and
+// the parameter that could only ever carry one value is gone.
+//
+// ⚠ **THE SIXTH SLOT IS NOT SHARED AND MUST NOT BE ADDED HERE.** `@40` is `isAscii` in a String record and
+// `element_destroy` in an Array record — genuinely different facts at one offset — which is precisely why
+// the shared prefix STOPS at `@32`. `__mm_cow_detach` never touches `@40`, and that is a property to keep:
+// the day it needs to, it needs a parameter, not a sixth constant.
+export let ManagedRecordBufferOffset = 0 as ByteOffset
+export let ManagedRecordLengthOffset = 8 as ByteOffset
+export let ManagedRecordCapacityOffset = 16 as ByteOffset
+export let ManagedRecordElementSizeOffset = 24 as ByteOffset
+export let ManagedRecordParentOffset = 32 as ByteOffset
 
-	export static function create(bufferOffset ByteOffset, capacityOffset ByteOffset, parentOffset ByteOffset) returns BufferRecordSlots
-		return Self{bufferOffset: bufferOffset, capacityOffset: capacityOffset, parentOffset: parentOffset}
-	end 'create'
-end 'BufferRecordSlots'
+// Both records are six 8-byte slots. Declared here for the same reason the offsets are: `__mm_cow_detach`
+// is one function over both, and `LowerMaxonToStd` sizes the `__mm_alloc` of a literal's record from it.
+export let ManagedRecordBytes = 48 as ByteCount
 
 // `capacity < 0` — ⭐ **THE ONE HOME OF THE NOT-MINE TEST**, asked by the places that must act on it and
 // reached by no other: `__arr_cow_detach` (such a buffer cannot be WRITTEN in place, so replace it),
@@ -138,8 +149,8 @@ end 'BufferRecordSlots'
 // arms are ordered accordingly.
 //
 // ⚠ `emitBufferCannotHold` below is the same question ASKED WIDER, not a second copy of it — see there.
-export function emitBufferNotOwned(module StdModule, block IrBlock, record ValueId, slots BufferRecordSlots, ids ValueMinter) returns ValueId
-	let capacity = emitLoadField(module, block: block, record: record, offset: slots.capacityOffset, ids: ids)
+export function emitBufferNotOwned(module StdModule, block IrBlock, record ValueId, ids ValueMinter) returns ValueId
+	let capacity = emitLoadField(module, block: block, record: record, offset: ManagedRecordCapacityOffset, ids: ids)
 	let zero = emitConst(module, block: block, value: 0, ids: ids)
 	return emitCmp(module, block: block, a: capacity, b: zero, pred: StdCmpPred.lt, ids: ids)
 end 'emitBufferNotOwned'
@@ -162,8 +173,8 @@ end 'emitBufferNotOwned'
 //
 // ⚠ It deliberately does NOT also call `emitBufferNotOwned`: an `OR` whose left arm can never be the
 // deciding one is a branch no input reaches, and this file already refuses to emit those.
-export function emitBufferCannotHold(module StdModule, block IrBlock, record ValueId, slots BufferRecordSlots, requiredLen ValueId, ids ValueMinter) returns ValueId
-	let capacity = emitLoadField(module, block: block, record: record, offset: slots.capacityOffset, ids: ids)
+export function emitBufferCannotHold(module StdModule, block IrBlock, record ValueId, requiredLen ValueId, ids ValueMinter) returns ValueId
+	let capacity = emitLoadField(module, block: block, record: record, offset: ManagedRecordCapacityOffset, ids: ids)
 	return emitCmp(module, block: block, a: capacity, b: requiredLen, pred: StdCmpPred.lt, ids: ids)
 end 'emitBufferCannotHold'
 
@@ -188,21 +199,21 @@ end 'emitBufferCannotHold'
 // though the drop paths call the two back to back. A DETACH must SPLIT them across its byte copy — the
 // base is read before the record is republished and spent only after the copy — so a fused helper would
 // serve some call sites and quietly invite the ones that must not fuse them to do so.
-export function emitOwedAllocationBase(module StdModule, func IrFunction, cur IrBlock, join IrBlock, record ValueId, slots BufferRecordSlots, ids ValueMinter) returns ValueId
+export function emitOwedAllocationBase(module StdModule, func IrFunction, cur IrBlock, join IrBlock, record ValueId, ids ValueMinter) returns ValueId
 	var viewBase = module.addBlock(func, label: b"vbase")
 	var ownBase = module.addBlock(func, label: b"obase")
 
-	let notOwned = emitBufferNotOwned(module, block: cur, record: record, slots: slots, ids: ids)
+	let notOwned = emitBufferNotOwned(module, block: cur, record: record, ids: ids)
 	module.setTerminator(cur, op: StdOp.condBranch(notOwned, thenBlockId: viewBase.id, elseBlockId: ownBase.id))
 
 	let base = ids.mint()
 	join.blockArgs.push(IrBlockArg.create(base, argType: StdType.i64))
 
-	let parent = emitLoadField(module, block: viewBase, record: record, offset: slots.parentOffset, ids: ids)
+	let parent = emitLoadField(module, block: viewBase, record: record, offset: ManagedRecordParentOffset, ids: ids)
 	module.setTerminator(viewBase, op: StdOp.branch(join.id))
 	viewBase.branchEdges.push(BranchEdge.create(join.id, argIds: argsOf(parent)))
 
-	let buffer = emitLoadField(module, block: ownBase, record: record, offset: slots.bufferOffset, ids: ids)
+	let buffer = emitLoadField(module, block: ownBase, record: record, offset: ManagedRecordBufferOffset, ids: ids)
 	module.setTerminator(ownBase, op: StdOp.branch(join.id))
 	ownBase.branchEdges.push(BranchEdge.create(join.id, argIds: argsOf(buffer)))
 
@@ -237,3 +248,90 @@ export function emitReleaseOwedBase(module StdModule, func IrFunction, cur IrBlo
 
 	return cont
 end 'emitReleaseOwedBase'
+
+// --- ⭐⭐ `__mm_cow_detach(record, askElements) -> owedBase` — THE COPY-ON-WRITE ACTION, ONCE ---
+//
+// **Give this record a PRIVATE buffer of `askElements` elements holding its live ones, and hand back the
+// allocation it used to owe a release to.** It is the ACTION half of copy-on-write; the QUESTION half stays
+// exactly where it already was (`emitBufferNotOwned` / `emitBufferCannotHold` above), and each caller goes
+// on asking its own — their conditions genuinely differ and are not this function's business.
+//
+// ⚠ **THE QUESTION WAS UNIFIED HERE LONG BEFORE THE ACTION WAS, AND THAT GAP IS WHAT THIS CLOSES.** This
+// file's header records that Array and String once answered *"is this buffer mine?"* with different fields
+// at the same offset, and that the cure was to own the question here. The ACTION stayed forked anyway:
+// `__arr_cow_detach` was Array's, and String open-coded its own detach inline inside `__str_append`. Two
+// spellings of *"copy my bytes somewhere private and republish"* — the same defect one level up, and a
+// `__str_cow_detach` beside `__arr_cow_detach` would have made it permanent.
+//
+// It is `__mm_`-prefixed because it is a MANAGED-MEMORY operation over the shared record shape rather than
+// either container's: both runtimes CALL it, neither owns it. ⭐ The prefix also earns its `usesHeap` bit
+// for free (`MmRuntime.isRuntimeCallee`). It is BUILT here rather than in `MmRuntime` because it reads five
+// record fields, and `MmRuntime` deliberately knows only the allocator HEADER's geometry — its own note
+// says that geometry "is private to this file, and stays that way". Its NAME lives with the other `__mm_*`
+// names there, where the one list of them is.
+//
+// ⭐ **THE ASK IS IN ELEMENTS, NOT BYTES, AND THAT IS WHAT LETS ONE FUNCTION SERVE BOTH RECORDS.** Every
+// byte count here goes through `emitElementByteLen` against the record's OWN `element_size@24` — so a
+// String (always 1) gets `askElements` bytes, an `Array with <a wide element>` gets `askElements · es`, and
+// a PACKED array gets `ceil(askElements · bits / 8)`. `capacity@16` is published as `askElements`, the unit
+// both records already keep it in. A detach that assumed a stride of 1 would be right for every String and
+// would under-allocate every wide-element array by exactly its stride.
+//
+// ⭐ **GROWTH POLICY STAYS WITH THE CALLER, DELIBERATELY, BECAUSE THE TWO CALLERS GENUINELY DIFFER.** Array
+// SEPARATES detaching from growing — `__arr_cow_detach` asks for exactly `length`, because slack is
+// `__arr_grow`/`__arr_grown_cap`'s business — while `__str_append` FUSES the two and asks for
+// `2 * requiredLen`. That doubling is not a preference: exact growth made `var s = ""` plus a loop of
+// appends QUADRATIC (measured ×3.94/×4.07/×3.82/×3.88 per doubling, and 5.0 s to build a 288 KB string),
+// and `StringRuntime.buildStrAppend` still owns that reasoning because it still owns that decision. Pulling
+// either policy in here would have to pick one of the two, so the ask is a parameter and neither is lost.
+//
+// ⚠⚠ **IT RETURNS THE OWED BASE INSTEAD OF RELEASING IT, AND THAT IS LOAD-BEARING RATHER THAN TIDY.**
+// `emitOwedAllocationBase` and `emitReleaseOwedBase` are deliberately unfused (see their headers) because a
+// detach must SPLIT them across its byte copy — and the two callers do not agree on where the far side of
+// that split is. `__arr_cow_detach` may pay the debt the instant this returns. `__str_append` may NOT:
+// `s.append(s)` aliases its `other` operand to `self`'s OLD buffer, so the release must wait until the BLIT
+// has also finished reading, one block later. Releasing inside here would reintroduce exactly the
+// read-after-free that `string-type-2/rc-repeated-self-append` exists to guard — and, per that case's own
+// note, NO TEST COULD CATCH IT TODAY, because `__mm_free` reclaims nothing under the bump allocator. So the
+// debt comes back out as a return value and each caller pays it when its own reads are done.
+//
+// The traps `buildArrCowDetach`'s header lists are kept here rather than restated there: the old buffer is
+// loaded AFTER the owed base is read, a ZERO-LENGTH record still detaches (no early-out — `__mm_alloc(0, 0)`
+// is a legal empty box, and skipping would leave a sentinel capacity on a pointer that has no header for the
+// next reallocation to read), and the fresh buffer comes from `__mm_alloc`, which zeroes.
+export function buildMmCowDetach(module StdModule)
+	var func = IrFunction.createFromStd(MmCowDetachName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
+	var ids = ValueMinter.create(2)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var baseJoin = module.addBlock(func, label: b"basejoin")
+
+	emitParams(module, block: entry, count: 2)
+	let record = 0 as ValueId
+	let askElements = 1 as ValueId
+
+	// entry: read the allocation this record owes a release to BEFORE anything is republished — the answer is
+	// derived from the very `capacity`/`buffer`/`parent` fields the publish below overwrites.
+	let base = emitOwedAllocationBase(module, func: func, cur: entry, join: baseJoin, record: record, ids: ids)
+
+	// baseJoin: size both the ask and the live extent through the record's own stride, allocate, copy across.
+	let length = emitLoadField(module, block: baseJoin, record: record, offset: ManagedRecordLengthOffset, ids: ids)
+	let es = emitLoadField(module, block: baseJoin, record: record, offset: ManagedRecordElementSizeOffset, ids: ids)
+	let liveBytes = emitElementByteLen(module, block: baseJoin, count: length, es: es, ids: ids)
+	let askBytes = emitElementByteLen(module, block: baseJoin, count: askElements, es: es, ids: ids)
+	let bufferDtor = emitConst(module, block: baseJoin, value: TrivialElementDestroy, ids: ids)
+	let newBuf = ids.mint()
+	module.appendOp(baseJoin, op: StdOp.call(newBuf, callee: MmAllocName, args: twoArgs(askBytes, second: bufferDtor)))
+	let oldBuf = emitLoadField(module, block: baseJoin, record: record, offset: ManagedRecordBufferOffset, ids: ids)
+	var afterCopy = emitForwardCopy(module, func: func, cur: baseJoin, dest: newBuf, src: oldBuf, byteCount: liveBytes, ids: ids)
+
+	// afterCopy: publish the private buffer. `parent@32` returns to `NoOwedAllocation` — a record that has
+	// just copied its bytes into an allocation of its own owes nothing to anyone else.
+	emitStoreField(module, block: afterCopy, record: record, offset: ManagedRecordBufferOffset, value: newBuf)
+	emitStoreField(module, block: afterCopy, record: record, offset: ManagedRecordCapacityOffset, value: askElements)
+	let noParent = emitConst(module, block: afterCopy, value: NoOwedAllocation, ids: ids)
+	emitStoreField(module, block: afterCopy, record: record, offset: ManagedRecordParentOffset, value: noParent)
+	module.setTerminator(afterCopy, op: StdOp.ret(base))
+
+	module.functions.push(func)
+end 'buildMmCowDetach'

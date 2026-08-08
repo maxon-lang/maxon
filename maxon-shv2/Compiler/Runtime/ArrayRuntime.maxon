@@ -36,14 +36,21 @@
 // --- The fused 48-byte Array backing record ---
 //
 // Every field is an 8-byte slot; the six offsets are 0/8/16/24/32/40 and the record is 48 bytes. It is a
-// DISTINCT record type from a String's (whose slot@40 is `singleByteGraphemes`); do not reinterpret one as the other.
-export let ArrBufferOffset = 0 as ByteOffset
-export let ArrLengthOffset = 8 as ByteOffset
-export let ArrCapacityOffset = 16 as ByteOffset
-export let ArrElementSizeOffset = 24 as ByteOffset
-export let ArrParentOffset = 32 as ByteOffset
+// DISTINCT record type from a String's (whose slot@40 is `singleByteGraphemes`); do not reinterpret one as
+// the other.
+// ⭐ **THE FIRST FIVE ARE DERIVED FROM `BufferOwnership`, NOT DECLARED HERE**, because `__mm_cow_detach` is
+// ONE emitted function that reads them out of this record AND out of the String record. They were two
+// coincidentally-equal sets of literals until that function existed; a divergence would now be a wrong load
+// inside it rather than a second value flowing through a parameter, so the numbers live in one place and
+// these names alias them. `element_destroy@40` is genuinely this record's own — the String record's `@40` is
+// `singleByteGraphemes` — which is exactly why the shared prefix stops at `@32`.
+export let ArrBufferOffset = ManagedRecordBufferOffset
+export let ArrLengthOffset = ManagedRecordLengthOffset
+export let ArrCapacityOffset = ManagedRecordCapacityOffset
+export let ArrElementSizeOffset = ManagedRecordElementSizeOffset
+export let ArrParentOffset = ManagedRecordParentOffset
 export let ArrElementDestroyOffset = 40 as ByteOffset
-export let ArrRecordBytes = 48 as ByteCount
+export let ArrRecordBytes = ManagedRecordBytes
 
 // ⭐ **`capacity@16` AND `parent@32` CARRY THE BUFFER-OWNERSHIP ENCODING, WHICH IS NOT THIS FILE'S TO
 // DEFINE — `BufferOwnership` owns it, and the String record answers the same two questions the same
@@ -84,17 +91,6 @@ export let TrivialElementDestroy = 0 as ParsedInt
 // parser's gate compares that rule's answer against (`byteStringBlobStrideMessage`): a program that
 // declares `Byte` WIDER than one byte cannot hold both records at one type, and is refused at the literal.
 export let ByteStringElementSize = 1 as ParsedInt
-
-// ⭐ **WHERE AN ARRAY RECORD KEEPS THE BUFFER-OWNERSHIP ENCODING** (`BufferOwnership`) — the three slots
-// its two predicates read, built from THIS file's offsets so the shared question is asked over the layout
-// declared here. The zero-copy view (`.slice`/`.clone`, P1.7 COW slice B) is the second non-owned-buffer
-// kind it answers for: a view is a record of its own (its own `length@8`, `element_size@24`,
-// `element_destroy@40`) whose `buffer@0` points INTO another allocation's bytes at
-// `base + start·element_size`, whose `capacity@16` is `ViewBufferCapacity` and whose `parent@32` is that
-// allocation's BASE.
-function arrayBufferSlots() returns BufferRecordSlots
-	return BufferRecordSlots.create(ArrBufferOffset, capacityOffset: ArrCapacityOffset, parentOffset: ArrParentOffset)
-end 'arrayBufferSlots'
 
 // The `.rdata` label prefix a byte-string literal's blob registers under. `__`-prefixed so it never
 // collides with a user name and stays out of the spec goldens (`isRuntimeFunction`'s data twin), and
@@ -2085,7 +2081,7 @@ function emitArrayView(module StdModule, func IrFunction, cur IrBlock, exit IrBl
 	var baseJoin = module.addBlock(func, label: b"vwbase")
 	var shareDone = module.addBlock(func, label: b"vwshared")
 	let newRec = emitViewRecordHead(module, block: shareArm, srcBuffer: srcBuffer, start: start, sliceLen: sliceLen, elementSize: es, elementDestroy: dtor, ids: ids)
-	let base = emitOwedAllocationBase(module, func: func, cur: shareArm, join: baseJoin, record: srcRecord, slots: arrayBufferSlots(), ids: ids)
+	let base = emitOwedAllocationBase(module, func: func, cur: shareArm, join: baseJoin, record: srcRecord, ids: ids)
 	emitViewRecordTail(module, func: func, cur: baseJoin, exit: shareDone, view: newRec, base: base, ids: ids)
 	module.setTerminator(shareDone, op: StdOp.branch(exit.id))
 	shareDone.branchEdges.push(BranchEdge.create(exit.id, argIds: argsOf(newRec)))
@@ -2238,7 +2234,6 @@ function buildArrCowDetach(module StdModule)
 	var checkShared = module.addBlock(func, label: b"chkshared")
 	var checkRc = module.addBlock(func, label: b"chkrc")
 	var detach = module.addBlock(func, label: b"detach")
-	var baseJoin = module.addBlock(func, label: b"basejoin")
 	let done = module.addBlock(func, label: b"done")
 
 	emitParams(module, block: entry, count: 1)
@@ -2246,7 +2241,7 @@ function buildArrCowDetach(module StdModule)
 
 	// entry — ARM 1: a buffer that is not this record's must be replaced before any write. Asked FIRST, so
 	// the header read below is only ever reached on a pointer that HAS a header (see the ordering note).
-	let notOwned = emitBufferNotOwned(module, block: entry, record: arr, slots: arrayBufferSlots(), ids: ids)
+	let notOwned = emitBufferNotOwned(module, block: entry, record: arr, ids: ids)
 	module.setTerminator(entry, op: StdOp.condBranch(notOwned, thenBlockId: detach.id, elseBlockId: checkShared.id))
 
 	// checkShared: an owner with no buffer at all (an array that never grew) has nothing to share and
@@ -2263,27 +2258,19 @@ function buildArrCowDetach(module StdModule)
 	let viewed = emitIsSharedAllocation(module, block: checkRc, ptr: ownBuf, ids: ids)
 	module.setTerminator(checkRc, op: StdOp.condBranch(viewed, thenBlockId: detach.id, elseBlockId: done.id))
 
-	// detach: read the allocation this record owes a release to BEFORE anything is republished — the answer
-	// is derived from the very `capacity`/`buffer`/`parent` fields the publish below overwrites.
-	let base = emitOwedAllocationBase(module, func: func, cur: detach, join: baseJoin, record: arr, slots: arrayBufferSlots(), ids: ids)
+	// detach: the ASK is exactly `length` — an array's detach buys NO slack, because growth is
+	// `__arr_grow`/`__arr_grown_cap`'s separate business and a detach that also grew would give this record
+	// two growth policies. `__mm_cow_detach` sizes the allocation from the record's own `element_size@24`,
+	// so a wide or bit-packed element is converted rather than assumed.
+	let length = emitLoadField(module, block: detach, record: arr, offset: ArrLengthOffset, ids: ids)
+	let base = ids.mint()
+	module.appendOp(detach, op: StdOp.call(base, callee: MmCowDetachName, args: twoArgs(arr, second: length)))
 
-	// baseJoin: allocate a private buffer sized to the live bytes and copy them across.
-	let length = emitLoadField(module, block: baseJoin, record: arr, offset: ArrLengthOffset, ids: ids)
-	let es = emitLoadField(module, block: baseJoin, record: arr, offset: ArrElementSizeOffset, ids: ids)
-	let liveBytes = emitElementByteLen(module, block: baseJoin, count: length, es: es, ids: ids)
-	let bufferDtor = emitConst(module, block: baseJoin, value: TrivialElementDestroy, ids: ids)
-	let newBuf = ids.mint()
-	module.appendOp(baseJoin, op: StdOp.call(newBuf, callee: MmAllocName, args: twoArgs(liveBytes, second: bufferDtor)))
-	let oldBuf = emitLoadField(module, block: baseJoin, record: arr, offset: ArrBufferOffset, ids: ids)
-	var afterCopy = emitForwardCopy(module, func: func, cur: baseJoin, dest: newBuf, src: oldBuf, byteCount: liveBytes, ids: ids)
-
-	// afterCopy: publish the private buffer, then release the old allocation — in that order, and never
-	// before the copy (see trap 5). `base` is a `baseJoin` block arg, and `baseJoin` dominates here.
-	emitStoreField(module, block: afterCopy, record: arr, offset: ArrBufferOffset, value: newBuf)
-	emitStoreField(module, block: afterCopy, record: arr, offset: ArrCapacityOffset, value: length)
-	let noParent = emitConst(module, block: afterCopy, value: NoOwedAllocation, ids: ids)
-	emitStoreField(module, block: afterCopy, record: arr, offset: ArrParentOffset, value: noParent)
-	var afterRelease = emitReleaseOwedBase(module, func: func, cur: afterCopy, base: base, callee: MmDecrefName, ids: ids)
+	// The old allocation is released only now, after the shared detach has finished copying out of it — the
+	// split `emitOwedAllocationBase`/`emitReleaseOwedBase` exist to make (trap 5). An array may pay the debt
+	// the instant the detach returns; `__str_append`, the other caller, may not, which is why the base comes
+	// back as a return value instead of being released inside.
+	var afterRelease = emitReleaseOwedBase(module, func: func, cur: detach, base: base, callee: MmDecrefName, ids: ids)
 	module.setTerminator(afterRelease, op: StdOp.branch(done.id))
 
 	module.setTerminator(done, op: StdOp.retVoid)
@@ -3992,7 +3979,7 @@ function buildArrDecref(module StdModule)
 	var afterWalk = emitDestroyRangeIfManaged(module, func: func, cur: release, record: record, buffer: buffer, start: start, stop: length, elementSize: es, ids: ids)
 	module.setTerminator(afterWalk, op: StdOp.branch(releaseBuf.id))
 
-	let base = emitOwedAllocationBase(module, func: func, cur: releaseBuf, join: baseJoin, record: record, slots: arrayBufferSlots(), ids: ids)
+	let base = emitOwedAllocationBase(module, func: func, cur: releaseBuf, join: baseJoin, record: record, ids: ids)
 	var afterRelease = emitReleaseOwedBase(module, func: func, cur: baseJoin, base: base, callee: MmDecrefName, ids: ids)
 	module.setTerminator(afterRelease, op: StdOp.branch(freeRec.id))
 

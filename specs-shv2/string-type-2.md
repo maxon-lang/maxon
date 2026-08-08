@@ -839,6 +839,110 @@ xy|2
 q|1
 ```
 
+### String literals are COPY-ON-WRITE
+
+⭐⭐ **A STRING LITERAL'S BYTES ARE SHARED; ITS RECORD IS NOT.** Every use of `"hello"` in a program reads
+ONE immortal `.rdata` blob — the bytes are interned, so a literal written a hundred times costs one copy of
+its text. What each use gets of its OWN is the 48-byte record that describes those bytes (`buffer@0`,
+`length@8`, `capacity@16`), heap-allocated per use over the shared blob with `capacity@16 =
+RdataBufferCapacity`. The first write through any such record detaches it onto a private buffer
+(`BufferOwnership.emitBufferCannotHold` is unconditionally true against a negative capacity), and the blob
+is left untouched for every other use.
+
+⚠ **BOTH HALVES OF THAT ARE LOAD-BEARING, AND THE RECORD HALF IS WHAT WAS MISSING.** `__str_append` already
+detached the BUFFER; what it had nowhere to publish the detach INTO was a writable record. A literal's
+record used to live in `.rdata` alongside its blob and be DEDUPED across every use, so the write-back of
+`buffer@0`/`capacity@16`/`length@8` had two separate defects at once, and which one you saw depended
+entirely on the target:
+
+- **x64/arm64** — the record is in a read-only image section, so the store faulted. `grow("hello")` was an
+  ACCESS VIOLATION (`0xC0000005`, exit 3221225477) with an empty stdout.
+- **wasm32-wasi** — linear memory has no read-only segment, so the identical store SUCCEEDED, and because
+  every use shared one record the write was visible through all of them: `grow("hello")` followed by an
+  entirely independent `print("hello")` printed `helloXY`. Silent corruption of a shared constant, with the
+  leak gate's orphaned-buffer 101 as the only signal.
+
+⇒ the cases below run on EVERY target deliberately. A check that only watches for the fault cannot see the
+wasm half, and the wasm half is the one that returns a wrong ANSWER.
+
+<!-- disabled-test: string-literal-through-a-mutating-parameter -->
+<!-- a String literal's 48-byte RECORD is still immortal `.rdata` (`LowerMaxonToStd.lowerStringLiteral`), so `__str_append`'s detach has nowhere writable to publish `buffer@0`/`capacity@16`/`length@8`. Needs the literal to lower to a HEAP record over the immortal blob, as `lowerConstArrayLiteral` already does for `b"…"` — which makes every literal an owned temp and pulls in six ownership sites (`scanRuntimeUsage`'s `usesHeap` arm, the character-literal retype, the non-dominating match-pattern test block, `ModuleInit`'s drop-less synthesized functions, `emitManagedConstant`, interpolation fragments). Its own rung -->
+### A Literal Passed to a Mutating Parameter
+The minimal shape. `grow` writes through a borrowed `String` parameter, and the argument is a bare literal —
+so nothing about the CALL SITE is unusual and nothing about the callee is: the record it is handed simply
+has to be one a write may land in.
+```maxon
+function grow(s String)
+	s.append("XY")
+end 'grow'
+
+function main() returns ExitCode
+	grow("hello")
+	print("survived\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+survived
+```
+
+<!-- disabled-test: string-literal-bytes-outlive-a-write-through-another-use -->
+<!-- same missing mechanism as `string-literal-through-a-mutating-parameter` above: the literal RECORD is immortal `.rdata` AND deduped across uses, so there is no per-use record for a detach to land in. This is the case that pins the wasm32-wasi half of the defect (a successful write into a shared record rather than a fault), so it must go green on BOTH lanes -->
+### A Write Through One Use Leaves Every Other Use Alone
+⭐ **THIS IS THE COW PROPERTY ITSELF, and it is the case the x64 fault could never have shown.** The two
+`"hello"`s share one interned blob; the first is written through and must detach onto a private buffer,
+which leaves the second reading the original bytes. On wasm this case printed `helloXY` before the record
+became per-use — the shared record had been repointed at the grown buffer, so a use that never wrote saw
+the write anyway.
+```maxon
+function grow(s String)
+	s.append("XY")
+end 'grow'
+
+function main() returns ExitCode
+	grow("hello")
+	print("hello\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+hello
+```
+
+<!-- disabled-test: string-literal-through-two-call-levels -->
+<!-- same missing mechanism as `string-literal-through-a-mutating-parameter` above. Kept separate because it is the case that refutes a NARROWER cure: promoting the literal at the immediate call site would fix the one-level case and still fault here, where the record is written two frames from the literal that produced it -->
+### A Literal Through Two Call Levels
+The borrow is transitive: `outer` passes its own borrowed parameter on to `grow`, so the record that is
+finally written is two frames away from the literal that produced it. Nothing along the way copies it, which
+is the point — a fix that worked by promoting at the immediate call site would still fault here.
+```maxon
+function grow(s String)
+	s.append("XY")
+end 'grow'
+
+function outer(t String)
+	grow(t)
+end 'outer'
+
+function main() returns ExitCode
+	outer("hello")
+	print("hello\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+hello
+```
+
 <!-- test: tobytearray-is-independent-of-an-owned-source -->
 `toByteArray()` returns a NEW INDEPENDENT `ByteArray`. Writing to it must not touch the string.
 The copy-on-write view behind it is an optimisation, not the contract.

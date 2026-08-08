@@ -75,6 +75,13 @@ export let MmDecrefName = b"__mm_decref"
 export let MmFreeName = b"__mm_free"
 export let MmLeakCheckName = b"__mm_leak_check"
 
+// ⭐ **THE COPY-ON-WRITE DETACH, SHARED BY THE STRING AND ARRAY RECORDS** — `__arr_cow_detach` and
+// `__str_append` both call it rather than each spelling the detach itself. Its NAME lives here, with the
+// other `__mm_*` names, because this is the one list of them and `isRuntimeCallee`'s prefix rule is stated
+// three lines below; its BODY is built in `BufferOwnership`, which owns the record layout it reads and the
+// ownership encoding it republishes. See `buildMmCowDetach` for why it is an `__mm_` operation at all.
+export let MmCowDetachName = b"__mm_cow_detach"
+
 // ⭐ **THE NAME OF A MANAGED-PAYLOAD UNION'S SYNTHESIZED DESTRUCTOR — `__destruct_<UnionName>`** (P1.3
 // slice 2). It is `__`-prefixed, so `isCompilerInternalCallee` routes its call past the user-function
 // checks — no file declares it. ONE speller, so the DROP site (`Parser.decrefCalleeFor`), the USAGE scan
@@ -281,6 +288,16 @@ export function installMmRuntime(module StdModule, usage RuntimeUsage)
 	if usage.usesRetain 'retain'
 		buildMmRetain(module)
 	end 'retain'
+
+	// ⚠ `__mm_cow_detach` IS CONDITIONAL under EITHER of its two callers' bits, for the same reason
+	// `__mm_incref` is: its consumers sit in two different files (`__arr_cow_detach` under `usesArray`,
+	// `__str_append` under `usesStrAppend`), and a program that reaches neither would carry it dead. Built
+	// here rather than by whichever runtime happens to be installed first — installing it twice would emit
+	// two copies of one function, and installing it from one side only would leave the other's call
+	// unresolved in a program that uses just that side.
+	if usage.usesArray or usage.usesStrAppend 'cowDetach'
+		buildMmCowDetach(module)
+	end 'cowDetach'
 end 'installMmRuntime'
 
 // One i64 parameter — the shape five of the six runtime functions share. Exported: the String

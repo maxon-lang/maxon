@@ -22,25 +22,35 @@
 // `buffer@0` is the ABSOLUTE VA of the byte blob — emitted as a PLACEHOLDER 0 and patched by the PE
 // writer once `.rdata`'s RVA is known (a fixed-base image, so the VA is compile-time computable). The
 // blob is a SEPARATE `.rdata` entry, NUL-terminated, and `length@8` EXCLUDES the NUL.
-export let StringBufferOffset = 0 as ByteOffset
-export let StringLengthOffset = 8 as ByteOffset
+// ⭐ **DERIVED FROM `BufferOwnership`, NOT DECLARED HERE.** The first five slots are the shared prefix the
+// Array record also uses, and `__mm_cow_detach` is ONE emitted function that reads them out of BOTH — so
+// the numbers exist once and these names alias them. Only `isAscii@40` below is genuinely this record's own
+// (the Array record's `@40` is `element_destroy`), which is why the shared prefix stops at `@32`.
+export let StringBufferOffset = ManagedRecordBufferOffset
+export let StringLengthOffset = ManagedRecordLengthOffset
 
 // Exported for `Parser.emitStringInterp`, which WRITES all six fields of an owned heap String's record
 // (the literal path here only ever writes rdata). One set of offsets, read by the runtime and written by
 // the interpolation lowering, so a reader and a writer of the same record cannot drift.
-export let StringCapacityOffset = 16 as ByteOffset
-export let StringElementSizeOffset = 24 as ByteOffset
-export let StringParentPtrOffset = 32 as ByteOffset
+// ⭐ **THESE THREE ARE DERIVED FROM `BufferOwnership`, NOT DECLARED HERE**, because `__mm_cow_detach` is ONE
+// emitted function that reads them out of this record AND out of the Array record. They were two
+// coincidentally-equal sets of literals until that function existed; a divergence would now be a wrong load
+// inside it rather than a second value flowing through a parameter, so the numbers live in one place and
+// these names alias them. `@40` below is genuinely this record's own — the Array record's `@40` is
+// `element_destroy` — which is exactly why the shared prefix stops at `@32`.
+export let StringCapacityOffset = ManagedRecordCapacityOffset
+export let StringElementSizeOffset = ManagedRecordElementSizeOffset
+export let StringParentPtrOffset = ManagedRecordParentOffset
 
 // ⭐⭐ **SLOT@40 IS `singleByteGraphemes` — *EVERY GRAPHEME IN THIS STRING IS EXACTLY ONE BYTE* — AND IT
-// USED TO BE THE STRICTLY WEAKER `singleByteGraphemes`.** The corpus field this record IS
+// USED TO BE THE STRICTLY WEAKER `isAscii`.** The corpus field this record IS
 // (`stdlib/String.maxon:86`'s `singleByteGraphemesFlag`) has always carried the stronger fact, and its own
 // declaration records the cost of the confusion: *"this field used to say only 'is ASCII', and ten methods
 // read THAT as 'one byte per character' … all ten split the cluster"*. **CR+LF is a SINGLE cluster under
 // UAX #29 GB3**, so an all-ASCII string is not necessarily one byte per grapheme.
 //
 // ⚠ **WHILE THE TWO MEANINGS DISAGREED, `String.hasSingleByteGraphemes()` HAD TO ANSWER A CONSERVATIVE
-// `false` OUTRIGHT** — serving `singleByteGraphemes@40` there would have made the corpus's `countGraphemes` take the
+// `false` OUTRIGHT** — serving `isAscii@40` there would have made the corpus's `countGraphemes` take the
 // shortcut and return the BYTE length, 2, for a CR+LF string where every other path in all three compilers
 // says 1. That refusal cost SPEED on long ASCII strings (measured by the corpus at ×2.4 rising to ×6.5 on
 // `findFirst`/`findLast`/`slice-by-length`), and `Parser.dispatchStringMethod` named the cure exactly:
@@ -51,7 +61,7 @@ export let StringParentPtrOffset = 32 as ByteOffset
 // each byte ON ITS OWN, so it survives both slicing and concatenation and `__str_append` may simply AND the
 // two flags. *"No CRLF pair"* would not: `"a\r"` and `"\nb"` each lack one and their join has one.
 export let StringSingleByteGraphemesOffset = 40 as ByteOffset
-export let StringRecordBytes = 48 as ByteCount
+export let StringRecordBytes = ManagedRecordBytes
 let StringFieldBytes = 8 as ByteCount
 
 // `element_size = 1` — a String's elements are bytes.
@@ -434,10 +444,6 @@ export let StrCloneName = b"__str_clone"
 // That test was this file's own third spelling of "is this buffer mine?" — and, at the same offset as the
 // Array record's `parent@32`, it meant the OPPOSITE thing (there, *someone else's allocation I owe a
 // release to*). Now `parent@32` means one thing in both records and nothing here has to be told which.
-function stringBufferSlots() returns BufferRecordSlots
-	return BufferRecordSlots.create(StringBufferOffset, capacityOffset: StringCapacityOffset, parentOffset: StringParentPtrOffset)
-end 'stringBufferSlots'
-
 // True iff every GRAPHEME of these bytes is exactly one byte — the `singleByteGraphemes@40` scan, run once
 // per distinct literal at lower time (the cold path), never per value.
 //
@@ -2061,7 +2067,6 @@ function buildStrAppend(module StdModule)
 	var entry = module.addBlock(func, label: b"entry")
 	var inPlace = module.addBlock(func, label: b"inPlace")
 	var detach = module.addBlock(func, label: b"detach")
-	var baseJoin = module.addBlock(func, label: b"baseJoin")
 	var blit = module.addBlock(func, label: b"blit")
 	var clearSingleByte = module.addBlock(func, label: b"clearSingleByte")
 	let done = module.addBlock(func, label: b"done")
@@ -2073,12 +2078,11 @@ function buildStrAppend(module StdModule)
 	// entry: load the fields every block reads (entry dominates all of them, so these need no phi),
 	// compute the required length, and branch on whether the buffer already has room for it.
 	let selfLen = emitLoadField(module, block: entry, record: selfPtr, offset: StringLengthOffset, ids: ids)
-	let selfBuf = emitLoadField(module, block: entry, record: selfPtr, offset: StringBufferOffset, ids: ids)
 	let otherLen = emitLoadField(module, block: entry, record: otherPtr, offset: StringLengthOffset, ids: ids)
 	let otherBuf = emitLoadField(module, block: entry, record: otherPtr, offset: StringBufferOffset, ids: ids)
 	let otherSingleByte = emitLoadField(module, block: entry, record: otherPtr, offset: StringSingleByteGraphemesOffset, ids: ids)
 	let requiredLen = emitBin(module, block: entry, a: selfLen, b: otherLen, opcode: StdBinOpcode.add, ids: ids)
-	let tooSmall = emitBufferCannotHold(module, block: entry, record: selfPtr, slots: stringBufferSlots(), requiredLen: requiredLen, ids: ids)
+	let tooSmall = emitBufferCannotHold(module, block: entry, record: selfPtr, requiredLen: requiredLen, ids: ids)
 	module.setTerminator(entry, op: StdOp.condBranch(tooSmall, thenBlockId: detach.id, elseBlockId: inPlace.id))
 
 	// The allocation the blit owes a release to once it has finished reading: the pre-detach one, or none
@@ -2090,26 +2094,19 @@ function buildStrAppend(module StdModule)
 	module.setTerminator(inPlace, op: StdOp.branch(blit.id))
 	inPlace.branchEdges.push(BranchEdge.create(blit.id, argIds: argsOf(owesNothing)))
 
-	// detach: read what the record owes BEFORE the publish below overwrites the fields that answer it.
-	let base = emitOwedAllocationBase(module, func: func, cur: detach, join: baseJoin, record: selfPtr, slots: stringBufferSlots(), ids: ids)
-
-	// baseJoin: allocate a fresh external buffer (destructor 0 — raw bytes), copy the live bytes across,
-	// and publish it. The ask is GEOMETRIC — see the growth note above — and the SAME value is both
-	// allocated and published as `capacity@16`, so the field says exactly how far the next append may
-	// write in place. `parent@32` returns to `NoOwedAllocation`: a record that has just copied its bytes
-	// into an allocation of its own owes nothing to anyone else, exactly as `__arr_cow_detach` leaves it.
-	let zeroDtor = emitConst(module, block: baseJoin, value: 0, ids: ids)
-	let grownLen = emitBin(module, block: baseJoin, a: requiredLen, b: requiredLen, opcode: StdBinOpcode.add, ids: ids)
-	let newBuf = ids.mint()
-	module.appendOp(baseJoin, op: StdOp.call(newBuf, callee: MmAllocName, args: twoArgs(grownLen, second: zeroDtor)))
-	let copied = ids.mint()
-	module.appendOp(baseJoin, op: StdOp.call(copied, callee: StrCopyName, args: threeArgs(newBuf, second: selfBuf, third: selfLen)))
-	emitStoreField(module, block: baseJoin, record: selfPtr, offset: StringBufferOffset, value: newBuf)
-	emitStoreField(module, block: baseJoin, record: selfPtr, offset: StringCapacityOffset, value: grownLen)
-	let noParent = emitConst(module, block: baseJoin, value: NoOwedAllocation, ids: ids)
-	emitStoreField(module, block: baseJoin, record: selfPtr, offset: StringParentPtrOffset, value: noParent)
-	module.setTerminator(baseJoin, op: StdOp.branch(blit.id))
-	baseJoin.branchEdges.push(BranchEdge.create(blit.id, argIds: argsOf(base)))
+	// detach: the shared copy-on-write action. The ask is GEOMETRIC — see the growth note above — and it is
+	// passed in ELEMENTS, which for a String (`element_size@24 == 1`) is the same number as bytes; the same
+	// value lands in `capacity@16`, so the field says exactly how far the next append may write in place.
+	//
+	// ⚠ The owed base comes BACK rather than being released inside, and this caller is the reason that is so:
+	// `s.append(s)` aliases `otherBuf` to `self`'s OLD buffer, so the release may not happen until the BLIT
+	// below has also finished reading. It rides a block arg into `blit` (0 on the in-place edge) and is paid
+	// there. `__arr_cow_detach`, which has no such aliasing, pays it immediately instead.
+	let grownLen = emitBin(module, block: detach, a: requiredLen, b: requiredLen, opcode: StdBinOpcode.add, ids: ids)
+	let base = ids.mint()
+	module.appendOp(detach, op: StdOp.call(base, callee: MmCowDetachName, args: twoArgs(selfPtr, second: grownLen)))
+	module.setTerminator(detach, op: StdOp.branch(blit.id))
+	detach.branchEdges.push(BranchEdge.create(blit.id, argIds: argsOf(base)))
 
 	// blit: append `other`'s bytes at the end of `self`'s CURRENT buffer (reloaded, since detach may have
 	// replaced it) using the OLD length as the write cursor, then publish the new length. Reached in place
@@ -2177,7 +2174,7 @@ function buildStrDecref(module StdModule)
 	// arm holding `NoOwedAllocation`, which the null guard inside the release step turns into an ordinary
 	// answer rather than a case. It is the SAME pair `__arr_decref` uses, so a String and an Array cannot
 	// disagree about what a record owns.
-	let base = emitOwedAllocationBase(module, func: func, cur: release, join: baseJoin, record: record, slots: stringBufferSlots(), ids: ids)
+	let base = emitOwedAllocationBase(module, func: func, cur: release, join: baseJoin, record: record, ids: ids)
 	var afterRelease = emitReleaseOwedBase(module, func: func, cur: baseJoin, base: base, callee: MmDecrefName, ids: ids)
 	module.setTerminator(afterRelease, op: StdOp.branch(freeRec.id))
 
@@ -3039,7 +3036,7 @@ function emitStringBytesAllocation(module StdModule, func IrFunction, cur IrBloc
 	var immortal = module.addBlock(func, label: b"bvrdata")
 	var inlineBytes = module.addBlock(func, label: b"bvinline")
 
-	let owedBase = emitOwedAllocationBase(module, func: func, cur: cur, join: owedJoin, record: record, slots: stringBufferSlots(), ids: ids)
+	let owedBase = emitOwedAllocationBase(module, func: func, cur: cur, join: owedJoin, record: record, ids: ids)
 
 	let base = ids.mint()
 	join.blockArgs.push(IrBlockArg.create(base, argType: StdType.i64))
