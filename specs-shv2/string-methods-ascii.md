@@ -1,7 +1,7 @@
 ---
 feature: string-methods-ascii
 status: experimental
-keywords: [string, ascii, bytes, startsWith, endsWith, contains, toLower, toUpper, replace, split]
+keywords: [string, ascii, bytes, startsWith, endsWith, contains, toLower, toUpper, replace, replaceFirst, split]
 category: types
 ---
 
@@ -33,19 +33,30 @@ Two consequences follow from "bytes and ASCII only", and they are what these tes
 `toLower`/`toUpper`/`replace` return a NEW `String` and `split` a NEW `Array with String` whose elements
 are new `String`s; the receiver is never modified and never aliased by a result.
 
-⚠ **`startsWith` AND `endsWith` ARE SERVED BY `stdlib/String.maxon` AND THE OTHER FIVE ARE SHV2's OWN,
-AND EVERY ANSWER BELOW IS THE SAME ON EITHER SIDE OF THAT LINE.** The two were struck from
-`Parser.stringSurfaceMemberNames`, which is the whole of what moved them: an unrostered member of a byte
-record is put to the corpus, and the corpus already declared both. This file is where that is checked to
-have changed NOTHING a program can observe — which is the only claim a retirement is allowed to make.
+⚠ **SIX OF THE SEVEN ARE SERVED BY `stdlib/String.maxon` AND ONLY `contains` AND `split` ARE SHV2's OWN,
+AND EVERY ANSWER BELOW IS THE SAME ON EITHER SIDE OF THAT LINE.** `startsWith`/`endsWith` went first (W49
+wave 1), then `toLower`/`toUpper`/`replace`/`replaceFirst` (wave 2). Each was struck from
+`Parser.stringSurfaceMemberNames`, which is the whole of what moved it: an unrostered member of a byte
+record is put to the corpus, and the corpus already declared every one. This file is where that is checked
+to have changed NOTHING a program can observe — which is the only claim a retirement is allowed to make.
 
 The one thing it genuinely does change is the OWNERSHIP ROUTE. A synthesized arm emits an inline runtime
 call and borrows its argument; a corpus call goes through the ordinary call door, which is where a result
 is minted, an owned temporary is enrolled and a consumed parameter is applied. Both end up borrowing
 here — the caller drops the temporary after the call returns — but they arrive there by different code,
-so the last two cases pin the two shapes that could tell them apart: an argument that is an owned
-TEMPORARY with nobody else to free it, and an argument that is a live BINDING the caller uses again
-afterwards.
+so the last four cases pin the shapes that could tell them apart: an argument that is an owned TEMPORARY
+with nobody else to free it, an argument that is a live BINDING the caller uses again afterwards, and —
+for the two-argument replacements, whose corpus bodies hold a live view of the receiver's bytes across an
+append of the replacement — an argument that IS the receiver.
+
+⚠⚠ **WAVE 2 IS ALSO WHERE A RETIREMENT FIRST REACHED A DOOR NOTHING HAD EVER WALKED THROUGH.** The corpus
+`toLower`/`toUpper` are `mapAsciiCase`, which maps a private copy through `String.byteAt` and
+`String.setByte`, and `setByte` had no other caller in the whole corpus. shv2 served it by writing through
+`__str_bytes_view(self)` — a NON-OWNING view record — so the write copy-on-write-detached into a private
+buffer that died with the temporary, and every case conversion in this file returned its receiver verbatim
+the moment the retirement landed. The arm now hands the write the String's OWN record. That is the reason
+`case-conversion-does-not-mutate-receiver` and `case-conversion-on-let-binding` (in `string-type-2.md`)
+are not redundant with the cases here: they ask about the RECEIVER, and these ask about the RESULT.
 
 ## Tests
 
@@ -442,4 +453,89 @@ first
 second
 6
 [prefix]
+```
+
+<!-- test: replacement-arguments-in-both-ownership-shapes -->
+### A replacement's two arguments, once as owned temporaries and once as live bindings
+`replace`/`replaceFirst` are the two-argument members, so a retirement puts TWO values through the call
+door per call instead of one. `piece` returns a freshly built `String`, so the first pair are owned
+temporaries with no binding behind them — a second owner leaks one (an exit code, not a printed
+difference) and a double drop frees bytes the builder is still copying. The second pair are live
+bindings, read and printed after both calls, which is what proves the corpus body BORROWED them: the
+receiver is a `let` throughout, so nothing here may write through anything either.
+
+The receiver is read again between the calls, because the corpus `replace` holds a live view of the
+receiver's own bytes (`addressableBytes()`) across every append into its builder.
+```maxon
+typealias Tag = int(0 to 9)
+
+function piece(n Tag) returns String
+	var s = "p"
+	s.append("{n}")
+	return s
+end 'piece'
+
+function main() returns ExitCode
+	let s = "p1-p2-p1"
+	print("[{s.replace(piece(1), with: piece(9))}]\n")
+	print("[{s.replaceFirst(piece(2), with: piece(8))}]\n")
+	print("[{s}]\n")
+	let needle = "p1"
+	let wide = "WIDE"
+	print("[{s.replace(needle, with: wide)}]\n")
+	print("[{s.replaceFirst(needle, with: wide)}]\n")
+	print("{needle.byteLength()}{wide.byteLength()}\n")
+	print("[{needle}][{wide}]\n")
+	var grown = "MiXeD"
+	grown.append("-CaSe-TAIL")
+	print("[{grown.toLower()}][{grown.toUpper()}][{grown}]\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+[p9-p2-p9]
+[p1-p8-p1]
+[p1-p2-p1]
+[WIDE-p2-WIDE]
+[WIDE-p2-p1]
+24
+[p1][WIDE]
+[mixed-case-tail][MIXED-CASE-TAIL][MiXeD-CaSe-TAIL]
+```
+
+<!-- test: a-replacement-argument-that-is-the-receiver -->
+### A needle or a replacement that IS the receiver
+The corpus `replace` takes `addressableBytes()` of the receiver ONCE, before its loop, and then appends
+`with` into a builder inside it. When `with` is the receiver, that append reads the very bytes the live
+view is over while the builder reallocates around them — so this is the one argument shape where a
+borrow that was really a move, or a view that outlived its String, shows up as wrong OUTPUT rather than
+only as a leak. All four spellings are here: needle-is-receiver (a whole-string match), replacement-is-
+receiver, both, and the two degenerate answers (`clone`) an empty or absent needle takes.
+```maxon
+function main() returns ExitCode
+	let s = "aXbXc"
+	print("[{s.replace(s, with: s)}]\n")
+	print("[{s.replace("X", with: s)}]\n")
+	print("[{s.replaceFirst("X", with: s)}]\n")
+	print("[{s.replace("", with: "Q")}]\n")
+	print("[{s.replaceFirst("zz", with: "Q")}]\n")
+	print("[{s.replace("aXbXc", with: "")}]\n")
+	print("[{s}]\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+[aXbXc]
+[aaXbXcbaXbXcc]
+[aaXbXcbXc]
+[aXbXc]
+[aXbXc]
+[]
+[aXbXc]
 ```

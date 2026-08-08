@@ -150,12 +150,17 @@ export let IntToStringScratchBytes = 21 as ParsedInt
 export let UIntToStringScratchBytes = 20 as ParsedInt
 
 // `__bool_to_string` renders "true" (4) or "false" (5). The ASCII bytes of both, and the two lengths.
+//
+// ⚠ `AsciiLowerA` was `export`ed for a SECOND reader — the parser's `toLower`/`toUpper` arms, which handed
+// the gated range and the shift to `__str_map_case`. Those retired onto `stdlib/String.maxon` in W49 wave 2
+// and the five constants that served them went with them, leaving this the byte `a` of "false" and nothing
+// else. Non-exported again, so the file that owns the only reader owns the only name.
 let AsciiLowerT = 116 as ParsedInt
 let AsciiLowerR = 114 as ParsedInt
 let AsciiLowerU = 117 as ParsedInt
 let AsciiLowerE = 101 as ParsedInt
 let AsciiLowerF = 102 as ParsedInt
-export let AsciiLowerA = 97 as ParsedInt
+let AsciiLowerA = 97 as ParsedInt
 let AsciiLowerL = 108 as ParsedInt
 let AsciiLowerS = 115 as ParsedInt
 let BoolTrueLength = 4 as ParsedInt
@@ -259,19 +264,20 @@ export let StrDecrefName = b"__str_decref"
 //     reject, with the window expressed as a start position rather than an `(offset, len)` pair: the three
 //     loop callers all walk a tail, which is what `startPos` says and what an explicit length would only
 //     re-encode.
-//   * `__str_starts_with` / `__str_ends_with` / `__str_contains` — the three predicates.
-//   * `__str_map_case(self, lo, hi, delta)` — ONE graph for `toLower` AND `toUpper` (the stdlib's
-//     `mapAsciiCase`, `:589-616`), the parser supplying the gate and the shift. ⭐ It transforms an
-//     INDEPENDENT COPY and never the receiver: `let b = a.toLower()` lowercasing `a` too is the exact bug
-//     `specs-shv2/string-type-2.md`'s `case-conversion-does-not-mutate-receiver` was written against.
-//   * `__str_replace(self, old, with)` — the stdlib's TWO-PASS shape (`:448-517`): count the matches, then
-//     build into ONE exactly-sized allocation. ⚠ NOT its `StringBuilder`, which shv2 does not have and is
-//     not getting here — the two-pass count is precisely what makes a builder unnecessary, since the final
-//     size is known before a byte is written and nothing ever grows.
+//   * `__str_contains(self, needle)` — the predicate, and the LAST of the three: `__str_starts_with` and
+//     `__str_ends_with` retired with their members in W49 wave 1.
 //   * `__str_split(self, delim, arr)` — fills a CALLER-CREATED `Array with String` (the stdlib's `:557-587`).
 //     The array is created by the PARSER through `emitArrayCreateOp`, the one array-creation door, so
 //     `split` cannot disagree with a literal about a `Array with String`'s element size or its
 //     `element_destroy@40` stamp; this function only pushes.
+//
+// ⚠ **THE SLICE IS DOWN TO TWO MEMBERS, AND WHAT LEFT IT DID NOT DIE — IT WENT HOME.** `__str_map_case`
+// (`toLower`/`toUpper`) and `__str_replace`/`__str_replace_first` were listed here until W49 wave 2, when
+// those four members were struck from `Parser.stringSurfaceMemberNames` and the corpus bodies they had been
+// transcribed FROM took over serving them. This block used to argue that shv2 "does not have and is not
+// getting" the reference's `StringBuilder` because a two-pass count makes it unnecessary — that argument
+// was about a transcription, and the transcription is gone: the corpus `replace` builds through
+// `StringBuilder` (`stdlib/String.maxon:795`) and shv2 now compiles it as ordinary Maxon.
 //
 // ⚠ **EVERY SEGMENT / RESULT IS A FRESH OWNED INLINE STRING** built through `emitBuildOwnedInlineString`,
 // the one fused-record encoder, so each is independently droppable through `__str_decref` and none of them
@@ -288,19 +294,19 @@ export let StrFindName = b"__str_find"
 // caller wants the whole haystack, and a backward window has no consumer to shape it.
 export let StrRFindName = b"__str_rfind"
 export let StrContainsName = b"__str_contains"
-export let StrMapCaseName = b"__str_map_case"
-export let StrReplaceName = b"__str_replace"
 export let StrSplitName = b"__str_split"
 
-// ⭐ **THE P1.8 SLICE E ENTRY POINTS.**
-//   * `__str_replace_first(self, old, with)` — the stdlib's `replaceFirst` (`:565-599`). A SEPARATE graph
-//     from `__str_replace` on the reference's own argument: with exactly one match the final size is known
-//     outright, so both of `replace`'s loops disappear. See `buildStrReplaceFirst`.
-//   * `__str_from_bytes(arr)` — `String.from(bytes)` (`:119-121`), the one exported `String` static. It
-//     COPIES where the reference shares a `__ManagedMemory`; see `buildStrFromBytes` for why shv2 cannot.
-// Both are `__`-prefixed compiler-internal (no E3004, no signature slotting) and neither is
-// `__mm_`-prefixed, so each declares its own transitive floor in `closeStringMethodNeeds`.
-export let StrReplaceFirstName = b"__str_replace_first"
+// ⚠ **`__str_map_case`, `__str_replace` AND `__str_replace_first` WERE HERE AND WENT WITH THEIR BUILDERS**
+// (W49 wave 2). `toLower`/`toUpper`/`replace`/`replaceFirst` are the CORPUS's now — struck from
+// `Parser.stringSurfaceMemberNames` — so nothing names any of the three and a constant for them could only
+// ever spell a callee no module emits. The corpus bodies behind them reach `byteAt`, `setByte`,
+// `addressableBytes` and `__ManagedMemory.slice`, whose doors are all still shv2's.
+//
+// ⭐ **THE P1.8 SLICE E ENTRY POINT THAT REMAINS.** `__str_from_bytes(arr)` — `String.from(bytes)`
+// (`:119-121`), the one exported `String` static. It COPIES where the reference shares a
+// `__ManagedMemory`; see `buildStrFromBytes` for why shv2 cannot. It is `__`-prefixed compiler-internal (no
+// E3004, no signature slotting) and not `__mm_`-prefixed, so it declares its own transitive floor in
+// `closeStringMethodNeeds`.
 export let StrFromBytesName = b"__str_from_bytes"
 
 // ⭐⭐ **`__str_of_buffer(srcRecord, singleByteGraphemes) -> String` — THE ENVELOPE COLLAPSE'S CONSTRUCTOR:
@@ -396,25 +402,14 @@ end 'isThrowingStringRuntimeCallee'
 // error on purpose.** The stdlib spells both searches `throws StringError.notFound`, and a Std graph CAN
 // throw — `StdOp.errorReturn`'s dual-register flag is exactly that, and `__strix_first`/`__strix_last` use
 // it one file over. What these two must not do is throw, because most of their callers are NOT throwing:
-// `contains` wants a bool, `replace` and `split` walk a tail until the search stops finding, and a `tryCall`
-// at each of those sites would be a control-flow join per iteration to answer a question the caller already
-// treats as ordinary. So the BYTE search answers in the byte domain and the LANGUAGE-level `findFirst`/
+// `contains` wants a bool, `split` walks a tail until the search stops finding, and a `tryCall` at either of
+// those sites would be a control-flow join per iteration to answer a question the caller already treats as
+// ordinary. So the BYTE search answers in the byte domain and the LANGUAGE-level `findFirst`/
 // `findLast` do the one sentinel→throw translation, in `buildStringIndexSearch` and nowhere else.
 // A byte position is non-negative by construction, so `-1` is outside the answer domain rather than inside
 // it, and every caller tests `>= 0`. Named, so the call sites and the two producers cannot drift on which
 // number means "nothing here".
 let StrFindNotFound = -1 as ParsedInt
-
-// ASCII case folding: `A`..`Z` (65..90) and `a`..`z` (97..122) sit a fixed distance apart, so `toLower` and
-// `toUpper` differ ONLY in which range they gate on and the SIGN of the shift. That is why one
-// `__str_map_case` graph serves both and the parser supplies the three numbers — and why a byte outside the
-// gated range is left ALONE, which is the whole reason a non-ASCII (high-bit) byte passes through a case
-// conversion unharmed. `AsciiLowerA` is shared with `__bool_to_string`'s "false": it is the byte `a` in both.
-export let AsciiUpperA = 65 as ParsedInt
-export let AsciiUpperZ = 90 as ParsedInt
-export let AsciiLowerZ = 122 as ParsedInt
-export let AsciiToLowerDelta = 32 as ParsedInt
-export let AsciiToUpperDelta = -32 as ParsedInt
 
 // `__str_clone(src) -> newStr` — a String's DEEP CLONE (P1.7 slice 3b-vi-b): a fresh OWNED heap String, an
 // independent copy of `src` that is droppable through `__str_decref` without touching `src`. The `(box) ->
@@ -684,18 +679,16 @@ export type RuntimeUsage
 	// search loop. It calls `__str_range_eq` inside its synthesized body, which this Maxon-module scan
 	// cannot see, so that need is declared by `closeStringMethodNeeds` exactly as `__str_find`'s is.
 	export var usesStrRFind as bool
-	// ⚠ **`usesStrStartsWith`/`usesStrEndsWith` WERE HERE AND WENT WITH THEIR BUILDER.** `String.startsWith`
-	// and `String.endsWith` are the CORPUS's now (struck from `Parser.stringSurfaceMemberNames`), so nothing
-	// names `__str_starts_with`/`__str_ends_with` and a bit for them could only ever read false. The corpus
-	// bodies reach `byteAt`, whose own door is still shv2's.
+	// ⚠ **SEVEN OF THIS FAMILY'S BITS WENT WITH THEIR BUILDERS**: `usesStrStartsWith`/`usesStrEndsWith` in W49
+	// wave 1, then `usesStrMapCase`/`usesStrReplace`/`usesStrReplaceFirst` in wave 2. `startsWith`, `endsWith`,
+	// `toLower`, `toUpper`, `replace` and `replaceFirst` are the CORPUS's now (struck from
+	// `Parser.stringSurfaceMemberNames`), so nothing names their entry points and a bit for any of them could
+	// only ever read false. The corpus bodies reach `byteAt`, `setByte`, `addressableBytes` and
+	// `__ManagedMemory.slice`, whose own doors are still shv2's and keep their own bits below.
 	export var usesStrContains as bool
-	export var usesStrMapCase as bool
-	export var usesStrReplace as bool
 	export var usesStrSplit as bool
-	// The two P1.8 Slice E entry points, each with its OWN bit under this file's one-bit-per-entry-point
-	// discipline: a program that only calls `replaceFirst` must not carry `replace`'s two loops, and a
-	// program that only builds a String from bytes must carry neither.
-	export var usesStrReplaceFirst as bool
+	// The P1.8 Slice E entry point that remains, with its OWN bit under this file's one-bit-per-entry-point
+	// discipline: a program that builds no String from bytes must not carry the classifying scan.
 	export var usesStrFromBytes as bool
 	export var usesStrOfBuffer as bool
 	export var usesMmToCString as bool
@@ -819,7 +812,7 @@ export type RuntimeUsage
 	export var usesProcessIntrospection as bool
 
 	static function create() returns RuntimeUsage
-		return Self{usesHeap: false, usesGt: false, usesIocp: false, usesStreaming: false, usesWriteStdout: false, usesWriteStderr: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesUIntToString: false, usesBoolToString: false, usesStrAppend: false, usesStrDecref: false, usesArray: false, usesSet: false, usesMap: false, usesList: false, usesDropTypeParam: false, usesDropExistential: false, usesRetainExistential: false, usesIncref: false, usesRetain: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrRangeEq: false, usesStrFind: false, usesStrRFind: false, usesStrContains: false, usesStrMapCase: false, usesStrReplace: false, usesStrSplit: false, usesStrReplaceFirst: false, usesStrFromBytes: false, usesStrOfBuffer: false, usesMmToCString: false, usesStrBytesView: false, usesStrByteAt: false, usesStrByteAtOrPanic: false, usesManagedArrayCopy: false, usesOpaqueArrayCopy: false, neededCloners: ClonerSet.create(), usesWallClock: false, usesCharAt: false, usesCharCmp: false, usesCharFromCodepoint: false, usesCharAsciiValue: false, usesStrToBytes: false, usesStrToCodepoints: false, usesStrToUtf16: false, usesStrIndexMake: false, usesStrIndexEnd: false, usesStrIndexByteToGrapheme: false, usesStrIndexAdvance: false, usesStrIndexFirst: false, usesStrIndexLast: false, usesStrIndexSlice: false, usesStrIndexAfter: false, usesUcdCategory: false, usesCharSetMake: false, usesCharSetDecref: false, usesCharSetContains: false, usesStrTrim: false, usesManagedFile: false, usesManagedDirectory: false, usesCommandLine: false, usesConsoleStdin: false, usesProcessIntrospection: false}
+		return Self{usesHeap: false, usesGt: false, usesIocp: false, usesStreaming: false, usesWriteStdout: false, usesWriteStderr: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesUIntToString: false, usesBoolToString: false, usesStrAppend: false, usesStrDecref: false, usesArray: false, usesSet: false, usesMap: false, usesList: false, usesDropTypeParam: false, usesDropExistential: false, usesRetainExistential: false, usesIncref: false, usesRetain: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrRangeEq: false, usesStrFind: false, usesStrRFind: false, usesStrContains: false, usesStrSplit: false, usesStrFromBytes: false, usesStrOfBuffer: false, usesMmToCString: false, usesStrBytesView: false, usesStrByteAt: false, usesStrByteAtOrPanic: false, usesManagedArrayCopy: false, usesOpaqueArrayCopy: false, neededCloners: ClonerSet.create(), usesWallClock: false, usesCharAt: false, usesCharCmp: false, usesCharFromCodepoint: false, usesCharAsciiValue: false, usesStrToBytes: false, usesStrToCodepoints: false, usesStrToUtf16: false, usesStrIndexMake: false, usesStrIndexEnd: false, usesStrIndexByteToGrapheme: false, usesStrIndexAdvance: false, usesStrIndexFirst: false, usesStrIndexLast: false, usesStrIndexSlice: false, usesStrIndexAfter: false, usesUcdCategory: false, usesCharSetMake: false, usesCharSetDecref: false, usesCharSetContains: false, usesStrTrim: false, usesManagedFile: false, usesManagedDirectory: false, usesCommandLine: false, usesConsoleStdin: false, usesProcessIntrospection: false}
 	end 'create'
 end 'RuntimeUsage'
 
@@ -1371,18 +1364,9 @@ function recordStringMethodUsage(callee ByteArray, usage RuntimeUsage)
 	if callee.equals(StrContainsName) 'contains'
 		usage.usesStrContains = true
 	end 'contains'
-	if callee.equals(StrMapCaseName) 'mapcase'
-		usage.usesStrMapCase = true
-	end 'mapcase'
-	if callee.equals(StrReplaceName) 'replace'
-		usage.usesStrReplace = true
-	end 'replace'
 	if callee.equals(StrSplitName) 'split'
 		usage.usesStrSplit = true
 	end 'split'
-	if callee.equals(StrReplaceFirstName) 'replacefirst'
-		usage.usesStrReplaceFirst = true
-	end 'replacefirst'
 	if callee.equals(StrFromBytesName) 'frombytes'
 		usage.usesStrFromBytes = true
 	end 'frombytes'
@@ -1411,15 +1395,15 @@ end 'recordStringMethodUsage'
 // cannot depend on the order in which the module happens to name its methods: `find`'s need for
 // `__str_range_eq` is stated once and reached whether `find` was named directly or pulled in by `contains`.
 function closeStringMethodNeeds(usage RuntimeUsage)
-	if usage.usesStrContains or usage.usesStrReplace or usage.usesStrReplaceFirst or usage.usesStrSplit 'needsFind'
+	if usage.usesStrContains or usage.usesStrSplit 'needsFind'
 		usage.usesStrFind = true
 	end 'needsFind'
 	if usage.usesStrFind or usage.usesStrRFind 'needsRangeEq'
 		usage.usesStrRangeEq = true
 	end 'needsRangeEq'
-	// `replace` and `split` answer a degenerate (empty) needle/delimiter with a CLONE of the receiver — the
-	// one shape neither one's loop can produce, since an empty needle matches at every position.
-	if usage.usesStrReplace or usage.usesStrReplaceFirst or usage.usesStrSplit 'clonesReceiver'
+	// `split` answers a degenerate (empty) delimiter with a CLONE of the receiver — the one shape its loop
+	// cannot produce, since an empty delimiter matches at every position.
+	if usage.usesStrSplit 'clonesReceiver'
 		usage.usesStrClone = true
 	end 'clonesReceiver'
 	// `split` PUSHES its segments into the array the parser created for it.
@@ -1428,7 +1412,13 @@ function closeStringMethodNeeds(usage RuntimeUsage)
 	end 'pushesSegments'
 	// Every string-BUILDING method allocates a fused record and blits bytes into it (`emitBuildOwnedInlineString`
 	// ⇒ `__mm_alloc` + `__str_copy`), and `__str_clone` under them does the same.
-	if usage.usesStrMapCase or usage.usesStrReplace or usage.usesStrReplaceFirst or usage.usesStrSplit or usage.usesStrFromBytes or usage.usesStrOfBuffer or usage.usesMmToCString 'buildsStrings'
+	//
+	// ⚠ **`usesStrMapCase`/`usesStrReplace`/`usesStrReplaceFirst` WERE TERMS IN ALL THREE OF THE CLAUSES
+	// ABOVE AND WENT WITH THEIR ENTRY POINTS** (W49 wave 2). Each clause KEEPS its remaining terms: `split`
+	// still reaches `__str_find` and `__str_clone`, and `contains` still reaches `__str_find`. What the
+	// retired members need instead is declared where a corpus body's needs are always declared — by the
+	// ordinary reachability of the functions it calls, not here.
+	if usage.usesStrSplit or usage.usesStrFromBytes or usage.usesStrOfBuffer or usage.usesMmToCString 'buildsStrings'
 		usage.usesHeap = true
 		usage.usesStrCopy = true
 	end 'buildsStrings'
@@ -1488,18 +1478,9 @@ export function installStringRuntime(module StdModule, usage RuntimeUsage)
 	if usage.usesStrContains 'strcontains'
 		buildStrContains(module)
 	end 'strcontains'
-	if usage.usesStrMapCase 'strmapcase'
-		buildStrMapCase(module)
-	end 'strmapcase'
-	if usage.usesStrReplace 'strreplace'
-		buildStrReplace(module)
-	end 'strreplace'
 	if usage.usesStrSplit 'strsplit'
 		buildStrSplit(module)
 	end 'strsplit'
-	if usage.usesStrReplaceFirst 'strreplacefirst'
-		buildStrReplaceFirst(module)
-	end 'strreplacefirst'
 	if usage.usesStrFromBytes 'strfrombytes'
 		buildStrFromBytes(module)
 	end 'strfrombytes'
@@ -2190,9 +2171,11 @@ export function emitBuildOwnedInlineString(module StdModule, block IrBlock, ids 
 	return newRec
 end 'emitBuildOwnedInlineString'
 
-// ⭐ **THE RECORD HALF of `emitBuildOwnedInlineString`, split out for the ONE producer that fills the bytes
-// from more than one source: `__str_replace` assembles its result from alternating slices of the receiver
-// and of the replacement, so it needs the box PUBLISHED and the bytes left to it.** Everything about the
+// ⭐ **THE RECORD HALF of `emitBuildOwnedInlineString`, split out for the producers that do NOT have one
+// contiguous source to copy from.** `__str_replace` was the original — it assembled its result from
+// alternating slices of the receiver and of the replacement — and it retired onto `stdlib/String.maxon` in
+// W49 wave 2; `GraphemeRuntime.emitCharRecordBuffer` is the reader that remains, and it writes a codepoint's
+// UTF-8 bytes one at a time. Both need the box PUBLISHED and the bytes left to them. Everything about the
 // record is settled here — its size (`byteLen` + record + NUL), its `buffer@0`, and the whole buffer-ownership
 // encoding (`capacity@16 = InlineBufferCapacity`, `parent@32` left 0 by the slab's zeroing contract) — so a
 // caller that fills the bytes itself cannot publish a record that differs from a cloned one by a field.
@@ -2308,9 +2291,9 @@ end 'buildStrRangeEq'
 // ⚠ **THE EMPTY NEEDLE IS ANSWERED BEFORE THE LOOP, AND THAT IS A BOUNDS FACT, NOT A SHORTCUT.** The loop
 // loads `needle[0]` once, up front; an empty String's buffer has no byte 0 it may read (a detached buffer is
 // allocated to its exact length and carries no NUL). It answers `startPos` — every string contains the empty
-// string at every position — which is what makes `"x".contains("")` true. `replace`/`split` never reach it:
-// both refuse an empty needle/delimiter before their loops, because an empty needle matches everywhere and
-// their loops would not terminate.
+// string at every position — which is what makes `"x".contains("")` true. `split` never reaches it: it
+// refuses an empty delimiter before its loop, because an empty delimiter matches everywhere and the loop
+// would not terminate.
 function buildStrFind(module StdModule)
 	var func = IrFunction.createFromStd(StrFindName, returnType: StdReturnType.value(StdType.i64), paramCount: 3, paramTypes: threeI64Params(), returnLine: 0)
 	var ids = ValueMinter.create(3)
@@ -2484,270 +2467,6 @@ function buildStrContains(module StdModule)
 	module.functions.push(func)
 end 'buildStrContains'
 
-// ⭐ **`__str_map_case(self, lo, hi, delta) -> newStr` — ONE graph for BOTH `toLower` and `toUpper`** (the
-// stdlib's `mapAsciiCase`, `:589-616`). The parser supplies the gated byte range and the shift, because that
-// is the only thing the two methods differ in.
-//
-// ⭐⭐ **IT TRANSFORMS AN INDEPENDENT COPY AND NEVER THE RECEIVER.** The bytes are cloned into a fresh owned
-// record FIRST and the map runs over the COPY's buffer, so `let b = a.toLower()` cannot touch `a` — the exact
-// regression `specs-shv2/string-type-2.md`'s `case-conversion-does-not-mutate-receiver` was written against
-// (the stdlib's own history: returning the mutated `managed` silently lowercased the receiver too). It is
-// also what makes the methods callable on a `let`: they write nothing the receiver owns.
-//
-// ⭐ **A BYTE OUTSIDE `[lo, hi]` IS LEFT ALONE, and that is the whole reason a non-ASCII string survives a
-// case conversion unharmed** — a UTF-8 continuation or lead byte has its high bit set, so it is above `hi`
-// (122 at most) and no arm of this loop touches it. There is no ASCII test anywhere here; the range gate IS it.
-function buildStrMapCase(module StdModule)
-	var func = IrFunction.createFromStd(StrMapCaseName, returnType: StdReturnType.value(StdType.i64), paramCount: 4, paramTypes: fourI64Params(), returnLine: 0)
-	var ids = ValueMinter.create(4)
-
-	var entry = module.addBlock(func, label: b"entry")
-	var header = module.addBlock(func, label: b"header")
-	var body = module.addBlock(func, label: b"body")
-	var checkHi = module.addBlock(func, label: b"checkHi")
-	var apply = module.addBlock(func, label: b"apply")
-	var step = module.addBlock(func, label: b"step")
-	var done = module.addBlock(func, label: b"done")
-
-	emitParams(module, block: entry, count: 4)
-	let selfPtr = 0 as ValueId
-	let lo = 1 as ValueId
-	let hi = 2 as ValueId
-	let delta = 3 as ValueId
-
-	// entry: the independent copy, and the buffer the loop rewrites. `singleByteGraphemes@40` carries over verbatim — the
-	// mapping moves bytes only WITHIN `[65,122]`, so it can neither create nor remove a high-bit byte.
-	let srcLen = emitLoadField(module, block: entry, record: selfPtr, offset: StringLengthOffset, ids: ids)
-	let srcBuf = emitLoadField(module, block: entry, record: selfPtr, offset: StringBufferOffset, ids: ids)
-	let srcSingleByte = emitLoadField(module, block: entry, record: selfPtr, offset: StringSingleByteGraphemesOffset, ids: ids)
-	let newRec = emitBuildOwnedInlineString(module, block: entry, ids: ids, srcBuf: srcBuf, srcLen: srcLen, singleByteGraphemes: srcSingleByte)
-	let dstBuf = emitInlineStringBuffer(module, block: entry, ids: ids, record: newRec)
-	let zero = emitConst(module, block: entry, value: 0, ids: ids)
-	module.setTerminator(entry, op: StdOp.branch(header.id))
-
-	let i = ids.mint()
-	header.blockArgs.push(IrBlockArg.create(i, argType: StdType.i64))
-	entry.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(zero)))
-
-	let atEnd = emitCmp(module, block: header, a: i, b: srcLen, pred: StdCmpPred.ge, ids: ids)
-	module.setTerminator(header, op: StdOp.condBranch(atEnd, thenBlockId: done.id, elseBlockId: body.id))
-
-	// body / checkHi: the two halves of `b >= lo and b <= hi`, as two blocks — a short-circuit `and` IS
-	// control flow, and there is no boolean `and` op in the Std tier to fold them into one test.
-	let addr = emitBin(module, block: body, a: dstBuf, b: i, opcode: StdBinOpcode.add, ids: ids)
-	let copyByte = emitLoadByteAt(module, block: body, addr: addr, ids: ids)
-	let atOrAboveLo = emitCmp(module, block: body, a: copyByte, b: lo, pred: StdCmpPred.ge, ids: ids)
-	module.setTerminator(body, op: StdOp.condBranch(atOrAboveLo, thenBlockId: checkHi.id, elseBlockId: step.id))
-
-	let atOrBelowHi = emitCmp(module, block: checkHi, a: copyByte, b: hi, pred: StdCmpPred.le, ids: ids)
-	module.setTerminator(checkHi, op: StdOp.condBranch(atOrBelowHi, thenBlockId: apply.id, elseBlockId: step.id))
-
-	let shifted = emitBin(module, block: apply, a: copyByte, b: delta, opcode: StdBinOpcode.add, ids: ids)
-	module.appendOp(apply, op: StdOp.storeIndirect(addr, offset: 0, valueId: shifted, valueType: StdType.u8))
-	module.setTerminator(apply, op: StdOp.branch(step.id))
-
-	let one = emitConst(module, block: step, value: 1, ids: ids)
-	let iNext = emitBin(module, block: step, a: i, b: one, opcode: StdBinOpcode.add, ids: ids)
-	module.setTerminator(step, op: StdOp.branch(header.id))
-	step.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(iNext)))
-
-	module.setTerminator(done, op: StdOp.ret(newRec))
-
-	module.functions.push(func)
-end 'buildStrMapCase'
-
-// ⭐ **`__str_replace(self, old, with) -> newStr` — the stdlib's TWO-PASS `replace` (`:448-517`): COUNT the
-// matches, then BUILD into one exactly-sized allocation.** The count is what makes the final size known before
-// a byte is written — `selfLen + count * (withLen - oldLen)` — so nothing ever grows and no builder is needed.
-//
-// ⚠ **THAT IS ALSO WHY shv2 DOES NOT PORT `StringBuilder`.** The stdlib reaches for one and immediately tells
-// it the answer (`out.reserve(...)`), i.e. it uses a growable buffer as a fixed one; the two-pass count is the
-// part that carries the property, and the builder is the part shv2 has no other consumer for.
-//
-// ⚠ **AN EMPTY `old` IS ANSWERED WITH A CLONE, BEFORE EITHER LOOP.** An empty needle matches at every
-// position, so `pos = idx + oldLen` would not advance and the count loop would not terminate — the stdlib
-// guards the same case for the same reason (`:451-453`, `return clone()`). Every OTHER degenerate case falls
-// out of the general path: a needle that never matches counts 0, sizes the result at `selfLen`, and copies
-// the whole receiver as its tail.
-function buildStrReplace(module StdModule)
-	var func = IrFunction.createFromStd(StrReplaceName, returnType: StdReturnType.value(StdType.i64), paramCount: 3, paramTypes: threeI64Params(), returnLine: 0)
-	var ids = ValueMinter.create(3)
-
-	var entry = module.addBlock(func, label: b"entry")
-	var cloneCase = module.addBlock(func, label: b"cloneCase")
-	var countHeader = module.addBlock(func, label: b"countHeader")
-	var countStep = module.addBlock(func, label: b"countStep")
-	var buildSetup = module.addBlock(func, label: b"buildSetup")
-	var buildHeader = module.addBlock(func, label: b"buildHeader")
-	var copySegment = module.addBlock(func, label: b"copySegment")
-	var copyTail = module.addBlock(func, label: b"copyTail")
-
-	emitParams(module, block: entry, count: 3)
-	let selfPtr = 0 as ValueId
-	let old = 1 as ValueId
-	let replacement = 2 as ValueId
-
-	// entry: every field the blocks below read (entry dominates all of them), then the empty-needle split.
-	let selfLen = emitLoadField(module, block: entry, record: selfPtr, offset: StringLengthOffset, ids: ids)
-	let selfBuf = emitLoadField(module, block: entry, record: selfPtr, offset: StringBufferOffset, ids: ids)
-	let selfSingleByte = emitLoadField(module, block: entry, record: selfPtr, offset: StringSingleByteGraphemesOffset, ids: ids)
-	let oldLen = emitLoadField(module, block: entry, record: old, offset: StringLengthOffset, ids: ids)
-	let withLen = emitLoadField(module, block: entry, record: replacement, offset: StringLengthOffset, ids: ids)
-	let withBuf = emitLoadField(module, block: entry, record: replacement, offset: StringBufferOffset, ids: ids)
-	let withSingleByte = emitLoadField(module, block: entry, record: replacement, offset: StringSingleByteGraphemesOffset, ids: ids)
-	let zero = emitConst(module, block: entry, value: 0, ids: ids)
-	let oldIsEmpty = emitCmp(module, block: entry, a: oldLen, b: zero, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(entry, op: StdOp.condBranch(oldIsEmpty, thenBlockId: cloneCase.id, elseBlockId: countHeader.id))
-
-	let cloned = ids.mint()
-	module.appendOp(cloneCase, op: StdOp.call(cloned, callee: StrCloneName, args: argsOf(selfPtr)))
-	module.setTerminator(cloneCase, op: StdOp.ret(cloned))
-
-	// countHeader / countStep: pass one — how many non-overlapping matches are there? The cursor jumps PAST
-	// each match (`idx + oldLen`), which is what makes `"aaaa".replace("aa", …)` two matches, not three.
-	let count = ids.mint()
-	let countPos = ids.mint()
-	countHeader.blockArgs.push(IrBlockArg.create(count, argType: StdType.i64))
-	countHeader.blockArgs.push(IrBlockArg.create(countPos, argType: StdType.i64))
-	entry.branchEdges.push(BranchEdge.create(countHeader.id, argIds: twoArgs(zero, second: zero)))
-
-	let countIdx = emitStrFindCall(module, block: countHeader, hay: selfPtr, startPos: countPos, needle: old, ids: ids)
-	let countFound = emitCmp(module, block: countHeader, a: countIdx, b: zero, pred: StdCmpPred.ge, ids: ids)
-	module.setTerminator(countHeader, op: StdOp.condBranch(countFound, thenBlockId: countStep.id, elseBlockId: buildSetup.id))
-
-	let one = emitConst(module, block: countStep, value: 1, ids: ids)
-	let countNext = emitBin(module, block: countStep, a: count, b: one, opcode: StdBinOpcode.add, ids: ids)
-	let countPosNext = emitBin(module, block: countStep, a: countIdx, b: oldLen, opcode: StdBinOpcode.add, ids: ids)
-	module.setTerminator(countStep, op: StdOp.branch(countHeader.id))
-	countStep.branchEdges.push(BranchEdge.create(countHeader.id, argIds: twoArgs(countNext, second: countPosNext)))
-
-	// buildSetup: the exact result size, and the box to write it into. `count` is read straight off
-	// `countHeader`, which dominates this block — only the loop-carried recurrence needs a phi, exactly as
-	// `__int_to_string`'s `writeSetup` reads its digit count.
-	//
-	// `singleByteGraphemes` is the AND of the two contributing strings' flags: every byte of the result comes from the
-	// receiver or from the replacement, so ASCII on both sides is ASCII in the result, and either side
-	// non-ASCII gives the conservative `false` this record format treats as the safe class.
-	let sizeDelta = emitBin(module, block: buildSetup, a: withLen, b: oldLen, opcode: StdBinOpcode.sub, ids: ids)
-	let totalDelta = emitBin(module, block: buildSetup, a: count, b: sizeDelta, opcode: StdBinOpcode.mul, ids: ids)
-	let outLen = emitBin(module, block: buildSetup, a: selfLen, b: totalDelta, opcode: StdBinOpcode.add, ids: ids)
-	let outAscii = emitBin(module, block: buildSetup, a: selfSingleByte, b: withSingleByte, opcode: StdBinOpcode.bitAnd, ids: ids)
-	let newRec = emitAllocOwnedInlineString(module, block: buildSetup, ids: ids, byteLen: outLen, singleByteGraphemes: outAscii)
-	let outBuf = emitInlineStringBuffer(module, block: buildSetup, ids: ids, record: newRec)
-	module.setTerminator(buildSetup, op: StdOp.branch(buildHeader.id))
-
-	// buildHeader(srcPos, dst): pass two — re-walk the same matches, copying the piece before each one and
-	// then the replacement. Two loop-carried values: where reading is up to, and where writing is up to.
-	let srcPos = ids.mint()
-	let dst = ids.mint()
-	buildHeader.blockArgs.push(IrBlockArg.create(srcPos, argType: StdType.i64))
-	buildHeader.blockArgs.push(IrBlockArg.create(dst, argType: StdType.i64))
-	buildSetup.branchEdges.push(BranchEdge.create(buildHeader.id, argIds: twoArgs(zero, second: outBuf)))
-
-	let buildIdx = emitStrFindCall(module, block: buildHeader, hay: selfPtr, startPos: srcPos, needle: old, ids: ids)
-	let buildFound = emitCmp(module, block: buildHeader, a: buildIdx, b: zero, pred: StdCmpPred.ge, ids: ids)
-	module.setTerminator(buildHeader, op: StdOp.condBranch(buildFound, thenBlockId: copySegment.id, elseBlockId: copyTail.id))
-
-	let preLen = emitBin(module, block: copySegment, a: buildIdx, b: srcPos, opcode: StdBinOpcode.sub, ids: ids)
-	let preAddr = emitBin(module, block: copySegment, a: selfBuf, b: srcPos, opcode: StdBinOpcode.add, ids: ids)
-	let prefixCopied = ids.mint()
-	module.appendOp(copySegment, op: StdOp.call(prefixCopied, callee: StrCopyName, args: threeArgs(dst, second: preAddr, third: preLen)))
-	let afterPrefix = emitBin(module, block: copySegment, a: dst, b: preLen, opcode: StdBinOpcode.add, ids: ids)
-	let replacementCopied = ids.mint()
-	module.appendOp(copySegment, op: StdOp.call(replacementCopied, callee: StrCopyName, args: threeArgs(afterPrefix, second: withBuf, third: withLen)))
-	let afterReplacement = emitBin(module, block: copySegment, a: afterPrefix, b: withLen, opcode: StdBinOpcode.add, ids: ids)
-	let srcPosNext = emitBin(module, block: copySegment, a: buildIdx, b: oldLen, opcode: StdBinOpcode.add, ids: ids)
-	module.setTerminator(copySegment, op: StdOp.branch(buildHeader.id))
-	copySegment.branchEdges.push(BranchEdge.create(buildHeader.id, argIds: twoArgs(srcPosNext, second: afterReplacement)))
-
-	// copyTail: no match left, so everything from `srcPos` on is copied verbatim. It runs even when the tail
-	// is empty (a receiver ending in a match), copying zero bytes.
-	let tailLen = emitBin(module, block: copyTail, a: selfLen, b: srcPos, opcode: StdBinOpcode.sub, ids: ids)
-	let tailAddr = emitBin(module, block: copyTail, a: selfBuf, b: srcPos, opcode: StdBinOpcode.add, ids: ids)
-	let tailCopied = ids.mint()
-	module.appendOp(copyTail, op: StdOp.call(tailCopied, callee: StrCopyName, args: threeArgs(dst, second: tailAddr, third: tailLen)))
-	module.setTerminator(copyTail, op: StdOp.ret(newRec))
-
-	module.functions.push(func)
-end 'buildStrReplace'
-
-// ⭐ **`__str_replace_first(self, old, with)` — the stdlib's `replaceFirst` (`stdlib/String.maxon:565-599`),
-// AND IT IS A SEPARATE GRAPH ON THE REFERENCE'S OWN ARGUMENT.** `replace` needs two passes because it does
-// not know how many matches there are until it has counted them; there is exactly ONE match here, so the
-// final size is known outright and the whole counting pass — and with it both loops — disappears. The
-// reference states that in as many words at its own `replaceFirst` ("`replace`'s three-piece build, with
-// the counting pass it does not need"), and the two share every primitive that matters: `__str_find` finds
-// the match, `__str_clone` answers both no-op cases, `emitAllocOwnedInlineString`/`emitInlineStringBuffer`
-// publish the box and `__str_copy` moves each piece. What is NOT shared is a loop neither would run.
-//
-// ⚠ **BOTH NO-OP CASES ANSWER WITH `__str_clone`, NOT WITH `self`.** An empty needle and a needle that is
-// absent are the two ways this method has nothing to do, and returning the receiver's own record would hand
-// the caller a second owner of a box it does not own — the caller drops the result, and the receiver's
-// bytes go with it. The reference refuses `return self` for the same reason at its own `clone()`, where the
-// note is the Stage 0 bug `let b = a.toLower()` lowercasing `a`.
-function buildStrReplaceFirst(module StdModule)
-	var func = IrFunction.createFromStd(StrReplaceFirstName, returnType: StdReturnType.value(StdType.i64), paramCount: 3, paramTypes: threeI64Params(), returnLine: 0)
-	var ids = ValueMinter.create(3)
-
-	var entry = module.addBlock(func, label: b"entry")
-	var search = module.addBlock(func, label: b"search")
-	var cloneCase = module.addBlock(func, label: b"cloneCase")
-	var build = module.addBlock(func, label: b"build")
-
-	emitParams(module, block: entry, count: 3)
-	let selfPtr = 0 as ValueId
-	let old = 1 as ValueId
-	let replacement = 2 as ValueId
-
-	// entry: every field the blocks below read (entry dominates all of them), then the empty-needle split —
-	// `__str_replace`'s opening, for its reason: an empty needle matches at every position, so a search for
-	// it answers 0 and the "replacement" would be an insertion at the front rather than a replacement.
-	let selfLen = emitLoadField(module, block: entry, record: selfPtr, offset: StringLengthOffset, ids: ids)
-	let selfBuf = emitLoadField(module, block: entry, record: selfPtr, offset: StringBufferOffset, ids: ids)
-	let selfSingleByte = emitLoadField(module, block: entry, record: selfPtr, offset: StringSingleByteGraphemesOffset, ids: ids)
-	let oldLen = emitLoadField(module, block: entry, record: old, offset: StringLengthOffset, ids: ids)
-	let withLen = emitLoadField(module, block: entry, record: replacement, offset: StringLengthOffset, ids: ids)
-	let withBuf = emitLoadField(module, block: entry, record: replacement, offset: StringBufferOffset, ids: ids)
-	let withSingleByte = emitLoadField(module, block: entry, record: replacement, offset: StringSingleByteGraphemesOffset, ids: ids)
-	let zero = emitConst(module, block: entry, value: 0, ids: ids)
-	let oldIsEmpty = emitCmp(module, block: entry, a: oldLen, b: zero, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(entry, op: StdOp.condBranch(oldIsEmpty, thenBlockId: cloneCase.id, elseBlockId: search.id))
-
-	let idx = emitStrFindCall(module, block: search, hay: selfPtr, startPos: zero, needle: old, ids: ids)
-	let found = emitCmp(module, block: search, a: idx, b: zero, pred: StdCmpPred.ge, ids: ids)
-	module.setTerminator(search, op: StdOp.condBranch(found, thenBlockId: build.id, elseBlockId: cloneCase.id))
-
-	let cloned = ids.mint()
-	module.appendOp(cloneCase, op: StdOp.call(cloned, callee: StrCloneName, args: argsOf(selfPtr)))
-	module.setTerminator(cloneCase, op: StdOp.ret(cloned))
-
-	// build: one match at `idx`, so the result is `[0, idx)` + the replacement + `[idx + oldLen, selfLen)`
-	// and its length is known before a byte is written. `singleByteGraphemes` is the AND of the two contributing
-	// strings' flags, `__str_replace`'s rule and for its reason.
-	let sizeDelta = emitBin(module, block: build, a: withLen, b: oldLen, opcode: StdBinOpcode.sub, ids: ids)
-	let outLen = emitBin(module, block: build, a: selfLen, b: sizeDelta, opcode: StdBinOpcode.add, ids: ids)
-	let outAscii = emitBin(module, block: build, a: selfSingleByte, b: withSingleByte, opcode: StdBinOpcode.bitAnd, ids: ids)
-	let newRec = emitAllocOwnedInlineString(module, block: build, ids: ids, byteLen: outLen, singleByteGraphemes: outAscii)
-	let outBuf = emitInlineStringBuffer(module, block: build, ids: ids, record: newRec)
-
-	let headCopied = ids.mint()
-	module.appendOp(build, op: StdOp.call(headCopied, callee: StrCopyName, args: threeArgs(outBuf, second: selfBuf, third: idx)))
-
-	let afterHead = emitBin(module, block: build, a: outBuf, b: idx, opcode: StdBinOpcode.add, ids: ids)
-	let replacementCopied = ids.mint()
-	module.appendOp(build, op: StdOp.call(replacementCopied, callee: StrCopyName, args: threeArgs(afterHead, second: withBuf, third: withLen)))
-
-	let matchEnd = emitBin(module, block: build, a: idx, b: oldLen, opcode: StdBinOpcode.add, ids: ids)
-	let tailAddr = emitBin(module, block: build, a: selfBuf, b: matchEnd, opcode: StdBinOpcode.add, ids: ids)
-	let tailLen = emitBin(module, block: build, a: selfLen, b: matchEnd, opcode: StdBinOpcode.sub, ids: ids)
-	let afterReplacement = emitBin(module, block: build, a: afterHead, b: withLen, opcode: StdBinOpcode.add, ids: ids)
-	let tailCopied = ids.mint()
-	module.appendOp(build, op: StdOp.call(tailCopied, callee: StrCopyName, args: threeArgs(afterReplacement, second: tailAddr, third: tailLen)))
-	module.setTerminator(build, op: StdOp.ret(newRec))
-
-	module.functions.push(func)
-end 'buildStrReplaceFirst'
-
 // ⭐ **`__str_from_bytes(arr) -> newStr` — `String.from(bytes)` (`stdlib/String.maxon:119-121`).** The
 // array's buffer holds exactly the UTF-8 bytes the String is to have, so the whole of the work is the
 // ASCII classification and the same fused-record build every other owned String is born through.
@@ -2903,11 +2622,20 @@ end 'buildMmToCString'
 // `element_destroy = TrivialDestructor` states the fact instead of inheriting a coincidence, and it costs
 // one 48-byte allocation for the whole `addressableBytes()` — the same allocation any `slice` already pays.
 //
-// ⭐ **A FRESH RECORD IS ALSO WHAT MAKES A WRITE THROUGH THE VIEW SAFE.** `capacity@16 = ViewBufferCapacity`
-// sends every in-place mutator through `__arr_cow_detach` first, so a stdlib caller that writes gets its own
-// private buffer and the String is untouched. The reference hands out the real buffer and a write shows
-// through; nothing in `stdlib/` writes through this door (all four call sites read, then `slice`), and shv2's
-// answer is the safer of the two rather than a second, quieter one.
+// ⛔⛔ **A WRITE THROUGH THIS VIEW DOES NOT REACH THE STRING, AND THIS BLOCK USED TO CALL THAT "SAFE".**
+// `capacity@16 = ViewBufferCapacity` sends every in-place mutator through `__arr_cow_detach` first, so a
+// caller that writes gets a private copy of the bytes and the String is untouched — and since the view is
+// an owned TEMPORARY at every call site, that copy dies at statement end and the write is simply LOST. The
+// old note argued this was the safer of the two answers and rested on *"nothing in `stdlib/` writes through
+// this door"*, which was an observation about today's callers rather than a property of the door. W49 wave 2
+// retired `toLower`/`toUpper` onto the corpus, which made `mapAsciiCase` — and with it `String.setByte` —
+// reachable for the first time, and every case conversion in the suite returned its receiver verbatim.
+//
+// ⇒ **`String.setByte` NO LONGER COMES THROUGH HERE**; it hands `__arr_set_byte` the String's own record, so
+// the detach asks about the STRING's provenance and the private copy it makes is the String's to keep. What
+// this door is for is READING: `addressableBytes()`'s four corpus call sites read, then `slice`. A future
+// writer must take the same route `setByte` now takes — the record — because a view cannot carry a write
+// home.
 //
 // ⚠ **LIFETIME: the view holds a REFERENCE COUNT on the allocation the bytes live in** (see
 // `emitStringBytesAllocation`), so it cannot outlive them however its binding is scoped. That is one more
@@ -3092,7 +2820,7 @@ end 'buildStrByteRead'
 // ⚠ **THE TAIL SEGMENT IS PUSHED UNCONDITIONALLY**, even when empty, and that is the whole of the
 // empty-segment behaviour the corpus pins: `"a,,b"` is three parts, `"hello,"` is two (the second empty),
 // `",,"` is three empties, and `""` is one empty. An empty DELIMITER is answered before the loop with a clone
-// of the receiver, for `replace`'s reason — it matches at every position, so the cursor would not advance.
+// of the receiver: it matches at every position, so the cursor would not advance.
 function buildStrSplit(module StdModule)
 	var func = IrFunction.createFromStd(StrSplitName, returnType: StdReturnType.void, paramCount: 3, paramTypes: threeI64Params(), returnLine: 0)
 	var ids = ValueMinter.create(3)
@@ -3177,9 +2905,9 @@ end 'emitPushSegment'
 
 // `idx = __str_find(hay, startPos, needle)` — the positioned search every consumer makes, minted and appended
 // in ONE step. Shared for the reason the argument names are spelled out at the call sites: `contains`,
-// `replace`'s two passes and `split`'s scan pass the same three values, and a haystack/needle swap between
-// two of those copies is a SILENT WRONG ANSWER (a search of the needle for the haystack still compiles, still
-// runs, and simply does not find things) rather than anything a compiler would catch.
+// `split`'s scan and `__strix_find`'s one file over pass the same three values, and a haystack/needle swap
+// between any two of those copies is a SILENT WRONG ANSWER (a search of the needle for the haystack still
+// compiles, still runs, and simply does not find things) rather than anything a compiler would catch.
 export function emitStrFindCall(module StdModule, block IrBlock, hay ValueId, startPos ValueId, needle ValueId, ids ValueMinter) returns ValueId
 	let idx = ids.mint()
 	module.appendOp(block, op: StdOp.call(idx, callee: StrFindName, args: threeArgs(hay, second: startPos, third: needle)))

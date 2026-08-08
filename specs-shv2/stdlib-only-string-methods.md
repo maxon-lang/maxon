@@ -1,7 +1,7 @@
 ---
 feature: stdlib-only-string-methods
 status: experimental
-keywords: [string, stdlib, visibility, module, addressableBytes, byteAtOrPanic]
+keywords: [string, stdlib, visibility, module, addressableBytes, byteAtOrPanic, setByte]
 category: language
 ---
 
@@ -9,20 +9,28 @@ category: language
 
 ## Documentation
 
-FOUR of `String`'s methods are `module`-visible in the corpus (`stdlib/String.maxon`) rather than
+FIVE of `String`'s methods are `module`-visible in the corpus (`stdlib/String.maxon`) rather than
 exported: `addressableBytes()`, which hands out a live view of the string's own UTF-8 bytes;
 `byteAt(index)` and `byteAtOrPanic(index)`, which read one of those bytes — the first throwing
-`__ManagedMemoryError`, the second with no catchable failure at all; and `hasSingleByteGraphemes()`,
-which reports a private field of the record. All four exist for the stdlib's own byte walkers —
-`stdlib/URL.maxon` and `stdlib/helpers/url/urlHelpers.maxon` forced the first two, and
-`stdlib/helpers/string/{utf8,hash,grapheme}.maxon` forced the other two — and none is part of the
-language a user program may write.
+`__ManagedMemoryError`, the second with no catchable failure at all; `setByte(index, value:)`, the only
+one that WRITES; and `hasSingleByteGraphemes()`, which reports a private field of the record. All five
+exist for the stdlib's own byte walkers — `stdlib/URL.maxon` and `stdlib/helpers/url/urlHelpers.maxon`
+forced the first two, `stdlib/helpers/string/{utf8,hash,grapheme}.maxon` forced two more, and
+`String.mapAsciiCase` is `setByte`'s one caller — and none is part of the language a user program may
+write.
+
+⚠ **THE COUNT SAID "FOUR" UNTIL W49 WAVE 2, IN THIS FILE AND IN THE REFUSAL ITSELF, WHILE FIVE ARMS TOOK
+THE GATE.** `setByte` was the missing one — and it had no case here either, so a user who wrote it was
+refused by a sentence enumerating four OTHER members and never their own. Wave 2 is what surfaced it:
+retiring `toLower`/`toUpper` onto the corpus gave `setByte` its first caller, and the member nobody had
+called turned out to be the member nobody had described. Both are fixed, and a case per member is now
+what stops a sixth arm arriving unnamed.
 
 ⚠ The case names below say "pair", which is what the set was when they were written. They are IDs, and
 an id is renamed at the cost of orphaning a golden in every target directory; the count that matters is
 the one the refusal itself renders, from the arms' own constants.
 
-The reference compiler refuses a user call to any of the four with its not-exported diagnostic. shv2
+The reference compiler refuses a user call to any of the five with its not-exported diagnostic. shv2
 enforces the same visibility on whether the calling file is physically **under `stdlib/`**. The refusal
 names the reason rather than falling through to the unknown-method roster — the method exists, it is
 simply not the caller's to reach.
@@ -30,7 +38,7 @@ simply not the caller's to reach.
 ⚠ This paragraph used to give the reason as *"shv2 has no `module` keyword and never parses
 `stdlib/String.maxon`"*, and **both halves have been false since W17**: `module` is a contextual modifier
 shv2's parser recognizes and records, and `stdlib/String.maxon` is a listed module whose declarations it
-reads. The location gate is still right, for a different reason — these four members are served by shv2's
+reads. The location gate is still right, for a different reason — these five members are served by shv2's
 own synthesized arms, and the member roster is consulted *ahead* of the corpus, so the call never reaches
 the declaration whose `module` visibility could have answered. A member RETIRED onto the corpus takes its
 visibility from its declaration instead, because from then on the declaration is the only thing serving it.
@@ -69,7 +77,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:3:16: Unsupported: String method 'addressableBytes' — it is STDLIB-ONLY (`module function` in `stdlib/String.maxon`, which the reference compiler refuses to user code as a not-exported error) and this file is not under `stdlib/`. `addressableBytes` hands out a live view of a String's own bytes, and `byteAt`/`byteAtOrPanic` each read one of them — the first through a catchable failure, the second through none — and `hasSingleByteGraphemes` reports a private flag of the record; user code reaches the bytes through `toByteArray()`, which copies
+error E2015: <fragment>:3:16: Unsupported: String method 'addressableBytes' — it is STDLIB-ONLY (`module function` in `stdlib/String.maxon`, which the reference compiler refuses to user code as a not-exported error) and this file is not under `stdlib/`. `addressableBytes` hands out a live view of a String's own bytes, and `byteAt`/`byteAtOrPanic` each read one of them — the first through a catchable failure, the second through none — while `setByte` WRITES one, which would mutate a String the caller may only have borrowed — and `hasSingleByteGraphemes` reports a private flag of the record; user code reaches the bytes through `toByteArray()`, which copies
 ```
 
 <!-- test: error.byte-at-or-panic-is-stdlib-only -->
@@ -79,7 +87,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:3:15: Unsupported: String method 'byteAtOrPanic' — it is STDLIB-ONLY (`module function` in `stdlib/String.maxon`, which the reference compiler refuses to user code as a not-exported error) and this file is not under `stdlib/`. `addressableBytes` hands out a live view of a String's own bytes, and `byteAt`/`byteAtOrPanic` each read one of them — the first through a catchable failure, the second through none — and `hasSingleByteGraphemes` reports a private flag of the record; user code reaches the bytes through `toByteArray()`, which copies
+error E2015: <fragment>:3:15: Unsupported: String method 'byteAtOrPanic' — it is STDLIB-ONLY (`module function` in `stdlib/String.maxon`, which the reference compiler refuses to user code as a not-exported error) and this file is not under `stdlib/`. `addressableBytes` hands out a live view of a String's own bytes, and `byteAt`/`byteAtOrPanic` each read one of them — the first through a catchable failure, the second through none — while `setByte` WRITES one, which would mutate a String the caller may only have borrowed — and `hasSingleByteGraphemes` reports a private flag of the record; user code reaches the bytes through `toByteArray()`, which copies
 ```
 
 <!-- test: error.byte-at-is-stdlib-only -->
@@ -89,7 +97,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:3:19: Unsupported: String method 'byteAt' — it is STDLIB-ONLY (`module function` in `stdlib/String.maxon`, which the reference compiler refuses to user code as a not-exported error) and this file is not under `stdlib/`. `addressableBytes` hands out a live view of a String's own bytes, and `byteAt`/`byteAtOrPanic` each read one of them — the first through a catchable failure, the second through none — and `hasSingleByteGraphemes` reports a private flag of the record; user code reaches the bytes through `toByteArray()`, which copies
+error E2015: <fragment>:3:19: Unsupported: String method 'byteAt' — it is STDLIB-ONLY (`module function` in `stdlib/String.maxon`, which the reference compiler refuses to user code as a not-exported error) and this file is not under `stdlib/`. `addressableBytes` hands out a live view of a String's own bytes, and `byteAt`/`byteAtOrPanic` each read one of them — the first through a catchable failure, the second through none — while `setByte` WRITES one, which would mutate a String the caller may only have borrowed — and `hasSingleByteGraphemes` reports a private flag of the record; user code reaches the bytes through `toByteArray()`, which copies
 ```
 
 <!-- test: error.has-single-byte-graphemes-is-stdlib-only -->
@@ -102,7 +110,25 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:3:11: Unsupported: String method 'hasSingleByteGraphemes' — it is STDLIB-ONLY (`module function` in `stdlib/String.maxon`, which the reference compiler refuses to user code as a not-exported error) and this file is not under `stdlib/`. `addressableBytes` hands out a live view of a String's own bytes, and `byteAt`/`byteAtOrPanic` each read one of them — the first through a catchable failure, the second through none — and `hasSingleByteGraphemes` reports a private flag of the record; user code reaches the bytes through `toByteArray()`, which copies
+error E2015: <fragment>:3:11: Unsupported: String method 'hasSingleByteGraphemes' — it is STDLIB-ONLY (`module function` in `stdlib/String.maxon`, which the reference compiler refuses to user code as a not-exported error) and this file is not under `stdlib/`. `addressableBytes` hands out a live view of a String's own bytes, and `byteAt`/`byteAtOrPanic` each read one of them — the first through a catchable failure, the second through none — while `setByte` WRITES one, which would mutate a String the caller may only have borrowed — and `hasSingleByteGraphemes` reports a private flag of the record; user code reaches the bytes through `toByteArray()`, which copies
+```
+
+<!-- test: error.set-byte-is-stdlib-only -->
+The one of the five that WRITES, and the last to get a case of its own — it had none until W49 wave 2,
+which is also the rung that gave it its first caller inside `stdlib/`. It is the member whose refusal
+matters most: reading a private byte is a privacy question, writing one is a MUTATION through a receiver
+the caller may only have borrowed.
+```maxon
+function main() returns ExitCode
+	let s = "abc"
+	try s.setByte(0, value: 65) otherwise 'oob'
+		return 1
+	end 'oob'
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:4:8: Unsupported: String method 'setByte' — it is STDLIB-ONLY (`module function` in `stdlib/String.maxon`, which the reference compiler refuses to user code as a not-exported error) and this file is not under `stdlib/`. `addressableBytes` hands out a live view of a String's own bytes, and `byteAt`/`byteAtOrPanic` each read one of them — the first through a catchable failure, the second through none — while `setByte` WRITES one, which would mutate a String the caller may only have borrowed — and `hasSingleByteGraphemes` reports a private flag of the record; user code reaches the bytes through `toByteArray()`, which copies
 ```
 
 <!-- test: error.addressable-bytes-on-a-string-variable-is-stdlib-only -->
@@ -115,20 +141,27 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:5:12: Unsupported: String method 'addressableBytes' — it is STDLIB-ONLY (`module function` in `stdlib/String.maxon`, which the reference compiler refuses to user code as a not-exported error) and this file is not under `stdlib/`. `addressableBytes` hands out a live view of a String's own bytes, and `byteAt`/`byteAtOrPanic` each read one of them — the first through a catchable failure, the second through none — and `hasSingleByteGraphemes` reports a private flag of the record; user code reaches the bytes through `toByteArray()`, which copies
+error E2015: <fragment>:5:12: Unsupported: String method 'addressableBytes' — it is STDLIB-ONLY (`module function` in `stdlib/String.maxon`, which the reference compiler refuses to user code as a not-exported error) and this file is not under `stdlib/`. `addressableBytes` hands out a live view of a String's own bytes, and `byteAt`/`byteAtOrPanic` each read one of them — the first through a catchable failure, the second through none — while `setByte` WRITES one, which would mutate a String the caller may only have borrowed — and `hasSingleByteGraphemes` reports a private flag of the record; user code reaches the bytes through `toByteArray()`, which copies
 ```
 
-A NEAR MISS of one of the four — `addressableByte` for `addressableBytes` — is a typo and must be answered
+A NEAR MISS of one of the five — `addressableByte` for `addressableBytes` — is a typo and must be answered
 as one. The visibility refusal is reachable only once a real method NAME has matched, so the roster
 answers here and nobody is told they lack permission for a method nobody has.
 
-⚠ **THE ROSTER NO LONGER NAMES `startsWith`, `endsWith` OR `count`, AND THAT IS NOT AN OMISSION — IT IS
-THE RETIREMENT.** Those three are served by `stdlib/String.maxon` now: struck from the roster, each falls
+⚠ **THE ROSTER NO LONGER NAMES `startsWith`, `endsWith`, `count`, `toLower`, `toUpper`, `replace` OR
+`replaceFirst`, AND THAT IS NOT AN OMISSION — IT IS THE RETIREMENT.** Those seven are served by
+`stdlib/String.maxon` now (three in W49 wave 1, four in wave 2): struck from the roster, each falls
 through to the corpus door that is consulted for exactly the names the roster does not carry, and becomes
 an ordinary call to the ordinary declared function the corpus already had. The list below therefore says
 what it has always said — *what the synthesized surface serves* — and a name leaving it means the corpus
-took the member over, never that the member vanished. `startsWith("x")` still works; `string-methods-ascii`
-and `string-type` pin that it answers the same.
+took the member over, never that the member vanished. `startsWith("x")` and `toLower()` still work;
+`string-methods-ascii` and `string-type-2` pin that they answer the same.
+
+⚠ **THE LIST IS WHAT A RETIREMENT MOVES, SO IT IS ALSO WHAT A RETIREMENT MUST RE-READ.** `setByte` is on
+it and stays there, and wave 2 is what first gave it a caller: the corpus `mapAsciiCase` behind
+`toLower`/`toUpper` is the only body in `stdlib/` that writes a byte. It had been served by a lowering
+that wrote through a non-owning view and lost the write, which nothing could observe while the member
+above it was synthesized.
 
 <!-- test: unknown-string-method-still-gets-the-roster -->
 ```maxon
@@ -137,7 +170,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:3:15: Unsupported: `String` member 'addressableByte' — shv2 provides append/byteLength/contains/toLower/toUpper/replace/split/bytes/toByteArray/codepoints/utf16/isEmpty/clone/replaceFirst/startIndex/endIndex/findFirst/findLast/indexAfter/slice/trim/trimStart/trimEnd/addressableBytes/byteAt/byteAtOrPanic/hasSingleByteGraphemes/setByte/hash/equals; that list IS the surface, so nothing else is served here
+error E2015: <fragment>:3:15: Unsupported: `String` member 'addressableByte' — shv2 provides append/byteLength/contains/split/bytes/toByteArray/codepoints/utf16/isEmpty/clone/startIndex/endIndex/findFirst/findLast/indexAfter/slice/trim/trimStart/trimEnd/addressableBytes/byteAt/byteAtOrPanic/hasSingleByteGraphemes/setByte/hash/equals; that list IS the surface, so nothing else is served here
 ```
 
 And the roster a user program is handed NAMES every stdlib-only method. This is the case the derivation
@@ -152,5 +185,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:3:15: Unsupported: `String` member 'frobnicate' — shv2 provides append/byteLength/contains/toLower/toUpper/replace/split/bytes/toByteArray/codepoints/utf16/isEmpty/clone/replaceFirst/startIndex/endIndex/findFirst/findLast/indexAfter/slice/trim/trimStart/trimEnd/addressableBytes/byteAt/byteAtOrPanic/hasSingleByteGraphemes/setByte/hash/equals; that list IS the surface, so nothing else is served here
+error E2015: <fragment>:3:15: Unsupported: `String` member 'frobnicate' — shv2 provides append/byteLength/contains/split/bytes/toByteArray/codepoints/utf16/isEmpty/clone/startIndex/endIndex/findFirst/findLast/indexAfter/slice/trim/trimStart/trimEnd/addressableBytes/byteAt/byteAtOrPanic/hasSingleByteGraphemes/setByte/hash/equals; that list IS the surface, so nothing else is served here
 ```

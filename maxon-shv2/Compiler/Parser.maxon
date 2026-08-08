@@ -3701,7 +3701,6 @@ let StringHasSingleByteGraphemesMethod = b"hasSingleByteGraphemes"
 // the very thing this lookup distinguishes — see that function.
 let SingleByteGraphemesFieldName = b"singleByteGraphemesFlag"
 
-let StringReplaceFirstMethod = b"replaceFirst"
 let CodepointViewMethod = b"codepoints"
 let Utf16ViewMethod = b"utf16"
 
@@ -3773,9 +3772,10 @@ end 'corpusFindGraphemeEndLabels'
 // them, so all three are grapheme-indexed BY THEIR SIGNATURES and wait for that type (P1.8 Slice B) however
 // byte-level their search happens to be.
 //
-// ⚠ **`startsWith` AND `endsWith` WERE THE FIRST TWO OF THESE AND ARE NOW THE CORPUS'S** (struck from
-// `stringSurfaceMemberNames`), so no constant for either survives — the arms that matched them are gone and
-// a name shv2 no longer dispatches has nothing here to spell.
+// ⚠ **`startsWith`, `endsWith`, `toLower`, `toUpper`, `replace` AND `replaceFirst` WERE THIS FAMILY AND ARE
+// NOW THE CORPUS'S** (struck from `stringSurfaceMemberNames` in waves 1 and 2), so no constant for any of
+// them survives — the arms that matched them are gone and a name shv2 no longer dispatches has nothing here
+// to spell. What is LEFT of the family is `contains` and `split`, for the two different reasons below.
 //
 // ⚠ **`contains` STAYS, AND NOT FOR WANT OF A TYPE.** shv2 has `Character`, so the reason its
 // `Character` overload (`stdlib/String.maxon:446`) blocks the retirement is the OVERLOAD PAIR itself:
@@ -3785,10 +3785,12 @@ end 'corpusFindGraphemeEndLabels'
 // and neither is a diagnosable event later. This arm serves the `String` spelling; the `Character` one is
 // still refused by the argument gate.
 let ContainsMethod = b"contains"
-let StringToLowerMethod = b"toLower"
-let StringToUpperMethod = b"toUpper"
-let StringReplaceMethod = b"replace"
 
+// `split` is not in this wave, and its declaration is unambiguous, so what holds it back is not `contains`'
+// blocker: it is the ONE String method that CONSTRUCTS an `Array with String`, and its arm decides the
+// element size and the `element_destroy@40` stamp through `emitArrayCreateOp` (see `parseStringSplit`).
+// Retiring it hands that to the ordinary generic-instance path, which is a thing to MEASURE rather than a
+// line to delete beside five members that answer with a String.
 let StringSplitMethod = b"split"
 
 // The three trims (P1.8 Slice D). Each takes an OPTIONAL `CharacterSet`, and they differ only in which end
@@ -4323,12 +4325,27 @@ end 'arrayWhereClause'
 // existed, this one denied a member that was fifteen lines away.
 //
 // ⭐⭐⭐ **AND A NAME LEAVING THIS LIST IS NOW A RETIREMENT RATHER THAN A HOLE.** `startsWith`, `endsWith`
-// and `count` were struck here, and that single deletion is the whole of what moved them onto
-// `stdlib/String.maxon`: `byteRecordMemberBelongsToTheCorpus` is asked ahead of `dispatchStringMethod`
-// and consults the corpus for exactly the names this roster does NOT carry, so each of the three is now
-// an ordinary qualified call to the ordinary declared function the corpus already had
-// (`stdlib/String.maxon:422`, `:430` and `:347`). Their arms, their runtime builders and their usage bits
-// went with them; nothing else was edited.
+// and `count` (wave 1), then `toLower`, `toUpper`, `replace` and `replaceFirst` (wave 2), were struck
+// here, and that single deletion is the whole of what moved each onto `stdlib/String.maxon`:
+// `byteRecordMemberBelongsToTheCorpus` is asked ahead of `dispatchStringMethod` and consults the corpus
+// for exactly the names this roster does NOT carry, so each of the seven is now an ordinary qualified call
+// to the ordinary declared function the corpus already had (`stdlib/String.maxon:422`, `:430`, `:347`,
+// `:665`, `:670`, `:494` and `:565`). Their arms, their runtime builders and their usage bits went with
+// them; nothing else was edited.
+//
+// ⚠⚠ **A RETIREMENT MOVES THE COST AS WELL AS THE BODY, AND WAVE 2 IS WHERE THAT FIRST BIT.** The corpus
+// `replace`/`replaceFirst` reach `findIn` (`stdlib/String.maxon:980`), which asks `byteAt` — a THROWING,
+// bounds-checked accessor — once per candidate position, where the retired `__str_replace` walked the
+// bytes with a raw load. The cost is in the byte-read LOWERING and no corpus source can reach it: the two
+// candidate stdlib cures were MEASURED and both are regressions (an `addressableBytes` walk allocates a
+// 48-byte record per call, +115.9% on shv2; a `byteAtOrPanic` rewrite is −22% on shv2 but +108% on the
+// bootstrap, which is the compiler that builds shv2). ⇒ **ACCEPTED and recorded** (user ruling), with the
+// real cure filed as a bootstrap rung. Do not attempt a stdlib fix here.
+//
+// ⚠ **WHAT A RETIREMENT MUST NOT DO IS DRAG ITS NEIGHBOURS OUT WITH IT.** `byteAt` and `setByte` are still
+// on this roster and still lowered inline, which is exactly what keeps the corpus `mapAsciiCase`
+// (`:647-662`, now the only body behind `toLower`/`toUpper`) allocation-free on a short string: it maps a
+// private copy through those two primitives rather than materializing a buffer.
 //
 // ⚠ **A MEMBER IS ONLY RETIRABLE ONCE ITS CORPUS DECLARATION IS UNAMBIGUOUS**, which is why `contains` is
 // still here beside them. It is an OVERLOAD PAIR in the corpus (`String` and `Character`,
@@ -4345,9 +4362,6 @@ function stringSurfaceMemberNames() returns ByteArrayArray
 	names.push(AppendMethod)
 	names.push(StringByteLengthMethod)
 	names.push(ContainsMethod)
-	names.push(StringToLowerMethod)
-	names.push(StringToUpperMethod)
-	names.push(StringReplaceMethod)
 	names.push(StringSplitMethod)
 	names.push(ByteViewMethod)
 	names.push(StringToByteArrayMethod)
@@ -4355,7 +4369,6 @@ function stringSurfaceMemberNames() returns ByteArrayArray
 	names.push(Utf16ViewMethod)
 	names.push(IsEmptyMethod)
 	names.push(CloneMethodName)
-	names.push(StringReplaceFirstMethod)
 	names.push(StringStartIndexMethod)
 	names.push(StringEndIndexMethod)
 	names.push(StringFindFirstMethod)
@@ -37151,27 +37164,18 @@ export type Parser
 			return try self.parseStringByteLength(recv.value, methodTok: methodTok)
 		end 'byteLength'
 
-		// ⭐ The P1.8 Slice C byte/ASCII family. Every one of them READS the receiver and writes a fresh
-		// value, so none takes `append`'s `noteReceiverWrite` path and a `let` receiver is fine throughout —
-		// which is exactly what `case-conversion-on-let-binding` pins.
+		// ⭐ What is LEFT of the P1.8 Slice C byte/ASCII family. Both of them READ the receiver and write a
+		// fresh value, so neither takes `append`'s `noteReceiverWrite` path and a `let` receiver is fine.
 		let range = SourceRange.between(baseTok, last: methodTok)
-		// ⚠ **`startsWith`/`endsWith` USED TO SIT HERE AND ARE NOW THE CORPUS'S** — struck from
-		// `stringSurfaceMemberNames`, which is the whole of the retirement, so they never reach this
-		// dispatcher at all. `contains` stays: it is an overload PAIR in the corpus and the call door does not
-		// yet resolve one (see the roster's own header for the leak/use-after-free that would follow).
+		// ⚠ **`startsWith`/`endsWith` (wave 1) AND `toLower`/`toUpper`/`replace`/`replaceFirst` (wave 2) USED
+		// TO SIT HERE AND ARE NOW THE CORPUS'S** — struck from `stringSurfaceMemberNames`, which is the whole
+		// of the retirement, so none of the six reaches this dispatcher at all. `contains` stays: it is an
+		// overload PAIR in the corpus and the call door does not yet resolve one (see the roster's own header
+		// for the leak/use-after-free that would follow, and for why `split` stays beside it).
 		if methodTok.value.equals(ContainsMethod) 'contains'
-			let needle = try self.parseStringArg(func, methodName: ContainsMethod)
+			let needle = try self.parseTaggedArg(func, methodName: ContainsMethod, required: ValueTypeTag.string)
 			return self.emitRuntimeCall(StrContainsName, args: pairArgs(recv.value, second: needle), resultTag: ValueTypeTag.boolean, resultNameId: UnnamedTypeId, range: range)
 		end 'contains'
-		if methodTok.value.equals(StringToLowerMethod) 'toLower'
-			return try self.parseStringCaseConversion(recv.value, lo: AsciiUpperA, hi: AsciiUpperZ, delta: AsciiToLowerDelta, range: range)
-		end 'toLower'
-		if methodTok.value.equals(StringToUpperMethod) 'toUpper'
-			return try self.parseStringCaseConversion(recv.value, lo: AsciiLowerA, hi: AsciiLowerZ, delta: AsciiToUpperDelta, range: range)
-		end 'toUpper'
-		if methodTok.value.equals(StringReplaceMethod) 'replace'
-			return try self.parseStringReplace(func, receiver: recv.value, callee: StrReplaceName, range: range)
-		end 'replace'
 		if methodTok.value.equals(StringSplitMethod) 'split'
 			return try self.parseStringSplit(func, receiver: recv.value, range: range)
 		end 'split'
@@ -37217,10 +37221,6 @@ export type Parser
 			try self.consumeEmptyArgList()
 			return self.emitOwnedRuntimeResult(StrCloneName, args: singletonArgs(recv.value), resultTag: ValueTypeTag.string, resultNameId: UnnamedTypeId, range: range)
 		end 'clone'
-		if methodTok.value.equals(StringReplaceFirstMethod) 'replaceFirst'
-			return try self.parseStringReplace(func, receiver: recv.value, callee: StrReplaceFirstName, range: range)
-		end 'replaceFirst'
-
 		// ⭐ P1.8 Slice B2 — the `StringIndex` family. Four producers and one consumer; every one of them
 		// READS the receiver and writes a fresh value, so none takes `append`'s `noteReceiverWrite` path and
 		// a `let` receiver is fine throughout.
@@ -37341,14 +37341,33 @@ export type Parser
 		// so serving the String's through the same arg-list protocol is what makes the two spellings agree
 		// rather than a special case for this file.
 		//
-		// ⭐ It writes through `__str_bytes_view(self)` — the buffer over the receiver's OWN bytes, which is
-		// exactly what the corpus body's `managed.setByte(…)` means — so there is no second byte-writer graph
-		// and no `__str_set_byte` to keep in step with `__arr_set_byte`.
+		// ⭐ It hands the RECEIVER'S OWN RECORD to `__arr_set_byte`, which is exactly what the corpus body's
+		// `managed.setByte(…)` means on a FUSED record: a String record and an Array record agree on all five
+		// slots that entry reads (`BufferOwnership`'s shared prefix, whose whole reason is one emitted function
+		// reading both), and it touches `@40` nowhere. So there is no second byte-writer graph and no
+		// `__str_set_byte` to keep in step with `__arr_set_byte` — the bound is the buffer's capacity, which is
+		// the bound the oracle's `__ManagedMemory.setByte` applies to the very same call.
+		//
+		// ⛔⛔ **IT WROTE THROUGH `__str_bytes_view(self)` UNTIL W49 WAVE 2, AND THE WRITE LANDED NOWHERE.** That
+		// view is a NON-OWNING record (`capacity@16 = ViewBufferCapacity`), so `__arr_set_byte`'s guard sent it
+		// through `__arr_cow_detach` FIRST — the view got a private copy of the bytes, the byte was written into
+		// that copy, and the copy died with the owned temporary at statement end. The String was never touched.
+		// `buildStrBytesView`'s own header stated the mechanism and called it safe on the grounds that
+		// *"nothing in `stdlib/` writes through this door"*, which was true only because the door's ONE corpus
+		// caller — `mapAsciiCase` — was unreachable while `toLower`/`toUpper` were served by a synthesized arm.
+		// Wave 2 retired those two onto the corpus, `mapAsciiCase` became reachable, and every case conversion
+		// in the suite returned its receiver verbatim. ⇒ **A CLAIM THAT AN UNREACHABLE PATH IS SAFE IS A CLAIM
+		// NOTHING MEASURED.** Passing the record instead makes the detach ask about the STRING's provenance —
+		// an `.rdata` literal or a viewed buffer still gets its private copy, and the String keeps it — which is
+		// the copy-on-write the corpus declaration promises (`stdlib/String.maxon:305-318`).
+		//
+		// ⭐ It also deletes an allocation PER BYTE WRITTEN: the view record was 48 bytes plus an `__mm_incref`,
+		// minted and dropped once per `setByte`, where a detach happens at most once per String.
 		if methodTok.value.equals(ManagedMemorySetByteMethod) 'setByte'
 			try self.requireStdlibOnlyStringMethod(methodTok)
 			try self.requireVoidMethodIsStatement(resultUsed, methodTok: methodTok)
 			var setArgs = try self.parseTwoBuiltinIntegerArgList(func, firstParam: ManagedMemoryOffsetParamName, secondParam: ManagedMemoryValueParamName, methodTok: methodTok)
-			setArgs.insert(0, value: self.emitOwnedRuntimeResult(StrBytesViewName, args: singletonArgs(recv.value), resultTag: ValueTypeTag.genericInstance, resultNameId: self.signatures.internSynthesizedByteInstance(), range: range))
+			setArgs.insert(0, value: recv.value)
 			return self.emitRuntimeCall(ArrSetByteName, args: setArgs, resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
 		end 'setByte'
 		if methodTok.value.equals(StringHasSingleByteGraphemesMethod) 'hasSingleByteGraphemes'
@@ -37422,16 +37441,26 @@ export type Parser
 	// names are ON the roster (`stringSurfaceMemberNames`), so the gate ahead of the arms admits them and
 	// they arrive HERE — which is what makes that distinction observable rather than merely intended.
 	//
-	// ⚠ **THE FOUR METHOD NAMES ARE RENDERED FROM THE ARMS' OWN CONSTANTS, NOT TYPED OUT (A2q)**, because
+	// ⚠ **THE METHOD NAMES ARE RENDERED FROM THE ARMS' OWN CONSTANTS, NOT TYPED OUT (A2q)**, because
 	// this sentence and the roster's tail clause name the same members and a rename that reached one would
 	// leave the other confidently wrong. It stays a VISIBILITY sentence rather than becoming a roster: it
 	// answers "who may call this?", not "what is there?", and the two questions have different lists.
+	//
+	// ⛔ **IT SAID "THE FOUR" AND HAD FIVE CALLERS, AND THE ONE IT LEFT OUT WAS `setByte`** — found at W49
+	// wave 2, which is the rung that gave that member its first corpus caller. A user writing
+	// `s.setByte(0, value: 65)` was refused by a sentence enumerating four OTHER members and never their
+	// own: the D12 wrong-noun defect, in the one message whose whole job is to say which member is being
+	// refused and why. It is the member most worth naming, too — it is the only one of the five that
+	// WRITES, so the reason it is stdlib-only is not "you would read something private" but "you would
+	// mutate a String through a `let`". Every arm that calls this gate must appear in this sentence; five
+	// do, and `stdlib-only-string-methods.md` has a case per member so a sixth arriving without one is a
+	// red case rather than a silent omission.
 	function requireStdlibOnlyStringMethod(methodTok Token) throws ParseError
 		if self.livesUnderStdlibDirectory 'thestdlibsOwn'
 			return
 		end 'thestdlibsOwn'
 
-		throw ParseError.unsupported("String method '{String.from(methodTok.value)}' — it is STDLIB-ONLY (`module function` in `stdlib/String.maxon`, which the reference compiler refuses to user code as a not-exported error) and this file is not under `stdlib/`. `{String.from(StringAddressableBytesMethod)}` hands out a live view of a String's own bytes, and `{String.from(ByteAtMethod)}`/`{String.from(StringByteAtOrPanicMethod)}` each read one of them — the first through a catchable failure, the second through none — and `{String.from(StringHasSingleByteGraphemesMethod)}` reports a private flag of the record; user code reaches the bytes through `{String.from(StringToByteArrayMethod)}()`, which copies", line: methodTok.line, column: methodTok.column)
+		throw ParseError.unsupported("String method '{String.from(methodTok.value)}' — it is STDLIB-ONLY (`module function` in `stdlib/String.maxon`, which the reference compiler refuses to user code as a not-exported error) and this file is not under `stdlib/`. `{String.from(StringAddressableBytesMethod)}` hands out a live view of a String's own bytes, and `{String.from(ByteAtMethod)}`/`{String.from(StringByteAtOrPanicMethod)}` each read one of them — the first through a catchable failure, the second through none — while `{String.from(ManagedMemorySetByteMethod)}` WRITES one, which would mutate a String the caller may only have borrowed — and `{String.from(StringHasSingleByteGraphemesMethod)}` reports a private flag of the record; user code reaches the bytes through `{String.from(StringToByteArrayMethod)}()`, which copies", line: methodTok.line, column: methodTok.column)
 	end 'requireStdlibOnlyStringMethod'
 
 	// ⭐⭐ **THE BUFFER'S TWO STDLIB-ONLY MEMBERS — the `requireStdlibOnlyStringMethod` twin, one surface over,
@@ -37469,12 +37498,14 @@ export type Parser
 	// ⭐ **`s.findFirst(n)` / `s.findLast(n)` — the two THROWING searches, which differ ONLY in which runtime
 	// entry point they name**: same receiver, same single String argument, same `StringIndex` result, same
 	// `StringError.notFound` on a miss. One home, so a third search cannot arrive with a different idea of
-	// any of those (`parseStringReplace`'s arrangement, for its reason).
+	// any of those. (This arrangement had three other users — `parseStringPredicate`, then
+	// `parseStringCaseConversion` and `parseStringReplace` — and each went with the members it served as they
+	// retired onto `stdlib/String.maxon`. It is the last one left.)
 	//
 	// The result is an OWNED `StringIndex` box on the SUCCESS path only; on the error path the callee's
 	// primary register is unread and the `otherwise` value takes its place, so nothing is dropped twice.
 	function parseStringSearch(func IrFunction, receiver ValueId, callee ByteArray, methodName ByteArray, range SourceRange) returns ValueId throws ParseError
-		let needle = try self.parseStringArg(func, methodName: methodName)
+		let needle = try self.parseTaggedArg(func, methodName: methodName, required: ValueTypeTag.string)
 		return self.emitOwnedRuntimeResult(callee, args: pairArgs(receiver, second: needle), resultTag: ValueTypeTag.structRef, resultNameId: self.stringIndexNameId(), range: range)
 	end 'parseStringSearch'
 
@@ -37545,8 +37576,9 @@ export type Parser
 	end 'parseStringSliceEnd'
 
 	// Parse one argument expression and require it to be a `StringIndex`, blaming the argument's own first
-	// token. `requireStringArgValue`'s twin, and it needs its own body because a `StringIndex` is not
-	// identified by a TAG — every struct shares `structRef` — but by the compiler-owned name behind it.
+	// token. `parseTaggedArg`'s type check, one type over, and it needs its own body because a `StringIndex`
+	// is not identified by a TAG — every struct shares `structRef` — but by the compiler-owned name behind
+	// it. It is also asked WITHOUT the parens, because `slice` takes two indices inside one pair.
 	//
 	// ⚠ **`methodName` IS A PARAMETER BECAUSE THERE IS NOW MORE THAN ONE ASKER.** It spelled `SliceMethod`
 	// inline while `slice` was the only consumer of an index; `indexAfter` is the second, and an inline
@@ -37561,36 +37593,6 @@ export type Parser
 		return value
 	end 'requireStringIndexValue'
 
-	// `s.toLower()` / `s.toUpper()` — ONE runtime graph, the caller supplying the gated byte range and the
-	// shift, because that is the only thing the two methods differ in (`__str_map_case`). The result is a
-	// FRESH owned String and the receiver is untouched, so neither method needs `noteReceiverWrite` and both
-	// are legal on a `let`.
-	function parseStringCaseConversion(receiver ValueId, lo ParsedInt, hi ParsedInt, delta ParsedInt, range SourceRange) returns ValueId throws ParseError
-		try self.consumeEmptyArgList()
-		let args = quadArgs(receiver, second: self.emitLiteral(lo, valueType: MaxonType.integer, range: range), third: self.emitLiteral(hi, valueType: MaxonType.integer, range: range), fourth: self.emitLiteral(delta, valueType: MaxonType.integer, range: range))
-		return self.emitOwnedRuntimeResult(StrMapCaseName, args: args, resultTag: ValueTypeTag.string, resultNameId: UnnamedTypeId, range: range)
-	end 'parseStringCaseConversion'
-
-	// `s.replace(old, with: new)` / `s.replaceFirst(old, with: new)` — the two two-argument builtin String
-	// methods, and the only ones whose label is a KEYWORD (see `consumeWithArgLabel`). They differ ONLY in
-	// which runtime entry point they name — same receiver, same two String arguments, same fresh owned
-	// String result — so they share one home: a third replacement cannot arrive with a different idea of any
-	// of those. (`parseStringSearch` names this arrangement too; the two are the surviving pair of it, and
-	// `parseStringPredicate` was the third until `startsWith`/`endsWith` retired onto the corpus and left
-	// `contains` as its only caller.)
-	//
-	// Both arguments are BORROWED (their bytes are read and copied), so neither is moved and an owned
-	// interpolation argument stays a pending temp that drops at statement end, after the copy — `append`'s
-	// rule for its argument, for the same reason.
-	function parseStringReplace(func IrFunction, receiver ValueId, callee ByteArray, range SourceRange) returns ValueId throws ParseError
-		try self.consume(TokenKind.leftParen)
-		let old = try self.requireStringArgValue(func, methodName: StringReplaceMethod)
-		try self.consumeWithArgLabel()
-		let replacement = try self.requireStringArgValue(func, methodName: StringReplaceMethod)
-		try self.consume(TokenKind.rightParen)
-		return self.emitOwnedRuntimeResult(callee, args: tripleArgs(receiver, second: old, third: replacement), resultTag: ValueTypeTag.string, resultNameId: UnnamedTypeId, range: range)
-	end 'parseStringReplace'
-
 	// ⭐ **`s.split(delimiter)` — the first builtin method that CONSTRUCTS an `Array with String` at runtime.**
 	// The array is created HERE, through `emitArrayCreateOp` — the one array-creation door — and handed to
 	// `__str_split` to fill. That split of labour is the point: element size and the `element_destroy@40`
@@ -37604,7 +37606,7 @@ export type Parser
 	// `emitOwnedRuntimeResult`, because the value the caller owns is the array the PARSER created, not the
 	// void result of the call that filled it — the same order `finishArrayLiteral` uses for its pushes.
 	function parseStringSplit(func IrFunction, receiver ValueId, range SourceRange) returns ValueId throws ParseError
-		let delimiter = try self.parseStringArg(func, methodName: StringSplitMethod)
+		let delimiter = try self.parseTaggedArg(func, methodName: StringSplitMethod, required: ValueTypeTag.string)
 		let giid = self.signatures.builtinInstanceForElement(ArrayBuiltinBaseName, element: MaxonType.string)
 		let parts = try self.emitArrayCreateOp(giid, range: range)
 		_ = self.emitRuntimeCall(StrSplitName, args: tripleArgs(receiver, second: delimiter, third: parts), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
@@ -38751,22 +38753,10 @@ export type Parser
 			throw ParseError.unsupported("`{String.from(CharacterSetBuiltinName)}` method '{String.from(methodTok.value)}' — shv2 provides `{String.from(ContainsMethod)}`; the reference's set algebra (`union`, `intersection`, `inverted`) has no consumer in the corpus", line: methodTok.line, column: methodTok.column)
 		end 'unknownMethod'
 
-		try self.consume(TokenKind.leftParen)
-		let character = try self.requireCharacterArgValue(func, methodName: methodTok.value)
-		try self.consume(TokenKind.rightParen)
+		let character = try self.parseTaggedArg(func, methodName: methodTok.value, required: ValueTypeTag.character)
+
 		return self.emitRuntimeCall(CharSetContainsName, args: pairArgs(recv.value, second: character), resultTag: ValueTypeTag.boolean, resultNameId: UnnamedTypeId, range: range)
 	end 'dispatchCharacterSetMethod'
-
-	// Parse one argument expression and require it to be a `Character`, blaming the argument's own first
-	// token. The `requireStringArgValue` twin.
-	function requireCharacterArgValue(func IrFunction, methodName ByteArray) returns ValueId throws ParseError
-		let argTok = self.current()
-		let arg = try self.parseExpression(func, block: self.currentBlock)
-		if self.tagOf(arg) != ValueTypeTag.character 'argNotCharacter'
-			throw ParseError.builtinOperandType(String.from(methodName), required: typeTagName(ValueTypeTag.character), got: typeTagName(self.tagOf(arg)), line: argTok.line, column: argTok.column)
-		end 'argNotCharacter'
-		return arg
-	end 'requireCharacterArgValue'
 
 	// The compiler-owned `CharacterSet` name, adopted into THIS FILE's interner — which is what a value's
 	// name column holds (`mintValue`), so it must be the local id and not the whole-program one. Interning is
@@ -39004,7 +38994,7 @@ export type Parser
 	end 'valueIsStringIndex'
 
 	// `( )` — the empty argument list of a no-argument BUILTIN call, whichever family it belongs to: a String
-	// accessor (`byteLength`, `toLower`, `toUpper`), an array method (`count`, `first`, `pop`, `clear`, …), a
+	// accessor (`byteLength`, `isEmpty`, `clone`), an array method (`count`, `first`, `pop`, `clear`, …), a
 	// set method, and the two static factories (`IntArray.create()`, `IntSet.create()`). It had four separate
 	// spellings; one home means a builtin's empty argument list is parsed the same way everywhere, and any
 	// future relaxation (a newline inside the parens, say) reaches all of them at once.
@@ -39013,36 +39003,30 @@ export type Parser
 		try self.consume(TokenKind.rightParen)
 	end 'consumeEmptyArgList'
 
-	// `( expr )` — the single String-typed argument every one-argument builtin String method takes
-	// (`append`, `contains`, `split`, and the two searches). One home for the paren pair and the type
-	// check, so a new method cannot arrive with its own idea of what a String argument is.
-	function parseStringArg(func IrFunction, methodName ByteArray) returns ValueId throws ParseError
+	// `( expr )` — the single argument of a one-argument BUILTIN method, required to be of one TAG: a
+	// `String` for `append`, `contains`, `split` and the two searches, a `Character` for a
+	// `CharacterSet`'s `contains`. One home for the paren pair and the type check, so a new method cannot
+	// arrive with its own idea of what a typed argument is.
+	//
+	// ⚠ **IT WAS THREE FUNCTIONS UNTIL W49 WAVE 2 — `parseStringArg` over a `requireStringArgValue`, plus a
+	// transcribed `requireCharacterArgValue` whose caller spelled the parens itself.** The split existed for
+	// `replace`, which took TWO String arguments inside ONE paren pair and so needed the value half alone;
+	// `replace`/`replaceFirst` retired onto `stdlib/String.maxon` and took that caller with them, at which
+	// point the only thing separating the three was the tag. It is a parameter now.
+	//
+	// The blame token is the ARGUMENT's own first token, not the method's, which is why it is read before the
+	// expression is parsed. (`requireStringIndexValue` stays apart: a `StringIndex` is not identified by a
+	// tag at all, and `slice` still asks for two of them inside one paren pair.)
+	function parseTaggedArg(func IrFunction, methodName ByteArray, required ValueTypeTag) returns ValueId throws ParseError
 		try self.consume(TokenKind.leftParen)
-		let arg = try self.requireStringArgValue(func, methodName: methodName)
-		try self.consume(TokenKind.rightParen)
-		return arg
-	end 'parseStringArg'
-
-	// Parse one argument expression and require it to be a String, blaming the argument's own first token.
-	// Split from `parseStringArg` for `replace`, whose two arguments share the paren pair.
-	function requireStringArgValue(func IrFunction, methodName ByteArray) returns ValueId throws ParseError
 		let argTok = self.current()
 		let arg = try self.parseExpression(func, block: self.currentBlock)
-		if self.tagOf(arg) != ValueTypeTag.string 'argNotString'
-			throw ParseError.builtinOperandType(String.from(methodName), required: typeTagName(ValueTypeTag.string), got: typeTagName(self.tagOf(arg)), line: argTok.line, column: argTok.column)
-		end 'argNotString'
+		if self.tagOf(arg) != required 'argTagMismatch'
+			throw ParseError.builtinOperandType(String.from(methodName), required: typeTagName(required), got: typeTagName(self.tagOf(arg)), line: argTok.line, column: argTok.column)
+		end 'argTagMismatch'
+		try self.consume(TokenKind.rightParen)
 		return arg
-	end 'requireStringArgValue'
-
-	// The ` , with : ` separating `replace`'s positional needle from its labelled replacement. It cannot go
-	// through `consumeArrayArgLabel` — that one consumes an IDENTIFIER and compares its text, and `with` is a
-	// reserved KEYWORD (`Array with T`), so the lexer never hands it over as an identifier. Here the token
-	// KIND *is* the label, which makes consuming the kind the whole check.
-	function consumeWithArgLabel() throws ParseError
-		try self.consume(TokenKind.comma)
-		try self.consume(TokenKind.with)
-		try self.consume(TokenKind.colon)
-	end 'consumeWithArgLabel'
+	end 'parseTaggedArg'
 
 	// s.append(t) -- grow the String s by t's bytes, IN PLACE (a __str_append(s, t) runtime call). s must
 	// be a var (append mutates the receiver), else E3019 with the bootstrap's exact framing. s is already
@@ -39065,7 +39049,7 @@ export type Parser
 		// CONSTANT it had matched (`AppendMethod`), which is the same bytes `methodTok.value` carries.
 		try self.requireVoidMethodIsStatement(resultUsed, methodTok: methodTok)
 
-		let arg = try self.parseStringArg(func, methodName: AppendMethod)
+		let arg = try self.parseTaggedArg(func, methodName: AppendMethod, required: ValueTypeTag.string)
 		_ = self.emitRuntimeCall(StrAppendName, args: pairArgs(recv.value, second: arg), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: SourceRange.between(recv.anchor, last: methodTok))
 		// append is a statement (resultUsed false, checked above); the returned id is discarded by the
 		// caller. The receiver value is the honest thing to hand back -- it is what s still denotes.
