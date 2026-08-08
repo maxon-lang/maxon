@@ -3766,36 +3766,28 @@ function corpusFindGraphemeEndLabels() returns ByteArrayArray
 	return labels
 end 'corpusFindGraphemeEndLabels'
 
-// ⭐ **THE P1.8 SLICE C BYTE/ASCII METHODS** — the `String` methods that need no Unicode character
-// database, no grapheme segmentation and no `StringIndex`. That last one is the LINE, not a coincidence:
-// `findFirst`/`findLast` return a `StringIndex` whose `charIdx` is a GRAPHEME index, and `slice` takes two of
-// them, so all three are grapheme-indexed BY THEIR SIGNATURES and wait for that type (P1.8 Slice B) however
-// byte-level their search happens to be.
+// ⭐⭐ **THE P1.8 SLICE C BYTE/ASCII FAMILY IS GONE FROM THIS FILE — ALL SEVEN OF IT** (W49 waves 1, 2, 4
+// and 5). `startsWith`/`endsWith`, then `toLower`/`toUpper`/`replace`/`replaceFirst`, then `contains`, and
+// finally `split`: every one is an ordinary declared function in `stdlib/String.maxon` reached through
+// `memberBelongsToTheCorpus`, so no constant for any of them survives here — a name shv2 no longer
+// dispatches has nothing in this file to spell. `slice` and the three trims (Slice D) went the same way at
+// wave 4, and the five `StringIndex` producers at wave 3.
 //
-// ⚠ **`startsWith`, `endsWith`, `toLower`, `toUpper`, `replace` AND `replaceFirst` WERE THIS FAMILY AND ARE
-// NOW THE CORPUS'S** (struck from `stringSurfaceMemberNames` in waves 1 and 2), so no constant for any of
-// them survives — the arms that matched them are gone and a name shv2 no longer dispatches has nothing here
-// to spell. What is LEFT of the family is `contains` and `split`, for the two different reasons below.
+// ⭐⭐ **`split` WAS THE LAST, AND IT WAS HELD BACK FOR ONE MEASUREMENT RATHER THAN FOR A BLOCKER.** It is
+// the one retired member that CONSTRUCTED an `Array with String`, and its arm decided that array's element
+// size and its `element_destroy@40` stamp through `emitArrayCreateOp` — the one array-creation door — so
+// the open question was whether the ordinary generic-instance path decides them the same way. MEASURED at
+// wave 5, on the emitted x64 of the same program before and after, and it is the same three instructions
+// in the same order: `movRegImm32 rcx, 8` / `leaRegFunc rdx, [rip + __str_decref]` / `callDirect
+// __arr_create`. The corpus's `typealias StringArray = Array with String` (`stdlib/String.maxon:604`) and
+// a caller's own `Array with String` INTERN TO ONE `GenericInstanceId` — interning is keyed on
+// `(typeNameId, args)` over the whole program, so the two spellings cannot be two instances — which is why
+// a `["…"]` literal and a `split` result are assignable in both directions.
 //
-// ⚠ **`contains` STAYS, AND NOT FOR WANT OF A TYPE.** shv2 has `Character`, so the reason its
-// `Character` overload (`stdlib/String.maxon:446`) blocks the retirement is the OVERLOAD PAIR itself:
-// `emitCall` mints the result, enrols the owned temp and applies caller-consume against the FIRST-DECLARED
-// member (`:439`, the `String` one) while `SemanticCheck.resolveOverloadedCalls` picks the real one
-// afterwards. Retired today, `s.contains(c)` would leak in one direction and use-after-free in the other,
-// and neither is a diagnosable event later. This arm serves the `String` spelling; the `Character` one is
-// still refused by the argument gate.
+// ⚠ **`ContainsMethod` SURVIVED `contains`' RETIREMENT AND IS NOT A LEFTOVER**: `Set`, `Map` and
+// `CharacterSet` all dispatch a `contains` of their own through it, and those surfaces are shv2's. What
+// wave 4 retired is the `String` ARM, not the spelling.
 let ContainsMethod = b"contains"
-
-// `split` is not in this wave, and its declaration is unambiguous, so what holds it back is not `contains`'
-// blocker: it is the ONE String method that CONSTRUCTS an `Array with String`, and its arm decides the
-// element size and the `element_destroy@40` stamp through `emitArrayCreateOp` (see `parseStringSplit`).
-// Retiring it hands that to the ordinary generic-instance path, which is a thing to MEASURE rather than a
-// line to delete beside five members that answer with a String.
-let StringSplitMethod = b"split"
-
-// ⚠ **THE THREE TRIMS (P1.8 Slice D) WERE HERE AND ARE THE CORPUS'S NOW** (W49 wave 4) — struck from
-// `stringSurfaceMemberNames` with `contains` and `slice`, so nothing names them and a constant for any of
-// the three could only spell a member no dispatcher serves.
 
 // ⭐ **WHAT IS LEFT OF THE P1.8 SLICE B2 `StringIndex` FAMILY: THE INDEX'S OWN TWO ACCESSORS.**
 // `charIndex`/`bytePos` are the reference's own names (`stdlib/String.maxon:925-931`), and they are
@@ -4333,22 +4325,41 @@ end 'arrayWhereClause'
 //
 // ⭐⭐⭐ **AND A NAME LEAVING THIS LIST IS NOW A RETIREMENT RATHER THAN A HOLE.** `startsWith`, `endsWith`
 // and `count` (wave 1), then `toLower`, `toUpper`, `replace` and `replaceFirst` (wave 2), then
-// `findFirst`, `findLast`, `startIndex`, `endIndex` and `indexAfter` (wave 3), were struck here, and that
+// `findFirst`, `findLast`, `startIndex`, `endIndex` and `indexAfter` (wave 3), then `contains`, `slice`,
+// `trim`, `trimStart` and `trimEnd` (wave 4), then `split` (wave 5), were struck here, and that
 // single deletion is the whole of what moved each onto `stdlib/String.maxon`:
 // `memberBelongsToTheCorpus` is asked ahead of `dispatchStringMethod` and consults the corpus
-// for exactly the names this roster does NOT carry, so each of the twelve is now an ordinary qualified
+// for exactly the names this roster does NOT carry, so each of the eighteen is now an ordinary qualified
 // call to the ordinary declared function the corpus already had (`stdlib/String.maxon:422`, `:430`,
-// `:347`, `:665`, `:670`, `:494`, `:565`, `:460`, `:464`, `:371`, `:374` and `:387`). Their arms, their
-// runtime builders and their usage bits went with them.
+// `:347`, `:665`, `:670`, `:494`, `:565`, `:460`, `:464`, `:371`, `:374`, `:387`, `:439`, `:470`, `:714`,
+// `:730`, `:745` and `:606`). Their arms, their runtime builders and their usage bits went with them.
 //
-// ⚠⚠ **WAVE 3 IS THE ONE THAT EDITED SOMETHING ELSE, AND IT HAD TO.** The other eleven members answer with
-// a `String`, a `bool` or an `int` — types the program already agrees on. These five PRODUCE a
+// ⚠⚠ **WAVE 3 IS THE ONE THAT EDITED SOMETHING ELSE, AND IT HAD TO.** The eleven members retired around it
+// answer with a `String`, a `bool` or an `int` — types the program already agrees on. These five PRODUCE a
 // `StringIndex`, and shv2 held a SECOND declaration of that type under the reserved spelling
 // `__StringIndex` (`SignatureIndex.StringIndexTypeName`, where the whole measurement is recorded). Retiring
-// the producers alone would have left `slice` — which stays, for the overload reason below — demanding the
-// compiler's declaration while every index a program could make was the corpus's. So the second
-// declaration retired with them: the corpus's is the only one now, `slice` reads its layout, and
-// `StringIndex` joins `TypeResolution.isCompilerOwnedTypeName` to keep the one bucket uncontested.
+// the producers alone would have left `slice` demanding the compiler's declaration while every index a
+// program could make was the corpus's. So the second declaration retired with them: the corpus's is the
+// only one now, `slice` (retired itself at wave 4) reads its layout, and `StringIndex` joins
+// `TypeResolution.isCompilerOwnedTypeName` to keep the one bucket uncontested.
+//
+// ⭐⭐ **WAVE 5 IS THE ONE THAT HANDED OVER A TYPE THE MEMBER CONSTRUCTED, AND THAT IS A THIRD KIND OF
+// RETIREMENT.** `split` answers with an `Array with String` and BUILT one, so its arm — not the corpus —
+// decided that array's element size and its `element_destroy@40` stamp, through `emitArrayCreateOp`. Wave 3
+// handed over a type shv2 DECLARED TWICE; wave 5 hands over a type shv2 STAMPED. Both were settled by
+// measurement rather than by reading, and this one three ways, all on the tree as it stood:
+//   * **The stamp is identical.** The emitted x64 for `__arr_create` is the same three instructions in the
+//     same order on both sides — element size 8, `element_destroy@40` = `__str_decref`.
+//   * **The instance is ONE, not two.** The corpus's inner `typealias StringArray = Array with String`
+//     (`stdlib/String.maxon:604`) and a caller's own `Array with String` intern to one `GenericInstanceId`,
+//     because `genericInstances.intern` is keyed on `(typeNameId, args)` over the WHOLE program and cannot
+//     be two things for one key. A `["…"]` literal and a `split` result are assignable in both directions.
+//   * **An owned `Array with String` survives being returned out of a corpus function**, through a user
+//     function, into a struct field and out again, with every element cloned and outliving the receiver —
+//     leak gate clean (the gate is live and the suite pins four cases that make it fire).
+// ⇒ The sweep probe that existed only to intern that instance went with the member (`atStringSplitCall`):
+// the corpus's own typealias is folded in every compile, so there is no per-file decision left to get wrong
+// — the same shape wave 3's `atStringIndexProducer` retired in.
 //
 // ⚠⚠ **A RETIREMENT MOVES THE COST AS WELL AS THE BODY, AND WAVE 2 IS WHERE THAT FIRST BIT.** The corpus
 // `replace`/`replaceFirst` reach `findIn` (`stdlib/String.maxon:980`), which asks `byteAt` — a THROWING,
@@ -4388,7 +4399,6 @@ function stringSurfaceMemberNames() returns ByteArrayArray
 	var names = ByteArrayArray.create()
 	names.push(AppendMethod)
 	names.push(StringByteLengthMethod)
-	names.push(StringSplitMethod)
 	names.push(ByteViewMethod)
 	names.push(StringToByteArrayMethod)
 	names.push(CodepointViewMethod)
@@ -8714,19 +8724,15 @@ export type Parser
 		// walk, exactly as the `Set`/`List` arms intern theirs. A vector's element cannot be an aggregate
 		// (`requireVectorElementType`), so there is no whole-program half to defer.
 		var vectorFromSizes = FixedSizeArray.create()
-		// A `.split` — the one builtin METHOD that constructs an `Array with String` at runtime (P1.8 Slice C).
-		// Like a bare `["…"]`, its instance has no typealias to intern from, so the sweep interns it and the
-		// parser reads the giid back at construction time. The sweep reads TOKENS and cannot know the receiver
-		// is a String, so it OVER-interns — the same answer `internLiteralContainerInstances` gives to the
-		// same limitation, and an unreferenced instance has no descriptor or destructor synthesized (both gate
-		// on usage), so it costs a registry entry and no codegen.
-		var hasStringSplitCall = false
+		// ⚠ **`hasStringSplitCall` WAS HERE AND WENT WITH `String.split`** (W49 wave 5) — see
+		// `atStringSplitCall`'s grave for why the corpus's own `typealias StringArray` replaces it.
+		//
 		// A `.bytes()` — the P1.8 slice B byte view, which constructs the SAME `Array with Byte` instance a
-		// `b"…"` literal does. Like `split`'s, its instance has no typealias to intern from, so the sweep
-		// interns it and the parser reads the giid back at construction time; and like `split`'s, the sweep
-		// reads TOKENS and cannot know the receiver is a String or a Character, so it OVER-interns. An
-		// unreferenced instance has no descriptor or destructor synthesized (both gate on usage), so it
-		// costs a registry entry and no codegen.
+		// `b"…"` literal does. Its instance has no typealias to intern from, so the sweep interns it and the
+		// parser reads the giid back at construction time; and the sweep reads TOKENS and cannot know the
+		// receiver is a String or a Character, so it OVER-interns — the same answer
+		// `internLiteralContainerInstances` gives to the same limitation. An unreferenced instance has no
+		// descriptor or destructor synthesized (both gate on usage), so it costs a registry entry and no codegen.
 		var hasByteViewCall = false
 		// ⚠⚠ **A LAYOUT PROBE MAY NOT RIDE THE DECLARATION WALK BELOW, BECAUSE THAT WALK DOES NOT SEE EVERY
 		// TOKEN.** `recordScannedType` consumes a whole `type` declaration — METHOD BODIES INCLUDED — and the
@@ -8783,10 +8789,6 @@ export type Parser
 					vectorFromSizes.push(size)
 				end 'wellFormedLiteral'
 			end 'vectorFromToken'
-
-			if self.atStringSplitCall() 'splitToken'
-				hasStringSplitCall = true
-			end 'splitToken'
 
 			if self.atByteViewCall() 'bytesToken'
 				hasByteViewCall = true
@@ -8890,7 +8892,7 @@ export type Parser
 		// Intern the managed-element literal instances — `Array with String` for a `["…"]`, plus every declared
 		// struct/union for a `[<identifier>…]` (whose element type the sweep cannot see). After `foldFile` so the
 		// aggregate loop reads the folded structs/unions and so the giids follow the file's named instances (P1.7 slice 3).
-		if hasStringArrayLiteral or hasStringSplitCall 'internStringArrayLiteral'
+		if hasStringArrayLiteral 'internStringArrayLiteral'
 			_ = index.builtinInstanceForElement(ArrayBuiltinBaseName, element: MaxonType.string)
 		end 'internStringArrayLiteral'
 		// Only NOTED here, never performed: the over-interning is over every declared struct/union in the
@@ -9058,12 +9060,14 @@ export type Parser
 		end 'declared'
 	end 'atStringLiteralInitConstruction'
 
-	// Is the cursor on the `.` of a `<receiver>.split` method call? Asked at the DOT rather than at the
-	// method name so the predicate reads FORWARD like `atSetFromConstruction` and never has to index behind
-	// the cursor.
-	function atStringSplitCall() returns bool
-		return self.atBuiltinMethodCall(StringSplitMethod)
-	end 'atStringSplitCall'
+	// ⚠ **`atStringSplitCall` WAS HERE AND WENT WITH `String.split`** (W49 wave 5). It existed because a
+	// SYNTHESIZED `split` arm materialized an `Array with String` that no `typealias` in the program had to
+	// mention, so the sweep interned that instance off a token shape. The corpus declares one
+	// (`stdlib/String.maxon:604`), and `String.maxon` is listed in every compile, so the instance now arrives
+	// through the ordinary declaration fold exactly as `atStringIndexProducer`'s type did at wave 3 — and it
+	// is the SAME instance, because interning is keyed on `(typeNameId, args)` across the whole program.
+	// VERIFIED by deleting this probe rather than assumed: `string-split` and `string-methods-ascii` both
+	// contain cases whose only `Array with String` is a split result, with no `["…"]` literal anywhere.
 
 	// A `.bytes(` or `.toByteArray(` at the cursor — the TWO spellings of the byte view, whose one
 	// `Array with Byte` the sweep interns. Both are asked in ONE predicate because they are one question
@@ -9203,7 +9207,7 @@ export type Parser
 	// Is the cursor on `. <name>`? The shape every "does this file call builtin method X?" sweep probe
 	// asks, written once so a second probe cannot arrive with its own idea of what a method call looks
 	// like. It is deliberately TOLERANT — it sees a token pair, not a receiver type — which is what makes
-	// its callers OVER-intern rather than miss (see `hasStringSplitCall`).
+	// its callers OVER-intern rather than miss (see `hasByteViewCall`).
 	function atBuiltinMethodCall(methodName ByteArray) returns bool
 		return self.at(TokenKind.dot) and self.peekKind() == TokenKind.identifier and self.tokenAt(self.pos + 1).value.equals(methodName)
 	end 'atBuiltinMethodCall'
@@ -37161,17 +37165,11 @@ export type Parser
 			return try self.parseStringByteLength(recv.value, methodTok: methodTok)
 		end 'byteLength'
 
-		// ⭐ What is LEFT of the P1.8 Slice C byte/ASCII family. Both of them READ the receiver and write a
-		// fresh value, so neither takes `append`'s `noteReceiverWrite` path and a `let` receiver is fine.
+		// ⚠ **THE WHOLE P1.8 SLICE C BYTE/ASCII FAMILY USED TO SIT HERE AND NONE OF IT DOES** —
+		// `startsWith`/`endsWith` (W49 wave 1), `toLower`/`toUpper`/`replace`/`replaceFirst` (wave 2),
+		// `contains` (wave 4) and `split` (wave 5). Each was struck from `stringSurfaceMemberNames`, which is
+		// the whole of the retirement, so not one of the seven reaches this dispatcher at all.
 		let range = SourceRange.between(baseTok, last: methodTok)
-		// ⚠ **`startsWith`/`endsWith` (wave 1) AND `toLower`/`toUpper`/`replace`/`replaceFirst` (wave 2) USED
-		// TO SIT HERE AND ARE NOW THE CORPUS'S** — struck from `stringSurfaceMemberNames`, which is the whole
-		// of the retirement, so none of the six reaches this dispatcher at all. `contains` stays: it is an
-		// overload PAIR in the corpus and the call door does not yet resolve one (see the roster's own header
-		// for the leak/use-after-free that would follow, and for why `split` stays beside it).
-		if methodTok.value.equals(StringSplitMethod) 'split'
-			return try self.parseStringSplit(func, receiver: recv.value, range: range)
-		end 'split'
 
 		// ⭐ P1.8 Slice B. `bytes()` is the byte view, shared with Character's.
 		//
@@ -37455,26 +37453,13 @@ export type Parser
 		throw ParseError.unsupported("`{String.from(ManagedMemoryTypeName)}` member '{String.from(methodTok.value)}' — it is STDLIB-ONLY (`module function` in `stdlib/String.maxon`, which the reference compiler refuses to user code as a not-exported error) and this file is not under `stdlib/`. `{String.from(ManagedMemoryToCStringMethod)}` hands back a raw address with no length, no owner and no refcount, so the copy it makes when the receiver's bytes are not already NUL-terminated is reclaimed by nothing; `{String.from(ManagedMemoryMakeCharFromBytesMethod)}` trusts its caller for `pos + len <= {String.from(ManagedMemoryLengthMethod)}()` and reads off the end of the buffer otherwise. User code reaches a buffer's bytes through `{String.from(ByteAtMethod)}`, which is bounds-checked and throwing", line: methodTok.line, column: methodTok.column)
 	end 'requireStdlibOnlyBufferMethod'
 
-	// ⭐ **`s.split(delimiter)` — the first builtin method that CONSTRUCTS an `Array with String` at runtime.**
-	// The array is created HERE, through `emitArrayCreateOp` — the one array-creation door — and handed to
-	// `__str_split` to fill. That split of labour is the point: element size and the `element_destroy@40`
-	// stamp that makes each segment droppable are decided by the same code an array literal uses, so a split
-	// result and a `["a","b"]` literal cannot disagree about what an `Array with String` is. The runtime only
-	// pushes.
-	//
-	// The result is an OWNED array of OWNED Strings: its scope-exit `__arr_decref` walks the slots and
-	// `__str_decref`s every segment, and no segment aliases the receiver's bytes, so there is nothing
-	// double-freed and nothing left behind. It is enrolled owned AFTER the fill rather than through
-	// `emitOwnedRuntimeResult`, because the value the caller owns is the array the PARSER created, not the
-	// void result of the call that filled it — the same order `finishArrayLiteral` uses for its pushes.
-	function parseStringSplit(func IrFunction, receiver ValueId, range SourceRange) returns ValueId throws ParseError
-		let delimiter = try self.parseTaggedArg(func, methodName: StringSplitMethod, required: ValueTypeTag.string)
-		let giid = self.signatures.builtinInstanceForElement(ArrayBuiltinBaseName, element: MaxonType.string)
-		let parts = try self.emitArrayCreateOp(giid, range: range)
-		_ = self.emitRuntimeCall(StrSplitName, args: tripleArgs(receiver, second: delimiter, third: parts), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
-		self.trackOwnedTemp(parts)
-		return parts
-	end 'parseStringSplit'
+	// ⚠ **`parseStringSplit` WAS HERE AND WENT WITH `String.split`** (W49 wave 5). It was the one builtin
+	// method that CONSTRUCTED an `Array with String`, creating the array here through `emitArrayCreateOp` and
+	// handing it to `__str_split` to fill. The corpus builds the same array through `StringArray.create()`
+	// (`stdlib/String.maxon:604-607`), which reaches the SAME door by the ordinary generic-instance path and
+	// stamps the same element size and the same `element_destroy@40` — measured on the emitted code, see
+	// `ContainsMethod`'s header. `.bytes()` below is now the only member here that fills a caller-created
+	// array, and it keeps this shape for its own element's sake (`requireRawByteFillFitsItsElement`).
 
 	// ⭐ **`.bytes()` — ONE EMITTER FOR A STRING'S AND A CHARACTER'S**, because they are one question about
 	// one record: hand back this record's bytes as an `Array with Byte`.

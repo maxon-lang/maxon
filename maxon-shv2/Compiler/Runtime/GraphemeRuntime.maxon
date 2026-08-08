@@ -111,7 +111,7 @@ let Utf8FourByteLength = 4 as ParsedInt
 //   * `__ext_pict(cp)` — Extended_Pictographic. User-callable as `isExtendedPictographic(cp)`.
 //   * `__utf8_cp_at(addr)` / `__utf8_len_at(addr)` — decode / sequence length at a raw ADDRESS rather than
 //     at a `(String, pos)` pair, because every caller here has already resolved a buffer and an offset and
-//     passing the record would make them re-derive what they hold (`__str_range_eq`'s reason).
+//     passing the record would make them re-derive what they hold.
 //   * `__gr_break(prevGbp, currGbp, currCp, state)` — the GB3–GB999 rules.
 //   * `__gr_state(state, gbp, cp)` — the RI-parity + emoji-ZWJ state transition.
 //   * `__gr_end(strRec, startPos)` — the END of the cluster starting at `startPos`. THE segmenter; both
@@ -132,7 +132,8 @@ let Utf8FourByteLength = 4 as ParsedInt
 //     byte, or is one byte that is not ASCII (`stdlib/Character.maxon:154-166`). It BORROWS its record.
 //   * `__str_to_bytes(strRec, arr)` — fill a caller-created `Array with Byte` with the record's bytes,
 //     i.e. `.bytes()`. The array is created by the PARSER through `emitArrayCreateOp` (the one
-//     array-creation door), exactly as `__str_split`'s is; this only pushes.
+//     array-creation door); this only pushes. It is the LAST such entry point — `__str_split` was the
+//     other, and retired onto the corpus at W49 wave 5.
 //   * `__str_to_codepoints(strRec, arr)` / `__str_to_utf16(strRec, arr)` — `.codepoints()` and `.utf16()`
 //     (P1.8 Slice E), `__str_to_bytes`'s two siblings: the same caller-created array, the same
 //     push-only contract, one UTF-8 walk each. They fill an `Array with integer` rather than an
@@ -438,9 +439,9 @@ function buildCharAscii(module StdModule)
 end 'buildCharAscii'
 
 // ⭐ **`__str_to_bytes(strRec, arr)` — `.bytes()`, filling a CALLER-CREATED `Array with Byte`.** The array
-// is built by the PARSER through `emitArrayCreateOp` (the one array-creation door), exactly as
-// `__str_split`'s is, so a `.bytes()` result and a `b"…"` literal cannot disagree about what an
-// `Array with Byte` is — they are the same interned instance (`internArrayByteInstance`).
+// is built by the PARSER through `emitArrayCreateOp` (the one array-creation door), so a `.bytes()` result
+// and a `b"…"` literal cannot disagree about what an `Array with Byte` is — they are the same interned
+// instance (`internArrayByteInstance`).
 //
 // ⚠ **shv2 HAS NO LAZY VIEW, AND THIS MATERIALIZES.** The reference returns a `ByteView` — a lazy
 // `Iterable` over the source's bytes — and shv2 has no `Iterable`, no associated types and no cursor

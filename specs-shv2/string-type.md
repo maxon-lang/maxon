@@ -1048,3 +1048,99 @@ end 'main'
 1
 ```
 
+<!-- test: split-result-crosses-a-user-function-and-a-struct-field -->
+### An owned `Array with String` survives being returned out of the corpus body
+`split` was held back from three retirement waves for ONE unmeasured question, and this case is where it
+was settled. It is the only retired `String` member that CONSTRUCTS a container: until W49 wave 5 the
+compiler's own arm built the result through `emitArrayCreateOp`, so shv2 — not the corpus — decided that
+array's element size and its `element_destroy@40` stamp. The corpus builds it through
+`StringArray.create()` (`stdlib/String.maxon:604-607`) instead.
+
+⚠ **A WRONG STAMP ANNOUNCES ITSELF IN NEITHER DIRECTION**: too small and the segments leak, too eager and
+they are freed twice, and both compile clean. So the result is carried across every boundary that could
+drop it — out of the corpus body, out of a user function, into a struct field, back out of a field read,
+and into a second array that outlives the receiver each segment was cut from — with the leak gate (exit
+101) as the verdict on all of it. The empty-delimiter arm is included because it is the one shape the
+scan cannot produce: it clones the whole receiver rather than slicing it.
+```maxon
+typealias Pieces = Array with String
+
+type Holder
+	export var parts as Pieces
+
+	static function create(parts Pieces) returns Self
+		return Self{parts: parts}
+	end 'create'
+end 'Holder'
+
+function pieces(s String) returns Pieces
+	return s.split(",")
+end 'pieces'
+
+function main() returns ExitCode
+	let a = pieces("one,two,three")
+	print("{a.count()}\n")
+
+	var h = Holder.create(pieces("p,q"))
+	let first = try h.parts.get(0) otherwise panic("two elements were pushed")
+	print("[{first}]\n")
+
+	var derived = ["seed"]
+	for round in 0 upto 200 'rounds'
+		let tmp = "{round},x,{round}"
+		for p in tmp.split(",") 'each'
+			derived.push(p.clone())
+		end 'each'
+	end 'rounds'
+	print("{derived.count()}\n")
+
+	let whole = "abc".split("")
+	print("{whole.count()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+3
+[p]
+601
+1
+```
+
+<!-- test: a-split-result-and-an-array-literal-are-one-type -->
+### The corpus's `StringArray` and a caller's `Array with String` are ONE instance
+The corpus declares `typealias StringArray = Array with String` INSIDE `type String`
+(`stdlib/String.maxon:604`) and this file declares its own `Array with String`. Two spellings, and the
+retirement is only sound if they are one `GenericInstanceId` — interning is keyed on `(typeNameId, args)`
+across the whole program, so they cannot be two, and this is what says so out loud: a split result is
+passed where the literal's type is declared and a literal is passed where the corpus's return type would
+be, which are the two directions a second instance would break as an `E3005`.
+```maxon
+typealias Pieces = Array with String
+
+function takesPieces(p Pieces) returns int
+	return p.count()
+end 'takesPieces'
+
+function main() returns ExitCode
+	var literal = ["seed"]
+	let fromSplit = "a,b,c".split(",")
+	print("{takesPieces(fromSplit)}\n")
+	print("{takesPieces(literal)}\n")
+	for p in fromSplit 'each'
+		literal.push(p.clone())
+	end 'each'
+	print("{literal.count()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+3
+1
+4
+```

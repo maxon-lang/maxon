@@ -33,12 +33,23 @@ Two consequences follow from "bytes and ASCII only", and they are what these tes
 `toLower`/`toUpper`/`replace` return a NEW `String` and `split` a NEW `Array with String` whose elements
 are new `String`s; the receiver is never modified and never aliased by a result.
 
-⚠ **SIX OF THE SEVEN ARE SERVED BY `stdlib/String.maxon` AND ONLY `contains` AND `split` ARE SHV2's OWN,
-AND EVERY ANSWER BELOW IS THE SAME ON EITHER SIDE OF THAT LINE.** `startsWith`/`endsWith` went first (W49
-wave 1), then `toLower`/`toUpper`/`replace`/`replaceFirst` (wave 2). Each was struck from
-`Parser.stringSurfaceMemberNames`, which is the whole of what moved it: an unrostered member of a byte
-record is put to the corpus, and the corpus already declared every one. This file is where that is checked
-to have changed NOTHING a program can observe — which is the only claim a retirement is allowed to make.
+⚠ **ALL SEVEN ARE SERVED BY `stdlib/String.maxon`, NONE OF THEM IS SHV2's OWN ANY MORE, AND EVERY ANSWER
+BELOW IS THE SAME AS IT WAS ON THE OTHER SIDE OF THAT LINE.** `startsWith`/`endsWith` went first (W49
+wave 1), then `toLower`/`toUpper`/`replace`/`replaceFirst` (wave 2), then `contains` (wave 4), and `split`
+last (wave 5). Each was struck from `Parser.stringSurfaceMemberNames`, which is the whole of what moved it:
+an unrostered member of a byte record is put to the corpus, and the corpus already declared every one. This
+file is where that is checked to have changed NOTHING a program can observe — which is the only claim a
+retirement is allowed to make.
+
+⚠ **`split` WAS HELD BACK THREE WAVES FOR ONE MEASUREMENT, AND THE CASES BELOW ARE WHERE IT WAS TAKEN.** It
+is the only member of the seven that CONSTRUCTS a container: its synthesized arm decided an
+`Array with String`'s element size and its `element_destroy@40` stamp through the compiler's own
+array-creation door, and the open question was whether the corpus's `typealias StringArray = Array with
+String` decides them the same way. It does — measured on the emitted x64, the same element size and the
+same `__str_decref` stamp, from one interned instance rather than two — so `split-many-segments` (which
+grows the result well past its initial capacity) and `unbound-results-do-not-leak` (which drops one
+unnamed) are the two cases that would have caught a wrong stamp, in the two directions a wrong one fails:
+a leak and a double free.
 
 The one thing it genuinely does change is the OWNERSHIP ROUTE. A synthesized arm emits an inline runtime
 call and borrows its argument; a corpus call goes through the ordinary call door, which is where a result

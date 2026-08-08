@@ -249,44 +249,32 @@ end 'integerToStringScratchBytes'
 export let StrAppendName = b"__str_append"
 export let StrDecrefName = b"__str_decref"
 
-// ⭐ **THE P1.8 SLICE C BYTE/ASCII METHOD FAMILY.** Seven `String` methods reach these eight entry points;
-// none of them needs a UCD table, a grapheme segmenter or a `StringIndex`, which is exactly what makes them
-// this slice (`findFirst`/`findLast`/`slice` are grapheme-indexed by their SIGNATURES and wait for the index
-// type). All are `__`-prefixed compiler-internal (no E3004, no signature slotting) but NOT `__mm_`-prefixed,
-// so each declares its own transitive floor in `recordCallUsage` rather than inheriting one from a prefix.
+// ⭐⭐ **THE P1.8 SLICE C BYTE/ASCII METHOD FAMILY IS GONE — ALL EIGHT ENTRY POINTS, ALL SEVEN MEMBERS**
+// (W49 waves 1, 2, 4 and 5). It was `__str_starts_with`/`__str_ends_with` (wave 1), `__str_map_case`,
+// `__str_replace` and `__str_replace_first` (wave 2), `__str_contains` (wave 4), and finally
+// `__str_split` — plus the two it was the last consumer of, `__str_find` and `__str_range_eq` — at wave 5.
+// Every one of the seven members is now an ordinary declared function in `stdlib/String.maxon`, reached
+// through `Parser.memberBelongsToTheCorpus`, and the corpus bodies these entry points had been transcribed
+// FROM are what serves them.
 //
-//   * `__str_range_eq(aAddr, bAddr, len)` — the raw byte-range compare a positioned search verifies with.
-//     The stdlib's `bytesEqual` (`stdlib/String.maxon:979-988`), on ADDRESSES rather than records: every
-//     caller here has already resolved a buffer and an offset, and passing records would make them
-//     re-derive what they hold.
-//   * `__str_find(hay, startPos, needle)` — the ABSOLUTE index of the first occurrence at or after
-//     `startPos`, or `StrFindNotFound`. The stdlib's `findIn` (`:1001-1022`) including its FIRST-BYTE fast
-//     reject, with the window expressed as a start position rather than an `(offset, len)` pair: the three
-//     loop callers all walk a tail, which is what `startPos` says and what an explicit length would only
-//     re-encode.
-//   * `__str_contains(self, needle)` — the predicate, and the LAST of the three: `__str_starts_with` and
-//     `__str_ends_with` retired with their members in W49 wave 1.
-//   * `__str_split(self, delim, arr)` — fills a CALLER-CREATED `Array with String` (the stdlib's `:557-587`).
-//     The array is created by the PARSER through `emitArrayCreateOp`, the one array-creation door, so
-//     `split` cannot disagree with a literal about a `Array with String`'s element size or its
-//     `element_destroy@40` stamp; this function only pushes.
+// ⚠ **`__str_find` AND `__str_range_eq` DID NOT GO HOME — THEY DIED, AND THAT IS A DIFFERENT FACT.** A
+// retired MEMBER hands its body back to the corpus; these two were never members, they were the search
+// underneath three of them. `contains` (wave 4) and `__strix_find` (wave 3) had already gone, which left
+// `__str_split` as `__str_find`'s only producer and `__str_find` as `__str_range_eq`'s only producer — so
+// with `split` retired, nothing in the compiler can emit either callee and no `RuntimeUsage` bit could ever
+// turn true. What replaces them is the corpus's own `findIn`/`bytesEqual` (`stdlib/String.maxon:980`,
+// `:958`), which these two were transcribed from in the first place. **THE ORDER MATTERS AND IS THE TRAP
+// THIS FAMILY KEEPS SETTING**: an entry point is deleted only once EVERY producer of its callee is gone,
+// never when merely its most visible one is (see `closeStringMethodNeeds`, whose clauses shed TERMS one at
+// a time for exactly this reason, and `StdlibSource.calleeIsGraphemeRuntimeEntry`, which states it again).
 //
-// ⚠ **THE SLICE IS DOWN TO TWO MEMBERS, AND WHAT LEFT IT DID NOT DIE — IT WENT HOME.** `__str_map_case`
-// (`toLower`/`toUpper`) and `__str_replace`/`__str_replace_first` were listed here until W49 wave 2, when
-// those four members were struck from `Parser.stringSurfaceMemberNames` and the corpus bodies they had been
-// transcribed FROM took over serving them. This block used to argue that shv2 "does not have and is not
-// getting" the reference's `StringBuilder` because a two-pass count makes it unnecessary — that argument
-// was about a transcription, and the transcription is gone: the corpus `replace` builds through
-// `StringBuilder` (`stdlib/String.maxon:795`) and shv2 now compiles it as ordinary Maxon.
-//
-// ⚠ **EVERY SEGMENT / RESULT IS A FRESH OWNED INLINE STRING** built through `emitBuildOwnedInlineString`,
-// the one fused-record encoder, so each is independently droppable through `__str_decref` and none of them
-// aliases the receiver's bytes. That is what keeps `split`'s array leak-free: `__arr_decref`'s element walk
-// calls `__str_decref` on every slot, and a slot holding a view of the receiver would double-free.
-export let StrRangeEqName = b"__str_range_eq"
-export let StrFindName = b"__str_find"
-
-export let StrSplitName = b"__str_split"
+// ⚠ **THE COST MOVED WITH THE BODY, AND IT IS ACCEPTED** (user ruling, recorded at wave 2). The corpus
+// `findIn` asks `byteAt` — a THROWING, bounds-checked accessor — once per candidate position, where
+// `__str_find` walked the bytes with a raw load and a first-byte fast reject in one Std body; and the
+// corpus `sliceBytes` builds each segment through `managed.slice` + a `String{…}` literal, where
+// `__str_split` blitted it straight into a fused record. shv2 has no inliner, so both differences are real
+// calls per byte and per segment. Two candidate cures were MEASURED and both are regressions; do not
+// attempt a third here (the full argument is at `Parser.stringSurfaceMemberNames`).
 
 // ⚠ **`__str_map_case`, `__str_replace` AND `__str_replace_first` WERE HERE AND WENT WITH THEIR BUILDERS**
 // (W49 wave 2). `toLower`/`toUpper`/`replace`/`replaceFirst` are the CORPUS's now — struck from
@@ -390,24 +378,12 @@ export function isThrowingStringRuntimeCallee(callee ByteArray) returns bool
 	return callee.equals(StrByteAtName)
 end 'isThrowingStringRuntimeCallee'
 
-// ⭐ **`__str_find`'s "no occurrence" answer, and it is a NEGATIVE INDEX rather than a thrown error on
-// purpose.** The stdlib spells its searches `throws StringError.notFound`, and a Std graph CAN throw —
-// `StdOp.errorReturn`'s dual-register flag is exactly that. What this one must not do is throw, because its
-// callers are NOT throwing: `contains` wants a bool and `split` walks a tail until the search stops finding,
-// and a `tryCall` at either site would be a control-flow join per iteration to answer a question the caller
-// already treats as ordinary. So the BYTE search answers in the byte domain.
-// A byte position is non-negative by construction, so `-1` is outside the answer domain rather than inside
-// it, and every caller tests `>= 0`. Named, so the call sites and the producer cannot drift on which number
-// means "nothing here".
-//
-// ⚠ **IT HAD A BACKWARD MIRROR, `__str_rfind`, AND W49 WAVE 3 TOOK IT.** That graph existed for exactly one
-// consumer — `__strix_last`, behind `String.findLast` — and the sentinel→throw translation lived in
-// `buildStringIndexSearch`. Both are `stdlib/String.maxon`'s now (`findLastIn` is the corpus's own downward
-// scan), and NOTHING else ever called it: `contains` and `split` walk FORWARD. ⛔ This wave's brief said the
-// pair `__str_find`/`__str_rfind` must both survive because "contains and split still consume them"; that is
-// true of the forward one and was never true of the backward one, which is why it went with its last
-// consumer as the same brief's own rule prescribes.
-let StrFindNotFound = -1 as ParsedInt
+// ⚠ **`StrFindNotFound` WAS HERE AND WENT WITH `__str_find`** (W49 wave 5). It was that search's "no
+// occurrence" answer — a NEGATIVE INDEX rather than a thrown error, because its callers were not throwing
+// and a `tryCall` per iteration would have been a control-flow join to answer a question they treated as
+// ordinary. The corpus spells the same search `throws StringError.notFound` (`findIn`), which is the
+// reference's own shape and needs no sentinel. `CommandLineRuntime.NoMoreArguments` is the one negative
+// byte-position sentinel left, and it now carries the argument itself rather than citing this one.
 
 // `__str_clone(src) -> newStr` — a String's DEEP CLONE (P1.7 slice 3b-vi-b): a fresh OWNED heap String, an
 // independent copy of `src` that is droppable through `__str_decref` without touching `src`. The `(box) ->
@@ -664,23 +640,21 @@ export type RuntimeUsage
 	// `__str_copy` inside its Std body this scan cannot see, so a reference turns on `usesHeap`/`usesStrCopy`
 	// too (`recordCallUsage`). Drives `installStringRuntime` to build `__str_clone`.
 	export var usesStrClone as bool
-	// ⭐ The P1.8 Slice C byte/ASCII method family — ONE BIT PER ENTRY POINT, following this file's existing
-	// discipline rather than a single `usesStringMethods` blanket: a program that only asks `s.toLower()`
-	// must not carry the replace machinery. Each bit is set TRANSITIVELY by `recordCallUsage` from whichever
-	// method the module actually names (a `__str_contains` reference turns on `__str_find`, which turns on
-	// `__str_range_eq`) — the same "declare what the synthesized body calls, because this Maxon-module scan
-	// cannot see inside it" rule `__str_append` and `__str_clone` already follow.
-	export var usesStrRangeEq as bool
-	export var usesStrFind as bool
-	// ⚠ **SEVEN OF THIS FAMILY'S BITS WENT WITH THEIR BUILDERS**: `usesStrStartsWith`/`usesStrEndsWith` in W49
-	// wave 1, then `usesStrMapCase`/`usesStrReplace`/`usesStrReplaceFirst` in wave 2. `startsWith`, `endsWith`,
-	// `toLower`, `toUpper`, `replace` and `replaceFirst` are the CORPUS's now (struck from
+	// ⚠ **THE P1.8 SLICE C BYTE/ASCII FAMILY'S BITS ARE ALL GONE — ALL EIGHT OF THEM.**
+	// `usesStrStartsWith`/`usesStrEndsWith` in W49 wave 1, `usesStrMapCase`/`usesStrReplace`/
+	// `usesStrReplaceFirst` in wave 2, `usesStrContains` in wave 4, and `usesStrSplit` with
+	// `usesStrFind`/`usesStrRangeEq` in wave 5. All seven members are the CORPUS's now (struck from
 	// `Parser.stringSurfaceMemberNames`), so nothing names their entry points and a bit for any of them could
 	// only ever read false. The corpus bodies reach `byteAt`, `setByte`, `addressableBytes` and
 	// `__ManagedMemory.slice`, whose own doors are still shv2's and keep their own bits below.
-	// ⚠ An EIGHTH, `usesStrContains`, went the same way at W49 wave 4. `contains` is an OVERLOAD PAIR in the
-	// corpus (`String` and `Character`) and serving it here served only the first of them.
-	export var usesStrSplit as bool
+	//
+	// ⚠ **THE LAST TWO ARE THE ONES THAT CAME OFF DIFFERENTLY, AND THE ORDER IS THE WHOLE OF IT.**
+	// `usesStrFind`/`usesStrRangeEq` were never set by a member — they were set TRANSITIVELY, by
+	// `closeStringMethodNeeds`, from whichever member reached the search underneath. With `contains` (wave 4)
+	// and the `StringIndex` searches (wave 3) already gone, `usesStrSplit` was the last thing that could turn
+	// `usesStrFind` on, and `usesStrFind` the last thing that could turn `usesStrRangeEq` on — so all three
+	// die together and none of them could die sooner. See the P1.8 Slice C grave at the head of this file for
+	// why an entry point may only be deleted once every PRODUCER of its callee is gone.
 	// The P1.8 Slice E entry point that remains, with its OWN bit under this file's one-bit-per-entry-point
 	// discipline: a program that builds no String from bytes must not carry the classifying scan.
 	export var usesStrFromBytes as bool
@@ -740,7 +714,8 @@ export type RuntimeUsage
 	// floor at all — hence no arm in `closeGraphemeNeeds`. `usesCharCmp` above is the other such bit.
 	export var usesCharAsciiValue as bool
 	// `__str_to_bytes` PUSHES into a caller-created `Array with Byte`, so it declares the array runtime
-	// (and the heap under it) exactly as `__str_split` declares them for its segments.
+	// (and the heap under it) in `closeGraphemeNeeds`. It is the LAST entry point that fills an array the
+	// parser built — `__str_split` was the other, and retired at W49 wave 5.
 	export var usesStrToBytes as bool
 	// `.codepoints()` and `.utf16()` (P1.8 Slice E) — `__str_to_bytes`'s two siblings, each with its OWN
 	// bit under this file's one-bit-per-entry-point discipline: a program that asks for the bytes must not
@@ -800,7 +775,7 @@ export type RuntimeUsage
 	export var usesProcessIntrospection as bool
 
 	static function create() returns RuntimeUsage
-		return Self{usesHeap: false, usesGt: false, usesIocp: false, usesStreaming: false, usesWriteStdout: false, usesWriteStderr: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesUIntToString: false, usesBoolToString: false, usesStrAppend: false, usesStrDecref: false, usesArray: false, usesSet: false, usesMap: false, usesList: false, usesDropTypeParam: false, usesDropExistential: false, usesRetainExistential: false, usesIncref: false, usesRetain: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrRangeEq: false, usesStrFind: false, usesStrSplit: false, usesStrFromBytes: false, usesStrOfBuffer: false, usesMmToCString: false, usesStrBytesView: false, usesStrByteAt: false, usesStrByteAtOrPanic: false, usesManagedArrayCopy: false, usesOpaqueArrayCopy: false, neededCloners: ClonerSet.create(), usesWallClock: false, usesCharAt: false, usesCharCmp: false, usesCharFromCodepoint: false, usesCharAsciiValue: false, usesStrToBytes: false, usesStrToCodepoints: false, usesStrToUtf16: false, usesUcdCategory: false, usesCharSetMake: false, usesCharSetDecref: false, usesCharSetContains: false, usesManagedFile: false, usesManagedDirectory: false, usesCommandLine: false, usesConsoleStdin: false, usesProcessIntrospection: false}
+		return Self{usesHeap: false, usesGt: false, usesIocp: false, usesStreaming: false, usesWriteStdout: false, usesWriteStderr: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesUIntToString: false, usesBoolToString: false, usesStrAppend: false, usesStrDecref: false, usesArray: false, usesSet: false, usesMap: false, usesList: false, usesDropTypeParam: false, usesDropExistential: false, usesRetainExistential: false, usesIncref: false, usesRetain: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrFromBytes: false, usesStrOfBuffer: false, usesMmToCString: false, usesStrBytesView: false, usesStrByteAt: false, usesStrByteAtOrPanic: false, usesManagedArrayCopy: false, usesOpaqueArrayCopy: false, neededCloners: ClonerSet.create(), usesWallClock: false, usesCharAt: false, usesCharCmp: false, usesCharFromCodepoint: false, usesCharAsciiValue: false, usesStrToBytes: false, usesStrToCodepoints: false, usesStrToUtf16: false, usesUcdCategory: false, usesCharSetMake: false, usesCharSetDecref: false, usesCharSetContains: false, usesManagedFile: false, usesManagedDirectory: false, usesCommandLine: false, usesConsoleStdin: false, usesProcessIntrospection: false}
 	end 'create'
 end 'RuntimeUsage'
 
@@ -1248,19 +1223,11 @@ function closeGraphemeNeeds(usage RuntimeUsage)
 	end 'pushesDecodedUnits'
 end 'closeGraphemeNeeds'
 
-// The P1.8 Slice C family's own arm of the callee → usage-bit map, split out so `recordCallUsage` stays a
-// readable list of families rather than growing eight more inline arms. Direct references only; what each
-// referenced body in turn needs is closed by `closeStringMethodNeeds`.
+// The String-building and byte-reading entry points' own arm of the callee → usage-bit map, split out so
+// `recordCallUsage` stays a readable list of families rather than growing six more inline arms. Direct
+// references only; what each referenced body in turn needs is closed by `closeStringMethodNeeds`. (It was
+// NINE arms until the P1.8 Slice C family retired onto the corpus — see the grave at the head of this file.)
 function recordStringMethodUsage(callee ByteArray, usage RuntimeUsage)
-	if callee.equals(StrRangeEqName) 'rangeeq'
-		usage.usesStrRangeEq = true
-	end 'rangeeq'
-	if callee.equals(StrFindName) 'find'
-		usage.usesStrFind = true
-	end 'find'
-	if callee.equals(StrSplitName) 'split'
-		usage.usesStrSplit = true
-	end 'split'
 	if callee.equals(StrFromBytesName) 'frombytes'
 		usage.usesStrFromBytes = true
 	end 'frombytes'
@@ -1282,41 +1249,26 @@ function recordStringMethodUsage(callee ByteArray, usage RuntimeUsage)
 	closeStringMethodNeeds(usage)
 end 'recordStringMethodUsage'
 
-// ⭐ **WHAT EACH REFERENCED BODY CALLS THAT THIS SCAN CANNOT SEE.** The family's members call each other and
-// the heap helpers from inside their SYNTHESIZED Std bodies, which walk no Maxon module — so the dependency
-// is DECLARED here rather than discovered, exactly as `__str_append` declares its `__mm_alloc`/`__str_copy`.
+// ⭐ **WHAT EACH REFERENCED BODY CALLS THAT THIS SCAN CANNOT SEE.** These entry points call the heap
+// helpers from inside their SYNTHESIZED Std bodies, which walk no Maxon module — so the dependency is
+// DECLARED here rather than discovered, exactly as `__str_append` declares its `__mm_alloc`/`__str_copy`.
 // Run as a CLOSURE after every record (rather than each arm listing its own transitive set) so the answer
-// cannot depend on the order in which the module happens to name its methods: `find`'s need for
-// `__str_range_eq` is stated once and reached whether `find` was named directly or pulled in by `split`.
+// cannot depend on the order in which the module happens to name its entry points.
 function closeStringMethodNeeds(usage RuntimeUsage)
-	// ⚠ **`usesStrContains` WAS THE OTHER TERM HERE AND WENT WITH ITS ENTRY POINT (W49 wave 4). THE CLAUSE
-	// STAYS**: `split` is still synthesized and still reaches `__str_find`, so shedding the whole `if` with
-	// the retired term would leave `__str_find` — and `__str_range_eq` under it — uninstalled for every
-	// program that splits. Retiring a member sheds its TERM, never its clause.
-	if usage.usesStrSplit 'needsFind'
-		usage.usesStrFind = true
-	end 'needsFind'
-	if usage.usesStrFind 'needsRangeEq'
-		usage.usesStrRangeEq = true
-	end 'needsRangeEq'
-	// `split` answers a degenerate (empty) delimiter with a CLONE of the receiver — the one shape its loop
-	// cannot produce, since an empty delimiter matches at every position.
-	if usage.usesStrSplit 'clonesReceiver'
-		usage.usesStrClone = true
-	end 'clonesReceiver'
-	// `split` PUSHES its segments into the array the parser created for it.
-	if usage.usesStrSplit 'pushesSegments'
-		usage.usesArray = true
-	end 'pushesSegments'
-	// Every string-BUILDING method allocates a fused record and blits bytes into it (`emitBuildOwnedInlineString`
-	// ⇒ `__mm_alloc` + `__str_copy`), and `__str_clone` under them does the same.
+	// Every string-BUILDING entry point allocates a fused record and blits bytes into it
+	// (`emitBuildOwnedInlineString` ⇒ `__mm_alloc` + `__str_copy`).
 	//
-	// ⚠ **`usesStrMapCase`/`usesStrReplace`/`usesStrReplaceFirst` WERE TERMS IN ALL THREE OF THE CLAUSES
-	// ABOVE AND WENT WITH THEIR ENTRY POINTS** (W49 wave 2). Each clause KEEPS its remaining terms: `split`
-	// still reaches `__str_find` and `__str_clone`, and `contains` still reaches `__str_find`. What the
-	// retired members need instead is declared where a corpus body's needs are always declared — by the
-	// ordinary reachability of the functions it calls, not here.
-	if usage.usesStrSplit or usage.usesStrFromBytes or usage.usesStrOfBuffer or usage.usesMmToCString 'buildsStrings'
+	// ⚠ **A RETIREMENT SHEDS A TERM; ONLY THE LAST TERM SHEDS THE CLAUSE — AND THIS FILE HAS NOW DONE BOTH.**
+	// `usesStrMapCase`/`usesStrReplace`/`usesStrReplaceFirst` left this clause as TERMS at W49 wave 2 and
+	// `usesStrSplit` at wave 5, each time leaving the surviving terms to keep it alive. Two SIBLING clauses
+	// did not survive wave 5, because `split` was their only term: `clonesReceiver` (`split` answered a
+	// degenerate empty delimiter with `__str_clone` of the receiver) and `pushesSegments` (it pushed into the
+	// array the parser created for it), plus the `needsFind`/`needsRangeEq` pair that installed the search
+	// underneath. Deleting a clause while any term could still be true is what would leave a callee
+	// uninstalled and a call landing on nothing; deleting it only when nothing can set its last term is what
+	// keeps this function from listing conditions no program can meet. What the retired members need instead
+	// is declared where a corpus body's needs always are — by the ordinary reachability of what it calls.
+	if usage.usesStrFromBytes or usage.usesStrOfBuffer or usage.usesMmToCString 'buildsStrings'
 		usage.usesHeap = true
 		usage.usesStrCopy = true
 	end 'buildsStrings'
@@ -1364,15 +1316,6 @@ export function installStringRuntime(module StdModule, usage RuntimeUsage)
 	if usage.usesStrClone 'strclone'
 		buildStrClone(module)
 	end 'strclone'
-	if usage.usesStrRangeEq 'strrangeeq'
-		buildStrRangeEq(module)
-	end 'strrangeeq'
-	if usage.usesStrFind 'strfind'
-		buildStrFind(module)
-	end 'strfind'
-	if usage.usesStrSplit 'strsplit'
-		buildStrSplit(module)
-	end 'strsplit'
 	if usage.usesStrFromBytes 'strfrombytes'
 		buildStrFromBytes(module)
 	end 'strfrombytes'
@@ -1449,9 +1392,8 @@ end 'buildStreamWrite'
 //
 // This is the bootstrap's `bytesEqual` (a length check, then a byte loop), NOT the enum `memcmp`
 // helper. It allocates nothing. Empty strings: length 0 == length 0 → the loop runs zero times →
-// return 1. The byte loop itself is `emitByteRangeCompareLoop` — shared with `__str_range_eq`, which
-// P1.8 Slice C's positioned searches verify a candidate with; see that emitter for why it is a shared
-// EMITTER and not a shared CALL.
+// return 1. The byte loop itself is `emitByteRangeCompareLoop` — shared with `__arr_eq`; see that emitter
+// for why it is a shared EMITTER and not a shared CALL.
 // ⭐ **IT RETURNS `bool`, NOT A MACHINE WORD, AND THE WITNESS SLOT IS WHY** (P1.7a slice 2b-iv-B). Under the
 // `String.equals` name this graph lands in an `Equatable` witness table, whose slot every dispatch site types
 // from `Equatable.equals(other Self) returns bool` — so its declared result must be the one
@@ -1494,16 +1436,17 @@ end 'buildStrEq'
 // off `cur`: `cur` is terminated into a fresh header, a full match falls out to `allMatch`, and the first
 // mismatching byte to `notEqual`. `len == 0` matches vacuously (the header guard is `i >= len`, true at once).
 //
-// ⚠ **SHARED BECAUSE THREE RUNTIME FUNCTIONS COMPARE BYTE RANGES**: `__str_eq` compares two whole records
-// after a length check, `__str_range_eq` compares two raw address ranges a search has already positioned, and
-// `Array.equals` compares two element buffers after the same length check (array-hashable — an array's
-// equality IS a byte compare, `stdlib/Array.maxon:648-663`). They were one loop written twice, with nothing
-// making them agree — a widened load or a changed bound in one would silently leave the other reading a byte
-// at a time on exactly one of the paths.
+// ⚠ **SHARED BECAUSE TWO RUNTIME FUNCTIONS COMPARE BYTE RANGES**: `__str_eq` compares two whole records
+// after a length check, and `Array.equals` compares two element buffers after the same length check
+// (array-hashable — an array's equality IS a byte compare, `stdlib/Array.maxon:648-663`). They were one loop
+// written twice, with nothing making them agree — a widened load or a changed bound in one would silently
+// leave the other reading a byte at a time on exactly one of the paths. (A THIRD consumer,
+// `__str_range_eq`, retired with the P1.8 Slice C searches at W49 wave 5; the sharing outlives it because
+// the two that remain are still two.)
 //
-// ⚠ It stays a shared EMITTER and does NOT become a `call __str_range_eq` from inside `__str_eq`: `==` on
-// Strings is what the operator lowers to, and routing it through a call would buy this dedup at the price of a
-// call per comparison. The duplication being removed is in the COMPILER's source, which is where it was.
+// ⚠ It stays a shared EMITTER and does NOT become a shared CALL: `==` on Strings is what the operator
+// lowers to, and routing it through a call would buy this dedup at the price of a call per comparison. The
+// duplication being removed is in the COMPILER's source, which is where it was.
 //
 // The loop index `i` is the header's phi — 0 from `cur`, `i+1` from the back edge — the on-the-fly SSA shape
 // every runtime loop here builds directly, a runtime function having no parser. The phi's `argType` is set
@@ -2135,121 +2078,12 @@ function buildStrClone(module StdModule)
 	module.functions.push(func)
 end 'buildStrClone'
 
-// --- P1.8 Slice C: the byte/ASCII String methods (see the name block at the head of this file) ---
-
-// `__str_range_eq(aAddr, bAddr, len) -> bool` — do the `len` bytes at `aAddr` equal the `len` bytes at
-// `bAddr`? The stdlib's `bytesEqual` (`stdlib/String.maxon:979-988`) on ADDRESSES, because every caller
-// here has already resolved a buffer and an offset. `len == 0` is vacuously equal.
-//
-// ⚠ Its callers guarantee both ranges are in bounds — `__str_starts_with`/`__str_ends_with` check the
-// length first and `__str_find` never probes past `hayLen - needleLen`. The stdlib's own note on
-// `bytesEqual` records what the alternative costs: every copy of this loop used to answer an
-// out-of-range byte with a bare `break`, which fell out and returned TRUE, so an OOB read would have
-// reported a MATCH. There is no in-bounds test to get wrong here because there is no per-byte bound at
-// all — `len` is the whole contract, and the three callers each establish it before calling.
-function buildStrRangeEq(module StdModule)
-	var func = IrFunction.createFromStd(StrRangeEqName, returnType: StdReturnType.value(StdType.i1), paramCount: 3, paramTypes: threeI64Params(), returnLine: 0)
-	var ids = ValueMinter.create(3)
-
-	var entry = module.addBlock(func, label: b"entry")
-	var allMatch = module.addBlock(func, label: b"allMatch")
-	var notEqual = module.addBlock(func, label: b"notEqual")
-
-	emitParams(module, block: entry, count: 3)
-	let aAddr = 0 as ValueId
-	let bAddr = 1 as ValueId
-	let len = 2 as ValueId
-
-	emitByteRangeCompareLoop(module, func: func, cur: entry, aBuf: aAddr, bBuf: bAddr, len: len, allMatch: allMatch, notEqual: notEqual, ids: ids)
-	emitConstReturn(module, block: allMatch, value: PredicateTrue, ids: ids)
-	emitConstReturn(module, block: notEqual, value: PredicateFalse, ids: ids)
-
-	module.functions.push(func)
-end 'buildStrRangeEq'
-
-// ⭐ **`__str_find(hay, startPos, needle) -> BytePos` — the ABSOLUTE index of the first occurrence of
-// `needle` at or after `startPos`, or `StrFindNotFound`.** The stdlib's `findIn` (`:1001-1022`), with its
-// window expressed as a START POSITION rather than an `(offset, len)` pair: all three loop callers walk a
-// tail after each match, which is exactly what a start position says, and a separate length would only be
-// `hayLen - startPos` re-encoded at every call.
-//
-// ⭐ **THE FIRST-BYTE CHECK IS WHAT PAYS FOR THE SHARED COMPARE LOOP, not a micro-optimisation** — the
-// stdlib's own measurement, and it applies here for the same reason: `__str_range_eq` is a real CALL (there
-// is no inliner), and nearly every candidate position mismatches on byte 0, so probing through the call
-// would spend a call to compare one byte. The receiver's length bound is `last = hayLen - needleLen`,
-// computed once; it goes NEGATIVE when the needle is longer than the haystack, which the header's
-// `i > last` test answers correctly on the first iteration with no separate too-long case.
-//
-// ⚠ **THE EMPTY NEEDLE IS ANSWERED BEFORE THE LOOP, AND THAT IS A BOUNDS FACT, NOT A SHORTCUT.** The loop
-// loads `needle[0]` once, up front; an empty String's buffer has no byte 0 it may read (a detached buffer is
-// allocated to its exact length and carries no NUL). It answers `startPos` — every string contains the empty
-// string at every position — which is what makes `"x".contains("")` true. `split` never reaches it: it
-// refuses an empty delimiter before its loop, because an empty delimiter matches everywhere and the loop
-// would not terminate.
-function buildStrFind(module StdModule)
-	var func = IrFunction.createFromStd(StrFindName, returnType: StdReturnType.value(StdType.i64), paramCount: 3, paramTypes: threeI64Params(), returnLine: 0)
-	var ids = ValueMinter.create(3)
-
-	var entry = module.addBlock(func, label: b"entry")
-	var emptyNeedle = module.addBlock(func, label: b"emptyNeedle")
-	var scan = module.addBlock(func, label: b"scan")
-	var header = module.addBlock(func, label: b"header")
-	var probe = module.addBlock(func, label: b"probe")
-	var verify = module.addBlock(func, label: b"verify")
-	var step = module.addBlock(func, label: b"step")
-	var found = module.addBlock(func, label: b"found")
-	var notFound = module.addBlock(func, label: b"notFound")
-
-	emitParams(module, block: entry, count: 3)
-	let hay = 0 as ValueId
-	let startPos = 1 as ValueId
-	let needle = 2 as ValueId
-
-	// entry: the four record fields every block below reads (entry dominates all of them), then the empty
-	// needle split.
-	let hayLen = emitLoadField(module, block: entry, record: hay, offset: StringLengthOffset, ids: ids)
-	let hayBuf = emitLoadField(module, block: entry, record: hay, offset: StringBufferOffset, ids: ids)
-	let needleLen = emitLoadField(module, block: entry, record: needle, offset: StringLengthOffset, ids: ids)
-	let needleBuf = emitLoadField(module, block: entry, record: needle, offset: StringBufferOffset, ids: ids)
-	let zero = emitConst(module, block: entry, value: 0, ids: ids)
-	let isEmpty = emitCmp(module, block: entry, a: needleLen, b: zero, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(entry, op: StdOp.condBranch(isEmpty, thenBlockId: emptyNeedle.id, elseBlockId: scan.id))
-
-	module.setTerminator(emptyNeedle, op: StdOp.ret(startPos))
-
-	// scan: the needle's first byte and the last position a match could start at, both loop-invariant.
-	let firstByte = emitLoadByteAt(module, block: scan, addr: needleBuf, ids: ids)
-	let last = emitBin(module, block: scan, a: hayLen, b: needleLen, opcode: StdBinOpcode.sub, ids: ids)
-	module.setTerminator(scan, op: StdOp.branch(header.id))
-
-	let i = ids.mint()
-	header.blockArgs.push(IrBlockArg.create(i, argType: StdType.i64))
-	scan.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(startPos)))
-
-	let past = emitCmp(module, block: header, a: i, b: last, pred: StdCmpPred.gt, ids: ids)
-	module.setTerminator(header, op: StdOp.condBranch(past, thenBlockId: notFound.id, elseBlockId: probe.id))
-
-	let candidate = emitLoadByteIndexed(module, block: probe, base: hayBuf, index: i, ids: ids)
-	let firstMatches = emitCmp(module, block: probe, a: candidate, b: firstByte, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(probe, op: StdOp.condBranch(firstMatches, thenBlockId: verify.id, elseBlockId: step.id))
-
-	let hayAddr = emitBin(module, block: verify, a: hayBuf, b: i, opcode: StdBinOpcode.add, ids: ids)
-	let whole = ids.mint()
-	module.appendOp(verify, op: StdOp.call(whole, callee: StrRangeEqName, args: threeArgs(hayAddr, second: needleBuf, third: needleLen)))
-	module.setTerminator(verify, op: StdOp.condBranch(whole, thenBlockId: found.id, elseBlockId: step.id))
-
-	let one = emitConst(module, block: step, value: 1, ids: ids)
-	let iNext = emitBin(module, block: step, a: i, b: one, opcode: StdBinOpcode.add, ids: ids)
-	module.setTerminator(step, op: StdOp.branch(header.id))
-	step.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(iNext)))
-
-	module.setTerminator(found, op: StdOp.ret(i))
-
-	let missing = emitConst(module, block: notFound, value: StrFindNotFound, ids: ids)
-	module.setTerminator(notFound, op: StdOp.ret(missing))
-
-	module.functions.push(func)
-end 'buildStrFind'
+// ⚠ **THE `--- P1.8 Slice C ---` SECTION WAS HERE AND IS EMPTY** (W49 wave 5). It held `__str_range_eq`
+// and `__str_find` to the end: the raw byte-range compare and the positioned search that `startsWith`,
+// `endsWith`, `contains`, `split` and the two `StringIndex` searches were all built on. Every one of those
+// members is `stdlib/String.maxon`'s now, and the corpus reaches the same two answers through its own
+// `bytesEqual`/`findIn` — which these graphs were transcribed from. See the P1.8 Slice C grave at the head
+// of this file for why they could not be deleted one wave sooner.
 
 // ⭐ **`__str_from_bytes(arr) -> newStr` — `String.from(bytes)` (`stdlib/String.maxon:119-121`).** The
 // array's buffer holds exactly the UTF-8 bytes the String is to have, so the whole of the work is the
@@ -2592,111 +2426,17 @@ function buildStrByteRead(module StdModule, name ByteArray)
 	module.functions.push(func)
 end 'buildStrByteRead'
 
-// ⭐ **`__str_split(self, delim, arr)` — the stdlib's `split` (`:557-587`), filling a CALLER-CREATED array.**
-// The `Array with String` is built by the PARSER through `emitArrayCreateOp`, the one array-creation door, so
-// `split` cannot disagree with an array literal about the element size or the `element_destroy@40` stamp that
-// makes each segment droppable. This function only pushes, and returns nothing.
+// ⚠ **`buildStrSplit` WAS HERE, WITH THE FOUR EMITTERS IT WAS THE LAST CALLER OF** (W49 wave 5):
+// `emitPushSliceSegment`, `emitSliceSegment`, `emitPushSegment` and `emitStrFindCall`. It filled a
+// caller-created `Array with String` whose element size and `element_destroy@40` stamp the PARSER decided
+// through `emitArrayCreateOp`; the corpus decides both through the ordinary generic-instance path and
+// stamps them identically (measured — `Parser.stringSurfaceMemberNames` carries the emitted-code diff).
 //
-// ⭐ **EVERY SEGMENT IS A FRESH OWNED INLINE STRING, NOT A VIEW.** The array becomes each segment's sole
-// owner, so `__arr_decref`'s element walk drops them all and nothing aliases the receiver's bytes — which is
-// what makes a split result leak-free AND independent of a receiver that later grows.
-//
-// ⚠ **THE TAIL SEGMENT IS PUSHED UNCONDITIONALLY**, even when empty, and that is the whole of the
-// empty-segment behaviour the corpus pins: `"a,,b"` is three parts, `"hello,"` is two (the second empty),
-// `",,"` is three empties, and `""` is one empty. An empty DELIMITER is answered before the loop with a clone
-// of the receiver: it matches at every position, so the cursor would not advance.
-function buildStrSplit(module StdModule)
-	var func = IrFunction.createFromStd(StrSplitName, returnType: StdReturnType.void, paramCount: 3, paramTypes: threeI64Params(), returnLine: 0)
-	var ids = ValueMinter.create(3)
-
-	var entry = module.addBlock(func, label: b"entry")
-	var emptyDelim = module.addBlock(func, label: b"emptyDelim")
-	var header = module.addBlock(func, label: b"header")
-	var pushSegment = module.addBlock(func, label: b"pushSegment")
-	var pushTail = module.addBlock(func, label: b"pushTail")
-
-	emitParams(module, block: entry, count: 3)
-	let selfPtr = 0 as ValueId
-	let delim = 1 as ValueId
-	let arr = 2 as ValueId
-
-	let selfLen = emitLoadField(module, block: entry, record: selfPtr, offset: StringLengthOffset, ids: ids)
-	let selfBuf = emitLoadField(module, block: entry, record: selfPtr, offset: StringBufferOffset, ids: ids)
-	let selfSingleByte = emitLoadField(module, block: entry, record: selfPtr, offset: StringSingleByteGraphemesOffset, ids: ids)
-	let delimLen = emitLoadField(module, block: entry, record: delim, offset: StringLengthOffset, ids: ids)
-	let zero = emitConst(module, block: entry, value: 0, ids: ids)
-	let delimIsEmpty = emitCmp(module, block: entry, a: delimLen, b: zero, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(entry, op: StdOp.condBranch(delimIsEmpty, thenBlockId: emptyDelim.id, elseBlockId: header.id))
-
-	let whole = ids.mint()
-	module.appendOp(emptyDelim, op: StdOp.call(whole, callee: StrCloneName, args: argsOf(selfPtr)))
-	emitPushSegment(module, block: emptyDelim, arr: arr, segment: whole, ids: ids)
-	module.setTerminator(emptyDelim, op: StdOp.retVoid)
-
-	let pos = ids.mint()
-	header.blockArgs.push(IrBlockArg.create(pos, argType: StdType.i64))
-	entry.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(zero)))
-
-	let idx = emitStrFindCall(module, block: header, hay: selfPtr, startPos: pos, needle: delim, ids: ids)
-	let found = emitCmp(module, block: header, a: idx, b: zero, pred: StdCmpPred.ge, ids: ids)
-	module.setTerminator(header, op: StdOp.condBranch(found, thenBlockId: pushSegment.id, elseBlockId: pushTail.id))
-
-	emitPushSliceSegment(module, block: pushSegment, arr: arr, srcBuf: selfBuf, from: pos, endPos: idx, singleByteGraphemes: selfSingleByte, ids: ids)
-	let posNext = emitBin(module, block: pushSegment, a: idx, b: delimLen, opcode: StdBinOpcode.add, ids: ids)
-	module.setTerminator(pushSegment, op: StdOp.branch(header.id))
-	pushSegment.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(posNext)))
-
-	emitPushSliceSegment(module, block: pushTail, arr: arr, srcBuf: selfBuf, from: pos, endPos: selfLen, singleByteGraphemes: selfSingleByte, ids: ids)
-	module.setTerminator(pushTail, op: StdOp.retVoid)
-
-	module.functions.push(func)
-end 'buildStrSplit'
-
-// ⭐ **ONE SEGMENT OF THE RECEIVER — the bytes `[from, endPos)` — BUILT FRESH AND PUSHED.** `__str_split` has
-// exactly two producers of one and they differ ONLY in where the segment STOPS (`endPos`): the piece before a
-// delimiter ends at the match, the tail after the last one ends at `length@8`. They were that difference plus three
-// identical lines, with nothing making the three agree — and what those lines encode is the whole of
-// "a segment is an INDEPENDENT COPY, not a view of the receiver", which is what keeps `__arr_decref`'s
-// element walk from double-freeing the receiver's bytes. Written once, so a change to what a segment IS
-// (its `singleByteGraphemes`, its record shape, its owner) cannot reach the interior segments and miss the tail.
-function emitPushSliceSegment(module StdModule, block IrBlock, arr ValueId, srcBuf ValueId, from ValueId, endPos ValueId, singleByteGraphemes ValueId, ids ValueMinter)
-	emitPushSegment(module, block: block, arr: arr, segment: emitSliceSegment(module, block: block, srcBuf: srcBuf, from: from, endPos: endPos, singleByteGraphemes: singleByteGraphemes, ids: ids), ids: ids)
-end 'emitPushSliceSegment'
-
-// ⭐ **THE BYTES `[from, endPos)` OF `srcBuf` AS A FRESH OWNED STRING** — the END-EXCLUSIVE half-open range
-// every String-slicing consumer means, and the whole of "a segment is an INDEPENDENT COPY, not a view".
-// Split out of `emitPushSliceSegment` for its THIRD consumer: `__str_split` pushes the result into an
-// array, and `__strix_slice` (`s.slice(a, endIndex: b)`) RETURNS it. Written once so a change to what a
-// slice IS — its `singleByteGraphemes`, its record shape, its owner — cannot reach the split's segments and miss
-// `slice`'s result, which is exactly the drift that would let one of them alias the receiver's bytes and
-// double-free under `__str_decref`.
-//
-// ⚠ **IT DOES NOT VALIDATE THE RANGE.** `__str_split` derives both ends from its own scan and cannot
-// produce a bad one; `__strix_slice` takes them from the caller and checks them itself, aborting rather
-// than handing a negative length to `__mm_alloc`. The check belongs where an untrusted range enters.
-export function emitSliceSegment(module StdModule, block IrBlock, srcBuf ValueId, from ValueId, endPos ValueId, singleByteGraphemes ValueId, ids ValueMinter) returns ValueId
-	let segLen = emitBin(module, block: block, a: endPos, b: from, opcode: StdBinOpcode.sub, ids: ids)
-	let segAddr = emitBin(module, block: block, a: srcBuf, b: from, opcode: StdBinOpcode.add, ids: ids)
-	return emitBuildOwnedInlineString(module, block: block, ids: ids, srcBuf: segAddr, srcLen: segLen, singleByteGraphemes: singleByteGraphemes)
-end 'emitSliceSegment'
-
-// Hand one finished segment to the array. `__arr_push` is void, but a Std `call` still defines a result
-// value, so the discarded id is minted here once rather than at each of `__str_split`'s three push sites.
-function emitPushSegment(module StdModule, block IrBlock, arr ValueId, segment ValueId, ids ValueMinter)
-	let pushed = ids.mint()
-	module.appendOp(block, op: StdOp.call(pushed, callee: ArrPushName, args: twoArgs(arr, second: segment)))
-end 'emitPushSegment'
-
-// `idx = __str_find(hay, startPos, needle)` — the positioned search every consumer makes, minted and appended
-// in ONE step. Shared for the reason the argument names are spelled out at the call sites: `contains`,
-// `split`'s scan and `__strix_find`'s one file over pass the same three values, and a haystack/needle swap
-// between any two of those copies is a SILENT WRONG ANSWER (a search of the needle for the haystack still
-// compiles, still runs, and simply does not find things) rather than anything a compiler would catch.
-export function emitStrFindCall(module StdModule, block IrBlock, hay ValueId, startPos ValueId, needle ValueId, ids ValueMinter) returns ValueId
-	let idx = ids.mint()
-	module.appendOp(block, op: StdOp.call(idx, callee: StrFindName, args: threeArgs(hay, second: startPos, third: needle)))
-	return idx
-end 'emitStrFindCall'
+// ⚠ **TWO OF THE FOUR WERE `export`ED FOR CONSUMERS THAT HAD ALREADY GONE**, which is why they are named
+// here rather than passed over: `emitSliceSegment`'s header claimed a THIRD consumer in `__strix_slice` and
+// `emitStrFindCall`'s claimed one in `__strix_find`, both deleted with `StringIndexRuntime.maxon` at wave 4.
+// An `export` outlives its last cross-file caller silently — nothing in this language reports one — so a
+// retirement has to go looking for them by name.
 
 // Store one constant byte at `dest[offset]`. The shape a fixed-text renderer (`__bool_to_string`) writes
 // each of its bytes with — a `const` typed i64, stored as a `u8` (the store keeps the low byte).
