@@ -148,14 +148,22 @@ A NEAR MISS of one of the five — `addressableByte` for `addressableBytes` — 
 as one. The visibility refusal is reachable only once a real method NAME has matched, so the roster
 answers here and nobody is told they lack permission for a method nobody has.
 
-⚠ **THE ROSTER NO LONGER NAMES `startsWith`, `endsWith`, `count`, `toLower`, `toUpper`, `replace` OR
-`replaceFirst`, AND THAT IS NOT AN OMISSION — IT IS THE RETIREMENT.** Those seven are served by
-`stdlib/String.maxon` now (three in W49 wave 1, four in wave 2): struck from the roster, each falls
-through to the corpus door that is consulted for exactly the names the roster does not carry, and becomes
-an ordinary call to the ordinary declared function the corpus already had. The list below therefore says
-what it has always said — *what the synthesized surface serves* — and a name leaving it means the corpus
-took the member over, never that the member vanished. `startsWith("x")` and `toLower()` still work;
-`string-methods-ascii` and `string-type-2` pin that they answer the same.
+⚠ **THE ROSTER NO LONGER NAMES `startsWith`, `endsWith`, `count`, `toLower`, `toUpper`, `replace`,
+`replaceFirst`, `contains`, `slice`, `split`, `bytes`, `toByteArray`, `codepoints` OR `utf16`, AND THAT IS
+NOT AN OMISSION — IT IS THE RETIREMENT.** Every one is served by `stdlib/String.maxon` now (W49 waves 1
+through 6): struck from the roster, each falls through to the corpus door that is consulted for exactly the
+names the roster does not carry, and becomes an ordinary call to the ordinary declared function the corpus
+already had. The list below therefore says what it has always said — *what the synthesized surface serves*
+— and a name leaving it means the corpus took the member over, never that the member vanished.
+`startsWith("x")` and `toLower()` still work; `string-methods-ascii` and `string-type-2` pin that they
+answer the same.
+
+⚠⚠ **WAVE 6 IS THE ONE THAT CHANGED A RETURN TYPE, SO "ANSWERS THE SAME" IS NARROWER THERE AND THE
+DIFFERENCE IS DELIBERATE.** `bytes()`/`codepoints()`/`utf16()` were MATERIALIZED `Array`s and are now the
+corpus's LAZY `ByteView`/`CodepointView`/`UTF16View` (`stdlib/helpers/string/views.maxon`), which hold the
+`String` rather than a copy of its bytes. `.count()` and `for x in <view>` answer identically — that is
+what the ported cases pin — but a view is not assignable at an `Array with Byte` position, and
+`bytearray-element-size` is where that is pinned rather than here.
 
 ⚠ **THE LIST IS WHAT A RETIREMENT MOVES, SO IT IS ALSO WHAT A RETIREMENT MUST RE-READ.** `setByte` is on
 it and stays there, and wave 2 is what first gave it a caller: the corpus `mapAsciiCase` behind
@@ -170,7 +178,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:3:15: Unsupported: `String` member 'addressableByte' — shv2 provides append/byteLength/bytes/toByteArray/codepoints/utf16/isEmpty/clone/addressableBytes/byteAt/byteAtOrPanic/hasSingleByteGraphemes/setByte/hash/equals; that list IS the surface, so nothing else is served here
+error E2015: <fragment>:3:15: Unsupported: `String` member 'addressableByte' — shv2 provides append/byteLength/isEmpty/clone/addressableBytes/byteAt/byteAtOrPanic/hasSingleByteGraphemes/setByte/hash/equals; that list IS the surface, so nothing else is served here
 ```
 
 And the roster a user program is handed NAMES every stdlib-only method. This is the case the derivation
@@ -185,5 +193,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:3:15: Unsupported: `String` member 'frobnicate' — shv2 provides append/byteLength/bytes/toByteArray/codepoints/utf16/isEmpty/clone/addressableBytes/byteAt/byteAtOrPanic/hasSingleByteGraphemes/setByte/hash/equals; that list IS the surface, so nothing else is served here
+error E2015: <fragment>:3:15: Unsupported: `String` member 'frobnicate' — shv2 provides append/byteLength/isEmpty/clone/addressableBytes/byteAt/byteAtOrPanic/hasSingleByteGraphemes/setByte/hash/equals; that list IS the surface, so nothing else is served here
 ```

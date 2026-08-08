@@ -988,9 +988,16 @@ end 'main'
 <!-- test: a-buffer-field-refuses-another-files-byte-at-the-construction -->
 ### …and the disagreement lands LOUDLY, at the construction
 The same two files with the buffer handed IN rather than built inside `holder.maxon`. `main.maxon`'s
-`"ab".toByteArray()` is its OWN `Byte`, two bytes wide, and the field is one byte wide — so the two
+`c.bytes()` is its OWN `Byte`, two bytes wide, and the field is one byte wide — so the two
 files meet nominally, at the line that hands the record over, instead of silently striding one
 record two ways. This is the refusal that pays for the case above.
+
+⚠ **THE PRODUCER WAS `"ab".toByteArray()` UNTIL W49 WAVE 6 AND IS NOW A `Character`'s BYTES**, because a
+`String`'s bytes are `stdlib/String.maxon`'s `ByteArray` and answer to the CORPUS's canonical `Byte`,
+which is the field's own one byte — so the two files would agree and there would be no disagreement to
+land. `Character.bytes()` is the producer still typed at the reading file's `Byte`, which is the property
+this case is about. The case above keeps its `toByteArray()` and keeps passing, because it builds the
+buffer inside `holder.maxon` where the corpus's `Byte` and that file's `Byte` are the same one byte.
 ```maxon
 // --- file: holder.maxon
 export type Holder
@@ -1013,12 +1020,13 @@ function widen(b Byte) returns int
 end 'widen'
 
 function main() returns ExitCode
-	let h = Holder.of("ab".toByteArray())
+	let c = 'a'
+	let h = Holder.of(c.bytes())
 	return (h.first() - widen(50)) as ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:23:10: argument type mismatch for 'b': expected 'ByteArray', got 'Array_Byte$0_1000'
+error E3005: <fragment>:24:10: argument type mismatch for 'b': expected 'ByteArray', got 'Array_Byte$0_1000'
 ```
 
 ### The MINT is an internal spelling, and a diagnostic quotes it only when nothing else can tell two types apart
@@ -1310,52 +1318,91 @@ position — turning a program that answers correctly today into a compile error
 (`internArrayByteInstance`) is deliberate and it is right; only the BOUNDS were never asked.
 `a-wide-byte-still-materializes-a-byte-view` below is what holds that shut.
 
+⚠⚠ **THE SUBJECT OF ALL OF THIS IS NOW `Character.bytes()` AND NOT A `String`'s BYTES, AND THAT MOVE IS
+W49 WAVE 6 RETIRING THE THREE `String` VIEWS ONTO `stdlib/String.maxon`.** Every case below used to write
+`"ß".toByteArray()`; that call is now `stdlib/String.maxon:156`, which answers with the CORPUS's own
+`ByteArray` over the corpus's canonical `Byte = int(0 to u8.max)` — a type fixed by the module that
+declares it, not by the file that reads it. So a narrow or wide `Byte` in the READING file no longer
+reaches a `String`'s bytes at all, and the rule has nothing to gate there.
+
+⭐ **THE SILENT WRONG ANSWER A4a CLOSED IS STILL CLOSED, BY A STRICTLY EARLIER REFUSAL, AND THAT IS
+MEASURED RATHER THAN INFERRED.** Under `typealias Byte = int(0 to 100)`, `takes("ß".toByteArray())` into
+`takes(b Bytes)` is now `E3005 … expected 'Bytes', got 'ByteArray'` and `takes("ß".bytes())` is
+`E3005 … got 'ByteView'`. There is no fill into a narrow element to gate because the value was never typed
+at that element. ⚠ **The ORACLE still returns the silent 195 for the first of those** (measured on the same
+tree), so shv2 is not converging onto the reference here — it is ahead of it, by a different route than
+E3117 took.
+
+⇒ **E3117 IS NOT DEAD; ITS SURFACE NARROWED TO THE PRODUCERS THAT STILL MINT THE READING FILE'S `Byte`** —
+`Character.bytes()` (`Parser.parseByteView`, the emitter's one remaining caller) and
+`__ManagedFile.read`. The cases below are retargeted onto the first of those rather than deleted, because
+the RULE is unchanged and only its reachable producers moved.
+
 ⚠ **THE READER IS UNTOUCHED, AND UNLIKE E3110's PAIR THAT IS NOT AN OVERSIGHT.** `byteAt` yields
 `ValueTypeTag.integer` with no name — a plain unranged `int`, never the element — so a raw byte read
 back is honest whatever `Byte` was declared to be. Only the WRITE puts a value into a slot the array
 surface reads through the element's declared range. `raw-byte-reads-survive-a-narrow-byte` pins it.
 
 <!-- test: a-byte-view-is-refused-when-byte-cannot-hold-every-byte -->
-### `toByteArray()` is refused when this program's `Byte` cannot hold every byte
+### `bytes()` is refused when this program's `Byte` cannot hold every byte
+The receiver is a `Character` because that is the one receiver still served by `Parser.parseByteView`,
+and therefore the one whose byte view is typed at the READING file's `Byte`. `'ß'` is two bytes and its
+continuation byte is 159, well past `int(0 to 100)`.
 ```maxon
 typealias Byte = int(0 to 100)
 typealias Bytes = Array with Byte
 
 function takes(b Bytes) returns ExitCode
-	return (try b.get(0) otherwise 0) as ExitCode
+	return try b.get(0) otherwise 0
 end 'takes'
 
 function main() returns ExitCode
-	return takes("ß".toByteArray())
+	let c = 'ß'
+	return takes(c.bytes())
 end 'main'
 ```
 ```maxoncstderr
-error E3117: <fragment>:10:20: 'toByteArray' stores RAW bytes into an element declared 'Byte' (int(0 to 100)), which does not hold every byte value 0 to 255 — widen the element's declared range to store raw bytes through it
+error E3117: <fragment>:11:17: 'bytes' stores RAW bytes into an element declared 'Byte' (int(0 to 100)), which does not hold every byte value 0 to 255 — widen the element's declared range to store raw bytes through it
 ```
 
-<!-- test: the-bytes-spelling-is-refused-identically -->
-### `.bytes()` is the same emitter, so it is the same refusal
-`bytes` and `toByteArray` reach one emitter (`Parser.parseByteView`) precisely so the two spellings
-cannot come to disagree about what a byte view IS. A rule wired to one of them would be the
-one-fact-two-answers shape this file records four times already.
+<!-- test: error.the-two-string-spellings-name-their-own-corpus-types -->
+### The two `String` spellings are refused too — at the TYPE, and each names its own corpus return
+⚠ **THIS CASE WAS `the-bytes-spelling-is-refused-identically` AND PINNED E3117 ON `"ß".bytes()` UNTIL W49
+WAVE 6, ON THE GROUND THAT `bytes` AND `toByteArray` REACHED ONE EMITTER "precisely so the two spellings
+cannot come to disagree about what a byte view IS". The RENAME is the point rather than tidying:**
+They no longer do, and they no longer are one thing: `stdlib/String.maxon:156` copies into a `ByteArray`
+and `:481` hands back a LAZY `ByteView` holding the String, which is the distinction the reference always
+drew and shv2 could not. So the refusal moved a whole stage earlier and the two halves now differ in
+exactly the way that is worth reading — the message names which one you wrote.
+
+⭐ **The A4a reading is still refused, which is the load-bearing half**: the silent **195** this section
+opens with cannot be reached through either spelling, and it needs no rule of its own to say so.
 ```maxon
 typealias Byte = int(0 to 100)
 typealias Bytes = Array with Byte
 
-function takes(b Bytes) returns ExitCode
-	return (try b.get(0) otherwise 0) as ExitCode
-end 'takes'
+function takesArray(b Bytes) returns ExitCode
+	return try b.get(0) otherwise 0
+end 'takesArray'
 
 function main() returns ExitCode
-	return takes("ß".bytes())
+	let viaCopy = takesArray("ß".toByteArray())
+	let viaView = takesArray("ß".bytes())
+	return viaCopy + viaView
 end 'main'
 ```
 ```maxoncstderr
-error E3117: <fragment>:10:20: 'bytes' stores RAW bytes into an element declared 'Byte' (int(0 to 100)), which does not hold every byte value 0 to 255 — widen the element's declared range to store raw bytes through it
+error E3005: <fragment>:10:16: argument type mismatch for 'b': expected 'Bytes', got 'ByteArray'
+error E3005: <fragment>:11:16: argument type mismatch for 'b': expected 'Bytes', got 'ByteView'
 ```
 
 <!-- test: a-byte-view-is-accepted-at-the-canonical-byte -->
 ### The canonical `Byte` holds every byte, so the view is untouched
+⚠ Since W49 wave 6 this case passes for a SECOND reason as well as its original one, and both are worth
+having: `Byte = int(0 to u8.max)` is the corpus's own canonical `Byte`, so `Bytes` and
+`stdlib/String.maxon`'s `ByteArray` intern to ONE `GenericInstanceId` (`genericInstances.intern` is keyed
+on `(typeNameId, args)` program-wide) and the argument is accepted nominally — as well as holding every
+byte, which is what the case was written to say.
 ```maxon
 typealias Byte = int(0 to u8.max)
 typealias Bytes = Array with Byte
@@ -1375,8 +1422,16 @@ end 'main'
 <!-- test: a-wide-byte-still-materializes-a-byte-view -->
 ### A WIDE `Byte` strides two and the view fills it correctly — this is what rules out `__ManagedByte`
 `int(0 to 1000)` HOLDS every byte, so the rule says nothing about it; the record strides two and
-`__str_to_bytes` writes at that stride. The three reads below are the measurement, and they are the
+`__str_to_bytes` writes at that stride. The reads below are the measurement, and they are the
 reason the byte view keeps the program's own `Byte` as its element rather than the compiler's.
+
+⚠ **THE RECEIVER IS A `Character` SINCE W49 WAVE 6, AND WITH A `String` THE PROGRAM IS NOW REFUSED.**
+`takes("abc".toByteArray())` under this same wide `Byte` is `E3005 … expected 'Bytes', got 'ByteArray'`
+— **and that is what the ORACLE answers on the identical program, byte for byte**, so the refusal is
+convergence and not a loss. What must not be lost is the argument this case exists for, and it is about
+the emitter rather than about the receiver: retyping the view `Array with __ManagedByte` would stride it
+1 and `byteBufferBoundaryAdmits` would refuse it at every declared `Bytes` position. `'ß'` is two bytes,
+both past 127, so a stride-1 record could not hold them apart.
 ```maxon
 typealias Byte = int(0 to 1000)
 typealias Bytes = Array with Byte
@@ -1384,12 +1439,12 @@ typealias Bytes = Array with Byte
 function takes(b Bytes) returns ExitCode
 	let first = try b.get(0) otherwise 0
 	let second = try b.get(1) otherwise 0
-	let third = try b.get(2) otherwise 0
-	return 0 if b.count() == 3 and first == 97 and second == 98 and third == 99 else 1
+	return 0 if b.count() == 2 and first == 195 and second == 159 else 1
 end 'takes'
 
 function main() returns ExitCode
-	return takes("abc".toByteArray())
+	let c = 'ß'
+	return takes(c.bytes())
 end 'main'
 ```
 ```exitcode

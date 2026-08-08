@@ -717,13 +717,11 @@ export type RuntimeUsage
 	// (and the heap under it) in `closeGraphemeNeeds`. It is the LAST entry point that fills an array the
 	// parser built — `__str_split` was the other, and retired at W49 wave 5.
 	export var usesStrToBytes as bool
-	// `.codepoints()` and `.utf16()` (P1.8 Slice E) — `__str_to_bytes`'s two siblings, each with its OWN
-	// bit under this file's one-bit-per-entry-point discipline: a program that asks for the bytes must not
-	// carry a UTF-8 decoder, and a program that asks for the codepoints must not carry the surrogate
-	// encoder. Both push into a caller-created array and both decode, so each declares the array runtime in
-	// `closeGraphemeNeeds` and seeds the corpus decoders' reachability in `StdlibSource`.
-	export var usesStrToCodepoints as bool
-	export var usesStrToUtf16 as bool
+	// ⚠ **`usesStrToCodepoints`/`usesStrToUtf16` STOOD HERE AND WENT AT W49 WAVE 6** with the two decoding
+	// views, onto the corpus's lazy `CodepointView`/`UTF16View`. They were separate bits under this file's
+	// one-bit-per-entry-point discipline — a program asking for the bytes must not carry a UTF-8 decoder, and
+	// one asking for the codepoints must not carry the surrogate encoder — and that discipline is why their
+	// removal takes nothing else with it: `usesStrToBytes` never stood for any of the three.
 	// ⚠ **THE P1.8 SLICE B2 `StringIndex` FAMILY HAS NO BITS LEFT, AND NO FILE EITHER.** Six went with the
 	// five members that retired onto `stdlib/String.maxon` at W49 wave 3; the last two
 	// (`usesStrIndexAdvance`/`usesStrIndexSlice`) went at wave 4 with `String.slice`, which was the only
@@ -775,7 +773,7 @@ export type RuntimeUsage
 	export var usesProcessIntrospection as bool
 
 	static function create() returns RuntimeUsage
-		return Self{usesHeap: false, usesGt: false, usesIocp: false, usesStreaming: false, usesWriteStdout: false, usesWriteStderr: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesUIntToString: false, usesBoolToString: false, usesStrAppend: false, usesStrDecref: false, usesArray: false, usesSet: false, usesMap: false, usesList: false, usesDropTypeParam: false, usesDropExistential: false, usesRetainExistential: false, usesIncref: false, usesRetain: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrFromBytes: false, usesStrOfBuffer: false, usesMmToCString: false, usesStrBytesView: false, usesStrByteAt: false, usesStrByteAtOrPanic: false, usesManagedArrayCopy: false, usesOpaqueArrayCopy: false, neededCloners: ClonerSet.create(), usesWallClock: false, usesCharAt: false, usesCharCmp: false, usesCharFromCodepoint: false, usesCharAsciiValue: false, usesStrToBytes: false, usesStrToCodepoints: false, usesStrToUtf16: false, usesUcdCategory: false, usesCharSetMake: false, usesCharSetDecref: false, usesCharSetContains: false, usesManagedFile: false, usesManagedDirectory: false, usesCommandLine: false, usesConsoleStdin: false, usesProcessIntrospection: false}
+		return Self{usesHeap: false, usesGt: false, usesIocp: false, usesStreaming: false, usesWriteStdout: false, usesWriteStderr: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesUIntToString: false, usesBoolToString: false, usesStrAppend: false, usesStrDecref: false, usesArray: false, usesSet: false, usesMap: false, usesList: false, usesDropTypeParam: false, usesDropExistential: false, usesRetainExistential: false, usesIncref: false, usesRetain: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrFromBytes: false, usesStrOfBuffer: false, usesMmToCString: false, usesStrBytesView: false, usesStrByteAt: false, usesStrByteAtOrPanic: false, usesManagedArrayCopy: false, usesOpaqueArrayCopy: false, neededCloners: ClonerSet.create(), usesWallClock: false, usesCharAt: false, usesCharCmp: false, usesCharFromCodepoint: false, usesCharAsciiValue: false, usesStrToBytes: false, usesUcdCategory: false, usesCharSetMake: false, usesCharSetDecref: false, usesCharSetContains: false, usesManagedFile: false, usesManagedDirectory: false, usesCommandLine: false, usesConsoleStdin: false, usesProcessIntrospection: false}
 	end 'create'
 end 'RuntimeUsage'
 
@@ -1176,12 +1174,6 @@ function recordGraphemeUsage(callee ByteArray, usage RuntimeUsage)
 	if callee.equals(StrToBytesName) 'tobytes'
 		usage.usesStrToBytes = true
 	end 'tobytes'
-	if callee.equals(StrToCodepointsName) 'tocodepoints'
-		usage.usesStrToCodepoints = true
-	end 'tocodepoints'
-	if callee.equals(StrToUtf16Name) 'toutf16'
-		usage.usesStrToUtf16 = true
-	end 'toutf16'
 	closeGraphemeNeeds(usage)
 end 'recordGraphemeUsage'
 
@@ -1209,18 +1201,17 @@ function closeGraphemeNeeds(usage RuntimeUsage)
 		usage.usesHeap = true
 	end 'encodesCharacters'
 	// `__str_to_bytes` pushes into the caller's array.
+	//
+	// ⚠ **A `pushesDecodedUnits` CLAUSE STOOD BESIDE IT FOR `__str_to_codepoints`/`__str_to_utf16` AND WENT
+	// WITH THEM (W49 wave 6).** It declared the same two bits and, in prose, the edge INTO the corpus
+	// decoders that a scan of this module cannot see — an edge `StdlibSource` owns because what it turns on is
+	// a stdlib function's REACHABILITY rather than a runtime-usage bit. The corpus's own
+	// `CodepointView`/`UTF16View` reach `utf8DecodeAt`/`utf8ByteLengthAt` through ordinary Maxon call edges,
+	// which the query spine follows without being told.
 	if usage.usesStrToBytes 'pushesBytes'
 		usage.usesArray = true
 		usage.usesHeap = true
 	end 'pushesBytes'
-	// The two decoding views push into the caller's array as well. Each also walks the source through the
-	// corpus decoders (`utf8DecodeAt` for the value, `utf8ByteLengthAt` for the step) — an edge declared in
-	// `StdlibSource`, not here, because what it turns on is a stdlib function's REACHABILITY rather than a
-	// runtime-usage bit.
-	if usage.usesStrToCodepoints or usage.usesStrToUtf16 'pushesDecodedUnits'
-		usage.usesArray = true
-		usage.usesHeap = true
-	end 'pushesDecodedUnits'
 end 'closeGraphemeNeeds'
 
 // The String-building and byte-reading entry points' own arm of the callee → usage-bit map, split out so

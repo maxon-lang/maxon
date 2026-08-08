@@ -853,14 +853,20 @@ function opNamesGraphemeRuntimeEntry(op MaxonOp) returns bool
 	end 'kind'
 end 'opNamesGraphemeRuntimeEntry'
 
-// ⚠ **TWO TERMS WENT AT W49 WAVE 4, AND EACH ONLY BECAUSE EVERY PRODUCER OF ITS CALLEE WENT WITH IT.**
-// `StrTrimName` left with the three trims and `isStringIndexRuntimeCallee` left with `String.slice` — that
-// whole runtime file is deleted, so the prefix test it owned has nothing to answer for. Shedding a term
-// EARLY is the failure mode this seed has: the corpus grapheme functions it names would be filed
-// unreachable, `skipUnreachedFunctionBody` would leave a bare `retVoid` behind, and a synthesized body's
-// call would land on it. A term goes only when nothing can emit its callee any more.
+// ⚠ **FOUR TERMS HAVE GONE, AND EACH ONLY BECAUSE EVERY PRODUCER OF ITS CALLEE WENT WITH IT.**
+// `StrTrimName` left with the three trims at W49 wave 4 and `isStringIndexRuntimeCallee` left with
+// `String.slice` — that whole runtime file is deleted, so the prefix test it owned has nothing to answer for.
+// `StrToCodepointsName` and `StrToUtf16Name` left at wave 6 with `String.codepoints()`/`String.utf16()`:
+// `buildStrToCodepoints`/`buildStrToUtf16` are deleted, so those two callees cannot appear in any module and
+// the seed can no longer be reached through them. What replaces the seed is not a substitute — the corpus's
+// `CodepointView`/`UTF16View` call `utf8DecodeAt`/`utf8ByteLengthAt` as ORDINARY Maxon edges, which the walk
+// follows without being told, which is the whole reason this list only ever names SYNTHESIZED bodies.
+//
+// ⚠ Shedding a term EARLY is the failure mode this seed has: the corpus grapheme functions it names would be
+// filed unreachable, `skipUnreachedFunctionBody` would leave a bare `retVoid` behind, and a synthesized
+// body's call would land on it. A term goes only when nothing can emit its callee any more.
 function calleeIsGraphemeRuntimeEntry(callee ByteArray) returns bool
-	return callee.equals(CharSetContainsName) or callee.equals(StrToCodepointsName) or callee.equals(StrToUtf16Name)
+	return callee.equals(CharSetContainsName)
 end 'calleeIsGraphemeRuntimeEntry'
 
 // True iff any live op in USER code names a STDLIB callee, or a TOP-LEVEL INITIALIZER does — the

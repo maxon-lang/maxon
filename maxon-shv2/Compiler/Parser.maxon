@@ -3626,27 +3626,29 @@ end 'requireAbiParamCount'
 // rung, dispatched by name in `dispatchStringMethod` off a String-typed receiver.
 let StringByteLengthMethod = b"byteLength"
 
-// ⭐ **THE P1.8 SLICE B METHOD NAMES.** `count`/`bytes` are String's; `bytes`/`byteLength`/`asciiValue`
-// are Character's. `bytes` is spelled ONCE and dispatched from both receivers to the same emitter — a
-// String's bytes and a Character's are the same question about the same record.
+// ⭐ **THE P1.8 SLICE B METHOD NAME.** `bytes` was String's and Character's, dispatched from both receivers
+// to one emitter; **W49 wave 6 retired the `String` half onto `stdlib/String.maxon:481`**, so it is now
+// `characterSurfaceMemberNames`' alone. The spelling stays one constant for the reason it always was: a
+// String's bytes and a Character's are the same question about the same record, and the day `Character.bytes`
+// retires too, one line goes.
 //
 // ⚠ `asciiValue` is NOT here: it is `SignatureIndex.CharacterAsciiValueMethod`, for the reason its three
 // `String` neighbours moved there at D12 — its runtime callee is throwing, so `runtimeCalleeSourceMethod`
 // needs the very constant this dispatcher matches on and a file-private `let` would force a second copy.
 let ByteViewMethod = b"bytes"
 
-// ⭐ **THE P1.8 SLICE E METHOD NAMES.** `isEmpty`/`clone` are NOT here — two containers spell each, so they
-// live in the shared block beside `SliceMethod`.
+// ⭐ **THE CORPUS MEMBER THE STDLIB-ONLY REFUSAL POINTS USER CODE AT**, and no longer a roster entry of any
+// surface (W49 wave 6). `requireStdlibOnlyStringMethod`'s sentence tells an author who reached for
+// `addressableBytes`/`byteAt`/`setByte` where the public door is, and it must name that door in the ONE
+// spelling the corpus declares it under (`stdlib/String.maxon:156`) — a literal in the message would be a
+// second copy of the name, free to survive a rename the compiler no longer has any other reason to notice.
 //
-// ⚠ **`toByteArray` REACHES `parseByteView`, THE SAME EMITTER `bytes` DOES, AND THAT IS THE MATERIALIZATION
-// DIVERGENCE PAYING OFF RATHER THAN A SHORTCUT.** The reference distinguishes them by LAZINESS and by
-// nothing else: `bytes()` is a lazy `ByteView` over the receiver's buffer and `toByteArray()` is an
-// independent `Array with Byte` copy (`stdlib/String.maxon:143-161` — it must `managed.slice`, because a
-// plain view onto an OWNED buffer is read-after-free the moment the owner appends). shv2 has no lazy view
-// at all, so `bytes()` ALREADY materializes an independent copy (`__str_to_bytes` blits byte by byte into a
-// fresh array) — which is exactly what `toByteArray()` promises. Two spellings of one answer here; giving
-// the second its own emitter would be two producers of one value, free to drift on the independence that
-// is the whole contract.
+// ⚠ **IT WAS `parseByteView`'s SECOND SPELLING UNTIL WAVE 6, AND THE ARGUMENT FOR THAT IS NOW ITS OPPOSITE.**
+// The reference distinguishes `bytes()` from `toByteArray()` by LAZINESS and by nothing else — `bytes()` is a
+// lazy `ByteView` over the receiver's buffer, `toByteArray()` an independent `Array with Byte` copy
+// (`stdlib/String.maxon:143-161`, which must `managed.slice` because a plain view onto an OWNED buffer is
+// read-after-free the moment the owner appends). shv2 had no lazy view, so both materialized and one emitter
+// served both. It has one now, and the corpus serves each with the body its own doc describes.
 let StringToByteArrayMethod = b"toByteArray"
 
 // ⭐⭐ **THE TWO STDLIB-ONLY `String` METHODS (BATCH2 slice 1)** — `module function` in the corpus
@@ -3701,8 +3703,10 @@ let StringHasSingleByteGraphemesMethod = b"hasSingleByteGraphemes"
 // the very thing this lookup distinguishes — see that function.
 let SingleByteGraphemesFieldName = b"singleByteGraphemesFlag"
 
-let CodepointViewMethod = b"codepoints"
-let Utf16ViewMethod = b"utf16"
+// ⚠ **`CodepointViewMethod` AND `Utf16ViewMethod` STOOD HERE AND WENT WITH THEIR ARMS (W49 wave 6).**
+// Unlike `StringToByteArrayMethod` above, nothing left in this compiler names either spelling: they were
+// matched in one dispatcher and one token probe, both deleted, and `stdlib/String.maxon:485,489` is now the
+// only statement of what those two members are called.
 
 // The `Character` BUILTIN's type name is `CharacterConformerName` — the `String` twin
 // (`StringConformerName`), recognized syntactically in a type position, and also the name a `for c in s`
@@ -4399,10 +4403,6 @@ function stringSurfaceMemberNames() returns ByteArrayArray
 	var names = ByteArrayArray.create()
 	names.push(AppendMethod)
 	names.push(StringByteLengthMethod)
-	names.push(ByteViewMethod)
-	names.push(StringToByteArrayMethod)
-	names.push(CodepointViewMethod)
-	names.push(Utf16ViewMethod)
 	names.push(IsEmptyMethod)
 	names.push(CloneMethodName)
 	names.push(StringAddressableBytesMethod)
@@ -8733,6 +8733,9 @@ export type Parser
 		// receiver is a String or a Character, so it OVER-interns — the same answer
 		// `internLiteralContainerInstances` gives to the same limitation. An unreferenced instance has no
 		// descriptor or destructor synthesized (both gate on usage), so it costs a registry entry and no codegen.
+		// ⚠ Since W49 wave 6 only a CHARACTER receiver reaches that emitter, so the over-intern is now the
+		// common case rather than the corner one — and it is still the right answer, for the reason above:
+		// this walk reads tokens, and a token has no receiver.
 		var hasByteViewCall = false
 		// ⚠⚠ **A LAYOUT PROBE MAY NOT RIDE THE DECLARATION WALK BELOW, BECAUSE THAT WALK DOES NOT SEE EVERY
 		// TOKEN.** `recordScannedType` consumes a whole `type` declaration — METHOD BODIES INCLUDED — and the
@@ -8793,13 +8796,6 @@ export type Parser
 			if self.atByteViewCall() 'bytesToken'
 				hasByteViewCall = true
 			end 'bytesToken'
-
-			// A `.codepoints()`/`.utf16()` materializes the SAME `Array with integer` instance a bare `[…]`
-			// int literal does, so it sets the very flag that literal sets rather than a second one — one
-			// instance, one trigger. Over-interned exactly as `hasByteViewCall` is, and for its reason.
-			if self.atDecodedViewCall() 'decodedViewToken'
-				hasIntArrayLiteral = true
-			end 'decodedViewToken'
 
 			if depth == 0 and self.atTopLevelBindingKeyword() 'isTopLevelBinding'
 				self.recordScannedBinding(bindings)
@@ -9069,20 +9065,26 @@ export type Parser
 	// VERIFIED by deleting this probe rather than assumed: `string-split` and `string-methods-ascii` both
 	// contain cases whose only `Array with String` is a split result, with no `["…"]` literal anywhere.
 
-	// A `.bytes(` or `.toByteArray(` at the cursor — the TWO spellings of the byte view, whose one
-	// `Array with Byte` the sweep interns. Both are asked in ONE predicate because they are one question
-	// ("can this file materialize a byte array?"), and because they reach one emitter (`parseByteView`), so
-	// a predicate that knew only `bytes` would leave `toByteArray`'s instance to be interned mid-parse.
+	// A `.bytes(` at the cursor — the byte view, whose `Array with Byte` the sweep interns.
+	//
+	// ⚠ **IT ASKED `.toByteArray(` TOO UNTIL W49 WAVE 6, AND IT NO LONGER MAY.** The two spellings shared one
+	// emitter, so a predicate that knew only `bytes` would have left `toByteArray`'s instance to be interned
+	// mid-parse. `String.toByteArray()` is now `stdlib/String.maxon:156`, which returns the CORPUS's own
+	// `ByteArray` — an instance the ordinary declaration fold registers in every program — so asking the token
+	// here would over-intern the READING FILE's `Byte` for a call that never mints one.
+	//
+	// ⚠ It is still asked for the whole file rather than per receiver: `Character.bytes()` is the one caller
+	// left, and the sweep's job is to over-intern, never to decide which receiver a token belongs to.
 	function atByteViewCall() returns bool
-		return self.atBuiltinMethodCall(ByteViewMethod) or self.atBuiltinMethodCall(StringToByteArrayMethod)
+		return self.atBuiltinMethodCall(ByteViewMethod)
 	end 'atByteViewCall'
 
-	// A `.codepoints(` or `.utf16(` at the cursor — the two DECODING views (P1.8 Slice E), which
-	// materialize into the plain `Array with integer` instance (`parseDecodedView`). `atByteViewCall`'s
-	// twin, one question apiece for the same reason.
-	function atDecodedViewCall() returns bool
-		return self.atBuiltinMethodCall(CodepointViewMethod) or self.atBuiltinMethodCall(Utf16ViewMethod)
-	end 'atDecodedViewCall'
+	// ⚠ **`atDecodedViewCall` STOOD HERE AND WENT WITH `String.codepoints()`/`String.utf16()` (W49 wave 6).**
+	// It existed because those two materialized the same `Array with integer` a bare `[…]` int literal mints,
+	// so the sweep had to set that literal's own flag off a token shape. The corpus answers with
+	// `CodepointView`/`UTF16View` — structs holding the `String` — which mint no array instance at all, so
+	// there is nothing left to over-intern. Deleted rather than left answering `false`, on wave 5's rule for
+	// `atStringSplitCall`.
 
 	// ⭐ **DOES THIS FILE NAME A `CharacterSet` PRODUCER ANYWHERE? (P1.8 Slice D)** — it needs its OWN
 	// complete walk of the token array, because `foldDeclaredSignaturesInto`'s loop is a DECLARATION walk:
@@ -37169,32 +37171,26 @@ export type Parser
 		// `startsWith`/`endsWith` (W49 wave 1), `toLower`/`toUpper`/`replace`/`replaceFirst` (wave 2),
 		// `contains` (wave 4) and `split` (wave 5). Each was struck from `stringSurfaceMemberNames`, which is
 		// the whole of the retirement, so not one of the seven reaches this dispatcher at all.
+		//
+		// ⭐⭐ **AND THE THREE VIEWS WENT AT WAVE 6, WHICH IS THE ONE RETIREMENT THAT CHANGED A RETURN TYPE.**
+		// `bytes()`/`codepoints()`/`utf16()` answered here with a MATERIALIZED `Array`; the corpus answers with
+		// a LAZY `ByteView`/`CodepointView`/`UTF16View` holding the `String`
+		// (`stdlib/helpers/string/views.maxon`). Every earlier wave was like-for-like, so the divergence this
+		// dispatcher's header used to defend — *"shv2 has no `Iterable`, no associated types and no cursor
+		// protocol"* — is simply no longer TRUE: measured before a line was deleted, `ByteView.create(s)`
+		// already answered `count()` and drove `for b in v` to `97,98,99` through the corpus's own
+		// `createIterator`/`current`/`advance`. `toByteArray()` rode `bytes()`'s emitter and is now the
+		// corpus's INDEPENDENT `managed.slice` copy, which is what the reference always meant by the pair.
+		//
+		// ⚠ `Character.bytes()` is NOT retired and still reaches `parseByteView` from
+		// `dispatchCharacterMethod` — `type Character` has no view accessor to fall through to.
 		let range = SourceRange.between(baseTok, last: methodTok)
 
-		// ⭐ P1.8 Slice B. `bytes()` is the byte view, shared with Character's.
-		//
 		// ⚠ **`count()` USED TO SIT HERE AND IS NOW THE CORPUS'S TOO, AND IT WAS THE CHEAPEST OF THE THREE TO
 		// GIVE BACK**: this arm already called `CorpusCountGraphemes` directly, so the corpus's own
 		// `count()` — whose entire body is `return countGraphemes(self)` (`stdlib/String.maxon:347-349`) —
 		// reaches the identical callee through one more frame, and no builder died with the arm.
-		if methodTok.value.equals(ByteViewMethod) 'bytes'
-			return try self.parseByteView(recv.value, methodTok: methodTok, range: range)
-		end 'bytes'
-
-		// ⭐ P1.8 Slice E — the leftovers, every one of them READING the receiver and writing a fresh value,
-		// so none takes `append`'s `noteReceiverWrite` path and a `let` receiver is fine throughout.
 		//
-		// `toByteArray()` is `bytes()`'s emitter verbatim; see `StringToByteArrayMethod` for why they are one
-		// answer here and two in the reference.
-		if methodTok.value.equals(StringToByteArrayMethod) 'toByteArray'
-			return try self.parseByteView(recv.value, methodTok: methodTok, range: range)
-		end 'toByteArray'
-		if methodTok.value.equals(CodepointViewMethod) 'codepoints'
-			return try self.parseDecodedView(recv.value, callee: StrToCodepointsName, range: range)
-		end 'codepoints'
-		if methodTok.value.equals(Utf16ViewMethod) 'utf16'
-			return try self.parseDecodedView(recv.value, callee: StrToUtf16Name, range: range)
-		end 'utf16'
 		// `isEmpty()` is `byteLength() == 0` — the reference's own body (`stdlib/String.maxon:340-342`), which
 		// is why it is the field load this file already emits plus the ordinary integer compare, and not a
 		// runtime entry point of its own. A String with no bytes has no graphemes either, so asking the length
@@ -37461,8 +37457,9 @@ export type Parser
 	// `ContainsMethod`'s header. `.bytes()` below is now the only member here that fills a caller-created
 	// array, and it keeps this shape for its own element's sake (`requireRawByteFillFitsItsElement`).
 
-	// ⭐ **`.bytes()` — ONE EMITTER FOR A STRING'S AND A CHARACTER'S**, because they are one question about
-	// one record: hand back this record's bytes as an `Array with Byte`.
+	// ⭐ **`Character.bytes()` — hand back this record's bytes as an `Array with Byte`.** It was ONE EMITTER
+	// FOR A STRING'S AND A CHARACTER'S until W49 wave 6, because they are one question about one record; the
+	// `String` half now falls through to the corpus and the question is the same, asked of one receiver.
 	//
 	// The array is created HERE, through `emitArrayCreateOp` — the one array-creation door — and handed to
 	// `__str_to_bytes` to fill, which is `split`'s split of labour and for `split`'s reason: element size
@@ -37470,10 +37467,17 @@ export type Parser
 	// `.bytes()` result and a byte-string literal cannot disagree about what an `Array with Byte` is. They
 	// are in fact the SAME interned instance (`internArrayByteInstance`).
 	//
-	// ⚠ **IT MATERIALIZES; THE REFERENCE'S `ByteView` IS LAZY.** shv2 has no `Iterable`, no associated
-	// types and no cursor protocol — the same absence that made `for x in <array>` an index counter rather
-	// than v1's heap iterator — so `.bytes()` copies into the one collection shv2 has. `.count()` and
-	// `for b in x.bytes()` then work through machinery that already exists, at one allocation and one copy.
+	// ⚠⚠ **IT MATERIALIZES, AND SINCE W49 WAVE 6 THAT IS A `Character` DECISION AND NOT A `String` ONE.**
+	// `String.bytes()` reached this emitter until wave 6 and now falls through to `stdlib/String.maxon:481`,
+	// whose `ByteView` is LAZY. The reason this emitter carried — *"shv2 has no `Iterable`, no associated
+	// types and no cursor protocol"* — was measured FALSE before the retirement: `for b in ByteView.create(s)`
+	// already walked the corpus's `createIterator`/`current`/`advance` and printed `97,98,99`.
+	//
+	// ⚠ **`Character` IS NOT KEPT HERE FOR WANT OF A DECLARATION — `stdlib/Character.maxon:53` DECLARES
+	// `bytes()` TOO.** It is kept because retiring it is a different trade with a cost of its own: that body
+	// is `ByteView.create(toString())`, and `toString()` mints a whole `String` record per call, where this
+	// emitter reads the Character's own bytes in place. `Character.bytes()` is on `characterSurfaceMemberNames`
+	// and off the `String` roster, so the wave that weighs that allocation is the wave that retires it.
 	// The result is an OWNED temp whose `__arr_decref` frees the record and its buffer.
 	//
 	// ⚠ **THE ELEMENT IS THE READING FILE'S OWN `Byte` ON PURPOSE, AND THAT IS WHY THE FILL HAS TO BE GATED
@@ -37488,42 +37492,34 @@ export type Parser
 	function parseByteView(record ValueId, methodTok Token, range SourceRange) returns ValueId throws ParseError
 		let giid = self.signatures.internArrayByteInstance(self.filePath)
 		try self.requireRawByteFillFitsItsElement(giid, methodTok: methodTok)
-		return try self.parseMaterializedView(record, giid: giid, callee: StrToBytesName, range: range)
+		try self.consumeEmptyArgList()
+		return try self.emitMaterializedFill(giid, callee: StrToBytesName, source: record, extraArgs: ValueIdArray.create(), range: range)
 	end 'parseByteView'
 
-	// ⭐ **`.codepoints()` AND `.utf16()` — the two DECODING views (P1.8 Slice E), `.bytes()`'s siblings.**
-	// They materialize for `parseByteView`'s reason, stated there: shv2 has no `Iterable`, no associated
-	// types and no cursor protocol, so the reference's lazy `CodepointView`/`Utf16View` have nothing to be
-	// built on and the answer goes into the one collection shv2 has.
-	//
-	// ⚠ **THE ELEMENT IS THE PLAIN `integer` INSTANCE, NOT `Codepoint`/`CodeUnit16`.** The obvious element
-	// names are a compiler-synthesized alias and a RANGED typealias in a whitelisted stdlib module, so an
-	// `Array with CodeUnit16` would take its stride from `arrayElementSize`'s registry probe — making the
-	// element size of a compiler-synthesized view a function of which stdlib modules the whitelist lists
-	// that day. `internBuiltinIntegerInstance` is the instance a `[…]` int literal already mints, so a
-	// decoded view and an int-array literal are the same type, exactly as `.bytes()` and a `b"…"` literal
-	// are (see `GraphemeRuntime.buildStrToUtf16`).
-	function parseDecodedView(record ValueId, callee ByteArray, range SourceRange) returns ValueId throws ParseError
-		return try self.parseMaterializedView(record, giid: self.signatures.internBuiltinIntegerInstance(ArrayBuiltinBaseName), callee: callee, range: range)
-	end 'parseDecodedView'
+	// ⚠⚠ **`parseDecodedView` WAS HERE AND WENT WITH `String.codepoints()`/`String.utf16()` (W49 WAVE 6).**
+	// It kept the two DECODING views off `Codepoint`/`CodeUnit16` and on the plain `integer` instance, for a
+	// reason that outlived it and is restated at `SignatureIndex.SynthesizedByteElementName`: those two
+	// element names are a compiler-synthesized alias and a RANGED typealias in a whitelisted stdlib module, so
+	// an `Array with CodeUnit16` would take its stride from `arrayElementSize`'s registry probe — making the
+	// element size of a compiler-synthesized view a function of which stdlib modules the whitelist lists that
+	// day. The corpus's `CodepointView`/`UTF16View` are structs holding the `String`, so they mint no array
+	// instance at all and there is nothing left for the rule to decide.
 
-	// ⭐ **THE ONE SHAPE ALL THREE VIEWS ARE** — the argument list, then the shared fill below. Three methods,
-	// one description of what a materialized view IS, so they cannot come to disagree about who creates the
-	// array or who owns it.
-	function parseMaterializedView(record ValueId, giid GenericInstanceId, callee ByteArray, range SourceRange) returns ValueId throws ParseError
-		try self.consumeEmptyArgList()
-		return try self.emitMaterializedFill(giid, callee: callee, source: record, extraArgs: ValueIdArray.create(), range: range)
-	end 'parseMaterializedView'
+	// ⚠ **`parseMaterializedView` STOOD HERE AND IS FOLDED INTO `parseByteView` (W49 WAVE 6).** It described
+	// "what a materialized view IS" for THREE methods that could otherwise have come to disagree about who
+	// creates the array and who owns it. Two of the three retired, and a description with one subject is not a
+	// shared description — it is a hop. The contract it carried is `emitMaterializedFill`'s and is stated
+	// there, where the other callers can read it.
 
-	// ⭐⭐ **A PUSH-ONLY RUNTIME WALK THAT FILLS A CALLER-CREATED ARRAY — the one door, for the three String
-	// views AND for `map`.** Create the array HERE through `emitArrayCreateOp` (the one array-creation door),
+	// ⭐⭐ **A PUSH-ONLY RUNTIME WALK THAT FILLS A CALLER-CREATED ARRAY — the one door, for the byte view AND
+	// for `map`.** Create the array HERE through `emitArrayCreateOp` (the one array-creation door),
 	// hand it to the walk as the SECOND argument, and enrol the ARRAY — not the void call's result — as the
 	// owned temporary.
 	//
 	// ⚠ **`(source, dest, …)` IS THE ARGUMENT ORDER EVERY SUCH RUNTIME ENTRY TAKES, and it is stated once
-	// here.** Four callees now share it (`__str_to_bytes`, `__str_to_codepoints`, `__str_to_utf16`,
-	// `__arr_map`/`__set_map`); a caller that assembled its own list would be free to swap the two records,
-	// which reads as a valid call at every tier and writes into the source at run time.
+	// here.** Two callees now share it (`__str_to_bytes`, `__arr_map`/`__set_map`) where four did until W49
+	// wave 6 retired the two decoding views; a caller that assembled its own list would be free to swap the
+	// two records, which reads as a valid call at every tier and writes into the source at run time.
 	//
 	// ⚠ The result is enrolled owned whatever the element is: `trackOwnedTemp` routes its scope-exit drop by
 	// TAG through `decrefCalleeFor` (`__arr_decref`), which destroys the elements the record's own

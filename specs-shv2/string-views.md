@@ -9,13 +9,15 @@ category: types
 
 ## Documentation
 
-Five `String` methods hand back a COPY of what the receiver holds, and one `String` static builds a
-`String` out of one:
+Three `String` methods hand back a LAZY VIEW of what the receiver holds, three hand back a COPY, and one
+`String` static builds a `String` out of one:
 
 ```text
+bytes()       returns ByteView
+codepoints()  returns CodepointView
+utf16()       returns UTF16View
+
 toByteArray() returns Array with Byte
-codepoints()  returns Array with integer
-utf16()       returns Array with integer
 clone()       returns String
 isEmpty()     returns bool
 replaceFirst(old String, with String) returns String
@@ -25,19 +27,26 @@ String.from(bytes Array with Byte) returns String
 
 Four properties are what these tests pin, and each is a decision rather than an accident:
 
-- **⚠ A VIEW MATERIALIZES.** The reference returns a LAZY `ByteView` / `CodepointView` / `Utf16View` — an
-  `Iterable` with a cursor over the receiver's own buffer. shv2 has no `Iterable`, no associated types
-  and no cursor protocol (the same absence that makes `for x in <array>` an index counter rather than a
-  heap iterator), so each view copies into the one collection shv2 does have. `.count()` and
-  `for u in <view>` then work through machinery that already exists.
-- **`bytes()` and `toByteArray()` are ONE answer here**, and that follows from the point above rather
-  than being a shortcut: the reference distinguishes them by laziness alone — its `toByteArray()` must
-  copy, because a plain view onto an OWNED buffer is a read-after-free the moment the owner appends —
-  and shv2's `bytes()` already copies. Two spellings, one emitter.
+- **⚠⚠ THE THREE VIEWS ARE LAZY, AND UNTIL W49 WAVE 6 THEY WERE NOT.** This section read *"A VIEW
+  MATERIALIZES … shv2 has no `Iterable`, no associated types and no cursor protocol, so each view copies
+  into the one collection shv2 does have"*, and every one of `bytes()`/`codepoints()`/`utf16()` handed
+  back an `Array`. **That premise was MEASURED FALSE before a line was deleted**: `for b in
+  ByteView.create(s)` already walked the corpus's own `createIterator`/`current`/`advance` and printed
+  `97,98,99`. The three retired onto `stdlib/helpers/string/views.maxon`, whose views hold the `String`
+  itself and read one unit per `advance()`. `.count()` and `for u in <view>` answer exactly what they
+  answered before — which is what the cases below pin — but a view is **not** an `Array`, so it is
+  refused at a declared `Array with Byte` position (`bytearray-element-size` holds that shut).
+- **⚠ `bytes()` AND `toByteArray()` ARE NO LONGER ONE ANSWER, AND THE REFERENCE'S DISTINCTION IS THE
+  REASON.** This section used to say they were, because shv2 had no lazy view and both spellings reached
+  one emitter. The reference distinguishes them by laziness and by nothing else: `bytes()` is a view over
+  the receiver's buffer and `toByteArray()` must COPY, because a plain view onto an OWNED buffer is a
+  read-after-free the moment the owner appends (`stdlib/String.maxon:143-161`, whose `managed.slice` is
+  that copy). Both are now the corpus's, each with the body its own doc describes.
 - **A copy is INDEPENDENT, and that is the CONTRACT.** `clone()` may not be `return self`: the receiver's
   record would gain a second owner and the caller's drop would take the receiver's bytes with it.
   `replaceFirst`'s two no-op cases — an empty needle, and a needle that is absent — answer with a clone
-  for exactly that reason.
+  for exactly that reason. `toByteArray()` makes the same promise about its array, and
+  `clone-outlives-a-growing-source` is the shape that would catch either breaking it.
 - **`String.from` COPIES the array's bytes** where the reference shares the array's `__ManagedMemory`.
   shv2 has no shared-ownership relationship between an `Array` record and a `String` record: each box's
   drop reclaims its own allocation, so a view would be a second reclaimer of one block.
@@ -356,10 +365,16 @@ grapheme-aligned, `replace`/`split` rebuild from valid pieces). A truncated lead
 is the worst version: at the end of a slab the same read crosses a page.
 
 **A sequence the buffer cannot complete now decodes as its own lead byte and advances ONE**, so no read
-leaves the buffer. The reference produces nothing at all to match here — its `utf8DecodeAt` is
-bounds-checked and `panic`s (`stdlib/helpers/string/utf8.maxon:126`, *"2-byte seq continuation out of
-bounds"*) — so what is pinned is the memory-safety guarantee, not an answer copied from it. The last row
-is the well-formed control: it must be untouched.
+leaves the buffer. The last row is the well-formed control: it must be untouched.
+
+⚠⚠ **THIS PARAGRAPH SAID THE REFERENCE "produces nothing at all to match here — its `utf8DecodeAt` is
+bounds-checked and `panic`s", AND THAT HAS BEEN FALSE SINCE THE CORPUS ADOPTED THIS VERY RULE.** Measured
+2026-08-08 on the bootstrap oracle, same tree: it prints these four lines byte for byte.
+`stdlib/helpers/string/utf8.maxon`'s `utf8WidthFits` carries the rule now and its own header cites THIS
+CASE as why — *"maxon-shv2's segmenter had this rule while this file did not"* — so what was a shv2-only
+memory-safety guarantee is a shared one, and the two compilers agree rather than one having no answer.
+⇒ **W49 wave 6 moved `codepoints()`/`utf16()` onto that corpus code and the pinned output did not move**,
+which is the strongest evidence available that the two implementations of this rule agree to the byte.
 ```maxon
 typealias Byte = int(0 to u8.max)
 typealias ByteSeq = Array with Byte

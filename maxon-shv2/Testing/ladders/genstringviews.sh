@@ -19,6 +19,43 @@
 # `parseMaterializedView`, `parseStringStaticCall` and all nine whitelisted `utf16*` declarations are
 # STRUCTURALLY invisible to a default `scale-test` run — in allocations, in bytes AND in CPU alike. A Δ0
 # from it is the instrument's blind spot and not a result. This ladder is the instrument for them.
+#
+# ⚠⚠ **FIVE OF THOSE NAMES NO LONGER EXIST (W49 wave 6), AND THE MODES THAT DRIVE THEM STILL DO — WHICH IS
+# THE POINT OF KEEPING THEM.** `String.toByteArray()`/`.bytes()`/`.codepoints()`/`.utf16()` retired onto
+# `stdlib/String.maxon` + `stdlib/helpers/string/views.maxon`, taking `__str_to_codepoints`,
+# `__str_to_utf16`, `parseDecodedView`, `parseMaterializedView` and `emitStringWalkSkeleton` with them
+# (`__str_to_bytes` survives, serving `Character.bytes()` alone). The MODES below are unchanged and still
+# compile: they now price the CORPUS bodies rather than the synthesized ones, which is exactly the A/B a
+# retirement owes.
+#
+# --- W49 WAVE 6 A/B (2026-08-08). Same SOURCE, two compilers, interleaved, min-of-5, 524,288 bytes x 5
+#     reps, ascii seed. base = 38fb221b0c, tip = the retirement. ---
+#
+#   ⭐⭐ **THE RETIREMENT IS FASTER ON EVERY MODE, WHICH IS THE OPPOSITE OF WHAT WAS EXPECTED**, and the
+#   reason is that materializing was never free: the synthesized views did an `__arr_push` per unit
+#   (capacity test, possible grow, indexed store, slab) BEFORE the walk began, where the corpus's views
+#   hold the `String` and read one unit per `advance()`.
+#
+#     data-tobytes    35.43 ms -> 0.0008 ms   `toByteArray().count()` is now O(1): the corpus returns a
+#                                             COW `managed.slice` and `count()` reads its length. The
+#                                             independence contract is unaffected — a write detaches
+#                                             (measured: `b.set(0,88)` leaves the String untouched, on
+#                                             shv2 AND on the oracle).
+#     data-codepoints 171.17 ms -> 13.62 ms   (12.6x) `CodepointView.count()` walks without building.
+#     data-utf16      180.03 ms -> 24.14 ms   (7.5x)
+#     data-clone        3.97 ms ->  3.73 ms   THE CONTROL, untouched by this wave — within noise.
+#
+#   ⚠ **`data-*` MEASURES `.count()`, WHICH IS NOT THE ITERATION PATH, AND FOR `bytes()` THE CORPUS
+#   ANSWERS IT WITHOUT WALKING AT ALL.** So a `for`-loop A/B was run beside it, same sizes
+#   (`temp/cost/iterbytes|itercp|iteru16` in that rung's tree — three programs, one `for x in <view>` each):
+#
+#     for b in s.bytes()        42.61 ms -> 24.33 ms   (1.75x faster)
+#     for c in s.codepoints()  195.04 ms -> 32.34 ms   (6.0x)
+#     for u in s.utf16()       208.27 ms -> 41.41 ms   (5.0x)
+#
+#   ⚠ **A SPEEDUP IS A DELETED LOOP UNTIL A CHECKSUM SAYS OTHERWISE.** All three walks were checksummed
+#   over 32,768 bytes of mixed 1/2/4-byte content and base shv2, tip shv2 AND the bootstrap oracle print
+#   the identical `bytesSum=5169152 cpSum=528236544 u16Sum=461377536`.
 #   ⇒ ⚠ AND `.clone()` IS THE TRAP IN REVERSE, the one slice B's optimizer named: a reading CAN move on
 #     the shared ladder for a `clone` — 256 of them — and it still cannot be ABOUT this rung, because
 #     every one of those receivers is an Array and the String arm did not exist when they were written.
