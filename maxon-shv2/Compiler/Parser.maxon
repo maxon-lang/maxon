@@ -44372,10 +44372,9 @@ export type Parser
 
 	// ⛔ **AN OPAQUE-`T` ARRAY ELEMENT MUST BE A VALUE THIS FRAME OWNS (W10) — the array move-in twin of
 	// `emitOpaqueFieldReassign`'s refusal, and the two doors now make the same demand.** The array destroys each
-	// element exactly once, and a shared generic body cannot COPY an opaque `T` to balance that (there is no
-	// `__retain_type_param`, and the layout descriptor carries no retain word), so a BORROWED element would hand
-	// the array a reference nobody transferred — freed once by the array's walk and never acquired, which is
-	// `0xC0000005` on an `.rdata` record and a double free on a heap one.
+	// element exactly once, so a BORROWED element would hand the array a reference nobody transferred — freed
+	// once by the array's walk and never acquired, which is `0xC0000005` on an `.rdata` record and a double
+	// free on a heap one.
 	//
 	// ⚠ **THE FIELD-STORE DOOR REFUSED THIS AND THE ARRAY DOOR PASSED IT SILENTLY THROUGH, WHICH IS WHY THE
 	// SPELLING-BOUND FEED RECOGNIZER COULD MISCOMPILE RATHER THAN COMPLAIN.** With the recognizer widened to
@@ -44383,6 +44382,33 @@ export type Parser
 	// `first` / `last` borrow, an opaque field read — and each is REFUSED here rather than emitted. The
 	// remaining owned sources are exactly the two the body can produce: an enrolled feed parameter, and a
 	// `pop`/`remove` result the runtime already moved out.
+	//
+	// ⛔⛔ **THIS REFUSAL IS INTRA-PROCEDURAL, AND ONE METHOD HOP DEFEATS IT — A LIVE MISCOMPILE, MEASURED
+	// 2026-08-07 (W41 optimization pass).** The demand is made of the value AT THE STORE. Inside a helper the
+	// stored value is a PARAMETER, which `valueIsOwnedHeap` answers true for, so the store is admitted; and
+	// nothing then checks that the helper's CALLER handed that parameter an owned value. So the identical
+	// borrow is refused when it is stored directly and silently miscompiled when it is stored one call away:
+	//
+	//     function storeAt(slot SlotIdx, v T)      // `v` is a parameter ⇒ admitted here
+	//         try items.set(slot, value: v) otherwise panic("oob")
+	//     end 'storeAt'
+	//     let borrowed = try old.get(0) otherwise panic("oob")
+	//     try items.set(0, value: borrowed) …      // E2015, correctly
+	//     storeAt(0, v: borrowed)                  // ADMITTED — exit 139 at teardown
+	//
+	// **`stdlib/Map.maxon`'s `grow()` → `insertAtSlot()` is exactly that hop**, so a `Map` with ANY managed
+	// column double-frees every entry as soon as it crosses its load factor: `Map with (String, Count)` prints
+	// the right answer for 12 entries and segfaults at 13 (`cap` 16 → 32). Reproduced identically on
+	// `69e655d38`, so the DEFECT predates W41 — but W41 is what made it reachable, because the synthesized
+	// `Map` it retired had no such body (the same program is exit 0 at 128,000 entries on that binary).
+	// The suite is 4769/0 over it: no spec case builds a managed-column map past the load factor.
+	//
+	// ⚠ **AND THE PARENTHETICAL THAT USED TO SIT IN THE PARAGRAPH ABOVE — *"there is no
+	// `__retain_type_param`, and the layout descriptor carries no retain word"* — WAS TRUE AT W10 AND FALSE
+	// FROM W41.** Both exist now (`ArrayRuntime.RetainTypeParamName`, `retainFunc@64`), and `moveOpaqueValueInto`
+	// already spends them on the FIELD-store side through `coOwnBorrowedOpaqueForConsume`. It is left recorded
+	// here rather than deleted because it is the cure this door still does not take, and a reader sent to fix
+	// the miscompile above was previously told the mechanism did not exist.
 	function requireOwnedOpaqueElement(value ValueId, valueStart TokenIndex) throws ParseError
 		if self.valueIsOwnedHeap(value) 'owned'
 			return
