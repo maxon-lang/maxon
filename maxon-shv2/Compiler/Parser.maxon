@@ -1474,6 +1474,11 @@ let sharedEmptyDeclaredAliasMap = ValueDeclaredAliasMap.create()
 // `recordCharLiteralOp` copies on its first write keyed on this instance's identity.
 let sharedEmptyCharLiteralOps = CharLiteralOpMap.create()
 
+// The same COW anchor for the byte-view op map (`StringBytesViewOpMap`), with the same invariant: a function
+// that never calls `addressableBytes()` INCREFS this one rather than allocating. That is every function of
+// every USER program — the method is stdlib-only — and all but a handful of the corpus's own.
+let sharedEmptyStringBytesViewOps = StringBytesViewOpMap.create()
+
 // The module-level shared EMPTY tuple-layout table (P1.10), held as the INITIAL value of `Parser.tupleLayouts`
 // AND as the COW anchor `internTupleLayout` keys on — `sharedEmptyInstanceAliasMap`'s pattern, for its reason
 // and with its invariant. A file that writes no tuple INCREFS this one rather than allocating a map of its
@@ -2230,11 +2235,47 @@ let MethodNameSeparatorBytes = b"."
 // `Point.create` — the name a type's method is declared and called under. ONE spelling, read by
 // `Parser.declaredMethodName` (the declaration) and `Parser.parseQualifiedCall` (the use). See
 // `MethodNameSeparator` for what a second spelling would cost.
-// ⚠ **`callWithCallee` STOOD HERE AND WENT WITH ITS ONE CALLER (W49 wave 7).** It replaced one field of an
-// emitted `call` — its CALLEE — carrying every other through, which was the whole of the edit
-// `foldByteViewIntoStreamWrite` made; that peephole lost its only producer when `String.addressableBytes`
-// retired onto the corpus (see `emitBuiltinsStreamWrite`). Nothing else in this compiler rewrites a call in
-// place, so the helper had no second reader to keep it alive.
+// ⭐ **ONE FIELD OF A `call` REPLACED — ITS CALLEE — AND EVERY OTHER CARRIED THROUGH.** The whole edit
+// `Parser.foldByteViewIntoStreamWrite` makes is this substitution: the byte view's producer becomes the
+// consumer that was going to read it, on the same result value, the same argument, the same labels, ranges
+// and mint. Written as one function so a rewrite cannot silently drop a field the op grows later — a
+// `MaxonOp.call` respelled at the rewrite site would have to be revisited every time the variant does.
+//
+// ⚠ **AND THAT "same argument" IS WHAT LET WAVE 7 RE-AIM THE FOLD WITHOUT TOUCHING THIS.** The op it
+// rewrites used to be `__str_bytes_view(s)`, minted by a synthesized arm, and is now the corpus call
+// `String.addressableBytes(s)`. Both carry exactly one argument and it is the String in both, so the
+// substitution that was right for the first is right for the second unchanged.
+//
+// The `default` panics because the only caller reads an op INDEX its own filing site recorded, and re-checks
+// the callee before rewriting; anything else is that pairing broken, which is a compiler bug and not a
+// program's.
+function callWithCallee(op MaxonOp, callee ByteArray) returns MaxonOp
+	return match op 'c'
+		call(result, _, args, argLabels, argRanges, argImmutableNames, argDefaultSlots, mint) gives MaxonOp.call(result, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, argDefaultSlots: argDefaultSlots, mint: mint)
+		default panic("callWithCallee: the op is not a `call`, so it has no callee to replace — every caller reads an index filed by the site that appended a call at it")
+	end 'c'
+end 'callWithCallee'
+
+// ⭐ **IS THE OP AT THIS INDEX THE DIRECT CALL TO `callee`?** The stream-write fold's re-match, and it exists
+// because wave 7 moved the filing site to a door that does not itself append the op: `dispatchMethodOnBase`
+// reads `opCount()` before handing the cursor to `parseCallNamed`, so the index is a FLOOR rather than a
+// certainty. Checked rather than trusted, a `parseCallNamed` that one day appends a setup op ahead of the
+// call makes the fold DECLINE — one allocation back — instead of rewriting an unrelated op, which is the
+// only failure direction a peephole may have.
+//
+// ⚠ It classifies through `maxonOpCalleeKind` rather than matching `MaxonOp` here, because a bare `default`
+// is exactly what this project forbids and a 28-arm restatement is what it forbids it FOR: that classifier
+// is the one place the variants are enumerated, and it already answers `noCallee` for everything that binds
+// no name. The VALUE identity needs no check — `stringBytesViewOps` is keyed by it, so a hit already proves
+// the map filed this index for this value.
+function opIsDirectCallTo(op MaxonOp, callee ByteArray) returns bool
+	return match maxonOpCalleeKind(op) 'kind'
+		direct gives maxonOpCalleeName(op).equals(callee)
+		functionValue gives false
+		noCallee gives false
+	end 'kind'
+end 'opIsDirectCallTo'
+
 export function qualifiedMethodName(typeName ByteArray, methodName ByteArray) returns ByteArray
 	return "{String.from(typeName)}{MethodNameSeparator}{String.from(methodName)}".toByteArray()
 end 'qualifiedMethodName'
@@ -3725,6 +3766,22 @@ export let CorpusUtf8DecodeAt = b"utf8DecodeAt"
 // `.codepoints()` and `.utf16()` walks. Its twin above decodes; this one steps, and the two MUST agree on a
 // truncated sequence or a walk steps into bytes it declined to decode (`utf8WidthFits`).
 export let CorpusUtf8ByteLengthAt = b"utf8ByteLengthAt"
+
+// ⭐⭐ **`addressableBytes()` — THE ONE CORPUS MEMBER THE STREAM-WRITE FOLD MATCHES BY NAME (W49 wave 7).**
+// `stdlib/Print.maxon:10` is `__Builtins.writeStdout(value.addressableBytes())`, and that member retired
+// onto `stdlib/String.maxon:181` — so the byte-view record the write does not need is produced by a CORPUS
+// CALL now rather than by a synthesized arm, and the fold that removes it has to recognize the call.
+//
+// ⚠ **NAMING A CORPUS FUNCTION IS WHAT THE FOUR CONSTANTS ABOVE ALREADY DO, and this one FAILS SOFTER than
+// any of them.** A rename breaks those loudly (`E3004`, a call to a declaration that is not there); this one
+// is only ever ASKED as *"is the op I am about to rewrite this call?"*, so a rename makes the fold decline
+// and a `print` costs one allocation again. Slower, never wrong — which is the only direction a
+// peephole's name-match may fail in.
+//
+// ⚠ It is the MEMBER's spelling, not the mangled `String.addressableBytes`: the qualified form is joined
+// where it is compared (`qualifiedMethodName`), so the type half is `StringConformerName`'s one spelling and
+// this constant stays the member's.
+export let CorpusAddressableBytes = b"addressableBytes"
 
 // `findGraphemeEnd(s, startPos: pos)` — the second parameter is LABELLED in the corpus declaration, and a
 // Maxon-tier call must present the label or `lowerCall` mis-slots it. Stated here beside the callee whose
@@ -6153,13 +6210,29 @@ typealias ValueDeclaredAliasMap = Map with (ValueId, TypeNameId)
 // closure body (its value ids are a fresh SSA space), exactly like the sibling value columns.
 typealias CharLiteralOpMap = Map with (ValueId, OpIndex)
 
-// ⚠ **`StringBytesViewOpMap` STOOD HERE AND WENT WITH THE STREAM-WRITE FOLD (W49 wave 7).** It was
-// `CharLiteralOpMap`'s twin — which op minted each `addressableBytes()` byte view — so that a write
-// intrinsic could CONSUME the String instead of the view, worth 3,178 ⇒ 1,703 code bytes on a hello-world.
-// The fold's producer was `dispatchStringMethod`'s arm; retiring that member onto `stdlib/String.maxon:181`
-// puts the mint one call frame away, where an in-place op rewrite cannot reach it, so the map had no writer
-// left. `emitBuiltinsStreamWrite` carries the full account and the cost. Nothing else ever read it, which
-// is why the field, its COW anchor and its four per-function/closure plumbing sites all went in one edit.
+// ⭐⭐ **WHICH OP PRODUCED EACH `addressableBytes()` BYTE VIEW — the map that lets a write intrinsic CONSUME
+// the String instead of the view (W35, re-aimed at W49 wave 7).** `addressableBytes()` yields a 48-byte
+// `Array` record so the value can be TYPED as one; `__Builtins.writeStdout`/`writeStderr` read `buffer@0`
+// and `length@8` and NOTHING else — the two slots a String record already carries, at the same offsets. So
+// when the view's sole consumer is the write, that record is minted and destroyed to satisfy a type nobody
+// reads: the allocator, the array runtime and the leak gate arrive in a hello-world for it (MEASURED at
+// 1,749 ⇒ 3,226 code bytes with the fold absent).
+//
+// ⚠⚠ **WHAT IT FILES CHANGED AT WAVE 7 AND THE FOLD DID NOT.** It used to hold the index of a
+// `__str_bytes_view` call the `addressableBytes` ARM appended; that member is `stdlib/String.maxon:181`'s
+// now, so the op is a CORPUS CALL — `call String.addressableBytes(s)` — filed by `dispatchMethodOnBase`.
+// ⭐ **AND THE REWRITE IS UNCHANGED, BECAUSE THE TWO OPS HAVE THE SAME SHAPE**: one result, one argument,
+// and that argument is the String. Re-pointing the callee at `__write_stdout` turns the producer into the
+// consumer either way, which is why wave 7 could delete this whole family and restore it verbatim.
+//
+// The op is REWRITTEN IN PLACE for `CharLiteralOpMap`'s reason and this is how its index is found in O(1) —
+// leaving the producing call behind and emitting a second one would keep the allocation this exists to
+// remove.
+//
+// A Map rather than a dense column for `CharLiteralOpMap`'s reason: the population is a function's
+// `addressableBytes()` calls, which is zero for every user function (the method is stdlib-only) and for
+// almost every stdlib one. Reset per function and SWAPPED across a closure body, exactly like the siblings.
+typealias StringBytesViewOpMap = Map with (ValueId, OpIndex)
 
 // ⭐ **ONE PARSER MARK OVER THIS FUNCTION'S SSA VALUES — a set of the values that carry it.** The two marks
 // that wear this shape are `Parser.immutableGlobalReads` (loaded out of an IMMUTABLE top-level global's slot,
@@ -7720,6 +7793,10 @@ export type Parser
 	// what an integer position does with it and why the op must be REPLACED rather than orphaned.
 	// Reset per function and SWAPPED across a closure body, exactly like the sibling value columns.
 	var charLiteralOps as CharLiteralOpMap
+	// ⭐⭐ **WHICH OP PRODUCED EACH `addressableBytes()` BYTE VIEW** — see `StringBytesViewOpMap` for what the
+	// stream-write fold does with it and for the allocation it removes.
+	// Reset per function and SWAPPED across a closure body, exactly like the sibling value columns.
+	var stringBytesViewOps as StringBytesViewOpMap
 	// ⭐⭐ **WHICH VALUES WERE READ OUT OF AN IMMUTABLE TOP-LEVEL GLOBAL (P1.7 slice 2b)** — the fact that
 	// stops a `let`-declared array's record from being written through a mutable ALIAS.
 	//
@@ -8438,6 +8515,7 @@ export type Parser
 			valueInstanceAlias: sharedEmptyInstanceAliasMap,
 			valueDeclaredAlias: sharedEmptyDeclaredAliasMap,
 			charLiteralOps: sharedEmptyCharLiteralOps,
+			stringBytesViewOps: sharedEmptyStringBytesViewOps,
 			immutableGlobalReads: sharedEmptyImmutableGlobalReads,
 			mergeImmutableBlame: sharedEmptyMergeBlames,
 			bufferSurfaceValues: sharedEmptyBufferSurfaceValues,
@@ -15538,6 +15616,7 @@ export type Parser
 		// function's SSA space (see `ValueDeclaredAliasMap`), and shares the same copy-on-write anchor.
 		self.valueDeclaredAlias = sharedEmptyDeclaredAliasMap
 		self.charLiteralOps = sharedEmptyCharLiteralOps
+		self.stringBytesViewOps = sharedEmptyStringBytesViewOps
 		// Per-function for the identical reason (P1.7 slice 2b): a marked value names an id in THIS
 		// function's SSA space, so a mark carried over would name an unrelated value in the next one.
 		self.immutableGlobalReads = sharedEmptyImmutableGlobalReads
@@ -16478,6 +16557,7 @@ export type Parser
 		self.valueInstanceAlias = sharedEmptyInstanceAliasMap
 		self.valueDeclaredAlias = sharedEmptyDeclaredAliasMap
 		self.charLiteralOps = sharedEmptyCharLiteralOps
+		self.stringBytesViewOps = sharedEmptyStringBytesViewOps
 		self.immutableGlobalReads = sharedEmptyImmutableGlobalReads
 		self.mergeImmutableBlame = sharedEmptyMergeBlames
 		// ⭐ **ALL THREE, for `parseFunction`'s stated reason — "they describe one value space" (BATCH22
@@ -22547,13 +22627,19 @@ export type Parser
 		self.pendingTempDrops.push(value)
 	end 'trackOwnedTemp'
 
-	// ⚠ **`releaseOwnedTemp` STOOD HERE AND WENT WITH ITS ONE CALLER (W49 wave 7).** It was
-	// `trackOwnedTemp`'s exact inverse — clear `valueOwnsHeap` AND drop the pending entry — for the one
-	// situation in which a record ceased to exist after being enrolled: `foldByteViewIntoStreamWrite`
-	// rewriting a `__str_bytes_view` mint into the write that consumed it. That peephole lost its producer
-	// when `String.addressableBytes` retired onto the corpus, and its own header recorded why this door must
-	// never become a general "cancel an ownership" — releasing a temporary whose record still EXISTS is a
-	// leak. With no caller left, the safest shape is not to offer it.
+	// ⭐ **`trackOwnedTemp`'s EXACT INVERSE — the value is no longer a managed temporary at all (W35).** Its
+	// one caller is `foldByteViewIntoStreamWrite`, which rewrites the call that PRODUCED the byte-view record
+	// INTO the write that consumed it: there is no record any more, so both halves of the enrolment have to
+	// go. Dropping only the pending entry would leave `valueOwnsHeap` set on what is now an integer byte
+	// count, and a `let n = __Builtins.writeStdout(…)` would then bind a value the scope exit tries to
+	// DECREF — which is why this is the inverse of the whole two-step and not of its second half.
+	//
+	// ⚠ It is NOT a general "cancel an ownership" door and must not become one: releasing a temporary whose
+	// record still EXISTS is a leak. The caller's obligation is that the producing op is gone.
+	function releaseOwnedTemp(value ValueId)
+		try self.valueOwnsHeap.set(value, value: false) otherwise panic("releaseOwnedTemp: v{value} has no owned-heap slot — every SSA value must be minted through mintValue, which seeds the column")
+		self.removeFromPendingTemps(value)
+	end 'releaseOwnedTemp'
 
 	// Set `value`'s owned-heap provenance bit WITHOUT enrolling it as a statement-scoped pending temporary
 	// — the half of `trackOwnedTemp` a CONSUMED PARAMETER needs (P1.4a wave 2). The param already drops at
@@ -33669,6 +33755,15 @@ export type Parser
 		return result
 	end 'emitCharacterLiteral'
 
+	// File the op a byte-view value was produced by, so the stream-write intrinsic can rewrite it in place.
+	// `recordCharLiteralOp`'s twin — same COW-off-the-shared-empty discipline, same reason.
+	function recordStringBytesViewOp(value ValueId, opIndex OpIndex)
+		if self.stringBytesViewOps is sharedEmptyStringBytesViewOps 'stillShared'
+			self.stringBytesViewOps = StringBytesViewOpMap.create()
+		end 'stillShared'
+		self.stringBytesViewOps.upsert(value, value: opIndex)
+	end 'recordStringBytesViewOp'
+
 	function recordCharLiteralOp(value ValueId, opIndex OpIndex)
 		// COPY-ON-WRITE off the shared empty map, exactly as `recordValueInstanceAlias` does and for its
 		// reason: a function that writes no character literal never allocates one.
@@ -36306,11 +36401,61 @@ export type Parser
 		// Read BEFORE the materialization too: `methodReceiverBinding` hands back an ordinary value binding,
 		// which is exactly the fact the struct fallthrough still has to refuse on.
 		let selfFieldName = baseTok.value if binding.isSelfField else EmptySourceText
+
+		// ⭐⭐⭐ **`managed.length()` INSIDE `stdlib/String.maxon` HANDS OVER THE STRING'S OWN RECORD AND MINTS
+		// NOTHING (W49 wave 7 cure).** Reading a fused wrapper's inline `managed` normally goes through
+		// `emitFieldLoad`, which mints a 48-byte `__str_bytes_view` record plus an `__mm_incref` so the value
+		// can be TYPED as an `Array with Byte` — and when the only thing that value does is receive ONE
+		// member call, that record is allocated and destroyed for a callee that reads two words the String
+		// record already carries at the same offsets.
+		//
+		// ⛔ **MEASURED, AND IT IS WHY THIS EXISTS**: `s.byteLength()` — whose corpus body is exactly
+		// `return managed.length()` — ran **86.7x** slower than the synthesized arm it replaced, against the
+		// 2-4x a pure call frame costs. `String.byteAt` is the same shape once PER BYTE, which is what turned
+		// `hashString` into one allocation per byte (35.9x). Neither was a leak or a wrong answer; both were
+		// an allocation nobody needed.
+		//
+		// ⭐ **IT IS THE ARRAY PATH'S OWN SHAPE, NOT A NEW ONE.** `arr.managed.setLength(2)` already dispatches
+		// with the receiver's record and mints nothing — `dispatchArrayMethod`'s `.managed` arm splits on
+		// `memberCallFollows` and re-enters with `viaManagedField: true`. That split is exactly this one: a
+		// `managed` that is CALLED needs no record of its own, and a `managed` used as a VALUE (bound,
+		// returned, passed, or stored in a `String{…}` literal) still mints, because the caller may drop it
+		// and dropping the receiver's own record is the double free `bufferSurfaceOf`'s header measures.
+		//
+		// ⚠ The member is asked through `fusedManagedMemberTakesTheRecord`, which carries the `@40` census:
+		// `slice` is NOT on it, so `clone()`/`toByteArray()` keep the view they genuinely need.
+		//
+		// ⚠ It presents `internSynthesizedByteInstance()` — the instance `emitFieldLoad` mints the VIEW
+		// under — rather than the field's declared `ByteMemory`, so the two spellings of one field answer to
+		// one element rule. Deriving it from the declaration instead would let a value path and a record path
+		// disagree about the element, which is the drift this whole surface is built to prevent.
+		// The SYNTACTIC half is asked first because it is total and cheap; only then is the layout consulted,
+		// which needs a `try` and so cannot join a condition chain.
+		if binding.isSelfField and self.memberCallFollows(self.pos + 1) and fusedManagedMemberTakesTheRecord(self.tokenAt(self.pos + 2).value) 'aCalledManagedFieldMember'
+			let servesTheRecord = try self.selfFieldIsInlineManaged(binding, baseTok: baseTok)
+			if servesTheRecord 'inlineManagedServesTheRecord'
+				let record = try self.selfFieldValueBinding(binding, baseTok: baseTok, value: try self.requireReceiverValue(baseTok))
+				let subjectName = self.borrowSubjectNameAt(baseIndex)
+
+				self.advance()
+				try self.consume(TokenKind.dot)
+				return try self.dispatchArrayMethod(func, arr: record.boundValue, giid: self.signatures.internSynthesizedByteInstance(), resultUsed: resultUsed, immutableReceiverName: self.immutableReceiverNameOf(record, baseTok: baseTok), borrowSubjectName: subjectName, receiverOwner: owner, receiverStorage: self.subjectStorageMask(func, subjectName: subjectName), viaManagedField: true)
+			end 'inlineManagedServesTheRecord'
+		end 'aCalledManagedFieldMember'
+
 		let held = try self.methodReceiverBinding(binding, baseTok: baseTok)
 
 		self.advance()
 		return try self.dispatchMethodOnReceiver(func, recv: MethodReceiver.create(held.boundValue, tag: maxonTypeTag(held.varType), nameId: typeNameIdOf(held.varType), anchor: baseTok, immutableName: self.immutableReceiverNameOf(held, baseTok: baseTok), subjectName: self.borrowSubjectNameAt(baseIndex), owner: owner, selfFieldName: selfFieldName), resultUsed: resultUsed)
 	end 'dispatchMethodOnBinding'
+
+	// Is this self-field alias the INLINE `managed` of a fused byte-record wrapper — the one field whose
+	// address IS the receiver's? The same two questions `emitFieldLoad`'s own arm asks, in one place because
+	// the record door above and the view mint below must agree about which field they are talking about.
+	function selfFieldIsInlineManaged(binding VarInfo, baseTok Token) returns bool throws ParseError
+		let layout = try self.enclosingLayout(baseTok)
+		return layout.conformsToBuiltinManagedWrapper() and binding.fieldIndex == layout.inlineManagedFieldIndex()
+	end 'selfFieldIsInlineManaged'
 
 	// ⭐ **THE RECEIVER A VALUE IS.** A temporary — a string literal, a call result, a parenthesised
 	// expression, a field read — is bound to no name, and the three provenance fields are the empty answer
@@ -36611,9 +36756,21 @@ export type Parser
 			return binding
 		end 'holdsItsOwnValue'
 
-		let loaded = try self.parseSelfFieldRead(baseTok, binding: binding)
-		return VarInfo.createValueBinding(baseTok.value, varType: binding.varType, mutable: try self.selfFieldIsWritable(binding, nameTok: baseTok), boundValue: loaded)
+		return try self.selfFieldValueBinding(binding, baseTok: baseTok, value: try self.parseSelfFieldRead(baseTok, binding: binding))
 	end 'methodReceiverBinding'
+
+	// ⭐ **THE MATERIALIZED FORM OF A SELF-FIELD ALIAS, GIVEN THE VALUE THAT STANDS FOR IT.** Two doors reach
+	// it and they differ ONLY in where that value comes from: the ordinary one loads the field
+	// (`methodReceiverBinding`), and the fused-wrapper record door hands over the RECEIVER
+	// (`dispatchMethodOnBinding`'s `inlineManagedServesTheRecord`, which mints nothing).
+	//
+	// ⚠ It is a function rather than two constructions because everything ELSE about the binding — the blame
+	// NAME, the declared TYPE, and the writability rule that must ask the FIELD's `var`/`let` rather than the
+	// alias's (`selfFieldIsWritable`, whose header records the false E3019 the other question produced) — is
+	// the same in both, and a second construction is where those three come to disagree.
+	function selfFieldValueBinding(binding VarInfo, baseTok Token, value ValueId) returns VarInfo throws ParseError
+		return VarInfo.createValueBinding(baseTok.value, varType: binding.varType, mutable: try self.selfFieldIsWritable(binding, nameTok: baseTok), boundValue: value)
+	end 'selfFieldValueBinding'
 
 	// ⭐ **MAY A SELF-FIELD ALIAS BE WRITTEN THROUGH? — THE FIELD'S OWN `var`/`let`, NEVER THE BINDING'S.**
 	// `createSelfField` binds every alias `mutable: false` and says why (a rebind of the alias is never legal),
@@ -36822,8 +36979,30 @@ export type Parser
 		let callee = qualifiedMethodName(base.layout.name, methodName: memberTok.value)
 		try self.requireMethodNotWithheldByConstraint(base.layout.name, callee: callee, receiver: base.box, memberTok: memberTok)
 
+		// ⭐⭐ **THE FLOOR THE CORPUS CALL WILL LAND AT, READ BEFORE THE EMIT** — `emitRuntimeCall`'s own
+		// discipline, for the reason the stream-write fold needs: `addressableBytes()` produces the 48-byte
+		// byte-view record that `__Builtins.writeStdout` does not read, and the fold removes it by rewriting
+		// THIS op's callee in place (`foldByteViewIntoStreamWrite`). Filed here because this is the one door
+		// every corpus method call passes through, and `callee` is already built.
+		//
+		// ⚠ It is a FLOOR rather than the index, because `parseCallNamed` — not this function — appends the
+		// op. The fold RE-MATCHES what it finds there and declines if it is not the call, so a
+		// `parseCallNamed` that one day emits a setup op first costs an allocation rather than rewriting the
+		// wrong op.
+		//
+		// ⚠ The guard is the RECEIVER's layout plus the member's spelling, never a join: asking
+		// `conformsToBuiltinManagedWrapper` first means a user type with an `addressableBytes` of its own is
+		// never filed, and it costs one bit-test on the overwhelmingly common path where the answer is no.
+		let byteViewOpFloor = self.artifact.module.opCount()
+		let producesAByteView = base.layout.conformsToBuiltinManagedWrapper() and memberTok.value.equals(CorpusAddressableBytes)
+
 		let result = try self.parseCallNamed(func, callee: callee, anchor: baseTok, receiver: ReceiverArg.value(base.box, immutableName: base.immutableName, subjectName: base.subjectName), resultUsed: resultUsed, constructorInstance: self.receiverConstructorInstance(base.box), mint: CalleeMint.notMinted)
 		self.retypeInstanceMethodResult(result, receiver: base.box)
+
+		if producesAByteView 'aFoldableByteView'
+			self.recordStringBytesViewOp(result, opIndex: byteViewOpFloor)
+		end 'aFoldableByteView'
+
 		return result
 	end 'dispatchMethodOnBase'
 
@@ -41789,6 +41968,50 @@ export type Parser
 		return buffer
 	end 'bufferSurfaceOf'
 
+	// ⭐⭐⭐ **MAY A FUSED WRAPPER'S OWN RECORD BE HANDED STRAIGHT TO THIS BUFFER MEMBER'S RUNTIME ENTRY,
+	// INSTEAD OF A MINTED VIEW? (W49 wave 7 cure.)** A `String` record and an `Array` record agree on their
+	// first FIVE slots — `buffer@0`, `length@8`, `capacity@16`, `element_size@24`, `parent@32`, all five
+	// spelled from the SAME `ManagedRecord*Offset` constants (`StringRuntime:29-43` against
+	// `ArrayRuntime:47-51`) — and they DIVERGE at `@40`, where an `Array` holds `element_destroy` (a FUNCTION
+	// POINTER) and a `String` holds `singleByteGraphemesFlag` (0/1). `BufferOwnership` declares that shared
+	// prefix, and its whole reason is one emitted function reading both records.
+	//
+	// ⇒ **So the question is not "which member", it is "does this member's entry touch `@40`" — and the
+	// members are the ANSWER to that question, listed here rather than re-derived at the call site.**
+	//
+	// ⚠⚠ **IT IS A WHITELIST AND MUST STAY ONE, BECAUSE THE DEFAULT HAS TO BE THE SLOW-BUT-CORRECT ANSWER.**
+	// A member absent from this list mints the view exactly as before: correct, one allocation. A member
+	// wrongly ADDED reads `singleByteGraphemesFlag` as a destructor and `callIndirect`s address 0 or 1. The
+	// two failure directions are not comparable, so a name joins only with its entry's call graph traced.
+	//
+	// **The census, traced through every helper each entry calls (W49 wave 7):**
+	//   • `length()` -> `__arr_count` (`buildArrCount`) — reads `@8`. Nothing else.
+	//   • `byteAt(i)` -> `__arr_byte_at` — reads `@0`, and `emitBufferAccessGuard` reads `@8`/`@16` and
+	//     `@24`. A String's `@24` is `StringElementSize = 1` on EVERY producer, so `length·es` is the byte
+	//     length, which is the bound that member means.
+	//   • `setByte(i, v)` -> `__arr_set_byte` — the guard plus `__arr_cow_detach` -> `__mm_cow_detach`,
+	//     which reads `@8`/`@24`/`@0` and writes `@0`/`@16`/`@32`. **W49 wave 2 already established this
+	//     one and already passes the String's record for it** (`dispatchStringMethod`'s `setByte` arm); it
+	//     is listed so the two doors read one list.
+	//   • `append(other)` -> `__arr_append` — reads both records' `@24` and ABORTS on a mismatch, which two
+	//     String records pass (1 == 1); `__arr_move_elems` takes raw buffers and a stride as ARGUMENTS.
+	//   • `toCString()` -> `__mm_to_cstring` — reads `@8` and `@0`. Not even `@24`.
+	//   • `makeCharFromBytes(pos, len)` -> `__char_at` — reads `@40`, and that is why it is SAFE rather than
+	//     unsafe: it reads it AS `singleByteGraphemes` (`GraphemeRuntime:230`) and stores it into the
+	//     Character it builds. It is written for a byte record and is the one entry a VIEW serves WRONGLY,
+	//     because a view's `@40` is `TrivialDestructor` rather than the source's flag.
+	//
+	// ⛔ **`slice(start, end)` IS THE ONE THAT MAY NOT, AND ITS ABSENCE IS THE POINT.** It reaches
+	// `__arr_slice` -> `emitArrayView`, which LOADS `@40` (`ArrayRuntime:2080`) and STORES it into the fresh
+	// record `__arr_create` stamps (`:2494`). Given a String, that publishes `0`/`1` as the new view's
+	// `element_destroy`, and the first `__arr_decref` of it `callIndirect`s address 1. The view mint is not
+	// overhead for this member — it is exactly what supplies a correct `TrivialDestructor`
+	// (`StringRuntime.buildStrBytesView`), which is what that function exists for. ⇒ `clone()`,
+	// `sliceBytes()` and `toByteArray()` keep their allocation, and this is the reason.
+	function fusedManagedMemberTakesTheRecord(member ByteArray) returns bool
+		return member.equals(ManagedMemoryLengthMethod) or member.equals(ByteAtMethod) or member.equals(ManagedMemorySetByteMethod) or member.equals(AppendMethod) or member.equals(ManagedMemoryToCStringMethod) or member.equals(ManagedMemoryMakeCharFromBytesMethod)
+	end 'fusedManagedMemberTakesTheRecord'
+
 	// Dispatch a builtin `Array` method — cursor on the method NAME, `arr` the (borrowed) receiver record.
 	// Shared by the binding receiver (`arr.push(x)`) and a value receiver (`[…].get(0)`). An OPAQUE-`T` array
 	// (`self.items.push(x)` in a generic body, P1.7 slice 3b) dispatches here too, and the shared body treats the
@@ -44985,38 +45208,36 @@ export type Parser
 		// the two spellings of one question land in one producer. Handing back the receiver's own `ValueId`
 		// instead is the double free `bufferSurfaceOf`'s header measures.
 		//
-		// ⛔⛔⛔ **THIS MINT IS A HEAP ALLOCATION PER `managed.<member>` READ, AND SINCE W49 WAVE 7 IT IS ON THE
-		// HOTTEST PATH IN THE LANGUAGE. MEASURED, min-of-7 interleaved, same source, base vs tip:**
+		// ⭐⭐⭐ **THIS MINT IS A HEAP ALLOCATION, AND WHAT KEEPS IT OFF THE HOT PATH IS THE DOOR ABOVE IT.**
+		// A `managed` read that is immediately CALLED never arrives here at all — `dispatchMethodOnBinding`'s
+		// `inlineManagedServesTheRecord` hands the receiver's own record to the buffer entry and mints
+		// nothing (W49 wave 7 cure). What still reaches this line is `managed` used as a VALUE: bound,
+		// returned (`addressableBytes()`'s whole body), passed as an argument, or stored into a `String{…}`
+		// literal — every one of which may outlive the statement, and for which handing back the receiver's
+		// own `ValueId` is the double free `bufferSurfaceOf`'s header measures.
 		//
-		//     s.byteLength()  in a 4,000,000-trip loop     3.40 ms ->   294.81 ms   **86.7x**
-		//     s.isEmpty()     (which calls byteLength)      5.18 ms ->   308.17 ms   **59.5x**
-		//     hashString(s)   over 524,288 bytes x 8        8.88 ms ->   318.62 ms   **35.9x**
-		//     integer control, none of the surface          5.91 ms ->     5.87 ms   0.99x
+		// ⛔ **WHY THAT SPLIT EXISTS, MEASURED — IT WAS 86.7x.** `String.byteLength`'s corpus body is
+		// `return managed.length()`, and before the cure that ONE expression emitted `__str_bytes_view` (a
+		// 48-byte `Array` record + `__mm_incref`), then `__arr_count`, then `__arr_decref` — a heap allocation
+		// and two refcount operations to read `length@8`. `String.byteAt` was the same shape once PER BYTE.
+		// min-of-7 interleaved, same source, base / wave-7-uncured / cured:
 		//
-		// **WHY IT IS SO MUCH MORE THAN A CALL FRAME**: `String.byteLength`'s corpus body is
-		// `return managed.length()`, and that ONE expression emits `__str_bytes_view` (a 48-byte `Array`
-		// record + `__mm_incref`), then `__arr_count`, then `__arr_decref` — a heap allocation and two
-		// refcount operations to read `length@8`. `String.byteAt` is the same shape once PER BYTE, which is
-		// what turns a byte walk into one allocation per byte. Neither is a leak (`__arr_decref` runs, no run
-		// exits 101) and neither is a wrong answer (every A/B mode returns a bit-identical accumulator on
-		// both compilers) — it is pure cost.
+		//     s.byteLength()  4,000,000 trips      3.33 ms -> 278.69 ms -> 11.13 ms   83.7x -> **3.34x**
+		//     s.isEmpty()     4,000,000 trips      5.05 ms -> 287.48 ms -> 17.22 ms   56.9x -> **3.41x**
+		//     hashString(s)   524,288 bytes x 8    8.82 ms -> 302.39 ms -> 19.74 ms   34.3x -> **2.24x**
+		//     short.clone()   4,000,000 trips    251.03 ms -> 1370.27 ms -> 841.54 ms  5.5x -> **3.35x**
+		//     integer control                     5.89 ms ->   5.83 ms ->  5.88 ms    1.0x ->   1.00x
 		//
-		// ⇒ **THE CURE IS NOT AN INLINER, AND THAT IS WHY IT IS WORTH NAMING HERE**: the record is minted to
-		// satisfy a TYPE, and the two members that dominate the cost read slots the receiver's OWN record
-		// already carries at the SAME offsets. That is the identical argument wave 2 used to fix `setByte` —
-		// a String record and an `Array` record agree on all five slots those entries read
-		// (`BufferOwnership`'s shared prefix, whose whole reason is one emitted function reading both) — and
-		// it is applied there on the WRITE side already. Applying it to the READ side means `managed.length()`
-		// and `managed.byteAt(i)` on a FUSED WRAPPER pass the receiver's record instead of a fresh view.
-		// ⚠ It is NOT a blanket removal of this mint: `managed.slice`, `managed.append`, `managed.toCString`
-		// and `managed.makeCharFromBytes` all hand the record onward or take ownership decisions on it, and
-		// `let b = s.addressableBytes()` legitimately binds one. The fix is per-MEMBER, on the reads that
-		// consume the record within the statement and drop it.
+		// Never a leak (`__arr_decref` ran, no run exits 101) and never a wrong answer — every mode returns a
+		// bit-identical accumulator on all three binaries, which is what says the cure deleted no work.
 		//
-		// ⚖ **REPORTED, NOT CURED, AND DELIBERATELY SO** (user ruling: accept, record, continue). It is a
-		// COST rather than a wrong answer or a leak, it is a change to the BUFFER surface rather than to the
-		// retirement, and it wants its own red-before-green. See `emitBuiltinsStreamWrite` for the second,
-		// independent cost this wave accepted.
+		// ⚠⚠ **`clone()` IS THE MEMBER THE CURE CANNOT REACH, AND IT STILL IMPROVED.** Its body goes through
+		// `sliceBytes` -> `managed.slice(...)`, and `slice` is the ONE buffer member that may not take a String
+		// record: `__arr_slice` -> `emitArrayView` LOADS `@40` and STORES it into the fresh view, so a String's
+		// `singleByteGraphemesFlag` would become that view's `element_destroy` and the first `__arr_decref`
+		// would `callIndirect` address 1. The view mint is not overhead there — it is what supplies a correct
+		// `TrivialDestructor`. It improved anyway (5.5x -> 3.35x) because `sliceBytes` asks `byteLength()`,
+		// which the cure made cheap. See `fusedManagedMemberTakesTheRecord` for the full `@40` census.
 		if layout.conformsToBuiltinManagedWrapper() and index == layout.inlineManagedFieldIndex() 'inlineManagedIsTheReceiver'
 			let view = self.emitOwnedRuntimeResult(StrBytesViewName, args: singletonArgs(box), resultTag: ValueTypeTag.genericInstance, resultNameId: self.signatures.internSynthesizedByteInstance(), range: range)
 			self.markBufferSurface(view)
@@ -45752,11 +45973,18 @@ export type Parser
 		self.bufferSurfaceValues.insert(value)
 	end 'markBufferSurface'
 
-	// ⚠ **`unmarkBufferSurface` STOOD HERE AND WENT WITH THE FOLD IT SERVED (W49 wave 7).** It was
-	// `markBufferSurface`'s inverse, for the one value whose record `foldByteViewIntoStreamWrite` had just
-	// deleted; that peephole lost its only producer when `String.addressableBytes` retired onto the corpus
-	// (see `emitBuiltinsStreamWrite`), and nothing else has ever needed to retract a mark. There is no
-	// standing claim to defend here now: a mark is made once, at the mint, and lives as long as the value.
+	// ⭐ `markBufferSurface`'s inverse — the value no longer denotes a buffer because the record it denoted no
+	// longer exists (W35, `foldByteViewIntoStreamWrite`). It is CLEARED rather than left to be unreachable by
+	// construction: "no integer-tagged value ever reaches a buffer-surface question" is exactly the kind of
+	// premise this compiler keeps finding false, and the mark is one `remove` to retire honestly. No
+	// copy-on-write is needed — a value can only be UNMARKED in a function that already marked one, so the
+	// set is this function's own by then.
+	function unmarkBufferSurface(value ValueId)
+		// The removal's "was it there?" answer is not a fact worth asking: the caller has just proved the
+		// value IS a byte view, and this door exists to make the mark's absence true, not to report on it.
+		_ = self.bufferSurfaceValues.remove(value)
+	end 'unmarkBufferSurface'
+
 	// ⭐ **THE ONE WRITER OF `bufferSurfaceSlots` (A2m)** — `markBufferSurface`'s twin for a TUPLE value,
 	// through the same one home for the copy-on-write (`privateValueSlotSurfaceMap`) and with the same hazard:
 	// the anchor is module-level, so a write into it names slots of an unrelated function's SSA space.
@@ -46306,6 +46534,7 @@ export type Parser
 		// The invariant is the one `CharLiteralOpMap`'s header already states ("SWAPPED across a closure body,
 		// exactly like the sibling value columns"); this is what makes it true.
 		let savedCharLiteralOps = self.charLiteralOps
+		let savedStringBytesViewOps = self.stringBytesViewOps
 		// ⛔⛔ **THE SAME DEFECT, TWICE MORE — FOUND BY SWEEPING THE RESET LIST AGAINST THIS ONE (BATCH23
 		// review).** Both are RESET below, correctly, and neither was restored, and each is a compiler PANIC
 		// on an ordinary program. They are listed here rather than beside their resets because the reset is
@@ -46422,6 +46651,7 @@ export type Parser
 		self.valueInstanceAlias = sharedEmptyInstanceAliasMap
 		self.valueDeclaredAlias = sharedEmptyDeclaredAliasMap
 		self.charLiteralOps = sharedEmptyCharLiteralOps
+		self.stringBytesViewOps = sharedEmptyStringBytesViewOps
 		self.immutableGlobalReads = sharedEmptyImmutableGlobalReads
 		self.mergeImmutableBlame = sharedEmptyMergeBlames
 		self.bufferSurfaceValues = sharedEmptyBufferSurfaceValues
@@ -46589,6 +46819,7 @@ export type Parser
 		self.valueInstanceAlias = savedValueInstanceAlias
 		self.valueDeclaredAlias = savedValueDeclaredAlias
 		self.charLiteralOps = savedCharLiteralOps
+		self.stringBytesViewOps = savedStringBytesViewOps
 		self.iterationLockedBindings = savedIterationLockedBindings
 		self.currentWitnessParamBase = savedWitnessParamBase
 		self.currentWitnessParamCount = savedWitnessParamCount
@@ -48638,36 +48869,14 @@ export type Parser
 			throw ParseError.builtinOperandType(String.from(callee), required: String.from(ManagedMemoryTypeName), got: self.valueDisplayTypeName(arg), line: calleeTok.line, column: calleeTok.column)
 		end 'notAManagedBuffer'
 
-		// ⛔⛔ **A PEEPHOLE STOOD HERE AND W49 WAVE 7 TOOK ITS ONLY PRODUCER AWAY — READ THIS BEFORE ASSUMING
-		// THE COST IT REMOVED IS STILL REMOVED.** `foldByteViewIntoStreamWrite` rewrote
-		// `__Builtins.writeStdout(s.addressableBytes())` into `__write_stdout(s)` by editing the one op the
-		// `addressableBytes` ARM had just appended, and it was worth **3,178 -> 1,703 code bytes on a program
-		// whose only call is `print`** (W35's measurement): the view is a 48-byte `Array` record minted purely
-		// to satisfy a TYPE, and with it arrive `__arr_create`, `__arr_decref`, the allocator and the leak gate.
-		//
-		// **The fold needed the view op to be IN THIS FUNCTION, and it no longer can be.** `addressableBytes`
-		// retired onto `stdlib/String.maxon:181`, whose body is `return managed` — so the view is minted inside
-		// THAT function (by `emitFieldLoad`'s inline-managed arm) and arrives here as a CALL RESULT. There are
-		// exactly two stream-write call sites in the whole corpus (`Print.maxon:10`, `PrintError.maxon:5`) and
-		// both spell the argument that way, so no rewrite reachable from this site can see the mint. Refiling
-		// the op index from `emitFieldLoad` would not help: the fold's other condition is that this write is
-		// the view's SOLE consumer, and a value returned across a call boundary never is.
-		//
-		// ⇒ **`print` COSTS ONE HEAP RECORD AND TWO CALL FRAMES AGAIN** (user ruling: accept, record,
-		// continue). **RE-MEASURED at wave 7, and W35's number came back almost to the byte**: a program whose
-		// only call is `print("hi\n")` emits **1,749 code bytes on the base compiler and 3,226 on this one,
-		// +84.4%** — against W35's original 1,703 / 3,178, the two sides each grown by the corpus since. The
-		// data section returns with it, which is what moved ~20 committed goldens from `func @main {` to
-		// `data {` (the allocator's own `__slab_cursor`/`__slab_end`/`__mm_alloc_count` slots). ⚠ The RUNTIME
-		// FLOOR is untouched and was re-checked: `--emit-ir` on a bare `return 0 as ExitCode` still emits NO
-		// data section at all, because that program calls no `print`.
-		//
-		// ⚠ **THE REAL CURE IS AN INLINER, AND A SECOND, LARGER COST SHARES ITS ROOT** — see
-		// `emitFieldLoad`'s inline-managed arm, where the same mint costs a heap record per `byteLength()`
-		// and per `byteAt()`. With an inliner, `String.addressableBytes`'s single-expression body folds into
-		// its caller and this peephole becomes a special case of a general pass. Re-introducing a by-name
-		// peephole on `String.addressableBytes` here would put back exactly the parser/corpus coupling the
-		// retirement removed.
+		// ⭐⭐ **THE VIEW THIS WRITE WOULD HAVE CONSUMED IS FOLDED AWAY WHEN THE WRITE IS ITS ONLY CONSUMER.**
+		// See `foldByteViewIntoStreamWrite` for the two conditions and for what the fold is worth.
+		if let viewOpIdx = try self.stringBytesViewOps.get(arg) 'aByteViewOfAString'
+			if self.pendingTempsContain(arg) and self.byteViewCallStillSitsAt(viewOpIdx) 'thisWriteIsItsSoleConsumer'
+				return self.foldByteViewIntoStreamWrite(arg, viewOpIdx: viewOpIdx, runtimeName: runtimeName)
+			end 'thisWriteIsItsSoleConsumer'
+		end 'aByteViewOfAString'
+
 		// The buffer is BORROWED — the runtime entry reads `buffer@0`/`length@8` through it and never takes
 		// ownership — so there is no owned temporary to enrol and a literal argument needs no decref. This is
 		// exactly how `runProcess` borrows its command line.
@@ -48675,6 +48884,61 @@ export type Parser
 		callArgs.push(arg)
 		return self.emitRuntimeCall(runtimeName, args: callArgs, resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(calleeTok))
 	end 'emitBuiltinsStreamWrite'
+
+	// ⭐⭐⭐ **`__Builtins.writeStdout(s.addressableBytes())` BECOMES `__write_stdout(s)` — ONE OP REWRITTEN, ONE
+	// FIELD CHANGED (W35, re-aimed at W49 wave 7).** The view exists to satisfy a TYPE, not a USE:
+	// `addressableBytes()` yields a 48-byte `Array` record so the value can be an `Array with Byte`, and the
+	// write reads `buffer@0` and `length@8` — the two slots a String record already carries, at the SAME
+	// offsets (see `StringRuntime.buildStreamWrite`). So the record is minted and destroyed for a consumer
+	// that never looks at the one slot the two records disagree on (`@40`, `element_destroy` against
+	// `singleByteGraphemes`), and with it arrive `__arr_create`/`__arr_decref`, the whole allocator and the
+	// leak gate.
+	//
+	// MEASURED, on a program whose only call is `print`: **1,749 code bytes with the fold, 3,226 without** —
+	// W35 read 1,703 / 3,178 for the same pair before the corpus grew.
+	//
+	// ⚠⚠ **THE OP IT REWRITES CHANGED AT WAVE 7 AND THE REWRITE DID NOT.** It used to be a
+	// `__str_bytes_view` call a synthesized arm appended; `String.addressableBytes` is
+	// `stdlib/String.maxon:181`'s now, so the producer is the CORPUS CALL `String.addressableBytes(s)`,
+	// filed by `dispatchMethodOnBase`. Both ops carry one result and ONE argument, and that argument is the
+	// String in both — so re-pointing the callee turns the producer into the consumer exactly as before.
+	// ⇒ **The fold is NOT an inliner and does not need to be**: it never reads the callee's body, only the
+	// fact that this call's one argument is the thing the write actually wants.
+	//
+	// ⭐ **THE REWRITE CHANGES THE CALLEE AND NOTHING ELSE.** Same result value, same single argument, same
+	// labels, ranges and mint — so the shape cannot drift and there is no second op to keep in step. The
+	// value's TYPE moves from the byte instance to `integer` (it is now the write's byte count) and its OWNED
+	// enrolment is released, which is what removes the `__arr_decref` the statement would otherwise emit.
+	//
+	// ⚠⚠ **THE NON-ESCAPE CONDITION IS `pendingTempsContain`, AND IT IS A PROOF RATHER THAN A GUESS.** That
+	// list holds exactly the owned temporaries no binding has taken (`removeFromPendingTemps` runs at every
+	// transfer, and its own header states the two homes are disjoint by construction). So a view that reached
+	// a `let`, a field, a return or a promoted scope is NOT in it and the fold declines — `arr.managed` and
+	// `let b = s.addressableBytes()` both keep the record they legitimately need. The only other reader a
+	// value in that list can have is the statement-end drop, which is the very op this removes.
+	//
+	// ⚠ **AND THE INDEX IS RE-MATCHED, NOT TRUSTED** (`opIsSingleArgCallReturning`). The filing site reads
+	// `opCount()` as a FLOOR before handing the cursor to `parseCallNamed`; if that ever appends a setup op
+	// first, the floor names the wrong op and the fold DECLINES rather than rewriting it.
+	// ⚠ The receiver's own ownership is UNTOUCHED: the write BORROWS the String exactly as `__print_string`
+	// borrowed it and as `__gt_process_run` borrows its command line, and the String is this call's argument
+	// so it outlives the call by construction — the shape `stdlib/Subprocess.maxon:529-536` records a UAF for
+	// (a byte view outliving its String) cannot arise, because nothing survives the call at all.
+	// The fold's precondition that is about the OP rather than about ownership — asked at the call site so a
+	// decline falls through to the ordinary emit, which is where the token for its range lives.
+	function byteViewCallStillSitsAt(viewOpIdx OpIndex) returns bool
+		return opIsDirectCallTo(try self.artifact.module.ops.get(viewOpIdx) otherwise panic("byteViewCallStillSitsAt: ops.get({viewOpIdx}) OOB — the index was filed by `dispatchMethodOnBase` as the floor the corpus call would land at, and ops are never removed"), callee: qualifiedMethodName(StringConformerName, methodName: CorpusAddressableBytes))
+	end 'byteViewCallStillSitsAt'
+
+	function foldByteViewIntoStreamWrite(view ValueId, viewOpIdx OpIndex, runtimeName ByteArray) returns ValueId
+		let viewOp = try self.artifact.module.ops.get(viewOpIdx) otherwise panic("foldByteViewIntoStreamWrite: ops.get({viewOpIdx}) OOB — `byteViewCallStillSitsAt` just read the same index")
+		try self.artifact.module.ops.set(viewOpIdx, value: callWithCallee(viewOp, callee: runtimeName)) otherwise panic("foldByteViewIntoStreamWrite: ops.set({viewOpIdx}) OOB — the index was read one line above")
+
+		self.releaseOwnedTemp(view)
+		self.unmarkBufferSurface(view)
+		self.retypeValue(view, valueType: MaxonType.integer)
+		return view
+	end 'foldByteViewIntoStreamWrite'
 
 	// `__Builtins.sleep(ms)` — **SUSPEND THE CURRENT GREEN THREAD** for `ms` milliseconds, yielding to the
 	// scheduler (P1.5 mid-body-yield). It emits no `MaxonOp.call` to a user function — it routes to the

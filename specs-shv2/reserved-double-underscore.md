@@ -549,27 +549,17 @@ arity, MEASURED again here about types. A declaration exists, so `SemanticCheck`
 parser-emitted `__write_stdout` call inside `stdlib/Print.maxon` and type-checks it; a signature that does
 not match is `E3005` at `stdlib/Print.maxon:10` and never reaches the tier this case is about.
 
-⇒ **SO THIS CASE ALSO PINS THE BYTE-VIEW FOLD, from the one angle a spec can see it — AND W49 WAVE 7 IS
-THE WAVE THAT COLLECTED ON THAT PIN.** The paragraph here used to read: *"The emitted call passes the
-`String` ITSELF, because `foldByteViewIntoStreamWrite` rewrites `__str_bytes_view`'s call into the write
-rather than letting the view be built — so `(value String)` is what type-checks here. Before the fold the
-argument was the view and this declaration had to be `(value ByteArray)`. **Undo the fold and this case
-fails.**"*
-
-**It was undone, and this case failed — the only case in the suite that did.** Wave 7 retired
-`String.addressableBytes()` onto `stdlib/String.maxon:181`, which put the view's mint one call frame below
-`stdlib/Print.maxon:10` where no in-place op rewrite can reach it; the fold lost its only producer and was
-deleted (`Parser.emitBuiltinsStreamWrite` carries the account and the cost). So the emitted call passes the
-VIEW again, and the declaration goes back to the buffer signature this note had recorded for exactly this
-eventuality. ⭐ **A PREDICTION WRITTEN INTO A SPEC IS WHAT MADE A DELETED OPTIMISATION IMPOSSIBLE TO LAND
-SILENTLY** — nothing else in 4,786 cases noticed, because a fold that stops firing is a slower program and
-not a wrong one.
+⇒ **SO THIS CASE ALSO PINS THE BYTE-VIEW FOLD, from the one angle a spec can see it.** The emitted call
+passes the `String` ITSELF, because `foldByteViewIntoStreamWrite` rewrites `__str_bytes_view`'s call into
+the write rather than letting the view be built — so `(value String)` is what type-checks here. Before the
+fold the argument was the view and this declaration had to be `(value __ManagedMemory)`; MEASURED, with the
+buffer signature it is now `E3005 … expected 'ByteArray', got 'String'`. Undo the fold and this case fails.
 ```maxon
 // --- stdlib-overlay: Builtins.maxon
 export typealias WrittenByteCount = int(0 to u64.max)
 
-export function __write_stdout(value ByteArray) returns WrittenByteCount
-	return value.count()
+export function __write_stdout(value String) returns WrittenByteCount
+	return value.byteLength()
 end '__write_stdout'
 // --- file: main.maxon
 function main() returns ExitCode

@@ -104,41 +104,30 @@ b
 c
 ```
 
-### Both spellings of the write's argument agree — and the FOLD that distinguished them is GONE
+### The view the write consumes is FOLDED AWAY — and only when the write is its sole consumer
 
-⛔⛔ **THESE TWO CASES WERE `folded-and-unfolded-agree`, AND W49 WAVE 7 DELETED THE THING THE NAME
-ASSERTED.** The section read: *"`stdlib/Print.maxon`'s body is
-`__Builtins.writeStdout(value.addressableBytes())`, and `addressableBytes()` is `__str_bytes_view`,
-which `__arr_create`s a 48-byte `Array` record so the value can be TYPED as one. The write reads
-`buffer@0` and `length@8` — the two slots a String record already carries, at the same offsets — so
-that record is minted and destroyed for a consumer that never looks at the one slot the two disagree
-on. Left in, it put the allocator, the array runtime and the leak gate into a hello-world: **3,178
-code bytes against 1,703** for a program whose only call is `print`. The parser therefore rewrites the
-producer INTO the consumer — one op, one field, the callee — but only when the view is still an
-unconsumed owned temporary."*
+`stdlib/Print.maxon`'s body is `__Builtins.writeStdout(value.addressableBytes())`, and
+`addressableBytes()` is `__str_bytes_view`, which `__arr_create`s a 48-byte `Array` record so the
+value can be TYPED as one. The write reads `buffer@0` and `length@8` — the two slots a String
+record already carries, at the same offsets — so that record is minted and destroyed for a consumer
+that never looks at the one slot the two disagree on. Left in, it put the allocator, the array
+runtime and the leak gate into a hello-world: **3,178 code bytes against 1,703** for a program whose
+only call is `print`.
 
-**Every word of that was true and the rewrite no longer happens.** `String.addressableBytes()` retired
-onto `stdlib/String.maxon:181`, whose body is `return managed` — so the view is minted one call frame
-BELOW the write, where an in-place op rewrite cannot see it, and a value returned across a call
-boundary is never the "unconsumed owned temporary" the fold required either. The peephole was deleted
-with its last producer; `Parser.emitBuiltinsStreamWrite` carries the account, and the cost is back
-(user ruling: accept, record, continue — the real cure is an inliner).
+The parser therefore rewrites the producer INTO the consumer — one op, one field, the callee — but
+**only when the view is still an unconsumed owned temporary**, which is exactly "no binding has taken
+it". The two cases below are the same intrinsic on both sides of that condition, staged through the
+stdlib overlay because `addressableBytes()` is stdlib-only. Neither can see an allocation; what they
+pin is that the ANSWER is the same either way, which is the property a fold may not change.
 
-⇒ **WHAT THE TWO CASES STILL PIN IS WHAT THEY ALWAYS ACTUALLY PINNED**: the same intrinsic reached
-through an INLINE argument and through a BINDING gives the same ANSWER on the same stream. That was
-the property a fold may not change; with no fold it is the property a retirement may not change, and
-it is the reason these cases survived the wave rather than being deleted with the optimisation. They
-are staged through the stdlib overlay because `addressableBytes()` is stdlib-only. Neither can see an
-allocation.
-
-<!-- test: both-argument-spellings-agree -->
+<!-- test: folded-and-unfolded-agree -->
 ```maxon
 // --- stdlib-overlay: Builtins.maxon
 export typealias WrittenBytes = int(0 to u64.max)
 
-export function writeInlineArgument(text String) returns WrittenBytes
+export function writeFolded(text String) returns WrittenBytes
 	return __Builtins.writeStdout(text.addressableBytes())
-end 'writeInlineArgument'
+end 'writeFolded'
 
 export function writeThroughABinding(text String) returns WrittenBytes
 	let bytes = text.addressableBytes()
@@ -146,7 +135,7 @@ export function writeThroughABinding(text String) returns WrittenBytes
 end 'writeThroughABinding'
 // --- file: main.maxon
 function main() returns ExitCode
-	let a = writeInlineArgument("ab\n")
+	let a = writeFolded("ab\n")
 	let b = writeThroughABinding("cde\n")
 	return (a + b) as ExitCode
 end 'main'
@@ -159,19 +148,17 @@ ab
 cde
 ```
 
-The same pair on the OTHER stream. It was here because the fold was written once and keyed on the
-runtime entry the intrinsic names, so a rewrite that folded only stdout would have passed the case
-above; with the fold gone it keeps its own reason — `emitBuiltinsStreamWrite` still serves both
-entries from one body, and a change that reached only stdout would still pass the case above.
+The same pair on the OTHER stream, because the fold is written once and keyed on the runtime entry
+the intrinsic names — so a rewrite that folded only stdout would pass the case above.
 
-<!-- test: both-argument-spellings-agree-on-stderr -->
+<!-- test: folded-and-unfolded-agree-on-stderr -->
 ```maxon
 // --- stdlib-overlay: Builtins.maxon
 export typealias WrittenBytes = int(0 to u64.max)
 
-export function errInlineArgument(text String) returns WrittenBytes
+export function errFolded(text String) returns WrittenBytes
 	return __Builtins.writeStderr(text.addressableBytes())
-end 'errInlineArgument'
+end 'errFolded'
 
 export function errThroughABinding(text String) returns WrittenBytes
 	let bytes = text.addressableBytes()
@@ -179,7 +166,7 @@ export function errThroughABinding(text String) returns WrittenBytes
 end 'errThroughABinding'
 // --- file: main.maxon
 function main() returns ExitCode
-	let a = errInlineArgument("xy\n")
+	let a = errFolded("xy\n")
 	let b = errThroughABinding("z\n")
 	return (a + b) as ExitCode
 end 'main'

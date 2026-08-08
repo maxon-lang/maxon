@@ -32,40 +32,64 @@
 #     the wave that retired them — so their second reading belongs here beside the first. Same SOURCE,
 #     two compilers swapped into ONE path, interleaved, min-of-7. base = ddfc4278ad. ---
 #
-#   ⛔⛔⛔ **THE COST IS A HEAP ALLOCATION PER CALL, NOT A CALL FRAME — AND THE SIZE OF THE RATIO IS WHAT
-#   FOUND THAT.** A frame would have read 2-4x; these read up to 87x, which is the gap that made it worth
-#   dumping `func @String.byteLength` instead of filing the number.
+#   ⛔⛔⛔ **THE COST WAS A HEAP ALLOCATION PER CALL, NOT A CALL FRAME — AND THE SIZE OF THE RATIO IS WHAT
+#   FOUND IT.** A frame would have read 2-4x; the first measurement read up to 87x, and that gap is what
+#   made it worth dumping `func @String.byteLength` instead of filing the number. ⚠ **THE WAVE SHIPS
+#   CURED, so all three columns are here** — a number quoted without its `cured` neighbour describes a
+#   state that never merged.
 #
-#     s.byteLength()  4,000,000 trips        3.40 ms ->   294.81 ms   **86.7x**
-#     s.isEmpty()     4,000,000 trips        5.18 ms ->   308.17 ms   **59.5x**  (its body IS byteLength)
-#     hashString(s)   524,288 bytes x 8      8.88 ms ->   318.62 ms   **35.9x**  (byteAt, once per byte)
-#     short.clone()   4,000,000 trips      265.66 ms -> 1,459.92 ms    **5.5x**  (`sliceBytes` allocated
-#                                                                                on BOTH sides already)
-#     integer control, none of the surface   5.91 ms ->     5.87 ms     0.99x    THE NOISE FLOOR
+#                                        base       uncured        cured    uncured     cured
+#     s.byteLength()  4,000,000 trips    3.33 ms   278.69 ms    11.13 ms     83.7x   **3.34x**
+#     s.isEmpty()     4,000,000 trips    5.05 ms   287.48 ms    17.22 ms     56.9x   **3.41x**  (body IS byteLength)
+#     hashString(s)   524,288 B x 8      8.82 ms   302.39 ms    19.74 ms     34.3x   **2.24x**  (byteAt, per byte)
+#     short.clone()   4,000,000 trips  251.03 ms  1370.27 ms   841.54 ms      5.5x   **3.35x**  (see below)
+#     integer control                   5.89 ms      5.83 ms     5.88 ms      1.0x     1.00x    THE NOISE FLOOR
 #
-#   **WHY**: `String.byteLength`'s corpus body is `return managed.length()`, and reading a fused wrapper's
-#   inline `managed` mints `__str_bytes_view` — a 48-byte `Array` record plus an `__mm_incref`. So that ONE
-#   expression emits `__str_bytes_view` / `__arr_count` / `__arr_decref` to read `length@8`, and
-#   `String.byteAt` is the same shape once PER BYTE. The full account, and the shape of the cure, is at
-#   `Parser.emitFieldLoad`'s `inlineManagedIsTheReceiver` arm. ⇒ `--emit-ir` one `s.byteLength()` and read
-#   the body rather than trusting this note.
+#   **WHY IT WAS 87x**: `String.byteLength`'s corpus body is `return managed.length()`, and reading a fused
+#   wrapper's inline `managed` minted `__str_bytes_view` — a 48-byte `Array` record plus an `__mm_incref`.
+#   That ONE expression emitted `__str_bytes_view` / `__arr_count` / `__arr_decref` to read `length@8`, and
+#   `String.byteAt` was the same shape once PER BYTE.
 #
-#   ⚠ **A SLOWDOWN IS A CHANGED PROGRAM UNTIL A CHECKSUM SAYS OTHERWISE** — wave 6's rule, in the other
-#   direction. Every mode accumulates into a printed sink and base and tip agree to the digit on all five
-#   (byteLength 2097152000000, isEmpty 0, clone 32000000, bytewalk 11897186344, control 11999994).
+#   **THE CURE**: a `managed` read that is immediately CALLED hands the receiver's OWN record to the buffer
+#   entry and mints nothing. A String record and an `Array` record agree on the five slots those entries
+#   read — the argument W49 wave 2 already used on the WRITE side for `setByte`. The `@40` census naming
+#   WHICH members may take it is `Parser.fusedManagedMemberTakesTheRecord`; the door is
+#   `dispatchMethodOnBinding`'s `inlineManagedServesTheRecord`. ⇒ `--emit-ir` one `s.byteLength()` and read
+#   the body rather than trusting this note: it is a single `callDirect __arr_count` now.
+#
+#   ⚠ **`clone()` IS THE ONE MEMBER THE CURE CANNOT REACH, AND IT IMPROVED ANYWAY.** `slice` is the single
+#   buffer member that may not take a String record — `__arr_slice` -> `emitArrayView` LOADS `@40` and
+#   STORES it into the fresh view, so a String's `singleByteGraphemesFlag` would become that view's
+#   `element_destroy` and the first `__arr_decref` would `callIndirect` address 1. The mint is not overhead
+#   there; it is what supplies a correct `TrivialDestructor`. `clone` still went 5.5x -> 3.35x, because
+#   `sliceBytes` asks `byteLength()` and the cure made that cheap.
+#
+#   ⚠ **A SLOWDOWN — OR A SPEEDUP — IS A CHANGED PROGRAM UNTIL A CHECKSUM SAYS OTHERWISE** (wave 6's rule,
+#   both directions). Every mode accumulates into a printed sink and ALL THREE binaries agree to the digit
+#   on all five: byteLength 2097152000000, isEmpty 0, clone 32000000, bytewalk 11897186344, control
+#   11999994.
 #
 #   ⚠ **`ScaleCorpus` IS NOT BLIND TO WAVE 7, UNLIKE THE SIX BEFORE IT, AND ITS READING IS A DIFFERENT
 #   QUESTION.** The 2026-08-08 corpus change gave the String knob `.byteLength()` and the materializer knob
-#   `.isEmpty()`/`.clone()`, so a default `scale-test` prices this wave at **+2.51% allocations at rung 0
-#   falling to +2.40% at rung 5, every growth ratio identical to three digits**. That is the COMPILER's
-#   cost of compiling programs containing more calls. It says nothing about what those programs then DO.
+#   `.isEmpty()`/`.clone()`, so a default `scale-test` prices this wave at **+2.39% allocations at rung 0
+#   and +2.40% at rung 5, every growth ratio identical to three digits on both columns**. That is the
+#   COMPILER's cost of compiling programs that contain more calls, and it says nothing about what those
+#   programs then DO — which is the whole reason this ladder exists beside it. ⚠ The CURE barely moves that
+#   column (uncured read +2.51% / +2.40%): it removes ops from the EMITTED program, not work from the
+#   compile, so the two instruments are measuring different things and only this one saw the 87x.
 #
-#   ⚠ **THE `print` PATH IS AN INDEPENDENT COST OF THE SAME WAVE AND IS DELIBERATELY NOT TIMED.** Retiring
-#   `addressableBytes` killed `foldByteViewIntoStreamWrite` (`Parser.emitBuiltinsStreamWrite`). A
-#   wall-clock A/B of `print` measures `WriteFile` at ~450 us per call and swamps the difference; the
-#   instruments that CAN see it are CODE SIZE and the IR — `print("hi\n")` alone reads **1,749 -> 3,226
-#   code bytes (+84.4%)** and regains a `.data` section. The runtime FLOOR is unaffected: a bare
-#   `return 0 as ExitCode` still emits no data section, because it calls no `print`.
+#   ⚠ **THE `print` PATH WAS A SECOND, INDEPENDENT COST OF THIS WAVE, AND IT IS CURED SEPARATELY AND FULLY.**
+#   Retiring `addressableBytes` put the byte view one call frame below `stdlib/Print.maxon:10`, which left
+#   `foldByteViewIntoStreamWrite` with no producer: `print("hi\n")` alone went **1,749 -> 3,226 code bytes
+#   (+84.4%)** and regained a `.data` section. The fold is RE-AIMED rather than rebuilt — it now rewrites the
+#   corpus call `String.addressableBytes(s)`, whose one argument is the String, exactly as it used to rewrite
+#   the `__str_bytes_view(s)` a synthesized arm appended. **Back to 1,749 bytes, the base number to the
+#   byte**, and `func @print` is one `callDirect __write_stdout` again.
+#
+#   ⚠ **IT IS DELIBERATELY NOT WALL-TIMED, and that is a statement about the instrument.** A `print` loop
+#   measures `WriteFile` at ~450 us per call, which swamps the difference by three orders of magnitude. CODE
+#   SIZE and the emitted IR are the instruments that can see this one. The runtime FLOOR is unaffected
+#   either way: a bare `return 0 as ExitCode` emits no data section, because it calls no `print`.
 #
 # --- W49 WAVE 6 A/B (2026-08-08). Same SOURCE, two compilers, interleaved, min-of-5, 524,288 bytes x 5
 #     reps, ascii seed. base = 38fb221b0c, tip = the retirement. ---
