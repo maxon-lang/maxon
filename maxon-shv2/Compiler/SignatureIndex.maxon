@@ -14267,8 +14267,20 @@ export type ProgramSignatures
 	// it is precisely the mistake, because the id then means whatever name happens to sit at that number in
 	// the OTHER table. Keeping both steps inside makes the pairing structural instead of conventional, which
 	// is the same move `typeArgAggregateName` above already makes.
+	//
+	// ⭐⭐ **ANSWERED OFF `typeOwnershipProtocol`, WHICH IS THE INVARIANT AND NOT A ROUTING CHOICE
+	// (W41-trivial).** The layout descriptor's `destroyFunc@40` gate is this, and its `retainFunc@64` is
+	// `typeParamRetainCallee` → `typeOwnershipProtocol`; a reference is taken through one word and released
+	// through the other, so **the two must be non-zero TOGETHER**, and two predicates cannot promise that.
+	// They were two — this said `typeIsManaged` while the drop gate said `typeArgIsOwned` — and a co-owned
+	// trivial aggregate fell between them: retained by the rehash, released by nobody. Reading ONE decision is
+	// the arrangement the witness pair `destroyFunc@8`/`retainFunc@16` already has off
+	// `existentialOwnershipProtocol`, which is why it is spelled the same way here.
 	export function instanceArgIsManaged(id GenericInstanceId, position TypeParamPosition) returns bool
-		return self.typeIsManaged(self.substitutedInstanceArg(id, position: position), from: self.typeNames)
+		return match self.typeOwnershipProtocol(self.substitutedInstanceArg(id, position: position)) 'protocol'
+			none gives false
+			byteRecord to aggregate gives true
+		end 'protocol'
 	end 'instanceArgIsManaged'
 
 	// ⭐ **THE TYPE-CYCLE NODE INSTANCE `id`'s ARGUMENT AT `position` POINTS AT (E4014).** A container OWNS its
@@ -14313,8 +14325,11 @@ export type ProgramSignatures
 	// source (`var b = …; { let pInner = Point.create(…); b = PointBox.create(pInner) }; b.itemDigest()` freed
 	// `pInner` at the inner scope while `b` still pointed at it — a use-after-free the witness dispatch first
 	// made reachable). The user ruling (2026-07-23) fixes it by RETAIN, generalizing OPEN #40's `__mm_retain`
-	// co-ownership: a trivial struct/instance stored into a generic field is `__mm_retain`'d at the constructor
-	// feed (`Parser.handleEscapingBorrowFeed`), so the box holds a REAL second reference — CO-OWNED, not
+	// co-ownership: a trivial struct/instance stored into a generic field is `__mm_retain`'d at the FEED
+	// (`Parser.coOwnConcreteAggregateFeed`, reached from BOTH of `handleEscapingBorrowFeed`'s sinks — the
+	// `Self{item: v}` constructor and the callee-storage `keys.set(…)` alike; the second took no reference at
+	// all until W41-trivial, which is what made a trivial-keyed `Map` lose every entry), so the box holds a
+	// REAL second reference — CO-OWNED, not
 	// borrowed. The DROP boundary therefore moved to `typeIsManaged` (`genericInstanceFieldIsManaged`), which
 	// releases that reference at the box's destruction, while THIS consume boundary stays put so the caller's
 	// own `p` is still live and dropped once. So the three questions now split three ways on a trivial struct:
@@ -14534,12 +14549,13 @@ export type ProgramSignatures
 	// ⭐ **DOES ANY INTERNED INSTANCE OF THE TYPE THAT DECLARES `param` MAKE THAT PARAMETER A CO-OWNED
 	// TRIVIAL STRUCT (the retain-escaping rung)?** A trivial struct/instance argument (`Box with
 	// Point`) is BORROWED at the call site (`typeArgIsOwned` false — the caller keeps it) yet CO-OWNED by the
-	// box (`typeIsManaged` true — `genericInstanceFieldIsManaged` drops it, balanced by the constructor-feed
+	// box (`typeIsManaged` true — `genericInstanceFieldIsManaged` drops it, balanced by the feed's
 	// `__mm_retain`). That co-ownership is sound for a field set ONCE at construction, but a SHARED-body
 	// REASSIGNMENT of it (`self.saved = next`) has no way to drop the field's OLD co-owned value: the opaque
-	// body cannot emit a trivial struct's `__mm_decref` directly, and the descriptor-gated `__drop_type_param`
-	// is inert for a trivial instantiation (its `destroyFunc@40` is 0). So a reassignment would LEAK the old
-	// value. This gate lets `emitOpaqueFieldReassign` REJECT that combination up front rather than ship the
+	// body cannot emit a trivial struct's `__mm_decref` directly, and the two gates the reassign site routes
+	// through (`genericTypeFieldHasManagedInstantiation` for the drop, `isManagedOpaqueTypeParamField` for the
+	// descriptor it would drop through) both read the CONSUME boundary, so neither fires for this class. So a
+	// reassignment would LEAK the old value. This gate lets `emitOpaqueFieldReassign` REJECT that combination up front rather than ship the
 	// leak — read off the SAME `typeIsManaged`/`typeArgIsOwned` boundaries the drop and the consume decide on,
 	// so the reject fires on exactly the fields the destructor co-owns but the reassign cannot re-balance. A
 	// managed instantiation (`Box with String`, both true) reassigns through the descriptor as before; a scalar
@@ -14632,16 +14648,24 @@ export type ProgramSignatures
 	// Is instance field `index` DROPPED by the box once its args are substituted — the per-field drop gate.
 	// A type-PARAMETER field is dropped iff its substituted argument is a HEAP AGGREGATE (`typeIsManaged`), the
 	// SAME gate a DIRECT field uses. That is DELIBERATELY BROADER than the CONSUME boundary (`typeArgIsOwned`):
-	// a trivial `Box with Point` is CO-OWNED, not consumed — its `Point` is `__mm_retain`'d at the constructor
-	// feed (`Parser.handleEscapingBorrowFeed`), so the box holds a real second reference the caller keeps
+	// a trivial `Box with Point` is CO-OWNED, not consumed — its `Point` is `__mm_retain`'d at the FEED
+	// (`Parser.coOwnConcreteAggregateFeed`), so the box holds a real second reference the caller keeps
 	// usable (`generic-trivial-struct-arg`), and this decref RELEASES that reference at the box's destruction.
 	// The retain and this drop are the two ends of one co-ownership (OPEN #40's `__mm_retain` thesis applied to
 	// the generic-field escape — the RED `PointBox.create(pInner)` outliving `pInner`'s scope). The two
 	// classifiers therefore differ exactly on a trivial struct/instance: consumed = borrowed-and-kept, dropped =
 	// co-owned. A managed argument (`String`, an owning struct) is BOTH consumed and dropped, unchanged; a
-	// scalar is neither. A shared-body reassignment of a co-owned trivial field would break this balance (the
-	// old value cannot be decref'd through the descriptor-gated `__drop_type_param` without a trivial-struct
-	// descriptor), so it is REJECTED at the reassign site (`emitOpaqueFieldReassign`) — leaving every field this
+	// scalar is neither.
+	//
+	// ⚠ **THE OPAQUE COLUMN'S TWIN OF THIS GATE IS `managedOpaqueArrayElementOf`, and it read the CONSUME
+	// boundary until W41-trivial.** A DIRECT field has always been dropped on this boundary; the same field
+	// reached through a shared body's opaque `Array with T` was not, so a `Map with (Point, …)` retained keys
+	// no column walk released. Both read `typeIsManaged` of the substituted argument now — that header carries
+	// the measurement.
+	//
+	// A shared-body reassignment of a co-owned trivial field would break this balance (the reassign site's own
+	// drop gate and descriptor-need seed both read the CONSUME boundary, so neither fires for this class), so
+	// it is REJECTED at the reassign site (`emitOpaqueFieldReassign`) — leaving every field this
 	// drop fires on either construct-only (co-owned once) or managed/scalar (the pre-existing model).
 	export function genericInstanceFieldIsManaged(id GenericInstanceId, index FieldIndex) returns bool
 		let baseFieldType = try self.baseLayoutOf(id).fieldTypes.get(index) otherwise panic("ProgramSignatures.genericInstanceFieldIsManaged: field {index} out of range for instance {id}'s base struct")
@@ -15320,8 +15344,15 @@ export type ProgramSignatures
 	// a `Holder with (Array with String)` would answer `none` and store an array without a reference. This
 	// asks `typeIsManaged`, which is the boundary the concrete record's destructor drops on.
 	//
-	// EMPTY is the ANSWER for a trivial argument, not a sentinel: the zero word is what makes
-	// `__retain_type_param` inert, exactly as the witness pair's zero makes `__retain_existential` inert.
+	// EMPTY is the ANSWER for an argument that owns no record at all — a scalar, a ranged alias, a payload-free
+	// enum — and not a sentinel: the zero word is what makes `__retain_type_param` inert, exactly as the
+	// witness pair's zero makes `__retain_existential` inert.
+	//
+	// ⚠ **IT IS *NOT* EMPTY FOR A "TRIVIAL" ARGUMENT, WHICH IS WHAT THIS SAID (W41-trivial).** An all-scalar
+	// STRUCT is trivial in the CONSUME sense and is still a refcounted box, so its answer is `__mm_retain`.
+	// The claim mattered because `destroyFunc@40` was gated on the consume boundary while this word was gated
+	// on ownership: the sentence made the two look like they agreed while the code had them differing on
+	// exactly that class. They now read one predicate (`instanceArgIsManaged`).
 	export function typeParamRetainCallee(id GenericInstanceId, position TypeParamPosition) returns ByteArray
 		return retainCalleeForProtocol(self.typeOwnershipProtocol(self.substitutedInstanceArg(id, position: position)))
 	end 'typeParamRetainCallee'
@@ -15335,10 +15366,29 @@ export type ProgramSignatures
 	//
 	// ⚠ The byte-record test is a TAG here where the name door tests two names, and that is the same test:
 	// `tagIsByteRecord` is exactly "String or Character", and a name door has no tag to read.
+	//
+	// ⛔⛔ **AND IT CARRIES THE SUPERSEDED GUARD, WHICH IS THE FOURTH DOOR TO NEED ONE (W41-trivial).** A
+	// spelling two files contest names no reader (`genericAliasSpellingIsSuperseded`), so the rule that door
+	// states applies here unchanged: **a classifier that meets one contributes NOTHING rather than guessing.**
+	// `typeIsManaged`'s `named` arm ends in `isGenericAlias(name)` and says MANAGED of such a spelling, and
+	// "managed" is spent HERE on naming a per-type callee — which for a contested alias is exactly the
+	// `genericAliasInstance` refusal, reached as a compiler PANIC instead of the diagnostic the program had
+	// already earned. `none` is the identity: both descriptor words stay 0 and both runtime entries are inert,
+	// which is what a doomed program's descriptor should hold.
+	//
+	// ⚠ **MEASURED (W41-trivial), on three committed `typealias-file-scope` cases**: widening the descriptor's
+	// DROP gate to this boundary without the guard put a contested `Bag`/`N0` through
+	// `managedOpaqueArrayElementDropCallee` → `managedFieldDropCallee` → `managedNameDropCallee`, and
+	// `noteDestructorUsage` died at `SignatureIndex.maxon`'s refusal with a stack trace where two `error.`
+	// cases expect an E2015 and one expects a clean compile. It is A3k's measurement arriving at a new door,
+	// for A3k's reason.
 	export function typeOwnershipProtocol(t MaxonType) returns ExistentialOwnershipProtocol
 		if tagIsByteRecord(maxonTypeTag(t)) 'byteRecord'
 			return ExistentialOwnershipProtocol.byteRecord
 		end 'byteRecord'
+		if self.typeArgSpellingIsSuperseded(t) 'theContestReplacedThisOne'
+			return ExistentialOwnershipProtocol.none
+		end 'theContestReplacedThisOne'
 		if not self.typeIsManaged(t, from: self.typeNames) 'ownsNothing'
 			return ExistentialOwnershipProtocol.none
 		end 'ownsNothing'
@@ -15503,6 +15553,28 @@ export type ProgramSignatures
 	// at teardown, freeing its `Integer` column's words as String records. The descriptor is now one block PER
 	// PARAMETER (`layoutBlockOffsetFor`) and this walk answers for ONE of them, so a column is stamped with its
 	// OWN argument's destructor or with nothing.
+	//
+	// ⛔⛔ **AND IT GATES ON THE *DROP* BOUNDARY (`instanceArgIsManaged`), NOT ON THE *CONSUME* ONE — IT ASKED
+	// `genericInstanceArgIsOwned` FOR THREE RUNGS AND THAT WAS A SILENT WRONG ANSWER (W41-trivial).** The two
+	// questions differ on EXACTLY one class, the co-owned trivial aggregate (`typeArgIsCoOwnedTrivial`: managed,
+	// not owned) — an all-scalar struct key, a trivial generic instance — and a `destroyFunc@40` read off the
+	// narrow one leaves that class with a **RETAIN AND NO RELEASE**. The two words are stamped from one
+	// descriptor a few lines apart and were reading two different predicates: `retainFunc@64`
+	// (`typeParamRetainCallee` → `typeOwnershipProtocol` → `typeIsManaged`) said `__mm_retain` of a trivial
+	// struct while this said "nothing to drop", so `Map.grow()`'s rehash increfed every key through
+	// `__retain_type_param` and the new column's element walk released none of them.
+	//
+	// ⚠ **MEASURED, and it is a WRONG ANSWER with exit 0 and no diagnostic**: `Map with (Point, Val)` over an
+	// all-scalar `Point`, filled in a LOOP, printed `total 0` where the oracle prints `total 15` — `count()`
+	// right, every key in the column dangling, because the caller BORROWED (the consume boundary is narrow by
+	// design and stays so) and nothing on either side ever took a reference. See
+	// `specs-shv2/map.md`'s `trivial-key-column-survives-rehash`.
+	//
+	// ⇒ **THE INVARIANT, stated here because this is the walk that broke it: `destroyFunc@40` and
+	// `retainFunc@64` are non-zero TOGETHER.** Both now read `typeIsManaged` of the SAME substituted argument
+	// through the SAME door (`instanceArgIsManaged`), which is the arrangement the witness table's
+	// `destroyFunc@8`/`retainFunc@16` pair already holds by construction off one `existentialOwnershipProtocol`.
+	// A reference taken through one word and released through the other cannot be balanced by two predicates.
 	function managedOpaqueArrayElementOf(id GenericInstanceId, position TypeParamPosition) returns ManagedOpaqueArrayElement
 		// ⚠ **THIS IS THE SITE THE UNDECLARED HALF OF THE GATE WAS MEASURED ON.**
 		// `noteDestructorUsage`'s `rootManagedOpaqueArrayElementDrops` calls this over EVERY interned
@@ -15525,7 +15597,7 @@ export type ProgramSignatures
 				// names a parameter at all.
 				if maxonTypeTag(element) == ValueTypeTag.typeParameter 'opaqueElement'
 					let elementPosition = self.opaqueTypeParamPosition(element)
-					if elementPosition == position and self.genericInstanceArgIsOwned(id, position: elementPosition) 'managedArrayElement'
+					if elementPosition == position and self.instanceArgIsManaged(id, position: elementPosition) 'managedArrayElement'
 						return ManagedOpaqueArrayElement.present(self.substitutedInstanceArg(id, position: elementPosition))
 					end 'managedArrayElement'
 				end 'opaqueElement'
@@ -15536,7 +15608,7 @@ export type ProgramSignatures
 			// above.
 			if maxonTypeTag(fieldType) == ValueTypeTag.typeParameter 'opaqueBareField'
 				let fieldPosition = self.opaqueTypeParamPosition(fieldType)
-				if fieldPosition == position and self.genericInstanceArgIsOwned(id, position: fieldPosition) 'managedBareField'
+				if fieldPosition == position and self.instanceArgIsManaged(id, position: fieldPosition) 'managedBareField'
 					return ManagedOpaqueArrayElement.present(self.substitutedInstanceArg(id, position: fieldPosition))
 				end 'managedBareField'
 			end 'opaqueBareField'
