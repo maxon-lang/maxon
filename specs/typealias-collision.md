@@ -145,21 +145,159 @@ definition without E3063 — the deeper, more-local nested export is not a
 competitor from the parent scope's point of view. This mirrors the compiler's
 own source, where `Compiler/` and `Compiler/Coverage/` both export
 `FilePathArray`.
+⚠⚠ **THIS CASE CAST `42` FOR MONTHS, AND `42` IS INSIDE BOTH RANGES.** It passed whichever
+declaration governed the reader, so it pinned the absence of E3063 and nothing at all about
+precedence. The two ranges now DISAGREE ON SIGNEDNESS and are both one byte wide, so neither value
+survives the other's storage: 200 read through `int(-100 to 100)` is −56, −50 read through
+`int(0 to 255)` is 206. MEASURED at this rung's merge base with exactly the program below, the
+enclosing file's own bare `Tally` resolved to the NESTED declaration and the build was refused
+`E3005: Value 200 is outside the range of 'Tally' (int(-100 to 100))` — which is what the `42` version
+had been passing over. ⚠ Three readers on purpose, because precedence is a claim about each of them
+separately: `bare` is the enclosing directory's own file resolving the name with no declaration of
+its own in sight, and `enclosing`/`nested` are the two DECLARERS reading back what they stored, which
+is the half a single reader cannot state. Prints `bare=200 enclosing=200 nested=-50`.
 ```maxon
 // --- file: Compiler/types.maxon
-export typealias Tally = int(0 to 100)
+export typealias Tally = int(0 to 255)
+
+export function enclosingTally() returns Tally
+	let v = 200 as Tally
+	return v
+end 'enclosingTally'
 
 // --- file: Compiler/Coverage/types.maxon
-export typealias Tally = int(0 to 200)
+export typealias Tally = int(-100 to 100)
+
+export function nestedTally() returns Tally
+	let v = -50 as Tally
+	return v
+end 'nestedTally'
 
 // --- file: Compiler/main.maxon
 function main() returns ExitCode
-	let x = 42 as Tally
-	return x
+	let x = 200 as Tally
+	print("bare={x} enclosing={enclosingTally()} nested={nestedTally()}\n")
+	return 0
 end 'main'
 ```
 ```exitcode
-42
+0
+```
+```stdout
+bare=200 enclosing=200 nested=-50
+```
+
+
+<!-- test: enclosing-and-nested-export-keep-their-own-element -->
+⭐ The generic twin of the case above, and the shape canonical's strict-enclosure rule BLESSES so
+refusing it is not available: an `export typealias Cells = Array with Cell` in `outer/` and another
+in `outer/inner/`, each over its own `Cell`. Neither declaration may be renamed by the rule that
+settles the file-private and `module` contests — an `export` name is one any file may write — so
+before this rung the two shared one family of emitted methods and the flat, name-keyed type table
+handed both files whichever declaration merged last. ⚠⚠ It is ONE defect with TWO faces, and which
+one a program sees is decided only by whether a range check catches the truncation: over
+`int(0 to 100000)` against `int(0 to 255)` the enclosing file read its own 70000 back as 112,
+silently, exit 0; over the two one-byte ranges used here — which disagree on SIGNEDNESS, so neither
+value survives the other's storage — the same shape died as `Range check failed: value outside
+typealias 'Cell'` in the enclosing file's own function. Prints `outer=200 inner=-50`.
+```maxon
+// --- file: outer/types.maxon
+export typealias Cell = int(0 to 255)
+export typealias Cells = Array with Cell
+
+export type Outer
+	export static function stash() returns Cell
+		var xs = Cells.create()
+		xs.push(200)
+		let v = try xs.get(0) otherwise 0
+		return v
+	end 'stash'
+end 'Outer'
+
+// --- file: outer/inner/types.maxon
+export typealias Cell = int(-100 to 100)
+export typealias Cells = Array with Cell
+
+export type Inner
+	export static function stash() returns Cell
+		var xs = Cells.create()
+		xs.push(-50)
+		let v = try xs.get(0) otherwise 0
+		return v
+	end 'stash'
+end 'Inner'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	print("outer={Outer.stash()} inner={Inner.stash()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+outer=200 inner=-50
+```
+
+
+<!-- test: module-alias-governs-a-sibling-in-its-own-subtree -->
+⭐ The half `module-alias-does-not-govern-another-directory` leaves out: a file that merely READS a
+`module` alias two DISJOINT subtrees declare. The pair is legal precisely because no file can see
+both, and the reader here is in `scopeA/`, so `scopeA/`'s declaration is the only one it may name at
+all. ⚠⚠ It was served `scopeB/`'s: the DECLARERS are each cured by the contest rename, and the reader
+is not — it resolves the bare name through the module's alias tables, which hold ONE declaration per
+name, so it got whichever merged last and read 65000 back as 232 (= 65000 mod 256). ⚠ The reader is
+deliberately a SEPARATE FILE from the declarer: written into the declaring file itself it is served by
+that parser's own registry and answers correctly whatever the module tables hold, which is the
+weakness that left this half untested. `narrow=200` is a liveness marker only — it sits inside both
+ranges and can never tell them apart.
+⚠⚠ **THE READER SORTS BEFORE ITS OWN DECLARER ON PURPOSE, AND THAT NAMING IS LOAD-BEARING.** It
+catches a SECOND defect the other order hides: `PreScanTypeAliasesOnly` had the `module` modifier in
+hand and passed only `export` on to `PreScanTypeAlias`, so for the whole pre-scan window a `module`
+declaration's recorded reach was FILE — invisible to every file but its own. A reader pre-scanned
+after its declarer never saw that window, because `PreScan` re-recorded the right reach first; a
+reader pre-scanned BEFORE it was refused `E2003: Unknown type: Cell` for a name declared beside it.
+Written `aa.maxon`/`reader.maxon` this case answers correctly and pins only half of what it is for.
+```maxon
+// --- file: scopeA/aa-reader.maxon
+export type Sibling
+	export static function stash() returns Cell
+		var xs = Cells.create()
+		xs.push(65000)
+		let v = try xs.get(0) otherwise 0
+		return v
+	end 'stash'
+end 'Sibling'
+
+// --- file: scopeA/zz-decl.maxon
+module typealias Cell = int(0 to 100000)
+module typealias Cells = Array with Cell
+
+// --- file: scopeB/zz.maxon
+module typealias Cell = int(0 to 255)
+module typealias Cells = Array with Cell
+
+export type Narrow
+	export static function stash() returns Cell
+		var xs = Cells.create()
+		xs.push(200)
+		let v = try xs.get(0) otherwise 0
+		return v
+	end 'stash'
+end 'Narrow'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	print("sib={Sibling.stash()} narrow={Narrow.stash()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+sib=65000 narrow=200
 ```
 
 
