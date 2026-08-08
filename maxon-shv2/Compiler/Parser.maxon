@@ -4474,9 +4474,25 @@ end 'arrayWhereClause'
 //
 // ⇒ **The rule is "a member is retirable once every fact `emitCall` reads by its name is guarded", not
 // "once its corpus declaration is unambiguous".** A future overload pair is refused, not miscompiled.
+// ⭐⭐ **W49 WAVE 9 EMPTIED THE HAND-WRITTEN HALF OF THIS ROSTER, AND WHAT IS LEFT IS ENTIRELY DERIVED.**
+// `setByte` was the last name pushed here by hand — the last member of `String` shv2 SYNTHESIZED — and it
+// retired onto `stdlib/String.maxon:316` once its one blocker was discharged: `mapAsciiCase` passed its
+// second argument POSITIONALLY (`stdlib/String.maxon:658`), which `specs/parameter-labels.md` forbids and
+// shv2 enforces (E2053), so the declared member could not have served its own corpus caller. One token
+// (`value:`) in the corpus closed it.
+//
+// ⇒ **The whole roster is now `builtinConformerMethodNameList(String)` — `hash`/`equals` — which are NOT
+// methods this dispatch synthesizes either.** They are the builtin CONFORMANCES, whose impls the corpus
+// already defines (`stdlib/String.maxon:351,355`); the arm below is a direct-call door onto those same
+// symbols, not a second body. So `dispatchStringMethod` no longer serves a single member of its own, and
+// every `String` member a program can write is the corpus's, reached through `memberBelongsToTheCorpus`.
+//
+// ⚠ **THE FUNCTION STAYS RATHER THAN COLLAPSING INTO ITS ONE CALL, and that is not a thin wrapper.** It is
+// the `MemberSurface.string` row of `surfaceMemberNames`, whose other rows are hand-written lists; the
+// roster gate reads it by surface, and the day `String` gains `Comparable` its `compare()` arrives here
+// with no edit. Deleting it would move a surface's answer into the switch that dispatches on surfaces.
 function stringSurfaceMemberNames() returns ByteArrayArray
 	var names = ByteArrayArray.create()
-	names.push(ManagedMemorySetByteMethod)
 	for conformanceMethod in builtinConformerMethodNameList(StringConformerName) 'eachConformance'
 		names.push(conformanceMethod)
 	end 'eachConformance'
@@ -36533,7 +36549,7 @@ export type Parser
 		// A STRING RECEIVER takes the builtin String methods rather than the struct path, which would reject
 		// it as not a struct. String is the one non-struct type carrying a method table of its own.
 		if recv.tag == ValueTypeTag.string 'stringMethod'
-			return try self.dispatchStringMethod(func, recv: recv, resultUsed: resultUsed)
+			return try self.dispatchStringMethod(func, recv: recv)
 		end 'stringMethod'
 
 		// A CHARACTER RECEIVER (P1.8 slice B) — its own dispatcher, for the reason it is its own type.
@@ -37305,11 +37321,18 @@ export type Parser
 		return StructBase.create(try self.structLayoutOfType(capturedTag, nameId: capturedTypeNameId, baseTok: baseTok), box: try self.emitCaptureRead(baseName, enclosing: enclosing, anchor: baseTok), immutableName: self.immutableReceiverNameOf(binding, baseTok: baseTok), subjectName: EmptySourceText)
 	end 'capturedStructBase'
 
-	// A STRING'S BUILTIN METHODS -- s.append(t) and s.byteLength(). String is the one non-struct type
-	// carrying methods at this rung, so it has its own dispatch rather than riding the struct path.
+	// ⭐ **A STRING RECEIVER'S LAST SYNTHESIZED DOOR, AND IT NOW SERVES NO METHOD OF ITS OWN (W49 wave 9).**
+	// What is left is the roster gate and the builtin-CONFORMANCE lookup — `hash`/`equals`, whose impls the
+	// corpus defines and which this reaches by symbol rather than by re-synthesizing. Every actual member of
+	// `String` is `stdlib/String.maxon`'s and is taken by `memberBelongsToTheCorpus` before this is asked.
+	//
+	// ⚠ **IT TAKES NO `resultUsed`, AND THAT IS A CONSEQUENCE RATHER THAN A TIDY-UP.** The parameter existed
+	// for `requireVoidMethodIsStatement`, which only a VOID member needs; `setByte` was the last one and it
+	// retired. A corpus member's void-ness is checked on the corpus path, by the declaration.
+	//
 	// The cursor sits on the method NAME; the receiver's live-binding guard belongs to whichever door
 	// resolved it (`dispatchMethodOnBinding` — a temporary has no move state to check).
-	function dispatchStringMethod(func IrFunction, recv MethodReceiver, resultUsed bool) returns ValueId throws ParseError
+	function dispatchStringMethod(func IrFunction, recv MethodReceiver) returns ValueId throws ParseError
 		let baseTok = recv.anchor
 		let methodTok = try self.consume(TokenKind.identifier)
 
@@ -37375,85 +37398,40 @@ export type Parser
 		// (`SemanticCheck.checkImmutableArgToMutatingParam`) refuses exactly what this arm used to, naming the
 		// corpus's own parameter. ⚠ **VERIFIED RED**: with the roster line struck and the mask arm absent, all
 		// four committed `immutable-method-call` String cases compiled clean.
-		let range = SourceRange.between(baseTok, last: methodTok)
-
-		// ⭐⭐ **`setByte(index, value)` — THE ONE BYTE PRIMITIVE THAT WRITES, AND THE LAST STDLIB-ONLY BYTE
-		// DOOR** (`stdlib/String.maxon:316`, a `module function` as the three READ doors were before wave 7
-		// retired them). Its one corpus caller is `mapAsciiCase`, which takes a private copy of the bytes and
-		// maps it in place.
+		// ⭐⭐⭐ **AND WAVE 9 TOOK `setByte`, THE LAST MEMBER THIS DISPATCH SYNTHESIZED — SO THERE IS NO ARM
+		// BELOW THIS LINE, ONLY THE CONFORMANCE DOOR.** It was `stdlib/String.maxon:316`, the one byte
+		// primitive that WRITES and the last `module` member still refused by a LOCATION gate rather than by
+		// its own declaration.
 		//
-		// ⛔⛔ **IT IS THE ONE THAT MAY NOT RETIRE, AND THE REASON IS A CORPUS CALL SITE — NOT OWNERSHIP.**
-		// This paragraph read *"the reason is OWNERSHIP rather than lowering: shv2 derives no
-		// `writtenParamMask` for a method writing its own receiver's data, so routing the call there would
-		// admit `let s = "abc"; s.setByte(0, value: 65)`"*, and `append` one arm up was held back on the same
-		// sentence. **That reason is DISCHARGED**: `receiverOwnerMask` derives the bit from the envelope
-		// collapse, `append` retired on it at wave 8, and `String.setByte`'s own corpus body carries the mask
-		// today — a `let` receiver would be refused by the call-site half exactly as `append`'s is.
+		// ⛔ **ITS BLOCKER WAS NEVER OWNERSHIP AND NEVER LOWERING — IT WAS ONE POSITIONAL ARGUMENT IN THE
+		// CORPUS.** `mapAsciiCase` wrote `try work.setByte(i, b + delta)` (`stdlib/String.maxon:658`), where
+		// `specs/parameter-labels.md` rules that every argument after the first must be NAMED. shv2 enforces
+		// that (E2053) and the bootstrap does not, so the declared member could not have served its own only
+		// caller: routed to the corpus, `stdlib/` refused itself. One token — `value:` — closed it, and the
+		// arm went in the same edit.
 		//
-		// ⛔ **WHAT ACTUALLY BLOCKS IT IS `stdlib/String.maxon:658`, AND IT IS A SPEC VIOLATION IN THE
-		// CORPUS.** `mapAsciiCase` writes `try work.setByte(i, b + delta)` — the second argument POSITIONAL —
-		// where `specs/parameter-labels.md` rules that *"the first argument is positional and every subsequent
-		// argument must be named"*. shv2 enforces that (E2053); the bootstrap does not, which is the only
-		// reason the line compiles at all. Routed to the declared `String.setByte`, that call is refused
-		// inside `stdlib/` itself — MEASURED on the retired two-parameter `slice`, which answers
-		// `E2053 … the second and later arguments must be named` for the identical spelling. The one-token
-		// fix (`value:`) belongs to `stdlib/`, which this wave does not own.
+		// ⭐ **THE LOWERING DID NOT CHANGE, IT MOVED ONE FRAME DOWN.** The arm handed the RECEIVER'S OWN
+		// RECORD to `__arr_set_byte`, which is exactly what the corpus body's `managed.setByte(…)` means on a
+		// FUSED record — a String record and an Array record agree on all five slots that entry reads
+		// (`BufferOwnership`'s shared prefix), and it touches `@40` nowhere. So the corpus body reaches the
+		// identical callee with the identical bound, and there was never a `__str_set_byte` to keep in step.
 		//
-		// ⇒ The arm stays, and it serves BOTH spellings through the buffer's own arg-list protocol
-		// (`consumeArrayArgLabel(required: false)`, because both are in the canonical corpus for that member),
-		// which is what makes the two spellings agree rather than a special case for this file.
+		// ⛔⛔ **IT WROTE THROUGH `__str_bytes_view(self)` UNTIL W49 WAVE 2, AND THE WRITE LANDED NOWHERE** —
+		// the record-not-view fix that made this arm correct is what the corpus body now inherits, so the
+		// lesson survives the arm. That view is NON-OWNING (`capacity@16 = ViewBufferCapacity`), so
+		// `__arr_set_byte`'s guard sent it through `__arr_cow_detach` first: the view got a private copy, the
+		// byte was written into the copy, and the copy died with the owned temporary at statement end.
+		// `buildStrBytesView`'s own header called that safe on the grounds that *"nothing in `stdlib/` writes
+		// through this door"* — true only because the door's one corpus caller, `mapAsciiCase`, was
+		// unreachable while `toLower`/`toUpper` were synthesized. Wave 2 made it reachable and every case
+		// conversion in the suite returned its receiver verbatim. ⇒ **A CLAIM THAT AN UNREACHABLE PATH IS SAFE
+		// IS A CLAIM NOTHING MEASURED.**
 		//
-		// ⭐ It hands the RECEIVER'S OWN RECORD to `__arr_set_byte`, which is exactly what the corpus body's
-		// `managed.setByte(…)` means on a FUSED record: a String record and an Array record agree on all five
-		// slots that entry reads (`BufferOwnership`'s shared prefix, whose whole reason is one emitted function
-		// reading both), and it touches `@40` nowhere. So there is no second byte-writer graph and no
-		// `__str_set_byte` to keep in step with `__arr_set_byte` — the bound is the buffer's capacity, which is
-		// the bound the oracle's `__ManagedMemory.setByte` applies to the very same call.
-		//
-		// ⛔⛔ **IT WROTE THROUGH `__str_bytes_view(self)` UNTIL W49 WAVE 2, AND THE WRITE LANDED NOWHERE.** That
-		// view is a NON-OWNING record (`capacity@16 = ViewBufferCapacity`), so `__arr_set_byte`'s guard sent it
-		// through `__arr_cow_detach` FIRST — the view got a private copy of the bytes, the byte was written into
-		// that copy, and the copy died with the owned temporary at statement end. The String was never touched.
-		// `buildStrBytesView`'s own header stated the mechanism and called it safe on the grounds that
-		// *"nothing in `stdlib/` writes through this door"*, which was true only because the door's ONE corpus
-		// caller — `mapAsciiCase` — was unreachable while `toLower`/`toUpper` were served by a synthesized arm.
-		// Wave 2 retired those two onto the corpus, `mapAsciiCase` became reachable, and every case conversion
-		// in the suite returned its receiver verbatim. ⇒ **A CLAIM THAT AN UNREACHABLE PATH IS SAFE IS A CLAIM
-		// NOTHING MEASURED.** Passing the record instead makes the detach ask about the STRING's provenance —
-		// an `.rdata` literal or a viewed buffer still gets its private copy, and the String keeps it — which is
-		// the copy-on-write the corpus declaration promises (`stdlib/String.maxon:305-318`).
-		//
-		// ⭐ It also deletes an allocation PER BYTE WRITTEN: the view record was 48 bytes plus an `__mm_incref`,
-		// minted and dropped once per `setByte`, where a detach happens at most once per String.
-		//
-		// ⚠⚠ **THE VISIBILITY REFUSAL IS WRITTEN HERE RATHER THAN IN A GATE, AND WAVE 7 IS WHY.** It was
-		// `requireStdlibOnlyStringMethod`, a shared guard whose sentence had to enumerate every arm that
-		// called it — a standing obligation that had already been broken once, saying *"THE FOUR"* with five
-		// callers and never naming `setByte`, the very member most worth naming (W49 wave 2). Wave 7 retired
-		// the other four onto declarations that carry their own `module` visibility, leaving ONE caller: the
-		// obligation is discharged by CONSTRUCTION now, because the sentence sits inside the only arm it can
-		// ever be about and there is no list to keep in step.
-		//
-		// ⭐ It comes FIRST in the arm, for the reason `requireVoidMethodIsStatement` opens the arms it
-		// guards: the refusal must beat every argument diagnostic, and it must be reachable only once a real
-		// method NAME has matched — a user's TYPO is still handed the roster below, never told it lacks
-		// permission for a method nobody has.
-		//
-		// ⚠ **ONLY THE NOUN AND THE REASON ARE WRITTEN HERE** — the sentence's opening is `stdlibOnlyRefusal`'s,
-		// shared with `requireStdlibOnlyBufferMethod`, and that is where the argument for naming the oracle's
-		// ANSWER rather than its CODE NUMBER lives. It is also where the `livesUnderStdlibDirectory`-not-
-		// `isStdlibSource` fact is recorded: gated on the latter, this refusal once told
-		// `maxon-shv2 build stdlib/URL.maxon` that `stdlib\URL.maxon` "is not stdlib source".
-		if methodTok.value.equals(ManagedMemorySetByteMethod) 'setByte'
-			if not self.livesUnderStdlibDirectory 'notTheStdlibsOwn'
-				throw stdlibOnlyRefusal("String method", methodTok: methodTok, reason: "It WRITES one of a String's own bytes, which would mutate a String the caller may only have borrowed; every other `module` member of `String` is refused by its own declaration, and this one is served here instead because a synthesized arm is what carries the receiver-write refusal")
-			end 'notTheStdlibsOwn'
-
-			try self.requireVoidMethodIsStatement(resultUsed, methodTok: methodTok)
-			var setArgs = try self.parseTwoBuiltinIntegerArgList(func, firstParam: ManagedMemoryOffsetParamName, secondParam: ManagedMemoryValueParamName, methodTok: methodTok)
-			setArgs.insert(0, value: recv.value)
-			return self.emitRuntimeCall(ArrSetByteName, args: setArgs, resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
-		end 'setByte'
+		// ⚠ **AND THE REFUSAL IT CARRIED IS NOT LOST, IT IS DELEGATED.** `stdlibOnlyRefusal("String method", …)`
+		// existed because a synthesized arm answers AHEAD of the corpus, so the `module` keyword the corpus
+		// WROTE could never be reached. With no arm, `String.setByte` is an ordinary declared function and
+		// `SemanticCheck.calleeVisibleFrom` refuses it with E3088 exactly as it refuses the four read doors
+		// wave 7 retired — one mechanism for all five, where there were two.
 
 		// ⭐⭐ **`hash()` AND `equals(other)` ARE NOT STRING METHODS — THEY ARE THE BUILTIN CONFORMANCES, AND
 		// THIS IS THE DIRECT-CALL DOOR ONTO THE IMPLS THAT ALREADY EXIST (BATCH2 slice 2).** A
@@ -48313,7 +48291,7 @@ export type Parser
 			if recv.tag == ValueTypeTag.character 'aCharacter'
 				return try self.dispatchCharacterMethod(recv)
 			end 'aCharacter'
-			return try self.dispatchStringMethod(func, recv: recv, resultUsed: resultUsed)
+			return try self.dispatchStringMethod(func, recv: recv)
 		end 'byteRecordRosterMember'
 
 		if self.isImplicitSelfMethod(calleeTok.value) 'implicitSelfMethod'
