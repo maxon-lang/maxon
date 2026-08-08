@@ -3645,12 +3645,21 @@ let StringToByteArrayMethod = b"toByteArray"
 
 // ⭐⭐ **THE TWO STDLIB-ONLY `String` METHODS (BATCH2 slice 1)** — `module function` in the corpus
 // (`stdlib/String.maxon:181` and `:281`), which is a real visibility and not a convention: the oracle
-// refuses a user program with its NOT-EXPORTED diagnostic. shv2 has no `module` keyword — `export` is the only
-// modifier its lexer knows — and it parses no `stdlib/String.maxon` at all, so the visibility cannot be
-// read off a declaration. It is enforced on the file's PHYSICAL LOCATION instead
-// (`requireStdlibOnlyStringMethod`, reading `livesUnderStdlibDirectory`) — and emphatically NOT on
+// refuses a user program with its NOT-EXPORTED diagnostic. It is enforced on the file's PHYSICAL LOCATION
+// instead (`requireStdlibOnlyStringMethod`, reading `livesUnderStdlibDirectory`) — and emphatically NOT on
 // `isStdlibSource`, which answers a different question and broke `maxon-shv2 build stdlib/URL.maxon` when
 // this gate first borrowed it.
+//
+// ⚠⚠ **THE REASON USED TO BE "shv2 HAS NO `module` KEYWORD AND PARSES NO `stdlib/String.maxon`", AND BOTH
+// HALVES HAVE BEEN FALSE SINCE W17.** `module` is a contextual modifier this parser recognizes and records
+// (`ModuleModifierName`, `atModuleModifier`, `Visibility.module`), and `stdlib/String.maxon` is a LISTED
+// module whose declarations this compiler reads — that listing is what
+// `byteRecordMemberBelongsToTheCorpus` exists to consult. The gate is still the file's location for a
+// different and still-true reason: these four members are served by shv2's own SYNTHESIZED arms, and the
+// roster is asked ahead of the corpus door, so the call never reaches the corpus declaration whose
+// visibility could otherwise have answered. A member retired onto the corpus — `startsWith`, `endsWith`,
+// `count` — DOES take its visibility from its declaration, because from then on that declaration is the
+// only thing serving it.
 //
 // They are listed apart from the method families above because that is what they are: not a slice of the
 // language's String surface, but the two doors `stdlib/URL.maxon` and `stdlib/helpers/url/urlHelpers.maxon`
@@ -3752,14 +3761,23 @@ function corpusFindGraphemeEndLabels() returns ByteArrayArray
 	return labels
 end 'corpusFindGraphemeEndLabels'
 
-// ⭐ **THE P1.8 SLICE C BYTE/ASCII METHODS** — the seven `String` methods that need no Unicode character
+// ⭐ **THE P1.8 SLICE C BYTE/ASCII METHODS** — the `String` methods that need no Unicode character
 // database, no grapheme segmentation and no `StringIndex`. That last one is the LINE, not a coincidence:
 // `findFirst`/`findLast` return a `StringIndex` whose `charIdx` is a GRAPHEME index, and `slice` takes two of
 // them, so all three are grapheme-indexed BY THEIR SIGNATURES and wait for that type (P1.8 Slice B) however
-// byte-level their search happens to be. `contains` here is the `String` overload only — the `Character` one
-// (`stdlib/String.maxon:392-398`) needs a type shv2 has not got.
-let StringStartsWithMethod = b"startsWith"
-let StringEndsWithMethod = b"endsWith"
+// byte-level their search happens to be.
+//
+// ⚠ **`startsWith` AND `endsWith` WERE THE FIRST TWO OF THESE AND ARE NOW THE CORPUS'S** (struck from
+// `stringSurfaceMemberNames`), so no constant for either survives — the arms that matched them are gone and
+// a name shv2 no longer dispatches has nothing here to spell.
+//
+// ⚠ **`contains` STAYS, AND NOT FOR WANT OF A TYPE.** shv2 has `Character`, so the reason its
+// `Character` overload (`stdlib/String.maxon:446`) blocks the retirement is the OVERLOAD PAIR itself:
+// `emitCall` mints the result, enrols the owned temp and applies caller-consume against the FIRST-DECLARED
+// member (`:439`, the `String` one) while `SemanticCheck.resolveOverloadedCalls` picks the real one
+// afterwards. Retired today, `s.contains(c)` would leak in one direction and use-after-free in the other,
+// and neither is a diagnosable event later. This arm serves the `String` spelling; the `Character` one is
+// still refused by the argument gate.
 let ContainsMethod = b"contains"
 let StringToLowerMethod = b"toLower"
 let StringToUpperMethod = b"toUpper"
@@ -4297,18 +4315,34 @@ end 'arrayWhereClause'
 // already names unbuilt), not on a segmenter at all. **A reason nobody checks is a reason that decides what
 // does not get built**, which is worse than the two earlier roster omissions: those denied a member that
 // existed, this one denied a member that was fifteen lines away.
+//
+// ⭐⭐⭐ **AND A NAME LEAVING THIS LIST IS NOW A RETIREMENT RATHER THAN A HOLE.** `startsWith`, `endsWith`
+// and `count` were struck here, and that single deletion is the whole of what moved them onto
+// `stdlib/String.maxon`: `byteRecordMemberBelongsToTheCorpus` is asked ahead of `dispatchStringMethod`
+// and consults the corpus for exactly the names this roster does NOT carry, so each of the three is now
+// an ordinary qualified call to the ordinary declared function the corpus already had
+// (`stdlib/String.maxon:422`, `:430` and `:347`). Their arms, their runtime builders and their usage bits
+// went with them; nothing else was edited.
+//
+// ⚠ **A MEMBER IS ONLY RETIRABLE ONCE ITS CORPUS DECLARATION IS UNAMBIGUOUS**, which is why `contains` is
+// still here beside them. It is an OVERLOAD PAIR in the corpus (`String` and `Character`,
+// `stdlib/String.maxon:439` and `:446`), and the whole-program declaration sweep cannot see parameter
+// types, so it publishes the pair's facts under the BARE name — the FIRST declaration's. `emitCall` reads
+// that when it mints the result, enrols the owned temp and applies caller-consume, and
+// `SemanticCheck.resolveOverloadedCalls` picks the real member a whole pass later (see
+// `parseFunctionDeclaration`'s `sourceName`, which states the boundary, and `requireOverloadableName`,
+// which refuses the overload shapes this DOES break outright). Retired today, `s.contains(c)` would leak
+// in one direction and use-after-free in the other, and neither is a diagnosable event later. The
+// retirement is incremental precisely so that a member whose door is not ready keeps its arm.
 function stringSurfaceMemberNames() returns ByteArrayArray
 	var names = ByteArrayArray.create()
 	names.push(AppendMethod)
 	names.push(StringByteLengthMethod)
-	names.push(StringStartsWithMethod)
-	names.push(StringEndsWithMethod)
 	names.push(ContainsMethod)
 	names.push(StringToLowerMethod)
 	names.push(StringToUpperMethod)
 	names.push(StringReplaceMethod)
 	names.push(StringSplitMethod)
-	names.push(CountMethod)
 	names.push(ByteViewMethod)
 	names.push(StringToByteArrayMethod)
 	names.push(CodepointViewMethod)
@@ -37018,14 +37052,13 @@ export type Parser
 		// value, so none takes `append`'s `noteReceiverWrite` path and a `let` receiver is fine throughout —
 		// which is exactly what `case-conversion-on-let-binding` pins.
 		let range = SourceRange.between(baseTok, last: methodTok)
-		if methodTok.value.equals(StringStartsWithMethod) 'startsWith'
-			return try self.parseStringPredicate(func, receiver: recv.value, callee: StrStartsWithName, methodName: StringStartsWithMethod, range: range)
-		end 'startsWith'
-		if methodTok.value.equals(StringEndsWithMethod) 'endsWith'
-			return try self.parseStringPredicate(func, receiver: recv.value, callee: StrEndsWithName, methodName: StringEndsWithMethod, range: range)
-		end 'endsWith'
+		// ⚠ **`startsWith`/`endsWith` USED TO SIT HERE AND ARE NOW THE CORPUS'S** — struck from
+		// `stringSurfaceMemberNames`, which is the whole of the retirement, so they never reach this
+		// dispatcher at all. `contains` stays: it is an overload PAIR in the corpus and the call door does not
+		// yet resolve one (see the roster's own header for the leak/use-after-free that would follow).
 		if methodTok.value.equals(ContainsMethod) 'contains'
-			return try self.parseStringPredicate(func, receiver: recv.value, callee: StrContainsName, methodName: ContainsMethod, range: range)
+			let needle = try self.parseStringArg(func, methodName: ContainsMethod)
+			return self.emitRuntimeCall(StrContainsName, args: pairArgs(recv.value, second: needle), resultTag: ValueTypeTag.boolean, resultNameId: UnnamedTypeId, range: range)
 		end 'contains'
 		if methodTok.value.equals(StringToLowerMethod) 'toLower'
 			return try self.parseStringCaseConversion(recv.value, lo: AsciiUpperA, hi: AsciiUpperZ, delta: AsciiToLowerDelta, range: range)
@@ -37040,14 +37073,12 @@ export type Parser
 			return try self.parseStringSplit(func, receiver: recv.value, range: range)
 		end 'split'
 
-		// ⭐ P1.8 Slice B. `count()` is the GRAPHEME count — O(n) per call, exactly as the reference's is.
-		// It calls the CORPUS's `countGraphemes` (`CorpusCountGraphemes`), which is the same body a user's own
-		// `countGraphemes(s)` reaches; the synthesized `__gr_count` it used to call is retired.
-		// `bytes()` is the byte view, shared with Character's.
-		if methodTok.value.equals(CountMethod) 'count'
-			try self.consumeEmptyArgList()
-			return self.emitRuntimeCall(CorpusCountGraphemes, args: singletonArgs(recv.value), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
-		end 'count'
+		// ⭐ P1.8 Slice B. `bytes()` is the byte view, shared with Character's.
+		//
+		// ⚠ **`count()` USED TO SIT HERE AND IS NOW THE CORPUS'S TOO, AND IT WAS THE CHEAPEST OF THE THREE TO
+		// GIVE BACK**: this arm already called `CorpusCountGraphemes` directly, so the corpus's own
+		// `count()` — whose entire body is `return countGraphemes(self)` (`stdlib/String.maxon:347-349`) —
+		// reaches the identical callee through one more frame, and no builder died with the arm.
 		if methodTok.value.equals(ByteViewMethod) 'bytes'
 			return try self.parseByteView(recv.value, methodTok: methodTok, range: range)
 		end 'bytes'
@@ -37335,7 +37366,7 @@ export type Parser
 	// ⭐ **`s.findFirst(n)` / `s.findLast(n)` — the two THROWING searches, which differ ONLY in which runtime
 	// entry point they name**: same receiver, same single String argument, same `StringIndex` result, same
 	// `StringError.notFound` on a miss. One home, so a third search cannot arrive with a different idea of
-	// any of those (`parseStringPredicate`'s arrangement, for its reason).
+	// any of those (`parseStringReplace`'s arrangement, for its reason).
 	//
 	// The result is an OWNED `StringIndex` box on the SUCCESS path only; on the error path the callee's
 	// primary register is unread and the `otherwise` value takes its place, so nothing is dropped twice.
@@ -37427,14 +37458,6 @@ export type Parser
 		return value
 	end 'requireStringIndexValue'
 
-	// `s.startsWith(p)` / `s.endsWith(p)` / `s.contains(p)` — the three predicates, which differ ONLY in which
-	// runtime entry point they name: same receiver, same single String argument, same `bool` result. One home,
-	// so a fourth predicate cannot arrive with a different idea of any of those three.
-	function parseStringPredicate(func IrFunction, receiver ValueId, callee ByteArray, methodName ByteArray, range SourceRange) returns ValueId throws ParseError
-		let arg = try self.parseStringArg(func, methodName: methodName)
-		return self.emitRuntimeCall(callee, args: pairArgs(receiver, second: arg), resultTag: ValueTypeTag.boolean, resultNameId: UnnamedTypeId, range: range)
-	end 'parseStringPredicate'
-
 	// `s.toLower()` / `s.toUpper()` — ONE runtime graph, the caller supplying the gated byte range and the
 	// shift, because that is the only thing the two methods differ in (`__str_map_case`). The result is a
 	// FRESH owned String and the receiver is untouched, so neither method needs `noteReceiverWrite` and both
@@ -37448,8 +37471,10 @@ export type Parser
 	// `s.replace(old, with: new)` / `s.replaceFirst(old, with: new)` — the two two-argument builtin String
 	// methods, and the only ones whose label is a KEYWORD (see `consumeWithArgLabel`). They differ ONLY in
 	// which runtime entry point they name — same receiver, same two String arguments, same fresh owned
-	// String result — so they share one home, `parseStringPredicate`'s arrangement and for its reason: a
-	// third replacement cannot arrive with a different idea of any of those.
+	// String result — so they share one home: a third replacement cannot arrive with a different idea of any
+	// of those. (`parseStringSearch` names this arrangement too; the two are the surviving pair of it, and
+	// `parseStringPredicate` was the third until `startsWith`/`endsWith` retired onto the corpus and left
+	// `contains` as its only caller.)
 	//
 	// Both arguments are BORROWED (their bytes are read and copied), so neither is moved and an owned
 	// interpolation argument stays a pending temp that drops at statement end, after the copy — `append`'s

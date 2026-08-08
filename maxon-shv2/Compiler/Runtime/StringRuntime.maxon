@@ -287,8 +287,6 @@ export let StrFindName = b"__str_find"
 // `__strix_bidx` walk the forward search uses. It takes no start position where `__str_find` does — every
 // caller wants the whole haystack, and a backward window has no consumer to shape it.
 export let StrRFindName = b"__str_rfind"
-export let StrStartsWithName = b"__str_starts_with"
-export let StrEndsWithName = b"__str_ends_with"
 export let StrContainsName = b"__str_contains"
 export let StrMapCaseName = b"__str_map_case"
 export let StrReplaceName = b"__str_replace"
@@ -674,7 +672,7 @@ export type RuntimeUsage
 	// too (`recordCallUsage`). Drives `installStringRuntime` to build `__str_clone`.
 	export var usesStrClone as bool
 	// ⭐ The P1.8 Slice C byte/ASCII method family — ONE BIT PER ENTRY POINT, following this file's existing
-	// discipline rather than a single `usesStringMethods` blanket: a program that only asks `s.startsWith(p)`
+	// discipline rather than a single `usesStringMethods` blanket: a program that only asks `s.toLower()`
 	// must not carry the replace machinery. Each bit is set TRANSITIVELY by `recordCallUsage` from whichever
 	// method the module actually names (a `__str_contains` reference turns on `__str_find`, which turns on
 	// `__str_range_eq`) — the same "declare what the synthesized body calls, because this Maxon-module scan
@@ -686,8 +684,10 @@ export type RuntimeUsage
 	// search loop. It calls `__str_range_eq` inside its synthesized body, which this Maxon-module scan
 	// cannot see, so that need is declared by `closeStringMethodNeeds` exactly as `__str_find`'s is.
 	export var usesStrRFind as bool
-	export var usesStrStartsWith as bool
-	export var usesStrEndsWith as bool
+	// ⚠ **`usesStrStartsWith`/`usesStrEndsWith` WERE HERE AND WENT WITH THEIR BUILDER.** `String.startsWith`
+	// and `String.endsWith` are the CORPUS's now (struck from `Parser.stringSurfaceMemberNames`), so nothing
+	// names `__str_starts_with`/`__str_ends_with` and a bit for them could only ever read false. The corpus
+	// bodies reach `byteAt`, whose own door is still shv2's.
 	export var usesStrContains as bool
 	export var usesStrMapCase as bool
 	export var usesStrReplace as bool
@@ -819,7 +819,7 @@ export type RuntimeUsage
 	export var usesProcessIntrospection as bool
 
 	static function create() returns RuntimeUsage
-		return Self{usesHeap: false, usesGt: false, usesIocp: false, usesStreaming: false, usesWriteStdout: false, usesWriteStderr: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesUIntToString: false, usesBoolToString: false, usesStrAppend: false, usesStrDecref: false, usesArray: false, usesSet: false, usesMap: false, usesList: false, usesDropTypeParam: false, usesDropExistential: false, usesRetainExistential: false, usesIncref: false, usesRetain: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrRangeEq: false, usesStrFind: false, usesStrRFind: false, usesStrStartsWith: false, usesStrEndsWith: false, usesStrContains: false, usesStrMapCase: false, usesStrReplace: false, usesStrSplit: false, usesStrReplaceFirst: false, usesStrFromBytes: false, usesStrOfBuffer: false, usesMmToCString: false, usesStrBytesView: false, usesStrByteAt: false, usesStrByteAtOrPanic: false, usesManagedArrayCopy: false, usesOpaqueArrayCopy: false, neededCloners: ClonerSet.create(), usesWallClock: false, usesCharAt: false, usesCharCmp: false, usesCharFromCodepoint: false, usesCharAsciiValue: false, usesStrToBytes: false, usesStrToCodepoints: false, usesStrToUtf16: false, usesStrIndexMake: false, usesStrIndexEnd: false, usesStrIndexByteToGrapheme: false, usesStrIndexAdvance: false, usesStrIndexFirst: false, usesStrIndexLast: false, usesStrIndexSlice: false, usesStrIndexAfter: false, usesUcdCategory: false, usesCharSetMake: false, usesCharSetDecref: false, usesCharSetContains: false, usesStrTrim: false, usesManagedFile: false, usesManagedDirectory: false, usesCommandLine: false, usesConsoleStdin: false, usesProcessIntrospection: false}
+		return Self{usesHeap: false, usesGt: false, usesIocp: false, usesStreaming: false, usesWriteStdout: false, usesWriteStderr: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesUIntToString: false, usesBoolToString: false, usesStrAppend: false, usesStrDecref: false, usesArray: false, usesSet: false, usesMap: false, usesList: false, usesDropTypeParam: false, usesDropExistential: false, usesRetainExistential: false, usesIncref: false, usesRetain: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrRangeEq: false, usesStrFind: false, usesStrRFind: false, usesStrContains: false, usesStrMapCase: false, usesStrReplace: false, usesStrSplit: false, usesStrReplaceFirst: false, usesStrFromBytes: false, usesStrOfBuffer: false, usesMmToCString: false, usesStrBytesView: false, usesStrByteAt: false, usesStrByteAtOrPanic: false, usesManagedArrayCopy: false, usesOpaqueArrayCopy: false, neededCloners: ClonerSet.create(), usesWallClock: false, usesCharAt: false, usesCharCmp: false, usesCharFromCodepoint: false, usesCharAsciiValue: false, usesStrToBytes: false, usesStrToCodepoints: false, usesStrToUtf16: false, usesStrIndexMake: false, usesStrIndexEnd: false, usesStrIndexByteToGrapheme: false, usesStrIndexAdvance: false, usesStrIndexFirst: false, usesStrIndexLast: false, usesStrIndexSlice: false, usesStrIndexAfter: false, usesUcdCategory: false, usesCharSetMake: false, usesCharSetDecref: false, usesCharSetContains: false, usesStrTrim: false, usesManagedFile: false, usesManagedDirectory: false, usesCommandLine: false, usesConsoleStdin: false, usesProcessIntrospection: false}
 	end 'create'
 end 'RuntimeUsage'
 
@@ -1368,12 +1368,6 @@ function recordStringMethodUsage(callee ByteArray, usage RuntimeUsage)
 	if callee.equals(StrRFindName) 'rfind'
 		usage.usesStrRFind = true
 	end 'rfind'
-	if callee.equals(StrStartsWithName) 'startswith'
-		usage.usesStrStartsWith = true
-	end 'startswith'
-	if callee.equals(StrEndsWithName) 'endswith'
-		usage.usesStrEndsWith = true
-	end 'endswith'
 	if callee.equals(StrContainsName) 'contains'
 		usage.usesStrContains = true
 	end 'contains'
@@ -1420,7 +1414,7 @@ function closeStringMethodNeeds(usage RuntimeUsage)
 	if usage.usesStrContains or usage.usesStrReplace or usage.usesStrReplaceFirst or usage.usesStrSplit 'needsFind'
 		usage.usesStrFind = true
 	end 'needsFind'
-	if usage.usesStrFind or usage.usesStrRFind or usage.usesStrStartsWith or usage.usesStrEndsWith 'needsRangeEq'
+	if usage.usesStrFind or usage.usesStrRFind 'needsRangeEq'
 		usage.usesStrRangeEq = true
 	end 'needsRangeEq'
 	// `replace` and `split` answer a degenerate (empty) needle/delimiter with a CLONE of the receiver — the
@@ -1491,12 +1485,6 @@ export function installStringRuntime(module StdModule, usage RuntimeUsage)
 	if usage.usesStrRFind 'strrfind'
 		buildStrRFind(module)
 	end 'strrfind'
-	if usage.usesStrStartsWith 'strstartswith'
-		buildStrAffixPredicate(module, name: StrStartsWithName, atTail: false)
-	end 'strstartswith'
-	if usage.usesStrEndsWith 'strendswith'
-		buildStrAffixPredicate(module, name: StrEndsWithName, atTail: true)
-	end 'strendswith'
 	if usage.usesStrContains 'strcontains'
 		buildStrContains(module)
 	end 'strcontains'
@@ -2468,56 +2456,6 @@ function buildStrRFind(module StdModule)
 
 	module.functions.push(func)
 end 'buildStrRFind'
-
-// ⭐ **`__str_starts_with` AND `__str_ends_with` FROM ONE BUILDER** — the stdlib's `startsWith` (`:368-374`)
-// and `endsWith` (`:376-383`), which are the SAME function apart from where the compared window begins:
-// offset 0 for a prefix, `selfLen - affixLen` for a suffix. Everything else — the length guard, the two field
-// loads, the `__str_range_eq` call, the `false` return — is shared, so it is written once and `atTail` is the
-// one documented axis. (`buildStrEq`'s "one graph, two symbols" parameterization, one level up: here the two
-// symbols get two graphs, but from one description.)
-//
-// ⚠ **THE LENGTH GUARD IS NOT AN OPTIMISATION, IT IS `__str_range_eq`'s IN-BOUNDS CONTRACT.** An affix longer
-// than the receiver returns `false` without reaching the compare — and for the tail form it is also what makes
-// `selfLen - affixLen` non-negative, so the guard must come first in both. An EMPTY affix compares zero bytes,
-// which is vacuously `true` at either end.
-function buildStrAffixPredicate(module StdModule, name ByteArray, atTail bool)
-	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i1), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
-	var ids = ValueMinter.create(2)
-
-	var entry = module.addBlock(func, label: b"entry")
-	var compare = module.addBlock(func, label: b"compare")
-	var tooLong = module.addBlock(func, label: b"tooLong")
-
-	emitParams(module, block: entry, count: 2)
-	let selfPtr = 0 as ValueId
-	let affix = 1 as ValueId
-
-	let selfLen = emitLoadField(module, block: entry, record: selfPtr, offset: StringLengthOffset, ids: ids)
-	let affixLen = emitLoadField(module, block: entry, record: affix, offset: StringLengthOffset, ids: ids)
-	let doesNotFit = emitCmp(module, block: entry, a: affixLen, b: selfLen, pred: StdCmpPred.gt, ids: ids)
-	module.setTerminator(entry, op: StdOp.condBranch(doesNotFit, thenBlockId: tooLong.id, elseBlockId: compare.id))
-
-	let selfBuf = emitLoadField(module, block: compare, record: selfPtr, offset: StringBufferOffset, ids: ids)
-	let affixBuf = emitLoadField(module, block: compare, record: affix, offset: StringBufferOffset, ids: ids)
-	let windowAddr = affixWindowAddress(module, block: compare, selfBuf: selfBuf, selfLen: selfLen, affixLen: affixLen, atTail: atTail, ids: ids)
-	let matches = ids.mint()
-	module.appendOp(compare, op: StdOp.call(matches, callee: StrRangeEqName, args: threeArgs(windowAddr, second: affixBuf, third: affixLen)))
-	module.setTerminator(compare, op: StdOp.ret(matches))
-
-	emitConstReturn(module, block: tooLong, value: PredicateFalse, ids: ids)
-
-	module.functions.push(func)
-end 'buildStrAffixPredicate'
-
-// Where the compared window starts: the buffer itself for a PREFIX, or `affixLen` bytes back from the end for
-// a SUFFIX. The one place the two predicates differ, so it is also the only place the difference is stated.
-function affixWindowAddress(module StdModule, block IrBlock, selfBuf ValueId, selfLen ValueId, affixLen ValueId, atTail bool, ids ValueMinter) returns ValueId
-	if not atTail 'atHead'
-		return selfBuf
-	end 'atHead'
-	let tailOffset = emitBin(module, block: block, a: selfLen, b: affixLen, opcode: StdBinOpcode.sub, ids: ids)
-	return emitBin(module, block: block, a: selfBuf, b: tailOffset, opcode: StdBinOpcode.add, ids: ids)
-end 'affixWindowAddress'
 
 // `__str_contains(self, needle) -> bool` — the stdlib's `contains(needle String)` (`:385-390`): a whole-string
 // `find`, turned from an INDEX into a PREDICATE. Not a wrapper around `__str_find` but a change of answer

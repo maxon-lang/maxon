@@ -22,11 +22,18 @@ language a user program may write.
 an id is renamed at the cost of orphaning a golden in every target directory; the count that matters is
 the one the refusal itself renders, from the arms' own constants.
 
-The reference compiler refuses a user call to either with its not-exported diagnostic. shv2 has no `module`
-keyword and never parses `stdlib/String.maxon` (`String` is compiler-owned), so it enforces the same
-visibility on the fact it does have: whether the calling file is physically **under `stdlib/`**. The
-refusal names the reason rather than falling through to the unknown-method roster — the method exists,
-it is simply not the caller's to reach.
+The reference compiler refuses a user call to either with its not-exported diagnostic. shv2 enforces the
+same visibility on whether the calling file is physically **under `stdlib/`**. The refusal names the reason
+rather than falling through to the unknown-method roster — the method exists, it is simply not the
+caller's to reach.
+
+⚠ This paragraph used to give the reason as *"shv2 has no `module` keyword and never parses
+`stdlib/String.maxon`"*, and **both halves have been false since W17**: `module` is a contextual modifier
+shv2's parser recognizes and records, and `stdlib/String.maxon` is a listed module whose declarations it
+reads. The location gate is still right, for a different reason — these four members are served by shv2's
+own synthesized arms, and the member roster is consulted *ahead* of the corpus, so the call never reaches
+the declaration whose `module` visibility could have answered. A member RETIRED onto the corpus takes its
+visibility from its declaration instead, because from then on the declaration is the only thing serving it.
 
 ⚠ It names the oracle's ANSWER and not the oracle's CODE NUMBER, and the expected stderr below must keep
 it that way. A 4-digit code written outside `docs/error-codes.txt` is a copy of the number space, and
@@ -115,6 +122,14 @@ A NEAR MISS of one of the two — `addressableByte` for `addressableBytes` — i
 as one. The visibility refusal is reachable only once a real method NAME has matched, so the roster
 answers here and nobody is told they lack permission for a method nobody has.
 
+⚠ **THE ROSTER NO LONGER NAMES `startsWith`, `endsWith` OR `count`, AND THAT IS NOT AN OMISSION — IT IS
+THE RETIREMENT.** Those three are served by `stdlib/String.maxon` now: struck from the roster, each falls
+through to the corpus door that is consulted for exactly the names the roster does not carry, and becomes
+an ordinary call to the ordinary declared function the corpus already had. The list below therefore says
+what it has always said — *what the synthesized surface serves* — and a name leaving it means the corpus
+took the member over, never that the member vanished. `startsWith("x")` still works; `string-methods-ascii`
+and `string-type` pin that it answers the same.
+
 <!-- test: unknown-string-method-still-gets-the-roster -->
 ```maxon
 function main() returns ExitCode
@@ -122,7 +137,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:3:15: Unsupported: `String` member 'addressableByte' — shv2 provides append/byteLength/startsWith/endsWith/contains/toLower/toUpper/replace/split/count/bytes/toByteArray/codepoints/utf16/isEmpty/clone/replaceFirst/startIndex/endIndex/findFirst/findLast/indexAfter/slice/trim/trimStart/trimEnd/addressableBytes/byteAt/byteAtOrPanic/hasSingleByteGraphemes/setByte/hash/equals; that list IS the surface, so nothing else is served here
+error E2015: <fragment>:3:15: Unsupported: `String` member 'addressableByte' — shv2 provides append/byteLength/contains/toLower/toUpper/replace/split/bytes/toByteArray/codepoints/utf16/isEmpty/clone/replaceFirst/startIndex/endIndex/findFirst/findLast/indexAfter/slice/trim/trimStart/trimEnd/addressableBytes/byteAt/byteAtOrPanic/hasSingleByteGraphemes/setByte/hash/equals; that list IS the surface, so nothing else is served here
 ```
 
 And the roster a user program is handed NAMES both stdlib-only methods. This is the case the derivation
@@ -136,5 +151,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:3:15: Unsupported: `String` member 'frobnicate' — shv2 provides append/byteLength/startsWith/endsWith/contains/toLower/toUpper/replace/split/count/bytes/toByteArray/codepoints/utf16/isEmpty/clone/replaceFirst/startIndex/endIndex/findFirst/findLast/indexAfter/slice/trim/trimStart/trimEnd/addressableBytes/byteAt/byteAtOrPanic/hasSingleByteGraphemes/setByte/hash/equals; that list IS the surface, so nothing else is served here
+error E2015: <fragment>:3:15: Unsupported: `String` member 'frobnicate' — shv2 provides append/byteLength/contains/toLower/toUpper/replace/split/bytes/toByteArray/codepoints/utf16/isEmpty/clone/replaceFirst/startIndex/endIndex/findFirst/findLast/indexAfter/slice/trim/trimStart/trimEnd/addressableBytes/byteAt/byteAtOrPanic/hasSingleByteGraphemes/setByte/hash/equals; that list IS the surface, so nothing else is served here
 ```
