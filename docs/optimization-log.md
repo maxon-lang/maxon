@@ -1149,6 +1149,72 @@ The four earliest rows predate the automated log; their numbers are reconstructe
 git, so they are accurate but were not written by the tool. They also predate the exponent table,
 which is why it starts empty.
 
+**2026-08-07 — W41 optimization pass. NO CHANGE SHIPPED, and this note is the result.** No row was
+appended because nothing moved the corpus ladder: the pass measured the three constant factors W41's
+implementers flagged in words, plus the paths the generated corpus structurally cannot reach, and
+every one of them is already linear. It also found two PRE-EXISTING defects, both confirmed against
+`69e655d38` built like-for-like in the same directory. Recorded here because the measurements exist
+and would otherwise have to be re-taken.
+
+*The three flagged constant factors — all measured, none worth changing:*
+
+- **The inert `__retain_type_param` on a trivial instantiation costs NOTHING MEASURABLE, so the
+  whole-program prune pass that would remove it should not be built.** A/B of the same program written
+  generically (`Holder with Integer`, whose `entryAt` builds a `(Element, Integer)` tuple from a
+  borrowed opaque, and whose emitted IR was confirmed to contain `x64.callDirect
+  __retain_type_param`) against its concrete twin, **20,000,000 executions of that site**: generic
+  1147 / 1166 / 1162 ms, concrete 1175 / 1147 / 1179 ms. The generic is not slower — the difference is
+  inside noise and the sign favours the generic. Code size 6,012 vs 5,876 bytes, and that +136 is an
+  UPPER bound because it also carries every other generic-path difference, not just the call. A
+  descriptor word of 0 makes the callee a load, a test and a return, and 20M of them do not show.
+- **`substituteInstanceArgsThrough`'s new per-argument interner probe is two O(1) non-allocating
+  operations.** `TypeNameInterner.nameOf` is `names.get(id)` — an array index handing back the interned
+  `ByteArray`, no copy — and `isTupleTypeName` is a 7-byte prefix compare. Both run only for a
+  `structRef`-tagged argument. On `genopaquefields.sh` (25→400 units) `phase:semanticCheck` is
+  1.0 / 1.6 / 2.8 / 4.9 / 10.4 ms, ratios ×1.60 ×1.75 ×1.75 ×2.12 — linear.
+- **`closeDestructorNeeds` is NOT O(referenced cascades × instances); that premise is stale by one
+  refactor.** The shared `CascadeWorklist` (`Compiler/Runtime/CascadeNeeds.maxon`) registers each node
+  once and expands it at most once, so the closure is O(types + instances + fields), and it early-outs
+  entirely when nothing drops. Measured on `genopaquefields.sh`: `phase:deriveRuntimeNeeds`
+  allocations 6,119 / 7,899 / 11,415 / 18,447 / 32,473 at 25 / 50 / 100 / 200 / 400 units — a per-unit
+  delta of **71.2, 70.3, 70.3, 70.1**, dead flat. Listing `Map.maxon` added a constant number of nodes
+  to a linear registration; it multiplied nothing.
+
+*What the corpus cannot see, measured directly (`stdlib/Map.maxon`'s own algorithms are now in a user
+program's hot path for the first time):* `Map with (Count, Count)` built, looked up and iterated at
+25k → 400k entries runs 91 / 118 / 159 / 266 / 500 ms wall; net of the ~60 ms fixed process cost that
+is ×1.87 ×1.71 ×2.08 ×2.14 per doubling — **linear**. `findSlot`'s probe, `grow()`'s amortized rehash
+and `ensureCapacity`'s 75% load factor all behave; final capacity is within 2× of entries, which is
+the doubling table's expected slack and not a growth term.
+
+### ⛔⛔ Measured debt found by this pass — PRE-EXISTING, both confirmed against `69e655d38`
+
+- **A BORROWED OPAQUE `T` HANDED TO A SELF-SIBLING'S PARAMETER ESCAPES `requireOwnedOpaqueElement`
+  ENTIRELY, AND `stdlib/Map.maxon` DOES EXACTLY THAT.** The refusal is intra-procedural: it demands the
+  value at the store be owned, a parameter answers `valueIsOwnedHeap` true, and nothing checks the
+  caller. `Map.grow()` → `insertAtSlot()` is one such hop, so **a `Map` with any managed column double
+  frees every entry the moment it crosses its load factor** — `Map with (String, Count)` prints the
+  right answer at 12 entries and exits 139 at 13. Reproduced with a 45-line generic holding no `Map` at
+  all, on BOTH binaries, so the compiler defect predates W41 — but the same program is **exit 0 at
+  128,000 entries** on `69e655d38`, whose synthesized `Map` had no such body, so **W41 regressed the
+  reachable set**. Suite 4769/0 over it: no spec case builds a managed-column map past the load factor.
+  Full diagnosis, the reproducer and the cure W41 itself already built (`retainFunc@64` +
+  `coOwnBorrowedOpaqueForConsume`, which the field-store door takes and this door does not) are in
+  `Parser.requireOwnedOpaqueElement`'s header. **This is a live miscompile, not a perf note.**
+- **AN INSTANCE ARGUMENT TREE THAT IS A SHARED DAG MAKES `phase:signatures` EXPONENTIAL IN LINES OF
+  SOURCE** (`genshareddag.sh`). `typealias P<k> = Pair with (P<k-1>, P<k-1>)` gives the deepest alias a
+  structural mangled name of 2^k characters. `phase:signatures` bytes at depth 18 / 20 / 22:
+  **36,156,421 → 139,977,003 → 555,220,169**, i.e. **×2 per ADDED LINE**, and CPU 180.4 → 620.9 →
+  2410.8 ms (97.4% of the compile at depth 22, on a 31-line file). The `control` mode — same
+  declaration count, same instance count, byte-identical allocation counts (31,441 / 23,514), second
+  argument a leaf instead of the shared alias — is **1,557,391 → 1,584,775 bytes, dead flat**, which is
+  what isolates it to name LENGTH over a shared DAG rather than to a walk. Allocation COUNT is flat in
+  both modes; only bytes move. Depth 25 is ~4.4 GB, past the 1.7 GB budget. W41 is exactly flat against
+  it (+~250 KB at every depth, independent of depth — the listed module's own constant). **Re-measure
+  trigger:** any machine-generated or deeply-composed generic type, or a program that hits the memory
+  budget in `phase:signatures`. **Named cure:** the digest that tuple names already use
+  (`__Tuple2.Tfcd8090be60770aa.…`, W14) applied to generic-instance mangling.
+
 **`667ec9eee` — a name is a slice of the source, not a heap String.** By far the largest win so far.
 Token text stopped being a heap `String` and became a zero-copy `ByteArray` slice into the source
 bytes already in memory. Note the *shape*: rung 0 fell 14% but rung 5 fell 43%. That did not shave a
