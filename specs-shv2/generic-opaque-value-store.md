@@ -176,3 +176,91 @@ end 'main'
 ```exitcode
 42
 ```
+
+### A generic with NO `T`-typed field still releases the reference its record took
+
+The retain word is a fact about the type ARGUMENT and the release must be the same fact. A base that
+declares no `Array with T` and no bare `T` — only an `Integer` — can still take a borrowed `T` into a tuple
+it builds, and if that tuple is dropped HERE the reference has to go with it. While `destroyFunc@40` was
+gated on the base's FIELD LIST instead, this exact shape retained through a live `retainFunc@64` and
+released through a zero: exit 101 with the right answer printed.
+
+<!-- test: a-record-in-a-fieldless-generic-releases-what-it-took -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Pack uses T
+	var n as Integer
+
+	export static function create() returns Self
+		return Self{n: 40}
+	end 'create'
+
+	export function tag(t T) returns Integer
+		let pair = (t, n)
+		return pair.1
+	end 'tag'
+end 'Pack'
+
+typealias StrPack = Pack with String
+
+function main() returns ExitCode
+	var p = StrPack.create()
+	let s = "hello"
+	return p.tag(s) + p.tag("literal")
+end 'main'
+```
+```exitcode
+80
+```
+
+### An interface type argument is REFUSED, not crashed on
+
+An existential is a two-word fat pointer whose retain and release live in its witness, and a descriptor
+word carries no witness — so `Box with Named` has no ownership protocol to name. The refusal is the
+container-element rule's, already recorded by the time the destructor walk runs; the walk must therefore
+contribute NOTHING for such an argument rather than route it into a one-argument drop router, which
+replaced the diagnostic with a compiler stack trace.
+
+<!-- test: error.an-interface-type-argument-is-refused -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Named
+	function label() returns String
+end 'Named'
+
+type Thing implements Named
+	var n as Integer
+
+	export static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+
+	export function label() returns String
+		return "thing"
+	end 'label'
+end 'Thing'
+
+type Box uses T
+	var value as T
+
+	export static function create(value T) returns Self
+		return Self{value: value}
+	end 'create'
+
+	export function get() returns T
+		return value
+	end 'get'
+end 'Box'
+
+typealias NamedBox = Box with Named
+
+function main() returns ExitCode
+	let b = NamedBox.create(Thing.create(3))
+	return b.get().label().length()
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:32:31: Unsupported: a container's element type declared at the interface type 'Named' — a value held at an interface type is a two-word fat pointer `(value, witness)`, and an element slot is one machine word. Declare it at a concrete type, or take the interface as a PARAMETER of a plain function, which carries its witness as an adjacent argument
+```

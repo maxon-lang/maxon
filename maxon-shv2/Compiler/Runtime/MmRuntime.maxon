@@ -1110,10 +1110,10 @@ export function noteRelocatedFunctionUsage(usage RuntimeUsage, project Project, 
 	closeDestructorNeeds(usage, project: project, signatures: signatures)
 end 'noteRelocatedFunctionUsage'
 
-// ⭐ **INSTALL EVERY MANAGED OPAQUE-`T` `Array` ELEMENT DESTRUCTOR the `funcAbs64InRdata` relocs will bake
-// (P1.7 slice 3b-iii).** `ensureLayoutDescriptor` records ONE reloc per instance for which
-// `genericInstanceHasManagedOpaqueArrayField` holds, its target `managedOpaqueArrayElementDropCallee(id)`.
-// This roots that identical set through `recordCallUsage`, so the rooted destructors and the baked relocs
+// ⭐ **INSTALL EVERY OPAQUE-`T` DESTRUCTOR the `destroyFunc@40` `funcAbs64InRdata` relocs will bake
+// (P1.7 slice 3b-iii).** `ensureLayoutDescriptor` records ONE reloc per type-parameter position whose
+// `typeParamDropCallee` is non-EMPTY. This roots that identical set through `recordCallUsage` — reading the
+// SAME callee rather than a second predicate over it, so the rooted destructors and the baked relocs
 // are ONE fact — no reloc names a `.text` VA that was never installed. It is unconditional over the
 // instances (not gated on the instance destructor being referenced): the reloc predicate is the sole gate,
 // so rooting on the same predicate cannot leave a reloc unrooted, and an over-rooted declared-but-unused
@@ -1150,21 +1150,17 @@ function rootManagedOpaqueArrayElementDrops(usage RuntimeUsage, signatures Progr
 		// TREE walk (the instance that actually rooted here hides its opacity one level in) and why ANY mention
 		// rather than every argument.
 		//
-		// ⚠⚠ **NOTHING IN THE COMMITTED TREE OBSERVES THIS TERM TODAY, AND THAT IS SAID HERE RATHER THAN LEFT
-		// TO BE DISCOVERED.** Every listed stdlib module is either non-generic or generic over nothing managed,
-		// and a USER program's own generic is not reachability-pruned at all (measured: the declared-but-unused
-		// `Holder uses Element` program emits 1,672 bytes with this term and 1,672 without, on both trees) — so
-		// no spec case can currently go red if this line is deleted. **The one-line experiment that observes
-		// it** is `listWhitelistedModule(stdlibDir, relative: "Map.maxon", into: listed)` in
-		// `StdlibLoader.whitelistedStdlibModules`: with it, and without this term, `function main() returns
-		// ExitCode return 7 end` grows 1,592 → **1,672** bytes and SIX cases go red — the five
-		// `static-variables/data-section-*` and `reserved-double-underscore/error.stdlib-overlay-mm-leak-check-
-		// takes-a-rooted-name`. With this term the same tree is byte-IDENTICAL to the base at 1,592 and the
-		// suite is 4,754/0. The listing is not here because the corpus `Map` is still shadowed by the
-		// synthesized one (see `ProgramSignatures.isMapBaseName`), so it would cost **+6.7% compile CPU per
-		// program** — measured across the suite, 734.4M → 783.6M ticks per test compile — for a type nothing
-		// can reach. The term lands ahead of it because it is correct on its own and because the listing must
-		// not have to rediscover this.
+		// ⚠⚠ **THE EXPERIMENT THAT OBSERVES THIS TERM IS NOW THE COMMITTED TREE, AND THIS PARAGRAPH SAID THE
+		// OPPOSITE (corrected at review).** It was written while `stdlib/Map.maxon` was still unlisted and read
+		// *"the listing is not here … for a type nothing can reach"*; `StdlibLoader.whitelistedStdlibModules`
+		// lists it as of the same wave, so the six cases below are what this term is holding green RIGHT NOW,
+		// not what it would hold green if someone added a line. What was measured, on the tree that added the
+		// listing: WITHOUT this term `function main() returns ExitCode return 7 end` grows 1,592 → **1,672**
+		// bytes and SIX cases go red — the five `static-variables/data-section-*` and
+		// `reserved-double-underscore/error.stdlib-overlay-mm-leak-check-takes-a-rooted-name`; with it the tree
+		// is byte-IDENTICAL to the merge base at 1,592. (A USER program's own generic is not
+		// reachability-pruned at all — the declared-but-unused `Holder uses Element` program emits 1,672 bytes
+		// either way — so a user program can neither observe nor be protected by this line.)
 		if signatures.instanceMentionsTypeParameter(id) 'declarationViewOnly'
 			continue
 		end 'declarationViewOnly'
@@ -1173,9 +1169,12 @@ function rootManagedOpaqueArrayElementDrops(usage RuntimeUsage, signatures Progr
 		// stamps each independently (W43b) — a `Map with (String, int)` roots `__str_decref` for its key
 		// column and nothing for its value column.
 		for position in 0 upto signatures.genericInstanceArgCount(id) 'eachTypeParam'
-			if signatures.genericInstanceHasManagedOpaqueArrayField(id, position: position) 'managedOpaque'
-				recordCallUsage(signatures.managedOpaqueArrayElementDropCallee(id, position: position), usage: usage)
-			end 'managedOpaque'
+			// The EMPTY answer is the gate, exactly as it is at the stamp: reading the callee and testing it is
+			// what makes "which reloc is baked" and "which symbol is rooted" one derivation rather than two.
+			let dropCallee = signatures.typeParamDropCallee(id, position: position)
+			if not dropCallee.isEmpty() 'argumentOwnsARecord'
+				recordCallUsage(dropCallee, usage: usage)
+			end 'argumentOwnsARecord'
 		end 'eachTypeParam'
 	end 'eachInstance'
 end 'rootManagedOpaqueArrayElementDrops'

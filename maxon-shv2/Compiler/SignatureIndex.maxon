@@ -15312,7 +15312,7 @@ export type ProgramSignatures
 	// (P1.7a-existentials slice 2). ONE answer, read by the site that STAMPS the reloc
 	// (`LowerMaxonToStd.ensureWitnessTable`) and by the site that ROOTS its target (`MmRuntime.rootConformerDrops`),
 	// so the symbol a table names and the symbol the pipeline installs cannot come apart — the arrangement
-	// `managedOpaqueArrayElementDropCallee` already has for the layout descriptor's `destroyFunc@40`.
+	// `typeParamDropCallee` already has for the layout descriptor's `destroyFunc@40`.
 	//
 	// ⚠ **EMPTY IS NOT A SENTINEL RETURN, IT IS THE ANSWER** — "this conformer has no destructor" is a real
 	// state of the world with a real encoding in the table (the zero word), and both callers act on it as such.
@@ -15354,8 +15354,60 @@ export type ProgramSignatures
 	// on ownership: the sentence made the two look like they agreed while the code had them differing on
 	// exactly that class. They now read one predicate (`instanceArgIsManaged`).
 	export function typeParamRetainCallee(id GenericInstanceId, position TypeParamPosition) returns ByteArray
-		return retainCalleeForProtocol(self.typeOwnershipProtocol(self.substitutedInstanceArg(id, position: position)))
+		return retainCalleeForProtocol(self.typeParamOwnershipProtocol(id, position: position))
 	end 'typeParamRetainCallee'
+
+	// ⭐⭐ **THE ONE ANSWER BOTH OF A DESCRIPTOR BLOCK'S OWNERSHIP WORDS ARE A SPELLING OF (found at review)** —
+	// `retainFunc@64` through `retainCalleeForProtocol`, `destroyFunc@40` through `typeParamDropCallee`. Written
+	// once so the pair is non-zero TOGETHER by construction rather than by two gates agreeing, which is what
+	// the witness table's `destroyFunc@8`/`retainFunc@16` have off one `existentialOwnershipProtocol` and what
+	// these two twice failed to have.
+	//
+	// ⛔ **A BUILTIN CONTAINER'S DESCRIPTOR CARRIES NEITHER, BECAUSE NO SHARED BODY READS ONE OUT OF IT.**
+	// These two words are consumed only by `__retain_type_param` / `__drop_type_param`, which are handed the
+	// block of the ENCLOSING GENERIC INSTANCE the compiled-once body belongs to — and only a DECLARED generic
+	// has such a body; an `Array`/`Set`/`Map` record is served by the runtime off its own stamps. Stamping them
+	// on an `Array with String` would bake relocations nothing loads, and the callee they name is a HEAP one,
+	// so `MmRuntime.rootManagedOpaqueArrayElementDrops` would then set `usesHeap` for programs that allocate
+	// nothing: MEASURED at review, `function main() returns ExitCode return 7 end` grew 1,592 → **1,672** bytes
+	// on exactly that. `genericInstanceHasBaseLayout` is the same guard `managedOpaqueArrayElementOf` opens
+	// with, for the same reason and against the same undeclared-base case.
+	function typeParamOwnershipProtocol(id GenericInstanceId, position TypeParamPosition) returns ExistentialOwnershipProtocol
+		if not self.genericInstanceHasBaseLayout(id) 'noSharedBodyReadsThisBlock'
+			return ExistentialOwnershipProtocol.none
+		end 'noSharedBodyReadsThisBlock'
+
+		return self.typeOwnershipProtocol(self.substitutedInstanceArg(id, position: position))
+	end 'typeParamOwnershipProtocol'
+
+	// ⭐⭐ **WHAT A LAYOUT DESCRIPTOR'S `destroyFunc@40` HOLDS FOR INSTANCE `id`'s TYPE ARGUMENT AT `position`**
+	// — the exact dual of the retain word above, off the SAME `typeOwnershipProtocol` answer about the SAME
+	// substituted argument, so **the two words are non-zero TOGETHER BY CONSTRUCTION** rather than by two
+	// predicates agreeing. That is the invariant `managedOpaqueArrayElementOf` states, and the arrangement the
+	// witness table's `destroyFunc@8`/`retainFunc@16` pair has held since P1.7a-existentials.
+	//
+	// ⛔⛔ **IT WAS GATED ON THE INSTANCE HAVING AN OPAQUE `Array with T` OR BARE `T` FIELD, AND THE RETAIN WAS
+	// NOT — SO THE STATED INVARIANT WAS FALSE AND THE GAP LEAKED (found at review).** `retainFunc@64` is a fact
+	// about the ARGUMENT; the old drop gate (`genericInstanceHasManagedOpaqueArrayField`) was a fact about the
+	// base's FIELD LIST, and a generic that stores a borrowed `T` into a record it builds needs no `T`-typed
+	// field at all. MEASURED, against the runnable oracle: `type Pack uses T` with only `var n as Integer`, an
+	// instance method doing `let pair = (t, n)` over a borrowed `T`, at `Pack with String` — the oracle prints
+	// `7` and exits 0, the merge base prints `7` and exits 0, and this tip printed `7` and exited **101**. The
+	// store took `__str_clone` through `retainFunc@64`; `emitOpaqueSlotReleases` called `__drop_type_param`,
+	// which loaded a ZERO `destroyFunc@40` and did nothing.
+	//
+	// ⭐ It also fills a slot that was 0 for an opaque `Array with T` built as a LOCAL rather than held as a
+	// field — the shared body's `__arr_create` reads its `element_destroy@40` out of this same word, and a base
+	// with no such field left it 0, so that array's elements were never walked.
+	//
+	// EMPTY is the ANSWER for an argument that owns no record, not a sentinel: `stampOwnershipWord` leaves the
+	// zero both `__drop_type_param` and the array walk treat as inert — the identical encoding the retain uses.
+	export function typeParamDropCallee(id GenericInstanceId, position TypeParamPosition) returns ByteArray
+		return match self.typeParamOwnershipProtocol(id, position: position) 'protocol'
+			none gives EmptySourceText
+			byteRecord to aggregate gives managedFieldDropCallee(self, typeNames: self.typeNames, fieldType: self.substitutedInstanceArg(id, position: position))
+		end 'protocol'
+	end 'typeParamDropCallee'
 
 	// ⭐⭐ **WHICH OWNERSHIP PROTOCOL A TYPE'S VALUE TAKES — `existentialOwnershipProtocol`'s TYPE-KEYED DOOR
 	// (W41-opaque).** ONE rule, two entries, the arrangement `conformerNameOfType` /
@@ -15378,10 +15430,21 @@ export type ProgramSignatures
 	//
 	// ⚠ **MEASURED (W41-trivial), on three committed `typealias-file-scope` cases**: widening the descriptor's
 	// DROP gate to this boundary without the guard put a contested `Bag`/`N0` through
-	// `managedOpaqueArrayElementDropCallee` → `managedFieldDropCallee` → `managedNameDropCallee`, and
+	// `typeParamDropCallee` → `managedFieldDropCallee` → `managedNameDropCallee`, and
 	// `noteDestructorUsage` died at `SignatureIndex.maxon`'s refusal with a stack trace where two `error.`
 	// cases expect an E2015 and one expects a clean compile. It is A3k's measurement arriving at a new door,
 	// for A3k's reason.
+	//
+	// ⛔⛔ **AND AN INTERFACE-TYPED ARGUMENT IS THE FIFTH DOOR TO NEED THE SAME GUARD, FOR THE SAME REASON
+	// (found at review).** `declaredNameIsManaged` answers `true` of an interface NAME deliberately — that arm
+	// serves `existentialDestroyCallee`, whose caller has already routed on a tag — so "managed" reaches here
+	// for a `Box with Named`, and "managed" is spent HERE on naming a per-type callee that an existential does
+	// not have: it is released through `__drop_existential(witness, value)`, and a descriptor word carries no
+	// witness. MEASURED: `typealias NamedBox = Box with Named` compiled at the merge base to a positioned
+	// **E2015** naming the fat pointer, and at this tip died in `noteDestructorUsage` with
+	// `managedNameDropCallee: 'Named' is an interface` and a stack trace — the diagnostic the program had
+	// already earned, replaced by a crash. That is `managedOpaqueArrayElementOf`'s own recorded failure
+	// (`genericInstanceHasBaseLayout`, "the build already doomed") arriving at the boundary this rung widened.
 	export function typeOwnershipProtocol(t MaxonType) returns ExistentialOwnershipProtocol
 		if tagIsByteRecord(maxonTypeTag(t)) 'byteRecord'
 			return ExistentialOwnershipProtocol.byteRecord
@@ -15392,9 +15455,31 @@ export type ProgramSignatures
 		if not self.typeIsManaged(t, from: self.typeNames) 'ownsNothing'
 			return ExistentialOwnershipProtocol.none
 		end 'ownsNothing'
+		if self.typeDenotesInterface(t) 'anExistentialHasNoStaticProtocol'
+			return ExistentialOwnershipProtocol.none
+		end 'anExistentialHasNoStaticProtocol'
 
 		return ExistentialOwnershipProtocol.aggregate
 	end 'typeOwnershipProtocol'
+
+	// Is `t` a value held at an INTERFACE type — a two-word fat pointer whose retain and release are its
+	// WITNESS's and not any name a descriptor word can hold? BOTH spellings, because a generic type ARGUMENT
+	// is a third producer of slot types that `normalizeSweptInterfaceTypes` does not re-tag: the real parse
+	// mints `interfaceRef`, and `Box with Named`'s argument arrives as a bare `named` — which is exactly the
+	// spelling `managedNameDropCallee`'s panic says cannot exist.
+	function typeDenotesInterface(t MaxonType) returns bool
+		let tag = maxonTypeTag(t)
+		if tag == ValueTypeTag.interfaceRef 'taggedExistential'
+			return true
+		end 'taggedExistential'
+
+		if not tagMayNameAggregate(tag) 'namesNoDeclaration'
+			return false
+		end 'namesNoDeclaration'
+
+		let form = try self.declaredFormOf(self.denotedSlotAggregateName(t)) otherwise return false
+		return form == TypeDeclKind.interfaceType
+	end 'typeDenotesInterface'
 
 	// Is struct field `index` declared at an INTERFACE type — the two-slot fat pointer whose drop is
 	// `__drop_existential` rather than a statically named callee (P1.7a-existentials slice 2)? Asked through
@@ -15462,40 +15547,9 @@ export type ProgramSignatures
 		return self.genericAliasInstance(self.nameOfId(typeNameIdOf(t)))
 	end 'denotedArrayInstance'
 
-	// ⭐ **DOES A CONCRETE INSTANCE HOLD AN OPAQUE-`T` `Array` FIELD WHOSE ELEMENT IS MANAGED (P1.7 slice
-	// 3b)?** — `Container with String`'s `items as Array with typeParameter(0)` field, where the substituted
-	// argument (`String`) owns managed heap. Such a field's array needs its `element_destroy@40` stamped with
-	// the element's destructor, which the shared opaque `__arr_create` reads at run time from the enclosing
-	// instance's descriptor `destroyFunc@40` — a slot filled by the `funcAbs64InRdata` relocation
-	// `ensureLayoutDescriptor` records when this answers true (P1.7 slice 3b-ii). A TRIVIAL argument answers
-	// false (its `destroyFunc@40` stays 0, no walk). An `Array` instance has no base struct and is never the
-	// subject. The reloc CONDITION and the reloc's DESTRUCTOR (`managedOpaqueArrayElementDropCallee`) read the
-	// same walk (`managedOpaqueArrayElementOf`), so "is there such a field?" and "what destructor?" cannot
-	// disagree about which field they mean.
-	export function genericInstanceHasManagedOpaqueArrayField(id GenericInstanceId, position TypeParamPosition) returns bool
-		match self.managedOpaqueArrayElementOf(id, position: position) 'has'
-			present then return true
-			absent then return false
-		end 'has'
-	end 'genericInstanceHasManagedOpaqueArrayField'
-
-	// ⭐ **THE `.text` DESTRUCTOR to bake into a managed-opaque-array-holding instance's descriptor
-	// `destroyFunc@40` (P1.7 slice 3b-ii)** — the drop callee of the array's SUBSTITUTED element (a String →
-	// `__str_decref`, a managed struct/union → its `__destruct_<T>`, a nested Array → `__arr_decref`), which
-	// the shared opaque `__arr_create` reads back to stamp its record's `element_destroy@40`. Routed through
-	// the SAME `managedFieldDropCallee` a concrete `Array with String` element uses (`arrayElementDropCallee`),
-	// so the opaque stamp and the concrete stamp name the identical destructor. Precondition:
-	// `genericInstanceHasManagedOpaqueArrayField(id)`.
-	export function managedOpaqueArrayElementDropCallee(id GenericInstanceId, position TypeParamPosition) returns ByteArray
-		match self.managedOpaqueArrayElementOf(id, position: position) 'element'
-			present(element) then return managedFieldDropCallee(self, typeNames: self.typeNames, fieldType: element)
-			absent then panic("ProgramSignatures.managedOpaqueArrayElementDropCallee: instance {id} holds no managed opaque field at type-parameter position {position} — every caller gates on genericInstanceHasManagedOpaqueArrayField")
-		end 'element'
-	end 'managedOpaqueArrayElementDropCallee'
-
 	// ⭐ **DOES A MANAGED-OPAQUE-ARRAY-HOLDING INSTANCE HAVE A DEEP-CLONEABLE ELEMENT (P1.7 slice 3b-vi-b-β)?**
 	// The GATE on the descriptor `copyFunc@32` stamp AND on the cloner DCE-root (`rootManagedOpaqueArrayElementClones`)
-	// — the CLONE dual of the reloc-need predicate `genericInstanceHasManagedOpaqueArrayField`. `copyFunc@32` is
+	// — the CLONE gate over the same walk the pre-review DROP gate read. `copyFunc@32` is
 	// stamped, and the element's `__clone_<T>` SYNTHESIZED, only when the element is deep-cloneable by this rung's
 	// single-`(box) -> newBox` mechanism: a String / boxed-union / struct / trivial-element-array element WHOSE WHOLE
 	// reachable type graph is itself clonable. It MUST read the SAME full-graph classifier the front-end reject
@@ -15522,7 +15576,7 @@ export type ProgramSignatures
 	end 'genericInstanceOpaqueArrayElementIsCopyable'
 
 	// ⭐ **THE `.text` ELEMENT CLONER to bake into a managed-opaque-array-holding instance's descriptor
-	// `copyFunc@32` (P1.7 slice 3b-vi-b-β)** — the exact CLONE dual of `managedOpaqueArrayElementDropCallee`. The
+	// `copyFunc@32` (P1.7 slice 3b-vi-b-β)** — the CLONE analogue of `typeParamDropCallee`. The
 	// direct `(box) -> newBox` clone callee of the array's SUBSTITUTED element (a String → `__str_clone`, a
 	// managed struct/union → its `__clone_<T>`, a trivial-element nested Array → `__arr_clone`), which the shared
 	// opaque-copy wrapper reads back and `callIndirect`s per element. Routed through the SAME
@@ -15537,14 +15591,20 @@ export type ProgramSignatures
 		end 'element'
 	end 'managedOpaqueArrayElementCloneCallee'
 
-	// The SUBSTITUTED type whose destructor a managed opaque type-parameter instance bakes into type parameter
-	// `position`'s descriptor block `destroyFunc@40` — the ONE walk both the reloc-need predicate
-	// (`genericInstanceHasManagedOpaqueArrayField`) and the reloc's destructor
-	// (`managedOpaqueArrayElementDropCallee`) read, so neither can drift to a different field. The shared body
-	// drops a substituted argument through it in TWO field shapes, both resolved here so ONE stamp serves both:
-	// an opaque `Array with T` ELEMENT — dropped on `.pop()`/scope-exit (P1.7 slice 3b-ii) — and a BARE opaque
-	// `T` field — dropped on reassignment (`self.saved = next`, P1.7 Finding A). (The public predicates keep
-	// their "Array" names for their out-of-tree call sites; the mechanism spans array elements AND bare fields.)
+	// The SUBSTITUTED type of an opaque field at type parameter `position` — the ONE walk the `copyFunc@32`
+	// gate (`genericInstanceOpaqueArrayElementIsCopyable`) and its cloner (`managedOpaqueArrayElementCloneCallee`)
+	// read, so neither can drift to a different field. It finds a substituted argument in TWO field shapes,
+	// both resolved here so ONE stamp serves both: an opaque `Array with T` ELEMENT (P1.7 slice 3b-ii) and a
+	// BARE opaque `T` field (P1.7 Finding A). (The public predicates keep their "Array" names for their
+	// out-of-tree call sites; the mechanism spans array elements AND bare fields.)
+	//
+	// ⛔⛔ **IT NO LONGER GATES `destroyFunc@40`, AND THAT WAS A LEAK (found at review).** The drop word is a
+	// fact about the type ARGUMENT and this walk is a fact about the base's FIELD LIST — so a generic that
+	// builds a record out of a borrowed `T` without ever declaring a `T`-typed field took a reference through
+	// `retainFunc@64` and released it through a zero. `typeParamDropCallee` is the word's gate and its callee
+	// now, off the SAME `typeOwnershipProtocol` the retain reads; the paragraphs below are the two earlier
+	// wrong answers of that same pair and are kept for what they measured. The CLONE word stays here because
+	// a clone genuinely is about the array COLUMN and not about the argument.
 	//
 	// ⛔⛔ **IT USED TO TAKE THE FIRST MANAGED OPAQUE FIELD OF ANY POSITION, AND THAT WAS A WILD FREE (W43b).**
 	// One descriptor carried one `destroyFunc@40`, so a two-parameter generic's two columns shared one
@@ -15570,11 +15630,13 @@ export type ProgramSignatures
 	// design and stays so) and nothing on either side ever took a reference. See
 	// `specs-shv2/map.md`'s `trivial-key-column-survives-rehash`.
 	//
-	// ⇒ **THE INVARIANT, stated here because this is the walk that broke it: `destroyFunc@40` and
-	// `retainFunc@64` are non-zero TOGETHER.** Both now read `typeIsManaged` of the SAME substituted argument
-	// through the SAME door (`instanceArgIsManaged`), which is the arrangement the witness table's
-	// `destroyFunc@8`/`retainFunc@16` pair already holds by construction off one `existentialOwnershipProtocol`.
-	// A reference taken through one word and released through the other cannot be balanced by two predicates.
+	// ⇒ **THE INVARIANT, recorded here because this is the walk that broke it TWICE: `destroyFunc@40` and
+	// `retainFunc@64` are non-zero TOGETHER.** W41-trivial made the two read one ARGUMENT question and left
+	// them behind two different FIELD questions, which is the leak the review found; they are now one
+	// expression apiece over one `typeOwnershipProtocol` (`typeParamDropCallee` / `typeParamRetainCallee`),
+	// which is the arrangement the witness table's `destroyFunc@8`/`retainFunc@16` pair has always held off one
+	// `existentialOwnershipProtocol`. A reference taken through one word and released through the other cannot
+	// be balanced by two predicates — in EITHER of their two halves.
 	function managedOpaqueArrayElementOf(id GenericInstanceId, position TypeParamPosition) returns ManagedOpaqueArrayElement
 		// ⚠ **THIS IS THE SITE THE UNDECLARED HALF OF THE GATE WAS MEASURED ON.**
 		// `noteDestructorUsage`'s `rootManagedOpaqueArrayElementDrops` calls this over EVERY interned
