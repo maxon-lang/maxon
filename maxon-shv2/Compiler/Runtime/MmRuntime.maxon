@@ -492,7 +492,7 @@ end 'emitOkReturn'
 
 // ⭐ **THE SUCCESS EXIT OF A THROWING *VOID* FUNCTION — the ok return with the placeholder the ABI never
 // moves.** It is not a wrapper around `emitOkReturn`: what it adds is the 0, and that 0 is the whole of the
-// duplication it removes. `__arr_set_length`, `__arr_set_byte`, `__arr_mem_append`, `__arr_mem_grow`,
+// duplication it removes. `__arr_set_length`, `__arr_set_byte`, `__arr_mem_grow`,
 // `__md_create`, `__mf_*`'s void pair and `__map_insert` all end this way, and each spelled the same two
 // statements out — one fact written down seven times, whose failure mode is a family that "returns void"
 // with a garbage flag register the day the placeholder is written differently.
@@ -962,7 +962,7 @@ end 'buildMmFree'
 // that bound a payload OUT does not double-free it here).
 export function installUnionDestructors(module StdModule, project Project, signatures ProgramSignatures, needed DestructorSet)
 	for (_, layout) in project.enumTypes 'each'
-		if not unionHasManagedField(signatures, typeNames: project.typeNames, layout: layout, wantStringOnly: false) 'noManaged'
+		if not unionHasManagedField(signatures, typeNames: project.typeNames, layout: layout) 'noManaged'
 			continue
 		end 'noManaged'
 		if not needed.contains(destructorSymbol(layout.name)) 'notReferenced'
@@ -985,69 +985,153 @@ end 'installUnionDestructors'
 //
 // Called after `scanRuntimeUsage`, before `.data` layout reads `usesHeap` and `installStringRuntime` reads
 // `usesStrDecref` — so the closed set and the bits are settled before anything they gate is built.
+//
+// ⛔⛔ **IT USED TO OPEN BY ROOTING EVERY MANAGED OPAQUE-`T` `Array` ELEMENT DESTRUCTOR THE DESCRIPTOR
+// RELOCS *MIGHT* BAKE, AND THAT PREDICTION IS GONE (W17-c).** It walked the whole instance registry and rooted
+// on `genericInstanceHasManagedOpaqueArrayField` alone — unconditional over the instances, by its own header
+// — which is a prediction of what LOWERING will emit, made before lowering. Listing the `String`/`Character`
+// cone put four instances of `stdlib/helpers/itertools/withIterator.maxon` in every program's registry
+// (`WithIterIterator_ByteIterator_Byte` and its three siblings, from the views' `Iterable with (…)`
+// conformances), so `return 0 as ExitCode` rooted `__destruct_ByteIterator`, `__destruct_CodepointIterator`,
+// `__destruct_UTF16Iterator` and `__destruct_StringIterator`, and the struct loop below turned the heap on for
+// a program that allocates nothing — the five `static-variables/data-section-*` pins, reading their `var` 24
+// bytes past its true offset.
+//
+// ⭐ **THE MEASURED SET REPLACES THE PREDICTED ONE, AND IT ALREADY EXISTED**: `noteRelocatedFunctionUsage`
+// roots every `.rdata` slot's callee off `pendingRdataRelocs` AFTER lowering — *"the rooted set is the
+// RELOCATED set, literally"* — and `ensureLayoutDescriptor`'s `destroyFunc@40` stamp is one of those slots
+// (`LowerMaxonToStd:1650`, the very `managedOpaqueArrayElementDropCallee` the prediction named). So the two
+// were one fact derived twice, one of them by guessing; the guess is what is deleted. Its clone twin
+// (`ArrayRuntime.rootManagedOpaqueArrayElementClones`) went with it for the identical reason.
 export function noteDestructorUsage(usage RuntimeUsage, project Project, signatures ProgramSignatures)
-	// ⭐ **ROOT EACH MANAGED OPAQUE-`T` `Array` ELEMENT'S DESTRUCTOR (P1.7 slice 3b-iii)** — BEFORE the
-	// closure below, so a struct/union element's own `__destruct_<T>` is closed over its nesting. A
-	// `Container with String`'s descriptor `destroyFunc@40` is filled by a `funcAbs64InRdata` relocation
-	// (`ensureLayoutDescriptor`) whose target — the element's `__str_decref` / `__destruct_<T>` /
-	// `__arr_decref` — is NAMED NOWHERE the module scan can see (the shared `__arr_decref` walk reads it out
-	// of the record at run time). So the writer would resolve a `.text` VA for a function that was never
-	// installed — the `bakeFuncAbs64Relocs` panic. Rooted off the SAME predicate + resolver the reloc uses,
-	// so the rooted set is exactly the relocated set.
-	rootManagedOpaqueArrayElementDrops(usage, signatures: signatures)
 	closeDestructorNeeds(usage, project: project, signatures: signatures)
+	declareDestructorCascadeNeeds(usage, project: project, signatures: signatures)
+end 'noteDestructorUsage'
 
+// Obligation 2 above — the transitive runtime bits every REFERENCED destructor's synthesized body needs —
+// split out because it has TWO callers and must not be one of them's private tail. `noteRelocatedFunctionUsage`
+// can put a `__destruct_<T>` in the set that no pre-pipeline walk saw, and a destructor whose `usesStrDecref`
+// was never declared links against a `__str_decref` nothing installed.
+//
+// ⭐⭐ **EVERY BIT IS DERIVED FROM THE DROP CALLEE THE CASCADE WILL ACTUALLY EMIT, AND IT USED TO BE A
+// HAND-WRITTEN LIST OF FIELD KINDS — WHICH IS THE SAME FACT WRITTEN TWICE, AND IT WAS WRONG IN ALL THREE ARMS
+// AT ONCE.** The three arms asked `structHasStringField` / `structHasArrayField` /
+// `unionHasManagedField(wantStringOnly: true)` / `genericInstanceHasStringField`: a fixed roster of the field
+// kinds someone remembered, against a synthesis (`managedFieldDropCallee`) that routes SIX. A managed type
+// whose drop has its own install bit — rather than one its own construction already turns on — therefore
+// linked against nothing.
+//
+// ⚠ **`CharacterSet` IS EXACTLY THAT TYPE, AND IT IS WHY THE DEFECT WAS OBSERVABLE.** Its family has THREE
+// bits (`usesCharSetMake`/`usesCharSetDecref`/`usesCharSetContains`), so `CharacterSet.whitespaces()` declares
+// the MAKE and nothing else, and a set reached only through a cascade wanted a `__cs_decref` no install had
+// been asked for. MEASURED on this tree at a struct field, at a union payload AND at a generic instance's
+// substituted field — all three — `panic at X64Backend.maxon:2027: resolveCallFixups: call to unknown function
+// '__cs_decref'`, with no diagnostic and no line. (`Set`/`Map`/`List`/`__ManagedFile`/`__ManagedDirectory`
+// escaped only because each has ONE bit that constructing a value already sets; that is a property of their
+// bit granularity, not of this walk, and it is not a property worth relying on.)
+//
+// ⇒ Each arm now walks its own managed fields, asks the SAME router the synthesis will ask, and hands the
+// answer to `recordCallUsage` — the one callee-to-bit map, which also closes each family over what its own
+// body calls. A drop callee this compiler can emit and this walk cannot account for is now unrepresentable
+// rather than a list to remember to extend. It is also CHEAPER than what it replaces: the struct arm ran three
+// full field walks (`structHasStringField`, `structHasArrayField`, `structHasExistentialField`) and now runs
+// one.
+//
+// ⚠ **IT IS SAFE TO CALL `recordCallUsage` HERE, AND ONLY HERE, BECAUSE `closeDestructorNeeds` HAS ALREADY
+// RUN.** That map INSERTS a `__destruct_<T>` callee into `neededDestructors` without queueing the cascade node
+// that closes it over its own nesting — harmless once the closure is at its fixpoint (every such callee is
+// already in the set, so the insert is a no-op), and a silently truncated closure if it ever ran first. Both
+// callers order the two that way; a third must too.
+function declareDestructorCascadeNeeds(usage RuntimeUsage, project Project, signatures ProgramSignatures)
 	for (_, layout) in project.structTypes 'eachStruct'
 		if usage.neededDestructors.contains(destructorSymbol(layout.name)) 'referenced'
 			usage.usesHeap = true
-			if structHasStringField(signatures, structName: layout.name) 'hasString'
-				usage.usesStrDecref = true
-			end 'hasString'
-			// A struct destructor that drops an `Array` field calls `__arr_decref` inside its synthesized
-			// body (which the module scan cannot see), so the array runtime bit is declared here (P1.7).
-			if signatures.structHasArrayField(layout.name) 'hasArray'
-				usage.usesArray = true
-			end 'hasArray'
-			// The same reasoning for an INTERFACE-typed field (P1.7a-existentials slice 2): the cascade calls
-			// `__drop_existential` inside that synthesized body.
-			if structHasExistentialField(signatures, structName: layout.name) 'hasExistential'
-				usage.usesDropExistential = true
-			end 'hasExistential'
+			declareStructFieldDropNeeds(usage, layout: layout, project: project, signatures: signatures)
 		end 'referenced'
 	end 'eachStruct'
 
 	for (_, layout) in project.enumTypes 'eachUnion'
 		if usage.neededDestructors.contains(destructorSymbol(layout.name)) 'referenced'
 			usage.usesHeap = true
-			if unionHasManagedField(signatures, typeNames: project.typeNames, layout: layout, wantStringOnly: true) 'hasString'
-				usage.usesStrDecref = true
-			end 'hasString'
+			declareUnionPayloadDropNeeds(usage, layout: layout, project: project, signatures: signatures)
 		end 'referenced'
 	end 'eachUnion'
 
 	// A REFERENCED managed generic instance's `__destruct_<mangled>` (P1.6-B2) frees its box (`__mm_free` —
-	// heap) and, for a directly-substituted String field, calls `__str_decref` — both inside the synthesized
-	// body the Maxon scan cannot see, so the bits are declared here. A String inside a nested struct/instance
-	// field is dropped by that nested destructor, so only a DIRECT substituted String turns on `usesStrDecref`.
-	// ⚠ The queries below must be safe to ask of ANY instance, builtin included — see
-	// `genericInstanceHasStringField`, which owns the reason and the guard. `neededDestructors` is keyed by
+	// heap) and calls each substituted field's own drop, both inside the synthesized body the Maxon scan cannot
+	// see. A managed value inside a nested struct/instance field is dropped by that nested destructor, so only
+	// a DIRECT substituted field is accounted for here.
+	// ⚠ The walk below must be safe to ask of ANY instance, builtin included — see
+	// `declareInstanceFieldDropNeeds`, which carries the no-layout guard. `neededDestructors` is keyed by
 	// SYMBOL NAME, and a declared `type Array_Foo` used to claim the very name `Array with Foo` mangles to;
 	// P1.7 mints that instance as `__Array_Foo` instead (`reservedIfDeclared`), so the two can no longer
 	// meet. The guard is the walk's structural precondition regardless of which route reaches it.
 	for id in 0 upto signatures.genericInstanceCount() 'eachInstance'
 		if usage.neededDestructors.contains(destructorSymbol(signatures.mangleGenericInstance(id))) 'referenced'
 			usage.usesHeap = true
-			if signatures.genericInstanceHasStringField(id) 'hasString'
-				usage.usesStrDecref = true
-			end 'hasString'
-			// The base struct's OWN interface-typed field survives substitution into the instance's cascade
-			// (`instanceFieldDropKind`), so an instance destructor calls `__drop_existential` too.
-			if signatures.genericInstanceHasExistentialField(id) 'hasExistential'
-				usage.usesDropExistential = true
-			end 'hasExistential'
+			declareInstanceFieldDropNeeds(usage, id: id, signatures: signatures)
 		end 'referenced'
 	end 'eachInstance'
-end 'noteDestructorUsage'
+end 'declareDestructorCascadeNeeds'
+
+// The struct arm's field walk — `addNestedStructDestructors`' bit-declaring dual, and deliberately its
+// mirror image field for field: that one collects the nested SYMBOLS a cascade names, this one declares the
+// runtime BITS the same callees need. Both ask `managedStructFieldDropCallee`, so the callee a field is
+// accounted for under and the callee it is dropped through are one answer.
+function declareStructFieldDropNeeds(usage RuntimeUsage, layout StructLayout, project Project, signatures ProgramSignatures)
+	for i in 0 upto layout.fieldCount() 'eachField'
+		if not signatures.structFieldIsManaged(layout.name, index: i) 'scalar'
+			continue
+		end 'scalar'
+		// ⭐ **AN EXISTENTIAL FIELD NAMES NO CALLEE, so it is the one kind that cannot be derived and is
+		// declared directly** (P1.7a-existentials slice 2). Its drop is `__drop_existential(witness, value)`,
+		// read out of the witness table at run time, which `managedFieldDropCallee` refuses to answer for at
+		// all — the same arm `addNestedStructDestructors` skips for the same reason, one question over.
+		if signatures.structFieldIsExistential(layout.name, index: i) 'existential'
+			usage.usesDropExistential = true
+			continue
+		end 'existential'
+		recordCallUsage(managedStructFieldDropCallee(layout, index: i, project: project, signatures: signatures), usage: usage)
+	end 'eachField'
+end 'declareStructFieldDropNeeds'
+
+// The union twin — `addNestedUnionDestructors`' bit-declaring dual, over the same payload classifier.
+function declareUnionPayloadDropNeeds(usage RuntimeUsage, layout EnumLayout, project Project, signatures ProgramSignatures)
+	for ci in 0 upto layout.caseCount() 'eachCase'
+		let payloads = layout.payloadsAt(ci)
+		for fi in 0 upto payloads.count() 'eachField'
+			let field = try payloads.get(fi) otherwise panic("declareUnionPayloadDropNeeds: payloadsAt count disagrees with get at {fi}")
+			let class = classifyUnionPayload(signatures, typeNames: project.typeNames, fieldType: field.declaredType, slotScopeFilePath: layout.declFilePath)
+			if not payloadClassIsManaged(class) 'scalar'
+				continue
+			end 'scalar'
+			recordCallUsage(managedFieldDropCallee(signatures, typeNames: project.typeNames, fieldType: field.declaredType), usage: usage)
+		end 'eachField'
+	end 'eachCase'
+end 'declareUnionPayloadDropNeeds'
+
+// The instance twin — `addNestedInstanceDestructors`' bit-declaring dual, carrying that walk's own
+// precondition: a layout-less instance (`Array`/`Set` and every undeclared base) synthesizes no cascade, and
+// the field walk reads a base struct it does not have. See `genericInstanceHasBaseLayout` for why the
+// early-out and the emptiness are one gate.
+function declareInstanceFieldDropNeeds(usage RuntimeUsage, id GenericInstanceId, signatures ProgramSignatures)
+	if not signatures.genericInstanceHasBaseLayout(id) 'noSynthesizedCascade'
+		return
+	end 'noSynthesizedCascade'
+
+	for i in 0 upto signatures.genericInstanceFieldCount(id) 'eachField'
+		if not signatures.genericInstanceFieldIsManaged(id, index: i) 'scalar'
+			continue
+		end 'scalar'
+		// The base struct's OWN interface-typed field survives substitution into the instance's cascade
+		// (`instanceFieldDropKind`) — `declareStructFieldDropNeeds`' arm, for its reason.
+		if signatures.genericInstanceFieldIsExistential(id, index: i) 'existential'
+			usage.usesDropExistential = true
+			continue
+		end 'existential'
+		recordCallUsage(signatures.genericInstanceFieldDropCallee(id, index: i), usage: usage)
+	end 'eachField'
+end 'declareInstanceFieldDropNeeds'
 
 // ⭐⭐ **ROOT EVERY FUNCTION AN `.rdata` SLOT NAMES, AFTER LOWERING HAS FILLED THEM (P1.7a-existentials
 // slice 2).** A witness table's `destroyFunc@8` and its method slots, and a layout descriptor's
@@ -1056,10 +1140,11 @@ end 'noteDestructorUsage'
 // see names it. The writer will bake a `.text` VA for every one of them, so every one must be INSTALLED.
 //
 // ⭐ **THE ROOTED SET IS THE RELOCATED SET, LITERALLY — read off the relocations rather than re-derived from
-// the declarations that produced them.** That is the property `rootManagedOpaqueArrayElementDrops`' header
-// asks for and gets by asking the same predicate; here it is had by construction, which matters because
-// WHICH `(conformer, interface)` pairs get a table is decided during LOWERING and no pre-pipeline walk can
-// know it. The first attempt rooted every DECLARED conformance instead, and every program has the stdlib's
+// the declarations that produced them.** It is had by CONSTRUCTION here, which matters because WHICH
+// `(conformer, interface)` pairs get a table — and which instances get a layout descriptor — is decided
+// during LOWERING, and no pre-pipeline walk can know it. That is why the two pre-pipeline PREDICTIONS of the
+// descriptor's own `destroyFunc@40`/`copyFunc@32` targets are deleted (W17-c) rather than kept beside this:
+// they asked the same question of the declarations and answered it for instances no program reaches. The first attempt rooted every DECLARED conformance instead, and every program has the stdlib's
 // (`FilePath` and `URL` conform, reachable or not) — so `var flag = true` grew the three `__slab_*` `.data`
 // globals and five `static-variables/data-section-*` cases read their bool 24 bytes off its true offset.
 //
@@ -1094,37 +1179,35 @@ end 'noteDestructorUsage'
 // `destroyFunc@8` pointing at a conformer's cascade — grows it and the closure runs exactly as before.
 export function noteRelocatedFunctionUsage(usage RuntimeUsage, project Project, signatures ProgramSignatures)
 	let heapBefore = usage.usesHeap
-	let neededBefore = usage.neededDestructors.count()
+	let destructorsBefore = usage.neededDestructors.count()
+	let clonersBefore = usage.neededCloners.count()
 	for reloc in project.globalData.pendingRdataRelocs 'eachRdataSlot'
 		recordCallUsage(reloc.funcName, usage: usage)
 	end 'eachRdataSlot'
 
+	// ⭐⭐ **BOTH CASCADES ARE RE-CLOSED, NOT JUST THE DROP ONE, AND THAT IS WHAT LETS THE TWO PRE-PIPELINE
+	// PREDICTIONS BE DELETED (W17-c).** A layout descriptor stamps `destroyFunc@40` AND `copyFunc@32`
+	// (`LowerMaxonToStd:1650`/`:1664`), so a reloc can be the FIRST mention of either a `__destruct_<T>` or a
+	// `__clone_<T>` — and a cascade left unclosed is an inner destructor/cloner nothing synthesizes, plus a
+	// `usesStrDecref`/`usesStrClone` nothing declares. Both closures are gated on their OWN set having grown,
+	// for the superlinear reason below; both installers run after this call, so a set grown here is still in
+	// time to be built.
+	if usage.neededDestructors.count() > destructorsBefore 'newDropCascades'
+		closeDestructorNeeds(usage, project: project, signatures: signatures)
+		declareDestructorCascadeNeeds(usage, project: project, signatures: signatures)
+	end 'newDropCascades'
+
+	if usage.neededCloners.count() > clonersBefore 'newCloneCascades'
+		noteClonerUsage(usage, project: project, signatures: signatures)
+	end 'newCloneCascades'
+
+	// ⚠ **CHECKED LAST, BECAUSE THE TWO CLOSURES ABOVE ALSO SET THE BIT** — a referenced struct destructor
+	// and a referenced cloner each declare the heap. Checking it against the reloc loop alone would leave
+	// exactly the case this gate exists for unguarded.
 	if usage.usesHeap and not heapBefore 'heapArrivedTooLate'
 		panic("noteRelocatedFunctionUsage: an `.rdata` slot named a heap callee in a program whose `.data` layout was taken with `usesHeap` false — the runtime globals are laid out before lowering, so the layout is now short by their width. Every relocatable callee releases a heap record, so the program that named one must already have allocated one: a new relocation kind has broken that premise")
 	end 'heapArrivedTooLate'
-
-	if usage.neededDestructors.count() == neededBefore 'nothingNewToCloseOver'
-		return
-	end 'nothingNewToCloseOver'
-
-	closeDestructorNeeds(usage, project: project, signatures: signatures)
 end 'noteRelocatedFunctionUsage'
-
-// ⭐ **INSTALL EVERY MANAGED OPAQUE-`T` `Array` ELEMENT DESTRUCTOR the `funcAbs64InRdata` relocs will bake
-// (P1.7 slice 3b-iii).** `ensureLayoutDescriptor` records ONE reloc per instance for which
-// `genericInstanceHasManagedOpaqueArrayField` holds, its target `managedOpaqueArrayElementDropCallee(id)`.
-// This roots that identical set through `recordCallUsage`, so the rooted destructors and the baked relocs
-// are ONE fact — no reloc names a `.text` VA that was never installed. It is unconditional over the
-// instances (not gated on the instance destructor being referenced): the reloc predicate is the sole gate,
-// so rooting on the same predicate cannot leave a reloc unrooted, and an over-rooted declared-but-unused
-// instance merely installs a leaf runtime function it never calls.
-function rootManagedOpaqueArrayElementDrops(usage RuntimeUsage, signatures ProgramSignatures)
-	for id in 0 upto signatures.genericInstanceCount() 'eachInstance'
-		if signatures.genericInstanceHasManagedOpaqueArrayField(id) 'managedOpaque'
-			recordCallUsage(signatures.managedOpaqueArrayElementDropCallee(id), usage: usage)
-		end 'managedOpaque'
-	end 'eachInstance'
-end 'rootManagedOpaqueArrayElementDrops'
 
 // Grow `usage.neededDestructors` to a fixpoint over destructor NESTING: for every referenced managed
 // struct/union/instance destructor, add the `__destruct_<T>` of each managed field that itself owns managed
@@ -1233,16 +1316,17 @@ end 'addNestedUnionDestructors'
 // field's `__str_decref` and a trivial box's `__mm_decref` are leaf drops and add nothing. No `project`:
 // every fact is answered inside `signatures`, over its own interner.
 function addNestedInstanceDestructors(usage RuntimeUsage, id GenericInstanceId, signatures ProgramSignatures, work CascadeWorklist)
-	// ⚠ The third site needing the no-layout early-out `genericInstanceHasManagedField` and
-	// `genericInstanceHasStringField` make: a node is expanded as soon as its SYMBOL is needed, and the field
-	// walk below reads a base struct a layout-less instance does not have. Measured before the
-	// guard existed: `panic ProgramSignatures.baseLayoutOf`, no diagnostic. (The route that reached it — a
-	// declared `type Array_Foo` expanding the base-less `Array with Foo` node registered under the identical
-	// string — is closed by P1.7's `reservedIfDeclared`; the guard is the walk's precondition either way.)
+	// ⚠ One of the three sites needing the no-layout early-out — `genericInstanceHasManagedField` and this
+	// walk's own bit-declaring dual `declareInstanceFieldDropNeeds` are the others: a node is expanded as soon
+	// as its SYMBOL is needed, and the field walk below reads a base struct a layout-less instance does not
+	// have. Measured before the guard existed: `panic ProgramSignatures.baseLayoutOf`, no diagnostic. (The
+	// route that reached it — a declared `type Array_Foo` expanding the base-less `Array with Foo` node
+	// registered under the identical string — is closed by P1.7's `reservedIfDeclared`; the guard is the
+	// walk's precondition either way.)
 	//
 	// Nothing is lost by returning: an `Array`/`Set` instance synthesizes no cascade for its nesting to
 	// close over — its elements are dropped by `__arr_decref`/`__set_decref`, whose own element destructor is
-	// rooted separately (`rootManagedOpaqueArrayElementDrops`) — and an UNDECLARED base has no fields to
+	// rooted by the descriptor reloc that names it (`noteRelocatedFunctionUsage`) — and an UNDECLARED base has no fields to
 	// nest through at all. See `ProgramSignatures.genericInstanceHasBaseLayout` for why those are one gate.
 	if not signatures.genericInstanceHasBaseLayout(id) 'noSynthesizedCascade'
 		return
@@ -1277,32 +1361,6 @@ function insertIfDestructorSymbol(usage RuntimeUsage, callee ByteArray, work Cas
 	work.discovered(callee)
 end 'insertIfDestructorSymbol'
 
-// The `StructLayout` of a struct the caller already knows is declared (it named a needed destructor). ONE
-// home for the "structOf answered declared → layout" step the struct-destructor helpers share, so the
-// "unreachable undeclared" panic is written once.
-function requireDeclaredStruct(signatures ProgramSignatures, structName ByteArray, context String) returns StructLayout
-	match signatures.structOf(structName) 'declared'
-		declared(layout) then return layout
-		undeclared then panic("{context}: `type {String.from(structName)}` referenced by a needed destructor is not declared — every needed struct destructor names a declared struct")
-	end 'declared'
-end 'requireDeclaredStruct'
-
-// True iff struct `structName` directly owns a `String` field — the fields THIS struct's destructor drops
-// through `__str_decref` (a String inside a nested struct is dropped by that struct's own destructor). The
-// `usesStrDecref` gate reads it.
-function structHasStringField(signatures ProgramSignatures, structName ByteArray) returns bool
-	let layout = requireDeclaredStruct(signatures, structName: structName, context: "structHasStringField")
-	for i in 0 upto layout.fieldCount() 'eachField'
-		let fieldType = try layout.fieldTypes.get(i) otherwise panic("structHasStringField: fieldTypes.get OOB at {i}")
-		// `tagIsByteRecord`: the gate this feeds is `usesStrDecref`, i.e. "does this destructor CALL
-		// `__str_decref`?" — and it does for a Character field for the reason it does for a String one.
-		if tagIsByteRecord(maxonTypeTag(fieldType)) 'byteRecord'
-			return true
-		end 'byteRecord'
-	end 'eachField'
-	return false
-end 'structHasStringField'
-
 // Emit `__destruct_<U>(box)`:
 //
 //   entry + lower: the shared refcount RMW (`emitRefcountCheckToLastOwner`) — `rc == 0` is the last
@@ -1333,7 +1391,7 @@ function synthesizeUnionDestructor(module StdModule, layout EnumLayout, project 
 
 	var cur = drop
 	for ci in 0 upto layout.caseCount() 'eachCase'
-		if not caseHasManagedField(signatures, typeNames: project.typeNames, layout: layout, ci: ci, wantStringOnly: false) 'scalarCase'
+		if not caseHasManagedField(signatures, typeNames: project.typeNames, layout: layout, ci: ci) 'scalarCase'
 			continue
 		end 'scalarCase'
 		let caseBlock = module.addBlock(func, label: b"case")
@@ -1405,21 +1463,6 @@ function structFieldDropKind(layout StructLayout, index FieldIndex, project Proj
 	end 'fatPointer'
 	return FieldDropKind.direct(managedStructFieldDropCallee(layout, index: index, project: project, signatures: signatures))
 end 'structFieldDropKind'
-
-// Does struct `structName` DIRECTLY own an interface-typed field — the `usesDropExistential` gate for its
-// destructor (P1.7a-existentials slice 2). Its cascade drops such a field through `__drop_existential`,
-// which this Maxon-module scan cannot see (it lives in the synthesized body), so this is what turns that
-// runtime on. The `structHasStringField` / `structHasArrayField` twin, asked through the SAME per-field
-// predicate the cascade routes on.
-function structHasExistentialField(signatures ProgramSignatures, structName ByteArray) returns bool
-	let layout = requireDeclaredStruct(signatures, structName: structName, context: "structHasExistentialField")
-	for i in 0 upto layout.fieldCount() 'eachField'
-		if signatures.structFieldIsExistential(structName, index: i) 'found'
-			return true
-		end 'found'
-	end 'eachField'
-	return false
-end 'structHasExistentialField'
 
 // ⭐⭐ **THE PER-INSTANCE DESTRUCTOR CASCADE (P1.6-B2).** A generic instance is a monomorphized base struct
 // that OWNS its managed type arguments (moved in at the concrete call site), so `__destruct_<mangled>` drops

@@ -1861,3 +1861,143 @@ end 'main'
 ```maxoncstderr
 error E3016: <fragment>:8:6: Method 'Point.digest' throws 'Bogus' but interface 'Digest' declares it 'throws Error', and 'Bogus' names no declared enum or union — the narrowing an abstract requirement permits is granted only to an error type whose flag SHAPE the compiler can see, and an unresolvable name is a mistake rather than a licence. Declare 'Bogus', or name 'Error' itself
 ```
+
+## A builtin literal marker is not a marker a user type may wear
+
+<!-- test: error.literal-marker-conformer-would-be-dropped-through-the-wrong-cascade -->
+### The record a marker conformer gets is a BYTE RECORD, and its cascade is a STRUCT's
+
+⭐⭐ **THE ENVELOPE COLLAPSE IS A LAYOUT RULE; THE VALUE IT PRODUCES CARRIES AN IDENTITY NOTHING ELSE
+AGREES WITH.** A type whose `implements` clause names one of `stdlib/Builtins.maxon`'s literal markers
+holds its `managed` inline, and its `Self{…}` is built through the fused byte-record encoder
+(`__str_from_bytes` / `__str_of_buffer`) — 48 bytes, `managed` at 0 and the grapheme flag at 40. But the
+VALUE is tagged `structRef`, because `returns Self` resolves to the struct, so it is dropped by
+`__destruct_<T>` and copied by `__clone_<T>`: cascades built from the DECLARED field list, over a record
+that has no slot for a third field. Measured on the program below before the refusal existed: **exit
+0xC0000005**, the cascade reading `label` at offset 48 of a 48-byte record and handing whatever it found
+to `__str_decref`.
+
+⇒ shv2 mints a fused record only for the two names it owns the record FOR. `String` and `Character` are
+on `TypeResolution.isCompilerOwnedTypeName`, so no user file can declare either, and their values are
+tagged `string`/`character` and dropped through `__str_decref` — never through a struct cascade.
+```maxon
+type Wrapped implements BuiltinStringLiteral
+	var managed as __ManagedMemory
+	var flag as bool
+	var label as String = "tag"
+
+	export static function init(value __ManagedMemory) returns Self
+		return Self{managed: value, flag: false}
+	end 'init'
+end 'Wrapped'
+
+function main() returns ExitCode
+	let mm = try __ManagedMemory.create(64, elementSize: 1) otherwise return 1
+	try mm.setLength(40) otherwise return 2
+	let w = Wrapped.init(mm)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:8:10: Unsupported: `Wrapped` implements `BuiltinStringLiteral`, one of `stdlib/Builtins.maxon`'s literal markers, so its record would be the compiler's own fused byte record rather than the fields it declares. shv2 mints that record only for the two names it owns the record FOR — `String` and `Character` — because a conformer of any other name gets a VALUE whose bytes are a byte record's and whose IDENTITY is a struct's: every declared field the fused record has no slot for is discarded at construction, and the struct cascade that later drops or clones it reads past the record's end
+```
+
+<!-- test: error.literal-marker-conformer-would-be-cloned-through-the-wrong-cascade -->
+### The clone half of the same refusal
+
+`__clone_<T>` is built from the identical declared field list, so co-owning such a value out of a struct
+field faults for the identical reason — measured **0xC0000005** before the refusal. One door refuses both,
+because there is exactly one producer of a fused wrapper value.
+```maxon
+type Wrapped implements BuiltinStringLiteral
+	var managed as __ManagedMemory
+	var flag as bool
+	var label as String = "tag"
+
+	export static function init(value __ManagedMemory) returns Self
+		return Self{managed: value, flag: false}
+	end 'init'
+end 'Wrapped'
+
+type Box
+	var w as Wrapped
+
+	export static function init(x Wrapped) returns Self
+		return Self{w: x}
+	end 'init'
+
+	export function get() returns Wrapped
+		return self.w
+	end 'get'
+end 'Box'
+
+function main() returns ExitCode
+	let mm = try __ManagedMemory.create(64, elementSize: 1) otherwise return 1
+	try mm.setLength(40) otherwise return 2
+	let b = Box.init(Wrapped.init(mm))
+	let copy = b.get()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:8:10: Unsupported: `Wrapped` implements `BuiltinStringLiteral`, one of `stdlib/Builtins.maxon`'s literal markers, so its record would be the compiler's own fused byte record rather than the fields it declares. shv2 mints that record only for the two names it owns the record FOR — `String` and `Character` — because a conformer of any other name gets a VALUE whose bytes are a byte record's and whose IDENTITY is a struct's: every declared field the fused record has no slot for is discarded at construction, and the struct cascade that later drops or clones it reads past the record's end
+```
+
+<!-- test: error.literal-marker-conformer-cannot-hold-what-its-literal-was-given -->
+### ⚠ THE SILENT ONE — a field written `false` that reads back TRUE
+
+⭐⭐ **THE MOST SERIOUS OF THE THREE, BECAUSE IT NEITHER FAULTS NOR LEAKS.** The fused encoder takes the
+`managed` field as its source and the field named `singleByteGraphemesFlag` as its flag; a conformer whose
+second field is named anything else reaches `__str_from_bytes`, which CLASSIFIES the bytes and writes its
+own answer at @40. The declared `flag` occupies @40 in the collapsed layout, so `Self{flag: false}` is
+written, discarded, and read back as the classifier's `true`. Measured before the refusal: **exit 7**,
+the `true` branch, for a program whose only literal wrote `false`.
+```maxon
+type Wrapped implements BuiltinStringLiteral
+	var managed as __ManagedMemory
+	var flag as bool
+
+	export static function init(value __ManagedMemory) returns Self
+		return Self{managed: value, flag: false}
+	end 'init'
+
+	export function readFlag() returns bool
+		return self.flag
+	end 'readFlag'
+end 'Wrapped'
+
+function main() returns ExitCode
+	let mm = try __ManagedMemory.create(4, elementSize: 1) otherwise return 1
+	try mm.setLength(1) otherwise return 2
+	try mm.setByte(0, 65) otherwise return 3
+	let w = Wrapped.init(mm)
+	return (7 if w.readFlag() else 9) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:7:10: Unsupported: `Wrapped` implements `BuiltinStringLiteral`, one of `stdlib/Builtins.maxon`'s literal markers, so its record would be the compiler's own fused byte record rather than the fields it declares. shv2 mints that record only for the two names it owns the record FOR — `String` and `Character` — because a conformer of any other name gets a VALUE whose bytes are a byte record's and whose IDENTITY is a struct's: every declared field the fused record has no slot for is discarded at construction, and the struct cascade that later drops or clones it reads past the record's end
+```
+
+<!-- test: error.char-literal-marker-conformer-is-refused-too -->
+### `BuiltinCharLiteral` is refused by the same door
+
+The marker the refusal quotes is the one the type DECLARES, so the two byte-record markers reach one
+refusal rather than one each — the record is the same 48 bytes and the defect is the same defect.
+```maxon
+type Glyph implements BuiltinCharLiteral
+	var managed as __ManagedMemory
+
+	export static function init(value __ManagedMemory) returns Self
+		return Self{managed: value}
+	end 'init'
+end 'Glyph'
+
+function main() returns ExitCode
+	let mm = try __ManagedMemory.create(4, elementSize: 1) otherwise return 1
+	let g = Glyph.init(mm)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:6:10: Unsupported: `Glyph` implements `BuiltinCharLiteral`, one of `stdlib/Builtins.maxon`'s literal markers, so its record would be the compiler's own fused byte record rather than the fields it declares. shv2 mints that record only for the two names it owns the record FOR — `String` and `Character` — because a conformer of any other name gets a VALUE whose bytes are a byte record's and whose IDENTITY is a struct's: every declared field the fused record has no slot for is discarded at construction, and the struct cascade that later drops or clones it reads past the record's end
+```

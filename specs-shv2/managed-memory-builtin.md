@@ -141,7 +141,7 @@ function main() returns ExitCode
 	try b.setLength(2) otherwise return 5
 	try b.set(0, value: 3) otherwise return 6
 	try b.set(1, value: 4) otherwise return 6
-	try a.append(b) otherwise return 7
+	a.append(b)
 	if a.length() != 4 'badLen'
 		return 8
 	end 'badLen'

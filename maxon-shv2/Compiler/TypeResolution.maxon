@@ -112,10 +112,20 @@ let ExitCodeBuiltinName = b"ExitCode"
 // `named` REFERENCE DENOTES.** `bool`/`int`/`float`/`String` are unreachable as a `named` reference's name
 // (the first three are KEYWORDS; `String` and `Character` are settled syntactically by
 // `Parser.parseTypeReference`), so they can only arrive here from a rendered interface signature — where
-// they mean the builtin. A user `enum String` is legal (measured: it compiles and runs), and its `Self`
-// arrives as `named("String")`, for which this table's answer would be WRONG. That is why
-// `denotedNamedType` admits only the `exitCode` answer and not every non-`named` one; a new caller must
-// decide the same question before it may read past the `exitCode` arm.
+// they mean the builtin. That is why `denotedNamedType` admits only the `exitCode` answer and not every
+// non-`named` one; a new caller must decide the same question before it may read past the `exitCode` arm.
+//
+// ⛔ **THIS PARAGRAPH USED TO REST THAT ON "a user `enum String` is legal (measured: it compiles and runs),
+// and its `Self` arrives as `named("String")`", AND BOTH HALVES ARE NOW FALSE (W17-b).** RE-MEASURED:
+// `enum String` is **`E2015 … a declaration of the type name 'String', which the compiler owns`** —
+// `Parser.requireTypeNameNotCompilerOwned` refuses it, because `String` and `Character` joined
+// `isCompilerOwnedTypeName` (BATCH2 slice 2) after that sentence was written. And a `Self` inside the one
+// body that MAY wear the name — the corpus's own `type String` — is now the builtin tag rather than any
+// `named` reference (`Parser.enclosingSelfType`, which asks `byteRecordTagOfTypeName`). So the restriction
+// above stands on the STRUCTURAL fact instead, which is stronger than the counter-example was: neither name
+// can wear a `named` tag at all, in any program, so the answers past `exitCode` are unreachable here rather
+// than merely risky. A negative claim that ages is exactly what this file's own header warns a
+// re-derivation costs.
 //
 // ⚠ **`Character` IS DELIBERATELY ABSENT, and admitting it would be a FEATURE rather than a re-spelling.**
 // The set here is exactly the set the interface door already answered for, because this rung single-sources

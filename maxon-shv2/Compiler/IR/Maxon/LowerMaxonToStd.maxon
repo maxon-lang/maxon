@@ -1088,7 +1088,7 @@ type MaxonToStdLowering
 	// the relocation kind discriminates.
 	function lowerStringLiteral(result ValueId, bytes ByteArray, dstBlock IrBlock)
 		let blobLabel = registerStringBlob(self.globalData, bytes: bytes)
-		let recordLabel = registerStringRecord(self.globalData, blobLabel: blobLabel, byteLength: bytes.count(), isAscii: bytesAreAscii(bytes))
+		let recordLabel = registerStringRecord(self.globalData, blobLabel: blobLabel, byteLength: bytes.count(), singleByteGraphemes: bytesAreSingleByteGraphemes(bytes))
 		self.globalData.recordStringBufferFixup(recordLabel, blobLabel: blobLabel)
 		self.stdModule.appendOp(dstBlock, op: StdOp.rdataAddr(result, label: recordLabel.toByteArray()))
 	end 'lowerStringLiteral'
@@ -1658,8 +1658,9 @@ type MaxonToStdLowering
 		// records nothing (its wrapper takes the byte-blit/COW path), and a MANAGED but non-direct element
 		// (`Array with (Array with String)`) records nothing either — it is never copied (the front end rejects a
 		// base that copies with such an instantiation), so its 0 slot is never read. The cloner is DCE-rooted on
-		// the SAME `genericInstanceOpaqueArrayElementIsCopyable` predicate (`rootManagedOpaqueArrayElementClones`),
-		// so the reloc never names a `.text` VA that was not installed.
+		// relocation this line records (`MmRuntime.noteRelocatedFunctionUsage`, which reads `pendingRdataRelocs`
+		// after lowering), so the reloc never names a `.text` VA that was not installed — the rooted set IS the
+		// relocated set rather than a prediction of it.
 		if self.signatures.genericInstanceOpaqueArrayElementIsCopyable(gid) 'copyableOpaqueElement'
 			self.globalData.recordFuncAbs64InRdata(self.signatures.managedOpaqueArrayElementCloneCallee(gid), rdataLabel: label, offsetInLabel: LAYOUT_OFFSET_COPY_FUNC)
 		end 'copyableOpaqueElement'

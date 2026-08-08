@@ -1,0 +1,19 @@
+// Test: error.an-array-alias-at-a-struct-field-keeps-the-array-surface
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+
+type Holder
+	export var buf as ByteArray
+
+	export static function create(buf ByteArray) returns Self
+		return Self{buf: buf}
+	end 'create'
+end 'Holder'
+
+function main() returns ExitCode
+	let h = Holder.create("hello".toByteArray())
+	return h.buf.length() as ExitCode
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:15:15: Unsupported: `Array` member 'length' — P1.7 provides managed/get/set/first/last/pop/remove/slice/count/capacity/isEmpty/clone/push/reserve/resize/clear/insert/append/map/contains/hash/equals; that list IS the surface, so nothing else is served here

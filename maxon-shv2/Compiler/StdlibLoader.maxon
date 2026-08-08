@@ -1399,6 +1399,101 @@ function whitelistedStdlibModules(stdlibDir FilePath) returns MaxonSourcePathSet
 	// `E3001: No 'main' function found` AND NOTHING ELSE.
 	try listWhitelistedModule(stdlibDir, relative: "Print.maxon", into: listed)
 	try listWhitelistedModule(stdlibDir, relative: "PrintError.maxon", into: listed)
+	// ⭐⭐⭐ **W17 — `String`, `Character` AND THE THREE VIEWS: THE CONVERGENCE ENTRY, AND THE FIRST LISTED
+	// MODULES THAT DECLARE A COMPILER-OWNED TYPE NAME.** Every entry above this one adds declarations the
+	// compiler did not already have. These three REPLACE the authority for something it has always had: the
+	// 48-byte byte record. `type String`'s two fields and `type Character`'s one now LAY OUT that record
+	// (`Project.StructLayout.isInlineManagedField` — the envelope collapse), instead of `StringRuntime`'s six
+	// offsets being the only statement of it.
+	//
+	// ⚠ **THEY ARE ONE CONE IN THREE LINES, like `URL`/`urlHelpers` above and for the same reason:** none of
+	// the three compiles alone. `Character` names `ByteView` (measured: `E3011 Unknown type 'ByteView'` at the
+	// probe, once its own blockers were cleared), `String` names `Character` (`E2015 … 'toString'`), and the
+	// views name both. Order-independent like every other entry, since `queryProgramSignatures` folds every
+	// file's declarations before any file parses.
+	//
+	// ⭐⭐⭐ **AND THE SECOND HALF OF THAT REPLACEMENT IS THE CONFORMANCE:** the corpus's own
+	// `hash`/`equals`/`compare`/`clone`/`toString` are now the bodies a `__witness_String.*` slot relocates
+	// to, where `BuiltinConformanceRuntime` used to synthesize every one of them
+	// (`undefinedImplNames` builds an impl only for a name the module does not already define).
+	//
+	// **THE COLLISION RULE, CLEARED PER MODULE** (the checks this file prescribes, run rather than assumed):
+	//   • `helpers/string/views.maxon` — no compiler-owned type name (`ByteView`, `CodepointView`,
+	//     `UTF16View` and their three iterators are the corpus's own), no free function contested by a bare
+	//     builtin or by another listed module, no top-level binding, and its only outward references are
+	//     `String` and `Character` — which is why it is one cone with them and not an entry of its own.
+	//   • `Character.maxon` — `Character` IS compiler-owned, which is the point: `recordStruct`'s provenance
+	//     bit (W16) admits it from the CORPUS and drops it from a user file, so a user declaration is still
+	//     E2015. Its free functions are none; its inner `typealias ByteMemory` is type-scoped and therefore
+	//     excluded from the DISPLAY index (`deriveInstanceDisplayNames`), so no diagnostic can quote a
+	//     spelling the author cannot write.
+	//   • `String.maxon` — the same provenance admission for `String`. Its four free functions (`bytesEqual`,
+	//     `findIn`, `findLastIn`, `scanSingleByteGraphemes`, `scanIsAscii`) are claimed by no bare builtin in
+	//     `Parser.parseCallNamed`'s chain and by no other listed module. `StringIndex`/`StringIterator` are
+	//     declared BY this file; `StringIndex` also has a compiler-owned layout under the RESERVED spelling
+	//     `__StringIndex` (`SignatureIndex.stringIndexLayout`), so the corpus's bare-named one lands in a
+	//     different bucket.
+	//   • NO top-level binding in any of the three, so the `S2h` reachability term has nothing of theirs to
+	//     keep or drop.
+	//
+	// ⭐⭐ **THE WALL SEQUENCE IS THE RECORD OF WHAT IT TOOK, AND IT IS KEPT BECAUSE IT IS THE ONLY THING THAT
+	// SAYS WHAT KIND OF WORK THIS WAS.** Each was measured by the same one-command probe this file's own
+	// collision rule prescribes — `maxon-shv2 build stdlib/String.maxon` — and each is a place where the
+	// CORPUS's calling style met shv2's rule, not a missing feature:
+	//   • `:115` the buffer surface's arg-list protocol, · `:447` the roster-wins order for a corpus method,
+	//   • `:542` `selfBytes.slice(pos, matchPos)` — CLEARED by routing an implicit-`self`
+	//     `addressableBytes()` through the roster arm that marks the buffer surface
+	//     (`Parser.implicitSelfTakesTheByteRecordRoster`); the corpus writes the second argument positionally.
+	//   • `:658` `work.setByte(i, b + delta)` — CLEARED by giving `String` the buffer's arg-list protocol for
+	//     `setByte`, because the corpus writes it POSITIONALLY where shv2 requires named arguments after the
+	//     first (E2053).
+	//   • `:830` `bytes.appendMemory(piece)` — CLEARED by giving the `Array` surface the member the CORPUS
+	//     declares on it (`stdlib/Array.maxon:272`); the roster IS the refusal.
+	//   • `:861` `String.fromOwnedBytes(…)` — CLEARED by building the STATIC half of the corpus fall-through
+	//     (`Parser.stringStaticBelongsToTheCorpus`): the compiler's `String` static roster answered ahead of
+	//     this very file's own declaration.
+	//   ⇒ and with `:861` the module PARSES TO ITS END, which is the bar this file sets for listing
+	//   ("a module must parse to its END before it is listed, not merely further than it did yesterday").
+	//
+	// ⛔⛔ **KEEP THIS: THE ENTRY CARRIED THREE FALSE DIAGNOSES, AND EVERY ONE WAS REASONED FROM THE SHAPE OF
+	// A FAILURE RATHER THAN FROM THE DECLARATION OR THE SECTION.** It is the most reusable thing here.
+	//   1. `:830` was called a `__ManagedMemory` member. It is declared on `Array` and on nothing else, in
+	//      the corpus or in either reference.
+	//   2. `:830` was then called a surface-propagation gap, with `bytes` declared `ByteBuffer` — a spelling
+	//      that has never existed in that file (`git log --all -S "bytes as ByteBuffer"` finds no commit).
+	//      The receiver is `var bytes as ByteArray` (`:796`). ⭐ The MECHANISM that diagnosis motivated is
+	//      real and stays (`ProgramSignatures.derivedAliasSurfaceBits`, a buffer ALIAS at a struct field /
+	//      declared return / union payload swept before the alias was registered) — it simply was never what
+	//      `:830` needed.
+	//   3. The five `static-variables/data-section-*` failures were called a `let`-with-constant-initializer
+	//      storage question — *"both are top-level `let`s … and need no `.data` slot at all; giving them none
+	//      is the fix"*. shv2 ALREADY gives a scalar `let` no slot, so the proposed cure was a NO-OP. The
+	//      first `--emit-ir` said so: the 24 bytes were `MmRuntime.runtimeGlobals()`, the compiler's OWN
+	//      allocator slots, laid down under `usage.usesHeap` for a program whose whole text is `return 0`.
+	//      ⇒ It was a RUNTIME-FLOOR regression breaking `Compiler.compileToCodeResult`'s own invariant, and
+	//      `RequiredData`'s prefix compare was the instrument that CAUGHT it, not the thing at fault.
+	//      ⚖ USER RULING: fix the floor, do not weaken `RequiredData` — re-pinning would bake the compiler's
+	//      private slots into a spec about a user's globals and retire a real property.
+	//   ⇒ **The pattern: a refusal names the surface it was ASKED about, and a section names the bytes that
+	//   are IN it. Neither names the declaration that caused them. Read the declaration.**
+	//
+	// ⭐ **THE FLOOR REPAIR ITSELF WAS TWO INDEPENDENT OVER-APPROXIMATIONS, EACH SUFFICIENT ALONE**, and both
+	// are narrowed rather than disabled — see `StdlibSource.functionDeclaresAWitnessPosition` (the corpus
+	// intrinsic conformance seed now fires only where a witness table can actually be materialized) and
+	// `MmRuntime.noteDestructorUsage` (the pre-pipeline PREDICTION of which layout-descriptor relocs lowering
+	// would stamp is deleted in favour of `noteRelocatedFunctionUsage`, which reads the stamps). With both,
+	// `maxon-shv2 build --emit-ir` on `return 0 as ExitCode` emits an EMPTY data section under this listing.
+	//
+	// ⚠ **TWO SPEC EXPECTATIONS MOVED WITH THE LISTING, AND ONLY ONE OF THE TWO THAT WERE PREDICTED.**
+	// `builtin-member-rosters.error.unknown-character-method-gets-the-roster` had to re-point from
+	// `codepoint` to `isUpperCase`, because `stdlib/Character.maxon:123` DECLARES `codepoint()` and the
+	// corpus fall-through now serves it — the listing working. The predicted second move did NOT come due:
+	// `reserved-double-underscore.error.stdlib-overlay-mm-leak-check-takes-a-rooted-name` still takes the
+	// A1w arm, because with the floor repaired a heap-free program installs no `__mm_leak_check` after all —
+	// which is that case doubling as a second witness for the repair.
+	try listWhitelistedModule(stdlibDir, relative: "helpers/string/views.maxon", into: listed)
+	try listWhitelistedModule(stdlibDir, relative: "Character.maxon", into: listed)
+	try listWhitelistedModule(stdlibDir, relative: "String.maxon", into: listed)
 	return listed
 end 'whitelistedStdlibModules'
 

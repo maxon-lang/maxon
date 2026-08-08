@@ -214,7 +214,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:8:14: Unsupported: `Array` member 'frobnicate' — P1.7 provides managed/get/set/first/last/pop/remove/slice/count/capacity/isEmpty/clone/push/reserve/resize/clear/insert/append/map/contains/hash/equals; that list IS the surface, so nothing else is served here
+error E2015: <fragment>:8:14: Unsupported: `Array` member 'frobnicate' — P1.7 provides managed/get/set/first/last/pop/remove/slice/count/capacity/isEmpty/clone/push/reserve/resize/clear/insert/append/appendMemory/map/contains/hash/equals; that list IS the surface, so nothing else is served here
 ```
 
 <!-- test: error.unknown-set-method-in-value-position -->
@@ -245,7 +245,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:4:13: Unsupported: `__ManagedMemory` member 'frobnicate' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/elementSize/grow/append/slice/clear; that list IS the surface, so nothing else is served here
+error E2015: <fragment>:4:13: Unsupported: `__ManagedMemory` member 'frobnicate' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/elementSize/grow/toCString/makeCharFromBytes/append/slice/clear; that list IS the surface, so nothing else is served here
 ```
 
 <!-- test: error.buffer-only-method-on-an-array-in-value-position -->
@@ -264,7 +264,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:8:14: Unsupported: `Array` member 'grow' — P1.7 provides managed/get/set/first/last/pop/remove/slice/count/capacity/isEmpty/clone/push/reserve/resize/clear/insert/append/map/contains/hash/equals; that list IS the surface, so nothing else is served here
+error E2015: <fragment>:8:14: Unsupported: `Array` member 'grow' — P1.7 provides managed/get/set/first/last/pop/remove/slice/count/capacity/isEmpty/clone/push/reserve/resize/clear/insert/append/appendMemory/map/contains/hash/equals; that list IS the surface, so nothing else is served here
 ```
 
 <!-- test: error.array-void-mutator-in-value-position -->
@@ -620,6 +620,17 @@ error E3059: <fragment>:4:10: type mismatch: ''grow' does not return a value'
 ```
 
 <!-- test: error.buffer-try-append-in-value-position -->
+
+⚖ **`append` LEFT THIS ENUMERATION ON 2026-08-07 AND IS KEPT AS THE CASE THAT SAYS SO.** The four above it
+are void THROWING members, and a `try` on one is well-formed until the value position is asked about — which
+is the E3059 this block enumerates. The ruling that made the buffer's `append` NON-throwing
+(`ArrayRuntime.ArrAppendName`, and `managed-memory-methods.error.try-on-the-buffers-append` for the door)
+takes it out of that class: this program is now wrong about the `try` BEFORE it is wrong about the value.
+
+⚠ **AND THAT ORDER IS THE RIGHT ONE, WHICH IS THE ONLY REASON THIS IS AN EDIT AND NOT A REGRESSION.** Both
+complaints are true and `parseTry` raises both, E3055 first. `try` is what the author wrote OUTERMOST, and
+*"there is nothing here to catch"* is the fact that survives deleting the `let x =` — where E3059 would not
+survive deleting the `try`. The three void throwing siblings below are unaffected and still pin E3059.
 ```maxon
 function main() returns ExitCode
 	var mm = try __ManagedMemory.create(4, elementSize: 1) otherwise return 1
@@ -629,7 +640,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3059: <fragment>:5:10: type mismatch: ''append' does not return a value'
+error E3055: <fragment>:5:10: try requires a throwing function: this builtin call cannot fail
 ```
 
 <!-- test: error.file-try-delete-in-value-position -->

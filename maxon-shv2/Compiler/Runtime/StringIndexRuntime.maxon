@@ -16,15 +16,26 @@
 // What changes is the SHAPE only: shv2 reads no stdlib, so each helper is a hand-built `StdOp` graph in the
 // manner of `StringRuntime`/`GraphemeRuntime`.
 //
-// ⚠ **THE ONE THING DELIBERATELY NOT PORTED: THE `hasSingleByteGraphemes()` FAST PATH.** The stdlib
-// collapses `byteIndexToGraphemeIndex` and `graphemeOffsetToBytePos` to arithmetic when the string is
-// classified one-byte-per-grapheme (`grapheme.maxon:384-404`, `:408-424`). shv2's record carries
-// `isAscii@40`, which is a DIFFERENT predicate: shv2 honours GB3, so `"\r\n"` is ONE cluster in an
-// all-ASCII string (`GraphemeRuntime`'s divergence 1) and `charIdx == bytePos` is then FALSE for every
-// position after a CRLF. Taking the flag as a licence would be the reference's own `isAsciiFlag`
-// shortcut reintroduced one file over — the exact bug that made its `count()` and its iterator disagree.
-// `__gr_count` does not have the shortcut either, for the same reason, so the family is consistent: every
-// byte↔grapheme conversion in shv2 walks `__gr_end`.
+// ⭐⭐ **THE `hasSingleByteGraphemes()` FAST PATH IS THE CORPUS'S, IT IS REACHED FROM HERE, AND IT IS NOW
+// LIVE — THIS PARAGRAPH USED TO EXPLAIN WHY IT COULD NEVER BE.** The stdlib collapses
+// `byteIndexToGraphemeIndex` and `graphemeOffsetToBytePos` to arithmetic when the string is classified
+// one-byte-per-grapheme (`grapheme.maxon:384-404`, `:408-424`), and since the segmenter converged onto the
+// corpus (`GraphemeRuntime`'s header) these bodies CALL those very walks — so the shortcut was always
+// reachable from here; it simply never fired.
+//
+// ⚠ **WHAT MADE IT UNREACHABLE WAS A RECORD FIELD MEANING THE WRONG THING, AND THAT IS FIXED AT THE
+// FIELD.** This paragraph argued that the flag was "a DIFFERENT predicate" — that shv2 honours GB3, so
+// `"\r\n"` is ONE cluster in an all-ASCII string and `charIdx == bytePos` is then FALSE for every position
+// after a CRLF, and that taking the flag as a licence would reintroduce the reference's old `isAsciiFlag`
+// shortcut. **Every word of that was true of `isAscii@40` and none of it is true of what slot@40 holds
+// now**: `singleByteGraphemes@40` is CR-FREE as well as ASCII (`StringRuntime`'s declaration carries the
+// argument), so a string containing a CR has the flag CLEAR and never reaches the arithmetic at all. The
+// predicate and the licence are now the same statement, which is what the corpus always required of it —
+// *"that is applying a fact the string states about itself, not a second opinion about where clusters
+// end"* (`grapheme.maxon:349-353`).
+//
+// ⇒ Nothing here takes a shortcut of its own, and that is still the rule: every byte↔grapheme conversion
+// in shv2 walks the corpus, and the corpus alone decides when its own flag licenses arithmetic.
 
 // ⭐ **THE BOX'S FIELD OFFSETS AND ITS SIZE.** They are asserted against the registered `StructLayout`
 // (`SignatureIndex.stringIndexLayout`) rather than merely agreeing with it by inspection, because the
@@ -529,7 +540,7 @@ function buildStringIndexSlice(module StdModule)
 
 	let len = emitLoadField(module, block: entry, record: record, offset: StringLengthOffset, ids: ids)
 	let buf = emitLoadField(module, block: entry, record: record, offset: StringBufferOffset, ids: ids)
-	let isAscii = emitLoadField(module, block: entry, record: record, offset: StringIsAsciiOffset, ids: ids)
+	let singleByteGraphemes = emitLoadField(module, block: entry, record: record, offset: StringSingleByteGraphemesOffset, ids: ids)
 	let zero = emitConst(module, block: entry, value: 0, ids: ids)
 	let startNegative = emitCmp(module, block: entry, a: startPos, b: zero, pred: StdCmpPred.lt, ids: ids)
 	let inverted = emitCmp(module, block: entry, a: endPos, b: startPos, pred: StdCmpPred.lt, ids: ids)
@@ -541,7 +552,7 @@ function buildStringIndexSlice(module StdModule)
 
 	emitRuntimeAbort(module, func: func, block: badRange, abort: RuntimeAbort.stringSliceInvalidRange, ids: ids)
 
-	module.setTerminator(build, op: StdOp.ret(emitSliceSegment(module, block: build, srcBuf: buf, from: startPos, endPos: endPos, isAscii: isAscii, ids: ids)))
+	module.setTerminator(build, op: StdOp.ret(emitSliceSegment(module, block: build, srcBuf: buf, from: startPos, endPos: endPos, singleByteGraphemes: singleByteGraphemes, ids: ids)))
 
 	module.functions.push(func)
 end 'buildStringIndexSlice'

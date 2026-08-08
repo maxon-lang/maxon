@@ -2402,8 +2402,14 @@ end 'keywordNamesAPrimitiveType'
 // time that module grows one. E2015 is the code its two siblings already use for an unknown member on a
 // compiler-owned type — `parseStringStaticCall`'s unknown `String` static, and the *"'int' has no method
 // named 'make'"* of a builtin-conformance dispatch.
+// ⚠ **IT ASKS THE *QUALIFIER* PREDICATE, NOT THE IMPL ONE, AND THE TWO PARTED COMPANY AT W17.** This door
+// wants "does the compiler own `int.`?" — true of every member under it, resolvable or not, which is the
+// whole point of refusing here. `isBuiltinConformanceImplName` now answers the narrower "did the compiler
+// MINT this symbol?", so asking it would let `int.frobnicate` fall through to the reserved-callee gate and
+// be told about a `__` prefix it does not have — that is the first bullet above, re-measured as a live
+// regression (`parsable-interface/error.unknown-primitive-static`) rather than left as a hazard.
 function requirePrimitiveStaticIsResolvable(typeTok Token, memberTok Token, declaredCallee ByteArray) throws ParseError
-	if not isBuiltinConformanceImplName(declaredCallee) 'ordinaryQualifier'
+	if not isBuiltinConformanceQualifier(declaredCallee) 'ordinaryQualifier'
 		return
 	end 'ordinaryQualifier'
 
@@ -3674,6 +3680,12 @@ let StringByteAtOrPanicMethod = b"byteAtOrPanic"
 // path past the UAX #29 walk. See `dispatchStringMethod`'s arm for what shv2 answers and why.
 let StringHasSingleByteGraphemesMethod = b"hasSingleByteGraphemes"
 
+// ⭐ **THE CORPUS'S NAME FOR SLOT@40, READ BACK RATHER THAN INVENTED** (`stdlib/String.maxon:86`). It is
+// what `emitFusedWrapperLiteral` finds the flag's VALUE by, so it is the corpus's spelling or the flag is
+// silently classified instead of used. `type Character` declares no such field, which is not an error but
+// the very thing this lookup distinguishes — see that function.
+let SingleByteGraphemesFieldName = b"singleByteGraphemesFlag"
+
 let StringReplaceFirstMethod = b"replaceFirst"
 let CodepointViewMethod = b"codepoints"
 let Utf16ViewMethod = b"utf16"
@@ -3942,8 +3954,10 @@ let ClearMethod = b"clear"
 // A rename that reached one copy and not the other was a WRONG ANSWER with no diagnostic: `Array.count`
 // and `Set.count` would answer to different tokens, each dispatcher still compiling.
 //
-// ⚠ `SliceMethod` and `AppendMethod` are among the throwing seven and so live in `SignatureIndex` — see the
-// roster block above, which is where that reason is stated. `clone` left this block for the same kind of
+// ⚠ `SliceMethod` and `AppendMethod` live in `SignatureIndex` — see the roster block above, which is where
+// that reason is stated. `slice` is among the throwing seven a source-method map must name; `append` was
+// until the 2026-08-07 ruling made the buffer's `append` non-throwing, and stays there on that block's
+// standing rule (one spelling, whichever surfaces serve it). `clone` left this block for the same kind of
 // reason and the block's own rule: it is `Cloneable`'s method name, `IrInterface` already declares the
 // protocol with it and now advertises it, so the two files held one spelling twice — see
 // `IrInterface.CloneMethodName`, which every dispatcher here reads.
@@ -4038,8 +4052,31 @@ function arrayMethodMutatesReceiver(name ByteArray, isManagedMemory bool) return
 		return true
 	end 'managedMemoryMutator'
 
-	return name.equals(ArrayPushMethod) or name.equals(ArraySetMethod) or name.equals(InsertMethod) or name.equals(AppendMethod) or name.equals(ArrayReserveMethod) or name.equals(ArrayResizeMethod) or name.equals(ClearMethod) or name.equals(ArrayPopMethod) or name.equals(RemoveMethod)
+	// ⚠ **`appendMemory` IS HERE FOR THE REASON `append` IS, AND ITS ABSENCE WOULD NOT HAVE BEEN A REFUSAL —
+	// IT WOULD HAVE BEEN A SILENT WRITE.** It copies the source's elements into the receiver's own storage,
+	// so E3019, E3070 and the storage-written mask must all see it; served as a member but left off this
+	// answer, `let a = [1, 2]` followed by `a.appendMemory(b.managed)` COMPILES and writes through an
+	// immutable binding (`arrays.error.appendMemory-on-a-let-array`, verified red before this line).
+	return name.equals(ArrayPushMethod) or name.equals(ArraySetMethod) or name.equals(InsertMethod) or name.equals(AppendMethod) or name.equals(AppendMemoryMethod) or name.equals(ArrayReserveMethod) or name.equals(ArrayResizeMethod) or name.equals(ClearMethod) or name.equals(ArrayPopMethod) or name.equals(RemoveMethod)
 end 'arrayMethodMutatesReceiver'
+
+// ⭐ **WHICH PARAMETER THE APPEND REFUSAL NAMES — READ OFF THE SPELLING THE AUTHOR WROTE.** One operation, two
+// entry points, two formals: `stdlib/Array.maxon:261` declares `append(other Self)` and `:272` declares
+// `appendMemory(source ElementMemory)`. The emission and the argument RULE are genuinely folded (there is one
+// of each), so the parameter name is the ONE thing the fold would otherwise lose — and it is the one part of
+// the sentence a reader can act on.
+//
+// ⚠ **IT IS THE `Array` SURFACE'S QUESTION ALONE**, because both declarations are `Array`'s. The BUFFER
+// serves only `append` — `appendMemory` is not a `__ManagedMemory` member and its receiver is refused by the
+// roster gate — so `requireAppendArg`'s buffer sentence names the one formal its own signature declares
+// rather than asking a question with a single answer.
+function appendArgParamName(methodName ByteArray) returns ByteArray
+	if methodName.equals(AppendMemoryMethod) 'memorySpelling'
+		return ArrayAppendMemorySourceParamName
+	end 'memorySpelling'
+
+	return ManagedMemoryOtherParamName
+end 'appendArgParamName'
 
 // ⭐⭐ **WHICH MEMBERS THE `__ManagedMemory` BUFFER SURFACE HAS — THE ONE LIST ITS DISPATCH CONSULTS AND
 // ITS REFUSAL RENDERS (D11b).** ⚖ **USER RULING, 2026-07-31: the buffer's legitimate surface is EXACTLY
@@ -4065,12 +4102,19 @@ end 'arrayMethodMutatesReceiver'
 // it is provided. The pairing cannot be verified at install time (an arm is a control-flow position, not an
 // entry in a table something can enumerate), so the check sits at the one moment it is observable.
 //
-// ⚠ **`remove`, `swap`, `shiftLeft`/`shiftRight` and the cstring/cursor members are ABSENT ON PURPOSE.**
+// ⚠ **`remove`, `swap`, `shiftLeft`/`shiftRight`, `fromCString` and `createCursor` are ABSENT ON PURPOSE.**
 // Every one is a real `__ManagedMemory` member in both references (bootstrap `2-Parser.cs:1481-1516`, v1
 // `LowerMaxonToStd.maxon:1618-1660`) and none is BUILT here — the only caller of `remove`/`swap`/`shiftRight`
 // anywhere is `stdlib/Array.maxon`, which is not a whitelisted module and which shv2 cannot compile at all,
-// and the cstring family takes a type shv2 has no producer for. Each arrives with the rung that builds it,
-// and **that rung adds its line HERE and has nothing else to remember.**
+// and the remaining cstring/cursor pair takes types shv2 has no producer for. Each arrives with the rung that
+// builds it, and **that rung adds its line HERE and has nothing else to remember.**
+//
+// ⚠ **WHAT THE LIST RECORDS IS WHAT THE SURFACE *HAS*, NEVER WHO MAY REACH IT, AND TWO ENTRIES DEPEND ON THAT
+// SPLIT.** `toCString` and `makeCharFromBytes` are served — the corpus calls both — but only to a file under
+// `stdlib/` (`requireStdlibOnlyBufferMethod`, which carries the two memory-safety measurements that made the
+// gate necessary). Folding provenance into this roster would make the refusal for a member the surface does
+// not have and the refusal for one you may not reach read as the same sentence; `dispatchStringMethod` keeps
+// its roster and its stdlib-only gate apart one surface over, for the same reason.
 //
 // ⭐⭐ **THAT LAST CLAUSE USED TO BE FALSE, AND `elementSize` IS WHAT PROVED IT.** The refusal carried a
 // hand-written `are not built` tail LISTING these names, so a rung had a standing obligation to strike its
@@ -4078,6 +4122,16 @@ end 'arrayMethodMutatesReceiver'
 // tail would have claimed a member the roster right above it now provides, across 21 committed pins. The
 // tail is gone (`rosterRefusalSentence`, which carries the measurement): the roster IS the claim, so adding a
 // name here is the whole edit and cannot leave a sentence contradicting itself.
+//
+// ⚠ **`appendMemory` IS ABSENT FOR A DIFFERENT REASON AGAIN, AND IT IS SETTLED: IT IS NOT A BUFFER MEMBER AT
+// ALL.** Unlike the seven above, it is not a member awaiting its rung — it is declared on `Array`
+// (`stdlib/Array.maxon:272`) and nowhere else: not in the corpus, not in v1's member table
+// (`LowerMaxonToStd.maxon:1618-1660`), not in the bootstrap's (`2-Parser.cs:1470-1512`), and no corpus caller
+// writes `mm.appendMemory(…)`. It was briefly listed here because the envelope collapse makes the two surfaces
+// ONE record, so serving it cost nothing and refused nothing — which is exactly the `length`/`count` rule (a
+// shared EMISSION is not a shared NAME, the reason `mm.count()` is refused) with its sign flipped: the buffer
+// advertising a member the language does not give it, the direction `arraySurfaceMemberNames`' header names as
+// D11's defect. `error.buffer-has-no-appendMemory` is the program.
 function bufferSurfaceMemberNames() returns ByteArrayArray
 	var names = ByteArrayArray.create()
 	names.push(ManagedMemoryLengthMethod)
@@ -4089,6 +4143,8 @@ function bufferSurfaceMemberNames() returns ByteArrayArray
 	names.push(ByteAtMethod)
 	names.push(ManagedMemoryElementSizeMethod)
 	names.push(ManagedMemoryGrowMethod)
+	names.push(ManagedMemoryToCStringMethod)
+	names.push(ManagedMemoryMakeCharFromBytesMethod)
 	names.push(AppendMethod)
 	names.push(SliceMethod)
 	names.push(ClearMethod)
@@ -4145,6 +4201,10 @@ function arraySurfaceMemberNames() returns ByteArrayArray
 	names.push(ClearMethod)
 	names.push(InsertMethod)
 	names.push(AppendMethod)
+	// ⚠ **THE `Array` SURFACE'S OWN, AND THE ONE THE CORPUS ACTUALLY DECLARES** (`stdlib/Array.maxon:272`).
+	// It sits beside `append` because `append` is its CALLER — `:262`'s whole body is
+	// `appendMemory(other.managed)` — so the roster shows the pair in the order the corpus builds them.
+	names.push(AppendMemoryMethod)
 	names.push(MapMethod)
 	// ⚠ **`contains` IS ON THE SURFACE UNCONDITIONALLY AND AVAILABLE CONDITIONALLY, and the two answers belong
 	// at different doors (conditional-extensions).** A roster says what the dispatch SERVES; whether THIS
@@ -4269,6 +4329,7 @@ function stringSurfaceMemberNames() returns ByteArrayArray
 	names.push(ByteAtMethod)
 	names.push(StringByteAtOrPanicMethod)
 	names.push(StringHasSingleByteGraphemesMethod)
+	names.push(ManagedMemorySetByteMethod)
 	for conformanceMethod in builtinConformerMethodNameList(StringConformerName) 'eachConformance'
 		names.push(conformanceMethod)
 	end 'eachConformance'
@@ -4313,9 +4374,15 @@ end 'stringIndexSurfaceMemberNames'
 // false, as its own header records.
 //
 // ⚠ **NOTHING IS ABSENT FROM IT THAT SHV2 OWES.** Unlike the five surfaces above, whose rosters a later rung
-// extends, this list is COMPLETE against `stdlib/String.maxon:114,119`: `fromOwnedBytes` is unexported by the
-// reference itself and `from(codepoints)` does not exist there. So a rung adds a line here only if the
-// REFERENCE gains a static.
+// extends, this list is COMPLETE against the EXPORTED pair at `stdlib/String.maxon:114,119`, and
+// `from(codepoints)` does not exist there at all. So a rung adds a line here only if shv2 comes to SERVE a
+// further static of its own.
+//
+// ⚠⚠ **AND A STATIC MISSING FROM IT IS NO LONGER A REFUSAL — `parseStringStaticCall` PUTS IT TO THE CORPUS**
+// (the static half of W17's fall-through). `fromOwnedBytes` is the case that built that door: the corpus
+// declares it at `:136` and does NOT export it, and this list answering alone refused `stdlib/String.maxon`
+// for naming its own declaration. It stays off this list because a roster states what shv2 SYNTHESIZES, and
+// whether that static may be named is the DECLARATION's `export` keyword to say, not a list's.
 function stringStaticMemberNames() returns ByteArrayArray
 	var names = ByteArrayArray.create()
 	names.push(FromMethod)
@@ -13075,14 +13142,15 @@ export type Parser
 	// stamps the field type with (`joinQualifiedName`), so the field's stored `named("Container.ElementArray")`
 	// and this `genericAliases` key are one string.
 	//
-	// ⚠ **IT RE-KEYS AND DOES NOTHING ELSE — `renamedTo`, not a rebuild through `create`.** A nested alias is
-	// a declaration a person wrote in a file, and every fact `readGenericInstanceAlias` captured about it (its
-	// declaring FILE above all, but also its visibility, its `Vector` size and its anchors) is as true of it
-	// under the qualified name as under the bare one. Rebuilding took `create`'s defaults for all of them and
-	// filed the entry as declared by the file `""`, which `deriveInstanceDisplayNames` then panicked on — see
-	// `GenericAliasEntry.renamedTo`.
+	// ⚠ **IT RE-KEYS AND RECORDS THE SCOPING — `scopedToEnclosingType`, not a rebuild through `create`.** A
+	// nested alias is a declaration a person wrote in a file, and every fact `readGenericInstanceAlias`
+	// captured about it (its declaring FILE above all, but also its visibility, its `Vector` size and its
+	// anchors) is as true of it under the qualified name as under the bare one. Rebuilding took `create`'s
+	// defaults for all of them and filed the entry as declared by the file `""`, which
+	// `deriveInstanceDisplayNames` then panicked on — see `GenericAliasEntry.scopedToEnclosingType`. The ONE
+	// thing that does change beside the name is `typeScoped`, the fact this call site is the sole evidence of.
 	function qualifiedInnerGenericAlias(entry GenericAliasEntry) returns GenericAliasEntry
-		return entry.renamedTo(joinQualifiedName(self.enclosingType, member: entry.aliasName))
+		return entry.scopedToEnclosingType(joinQualifiedName(self.enclosingType, member: entry.aliasName))
 	end 'qualifiedInnerGenericAlias'
 
 	// ⭐ **A GENERIC-INSTANCE TYPEALIAS (P1.6-A)** — `typealias IntBox = Box with Integer`. The cursor
@@ -16841,21 +16909,44 @@ export type Parser
 				return MaxonType.named(self.artifact.typeNames.intern(qualified))
 			end 'qualifiedMember'
 
-			// The `String` BUILTIN — recognized SYNTACTICALLY, like `Self` below, so it needs no registry
-			// and both the declaration sweep and the real parse answer it identically. It resolves to its
-			// own `MaxonType.string` arm (NEVER `named`), which is what tags a `String` parameter's value
-			// `string` at parse time. See `StringConformerName`.
-			if name.equals(StringConformerName) 'stringBuiltin'
-				return MaxonType.string
-			end 'stringBuiltin'
-			// The `Character` BUILTIN (P1.8 slice B) — recognized SYNTACTICALLY, exactly as `String` is
-			// one line up and for the identical reason: it needs no registry, so the tolerant declaration
-			// sweep and the real parse answer it the same way. It resolves to its own `MaxonType.character`
-			// arm (NEVER `named`), which is what tags a `Character` parameter's value `character` at parse
-			// time and keeps every `named`-reading rule from treating a record pointer as a ranged int.
-			if name.equals(CharacterConformerName) 'characterBuiltin'
-				return MaxonType.character
-			end 'characterBuiltin'
+			// The `String` and `Character` BUILTINS — recognized SYNTACTICALLY, like `Self` below, so they
+			// need no registry and both the declaration sweep and the real parse answer them identically.
+			// Each resolves to its OWN `MaxonType` arm (`string` / `character`, NEVER `named`), which is what
+			// tags a `String`/`Character` parameter's value at parse time and keeps every `named`-reading rule
+			// from treating a record pointer as a ranged int.
+			//
+			// ⭐ The two names are ONE TABLE (`byteRecordTagOfTypeName`) rather than an arm each, because
+			// `enclosingSelfType` must reach the SAME answer for the SAME name and for a rung did not — see
+			// there, and see the table for the 25 wrong rejections that cost.
+			let byteRecord = byteRecordTagOfTypeName(name)
+			if byteRecord != ValueTypeTag.unresolved 'builtinByteRecord'
+				return maxonTypeOfTag(byteRecord, nameId: UnnamedTypeId)
+			end 'builtinByteRecord'
+			// ⭐⭐ **`CharacterSet` NAMES THE COMPILER'S OWN LAYOUT, WHICH IS REGISTERED UNDER THE RESERVED
+			// SPELLING — AND THE CONSEQUENCE THAT USED TO FOLLOW FROM THAT WAS NEVER FORCED (W17).**
+			// `CharacterSetTypeName`'s header records it as settled: *"a `CharacterSet` cannot cross a function
+			// boundary, because a parameter or return type would have to NAME it"*. That is true of a lookup
+			// through the ordinary struct registry, where `containsStruct("CharacterSet")` is FALSE by design;
+			// it is not true of the language. **The reservation exists to stop a USER declaration contesting
+			// the bucket, and `isCompilerOwnedTypeName` already does that on its own** — so resolving the
+			// user-facing spelling to the reserved layout takes nothing away from it and is the door the
+			// reservation was protecting all along.
+			//
+			// ⚠ **IT HAD TO STOP BEING TRUE HERE, BECAUSE `stdlib/String.maxon` NAMES IT AT FOUR PARAMETERS**
+			// — `trim`/`trimStart`/`trimEnd` and the two private scans all take `chars CharacterSet`. Listing
+			// that module without this reported **`E3011 Unknown type 'CharacterSet'`, five times**, for a type
+			// the compiler ships.
+			//
+			// ⚠ **AND IT IS WHAT KEEPS `stdlib/CharacterSet.maxon` OFF THE WHITELIST, DELIBERATELY.** Listing
+			// the corpus module would land ITS layout under the BARE name while this one keeps `__CharacterSet`
+			// — *"one concept has two layouts under two keys"*, which is the hazard `SignatureIndex.recordStruct`'s
+			// header names as the listing rung's question to settle. Settled the other way: ONE layout, the
+			// compiler's, reachable under the name the corpus writes. (That module also needs `static let`
+			// fields with initializers, which shv2's parser does not have — so nothing is lost by not listing
+			// it, and the two facts are independent.)
+			if name.equals(CharacterSetBuiltinName) 'characterSetBuiltin'
+				return MaxonType.structRef(self.artifact.typeNames.intern(CharacterSetTypeName))
+			end 'characterSetBuiltin'
 			// The type's own name inside its own body means what `Self` means — for an `enum Toggle`'s
 			// `function flip() returns Toggle` exactly as for a `type Point`'s `returns Point`. Both
 			// spellings are legal Maxon and they must not resolve differently, because a struct's own name
@@ -17039,6 +17130,25 @@ export type Parser
 			try self.consume(TokenKind.float)
 			return MaxonType.float
 		end 'primFloat'
+		// ⭐⭐ **`cstring` — A NUL-TERMINATED BYTE POINTER, AND IT RESOLVES TO A MACHINE WORD RATHER THAN TO A
+		// TAG OF ITS OWN.** The Lexer has carried the keyword since P1.2 (its help text already tells an author
+		// to *"produce one with `String.cstr()` or `__ManagedMemory.toCString()`"*) while `parseTypeReference`
+		// had no arm for it, so the one declaration in the corpus that names it —
+		// `stdlib/String.maxon:194`'s `export function cstr() returns cstring` — was `E2010 Expected 'a type'`.
+		//
+		// ⚠ **WHY A WORD AND NOT A `ValueTypeTag` OF ITS OWN, STATED SO THE NEXT READER CAN OVERTURN IT.** A
+		// `cstring` IS a raw address: it carries no length, no capacity and no ownership, and shv2 already
+		// types every such address `integer` — `buffer@0` out of a record, `parent@32`, a `functionRef`'s code
+		// pointer. A distinct tag would buy one thing, which is refusing `cstr() + 1`; it would cost an arm in
+		// every exhaustive `ValueTypeTag` match across the three backends, for a type whose ONLY consumer is a
+		// `__Builtins.*` parameter that immediately `strlen`s it. **What it does NOT buy is safety**: the
+		// pointer's lifetime is the buffer's either way, and no tag expresses that.
+		// ⇒ The distinction is deliberately not modelled, and the day a builtin declares a `cstring` PARAMETER
+		// that must reject an ordinary int is the day this becomes a tag.
+		if self.at(TokenKind.cstring) 'cstringPointer'
+			try self.consume(TokenKind.cstring)
+			return MaxonType.integer
+		end 'cstringPointer'
 		let tok = self.current()
 		throw ParseError.unexpectedToken("a type", got: tokenDisplayText(tok), line: tok.line, column: tok.column)
 	end 'parseTypeReference'
@@ -17055,8 +17165,23 @@ export type Parser
 	//
 	// The kind is read off `enclosingTypeIsEnum` rather than the signature index for that field's stated
 	// reason: this routine answers in the tolerant SWEEP too, where the enum being declared is not folded.
+	//
+	// ⭐⭐ **A BYTE RECORD IS NEITHER, AND ASKING FIRST IS THE WHOLE POINT (W17).** The corpus's `type String`
+	// and `type Character` declare the two types the compiler already owns, so `Self` — and the implicit
+	// receiver every instance method of those bodies carries — is the BUILTIN, not a struct that happens to
+	// bear its name. `parseTypeReference` settles the written spelling `String` that way one routine over
+	// (`byteRecordTagOfTypeName`, which this asks so the two cannot answer one name two ways); without this
+	// arm `self` reached a `s String` parameter as a `structRef` and was refused against its own type. The
+	// table carries the measurement.
 	function enclosingSelfType(anchor Token) returns MaxonType throws ParseError
-		let id = self.artifact.typeNames.intern(try self.requireEnclosingTypeName(anchor))
+		let name = try self.requireEnclosingTypeName(anchor)
+
+		let byteRecord = byteRecordTagOfTypeName(name)
+		if byteRecord != ValueTypeTag.unresolved 'theBuiltinByteRecord'
+			return maxonTypeOfTag(byteRecord, nameId: UnnamedTypeId)
+		end 'theBuiltinByteRecord'
+
+		let id = self.artifact.typeNames.intern(name)
 		return MaxonType.named(id) if self.enclosingTypeIsEnum else MaxonType.structRef(id)
 	end 'enclosingSelfType'
 
@@ -17136,6 +17261,59 @@ export type Parser
 	// ⚠ At `parseTypeReference` the first two tests are already settled by the arms above it and are asked
 	// again only so that the three doors share ONE predicate: a fourth clause added here reaches every door
 	// that resolves a written name, which is exactly what the arm order could not guarantee.
+	// ⭐⭐ **DOES THIS WRITTEN SPELLING DENOTE THE `__ManagedMemory` BUFFER? — THE LITERAL NAME, A FILE-SCOPE
+	// ALIAS, *OR* AN INNER ONE.** The third is what `stdlib/Character.maxon:172` needs: its
+	// `typealias ByteMemory = __ManagedMemory with Byte` is declared INSIDE `type Character`, so the registry
+	// holds it under `Character.ByteMemory` while the call site writes the bare `ByteMemory`, and a lookup of
+	// the bare name misses. `ByteMemory.create(1, 1)` then routed to `parseArrayStaticCall` and met
+	// `E2010 Expected ')' but got '1'` against `Array.create()`'s no arguments.
+	//
+	// ⚠ **IT QUALIFIES THE SAME WAY `parseTypeReference` DOES, AND THAT IS THE WHOLE POINT** — one
+	// construction of an inner alias's registry key (`joinQualifiedName(enclosingType, member:)`), gated by
+	// the one predicate that says a bare name IS an inner alias here. A second spelling of that join is how a
+	// type position and a call position come to disagree about what one written word denotes.
+	// ⚠ **THE INNER-ALIAS PROBE IS GATED ON `enclosingType` BEING NON-EMPTY, NOT ON `namesInnerAliasHere`.**
+	// The bare probe comes first because a file-scope alias is the common case; the join is skipped at file
+	// scope, where `enclosingType` is empty and the key it would build cannot exist. `namesInnerAliasHere`
+	// would be the stricter test and is the wrong one HERE: it consults the body walk's live alias set, which
+	// a DECLARATION position (a parameter, a return clause) is read outside of.
+	// ⚠⚠ **THE ALIAS REGISTRIES ARE READ IN THE REAL PARSE ONLY, ON `allFilesFolded` (W49) — the gate
+	// `parseTypeReference`'s own alias arms sit behind, arriving here for the same two reasons.**
+	//   1. **IT WAS A PROPERTY OF THE DISK.** Both sets are written by `recordGenericAlias`, which `foldFile`
+	//      calls when a file's token walk ENDS — so during the sweep an alias declared in the file being swept
+	//      always read as absent while one declared in a file the walk reached EARLIER did not, and the SWEEP's
+	//      answer is the one the whole-program column stores.
+	//   2. **AND THE STORED ANSWER IS NOW REDUNDANT FOR AN ALIAS, WHICH IS WHAT MAKES THE GATE FREE.** A2m's
+	//      warning against suppressing the root here was measured BEFORE A3e gated `parseTypeReference` on
+	//      `allFilesFolded`; since that gate, a swept alias-typed position keeps its bare `named` in EVERY file
+	//      order, so `ProgramSignatures.derivedAliasSurfaceBits` answers for it at the read door in every
+	//      order. What the sweep stores for an alias could therefore only ever AGREE with the derivation or be
+	//      WRONG — and it was wrong, because it read a whole-program set for a FILE-SCOPED name.
+	// ⇒ The sweep answers from the TOKENS ALONE (the reserved spelling, which is a token fact and needs no
+	// registry), and the doors only the real parse reaches — a PARAMETER, a static call — ask the registries
+	// where they are complete and can be scoped.
+	//
+	// ⚠ **AND THE READ IS SCOPED TO THIS FILE.** A plain `typealias` is file-local, so two files may each
+	// declare `B` and mean different things; these sets are keyed by the bare name with no file in the key.
+	// MEASURED in both file orders: with `typealias B = __ManagedMemory with Byte` in one file and
+	// `typealias B = Array with Int` in another, the second file's own `B` wore the BUFFER's surface — its
+	// parameter refused `count`, and its `B.create()` routed to the buffer's two-argument static.
+	function spellingDenotesBufferSurface(spelling ByteArray) returns bool
+		if spelling.equals(ManagedMemoryTypeName) 'spelledTheReservedNameItself'
+			return true
+		end 'spelledTheReservedNameItself'
+
+		if not self.signatures.allFilesFolded 'sweepAnswersFromTokensAlone'
+			return false
+		end 'sweepAnswersFromTokensAlone'
+
+		if self.signatures.aliasDenotesBufferSurface(spelling, readerFilePath: self.filePath) 'aFileScopeAlias'
+			return true
+		end 'aFileScopeAlias'
+
+		return not self.enclosingType.isEmpty() and self.signatures.aliasDenotesBufferSurface(joinQualifiedName(self.enclosingType, member: spelling), readerFilePath: self.filePath)
+	end 'spellingDenotesBufferSurface'
+
 	function namesInnerAliasHere(name ByteArray) returns bool
 		if self.namesEnclosingType(name) 'ownName'
 			return false
@@ -33918,7 +34096,7 @@ export type Parser
 		self.emitStoreStringField(result, offset: StringCapacityOffset, value: capacity, range: range)
 		let elementSize = self.emitLiteral(StringElementSize, valueType: MaxonType.integer, range: range)
 		self.emitStoreStringField(result, offset: StringElementSizeOffset, value: elementSize, range: range)
-		// `isAscii@40 = 0` (conservative) comes from the slab's zeroing — grapheme/ascii refinement is P1.7.
+		// `singleByteGraphemes@40 = 0` (conservative) comes from the slab's zeroing.
 
 		// Free the owned scratch now its bytes are copied. A `__mm_decref` (rc 0 → `__mm_free`), never a raw
 		// free, so the leak counter stays balanced — the same door `emitScopeDrops` drops through.
@@ -33965,7 +34143,7 @@ export type Parser
 	end 'emitLoadStringField'
 
 	// Store an 8-byte field of a String record — the mirror of `emitLoadStringField`, the one place
-	// `emitStringInterp` writes the fused record's six fields (five explicitly; `isAscii@40` rides the
+	// `emitStringInterp` writes the fused record's six fields (five explicitly; `singleByteGraphemes@40` rides the
 	// slab's zeroing).
 	function emitStoreStringField(rec ValueId, offset ByteOffset, value ValueId, range SourceRange)
 		self.emitIndirectStore(rec, offset: offset, value: value, storageType: MaxonType.integer, range: range)
@@ -34683,6 +34861,15 @@ export type Parser
 	// cross-call consume). The box becomes the field's sole owner, and its `__destruct_<Struct>` cascade
 	// drops the field once when the box is dropped.
 	function emitStructLiteral(layout StructLayout, fieldValues ValueIdArray, fieldBareLocal BoolArray, anchor Token, range SourceRange) returns ValueId throws ParseError
+		// ⭐⭐ **A FUSED WRAPPER'S LITERAL IS NOT A STRUCT LITERAL, AND THE LOOP BELOW WOULD CORRUPT IT.**
+		// `type String`'s `managed` is embedded whole at offset 0 (`StructLayout.isInlineManagedField`), so
+		// offset 0 is the RECORD'S OWN `buffer@0` — the ordinary field store would put a `__ManagedMemory`
+		// POINTER there and every later read would take that pointer for a byte buffer. The wrapper's record
+		// is built by its own producer instead.
+		if layout.conformsToBuiltinManagedWrapper() 'fusedWrapper'
+			return try self.emitFusedWrapperLiteral(layout, fieldValues: fieldValues, anchor: anchor, range: range)
+		end 'fusedWrapper'
+
 		let box = self.emitOwnedStructBox(layout, range: range)
 
 		for i in 0 upto layout.fieldCount() 'eachField'
@@ -34704,6 +34891,102 @@ export type Parser
 	// value-semantics copy, P1.10), because a second copy of the sequence is how a change to what a record
 	// costs — a header, an alignment, a different allocator door — reaches one producer and not the other,
 	// and a box allocated without the enrolment simply leaks (exit 101).
+	// ⭐⭐ **BUILD A FUSED WRAPPER'S RECORD — `String{managed: X, singleByteGraphemesFlag: F}` and
+	// `Character{managed: X}` (THE ENVELOPE COLLAPSE, W17).** The result IS the 48-byte byte record, so its
+	// value tag is `string`/`character` and NOT `structRef`: that is the whole of what closed
+	// `E3005 Cannot return 'struct' from function declared to return 'String'` at `stdlib/String.maxon:115`,
+	// and it is not a cast — a corpus `String` and shv2's builtin `String` are one type with one layout,
+	// which is what convergence MEANS.
+	//
+	// ⚠ **THE FLAG IS OPTIONAL AND ITS ABSENCE IS `Character`'s CASE, NOT AN ERROR.** `type Character`
+	// declares `managed` alone, so there is no flag value to pass and the bytes must be classified instead —
+	// which is exactly `__str_from_bytes`. Two producers, chosen by whether the declaration HAS the field,
+	// rather than one producer with a sentinel meaning "scan it yourself".
+	//
+	// ⚠ **`BuiltinArrayLiteral` IS REFUSED RATHER THAN GUESSED.** It is the third marker and its conformer
+	// is `stdlib/Array.maxon`, which is unlisted and which shv2 serves through a synthesized surface with a
+	// different record (`ArrayRuntime`'s `element_destroy@40` where a String keeps its flag). Producing a
+	// `string`-tagged value for it would be a silent wrong answer at the one slot the two records disagree
+	// on; listing that module is its own rung and this is the door it will come through.
+	function emitFusedWrapperLiteral(layout StructLayout, fieldValues ValueIdArray, anchor Token, range SourceRange) returns ValueId throws ParseError
+		let tag = try self.requireFusedWrapperTag(layout, anchor: anchor)
+
+		let managedIndex = layout.inlineManagedFieldIndex()
+		if managedIndex >= layout.fieldCount() 'noManagedField'
+			// A wrapper conformer with no `managed` field declares itself the compiler's byte record and then
+			// does not carry one. Nothing in the corpus does this; a stdlib edit that did would otherwise
+			// reach `fieldValues.get` past its end.
+			throw ParseError.unsupported("`{String.from(layout.name)}` names a builtin literal marker, so its record is the fused byte record, but it declares no `managed` field for that record's buffer to come from", line: anchor.line, column: anchor.column)
+		end 'noManagedField'
+
+		let source = try fieldValues.get(managedIndex) otherwise panic("emitFusedWrapperLiteral: fieldValues.get OOB at {managedIndex} — the column is sized to the layout's field count")
+
+		let flagIndex = layout.indexOfField(SingleByteGraphemesFieldName)
+		if flagIndex >= layout.fieldCount() 'classifiesItsOwnBytes'
+			return self.emitOwnedRuntimeResult(StrFromBytesName, args: singletonArgs(source), resultTag: tag, resultNameId: self.fusedWrapperNameId(tag, layout: layout), range: range)
+		end 'classifiesItsOwnBytes'
+
+		let flag = try fieldValues.get(flagIndex) otherwise panic("emitFusedWrapperLiteral: fieldValues.get OOB at {flagIndex} — the column is sized to the layout's field count")
+		return self.emitOwnedRuntimeResult(StrOfBufferName, args: pairArgs(source, second: flag), resultTag: tag, resultNameId: self.fusedWrapperNameId(tag, layout: layout), range: range)
+	end 'emitFusedWrapperLiteral'
+
+	// A byte-record tag carries no name (`String` and `Character` are their own `MaxonType` arms); a
+	// `structRef` is nothing BUT its name, and `p.flag` on the result needs it to find the layout. One place
+	// decides, so the two producers above cannot disagree about which values carry one.
+	function fusedWrapperNameId(tag ValueTypeTag, layout StructLayout) returns TypeNameId
+		if tag == ValueTypeTag.structRef 'nominal'
+			return self.artifact.typeNames.intern(layout.name)
+		end 'nominal'
+		return UnnamedTypeId
+	end 'fusedWrapperNameId'
+
+	// ⭐⭐ **WHICH TAG A FUSED LITERAL PRODUCES — DECIDED BY THE TYPE'S NAME, AND A NAME THE COMPILER DOES NOT
+	// OWN THE RECORD FOR IS REFUSED OUTRIGHT.** The marker cannot decide it: keying on the marker alone gave
+	// EVERY `BuiltinStringLiteral` conformer the `string` tag, so a type of any other name got a `string`-tagged
+	// value out of its own `Self{…}` while `returns Self` still resolved to its struct —
+	// `E3005 Cannot return 'String' from function declared to return 'struct'`, measured on a corpus-provenanced
+	// probe.
+	//
+	// ⚠⚠ **AND KEYING ON THE NAME WHILE STILL BUILDING THE RECORD IS THE OTHER HALF OF THE SAME DEFECT, WHICH
+	// IS WHY THIS REFUSES RATHER THAN FALLING BACK TO `structRef`.** A conformer of any other name was handed a
+	// value whose BYTES are the fused byte record's and whose IDENTITY is a struct's, and the three consumers of
+	// that value each read it as the thing it is not — measured, all three, on ordinary user programs:
+	//   * **Construction DISCARDS every field the fused record has no slot for.** `emitFusedWrapperLiteral`
+	//     takes `managed` as its source and `singleByteGraphemesFlag` as its flag and passes on nothing else, so
+	//     a conformer whose second field is named anything else reaches `__str_from_bytes`, which CLASSIFIES the
+	//     bytes and writes its OWN answer at @40 — the offset that field occupies. `Self{flag: false}` read
+	//     back **TRUE**: exit 7 on a program whose only literal wrote `false`, no fault, no leak, no diagnostic.
+	//   * **The DROP is `__destruct_<T>`**, built from the DECLARED field list rather than from the record that
+	//     was actually built, so a third field is loaded from past the 48-byte record's end and handed to
+	//     `__str_decref`: **0xC0000005**.
+	//   * **The CLONE is `__clone_<T>`**, built from the identical list, and faults identically.
+	// There is no tag that fixes this: the value is one record and two descriptions of it. The DECLARATION
+	// stays legal (its layout is a real answer, which is what `sizeof` reports) and the CONSTRUCTION is refused,
+	// which is exactly the arrangement `BuiltinArrayLiteral` has always had here — its own arm is GONE, folded
+	// into this one, because it was the same refusal for a narrower reason. (`BuiltinArrayLiteral`'s record
+	// disagrees one slot further still: it keeps a per-element destructor at @40 where a String keeps its
+	// grapheme flag, and shv2 serves `Array` through a synthesized surface rather than from
+	// `stdlib/Array.maxon`, which is unlisted.)
+	//
+	// ⇒ Only the two names the compiler already owns denote a builtin byte record: `String` and `Character`
+	// are on `TypeResolution.isCompilerOwnedTypeName`, which is what guarantees no USER file can mint one, so a
+	// layout carrying one of those names IS the corpus's own declaration — and its values are tagged
+	// `string`/`character` and dropped through `__str_decref`, never through a struct cascade.
+	//
+	// The two byte-record names get DISTINCT tags for `IrInterface.CharacterConformerName`'s stated reason: a
+	// `Character` and a `String` share one representation and are told apart only by their type — and the
+	// name→tag decision is `byteRecordTagOfTypeName`'s, shared with the two type-reference doors so a literal's
+	// tag and its declared type's tag are one answer. That same call is the ADMISSION test here, so the set of
+	// names that may be constructed and the set that may be REFERENCED cannot drift apart.
+	function requireFusedWrapperTag(layout StructLayout, anchor Token) returns ValueTypeTag throws ParseError
+		let byteRecord = byteRecordTagOfTypeName(layout.name)
+		if byteRecord != ValueTypeTag.unresolved 'theCompilersOwnByteRecord'
+			return byteRecord
+		end 'theCompilersOwnByteRecord'
+
+		throw ParseError.unsupported("`{String.from(layout.name)}` implements `{String.from(layout.requireBuiltinManagedWrapperInterfaceName())}`, one of `stdlib/Builtins.maxon`'s literal markers, so its record would be the compiler's own fused byte record rather than the fields it declares. shv2 mints that record only for the two names it owns the record FOR — `{String.from(StringConformerName)}` and `{String.from(CharacterConformerName)}` — because a conformer of any other name gets a VALUE whose bytes are a byte record's and whose IDENTITY is a struct's: every declared field the fused record has no slot for is discarded at construction, and the struct cascade that later drops or clones it reads past the record's end", line: anchor.line, column: anchor.column)
+	end 'requireFusedWrapperTag'
+
 	function emitOwnedStructBox(layout StructLayout, range SourceRange) returns ValueId
 		let size = self.emitLiteral(layout.sizeBytes(), valueType: MaxonType.integer, range: range)
 		let box = self.emitBoxAlloc(size, resultTag: ValueTypeTag.structRef, resultNameId: self.artifact.typeNames.intern(layout.name), range: range)
@@ -35570,7 +35853,15 @@ export type Parser
 		// below, which would route it to `parseArrayStaticCall` (the alias IS bound to an `Array` instance)
 		// and refuse its two arguments against `Array.create()`'s none. That is the measured red:
 		// `E2010 Expected ')' but got 'integer literal'`.
-		if typeTok.value.equals(ManagedMemoryTypeName) 'managedMemoryStatic'
+		// ⚠ **AN ALIAS TO THE BUFFER REACHES THIS DOOR TOO, AND LEAVING IT OUT REPRODUCED THE VERY RED THE
+		// PARAGRAPH ABOVE DESCRIBES.** `stdlib/Character.maxon:172` writes `ByteMemory.create(1, 1)` over its
+		// own `typealias ByteMemory = __ManagedMemory with Byte`, and a qualifier test that matched only the
+		// literal spelling sent it to `parseArrayStaticCall` — `E2010 Expected ')' but got '1'`, the same
+		// measured shape one line down, arrived at through the alias instead of through the arm order.
+		// `aliasDenotesBufferSurface` is the existing answer to "does this spelling denote the buffer?" and is
+		// already what `declaredSurfaceOfSpelling` asks in the other position, so this is that one question
+		// asked here rather than a second test of it.
+		if self.spellingDenotesBufferSurface(typeTok.value) 'managedMemoryStatic'
 			return try self.parseManagedMemoryStaticCall(func, typeTok: typeTok)
 		end 'managedMemoryStatic'
 
@@ -35579,7 +35870,7 @@ export type Parser
 		// behind it, so the mangled `String.from` below would name a callee no file declares (E3004), and
 		// the value it builds comes out of the string runtime rather than out of a user method.
 		if typeTok.value.equals(StringConformerName) 'stringStatic'
-			return try self.parseStringStaticCall(func, typeTok: typeTok)
+			return try self.parseStringStaticCall(func, typeTok: typeTok, resultUsed: resultUsed)
 		end 'stringStatic'
 
 		// ⭐⭐ **THE GENERIC ALIAS THIS CALL'S BASE NAMES, RESOLVED ONCE — file-scope (`IntBox`) or INNER
@@ -35943,6 +36234,21 @@ export type Parser
 		try self.consume(TokenKind.dot)
 		self.noteMemberDispatch(recv)
 
+		// ⭐⭐⭐ **A BYTE-RECORD MEMBER THE CORPUS DECLARES AND THE ROSTER DOES NOT GOES TO THE CORPUS (W17).**
+		// Asked AHEAD of the two builtin dispatchers, and gated so it can only ever catch what they would
+		// REFUSE: `corpusDeclaresByteRecordMember` is consulted only for a name the roster does not carry, so
+		// every arm below keeps every member it already served and the order rule in this header is untouched.
+		// What changes is the fall-through — `Character.toString()` was *"shv2 provides
+		// bytes/byteLength/asciiValue; that list IS the surface"* (76 failures the moment the module was
+		// listed) and is now an ordinary call to an ordinary declared function.
+		//
+		// ⇒ **THIS IS HOW THE SYNTHESIZED SURFACE RETIRES, ONE MEMBER AT A TIME AND MEASURABLY**: strike a
+		// name from `stringSurfaceMemberNames`, and the corpus body behind it takes over here with no other
+		// edit. See `corpusDeclaresByteRecordMember`.
+		if self.byteRecordMemberBelongsToTheCorpus(recv) 'corpusByteRecordMethod'
+			return try self.dispatchMethodOnBase(func, base: try self.structBaseOfReceiver(recv), baseTok: recv.anchor, resultUsed: resultUsed)
+		end 'corpusByteRecordMethod'
+
 		// A STRING RECEIVER takes the builtin String methods rather than the struct path, which would reject
 		// it as not a struct. String is the one non-struct type carrying a method table of its own.
 		if recv.tag == ValueTypeTag.string 'stringMethod'
@@ -36086,7 +36392,7 @@ export type Parser
 	// result, an enum value, a function value. The message names the member rather than the type's fields,
 	// because reaching this point means a `.` followed a value the language gives no member access to.
 	function structBaseOfReceiver(recv MethodReceiver) returns StructBase throws ParseError
-		if not tagCarriesStructLayout(recv.tag) 'notAStruct'
+		if not self.tagCarriesStructLayoutHere(recv.tag) 'notAStruct'
 			let memberTok = self.current()
 
 			// ⚠ The third of `requireDeclaredBaseTypeName`'s doors — a receiver with no binding to name, whose
@@ -36863,29 +37169,59 @@ export type Parser
 			let index = try self.parseOneBuiltinIntegerArgList(func, paramName: ManagedMemoryIndexParamName, methodTok: methodTok)
 			return self.emitRuntimeCall(StrByteAtOrPanicName, args: pairArgs(recv.value, second: index), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
 		end 'byteAtOrPanic'
-		// ⚠⚠ **`hasSingleByteGraphemes()` IS ANSWERED `false` OUTRIGHT, AND THAT IS A CONSERVATIVE ANSWER
-		// RATHER THAN A STUB.** The corpus carries a `singleByteGraphemesFlag` field meaning *"every grapheme
-		// is one byte"*; shv2's String record carries `isAscii@40`, which is the WEAKER fact, and its own
-		// declaration says why the two are not interchangeable: **CR+LF is a single cluster under UAX #29
-		// GB3**, so an all-ASCII string is not necessarily one byte per cluster. `stdlib/String.maxon:72-77`
-		// records the corpus paying for exactly that confusion once — *"this field used to say only 'is
-		// ASCII', and ten methods read THAT as 'one byte per character' … all ten split the cluster"*.
+		// ⭐⭐ **`hasSingleByteGraphemes()` IS THE RECORD'S OWN `@40` FIELD, AND UNTIL THE FLAG WAS
+		// STRENGTHENED IT HAD TO BE ANSWERED A CONSERVATIVE `false` OUTRIGHT.** The corpus field means
+		// *"every grapheme is one byte"*; shv2's slot@40 used to hold the strictly WEAKER `isAscii`, and
+		// **CR+LF is a single cluster under UAX #29 GB3**, so an all-ASCII string is not necessarily one byte
+		// per cluster. `stdlib/String.maxon:72-77` records the corpus paying for exactly that confusion once
+		// — *"this field used to say only 'is ASCII', and ten methods read THAT as 'one byte per character' …
+		// all ten split the cluster"*. Serving the weaker field here would have been a SILENT WRONG ANSWER:
+		// `countGraphemes` of a CR+LF string would take the shortcut and return the BYTE length, 2, where
+		// every other path in all three compilers says 1.
 		//
-		// ⇒ Serving `isAscii@40` here would be a SILENT WRONG ANSWER: `countGraphemes` of a CR+LF string
-		// would take the shortcut and return the BYTE length, 2, where every other path in both compilers
-		// says 1. `stdlib-whitelist.the-corpus-segmenter-agrees-with-the-synthesized-one` carries that row.
+		// ⇒ The cure named at that refusal — *"strengthening the record's `@40` flag to the corpus's meaning
+		// at its literal scan and at all nine of its propagation sites"* — is what `StringRuntime`'s
+		// `StringSingleByteGraphemesOffset` now declares and what `bytesAreSingleByteGraphemes`,
+		// `__str_from_bytes`'s runtime scan and `__char_from_cp`'s CR arm compute. The two predicates are one
+		// predicate, so the field IS the answer and the `false` is retired.
 		//
-		// ⇒ `false` declines the shortcut, which costs an ANSWER nothing — the corpus is explicit that
-		// `findGraphemeEnd` "stays the only thing that decides where a cluster ends, including for the
-		// strings this flag is false for" — and puts the corpus's three walks on exactly the path shv2's own
-		// synthesized segmenter already takes (`GraphemeRuntime.buildGraphemeCount` has no fast path either).
-		// What it costs is SPEED on long ASCII strings, and buying that back means strengthening the record's
-		// `@40` flag to the corpus's meaning at its literal scan and at all nine of its propagation sites —
-		// a record-semantics rung, not a line here.
+		// ⭐ **AND SERVING IT IS WHAT TURNS THE CORPUS'S OWN FAST PATHS ON** — `countGraphemes`,
+		// `byteIndexToGraphemeIndex` and `graphemeOffsetToBytePos` each open with this predicate
+		// (`grapheme.maxon:349-361`, which measured ×2.4 at 64 bytes rising to ×6.5 at 100k without it). The
+		// shortcut lives THERE, in the file that owns UAX #29 and knows what the flag licenses; nothing here
+		// takes one.
+		// ⚠ The field is an i64 0/1 (the width every record slot is stored at), and this method returns a
+		// `bool`, which is an i1 — so the load is followed by a `!= 0` rather than handed back as-is. That is
+		// the same shape `__str_from_bytes` writes the flag with at the other end, and the reason it is a
+		// compare and not a cast is stated there: the two are different Std types and the field must be the
+		// record's width.
+		// ⭐⭐ **`setByte(index, value)` — THE ONE BYTE PRIMITIVE THAT WRITES, AND THE THIRD STDLIB-ONLY BYTE
+		// DOOR** (`stdlib/String.maxon:316`, a `module function` like `byteAt` and `addressableBytes`). Its
+		// one corpus caller is `mapAsciiCase`, which takes a private copy of the bytes and maps it in place.
+		//
+		// ⚠ **IT IS AN ARM RATHER THAN A CORPUS CALL FOR A REASON THE LANGUAGE FORCES.** The corpus writes
+		// `work.setByte(i, b + delta)` — POSITIONAL — and shv2 requires the second and later arguments to be
+		// named (E2053) where the bootstrap does not. Routed to the declared `String.setByte`, that call is
+		// refused inside `stdlib/` itself. The BUFFER's `setByte` already accepts both spellings
+		// (`consumeArrayArgLabel(required: false)`, because both are in the canonical corpus for that member),
+		// so serving the String's through the same arg-list protocol is what makes the two spellings agree
+		// rather than a special case for this file.
+		//
+		// ⭐ It writes through `__str_bytes_view(self)` — the buffer over the receiver's OWN bytes, which is
+		// exactly what the corpus body's `managed.setByte(…)` means — so there is no second byte-writer graph
+		// and no `__str_set_byte` to keep in step with `__arr_set_byte`.
+		if methodTok.value.equals(ManagedMemorySetByteMethod) 'setByte'
+			try self.requireStdlibOnlyStringMethod(methodTok)
+			try self.requireVoidMethodIsStatement(resultUsed, methodTok: methodTok)
+			var setArgs = try self.parseTwoBuiltinIntegerArgList(func, firstParam: ManagedMemoryOffsetParamName, secondParam: ManagedMemoryValueParamName, methodTok: methodTok)
+			setArgs.insert(0, value: self.emitOwnedRuntimeResult(StrBytesViewName, args: singletonArgs(recv.value), resultTag: ValueTypeTag.genericInstance, resultNameId: self.signatures.internSynthesizedByteInstance(), range: range))
+			return self.emitRuntimeCall(ArrSetByteName, args: setArgs, resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+		end 'setByte'
 		if methodTok.value.equals(StringHasSingleByteGraphemesMethod) 'hasSingleByteGraphemes'
 			try self.requireStdlibOnlyStringMethod(methodTok)
 			try self.consumeEmptyArgList()
-			return self.emitLiteral(BoolFalseValue, valueType: MaxonType.boolean, range: range)
+			let flag = self.emitLoadStringField(recv.value, offset: StringSingleByteGraphemesOffset, range: range)
+			return self.emitCompareAgainstLiteral(flag, literal: BoolFalseValue, op: MaxonCmpOp.ne, opTok: methodTok)
 		end 'hasSingleByteGraphemes'
 
 		// ⭐⭐ **`hash()` AND `equals(other)` ARE NOT STRING METHODS — THEY ARE THE BUILTIN CONFORMANCES, AND
@@ -36963,6 +37299,38 @@ export type Parser
 
 		throw ParseError.unsupported("String method '{String.from(methodTok.value)}' — it is STDLIB-ONLY (`module function` in `stdlib/String.maxon`, which the reference compiler refuses to user code as a not-exported error) and this file is not under `stdlib/`. `{String.from(StringAddressableBytesMethod)}` hands out a live view of a String's own bytes, and `{String.from(ByteAtMethod)}`/`{String.from(StringByteAtOrPanicMethod)}` each read one of them — the first through a catchable failure, the second through none — and `{String.from(StringHasSingleByteGraphemesMethod)}` reports a private flag of the record; user code reaches the bytes through `{String.from(StringToByteArrayMethod)}()`, which copies", line: methodTok.line, column: methodTok.column)
 	end 'requireStdlibOnlyStringMethod'
+
+	// ⭐⭐ **THE BUFFER'S TWO STDLIB-ONLY MEMBERS — the `requireStdlibOnlyStringMethod` twin, one surface over,
+	// and it exists because the two of them shipped UNGATED and each was a memory-safety hole reachable from an
+	// ordinary user program.** Both are `module function`s in the corpus (`stdlib/String.maxon:195`'s `cstr()`
+	// forwards to `toCString`, `:301` IS `makeCharFromBytes`), so the visibility is the corpus's own and is
+	// enforced on the file's PHYSICAL LOCATION for the reason its String twin states — shv2 has no `module`
+	// keyword, and `livesUnderStdlibDirectory` is emphatically not `isStdlibSource`.
+	//
+	// **What the gate is worth, measured on this tree before it existed:**
+	//   * `sub.managed.toCString()` on a zero-copy view — **exit 101**, the leak gate. A `cstring` is a raw
+	//     address with no length, no capacity, no refcount and no drop, so the copy `__mm_to_cstring` makes when
+	//     `buffer[length]` is not already 0 belongs to nobody. A view's next byte is its PARENT's, so the copy
+	//     path is what an ordinary slice takes, not an exotic one.
+	//   * `mm.makeCharFromBytes(0, len: 1000000000)` — **0xC0000005**. The corpus's contract is a PRECONDITION
+	//     (*"callers must guarantee `pos + len <= byteLength()`"*), so `__char_at` copies the window without
+	//     checking it — correctly, since its other caller is the `for c in s` segmenter, whose window is in
+	//     range by construction and which would otherwise pay a bound test per cluster. The bootstrap checks at
+	//     this same door and refuses with `__ManagedMemory: byte index out of bounds`; shv2 refuses the door.
+	//
+	// ⇒ Neither member leaves the roster: the corpus DOES call both, and `bufferSurfaceMemberNames` records
+	// what the surface HAS rather than who may reach it — the same split `dispatchStringMethod`'s roster and its
+	// stdlib-only gate already keep one surface over.
+	//
+	// It is a second function rather than a `message` parameter on the first because the message is built ONLY
+	// on the throw path; a shared entry point would have to render one at every admitted call.
+	function requireStdlibOnlyBufferMethod(methodTok Token) throws ParseError
+		if self.livesUnderStdlibDirectory 'thestdlibsOwn'
+			return
+		end 'thestdlibsOwn'
+
+		throw ParseError.unsupported("`{String.from(ManagedMemoryTypeName)}` member '{String.from(methodTok.value)}' — it is STDLIB-ONLY (`module function` in `stdlib/String.maxon`, which the reference compiler refuses to user code as a not-exported error) and this file is not under `stdlib/`. `{String.from(ManagedMemoryToCStringMethod)}` hands back a raw address with no length, no owner and no refcount, so the copy it makes when the receiver's bytes are not already NUL-terminated is reclaimed by nothing; `{String.from(ManagedMemoryMakeCharFromBytesMethod)}` trusts its caller for `pos + len <= {String.from(ManagedMemoryLengthMethod)}()` and reads off the end of the buffer otherwise. User code reaches a buffer's bytes through `{String.from(ByteAtMethod)}`, which is bounds-checked and throwing", line: methodTok.line, column: methodTok.column)
+	end 'requireStdlibOnlyBufferMethod'
 
 	// ⭐ **`s.findFirst(n)` / `s.findLast(n)` — the two THROWING searches, which differ ONLY in which runtime
 	// entry point they name**: same receiver, same single String argument, same `StringIndex` result, same
@@ -37304,7 +37672,7 @@ export type Parser
 	// the same rule `requireBuiltinConformanceSelfArgs` enforces for a scalar or `String` conformer, and for
 	// the same reason: the impl reads two array RECORDS, so anything else would be dereferenced as one.
 	//
-	// ⚠ It is the STRICT instance test and deliberately not `appendArgAdmitted`: that one also admits the
+	// ⚠ It is the STRICT instance test and deliberately not `arrayAppendArgAdmits`: that one also admits the
 	// byte-buffer boundary (an `Array with Byte` taking a `__ManagedMemory`), which `append` wants because it
 	// COPIES BYTES between two records the boundary says are one — and which `equals` must not, because two
 	// spellings of one record answering `Self` would let `bytearray-element-size`'s whole subject through
@@ -37893,8 +38261,39 @@ export type Parser
 	// and excludes exactly the literal kinds, so what reaches the roster gate and the arms is a token that
 	// could be a name at all. That also makes this door read like its five siblings, every one of which
 	// consumes its method name BEFORE asking `requireSurfaceMember` — this was the only one that did not.
-	function parseStringStaticCall(func IrFunction, typeTok Token) returns ValueId throws ParseError
+	function parseStringStaticCall(func IrFunction, typeTok Token, resultUsed bool) returns ValueId throws ParseError
 		try self.consume(TokenKind.dot)
+
+		// ⭐⭐⭐ **A `String` STATIC THE CORPUS DECLARES AND THE ROSTER DOES NOT GOES TO THE CORPUS — W17's
+		// FALL-THROUGH IN THE STATIC DIRECTION.** The MEMBER half has existed since W17
+		// (`byteRecordMemberBelongsToTheCorpus`); this door had no twin, so its roster answered and REFUSED,
+		// and a static the corpus declares on a compiler-owned type name could never be reached. MEASURED with
+		// the three `String` cone modules temporarily listed: `stdlib/String.maxon:861`'s
+		// `String.fromOwnedBytes(self.bytes, singleByteGraphemes: …)` — a static `stdlib/String.maxon:136`
+		// DECLARES ITSELF — was *"`String` static 'fromOwnedBytes' — the reference provides from/init; that list
+		// IS the surface"*, a file refused for naming its own declaration.
+		//
+		// ⚠ **ROSTER FIRST, exactly as the member door orders it**, and for the reason stated there: `String.from`
+		// keeps its arm and its `__str_from_bytes` emission rather than calling a corpus body, and retiring an arm
+		// stays a DELETION from `stringStaticMemberNames` with nothing else to edit.
+		//
+		// ⚠ **IT PEEKS AND DOES NOT CONSUME, because `parseCallNamed` consumes its own callee name** (D8's
+		// keyword-in-a-name-position rule lives there). That is also what keeps the literal hazard closed: the
+		// name still crosses `consumeNameToken`, so `String."fromOwnedBytes"(…)` is refused there and never
+		// reaches a corpus declaration through a token that only carries the right bytes.
+		//
+		// ⭐⭐ **VISIBILITY IS THE DECLARATION'S OWN AND IS NOT RE-STATED HERE.** `fromOwnedBytes` is declared
+		// WITHOUT `export` on purpose (*"take these bytes and trust me about them" is not a promise the stdlib
+		// makes to arbitrary code*), and a receiverless `CalleeMint.notMinted` call is exactly what
+		// `SemanticCheck.calleeVisibleFrom` holds to `ProgramSignatures.isVisibleFrom` — so a user program gets
+		// E3008 off the corpus's own missing keyword. A `requireStdlibOnlyStringMethod`-shaped gate here would be
+		// a SECOND statement of a visibility the declaration already makes, free to disagree with it; that gate
+		// exists for members shv2 SYNTHESIZES, which have no declaration to read.
+		let memberTok = self.current()
+		if self.stringStaticBelongsToTheCorpus(memberTok) 'corpusStringStatic'
+			return try self.parseCallNamed(func, callee: qualifiedMethodName(StringConformerName, methodName: memberTok.value), anchor: typeTok, receiver: ReceiverArg.none, resultUsed: resultUsed, constructorInstance: ConstructorInstance.none, mint: CalleeMint.notMinted)
+		end 'corpusStringStatic'
+
 		let methodTok = try self.consumeNameToken(NamePosition.declaration)
 		let range = SourceRange.between(typeTok, last: methodTok)
 
@@ -39328,7 +39727,7 @@ export type Parser
 		if self.signatures.isArrayInstance(giid) 'array'
 			let arr = try self.emitArrayCreateOp(giid, range: range)
 			self.trackOwnedTemp(arr)
-			if self.signatures.aliasElementIsBufferSurface(aliasName) 'elementsAreBuffers'
+			if self.signatures.aliasElementIsBufferSurface(aliasName, readerFilePath: self.filePath) 'elementsAreBuffers'
 				self.markBufferSurfaceElements(arr)
 			end 'elementsAreBuffers'
 
@@ -41414,6 +41813,79 @@ export type Parser
 		return roster
 	end 'requireSurfaceMember'
 
+	// ⭐⭐⭐ **DOES THE CORPUS DECLARE THIS MEMBER? — THE DOOR THAT MAKES A LISTED `stdlib/String.maxon` MEAN
+	// SOMETHING (W17).** A roster is shv2's statement of what its SYNTHESIZED surface serves; it was the whole
+	// answer while the corpus was unreadable, and it stopped being one the moment `type String` and
+	// `type Character` were listed. Those declarations carry members the roster has never had —
+	// `Character.toString()` is the one the suite found first, 76 times — and the refusal for them was
+	// *"shv2 provides bytes/byteLength/asciiValue; that list IS the surface"*, which is now false: the
+	// program HAS a `Character.toString`, written in Maxon, sitting in a module this compiler loaded.
+	//
+	// ⇒ **A byte-record receiver asks the CORPUS before it is refused**, and a hit becomes an ordinary
+	// qualified call to an ordinary declared function. That is the retirement mechanism in one door: every
+	// member the corpus declares and shv2 does not is served from source, with no arm, no runtime graph and
+	// no roster entry — and the members shv2 DOES serve keep their arms, because the roster is asked first.
+	//
+	// ⚠ **ORDER IS THE DESIGN, NOT AN OPTIMISATION.** The roster wins, so `s.byteLength()` still lowers to a
+	// field load rather than calling the corpus body that would do the same thing more slowly, and
+	// `s.hash()`/`s.equals()` still reach the synthesized conformance impls a witness slot is stamped with.
+	// Retiring an arm is therefore a DELETION from the roster and nothing else — the corpus catches it here,
+	// which is what makes the retirement incremental and measurable one member at a time.
+	function byteRecordMemberBelongsToTheCorpus(recv MethodReceiver) returns bool
+		if not tagIsByteRecord(recv.tag) 'notAByteRecord'
+			return false
+		end 'notAByteRecord'
+
+		// The cursor sits on the member name — the `.` is already consumed and no arm has read it yet, so
+		// this must PEEK. A member the roster carries is the synthesized surface's, whatever the corpus also
+		// says about it, and is left to the dispatcher below.
+		let memberTok = self.current()
+		if not tokenCanBeAName(memberTok) 'notAMemberName'
+			return false
+		end 'notAMemberName'
+		if rosterHasMember(memberTok.value, roster: self.surfaceMemberNames(byteRecordSurface(recv.tag))) 'theSynthesizedSurfaceServesIt'
+			return false
+		end 'theSynthesizedSurfaceServesIt'
+
+		return self.signatures.conformerDeclaresOwnMethod(qualifiedMethodName(self.byteRecordLayoutName(recv.tag), methodName: memberTok.value))
+	end 'byteRecordMemberBelongsToTheCorpus'
+
+	// ⭐⭐⭐ **THE SAME QUESTION ABOUT A `String` STATIC — `byteRecordMemberBelongsToTheCorpus`'s twin, one
+	// call shape over.** A static has no RECEIVER, so there is no tag to classify and no layout name to
+	// derive: the type is written at the call (`parseQualifiedCall`'s `stringStatic` arm matched it), which
+	// is why this takes a token where its sibling takes a `MethodReceiver`. Everything else is that
+	// function's, deliberately: the roster is asked FIRST so a served static keeps its arm, and only a
+	// roster MISS is put to the corpus.
+	//
+	// ⚠ **`Character` HAS NO STATIC DOOR AT ALL, so there is no third copy of this waiting**: `String` is the
+	// one byte record `parseQualifiedCall` intercepts, because it is the one with statics of shv2's own. A
+	// `Character.` qualifier already flows down the ordinary qualified-call path, where a corpus declaration
+	// is found with no help from here.
+	//
+	// ⚠ It PEEKS — the cursor sits on the member name with the `.` consumed — because the caller hands that
+	// token to `parseCallNamed`, which consumes it. `tokenCanBeAName` is the same guard the member twin
+	// applies and for the identical measured reason: a literal carries its CONTENT in `.value`, so
+	// `String."fromOwnedBytes"` would otherwise be tested against the corpus's declaration by bytes alone.
+	function stringStaticBelongsToTheCorpus(memberTok Token) returns bool
+		if not tokenCanBeAName(memberTok) 'notAMemberName'
+			return false
+		end 'notAMemberName'
+		if rosterHasMember(memberTok.value, roster: self.surfaceMemberNames(MemberSurface.stringStatic)) 'theSynthesizedSurfaceServesIt'
+			return false
+		end 'theSynthesizedSurfaceServesIt'
+
+		return self.signatures.conformerDeclaresOwnMethod(qualifiedMethodName(StringConformerName, methodName: memberTok.value))
+	end 'stringStaticBelongsToTheCorpus'
+
+	// Which roster a byte record's tag names. The two are separate surfaces with separate rosters, exactly as
+	// they are separate conformers, so the mapping is stated once here rather than at each asker.
+	function byteRecordSurface(tag ValueTypeTag) returns MemberSurface
+		if tag == ValueTypeTag.character 'aCharacter'
+			return MemberSurface.character
+		end 'aCharacter'
+		return MemberSurface.string
+	end 'byteRecordSurface'
+
 	// ⭐⭐ **`arr.managed` IN VALUE POSITION — THE SAME RECORD, SEEN AS THE BUFFER (BATCH2 slice 6), AND THE
 	// EXACT INVERSE OF `parseArrayInitStatic`.** `init(managed)` adopts a buffer AS the array around it; this
 	// hands the array's buffer BACK. One record, two surfaces, and the two directions owe the same two things:
@@ -41668,6 +42140,37 @@ export type Parser
 			try self.consumeEmptyArgList()
 			return self.emitRuntimeCall(ArrCountName, args: singletonArgs(arr), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
 		end 'count'
+		// ⭐ **`toCString()` — BUFFER-SURFACE ONLY**, like `length`/`byteAt`/`elementSize`: neither reference
+		// gives `Array` the spelling, and the corpus reaches it through `arr.managed.toCString()`. The result is
+		// a raw address, so it is `integer`-tagged exactly as `cstring` resolves in a type position — one
+		// answer to "what is a NUL-terminated pointer?", given at the type door and at the value door.
+		// ⭐⭐ **`makeCharFromBytes(pos, len)` — THE CORPUS'S GRAPHEME MINT, SERVED BY THE DOOR THAT ALREADY
+		// EXISTS.** `__char_at(record, startPos, endPos)` is precisely this operation: *"a fresh OWNED record
+		// holding a COPY of the bytes `[startPos, endPos)`"*, built through the one fused-record encoder, so a
+		// Character minted here is byte-for-byte the one `for c in s` mints and drops through `__str_decref`
+		// identically. Writing a second minting graph for the corpus's spelling is exactly the twin this
+		// convergence exists to remove.
+		//
+		// ⚠ **THE CORPUS PASSES A LENGTH AND `__char_at` TAKES AN END, so the arm ADDS.** End-EXCLUSIVE, which
+		// is what `pos + len` is — the corpus's own contract is *"callers must guarantee `pos + len <=
+		// byteLength()`"*. Getting this backwards would read one byte too few from every multi-byte cluster,
+		// silently.
+		//
+		// ⚠⚠ **BOTH ARE GATED ON STDLIB PROVENANCE, AND THAT IS THE VISIBILITY THEIR CORPUS DECLARATIONS
+		// ALREADY CARRY** — see `requireStdlibOnlyBufferMethod` for the two measured failures that made the
+		// omission a memory-safety hole rather than a widened surface.
+		if isManagedMemory and methodTok.value.equals(ManagedMemoryMakeCharFromBytesMethod) 'makeCharFromBytes'
+			try self.requireStdlibOnlyBufferMethod(methodTok)
+			let window = try self.parseTwoBuiltinIntegerArgList(func, firstParam: ManagedMemoryCharPosParamName, secondParam: ManagedMemoryCharLenParamName, methodTok: methodTok)
+			let startPos = try window.get(0) otherwise panic("makeCharFromBytes: parseTwoBuiltinIntegerArgList returned fewer than the two arguments it consumes")
+			let byteLen = try window.get(1) otherwise panic("makeCharFromBytes: parseTwoBuiltinIntegerArgList returned fewer than the two arguments it consumes")
+			return self.emitOwnedRuntimeResult(CharAtName, args: tripleArgs(arr, second: startPos, third: self.emitMachineWordAdd(startPos, rhs: byteLen, range: range)), resultTag: ValueTypeTag.character, resultNameId: UnnamedTypeId, range: range)
+		end 'makeCharFromBytes'
+		if isManagedMemory and methodTok.value.equals(ManagedMemoryToCStringMethod) 'toCString'
+			try self.requireStdlibOnlyBufferMethod(methodTok)
+			try self.consumeEmptyArgList()
+			return self.emitRuntimeCall(MmToCStringName, args: singletonArgs(arr), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
+		end 'toCString'
 		if methodTok.value.equals(ArrayCapacityMethod) 'capacity'
 			try self.consumeEmptyArgList()
 			return self.emitRuntimeCall(ArrCapacityName, args: singletonArgs(arr), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
@@ -41781,30 +42284,38 @@ export type Parser
 			// so its `value:` label is required whichever surface the receiver wears.
 			return try self.parseArraySetOrInsert(func, arr: arr, giid: giid, callee: ArrInsertName, methodTok: methodTok, throwing: false, secondArgLabelled: true, range: range)
 		end 'insert'
-		// ⭐⭐ **`append(other)` ON THE BUFFER SURFACE IS THROWING WHERE `Array.append` IS NOT, and the corpus is
-		// what says so**: `specs/managed-memory-builtin.md:append` writes `try a.append(b) otherwise return 7`,
-		// while `specs-shv2/arrays.md` writes `arr.append(other)` bare. shv2 refuses a `try` over a call that
-		// cannot fail (E3055), so the two cannot share one callee — and the difference is real, not notational:
-		// the buffer's append raises the capacity through the THROWING `__arr_mem_grow`, where `__arr_append`'s
-		// internal grow aborts the process on an overflow (see `ArrayRuntime.ArrMemAppendName`).
+		// ⭐⭐ **ONE ARM FOR ALL THREE SPELLINGS OF ONE OPERATION — `Array.append`, `Array.appendMemory` AND THE
+		// BUFFER'S `append` — BECAUSE THE CORPUS BUILDS EACH OUT OF THE LAST.** `stdlib/Array.maxon:262` is
+		// `append(other Self)` whose entire body is `appendMemory(other.managed)` — the array half of `other` is
+		// never read — and `:272` is `appendMemory(source ElementMemory)`, whose own body is the buffer's
+		// `append`. Post-collapse `ElementMemory` and `Self` are one record, so there is no second operation to
+		// emit at any of the three: `parseArrayAppend` copies the source's elements into the receiver's storage
+		// at whatever elementhood the receiver has.
 		//
-		// ⚠ Its argument rule is the buffer's too, and that is what `builtin-type-checking`'s
-		// `error-managed-memory-append-int` pins: `E3005 argument type mismatch for 'other': expected
-		// '__ManagedMemory'`, naming the type the SIGNATURE declares, where `Array.append`'s refusal names the
-		// receiver's own instance. One rule (`ProgramSignatures.arrayAppendArgAdmits`), two sentences — the split
-		// `requireByteArrayValue`/`requireManagedMemoryValue` already draws for a `ByteArray` parameter.
-		if isManagedMemory and methodTok.value.equals(AppendMethod) 'bufferAppend'
-			try self.requireVoidMethodIsStatement(resultUsed, methodTok: methodTok)
-			try self.consume(TokenKind.leftParen)
-			let other = try self.parseExpression(func, block: self.currentBlock)
-			try self.requireManagedMemoryAppendArg(other, giid: giid, methodTok: methodTok)
-			try self.consume(TokenKind.rightParen)
-			return self.emitRuntimeCall(ArrMemAppendName, args: pairArgs(arr, second: other), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
-		end 'bufferAppend'
-		if methodTok.value.equals(AppendMethod) 'append'
+		// ⚖ **THE BUFFER USED TO HAVE ITS OWN CALLEE (`__arr_mem_append`), ON THE CLAIM THAT ITS `append`
+		// THROWS. USER RULING, 2026-08-07: IT DOES NOT** — both references make it non-throwing, and
+		// `stdlib/String.maxon:414` declares a non-throwing `append` over a bare `managed.append(other.managed)`
+		// that cannot compile otherwise. The whole argument is at `ArrayRuntime.ArrAppendName`.
+		//
+		// ⭐ **AND THE SPLIT WAS NOT MERELY REDUNDANT, IT WAS A WRONG ANSWER**: the buffer callee byte-blitted
+		// whatever the receiver held, so `a.managed.append(b.managed)` on an `Array with String` duplicated each
+		// heap pointer and double-freed it (MEASURED: SIGSEGV at teardown). Reaching the shared door instead
+		// picks the MANAGED and OPAQUE emissions by element kind, exactly as the `Array` spelling always did —
+		// which is what identifies this as one operation the surfaces had come to disagree about.
+		//
+		// ⚠ **WHAT DOES NOT FOLD IS THE SURFACE**, in either direction:
+		//   • The ARGUMENT SENTENCE stays per-surface (`parseArrayAppend`'s `bufferSurface`): the buffer's
+		//     parameter is declared `__ManagedMemory`, so a mismatch names that type, where `Array.append`'s
+		//     names the receiver's own instance. `builtin-type-checking.error-managed-memory-append-int` pins
+		//     the first and `arrays.error.append-narrower-element-array` the second. One rule
+		//     (`ProgramSignatures.arrayAppendArgAdmits`), two sentences.
+		//   • `appendMemory` remains an `Array` NAME and only an `Array` name — the `length`/`count`
+		//     arrangement. The corpus declares it on `Array` and on nothing else, so a buffer receiver asking
+		//     for it is refused by the roster gate above and never reaches here.
+		if methodTok.value.equals(AppendMethod) or methodTok.value.equals(AppendMemoryMethod) 'append'
 			try self.requireVoidMethodIsStatement(resultUsed, methodTok: methodTok)
 			try self.requireArrayCopyMethodSupported(giid, methodTok: methodTok)
-			return try self.parseArrayAppend(func, arr: arr, giid: giid, methodTok: methodTok, range: range)
+			return try self.parseArrayAppend(func, arr: arr, giid: giid, methodTok: methodTok, bufferSurface: isManagedMemory, range: range)
 		end 'append'
 
 		// ⭐⭐ **THE TWO `__ManagedMemory` MUTATORS (R4.2) — `setLength` and `setByte`.** VOID and THROWING,
@@ -42590,15 +43101,16 @@ export type Parser
 
 	// `append(other)` — append `other`'s elements to `self`. `other` is BORROWED (read-only, not moved) and
 	// PRESERVED (`append-preserves-originals`). Its element must be one the receiver's admits every value of,
-	// which `requireArrayAppendArg` enforces through the rule both surfaces share
-	// (`ProgramSignatures.arrayAppendArgAdmits`). A TRIVIAL receiver block-copies `other`'s bytes (`__arr_append`); a
-	// CONCRETE MANAGED receiver (P1.7 slice 3b-vi-b) DEEP-CLONES each `other` element into `self` via
-	// `__arr_append_managed`, stamped with the element's `funcAddr(__clone_<E>)`, so both arrays end up sole
-	// owners of independent elements. Returns the receiver (what the statement still denotes).
-	function parseArrayAppend(func IrFunction, arr ValueId, giid GenericInstanceId, methodTok Token, range SourceRange) returns ValueId throws ParseError
+	// which the rule all three spellings share enforces (`ProgramSignatures.arrayAppendArgAdmits`); only the
+	// SENTENCE is per-surface, which is what `bufferSurface` selects — see the caller. A TRIVIAL receiver
+	// block-copies `other`'s bytes (`__arr_append`); a CONCRETE MANAGED receiver (P1.7 slice 3b-vi-b)
+	// DEEP-CLONES each `other` element into `self` via `__arr_append_managed`, stamped with the element's
+	// `funcAddr(__clone_<E>)`, so both arrays end up sole owners of independent elements. Returns the receiver
+	// (what the statement still denotes).
+	function parseArrayAppend(func IrFunction, arr ValueId, giid GenericInstanceId, methodTok Token, bufferSurface bool, range SourceRange) returns ValueId throws ParseError
 		try self.consume(TokenKind.leftParen)
 		let other = try self.parseExpression(func, block: self.currentBlock)
-		try self.requireArrayAppendArg(other, arr: arr, giid: giid, methodTok: methodTok)
+		try self.requireAppendArg(other, arr: arr, giid: giid, methodTok: methodTok, bufferSurface: bufferSurface)
 		try self.consume(TokenKind.rightParen)
 		if self.signatures.containerElementIsOpaque(giid) 'opaqueAppend'
 			return self.emitArrayVoidCall(ArrAppendOpaqueName, args: pairArgs(arr, second: other), receiver: arr, range: range)
@@ -42609,23 +43121,15 @@ export type Parser
 		return self.emitArrayVoidCall(ArrAppendName, args: pairArgs(arr, second: other), receiver: arr, range: range)
 	end 'parseArrayAppend'
 
-	// ⭐ **THE BUFFER SURFACE'S `append` ARGUMENT RULE (R4.4)** — the same rule the `Array` surface's makes
-	// (`ProgramSignatures.arrayAppendArgAdmits`, shared: one record, one operation, one precondition), under the
-	// diagnostic the buffer's SIGNATURE earns. Its parameter is declared `__ManagedMemory`, so a mismatch names
-	// that type and its `other` label (`builtin-type-checking.error-managed-memory-append-int` pins the wording)
-	// where the `Array` twin below names the receiver's own instance. The split
-	// `requireByteArrayValue`/`requireManagedMemoryValue` already draws for a `ByteArray` parameter, for this
-	// reason.
-	function requireManagedMemoryAppendArg(other ValueId, giid GenericInstanceId, methodTok Token) throws ParseError
-		if self.appendArgAdmitted(other, giid: giid) 'admitted'
-			return
-		end 'admitted'
-
-		throw ParseError.builtinArgumentType(String.from(ManagedMemoryOtherParamName), expected: String.from(ManagedMemoryTypeName), got: self.valueDisplayTypeName(other), line: methodTok.line, column: methodTok.column)
-	end 'requireManagedMemoryAppendArg'
-
-	// ⭐ **THE `Array` SURFACE'S HALF OF THE SAME RULE.** The whole verdict is
-	// `ProgramSignatures.arrayAppendArgAdmits`, which states it; what lives here is the sentence.
+	// ⭐⭐ **THE ARGUMENT RULE ALL THREE `append` SPELLINGS MAKE, AND THE TWO SENTENCES IT SPEAKS IT IN.** The
+	// whole VERDICT is `ProgramSignatures.arrayAppendArgAdmits` — one record, one operation, one precondition,
+	// stated where the element types live so no door may respell it. What lives here is which sentence a
+	// refusal gets, and that is a property of the SURFACE the author wrote rather than of the rule:
+	//   • the BUFFER's parameter is declared `__ManagedMemory`, so its mismatch names that type and its `other`
+	//     label (`builtin-type-checking.error-managed-memory-append-int` pins the wording);
+	//   • `Array.append`/`appendMemory` name the RECEIVER's own instance instead, and read the parameter name
+	//     off the spelling the author wrote (`appendArgParamName`), so `appendMemory` is never told to fix an
+	//     `other` it does not declare.
 	//
 	// ⚠ **IT REPORTS E3005 AND USED TO REPORT E2015, AND THE OLD CODE WAS A FALSE CLAIM** — A3r's argument,
 	// applied to a fourth site. E2015 reads *"a language construct this compiler does not implement yet"*, and
@@ -42635,26 +43139,24 @@ export type Parser
 	// hand-written sentences it replaces named neither type, so `expected 'Array_Byte', got 'Array_Small'`
 	// could not be said at all.
 	//
-	// ⚠ **IT ANCHORS ON THE METHOD NAME, NOT ON THE ARGUMENT, AND THAT IS THE REFERENCE'S ANCHOR.**
-	// `specs/type-checking.md`'s `method-call-wrong-self-type` pins column 6 of `\tarr.append("hello")` — the
-	// `append` token — and its `array-of-different-element-types` pins the `append` of `\tints.append(strings)`
-	// the same way. shv2 pointed at the argument HERE while pointing at the callee at every DECLARED call
-	// (`SemanticCheck.checkOneArgType` anchors on the call op) and at the method at the buffer surface
-	// (`requireManagedMemoryAppendArg`, one function up) — one refusal, three anchors, decided by which door
-	// the value happened to enter.
-	function requireArrayAppendArg(other ValueId, arr ValueId, giid GenericInstanceId, methodTok Token) throws ParseError
-		if self.appendArgAdmitted(other, giid: giid) 'admitted'
+	// ⚠ **BOTH ANCHOR ON THE METHOD NAME, NOT ON THE ARGUMENT, AND THAT IS THE REFERENCE'S ANCHOR.**
+	// `specs/type-checking.md`'s `method-call-wrong-self-type` pins column 6 of `	arr.append("hello")` — the
+	// `append` token — and its `array-of-different-element-types` pins the `append` of `	ints.append(strings)`
+	// the same way. shv2 pointed at the argument on the `Array` side while pointing at the callee at every
+	// DECLARED call (`SemanticCheck.checkOneArgType` anchors on the call op) and at the method on the buffer
+	// side — one refusal, three anchors, decided by which door the value happened to enter. The two sides were
+	// still two functions with one body until the 2026-08-07 fold, which is how they could differ at all.
+	function requireAppendArg(other ValueId, arr ValueId, giid GenericInstanceId, methodTok Token, bufferSurface bool) throws ParseError
+		if self.signatures.arrayAppendArgAdmits(giid, argTag: self.tagOf(other), argNameId: self.valueNameId(other), readerFilePath: self.filePath) 'admitted'
 			return
 		end 'admitted'
 
-		throw ParseError.builtinArgumentType(String.from(ManagedMemoryOtherParamName), expected: self.valueDisplayTypeName(arr), got: self.valueDisplayTypeName(other), line: methodTok.line, column: methodTok.column)
-	end 'requireArrayAppendArg'
+		if bufferSurface 'bufferSentence'
+			throw ParseError.builtinArgumentType(String.from(ManagedMemoryOtherParamName), expected: String.from(ManagedMemoryTypeName), got: self.valueDisplayTypeName(other), line: methodTok.line, column: methodTok.column)
+		end 'bufferSentence'
 
-	// The shared adapter putting a `ValueId`'s two type columns in front of the index's rule — `valueIsByteArray`'s
-	// shape, for its reason: the RULE belongs where the element types live, and neither door may respell it.
-	function appendArgAdmitted(other ValueId, giid GenericInstanceId) returns bool
-		return self.signatures.arrayAppendArgAdmits(giid, argTag: self.tagOf(other), argNameId: self.valueNameId(other), readerFilePath: self.filePath)
-	end 'appendArgAdmitted'
+		throw ParseError.builtinArgumentType(String.from(appendArgParamName(methodTok.value)), expected: self.valueDisplayTypeName(arr), got: self.valueDisplayTypeName(other), line: methodTok.line, column: methodTok.column)
+	end 'requireAppendArg'
 
 	// ⭐ **THE COPY GATE for `slice`/`clone`/`append` on a CONCRETE-element array (P1.7 slice 3b-vi-b).** A
 	// TRIVIAL element passes (its copy is a correct byte blit / COW view). A CONCRETE MANAGED element (String /
@@ -43547,7 +44049,7 @@ export type Parser
 	function structLayoutOfField(baseLayout StructLayout, fieldTok Token, fieldType MaxonType) returns StructLayout throws ParseError
 		let resolved = self.resolveNamedStruct(fieldType)
 		let tag = maxonTypeTag(resolved)
-		if not tagCarriesStructLayout(tag) 'notAStruct'
+		if not self.tagCarriesStructLayoutHere(tag) 'notAStruct'
 			throw ParseError.unsupported("a field access through '{String.from(baseLayout.name)}.{String.from(fieldTok.value)}', which is declared '{typeTagName(tag)}' and not a struct — only a struct field can carry a further field access", line: fieldTok.line, column: fieldTok.column)
 		end 'notAStruct'
 
@@ -44309,7 +44811,7 @@ export type Parser
 		// opaque `T`). Every other tag has no fields.
 		let baseTag = maxonTypeTag(binding.varType)
 		let baseTypeNameId = typeNameIdOf(binding.varType)
-		if not tagCarriesStructLayout(baseTag) 'notAStruct'
+		if not self.tagCarriesStructLayoutHere(baseTag) 'notAStruct'
 			// ⚠ **A TYPE THE PROGRAM DOES NOT HAVE IS NOT "declared 'int'", AND IT IS NOT THIS ACCESS'S
 			// FAULT EITHER** — asked BEFORE the not-a-struct refusal below, because a name that denotes
 			// nothing has no struct-hood to be wrong about. See `requireDeclaredBaseTypeName`.
@@ -44539,8 +45041,52 @@ export type Parser
 		if tag == ValueTypeTag.genericInstance 'instance'
 			return self.signatures.genericInstanceBaseName(nameId)
 		end 'instance'
+		// ⭐ A BYTE RECORD carries no name id of its own (`String` and `Character` are their own `MaxonType`
+		// arms, not `named`), so its layout is found under the CORPUS's declaration name — which is the one
+		// name a declaration of it can wear, since both are on `isCompilerOwnedTypeName`.
+		if tag == ValueTypeTag.string 'aString'
+			return StringConformerName
+		end 'aString'
+		if tag == ValueTypeTag.character 'aCharacter'
+			return CharacterConformerName
+		end 'aCharacter'
 		return try self.artifact.typeNames.nameOf(nameId) otherwise panic("baseStructNameOfType: '{String.from(baseTok.value)}' carries a structRef whose name id is not in this file's interner — every structRef the parser mints is interned from a name in the same table")
 	end 'baseStructNameOfType'
+
+	// ⭐⭐ **DOES THIS VALUE HAVE A STRUCT LAYOUT *IN THIS PROGRAM*? — `tagCarriesStructLayout` PLUS THE ONE
+	// QUESTION A TAG CANNOT ANSWER ON ITS OWN (W17).** A `String`/`Character` is a byte record whose FIELDS
+	// exist only when the corpus that declares them is loaded: with `stdlib/String.maxon` listed, `managed`
+	// and `singleByteGraphemesFlag` are real fields at real offsets; without it there is no layout and the
+	// old refusal is still the right answer. So the admitted set is the static one WIDENED by a lookup,
+	// never a second static list.
+	//
+	// ⚠ **IT DOES NOT WIDEN WHAT USER CODE MAY REACH, AND THAT IS A DIFFERENT GATE'S JOB.** Neither corpus
+	// field is exported, so `"abc".managed` outside `type String` is E3014 exactly as any unexported field
+	// is — the visibility check runs after this one and is unchanged. What this changes is only WHICH
+	// diagnostic an inaccessible field gets, and it moves it from "not a struct type" (false, and useless)
+	// to the accurate one.
+	function tagCarriesStructLayoutHere(tag ValueTypeTag) returns bool
+		if tagCarriesStructLayout(tag) 'staticallyAggregate'
+			return true
+		end 'staticallyAggregate'
+		if not tagIsByteRecord(tag) 'notAByteRecord'
+			return false
+		end 'notAByteRecord'
+		return match self.signatures.structOf(self.byteRecordLayoutName(tag)) 'corpusDeclaresIt'
+			declared gives true
+			undeclared gives false
+		end 'corpusDeclaresIt'
+	end 'tagCarriesStructLayoutHere'
+
+	// The corpus name a byte-record tag's layout is declared under. Split from `baseStructNameOfType` only
+	// because that one needs a token to panic with and this one is asked before any error is possible; the
+	// two must answer the same, so the second reads the first's two constants rather than restating them.
+	function byteRecordLayoutName(tag ValueTypeTag) returns ByteArray
+		if tag == ValueTypeTag.character 'aCharacter'
+			return CharacterConformerName
+		end 'aCharacter'
+		return StringConformerName
+	end 'byteRecordLayoutName'
 
 	// `loadIndirect <box> <offset>` — the one op a field read is.
 	//
@@ -44558,6 +45104,24 @@ export type Parser
 	// A parameter declared `Integer` already lives with exactly this split (`valueTagToStdType`'s
 	// `named` arm exists for it), so this is that arrangement reaching one op further, not a new one.
 	function emitFieldLoad(box ValueId, layout StructLayout, index FieldIndex, range SourceRange) returns ValueId
+		// ⭐⭐ **READING A FUSED WRAPPER'S INLINE `managed` IS NOT A LOAD — THE FIELD *IS* THE RECEIVER (W17).**
+		// `type String`'s `managed` is the `__ManagedMemory` embedded whole at offset 0, so its ADDRESS equals
+		// the record pointer; an `emitIndirectLoad` at offset 0 would read `buffer@0` and hand back a raw byte
+		// pointer where a buffer RECORD is wanted. Both references settle it the same way — *"a bare `managed`
+		// reference IS `self`"* (`MaxonToStandardConversion.cs:1600`).
+		//
+		// ⭐ **AND THE CORPUS ALREADY HAS A NAME FOR THIS VALUE: `addressableBytes()`, whose entire body is
+		// `return managed`** (`stdlib/String.maxon:181`). shv2 serves that through `__str_bytes_view`, which
+		// publishes a fresh `Array with Byte` record over the receiver's live bytes and INCREFS the allocation
+		// they live in — so the ownership is the debugged one rather than a second answer invented here, and
+		// the two spellings of one question land in one producer. Handing back the receiver's own `ValueId`
+		// instead is the double free `bufferSurfaceOf`'s header measures.
+		if layout.conformsToBuiltinManagedWrapper() and index == layout.inlineManagedFieldIndex() 'inlineManagedIsTheReceiver'
+			let view = self.emitOwnedRuntimeResult(StrBytesViewName, args: singletonArgs(box), resultTag: ValueTypeTag.genericInstance, resultNameId: self.signatures.internSynthesizedByteInstance(), range: range)
+			self.markBufferSurface(view)
+			return view
+		end 'inlineManagedIsTheReceiver'
+
 		// A FUNCTION-typed field (`export var op as UnaryOp`) arrives from `fieldTypeOf` already re-tagged
 		// `function` (it functionizes over the whole-program function-alias registry, since the SWEEP that
 		// recorded the layout ran before the alias was known), which is what makes the loaded value carry
@@ -45324,12 +45888,7 @@ export type Parser
 	// first — a file-scope alias is the common case and `enclosingType` is empty at file scope, where the join
 	// would build a string for a key that cannot exist.
 	function typeSpellingAtDenotesBuffer(index TokenIndex) returns bool
-		let spelling = self.identifierNameAt(index)
-		if spelling.equals(ManagedMemoryTypeName) or self.signatures.aliasDenotesBufferSurface(spelling) 'spelledItOrAFileScopeAlias'
-			return true
-		end 'spelledItOrAFileScopeAlias'
-
-		return not self.enclosingType.isEmpty() and self.signatures.aliasDenotesBufferSurface(joinQualifiedName(self.enclosingType, member: spelling))
+		return self.spellingDenotesBufferSurface(self.identifierNameAt(index))
 	end 'typeSpellingAtDenotesBuffer'
 
 	// ⭐⭐ **WHERE DOES THE TYPE WRITTEN AT `index` NAME `__ManagedMemory` (A2m)?** THE one reader every
@@ -45369,16 +45928,25 @@ export type Parser
 	// depends on file order is a wrong answer in one of the two orders, whichever one that is.
 	//
 	// ⚠⚠ **AND THE ROOT IS THE EXACT OPPOSITE CASE — IT ALWAYS ASKS, BECAUSE ITS ANSWER IS REPAIRED AT EVERY
-	// READ DOOR BY A DERIVATION THAT IS COMPLEMENTARY BY CONSTRUCTION.** `ProgramSignatures.fieldSurfaceOf`
-	// and `declaredReturnSurface` both OR in `declaredElementIsBufferSurface`, which reads the alias NAME off
-	// a swept type that is still `named` — and a swept type is still `named` EXACTLY when
+	// READ DOOR BY A DERIVATION THAT IS COMPLEMENTARY BY CONSTRUCTION.** `ProgramSignatures.fieldSurfaceOf`,
+	// `declaredReturnSurface` and `payloadSurfaceOf` all OR in `derivedAliasSurfaceBits`, which reads the alias
+	// NAME off a swept type that is still `named` — and a swept type is still `named` EXACTLY when
 	// `parseTypeReference`'s generic-alias arm found no alias, i.e. exactly when this token test finds none
-	// either. Both conditions are `recordGenericAlias`'s one write (`genericAliases` and
-	// `bufferElementAliases`, adjacent lines), so the two halves cover the two orders between them and their
-	// UNION is order-independent. ⚠ Suppressing the root here — which this review did, briefly — breaks that
-	// pair and makes `var bufs as BufArray` / `returns BufArray` themselves order-dependent; measured, the
+	// either. Both conditions are `recordGenericAlias`'s one write (`genericAliases`, `bufferElementAliases`
+	// and `bufferSurfaceAliases`, adjacent lines), so the two halves cover the two orders between them and
+	// their UNION is order-independent. ⚠ Suppressing the root here — which this review did, briefly — breaks
+	// that pair and makes `var bufs as BufArray` / `returns BufArray` themselves order-dependent; measured, the
 	// same two-file program then flipped the other way. A SLOT has no such second half, which is the whole of
 	// why the two positions answer differently.
+	//
+	// ⚠⚠ **BOTH ROOT BITS RIDE THAT PAIR, AND ONLY ONE OF THEM DID UNTIL W49.** The read-door derivation
+	// carried the ELEMENT bit alone, so a root spelled with an alias FOR the buffer —
+	// `typealias ByteBuffer = __ManagedMemory with Byte`, then `var buf as ByteBuffer` — had only the stored
+	// token half, which is empty for every alias its own file declares (`recordGenericAlias` runs at
+	// `foldFile`). MEASURED: the field, the RETURN clause and the union PAYLOAD each refused `length`, the
+	// buffer roster's first member, while a PARAMETER spelled with the same alias compiled and RAN — because a
+	// parameter's surface is read in the REAL parse, where the registry is complete. The token test below is
+	// unchanged; what changed is that its read-door twin now answers for the same two bits it does.
 	function declaredSurfaceAt(index TokenIndex, slotElementsFromAliases bool) returns DeclaredSurface
 		if self.kindAt(index) != TokenKind.leftParen 'notATuple'
 			return self.rootLeafSurfaceAt(index)
@@ -45446,12 +46014,16 @@ export type Parser
 	// consultation of `bufferElementAliases` from a declared spelling, so the gate and the leaf builder cannot
 	// come to hold different opinions about a position's right to the registry — which is exactly the shape
 	// that made a slot's answer file-order dependent (see `declaredSurfaceAt`).
+	// ⚠ **`allFilesFolded` JOINS `elementFromAliases` AS A SECOND GATE (W49)**, and it says the same thing one
+	// scope wider: `elementFromAliases` refuses the registry at a sweep-fed SLOT, and this refuses it in the
+	// sweep at ALL positions. Both exist because a registry read during the sweep reports how far the sweep had
+	// got; see `spellingDenotesBufferSurface` for the measurement and for why the root can now afford it.
 	function spellingAtNamesBufferElements(index TokenIndex, elementFromAliases bool) returns bool
-		if not elementFromAliases 'sweepFedSlot'
+		if not elementFromAliases or not self.signatures.allFilesFolded 'sweepFedSlotOrSweepItself'
 			return false
-		end 'sweepFedSlot'
+		end 'sweepFedSlotOrSweepItself'
 
-		return self.signatures.aliasElementIsBufferSurface(self.identifierNameAt(index))
+		return self.signatures.aliasElementIsBufferSurface(self.identifierNameAt(index), readerFilePath: self.filePath)
 	end 'spellingAtNamesBufferElements'
 
 	// Append the pre-order nodes of the type written at `index` to `out`. A tuple pushes its own node — whose
@@ -46617,7 +47189,7 @@ export type Parser
 		// re-loaded at every use, so no mark reaches the read. Admitting it would hand back an ARRAY-surfaced
 		// element where the author wrote a buffer's alias — a refusal at the first buffer method, blaming the
 		// method rather than the declaration.
-		if self.signatures.aliasElementIsBufferSurface(aliasTok.value) 'elementsAreBuffers'
+		if self.signatures.aliasElementIsBufferSurface(aliasTok.value, readerFilePath: self.filePath) 'elementsAreBuffers'
 			throw ConstEvalError.defective(ParseError.unsupported("a top-level `{String.from(aliasTok.value)}.{String.from(CreateMethod)}()` — its elements are `{String.from(ManagedMemoryTypeName)}` buffers, and a global is re-loaded at every use, so an element read out of it would carry the `{String.from(ArrayBuiltinBaseName)}` surface instead. Declare an array of buffers inside a function", line: aliasTok.line, column: aliasTok.column))
 		end 'elementsAreBuffers'
 
@@ -47329,6 +47901,29 @@ export type Parser
 	//     HERE, it is the answer, and the arity check words it in terms of the call the author actually wrote.
 	// The caller (`parseCall`) has already established `name` IS a sibling (`isImplicitSelfMethod`), so the map
 	// is built and this `ensureSiblingReceivers` is a memo hit.
+	// Is this bare call a byte record's own roster member? See `parseCall`'s arm for why it outranks the
+	// implicit-self resolution. It must decide WITHOUT resolving anything: an enclosing type that is not
+	// `String`/`Character` and a name the roster does not carry both answer no, and only then is a receiver
+	// materialized.
+	function implicitSelfTakesTheByteRecordRoster(calleeTok Token) returns bool
+		let enclosing = byteRecordTagOfTypeName(self.enclosingType)
+		if enclosing == ValueTypeTag.unresolved 'notInsideAByteRecord'
+			return false
+		end 'notInsideAByteRecord'
+		if not (self.scope.contains(SelfParamName) or self.captureBinds(SelfParamName)) 'noReceiver'
+			return false
+		end 'noReceiver'
+		return rosterHasMember(calleeTok.value, roster: self.surfaceMemberNames(byteRecordSurface(enclosing)))
+	end 'implicitSelfTakesTheByteRecordRoster'
+
+	// `self`, shaped as the receiver the roster dispatchers take. It carries no immutable name and no borrow
+	// subject for `implicitSelfReceiver`'s stated reason — a bare sibling call names no ONE storage — and the
+	// anchor is the callee token, which is what a diagnostic inside the arm points at.
+	function implicitSelfByteRecordReceiver(calleeTok Token) returns MethodReceiver throws ParseError
+		let value = try self.requireReceiverValue(calleeTok)
+		return MethodReceiver.create(value, tag: byteRecordTagOfTypeName(self.enclosingType), nameId: UnnamedTypeId, anchor: calleeTok, immutableName: EmptySourceText, subjectName: EmptySourceText, owner: NoMutatedParams, selfFieldName: EmptySourceText)
+	end 'implicitSelfByteRecordReceiver'
+
 	function implicitSelfReceiver(name ByteArray, anchor Token) returns ReceiverArg throws ParseError
 		self.ensureSiblingReceivers()
 		if not (try self.siblingReceivers.get(name) otherwise false) 'staticSibling'
@@ -47464,6 +48059,31 @@ export type Parser
 		// qualified name, prepending `self` for an instance method. The method takes precedence over a
 		// same-named free function; a name that is NOT a sibling stays the free/direct call below (E3004 if it
 		// names nothing declared).
+		// ⭐⭐⭐ **A BARE SIBLING CALL INSIDE A BYTE RECORD TAKES THE ROSTER, EXACTLY AS `s.<member>()` DOES
+		// (W17).** The roster-wins order `dispatchMethodOnReceiver` states was written for the EXPLICIT
+		// spelling and silently did not cover the implicit-self one — so inside `type String` a bare
+		// `addressableBytes()` resolved to the corpus module function while `s.addressableBytes()` reached the
+		// arm that mints `__str_bytes_view` **and marks the result a buffer surface**.
+		//
+		// ⚠ **THE MARK IS THE WHOLE POINT, AND ITS ABSENCE IS A WRONG ANSWER RATHER THAN A SLOWER ONE.**
+		// `String.replace` writes `let selfBytes = addressableBytes()` and then `selfBytes.slice(pos, matchPos)`;
+		// unmarked, `dispatchArrayMethod` reads `selfBytes` as an `Array`, `parseArraySlice`'s
+		// `required: not bufferSurface` then DEMANDS the `endIndex:` label the buffer surface makes optional, and
+		// the corpus is refused inside its own file — `E2010 Expected ':' but got ')'` at `String.maxon:542`,
+		// which is 1002 of the 1158 failures listing the module produced.
+		//
+		// ⇒ Asked BEFORE the implicit-self arm and gated to the roster, so it can only ever catch a member the
+		// arm below would have sent to a corpus body that duplicates one. A member the roster does NOT serve
+		// falls through and reaches the corpus exactly as it should — the same split
+		// `byteRecordMemberBelongsToTheCorpus` makes one door over, from the other side.
+		if self.implicitSelfTakesTheByteRecordRoster(calleeTok) 'byteRecordRosterMember'
+			let recv = try self.implicitSelfByteRecordReceiver(calleeTok)
+			if recv.tag == ValueTypeTag.character 'aCharacter'
+				return try self.dispatchCharacterMethod(recv)
+			end 'aCharacter'
+			return try self.dispatchStringMethod(func, recv: recv, resultUsed: resultUsed)
+		end 'byteRecordRosterMember'
+
 		if self.isImplicitSelfMethod(calleeTok.value) 'implicitSelfMethod'
 			let receiver = try self.implicitSelfReceiver(calleeTok.value, anchor: calleeTok)
 			return try self.parseCallNamed(func, callee: qualifiedMethodName(self.enclosingType, methodName: calleeTok.value), anchor: calleeTok, receiver: receiver, resultUsed: resultUsed, constructorInstance: ConstructorInstance.none, mint: CalleeMint.notMinted)
@@ -48118,7 +48738,7 @@ export type Parser
 	// 48-byte `Array` record so the value can be an `Array with Byte`, and the write reads `buffer@0` and
 	// `length@8` — the two slots a String record already carries, at the SAME offsets (see
 	// `StringRuntime.buildStreamWrite`). So the record is minted and destroyed for a consumer that never looks
-	// at the one slot the two records disagree on (`@40`, `element_destroy` against `isAsciiFlag`), and with it
+	// at the one slot the two records disagree on (`@40`, `element_destroy` against `singleByteGraphemes`), and with it
 	// arrive `__arr_create`/`__arr_decref`, the whole allocator and the leak gate.
 	//
 	// MEASURED, on a program whose only call is `print`: **3,178 code bytes with the view, 1,703 without** —

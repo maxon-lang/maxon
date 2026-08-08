@@ -288,3 +288,49 @@ end 'main'
 ```exitcode
 8
 ```
+
+<!-- test: sizeof.the-corpus-byte-record-is-forty-eight -->
+### A `managed` field of a builtin-literal conformer is embedded whole
+
+THE ENVELOPE COLLAPSE. A type whose `implements` clause names one of `stdlib/Builtins.maxon`'s three
+literal markers holds its `managed` `__ManagedMemory` INLINE — five machine words at offset 0 — rather
+than as an 8-byte pointer to one. That is what makes the corpus's two-field `type String` lay out as the
+48-byte record the runtime reads: `managed` occupies 0..40 and the flag lands at 40.
+
+⚠ **THE SUBJECT IS THE CORPUS'S OWN `String`, AND IT HAS TO BE.** A user conformer would be the more
+direct probe, and it is the one this case first used — but a marker conformer of any name the compiler
+does not own the byte record for is now refused at its `Self{…}`
+(`Parser.requireFusedWrapperTag`), because the value it produced carried a byte record's bytes under a
+struct's identity and its drop, its clone and its own field reads each disagreed with it. See
+`interface-conformance/error.literal-marker-conformer-*` for the three measured programs. So the marker
+conformers that remain are the two the corpus declares, and this reads one of them.
+
+```maxon
+function main() returns ExitCode
+	return sizeof(String) as ExitCode
+end 'main'
+```
+```exitcode
+48
+```
+
+<!-- test: sizeof.a-plain-managed-field-is-still-a-pointer -->
+### Without the marker, `managed` is an ordinary pointer field
+
+The negative control, and it is the reason the rule is keyed on the CONFORMANCE and not on the field
+name: pointer-valued `managed` fields exist (`StringIterator`'s, an `ArrayIter`'s cursor source), and
+keying on the name alone would silently widen every one of them by 32 bytes.
+
+```maxon
+type Plain
+	var managed as __ManagedMemory
+	var flag as bool
+end 'Plain'
+
+function main() returns ExitCode
+	return sizeof(Plain) as ExitCode
+end 'main'
+```
+```exitcode
+16
+```

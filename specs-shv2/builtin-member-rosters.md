@@ -30,6 +30,12 @@ methods, so the case that names them lives beside the visibility rule they are r
 `Character`'s is here, because it had none at all and its own spec file (`specs-shv2/character-type.md`)
 is ported byte-identical from `/specs` and may not gain an shv2-authored case.
 
+⚠ The member the case names has to be one **NEITHER SIDE SUPPLIES**, and that is not a free choice: with
+`stdlib/Character.maxon` listed, the corpus fall-through serves every member the corpus declares, so a name
+like `codepoint` (`stdlib/Character.maxon:123`) is now RESOLVED rather than refused — which is the listing
+working, not the roster failing. `isUpperCase` is declared by neither the roster nor the corpus, so it still
+reaches the refusal this case is about.
+
 ## Tests
 
 <!-- test: error.unknown-character-method-gets-the-roster -->
@@ -39,11 +45,11 @@ function main() returns ExitCode
 	let s = "hi"
 	var n = 0
 	for c in s 'eachCharacter'
-		n = n + c.codepoint()
+		n = n + c.isUpperCase()
 	end 'eachCharacter'
 	return n
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:6:13: Unsupported: `Character` member 'codepoint' — shv2 provides bytes/byteLength/asciiValue; that list IS the surface, so nothing else is served here
+error E2015: <fragment>:6:13: Unsupported: `Character` member 'isUpperCase' — shv2 provides bytes/byteLength/asciiValue; that list IS the surface, so nothing else is served here
 ```

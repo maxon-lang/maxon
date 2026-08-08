@@ -784,7 +784,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:4:8: Unsupported: `Array` member 'setLength' — P1.7 provides managed/get/set/first/last/pop/remove/slice/count/capacity/isEmpty/clone/push/reserve/resize/clear/insert/append/map/contains/hash/equals; that list IS the surface, so nothing else is served here
+error E2015: <fragment>:4:8: Unsupported: `Array` member 'setLength' — P1.7 provides managed/get/set/first/last/pop/remove/slice/count/capacity/isEmpty/clone/push/reserve/resize/clear/insert/append/appendMemory/map/contains/hash/equals; that list IS the surface, so nothing else is served here
 ```
 
 <!-- test: buffer-of-a-slice-is-a-buffer-and-detaches-before-it-writes -->
@@ -899,7 +899,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:7:8: Unsupported: `Array` member 'setLength' — P1.7 provides managed/get/set/first/last/pop/remove/slice/count/capacity/isEmpty/clone/push/reserve/resize/clear/insert/append/map/contains/hash/equals; that list IS the surface, so nothing else is served here
+error E2015: <fragment>:7:8: Unsupported: `Array` member 'setLength' — P1.7 provides managed/get/set/first/last/pop/remove/slice/count/capacity/isEmpty/clone/push/reserve/resize/clear/insert/append/appendMemory/map/contains/hash/equals; that list IS the surface, so nothing else is served here
 ```
 
 ### An element size shv2 has no element TYPE for is refused, not silently truncated
@@ -954,7 +954,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:10:12: Unsupported: `Array` member 'setByte' — P1.7 provides managed/get/set/first/last/pop/remove/slice/count/capacity/isEmpty/clone/push/reserve/resize/clear/insert/append/map/contains/hash/equals; that list IS the surface, so nothing else is served here
+error E2015: <fragment>:10:12: Unsupported: `Array` member 'setByte' — P1.7 provides managed/get/set/first/last/pop/remove/slice/count/capacity/isEmpty/clone/push/reserve/resize/clear/insert/append/appendMemory/map/contains/hash/equals; that list IS the surface, so nothing else is served here
 ```
 
 ### R4.6 — the buffer's `set` is bounded by CAPACITY, and the `Array`'s is not
@@ -1557,7 +1557,7 @@ function main() returns ExitCode
 	let more = try __ManagedMemory.create(1, elementSize: 8) otherwise return 10
 	try more.setLength(1) otherwise return 11
 	try more.set(0, value: 33) otherwise return 12
-	try words.append(more) otherwise return 13
+	words.append(more)
 	total = total + words.length()
 	words.clear()
 	total = total + words.length()
@@ -1570,6 +1570,69 @@ end 'main'
 ```
 ```exitcode
 42
+```
+
+<!-- test: error.try-on-the-buffers-append -->
+
+⚖ **`append` IS THE ONE BUFFER MUTATOR THAT CANNOT FAIL, SO A `try` ON IT IS E3055 — USER RULING,
+2026-08-07.** It reads as an exception beside `set`/`setLength`/`setByte`/`grow`/`slice`, which all throw, and
+it is not: those five take an INDEX or a CAPACITY the source wrote and must refuse the ones the record cannot
+serve, while `append` is handed another record and asks the growth policy for whatever capacity that implies.
+Both references agree — the bootstrap registers it as the only `__ManagedMemory` mutator with no `throwsType`
+(`maxon-sharp/Compiler/2-Parser.cs:1670`) and v1's `__managed_mem_append` says *"Non-throwing"* in its header
+and swallows the grow's error (`stdlib/Internals.maxon:3743-3766`) — and `stdlib/String.maxon:414` declares a
+NON-throwing `append` whose whole body is a bare `managed.append(other.managed)`, which is unwritable under
+any other answer.
+
+⚠ **THE `try a.append(b) otherwise …` IN `specs/managed-memory-builtin.md` IS NOT EVIDENCE AGAINST IT**, and
+was read as such for a rung. That file is `status: selfhosted`: v1 merely TOLERATES a redundant `try` on a
+builtin where shv2 refuses one, so the line records v1's permissiveness rather than the callee's contract.
+```maxon
+function main() returns ExitCode
+	let a = try __ManagedMemory.create(2, elementSize: 8) otherwise return 1
+	let b = try __ManagedMemory.create(2, elementSize: 8) otherwise return 2
+	try a.append(b) otherwise return 3
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3055: <fragment>:5:2: try requires a throwing function: this builtin call cannot fail
+```
+
+<!-- test: buffer-append-deep-clones-a-managed-element -->
+
+⭐⭐ **THE BUFFER'S `append` AND THE `Array`'s ARE ONE OPERATION, AND WHILE THEY WERE TWO THIS PROGRAM
+SEGFAULTED.** The buffer had its own callee (`__arr_mem_append`) whose only distinguishing property was a
+throwing-ness the ruling above removed — and that callee byte-blitted the receiver's elements whatever they
+were, so appending through the `.managed` surface of an `Array with String` duplicated every heap pointer and
+double-freed it at teardown. The `Array` spelling had always picked its emission by element kind; folding the
+two onto that one door is what makes the surfaces agree. MEASURED before the fold: correct output, then
+SIGSEGV on the way out.
+
+⚠ The receiver keeps its own copies, which is the deep clone's whole point: `b` is dropped at its last use
+here and `a`'s second element must survive it.
+```maxon
+typealias Strings = Array with String
+
+function main() returns ExitCode
+	var a = Strings.create()
+	a.push("alpha is long enough to be heap allocated")
+	var b = Strings.create()
+	b.push("beta is also long enough to be heap allocated")
+	a.managed.append(b.managed)
+	if a.count() != 2 'badCount'
+		return 90
+	end 'badCount'
+	let second = try a.get(1) otherwise return 91
+	print("{second}\n")
+	return 0
+end 'main'
+```
+```stdout
+beta is also long enough to be heap allocated
+```
+```exitcode
+0
 ```
 
 <!-- test: error.buffer-has-no-push -->
@@ -1587,7 +1650,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:4:5: Unsupported: `__ManagedMemory` member 'push' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/elementSize/grow/append/slice/clear; that list IS the surface, so nothing else is served here
+error E2015: <fragment>:4:5: Unsupported: `__ManagedMemory` member 'push' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/elementSize/grow/toCString/makeCharFromBytes/append/slice/clear; that list IS the surface, so nothing else is served here
 ```
 
 <!-- test: error.buffer-has-no-push-in-value-position -->
@@ -1605,7 +1668,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:4:13: Unsupported: `__ManagedMemory` member 'push' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/elementSize/grow/append/slice/clear; that list IS the surface, so nothing else is served here
+error E2015: <fragment>:4:13: Unsupported: `__ManagedMemory` member 'push' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/elementSize/grow/toCString/makeCharFromBytes/append/slice/clear; that list IS the surface, so nothing else is served here
 ```
 
 <!-- test: error.buffer-has-no-remove -->
@@ -1621,7 +1684,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:4:9: Unsupported: `__ManagedMemory` member 'remove' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/elementSize/grow/append/slice/clear; that list IS the surface, so nothing else is served here
+error E2015: <fragment>:4:9: Unsupported: `__ManagedMemory` member 'remove' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/elementSize/grow/toCString/makeCharFromBytes/append/slice/clear; that list IS the surface, so nothing else is served here
 ```
 
 <!-- test: error.buffer-has-no-count -->
@@ -1638,7 +1701,29 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:4:13: Unsupported: `__ManagedMemory` member 'count' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/elementSize/grow/append/slice/clear; that list IS the surface, so nothing else is served here
+error E2015: <fragment>:4:13: Unsupported: `__ManagedMemory` member 'count' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/elementSize/grow/toCString/makeCharFromBytes/append/slice/clear; that list IS the surface, so nothing else is served here
+```
+
+<!-- test: error.buffer-has-no-appendMemory -->
+
+⭐⭐ **`count`'s ARGUMENT, ONE MEMBER OVER — AND THE DIRECTION THAT NEEDED ITS OWN CASE.** `appendMemory` is
+declared on `Array` (`stdlib/Array.maxon:272`) and NOWHERE else: not in the corpus, not in v1's
+`__ManagedMemory` member table (`LowerMaxonToStd.maxon:1618-1660`), not in the bootstrap's
+(`2-Parser.cs:1470-1512`), and no corpus caller writes `mm.appendMemory(…)`. The envelope collapse makes the
+two surfaces ONE record and the `Array` spelling therefore folds onto the buffer's `append` EMISSION — which
+is exactly the fold `count` proves must not reach the SURFACE. Served here it cost nothing and refused
+nothing, which is the whole hazard: a buffer advertising a member the language does not give it, with no
+program able to notice.
+```maxon
+function main() returns ExitCode
+	let mm = try __ManagedMemory.create(4, elementSize: 1) otherwise return 1
+	let piece = try __ManagedMemory.create(2, elementSize: 1) otherwise return 2
+	try mm.appendMemory(piece) otherwise return 3
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:5:9: Unsupported: `__ManagedMemory` member 'appendMemory' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/elementSize/grow/toCString/makeCharFromBytes/append/slice/clear; that list IS the surface, so nothing else is served here
 ```
 
 <!-- test: error.buffer-has-no-managed-field -->
@@ -1655,7 +1740,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:4:9: Unsupported: `__ManagedMemory` member 'managed' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/elementSize/grow/append/slice/clear; that list IS the surface, so nothing else is served here
+error E2015: <fragment>:4:9: Unsupported: `__ManagedMemory` member 'managed' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/elementSize/grow/toCString/makeCharFromBytes/append/slice/clear; that list IS the surface, so nothing else is served here
 ```
 
 <!-- test: buffer-reports-its-element-size -->
@@ -1693,7 +1778,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:4:17: Unsupported: `__ManagedMemory` member 'pop' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/elementSize/grow/append/slice/clear; that list IS the surface, so nothing else is served here
+error E2015: <fragment>:4:17: Unsupported: `__ManagedMemory` member 'pop' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/elementSize/grow/toCString/makeCharFromBytes/append/slice/clear; that list IS the surface, so nothing else is served here
 ```
 
 <!-- test: error.buffer-has-no-first -->
@@ -1705,7 +1790,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:4:17: Unsupported: `__ManagedMemory` member 'first' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/elementSize/grow/append/slice/clear; that list IS the surface, so nothing else is served here
+error E2015: <fragment>:4:17: Unsupported: `__ManagedMemory` member 'first' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/elementSize/grow/toCString/makeCharFromBytes/append/slice/clear; that list IS the surface, so nothing else is served here
 ```
 
 <!-- test: error.buffer-has-no-last -->
@@ -1717,7 +1802,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:4:17: Unsupported: `__ManagedMemory` member 'last' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/elementSize/grow/append/slice/clear; that list IS the surface, so nothing else is served here
+error E2015: <fragment>:4:17: Unsupported: `__ManagedMemory` member 'last' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/elementSize/grow/toCString/makeCharFromBytes/append/slice/clear; that list IS the surface, so nothing else is served here
 ```
 
 <!-- test: error.buffer-has-no-insert -->
@@ -1736,7 +1821,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:4:9: Unsupported: `__ManagedMemory` member 'insert' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/elementSize/grow/append/slice/clear; that list IS the surface, so nothing else is served here
+error E2015: <fragment>:4:9: Unsupported: `__ManagedMemory` member 'insert' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/elementSize/grow/toCString/makeCharFromBytes/append/slice/clear; that list IS the surface, so nothing else is served here
 ```
 
 <!-- test: error.buffer-has-no-reserve -->
@@ -1753,7 +1838,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:4:5: Unsupported: `__ManagedMemory` member 'reserve' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/elementSize/grow/append/slice/clear; that list IS the surface, so nothing else is served here
+error E2015: <fragment>:4:5: Unsupported: `__ManagedMemory` member 'reserve' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/elementSize/grow/toCString/makeCharFromBytes/append/slice/clear; that list IS the surface, so nothing else is served here
 ```
 
 <!-- test: error.buffer-has-no-resize -->
@@ -1770,7 +1855,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:4:5: Unsupported: `__ManagedMemory` member 'resize' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/elementSize/grow/append/slice/clear; that list IS the surface, so nothing else is served here
+error E2015: <fragment>:4:5: Unsupported: `__ManagedMemory` member 'resize' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/elementSize/grow/toCString/makeCharFromBytes/append/slice/clear; that list IS the surface, so nothing else is served here
 ```
 
 <!-- test: error.buffer-has-no-is-empty -->
@@ -1782,7 +1867,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:4:13: Unsupported: `__ManagedMemory` member 'isEmpty' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/elementSize/grow/append/slice/clear; that list IS the surface, so nothing else is served here
+error E2015: <fragment>:4:13: Unsupported: `__ManagedMemory` member 'isEmpty' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/elementSize/grow/toCString/makeCharFromBytes/append/slice/clear; that list IS the surface, so nothing else is served here
 ```
 
 <!-- test: error.buffer-has-no-clone -->
@@ -1798,7 +1883,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:4:13: Unsupported: `__ManagedMemory` member 'clone' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/elementSize/grow/append/slice/clear; that list IS the surface, so nothing else is served here
+error E2015: <fragment>:4:13: Unsupported: `__ManagedMemory` member 'clone' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/elementSize/grow/toCString/makeCharFromBytes/append/slice/clear; that list IS the surface, so nothing else is served here
 ```
 
 <!-- test: error.buffer-of-a-slice-has-no-array-members-either -->
@@ -1817,7 +1902,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:6:15: Unsupported: `__ManagedMemory` member 'count' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/elementSize/grow/append/slice/clear; that list IS the surface, so nothing else is served here
+error E2015: <fragment>:6:15: Unsupported: `__ManagedMemory` member 'count' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/elementSize/grow/toCString/makeCharFromBytes/append/slice/clear; that list IS the surface, so nothing else is served here
 ```
 
 <!-- test: array-members-still-work-through-a-managed-field-hop -->
@@ -1878,7 +1963,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:3:12: Unsupported: `__ManagedMemory` member 'count' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/elementSize/grow/append/slice/clear; that list IS the surface, so nothing else is served here
+error E2015: <fragment>:3:12: Unsupported: `__ManagedMemory` member 'count' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/elementSize/grow/toCString/makeCharFromBytes/append/slice/clear; that list IS the surface, so nothing else is served here
 ```
 
 <!-- test: declared-parameter-serves-the-roster -->
@@ -1917,7 +2002,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:8:11: Unsupported: `__ManagedMemory` member 'count' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/elementSize/grow/append/slice/clear; that list IS the surface, so nothing else is served here
+error E2015: <fragment>:8:11: Unsupported: `__ManagedMemory` member 'count' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/elementSize/grow/toCString/makeCharFromBytes/append/slice/clear; that list IS the surface, so nothing else is served here
 ```
 
 <!-- test: declared-return-type-serves-the-roster -->
@@ -1960,7 +2045,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:12:15: Unsupported: `__ManagedMemory` member 'count' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/elementSize/grow/append/slice/clear; that list IS the surface, so nothing else is served here
+error E2015: <fragment>:12:15: Unsupported: `__ManagedMemory` member 'count' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/elementSize/grow/toCString/makeCharFromBytes/append/slice/clear; that list IS the surface, so nothing else is served here
 ```
 
 <!-- test: declared-field-serves-the-roster -->
@@ -2052,7 +2137,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:8:13: Unsupported: `Array` member 'create' — P1.7 provides managed/get/set/first/last/pop/remove/slice/count/capacity/isEmpty/clone/push/reserve/resize/clear/insert/append/map/contains/hash/equals; that list IS the surface, so nothing else is served here
+error E2015: <fragment>:8:13: Unsupported: `Array` member 'create' — P1.7 provides managed/get/set/first/last/pop/remove/slice/count/capacity/isEmpty/clone/push/reserve/resize/clear/insert/append/appendMemory/map/contains/hash/equals; that list IS the surface, so nothing else is served here
 ```
 
 ### A2m — the buffer surface rides a SLOT, so a tuple element and an array element carry it
@@ -2224,7 +2309,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:10:13: Unsupported: `__ManagedMemory` member 'count' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/elementSize/grow/append/slice/clear; that list IS the surface, so nothing else is served here
+error E2015: <fragment>:10:13: Unsupported: `__ManagedMemory` member 'count' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/elementSize/grow/toCString/makeCharFromBytes/append/slice/clear; that list IS the surface, so nothing else is served here
 ```
 
 <!-- test: error.array-element-has-the-buffer-surface -->
@@ -2241,7 +2326,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:8:11: Unsupported: `__ManagedMemory` member 'count' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/elementSize/grow/append/slice/clear; that list IS the surface, so nothing else is served here
+error E2015: <fragment>:8:11: Unsupported: `__ManagedMemory` member 'count' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/elementSize/grow/toCString/makeCharFromBytes/append/slice/clear; that list IS the surface, so nothing else is served here
 ```
 
 <!-- test: error.a-tuple-of-byte-arrays-keeps-the-array-surface -->
@@ -2266,7 +2351,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:12:13: Unsupported: `Array` member 'length' — P1.7 provides managed/get/set/first/last/pop/remove/slice/count/capacity/isEmpty/clone/push/reserve/resize/clear/insert/append/map/contains/hash/equals; that list IS the surface, so nothing else is served here
+error E2015: <fragment>:12:13: Unsupported: `Array` member 'length' — P1.7 provides managed/get/set/first/last/pop/remove/slice/count/capacity/isEmpty/clone/push/reserve/resize/clear/insert/append/appendMemory/map/contains/hash/equals; that list IS the surface, so nothing else is served here
 ```
 
 <!-- test: a-tuple-of-byte-arrays-still-serves-count -->
@@ -2309,7 +2394,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:10:11: Unsupported: `Array` member 'length' — P1.7 provides managed/get/set/first/last/pop/remove/slice/count/capacity/isEmpty/clone/push/reserve/resize/clear/insert/append/map/contains/hash/equals; that list IS the surface, so nothing else is served here
+error E2015: <fragment>:10:11: Unsupported: `Array` member 'length' — P1.7 provides managed/get/set/first/last/pop/remove/slice/count/capacity/isEmpty/clone/push/reserve/resize/clear/insert/append/appendMemory/map/contains/hash/equals; that list IS the surface, so nothing else is served here
 ```
 
 <!-- test: an-array-of-byte-arrays-still-serves-count -->
@@ -2366,7 +2451,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:21:14: Unsupported: `Array` member 'length' — P1.7 provides managed/get/set/first/last/pop/remove/slice/count/capacity/isEmpty/clone/push/reserve/resize/clear/insert/append/map/contains/hash/equals; that list IS the surface, so nothing else is served here
+error E2015: <fragment>:21:14: Unsupported: `Array` member 'length' — P1.7 provides managed/get/set/first/last/pop/remove/slice/count/capacity/isEmpty/clone/push/reserve/resize/clear/insert/append/appendMemory/map/contains/hash/equals; that list IS the surface, so nothing else is served here
 ```
 
 ### A2m pins — four behaviours that were already RIGHT and had nothing holding them there
@@ -2411,7 +2496,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:10:18: Unsupported: `Array` member 'length' — P1.7 provides managed/get/set/first/last/pop/remove/slice/count/capacity/isEmpty/clone/push/reserve/resize/clear/insert/append/map/contains/hash/equals; that list IS the surface, so nothing else is served here
+error E2015: <fragment>:10:18: Unsupported: `Array` member 'length' — P1.7 provides managed/get/set/first/last/pop/remove/slice/count/capacity/isEmpty/clone/push/reserve/resize/clear/insert/append/appendMemory/map/contains/hash/equals; that list IS the surface, so nothing else is served here
 ```
 
 <!-- test: managed-field-as-a-value-binds-serves-the-roster-and-drops-once -->
@@ -2474,7 +2559,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:9:27: Unsupported: `Array` member 'length' — P1.7 provides managed/get/set/first/last/pop/remove/slice/count/capacity/isEmpty/clone/push/reserve/resize/clear/insert/append/map/contains/hash/equals; that list IS the surface, so nothing else is served here
+error E2015: <fragment>:9:27: Unsupported: `Array` member 'length' — P1.7 provides managed/get/set/first/last/pop/remove/slice/count/capacity/isEmpty/clone/push/reserve/resize/clear/insert/append/appendMemory/map/contains/hash/equals; that list IS the surface, so nothing else is served here
 ```
 
 <!-- test: managed-field-on-a-value-receiver-binds-and-serves-the-roster -->
@@ -2795,7 +2880,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:12:15: Unsupported: `Array` member 'length' — P1.7 provides managed/get/set/first/last/pop/remove/slice/count/capacity/isEmpty/clone/push/reserve/resize/clear/insert/append/map/contains/hash/equals; that list IS the surface, so nothing else is served here
+error E2015: <fragment>:12:15: Unsupported: `Array` member 'length' — P1.7 provides managed/get/set/first/last/pop/remove/slice/count/capacity/isEmpty/clone/push/reserve/resize/clear/insert/append/appendMemory/map/contains/hash/equals; that list IS the surface, so nothing else is served here
 ```
 
 <!-- test: a-nested-tuple-of-byte-arrays-still-serves-count -->
@@ -2868,7 +2953,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:9:11: Unsupported: `Array` member 'length' — P1.7 provides managed/get/set/first/last/pop/remove/slice/count/capacity/isEmpty/clone/push/reserve/resize/clear/insert/append/map/contains/hash/equals; that list IS the surface, so nothing else is served here
+error E2015: <fragment>:9:11: Unsupported: `Array` member 'length' — P1.7 provides managed/get/set/first/last/pop/remove/slice/count/capacity/isEmpty/clone/push/reserve/resize/clear/insert/append/appendMemory/map/contains/hash/equals; that list IS the surface, so nothing else is served here
 ```
 
 <!-- test: a-tuple-slot-of-byte-arrays-still-serves-count -->
@@ -3054,7 +3139,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:20:12: Unsupported: `Array` member 'length' — P1.7 provides managed/get/set/first/last/pop/remove/slice/count/capacity/isEmpty/clone/push/reserve/resize/clear/insert/append/map/contains/hash/equals; that list IS the surface, so nothing else is served here
+error E2015: <fragment>:20:12: Unsupported: `Array` member 'length' — P1.7 provides managed/get/set/first/last/pop/remove/slice/count/capacity/isEmpty/clone/push/reserve/resize/clear/insert/append/appendMemory/map/contains/hash/equals; that list IS the surface, so nothing else is served here
 ```
 
 <!-- test: error.a-sibling-files-alias-in-a-tuple-slot-is-refused-alias-file-last -->
@@ -3085,7 +3170,7 @@ export function seed(x BufArray) returns Int
 end 'seed'
 ```
 ```maxoncstderr
-error E2015: <fragment>:12:12: Unsupported: `Array` member 'length' — P1.7 provides managed/get/set/first/last/pop/remove/slice/count/capacity/isEmpty/clone/push/reserve/resize/clear/insert/append/map/contains/hash/equals; that list IS the surface, so nothing else is served here
+error E2015: <fragment>:12:12: Unsupported: `Array` member 'length' — P1.7 provides managed/get/set/first/last/pop/remove/slice/count/capacity/isEmpty/clone/push/reserve/resize/clear/insert/append/appendMemory/map/contains/hash/equals; that list IS the surface, so nothing else is served here
 ```
 
 ### A2m — probing the tree walk: depth, sibling order, and width
@@ -3158,7 +3243,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:12:15: Unsupported: `Array` member 'length' — P1.7 provides managed/get/set/first/last/pop/remove/slice/count/capacity/isEmpty/clone/push/reserve/resize/clear/insert/append/map/contains/hash/equals; that list IS the surface, so nothing else is served here
+error E2015: <fragment>:12:15: Unsupported: `Array` member 'length' — P1.7 provides managed/get/set/first/last/pop/remove/slice/count/capacity/isEmpty/clone/push/reserve/resize/clear/insert/append/appendMemory/map/contains/hash/equals; that list IS the surface, so nothing else is served here
 ```
 
 <!-- test: a-seventy-element-tuple-carries-its-last-slots-surface -->
@@ -3257,7 +3342,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:11:18: Unsupported: `__ManagedMemory` member 'count' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/elementSize/grow/append/slice/clear; that list IS the surface, so nothing else is served here
+error E2015: <fragment>:11:18: Unsupported: `__ManagedMemory` member 'count' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/elementSize/grow/toCString/makeCharFromBytes/append/slice/clear; that list IS the surface, so nothing else is served here
 ```
 
 <!-- test: union-payload-declared-managed-memory-serves-a-shared-member -->
@@ -3320,7 +3405,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:13:18: Unsupported: `Array` member 'length' — P1.7 provides managed/get/set/first/last/pop/remove/slice/count/capacity/isEmpty/clone/push/reserve/resize/clear/insert/append/map/contains/hash/equals; that list IS the surface, so nothing else is served here
+error E2015: <fragment>:13:18: Unsupported: `Array` member 'length' — P1.7 provides managed/get/set/first/last/pop/remove/slice/count/capacity/isEmpty/clone/push/reserve/resize/clear/insert/append/appendMemory/map/contains/hash/equals; that list IS the surface, so nothing else is served here
 ```
 
 <!-- test: a-byte-array-payload-still-serves-count -->
@@ -3427,7 +3512,7 @@ function useBufferPair(p (__ManagedMemory, Int)) returns Int
 end 'useBufferPair'
 ```
 ```maxoncstderr
-error E2015: <fragment>:10:44: Unsupported: `Array` member 'length' — P1.7 provides managed/get/set/first/last/pop/remove/slice/count/capacity/isEmpty/clone/push/reserve/resize/clear/insert/append/map/contains/hash/equals; that list IS the surface, so nothing else is served here
+error E2015: <fragment>:10:44: Unsupported: `Array` member 'length' — P1.7 provides managed/get/set/first/last/pop/remove/slice/count/capacity/isEmpty/clone/push/reserve/resize/clear/insert/append/appendMemory/map/contains/hash/equals; that list IS the surface, so nothing else is served here
 ```
 
 <!-- test: a-sibling-files-buffer-array-payload-serves-the-roster-alias-file-first -->
@@ -3501,4 +3586,474 @@ end 'seed'
 ```
 ```exitcode
 5
+```
+
+### A `typealias` FOR the buffer carries the surface at every SWEPT declared position (W49)
+
+⭐⭐ **THE BIT THE SWEEP STORES IS NOT A BIT THE SWEEP CAN ANSWER.** W43 made
+`typealias KeyMemory = __ManagedMemory with Key` denote the buffer, filed by NAME in
+`ProgramSignatures.bufferSurfaceAliases` because a `GenericInstanceId` structurally cannot carry it
+(`__ManagedMemory with T` and `Array with T` intern to ONE instance). But `recordGenericAlias` — the one
+writer of that set — is called from `foldFile`, i.e. AFTER the whole file has been swept, while
+`Parser.declaredSurfaceAt` asks `aliasDenotesBufferSurface` DURING the sweep and writes its answer into the
+stored column. **So a position's surface was decided one pass before the fact that decides it existed**, and
+the answer stored for every same-file alias spelling was the `Array` one.
+
+**MEASURED before this fix**, on a ten-line program with no `String` anywhere: a file-scope
+`typealias ProbeBuf = __ManagedMemory with Byte` and a `var bytes as ProbeBuf` SEVEN LINES BELOW it, whose
+`bytes.length()` — the buffer roster's FIRST member — was refused as an unknown `Array` member. A PARAMETER
+spelled with the same alias compiled and ran, and that is what located the defect: a parameter's surface is
+read in the REAL parse, where the registry is complete, and the other positions are read by the SWEEP.
+
+⭐ **THE CURE IS THE ONE THE ELEMENT BIT ALREADY HAD, EXTENDED TO ITS TWIN** — not a second mechanism.
+`SurfaceBitElementIsBuffer` was recognised at A2m as underivable at sweep time and is therefore DERIVED at
+the read door from the alias NAME the swept `named` type still carries
+(`ProgramSignatures.surfaceWithDerivedAliasBits`). `SurfaceBitIsBuffer` has the identical problem, the
+identical registry — written on the adjacent line of the same function — and the identical carrier, so it is
+now derived through the identical door. The two halves are complementary by construction and cover the two
+file orders between them: a swept type is still `named` EXACTLY when the alias was not yet registered, which
+is EXACTLY when the token test found nothing, because both conditions are `recordGenericAlias`'s ONE write.
+
+<!-- test: a-buffer-alias-serves-the-roster-at-a-struct-field -->
+
+The ten-line repro, through TWO doors on one layout — `h.buf` from outside the type and a bare `self.buf`
+from inside a method — for the reason `declared-field-serves-the-roster` states about the bare spelling:
+both mint their value at the same place, so one column answers for both.
+```maxon
+typealias Byte = int(0 to u8.max)
+typealias Int = int(i64.min to i64.max)
+typealias ByteBuffer = __ManagedMemory with Byte
+
+type Holder
+	export var buf as ByteBuffer
+
+	export static function create(buf ByteBuffer) returns Self
+		return Self{buf: buf}
+	end 'create'
+
+	export function size() returns Int
+		return self.buf.length()
+	end 'size'
+end 'Holder'
+
+function main() returns ExitCode
+	let h = Holder.create("hello".toByteArray())
+	return (h.buf.length() + h.size()) as ExitCode
+end 'main'
+```
+```exitcode
+10
+```
+
+<!-- test: error.a-buffer-alias-at-a-struct-field-refuses-an-array-member -->
+
+The refusal half. `count` is an `Array` member and not a buffer one, so the field is refused it — and refused
+it with the BUFFER's roster, which is what says the message answers for the type it is shown about. **This
+exact program COMPILED before this fix**, which is the wrong answer no diagnostic reported.
+```maxon
+typealias Byte = int(0 to u8.max)
+typealias ByteBuffer = __ManagedMemory with Byte
+
+type Holder
+	export var buf as ByteBuffer
+
+	export static function create(buf ByteBuffer) returns Self
+		return Self{buf: buf}
+	end 'create'
+end 'Holder'
+
+function main() returns ExitCode
+	let h = Holder.create("hello".toByteArray())
+	return h.buf.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:15:15: Unsupported: `__ManagedMemory` member 'count' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/elementSize/grow/toCString/makeCharFromBytes/append/slice/clear; that list IS the surface, so nothing else is served here
+```
+
+<!-- test: error.an-array-alias-at-a-struct-field-keeps-the-array-surface -->
+
+⭐⭐ **THE OVER-ACCEPTANCE CONTROL, and it is the load-bearing one.** `__ManagedMemory with Byte` and
+`Array with Byte` intern to the IDENTICAL instance, so this field's `MaxonType` is the very one the case
+above declares — the surface cannot be keyed on it, and only the alias NAME tells the two apart. A fix that
+derived the bit from the resolved type, or that handed the buffer roster to every alias-typed field, would
+accept this program and nothing would report it.
+```maxon
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+
+type Holder
+	export var buf as ByteArray
+
+	export static function create(buf ByteArray) returns Self
+		return Self{buf: buf}
+	end 'create'
+end 'Holder'
+
+function main() returns ExitCode
+	let h = Holder.create("hello".toByteArray())
+	return h.buf.length() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:15:15: Unsupported: `Array` member 'length' — P1.7 provides managed/get/set/first/last/pop/remove/slice/count/capacity/isEmpty/clone/push/reserve/resize/clear/insert/append/appendMemory/map/contains/hash/equals; that list IS the surface, so nothing else is served here
+```
+
+<!-- test: an-array-alias-at-a-struct-field-still-serves-count -->
+
+The positive control for the case above — the `Array`-aliased field is still USABLE, so its refusal of
+`length` is a surface decision and not a broken field read.
+```maxon
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+
+type Holder
+	export var buf as ByteArray
+
+	export static function create(buf ByteArray) returns Self
+		return Self{buf: buf}
+	end 'create'
+end 'Holder'
+
+function main() returns ExitCode
+	let h = Holder.create("hello".toByteArray())
+	return h.buf.count() as ExitCode
+end 'main'
+```
+```exitcode
+5
+```
+
+<!-- test: a-buffer-alias-serves-the-roster-at-a-declared-return -->
+
+The RETURN clause is the second swept position, and it is read through the same one fold
+(`ProgramSignatures.declaredReturnSurface`). Nothing about the VALUE says buffer — it is an ordinary
+`"hello".toByteArray()` — so the return spelling is doing all the work.
+```maxon
+typealias Byte = int(0 to u8.max)
+typealias ByteBuffer = __ManagedMemory with Byte
+
+function makeBuf() returns ByteBuffer
+	return "hello".toByteArray()
+end 'makeBuf'
+
+function main() returns ExitCode
+	return makeBuf().length() as ExitCode
+end 'main'
+```
+```exitcode
+5
+```
+
+<!-- test: error.an-array-alias-at-a-declared-return-keeps-the-array-surface -->
+
+The return door's over-acceptance control, for the field control's exact reason: the two return types are one
+`MaxonType`.
+```maxon
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+
+function makeBuf() returns ByteArray
+	return "hello".toByteArray()
+end 'makeBuf'
+
+function main() returns ExitCode
+	return makeBuf().length() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:10:19: Unsupported: `Array` member 'length' — P1.7 provides managed/get/set/first/last/pop/remove/slice/count/capacity/isEmpty/clone/push/reserve/resize/clear/insert/append/appendMemory/map/contains/hash/equals; that list IS the surface, so nothing else is served here
+```
+
+<!-- test: a-buffer-alias-serves-the-roster-at-a-union-payload -->
+
+The union PAYLOAD is the third swept position (BATCH22's door), and it reaches the same derivation through
+`payloadSurfaceOf`. Three positions, one fold — which is what says this is ONE defect and not three.
+```maxon
+typealias Byte = int(0 to u8.max)
+typealias Int = int(i64.min to i64.max)
+typealias ByteBuffer = __ManagedMemory with Byte
+
+union Held
+	mem(m ByteBuffer)
+	nothing
+end 'Held'
+
+function size(h Held) returns Int
+	return match h 'k'
+		mem(x) gives x.length()
+		nothing gives 0
+	end 'k'
+end 'size'
+
+function main() returns ExitCode
+	let h = Held.mem("hello".toByteArray())
+	return size(h) as ExitCode
+end 'main'
+```
+```exitcode
+5
+```
+
+<!-- test: an-inner-buffer-alias-serves-the-roster-at-a-struct-field -->
+
+⭐ **AN ALIAS DECLARED INSIDE THE TYPE, which is the spelling `stdlib/Character.maxon` and
+`stdlib/String.maxon` actually write** (`typealias ByteMemory = __ManagedMemory with Byte` inside
+`type Character`). It needs NO second key handling, and that is the point: `parseTypeReference`'s
+inner-alias arm stamps the swept field type with the BASE-QUALIFIED name (`Holder.Mem`), and
+`qualifiedInnerGenericAlias` files the alias in `bufferSurfaceAliases` under that same one string — so the
+read-door derivation asks the name it was filed under without needing to know an inner alias exists.
+```maxon
+typealias Byte = int(0 to u8.max)
+typealias Int = int(i64.min to i64.max)
+
+type Holder
+	typealias Mem = __ManagedMemory with Byte
+
+	export var buf as Mem
+
+	export static function create(buf Mem) returns Self
+		return Self{buf: buf}
+	end 'create'
+
+	export function size() returns Int
+		return self.buf.length()
+	end 'size'
+end 'Holder'
+
+function main() returns ExitCode
+	let h = Holder.create("hello".toByteArray())
+	return h.size() as ExitCode
+end 'main'
+```
+```exitcode
+5
+```
+
+<!-- test: a-sibling-files-buffer-alias-serves-the-roster-alias-file-first -->
+
+⭐ **THE FILE-ORDER PAIR, which is what proves the cure is a COMPLEMENTARY half and not a replacement.**
+**Alias file FIRST**: the alias is already registered when `main.maxon` is swept, so the field type has
+resolved to `genericInstance` — the name is gone, the read-door derivation cannot fire, and the sweep's own
+TOKEN bit is what carries the surface. Deleting the stored bit in favour of the derivation would leave this
+half wrong.
+```maxon
+// --- file: alias.maxon
+typealias Byte = int(0 to u8.max)
+typealias Int = int(i64.min to i64.max)
+typealias ByteBuffer = __ManagedMemory with Byte
+
+export function seed(x ByteBuffer) returns Int
+	return x.length()
+end 'seed'
+
+// --- file: main.maxon
+type Holder
+	export var buf as ByteBuffer
+
+	export static function create(buf ByteBuffer) returns Self
+		return Self{buf: buf}
+	end 'create'
+end 'Holder'
+
+function main() returns ExitCode
+	let h = Holder.create("hello".toByteArray())
+	return (h.buf.length() + seed("hi".toByteArray())) as ExitCode
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: a-sibling-files-buffer-alias-serves-the-roster-alias-file-last -->
+
+⭐ **The other half — the identical program, its two files declared the other way round.** Now the alias is
+NOT yet registered when `main.maxon` is swept, so the field type stays `named("ByteBuffer")`, the stored
+token bit is clear, and it is the read-door DERIVATION that carries the surface. Both halves are pinned
+because either one alone leaves one order wrong — and a member roster that depends on file order is a wrong
+answer in one of the two orders, whichever one that is.
+```maxon
+// --- file: main.maxon
+type Holder
+	export var buf as ByteBuffer
+
+	export static function create(buf ByteBuffer) returns Self
+		return Self{buf: buf}
+	end 'create'
+end 'Holder'
+
+function main() returns ExitCode
+	let h = Holder.create("hello".toByteArray())
+	return (h.buf.length() + seed("hi".toByteArray())) as ExitCode
+end 'main'
+
+// --- file: alias.maxon
+typealias Byte = int(0 to u8.max)
+typealias Int = int(i64.min to i64.max)
+typealias ByteBuffer = __ManagedMemory with Byte
+
+export function seed(x ByteBuffer) returns Int
+	return x.length()
+end 'seed'
+```
+```exitcode
+7
+```
+
+### A buffer alias's surface is FILE-SCOPED, exactly as its instance is (W49)
+
+⭐⭐ **THE TWO SPELLING REGISTRIES ARE WHOLE-PROGRAM NAME SETS, AND A GENERIC ALIAS NAME IS NOT
+WHOLE-PROGRAM.** A plain `typealias` is file-local, so two files may each declare `B` and mean different
+things; N3 built the whole three-tier resolution
+(`ProgramSignatures.scopedGenericAliasInstance`) to answer *"which declaration does THIS file mean?"*. But
+`bufferSurfaceAliases` and `bufferElementAliases` are keyed by the bare name with no file in the key, so
+`contains("B")` answers *"did ANY file's declaration of `B` spell the buffer?"* — and a contested name is
+precisely the case where the files DISAGREE.
+
+**MEASURED, both file orders**: with `typealias B = __ManagedMemory with Byte` in one file and
+`typealias B = Array with Int` in another, the SECOND file's own `B` wore the buffer's surface — a parameter
+declared `B` refused `count` with the `__ManagedMemory` roster, and `B.create()` routed to the buffer's
+two-argument static and reported `E2004 Expected expression but got ')'` against a call the author wrote
+correctly. Neither diagnostic named the real cause, and both blamed the line that was right.
+
+⚠ **IT PREDATES THE READ-DOOR DERIVATION ABOVE** — the flat sets and the flat reads are W43's and A2m's —
+but it is the same registry, so the two are settled together: the SPELLING is resolved to the reader's own
+declaration before either set is asked (`ProgramSignatures.readerScopedAliasName`), through the very tiers
+N3 already resolves the INSTANCE by. An uncontested name — every name in the corpus — costs one miss on an
+empty map and allocates nothing.
+
+<!-- test: a-contested-alias-takes-each-files-own-buffer-spelling -->
+
+Both halves in one program, so neither can be satisfied by handing everything one surface: `bufferWidth`'s
+parameter must reach `length` (its file spelled the buffer) and `arrayWidth`'s must reach `count` (its file
+did not), under one alias name.
+```maxon
+// --- file: buffer.maxon
+typealias Byte = int(0 to u8.max)
+typealias Int = int(i64.min to i64.max)
+typealias B = __ManagedMemory with Byte
+
+export function bufferWidth(m B) returns Int
+	return m.length()
+end 'bufferWidth'
+
+// --- file: main.maxon
+typealias Int2 = int(i64.min to i64.max)
+typealias B = Array with Int2
+
+function arrayWidth(xs B) returns Int2
+	return xs.count()
+end 'arrayWidth'
+
+function main() returns ExitCode
+	var xs = B.create()
+	xs.push(7 as Int2)
+	return (bufferWidth("hello".toByteArray()) + arrayWidth(xs)) as ExitCode
+end 'main'
+```
+```exitcode
+6
+```
+
+<!-- test: a-contested-alias-takes-each-files-own-buffer-spelling-at-a-struct-field -->
+
+⭐ **THE FIELD DOOR'S HALF, WHICH TAKES A DIFFERENT ROUTE TO THE SAME ANSWER AND SO NEEDS ITS OWN CASE.** A
+contested name has its recorded field type REWRITTEN to a per-instance mint
+(`resolveRecordedGenericAliasTypes`), and the read-door derivation then asks the registries for that mint —
+so the surface reaches this position only if `recordGenericAliasContest` filed each mint under the spelling
+*its own* declarations wrote, rather than under the contested name's union. **MEASURED before that was so,
+in both file orders**: `b.items.count()`, on a field of the `Array` kind, was refused with the buffer's
+roster.
+```maxon
+// --- file: buffer.maxon
+typealias Byte = int(0 to u8.max)
+typealias Int = int(i64.min to i64.max)
+typealias B = __ManagedMemory with Byte
+
+type Holder
+	export var buf as B
+
+	export static function create(buf B) returns Self
+		return Self{buf: buf}
+	end 'create'
+end 'Holder'
+
+export function seed() returns Int
+	let h = Holder.create("hello".toByteArray())
+	return h.buf.length()
+end 'seed'
+
+// --- file: main.maxon
+typealias Int2 = int(i64.min to i64.max)
+typealias B = Array with Int2
+typealias Nums = Array with Int2
+
+type Bag
+	export var items as B
+
+	export static function create(items Nums) returns Self
+		return Self{items: items}
+	end 'create'
+end 'Bag'
+
+function main() returns ExitCode
+	var xs = Nums.create()
+	xs.push(7 as Int2)
+	let b = Bag.create(xs)
+	return (seed() + b.items.count()) as ExitCode
+end 'main'
+```
+```exitcode
+6
+```
+
+## The two buffer members the corpus keeps to itself
+
+<!-- test: error.buffer-toCString-is-stdlib-only -->
+### `toCString()` is STDLIB-ONLY
+
+⭐⭐ **A `cstring` IS A RAW ADDRESS WITH NO OWNER, AND THAT IS THE TYPE'S CONTRACT RATHER THAN A GAP** —
+no length, no capacity, no refcount, and no drop that could reclaim it. `__mm_to_cstring` hands the
+receiver's own buffer back when `buffer[length]` is already 0 and COPIES otherwise, and the copy is the
+half nothing owns. A zero-copy view is exactly the receiver whose next byte belongs to its parent, so a
+program reaching this door through `arr.managed` takes the copy path on ordinary input: measured on the
+program below, **exit 101** — the leak gate — where the `.length()` control on the same slice exits 0.
+
+⇒ The member stays on the buffer roster, because the corpus DOES call it (`stdlib/String.maxon:195`'s
+`cstr()`), and the visibility that declaration carries is enforced the only way shv2 can enforce it: on
+the file's physical location, exactly as the four stdlib-only `String` byte doors are
+(`Parser.requireStdlibOnlyStringMethod`). The ownership question belongs to the rung that gives `cstring`
+a producer and a consumer; until then no user program can be the one that asks it.
+```maxon
+function main() returns ExitCode
+	let bytes = "abcd".toByteArray()
+	let sub = try bytes.slice(0, endIndex: 2) otherwise panic("slice: 0..2 of a length-4 array")
+	let p = sub.managed.toCString()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:5:22: Unsupported: `__ManagedMemory` member 'toCString' — it is STDLIB-ONLY (`module function` in `stdlib/String.maxon`, which the reference compiler refuses to user code as a not-exported error) and this file is not under `stdlib/`. `toCString` hands back a raw address with no length, no owner and no refcount, so the copy it makes when the receiver's bytes are not already NUL-terminated is reclaimed by nothing; `makeCharFromBytes` trusts its caller for `pos + len <= length()` and reads off the end of the buffer otherwise. User code reaches a buffer's bytes through `byteAt`, which is bounds-checked and throwing
+```
+
+<!-- test: error.buffer-makeCharFromBytes-is-stdlib-only -->
+### `makeCharFromBytes(pos, len)` is STDLIB-ONLY
+
+The same gate, and the second member behind it. Its corpus declaration is a `module function`
+(`stdlib/String.maxon:301`) whose stated contract is *"callers must guarantee `pos + len <=
+byteLength()`"* — a PRECONDITION, so the graph it forwards to (`__char_at`, the one door a `Character` is
+born through) copies the window without checking it. The reference compiler does check, and refuses with
+`__ManagedMemory: byte index out of bounds`; shv2's `__char_at` is shared with `for c in s`, whose window
+comes from the segmenter and is in range by construction, so the check does not belong inside it. Handed
+a window from USER code the copy walks off the buffer: measured on the program below, **0xC0000005**.
+```maxon
+function main() returns ExitCode
+	let mm = try __ManagedMemory.create(4, elementSize: 1) otherwise return 1
+	try mm.setLength(2) otherwise return 2
+	let c = mm.makeCharFromBytes(0, len: 1000000000)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:5:13: Unsupported: `__ManagedMemory` member 'makeCharFromBytes' — it is STDLIB-ONLY (`module function` in `stdlib/String.maxon`, which the reference compiler refuses to user code as a not-exported error) and this file is not under `stdlib/`. `toCString` hands back a raw address with no length, no owner and no refcount, so the copy it makes when the receiver's bytes are not already NUL-terminated is reclaimed by nothing; `makeCharFromBytes` trusts its caller for `pos + len <= length()` and reads off the end of the buffer otherwise. User code reaches a buffer's bytes through `byteAt`, which is bounds-checked and throwing
 ```

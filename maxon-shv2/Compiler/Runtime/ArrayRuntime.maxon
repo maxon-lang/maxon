@@ -36,7 +36,7 @@
 // --- The fused 48-byte Array backing record ---
 //
 // Every field is an 8-byte slot; the six offsets are 0/8/16/24/32/40 and the record is 48 bytes. It is a
-// DISTINCT record type from a String's (whose slot@40 is `isAscii`); do not reinterpret one as the other.
+// DISTINCT record type from a String's (whose slot@40 is `singleByteGraphemes`); do not reinterpret one as the other.
 export let ArrBufferOffset = 0 as ByteOffset
 export let ArrLengthOffset = 8 as ByteOffset
 export let ArrCapacityOffset = 16 as ByteOffset
@@ -307,6 +307,26 @@ export let ArrDecrefName = b"__arr_decref"
 // `emitArrayView`); `append` grows `self` and block-copies `other`'s bytes in, leaving `other` untouched.
 // TRIVIAL elements only — a managed element would need a per-element deep clone (the parser rejects the
 // managed cases, P1.7 slice 4).
+//
+// ⚖ **`append` IS NON-THROWING ON THE `__ManagedMemory` SURFACE TOO, AND THIS ENTRY SERVES BOTH — USER
+// RULING, 2026-08-07.** There used to be a second entry (`__arr_mem_append`) whose whole reason for existing
+// was that the buffer's `append` throws. It does not, and the two references agree: the bootstrap registers
+// `("__ManagedMemory", "append", ["self","other"], [mm, mm], null)` — the ONE mm mutator with no `throwsType`,
+// where `set`/`grow`/`setByte`/`slice` all carry `mmErr` (`maxon-sharp/Compiler/2-Parser.cs:1670`) — and v1's
+// `__managed_mem_append` says *"Non-throwing"* in its header and SWALLOWS the grow's error
+// (`stdlib/Internals.maxon:3743-3766`: `_ = try __managed_mem_grow(…) otherwise 0`, arguing the throw path is
+// unreachable because `requested > capacity`). The `try a.append(b) otherwise …` in
+// `specs/managed-memory-builtin.md` is not evidence against that: the file is `status: selfhosted`, and v1
+// merely TOLERATES a redundant `try` where shv2 refuses one (E3055).
+//
+// ⚠ **AND THE OVERFLOW ARM THAT MOTIVATED THE SPLIT WAS ON THE WRONG SIDE OF THIS FILE'S OWN RULE.** The
+// deleted entry pre-grew through the THROWING `__arr_mem_grow`, whose byte-count overflow reports
+// `invalidCapacity`. But `__arr_mem_grow` throws because it is reached from a capacity THE SOURCE WROTE
+// (`buf.grow(n)`); an `append` writes no capacity — it asks `__arr_grown_cap` for one, which is the compiler's
+// own growth arithmetic, and `buildArrGrow` states in as many words that an overflow from there is a compiler
+// bug and ABORTS. So the pre-grow was a second, differently-answering copy of the reserve `__arr_append`
+// already performs (`__arr_reserve` → `__arr_grow`, which detaches a COW/rdata buffer unconditionally and
+// applies the identical `__arr_grown_cap` policy). Deleting it leaves ONE operation with one answer.
 export let ArrSliceName = b"__arr_slice"
 export let ArrCloneName = b"__arr_clone"
 export let ArrAppendName = b"__arr_append"
@@ -479,14 +499,12 @@ export let ArrMemCreateName = b"__arr_mem_create"
 export let ArrSetLengthName = b"__arr_set_length"
 export let ArrSetByteName = b"__arr_set_byte"
 
-// ⭐⭐ **THE R4.4 ADDS. `grow` and `byteAt` were the only two members with NO RUNTIME AT ALL; `append` is a
-// THIRD add for a different reason — it HAS a runtime and may not use it.** Keeping those two reasons apart is
-// the point: a member can be missing, or it can be present and wrong for this surface, and only the first is
-// an absence you could find by grepping the roster.
+// ⭐⭐ **THE R4.4 ADDS — `grow` and `byteAt`, the only two members with NO RUNTIME AT ALL.**
 // Every other `__ManagedMemory` member dispatches to an entry above — `length`→`__arr_count`,
-// `capacity`→`__arr_capacity`, `get`→`__arr_get`, `slice`→`__arr_slice`, `clear`→`__arr_clear` — because the
-// two types are one record (`SignatureIndex.ManagedMemoryTypeName`). `set` USED to be on that list and is not
-// any more; see `ArrMemSetName` (R4.6).
+// `capacity`→`__arr_capacity`, `get`→`__arr_get`, `slice`→`__arr_slice`, `clear`→`__arr_clear`,
+// `append`→`__arr_append` — because the two types are one record
+// (`SignatureIndex.ManagedMemoryTypeName`). `set` USED to be on that list and is not any more; see
+// `ArrMemSetName` (R4.6).
 //
 // ⚠ **NEITHER FOLDS ONTO THE `Array` OPERATION IT RESEMBLES, AND AGAIN THE REASONS ARE SEPARATE.**
 //   • `__arr_mem_grow(arr, newCapacity)` raises the capacity to EXACTLY `newCapacity` and THROWS
@@ -500,19 +518,6 @@ export let ArrSetByteName = b"__arr_set_byte"
 export let ArrMemGrowName = b"__arr_mem_grow"
 export let ArrByteAtName = b"__arr_byte_at"
 export let ArrElementSizeName = b"__arr_element_size"
-
-// ⭐⭐ **`__arr_mem_append` — THE BUFFER'S `append`, AND WHY IT IS NOT `__arr_append` (R4.4).** The corpus
-// writes `try a.append(b) otherwise …` (`specs/managed-memory-builtin.md:append`), so on the buffer surface
-// `append` is a THROWING member; `Array.append` is not, and shv2 refuses a `try` over a call that cannot fail
-// (E3055). That difference is real rather than notational: this entry raises the capacity through
-// `__arr_mem_grow`, whose overflow arm THROWS `invalidCapacity`, where `__arr_append`'s internal `__arr_grow`
-// ABORTS the process. A source-written append that asks for more than the machine has is a program error, and
-// the reference's own append grows through the throwing grow for the same reason
-// (v1 `stdlib/Internals.maxon:3743-3766`).
-//
-// ⚠ It is NOT a wrapper that only forwards: it owns the capacity arithmetic and the growth, and delegates
-// ONLY the byte copy — which is `__arr_append`'s whole remaining job once the buffer already fits.
-export let ArrMemAppendName = b"__arr_mem_append"
 
 // ⭐⭐ **`__arr_mem_set` — THE BUFFER'S ELEMENT WRITE, BOUNDED BY CAPACITY (R4.6).**
 //
@@ -533,19 +538,23 @@ export let ArrMemAppendName = b"__arr_mem_append"
 //
 // ⚠ **IT DOES NOT FOLD ONTO `__arr_set`, AND `Array.set` MUST NOT MOVE.** `specs/arrays.md` and the whole
 // array corpus are written against a length bound (`arrays.md`'s own `set` past the count is an error), and
-// `__arr_set` is shared — so the two surfaces need two entries, exactly as `append` did one rung earlier.
-// Which one a receiver gets is decided by PROVENANCE at the single door (`Parser.dispatchArrayMethod`'s
-// `isManagedMemory`), never by the element type.
+// `__arr_set` is shared — so the two surfaces need two entries. Which one a receiver gets is decided by
+// PROVENANCE at the single door (`Parser.dispatchArrayMethod`'s `isManagedMemory`), never by the element type.
+//
+// ⚠ **`append` USED TO BE CITED HERE AS THE PRECEDENT AND IS NOW THE COUNTER-EXAMPLE**, which is worth
+// keeping because it names what a second entry actually costs: it earns one when the two surfaces' CONTRACTS
+// differ (here, the bound), and not when only their SENTENCES do. `append`'s split rested on a throwing-ness
+// the references do not give it, so the 2026-08-07 ruling folded it back to `__arr_append` while the surface
+// split — the argument rule and its diagnostic — stayed in the parser where it belongs.
 //
 // ⚠ It owns only what differs — the CAPACITY bound, the detach that bound needs, and the complaint — and
-// delegates the write itself to `emitElementStoreAndOkReturn`, which is `__arr_set`'s tail verbatim
-// (`__arr_mem_append`'s precedent: own the arithmetic, delegate the copy).
+// delegates the write itself to `emitElementStoreAndOkReturn`, which is `__arr_set`'s tail verbatim.
 //
 // ⚠⚠ **THE STAGING REGION `[length, capacity)` CARRIES NO OWNERSHIP, WHICH IS WHY A MANAGED ELEMENT MAY NOT
 // REACH THIS ENTRY AT ALL.** ⚖ USER RULING, 2026-07-30 (the second on this member): the front end REFUSES
 // `arr.managed.set` when the element type is managed — `Parser.requireBufferSetOwnsWhatItStores`, **E3109**.
 // A managed element written past the length would be owned by NOBODY until `setLength` published it:
-// `__arr_decref` destroys only `[0, length)`, `__arr_push`/`__arr_insert`/`__arr_mem_append` store AT `length`
+// `__arr_decref` destroys only `[0, length)`, `__arr_push`/`__arr_insert`/`__arr_append` store AT `length`
 // WITHOUT destroying the occupant (before R4.6 that slot was provably NULL, so there was nothing to destroy),
 // and a grow or a detach copies only `length · element_size` live bytes and abandons the rest. MEASURED in
 // R4.6 review, all at exit **101**: a `String` staged and never published; one staged then `push`ed over; and
@@ -553,7 +562,7 @@ export let ArrMemAppendName = b"__arr_mem_append"
 //
 // ⭐ **REJECTED RATHER THAN FIXED, and the reason is this file's own invariant.** Making the staged slot owned
 // means a destructor gate on every managed `push` — a hot path — and it makes `[length, capacity)`-reads-ZERO
-// CONDITIONAL, which `__arr_push`, `__arr_insert`, `__arr_mem_append`, `emitReallocateToCapacity` and
+// CONDITIONAL, which `__arr_push`, `__arr_insert`, `__arr_append`, `emitReallocateToCapacity` and
 // `__arr_cow_detach` all rely on. Refusing costs neither, and costs no capability: `[0, length)` is exactly
 // what `__arr_set` covers, which owns what it stores. **So this entry only ever sees a TRIVIAL element**, and
 // the staging story the ruling exists to serve — `__ManagedMemory.create`, which can only yield a trivial
@@ -762,7 +771,7 @@ end 'inBoundsElementAccessor'
 // declare ONE `throws` clause and propagate a buffer `set` and a buffer `get` through it; moving those two
 // needs buffer entries of their own (`get` carries the empty-slot arm) and is a rung, not a rename.
 export function isManagedMemoryRuntimeCallee(callee ByteArray) returns bool
-	return callee.equals(ArrMemCreateName) or callee.equals(ArrSetLengthName) or callee.equals(ArrSetByteName) or callee.equals(ArrByteAtName) or callee.equals(ArrMemGrowName) or callee.equals(ArrMemAppendName) or callee.equals(ArrMemSetName)
+	return callee.equals(ArrMemCreateName) or callee.equals(ArrSetLengthName) or callee.equals(ArrSetByteName) or callee.equals(ArrByteAtName) or callee.equals(ArrMemGrowName) or callee.equals(ArrMemSetName)
 end 'isManagedMemoryRuntimeCallee'
 
 // ⭐ **WHAT THE USER ACTUALLY WROTE (D12)** — this family's `managedDirectorySourceMethodName`, read through
@@ -795,9 +804,6 @@ export function managedMemorySourceMethodName(callee ByteArray) returns ByteArra
 	if callee.equals(ArrMemGrowName) 'grow'
 		return ManagedMemoryGrowMethod
 	end 'grow'
-	if callee.equals(ArrMemAppendName) 'append'
-		return AppendMethod
-	end 'append'
 	if callee.equals(ArrMemSetName) 'set'
 		return ArraySetMethod
 	end 'set'
@@ -943,7 +949,6 @@ export function installArrayRuntime(module StdModule, usage RuntimeUsage)
 	buildArrSetByte(module)
 	buildArrByteAt(module)
 	buildArrMemGrow(module)
-	buildArrMemAppend(module)
 	buildArrMemSet(module)
 	// The MANAGED-element copies (P1.7 slice 3b-vi-b) — installed under their OWN bit, so a trivial-array
 	// program (the common one) does not carry them. `usesManagedArrayCopy` implies `usesArray` (they are
@@ -2117,7 +2122,7 @@ end 'emitPackedWindowCopy'
 // ⭐⭐ **THE FIRST HALF OF A VIEW: MINT THE RECORD AND FILL EVERY SLOT BUT `parent@32`.** Split out of
 // `emitArrayView` because a view's SOURCE need not be an Array record: `StringRuntime.__str_bytes_view`
 // windows a STRING's bytes, and the two records disagree at exactly one slot (`element_destroy@40` against
-// `isAscii@40`), so the three facts a source decides — `elementSize`, `elementDestroy` and the owed base —
+// `singleByteGraphemes@40`), so the three facts a source decides — `elementSize`, `elementDestroy` and the owed base —
 // are the caller's to answer and everything else is one description of what a view IS.
 //
 // ⚠ **`parent@32` CANNOT BE FILLED HERE, and that is why this is a half rather than a whole.** The owed base
@@ -3888,55 +3893,6 @@ function buildArrMemSet(module StdModule)
 	module.functions.push(func)
 end 'buildArrMemSet'
 
-// ⭐ `__arr_mem_append(self, other)` — concatenate `other`'s live elements onto `self`, growing first. VOID
-// and throwing; see `ArrMemAppendName` for why it exists beside `__arr_append`.
-//
-// The growth policy is `__arr_grown_cap`'s, the same one `__arr_grow` uses, so an append loop stays amortized
-// O(1) per element rather than reallocating at the exact new length each time (v1 open-codes the identical
-// `max(newLength, capacity*2, floor)` policy at `stdlib/Internals.maxon:3749-3762`).
-//
-// ⚠ A NON-OWNED buffer reaches the grow unconditionally, which is what makes it safe: its `capacity@16` is
-// NEGATIVE, so `capacity < newLength` is true for every ask and `__arr_mem_grow` detaches before the copy.
-function buildArrMemAppend(module StdModule)
-	var func = IrFunction.createFromStd(ArrMemAppendName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params(), returnLine: 0, throwsTypeName: managedMemoryThrows())
-	var ids = ValueMinter.create(2)
-
-	var entry = module.addBlock(func, label: b"entry")
-	var grow = module.addBlock(func, label: b"grow")
-	var forward = module.addBlock(func, label: b"fwderr")
-	var copy = module.addBlock(func, label: b"copy")
-
-	emitParams(module, block: entry, count: 2)
-	let dest = 0 as ValueId
-	let other = 1 as ValueId
-
-	let destLen = emitLoadField(module, block: entry, record: dest, offset: ArrLengthOffset, ids: ids)
-	let otherLen = emitLoadField(module, block: entry, record: other, offset: ArrLengthOffset, ids: ids)
-	let newLength = emitBin(module, block: entry, a: destLen, b: otherLen, opcode: StdBinOpcode.add, ids: ids)
-	let capacity = emitLoadField(module, block: entry, record: dest, offset: ArrCapacityOffset, ids: ids)
-	let short = emitCmp(module, block: entry, a: capacity, b: newLength, pred: StdCmpPred.lt, ids: ids)
-	module.setTerminator(entry, op: StdOp.condBranch(short, thenBlockId: grow.id, elseBlockId: copy.id))
-
-	let newCap = ids.mint()
-	module.appendOp(grow, op: StdOp.call(newCap, callee: ArrGrownCapName, args: twoArgs(capacity, second: newLength)))
-	let grown = ids.mint()
-	let flag = ids.mint()
-	module.appendOp(grow, op: StdOp.tryCall(grown, errorFlagId: flag, callee: ArrMemGrowName, args: twoArgs(dest, second: newCap)))
-	let zero = emitConst(module, block: grow, value: 0, ids: ids)
-	let failed = emitCmp(module, block: grow, a: flag, b: zero, pred: StdCmpPred.ne, ids: ids)
-	module.setTerminator(grow, op: StdOp.condBranch(failed, thenBlockId: forward.id, elseBlockId: copy.id))
-
-	// The grow's own `invalidCapacity` is this member's answer too — forwarded rather than re-derived, so the
-	// two cannot come to disagree about which case an over-large append reports.
-	let forwardValue = emitConst(module, block: forward, value: 0, ids: ids)
-	module.setTerminator(forward, op: StdOp.errorReturn(forwardValue, errorFlagId: flag))
-
-	module.appendOp(copy, op: StdOp.call(ids.mint(), callee: ArrAppendName, args: twoArgs(dest, second: other)))
-	emitVoidOkReturn(module, block: copy, ids: ids)
-
-	module.functions.push(func)
-end 'buildArrMemAppend'
-
 // ⭐ `__arr_mem_grow(arr, newCapacity)` — raise the capacity to EXACTLY `newCapacity`, or throw
 // `invalidCapacity`. VOID and throwing. v1's `__managed_mem_grow` (`stdlib/Internals.maxon:3485-3503`).
 //
@@ -4355,16 +4311,14 @@ end 'buildArrAppendOpaque'
 // `usesManagedArrayCopy`/`usesHeap` bits. Called after `scanRuntimeUsage` (which seeds `neededCloners` from the
 // `funcAddr(__clone_<T>)` element-cloner stamps), before `.data` layout reads `usesHeap` and `installStringRuntime`
 // reads `usesStrClone`.
+//
+// ⛔ **ITS OWN OPAQUE-ELEMENT ROOT IS GONE, WITH THE DROP TWIN IT MIRRORED (W17-c).** It rooted every instance
+// for which `genericInstanceOpaqueArrayElementIsCopyable` held — a PREDICTION of which `copyFunc@32` relocs
+// lowering would stamp, made before lowering, and true of instances no program reaches (the four
+// `WithIterIterator_*` the `String` cone puts in every registry). `MmRuntime.noteRelocatedFunctionUsage` reads
+// the stamps themselves and now re-enters THIS closure when they grow `neededCloners`, so the measured set
+// replaces the predicted one on both sides at once. See `MmRuntime.noteDestructorUsage` for the measurement.
 export function noteClonerUsage(usage RuntimeUsage, project Project, signatures ProgramSignatures)
-	// ⭐ **ROOT EVERY MANAGED OPAQUE-`T` `Array` ELEMENT CLONER the `funcAbs64InRdata` copyFunc relocs will bake
-	// (P1.7 slice 3b-vi-b-β)** — the CLONE twin of `rootManagedOpaqueArrayElementDrops`. `ensureLayoutDescriptor`
-	// records ONE `copyFunc@32` reloc per instance for which `genericInstanceOpaqueArrayElementIsCopyable` holds,
-	// its target `managedOpaqueArrayElementCloneCallee(id)` — a runtime read the module scan cannot see. This
-	// roots that identical set through `recordCallUsage` (BEFORE the early-out and the fixpoint below, so a rooted
-	// `__clone_<T>` joins `neededCloners` and closes over its own nesting), so the rooted cloners and the baked
-	// relocs are ONE fact and no reloc names a `.text` VA that was never installed — the exact discipline the drop
-	// root uses. It rides the SAME `genericInstanceOpaqueArrayElementIsCopyable` predicate the stamp gates on.
-	rootManagedOpaqueArrayElementClones(usage, signatures: signatures)
 	// The overwhelmingly common program (and the entire generic/managed-free scale corpus) references no cloner,
 	// so its `neededCloners` is empty and can only STAY empty (nothing seeds a nested need). Early-out then, so
 	// the per-type `clonerSymbol` allocations of the registration below are paid only by a program that deep-clones
@@ -4409,21 +4363,6 @@ export function noteClonerUsage(usage RuntimeUsage, project Project, signatures 
 		end 'node'
 	end 'drain'
 end 'noteClonerUsage'
-
-// ⭐ **INSTALL EVERY MANAGED OPAQUE-`T` `Array` ELEMENT CLONER the `funcAbs64InRdata` copyFunc relocs will bake
-// (P1.7 slice 3b-vi-b-β)** — the CLONE twin of `rootManagedOpaqueArrayElementDrops`. `ensureLayoutDescriptor`
-// records ONE reloc per instance for which `genericInstanceOpaqueArrayElementIsCopyable` holds, its target
-// `managedOpaqueArrayElementCloneCallee(id)`. Rooting on the SAME predicate cannot leave a reloc unrooted, and —
-// like the drop root — an over-rooted declared-but-copied-nowhere instance merely installs a leaf cloner it
-// never calls (its copyFunc slot is filled but read only by the opaque-copy wrappers, which a program that never
-// copies does not carry).
-function rootManagedOpaqueArrayElementClones(usage RuntimeUsage, signatures ProgramSignatures)
-	for id in 0 upto signatures.genericInstanceCount() 'eachInstance'
-		if signatures.genericInstanceOpaqueArrayElementIsCopyable(id) 'copyableOpaque'
-			recordCallUsage(signatures.managedOpaqueArrayElementCloneCallee(id), usage: usage)
-		end 'copyableOpaque'
-	end 'eachInstance'
-end 'rootManagedOpaqueArrayElementClones'
 
 // Turn on the transitive bits (and grow `neededCloners`) for every managed field of struct `layout`'s cloner,
 // queueing each newly-needed cloner on `work` so its OWN nesting is closed in turn.
@@ -4565,7 +4504,7 @@ function synthesizeUnionCloner(module StdModule, layout EnumLayout, project Proj
 
 	let tag = emitLoadField(module, block: cur, record: newBox, offset: UnionTagOffset, ids: ids)
 	for ci in 0 upto layout.caseCount() 'eachCase'
-		if not caseHasManagedField(signatures, typeNames: project.typeNames, layout: layout, ci: ci, wantStringOnly: false) 'scalarCase'
+		if not caseHasManagedField(signatures, typeNames: project.typeNames, layout: layout, ci: ci) 'scalarCase'
 			continue
 		end 'scalarCase'
 		let caseBlock = module.addBlock(func, label: b"case")

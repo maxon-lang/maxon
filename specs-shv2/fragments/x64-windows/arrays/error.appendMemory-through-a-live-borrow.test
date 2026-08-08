@@ -1,0 +1,12 @@
+// Test: error.appendMemory-through-a-live-borrow
+function main() returns ExitCode
+	var arr = ["hello world this is a long string for heap allocation"]
+	let s = try arr.first() otherwise ""
+	let other = ["a second long string that also lives on the heap here"]
+	arr.appendMemory(other.managed)
+	print("[{s}]\n")
+	return 0
+end 'main'
+---
+CompilerError:
+error E3070: <fragment>:6:6: cannot mutate 'arr' via 'appendMemory' while it is borrowed by 's' (borrowed at line 4)

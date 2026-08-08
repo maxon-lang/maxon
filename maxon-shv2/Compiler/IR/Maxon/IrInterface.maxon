@@ -1518,6 +1518,44 @@ export let FloatConformerName = b"float"
 // `CharacterBuiltinName = b"Character"` constant in `Parser.maxon` at the same time (W1 review).
 export let CharacterConformerName = b"Character"
 
+// ⭐⭐ **WHICH BYTE-RECORD TAG A TYPE *NAME* DENOTES — the one table, and the inverse of
+// `Parser.baseStructNameOfType`.** `tagIsByteRecord` answers the question from the TAG side; this answers it
+// from the NAME side, which is what every door holding a type only as the bytes an author (or the corpus)
+// wrote has to ask. Four doors ask it: `Parser.parseTypeReference` (a written type reference),
+// `Parser.enclosingSelfType` (what `Self` and the enclosing type's own name denote),
+// `Parser.requireFusedWrapperTag` (which tag a `Self{…}` literal produces) and the byte-record roster's
+// implicit-self door.
+//
+// ⛔⛔ **THREE SPELLED THE TWO-NAME TEST THEMSELVES AND THE FOURTH SIMPLY LACKED IT, WHICH COST A WRONG
+// REJECTION OF THE CORPUS'S OWN `String` (W17).** `enclosingSelfType` had no byte-record arm, so inside
+// `stdlib/String.maxon`'s `type String` the receiver `self` was minted `structRef("String")` while a
+// DECLARED `String` parameter was settled `MaxonType.string` one routine over — two tags whose rendered
+// names are both `"String"`. MEASURED
+// with the cone listed: **25 × `E3005 argument type mismatch for 's': expected 'String', got 'String'`**, and
+// it DISCRIMINATED — `bytesEqual(self, aOffset: 0, b: other, …)` refused the `self` and accepted `other`, a
+// declared `String` arriving at the same `String` parameter in the same call. (Instrumented at the refusal:
+// `declaredTag=String argTag=struct`.) A refusal whose two halves render identically is what one name
+// carrying two tags always looks like.
+//
+// ⚠ **KEYED ON THE NAME ALONE, WHICH IS EXACT ONLY BECAUSE THE NAMES ARE RESERVED.** `String` and `Character`
+// are both on `TypeResolution.isCompilerOwnedTypeName`, and `Parser.requireTypeNameNotCompilerOwned` refuses
+// any USER declaration binding either (measured: `enum String` is `E2015 … a declaration of the type name
+// 'String', which the compiler owns`). So a body enclosed by one of these two names is the corpus's own
+// declaration and nothing else's — there is no second `String` for this table to answer wrongly about.
+//
+// `unresolved` is the "not a byte record" answer rather than a second sentinel: it is the tag's own no-answer
+// and is never a value's, so a caller that wants a `MaxonType` feeds the hit straight to `maxonTypeOfTag` and
+// a caller that wants a fallback tag tests against it.
+export function byteRecordTagOfTypeName(name ByteArray) returns ValueTypeTag
+	if name.equals(StringConformerName) 'theString'
+		return ValueTypeTag.string
+	end 'theString'
+	if name.equals(CharacterConformerName) 'theCharacter'
+		return ValueTypeTag.character
+	end 'theCharacter'
+	return ValueTypeTag.unresolved
+end 'byteRecordTagOfTypeName'
+
 // The canonical conformer name of the primitive `bool` (P1.7a slice 2b-iii) — the key of its synthesized
 // `bool.compare` impl, and it MUST equal `primitiveTypeTagName(ValueTypeTag.boolean)`. It doubles as the
 // rendered spelling of `Equatable.equals`'s `bool` RESULT type (`builtinInterface`), which is the same fact
@@ -1744,9 +1782,74 @@ end 'builtinConformerName'
 //
 // The conformers listed here are exactly those `builtinConformerOfTag` can return, because those are the
 // only qualifiers the parser can emit a direct dispatch under. A tag joins that map and this one together.
+// ⛔⛔ **THE QUALIFIER ALONE IS NO LONGER THE ANSWER, AND THE PARAGRAPHS ABOVE SAID SO BEFORE IT HAPPENED.**
+// They rest the `String` arm on *"no user `type String` exists to carry a `hash()`"* — a premise about the
+// RESERVATION, and one that only ever excluded a USER declaration. **W16 made the CORPUS's declaration
+// admissible** (`SignatureIndex.recordStruct`'s provenance bit), and W17 listed the module, so
+// `stdlib/String.maxon` now carries thirty real methods whose registration names all wear `String.`.
+// MEASURED, in thirteen lines, on a corpus-provenanced file: a `type String` with a `byteLength()` and a
+// second method calling it reports
+// **`E3004 call to undefined function 'String.byteLength': the '__' prefix names a compiler intrinsic, and
+// no intrinsic of that name exists`** — the compiler claiming one of the corpus's own methods as an
+// intrinsic it does not have.
+//
+// ⇒ **THE CURE IS THE ONE THIS HEADER ALREADY PRESCRIBES, APPLIED RATHER THAN QUOTED.** It forbids adding
+// *"and these three methods"* here because that *"would be a second copy of `builtinConformerMethod`'s
+// answer"* — which is exactly right, and the conclusion is to ASK that function, not to keep answering on
+// the qualifier. A synthesized impl is precisely a `<conformer>.<method>` the ragged table SUPPLIES; a
+// `String.byteLength` the corpus declares is not one, and now there is a difference to tell.
+//
+// The `int`/`float`/`bool` arms are unchanged in effect — they are KEYWORDS, so no declaration can wear
+// their qualifier and every name reaching them was already one of the table's — but they are asked the same
+// way, because a predicate with one arm reasoning from a keyword and another from a lookup is how the two
+// come to disagree the next time a reservation moves.
 export function isBuiltinConformanceImplName(name ByteArray) returns bool
-	return isQualifiedUnderTypeName(name, typeName: IntConformerName) or isQualifiedUnderTypeName(name, typeName: FloatConformerName) or isQualifiedUnderTypeName(name, typeName: BoolConformerName) or isQualifiedUnderTypeName(name, typeName: StringConformerName)
+	return match splitQualifiedName(name) 'parts'
+		notQualified gives false
+		parts(conformer, method) gives isSynthesizedConformerImpl(conformer, methodName: method)
+	end 'parts'
 end 'isBuiltinConformanceImplName'
+
+// ⭐⭐ **THE *QUALIFIER* QUESTION, WHICH IS NOT THE SYMBOL QUESTION — AND COLLAPSING THE TWO WAS A MEASURED
+// REGRESSION.** `isBuiltinConformanceImplName` above answers *"did the compiler MINT this symbol?"*, which
+// is what `MmRuntime.isCompilerInternalCallee` needs in order to wave a callee past E3004 — and narrowing
+// it to the methods actually synthesized is what stopped it claiming `stdlib/String.maxon`'s own methods.
+// **This one answers *"does the compiler OWN this qualifier?"***, which is what
+// `Parser.requirePrimitiveStaticIsResolvable` needs in order to say *"'int' has no static method named
+// 'frobnicate'"* in the author's own words instead of letting the reserved-callee gate describe a `__`
+// prefix the program does not have.
+//
+// ⚠ MEASURED, by making the second reader ask the first: `parsable-interface/error.unknown-primitive-static`
+// went from that E2015 to `E3004 call to undefined function 'int.frobnicate'` — the right code describing a
+// program the author does not have, which is the exact wrong answer that function's header was written to
+// close. One predicate cannot serve both, because the two answers only ever differed once a DECLARATION
+// could wear a compiler-owned qualifier, and that is precisely what W17 made possible.
+//
+// ⚠ **IT KEEPS ALL FOUR QUALIFIERS, INCLUDING `String`, AND THAT IS SAFE FOR A DOOR REASON RATHER THAN A
+// NAME REASON.** Its one caller is reached only from the PRIMITIVE static path; a source-written
+// `String.<member>(…)` is intercepted by `Parser.parseStringStaticCall` at its own span and never arrives
+// here — the same door-not-rule argument the header above already makes about that spelling.
+export function isBuiltinConformanceQualifier(name ByteArray) returns bool
+	return match splitQualifiedName(name) 'parts'
+		notQualified gives false
+		parts(conformer, _) gives conformer.equals(IntConformerName) or conformer.equals(FloatConformerName) or conformer.equals(BoolConformerName) or conformer.equals(StringConformerName)
+	end 'parts'
+end 'isBuiltinConformanceQualifier'
+
+// Does the compiler SYNTHESIZE `<conformer>.<methodName>`? True exactly when the conformer is one the
+// parser can emit a direct dispatch under AND the ragged table supplies that method for it — one lookup,
+// so this predicate and the installer that builds the body cannot come to disagree about which symbols
+// exist.
+function isSynthesizedConformerImpl(conformer ByteArray, methodName ByteArray) returns bool
+	if not (conformer.equals(IntConformerName) or conformer.equals(FloatConformerName) or conformer.equals(BoolConformerName) or conformer.equals(StringConformerName)) 'notABuiltinConformer'
+		return false
+	end 'notABuiltinConformer'
+
+	return match builtinConformerMethod(conformer, methodName: methodName) 'lookup'
+		supplied gives true
+		notSupplied gives false
+	end 'lookup'
+end 'isSynthesizedConformerImpl'
 
 // The protocol method a builtin conformer supplies under a given name, or `notSupplied`.
 export union BuiltinConformerMethodLookup

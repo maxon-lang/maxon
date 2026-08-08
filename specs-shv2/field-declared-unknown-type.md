@@ -241,41 +241,46 @@ end 'main'
 error E3011: <fragment>:6:11: Unknown type 'NoSuchTypeAtAll'
 ```
 
-<!-- test: error.compiler-reserved-base-type-is-not-undeclared -->
-⭐ **A NAME THE COMPILER RESERVES IS NOT AN UNDECLARED NAME, AND `CharacterSet` IS THE ONE THAT SAYS SO.**
-`denotedNamedType` answers for five of the six `isCompilerOwnedTypeName` names — `ExitCode` by its own arm,
-`HashValue` and `Codepoint` through `isSynthesizedIntAliasName`, `Ordering` because `createEnumRegistry`
-seeds it, `CharSet` because `registerCharacterSetType` folds it into `genericAliases`. It answers for
-`CharacterSet` NOWHERE, and that is not an oversight: the layout is registered under the RESERVED spelling
-`__CharacterSet` (`SignatureIndex.CharacterSetTypeName`) precisely so a user `type CharacterSet` cannot
-contest its bucket, while the user-facing door is the bare `CharacterSet`
-(`SignatureIndex.CharacterSetBuiltinName`). So `containsStruct("CharacterSet")` is FALSE and the cascade
-raises `notDeclared` for a type the compiler ships and `CharacterSet.letters()` uses successfully (pinned
-by `specs-shv2/character-set.md`'s `supplementary-plane-category`).
+<!-- test: compiler-reserved-base-type-is-nameable-at-a-parameter -->
+⭐⭐ **A NAME THE COMPILER RESERVES IS NOT AN UNDECLARED NAME — AND, SINCE W17, IT IS NOT AN UNNAMEABLE ONE
+EITHER.** `CharacterSet`'s layout is registered under the RESERVED spelling `__CharacterSet`
+(`SignatureIndex.CharacterSetTypeName`) precisely so a user `type CharacterSet` cannot contest its bucket,
+while the user-facing door is the bare `CharacterSet` (`CharacterSetBuiltinName`). That made
+`containsStruct("CharacterSet")` FALSE, and this case used to pin the consequence: a parameter declared
+`CharacterSet` was refused, because *"the type is real, it simply cannot be NAMED at a parameter yet"*.
 
-Which makes this the trap the whole rung is about, sprung by the rung's own fix: reading the cascade's
-`notDeclared` as "the program declares no such type" produced **`E3011: Unknown type 'CharacterSet'`** — a
-falsehood, and a more confident one than the `int` it replaced, which at least named `CharacterSet` as a
-member-carrying builtin in the same breath. `undeclaredBaseTypeNameOf` therefore claims nothing about a
-compiler-owned name and the pre-existing refusal stands, unchanged and correct: the type is real, it simply
-cannot be NAMED at a parameter yet (see `CharacterSetTypeName`'s own header on why it cannot cross a
-function boundary).
+⚠ **THE `yet` EXPIRED, AND WHAT ENDED IT WAS NOT A DECISION ABOUT THIS TYPE.** `stdlib/String.maxon` names
+`CharacterSet` at four parameters (`trim`/`trimStart`/`trimEnd` and the two private scans), so listing that
+module reported **`E3011 Unknown type 'CharacterSet'` five times** for a type the compiler ships. The
+reservation exists to stop a USER DECLARATION binding the name, and `isCompilerOwnedTypeName` already does
+that on its own — so `Parser.parseTypeReference` now resolves the user-facing spelling to the reserved
+layout, which takes nothing away from the reservation and is the door it was protecting all along.
 
-⚠ **Delete that guard and this case reports `Unknown type 'CharacterSet'` again — MEASURED, and it is the
-ONLY case of 2541 that notices.** The two halves of the query are independently load-bearing and each has
-exactly one witness: remove the `isCompilerOwnedTypeName` gate and only this case reddens; widen the
-`denotedNamedType` ask to fire on every `named` and only `self-field-struct-typed`'s
-`error.scalar-field-base-is-not-a-struct` reddens.
+⇒ ONE layout, the compiler's, reachable under the name the corpus writes. `stdlib/CharacterSet.maxon` stays
+OFF the whitelist deliberately: listing it would land a SECOND layout under the bare name, which is the
+*"one concept has two layouts under two keys"* hazard `SignatureIndex.recordStruct`'s header names.
+
+⚠ The OTHER half of `undeclaredBaseTypeNameOf` is unaffected and keeps its own witness — widen the
+`denotedNamedType` ask to fire on every `named` and `self-field-struct-typed`'s
+`error.scalar-field-base-is-not-a-struct` still reddens.
 ```maxon
 
-function hasIt(s CharacterSet, c Character) returns bool
-	return s.contains(c)
-end 'hasIt'
+typealias HitCount = int(0 to u64.max)
+
+function countIn(s String, chars CharacterSet) returns HitCount
+	var seen = 0
+	for c in s 'scan'
+		if chars.contains(c) 'hit'
+			seen = seen + 1
+		end 'hit'
+	end 'scan'
+	return seen
+end 'countIn'
 
 function main() returns ExitCode
-	return 0
+	return countIn("a b c", chars: CharacterSet.whitespaces()) as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E2015: <fragment>:4:11: Unsupported: a member access 'contains' on a 'int' value — only a struct, a generic instance and the builtin types (`String`, `Character`, `Array`, `Set`, `StringIndex`, `CharacterSet`) carry members here
+```exitcode
+2
 ```

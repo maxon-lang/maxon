@@ -1519,17 +1519,20 @@ function enumPayloadClass(enumLayout EnumLayout, fieldType MaxonType) returns Pa
 	return PayloadClass.scalar(MaxonType.integer)
 end 'enumPayloadClass'
 
-// ⭐ **THE ONE LOOP THREE QUESTIONS SHARE.** Does any case carry a payload that needs a DROP — a managed
-// (String/struct) field, or (when `wantStringOnly`) specifically a String field? Keeping it ONE function,
-// not one copy per site, is what makes the destructor's dropped set, the construct's moved set, and the
-// `usesStrDecref` gate agree on what "managed" means by construction. Callers:
-//   • `wantStringOnly: false` — does the union need a `__destruct_<U>` at all / does the construct move
-//     its payloads in (`decrefCalleeFor`, `installUnionDestructors`, `noteUnionDestructorUsage`);
-//   • `wantStringOnly: true`  — does that destructor transitively call `__str_decref` (the usesStrDecref
-//     gate in `noteUnionDestructorUsage`).
-export function unionHasManagedField(signatures ProgramSignatures, typeNames TypeNameInterner, layout EnumLayout, wantStringOnly bool) returns bool
+// ⭐ **THE ONE LOOP THREE QUESTIONS SHARE.** Does any case carry a payload that needs a DROP? Keeping it ONE
+// function, not one copy per site, is what makes the destructor's dropped set, the construct's moved set and
+// the union destructor's declared runtime needs agree on what "managed" means by construction.
+//
+// ⚠ **IT USED TO TAKE A `wantStringOnly` FLAG, AND THAT FLAG WAS A CASCADE-NEEDS DEFECT WEARING A
+// PARAMETER'S CLOTHES.** Its one `true` caller asked "does this union's destructor call `__str_decref`?" —
+// a question about `String` and about nothing else, so a payload of any OTHER managed type with its own
+// install bit declared no bit at all and linked against a runtime nothing installed (measured with
+// `CharacterSet`: `resolveCallFixups: call to unknown function '__cs_decref'`). That caller now derives its
+// bits from the drop CALLEE instead (`MmRuntime.declareUnionPayloadDropNeeds`), which cannot have a
+// favourite type, and the flag went with it.
+export function unionHasManagedField(signatures ProgramSignatures, typeNames TypeNameInterner, layout EnumLayout) returns bool
 	for ci in 0 upto layout.caseCount() 'eachCase'
-		if caseHasManagedField(signatures, typeNames: typeNames, layout: layout, ci: ci, wantStringOnly: wantStringOnly) 'found'
+		if caseHasManagedField(signatures, typeNames: typeNames, layout: layout, ci: ci) 'found'
 			return true
 		end 'found'
 	end 'eachCase'
@@ -1538,13 +1541,12 @@ end 'unionHasManagedField'
 
 // The per-CASE half — the destructor's tag switch emits a drop block only for a case this answers true
 // for, so the switch and the union-wide gate above read the exact same classification.
-export function caseHasManagedField(signatures ProgramSignatures, typeNames TypeNameInterner, layout EnumLayout, ci CaseIndex, wantStringOnly bool) returns bool
+export function caseHasManagedField(signatures ProgramSignatures, typeNames TypeNameInterner, layout EnumLayout, ci CaseIndex) returns bool
 	let payloads = layout.payloadsAt(ci)
 	for fi in 0 upto payloads.count() 'eachField'
 		let field = try payloads.get(fi) otherwise panic("caseHasManagedField: payloadsAt count disagrees with get at {fi}")
 		let class = classifyUnionPayload(signatures, typeNames: typeNames, fieldType: field.declaredType, slotScopeFilePath: layout.declFilePath)
-		let needsDrop = payloadClassIsString(class) if wantStringOnly else payloadClassIsManaged(class)
-		if needsDrop 'found'
+		if payloadClassIsManaged(class) 'found'
 			return true
 		end 'found'
 	end 'eachField'
@@ -3081,19 +3083,25 @@ export function surfaceSlot(surface DeclaredSurface, slot FieldIndex) returns De
 	return out
 end 'surfaceSlot'
 
-// ⭐ **THE SAME SURFACE WITH ITS ELEMENT BIT SET.** The one WRITER outside the parser's builder, and it
-// COPIES rather than mutating: the tree it is handed is the one stored on a `StructLayout` or in the
+// ⭐ **THE SAME SURFACE WITH SPELLING BITS ADDED AT ITS ROOT.** The one WRITER outside the parser's builder,
+// and it COPIES rather than mutating: the tree it is handed is the one stored on a `StructLayout` or in the
 // whole-program return table, shared by every reader of that declaration, and setting a bit in place would
-// teach one file's read to every other file's. Its callers are the two doors that must DERIVE the element
-// bit rather than store it — see `ProgramSignatures.declaredElementIsBufferSurface`.
-export function surfaceWithElementBuffer(surface DeclaredSurface) returns DeclaredSurface
+// teach one file's read to every other file's. Its caller is the door that must DERIVE the root's spelling
+// bits rather than store them — see `ProgramSignatures.derivedAliasSurfaceBits`.
+//
+// ⚠ **IT TAKES THE BITS RATHER THAN NAMING ONE (W49).** It set `SurfaceBitElementIsBuffer` outright while
+// the element bit was the only underivable one; W49 found its TWIN underivable at the same door, for the
+// same reason, off the same recorded name. A second function beside this one would have been a second copy
+// of the copy-the-tree-and-OR-the-root rule — free to disagree the day the node grows a third bit, which is
+// this project's own signature bug.
+export function surfaceWithRootBits(surface DeclaredSurface, bits DeclaredSurfaceNode) returns DeclaredSurface
 	var out = DeclaredSurface.create()
-	out.push(surfaceRootNode(surface) or SurfaceBitElementIsBuffer)
+	out.push(surfaceRootNode(surface) or bits)
 	for i in 1 upto surface.count() 'eachRemainingNode'
 		out.push(surfaceNodeAt(surface, at: i))
 	end 'eachRemainingNode'
 	return out
-end 'surfaceWithElementBuffer'
+end 'surfaceWithRootBits'
 
 // Node `at` of the tree. A precondition, not a case: every index handed here came from a walk that started
 // at node 0 and advanced by whole subtrees.
@@ -3224,6 +3232,19 @@ export let ManagedMemorySetLengthMethod = b"setLength"
 export let ManagedMemorySetByteMethod = b"setByte"
 export let ManagedMemoryLengthMethod = b"length"
 export let ManagedMemoryGrowMethod = b"grow"
+
+// ⭐ **`toCString()` — THE BUFFER'S NUL-TERMINATED VIEW**, and the corpus's only producer of a `cstring`
+// (`stdlib/String.maxon:195`, whose `cstr()` is its one caller). Named here beside its siblings rather than
+// at the arm, so the roster, the dispatch and the refusal all read one spelling.
+export let ManagedMemoryToCStringMethod = b"toCString"
+
+// ⭐ **`makeCharFromBytes(pos, len)` — MINT ONE `Character` FROM A BYTE WINDOW** (`stdlib/String.maxon:301`,
+// a `module function` whose whole body forwards to the buffer). Its two parameter names are the corpus's,
+// read back rather than invented, because the arm accepts them as argument LABELS.
+export let ManagedMemoryMakeCharFromBytesMethod = b"makeCharFromBytes"
+
+export let ManagedMemoryCharPosParamName = b"pos"
+export let ManagedMemoryCharLenParamName = b"len"
 export let ManagedMemoryElementSizeMethod = b"elementSize"
 
 // ⭐ **THE `Array` SPELLINGS A SOURCE-METHOD MAP HAS TO NAME (D12, completed by D11c).** Every one of these
@@ -3236,12 +3257,33 @@ export let ManagedMemoryElementSizeMethod = b"elementSize"
 // now answers for all nine throwing `Array` accessors rather than for the buffer subset alone — see that
 // map for why the array family stopped being the one family without a spelling.
 //
+// ⚠ **`append` NO LONGER HAS A SOURCE-METHOD ARM — the 2026-08-07 ruling made the buffer's `append`
+// NON-THROWING and folded `__arr_mem_append` away (`ArrayRuntime.ArrAppendName`) — AND IT STAYS HERE ON THE
+// BLOCK'S OWN RULE RATHER THAN ON THE ONE THAT BROUGHT IT.** A source-method map is only ever the FIRST
+// reason a spelling has to be visible outside `Parser.maxon`; the standing one is below, and it is why
+// `AppendMemoryMethod`, `ArrayPopMethod` and `ListPrependMethod` — none of which any map names — sit here too.
+//
 // ⚠ None carries a family prefix, and that is the fact rather than an omission: ONE spelling serves
-// `String.append`, `Array.append`/`Array.set` and the buffer's `__arr_mem_append`/`__arr_mem_set` alike, and
-// the parser dispatches all of them on this one byte string. `RemoveMethod` and `SliceMethod` are unprefixed
-// for the same reason — the buffer and the `Array` both spell `slice`.
+// `String.append`, `List.append` and `Array.append`/`Array.set` — which since that ruling is the buffer's
+// `append` as well — and the parser dispatches all of them on this one byte string. `RemoveMethod` and
+// `SliceMethod` are unprefixed for the same reason: the buffer and the `Array` both spell `slice`.
 export let ArraySetMethod = b"set"
 export let AppendMethod = b"append"
+// ⭐ **`appendMemory(source)` — APPEND ENTERED THROUGH THE MEMORY RATHER THAN THE ARRAY.** It is
+// `stdlib/Array.maxon:272`'s member and `append`'s whole body (`:262` is `appendMemory(other.managed)`), so
+// the two are ONE emission under two names — `length`/`count`'s arrangement, one member over. Since the
+// envelope collapse an `Array` IS its `__ManagedMemory`, which is why the corpus keeps both: a caller already
+// holding the memory would otherwise allocate an `Array` record per call to hand it over, and
+// `StringBuilder.appendBytes` paid exactly that (`stdlib/String.maxon:830`, this member's one corpus caller).
+//
+// ⚠ **IT IS AN `Array` MEMBER AND ONLY AN `Array` MEMBER, WHICH IS THE OTHER HALF OF `length`/`count`'s
+// ARRANGEMENT.** The buffer shares the EMISSION, never the name: `appendMemory` appears in neither reference's
+// `__ManagedMemory` member table (v1 `LowerMaxonToStd.maxon:1618-1660`, bootstrap `2-Parser.cs:1470-1512`) and
+// no corpus caller writes `mm.appendMemory(…)`, so `Parser.bufferSurfaceMemberNames` deliberately omits it and
+// `managed-memory-methods.error.buffer-has-no-appendMemory` is the program that says so. It is nonetheless
+// unprefixed for this block's rule — one spelling, whichever surfaces come to serve it — as `set`, `append`,
+// `slice` and `byteAt` above it each record.
+export let AppendMemoryMethod = b"appendMemory"
 export let GetMethod = b"get"
 export let ArrayFirstMethod = b"first"
 export let ArrayLastMethod = b"last"
@@ -3292,10 +3334,17 @@ export let ManagedMemoryNewLengthParamName = b"newLength"
 export let ManagedMemoryNewCapacityParamName = b"newCapacity"
 export let ManagedMemoryOffsetParamName = b"offset"
 export let ManagedMemoryIndexParamName = b"index"
-// ⚠ `Array.append`'s parameter carries this SAME label, so `Parser.requireArrayAppendArg` reads this
-// constant rather than minting a second `b"other"` — one label, one spelling. It is in this block because
-// the buffer surface is where the label was first written down, not because the `Array` surface has another.
+// ⚠ `Array.append`'s parameter carries this SAME label, so both append doors reach this one constant (through
+// `Parser.appendArgParamName`) rather than minting a second `b"other"` — one label, one spelling. It is in
+// this block because the buffer surface is where the label was first written down, not because the `Array`
+// surface has another.
 export let ManagedMemoryOtherParamName = b"other"
+// ⭐ **`appendMemory`'s PARAMETER, AND THE ONE THING THE `append` FOLD MUST NOT LOSE.** The two spellings
+// share an emission and an argument RULE, but the corpus declares two names for the one operation —
+// `append(other Self)` at `stdlib/Array.maxon:261`, `appendMemory(source ElementMemory)` at `:272` — and the
+// refusal's whole job is to name the parameter the author can act on. `Parser.appendArgParamName` reads the
+// spelling off the method token so neither door can answer for the other.
+export let ArrayAppendMemorySourceParamName = b"source"
 export let ManagedMemoryValueParamName = b"value"
 
 // ⭐ **THE MACHINE-WORD ELEMENT WIDTH A `__ManagedMemory.create(count, 8)` NAMES (R4.4 review)** — the
@@ -3879,6 +3928,10 @@ export typealias GenericAliasMap = Map with (ByteArray, GenericInstanceId)
 // structures also keep ONE notion of "the same file" between them by using one key type.
 typealias GenericAliasByDeclaringFile = Map with (String, GenericInstanceId)
 
+// The instance a contested alias name denotes ⇒ the buffer-spelling bits the declarations naming it wrote
+// (W49). See `GenericAliasDeclarationGroup.bitsByInstance` for why the key is the instance.
+typealias GenericAliasSpellingBitsMap = Map with (GenericInstanceId, DeclaredSurfaceNode)
+
 // The generic-alias names whose declarations name DIFFERENT instances (N3) ⇒ every declaration of each, by
 // declaring file. EMPTY for every program in the corpus — see
 // `ProgramSignatures.settleGenericAliasContest` for why that emptiness is what keeps every interned
@@ -3923,6 +3976,12 @@ export type GenericAliasDeclarationGroup
 	// Declaring file path ⇒ the instance that file's declaration names — published verbatim as this name's
 	// entry in `ContestedGenericAliasMap`.
 	export var byDeclaringFile as GenericAliasByDeclaringFile
+	// ⭐ **THE BUFFER-SPELLING BITS OF EACH DECLARATION, KEYED BY THE INSTANCE (W49).** Keyed by instance and
+	// not by file because the MINT this feeds is derived from the instance
+	// (`recordGenericAliasContest`), so this is the exact granularity that pass can act at. Two declarations
+	// naming one instance therefore share one entry and their bits are OR-ed — which is not a loss, because
+	// they would reach the identical mint name and no per-declaration answer could be filed against it.
+	export var bitsByInstance as GenericAliasSpellingBitsMap
 	// Tier 2 of `ProgramSignatures.scopedGenericAliasInstance`: did any declaration make the name writable
 	// from ANY file, and which instance did the last such declaration name? Last-wins among the nameable
 	// ones, exactly as `RangedAliasRegistry.record` files `nameable`.
@@ -3930,7 +3989,7 @@ export type GenericAliasDeclarationGroup
 	export var nameableInstance as GenericInstanceId
 
 	export static function create() returns GenericAliasDeclarationGroup
-		return Self{byDeclaringFile: GenericAliasByDeclaringFile.create(), anyNameable: false, nameableInstance: 0}
+		return Self{byDeclaringFile: GenericAliasByDeclaringFile.create(), bitsByInstance: GenericAliasSpellingBitsMap.create(), anyNameable: false, nameableInstance: 0}
 	end 'create'
 
 	// Fold one declaration in.
@@ -3939,13 +3998,24 @@ export type GenericAliasDeclarationGroup
 	// review).** E3061 is reported after `queryProgramSignatures`, so both declarations are in
 	// `genericAliasDecls` while this runs. That program is refused either way; what the write must not do is
 	// pretend otherwise, so it is stated rather than assumed away.
-	export function record(instance GenericInstanceId, declFilePath FilePath, nameable bool)
+	//
+	// ⚠ **THE SPELLING BITS ACCUMULATE WHERE `byDeclaringFile` OVERWRITES**, deliberately: a bit says "some
+	// declaration naming this instance wrote the buffer", and dropping an earlier one would silently narrow
+	// a member surface the source did ask for.
+	export function record(instance GenericInstanceId, declFilePath FilePath, nameable bool, spellingBits DeclaredSurfaceNode)
 		self.byDeclaringFile.upsert(declFilePath.toString(), value: instance)
+		self.bitsByInstance.upsert(instance, value: self.spellingBitsOf(instance) or spellingBits)
 		if nameable 'writableFromAnyFile'
 			self.anyNameable = true
 			self.nameableInstance = instance
 		end 'writableFromAnyFile'
 	end 'record'
+
+	// The accumulated spelling bits of every declaration naming `instance` — plain for an instance no
+	// declaration in this group names, which is what makes it safe to ask before the fold as well as after.
+	export function spellingBitsOf(instance GenericInstanceId) returns DeclaredSurfaceNode
+		return try self.bitsByInstance.get(instance) otherwise 0 as DeclaredSurfaceNode
+	end 'spellingBitsOf'
 end 'GenericAliasDeclarationGroup'
 
 // Generic-alias name ⇒ its declarations, for the contest's second pass.
@@ -4341,21 +4411,41 @@ export type GenericAliasEntry
 	// instance is interned and the size is half of that instance's identity. `NoFixedSize` for every other
 	// declaration, which is every declaration whose base is not `Vector`.
 	export var fixedSize as FixedElementCount
+	// ⭐⭐ **WAS THIS ALIAS DECLARED INSIDE A `type` (W17)** — `type Character`'s `typealias ByteMemory =
+	// __ManagedMemory with Byte`, as against a FILE-scope `typealias ByteArray = Array with Byte`. Written by
+	// the one re-key that scopes such a declaration, `scopedToEnclosingType` below.
+	//
+	// ⚠ **IT IS READ BY THE DISPLAY INDEX AND BY NOTHING ELSE**, and the narrowness is the rule rather than
+	// today's caller list: an inner alias RESOLVES everywhere it always did (`parseTypeReference`'s inner-alias
+	// arm, `scopedGenericAliasInstance`, the buffer-surface derivation), and it is only QUOTING one back at an
+	// author that is wrong. `deriveInstanceDisplayNames` carries the argument in full.
+	//
+	// ⚠ **A BOOL AND NOT A TEST FOR A `.` IN `aliasName`.** The qualified spelling is what the re-key
+	// PRODUCES, so reading the fact back out of it would be a second, lossy statement of it — the lexer admits
+	// only `[A-Za-z0-9_]` inside an identifier today, which is the only reason such a test would work at all,
+	// and a name form that ever carried a `.` for another reason would silently join this class. The producer
+	// states the fact; nothing decodes it.
+	export var typeScoped as bool
 
 	export static function create(aliasName ByteArray, baseName ByteArray, argCount FieldIndex, args GenericArgNodeArray, elementIsBuffer bool = false, baseIsBuffer bool = false, nameLine LineNumber = 0, nameColumn ColumnNumber = 0, filePath FilePath = FilePath from "", visibility Visibility = Visibility.file, fixedSize FixedElementCount = NoFixedSize, selfRefLine LineNumber = 0, selfRefColumn ColumnNumber = 0) returns GenericAliasEntry
-		return Self{aliasName: aliasName, baseName: baseName, argCount: argCount, args: args, elementIsBuffer: elementIsBuffer, baseIsBuffer: baseIsBuffer, nameLine: nameLine, nameColumn: nameColumn, filePath: filePath, visibility: visibility, sweptInstance: 0, sweptInstanceRecorded: false, fixedSize: fixedSize, selfRefLine: selfRefLine, selfRefColumn: selfRefColumn}
+		return Self{aliasName: aliasName, baseName: baseName, argCount: argCount, args: args, elementIsBuffer: elementIsBuffer, baseIsBuffer: baseIsBuffer, nameLine: nameLine, nameColumn: nameColumn, filePath: filePath, visibility: visibility, sweptInstance: 0, sweptInstanceRecorded: false, fixedSize: fixedSize, selfRefLine: selfRefLine, selfRefColumn: selfRefColumn, typeScoped: false}
 	end 'create'
 
 	// This declaration, carrying the instance the index interned it to — the form `genericAliasDecls`
 	// retains. A COPY rather than a mutation so the parser's own entry, whose instance is not yet knowable,
 	// can never be mistaken for a recorded one.
 	export function recorded(id GenericInstanceId) returns GenericAliasEntry
-		return Self{aliasName: self.aliasName, baseName: self.baseName, argCount: self.argCount, args: self.args, elementIsBuffer: self.elementIsBuffer, baseIsBuffer: self.baseIsBuffer, nameLine: self.nameLine, nameColumn: self.nameColumn, filePath: self.filePath, visibility: self.visibility, sweptInstance: id, sweptInstanceRecorded: true, fixedSize: self.fixedSize, selfRefLine: self.selfRefLine, selfRefColumn: self.selfRefColumn}
+		return Self{aliasName: self.aliasName, baseName: self.baseName, argCount: self.argCount, args: self.args, elementIsBuffer: self.elementIsBuffer, baseIsBuffer: self.baseIsBuffer, nameLine: self.nameLine, nameColumn: self.nameColumn, filePath: self.filePath, visibility: self.visibility, sweptInstance: id, sweptInstanceRecorded: true, fixedSize: self.fixedSize, selfRefLine: self.selfRefLine, selfRefColumn: self.selfRefColumn, typeScoped: self.typeScoped}
 	end 'recorded'
 
-	// ⭐⭐ **THIS DECLARATION UNDER A DIFFERENT KEY — the NAME changes and NOTHING ELSE DOES.** Its one caller
-	// is `Parser.qualifiedInnerGenericAlias`, which re-keys a nested alias under its base-qualified spelling
-	// (`Container.ElementArray`); a re-key is not a new declaration and must not lose the declaration's facts.
+	// ⭐⭐ **THIS DECLARATION SCOPED TO THE `type` THAT HOLDS IT — the NAME becomes base-qualified and the one
+	// other thing that changes is the RECORD OF THAT.** Its one caller is `Parser.qualifiedInnerGenericAlias`,
+	// which re-keys a nested alias under its enclosing type's spelling (`Container.ElementArray`); a re-key is
+	// not a new declaration and must not lose the declaration's facts.
+	//
+	// ⚠ **IT USED TO BE `renamedTo` AND TO CHANGE THE NAME ALONE, AND THAT LEFT THE ONE FACT THE NAME IS THE
+	// EVIDENCE FOR UNRECORDED** (W17). Being inside a `type` is not a property of the spelling — it is what
+	// PRODUCED the spelling — and the display index needs it as a fact. See `typeScoped` above.
 	//
 	// ⛔ **IT EXISTS BECAUSE THE HAND-WRITTEN RE-KEY DROPPED SEVEN OF THEM, AND ONE OF THOSE PANICKED THE
 	// COMPILER (review, 2026-08-04).** Rebuilding through `create` took the defaults for `filePath`,
@@ -4366,9 +4456,9 @@ export type GenericAliasEntry
 	// name, and `moduleDirectoryOfPathText('')` panicked** — on a program whose real defect is the duplicate
 	// `type` E3006 reports one pass later. A copy that names every field is the only shape that cannot
 	// silently omit one.
-	export function renamedTo(qualifiedName ByteArray) returns GenericAliasEntry
-		return Self{aliasName: qualifiedName, baseName: self.baseName, argCount: self.argCount, args: self.args, elementIsBuffer: self.elementIsBuffer, baseIsBuffer: self.baseIsBuffer, nameLine: self.nameLine, nameColumn: self.nameColumn, filePath: self.filePath, visibility: self.visibility, sweptInstance: self.sweptInstance, sweptInstanceRecorded: self.sweptInstanceRecorded, fixedSize: self.fixedSize, selfRefLine: self.selfRefLine, selfRefColumn: self.selfRefColumn}
-	end 'renamedTo'
+	export function scopedToEnclosingType(qualifiedName ByteArray) returns GenericAliasEntry
+		return Self{aliasName: qualifiedName, baseName: self.baseName, argCount: self.argCount, args: self.args, elementIsBuffer: self.elementIsBuffer, baseIsBuffer: self.baseIsBuffer, nameLine: self.nameLine, nameColumn: self.nameColumn, filePath: self.filePath, visibility: self.visibility, sweptInstance: self.sweptInstance, sweptInstanceRecorded: self.sweptInstanceRecorded, fixedSize: self.fixedSize, selfRefLine: self.selfRefLine, selfRefColumn: self.selfRefColumn, typeScoped: true}
+	end 'scopedToEnclosingType'
 
 	// The instance this declaration names. Precondition: the entry came from `genericAliasDecls`, which
 	// `recordGenericAlias` fills with `recorded` copies exclusively.
@@ -4379,6 +4469,23 @@ export type GenericAliasEntry
 
 		return self.sweptInstance
 	end 'internedInstance'
+
+	// ⭐ **HOW THIS DECLARATION WAS WRITTEN, AS ONE `DeclaredSurfaceNode`** — the shape both consumers of the
+	// two `bool`s above actually want. The content hash mixes it, and the contest's per-instance mint files
+	// it (`recordGenericAliasContest`), and each had otherwise spelled the same two-`if` mapping from a pair
+	// of flags to a pair of bits. One speller, so a third bit cannot reach one of them and not the other.
+	export function spellingBits() returns DeclaredSurfaceNode
+		var bits = 0 as DeclaredSurfaceNode
+		if self.baseIsBuffer 'baseNamesTheBuffer'
+			bits = bits or SurfaceBitIsBuffer
+		end 'baseNamesTheBuffer'
+
+		if self.elementIsBuffer 'elementNamesTheBuffer'
+			bits = bits or SurfaceBitElementIsBuffer
+		end 'elementNamesTheBuffer'
+
+		return bits
+	end 'spellingBits'
 end 'GenericAliasEntry'
 
 export typealias GenericAliasEntryArray = Array with GenericAliasEntry
@@ -6343,11 +6450,13 @@ export type ProgramSignatures
 	// It must be whole-program: the callee may be declared in another file, and the SPELLING is gone from
 	// every type by the time the call is parsed.
 	//
-	// ⚠ **THE ELEMENT BIT IS DERIVED HERE AND IS NEVER STORED**, because the SWEEP that captured this
-	// declaration ran while the alias registry was still being built — `returns BufArray` cannot be asked
-	// "is `BufArray` an array of buffers?" at the moment it is read. What the sweep DOES preserve is the
-	// alias NAME, inside the recorded return type, and by the time anything asks this question every file is
-	// folded. See `declaredElementIsBufferSurface`.
+	// ⚠ **AN ALIAS SPELLING'S BITS ARE DERIVED HERE RATHER THAN TAKEN FROM THE STORE**, because the SWEEP that
+	// captured this declaration ran while the alias registries were still being built — `returns BufArray`
+	// cannot be asked "is `BufArray` an array of buffers?", nor `returns ByteBuffer` "is `ByteBuffer` the
+	// buffer itself?" (W49), at the moment it is read. What the sweep DOES preserve is the alias NAME, inside
+	// the recorded return type, and by the time anything asks this question every file is folded. The stored
+	// bits are OR-ed in rather than replaced, which is what covers the other file order. See
+	// `derivedAliasSurfaceBits`.
 	//
 	// A callee with no entry and a non-alias return type costs one `Map.contains` on an empty map plus a tag
 	// test per call — the safe default `funcThrows`/`funcParamConsumes` rest on. It is also the question
@@ -6357,59 +6466,121 @@ export type ProgramSignatures
 		if let declared = try self.returnTypes.get(callee) 'declaresAReturnType'
 			return match declared 'r'
 				void gives stored
-				value(inner) gives self.surfaceWithDerivedElement(stored, declared: inner)
+				value(inner) gives self.surfaceWithDerivedAliasBits(stored, declared: inner)
 			end 'r'
 		end 'declaresAReturnType'
 
 		return stored
 	end 'declaredReturnSurface'
 
-	// ⭐ **THE ONE FOLD OF A STORED SURFACE WITH THE ELEMENT BIT THAT MUST BE DERIVED.** Every declared
+	// ⭐ **THE ONE FOLD OF A STORED SURFACE WITH THE SPELLING BITS THAT MUST BE DERIVED.** Every declared
 	// position whose surface the SWEEP wrote asks it — a struct FIELD (`fieldSurfaceOf`), a declared RETURN
-	// (above), and a union PAYLOAD (`payloadSurfaceOf`) — because two of the three bits are token facts the
-	// sweep could answer and the element bit is not; see `declaredElementIsBufferSurface` for why. It was
-	// written out at the first two doors, and BATCH22's third would have been a third copy of one rule.
-	function surfaceWithDerivedElement(stored DeclaredSurface, declared MaxonType) returns DeclaredSurface
-		if not self.declaredElementIsBufferSurface(declared) 'holdsNoArrayOfBuffers'
+	// (above), and a union PAYLOAD (`payloadSurfaceOf`) — because NEITHER spelling bit is a fact that sweep
+	// could answer; see `derivedAliasSurfaceBits` for why. It was written out at the first two doors, and
+	// BATCH22's third would have been a third copy of one rule.
+	function surfaceWithDerivedAliasBits(stored DeclaredSurface, declared MaxonType) returns DeclaredSurface
+		let derived = self.derivedAliasSurfaceBits(declared)
+		if derived == 0 'namesNoBufferAlias'
 			return stored
-		end 'holdsNoArrayOfBuffers'
+		end 'namesNoBufferAlias'
 
-		return surfaceWithElementBuffer(stored)
-	end 'surfaceWithDerivedElement'
+		return surfaceWithRootBits(stored, bits: derived)
+	end 'surfaceWithDerivedAliasBits'
 
-	// ⭐ **WAS THIS DECLARED SLOT'S TYPE A GENERIC ALIAS WHOSE ELEMENT IS A BUFFER (A2m)?** THE one derivation,
-	// reached by every declared position through `surfaceWithDerivedElement` — the struct FIELD, the RETURN
-	// clause and (BATCH22) the union PAYLOAD — so no two of them can come to disagree about what
-	// `var bufs as BufArray`, `returns BufArray` and `mem(b BufArray)` mean.
+	// ⭐⭐ **WHICH SPELLING BITS DOES THIS DECLARED POSITION'S ALIAS NAME CARRY (A2m + W49)?** THE one
+	// derivation, reached by every SWEPT position through `surfaceWithDerivedAliasBits` — the struct FIELD,
+	// the RETURN clause and (BATCH22) the union PAYLOAD — so no two of them can come to disagree about what
+	// `var bufs as BufArray` and `var buf as ByteBuffer` mean.
 	//
-	// It reads the `named` the SWEEP recorded and not a resolved type, and that is the whole mechanism: the
-	// sweep runs before any alias is interned, so an alias-typed slot arrives as a bare `named` carrying the
-	// name (this is the very property `declaredSlotType`'s re-tags exist to undo). A slot that is
-	// already a `genericInstance` was written with a spelling that is not an alias name at all, and there is
-	// nothing left in it to ask — which is correct, because `Array with __ManagedMemory` and
-	// `Array with ByteArray` ARE that one instance.
-	export function declaredElementIsBufferSurface(declared MaxonType) returns bool
+	// ⚠⚠ **NEITHER BIT IS A FACT THE SWEEP THAT RECORDED THE POSITION COULD ANSWER, AND THAT IS *ONE* CAUSE
+	// RATHER THAN TWO (W49).** Both registries are written by `recordGenericAlias` on ADJACENT LINES, and
+	// `recordGenericAlias` is called from `foldFile` — i.e. after the whole file has been swept. So a position
+	// spelled with an alias its OWN file declares is read while both sets are still empty, whichever bit it
+	// wanted. A2m saw this for the element bit and derived it here; W49 MEASURED the identical inversion for
+	// the outright one — `var buf as ByteBuffer` refused `length`, the buffer roster's FIRST member, seven
+	// lines below `typealias ByteBuffer = __ManagedMemory with Byte` — and it joins this derivation rather
+	// than acquiring a second mechanism free to disagree with its twin.
+	//
+	// It reads the `named` the SWEEP recorded and not a resolved type, and that is the whole mechanism: an
+	// alias-typed position arrives as a bare `named` carrying the name (the very property `declaredSlotType`'s
+	// re-tags exist to undo). A position that is ALREADY a `genericInstance` was written where the alias was
+	// registered, so `parseTypeReference` folded the spelling away and there is nothing left in it to ask —
+	// which is correct, because `Array with __ManagedMemory` and `Array with ByteArray` are one instance,
+	// exactly as `__ManagedMemory with Byte` and `ByteArray` are.
+	//
+	// ⚠⚠ **AND SINCE W49 IT IS THE SOLE CARRIER FOR AN ALIAS SPELLING, NOT A COMPLEMENTARY HALF.** It was
+	// written as one half of a pair with the sweep's token test, on the premise that a swept alias-typed
+	// position is sometimes already a `genericInstance` — which A3e made false when it gated
+	// `parseTypeReference`'s alias arms on `allFilesFolded`. `Queries.foldOneFileInto` folds EVERY file before
+	// that flag is set, so a swept alias-typed position keeps its bare `named` in every file order, and this
+	// answers for it in every file order. The sweep's own registry read was therefore redundant AND wrong —
+	// wrong because it consulted a whole-program set for a FILE-SCOPED name — and it is gone
+	// (`Parser.spellingDenotesBufferSurface`). What the sweep still stores is the LITERAL `__ManagedMemory`
+	// spelling, which is a token fact needing no registry, and the tuple-slot mask.
+	//
+	// ⚠ **IT NEEDS NO READER FILE, AND THAT IS A PROPERTY OF ITS INPUT RATHER THAN AN OMISSION.** A name
+	// reaching here is either uncontested — one declaration, so every file means the same one — or has already
+	// been rewritten to its per-instance MINT by `resolveRecordedGenericAliasTypes`, and a mint is never itself
+	// contested. The file-scoping this cannot do is therefore never asked of it; the door that IS asked is
+	// `readerScopedAliasName`.
+	//
+	// ⚠ The name is asked exactly as RECORDED, which is BASE-QUALIFIED for an inner alias
+	// (`Character.ByteMemory`): `parseTypeReference`'s inner-alias arm and `qualifiedInnerGenericAlias` build
+	// that one string between them, so this needs no second key and no knowledge that inner aliases exist.
+	function derivedAliasSurfaceBits(declared MaxonType) returns DeclaredSurfaceNode
 		if maxonTypeTag(declared) != ValueTypeTag.named 'notANamedAlias'
-			return false
+			return 0 as DeclaredSurfaceNode
 		end 'notANamedAlias'
 
-		return self.aliasElementIsBufferSurface(self.nameOfId(typeNameIdOf(declared)))
-	end 'declaredElementIsBufferSurface'
+		let name = self.nameOfId(typeNameIdOf(declared))
+		var bits = 0 as DeclaredSurfaceNode
+		if self.bufferSurfaceAliases.contains(name) 'aliasIsItselfTheBuffer'
+			bits = bits or SurfaceBitIsBuffer
+		end 'aliasIsItselfTheBuffer'
+
+		if self.bufferElementAliases.contains(name) 'aliasHoldsBuffers'
+			bits = bits or SurfaceBitElementIsBuffer
+		end 'aliasHoldsBuffers'
+
+		return bits
+	end 'derivedAliasSurfaceBits'
 
 	// Does the generic-instance alias `name` hold BUFFERS — was it declared `Array with __ManagedMemory`
 	// (A2m)? The read side of `bufferElementAliases`; `Set.contains` on the shared empty set returns before it
 	// hashes, so a program that never writes the alias does not pay to ask.
-	export function aliasElementIsBufferSurface(name ByteArray) returns bool
-		return self.bufferElementAliases.contains(name)
+	export function aliasElementIsBufferSurface(name ByteArray, readerFilePath FilePath) returns bool
+		return self.bufferElementAliases.contains(self.readerScopedAliasName(name, readerFilePath: readerFilePath))
 	end 'aliasElementIsBufferSurface'
 
 	// Does the generic-instance alias `name` DENOTE a buffer — was it declared `__ManagedMemory with T`
 	// (W43)? The read side of `bufferSurfaceAliases`, and the door that makes `initKeys.length()` legal where
 	// the parameter is declared `KeyMemory` rather than `__ManagedMemory`. `Set.contains` on the shared empty
 	// set returns before it hashes, so a program with no such alias does not pay to ask.
-	export function aliasDenotesBufferSurface(name ByteArray) returns bool
-		return self.bufferSurfaceAliases.contains(name)
+	export function aliasDenotesBufferSurface(name ByteArray, readerFilePath FilePath) returns bool
+		return self.bufferSurfaceAliases.contains(self.readerScopedAliasName(name, readerFilePath: readerFilePath))
 	end 'aliasDenotesBufferSurface'
+
+	// ⭐⭐ **THE KEY THESE TWO REGISTRIES HOLD *THIS READER'S* DECLARATION UNDER (W49).** Both are keyed by the
+	// bare alias name with no file in the key, but a plain `typealias` is FILE-LOCAL — so on a contested name
+	// the bare key answers "did ANY file's declaration spell the buffer?", which is exactly the question a
+	// contest makes meaningless. `recordGenericAliasContest` files each declaration's own spelling under the
+	// per-instance MINT, and this is the one place that spelling is looked up again.
+	//
+	// ⚠ **THE SCOPING RULE IS NOT RESTATED HERE — it is `scopedGenericAliasInstance`'s**, the same three tiers
+	// N3 resolves the INSTANCE by (the reader's own file, then a declaration the reader may name, then bare
+	// last-wins). A second rule for the SURFACE would be free to disagree with the one that picks the TYPE,
+	// which is how one written word comes to denote two things.
+	//
+	// ⚠ **AN UNCONTESTED NAME COSTS ONE MISS ON AN EMPTY MAP AND ALLOCATES NOTHING** — no `toString`, no mint
+	// spelling — which is `scopedGenericAliasInstance`'s own discipline and matters for the same reason: this
+	// is asked of every identifier written in a type position.
+	function readerScopedAliasName(name ByteArray, readerFilePath FilePath) returns ByteArray
+		if not self.contestedGenericAliases.contains(name) 'oneDeclarationOfThisNameOrNone'
+			return name
+		end 'oneDeclarationOfThisNameOrNone'
+
+		return instanceQualifiedAliasName(name, canonicalInstance: self.canonicalInstanceName(self.scopedGenericAliasInstance(name, readerFilePath: readerFilePath)))
+	end 'readerScopedAliasName'
 
 	// ⭐⭐ **DOES THE CONFORMER DECLARE `qualified` IN ITS OWN BODY, so an `extension` must NOT publish its
 	// same-named method onto it (W43)?** An interface extension supplies DEFAULT implementations; a conformer
@@ -6959,10 +7130,8 @@ export type ProgramSignatures
 		// the member SURFACE every declared position naming this alias wears, and `mixType` cannot carry it —
 		// `__ManagedMemory with T` and `Array with T` fold to one `genericInstance`. A separate bit rather than
 		// a second `mix`, so a declaration that changes only its base's SPELLING still moves the hash.
-		let baseSpelling = SurfaceBitIsBuffer if entry.baseIsBuffer else 0 as DeclaredSurfaceNode
-		let elementSpelling = SurfaceBitElementIsBuffer if entry.elementIsBuffer else 0 as DeclaredSurfaceNode
 		let sizeBits = entry.fixedSize as ContentHash
-		var state = mix(mix(mixBytes(mixBytes(mix(self.hash, value: DeclShapeGenericAlias), bytes: entry.aliasName), bytes: entry.baseName), value: baseSpelling or elementSpelling), value: sizeBits)
+		var state = mix(mix(mixBytes(mixBytes(mix(self.hash, value: DeclShapeGenericAlias), bytes: entry.aliasName), bytes: entry.baseName), value: entry.spellingBits()), value: sizeBits)
 		for arg in args 'eachHash'
 			state = self.mixType(state, t: arg)
 		end 'eachHash'
@@ -11887,7 +12056,7 @@ export type ProgramSignatures
 			end 'firstDeclarationOfThisName'
 
 			var group = try byName.get(entry.aliasName) otherwise panic("ProgramSignatures.recordGenericAliasContests: '{String.from(entry.aliasName)}' was just seeded into the group map and is not there")
-			group.record(self.fileScopedInstance(entry.internedInstance(), filePath: entry.filePath), declFilePath: entry.filePath, nameable: nameableFromAnywhere(entry.visibility))
+			group.record(self.fileScopedInstance(entry.internedInstance(), filePath: entry.filePath), declFilePath: entry.filePath, nameable: nameableFromAnywhere(entry.visibility), spellingBits: entry.spellingBits())
 		end 'eachDeclaration'
 
 		var foundANewContest = false
@@ -11948,16 +12117,36 @@ export type ProgramSignatures
 
 		// ⭐ The MINT — one entry per DISTINCT instance, which falls out of the spelling being DERIVED from the
 		// instance rather than from the declaration: two declarations that agree walk to the same name and
-		// upsert it twice. It inherits the source declaration's buffer-element bit, which is the one fact a
-		// `GenericInstanceId` structurally cannot carry (`Array with __ManagedMemory` and
-		// `Array with ByteArray` are one instance), and losing it at a rewritten field type would change that
-		// field's member roster.
+		// upsert it twice. It inherits the source declaration's BUFFER-SPELLING bits, which are the two facts a
+		// `GenericInstanceId` structurally cannot carry (`Array with __ManagedMemory` and `Array with ByteArray`
+		// are one instance, as are `__ManagedMemory with Byte` and `ByteArray`), and losing either at a
+		// rewritten field type would change that field's member roster.
+		//
+		// ⚠ **BOTH SETS, because `retypeField` rewrites the name the READ DOOR derives from (W49).** The
+		// element bit was carried here alone while it was the only derived one; its twin now reaches
+		// `derivedAliasSurfaceBits` by the same route, so a contested `typealias B = __ManagedMemory with Byte`
+		// would otherwise have its field's surface erased by the very pass that scopes it — the defect this
+		// loop already existed to prevent, one bit over.
+		//
+		// ⚠⚠ **THE BITS COME FROM *THIS INSTANCE'S* DECLARATIONS, NOT FROM THE CONTESTED NAME (W49), AND THE
+		// DIFFERENCE IS A WRONG ANSWER RATHER THAN A REFINEMENT.** The registries are keyed by bare alias NAME
+		// and are whole-program, so `contains(aliasName)` answers "did ANY file's declaration of this name
+		// write the buffer?" — and a contested name is precisely the case where the files DISAGREE. MEASURED:
+		// with `typealias B = __ManagedMemory with Byte` in one file and `typealias B = Array with Int` in
+		// another, `b.items.count()` on a field of the SECOND kind was refused with the BUFFER's roster, in
+		// both file orders. The group carries each instance's own spelling for exactly this, and the mint is
+		// keyed by instance, so the two mints now take the two answers their two declarations wrote.
 		for (_, instance) in group.byDeclaringFile 'eachDeclaration'
 			let mint = instanceQualifiedAliasName(aliasName, canonicalInstance: self.canonicalInstanceName(instance))
 			self.genericAliases.upsert(mint, value: instance)
-			if self.bufferElementAliases.contains(aliasName) 'elementNamesTheBuffer'
+			let spelling = group.spellingBitsOf(instance)
+			if (spelling and SurfaceBitElementIsBuffer) != 0 'elementNamesTheBuffer'
 				self.bufferElementAliases.insert(mint)
 			end 'elementNamesTheBuffer'
+
+			if (spelling and SurfaceBitIsBuffer) != 0 'baseNamesTheBuffer'
+				self.bufferSurfaceAliases.insert(mint)
+			end 'baseNamesTheBuffer'
 		end 'eachDeclaration'
 	end 'recordGenericAliasContest'
 
@@ -11973,9 +12162,12 @@ export type ProgramSignatures
 	//
 	// ⭐ **THE SPELLING IS REWRITTEN AND THE TAG IS NOT**, deliberately. Rewriting to `genericInstance(gid)`
 	// is what `declaredSlotType` produces and would satisfy the cascades — but it DESTROYS the alias NAME, and
-	// `fieldSurfaceOf` reads that name to derive the buffer-element bit (`declaredElementIsBufferSurface`),
-	// which no gid can carry. A minted `named` keeps every name-keyed reader on exactly the path it was on
-	// and changes only which declaration the name denotes.
+	// `fieldSurfaceOf` reads that name to derive BOTH of the position's buffer-spelling bits
+	// (`derivedAliasSurfaceBits`), neither of which a gid can carry. A minted `named` keeps every name-keyed
+	// reader on exactly the path it was on and changes only which declaration the name denotes.
+	//
+	// ⚠ **WHICH IS WHY THE MINT MUST INHERIT BOTH SPELLING SETS** — see `recordGenericAliasContest`, where the
+	// two `insert`s sit together for the reason they sit together in `recordGenericAlias`.
 	//
 	// ⚠ **A SPELLING THIS PASS DOES NOT REACH IS A PANIC, NOT A WRONG ANSWER** — `genericAliasInstance`
 	// refuses a contested name outright. That is the whole reason the file-less door has a guard rather than a
@@ -12400,7 +12592,45 @@ export type ProgramSignatures
 	// that has to obey it: `Parser.literalColumnTypeFor` names the same type for a bracketed literal's column
 	// and would otherwise carry a second copy of the tuple test, which is the exact shape the measured E3006
 	// above came from.
+	//
+	// ⭐⭐ **A NAME THE PARSER SETTLES SYNTACTICALLY IS ANSWERED WITH THAT BUILTIN'S OWN ARM, NEVER WITH
+	// `named`** — the tuple arm's identical defect, two types over, and the only reason it is not live today
+	// is that the corpus's own `type String` / `type Character` are not listed yet.
+	// `Parser.parseTypeReference` settles both names to `MaxonType.string` / `MaxonType.character` and NEVER
+	// to `named`, so every type reference the source writes carries the builtin arm — while
+	// `internAggregateElementInstances` over-interns one instance per name in `structTypes`, and the moment
+	// those modules are listed those two names are IN it. A `named` answer here therefore minted a SECOND gid
+	// for a type the parser already had, and `mangleTypeArg` reads only the NAME
+	// (`primitiveTypeTagName(ValueTypeTag.character)` is literally `"Character"`), so the two gids compiled to
+	// one symbol.
+	//
+	// ⇒ MEASURED on this tree with `helpers/string/views.maxon` and `Character.maxon` listed:
+	// `typealias CharArray = Array with Character` plus any `[<identifier>…]` literal was rejected with
+	// **E3006 duplicate definition of 'Array_Character'**, blaming a `typealias` written once against an
+	// instantiation appearing nowhere in the source. `String` is the same collision by the same route and
+	// cannot yet be driven to it only because `stdlib/String.maxon` stops parsing earlier (see
+	// `StdlibLoader.whitelistedStdlibModules`) — so both arms land together rather than leaving the twin for
+	// whoever clears that wall to rediscover.
+	//
+	// Ahead of the tuple test because neither name can be a tuple's: `isTupleTypeName` keys on the reserved
+	// `__Tuple` spelling, which E2051 bars a declaration from taking.
+	//
+	// ⚠ **NOT ROUTED THROUGH `TypeResolution.builtinTypeNameTag`, WHICH IS THE NEIGHBOURING TABLE ANSWERING A
+	// DIFFERENT QUESTION.** That one serves the INTERNER-FREE REBUILD doors (a rendered interface return
+	// string, a function typealias's stored `(tag, name)` pair), so it admits `ExitCode` — a name
+	// `parseTypeReference` does NOT settle, which reaches here as `named` and must STAY `named`.
+	// `denotedNamedType` draws the same line from the other side, admitting that one arm of the table and
+	// refusing the rest for exactly this reason. It also carries no `Character` arm, so reusing it would have
+	// cured `String` and left the twin.
 	export function namedElementType(element ByteArray) returns MaxonType
+		if element.equals(StringConformerName) 'theStringBuiltin'
+			return MaxonType.string
+		end 'theStringBuiltin'
+
+		if element.equals(CharacterConformerName) 'theCharacterBuiltin'
+			return MaxonType.character
+		end 'theCharacterBuiltin'
+
 		let elementId = self.typeNames.intern(element)
 		return MaxonType.structRef(elementId) if isTupleTypeName(element) else MaxonType.named(elementId)
 	end 'namedElementType'
@@ -13059,8 +13289,33 @@ export type ProgramSignatures
 	// `ByteArray` over the same `Byte`). Both spellings are TRUE of that one type, so there is nothing to
 	// choose between them on correctness; declaration order settles it deterministically and needs no reader
 	// file, which the parse-time askers would otherwise all have to supply.
+	//
+	// ⭐⭐ **A TYPE-SCOPED ALIAS IS EXCLUDED, AND IT IS THE ONE PLACE IN THE COMPILER THAT EXCLUDES ONE** (⚖
+	// USER RULING, W17). `type Character`'s `typealias ByteMemory = __ManagedMemory with Byte` is a true name
+	// for `Array with Byte` and a declaration a person wrote — so by the paragraph above it won the display,
+	// and `stdlib/Character.maxon` sorting ahead of `stdlib/String.maxon` is the whole of why it beat
+	// `String.maxon:23`'s file-scope `ByteArray`. But an inner alias is not a name the author of the refused
+	// program could have WRITTEN — `stdlib/String.maxon:25` says exactly that about its own twin, which is why
+	// that file declares a file-scope `ByteBuffer` beside it — so quoting `Character.ByteMemory` back at
+	// someone who wrote `ByteArray` breaks the 2026-08-04 ruling that a diagnostic names a type THE WAY THE
+	// AUTHOR WROTE IT. MEASURED before the exclusion: three cases across `array-init` and
+	// `bytearray-element-size` read `got 'Character.ByteMemory'` where `got 'ByteArray'` is correct.
+	//
+	// ⚠ **EXCLUDED FROM THE DISPLAY AND FROM NOTHING ELSE.** An inner alias goes on resolving exactly as it
+	// did — `parseTypeReference`'s inner-alias arm, `scopedGenericAliasInstance`, the contest rounds and the
+	// buffer-surface derivation all read `genericAliases`/`genericAliasDecls` and are untouched. What is being
+	// said is only that it is not a SPELLING to hand back.
+	//
+	// ⚠ **AND EXCLUDING ONE CANNOT LEAVE AN INSTANCE UNNAMED**: a miss is an answer here
+	// (`instanceDisplayName` falls back to `canonicalInstanceName`), so an instance whose only declared name
+	// is type-scoped is quoted by the canonical mint — the spelling the index gave it before any alias was
+	// recorded — rather than by an invented one.
 	function deriveInstanceDisplayNames()
 		for entry in self.genericAliasDecls 'eachDeclaration'
+			if entry.typeScoped 'notNameableWhereTheRefusalIsRead'
+				continue
+			end 'notNameableWhereTheRefusalIsRead'
+
 			let instance = self.fileScopedInstance(entry.internedInstance(), filePath: entry.filePath)
 			if self.instanceDisplayNames.contains(instance) 'anEarlierDeclarationAlreadyNamedThisType'
 				continue
@@ -14008,23 +14263,6 @@ export type ProgramSignatures
 		return maxonTypeTag(self.substituteInstanceFieldType(id, index: index)) == ValueTypeTag.interfaceRef
 	end 'genericInstanceFieldIsExistential'
 
-	// Does instance `id` own ANY existential field once substituted — the `usesDropExistential` gate for its
-	// cascade, the `genericInstanceHasStringField` twin.
-	export function genericInstanceHasExistentialField(id GenericInstanceId) returns bool
-		// The same no-layout early-out `genericInstanceHasManagedField`/`genericInstanceHasStringField` make,
-		// and asked for the identical reason: `noteDestructorUsage` reaches this for any instance whose
-		// destructor is in the needed set, including one with no base struct at all.
-		if not self.genericInstanceHasBaseLayout(id) 'noFields'
-			return false
-		end 'noFields'
-		for i in 0 upto self.genericInstanceFieldCount(id) 'eachField'
-			if self.genericInstanceFieldIsExistential(id, index: i) 'found'
-				return true
-			end 'found'
-		end 'eachField'
-		return false
-	end 'genericInstanceHasExistentialField'
-
 	// Does instance `id` own ANY managed field once substituted — the gate deciding whether it needs a
 	// `__destruct_<instance>` cascade at all (else its box drop is the trivial `__mm_decref`).
 	export function genericInstanceHasManagedField(id GenericInstanceId) returns bool
@@ -14033,6 +14271,22 @@ export type ProgramSignatures
 		// `genericInstanceBoxDropCallee`), NOT a synthesized per-instance `__destruct_<mangled>`, so `false`
 		// is the ANSWER and not a dodge; an UNDECLARED base has no fields at all. Either way the walk below
 		// would read a layout that does not exist — see `genericInstanceHasBaseLayout`.
+		//
+		// ⚠⚠ **THE EARLY-OUT IS THIS WALK'S STRUCTURAL PRECONDITION, AND IT IS MEASURED RATHER THAN
+		// CAUTIOUS.** Every walk over an instance's substituted fields owes it — the two destructor passes
+		// (`MmRuntime.addNestedInstanceDestructors`, `MmRuntime.declareInstanceFieldDropNeeds`) reach one for
+		// ANY instance whose `__destruct_<mangled>` is in the needed set, base struct or no base struct.
+		// Measured on a compiler that had the guard on only one of a pair of such walks:
+		// `panic ProgramSignatures.baseLayoutOf: generic instance 3's base struct 'Array' is not declared` —
+		// a stack trace with no diagnostic at all.
+		//
+		// ⚠ The ROUTE that reached it is closed as of P1.7's reserved-space disjointness, and the guard stays
+		// anyway. It used to be a NAME collision: the needed set is keyed by symbol, so a declared
+		// `type Array_Foo` owning a String put `__destruct_Array_Foo` there and pulled the base-less
+		// `Array with Foo` instance in behind it. That instance is `__Array_Foo` now (`reservedIfDeclared`),
+		// so the two names cannot meet — but the guard is the walk's precondition, not a patch on that one
+		// route, and `declared-type-owning-a-string-named-like-an-array-instance` is the case that
+		// re-measures it.
 		if not self.genericInstanceHasBaseLayout(id) 'noFields'
 			return false
 		end 'noFields'
@@ -14044,41 +14298,6 @@ export type ProgramSignatures
 		end 'eachField'
 		return false
 	end 'genericInstanceHasManagedField'
-
-	// Does instance `id` DIRECTLY own a String field once substituted — the `usesStrDecref` gate for its
-	// destructor. A String inside a nested struct/instance field is dropped by that nested destructor, not
-	// this one, so only a directly-substituted String counts (the struct/union `structHasStringField` twin).
-	export function genericInstanceHasStringField(id GenericInstanceId) returns bool
-		// ⚠ **THE SAME NO-LAYOUT EARLY-OUT `genericInstanceHasManagedField` MAKES, AND FOR THE SAME REASON.**
-		// These two are read as a pair by the destructor passes, and only one of them had the guard — so the
-		// pair agreed exactly until something asked this one on its own. `noteDestructorUsage` does: it
-		// reaches this for any instance whose `__destruct_<mangled>` is in the needed set, and an instance
-		// walked into the field loop below reads a base struct that does not exist. Measured, on the
-		// compiler that had the guard on only one of the pair: `panic ProgramSignatures.baseLayoutOf: generic
-		// instance 3's base struct 'Array' is not declared` — a stack trace with no diagnostic at all.
-		//
-		// ⚠ The ROUTE that reached it is closed as of P1.7's reserved-space disjointness, and the guard stays
-		// anyway. It used to be a NAME collision: the needed set is keyed by symbol, so a declared
-		// `type Array_Foo` owning a String put `__destruct_Array_Foo` there and pulled the base-less
-		// `Array with Foo` instance in behind it. That instance is `__Array_Foo` now (`reservedIfDeclared`),
-		// so the two names cannot meet — but the guard is this walk's STRUCTURAL precondition, not a patch on
-		// that one route, and `declared-type-owning-a-string-named-like-an-array-instance` is the case that
-		// re-measures it.
-		//
-		// `false` is the ANSWER, not a dodge: an `Array`/`Set` instance owns no substituted String field. Its
-		// elements are released by `__arr_decref`/`__set_decref` walking the record, never by a synthesized
-		// per-instance cascade — which is exactly why it has no `__destruct_<mangled>` to gate.
-		if not self.genericInstanceHasBaseLayout(id) 'noFields'
-			return false
-		end 'noFields'
-
-		for i in 0 upto self.genericInstanceFieldCount(id) 'eachField'
-			if tagIsByteRecord(maxonTypeTag(self.substituteInstanceFieldType(id, index: i))) 'byteRecord'
-				return true
-			end 'byteRecord'
-		end 'eachField'
-		return false
-	end 'genericInstanceHasStringField'
 
 	// ⭐ **THE DROP CALLEE FOR AN OWNED INSTANCE BOX** — its own `__destruct_<mangled>` cascade when it owns
 	// managed heap, else the trivial `__mm_decref`. The generic-instance twin of `unionBoxDropCallee`, and
@@ -14332,12 +14551,20 @@ export type ProgramSignatures
 	// for the half a `MaxonType` cannot hold, and the door `Parser.emitFieldLoad` asks at the one site a
 	// field read mints its value.
 	//
-	// ⚠ **TWO OF THE THREE BITS ARE STORED AND THE THIRD IS DERIVED, AND THE SPLIT IS FORCED.** The
-	// outright spelling and the tuple-slot mask are TOKEN facts, so the declaration SWEEP that built this
-	// layout could answer them and wrote them into the column. The element bit is not: `var bufs as
-	// BufArray` asks whether `BufArray` holds buffers, and at sweep time that alias may not be interned yet
-	// — an answer that would depend on how far the sweep had got. So it is derived HERE, where every file is
-	// folded, from the alias NAME the swept `named` type still carries. See `declaredElementIsBufferSurface`.
+	// ⚠ **THE SPLIT IS BY POSITION, NOT BY BIT, AND IT IS FORCED.** Only the TUPLE-SLOT mask is purely stored:
+	// a slot must not consult an alias registry at a sweep-fed door at all, because a tuple's element types
+	// are canonical by the time anything could repair one, so its answer would be *how far the sweep had got*
+	// (`Parser.declaredSurfaceAt`'s `slotElementsFromAliases`). Both ROOT bits are stored AND derived, and
+	// their union is the answer: the sweep can settle a root written with the LITERAL spelling
+	// (`var buf as __ManagedMemory` is a token fact), and only the read door can settle one written with an
+	// ALIAS — `var bufs as BufArray`, `var buf as ByteBuffer` — since at sweep time that alias is not yet
+	// registered. So the derived half runs HERE, where every file is folded, off the alias NAME the swept
+	// `named` type still carries.
+	//
+	// ⚠ **IT WAS THE ELEMENT BIT ALONE UNTIL W49, AND THAT WAS A MEASURED DEFECT AND NOT A DESIGN.** This
+	// block used to read *"the outright spelling … the SWEEP could answer"*, which is true of the literal
+	// spelling and FALSE of an alias for it — the case W43 had just made legal. See
+	// `derivedAliasSurfaceBits`.
 	//
 	// ⚠ **IT TAKES THE LAYOUT AND NOT THE STRUCT NAME, WHICH IS A COST AND NOT A STYLE.** `structTypes` is
 	// keyed by NAME, so re-resolving the layout here HASHES that name — and a TUPLE's canonical name grows with
@@ -14357,7 +14584,7 @@ export type ProgramSignatures
 	export function fieldSurfaceOf(layout StructLayout, index FieldIndex) returns DeclaredSurface
 		let declared = try layout.fieldTypes.get(index) otherwise panic("ProgramSignatures.fieldSurfaceOf: field {index} is out of range for `type {String.from(layout.name)}`, which declares {layout.fieldCount()} — every index handed out came from `indexOfField`")
 
-		return self.surfaceWithDerivedElement(layout.fieldDeclaredSurface(index), declared: declared)
+		return self.surfaceWithDerivedAliasBits(layout.fieldDeclaredSurface(index), declared: declared)
 	end 'fieldSurfaceOf'
 
 	// ⭐ **THE PRE-ERASURE `__ManagedMemory` SPELLING OF A UNION PAYLOAD (BATCH22)** — `payloadTypeOf`'s twin
@@ -14369,7 +14596,7 @@ export type ProgramSignatures
 	// token facts, and the swept `named` the element bit is derived from — arrive in one value, so there is
 	// nothing to look up and no pair that can fall out of lockstep.
 	export function payloadSurfaceOf(field PayloadField) returns DeclaredSurface
-		return self.surfaceWithDerivedElement(field.declaredSurface, declared: field.declaredType)
+		return self.surfaceWithDerivedAliasBits(field.declaredSurface, declared: field.declaredType)
 	end 'payloadSurfaceOf'
 
 	// ⭐ **WHAT A SLOT'S DECLARED TYPE MEANS ONCE THE ALIAS REGISTRIES ARE KNOWN** — the door a struct
@@ -14650,23 +14877,6 @@ export type ProgramSignatures
 		return self.typeIsManaged(fieldType, from: self.typeNames)
 	end 'structFieldIsManaged'
 
-	// Does struct `structName` DIRECTLY own an `Array` field — the `usesArray` gate for its destructor (P1.7).
-	// The struct's `__destruct_<Struct>` drops such a field through `__arr_decref`, which the module scan
-	// cannot see (it lives in the synthesized body), so this is what turns the array runtime on. An array
-	// inside a nested struct field is dropped by that nested struct's destructor, not this one, so only a
-	// DIRECT array field counts — the `structHasStringField` twin. A field arrives as a `named` generic
-	// alias (the sweep recorded it before interning), so the alias is resolved to its instance and tested.
-	export function structHasArrayField(structName ByteArray) returns bool
-		let layout = try self.structTypes.get(structName) otherwise panic("ProgramSignatures.structHasArrayField: no `type {String.from(structName)}` is declared — every caller asks `structOf` first")
-		for i in 0 upto layout.fieldCount() 'eachField'
-			let fieldType = try layout.fieldTypes.get(i) otherwise panic("ProgramSignatures.structHasArrayField: fieldTypes.get OOB at {i}")
-			if self.denotesArrayInstance(fieldType) 'array'
-				return true
-			end 'array'
-		end 'eachField'
-		return false
-	end 'structHasArrayField'
-
 	// ⭐ **DOES A TYPE DENOTE AN `Array` INSTANCE — DIRECTLY OR THROUGH A GENERIC-ALIAS NAME?** A layout's
 	// field type is recorded by the SWEEP, before interning, so an `items as IntArr` field arrives as
 	// `named("IntArr")` where an `items as Array with Int` field arrives already tagged `genericInstance`;
@@ -14733,8 +14943,9 @@ export type ProgramSignatures
 	end 'managedOpaqueArrayElementDropCallee'
 
 	// ⭐ **DOES A MANAGED-OPAQUE-ARRAY-HOLDING INSTANCE HAVE A DEEP-CLONEABLE ELEMENT (P1.7 slice 3b-vi-b-β)?**
-	// The GATE on the descriptor `copyFunc@32` stamp AND on the cloner DCE-root (`rootManagedOpaqueArrayElementClones`)
-	// — the CLONE dual of the reloc-need predicate `genericInstanceHasManagedOpaqueArrayField`. `copyFunc@32` is
+	// The GATE on the descriptor `copyFunc@32` stamp — the CLONE dual of the reloc-need predicate
+	// `genericInstanceHasManagedOpaqueArrayField`, and since W17-c the stamp is its only reader (the cloner is
+	// DCE-rooted off the stamp itself, by `MmRuntime.noteRelocatedFunctionUsage`). `copyFunc@32` is
 	// stamped, and the element's `__clone_<T>` SYNTHESIZED, only when the element is deep-cloneable by this rung's
 	// single-`(box) -> newBox` mechanism: a String / boxed-union / struct / trivial-element-array element WHOSE WHOLE
 	// reachable type graph is itself clonable. It MUST read the SAME full-graph classifier the front-end reject
@@ -14787,9 +14998,9 @@ export type ProgramSignatures
 	// public predicates keep their "Array" names for their out-of-tree call sites; the mechanism now spans array
 	// elements AND bare fields.)
 	function managedOpaqueArrayElementOf(id GenericInstanceId) returns ManagedOpaqueArrayElement
-		// ⚠ **THIS IS THE SITE THE UNDECLARED HALF OF THE GATE WAS MEASURED ON.**
-		// `noteDestructorUsage`'s `rootManagedOpaqueArrayElementDrops` calls this over EVERY interned
-		// instance, so it meets whatever a `with` named: a `Set with Int` (synthesized — no base struct to
+		// ⚠ **THIS IS THE SITE THE UNDECLARED HALF OF THE GATE WAS MEASURED ON.** The pre-pipeline root that
+		// called this over EVERY interned instance is gone (W17-c — see `MmRuntime.noteDestructorUsage`), but
+		// `ensureLayoutDescriptor` still asks it of whatever a `with` named: a `Set with Int` (synthesized — no base struct to
 		// iterate) and equally a `Map with (Int, Int)` or a misspelled `Foo with Int` (undeclared — E2055
 		// already recorded, the build already doomed). Both hold no managed opaque `T` field, and both used
 		// to reach `baseLayoutOf` below; the second killed the compiler with a stack trace instead of
@@ -15079,7 +15290,7 @@ export type ProgramSignatures
 	// `declared`.
 	export function unionHasManagedPayload(unionName ByteArray) returns bool
 		let layout = try self.enumTypes.get(unionName) otherwise panic("ProgramSignatures.unionHasManagedPayload: no `union {String.from(unionName)}` is declared — the caller asks `enumOf` first")
-		return unionHasManagedField(self, typeNames: self.typeNames, layout: layout, wantStringOnly: false)
+		return unionHasManagedField(self, typeNames: self.typeNames, layout: layout)
 	end 'unionHasManagedPayload'
 
 	// ⭐ **CAN A MANAGED-ELEMENT `Array with T` BE DEEP-CLONED by this rung's mechanism (P1.7 slice 3b-vi-b)?**

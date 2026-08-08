@@ -819,6 +819,155 @@ end 'main'
 7
 ```
 
+### `appendMemory` — the same append, entered through the MEMORY instead of the array
+
+`stdlib/Array.maxon:272` declares `appendMemory(source ElementMemory)`, and `:262` builds
+`append(other Self)` out of it — `append`'s whole body is `appendMemory(other.managed)`, because the
+array half of `other` was never read. Since the envelope collapse an `Array` IS its
+`__ManagedMemory`, so a caller who already HOLDS the memory would otherwise have to wrap it in an
+`Array` record just to hand it over: `StringBuilder.appendBytes` paid one allocation PER APPEND
+(`stdlib/String.maxon:830`, this member's one corpus caller).
+
+⇒ The two spellings are ONE operation, ONE argument rule and ONE emission. What is NOT folded is the
+SENTENCE: `append` declares its parameter `other` and `appendMemory` declares it `source`, so a
+refusal names the parameter of the method the author actually wrote.
+
+<!-- test: appendMemory-copies-a-raw-buffers-elements -->
+### An `Array` receiver takes a raw `__ManagedMemory` — `stdlib/String.maxon:830`'s exact shape
+The receiver is a genuine `Array` and the argument is a buffer nothing wrapped, which is the whole
+point of the member existing beside `append`.
+```maxon
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+
+function main() returns ExitCode
+	var a = ByteArray.create()
+	a.push(7)
+	var piece = try __ManagedMemory.create(4, 1) otherwise return 9
+	try piece.set(0, 20) otherwise return 8
+	try piece.set(1, 30) otherwise return 8
+	try piece.setLength(2) otherwise return 8
+	a.appendMemory(piece)
+	var sum = 0
+	var i = 0
+	while i < a.count() 'loop'
+		sum = sum + (try a.get(i) otherwise 0)
+		i = i + 1
+	end 'loop'
+	return sum as ExitCode
+end 'main'
+```
+```exitcode
+57
+```
+
+<!-- test: appendMemory-takes-another-arrays-managed -->
+### `stdlib/Array.maxon:262`'s own spelling — `append` is a caller of this member
+```maxon
+function main() returns ExitCode
+	var a = [1, 2, 3]
+	let b = [4, 5, 6]
+	a.appendMemory(b.managed)
+	var sum = 0
+	var i = 0
+	while i < a.count() 'loop'
+		sum = sum + (try a.get(i) otherwise 0)
+		i = i + 1
+	end 'loop'
+	return sum
+end 'main'
+```
+```exitcode
+21
+```
+
+<!-- test: appendMemory-preserves-its-source -->
+### The source is BORROWED and copied out of, exactly as `append`'s is
+```maxon
+function main() returns ExitCode
+	var a = [1, 2]
+	let b = [3, 4]
+	a.appendMemory(b.managed)
+	// b should still have its original elements
+	let b0 = try b.get(0) otherwise 0
+	let b1 = try b.get(1) otherwise 0
+	return b0 + b1
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: error.appendMemory-names-its-own-parameter -->
+### The argument rule is `append`'s, and the sentence names `source`
+One rule (`ProgramSignatures.arrayAppendArgAdmits`) — a `Small` cannot walk into a `Bytes` through
+either spelling. Two sentences, because the corpus declares two parameter names for one operation
+and a reader is told the one they can act on.
+```maxon
+typealias Byte = int(0 to 100)
+typealias Small = int(0 to 200)
+typealias Bytes = Array with Byte
+typealias Smalls = Array with Small
+
+function main() returns ExitCode
+	var s = Smalls.create()
+	s.push(150)
+	var b = Bytes.create()
+	b.appendMemory(s.managed)
+	return try b.get(0) otherwise 1
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:11:4: argument type mismatch for 'source': expected 'Bytes', got 'Smalls'
+```
+
+<!-- test: error.appendMemory-on-a-let-array -->
+### It WRITES the receiver, so a `let` array refuses it
+`appendMemory` is a receiver-writing method (`arrayMethodMutatesReceiver`), which is the same answer
+E3019, E3070 and the storage-written mask all read. Served as a member but omitted from that
+answer, this program would have compiled and silently written through an immutable binding.
+```maxon
+function main() returns ExitCode
+	let a = [1, 2]
+	let b = [3]
+	a.appendMemory(b.managed)
+	return a.count()
+end 'main'
+```
+```maxoncstderr
+error E3019: <fragment>:5:4: cannot pass 'a' to function that mutates parameter 'self' (in main)
+```
+
+<!-- test: error.appendMemory-through-a-live-borrow -->
+### The same answer at E3070's door, naming the spelling the author wrote
+```maxon
+function main() returns ExitCode
+	var arr = ["hello world this is a long string for heap allocation"]
+	let s = try arr.first() otherwise ""
+	let other = ["a second long string that also lives on the heap here"]
+	arr.appendMemory(other.managed)
+	print("[{s}]\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3070: <fragment>:6:6: cannot mutate 'arr' via 'appendMemory' while it is borrowed by 's' (borrowed at line 4)
+```
+
+<!-- test: error.appendMemory-is-not-a-value -->
+### It is VOID, like every other `Array` mutator
+```maxon
+function main() returns ExitCode
+	var a = [1, 2]
+	let b = [3]
+	let x = a.appendMemory(b.managed)
+	return x
+end 'main'
+```
+```maxoncstderr
+error E2004: <fragment>:5:12: Function 'appendMemory' does not return a value
+```
+
 ### Copy-on-Write
 
 <!-- test: slice-cow-modify-slice -->
@@ -1854,6 +2003,11 @@ error E3005: <fragment>:11:4: argument type mismatch for 'other': expected 'Byte
 ### The BUFFER surface's `append` is the same door and answers the same way
 One record, two surfaces: `b.managed.append(s)` reaches `__ManagedMemory`'s `append`, whose rule
 used to be a second spelling of the `Array` one. It returned the identical `150`.
+
+⚠ The two programs are now spelled identically bar the `.managed` hop, which they were not: this one wrote
+`try … otherwise panic(…)` while its sibling above wrote a bare call. That `try` was vestigial after the
+2026-08-07 ruling made the buffer's `append` non-throwing, and it survived only because the argument
+refusal is raised first — a spelling the language rejects, kept alive by never being reached.
 ```maxon
 typealias Byte = int(0 to 100)
 typealias Small = int(0 to 200)
@@ -1864,12 +2018,12 @@ function main() returns ExitCode
 	var s = Smalls.create()
 	s.push(150)
 	var b = Bytes.create()
-	try b.managed.append(s) otherwise panic("test invariant: append")
+	b.managed.append(s)
 	return try b.get(0) otherwise 1
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:11:16: argument type mismatch for 'other': expected '__ManagedMemory', got 'Smalls'
+error E3005: <fragment>:11:12: argument type mismatch for 'other': expected '__ManagedMemory', got 'Smalls'
 ```
 
 <!-- test: error.append-bool-array-into-a-byte-array -->

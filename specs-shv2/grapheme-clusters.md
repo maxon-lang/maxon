@@ -447,3 +447,69 @@ end 'main'
 ```stdout
 2
 ```
+
+<!-- test: single-byte-grapheme-flag-declines-a-cr -->
+### The one-byte-per-grapheme flag declines a CR
+
+A String's record carries `singleByteGraphemes@40`, and the corpus's three bulk walks
+(`countGraphemes`, `byteIndexToGraphemeIndex`, `graphemeOffsetToBytePos`) collapse to arithmetic when it
+is set. The flag is therefore only sound if it is CR-FREE as well as ASCII: CR+LF is a SINGLE cluster
+under GB3, so a string holding a CR must decline the shortcut even though every one of its bytes is
+ASCII. Verified RED by removing the CR test from the literal scan, which reports the BYTE length 4.
+
+```maxon
+function main() returns ExitCode
+	let s = "a\r\nb"  // a, CRLF, b = 3 graphemes over 4 bytes
+	print("{s.count()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+3
+```
+
+<!-- test: single-byte-grapheme-flag-survives-concatenation -->
+### The flag composes across an append
+
+The flag is CR-FREE rather than CRLF-free precisely so that it composes: "no CR" is a property of each
+byte on its own, so `__str_append` may simply AND the two operands' flags. Were a CR-bearing string
+allowed to carry the flag set, `"a\r"` and `"\nb"` would each qualify on their own and their join would
+claim one byte per grapheme over a buffer whose CR+LF is a single two-byte cluster.
+
+```maxon
+function main() returns ExitCode
+	var s = "a\r"
+	s.append("\nb")
+	print("{s.count()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+3
+```
+
+<!-- test: single-byte-grapheme-flag-still-shortcuts-plain-ascii -->
+### A CR-free ASCII string still takes the shortcut
+
+The negative control for the two cases above: declining a CR must not cost the ordinary string its
+fast path.
+
+```maxon
+function main() returns ExitCode
+	let s = "hello"
+	print("{s.count()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+5
+```

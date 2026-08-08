@@ -1675,7 +1675,7 @@ function main() returns ExitCode
 	b.push(65)
 	var cwd = try __ManagedDirectory.currentPath() otherwise return 1
 	let before = cwd.length()
-	try cwd.append(b) otherwise panic("test invariant: append")
+	cwd.append(b)
 	return 0 if cwd.length() == before + 1 else 2
 end 'main'
 ```
@@ -1698,7 +1698,7 @@ function main() returns ExitCode
 	b.push(65)
 	var cwd = try __ManagedDirectory.currentPath() otherwise return 1
 	let before = cwd.length()
-	try cwd.append(b) otherwise panic("test invariant: append")
+	cwd.append(b)
 	return 0 if cwd.length() == before + 1 else 2
 end 'main'
 ```

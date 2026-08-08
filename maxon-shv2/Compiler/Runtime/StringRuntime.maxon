@@ -31,7 +31,26 @@ export let StringLengthOffset = 8 as ByteOffset
 export let StringCapacityOffset = 16 as ByteOffset
 export let StringElementSizeOffset = 24 as ByteOffset
 export let StringParentPtrOffset = 32 as ByteOffset
-export let StringIsAsciiOffset = 40 as ByteOffset
+
+// ⭐⭐ **SLOT@40 IS `singleByteGraphemes` — *EVERY GRAPHEME IN THIS STRING IS EXACTLY ONE BYTE* — AND IT
+// USED TO BE THE STRICTLY WEAKER `singleByteGraphemes`.** The corpus field this record IS
+// (`stdlib/String.maxon:86`'s `singleByteGraphemesFlag`) has always carried the stronger fact, and its own
+// declaration records the cost of the confusion: *"this field used to say only 'is ASCII', and ten methods
+// read THAT as 'one byte per character' … all ten split the cluster"*. **CR+LF is a SINGLE cluster under
+// UAX #29 GB3**, so an all-ASCII string is not necessarily one byte per grapheme.
+//
+// ⚠ **WHILE THE TWO MEANINGS DISAGREED, `String.hasSingleByteGraphemes()` HAD TO ANSWER A CONSERVATIVE
+// `false` OUTRIGHT** — serving `singleByteGraphemes@40` there would have made the corpus's `countGraphemes` take the
+// shortcut and return the BYTE length, 2, for a CR+LF string where every other path in all three compilers
+// says 1. That refusal cost SPEED on long ASCII strings (measured by the corpus at ×2.4 rising to ×6.5 on
+// `findFirst`/`findLast`/`slice-by-length`), and `Parser.dispatchStringMethod` named the cure exactly:
+// *"strengthening the record's `@40` flag to the corpus's meaning at its literal scan and at all nine of its
+// propagation sites"*. That is what this is.
+//
+// ⭐ **CR-FREE RATHER THAN CRLF-FREE, AND THAT IS WHAT MAKES IT COMPOSABLE** — *"no CR"* is a property of
+// each byte ON ITS OWN, so it survives both slicing and concatenation and `__str_append` may simply AND the
+// two flags. *"No CRLF pair"* would not: `"a\r"` and `"\nb"` each lack one and their join has one.
+export let StringSingleByteGraphemesOffset = 40 as ByteOffset
 export let StringRecordBytes = 48 as ByteCount
 let StringFieldBytes = 8 as ByteCount
 
@@ -57,12 +76,26 @@ export let StringElementSize = 1 as ParsedInt
 // it). `Parser.emitStringInterp` sizes its one `__mm_alloc` as `totalLen + StringInterpOverheadBytes`.
 export let StringInterpOverheadBytes = (StringRecordBytes as ParsedInt) + 1
 
-// `isAsciiFlag@40` — 1 iff every byte is < 128 (a compile-time scan). An empty string is vacuously
-// ASCII. The high-bit threshold and the two flag values are named rather than bare so the scan reads
-// as the property it computes.
+// `singleByteGraphemes@40` — 1 iff every byte is < 128 AND no byte is a CR (a compile-time scan). An empty
+// string satisfies it vacuously. The high-bit threshold and the two flag values are named rather than bare
+// so the scan reads as the property it computes.
 let AsciiHighBit = 128 as Byte
-let AsciiFlagTrue = 1 as ParsedInt
-let AsciiFlagFalse = 0 as ParsedInt
+let SingleByteGraphemesTrue = 1 as ParsedInt
+let SingleByteGraphemesFalse = 0 as ParsedInt
+
+// ⚠ **U+000D, AND THIS IS THE THIRD STATEMENT OF THE BYTE — the corpus already carries two, WITH a measured
+// reason, and this one has the same shape of reason.** `stdlib/helpers/string/grapheme.maxon:38` is the
+// AUTHORITY (it implements GB3); `stdlib/String.maxon:53` states it a second time because its classifier
+// tests every byte of every string as it is constructed and a cross-file call per byte measured worse than
+// the second walk it replaced. This copy exists because the scan below runs in the COMPILER, at lower time,
+// over a literal's bytes — it cannot call corpus Maxon at all. What holds the three together is a CHECK and
+// not a comment: `specs-shv2/grapheme-clusters`'s `grapheme-boundary-crlf` and the literal-flag cases go red
+// if any of them stops treating CR specially.
+//
+// ⚠ **EXPORTED FOR `GraphemeRuntime.buildCharFromCodepoint`, WHICH IS THE OTHER PRODUCER OF THIS FIELD.**
+// Slot@40's meaning is declared in this file, so the byte that clears it is declared here too — a second
+// `13` in the encoder would be a fourth statement of the number with nothing holding it to this one.
+export let CarriageReturnByte = 13 as Byte
 
 // The blob is the payload bytes followed by a single NUL — a C string, so the record's pointer is
 // usable by any consumer that wants a NUL-terminated buffer, while `length@8` is what Maxon reads.
@@ -262,6 +295,51 @@ export let StrSplitName = b"__str_split"
 export let StrReplaceFirstName = b"__str_replace_first"
 export let StrFromBytesName = b"__str_from_bytes"
 
+// ⭐⭐ **`__str_of_buffer(srcRecord, singleByteGraphemes) -> String` — THE ENVELOPE COLLAPSE'S CONSTRUCTOR:
+// what a corpus `String{managed: X, singleByteGraphemesFlag: F}` LOWERS TO.** `type String` declares two
+// fields and IS the fused record (`Project.StructLayout.isInlineManagedField`), so its literal cannot
+// store a pointer at offset 0 the way an ordinary struct literal stores a field — offset 0 is `buffer@0`
+// of the record being built. This is the producer that builds it instead.
+//
+// ⭐ **IT IS `__str_from_bytes` WITH THE FLAG SUPPLIED RATHER THAN SCANNED, AND IT IS THE SAME GRAPH
+// UNDERNEATH** (`emitBuildOwnedInlineString`). The two differ in exactly one thing and it is the one thing
+// the corpus is explicit about: `String.from(bytes)` classifies the bytes it was handed, while
+// `fromOwnedBytes` takes a caller *"that ALREADY KNOWS how the bytes classify"* — `StringBuilder.build`
+// watched every byte go in, so re-scanning them *"would make finishing a builder cost a second walk"*
+// (`stdlib/String.maxon:139-142`). Sharing the builder is what keeps the two from drifting into two record
+// shapes.
+//
+// ⚠⚠ **IT COPIES, WHERE THE REFERENCE BUILDS A ZERO-COPY VIEW — DELIBERATELY, AND THIS IS A DIFFERENT
+// ARGUMENT FROM THE ONE `buildStrFromBytes` USED TO MAKE.** That function's header says shv2 *cannot* share,
+// *"has no shared-ownership relationship between an `Array` record and a `String` record"*; that was true
+// when written and the P1.7 COW slice made it false — `buildStrBytesView`, two screens down, establishes
+// exactly that relationship in the other direction, increfing the allocation the bytes live in and stating
+// its refcount correct in both drop orders. **So the view is now REPRESENTABLE.** It is not taken here
+// because a view is the shape whose failure mode is a double free or a read of returned memory, and it
+// buys a constant factor on a path nothing has measured. Copying is what every other producer in this file
+// hands back and what `__str_decref` already reclaims. ⇒ A rung with the ladder read, not a line here.
+export let StrOfBufferName = b"__str_of_buffer"
+
+// ⭐⭐ **`__mm_to_cstring(bufRecord) -> ptr` — `__ManagedMemory.toCString()`, the corpus's ONE producer of a
+// `cstring`** (`stdlib/String.maxon:195`). It implements the contract that declaration states verbatim:
+// *"The conversion checks `buffer[length] == 0` and copies if not, so the returned pointer is always safely
+// NUL-terminated even when the underlying `__ManagedMemory` happens to be packed tight against its
+// allocated capacity (where `strlen` would otherwise walk past the end into adjacent heap)."*
+//
+// ⭐ **THE CHECK IS NOT AN OPTIMISATION, IT IS WHAT MAKES THE COMMON CASE FREE.** Every String literal's
+// blob is NUL-terminated by `stringBlobBytes`, and every owned inline String's trailing NUL comes from the
+// slab's zeroing contract — so `buffer[length]` is already 0 for both, the test falls through, and the
+// receiver's own bytes are handed back with nothing allocated. Only a buffer that is neither pays a copy.
+//
+// ⚠⚠ **THE COPY PATH RETURNS AN ADDRESS NOTHING OWNS, AND THAT IS THE `cstring` CONTRACT RATHER THAN AN
+// OVERSIGHT.** A `cstring` is a raw pointer with no length, no capacity and no refcount — the type exists
+// precisely to hand a `__Builtins.*` intrinsic something to `strlen`. There is no owner to record it
+// against and no drop that could reclaim it, in this compiler or in either reference. ⇒ A program that
+// reaches the copy path leaks that buffer, and the leak is the DECLARATION's to fix (by keeping the
+// receiver alive and NUL-terminated) rather than this graph's. Nothing in the loaded corpus reaches it:
+// `cstr()` has no caller, so dead-function elimination drops both.
+export let MmToCStringName = b"__mm_to_cstring"
+
 // ⭐⭐ **THE THREE STDLIB-ONLY BYTE DOORS — what `stdlib/`'s own byte walkers actually ask a String for.**
 // All three are `module function` in the corpus (`stdlib/String.maxon:181`, `:266` and `:281`), so no user
 // program may reach any of them; the visibility is enforced at the PARSER, on stdlib provenance
@@ -360,16 +438,22 @@ function stringBufferSlots() returns BufferRecordSlots
 	return BufferRecordSlots.create(StringBufferOffset, capacityOffset: StringCapacityOffset, parentOffset: StringParentPtrOffset)
 end 'stringBufferSlots'
 
-// True iff every byte is ASCII (< 128) — the `isAsciiFlag@40` scan, run once per distinct literal at
-// lower time (the cold path), never per value.
-export function bytesAreAscii(bytes ByteArray) returns bool
+// True iff every GRAPHEME of these bytes is exactly one byte — the `singleByteGraphemes@40` scan, run once
+// per distinct literal at lower time (the cold path), never per value.
+//
+// ⭐ **ONE PASS TESTING BOTH, rather than an ASCII scan followed by a CR scan** — the corpus's
+// `scanSingleByteGraphemes` (`stdlib/String.maxon:1048`) is the same loop for the same stated reason, and
+// this is its compile-time twin over a literal's bytes.
+export function bytesAreSingleByteGraphemes(bytes ByteArray) returns bool
 	for b in bytes 'each'
-		if b >= AsciiHighBit 'high'
+		// A CR is ASCII and is NOT a grapheme on its own — GB3 joins it to a following LF — so it is the one
+		// byte that clears this flag without being high.
+		if b >= AsciiHighBit or b == CarriageReturnByte 'notSingleByte'
 			return false
-		end 'high'
+		end 'notSingleByte'
 	end 'each'
 	return true
-end 'bytesAreAscii'
+end 'bytesAreSingleByteGraphemes'
 
 // The NUL-terminated blob for a literal's payload — the bytes, then one NUL.
 export function stringBlobBytes(bytes ByteArray) returns ByteArray
@@ -383,7 +467,7 @@ export function stringBlobBytes(bytes ByteArray) returns ByteArray
 end 'stringBlobBytes'
 
 // Build the 48-byte record for a literal. `byteLength` EXCLUDES the NUL (it is the payload count);
-// `isAscii` is `bytesAreAscii`'s answer.
+// `singleByteGraphemes` is `bytesAreSingleByteGraphemes`'s answer.
 //
 // ⚠ **`buffer@0` HOLDS THE BLOB'S RDATA OFFSET, NOT 0, AND THIS IS LOAD-BEARING FOR DEDUP.** The PE
 // writer OVERWRITES `buffer@0` with the blob's absolute VA (`ImageBase + rdataRva + blobOffset`), so
@@ -399,14 +483,14 @@ end 'stringBlobBytes'
 // the runtime functions load by (`StringBufferOffset`, `StringLengthOffset`) and the offsets this
 // writes are ONE set of constants that cannot drift: reorder a field or mis-size one and this panics
 // rather than shipping a record the runtime reads wrong.
-export function buildStringRecordBytes(blobOffset ByteOffset, byteLength ByteCount, isAscii bool) returns ByteArray
+export function buildStringRecordBytes(blobOffset ByteOffset, byteLength ByteCount, singleByteGraphemes bool) returns ByteArray
 	var record = ByteArray.create()
 	appendRecordField(record, expectedOffset: StringBufferOffset, value: blobOffset as ParsedInt)
 	appendRecordField(record, expectedOffset: StringLengthOffset, value: byteLength as ParsedInt)
 	appendRecordField(record, expectedOffset: StringCapacityOffset, value: RdataBufferCapacity)
 	appendRecordField(record, expectedOffset: StringElementSizeOffset, value: StringElementSize)
 	appendRecordField(record, expectedOffset: StringParentPtrOffset, value: NoOwedAllocation)
-	appendRecordField(record, expectedOffset: StringIsAsciiOffset, value: asciiFlagValue(isAscii))
+	appendRecordField(record, expectedOffset: StringSingleByteGraphemesOffset, value: singleByteGraphemesFlagValue(singleByteGraphemes))
 
 	if record.count() != StringRecordBytes 'sizeDrift'
 		panic("buildStringRecordBytes: assembled {record.count()} bytes, not {StringRecordBytes} — a field's width does not match its offset spacing")
@@ -421,12 +505,12 @@ function appendRecordField(record ByteArray, expectedOffset ByteOffset, value Pa
 	record.append(scalarImage(value, byteCount: StringFieldBytes))
 end 'appendRecordField'
 
-function asciiFlagValue(isAscii bool) returns ParsedInt
-	if isAscii 'ascii'
-		return AsciiFlagTrue
-	end 'ascii'
-	return AsciiFlagFalse
-end 'asciiFlagValue'
+function singleByteGraphemesFlagValue(singleByteGraphemes bool) returns ParsedInt
+	if singleByteGraphemes 'oneByteEach'
+		return SingleByteGraphemesTrue
+	end 'oneByteEach'
+	return SingleByteGraphemesFalse
+end 'singleByteGraphemesFlagValue'
 
 // The `.rdata` labels a literal's blob and record register under. Split out so the two prefixes are
 // named at the one place that uses them and `LowerMaxonToStd` names neither.
@@ -436,9 +520,9 @@ end 'registerStringBlob'
 
 // Register a literal's record, seeded with its blob's offset (see `buildStringRecordBytes` for why the
 // offset, not 0). `blobLabel` must already be registered — its offset is read back here.
-export function registerStringRecord(globalData GlobalDataTable, blobLabel String, byteLength ByteCount, isAscii bool) returns String
+export function registerStringRecord(globalData GlobalDataTable, blobLabel String, byteLength ByteCount, singleByteGraphemes bool) returns String
 	let blobOffset = globalData.rdataOffsetOf(blobLabel)
-	return globalData.registerRdataConstant(StringRecordPrefix, bytes: buildStringRecordBytes(blobOffset, byteLength: byteLength, isAscii: isAscii))
+	return globalData.registerRdataConstant(StringRecordPrefix, bytes: buildStringRecordBytes(blobOffset, byteLength: byteLength, singleByteGraphemes: singleByteGraphemes))
 end 'registerStringRecord'
 
 // --- Which compiler-internal runtime functions a module references ---
@@ -607,6 +691,8 @@ export type RuntimeUsage
 	// program that only builds a String from bytes must carry neither.
 	export var usesStrReplaceFirst as bool
 	export var usesStrFromBytes as bool
+	export var usesStrOfBuffer as bool
+	export var usesMmToCString as bool
 	// The three stdlib-only byte doors, each with its OWN bit under this file's one-bit-per-entry-point
 	// discipline: a program whose stdlib cone reads bytes must not carry the view builder, and one that takes
 	// a byte view must not carry a bounds check it never reaches. `usesStrBytesView` declares
@@ -727,7 +813,7 @@ export type RuntimeUsage
 	export var usesProcessIntrospection as bool
 
 	static function create() returns RuntimeUsage
-		return Self{usesHeap: false, usesGt: false, usesIocp: false, usesStreaming: false, usesWriteStdout: false, usesWriteStderr: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesUIntToString: false, usesBoolToString: false, usesStrAppend: false, usesStrDecref: false, usesArray: false, usesSet: false, usesMap: false, usesList: false, usesDropTypeParam: false, usesDropExistential: false, usesRetainExistential: false, usesIncref: false, usesRetain: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrRangeEq: false, usesStrFind: false, usesStrRFind: false, usesStrStartsWith: false, usesStrEndsWith: false, usesStrContains: false, usesStrMapCase: false, usesStrReplace: false, usesStrSplit: false, usesStrReplaceFirst: false, usesStrFromBytes: false, usesStrBytesView: false, usesStrByteAt: false, usesStrByteAtOrPanic: false, usesManagedArrayCopy: false, usesOpaqueArrayCopy: false, neededCloners: ClonerSet.create(), usesWallClock: false, usesCharAt: false, usesCharCmp: false, usesCharFromCodepoint: false, usesCharAsciiValue: false, usesStrToBytes: false, usesStrToCodepoints: false, usesStrToUtf16: false, usesStrIndexMake: false, usesStrIndexEnd: false, usesStrIndexByteToGrapheme: false, usesStrIndexAdvance: false, usesStrIndexFirst: false, usesStrIndexLast: false, usesStrIndexSlice: false, usesStrIndexAfter: false, usesUcdCategory: false, usesCharSetMake: false, usesCharSetDecref: false, usesCharSetContains: false, usesStrTrim: false, usesManagedFile: false, usesManagedDirectory: false, usesCommandLine: false, usesConsoleStdin: false, usesProcessIntrospection: false}
+		return Self{usesHeap: false, usesGt: false, usesIocp: false, usesStreaming: false, usesWriteStdout: false, usesWriteStderr: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesUIntToString: false, usesBoolToString: false, usesStrAppend: false, usesStrDecref: false, usesArray: false, usesSet: false, usesMap: false, usesList: false, usesDropTypeParam: false, usesDropExistential: false, usesRetainExistential: false, usesIncref: false, usesRetain: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrRangeEq: false, usesStrFind: false, usesStrRFind: false, usesStrStartsWith: false, usesStrEndsWith: false, usesStrContains: false, usesStrMapCase: false, usesStrReplace: false, usesStrSplit: false, usesStrReplaceFirst: false, usesStrFromBytes: false, usesStrOfBuffer: false, usesMmToCString: false, usesStrBytesView: false, usesStrByteAt: false, usesStrByteAtOrPanic: false, usesManagedArrayCopy: false, usesOpaqueArrayCopy: false, neededCloners: ClonerSet.create(), usesWallClock: false, usesCharAt: false, usesCharCmp: false, usesCharFromCodepoint: false, usesCharAsciiValue: false, usesStrToBytes: false, usesStrToCodepoints: false, usesStrToUtf16: false, usesStrIndexMake: false, usesStrIndexEnd: false, usesStrIndexByteToGrapheme: false, usesStrIndexAdvance: false, usesStrIndexFirst: false, usesStrIndexLast: false, usesStrIndexSlice: false, usesStrIndexAfter: false, usesUcdCategory: false, usesCharSetMake: false, usesCharSetDecref: false, usesCharSetContains: false, usesStrTrim: false, usesManagedFile: false, usesManagedDirectory: false, usesCommandLine: false, usesConsoleStdin: false, usesProcessIntrospection: false}
 	end 'create'
 end 'RuntimeUsage'
 
@@ -1300,6 +1386,12 @@ function recordStringMethodUsage(callee ByteArray, usage RuntimeUsage)
 	if callee.equals(StrFromBytesName) 'frombytes'
 		usage.usesStrFromBytes = true
 	end 'frombytes'
+	if callee.equals(StrOfBufferName) 'ofbuffer'
+		usage.usesStrOfBuffer = true
+	end 'ofbuffer'
+	if callee.equals(MmToCStringName) 'tocstring'
+		usage.usesMmToCString = true
+	end 'tocstring'
 	if callee.equals(StrBytesViewName) 'bytesview'
 		usage.usesStrBytesView = true
 	end 'bytesview'
@@ -1336,7 +1428,7 @@ function closeStringMethodNeeds(usage RuntimeUsage)
 	end 'pushesSegments'
 	// Every string-BUILDING method allocates a fused record and blits bytes into it (`emitBuildOwnedInlineString`
 	// ⇒ `__mm_alloc` + `__str_copy`), and `__str_clone` under them does the same.
-	if usage.usesStrMapCase or usage.usesStrReplace or usage.usesStrReplaceFirst or usage.usesStrSplit or usage.usesStrFromBytes 'buildsStrings'
+	if usage.usesStrMapCase or usage.usesStrReplace or usage.usesStrReplaceFirst or usage.usesStrSplit or usage.usesStrFromBytes or usage.usesStrOfBuffer or usage.usesMmToCString 'buildsStrings'
 		usage.usesHeap = true
 		usage.usesStrCopy = true
 	end 'buildsStrings'
@@ -1417,6 +1509,12 @@ export function installStringRuntime(module StdModule, usage RuntimeUsage)
 	if usage.usesStrFromBytes 'strfrombytes'
 		buildStrFromBytes(module)
 	end 'strfrombytes'
+	if usage.usesStrOfBuffer 'strofbuffer'
+		buildStrOfBuffer(module)
+	end 'strofbuffer'
+	if usage.usesMmToCString 'mmtocstring'
+		buildMmToCString(module)
+	end 'mmtocstring'
 	if usage.usesStrBytesView 'strbytesview'
 		buildStrBytesView(module)
 	end 'strbytesview'
@@ -1965,7 +2063,7 @@ function buildStrAppend(module StdModule)
 	var detach = module.addBlock(func, label: b"detach")
 	var baseJoin = module.addBlock(func, label: b"baseJoin")
 	var blit = module.addBlock(func, label: b"blit")
-	var clearAscii = module.addBlock(func, label: b"clearAscii")
+	var clearSingleByte = module.addBlock(func, label: b"clearSingleByte")
 	let done = module.addBlock(func, label: b"done")
 
 	emitParams(module, block: entry, count: 2)
@@ -1978,7 +2076,7 @@ function buildStrAppend(module StdModule)
 	let selfBuf = emitLoadField(module, block: entry, record: selfPtr, offset: StringBufferOffset, ids: ids)
 	let otherLen = emitLoadField(module, block: entry, record: otherPtr, offset: StringLengthOffset, ids: ids)
 	let otherBuf = emitLoadField(module, block: entry, record: otherPtr, offset: StringBufferOffset, ids: ids)
-	let otherAscii = emitLoadField(module, block: entry, record: otherPtr, offset: StringIsAsciiOffset, ids: ids)
+	let otherSingleByte = emitLoadField(module, block: entry, record: otherPtr, offset: StringSingleByteGraphemesOffset, ids: ids)
 	let requiredLen = emitBin(module, block: entry, a: selfLen, b: otherLen, opcode: StdBinOpcode.add, ids: ids)
 	let tooSmall = emitBufferCannotHold(module, block: entry, record: selfPtr, slots: stringBufferSlots(), requiredLen: requiredLen, ids: ids)
 	module.setTerminator(entry, op: StdOp.condBranch(tooSmall, thenBlockId: detach.id, elseBlockId: inPlace.id))
@@ -2023,14 +2121,14 @@ function buildStrAppend(module StdModule)
 	emitStoreField(module, block: blit, record: selfPtr, offset: StringLengthOffset, value: requiredLen)
 	var afterRelease = emitReleaseOwedBase(module, func: func, cur: blit, base: owedBase, callee: MmDecrefName, ids: ids)
 
-	// afterRelease: `isAscii` is maintained incrementally — the concatenation stays ASCII only if `other` is.
-	let zeroAscii = emitConst(module, block: afterRelease, value: AsciiFlagFalse, ids: ids)
-	let otherNonAscii = emitCmp(module, block: afterRelease, a: otherAscii, b: zeroAscii, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(afterRelease, op: StdOp.condBranch(otherNonAscii, thenBlockId: clearAscii.id, elseBlockId: done.id))
+	// afterRelease: `singleByteGraphemes` is maintained incrementally — the concatenation stays ASCII only if `other` is.
+	let notSingleByte = emitConst(module, block: afterRelease, value: SingleByteGraphemesFalse, ids: ids)
+	let otherNotSingleByte = emitCmp(module, block: afterRelease, a: otherSingleByte, b: notSingleByte, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(afterRelease, op: StdOp.condBranch(otherNotSingleByte, thenBlockId: clearSingleByte.id, elseBlockId: done.id))
 
-	// clearAscii: `other` carried a non-ASCII byte, so the result is not ASCII.
-	emitStoreField(module, block: clearAscii, record: selfPtr, offset: StringIsAsciiOffset, value: zeroAscii)
-	module.setTerminator(clearAscii, op: StdOp.branch(done.id))
+	// clearSingleByte: `other` carried a non-ASCII byte, so the result is not ASCII.
+	emitStoreField(module, block: clearSingleByte, record: selfPtr, offset: StringSingleByteGraphemesOffset, value: notSingleByte)
+	module.setTerminator(clearSingleByte, op: StdOp.branch(done.id))
 
 	module.setTerminator(done, op: StdOp.retVoid)
 
@@ -2093,13 +2191,13 @@ end 'buildStrDecref'
 
 // ⭐ **THE ONE ENCODER of shv2's fused OWNED inline String record** — record + inline bytes + a trailing NUL in
 // ONE `__mm_alloc`, `buffer@0` pointing at the inline region, `capacity@16 = InlineBufferCapacity`, `parent@32`
-// left 0 by the slab zeroing, and `isAscii@40 = isAscii`. Emits the ops into `block` and returns the record.
-// Shared so the record layout has exactly ONE construction site: `__str_clone` (passes the SOURCE's `isAscii`)
+// left 0 by the slab zeroing, and `singleByteGraphemes@40 = singleByteGraphemes`. Emits the ops into `block` and returns the record.
+// Shared so the record layout has exactly ONE construction site: `__str_clone` (passes the SOURCE's `singleByteGraphemes`)
 // and `__gt_subp_str_from_bytes` (passes 0 — child output is arbitrary bytes, `not-ascii` is the safe class)
 // were byte-for-byte copies of this sequence, and a field the record later gains must be initialized once, here,
 // not silently in one path and not the other.
-export function emitBuildOwnedInlineString(module StdModule, block IrBlock, ids ValueMinter, srcBuf ValueId, srcLen ValueId, isAscii ValueId) returns ValueId
-	let newRec = emitAllocOwnedInlineString(module, block: block, ids: ids, byteLen: srcLen, isAscii: isAscii)
+export function emitBuildOwnedInlineString(module StdModule, block IrBlock, ids ValueMinter, srcBuf ValueId, srcLen ValueId, singleByteGraphemes ValueId) returns ValueId
+	let newRec = emitAllocOwnedInlineString(module, block: block, ids: ids, byteLen: srcLen, singleByteGraphemes: singleByteGraphemes)
 	let copied = ids.mint()
 	module.appendOp(block, op: StdOp.call(copied, callee: StrCopyName, args: threeArgs(emitInlineStringBuffer(module, block: block, ids: ids, record: newRec), second: srcBuf, third: srcLen)))
 	return newRec
@@ -2111,7 +2209,7 @@ end 'emitBuildOwnedInlineString'
 // record is settled here — its size (`byteLen` + record + NUL), its `buffer@0`, and the whole buffer-ownership
 // encoding (`capacity@16 = InlineBufferCapacity`, `parent@32` left 0 by the slab's zeroing contract) — so a
 // caller that fills the bytes itself cannot publish a record that differs from a cloned one by a field.
-export function emitAllocOwnedInlineString(module StdModule, block IrBlock, ids ValueMinter, byteLen ValueId, isAscii ValueId) returns ValueId
+export function emitAllocOwnedInlineString(module StdModule, block IrBlock, ids ValueMinter, byteLen ValueId, singleByteGraphemes ValueId) returns ValueId
 	// One `__mm_alloc` for the record + the bytes + a trailing NUL (the slab zeroes it), sized exactly as an
 	// interpolation of a single part is (`StringInterpOverheadBytes` = record + NUL).
 	let overhead = emitConst(module, block: block, value: StringInterpOverheadBytes, ids: ids)
@@ -2129,7 +2227,7 @@ export function emitAllocOwnedInlineString(module StdModule, block IrBlock, ids 
 	emitStoreField(module, block: block, record: newRec, offset: StringCapacityOffset, value: capacity)
 	let elementSize = emitConst(module, block: block, value: StringElementSize, ids: ids)
 	emitStoreField(module, block: block, record: newRec, offset: StringElementSizeOffset, value: elementSize)
-	emitStoreField(module, block: block, record: newRec, offset: StringIsAsciiOffset, value: isAscii)
+	emitStoreField(module, block: block, record: newRec, offset: StringSingleByteGraphemesOffset, value: singleByteGraphemes)
 
 	return newRec
 end 'emitAllocOwnedInlineString'
@@ -2154,7 +2252,7 @@ end 'emitInlineStringBuffer'
 // the same encoding `emitStringInterp` publishes — so `__str_decref` reclaims record and bytes together and owes
 // nothing to anyone. A LITERAL source (immortal `.rdata`, `capacity == RdataBufferCapacity`) clones through this
 // identical path: its bytes are COPIED into the new inline box, so the clone frees its own copy and never the
-// immortal blob. `isAscii@40` is carried over from the source, an accurate copy at no extra cost.
+// immortal blob. `singleByteGraphemes@40` is carried over from the source, an accurate copy at no extra cost.
 function buildStrClone(module StdModule)
 	var func = IrFunction.createFromStd(StrCloneName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
@@ -2163,12 +2261,12 @@ function buildStrClone(module StdModule)
 	emitParams(module, block: entry, count: 1)
 	let src = 0 as ValueId
 
-	// A clone PRESERVES the source's `isAscii` classification (the bytes are copied verbatim), unlike a
+	// A clone PRESERVES the source's `singleByteGraphemes` classification (the bytes are copied verbatim), unlike a
 	// raw-bytes construction which cannot know it.
 	let srcLen = emitLoadField(module, block: entry, record: src, offset: StringLengthOffset, ids: ids)
 	let srcBuf = emitLoadField(module, block: entry, record: src, offset: StringBufferOffset, ids: ids)
-	let srcAscii = emitLoadField(module, block: entry, record: src, offset: StringIsAsciiOffset, ids: ids)
-	let newRec = emitBuildOwnedInlineString(module, block: entry, ids: ids, srcBuf: srcBuf, srcLen: srcLen, isAscii: srcAscii)
+	let srcSingleByte = emitLoadField(module, block: entry, record: src, offset: StringSingleByteGraphemesOffset, ids: ids)
+	let newRec = emitBuildOwnedInlineString(module, block: entry, ids: ids, srcBuf: srcBuf, srcLen: srcLen, singleByteGraphemes: srcSingleByte)
 
 	module.setTerminator(entry, op: StdOp.ret(newRec))
 
@@ -2480,12 +2578,12 @@ function buildStrMapCase(module StdModule)
 	let hi = 2 as ValueId
 	let delta = 3 as ValueId
 
-	// entry: the independent copy, and the buffer the loop rewrites. `isAscii@40` carries over verbatim — the
+	// entry: the independent copy, and the buffer the loop rewrites. `singleByteGraphemes@40` carries over verbatim — the
 	// mapping moves bytes only WITHIN `[65,122]`, so it can neither create nor remove a high-bit byte.
 	let srcLen = emitLoadField(module, block: entry, record: selfPtr, offset: StringLengthOffset, ids: ids)
 	let srcBuf = emitLoadField(module, block: entry, record: selfPtr, offset: StringBufferOffset, ids: ids)
-	let srcAscii = emitLoadField(module, block: entry, record: selfPtr, offset: StringIsAsciiOffset, ids: ids)
-	let newRec = emitBuildOwnedInlineString(module, block: entry, ids: ids, srcBuf: srcBuf, srcLen: srcLen, isAscii: srcAscii)
+	let srcSingleByte = emitLoadField(module, block: entry, record: selfPtr, offset: StringSingleByteGraphemesOffset, ids: ids)
+	let newRec = emitBuildOwnedInlineString(module, block: entry, ids: ids, srcBuf: srcBuf, srcLen: srcLen, singleByteGraphemes: srcSingleByte)
 	let dstBuf = emitInlineStringBuffer(module, block: entry, ids: ids, record: newRec)
 	let zero = emitConst(module, block: entry, value: 0, ids: ids)
 	module.setTerminator(entry, op: StdOp.branch(header.id))
@@ -2555,11 +2653,11 @@ function buildStrReplace(module StdModule)
 	// entry: every field the blocks below read (entry dominates all of them), then the empty-needle split.
 	let selfLen = emitLoadField(module, block: entry, record: selfPtr, offset: StringLengthOffset, ids: ids)
 	let selfBuf = emitLoadField(module, block: entry, record: selfPtr, offset: StringBufferOffset, ids: ids)
-	let selfAscii = emitLoadField(module, block: entry, record: selfPtr, offset: StringIsAsciiOffset, ids: ids)
+	let selfSingleByte = emitLoadField(module, block: entry, record: selfPtr, offset: StringSingleByteGraphemesOffset, ids: ids)
 	let oldLen = emitLoadField(module, block: entry, record: old, offset: StringLengthOffset, ids: ids)
 	let withLen = emitLoadField(module, block: entry, record: replacement, offset: StringLengthOffset, ids: ids)
 	let withBuf = emitLoadField(module, block: entry, record: replacement, offset: StringBufferOffset, ids: ids)
-	let withAscii = emitLoadField(module, block: entry, record: replacement, offset: StringIsAsciiOffset, ids: ids)
+	let withSingleByte = emitLoadField(module, block: entry, record: replacement, offset: StringSingleByteGraphemesOffset, ids: ids)
 	let zero = emitConst(module, block: entry, value: 0, ids: ids)
 	let oldIsEmpty = emitCmp(module, block: entry, a: oldLen, b: zero, pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(entry, op: StdOp.condBranch(oldIsEmpty, thenBlockId: cloneCase.id, elseBlockId: countHeader.id))
@@ -2590,14 +2688,14 @@ function buildStrReplace(module StdModule)
 	// `countHeader`, which dominates this block — only the loop-carried recurrence needs a phi, exactly as
 	// `__int_to_string`'s `writeSetup` reads its digit count.
 	//
-	// `isAscii` is the AND of the two contributing strings' flags: every byte of the result comes from the
+	// `singleByteGraphemes` is the AND of the two contributing strings' flags: every byte of the result comes from the
 	// receiver or from the replacement, so ASCII on both sides is ASCII in the result, and either side
 	// non-ASCII gives the conservative `false` this record format treats as the safe class.
 	let sizeDelta = emitBin(module, block: buildSetup, a: withLen, b: oldLen, opcode: StdBinOpcode.sub, ids: ids)
 	let totalDelta = emitBin(module, block: buildSetup, a: count, b: sizeDelta, opcode: StdBinOpcode.mul, ids: ids)
 	let outLen = emitBin(module, block: buildSetup, a: selfLen, b: totalDelta, opcode: StdBinOpcode.add, ids: ids)
-	let outAscii = emitBin(module, block: buildSetup, a: selfAscii, b: withAscii, opcode: StdBinOpcode.bitAnd, ids: ids)
-	let newRec = emitAllocOwnedInlineString(module, block: buildSetup, ids: ids, byteLen: outLen, isAscii: outAscii)
+	let outAscii = emitBin(module, block: buildSetup, a: selfSingleByte, b: withSingleByte, opcode: StdBinOpcode.bitAnd, ids: ids)
+	let newRec = emitAllocOwnedInlineString(module, block: buildSetup, ids: ids, byteLen: outLen, singleByteGraphemes: outAscii)
 	let outBuf = emitInlineStringBuffer(module, block: buildSetup, ids: ids, record: newRec)
 	module.setTerminator(buildSetup, op: StdOp.branch(buildHeader.id))
 
@@ -2669,11 +2767,11 @@ function buildStrReplaceFirst(module StdModule)
 	// it answers 0 and the "replacement" would be an insertion at the front rather than a replacement.
 	let selfLen = emitLoadField(module, block: entry, record: selfPtr, offset: StringLengthOffset, ids: ids)
 	let selfBuf = emitLoadField(module, block: entry, record: selfPtr, offset: StringBufferOffset, ids: ids)
-	let selfAscii = emitLoadField(module, block: entry, record: selfPtr, offset: StringIsAsciiOffset, ids: ids)
+	let selfSingleByte = emitLoadField(module, block: entry, record: selfPtr, offset: StringSingleByteGraphemesOffset, ids: ids)
 	let oldLen = emitLoadField(module, block: entry, record: old, offset: StringLengthOffset, ids: ids)
 	let withLen = emitLoadField(module, block: entry, record: replacement, offset: StringLengthOffset, ids: ids)
 	let withBuf = emitLoadField(module, block: entry, record: replacement, offset: StringBufferOffset, ids: ids)
-	let withAscii = emitLoadField(module, block: entry, record: replacement, offset: StringIsAsciiOffset, ids: ids)
+	let withSingleByte = emitLoadField(module, block: entry, record: replacement, offset: StringSingleByteGraphemesOffset, ids: ids)
 	let zero = emitConst(module, block: entry, value: 0, ids: ids)
 	let oldIsEmpty = emitCmp(module, block: entry, a: oldLen, b: zero, pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(entry, op: StdOp.condBranch(oldIsEmpty, thenBlockId: cloneCase.id, elseBlockId: search.id))
@@ -2687,12 +2785,12 @@ function buildStrReplaceFirst(module StdModule)
 	module.setTerminator(cloneCase, op: StdOp.ret(cloned))
 
 	// build: one match at `idx`, so the result is `[0, idx)` + the replacement + `[idx + oldLen, selfLen)`
-	// and its length is known before a byte is written. `isAscii` is the AND of the two contributing
+	// and its length is known before a byte is written. `singleByteGraphemes` is the AND of the two contributing
 	// strings' flags, `__str_replace`'s rule and for its reason.
 	let sizeDelta = emitBin(module, block: build, a: withLen, b: oldLen, opcode: StdBinOpcode.sub, ids: ids)
 	let outLen = emitBin(module, block: build, a: selfLen, b: sizeDelta, opcode: StdBinOpcode.add, ids: ids)
-	let outAscii = emitBin(module, block: build, a: selfAscii, b: withAscii, opcode: StdBinOpcode.bitAnd, ids: ids)
-	let newRec = emitAllocOwnedInlineString(module, block: build, ids: ids, byteLen: outLen, isAscii: outAscii)
+	let outAscii = emitBin(module, block: build, a: selfSingleByte, b: withSingleByte, opcode: StdBinOpcode.bitAnd, ids: ids)
+	let newRec = emitAllocOwnedInlineString(module, block: build, ids: ids, byteLen: outLen, singleByteGraphemes: outAscii)
 	let outBuf = emitInlineStringBuffer(module, block: build, ids: ids, record: newRec)
 
 	let headCopied = ids.mint()
@@ -2732,8 +2830,9 @@ function buildStrFromBytes(module StdModule)
 	var entry = module.addBlock(func, label: b"entry")
 	var scan = module.addBlock(func, label: b"scan")
 	var scanBody = module.addBlock(func, label: b"scanBody")
-	var stillAscii = module.addBlock(func, label: b"stillAscii")
-	var sawHighByte = module.addBlock(func, label: b"sawHighByte")
+	var notHigh = module.addBlock(func, label: b"notHigh")
+	var stillSingleByte = module.addBlock(func, label: b"stillSingleByte")
+	var sawMultiByteGrapheme = module.addBlock(func, label: b"sawMultiByteGrapheme")
 	var build = module.addBlock(func, label: b"build")
 
 	emitParams(module, block: entry, count: 1)
@@ -2744,15 +2843,20 @@ function buildStrFromBytes(module StdModule)
 	let zero = emitConst(module, block: entry, value: 0, ids: ids)
 	module.setTerminator(entry, op: StdOp.branch(scan.id))
 
-	// The `isAscii@40` classification, computed rather than guessed: it is a claim about these bytes, and
-	// the one place a String's is otherwise produced (`bytesAreAscii`) makes the identical claim at lower
-	// time for a literal. It is carried as an i64 0/1, the width the field is stored at, which is why the
-	// high-byte case is a BRANCH rather than an `and` of the `i1` a compare yields: the two are different
-	// Std types and the flag must be the record's.
+	// The `singleByteGraphemes@40` classification, computed rather than guessed: it is a claim about these
+	// bytes, and the one place a String's is otherwise produced (`bytesAreSingleByteGraphemes`) makes the
+	// identical claim at lower time for a literal. It is carried as an i64 0/1, the width the field is stored
+	// at, which is why each disqualifying case is a BRANCH rather than an `and` of the `i1` a compare yields:
+	// the two are different Std types and the flag must be the record's.
+	//
+	// ⭐ **TWO TESTS PER BYTE, NOT ONE, AND THE SECOND IS THE ONE THIS FLAG IS NAMED FOR.** A high byte begins
+	// a multi-byte codepoint; a CR is ASCII yet is not a grapheme on its own, because GB3 joins it to a
+	// following LF. Both are disqualifying and they are asked in a LADDER for the reason above — the `and` of
+	// two `i1`s would not be the i64 the field holds.
 	let i = ids.mint()
-	let ascii = ids.mint()
+	let singleByte = ids.mint()
 	scan.blockArgs.push(IrBlockArg.create(i, argType: StdType.i64))
-	scan.blockArgs.push(IrBlockArg.create(ascii, argType: StdType.i64))
+	scan.blockArgs.push(IrBlockArg.create(singleByte, argType: StdType.i64))
 	let one = emitConst(module, block: entry, value: 1, ids: ids)
 	entry.branchEdges.push(BranchEdge.create(scan.id, argIds: twoArgs(zero, second: one)))
 
@@ -2763,18 +2867,87 @@ function buildStrFromBytes(module StdModule)
 	let highBit = emitConst(module, block: scanBody, value: AsciiHighBit, ids: ids)
 	let isLow = emitCmp(module, block: scanBody, a: raw, b: highBit, pred: StdCmpPred.lt, ids: ids)
 	let iNext = emitBin(module, block: scanBody, a: i, b: one, opcode: StdBinOpcode.add, ids: ids)
-	module.setTerminator(scanBody, op: StdOp.condBranch(isLow, thenBlockId: stillAscii.id, elseBlockId: sawHighByte.id))
+	module.setTerminator(scanBody, op: StdOp.condBranch(isLow, thenBlockId: notHigh.id, elseBlockId: sawMultiByteGrapheme.id))
 
-	module.setTerminator(stillAscii, op: StdOp.branch(scan.id))
-	stillAscii.branchEdges.push(BranchEdge.create(scan.id, argIds: twoArgs(iNext, second: ascii)))
+	let crByte = emitConst(module, block: notHigh, value: CarriageReturnByte as ParsedInt, ids: ids)
+	let isNotCr = emitCmp(module, block: notHigh, a: raw, b: crByte, pred: StdCmpPred.ne, ids: ids)
+	module.setTerminator(notHigh, op: StdOp.condBranch(isNotCr, thenBlockId: stillSingleByte.id, elseBlockId: sawMultiByteGrapheme.id))
 
-	module.setTerminator(sawHighByte, op: StdOp.branch(scan.id))
-	sawHighByte.branchEdges.push(BranchEdge.create(scan.id, argIds: twoArgs(iNext, second: zero)))
+	module.setTerminator(stillSingleByte, op: StdOp.branch(scan.id))
+	stillSingleByte.branchEdges.push(BranchEdge.create(scan.id, argIds: twoArgs(iNext, second: singleByte)))
 
-	module.setTerminator(build, op: StdOp.ret(emitBuildOwnedInlineString(module, block: build, ids: ids, srcBuf: buf, srcLen: len, isAscii: ascii)))
+	module.setTerminator(sawMultiByteGrapheme, op: StdOp.branch(scan.id))
+	sawMultiByteGrapheme.branchEdges.push(BranchEdge.create(scan.id, argIds: twoArgs(iNext, second: zero)))
+
+	module.setTerminator(build, op: StdOp.ret(emitBuildOwnedInlineString(module, block: build, ids: ids, srcBuf: buf, srcLen: len, singleByteGraphemes: singleByte)))
 
 	module.functions.push(func)
 end 'buildStrFromBytes'
+
+// ⭐ **`__str_of_buffer(srcRecord, singleByteGraphemes) -> String`** — see the constant's header for what it
+// is for and why it copies. The whole body is `buildStrFromBytes`'s tail with the scan removed: the flag
+// arrives as a parameter, so there is no ladder and no loop, just the read of the source's two buffer slots
+// and the one shared record build.
+//
+// ⚠ **THE SOURCE IS READ THROUGH THE *ARRAY* SLOTS, AND THAT IS THE HONEST SPELLING RATHER THAN A COINCIDENCE
+// EXPLOITED.** Its argument is a `__ManagedMemory`, which in shv2 IS the array-shaped buffer record — what
+// `arr.managed` yields and what `managed.slice(…)` returns (`ArrayRuntime.emitViewRecordHead` builds it
+// through `__arr_create`). The two records agree at `buffer@0`/`length@8`, and `BufferOwnership`'s header
+// says in so many words that *"the two sets coincide today and nothing here relies on that"* — so reading a
+// buffer through the buffer record's own constants is what keeps that true.
+function buildStrOfBuffer(module StdModule)
+	var func = IrFunction.createFromStd(StrOfBufferName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
+	var ids = ValueMinter.create(2)
+
+	var entry = module.addBlock(func, label: b"entry")
+	emitParams(module, block: entry, count: 2)
+	let src = 0 as ValueId
+	let singleByteGraphemes = 1 as ValueId
+
+	let len = emitLoadField(module, block: entry, record: src, offset: ArrLengthOffset, ids: ids)
+	let buf = emitLoadField(module, block: entry, record: src, offset: ArrBufferOffset, ids: ids)
+	module.setTerminator(entry, op: StdOp.ret(emitBuildOwnedInlineString(module, block: entry, ids: ids, srcBuf: buf, srcLen: len, singleByteGraphemes: singleByteGraphemes)))
+
+	module.functions.push(func)
+end 'buildStrOfBuffer'
+
+// ⭐ **`__mm_to_cstring(bufRecord) -> ptr`** — see the constant's header for the contract and for why the
+// copy path's result is unowned. Three blocks: read `buffer[length]`, hand the buffer straight back when it
+// is already 0, otherwise allocate `length + 1` (the slab zeroes the terminator, so nothing writes it),
+// blit the payload across and return the fresh address.
+function buildMmToCString(module StdModule)
+	var func = IrFunction.createFromStd(MmToCStringName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var alreadyTerminated = module.addBlock(func, label: b"nulok")
+	var copyIt = module.addBlock(func, label: b"copy")
+
+	emitParams(module, block: entry, count: 1)
+	let src = 0 as ValueId
+
+	let len = emitLoadField(module, block: entry, record: src, offset: ArrLengthOffset, ids: ids)
+	let buf = emitLoadField(module, block: entry, record: src, offset: ArrBufferOffset, ids: ids)
+	let terminator = emitLoadByteIndexed(module, block: entry, base: buf, index: len, ids: ids)
+	let zero = emitConst(module, block: entry, value: 0, ids: ids)
+	let isTerminated = emitCmp(module, block: entry, a: terminator, b: zero, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(isTerminated, thenBlockId: alreadyTerminated.id, elseBlockId: copyIt.id))
+
+	module.setTerminator(alreadyTerminated, op: StdOp.ret(buf))
+
+	// `len + 1` — the payload plus the terminator the zeroing supplies. `TrivialDestructor` because the
+	// block is raw bytes owning nothing, exactly as `emitAllocOwnedInlineString`'s is.
+	let one = emitConst(module, block: copyIt, value: 1, ids: ids)
+	let withNul = emitBin(module, block: copyIt, a: len, b: one, opcode: StdBinOpcode.add, ids: ids)
+	let zeroDtor = emitConst(module, block: copyIt, value: TrivialDestructor, ids: ids)
+	let fresh = ids.mint()
+	module.appendOp(copyIt, op: StdOp.call(fresh, callee: MmAllocName, args: twoArgs(withNul, second: zeroDtor)))
+	let copied = ids.mint()
+	module.appendOp(copyIt, op: StdOp.call(copied, callee: StrCopyName, args: threeArgs(fresh, second: buf, third: len)))
+	module.setTerminator(copyIt, op: StdOp.ret(fresh))
+
+	module.functions.push(func)
+end 'buildMmToCString'
 
 // ⭐⭐ **`__str_bytes_view(str) -> arrRecord` — `addressableBytes()`, AND IT IS A BORROW OF THE BYTES WITH
 // AN OWNED RECORD AROUND IT.** The corpus's body is `return managed` (`stdlib/String.maxon:181-183`) — hand
@@ -2786,7 +2959,7 @@ end 'buildStrFromBytes'
 // ⚠⚠ **IT IS NOT THE STRING POINTER RETAGGED, AND THE REASON IS ONE SLOT.** A String record and an Array
 // record agree at five of their six 8-byte slots — `buffer@0`, `length@8`, `capacity@16`, `element_size@24`
 // (a String's is 1), `parent@32` (one shared `BufferOwnership` encoding) — and DISAGREE at `@40`, where a
-// String keeps `isAsciiFlag` and an Array keeps `element_destroy`. Handing the String pointer to the array
+// String keeps `singleByteGraphemes` and an Array keeps `element_destroy`. Handing the String pointer to the array
 // dispatch would therefore make `urlBytes.slice(0, colonPos)` build a view whose `element_destroy@40` is the
 // source's ASCII FLAG, and `__arr_decref` would `callIndirect` address 1 on every element of an all-ASCII
 // slice. A URL is all-ASCII, so that is not a rare shape — it is every corpus call. A fresh record stamped
@@ -3000,7 +3173,7 @@ function buildStrSplit(module StdModule)
 
 	let selfLen = emitLoadField(module, block: entry, record: selfPtr, offset: StringLengthOffset, ids: ids)
 	let selfBuf = emitLoadField(module, block: entry, record: selfPtr, offset: StringBufferOffset, ids: ids)
-	let selfAscii = emitLoadField(module, block: entry, record: selfPtr, offset: StringIsAsciiOffset, ids: ids)
+	let selfSingleByte = emitLoadField(module, block: entry, record: selfPtr, offset: StringSingleByteGraphemesOffset, ids: ids)
 	let delimLen = emitLoadField(module, block: entry, record: delim, offset: StringLengthOffset, ids: ids)
 	let zero = emitConst(module, block: entry, value: 0, ids: ids)
 	let delimIsEmpty = emitCmp(module, block: entry, a: delimLen, b: zero, pred: StdCmpPred.eq, ids: ids)
@@ -3019,12 +3192,12 @@ function buildStrSplit(module StdModule)
 	let found = emitCmp(module, block: header, a: idx, b: zero, pred: StdCmpPred.ge, ids: ids)
 	module.setTerminator(header, op: StdOp.condBranch(found, thenBlockId: pushSegment.id, elseBlockId: pushTail.id))
 
-	emitPushSliceSegment(module, block: pushSegment, arr: arr, srcBuf: selfBuf, from: pos, endPos: idx, isAscii: selfAscii, ids: ids)
+	emitPushSliceSegment(module, block: pushSegment, arr: arr, srcBuf: selfBuf, from: pos, endPos: idx, singleByteGraphemes: selfSingleByte, ids: ids)
 	let posNext = emitBin(module, block: pushSegment, a: idx, b: delimLen, opcode: StdBinOpcode.add, ids: ids)
 	module.setTerminator(pushSegment, op: StdOp.branch(header.id))
 	pushSegment.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(posNext)))
 
-	emitPushSliceSegment(module, block: pushTail, arr: arr, srcBuf: selfBuf, from: pos, endPos: selfLen, isAscii: selfAscii, ids: ids)
+	emitPushSliceSegment(module, block: pushTail, arr: arr, srcBuf: selfBuf, from: pos, endPos: selfLen, singleByteGraphemes: selfSingleByte, ids: ids)
 	module.setTerminator(pushTail, op: StdOp.retVoid)
 
 	module.functions.push(func)
@@ -3036,26 +3209,26 @@ end 'buildStrSplit'
 // identical lines, with nothing making the three agree — and what those lines encode is the whole of
 // "a segment is an INDEPENDENT COPY, not a view of the receiver", which is what keeps `__arr_decref`'s
 // element walk from double-freeing the receiver's bytes. Written once, so a change to what a segment IS
-// (its `isAscii`, its record shape, its owner) cannot reach the interior segments and miss the tail.
-function emitPushSliceSegment(module StdModule, block IrBlock, arr ValueId, srcBuf ValueId, from ValueId, endPos ValueId, isAscii ValueId, ids ValueMinter)
-	emitPushSegment(module, block: block, arr: arr, segment: emitSliceSegment(module, block: block, srcBuf: srcBuf, from: from, endPos: endPos, isAscii: isAscii, ids: ids), ids: ids)
+// (its `singleByteGraphemes`, its record shape, its owner) cannot reach the interior segments and miss the tail.
+function emitPushSliceSegment(module StdModule, block IrBlock, arr ValueId, srcBuf ValueId, from ValueId, endPos ValueId, singleByteGraphemes ValueId, ids ValueMinter)
+	emitPushSegment(module, block: block, arr: arr, segment: emitSliceSegment(module, block: block, srcBuf: srcBuf, from: from, endPos: endPos, singleByteGraphemes: singleByteGraphemes, ids: ids), ids: ids)
 end 'emitPushSliceSegment'
 
 // ⭐ **THE BYTES `[from, endPos)` OF `srcBuf` AS A FRESH OWNED STRING** — the END-EXCLUSIVE half-open range
 // every String-slicing consumer means, and the whole of "a segment is an INDEPENDENT COPY, not a view".
 // Split out of `emitPushSliceSegment` for its THIRD consumer: `__str_split` pushes the result into an
 // array, and `__strix_slice` (`s.slice(a, endIndex: b)`) RETURNS it. Written once so a change to what a
-// slice IS — its `isAscii`, its record shape, its owner — cannot reach the split's segments and miss
+// slice IS — its `singleByteGraphemes`, its record shape, its owner — cannot reach the split's segments and miss
 // `slice`'s result, which is exactly the drift that would let one of them alias the receiver's bytes and
 // double-free under `__str_decref`.
 //
 // ⚠ **IT DOES NOT VALIDATE THE RANGE.** `__str_split` derives both ends from its own scan and cannot
 // produce a bad one; `__strix_slice` takes them from the caller and checks them itself, aborting rather
 // than handing a negative length to `__mm_alloc`. The check belongs where an untrusted range enters.
-export function emitSliceSegment(module StdModule, block IrBlock, srcBuf ValueId, from ValueId, endPos ValueId, isAscii ValueId, ids ValueMinter) returns ValueId
+export function emitSliceSegment(module StdModule, block IrBlock, srcBuf ValueId, from ValueId, endPos ValueId, singleByteGraphemes ValueId, ids ValueMinter) returns ValueId
 	let segLen = emitBin(module, block: block, a: endPos, b: from, opcode: StdBinOpcode.sub, ids: ids)
 	let segAddr = emitBin(module, block: block, a: srcBuf, b: from, opcode: StdBinOpcode.add, ids: ids)
-	return emitBuildOwnedInlineString(module, block: block, ids: ids, srcBuf: segAddr, srcLen: segLen, isAscii: isAscii)
+	return emitBuildOwnedInlineString(module, block: block, ids: ids, srcBuf: segAddr, srcLen: segLen, singleByteGraphemes: singleByteGraphemes)
 end 'emitSliceSegment'
 
 // Hand one finished segment to the array. `__arr_push` is void, but a Std `call` still defines a result

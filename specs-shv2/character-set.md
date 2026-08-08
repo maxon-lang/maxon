@@ -437,3 +437,83 @@ end 'main'
 ```maxoncstderr
 error E2015: <fragment>:2:6: Unsupported: a declaration of the type name 'CharacterSet', which the compiler owns — its one meaning comes from the compiler itself or from the stdlib module that declares it, and shv2 has no namespace to tell a user declaration of the name apart from that one
 ```
+
+### A `CharacterSet` an aggregate OWNS is dropped by that aggregate's cascade
+
+<!-- test: characterset-at-a-struct-field -->
+### A `CharacterSet` at a struct field
+
+⭐⭐ **THE DESTRUCTOR CASCADE CALLS `__cs_decref`, AND WHAT A CASCADE CALLS IS INVISIBLE TO THE MODULE
+SCAN.** `scanRuntimeUsage` walks the Maxon module and turns on a runtime bit per callee it SEES; a
+`__destruct_<T>` body is synthesized later, so every callee inside one has to be DECLARED instead
+(`MmRuntime.declareDestructorCascadeNeeds`). `CharacterSet` is the one managed type whose drop has its own
+install bit (`usesCharSetDecref`) rather than riding a family bit its own construction already turns on —
+`CharacterSet.whitespaces()` sets `usesCharSetMake` and nothing else — so a set reached ONLY through a
+cascade linked against a `__cs_decref` nothing installed: `panic at X64Backend.maxon: resolveCallFixups:
+call to unknown function '__cs_decref'`, on a program with no diagnostic to its name.
+```maxon
+type Trimmer
+	var chars as CharacterSet
+
+	export static function init(cs CharacterSet) returns Self
+		return Self{chars: cs}
+	end 'init'
+end 'Trimmer'
+
+function main() returns ExitCode
+	let t = Trimmer.init(CharacterSet.whitespaces())
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: characterset-at-a-union-payload -->
+### A `CharacterSet` at a union payload
+
+The union arm of the same declaration, and it was missing for the same reason: the arm asked
+`unionHasManagedField(wantStringOnly: true)`, which is a question about `String` and about nothing else, so
+a payload of any other managed type contributed no bit at all. Both arms now read the drop CALLEE the
+cascade will emit and route it through the one callee-to-bit map, so neither can answer for a type the
+other knows about.
+```maxon
+union Slot
+	empty
+	filled(chars CharacterSet)
+end 'Slot'
+
+function main() returns ExitCode
+	let s = Slot.filled(CharacterSet.whitespaces())
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: characterset-at-a-generic-instance-field -->
+### A `CharacterSet` substituted into a generic instance's field
+
+The third arm, and the one that shows the three were one defect rather than three: an instance's cascade is
+synthesized by the same machinery and its needs were declared from `genericInstanceHasStringField`, the
+`String`-only question again.
+```maxon
+type Box uses T
+	var v as T
+
+	export static function init(x T) returns Self
+		return Self{v: x}
+	end 'init'
+end 'Box'
+
+typealias CharacterSetBox = Box with CharacterSet
+
+function main() returns ExitCode
+	let b = CharacterSetBox.init(CharacterSet.whitespaces())
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
