@@ -532,6 +532,14 @@ argument-type check — `E3005`, naming the `value:` label. **The discipline thi
 untouched**: `bool` and `int` are still distinct at a container column, and the case still goes red
 the moment they are folded together. It is anchored on the CALL rather than on the argument, which
 is where an argument-type mismatch has always been anchored.
+
+⚠ **AND THE CALL'S ANCHOR IS THE METHOD NAME, NOT THE RECEIVER (W49b).** This block read `:6:2` — the
+`m` — which is the column the Map-retirement branch emitted and which nothing else in the suite agrees
+with. MEASURED against the runnable oracle on the same shape (`h.put(3, value: 1)` on a plain user
+type, no `Map` and no stdlib involved): the C# bootstrap answers `:15:4`, the method name, and
+`per-instance-typealias.md`'s `wrong-instance-error` already pins `:30:4` on a method call and passes.
+The compiler is right and this golden was stale; it is the receiver-anchored spelling that was the
+outlier.
 ```maxon
 typealias Flags = Map with (String, bool)
 
@@ -542,7 +550,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:6:2: argument type mismatch for 'value': expected 'bool', got 'int'
+error E3005: <fragment>:6:4: argument type mismatch for 'value': expected 'bool', got 'int'
 ```
 
 <!-- test: bool-into-an-int-map-value -->
@@ -559,5 +567,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:7:2: argument type mismatch for 'value': expected 'int', got 'bool'
+error E3005: <fragment>:7:4: argument type mismatch for 'value': expected 'int', got 'bool'
 ```

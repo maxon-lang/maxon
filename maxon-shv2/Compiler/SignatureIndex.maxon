@@ -6186,8 +6186,15 @@ export type ProgramSignatures
 				self.userDeclaredTypeNames.insert(alias.name)
 			end 'aDeclarationTheUserWrote'
 		end 'eachAlias'
+		// The BASE-QUALIFIED copy of a nested function alias is skipped for the mirror's reason, and the dot is
+		// exact here for `mirrorsANamespaceQualifiedAlias`'s: a source-written alias name is an identifier and
+		// cannot hold a ".", and the function form takes no NAMESPACE mirror (`pushNamespaceQualifiedAlias`
+		// files into the RANGED array alone) — so a dotted name in this array is exactly and only the
+		// `<Type>.<member>` copy `Parser.publishNestedFunctionAlias` minted.
 		for functionAlias in functionAliases 'eachFunctionAlias'
-			self.userDeclaredTypeNames.insert(functionAlias.name)
+			if not containsQualifier(functionAlias.name) 'aDeclarationTheUserWrote'
+				self.userDeclaredTypeNames.insert(functionAlias.name)
+			end 'aDeclarationTheUserWrote'
 		end 'eachFunctionAlias'
 		for layout in structs 'eachStruct'
 			self.userDeclaredTypeNames.insert(layout.name)
@@ -9232,8 +9239,11 @@ export type ProgramSignatures
 	// once here rather than at the asker, because the day a fifth alias form arrives the asker would be the
 	// copy that did not learn about it.
 	//
-	// A FUNCTION alias is deliberately absent: it declares a FILE-scope name and is never qualified by its
-	// enclosing type (`Parser.NestedAliasResult`), so `<Type>.<member>` could not name one.
+	// ⚠ **A FUNCTION alias is deliberately absent even though it IS qualified by its enclosing type since
+	// W49b** (`Parser.publishNestedFunctionAlias` files `<Type>.<member>` beside the bare name). The question
+	// this asks is not "is the name keyed?" but "is it a MEMBER of the type?" — every caller uses the answer
+	// to reach the per-instance machinery, and a function alias is not per-instance: it declares a file-scope
+	// name too, and its qualified copy carries the identical signature. `isFunctionAlias` is the door for it.
 	export function declaresInnerAlias(qualified ByteArray) returns bool
 		return self.innerAliases.contains(qualified) or self.genericAliases.contains(qualified) or self.tupleAliases.contains(qualified)
 	end 'declaresInnerAlias'

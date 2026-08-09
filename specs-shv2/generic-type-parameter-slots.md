@@ -100,5 +100,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/generic-type-parameter-slots/generic-type-parameter-slots.error.function-value-into-an-int-argument.test:29:2: cannot pass a value of type 'function' as argument 'item', which holds 'int': a function value is only usable where a function type declared with 'typealias' is expected
+error E3005: specs/fragments/generic-type-parameter-slots/generic-type-parameter-slots.error.function-value-into-an-int-argument.test:29:4: cannot pass a value of type 'function' as argument 'item', which holds 'int': a function value is only usable where a function type declared with 'typealias' is expected
 ```

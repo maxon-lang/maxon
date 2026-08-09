@@ -1920,11 +1920,16 @@ end 'ConstructorInstance'
 // `Container.Idx` is nominally distinct per instantiation (`specs/per-instance-typealias.md`) and
 // `Container.ElementArray` names an instance over the enclosing type's parameters — and their bare names
 // genuinely collide (`stdlib/Array.maxon` declares `ElementMemory` in two different types of one file).
-// A FUNCTION alias has neither property: its identity IS its name whole-program
-// (`resolveNamedAlias` re-tags a `named` reference to `MaxonType.function(<name>)`), so one written inside
-// a body is indistinguishable from one written above it and belongs in the file-scope registry it already
-// has. `specs/ownership.md`'s `closure-captures-borrow` writes exactly that and names the alias from a FREE
-// function below the type.
+// ⭐⭐ **A FUNCTION alias is BOTH, and it is the only form that is (W49b).** Its identity IS its name
+// whole-program (`resolveNamedAlias` re-tags a `named` reference to `MaxonType.function(<name>)`), so one
+// written inside a body really is nameable from outside it: `specs/ownership.md`'s `closure-captures-borrow`
+// names the alias from a FREE function below the type, and `specs/type-name-collision.md`'s form table calls
+// the registry "bare, whole-program". That reading is kept. But it is ALSO per-declaring-type, because the
+// same written words denote a different signature in each fold of an `extension <Interface>` body — so it is
+// published under `<Type>.<member>` as well, and THAT is the name its own body resolves. It records no
+// `enclosingInnerAliases` membership even so: that set means "a member of this type", which drives the
+// literal door and the per-instance parameter machinery, and a function alias is neither constructible nor
+// per-instance. See `Parser.publishNestedFunctionAlias`, the one home of both halves.
 union NestedAliasResult
 	ranged(alias RangedTypeAlias)
 	genericInstance(entry GenericAliasEntry)
@@ -11784,8 +11789,9 @@ export type Parser
 					// land in, because it mints no identity of its own (see `NestedAliasResult`).
 					tupleAlias then break 'nested'
 					// Into the FILE's function-alias array, the one a top-level `typealias Fn = function(…)`
-					// lands in — unqualified, because that is the scope it declares (see `NestedAliasResult`).
-					functionAlias(alias) then functionAliasOut.push(alias)
+					// lands in — under BOTH its bare name and `<Type>.<member>`, because a nested one declares
+					// both scopes (see `publishNestedFunctionAlias`).
+					functionAlias(alias) then self.publishNestedFunctionAlias(alias, into: functionAliasOut)
 				end 'nested'
 				continue
 			end 'isInnerAlias'
@@ -12145,13 +12151,17 @@ export type Parser
 						genericInstance(entry) then genericAliasOut.push(self.qualifiedInnerGenericAlias(entry))
 						// Already keyed (or deliberately not) by the reader, off `nestedTupleOwner` above.
 						tupleAlias then break 'nested'
-						// A FUNCTION alias declares a FILE-scope name (see `NestedAliasResult`), so it is filed
-						// unqualified exactly as `recordScannedTypeAlias` files a top-level one. It is the one form
-						// whose meaning is NOT per-conformer-distinct in the name space: `ElementTransform` written
-						// in `extension Iterable` is one name however many conformers there are, and the last fold
-						// wins. That is unchanged by this rung and is what the real parse already does with it
-						// (`parseTypeMember` pushes it into the file's own array once per conformer).
-						functionAlias(alias) then functionAliasOut.push(alias)
+						// ⭐⭐ **AND THE FUNCTION FORM IS PER-CONFORMER TOO — IT IS THE READING INSIDE THE BODY THAT
+						// IS, WHICH IS WHY IT TOOK A SECOND KEY RATHER THAN A DIFFERENT ONE (W49b).** This comment
+						// read "one name however many conformers there are, and the last fold wins" and stated it
+						// as settled; it was the defect. `ElementTransform` is `function(Byte) returns Byte` in
+						// `ByteView`'s fold and `function(Character) returns Character` in `String`'s, so one key
+						// cannot hold both and `map`'s own body stopped type-checking once a third element type
+						// joined them. Filed under BOTH names by `publishNestedFunctionAlias`: the bare one keeps
+						// the file-scope reading a top-level `typealias Fn = function(…)` has, and the
+						// `<conformer>.<member>` one is what the body resolves — the same `<Type>.<member>` key
+						// the three per-instance forms above take, for the same reason.
+						functionAlias(alias) then self.publishNestedFunctionAlias(alias, into: functionAliasOut)
 					end 'nested'
 					continue
 				end 'nestedTypeAlias'
@@ -13659,10 +13669,12 @@ export type Parser
 			return NestedAliasResult.tupleAlias
 		end 'tupleAlias'
 
-		// A FUNCTION nested alias. It is NOT entered into `enclosingInnerAliases`: an inner-alias name is
-		// stamped `Type.Member` wherever the body writes it (`parseTypeReference`'s inner-alias arm), and a
-		// function alias must read back as the same file-scope `MaxonType.function(<name>)` inside the body
-		// and outside it.
+		// A FUNCTION nested alias. It is NOT entered into `enclosingInnerAliases`, and that is unchanged by
+		// W49b: membership in that set means "a MEMBER of this type", which routes a `Name{…}` literal
+		// (`parseInnerAliasLiteral`) and files the per-instance parameter entries a concrete receiver
+		// re-qualifies (`innerAliasMemberOfParamType`) — a function alias is neither constructible nor
+		// per-instance, so both would be wrong answers. Its `<Type>.<member>` reading is served instead by the
+		// registry itself, which the CALLER files it into under both names (`publishNestedFunctionAlias`).
 		if form == TypeDeclKind.functionAlias 'functionAlias'
 			return NestedAliasResult.functionAlias(try functionAliases.get(0) otherwise panic("readNestedTypeAlias: the function form was read but functionAliases.get(0) failed"))
 		end 'functionAlias'
@@ -13783,6 +13795,44 @@ export type Parser
 	function qualifiedInnerGenericAlias(entry GenericAliasEntry) returns GenericAliasEntry
 		return entry.scopedToEnclosingType(joinQualifiedName(self.enclosingType, member: entry.aliasName))
 	end 'qualifiedInnerGenericAlias'
+
+	// ⭐⭐ **A NESTED FUNCTION ALIAS IS PUBLISHED UNDER TWO KEYS, AND THEY ANSWER TWO DIFFERENT QUESTIONS
+	// (W49b).** The BARE name is the file-scope reading this form has always had and which the corpus pins —
+	// `specs-shv2/ownership.md`'s `closure-captures-borrow` declares `FnTypeAlias1` inside `type Config` and
+	// names it from a FREE function below the type, and `specs-shv2/type-name-collision.md`'s form table calls
+	// the function-alias registry "bare, whole-program". The `<Type>.<member>` name is the reading INSIDE the
+	// declaring body, and it is the one this rung adds.
+	//
+	// ⛔ **RE-KEYING INSTEAD OF ADDING WAS THE OBVIOUS CURE AND IT IS WRONG** — it deletes the file-scope
+	// reading and reddens `closure-captures-borrow`. The two keys are not one fact written twice: they are
+	// allowed to disagree, and on `stdlib/Interfaces.maxon` they DO. That body is read once per CONFORMER
+	// with that conformer's substitution (`foldExtensionDeclarationInto`), so eleven folds write eleven
+	// signatures — `function(Byte) returns Byte` for `ByteView`, `function(Character) returns Character` for
+	// `String`, `function(Entry) returns Entry` for `Map`. Under one key the last fold won and `map`'s own
+	// body stopped type-checking: `result.push(transform(item))` was **`E3005 … expected 'Byte', got
+	// 'Character'`**, which took every `Map` literal in the suite with it (66 cases). The qualified key gives
+	// each fold its own identity, which is exactly what the three PER-INSTANCE nested forms already have.
+	//
+	// ⚠ **PUBLISHING BOTH IS ALSO WHAT MAKES THE READ DOOR'S GATE EXACT AND FREE** — `parseTypeReference`
+	// probes the qualified key only after the BARE one has hit, which is sound precisely because a nested
+	// declaration always files both. See there.
+	//
+	// The bare key stays LAST-WINS across declarations, unchanged and deliberately so: that is the cross-file
+	// "two function aliases with different signatures" case `specs-shv2/type-name-collision.md` calls out of
+	// scope, and PLAN.md's `A3w` owns it. Nothing here narrows or widens it.
+	//
+	// ⚠ **THE NON-EMPTY PRECONDITION IS CHECKED, NOT MERELY WRITTEN DOWN** — `namespaceQualifiedName`'s guard
+	// for its reason. All three callers are inside a type or extension body and cannot reach here otherwise,
+	// which is exactly why a fourth that forgot would file `.Fn` — a key no source can spell, unreachable
+	// behind the read door's own `isEmpty` gate, and red nowhere. Once per DECLARATION, so the test is free.
+	function publishNestedFunctionAlias(alias FunctionTypeAlias, into FunctionTypeAliasArray)
+		if self.enclosingType.isEmpty() 'noEnclosingTypeToQualifyWith'
+			panic("publishNestedFunctionAlias: nested function typealias '{String.from(alias.name)}' was published with an EMPTY enclosing type — every caller reads a `type`/`extension` BODY, where `enterTypeScope` has set one")
+		end 'noEnclosingTypeToQualifyWith'
+
+		into.push(alias)
+		into.push(alias.scopedToEnclosingType(joinQualifiedName(self.enclosingType, member: alias.name)))
+	end 'publishNestedFunctionAlias'
 
 	// ⭐ **A GENERIC-INSTANCE TYPEALIAS (P1.6-A)** — `typealias IntBox = Box with Integer`. The cursor
 	// sits on the base identifier. It RECORDS the instance into `genericOut` (which `foldFile` interns
@@ -15830,12 +15880,14 @@ export type Parser
 			// /`tupleAliases`) and the real parse needs only the local `enclosingInnerAliases` population
 			// `readNestedTypeAlias` performs — so their shapes are discarded here, and the TUPLE form's owner is
 			// `unpublished` for the same reason (the sweep already keyed it, from the same tokens). A FUNCTION
-			// alias is not a member, and its declared SIGNATURE lives only in the real parse's artifact
-			// (`readFunctionTypeAlias`'s `recordSignature` note), so it is filed here in the array a top-level
-			// `typealias Fn = function(…)` files into.
+			// alias's declared SIGNATURE lives only in the real parse's artifact (`readFunctionTypeAlias`'s
+			// `recordSignature` note), so it is filed here in the array a top-level `typealias Fn = function(…)`
+			// files into — under BOTH of the names it declares, exactly as the sweep files it
+			// (`publishNestedFunctionAlias`). This is the copy every consumer of a PARAMETER type reads, so a
+			// qualified key filed by the sweep alone would carry the return type and an empty parameter list.
 			match try self.readNestedTypeAlias(visibility, recordFunctionSignature: true, tupleOwner: TupleAliasOwner.unpublished) 'nested'
 				ranged to tupleAlias then return
-				functionAlias(alias) then self.artifact.functionTypeAliases.push(alias)
+				functionAlias(alias) then self.publishNestedFunctionAlias(alias, into: self.artifact.functionTypeAliases)
 			end 'nested'
 			return
 		end 'nestedTypeAlias'
@@ -17830,6 +17882,24 @@ export type Parser
 				// a param/field/return declared with a function alias carries the `function` tag, which is what
 				// makes a function value assignable to it and an indirect call reach it.
 				if self.signatures.isFunctionAlias(name) 'functionAlias'
+					// ⭐⭐ **INSIDE A TYPE BODY, THAT BODY'S OWN NESTED DECLARATION WINS (W49b)** — the innermost
+					// scope, exactly as `namesInnerAliasHere` gives the three per-instance forms above. It is what
+					// makes `ElementTransform` mean THIS conformer's `function(Element) returns Element` in a
+					// `extension Iterable` body read once per conformer, instead of whichever fold wrote the bare
+					// key last; see `publishNestedFunctionAlias` for the eleven-signature measurement.
+					//
+					// ⚠ **THE BARE HIT IS THE GATE, AND IT IS EXACT RATHER THAN AN APPROXIMATION** — a nested
+					// declaration files BOTH keys, so a qualified entry cannot exist without its bare twin and
+					// nothing is missed by asking second. It is also what keeps the join OFF the hot path: every
+					// type annotation in the program reaches this arm, and only the handful of spellings that are
+					// already function aliases pay `joinQualifiedName`'s allocation.
+					if not self.enclosingType.isEmpty() 'maybeDeclaredInThisBody'
+						let qualifiedInner = joinQualifiedName(self.enclosingType, member: name)
+						if self.signatures.isFunctionAlias(qualifiedInner) 'thisBodysOwn'
+							return MaxonType.function(self.artifact.typeNames.intern(qualifiedInner))
+						end 'thisBodysOwn'
+					end 'maybeDeclaredInThisBody'
+
 					return MaxonType.function(self.artifact.typeNames.intern(name))
 				end 'functionAlias'
 			end 'wholeProgramAliasRegistries'

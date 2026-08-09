@@ -2402,6 +2402,19 @@ export type FunctionTypeAlias
 	export static function create(name ByteArray, returnTag ValueTypeTag, returnTypeName ByteArray, returnAggregateName ByteArray, display ByteArray, paramTypes FunctionAliasParamArray) returns FunctionTypeAlias
 		return Self{name: name, returnTag: returnTag, returnTypeName: returnTypeName, returnAggregateName: returnAggregateName, display: display, paramTypes: paramTypes}
 	end 'create'
+
+	// ⭐⭐ **THE SAME DECLARATION UNDER ITS ENCLOSING TYPE'S NAME — `Config.FnTypeAlias1` (W49b).** A nested
+	// function alias is published under BOTH keys; `Parser.publishNestedFunctionAlias` is the one home of why,
+	// and this is the copy it mints for the qualified one. `GenericAliasEntry.scopedToEnclosingType`'s twin,
+	// named alike because it is the same act on the other nested form.
+	//
+	// ⚠ Everything but the name is carried through UNCHANGED, and it must be: the SIGNATURE is what the two
+	// keys disagree about only across separate folds (`extension Iterable` read once per conformer), never
+	// between the two copies of ONE fold. A rebuild through `create` with anything defaulted would make the
+	// qualified copy answer a different shape from the bare one for the same written declaration.
+	export function scopedToEnclosingType(qualifiedName ByteArray) returns FunctionTypeAlias
+		return Self{name: qualifiedName, returnTag: self.returnTag, returnTypeName: self.returnTypeName, returnAggregateName: self.returnAggregateName, display: self.display, paramTypes: self.paramTypes}
+	end 'scopedToEnclosingType'
 end 'FunctionTypeAlias'
 
 // ONE parameter of a function typealias, stored the way the alias's RETURN type is and for the same
