@@ -2550,12 +2550,15 @@ let InlineManagedFieldName = b"managed"
 // Writing `40` here instead would be a third statement of a number those ten constants already fix, and the
 // one that no reader would check — so it is a product of the two facts it is made of.
 //
-// ⚠ **THE PRODUCT IS NOT YET CHECKED AGAINST THE RECORD THE RUNTIME READS, BECAUSE THERE IS NOTHING TO
-// CHECK IT AGAINST UNTIL `stdlib/String.maxon` IS LISTED.** The moment a corpus layout is registered under
-// that name, it and `StringRuntime`'s six offsets become two descriptions of one record — the pair
-// `characterSetLayout` still guards with a panic, one type over — and that assertion belongs with the
-// listing. Recorded here rather than left implicit: this constant is currently correct by derivation and by
-// the `sizeof` probe alone, which is weaker than the discipline the rest of this file holds itself to.
+// ✅ **AND THE PRODUCT IS NOW CHECKED AGAINST THE RECORD THE RUNTIME READS (W49 wave 9).** This header used
+// to record a DEBT — *"there is nothing to check it against until `stdlib/String.maxon` is listed; the
+// moment a corpus layout is registered under that name, it and `StringRuntime`'s six offsets become two
+// descriptions of one record, and that assertion belongs with the listing"*. Both `String.maxon` and
+// `Character.maxon` are listed unconditionally now, so both descriptions exist in every compile, and
+// `ProgramSignatures.checkFusedWrapperRecordLayouts` — run once per program from the query spine — is what
+// holds them together. It checks the FIELD COUNT as well as the offsets, which is the clause this constant
+// could never have implied: a field the fused record has no slot for is discarded at construction in
+// silence (see `Parser.requireFusedWrapperTag`, which carries that defect measured).
 let ManagedMemorySlotCount = 5 as ByteOffset
 let InlineManagedMemoryBytes = ManagedMemorySlotCount * FieldSlotBytes
 

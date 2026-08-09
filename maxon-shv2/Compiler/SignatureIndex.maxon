@@ -9674,6 +9674,77 @@ export type ProgramSignatures
 		return try self.structTypes.get(StringIndexTypeName) otherwise panic("ProgramSignatures.stringIndexLayoutOrPanic: `{String.from(StringIndexTypeName)}` is not registered — it is declared by `stdlib/String.maxon`, which `StdlibLoader` lists in every program, so the declaration fold has not run or has dropped it")
 	end 'stringIndexLayoutOrPanic'
 
+	// ⭐⭐ **THE ASSERTION `Project.ManagedMemorySlotCount` HAS OWED SINCE THE ENVELOPE COLLAPSE, PAID NOW
+	// THAT BOTH DESCRIPTIONS EXIST IN EVERY COMPILE (W49 wave 9).** That constant's header recorded the debt
+	// in so many words: *"the product is not yet checked against the record the runtime reads, because there
+	// is nothing to check it against until `stdlib/String.maxon` is listed … the moment a corpus layout is
+	// registered under that name, it and `StringRuntime`'s six offsets become two descriptions of one record
+	// — and that assertion belongs with the listing"*. Both declaring modules are listed unconditionally now
+	// (`StdlibLoader.whitelistedStdlibModules`), so the two descriptions are always both present, and this is
+	// what holds them together. It is `characterSetLayout`'s check one type over, with the halves swapped:
+	// there the compiler STATES the shape and the runtime writes it, here the CORPUS states it.
+	//
+	// ⭐ **IT CHECKS THE FIELD *COUNT*, AND THAT IS THE CLAUSE THAT EARNS THE FUNCTION.** The offsets are the
+	// obvious half and the easy half; the dangerous half is a field the fused record has NO SLOT FOR.
+	// `Parser.emitFusedWrapperLiteral` takes `managed` as its source and `singleByteGraphemesFlag` as its
+	// flag and **passes on nothing else** — so a third field added to `type String`, or a second to
+	// `type Character`, would be accepted by the parser, discarded at construction, and read back as whatever
+	// the record's producer happened to write at its offset. `Parser.requireFusedWrapperTag`'s header carries
+	// that defect MEASURED, for conformers of other NAMES: *"`Self{flag: false}` read back TRUE — exit 7 on a
+	// program whose only literal wrote `false`, no fault, no leak, no diagnostic"*, with the drop and the
+	// clone — both built from the DECLARED field list — then reading past the 48-byte record's end
+	// (0xC0000005). That refusal structurally cannot cover `String` and `Character`, because those are
+	// exactly the two names it must ADMIT. This is their half of it.
+	//
+	// ⚠ **A PANIC, NOT A DIAGNOSTIC, AND `Project.requireCorpusDeclaredEnum` IS THE PRECEDENT.** What could
+	// make it fire is an edit to a LISTED corpus module — never anything a user program can express — and
+	// there is no degraded answer available: the compiler would go on minting a record shape the corpus no
+	// longer declares.
+	//
+	// ⚠ **`Character`'s DECLARED SIZE IS 40 AND THE RECORD IT MINTS IS 48, AND THAT IS EXPLAINED RATHER THAN
+	// CHECKED.** `type Character` declares the inline `managed` alone, so the layout's own `sizeBytes()` stops
+	// at the shared five slots, while the record `StringRuntime.emitAllocOwnedInlineString` builds for it is
+	// `StringRecordBytes` wide — ONE encoder serves both wrappers and it always writes `@40`. Nothing reads
+	// that slot for a Character, and nothing allocates one from `sizeBytes()`: a fused literal routes to
+	// `__str_from_bytes`, never to `emitOwnedStructBox` (MEASURED — `sizeof(Character)` is 8, the pointer a
+	// Character value IS, and `sizeof(String)` is 48 off the byte-record path, so neither reads this size).
+	// So the slack is inert, and what must hold is the property that MAKES it inert: the field count.
+	export function checkFusedWrapperRecordLayouts()
+		// `String` — two fields: the inline `managed` occupying the shared five slots, then the flag at `@40`.
+		let string = self.corpusDeclaredFusedWrapper(StringConformerName)
+		requireInlineManagedFieldFirst(string)
+		if string.fieldCount() != StringDeclaredFieldCount 'stringFieldCount'
+			panic("ProgramSignatures.checkFusedWrapperRecordLayouts: `type {String.from(StringConformerName)}` declares {string.fieldCount()} fields and the fused record has slots for {StringDeclaredFieldCount} — `emitFusedWrapperLiteral` passes on `managed` and `{String.from(SingleByteGraphemesFieldName)}` and NOTHING ELSE, so any further field is silently discarded at construction and read back as whatever the record's producer wrote at its offset")
+		end 'stringFieldCount'
+
+		let flagIndex = string.indexOfField(SingleByteGraphemesFieldName)
+		if flagIndex >= string.fieldCount() 'noFlagField'
+			panic("ProgramSignatures.checkFusedWrapperRecordLayouts: `type {String.from(StringConformerName)}` declares no `{String.from(SingleByteGraphemesFieldName)}` field, so `emitFusedWrapperLiteral` would classify every literal's bytes instead of using the flag the corpus states — the record's `@40` IS that field, and the compiler reads the corpus's spelling rather than inventing one")
+		end 'noFlagField'
+		if string.offsetOfField(flagIndex) != StringSingleByteGraphemesOffset 'flagOffset'
+			panic("ProgramSignatures.checkFusedWrapperRecordLayouts: `type {String.from(StringConformerName)}` puts `{String.from(SingleByteGraphemesFieldName)}` at {string.offsetOfField(flagIndex)} but every producer and reader of the record uses {StringSingleByteGraphemesOffset} — the corpus's declared shape and the record shv2 mints have drifted")
+		end 'flagOffset'
+		if string.sizeBytes() != StringRecordBytes 'recordSize'
+			panic("ProgramSignatures.checkFusedWrapperRecordLayouts: `type {String.from(StringConformerName)}` lays out {string.sizeBytes()} bytes but the record shv2 mints for it is {StringRecordBytes} — the corpus's declared shape and the record shv2 mints have drifted")
+		end 'recordSize'
+
+		// `Character` — the inline `managed` alone. See this function's header for why its declared size stops
+		// short of the record it mints, and why the FIELD COUNT is what has to hold instead.
+		let character = self.corpusDeclaredFusedWrapper(CharacterConformerName)
+		requireInlineManagedFieldFirst(character)
+		if character.fieldCount() != CharacterDeclaredFieldCount 'characterFieldCount'
+			panic("ProgramSignatures.checkFusedWrapperRecordLayouts: `type {String.from(CharacterConformerName)}` declares {character.fieldCount()} fields and the fused record has a slot for {CharacterDeclaredFieldCount} — `emitFusedWrapperLiteral` takes `managed` and passes on nothing else, so any further field is silently discarded at construction")
+		end 'characterFieldCount'
+	end 'checkFusedWrapperRecordLayouts'
+
+	// The corpus declaration behind one of the two byte records. Absent, this is not a program that happens
+	// not to use strings — `StdlibLoader` lists both declaring modules unconditionally and
+	// `listWhitelistedModule` throws `fileNotFound` if either is gone — so what reaches here is a declaration
+	// deleted from a listed module. `stringIndexLayoutOrPanic`'s argument, two type names over.
+	function corpusDeclaredFusedWrapper(typeName ByteArray) returns StructLayout
+		return try self.structTypes.get(typeName) otherwise panic("ProgramSignatures.checkFusedWrapperRecordLayouts: this compile declares no `type {String.from(typeName)}`, and the compiler mints that type's record FROM the corpus's declaration rather than transcribing it — the module declaring it is listed by `StdlibLoader.whitelistedStdlibModules` and must still declare it")
+	end 'corpusDeclaredFusedWrapper'
+
 	// ⭐ **REGISTER THE COMPILER-OWNED `CharacterSet` TYPE (P1.8 Slice D)** — the `StringIndex` twin, called
 	// by the declaration SWEEP when a file's tokens name a producer (`Parser.fileNamesCharacterSetProducer`).
 	// Idempotent, so the sweep is the WRITE and every parser read is a pure read.
@@ -15756,3 +15827,21 @@ export type ProgramSignatures
 		return try self.typeNames.nameOf(id) otherwise panic("ProgramSignatures: type-name id {id} is not in this index's own interner — every id it stores was minted by foldFile's fold into that table")
 	end 'nameOfId'
 end 'ProgramSignatures'
+
+// The two field counts the fused record has slots for, named rather than written as a bare `2`/`1` so each
+// reads as the thing it counts: `managed` plus the grapheme flag, and `managed` alone.
+let StringDeclaredFieldCount = 2 as FieldIndex
+let CharacterDeclaredFieldCount = 1 as FieldIndex
+
+// `managed` FIRST and embedded whole — the clause both fused wrappers share, and the one every offset in
+// the record rests on: `buffer@0` and `length@8` ARE that field's first two slots, and every runtime
+// function that reads a String or a Character reads them there. A free function rather than a third arm
+// inside the check, because the two wrappers agree on exactly this much and differ below it.
+function requireInlineManagedFieldFirst(layout StructLayout)
+	if layout.inlineManagedFieldIndex() != 0 'notFirst'
+		panic("ProgramSignatures.checkFusedWrapperRecordLayouts: `type {String.from(layout.name)}` declares its inline `managed` field at index {layout.inlineManagedFieldIndex()} rather than first — the record's `buffer@0`/`length@8` ARE that field's first two slots, so every runtime read of this type would be off by whatever is declared ahead of it")
+	end 'notFirst'
+	if layout.offsetOfField(0) != ManagedRecordBufferOffset 'notAtZero'
+		panic("ProgramSignatures.checkFusedWrapperRecordLayouts: `type {String.from(layout.name)}` puts its first field at {layout.offsetOfField(0)} rather than {ManagedRecordBufferOffset} — the record's own `buffer@0`")
+	end 'notAtZero'
+end 'requireInlineManagedFieldFirst'
