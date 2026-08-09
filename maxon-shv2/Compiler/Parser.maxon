@@ -1063,7 +1063,7 @@ export union ParseError implements Error
 	// the only tier that knows the name came from SOURCE rather than from the compiler's own
 	// `emitRuntimeCall`. SemanticCheck cannot tell those two apart, which is precisely why its early return
 	// let this class of program through to the backend (see `requireCalleeIsNotReservedName`).
-	unknownCompilerIntrinsic(callee String, line LineNumber, column ColumnNumber)
+	unknownCompilerIntrinsic(callee String, reason ReservedCalleeReason, line LineNumber, column ColumnNumber)
 	// ⭐ `resize` on an array whose element is MANAGED. Renders as **E3106**, positioned at the method
 	// name. `__arr_resize` grows by publishing a longer length over slots `__arr_grow` left zeroed, and
 	// a zero is an ELEMENT only while the element lives inline in the buffer; a managed element lives
@@ -2499,9 +2499,10 @@ end 'keywordNamesAPrimitiveType'
 // set is `stdlib/Builtins.maxon`'s to state, and a list here would be a second copy of it, stale the first
 // time that module grows one. E2015 is the code its siblings already use for an unknown member on a
 // compiler-owned type — `parseCharacterSetStaticCall`'s unknown `CharacterSet` static, and the *"'int' has
-// no method named 'make'"* of a builtin-conformance dispatch. (`String` was a third such sibling until W55
-// retired its statics to `stdlib/String.maxon`; an unknown one is E3004 off the mangled callee now, which is
-// what a type the corpus DECLARES is entitled to.)
+// no method named 'make'"* of a builtin-conformance dispatch. `String` is a third such sibling, and W55
+// retiring its statics to `stdlib/String.maxon` did not change that: what moved is only WHICH tier knows the
+// surface, so the refusal moved to `requireCompilerOwnedStaticIsResolvable` — same code, same shape of
+// sentence, one screen down.
 // ⚠ **IT ASKS THE *QUALIFIER* PREDICATE, NOT THE IMPL ONE, AND THE TWO PARTED COMPANY AT W17.** This door
 // wants "does the compiler own `int.`?" — true of every member under it, resolvable or not, which is the
 // whole point of refusing here. `isBuiltinConformanceImplName` now answers the narrower "did the compiler
@@ -2513,8 +2514,62 @@ function requirePrimitiveStaticIsResolvable(typeTok Token, memberTok Token, decl
 		return
 	end 'ordinaryQualifier'
 
-	throw ParseError.unsupported("'{String.from(typeTok.value)}' has no static method named '{String.from(memberTok.value)}' — a primitive type's statics are the free functions `stdlib/Builtins.maxon` declares, and it declares none of that name", line: typeTok.line, column: typeTok.column)
+	throw ParseError.unsupported(noSuchCompilerOwnedStaticMessage(typeTok, memberTok: memberTok, surfaceClause: "a primitive type's statics are the free functions `stdlib/Builtins.maxon` declares, and it declares none of that name"), line: typeTok.line, column: typeTok.column)
 end 'requirePrimitiveStaticIsResolvable'
+
+// ⭐ **THE ONE SENTENCE BOTH COMPILER-OWNED-STATIC REFUSALS SAY.** The FACT is one — the base names a type
+// whose surface the compiler owns, and nothing declares the member written after it — and the only thing
+// that differs between the two doors is WHERE such a member would have had to be declared. Written once so
+// the two cannot come to describe one mistake in two voices, which is what the roster sentences they replaced
+// did.
+function noSuchCompilerOwnedStaticMessage(typeTok Token, memberTok Token, surfaceClause String) returns String
+	return "'{String.from(typeTok.value)}' has no static method named '{String.from(memberTok.value)}' — {surfaceClause}"
+end 'noSuchCompilerOwnedStaticMessage'
+
+// ⛔⛔ **AN UNRESOLVED STATIC ON A TYPE THE *COMPILER* OWNS IS REFUSED AT THE CALL — the door W55 needed
+// after it retired `parseStringStaticCall`, and the sibling of `requirePrimitiveStaticIsResolvable` above.**
+//
+// `parseQualifiedCall`'s standing rule is that an unknown static is NOT the parser's to refuse: the callee
+// simply mangles, and `SemanticCheck.validateCall` reports E3004 off the whole-program registry the real
+// parse built. **That rule is the corpus's, not a preference** — `method-calls`' `Counter.incrementt`,
+// `self-type-member-expression`'s `Gate.nope` and `static-method-statement`'s `Helper.nope`/`Pair.nope` all
+// pin that E3004 — and it stays for every base a program declares.
+//
+// ⚠ **BUT DEFERRING ONLY WORKS WHILE THE CALL'S RESULT IS UNUSED, AND THAT IS WHAT MADE THIS A REGRESSION.**
+// An undeclared callee types its result `unknown`, so the moment the author does anything with it the parser
+// refuses the USE first — and a parse error ends the file before SemanticCheck ever runs. MEASURED on W55's
+// base, for `let s = String.create()` then `s.byteLength()`:
+// **`E2015 :4:11: a member access 'byteLength' on a 'unknown' value`** — one line past the mistake, naming
+// neither `String` nor `create`. Until W55 the bespoke `String` static door hid it; the door is gone and the
+// masking is not W55's to leave behind, because retiring the door is what exposed it.
+//
+// ⇒ **WHY THE EXCEPTION IS DRAWN AT `isCompilerOwnedTypeName` AND NOT MADE GENERAL.** Those names are the
+// ones no file may DECLARE, so `String.<member>` cannot mean "a type you have not written yet"; the parser
+// resolves values of those types itself, exactly as it does `int.`'s statics one door up, and it is the tier
+// holding both tokens at a source span. A general refusal would also contradict the ported cases named
+// above, which are the corpus stating that a USER base's unknown static belongs to SemanticCheck.
+//
+// ⚠⚠ **THE `declaresCallee` CONJUNCTION IS LOAD-BEARING, AND MEASURED RATHER THAN ASSUMED.** "The compiler
+// owns the NAME" does NOT mean the program cannot declare members on it: an `extension String` with a
+// `static function create()` COMPILES AND RUNS on this tree today (measured, exit 7), and the corpus's own
+// `stdlib/String.maxon` declares thirty. So the question asked here is only ever *"does the program have this
+// function?"*, which is the same question the primitive door asks at its own mint site.
+//
+// A callee the compiler MINTED under one of these qualifiers is not this door's to describe: a synthesized
+// conformance impl (`String.hash`) is refused for BEING one by `requireCalleeIsNotReservedName`, whose
+// sentence says so. Asked through `isCompilerInternalCallee` so that "which callees are the compiler's own"
+// stays one predicate.
+function requireCompilerOwnedStaticIsResolvable(typeTok Token, memberTok Token, declaredCallee ByteArray, signatures ProgramSignatures) throws ParseError
+	if not isCompilerOwnedTypeName(typeTok.value) 'ordinaryQualifier'
+		return
+	end 'ordinaryQualifier'
+
+	if isCompilerInternalCallee(declaredCallee) or signatures.declaresCallee(declaredCallee) 'theCompilersOwnSymbolOrTheProgramsOwnDeclaration'
+		return
+	end 'theCompilersOwnSymbolOrTheProgramsOwnDeclaration'
+
+	throw ParseError.unsupported(noSuchCompilerOwnedStaticMessage(typeTok, memberTok: memberTok, surfaceClause: "the compiler owns that type name, so a static of its own can only come from the module that declares it or from an `extension` of it, and no declaration of that name exists"), line: memberTok.line, column: memberTok.column)
+end 'requireCompilerOwnedStaticIsResolvable'
 
 // Every function name this FILE has registered — bare names and mangled overload members alike. THE answer
 // to "is this name already claimed here?", which is the whole contest test `overloadRegistrationNameFor`
@@ -3627,9 +3682,35 @@ let NanosPerMillisecond = 1000000
 // available for it — SemanticCheck cannot tell a source-written `__` callee from a compiler-emitted one,
 // which is this whole function's reason for existing — so it is stated at both ends instead.
 function requireCalleeIsNotReservedName(callee ByteArray, anchor Token, fileDeclaresReservedNames bool, isStdlibSource bool, mint CalleeMint, signatures ProgramSignatures) throws ParseError
-	if not isCompilerInternalCallee(callee) 'ordinaryCallee'
+	// ⭐ **ASKED ONCE AND CARRIED, NOT ASKED AGAIN TO EXPLAIN (W55).** The gate used to refuse on
+	// `isCompilerInternalCallee` — an OR over two clauses — and then hand the message a reason derived
+	// independently, which is how `String.compare` came to be refused for a `__` prefix it does not carry.
+	// The classifier's answer IS the refusal's reason, so there is one derivation and nothing to keep in step.
+	let reason = reservedCalleeReasonOf(callee)
+	if reason == ReservedCalleeReason.notReserved 'ordinaryCallee'
 		return
 	end 'ordinaryCallee'
+
+	// ⛔⛔ **THE SYNTHESIZED-IMPL CLAUSE IS ONLY THE COMPILER'S WHILE NO FILE DECLARES THE METHOD — AND
+	// LEFT UNCONDITIONAL IT REFUSED A PROGRAM THE ORACLE RUNS (W55).** `<conformer>.<method>` names the
+	// symbol `BuiltinConformanceRuntime` mints for a witness slot AND the ordinary spelling of the corpus's
+	// own instance method named statically, which `parseQualifiedCall`'s header settles as LEGAL
+	// (`Adder.bump(a)` IS `a.bump()`). `stdlib/String.maxon` declares both `hash()` and `equals()`
+	// (`:351,355`), so from W17 onwards every callee this clause could reach was one the corpus had — and
+	// MEASURED against the runnable oracle, `String.hash("a")` COMPILES AND PRINTS 177670 there, the same
+	// value `"a".hash()` gives on this tree. A clause that could only ever fire on a correct program was
+	// refusing every one of them.
+	//
+	// ⇒ Conjoined with `declaresCallee` exactly as the four clauses below are, and for their reason: the
+	// classifier says the compiler owns the SPELLING, and this says the program actually has that function.
+	// It is safe because the two registries agree by construction — a callee `funcSignatures` contains is
+	// not `isSignaturelessCompilerCallee`, so SemanticCheck gives it the full arity/label/type battery and
+	// `lowerCall` slots its arguments against the declaration, rather than treating it as one the compiler
+	// wrote positionally. What is left refused is the case the clause was actually written for: a
+	// `<conformer>.<method>` no file declares, which no signature could ever validate.
+	if reason == ReservedCalleeReason.synthesizedConformanceImpl and signatures.declaresCallee(callee) 'theCorpusOwnDeclarationNamedStatically'
+		return
+	end 'theCorpusOwnDeclarationNamedStatically'
 
 	// ⭐⭐ **THE THIRD KIND OF EXEMPTION: THE NAME IS RESERVED AND THE AUTHOR DID NOT WRITE IT (A1s-prim).**
 	// The two clauses below both key on a FILE — "which file is calling?" — because until now every `__`
@@ -3680,7 +3761,7 @@ function requireCalleeIsNotReservedName(callee ByteArray, anchor Token, fileDecl
 		return
 	end 'theCompilersOwnMint'
 
-	throw ParseError.unknownCompilerIntrinsic(String.from(callee), line: anchor.line, column: anchor.column)
+	throw ParseError.unknownCompilerIntrinsic(String.from(callee), reason: reason, line: anchor.line, column: anchor.column)
 end 'requireCalleeIsNotReservedName'
 
 // Is this call site's callee a DEFAULT VALUE's synthesized helper — a parameter's or a field's? The two
@@ -4595,6 +4676,13 @@ end 'stringIndexSurfaceMemberNames'
 // path every other type's statics already take. There is no seventh roster here because there is no longer a
 // synthesized surface for one to describe: `String.<anything>` mangles to the callee `String.<anything>`,
 // which the corpus either declares or does not.
+//
+// ⚠ **"OR DOES NOT" NEEDED A DOOR OF ITS OWN, AND LEAVING IT TO THE FALL-THROUGH WAS A MEASURED
+// REGRESSION.** An undeclared callee types its result `unknown`, so the refusal surfaced at the next USE of
+// that value rather than at the call — `E2015 :4:11: a member access 'byteLength' on a 'unknown' value` for
+// `String.create()`, naming neither the type nor the member. `requireCompilerOwnedStaticIsResolvable` is
+// where that answer lives now: it is a rule about a name the COMPILER owns rather than a roster of members
+// the compiler serves, so it needs no list and cannot go stale when the corpus grows one.
 //
 // ⚠ **THE INTERCEPTION WENT WITH IT, NOT JUST THE ARMS.** `parseStringStaticCall` existed to keep a
 // `String` static off `parseQualifiedCall`'s mangling, on the stated ground that *"`String` is a BUILTIN
@@ -37182,6 +37270,12 @@ export type Parser
 		if self.signatures.resolvesAsNamespaceQualifiedFunction(declaredCallee) 'namespaceQualifiedFreeCall'
 			return try self.parseCallNamed(func, callee: self.namespaceQualifiedCallee(declaredCallee, bare: memberTok.value), anchor: typeTok, receiver: ReceiverArg.none, resultUsed: resultUsed, constructorInstance: ConstructorInstance.none, mint: CalleeMint.notMinted)
 		end 'namespaceQualifiedFreeCall'
+
+		// ⭐ `String.create(…)` — an unknown static on a type name the COMPILER owns (W55). LAST of the doors,
+		// so every interception above still wins: it speaks only for a base no file may declare and a member
+		// no file does. See `requireCompilerOwnedStaticIsResolvable` for why this one class is the parser's to
+		// refuse while a user type's stays SemanticCheck's.
+		try requireCompilerOwnedStaticIsResolvable(typeTok, memberTok: memberTok, declaredCallee: declaredCallee, signatures: self.signatures)
 
 		// ⭐ **ASKED ONCE AND READ TWICE.** The consume side (which argument OWNS the box being built) and the
 		// result side (which instance the value IS) are two halves of one fact, and each used to re-derive it

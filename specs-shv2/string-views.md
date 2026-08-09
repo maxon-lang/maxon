@@ -200,6 +200,12 @@ HELLOWORLDLONGENOUGHTAIL HELLOWORLDLONGENOUGH
 ### `String.from`'s argument must be an `Array with Byte`
 An `Array with integer` strides EIGHT bytes per element, so reading it as bytes would hand back every
 eighth byte of a slot's worth of padding — a silent wrong answer, refused at the argument instead.
+
+⭐ **THE SENTENCE IS THE ORDINARY PARAMETER CHECK'S SINCE W55, AND THAT IS THE POINT.** `String.from`
+had a bespoke parse door with a bespoke argument test; retiring it (`Parser.parseStringStaticCall`) left
+`stdlib/String.maxon`'s own `from(bytes ByteArray)` to be met by `SemanticCheck.checkArgTypes`, the check
+every other call's argument already answers to. What moved is the wording and the column — the anchor is
+now the CALL rather than the argument — and what did not move is the refusal.
 ```maxon
 function main() returns ExitCode
 	let s = String.from([1, 2, 3])
@@ -207,7 +213,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:3:22: 'String.from' requires a Array with Byte, but its argument is Array_int
+error E3005: <fragment>:3:10: argument type mismatch for 'bytes': expected 'ByteArray', got 'Array_int'
 ```
 
 <!-- test: error.from-rejects-a-string -->
@@ -219,7 +225,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:3:22: 'String.from' requires a Array with Byte, but its argument is String
+error E3005: <fragment>:3:10: argument type mismatch for 'bytes': expected 'ByteArray', got 'String'
 ```
 
 <!-- test: error.string-unknown-static-is-named-where-it-is-written -->
@@ -235,13 +241,20 @@ than mangled into a `String.create` callee no file declares. A test whose NAME c
 BODY pins another is this project's signature bug wearing a filename, and the count is the half that is
 not load-bearing. ⇒ the name now says what the body checks, and it will survive the next static too.
 
-⭐ **AND SINCE A3g THE SENTENCE IS DERIVED RATHER THAN WRITTEN, so this case pins the ROSTER and not a
-paragraph.** `from` and `init` are rendered from the two constants the parser's arms match on
-(`stringStaticMemberNames`), a gate ahead of those arms refuses anything off the list, and the
-fall-through past them is a PANIC naming the list — so an arm added without a roster line is unreachable
-and a roster line added without an arm cannot ship. What one static's name is called is therefore now
-one fact in one place, which the prose above — *"the reference exports two, `from(bytes)` and
-`init(managed)`"* — was not.
+⭐⭐ **THE SENTENCE NO LONGER NAMES A ROSTER, BECAUSE THERE IS NO LONGER A ROSTER TO NAME (W55).** It read
+*"the reference provides from/init; that list IS the surface"*, rendered from the two constants the
+parser's own static arms matched on — and W55 retired those arms, so `String`'s statics are now whatever
+`stdlib/String.maxon` declares plus whatever an `extension String` adds. A message quoting a two-name list
+would have been a copy of a surface the compiler stopped holding. What the case pins is unchanged and is
+the whole of why it exists: the refusal lands on `create`, **where the author wrote it**, and names both
+the type and the member.
+
+⚠ **AND IT WENT RED WHEN THE DOOR WENT, WHICH IS WHAT MADE IT WORTH KEEPING.** With no static door the
+callee mangles to `String.create`, whose result is typed `unknown` — and the parser then refuses the USE
+one line later (`E2015 :4:11: a member access 'byteLength' on a 'unknown' value`), ending the file before
+`SemanticCheck`'s E3004 could name the call at all. `Parser.requireCompilerOwnedStaticIsResolvable` is
+the door that replaced the roster: it speaks for a base no file may declare and a member no file does,
+and leaves a USER type's unknown static to SemanticCheck exactly as before.
 ```maxon
 function main() returns ExitCode
 	let s = String.create()
@@ -249,7 +262,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:3:17: Unsupported: `String` static 'create' — the reference provides from/init; that list IS the surface, so nothing else is served here
+error E2015: <fragment>:3:17: Unsupported: 'String' has no static method named 'create' — the compiler owns that type name, so a static of its own can only come from the module that declares it or from an `extension` of it, and no declaration of that name exists
 ```
 
 <!-- test: error.codepoint-is-a-compiler-owned-type-name -->
@@ -483,11 +496,29 @@ Hi!
 The case above rides `emitArrayElementAccessor`'s trivial arm; the element type of a compiler-minted
 `Array with Byte` is not a `named` type, so it never reaches `arrayElementValueType`'s ranged-alias arm.
 A `typealias` the AUTHOR wrote does — and without that arm the element erases to a bare `int`, so
-`[x, y]` builds an eight-byte-strided `Array with integer` and `String.from` FALSE-REJECTS a program
-both references accept (measured: `E3005 requires a Array with Byte, but its argument is Array_int`).
+`[x, y]` builds an eight-byte-strided `Array with integer` instead of an `OctetArray`.
+
+⭐⭐ **THE ASSERTION IS THE PARAMETER TYPE, AND IT USED TO BE `String.from` — WHICH WAS PINNING A WRONG
+ANSWER (W55).** This case read `print("{String.from([x, y])}\n")` and claimed stdout `Hi` as *"a program
+both references accept"*. **MEASURED against the runnable oracle: it prints `H`.** The bootstrap erases
+the literal's element, strides eight, and hands `String.from` every eighth byte of the buffer — the exact
+silent wrong answer the case above exists to forbid, committed as an expectation. shv2 refuses that
+program instead (see the `error.` case below), which is the better answer and is why this one had to stop
+asking `String.from` the question.
+⇒ **What the case pins is unchanged and is now asserted where it belongs: at the RECORD.**
+`aggregatesConflict` is nominal over containers, so a `readBack(bytes OctetArray)` parameter admits an
+argument whose element kept the name `Octet` and refuses an `Array_int`; reading the two elements back
+THROUGH that parameter is what proves the STRIDE as well as the name. Both compilers print `177`.
 ```maxon
 typealias Octet = int(0 to u8.max)
 typealias OctetArray = Array with Octet
+typealias OctetSum = int(0 to 510)
+
+function readBack(bytes OctetArray) returns OctetSum
+	let p = try bytes.get(0) otherwise 0
+	let q = try bytes.get(1) otherwise 0
+	return p + q
+end 'readBack'
 
 function main() returns ExitCode
 	var a = OctetArray.create()
@@ -495,7 +526,7 @@ function main() returns ExitCode
 	a.push(105)
 	let x = try a.get(0) otherwise 0
 	let y = try a.get(1) otherwise 0
-	print("{String.from([x, y])}\n")
+	print("{readBack([x, y])}\n")
 	return 0
 end 'main'
 ```
@@ -503,5 +534,27 @@ end 'main'
 0
 ```
 ```stdout
-Hi
+177
+```
+
+<!-- test: error.from-rejects-a-user-ranged-byte-alias -->
+### `String.from` takes `ByteArray` and nothing that merely strides like one
+The other half of the case above, and the reason it stopped asking `String.from`: an `OctetArray` holds
+one byte per element exactly as a `ByteArray` does, and is still a DIFFERENT type. `aggregatesConflict`
+is nominal over containers by design, so the argument is refused on its NAME rather than admitted on its
+layout — a rule that cannot be talked into reading one buffer as another. The bootstrap accepts this
+program and prints a truncated string; refusing it is the answer shv2 keeps.
+```maxon
+typealias Octet = int(0 to u8.max)
+typealias OctetArray = Array with Octet
+
+function main() returns ExitCode
+	var a = OctetArray.create()
+	a.push(72)
+	let s = String.from(a)
+	return s.byteLength()
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:8:10: argument type mismatch for 'bytes': expected 'ByteArray', got 'OctetArray'
 ```

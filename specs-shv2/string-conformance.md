@@ -354,6 +354,35 @@ end 'main'
 error E3005: <fragment>:4:7: 'equals' requires a String, but its argument is int
 ```
 
+<!-- test: string-conformance.the-conformance-method-may-be-named-statically -->
+### `String.hash(s)` is the corpus's own method named statically, and it agrees with `s.hash()`
+`String.hash` is TWO things wearing one spelling: the symbol `BuiltinConformanceRuntime` mints so a
+witness-table reloc has a real `.text` target (which is why it carries no `__` prefix at all), and the
+ordinary static spelling of the `hash()` `stdlib/String.maxon` declares at `:351`. Naming an instance
+method statically is legal — `Adder.bump(a)` IS `a.bump()`, which `Parser.parseQualifiedCall`'s header
+settles and the oracle runs — so this program is one of those.
+
+⛔ **IT WAS REFUSED, AND THE REFUSAL WAS A WRONG ANSWER (W55).** `MmRuntime.isCompilerInternalCallee`
+declares every `<conformer>.<method>` to be the compiler's own, and `requireCalleeIsNotReservedName` acted
+on that OR unconditionally. MEASURED on W55's base: *"E3004 call to undefined function 'String.hash': the
+`__` prefix names a compiler intrinsic, and no intrinsic of that name exists"* — the wrong sentence AND
+the wrong verdict, about a method the corpus declares, against a program the runnable oracle compiles and
+runs (177670, the same value the two lines below print). The clause is conjoined with `declaresCallee`
+now, exactly as the four exemptions beside it are.
+```maxon
+function main() returns ExitCode
+	let s = "a"
+	print("{String.hash(s)} {s.hash()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+177670 177670
+```
+
 <!-- test: error.a-declaration-may-not-bind-the-name-String -->
 ### A declaration may not bind `String` to a nominal identity
 ⚠ **This refusal is what makes the `String.hash` / `String.equals` SYMBOLS the compiler's.** A user

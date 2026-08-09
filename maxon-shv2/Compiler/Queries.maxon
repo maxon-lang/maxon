@@ -1202,6 +1202,30 @@ end 'reportDirectiveError'
 // (`specs-shv2/cast-target-type-resolution.md`).
 export let HiddenTypeNameMessage = "Expected type name after 'as'"
 
+// ⭐ **WHY THIS CALLEE IS THE COMPILER'S AND NOT THE PROGRAM'S — one sentence per clause of
+// `MmRuntime.reservedCalleeReasonOf`, and it is a `match` so a third clause cannot be added there without
+// a sentence here.** The two differ in the only way that matters to the author: one names a SHAPE the
+// name has (`__`), the other names a symbol the compiler MINTED whose spelling looks perfectly ordinary —
+// so a reader told about a prefix would go looking for one that is not there, which is exactly what
+// `String.compare("a", "b")` was told before the reason was carried.
+//
+// ⚠ **THE SECOND SENTENCE NAMES THE ROUTE THAT WORKS, AND MUST NOT CLAIM THE NAME IS UNDECLARED** — a
+// `<conformer>.<method>` the corpus DOES declare is admitted at the gate now
+// (`Parser.requireCalleeIsNotReservedName`'s `declaresCallee` conjunction), so what is left here is the
+// method the compiler synthesizes and NO file declares: the operation genuinely has no body a call could
+// be checked against, and the author is sent to the value rather than told to go and define the symbol.
+// The corpus currently declares every `String` conformer method (`stdlib/String.maxon:351,355`) and the
+// three keyword qualifiers never reach this door (`Parser.requirePrimitiveStaticIsResolvable` answers
+// first), so this arm is the standing answer for the next conformer method the ragged table gains ahead of
+// the module — not a case any of today's programs can produce.
+function unknownReservedCalleeMessage(callee String, reason ReservedCalleeReason) returns String
+	return match reason 'reason'
+		compilerInternalPrefix gives "call to undefined function '{callee}': the '__' prefix names a compiler intrinsic, and no intrinsic of that name exists"
+		synthesizedConformanceImpl gives "call to undefined function '{callee}': that name is the symbol the compiler synthesizes for the builtin's conformance, which a program reaches through a value of the type (`value.method()`) and never by naming the symbol"
+		notReserved panic("unknownReservedCalleeMessage: asked to explain '{callee}' as reserved while the classifier calls it ordinary — `requireCalleeIsNotReservedName` returns on that answer and is the only site that raises this error")
+	end 'reason'
+end 'unknownReservedCalleeMessage'
+
 // Map a ParseError to a project diagnostic. The unexpected-token case is the
 // spec-gated E2010 (`parserExpectedToken`) — its exact `Expected '<x>' but got
 // '<y>'` text + positioned prefix is compared byte-for-byte by `variables.md`'s
@@ -1502,7 +1526,14 @@ function reportParseError(project Project, path FilePath, error ParseError)
 		// wording: the message must say WHY no declaration could ever supply this one, since `__` is the
 		// prefix the user is forbidden to declare (E2051) and a "did you mean to define it?" reading would
 		// send them at a wall.
-		unknownCompilerIntrinsic(callee, line, column) then reportPositioned(project, code: ErrorCode.callUnknownFunction, message: "call to undefined function '{callee}': the '__' prefix names a compiler intrinsic, and no intrinsic of that name exists", line: line, column: column, filePath: path)
+		//
+		// ⛔ **AND WHICH "WHY" IS THE CLASSIFIER'S ANSWER, NOT THIS ARM'S GUESS (W55).** The clause is
+		// `MmRuntime.reservedCalleeReasonOf`'s, carried on the error — a single sentence here told every
+		// refusal it was about a `__` prefix, so `String.compare("a", "b")` (a synthesized conformance impl,
+		// which wears no prefix at all — a witness-table reloc needs a real `.text` symbol) was refused for
+		// something that is not true of its name. Both clauses forbid a DECLARATION as well as a call, so
+		// neither reading sends the author off to define the function.
+		unknownCompilerIntrinsic(callee, reason, line, column) then reportPositioned(project, code: ErrorCode.callUnknownFunction, message: unknownReservedCalleeMessage(callee, reason: reason), line: line, column: column, filePath: path)
 		// ⭐ The words are the BOOTSTRAP's, verbatim (SemanticCheckPass.CheckDenseArrayGrowth), minus the
 		// `growFilled`/`truncate` suggestions — shv2 synthesizes neither method, so naming them would
 		// send the reader to something that is not there.
