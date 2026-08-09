@@ -788,6 +788,14 @@ E3059 SemanticErrorTypeMismatch
 	selfhosted semanticOtherwiseTypeMismatch
 	shv2 errorTypeMismatch
 	doc An 'otherwise' handler's value has a type other than the 'try' expression's type.
+	doc It carries a SECOND message on the same fault seen from the value side: a `try` in a VALUE
+	doc POSITION over a callee that returns nothing -- `'f' does not return a value`, anchored on the
+	doc `try`. A BINDING is a value position too, so `if let x = try voidF()` (and `if let _ =`, which
+	doc discards a result that does not exist) is refused here as well. That arm was missing until
+	doc E3124's rung added it: the condition form shares the try-call REWRITE with the expression form
+	doc but had never shared the question about the rewrite's RESULT, so the bootstrap declared no
+	doc binding and blamed the USE (`E2004: Undefined variable`) while shv2 panicked in
+	doc `maxonTypeOfTag`. NOT E3124, which is the opposite mismatch -- a value produced and dropped.
 
 E3060 SemanticAmbiguousTypeReference
 	reserved retired 2026-07-14 -- the member was DECLARED but no site ever emitted it, which `error-codes check` now refuses. The number stays TAKEN: a retired meaning must not be silently reused.
@@ -1666,6 +1674,22 @@ E3123 SemanticAbstractRequirementErrorNotBindable
 	doc NOT E3113, which is the same hazard on a FUNCTION's own clause and is refused at the DECLARATION.
 	doc A requirement is allowed to name an interface -- that is what `Error` is for -- so the refusal
 	doc has to fall on the catch site that cannot be served, not on the declaration that is well-formed.
+
+E3124 SemanticIfTryDiscardsResult
+	csharp SemanticIfTryDiscardsResult
+	shv2 ifTryDiscardsResult
+	doc `if try f()` was written on a call that PRODUCES a value. The bare form is a THROW test, not a
+	doc value test -- the then branch runs whenever the call did not throw -- so the result it produces is
+	doc silently dropped and the form reads as though it were being tested. `if try json.getBool(node,
+	doc key: "enabled")` reads as "if enabled" and means "if the key exists and is a bool", which is true
+	doc when the value is `false`. MEASURED before this check existed: a throwing `answer(succeed bool)
+	doc returns bool` whose SUCCESS path returns `false` still took the branch.
+	doc ONE law, not a type-keyed one: if the call produces a value you must say what happens to it, so
+	doc `if try` is legal only when the callee returns nothing -- "run this, branch on whether it worked".
+	doc An IMPURE callee's result may be discarded explicitly, `if let _ = try f()`. A PURE one's may not:
+	doc `_` is E3064 there as everywhere, because a pure call whose result nobody wants is the wrong call.
+	doc NOT E3055, which refuses a `try` whose callee cannot throw at all -- a different fault with a
+	doc different cure, and this one fires only once that question has already been answered.
 
 E4001 IrUnsupportedExpression
 	csharp IrUnsupportedExpression

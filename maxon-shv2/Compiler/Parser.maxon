@@ -1002,6 +1002,15 @@ export union ParseError implements Error
 	// parser holds that token — the emitted `tryCall` op's span anchors on the callee, and the append-only
 	// span table cannot be retargeted after the fact. `callee` names the non-throwing function.
 	tryOnNonThrowing(callee String, line LineNumber, column ColumnNumber)
+	// **E3124** — `if try f()` on a call that PRODUCES a value. The bare form is a THROW test, not a value
+	// test, so a result it produces is dropped while the source reads as though it were what is being tested:
+	// `if try json.getBool(node, key: "enabled")` reads as *"if enabled"* and means *"if the key exists and is
+	// a bool"*, which is true when the value is `false`. MEASURED before this refusal existed — a throwing
+	// `answer(succeed bool) returns bool` whose SUCCESS path returned `false` still took the branch.
+	// Positioned at the `try` token, beside its E3055 sibling, and raised only AFTER it: a callee that cannot
+	// throw at all is that mistake, not this one, whatever it returns. `callee` is `tryTargetNoun`'s answer,
+	// so a witness dispatch and a builtin each blame the spelling the author actually wrote.
+	ifTryDiscardsResult(callee String, line LineNumber, column ColumnNumber)
 	// **E3087** — an `if x.contains(k)` whose then-block reads `try x.get(k)` on the same receiver and key.
 	// It carries the whole sentence rather than its parts because the sentence quotes SOURCE SPELLINGS (the
 	// receiver's access path, the key's, the receiver type's name) that only the parser holds; see
@@ -25055,15 +25064,64 @@ export type Parser
 	function parseIfCondition(func IrFunction, block IrBlock, ifTok Token, binder IfBinder) returns IfCondition throws ParseError
 		match binder 'b'
 			none then break 'b'
-			binding then return try self.parseCatchingCondition(func, block: block)
+			binding then return try self.parseCatchingCondition(func, block: block, binder: binder)
 		end 'b'
 
 		if self.at(TokenKind.try) 'bareCatch'
-			return try self.parseCatchingCondition(func, block: block)
+			return try self.parseCatchingCondition(func, block: block, binder: binder)
 		end 'bareCatch'
 
 		return IfCondition.plain(try self.parseBoolCondition(func, block: block, kwTok: ifTok))
 	end 'parseIfCondition'
+
+	// **E3124 — THE BARE `if try <call>` MAY ONLY TEST A CALL THAT RETURNS NOTHING.** The form is a THROW
+	// test: the then branch runs whenever the call did not throw, whatever it produced. So a callee with a
+	// result has that result dropped here, while the source reads as though the result were the thing being
+	// tested — `if try json.getBool(node, key: "enabled")` reads as *"if enabled"* and means *"if the key
+	// exists and is a bool"*, which is TRUE when the stored value is `false`. MEASURED before this refusal:
+	// `answer(succeed bool) returns bool throws MyError` returning `false` on its SUCCESS path still took
+	// the branch, in both compilers.
+	//
+	// ⭐ **ONE LAW, NOT A TYPE-KEYED ONE.** The refusal is on "the call produces a value", not on "the value
+	// is a bool": a `bool` is only where the misreading is loudest, and a rule keyed to it would leave every
+	// other type silently dropping its result. What survives is the form's honest use — a void-returning
+	// throwing call, "run this, branch on whether it worked".
+	//
+	// The `_` binding needs no arm on THAT side: `if let _ = try f()` has SAID what happens to the result,
+	// which is all this rule asks. Whether a PURE callee may be discarded that way is E3064's question, and
+	// shv2 has no purity classification to answer it with (see specs-shv2/discarded-results.md).
+	//
+	// ⭐⭐ **AND THE DUAL, WHICH IS THE SAME QUESTION FROM THE OTHER SIDE: `if let x = try voidF()` BINDS A
+	// VALUE THE CALL DOES NOT PRODUCE (E3059).** A binding is a VALUE POSITION, so this is precisely the
+	// fault `parseTry`'s `voidInValue` guard already refuses — same code, same sentence, same anchor. It is
+	// asked here because it was asked NOWHERE: `parseCatchingCondition` shares the try-call REWRITE with the
+	// expression form but never shared the question about the rewrite's RESULT, and the two compilers failed
+	// two different ways on it. MEASURED before this arm existed: shv2 PANICKED in `maxonTypeOfTag` (*"a
+	// `void` tag names no value"*) by way of `parseBoundThenBody` → `declareInitializedBinding` → `typeOf`,
+	// while the bootstrap silently declared nothing and blamed the USE (`E2004: Undefined variable 'x'`,
+	// about a name written on the line above) — or compiled clean when the binding went unread.
+	// `_` is not exempt from this half: it discards a result, and here there is no result to discard.
+	//
+	// Both arms live in ONE function because they are ONE question — does the binder agree with what the
+	// call produces — and asking them apart is exactly how the second one came to be unasked.
+	// ⚠ The noun is built INSIDE each throw and not once above them, because this routine runs on every
+	// `if try` parsed and `tryTargetNoun` + `String.from` allocate: the two refusals are cold, and a
+	// diagnostic's words must not be paid for by the programs that have nothing wrong with them.
+	function requireCaughtResultIsSpokenFor(result ValueId, target TryTarget, binder IfBinder, tryTok Token) throws ParseError
+		let producesNothing = self.tagOf(result) == ValueTypeTag.void
+		let bound = match binder 'b'
+			none gives false
+			binding gives true
+		end 'b'
+
+		if bound and producesNothing 'boundNothing'
+			throw ParseError.errorTypeMismatch("'{String.from(tryTargetNoun(target, signatures: self.signatures))}' does not return a value", line: tryTok.line, column: tryTok.column)
+		end 'boundNothing'
+
+		if not bound and not producesNothing 'droppedSomething'
+			throw ParseError.ifTryDiscardsResult(String.from(tryTargetNoun(target, signatures: self.signatures)), line: tryTok.line, column: tryTok.column)
+		end 'droppedSomething'
+	end 'requireCaughtResultIsSpokenFor'
 
 	// ⭐ **`try <call>` IN A CONDITION: THE CALL IS REWRITTEN EXACTLY AS AN EXPRESSION `try` REWRITES IT, AND
 	// THEN THE `if` — NOT `desugarTry` — OWNS THE FORK.** `parseTryCallTarget` + `rewriteLastCallToTryCall` +
@@ -25073,9 +25131,13 @@ export type Parser
 	// from the expression form. What is NOT run is `desugarTry`: its `flag != 0` split, error block, handler
 	// and merge are precisely what the `if` already is, and building both would fork twice.
 	//
+	// What IS this form's own is `requireCaughtResultIsSpokenFor` above — the binder/result agreement, in
+	// both directions. Only a CONDITION can drop the call's result without saying so (E3124), and only a
+	// condition reaches a binding through a path the expression form's void guard never ran on (E3059).
+	//
 	// The test is `flag == 0` — TRUE on the success path — so the then branch is the ok edge and the else
 	// branch the error edge, with no swapping anywhere downstream.
-	function parseCatchingCondition(func IrFunction, block IrBlock) returns IfCondition throws ParseError
+	function parseCatchingCondition(func IrFunction, block IrBlock, binder IfBinder) returns IfCondition throws ParseError
 		self.currentBlock = block
 		let tryTok = try self.consume(TokenKind.try)
 
@@ -25084,6 +25146,7 @@ export type Parser
 		let flag = self.mintValue(ValueTypeTag.integer, nameId: UnnamedTypeId)
 		let target = try self.rewriteLastCallToTryCall(func, flag: flag, tryTok: tryTok, targetOpFloor: targetOpFloor)
 		try self.requireThrowingTryTarget(target, tryTok: tryTok)
+		try self.requireCaughtResultIsSpokenFor(result, target: target, binder: binder, tryTok: tryTok)
 
 		// ⭐ **A MANAGED SUCCESS VALUE IS OWNED ON THE THEN EDGE ALONE, so it leaves the pending-temp list
 		// here** — the same removal `desugarTry` makes at its fork, and for the same reason: on the error edge
@@ -33759,14 +33822,10 @@ export type Parser
 		if self.tagOf(v) != ValueTypeTag.typeParameter 'notParam'
 			return false
 		end 'notParam'
-		// `if let _`, the existence form `SemanticCheck.dispatchedAssociatedTypeIsBound` already spells over
-		// this door's twin (`associatedTypePositionOf`): the POSITION is not wanted here, only whether the
-		// token names one of this declaration's parameters at all.
-		if let _ = try typeParamPositionIn(self.valueNameId(v), declarationName: self.enclosingType, paramNames: self.enclosingTypeParams) 'namesOneOfMine'
-			return true
-		end 'namesOneOfMine'
-
-		return false
+		// The EXISTENCE door, not a discarded `typeParamPositionIn`: the POSITION is not wanted here, only
+		// whether the token names one of this declaration's parameters at all — and a PURE result may not be
+		// dropped in any spelling (E3064), which is what this line used to do.
+		return namesTypeParamOf(self.valueNameId(v), declarationName: self.enclosingType, paramNames: self.enclosingTypeParams)
 	end 'isEnclosingTypeParam'
 
 	// ⭐ **LOWER A COMPARISON ON A CONSTRAINED TYPE PARAMETER TO A WITNESS DISPATCH (P1.7a slice 2b / 2b-ii).**

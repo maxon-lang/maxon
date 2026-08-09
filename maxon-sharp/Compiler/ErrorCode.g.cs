@@ -395,6 +395,14 @@ public enum ErrorCode {
   SemanticOtherwiseRequiresTry = 3058,
   /// <summary>
   /// An 'otherwise' handler's value has a type other than the 'try' expression's type.
+  /// It carries a SECOND message on the same fault seen from the value side: a `try` in a VALUE
+  /// POSITION over a callee that returns nothing -- `'f' does not return a value`, anchored on the
+  /// `try`. A BINDING is a value position too, so `if let x = try voidF()` (and `if let _ =`, which
+  /// discards a result that does not exist) is refused here as well. That arm was missing until
+  /// E3124's rung added it: the condition form shares the try-call REWRITE with the expression form
+  /// but had never shared the question about the rewrite's RESULT, so the bootstrap declared no
+  /// binding and blamed the USE (`E2004: Undefined variable`) while shv2 panicked in
+  /// `maxonTypeOfTag`. NOT E3124, which is the opposite mismatch -- a value produced and dropped.
   /// </summary>
   SemanticErrorTypeMismatch = 3059,
   /// <summary>
@@ -803,6 +811,21 @@ public enum ErrorCode {
   /// has to fall on the catch site that cannot be served, not on the declaration that is well-formed.
   /// </summary>
   SemanticAbstractRequirementErrorNotBindable = 3123,
+  /// <summary>
+  /// `if try f()` was written on a call that PRODUCES a value. The bare form is a THROW test, not a
+  /// value test -- the then branch runs whenever the call did not throw -- so the result it produces is
+  /// silently dropped and the form reads as though it were being tested. `if try json.getBool(node,
+  /// key: "enabled")` reads as "if enabled" and means "if the key exists and is a bool", which is true
+  /// when the value is `false`. MEASURED before this check existed: a throwing `answer(succeed bool)
+  /// returns bool` whose SUCCESS path returns `false` still took the branch.
+  /// ONE law, not a type-keyed one: if the call produces a value you must say what happens to it, so
+  /// `if try` is legal only when the callee returns nothing -- "run this, branch on whether it worked".
+  /// An IMPURE callee's result may be discarded explicitly, `if let _ = try f()`. A PURE one's may not:
+  /// `_` is E3064 there as everywhere, because a pure call whose result nobody wants is the wrong call.
+  /// NOT E3055, which refuses a `try` whose callee cannot throw at all -- a different fault with a
+  /// different cure, and this one fires only once that question has already been answered.
+  /// </summary>
+  SemanticIfTryDiscardsResult = 3124,
 
   /// <summary>
   /// The IR builder met an expression form it cannot lower.

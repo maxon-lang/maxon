@@ -1,6 +1,6 @@
 {
   "generatedFrom": "docs/error-codes.txt",
-  "sourceHash": "37785c7d31a384eb",
+  "sourceHash": "e5283950ae38966c",
   "note": "GENERATED. Do not edit. Run `maxon error-codes generate`. A reader MUST hash generatedFrom's bytes (FNV-1a 64, hex) and refuse to answer unless it equals sourceHash.",
   "compilers": ["csharp", "selfhosted", "shv2"],
   "codes": [
@@ -818,7 +818,7 @@
       "tag": "E3059",
       "name": "SemanticErrorTypeMismatch",
       "stage": "semantic",
-      "doc": "An 'otherwise' handler's value has a type other than the 'try' expression's type.",
+      "doc": "An 'otherwise' handler's value has a type other than the 'try' expression's type.\nIt carries a SECOND message on the same fault seen from the value side: a `try` in a VALUE\nPOSITION over a callee that returns nothing -- `'f' does not return a value`, anchored on the\n`try`. A BINDING is a value position too, so `if let x = try voidF()` (and `if let _ =`, which\ndiscards a result that does not exist) is refused here as well. That arm was missing until\nE3124's rung added it: the condition form shares the try-call REWRITE with the expression form\nbut had never shared the question about the rewrite's RESULT, so the bootstrap declared no\nbinding and blamed the USE (`E2004: Undefined variable`) while shv2 panicked in\n`maxonTypeOfTag`. NOT E3124, which is the opposite mismatch -- a value produced and dropped.",
       "emittedBy": {"csharp": "SemanticErrorTypeMismatch", "selfhosted": "semanticOtherwiseTypeMismatch", "shv2": "errorTypeMismatch"},
       "notEmittedBy": []
     },
@@ -1399,6 +1399,15 @@
       "doc": "A `try` on a call dispatched through an interface requirement whose `throws` names an INTERFACE\n(the abstract error channel, `throws Error`) asks for the caught error in a form that needs the\nerror's CONCRETE type -- an `(e)` binding, or routing into a `try` BLOCK's shared handler.\nThere is no such type at the dispatch. E3016 lets each conformer NARROW an abstract requirement\nto its own payload-free error enum, so the ordinal in the error flag means whatever the conformer\nthat actually ran says it means, and which conformer that is becomes knowable only at\nmonomorphization -- long after the parser decides everything a `try` decides.\nMEASURED before this check existed: the binding fell through to the raw error-flag `int`, and\n`print(\"{e}\")` on a caught `ParseFailure.worse` printed `2` -- the ABI's `ordinal +\nErrorFlagOrdinalBias`, handed to the user as their error value, compiling and running green. A\n`match e` on the same binding was refused instead, with `E2004: Expected pattern value`, naming a\ncase the user had just written. The `try` BLOCK form failed a third way: nothing routed the call,\nso the block was refused with E3083 (`try block contains no throwing calls`) about a block that\ncontains one.\nThe forms that need no concrete type are unaffected and stay legal: `otherwise <default>`,\n`otherwise ignore`, `otherwise panic`, `otherwise return/break/continue`, and an `otherwise\n'label'` block with no binding. Each catches the flag without decoding it, which is exactly what\nan abstract channel can promise. Bind the error by declaring the requirement as the concrete\nerror enum the caller means to catch.\nNOT E3113, which is the same hazard on a FUNCTION's own clause and is refused at the DECLARATION.\nA requirement is allowed to name an interface -- that is what `Error` is for -- so the refusal\nhas to fall on the catch site that cannot be served, not on the declaration that is well-formed.",
       "emittedBy": {"csharp": "SemanticAbstractRequirementErrorNotBindable"},
       "notEmittedBy": ["selfhosted", "shv2"]
+    },
+    {
+      "code": 3124,
+      "tag": "E3124",
+      "name": "SemanticIfTryDiscardsResult",
+      "stage": "semantic",
+      "doc": "`if try f()` was written on a call that PRODUCES a value. The bare form is a THROW test, not a\nvalue test -- the then branch runs whenever the call did not throw -- so the result it produces is\nsilently dropped and the form reads as though it were being tested. `if try json.getBool(node,\nkey: \"enabled\")` reads as \"if enabled\" and means \"if the key exists and is a bool\", which is true\nwhen the value is `false`. MEASURED before this check existed: a throwing `answer(succeed bool)\nreturns bool` whose SUCCESS path returns `false` still took the branch.\nONE law, not a type-keyed one: if the call produces a value you must say what happens to it, so\n`if try` is legal only when the callee returns nothing -- \"run this, branch on whether it worked\".\nAn IMPURE callee's result may be discarded explicitly, `if let _ = try f()`. A PURE one's may not:\n`_` is E3064 there as everywhere, because a pure call whose result nobody wants is the wrong call.\nNOT E3055, which refuses a `try` whose callee cannot throw at all -- a different fault with a\ndifferent cure, and this one fires only once that question has already been answered.",
+      "emittedBy": {"csharp": "SemanticIfTryDiscardsResult", "shv2": "ifTryDiscardsResult"},
+      "notEmittedBy": ["selfhosted"]
     },
     {
       "code": 4001,

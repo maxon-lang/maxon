@@ -715,14 +715,14 @@ end 'main'
 ```
 
 <!-- test: ascii-value-non-ascii -->
-<!-- P1.4b `try` IN CONDITION POSITION as a SUCCESS TEST — `if try c.asciiValue()` takes the branch only when the call did not throw. ⭐ It is also the THROWING half of `Character.asciiValue()`: the five sibling `ascii-value-*` cases pin the value it returns for an ASCII character, this pair pins that a non-ASCII one throws `CharacterError.notAscii` instead. ⚠ The blocker note that stood here is RETIRED (re-measured 2026-08-05, A5m-ab) — it claimed `Character` and its `bytes`/`byteLength` were still ahead at P1.8 Slice B, that shv2 had no `if try <throwing call>` form for ANY callee, and that `asciiValue()` was "deliberately unbuilt until that form exists". All three are built, and this case is green -->
+<!-- `try` IN CONDITION POSITION as a SUCCESS TEST, in the form the rule leaves standing: `asciiValue()` PRODUCES a value, so the bare `if try c.asciiValue()` this pair used to spell is now E3124 in both compilers — it dropped the byte while reading as though the byte were what the `if` tested. Bound and used, the case still pins what it always pinned: the five sibling `ascii-value-*` cases pin the value returned for an ASCII character, this pair pins that a non-ASCII one throws `CharacterError.notAscii` instead and the branch is not taken -->
 ### ASCII Value for Non-ASCII Returns Error
 
 ```maxon
 function main() returns ExitCode
 	let c = 'é'
-	if try c.asciiValue() 'hasAscii'
-		return 1
+	if let ascii = try c.asciiValue() 'hasAscii'
+		return ascii
 	end 'hasAscii'
 	return 0
 end 'main'
@@ -732,14 +732,14 @@ end 'main'
 ```
 
 <!-- test: ascii-value-emoji -->
-<!-- P1.4b `try` IN CONDITION POSITION as a SUCCESS TEST — `if try c.asciiValue()` takes the branch only when the call did not throw. ⭐ It is also the THROWING half of `Character.asciiValue()`: the five sibling `ascii-value-*` cases pin the value it returns for an ASCII character, this pair pins that a non-ASCII one throws `CharacterError.notAscii` instead. ⚠ The blocker note that stood here is RETIRED (re-measured 2026-08-05, A5m-ab) — it claimed `Character` and its `bytes`/`byteLength` were still ahead at P1.8 Slice B, that shv2 had no `if try <throwing call>` form for ANY callee, and that `asciiValue()` was "deliberately unbuilt until that form exists". All three are built, and this case is green -->
+<!-- `try` IN CONDITION POSITION as a SUCCESS TEST, in the form the rule leaves standing: `asciiValue()` PRODUCES a value, so the bare `if try c.asciiValue()` this pair used to spell is now E3124 in both compilers — it dropped the byte while reading as though the byte were what the `if` tested. Bound and used, the case still pins what it always pinned: the five sibling `ascii-value-*` cases pin the value returned for an ASCII character, this pair pins that a non-ASCII one throws `CharacterError.notAscii` instead and the branch is not taken -->
 ### ASCII Value for Emoji Returns Error
 
 ```maxon
 function main() returns ExitCode
 	let c = '🎉'
-	if try c.asciiValue() 'hasAscii'
-		return 1
+	if let ascii = try c.asciiValue() 'hasAscii'
+		return ascii
 	end 'hasAscii'
 	return 0
 end 'main'

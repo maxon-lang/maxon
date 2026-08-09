@@ -213,6 +213,14 @@ export enum ErrorCode
 	// 'otherwise' is written without a 'try'.
 	semanticOtherwiseRequiresTry = 3058
 	// An 'otherwise' handler's value has a type other than the 'try' expression's type.
+	// It carries a SECOND message on the same fault seen from the value side: a `try` in a VALUE
+	// POSITION over a callee that returns nothing -- `'f' does not return a value`, anchored on the
+	// `try`. A BINDING is a value position too, so `if let x = try voidF()` (and `if let _ =`, which
+	// discards a result that does not exist) is refused here as well. That arm was missing until
+	// E3124's rung added it: the condition form shares the try-call REWRITE with the expression form
+	// but had never shared the question about the rewrite's RESULT, so the bootstrap declared no
+	// binding and blamed the USE (`E2004: Undefined variable`) while shv2 panicked in
+	// `maxonTypeOfTag`. NOT E3124, which is the opposite mismatch -- a value produced and dropped.
 	semanticOtherwiseTypeMismatch = 3059
 	// Two typealiases in scope declare the same name.
 	// Two declarations of one name are legal only when both are `typealias` of

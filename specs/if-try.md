@@ -13,17 +13,27 @@ category: error-handling
 
 The `if try` construct provides conditional execution based on whether a throwing expression succeeds or fails.
 
-#### Boolean Form
+#### Bare Form
 
-Check if an expression succeeds without binding the result:
+Run a throwing call that returns nothing, and branch on whether it worked:
 
 ```maxon
-if try mayFail() 'check'
+if try runStep() 'check'
 	print("Operation succeeded!")
 end 'check'
 ```
 
 The if-block executes only if the expression succeeds (doesn't throw).
+
+That is a THROW test, not a value test, which is why the bare form is legal ONLY when the callee
+returns nothing. A call that PRODUCES a value is refused (E3124): the result would be dropped
+while the source reads as though the result were what is being tested. `if try json.getBool(node,
+key: "enabled")` reads as *"if enabled"* and means *"if the key exists and is a bool"* — which is
+true when the stored value is `false`.
+
+The rule is on "the call produces a value", not on the type of that value. A `bool` is only where
+the misreading is loudest; a rule keyed to it would leave every other type silently dropping its
+result.
 
 #### Binding Form
 
@@ -37,12 +47,27 @@ end 'check'
 
 If successful, the unwrapped value is bound to `value` and available within the if-block.
 
+#### Discarding the Result
+
+A value-producing call has to say what happens to its result, and `_` — the discard identifier —
+is how a caller says "nothing":
+
+```maxon
+if let _ = try appendAndCount(item) 'check'
+	print("appended")
+end 'check'
+```
+
+That is open to an IMPURE callee only. A PURE function's result must be USED, and `_` does not save
+it (E3064): a pure call whose answer nobody wants is the wrong call. Ask `s.contains(x)` rather than
+discarding `s.findLast(x)`.
+
 #### With Else Clause
 
 Handle the error case:
 
 ```maxon
-if try mayFail() 'check'
+if try runStep() 'check'
 	print("Success!")
 end 'check' else 'err'
 	print("Failed!")
@@ -68,22 +93,19 @@ The error is bound to `e` and available within the else-block.
 <!-- test: if-try-boolean-success -->
 ```maxon
 
-typealias Integer = int(i64.min to i64.max)
-
 enum MyError implements Error
 	failed
 end 'MyError'
 
-function mayFail(succeed bool) returns Integer throws MyError
+function runStep(succeed bool) throws MyError
 	if not succeed 'check'
 		throw MyError.failed
 	end 'check'
-	return 42
-end 'mayFail'
+end 'runStep'
 
 function main() returns ExitCode
 	var result = 0
-	if try mayFail(true) 'check'
+	if try runStep(true) 'check'
 		result = 1
 	end 'check'
 	return result
@@ -96,22 +118,19 @@ end 'main'
 <!-- test: if-try-boolean-failure -->
 ```maxon
 
-typealias Integer = int(i64.min to i64.max)
-
 enum MyError implements Error
 	failed
 end 'MyError'
 
-function mayFail(succeed bool) returns Integer throws MyError
+function runStep(succeed bool) throws MyError
 	if not succeed 'check'
 		throw MyError.failed
 	end 'check'
-	return 42
-end 'mayFail'
+end 'runStep'
 
 function main() returns ExitCode
 	var result = 0
-	if try mayFail(false) 'check'
+	if try runStep(false) 'check'
 		result = 1
 	end 'check'
 	return result
@@ -178,22 +197,19 @@ end 'main'
 <!-- test: if-try-else-block -->
 ```maxon
 
-typealias Integer = int(i64.min to i64.max)
-
 enum MyError implements Error
 	failed
 end 'MyError'
 
-function mayFail(succeed bool) returns Integer throws MyError
+function runStep(succeed bool) throws MyError
 	if not succeed 'check'
 		throw MyError.failed
 	end 'check'
-	return 42
-end 'mayFail'
+end 'runStep'
 
 function main() returns ExitCode
 	var result = 0
-	if try mayFail(false) 'check'
+	if try runStep(false) 'check'
 		result = 1
 	end 'check' else 'err'
 		result = 2
@@ -208,22 +224,19 @@ end 'main'
 <!-- test: if-try-else-success -->
 ```maxon
 
-typealias Integer = int(i64.min to i64.max)
-
 enum MyError implements Error
 	failed
 end 'MyError'
 
-function mayFail(succeed bool) returns Integer throws MyError
+function runStep(succeed bool) throws MyError
 	if not succeed 'check'
 		throw MyError.failed
 	end 'check'
-	return 42
-end 'mayFail'
+end 'runStep'
 
 function main() returns ExitCode
 	var result = 0
-	if try mayFail(true) 'check'
+	if try runStep(true) 'check'
 		result = 1
 	end 'check' else 'err'
 		result = 2
@@ -387,19 +400,18 @@ enum MyError implements Error
 	second
 end 'MyError'
 
-function mayFail(which Integer) returns Integer throws MyError
+function runStep(which Integer) throws MyError
 	if which == 1 'check1'
 		throw MyError.first
 	end 'check1'
 	if which == 2 'check2'
 		throw MyError.second
 	end 'check2'
-	return 42
-end 'mayFail'
+end 'runStep'
 
 function main() returns ExitCode
 	var result = 0
-	if try mayFail(1) 'check'
+	if try runStep(1) 'check'
 		result = 100
 	end 'check' else (e) 'err'
 		match e 'kind'
@@ -417,23 +429,20 @@ end 'main'
 <!-- test: if-try-nested -->
 ```maxon
 
-typealias Integer = int(i64.min to i64.max)
-
 enum MyError implements Error
 	failed
 end 'MyError'
 
-function mayFail(succeed bool) returns Integer throws MyError
+function runStep(succeed bool) throws MyError
 	if not succeed 'check'
 		throw MyError.failed
 	end 'check'
-	return 42
-end 'mayFail'
+end 'runStep'
 
 function main() returns ExitCode
 	var result = 0
-	if try mayFail(true) 'outer'
-		if try mayFail(true) 'inner'
+	if try runStep(true) 'outer'
+		if try runStep(true) 'inner'
 			result = 3
 		end 'inner'
 	end 'outer'
@@ -830,4 +839,271 @@ end 'main'
 ```
 ```exitcode
 14
+```
+
+<!-- test: error.if-try-discards-a-result -->
+`if try` is a THROW test, not a value test: the then-block runs whenever the call did not throw,
+whatever it produced. So a callee with a result has that result silently dropped while the source
+reads as though the result were what is being tested. MEASURED before this refusal existed — this
+exact program compiled, and `answer(true)` returning `false` still took the branch and exited 7.
+
+```maxon
+
+enum MyError implements Error
+	failed
+end 'MyError'
+
+function answer(succeed bool) returns bool throws MyError
+	if not succeed 'check'
+		throw MyError.failed
+	end 'check'
+	return false
+end 'answer'
+
+function main() returns ExitCode
+	if try answer(true) 'check'
+		return 7
+	end 'check'
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3124: specs/fragments/if-try/error.if-try-discards-a-result.test:15:5: 'if try' discards the result of 'answer': only a call that returns nothing may be tested bare — bind the result with 'if let'
+```
+
+<!-- test: error.if-try-discards-a-non-bool-result -->
+ONE law, not a type-keyed one. `bool` is only where the misreading is loudest; the refusal is on
+"the call produces a value", so an `Integer` result is dropped exactly as silently and is refused
+exactly the same way.
+
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+enum MyError implements Error
+	failed
+end 'MyError'
+
+function mayFail(succeed bool) returns Integer throws MyError
+	if not succeed 'check'
+		throw MyError.failed
+	end 'check'
+	return 42
+end 'mayFail'
+
+function main() returns ExitCode
+	if try mayFail(true) 'check'
+		return 1
+	end 'check'
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3124: specs/fragments/if-try/error.if-try-discards-a-non-bool-result.test:17:5: 'if try' discards the result of 'mayFail': only a call that returns nothing may be tested bare — bind the result with 'if let'
+```
+
+<!-- test: if-try-void-callee-runs-its-effect -->
+The form the rule leaves standing: "run this, branch on whether it worked". The callee's effect
+happens on the success path and is skipped on the throwing one, and nothing is dropped because
+there is nothing to drop.
+
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+enum MyError implements Error
+	failed
+end 'MyError'
+
+var visits = 0 as Integer
+
+function recordVisit(succeed bool) throws MyError
+	if not succeed 'check'
+		throw MyError.failed
+	end 'check'
+	visits = visits + 1
+end 'recordVisit'
+
+function main() returns ExitCode
+	var taken = 0
+	if try recordVisit(true) 'ok'
+		taken = taken + 1
+	end 'ok'
+	if try recordVisit(false) 'bad'
+		taken = taken + 10
+	end 'bad'
+	print("{taken} {visits}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1 1
+```
+
+<!-- test: if-try-impure-result-may-be-discarded -->
+An IMPURE callee's result may be dropped, provided the program SAYS so: `_` is the discard
+identifier, and writing it is the whole of what the rule asks for. The call still runs — the
+counter it bumps proves it — and the then-block still tests only whether it threw.
+
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+enum MyError implements Error
+	failed
+end 'MyError'
+
+var calls = 0 as Integer
+
+function impureFail(succeed bool) returns Integer throws MyError
+	calls = calls + 1
+	if not succeed 'check'
+		throw MyError.failed
+	end 'check'
+	return 42
+end 'impureFail'
+
+function main() returns ExitCode
+	var taken = 0
+	if let _ = try impureFail(true) 'ok'
+		taken = taken + 1
+	end 'ok'
+	if let _ = try impureFail(false) 'bad'
+		taken = taken + 10
+	end 'bad'
+	print("{taken} {calls}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1 2
+```
+
+<!-- test: error.if-try-pure-result-is-not-saved-by-discard -->
+`_` does not save a PURE callee, and that is the rule's point rather than a gap in it: a pure call
+whose answer nobody wants is the wrong call. The site has to bind the result and USE it, or ask a
+function that answers the question it actually has — `s.contains(x)` rather than a discarded
+`s.findLast(x)`.
+
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+enum MyError implements Error
+	failed
+end 'MyError'
+
+function pureFail(succeed bool) returns Integer throws MyError
+	if not succeed 'check'
+		throw MyError.failed
+	end 'check'
+	return 42
+end 'pureFail'
+
+function main() returns ExitCode
+	if let _ = try pureFail(true) 'check'
+		return 1
+	end 'check'
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3064: specs/fragments/if-try/error.if-try-pure-result-is-not-saved-by-discard.test:17:9: result of pure function 'pureFail' must be used
+```
+
+<!-- test: if-try-binding-uses-the-result -->
+The cure for a pure callee, spelled out: the result is bound and used, and the branch still turns
+only on whether the call threw.
+
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+enum MyError implements Error
+	failed
+end 'MyError'
+
+function pureFail(succeed bool) returns Integer throws MyError
+	if not succeed 'check'
+		throw MyError.failed
+	end 'check'
+	return 42
+end 'pureFail'
+
+function main() returns ExitCode
+	if let value = try pureFail(true) 'check'
+		return value
+	end 'check'
+	return 0
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: error.if-try-binds-a-void-result -->
+The DUAL of the rule above, and the same question from the other side: a binding is a value
+position, so `if let x = try runStep()` asks for a value the call does not produce. It is the fault
+the expression `try` already refuses (`let x = try runStep() otherwise …`), with the same code, the
+same sentence and the same anchor — the condition form shares that rewrite and had never shared the
+question about its result. MEASURED before this refusal existed: the bootstrap declared no binding
+at all and blamed the USE (`E2004: Undefined variable 'x'`, about a name written one line above),
+and shv2 did not survive it — it PANICKED in `maxonTypeOfTag`, "a `void` tag names no value".
+
+```maxon
+
+enum MyError implements Error
+	failed
+end 'MyError'
+
+function runStep(succeed bool) throws MyError
+	if not succeed 'check'
+		throw MyError.failed
+	end 'check'
+end 'runStep'
+
+function main() returns ExitCode
+	if let x = try runStep(true) 'v'
+		print("{x}\n")
+		return 4
+	end 'v'
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3059: specs/fragments/if-try/error.if-try-binds-a-void-result.test:14:13: type mismatch: ''runStep' does not return a value'
+```
+
+<!-- test: error.if-try-discards-a-void-result -->
+`_` is exempt from the unused checks, not from arithmetic: it discards a result, and a void call has
+no result to discard. Refused on the same code as its named-binding sibling, because it is the same
+mistake with a different spelling — and it compiled clean before, binding nothing from nothing.
+
+```maxon
+
+enum MyError implements Error
+	failed
+end 'MyError'
+
+function runStep(succeed bool) throws MyError
+	if not succeed 'check'
+		throw MyError.failed
+	end 'check'
+end 'runStep'
+
+function main() returns ExitCode
+	if let _ = try runStep(true) 'v'
+		return 4
+	end 'v'
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3059: specs/fragments/if-try/error.if-try-discards-a-void-result.test:14:13: type mismatch: ''runStep' does not return a value'
 ```

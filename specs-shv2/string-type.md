@@ -538,12 +538,13 @@ end 'main'
 ```
 
 <!-- test: find-last-not-found -->
-<!-- P1.4b `try` IN CONDITION POSITION as a SUCCESS TEST — `if try s.findLast("xyz") 'found' … else`. NOT a `findLast` gap: P1.8 Slice B2 shipped `findLast`, and its five sibling cases here are enabled. The blocker is that shv2 has no `if try <throwing call>` form for ANY callee — the whole of `specs/if-try.md` is unported — measured on this very call shape: the bare `try` in a condition is E3059 ("try propagates 'E' but the enclosing function declares no 'throws'"), and past that an `if` over the call's non-bool result is E3005. Same blocker as `character-type`'s two `if try c.asciiValue()` cases -->
+<!-- ⚠ THE BLOCKER PROSE THAT STOOD HERE IS RETIRED, AND SO IS THE FORM IT DESCRIBED. It claimed shv2 had no `if try <throwing call>` form for ANY callee and that `specs/if-try.md` was unported; both were already stale, and the bare form this case used to spell is now REFUSED IN BOTH COMPILERS (E3124) — `findLast` PRODUCES a `StringIndex`, and a produced value may not be dropped by a `try` that reads as though it were testing it. The case now binds the index and uses it, which is the migration the rule asks for -->
 ```maxon
 function main() returns ExitCode
 	let s = "hello world"
-	if try s.findLast("xyz") 'found'
+	if let idx = try s.findLast("xyz") 'found'
 		print("FOUND\n")
+		return idx.charIndex() as ExitCode
 	end 'found' else 'not_found'
 		print("NOT_FOUND\n")
 	end 'not_found'

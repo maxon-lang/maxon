@@ -1987,7 +1987,10 @@ function witnessFormalDeclaredType(project Project, signatures ProgramSignatures
 	// ⚠ Asked BEFORE `builtinTypeNameTag`, and the order is load-bearing for `LowerMaxonToStd.witnessFormalType`'s
 	// measured reason: a `uses` parameter is an IDENTIFIER, and `ExitCode`/`String` are identifiers too, so
 	// `interface Taker uses ExitCode` would otherwise read a TYPE PARAMETER as the u32 builtin.
-	if let _ = try associatedTypePositionOf(dispatched.associatedTypeNames, name: formalName) 'aConformerBindsIt'
+	// `namesInclude`, not a discarded `associatedTypePositionOf`: this door answers `opaque` and has no use
+	// for the position, and a PURE result may not be dropped in any spelling (E3064) — which is what the
+	// `if let _ = try …` that stood here did.
+	if namesInclude(dispatched.associatedTypeNames, name: formalName) 'aConformerBindsIt'
 		return WitnessFormalType.opaque
 	end 'aConformerBindsIt'
 

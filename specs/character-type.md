@@ -432,8 +432,8 @@ end 'main'
 ```maxon
 function main() returns ExitCode
 	let c = 'é'
-	if try c.asciiValue() 'hasAscii'
-		return 1
+	if let ascii = try c.asciiValue() 'hasAscii'
+		return ascii
 	end 'hasAscii'
 	return 0
 end 'main'
@@ -448,8 +448,8 @@ end 'main'
 ```maxon
 function main() returns ExitCode
 	let c = '🎉'
-	if try c.asciiValue() 'hasAscii'
-		return 1
+	if let ascii = try c.asciiValue() 'hasAscii'
+		return ascii
 	end 'hasAscii'
 	return 0
 end 'main'

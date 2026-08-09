@@ -596,6 +596,24 @@ export function associatedTypePositionOf(associatedTypeNames ByteArrayArray, nam
 	throw MapError.keyNotFound
 end 'associatedTypePositionOf'
 
+// ⭐ **THE EXISTENCE HALF OF THE SCAN ABOVE — "is `name` one of these associated types at all?"** —
+// for `SemanticCheck.witnessFormalDeclaredType`, which answers `opaque` and has no use for WHICH position.
+//
+// ⚠ **IT IS A SEPARATE DOOR BECAUSE THE LANGUAGE MAKES IT ONE.** `associatedTypePositionOf` is PURE, and a
+// pure function's result may not be dropped in any spelling: `_ = f()` and `if let _ = try f()` are both
+// E3064, and the bare `if try f()` is E3124. A pure call whose answer nobody wants is the wrong call, so
+// the caller that wants only WHETHER is given the function that answers only that. This one is plain
+// membership in a name list — the general operation the scan above happens to also perform on its way to a
+// position — and both settle "is this the same name" with the ONE predicate, `ByteArray.equals`.
+export function namesInclude(names ByteArrayArray, name ByteArray) returns bool
+	for i in 0 upto names.count() 'eachName'
+		if (try names.get(i) otherwise panic("namesInclude: names.get OOB at {i} below count {names.count()}")).equals(name) 'isThisOne'
+			return true
+		end 'isThisOne'
+	end 'eachName'
+	return false
+end 'namesInclude'
+
 // ⭐⭐ **THE ABI-BEARING TYPE A RENDERED TYPE NAME DENOTES — the one collapse for every place a type is
 // held only as the bytes the source wrote.** `builtinTypeNameTag` answers for the five builtins whose tag
 // carries a width; EVERYTHING else it calls `named`, and a `named` here is not a residue to panic on — it

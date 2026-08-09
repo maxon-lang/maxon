@@ -1,22 +1,19 @@
 // Test: if-try-nested
 
-typealias Integer = int(i64.min to i64.max)
-
 enum MyError implements Error
 	failed
 end 'MyError'
 
-function mayFail(succeed bool) returns Integer throws MyError
+function runStep(succeed bool) throws MyError
 	if not succeed 'check'
 		throw MyError.failed
 	end 'check'
-	return 42
-end 'mayFail'
+end 'runStep'
 
 function main() returns ExitCode
 	var result = 0
-	if try mayFail(true) 'outer'
-		if try mayFail(true) 'inner'
+	if try runStep(true) 'outer'
+		if try runStep(true) 'inner'
 			result = 3
 		end 'inner'
 	end 'outer'
@@ -27,12 +24,12 @@ ExitCode: 3
 ---
 // CompiledIR
 module {
-  func @mayFail(succeed: i1) -> i64 {
+  func @runStep(succeed: i1) {
   entry:
     x64.mov rax, 1
     x64.xor rcx, rax
     x64.test rcx, rcx
-    x64.je mayFail.check_0.after
+    x64.je runStep.check_0.after
   check_0:
     x64.xor eax, eax
     x64.mov rcx, 1
@@ -41,7 +38,6 @@ module {
     x64.xor eax, eax
     x64.ret
   check_0.after:
-    x64.mov rax, 42
     x64.xor edx, edx
     x64.ret
   }
@@ -51,15 +47,15 @@ module {
     x64.xor eax, eax
     x64.mov [rbp-8], rax
     x64.mov rcx, 1
-    x64.call mayFail
+    x64.call runStep
     x64.xor ecx, ecx
     x64.cmp rdx, rcx
     x64.jne main.outer_0.merge
   outer_0:
     x64.mov rcx, 1
-    x64.call mayFail
-    x64.xor ecx, ecx
-    x64.cmp rdx, rcx
+    x64.call runStep
+    x64.xor eax, eax
+    x64.cmp rdx, rax
     x64.jne main.inner_0.merge
   inner_0:
     x64.mov rax, 3

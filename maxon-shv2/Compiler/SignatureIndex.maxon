@@ -1882,6 +1882,27 @@ export function typeParamPositionIn(token TypeParamId, declarationName ByteArray
 	throw MapError.keyNotFound
 end 'typeParamPositionIn'
 
+// ⭐ **THE EXISTENCE HALF OF THE DOOR ABOVE — "does `token` name ANY parameter of `declarationName`?"**
+//
+// ⚠ **IT IS ITS OWN DOOR AND NOT A DISCARDED `typeParamPositionIn`, AND THAT IS A LANGUAGE RULE, NOT A
+// PREFERENCE.** `typeParamPositionIn` is PURE, and a pure function's result may not be dropped in ANY
+// spelling: `_ = f()` and `if let _ = try f()` are both E3064, and the `if try f()` this caller used to be
+// written as is E3124. The rule's whole point is that a pure call whose answer nobody wants is the WRONG
+// call — so the caller that wants only WHETHER gets a function that answers only that.
+//
+// The two do not duplicate the RULE: what makes a token name a parameter is `typeParamTokenFor`, which both
+// ask and neither states. What differs is only the answer's shape, which is the same reason both exist.
+export function namesTypeParamOf(token TypeParamId, declarationName ByteArray, paramNames ByteArrayArray) returns bool
+	for i in 0 upto paramNames.count() 'eachParam'
+		let paramName = try paramNames.get(i) otherwise panic("namesTypeParamOf: paramNames.get OOB at {i} below count {paramNames.count()}")
+		if typeParamTokenFor(declarationName, paramName: paramName) == token 'thisOne'
+			return true
+		end 'thisOne'
+	end 'eachParam'
+
+	return false
+end 'namesTypeParamOf'
+
 // ⭐ **WHAT MINTED A TYPE-PARAMETER TOKEN — the reverse of `typeParamTokenFor`, and the record that makes a
 // digest collision a DETECTED event rather than a silent shared identity (W14).** `position` rides with the
 // two names because it is recorded in the same act (the declaration's own `uses` order), so a reader that

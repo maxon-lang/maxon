@@ -560,7 +560,8 @@ typealias IntManagedList = __ManagedList with Integer
 
 function main() returns ExitCode
 	let list = IntManagedList.create()
-	if try list.head() 'try'
+	if let node = try list.head() 'try'
+		print("{node.value()}\n")
 		return 1
 	end 'try' else 'err'
 		print("caught\n")
@@ -582,7 +583,8 @@ typealias IntManagedList = __ManagedList with Integer
 
 function main() returns ExitCode
 	let list = IntManagedList.create()
-	if try list.tail() 'try'
+	if let node = try list.tail() 'try'
+		print("{node.value()}\n")
 		return 1
 	end 'try' else 'err'
 		print("caught\n")
@@ -611,7 +613,8 @@ function main() returns ExitCode
 		return 1
 	end 'err'
 	// Try to go past end
-	if try h.next() 'try'
+	if let after = try h.next() 'try'
+		print("{after.value()}\n")
 		return 1
 	end 'try' else 'err2'
 		print("caught\n")
@@ -641,7 +644,8 @@ function main() returns ExitCode
 		return 1
 	end 'err'
 	// Try to go before beginning
-	if try h.prev() 'try'
+	if let before = try h.prev() 'try'
+		print("{before.value()}\n")
 		return 1
 	end 'try' else 'err2'
 		print("caught\n")

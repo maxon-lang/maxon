@@ -437,18 +437,11 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 	end 'endsWith'
 
 	export function contains(needle String) returns bool
-		if try findIn(self, offset: 0, len: byteLength(), needle: needle) 'found'
-			return true
-		end 'found'
-		return false
+		return needleOccursIn(self, len: byteLength(), needle: needle)
 	end 'contains'
 
 	export function contains(character Character) returns bool
-		let charStr = character.toString()
-		if try findIn(self, offset: 0, len: byteLength(), needle: charStr) 'found'
-			return true
-		end 'found'
-		return false
+		return needleOccursIn(self, len: byteLength(), needle: character.toString())
 	end 'contains'
 
 	/// The `StringIndex` naming the grapheme that STARTS at `byteIdx` — the one thing both searches
@@ -999,6 +992,21 @@ function findIn(haystack String, offset BytePos, len ByteCount, needle String) r
 	end 'search_loop'
 	throw StringError.notFound
 end 'findIn'
+
+/// The scan asked as `contains` asks it, and the ONE place that translation is made — both overloads
+/// ask exactly this, and a second copy is a second place the two answers could be swapped.
+///
+/// ⚠ **`try … otherwise`, NOT `if try …` — and the difference is the whole of the rung that wrote this
+/// line.** The bare `if try findIn(…)` both overloads used to spell is now E3124: it DROPPED the byte
+/// position while reading as though the position were what the `if` tested. `if let _ = try findIn(…)`
+/// does not rescue it either — `findIn` is PURE, and a pure call's result may not be discarded (E3064),
+/// because a pure call whose answer nobody wants is the wrong call. What is left, and what is right, is
+/// to consume the ONE half of `findIn`'s answer this caller has a use for: the THROW. `otherwise return
+/// false` says "the search did not find it" in as many words, and nothing here reads as a value test.
+function needleOccursIn(haystack String, len ByteCount, needle String) returns bool
+	try findIn(haystack, offset: 0, len: len, needle: needle) otherwise return false
+	return true
+end 'needleOccursIn'
 
 function findLastIn(haystack String, needle String) returns BytePos throws StringError
 	let len = haystack.byteLength()

@@ -1,0 +1,25 @@
+// Test: error.if-try-binds-a-void-result
+
+enum MyError implements Error
+	failed
+end 'MyError'
+
+function runStep(succeed bool) throws MyError
+	if not succeed 'check'
+		throw MyError.failed
+	end 'check'
+end 'runStep'
+
+function main() returns ExitCode
+	if let x = try runStep(true) 'v'
+		print("{x}\n")
+		return 4
+	end 'v'
+	return 0
+end 'main'
+---
+MaxoncStderr: ```
+error E3059: specs/fragments/if-try/error.if-try-binds-a-void-result.test:14:13: type mismatch: ''runStep' does not return a value'
+```
+---
+---

@@ -442,8 +442,9 @@ end 'main'
 ```maxon
 function main() returns ExitCode
 	let s = "hello world"
-	if try s.findLast("xyz") 'found'
+	if let idx = try s.findLast("xyz") 'found'
 		print("FOUND\n")
+		return idx.charIndex() as ExitCode
 	end 'found' else 'not_found'
 		print("NOT_FOUND\n")
 	end 'not_found'

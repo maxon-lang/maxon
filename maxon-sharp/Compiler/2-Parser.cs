@@ -365,6 +365,12 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   /// and a diagnostic that names it names something the reader cannot find in their source.
   private const string SelfParamName = "self";
 
+  /// The discard identifier. Writing it declares no binding and is exempt from the unused checks,
+  /// which is how a result gets dropped on purpose (`_ = f()`, `if let _ = try f()`, `for _ in xs`,
+  /// a match payload). Named here because eight unrelated places test for it and every one of them
+  /// is the same one fact — `specs/discarded-results.md` is where that fact is written down.
+  private const string DiscardIdentifier = "_";
+
   // Top-level compile-time constants (name -> evaluated value: long, double, or bool)
   private Dictionary<string, object> _topLevelConstants = [];
 
@@ -8081,7 +8087,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
 
     for (int i = 0; i < paramNames.Count; i++) {
       CheckNoSelfFieldShadow(paramNames[i], paramTokens[i].Line, paramTokens[i].Column);
-      if (paramNames[i] != "_") {
+      if (paramNames[i] != DiscardIdentifier) {
         _paramLocations.Add((paramNames[i], paramTokens[i].Line, paramTokens[i].Column));
       }
       var paramType = paramTypes[i];
@@ -9186,7 +9192,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       ParseContinue();
     } else if (TryRewritePrimitiveStaticMethod()) {
       ParseCallStatement();
-    } else if (Check(TokenType.Identifier) && Current().Value == "_" && PeekNext().Type == TokenType.Equals) {
+    } else if (Check(TokenType.Identifier) && Current().Value == DiscardIdentifier && PeekNext().Type == TokenType.Equals) {
       // Discard assignment: _ = expr
       ParseDiscardAssignment();
     } else if (Check(TokenType.Identifier) && PeekNext().Type == TokenType.Dot) {
@@ -11257,7 +11263,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       nameToken = Expect(TokenType.Identifier);
       CheckReservedDeclName(nameToken);
       name = nameToken.Value;
-      if (name == "_") {
+      if (name == DiscardIdentifier) {
         throw new CompileError(ErrorCode.ParserUnexpectedToken,
           "use '_ = expr' to discard a result (without var/let)",
           nameToken.Line, nameToken.Column);
@@ -11381,7 +11387,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       CheckReservedDeclName(nameToken);
       CheckNoSelfFieldShadow(nameToken.Value, nameToken.Line, nameToken.Column);
       names.Add(nameToken.Value);
-      if (nameToken.Value != "_") {
+      if (nameToken.Value != DiscardIdentifier) {
         _localVarLocations.Add((nameToken.Value, nameToken.Line, nameToken.Column));
         if (isMutable) _mutableVarNames.Add(nameToken.Value);
       }
@@ -11450,7 +11456,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
         parenToken.Line, parenToken.Column);
 
     // If all tuple elements are discarded, mark the underlying call for purity checking
-    if (names.All(n => n == "_")) {
+    if (names.All(n => n == DiscardIdentifier)) {
       MarkLetDiscardResult(parenToken);
     }
 
@@ -11476,7 +11482,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       var slot = slots[i];
       var nameToken = slot.NameToken;
       var name = nameToken.Value;
-      if (name == "_") continue;
+      if (name == DiscardIdentifier) continue;
 
       var field = tupleType.Fields[i];
       var fieldKind = field.Type.ToValueKind();
@@ -14048,17 +14054,73 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   }
 
   /// <summary>
+  /// Does the `if try` form's BINDER agree with what its call produces? Both directions, in one
+  /// place, because they are one question and separating them is what let the second one go unasked.
+  ///
+  /// E3124: `if try f()` on a call that PRODUCES a value.
+  ///
+  /// The bare form is a THROW test, not a value test — the then branch runs whenever the call did
+  /// not throw — so a result it produces is dropped without the program saying so, while the source
+  /// reads as though the result were what is being tested. `if try json.getBool(node, key: "x")`
+  /// reads as "if x" and means "if the key exists and is a bool", which is TRUE when the value is
+  /// `false`. MEASURED before this check existed: a throwing `answer(succeed bool) returns bool`
+  /// whose success path returns `false` still took the branch.
+  ///
+  /// ONE law, not a type-keyed one: if the call produces a value you must say what happens to it.
+  /// So `if try` survives only for a void-returning throwing call — "run this, branch on whether it
+  /// worked" — and every other site names the result.
+  ///
+  /// The `_` binding is NOT waved through here, and that is the whole of the purity interaction: it
+  /// is routed into the SAME discard flag `_ = f()` sets, so `CheckDiscardedResults` answers for it
+  /// with the one rule it already owns — an impure result may be dropped explicitly (legal), a pure
+  /// one may not (E3064, "the wrong call"). Writing a second purity test here would be that rule's
+  /// second copy, and the two would drift.
+  ///
+  /// Ordered AFTER <see cref="RewriteTailCallAsTryCall"/>'s E3055 on purpose: a callee that cannot
+  /// throw at all is that mistake, not this one, whatever it returns.
+  ///
+  /// E3059, the DUAL: `if let x = try voidF()` binds a value the call does not produce. A binding is
+  /// a value position, so it is the same fault the expression `try` already refuses with this code,
+  /// this sentence and this anchor — and it is asked here because it was asked NOWHERE. The comment
+  /// at that expression site says `if let x = try f()` is "the same rewrite", and the rewrite is
+  /// shared; the question about the rewrite's RESULT was not. MEASURED before this arm existed: the
+  /// bootstrap declared no binding at all and blamed the USE — `E2004: Undefined variable 'x'`, about
+  /// a name the program declares on the line above — and compiled clean when the binding went unused;
+  /// shv2 did not survive it at all and PANICKED in `maxonTypeOfTag` ("a `void` tag names no value").
+  /// `_` is not exempt: it discards a result, and there is no result to discard.
+  /// </summary>
+  private void RequireIfTryResultIsSpokenFor(MaxonTryCallOp tryCallOp, string? bindingName, Token? bindingTok, Token tryToken) {
+    if (tryCallOp.Result == null) {
+      if (bindingName != null) {
+        throw new CompileError(ErrorCode.SemanticErrorTypeMismatch,
+          $"type mismatch: ''{TryTargetNoun(tryCallOp.Callee)}' does not return a value'",
+          tryToken.Line, tryToken.Column);
+      }
+      return;
+    }
+
+    if (bindingName == null) {
+      throw new CompileError(ErrorCode.SemanticIfTryDiscardsResult,
+        $"'if try' discards the result of '{tryCallOp.Callee}': only a call that returns nothing may be tested bare — bind the result with 'if let'",
+        tryToken.Line, tryToken.Column);
+    }
+
+    if (bindingName == DiscardIdentifier) MarkLetDiscardResult(bindingTok!);
+  }
+
+  /// <summary>
   /// Parses `if try expr 'label'` (boolean form) and `if let/var name = try expr 'label'` (binding form).
   /// Called after 'if' has been consumed. Current token is 'try', 'let', or 'var'.
   /// </summary>
   private void ParseIfTry(SourceSpan ifPos) {
     // Determine form: binding (`if let/var name = try ...`) or boolean (`if try ...`)
     string? bindingName = null;
+    Token? bindingTok = null;
     bool bindingIsMutable = false;
     if (Check(TokenType.Var) || Check(TokenType.Let)) {
       bindingIsMutable = Check(TokenType.Var);
       Advance(); // consume 'var' or 'let'
-      var bindingTok = Expect(TokenType.Identifier);
+      bindingTok = Expect(TokenType.Identifier);
       CheckReservedDeclName(bindingTok);
       bindingName = bindingTok.Value;
       Expect(TokenType.Equals);
@@ -14078,6 +14140,8 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     var tryCallOp = target.Op;
     var callee = target.Callee;
     var calleeThrowsType = target.ThrowsType;
+
+    RequireIfTryResultIsSpokenFor(tryCallOp, bindingName, bindingTok, tryToken);
 
     // Store error flag and result to mutable variables for cross-block access
     var tryInfo = new TryResultInfo(tryCallOp.ErrorFlag, tryCallOp.Result, tryCallOp.ResultKind, tryCallOp.ResultStructTypeName, callee?.ReturnType, tryCallOp.ResultFnType);
@@ -14318,7 +14382,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       do {
         if (Check(TokenType.Comma)) Advance();
         var nameToken = Expect(TokenType.Identifier);
-        if (nameToken.Value == "_") {
+        if (nameToken.Value == DiscardIdentifier) {
           destructureNames.Add($"__discard_{_discardCounter++}");
         } else {
           CheckReservedDeclName(nameToken);
@@ -14331,7 +14395,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       itemName = $"__for_tuple_{_blockCounter}";
     } else {
       var itemToken = Expect(TokenType.Identifier);
-      if (itemToken.Value == "_") {
+      if (itemToken.Value == DiscardIdentifier) {
         itemName = $"__discard_{_discardCounter++}";
       } else {
         CheckReservedDeclName(itemToken);
@@ -15329,7 +15393,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
             bindings = [];
             while (!Check(TokenType.RightParen) && !IsAtEnd()) {
               var bindingToken = Expect(TokenType.Identifier);
-              if (bindingToken.Value == "_") {
+              if (bindingToken.Value == DiscardIdentifier) {
                 bindings.Add(($"__discard_{_discardCounter++}", bindingToken.Line, bindingToken.Column));
               } else {
                 CheckReservedDeclName(bindingToken);
@@ -15349,7 +15413,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
 
             // Error when all bindings are discarded — use bare case name instead
             if (bindings.Count > 0 && bindings.All(b => b.Name.StartsWith("__discard_"))) {
-              var underscores = string.Join(", ", bindings.Select(_ => "_"));
+              var underscores = string.Join(", ", bindings.Select(_ => DiscardIdentifier));
               throw new CompileError(ErrorCode.SemanticMatchDiscardedBindings,
                 $"use '{caseNameToken.Value}' instead of '{caseNameToken.Value}({underscores})' to ignore associated values",
                 caseNameToken.Line, caseNameToken.Column);
@@ -16906,7 +16970,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
           caseBindings = [];
           while (!Check(TokenType.RightParen) && !IsAtEnd()) {
             var bindingToken = Expect(TokenType.Identifier);
-            if (bindingToken.Value == "_") {
+            if (bindingToken.Value == DiscardIdentifier) {
               caseBindings.Add(($"__discard_{_discardCounter++}", bindingToken.Line, bindingToken.Column));
             } else {
               CheckReservedDeclName(bindingToken);
@@ -16924,7 +16988,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
           // Mirror ParseMatchPatterns: all-discard `case(_, _)` is rejected — bare case
           // name is the canonical way to ignore payloads.
           if (caseBindings.Count > 0 && caseBindings.All(b => b.Name.StartsWith("__discard_"))) {
-            var underscores = string.Join(", ", caseBindings.Select(_ => "_"));
+            var underscores = string.Join(", ", caseBindings.Select(_ => DiscardIdentifier));
             throw new CompileError(ErrorCode.SemanticMatchDiscardedBindings,
               $"use '{targetEnum!.Name}.{caseNameToken.Value}' instead of '{targetEnum!.Name}.{caseNameToken.Value}({underscores})' to ignore associated values",
               caseNameToken.Line, caseNameToken.Column);
@@ -26654,7 +26718,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
 
     // Add closure parameters to scope
     for (int i = 0; i < paramNames.Count; i++) {
-      if (paramNames[i] != "_" && i < paramTokens.Count) {
+      if (paramNames[i] != DiscardIdentifier && i < paramTokens.Count) {
         CheckNoSelfFieldShadow(paramNames[i], paramTokens[i].Line, paramTokens[i].Column);
         _paramLocations.Add((paramNames[i], paramTokens[i].Line, paramTokens[i].Column));
       }
