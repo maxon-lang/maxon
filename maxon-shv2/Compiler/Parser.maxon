@@ -14462,11 +14462,48 @@ export type Parser
 			end 'wrongArity'
 			return
 		end 'builtinGeneric'
+
+		// ⭐⭐ **AN INTERFACE'S `uses` NAMES ARE ASSOCIATED TYPES, SO `Iterator with Element` IS A BASE THIS
+		// CHECK MUST ANSWER FOR — AND IT ASKED ONLY `structOf`, WHICH AN INTERFACE IS NEVER IN.** The verdict
+		// that followed was `recordBaseNotGeneric`'s "has no associated types", about the one kind of
+		// declaration whose type parameters ARE called associated types — the message contradicting itself at
+		// the exact name it was printed for.
+		//
+		// MEASURED on `stdlib/Array.maxon`, which cannot be listed without it: `typealias ElementIterator =
+		// Iterator with Element` and `typealias ElementIterable = Iterable with (Element, ElementIterator)`
+		// were **E2055** at `:121` and `:122`.
+		//
+		// It goes through `lookupInterface` rather than the raw map for `parseTypeReference`'s stated reason —
+		// that is the ONE lookup rule, and it is what puts the SYNTHESIZED protocols on the same footing as
+		// the user-declared ones. The arity is the interface's OWN `uses` list; an inherited `extends` parent
+		// contributes none, because a parent's associated types are bound by the child's own declaration.
+		match lookupInterface(self.signatures.interfaceMap(), name: baseName) 'interfaceBase'
+			found(iface) then return self.checkInterfaceGenericArity(iface, baseTok: baseTok, argCount: argCount)
+			notFound then break 'interfaceBase'
+		end 'interfaceBase'
+
 		match self.signatures.structOf(baseName) 'base'
 			undeclared then self.recordBaseNotGeneric(baseTok)
 			declared(layout) then self.checkGenericInstanceAgainst(layout, baseTok: baseTok, argCount: argCount)
 		end 'base'
 	end 'checkGenericInstance'
+
+	// The interface half of `checkGenericInstance` — associated-types-at-all, then arity. It mirrors
+	// `checkGenericInstanceAgainst` rather than sharing it because the two read the count off different
+	// declarations (a `StructLayout`'s `uses` list against an `IrInterface`'s associated-type names) and
+	// there is no common handle to pass; both verdicts are the shared `recordBaseNotGeneric` /
+	// `genericArityMismatch` pair, which is where the sentences actually have to agree.
+	function checkInterfaceGenericArity(iface IrInterface, baseTok Token, argCount FieldIndex)
+		let expected = iface.associatedTypeNames.count()
+		if expected == 0 'notGeneric'
+			self.recordBaseNotGeneric(baseTok)
+			return
+		end 'notGeneric'
+
+		if argCount != expected 'wrongArity'
+			self.recordArtifactDiagnostic(ErrorCode.genericArityMismatch, message: "generic type '{String.from(baseTok.value)}' expects {expected} type argument(s), but {argCount} were supplied", range: SourceRange.ofToken(baseTok))
+		end 'wrongArity'
+	end 'checkInterfaceGenericArity'
 
 	// The "has no associated types" verdict (E2055), from its ONE home (P1.6-A). Reached by BOTH halves
 	// of the base check — a `Base` that is not a declared type at all (`structOf` undeclared) and a `Base`
