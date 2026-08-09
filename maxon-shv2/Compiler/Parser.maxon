@@ -1424,6 +1424,12 @@ let sharedEmptyDescriptorScanSites = DescriptorScanSiteArray.create()
 // and it is never mutated in place, so this shared instance is safe across the per-file parse fan-out.
 let sharedEmptyWhereConstraints = WhereConstraintArray.create()
 
+// The answer `readImplementsList` gives for the absent clause, held here for `sharedEmptyWhereConstraints`'
+// reason: every conformance-free `type` and every plain `extension` — nearly the whole corpus — allocates
+// no list at all. Never mutated in place (the reader REPLACES it with a fresh list when the clause is
+// present), so it is safe across the per-file parse fan-out.
+let sharedEmptyInterfaceConformances = InterfaceConformanceArray.create()
+
 // The INITIAL `Parser.siblingReceivers`, held here (like `sharedEmptyTypeParamFeeds`) so a parser
 // allocates none of its own until a bare call inside a type body actually needs the map. The lazy builder
 // REPLACES the field with a fresh map — it never mutates in place — so this placeholder stays empty and is
@@ -12421,15 +12427,21 @@ export type Parser
 		let nameTok = try self.consume(TokenKind.identifier)
 		let target = self.signatures.extensionTargetOf(nameTok.value)
 
+		// ⭐ **THE `implements` CLAUSE IS READ BEFORE THE `where`, WHICH IS THE ORDER THE LANGUAGE WRITES
+		// THEM** (`extension Array implements Hashable, Equatable where Element is Hashable and Equatable`).
+		// It reuses the `type` declaration's own reader — one grammar for one clause — so an associated-type
+		// binding (`implements Iterable with (Element, Iter)`) means here exactly what it means there.
+		let interfaces = try self.readImplementsList()
+
 		if not self.at(TokenKind.where) 'unconditional'
-			return ExtensionHeader.create(nameTok, target: target, constraints: sharedEmptyWhereConstraints)
+			return ExtensionHeader.create(nameTok, target: target, interfaces: interfaces, constraints: sharedEmptyWhereConstraints)
 		end 'unconditional'
 
 		self.enclosingTypeParams = extensionTargetParamNames(target)
 		let constraints = try self.readWhereClause()
 		self.enclosingTypeParams = self.emptyTypeParams
 
-		return ExtensionHeader.create(nameTok, target: target, constraints: constraints)
+		return ExtensionHeader.create(nameTok, target: target, interfaces: interfaces, constraints: constraints)
 	end 'readExtensionHeader'
 
 	// The parser state an extension BODY is read under, for whichever door the extension came through — set
@@ -14958,6 +14970,18 @@ export type Parser
 				satisfied then break 'verdict'
 			end 'verdict'
 
+			// ⭐ **THE EXTENSION'S OWN `implements` IS RECORDED HERE, PAST THE VERDICT, AND THAT POSITION IS THE
+			// WHOLE MEANING OF A CONDITIONAL CONFORMANCE.** `extension Array implements Hashable where Element
+			// is Hashable` says the conformance holds for the conformers that satisfy the clause and for no
+			// others; recorded before the verdict it would claim `Hashable` for every one of them, which is the
+			// same sentence with the condition deleted. The `unmet` arm above has already `continue`d, so a
+			// conformer reaching this line is one the clause admits.
+			//
+			// It is the REAL PARSE that records it and not the fold, for the reason the fold publishes only
+			// signatures: `recordConformance` writes the per-file artifact `checkConformance` later reads, and
+			// the fold runs once per declaration over a shared index that has no file to attribute it to.
+			self.recordExtensionConformance(header, conformer: conformer)
+
 			self.pos = bodyStart
 			self.enterTypeScope(conformer, isEnum: false)
 			self.openExtensionBodyScope(header, conformer: conformer, index: self.signatures)
@@ -15374,8 +15398,40 @@ export type Parser
 	// interface carries its own `with` bindings (R5), which `checkConformance` substitutes into that
 	// interface's requirements before it compares them.
 	function parseTypeImplementsClause(nameTok Token) throws ParseError
-		if not self.at(TokenKind.implements) 'noImplements'
+		let interfaces = try self.readImplementsList()
+		if interfaces.isEmpty() 'noImplements'
 			return
+		end 'noImplements'
+
+		self.artifact.recordConformance(ConformanceDecl.create(nameTok.value, interfaces: interfaces, nameLine: nameTok.line, nameColumn: nameTok.column, filePath: self.filePath))
+	end 'parseTypeImplementsClause'
+
+	// The conformance an `extension <T> implements …` declares on behalf of ONE conformer the `where` clause
+	// admits. Anchored on the extension's own name token, so a requirement the body fails to satisfy is
+	// blamed at the `extension` line the author wrote rather than at the type's distant declaration.
+	//
+	// A plain `extension X` records nothing, which is the empty-list fast path and the whole corpus bar two
+	// files.
+	function recordExtensionConformance(header ExtensionHeader, conformer ByteArray)
+		if header.interfaces.isEmpty() 'addsNoConformance'
+			return
+		end 'addsNoConformance'
+
+		self.artifact.recordConformance(ConformanceDecl.create(conformer, interfaces: header.interfaces, nameLine: header.nameTok.line, nameColumn: header.nameTok.column, filePath: self.filePath))
+	end 'recordExtensionConformance'
+
+	// ⭐ **THE `implements I1, I2 [with …]` LIST ITSELF, WITHOUT DECIDING WHO CONFORMS.** Two headers carry
+	// this clause — a `type` declaration's and an `extension`'s — and they differ only in what they do with
+	// the answer: a type records the conformance against its own name unconditionally, while an extension
+	// records it per CONFORMER and only where the `where` clause is satisfied. Reading it in one place is
+	// what keeps `implements Iterable with (Element, Iter)` one grammar rather than two that agree by hand.
+	//
+	// An absent clause answers the SHARED EMPTY rather than a fresh list, so the whole corpus of plain
+	// `extension X` and conformance-free `type X` allocates nothing — the `sharedEmptyWhereConstraints`
+	// rule, and safe for the same reason: the array is never mutated in place, only replaced.
+	function readImplementsList() returns InterfaceConformanceArray throws ParseError
+		if not self.at(TokenKind.implements) 'noImplements'
+			return sharedEmptyInterfaceConformances
 		end 'noImplements'
 		try self.consume(TokenKind.implements)
 
@@ -15386,8 +15442,8 @@ export type Parser
 			interfaces.push(try self.parseOneConformance())
 		end 'moreInterfaces'
 
-		self.artifact.recordConformance(ConformanceDecl.create(nameTok.value, interfaces: interfaces, nameLine: nameTok.line, nameColumn: nameTok.column, filePath: self.filePath))
-	end 'parseTypeImplementsClause'
+		return interfaces
+	end 'readImplementsList'
 
 	// One `I [with …]` entry of an `implements` list (R5) — the interface name and the arguments bound to
 	// its `uses` names, which are only meaningful as a pair (`InterfaceConformance`).

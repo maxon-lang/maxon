@@ -4996,18 +4996,27 @@ export function extensionTargetConformers(target ExtensionTarget) returns ByteAr
 	end 'target'
 end 'extensionTargetConformers'
 
-// ⭐ **AN `extension <Name> [where …]` HEADER, AS BOTH PASSES READ IT** — `Parser.readExtensionHeader`
-// returns it with the cursor left on the body's first token. The two passes must agree about all three of
-// these (which types get methods, under what condition, and where to blame a malformed clause), so they read
-// one header through one reader rather than each taking the parts it happens to need.
+// ⭐ **AN `extension <Name> [implements …] [where …]` HEADER, AS BOTH PASSES READ IT** —
+// `Parser.readExtensionHeader` returns it with the cursor left on the body's first token. The two passes
+// must agree about all four of these (which types get methods, what conformance the extension ADDS, under
+// what condition, and where to blame a malformed clause), so they read one header through one reader rather
+// than each taking the parts it happens to need.
 export type ExtensionHeader
 	export let nameTok as Token
 	export let target as ExtensionTarget
+	// ⭐ **THE `implements I1, I2` AN EXTENSION DECLARES ON BEHALF OF THE EXTENDED TYPE — a CONDITIONAL
+	// conformance when the header also carries a `where`.** Empty for the plain `extension X` that only adds
+	// methods, which is the whole corpus bar `stdlib/Array.maxon:637` and `stdlib/PrimitiveExtensions.maxon`.
+	//
+	// It is read HERE rather than by the real parse alone because the cursor must land on the body's first
+	// token identically in both passes: the fold reads the same header and would otherwise stop at
+	// `implements` and publish no signature for a single member of the body.
+	export let interfaces as InterfaceConformanceArray
 	// Empty for an unconditional `extension` — the whole existing corpus.
 	export let constraints as WhereConstraintArray
 
-	export static function create(nameTok Token, target ExtensionTarget, constraints WhereConstraintArray) returns ExtensionHeader
-		return Self{nameTok: nameTok, target: target, constraints: constraints}
+	export static function create(nameTok Token, target ExtensionTarget, interfaces InterfaceConformanceArray, constraints WhereConstraintArray) returns ExtensionHeader
+		return Self{nameTok: nameTok, target: target, interfaces: interfaces, constraints: constraints}
 	end 'create'
 end 'ExtensionHeader'
 
