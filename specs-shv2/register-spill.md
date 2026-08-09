@@ -1426,3 +1426,146 @@ end 'main'
 ```exitcode
 0
 ```
+
+<!-- test: a-twice-spilled-value-reloads-after-its-own-store -->
+A SPILL STORE IS A USE OF THE VALUE IT STORES, AND IT MUST NEVER ANCHOR A RELOAD.
+
+`storeSlotReg slot, v` READS `v`, so `buildUseIndex` records it as an ordinary use of `v`.
+When the SAME value is spilled a SECOND time at a deeper peak, `spillOneValue` walks the use
+thread and reaches that store's record. Served like any other use, it anchors a reload at the
+store's OWN position — splicing `loadRegSlot fresh, slot` IMMEDIATELY BEFORE the only op that
+ever writes that slot. `rewriteOpAt` then correctly declines to repoint the store itself, but
+the reload is already there and the REST of the run is repointed at it, so the run's real uses
+read a stack slot nothing has written.
+
+Here the `let`-bound array is that twice-spilled value: it is live across BOTH loops, and the
+single interpolation reading both accumulators at the end is what raises the second peak. The
+emitted `entry` block read
+
+	callDirect  __arr_create      ; the array, in r8
+	loadRegSlot  rcx, slot0       ; <- reload of a slot NOTHING has written
+	storeSlotReg slot0, r8        ; <- the store it was spliced ahead of
+	callDirect  __arr_push        ; receiver rcx = uninitialised frame slot
+
+which faults. ALL FOUR of these are required and dropping any ONE hides it (see the near
+misses below): a `let`-bound array, TWO `for..in` loops, self-referencing accumulation in
+each, and both accumulators read in ONE interpolation.
+```maxon
+function main() returns ExitCode
+	let b = [72]
+	var one = ""
+	for x in b 'eachOne'
+		one = "{one}{x}"
+	end 'eachOne'
+	var two = ""
+	for x in b 'eachTwo'
+		two = "{two}{x}"
+	end 'eachTwo'
+	print("{one} {two}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+72 72
+```
+
+<!-- test: one-loop-does-not-raise-the-second-peak -->
+NEAR MISS — drops condition 2 (two loops). One loop spills the array at most once, so no split
+ever reaches a store's use record.
+```maxon
+function main() returns ExitCode
+	let b = [72]
+	var one = ""
+	for x in b 'eachOne'
+		one = "{one}{x}"
+	end 'eachOne'
+	print("{one}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+72
+```
+
+<!-- test: two-accumulators-printed-separately -->
+NEAR MISS — drops condition 4 (both accumulators read in ONE interpolation). Two separate
+`print`s never make both accumulators live at once, so the second peak stays below the pool.
+```maxon
+function main() returns ExitCode
+	let b = [72]
+	var one = ""
+	for x in b 'eachOne'
+		one = "{one}{x}"
+	end 'eachOne'
+	var two = ""
+	for x in b 'eachTwo'
+		two = "{two}{x}"
+	end 'eachTwo'
+	print("{one}\n")
+	print("{two}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+72
+72
+```
+
+<!-- test: two-loops-without-self-referencing-accumulation -->
+NEAR MISS — drops condition 3 (self-referencing accumulation). Without reading the accumulator
+back, each loop body holds one fewer live String across its own peak.
+```maxon
+function main() returns ExitCode
+	let b = [72]
+	var one = ""
+	for x in b 'eachOne'
+		one = "{x}"
+	end 'eachOne'
+	var two = ""
+	for x in b 'eachTwo'
+		two = "{x}"
+	end 'eachTwo'
+	print("{one} {two}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+72 72
+```
+
+<!-- test: a-twice-spilled-value-read-on-every-iteration -->
+The same four conditions with a two-element array, so each loop iterates more than once and the
+reload-before-store is read on every iteration rather than only on the first.
+```maxon
+function main() returns ExitCode
+	let b = [72, 73]
+	var one = ""
+	for x in b 'eachOne'
+		one = "{one}{x}"
+	end 'eachOne'
+	var two = ""
+	for x in b 'eachTwo'
+		two = "{two}{x}"
+	end 'eachTwo'
+	print("{one} {two}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+7273 7273
+```

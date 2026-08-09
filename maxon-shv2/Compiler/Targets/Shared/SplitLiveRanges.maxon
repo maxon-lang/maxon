@@ -5149,6 +5149,34 @@ function spillOneValue(module TargetModule, index UseIndex, cfg FuncCfg, livenes
 				continue
 			end 'beforePeakUseKeepsTheOriginal'
 
+			// A SPILL STORE MUST NEVER ANCHOR A RELOAD — it is the one use of the value that a reload
+			// cannot be placed before. `storeSlotReg slot, valueId` READS the value, so `buildUseIndex`
+			// records it as an ordinary use; but it is also the ONLY op that ever WRITES that slot, and
+			// `insertReloadFor` anchors at the use's own position, which puts the `loadRegSlot` AHEAD of
+			// it. The reload then reads the slot before anything has written it — and because
+			// `rewriteOpAt` deliberately declines to repoint the store (it must keep reading the
+			// ORIGINAL), the reload serves nobody but the REST of the run, every member of which is
+			// repointed at that garbage.
+			//
+			// ⚠ IT TAKES A VALUE SPILLED TWICE to get here at all, which is why it hid: the store only
+			// exists from the FIRST split, and only a SECOND split of that same value walks over it. The
+			// measured case was an `everyUse` split (tier 4), and that is the common route — a store is
+			// anchored at the value's def, so it usually precedes a later peak and the before-peak skip
+			// above already covers it. But that is a TENDENCY, NOT AN INVARIANT: a def sitting
+			// immediately before the peak puts its store at or after `peakSeq`, and then an
+			// `afterPeakUses` split reaches it too. So this guard is unconditional rather than scoped to
+			// `everyUse`.
+			//
+			// It asks `OpVariantFacts.slotRoleOf`, which is the SAME question `rewriteOpAt` asks from the
+			// same memo. Written as its own predicate here, the placer and the rewriter cannot drift into
+			// disagreeing about which ops are spill stores — the drift that WAS this bug: the rewriter
+			// knew, and the placer did not.
+			if useIsSpillStore(module, index: index, record: record, opFacts: liveness.opFacts) 'theStoreWritesTheSlotAReloadWouldRead'
+				j = j + 1
+				record = index.nextUseOf(record)
+				continue
+			end 'theStoreWritesTheSlotAReloadWouldRead'
+
 			let blockLocal = index.useBlockAt(record)
 			insertReloadFor(module, cfg: cfg, index: index, useRecord: record, valueId: valueId, freshId: freshId, slot: slot, placement: placement, edits: edits)
 			// The reload id derives from the value it reloads — record it so a reload id in an
@@ -5683,6 +5711,24 @@ function rewriteOpAt(module TargetModule, opIdx OpIndex, from ValueId, to ValueI
 	end 'noUse'
 	try module.ops.set(opIdx, value: substituteValueInOp(op, from: from, to: to)) otherwise panic("rewriteOpAt: ops.set OOB")
 end 'rewriteOpAt'
+
+// Is this use record the SPILL STORE of the value it names? A `storeSlotReg slot, v` reads `v`, so it
+// is a use record like every other — and it is the one use a reload must never be anchored on, for
+// exactly the reason `rewriteOpAt` refuses to repoint it: the store is the only WRITER of the slot,
+// and a reload anchored at its position is spliced ahead of it, reading the slot unwritten.
+//
+// An EDGE use is anchored on its block's TERMINATOR, which is never a spill store (the splitter
+// inserts stores and reloads as BODY ops), so it answers false without a lookup.
+function useIsSpillStore(module TargetModule, index UseIndex, record UseRecordIndex, opFacts OpVariantFacts) returns bool
+	match index.useKindAt(record) 'kind'
+		op then break 'kind'
+		edge then return false
+	end 'kind'
+
+	let opIdx = index.useOpAt(record)
+	let op = try module.ops.get(opIdx) otherwise panic("useIsSpillStore: use record {record} reads through op {opIdx}, which is not in module.ops")
+	return opFacts.slotRoleOf(op) == OpSlotRole.spillStore
+end 'useIsSpillStore'
 
 function opUsesValue(op TargetOp, valueId ValueId, buf OperandList) returns bool
 	targetOpOperands(op, buf: buf)
