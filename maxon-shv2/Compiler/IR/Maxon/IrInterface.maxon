@@ -1781,11 +1781,21 @@ end 'builtinConformerName'
 // method symbol can wear `String.`. **Remove `String` from that list and this line becomes false**, in the
 // silent direction — see that function for the two wrong answers measured before it covered the name.
 //
-// ⚠ Its OTHER half is discharged by a door rather than by a rule: a source-written `String.<member>(…)` is
-// intercepted by `Parser.parseStringStaticCall` at its own span (E2015, naming the two statics the reference
-// exports) and never reaches `Parser.requireCalleeIsNotReservedName`, so admitting the qualifier here cannot
-// turn a user's `String.` call into an "unknown compiler intrinsic". `character-conformance`'s twin does not
-// arise: `Character.` is absent below.
+// ⛔⛔ **ITS OTHER HALF USED TO BE DISCHARGED BY A DOOR, AND THAT DOOR IS GONE — SO THE HAZARD IT NAMED IS
+// LIVE, AND IT WAS LIVE BEFORE THE DOOR WENT.** This paragraph read *"a source-written `String.<member>(…)`
+// is intercepted by `Parser.parseStringStaticCall` at its own span and never reaches
+// `Parser.requireCalleeIsNotReservedName`, so admitting the qualifier here cannot turn a user's `String.`
+// call into an 'unknown compiler intrinsic'."* W17 gave that door a corpus fall-through, which forwards a
+// member `stdlib/String.maxon` declares STRAIGHT to `parseCallNamed` — so `String.hash(…)` reached the
+// reserved-callee gate from that release onwards, and W50's removal of the door only widened which spellings
+// do. MEASURED on both: **`E3004 call to undefined function 'String.hash': the '__' prefix names a compiler
+// intrinsic, and no intrinsic of that name exists`** — a message whose stated REASON is false of a name
+// carrying no `__` at all.
+//
+// ⇒ **THE MESSAGE IS NOW DERIVED FROM WHICH CLAUSE OF `MmRuntime.isCompilerInternalCallee` MATCHED**
+// (`ParseError.unknownCompilerIntrinsic` carries the reason), so a synthesized conformance impl named
+// directly is refused for being one rather than for a prefix it does not have. `character-conformance`'s
+// twin does not arise here: `Character.` is absent below.
 //
 // The conformers listed here are exactly those `builtinConformerOfTag` can return, because those are the
 // only qualifiers the parser can emit a direct dispatch under. A tag joins that map and this one together.
@@ -1832,10 +1842,11 @@ end 'isBuiltinConformanceImplName'
 // close. One predicate cannot serve both, because the two answers only ever differed once a DECLARATION
 // could wear a compiler-owned qualifier, and that is precisely what W17 made possible.
 //
-// ⚠ **IT KEEPS ALL FOUR QUALIFIERS, INCLUDING `String`, AND THAT IS SAFE FOR A DOOR REASON RATHER THAN A
-// NAME REASON.** Its one caller is reached only from the PRIMITIVE static path; a source-written
-// `String.<member>(…)` is intercepted by `Parser.parseStringStaticCall` at its own span and never arrives
-// here — the same door-not-rule argument the header above already makes about that spelling.
+// ⚠ **IT KEEPS ALL FOUR QUALIFIERS, INCLUDING `String`, AND WHAT MAKES THAT SAFE IS THE CALLER'S GATE.** Its
+// one caller (`Parser.requirePrimitiveStaticIsResolvable`) sits behind `namesAPrimitiveType`, which admits
+// `int`/`float`/`bool`/`byte` and no other spelling — so a `String.` qualifier cannot reach here whatever
+// door it came through. That is a fact about the CALLER and survives the removal of
+// `parseStringStaticCall` (W50), where the header above's version of the argument did not.
 export function isBuiltinConformanceQualifier(name ByteArray) returns bool
 	return match splitQualifiedName(name) 'parts'
 		notQualified gives false
