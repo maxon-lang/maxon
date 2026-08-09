@@ -614,3 +614,516 @@ end 'main'
 ```exitcode
 0
 ```
+
+<!-- test: a-user-type-can-be-a-map-key -->
+⭐⭐ **THE CAPABILITY THE RETIREMENT BOUGHT (W41), and it is the reason the retirement was worth
+doing rather than a like-for-like swap.** While `Map` was SYNTHESIZED its keys were a fixed roster of
+four — `int`, `String`, `Character`, `Array` — and anything else was refused outright with *"a
+'<Type>' key is a later slice"*. `Map` is `stdlib/Map.maxon` now, declared
+`where Key is Hashable and Equatable`, so **the roster is not a list any more: it is the constraint**,
+and a user type that declares both conformances is a key like any other.
+
+Measured against the C# bootstrap on this exact program: **both compilers exit 42.**
+
+⛔⛔ **THE UPSERTS ARE IN A LOOP, AND THAT IS THE WHOLE POINT OF THE SHAPE (W41-trivial).** This case
+was written with two STRAIGHT-LINE `upsert`s, and it passed for a reason that had nothing to do with
+the capability it advertised: a straight-line `Point.create(…)` temporary is promoted to a binding of
+`main`'s OWN frame (`giveTemporaryScopeLifetime`), so it happens to outlive every read that follows.
+Put the identical inserts in a loop and the promotion scopes them to the **loop body**, which frees
+each key at the end of its iteration while the map still points at it — **`total 0` where the oracle
+prints `total 15`, exit 0, no diagnostic**. The map's `count()` was right the whole time; every key in
+it was dangling. A capability that evaporates the moment its subject is written in a loop was not a
+capability, and a case that cannot tell the difference was not testing one.
+
+⚠ The `hash()` return type must be `HashValue` and not merely some `int` alias of the same span. The
+oracle refuses `returns Val` with `E3016: Partial interface implementation … expected hash() returns
+HashValue`; shv2 accepts it, because its signature match erases a ranged alias to its underlying
+primitive where the bootstrap compares the alias NAME. That divergence is PRE-EXISTING and is not
+this case's subject — it is recorded here because this is the program that surfaces it, and a reader
+who writes `returns Val` will otherwise get a green shv2 and a red oracle with no idea why.
+```maxon
+typealias Val = int(i64.min to i64.max)
+
+type Point implements Hashable, Equatable
+	export var x as Val
+	export var y as Val
+
+	export static function create(x Val, y Val) returns Self
+		return Self{x: x, y: y}
+	end 'create'
+
+	export function hash() returns HashValue
+		return x * 31 + y
+	end 'hash'
+
+	export function equals(other Self) returns bool
+		return x == other.x and y == other.y
+	end 'equals'
+end 'Point'
+
+typealias PointMap = Map with (Point, Val)
+
+function main() returns ExitCode
+	var m = PointMap.create()
+	for i in 1 upto 4 'fill'
+		m.upsert(Point.create(i, y: i * 2), value: i * 7)
+	end 'fill'
+	return (try m.get(Point.create(1, y: 2)) otherwise 0) + (try m.get(Point.create(2, y: 4)) otherwise 0) + (try m.get(Point.create(3, y: 6)) otherwise 0)
+end 'main'
+```
+```exitcode
+42
+```
+
+### A TRIVIAL key column is co-owned, and survives every rehash its load factor triggers
+
+⭐⭐ **THE TRIVIAL-KEY TWIN OF THE TWO MANAGED-COLUMN CASES BELOW, AND IT WAS THE ONE THAT WAS
+MISSING (W41-trivial).** A `String` key and a `String`-owning-struct key both reach the map by being
+**CONSUMED** — `typeArgIsOwned` says they own heap, so the call site MOVES them in and the column's
+own element walk frees them. An all-scalar struct key answers that question `false` and was therefore
+**BORROWED**, with a scope-lifetime extension as its entire protection; the container outlives the
+scope in every loop, so the column held dangling keys and every `get` missed.
+
+The cure is that a trivial aggregate key is **CO-OWNED**, exactly as a trivial `Box with Point`
+constructor field already was: the call site takes a real `__mm_retain`, and the column's element walk
+releases it. Both ends read `typeIsManaged`, so the descriptor's `retainFunc@64` and its
+`destroyFunc@40` are non-zero together — they used to read two DIFFERENT questions, which is the same
+defect stated at the descriptor.
+
+The three sizes are not decoration. **5** is below the first `grow()`, **50** crosses it three times
+(16 → 32 → 64 → 128) and **500** eight; a rehash re-inserts every key through the shared body's
+BORROWED path, so a fix that landed only on the concrete call site would be green at 5 and red at 50.
+
+<!-- test: trivial-key-column-survives-rehash -->
+```maxon
+typealias Val = int(i64.min to i64.max)
+
+type Point implements Hashable, Equatable
+	export var x as Val
+	export var y as Val
+
+	export static function create(x Val, y Val) returns Self
+		return Self{x: x, y: y}
+	end 'create'
+
+	export function hash() returns HashValue
+		return x * 31 + y
+	end 'hash'
+
+	export function equals(other Self) returns bool
+		return x == other.x and y == other.y
+	end 'equals'
+end 'Point'
+
+typealias PointMap = Map with (Point, Val)
+
+function build(n Val) returns Val
+	var m = PointMap.create()
+	for i in 0 upto n 'fill'
+		m.upsert(Point.create(i, y: i * 3), value: i)
+	end 'fill'
+	var seen = 0 as Val
+	for i in 0 upto n 'read'
+		seen = seen + (try m.get(Point.create(i, y: i * 3)) otherwise -1)
+	end 'read'
+	if seen != (n * (n - 1)) / 2 'sum'
+		return -1
+	end 'sum'
+	return m.count() as Val
+end 'build'
+
+function main() returns ExitCode
+	print("5 {build(5)} 50 {build(50)} 500 {build(500)}")
+	return 0
+end 'main'
+```
+```stdout
+5 5 50 50 500 500
+```
+```exitcode
+0
+```
+
+### A trivial KEY beside a managed VALUE — the two columns take different protocols in one map
+
+The pair that proves the descriptor is read **per type parameter** and not once per instance: the key
+column co-owns a trivial aggregate by `__mm_retain`, the value column consumes a `String` outright, and
+the two blocks sit at `layoutBlockOffsetFor(0)` and `(1)` of one `__layout_Map_Point_String`. Stamping
+one column's protocol into the other's block is the wild free `managedOpaqueArrayElementOf` already
+carries the measurement for (W43b), so a map whose two arguments DISAGREE about their protocol is the
+program that would find it again. The value is read back and compared, so a rehash that merely
+survived without faulting would still fail here.
+
+<!-- test: trivial-key-with-managed-value-column -->
+```maxon
+typealias Val = int(i64.min to i64.max)
+
+type Point implements Hashable, Equatable
+	export var x as Val
+	export var y as Val
+
+	export static function create(x Val, y Val) returns Self
+		return Self{x: x, y: y}
+	end 'create'
+
+	export function hash() returns HashValue
+		return x * 31 + y
+	end 'hash'
+
+	export function equals(other Self) returns bool
+		return x == other.x and y == other.y
+	end 'equals'
+end 'Point'
+
+typealias PointStrMap = Map with (Point, String)
+
+function main() returns ExitCode
+	var m = PointStrMap.create()
+	for i in 0 upto 40 'fill'
+		m.upsert(Point.create(i, y: i * 3), value: "value number {i}, long enough to escape any small-string envelope")
+	end 'fill'
+	var seen = 0
+	for i in 0 upto 40 'read'
+		if (try m.get(Point.create(i, y: i * 3)) otherwise "").equals("value number {i}, long enough to escape any small-string envelope") 'hit'
+			seen = seen + 1
+		end 'hit'
+	end 'read'
+	print("hits {seen} count {m.count()}")
+	return 0
+end 'main'
+```
+```stdout
+hits 40 count 40
+```
+```exitcode
+0
+```
+
+### A managed KEY column survives the rehash its load factor triggers
+
+⛔ **The rehash double-freed every entry, and the suite was 4769/0 over it because no case had ever
+built a managed-column map past its load factor.** `Map.grow()` reads a BORROWED key out of the old
+column and hands it to `insertAtSlot`, whose parameter is enrolled OWNED and moved into the new one — so
+the new array's element walk and the old array's each destroyed the same record. `Map with (String, …)`
+printed the right answer for 12 entries and **segfaulted at 13**, which is exactly `trunc(16 * 3/4) + 1`:
+the first insert that calls `grow()`. The oracle prints `count 200` on the identical program.
+
+The guard is the ENTRY COUNT and nothing else, so this case crosses the threshold three times over
+(16 → 32 → 64 → 128 → 256): a case that stopped at 12 would be green on the defect.
+
+<!-- test: managed-key-column-survives-rehash -->
+```maxon
+typealias Count = int(i64.min to i64.max)
+typealias StrMap = Map with (String, Count)
+
+function build(n Count) returns Count
+	var m = StrMap.create()
+	for i in 0 upto n 'fill'
+		m.upsert("key number {i}, long enough to escape any small-string envelope", value: i)
+	end 'fill'
+	var seen = 0 as Count
+	for i in 0 upto n 'read'
+		seen = seen + (try m.get("key number {i}, long enough to escape any small-string envelope") otherwise 0)
+	end 'read'
+	if seen != (n * (n - 1)) / 2 'sum'
+		return -1
+	end 'sum'
+	return m.count() as Count
+end 'build'
+
+function main() returns ExitCode
+	print("count {build(200)}")
+	return 0
+end 'main'
+```
+```stdout
+count 200
+```
+```exitcode
+0
+```
+
+### A managed AGGREGATE column survives the rehash too — the retain arm, not the clone arm
+
+The same store, one ownership protocol along: a `String` column takes its reference by COPYING
+(`__str_clone`, because an immortal `.rdata` record admits no incref) and an aggregate takes it with a
+real `__mm_retain`. Both words are read out of the same layout descriptor, so a fix landing on only one
+of them would leave this red — and it was red identically (`0xC0000005` at the first `grow()`) where the
+oracle prints `total 21190`. The value is read back and summed, so a rehash that merely survived without
+faulting would still fail here.
+
+<!-- test: managed-aggregate-column-survives-rehash -->
+```maxon
+typealias Count = int(i64.min to i64.max)
+
+type Tagged
+	var label as String
+	var n as Count
+
+	export static function create(label String, n Count) returns Self
+		return Self{label: label, n: n}
+	end 'create'
+
+	export function score() returns Count
+		return n + label.byteLength() as Count
+	end 'score'
+end 'Tagged'
+
+typealias TaggedMap = Map with (Count, Tagged)
+
+function build(n Count) returns Count
+	var m = TaggedMap.create()
+	for i in 0 upto n 'fill'
+		m.upsert(i, value: Tagged.create("tag {i}", n: i))
+	end 'fill'
+	var total = 0 as Count
+	for i in 0 upto n 'read'
+		let t = try m.get(i) otherwise panic("Map lost an entry across its rehash")
+		total = total + t.score()
+	end 'read'
+	return total
+end 'build'
+
+function main() returns ExitCode
+	print("total {build(200)}")
+	return 0
+end 'main'
+```
+```stdout
+total 21190
+```
+```exitcode
+0
+```
+
+## The `[k: v]` LITERAL is the same map — the door the retirement missed (W41-lit)
+
+⭐⭐ **EVERY `Map` DOOR WAS GATED BY THE RETIREMENT SWITCH EXCEPT THE LITERAL.** `Map` is
+`stdlib/Map.maxon` now, and `ProgramSignatures.isMapBaseName` answering false for a declared `Map` is
+what retires the synthesized record at every door that asks it. `Parser.parseMapLiteralBody` asked
+none of them for its COLUMN RULES: it called `requireMapColumnTypes` — the *builtin's* rule —
+directly, and it moved each column value in under the *builtin's* ownership protocol. So a `[k: v]`
+literal and the `create()` + `upsert` spelling of the identical map were two different containers,
+which is the one thing that function's own header has always promised they are not.
+
+The four cases below are the two halves of that, each with its regression pin. Every one is measured
+against the C# bootstrap on the exact program.
+
+### A user `Hashable` key is a literal's key too
+
+⭐ **THE GATE HALF.** `map.md`'s `a-user-type-can-be-a-map-key` pins a user `Point` reaching a map
+through `PointMap.create()` + `upsert`; the byte-identical key written in a LITERAL was
+**`error E2015: … a key must be one of int, String, Character, Array — a 'Point' key is a later
+slice`** — the retired builtin's own roster sentence, quoted by the one door that never learned the
+roster was gone. Both compilers exit **42** on this program.
+
+<!-- test: literal.user-type-key -->
+```maxon
+typealias Val = int(i64.min to i64.max)
+
+type Point implements Hashable, Equatable
+	export var x as Val
+	export var y as Val
+
+	export static function create(x Val, y Val) returns Self
+		return Self{x: x, y: y}
+	end 'create'
+
+	export function hash() returns HashValue
+		return x * 31 + y
+	end 'hash'
+
+	export function equals(other Self) returns bool
+		return x == other.x and y == other.y
+	end 'equals'
+end 'Point'
+
+function main() returns ExitCode
+	let m = [Point.create(1, y: 2): 7, Point.create(3, y: 4): 11, Point.create(5, y: 6): 24]
+	var total = 0 as Val
+	for i in 1 upto 4 'read'
+		total = total + (try m.get(Point.create(i * 2 - 1, y: i * 2)) otherwise panic("map literal lost a user-type key"))
+	end 'read'
+	print("total {total} count {m.count()}")
+	return total as ExitCode
+end 'main'
+```
+```stdout
+total 42 count 3
+```
+```exitcode
+42
+```
+
+### A literal's key column outlives the frame that built it
+
+⚠ **THE KEY HALF OF THE OWNERSHIP QUESTION, WHICH THE STRAIGHT-LINE CASE ABOVE CANNOT ASK.** An
+all-scalar `Point` is `typeArgIsOwned` FALSE, so `Map.upsert` BORROWS it and the call site takes the
+second reference (`coOwnConcreteAggregateFeed`) — the arrangement `trivial-key-column-survives-rehash`
+pins for the written spelling. Reading it back inside the builder's own frame passes whether or not
+that reference was ever taken, because the builder's temporaries are still alive there. Returning the
+map is what makes the reference load-bearing: the keys' own frame is gone by the time `main` reads
+them.
+
+Both compilers print `total 42 count 3` and exit **42**.
+
+<!-- test: literal.user-type-key-escapes-its-builder -->
+```maxon
+typealias Val = int(i64.min to i64.max)
+
+type Point implements Hashable, Equatable
+	export var x as Val
+	export var y as Val
+
+	export static function create(x Val, y Val) returns Self
+		return Self{x: x, y: y}
+	end 'create'
+
+	export function hash() returns HashValue
+		return x * 31 + y
+	end 'hash'
+
+	export function equals(other Self) returns bool
+		return x == other.x and y == other.y
+	end 'equals'
+end 'Point'
+
+typealias PointMap = Map with (Point, Val)
+
+function build() returns PointMap
+	return [Point.create(1, y: 2): 7, Point.create(3, y: 4): 11, Point.create(5, y: 6): 24]
+end 'build'
+
+function main() returns ExitCode
+	let m = build()
+	var total = 0 as Val
+	for i in 1 upto 4 'read'
+		total = total + (try m.get(Point.create(i * 2 - 1, y: i * 2)) otherwise panic("map literal lost a user-type key"))
+	end 'read'
+	print("total {total} count {m.count()}")
+	return total as ExitCode
+end 'main'
+```
+```stdout
+total 42 count 3
+```
+```exitcode
+42
+```
+
+### An AGGREGATE value column in a literal leaks nothing
+
+⛔⛔ **THE OWNERSHIP HALF, AND IT WAS AN OUTRIGHT LEAK: exit 101 where the oracle exits 42.** The
+literal desugars to `Map.create()` plus one `Map.upsert(map, key, value:)` per pair — an ORDINARY
+call, whose arguments the ordinary machinery transfers or co-owns (`applyCallerConsume`). The literal
+ALSO ran the synthesized record's move-in (`moveColumnValueIntoTable`), which drains the value from
+the statement's pending drops because `__map_upsert` is a runtime call with no signature to read. Two
+protocols on one value: the map took its reference and the statement no longer released its own.
+
+⚠ **ONLY AN AGGREGATE COLUMN SHOWED IT, WHICH IS WHY THE SUITE WAS GREEN OVER IT.** The two
+protocols AGREE for every column the suite had a literal for: an `int` column owns no record and
+moves nothing, and a `String` column is `typeArgIsOwned` TRUE, so the ordinary machinery MOVES it —
+exactly what the literal had already done. An all-scalar struct is the one class the call site
+BORROWS, and there the drained temporary is a reference nobody releases.
+
+<!-- test: literal.aggregate-value-column -->
+```maxon
+typealias Val = int(i64.min to i64.max)
+
+type Pair
+	export var a as Val
+	export var b as Val
+
+	export static function create(a Val, b Val) returns Self
+		return Self{a: a, b: b}
+	end 'create'
+
+	export function sum() returns Val
+		return a + b
+	end 'sum'
+end 'Pair'
+
+function main() returns ExitCode
+	let m = [1: Pair.create(3, b: 4), 2: Pair.create(10, b: 25)]
+	let first = try m.get(1) otherwise panic("map literal lost an aggregate value")
+	let second = try m.get(2) otherwise panic("map literal lost an aggregate value")
+	let total = first.sum() + second.sum()
+	print("total {total} count {m.count()}")
+	return total as ExitCode
+end 'main'
+```
+```stdout
+total 42 count 2
+```
+```exitcode
+42
+```
+
+### A MANAGED column pair through a literal — the regression pin the two fixes must not move
+
+⚠ **THE COLUMNS THAT WERE ALREADY RIGHT, PINNED SO THAT MAKING THE AGGREGATE ONE RIGHT CANNOT BREAK
+THEM.** A `String` key and a `String` value are `typeArgIsOwned` TRUE and therefore CONSUMED at the
+call, which is the arm where the literal's own move-in and the ordinary call machinery happened to
+agree — so this program was green before either fix and its whole job is to still be green after.
+Read back and printed rather than merely counted: a lost reference here is a use-after-free, not a
+missing entry, and `count()` cannot see one.
+
+⚠ **ITS GOLDEN IS THE ONE FRAGMENT IN THE WHOLE SUITE THAT MOVED, and the movement is ORDER and not
+content.** Measured against the merge base built the same way: 1014 fragments drift before, 1015
+after, and the set difference is exactly this case. The emitted call sequence is identical —
+`Map.create`, three `Map.upsert`, the same six `__mm_alloc` + `__str_copy` literal promotions, the
+same `__destruct_Map_String_String` — because the promotion of a borrowed `.rdata` String is the same
+act wherever it is emitted. What moved is WHEN: it used to happen inside the literal parse and now
+happens inside `emitCall`, which runs after `Map.create` rather than before it. More values are
+therefore live across that call and the allocator spills four more slots (`prologue 152` → `184`).
+That is the price of the literal and the written `upsert` sharing ONE ownership protocol, and it is
+paid only on this path.
+
+<!-- test: literal.managed-column-pair -->
+```maxon
+function main() returns ExitCode
+	let m = ["alpha": "one", "beta": "two", "gamma": "three"]
+	let a = try m.get("alpha") otherwise panic("map literal lost a String key")
+	let g = try m.get("gamma") otherwise panic("map literal lost a String key")
+	print("{a}/{g} count {m.count()}")
+	return m.count() as ExitCode
+end 'main'
+```
+```stdout
+one/three count 3
+```
+```exitcode
+3
+```
+
+### A literal key that conforms to NEITHER is still refused, at the literal
+
+⛔ **THE REFUSAL THE GATE FIX MUST NOT LOSE.** A literal is the one door a map can be born through
+with no `with (K, V)` annotation to anchor an E3017 on, so dropping the builtin's roster without
+putting anything in its place would admit a key nothing can hash. It is `Map`'s OWN declared
+`where Key is Hashable and Equatable` that refuses it now — the same sentence, code and shape a
+written `typealias OpaqueMap = Map with (Opaque, Val)` gets (`array-conditional-conformance-withheld`'s
+`error.a-key-type-nothing-conforms-for-still-reads-as-a-later-slice`) — anchored on the literal's
+first key, which is the only position the program offers.
+
+<!-- test: error.literal-key-conforming-to-neither -->
+```maxon
+typealias Val = int(i64.min to i64.max)
+
+type Opaque
+	export var x as Val
+
+	export static function create(x Val) returns Self
+		return Self{x: x}
+	end 'create'
+end 'Opaque'
+
+function main() returns ExitCode
+	let m = [Opaque.create(1): 5]
+	return m.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3017: <fragment>:13:11: Type 'Opaque' does not satisfy constraint 'Hashable' required by type parameter 'Key' of 'Map'
+error E3017: <fragment>:13:11: Type 'Opaque' does not satisfy constraint 'Equatable' required by type parameter 'Key' of 'Map'
+```

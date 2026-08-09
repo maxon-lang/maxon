@@ -285,9 +285,17 @@ export typealias DeclaredConformanceMap = Map with (ByteArray, InterfaceNameSet)
 // instantiation. Runs AFTER `queryProgramSignatures` (the instances are interned by then) and reads the
 // DECLARED conformances `checkConformance` already validated (E3016), so a type reaching here as conforming has
 // a complete, correct implementation. A program with no constrained instantiation short-circuits allocation-free.
+//
+// ⭐⭐ **AN INSTANTIATION NEED NOT HAVE BEEN WRITTEN AS A `typealias`, AND THE ONE THAT IS NOT WAS THE ONE
+// GOING UNCHECKED (W41-lit).** `[k: v]` interns a `Map with (K, V)` from its first pair — a real
+// instantiation of a real constrained generic, with a real source position and no type name anywhere in the
+// program. The token SWEEP that fills `instantiationSites` reads `typealias` declarations, so it structurally
+// cannot see one; the PARSER records it instead (`Project.inferredInstantiationSites`). Both lists are walked
+// here, by one loop over one rule, because *"does this type argument satisfy the base's `where` clause"* is
+// one question and a second copy of it would be free to answer the literal differently from the alias.
 export function checkWhereConstraints(project Project, signatures ProgramSignatures)
-	let sites = signatures.instantiationSites()
-	if sites.count() == 0 'noSites'
+	let aliasSites = signatures.instantiationSites()
+	if aliasSites.count() == 0 and project.inferredInstantiationSites.count() == 0 'noSites'
 		return
 	end 'noSites'
 
@@ -300,10 +308,20 @@ export function checkWhereConstraints(project Project, signatures ProgramSignatu
 	end 'malformedProject'
 
 	let declared = declaredConformanceIndex(project)
+	// The DECLARED sites first, so a program whose alias and whose literal both name an inadmissible argument
+	// is reported against the declaration the author wrote before the one the compiler inferred.
+	checkInstantiationSites(project, signatures: signatures, declared: declared, sites: aliasSites)
+	checkInstantiationSites(project, signatures: signatures, declared: declared, sites: project.inferredInstantiationSites)
+end 'checkWhereConstraints'
+
+// Validate every site in one list. The two lists this check reads differ in where they were RECORDED — a
+// `typealias` by the token sweep, a bracketed literal by the parser — and in nothing the rule can see, so
+// the walk is written once rather than once per provenance.
+function checkInstantiationSites(project Project, signatures ProgramSignatures, declared DeclaredConformanceMap, sites GenericInstantiationSiteArray)
 	for site in sites 'eachSite'
 		checkOneInstantiation(project, signatures: signatures, declared: declared, site: site)
 	end 'eachSite'
-end 'checkWhereConstraints'
+end 'checkInstantiationSites'
 
 // ⭐ **`<Type> from "…"` REQUIRES `implements InitableFromStringLiteral` — checked HERE, at the merge, for
 // `checkWhereConstraints`' reason (BATCH2 slice 3).** The construction is sugar for `<Type>.init(<literal>)`
@@ -351,13 +369,41 @@ function checkOneInstantiation(project Project, signatures ProgramSignatures, de
 		// The CANONICAL conformer name (`Integer` -> `int`) is what the conformance test compares by — the same
 		// name the witness table is keyed by — while the E3017 MESSAGE still prints the source spelling. This is
 		// `signatureMatches`/`canonicalTypeName`'s split, applied to a `where`-constraint argument.
+		// ⭐⭐ **AN OPAQUE TYPE ARGUMENT IS DISCHARGED BY ITS OWNER'S OWN `where` CLAUSE, NOT BY A CONFORMER
+		// NAME (W41).** A generic body instantiating another constrained generic binds that callee's
+		// constrained parameter to its OWN type parameter — `Map with (Key, Value)`'s body building a
+		// `MapIterator with (Key, Value)`. `Key` is opaque, so it reduces to a MANGLED token no `implements`
+		// claims, and the conformer test below refuses it: under dictionary-passing that refuses EVERY generic
+		// that drives another generic. The oracle accepts exactly these programs — measured on a stdlib-free
+		// 45-line reproducer where the bootstrap compiles and prints `thing` and shv2 answered
+		// `E3017: Type 'T4032a9ecb1272bfc' does not satisfy constraint 'Named'`.
+		//
+		// The verdict is SHARED with the lowering that must then supply the witness pointer; see
+		// `opaqueParamDischarge` for why acceptance and slot index are one answer and not two.
+		let typeArg = signatures.substitutedInstanceArg(site.gid, position: constraint.typeParamIndex)
+		if maxonTypeTag(typeArg) == ValueTypeTag.typeParameter 'opaqueArgument'
+			if not opaqueConstraintIsDischarged(opaqueParamDischarge(signatures, interfaces: project.interfaces, token: typeNameIdOf(typeArg), interfaceName: constraint.interfaceName)) 'ownerPromisesNothing'
+				reportUnsatisfiedConstraint(project, signatures: signatures, site: site, constraint: constraint, baseName: baseName)
+			end 'ownerPromisesNothing'
+			continue
+		end 'opaqueArgument'
+
 		let conformerType = signatures.conformerTypeArgName(site.gid, position: constraint.typeParamIndex).toByteArray()
 		if not typeConformsTo(declared, interfaces: project.interfaces, typeName: conformerType, interfaceName: constraint.interfaceName) 'violates'
-			let sourceType = signatures.instanceArgDisplayName(site.gid, position: constraint.typeParamIndex)
-			reportPositioned(project, code: ErrorCode.semanticWhereConstraintViolation, message: "Type '{String.from(sourceType)}' does not satisfy constraint '{String.from(constraint.interfaceName)}' required by type parameter '{String.from(constrainedTypeParamName(signatures, baseName: baseName, position: constraint.typeParamIndex))}' of '{String.from(baseName)}'", line: site.nameLine, column: site.nameColumn, filePath: site.filePath)
+			reportUnsatisfiedConstraint(project, signatures: signatures, site: site, constraint: constraint, baseName: baseName)
 		end 'violates'
 	end 'eachConstraint'
 end 'checkOneInstantiation'
+
+// The ONE E3017 sentence, for the two arms that reach it — a CONCRETE argument whose type declares no
+// conformance, and an OPAQUE one whose owner declaration promises nothing (W41). Split out when the second
+// arm landed: one diagnostic written twice is one that comes to disagree with itself about which name it
+// blames, and the SOURCE-spelling half (`instanceArgDisplayName`, which keeps `IntWrapper` where the
+// comparison uses the canonical name) is exactly the half that would drift.
+function reportUnsatisfiedConstraint(project Project, signatures ProgramSignatures, site GenericInstantiationSite, constraint WhereConstraint, baseName ByteArray)
+	let sourceType = signatures.instanceArgDisplayName(site.gid, position: constraint.typeParamIndex)
+	reportPositioned(project, code: ErrorCode.semanticWhereConstraintViolation, message: "Type '{String.from(sourceType)}' does not satisfy constraint '{String.from(constraint.interfaceName)}' required by type parameter '{String.from(constrainedTypeParamName(signatures, baseName: baseName, position: constraint.typeParamIndex))}' of '{String.from(baseName)}'", line: site.nameLine, column: site.nameColumn, filePath: site.filePath)
+end 'reportUnsatisfiedConstraint'
 
 // The NAME of the constrained type parameter — the `T` of `where T is Bar` — for the E3017 sentence, which
 // the canonical corpus spells naming it (`specs/where-clauses.md`'s `and-violation`). It lives on the SAME
@@ -387,6 +433,72 @@ export function typeConformsTo(declared DeclaredConformanceMap, interfaces IrInt
 	end 'intrinsic'
 	return typeDeclaresInterface(declared, interfaces: interfaces, typeName: typeName, interfaceName: interfaceName)
 end 'typeConformsTo'
+
+// ⭐⭐ **HOW AN OPAQUE TYPE PARAMETER DISCHARGES A CONSTRAINT — the ONE answer, read by the CHECK that
+// accepts the program and by the LOWERING that supplies the witness pointer (W41).**
+//
+// Under dictionary-passing a generic body is compiled ONCE over an opaque `T`, so a call it makes into
+// another constrained generic binds that callee's constrained parameter to `T` itself. There is no concrete
+// conformer to name, and the question stops being *"what does this type implement"*. It becomes **"does the
+// declaration that OWNS this parameter already promise the interface — and in WHICH of its witness
+// slots"**.
+//
+// ⭐ **ONE FUNCTION, BECAUSE IF THE TWO SIDES DRIFT NEITHER FAILURE IS A DIAGNOSTIC.**
+// `checkOneInstantiation` decides whether the program is legal; `LowerMaxonToStd.materializeWitnessArg`
+// decides which pointer is passed. Accept a shape the lowering cannot place and the compile PANICS inside
+// lowering (MEASURED: `witnessSlotImpl: no conformance selected a member for slot 'T….Hashable.hash'`).
+// Place a slot the check never verified and the callee reads a witness table out of a slot holding
+// something else — a wild indirect call, which nothing downstream can notice. So ACCEPTANCE and INDEX are
+// one answer computed once, the arrangement `typeExtensionWitnessConstraints` already has for the
+// reservation and supply sides of the same ABI.
+//
+// ⭐ **THE INDEX IS INTO THE OWNER DECLARATION'S OWN `whereConstraints`, WHICH IS THE CALLER'S WITNESS
+// BLOCK.** A plain method of a type carries exactly the type's constraint list in declaration order, and a
+// type EXTENSION's method carries that list followed by its extras — the prefix property
+// `forwardCallerWitness` rests on and `typeExtensionWitnessConstraints` exists to guarantee. So slot `i`
+// here IS witness parameter `i` there. ⚠ The lowering re-checks that the enclosing function is a method of
+// the owner declaration before forwarding, because that premise is the only thing between this index and a
+// wrong register.
+//
+// ⚠ **`extends` COUNTS, through the same `conformanceSatisfiesInterface` a concrete conformer is asked
+// about** — `where T is Ordered` with `interface Ordered extends Equatable` discharges a callee's
+// `Equatable`, and it discharges it FROM THE `Ordered` SLOT, which is the table that callee needs.
+export union OpaqueConstraintDischarge
+	// The owner's witness slot that already carries this interface for this parameter.
+	slot(index WitnessSlotIndex)
+	// The owner declaration promises nothing reaching `interfaceName` — E3017, and never a forward.
+	unsatisfied
+end 'OpaqueConstraintDischarge'
+
+export function opaqueParamDischarge(signatures ProgramSignatures, interfaces IrInterfaceMap, token TypeParamId, interfaceName ByteArray) returns OpaqueConstraintDischarge
+	// A token no declaration filed owns nothing and promises nothing. `typeParamOwnerOf` THROWS on absence
+	// rather than panicking, and answering `unsatisfied` here is the safe direction: a refused program, never
+	// a forwarded slot nobody reserved.
+	let owner = try signatures.typeParamOwnerOf(token) otherwise return OpaqueConstraintDischarge.unsatisfied
+	let constraints = signatures.structWhereConstraints(owner.declaringTypeName)
+	for i in 0 upto constraints.count() 'eachOwnerConstraint'
+		let promised = try constraints.get(i) otherwise panic("opaqueParamDischarge: whereConstraints.get OOB at {i} for `type {String.from(owner.declaringTypeName)}`, whose own list this iterates")
+		if promised.typeParamIndex != owner.position 'aboutAnotherParameter'
+			continue
+		end 'aboutAnotherParameter'
+
+		if promised.interfaceName.equals(interfaceName) or conformanceSatisfiesInterface(interfaces, declaredName: promised.interfaceName, wanted: interfaceName) 'discharges'
+			return OpaqueConstraintDischarge.slot(i)
+		end 'discharges'
+	end 'eachOwnerConstraint'
+
+	return OpaqueConstraintDischarge.unsatisfied
+end 'opaqueParamDischarge'
+
+// Does this verdict discharge the constraint? The bool the union deliberately is not, for the one caller
+// that needs the verdict WITHOUT the index — the E3017 check, which has a diagnostic to emit and no slot to
+// place. Asked through this rather than by re-matching the union, so "discharged" has one definition.
+export function opaqueConstraintIsDischarged(verdict OpaqueConstraintDischarge) returns bool
+	return match verdict 'verdict'
+		slot gives true
+		unsatisfied gives false
+	end 'verdict'
+end 'opaqueConstraintIsDischarged'
 
 // The verdict on ONE conformer's bindings against ONE conditional extension's `where` clause. A CASE and not
 // a bool, because the failing arm has to carry what the diagnostic names — which constraint, and what the

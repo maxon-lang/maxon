@@ -1,0 +1,23 @@
+// Test: error.cross-file-file-private-generic-create
+// --- file: api/box.maxon
+export typealias Count = int(0 to u64.max)
+
+export type Box uses T
+	export var n as Count
+
+	static function create() returns Self
+		return Self{n: 7}
+	end 'create'
+end 'Box'
+
+export typealias IntBox = Box with Count
+
+// --- file: bin/main.maxon
+var b = IntBox.create()
+
+function main() returns ExitCode
+	return b.n
+end 'main'
+---
+CompilerError:
+error E3008: bin/<fragment>:16:9: function 'Box.create' is not exported

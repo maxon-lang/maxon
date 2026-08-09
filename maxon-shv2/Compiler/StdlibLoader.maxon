@@ -1505,6 +1505,11 @@ function whitelistedStdlibModules(stdlibDir FilePath) returns MaxonSourcePathSet
 	try listWhitelistedModule(stdlibDir, relative: "helpers/string/views.maxon", into: listed)
 	try listWhitelistedModule(stdlibDir, relative: "Character.maxon", into: listed)
 	try listWhitelistedModule(stdlibDir, relative: "String.maxon", into: listed)
+	// ⭐⭐ **`stdlib/Map.maxon` — AND IT RETIRES THE SYNTHESIZED `Map`, WHICH IS WHY THE TWO ARE ONE CHANGE.**
+	// Listing it while the builtin still shadowed would have loaded a `type Map` no call site could reach —
+	// `Sleep.maxon`'s defect exactly, and this file's own rule names it. `ProgramSignatures.isMapBaseName`
+	// now answers FALSE once a `Map` is declared, so this line is what makes the corpus type the real one.
+	try listWhitelistedModule(stdlibDir, relative: "Map.maxon", into: listed)
 	return listed
 end 'whitelistedStdlibModules'
 

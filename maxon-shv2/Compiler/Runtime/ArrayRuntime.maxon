@@ -635,6 +635,25 @@ end 'isOpaqueArrayCopyCallee'
 // (its move-out / feed drops route through it), so ONE install covers both, exactly once.
 export let DropTypeParamName = b"__drop_type_param"
 
+// ⭐⭐ **THE SINGLE-VALUE DESCRIPTOR-GATED RETAIN (W41-opaque).** `__retain_type_param(descriptor, value) ->
+// value` takes the reference a shared generic body owes when it stores a BORROWED opaque `T` into a record it
+// builds — a tuple, a `Self{…}` field, an array element. The body compiles ONCE, so it cannot name the
+// protocol; the enclosing instance's descriptor names it at `retainFunc@64`, and a trivial instantiation
+// leaves that word 0 and passes the raw value straight through.
+//
+// ⚠⚠ **THE RECORD IT FILLS IS CONCRETE AT THE CALLER, WHICH IS WHY THE REFERENCE IS OWED AT ALL.**
+// `MapIterator.current` returns `(Key, Value)`; the caller's substituted `(String, Integer)` is a tuple whose
+// `__destruct___Tuple2.String.int` decrefs slot 0 whoever filled it. Storing the raw borrow made that record a
+// second OWNER of one reference — MEASURED as `__mm_alloc` followed by a bare `store [r8+0], rbx`, then a
+// decref from the tuple AND a decref from the container's array: 0xC0000005 on
+// `interface-extensions/stdlib-map-on-map` and `tuples/for-destructuring-map`.
+//
+// ⚠ **IT IS `__drop_type_param` AT A DIFFERENT OFFSET AND WITH THE OTHER ACTION**, so `buildRecordGatedAction`
+// builds it — the fourth entry of that shape and the second `retainThroughWord`. Its ANSWER is what the caller
+// must store and never what it gave: a byte-record argument's word is `__str_clone`, which hands back a
+// DIFFERENT record.
+export let RetainTypeParamName = b"__retain_type_param"
+
 // ⭐ **THE EXISTENTIAL'S DROP (P1.7a-existentials slice 2).** `__drop_existential(witness, value)` releases
 // the VALUE half of a fat pointer through the destructor its WITNESS table names
 // (`IrInterface.WitnessDestroyFuncOffset`) — the drop an owned interface-typed field or binding takes, whose
@@ -990,6 +1009,17 @@ export function installDropTypeParamRuntime(module StdModule, usage RuntimeUsage
 	buildRecordGatedAction(module, symbolName: DropTypeParamName, wordOffset: LAYOUT_OFFSET_DESTROY_FUNC, action: RecordGatedAction.destroyThroughWord)
 end 'installDropTypeParamRuntime'
 
+// ⭐ **INSTALL THE SINGLE-VALUE DESCRIPTOR-GATED RETAIN** (`__retain_type_param`, W41-opaque) — its own bit for
+// `installDropTypeParamRuntime`'s reason: a body that only STORES a borrowed opaque `T` (`MapIterator.current`
+// building its `(Key, Value)` entry) never drops one, and a body that only drops a consumed feed never stores
+// one, so neither bit implies the other.
+export function installRetainTypeParamRuntime(module StdModule, usage RuntimeUsage)
+	if not usage.usesRetainTypeParam 'noRetain'
+		return
+	end 'noRetain'
+	buildRecordGatedAction(module, symbolName: RetainTypeParamName, wordOffset: LAYOUT_OFFSET_RETAIN_FUNC, action: RecordGatedAction.retainThroughWord)
+end 'installRetainTypeParamRuntime'
+
 // ⭐ **INSTALL `__drop_existential` (P1.7a-existentials slice 2)** — its own bit for
 // `installDropTypeParamRuntime`'s reason: an interface-typed FIELD drops through it in a program that
 // instantiates no generic at all, so gating it on the descriptor drop's bit would leave that call unlinked.
@@ -1066,7 +1096,8 @@ union RecordGatedAction
 	// DESTROY `value` through the loaded word with a `callIndirect` — `__drop_type_param`,
 	// `__drop_existential`. A void `(i64, i64) -> void`, so the taken path falls into the shared exit.
 	destroyThroughWord
-	// Take a SECOND owner of `value` through the loaded word with a `callIndirect` — `__retain_existential`.
+	// Take a SECOND owner of `value` through the loaded word with a `callIndirect` — `__retain_existential`,
+	// `__retain_type_param`.
 	// A `(i64, i64) -> i64` that ANSWERS WITH WHAT THE WORD HANDED BACK, which is the whole difference: the
 	// co-owner may be a DIFFERENT record from `value` (a `__str_clone` of an immortal `.rdata` literal, see
 	// `IrInterface.WitnessRetainFuncOffset`) and the caller must store what it was given, not what it gave.
@@ -1079,7 +1110,7 @@ end 'RecordGatedAction'
 // is non-zero, act on `value` as `action` says; a zero word is inert. `value` is a LIVE owner (or a live
 // borrow) at every call site, so unlike the array walk it needs no per-slot null guard.
 //
-// **THREE ENTRIES ARE THIS SHAPE, AND THEY DIFFER IN THE RECORD, THE OFFSET AND THE ACTION:**
+// **FOUR ENTRIES ARE THIS SHAPE, AND THEY DIFFER IN THE RECORD, THE OFFSET AND THE ACTION:**
 //   • `__drop_type_param(descriptor, value)` (P1.7 slice 3b-v) — a shared generic body dropping a consumed
 //     opaque type-parameter binding (a `push`/forward feed parameter left live on some path). The record is
 //     the enclosing instance's LAYOUT DESCRIPTOR and the word is `destroyFunc@40` — the same word the
@@ -1092,9 +1123,13 @@ end 'RecordGatedAction'
 //     2b) — the exact INVERSE of the one above, reading the SAME table one word along (`retainFunc@16`),
 //     which `existentialOwnershipProtocol` fills from the same decision — so a conformer whose drop is inert
 //     has an inert retain. See `RetainExistentialName` for the two access violations the shortcuts measured.
+//   • `__retain_type_param(descriptor, value) -> value` (W41-opaque) — the FIRST entry's inverse, one
+//     record over: a shared generic body taking the reference a record it BUILDS owes on a borrowed opaque
+//     `T`. The record is the LAYOUT DESCRIPTOR and the word is `retainFunc@64`, filled from the same
+//     `ExistentialOwnershipProtocol` the witness pair is (`retainCalleeForProtocol`).
 //
-// All three are "a per-type fact nobody can name statically, read out of a record at run time", so one
-// emitter builds all three: the element-destructor ABI (`emitElementDestructorCall`) and the
+// All four are "a per-type fact nobody can name statically, read out of a record at run time", so one
+// emitter builds all four: the element-destructor ABI (`emitElementDestructorCall`) and the
 // zero-means-nothing-to-do convention are then stated once and cannot drift between them.
 //
 // ⚠ **THE RETAIN'S TAKEN PATH RETURNS FROM `doact` RATHER THAN FALLING INTO `done`**, so the two exits are

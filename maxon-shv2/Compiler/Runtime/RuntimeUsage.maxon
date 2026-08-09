@@ -127,6 +127,12 @@ export type RuntimeUsage
 	// reads the descriptor's `destroyFunc@40` and `callIndirect`s it (no direct alloc/free), so this bit alone
 	// drives `installDropTypeParamRuntime` and pulls in no transitive floor of its own.
 	export var usesDropTypeParam as bool
+	// The program takes a REFERENCE to a single opaque type-parameter value (`__retain_type_param`,
+	// W41-opaque) — a shared generic body storing a borrowed `T` into a record it builds. Its OWN bit rather
+	// than `usesDropTypeParam`'s, for the reason `usesRetainExistential` is not `usesDropExistential`'s: a body
+	// that only stores never drops and a body that only drops never stores, so neither implies the other. Its
+	// body reads the descriptor's `retainFunc@64` and `callIndirect`s it, so it pulls in no transitive floor.
+	export var usesRetainTypeParam as bool
 	// The program DROPS a value held at its INTERFACE type (`__drop_existential`, P1.7a-existentials slice
 	// 2) — an owned interface-typed field released by its struct's destructor cascade, or a consumed
 	// existential parameter left live at a scope exit. Its OWN bit for `usesDropTypeParam`'s exact reason,
@@ -308,7 +314,7 @@ export type RuntimeUsage
 	export var usesProcessIntrospection as bool
 
 	static function create() returns RuntimeUsage
-		return Self{usesHeap: false, usesGt: false, usesIocp: false, usesStreaming: false, usesWriteStdout: false, usesWriteStderr: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesUIntToString: false, usesBoolToString: false, usesStrDecref: false, usesArray: false, usesSet: false, usesMap: false, usesList: false, usesDropTypeParam: false, usesDropExistential: false, usesRetainExistential: false, usesIncref: false, usesRetain: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrFromBytes: false, usesStrOfBuffer: false, usesMmToCString: false, usesStrBytesView: false, usesManagedArrayCopy: false, usesOpaqueArrayCopy: false, neededCloners: ClonerSet.create(), usesWallClock: false, usesCharAt: false, usesCharCmp: false, usesCharFromCodepoint: false, usesCharAsciiValue: false, usesStrToBytes: false, usesUcdCategory: false, usesCharSetMake: false, usesCharSetDecref: false, usesCharSetContains: false, usesManagedFile: false, usesManagedDirectory: false, usesCommandLine: false, usesConsoleStdin: false, usesProcessIntrospection: false}
+		return Self{usesHeap: false, usesGt: false, usesIocp: false, usesStreaming: false, usesWriteStdout: false, usesWriteStderr: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesUIntToString: false, usesBoolToString: false, usesStrDecref: false, usesArray: false, usesSet: false, usesMap: false, usesList: false, usesDropTypeParam: false, usesRetainTypeParam: false, usesDropExistential: false, usesRetainExistential: false, usesIncref: false, usesRetain: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrFromBytes: false, usesStrOfBuffer: false, usesMmToCString: false, usesStrBytesView: false, usesManagedArrayCopy: false, usesOpaqueArrayCopy: false, neededCloners: ClonerSet.create(), usesWallClock: false, usesCharAt: false, usesCharCmp: false, usesCharFromCodepoint: false, usesCharAsciiValue: false, usesStrToBytes: false, usesUcdCategory: false, usesCharSetMake: false, usesCharSetDecref: false, usesCharSetContains: false, usesManagedFile: false, usesManagedDirectory: false, usesCommandLine: false, usesConsoleStdin: false, usesProcessIntrospection: false}
 	end 'create'
 end 'RuntimeUsage'
 
@@ -565,6 +571,15 @@ export function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 	if callee.equals(DropTypeParamName) 'droptypeparam'
 		usage.usesDropTypeParam = true
 	end 'droptypeparam'
+	// The single-value descriptor-gated RETAIN (W41-opaque) — the drop above's inverse, and its `usesHeap`
+	// rides for `__retain_existential`'s stated reason: this entry names no callee of its own (it
+	// `callIndirect`s `retainFunc@64`), and every word that slot can hold is a heap callee
+	// (`__str_clone`/`__mm_retain`), so a program that emits this entry may need the allocator whether or not
+	// its own source allocates. The relocation scan runs after `globalData.layOut` and cannot supply the bit.
+	if callee.equals(RetainTypeParamName) 'retaintypeparam'
+		usage.usesRetainTypeParam = true
+		usage.usesHeap = true
+	end 'retaintypeparam'
 	// The existential's drop (P1.7a-existentials slice 2) — the same shape as the line above and for the same
 	// reasons: `__`-prefixed but neither `__mm_`- nor `__arr_`-prefixed, so no arm above sees it, and its body
 	// only reads the witness table's `destroyFunc@8` and `callIndirect`s it, so it declares no other bit.

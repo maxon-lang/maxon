@@ -524,6 +524,14 @@ count=2 on=true off=false on2=false
 <!-- test: int-into-a-bool-map-value -->
 An `int` is not admitted by a `bool` column. If this starts passing, the column has been folded
 back into the integral fall-through and a `1` is being stored where a `bool` is read.
+
+⭐ **THE SENTENCE MOVED WHEN `Map` STOPPED BEING SYNTHESIZED (W41), AND WHAT IT PINS DID NOT.** The
+`E2015` here was the builtin map's own per-column gate. `Map` is `stdlib/Map.maxon` now, so
+`upsert(key Key, value Value)` is an ordinary declared method and the refusal is the ordinary
+argument-type check — `E3005`, naming the `value:` label. **The discipline this case exists for is
+untouched**: `bool` and `int` are still distinct at a container column, and the case still goes red
+the moment they are folded together. It is anchored on the CALL rather than on the argument, which
+is where an argument-type mismatch has always been anchored.
 ```maxon
 typealias Flags = Map with (String, bool)
 
@@ -534,7 +542,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:6:24: Unsupported: this `Map`'s value is a bool — got a 'int' value
+error E3005: <fragment>:6:2: argument type mismatch for 'value': expected 'bool', got 'int'
 ```
 
 <!-- test: bool-into-an-int-map-value -->
@@ -551,5 +559,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:7:24: Unsupported: this `Map`'s value is an int — got a 'bool' value
+error E3005: <fragment>:7:2: argument type mismatch for 'value': expected 'int', got 'bool'
 ```

@@ -75,7 +75,7 @@ type name denotes anything:
   cascade genuinely says `notDeclared` for it — its layout is registered under `__CharacterSet`, not
   under the name a source writes — so this is the one place the cascade's answer may not be read as
   "the program declares no such type". `isCompilerOwnedTypeName` is the gate, and
-  `error.compiler-reserved-base-type-is-not-undeclared` below is what stops it being deleted.
+  `compiler-reserved-base-type-is-nameable-at-a-parameter` below is what stops it being deleted.
 * **it denotes nothing** ⇒ the door reports **E3011 with `unknownTypeMessage`** — the authority's own
   code and the authority's own words — positioned at the base (or, for a method call, the member).
   Not a sentence of its own: `ParseError.unknownTypeName`, the one arm every positioned undeclared

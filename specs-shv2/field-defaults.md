@@ -278,3 +278,270 @@ end 'main'
 ```maxoncstderr
 error E2010: specs/fragments/field-defaults/field-defaults.error.trailing-tokens.test:5:23: Expected 'end of default value' but got 'zzz'
 ```
+
+### A field default in a GENERIC type reads the layout descriptor
+
+A default expression is compiled to a synthesized nullary function, so a default that constructs a
+container over the enclosing type's own type parameter (`Array with Element`) reads the same
+per-instance layout descriptor a METHOD doing the same thing reads. Nothing scanned that expression,
+so nothing reserved the hidden slot, and lowering aborted the compiler:
+`appendOpaqueArrayCreate: opaque 'Array.create()' in '__fieldDefault#Bag#items' but the function
+carries no layout descriptor parameter`.
+
+<!-- test: field-defaults.opaque-array-default-in-generic-type -->
+```maxon
+typealias Count = int(0 to u64.max)
+
+type Bag uses Element
+	typealias ElementArray = Array with Element
+	var items as ElementArray = ElementArray.create()
+	var seen = 0
+
+	export static function create() returns Self
+		return Self{}
+	end 'create'
+
+	export function add(item Element)
+		items.push(item)
+		seen = seen + 1
+	end 'add'
+
+	export function size() returns Count
+		return seen
+	end 'size'
+end 'Bag'
+
+typealias Integer = int(i64.min to i64.max)
+typealias IntBag = Bag with Integer
+
+function main() returns ExitCode
+	var b = IntBag.create()
+	b.add(4)
+	b.add(9)
+	return b.size()
+end 'main'
+```
+```exitcode
+2
+```
+
+### The same default, in a TWO-parameter generic type
+
+`stdlib/Map.maxon` is this shape: `uses Key, Value`, with one defaulted `Array` column per parameter.
+
+<!-- test: field-defaults.opaque-array-default-two-type-params -->
+```maxon
+typealias Count = int(0 to u64.max)
+
+type Pairs uses Key, Value
+	typealias KeyArray = Array with Key
+	typealias ValueArray = Array with Value
+	var keys as KeyArray = KeyArray.create()
+	var values as ValueArray = ValueArray.create()
+	var seen = 0
+
+	export static function create() returns Self
+		return Self{}
+	end 'create'
+
+	export function add(key Key, value Value)
+		keys.push(key)
+		values.push(value)
+		seen = seen + 1
+	end 'add'
+
+	export function size() returns Count
+		return seen
+	end 'size'
+end 'Pairs'
+
+typealias Integer = int(i64.min to i64.max)
+typealias IntPairs = Pairs with (Integer, Integer)
+
+function main() returns ExitCode
+	var p = IntPairs.create()
+	p.add(1, value: 5)
+	p.add(2, value: 6)
+	p.add(3, value: 7)
+	return p.size()
+end 'main'
+```
+```exitcode
+3
+```
+
+### A method call on a `Self{…}` LOCAL forwards the layout descriptor
+
+`stdlib/Map.maxon:58-68` builds `var result = Self{…}` inside a static and then calls a
+descriptor-reading method on it. The receiver is a value of the enclosing type that is not `self`,
+which used to be refused outright.
+
+<!-- test: field-defaults.descriptor-forwards-from-a-self-literal-local -->
+```maxon
+typealias Count = int(0 to u64.max)
+typealias Integer = int(i64.min to i64.max)
+
+type Basket uses Element
+	typealias ElementArray = Array with Element
+	var items as ElementArray = ElementArray.create()
+	var seen = 0
+
+	export static function create() returns Self
+		return Self{}
+	end 'create'
+
+	export static function of(first Element, second Element) returns Self
+		var result = Self{}
+		result.add(first)
+		result.add(second)
+		return result
+	end 'of'
+
+	export function add(item Element)
+		items.push(item)
+		seen = seen + 1
+	end 'add'
+
+	export function size() returns Count
+		return seen
+	end 'size'
+end 'Basket'
+
+typealias IntBasket = Basket with Integer
+
+function main() returns ExitCode
+	let b = IntBasket.of(11, second: 22)
+	return b.size()
+end 'main'
+```
+```exitcode
+2
+```
+
+### Two type parameters, two independently managed columns
+
+A `Map with (String, int)` is this shape, and it is where the descriptor's single `destroyFunc@40`
+was a wild free: both columns were stamped with the FIRST column's destructor, so the trivial column's
+words were freed as String records. The program printed the right answer and exited 139.
+
+<!-- test: field-defaults.two-type-params-with-one-managed-column -->
+```maxon
+typealias Count = int(0 to u64.max)
+typealias Integer = int(i64.min to i64.max)
+
+type Pairs uses Key, Value
+	typealias KeyArray = Array with Key
+	typealias ValueArray = Array with Value
+	var keys as KeyArray = KeyArray.create()
+	var values as ValueArray = ValueArray.create()
+
+	export static function create() returns Self
+		return Self{}
+	end 'create'
+
+	export function add(key Key, value Value)
+		keys.push(key)
+		values.push(value)
+	end 'add'
+
+	export function size() returns Count
+		return keys.count()
+	end 'size'
+end 'Pairs'
+
+typealias StrIntPairs = Pairs with (String, Integer)
+
+function main() returns ExitCode
+	var p = StrIntPairs.create()
+	p.add("alpha", value: 1)
+	p.add("beta", value: 2)
+	return p.size()
+end 'main'
+```
+```exitcode
+2
+```
+
+### …and with the MANAGED column second
+
+The mirror image, so the fix cannot be "always use the first column's destructor" wearing a pass.
+
+<!-- test: field-defaults.two-type-params-with-the-managed-column-second -->
+```maxon
+typealias Count = int(0 to u64.max)
+typealias Integer = int(i64.min to i64.max)
+
+type Pairs uses Key, Value
+	typealias KeyArray = Array with Key
+	typealias ValueArray = Array with Value
+	var keys as KeyArray = KeyArray.create()
+	var values as ValueArray = ValueArray.create()
+
+	export static function create() returns Self
+		return Self{}
+	end 'create'
+
+	export function add(key Key, value Value)
+		keys.push(key)
+		values.push(value)
+	end 'add'
+
+	export function size() returns Count
+		return values.count()
+	end 'size'
+end 'Pairs'
+
+typealias IntStrPairs = Pairs with (Integer, String)
+
+function main() returns ExitCode
+	var p = IntStrPairs.create()
+	p.add(1, value: "alpha")
+	p.add(2, value: "beta")
+	p.add(3, value: "gamma")
+	return p.size()
+end 'main'
+```
+```exitcode
+3
+```
+
+### Both columns managed
+
+Two live destructors in one descriptor, one per parameter.
+
+<!-- test: field-defaults.two-type-params-with-both-columns-managed -->
+```maxon
+typealias Count = int(0 to u64.max)
+
+type Pairs uses Key, Value
+	typealias KeyArray = Array with Key
+	typealias ValueArray = Array with Value
+	var keys as KeyArray = KeyArray.create()
+	var values as ValueArray = ValueArray.create()
+
+	export static function create() returns Self
+		return Self{}
+	end 'create'
+
+	export function add(key Key, value Value)
+		keys.push(key)
+		values.push(value)
+	end 'add'
+
+	export function size() returns Count
+		return keys.count() + values.count()
+	end 'size'
+end 'Pairs'
+
+typealias StrStrPairs = Pairs with (String, String)
+
+function main() returns ExitCode
+	var p = StrStrPairs.create()
+	p.add("a", value: "alpha")
+	p.add("b", value: "beta")
+	return p.size()
+end 'main'
+```
+```exitcode
+4
+```

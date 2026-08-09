@@ -1,0 +1,23 @@
+// Test: error-a-conformers-own-map-is-not-the-extensions-map
+typealias Integer = int(i64.min to i64.max)
+typealias Doubler = function(Integer) returns Integer
+
+type Counter
+	var n as Integer
+
+	export static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+
+	export function map(transform Doubler) returns Integer
+		return transform(self.n)
+	end 'map'
+end 'Counter'
+
+function main() returns ExitCode
+	let c = Counter.create(2)
+	return c.map(function(x) gives x * 2) as ExitCode
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:19:24: Unsupported: parameter 'x' with no type — shv2 infers an omitted parameter type in exactly one position, a closure passed to a container's `map`, whose transform takes the container's own element; every other parameter declares its type

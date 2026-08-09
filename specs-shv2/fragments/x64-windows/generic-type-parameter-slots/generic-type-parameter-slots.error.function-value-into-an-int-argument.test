@@ -1,0 +1,34 @@
+// Test: generic-type-parameter-slots.error.function-value-into-an-int-argument
+typealias Integer = int(i64.min to i64.max)
+
+function double(x Integer) returns Integer
+	return x * 2
+end 'double'
+
+type Holder uses Element
+	typealias EArray = Array with Element
+	var items as EArray = EArray.create()
+
+	export static function create() returns Self
+		return Self{}
+	end 'create'
+
+	export function add(item Element)
+		items.push(item)
+	end 'add'
+
+	export function first() returns Element throws ArrayError
+		return try items.get(0)
+	end 'first'
+end 'Holder'
+
+typealias IHolder = Holder with Integer
+
+function main() returns ExitCode
+	var h = IHolder.create()
+	h.add(double)
+	return try h.first() otherwise 0
+end 'main'
+---
+CompilerError:
+error E3005: <fragment>:29:2: cannot pass a value of type 'function' as argument 'item', which holds 'int': a function value is only usable where a function type declared with 'typealias' is expected

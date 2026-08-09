@@ -1535,15 +1535,68 @@ end 'synthesizeUnionDestructor'
 // unconditionally (behind a null-guard) rather than under a tag switch.
 export function installStructDestructors(module StdModule, project Project, signatures ProgramSignatures, needed DestructorSet)
 	for (_, layout) in project.structTypes 'each'
-		if not signatures.structHasManagedField(layout.name) 'noManaged'
-			continue
-		end 'noManaged'
-		if not needed.contains(destructorSymbol(layout.name)) 'notReferenced'
-			continue
-		end 'notReferenced'
-		synthesizeStructDestructor(module, layout: layout, project: project, signatures: signatures)
+		installOneStructDestructor(module, layout: layout, project: project, signatures: signatures, needed: needed)
 	end 'each'
+
+	// ⭐⭐ **THE TUPLES, FROM THE INDEX — BECAUSE THE PROJECT REGISTRY NEVER RECEIVES A SUBSTITUTED ONE
+	// (W41).** `project.structTypes` is fed by `ParseStaging.commitStructTypes`, which copies each FILE
+	// ARTIFACT's own layouts, so it holds every tuple the source SPELLS and no tuple minted by SUBSTITUTION —
+	// `ProgramSignatures.substituteTupleThroughInstance` creates those at a CALL SITE, straight into the
+	// whole-program index. The parser emits the drop call either way, so the missing body is a BACKEND panic
+	// rather than a leak: **MEASURED, with the corpus `Map` live, `for (_, value) in m` over `["a": 10]` walks
+	// `MapIterator.current()`, whose declared `Entry = (Key, Value)` substitutes to `__Tuple2.String.int`, and
+	// the compile stops at `resolveCallFixups: call to unknown function '__destruct___Tuple2.String.int'`.** A
+	// plain `function pair() returns (String, Num)` in the same tree compiles and runs, which is what
+	// localizes it to the substituted mint rather than to tuples.
+	//
+	// ⛔⛔ **A NAME THE PROJECT REGISTRY ALREADY HOLDS IS SKIPPED, AND LETTING THIS WALK OWN ALL TUPLES
+	// INSTEAD WAS A MEASURED REGRESSION (22 failures against 14).** The two registries are NOT two views of
+	// one table for a tuple: a sweep key is `(spelling, file)` and only a CANONICAL name is a whole-program
+	// identity, so the index can hold a layout whose elements were resolved in a different file's scope from
+	// the one `commitStructTypes` committed — see `ProgramSignatures`' A3v header, which records the wrong
+	// answer that shape already produced once. The project's entry is the authoritative resolved one wherever
+	// it exists; this walk supplies only what nothing committed.
+	//
+	// ⚠ **GATED ON ANY DESTRUCTOR BEING NEEDED AT ALL**, so a program that drops nothing does not walk the
+	// type registry to discover it needs nothing — `closeDestructorNeeds`' early-out, on the same set and for
+	// the same reason.
+	if needed.count() == 0 'nothingDrops'
+		return
+	end 'nothingDrops'
+
+	for layout in signatures.tupleLayouts() 'eachInternedTuple'
+		if projectHasStructLayout(project, name: layout.name) 'committedAlready'
+			continue
+		end 'committedAlready'
+		installOneStructDestructor(module, layout: layout, project: project, signatures: signatures, needed: needed)
+	end 'eachInternedTuple'
 end 'installStructDestructors'
+
+// Has `ParseStaging.commitStructTypes` already committed a layout under this name? The membership half of
+// the skip above, spelled as its own question because "the project registry is authoritative where it has an
+// entry" is the rule, and a `try … otherwise false` inline would read as a lookup that happened to fail.
+function projectHasStructLayout(project Project, name ByteArray) returns bool
+	if let committed = try project.structTypes.get(name) 'found'
+		return not committed.name.isEmpty()
+	end 'found'
+
+	return false
+end 'projectHasStructLayout'
+
+// One layout's cascade, or nothing when it is unreferenced or owns nothing droppable. Split out when the
+// substituted-tuple walk landed (W41) so the two walks share one admission test rather than each spelling
+// it — the shape where one of them comes to admit a layout the other would have declined.
+function installOneStructDestructor(module StdModule, layout StructLayout, project Project, signatures ProgramSignatures, needed DestructorSet)
+	if not signatures.structHasManagedField(layout.name) 'noManaged'
+		return
+	end 'noManaged'
+
+	if not needed.contains(destructorSymbol(layout.name)) 'notReferenced'
+		return
+	end 'notReferenced'
+
+	synthesizeStructDestructor(module, layout: layout, project: project, signatures: signatures)
+end 'installOneStructDestructor'
 
 // Emit `__destruct_<Struct>(box)` — the field list is built here and the entry/lower/drop/free skeleton
 // runs in the shared `emitFieldCascadeDestructor`:

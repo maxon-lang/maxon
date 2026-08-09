@@ -4157,6 +4157,15 @@ export function fieldDefaultHelperName(typeName ByteArray, fieldName ByteArray) 
 	return overloadRegistrationName(overloadRegistrationName(FieldDefaultHelperPrefix.toByteArray(), suffix: typeName), suffix: fieldName)
 end 'fieldDefaultHelperName'
 
+// ⭐ **IS `callee` ONE OF THE MINT ABOVE? (W43b)** — the question `LowerMaxonToStd.materializeLayoutArgFor`
+// asks to tell the ONE receiverless callee whose layout descriptor is FORWARDED from its caller apart from
+// the static generic constructor whose descriptor is read off its own result. It reads the prefix rather
+// than a `CalleeMint`, because the mint is a parse-time fact and does not ride the op; it lives beside the
+// join so the prefix keeps its one speller.
+export function isFieldDefaultHelperName(callee ByteArray) returns bool
+	return bytesStartWith(callee, prefix: FieldDefaultHelperPrefix.toByteArray())
+end 'isFieldDefaultHelperName'
+
 let FieldDefaultHelperPrefix = "__fieldDefault"
 
 // ⭐ **THE INVERSE OF THE PARAMETER MINT: WHICH CALL DID THE AUTHOR ACTUALLY WRITE?** A helper call is a
@@ -4740,6 +4749,12 @@ export type Project
 	// merge order. An ARRAY for `conformances`' reason: the check drains it once whole-program and two
 	// constructions of one type are two positions to report. Read by `checkLiteralInitConformance`.
 	export var literalInitSites as LiteralInitSiteArray
+	// ⭐ **EVERY INSTANTIATION A BRACKETED LITERAL INFERRED (W41-lit)** — one per literal, in merge order,
+	// an ARRAY for `literalInitSites`' reason. It is the PARSER-side half of
+	// `ProgramSignatures.instantiationSites`, which holds the ones a `typealias` wrote; the two are read
+	// together by `checkWhereConstraints`, because a `where` clause binds an instance however it was
+	// spelled and a literal is the one spelling that writes no type name.
+	export var inferredInstantiationSites as GenericInstantiationSiteArray
 	// id <-> name table behind every `MaxonType.named`. Folded from per-file
 	// artifact interners at merge time (see TypeNameInterner.maxon).
 	export var typeNames as TypeNameInterner
@@ -4821,6 +4836,7 @@ export type Project
 			declaredConformances: DeclaredConformanceMap.create(),
 			declaredConformanceIndexBuilt: false,
 			literalInitSites: LiteralInitSiteArray.create(),
+			inferredInstantiationSites: GenericInstantiationSiteArray.create(),
 			typeNames: TypeNameInterner.create(),
 			opRanges: SourceRangeTable.create(),
 			valueOrigins: ValueOriginTable.create(),

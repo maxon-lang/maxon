@@ -2527,3 +2527,144 @@ end 'main'
 ```exitcode
 1
 ```
+
+### A `Self`-returning static dispatches through the constraints on the value it builds
+
+A `static function` has no `self`, so it used to carry no witness tables at all — and a static that
+built a `Self{…}` and called a constraint-dispatching method on it aborted the compiler:
+`forwardCallerWitness: caller 'Map.init' carries 0 witness parameter(s) and was asked to forward slot 0
+to 'Map.upsert'`. A static that RETURNS its own type has the same witness source the layout descriptor
+already used — the concrete instance it builds — so it carries the block on the same terms.
+`stdlib/Map.maxon`'s `static function init(…) returns Self` is this program.
+
+<!-- test: where-clauses.self-returning-static-dispatches-on-its-own-value -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Holder uses T where T is Hashable and Equatable
+	var v as T
+
+	export static function of(v T) returns Self
+		var built = Self{v: v}
+		if built.matches(v) 'sameValue'
+			return built
+		end 'sameValue'
+		panic("Holder.of: the value it was built from must equal itself")
+	end 'of'
+
+	export function matches(other T) returns bool
+		return v.equals(other)
+	end 'matches'
+
+	export function digest() returns HashValue
+		return v.hash()
+	end 'digest'
+end 'Holder'
+
+typealias H = Holder with Integer
+
+function main() returns ExitCode
+	let h = H.of(41)
+	return h.digest()
+end 'main'
+```
+```exitcode
+41
+```
+
+### Error: a static that does NOT return `Self` has no witness source
+
+The other half of the rule above, stated as a refusal rather than an abort. Threading the dictionary
+from the static CALL SITE's alias — `H.digestOf(41)` knows `H = Holder with Integer` — is the same
+"later slice" the layout descriptor's own static rule names.
+
+<!-- test: where-clauses.error.static-without-self-return-cannot-dispatch -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Holder uses T where T is Hashable and Equatable
+	var v as T
+
+	export function digest() returns HashValue
+		return v.hash()
+	end 'digest'
+
+	export static function digestOf(v T) returns HashValue
+		let h = Self{v: v}
+		return h.digest()
+	end 'digestOf'
+end 'Holder'
+
+typealias H = Holder with Integer
+
+function main() returns ExitCode
+	return H.digestOf(41)
+end 'main'
+```
+```maxoncstderr
+error E2015: specs/fragments/where-clauses/where-clauses.error.static-without-self-return-cannot-dispatch.test:13:12: Unsupported: calling 'digest' (which dispatches through the type's `where` constraints) on a value of the enclosing type, from a `static function` that carries no witness tables of its own to forward — a static sources them from the instance it RETURNS, so declare this one `returns Self` and call the method on the result, or make it an instance method
+```
+
+### An INTERFACE EXTENSION's method over a constrained conformer reserves that conformer's witnesses
+
+An extension method is monomorphized for ONE conformer, so it carries that conformer's witness block
+exactly as the conformer's own methods do — and the supply side always passed it, because
+`witnessConstraintsOfMethod` resolves a callee by its TYPE name whatever door the method came through.
+The body reserved none, so it read two argument registers it had never declared. `stdlib/Interfaces.maxon`'s
+`extension Iterator`'s `advanceBy` is the reaching method.
+
+<!-- test: where-clauses.interface-extension-over-a-constrained-conformer -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Step = int(0 to u64.max)
+
+type Ticks uses T where T is Hashable and Equatable
+	typealias Items = Array with T
+	var items as Items
+	var at = 0
+
+	export static function create(items Items) returns Self throws IterationError
+		if items.count() == 0 'empty'
+			throw IterationError.exhausted
+		end 'empty'
+		return Self{items: items}
+	end 'create'
+
+	export function current() returns T
+		return try items.get(at) otherwise panic("Ticks.current: the positioning invariant holds")
+	end 'current'
+
+	export function advance() throws IterationError
+		at = at + 1
+		if at >= items.count() 'done'
+			throw IterationError.exhausted
+		end 'done'
+	end 'advance'
+end 'Ticks'
+
+extension Ticks
+	export function skip(n Step) throws IterationError
+		var i = 0
+		while i < n 'loop'
+			try self.advance()
+			i = i + 1
+		end 'loop'
+	end 'skip'
+end 'Ticks'
+
+typealias IntArray = Array with Integer
+typealias IntTicks = Ticks with Integer
+
+function main() returns ExitCode
+	var a = IntArray.create()
+	a.push(5)
+	a.push(6)
+	a.push(7)
+	var t = try IntTicks.create(a) otherwise panic("non-empty")
+	try t.skip(2) otherwise panic("three elements")
+	return t.current()
+end 'main'
+```
+```exitcode
+7
+```

@@ -1238,9 +1238,9 @@ type MaxonToStdLowering
 	// then walks (`ProgramSignatures.witnessConstraintsOfMethod`), rather than a second lookup that could
 	// answer for a different list.
 	function witnessParamCountForCallee(callee ByteArray, sig FuncSignature) returns ParamCount
-		if not sig.takesReceiver() 'notInstance'
+		if not sig.takesReceiver() and not self.signatures.calleeReturnsItsDeclaringType(callee) 'noWitnessSource'
 			return 0
-		end 'notInstance'
+		end 'noWitnessSource'
 		return self.signatures.witnessConstraintsOfMethod(callee).count()
 	end 'witnessParamCountForCallee'
 
@@ -1273,7 +1273,7 @@ type MaxonToStdLowering
 			out.push(self.materializeLayoutArgFor(argIds, sig: sig, result: result, callee: callee, dstBlock: dstBlock))
 		end 'layout'
 		if witnessCount > 0 'witnesses'
-			self.appendWitnessArgs(out, argIds: argIds, callee: callee, dstBlock: dstBlock)
+			self.appendWitnessArgs(out, argIds: argIds, sig: sig, result: result, callee: callee, dstBlock: dstBlock)
 		end 'witnesses'
 		return out
 	end 'finalizeCallArgsWithLayout'
@@ -1350,18 +1350,33 @@ type MaxonToStdLowering
 
 	// Append the hidden WITNESS arguments a dictionary-passing call to `callee` carries (P1.7a slice 2a) — one
 	// per `where` constraint of the callee's enclosing type, in constraint (source) order, AFTER any layout
-	// descriptor. Only an INSTANCE method carries witnesses (`witnessParamCountForCallee` returns 0 for a
-	// static/free callee), so the receiver is always `argIds[0]` — the value whose CONCRETE instance (or
-	// enclosing `self`) supplies each witness. `out` is the fresh argument array `finalizeCallArgsWithLayout`
-	// built (never `argIds`), so pushing is safe.
-	function appendWitnessArgs(out ValueIdArray, argIds ValueIdArray, callee ByteArray, dstBlock IrBlock)
-		let receiver = try argIds.get(0) otherwise panic("appendWitnessArgs: witness-carrying instance method '{String.from(callee)}' has no receiver argument — its first parameter is `self`")
+	// descriptor. `out` is the fresh argument array `finalizeCallArgsWithLayout` built (never `argIds`), so
+	// pushing is safe.
+	//
+	// ⭐ **THE SOURCE VALUE IS THE RECEIVER, OR — FOR A `Self`-RETURNING STATIC — THE RESULT (W43b).** It is
+	// `materializeLayoutArgFor`'s split exactly, one dictionary column over, and the two are decided by the
+	// same predicate (`sig.takesReceiver()`) so a call can never take its descriptor from one value and its
+	// witnesses from another.
+	function appendWitnessArgs(out ValueIdArray, argIds ValueIdArray, sig FuncSignature, result ValueId, callee ByteArray, dstBlock IrBlock)
+		let source = self.witnessSourceValue(argIds, sig: sig, result: result, callee: callee)
 		let constraints = self.signatures.witnessConstraintsOfMethod(callee)
 		for i in 0 upto constraints.count() 'eachConstraint'
 			let constraint = try constraints.get(i) otherwise panic("appendWitnessArgs: whereConstraints.get OOB at {i}")
-			out.push(self.materializeWitnessArg(receiver, constraint: constraint, constraintIndex: i, callee: callee, dstBlock: dstBlock))
+			out.push(self.materializeWitnessArg(source, constraint: constraint, constraintIndex: i, callee: callee, dstBlock: dstBlock))
 		end 'eachConstraint'
 	end 'appendWitnessArgs'
+
+	// The value a call's witness tables are read off — the RECEIVER for an instance method, the RESULT for a
+	// `Self`-returning static (W43b). It is `materializeLayoutArgFor`'s split, decided by the same
+	// `sig.takesReceiver()`, so a call cannot take its layout descriptor from one value and its witnesses
+	// from another. A receiverless callee that is NOT a generic constructor carries no witness block at all
+	// (`witnessParamCountForCallee`), so it never reaches here.
+	function witnessSourceValue(argIds ValueIdArray, sig FuncSignature, result ValueId, callee ByteArray) returns ValueId
+		if not sig.takesReceiver() 'staticConstructor'
+			return result
+		end 'staticConstructor'
+		return try argIds.get(0) otherwise panic("witnessSourceValue: witness-carrying instance method '{String.from(callee)}' has no receiver argument — its first parameter is `self`")
+	end 'witnessSourceValue'
 
 	// The witness-table address to pass for ONE constraint (P1.7a slice 2a). A CONCRETE generic-instance
 	// receiver → the RIP-relative address of `__witness_<ConcreteArg>.<Iface>` (`rdataAddr`), emitting the
@@ -1372,6 +1387,26 @@ type MaxonToStdLowering
 		let tag = self.valueTagOf(receiver)
 		if tag == ValueTypeTag.genericInstance 'concrete'
 			let gid = try self.valueNameIds.get(receiver) otherwise panic("materializeWitnessArg: genericInstance receiver v{receiver} has no name-id (its GenericInstanceId)")
+
+			// ⭐⭐ **AN INSTANCE OVER THE ENCLOSING BODY'S OWN TYPE PARAMETER FORWARDS, IT DOES NOT MATERIALIZE
+			// (W41).** The receiver IS a concrete `genericInstance` — but the argument at the constrained
+			// position may be an OPAQUE parameter of the function we are lowering: `Map.createIterator` building
+			// a `MapIterator with (Key, Value)` while `Key` is still `Map`'s own parameter. There is no table to
+			// name (`conformerTypeArgName` answers a mangled `T<digest>` that no conformance is filed under, and
+			// `ensureWitnessTable` on it PANICS in `witnessSlotImpl`), and there does not need to be: the caller
+			// was handed one, and its own `where` clause says which slot.
+			//
+			// ⚠ **THE SLOT COMES FROM THE SHARED VERDICT, NEVER FROM `constraintIndex`.** The two constraint
+			// lists here belong to DIFFERENT declarations (`Map`'s and `MapIterator`'s), so the prefix-alignment
+			// that lets the `structRef`/`typeParameter` arm below forward slot `i` to slot `i` does not hold and
+			// must not be assumed — that is exactly the wrong forwarding index this rung exists to avoid.
+			// `opaqueParamDischarge` is the same answer `checkWhereConstraints` accepted the program on, so the
+			// slot placed here is the slot the check verified.
+			let typeArg = self.signatures.substitutedInstanceArg(gid, position: constraint.typeParamIndex)
+			if maxonTypeTag(typeArg) == ValueTypeTag.typeParameter 'opaqueArgument'
+				return self.forwardOpaqueParamWitness(typeNameIdOf(typeArg), constraint: constraint, callee: callee)
+			end 'opaqueArgument'
+
 			// The CANONICAL conformer name (`Box with Integer` -> `int`, `Box with Point` -> `Point`), so the
 			// table label (`__witness_int.Hashable`) and its slot reloc (`int.hash`) name the synthesized primitive
 			// impl — the SAME reducer the E3017 check keys its conformance lookup by, never a second spelling.
@@ -1406,6 +1441,42 @@ type MaxonToStdLowering
 	// diagnosable type error. `Parser.requireReceiverSatisfiesExtensionConstraints` refuses that program with a
 	// position, so reaching here means that refusal did not fire; testing only `== 0` let every non-zero
 	// mismatch through in silence.
+	// ⭐⭐ **FORWARD THE SLOT THE ENCLOSING DECLARATION'S OWN `where` CLAUSE PROMISED FOR AN OPAQUE ARGUMENT
+	// (W41)** — the cross-declaration case `forwardCallerWitness` deliberately does not cover, because there
+	// the two constraint lists belong to one type and align by index, and here they do not.
+	//
+	// ⚠⚠ **THE OWNER GUARD IS THE WHOLE SAFETY ARGUMENT AND IT IS CHECKED, NOT ASSUMED.**
+	// `opaqueParamDischarge` returns an index into the OWNER declaration's `whereConstraints`, and that index
+	// is a witness-parameter number only for a function whose witness block IS that list — a method of the
+	// owner type (its own, or an extension's, whose extras come after). Lowering a body that reached an
+	// opaque parameter owned by some OTHER declaration would forward a slot holding an unrelated table: a
+	// wild indirect call, invisible to every check downstream. Nothing produces that shape today — a bare `T`
+	// resolves against the ENCLOSING declaration's `uses` list and nowhere else — which is precisely why it
+	// is worth a panic rather than a comment.
+	//
+	// ⚠ `unsatisfied` is likewise an invariant break rather than a user error: `checkWhereConstraints` ran
+	// this same predicate and refused the program with E3017 if it did not discharge, so reaching lowering
+	// means it did. Both panics name the two declarations, because the answer to "which one is wrong" is
+	// always which pair failed to line up.
+	function forwardOpaqueParamWitness(token TypeParamId, constraint WhereConstraint, callee ByteArray) returns ValueId
+		let owner = try self.signatures.typeParamOwnerOf(token) otherwise panic("forwardOpaqueParamWitness: lowering '{String.from(self.currentFuncName)}' reached an opaque type parameter (token {token}) that no declaration filed — every `typeParameter` the parser mints is recorded against the `uses` list it was resolved from")
+		// The declaring TYPE of the function being lowered — the same `Type.member` split
+		// `witnessConstraintsOfMethod` reads a caller's own constraint list through, so the two agree on what
+		// "this function's type" means by construction.
+		let enclosingType = match splitQualifiedName(self.currentFuncName) 'q'
+			notQualified gives EmptySourceText
+			parts(typeName, _) gives typeName
+		end 'q'
+		if not enclosingType.equals(owner.declaringTypeName) 'foreignParameter'
+			panic("forwardOpaqueParamWitness: '{String.from(self.currentFuncName)}' passes `{String.from(owner.paramName)}` of `type {String.from(owner.declaringTypeName)}` to '{String.from(callee)}', but this function is a method of `{String.from(enclosingType)}` — a witness slot index of one declaration is not a parameter number of another, and forwarding it would read a table out of an unrelated slot")
+		end 'foreignParameter'
+
+		match opaqueParamDischarge(self.signatures, interfaces: self.interfaces, token: token, interfaceName: constraint.interfaceName) 'discharge'
+			slot(index) then return self.forwardCallerWitness(index, callee: callee)
+			unsatisfied then panic("forwardOpaqueParamWitness: '{String.from(self.currentFuncName)}' passes `{String.from(owner.paramName)}` to '{String.from(callee)}', which requires `{String.from(constraint.interfaceName)}`, and `type {String.from(owner.declaringTypeName)}` promises nothing that reaches it — `checkWhereConstraints` asks this same question and refuses such a program with E3017, so the two have come apart")
+		end 'discharge'
+	end 'forwardOpaqueParamWitness'
+
 	function forwardCallerWitness(constraintIndex WitnessSlotIndex, callee ByteArray) returns ValueId
 		if constraintIndex >= self.currentWitnessCount 'noSuchSlot'
 			panic("forwardCallerWitness: caller '{String.from(self.currentFuncName)}' carries {self.currentWitnessCount} witness parameter(s) and was asked to forward slot {constraintIndex} to '{String.from(callee)}' — a generic→generic dispatch is only reached from an instance method whose own constraint list is a PREFIX-COMPATIBLE superset of the callee's")
@@ -1452,8 +1523,8 @@ type MaxonToStdLowering
 		// HOW A SECOND OWNER OF ONE IS TAKEN (P1.7a-existentials slices 2 and 2b).** Both are derived from
 		// `existentialOwnershipProtocol`'s single answer, so they are non-zero together and cannot disagree
 		// about a conformer.
-		self.stampWitnessOwnershipWord(self.signatures.existentialDestroyCallee(typeName), label: label, offsetInLabel: WitnessDestroyFuncOffset)
-		self.stampWitnessOwnershipWord(self.signatures.existentialRetainCallee(typeName), label: label, offsetInLabel: WitnessRetainFuncOffset)
+		self.stampOwnershipWord(self.signatures.existentialDestroyCallee(typeName), label: label, offsetInLabel: WitnessDestroyFuncOffset)
+		self.stampOwnershipWord(self.signatures.existentialRetainCallee(typeName), label: label, offsetInLabel: WitnessRetainFuncOffset)
 
 		for i in 0 upto methodCount 'eachMethod'
 			let slot = try slots.get(i) otherwise panic("ensureWitnessTable: slots.get OOB at {i} below count {methodCount}")
@@ -1466,23 +1537,30 @@ type MaxonToStdLowering
 		return label
 	end 'ensureWitnessTable'
 
-	// Stamp one of the witness header's two OWNERSHIP words with the `funcAbs64InRdata` reloc the method slots
-	// take. An EMPTY callee leaves the zero-fill in place, which is the encoding both runtime entries read as
-	// "nothing to do" — an `int`/`bool`/`float` conformer, whose value half is not a pointer at all.
+	// Stamp ONE ownership word of a `.rdata` blob with the `funcAbs64InRdata` reloc the witness method slots
+	// take. An EMPTY callee leaves the zero-fill in place, which is the encoding every runtime entry that reads
+	// such a word treats as "nothing to do" — an `int`/`bool`/`float` conformer, whose value half is not a
+	// pointer at all, and equally a trivial generic type argument.
 	//
 	// ⚠ **THE SYMBOL IS INSTALLED BECAUSE THIS RELOCATION EXISTS, NOT BECAUSE SOMETHING PREDICTED IT**:
 	// `MmRuntime.noteRelocatedFunctionUsage` roots every `.rdata` slot's callee after lowering, so the
 	// relocated set and the installed set are one list rather than two that agree. See there for what a
-	// pre-pipeline prediction cost when it was tried. It is ONE function rather than two spellings because the
-	// empty test IS the encoding, and a second copy of it is where the retain word would come to be stamped
-	// on a rule the drop word had already stopped using.
-	function stampWitnessOwnershipWord(callee ByteArray, label String, offsetInLabel ByteOffset)
-		if callee.isEmpty() 'conformerOwnsNothing'
+	// pre-pipeline prediction cost when it was tried. It is ONE function rather than a spelling per word
+	// because the empty test IS the encoding, and a second copy of it is where one word would come to be
+	// stamped on a rule another had already stopped using.
+	//
+	// ⚠ It serves the WITNESS TABLE's two ownership words and the LAYOUT DESCRIPTOR's two
+	// (`destroyFunc@40`, `retainFunc@64`) — which is why it names neither blob. Both pairs are non-zero
+	// TOGETHER precisely because each pair's two callees come off one protocol answer and meet the one EMPTY
+	// test here; the descriptor's `copyFunc@32` is a fact about an opaque `Array` COLUMN rather than about the
+	// type argument, so it keeps its own predicate and does not come through here.
+	function stampOwnershipWord(callee ByteArray, label String, offsetInLabel ByteOffset)
+		if callee.isEmpty() 'ownsNothing'
 			return
-		end 'conformerOwnsNothing'
+		end 'ownsNothing'
 
 		self.globalData.recordFuncAbs64InRdata(callee, rdataLabel: label, offsetInLabel: offsetInLabel)
-	end 'stampWitnessOwnershipWord'
+	end 'stampOwnershipWord'
 
 	// ⭐⭐ **THE SYMBOL A WITNESS SLOT POINTS AT IS THE MEMBER `checkConformance` ACCEPTED — NOT A SECOND JOIN
 	// OF THE SAME TWO NAMES (R10).** This site used to mint `qualifiedMethodName(typeName, method.name)` for
@@ -1543,6 +1621,15 @@ type MaxonToStdLowering
 			let receiver = try argIds.get(0) otherwise panic("materializeLayoutArgFor: layout-needing instance method '{String.from(callee)}' has no receiver argument — its first parameter is `self`")
 			return self.materializeLayoutArg(receiver, callee: callee, dstBlock: dstBlock)
 		end 'instanceMethod'
+		// ⭐ **A FIELD-DEFAULT HELPER IS THE ONE RECEIVERLESS LAYOUT-NEEDING CALLEE WHOSE DESCRIPTOR COMES
+		// FROM THE CALLER (W43b).** Its result is the FIELD's type (`Array with Key`), not the enclosing
+		// instance, so there is nothing to read a descriptor off — but its only call site is a `Self{…}`
+		// inside the declaring type's own body (`requireConstructible`'s E3076), which is a method of that
+		// type and therefore holds the descriptor to forward. `Parser.scanDescriptorNeedsInto` gives that
+		// method the slot for exactly this reason, so `forwardCallerLayout` always finds one.
+		if isFieldDefaultHelperName(callee) 'fieldDefault'
+			return self.forwardCallerLayout(callee)
+		end 'fieldDefault'
 		return self.materializeStaticConstructorLayout(result, callee: callee, dstBlock: dstBlock)
 	end 'materializeLayoutArgFor'
 
@@ -1605,12 +1692,20 @@ type MaxonToStdLowering
 
 	// The `.rdata` label of `gid`'s descriptor blob, emitting it on first reference. The blob is PURE DATA —
 	// box size, alignment, the T-slot storage width, and the source-level `elementLogicalSize` that
-	// `sizeof(T)` reads. `destroyFunc@40` is 0 on disk; when `gid` holds a MANAGED opaque-`T` `Array` field
-	// (`Container with String`, P1.7 slice 3b-ii), a `funcAbs64InRdata` relocation is recorded so the x64
-	// writer patches that slot with the element destructor's `.text` VA — the value the shared opaque
-	// `__arr_create` reads back into its record's `element_destroy@40`. A TRIVIAL argument records nothing and
-	// the slot stays 0 (no element walk). Idempotent: a gid referenced at several call sites registers one blob
-	// and one reloc and shares the label.
+	// `sizeof(T)` reads. Every function-pointer slot is 0 on disk; when `gid` holds an opaque-`T` `Array` or
+	// bare field whose SUBSTITUTED argument owns a record (`Container with String`, P1.7 slice 3b-ii), a
+	// `funcAbs64InRdata` relocation is recorded so the x64 writer patches `destroyFunc@40` with that
+	// argument's destructor `.text` VA — the value the shared opaque `__arr_create` reads back into its
+	// record's `element_destroy@40`. An argument owning NO record (a scalar, a ranged alias, a payload-free
+	// enum) records nothing and the slot stays 0, so its walk is skipped. Idempotent: a gid referenced at
+	// several call sites registers one blob and one reloc and shares the label.
+	//
+	// ⚠ **THE GATE IS THE ARGUMENT'S OWNERSHIP PROTOCOL, NOT ITS CONSUME CLASS, AND THIS COMMENT SAID
+	// "A TRIVIAL ARGUMENT RECORDS NOTHING" WHILE THE CODE MEANT SOMETHING NARROWER (W41-trivial).** An
+	// all-scalar STRUCT argument is trivial to CONSUME and is still a refcounted box: it now stamps both
+	// `destroyFunc@40` and `retainFunc@64`, which is what makes the reference a container takes releasable.
+	// See `ProgramSignatures.managedOpaqueArrayElementOf` for the wrong answer the two words' old, differing
+	// gates produced.
 	function ensureLayoutDescriptor(gid GenericInstanceId) returns String
 		if self.layoutDescriptors.contains(gid) 'cached'
 			return self.layoutDescriptors.labelFor(gid)
@@ -1638,32 +1733,52 @@ type MaxonToStdLowering
 		// are named in each other's comments.
 		let soleArgLogicalSize = self.signatures.genericInstanceSoleArgLogicalSizeOrNone(gid)
 		let descriptor = LayoutDescriptor.create(self.signatures.genericInstanceBoxSize(gid), alignment: LAYOUT_MIN_ALIGNMENT, elementSize: LAYOUT_TYPE_PARAM_SLOT_BYTES, elementLogicalSize: soleArgLogicalSize)
-		let label = self.globalData.registerRdataConstantLabeled("__layout_{String.from(self.signatures.mangleGenericInstance(gid))}", bytes: encodeLayoutDescriptor(descriptor))
+		// ⭐ ONE BLOCK PER TYPE PARAMETER — see `layoutDescriptorBytesFor` for the wild free a single shared
+		// `destroyFunc@40` caused on a two-parameter generic. A one-parameter instance emits one block and is
+		// byte-identical to what it always emitted.
+		let paramCount = self.signatures.genericInstanceArgCount(gid)
+		let label = self.globalData.registerRdataConstantLabeled("__layout_{String.from(self.signatures.mangleGenericInstance(gid))}", bytes: encodeLayoutDescriptor(descriptor, typeParamCount: paramCount))
 		self.layoutDescriptors.record(gid, label: label)
 
 		// A MANAGED opaque-`T` `Array` field's `destroyFunc@40` is the ONLY compile-time reference to the
 		// element destructor — the shared body's `loadIndirect(descriptor, +40)` is a runtime read the usage
 		// scan cannot see — so the relocation both fills the slot AND is what the writer resolves the
-		// destructor's `.text` VA against. The destructor is DCE-rooted where the enclosing instance's own
-		// `__destruct_<mangled>` is noted (`noteDestructorUsage`), so it is installed for the writer to resolve.
-		if self.signatures.genericInstanceHasManagedOpaqueArrayField(gid) 'managedOpaqueElement'
-			self.globalData.recordFuncAbs64InRdata(self.signatures.managedOpaqueArrayElementDropCallee(gid), rdataLabel: label, offsetInLabel: LAYOUT_OFFSET_DESTROY_FUNC)
-		end 'managedOpaqueElement'
-
-		// ⭐ **THE `copyFunc@32` STAMP — the exact CLONE dual of the `destroyFunc@40` stamp above (P1.7 slice
-		// 3b-vi-b-β).** When the instance's managed opaque-`T` `Array` element is DIRECT-clonable (a String /
-		// struct / boxed-union / trivial-element-array element — the only shape a single `(box) -> newBox` cloner
-		// can hold), a second `funcAbs64InRdata` relocation fills `copyFunc@32` with the element CLONER's `.text`
-		// VA, the value the shared opaque-copy wrappers read back and `callIndirect` per element. A TRIVIAL element
-		// records nothing (its wrapper takes the byte-blit/COW path), and a MANAGED but non-direct element
-		// (`Array with (Array with String)`) records nothing either — it is never copied (the front end rejects a
-		// base that copies with such an instantiation), so its 0 slot is never read. The cloner is DCE-rooted on
-		// relocation this line records (`MmRuntime.noteRelocatedFunctionUsage`, which reads `pendingRdataRelocs`
-		// after lowering), so the reloc never names a `.text` VA that was not installed — the rooted set IS the
-		// relocated set rather than a prediction of it.
-		if self.signatures.genericInstanceOpaqueArrayElementIsCopyable(gid) 'copyableOpaqueElement'
-			self.globalData.recordFuncAbs64InRdata(self.signatures.managedOpaqueArrayElementCloneCallee(gid), rdataLabel: label, offsetInLabel: LAYOUT_OFFSET_COPY_FUNC)
-		end 'copyableOpaqueElement'
+		// destructor's `.text` VA against.
+		//
+		// ⭐⭐ **EVERY WORD STAMPED BELOW IS DCE-ROOTED OFF THE RELOCATION THE STAMP ITSELF RECORDS** —
+		// `MmRuntime.noteRelocatedFunctionUsage`, which walks `pendingRdataRelocs` after lowering (W17-c). So the
+		// rooted set IS the relocated set rather than a prediction of it, and no word can name a `.text` VA that
+		// was never installed. Stated ONCE for all three words because it is one fact about the stamp and not
+		// three facts about the slots: the pre-pipeline walks that used to predict the drop and clone roots
+		// per-instance are deleted, and a predicate here is the sole gate on whether a word is written at all.
+		//
+		// ⭐ **THE `copyFunc@32` STAMP — the exact CLONE dual (P1.7 slice 3b-vi-b-β).** When the parameter's
+		// managed opaque `Array` element is DIRECT-clonable (a String / struct / boxed-union / trivial-element-array
+		// element — the only shape a single `(box) -> newBox` cloner can hold), a second `funcAbs64InRdata`
+		// relocation fills `copyFunc@32` with the element CLONER's `.text` VA, the value the shared opaque-copy
+		// wrappers read back and `callIndirect` per element. A TRIVIAL element records nothing (its wrapper takes
+		// the byte-blit/COW path), and a MANAGED but non-direct element (`Array with (Array with String)`) records
+		// nothing either — it is never copied (the front end rejects a base that copies with such an
+		// instantiation), so its 0 slot is never read.
+		for position in 0 upto paramCount 'eachTypeParam'
+			let blockBase = layoutBlockOffsetFor(position)
+			// ⭐⭐ **THE `destroyFunc@40` STAMP AND THE `retainFunc@64` STAMP ARE ONE PAIR OF LINES OVER ONE
+			// PREDICATE, AND SPLITTING THEM LEAKED (found at review).** Both are `stampOwnershipWord` over a
+			// per-argument callee that answers EMPTY when the argument owns no record, so the two words are
+			// non-zero together by construction — see `ProgramSignatures.typeParamDropCallee` for the measured
+			// exit-101 the old FIELD-shaped drop gate produced beside this ARGUMENT-shaped retain gate.
+			self.stampOwnershipWord(self.signatures.typeParamDropCallee(gid, position: position), label: label, offsetInLabel: (blockBase + LAYOUT_OFFSET_DESTROY_FUNC) as ByteOffset)
+			if self.signatures.genericInstanceOpaqueArrayElementIsCopyable(gid, position: position) 'copyableOpaqueElement'
+				self.globalData.recordFuncAbs64InRdata(self.signatures.managedOpaqueArrayElementCloneCallee(gid, position: position), rdataLabel: label, offsetInLabel: (blockBase + LAYOUT_OFFSET_COPY_FUNC) as ByteOffset)
+			end 'copyableOpaqueElement'
+			// ⭐⭐ **THE `retainFunc@64` STAMP — how a shared body takes the reference a record it BUILDS owes on
+			// a borrowed opaque `T` (W41-opaque).** Its GATE is the argument's own ownership, which the drop
+			// word above now shares; only `copyFunc@32` between them is a fact about the instance's opaque
+			// `Array` FIELD, because a clone is about that column and not about the argument.
+			// `typeParamRetainCallee` answers EMPTY for an argument owning no record and `stampOwnershipWord`
+			// then leaves the zero `__retain_type_param` treats as inert.
+			self.stampOwnershipWord(self.signatures.typeParamRetainCallee(gid, position: position), label: label, offsetInLabel: (blockBase + LAYOUT_OFFSET_RETAIN_FUNC) as ByteOffset)
+		end 'eachTypeParam'
 
 		return label
 	end 'ensureLayoutDescriptor'
@@ -1769,10 +1884,14 @@ type MaxonToStdLowering
 		// element destructor is not known statically, so the enclosing instance's layout descriptor is
 		// PREPENDED as the first argument (`__drop_type_param(descriptor, value)`) — the drop twin of
 		// `appendOpaqueArrayCreate`'s destructor read, off the SAME `implicitLayoutValueId`.
-		if callee.equals(DropTypeParamName) 'dropTypeParam'
-			self.appendDropTypeParamDescriptor(result, callee: callee, args: args, dstBlock: dstBlock)
+		// A `__drop_type_param` (P1.7 slice 3b-v) and its co-ownership twin `__retain_type_param` (W41-opaque)
+		// each arrive with ONE argument (the opaque value) and take the descriptor in front of it. ONE arm
+		// because the prepend is one act: the block is chosen off the VALUE's own type parameter either way,
+		// and two arms is where the drop's block and the retain's would come to be read differently.
+		if callee.equals(DropTypeParamName) or callee.equals(RetainTypeParamName) 'typeParamOwnership'
+			self.appendTypeParamDescriptor(result, callee: callee, args: args, dstBlock: dstBlock)
 			return
-		end 'dropTypeParam'
+		end 'typeParamOwnership'
 		// A hash-table runtime call that hashes/compares its key (`__set_insert`/`__set_contains`/
 		// `__set_remove`, and the `Map` family's `__map_upsert`/`__map_contains`/`__map_get`) gets the key's
 		// `Hashable`/`Equatable` witness-table addresses appended as its two hidden trailing arguments — the
@@ -1793,7 +1912,7 @@ type MaxonToStdLowering
 			self.appendArrayElementWitnessArgs(result, callee: callee, args: args, dstBlock: dstBlock)
 			return
 		end 'arrayElementWitness'
-		self.stdModule.appendOp(dstBlock, op: StdOp.call(result, callee: callee, args: self.opaqueCopyArgsWithDescriptor(callee, args: args)))
+		self.stdModule.appendOp(dstBlock, op: StdOp.call(result, callee: callee, args: self.opaqueCopyArgsWithDescriptor(callee, args: args, dstBlock: dstBlock)))
 	end 'lowerRuntimeCall'
 
 	// ⭐ **APPEND THE KEY-WITNESS ARGUMENTS to a set runtime call (P1.7b slice A).** `insert`/`contains`/
@@ -1911,34 +2030,54 @@ type MaxonToStdLowering
 	// parser's copy-descriptor-need seed (a method that copies an opaque array reserves it, exactly as an opaque
 	// `X.create()` or a `sizeof(T)` method does), so its absence here is a parser/lowering divergence — a loud
 	// bug, not a silent wrong load, matching `appendOpaqueArrayCreate`.
-	function opaqueCopyArgsWithDescriptor(callee ByteArray, args ValueIdArray) returns ValueIdArray
+	function opaqueCopyArgsWithDescriptor(callee ByteArray, args ValueIdArray, dstBlock IrBlock) returns ValueIdArray
 		if not isOpaqueArrayCopyCallee(callee) 'notOpaqueCopy'
 			return args
 		end 'notOpaqueCopy'
 		if not self.hasImplicitLayout 'noLayout'
 			panic("opaqueCopyArgsWithDescriptor: opaque array copy '{String.from(callee)}' in '{String.from(self.currentFuncName)}' but the function carries no layout descriptor parameter — the parser's copy-descriptor-need seed and this lowering disagree")
 		end 'noLayout'
+		// The COPIED array's own type parameter decides the block (W43b) — its `copyFunc@32` is that column's
+		// cloner and no other's, the exact dual of `appendOpaqueArrayCreate`'s destructor read.
+		let source = try args.get(0) otherwise panic("opaqueCopyArgsWithDescriptor: opaque array copy '{String.from(callee)}' has no receiver argument — its first parameter is the array record")
 		var fullArgs = ValueIdArray.create()
 		fullArgs.append(args)
-		fullArgs.push(self.implicitLayoutValueId)
+		fullArgs.push(self.descriptorBlockAddr(self.opaqueArrayBlockOffset(source, callee: callee), dstBlock: dstBlock))
 		return fullArgs
 	end 'opaqueCopyArgsWithDescriptor'
 
-	// Emit `__drop_type_param(descriptor, value)` (P1.7 slice 3b-v): prepend the CURRENT function's layout
-	// descriptor to the single `value` argument the parser emitted. The descriptor parameter is guaranteed by
-	// the parser's descriptor-need seed (a method that drops an opaque feed binding needs it, exactly as a
+	// Emit `__drop_type_param(descriptor, value)` (P1.7 slice 3b-v) / `__retain_type_param(descriptor, value)`
+	// (W41-opaque): prepend the CURRENT function's layout descriptor to the single `value` argument the parser
+	// emitted. The descriptor parameter is guaranteed by the parser's descriptor-need seed (a method that drops
+	// an opaque feed binding, or STORES a borrowed opaque value into a record, needs it exactly as a
 	// `sizeof(T)` / opaque `X.create()` method does), so its absence here is a parser/lowering divergence — a
-	// loud bug, not a silent wrong load, matching `appendOpaqueArrayCreate`. `result` is the parser's VOID
-	// result value (a drop returns nothing), passed through so the Std op's result column stays dense.
-	function appendDropTypeParamDescriptor(result ValueId, callee ByteArray, args ValueIdArray, dstBlock IrBlock)
+	// loud bug, not a silent wrong load, matching `appendOpaqueArrayCreate`. `result` is the parser's result
+	// value — VOID for the drop, the CO-OWNER for the retain — passed through so the Std op's result column
+	// stays dense either way.
+	function appendTypeParamDescriptor(result ValueId, callee ByteArray, args ValueIdArray, dstBlock IrBlock)
 		if not self.hasImplicitLayout 'noLayout'
-			panic("appendDropTypeParamDescriptor: `__drop_type_param` in '{String.from(self.currentFuncName)}' but the function carries no layout descriptor parameter — the parser's descriptor-need seed (a method that drops an opaque feed binding) and this lowering disagree")
+			panic("appendTypeParamDescriptor: `{String.from(callee)}` in '{String.from(self.currentFuncName)}' but the function carries no layout descriptor parameter — the parser's descriptor-need seed and this lowering disagree")
 		end 'noLayout'
+		// The value's own type parameter decides the block (W43b): both entries read their word off whatever
+		// descriptor they are handed, so a two-parameter generic acting on its SECOND parameter's value must be
+		// handed that parameter's block and not the first's.
+		let value = try args.get(0) otherwise panic("appendTypeParamDescriptor: `{String.from(callee)}` has no value argument")
 		var fullArgs = ValueIdArray.create()
-		fullArgs.push(self.implicitLayoutValueId)
+		fullArgs.push(self.descriptorBlockAddr(self.typeParamValueBlockOffset(value, callee: callee), dstBlock: dstBlock))
 		fullArgs.append(args)
 		self.stdModule.appendOp(dstBlock, op: StdOp.call(result, callee: callee, args: fullArgs))
-	end 'appendDropTypeParamDescriptor'
+	end 'appendTypeParamDescriptor'
+
+	// The descriptor block of the type parameter a descriptor-gated ownership value is typed at — read off the
+	// value's own `typeParameter` token, the same token the stamp matched positions against.
+	function typeParamValueBlockOffset(value ValueId, callee ByteArray) returns ByteOffset
+		let tag = self.valueTagOf(value)
+		if tag != ValueTypeTag.typeParameter 'notATypeParameter'
+			panic("typeParamValueBlockOffset: `{String.from(callee)}` was given a {tag.name} value — only an opaque type-parameter value is owned through the descriptor")
+		end 'notATypeParameter'
+		let token = try self.valueNameIds.get(value) otherwise panic("typeParamValueBlockOffset: typeParameter value v{value} has no name-id (its type-parameter token) — the two type columns are dense and in lockstep")
+		return layoutBlockOffsetFor(self.signatures.opaqueTypeParamPosition(MaxonType.typeParameter(token)))
+	end 'typeParamValueBlockOffset'
 
 	// Is this runtime call an OPAQUE-`T` `Array.create()` — an `__arr_create` whose result instance's element
 	// is a type parameter (P1.7 slice 3b-i)? The parser emits such a create with only `element_size`; the
@@ -1963,13 +2102,47 @@ type MaxonToStdLowering
 		if not self.hasImplicitLayout 'noLayout'
 			panic("appendOpaqueArrayCreate: opaque `Array.create()` in '{String.from(self.currentFuncName)}' but the function carries no layout descriptor parameter — the parser's descriptor-need seed and this lowering disagree")
 		end 'noLayout'
+		// ⭐ **WHICH type parameter's dictionary — the block for the ELEMENT's OWN parameter (W43b).** A
+		// two-parameter generic creates one opaque array per column from ONE shared body, and reading a fixed
+		// `destroyFunc@40` gave both columns the FIRST column's destructor: measured, an `Array with Value`
+		// over `Integer` was stamped `__str_decref` and freed its ints as Strings at teardown.
 		let destroyId = self.mintStdValueId()
-		self.stdModule.appendOp(dstBlock, op: StdOp.loadIndirect(destroyId, addrId: self.implicitLayoutValueId, offset: LAYOUT_OFFSET_DESTROY_FUNC, valueType: StdType.i64))
+		self.stdModule.appendOp(dstBlock, op: StdOp.loadIndirect(destroyId, addrId: self.implicitLayoutValueId, offset: self.opaqueArrayBlockOffset(result, callee: callee) + LAYOUT_OFFSET_DESTROY_FUNC, valueType: StdType.i64))
 		var fullArgs = ValueIdArray.create()
 		fullArgs.append(args)
 		fullArgs.push(destroyId)
 		self.stdModule.appendOp(dstBlock, op: StdOp.call(result, callee: callee, args: fullArgs))
 	end 'appendOpaqueArrayCreate'
+
+	// ⭐ **THE DESCRIPTOR BLOCK an OPAQUE `Array with T` VALUE's dictionary lives in (W43b)** — the block for
+	// the type parameter its ELEMENT names. Read off the array instance's own element type, which is the same
+	// `typeParameter` token `managedOpaqueArrayElementOf` matched positions against when it stamped the slot,
+	// so the write side and this read side name one block by construction. A concrete-element array never
+	// reaches here (its callers gate on `containerElementIsOpaque` / `isOpaqueArrayCopyCallee`).
+	function opaqueArrayBlockOffset(arrayInstance ValueId, callee ByteArray) returns ByteOffset
+		let gid = try self.valueNameIds.get(arrayInstance) otherwise panic("opaqueArrayBlockOffset: opaque array value v{arrayInstance} of '{String.from(callee)}' has no name-id (its GenericInstanceId) — the two type columns are dense and in lockstep")
+		return layoutBlockOffsetFor(self.signatures.opaqueTypeParamPosition(self.signatures.containerElementType(gid)))
+	end 'opaqueArrayBlockOffset'
+
+	// ⭐ **THE ADDRESS OF ONE TYPE PARAMETER'S DICTIONARY BLOCK inside the current function's descriptor
+	// (W43b)** — what a runtime graph that takes a descriptor POINTER and reads a FIXED field offset from it
+	// (`__drop_type_param`'s `destroyFunc@40`, the `__arr_*_opaque` wrappers' `copyFunc@32`) must be handed,
+	// so that those graphs need no second offset argument and no signature change: the caller knows the
+	// parameter statically and the callee keeps reading field 0 of whatever block it was given.
+	//
+	// Parameter 0's block IS the descriptor, so a single-parameter instance emits no arithmetic at all and
+	// its code is byte-identical to what it emitted before the descriptor grew a block per parameter.
+	function descriptorBlockAddr(blockOffset ByteOffset, dstBlock IrBlock) returns ValueId
+		if blockOffset == 0 'theFirstBlockIsTheDescriptor'
+			return self.implicitLayoutValueId
+		end 'theFirstBlockIsTheDescriptor'
+
+		let offsetId = self.mintStdValueId()
+		self.stdModule.appendOp(dstBlock, op: StdOp.const(offsetId, value: blockOffset as ParsedInt, valueType: StdType.i64))
+		let addrId = self.mintStdValueId()
+		self.stdModule.appendOp(dstBlock, op: StdOp.binOp(addrId, lhs: self.implicitLayoutValueId, rhs: offsetId, opcode: StdBinOpcode.add, operandType: StdType.i64))
+		return addrId
+	end 'descriptorBlockAddr'
 
 	// Lower a Maxon `indirectCall` to `StdOp.callIndirect` (P1.5-A1). There is NO signature to SLOT
 	// against — a function TYPE has no parameter names, so the arguments are already in call order (the
@@ -2837,7 +3010,7 @@ type MaxonToStdLowering
 			end 'witnessTryCall'
 			// The throwing OPAQUE-`T` `slice` (`__arr_slice_opaque`) takes the enclosing instance's descriptor as
 			// its last argument, appended here exactly as the non-throwing clone/append do in `lowerRuntimeCall`.
-			self.stdModule.appendOp(dstBlock, op: StdOp.tryCall(result, errorFlagId: errorFlag, callee: callee, args: self.opaqueCopyArgsWithDescriptor(callee, args: args)))
+			self.stdModule.appendOp(dstBlock, op: StdOp.tryCall(result, errorFlagId: errorFlag, callee: callee, args: self.opaqueCopyArgsWithDescriptor(callee, args: args, dstBlock: dstBlock)))
 			return
 		end 'compilerOwnTryCall'
 
