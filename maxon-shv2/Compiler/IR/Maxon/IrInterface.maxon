@@ -1781,21 +1781,24 @@ end 'builtinConformerName'
 // method symbol can wear `String.`. **Remove `String` from that list and this line becomes false**, in the
 // silent direction — see that function for the two wrong answers measured before it covered the name.
 //
-// ⛔⛔ **ITS OTHER HALF USED TO BE DISCHARGED BY A DOOR, AND THAT DOOR IS GONE — SO THE HAZARD IT NAMED IS
-// LIVE, AND IT WAS LIVE BEFORE THE DOOR WENT.** This paragraph read *"a source-written `String.<member>(…)`
-// is intercepted by `Parser.parseStringStaticCall` at its own span and never reaches
+// ⛔⛔ **ITS OTHER HALF USED TO BE DISCHARGED BY A DOOR, AND THAT DOOR IS GONE — SO THE HAZARD IT NAMED WAS
+// ALREADY LIVE BEFORE THE DOOR WENT.** This paragraph read *"a source-written `String.<member>(…)` is
+// intercepted by `Parser.parseStringStaticCall` at its own span and never reaches
 // `Parser.requireCalleeIsNotReservedName`, so admitting the qualifier here cannot turn a user's `String.`
 // call into an 'unknown compiler intrinsic'."* W17 gave that door a corpus fall-through, which forwards a
-// member `stdlib/String.maxon` declares STRAIGHT to `parseCallNamed` — so `String.hash(…)` reached the
-// reserved-callee gate from that release onwards, and W50's removal of the door only widened which spellings
-// do. MEASURED on both: **`E3004 call to undefined function 'String.hash': the '__' prefix names a compiler
-// intrinsic, and no intrinsic of that name exists`** — a message whose stated REASON is false of a name
-// carrying no `__` at all.
+// member `stdlib/String.maxon` declares STRAIGHT to `parseCallNamed` — so `String.hash(…)` had reached the
+// reserved-callee gate from that release onwards, with the door still standing. MEASURED on W55's base:
+// **`E3004 call to undefined function 'String.hash': the '__' prefix names a compiler intrinsic, and no
+// intrinsic of that name exists`** — a message whose stated REASON is false of a name carrying no `__`.
 //
-// ⇒ **THE MESSAGE IS NOW DERIVED FROM WHICH CLAUSE OF `MmRuntime.isCompilerInternalCallee` MATCHED**
-// (`ParseError.unknownCompilerIntrinsic` carries the reason), so a synthesized conformance impl named
-// directly is refused for being one rather than for a prefix it does not have. `character-conformance`'s
-// twin does not arise here: `Character.` is absent below.
+// ⚠ **W55 WIDENED WHICH SPELLINGS REACH IT, WHICH IS WHY THE MESSAGE IS THAT RUNG'S TO FIX.** Retiring the
+// door sent every `String.<member>(…)` down the ordinary qualified path, so a synthesized impl the corpus
+// does NOT declare arrives here too: `String.compare("a", "b")` was a positioned E2015 off the retired
+// static roster on that same base, and is the reserved-callee gate's now.
+//
+// ⇒ **THE MESSAGE IS DERIVED FROM WHICH CLAUSE OF `MmRuntime.reservedCalleeReasonOf` MATCHED**, so a
+// synthesized conformance impl named directly is refused for BEING one rather than for a prefix it does not
+// have. `character-conformance`'s twin does not arise here: `Character.` is absent below.
 //
 // The conformers listed here are exactly those `builtinConformerOfTag` can return, because those are the
 // only qualifiers the parser can emit a direct dispatch under. A tag joins that map and this one together.
@@ -1846,7 +1849,7 @@ end 'isBuiltinConformanceImplName'
 // one caller (`Parser.requirePrimitiveStaticIsResolvable`) sits behind `namesAPrimitiveType`, which admits
 // `int`/`float`/`bool`/`byte` and no other spelling — so a `String.` qualifier cannot reach here whatever
 // door it came through. That is a fact about the CALLER and survives the removal of
-// `parseStringStaticCall` (W50), where the header above's version of the argument did not.
+// `parseStringStaticCall` (W55), where the header above's version of the argument did not.
 export function isBuiltinConformanceQualifier(name ByteArray) returns bool
 	return match splitQualifiedName(name) 'parts'
 		notQualified gives false

@@ -188,8 +188,43 @@ let CompilerInternalPrefix = b"__"
 // (`TypeResolution.isCompilerOwnedTypeName`). It is allocation-free (`isQualifiedUnderTypeName`), because
 // this sits on the per-call path of `validateCall` and `lowerCall`.
 export function isCompilerInternalCallee(callee ByteArray) returns bool
-	return bytesStartWith(callee, prefix: CompilerInternalPrefix) or isBuiltinConformanceImplName(callee)
+	return not (reservedCalleeReasonOf(callee) == ReservedCalleeReason.notReserved)
 end 'isCompilerInternalCallee'
+
+// ⭐⭐ **WHY A CALLEE IS THE COMPILER'S OWN — the two clauses above, told apart rather than summed (W55).**
+// The predicate answers *whether*; a REFUSAL has to say *why*, and deriving the two separately is how the
+// gate and its sentence came to disagree: `Parser.requireCalleeIsNotReservedName` refused on the OR and then
+// explained every refusal with the FIRST clause's reason, so a synthesized impl named directly reported
+// **`E3004 call to undefined function 'String.compare': the '__' prefix names a compiler intrinsic`** about
+// a name carrying no `__` at all. One classifier, asked once, removes the second derivation rather than
+// keeping it in step.
+//
+// ⚠ **THE TWO CLAUSES ARE DISJOINT AND THE ORDER IS THEREFORE NOT A PRECEDENCE.** A synthesized impl is
+// `<conformer>.<method>` over `int`/`float`/`bool`/`String`, none of which can wear the reserved prefix
+// (three are keywords; `String` is refused to any declaration by `TypeResolution.isCompilerOwnedTypeName`),
+// so no callee answers both and neither clause can mask the other.
+export enum ReservedCalleeReason
+	// An ordinary callee: the name is the program's to declare, and this gate has nothing to say about it.
+	notReserved
+	// `__`-prefixed. E2051 forbids DECLARING one, so no signature can ever arrive for it.
+	compilerInternalPrefix
+	// A builtin-conformance impl the compiler synthesizes (`int.compare`, `String.hash`). It wears no prefix
+	// — a witness-table reloc needs a real `.text` symbol — and no file declares it, so it is compiler-owned
+	// for a reason the name's SHAPE cannot show.
+	synthesizedConformanceImpl
+end 'ReservedCalleeReason'
+
+export function reservedCalleeReasonOf(callee ByteArray) returns ReservedCalleeReason
+	if bytesStartWith(callee, prefix: CompilerInternalPrefix) 'wearsTheReservedPrefix'
+		return ReservedCalleeReason.compilerInternalPrefix
+	end 'wearsTheReservedPrefix'
+
+	if isBuiltinConformanceImplName(callee) 'aSynthesizedImpl'
+		return ReservedCalleeReason.synthesizedConformanceImpl
+	end 'aSynthesizedImpl'
+
+	return ReservedCalleeReason.notReserved
+end 'reservedCalleeReasonOf'
 
 // ⭐⭐ **DOES THIS CALLEE HAVE NO DECLARED SIGNATURE FOR THE USER-FUNCTION CHECKS TO READ?** Equivalently:
 // **is it a name the COMPILER EMITTED**, since a compiler-emitted symbol is built at the Std tier, long after

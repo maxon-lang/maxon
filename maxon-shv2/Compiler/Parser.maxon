@@ -1046,10 +1046,15 @@ export union ParseError implements Error
 	// not E3059 because the mistake is not that one error type does not fit another — it is that the value is
 	// not an error at all, which is the plain type mismatch its sibling `throwsClause` is the arm for.
 	thrownValueNotAnErrorEnum(line LineNumber, column ColumnNumber)
-	// ⭐ A `__`-prefixed CALLEE written in source that names no compiler intrinsic (P1.0b step 2). Renders as
-	// **E3004** — the SAME code `SemanticCheck.validateCall` gives `undeclaredThing()` — because it is the
-	// same fact: the call names a function that does not exist. `__whatever()` and `whatever()` are one
+	// ⭐ A COMPILER-OWNED CALLEE written in source that names no function the program has (P1.0b step 2).
+	// Renders as **E3004** — the SAME code `SemanticCheck.validateCall` gives `undeclaredThing()` — because it
+	// is the same fact: the call names a function that does not exist. `__whatever()` and `whatever()` are one
 	// mistake and must not answer with two codes.
+	//
+	// ⚠ **IT CARRIES THE `reason` BECAUSE THE FAMILY HAS TWO CLAUSES AND ONLY ONE WAS EVER EXPLAINED (W55).**
+	// `MmRuntime.reservedCalleeReasonOf` says which — the reserved `__` prefix, or a synthesized
+	// builtin-conformance impl, which wears no prefix at all. The name still says `Intrinsic` because that is
+	// what both clauses mean to the author: a symbol the compiler owns and no file may declare.
 	//
 	// It is a PARSE error, and that is the one thing about it that needs a reason, because shv2 deliberately
 	// moved "undefined function" OUT of the parser: a plain callee may be declared in another FILE, and only
