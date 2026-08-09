@@ -487,11 +487,16 @@ export let ArrEqName = b"__arr_eq"
 // they are `__arr_`-prefixed and ride the existing `usesArray` install with no bit of their own.
 //
 // ⚠ **NONE FOLDS ONTO AN EXISTING ENTRY, AND THE REASONS ARE SEPARATE.**
-//   • `__arr_mem_create(count, elementSize)` PUBLISHES `count` elements — length AND capacity are `count`,
-//     which is what makes the reference's `ByteMemory.create(1, 1)` followed by `setByte(0, …)` legal
-//     (`stdlib/Character.maxon:172-179`) — where `__arr_create` yields an EMPTY array whose every index is out
-//     of bounds. It also takes its element size as a RUNTIME argument rather than a compile-time literal,
-//     because the source writes one.
+//   • `__arr_mem_create(count, elementSize)` RESERVES `count` elements — `count` is a CAPACITY request and
+//     the length stays 0 — which is what makes the reference's `ByteMemory.create(1, 1)` followed by
+//     `setByte(0, …)` legal (`stdlib/Character.maxon:172-179`): the SETTER's bound is capacity, not length.
+//     `__arr_create` takes no count at all and cannot express the reservation. It also takes its element size
+//     as a RUNTIME argument rather than a compile-time literal, because the source writes one.
+//     ⚠⚠ **THIS PARAGRAPH SAID "PUBLISHES `count` ELEMENTS — length AND capacity are `count`" UNTIL THE
+//     Array-retirement RUNG, AND IT HAD BEEN FALSE SINCE R4.4.** That was R4.2's behaviour;
+//     `create-and-length` measured it wrong and R4.4 changed the builder, whose own comment states the
+//     correct contract and cites the case. The two headers then sat in one file disagreeing, and the stale
+//     one is the one a reader meets first — it cost this rung a spec case written against a length of 4.
 //   • `__arr_set_length(arr, n)` REFUSES an `n` above the capacity where `__arr_resize` GROWS to fit. That
 //     refusal is the method's whole contract in the reference — `stdlib/Array.maxon:378-382` builds `resize`
 //     out of `reserve` THEN `setLength` precisely because `setLength` will not grow — so folding the two
@@ -521,6 +526,94 @@ export let ArrSetByteName = b"__arr_set_byte"
 export let ArrMemGrowName = b"__arr_mem_grow"
 export let ArrByteAtName = b"__arr_byte_at"
 export let ArrElementSizeName = b"__arr_element_size"
+
+// ⭐⭐ **THE THREE RELOCATORS — `swap`, `shiftRight`, `shiftLeft`.** They are what `stdlib/Array.maxon` builds
+// `insert`/`remove` out of and what `stdlib/helpers/sort/smallSort.maxon` builds every sort out of, and they
+// are the one group on this surface that neither PRODUCES nor CONSUMES an element: every one of them moves
+// elements the buffer already owns from one slot to another, so the multiset of live elements — and every
+// element's refcount — is invariant across all three.
+//
+// ⭐⭐ **THAT INVARIANCE IS THE WHOLE DESIGN, AND `swap` IS WHERE GETTING IT WRONG IS A USE-AFTER-FREE.** A
+// swap built from `get` + `set` makes `set` do exactly what `set` correctly does for an OVERWRITE — release
+// the occupant it displaces — while a borrowed copy of that very element is still in flight toward the other
+// slot. The element is freed mid-swap and the other slot is left addressing reclaimed memory.
+// `stdlib/helpers/sort/smallSort.maxon:24-31` names this outright as the reason `Array.swap` routes through
+// the raw builtin, and v1 says it again at its registration
+// (`maxon-selfhosted/…/LowerMaxonToStd.maxon:1652-1656`). So the three are RAW SLOT operations: they read
+// and write element words through `emitLoadElemAt`/`emitStoreElemAt`/`__arr_move_elems`, and no destructor,
+// incref or decref appears in any of them.
+//
+// ⚠ **`remove` IS NOT HERE, AND ITS ABSENCE IS THE FILE'S OWN RULE RATHER THAN AN OMISSION.** The buffer's
+// `remove` is the `Array`'s `remove` — same `length` bound, same tail slide, same erase of the vacated top
+// slot — so it dispatches to `__arr_remove` exactly as `get`/`slice`/`clear`/`append` dispatch to their
+// `Array` entries. What it costs is stated where the other four state it (`isManagedMemoryRuntimeCallee`): a
+// member sharing an `Array` entry throws that entry's `ArrayError` rather than `__ManagedMemoryError`. No
+// corpus caller binds it — `stdlib/Array.maxon:294,328` both write `otherwise throw ArrayError.…` — so the
+// difference is unobservable, and a second byte-identical entry to relabel one enum would be the twin this
+// file spends its whole header avoiding.
+//
+// ⚠ **THE TWO SHIFTS ARE BOUNDED BY `capacity`, NOT `length`, AND THAT IS NOT A LOOSENING.** They are the
+// STAGING half of a publish: `Array.insert` reserves, shifts a hole open ABOVE the live range, writes into it
+// and only then calls `setLength` to publish (`stdlib/Array.maxon:308-323`). A `length` bound would refuse
+// the very sequence they exist for. Both references bound them the same way, and both say so in the corpus's
+// own prose (`specs/managed-memory-methods.md:23-24`, `specs/internal-types.md:46-47`).
+export let ArrMemSwapName = b"__arr_mem_swap"
+export let ArrMemShiftRightName = b"__arr_mem_shift_right"
+export let ArrMemShiftLeftName = b"__arr_mem_shift_left"
+
+// --- `__ManagedMemoryCursor with Element` — a navigable position inside a buffer ---
+//
+// ⭐⭐ **THE CURSOR RECORD IS 16 BYTES AND HOLDS THE SOURCE RECORD PLUS A POSITION. NOTHING ELSE.** Both
+// reference compilers store FIVE slots — `buffer`, `position`, `length`, `element_size`, `source_ptr`, 40
+// bytes (bootstrap `2-Parser.cs:1482-1490`, v1 `LowerMaxonToStd.maxon:1464-1477`) — and shv2 stores two,
+// reading `buffer@0`, `length@8` and `element_size@24` LIVE off the source on every access.
+//
+// ⚖ **THAT IS A RULED DIVERGENCE, AND IT IS THE ONE PLACE THIS TYPE MAY NOT COPY ITS REFERENCES.** A
+// snapshot is a SECOND COPY of a fact the source already holds, and every one of the three goes stale in a
+// way the references have measured:
+//
+//   • `buffer@0` is invalidated by any REALLOCATION — a `grow`, a `push` past capacity, a COW detach — after
+//     which the cursor reads a freed allocation. v1's cursor dangles exactly here.
+//   • `length@8` is invalidated by `setLength`, `remove`, `pop` and `clear`, after which the cursor's own
+//     bounds tests admit positions the buffer no longer has.
+//   • `element_size@24` is stamped once and never changes, so its snapshot is harmless — but keeping it
+//     would mean the record has a stale half and a fresh half, which is worse to reason about than either.
+//
+// Reading live costs one extra load per access and removes all three. It also routes every element read
+// through `emitLoadElemAt`, the file's ONE element load, so a cursor over a SUB-BYTE-PACKED element
+// (`Array with bool`) is correct without a line of packed arithmetic here — where a snapshotted
+// `element_size` reached a fixed-qword peek in v1, which is the bug that file paid for twice.
+//
+// ⭐ **IT RETAINS THE SOURCE, AND THE RETAIN IS NOT OPTIONAL.** `let c = try makeBuffer().createCursor()`
+// makes the `createCursor` call the source's textual LAST USE, so without a reference of its own the record
+// is released there and every later read is through reclaimed memory — a measured SIGSEGV in both references
+// (`stdlib/Internals.maxon:3040-3050` states it, and v1's `lowerCreateCursor` carries the incref).
+//
+// ⚠ **RETAINING A RECORD IS NOT A HOLE IN MOVE-ONLY OWNERSHIP.** Move-only is a rule about BINDINGS not
+// silently sharing a value; the runtime's refcount has always admitted more than one holder, which is
+// precisely what `__arr_decref`'s `emitRefcountCheckToLastOwner` is for and what the parser's own
+// `try … otherwise` phi reconciliation already emits `__mm_incref` for. What shv2 refuses is an implicit
+// second OWNER of an element (hence `__arr_clone_managed`'s deep clone); a cursor is a second READER of a
+// record, which is the relationship `emitArrayView` already models one level down on the buffer.
+export let ArrCursorCreateName = b"__arr_cursor_create"
+export let ArrCursorCurrentName = b"__arr_cursor_current"
+export let ArrCursorIndexName = b"__arr_cursor_index"
+export let ArrCursorAdvanceName = b"__arr_cursor_advance"
+export let ArrCursorRetreatName = b"__arr_cursor_retreat"
+export let ArrCursorSeekName = b"__arr_cursor_seek"
+export let ArrCursorPeekName = b"__arr_cursor_peek"
+export let ArrCursorDecrefName = b"__arr_cursor_decref"
+
+// The two slots, and the box they sit in. ⚠ `position@8` is never written at creation: `__mm_alloc` zeroes
+// its payload and a fresh cursor starts at 0, the same contract `__arr_create` relies on for
+// `element_destroy@40`.
+// ⚠ Both offsets are file-private and the SIZE is not: the slots are read only by the builders below, while
+// `ProgramSignatures.genericInstanceBoxSize` has to answer how big a cursor's box is. That is the same split
+// `MemoryInvalidByteRangeFlag` was de-exported to restore — a keyword with no cross-file caller is a claim
+// nothing checks.
+let CursorSourceOffset = 0 as ByteOffset
+let CursorPositionOffset = 8 as ByteOffset
+export let CursorRecordBytes = 16 as ParsedInt
 
 // ⭐⭐ **`__arr_mem_set` — THE BUFFER'S ELEMENT WRITE, BOUNDED BY CAPACITY (R4.6).**
 //
@@ -584,11 +677,18 @@ export let ArrMemSetName = b"__arr_mem_set"
 let MemoryIndexOutOfBoundsOrdinal = 0 as ParsedInt
 let MemoryInvalidLengthOrdinal = 3 as ParsedInt
 let MemoryInvalidCapacityOrdinal = 4 as ParsedInt
+// ⭐ **THE TWO SHIFTS' OWN CASE, AND IT BLAMES A RANGE RATHER THAN AN INDEX.** `shiftOutOfBounds` is the case
+// `stdlib/Builtins.maxon:157` declares for exactly this pair, and it is a different complaint from
+// `indexOutOfBounds`: a shift is handed `(index, count)` and refuses when their SUM leaves the capacity, so
+// naming one index would blame a value that may be perfectly in range on its own. Both references raise it
+// here (v1 `stdlib/Internals.maxon:3641,3701`).
+let MemoryShiftOutOfBoundsOrdinal = 5 as ParsedInt
 let MemoryInvalidByteRangeOrdinal = 6 as ParsedInt
 let MemoryInvalidAllocationOrdinal = 7 as ParsedInt
 let MemoryIndexOutOfBoundsFlag = MemoryIndexOutOfBoundsOrdinal + ErrorFlagOrdinalBias
 let MemoryInvalidLengthFlag = MemoryInvalidLengthOrdinal + ErrorFlagOrdinalBias
 let MemoryInvalidCapacityFlag = MemoryInvalidCapacityOrdinal + ErrorFlagOrdinalBias
+let MemoryShiftOutOfBoundsFlag = MemoryShiftOutOfBoundsOrdinal + ErrorFlagOrdinalBias
 // ⚠ **THIS ONE WAS `export` AND ITS FOUR SIBLINGS NEVER WERE, AND NOTHING EVER WROTE DOWN WHY.** Its only
 // cross-file consumer was `StringRuntime.buildStrByteRead`, which passed it to `emitMemoryThrow` at the byte
 // read's out-of-range exit; W49 wave 7 retired `String.byteAt`/`byteAtOrPanic` onto the corpus and deleted
@@ -742,8 +842,45 @@ export function isThrowingArrayRuntimeCallee(callee ByteArray) returns bool
 	// alone; a runtime entry never returns an interface, so the two agree here and the conclusion stands). They arrive as
 	// the ONE list `isManagedMemoryRuntimeCallee` holds, because `GtRuntime.runtimeThrowsClause` needs the same
 	// three names and two hand-written lists of one set is what this file's guard exists to catch.
-	return isThrowingArrayAccessorCallee(callee) or isManagedMemoryRuntimeCallee(callee)
+	return isThrowingArrayAccessorCallee(callee) or isManagedMemoryRuntimeCallee(callee) or isThrowingCursorRuntimeCallee(callee)
 end 'isThrowingArrayRuntimeCallee'
+
+// ⭐⭐ **THE `__ManagedMemoryCursor` MEMBERS THAT THROW — A THIRD FAMILY UNDER ONE PREFIX.** The cursor's
+// entries are `__arr_`-prefixed like the buffer's (one runtime, and the cursor reads an array record), so
+// they compose into the union above exactly as the buffer members do — and for the same reason they need a
+// NARROW predicate of their own: `GtRuntime.runtimeCalleeSourceMethod` must reach a cursor map rather than
+// the array family's, or `c.advance()` written without a `try` inherits *"throwing array accessor"* for a
+// construct the program does not contain (D11c's defect, one family over).
+//
+// ⚠ **`__arr_cursor_create` IS NOT HERE — IT IS A `__ManagedMemory` MEMBER.** The author writes
+// `buf.createCursor()`, on the BUFFER, so its spelling and its receiver both belong to that family and it is
+// listed there. What this predicate names is the members whose RECEIVER is a cursor.
+//
+// ⚠ **`current`/`index` ARE ABSENT BECAUSE THEY DO NOT THROW, and `verifyThrowingAccessorsMatchPredicate`
+// CHECKS that** — it fails the install for a `__arr_` entry named here without a `throws` stamp and for one
+// stamped without being named. Their infallibility is the position invariant every member above maintains;
+// see `buildArrCursorCurrent`.
+export function isThrowingCursorRuntimeCallee(callee ByteArray) returns bool
+	return callee.equals(ArrCursorAdvanceName) or callee.equals(ArrCursorRetreatName) or callee.equals(ArrCursorSeekName) or callee.equals(ArrCursorPeekName)
+end 'isThrowingCursorRuntimeCallee'
+
+// ⭐ **WHAT THE AUTHOR WROTE, for the cursor family** — `managedMemorySourceMethodName`'s twin, read through
+// the same composer and panicking off its own domain for the same reason.
+export function cursorSourceMethodName(callee ByteArray) returns ByteArray
+	if callee.equals(ArrCursorAdvanceName) 'advance'
+		return CursorAdvanceMethod
+	end 'advance'
+	if callee.equals(ArrCursorRetreatName) 'retreat'
+		return CursorRetreatMethod
+	end 'retreat'
+	if callee.equals(ArrCursorSeekName) 'seek'
+		return CursorSeekMethod
+	end 'seek'
+	if callee.equals(ArrCursorPeekName) 'peek'
+		return CursorPeekMethod
+	end 'peek'
+	panic("cursorSourceMethodName: no source-method arm for '{String.from(callee)}'. EITHER it is not a throwing `{String.from(ManagedMemoryCursorBuiltinBaseName)}` member — this map is asked ONLY behind `isThrowingCursorRuntimeCallee` — OR that predicate gained a name and this map did not, in which case add an arm answering the parser's own method constant. `verifyThrowingAccessorsMatchPredicate` asks this for every cursor member `installArrayRuntime` installs, so the second case fails at INSTALL and never in front of a user's missing `try`")
+end 'cursorSourceMethodName'
 
 // ⭐⭐ **THE NINE GENUINE `Arr*` ACCESSORS, WITHOUT THE BUFFER MEMBERS THE PREDICATE ABOVE COMPOSES IN
 // (D11c).** A pure factoring of the union above — it adds no name and removes none — and it exists because
@@ -799,7 +936,7 @@ end 'inBoundsElementAccessor'
 // declare ONE `throws` clause and propagate a buffer `set` and a buffer `get` through it; moving those two
 // needs buffer entries of their own (`get` carries the empty-slot arm) and is a rung, not a rename.
 export function isManagedMemoryRuntimeCallee(callee ByteArray) returns bool
-	return callee.equals(ArrMemCreateName) or callee.equals(ArrSetLengthName) or callee.equals(ArrSetByteName) or callee.equals(ArrByteAtName) or callee.equals(ArrMemGrowName) or callee.equals(ArrMemSetName)
+	return callee.equals(ArrMemCreateName) or callee.equals(ArrSetLengthName) or callee.equals(ArrSetByteName) or callee.equals(ArrByteAtName) or callee.equals(ArrMemGrowName) or callee.equals(ArrMemSetName) or callee.equals(ArrMemSwapName) or callee.equals(ArrMemShiftRightName) or callee.equals(ArrMemShiftLeftName) or callee.equals(ArrCursorCreateName)
 end 'isManagedMemoryRuntimeCallee'
 
 // ⭐ **WHAT THE USER ACTUALLY WROTE (D12)** — this family's `managedDirectorySourceMethodName`, read through
@@ -835,6 +972,20 @@ export function managedMemorySourceMethodName(callee ByteArray) returns ByteArra
 	if callee.equals(ArrMemSetName) 'set'
 		return ArraySetMethod
 	end 'set'
+	if callee.equals(ArrMemSwapName) 'swap'
+		return ManagedMemorySwapMethod
+	end 'swap'
+	if callee.equals(ArrMemShiftRightName) 'shiftRight'
+		return ManagedMemoryShiftRightMethod
+	end 'shiftRight'
+	if callee.equals(ArrMemShiftLeftName) 'shiftLeft'
+		return ManagedMemoryShiftLeftMethod
+	end 'shiftLeft'
+	// ⚠ The cursor's PRODUCER is a buffer member, so it is spelled here; its five consumers have a receiver
+	// of their own and are `cursorSourceMethodName`'s.
+	if callee.equals(ArrCursorCreateName) 'createCursor'
+		return ManagedMemoryCreateCursorMethod
+	end 'createCursor'
 	panic("managedMemorySourceMethodName: no source-method arm for '{String.from(callee)}'. EITHER it is not a `__ManagedMemory` runtime callee — this map is asked ONLY behind `isManagedMemoryRuntimeCallee`, so nothing else can reach an E3057 — OR that predicate gained a name and this map did not, in which case add an arm answering the parser's own method constant. `verifyThrowingAccessorsMatchPredicate` asks this for every buffer member `installArrayRuntime` installs, so the second case fails at INSTALL and never in front of a user's missing `try`")
 end 'managedMemorySourceMethodName'
 
@@ -924,6 +1075,7 @@ function claimManagedMemoryOrdinals(project Project, declaration EnumLayout)
 	memoryErrors.claim(ManagedMemoryIndexOutOfBoundsCaseName, ordinal: MemoryIndexOutOfBoundsOrdinal)
 	memoryErrors.claim(ManagedMemoryInvalidLengthCaseName, ordinal: MemoryInvalidLengthOrdinal)
 	memoryErrors.claim(ManagedMemoryInvalidCapacityCaseName, ordinal: MemoryInvalidCapacityOrdinal)
+	memoryErrors.claim(ManagedMemoryShiftOutOfBoundsCaseName, ordinal: MemoryShiftOutOfBoundsOrdinal)
 	memoryErrors.claim(ManagedMemoryInvalidByteRangeCaseName, ordinal: MemoryInvalidByteRangeOrdinal)
 	memoryErrors.claim(ManagedMemoryInvalidAllocationCaseName, ordinal: MemoryInvalidAllocationOrdinal)
 end 'claimManagedMemoryOrdinals'
@@ -969,15 +1121,26 @@ export function installArrayRuntime(module StdModule, usage RuntimeUsage)
 	buildArrayEquals(module, name: ArrEqName)
 	buildArrDecref(module)
 	// The `__ManagedMemory` members with a runtime of their own (three from R4.2, three from R4.4, one from
-	// R4.6) — part of the all-or-nothing `usesArray` install for the reason the header gives: `__`-prefixed
-	// functions are excluded from the goldens, so an unreferenced one costs nothing a fragment can see, and
-	// these call `__arr_create`/`__arr_reserve`/`__arr_cow_detach` anyway.
+	// R4.6, three relocators) — part of the all-or-nothing `usesArray` install for the reason the header
+	// gives: `__`-prefixed functions are excluded from the goldens, so an unreferenced one costs nothing a
+	// fragment can see, and these call `__arr_create`/`__arr_reserve`/`__arr_cow_detach` anyway.
 	buildArrMemCreate(module)
 	buildArrSetLength(module)
 	buildArrSetByte(module)
 	buildArrByteAt(module)
 	buildArrMemGrow(module)
 	buildArrMemSet(module)
+	buildArrMemSwap(module)
+	buildArrMemShiftRight(module)
+	buildArrMemShiftLeft(module)
+	buildArrCursorCreate(module)
+	buildArrCursorDecref(module)
+	buildArrCursorIndex(module)
+	buildArrCursorCurrent(module)
+	buildArrCursorPeek(module)
+	buildArrCursorNavigator(module, name: ArrCursorAdvanceName, step: CursorStep.forward)
+	buildArrCursorNavigator(module, name: ArrCursorRetreatName, step: CursorStep.backward)
+	buildArrCursorNavigator(module, name: ArrCursorSeekName, step: CursorStep.absolute)
 	// The MANAGED-element copies (P1.7 slice 3b-vi-b) — installed under their OWN bit, so a trivial-array
 	// program (the common one) does not carry them. `usesManagedArrayCopy` implies `usesArray` (they are
 	// `__arr_`-prefixed), so this install is always reached when the bit is set.
@@ -1085,6 +1248,9 @@ function verifyThrowingAccessorsMatchPredicate(module StdModule)
 			if isManagedMemoryRuntimeCallee(func.name) 'bufferHasSourceMethod'
 				requireQuotableSourceSpelling(managedMemorySourceMethodName(func.name), callee: func.name)
 			end 'bufferHasSourceMethod'
+			if isThrowingCursorRuntimeCallee(func.name) 'cursorHasSourceMethod'
+				requireQuotableSourceSpelling(cursorSourceMethodName(func.name), callee: func.name)
+			end 'cursorHasSourceMethod'
 		end 'arr'
 	end 'eachFunc'
 end 'verifyThrowingAccessorsMatchPredicate'
@@ -3979,6 +4145,405 @@ function buildArrMemGrow(module StdModule)
 
 	module.functions.push(func)
 end 'buildArrMemGrow'
+
+// ⭐⭐ `__arr_mem_swap(arr, i, j)` — exchange the two slots' element words with NO REFCOUNT TRAFFIC. VOID and
+// throwing `indexOutOfBounds`; both indices are bounded by `length`, because a swap relocates LIVE elements
+// and the staging region holds none.
+//
+// ⭐ **IT IS BUILT FROM THE ELEMENT LOAD AND THE ELEMENT STORE, WHICH IS WHAT MAKES IT PACKED-CORRECT FOR
+// FREE.** `emitLoadElemAt`/`emitStoreElemAt` are the file's one element read and one element write, so a
+// `bool` array (`element_size@24` = -1, eight slots per byte) exchanges two BIT FIELDS and a machine-word
+// array exchanges two qwords, from one graph. A byte-wise exchange of `element_size` bytes — which is what
+// v1 writes (`stdlib/Internals.maxon:3388-3397`) — cannot serve the packed case at all: `element_size` is
+// NEGATIVE there, so its loop never runs and the swap silently does nothing.
+//
+// ⚠ **BOTH SLOTS ARE READ BEFORE EITHER IS WRITTEN, AND FOR A PACKED ELEMENT THAT IS LOAD-BEARING RATHER
+// THAN TIDY.** Two packed fields can share ONE BYTE, so writing `i` before reading `j` would read back the
+// byte this swap has already half-rewritten. v1 states the same ordering for the same reason.
+//
+// ⚠ **`i == j` RETURNS BEFORE THE DETACH**, so a self-swap on a COW view neither allocates nor materializes.
+// It is also the one input where the exchange itself would be observable if the reads and writes were
+// interleaved, which is the second reason it is answered rather than performed.
+function buildArrMemSwap(module StdModule)
+	var func = IrFunction.createFromStd(ArrMemSwapName, returnType: StdReturnType.void, paramCount: 3, paramTypes: threeI64Params(), returnLine: 0, throwsTypeName: managedMemoryThrows())
+	var ids = ValueMinter.create(3)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var oob = module.addBlock(func, label: b"swoob")
+	var checkSame = module.addBlock(func, label: b"swsame")
+	var exchange = module.addBlock(func, label: b"swxchg")
+	var readSecond = module.addBlock(func, label: b"swread2")
+	var write = module.addBlock(func, label: b"swwrite")
+	var done = module.addBlock(func, label: b"swdone")
+
+	emitParams(module, block: entry, count: 3)
+	let arr = 0 as ValueId
+	let i = 1 as ValueId
+	let j = 2 as ValueId
+
+	let length = emitLoadField(module, block: entry, record: arr, offset: ArrLengthOffset, ids: ids)
+	let iBad = emitIndexOutOfRange(module, block: entry, index: i, length: length, ids: ids)
+	let jBad = emitIndexOutOfRange(module, block: entry, index: j, length: length, ids: ids)
+	let eitherBad = emitBin(module, block: entry, a: iBad, b: jBad, opcode: StdBinOpcode.bitOr, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(eitherBad, thenBlockId: oob.id, elseBlockId: checkSame.id))
+
+	emitMemoryThrow(module, block: oob, flag: MemoryIndexOutOfBoundsFlag, ids: ids)
+
+	let same = emitCmp(module, block: checkSame, a: i, b: j, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(checkSame, op: StdOp.condBranch(same, thenBlockId: done.id, elseBlockId: exchange.id))
+
+	// Detach BEFORE the buffer pointer is loaded (`__arr_cow_detach` trap 1), and after both checks, so a
+	// refused or trivial swap allocates nothing.
+	emitCowDetach(module, block: exchange, arr: arr, ids: ids)
+	let es = emitLoadField(module, block: exchange, record: arr, offset: ArrElementSizeOffset, ids: ids)
+	let buffer = emitLoadField(module, block: exchange, record: arr, offset: ArrBufferOffset, ids: ids)
+	let iValue = emitLoadElemAt(module, func: func, cur: exchange, exit: readSecond, buffer: buffer, index: i, es: es, ids: ids)
+	let jValue = emitLoadElemAt(module, func: func, cur: readSecond, exit: write, buffer: buffer, index: j, es: es, ids: ids)
+	var afterFirstStore = emitStoreElemAt(module, func: func, cur: write, buffer: buffer, index: i, value: jValue, es: es, ids: ids)
+	var afterSecondStore = emitStoreElemAt(module, func: func, cur: afterFirstStore, buffer: buffer, index: j, value: iValue, es: es, ids: ids)
+	module.setTerminator(afterSecondStore, op: StdOp.branch(done.id))
+
+	emitVoidOkReturn(module, block: done, ids: ids)
+
+	module.functions.push(func)
+end 'buildArrMemSwap'
+
+// ⭐ `__arr_mem_shift_right(arr, index, count)` — slide `[index, index+count)` UP one slot and ZERO the slot
+// at `index` the slide vacated. VOID and throwing `shiftOutOfBounds`.
+//
+// ⭐⭐ **THE ZEROING IS THE MEMBER'S POINT, NOT ITS TIDY-UP.** The slide leaves slot `index` holding a
+// DUPLICATE of the pointer now living at `index+1`; the caller's following `set(index, …)` would release
+// that duplicate and leave the relocated element dangling. Erasing it is the same
+// `[length, capacity)`-reads-zero rule every other vacating path here obeys — see `emitZeroElems`, whose
+// header names the five callers this joins. Both references zero it and both say so
+// (`stdlib/Internals.maxon:3676-3688`, the bootstrap's `LowerManagedMemShift`).
+//
+// ⚠ **A `count` OF 0 STILL ERASES SLOT `index`, WHICH IS THE CONTRACT AND NOT AN EDGE CASE.** The operation
+// is "open a hole at `index`"; how many elements had to move to open it is the argument, not the outcome.
+// Both references behave identically, and `Array.insert` — the only corpus caller — never asks for one (it
+// calls this only when `index < length`, so `count >= 1`).
+function buildArrMemShiftRight(module StdModule)
+	var func = IrFunction.createFromStd(ArrMemShiftRightName, returnType: StdReturnType.void, paramCount: 3, paramTypes: threeI64Params(), returnLine: 0, throwsTypeName: managedMemoryThrows())
+	var ids = ValueMinter.create(3)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var checkRange = module.addBlock(func, label: b"srrange")
+	var bad = module.addBlock(func, label: b"srbad")
+	var shift = module.addBlock(func, label: b"srshift")
+
+	emitParams(module, block: entry, count: 3)
+	let arr = 0 as ValueId
+	let index = 1 as ValueId
+	let count = 2 as ValueId
+
+	let negativeArgument = emitShiftArgumentIsNegative(module, block: entry, index: index, count: count, floor: 0, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(negativeArgument, thenBlockId: bad.id, elseBlockId: checkRange.id))
+
+	let pastCapacity = emitShiftRangePastCapacity(module, block: checkRange, arr: arr, index: index, count: count, ids: ids)
+	module.setTerminator(checkRange, op: StdOp.condBranch(pastCapacity, thenBlockId: bad.id, elseBlockId: shift.id))
+
+	emitMemoryThrow(module, block: bad, flag: MemoryShiftOutOfBoundsFlag, ids: ids)
+
+	let es = emitLoadField(module, block: shift, record: arr, offset: ArrElementSizeOffset, ids: ids)
+	let buffer = emitLoadField(module, block: shift, record: arr, offset: ArrBufferOffset, ids: ids)
+	let one = emitConst(module, block: shift, value: 1, ids: ids)
+	let openedAt = emitBin(module, block: shift, a: index, b: one, opcode: StdBinOpcode.add, ids: ids)
+	emitMoveElems(module, block: shift, destBuffer: buffer, destIndex: openedAt, srcBuffer: buffer, srcIndex: index, count: count, es: es, ids: ids)
+	emitZeroElems(module, block: shift, buffer: buffer, start: index, count: one, es: es, ids: ids)
+	emitVoidOkReturn(module, block: shift, ids: ids)
+
+	module.functions.push(func)
+end 'buildArrMemShiftRight'
+
+// ⭐ `__arr_mem_shift_left(arr, index, count)` — slide `[index, index+count)` DOWN one slot. VOID and throwing
+// `shiftOutOfBounds`.
+//
+// ⚠ **ITS FLOOR IS 1, NOT 0, BECAUSE `index - 1` IS WHERE THE FIRST ELEMENT LANDS.** An `index` of 0 would
+// write at `buffer - element_size` — before the buffer, over the `__mm_alloc` header — which is the one
+// out-of-buffer write a DETACH cannot fix, exactly as `arrayNegativeResize` records for the shrink path.
+//
+// ⚠ **IT ZEROES NOTHING, AND THAT ASYMMETRY WITH ITS TWIN IS THE CONTRACT.** A shift-right opens a hole its
+// caller is about to fill; a shift-left closes one and leaves a DUPLICATE at the top, which the caller
+// disposes of by republishing a shorter `length` — and `__arr_set_length`'s shrink path is what erases the
+// slots that leave the live range. Zeroing here as well would erase a slot the caller may still be about to
+// read, and would duplicate a rule that already has one home.
+function buildArrMemShiftLeft(module StdModule)
+	var func = IrFunction.createFromStd(ArrMemShiftLeftName, returnType: StdReturnType.void, paramCount: 3, paramTypes: threeI64Params(), returnLine: 0, throwsTypeName: managedMemoryThrows())
+	var ids = ValueMinter.create(3)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var checkRange = module.addBlock(func, label: b"slrange")
+	var bad = module.addBlock(func, label: b"slbad")
+	var shift = module.addBlock(func, label: b"slshift")
+
+	emitParams(module, block: entry, count: 3)
+	let arr = 0 as ValueId
+	let index = 1 as ValueId
+	let count = 2 as ValueId
+
+	let belowFloor = emitShiftArgumentIsNegative(module, block: entry, index: index, count: count, floor: 1, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(belowFloor, thenBlockId: bad.id, elseBlockId: checkRange.id))
+
+	let pastCapacity = emitShiftRangePastCapacity(module, block: checkRange, arr: arr, index: index, count: count, ids: ids)
+	module.setTerminator(checkRange, op: StdOp.condBranch(pastCapacity, thenBlockId: bad.id, elseBlockId: shift.id))
+
+	emitMemoryThrow(module, block: bad, flag: MemoryShiftOutOfBoundsFlag, ids: ids)
+
+	let es = emitLoadField(module, block: shift, record: arr, offset: ArrElementSizeOffset, ids: ids)
+	let buffer = emitLoadField(module, block: shift, record: arr, offset: ArrBufferOffset, ids: ids)
+	let one = emitConst(module, block: shift, value: 1, ids: ids)
+	let landsAt = emitBin(module, block: shift, a: index, b: one, opcode: StdBinOpcode.sub, ids: ids)
+	emitMoveElems(module, block: shift, destBuffer: buffer, destIndex: landsAt, srcBuffer: buffer, srcIndex: index, count: count, es: es, ids: ids)
+	emitVoidOkReturn(module, block: shift, ids: ids)
+
+	module.functions.push(func)
+end 'buildArrMemShiftLeft'
+
+// ⭐ **THE HALF OF A SHIFT'S BOUNDS CHECK THAT READS ONLY THE ARGUMENTS** — `index < floor` or `count < 0`.
+// The two shifts differ ONLY in that floor (0 for a right shift, 1 for a left one, whose `index - 1` is a
+// real slot), so the two spellings that would otherwise sit in two builders are one function with the
+// difference passed in.
+//
+// ⚠ **IT IS ASKED BEFORE THE DETACH, AND THAT ORDER IS `__arr_set_length`'s RULE APPLIED** — a detach
+// ALLOCATES, and a call refused on every possible buffer must not copy one first. The CAPACITY half cannot
+// come first for the same reason in reverse: a view's `capacity@16` is negative until the detach republishes
+// it, so comparing against it before would answer about the encoding rather than about the buffer.
+function emitShiftArgumentIsNegative(module StdModule, block IrBlock, index ValueId, count ValueId, floor ParsedInt, ids ValueMinter) returns ValueId
+	let limit = emitConst(module, block: block, value: floor, ids: ids)
+	let indexTooLow = emitCmp(module, block: block, a: index, b: limit, pred: StdCmpPred.lt, ids: ids)
+	let countNegative = emitIsNegative(module, block: block, value: count, ids: ids)
+	return emitBin(module, block: block, a: indexTooLow, b: countNegative, opcode: StdBinOpcode.bitOr, ids: ids)
+end 'emitShiftArgumentIsNegative'
+
+// ⭐ **THE OTHER HALF: `index + count > capacity`, ASKED OF A DETACHED RECORD.** The detach happens HERE
+// rather than in each builder because it is the precondition of the comparison rather than of the shift —
+// `__arr_mem_grow` states the identical order for the identical reason.
+//
+// ⚠ **THE BOUND IS CAPACITY, NOT LENGTH.** A shift is the staging half of a publish: `Array.insert` reserves,
+// shifts a hole open ABOVE the live range and only then calls `setLength`, so a `length` bound would refuse
+// the one sequence these members exist to serve.
+function emitShiftRangePastCapacity(module StdModule, block IrBlock, arr ValueId, index ValueId, count ValueId, ids ValueMinter) returns ValueId
+	emitCowDetach(module, block: block, arr: arr, ids: ids)
+	let capacity = emitLoadField(module, block: block, record: arr, offset: ArrCapacityOffset, ids: ids)
+	let reach = emitBin(module, block: block, a: index, b: count, opcode: StdBinOpcode.add, ids: ids)
+	return emitCmp(module, block: block, a: reach, b: capacity, pred: StdCmpPred.gt, ids: ids)
+end 'emitShiftRangePastCapacity'
+
+// ⭐ `__arr_cursor_create(arr) -> (cursor, flag)` — a fresh cursor at position 0, or throw when the buffer is
+// EMPTY. The refusal is what makes `current()` and `index()` infallible: a cursor that exists points at a
+// live element, so the only entry point that can fail to produce one is this.
+//
+// ⚠ **IT REFUSES BEFORE IT ALLOCATES, WHERE BOTH REFERENCES ALLOCATE AND THEN RAISE.** v1 builds the 40-byte
+// record, stamps every field, and only then sets the error flag from `length == 0` — which leaves the throw
+// EDGE owing a release, and its own header records the leak that went with it ("the `contains(…)`-on-empty-
+// array 2-allocation leak"). Asking the question first means the failing path allocates nothing and owes
+// nothing, which is also the order `__arr_pop` and `__arr_remove` already use for their bounds checks.
+//
+// ⚠ **THE CASE IS `indexOutOfBounds`, WHERE v1 RAISES `emptySlot` — a deliberate correction.**
+// `stdlib/Builtins.maxon:153` defines `emptySlot` as *"get on a slot that was never filled"*, which is a
+// statement about a slot INSIDE the live range; an empty buffer has no slot at all and position 0 is simply
+// out of its range, which is what `indexOutOfBounds` names. Nothing observable moves: the only consumer
+// (`stdlib/Array.maxon:496`) relabels every failure as `IterationError.exhausted`.
+function buildArrCursorCreate(module StdModule)
+	var func = IrFunction.createFromStd(ArrCursorCreateName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0, throwsTypeName: managedMemoryThrows())
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var refuse = module.addBlock(func, label: b"curempty")
+	var build = module.addBlock(func, label: b"curbuild")
+
+	emitParams(module, block: entry, count: 1)
+	let arr = 0 as ValueId
+
+	let length = emitLoadField(module, block: entry, record: arr, offset: ArrLengthOffset, ids: ids)
+	let zero = emitConst(module, block: entry, value: 0, ids: ids)
+	let isEmpty = emitCmp(module, block: entry, a: length, b: zero, pred: StdCmpPred.le, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(isEmpty, thenBlockId: refuse.id, elseBlockId: build.id))
+
+	emitMemoryThrow(module, block: refuse, flag: MemoryIndexOutOfBoundsFlag, ids: ids)
+
+	let recordSize = emitConst(module, block: build, value: CursorRecordBytes, ids: ids)
+	let recordDtor = emitConst(module, block: build, value: TrivialElementDestroy, ids: ids)
+	let cursor = ids.mint()
+	module.appendOp(build, op: StdOp.call(cursor, callee: MmAllocName, args: twoArgs(recordSize, second: recordDtor)))
+	// The retain the header argues for, balanced 1:1 by `__arr_cursor_decref`. `position@8` is left at the
+	// zero `__mm_alloc` supplies.
+	module.appendOp(build, op: StdOp.call(ids.mint(), callee: MmIncrefName, args: argsOf(arr)))
+	emitStoreField(module, block: build, record: cursor, offset: CursorSourceOffset, value: arr)
+	emitOkReturn(module, block: build, value: cursor, ids: ids)
+
+	module.functions.push(func)
+end 'buildArrCursorCreate'
+
+// `__arr_cursor_decref(cursor)` — one fewer owner; at the last, release the retained source and reclaim the
+// 16-byte box. The `__arr_decref` shape, over a record whose one owned slot is `source@0`.
+//
+// ⚠ **THE SOURCE IS RELEASED THROUGH `__arr_decref`, NOT `__mm_decref`.** The source is an array record, so
+// its own release has to free the external element buffer and walk its managed elements — which a generic
+// `__mm_decref` cannot reach. ⚠ It is never NULL: the only producer stores it before the cursor can escape,
+// and the refusal path above produces no cursor at all, so there is nothing for a null guard to catch.
+function buildArrCursorDecref(module StdModule)
+	var func = IrFunction.createFromStd(ArrCursorDecrefName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var lower = module.addBlock(func, label: b"lower")
+	var release = module.addBlock(func, label: b"release")
+
+	emitParams(module, block: entry, count: 1)
+	let cursor = 0 as ValueId
+
+	emitRefcountCheckToLastOwner(module, entry: entry, lower: lower, record: cursor, lastOwner: release, ids: ids)
+
+	let source = emitLoadField(module, block: release, record: cursor, offset: CursorSourceOffset, ids: ids)
+	module.appendOp(release, op: StdOp.call(ids.mint(), callee: ArrDecrefName, args: argsOf(source)))
+	module.appendOp(release, op: StdOp.call(ids.mint(), callee: MmFreeName, args: argsOf(cursor)))
+	module.setTerminator(release, op: StdOp.retVoid)
+
+	module.functions.push(func)
+end 'buildArrCursorDecref'
+
+// `__arr_cursor_index(cursor) -> position` — the one member that reads nothing but the cursor itself.
+function buildArrCursorIndex(module StdModule)
+	var func = IrFunction.createFromStd(ArrCursorIndexName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+	emitParams(module, block: entry, count: 1)
+	let cursor = 0 as ValueId
+
+	let position = emitLoadField(module, block: entry, record: cursor, offset: CursorPositionOffset, ids: ids)
+	module.setTerminator(entry, op: StdOp.ret(position))
+
+	module.functions.push(func)
+end 'buildArrCursorIndex'
+
+// `__arr_cursor_current(cursor) -> element` — INFALLIBLE, because the position invariant is what every other
+// member maintains: `create` refuses an empty buffer and `advance`/`retreat`/`seek` refuse rather than move.
+//
+// ⚠ **INFALLIBLE IS NOT UNCHECKED-BY-ACCIDENT — it is the corpus's declaration.** `stdlib/Array.maxon:502`
+// declares `current()` with no `throws` and forwards straight to it, which is only sound while the invariant
+// above holds; a member that moved on failure would break it silently, which is why all four navigators test
+// BEFORE they store.
+function buildArrCursorCurrent(module StdModule)
+	var func = IrFunction.createFromStd(ArrCursorCurrentName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var ret = module.addBlock(func, label: b"curret")
+
+	emitParams(module, block: entry, count: 1)
+	let cursor = 0 as ValueId
+
+	let position = emitLoadField(module, block: entry, record: cursor, offset: CursorPositionOffset, ids: ids)
+	let value = emitCursorElementAt(module, func: func, cur: entry, exit: ret, cursor: cursor, index: position, ids: ids)
+	module.setTerminator(ret, op: StdOp.ret(value))
+
+	module.functions.push(func)
+end 'buildArrCursorCurrent'
+
+// `__arr_cursor_peek(cursor, ahead) -> (element, flag)` — read `position + ahead` WITHOUT moving. Throwing,
+// because the offset is the caller's and may leave the buffer in either direction (`emitIndexOutOfRange`
+// rejects a negative `position + ahead` as well as one at or past the length).
+function buildArrCursorPeek(module StdModule)
+	var func = IrFunction.createFromStd(ArrCursorPeekName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0, throwsTypeName: managedMemoryThrows())
+	var ids = ValueMinter.create(2)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var refuse = module.addBlock(func, label: b"pkoob")
+	var read = module.addBlock(func, label: b"pkread")
+	var ret = module.addBlock(func, label: b"pkret")
+
+	emitParams(module, block: entry, count: 2)
+	let cursor = 0 as ValueId
+	let ahead = 1 as ValueId
+
+	let position = emitLoadField(module, block: entry, record: cursor, offset: CursorPositionOffset, ids: ids)
+	let target = emitBin(module, block: entry, a: position, b: ahead, opcode: StdBinOpcode.add, ids: ids)
+	let outOfRange = emitCursorPositionOutOfRange(module, block: entry, cursor: cursor, position: target, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(outOfRange, thenBlockId: refuse.id, elseBlockId: read.id))
+
+	emitMemoryThrow(module, block: refuse, flag: MemoryIndexOutOfBoundsFlag, ids: ids)
+
+	let value = emitCursorElementAt(module, func: func, cur: read, exit: ret, cursor: cursor, index: target, ids: ids)
+	emitOkReturn(module, block: ret, value: value, ids: ids)
+
+	module.functions.push(func)
+end 'buildArrCursorPeek'
+
+// ⭐ `__arr_cursor_advance(cursor)` / `__arr_cursor_retreat(cursor)` / `__arr_cursor_seek(cursor, index)` —
+// the three navigators, VOID and throwing. **They REFUSE rather than move**, which is the whole of what makes
+// `current()` infallible: a cursor that already exists still points at a live element after a failed move.
+//
+// ⭐ **ONE BUILDER SERVES ALL THREE, because they differ only in HOW THE CANDIDATE POSITION IS COMPUTED** —
+// `position + 1`, `position - 1`, or an argument taken as-is. The bounds test, the refusal, the store and the
+// return are identical, so a builder each would have been one navigation protocol written three times, and
+// the difference is passed in as a step and a parameter count. (`buildArrayHash`/`buildArrayEquals` take a
+// family the same way, and `dispatchArrayMethod`'s shift arm folds its pair for the same reason.)
+//
+// ⚠ **`seek`'s CANDIDATE IS ITS ARGUMENT AND IS NOT DERIVED FROM `position` AT ALL**, so it is the one arm
+// that takes two parameters. That is the whole of the asymmetry, and it is why the step is a `CursorStep`
+// rather than an integer added to the position: an integer would have made `seek` "position + (index -
+// position)", which is arithmetic standing in for a distinction.
+enum CursorStep
+	forward
+	backward
+	absolute
+end 'CursorStep'
+
+function buildArrCursorNavigator(module StdModule, name ByteArray, step CursorStep)
+	let takesTarget = step == CursorStep.absolute
+	let paramCount = 2 if takesTarget else 1
+	let paramTypes = twoI64Params() if takesTarget else oneI64Param()
+	var func = IrFunction.createFromStd(name, returnType: StdReturnType.void, paramCount: paramCount, paramTypes: paramTypes, returnLine: 0, throwsTypeName: managedMemoryThrows())
+	var ids = ValueMinter.create(paramCount)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var refuse = module.addBlock(func, label: b"navoob")
+	var move = module.addBlock(func, label: b"navmove")
+
+	emitParams(module, block: entry, count: paramCount)
+	let cursor = 0 as ValueId
+
+	var target = 1 as ValueId
+	if not takesTarget 'relativeToTheCurrentPosition'
+		let position = emitLoadField(module, block: entry, record: cursor, offset: CursorPositionOffset, ids: ids)
+		let one = emitConst(module, block: entry, value: 1, ids: ids)
+		let opcode = StdBinOpcode.add if step == CursorStep.forward else StdBinOpcode.sub
+		target = emitBin(module, block: entry, a: position, b: one, opcode: opcode, ids: ids)
+	end 'relativeToTheCurrentPosition'
+
+	let outOfRange = emitCursorPositionOutOfRange(module, block: entry, cursor: cursor, position: target, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(outOfRange, thenBlockId: refuse.id, elseBlockId: move.id))
+
+	emitMemoryThrow(module, block: refuse, flag: MemoryIndexOutOfBoundsFlag, ids: ids)
+
+	emitStoreField(module, block: move, record: cursor, offset: CursorPositionOffset, value: target)
+	emitVoidOkReturn(module, block: move, ids: ids)
+
+	module.functions.push(func)
+end 'buildArrCursorNavigator'
+
+// ⭐ **IS `position` A LIVE ELEMENT OF THE CURSOR'S SOURCE?** — the ONE bounds question all four fallible
+// cursor members ask, over a `length@8` read LIVE off the source record (the header's whole argument). It is
+// `emitIndexOutOfRange`, which is also what `get`/`set`/`remove` ask, so a cursor and an index agree about
+// what "in range" means by construction rather than by two matching comparisons.
+function emitCursorPositionOutOfRange(module StdModule, block IrBlock, cursor ValueId, position ValueId, ids ValueMinter) returns ValueId
+	let source = emitLoadField(module, block: block, record: cursor, offset: CursorSourceOffset, ids: ids)
+	let length = emitLoadField(module, block: block, record: source, offset: ArrLengthOffset, ids: ids)
+	return emitIndexOutOfRange(module, block: block, index: position, length: length, ids: ids)
+end 'emitCursorPositionOutOfRange'
+
+// ⭐ **READ ELEMENT `index` OUT OF THE CURSOR'S SOURCE** — shared by `current` and `peek`, and the reason a
+// cursor needs no packed arithmetic of its own: `buffer@0` and `element_size@24` come off the source LIVE and
+// go straight into `emitLoadElemAt`, the file's one element load. `exit` is caller-owned, the `emitLoadElemAt`
+// shape.
+function emitCursorElementAt(module StdModule, func IrFunction, cur IrBlock, exit IrBlock, cursor ValueId, index ValueId, ids ValueMinter) returns ValueId
+	let source = emitLoadField(module, block: cur, record: cursor, offset: CursorSourceOffset, ids: ids)
+	let buffer = emitLoadField(module, block: cur, record: source, offset: ArrBufferOffset, ids: ids)
+	let es = emitLoadField(module, block: cur, record: source, offset: ArrElementSizeOffset, ids: ids)
+	return emitLoadElemAt(module, func: func, cur: cur, exit: exit, buffer: buffer, index: index, es: es, ids: ids)
+end 'emitCursorElementAt'
 
 // ⭐ **THE `throws __ManagedMemoryError` STAMP the three `__ManagedMemory` members carry, AND WHAT A CALLER'S
 // `otherwise (e)` BINDING IS TYPED FROM.** A `__ManagedMemory` member does NOT throw `ArrayError`: the

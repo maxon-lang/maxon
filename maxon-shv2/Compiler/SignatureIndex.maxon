@@ -2777,6 +2777,32 @@ export let ManagedListNodeBuiltinBaseName = b"__ManagedListNode"
 // accessor a `get` is.
 export let ManagedListNodeTypeParamCount = 1 as FieldIndex
 
+// ⭐⭐ **`__ManagedMemoryCursor with Element` — A NAVIGABLE POSITION INSIDE A BUFFER, AND THE SECOND TYPE NO
+// SOURCE CAN CONSTRUCT.** Only `__ManagedMemory.createCursor()` mints one. `stdlib/Array.maxon:490-531`'s
+// `ArrayIterator` is its whole consumer: it stores one in a field and forwards six members, which is why the
+// type must be NAMEABLE in an annotation (`typealias RawCursor = __ManagedMemoryCursor with Element`) where a
+// node handle need not be.
+//
+// ⚠ **IT IS `__`-PREFIXED IN THE CANONICAL LANGUAGE, so the name is spelled with the prefix here and not
+// reserved-renamed** — the `__ManagedList` rule, for that entry's reason: `/specs/internal-types.md` lists it
+// among the types a program may NAME while their representation stays the compiler's.
+//
+// ⚠ **IT IS PARAMETERIZED BY THE ELEMENT FOR `ManagedListNodeBuiltinBaseName`'s REASON, VERBATIM.** A
+// cursor's `current()`/`peek()` read one machine word whatever the element is, so the WIDTH needs no
+// parameter — but the TYPE they hand back does, and a value's type in shv2 is a `(tag, nameId)` pair with
+// nowhere else to carry it.
+//
+// ⭐ **UNLIKE A NODE HANDLE, IT IS OWNED AND IT IS DROPPED.** A node is a borrow into a chain the list frees;
+// a cursor is its own 16-byte `__mm_alloc` box holding a RETAINED source, so it has a real box size and a
+// real drop callee — see `ArrayRuntime.ArrCursorCreateName` for why the retain exists and why the record
+// holds the source rather than a snapshot of its fields.
+export let ManagedMemoryCursorBuiltinBaseName = b"__ManagedMemoryCursor"
+
+// The single type parameter a cursor carries — the same one-element arity every other one-argument door
+// (`containerElementType`, `containerElementIsManaged`, `elementAccessorResultType`) already serves, which is
+// how `current()` is emitted through the SAME element accessor an `Array`'s `get` is.
+export let ManagedMemoryCursorTypeParamCount = 1 as FieldIndex
+
 // ⭐⭐ **THE FIFTH COMPILER-OWNED CONTAINER: `Vector with <N> <Element>`, A FIXED-SIZE ARRAY.**
 // `stdlib/Vector.maxon` declares one, and shv2 cannot read that file for the reason `ListRuntime.maxon`'s
 // header measured a second time and this rung measured a third: its sole field is
@@ -3501,6 +3527,44 @@ export let ManagedMemoryMakeCharFromBytesMethod = b"makeCharFromBytes"
 export let ManagedMemoryCharPosParamName = b"pos"
 export let ManagedMemoryCharLenParamName = b"len"
 export let ManagedMemoryElementSizeMethod = b"elementSize"
+
+// ⭐⭐ **THE THREE RELOCATORS' SPELLINGS.** `swap` is what every sort moves elements with
+// (`stdlib/helpers/sort/smallSort.maxon:31`) and the two shifts are what `stdlib/Array.maxon`'s
+// `insert`/`remove` open and close a hole with (`:312`) — so all three are corpus spellings read back, never
+// invented, and the roster, the dispatch, the refusal and `ArrayRuntime.managedMemorySourceMethodName` all
+// read these.
+export let ManagedMemorySwapMethod = b"swap"
+export let ManagedMemoryShiftRightMethod = b"shiftRight"
+export let ManagedMemoryShiftLeftMethod = b"shiftLeft"
+
+// ⚠ **`swap`'s SECOND PARAMETER IS LABELLED AND ITS FIRST IS NOT, WHICH IS THE CORPUS'S OWN CALL AND NOT A
+// CHOICE.** `smallSort.maxon:31` writes `managed.swap(i, j: j)`, and v1 registers exactly those two names
+// (`LowerMaxonToStd.maxon:1656`). Both shifts take `(index, count)` and the corpus labels neither
+// (`stdlib/Array.maxon:312` writes `managed.shiftRight(index, len - index)`), which the shared
+// `parseTwoBuiltinIntegerArgList` already permits — it consumes a matching label when one is written and
+// requires none. Their two labels are `ManagedMemoryIndexParamName`/`ManagedMemoryCountParamName`, already
+// declared below for `get`/`create` — a parameter-name constant is about a SPELLING, and a second `b"count"`
+// beside the first is the drift these blocks exist to prevent.
+export let ManagedMemorySwapFirstParamName = b"i"
+export let ManagedMemorySwapSecondParamName = b"j"
+
+// ⭐⭐ **`createCursor()` AND THE SIX MEMBERS OF WHAT IT HANDS BACK.** Every spelling is
+// `stdlib/Array.maxon:490-531`'s, read back rather than invented: `ArrayIterator` is the cursor's only
+// consumer and forwards each member one-for-one, so its declarations ARE the surface. v1 registers the same
+// six (`LowerMaxonToStd.maxon:1488-1498`).
+//
+// ⚠ `peek`'s parameter name is the corpus's too, and the arm accepts it as an argument LABEL, which is why
+// it is named here beside the methods rather than at the arm. `seek`'s is `index`, which is
+// `ManagedMemoryIndexParamName` already — a parameter-name constant is about a SPELLING, and a second
+// `b"index"` beside the first is the drift these blocks exist to prevent.
+export let ManagedMemoryCreateCursorMethod = b"createCursor"
+export let CursorCurrentMethod = b"current"
+export let CursorIndexMethod = b"index"
+export let CursorAdvanceMethod = b"advance"
+export let CursorRetreatMethod = b"retreat"
+export let CursorSeekMethod = b"seek"
+export let CursorPeekMethod = b"peek"
+export let CursorPeekParamName = b"ahead"
 
 // ⭐ **THE `Array` SPELLINGS A SOURCE-METHOD MAP HAS TO NAME (D12, completed by D11c).** Every one of these
 // was a PARSER constant, file-private in `Parser.maxon`, and each moved here the moment a runtime family's
@@ -11589,6 +11653,33 @@ export type ProgramSignatures
 		return self.builtinInstanceForElement(ManagedListNodeBuiltinBaseName, element: self.containerElementType(listGiid))
 	end 'managedListNodeInstanceFor'
 
+	// --- The `__ManagedMemoryCursor` builtin generic ---
+
+	// Is `name` the builtin `__ManagedMemoryCursor` type — the base of every cursor.
+	export function isManagedMemoryCursorBaseName(name ByteArray) returns bool
+		return name.equals(ManagedMemoryCursorBuiltinBaseName)
+	end 'isManagedMemoryCursorBaseName'
+
+	// Is generic instance `id` a `__ManagedMemoryCursor with T`?
+	export function isManagedMemoryCursorInstance(id GenericInstanceId) returns bool
+		return self.isManagedMemoryCursorBaseName(self.genericInstanceBaseName(id))
+	end 'isManagedMemoryCursorInstance'
+
+	// ⭐ **DOES THIS (tag, id) PAIR DENOTE A CURSOR?** — the receiver dispatch's door, and the (tag, id) form
+	// for `isListInstanceAt`'s measured reason: a `TypeNameId` and a `GenericInstanceId` share one numeric
+	// space, so the id alone can answer TRUE about an instance the caller never had.
+	export function isManagedMemoryCursorInstanceAt(tag ValueTypeTag, nameId TypeNameId) returns bool
+		return tag == ValueTypeTag.genericInstance and self.isManagedMemoryCursorInstance(nameId)
+	end 'isManagedMemoryCursorInstanceAt'
+
+	// ⭐ **THE CURSOR INSTANCE FOR A BUFFER'S ELEMENT** — what `createCursor()`'s result is typed with.
+	// Derived from the SOURCE's instance rather than taken from the caller, so the element a `current()` reads
+	// back is by construction the element the buffer holds — `managedListNodeInstanceFor`'s rule, and for the
+	// same reason.
+	export function managedMemoryCursorInstanceFor(sourceGiid GenericInstanceId) returns GenericInstanceId
+		return self.builtinInstanceForElement(ManagedMemoryCursorBuiltinBaseName, element: self.containerElementType(sourceGiid))
+	end 'managedMemoryCursorInstanceFor'
+
 	// --- The `Vector` builtin generic ---
 	//
 	// The FIXED-SIZE array (see `VectorBuiltinBaseName`). Its element is read through the shared
@@ -13476,6 +13567,11 @@ export type ProgramSignatures
 		if self.isManagedListNodeInstance(id) 'managedListNode'
 			return ListNodeBytes as ByteOffset
 		end 'managedListNode'
+		// A cursor's box is its own 16-byte record — `source@0` plus `position@8`, and nothing else, because
+		// it reads the source's `buffer`/`length`/`element_size` LIVE (see `ArrayRuntime.CursorRecordBytes`).
+		if self.isManagedMemoryCursorInstance(id) 'managedMemoryCursor'
+			return CursorRecordBytes as ByteOffset
+		end 'managedMemoryCursor'
 		match self.structOf(self.genericInstanceBaseName(id)) 'base'
 			declared(layout) then return layout.sizeBytes()
 			undeclared then panic("genericInstanceBoxSize: generic instance {id}'s base '{String.from(self.genericInstanceBaseName(id))}' is neither a builtin nor a declared struct, so it has no box — every caller opens with genericInstanceBaseIsKnown")
@@ -14504,7 +14600,7 @@ export type ProgramSignatures
 	// `StructLayout` exists for it and none is missing. The ONE home of the builtin-container disjunction —
 	// every door that means "a container this compiler owns" asks here rather than re-spelling the four names.
 	export function isBuiltinGenericBaseName(name ByteArray) returns bool
-		return self.isArrayBaseName(name) or self.isSetBaseName(name) or self.isMapBaseName(name) or self.isListBaseName(name) or self.isVectorBaseName(name) or self.isManagedListBaseName(name) or self.isManagedListNodeBaseName(name)
+		return self.isArrayBaseName(name) or self.isSetBaseName(name) or self.isMapBaseName(name) or self.isListBaseName(name) or self.isVectorBaseName(name) or self.isManagedListBaseName(name) or self.isManagedListNodeBaseName(name) or self.isManagedMemoryCursorBaseName(name)
 	end 'isBuiltinGenericBaseName'
 
 	// ⭐ **HOW MANY TYPE ARGUMENTS THE SYNTHESIZED GENERIC `name` TAKES** — the arity `Parser.checkGenericInstance`
@@ -14540,6 +14636,9 @@ export type ProgramSignatures
 		if self.isManagedListNodeBaseName(name) 'managedListNode'
 			return ManagedListNodeTypeParamCount
 		end 'managedListNode'
+		if self.isManagedMemoryCursorBaseName(name) 'managedMemoryCursor'
+			return ManagedMemoryCursorTypeParamCount
+		end 'managedMemoryCursor'
 		panic("ProgramSignatures.builtinGenericTypeParamCount: `{String.from(name)}` is not a synthesized builtin generic — every caller opens with isBuiltinGenericBaseName, and a name that answers yes there owes an arity here")
 	end 'builtinGenericTypeParamCount'
 
@@ -15341,6 +15440,15 @@ export type ProgramSignatures
 		// emitted through the element accessor's `owned: false` path and never enrolled as an owned temp. So
 		// reaching here means a node value was tracked as owned somewhere, which would be a DOUBLE FREE at
 		// the first scope exit — loud here, silent there.
+		// ⭐ **A CURSOR DROPS THROUGH `__arr_cursor_decref` — the one builtin whose box owns a RECORD rather
+		// than a buffer.** It releases the source it retained at creation (through `__arr_decref`, which is
+		// what frees that record's own element buffer and walks its managed elements) and then reclaims the
+		// 16-byte box. A generic `__mm_decref` here would free the cursor and strand the source's whole
+		// allocation — the leak this router's fall-through panic exists to prevent.
+		if self.isManagedMemoryCursorInstance(id) 'managedMemoryCursor'
+			return ArrCursorDecrefName
+		end 'managedMemoryCursor'
+
 		if self.isManagedListNodeInstance(id) 'nodeHandleIsABorrow'
 			panic("ProgramSignatures.genericInstanceBoxDropCallee: a `{String.from(ManagedListNodeBuiltinBaseName)}` handle has no drop — the list owns its nodes and frees them in `{String.from(ListClearName)}`, so a node reaching this door was enrolled as an OWNED value and would be freed twice")
 		end 'nodeHandleIsABorrow'

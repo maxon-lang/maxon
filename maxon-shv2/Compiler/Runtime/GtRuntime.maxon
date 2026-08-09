@@ -681,6 +681,17 @@ export function runtimeThrowsClause(callee ByteArray) returns ThrowsClause
 		return managedMemoryThrows()
 	end 'memoryFamily'
 
+	// ⭐ **THE CURSOR FAMILY, WHICH THROWS THE BUFFER'S ENUM.** A cursor is a position inside a
+	// `__ManagedMemory` and every failure it can report is an out-of-range position, so the errors it raises
+	// are that surface's — v1 declares its `createCursor` `throws __ManagedMemoryError` for the same reason.
+	//
+	// ⚠ **IT MUST STAY ABOVE THE ARRAY ARM, for the memory family's reason one line up**: the cursor entries
+	// are `__arr_`-prefixed and `isThrowingArrayRuntimeCallee` COMPOSES this predicate in, so asking the wide
+	// test first would type every cursor failure as `ArrayError`.
+	if isThrowingCursorRuntimeCallee(callee) 'cursorFamily'
+		return managedMemoryThrows()
+	end 'cursorFamily'
+
 	// ⚠ **THE `String` FAMILY HAD AN ARM HERE UNTIL W49 WAVE 7, AND IT COLLAPSED INTO THE MEMORY ARM ABOVE
 	// RATHER THAN VANISHING.** Its one member was `__str_byte_at`, and it answered `managedMemoryThrows()` —
 	// the SAME clause the memory family answers — because `String.byteAt` is declared
@@ -843,6 +854,13 @@ export function runtimeCalleeSourceMethod(callee ByteArray) returns RuntimeCalle
 	if isManagedMemoryRuntimeCallee(callee) 'memoryFamily'
 		return RuntimeCalleeSourceMethod.found(managedMemorySourceMethodName(callee))
 	end 'memoryFamily'
+
+	// The cursor family — four names, four distinct spellings the author writes, so it is the several-names
+	// map shape and not the `Character` family's one-name identity. Above the array arm for the reason
+	// `runtimeThrowsClause`'s cursor arm gives.
+	if isThrowingCursorRuntimeCallee(callee) 'cursorFamily'
+		return RuntimeCalleeSourceMethod.found(cursorSourceMethodName(callee))
+	end 'cursorFamily'
 
 	if isThrowingArrayAccessorCallee(callee) 'arrayFamily'
 		return RuntimeCalleeSourceMethod.found(arrayAccessorSourceMethodName(callee))

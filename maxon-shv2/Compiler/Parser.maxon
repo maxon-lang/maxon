@@ -4343,7 +4343,12 @@ function arrayMethodMutatesReceiver(name ByteArray, isManagedMemory bool) return
 	// vacated bytes, `setByte` one byte of its buffer, `grow` its `buffer@0` and `capacity@16`) — so an
 	// outstanding borrow is E3070 through the one home that rule has. `length`/`capacity`/`byteAt` only read
 	// and are deliberately absent.
-	if isManagedMemory and (name.equals(ManagedMemorySetLengthMethod) or name.equals(ManagedMemorySetByteMethod) or name.equals(ManagedMemoryGrowMethod)) 'managedMemoryMutator'
+	// ⭐ **THE THREE RELOCATORS JOIN THEM, AND `swap` IS THE ONE WORTH SAYING OUT LOUD.** It writes no
+	// `length@8` and allocates nothing — it exchanges two slots — but it REWRITES THE ELEMENTS a borrow may be
+	// looking at, which is exactly what E3070 exists to catch. A read-only classification here would let
+	// `let e = try arr.get(0)` stay live across `arr.managed.swap(0, j: 1)` and hand the caller an element
+	// that has moved. The two shifts write the buffer outright.
+	if isManagedMemory and (name.equals(ManagedMemorySetLengthMethod) or name.equals(ManagedMemorySetByteMethod) or name.equals(ManagedMemoryGrowMethod) or name.equals(ManagedMemorySwapMethod) or name.equals(ManagedMemoryShiftRightMethod) or name.equals(ManagedMemoryShiftLeftMethod)) 'managedMemoryMutator'
 		return true
 	end 'managedMemoryMutator'
 
@@ -4397,12 +4402,17 @@ end 'appendArgParamName'
 // it is provided. The pairing cannot be verified at install time (an arm is a control-flow position, not an
 // entry in a table something can enumerate), so the check sits at the one moment it is observable.
 //
-// ⚠ **`remove`, `swap`, `shiftLeft`/`shiftRight`, `fromCString` and `createCursor` are ABSENT ON PURPOSE.**
-// Every one is a real `__ManagedMemory` member in both references (bootstrap `2-Parser.cs:1481-1516`, v1
-// `LowerMaxonToStd.maxon:1618-1660`) and none is BUILT here — the only caller of `remove`/`swap`/`shiftRight`
-// anywhere is `stdlib/Array.maxon`, which is not a whitelisted module and which shv2 cannot compile at all,
-// and the remaining cstring/cursor pair takes types shv2 has no producer for. Each arrives with the rung that
-// builds it, and **that rung adds its line HERE and has nothing else to remember.**
+// ⚠ **`fromCString` IS ABSENT ON PURPOSE, AND IT IS NOW THE ONLY ONE.** It is a real `__ManagedMemory` member
+// in both references (bootstrap `2-Parser.cs:1481-1516`, v1 `LowerMaxonToStd.maxon:1618-1660`) and is not
+// BUILT here, because it takes a `cstring` shv2 has no producer for. It arrives with the rung that builds it,
+// and **that rung adds its line HERE and has nothing else to remember.**
+//
+// ⭐ **THAT LIST USED TO NAME FIVE, AND FOUR OF THEM ARRIVED BY EXACTLY THE ROUTE IT PREDICTED.**
+// `remove`/`swap`/`shiftLeft`/`shiftRight` were absent because *"the only caller anywhere is
+// `stdlib/Array.maxon`, which is not a whitelisted module"* — which was a statement about the CALLER's
+// availability, not about the member's, and the Array retirement needs the members BEFORE it can list that
+// module. Adding each was one line here plus its arm; nothing else moved, which is the property the header
+// claims and this is the measurement of it.
 //
 // ⚠ **WHAT THE LIST RECORDS IS WHAT THE SURFACE *HAS*, NEVER WHO MAY REACH IT, AND TWO ENTRIES DEPEND ON THAT
 // SPLIT.** `toCString` and `makeCharFromBytes` are served — the corpus calls both — but only to a file under
@@ -4443,8 +4453,46 @@ function bufferSurfaceMemberNames() returns ByteArrayArray
 	names.push(AppendMethod)
 	names.push(SliceMethod)
 	names.push(ClearMethod)
+	// ⭐ **THE FOUR RELOCATORS, ARRIVING BY EXACTLY THE ROUTE THE HEADER ABOVE DESCRIBES.** `remove` shares
+	// the `Array`'s `__arr_remove` (same `length` bound, same tail slide, same erase); `swap`/`shiftRight`/
+	// `shiftLeft` have runtimes of their own. They sit together because they are ONE group — the operations
+	// that move elements the buffer already owns without producing or consuming one — and
+	// `ArrayRuntime.ArrMemSwapName`'s header carries why that group may not be built out of `get` + `set`.
+	names.push(RemoveMethod)
+	names.push(ManagedMemorySwapMethod)
+	names.push(ManagedMemoryShiftRightMethod)
+	names.push(ManagedMemoryShiftLeftMethod)
+	// ⭐ **THE CURSOR'S PRODUCER IS A BUFFER MEMBER, AND IT IS THE ONLY ONE.** Nothing else in the language
+	// mints a `__ManagedMemoryCursor`; the six members OF one live on `cursorSurfaceMemberNames`, one
+	// receiver over.
+	names.push(ManagedMemoryCreateCursorMethod)
 	return names
 end 'bufferSurfaceMemberNames'
+
+// ⭐⭐ **WHICH MEMBERS A `__ManagedMemoryCursor` HAS — the buffer roster's twin, one receiver over.** It
+// carries the identical obligations: the entries are the very constants `dispatchCursorMethod`'s arms match
+// on, the ORDER is the message's order because the message is joined from this list, and the fall-through is
+// a PANIC naming it.
+//
+// ⚠ **THE LIST IS `stdlib/Array.maxon:500-530`'s, AND THAT IS WHY IT IS EXACTLY SIX.** `ArrayIterator`
+// forwards `current`/`index`/`advance`/`retreat`/`seek`/`peek` and declares nothing else over its `raw`
+// cursor; `advanceBy`/`retreatBy` are `Iterator`/`BidirectionalIterator` EXTENSION methods written in terms
+// of `advance`/`retreat`, so they are the corpus's own code and never reach a compiler-owned arm.
+//
+// ⚠ **THE FIRST TWO ARE INFALLIBLE AND THE LAST FOUR THROW, and the split is the type's whole invariant
+// rather than a per-member choice**: a cursor that exists points at a live element, so reading needs no
+// check and every MOVE must refuse rather than land somewhere invalid. See
+// `ArrayRuntime.buildArrCursorCurrent`.
+function cursorSurfaceMemberNames() returns ByteArrayArray
+	var names = ByteArrayArray.create()
+	names.push(CursorCurrentMethod)
+	names.push(CursorIndexMethod)
+	names.push(CursorAdvanceMethod)
+	names.push(CursorRetreatMethod)
+	names.push(CursorSeekMethod)
+	names.push(CursorPeekMethod)
+	return names
+end 'cursorSurfaceMemberNames'
 
 // ⭐⭐ **WHICH MEMBERS THE `Array` SURFACE HAS — the buffer roster's twin, one surface over (A2k).** It
 // exists for the identical reason and carries the identical obligations: the entries are the very
@@ -4852,6 +4900,10 @@ enum MemberSurface
 	stringIndex
 	// `Map with (Key, Value)` — the two-column hash table's own surface.
 	map
+	// `__ManagedMemoryCursor with Element` — a navigable position INSIDE a buffer, and a surface of its own
+	// rather than more of the buffer's: what may be done to a position (`current`/`advance`/`seek`) and what
+	// may be done to the storage it points into (`get`/`setLength`/`grow`) are disjoint sets on two receivers.
+	cursor
 end 'MemberSurface'
 
 // The read side of a roster — asked ONCE per array-method call, ahead of every arm.
@@ -4970,7 +5022,7 @@ end 'rosterDriftMessage'
 // once" and then wired only the first two: this function kept the `isManagedMemory bool` the enum was
 // introduced to REPLACE, and the three new surfaces spelled their refusals inline at their own gates — five
 // sentences in four homes, the shape `rosterList` and `rosterRefusalSentence` each exist to close one level
-// down. One home, one key, one `if`-chain that a sixth surface cannot silently fall through.
+// down. One home, one key, one `if`-chain that a seventh surface cannot silently fall through.
 function surfaceRosterRefusal(surface MemberSurface, member ByteArray, roster ByteArrayArray) returns String
 	if surface == MemberSurface.buffer 'bufferSurface'
 		return rosterRefusalSentence(ManagedMemoryTypeName, member: member, roster: roster, noun: SurfaceMemberNoun, provider: "R4.4")
@@ -4995,6 +5047,10 @@ function surfaceRosterRefusal(surface MemberSurface, member ByteArray, roster By
 	if surface == MemberSurface.map 'mapSurface'
 		return rosterRefusalSentence(MapBuiltinBaseName, member: member, roster: roster, noun: SurfaceMemberNoun, provider: "shv2")
 	end 'mapSurface'
+
+	if surface == MemberSurface.cursor 'cursorSurface'
+		return rosterRefusalSentence(ManagedMemoryCursorBuiltinBaseName, member: member, roster: roster, noun: SurfaceMemberNoun, provider: "shv2")
+	end 'cursorSurface'
 
 	panic("surfaceRosterRefusal: no refusal sentence for a `MemberSurface` this function does not cover — a surface added to the enum without one, which every gate reading it would then refuse with another type's roster")
 end 'surfaceRosterRefusal'
@@ -8744,7 +8800,7 @@ export type Parser
 	// allocation-neutral against the shared empty — until a name is actually declared twice.
 	var declaredFuncNames as DeclaredFuncNameSet
 	var overloadMembers as OverloadMemberMap
-	// ⭐ The six MEMBER ROSTERS the builtin dispatchers gate on, memoized per file off their shared empty
+	// ⭐ The seven MEMBER ROSTERS the builtin dispatchers gate on, memoized per file off their shared empty
 	// anchor — see `sharedEmptySurfaceRoster` for the measurement that put them here, and `MemberSurface`
 	// for which dispatch reads which.
 	var arraySurfaceRoster as ByteArrayArray
@@ -8753,6 +8809,7 @@ export type Parser
 	var characterSurfaceRoster as ByteArrayArray
 	var stringIndexSurfaceRoster as ByteArrayArray
 	var mapSurfaceRoster as ByteArrayArray
+	var cursorSurfaceRoster as ByteArrayArray
 
 	// ⭐⭐ **THE STDLIB/USER SHADOW RENAME IS APPLIED HERE, TO THE TOKENS, AND THAT PLACEMENT IS THE WHOLE
 	// DESIGN (A1s wave 2).**
@@ -8927,7 +8984,8 @@ export type Parser
 			stringSurfaceRoster: sharedEmptySurfaceRoster,
 			characterSurfaceRoster: sharedEmptySurfaceRoster,
 			stringIndexSurfaceRoster: sharedEmptySurfaceRoster,
-			mapSurfaceRoster: sharedEmptySurfaceRoster
+			mapSurfaceRoster: sharedEmptySurfaceRoster,
+			cursorSurfaceRoster: sharedEmptySurfaceRoster
 		}
 	end 'create'
 
@@ -37932,6 +37990,14 @@ export type Parser
 			return try self.dispatchManagedListNodeMethod(func, node: recv.value, giid: recv.nameId)
 		end 'managedListNodeMethod'
 
+		// A CURSOR RECEIVER (`c.current()`, `c.advance()`) — its own dispatcher for the node arm's reason: a
+		// cursor is not a container either. It carries the borrow subject, which the node arm does not,
+		// because `current()`/`peek()` hand back a BORROW of an element the SOURCE owns and E3070 is what
+		// keeps that borrow from outliving a write to it.
+		if self.signatures.isManagedMemoryCursorInstanceAt(recv.tag, nameId: recv.nameId) 'cursorMethod'
+			return try self.dispatchCursorMethod(func, cursor: recv.value, giid: recv.nameId, resultUsed: resultUsed, borrowSubjectName: recv.subjectName)
+		end 'cursorMethod'
+
 		// A VECTOR RECEIVER (`v.get(0)`, `v.set(0, value: 42)`, `v.count()`) goes to the fixed-size container's
 		// dispatch. It carries the STORAGE mask as well as the borrow subject, which the `List` arm above does
 		// not: a vector's slots ARE an array's, so a `set` through one can free the very element an outstanding
@@ -42481,6 +42547,74 @@ export type Parser
 		return self.emitContainerElementAccessor(func, callee: ListNodeValueName, container: node, args: singletonArgs(node), giid: giid, owned: false, borrowSubjectName: EmptySourceText, range: SourceRange.ofToken(methodTok))
 	end 'dispatchManagedListNodeMethod'
 
+	// ⭐⭐ **A `__ManagedMemoryCursor` RECEIVER — ITS OWN DISPATCH, because a cursor is not a container.** It
+	// holds no elements: what it answers is a POSITION and the element at one, so the members that make sense
+	// on it (`current`/`index`/`advance`/`retreat`/`seek`/`peek`) and the members that make sense on the
+	// storage it points into (`get`/`setLength`/`grow`) are disjoint sets on two receivers.
+	//
+	// ⚠ **THE ROSTER GATE IS ASKED FIRST**, as it is on the six surfaces that already carry one: "does this
+	// member exist?" is the question every other refusal about the call presupposes — see
+	// `dispatchArrayMethod` for the two measured spellings that made the ORDER matter as much as the test.
+	//
+	// ⚠ **NO IMMUTABLE-RECEIVER RULE, AND THAT IS THE CORPUS'S SIGNATURE RATHER THAN A RELAXATION.**
+	// `stdlib/Array.maxon:514-526` declares `advance`/`retreat`/`seek` on a plain `self` and
+	// `stdlib/Array.maxon:496` binds the cursor with `let`, so a `let`-bound cursor must be navigable — which
+	// is the same answer a `let`-bound BUFFER already gets, for the same reason (both references declare every
+	// member of both types on a plain `self`).
+	//
+	// ⚠ **AND NO E3070 BORROW SUBJECT EITHER, WHICH IS A DIFFERENT FACT AND A NARROWER ONE.** A navigation
+	// writes the CURSOR's `position@8`; it does not write the buffer, so it cannot invalidate a borrow taken
+	// out of the buffer. What COULD invalidate the cursor is a write to the SOURCE, and the cursor is
+	// protected there by the retain rather than by the borrow set: the record cannot be freed under it, and a
+	// position that the source has since shortened past is caught at the next navigation by the LIVE `length`
+	// read (`emitCursorPositionOutOfRange`) rather than trusted from a snapshot.
+	function dispatchCursorMethod(func IrFunction, cursor ValueId, giid GenericInstanceId, resultUsed bool, borrowSubjectName ByteArray) returns ValueId throws ParseError
+		let methodTok = try self.consume(TokenKind.identifier)
+		let range = SourceRange.ofToken(methodTok)
+		let roster = try self.requireSurfaceMember(MemberSurface.cursor, methodTok: methodTok)
+
+		// ⭐ **THE TWO INFALLIBLE READS.** `current()` yields the ELEMENT and goes through
+		// `emitContainerElementAccessor` — the one door every element read in the language uses — as a BORROW:
+		// the buffer still owns what is in the slot, so a `String` element handed back here is neither cloned
+		// nor released. `index()` yields a plain integer and is emitted as one.
+		if methodTok.value.equals(CursorCurrentMethod) 'current'
+			try self.consumeEmptyArgList()
+			return self.emitContainerElementAccessor(func, callee: ArrCursorCurrentName, container: cursor, args: singletonArgs(cursor), giid: giid, owned: false, borrowSubjectName: borrowSubjectName, range: range)
+		end 'current'
+		if methodTok.value.equals(CursorIndexMethod) 'index'
+			try self.consumeEmptyArgList()
+			return self.emitRuntimeCall(ArrCursorIndexName, args: singletonArgs(cursor), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
+		end 'index'
+
+		// ⭐ **THE THREE VOID NAVIGATORS, ONE ARM.** They differ only in the callee and in whether a target is
+		// written, which is the same folding `dispatchArrayMethod`'s shift arm does and for the same reason:
+		// two argument protocols where there is one would be the twin these rosters exist to prevent.
+		if methodTok.value.equals(CursorAdvanceMethod) or methodTok.value.equals(CursorRetreatMethod) 'step'
+			try self.requireVoidMethodIsStatement(resultUsed, methodTok: methodTok)
+			try self.consumeEmptyArgList()
+			let stepCallee = ArrCursorAdvanceName if methodTok.value.equals(CursorAdvanceMethod) else ArrCursorRetreatName
+			return self.emitRuntimeCall(stepCallee, args: singletonArgs(cursor), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+		end 'step'
+		if methodTok.value.equals(CursorSeekMethod) 'seek'
+			try self.requireVoidMethodIsStatement(resultUsed, methodTok: methodTok)
+			let target = try self.parseOneBuiltinIntegerArgList(func, paramName: ManagedMemoryIndexParamName, methodTok: methodTok)
+			return self.emitRuntimeCall(ArrCursorSeekName, args: pairArgs(cursor, second: target), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+		end 'seek'
+
+		// `peek(ahead)` reads WITHOUT moving, so it is the one member that both takes an argument and yields an
+		// element — the accessor door again, and a BORROW again, for `current`'s reason.
+		if methodTok.value.equals(CursorPeekMethod) 'peek'
+			let ahead = try self.parseOneBuiltinIntegerArgList(func, paramName: CursorPeekParamName, methodTok: methodTok)
+			return self.emitContainerElementAccessor(func, callee: ArrCursorPeekName, container: cursor, args: pairArgs(cursor, second: ahead), giid: giid, owned: false, borrowSubjectName: borrowSubjectName, range: range)
+		end 'peek'
+
+		// ⚠ Unreachable while the roster and these arms agree — `dispatchArrayMethod`'s drift panic, for its
+		// reason: a roster member with no arm would otherwise be handed the very refusal that says it is
+		// provided.
+		let drift = rosterDriftMessage("dispatchCursorMethod", member: methodTok.value, roster: roster, rosterFuncs: "`cursorSurfaceMemberNames`")
+		panic("{drift}")
+	end 'dispatchCursorMethod'
+
 	// ⭐ **`List from [a, b, c]` — CONSTRUCT A LIST FROM AN ARRAY LITERAL.** The cursor sits on the `List`
 	// identifier. Parse `from` then the `[…]` through the EXISTING array-literal parser — which infers the
 	// element type and yields an OWNED `Array with <elem>` temporary — then emit `__list_from` over it,
@@ -43469,6 +43603,14 @@ export type Parser
 			return self.mapSurfaceRoster
 		end 'mapSurface'
 
+		if surface == MemberSurface.cursor 'cursorSurface'
+			if self.cursorSurfaceRoster is sharedEmptySurfaceRoster 'firstCursorCallInThisFile'
+				self.cursorSurfaceRoster = cursorSurfaceMemberNames()
+			end 'firstCursorCallInThisFile'
+
+			return self.cursorSurfaceRoster
+		end 'cursorSurface'
+
 		panic("surfaceMemberNames: no roster for a `MemberSurface` this function does not cover — a surface added to the enum without one, which every gate reading it would then answer for by falling through")
 	end 'surfaceMemberNames'
 
@@ -44141,6 +44283,108 @@ export type Parser
 			let newCapacity = try self.parseOneBuiltinIntegerArgList(func, paramName: ManagedMemoryNewCapacityParamName, methodTok: methodTok)
 			return self.emitRuntimeCall(ArrMemGrowName, args: pairArgs(arr, second: newCapacity), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
 		end 'grow'
+
+		// ⭐⭐ **THE THREE RELOCATORS — void, throwing, two integer arguments each, and BUFFER-SURFACE ONLY.**
+		// Neither reference gives `Array` any of these spellings: the corpus reaches them through
+		// `managed.swap`/`managed.shiftRight` from inside `stdlib/Array.maxon` and
+		// `stdlib/helpers/sort/smallSort.maxon`, and the `Array` methods built ON them (`insert`, `remove`,
+		// `Array.swap`) are the surface a program is meant to see.
+		//
+		// ⚠ **THEY TAKE `emitRuntimeCall` FOR `grow`'s MEASURED REASON**: under a `try`, `emitArrayVoidCall`
+		// would make the try's value the owned array record and the reconciliation would act on it (an access
+		// violation — see the note above `setLength`).
+		//
+		// ⚠⚠ **NO MANAGED-ELEMENT GATE, AND THAT IS THE GROUP'S DEFINING PROPERTY RATHER THAN AN OVERSIGHT.**
+		// `set` is refused for a managed element (E3109) because it takes OWNERSHIP of a value it was handed,
+		// into a slot above `length` that nobody owns; `setByte`/`byteAt` are refused (E3110) because they read
+		// or write a pointer as though it were data. A relocator does neither: it moves words the buffer
+		// ALREADY OWNS between slots the buffer already owns, so the live multiset — and every element's
+		// refcount — is invariant across it and the element's kind never enters the question.
+		// `ArrayRuntime.ArrMemSwapName`'s header carries that argument in full, and it is the same one that
+		// makes `swap` unbuildable out of `get` + `set`.
+		if isManagedMemory and methodTok.value.equals(ManagedMemorySwapMethod) 'swap'
+			try self.requireVoidMethodIsStatement(resultUsed, methodTok: methodTok)
+			// The RECEIVER is argument 0, so the two-int list is prepended to rather than rebuilt — the
+			// arg-list protocol stays in its one home, exactly as `setByte` above does it.
+			var swapArgs = try self.parseTwoBuiltinIntegerArgList(func, firstParam: ManagedMemorySwapFirstParamName, secondParam: ManagedMemorySwapSecondParamName, methodTok: methodTok)
+			swapArgs.insert(0, value: arr)
+			return self.emitRuntimeCall(ArrMemSwapName, args: swapArgs, resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+		end 'swap'
+		if isManagedMemory and (methodTok.value.equals(ManagedMemoryShiftRightMethod) or methodTok.value.equals(ManagedMemoryShiftLeftMethod)) 'shift'
+			try self.requireVoidMethodIsStatement(resultUsed, methodTok: methodTok)
+			// ⚠ ONE ARM FOR THE PAIR, because they differ ONLY in the DIRECTION — same two parameters, same
+			// labels, same capacity bound, same thrown case. The direction IS the callee, so it is chosen here
+			// and nothing else in the arm branches on it; two arms would have been one argument protocol
+			// written twice.
+			let shiftCallee = ArrMemShiftRightName if methodTok.value.equals(ManagedMemoryShiftRightMethod) else ArrMemShiftLeftName
+			var shiftArgs = try self.parseTwoBuiltinIntegerArgList(func, firstParam: ManagedMemoryIndexParamName, secondParam: ManagedMemoryCountParamName, methodTok: methodTok)
+			shiftArgs.insert(0, value: arr)
+			return self.emitRuntimeCall(shiftCallee, args: shiftArgs, resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+		end 'shift'
+
+		// ⭐⭐ **`createCursor()` — THE BUFFER'S ONE PRODUCER OF A `__ManagedMemoryCursor with Element`.**
+		// Throwing (an EMPTY buffer has no valid position to start at) and OWNED: the cursor is its own
+		// `__mm_alloc` box holding a RETAINED source, so it is tracked as an owned temp and drops at scope exit
+		// through `genericInstanceBoxDropCallee` → `__arr_cursor_decref`, exactly as a `.create()`d container
+		// drops through `__arr_decref`.
+		//
+		// ⚠ **THE RESULT'S ELEMENT IS DERIVED FROM THE RECEIVER'S INSTANCE, NOT RE-INFERRED**
+		// (`managedMemoryCursorInstanceFor`), so a `current()` hands back the element the buffer actually
+		// holds and the two cannot disagree about what that is.
+		//
+		// ⚠ **THE CURSOR IS NOT MARKED AS THE BUFFER SURFACE, and that is the one thing a reader of the
+		// `slice` arm above might expect.** A slice of a buffer IS a buffer — same record, same members — so
+		// its surface rides the value. A cursor is a DIFFERENT record with a disjoint member list, and it
+		// carries its surface in its TYPE (`MemberSurface.cursor`, reached off the instance) rather than in
+		// the provenance table, because unlike the buffer it does not share a `GenericInstanceId` with anything.
+		if isManagedMemory and methodTok.value.equals(ManagedMemoryCreateCursorMethod) 'createCursor'
+			try self.consumeEmptyArgList()
+			let cursor = self.emitOwnedRuntimeResult(ArrCursorCreateName, args: singletonArgs(arr), resultTag: ValueTypeTag.genericInstance, resultNameId: self.signatures.managedMemoryCursorInstanceFor(giid), range: range)
+
+			// ⭐⭐ **A CURSOR IS A STANDING BORROW OF ITS SOURCE, AND E3070 IS WHERE THAT IS ENFORCED.** ⚖ USER
+			// RULING (PLAN `S2l`, 2026-08-06): *"an array cursor locks its source."* The retain in
+			// `__arr_cursor_create` keeps the record ALIVE, which is a different guarantee from keeping it
+			// UNCHANGED — MEASURED on this tree before this line: `let c = try xs.managed.createCursor()`
+			// followed by `xs.clear()` and `c.current()` compiled clean and faulted with **0xC0000005**, because
+			// `clear` releases every element and zeroes its slot while the cursor still names position 0. The
+			// trivial-element twin does not crash and is just as wrong — it reports the zero left behind as an
+			// element the array no longer has.
+			//
+			// ⭐ **IT IS THE BORROW SET AND NOT A FOURTH LOCK, and the borrow set is the STRONGER of the two
+			// here.** The lock a `for … in` takes is LEXICAL — it holds for a syntactic body — where a borrow
+			// holds until the borrower's LAST USE (`attachPendingBorrows` seeds `lastUseToken`). For a cursor
+			// that is the more precise extent in both directions: a cursor BINDING outlives any body, so a
+			// lexical lock keyed on a block would expire while the cursor was still readable; and
+			// `let c = …; print(c.current()); xs.clear()` is SAFE and a lexical lock would refuse it. Nothing
+			// new is built, and a cursor answers the same E3070 an outstanding `get` borrow already does.
+			//
+			// ⚠ **IT IS MINTED WHATEVER THE ELEMENT TYPE, where `emitContainerElementAccessor` mints only for a
+			// MANAGED one.** That gate is right for an element read — a trivial element is a copied WORD that
+			// cannot dangle — and wrong here, because what the cursor holds is a position into the CONTAINER,
+			// and a container can be emptied under a position whatever its elements are.
+			//
+			// ⚠⚠ **THE LOCK IS ONE HOP DEEP, AND THE MISSING HOP IS E3070's RATHER THAN THIS TYPE'S.** A value
+			// read OUT of a cursor borrows the CURSOR (`emitContainerElementAccessor`, one function down), and
+			// the borrow set does not compose — so after the cursor's own last use its lock on the source
+			// expires while that value still points inside it: `let s = c.current()` then `xs.clear()` then
+			// `print(s)` faults. It is NOT this rung's to fix, and that is measured rather than assumed: the
+			// identical shape over a nested `Array with (Array with String)` — `outer.get(0)` then
+			// `.get(0)` then `outer.clear()` — faults the same way with no cursor anywhere. Composing borrows
+			// transitively is a change to what E3070 means for every container (v1 does it as a per-value
+			// liveness EXTENSION, `StdLiveness.maxon:236-267`'s `baseOf[result] = receiver` chain), so it is a
+			// rung and not a line here.
+			//
+			// ⚠ **A SOURCE NOTHING CAN NAME MINTS NOTHING, AND THAT IS SAFE FOR A SECOND REASON.**
+			// `makeBuffer().managed.createCursor()` has no subject to key a borrow on — and needs none: no
+			// other expression can reach that record to write it, and the retain is what stops it being freed
+			// (`managed-memory-cursor.the-cursor-keeps-its-source-alive` measures exactly that, across 500
+			// intervening allocations).
+			if not borrowSubjectName.isEmpty() 'sourceIsNameableStorage'
+				self.mintPendingBorrow(func, subjectName: borrowSubjectName, borrowValue: cursor, range: range)
+			end 'sourceIsNameableStorage'
+
+			return cursor
+		end 'createCursor'
 
 		// ⚠⚠ **NO RECEIVER OF EITHER SURFACE CAN REACH HERE, AND THIS IS THE CHECK THAT SAYS SO** (D11b for
 		// the buffer, A2k for the `Array`). The roster gate at the top admitted only the names

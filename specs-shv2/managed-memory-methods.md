@@ -1650,7 +1650,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:4:5: Unsupported: `__ManagedMemory` member 'push' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/elementSize/grow/toCString/makeCharFromBytes/append/slice/clear; that list IS the surface, so nothing else is served here
+error E2015: <fragment>:4:5: Unsupported: `__ManagedMemory` member 'push' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/elementSize/grow/toCString/makeCharFromBytes/append/slice/clear/remove/swap/shiftRight/shiftLeft/createCursor; that list IS the surface, so nothing else is served here
 ```
 
 <!-- test: error.buffer-has-no-push-in-value-position -->
@@ -1668,23 +1668,32 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:4:13: Unsupported: `__ManagedMemory` member 'push' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/elementSize/grow/toCString/makeCharFromBytes/append/slice/clear; that list IS the surface, so nothing else is served here
+error E2015: <fragment>:4:13: Unsupported: `__ManagedMemory` member 'push' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/elementSize/grow/toCString/makeCharFromBytes/append/slice/clear/remove/swap/shiftRight/shiftLeft/createCursor; that list IS the surface, so nothing else is served here
 ```
 
-<!-- test: error.buffer-has-no-remove -->
+<!-- test: the-buffer-does-have-remove -->
 
-⭐ **THE SECOND PROGRAM THE D11 REVIEW RAN, and the one the message named outright.** The roster has always
-said `remove` "is not built"; the arm accepted it and emitted the `Array`'s length-bounded `__arr_remove`.
-Both halves of that are now true at once.
+⭐⭐ **THE SECOND PROGRAM THE D11 REVIEW RAN, AND THE ONE THAT FLIPPED.** It was
+`error.buffer-has-no-remove`: the roster said `remove` "is not built" while the arm accepted it and emitted
+the `Array`'s length-bounded `__arr_remove`, so D11b made both halves say ABSENT. The Array-retirement rung
+that BUILDS the member makes both halves say PRESENT instead — the arm is the same `__arr_remove` it always
+was (same `length` bound, same tail slide, same erase of the vacated slot), and what changed is that the
+roster now claims it.
+
+⚠ The program below is the D11 review's, extended by the two lines a `remove` needs: `create(4, …)` RESERVES
+four slots and leaves the length at 0 (see `create-and-length`), so the buffer has to publish a length and
+write an element before there is anything for index 0 to name.
 ```maxon
 function main() returns ExitCode
 	let mm = try __ManagedMemory.create(4, elementSize: 1) otherwise return 1
-	try mm.remove(0) otherwise return 2
-	return 0
+	try mm.setLength(3) otherwise return 2
+	try mm.setByte(0, 7) otherwise return 3
+	let gone = try mm.remove(0) otherwise return 4
+	return gone + mm.length()
 end 'main'
 ```
-```maxoncstderr
-error E2015: <fragment>:4:9: Unsupported: `__ManagedMemory` member 'remove' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/elementSize/grow/toCString/makeCharFromBytes/append/slice/clear; that list IS the surface, so nothing else is served here
+```exitcode
+9
 ```
 
 <!-- test: error.buffer-has-no-count -->
@@ -1701,7 +1710,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:4:13: Unsupported: `__ManagedMemory` member 'count' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/elementSize/grow/toCString/makeCharFromBytes/append/slice/clear; that list IS the surface, so nothing else is served here
+error E2015: <fragment>:4:13: Unsupported: `__ManagedMemory` member 'count' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/elementSize/grow/toCString/makeCharFromBytes/append/slice/clear/remove/swap/shiftRight/shiftLeft/createCursor; that list IS the surface, so nothing else is served here
 ```
 
 <!-- test: error.buffer-has-no-appendMemory -->
@@ -1723,7 +1732,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:5:9: Unsupported: `__ManagedMemory` member 'appendMemory' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/elementSize/grow/toCString/makeCharFromBytes/append/slice/clear; that list IS the surface, so nothing else is served here
+error E2015: <fragment>:5:9: Unsupported: `__ManagedMemory` member 'appendMemory' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/elementSize/grow/toCString/makeCharFromBytes/append/slice/clear/remove/swap/shiftRight/shiftLeft/createCursor; that list IS the surface, so nothing else is served here
 ```
 
 <!-- test: error.buffer-has-no-managed-field -->
@@ -1740,7 +1749,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:4:9: Unsupported: `__ManagedMemory` member 'managed' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/elementSize/grow/toCString/makeCharFromBytes/append/slice/clear; that list IS the surface, so nothing else is served here
+error E2015: <fragment>:4:9: Unsupported: `__ManagedMemory` member 'managed' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/elementSize/grow/toCString/makeCharFromBytes/append/slice/clear/remove/swap/shiftRight/shiftLeft/createCursor; that list IS the surface, so nothing else is served here
 ```
 
 <!-- test: buffer-reports-its-element-size -->
@@ -1778,7 +1787,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:4:17: Unsupported: `__ManagedMemory` member 'pop' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/elementSize/grow/toCString/makeCharFromBytes/append/slice/clear; that list IS the surface, so nothing else is served here
+error E2015: <fragment>:4:17: Unsupported: `__ManagedMemory` member 'pop' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/elementSize/grow/toCString/makeCharFromBytes/append/slice/clear/remove/swap/shiftRight/shiftLeft/createCursor; that list IS the surface, so nothing else is served here
 ```
 
 <!-- test: error.buffer-has-no-first -->
@@ -1790,7 +1799,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:4:17: Unsupported: `__ManagedMemory` member 'first' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/elementSize/grow/toCString/makeCharFromBytes/append/slice/clear; that list IS the surface, so nothing else is served here
+error E2015: <fragment>:4:17: Unsupported: `__ManagedMemory` member 'first' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/elementSize/grow/toCString/makeCharFromBytes/append/slice/clear/remove/swap/shiftRight/shiftLeft/createCursor; that list IS the surface, so nothing else is served here
 ```
 
 <!-- test: error.buffer-has-no-last -->
@@ -1802,7 +1811,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:4:17: Unsupported: `__ManagedMemory` member 'last' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/elementSize/grow/toCString/makeCharFromBytes/append/slice/clear; that list IS the surface, so nothing else is served here
+error E2015: <fragment>:4:17: Unsupported: `__ManagedMemory` member 'last' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/elementSize/grow/toCString/makeCharFromBytes/append/slice/clear/remove/swap/shiftRight/shiftLeft/createCursor; that list IS the surface, so nothing else is served here
 ```
 
 <!-- test: error.buffer-has-no-insert -->
@@ -1821,7 +1830,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:4:9: Unsupported: `__ManagedMemory` member 'insert' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/elementSize/grow/toCString/makeCharFromBytes/append/slice/clear; that list IS the surface, so nothing else is served here
+error E2015: <fragment>:4:9: Unsupported: `__ManagedMemory` member 'insert' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/elementSize/grow/toCString/makeCharFromBytes/append/slice/clear/remove/swap/shiftRight/shiftLeft/createCursor; that list IS the surface, so nothing else is served here
 ```
 
 <!-- test: error.buffer-has-no-reserve -->
@@ -1838,7 +1847,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:4:5: Unsupported: `__ManagedMemory` member 'reserve' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/elementSize/grow/toCString/makeCharFromBytes/append/slice/clear; that list IS the surface, so nothing else is served here
+error E2015: <fragment>:4:5: Unsupported: `__ManagedMemory` member 'reserve' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/elementSize/grow/toCString/makeCharFromBytes/append/slice/clear/remove/swap/shiftRight/shiftLeft/createCursor; that list IS the surface, so nothing else is served here
 ```
 
 <!-- test: error.buffer-has-no-resize -->
@@ -1855,7 +1864,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:4:5: Unsupported: `__ManagedMemory` member 'resize' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/elementSize/grow/toCString/makeCharFromBytes/append/slice/clear; that list IS the surface, so nothing else is served here
+error E2015: <fragment>:4:5: Unsupported: `__ManagedMemory` member 'resize' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/elementSize/grow/toCString/makeCharFromBytes/append/slice/clear/remove/swap/shiftRight/shiftLeft/createCursor; that list IS the surface, so nothing else is served here
 ```
 
 <!-- test: error.buffer-has-no-is-empty -->
@@ -1867,7 +1876,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:4:13: Unsupported: `__ManagedMemory` member 'isEmpty' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/elementSize/grow/toCString/makeCharFromBytes/append/slice/clear; that list IS the surface, so nothing else is served here
+error E2015: <fragment>:4:13: Unsupported: `__ManagedMemory` member 'isEmpty' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/elementSize/grow/toCString/makeCharFromBytes/append/slice/clear/remove/swap/shiftRight/shiftLeft/createCursor; that list IS the surface, so nothing else is served here
 ```
 
 <!-- test: error.buffer-has-no-clone -->
@@ -1883,7 +1892,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:4:13: Unsupported: `__ManagedMemory` member 'clone' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/elementSize/grow/toCString/makeCharFromBytes/append/slice/clear; that list IS the surface, so nothing else is served here
+error E2015: <fragment>:4:13: Unsupported: `__ManagedMemory` member 'clone' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/elementSize/grow/toCString/makeCharFromBytes/append/slice/clear/remove/swap/shiftRight/shiftLeft/createCursor; that list IS the surface, so nothing else is served here
 ```
 
 <!-- test: error.buffer-of-a-slice-has-no-array-members-either -->
@@ -1902,7 +1911,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:6:15: Unsupported: `__ManagedMemory` member 'count' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/elementSize/grow/toCString/makeCharFromBytes/append/slice/clear; that list IS the surface, so nothing else is served here
+error E2015: <fragment>:6:15: Unsupported: `__ManagedMemory` member 'count' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/elementSize/grow/toCString/makeCharFromBytes/append/slice/clear/remove/swap/shiftRight/shiftLeft/createCursor; that list IS the surface, so nothing else is served here
 ```
 
 <!-- test: array-members-still-work-through-a-managed-field-hop -->
@@ -1963,7 +1972,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:3:12: Unsupported: `__ManagedMemory` member 'count' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/elementSize/grow/toCString/makeCharFromBytes/append/slice/clear; that list IS the surface, so nothing else is served here
+error E2015: <fragment>:3:12: Unsupported: `__ManagedMemory` member 'count' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/elementSize/grow/toCString/makeCharFromBytes/append/slice/clear/remove/swap/shiftRight/shiftLeft/createCursor; that list IS the surface, so nothing else is served here
 ```
 
 <!-- test: declared-parameter-serves-the-roster -->
@@ -2002,7 +2011,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:8:11: Unsupported: `__ManagedMemory` member 'count' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/elementSize/grow/toCString/makeCharFromBytes/append/slice/clear; that list IS the surface, so nothing else is served here
+error E2015: <fragment>:8:11: Unsupported: `__ManagedMemory` member 'count' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/elementSize/grow/toCString/makeCharFromBytes/append/slice/clear/remove/swap/shiftRight/shiftLeft/createCursor; that list IS the surface, so nothing else is served here
 ```
 
 <!-- test: declared-return-type-serves-the-roster -->
@@ -2045,7 +2054,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:12:15: Unsupported: `__ManagedMemory` member 'count' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/elementSize/grow/toCString/makeCharFromBytes/append/slice/clear; that list IS the surface, so nothing else is served here
+error E2015: <fragment>:12:15: Unsupported: `__ManagedMemory` member 'count' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/elementSize/grow/toCString/makeCharFromBytes/append/slice/clear/remove/swap/shiftRight/shiftLeft/createCursor; that list IS the surface, so nothing else is served here
 ```
 
 <!-- test: declared-field-serves-the-roster -->
@@ -2309,7 +2318,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:10:13: Unsupported: `__ManagedMemory` member 'count' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/elementSize/grow/toCString/makeCharFromBytes/append/slice/clear; that list IS the surface, so nothing else is served here
+error E2015: <fragment>:10:13: Unsupported: `__ManagedMemory` member 'count' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/elementSize/grow/toCString/makeCharFromBytes/append/slice/clear/remove/swap/shiftRight/shiftLeft/createCursor; that list IS the surface, so nothing else is served here
 ```
 
 <!-- test: error.array-element-has-the-buffer-surface -->
@@ -2326,7 +2335,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:8:11: Unsupported: `__ManagedMemory` member 'count' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/elementSize/grow/toCString/makeCharFromBytes/append/slice/clear; that list IS the surface, so nothing else is served here
+error E2015: <fragment>:8:11: Unsupported: `__ManagedMemory` member 'count' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/elementSize/grow/toCString/makeCharFromBytes/append/slice/clear/remove/swap/shiftRight/shiftLeft/createCursor; that list IS the surface, so nothing else is served here
 ```
 
 <!-- test: error.a-tuple-of-byte-arrays-keeps-the-array-surface -->
@@ -3342,7 +3351,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:11:18: Unsupported: `__ManagedMemory` member 'count' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/elementSize/grow/toCString/makeCharFromBytes/append/slice/clear; that list IS the surface, so nothing else is served here
+error E2015: <fragment>:11:18: Unsupported: `__ManagedMemory` member 'count' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/elementSize/grow/toCString/makeCharFromBytes/append/slice/clear/remove/swap/shiftRight/shiftLeft/createCursor; that list IS the surface, so nothing else is served here
 ```
 
 <!-- test: union-payload-declared-managed-memory-serves-a-shared-member -->
@@ -3668,7 +3677,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:15:15: Unsupported: `__ManagedMemory` member 'count' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/elementSize/grow/toCString/makeCharFromBytes/append/slice/clear; that list IS the surface, so nothing else is served here
+error E2015: <fragment>:15:15: Unsupported: `__ManagedMemory` member 'count' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/elementSize/grow/toCString/makeCharFromBytes/append/slice/clear/remove/swap/shiftRight/shiftLeft/createCursor; that list IS the surface, so nothing else is served here
 ```
 
 <!-- test: error.an-array-alias-at-a-struct-field-keeps-the-array-surface -->
