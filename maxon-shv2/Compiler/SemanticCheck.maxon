@@ -79,12 +79,13 @@ export function semanticCheck(project Project, module MaxonModule, signatures Pr
 	// E3100 (P1.5-B2a): a green thread awaited more than once on a single flow path.
 	checkLinearAwait(project, module: module)
 	// ⭐ **THE ONE REWRITE THIS PASS MAKES BESIDES `resolveOverloadedCalls`, AND IT IS LAST ON PURPOSE.**
-	// A `String` literal handed to a parameter the callee WRITES is given a record the write may land in
-	// (`LiteralArgPromotion`). It reads the same `mutationSummary` the E3019 check above does — which is
+	// A byte record handed to a parameter the callee WRITES — a `String` literal, or a MERGE whose edges
+	// disagree about their provenance — is given one the write may land in (`LiteralArgPromotion`). It
+	// reads the same `mutationSummary` the E3019 check above does — which is
 	// why it lives here rather than in a pass of its own, where the whole-program fixpoint would have to
 	// be rebuilt — and it runs after every check so that a program with a diagnostic is left exactly as
 	// the checks found it.
-	promoteImmortalLiteralArgs(project, module: module, mutationSummary: mutationSummary)
+	promoteArgsNeedingAWritableRecord(project, module: module, mutationSummary: mutationSummary)
 end 'semanticCheck'
 
 // ⭐⭐ **PICK THE OVERLOAD EACH CALL MEANT, AND REWRITE THE CALL TO NAME IT** (D7).

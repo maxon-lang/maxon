@@ -182,6 +182,11 @@ export type RuntimeUsage
 	// `__str_copy` inside its Std body this scan cannot see, so a reference turns on `usesHeap`/`usesStrCopy`
 	// too (`recordCallUsage`). Drives `installStringRuntime` to build `__str_clone`.
 	export var usesStrClone as bool
+	// The program CO-OWNS a borrowed byte record whose provenance only the RECORD knows (`__str_retain`,
+	// W56). Its own bit for the same reason `usesStrClone` has one: its Std body calls `__str_clone` and
+	// `__mm_incref`, neither of which this Maxon-module scan can see, so a reference turns on
+	// `usesStrClone`/`usesStrCopy`/`usesIncref`/`usesHeap` too (`recordCallUsage`).
+	export var usesStrRetain as bool
 	// ⚠ **THE P1.8 SLICE C BYTE/ASCII FAMILY'S BITS ARE ALL GONE — ALL EIGHT OF THEM.**
 	// `usesStrStartsWith`/`usesStrEndsWith` in W49 wave 1, `usesStrMapCase`/`usesStrReplace`/
 	// `usesStrReplaceFirst` in wave 2, `usesStrContains` in wave 4, and `usesStrSplit` with
@@ -314,7 +319,7 @@ export type RuntimeUsage
 	export var usesProcessIntrospection as bool
 
 	static function create() returns RuntimeUsage
-		return Self{usesHeap: false, usesGt: false, usesIocp: false, usesStreaming: false, usesWriteStdout: false, usesWriteStderr: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesUIntToString: false, usesBoolToString: false, usesStrDecref: false, usesArray: false, usesSet: false, usesMap: false, usesList: false, usesDropTypeParam: false, usesRetainTypeParam: false, usesDropExistential: false, usesRetainExistential: false, usesIncref: false, usesRetain: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrFromBytes: false, usesStrOfBuffer: false, usesMmToCString: false, usesStrBytesView: false, usesManagedArrayCopy: false, usesOpaqueArrayCopy: false, neededCloners: ClonerSet.create(), usesWallClock: false, usesCharAt: false, usesCharCmp: false, usesCharFromCodepoint: false, usesCharAsciiValue: false, usesStrToBytes: false, usesUcdCategory: false, usesCharSetMake: false, usesCharSetDecref: false, usesCharSetContains: false, usesManagedFile: false, usesManagedDirectory: false, usesCommandLine: false, usesConsoleStdin: false, usesProcessIntrospection: false}
+		return Self{usesHeap: false, usesGt: false, usesIocp: false, usesStreaming: false, usesWriteStdout: false, usesWriteStderr: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesUIntToString: false, usesBoolToString: false, usesStrDecref: false, usesArray: false, usesSet: false, usesMap: false, usesList: false, usesDropTypeParam: false, usesRetainTypeParam: false, usesDropExistential: false, usesRetainExistential: false, usesIncref: false, usesRetain: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrRetain: false, usesStrFromBytes: false, usesStrOfBuffer: false, usesMmToCString: false, usesStrBytesView: false, usesManagedArrayCopy: false, usesOpaqueArrayCopy: false, neededCloners: ClonerSet.create(), usesWallClock: false, usesCharAt: false, usesCharCmp: false, usesCharFromCodepoint: false, usesCharAsciiValue: false, usesStrToBytes: false, usesUcdCategory: false, usesCharSetMake: false, usesCharSetDecref: false, usesCharSetContains: false, usesManagedFile: false, usesManagedDirectory: false, usesCommandLine: false, usesConsoleStdin: false, usesProcessIntrospection: false}
 	end 'create'
 end 'RuntimeUsage'
 
@@ -619,6 +624,19 @@ export function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 		usage.usesHeap = true
 		usage.usesStrCopy = true
 	end 'strclone'
+	// The PROVENANCE-DECIDING co-ownership of a borrowed byte record (`__str_retain`, W56). Its body calls
+	// BOTH of its two arms' entry points inside a Std body this scan cannot see, so both are declared here —
+	// `__str_clone` with the two bits that clone itself declares, and `__mm_incref` with `usesIncref`. Stated
+	// directly rather than by re-entering the `strclone` arm above: a transitive need is a fact about THIS
+	// entry point, and routing it through another arm's name would make the two families' bits move together
+	// the day either changes.
+	if callee.equals(StrRetainName) 'strretain'
+		usage.usesStrRetain = true
+		usage.usesStrClone = true
+		usage.usesStrCopy = true
+		usage.usesIncref = true
+		usage.usesHeap = true
+	end 'strretain'
 	// The `General_Category` lookup (P1.8 Slice D). It declares NOTHING else — see `usesUcdCategory` —
 	// which makes it the second family, beside `__clock_*`, whose body calls nothing this scan cannot see.
 	if callee.equals(UcdCategoryName) 'ucdcategory'

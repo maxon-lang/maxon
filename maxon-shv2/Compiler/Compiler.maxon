@@ -474,11 +474,12 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 
 	recordPhase(project, phase: CompilePhase.deriveRuntimeNeeds, probe: needsProbe)
 
-	// ⭐⭐ **THE PIPELINE RUNS IN TWO STAGES, AND WHAT SITS BETWEEN THEM IS THIS RUNG (the literal-arg rung).**
-	// The Maxon-tier stage ends at `semanticCheck`, which is where `promoteImmortalLiteralArgs` inserts the
-	// `__str_clone` / `__str_decref` calls that give a String literal handed to a writing parameter a record
-	// the write may land in. The runtime-needs scan below then walks the FINAL Maxon module, and the lowering
-	// stage runs after it. Both neighbours are forced, and both were measured — see `buildMaxonTierPasses`.
+	// ⭐⭐ **THE PIPELINE RUNS IN TWO STAGES, AND WHAT SITS BETWEEN THEM IS THIS RUNG (the writable-record
+	// rung).** The Maxon-tier stage ends at `semanticCheck`, which is where
+	// `promoteArgsNeedingAWritableRecord` inserts the `__str_clone` / `__str_retain` / `__str_decref` calls
+	// that give a byte record handed to a writing parameter one the write may land in. The runtime-needs
+	// scan below then walks the FINAL Maxon module, and the lowering stage runs after it. Both neighbours
+	// are forced, and both were measured — see `buildMaxonTierPasses`.
 	var pipeline = try PassPipeline.create(project, maxonModule: module, signatures: signatures) otherwise 'duplicateFunctionName'
 		try refuseCompile(project)
 	end 'duplicateFunctionName'

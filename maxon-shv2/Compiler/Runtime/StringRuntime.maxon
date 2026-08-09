@@ -434,6 +434,33 @@ export let StrBytesViewName = b"__str_bytes_view"
 // see, so a reference to it turns on `usesHeap`/`usesStrCopy` explicitly (`recordCallUsage`).
 export let StrCloneName = b"__str_clone"
 
+// ⭐⭐ **`__str_retain(record) -> ownedRecord` — BECOME AN OWNER OF A BORROWED BYTE RECORD WITHOUT KNOWING
+// WHICH KIND IT IS.** It is `__str_clone` when the record is an IMMORTAL `.rdata` literal and `__mm_incref`
+// when it is a heap record, and either way the caller owns exactly one reference it must `__str_decref`.
+//
+// ⭐ **THE CHOICE IS DEFERRED TO RUN TIME BECAUSE NO COMPILE-TIME TIER CAN MAKE IT.** A borrowed `String`
+// PARAMETER is a heap record when its caller owned one and an immortal `.rdata` record when its caller
+// wrote a literal — `pick("ab", c: true)` and `pick(v, c: true)` over one `pick(s String, c bool)` differ
+// in nothing the callee's frame can read. Getting it wrong is a fault in one direction and a lost write in
+// the other: `__mm_incref` on `.rdata` writes a refcount into a read-only image section, and a `__str_clone`
+// of a heap record hands the caller a COPY, so an append through it never reaches the record's owner
+// (MEASURED, both: `grow(s if c else "lit")` was 0xC0000005 and `grow(make() if c else s)` printed `v=ab`
+// where the oracle prints `v=abXY`).
+//
+// ⭐ **AND THE RECORD ALREADY CARRIES THE ANSWER** — `capacity@16 = RdataBufferCapacity` is the literal
+// provenance `BufferOwnership` declares, so the test is one load and one compare. This is
+// `__retain_existential` one tier down: the same three-way protocol choice `promoteBorrowedToOwned` makes
+// statically, deferred to the one party that can make it.
+//
+// ⚠ **IT MUST BE READ FOR ITS RESULT, NEVER SUBSTITUTED BY ITS ARGUMENT.** The incref arm hands back the
+// record it was given; the clone arm hands back a DIFFERENT one. A caller that dropped the result and used
+// the source would write through the immortal record it was called to avoid.
+//
+// `__`-prefixed compiler-internal (no E3004, no signature slotting) but NOT `__mm_`-prefixed; its two arms
+// call `__str_clone` and `__mm_incref` inside its Std body, which `scanRuntimeUsage` cannot see, so a
+// reference declares those needs explicitly (`recordCallUsage`).
+export let StrRetainName = b"__str_retain"
+
 // ⭐ **WHERE A STRING RECORD KEEPS THE BUFFER-OWNERSHIP ENCODING** (`BufferOwnership`) — the three slots
 // its predicates read, built from THIS file's offsets. All three provenances the record format admits are
 // ordinary values of that encoding, and no String-only branch stands in front of it:
@@ -591,6 +618,9 @@ export function installStringRuntime(module StdModule, usage RuntimeUsage)
 	if usage.usesStrClone 'strclone'
 		buildStrClone(module)
 	end 'strclone'
+	if usage.usesStrRetain 'strretain'
+		buildStrRetain(module)
+	end 'strretain'
 	if usage.usesStrFromBytes 'strfrombytes'
 		buildStrFromBytes(module)
 	end 'strfrombytes'
@@ -1151,6 +1181,50 @@ function buildStrClone(module StdModule)
 
 	module.functions.push(func)
 end 'buildStrClone'
+
+// `__str_retain(record) -> ownedRecord` — the two-armed graph the constant's header argues for.
+//
+// ⚠ **THE TEST IS `== RdataBufferCapacity` AND MUST NOT BE `emitBufferNotOwned`'s `capacity < 0`.** That
+// one asks *"is this buffer mine to write in place?"*, which is FALSE for an ordinary owned INLINE String
+// too (`InlineBufferCapacity`) — and an inline String is heap, refcounted and exactly what the incref arm
+// exists for. Asking the wider question would clone every owned String reaching a merge, which is a lost
+// write, not merely a cost. This is the one provenance test that wants a specific value rather than a sign.
+function buildStrRetain(module StdModule)
+	var func = IrFunction.createFromStd(StrRetainName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var copyImmortal = module.addBlock(func, label: b"copy")
+	var coOwn = module.addBlock(func, label: b"coown")
+	var join = module.addBlock(func, label: b"owned")
+
+	emitParams(module, block: entry, count: 1)
+	let record = 0 as ValueId
+
+	let capacity = emitLoadField(module, block: entry, record: record, offset: StringCapacityOffset, ids: ids)
+	let rdataCapacity = emitConst(module, block: entry, value: RdataBufferCapacity as ParsedInt, ids: ids)
+	let isImmortal = emitCmp(module, block: entry, a: capacity, b: rdataCapacity, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(isImmortal, thenBlockId: copyImmortal.id, elseBlockId: coOwn.id))
+
+	// The two arms answer with DIFFERENT records — the clone's fresh one, the incref's own — so the answer
+	// is a block arg rather than a value either arm could write into the other's name.
+	let owned = ids.mint()
+	join.blockArgs.push(IrBlockArg.create(owned, argType: StdType.i64))
+
+	let copied = ids.mint()
+	module.appendOp(copyImmortal, op: StdOp.call(copied, callee: StrCloneName, args: argsOf(record)))
+	module.setTerminator(copyImmortal, op: StdOp.branch(join.id))
+	copyImmortal.branchEdges.push(BranchEdge.create(join.id, argIds: argsOf(copied)))
+
+	let increfed = ids.mint()
+	module.appendOp(coOwn, op: StdOp.call(increfed, callee: MmIncrefName, args: argsOf(record)))
+	module.setTerminator(coOwn, op: StdOp.branch(join.id))
+	coOwn.branchEdges.push(BranchEdge.create(join.id, argIds: argsOf(record)))
+
+	module.setTerminator(join, op: StdOp.ret(owned))
+
+	module.functions.push(func)
+end 'buildStrRetain'
 
 // ⚠ **THE `--- P1.8 Slice C ---` SECTION WAS HERE AND IS EMPTY** (W49 wave 5). It held `__str_range_eq`
 // and `__str_find` to the end: the raw byte-range compare and the positioned search that `startsWith`,

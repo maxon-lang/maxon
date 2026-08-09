@@ -24143,6 +24143,19 @@ export type Parser
 		return retained
 	end 'retainBorrowedAggregate'
 
+	// ⭐ **THE BYTE-RECORD TWIN OF `retainBorrowedAggregate` (W56)** — same ownership bookkeeping, a different
+	// runtime entry, and the difference is that a byte record has TWO provenances where an aggregate has one.
+	// `__str_retain` copies an immortal `.rdata` literal and increfs a heap record; either way the result is a
+	// FRESH SSA value the merge phi owns outright, and `markValueOwnsHeap` rather than `trackOwnedTemp` for
+	// the reason stated one function up — the phi, not this statement, owes the drop.
+	//
+	// The result carries the SOURCE's tag and name id, so a `Character` edge stays a `Character`.
+	function retainBorrowedByteRecord(source ValueId, range SourceRange) returns ValueId
+		let retained = self.emitRuntimeCall(StrRetainName, args: singletonArgs(source), resultTag: self.tagOf(source), resultNameId: self.valueNameId(source), range: range)
+		self.markValueOwnsHeap(retained)
+		return retained
+	end 'retainBorrowedByteRecord'
+
 	// ⭐ **AN EXISTENTIAL'S FRESH NAME KEEPS THE SOURCE'S WITNESS (P1.7a-existentials slice 2).** A retain
 	// takes a second owner of the conformer's record — or, for a byte record, a CLONE of it — and in neither
 	// case does the conformer change, so the co-owner dispatches through the same table. But it is a different
@@ -24353,6 +24366,25 @@ export type Parser
 	// called from nowhere else.
 	function ownedFormOfBorrowedValue(value ValueId, door BorrowLaunderDoor, range SourceRange) returns ValueId throws ParseError
 		if tagIsByteRecord(self.tagOf(value)) 'byteRecord'
+			// ⭐⭐ **A MERGE EDGE CO-OWNS WHERE THE OTHER TWO DOORS COPY, AND THE DIFFERENCE IS A WRITE THAT MUST
+			// REACH THE CALLER (W56).** `grow(make() if c else s)` hands the phi to a callee that WRITES it, so a
+			// copy of the `s` edge is a write nobody sees: MEASURED `v=ab` against the oracle's `v=abXY`. The
+			// split is by DOOR rather than by widening the copy away because the other two doors have their own
+			// settled answers and no measured defect: a BINDING becomes a new owner in this frame — which is
+			// what keeps `var b = <a String let>` legal (see the immutable-global refusal below, whose soundness
+			// rests on the text arm copying) — and a `return` a new owner in the CALLER's, which is what makes a
+			// `try f() otherwise <owned>` merge's ok edge provably a heap record rather than its caller's
+			// literal.
+			//
+			// ⚠ **AND IT CANNOT BE `emitIncref`, BECAUSE THE PARSER CANNOT KNOW WHICH KIND OF RECORD THIS IS.**
+			// A borrowed `String` parameter is heap when its caller owned one and immortal `.rdata` when its
+			// caller wrote a literal, and `pick(v, …)` / `pick("ab", …)` over one `pick(s String, …)` differ in
+			// nothing this frame can read. `__str_retain` is that decision, made where it can be — off the
+			// record's own `capacity@16`. See its header for the two measurements that bound it on both sides.
+			if door == BorrowLaunderDoor.merged 'mergedEdge'
+				return self.retainBorrowedByteRecord(value, range: range)
+			end 'mergedEdge'
+
 			return self.promoteToOwnedString(value, range: range)
 		end 'byteRecord'
 

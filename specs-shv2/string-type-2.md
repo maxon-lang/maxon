@@ -868,11 +868,23 @@ crashed.
 
 ⭐ **WHAT MAKES THEM PASS: the literal at a WRITTEN parameter position is given a heap record of its own**
 (`LiteralArgPromotion` — `__str_clone` before the call, `__str_decref` after). A literal that no callee
-writes still lowers to its immortal `.rdata` record and costs nothing. ⚠ A literal reaching such a position
-THROUGH A MERGE (`grow("a" if c else "b")`, `grow(try arr.get(0) otherwise "lit")`) is NOT covered — the
-argument is a block-arg, and one edge of the second is a real heap element whose write must reach the array,
-so no single substitution at the call can be right on both edges. That needs every literal use to lower to
-its own heap record, which is a separate rung; those shapes still fault.
+writes still lowers to its immortal `.rdata` record and costs nothing.
+
+⭐⭐ **AND A LITERAL REACHING SUCH A POSITION THROUGH A MERGE IS THE SAME ONE SUBSTITUTION, ASKED OF THE
+RECORD INSTEAD OF THE COMPILER** (`grow("a" if c else "b")`, `grow(try arr.get(5) otherwise "lit")`,
+`grow(s if c else "lit")`). The argument is a block-arg whose edges have DIFFERENT provenances — one an
+immortal `.rdata` record that must be COPIED, one a live heap record whose write MUST reach its owner — so
+no *statically chosen* substitution can be right on both. The substitution is `__str_retain`, which reads
+`capacity@16` and clones or increfs accordingly; `__str_decref` balances either arm, because it frees only
+at the last owner. ⚠ The provenance is genuinely not a compile-time fact even for a single edge: a borrowed
+`String` PARAMETER is a heap record when its caller owned one and an immortal record when its caller wrote a
+literal, and one `pick(s String, c bool)` sees both.
+
+⚠ **THE FAILURE MODES ARE OPPOSITE AND BOTH WERE MEASURED**, which is why the cases below pin the
+write-through as hard as they pin the fault: increfing an immortal record writes a refcount into a read-only
+image section (`0xC0000005`), and cloning a heap record hands the callee a COPY, so the append lands
+somewhere nobody reads (`v=ab` where the oracle prints `v=abXY` — silent, exit 0, and invisible to a check
+that only watched for the crash).
 
 <!-- test: string-literal-through-a-mutating-parameter -->
 ### A Literal Passed to a Mutating Parameter
@@ -947,6 +959,154 @@ end 'main'
 ```
 ```stdout
 hello
+```
+
+<!-- test: string-literal-through-a-merge-of-two-literals -->
+### A Literal Through a Ternary Merge
+Both edges are immortal `.rdata` records, so both need a writable one — but the argument the callee is
+handed is the MERGE, not either literal, and the merge is what has to be substituted.
+```maxon
+function grow(s String)
+	s.append("XY")
+end 'grow'
+
+function main() returns ExitCode
+	let c = true
+	grow("a" if c else "b")
+	print("done\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+done
+```
+
+<!-- test: string-literal-through-a-try-otherwise-fallback -->
+### A Literal on a `try … otherwise` Fallback Edge
+⭐ **THE TWO EDGES DISAGREE, AND BOTH ARE EXERCISED HERE.** The `ok` edge is a real heap element the array
+owns and whose append MUST reach it (`t=abXY`); the `otherwise` edge is an immortal literal that must get a
+record of its own. The first `grow` takes the ok edge, the second takes the fallback — so a fix that copied
+the element would print `t=ab`, and one that increfed the literal would fault on the second call.
+```maxon
+typealias StringArray = Array with String
+
+function grow(s String)
+	s.append("XY")
+end 'grow'
+
+function main() returns ExitCode
+	var arr = StringArray.create()
+	arr.push("ab")
+	grow(try arr.get(0) otherwise "lit")
+	let t = try arr.get(0) otherwise panic("get")
+	print("t={t}\n")
+	grow(try arr.get(5) otherwise "lit")
+	print("done\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+t=abXY
+done
+```
+
+<!-- test: string-literal-merged-with-a-borrowed-parameter -->
+### A Literal Merged With a Borrowed Parameter
+One `pick` sees a caller-owned heap record on the first call and takes the literal edge on the second, so a
+SINGLE compiled merge must be right about both. `t=abXY` is the borrowed edge writing through to `main`'s
+own `v`; `done` is the literal edge not faulting.
+```maxon
+function grow(s String)
+	s.append("XY")
+end 'grow'
+
+function pick(s String, c bool)
+	grow(s if c else "lit")
+end 'pick'
+
+function main() returns ExitCode
+	var v = "ab"
+	pick(v, c: true)
+	print("t={v}\n")
+	pick(v, c: false)
+	print("done\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+t=abXY
+done
+```
+
+<!-- test: a-merged-borrow-still-writes-through-to-the-caller -->
+### The Non-Literal Edge Still Writes Through
+⭐⭐ **THE PROPERTY A NAIVE FIX DESTROYS, PINNED RATHER THAN ASSUMED.** Here the merge already has an OWNED
+edge (`make()`), so the borrowed `s` edge is promoted to match it — and promoting it by COPYING is exactly
+the wrong answer: `grow` would append to the copy and `main`'s `v` would never see it. This printed `v=ab`
+before the promotion became a co-ownership, silently and with exit 0.
+```maxon
+function grow(s String)
+	s.append("XY")
+end 'grow'
+
+function make() returns String
+	var m = "zz"
+	m.append("!")
+	return m
+end 'make'
+
+function pick(s String, c bool)
+	grow(make() if c else s)
+end 'pick'
+
+function main() returns ExitCode
+	var v = "ab"
+	pick(v, c: false)
+	print("v={v}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+v=abXY
+```
+
+<!-- test: a-literal-reaching-a-merge-through-a-parameter -->
+### A Literal Reaching a Merge Through a Parameter
+⚠ **THIS IS WHY THE CHOICE CANNOT BE MADE AT COMPILE TIME.** `pick`'s `s` is the same declared `String`
+parameter as in the case two above, and here it holds an IMMORTAL record because `main` wrote a literal —
+nothing in `pick`'s frame distinguishes the two, and the merge is what has to ask.
+```maxon
+function grow(s String)
+	s.append("XY")
+end 'grow'
+
+function pick(s String, c bool)
+	grow(s if c else "lit")
+end 'pick'
+
+function main() returns ExitCode
+	pick("ab", c: true)
+	print("done\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+done
 ```
 
 <!-- test: tobytearray-is-independent-of-an-owned-source -->
