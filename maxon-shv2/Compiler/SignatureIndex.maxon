@@ -5431,6 +5431,23 @@ let RootDeclarationShadowPrefix = "__rootDecl"
 // An `enum` and not three functions passed as values: it is `match`ed in one place
 // (`rewrittenReturnTypeUnder`), so a fourth rule fails to compile there rather than silently taking a
 // neighbour's line.
+// ⭐ **WHICH POPULATION `ProgramSignatures.nameInstancesFromDeclarations` IS CLAIMING INSTANCES FOR (W49b)** —
+// the two rounds of `deriveInstanceDisplayNames`, run in this declaration order because an unscoped spelling
+// outranks a type-scoped one. See that walk for the ruling.
+//
+// An `enum` and not the `bool` it replaced, for a reason the LANGUAGE settles rather than taste: a lone
+// leading argument cannot be labelled (E2052), so a `bool` here reads `nameInstancesFromDeclarations(false)`
+// at the call site — a magic value whose meaning lives only in the callee's parameter list. It is the same
+// shape `RecordedReturnTypeRule` below takes for the same walk-with-two-rules problem.
+export enum DisplayNameRound
+	// A file-scope `typealias ByteArray = Array with Byte`. Claimed FIRST, so it wins every contest with a
+	// type-scoped spelling of the same instance whatever order the loader reached the files in.
+	unscoped
+	// A nested `typealias UArr = Array with U`, keyed `Inner.UArr` by `Parser.qualifiedInnerGenericAlias`.
+	// Claimed SECOND, so it names an instance only when nothing unscoped does — "the only name".
+	typeScoped
+end 'DisplayNameRound'
+
 export enum RecordedReturnTypeRule
 	// ⭐ **N3 — the contested generic ALIAS a `returns` clause names, rescoped against the file that
 	// DECLARED the function.** See `contestScopedReturnTypeOf`.
@@ -13857,8 +13874,10 @@ export type ProgramSignatures
 	// choose between them on correctness; declaration order settles it deterministically and needs no reader
 	// file, which the parse-time askers would otherwise all have to supply.
 	//
-	// ⭐⭐ **A TYPE-SCOPED ALIAS IS EXCLUDED, AND IT IS THE ONE PLACE IN THE COMPILER THAT EXCLUDES ONE** (⚖
-	// USER RULING, W17). `type Character`'s `typealias ByteMemory = __ManagedMemory with Byte` is a true name
+	// ⭐⭐ **A TYPE-SCOPED ALIAS LOSES TO AN UNSCOPED ONE, AND IT IS THE ONE PLACE IN THE COMPILER THAT RANKS
+	// TWO TRUE NAMES** (⚖ USER RULING, W17; narrowed from an outright exclusion by a second ruling at W49b —
+	// see `deriveInstanceDisplayNames` for that half, which this paragraph is the FIRST half of and no longer
+	// the whole of). `type Character`'s `typealias ByteMemory = __ManagedMemory with Byte` is a true name
 	// for `Array with Byte` and a declaration a person wrote — so by the paragraph above it won the display,
 	// and `stdlib/Character.maxon` sorting ahead of `stdlib/String.maxon` is the whole of why it beat
 	// `String.maxon:23`'s file-scope `ByteArray`. But an inner alias is not a name the author of the refused
@@ -13873,15 +13892,49 @@ export type ProgramSignatures
 	// buffer-surface derivation all read `genericAliases`/`genericAliasDecls` and are untouched. What is being
 	// said is only that it is not a SPELLING to hand back.
 	//
-	// ⚠ **AND EXCLUDING ONE CANNOT LEAVE AN INSTANCE UNNAMED**: a miss is an answer here
-	// (`instanceDisplayName` falls back to `canonicalInstanceName`), so an instance whose only declared name
-	// is type-scoped is quoted by the canonical mint — the spelling the index gave it before any alias was
-	// recorded — rather than by an invented one.
+	// ⭐⭐ **AND THE EXCLUSION IS CONDITIONAL, NOT ABSOLUTE — "ADMIT TYPE-SCOPED WHEN IT'S THE ONLY NAME"
+	// (⚖ USER RULING, W49b).** It was written as an unconditional skip, and the fallback that left behind is
+	// the CANONICAL MINT: an instance whose only declared name is type-scoped was quoted as
+	// `Array_Tc458b93abe5c7098`. That serves nobody, and it is the very thing the W17 ruling was reaching for
+	// — a diagnostic names a type THE WAY THE AUTHOR WROTE IT — turned against itself, because when
+	// `Inner.UArr` is the only name the author CAN write, it is the way the author wrote it. MEASURED:
+	// `generic-type-substitution/error.a-name-the-scope-does-not-bind-binds-nothing` read
+	// `expected 'Array_Tc458b93abe5c7098', got 'Array_T4032a9ecb1272bfc'` where `expected 'Inner.UArr', got
+	// 'Outer.OArr'` is correct.
+	//
+	// ⭐ **W17's OWN CASE IS PROTECTED BY CONSTRUCTION RATHER THAN BY A CARVE-OUT, AND THAT IS WHY THE ROUNDS
+	// ARE SPLIT BY KIND.** What W17 fixed was `Character.ByteMemory` beating `stdlib/String.maxon:23`'s
+	// file-scope `ByteArray` — and it beat it only because `Character.maxon` sorts ahead of `String.maxon`.
+	// BOTH instances in that measurement still hold an unscoped spelling (`Array with Byte` is `ByteArray` in
+	// five listed modules; `__ManagedMemory with Byte` is `String.maxon:28`'s `ByteBuffer`, which that file
+	// declares for exactly this reason), so round one claims them and round two never sees them. The four
+	// cases W17 was protecting — `array-init`'s `error.a-buffer-of-the-wrong-element` and
+	// `bytearray-element-size`'s `a-byte-two-files-disagree-about-is-two-types`,
+	// `a-buffer-field-refuses-another-files-byte-at-the-construction` and
+	// `error.the-two-string-spellings-name-their-own-corpus-types` — go on reading `ByteArray`.
+	//
+	// ⚠ **AN UNSCOPED SPELLING WINS OVER A TYPE-SCOPED ONE ALWAYS, AND IT IS THE ROUND THAT DECIDES THAT
+	// RATHER THAN THE WALK ORDER.** That is a STRENGTHENING of what stood before W17, not a weakening: the
+	// contest between the two kinds used to be settled by which file the loader reached first (the
+	// `Character.maxon`-before-`String.maxon` accident above), and it is now settled by kind, so it cannot
+	// vary with the filesystem. Within ONE kind, first-declaration-wins is unchanged and still walks
+	// `genericAliasDecls` in its recorded order.
 	function deriveInstanceDisplayNames()
+		self.nameInstancesFromDeclarations(DisplayNameRound.unscoped)
+		self.nameInstancesFromDeclarations(DisplayNameRound.typeScoped)
+	end 'deriveInstanceDisplayNames'
+
+	// ONE ROUND of the walk above, over the declarations of a single scope kind — the two rounds are the same
+	// rule applied to two populations, so they are one body and cannot come to disagree about what naming an
+	// instance means. Round two is what "only name" is spelled as: an instance round one claimed is already in
+	// the map, so `anEarlierDeclarationAlreadyNamedThisType` is exactly the "an unscoped name exists" test, and
+	// no second index has to be built to answer it.
+	function nameInstancesFromDeclarations(round DisplayNameRound)
 		for entry in self.genericAliasDecls 'eachDeclaration'
-			if entry.typeScoped 'notNameableWhereTheRefusalIsRead'
+			let entryRound = DisplayNameRound.typeScoped if entry.typeScoped else DisplayNameRound.unscoped
+			if entryRound != round 'aDeclarationForTheOtherRound'
 				continue
-			end 'notNameableWhereTheRefusalIsRead'
+			end 'aDeclarationForTheOtherRound'
 
 			let instance = self.fileScopedInstance(entry.internedInstance(), filePath: entry.filePath)
 			if self.instanceDisplayNames.contains(instance) 'anEarlierDeclarationAlreadyNamedThisType'
@@ -13890,7 +13943,7 @@ export type ProgramSignatures
 
 			self.instanceDisplayNames.upsert(instance, value: self.unambiguousAliasSpelling(entry))
 		end 'eachDeclaration'
-	end 'deriveInstanceDisplayNames'
+	end 'nameInstancesFromDeclarations'
 
 	// ⭐⭐ **THE AMBIGUITY RULE, AND IT IS THE USER'S (2026-08-04): "if a name is possibly ambiguous it needs
 	// to contain its full namespace".** A declared alias is ambiguous EXACTLY when this program's declarations
