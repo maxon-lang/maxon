@@ -1,0 +1,797 @@
+// Runtime/RuntimeUsage.maxon — WHICH compiler-emitted runtime functions a program references, and what
+// each of those in turn needs. ⭐ **ONE walk of the Maxon module, one bit per entry point, and the
+// closures that declare what a SYNTHESIZED body calls that a walk of the Maxon module cannot see.**
+//
+// ⚠⚠ **THIS FILE IS A RELOCATION, NOT A NEW MECHANISM (W49 wave 9), AND THE RELOCATION IS THE POINT.**
+// Every line below lived in `Runtime/StringRuntime.maxon` — 760 of that file's 2,229 — where it decided
+// the install of the green-thread scheduler, the IOCP substrate, the streaming subprocess API, the array,
+// set, map and list runtimes, the descriptor and existential drops, the incref/retain helpers, the union
+// destructors and struct cloners, the wall clock, the `CharacterSet` family, the grapheme family, managed
+// files, managed directories, the command line, standard input and process introspection.
+//
+// **A String is one tenant of that list and was never its landlord.** The file's name said otherwise, and
+// a name that lies is the cheapest kind of wrong fact to leave lying around: it tells the next reader that
+// `usesIocp` is a String concern and that a new runtime family's bit belongs in a String file. The two
+// String-specific arms (`recordStringMethodUsage`/`closeStringMethodNeeds`) stay here with their siblings
+// rather than going back, because what makes them work is that every family follows ONE discipline —
+// declared here, checked against each other here, and ORDERED against each other here.
+//
+// ⚠ **NOTHING ABOUT THE BEHAVIOUR MOVED WITH IT.** No bit was added, removed, renamed or reordered, and
+// no closure's arms changed. The shv2 suite reads the same 4,789 and the golden drift the same 1,323
+// fragments, by NAME, across the move.
+//
+// The three rules the whole file rests on, stated once here rather than re-argued per family:
+//
+//   1. **ONE BIT PER ENTRY POINT.** Vocabulary does not ship ahead of its consumer: a program that only
+//      prints must not carry the stderr writer, and one that only builds a `CharacterSet` must not carry
+//      the membership probe. Where two near-identical graphs exist, they get two bits.
+//   2. **A SYNTHESIZED BODY'S CALLS ARE *DECLARED*, NEVER DISCOVERED.** This scan walks the MAXON module;
+//      a runtime function's body is a `StdOp` graph that no Maxon module contains. So `__str_decref`'s
+//      `__mm_free`, `__arr_create`'s `__mm_alloc` and `__cs_contains`'s `__ucd_cat` are stated in the
+//      `close*Needs` closures. What a CORPUS body calls is the opposite case — an ordinary Maxon call
+//      edge the reachability walk FINDS — and a declared list of those could only go stale.
+//   3. **A CLOSURE RUNS AFTER EVERY RECORD, NOT INSIDE THE ARM THAT SET THE BIT**, so the answer cannot
+//      depend on the order in which a module happens to NAME its entry points. The order the four
+//      `record*Usage` calls run in IS load-bearing and is a rule about FAMILIES: a family that closes
+//      into another must record first.
+
+// --- Which compiler-internal runtime functions a module references ---
+//
+// ⭐ ONE WALK, THREE ANSWERS. `moduleUsesHeap`'s job (does this program touch the heap?) and the two
+// String questions (does it print? does it compare strings?) are the SAME traversal — every call op,
+// once — so they are answered together rather than by three near-identical walks. Each answer keys a
+// DIFFERENT installation, and the heap answer stays `__mm_`-specific: a print-only program must carry
+// NO allocator and NO leak check, so `usesHeap` reads `isRuntimeCallee` (the `__mm_` prefix), never
+// "any compiler-internal callee".
+//
+// It asks the MAXON module because the answers are needed BEFORE lowering — the heap decision drives
+// `.data` layout, and all three drive which functions get installed into the Std module.
+
+// The set of `__destruct_<U>` symbols a module CALLS. A SET, not a list, because both
+// `noteUnionDestructorUsage` and
+// `installUnionDestructors` walk EVERY union (`project.enumTypes`) and ask "is this union's destructor
+// referenced?" — a per-union membership test. Against a per-drop-site list that is an O(unions × drop
+// sites) scan (the classic linear-lookup-in-a-linear-walk quadratic); against a set it is O(1) each, so
+// the whole check is O(unions + drop sites). Insert also DEDUPLICATES — a union dropped D times records
+// its one symbol once, not D copies.
+export typealias DestructorSet = Set with ByteArray
+
+// The set of `__clone_<T>` symbols a module references (P1.7 slice 3b-vi-b) — the CLONE twin of
+// `DestructorSet`, collected from the `funcAddr(__clone_<T>)` element-cloner stamps and closed over nesting by
+// `noteClonerUsage`, so `installStructCloners`/`installUnionCloners` synthesize only the referenced cloners.
+// The SAME `Set with ByteArray` type is reused by `typeSupportsDeepClone` as its VISITED-name set (a
+// cycle-breaker over struct/union names), since both are membership sets of `ByteArray` names.
+export typealias ClonerSet = Set with ByteArray
+
+export type RuntimeUsage
+	export var usesHeap as bool
+	// The program spawns a green thread (`async`/`await`). Drives `installGtRuntime` + the GT `.data`
+	// globals + the two hand-assembled backend chunks. Set alongside `usesHeap` (spawn `__slab_alloc`s the
+	// GT struct + arg buffer), from the `asyncCall`/`await` Maxon ops rather than a callee name — the async
+	// ops are their own op kind, and their `__gt_*` calls do not exist until lowering.
+	export var usesGt as bool
+	// The program issues a YIELDING overlapped pipe read (`__gt_io_read`, the `spawnReadLine` probe, P1.5 slice
+	// 1a-ii). A SUPERSET of `usesGt` (a read yields the green thread, so it needs the whole scheduler), plus the
+	// IOCP substrate: `installIoRuntime` (`__io_init` + `__gt_io_read`), the hand-assembled `__io_completion_loop`
+	// chunk, the six `__io_*` `.data` slots, and the run-queue CRITICAL_SECTION that guards the completion thread's
+	// cross-thread `__gt_enqueue`. Set by `recordCallUsage` on a `__gt_io_read` call (which also sets `usesGt`).
+	export var usesIocp as bool
+	// The STREAMING subprocess API (P1.5 dogfood slice 1b) — the handle table + `__gt_subp_*` functions. A SUPERSET
+	// of `usesIocp` (the yielding line read rides the completion thread), set by `recordCallUsage` on any
+	// `__gt_subp_*` call. Drives `installSubpRuntime` + the `__subp_table` `.data` slot.
+	export var usesStreaming as bool
+	// W35: the two stream writers, each with its OWN bit under this file's one-bit-per-entry-point
+	// discipline — a program that only prints must not carry the stderr writer, and neither declares any
+	// transitive floor (see `StreamWriteStdoutName`).
+	export var usesWriteStdout as bool
+	export var usesWriteStderr as bool
+	export var usesStrEq as bool
+	export var usesStrCopy as bool
+	export var usesIntToString as bool
+	// The UNSIGNED decimal renderer (X11). A bit of its own rather than a widening of the one above,
+	// because a program that only prints a declared non-negative value references only `__uint_to_string`
+	// and must not carry the signed entry point it never calls — the "vocabulary does not ship ahead of
+	// its consumer" rule `installStringRuntime` states, applied to a second entry point of one builder.
+	export var usesUIntToString as bool
+	export var usesBoolToString as bool
+	export var usesStrDecref as bool
+	// The program touches an `Array` (P1.7 slice 1). Any `__arr_*` runtime call turns this on — and, like
+	// the String helpers, turns on `usesHeap` too, because the array helpers `__mm_alloc`/`__mm_free` the
+	// backing record and its element buffer inside their Std bodies, which this Maxon-module scan cannot
+	// see. It drives `installArrayRuntime` (all the array helpers, appended already-lowered).
+	export var usesArray as bool
+	// The program touches a `Set` (P1.7b slice A). Any `__set_*` runtime call turns this on — and, like
+	// `usesArray`, turns on `usesHeap` too, because the set helpers `__mm_alloc`/`__mm_free` the record and
+	// its three external buffers inside their Std bodies, which this Maxon-module scan cannot see. It drives
+	// `installSetRuntime`. Its own bit so a set-free program stays golden-neutral (installs nothing).
+	export var usesSet as bool
+	// The program touches a `Map`. Any `__map_*` runtime call turns this on — and, like `usesSet`, turns on
+	// `usesHeap` too, because the map helpers `__mm_alloc`/`__mm_free` the record and its FOUR external
+	// buffers inside their Std bodies, which this Maxon-module scan cannot see. It drives `installMapRuntime`.
+	// Its OWN bit and NOT `usesSet`, even though the two runtimes are built from one shared graph
+	// (`HashTableRuntime`): the graph is shared at BUILD time, but the installed functions are two disjoint
+	// name sets, so a set-only program must not carry `__map_*` and a map-only program must not carry
+	// `__set_*`.
+	export var usesMap as bool
+	// The program touches a `List`. Any `__list_*` call turns this on — and, like `usesSet`, turns on
+	// `usesHeap` too, because the list helpers `__mm_alloc` the chain header and every node and `__mm_free`
+	// them again inside their Std bodies, which this Maxon-module scan cannot see. It drives
+	// `installListRuntime`. Its OWN bit so a list-free program stays golden-neutral (installs nothing).
+	export var usesList as bool
+	// The program DROPS a single opaque type-parameter value (`__drop_type_param`, P1.7 slice 3b-v /
+	// Finding A) — a consumed feed binding left live at a scope exit, an opaque array element moved out
+	// (`.pop()`), OR a bare opaque `T` field reassignment (`self.saved = next`). Its OWN bit, decoupled from
+	// `usesArray`: a bare-field reassign in an ARRAY-FREE generic struct emits `__drop_type_param` yet touches
+	// no `__arr_*`, so gating its install on `usesArray` would leave the call unlinked. `__drop_type_param` is
+	// `__`-prefixed but NOT `__mm_`/`__arr_`-prefixed, so a call to it sets no other usage bit; its body only
+	// reads the descriptor's `destroyFunc@40` and `callIndirect`s it (no direct alloc/free), so this bit alone
+	// drives `installDropTypeParamRuntime` and pulls in no transitive floor of its own.
+	export var usesDropTypeParam as bool
+	// The program DROPS a value held at its INTERFACE type (`__drop_existential`, P1.7a-existentials slice
+	// 2) — an owned interface-typed field released by its struct's destructor cascade, or a consumed
+	// existential parameter left live at a scope exit. Its OWN bit for `usesDropTypeParam`'s exact reason,
+	// with the roles reversed: an interface field drops in a program that instantiates no generic, so gating
+	// its install on the descriptor drop's bit would leave THAT call unlinked. Its body only reads the
+	// witness table's `destroyFunc@8` and `callIndirect`s it, so it pulls in no transitive floor of its own.
+	export var usesDropExistential as bool
+	// The program CO-OWNS a value held at its INTERFACE type (`__retain_existential`, P1.7a-existentials
+	// slice 2) — a borrowed existential bound into a `var`, or one forwarded to a consuming position. Its
+	// OWN bit rather than `usesDropExistential`'s, for the reason `usesRetain` is not `usesIncref`'s: the two
+	// have independent callers, so folding either into the other installs an unreachable copy of the unused
+	// one. It DOES imply `__mm_incref`, which its body calls — declared through `recordCallUsage`.
+	export var usesRetainExistential as bool
+	// The program takes a SECOND owner of a heap box (`__mm_incref`). Two producers: the array runtime's
+	// zero-copy slice (a view increfs the parent's element buffer — implied by `usesArray`, since the call
+	// lives in a Std body this scan cannot see), and the PARSER's `try … otherwise` reconciliation, which
+	// increfs an ok-edge borrow or an aliased error-edge binding so both merge into one owned phi — a `call
+	// __mm_incref` this scan DOES see. Drives `installMmRuntime` to build `__mm_incref`; a program that never
+	// increfs (the common one) keeps it out. Set alongside `usesHeap` (an incref is on a `__mm_alloc`'d box).
+	export var usesIncref as bool
+	// The program co-owns a BORROWED managed-aggregate parameter into a `var` (`var q = p`, OPEN #40),
+	// which the parser makes a second owner of the caller's box via `__mm_retain`. Its OWN bit, not
+	// `usesIncref`: `__mm_retain` (returns the pointer) and `__mm_incref` (void) have independent callers,
+	// so folding either into the other installs a dead function in the program that uses only the other
+	// (see `installMmRuntime`). A `call __mm_retain` this scan sees directly. Drives `installMmRuntime` to
+	// build `__mm_retain`; a program that never co-owns a borrowed aggregate keeps it out. Set alongside
+	// `usesHeap` (a retain is on a `__mm_alloc`'d box).
+	export var usesRetain as bool
+	// ⭐ The program declares at least one MANAGED top-level `var` (P1.7 slice 2a), so it carries
+	// `__module_init` + `__maxon_global_cleanup` and every entry stub calls them around `main`. Set NOT by
+	// this Maxon-module scan but by `installManagedGlobalInit`, which is where the decision is made — the
+	// same discipline the leak/GT gates follow (see `BackendDispatch.buildBackend`'s header): an entry stub
+	// asking the module "is `__module_init` still there?" would be asking a question dead-function
+	// elimination can change the answer to, where "was it installed?" is fixed. The RUNTIME floor those two
+	// functions need (`__mm_alloc`, `__str_clone`, `__str_decref`, `__arr_decref`) rides the ordinary bits:
+	// they are appended to the Maxon module BEFORE `scanRuntimeUsage` walks it, so their calls are seen
+	// exactly as user code's are.
+	export var usesManagedGlobals as bool
+	// The `__destruct_<U>` symbols this module CALLS (P1.3 slice 2) — collected from the drop sites so
+	// `installUnionDestructors` synthesizes only the referenced ones, and `noteUnionDestructorUsage`
+	// can classify their transitive `__str_decref`/`__mm_free` needs. Full symbols (not names): the
+	// consumers query them against `destructorSymbol(name)`, avoiding a byte-substring extract. A
+	// SET so that per-union query is O(1) — see `DestructorSet`.
+	export var neededDestructors as DestructorSet
+	// The program DEEP-CLONES a String (`__str_clone`, P1.7 slice 3b-vi-b) — a managed array/struct copy that
+	// clones a String element/field. Its OWN bit, like `usesStrDecref`: `__str_clone` calls `__mm_alloc`/
+	// `__str_copy` inside its Std body this scan cannot see, so a reference turns on `usesHeap`/`usesStrCopy`
+	// too (`recordCallUsage`). Drives `installStringRuntime` to build `__str_clone`.
+	export var usesStrClone as bool
+	// ⚠ **THE P1.8 SLICE C BYTE/ASCII FAMILY'S BITS ARE ALL GONE — ALL EIGHT OF THEM.**
+	// `usesStrStartsWith`/`usesStrEndsWith` in W49 wave 1, `usesStrMapCase`/`usesStrReplace`/
+	// `usesStrReplaceFirst` in wave 2, `usesStrContains` in wave 4, and `usesStrSplit` with
+	// `usesStrFind`/`usesStrRangeEq` in wave 5. All seven members are the CORPUS's now (struck from
+	// `Parser.stringSurfaceMemberNames`), so nothing names their entry points and a bit for any of them could
+	// only ever read false. The corpus bodies reach `byteAt`, `setByte`, `addressableBytes` and
+	// `__ManagedMemory.slice`, whose own doors are still shv2's and keep their own bits below.
+	//
+	// ⚠ **THE LAST TWO ARE THE ONES THAT CAME OFF DIFFERENTLY, AND THE ORDER IS THE WHOLE OF IT.**
+	// `usesStrFind`/`usesStrRangeEq` were never set by a member — they were set TRANSITIVELY, by
+	// `closeStringMethodNeeds`, from whichever member reached the search underneath. With `contains` (wave 4)
+	// and the `StringIndex` searches (wave 3) already gone, `usesStrSplit` was the last thing that could turn
+	// `usesStrFind` on, and `usesStrFind` the last thing that could turn `usesStrRangeEq` on — so all three
+	// die together and none of them could die sooner. See the P1.8 Slice C grave at the head of this file for
+	// why an entry point may only be deleted once every PRODUCER of its callee is gone.
+	// The P1.8 Slice E entry point that remains, with its OWN bit under this file's one-bit-per-entry-point
+	// discipline: a program that builds no String from bytes must not carry the classifying scan.
+	export var usesStrFromBytes as bool
+	export var usesStrOfBuffer as bool
+	export var usesMmToCString as bool
+	// The byte-view door, with its OWN bit under this file's one-bit-per-entry-point discipline: a program
+	// that never reads a fused wrapper's inline `managed` must not carry the view builder. It declares
+	// `usesArray`/`usesHeap` in `closeStringMethodNeeds` — it calls `__arr_create` and `__mm_incref` inside
+	// its synthesized body, which this Maxon-module scan cannot see.
+	//
+	// ⚠ **`usesStrByteAt` AND `usesStrByteAtOrPanic` SAT BESIDE IT AND WENT WITH THEIR ENTRY POINTS (W49
+	// wave 7)** — see the byte-door header at the head of this file. They were the file's example of two bits
+	// for two near-identical graphs (so a program reaching only the throwing read did not carry the other's
+	// `mrt_panic` call site); with both members retired onto the corpus, neither bit had a writer.
+	export var usesStrBytesView as bool
+	// The program copies a MANAGED-element array (`__arr_slice_managed`/`__arr_clone_managed`/
+	// `__arr_append_managed`, P1.7 slice 3b-vi-b). Its OWN bit, DECOUPLED from `usesArray`, so a program that
+	// only uses TRIVIAL arrays does not carry the three managed-copy helpers. Set alongside `usesArray`/
+	// `usesHeap` (the helpers are `__arr_`-prefixed). Drives the managed-copy install in `installArrayRuntime`.
+	export var usesManagedArrayCopy as bool
+	// The program copies an OPAQUE-`T` array (`__arr_slice_opaque`/`__arr_clone_opaque`/`__arr_append_opaque`,
+	// P1.7 slice 3b-vi-b-β) — a `slice`/`clone`/`append` on an `Array with <type parameter>` field in a generic
+	// body. Its OWN bit, DECOUPLED from `usesArray`, so a program that touches no opaque-array copy does not carry
+	// the three wrappers. Set alongside `usesManagedArrayCopy` (`recordCallUsage`), because each wrapper's managed
+	// branch calls the α `__arr_*_managed` helpers. Drives the opaque-copy install in `installArrayRuntime`.
+	export var usesOpaqueArrayCopy as bool
+	// The `__clone_<T>` symbols this module references (P1.7 slice 3b-vi-b) — the CLONE twin of
+	// `neededDestructors`, collected from the `funcAddr(__clone_<T>)` element-cloner stamps and closed over
+	// nesting by `noteClonerUsage`, so `installStructCloners`/`installUnionCloners` synthesize only the
+	// referenced cloners. `usesHeap` follows any cloner (the box it allocates).
+	export var neededCloners as ClonerSet
+	// The program reads the WALL clock (`__clock_now_unix_s`, `__Builtins.currentUnixTimeSeconds`). Its OWN
+	// bit, DECOUPLED from `usesGt` and from `usesHeap`, and that decoupling is the point: a calendar read is
+	// a leaf that calls one Win32 import and divides, with no relationship to the green-thread scheduler
+	// whose `__gt_now_ns` answers the OTHER clock question. Folding it under `usesGt` would install the
+	// entire scheduler — plus the allocator and the leak gate under it — for a program that asks what
+	// today's date is. Drives `installClockRuntime` + the one `__clock_wall_ticks` `.data` slot.
+	export var usesWallClock as bool
+	// ⭐ **THE P1.8 SLICE B GRAPHEME FAMILY — ONE BIT PER ENTRY POINT**, following this file's existing
+	// discipline rather than one `usesGrapheme` blanket: a program that only asks
+	// `graphemeBreakProperty(cp)` must carry neither the segmenter nor the UTF-8 decoders, and a program
+	// that never touches a String at all must carry none of it. Each is set TRANSITIVELY by
+	// `recordCallUsage` from whichever entry point the module actually names (a `__gr_count` reference
+	// turns on `__gr_end`, which turns on `__gr_break` and the decoders, which turn on `__gbp` and
+	// `__ext_pict`) — the same "declare what the synthesized body calls, because this Maxon-module scan
+	// cannot see inside it" rule the String method family already follows.
+	// `__char_at` MINTS a Character — one `__mm_alloc`'d fused record per call, blitted with `__str_copy`
+	// — so it declares the heap and the copy loop that `emitBuildOwnedInlineString` puts inside its body.
+	export var usesCharAt as bool
+	export var usesCharFromCodepoint as bool
+	// `__char_cmp` reads two BORROWED records' `buffer@0`/`length@8` and walks their bytes, allocating
+	// nothing and calling nothing — `__char_ascii`'s floor-free shape, so it has no arm in
+	// `closeGraphemeNeeds` either.
+	export var usesCharCmp as bool
+	// `__char_ascii` reads two fields of a BORROWED record and calls nothing, so it declares no transitive
+	// floor at all — hence no arm in `closeGraphemeNeeds`. `usesCharCmp` above is the other such bit.
+	export var usesCharAsciiValue as bool
+	// `__str_to_bytes` PUSHES into a caller-created `Array with Byte`, so it declares the array runtime
+	// (and the heap under it) in `closeGraphemeNeeds`. It is the LAST entry point that fills an array the
+	// parser built — `__str_split` was the other, and retired at W49 wave 5.
+	export var usesStrToBytes as bool
+	// ⚠ **`usesStrToCodepoints`/`usesStrToUtf16` STOOD HERE AND WENT AT W49 WAVE 6** with the two decoding
+	// views, onto the corpus's lazy `CodepointView`/`UTF16View`. They were separate bits under this file's
+	// one-bit-per-entry-point discipline — a program asking for the bytes must not carry a UTF-8 decoder, and
+	// one asking for the codepoints must not carry the surrogate encoder — and that discipline is why their
+	// removal takes nothing else with it: `usesStrToBytes` never stood for any of the three.
+	// ⚠ **THE P1.8 SLICE B2 `StringIndex` FAMILY HAS NO BITS LEFT, AND NO FILE EITHER.** Six went with the
+	// five members that retired onto `stdlib/String.maxon` at W49 wave 3; the last two
+	// (`usesStrIndexAdvance`/`usesStrIndexSlice`) went at wave 4 with `String.slice`, which was the only
+	// caller `__strix_advance` and `__strix_slice` had. `Runtime/StringIndexRuntime.maxon` is deleted, not
+	// emptied — the corpus bodies behind every one of them are ordinary Maxon call edges now, which the
+	// reachability walk FINDS rather than being told.
+	// ⭐ **THE UNICODE `General_Category` TABLE (P1.8 Slice D, R2).** Its own bit, and DECOUPLED from every
+	// String bit: `__ucd_cat` is a LEAF that reads two `.rdata` blobs and does integer arithmetic — no heap,
+	// no copy loop, no segmenter — so a program that classifies a codepoint carries nothing else, and a
+	// program that never does carries neither the 65,536-byte BMP table nor the supplementary one. Set by
+	// `recordCallUsage` on a `__ucd_cat` reference, which is what `CharacterSet.contains` emits.
+	export var usesUcdCategory as bool
+	// ⭐ **THE P1.8 SLICE D `CharacterSet` FAMILY — ONE BIT PER ENTRY POINT**, following this file's
+	// existing discipline: a program that only builds a `CharacterSet` must not carry the membership probe.
+	// Each is set by `recordCharacterSetUsage` from whichever entry point the module actually names, and
+	// `__cs_contains` in turn declares `__set_contains` and `__ucd_cat` through `closeCharacterSetNeeds`.
+	//
+	// ⚠ A FOURTH, `usesStrTrim`, went at W49 wave 4 with the three trims, which are `stdlib/String.maxon`'s
+	// now. It was the one bit here that reached into all THREE sibling families, which is what fixed this
+	// family's recording ORDER — the order is kept, because it is a rule about families and not about the arm
+	// that first needed it.
+	export var usesCharSetMake as bool
+	export var usesCharSetDecref as bool
+	export var usesCharSetContains as bool
+	// R4.1: the program opens a file. Unlike the wall clock it DOES declare a transitive dependency —
+	// `__mf_open_read` allocates a NUL-terminated scratch copy of the path and the handle box through
+	// `__mm_alloc`/`__mm_free`, so it carries `usesHeap` too (set together below).
+	export var usesManagedFile as bool
+	// R4.3: the program searches, creates or asks about a DIRECTORY. Its own bit, so a file-only program
+	// carries none of the directory runtime. Like the file family it declares a transitive dependency on
+	// `usesHeap` (the find block, the box and the path scratch are all `__mm_alloc`'d) — and, unlike it,
+	// ALSO on `usesArray`: `__md_filename`/`__md_current_path` build their `__ManagedMemory` answer through
+	// `__arr_create`/`__arr_reserve`, calls that live in a Std body this Maxon-module scan cannot see.
+	export var usesManagedDirectory as bool
+	// The program reads its COMMAND LINE. Like the directory family it declares a transitive dependency on
+	// `usesHeap` (the scratch buffer is a raw alloc) AND on `usesArray`: `__cl_arg` builds its
+	// `__ManagedMemory` answer through `__arr_create`/`__arr_reserve` inside a Std body this Maxon-module
+	// scan cannot see.
+	export var usesCommandLine as bool
+	// W5: the program reads STANDARD INPUT. It carries `usesHeap` (the out word is a raw alloc) AND
+	// `usesArray`: `__con_read_stdin` answers with an `Array` record it builds through
+	// `__arr_create`/`__arr_reserve` in a Std body this Maxon-module scan cannot see.
+	export var usesConsoleStdin as bool
+	// W5: the program asks for its own EXECUTABLE PATH. Its own bit rather than sharing the one above, under
+	// this file's one-bit-per-entry-point discipline: the two serve different stdlib modules and reach
+	// different OS APIs, so a program that reads stdin must not carry a path walk it never calls. Same two
+	// transitive bits, for the same two reasons — the grow-and-retry buffer is a raw alloc, and the answer is
+	// an `Array` record built one tier down.
+	export var usesProcessIntrospection as bool
+
+	static function create() returns RuntimeUsage
+		return Self{usesHeap: false, usesGt: false, usesIocp: false, usesStreaming: false, usesWriteStdout: false, usesWriteStderr: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesUIntToString: false, usesBoolToString: false, usesStrDecref: false, usesArray: false, usesSet: false, usesMap: false, usesList: false, usesDropTypeParam: false, usesDropExistential: false, usesRetainExistential: false, usesIncref: false, usesRetain: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrFromBytes: false, usesStrOfBuffer: false, usesMmToCString: false, usesStrBytesView: false, usesManagedArrayCopy: false, usesOpaqueArrayCopy: false, neededCloners: ClonerSet.create(), usesWallClock: false, usesCharAt: false, usesCharCmp: false, usesCharFromCodepoint: false, usesCharAsciiValue: false, usesStrToBytes: false, usesUcdCategory: false, usesCharSetMake: false, usesCharSetDecref: false, usesCharSetContains: false, usesManagedFile: false, usesManagedDirectory: false, usesCommandLine: false, usesConsoleStdin: false, usesProcessIntrospection: false}
+	end 'create'
+end 'RuntimeUsage'
+
+// `unreachableStdlib` names the functions this scan must ignore — the STDLIB functions no path from
+// `main` reaches (`StdlibFacts.unreachable`, see StdlibSource). Dead-function elimination drops them
+// before the back end, so the floor they would ask for is a floor for code the program does not
+// contain: a `Clock` nothing calls must not install the green-thread scheduler and the wall-clock
+// `.data` slot. It never contains a USER function — an unreached user body still speaks for the
+// program — so the answer for every stdlib-free program is unchanged.
+export function scanRuntimeUsage(module MaxonModule, unreachableStdlib FunctionNameSet, funcSignatures FuncSignatureMap) returns RuntimeUsage
+	var usage = RuntimeUsage.create()
+	for func in module.functions 'eachFunc'
+		if unreachableStdlib.contains(func.name) 'notInTheProgram'
+			continue
+		end 'notInTheProgram'
+		for blockRef in func.blockRefs 'eachBlock'
+			let block = try module.blocks.get(blockRef) otherwise panic("scanRuntimeUsage: blockRef from func.blockRefs not in module.blocks")
+			for opIdx in block.opRefs 'eachOp'
+				let op = try module.ops.get(opIdx) otherwise panic("scanRuntimeUsage: opIdx {opIdx} not in module.ops")
+				classifyRuntimeCall(op, usage: usage, funcSignatures: funcSignatures)
+			end 'eachOp'
+		end 'eachBlock'
+	end 'eachFunc'
+	return usage
+end 'scanRuntimeUsage'
+
+function classifyRuntimeCall(op MaxonOp, usage RuntimeUsage, funcSignatures FuncSignatureMap)
+	match op 'op'
+		call(_, callee, _, _, _, _, _, _) then recordCallUsage(callee, usage: usage)
+		literal to stringLiteral then break 'op'
+		// A throwing call names a user callee whose runtime usage is scanned exactly as `call`'s is; the
+		// throw/propagate terminators and `panicAbort` name no user callee (panic exits directly) (P1.4b).
+		tryCall(_, _, callee, _, _, _, _, _, _) then recordCallUsage(callee, usage: usage)
+		throwError to panicAbort then break 'op'
+		// P1.5-A1: an `indirectCall` calls through a code POINTER and names no runtime callee, so it records
+		// nothing. A `functionRef` naming a USER function is likewise a bare `lea` of no runtime consequence —
+		// but one naming a COMPILER-EMITTED callee is the address of an array element destructor
+		// stamped into `element_destroy@40` (P1.7 slice 3), and THAT reference must install its target (a
+		// `__str_decref`/`__destruct_<T>`/`__mm_decref`/`__arr_decref`) exactly as a direct `call` to it would —
+		// its transitive needs then close through `noteDestructorUsage`. Recorded through the same `recordCallUsage`.
+		functionRef(_, funcName) then recordFunctionRefUsage(funcName, usage: usage, funcSignatures: funcSignatures)
+		indirectCall then break 'op'
+		// P1.5-B1a/B2b: `async`/`await`/`try await` carry the green-thread scheduler. Detected by OP KIND
+		// (their `__gt_*` calls do not exist until lowering), and imply the HEAP too — `__gt_spawn`
+		// `__slab_alloc`s the GT struct and the argument buffer.
+		asyncCall to tryAwait then recordGtUsage(usage)
+		// `sizeof(T)` lowers to a plain `loadIndirect` of the layout descriptor — it names no runtime callee
+		// and pulls in no runtime floor (the descriptor is pure `.rdata`), so it records no usage (P1.6-B1).
+		sizeofType then break 'op'
+		constArrayLiteral then recordConstArrayLiteralUsage(usage)
+		// The jump table names no runtime callee and pulls in no runtime floor — a bare indexed branch.
+		switch then break 'op'
+		// A witness dispatch names no runtime callee and pulls in no runtime floor — the fused call reads a
+		// `.rdata` witness table and jumps; the dispatched user impl is scanned on its own (P1.7a slice 2a).
+		// The throwing form adds an error flag, not a runtime callee.
+		witnessDispatch to witnessTryDispatch then break 'op'
+		// A panic names no runtime callee under either spelling — it exits directly.
+		panicAbortValue then break 'op'
+	end 'op'
+end 'classifyRuntimeCall'
+
+// An `async`/`await` op turns on both scheduler and heap: the scheduler runs the green threads, and the
+// heap floor supplies the `__slab_alloc` that `__gt_spawn` and the async arg-buffer spill need.
+function recordGtUsage(usage RuntimeUsage)
+	usage.usesGt = true
+	usage.usesHeap = true
+end 'recordGtUsage'
+
+// A CONSTANT array literal over an immortal `.rdata` blob — a `b"…"` byte string, or a packed
+// `[0 as Q, …]` — turns on both the Array runtime and the heap under it, the same pair any `__arr_*` call
+// declares (`recordCallUsage`'s array arm), because the literal IS an owned Array record (`__mm_alloc`)
+// whose `.count()`/`.get()`/drop go through the array runtime. Both producers of `constArrayLiteral` need
+// exactly this pair, which is why one recorder still serves the op after it stopped being byte-string-only.
+function recordConstArrayLiteralUsage(usage RuntimeUsage)
+	usage.usesArray = true
+	usage.usesHeap = true
+end 'recordConstArrayLiteralUsage'
+
+// A `functionRef` whose target is a COMPILER-EMITTED callee is an array element destructor's address stamped
+// into `element_destroy@40` (P1.7 slice 3) — its target must be installed exactly as a direct `call` to it
+// would, so it routes through the SAME `recordCallUsage` (turning on the heap/`usesStrDecref`/`usesArray` bit
+// or adding to `neededDestructors`, per the callee). A `functionRef` to a USER function is a plain
+// code-pointer `lea` of no runtime consequence and records nothing (the P1.5-A1 behaviour, unchanged).
+//
+// ⚠ **THE TEST IS `isSignaturelessCompilerCallee` AND NOT THE `__` PREFIX (A1r review)**, because since D6/A1r
+// a `__` name may be DECLARED — in `stdlib/Builtins.maxon` — and a value use of THAT is the USER case: it is
+// a `funcAddr` of the name's `__fnref_` thunk (`lowerFunctionRef`, which parts the same two ways on the same
+// predicate), never an installable runtime entry. Keyed on the prefix, `recordCallUsage` was asked about a
+// user function; today's roster maps no such name to a bit, so nothing moved — but the question was already
+// the wrong one, and a `Builtins.maxon` declaration sharing a runtime prefix (`__mm_`) would have installed a
+// runtime floor for a program that never calls into it.
+function recordFunctionRefUsage(funcName ByteArray, usage RuntimeUsage, funcSignatures FuncSignatureMap)
+	if isSignaturelessCompilerCallee(funcName, funcSignatures: funcSignatures) 'runtimeAddress'
+		recordCallUsage(funcName, usage: usage)
+	end 'runtimeAddress'
+end 'recordFunctionRefUsage'
+
+// ⭐ **THE ONE CALLEE-NAME → RUNTIME-USAGE-BIT MAP.** Exported so `noteDestructorUsage` can root a
+// managed opaque-`T` `Array` element's destructor (P1.7 slice 3b-iii) through the IDENTICAL mapping the
+// module scan gives a callee named directly — a `__str_decref` turns on the String runtime, a `__arr_decref`
+// the array runtime, a `__destruct_<T>` joins `neededDestructors` — so the reloc-baked destructor is
+// installed for the writer to resolve exactly as if the module had called it.
+export function recordCallUsage(callee ByteArray, usage RuntimeUsage)
+	if isRuntimeCallee(callee) 'heap'
+		usage.usesHeap = true
+	end 'heap'
+	// A DIRECT `__gt_*` runtime call carries the whole green-thread scheduler (P1.5 mid-body-yield). `async`/
+	// `await`/`try await` are detected by op KIND above because their `__gt_*` calls do not exist until
+	// lowering, but `__Builtins.sleep(ms)` lowers in the FRONT END to a `call __gt_sleep`, which IS a Maxon
+	// `call` this scan sees — so any `__gt_*` callee here turns on the scheduler (and, via `recordGtUsage`,
+	// the heap). A source `sleep(ms)` reaches it one frame down, inside `stdlib/Sleep.maxon`'s body, which
+	// this scan walks because stdlib source is merged into the module it walks — but ONLY IF A PATH FROM
+	// `main` REACHES THAT BODY. `scanRuntimeUsage`'s `unreachableStdlib` filter (above) skips the rest, and
+	// that qualifier is the load-bearing half, not a footnote: it is what keeps listing a stdlib module
+	// byte-neutral for a program that does not use it, and it is why an unreached `sleep(ms)` compiles for a
+	// target with no `__gt_sleep` while an unreached `__Builtins.sleep(ms)` in USER code is still refused.
+	if isGtRuntimeCallee(callee) 'gt'
+		recordGtUsage(usage)
+	end 'gt'
+	// A `__gt_io_read` call (the `spawnReadLine` probe, P1.5 slice 1a-ii) additionally carries the IOCP substrate:
+	// the completion port + completion thread + wake event + run-queue lock. `usesGt` is already set by the `__gt_`
+	// prefix above; this bit installs the IOCP-only pieces.
+	if callee.equals(IoReadName) 'ioread'
+		usage.usesIocp = true
+	end 'ioread'
+	// A `__gt_subp_*` call (the P1.5 streaming subprocess API, slice 1b) carries the whole streaming runtime: the
+	// handle table + the `__gt_subp_*` functions, which ride the IOCP substrate (`usesIocp`) and build owned Strings
+	// from raw bytes (`__mm_alloc`/`__str_copy` inside their bodies — `usesHeap`/`usesStrCopy`, declared here because
+	// this Maxon-module scan cannot see those transitive calls). `usesGt`/`usesHeap` are already set by the `__gt_`
+	// prefix above; these bits install the streaming-only pieces.
+	if bytesStartWith(callee, prefix: SubpCalleePrefix) 'streaming'
+		usage.usesStreaming = true
+		usage.usesIocp = true
+		usage.usesStrCopy = true
+	end 'streaming'
+	// A `__clock_*` call carries the WALL clock and NOTHING ELSE — no scheduler, no heap, no leak gate. It is
+	// the ONE runtime family here that declares no transitive dependency, and that is a fact about the code
+	// rather than an omission: `__clock_now_unix_s`'s Std body reads one `.data` word through one Win32 import
+	// and divides, calling nothing this Maxon-module scan cannot see.
+	if isClockRuntimeCallee(callee) 'wallClock'
+		usage.usesWallClock = true
+	end 'wallClock'
+	// R4.1: a `__mf_*` call. It carries `usesHeap` with it, unlike the clock above — the open allocates a
+	// NUL-terminated scratch copy of the path and the handle box, and frees the scratch.
+	if isManagedFileRuntimeCallee(callee) 'managedFile'
+		usage.usesManagedFile = true
+		usage.usesHeap = true
+	end 'managedFile'
+	// R4.3: a `__md_*` call. It carries `usesHeap` (the find block, the box and the path scratch) AND
+	// `usesArray`, which the file family does not need: `__md_filename`/`__md_current_path` answer with an
+	// `Array` record they build through `__arr_create`/`__arr_reserve` inside their Std bodies, and this
+	// Maxon-module scan cannot see a call one tier down. Left off, those two would link against nothing.
+	if isManagedDirectoryRuntimeCallee(callee) 'managedDirectory'
+		usage.usesManagedDirectory = true
+		usage.usesHeap = true
+		usage.usesArray = true
+	end 'managedDirectory'
+	// A `__cl_*` call. Same two transitive bits as the directory family and for the same reasons: the scratch
+	// buffer is a raw alloc, and `__cl_arg` answers with an `Array` record it builds one tier down.
+	if isCommandLineRuntimeCallee(callee) 'commandLine'
+		usage.usesCommandLine = true
+		usage.usesHeap = true
+		usage.usesArray = true
+	end 'commandLine'
+	// W5: a `__con_*` or a `__proc_*` call. Same two transitive bits as the command-line family and for the
+	// same two reasons — a raw-alloc scratch word (or buffer), and an `Array` record each answers with from a
+	// Std body this Maxon-module scan cannot see. Left off, both would link against nothing.
+	if isConsoleRuntimeCallee(callee) 'consoleStdin'
+		usage.usesConsoleStdin = true
+		usage.usesHeap = true
+		usage.usesArray = true
+	end 'consoleStdin'
+	if isProcessRuntimeCallee(callee) 'processIntrospection'
+		usage.usesProcessIntrospection = true
+		usage.usesHeap = true
+		usage.usesArray = true
+	end 'processIntrospection'
+	if callee.equals(StreamWriteStdoutName) 'writestdout'
+		usage.usesWriteStdout = true
+	end 'writestdout'
+	if callee.equals(StreamWriteStderrName) 'writestderr'
+		usage.usesWriteStderr = true
+	end 'writestderr'
+	if callee.equals(StrEqName) 'streq'
+		usage.usesStrEq = true
+	end 'streq'
+	if callee.equals(StrCopyName) 'strcopy'
+		usage.usesStrCopy = true
+	end 'strcopy'
+	if callee.equals(IntToStringName) 'inttostr'
+		usage.usesIntToString = true
+	end 'inttostr'
+	if callee.equals(UIntToStringName) 'uinttostr'
+		usage.usesUIntToString = true
+	end 'uinttostr'
+	if callee.equals(BoolToStringName) 'booltostr'
+		usage.usesBoolToString = true
+	end 'booltostr'
+	// `__str_decref` calls `__mm_alloc`/`__mm_free` inside its Std body, which this Maxon-module scan
+	// cannot see — so its TRANSITIVE heap dependency is declared here rather than discovered.
+	if callee.equals(StrDecrefName) 'strdecref'
+		usage.usesStrDecref = true
+		usage.usesHeap = true
+	end 'strdecref'
+	// A `__mm_incref` the PARSER emitted (the `try … otherwise` phi reconciliation) — install the incref
+	// helper for it, not only for the array runtime's `usesArray`. `usesHeap` follows because the box it
+	// increfs was `__mm_alloc`'d (which set `usesHeap` at its own call site anyway).
+	if callee.equals(MmIncrefName) 'incref'
+		usage.usesIncref = true
+		usage.usesHeap = true
+	end 'incref'
+	// A `__mm_retain` the PARSER emitted (co-owning a borrowed managed-aggregate parameter into a `var`,
+	// OPEN #40) — install the retain helper for it. `usesHeap` follows because the box it retains was
+	// `__mm_alloc`'d (which set `usesHeap` at that box's own allocation site anyway).
+	if callee.equals(MmRetainName) 'retain'
+		usage.usesRetain = true
+		usage.usesHeap = true
+	end 'retain'
+	// Any `__arr_*` call carries the whole array runtime, and the heap under it: `__arr_create`/`__arr_grow`
+	// `__mm_alloc` the record and the element buffer, `__arr_decref` `__mm_free`s them — none of which this
+	// Maxon-module scan sees, since those calls live in the synthesized Std bodies. So a single reference
+	// declares both bits, exactly as `__str_decref` does for its own transitive heap use.
+	if isArrayRuntimeCallee(callee) 'array'
+		usage.usesArray = true
+		usage.usesHeap = true
+	end 'array'
+	// Any `__set_*` call carries the whole set runtime, and the heap under it: `__set_create`/`__set_grow`
+	// `__mm_alloc` the record and its three buffers, `__set_decref` `__mm_free`s them — none of which this
+	// Maxon-module scan sees, since those calls live in the synthesized Std bodies. So a single reference
+	// declares both bits, exactly as the `__arr_*` arm above does (P1.7b slice A).
+	if isSetRuntimeCallee(callee) 'set'
+		usage.usesSet = true
+		usage.usesHeap = true
+	end 'set'
+	// Any `__map_*` call carries the whole map runtime, and the heap under it — the `__set_*` arm above, one
+	// column wider: `__map_create`/`__map_grow` `__mm_alloc` the record and its FOUR buffers and
+	// `__map_decref` `__mm_free`s them, none of which this Maxon-module scan sees. It is a SEPARATE arm rather
+	// than a widened prefix test because the two runtimes install disjoint name sets — see `usesMap`.
+	if isMapRuntimeCallee(callee) 'map'
+		usage.usesMap = true
+		usage.usesHeap = true
+	end 'map'
+	// Any `__list_*` call carries the whole list runtime, and the heap under it — the `__set_*` arm above over
+	// a CHAIN instead of a table: `__list_create` and every insertion `__mm_alloc` (the header, then one node
+	// each) and `__list_decref` `__mm_free`s all of them, none of which this Maxon-module scan sees.
+	if isListRuntimeCallee(callee) 'list'
+		usage.usesList = true
+		usage.usesHeap = true
+	end 'list'
+	// The single-value descriptor-gated drop (P1.7 slice 3b-v / Finding A). Decoupled from `usesArray` so an
+	// array-free bare-field reassign links: it is `__`-prefixed but neither `__mm_`- nor `__arr_`-prefixed, so
+	// none of the arms above sees it. Its body only reads the descriptor and `callIndirect`s the destructor
+	// (no direct `__mm_alloc`/`__mm_free`), so it declares no other bit — see `usesDropTypeParam`.
+	if callee.equals(DropTypeParamName) 'droptypeparam'
+		usage.usesDropTypeParam = true
+	end 'droptypeparam'
+	// The existential's drop (P1.7a-existentials slice 2) — the same shape as the line above and for the same
+	// reasons: `__`-prefixed but neither `__mm_`- nor `__arr_`-prefixed, so no arm above sees it, and its body
+	// only reads the witness table's `destroyFunc@8` and `callIndirect`s it, so it declares no other bit.
+	// ⚠ It does NOT set `usesHeap`: a struct DESTRUCTOR's cascade reaches it from a Std body this scan cannot
+	// see, and that destructor's own `__mm_free` already declares the heap (`noteDestructorUsage`).
+	if callee.equals(DropExistentialName) 'dropexistential'
+		usage.usesDropExistential = true
+	end 'dropexistential'
+	// The existential's CO-OWNERSHIP (P1.7a-existentials slice 2). Its body names NO callee — since slice 2b it
+	// `callIndirect`s the witness's `retainFunc@16`, exactly as its drop twin `callIndirect`s `destroyFunc@8` —
+	// so what it reaches is declared by the RELOCATIONS that fill those words (`noteRelocatedFunctionUsage`),
+	// not here. It used to declare `usesIncref` for a hardcoded `__mm_incref` that no longer exists.
+	// ⚠ **`usesHeap` STILL RIDES, AND IT IS THE ONE BIT THE RELOCATION SCAN CANNOT SUPPLY**: that scan runs
+	// after `globalData.layOut`, so a program whose heap is first declared there PANICS
+	// (`noteRelocatedFunctionUsage`'s `heapArrivedTooLate` gate) with a `.data` image short by the allocator's
+	// globals. Every non-zero ownership word names a heap callee (`__str_clone`/`__str_decref`/`__mm_retain`/a
+	// `__destruct_<T>`), so a program that emits this entry may need the allocator whether or not its own
+	// source ever allocates — `widen("abc")` is exactly that program, and it is why the bit is taken here
+	// rather than inferred later.
+	if callee.equals(RetainExistentialName) 'retainexistential'
+		usage.usesRetainExistential = true
+		usage.usesHeap = true
+	end 'retainexistential'
+	// A managed-payload union's scope-exit drop (`__destruct_<U>`). It frees the box (`__mm_free` — heap)
+	// and, for a String field, calls `__str_decref` — but those live in the SYNTHESIZED body this scan
+	// cannot see, so the symbol is recorded and its transitive needs are declared by
+	// `noteUnionDestructorUsage` (which has the signatures/interner to classify the fields).
+	if bytesStartWith(callee, prefix: DestructorPrefix) 'uniondtor'
+		usage.usesHeap = true
+		usage.neededDestructors.insert(callee)
+	end 'uniondtor'
+	// A String DEEP-CLONE (`__str_clone`, P1.7 slice 3b-vi-b) — a managed array/struct copy cloning a String
+	// element/field. It `__mm_alloc`s a fresh fused record and `__str_copy`s the bytes in, inside its SYNTHESIZED
+	// body this scan cannot see, so those transitive bits are declared here (the `__str_decref` shape).
+	if callee.equals(StrCloneName) 'strclone'
+		usage.usesStrClone = true
+		usage.usesHeap = true
+		usage.usesStrCopy = true
+	end 'strclone'
+	// The `General_Category` lookup (P1.8 Slice D). It declares NOTHING else — see `usesUcdCategory` —
+	// which makes it the second family, beside `__clock_*`, whose body calls nothing this scan cannot see.
+	if callee.equals(UcdCategoryName) 'ucdcategory'
+		usage.usesUcdCategory = true
+	end 'ucdcategory'
+	// ⚠ **THE ORDER IS A RULE ABOUT FAMILIES, NOT ABOUT TODAY'S ARMS, WHICH IS WHY IT SURVIVES THE ARM THAT
+	// FORCED IT.** The `CharacterSet` family closes into the two below it — `__cs_contains` decodes a
+	// codepoint — so it must record FIRST: a bit turned on after its own family's closure has run installs an
+	// entry point without what it calls. A `StringIndex` family recorded here too, ahead of these, for the
+	// identical reason; W49 wave 4 retired `String.slice` and its last two entry points went with it.
+	recordCharacterSetUsage(callee, usage: usage)
+	recordStringMethodUsage(callee, usage: usage)
+	recordGraphemeUsage(callee, usage: usage)
+	// The three MANAGED-element array copies (`__arr_slice_managed`/`__arr_clone_managed`/`__arr_append_managed`,
+	// P1.7 slice 3b-vi-b). `isArrayRuntimeCallee` above already set `usesArray`/`usesHeap` (they are `__arr_`-
+	// prefixed); THIS bit gates their install so a trivial-array program does not carry them.
+	if isManagedArrayCopyCallee(callee) 'managedcopy'
+		usage.usesManagedArrayCopy = true
+	end 'managedcopy'
+	// The three OPAQUE-`T` array copies (`__arr_slice_opaque`/`__arr_clone_opaque`/`__arr_append_opaque`, P1.7
+	// slice 3b-vi-b-β). `isArrayRuntimeCallee` above already set `usesArray`/`usesHeap` (they are `__arr_`-
+	// prefixed); THIS turns on the opaque-copy install AND `usesManagedArrayCopy`, because each wrapper's managed
+	// branch calls the α `__arr_*_managed` helpers whose own install is gated on that bit.
+	if isOpaqueArrayCopyCallee(callee) 'opaquecopy'
+		usage.usesOpaqueArrayCopy = true
+		usage.usesManagedArrayCopy = true
+	end 'opaquecopy'
+	// A per-type CLONER (`__clone_<T>`, P1.7 slice 3b-vi-b) — the CLONE twin of the `__destruct_<T>` arm above,
+	// referenced through a `funcAddr(__clone_<T>)` element-cloner stamp. It frees no memory but ALLOCATES a box
+	// (`usesHeap`), and its transitive `__str_clone`/`__arr_clone`/nested-cloner needs close through
+	// `noteClonerUsage` (which has the signatures/interner to classify the fields).
+	if bytesStartWith(callee, prefix: ClonerPrefix) 'structcloner'
+		usage.usesHeap = true
+		usage.neededCloners.insert(callee)
+	end 'structcloner'
+end 'recordCallUsage'
+
+// ⭐ The P1.8 Slice D `CharacterSet` family's arm of the callee → usage-bit map — the
+// `recordGraphemeUsage` twin, split out for the same reason: `recordCallUsage` stays a readable list of
+// families. Direct references only; what each referenced body in turn needs is closed by
+// `closeCharacterSetNeeds`.
+function recordCharacterSetUsage(callee ByteArray, usage RuntimeUsage)
+	if callee.equals(CharSetMakeName) 'make'
+		usage.usesCharSetMake = true
+	end 'make'
+	if callee.equals(CharSetDecrefName) 'decref'
+		usage.usesCharSetDecref = true
+	end 'decref'
+	if callee.equals(CharSetContainsName) 'contains'
+		usage.usesCharSetContains = true
+	end 'contains'
+	closeCharacterSetNeeds(usage)
+end 'recordCharacterSetUsage'
+
+// ⭐ **WHAT EACH `CharacterSet` BODY CALLS THAT THIS SCAN CANNOT SEE.** Declared here rather than
+// discovered, exactly as the three sibling closures declare their families'. Run as a CLOSURE after every
+// record so the answer cannot depend on the order in which the module happens to name its entry points.
+// ⚠ **A `__str_trim` ARM STOOD HERE UNTIL W49 WAVE 4** — it declared the cluster walk, the `Character` mint,
+// the per-cluster drop, the set probe and the slice producer that the SYNTHESIZED trim reached from inside a
+// body this scan cannot read. The three trims are `stdlib/String.maxon`'s now, so every one of those is an
+// ordinary Maxon call edge the reachability walk finds for itself, and a declared list of them could only go
+// stale. Its `usesCharSetContains` feed is why the `probes` arm below must still run after it did.
+function closeCharacterSetNeeds(usage RuntimeUsage)
+	// `__cs_contains` probes the member set, decodes the character's first codepoint, and classifies it.
+	if usage.usesCharSetContains 'probes'
+		usage.usesSet = true
+		usage.usesHeap = true
+		usage.usesUcdCategory = true
+	end 'probes'
+	// The box is one `__mm_alloc`; its drop releases the member set and reclaims the box.
+	if usage.usesCharSetMake 'allocatesABox'
+		usage.usesHeap = true
+	end 'allocatesABox'
+	if usage.usesCharSetDecref 'dropsASet'
+		usage.usesSet = true
+		usage.usesHeap = true
+	end 'dropsASet'
+end 'closeCharacterSetNeeds'
+
+// ⭐ The P1.8 Slice B grapheme family's arm of the callee → usage-bit map — the `recordStringMethodUsage`
+// twin, split out for the same reason: `recordCallUsage` stays a readable list of families. Direct
+// references only; what each referenced body in turn needs is closed by `closeGraphemeNeeds`.
+function recordGraphemeUsage(callee ByteArray, usage RuntimeUsage)
+	if callee.equals(CharAtName) 'charat'
+		usage.usesCharAt = true
+	end 'charat'
+	if callee.equals(CharFromCodepointName) 'charfromcp'
+		usage.usesCharFromCodepoint = true
+	end 'charfromcp'
+	if callee.equals(CharCmpName) 'charcmp'
+		usage.usesCharCmp = true
+	end 'charcmp'
+	if callee.equals(CharAsciiValueName) 'charascii'
+		usage.usesCharAsciiValue = true
+	end 'charascii'
+	if callee.equals(StrToBytesName) 'tobytes'
+		usage.usesStrToBytes = true
+	end 'tobytes'
+	closeGraphemeNeeds(usage)
+end 'recordGraphemeUsage'
+
+// ⭐ **WHAT EACH GRAPHEME BODY CALLS THAT THIS SCAN CANNOT SEE.** The family's members call each other from
+// inside their SYNTHESIZED Std bodies, which walk no Maxon module — so the dependency is DECLARED here
+// rather than discovered, exactly as `closeStringMethodNeeds` declares the String family's. Run as a
+// CLOSURE after every record (rather than each arm listing its own transitive set) so the answer cannot
+// depend on the order in which the module happens to name its entry points.
+// ⚠ **THE SEGMENTER'S OWN NEEDS ARE NO LONGER CLOSED HERE, BECAUSE IT IS NO LONGER SYNTHESIZED.** This
+// closure used to walk `__gr_count` → `__gr_end` → `__utf8_cp_at` / `__gr_break` → `__ext_pict` / `__gbp`,
+// which is exactly the chain now living in `stdlib/helpers/string/grapheme.maxon`. Those are ORDINARY Maxon
+// call edges, so the query spine follows them without being told: what a corpus function needs is found, not
+// declared. What is left here is the residue with no corpus counterpart — the `Character` mint and the three
+// array-filling views — plus the ONE thing a scan of the Maxon module still cannot see, which has moved to
+// `StdlibSource.markCorpusCalleesOfSynthesizedRuntimes`: the edge FROM these Std bodies INTO the corpus.
+function closeGraphemeNeeds(usage RuntimeUsage)
+	// `__char_at` builds a fresh owned inline record: one `__mm_alloc` plus a `__str_copy` blit.
+	if usage.usesCharAt 'mintsCharacters'
+		usage.usesHeap = true
+		usage.usesStrCopy = true
+	end 'mintsCharacters'
+	// `__char_from_cp` builds the same record with one `__mm_alloc` and NO blit — it stores the bytes it
+	// encoded, so it needs the allocator and not the copier.
+	if usage.usesCharFromCodepoint 'encodesCharacters'
+		usage.usesHeap = true
+	end 'encodesCharacters'
+	// `__str_to_bytes` pushes into the caller's array.
+	//
+	// ⚠ **A `pushesDecodedUnits` CLAUSE STOOD BESIDE IT FOR `__str_to_codepoints`/`__str_to_utf16` AND WENT
+	// WITH THEM (W49 wave 6).** It declared the same two bits and, in prose, the edge INTO the corpus
+	// decoders that a scan of this module cannot see — an edge `StdlibSource` owns because what it turns on is
+	// a stdlib function's REACHABILITY rather than a runtime-usage bit. The corpus's own
+	// `CodepointView`/`UTF16View` reach `utf8DecodeAt`/`utf8ByteLengthAt` through ordinary Maxon call edges,
+	// which the query spine follows without being told.
+	if usage.usesStrToBytes 'pushesBytes'
+		usage.usesArray = true
+		usage.usesHeap = true
+	end 'pushesBytes'
+end 'closeGraphemeNeeds'
+
+// The String-building and byte-viewing entry points' own arm of the callee → usage-bit map, split out so
+// `recordCallUsage` stays a readable list of families rather than growing four more inline arms. Direct
+// references only; what each referenced body in turn needs is closed by `closeStringMethodNeeds`. (It was
+// NINE arms until the P1.8 Slice C family retired onto the corpus, and SIX until wave 7 took the two byte
+// READS with `byteAt`/`byteAtOrPanic` — see the grave at the head of this file.)
+function recordStringMethodUsage(callee ByteArray, usage RuntimeUsage)
+	if callee.equals(StrFromBytesName) 'frombytes'
+		usage.usesStrFromBytes = true
+	end 'frombytes'
+	if callee.equals(StrOfBufferName) 'ofbuffer'
+		usage.usesStrOfBuffer = true
+	end 'ofbuffer'
+	if callee.equals(MmToCStringName) 'tocstring'
+		usage.usesMmToCString = true
+	end 'tocstring'
+	if callee.equals(StrBytesViewName) 'bytesview'
+		usage.usesStrBytesView = true
+	end 'bytesview'
+	closeStringMethodNeeds(usage)
+end 'recordStringMethodUsage'
+
+// ⭐ **WHAT EACH REFERENCED BODY CALLS THAT THIS SCAN CANNOT SEE.** These entry points call the heap
+// helpers from inside their SYNTHESIZED Std bodies, which walk no Maxon module — so the dependency is
+// DECLARED here rather than discovered, exactly as `__str_decref` declares its `__mm_alloc`/`__mm_free`.
+// Run as a CLOSURE after every record (rather than each arm listing its own transitive set) so the answer
+// cannot depend on the order in which the module happens to name its entry points.
+function closeStringMethodNeeds(usage RuntimeUsage)
+	// Every string-BUILDING entry point allocates a fused record and blits bytes into it
+	// (`emitBuildOwnedInlineString` ⇒ `__mm_alloc` + `__str_copy`).
+	//
+	// ⚠ **A RETIREMENT SHEDS A TERM; ONLY THE LAST TERM SHEDS THE CLAUSE — AND THIS FILE HAS NOW DONE BOTH.**
+	// `usesStrMapCase`/`usesStrReplace`/`usesStrReplaceFirst` left this clause as TERMS at W49 wave 2 and
+	// `usesStrSplit` at wave 5, each time leaving the surviving terms to keep it alive. Two SIBLING clauses
+	// did not survive wave 5, because `split` was their only term: `clonesReceiver` (`split` answered a
+	// degenerate empty delimiter with `__str_clone` of the receiver) and `pushesSegments` (it pushed into the
+	// array the parser created for it), plus the `needsFind`/`needsRangeEq` pair that installed the search
+	// underneath. Deleting a clause while any term could still be true is what would leave a callee
+	// uninstalled and a call landing on nothing; deleting it only when nothing can set its last term is what
+	// keeps this function from listing conditions no program can meet. What the retired members need instead
+	// is declared where a corpus body's needs always are — by the ordinary reachability of what it calls.
+	if usage.usesStrFromBytes or usage.usesStrOfBuffer or usage.usesMmToCString 'buildsStrings'
+		usage.usesHeap = true
+		usage.usesStrCopy = true
+	end 'buildsStrings'
+	// `__str_bytes_view` publishes an `Array` record through `__arr_create` and increfs the allocation the
+	// bytes live in through `__mm_incref` — both inside its synthesized body, which this scan cannot see.
+	// `usesArray` is what installs the array runtime AND (through `installMmRuntime`'s `usesIncref or
+	// usesArray`) the incref helper, so the two bits below are the whole of its transitive floor.
+	if usage.usesStrBytesView 'publishesAView'
+		usage.usesArray = true
+		usage.usesHeap = true
+	end 'publishesAView'
+end 'closeStringMethodNeeds'

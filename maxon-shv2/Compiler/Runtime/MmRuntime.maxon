@@ -63,9 +63,16 @@ let ArenaBytes = 0x10000
 // and `end == 0` mean "no arena yet", and the very first `__slab_alloc` computes `0 + size > 0` and
 // takes the grow path. That is why there is no `__slab_init` and nothing to call before `main`: the
 // `.data` image IS the initialization, so the state cannot be observed before it is established.
-export let SlabCursorLabel = b"__slab_cursor"
-export let SlabEndLabel = b"__slab_end"
-export let MmAllocCountLabel = b"__mm_alloc_count"
+//
+// ⚠ **NONE OF THE THREE IS `export`ED ANY MORE (W49 wave 9).** An orphan sweep over this file found no
+// cross-file reader for any of them, nor for `buildMmIncref`/`buildMmRetain` below — five `export`s that
+// had outlived their last cross-file caller. Nothing in this language reports that, which is why it takes
+// a sweep to find and why `StringRuntime`'s `buildStrSplit` grave records the same lesson: *"an `export`
+// outlives its last cross-file caller silently … so a retirement has to go looking for them by name"*.
+// These slots are the allocator's private state and reading them from another file was never intended.
+let SlabCursorLabel = b"__slab_cursor"
+let SlabEndLabel = b"__slab_end"
+let MmAllocCountLabel = b"__mm_alloc_count"
 
 export let SlabAllocName = b"__slab_alloc"
 export let MmIncrefName = b"__mm_incref"
@@ -537,6 +544,91 @@ export function emitConstReturn(module StdModule, block IrBlock, value ParsedInt
 	module.setTerminator(block, op: StdOp.ret(result))
 end 'emitConstReturn'
 
+// ⚠ **THE TWO BYTE LOADS AND `__str_copy` MOVED HERE FROM `StringRuntime` (W49 wave 9).** They joined the
+// single-op emit helpers above for `emitConstReturn`'s stated reason, one family further out: a `u8` LOAD
+// and a byte BLIT are properties of the Std tier, not of a String. Both emitters were already `export`ed
+// for `GraphemeRuntime`'s decoders and segmenter — which is the shape the header below said it existed to
+// prevent, TWO files each owning "the ONE spelling" — and `__str_copy`'s consumers had already outgrown
+// their name: `Parser`'s interpolation, `GtRuntime`'s subprocess buffers, `__mm_to_cstring`'s copy path
+// and every `emitBuildOwnedInlineString` blit. The callee KEEPS its `__str_copy` spelling, because a
+// runtime symbol's name is baked into goldens and into `RuntimeUsage`'s bit; only the source moved.
+
+// The blit's callee name. `__`-prefixed compiler-internal (no E3004, no signature slotting) and NOT
+// `__mm_`-prefixed, so `isRuntimeCallee` leaves it out of the heap decision — it allocates nothing, and a
+// program that only blits bytes must not carry the allocator or the leak gate.
+//
+// ⚠ It is spelled `__str_copy` and stays spelled that way though it lives here now and has never been a
+// String's: the name is baked into every committed golden that installs it and into `RuntimeUsage`'s
+// `usesStrCopy` bit, so changing it would be a codegen change dressed as a rename.
+export let StrCopyName = b"__str_copy"
+
+// ⭐ **ONE BYTE AT `addr` — THE `u8` LOAD SPELLING FOR EVERY RUNTIME BUILDER**, so a widened read is a
+// one-line change rather than a sweep of every byte-walking loop.
+export function emitLoadByteAt(module StdModule, block IrBlock, addr ValueId, ids ValueMinter) returns ValueId
+	let v = ids.mint()
+	module.appendOp(block, op: StdOp.loadIndirect(v, addrId: addr, offset: 0, valueType: StdType.u8))
+	return v
+end 'emitLoadByteAt'
+
+// One byte at `base[index]` — the address add plus the `u8` load, the shape every byte-walking loop that
+// does NOT also need the address repeats (the compare loop's two operands, the grapheme runtime's
+// byte-view fill, the classifying scan in `__str_from_bytes`).
+export function emitLoadByteIndexed(module StdModule, block IrBlock, base ValueId, index ValueId, ids ValueMinter) returns ValueId
+	return emitLoadByteAt(module, block: block, addr: emitBin(module, block: block, a: base, b: index, opcode: StdBinOpcode.add, ids: ids), ids: ids)
+end 'emitLoadByteIndexed'
+
+// `__str_copy(dest, src, len)` — blit `len` bytes from `src` into `dest`. A byte loop rather than a
+// `rep movsb`/memcpy op because there is no memory-move op in the Std tier (`system` holds only
+// `osAllocPages`/`osWriteStdout`), and a byte loop needs nothing the tier lacks. `len == 0` copies nothing
+// (the header guard is `i >= len`, true at once).
+//
+// The loop index `i` is the header's phi — 0 from entry, `i+1` from the back edge — the same on-the-fly
+// SSA shape every runtime builder here constructs directly, a runtime function having no parser.
+export function buildStrCopy(module StdModule)
+	var func = IrFunction.createFromStd(StrCopyName, returnType: StdReturnType.void, paramCount: 3, paramTypes: threeI64Params(), returnLine: 0)
+	var ids = ValueMinter.create(3)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var header = module.addBlock(func, label: b"header")
+	var body = module.addBlock(func, label: b"body")
+	var done = module.addBlock(func, label: b"done")
+
+	emitParams(module, block: entry, count: 3)
+	let dest = 0 as ValueId
+	let src = 1 as ValueId
+	let len = 2 as ValueId
+
+	let zero = ids.mint()
+	module.appendOp(entry, op: StdOp.const(zero, value: 0, valueType: StdType.i64))
+	module.setTerminator(entry, op: StdOp.branch(header.id))
+
+	let i = ids.mint()
+	header.blockArgs.push(IrBlockArg.create(i, argType: StdType.i64))
+	entry.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(zero)))
+
+	let atEnd = ids.mint()
+	module.appendOp(header, op: StdOp.cmp(atEnd, lhs: i, rhs: len, pred: StdCmpPred.ge, operandType: StdType.i64))
+	module.setTerminator(header, op: StdOp.condBranch(atEnd, thenBlockId: done.id, elseBlockId: body.id))
+
+	let srcAddr = ids.mint()
+	module.appendOp(body, op: StdOp.binOp(srcAddr, lhs: src, rhs: i, opcode: StdBinOpcode.add, operandType: StdType.i64))
+	let srcByte = ids.mint()
+	module.appendOp(body, op: StdOp.loadIndirect(srcByte, addrId: srcAddr, offset: 0, valueType: StdType.u8))
+	let dstAddr = ids.mint()
+	module.appendOp(body, op: StdOp.binOp(dstAddr, lhs: dest, rhs: i, opcode: StdBinOpcode.add, operandType: StdType.i64))
+	module.appendOp(body, op: StdOp.storeIndirect(dstAddr, offset: 0, valueId: srcByte, valueType: StdType.u8))
+	let one = ids.mint()
+	module.appendOp(body, op: StdOp.const(one, value: 1, valueType: StdType.i64))
+	let iNext = ids.mint()
+	module.appendOp(body, op: StdOp.binOp(iNext, lhs: i, rhs: one, opcode: StdBinOpcode.add, operandType: StdType.i64))
+	module.setTerminator(body, op: StdOp.branch(header.id))
+	body.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(iNext)))
+
+	module.setTerminator(done, op: StdOp.retVoid)
+
+	module.functions.push(func)
+end 'buildStrCopy'
+
 // ⭐ **THE TWO WORDS A STD-TIER PREDICATE RETURNS — 1 for yes, 0 for no — WRITTEN DOWN ONCE.** They live
 // beside `emitConstReturn` because they are the same fact it is: with no `setcc` at this tier a bool is a
 // returned CONSTANT, and which constant means true is not a property of any one runtime family.
@@ -741,7 +833,7 @@ end 'buildMmAlloc'
 // becomes `LOCK`-prefixed on the same day for the same reason. See `emitRefcountCheckToLastOwner`.
 //
 // There is no overflow check: the count is `owners - 1` in an i64, and a program cannot hold 2^63 views.
-export function buildMmIncref(module StdModule)
+function buildMmIncref(module StdModule)
 	var func = IrFunction.createFromStd(MmIncrefName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
@@ -769,7 +861,7 @@ end 'buildMmIncref'
 // ⚠⚠ **NON-ATOMIC, DELIBERATELY** — the same read-modify-write `buildMmIncref` and `__mm_decref`
 // carry, and it becomes `LOCK`-prefixed on the same day for the same reason. See
 // `emitRefcountCheckToLastOwner`.
-export function buildMmRetain(module StdModule)
+function buildMmRetain(module StdModule)
 	var func = IrFunction.createFromStd(MmRetainName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
