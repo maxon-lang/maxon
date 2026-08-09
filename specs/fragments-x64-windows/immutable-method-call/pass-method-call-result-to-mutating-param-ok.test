@@ -1,0 +1,118 @@
+// Test: pass-method-call-result-to-mutating-param-ok
+typealias Integer = int(i64.min to i64.max)
+
+function grow(s String) returns Integer
+	s.append("XY")
+	return s.byteLength()
+end 'grow'
+
+function main() returns ExitCode
+	let g = "hello"
+	return grow(g.toUpper()) as ExitCode
+end 'main'
+---
+ExitCode: 7
+---
+// CompiledIR
+module {
+  func @grow(s: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=48
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.mov [rbp-16], rcx
+    x64.lea rdx, [rip+__static_lit_0]
+    x64.mov rbx, rdx
+    x64.mov rsi, 32
+    x64.add rbx, rsi
+    x64.mov [rbp-24], rbx
+    x64.mov rdi, [rbp-24]
+    x64.mov rcx, [rbp-24]
+    x64.call mm_incref
+    x64.mov r8, [rbp-16]
+    x64.mov r9, [rbp-24]
+    x64.mov rcx, [rbp-16]
+    x64.mov rdx, [rbp-24]
+    x64.call stdlib.String.append
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.mov [rbp-32], rcx
+    x64.mov rax, [rbp-32]
+    x64.mov rcx, [rax+8]
+    x64.mov rax, [rbp-24]
+    x64.mov [rbp-40], rcx
+    x64.test rax, rax
+    x64.jz __nonnull_skip_0
+    x64.mov rcx, [rbp-24]
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.mov rax, [rbp-40]
+    x64.epilogue
+    x64.ret
+  }
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=32
+    x64.lea rax, [rip+__static_lit_1]
+    x64.mov rcx, rax
+    x64.mov rdx, 32
+    x64.add rcx, rdx
+    x64.mov [rbp-8], rcx
+    x64.mov rbx, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call mm_incref
+    x64.mov rsi, [rbp-8]
+    x64.mov [rbp-16], rsi
+    x64.mov rdi, [rbp-16]
+    x64.mov rcx, [rbp-16]
+    x64.call stdlib.String.toUpper
+    x64.mov [rbp-24], rax
+    x64.lea r8, [rbp-24]
+    x64.mov r9, r8
+    x64.mov rcx, r9
+    x64.call grow
+    x64.xor ecx, ecx
+    x64.mov edx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg main.__range_panic_0
+    x64.cmp rax, rcx
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.xor ebx, ebx
+    x64.mov esi, 4294967295
+    x64.cmp rax, rsi
+    x64.jg main.__range_panic_1
+    x64.cmp rax, rbx
+    x64.jl main.__range_panic_1
+    x64.jmp main.__range_ok_1
+  __range_panic_1:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_1:
+    x64.mov rdi, [rbp-24]
+    x64.mov [rbp-32], rax
+    x64.test rdi, rdi
+    x64.jz __nonnull_skip_0
+    x64.mov rcx, [rbp-24]
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.xor eax, eax
+    x64.mov [rbp-24], rax
+    x64.mov rcx, [rbp-8]
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_1
+    x64.call mm_decref
+    x64.label __nonnull_skip_1
+    x64.mov rax, [rbp-32]
+    x64.epilogue
+    x64.ret
+  }
+}
+---

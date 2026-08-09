@@ -19249,6 +19249,19 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     // Only track immutable root for direct variable references, not for function call results
     _lastExprFromImmutableRoot = result is ExprResult.VarRef { Info.Mutable: false, VarName: not "self" };
 
+    // A CALL's result belongs to the callee, not to the receiver's binding: it is nobody's
+    // place, so no root variable names it and no `let` reaches it. Every arm that produces one
+    // says so HERE, rather than leaving it to the `!isFirstChainStep` reset on the next '.'
+    // step — a chain that ENDS in a call never reaches that step, and the stale root then rode
+    // out through the epilogue below. That is what refused `grow(g.toUpper())`, a fresh String,
+    // against `g`'s `let`, and made the message blame a binding it could no longer name.
+    void CallResultIsNobodysPlace() {
+      rootVarName = null;
+      rootVarMutable = true;
+      isFirstChainStep = false;
+      _lastExprFromImmutableRoot = false;
+    }
+
     // The signature of the value currently in `result`, when it is callable. Refreshed at
     // every step that can produce a function value, and cleared by every step that cannot.
     var resultFnType = ResolveCallableFnType(result, valueFnType);
@@ -19269,12 +19282,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
             : ResolveExprValue(chainResult),
           calleeFnType, originToken);
 
-        // A call result is a fresh temporary, not a place: it has no root variable, and
-        // it is never an immutable root.
-        rootVarName = null;
-        rootVarMutable = true;
-        isFirstChainStep = false;
-        _lastExprFromImmutableRoot = false;
+        CallResultIsNobodysPlace();
 
         if (indirectCall.Result == null) {
           // A signature returning nothing ends the chain — there is no value to take a
@@ -19552,6 +19560,9 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
           var (handled, chainResult) = TryEmitBuiltinTypeMethod(userTypeName, fieldName, builtinArgs, fieldToken);
           _builtinReceiverVarName = null;
           if (handled) {
+            // A receiver-writing builtin (`push`, `append`, …) hands back nothing, and its
+            // value here IS the receiver — still the root's place, so the root must stand.
+            if (chainResult != null) CallResultIsNobodysPlace();
             result = new ExprResult.Direct(chainResult ?? structVal);
             continue;
           }
@@ -19577,6 +19588,8 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
           var qualifiedFuncToken = new Token(TokenType.Identifier, resolvedMethodName, fieldToken.Line, fieldToken.Column);
           var (allArgs, structCallee) = ParseInstanceMethodCallArgs(qualifiedFuncToken, methodStructVal);
           var callOp = CreateFunctionCall(qualifiedFuncToken, allArgs, structCallee);
+          // A void method's value here IS the receiver — see the builtin arm above.
+          if (callOp.Result != null) CallResultIsNobodysPlace();
           result = new ExprResult.Direct(callOp.Result ?? methodStructVal);
           resultFnType = callOp.ResultFnType;
           continue;
@@ -21489,6 +21502,13 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     // Only update mutability tracking for VarRef expressions.
     // For Direct expressions, preserve the existing _lastExprWasMutableVar value
     // so that field-access chains on mutable structs retain their mutability.
+    //
+    // ⚠ The preserved bit is LOAD-BEARING for a merge that launders a `let`:
+    // `grow(g if flag else g)` yields a Direct whose arms are both `g`, and the carried
+    // `false` is the only thing refusing it. Accepting it writes into the literal's
+    // read-only `.rdata` record. Whoever a value's blame belongs to is decided by the
+    // producer — see ParseFieldAccessChain, where a CALL step clears the root because a
+    // callee's result is nobody's place.
     if (expr is ExprResult.VarRef vrMut) {
       _lastExprWasMutableVar = vrMut.Info.Mutable;
       _lastExprVarName = vrMut.VarName;

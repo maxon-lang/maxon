@@ -63,6 +63,52 @@ end 'main'
 error E3019: specs/fragments/immutable-method-call/set-on-let-array-error.test:8:10: cannot pass 'arr' to function that mutates parameter 'self' (in main)
 ```
 
+<!-- test: pass-method-call-result-to-mutating-param-ok -->
+`g.toUpper()` hands back a FRESH `String`, not a view of `g`. The `let` governs the binding `g`,
+and a call's result is not that binding — so a function that writes its parameter may have it.
+
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function grow(s String) returns Integer
+	s.append("XY")
+	return s.byteLength()
+end 'grow'
+
+function main() returns ExitCode
+	let g = "hello"
+	return grow(g.toUpper()) as ExitCode
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: pass-let-string-through-inline-if-error -->
+⭐ **A LAUNDER IS NOT A LOOPHOLE.** `grow(g)` on a `let` is refused, so `grow(g if flag else g)` —
+the SAME binding, reached through a merge that copies nothing — must be refused too.
+
+⚠ **THIS IS A MEMORY-SAFETY RULE, NOT A MESSAGE ONE.** Accepted, the program writes into the
+literal's read-only `.rdata` record. It is pinned here because the rule that refuses it is the
+same one that must NOT refuse `g.toUpper()` above: a merge yields a view of its arms, a call
+yields the callee's own value, and only the second is nobody's place.
+
+```maxon
+function grow(s String)
+	s.append("XY")
+end 'grow'
+
+function main() returns ExitCode
+	let flag = true
+	let g = "hello"
+	grow(g if flag else g)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3019: specs/fragments/immutable-method-call/pass-let-string-through-inline-if-error.test:9:2: cannot pass immutable 'let' variable to function that mutates parameter 's' (in main)
+```
+
 <!-- test: read-on-let-array-ok -->
 Reading from a `let` array (non-mutating methods) should work fine.
 
