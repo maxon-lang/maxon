@@ -3294,16 +3294,33 @@ function checkArgTypes(project Project, func IrFunction, result ValueId, sig Fun
 		let paramType = paramTypeThroughCallInstance(project, func: func, subject: instanceSubject, paramType: try sig.paramTypes.get(i) otherwise panic("checkArgTypes: paramTypes.get OOB at {i} — slotCallArgs returned {argIds.count()} slots for a {sig.paramCount()}-parameter signature"))
 		let paramName = try sig.paramNames.get(i) otherwise panic("checkArgTypes: paramNames.get OOB at {i}")
 
-		// ⭐ THE RECEIVER ARGUMENT (`__self`, position 0 of an instance-method call) IS COMPATIBLE WITH ITS
-		// METHOD'S RECEIVER PARAMETER BY CONSTRUCTION — the callee was mangled FROM the receiver's own type
+		// ⛔⛔ **THE RECEIVER ARGUMENT (`__self`, position 0) IS JUDGED LIKE EVERY OTHER PARAMETER, AND THE
+		// EXEMPTION IT USED TO HAVE WAS A SILENT MEMORY-SAFETY HOLE.** The exemption's premise was that a
+		// receiver is *compatible by construction* — the callee was mangled FROM the receiver's own type
 		// (`dispatchMethodOnBase`), so a method declared on `Sizer` is only ever reached through a `Sizer`.
-		// The checks below assume the arg and param share a tagging: a generic INSTANCE receiver (P1.6-B1) is
-		// tagged `genericInstance` while its `__self` param is the base `structRef`, which they would read as
-		// a spurious mismatch. The receiver's correctness is the dispatch's, not this coercion check's.
-		if paramName.equals(SelfParamName) 'receiverArg'
-			continue
-		end 'receiverArg'
-
+		// **That is true of `a.bump()` and false of `Adder.bump(7)`**, where the author NAMED the type and
+		// the parser therefore built the call with no receiver at all (`ReceiverArg.none`): the first
+		// argument the author wrote lands in slot 0 because that is where an unlabelled argument goes, and
+		// slot 0 is `SelfParamName`. `parseQualifiedCall` believed arity refused that shape, which holds
+		// only while the counts differ — and they COINCIDE for every zero-parameter instance method called
+		// with one argument. MEASURED on the unchanged tree, all three COMPILED CLEAN and then faulted
+		// `0xC0000005` dereferencing an `int` as a record pointer: `String.byteLength(3)`,
+		// `Character.hash(3)`, and `Adder.bump(7)` on a plain user type.
+		//
+		// ⭐ **THE FORM ITSELF IS LEGAL AND IS NOT REFUSED.** `Adder.bump(a)` on a real `Adder` is that
+		// method call, and the runnable oracle COMPILES AND RUNS IT (exit 42, measured) — so what
+		// distinguishes the two is exactly what this check answers, the ARGUMENT'S TYPE, and nothing here
+		// needs to know which spelling the author used.
+		//
+		// ⚠ **WHAT THE EXEMPTION WAS PROTECTING IS `paramTypeThroughCallInstance`'s JOB, AND IT WAS ALREADY
+		// DOING IT ONE LINE ABOVE.** A generic INSTANCE receiver (P1.6-B1) is tagged `genericInstance` while
+		// the shared body's `__self` param is the base `structRef`, which a raw comparison would read as a
+		// spurious mismatch — but `paramType` above has ALREADY been resolved through the call's instance,
+		// and that substitution's `maybeSelf` arm maps precisely a base-named `structRef` onto the subject's
+		// instance. The receiver is the subject `callInstanceSubject` picks, so the parameter it fixes first
+		// is its own. `an-ordinary-method-call-through-a-generic-instance-is-unaffected` is the case that
+		// goes red if that stops being true.
+		//
 		// The two pre-erasure columns a DIRECT call's signature carries — the UNION/ENUM identity and the
 		// DECLARED SPELLING; see `checkOneArgType`.
 		let preErasedAggregate = try sig.paramAggregateNames.get(i) otherwise panic("checkArgTypes: paramAggregateNames.get OOB at {i} — a signature's param columns (names, types, aggregate names) are built in lockstep")
@@ -3452,8 +3469,13 @@ end 'maxonReturnTypesDenoteSame'
 // Rendering the label up front and passing it in cost a `String.from` plus an interpolation on EVERY
 // argument of EVERY call in the program — a per-argument allocation on a path that reports nothing almost
 // every time. That is why the label arrives as its two pieces.
+// ⚠ **THROUGH `displayParamName`, WHICH IS WHAT MAKES THE RECEIVER PRINTABLE.** `__self` is the IR's name
+// for parameter 0 and appears nowhere in the author's program; `self` is the keyword they wrote. This label
+// could not reach the receiver at all while `checkArgTypes` exempted it, so a bare `String.from` was
+// harmless — the moment the exemption went, `'__self'` would have been quoted at every one of them. It is
+// the same mapping E3019 already renders its receiver half through, asked here rather than restated.
 function argParamLabel(paramName ByteArray, position ParamCount) returns String
-	return "{position + 1}" if paramName.isEmpty() else quotedParamLabel(String.from(paramName))
+	return "{position + 1}" if paramName.isEmpty() else quotedParamLabel(displayParamName(paramName))
 end 'argParamLabel'
 
 // How a NAMED parameter is quoted in a diagnostic. ⭐ Exported because the parser tier renders the same

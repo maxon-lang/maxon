@@ -37026,14 +37026,25 @@ export type Parser
 	// function", reading the registry the real parse built. A check here would be a second opinion
 	// from the tolerant sweep, and the sweep must never own a veto (see `CalleeReturn.undeclared`).
 	//
-	// ⚠ **`Adder.add(5)` — AN INSTANCE METHOD NAMED STATICALLY — REACHES HERE, AND IS REJECTED BY
-	// ARITY RATHER THAN BY WHAT IT IS.** It carries no receiver, so its argument list is one short
-	// of the signature (whose parameter 0 is `SelfParamName`) and `validateCall` reports E3036. The
-	// program is refused, which is right, but it is refused for the wrong reason and the honest fix
-	// is a diagnostic that says an instance method needs a receiver — which no corpus case covers,
-	// so it is recorded rather than invented here. (The COUNTS that E3036 carries are inflated by
-	// the receiver, which is not this routine's doing and is not restated here — see the receiver
-	// prepend in `parseCallNamed`, the one place that causes it, for both callers.)
+	// ⛔⛔ **`Adder.bump(a)` — AN INSTANCE METHOD NAMED STATICALLY — REACHES HERE AND IS *NOT* REFUSED,
+	// AND THIS PARAGRAPH USED TO CLAIM IT WAS "REJECTED BY ARITY". THAT CLAIM WAS FALSE AND IT WAS
+	// COSTING AN ACCESS VIOLATION.** The call carries no receiver, so the argument list is one short of
+	// the signature (whose parameter 0 is `SelfParamName`) — but that is a refusal only WHEN THE COUNTS
+	// DIFFER, and they COINCIDE for every zero-parameter instance method called with one argument. The
+	// author's first argument then simply lands in slot 0, because that is where an unlabelled argument
+	// goes; `Adder.bump(a)` on a real `Adder` IS `a.bump()`, and the runnable oracle compiles and runs
+	// it (exit 42, measured), so the FORM is legal and refusing it here would refuse a working program.
+	//
+	// ⇒ What was missing was never a diagnostic about spelling: it was the ARGUMENT TYPE CHECK on that
+	// slot, which `SemanticCheck.checkArgTypes` exempted outright. `Adder.bump(7)` COMPILED CLEAN and
+	// dereferenced an `int` as a record pointer. The exemption is gone (see its header for the three
+	// measured faults), the receiver is judged like any other parameter, and E3005 now says
+	// `argument type mismatch for 'self': expected 'Adder', got 'int'` — the oracle's own sentence,
+	// which shv2 already spells for every other parameter. Nothing about it belongs in this routine.
+	//
+	// (The COUNTS that E3036 carries when the arities genuinely differ ARE inflated by the receiver,
+	// which is not this routine's doing and is not restated here — see the receiver prepend in
+	// `parseCallNamed`, the one place that causes it, for both callers.)
 	function parseQualifiedCall(func IrFunction, resultUsed bool) returns ValueId throws ParseError
 		// `Self.create(…)` reaches here as `Point.create(…)` — `consumeTypeBaseToken` resolved the keyword, so
 		// the callee mangling, the alias interceptions and the E3062 use hook below all see one spelling (D9).
