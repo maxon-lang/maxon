@@ -323,11 +323,22 @@ export let StrDecrefName = b"__str_decref"
 // ever spell a callee no module emits. The corpus bodies behind them reach `byteAt`, `setByte`,
 // `addressableBytes` and `__ManagedMemory.slice`, whose doors are all still shv2's.
 //
-// ⭐ **THE P1.8 SLICE E ENTRY POINT THAT REMAINS.** `__str_from_bytes(arr)` — `String.from(bytes)`
-// (`:119-121`), the one exported `String` static. It COPIES where the reference shares a
-// `__ManagedMemory`; see `buildStrFromBytes` for why shv2 cannot. It is `__`-prefixed compiler-internal (no
-// E3004, no signature slotting) and not `__mm_`-prefixed, so it declares its own transitive floor in
-// `closeStringMethodNeeds`.
+// ⭐⭐ **`__str_from_bytes(arr) -> String` — `__str_of_buffer`'s TWIN, TAKEN WHEN THE FLAG MUST BE SCANNED
+// RATHER THAN SUPPLIED.** It is `__`-prefixed compiler-internal (no E3004, no signature slotting) and not
+// `__mm_`-prefixed, so it declares its own transitive floor in `closeStringMethodNeeds`.
+//
+// ⛔ **IT IS NO LONGER `String.from(bytes)`'S BODY, AND THIS HEADER SAID SO UNTIL W55 — WHICH IS EXACTLY
+// THE LIFETIME OF THE CLAIM.** W17 listed `stdlib/String.maxon`, so `from(bytes)` is the corpus's own
+// declaration and W55 retired the static roster that intercepted it. What reaches this graph now is
+// `Parser.emitFusedWrapperLiteral`'s no-flag arm — `Character{managed: X}`, whose declaration carries no
+// `singleByteGraphemesFlag` field for a caller to pass — so it is LIVE and load-bearing (`c.clone()` over a
+// `Character` emits `x64.callDirect __str_from_bytes`, measured), just not for the member it was built for.
+// The flag-carrying arm, which is every corpus `String{…}`, goes to `__str_of_buffer`.
+//
+// ⚠ **BOTH COPY, WHICH IS WHY RETIRING THE STATIC MOVED NO OWNERSHIP.** The ARGUMENT for copying is stated
+// once, at `StrOfBufferName` — the view is representable since the P1.7 COW slice and is declined on
+// failure-mode grounds, not on impossibility. Do not restate it here and do not restate its retracted
+// predecessor ("shv2 CANNOT share"), which is what this header used to point at.
 export let StrFromBytesName = b"__str_from_bytes"
 
 // ⭐⭐ **`__str_of_buffer(srcRecord, singleByteGraphemes) -> String` — THE ENVELOPE COLLAPSE'S CONSTRUCTOR:
@@ -1148,18 +1159,25 @@ end 'buildStrClone'
 // `bytesEqual`/`findIn` — which these graphs were transcribed from. See the P1.8 Slice C grave at the head
 // of this file for why they could not be deleted one wave sooner.
 
-// ⭐ **`__str_from_bytes(arr) -> newStr` — `String.from(bytes)` (`stdlib/String.maxon:119-121`).** The
-// array's buffer holds exactly the UTF-8 bytes the String is to have, so the whole of the work is the
-// ASCII classification and the same fused-record build every other owned String is born through.
+// ⭐ **`__str_from_bytes(arr) -> newStr` — the fused-wrapper literal whose declaration carries NO flag
+// field to pass (`Character{managed: X}`); see the constant's header.** The argument's buffer holds exactly
+// the UTF-8 bytes the record is to have, so the whole of the work is the classification below and the same
+// fused-record build every other owned String is born through.
 //
-// ⚠ **IT COPIES WHERE THE REFERENCE SHARES, AND THE DIVERGENCE IS FORCED.** The reference builds
-// `String{managed: bytes.managed, …}` — a zero-copy view of the array's own backing memory, sound there
-// because a `__ManagedMemory` is refcounted and the two records share ownership of one block. shv2 has no
-// shared-ownership relationship between an `Array` record and a `String` record: each is an independent
-// box whose drop reclaims its own allocation, so a view would be a second reclaimer of one block (a
-// double free) or a reader of a block the array's `__arr_decref` has already returned. Copying makes the
-// result an ordinary owned inline String, which is what every producer in this file hands back and what
-// `__str_decref` already knows how to reclaim.
+// ⚠ **WHY IT COPIES IS STATED ONCE, AT `StrOfBufferName`, AND THE VERSION THAT USED TO BE HERE IS
+// RETRACTED.** This paragraph read *"shv2 has no shared-ownership relationship between an `Array` record
+// and a `String` record"*; `buildStrBytesView` established exactly that relationship at the P1.7 COW slice,
+// so the divergence is a CHOICE with a failure mode behind it, not a thing shv2 cannot do. Two headers
+// arguing one point is how one of them came to be false for a whole slice without anything noticing.
+//
+// ⚠ **AND THE PER-BYTE COST OF THE MEMBER THIS GRAPH USED TO SERVE MOVED WITH THE BODY — RECORDED, NOT
+// CURED** (W55, and the same ruling the `findIn`/`sliceBytes` note at the head of this file carries). The
+// corpus's `scanSingleByteGraphemes` (`stdlib/String.maxon:1044-1053`) asks `managed.byteAt(i)` — a
+// throwing, bounds-checked accessor lowering to a `__arr_byte_at` CALL — once per byte, where the loop
+// below walks the same bytes with an inline indexed load. shv2 has no inliner, so that is a real call per
+// byte for every `String.from(bytes)` and every `String.init(managed)` in a program. ⛔ **THE LADDER
+// CANNOT SEE IT AND A Δ0 FROM IT IS NOT EVIDENCE**: the generated scale corpus emits neither call, so every
+// column reads flat — the CORPUS blind spot, which the CPU column does not cure.
 function buildStrFromBytes(module StdModule)
 	var func = IrFunction.createFromStd(StrFromBytesName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
