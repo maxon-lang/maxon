@@ -3402,12 +3402,17 @@ end 'paramTypeThroughCallInstance'
 // returns …'`** — one type named twice, in two views, which is `paramTypeThroughCallInstance`'s own W25
 // measurement one tier down. The bootstrap runs that program and answers 6.
 //
-// ⚠ **THE PRE-ERASURE IDENTITY COLUMNS ARE CARRIED THROUGH UNCHANGED, AND THAT IS CORRECT RATHER THAN LAZY.**
-// They hold the names resolution DESTROYS — a boxed union/enum, a per-instance ranged alias — and
-// `FunctionShape.paramAggregateNames` is deliberately EMPTY for exactly the shapes this substitution moves (a
-// struct, a tuple, a nested instance keep their identity live in `paramTypes`). A type argument cannot turn a
-// position from one kind into the other: the substitution replaces a type parameter or an instance argument,
-// never the enum-ness of a slot.
+// ⚠ **THE PRE-ERASURE IDENTITY COLUMNS ARE CARRIED THROUGH UNCHANGED FOR EVERY SLOT BUT ONE, AND THAT
+// EXCEPTION IS F3's.** They hold the names resolution DESTROYS — a boxed union/enum, a per-instance ranged
+// alias — and `FunctionShape.paramAggregateNames` is deliberately EMPTY for exactly the shapes this
+// substitution used to move (a struct, a tuple, a nested instance keep their identity live in `paramTypes`).
+// This header used to close *"a type argument cannot turn a position from one kind into the other: the
+// substitution replaces a type parameter or an instance argument, never the enum-ness of a slot"*, and a bare
+// `T` slot is precisely where that stops being true — its identity column was captured at the PARSE, where
+// the slot was an opaque parameter with no identity at all, and the instance may bind it to an ENUM.
+// ⛔ MEASURED on `typealias Transform = function(Element) returns Element` at a `Holder with Shade`:
+// **`E3005 … expected 'fn(int) returns int', got 'fn(Shade) returns Shade'`** — a legal program refused,
+// because the arriving side carried `Shade` and the declared side carried the opaque slot's empty column.
 //
 // Returns the shape UNCHANGED — the same object — when nothing moved, the early-return contract every
 // substitution in this compiler keeps, so the overwhelmingly common non-generic call allocates nothing.
@@ -3422,29 +3427,121 @@ function functionShapeThroughCallInstance(project Project, func IrFunction, subj
 	var signatures = programSignaturesIn(project, asker: "functionShapeThroughCallInstance")
 	let gid = try func.valueNameIds.get(subject) otherwise panic("functionShapeThroughCallInstance: genericInstance value v{subject} of function '{String.from(func.name)}' has no recorded GenericInstanceId — the two type columns are minted in lockstep")
 	var substituted = MaxonTypeArray.create()
+	var identities = ByteArrayArray.create()
 	var moved = false
-	for paramType in shape.paramTypes 'eachParam'
-		let next = signatures.substituteThroughInstanceInterned(paramType, id: gid, interner: project.typeNames)
+	for i in 0 upto shape.paramTypes.count() 'eachParam'
+		let paramType = try shape.paramTypes.get(i) otherwise panic("functionShapeThroughCallInstance: paramTypes.get OOB at {i} — the count was just read from the same array")
+		let next = resolvedSlotThroughCallInstance(project, signatures: signatures, slotType: paramType, gid: gid)
 		if not maxonTypesDenoteSame(next, b: paramType) 'paramMoved'
 			moved = true
 		end 'paramMoved'
 		substituted.push(next)
+		identities.push(substitutedSlotIdentity(project, signatures: signatures, slotType: paramType, gid: gid, carried: shapeParamIdentity(shape, index: i)))
 	end 'eachParam'
 
-	let returnType = returnTypeThroughCallInstance(signatures, returnType: shape.returnType, gid: gid, typeNames: project.typeNames)
+	let returnType = returnTypeThroughCallInstance(project, signatures: signatures, returnType: shape.returnType, gid: gid)
 	if not moved and maxonReturnTypesDenoteSame(returnType, b: shape.returnType) 'theInstanceFixesNothingHere'
 		return shape
 	end 'theInstanceFixesNothingHere'
 
-	return FunctionShape.create(substituted, returnType: returnType, paramAggregateNames: shape.paramAggregateNames, returnAggregateName: shape.returnAggregateName)
+	return FunctionShape.create(substituted, returnType: returnType, paramAggregateNames: identities, returnAggregateName: returnSlotIdentityThroughCallInstance(project, signatures: signatures, shape: shape, gid: gid))
 end 'functionShapeThroughCallInstance'
+
+// ⭐⭐ **THE IDENTITY OF A SLOT THE INSTANCE JUST FILLED IN — `Parser.erasedAggregateNameOf`'s RULE stated for
+// this tier, and asked for the bare-`T` arm alone (F3).** Every other slot keeps the column the parse
+// captured: it was already concrete there, and recomputing it from the RESOLVED type would read `integer`
+// and throw a real `Shade` away.
+//
+// ⚠ **THE RULE IS "THE IDENTITY RESOLUTION DESTROYS", WHICH IS NOT "THE IDENTITY THE TYPE HAS".** A STRUCT
+// keeps its `structRef` through resolution and must answer EMPTY here (its name is read live off the type on
+// both sides); only what collapses to bare `integer` — a boxed union/enum, a per-instance ranged alias — has
+// a name that must be carried. That is why the gate is the RESOLVED tag while the answer comes from the
+// UNRESOLVED one, and why `aggregateNameFor` alone would be wrong here: it names a struct.
+//
+// ⚠ It CROSSES THE SLOT AGAIN rather than taking the caller's crossed type, and that is one extra call of
+// ONE function, not a second spelling of it: the caller holds the RESOLVED form, and the name this needs
+// exists only in the unresolved one. The crossing is `slotThroughCallInstance` either way, so the two cannot
+// come to disagree; and it runs on the bare-`T` arm alone, which is a handful of slots in a whole program.
+function substitutedSlotIdentity(project Project, signatures ProgramSignatures, slotType MaxonType, gid GenericInstanceId, carried ByteArray) returns ByteArray
+	if not slotIsBareTypeParameter(slotType) 'concreteAtTheParse'
+		return carried
+	end 'concreteAtTheParse'
+
+	let unresolved = slotThroughCallInstance(project, signatures: signatures, slotType: slotType, gid: gid)
+	if maxonTypeTag(resolveType(project, signatures: signatures, t: unresolved)) != ValueTypeTag.integer 'identitySurvivesInTheTypeItself'
+		return EmptySourceText
+	end 'identitySurvivesInTheTypeItself'
+
+	return aggregateNameFor(project, tag: maxonTypeTag(unresolved), nameId: typeNameIdOf(unresolved))
+end 'substitutedSlotIdentity'
+
+// The RETURN slot's half of the identity above — one name rather than a column, because a function type
+// returns exactly one thing. `void` carries no type and therefore no identity.
+function returnSlotIdentityThroughCallInstance(project Project, signatures ProgramSignatures, shape FunctionShape, gid GenericInstanceId) returns ByteArray
+	match shape.returnType 'declaredSlot'
+		void then return EmptySourceText
+		value(inner) then return substitutedSlotIdentity(project, signatures: signatures, slotType: inner, gid: gid, carried: shape.returnAggregateName)
+	end 'declaredSlot'
+end 'returnSlotIdentityThroughCallInstance'
+
+// ⭐ **IS THIS SHAPE SLOT THE BARE-`T` ARM? — the ONE question that decides BOTH halves of the substitution,
+// which is why it has one speller (F3).** It says whether the answer crosses an INTERNER
+// (`slotThroughCallInstance`) and whether the instance can give the slot a pre-erasure IDENTITY it did not
+// have when the alias was parsed (`substitutedSlotIdentity`). Those are two facts about one slot and they
+// must never be decided differently for it: a slot crossed as opaque but scored as concrete would compare a
+// project-space type against an index-space name, which is the pair of bugs both headers record.
+function slotIsBareTypeParameter(slotType MaxonType) returns bool
+	return maxonTypeTag(slotType) == ValueTypeTag.typeParameter
+end 'slotIsBareTypeParameter'
+
+// ⭐⭐ **ONE SLOT OF THAT SUBSTITUTION, CROSSED BACK INTO THIS PASS'S INTERNER — the first of the two steps
+// `Parser.slotTypeThroughReceiver` already takes one tier down, and the half this door was missing (F3).**
+// The substitution is asked in the INDEX's space and only the ANSWER crosses, which is that door's own rule;
+// what it adds is that a bare-`T` slot's answer is the instance's ARGUMENT, and that comes back in the WRONG
+// TABLE. `substitutedInstanceArg` answers in `ProgramSignatures.typeNames`, a different interner with its own
+// insertion order, so the id means whatever name happens to sit at that number here.
+//
+// ⛔ **MEASURED** on `typealias Zog = function(Element) returns Element` inside `extension Holder`, called at
+// a `Holder with Integer`: the refusal read **`expected 'fn(Holder.Zog) returns Holder.Zog'`** — the
+// substituted argument rendered as the ALIAS'S OWN NAME, because that name sat at the argument's index-space
+// id in the project table. The identical program with a CONCRETE parameter read `Integer`, which is the same
+// bug landing on a plausible name instead of an absurd one.
+//
+// ⚠ **GATED ON THE DECLARED SLOT, NOT ON THE ANSWER, for `slotTypeThroughReceiver`'s reason turned to this
+// door's shape.** The bare-`T` arm is the ONE arm of `substituteThroughInstanceInterned` that hands back an
+// index-space id — a tuple crossed as a NAME into the interner it was GIVEN, a nested instance answers a
+// whole-program giid, and every other slot is returned untouched — so adopting an answer that never left
+// would re-read a project id in the index's table, which is this same bug pointed the other way.
+//
+// The answer is deliberately still UNRESOLVED, because its two readers need it in that order: the TYPE wants
+// the erasure `resolveTypes` already performed on the arriving side (`resolvedSlotThroughCallInstance`), and
+// `substitutedSlotIdentity` wants the name that erasure destroys. One crossing, two readers.
+function slotThroughCallInstance(project Project, signatures ProgramSignatures, slotType MaxonType, gid GenericInstanceId) returns MaxonType
+	// ⚠ `var` for `functionShapeThroughCallInstance`'s reason — the substitution INTERNS what it produces.
+	var index = signatures
+	let substituted = index.substituteThroughInstanceInterned(slotType, id: gid, interner: project.typeNames)
+	if not slotIsBareTypeParameter(slotType) 'noIndexSpaceIdCrossedOut'
+		return substituted
+	end 'noIndexSpaceIdCrossedOut'
+
+	return index.adoptType(substituted, into: project.typeNames)
+end 'slotThroughCallInstance'
+
+// ⭐ **THE CROSSING'S SECOND STEP — the ERASURE, which is what makes the declared side comparable with the
+// arriving one at all.** A generic instance's type ARGUMENT is interned before the alias registries exist,
+// so `Integer` crosses back as a `named` LEAF while the arriving function's own parameter was erased to
+// `integer` by `resolveTypes`: one type, two spellings, and `resolvedTypesMatch` refuses them. Written once
+// rather than at the parameter loop and the return slot, which is where a pair like this comes apart.
+function resolvedSlotThroughCallInstance(project Project, signatures ProgramSignatures, slotType MaxonType, gid GenericInstanceId) returns MaxonType
+	return resolveType(project, signatures: signatures, t: slotThroughCallInstance(project, signatures: signatures, slotType: slotType, gid: gid))
+end 'resolvedSlotThroughCallInstance'
 
 // The RETURN slot of the substitution above — the `void`/`value` split, which a match arm's single statement
 // makes its own function exactly as `mappedArrayElementHint` is in the parser.
-function returnTypeThroughCallInstance(signatures ProgramSignatures, returnType MaxonReturnType, gid GenericInstanceId, typeNames TypeNameInterner) returns MaxonReturnType
+function returnTypeThroughCallInstance(project Project, signatures ProgramSignatures, returnType MaxonReturnType, gid GenericInstanceId) returns MaxonReturnType
 	match returnType 'returned'
 		void then break 'returned'
-		value(inner) then return MaxonReturnType.value(signatures.substituteThroughInstanceInterned(inner, id: gid, interner: typeNames))
+		value(inner) then return MaxonReturnType.value(resolvedSlotThroughCallInstance(project, signatures: signatures, slotType: inner, gid: gid))
 	end 'returned'
 
 	return returnType

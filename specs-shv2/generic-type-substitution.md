@@ -394,20 +394,7 @@ end 'main'
 42
 ```
 
-<!-- disabled-test: generic-type-conforming-to-Iterable -->
-<!-- function types over a TYPE PARAMETER (rung unassigned - reported by generic-substitution) — `stdlib/Interfaces.maxon:196` declares
-     `typealias ElementTransform = function(Element) returns Element`, and for a GENERIC conformer
-     `Element` binds to a bare type PARAMETER of the conformer. A function typealias's signature is
-     stored as interner-free `(tag, NAME)` pairs (`Project.FunctionTypeAlias` /
-     `FunctionAliasParam`), and a `typeParameter`'s payload is a W14 digest with no name — so
-     `Parser.requireNoEnclosingTypeParameter` refuses the alias and the extension body cannot be
-     parsed for the conformer at all. Representing it needs `Project.maxon` (the stored pair),
-     `TypeResolution.maxon` (`maxonTypeOfStoredTypeName`, `FunctionShape`) and
-     `SemanticCheck.maxon` (`functionShapesAgree` substituting through the receiver's instance).
-     The two other faults this case had — `for … in` refusing a `genericInstance` source, and
-     `extension Iterable`'s `typealias ElementArray = Array with Element` reporting
-     `E3011 Unknown type 'T'` five times — are FIXED by the generic-substitution rung and are what the case is waiting on
-     nothing else for. -->
+<!-- test: generic-type-conforming-to-Iterable -->
 ### A generic type conforming to `Iterable`
 ```maxon
 typealias Integer = int(i64.min to i64.max)

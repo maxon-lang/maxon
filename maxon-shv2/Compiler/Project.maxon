@@ -2376,6 +2376,11 @@ export type FunctionTypeAlias
 	export let name as ByteArray
 	export let returnTag as ValueTypeTag
 	export let returnTypeName as ByteArray
+	// The RETURN slot's half of `FunctionAliasParam.typeParamToken` — see there. `NoTypeParamId` for every
+	// tag but `typeParameter`, and NOT dropped on the SWEEP's copy the way `returnAggregateName` is: the
+	// token is a PURE digest of two source names (W14), which is exactly the property that lets the sweep
+	// and the real parse mint it identically without a registry.
+	export let returnTypeParamToken as TypeParamId
 	// The RETURN slot's half of `FunctionAliasParam.aggregateName` — see there. EMPTY for a `void` return and
 	// for every type whose identity survives resolution, and EMPTY on the SWEEP's copy of an alias, which
 	// cannot classify a name the registry it is still building has not reached (`Parser.readFunctionTypeAlias`
@@ -2399,8 +2404,8 @@ export type FunctionTypeAlias
 	// against a declared function's display built the same way.
 	export let display as ByteArray
 
-	export static function create(name ByteArray, returnTag ValueTypeTag, returnTypeName ByteArray, returnAggregateName ByteArray, display ByteArray, paramTypes FunctionAliasParamArray) returns FunctionTypeAlias
-		return Self{name: name, returnTag: returnTag, returnTypeName: returnTypeName, returnAggregateName: returnAggregateName, display: display, paramTypes: paramTypes}
+	export static function create(name ByteArray, returnTag ValueTypeTag, returnTypeName ByteArray, returnTypeParamToken TypeParamId, returnAggregateName ByteArray, display ByteArray, paramTypes FunctionAliasParamArray) returns FunctionTypeAlias
+		return Self{name: name, returnTag: returnTag, returnTypeName: returnTypeName, returnTypeParamToken: returnTypeParamToken, returnAggregateName: returnAggregateName, display: display, paramTypes: paramTypes}
 	end 'create'
 
 	// ⭐⭐ **THE SAME DECLARATION UNDER ITS ENCLOSING TYPE'S NAME — `Config.FnTypeAlias1` (W49b).** A nested
@@ -2413,7 +2418,7 @@ export type FunctionTypeAlias
 	// between the two copies of ONE fold. A rebuild through `create` with anything defaulted would make the
 	// qualified copy answer a different shape from the bare one for the same written declaration.
 	export function scopedToEnclosingType(qualifiedName ByteArray) returns FunctionTypeAlias
-		return Self{name: qualifiedName, returnTag: self.returnTag, returnTypeName: self.returnTypeName, returnAggregateName: self.returnAggregateName, display: self.display, paramTypes: self.paramTypes}
+		return Self{name: qualifiedName, returnTag: self.returnTag, returnTypeName: self.returnTypeName, returnTypeParamToken: self.returnTypeParamToken, returnAggregateName: self.returnAggregateName, display: self.display, paramTypes: self.paramTypes}
 	end 'scopedToEnclosingType'
 end 'FunctionTypeAlias'
 
@@ -2438,9 +2443,31 @@ export type FunctionAliasParam
 	// why sharing the EXTRACTION rather than loosening the comparison is what keeps the two tiers from
 	// classifying one parameter two ways.
 	export let aggregateName as ByteArray
+	// ⭐⭐ **THE IDENTITY OF A TYPE-PARAMETER PARAMETER — `Element` in `typealias ElementTransform =
+	// function(Element) returns Element`, written inside a generic type's body (F3).** `NoTypeParamId` for
+	// every other tag, and read by nobody under one: the tag is what says whether this column means
+	// anything, exactly as it says whether `typeName` does.
+	//
+	// ⭐ **IT IS A THIRD COLUMN RATHER THAN A NAME IN `typeName`, AND THAT IS WHAT `typeName` MEANS.** That
+	// slot is "the name a reader's interner must re-intern to rebuild the type", and a type parameter has
+	// none: its id is the W14 DIGEST of `(declaring type name, parameter name)`, minted by
+	// `ProgramSignatures.typeParamTokenFor` and never looked up. Storing `Element` there would make every
+	// reader intern a name that denotes no type and then rebuild `named("Element")` from it.
+	//
+	// ⛔ **THE ALTERNATIVE WAS THE SILENT WRONG ANSWER THIS COLUMN EXISTS TO CLOSE.** `Parser.functionAliasTypeName`
+	// has no name to give for a `typeParameter` and still yields the EMPTY STRING (see its `typeParameter`
+	// arm) — so until F3 the whole FORM was refused at the declaration, the alternative being an alias that
+	// carried an empty declared parameter type which every later reader took at face value. That refusal
+	// cost `stdlib/Interfaces.maxon`'s `extension Iterable` every GENERIC conformer, `Array` included, which
+	// is what makes the identity worth a column of its own rather than a diagnostic.
+	//
+	// ⚠ It needs NO REMAP and rides the alias fold exactly as the names beside it do — a digest of two
+	// source spellings is the same number in every file that computes it, which is precisely the property
+	// W14 chose it for.
+	export let typeParamToken as TypeParamId
 
-	export static function create(tag ValueTypeTag, typeName ByteArray, aggregateName ByteArray) returns FunctionAliasParam
-		return Self{tag: tag, typeName: typeName, aggregateName: aggregateName}
+	export static function create(tag ValueTypeTag, typeName ByteArray, typeParamToken TypeParamId, aggregateName ByteArray) returns FunctionAliasParam
+		return Self{tag: tag, typeName: typeName, typeParamToken: typeParamToken, aggregateName: aggregateName}
 	end 'create'
 end 'FunctionAliasParam'
 

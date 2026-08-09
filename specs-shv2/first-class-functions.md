@@ -497,8 +497,7 @@ end 'main'
 10
 ```
 
-<!-- disabled-test: first-class-function.cross-file-extension-typealias-param -->
-<!-- P1.6 (generics: Sorter with Number) -->
+<!-- test: first-class-function.cross-file-extension-typealias-param -->
 A function-typed parameter must work even when its typealias is declared
 inside an `extension` block in a SEPARATE file that the loader hasn't reached
 yet. The stdlib loader walks `stdlib/` in whatever order the OS returns from
@@ -565,7 +564,292 @@ end 'main'
 0
 ```
 
+<!-- test: first-class-function.type-extension-alias-over-a-type-parameter-at-two-instantiations -->
+The case above proves ONE instantiation, and one instantiation cannot tell an alias that is genuinely
+per-instantiation from one the compiler resolved against whichever instantiation it happened to meet first.
+`Transform` is `function(Element) returns Element` and `Predicate` is `function(Element) returns bool`, both
+written ONCE on `type Holder uses Element` — so `Holder with Integer` needs `fn(int) returns int`,
+`Holder with bool` needs `fn(bool) returns bool` and `Holder with String` needs `fn(String) returns bool`,
+out of two written declarations. The three differ in their parameter TAG, not merely in a range, so an alias
+that collapsed to a single signature could not accept all three; and every answer is COMPUTED, so one that
+collapsed silently would print the wrong bytes rather than merely compiling.
+```maxon
+typealias Integer = int(i64.min to i64.max)
 
+type Holder uses Element
+	export var value as Element
+
+	export static function create(v Element) returns Self
+		return Self{value: v}
+	end 'create'
+end 'Holder'
+
+export extension Holder
+	typealias Transform = function(Element) returns Element
+	typealias Predicate = function(Element) returns bool
+
+	export function apply(f Transform) returns Element
+		return f(self.value)
+	end 'apply'
+
+	export function check(p Predicate) returns bool
+		return p(self.value)
+	end 'check'
+end 'Holder'
+
+typealias IntHolder = Holder with Integer
+typealias FlagHolder = Holder with bool
+typealias TextHolder = Holder with String
+
+function twice(n Integer) returns Integer
+	return n * 2
+end 'twice'
+
+function flip(b bool) returns bool
+	return not b
+end 'flip'
+
+function isBig(n Integer) returns bool
+	return n > 10
+end 'isBig'
+
+function isLoud(s String) returns bool
+	return s.count() > 3
+end 'isLoud'
+
+function main() returns ExitCode
+	let n = IntHolder.create(21)
+	let g = FlagHolder.create(false)
+	let t = TextHolder.create("hi")
+	let doubled = n.apply(twice)
+	let flipped = g.apply(flip)
+	print("{doubled} {flipped} {n.check(isBig)} {t.check(isLoud)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+42 true true false
+```
+
+<!-- test: first-class-function.alias-over-a-type-parameter-bound-to-an-enum -->
+An ENUM type argument is the one binding that turns a slot with NO pre-erasure identity into one that HAS
+one: `Element` carries none where the alias is written, `Shade` erases to a bare `int` at resolution, and
+what tells one erased `int` from another is the identity column beside it. The declared side's column was
+captured at the parse, where the slot was still opaque — so a substitution that moves the TYPE and leaves
+the column behind reports `expected 'fn(int) returns int', got 'fn(Shade) returns Shade'` and refuses this
+program.
+```maxon
+enum Shade
+	light
+	dark
+end 'Shade'
+
+type Holder uses Element
+	export var value as Element
+
+	export static function create(v Element) returns Self
+		return Self{value: v}
+	end 'create'
+end 'Holder'
+
+export extension Holder
+	typealias Transform = function(Element) returns Element
+
+	export function apply(f Transform) returns Element
+		return f(self.value)
+	end 'apply'
+end 'Holder'
+
+typealias ShadeHolder = Holder with Shade
+
+function invert(s Shade) returns Shade
+	if s == Shade.light 'wasLight'
+		return Shade.dark
+	end 'wasLight'
+	return Shade.light
+end 'invert'
+
+function main() returns ExitCode
+	let h = ShadeHolder.create(Shade.light)
+	let flipped = h.apply(invert)
+	if flipped == Shade.dark 'ok'
+		print("dark\n")
+	end 'ok'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+dark
+```
+
+<!-- test: first-class-function.interface-extension-alias-over-an-associated-type-at-two-instantiations -->
+The same alias reached through an INTERFACE extension, which is the shape `stdlib/Interfaces.maxon`'s
+`extension Iterable` wears: `ItemPredicate` names the interface's ASSOCIATED type `Item`, and the conformer
+binds that associated type to its OWN type parameter (`implements Container with Element`). Keying the
+alias per CONFORMER — which the extension fold already does — is therefore not enough on its own, because
+one conformer still spans every instantiation of itself, and here the two instantiations do not even share a
+parameter tag.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Container uses Item
+	function only() returns Item
+end 'Container'
+
+extension Container
+	typealias ItemPredicate = function(Item) returns bool
+
+	export function checkOnly(p ItemPredicate) returns bool
+		return p(self.only())
+	end 'checkOnly'
+end 'Container'
+
+type Bag uses Element implements Container with Element
+	export var value as Element
+
+	export static function create(v Element) returns Self
+		return Self{value: v}
+	end 'create'
+
+	export function only() returns Element
+		return self.value
+	end 'only'
+end 'Bag'
+
+typealias IntBag = Bag with Integer
+typealias TextBag = Bag with String
+
+function isBig(n Integer) returns bool
+	return n > 10
+end 'isBig'
+
+function isLoud(s String) returns bool
+	return s.count() > 3
+end 'isLoud'
+
+function main() returns ExitCode
+	let n = IntBag.create(21)
+	let t = TextBag.create("hi")
+	print("{n.checkOnly(isBig)} {t.checkOnly(isLoud)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+true false
+```
+
+<!-- test: first-class-function.error.alias-over-a-type-parameter-named-outside-an-instantiation -->
+The over-acceptance guard, and the one thing about this alias that stays unrepresentable. A nested
+`typealias` is published under its BARE name as well as under `<Type>.<member>`, so `Transform` can be
+written at FILE SCOPE — where there is no receiver, no instantiation and therefore nothing to bind `Element`
+to. The declared place keeps the opaque parameter it was written with and the door refuses the concrete
+function that arrives at it: the alias is admitted where an instance can say what `T` is, and nowhere else.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Holder uses Element
+	export var value as Element
+
+	export static function create(v Element) returns Self
+		return Self{value: v}
+	end 'create'
+end 'Holder'
+
+export extension Holder
+	typealias Transform = function(Element) returns Element
+
+	export function apply(f Transform) returns Element
+		return f(self.value)
+	end 'apply'
+end 'Holder'
+
+typealias IntHolder = Holder with Integer
+
+function twice(n Integer) returns Integer
+	return n * 2
+end 'twice'
+
+function callAtFileScope(f Transform) returns Integer
+	return f(21)
+end 'callAtFileScope'
+
+function main() returns ExitCode
+	let h = IntHolder.create(4)
+	let viaMethod = h.apply(twice)
+	let viaFileScope = callAtFileScope(twice)
+	print("{viaMethod} {viaFileScope}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:33:21: argument type mismatch for 'f': expected 'fn(type parameter) returns type parameter', got 'fn(int) returns int'
+```
+
+<!-- disabled-test: first-class-function.alias-over-a-type-parameter-returning-a-MANAGED-element -->
+<!-- BLOCKED by the OPAQUE-OWNED-RETURN slice (P1.7 slice 3b-vi-a), NOT by the function alias. A `returns
+Element` boundary hands the caller a BORROW — the shared body cannot classify `T`, so it emits no retain,
+and `Parser.retypeOpaqueMethodResult`/`coOwnSubstitutedCallResult` make the CALLER take its own reference.
+An OWNED managed value crossing that boundary is therefore never released: `shout`'s `+1` String leaks
+(exit 101). It is NOT this alias's doing and reproduces with no function alias anywhere in the program — a
+plain `function remade() returns Element / return fresh()` on `Holder with String` exits 101 on the merge
+base too. `Parser.emitOwnedValueReturn` already refuses ONE provenance of this (an element `pop`ped out of
+an opaque array) and its own comment defers the general case. Enable when that slice lands; the sibling
+cases above cover every element type the boundary can carry today, String INCLUDED (as a borrowed argument
+at `Predicate`). -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Holder uses Element
+	export var value as Element
+
+	export static function create(v Element) returns Self
+		return Self{value: v}
+	end 'create'
+end 'Holder'
+
+export extension Holder
+	typealias Transform = function(Element) returns Element
+
+	export function apply(f Transform) returns Element
+		return f(self.value)
+	end 'apply'
+end 'Holder'
+
+typealias IntHolder = Holder with Integer
+typealias TextHolder = Holder with String
+
+function twice(n Integer) returns Integer
+	return n * 2
+end 'twice'
+
+function shout(s String) returns String
+	return "{s}!"
+end 'shout'
+
+function main() returns ExitCode
+	let n = IntHolder.create(21)
+	let t = TextHolder.create("hi")
+	let doubled = n.apply(twice)
+	let loud = t.apply(shout)
+	print("{doubled} {loud}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+42 hi!
+```
 
 <!-- test: first-class-function.field-call -->
 A function stored in a struct field is called through the field. The field holds a

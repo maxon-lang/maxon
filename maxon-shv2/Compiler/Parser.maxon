@@ -3935,8 +3935,15 @@ let HeapAnnotationName = b"heap"
 // Does `kind` open a DECLARATION a visibility modifier can precede? The complete list, in one place: it is
 // what makes `module` recognizable without reserving the word, and a keyword left out of it would make
 // `module <thatKeyword>` silently parse as an expression instead of as a modified declaration.
+//
+// ⛔ **`extension` WAS LEFT OUT, WHICH IS EXACTLY THE FAILURE THE SENTENCE ABOVE DESCRIBES.** `export
+// extension Sorter` parsed (the `export` is a real lexer keyword and needs no look-ahead) while `module
+// extension Sorter` reported **E2001 `Expected function declaration, got 'module'`** at the file's first
+// column — `dispatchTopLevel` had already declined to consume the modifier, so the `extension` it would
+// have dispatched on was never reached. Found by `first-class-functions/
+// first-class-function.cross-file-extension-typealias-param`, whose declaring file writes exactly that.
 function declarationOpensAt(kind TokenKind) returns bool
-	return kind == TokenKind.function or kind == TokenKind.type or kind == TokenKind.enum or kind == TokenKind.union or kind == TokenKind.interface or kind == TokenKind.typealias or kind == TokenKind.let or kind == TokenKind.var or kind == TokenKind.static
+	return kind == TokenKind.function or kind == TokenKind.type or kind == TokenKind.enum or kind == TokenKind.union or kind == TokenKind.interface or kind == TokenKind.extension or kind == TokenKind.typealias or kind == TokenKind.let or kind == TokenKind.var or kind == TokenKind.static
 end 'declarationOpensAt'
 
 // ⭐ **THE CORPUS'S NAME FOR SLOT@40, READ BACK RATHER THAN INVENTED** (`stdlib/String.maxon:86`). It is
@@ -14560,9 +14567,8 @@ export type Parser
 					// This is the ONLY place a function type's parameter list is parsed — an inline `function(...)` in a
 					// parameter position is E2010 — so one call site covers the position.
 					try self.requireStorableDeclaredType(paramType, position: DeclaredStoragePosition.functionTypeParameter, line: paramAnchor.line, column: paramAnchor.column)
-					try self.requireNoEnclosingTypeParameter(paramType, aliasName: nameTok.value, line: paramAnchor.line, column: paramAnchor.column)
 					paramTypes.push(paramType)
-					declaredParams.push(FunctionAliasParam.create(maxonTypeTag(paramType), typeName: self.functionAliasTypeName(paramType), aggregateName: self.erasedAggregateNameOf(paramType)))
+					declaredParams.push(FunctionAliasParam.create(maxonTypeTag(paramType), typeName: self.functionAliasTypeName(paramType), typeParamToken: functionAliasTypeParamToken(paramType), aggregateName: self.erasedAggregateNameOf(paramType)))
 				end 'collectParam'
 				if not self.at(TokenKind.comma) 'endParams'
 					break
@@ -14575,6 +14581,7 @@ export type Parser
 
 		var returnTag = ValueTypeTag.void
 		var returnTypeName = EmptySourceText
+		var returnTypeParamToken = NoTypeParamId
 		var returnAggregateName = EmptySourceText
 		var returnForDisplay = MaxonReturnType.void
 		if self.at(TokenKind.returns) 'hasReturn'
@@ -14586,15 +14593,18 @@ export type Parser
 				// value cannot read it (`callIndirect` declares one result). Gated on `recordSignature`
 				// exactly as the parameter half above is: the sweep may not veto.
 				try self.requireStorableDeclaredType(returnType, position: DeclaredStoragePosition.functionTypeReturnType, line: returnsTok.line, column: returnsTok.column)
-				try self.requireNoEnclosingTypeParameter(returnType, aliasName: nameTok.value, line: returnsTok.line, column: returnsTok.column)
-				// ⚠ Inside the gate with the parameter half, and NOT beside the two unconditional lines below,
-				// because it is the one fact of the three the sweep cannot read identically: `erasedAggregateNameOf`
+				// ⚠ Inside the gate with the parameter half, and NOT beside the four unconditional lines below,
+				// because it is the one fact of the four the sweep cannot read identically: `erasedAggregateNameOf`
 				// classifies through `self.signatures`, the registry the sweep is still filling. The sweep's copy
 				// of an alias carries the return TAG and no identity, which is exactly what it can honestly say.
 				returnAggregateName = self.erasedAggregateNameOf(returnType)
 			end 'realParse'
 			returnTag = maxonTypeTag(returnType)
 			returnTypeName = self.functionAliasTypeName(returnType)
+			// ⭐ UNCONDITIONAL, unlike the aggregate name above, and that is the W14 digest's whole property: the
+			// token is a pure function of two SOURCE SPELLINGS (`ProgramSignatures.typeParamTokenFor`), so the
+			// tolerant sweep mints the identical one without consulting the registry it is still building.
+			returnTypeParamToken = functionAliasTypeParamToken(returnType)
 			returnForDisplay = MaxonReturnType.value(returnType)
 		end 'hasReturn'
 
@@ -14602,7 +14612,7 @@ export type Parser
 		if recordSignature 'display'
 			display = formatFnTypeDisplay(paramTypes, returnType: returnForDisplay, typeNames: self.artifact.typeNames).toByteArray()
 		end 'display'
-		return FunctionTypeAlias.create(nameTok.value, returnTag: returnTag, returnTypeName: returnTypeName, returnAggregateName: returnAggregateName, display: display, paramTypes: declaredParams)
+		return FunctionTypeAlias.create(nameTok.value, returnTag: returnTag, returnTypeName: returnTypeName, returnTypeParamToken: returnTypeParamToken, returnAggregateName: returnAggregateName, display: display, paramTypes: declaredParams)
 	end 'readFunctionTypeAlias'
 
 	// One parameter of a function-type signature — an optional NAME followed by its type, or a bare type,
@@ -14624,27 +14634,6 @@ export type Parser
 		return k == TokenKind.identifier or k == TokenKind.int or k == TokenKind.bool or k == TokenKind.float or k == TokenKind.selfType
 	end 'peekStartsType'
 
-	// ⭐ **A FUNCTION ALIAS MAY NOT NAME AN ENCLOSING TYPE PARAMETER, and the reason is the alias's IDENTITY.**
-	// A function alias resolves to `MaxonType.function(<the alias NAME>)` — ONE type whole-program, carrying
-	// ONE stored signature — while `T` denotes a different type in every instantiation of the enclosing
-	// generic. `typealias Fn = function(T) returns T` inside `type Container uses T` therefore has no single
-	// signature to store, and it would not fail loudly on its own: `functionAliasTypeName` has no
-	// re-internable NAME for a `typeParameter` and yields the empty string, which the alias would carry as its
-	// declared parameter type and every later reader would take at face value.
-	//
-	// ⚠ **THE POSITION IS REACHABLE ONLY BECAUSE A NESTED FUNCTION ALIAS IS**: `parseTypeReference` mints a
-	// `typeParameter` only inside a type's own body, so before the nested form was admitted this could not
-	// fire, and `functionAliasTypeName`'s `typeParameter` arm says as much ("not reachable in the trivial
-	// slice"). The refusal lands with the door that opened it. It is asked of BOTH halves of the signature,
-	// beside `requireStorableDeclaredType` and under its `recordSignature` gate, for that gate's reason.
-	function requireNoEnclosingTypeParameter(declared MaxonType, aliasName ByteArray, line LineNumber, column ColumnNumber) throws ParseError
-		if maxonTypeTag(declared) != ValueTypeTag.typeParameter 'notATypeParameter'
-			return
-		end 'notATypeParameter'
-
-		throw ParseError.unsupported("function typealias '{String.from(aliasName)}' names a type parameter of the enclosing type — a function alias's identity is its NAME whole-program, so its signature cannot vary per instantiation; declare it at file scope over a concrete type", line: line, column: column)
-	end 'requireNoEnclosingTypeParameter'
-
 	// The interned NAME behind one type in a function alias's declared signature — a PARAMETER's or the
 	// RETURN's — stored so the type can be re-interned into any reader's own interner (see
 	// FunctionTypeAlias). A primitive (`bool`/`int`/`float`/`ExitCode`/`void`) carries no name and yields the
@@ -14660,8 +14649,10 @@ export type Parser
 			string gives EmptySourceText
 			// A type parameter / generic instance carries no re-internable NAME (its id is a W14 TOKEN — a
 			// digest of `(declaring type, parameter)` — / a GenericInstanceId, P1.6-A), so like a primitive
-			// it yields the empty string. A function ALIAS
-			// naming one is not reachable in the trivial slice — this is exhaustiveness insurance.
+			// it yields the empty string. ⭐ For a TYPE PARAMETER that is not the end of the story and used to
+			// be: the identity travels in its own column instead (`FunctionAliasParam.typeParamToken`, filled by
+			// `TypeResolution.functionAliasTypeParamToken`), because a digest needs no interner — so it belongs
+			// in neither the name slot nor, as it did until F3, a refusal of the whole declaration.
 			typeParameter gives EmptySourceText
 			genericInstance gives EmptySourceText
 			// A Character is a builtin with no interned name, exactly like `string` above.
@@ -52354,7 +52345,7 @@ export type Parser
 		end 'voidReturn'
 
 		let nameId = UnnamedTypeId if alias.returnTypeName.isEmpty() else self.artifact.typeNames.intern(alias.returnTypeName)
-		return MaxonReturnType.value(maxonTypeOfStoredTypeName(alias.returnTag, name: alias.returnTypeName, nameId: nameId))
+		return MaxonReturnType.value(maxonTypeOfStoredTypeName(alias.returnTag, name: alias.returnTypeName, nameId: nameId, typeParamToken: alias.returnTypeParamToken))
 	end 'functionAliasReturnType'
 
 	// Parse an integer literal token into a `literal` op, and return the value it defines.

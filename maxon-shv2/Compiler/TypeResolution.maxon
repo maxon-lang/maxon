@@ -172,9 +172,36 @@ end 'builtinTypeNameTag'
 // syntactically; a `named` tag is the only one that still carries a NAME, so it is the only one asked
 // whether that name is a builtin whose own tag carries a width. `nameId` is the caller's interner's id for
 // the same name, which is what keeps the two interners' rebuilds one function rather than two.
-export function maxonTypeOfStoredTypeName(tag ValueTypeTag, name ByteArray, nameId TypeNameId) returns MaxonType
+//
+// ⭐ **A `typeParameter` SLOT IS THE ONE THE INTERNER CANNOT ANSWER FOR, AND IT IS ANSWERED HERE RATHER
+// THAN BY EITHER CALLER (F3).** Its id column is the W14 DIGEST of `(declaring type, parameter name)` —
+// not an interner id at all — so it is carried beside the name (`FunctionAliasParam.typeParamToken`) and
+// substituted for `nameId` here. Doing it in this one place is what keeps the property the header above
+// claims: the two interners' rebuilds stay one function, and neither caller has to know that one arm of
+// the union is not about interning.
+export function maxonTypeOfStoredTypeName(tag ValueTypeTag, name ByteArray, nameId TypeNameId, typeParamToken TypeParamId) returns MaxonType
+	if tag == ValueTypeTag.typeParameter 'anOpaqueParameterOfTheDeclaringType'
+		return MaxonType.typeParameter(typeParamToken)
+	end 'anOpaqueParameterOfTheDeclaringType'
+
 	return maxonTypeOfTag(tag if tag != ValueTypeTag.named else builtinTypeNameTag(name), nameId: nameId)
 end 'maxonTypeOfStoredTypeName'
+
+// ⭐ **THE W14 TOKEN ONE SLOT OF A FUNCTION ALIAS'S SIGNATURE STORES — the mint that pairs with the rebuild
+// above (F3).** `NoTypeParamId` for every tag but `typeParameter`, whose payload IS the token
+// `Parser.parseTypeReference` already minted against the enclosing type's `uses` list, so this reads an
+// identity rather than deriving a second one.
+//
+// ⚠ It takes the whole `MaxonType` rather than a tag plus an id because the pairing of the two is exactly
+// what must not be re-spelled: reading the id column of a NON-type-parameter arm would file that arm's
+// interner id as a digest, which is the shape W14 exists to have removed.
+export function functionAliasTypeParamToken(declared MaxonType) returns TypeParamId
+	if maxonTypeTag(declared) != ValueTypeTag.typeParameter 'notAnOpaqueParameter'
+		return NoTypeParamId
+	end 'notAnOpaqueParameter'
+
+	return typeNameIdOf(declared)
+end 'functionAliasTypeParamToken'
 
 // `denotedNamedType`'s "this name is in none of the sources" answer. Payload-free — the caller
 // already holds the name it asked about — so it is a scalar and the throw allocates nothing on a
@@ -345,7 +372,7 @@ end 'resolveFunctionAliasShapes'
 // own `functionAliasReturnType`, which does the identical rebuild against the FILE's interner — the storage
 // convention is one, so the rebuild is `maxonTypeOfStoredTypeName` and these two only supply the interner.
 function functionAliasParamType(project Project, param FunctionAliasParam) returns MaxonType
-	return maxonTypeOfStoredTypeName(param.tag, name: param.typeName, nameId: functionAliasNameId(project, typeName: param.typeName))
+	return maxonTypeOfStoredTypeName(param.tag, name: param.typeName, nameId: functionAliasNameId(project, typeName: param.typeName), typeParamToken: param.typeParamToken)
 end 'functionAliasParamType'
 
 // Rebuild a function alias's declared RETURN type from its interner-free storage. `void` means the function
@@ -354,7 +381,7 @@ function functionAliasReturnType(project Project, alias FunctionTypeAlias) retur
 	if alias.returnTag == ValueTypeTag.void 'voidReturn'
 		return MaxonReturnType.void
 	end 'voidReturn'
-	return MaxonReturnType.value(maxonTypeOfStoredTypeName(alias.returnTag, name: alias.returnTypeName, nameId: functionAliasNameId(project, typeName: alias.returnTypeName)))
+	return MaxonReturnType.value(maxonTypeOfStoredTypeName(alias.returnTag, name: alias.returnTypeName, nameId: functionAliasNameId(project, typeName: alias.returnTypeName), typeParamToken: alias.returnTypeParamToken))
 end 'functionAliasReturnType'
 
 // The project-interner id behind one stored type NAME — `UnnamedTypeId` for a primitive, which carries none
@@ -765,7 +792,13 @@ function resolveReturnType(project Project, signatures ProgramSignatures, ret Ma
 	end 'r'
 end 'resolveReturnType'
 
-function resolveType(project Project, signatures ProgramSignatures, t MaxonType) returns MaxonType
+// ⚠ EXPORTED for `SemanticCheck.resolvedSlotThroughCallInstance` (F3), the one door outside this pass that
+// asks it. A function shape SUBSTITUTED at a call site holds one slot this pass never saw — the instance's
+// own type ARGUMENT, interned before the alias registries existed and so still a `named` LEAF — and it must
+// be erased exactly as this pass erased every other slot of the shapes being compared. A second erasure
+// written there would be a second answer to "what does this name denote", which is the disagreement this
+// file's header is about.
+export function resolveType(project Project, signatures ProgramSignatures, t MaxonType) returns MaxonType
 	match t 'r'
 		boolean then return t
 		integer then return t
