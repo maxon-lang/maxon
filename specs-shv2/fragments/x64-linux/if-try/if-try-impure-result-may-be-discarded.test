@@ -1,0 +1,194 @@
+// Test: if-try-impure-result-may-be-discarded
+
+typealias Integer = int(i64.min to i64.max)
+
+enum MyError implements Error
+	failed
+end 'MyError'
+
+var calls = 0 as Integer
+
+function impureFail(succeed bool) returns Integer throws MyError
+	calls = calls + 1
+	if not succeed 'check'
+		throw MyError.failed
+	end 'check'
+	return 42
+end 'impureFail'
+
+function main() returns ExitCode
+	var taken = 0
+	if let _ = try impureFail(true) 'ok'
+		taken = taken + 1
+	end 'ok'
+	if let _ = try impureFail(false) 'bad'
+		taken = taken + 10
+	end 'bad'
+	print("{taken} {calls}\n")
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __data_calls@0 = i64 0
+  __slab_cursor@8 = i64 0
+  __slab_end@16 = i64 0
+  __mm_alloc_count@24 = i64 0
+}
+
+func @impureFail {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.leaRegGlobal rax, __data_calls
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.leaRegRegImm32 rax, rax, 1
+    x64.leaRegGlobal rdx, __data_calls
+    x64.storeBaseDispReg.word64 [rdx + 0], rax
+    x64.xorRegImm32 rcx, rcx, 1
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc notEqual, check
+    x64.jmp ifcont
+  check:
+    x64.movRegImm32 rax, 0
+    x64.leaRegRegImm32 r10, rax, 1
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 42
+    x64.movRegImm32 r10, 0
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 88
+    x64.movRegImm32 rbx, 0
+    x64.movRegImm32 rcx, 1
+    x64.callDirect impureFail
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, ok
+    x64.jmp ifelse
+  ok:
+    x64.leaRegRegImm32 rbx, rbx, 1
+    x64.jmp ifcont
+  ifelse:
+    x64.jmp ifcont
+  ifcont:
+    x64.movRegImm32 rcx, 0
+    x64.callDirect impureFail
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, bad
+    x64.jmp ifelse
+  bad:
+    x64.leaRegRegImm32 rbx, rbx, 10
+    x64.jmp ifcont
+  ifelse:
+    x64.jmp ifcont
+  ifcont:
+    x64.movRegImm32 rcx, 21
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r12, r8
+    x64.storeSlotReg slot0, r12
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
+    x64.callDirect __int_to_string
+    x64.movRegReg rbx, r8
+    x64.leaRegRdata rax, [rip + __str_rec_1]
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.storeSlotReg slot6, rcx
+    x64.loadRegBaseDisp.word64 r13, [rax + 8]
+    x64.leaRegGlobal rax, __data_calls
+    x64.loadRegBaseDisp.word64 r14, [rax + 0]
+    x64.movRegImm32 rcx, 21
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r15, r8
+    x64.movRegReg rcx, r14
+    x64.movRegReg rdx, r15
+    x64.callDirect __int_to_string
+    x64.storeSlotReg slot5, r8
+    x64.leaRegRdata rax, [rip + __str_rec_3]
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.storeSlotReg slot4, rcx
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+    x64.storeSlotReg slot3, rax
+    x64.leaRegRegReg rcx, rbx, r13
+    x64.leaRegRegReg rcx, rcx, r8
+    x64.leaRegRegReg rax, rcx, rax
+    x64.storeSlotReg slot1, rax
+    x64.leaRegRegImm32 rcx, rax, 49
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot2, r8
+    x64.leaRegRegImm32 r14, r8, 48
+    x64.movRegReg rcx, r14
+    x64.movRegReg rdx, r12
+    x64.movRegReg rax, rbx
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, r14, rbx
+    x64.movRegReg rcx, rbx
+    x64.loadRegSlot rdx, slot6
+    x64.movRegReg rax, r13
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, rbx, r13
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r15
+    x64.loadRegSlot r12, slot5
+    x64.movRegReg rax, r12
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, rbx, r12
+    x64.movRegReg rcx, rbx
+    x64.loadRegSlot rdx, slot4
+    x64.loadRegSlot r12, slot3
+    x64.movRegReg rax, r12
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rax, rbx, r12
+    x64.loadRegSlot rbx, slot2
+    x64.storeBaseDispReg.word64 [rbx + 0], r14
+    x64.loadRegSlot rax, slot1
+    x64.storeBaseDispReg.word64 [rbx + 8], rax
+    x64.movRegImm rax, -3
+    x64.storeBaseDispReg.word64 [rbx + 16], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [rbx + 24], rax
+    x64.loadRegSlot rcx, slot0
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, r15
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect print
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_decref
+    x64.movRegImm32 r8, 0
+    x64.epilogue 88
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @print {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.callDirect __write_stdout
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

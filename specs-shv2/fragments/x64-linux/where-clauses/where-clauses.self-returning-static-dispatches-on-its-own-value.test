@@ -1,0 +1,186 @@
+// Test: where-clauses.self-returning-static-dispatches-on-its-own-value
+typealias Integer = int(i64.min to i64.max)
+
+type Holder uses T where T is Hashable and Equatable
+	var v as T
+
+	export static function of(v T) returns Self
+		var built = Self{v: v}
+		if built.matches(v) 'sameValue'
+			return built
+		end 'sameValue'
+		panic("Holder.of: the value it was built from must equal itself")
+	end 'of'
+
+	export function matches(other T) returns bool
+		return v.equals(other)
+	end 'matches'
+
+	export function digest() returns HashValue
+		return v.hash()
+	end 'digest'
+end 'Holder'
+
+typealias H = Holder with Integer
+
+function main() returns ExitCode
+	let h = H.of(41)
+	return h.digest()
+end 'main'
+---
+ExitCode: 41
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @Holder.of {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.prologue 32
+    x64.movRegReg rbx, rcx
+    x64.movRegReg r12, rdx
+    x64.movRegReg r13, rax
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r14, r8
+    x64.storeBaseDispReg.word64 [r14 + 0], rbx
+    x64.movRegReg rcx, r14
+    x64.movRegReg rdx, rbx
+    x64.movRegReg rax, r12
+    x64.movRegReg r9, r13
+    x64.callDirect Holder.matches
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, sameValue
+    x64.jmp ifcont
+  sameValue:
+    x64.movRegReg r8, r14
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Holder.matches {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, r9
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
+    x64.callMem [rbx + 24]
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Holder.digest {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, rdx
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
+    x64.callMem [rbx + 24]
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegImm32 rcx, 41
+    x64.leaRegRdata rdx, [rip + __witness_int.Hashable]
+    x64.leaRegRdata rax, [rip + __witness_int.Equatable]
+    x64.callDirect Holder.of
+    x64.movRegReg rbx, r8
+    x64.leaRegRdata rdx, [rip + __witness_int.Hashable]
+    x64.leaRegRdata rax, [rip + __witness_int.Equatable]
+    x64.movRegReg rcx, rbx
+    x64.callDirect Holder.digest
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_decref
+    x64.cmpRegImm32 r12, 0
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.cmpRegImm32 r12, 255
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_27]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @int.hash {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 rax, 4294967295
+    x64.movRegReg r8, rcx
+    x64.andRegReg r8, rcx, rax
+    x64.popReg rbp
+    x64.ret
+}
+
+func @int.equals {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.cmpRegReg rcx, rdx
+    x64.jcc equal, equal
+    x64.jmp notEqual
+  equal:
+    x64.movRegImm32 r8, 1
+    x64.popReg rbp
+    x64.ret
+  notEqual:
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+}

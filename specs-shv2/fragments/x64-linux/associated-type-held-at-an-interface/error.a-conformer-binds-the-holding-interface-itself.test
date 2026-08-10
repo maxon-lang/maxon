@@ -1,0 +1,48 @@
+// Test: error.a-conformer-binds-the-holding-interface-itself
+typealias Integer = int(i64.min to i64.max)
+
+interface Cursor
+	function current() returns Integer
+end 'Cursor'
+
+interface Bag uses Iter
+	function makeIt() returns Iter
+end 'Bag'
+
+type OneCursor implements Cursor
+	var pos as Integer
+
+	export static function create() returns Self
+		return Self{pos: 5}
+	end 'create'
+
+	export function current() returns Integer
+		return self.pos
+	end 'current'
+end 'OneCursor'
+
+type WeirdBag implements Bag with Cursor
+	let seed as Integer
+
+	export static function create(seed Integer) returns Self
+		return Self{seed: seed}
+	end 'create'
+
+	export function makeIt() returns Cursor
+		return OneCursor.create()
+	end 'makeIt'
+end 'WeirdBag'
+
+typealias CursorBag = Bag with Cursor
+
+function firstOf(source CursorBag) returns Integer
+	return source.makeIt().current()
+end 'firstOf'
+
+function main() returns ExitCode
+	print("{firstOf(WeirdBag.create(1))}\n")
+	return 0
+end 'main'
+---
+CompilerError:
+error E3120: <fragment>:24:6: 'WeirdBag' binds 'Bag's associated type 'Iter' to the interface type 'Cursor', and this program holds 'Iter' at the interface type 'Cursor' — a value held at an interface type is a two-word fat pointer `(value, witness)`, so the impl would have to hand BOTH words back out of a witness call that returns one. A holding supplies the second word for a CONCRETE binding, from a slot naming that conformer's own nested table; there is nothing left to supply when the binding is already an interface. Bind the associated type to a concrete conformer

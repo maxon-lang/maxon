@@ -1,0 +1,21 @@
+// Test: error.user-generic-instance-with-no-create-at-file-scope
+typealias Count = int(0 to u64.max)
+
+type Box uses T
+	export var n as Count
+
+	static function make() returns Self
+		return Self{n: 9}
+	end 'make'
+end 'Box'
+
+typealias IntBox = Box with Count
+
+var b = IntBox.create()
+
+function main() returns ExitCode
+	return b.n
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:14:9: Unsupported: a top-level `IntBox.create()` — `IntBox` instantiates the generic `Box`, which declares no `create()` static, so `__module_init` has nothing to call before `main`. Give `Box` one, or build the value inside a function

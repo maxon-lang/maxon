@@ -1,0 +1,36 @@
+// Test: error.a-trivial-instantiation-of-a-refused-body-is-refused-with-it
+typealias Small = int(0 to 100)
+
+type Array uses Element implements BuiltinArrayLiteral
+	typealias ElementMemory = __ManagedMemory with Element
+	export var managed as ElementMemory
+
+	export static function init(managed ElementMemory) returns Self
+		return Self{managed: managed}
+	end 'init'
+
+	export static function create() returns Self
+		return Self{}
+	end 'create'
+
+	export function rotateFirstTwo()
+		let a = try managed.get(0) otherwise panic("oob")
+		let b = try managed.get(1) otherwise panic("oob")
+		try managed.set(0, value: b) otherwise panic("oob")
+		try managed.set(1, value: a) otherwise panic("oob")
+	end 'rotateFirstTwo'
+end 'Array'
+
+typealias SmallArray = Array with Small
+
+function main() returns ExitCode
+	var a = SmallArray.create()
+	a.push(7)
+	a.push(9)
+	a.rotateFirstTwo()
+	print("{try a.get(0) otherwise 0}\n")
+	return 0
+end 'main'
+---
+CompilerError:
+error E3070: <fragment>:19:15: cannot mutate 'managed' via 'set' while it is borrowed by 'a' (borrowed at line 17)

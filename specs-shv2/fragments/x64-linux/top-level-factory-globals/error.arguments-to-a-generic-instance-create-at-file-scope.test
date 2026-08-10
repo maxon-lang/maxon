@@ -1,0 +1,21 @@
+// Test: error.arguments-to-a-generic-instance-create-at-file-scope
+typealias Count = int(0 to u64.max)
+
+type Box uses T
+	export var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+typealias IntBox = Box with Count
+
+var b = IntBox.create(9)
+
+function main() returns ExitCode
+	return b.n
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:14:23: Unsupported: arguments to `IntBox.create()` in a top-level initializer — a global declared through a generic-instance alias holds the EMPTY record that alias's `create()` builds, and that is the whole of what its slot description carries. Build a populated one inside a function

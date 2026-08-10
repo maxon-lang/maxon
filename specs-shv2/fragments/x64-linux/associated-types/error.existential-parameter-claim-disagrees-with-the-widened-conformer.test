@@ -1,0 +1,46 @@
+// Test: error.existential-parameter-claim-disagrees-with-the-widened-conformer
+typealias Integer = int(i64.min to i64.max)
+
+interface Taker uses Element
+	function take(e Element) returns Integer
+	function label() returns Integer
+end 'Taker'
+
+type Runner implements Taker with Integer
+	let base as Integer
+
+	function take(e Integer) returns Integer
+		return base + e
+	end 'take'
+
+	function label() returns Integer
+		return base
+	end 'label'
+
+	static function create(base Integer) returns Self
+		return Self{base: base}
+	end 'create'
+end 'Runner'
+
+type Box uses T
+	typealias TakerOfT = Taker with T
+
+	let seed as Integer
+
+	export function run(t TakerOfT) returns Integer
+		return t.label() + self.seed
+	end 'run'
+
+	static function create(seed Integer) returns Self
+		return Self{seed: seed}
+	end 'create'
+end 'Box'
+
+typealias StrBox = Box with String
+
+function main() returns ExitCode
+	return StrBox.create(0).run(Runner.create(20)) as ExitCode
+end 'main'
+---
+CompilerError:
+error E3127: <fragment>:42:26: cannot widen 'Runner' into 't', which is declared at the existential type 'Taker' with its associated type 'Element' bound to 'String' — 'Runner' binds 'Element' to 'Integer'. A dispatch through this value is emitted against the binding the site claims and would reach an impl written for the other one. Write the binding the conformer declares, or widen a conformer that binds 'Element' to 'String'

@@ -1,0 +1,306 @@
+// Test: generic-hash-table-regalloc.witness-dispatch-inside-a-pressured-loop
+typealias Integer = int(i64.min to i64.max)
+typealias IntKey = int(0 to u32.max)
+
+function bump(x Integer) returns Integer
+	return x + 1
+end 'bump'
+
+type Mixer uses T where T is Hashable and Equatable
+	var base as Integer
+
+	export static function create(base Integer) returns Self
+		return Self{base: base}
+	end 'create'
+
+	export function mix(key T) returns Integer
+		var a1 = base + 1
+		var a2 = base + 2
+		var a3 = base + 3
+		var a4 = base + 4
+		var a5 = base + 5
+		var a6 = base + 6
+		var a7 = base + 7
+		var a8 = base + 8
+		var a9 = base + 9
+		var a10 = base + 10
+		var a11 = base + 11
+		var a12 = base + 12
+		var i = 0
+		while i < 3 'loop'
+			let d = bump(i)
+			let h = key.hash()
+			var step = d
+			if key.equals(key) 'sameKey'
+				step = d + h
+			end 'sameKey'
+			a1 = a1 + step
+			a2 = a2 + step
+			a3 = a3 + step
+			a4 = a4 + step
+			a5 = a5 + step
+			a6 = a6 + step
+			a7 = a7 + step
+			a8 = a8 + step
+			a9 = a9 + step
+			a10 = a10 + step
+			a11 = a11 + step
+			a12 = a12 + step
+			i = i + 1
+		end 'loop'
+		return a1 + a2 + a3 + a4 + a5 + a6 + a7 + a8 + a9 + a10 + a11 + a12
+	end 'mix'
+end 'Mixer'
+
+typealias IntMixer = Mixer with IntKey
+
+function main() returns ExitCode
+	var m = IntMixer.create(0)
+	if m.mix(5 as IntKey) != 330 'wrongSum'
+		return 90
+	end 'wrongSum'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @bump {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.leaRegRegImm32 r8, rcx, 1
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Mixer.create {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Mixer.mix {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 152
+    x64.storeSlotReg slot0, rdx
+    x64.movRegReg rbx, rax
+    x64.storeSlotReg slot1, r9
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.leaRegRegImm32 r12, rax, 1
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.leaRegRegImm32 rax, rax, 2
+    x64.loadRegBaseDisp.word64 rdx, [rcx + 0]
+    x64.leaRegRegImm32 rdx, rdx, 3
+    x64.loadRegBaseDisp.word64 rsi, [rcx + 0]
+    x64.leaRegRegImm32 rsi, rsi, 4
+    x64.loadRegBaseDisp.word64 rdi, [rcx + 0]
+    x64.leaRegRegImm32 rdi, rdi, 5
+    x64.loadRegBaseDisp.word64 r8, [rcx + 0]
+    x64.leaRegRegImm32 r8, r8, 6
+    x64.loadRegBaseDisp.word64 r9, [rcx + 0]
+    x64.leaRegRegImm32 r9, r9, 7
+    x64.loadRegBaseDisp.word64 r10, [rcx + 0]
+    x64.leaRegRegImm32 r10, r10, 8
+    x64.loadRegBaseDisp.word64 r11, [rcx + 0]
+    x64.leaRegRegImm32 r11, r11, 9
+    x64.loadRegBaseDisp.word64 r13, [rcx + 0]
+    x64.leaRegRegImm32 r13, r13, 10
+    x64.loadRegBaseDisp.word64 r14, [rcx + 0]
+    x64.leaRegRegImm32 r14, r14, 11
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
+    x64.leaRegRegImm32 rcx, rcx, 12
+    x64.movRegImm32 r15, 0
+    x64.xchgRegReg rcx, r13
+    x64.jmp whilehdr
+  whilehdr:
+    x64.storeSlotReg slot13, rax
+    x64.storeSlotReg slot12, rdx
+    x64.storeSlotReg slot11, rsi
+    x64.storeSlotReg slot10, rdi
+    x64.storeSlotReg slot9, r8
+    x64.storeSlotReg slot8, r9
+    x64.storeSlotReg slot7, r10
+    x64.storeSlotReg slot6, r11
+    x64.storeSlotReg slot5, rcx
+    x64.storeSlotReg slot4, r14
+    x64.storeSlotReg slot3, r13
+    x64.storeSlotReg slot2, r15
+    x64.cmpRegImm32 r15, 3
+    x64.jcc less, loop
+    x64.jmp whileexit
+  loop:
+    x64.movRegReg rcx, r15
+    x64.callDirect bump
+    x64.movRegReg r13, r8
+    x64.loadRegSlot r14, slot0
+    x64.movRegReg rcx, r14
+    x64.callMem [rbx + 24]
+    x64.movRegReg r15, r8
+    x64.movRegReg rcx, r14
+    x64.movRegReg rdx, r14
+    x64.loadRegSlot r14, slot1
+    x64.callMem [r14 + 24]
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, sameKey
+    x64.jmp critsplit
+  sameKey:
+    x64.leaRegRegReg rax, r13, r15
+    x64.jmp ifcont
+  critsplit:
+    x64.movRegReg rax, r13
+    x64.jmp ifcont
+  ifcont:
+    x64.leaRegRegReg r12, r12, rax
+    x64.loadRegSlot rcx, slot13
+    x64.leaRegRegReg rcx, rcx, rax
+    x64.loadRegSlot rdx, slot12
+    x64.leaRegRegReg rdx, rdx, rax
+    x64.loadRegSlot rsi, slot11
+    x64.leaRegRegReg rsi, rsi, rax
+    x64.loadRegSlot rdi, slot10
+    x64.leaRegRegReg rdi, rdi, rax
+    x64.loadRegSlot r8, slot9
+    x64.leaRegRegReg r8, r8, rax
+    x64.loadRegSlot r9, slot8
+    x64.leaRegRegReg r9, r9, rax
+    x64.loadRegSlot r10, slot7
+    x64.leaRegRegReg r10, r10, rax
+    x64.loadRegSlot r11, slot6
+    x64.leaRegRegReg r11, r11, rax
+    x64.loadRegSlot r13, slot5
+    x64.leaRegRegReg r13, r13, rax
+    x64.loadRegSlot r14, slot4
+    x64.leaRegRegReg r14, r14, rax
+    x64.loadRegSlot r15, slot3
+    x64.leaRegRegReg rax, r15, rax
+    x64.loadRegSlot r15, slot2
+    x64.leaRegRegImm32 r15, r15, 1
+    x64.xchgRegReg rax, rcx
+    x64.xchgRegReg rcx, r13
+    x64.jmp whilehdr
+  whileexit:
+    x64.loadRegSlot rax, slot13
+    x64.leaRegRegReg rax, r12, rax
+    x64.loadRegSlot rcx, slot12
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot11
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot10
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot9
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot8
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot7
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot6
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot5
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot4
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot3
+    x64.leaRegRegReg r8, rax, rcx
+    x64.epilogue 152
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegImm32 rcx, 0
+    x64.leaRegRdata rdx, [rip + __witness_int.Hashable]
+    x64.leaRegRdata rax, [rip + __witness_int.Equatable]
+    x64.callDirect Mixer.create
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rdx, 5
+    x64.leaRegRdata rax, [rip + __witness_int.Hashable]
+    x64.leaRegRdata r9, [rip + __witness_int.Equatable]
+    x64.movRegReg rcx, rbx
+    x64.callDirect Mixer.mix
+    x64.cmpRegImm32 r8, 330
+    x64.jcc notEqual, wrongSum
+    x64.jmp ifcont
+  wrongSum:
+    x64.movRegImm32 r12, 90
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r12, 0
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @int.hash {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 rax, 4294967295
+    x64.movRegReg r8, rcx
+    x64.andRegReg r8, rcx, rax
+    x64.popReg rbp
+    x64.ret
+}
+
+func @int.equals {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.cmpRegReg rcx, rdx
+    x64.jcc equal, equal
+    x64.jmp notEqual
+  equal:
+    x64.movRegImm32 r8, 1
+    x64.popReg rbp
+    x64.ret
+  notEqual:
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+}

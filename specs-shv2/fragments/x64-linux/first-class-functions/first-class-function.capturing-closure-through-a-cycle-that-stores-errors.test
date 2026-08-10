@@ -1,0 +1,31 @@
+// Test: first-class-function.capturing-closure-through-a-cycle-that-stores-errors
+typealias Integer = int(i64.min to i64.max)
+typealias UnaryOp = function(Integer) returns Integer
+
+type Holder
+	export var op as UnaryOp
+
+	export static function create(op UnaryOp) returns Self
+		return Self{op: op}
+	end 'create'
+end 'Holder'
+
+function ping(f UnaryOp, n Integer) returns Holder
+	if n <= 0 'done'
+		return Holder.create(f)
+	end 'done'
+	return pong(f, n: n - 1)
+end 'ping'
+
+function pong(f UnaryOp, n Integer) returns Holder
+	return ping(f, n: n - 1)
+end 'pong'
+
+function main() returns ExitCode
+	let bump = 20
+	let h = pong(function(n Integer) gives n + bump, n: 5)
+	return h.op(21) as ExitCode
+end 'main'
+---
+CompilerError:
+error E3099: <fragment>:26:10: cannot pass a closure that captures to 'pong', which stores or returns it: captures are taken by reference to the enclosing function's frame, so a closure that captures cannot outlive that frame. Use a function reference, or a closure that captures nothing

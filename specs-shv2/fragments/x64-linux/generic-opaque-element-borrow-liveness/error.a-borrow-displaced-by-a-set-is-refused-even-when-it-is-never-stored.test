@@ -1,0 +1,34 @@
+// Test: error.a-borrow-displaced-by-a-set-is-refused-even-when-it-is-never-stored
+type Array uses Element implements BuiltinArrayLiteral
+	typealias ElementMemory = __ManagedMemory with Element
+	export var managed as ElementMemory
+
+	export static function init(managed ElementMemory) returns Self
+		return Self{managed: managed}
+	end 'init'
+
+	export static function create() returns Self
+		return Self{}
+	end 'create'
+
+	export function readThenDisplace(other Self) returns Element
+		let a = try managed.get(0) otherwise panic("oob")
+		let v = try other.managed.get(0) otherwise panic("oob")
+		try managed.set(0, value: v) otherwise panic("oob")
+		return a
+	end 'readThenDisplace'
+end 'Array'
+
+typealias StrArray = Array with String
+
+function main() returns ExitCode
+	var a = StrArray.create()
+	a.push("alpha value long enough for a heap record")
+	var b = StrArray.create()
+	b.push("beta value long enough for a heap record")
+	print("{a.readThenDisplace(b)}\n")
+	return 0
+end 'main'
+---
+CompilerError:
+error E3070: <fragment>:17:15: cannot mutate 'managed' via 'set' while it is borrowed by 'a' (borrowed at line 15)

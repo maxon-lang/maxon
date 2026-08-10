@@ -1,0 +1,24 @@
+// Test: where-clauses.error.static-without-self-return-cannot-dispatch
+typealias Integer = int(i64.min to i64.max)
+
+type Holder uses T where T is Hashable and Equatable
+	var v as T
+
+	export function digest() returns HashValue
+		return v.hash()
+	end 'digest'
+
+	export static function digestOf(v T) returns HashValue
+		let h = Self{v: v}
+		return h.digest()
+	end 'digestOf'
+end 'Holder'
+
+typealias H = Holder with Integer
+
+function main() returns ExitCode
+	return H.digestOf(41)
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:13:12: Unsupported: calling 'digest' (which dispatches through the type's `where` constraints) on a value of the enclosing type, from a `static function` that carries no witness tables of its own to forward — a static sources them from the instance it RETURNS, so declare this one `returns Self` and call the method on the result, or make it an instance method

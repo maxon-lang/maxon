@@ -1,0 +1,38 @@
+// Test: error.an-inner-alias-return-over-a-byte-array-keeps-the-array-surface
+type Cell uses U
+	export var slot as U
+
+	export static function make(slot U) returns Self
+		return Self{slot: slot}
+	end 'make'
+
+	export function get() returns U
+		return slot
+	end 'get'
+end 'Cell'
+
+type Holder uses T
+	typealias TCell = Cell with T
+	export var cell as TCell
+
+	export static function make(cell TCell) returns Self
+		return Self{cell: cell}
+	end 'make'
+
+	export function inner() returns TCell
+		return cell
+	end 'inner'
+end 'Holder'
+
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+typealias BufCell = Cell with ByteArray
+typealias BufHolder = Holder with ByteArray
+
+function main() returns ExitCode
+	let h = BufHolder.make(BufCell.make("hello".toByteArray()))
+	return h.inner().get().length() as ExitCode
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:34:25: Unsupported: `Array` member 'length' — P1.7 provides managed/get/set/first/slice/count/isEmpty/clone/push/reserve/resize/clear/insert/append/appendMemory/contains; that list IS the surface, so nothing else is served here
