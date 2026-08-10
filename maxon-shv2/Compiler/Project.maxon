@@ -3082,8 +3082,12 @@ export type StructLayout
 	//
 	// ⚠ It rewrites ONE DECLARED column, which is why it is not a violation of `addField`'s "one writer" rule:
 	// the columns stay in lockstep because no length changes. It is deliberately not general — there is
-	// exactly one caller per reason, each named above, and a third reason to retype a recorded field would be
-	// a third reason for two passes to disagree about what a declaration says.
+	// exactly one caller per REASON, and a further reason to retype a recorded field would be a further reason
+	// for two passes to disagree about what a declaration says. The reasons are the three facts the sweep
+	// structurally cannot answer, each settled once with every file folded: N3's contested generic ALIAS
+	// (above), the swept `named` that denotes an INTERFACE (`normalizeSweptInterfaceTypes`), and the swept
+	// `named` that is a BARE GENERIC NAME at the declaring type's own parameters
+	// (`normalizeSweptScopedGenericFields`).
 	//
 	// ⚠⚠ **AND IT REBUILDS THE DERIVED SLOT GEOMETRY, BECAUSE `normalizeSweptInterfaceTypes` CHANGES A
 	// FIELD'S SLOT COUNT** (P1.7a-existentials slice 2). A swept `named` that denotes an interface is

@@ -13299,6 +13299,80 @@ export type ProgramSignatures
 		return MaxonType.interfaceRef(id)
 	end 'sweptInterfaceTypeOf'
 
+	// ⭐⭐ **RE-TAG EVERY SWEPT `named` FIELD THAT IS A BARE GENERIC NAME AS THE INSTANCE ITS DECLARING SCOPE
+	// BINDS — the field-column twin of the interface normalization above, and for the identical reason.**
+	//
+	// `Cell` written inside `type Holder uses T` means `Cell with Holder.T`, and that rule
+	// (`scopedGenericInstanceOf`) is gated on `allFilesFolded` because the struct registry is still filling
+	// while the declaration sweep reads it. So a swept field type is ALWAYS the bare `named("Cell")` — the
+	// BASE's declaration view — while the real parse, reading a complete registry, records
+	// `genericInstance(Cell with Holder.T)` for the very same field. One declaration, two registries, two
+	// answers.
+	//
+	// ⛔⛔ **AND THE DROP CASCADE READ THE UNREPAIRED ONE, WHICH IS A LEAK WITH NO DIAGNOSTIC.**
+	// `substituteInstanceFieldType` reads this column off `baseLayoutOf`, and `substituteThroughInstance`
+	// passes a `named` through untouched (it has no name table) — so `Holder with String`'s cascade classified
+	// its `cell` field as the BASE `Cell`, whose only field is the opaque `T` and which therefore owns nothing.
+	// The drop it emitted was the trivial `__mm_decref`: the cell's BOX was reclaimed and the `String` the type
+	// argument put inside it was stranded. **MEASURED before this pass existed** — `Holder with String` built
+	// from a `Cell with String`, printed its answer and exited **101**, while the corpus's only case of the
+	// shape (`bare-generic-name-as-a-field-type`) is over `Integer`, which has nothing to strand and so agreed.
+	//
+	// ⭐ **IT IS NORMALIZED HERE RATHER THAN REPAIRED AT EACH READER, AND THE THIRD READER IS WHY.** The field
+	// READ already carried this rule inline (`fieldTypeOf`), the drop cascade did not, and the CLONE gate
+	// (`structFieldsSupportDeepClone`) reads the same raw column a fourth time. Repairing the cascade would
+	// have made three copies of one rule, and the copies decide ownership: a gate and a strategy that resolve a
+	// name differently admit a clone nobody can emit, which is the failure `managedNameCloneStrategy`'s own
+	// header records. Recorded once, every reader of the column sees the instance and there is nothing left to
+	// remember.
+	//
+	// ⚠ **STRUCT FIELDS ONLY, AND THAT IS A PROPERTY OF THE LANGUAGE RATHER THAN A GAP.** The rule needs a
+	// binding SCOPE — the enclosing declaration's `uses` list — and only a struct layout carries one: a union
+	// declared `uses` cannot be instantiated at all (`Maybe with String` is **E2055**, measured on this tree),
+	// so a payload has no scope to bind against. A method's recorded RETURN type has the same gap and a
+	// different cure already: `Parser.promoteBareGenericResultToCalleeScope` repairs it in the CALLEE's scope,
+	// which is not this layout's and so is not this walk's to answer.
+	//
+	// ⚠ **A PROGRAM THAT DECLARES NO TYPE PARAMETER PAYS ONE `Map.count()`** — `normalizeSweptInterfaceTypes`'
+	// gate, over the registry that answers the necessary condition here: no type parameter anywhere means no
+	// scope binds anything.
+	export function normalizeSweptScopedGenericFields()
+		if self.typeParamOwners.count() == 0 'noTypeParameterIsDeclared'
+			return
+		end 'noTypeParameterIsDeclared'
+
+		for (_, layout) in self.structTypes 'eachStruct'
+			// A non-generic declaring type binds nothing, so it cannot make a bare name mean an instance —
+			// `fieldTypeOf`'s own measured gate, which exists because `scopedGenericInstanceOf` returns a UNION
+			// and Maxon heap-boxes even its payload-free arm.
+			if layout.typeParamNames.isEmpty() 'scopeBindsNothing'
+				continue
+			end 'scopeBindsNothing'
+
+			for index in 0 upto layout.fieldCount() 'eachField'
+				let declared = try layout.fieldTypes.get(index) otherwise panic("ProgramSignatures.normalizeSweptScopedGenericFields: fieldTypes.get OOB at {index} for `type {String.from(layout.name)}`")
+				if let asInstance = try self.sweptScopedGenericFieldTypeOf(declared, layout: layout) 'namesABareGeneric'
+					layout.retypeField(index, declaredType: asInstance)
+				end 'namesABareGeneric'
+			end 'eachField'
+		end 'eachStruct'
+	end 'normalizeSweptScopedGenericFields'
+
+	// The instance a swept `named` field of `layout` denotes; `MapError.keyNotFound` when the name is not a
+	// bare generic one — `sweptInterfaceTypeOf`'s shape, and its "absence is a throw" convention, so both
+	// normalizations of this column read as one kind of pass. The RULE is `scopedGenericInstanceOf`'s, shared
+	// with the READ doors that ask it of a different scope; what this adds is only which scope a FIELD is in.
+	function sweptScopedGenericFieldTypeOf(declared MaxonType, layout StructLayout) returns MaxonType throws MapError
+		if maxonTypeTag(declared) != ValueTypeTag.named 'namesNoBareGeneric'
+			throw MapError.keyNotFound
+		end 'namesNoBareGeneric'
+
+		match self.scopedGenericInstanceOf(self.nameOfId(typeNameIdOf(declared)), declaringTypeName: layout.name, scopeParamNames: layout.typeParamNames) 'scoped'
+			notInScope then throw MapError.keyNotFound
+			instance(gid) then return MaxonType.genericInstance(gid)
+		end 'scoped'
+	end 'sweptScopedGenericFieldTypeOf'
+
 	// The return-type wrapper of the test above: a `void` return names no type to re-tag.
 	function sweptInterfaceReturnOf(declared MaxonReturnType) returns MaxonType throws MapError
 		match declared 'shape'
@@ -15029,9 +15103,28 @@ export type ProgramSignatures
 	// and `HoldA`'s `items as Items` into `Array with Num` for a `HoldA with Num`, so the cascade can classify
 	// and drop it. Arity was checked at instantiation (E2056), so a type-parameter field's position indexes the
 	// args in range.
+	//
+	// ⛔⛔ **THE COLUMN IS RESOLVED BEFORE IT IS SUBSTITUTED, AND SKIPPING THAT STEP LEAKED THE `Array` SHAPE
+	// ITSELF.** A field declared through an INNER generic alias — `typealias Inner = Cell with T` inside
+	// `type Holder uses T`, which is exactly `stdlib/Array.maxon`'s `typealias ElementMemory = __ManagedMemory
+	// with Element` — is recorded by the sweep as a bare `named("Holder.Inner")`, because the alias registry is
+	// filled after the file is swept. `substituteThroughInstance` passes a `named` through untouched (it has no
+	// name table), so the cascade classified the field by its ALIAS NAME: `declaredNameIsManaged` said "a
+	// generic alias, so managed" and `managedNameDropCallee` resolved that alias to the UNSUBSTITUTED
+	// `Cell with Holder.T`, whose own field is opaque and so owns nothing — the trivial `__mm_decref`.
+	// **MEASURED**: a `Holder with String` over a `Cell with String` printed 47 and exited **101**.
+	//
+	// ⚠ **IT IS RESOLVED HERE AND THE COLUMN IS LEFT ALONE, WHICH IS THE OPPOSITE CHOICE FROM THE BARE
+	// GENERIC NAME ONE DOOR OVER** (`normalizeSweptScopedGenericFields`, which rewrites the column). The
+	// difference is what the spelling still carries: an alias NAME is what `fieldSurfaceOf` derives a
+	// position's buffer-spelling bits from (`derivedAliasSurfaceBits`, and `Character.ByteMemory` is one), and
+	// a `genericInstance` cannot hold it — `resolveRecordedGenericAliasTypes`' header states that trap for the
+	// registry that already had to respect it. A bare generic NAME carries no such bit, so it may be recorded
+	// resolved; an alias may only be resolved at the door that needs the type.
 	export function substituteInstanceFieldType(id GenericInstanceId, index FieldIndex) returns MaxonType
-		let fieldType = try self.baseLayoutOf(id).fieldTypes.get(index) otherwise panic("ProgramSignatures.substituteInstanceFieldType: field {index} out of range for instance {id}'s base struct")
-		return self.substituteThroughInstance(fieldType, id: id)
+		let layout = self.baseLayoutOf(id)
+		let fieldType = try layout.fieldTypes.get(index) otherwise panic("ProgramSignatures.substituteInstanceFieldType: field {index} out of range for instance {id}'s base struct")
+		return self.substituteThroughInstance(self.declaredSlotType(fieldType, into: self.typeNames, slotScopeFilePath: layout.declFilePath), id: id)
 	end 'substituteInstanceFieldType'
 
 	// Instance `id`'s concrete type argument at type-parameter `position` (P1.6-B2) — what a `T`-typed field
@@ -15483,12 +15576,16 @@ export type ProgramSignatures
 	// drop gate and descriptor-need seed both read the CONSUME boundary, so neither fires for this class), so
 	// it is REJECTED at the reassign site (`emitOpaqueFieldReassign`) — leaving every field this
 	// drop fires on either construct-only (co-owned once) or managed/scalar (the pre-existing model).
+	//
+	// ⭐ **IT ASKS THE INSTANCE VIEW FOR *EVERY* FIELD, NOT ONLY FOR AN OPAQUE ONE.** It used to substitute only
+	// a `typeParameter` field and read the RAW declared type otherwise — two derivations that happened to agree,
+	// because a `named` struct, a generic alias and a `genericInstance` are all managed in either view. But the
+	// drop CALLEE (`genericInstanceFieldDropCallee`) and the drop KIND (`genericInstanceFieldIsExistential`)
+	// both read the substituted type, and this rung MEASURED what a third reading of the same column costs: the
+	// alias arm resolved `Holder.Inner` to the unsubstituted `Cell with Holder.T` and leaked (see
+	// `substituteInstanceFieldType`). One derivation, so the three cannot come to classify three types.
 	export function genericInstanceFieldIsManaged(id GenericInstanceId, index FieldIndex) returns bool
-		let baseFieldType = try self.baseLayoutOf(id).fieldTypes.get(index) otherwise panic("ProgramSignatures.genericInstanceFieldIsManaged: field {index} out of range for instance {id}'s base struct")
-		if maxonTypeTag(baseFieldType) == ValueTypeTag.typeParameter 'typeParamField'
-			return self.typeIsManaged(self.substituteInstanceFieldType(id, index: index), from: self.typeNames)
-		end 'typeParamField'
-		return self.typeIsManaged(baseFieldType, from: self.typeNames)
+		return self.typeIsManaged(self.substituteInstanceFieldType(id, index: index), from: self.typeNames)
 	end 'genericInstanceFieldIsManaged'
 
 	// The drop callee for managed instance field `index` — routed through the shared `managedFieldDropCallee`
@@ -15615,6 +15712,45 @@ export type ProgramSignatures
 		end 'managed'
 		return MmDecrefName
 	end 'genericInstanceBoxDropCallee'
+
+	// ⭐⭐ **DOES ANY REAL INSTANTIATION OF `declaringTypeName` RELEASE FIELD `index` THROUGH SOMETHING OTHER
+	// THAN `sharedCallee`?** — the whole-program half of `Parser.requireSharedBodyReassignHasAStaticDrop`, whose
+	// header carries the leak this refuses and why divergence rather than non-concreteness is the test.
+	//
+	// The shared generic body has exactly ONE callee available for a field write's displaced value, chosen off
+	// the DECLARATION view; every instantiation's real drop is chosen off the SUBSTITUTED one. When those agree
+	// the write is sound and stays legal — an all-trivial program is the common case and must not be refused.
+	//
+	// ⚠ **A NOT-MANAGED INSTANTIATION DIVERGES TOO, AND IN THE OTHER DIRECTION**: the body would emit a release
+	// for a slot that instantiation owes none, which is an over-release rather than a leak. Both are the same
+	// question — "is the one callee right everywhere?" — so both are answered here rather than at the caller.
+	//
+	// The walk is O(interned instances) and is reached only from a shared body writing to an instance-typed
+	// field, i.e. from the one shape that can be wrong; the caller's two tag gates keep every ordinary field
+	// write away from it.
+	export function instanceFieldDropDivergesAcrossInstantiations(declaringTypeName ByteArray, index FieldIndex, sharedCallee ByteArray) returns bool
+		for id in 0 upto self.genericInstanceCount() 'eachInstance'
+			if not self.genericInstanceBaseName(id).equals(declaringTypeName) 'anotherBase'
+				continue
+			end 'anotherBase'
+			// A layout-less instance of this base cannot exist (the name is a declared `type`), so the guard is
+			// the walk's stated precondition rather than a case — `genericInstanceHasBaseLayout`'s rule, asked
+			// where every other instance-field walk asks it.
+			if not self.genericInstanceHasBaseLayout(id) 'noFields'
+				continue
+			end 'noFields'
+
+			if not self.genericInstanceFieldIsManaged(id, index: index) 'thisInstantiationOwesNoDrop'
+				return true
+			end 'thisInstantiationOwesNoDrop'
+
+			if not self.genericInstanceFieldDropCallee(id, index: index).equals(sharedCallee) 'aDifferentCallee'
+				return true
+			end 'aDifferentCallee'
+		end 'eachInstance'
+
+		return false
+	end 'instanceFieldDropDivergesAcrossInstantiations'
 
 	// Does instance `id`'s type argument at `position` OWN managed heap — the CALL-SITE CONSUME gate (P1.6-B2).
 	// An owning argument is MOVED into the box (the box drops it, so the caller must not); a trivial argument
@@ -15777,28 +15913,16 @@ export type ProgramSignatures
 	// with its arity, that made a W-slot tuple read W times cost O(W²) bytes hashed.
 	//
 	// The index is a precondition, not a case: `index` is one `indexOfField` handed out.
-	// ⭐ **A FIELD TYPED BY A BARE GENERIC NAME IS READ AT ITS DECLARING TYPE'S PARAMETERS** — `var cell as
-	// Cell` inside `type Holder uses T` is a `Cell with Holder.T`, and the layout THIS index holds is the
-	// SWEPT one, which records it as a plain `named`. The scope is the layout's own, which is what makes this
-	// the right door for it: `scopedGenericInstanceOf` needs the declaring type and its parameter names, and
-	// this function is handed the one record carrying both. Measured before it: `Self{cell: cell}` was
-	// **`E3005: cannot assign 'Cell_Ta8fe889e854d6824' to variable 'Holder.cell' of type 'struct'`** — the
-	// value's instance against the field's un-instantiated base.
+	//
+	// ⭐ **A FIELD TYPED BY A BARE GENERIC NAME IS ALREADY AN INSTANCE BY THE TIME THIS IS ASKED** — `var cell
+	// as Cell` inside `type Holder uses T` is a `Cell with Holder.T`, and the column carries exactly that,
+	// because `normalizeSweptScopedGenericFields` recorded it once with every file folded. This function used
+	// to hold that rule INLINE, which made it the field READ's private answer to a question the drop cascade
+	// and the clone gate ask of the same column — and the cascade, reading the raw swept `named`, dropped a
+	// `Holder with String` through the base `Cell`'s classification and stranded the string (exit 101). One
+	// recorded answer replaced three derivations; see that normalization for the measurement.
 	export function fieldTypeOf(layout StructLayout, index FieldIndex, into TypeNameInterner) returns MaxonType
 		let declared = try layout.fieldTypes.get(index) otherwise panic("ProgramSignatures.fieldTypeOf: field {index} is out of range for `type {String.from(layout.name)}`, which declares {layout.fieldCount()} — every index handed out came from `indexOfField`")
-
-		// ⚠ **BOTH HALVES OF THE GATE ARE COST, AND THE SECOND IS THE LOAD-BEARING ONE.** This runs at every
-		// field access in the program and `scopedGenericInstanceOf` returns a UNION, which Maxon heap-boxes even
-		// for its payload-free arm — the +24,396 allocations `parseTypeReference` measured between
-		// `isInterfaceName` and `lookupInterface`. A NON-GENERIC declaring type can bind nothing, so the whole
-		// generics-free corpus must not reach the call at all; asking the door and letting it answer
-		// `notInScope` would be correct and would allocate once per field read.
-		if maxonTypeTag(declared) == ValueTypeTag.named and not layout.typeParamNames.isEmpty() 'maybeABareGenericName'
-			match self.scopedGenericInstanceOf(self.nameOfId(typeNameIdOf(declared)), declaringTypeName: layout.name, scopeParamNames: layout.typeParamNames) 'scoped'
-				notInScope then break 'scoped'
-				instance(gid) then return MaxonType.genericInstance(gid)
-			end 'scoped'
-		end 'maybeABareGenericName'
 
 		return self.declaredSlotType(declared, into: into, slotScopeFilePath: layout.declFilePath)
 	end 'fieldTypeOf'

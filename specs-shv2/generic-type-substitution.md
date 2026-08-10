@@ -65,6 +65,19 @@ A generic type's `implements … with (…)` clause may bind an associated type 
 parameters and to another generic type of the program, and `for … in` walks it through the cursor
 protocol exactly as it walks a non-generic conformer.
 
+### The DROP CASCADE reads the same instance view every other door does
+
+A bare generic name in a field position is not a scalar and not the base struct — it is an INSTANCE,
+and the instance is what owns the heap. So `Holder with String`'s destructor must reach the
+`Cell with String` its `cell` field holds, and through it that cell's `String`. Reaching only the base
+`Cell` instead drops the field through the base's own classification — `Cell`'s single field is the
+opaque `T`, which owns nothing — so the cell's BOX is reclaimed and everything the type argument
+brought with it is stranded.
+
+That is a leak with no diagnostic (exit **101**, the leak gate), and it is invisible to a test whose
+type argument is trivial: `Holder with Integer` has nothing for the missing drop to strand, which is
+exactly why the case above passes and the one below did not.
+
 ## Tests
 
 <!-- test: bare-generic-name-in-a-generic-body -->
@@ -138,6 +151,329 @@ typealias IntCell = Cell with Integer
 typealias IntHolder = Holder with Integer
 
 function main() returns ExitCode
+	let h = IntHolder.create(IntCell.make(9))
+	return h.value() as ExitCode
+end 'main'
+```
+```exitcode
+9
+```
+
+<!-- test: bare-generic-name-as-a-managed-field-type -->
+### A bare generic name holding a MANAGED type argument is dropped through its instance
+The `Integer` case above cannot see this: the outer cascade reached the BASE `Cell`, whose only field is
+the opaque `T`, and so released the cell's box and nothing else. With a `String` argument that is a
+stranded heap record — exit 101, the leak gate — while the program prints the right answer.
+```maxon
+type Cell uses T
+	export var v as T
+	export static function make(v T) returns Self
+		return Self{v: v}
+	end 'make'
+	export function get() returns T
+		return self.v
+	end 'get'
+end 'Cell'
+
+type Holder uses T
+	export var cell as Cell
+	export static function create(cell Cell) returns Self
+		return Self{cell: cell}
+	end 'create'
+	export function value() returns T
+		return self.cell.get()
+	end 'value'
+end 'Holder'
+
+typealias StrCell = Cell with String
+typealias StrHolder = Holder with String
+
+function main() returns ExitCode
+	let h = StrHolder.create(StrCell.make("a string long enough to force a heap allocation"))
+	return h.value().count() as ExitCode
+end 'main'
+```
+```exitcode
+47
+```
+
+<!-- test: inner-alias-nested-instance-is-dropped-through-its-substituted-instance -->
+### The same nesting reached through an INNER TYPEALIAS
+`typealias Inner = Cell with T` inside `type Holder uses T` is the other spelling of the same field, and it
+is the spelling `stdlib/Array.maxon` uses for its own buffer (`typealias ElementMemory = __ManagedMemory
+with Element`). The sweep records it as a bare `named("Holder.Inner")` because the alias registry is filled
+after the file is swept, so the cascade used to classify the field by its ALIAS NAME and resolve that to the
+UNSUBSTITUTED `Cell with Holder.T` — the trivial box drop, and a stranded string. Measured at exit 101.
+```maxon
+type Cell uses T
+	export var v as T
+	export static function make(v T) returns Self
+		return Self{v: v}
+	end 'make'
+	export function get() returns T
+		return self.v
+	end 'get'
+end 'Cell'
+
+type Holder uses T
+	typealias Inner = Cell with T
+	export var cell as Inner
+	export static function create(cell Inner) returns Self
+		return Self{cell: cell}
+	end 'create'
+	export function value() returns T
+		return self.cell.get()
+	end 'value'
+end 'Holder'
+
+typealias StrCell = Cell with String
+typealias StrHolder = Holder with String
+
+function main() returns ExitCode
+	let h = StrHolder.create(StrCell.make("a string long enough to force a heap allocation"))
+	return h.value().count() as ExitCode
+end 'main'
+```
+```exitcode
+47
+```
+
+<!-- test: bare-generic-name-nested-three-levels -->
+### THREE levels of bare generic nesting all cascade
+Each level's field is a bare generic name at the level above's parameters, so the drop has to descend
+`Top with String` → `Mid with String` → `Cell with String` → the `String`.
+```maxon
+type Cell uses T
+	export var v as T
+	export static function make(v T) returns Self
+		return Self{v: v}
+	end 'make'
+	export function get() returns T
+		return self.v
+	end 'get'
+end 'Cell'
+
+type Mid uses T
+	export var cell as Cell
+	export static function create(cell Cell) returns Self
+		return Self{cell: cell}
+	end 'create'
+	export function value() returns T
+		return self.cell.get()
+	end 'value'
+end 'Mid'
+
+type Top uses T
+	export var mid as Mid
+	export static function create(mid Mid) returns Self
+		return Self{mid: mid}
+	end 'create'
+	export function value() returns T
+		return self.mid.value()
+	end 'value'
+end 'Top'
+
+typealias StrCell = Cell with String
+typealias StrMid = Mid with String
+typealias StrTop = Top with String
+
+function main() returns ExitCode
+	let t = StrTop.create(StrMid.create(StrCell.make("a string long enough to force a heap allocation")))
+	return t.value().count() as ExitCode
+end 'main'
+```
+```exitcode
+47
+```
+
+<!-- test: bare-generic-name-managed-field-reassigned -->
+### Reassigning the field through a CONCRETE receiver releases the OLD instance exactly once
+The receiver fixes the argument, so the write drops the displaced value through the concrete
+`__destruct_Cell_String`: a missing release leaks the first string and a doubled one drives the allocation
+count negative, and both are exit 101. This is the shape that stays legal — see the refusal below for the
+one that cannot.
+```maxon
+type Cell uses T
+	export var v as T
+	export static function make(v T) returns Self
+		return Self{v: v}
+	end 'make'
+	export function get() returns T
+		return self.v
+	end 'get'
+end 'Cell'
+
+type Holder uses T
+	export var cell as Cell
+	export static function create(cell Cell) returns Self
+		return Self{cell: cell}
+	end 'create'
+	export function value() returns T
+		return self.cell.get()
+	end 'value'
+end 'Holder'
+
+typealias StrCell = Cell with String
+typealias StrHolder = Holder with String
+
+function main() returns ExitCode
+	var h = StrHolder.create(StrCell.make("first string long enough to force a heap allocation"))
+	h.cell = StrCell.make("second string, longer still, and also heap allocated")
+	return h.value().count() as ExitCode
+end 'main'
+```
+```exitcode
+52
+```
+
+<!-- test: error.bare-generic-name-field-reassigned-in-the-shared-body -->
+### The SHARED body cannot reassign such a field, because it cannot name the drop
+`__drop_type_param` releases an opaque `T` field by reading `T`'s destructor out of the enclosing instance's
+layout descriptor — but a descriptor describes the PARAMETERS, not the instances built over them, so it
+holds `String`'s `__str_decref` and nothing that names `__destruct_Cell_String`. The one callee the shared
+body can pick is the non-concrete instance's own `__mm_decref`, which frees the cell's box and strands the
+string: measured at exit **101** before this refusal existed. The refusal is on DIVERGENCE, so an
+all-trivial program — where `__mm_decref` really is every instantiation's drop — is untouched.
+```maxon
+type Cell uses T
+	export var v as T
+	export static function make(v T) returns Self
+		return Self{v: v}
+	end 'make'
+end 'Cell'
+
+type Holder uses T
+	export var cell as Cell
+	export static function create(cell Cell) returns Self
+		return Self{cell: cell}
+	end 'create'
+	export function replace(next Cell)
+		self.cell = next
+	end 'replace'
+end 'Holder'
+
+typealias StrCell = Cell with String
+typealias StrHolder = Holder with String
+
+function main() returns ExitCode
+	var h = StrHolder.create(StrCell.make("first string long enough to force a heap allocation"))
+	h.replace(StrCell.make("second string, longer still, and also heap allocated"))
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:15:8: Unsupported: reassigning 'cell' of 'Holder', whose type is a generic instance over this type's OWN parameters — the shared generic body compiles once for every instantiation, so the drop for the value being displaced is not one callee: it is `__mm_decref` here and something else at some instantiation. The box's own destructor releases the field correctly, so reassign it through a CONCRETE receiver instead; a descriptor slot carrying a nested instance's per-instantiation destructor is a later slice
+```
+
+<!-- test: bare-generic-name-managed-field-as-array-element -->
+### The same cascade reached through an array element's descriptor
+An `Array with (Holder with String)` releases each element through the layout descriptor's
+`destroyFunc`, which is the very `__destruct_Holder_String` the direct scope-exit drop names — so the
+element walk strands the same string when the cascade stops at the base.
+```maxon
+type Cell uses T
+	export var v as T
+	export static function make(v T) returns Self
+		return Self{v: v}
+	end 'make'
+end 'Cell'
+
+type Holder uses T
+	export var cell as Cell
+	export static function create(cell Cell) returns Self
+		return Self{cell: cell}
+	end 'create'
+end 'Holder'
+
+typealias StrCell = Cell with String
+typealias StrHolder = Holder with String
+typealias HolderArray = Array with StrHolder
+
+function main() returns ExitCode
+	var a = HolderArray.create()
+	a.push(StrHolder.create(StrCell.make("a string long enough to force a heap allocation")))
+	a.push(StrHolder.create(StrCell.make("another string long enough to force a heap allocation")))
+	return a.count() as ExitCode
+end 'main'
+```
+```exitcode
+2
+```
+
+<!-- test: error.bare-generic-name-nesting-is-not-deep-cloneable -->
+### The CLONE direction is REFUSED, not silently shallow
+The drop side of a nested bare generic name cascades; the clone side has no cascade to reach, because a
+generic instance has no `__clone_<instance>` at this slice. The gate and the strategy therefore agree that
+the element is not deep-cloneable and the front end says so with a position — which is what keeps the two
+directions from disagreeing: a gate that admitted the copy would byte-blit the inner box's pointer and
+free it twice.
+```maxon
+type Cell uses T
+	export var v as T
+	export static function make(v T) returns Self
+		return Self{v: v}
+	end 'make'
+end 'Cell'
+
+type Holder uses T
+	export var cell as Cell
+	export static function create(cell Cell) returns Self
+		return Self{cell: cell}
+	end 'create'
+end 'Holder'
+
+typealias StrCell = Cell with String
+typealias StrHolder = Holder with String
+typealias HolderArray = Array with StrHolder
+
+function main() returns ExitCode
+	var a = HolderArray.create()
+	a.push(StrHolder.create(StrCell.make("a string long enough to force a heap allocation")))
+	let b = a.clone()
+	return b.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:23:12: Unsupported: `clone` on an array whose managed element has a nested type this rung cannot deep-clone yet — a `Box with T` generic-instance field/element (its per-instance cloner is a later slice) or an array-of-managed-arrays. String / struct / boxed-union elements, including nested String, struct, union and Array fields, ARE supported.
+```
+
+<!-- test: bare-generic-name-trivial-argument-stays-inert -->
+### A trivial type argument gets NO release, with the leak gate live
+The control for the four cases above: `Cell with Integer` owns nothing but its box, so its cascade must
+stay the trivial box drop. A spurious release here would decref an `Integer` as if it were a record —
+a wild free, or an over-release the same gate reports. The `String` local is what keeps that gate
+meaningful rather than vacuous.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Cell uses T
+	export var v as T
+	export static function make(v T) returns Self
+		return Self{v: v}
+	end 'make'
+	export function get() returns T
+		return self.v
+	end 'get'
+end 'Cell'
+
+type Holder uses T
+	export var cell as Cell
+	export static function create(cell Cell) returns Self
+		return Self{cell: cell}
+	end 'create'
+	export function value() returns T
+		return self.cell.get()
+	end 'value'
+end 'Holder'
+
+typealias IntCell = Cell with Integer
+typealias IntHolder = Holder with Integer
+
+function main() returns ExitCode
+	let s = "a string long enough to force a heap allocation"
+	if s.count() != 47 'unexpectedLength'
+		return 1
+	end 'unexpectedLength'
 	let h = IntHolder.create(IntCell.make(9))
 	return h.value() as ExitCode
 end 'main'

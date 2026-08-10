@@ -307,6 +307,16 @@ export function queryProgramSignatures(project Project) returns ProgramSignature
 	// Normalizing here — once, with every declaration in and no file yet parsed — makes `interfaceRef` the
 	// single spelling everything downstream sees. See `normalizeSweptInterfaceTypes`.
 	signatures.normalizeSweptInterfaceTypes()
+	// ⭐⭐ **AND ONLY NOW CAN A SWEPT `named` BE TOLD FROM A BARE GENERIC NAME.** `var cell as Cell` inside
+	// `type Holder uses T` means `Cell with Holder.T`, and `scopedGenericInstanceOf` is gated on
+	// `allFilesFolded` for the reason the line above is gated on the interface fold: the struct registry is
+	// still filling while the sweep reads it. Left bare, the DROP CASCADE classifies the field as the base
+	// `Cell` — which owns nothing, because its one field is the opaque `T` — and strands whatever the type
+	// argument brought (exit 101, no diagnostic). AFTER the interface re-tag, so the two rules see one column
+	// in one state, and BEFORE `foldDescriptorNeeds`/`deriveInstanceNames`, because it INTERNS the scoped
+	// instance and an instance minted after the warming walk derives its name memos lazily — by the parse,
+	// which must only ever read them. See `normalizeSweptScopedGenericFields`.
+	signatures.normalizeSweptScopedGenericFields()
 	// ⭐ And which methods carry the hidden LAYOUT-DESCRIPTOR parameter (P1.6-B1, W23c) — after the extension
 	// fold, which is what puts an extension's methods onto their conformers, and BEFORE `deriveInstanceNames`,
 	// because the scan's opaque-array seed asks `genericAliasInstanceFrom` and that INTERNS: an instance minted

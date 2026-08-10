@@ -46533,6 +46533,11 @@ export type Parser
 			return
 		end 'scalarField'
 
+		// ⛔⛔ **THE SHARED BODY CANNOT NAME THE DROP FOR AN INSTANCE OVER ITS OWN PARAMETERS, AND STORING OVER
+		// IT WOULD LEAK WHAT THE ARGUMENT BROUGHT.** See the door below for the whole argument and the
+		// measurement; refused there, positioned at the field name, rather than emitted here.
+		try self.requireSharedBodyReassignHasAStaticDrop(box, layout: layout, index: index, fieldType: fieldType, anchor: anchor)
+
 		let old = self.emitFieldLoad(box, layout: layout, index: index, range: range)
 		self.emitDecref(old, range: range)
 		// An opaque `T` field is settled above by `emitOpaqueFieldReassign`, so the class here is always a
@@ -46541,6 +46546,52 @@ export type Parser
 		let stored = try self.moveInPayload(class, arg: value, argBareLocal: argBareLocal, owner: box, anchor: anchor, range: range)
 		self.emitFieldStore(box, layout: layout, index: index, value: stored, range: range)
 	end 'emitFieldWrite'
+
+	// ⭐⭐ **WOULD THIS WRITE DISPLACE A VALUE THE BODY CANNOT NAME A DROP FOR? — `emitOpaqueFieldReassign`'s
+	// question ONE LEVEL OF NESTING UP, and the level at which the descriptor has no answer.**
+	//
+	// An opaque `T` field is reassignable in a shared body because `__drop_type_param` reads `T`'s destructor out
+	// of the enclosing instance's layout descriptor at run time. A field typed `Cell` inside `type Holder uses T`
+	// is a `Cell with Holder.T` — an INSTANCE over that parameter — and the descriptor describes the PARAMETERS,
+	// not the instances built over them: it holds `String`'s `__str_decref` and nothing that names
+	// `__destruct_Cell_String`. So the drop the body would emit is whatever the NON-CONCRETE instance answers
+	// (`__mm_decref`, since `Cell with Holder.T`'s only field is opaque and so owns nothing), which frees the
+	// cell's box and strands everything the argument put inside it.
+	//
+	// ⚠ **MEASURED on this tree before the refusal**: `Holder.replace(next Cell)` doing `self.cell = next`, over
+	// `Holder with String`, printed its answer and exited **101** — the leak gate, no diagnostic. The
+	// CONCRETE-receiver form of the same assignment (`h.cell = StrCell.make(…)`) is correct and stays legal:
+	// `slotTypeThroughReceiver` substitutes the receiver's argument, so that write drops through the concrete
+	// `__destruct_Cell_String`.
+	//
+	// ⭐ **THE TEST IS DIVERGENCE, NOT NON-CONCRETENESS**, and that is what keeps an all-trivial program legal.
+	// `Holder with Integer`'s field really is released by the `__mm_decref` the shared body picks, so a program
+	// with no managed instantiation is untouched; the refusal fires exactly when the one callee the shared body
+	// can emit is the wrong one for some instantiation the program actually interns.
+	//
+	// A CONCRETE receiver never reaches the registry walk: its box is a `genericInstance` and its field type was
+	// already substituted, so the two cheap gates below settle it. Only a write through the enclosing `self` of a
+	// GENERIC type gets that far, which is what keeps an O(instances) question off every field write.
+	//
+	// It THROWS rather than answering, so the one callee the refusal names is the one the divergence was
+	// measured against — a predicate would have had the message recompute it, which is the same fact derived
+	// twice at the one site where the two must agree.
+	function requireSharedBodyReassignHasAStaticDrop(box ValueId, layout StructLayout, index FieldIndex, fieldType MaxonType, anchor Token) throws ParseError
+		if maxonTypeTag(fieldType) != ValueTypeTag.genericInstance 'notAnInstanceField'
+			return
+		end 'notAnInstanceField'
+
+		if layout.typeParamNames.isEmpty() or self.tagOf(box) != ValueTypeTag.structRef 'notTheSharedBody'
+			return
+		end 'notTheSharedBody'
+
+		let sharedCallee = self.signatures.genericInstanceBoxDropCallee(typeNameIdOf(fieldType))
+		if not self.signatures.instanceFieldDropDivergesAcrossInstantiations(layout.name, index: index, sharedCallee: sharedCallee) 'oneCalleeServesEveryInstantiation'
+			return
+		end 'oneCalleeServesEveryInstantiation'
+
+		throw ParseError.unsupported("reassigning '{String.from(anchor.value)}' of '{String.from(layout.name)}', whose type is a generic instance over this type's OWN parameters — the shared generic body compiles once for every instantiation, so the drop for the value being displaced is not one callee: it is `{String.from(sharedCallee)}` here and something else at some instantiation. The box's own destructor releases the field correctly, so reassign it through a CONCRETE receiver instead; a descriptor slot carrying a nested instance's per-instantiation destructor is a later slice", line: anchor.line, column: anchor.column)
+	end 'requireSharedBodyReassignHasAStaticDrop'
 
 	// ⭐ **REASSIGN A BARE OPAQUE `T` FIELD IN THE SHARED GENERIC BODY (P1.7 Finding A)** — the opaque twin of the
 	// concrete managed field write. The new value MUST be an OWNED feed parameter: the shared body cannot COPY an
