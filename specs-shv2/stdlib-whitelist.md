@@ -836,3 +836,81 @@ out 2
 ```stderr
 err 4
 ```
+
+### A CONTESTED extension method's call is an edge into stdlib, and the short-circuit has to see it
+
+`userCodeReachesStdlib` is the exact short-circuit this whole derivation opens with: *"no op in user
+code names a stdlib function ⇒ no stdlib function is reachable ⇒ file them all `unreachable`"*. It
+tests the op's callee NAME against the stdlib function-name set — and a call op carries the OVERLOAD
+SET's BASE name until `SemanticCheck.resolveOverloadedCalls` rebinds it to a member.
+
+For most overload sets that costs nothing, because the first declaration KEEPS the bare spelling and
+the base therefore IS a function name (`String.contains` is exactly this). For a **contested**
+extension method it costs the whole answer: D7's rule is that when a `<Conformer>.<method>` is
+declared by extensions in more than one file, **nobody keeps the bare spelling** — `Array.contains`
+is declared by `stdlib/Array.maxon`'s `where Element is Equatable` extension AND published onto
+`Array` by `stdlib/Interfaces.maxon`'s `extension Iterable`, so its members register as
+`Array.contains#type parameter` and `Array.contains#struct` and NOTHING is named `Array.contains`.
+The scan therefore missed a real edge, every stdlib name was filed `unreachable`, `lowerMaxonToStd`
+lowered no body — and `DeadFunctionElimination` then reached the resolved member from its own root
+set and PANICKED (`requireUnreachableStdlibStayedDead`, which is the guard doing its job: without it
+the program would have linked and called an EMPTY function).
+
+⭐ The cure is the one this file's own header argues for everywhere else: **the widening is written
+ONCE**. `markReachable` already widened a callee through `project.overloadSets`; this scan did not,
+which is one fact with two readers and the narrower one deciding. Both now ask
+`nameReachesStdlib`. MEASURED red before it: both cases below panicked in
+`DeadFunctionElimination`, and adding a single non-overloaded stdlib call (`"a".isAscii()`) to
+either one made it compile — which is what identified the short-circuit rather than the walk.
+
+<!-- disabled-test: stdlib-whitelist.a-contested-extension-method-is-the-only-edge-into-stdlib -->
+<!-- the rung that retires `Array.contains` from `Parser.arraySurfaceMemberNames` -->
+```maxon
+function main() returns ExitCode
+	let nums = [10, 20, 30, 40]
+	if nums.contains([20, 30]) 'found'
+		return 7
+	end 'found'
+	return 1
+end 'main'
+```
+```exitcode
+7
+```
+
+The ELEMENT overload of the same contested set, which registers under a different suffix and is
+reached by the same widening. Both are here because the two members are separate functions and a
+walk that widened to only the first would keep this one red.
+
+<!-- disabled-test: stdlib-whitelist.the-other-member-of-the-contested-set-is-an-edge-too -->
+<!-- the rung that retires `Array.contains` from `Parser.arraySurfaceMemberNames` -->
+```maxon
+function main() returns ExitCode
+	let nums = [10, 20, 30, 40]
+	if nums.contains(30) 'found'
+		return 7
+	end 'found'
+	return 1
+end 'main'
+```
+```exitcode
+7
+```
+
+⛔⛔ **THE TWO CASES ABOVE ARE DISABLED, AND SAYING WHY IS THE WHOLE POINT OF LEAVING THEM HERE.** They
+were written RED and measured RED — both panicked in `DeadFunctionElimination`, naming
+`Array.contains#struct` and `Array.contains#type parameter` — against a tree where `contains` had been
+struck from `Parser.arraySurfaceMemberNames`, and they went GREEN on the fix. `contains` did NOT retire
+in the end (its corpus body faults; `arraySurfaceMemberNames` carries that measurement), so with the
+roster serving `contains` again these two programs never cross into stdlib at all: they would PASS
+without touching the rule they exist for, which is the one thing a test must not do.
+
+⚠ **AND THEY CANNOT BE REWRITTEN AROUND IT TODAY** — `Array.contains` is the ONLY contested
+`<Conformer>.<method>` the corpus has (`stdlib/Interfaces.maxon`'s `extension Iterable` and
+`stdlib/Array.maxon`'s `where Element is Equatable` extension are the two files; every other method
+either of them declares is unique to one). A user file cannot manufacture a second: MEASURED, a user
+`extension Array` declaring `filter(bump Int)` beside `Iterable`'s `filter(keep ElementPredicate)`
+does not resolve by argument type — `nums.filter(6)` reports `E3005 Cannot return 'struct' from
+function declared to return 'int'`, i.e. it binds the stdlib member — which is a separate finding and
+not a vehicle. The fix stands (a strict widening of a conservative predicate: over-answering costs a
+walk, under-answering skips a body the back end calls); these two go green with `contains`.

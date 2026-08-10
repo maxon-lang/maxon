@@ -451,6 +451,12 @@ transform declaring another type is handed the element regardless: `nums.map(fun
 a.count())` over an int array compiled clean and SEGFAULTED, dereferencing the integer `1` as a `String`.
 The arity half of this contract is E3122's; this is the type half, and both are decided whole-program
 because a bare reference to a named function carries no closure literal to read.
+
+⚠ **THE SENTENCE MOVED AT X-array-retire AND THE VERDICT DID NOT.** `map` left the `Array` roster, so this
+is now a call to `stdlib/Interfaces.maxon:199`'s declared `transform fn(Element) returns Element` and the
+ORDINARY argument-agreement check refuses it, in the voice every other call gets. `Set`/`Map` still get the
+tailored sentence because those surfaces are still synthesized — see
+`closure-param-type-inference.md`, which carries the whole argument and the `print`/`sleep` precedent.
 ```maxon
 
 function main() returns ExitCode
@@ -461,7 +467,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:5:21: `map` calls its transform with the container's own element, which is 'int' — but this transform declares its parameter as 'String'; a transform is `function(Element) returns Element`, so its parameter IS the element
+error E3005: <fragment>:5:17: argument type mismatch for 'transform': expected 'fn(int) returns int', got 'fn(String) returns int'
 ```
 
 <!-- test: map-struct-element-preserved -->
@@ -579,7 +585,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:27:16: `map` calls its transform with the container's own element, which is 'Color' — but this transform declares its parameter as 'Shade'; a transform is `function(Element) returns Element`, so its parameter IS the element
+error E3005: <fragment>:27:12: argument type mismatch for 'transform': expected 'fn(Color) returns Color', got 'fn(Shade) returns Color'
 ```
 
 <!-- test: error-map-transform-param-enum-at-an-int-element -->
@@ -615,5 +621,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:20:21: `map` calls its transform with the container's own element, which is 'int' — but this transform declares its parameter as 'Color'; a transform is `function(Element) returns Element`, so its parameter IS the element
+error E3005: <fragment>:20:17: argument type mismatch for 'transform': expected 'fn(int) returns int', got 'fn(Color) returns int'
 ```

@@ -52,6 +52,25 @@ passes exactly two, so `b` read the environment POINTER as its value and `a + b`
 compiled clean and printed a plausible number — `sum=6` for `[1, 2, 3]`, the right answer to a different
 question.
 
+⭐⭐ **THE THREE `Array` REFUSALS BELOW CHANGED PRODUCER AT X-array-retire, AND THEY ARE THE SAME VERDICT
+IN THE ORDINARY VOICE.** `map` left `Parser.arraySurfaceMemberNames`, so `nums.map(f)` on an ARRAY is now
+a call to `stdlib/Interfaces.maxon:199`'s `extension Iterable` — an ordinary declared function with an
+ordinary `fn(Element) returns Element` parameter — and the ordinary argument check reads that signature and
+refuses. E3122 becomes **E3005 `argument type mismatch for 'transform': expected 'fn(int) returns int',
+got 'fn(int, int) returns int'`**, at the ARGUMENT's own column rather than four in. Same program refused,
+same reason, no capability moved: the arity half and the parameter-TYPE half are both what a function-typed
+argument's own agreement rule already answers.
+
+This is `stdlib-whitelist.md`'s `print` finding one surface over, and the `sleep` precedent before it —
+*"a builtin's bespoke argument rejection, replaced by the ordinary one"* — and it is the shape a retirement
+takes every time: the bespoke sentence existed because there was no declaration to read.
+
+⚠ **E3122 IS STILL LIVE, AND ON PURPOSE**: `Set` and `Map` are still SYNTHESIZED surfaces whose `map` goes
+through `Parser.parseContainerMap`, which still raises it (`collection.map-set-with-declared-ranged-alias`
+is on that path). So the two voices coexist until those surfaces retire too — which is a real, temporary
+divergence between containers and is recorded here rather than left for a reader to discover from a
+diff.
+
 ## Tests
 
 <!-- test: the-transform-parameter-takes-the-container-element -->
@@ -96,7 +115,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3122: <fragment>:6:21: `map` calls its transform with 1 argument(s) — the container's own element — but this transform declares 2 parameter(s); a transform is `function(Element) returns Element`
+error E3005: <fragment>:6:17: argument type mismatch for 'transform': expected 'fn(int) returns int', got 'fn(int, int) returns int'
 ```
 
 <!-- test: error-a-transform-that-declares-no-parameter-is-refused-too -->
@@ -112,7 +131,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3122: <fragment>:5:21: `map` calls its transform with 1 argument(s) — the container's own element — but this transform declares 0 parameter(s); a transform is `function(Element) returns Element`
+error E3005: <fragment>:5:17: argument type mismatch for 'transform': expected 'fn(int) returns int', got 'fn() returns int'
 ```
 
 <!-- test: error-a-named-function-of-the-wrong-arity-is-refused-at-the-argument -->
@@ -134,7 +153,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3122: <fragment>:10:21: `map` calls its transform with 1 argument(s) — the container's own element — but this transform declares 2 parameter(s); a transform is `function(Element) returns Element`
+error E3005: <fragment>:10:17: argument type mismatch for 'transform': expected 'fn(int) returns int', got 'fn(int, int) returns int'
 ```
 
 <!-- test: error-a-second-untyped-closure-parameter-is-uninferrable -->

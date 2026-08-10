@@ -4485,7 +4485,11 @@ function arrayMethodMutatesReceiver(name ByteArray, isManagedMemory bool) return
 	// looking at, which is exactly what E3070 exists to catch. A read-only classification here would let
 	// `let e = try arr.get(0)` stay live across `arr.managed.swap(0, j: 1)` and hand the caller an element
 	// that has moved. The two shifts write the buffer outright.
-	if isManagedMemory and (name.equals(ManagedMemorySetLengthMethod) or name.equals(ManagedMemorySetByteMethod) or name.equals(ManagedMemoryGrowMethod) or name.equals(ManagedMemorySwapMethod) or name.equals(ManagedMemoryShiftRightMethod) or name.equals(ManagedMemoryShiftLeftMethod)) 'managedMemoryMutator'
+	// ⚠ **`remove` JOINED THEM AT X-array-retire, BECAUSE THE `Array` SPELLING LEFT THE ROSTER** — it is a
+	// buffer member and nothing else now, exactly like `swap`, and its `Array` caller is
+	// `stdlib/Array.maxon:327`'s `managed.remove(at)`, whose own receiver-write this same answer records
+	// one frame down.
+	if isManagedMemory and (name.equals(ManagedMemorySetLengthMethod) or name.equals(ManagedMemorySetByteMethod) or name.equals(ManagedMemoryGrowMethod) or name.equals(ManagedMemorySwapMethod) or name.equals(ManagedMemoryShiftRightMethod) or name.equals(ManagedMemoryShiftLeftMethod) or name.equals(RemoveMethod)) 'managedMemoryMutator'
 		return true
 	end 'managedMemoryMutator'
 
@@ -4494,7 +4498,7 @@ function arrayMethodMutatesReceiver(name ByteArray, isManagedMemory bool) return
 	// so E3019, E3070 and the storage-written mask must all see it; served as a member but left off this
 	// answer, `let a = [1, 2]` followed by `a.appendMemory(b.managed)` COMPILES and writes through an
 	// immutable binding (`arrays.error.appendMemory-on-a-let-array`, verified red before this line).
-	return name.equals(ArrayPushMethod) or name.equals(ArraySetMethod) or name.equals(InsertMethod) or name.equals(AppendMethod) or name.equals(AppendMemoryMethod) or name.equals(ArrayReserveMethod) or name.equals(ArrayResizeMethod) or name.equals(ClearMethod) or name.equals(ArrayPopMethod) or name.equals(RemoveMethod)
+	return name.equals(ArrayPushMethod) or name.equals(ArraySetMethod) or name.equals(InsertMethod) or name.equals(AppendMethod) or name.equals(AppendMemoryMethod) or name.equals(ArrayReserveMethod) or name.equals(ArrayResizeMethod) or name.equals(ClearMethod)
 end 'arrayMethodMutatesReceiver'
 
 // ⭐ **WHICH PARAMETER THE APPEND REFUSAL NAMES — READ OFF THE SPELLING THE AUTHOR WROTE.** One operation, two
@@ -4661,21 +4665,49 @@ end 'cursorSurfaceMemberNames'
 // sentence — `managed-memory-methods.md` and `void-call-result.md` between them pin it sixteen times about the
 // `Array` surface. That is the derived-message property working as designed (a diagnostic enumerating what
 // the compiler supplies must move when the surface grows), and it is the standing cost of adding a line here.
+//
+// ⭐⭐⭐ **AND IT RUNS BACKWARDS: X-array-retire STRUCK SEVEN NAMES, AND STRIKING ONE IS THE WHOLE EDIT.**
+// `stdlib/Array.maxon` is listed, so `memberBelongsToTheCorpus` serves a name this list does not carry from
+// the declaration the program actually has. `last`, `pop`, `remove`, `capacity`, `map`, `hash` and `equals`
+// left; the header's promise held in reverse — nothing else moved but the sentence, which is the same
+// seventeen-expectation churn the paragraph above prices, paid in the other direction.
+//
+// ⚠ **FOUR OF THOSE SEVEN DELETED NO CODE, AND THAT IS THE PARTITION SPEAKING RATHER THAN A HALF-JOB.**
+// `remove` and `capacity` are `__ManagedMemory` members too (`bufferSurfaceMemberNames`), so their arms and
+// their `__arr_remove`/`__arr_capacity` runtimes are FLOOR; `map`'s `__arr_map` is `Map.map`'s emission
+// (`parseContainerMap`, one caller over) and `hash`/`equals`' `__arr_hash`/`__arr_eq` are what a `Map` key's
+// WITNESS slot and the `==` OPERATOR name. What retired there is the `Array` SPELLING, which is exactly what
+// a roster is.
+//
+// ⚠⚠ **WHAT STAYED, STAYED FOR A MEASURED REASON, AND EACH IS RECORDED AT ITS OWN LINE OR HERE.** Three
+// classes, and only the first is about this file:
+//   • **A COMPILE-TIME RULE THE CORPUS CANNOT STATE** — `resize` is E3106 (a managed element has no zero),
+//     `first` is a BORROW SOURCE for E3070 (`borrow-liveness.first-is-a-borrow-source`), and `clear` carries
+//     the receiver-write mask that answers *"does `Bag.wipe()` free what the caller borrowed?"* — MEASURED,
+//     five `borrow-liveness` cases stop being refused when it goes, and the rest move column.
+//   • **A DECLARED-OWN-`Array` DEPENDS ON IT** — `reserve`, `count`, `isEmpty`, `clear`; see `reserve`'s line.
+//   • **THE CORPUS BODY IS WRONG OR THE CALL TO IT IS** — `contains` (see its line, a fault), and
+//     `get`/`set`/`slice`/`clone`/`push`/`insert`/`append`/`appendMemory`, whose corpus route MEASURED a
+//     `type parameter` return that never substitutes (`try arr.get(i) otherwise 0` ⇒ E3059) and a
+//     typealias-nominal `append` that refuses the value-set rule `arrayAppendArgAdmits` states.
 function arraySurfaceMemberNames() returns ByteArrayArray
 	var names = ByteArrayArray.create()
 	names.push(ManagedMemoryFieldName)
 	names.push(GetMethod)
 	names.push(ArraySetMethod)
 	names.push(ArrayFirstMethod)
-	names.push(ArrayLastMethod)
-	names.push(ArrayPopMethod)
-	names.push(RemoveMethod)
 	names.push(SliceMethod)
 	names.push(CountMethod)
-	names.push(ArrayCapacityMethod)
 	names.push(IsEmptyMethod)
 	names.push(CloneMethodName)
 	names.push(ArrayPushMethod)
+	// ⚠ **`reserve` STAYED, AND THE REASON IS `stdlib/String.maxon:807` RATHER THAN THIS SURFACE
+	// (X-array-retire).** A program may declare its OWN `type Array` (`array-declared-record.md`), and that
+	// declaration REPLACES the corpus's for the whole compile INCLUDING stdlib — so a stdlib body calling
+	// `arr.reserve(…)` has no provider but this roster. MEASURED: struck, three cases
+	// (`array-declared-record.a-corpus-served-managed-element-balances-across-a-loop` and
+	// `stable-partition-managed-pivot`'s two) stopped compiling inside `stdlib/String.maxon`, not inside the
+	// program. The same holds of `count`, `isEmpty` and `clear`; those have losses of their own as well.
 	names.push(ArrayReserveMethod)
 	names.push(ArrayResizeMethod)
 	names.push(ClearMethod)
@@ -4685,14 +4717,23 @@ function arraySurfaceMemberNames() returns ByteArrayArray
 	// It sits beside `append` because `append` is its CALLER — `:262`'s whole body is
 	// `appendMemory(other.managed)` — so the roster shows the pair in the order the corpus builds them.
 	names.push(AppendMemoryMethod)
-	names.push(MapMethod)
+	// ⚠⚠ **`contains` IS THE ONE MEMBER THIS RUNG COULD NOT RETIRE, AND IT IS NOT THE ROSTER'S FAULT
+	// (X-array-retire).** Struck from this list the call routes to `stdlib/Array.maxon:537`'s
+	// `where Element is Equatable` extension, which COMPILES AND THEN FAULTS: **MEASURED 0xC0000005 on
+	// `[10].contains(10)` and on `[10, 20].contains([10])`, and on a `String` element too**, so it is the
+	// BODY rather than an element's witness. The same body written by a USER is refused outright —
+	// `extension Array where Element is Equatable` with `for item in self` earns *"'hasIt' owns an opaque
+	// type-parameter value it must release on some path, but the method reserves no layout descriptor"* —
+	// which is the shape that faults, escaping its own refusal because the declaration is stdlib's. Its
+	// retirement is the largest single deletion left here (the whole `ArrayRuntime` contains family, its
+	// two witness-threading predicates and `parseArrayContains`) and it is a GENERICS rung, not a roster
+	// line.
 	// ⚠ **`contains` IS ON THE SURFACE UNCONDITIONALLY AND AVAILABLE CONDITIONALLY, and the two answers belong
 	// at different doors (conditional-extensions).** A roster says what the dispatch SERVES; whether THIS
 	// receiver's element satisfies `where Element is Equatable` is `requireArrayExtensionAvailable`'s question,
 	// asked at its own span with its own diagnostic (E4006, the same one a user's conditional extension is
 	// withheld with). Leaving the name off for a non-`Equatable` element would be the roster lying about the
 	// surface — the exact shape this list's header records twice already.
-	names.push(ContainsMethod)
 
 	// ⚠ **`hash`/`equals` ARE ON THE SURFACE UNCONDITIONALLY AND AVAILABLE CONDITIONALLY** (array-hashable),
 	// for the sentence `contains` carries three lines up — whether THIS receiver's element satisfies `where
@@ -4701,9 +4742,7 @@ function arraySurfaceMemberNames() returns ByteArrayArray
 	// (`stringSurfaceMemberNames`'s rule): the conformance row is
 	// `IrInterface.isIntrinsicBuiltinConformance`'s, so the day `Array` gains a protocol, its method joins
 	// the roster, the refusal and the dispatch together.
-	for conformanceMethod in builtinConformerMethodNameList(ArrayBuiltinBaseName) 'eachConformance'
-		names.push(conformanceMethod)
-	end 'eachConformance'
+	names.push(ContainsMethod)
 	return names
 end 'arraySurfaceMemberNames'
 
@@ -40436,30 +40475,16 @@ export type Parser
 	// ⭐ **THE `Hashable`/`Equatable` HALF OF THE RULE ABOVE, ASKED UNDER `Array`'s OWN CONFORMANCE ROW.**
 	// `where Element is Hashable and Equatable` is the SAME two protocols `Array` conditionally supplies, so
 	// the clause is READ from `isIntrinsicBuiltinConformance` rather than transcribed (see that predicate's
-	// `Array` arm). The three doors that WITHHOLD a method under it — `arr.hash()`, `a.equals(b)` and the
-	// `==`/`!=` operator — share this one, so the refusal they raise is one sentence. (The hash-table KEY
+	// `Array` arm). The doors that WITHHOLD a method under it share this one, so the refusal they raise is one
+	// sentence. ⚠ X-array-retire left it with a SINGLE caller — the `==`/`!=` OPERATOR — because the
+	// `arr.hash()` and `a.equals(b)` METHOD arms retired to `stdlib/Array.maxon:637`'s extension, which states
+	// the same clause in the language and withholds itself. The operator has no declaration to withhold it,
+	// which is exactly why this survives them. (The hash-table KEY
 	// gate reads the same row but does NOT come through here: it refuses a key rather than a method, so it
 	// wants the verdict's payload and not this throw. See `requireArrayKeyElementConforms`.)
 	function requireArrayConformanceAvailable(giid GenericInstanceId, methodName ByteArray, anchor Token) throws ParseError
 		try self.requireArrayExtensionAvailable(giid, interfaces: intrinsicConformanceProtocolNames(ArrayBuiltinBaseName), methodName: methodName, anchor: anchor)
 	end 'requireArrayConformanceAvailable'
-
-	// `equals`'s formal is `other Self`, so its actual must be a value of the RECEIVER's own array instance —
-	// the same rule `requireBuiltinConformanceSelfArgs` enforces for a scalar or `String` conformer, and for
-	// the same reason: the impl reads two array RECORDS, so anything else would be dereferenced as one.
-	//
-	// ⚠ It is the STRICT instance test and deliberately not `arrayAppendArgAdmits`: that one also admits the
-	// byte-buffer boundary (an `Array with Byte` taking a `__ManagedMemory`), which `append` wants because it
-	// COPIES BYTES between two records the boundary says are one — and which `equals` must not, because two
-	// spellings of one record answering `Self` would let `bytearray-element-size`'s whole subject through
-	// (an `Array with <one Byte>` compared against an `Array with <another>`).
-	function requireSameArrayInstanceArg(other ValueId, arr ValueId, giid GenericInstanceId, methodTok Token) throws ParseError
-		if self.tagOf(other) == ValueTypeTag.genericInstance and self.valueNameId(other) == giid 'sameInstance'
-			return
-		end 'sameInstance'
-
-		throw ParseError.builtinArgumentType(String.from(OtherParamName), expected: self.valueDisplayTypeName(arr), got: self.valueDisplayTypeName(other), line: methodTok.line, column: methodTok.column)
-	end 'requireSameArrayInstanceArg'
 
 	// ⚠ **THE METHOD NAME AND THE POSITION ARE TWO PARAMETERS, because the OPERATOR door has one and not the
 	// other.** `a == b` fails this rule as `Array.equals` — that is the method whose availability was
@@ -45469,15 +45494,14 @@ export type Parser
 			try self.consumeEmptyArgList()
 			return self.emitContainerElementAccessor(func, callee: ArrFirstName, container: arr, args: singletonArgs(arr), giid: giid, owned: false, borrowSubjectName: borrowSubjectName, range: range)
 		end 'first'
-		if methodTok.value.equals(ArrayLastMethod) 'last'
-			try self.consumeEmptyArgList()
-			return self.emitContainerElementAccessor(func, callee: ArrLastName, container: arr, args: singletonArgs(arr), giid: giid, owned: false, borrowSubjectName: borrowSubjectName, range: range)
-		end 'last'
-		if methodTok.value.equals(ArrayPopMethod) 'pop'
-			try self.consumeEmptyArgList()
-			return self.emitContainerElementAccessor(func, callee: ArrPopName, container: arr, args: singletonArgs(arr), giid: giid, owned: true, borrowSubjectName: borrowSubjectName, range: range)
-		end 'pop'
-		if methodTok.value.equals(RemoveMethod) 'remove'
+		// ⭐ **`remove` IS BUFFER-SURFACE ONLY SINCE X-array-retire, AND THE GATE IS WHAT SAYS SO.** The
+		// `Array` spelling is `stdlib/Array.maxon:327`'s, which is this same operation through
+		// `managed.remove(at)` — one runtime, reached from source instead of from an arm. The gate is
+		// unreachable-by-roster (the buffer roster carries the name and the `Array` one no longer does) and
+		// is written anyway, exactly as `byteAt`/`elementSize`/`grow` write theirs: an arm that can be
+		// reached on a surface the member does not belong to is D11's defect, and the gate is the only thing
+		// that states the surface at the arm rather than only in a list.
+		if isManagedMemory and methodTok.value.equals(RemoveMethod) 'remove'
 			let index = try self.parseArrayOneArg(func)
 			return self.emitContainerElementAccessor(func, callee: ArrRemoveName, container: arr, args: pairArgs(arr, second: index), giid: giid, owned: true, borrowSubjectName: borrowSubjectName, range: range)
 		end 'remove'
@@ -45540,7 +45564,9 @@ export type Parser
 			try self.consumeEmptyArgList()
 			return self.emitRuntimeCall(MmToCStringName, args: singletonArgs(arr), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
 		end 'toCString'
-		if methodTok.value.equals(ArrayCapacityMethod) 'capacity'
+		// Buffer-surface only since X-array-retire, for `remove`'s reason: `Array.capacity()` is
+		// `stdlib/Array.maxon:157`'s `managed.capacity()`, which is this arm reached from source.
+		if isManagedMemory and methodTok.value.equals(ArrayCapacityMethod) 'capacity'
 			try self.consumeEmptyArgList()
 			return self.emitRuntimeCall(ArrCapacityName, args: singletonArgs(arr), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
 		end 'capacity'
@@ -45566,59 +45592,21 @@ export type Parser
 			return self.inheritArrayElementSurface(self.emitArrayCloneCall(giid, arr: arr, range: range), source: arr)
 		end 'clone'
 
-		// ⭐ **`map(transform)` — the element-wise transform (interface-extensions).** It is on the `Array`
-		// roster and NOT the buffer's, so a receiver reaching here is an `Array`; `mm.map(f)` is the roster
-		// refusal, exactly as `mm.push(x)` is.
-		//
-		// ⚠ **IT NEEDS NO `requireArrayCopyMethodSupported` AND MUST NOT ASK FOR ONE.** That gate exists
-		// because `slice`/`clone`/`append` DUPLICATE the source's elements and a managed element has no
-		// byte-blit; `map` duplicates nothing — every element of the result is what the transform ANSWERED,
-		// a fresh value the new record becomes the sole owner of. The result's own element surface is the
-		// transform's business too, so `inheritArrayElementSurface` would be a claim about a value the
-		// receiver never handed on.
-		if methodTok.value.equals(MapMethod) 'map'
-			return try self.parseContainerMap(func, container: arr, resultGiid: giid, callee: ArrMapName, range: range)
-		end 'map'
-
-		// ⭐ **`contains(…)` — the CONDITIONAL extension (conditional-extensions).** It sits beside `map`
-		// because both are `stdlib`'s `Array` extensions rather than its core surface, and it is on the
-		// `Array` roster and NOT the buffer's for `map`'s reason: a receiver reaching here is an `Array`, and
-		// `mm.contains(x)` is the roster refusal.
+		// ⭐ **`contains(…)` — the CONDITIONAL extension (conditional-extensions), and the LAST of `stdlib`'s
+		// `Array` extension members still served here.** It is on the `Array` roster and NOT the buffer's, so
+		// a receiver reaching here is an `Array` and `mm.contains(x)` is the roster refusal.
 		//
 		// ⚠ It is the FIRST overload set on any container surface, and the arm is one call because the choice
 		// is made where the argument is parsed — see `parseArrayContains`. It also carries the surface's first
 		// AVAILABILITY rule, which is why the arm cannot be a bare `emitRuntimeCall` the way `count` is.
+		//
+		// ⚠⚠ **`map`, `hash` AND `equals` LEFT THIS SPOT AT X-array-retire AND THIS ONE COULD NOT** — see
+		// `arraySurfaceMemberNames`, which records the measured fault that kept it. The two runtimes they
+		// took their names from are still built: `__arr_map` is `Map.map`'s and `__arr_hash`/`__arr_eq` are
+		// the WITNESS door's and the `==` operator's.
 		if methodTok.value.equals(ContainsMethod) 'contains'
 			return try self.parseArrayContains(func, arr: arr, giid: giid, methodTok: methodTok, range: range)
 		end 'contains'
-
-		// ⭐⭐ **`hash()` / `equals(other)` — THE `Hashable`/`Equatable` CONDITIONAL CONFORMANCE
-		// (array-hashable).** They sit beside `contains` because all three are `stdlib`'s `Array` EXTENSIONS
-		// rather than its core surface, and they carry the same availability rule under their own clause.
-		//
-		// ⚠ **THIS IS THE ONE CONFORMANCE THE `builtinConformerOfTag` CLASSIFIER DOES NOT ROUTE, and that is
-		// `Character`'s arrangement rather than a new one**: an `Array` receiver is routed HERE several arms
-		// above any conformance lookup (it must be — `arr.count()` may not resolve against the intrinsic
-		// conformances), so the two arms live where the receiver actually arrives. What they emit is the same
-		// pair of graphs a `Map` key's witness slot names; see `ArrayRuntime.ArrHashName` for why the direct
-		// door spells them `__arr_*` and the witness door spells them `Array.*`.
-		if methodTok.value.equals(HashMethodName) 'hash'
-			try self.requireArrayConformanceAvailable(giid, methodName: methodTok.value, anchor: methodTok)
-			try self.consumeEmptyArgList()
-			// The result is typed off `Hashable.hash`'s own declared return, exactly as the witness-dispatched
-			// and the `int.hash` forms are (`emitBuiltinConformanceCall`), so a `HashValue` carries the ranged
-			// alias's `named` tag rather than a bare `integer` minted here.
-			let hashType = self.interfaceReturnMaxonType(HashValueTypeName)
-			return self.emitRuntimeCall(ArrHashName, args: singletonArgs(arr), resultTag: maxonTypeTag(hashType), resultNameId: typeNameIdOf(hashType), range: range)
-		end 'hash'
-		if methodTok.value.equals(EqualsMethodName) 'equals'
-			try self.requireArrayConformanceAvailable(giid, methodName: methodTok.value, anchor: methodTok)
-			try self.consume(TokenKind.leftParen)
-			let other = try self.parseExpression(func, block: self.currentBlock)
-			try self.requireSameArrayInstanceArg(other, arr: arr, giid: giid, methodTok: methodTok)
-			try self.consume(TokenKind.rightParen)
-			return self.emitRuntimeCall(ArrEqName, args: pairArgs(arr, second: other), resultTag: ValueTypeTag.boolean, resultNameId: UnnamedTypeId, range: range)
-		end 'equals'
 
 		// ⭐ **THE VOID MUTATORS — AND EACH REFUSES VALUE POSITION FROM INSIDE ITS OWN ARM
 		// (`requireVoidMethodIsStatement`, whose header carries the D11 measurement).** The refusal used to

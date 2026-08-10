@@ -297,8 +297,6 @@ export let ArrIsEmptyName = b"__arr_is_empty"
 export let ArrReserveName = b"__arr_reserve"
 export let ArrResizeName = b"__arr_resize"
 export let ArrFirstName = b"__arr_first"
-export let ArrLastName = b"__arr_last"
-export let ArrPopName = b"__arr_pop"
 export let ArrClearName = b"__arr_clear"
 export let ArrInsertName = b"__arr_insert"
 export let ArrRemoveName = b"__arr_remove"
@@ -895,7 +893,7 @@ end 'cursorSourceMethodName'
 // exact defect D12 existed to remove. Asking the NARROW predicate is disjointness **by construction**, so
 // the order of those tests stops mattering at all.
 export function isThrowingArrayAccessorCallee(callee ByteArray) returns bool
-	return callee.equals(ArrGetName) or callee.equals(ArrSetName) or callee.equals(ArrGetInBoundsName) or callee.equals(ArrSetInBoundsName) or callee.equals(ArrFirstName) or callee.equals(ArrLastName) or callee.equals(ArrPopName) or callee.equals(ArrRemoveName) or callee.equals(ArrSliceName) or callee.equals(ArrSliceManagedName) or callee.equals(ArrSliceOpaqueName)
+	return callee.equals(ArrGetName) or callee.equals(ArrSetName) or callee.equals(ArrGetInBoundsName) or callee.equals(ArrSetInBoundsName) or callee.equals(ArrFirstName) or callee.equals(ArrRemoveName) or callee.equals(ArrSliceName) or callee.equals(ArrSliceManagedName) or callee.equals(ArrSliceOpaqueName)
 end 'isThrowingArrayAccessorCallee'
 
 // ⭐ **THE ELIDED TWIN OF A CHECKED ELEMENT ACCESSOR** — the one place the two pairs are related, read by
@@ -1023,12 +1021,6 @@ export function arrayAccessorSourceMethodName(callee ByteArray) returns ByteArra
 	if callee.equals(ArrFirstName) 'first'
 		return ArrayFirstMethod
 	end 'first'
-	if callee.equals(ArrLastName) 'last'
-		return ArrayLastMethod
-	end 'last'
-	if callee.equals(ArrPopName) 'pop'
-		return ArrayPopMethod
-	end 'pop'
 	if callee.equals(ArrRemoveName) 'remove'
 		return RemoveMethod
 	end 'remove'
@@ -1124,8 +1116,6 @@ export function installArrayRuntime(module StdModule, usage RuntimeUsage)
 	buildArrReserve(module)
 	buildArrResize(module)
 	buildArrFirst(module)
-	buildArrLast(module)
-	buildArrPop(module)
 	buildArrClear(module)
 	buildArrInsert(module)
 	buildArrRemove(module)
@@ -3101,70 +3091,6 @@ function buildArrFirst(module StdModule)
 
 	module.functions.push(func)
 end 'buildArrFirst'
-
-// `__arr_last(arr) -> (value, flag)` — element length-1 (throws on empty).
-function buildArrLast(module StdModule)
-	var func = IrFunction.createFromStd(ArrLastName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0, throwsTypeName: arrayErrorThrows())
-	var ids = ValueMinter.create(1)
-
-	var entry = module.addBlock(func, label: b"entry")
-	var oob = module.addBlock(func, label: b"oob")
-	var load = module.addBlock(func, label: b"load")
-
-	emitParams(module, block: entry, count: 1)
-	let arr = 0 as ValueId
-
-	let length = emitLoadField(module, block: entry, record: arr, offset: ArrLengthOffset, ids: ids)
-	let zero = emitConst(module, block: entry, value: 0, ids: ids)
-	let isEmpty = emitCmp(module, block: entry, a: length, b: zero, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(entry, op: StdOp.condBranch(isEmpty, thenBlockId: oob.id, elseBlockId: load.id))
-
-	emitOobReturn(module, block: oob, ids: ids)
-
-	let one = emitConst(module, block: load, value: 1, ids: ids)
-	let lastIdx = emitBin(module, block: load, a: length, b: one, opcode: StdBinOpcode.sub, ids: ids)
-	let buffer = emitLoadField(module, block: load, record: arr, offset: ArrBufferOffset, ids: ids)
-	let es = emitLoadField(module, block: load, record: arr, offset: ArrElementSizeOffset, ids: ids)
-	emitLoadElemAndOkReturn(module, func: func, cur: load, record: arr, buffer: buffer, index: lastIdx, es: es, ids: ids)
-
-	module.functions.push(func)
-end 'buildArrLast'
-
-// `__arr_pop(arr) -> (value, flag)` — remove and return the last element (throws on empty). The vacated
-// slot is zeroed to keep `[length, capacity)` zero.
-function buildArrPop(module StdModule)
-	var func = IrFunction.createFromStd(ArrPopName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0, throwsTypeName: arrayErrorThrows())
-	var ids = ValueMinter.create(1)
-
-	var entry = module.addBlock(func, label: b"entry")
-	var oob = module.addBlock(func, label: b"oob")
-	var pop = module.addBlock(func, label: b"pop")
-
-	emitParams(module, block: entry, count: 1)
-	let arr = 0 as ValueId
-
-	let length = emitLoadField(module, block: entry, record: arr, offset: ArrLengthOffset, ids: ids)
-	let zero = emitConst(module, block: entry, value: 0, ids: ids)
-	let isEmpty = emitCmp(module, block: entry, a: length, b: zero, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(entry, op: StdOp.condBranch(isEmpty, thenBlockId: oob.id, elseBlockId: pop.id))
-
-	emitOobReturn(module, block: oob, ids: ids)
-
-	// Detach BEFORE the buffer pointer is loaded (`__arr_cow_detach` trap 1), and after the empty check, so a
-	// throwing `pop` allocates nothing.
-	emitCowDetach(module, block: pop, arr: arr, ids: ids)
-	let one = emitConst(module, block: pop, value: 1, ids: ids)
-	let lastIdx = emitBin(module, block: pop, a: length, b: one, opcode: StdBinOpcode.sub, ids: ids)
-	let buffer = emitLoadField(module, block: pop, record: arr, offset: ArrBufferOffset, ids: ids)
-	let es = emitLoadField(module, block: pop, record: arr, offset: ArrElementSizeOffset, ids: ids)
-	var afterLoad = module.addBlock(func, label: b"poploaded")
-	let value = emitLoadElemAt(module, func: func, cur: pop, exit: afterLoad, buffer: buffer, index: lastIdx, es: es, ids: ids)
-	emitZeroElems(module, block: afterLoad, buffer: buffer, start: lastIdx, count: one, es: es, ids: ids)
-	emitStoreField(module, block: afterLoad, record: arr, offset: ArrLengthOffset, value: lastIdx)
-	emitOkReturn(module, block: afterLoad, value: value, ids: ids)
-
-	module.functions.push(func)
-end 'buildArrPop'
 
 // `__arr_clear(arr)` — length ← 0, zeroing the whole live region (capacity-slot invariant). The buffer
 // and capacity are left in place for reuse.
