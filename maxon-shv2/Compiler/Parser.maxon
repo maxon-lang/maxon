@@ -16807,6 +16807,9 @@ export type Parser
 		// through, so the two passes cannot form two opinions of what `returns __ManagedMemory` means — the
 		// property `parseOptionalReturnType` is shared for. This copy reaches `project.funcReturnTypes`.
 		let declaredReturnSurface = self.returnDeclaredSurface()
+		// Captured BEFORE the clause is consumed, for `paramTypeStarts`' reason one column over (W57/W58): the
+		// resolved type is exactly where the `with` arguments stop existing, so the token is what survives.
+		let returnTypeStart = self.returnTypeTokenIndex()
 		let returnType = self.resolveNamedStructReturn(try self.parseOptionalReturnType())
 		// The `throws E` clause (P1.4b) — stamped onto the function so the body parse (`throw`/propagate)
 		// and the lowering (`ret` → `errorReturn` inside a throwing function) can read it off `func`.
@@ -17130,7 +17133,7 @@ export type Parser
 		self.skipOptionalLabel()
 
 		self.artifact.recordFuncReturnType(name, returnType: returnType, declaredSurface: declaredReturnSurface)
-		self.artifact.recordFuncSignature(name, signature: FuncSignature.create(paramNames, paramTypes: paramTypes, paramAggregateNames: self.paramAggregateNamesOf(paramTypes), paramDeclaredNames: self.paramDeclaredNamesOf(paramTypes), returnAggregateName: self.erasedAggregateNameOfReturn(returnType)), nameLine: nameTok.line, nameColumn: nameTok.column, sourceFilePath: self.filePath)
+		self.artifact.recordFuncSignature(name, signature: FuncSignature.create(paramNames, paramTypes: paramTypes, paramAggregateNames: self.paramAggregateNamesOf(paramTypes), paramDeclaredNames: self.paramDeclaredNamesOf(paramTypes), returnAggregateName: self.erasedAggregateNameOfReturn(returnType), paramExistentialSites: self.paramExistentialSitesOf(paramTypes, paramTypeStarts: paramTypeStarts), returnExistentialSites: self.returnExistentialSitesOf(returnType, returnTypeStart: returnTypeStart)), nameLine: nameTok.line, nameColumn: nameTok.column, sourceFilePath: self.filePath)
 		self.commitRangeChecks(name)
 	end 'parseFunction'
 
@@ -17746,6 +17749,72 @@ export type Parser
 		return try self.declaredGenericAliasInstance(name)
 	end 'declaredExistentialInstanceAt'
 
+	// ⭐⭐ **THE SIGNATURE'S HALF OF THE SAME FACT (W58)** — which PARAMETERS were declared at a parameterized
+	// existential, and at which instance. `bindParameters` records this per VALUE, for the callee's own body
+	// (W57); the caller asking *"may this concrete argument widen into that parameter?"* stands in a different
+	// function and a different SSA space, so it reads the SIGNATURE. Both derive it from the same
+	// `paramTypeStarts` column through the same `declaredExistentialInstanceAt`, which is what keeps one
+	// parameter from being read two ways.
+	//
+	// The `interfaceRef` gate is the same one `bindParameters` applies and for the same reason: only an
+	// existential can have had `with` arguments to lose, and a generic alias over a STRUCT base keeps its
+	// arguments on the type where every other door already reads them.
+	//
+	// ⚠ The walk's list is allocated up front and COLLAPSED to the shared empty when nothing claimed, rather
+	// than materialized copy-on-write the way `rangedParamSites` does it. The reason is `materializedParamSites`'
+	// own header: reassigning the walk's binding from inside a branch is the measured `E9001 … does not
+	// dominate` shape, and the claim here is discovered inside an `if let` that no `continue` guard can flatten
+	// without asking `declaredExistentialInstanceAt` twice. The cost is one empty array per parsed function,
+	// which is strictly less than the full-length column `paramAggregateNamesOf` builds beside it.
+	function paramExistentialSitesOf(paramTypes MaxonTypeArray, paramTypeStarts TokenIndexColumn) returns ParamExistentialSiteArray
+		var sites = ParamExistentialSiteArray.create()
+		for i in 0 upto paramTypes.count() 'eachParam'
+			let paramType = try paramTypes.get(i) otherwise panic("paramExistentialSitesOf: paramTypes.get OOB at {i} below the count just read from the same array")
+			if maxonTypeTag(paramType) != ValueTypeTag.interfaceRef 'notAnExistential'
+				continue
+			end 'notAnExistential'
+
+			let start = try paramTypeStarts.get(i) otherwise panic("paramExistentialSitesOf: paramTypeStarts.get OOB at {i} — a parameter's columns are built in lockstep")
+			if let instance = try self.declaredExistentialInstanceAt(start) 'namesAnInstantiation'
+				sites.push(ParamExistentialSite.create(i, instance: instance))
+			end 'namesAnInstantiation'
+		end 'eachParam'
+
+		return sharedEmptyParamExistentialSites if sites.count() == 0 else sites
+	end 'paramExistentialSitesOf'
+
+	// The RETURN slot's half — at most one instance, so an EMPTY column is "this function's return names no
+	// instantiation" and there is no absent-value to invent. A `void` return and a non-existential one leave it
+	// empty through the same predicate, exactly as a non-existential parameter is skipped above.
+	function returnExistentialSitesOf(returnType MaxonReturnType, returnTypeStart TokenIndex) returns GenericInstanceIdArray
+		if maxonReturnTypeIsVoid(returnType) 'returnsNothing'
+			return sharedEmptyReturnExistentialSites
+		end 'returnsNothing'
+
+		if maxonReturnTypeTag(returnType) != ValueTypeTag.interfaceRef 'notAnExistential'
+			return sharedEmptyReturnExistentialSites
+		end 'notAnExistential'
+
+		var sites = GenericInstanceIdArray.create()
+		if let instance = try self.declaredExistentialInstanceAt(returnTypeStart) 'namesAnInstantiation'
+			sites.push(instance)
+		end 'namesAnInstantiation'
+
+		return sharedEmptyReturnExistentialSites if sites.count() == 0 else sites
+	end 'returnExistentialSitesOf'
+
+	// ⭐ **THE TOKEN INDEX OF THE DECLARED RETURN TYPE'S OWN NAME** — `self.pos` is the `returns` keyword and
+	// the type follows it. Spelled once because two readers want it: `returnDeclaredSurface` reads the buffer
+	// spelling off it and `returnExistentialSitesOf` reads the `with` arguments, and a drift between the two
+	// would have them describing different tokens of one declaration.
+	//
+	// With NO return clause it answers `self.pos` itself, which is the newline or the `throws` keyword — a slot
+	// that names no type BY TOKEN KIND, which is the same guarantee the receiver's slot rests on (see
+	// `parseFunction`'s `receiverParam`) rather than a claim about what some identifier means.
+	function returnTypeTokenIndex() returns TokenIndex
+		return self.pos if not self.at(TokenKind.returns) else (self.pos + 1) as TokenIndex
+	end 'returnTypeTokenIndex'
+
 	// The instance a `typealias` bound `name` to; `MapError.keyNotFound` for a name no generic alias declares.
 	// The throwing half of `genericAliasDenotedType`'s join, for the one caller that wants the INSTANCE rather
 	// than what it denotes — see that function for why the two are not one door.
@@ -18115,7 +18184,12 @@ export type Parser
 		end 'trailingTokens'
 
 		self.artifact.recordFuncReturnType(helperName, returnType: returnType, declaredSurface: sharedEmptyDeclaredSurface)
-		self.artifact.recordFuncSignature(helperName, signature: FuncSignature.create(ByteArrayArray.create(), paramTypes: MaxonTypeArray.create(), paramAggregateNames: ByteArrayArray.create(), paramDeclaredNames: ByteArrayArray.create(), returnAggregateName: self.erasedAggregateNameOfReturn(returnType)), nameLine: anchor.line, nameColumn: anchor.column, sourceFilePath: self.filePath)
+		// A default-value helper takes NO parameters and its return type is the parameter's own already-resolved
+		// declared type (`pending.declaredType`), not a spelling this parse is standing on — so neither
+		// existential column has a token to read and both stay shared-empty. A parameter declared at a
+		// parameterized existential cannot have a default: `E3121`/`E2010` aside, a default is an EXPRESSION and
+		// there is no literal of an interface type to write.
+		self.artifact.recordFuncSignature(helperName, signature: FuncSignature.create(ByteArrayArray.create(), paramTypes: MaxonTypeArray.create(), paramAggregateNames: ByteArrayArray.create(), paramDeclaredNames: ByteArrayArray.create(), returnAggregateName: self.erasedAggregateNameOfReturn(returnType), paramExistentialSites: sharedEmptyParamExistentialSites, returnExistentialSites: sharedEmptyReturnExistentialSites), nameLine: anchor.line, nameColumn: anchor.column, sourceFilePath: self.filePath)
 		self.commitRangeChecks(helperName)
 	end 'parseDefaultHelperBody'
 
@@ -44673,7 +44747,7 @@ export type Parser
 	// attempt at this rule (`TypeResolution.maxon:5082-5118`, `elementTypeForIterable`, dead code the parser
 	// never reaches) took `args[0]` flat, with its own comment conceding *"Array's `Iter` arg is at index 1"*.
 	// For `Iterable uses Element, Iter` that is right by luck and for a requirement returning `Iter` it is the
-	// wrong argument silently. `associatedTypePositionOf` is the same numbering the held arm above uses.
+	// wrong argument silently. `namePositionIn` is the same numbering the held arm above uses.
 	//
 	// ⚠ **AND IT IS A PER-VALUE ANSWER, NEVER A WHOLE-PROGRAM ONE, WHICH THE HOLDINGS RECORD ONE ARM UP IS.**
 	// A holding is unique because E3125 refuses a second site claiming another; an ARGUMENT is not — a shared
@@ -44704,7 +44778,7 @@ export type Parser
 	// `slotTypeThroughReceiver` crosses a substituted field type — an `adoptType` alone would leave a
 	// sweep-recorded `named` leaf that reads as an integer (see that door, and T1).
 	function instanceBoundAssociatedType(instance GenericInstanceId, iface IrInterface, returnTypeName ByteArray) returns MaxonType throws MapError
-		let position = try associatedTypePositionOf(iface.associatedTypeNames, name: returnTypeName)
+		let position = try namePositionIn(iface.associatedTypeNames, name: returnTypeName)
 		if position >= self.signatures.genericInstanceArgCount(instance) 'boundNothingHere'
 			throw MapError.keyNotFound
 		end 'boundNothingHere'
@@ -44740,7 +44814,7 @@ export type Parser
 	// The two lookups the answer above is, over a resolved interface — split out because the `found` arm of a
 	// `lookupInterface` match is a call in every reader of this file, never a body.
 	function heldAssociatedReturnIn(iface IrInterface, returnTypeName ByteArray) returns HeldAssociatedReturn throws MapError
-		let position = try associatedTypePositionOf(iface.associatedTypeNames, name: returnTypeName)
+		let position = try namePositionIn(iface.associatedTypeNames, name: returnTypeName)
 		return HeldAssociatedReturn.create(try self.signatures.associatedTypeHeldAt(iface.name, position: position), slotOffset: witnessAssociatedSlotOffset(self.witnessSlotsOf(iface).count(), position: position), position: position)
 	end 'heldAssociatedReturnIn'
 
@@ -49877,7 +49951,7 @@ export type Parser
 		// whole-program index stores, so a SLOT's element bit read here would be how far the sweep had got,
 		// and a call's member roster would depend on file order. The ROOT's is safe and is left asking; see
 		// `declaredSurfaceAt`'s two ⚠⚠ blocks for why the two positions differ.
-		return self.declaredSurfaceAt((self.pos + 1) as TokenIndex, slotElementsFromAliases: false)
+		return self.declaredSurfaceAt(self.returnTypeTokenIndex(), slotElementsFromAliases: false)
 	end 'returnDeclaredSurface'
 
 	// ⭐ **THE ONE BRIDGE FROM A DECLARED SPELLING TO THE VALUE MARKS.** Three declaration sites carry the
@@ -50438,7 +50512,11 @@ export type Parser
 		// ⚠ The return identity is read off the INFERRED `returnType` — a closure never spells one, so this is
 		// the only place its enum-ness is knowable. `function() gives Color.blue` therefore reaches an
 		// enum-returning function type as a `Color` rather than as the bare `integer` resolution leaves.
-		self.artifact.recordFuncSignature(closureName, signature: FuncSignature.create(paramNames, paramTypes: paramTypes, paramAggregateNames: self.paramAggregateNamesOf(paramTypes), paramDeclaredNames: self.paramDeclaredNamesOf(paramTypes), returnAggregateName: self.erasedAggregateNameOfReturn(returnType)), nameLine: functionTok.line, nameColumn: functionTok.column, sourceFilePath: self.filePath)
+		// ⚠ The PARAMETER column is filled and the RETURN one is not, and the asymmetry is the line above: a
+		// closure's parameters ARE spelled (`function(t IntTaker) gives …`) and carry the same `paramTypeStarts`
+		// every declared function's do, while its return type is INFERRED from the body and names no token for
+		// `declaredExistentialInstanceAt` to read.
+		self.artifact.recordFuncSignature(closureName, signature: FuncSignature.create(paramNames, paramTypes: paramTypes, paramAggregateNames: self.paramAggregateNamesOf(paramTypes), paramDeclaredNames: self.paramDeclaredNamesOf(paramTypes), returnAggregateName: self.erasedAggregateNameOfReturn(returnType), paramExistentialSites: self.paramExistentialSitesOf(paramTypes, paramTypeStarts: paramTypeStarts), returnExistentialSites: sharedEmptyReturnExistentialSites), nameLine: functionTok.line, nameColumn: functionTok.column, sourceFilePath: self.filePath)
 		self.closureReturns.upsert(closureName, value: returnType)
 		// Commit the closure's OWN range-check sites under its OWN lifted name, so `InsertRangeChecks`
 		// resolves them against the function whose SSA space numbered them. It sits here — after the body,

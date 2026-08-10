@@ -749,13 +749,15 @@ end 'checkStructFieldTypes'
 // twin (BATCH18-b) and `paramDeclaredNames` (the display spelling) — are carried STRAIGHT THROUGH. They are
 // precisely what resolving `func.maxonParamTypes` destroys (a `named` union AND a `named` ranged alias both
 // collapse to `integer` here), so they must be read off the SIGNATURE (which the parser captured before this
-// pass) and never re-derived from the now-erased types.
+// pass) and never re-derived from the now-erased types. The two EXISTENTIAL columns (W58) ride through for the
+// same reason and a stronger one: `instanceDenotedType` had already dropped the `with` arguments before this
+// pass ever saw the type, so there is nothing here to re-derive them from at all.
 function syncResolvedSignature(project Project, func IrFunction)
 	if not project.funcSignatures.contains(func.name) 'noSig'
 		return
 	end 'noSig'
 	let sig = try project.funcSignatures.get(func.name) otherwise panic("syncResolvedSignature: contains({String.from(func.name)}) true but get failed")
-	project.funcSignatures.upsert(func.name, value: FuncSignature.create(sig.paramNames, paramTypes: sourceParamTypesOf(func, declaredCount: sig.paramNames.count()), paramAggregateNames: sig.paramAggregateNames, paramDeclaredNames: sig.paramDeclaredNames, returnAggregateName: sig.returnAggregateName))
+	project.funcSignatures.upsert(func.name, value: FuncSignature.create(sig.paramNames, paramTypes: sourceParamTypesOf(func, declaredCount: sig.paramNames.count()), paramAggregateNames: sig.paramAggregateNames, paramDeclaredNames: sig.paramDeclaredNames, returnAggregateName: sig.returnAggregateName, paramExistentialSites: sig.paramExistentialSites, returnExistentialSites: sig.returnExistentialSites))
 end 'syncResolvedSignature'
 
 // ⭐ **THE FUNCTION'S SOURCE PARAMETER TYPES — WHICH IS NOT ALWAYS ALL OF `maxonParamTypes`.** A LIFTED

@@ -1980,7 +1980,7 @@ end 'typeParamTokenFor'
 // they are not two spellings of one rule: they differ in what is available, not in what is true.
 //
 // A linear scan, for `Parser.typeParamPositionOf`'s reason: a declaration names a handful of parameters.
-// Absence is a THROW rather than a `count()` sentinel — `IrInterface.associatedTypePositionOf`'s rule, and
+// Absence is a THROW rather than a `count()` sentinel — `IrInterface.namePositionIn`'s rule, and
 // its reason: a sentinel index is exactly the shape that let a POSITION stand in for an IDENTITY here.
 export function typeParamPositionIn(token TypeParamId, declarationName ByteArray, paramNames ByteArrayArray) returns TypeParamPosition throws MapError
 	for i in 0 upto paramNames.count() 'eachParam'
@@ -10487,6 +10487,27 @@ export type ProgramSignatures
 
 		return held
 	end 'associatedTypeHeldAt'
+
+	// ⭐ **THE EXISTENCE HALF OF THE READ ABOVE — "is THIS position held at all?"** — for a caller that must only
+	// SKIP a held position and has no use for which interface holds it
+	// (`SemanticCheck.existentialSiteClaimAgainst`).
+	//
+	// ⚠ **IT IS A SEPARATE DOOR BECAUSE THE LANGUAGE MAKES IT ONE**, which is `IrInterface.namesInclude`'s
+	// reason one registry over: `associatedTypeHeldAt` is PURE, so its result may not be dropped in any spelling
+	// — `if let _ = try f()` is E3064 and a bare `if try f()` is E3124 — and binding the name only to leave it
+	// unread is E3012. A caller that wants only WHETHER is given the function that answers only that.
+	//
+	// It is NOT `interfaceHoldsAnAssociatedType` with a position bolted on: that one asks whether the interface
+	// holds ANY position (the gate on the witness table's whole associated-slot block), and answering it for one
+	// position would skip every position of an interface that holds a DIFFERENT one.
+	export function associatedTypeIsHeldAt(interfaceName ByteArray, position ElementCount) returns bool
+		let row = try self.associatedTypeHoldings.get(interfaceName) otherwise return false
+		if position >= row.count() 'pastThisInterfacesPositions'
+			return false
+		end 'pastThisInterfacesPositions'
+
+		return not (try row.get(position) otherwise panic("associatedTypeIsHeldAt: row.get OOB at {position} below width {row.count()} — the guard above excludes it")).isEmpty()
+	end 'associatedTypeIsHeldAt'
 
 	// The COMPILED name of instance `gid`'s type argument at `position` (P1.7a slice 2a) — `mangleTypeArg`'s
 	// answer, so a struct/named arg reads as its bare name and a NESTED instance as its mangled form.

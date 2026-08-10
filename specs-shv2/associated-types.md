@@ -2377,3 +2377,594 @@ end 'main'
 ```maxoncstderr
 error E3120: specs/fragments/associated-types/error.associated-type-bound-to-an-interface.test:24:6: 'Runner' binds 'Taker's associated type 'Element' to the interface type 'Shape', and 'Element' reaches the calling convention of a requirement this program DISPATCHES — a value held at an interface type is a two-word fat pointer `(value, witness)`, and a witness call carries one machine word per argument and one per result — so the second word is dropped and the impl reads a witness that was never passed. Bind the associated type to a concrete type
 ```
+
+### ⭐⭐ A PARAMETERIZED EXISTENTIAL CARRIES ITS ARGUMENTS INTO THE SIGNATURE, AND THE WIDENING DISCHARGES THE CLAIM (W58)
+
+`ProgramSignatures.instanceDenotedType` collapses `Base with Args` to a bare `interfaceRef(Base)`, so the
+arguments a use site wrote stopped existing on the type and E3125 was the whole of their enforcement — a
+WHOLE-PROGRAM comparison against the one binding the conformances settled. That is exactly right while the
+written argument is a CONCRETE type, and it is wrong when the argument is the enclosing generic's own
+TYPE PARAMETER: `typealias TakerOfT = Taker with T` inside `type Box uses T` states nothing about the
+program, it states something about each INSTANTIATION, and comparing `T` against `Integer` refused a
+correct program.
+
+So the arguments now ride the SIGNATURE (`FuncSignature.paramExistentialSites` / `returnExistentialSite`),
+are substituted through the call's own instance, and the claim is discharged where a concrete value
+actually becomes an existential — the WIDENING, which is the one door both positions already share
+(`SemanticCheck.existentialWideningVerdict`). E3125 keeps every concrete claim; only an OPAQUE one is
+deferred to that door.
+
+⚠ **A CLAIM THAT CANNOT BE RESOLVED IS REFUSED, NOT ADMITTED.** A `return` position is checked in the
+DECLARATION view, where the enclosing generic's parameter is still opaque and there is no instance to
+substitute it through — so an opaque claim there has no answer and E3127 says so, exactly as E3120 refuses
+an associated RETURN whose binding the parser cannot resolve and points at the parameter position instead.
+
+<!-- test: associated-types.existential-parameter-bound-to-the-enclosing-generics-own-parameter -->
+⭐⭐ **THE CASE E3125 REFUSED AND THE PROGRAM COMPUTES.** A shared generic body binds an existential's
+associated position to its OWN type parameter and dispatches through it. `Box with Integer` makes the
+claim `Taker with Integer`, which is what `Runner` binds — so the widening is sound and the dispatch is
+the ordinary one. **MEASURED RED: `E3125 … binds its associated type 'Element' to 'T', but 'Runner' binds
+it to 'Integer'`.** Returns `31`.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Taker uses Element
+	function take(e Element) returns Integer
+end 'Taker'
+
+type Runner implements Taker with Integer
+	let base as Integer
+
+	function take(e Integer) returns Integer
+		return base + e
+	end 'take'
+
+	static function create(base Integer) returns Self
+		return Self{base: base}
+	end 'create'
+end 'Runner'
+
+type Box uses T
+	typealias TakerOfT = Taker with T
+
+	let seed as Integer
+
+	export function run(t TakerOfT, c T) returns Integer
+		return t.take(c) + self.seed
+	end 'run'
+
+	static function create(seed Integer) returns Self
+		return Self{seed: seed}
+	end 'create'
+end 'Box'
+
+typealias IntBox = Box with Integer
+
+function main() returns ExitCode
+	return IntBox.create(0).run(Runner.create(20), c: 11) as ExitCode
+end 'main'
+```
+```exitcode
+31
+```
+
+<!-- test: error.existential-parameter-claim-disagrees-with-the-widened-conformer -->
+⭐⭐ **THE SAFETY CONDITION THE DEFERRAL OWES, AND WITHOUT IT THE PROGRAM IS E3119's FIRST RECORDED FAILURE
+ONE INDIRECTION LATER.** The same shared body, instantiated at `String`: the site's claim is now
+`Taker with String` and the value widened into it is a `Runner`, which binds `Element` to `Integer`. Under
+the per-site rule the conformances no longer settle the question, so the WIDENING is the only place the two
+bindings meet, and it refuses. Nothing here is a whole-program disagreement — there is exactly one
+conformer — so neither E3119 nor E3125 can see it.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Taker uses Element
+	function take(e Element) returns Integer
+	function label() returns Integer
+end 'Taker'
+
+type Runner implements Taker with Integer
+	let base as Integer
+
+	function take(e Integer) returns Integer
+		return base + e
+	end 'take'
+
+	function label() returns Integer
+		return base
+	end 'label'
+
+	static function create(base Integer) returns Self
+		return Self{base: base}
+	end 'create'
+end 'Runner'
+
+type Box uses T
+	typealias TakerOfT = Taker with T
+
+	let seed as Integer
+
+	export function run(t TakerOfT) returns Integer
+		return t.label() + self.seed
+	end 'run'
+
+	static function create(seed Integer) returns Self
+		return Self{seed: seed}
+	end 'create'
+end 'Box'
+
+typealias StrBox = Box with String
+
+function main() returns ExitCode
+	return StrBox.create(0).run(Runner.create(20)) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3127: specs/fragments/associated-types/error.existential-parameter-claim-disagrees-with-the-widened-conformer.test:42:26: cannot widen 'Runner' into 't', which is declared at the existential type 'Taker' with its associated type 'Element' bound to 'String' — 'Runner' binds 'Element' to 'Integer'. A dispatch through this value is emitted against the binding the site claims and would reach an impl written for the other one. Write the binding the conformer declares, or widen a conformer that binds 'Element' to 'String'
+```
+
+<!-- test: associated-types.existential-parameter-with-a-concrete-claim-still-runs -->
+The FALSE-REJECT CONTROL for the new door in its ordinary shape: a CONCRETE claim that restates what the
+one conformer binds is what E3125 has always admitted, and the widening check must agree with it rather
+than acquire an opinion of its own. Returns `31`.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Taker uses Element
+	function take(e Element) returns Integer
+end 'Taker'
+
+type Runner implements Taker with Integer
+	let base as Integer
+
+	function take(e Integer) returns Integer
+		return base + e
+	end 'take'
+
+	static function create(base Integer) returns Self
+		return Self{base: base}
+	end 'create'
+end 'Runner'
+
+typealias IntTaker = Taker with Integer
+
+function useIt(t IntTaker, c Integer) returns Integer
+	return t.take(c)
+end 'useIt'
+
+function main() returns ExitCode
+	return useIt(Runner.create(20), c: 11) as ExitCode
+end 'main'
+```
+```exitcode
+31
+```
+
+<!-- test: error.existential-return-claim-cannot-be-resolved-in-the-declaration-view -->
+⭐ **THE HOLE THE DEFERRAL WOULD OTHERWISE OPEN, CLOSED WHERE IT OPENS.** A `return` widens too, and it is
+checked once against the shared body's DECLARATION view — where `T` is still opaque and no call instance
+exists to substitute it through. Admitting the claim there would let a `Box with String` hand back a
+`Runner` that binds `Integer`, which is the previous case with no site left to report it at. Refused, and
+the sentence names the position that CAN be resolved.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Taker uses Element
+	function take(e Element) returns Integer
+	function label() returns Integer
+end 'Taker'
+
+type Runner implements Taker with Integer
+	let base as Integer
+
+	function take(e Integer) returns Integer
+		return base + e
+	end 'take'
+
+	function label() returns Integer
+		return base
+	end 'label'
+
+	static function create(base Integer) returns Self
+		return Self{base: base}
+	end 'create'
+end 'Runner'
+
+type Box uses T
+	typealias TakerOfT = Taker with T
+
+	let seed as Integer
+
+	export function make() returns TakerOfT
+		return Runner.create(20 + self.seed)
+	end 'make'
+
+	static function create(seed Integer) returns Self
+		return Self{seed: seed}
+	end 'create'
+end 'Box'
+
+typealias IntBox = Box with Integer
+
+function main() returns ExitCode
+	return IntBox.create(0).make().label() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3127: specs/fragments/associated-types/error.existential-return-claim-cannot-be-resolved-in-the-declaration-view.test:31:3: cannot return a value from 'Box.make', which is declared to return the existential type 'Taker' with its associated type 'Element' bound to 'T' — 'T' is a type parameter of the declaring type, and a `return` is checked once against the shared body, where no instantiation has fixed it. Write the binding the conformers declare, or take the value as a PARAMETER instead, where the call's own instance resolves it
+```
+
+<!-- test: associated-types.existential-field-at-an-opaque-claim-is-filled-through-a-checked-parameter -->
+⭐ **THE FIELD POSITION, WHICH IS THE THIRD PLACE A VALUE COULD BECOME AN EXISTENTIAL.** The deferral admits
+`Taker with T` as a FIELD type as well as a parameter one, and a field store is checked by nobody — so this
+case and the one below it are the pair that says the deferral opened no hole. This half is the legal route:
+the field is filled from a PARAMETER, which the widening check reaches, and the call goes through a STATIC
+constructor rather than an instance method — a different subject for `callInstanceSubject` to resolve the
+instantiation from, and the one `stdlib` shapes are built out of. Returns `31`.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Taker uses Element
+	function take(e Element) returns Integer
+	function label() returns Integer
+end 'Taker'
+
+type Runner implements Taker with Integer
+	let base as Integer
+
+	function take(e Integer) returns Integer
+		return base + e
+	end 'take'
+
+	function label() returns Integer
+		return base
+	end 'label'
+
+	static function create(base Integer) returns Self
+		return Self{base: base}
+	end 'create'
+end 'Runner'
+
+type Box uses T
+	typealias TakerOfT = Taker with T
+
+	let t as TakerOfT
+
+	export function run() returns Integer
+		return self.t.label()
+	end 'run'
+
+	static function create(t TakerOfT) returns Self
+		return Self{t: t}
+	end 'create'
+end 'Box'
+
+typealias IntBox = Box with Integer
+
+function main() returns ExitCode
+	return IntBox.create(Runner.create(31)).run() as ExitCode
+end 'main'
+```
+```exitcode
+31
+```
+
+<!-- test: error.existential-field-at-an-opaque-claim-cannot-be-stored-into-directly -->
+⭐⭐ **AND THE OTHER HALF: THE ROUTE THAT WOULD BYPASS THE WIDENING CHECK DOES NOT EXIST.** The same field,
+filled by a struct literal inside the shared body — no callee, no parameter, nothing for E3127 to be asked at.
+It is refused, and it was refused before this rung existed: E2015 already required every widening to name a
+SITE, for the fat pointer's own reason. **That is the argument the E3125 deferral rests on** — the widening
+positions E3127 covers (a call argument and a `return`) are ALL of them, so a claim deferred out of the
+whole-program check cannot slip through a third door. Pinned as a case rather than left as reasoning, because
+the day a direct field store becomes legal is the day the deferral needs a third discharge.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Taker uses Element
+	function take(e Element) returns Integer
+	function label() returns Integer
+end 'Taker'
+
+type Runner implements Taker with Integer
+	let base as Integer
+
+	function take(e Integer) returns Integer
+		return base + e
+	end 'take'
+
+	function label() returns Integer
+		return base
+	end 'label'
+
+	static function create(base Integer) returns Self
+		return Self{base: base}
+	end 'create'
+end 'Runner'
+
+type Box uses T
+	typealias TakerOfT = Taker with T
+
+	let t as TakerOfT
+
+	export function run() returns Integer
+		return self.t.label()
+	end 'run'
+
+	static function make() returns Self
+		return Self{t: Runner.create(31)}
+	end 'make'
+end 'Box'
+
+typealias StrBox = Box with String
+
+function main() returns ExitCode
+	return StrBox.make().run() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: specs/fragments/associated-types/error.existential-field-at-an-opaque-claim-cannot-be-stored-into-directly.test:35:15: Unsupported: storing a value of a CONCRETE type into the interface-typed field 'Box.t' — a value held at an interface type is a two-word fat pointer `(value, witness)`, and the second word is the address of the conformer's witness table, which only a widening SITE can name. A field store has no callee whose declared parameter types could name it, unlike a call argument. Pass the value to a named function taking the interface as a PARAMETER and store THAT parameter (which arrives already widened), or declare the field at a concrete type
+```
+<!-- test: associated-types.a-generic-conformers-binding-is-resolved-through-its-own-instance -->
+⭐⭐ **THE CONFORMER'S SIDE IS A SOURCE SPELLING TOO, AND A GENERIC CONFORMER'S NAMES ITS OWN PARAMETER.**
+`type Holder uses E implements Taker with E` records the binding as the STRING `E` — not a type, and not
+anything a site's `Integer` could equal. Compared raw that is a false disagreement, and it is exactly the shape
+`stdlib/Array.maxon` is made of (`type Array uses Element implements Iterable with Element`). So both sides are
+reduced before they meet: the SITE's claim through the call's instance (`Box with Integer` makes `Taker with T`
+into `Taker with Integer`) and the CONFORMER's binding through its own (`Holder with Integer` makes `E` into
+`Integer`). Returns `31`.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Taker uses Element
+	function take(e Element) returns Integer
+	function label() returns Integer
+end 'Taker'
+
+type Holder uses E implements Taker with E
+	let base as Integer
+	let seed as E
+
+	function take(e E) returns Integer
+		return self.base
+	end 'take'
+
+	function label() returns Integer
+		return self.base
+	end 'label'
+
+	static function create(base Integer, seed E) returns Self
+		return Self{base: base, seed: seed}
+	end 'create'
+end 'Holder'
+
+type Box uses T
+	typealias TakerOfT = Taker with T
+
+	let extra as Integer
+
+	export function run(t TakerOfT) returns Integer
+		return t.label() + self.extra
+	end 'run'
+
+	static function create(extra Integer) returns Self
+		return Self{extra: extra}
+	end 'create'
+end 'Box'
+
+typealias IntHolder = Holder with Integer
+typealias IntBox = Box with Integer
+
+function main() returns ExitCode
+	return IntBox.create(11).run(IntHolder.create(20, seed: 0)) as ExitCode
+end 'main'
+```
+```exitcode
+31
+```
+
+<!-- test: error.a-generic-conformers-resolved-binding-still-has-to-match -->
+⭐ **AND THE CONTROL THAT KEEPS THE REDUCTION HONEST.** The identical program at `Box with String`: the site
+now claims `Taker with String` and `IntHolder`'s `E` still resolves to `Integer`. A reduction that had quietly
+answered "agrees" for every generic conformer would pass this, so the two cases are a pair — one proves the
+resolution happens, the other that it still compares.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Taker uses Element
+	function take(e Element) returns Integer
+	function label() returns Integer
+end 'Taker'
+
+type Holder uses E implements Taker with E
+	let base as Integer
+	let seed as E
+
+	function take(e E) returns Integer
+		return self.base
+	end 'take'
+
+	function label() returns Integer
+		return self.base
+	end 'label'
+
+	static function create(base Integer, seed E) returns Self
+		return Self{base: base, seed: seed}
+	end 'create'
+end 'Holder'
+
+type Box uses T
+	typealias TakerOfT = Taker with T
+
+	let extra as Integer
+
+	export function run(t TakerOfT) returns Integer
+		return t.label() + self.extra
+	end 'run'
+
+	static function create(extra Integer) returns Self
+		return Self{extra: extra}
+	end 'create'
+end 'Box'
+
+typealias IntHolder = Holder with Integer
+typealias StrBox = Box with String
+
+function main() returns ExitCode
+	return StrBox.create(11).run(IntHolder.create(20, seed: 0)) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3127: specs/fragments/associated-types/error.a-generic-conformers-resolved-binding-still-has-to-match.test:44:27: cannot widen 'IntHolder' into 't', which is declared at the existential type 'Taker' with its associated type 'Element' bound to 'String' — 'IntHolder' binds 'Element' to 'Integer'. A dispatch through this value is emitted against the binding the site claims and would reach an impl written for the other one. Write the binding the conformer declares, or widen a conformer that binds 'Element' to 'String'
+```
+<!-- test: error.a-deferred-claim-cannot-be-filled-from-a-value-already-held-at-the-interface -->
+⛔⛔ **THE HOLE THE DEFERRAL OPENED, FOUND BY RUNNING IT, AND THE REASON E3127 IS NOT ONLY ABOUT CONCRETE
+CONFORMERS.** Every check above asks what the ARRIVING TYPE binds. A value already held at `Taker` answers
+nothing — which conformer is inside a fat pointer is exactly what it exists to not say — so forwarding a bare
+`Taker` into a `Box with String`'s `Taker with T` slipped past the widening check entirely.
+**MEASURED on this tree with the deferral landed and this refusal not yet written: it COMPILED**, `Runner.take`
+read a `String` pointer as its `Integer` argument, and the program died
+`panic … Range check failed: value outside typealias 'ExitCode'`. That is E3119's own recorded failure class
+one indirection later, which is precisely what E3127 exists to stop.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Taker uses Element
+	function take(e Element) returns Integer
+end 'Taker'
+
+type Runner implements Taker with Integer
+	let base as Integer
+
+	function take(e Integer) returns Integer
+		return base + e
+	end 'take'
+
+	static function create(base Integer) returns Self
+		return Self{base: base}
+	end 'create'
+end 'Runner'
+
+type Box uses T
+	typealias TakerOfT = Taker with T
+
+	let seed as Integer
+
+	export function run(t TakerOfT, c T) returns Integer
+		return t.take(c) + self.seed
+	end 'run'
+
+	static function create(seed Integer) returns Self
+		return Self{seed: seed}
+	end 'create'
+end 'Box'
+
+typealias StrBox = Box with String
+
+function relay(t Taker) returns Integer
+	return StrBox.create(0).run(t, c: "hello")
+end 'relay'
+
+function main() returns ExitCode
+	return relay(Runner.create(20)) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3127: specs/fragments/associated-types/error.a-deferred-claim-cannot-be-filled-from-a-value-already-held-at-the-interface.test:37:26: cannot pass a value already held at the interface type 'Taker' as 't', which is declared at the existential type 'Taker' with its associated type 'Element' bound to 'T' — 'T' is a type parameter of the declaring type, so this site's binding was never settled against the conformances, and a value held at an interface does not say which conformer is inside it for the call to settle it against. Pass the concrete conformer, or declare 't' at 'Taker' with no `with` clause
+```
+
+<!-- test: associated-types.a-concrete-claim-may-still-be-filled-from-a-value-already-held-at-the-interface -->
+⚖ **AND THE REASON THE REFUSAL ABOVE IS NARROW RATHER THAN BLANKET.** The identical forwarding into a
+CONCRETE claim is legal and must stay so: E3125 has already checked `Taker with Integer` against the one
+binding the conformances settled, and E3119 makes that binding unique — so whatever conformer is inside the fat
+pointer binds `Element` to `Integer` too, and the site has nothing left to verify. Only a DEFERRED claim has
+had neither check, which is the one case the refusal names. Returns `31`.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Taker uses Element
+	function take(e Element) returns Integer
+end 'Taker'
+
+type Runner implements Taker with Integer
+	let base as Integer
+
+	function take(e Integer) returns Integer
+		return base + e
+	end 'take'
+
+	static function create(base Integer) returns Self
+		return Self{base: base}
+	end 'create'
+end 'Runner'
+
+typealias IntTaker = Taker with Integer
+
+function useIt(t IntTaker, c Integer) returns Integer
+	return t.take(c)
+end 'useIt'
+
+function relay(t Taker, c Integer) returns Integer
+	return useIt(t, c: c)
+end 'relay'
+
+function main() returns ExitCode
+	return relay(Runner.create(20), c: 11) as ExitCode
+end 'main'
+```
+```exitcode
+31
+```
+<!-- test: error.a-deferred-claim-cannot-be-laundered-through-a-return -->
+⭐ **THE ESCAPE ATTEMPT, RUN RATHER THAN REASONED ABOUT.** The `return` position lets an ALREADY-existential
+value through — `function id(t TakerOfT) returns TakerOfT` restates its own claim and widens nothing — so the
+obvious way around the refusal above is to launder a bare `Taker` into a claimed one through a return and hand
+THAT to the claimed parameter. It does not work, and the reason is that a claim is only ever consumed at a
+DECLARED slot: the laundered result carries no claim of its own, and the moment it reaches one it is an
+already-existential argument again. Refused at the consumer, with the same sentence and the call's position.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Taker uses Element
+	function take(e Element) returns Integer
+end 'Taker'
+
+type Runner implements Taker with Integer
+	let base as Integer
+
+	function take(e Integer) returns Integer
+		return base + e
+	end 'take'
+
+	static function create(base Integer) returns Self
+		return Self{base: base}
+	end 'create'
+end 'Runner'
+
+type Box uses T
+	typealias TakerOfT = Taker with T
+
+	let seed as Integer
+
+	export function pass(t Taker) returns TakerOfT
+		return t
+	end 'pass'
+
+	export function use(t TakerOfT, c T) returns Integer
+		return t.take(c) + self.seed
+	end 'use'
+
+	static function create(seed Integer) returns Self
+		return Self{seed: seed}
+	end 'create'
+end 'Box'
+
+typealias StrBox = Box with String
+
+function main() returns ExitCode
+	let b = StrBox.create(0)
+	return b.use(b.pass(Runner.create(20)), c: "hi") as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3127: specs/fragments/associated-types/error.a-deferred-claim-cannot-be-laundered-through-a-return.test:42:11: cannot pass a value already held at the interface type 'Taker' as 't', which is declared at the existential type 'Taker' with its associated type 'Element' bound to 'T' — 'T' is a type parameter of the declaring type, so this site's binding was never settled against the conformances, and a value held at an interface does not say which conformer is inside it for the call to settle it against. Pass the concrete conformer, or declare 't' at 'Taker' with no `with` clause
+```

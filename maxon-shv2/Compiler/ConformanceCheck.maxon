@@ -593,6 +593,25 @@ function checkOneAssociatedBinding(project Project, signatures ProgramSignatures
 		return
 	end 'heldAtAnInterface'
 
+	// ⭐⭐ **AN OPAQUE ARGUMENT IS A CLAIM ABOUT EACH INSTANTIATION, NOT ABOUT THE PROGRAM, SO IT IS DEFERRED TO
+	// THE WIDENING (W58, E3127).** The comparison below rests on the argument naming a TYPE, and the enclosing
+	// generic's own parameter does not: `typealias TakerOfT = Taker with T` inside `type Box uses T` says
+	// nothing that could agree or disagree with `Runner`'s `Integer` — it says something different at every
+	// `Box with X`, and `stdlib/Array.maxon`'s `Iterable with (Element, ElementIterator)` is the shape of it.
+	// Compared raw it read as a contradiction and refused a program that computes.
+	//
+	// ⚠ **DEFERRED, NOT DROPPED, AND THE DISCHARGE IS WHAT MAKES THE DEFERRAL SOUND.** The claim is paid at the
+	// WIDENING (`SemanticCheck.checkExistentialSiteClaimAtArgument`), where the call's own instance has fixed
+	// the parameter and a concrete conformer is actually crossing into the existential — and an argument still
+	// opaque THERE is refused rather than admitted, which is what keeps the `return` position closed.
+	//
+	// ⚠ It sits BELOW the held-position arm on purpose. A holding is not a restatement of a conformer's binding
+	// at all (see that arm), and `T` names no interface to hold a position at, so deferring it there would drop
+	// a real refusal rather than move one.
+	if maxonTypeTag(signatures.substitutedInstanceArg(site.gid, position: position)) == ValueTypeTag.typeParameter 'deferredToTheWidening'
+		return
+	end 'deferredToTheWidening'
+
 	match associatedAbiBindingOf(project.conformances, interfaceName: iface.name, position: position) 'binding'
 		unconformed then break 'binding'
 		disagreed then break 'binding'
@@ -1139,10 +1158,10 @@ end 'substituteAssociatedTypes'
 
 // What ONE written type name in a requirement denotes under this conformance's bindings: the argument bound
 // at the associated type's position, or the name itself when it names no associated type. The scan that
-// decides WHICH `uses` parameter a name is lives in `IrInterface.associatedTypePositionOf` — one statement of
+// decides WHICH `uses` parameter a name is lives in `IrInterface.namePositionIn` — one statement of
 // it, because the witness-call lowering asks the same question for a different reason (see there).
 function boundTypeName(name ByteArray, associatedTypeNames ByteArrayArray, boundTypeNames ByteArrayArray) returns ByteArray
-	if let position = try associatedTypePositionOf(associatedTypeNames, name: name) 'isAssociatedType'
+	if let position = try namePositionIn(associatedTypeNames, name: name) 'isAssociatedType'
 		return try boundTypeNames.get(position) otherwise panic("boundTypeName: boundTypeNames.get OOB at {position} below associated-type count {associatedTypeNames.count()} — `checkOneInterfaceConformance` reports a short argument list and returns before any requirement is collected")
 	end 'isAssociatedType'
 	return name

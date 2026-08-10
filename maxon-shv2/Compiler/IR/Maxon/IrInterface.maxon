@@ -609,32 +609,41 @@ export type IrInterface
 	end 'create'
 end 'IrInterface'
 
-// ⭐ **WHICH `uses` PARAMETER A WRITTEN TYPE NAME IN A REQUIREMENT IS, IF ANY** — the ONE scan of an
-// interface's associated-type list, and the reason it is here rather than at either caller. Both callers want
-// the POSITION, and each spends it on a different registry:
+// ⭐ **WHERE `name` SITS IN A LIST OF DECLARED NAMES** — the compiler's ONE positional scan over one, and the
+// POSITION is what every caller spends, each on a different registry:
 //
-//   • `ConformanceCheck.boundTypeName` needs it to pick the argument a conformance bound there;
-//   • `LowerMaxonToStd.witnessFormalType` needs it to ask `associatedAbiBindingOf` what the conformers
-//     bound THAT position to — the formal's type is the binding's, and the interface cannot state it.
+//   • `ConformanceCheck.boundTypeName` — an interface's `uses` names, to pick the argument a conformance
+//     bound at that position;
+//   • `LowerMaxonToStd.witnessFormalType` — the same list, to ask `associatedAbiBindingOf` what the conformers
+//     bound THAT position to; the formal's type is the binding's, and the interface cannot state it;
+//   • `Parser.instanceBoundAssociatedType` — the same list again, against the receiver's own instantiation;
+//   • `SemanticCheck.conformerBindingThroughInstance` — a generic type's declared TYPE PARAMETERS, because a
+//     conformance's `withArgs` are source spellings and a generic conformer's names its own parameter
+//     (`type Array uses Element implements Iterable with Element`), which only its instance can reduce.
 //
-// A linear scan and not a map, for the reason `boundTypeName` gave when it owned the scan: an interface
-// declares a handful of `uses` names at most, so the scan is cheaper than building a map would be and it
-// allocates nothing. Absence is a THROW rather than a sentinel index or a `count()`-means-no answer, both of
-// which are exactly the shape this project forbids; `MapError.keyNotFound` is the absence channel every other
-// registry here already speaks.
-export function associatedTypePositionOf(associatedTypeNames ByteArrayArray, name ByteArray) returns ElementCount throws MapError
-	for i in 0 upto associatedTypeNames.count() 'eachAssociatedType'
-		if (try associatedTypeNames.get(i) otherwise panic("associatedTypePositionOf: associatedTypeNames.get OOB at {i} below count {associatedTypeNames.count()}")).equals(name) 'isAssociatedType'
+// ⚠ **IT WAS `associatedTypePositionOf` AND THE LAST OF THOSE IS WHY IT IS NOT ANY MORE.** The body never
+// looked at anything but a name list, and its sibling `namesInclude` had already been consolidated out of two
+// identically-bodied copies (`byteArrayContains`, `rosterHasMember`) into the one generally-named door. A
+// second copy under a general name beside a first under a specific one would have been that same duplication
+// back again; renaming is what keeps there being one.
+//
+// A linear scan and not a map, for the reason `boundTypeName` gave when it owned the scan: a declaration names
+// a handful at most, so the scan is cheaper than building a map would be and it allocates nothing. Absence is a
+// THROW rather than a sentinel index or a `count()`-means-no answer, both of which are exactly the shape this
+// project forbids; `MapError.keyNotFound` is the absence channel every other registry here already speaks.
+export function namePositionIn(names ByteArrayArray, name ByteArray) returns ElementCount throws MapError
+	for i in 0 upto names.count() 'eachName'
+		if (try names.get(i) otherwise panic("namePositionIn: names.get OOB at {i} below count {names.count()}")).equals(name) 'isThisOne'
 			return i
-		end 'isAssociatedType'
-	end 'eachAssociatedType'
+		end 'isThisOne'
+	end 'eachName'
 	throw MapError.keyNotFound
-end 'associatedTypePositionOf'
+end 'namePositionIn'
 
-// ⭐ **THE EXISTENCE HALF OF THE SCAN ABOVE — "is `name` one of these associated types at all?"** —
+// ⭐ **THE EXISTENCE HALF OF THE SCAN ABOVE — "is `name` in the list at all?"** —
 // for `SemanticCheck.witnessFormalDeclaredType`, which answers `opaque` and has no use for WHICH position.
 //
-// ⚠ **IT IS A SEPARATE DOOR BECAUSE THE LANGUAGE MAKES IT ONE.** `associatedTypePositionOf` is PURE, and a
+// ⚠ **IT IS A SEPARATE DOOR BECAUSE THE LANGUAGE MAKES IT ONE.** `namePositionIn` is PURE, and a
 // pure function's result may not be dropped in any spelling: `_ = f()` and `if let _ = try f()` are both
 // E3064, and the bare `if try f()` is E3124. A pure call whose answer nobody wants is the wrong call, so
 // the caller that wants only WHETHER is given the function that answers only that. This one is plain

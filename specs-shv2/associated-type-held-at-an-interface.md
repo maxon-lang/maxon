@@ -661,14 +661,19 @@ end 'main'
 1
 ```
 
-<!-- test: error.a-use-site-binding-a-type-parameter-names-it -->
-⭐ **A DIAGNOSTIC NAMES A TYPE THE WAY THE AUTHOR WROTE IT, AND AN OPAQUE ARGUMENT IS A TYPE.** E3125 compares
-what a use site binds an associated type to against what the conformers bind it to, and BOTH sides are meant
-to be the source spelling — its own comment says comparing a compiled name against a source string *"would
-report a difference in RENDERING as a difference in type"*. A TYPE-PARAMETER argument was rendered by
-`mangleTypeArg`, whose answer is a W14 digest: the sentence read *"binds its associated type 'Element' to
-'Td0c4d4635e31e169', but 'UpCursor' binds it to 'Integer'"* — one parameter named twice, once by the author
-and once by a hash, and the refusal below rested on the two not matching rather than on the types differing.
+<!-- test: a-use-site-binding-a-type-parameter-is-a-claim-about-each-instantiation -->
+⭐⭐ **THIS CASE PINNED A REFUSAL, AND W58 INVERTED IT — the program below is CORRECT and now compiles.** It
+was `error.a-use-site-binding-a-type-parameter-names-it`, and its subject was the SPELLING in E3125's sentence:
+a TYPE-PARAMETER argument was rendered by `mangleTypeArg` as the W14 digest `'Td0c4d4635e31e169'`, so the
+refusal rested on a hash not matching a source name rather than on two types differing. Fixing the rendering
+left the refusal standing on `'Element'` vs `'Integer'` — and THAT comparison is the thing W58 found to be
+meaningless. `typealias ElementCursor = Cursor with Element` inside `type Counter uses Element` states nothing
+about the program; it states something different at every `Counter with X`, and E3125 has no instantiation in
+hand to substitute. So the claim is DEFERRED to the widening (E3127), and here there is no widening to make:
+nothing instantiates `Counter` and nothing calls `Counter.of`.
+⚠ The rendering fact this case was written for did NOT go with the refusal — `associated-types.md`'s
+`error.existential-return-claim-cannot-be-resolved-in-the-declaration-view` pins an E3127 sentence reading
+`bound to 'T'`, the author's own spelling, which is the same guarantee against the same digest.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -719,8 +724,11 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3125: <fragment>:38:12: this use of 'Cursor' binds its associated type 'Element' to 'Element', but 'UpCursor' binds it to 'Integer' — an interface this program DISPATCHES through has exactly one binding per associated type (E3119's rule), so a use site does not choose one, it states the one the conformances already settled. Write the binding the conformers declare, or give the two readings different interfaces
+```stdout
+ok
+```
+```exitcode
+0
 ```
 
 <!-- test: held.a-conformer-binds-a-generic-instance -->

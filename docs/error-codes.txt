@@ -1725,6 +1725,34 @@ E3126 SemanticHeldAssociatedTypeBindingNotConforming
 	doc the program means to hold the position at. Both are "this type must implement that interface";
 	doc they differ in which party supplies the type, so they are two codes rather than one.
 
+E3127 SemanticExistentialWideningBindingDisagreement
+	shv2 existentialWideningBindingDisagreement
+	doc A concrete value is WIDENED into a parameterized existential -- `I with <Args>` -- whose argument at
+	doc some associated position is not what that value's own conformance binds the position to.
+	doc It is E3125's rule moved to the one place it can still be asked once a use site is allowed to CHOOSE.
+	doc E3125 compares a written argument against the single binding the conformances settled, and that
+	doc comparison is exactly right while the argument is CONCRETE. It is wrong when the argument is the
+	doc enclosing generic's own TYPE PARAMETER: `typealias TakerOfT = Taker with T` inside `type Box uses T`
+	doc says nothing about the program and something about each INSTANTIATION, so comparing `T` against
+	doc `Integer` refused a correct program. Such a claim is therefore DEFERRED by E3125 -- and a deferral
+	doc owes a discharge, which is this code.
+	doc The discharge is at the WIDENING because that is where a concrete conformer and a site's claim first
+	doc meet: the arguments ride the signature (`FuncSignature.paramExistentialSites` /
+	doc `returnExistentialSites`), are substituted through the call's own generic instance, and the site's
+	doc argument at each position is compared -- RAW, for E3125's measured reason -- against what THIS
+	doc conformer binds there (`conformerAssociatedBinding`).
+	doc Without it the deferral is E3119's own recorded hazard one indirection later: a dispatch through the
+	doc widened value is emitted against the type the SITE claims and lands in an impl written for the type
+	doc the CONFORMER bound. E3119's header records what that costs -- `with String` beside `with Integer`
+	doc SEGFAULTED (exit 139), `with float` answered 31 where the program computes 51, and a ranged binding
+	doc RANGE-PANICKED -- and none of those three is visible to E3119 here, because a program can reach this
+	doc with exactly ONE conformer and no whole-program disagreement at all.
+	doc ⚠ AN UNRESOLVABLE CLAIM IS REFUSED, NOT ADMITTED, AND THAT IS THE RETURN POSITION. A `return` is
+	doc checked once against the shared body's DECLARATION view, where the enclosing generic's parameter is
+	doc still opaque and there is no call instance to substitute it through. There is no answer to give, so
+	doc the same code refuses and names the position that CAN be resolved -- the same cure E3120 offers for
+	doc the same reason one door over.
+
 E4001 IrUnsupportedExpression
 	csharp IrUnsupportedExpression
 	doc The IR builder met an expression form it cannot lower.

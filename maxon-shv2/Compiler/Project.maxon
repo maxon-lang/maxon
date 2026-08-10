@@ -3992,6 +3992,41 @@ end 'declarationContestsACompilerOwnedName'
 // read by SemanticCheck to locate `main` and validate its return type.
 export typealias FuncReturnTypeMap = Map with (ByteArray, MaxonReturnType)
 
+// One PARAMETER declared at a parameterized existential, and the `Base with Args` instance its declared type
+// named (W58) — see `FuncSignature.paramExistentialSites` for why the position rides the entry instead of the
+// column being dense.
+export type ParamExistentialSite
+	export var position as ParamCount
+	export var instance as GenericInstanceId
+
+	export static function create(position ParamCount, instance GenericInstanceId) returns Self
+		return Self{position: position, instance: instance}
+	end 'create'
+end 'ParamExistentialSite'
+
+export typealias ParamExistentialSiteArray = Array with ParamExistentialSite
+
+// The COW anchors both existential columns start at, and the answer every reader gets for a slot that claims
+// nothing — which is very nearly every slot. Homed here, beside the type they anchor, because BOTH the parser
+// (which writes them) and SemanticCheck (which must hand the two argument checkers that hold no signature an
+// honest empty column) name them. Never mutated: a writer builds a fresh array and returns it whole.
+export let sharedEmptyParamExistentialSites = ParamExistentialSiteArray.create()
+export let sharedEmptyReturnExistentialSites = GenericInstanceIdArray.create()
+
+// The `Base with Args` instance parameter `position` was declared at, or `MapError.keyNotFound` for a parameter
+// that named no generic alias — which is every parameter of almost every function, and is why the column is
+// SCANNED rather than indexed (see `FuncSignature.paramExistentialSites`). A free function rather than a method
+// because the two argument checkers that have no `FuncSignature` at all still ask it, of the shared empty.
+export function paramExistentialSiteAt(sites ParamExistentialSiteArray, position ParamCount) returns GenericInstanceId throws MapError
+	for site in sites 'each'
+		if site.position == position 'thisOne'
+			return site.instance
+		end 'thisOne'
+	end 'each'
+
+	throw MapError.keyNotFound
+end 'paramExistentialSiteAt'
+
 // A function's parameter signature: the declared parameter NAMES (in declaration
 // order) and their source-level TYPES (parallel, same order). The M5 parse-staging
 // registry the call machinery needs — the return-type registry above answers "what
@@ -4041,8 +4076,32 @@ export type FuncSignature
 	// EMPTY for `void` and for every identity resolution preserves.
 	export var returnAggregateName as ByteArray
 
-	export static function create(paramNames ByteArrayArray, paramTypes MaxonTypeArray, paramAggregateNames ByteArrayArray, paramDeclaredNames ByteArrayArray, returnAggregateName ByteArray) returns FuncSignature
-		return Self{paramNames: paramNames, paramTypes: paramTypes, paramAggregateNames: paramAggregateNames, paramDeclaredNames: paramDeclaredNames, returnAggregateName: returnAggregateName}
+	// ⭐⭐ **THE `with` ARGUMENTS AN EXISTENTIAL SLOT WAS DECLARED WITH, CARRIED ACROSS THE CALL BOUNDARY
+	// (W58).** `ProgramSignatures.instanceDenotedType` collapses `Base with Args` over an interface base to a
+	// bare `interfaceRef(Base)`, so a parameter declared `t IntTaker` arrives in `paramTypes` with nothing left
+	// to say what `Taker`'s associated positions were bound to. W57 recovered that fact for the CALLEE's own
+	// body by keeping it beside the value (`Parser.ValueExistentialInstanceMap`), which is the right home there
+	// and is unreachable here: that column is per-function, keyed in the callee's OWN SSA space, and the
+	// question this one answers is asked in the CALLER, about a parameter whose value does not exist yet.
+	//
+	// SPARSE, and empty for very nearly every function: a parameterized existential parameter is rare, and a
+	// dense column would cost one entry per parameter of every function in the program to say "nothing" almost
+	// every time. `ParamExistentialSite` carries its own position for that reason, so a reader scans a list
+	// that is empty or has one or two entries rather than indexing a full-length one.
+	//
+	// Travels as a `GenericInstanceId`, which — unlike the two name columns above — is NOT interner-local: gids
+	// index the whole-program `ProgramSignatures.genericInstances`, the same registry a value's own
+	// `MaxonType.genericInstance` payload indexes across the merge. `syncResolvedSignature` carries both
+	// columns through untouched, exactly as it does the aggregate ones.
+	export var paramExistentialSites as ParamExistentialSiteArray
+
+	// The RETURN slot's half of the column above — EMPTY, or the one instance the declared return type named.
+	// An array rather than an option because a Maxon union VALUE is a heap box (`hasTypeParameterParam`'s
+	// reason), and every signature in a generics-free program would mint one just to read "none".
+	export var returnExistentialSites as GenericInstanceIdArray
+
+	export static function create(paramNames ByteArrayArray, paramTypes MaxonTypeArray, paramAggregateNames ByteArrayArray, paramDeclaredNames ByteArrayArray, returnAggregateName ByteArray, paramExistentialSites ParamExistentialSiteArray, returnExistentialSites GenericInstanceIdArray) returns FuncSignature
+		return Self{paramNames: paramNames, paramTypes: paramTypes, paramAggregateNames: paramAggregateNames, paramDeclaredNames: paramDeclaredNames, returnAggregateName: returnAggregateName, paramExistentialSites: paramExistentialSites, returnExistentialSites: returnExistentialSites}
 	end 'create'
 
 	// The declared parameter count — the arity a call must match.

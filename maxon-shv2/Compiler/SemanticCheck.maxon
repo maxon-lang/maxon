@@ -1959,7 +1959,7 @@ function checkWitnessArgTypes(project Project, func IrFunction, signatures Progr
 			// are owned by the interface rather than by any conformer — which is exactly the owner guard
 			// `ProgramSignatures.substituteThroughInstance` applies, and `witnessFormalDeclaredType` has already
 			// answered `opaque` for them one line up.
-			declared(paramType, preErasedAggregate) then checkOneArgType(project, func: func, paramType: paramType, preErasedAggregate: preErasedAggregate, declaredParamName: formalName, paramName: witnessFormalName(requirement, position: j), position: j, argId: try args.get(j + WitnessReceiverArgCount) otherwise panic("checkWitnessArgTypes: args.get OOB at {j + WitnessReceiverArgCount} below count {args.count()} — a dispatch reaching here has the receiver plus one actual per formal"), callInstanceSubject: witnessReceiver, callRange: callRange, filePath: func.sourceFilePath)
+			declared(paramType, preErasedAggregate) then checkOneArgType(project, func: func, paramType: paramType, preErasedAggregate: preErasedAggregate, declaredParamName: formalName, paramName: witnessFormalName(requirement, position: j), position: j, argId: try args.get(j + WitnessReceiverArgCount) otherwise panic("checkWitnessArgTypes: args.get OOB at {j + WitnessReceiverArgCount} below count {args.count()} — a dispatch reaching here has the receiver plus one actual per formal"), callInstanceSubject: witnessReceiver, paramExistentialSites: sharedEmptyParamExistentialSites, callRange: callRange, filePath: func.sourceFilePath)
 		end 'formal'
 	end 'eachFormal'
 end 'checkWitnessArgTypes'
@@ -2022,7 +2022,7 @@ function witnessFormalDeclaredType(project Project, signatures ProgramSignatures
 	// ⚠ Asked BEFORE `builtinTypeNameTag`, and the order is load-bearing for `LowerMaxonToStd.witnessFormalType`'s
 	// measured reason: a `uses` parameter is an IDENTIFIER, and `ExitCode`/`String` are identifiers too, so
 	// `interface Taker uses ExitCode` would otherwise read a TYPE PARAMETER as the u32 builtin.
-	// `namesInclude`, not a discarded `associatedTypePositionOf`: this door answers `opaque` and has no use
+	// `namesInclude`, not a discarded `namePositionIn`: this door answers `opaque` and has no use
 	// for the position, and a PURE result may not be dropped in any spelling (E3064) — which is what the
 	// `if let _ = try …` that stood here did.
 	if namesInclude(dispatched.associatedTypeNames, name: formalName) 'aConformerBindsIt'
@@ -2556,7 +2556,7 @@ function checkIndirectCallArgs(project Project, func IrFunction, opIndex OpIndex
 		// ⚠ The CALLEE is this call's own subject, and it is a function VALUE — never `genericInstance`-tagged —
 		// so the shape substitution declines. That is the right answer as well as an honest one: an indirect
 		// call's declared shape is the function TYPE's own, written in no generic body's declaration view.
-		checkOneArgType(project, func: func, paramType: paramType, preErasedAggregate: shapeParamIdentity(shape, index: i), declaredParamName: EmptySourceText, paramName: EmptySourceText, position: i, argId: argId, callInstanceSubject: callee, callRange: callRange, filePath: func.sourceFilePath)
+		checkOneArgType(project, func: func, paramType: paramType, preErasedAggregate: shapeParamIdentity(shape, index: i), declaredParamName: EmptySourceText, paramName: EmptySourceText, position: i, argId: argId, callInstanceSubject: callee, paramExistentialSites: sharedEmptyParamExistentialSites, callRange: callRange, filePath: func.sourceFilePath)
 	end 'eachArg'
 end 'checkIndirectCallArgs'
 
@@ -3392,7 +3392,7 @@ function checkArgTypes(project Project, func IrFunction, result ValueId, sig Fun
 		// DECLARED SPELLING; see `checkOneArgType`.
 		let preErasedAggregate = try sig.paramAggregateNames.get(i) otherwise panic("checkArgTypes: paramAggregateNames.get OOB at {i} — a signature's param columns (names, types, aggregate names) are built in lockstep")
 		let declaredParamName = try sig.paramDeclaredNames.get(i) otherwise panic("checkArgTypes: paramDeclaredNames.get OOB at {i} — a signature's param columns (names, types, aggregate names, declared names) are built in lockstep")
-		checkOneArgType(project, func: func, paramType: paramType, preErasedAggregate: preErasedAggregate, declaredParamName: declaredParamName, paramName: paramName, position: i, argId: argId, callInstanceSubject: instanceSubject, callRange: callRange, filePath: filePath)
+		checkOneArgType(project, func: func, paramType: paramType, preErasedAggregate: preErasedAggregate, declaredParamName: declaredParamName, paramName: paramName, position: i, argId: argId, callInstanceSubject: instanceSubject, paramExistentialSites: sig.paramExistentialSites, callRange: callRange, filePath: filePath)
 	end 'eachArg'
 end 'checkArgTypes'
 
@@ -3730,6 +3730,256 @@ function existentialWideningVerdict(project Project, valueTag ValueTypeTag, valu
 	return ExistentialWideningVerdict.widens
 end 'existentialWideningVerdict'
 
+// The three answers `existentialSiteClaimVerdict` gives. `unresolvable` is NOT a shade of `disagrees`: the two
+// are refused by one code because they are one fault (a claim the program cannot be shown to keep), and they
+// are separate arms because only the caller can say what to do instead — an argument position can name the
+// conformer that would fit, a return position can only send the author to the argument position.
+enum ExistentialSiteClaimStatus
+	agrees
+	disagrees
+	unresolvable
+end 'ExistentialSiteClaimStatus'
+
+// ⭐⭐ **THE DISAGREEMENT ITSELF — WHICH associated position, and the two spellings that met there.** A verdict
+// with a payload rather than a bare enum like `ExistentialWideningVerdict`, because a refusal here must NAME
+// both bindings (the whole complaint is that two spellings differ, and a sentence that showed only one would
+// leave the reader to guess the other). Built only inside the `interfaceRef` branch of a widening whose callee
+// actually claimed something, which is a vanishing fraction of any program's arguments.
+type ExistentialSiteClaim
+	export var status as ExistentialSiteClaimStatus
+	export var associatedName as ByteArray
+	export var siteBinding as ByteArray
+	export var conformerBinding as ByteArray
+
+	// An agreeing claim names nothing: there is no disagreement to describe, and inventing spellings for the
+	// three fields would be exactly the sentinel this codebase refuses. Every reader gates on `status` first.
+	static function agreeing() returns Self
+		return Self{status: ExistentialSiteClaimStatus.agrees, associatedName: EmptySourceText, siteBinding: EmptySourceText, conformerBinding: EmptySourceText}
+	end 'agreeing'
+
+	static function disagreeing(associatedName ByteArray, siteBinding ByteArray, conformerBinding ByteArray) returns Self
+		return Self{status: ExistentialSiteClaimStatus.disagrees, associatedName: associatedName, siteBinding: siteBinding, conformerBinding: conformerBinding}
+	end 'disagreeing'
+
+	// An unresolvable claim names no conformer binding, and that is not a missing field: the fault is that
+	// nothing has fixed the SITE's side, so the conformer's was never reached and there is nothing to report
+	// about it. The two sentences that word this refusal say so.
+	static function unresolved(associatedName ByteArray, siteBinding ByteArray) returns Self
+		return Self{status: ExistentialSiteClaimStatus.unresolvable, associatedName: associatedName, siteBinding: siteBinding, conformerBinding: EmptySourceText}
+	end 'unresolved'
+end 'ExistentialSiteClaim'
+
+// ⭐⭐ **DOES THE VALUE BEING WIDENED BIND WHAT THE SITE CLAIMED? — E3127, the discharge the E3125 DEFERRAL
+// OWES (W58).** A use site writing `I with <Args>` normally restates a settled fact, and E3125 compares its
+// argument against the one binding the conformances agreed on. That comparison has no meaning when the argument
+// is the enclosing generic's own TYPE PARAMETER: `Taker with T` inside `type Box uses T` claims nothing about
+// the program and something about each INSTANTIATION. So E3125 defers such a claim, and this is where the
+// deferral is paid: at the WIDENING, the one place a concrete conformer and a site's claim actually meet, with
+// the claim already substituted through the call's own instance by the caller.
+//
+// ⚠ **THE COMPARISON IS RAW, FOR E3125's MEASURED REASON.** Collapsing a ranged alias to its primitive would
+// make `Integer` and a `Score = int(0 to 100)` one binding, and E3119's third recorded failure is exactly that
+// pair: the actual 5000 answered 5000 through one conformer and RANGE-PANICKED through the other.
+//
+// ⚠ **A GENERIC CONFORMER'S BINDING IS RESOLVED THROUGH ITS OWN INSTANCE FIRST.** `type Array uses Element`
+// conforming `Iterable with Element` records the binding as the string `Element` — its OWN parameter's name, not
+// a type. Compared raw against a site's `Integer` that is a false disagreement, and it is the shape
+// `stdlib/Array.maxon` is made of. `conformerBindingThroughInstance` reduces it before the comparison.
+function existentialSiteClaimVerdict(project Project, signatures ProgramSignatures, siteInstance GenericInstanceId, conformerTag ValueTypeTag, conformerNameId TypeNameId, interfaceName ByteArray) returns ExistentialSiteClaim
+	match lookupInterface(project.interfaces, name: interfaceName) 'base'
+		notFound then return ExistentialSiteClaim.agreeing()
+		found(iface) then return existentialSiteClaimAgainst(project, signatures: signatures, siteInstance: siteInstance, conformerTag: conformerTag, conformerNameId: conformerNameId, iface: iface)
+	end 'base'
+end 'existentialSiteClaimVerdict'
+
+// The walk over the interface's associated positions, split from the lookup above so that one reads as the
+// gate it is. The FIRST position that disagrees is the answer: a second sentence about the same widening would
+// describe the same fault twice, and the cure for either is the same edit.
+function existentialSiteClaimAgainst(project Project, signatures ProgramSignatures, siteInstance GenericInstanceId, conformerTag ValueTypeTag, conformerNameId TypeNameId, iface IrInterface) returns ExistentialSiteClaim
+	let claimed = signatures.genericInstanceArgCount(siteInstance)
+	for position in 0 upto iface.associatedTypeNames.count() 'eachAssociatedType'
+		// A site that bound FEWER arguments than the interface declares claims nothing here — the same arity
+		// gate `checkInterfaceInstantiationBindings` applies, and being short is `checkGenericInstance`'s report.
+		if position >= claimed 'claimsNothingHere'
+			continue
+		end 'claimsNothingHere'
+
+		// ⭐⭐ **A HELD POSITION IS NOT A RESTATEMENT OF A CONFORMER'S BINDING, SO IT IS NOT COMPARED WITH ONE** —
+		// the same exemption `ConformanceCheck.checkOneAssociatedBinding` makes, for the reason stated there.
+		// The site NAMES the interface the position is HELD at, and every conformer legitimately binds a
+		// different concrete type there and is widened into it: `Bag with (Integer, IntegerCursor)` beside an
+		// `UpBag` binding `Iter` to `UpCursor` is exactly right. **MEASURED: comparing them refused 8 correct
+		// programs across `associated-type-held-at-an-interface` and `parameterized-existential`.** What a held
+		// argument must agree with is checked whole-program instead — the holding by E3125, and every
+		// conformer's binding against it by E3126.
+		if signatures.associatedTypeIsHeldAt(iface.name, position: position) 'heldAtAnInterface'
+			continue
+		end 'heldAtAnInterface'
+
+		let associatedName = try iface.associatedTypeNames.get(position) otherwise panic("existentialSiteClaimAgainst: associatedTypeNames.get OOB at {position} below the count this loop is bounded by")
+		let siteBinding = signatures.instanceArgDisplayName(siteInstance, position: position)
+
+		// ⚠ **AN ARGUMENT STILL OPAQUE AFTER SUBSTITUTION HAS NO ANSWER, AND SILENCE WOULD BE THE WRONG ONE.**
+		// The caller substituted the site's instance through the call's own; a `typeParameter` that survived that
+		// belongs to a declaration no instance here fixes — a `return` checked in the shared body's declaration
+		// view, or a self-call inside it. Admitting the claim would leave exactly the hazard E3127 exists for.
+		if maxonTypeTag(signatures.substitutedInstanceArg(siteInstance, position: position)) == ValueTypeTag.typeParameter 'noInstanceFixedIt'
+			return ExistentialSiteClaim.unresolved(associatedName, siteBinding: siteBinding)
+		end 'noInstanceFixedIt'
+
+		if let conformerBinding = try conformerBindingThroughInstance(project, signatures: signatures, conformerTag: conformerTag, conformerNameId: conformerNameId, interfaceName: iface.name, position: position) 'thisConformerBindsIt'
+			if not siteBinding.equals(conformerBinding) 'contradictsTheClaim'
+				return ExistentialSiteClaim.disagreeing(associatedName, siteBinding: siteBinding, conformerBinding: conformerBinding)
+			end 'contradictsTheClaim'
+		end 'thisConformerBindsIt'
+	end 'eachAssociatedType'
+
+	return ExistentialSiteClaim.agreeing()
+end 'existentialSiteClaimAgainst'
+
+// What the value being widened binds `interfaceName`'s associated type at `position` to — the conformer's own
+// answer (`conformerAssociatedBinding`), reduced through the conformer's INSTANCE when it has one.
+//
+// A conformance's `withArgs` are RENDERED SOURCE NAMES, so a GENERIC conformer records its own type parameter's
+// spelling: `type Array uses Element implements Iterable with Element` binds the string `Element`. That names a
+// type only once an instance says which, so an `Array with Integer` being widened resolves it to `Integer`
+// before the comparison. `MapError.keyNotFound` when this type declares no such conformance or bound too few
+// arguments — both E3016's to report, and neither a disagreement.
+function conformerBindingThroughInstance(project Project, signatures ProgramSignatures, conformerTag ValueTypeTag, conformerNameId TypeNameId, interfaceName ByteArray, position ElementCount) returns ByteArray throws MapError
+	if conformerTag != ValueTypeTag.genericInstance 'aNominalConformer'
+		let conformerName = try project.typeNames.nameOf(conformerNameId) otherwise panic("conformerBindingThroughInstance: type-name id {conformerNameId} is not in the project interner — a value's name id is remapped project-global at merge (mergeArtifact)")
+		return try conformerAssociatedBinding(project.conformances, typeName: conformerName, interfaceName: interfaceName, position: position)
+	end 'aNominalConformer'
+
+	let baseName = signatures.genericInstanceBaseName(conformerNameId)
+	let declared = try conformerAssociatedBinding(project.conformances, typeName: baseName, interfaceName: interfaceName, position: position)
+	if let paramPosition = try namePositionIn(signatures.structTypeParamsOf(baseName), name: declared) 'namesTheConformersOwnParameter'
+		return signatures.instanceArgDisplayName(conformerNameId, position: paramPosition)
+	end 'namesTheConformersOwnParameter'
+
+	return declared
+end 'conformerBindingThroughInstance'
+
+// ⭐ **THE SITE'S CLAIM AS THE CALL SEES IT** — the callee's declared `Base with Args` with the CALLER's own
+// generic instance substituted in, so `Taker with T` declared inside `type Box uses T` is `Taker with Integer`
+// at a call on an `IntBox`. The same subject and the same substitution `paramTypeThroughCallInstance` uses on
+// the parameter's type; this is the half of the parameter's declaration that type no longer carries.
+//
+// Returns the site UNSUBSTITUTED when the subject is not a concrete instance — a free function's call, or a
+// self-call inside the shared body. That is not a silent pass: an argument still opaque afterwards is what
+// `existentialSiteClaimAgainst` refuses as `unresolvable`.
+function existentialSiteThroughCallInstance(signatures ProgramSignatures, func IrFunction, subject ValueId, siteInstance GenericInstanceId) returns GenericInstanceId
+	let subjectTag = try func.valueTags.get(subject) otherwise panic("existentialSiteThroughCallInstance: value v{subject} of function '{String.from(func.name)}' has no recorded type — every SSA value must be minted through Parser.mintValue")
+	if subjectTag != ValueTypeTag.genericInstance 'notACallThroughAConcreteInstance'
+		return siteInstance
+	end 'notACallThroughAConcreteInstance'
+
+	let subjectGid = try func.valueNameIds.get(subject) otherwise panic("existentialSiteThroughCallInstance: genericInstance value v{subject} of function '{String.from(func.name)}' has no recorded GenericInstanceId — the two type columns are minted in lockstep")
+	let substituted = signatures.substituteThroughInstance(MaxonType.genericInstance(siteInstance), id: subjectGid)
+	// The substitution re-interns and hands back a `genericInstance`, or the SAME instance when no argument
+	// moved. A different tag would mean it had rewritten an existential's identity into something else, which
+	// only a defect in that door could do — so it is asserted rather than silently reinterpreted.
+	if maxonTypeTag(substituted) != ValueTypeTag.genericInstance 'noLongerAnInstance'
+		panic("existentialSiteThroughCallInstance: substituting instance {siteInstance} through {subjectGid} produced tag {maxonTypeTag(substituted).rawValue} — `substituteInstanceArgsThrough` re-interns a genericInstance and returns the original when nothing moved, so it can never leave this door")
+	end 'noLongerAnInstance'
+
+	return typeNameIdOf(substituted)
+end 'existentialSiteThroughCallInstance'
+
+// How BOTH refusals name the position at fault — the interface and the argument the site claimed for one of
+// its associated types. Shared for `nonConformingMessage`'s reason: one rule decides, so a reader must be told
+// one sentence and not two spellings of it. What differs between the positions is the head in front of it and
+// the advice behind it, which is exactly where the two callers take over.
+function existentialSiteClaimSentence(interfaceName ByteArray, claim ExistentialSiteClaim) returns String
+	return "the existential type '{String.from(interfaceName)}' with its associated type '{String.from(claim.associatedName)}' bound to '{String.from(claim.siteBinding)}'"
+end 'existentialSiteClaimSentence'
+
+// The `with` arguments the function's DECLARED RETURN named — off its signature, which is where the parser put
+// them. `MapError.keyNotFound` for a name no signature is registered under, which the one caller answers with
+// the shared empty column: "claims nothing" is exactly right for a function whose declaration was never seen.
+function returnExistentialSitesOfFunc(project Project, name ByteArray) returns GenericInstanceIdArray throws MapError
+	return (try project.funcSignatures.get(name)).returnExistentialSites
+end 'returnExistentialSitesOfFunc'
+
+// ⭐ **THE ARGUMENT POSITION'S HALF OF E3127.** Reached only once conformance is settled, and only for a callee
+// whose signature actually recorded a claim for this parameter — `paramExistentialSiteAt` throws for every
+// other parameter of every other function, which is nearly all of them, so the shared empty column costs one
+// failed scan of an empty list.
+function checkExistentialSiteClaimAtArgument(project Project, func IrFunction, paramExistentialSites ParamExistentialSiteArray, position ParamCount, argTag ValueTypeTag, argNameId TypeNameId, interfaceName ByteArray, paramName ByteArray, callInstanceSubject ValueId, callRange SourceRange, filePath FilePath)
+	let declaredSite = try paramExistentialSiteAt(paramExistentialSites, position: position) otherwise return
+	var signatures = programSignaturesIn(project, asker: "checkExistentialSiteClaimAtArgument")
+
+	// ⛔⛔ **AN ARGUMENT THAT IS ALREADY AN EXISTENTIAL HAS NO CONFORMER TO ASK, AND AGAINST A DEFERRED CLAIM
+	// THAT IS A WRONG ANSWER.** Everything below asks what the ARRIVING TYPE binds; a value held at an interface
+	// answers nothing — which conformer is inside it is precisely what a fat pointer exists to not say.
+	// For a CONCRETE claim that silence is safe and is why this is not a blanket refusal: E3125 has already
+	// checked the claim against the one binding the conformances settled, and E3119 makes that binding unique,
+	// so whatever conformer is inside binds it too. A DEFERRED claim has had neither check.
+	// ⛔ **MEASURED on this tree**, with `function relay(t Taker) returns Integer` forwarding its bare `t` into a
+	// `Box with String`'s `run(t Taker with T)`: it COMPILED, `Runner.take` read a `String` pointer as its
+	// `Integer` argument, and the program died `Range check failed: value outside typealias 'ExitCode'` — E3119's
+	// own recorded failure class, one indirection later, which is the hazard E3127 exists to stop.
+	if argTag == ValueTypeTag.interfaceRef 'theArgumentIsItselfAnExistential'
+		checkDeferredClaimAgainstExistentialArgument(project, signatures: signatures, declaredSite: declaredSite, argTag: argTag, argNameId: argNameId, interfaceName: interfaceName, paramName: paramName, position: position, callRange: callRange, filePath: filePath)
+		return
+	end 'theArgumentIsItselfAnExistential'
+
+	let site = existentialSiteThroughCallInstance(signatures, func: func, subject: callInstanceSubject, siteInstance: declaredSite)
+	let claim = existentialSiteClaimVerdict(project, signatures: signatures, siteInstance: site, conformerTag: argTag, conformerNameId: argNameId, interfaceName: interfaceName)
+	let conformer = typeDisplayName(project, tag: argTag, nameId: argNameId)
+	let siteText = existentialSiteClaimSentence(interfaceName, claim: claim)
+	let associated = String.from(claim.associatedName)
+	match claim.status 'claim'
+		agrees then break 'claim'
+		disagrees then reportPositioned(project, code: ErrorCode.existentialWideningBindingDisagreement, message: "cannot widen '{conformer}' into {argParamLabel(paramName, position: position)}, which is declared at {siteText} — '{conformer}' binds '{associated}' to '{String.from(claim.conformerBinding)}'. A dispatch through this value is emitted against the binding the site claims and would reach an impl written for the other one. Write the binding the conformer declares, or widen a conformer that binds '{associated}' to '{String.from(claim.siteBinding)}'", line: callRange.line, column: callRange.column, filePath: filePath)
+		unresolvable then reportPositioned(project, code: ErrorCode.existentialWideningBindingDisagreement, message: "cannot widen '{conformer}' into {argParamLabel(paramName, position: position)}, which is declared at {siteText} — '{String.from(claim.siteBinding)}' is a type parameter this call fixes to nothing, so what '{conformer}' would have to bind '{associated}' to is not known here. Call through a concrete instance of the declaring type, or write the binding the conformers declare", line: callRange.line, column: callRange.column, filePath: filePath)
+	end 'claim'
+end 'checkExistentialSiteClaimAtArgument'
+
+// Was the callee's claim DEFERRED — i.e. is this the one shape an already-existential argument cannot be let
+// through? Asked by putting the DECLARED, UNSUBSTITUTED site through the same verdict every other caller uses:
+// `unresolvable` there is exactly "some position's argument is the declaring type's own parameter", which is
+// E3125's deferral condition read back. Asking it this way rather than with a second predicate is what keeps
+// the arity gate and the held-position exemption stated once.
+//
+// The `disagrees` arm cannot be reached and is not swept into the pass: the conformer lookup is keyed by the
+// ARRIVING type's name, which here is an INTERFACE's, and no `type` may share a name with an interface (E3006).
+function checkDeferredClaimAgainstExistentialArgument(project Project, signatures ProgramSignatures, declaredSite GenericInstanceId, argTag ValueTypeTag, argNameId TypeNameId, interfaceName ByteArray, paramName ByteArray, position ParamCount, callRange SourceRange, filePath FilePath)
+	let claim = existentialSiteClaimVerdict(project, signatures: signatures, siteInstance: declaredSite, conformerTag: argTag, conformerNameId: argNameId, interfaceName: interfaceName)
+	match claim.status 'declared'
+		agrees then break 'declared'
+		disagrees then panic("checkDeferredClaimAgainstExistentialArgument: the argument is held at interface '{String.from(interfaceName)}' and the claim reports a conformer binding — `conformerBindingThroughInstance` keys the lookup by the arriving type's name, which is that interface's, and E3006 forbids a `type` sharing it")
+		unresolvable then reportPositioned(project, code: ErrorCode.existentialWideningBindingDisagreement, message: "cannot pass a value already held at the interface type '{String.from(interfaceName)}' as {argParamLabel(paramName, position: position)}, which is declared at {existentialSiteClaimSentence(interfaceName, claim: claim)} — '{String.from(claim.siteBinding)}' is a type parameter of the declaring type, so this site's binding was never settled against the conformances, and a value held at an interface does not say which conformer is inside it for the call to settle it against. Pass the concrete conformer, or declare {argParamLabel(paramName, position: position)} at '{String.from(interfaceName)}' with no `with` clause", line: callRange.line, column: callRange.column, filePath: filePath)
+	end 'declared'
+end 'checkDeferredClaimAgainstExistentialArgument'
+
+// ⭐ **THE `return` POSITION'S HALF, AND THE ASYMMETRY WITH THE ARGUMENT IS THE WHOLE OF WHY `unresolvable`
+// EXISTS.** A `return` is checked ONCE, against the shared body's DECLARATION view, so there is no call whose
+// instance could fix an opaque claim — a `returns Taker with T` inside `type Box uses T` therefore has no
+// answer here however the program instantiates `Box`, and the refusal points at the position that DOES have
+// one. That is the same cure E3120 offers, for the same reason, one door over.
+//
+// A value that is ALREADY an existential is passed over: `function id(t TakerOfT) returns TakerOfT` hands back
+// what it was given, no widening happens, and the claim it restates is its own.
+function checkExistentialSiteClaimAtReturn(project Project, func IrFunction, returnExistentialSites GenericInstanceIdArray, valueTag ValueTypeTag, valueNameId TypeNameId, interfaceName ByteArray, retRange SourceRange)
+	if valueTag == ValueTypeTag.interfaceRef 'alreadyWidenedElsewhere'
+		return
+	end 'alreadyWidenedElsewhere'
+
+	let site = try returnExistentialSites.get(0) otherwise return
+	var signatures = programSignaturesIn(project, asker: "checkExistentialSiteClaimAtReturn")
+	let claim = existentialSiteClaimVerdict(project, signatures: signatures, siteInstance: site, conformerTag: valueTag, conformerNameId: valueNameId, interfaceName: interfaceName)
+	let funcName = String.from(func.name)
+	let conformer = typeDisplayName(project, tag: valueTag, nameId: valueNameId)
+	let siteText = existentialSiteClaimSentence(interfaceName, claim: claim)
+	let associated = String.from(claim.associatedName)
+	match claim.status 'claim'
+		agrees then break 'claim'
+		disagrees then reportPositioned(project, code: ErrorCode.existentialWideningBindingDisagreement, message: "cannot return '{conformer}' from '{funcName}', which is declared to return {siteText} — '{conformer}' binds '{associated}' to '{String.from(claim.conformerBinding)}'. A dispatch through the returned value is emitted against the binding the site claims and would reach an impl written for the other one. Write the binding the conformer declares, or return a conformer that binds '{associated}' to '{String.from(claim.siteBinding)}'", line: retRange.line, column: retRange.column, filePath: func.sourceFilePath)
+		unresolvable then reportPositioned(project, code: ErrorCode.existentialWideningBindingDisagreement, message: "cannot return a value from '{funcName}', which is declared to return {siteText} — '{String.from(claim.siteBinding)}' is a type parameter of the declaring type, and a `return` is checked once against the shared body, where no instantiation has fixed it. Write the binding the conformers declare, or take the value as a PARAMETER instead, where the call's own instance resolves it", line: retRange.line, column: retRange.column, filePath: func.sourceFilePath)
+	end 'claim'
+end 'checkExistentialSiteClaimAtReturn'
+
 // The float refusal's REASON, up to the point where the two positions diverge on what to do instead. Shared
 // for `nonConformingMessage`'s reason, and split exactly where the advice stops being the same advice.
 function floatHasNoValueHalfReason(interfaceName String) returns String
@@ -3774,10 +4024,14 @@ function checkReturnsAgainstInterface(project Project, module MaxonModule, func 
 	end 'notAnExistentialReturn'
 
 	let interfaceName = interfaceNameOfType(declaredReturn, typeNames: project.typeNames)
+	// ⭐ The `with` arguments the declared return named (W58), read ONCE per function rather than per `return`:
+	// they are a property of the DECLARATION, and this walk visits every `ret` in the body. A function with no
+	// registered signature — none today, since the parser records one per function it builds — claims nothing.
+	let returnExistentialSites = try returnExistentialSitesOfFunc(project, name: func.name) otherwise sharedEmptyReturnExistentialSites
 	for opIdx in module.liveOpIndices(func) 'eachOp'
 		let op = try module.ops.get(opIdx) otherwise panic("checkReturnsAgainstInterface: opIdx {opIdx} from liveOpIndices not in module.ops")
 		match op 'op'
-			ret(value) then checkOneReturnedValue(project, func: func, value: value, interfaceName: interfaceName, retRange: project.opRanges.get(opIdx))
+			ret(value) then checkOneReturnedValue(project, func: func, value: value, interfaceName: interfaceName, returnExistentialSites: returnExistentialSites, retRange: project.opRanges.get(opIdx))
 			// Every other op — a `retVoid` included, which a value-returning function's parser never emits —
 			// hands nothing back through the return registers. The band range leans on the band-append
 			// invariant: a newly appended op FAILS TO COMPILE here rather than being swept into an ignore arm.
@@ -3790,12 +4044,13 @@ end 'checkReturnsAgainstInterface'
 
 // One `return`'s value against the interface its function promised — the verdict shared with the argument
 // position, worded for this one. Anchored on the `return` itself, the line an author would change.
-function checkOneReturnedValue(project Project, func IrFunction, value ValueId, interfaceName ByteArray, retRange SourceRange)
+function checkOneReturnedValue(project Project, func IrFunction, value ValueId, interfaceName ByteArray, returnExistentialSites GenericInstanceIdArray, retRange SourceRange)
 	let valueTag = try func.valueTags.get(value) otherwise panic("checkOneReturnedValue: value v{value} of function '{String.from(func.name)}' has no recorded type — every SSA value must be minted through Parser.mintValue")
 	let valueNameId = try func.valueNameIds.get(value) otherwise panic("checkOneReturnedValue: value v{value} of function '{String.from(func.name)}' has no recorded type name — the two type columns are minted in lockstep")
 	let displayName = String.from(interfaceName)
 	match existentialWideningVerdict(project, valueTag: valueTag, valueNameId: valueNameId, interfaceName: interfaceName) 'widening'
-		widens then break 'widening'
+		// The parameterized half, asked once conformance is settled — the argument position's twin (W58).
+		widens then checkExistentialSiteClaimAtReturn(project, func: func, returnExistentialSites: returnExistentialSites, valueTag: valueTag, valueNameId: valueNameId, interfaceName: interfaceName, retRange: retRange)
 		floatHasNoValueHalf then reportPositioned(project, code: ErrorCode.floatWidenedToExistential, message: "Cannot return a `float` from '{String.from(func.name)}', which is declared to return the interface type '{displayName}': {floatHasNoValueHalfReason(displayName)}, or declare the return type as `float`", line: retRange.line, column: retRange.column, filePath: func.sourceFilePath)
 		doesNotConform then reportPositioned(project, code: ErrorCode.typeMismatch, message: nonConformingMessage("return type mismatch in '{String.from(func.name)}'", conformer: typeDisplayName(project, tag: valueTag, nameId: valueNameId), interfaceName: displayName), line: retRange.line, column: retRange.column, filePath: func.sourceFilePath)
 	end 'widening'
@@ -3824,7 +4079,14 @@ end 'checkOneReturnedValue'
 // parameter types — the same subject `checkArgTypes` reads for `paramTypeThroughCallInstance`. Only the
 // function-shape arm below consults it, and it declines for any subject not tagged `genericInstance`, which
 // is how the two callers that HAVE no instance pass their own honest subject rather than a sentinel.
-function checkOneArgType(project Project, func IrFunction, paramType MaxonType, preErasedAggregate ByteArray, declaredParamName ByteArray, paramName ByteArray, position ParamCount, argId ValueId, callInstanceSubject ValueId, callRange SourceRange, filePath FilePath)
+//
+// `paramExistentialSites` is the callee's sparse record of which parameters were declared at a PARAMETERIZED
+// existential (W58) — the `with` arguments `instanceDenotedType` dropped on the way to `paramType`'s bare
+// `interfaceRef`. Only the DIRECT-call caller has a `FuncSignature` to read one off; the witness-dispatch and
+// indirect-call callers hand over `sharedEmptyParamExistentialSites`, which is their honest answer rather than
+// a stand-in — an interface REQUIREMENT's formals are the interface's own spelling, and a function TYPE names
+// its parameters' declarations nowhere at all (the same gap `declaredParamName` has at those two sites).
+function checkOneArgType(project Project, func IrFunction, paramType MaxonType, preErasedAggregate ByteArray, declaredParamName ByteArray, paramName ByteArray, position ParamCount, argId ValueId, callInstanceSubject ValueId, paramExistentialSites ParamExistentialSiteArray, callRange SourceRange, filePath FilePath)
 	let argTag = try func.valueTags.get(argId) otherwise panic("checkOneArgType: value v{argId} of function '{String.from(func.name)}' has no recorded type — every SSA value must be minted through Parser.mintValue")
 	let argNameId = try func.valueNameIds.get(argId) otherwise panic("checkOneArgType: value v{argId} of function '{String.from(func.name)}' has no recorded type name — the two type columns are minted in lockstep")
 	let paramTag = maxonTypeTag(paramType)
@@ -3843,7 +4105,11 @@ function checkOneArgType(project Project, func IrFunction, paramType MaxonType, 
 		let interfaceName = interfaceNameOfType(paramType, typeNames: project.typeNames)
 		let displayName = String.from(interfaceName)
 		match existentialWideningVerdict(project, valueTag: argTag, valueNameId: argNameId, interfaceName: interfaceName) 'widening'
-			widens then break 'widening'
+			// ⭐ **AND THEN THE PARAMETERIZED half of the same question (W58).** Conformance is the door's
+			// original verdict and says nothing about `with` arguments — a `Runner` implements `Taker` whichever
+			// type the site claims `Element` is. Asked only once conformance is settled, because a
+			// non-conformer's bindings are not the fault worth reporting.
+			widens then checkExistentialSiteClaimAtArgument(project, func: func, paramExistentialSites: paramExistentialSites, position: position, argTag: argTag, argNameId: argNameId, interfaceName: interfaceName, paramName: paramName, callInstanceSubject: callInstanceSubject, callRange: callRange, filePath: filePath)
 			floatHasNoValueHalf then reportPositioned(project, code: ErrorCode.floatWidenedToExistential, message: "Cannot pass a `float` as {argParamLabel(paramName, position: position)}, which is declared at the interface type '{displayName}': {floatHasNoValueHalfReason(displayName)}, or take the parameter as a `float`", line: callRange.line, column: callRange.column, filePath: filePath)
 			doesNotConform then reportPositioned(project, code: ErrorCode.typeMismatch, message: nonConformingMessage("argument type mismatch for {argParamLabel(paramName, position: position)}", conformer: typeDisplayName(project, tag: argTag, nameId: argNameId), interfaceName: displayName), line: callRange.line, column: callRange.column, filePath: filePath)
 		end 'widening'
