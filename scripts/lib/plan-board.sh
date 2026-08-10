@@ -188,18 +188,54 @@ row_is_free() {
 # THE LANE IS THE REAL EXCLUSION UNIT. Six of the board's rows raise refusals inside ONE 28,152-line
 # Parser.maxon, so "different mechanism" does not mean "different code". The board calls this "the
 # concurrency limit, and it is not advisory" — and until this function existed, nothing checked it.
+#
+# ⛔ THE RECORD IS SPLIT WITH `cut`, NOT BY `read`'s IFS, AND THE DIFFERENCE IS A MISSED CONFLICT.
+#    Tab is IFS *whitespace*, so bash collapses a RUN of tabs into a single delimiter. This loop wants
+#    field 4 (lanes) — but a row whose Lane cell is EMPTY collapses the gap and hands field 4 the next
+#    non-empty cell instead, which on a BOARD row (whose `members` is empty by construction) is the
+#    OWNER. The `L-` scan would then run over a branch name and find nothing, and this function's whole
+#    job is to REFUSE — so its failure mode is silently reporting "no conflict" and letting two agents
+#    into one lane. `cut -f` counts empty fields; `read` cannot be made to.
 lane_conflicts() {
-  local plan="$1" self="$2" lanes="$3" line id status shared
+  local plan="$1" self="$2" lanes="$3" rec line id lane_cell shared
   [ -n "$lanes" ] || return 0
   board_scan "$plan"
-  while IFS=$'\t' read -r line id status lane_cell _rest; do
+  while IFS= read -r rec; do
+    [ -n "$rec" ] || continue
+    id="$(printf '%s' "$rec" | cut -f2)"
     [ "$id" != "$self" ] || continue
-    case "$status" in *🔶*) ;; *) continue ;; esac
+    line="$(printf '%s' "$rec" | cut -f1)"
+    lane_cell="$(printf '%s' "$rec" | cut -f4)"
     shared="$(comm -12 <(printf '%s\n' "$lanes") \
                        <(printf '%s\n' "$lane_cell" | grep -oE 'L-[A-Za-z0-9_-]+' | sort -u))"
     [ -n "$shared" ] && echo "$id (PLAN.md:$line) holds: $(printf '%s' "$shared" | tr '\n' ' ')"
-  done <<< "$_BOARD_CACHE"
+  done <<< "$(printf '%s\n' "$_BOARD_CACHE" | awk -F'\t' '$3 ~ /🔶/')"
   return 0
+}
+
+# live_claim_branches <plan> — the branch named by every LIVE (🔶) row's Owner cell, one per line.
+#
+# ⭐ THE BOARD IS THE ONLY PLACE A LIVE RUNG IS WRITTEN DOWN, and since 2026-08-04 it is the only place
+#    LEFT. Branches never go to origin, so `git ls-remote --heads origin` — which rung-start.sh's own
+#    refusal message used to name as the way to tell a live claim from an abandoned one — reports
+#    nothing for either. rung-start.sh says so itself in its step 5: "Do not read an absent remote
+#    branch as evidence of anything."
+#
+#    So anything that wants to DELETE a worktree has exactly one honest way to ask whether another
+#    agent is standing in it, and this is it. A reaper without this question is a reaper that guesses,
+#    and the thing it guesses wrong about is somebody else's live rung.
+#
+# ⛔ awk, NOT `while IFS=$'\t' read`. THE FIRST VERSION OF THIS FUNCTION USED read AND RETURNED THE
+#    CLAIM DATE WHERE THE BRANCH BELONGS. Tab is IFS *whitespace*, so bash collapses a RUN of tabs into
+#    one delimiter — and a BOARD row's `members` field is empty by construction (only BATCH rows have
+#    members), so every field after it shifted left by one and `owner` received `claimed`. It read
+#    `2026-08-09` as a branch name, which no worktree is ever called, so the guard would have silently
+#    protected NOTHING while looking like it worked. Caught only by a synthetic board with a known
+#    answer; the live board has zero 🔶 rows today, so the real one could not have caught it.
+#    `awk -F'\t'` does not collapse, which is also why every accessor above reaches for `cut`.
+live_claim_branches() {
+  board_scan "$1"
+  printf '%s\n' "$_BOARD_CACHE" | awk -F'\t' '$3 ~ /🔶/ { gsub(/`/, "", $6); if ($6 != "") print $6 }'
 }
 
 # ── writing ──────────────────────────────────────────────────────────────────────────────────────

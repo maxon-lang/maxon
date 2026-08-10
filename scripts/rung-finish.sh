@@ -5,7 +5,7 @@
 # MEANS, because this script can tell you a gate failed and never why it matters.
 #
 #   rebase the branch -> build -> suite -> GATES -> BASE-DRIFT A/B -> cross-target -> ff-merge
-#     -> flip the board -> commit -> push -> tear down the worktree
+#     -> flip the board -> commit -> push -> tear down the worktree -> REAP the leaked ones
 #
 # ⭐ THE ORDER IS THE POINT, and by hand it has gone wrong in every direction:
 #
@@ -59,6 +59,8 @@
 #   --no-ladder-row     skip the optimization-log.md check, with a reason that is echoed into the report
 #   --branch            WAVE mode: name the branch directly, no board row is read or flipped
 #   --dry-run           run every gate, merge nothing, write nothing, push nothing
+#   --keep-worktree     keep THIS rung's worktree and branch — and skip the reap below with it, because
+#                       both are the same request: leave the trees on disk alone
 #
 set -o pipefail
 
@@ -79,6 +81,10 @@ readonly REPO="$RUNG_FINISH_REPO"
 readonly PLAN="$REPO/maxon-shv2/PLAN.md"
 readonly LOGDIR="$REPO/temp"
 readonly MAX_PUSH_ATTEMPTS=3
+# How long a worktree must have gone UNWRITTEN before step 10 will consider it dead. See the reap
+# block for why an idle test earns its place beside three git-state tests: it is the only one of the
+# four that is not a reading of the commit graph, so it is the only one that can disagree with them.
+readonly REAP_IDLE_MINUTES=30
 
 # shellcheck source=lib/plan-board.sh
 . "$REPO/scripts/lib/plan-board.sh" || { echo "cannot source scripts/lib/plan-board.sh" >&2; exit 1; }
@@ -116,7 +122,7 @@ while [ $# -gt 0 ]; do
     --dry-run)           DRY_RUN=1;         shift   ;;
     --no-push)           NO_PUSH=1;         shift   ;;
     --keep-worktree)     KEEP_WORKTREE=1;   shift   ;;
-    -h|--help)           sed -n '2,62p' "${BASH_SOURCE[0]}"; exit 0 ;;
+    -h|--help)           sed -n '2,64p' "${BASH_SOURCE[0]}"; exit 0 ;;
     *) die "unknown argument: $1" ;;
   esac
 done
@@ -133,7 +139,7 @@ mkdir -p "$LOGDIR"
 cd "$REPO" || die "cannot cd to $REPO"
 
 # ─────────────────────────────────────────────────────────────────────────────────────────────────
-step "1/9  Position — the branch, the worktree, and the DETAIL ROW you owe"
+step "1/10  Position — the branch, the worktree, and the DETAIL ROW you owe"
 # ─────────────────────────────────────────────────────────────────────────────────────────────────
 [ "$(git rev-parse --abbrev-ref HEAD)" = "main" ] || die "this checkout is on '$(git rev-parse --abbrev-ref HEAD)', not main.
      The merge and the board flip both land ON main, so they run in the checkout that OWNS main —
@@ -197,7 +203,7 @@ BOOTSTRAP="$(maxon_bootstrap_path "$WORKTREE")"
 [ -x "$BOOTSTRAP" ] || die "no bootstrap in the worktree ($BOOTSTRAP) — bin/ is gitignored; copy it in"
 
 # ─────────────────────────────────────────────────────────────────────────────────────────────────
-step "2/9  Rebase the branch onto origin/main — BEFORE the suite, not after"
+step "2/10  Rebase the branch onto origin/main — BEFORE the suite, not after"
 # ─────────────────────────────────────────────────────────────────────────────────────────────────
 git fetch --quiet origin || die "git fetch failed"
 BASE_SHA="$(git rev-parse origin/main)"
@@ -227,7 +233,7 @@ echo "$CHANGED_FILES" | grep -qE '^(maxon-sharp|stdlib)/' && RUN_CSHARP=1
 [ "$RUN_CSHARP" = "0" ] || ok "the branch touched maxon-sharp/ or stdlib/ — the C# suite is now part of this battery"
 
 # ─────────────────────────────────────────────────────────────────────────────────────────────────
-step "3/9  Build"
+step "3/10  Build"
 # ─────────────────────────────────────────────────────────────────────────────────────────────────
 build_tree() {                       # build_tree <tree> <tag> [force-bootstrap] — bootstrap, then shv2
   local tree="$1" tag="$2" force="${3:-0}"
@@ -249,7 +255,7 @@ build_tree "$WORKTREE" "tip"
 ok "shv2 built from the rebased branch"
 
 # ─────────────────────────────────────────────────────────────────────────────────────────────────
-step "4/9  The full unfiltered shv2 suite"
+step "4/10  The full unfiltered shv2 suite"
 # ─────────────────────────────────────────────────────────────────────────────────────────────────
 # ⚠ REDIRECTED, never piped. A pipe decides what to keep BEFORE you know what failed, so a red run
 #   costs a second full run just to read what the first one already had.
@@ -311,7 +317,7 @@ UNTRACKED="$(git -C "$WORKTREE" ls-files --others --exclude-standard specs-shv2/
 ok "no untracked goldens"
 
 # ─────────────────────────────────────────────────────────────────────────────────────────────────
-step "5/9  The golden-drift DELTA against the merge base"
+step "5/10  The golden-drift DELTA against the merge base"
 # ─────────────────────────────────────────────────────────────────────────────────────────────────
 # ⛔ `git status specs-shv2/fragments/` cannot answer this and was believed to in five rungs. The
 #    runner's drift count can — but a rung INHERITS whatever drift main already carries, so the count
@@ -380,7 +386,7 @@ else
 fi
 
 # ─────────────────────────────────────────────────────────────────────────────────────────────────
-step "6/9  The ladder read, and the C# lane"
+step "6/10  The ladder read, and the C# lane"
 # ─────────────────────────────────────────────────────────────────────────────────────────────────
 # The scale-test READ is per rung and never batches — not out of thoroughness, but because ATTRIBUTION
 # IS ONLY AVAILABLE NOW. The instrument sees exactly WHAT moved and can never see why; ten rungs later,
@@ -421,7 +427,7 @@ if [ "$RUN_CSHARP" = "1" ]; then
 fi
 
 # ─────────────────────────────────────────────────────────────────────────────────────────────────
-step "7/9  The CROSS-TARGET gate — every LOCAL target"
+step "7/10  The CROSS-TARGET gate — every LOCAL target"
 # ─────────────────────────────────────────────────────────────────────────────────────────────────
 # Step 4 proved the rung on exactly ONE target: whichever one this host happens to be. A green suite on
 # one target is evidence about one target — that is how 317 stale arm64 goldens sat on main unnoticed
@@ -466,7 +472,7 @@ if [ "$DRY_RUN" = "1" ]; then
 fi
 
 # ─────────────────────────────────────────────────────────────────────────────────────────────────
-step "8/9  Land it — linear history"
+step "8/10  Land it — linear history"
 # ─────────────────────────────────────────────────────────────────────────────────────────────────
 if [ -n "$(git status --porcelain)" ]; then
   git stash push -u --quiet -m "rung-finish: $BATCH" || die "git stash failed"
@@ -541,7 +547,7 @@ git commit --quiet -F "$MSG_FILE" || die "git commit failed"
 ok "committed $(git log --oneline -1)"
 
 # ─────────────────────────────────────────────────────────────────────────────────────────────────
-step "9/9  Push"
+step "9/10  Push"
 # ─────────────────────────────────────────────────────────────────────────────────────────────────
 if [ "$NO_PUSH" = "1" ]; then
   warn "--no-push: main is ahead locally. Push it yourself — the parallel repo consumes it."
@@ -570,10 +576,165 @@ else
 fi
 
 if [ "$KEEP_WORKTREE" = "0" ]; then
-  git worktree remove --force "$WORKTREE" >/dev/null 2>&1 && ok "worktree removed" \
-    || warn "could not remove the worktree — remove it by hand: git worktree remove --force $WORKTREE"
-  git branch -q -D "$BRANCH" 2>/dev/null && ok "branch $BRANCH deleted" || true
-  git push --quiet origin --delete "$BRANCH" 2>/dev/null && ok "remote branch deleted" || true
+  # ⛔ THE BRANCH DELETE IS NOT INDEPENDENT OF THE WORKTREE REMOVE, AND IT USED TO SWALLOW ITS OWN
+  #    FAILURE. `git branch -D` REFUSES a branch that is checked out in a worktree, so a failed remove
+  #    GUARANTEES a failed delete — and the delete ended in `|| true`, so the pair leaked while the
+  #    output mentioned only the worktree. Both speak now, and the failure names the whole recovery.
+  if git worktree remove --force "$WORKTREE" >/dev/null 2>&1; then
+    ok "worktree removed"
+    git branch -q -D "$BRANCH" 2>/dev/null && ok "branch $BRANCH deleted" \
+      || warn "worktree gone but branch '$BRANCH' SURVIVES — delete it: git branch -D $BRANCH"
+  else
+    warn "could not remove the worktree — BOTH it and branch '$BRANCH' survive. By hand:"
+    warn "    git worktree remove --force $WORKTREE && git branch -D $BRANCH"
+  fi
+
+  # ⛔ NO `git push origin --delete` HERE, AND THERE MUST NOT BE ONE. There has never been a remote
+  #    branch for it to delete: rung-start.sh stopped pushing one on 2026-08-04 ("BRANCHES NEVER GO TO
+  #    ORIGIN", user rule) and documents it in its own step 5. The call that used to sit here was a
+  #    network round-trip that could only ever fail, with the failure sent to /dev/null and `|| true` —
+  #    while its `ok "remote branch deleted"` could print in exactly ONE case, somebody having violated
+  #    the rule, which is the one case worth SEEING rather than quietly tidying away.
+fi
+
+# ─────────────────────────────────────────────────────────────────────────────────────────────────
+step "10/10  Reap LEAKED rung worktrees — the debris nothing has ever removed"
+# ─────────────────────────────────────────────────────────────────────────────────────────────────
+# ⭐ WHY THIS EXISTS. The teardown above removes the worktree of the rung that RAN this script. Nothing
+#    has ever removed the worktree of a rung that DIDN'T, and there are two routine ways to be one:
+#
+#      · a rung merged BY HAND — into a feature branch, say — never invokes this script at all;
+#      · a rung whose battery died after the push but before the teardown.
+#
+#    MEASURED 2026-08-09: 33 worktrees on this checkout at ~570 MB each, of which 7 were leaked rung
+#    trees. Every leaked path also BLOCKS ITS OWN SLUG — rung-start.sh refuses a worktree path that
+#    already exists ("A rung is live there, or one was never torn down") — so the debris is not merely
+#    disk, it is a name nobody can reuse. Cleanup nobody schedules never happens; a rung finishing is
+#    the one moment it is both cheap and provably safe.
+#
+# ⛔ IT REMOVES ONLY WHAT IT CAN PROVE IS INERT, AND IT PRINTS EVERY ONE IT DECLINES, WITH THE REASON.
+#    A reaper that reported only its successes would read as "nothing left behind" while leaving
+#    plenty — the silent-cap failure this repo keeps paying for. FIVE conditions, each excluding one
+#    distinct way of being wrong:
+#
+#      1. the path is a `maxon-*` SIBLING of this checkout      ⇒ rung-start.sh:82 made it. The agent
+#         harness's own `.claude/worktrees/` trees are NOT this script's to judge, and it says so.
+#      2. `git status --porcelain` is empty                     ⇒ no uncommitted work to lose.
+#      3. NOTHING HAS WRITTEN TO IT for REAP_IDLE_MINUTES       ⇒ no agent is standing in it.
+#      4. zero commits that are not already in main             ⇒ no committed work to lose either.
+#      5. no LIVE 🔶 claim names its branch, AND its tip is
+#         STRICTLY OLDER than the base this rung gated against  ⇒ it is not a rung STARTING UP.
+#
+#    (5) is two tests because neither covers the other. A rung rung-start.sh created minutes ago sits
+#    exactly AT origin/main's tip — which is $BASE_SHA at the newest — so "strictly older" excludes it
+#    without the board being consulted at all; that is what protects a WAVE rung, which has no board
+#    row to hold a claim. The board test is what protects a SLICE rung that started BEFORE this one
+#    and has not committed yet, whose tip is genuinely older.
+#
+#    ⭐ AND (3) IS THE ONE THAT IS NOT A READING OF THE COMMIT GRAPH. 1, 4 and 5 all interrogate git,
+#    so they can be wrong TOGETHER — which is exactly what happened on 2026-08-09, when all of them
+#    cleared two rungs that had been created eight minutes earlier and had agents inside them. A guard
+#    drawn from a different instrument is worth more than a fourth guard drawn from the same one.
+#
+#    It errs in one known direction, stated rather than left to be discovered: a rung that landed with
+#    NO other rung between it and this one has a tip EQUAL to $BASE_SHA, so it survives one extra cycle
+#    and the next finish takes it. That error costs a directory for one rung. The opposite error costs
+#    a live agent its worktree, so the asymmetry is the point.
+if [ "$KEEP_WORKTREE" = "1" ]; then
+  warn "--keep-worktree: reap skipped along with the teardown — same request, leave the trees alone"
+else
+  # ⚠ A BOARD IT CANNOT READ MUST NOT READ AS "NO LIVE CLAIMS". An empty result is legitimate — nobody
+  #   is mid-rung — and a `die` inside the substitution produces the identical empty string, so the
+  #   failure is caught explicitly rather than folded into the benign case. Losing this guard is
+  #   survivable (the strictly-older test still stands alone); losing it SILENTLY is not.
+  LIVE_CLAIMS="$(live_claim_branches "$PLAN")" || {
+    warn "could not read live claims off the board — falling back to the strictly-older test alone"
+    LIVE_CLAIMS=""; }
+  REPO_WIN="$(win_path "$REPO")"
+  MAIN_SHA="$(git rev-parse HEAD)"
+  REAPED=0; KEPT=0
+
+  # `git worktree list --porcelain` emits one blank-line-separated block per tree. A detached tree has
+  # no `branch` line at all, which is why `br` is cleared per block rather than left to carry over.
+  # ⚠ The `IFS=$'\t' read` below is safe ONLY because the possibly-empty field is the LAST one: tab is
+  #   IFS whitespace, so bash collapses a RUN of tabs, and an empty field anywhere but the end would
+  #   shift every later one left. That exact collapse produced a real bug in plan-board.sh's
+  #   `live_claim_branches` and a latent one in `lane_conflicts` — both now split with awk/cut. Do not
+  #   add a third field to this record without moving it off `read` as well.
+  WT_LIST="$(git worktree list --porcelain | awk '
+    /^worktree /{ wt = substr($0, 10); br = "" }
+    /^branch /  { br = $2 }
+    /^$/        { if (wt != "") print wt "\t" br; wt = "" }
+    END         { if (wt != "") print wt "\t" br }')"
+
+  while IFS=$'\t' read -r wt ref; do
+    [ -n "$wt" ] || continue
+    branch="${ref#refs/heads/}"
+
+    # (1) ours to judge? A `maxon-*` sibling, never the checkout itself and never anything inside it.
+    #     Compared through win_path because git prints native absolute paths and $REPO is whatever
+    #     the shell's `pwd` spells — on Git Bash those two disagree, and an untested string compare
+    #     between them would silently match nothing and reap nothing forever.
+    wt_win="$(win_path "$wt")"
+    [ "$wt_win" != "$REPO_WIN" ] || continue
+    case "$wt_win" in "$REPO_WIN"/*) continue ;; esac
+    case "$(basename "$wt_win")" in maxon-*) ;; *) continue ;; esac
+
+    if [ -z "$branch" ]; then
+      warn "  KEPT  $wt — detached HEAD, so there is no branch to reason about"; KEPT=$(( KEPT + 1 )); continue
+    fi
+    if [ -n "$(git -C "$wt" status --porcelain 2>/dev/null)" ]; then
+      warn "  KEPT  $wt [$branch] — UNCOMMITTED work in it"; KEPT=$(( KEPT + 1 )); continue
+    fi
+
+    # ⛔ GIT STATE CANNOT SEE A LIVE AGENT, and this guard was added because the git-only version very
+    #    nearly deleted two live rungs. MEASURED 2026-08-09: a cleanup sweep listed
+    #    `rung-forin-existential` and `rung-opaque-element-ownership` as removable — both CLEAN, both
+    #    fully merged, both created EIGHT MINUTES EARLIER with agents working in them right then. A
+    #    tree being actively built in is clean and merged right up until the moment it is not, so
+    #    "clean + merged" describes a rung STARTING UP and a rung FINISHED equally well.
+    #
+    #    Recent WRITES are the one signal git has no opinion about, and they are independent of every
+    #    test around them — which is the point: the tests below can all be wrong together (they are
+    #    three readings of the same commit graph), and this one still fires.
+    newest=0
+    for probe in "$wt/bin" "$wt/maxon-shv2/.maxon" "$wt/temp" "$wt/maxon-sharp/bin" "$wt"; do
+      [ -e "$probe" ] || continue
+      m="$(stat -c %Y "$probe" 2>/dev/null || echo 0)"
+      [ "$m" -gt "$newest" ] && newest="$m"
+    done
+    idle_min=$(( ( $(date +%s) - newest ) / 60 ))
+    if [ "$idle_min" -lt "$REAP_IDLE_MINUTES" ]; then
+      warn "  KEPT  $wt [$branch] — written to $idle_min min ago; something may be working in it"
+      KEPT=$(( KEPT + 1 )); continue
+    fi
+    unique="$(git rev-list --count "refs/heads/$branch" "^$MAIN_SHA" 2>/dev/null || echo unknown)"
+    if [ "$unique" != "0" ]; then
+      warn "  KEPT  $wt [$branch] — $unique commit(s) NOT in main; this is unmerged work"; KEPT=$(( KEPT + 1 )); continue
+    fi
+    if printf '%s\n' "$LIVE_CLAIMS" | grep -qxF "$branch"; then
+      warn "  KEPT  $wt [$branch] — a LIVE 🔶 board claim names it"; KEPT=$(( KEPT + 1 )); continue
+    fi
+    if ! git merge-base --is-ancestor "refs/heads/$branch" "$BASE_SHA" 2>/dev/null \
+       || [ "$(git rev-parse "refs/heads/$branch")" = "$BASE_SHA" ]; then
+      warn "  KEPT  $wt [$branch] — tip is not strictly older than the base this rung gated ($(git log --oneline -1 --format=%h "$BASE_SHA")); it may be a rung starting up"
+      KEPT=$(( KEPT + 1 )); continue
+    fi
+
+    if git worktree remove --force "$wt" >/dev/null 2>&1; then
+      git branch -q -D "$branch" 2>/dev/null \
+        && ok "  reaped $wt [$branch]" \
+        || warn "  reaped $wt but branch '$branch' survives — git branch -D $branch"
+      REAPED=$(( REAPED + 1 ))
+    else
+      warn "  KEPT  $wt [$branch] — inert, but \`git worktree remove\` FAILED (open handle? locked?)"
+      KEPT=$(( KEPT + 1 ))
+    fi
+  done <<< "$WT_LIST"
+
+  git worktree prune                   # admin entries whose directory somebody already deleted
+  [ "$REAPED" = "0" ] && [ "$KEPT" = "0" ] && ok "no leaked rung worktrees" \
+    || ok "reaped $REAPED, kept $KEPT (each kept one printed its reason above)"
 fi
 
 printf '\n\033[32m✓ RUNG LANDED\033[0m\n\n'

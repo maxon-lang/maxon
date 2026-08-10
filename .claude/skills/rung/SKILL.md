@@ -26,7 +26,7 @@ and refuses to invent one.**
 | | |
 |---|---|
 | **`scripts/rung-start.sh`** | claim the row · **refuse a duplicate id** · **refuse a LANE COLLISION** · push (the lock) · worktree · `cp -r bin` · build |
-| **`scripts/rung-finish.sh`** | rebase FIRST · build · suite · leak · untracked goldens · **golden-drift DELTA vs the merge base** · ladder row · C# lane · cross-target · `--ff-only` merge · flip the board · push · re-run the suite on a rejected push · tear down |
+| **`scripts/rung-finish.sh`** | rebase FIRST · build · suite · leak · untracked goldens · **golden-drift DELTA vs the merge base** · ladder row · C# lane · cross-target · `--ff-only` merge · flip the board · push · re-run the suite on a rejected push · tear down · **REAP leaked rung worktrees** |
 
 Both take `--dry-run`. Both refuse to run outside a checkout that owns `main`. **Read what they refuse —
 the refusal names the fix.**
