@@ -2415,6 +2415,22 @@ function managedNameDropCallee(signatures ProgramSignatures, declaredName ByteAr
 		userDeclared then break 'compilerOwned'
 	end 'compilerOwned'
 
+	// ⭐⭐ **AN INSTANCE ALSO ARRIVES AS ITS OWN CANONICAL RENDERING, AND `declaredNameIsManaged` ALREADY SAID
+	// SO — THIS IS THE ROUTER THAT HAD TO AGREE (W58).** That door answers `true` for `UpCursor_Integer` by
+	// asking `isCanonicalInstanceName` FIRST, precisely because no registry is keyed by a canonical mint; the
+	// drop it thereby promises was never routed, so the walk below fell through to the `otherwise panic` on a
+	// program the classification had already accepted. MEASURED: a conformer widened into a held existential
+	// whose binding is a generic instance took the compile down at
+	// `existentialDestroyCallee` → here, on `stdlib/Array.maxon`'s own conformance shape. The answer is the
+	// `genericAlias` arm's, on the same gid — an instance box drops the same way whichever spelling named it.
+	//
+	// ⚠ It reads AHEAD of `declaredFormOf` and still cannot outrank a declaration, because the precedence is
+	// in the DOOR: `renderedInstanceOfUnclaimedName` refuses a spelling any declaration claims. Asked the
+	// other way round it routed `type Box_String`'s cascade through `Box with String`'s — see there.
+	if let rendered = try signatures.renderedInstanceOfUnclaimedName(declaredName) 'aRenderedInstance'
+		return signatures.genericInstanceBoxDropCallee(rendered)
+	end 'aRenderedInstance'
+
 	let form = try signatures.declaredFormOf(declaredName) otherwise panic("managedNameDropCallee: managed field '{String.from(declaredName)}' is declared by no registry — the caller classified it managed, and every managed non-String form is a declared struct, a boxed union or a generic-alias instance")
 	match form 'form'
 		structType then return structBoxDropCallee(signatures, structName: declaredName)
@@ -2543,6 +2559,16 @@ function managedNameCloneStrategy(signatures ProgramSignatures, declaredName Byt
 		managedDirectory then return ManagedCloneStrategy.unsupported
 		userDeclared then break 'compilerOwned'
 	end 'compilerOwned'
+
+	// The drop twin's canonical-rendering arm, at the same tier and on the same gid — see it for the measured
+	// panic. It is spelled here even though no corpus program is known to reach the CLONE side with a rendered
+	// instance name, because these two duals resolve at one tier by contract (`managedFieldDropCallee`'s
+	// header states the rule and A3e measured what breaking it costs): a value the drop side routes must be a
+	// value the clone side can route, and a divergence between them is a panic on one walk order and a
+	// compiling program on the other.
+	if let rendered = try signatures.renderedInstanceOfUnclaimedName(declaredName) 'aRenderedInstance'
+		return instanceCloneStrategy(signatures, id: rendered)
+	end 'aRenderedInstance'
 
 	let form = try signatures.declaredFormOf(declaredName) otherwise panic("managedNameCloneStrategy: managed field '{String.from(declaredName)}' is declared by no registry — the caller classified it managed, and every managed non-String form is a declared struct, a boxed union or a generic-alias instance")
 	match form 'form'
@@ -4445,8 +4471,8 @@ export typealias CanonicalInstanceNameMap = Map with (GenericInstanceId, ByteArr
 // there is no author's spelling to quote and the mint is the only thing that can distinguish it.
 export typealias InstanceDisplayNameMap = Map with (GenericInstanceId, ByteArray)
 
-// ⭐ **THE REVERSE OF `CanonicalInstanceNameMap` — every interned instance's canonical name as a SET, so
-// "is this NAME an instance?" is a probe rather than a walk.** `isCanonicalInstanceName` used to answer it
+// ⭐ **THE REVERSE OF `CanonicalInstanceNameMap` — every interned instance's canonical name back TO ITS ID,
+// so "is this NAME an instance?" is a probe rather than a walk.** `isCanonicalInstanceName` used to answer it
 // by scanning `0 upto genericInstances.count()`, which its own header justified with *"a program interns a
 // handful of instances"* and *"the two askers are whole-program CHECKS that run once per declared
 // associated type"*. Both premises were true when written and BOTH went stale: `declaredNameIsManaged`
@@ -4457,7 +4483,16 @@ export typealias InstanceDisplayNameMap = Map with (GenericInstanceId, ByteArray
 // x2.13, x2.71, x3.22 across a DOUBLING knob, fitting `1,814 + 94N + 2.0N²` to the digit, the 2.0 being the
 // array record plus its buffer.** It also broke `declaredNameIsManaged`'s own stated obligation two lines
 // above it — *"Allocation-free throughout, which is `typeIsManaged`'s standing obligation"*.
-typealias CanonicalInstanceNameSet = Set with ByteArray
+//
+// ⭐⭐ **IT CARRIES THE ID AND NOT MERELY MEMBERSHIP (W58), BECAUSE A CANONICAL NAME IS AN ARRIVAL AND NOT
+// ONLY A CLASSIFICATION.** A conformance's `with` argument is a RENDERED name, so a binding to a generic
+// instance reaches `ConformanceCheck` as `UpCursor_Integer` and nothing downstream can say what it is a
+// rendering OF — which base declares it, and which `typealias` the author wrote — without the id. Both
+// answers already exist keyed by id (`genericInstanceBaseName`, `instanceDisplayName`); this is the one
+// edge that was missing, and holding a `GenericInstanceId` beside a name the walk already inserts costs one
+// word per interned instance. The mapping is injective by construction: the registry interns by structural
+// key and `canonicalInstanceName` is a pure function of that key, so no two live ids share a name.
+typealias CanonicalInstanceNameIndex = Map with (ByteArray, GenericInstanceId)
 
 // ⭐ A tuple name ⇒ its CANONICAL tuple name (P1.10). Keyed by name rather than by an id because a tuple has
 // no id: it IS its name (`ProgramSignatures.tupleCanonicalNames`).
@@ -5875,10 +5910,10 @@ export type ProgramSignatures
 	// `InstanceDisplayNameMap`. Filled once by `deriveInstanceDisplayNames`, which is the only writer, so the
 	// parse (which fans out per file) only ever reads it.
 	var instanceDisplayNames as InstanceDisplayNameMap
-	// The reverse of `canonicalInstanceNames` — see `CanonicalInstanceNameSet` for the quadratic it removes.
-	// Filled by `indexCanonicalInstanceNames`, which is the ONLY writer, so the set and the watermark below
+	// The reverse of `canonicalInstanceNames` — see `CanonicalInstanceNameIndex` for the quadratic it removes.
+	// Filled by `indexCanonicalInstanceNames`, which is the ONLY writer, so the index and the watermark below
 	// cannot disagree about which ids are in it.
-	var canonicalInstanceNameIndex as CanonicalInstanceNameSet
+	var canonicalInstanceNameIndex as CanonicalInstanceNameIndex
 	// How far `canonicalInstanceNameIndex` has been filled: every id BELOW this is in the set. Instances are
 	// append-only, so advancing it is monotone and the total work of keeping the set complete is O(instances)
 	// across the whole compile however often it is asked.
@@ -6467,7 +6502,7 @@ export type ProgramSignatures
 	// Every index, empty. Split out of `create` only so the seed stamping above reads as the two steps it
 	// is; this is its one caller.
 	static function freshIndexes(os Os) returns ProgramSignatures
-		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(os), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), structNamesInDeclOrder: ByteArrayArray.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), instanceDisplayNames: InstanceDisplayNameMap.create(), canonicalInstanceNameIndex: CanonicalInstanceNameSet.create(), canonicalNamesIndexedThrough: 0, tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleElementTokens: TupleElementTokenMap.create(), tupleElementTokenOwners: TupleElementTokenOwnerMap.create(), typeParamOwners: TypeParamOwnerMap.create(), tupleAliases: TupleCanonicalNameMap.create(), sawAggregateArrayLiteral: false, sawListFromConstruction: false, genericAliases: GenericAliasMap.create(), contestedGenericAliases: sharedEmptyGenericAliasContests, multiplyDeclaredGenericAliases: sharedEmptyDisagreeingAliasNames, divergedGenericAliasDecl: AliasCycleResult.none, nameableGenericAliases: sharedEmptyNameableGenericAliases, genericAliasSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), extensionInnerAliasMembers: ExtensionInnerAliasNameSet.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceNamesInDeclOrder: builtinInterfaceNames(), interfaceDeclIndexByName: builtinInterfaceDeclIndices(), interfaceDeclSites: InterfaceDeclSiteArray.create(), extensionDeclSites: ExtensionDeclSiteArray.create(), descriptorScanSites: DescriptorScanSiteArray.create(), descriptorNeeds: sharedEmptyDescriptorNeeds, conditionalExtensionSkips: ConditionalExtensionSkipMap.create(), associatedTypeHoldings: AssociatedTypeHoldingMap.create(), sweptConformances: DeclaredConformanceMap.create(), sweptConformancesBuilt: false, extensionMethodConstraints: ExtensionMethodConstraintMap.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcThrows: FuncThrowsMap.create(), funcParamDefaults: ParamDefaultMap.create(), collidingParamDefaults: CollidingParamDefaultNameSet.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), funcReturnDeclFiles: FuncReturnDeclFileMap.create(), funcDeclSites: FunctionDeclSiteMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), bufferSurfaceAliases: BufferElementAliasNameSet.create(), extensionPublishedMethods: ExtensionMethodNameSet.create(), extensionShadowedMethods: ExtensionMethodNameSet.create(), extensionMethodDeclFiles: ExtensionMethodDeclFileMap.create(), contestedExtensionMethods: ExtensionMethodNameSet.create(), hash: fnvOffsetBasis(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, allFilesFolded: false, rootIsUnderStdlibDirectory: false, constInitializerTypeNames: ConstInitializerTypeNameSet.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false, bareTypeParamReturnerNames: MethodNameSet.create(), bareTypeParamReturnerNamesComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibShadowRenames: StdlibShadowRenameMap.create(), fileModuleDirectories: FileModuleDirectoryMap.create(), namespaceQualifiedFunctions: NamespaceQualifiedFunctionSet.create(), freeFunctionDirectories: FreeFunctionDirectoryMap.create(), contestedFreeFunctions: ContestedFreeFunctionMap.create(), contestedRegistrationNames: ContestedRegistrationNameSet.create()}
+		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(os), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), structNamesInDeclOrder: ByteArrayArray.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), instanceDisplayNames: InstanceDisplayNameMap.create(), canonicalInstanceNameIndex: CanonicalInstanceNameIndex.create(), canonicalNamesIndexedThrough: 0, tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleElementTokens: TupleElementTokenMap.create(), tupleElementTokenOwners: TupleElementTokenOwnerMap.create(), typeParamOwners: TypeParamOwnerMap.create(), tupleAliases: TupleCanonicalNameMap.create(), sawAggregateArrayLiteral: false, sawListFromConstruction: false, genericAliases: GenericAliasMap.create(), contestedGenericAliases: sharedEmptyGenericAliasContests, multiplyDeclaredGenericAliases: sharedEmptyDisagreeingAliasNames, divergedGenericAliasDecl: AliasCycleResult.none, nameableGenericAliases: sharedEmptyNameableGenericAliases, genericAliasSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), extensionInnerAliasMembers: ExtensionInnerAliasNameSet.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceNamesInDeclOrder: builtinInterfaceNames(), interfaceDeclIndexByName: builtinInterfaceDeclIndices(), interfaceDeclSites: InterfaceDeclSiteArray.create(), extensionDeclSites: ExtensionDeclSiteArray.create(), descriptorScanSites: DescriptorScanSiteArray.create(), descriptorNeeds: sharedEmptyDescriptorNeeds, conditionalExtensionSkips: ConditionalExtensionSkipMap.create(), associatedTypeHoldings: AssociatedTypeHoldingMap.create(), sweptConformances: DeclaredConformanceMap.create(), sweptConformancesBuilt: false, extensionMethodConstraints: ExtensionMethodConstraintMap.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcThrows: FuncThrowsMap.create(), funcParamDefaults: ParamDefaultMap.create(), collidingParamDefaults: CollidingParamDefaultNameSet.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), funcReturnDeclFiles: FuncReturnDeclFileMap.create(), funcDeclSites: FunctionDeclSiteMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), bufferSurfaceAliases: BufferElementAliasNameSet.create(), extensionPublishedMethods: ExtensionMethodNameSet.create(), extensionShadowedMethods: ExtensionMethodNameSet.create(), extensionMethodDeclFiles: ExtensionMethodDeclFileMap.create(), contestedExtensionMethods: ExtensionMethodNameSet.create(), hash: fnvOffsetBasis(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, allFilesFolded: false, rootIsUnderStdlibDirectory: false, constInitializerTypeNames: ConstInitializerTypeNameSet.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false, bareTypeParamReturnerNames: MethodNameSet.create(), bareTypeParamReturnerNamesComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibShadowRenames: StdlibShadowRenameMap.create(), fileModuleDirectories: FileModuleDirectoryMap.create(), namespaceQualifiedFunctions: NamespaceQualifiedFunctionSet.create(), freeFunctionDirectories: FreeFunctionDirectoryMap.create(), contestedFreeFunctions: ContestedFreeFunctionMap.create(), contestedRegistrationNames: ContestedRegistrationNameSet.create()}
 	end 'freshIndexes'
 
 	// --- MODULE DIRECTORIES and the ONE visibility decision (N1a) ---
@@ -14517,19 +14552,58 @@ export type ProgramSignatures
 		// superseded spelling falls through to its own name, which conforms to nothing — the same answer a
 		// non-conforming array gets, and the safe direction.
 		if self.isGenericAlias(name) and not self.genericAliasSpellingIsSuperseded(name) 'genericInstanceAlias'
-			// ⚠ The UNREDUCED fallback is the ALIAS's OWN NAME and never the mangled instance — this door has
-			// the spelling the author wrote, and that spelling reaches an author through the withheld-extension
-			// diagnostic (`array-conditional-conformance-withheld`, which measured the regression when this
-			// fell through to the mangler). It conforms to nothing either way, which is the answer that matters.
-			match self.instanceConformerReduction(self.genericAliasInstance(name)) 'reduction'
-				arrayBuiltin then return String.from(ArrayBuiltinBaseName)
-				declaredBase(baseName) then return String.from(baseName)
-				unreduced then return String.from(name)
-			end 'reduction'
+			return self.conformerNameOfInstanceSpelling(self.genericAliasInstance(name), spelling: name)
 		end 'genericInstanceAlias'
+
+		// ⭐⭐ **AN INSTANCE ALSO ARRIVES AS ITS OWN CANONICAL RENDERING, AND THAT SPELLING REDUCES BY THE SAME
+		// RULE (W58).** The arm above answers for the spelling an author WROTE (`IntUpCursor`); this one answers
+		// for the spelling the COMPILER wrote (`UpCursor_Integer`), which is what `renderDeclaredTypeName`
+		// records into a conformance's `withArgs` and therefore what every conformance question asked of a
+		// binding is handed. `declaredNameIsManaged` already carries this same arm for the ownership question,
+		// with the same sentence — *"a generic instance arrives as its canonical name at some doors, and no
+		// registry is keyed by that"* — and the conformance question needed it for the same reason and did not
+		// have it. MEASURED at the E3126 door: *"'UpCursor_Integer' does not implement 'Cursor'"* on a program
+		// whose `type UpCursor uses Element implements Cursor with Element` declares exactly that, which is
+		// `stdlib/Array.maxon`'s `Iterable with (Element, ArrayIter)` to the letter.
+		//
+		// ⚠ It is asked after the alias door because that one holds the author's spelling and this one the
+		// compiler's; `renderedInstanceOfUnclaimedName` is what keeps a mint from outranking a DECLARATION.
+		if let rendered = try self.renderedInstanceOfUnclaimedName(name) 'aRenderedInstance'
+			return self.conformerNameOfInstanceSpelling(rendered, spelling: name)
+		end 'aRenderedInstance'
 
 		return String.from(name)
 	end 'conformerNameOfDeclaredName'
+
+	// The reduction the two instance SPELLINGS share — an author's `typealias` and the compiler's own canonical
+	// mint — written once so the two doors above cannot come to answer differently about one instance.
+	//
+	// ⚠ The UNREDUCED fallback is the CALLER'S spelling and never the mangled instance: the alias door holds
+	// the name the author wrote, and that name reaches an author through the withheld-extension diagnostic
+	// (`array-conditional-conformance-withheld`, which measured the regression when it fell through to the
+	// mangler). Either way the answer conforms to nothing, which is the part that decides the program.
+	function conformerNameOfInstanceSpelling(id GenericInstanceId, spelling ByteArray) returns String
+		match self.instanceConformerReduction(id) 'reduction'
+			arrayBuiltin then return String.from(ArrayBuiltinBaseName)
+			declaredBase(baseName) then return String.from(baseName)
+			unreduced then return String.from(spelling)
+		end 'reduction'
+	end 'conformerNameOfInstanceSpelling'
+
+	// ⭐ **HOW A DIAGNOSTIC SPELLS A DECLARED NAME — the name-keyed twin of `instanceDisplayName` (W58).**
+	// A conformance's recorded `withArgs` are RENDERED names, so a binding to a generic instance reaches every
+	// message that prints one as `Tally_Integer`: the compiler's own canonical mint, which no source line
+	// holds and which reads to an author as a type they never wrote. This is the same split
+	// `conformerNameOfDeclaredName` is to `conformerNameOfType` — one door for a caller holding a NAME where
+	// the other holds a type — and it exists for the reason `InstanceDisplayNameMap` states: a person did not
+	// write `Array_String`.
+	//
+	// ⚠ **NOTHING MAY COMPARE TWO OF THESE**, exactly as `instanceDisplayName`'s header insists: two aliases
+	// legitimately spell one type. Every comparison stays on `conformerNameOfDeclaredName`, which is the
+	// identity; this answers only what gets printed.
+	export function displaySpellingOfDeclaredName(name ByteArray) returns ByteArray
+		return self.instanceDisplayName(try self.renderedInstanceOfUnclaimedName(name) otherwise return name)
+	end 'displaySpellingOfDeclaredName'
 
 	// A ranged numeric alias resolves to its underlying primitive `MaxonType` (`int(0 to u32.max)` -> `integer`),
 	// exactly as `resolveNamedType` does (`alias.underlying`, range dropped); every other type passes through.
@@ -17188,25 +17262,66 @@ export type ProgramSignatures
 	// Is `name` the CANONICAL rendering of an interned generic instance? The registry is keyed by the
 	// instance's structural KEY and its canonical NAME is derived, so the reverse direction needs an index of
 	// its own — `canonicalInstanceNameIndex`, whose header carries the measurement of the quadratic the walk
-	// this replaces was running. ONE probe now, over a set kept complete by `indexCanonicalInstanceNames`.
+	// this replaces was running. ONE probe now, over an index kept complete by `indexCanonicalInstanceNames`.
 	export function isCanonicalInstanceName(name ByteArray) returns bool
 		self.indexCanonicalInstanceNames()
 		return self.canonicalInstanceNameIndex.contains(name)
 	end 'isCanonicalInstanceName'
 
+	// ⭐ **WHICH INSTANCE `name` IS THE CANONICAL RENDERING OF, *IF NO DECLARATION CLAIMS THE SPELLING*** —
+	// the half of the same probe that carries the id, for the callers that must go on to ask something of the
+	// instance itself (its base declaration, its drop, its display spelling). `MapError.keyNotFound` for a
+	// name no instance renders to, which is every ordinary declared name: the miss is the common case here
+	// and never an invariant violation.
+	//
+	// ⛔⛔ **THE PRECEDENCE IS THE WHOLE OF THIS DOOR, AND WITHOUT IT THE MINT WINS AND THE PROGRAM FAULTS.**
+	// A canonical mint is not a reserved spelling: `specs-shv2/type-name-collision.md` writes
+	// `type Box_String` beside a `Box with String`, and every one of its cases is about those two claimants
+	// staying DIFFERENT objects with different cascades. Let the mint win and a DECLARED struct's drop, clone
+	// or conformance is routed through the INSTANCE's — MEASURED, with the index asked ahead of the
+	// registries: six of that spec's cases went red at once, two LEAKING (exit 101) and four FAULTING
+	// (0xC0000005). `declaredFormOf`'s own header states the identical rule one rank up — declared types are
+	// asked before aliases, and *"the order is not a cost choice"* — and this is that rule's last rank: a
+	// declaration of ANY form outranks a name the compiler minted.
+	export function renderedInstanceOfUnclaimedName(name ByteArray) returns GenericInstanceId throws MapError
+		if self.nameIsDeclared(name) 'aDeclarationClaimsTheSpelling'
+			throw MapError.keyNotFound
+		end 'aDeclarationClaimsTheSpelling'
+
+		self.indexCanonicalInstanceNames()
+		return try self.canonicalInstanceNameIndex.get(name)
+	end 'renderedInstanceOfUnclaimedName'
+
+	// Does ANY declaration claim this spelling? The bool half of `declaredFormOf`, for the callers that need
+	// the PRECEDENCE and not the form. Every arm answers `true` because the form is not the question; they
+	// are written out rather than collapsed to a range for `declaredFormOf`'s own stated reason — a case
+	// appended to `TypeDeclKind` must fail to compile here rather than be swallowed.
+	export function nameIsDeclared(name ByteArray) returns bool
+		return match try self.declaredFormOf(name) otherwise return false 'form'
+			structType gives true
+			enumType gives true
+			unionType gives true
+			interfaceType gives true
+			rangedAlias gives true
+			functionAlias gives true
+			genericAlias gives true
+			tupleAlias gives true
+		end 'form'
+	end 'nameIsDeclared'
+
 	// Bring `canonicalInstanceNameIndex` up to date with every instance interned so far — the SOLE writer of
-	// that set and of its watermark, so "which ids are in it" is one fact rather than two.
+	// that index and of its watermark, so "which ids are in it" is one fact rather than two.
 	//
 	// ⚠ It normally does NOTHING, and that is what keeps it off the parse's write path. `deriveInstanceNames`
 	// calls it at the one point the declaration sweep is complete, so by the time the parallel parse can ask
 	// `isCanonicalInstanceName` the watermark already stands at `count()` and the loop body never runs — the
 	// same READ-ONLY-during-parse property that function's header describes for the two name memos, extended
-	// to this set. The loop is reached again only for instances interned AFTER the last parse (the builtin
+	// to this index. The loop is reached again only for instances interned AFTER the last parse (the builtin
 	// `Array`/`Set` instances minted during lowering), which is single-threaded.
 	function indexCanonicalInstanceNames()
 		while self.canonicalNamesIndexedThrough < self.genericInstances.count() 'eachNewInstance'
 			let id = self.canonicalNamesIndexedThrough
-			self.canonicalInstanceNameIndex.insert(self.canonicalInstanceName(id))
+			self.canonicalInstanceNameIndex.upsert(self.canonicalInstanceName(id), value: id)
 			self.canonicalNamesIndexedThrough = id + 1
 		end 'eachNewInstance'
 	end 'indexCanonicalInstanceNames'

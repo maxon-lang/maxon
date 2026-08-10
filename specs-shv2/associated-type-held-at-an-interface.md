@@ -722,3 +722,329 @@ end 'main'
 ```maxoncstderr
 error E3125: <fragment>:38:12: this use of 'Cursor' binds its associated type 'Element' to 'Element', but 'UpCursor' binds it to 'Integer' — an interface this program DISPATCHES through has exactly one binding per associated type (E3119's rule), so a use site does not choose one, it states the one the conformances already settled. Write the binding the conformers declare, or give the two readings different interfaces
 ```
+
+<!-- test: held.a-conformer-binds-a-generic-instance -->
+⭐⭐ **A CONFORMER MAY BIND A HELD POSITION TO A GENERIC INSTANCE, AND THE QUESTION MUST BE ASKED OF THE
+BASE DECLARATION.** A conformance’s `with` argument is recorded by `renderDeclaredTypeName` as the compiler’s
+own CANONICAL name (`UpCursor_Integer`), and no `implements` clause is filed under one — the registry is keyed
+by the DECLARED struct name. Asking whether `UpCursor_Integer` implements `Cursor` therefore asks about a name
+that is not a declaration at all, and the answer can only be no: the refusal read *"'UpCursor_Integer' does
+not implement 'Cursor'"* on a program whose `type UpCursor uses Slot implements Cursor` says otherwise on its
+own line.
+
+⚠ Under dictionary-passing the conformance is a property of the DECLARATION — `UpCursor.current` is compiled
+once over an opaque layout and one `__witness_UpCursor.Cursor` answers for every instantiation — which is why
+the base is the right thing to ask, and it is the reduction `conformerNameOfDeclaredName` already owned for
+every other conformance door. The arguments are not lost by it: the base’s own `where` clause is checked at
+the INSTANTIATION site by E3017, which is where a conditional conformance lives.
+
+⚠ The same reduction is owed by the LOWERING, and asking it in only one of the two places is worse than
+asking it in neither. `stampAssociatedWitnessSlots` named `__witness_UpCursor_Integer.Cursor` and
+`witnessSlotImpl` panicked; `existentialDestroyCallee` reached a drop router with no arm for a canonical
+mint, on a name `declaredNameIsManaged` had already called managed. This program exercises the accept, the
+table and the drop.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Cursor
+	function current() returns Integer
+	function advance() throws IterationError
+end 'Cursor'
+
+interface Bag uses Iter
+	function createIterator() returns Iter throws IterationError
+end 'Bag'
+
+type UpCursor uses Slot implements Cursor
+	var pos as Integer
+	let limit as Integer
+	let spare as Slot
+
+	export static function create(limit Integer, spare Slot) returns Self throws IterationError
+		if limit < 1 'empty'
+			throw IterationError.exhausted
+		end 'empty'
+		return Self{pos: 1, limit: limit, spare: spare}
+	end 'create'
+
+	export function current() returns Integer
+		return self.pos
+	end 'current'
+
+	export function advance() throws IterationError
+		if self.pos >= self.limit 'atTheLast'
+			throw IterationError.exhausted
+		end 'atTheLast'
+		self.pos = self.pos + 1
+	end 'advance'
+end 'UpCursor'
+
+typealias IntUpCursor = UpCursor with Integer
+
+type UpBag implements Bag with IntUpCursor
+	let limit as Integer
+
+	export static function create(limit Integer) returns Self
+		return Self{limit: limit}
+	end 'create'
+
+	export function createIterator() returns IntUpCursor throws IterationError
+		return try IntUpCursor.create(self.limit, spare: 0)
+	end 'createIterator'
+end 'UpBag'
+
+typealias CursorBag = Bag with Cursor
+
+function total(source CursorBag) returns Integer
+	var sum = 0 as Integer
+	for item in source 'walk'
+		sum = sum + item
+	end 'walk'
+	return sum
+end 'total'
+
+function main() returns ExitCode
+	print("{total(UpBag.create(4))}\n")
+	print("{total(UpBag.create(0))}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+10
+0
+```
+
+<!-- test: held.a-generic-instance-conforming-through-extends -->
+⭐⭐ **`stdlib/Array.maxon`'s OWN SHAPE, TO THE LETTER.** `type ArrayIterator uses Element implements
+BidirectionalIterator with Element` with `interface BidirectionalIterator extends Iterator`, bound into
+`Array`'s `implements … Iterable with (Element, ArrayIter)` and held at `Iterator` by
+`typealias ElementIterator = Iterator with Element`. Both facts are in play at once — the binding is a
+generic INSTANCE, and it reaches the holding only THROUGH `extends` — and the two are decided by different
+code, so this case is what says they compose.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Cursor uses Element
+	function current() returns Element
+	function advance() throws IterationError
+end 'Cursor'
+
+interface BiCursor extends Cursor
+	function retreat() throws IterationError
+end 'BiCursor'
+
+interface Bag uses Element, Iter
+	function createIterator() returns Iter throws IterationError
+end 'Bag'
+
+type UpCursor uses Element implements BiCursor with Element
+	var pos as Integer
+	let limit as Integer
+
+	export static function create(limit Integer) returns Self throws IterationError
+		if limit < 1 'empty'
+			throw IterationError.exhausted
+		end 'empty'
+		return Self{pos: 1, limit: limit}
+	end 'create'
+
+	export function current() returns Element
+		return self.pos
+	end 'current'
+
+	export function advance() throws IterationError
+		if self.pos >= self.limit 'atTheLast'
+			throw IterationError.exhausted
+		end 'atTheLast'
+		self.pos = self.pos + 1
+	end 'advance'
+
+	export function retreat() throws IterationError
+		throw IterationError.exhausted
+	end 'retreat'
+end 'UpCursor'
+
+typealias IntUpCursor = UpCursor with Integer
+
+type UpBag implements Bag with (Integer, IntUpCursor)
+	let limit as Integer
+
+	export static function create(limit Integer) returns Self
+		return Self{limit: limit}
+	end 'create'
+
+	export function createIterator() returns IntUpCursor throws IterationError
+		return try IntUpCursor.create(self.limit)
+	end 'createIterator'
+end 'UpBag'
+
+typealias IntegerCursor = Cursor with Integer
+typealias IntegerBag = Bag with (Integer, IntegerCursor)
+
+function total(source IntegerBag) returns Integer
+	var sum = 0 as Integer
+	for item in source 'walk'
+		sum = sum + item
+	end 'walk'
+	return sum
+end 'total'
+
+function main() returns ExitCode
+	print("{total(UpBag.create(4))}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+10
+```
+
+<!-- test: held.a-conformer-reaching-the-holding-through-extends -->
+The FALSE-REJECT CONTROL that separates the two facts of the case above: a CONCRETE conformer whose
+conformance reaches the holding only through `extends`. It was already accepted — `typeDeclaresInterface`
+walks `extendsInterfaces` for every conformance question in the compiler — so a red here attributes a
+regression to the `extends` walk rather than to the instance-name reduction.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Cursor
+	function current() returns Integer
+	function advance() throws IterationError
+end 'Cursor'
+
+interface BiCursor extends Cursor
+	function retreat() throws IterationError
+end 'BiCursor'
+
+interface Bag uses Iter
+	function createIterator() returns Iter throws IterationError
+end 'Bag'
+
+type Tally implements BiCursor
+	var pos as Integer
+	let limit as Integer
+
+	export static function create(limit Integer) returns Self throws IterationError
+		if limit < 1 'empty'
+			throw IterationError.exhausted
+		end 'empty'
+		return Self{pos: 1, limit: limit}
+	end 'create'
+
+	export function current() returns Integer
+		return self.pos
+	end 'current'
+
+	export function advance() throws IterationError
+		if self.pos >= self.limit 'atTheLast'
+			throw IterationError.exhausted
+		end 'atTheLast'
+		self.pos = self.pos + 1
+	end 'advance'
+
+	export function retreat() throws IterationError
+		throw IterationError.exhausted
+	end 'retreat'
+end 'Tally'
+
+type UpBag implements Bag with Tally
+	let limit as Integer
+
+	export static function create(limit Integer) returns Self
+		return Self{limit: limit}
+	end 'create'
+
+	export function createIterator() returns Tally throws IterationError
+		return try Tally.create(self.limit)
+	end 'createIterator'
+end 'UpBag'
+
+typealias CursorBag = Bag with Cursor
+
+function total(source CursorBag) returns Integer
+	var sum = 0 as Integer
+	for item in source 'walk'
+		sum = sum + item
+	end 'walk'
+	return sum
+end 'total'
+
+function main() returns ExitCode
+	print("{total(UpBag.create(4))}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+10
+```
+
+<!-- test: error.a-generic-instance-whose-base-does-not-conform -->
+⭐ **THE OTHER DIRECTION OF THE SAME REDUCTION: A BASE THAT GENUINELY DOES NOT CONFORM IS STILL REFUSED, AND
+THE SENTENCE NAMES THE TYPE THE AUTHOR WROTE.** `Tally` declares no conformance at all, so no reduction can
+rescue `Tally with Integer` and the widening is refused exactly as the non-generic case is. What must NOT
+survive into the message is `Tally_Integer` — the compiler's own canonical mint, which no source line holds;
+the author wrote `IntTally`, and `instanceDisplayName` is the door that says so.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Cursor
+	function current() returns Integer
+	function advance() throws IterationError
+end 'Cursor'
+
+interface Bag uses Iter
+	function createIterator() returns Iter throws IterationError
+end 'Bag'
+
+type Tally uses Element
+	var pos as Integer
+
+	export static function create() returns Self
+		return Self{pos: 3}
+	end 'create'
+
+	export function current() returns Integer
+		return self.pos
+	end 'current'
+end 'Tally'
+
+typealias IntTally = Tally with Integer
+
+type OddBag implements Bag with IntTally
+	let seed as Integer
+
+	export static function create(seed Integer) returns Self
+		return Self{seed: seed}
+	end 'create'
+
+	export function createIterator() returns IntTally throws IterationError
+		return IntTally.create()
+	end 'createIterator'
+end 'OddBag'
+
+typealias CursorBag = Bag with Cursor
+
+function total(source CursorBag) returns Integer
+	var sum = 0 as Integer
+	for item in source 'walk'
+		sum = sum + item
+	end 'walk'
+	return sum
+end 'total'
+
+function main() returns ExitCode
+	print("{total(OddBag.create(1))}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3126: <fragment>:27:6: 'OddBag' binds 'Bag's associated type 'Iter' to 'IntTally', and this program holds 'Iter' at the interface type 'Cursor' — every value of a held associated type is widened into that existential, so every conformer's binding must conform to it, and 'IntTally' does not implement 'Cursor'. Declare the conformance, or hold the associated type at an interface every conformer implements
+```

@@ -2108,6 +2108,12 @@ CANONICAL name (`Box_Integer`), while `genericAliases` is keyed by the ALIAS (`I
 ⇒ That door answers for canonical instance names now. It also falsified the claim that an undeclared
 name is safe here because E3011 would have fired — `Box_Integer` is the compiler's own spelling of a
 declared type and no diagnostic fires on it.
+
+⚠ **THE SENTENCE ITSELF USED TO SHOW `Box_Integer`, AND A DIAGNOSTIC NAMES A TYPE THE WAY THE AUTHOR WROTE
+IT (W58).** The canonical mint is the right key for the ownership question above and is not a type name: the
+author wrote `IntBox`, and no source line in this program holds the other spelling. Every message in
+`ConformanceCheck` that prints a conformance's recorded binding now goes through
+`displaySpellingOfDeclaredName`, the name-keyed twin of `instanceDisplayName`.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -2146,7 +2152,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3120: specs/fragments/associated-types/error.associated-return-bound-to-a-generic-instance.test:18:6: 'Runner' binds 'Maker's associated type 'Element' to 'Box_Integer', and 'Element' is the RETURN type of one of 'Maker's requirements. A dispatch's result type flows on into the code around it — which instruction the arithmetic picks, and whether the value is OWNED and released — and that is chosen while the interface is still only a NAME, because a conformer's binding is not known until every file has parsed. Bind it to an `int`, a ranged typealias or a payload-free enum, or take the value as a PARAMETER instead, where the binding IS resolved
+error E3120: specs/fragments/associated-types/error.associated-return-bound-to-a-generic-instance.test:18:6: 'Runner' binds 'Maker's associated type 'Element' to 'IntBox', and 'Element' is the RETURN type of one of 'Maker's requirements. A dispatch's result type flows on into the code around it — which instruction the arithmetic picks, and whether the value is OWNED and released — and that is chosen while the interface is still only a NAME, because a conformer's binding is not known until every file has parsed. Bind it to an `int`, a ranged typealias or a payload-free enum, or take the value as a PARAMETER instead, where the binding IS resolved
 ```
 
 <!-- test: error.associated-type-bound-to-an-interface -->

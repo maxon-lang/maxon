@@ -137,7 +137,7 @@ function checkOneAssociatedType(project Project, signatures ProgramSignatures, i
 	match associatedAbiBindingOf(project.conformances, interfaceName: iface.name, position: position) 'binding'
 		agreed(conformer, binding, _) then checkAgreedBindingIsCarryable(project, signatures: signatures, iface: iface, name: name, conformer: conformer, binding: binding)
 		unconformed then break 'binding'
-		disagreed(first, firstBinding, second, secondBinding) then reportAssociatedTypeBindingDisagreement(project, iface: iface, name: name, first: first, firstBinding: firstBinding, second: second, secondBinding: secondBinding)
+		disagreed(first, firstBinding, second, secondBinding) then reportAssociatedTypeBindingDisagreement(project, signatures: signatures, iface: iface, name: name, first: first, firstBinding: firstBinding, second: second, secondBinding: secondBinding)
 	end 'binding'
 end 'checkOneAssociatedType'
 
@@ -221,11 +221,21 @@ function checkOneHeldBinding(project Project, signatures ProgramSignatures, decl
 		return
 	end 'twoWordsOutOfAOneWordResult'
 
-	if typeConformsTo(declared, interfaces: project.interfaces, typeName: binding, interfaceName: heldAt) 'widensIntoTheHolding'
+	// ⭐⭐ **THE QUESTION IS ASKED OF THE CONFORMER THE BINDING REDUCES TO, NOT OF THE RENDERED NAME.** A
+	// `withArgs` entry is `renderDeclaredTypeName`'s output, so a binding to a generic instance arrives as the
+	// compiler's own canonical mint (`UpCursor_Integer`) — a string the `implements` registry is not keyed by
+	// and never can be, since under dictionary-passing the conformance belongs to the DECLARATION and one
+	// `__witness_UpCursor.Cursor` answers for every instantiation. Asked raw, the answer was always "does not
+	// implement", on `stdlib/Array.maxon`'s own `Iterable with (Element, ArrayIter)` among others.
+	// `conformerNameOfDeclaredName` is the ONE reducer every other conformance door already goes through, and
+	// this site was simply not going through it — the arguments are not lost by that, they are checked at the
+	// instantiation SITE by `checkOneInstantiation`'s E3017, which is where a base's `where` clause lives.
+	if typeConformsTo(declared, interfaces: project.interfaces, typeName: signatures.conformerNameOfDeclaredName(binding).toByteArray(), interfaceName: heldAt) 'widensIntoTheHolding'
 		return
 	end 'widensIntoTheHolding'
 
-	reportPositioned(project, code: ErrorCode.heldAssociatedTypeBindingNotConforming, message: "'{String.from(conformer.typeName)}' binds '{String.from(iface.name)}'s associated type '{String.from(name)}' to '{String.from(binding)}', and this program holds '{String.from(name)}' at the interface type '{String.from(heldAt)}' — every value of a held associated type is widened into that existential, so every conformer's binding must conform to it, and '{String.from(binding)}' does not implement '{String.from(heldAt)}'. Declare the conformance, or hold the associated type at an interface every conformer implements", line: conformer.nameLine, column: conformer.nameColumn, filePath: conformer.filePath)
+	let shown = signatures.displaySpellingOfDeclaredName(binding)
+	reportPositioned(project, code: ErrorCode.heldAssociatedTypeBindingNotConforming, message: "'{String.from(conformer.typeName)}' binds '{String.from(iface.name)}'s associated type '{String.from(name)}' to '{String.from(shown)}', and this program holds '{String.from(name)}' at the interface type '{String.from(heldAt)}' — every value of a held associated type is widened into that existential, so every conformer's binding must conform to it, and '{String.from(shown)}' does not implement '{String.from(heldAt)}'. Declare the conformance, or hold the associated type at an interface every conformer implements", line: conformer.nameLine, column: conformer.nameColumn, filePath: conformer.filePath)
 end 'checkOneHeldBinding'
 
 // The two things a dispatch cannot carry, asked of one agreed binding. They are separate clauses because
@@ -261,7 +271,10 @@ function checkAssociatedReturnIsUnmanagedMachineWord(project Project, signatures
 		return
 	end 'notAResultAnywhere'
 
-	reportPositioned(project, code: ErrorCode.associatedTypeReturnNotMachineWord, message: "'{String.from(conformer.typeName)}' binds '{String.from(iface.name)}'s associated type '{String.from(name)}' to '{String.from(binding)}', and '{String.from(name)}' is the RETURN type of one of '{String.from(iface.name)}'s requirements. A dispatch's result type flows on into the code around it — which instruction the arithmetic picks, and whether the value is OWNED and released — and that is chosen while the interface is still only a NAME, because a conformer's binding is not known until every file has parsed. Bind it to an `int`, a ranged typealias or a payload-free enum, or take the value as a PARAMETER instead, where the binding IS resolved", line: conformer.nameLine, column: conformer.nameColumn, filePath: conformer.filePath)
+	// The AUTHOR's spelling: a generic-instance binding reaches here as `Box_Integer`, the canonical mint, and
+	// the author wrote `IntBox`. Its two sibling refusals above print an INTERFACE name — `declaredNameIsFatPointer`
+	// is true of no other declared form — so a rendered instance cannot reach them and they need no reduction.
+	reportPositioned(project, code: ErrorCode.associatedTypeReturnNotMachineWord, message: "'{String.from(conformer.typeName)}' binds '{String.from(iface.name)}'s associated type '{String.from(name)}' to '{String.from(signatures.displaySpellingOfDeclaredName(binding))}', and '{String.from(name)}' is the RETURN type of one of '{String.from(iface.name)}'s requirements. A dispatch's result type flows on into the code around it — which instruction the arithmetic picks, and whether the value is OWNED and released — and that is chosen while the interface is still only a NAME, because a conformer's binding is not known until every file has parsed. Bind it to an `int`, a ranged typealias or a payload-free enum, or take the value as a PARAMETER instead, where the binding IS resolved", line: conformer.nameLine, column: conformer.nameColumn, filePath: conformer.filePath)
 end 'checkAssociatedReturnIsUnmanagedMachineWord'
 
 // Can shv2 PROVE this binding is a plain, unowned machine word? The BUILTIN names it answers itself — `int`
@@ -294,8 +307,11 @@ end 'bindingIsUnmanagedMachineWord'
 // exactly as `checkTypeSymbolNamespace` blames the newcomer rather than the claimant that settled the name.
 // Both declarations arrive ON the fold's answer, so nothing is re-derived here and nothing has to panic if a
 // re-derivation misses.
-function reportAssociatedTypeBindingDisagreement(project Project, iface IrInterface, name ByteArray, first ConformanceDecl, firstBinding ByteArray, second ConformanceDecl, secondBinding ByteArray)
-	reportPositioned(project, code: ErrorCode.associatedTypeAbiDisagreement, message: "'{String.from(second.typeName)}' binds '{String.from(iface.name)}'s associated type '{String.from(name)}' to '{String.from(secondBinding)}', but '{String.from(first.typeName)}' binds it to '{String.from(firstBinding)}' — and '{String.from(name)}' is written as a parameter or return type of a requirement this program DISPATCHES. A witness dispatch is compiled ONCE for every conformer, with no per-conformer specialization, so the shared body would be compiled against one of those two types and hand the other conformer's impl bits it reads as something else. Bind the associated type to the same type in both conformances, or give the two conformers different interfaces", line: second.nameLine, column: second.nameColumn, filePath: second.filePath)
+//
+// Both bindings are DISPLAYED rather than printed raw, for `checkAssociatedReturnIsUnmanagedMachineWord`'s
+// reason: either side may be a generic instance, which a conformance records as the canonical mint.
+function reportAssociatedTypeBindingDisagreement(project Project, signatures ProgramSignatures, iface IrInterface, name ByteArray, first ConformanceDecl, firstBinding ByteArray, second ConformanceDecl, secondBinding ByteArray)
+	reportPositioned(project, code: ErrorCode.associatedTypeAbiDisagreement, message: "'{String.from(second.typeName)}' binds '{String.from(iface.name)}'s associated type '{String.from(name)}' to '{String.from(signatures.displaySpellingOfDeclaredName(secondBinding))}', but '{String.from(first.typeName)}' binds it to '{String.from(signatures.displaySpellingOfDeclaredName(firstBinding))}' — and '{String.from(name)}' is written as a parameter or return type of a requirement this program DISPATCHES. A witness dispatch is compiled ONCE for every conformer, with no per-conformer specialization, so the shared body would be compiled against one of those two types and hand the other conformer's impl bits it reads as something else. Bind the associated type to the same type in both conformances, or give the two conformers different interfaces", line: second.nameLine, column: second.nameColumn, filePath: second.filePath)
 end 'reportAssociatedTypeBindingDisagreement'
 
 // Does any requirement of `iface` write `name` where it reaches a witness call's calling convention — a

@@ -1578,13 +1578,26 @@ type MaxonToStdLowering
 	// names `__witness_DownCursor.Cursor`, and a dispatch through either lands in the right one without the
 	// call site knowing which.
 	//
+	// ⚠⚠ **THE BINDING IS REDUCED TO ITS CONFORMER NAME FIRST, EXACTLY AS THIS PASS'S OTHER TWO
+	// `ensureWitnessTable` CALLERS DO (W58).** A conformance's `withArgs` are RENDERED names, so a binding to a
+	// generic instance arrives as the canonical mint `UpCursor_Integer` — and a table is keyed by the CONFORMER
+	// (`materializeWitnessArg` uses `conformerTypeArgName`, `witnessForExistentialValue` uses
+	// `conformerNameOfType`; this was the one site reading the raw spelling). Under dictionary-passing that
+	// reduction is what makes the table right rather than merely findable: `UpCursor.current` is compiled ONCE
+	// over an opaque layout, so one `__witness_UpCursor.Cursor` answers for every instantiation, and it is
+	// bit-for-bit the table a DIRECT widening of the same value already mints. Unreduced, the label named
+	// `__witness_UpCursor_Integer.Cursor` and `witnessSlotImpl` PANICKED — *"no conformance selected a member
+	// for slot 'UpCursor_Integer.Cursor.current'"* — because `checkConformance` files its selections under the
+	// declared name, which is `stdlib/Array.maxon`'s `Iterable with (Element, ArrayIter)` shape.
+	//
 	// A conformance that bound nothing at this position is E3016's to report and stamps nothing: leaving the
 	// zero-fill is right, because nothing will read a slot for a position that has no binding to widen.
 	function stampAssociatedWitnessSlots(typeName ByteArray, interfaceName ByteArray, label String, methodCount WitnessMethodIndex, associatedCount ElementCount)
 		for position in 0 upto associatedCount 'eachAssociatedType'
 			if let held = try self.signatures.associatedTypeHeldAt(interfaceName, position: position) 'heldAtAnInterface'
 				if let binding = try conformerAssociatedBinding(self.conformances, typeName: typeName, interfaceName: interfaceName, position: position) 'thisConformerBoundIt'
-					self.globalData.recordRdataBlobRelativeOffset(self.ensureWitnessTable(binding, interfaceName: held), rdataLabel: label, offsetInLabel: witnessAssociatedSlotOffset(methodCount, position: position))
+					let conformer = self.signatures.conformerNameOfDeclaredName(binding).toByteArray()
+					self.globalData.recordRdataBlobRelativeOffset(self.ensureWitnessTable(conformer, interfaceName: held), rdataLabel: label, offsetInLabel: witnessAssociatedSlotOffset(methodCount, position: position))
 				end 'thisConformerBoundIt'
 			end 'heldAtAnInterface'
 		end 'eachAssociatedType'
