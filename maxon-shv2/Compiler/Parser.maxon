@@ -20780,8 +20780,8 @@ export type Parser
 	// a `returns int` would convert too.
 	//
 	// ⚠ It is the PARSER's promotion and deliberately not the Std tier's. shv2 has exactly two promotion
-	// primitives and the split is forced: `LowerMaxonToStd.floatWidenedArg` widens a call ARGUMENT, whose
-	// callee signature is a whole-program fact the parser may not have; every site below is intra-file —
+	// primitives and the split is forced: `LowerMaxonToStd.floatDomainCrossedArg` converts a call ARGUMENT,
+	// whose callee signature is a whole-program fact the parser may not have; every site below is intra-file —
 	// a `return` against its own function's declared type, a field against a layout already in hand, a
 	// binding against its own declaration — so all of them promote HERE, off the `valueTags` column, with
 	// no second table.
@@ -44129,7 +44129,7 @@ export type Parser
 	end 'emitWitnessDispatch'
 
 	// ⭐⭐ **WIDEN AN INTEGRAL ACTUAL SUPPLIED FOR A `float` INTERFACE FORMAL — the witness twin of
-	// `LowerMaxonToStd.widenIntArgsToFloatParams`, and it was MISSING.** A DIRECT call gets this from the
+	// `LowerMaxonToStd.crossFloatDomainArgs`, and it was MISSING.** A DIRECT call gets this from the
 	// callee's resolved signature at the Maxon→Std boundary; a witness dispatch has no callee to look up, so
 	// its arguments reached the fused `witnessCall` exactly as written, while the op's `argFloatMask` said what
 	// the CALLEE reads. An `int` actual for a `float` formal therefore travelled as a GPR/i64 while the
@@ -44148,7 +44148,7 @@ export type Parser
 	// that resolves to `float` declares XMM whatever the actual is — and an unwidened `int` actual is then a raw
 	// integer bit pattern moved into a float register, which x64 refuses outright (MEASURED: `a
 	// register-to-register move from rax to xmm0 crosses register files`). So the lowering widens too, through
-	// the same `widenIntArgsToFloatParams` a function-value call uses.
+	// the same `crossFloatDomainArgs` a function-value call uses.
 	// What THIS one still owns is the formal spelled `float` in the interface: it makes the VALUE an f64 at
 	// PARSE time, which is what types the expression around it, and nothing downstream can do that. The
 	// lowering's covers the formal the interface does NOT spell — an ASSOCIATED type, whose `float` is a
@@ -44166,7 +44166,7 @@ export type Parser
 	// agree and walking the actuals is simply walking the formals — the loop is unchanged, and what changed
 	// is that `witnessFormalIsFloat` may now panic on an index it once absorbed.
 	function floatWidenedWitnessArgs(target WitnessDispatchTarget, args ValueIdArray, siteTok Token) returns ValueIdArray
-		// FAST PATH, for `widenIntArgsToFloatParams`'s reason: only a `float` FORMAL can force a widening and
+		// FAST PATH, for `crossFloatDomainArgs`'s reason: only a `float` FORMAL can force a widening and
 		// almost no interface method has one, so every other dispatch returns its arguments verbatim — no array
 		// built, no op emitted, and the whole conformance corpus stays byte-identical.
 		if not self.witnessTargetHasFloatFormal(target) 'noFloatFormal'
@@ -53172,7 +53172,7 @@ export type Parser
 		// it with no change to any of them.
 		let argDefaultSlots = try self.fillOmittedArgDefaults(callee, anchor: anchor, args: args, argLabels: argLabels, argRanges: argRanges)
 		let result = try self.mintCallResult(callee, anchor: anchor, resultUsed: resultUsed)
-		self.retypeOpaqueMethodResult(result, callee: callee, args: args)
+		let readsAsFloatOutOfTheOpaqueWord = self.retypeOpaqueMethodResult(result, callee: callee, args: args)
 		// ⭐⭐ **THE DROP ENROLMENT COMES AFTER THE RETYPE, AND THAT ORDER IS THE WHOLE OF A5o.** It used to sit
 		// in the mint's own tail, where the tag was still the opaque `T` — and an opaque tag ALWAYS answers "owns
 		// nothing" (`valueIsManagedHeap` tests byte-record and aggregate tags, and `typeParameter` is neither).
@@ -53213,7 +53213,23 @@ export type Parser
 		// one question.
 		self.routeBareThrowingCallToTryBlock(callee, opIdx: opIdx, result: result)
 
-		return result
+		// ⭐⭐ **THE OPAQUE WORD IS READ BACK AS THE FLOAT THE RECEIVER'S INSTANCE SAYS IT IS** —
+		// `retypeOpaqueReturnValue`'s answer, spent HERE because the reinterpretation is an op and an op must
+		// come after the `call` that defines its operand. Everything above deliberately keeps working on the
+		// CALL's own value: the drop enrolment, the declared surface, the caller-consume and the throwing-call
+		// routing are all facts about the callee's hand-off, and the bitcast is a fact about how this caller
+		// reads it. Only the value handed BACK changes.
+		//
+		// ⚠ **THE `try` DOOR ALREADY KNOWS THIS SHAPE, WHICH IS WHY THIS IS SAFE FOR A THROWING CALLEE.**
+		// `rewriteLastCallToTryCall` steps back over exactly one trailing reinterpretation whose operand is the
+		// preceding op's result (`tryTargetCallOpIndex`) — built for `emitContainerElementAccessor`'s float
+		// element, and true of this one for the same reason: the reinterpretation is part of the call's RESULT
+		// PRODUCTION, not a second expression the `try` was applied to.
+		if not readsAsFloatOutOfTheOpaqueWord 'theResultIsAlreadyWhatItSeems'
+			return result
+		end 'theResultIsAlreadyWhatItSeems'
+
+		return self.emitUnaryOp(result, op: MaxonUnaryOp.bitsToFloat, resultTag: ValueTypeTag.float, range: SourceRange.between(anchor, last: rparenTok))
 	end 'emitCall'
 
 	// ⭐ **SUPPLY EVERY ARGUMENT THE CALL OMITTED AND THE DECLARATION DEFAULTS** (BATCH2 slice 4) — each one
@@ -53325,32 +53341,32 @@ export type Parser
 	// RETURNED VALUE, so the two could disagree — and did, for every body that returned a value it already
 	// owned. The callee now discharges the hand-off for every shape (`emitOwnedValueReturn`), so there is one
 	// convention, no bit, and nothing here for a caller to read back.
-	function retypeOpaqueMethodResult(result ValueId, callee ByteArray, args ValueIdArray)
+	function retypeOpaqueMethodResult(result ValueId, callee ByteArray, args ValueIdArray) returns bool
 		if args.isEmpty() 'noReceiver'
-			return
+			return false
 		end 'noReceiver'
 
 		let receiver = try args.get(0) otherwise panic("retypeOpaqueMethodResult: args.get(0) failed on a non-empty list")
 		if self.tagOf(receiver) != ValueTypeTag.genericInstance 'concreteReceiverOnly'
-			return
+			return false
 		end 'concreteReceiverOnly'
 
 		// The callee must be a method OF the receiver's own generic base, or `T` names a different type's
 		// parameter and the substitution would be against the wrong binding.
 		if not isQualifiedUnderTypeName(callee, typeName: self.signatures.genericInstanceBaseName(self.valueNameId(receiver))) 'notItsOwnMethod'
-			return
+			return false
 		end 'notItsOwnMethod'
 
 		match self.signatures.returnTypeOf(callee, into: self.artifact.typeNames) 'declared'
-			declared(returnType) then self.retypeOpaqueReturn(result, receiver: receiver, returnType: returnType)
-			undeclared then break 'declared'
+			declared(returnType) then return self.retypeOpaqueReturn(result, receiver: receiver, returnType: returnType)
+			undeclared then return false
 		end 'declared'
 	end 'retypeOpaqueMethodResult'
 
-	function retypeOpaqueReturn(result ValueId, receiver ValueId, returnType MaxonReturnType)
+	function retypeOpaqueReturn(result ValueId, receiver ValueId, returnType MaxonReturnType) returns bool
 		match returnType 'r'
-			value(inner) then self.retypeOpaqueReturnValue(result, receiver: receiver, inner: inner)
-			void then break 'r'
+			value(inner) then return self.retypeOpaqueReturnValue(result, receiver: receiver, inner: inner)
+			void then return false
 		end 'r'
 	end 'retypeOpaqueReturn'
 
@@ -53386,13 +53402,34 @@ export type Parser
 	// the bare-`T` arm cured that instance and left the shape: a caller reading a DECLARED type to decide what
 	// a RETURNED VALUE owes. The callee now owes the `+1` on every shape (`emitOwnedValueReturn`) and there is
 	// no bit to narrow.
-	function retypeOpaqueReturnValue(result ValueId, receiver ValueId, inner MaxonType)
+	//
+	// ⭐⭐ **AND IT ANSWERS ONE THING THE CALLER MUST ACT ON: A `returns T` THE INSTANCE FIXES TO `float`
+	// CANNOT BE THE TYPE IT IS FIXED TO — IT IS THAT TYPE'S 64 BITS.** Under dictionary-passing the callee is
+	// compiled ONCE for every instantiation at once, so it hands its result back in the general-purpose
+	// register a type parameter travels in. Writing `float` onto that value tells the allocator to colour a
+	// GPR-defined value into the XMM file, which is `X64Backend`'s cross-register-file assertion verbatim.
+	// So this door reports the case and `emitCall` reinterprets, exactly as `emitContainerElementAccessor`
+	// does at the element boundary: the same sentence, the other kind of slot.
+	function retypeOpaqueReturnValue(result ValueId, receiver ValueId, inner MaxonType) returns bool
 		let fixedByTheInstance = self.slotTypeThroughReceiver(receiver, declared: inner)
 		if maxonTypesDenoteSame(fixedByTheInstance, b: inner) 'theInstanceFixesNothingHere'
-			return
+			return false
 		end 'theInstanceFixesNothingHere'
 
+		// ⚠ **THE GATE READS THE DECLARED SIDE AS WELL AS THE SUBSTITUTED ONE.** A `returns Items` fixes to a
+		// `genericInstance` and a `returns Entry` to a tuple; neither can BECOME a float, and only a BARE type
+		// parameter occupies the opaque word this rule is about. Testing `tagIsFloat(fixed)` alone would state
+		// a rule about a slot KIND while checking only its contents.
+		if maxonTypeTag(inner) == ValueTypeTag.typeParameter and tagIsFloat(maxonTypeTag(fixedByTheInstance)) 'aFloatRidingTheOpaqueWord'
+			// The call's own result is what the ABI says it is — an i64 — which is also what makes
+			// `enrolOwnedCallTemp` decline it correctly: a float owns no heap, so the descriptor-gated drop an
+			// opaque tag would have enrolled is work with no effect on every trip of every loop.
+			self.retypeValue(result, valueType: MaxonType.integer)
+			return true
+		end 'aFloatRidingTheOpaqueWord'
+
 		self.retypeValue(result, valueType: fixedByTheInstance)
+		return false
 	end 'retypeOpaqueReturnValue'
 
 	// ⭐ **A CALL ARGUMENT MEETS THE PARAMETER'S DECLARED RANGE (P1.9), and this is the door that used to

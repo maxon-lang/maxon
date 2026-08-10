@@ -306,7 +306,7 @@ export function maxonCmpOpToStdPred(op MaxonCmpOp) returns StdCmpPred
 end 'maxonCmpOpToStdPred'
 
 // Does any declared parameter have `float` type — the ONLY thing that can force an int→float
-// argument widening (see `MaxonToStdLowering.widenIntArgsToFloatParams`). A bounded scan (parameters
+// argument widening (see `MaxonToStdLowering.crossFloatDomainArgs`). A bounded scan (parameters
 // are capped at the register-arg ABI count), so it is O(1) per call and allocates nothing; it is what
 // lets the overwhelmingly common no-float call return its arguments verbatim rather than build a fresh
 // array it would never change.
@@ -361,15 +361,6 @@ function paramNarrowMask(paramTypes MaxonTypeArray) returns ArgNarrowMask
 	end 'eachParam'
 	return mask
 end 'paramNarrowMask'
-
-function paramTypesIncludeFloat(paramTypes MaxonTypeArray) returns bool
-	for paramType in paramTypes 'eachParam'
-		if stdTypeIsFloat(maxonTypeToStdType(paramType)) 'float'
-			return true
-		end 'float'
-	end 'eachParam'
-	return false
-end 'paramTypesIncludeFloat'
 
 // Does any parameter of `sig` have `function` type — the ONLY thing that forces a companion environment
 // argument to be threaded at the call (see `MaxonToStdLowering.appendCalleeEnvArgs`). Bounded scan (the same
@@ -2300,7 +2291,7 @@ type MaxonToStdLowering
 	// A helper because `lowerIndirectCall`'s arm must hand `args` to a function and touch it no other way.
 	function appendCallIndirect(dstBlock IrBlock, result ValueId, callee ValueId, args ValueIdArray)
 		let declaredParams = self.indirectCalleeParamTypes(callee)
-		self.stdModule.appendOp(dstBlock, op: StdOp.callIndirect(result, calleeReg: callee, resultType: StdReturnType.value(self.indirectResultType(result)), argFloatMask: paramFloatMask(declaredParams), argNarrowMask: paramNarrowMask(declaredParams), args: self.widenIntArgsToFloatParams(args, paramTypes: declaredParams, dstBlock: dstBlock)))
+		self.stdModule.appendOp(dstBlock, op: StdOp.callIndirect(result, calleeReg: callee, resultType: StdReturnType.value(self.indirectResultType(result)), argFloatMask: paramFloatMask(declaredParams), argNarrowMask: paramNarrowMask(declaredParams), args: self.crossFloatDomainArgs(args, paramTypes: declaredParams, dstBlock: dstBlock)))
 	end 'appendCallIndirect'
 
 	// ⭐ **THE DECLARED PARAMETER TYPES OF THE FUNCTION VALUE BEING CALLED — the one fact an indirect call's
@@ -2539,7 +2530,7 @@ type MaxonToStdLowering
 	function appendWitnessCall(dstBlock IrBlock, result ValueId, args ValueIdArray, witness ValueId, methodIndex WitnessMethodIndex, interfaceDeclIndex InterfaceDeclIndex, isVoid bool)
 		let resultType = self.witnessCallResultType(result, isVoid: isVoid)
 		let declaredParams = self.witnessFormalTypes(methodIndex, interfaceDeclIndex: interfaceDeclIndex)
-		self.stdModule.appendOp(dstBlock, op: StdOp.witnessCall(result, witnessAddr: witness, methodIndex: methodIndex, resultType: resultType, argFloatMask: paramFloatMask(declaredParams), argNarrowMask: paramNarrowMask(declaredParams), args: self.widenIntArgsToFloatParams(args, paramTypes: declaredParams, dstBlock: dstBlock)))
+		self.stdModule.appendOp(dstBlock, op: StdOp.witnessCall(result, witnessAddr: witness, methodIndex: methodIndex, resultType: resultType, argFloatMask: paramFloatMask(declaredParams), argNarrowMask: paramNarrowMask(declaredParams), args: self.crossFloatDomainArgs(args, paramTypes: declaredParams, dstBlock: dstBlock)))
 	end 'appendWitnessCall'
 
 	// The throwing twin of `appendWitnessCall`, sharing its result typing (`witnessCallResultType`) verbatim —
@@ -2549,7 +2540,7 @@ type MaxonToStdLowering
 	function appendWitnessTryCall(dstBlock IrBlock, result ValueId, errorFlag ValueId, args ValueIdArray, witness ValueId, methodIndex WitnessMethodIndex, interfaceDeclIndex InterfaceDeclIndex, isVoid bool)
 		let resultType = self.witnessCallResultType(result, isVoid: isVoid)
 		let declaredParams = self.witnessFormalTypes(methodIndex, interfaceDeclIndex: interfaceDeclIndex)
-		self.stdModule.appendOp(dstBlock, op: StdOp.witnessTryCall(result, errorFlagId: errorFlag, witnessAddr: witness, methodIndex: methodIndex, resultType: resultType, argFloatMask: paramFloatMask(declaredParams), argNarrowMask: paramNarrowMask(declaredParams), args: self.widenIntArgsToFloatParams(args, paramTypes: declaredParams, dstBlock: dstBlock)))
+		self.stdModule.appendOp(dstBlock, op: StdOp.witnessTryCall(result, errorFlagId: errorFlag, witnessAddr: witness, methodIndex: methodIndex, resultType: resultType, argFloatMask: paramFloatMask(declaredParams), argNarrowMask: paramNarrowMask(declaredParams), args: self.crossFloatDomainArgs(args, paramTypes: declaredParams, dstBlock: dstBlock)))
 	end 'appendWitnessTryCall'
 
 	// The Std return type a witness call CAPTURES its result in — the result value's own type, or `void` for
@@ -2703,36 +2694,83 @@ type MaxonToStdLowering
 	// merely to hand the same values back. A DIRECT call never takes this path: `slotCallArgs` returns
 	// exactly one ordered argument per parameter, so the counts are equal and nothing is skipped. Too FEW
 	// arguments is a program error `SemanticCheck` has already refused (E3036) for both shapes.
-	function widenIntArgsToFloatParams(argIds ValueIdArray, paramTypes MaxonTypeArray, dstBlock IrBlock) returns ValueIdArray
-		// FAST PATH, and it is what keeps this allocation-neutral on the hot call-lowering path: only a
-		// float PARAMETER can force a widening, and almost no callee has one, so a callee with none
-		// returns its arguments verbatim — no `ValueIdArray` built, no op emitted. Without it every
-		// lowered call allocates a fresh array it never changes (measured: a linear per-call allocation
-		// delta across the scale ladder).
-		if not paramTypesIncludeFloat(paramTypes) 'noFloatParam'
+	function crossFloatDomainArgs(argIds ValueIdArray, paramTypes MaxonTypeArray, dstBlock IrBlock) returns ValueIdArray
+		// FAST PATH, and it is what keeps this allocation-neutral on the hot call-lowering path: a call
+		// whose arguments are already in the domain their parameters want returns them verbatim — no
+		// `ValueIdArray` built, no op emitted. Without it every lowered call allocates a fresh array it
+		// never changes (measured: a linear per-call allocation delta across the scale ladder).
+		//
+		// ⚠ **THE SCAN ASKS THE EXACT PER-ARGUMENT QUESTION, NOT A CHEAPER APPROXIMATION OF IT.** It used to
+		// ask only whether the SIGNATURE had a float parameter, which the opaque-word direction cannot be
+		// expressed in — a `T` parameter is an i64 — so widening the approximation to "float or type
+		// parameter" would have allocated at every `push`, `set` and `get` of every generic container. Asked
+		// exactly, the scan allocates nothing and answers for both directions at once.
+		if not self.anyArgCrossesTheFloatDomain(argIds, paramTypes: paramTypes) 'everyArgAlreadyInItsDomain'
 			return argIds
-		end 'noFloatParam'
+		end 'everyArgAlreadyInItsDomain'
 
-		var widened = ValueIdArray.create()
+		var crossed = ValueIdArray.create()
 		for i in 0 upto argIds.count() 'eachArg'
-			let argId = try argIds.get(i) otherwise panic("widenIntArgsToFloatParams: argIds.get OOB at {i}")
+			let argId = try argIds.get(i) otherwise panic("crossFloatDomainArgs: argIds.get OOB at {i}")
 			if i >= paramTypes.count() 'pastDeclaredParams'
-				widened.push(argId)
+				crossed.push(argId)
 				continue
 			end 'pastDeclaredParams'
-			let paramType = try paramTypes.get(i) otherwise panic("widenIntArgsToFloatParams: paramTypes.get OOB at {i} — the bound was just tested")
-			widened.push(self.floatWidenedArg(argId, paramType: paramType, dstBlock: dstBlock))
+			let paramType = try paramTypes.get(i) otherwise panic("crossFloatDomainArgs: paramTypes.get OOB at {i} — the bound was just tested")
+			crossed.push(self.floatDomainCrossedArg(argId, paramType: paramType, dstBlock: dstBlock))
 		end 'eachArg'
-		return widened
-	end 'widenIntArgsToFloatParams'
+		return crossed
+	end 'crossFloatDomainArgs'
 
-	// One argument: converted into the float domain when its parameter is `float` and the argument is not
-	// already there, else the argument verbatim. A non-float argument bound for a float parameter is ALWAYS
-	// an integer — SemanticCheck has already rejected every other type (`bool`/`String`/struct disagree
-	// with `float`, E3005) — so `not stdTypeIsFloat` on the argument is exactly "the value that converts",
-	// and it is also what keeps `assertConversionCrossesDomain` satisfied (neither conversion's operand is
-	// a float). The conversion REUSES `lowerUnaryOp`, so the op construction and its guard stay in the one
-	// place that owns them.
+	// The fast path's scan and the loop's test are ONE predicate, asked once per position each — so a call
+	// this declines to rebuild is exactly a call in which `floatDomainCrossedArg` would have handed every
+	// argument back unchanged. Two spellings would be two chances to skip a conversion the loop would have
+	// made, which is a wrong register file rather than a diagnostic.
+	//
+	// An argument past the last declared parameter passes through untouched (the enclosing header says why an
+	// indirect call has one), so the scan stops at the shorter of the two columns rather than asking about a
+	// position no parameter describes.
+	function anyArgCrossesTheFloatDomain(argIds ValueIdArray, paramTypes MaxonTypeArray) returns bool
+		let declared = paramTypes.count()
+		for i in 0 upto argIds.count() 'eachArg'
+			if i >= declared 'pastDeclaredParams'
+				break
+			end 'pastDeclaredParams'
+
+			let argId = try argIds.get(i) otherwise panic("anyArgCrossesTheFloatDomain: argIds.get OOB at {i}")
+			let paramType = try paramTypes.get(i) otherwise panic("anyArgCrossesTheFloatDomain: paramTypes.get OOB at {i} — the bound was just tested")
+			if self.argCrossesTheFloatDomain(argId, paramType: paramType) 'crosses'
+				return true
+			end 'crosses'
+		end 'eachArg'
+		return false
+	end 'anyArgCrossesTheFloatDomain'
+
+	// ⭐⭐ **DOES THIS ARGUMENT HAVE TO CHANGE REGISTER FILES TO REACH ITS PARAMETER?** Two directions, and
+	// they are one question because they are one boundary:
+	//
+	//   • **INTO a float parameter** (F3a) — the argument is an integer, and a non-float argument bound for a
+	//     float parameter is ALWAYS one: `SemanticCheck` has already rejected every other type (E3005).
+	//   • **INTO A TYPE PARAMETER'S OPAQUE WORD** — the argument is a float and the parameter is a `T`. shv2
+	//     DICTIONARY-PASSES, so `push(value Element)` is compiled ONCE for every instantiation at once and
+	//     its formal is the 8-byte GENERAL-PURPOSE slot every type parameter travels in. An f64 actual is born
+	//     in XMM, so handing it over unconverted asks the emitter to move xmm0 into rax: MEASURED on
+	//     `a.growFilled(4, value: 3.5)` over an `Array with float` once `stdlib/Array.maxon` is listed —
+	//     *"a register-to-register move from xmm0 to rax crosses register files"* (`X64Backend:834`).
+	//
+	// ⚠ A parameter cannot be both: a `typeParameter` lowers to i64, never to f64.
+	function argCrossesTheFloatDomain(argId ValueId, paramType MaxonType) returns bool
+		if stdTypeIsFloat(maxonTypeToStdType(paramType)) 'aFloatParameter'
+			return not stdTypeIsFloat(self.stdTypeOf(argId))
+		end 'aFloatParameter'
+
+		return maxonTypeTag(paramType) == ValueTypeTag.typeParameter and stdTypeIsFloat(self.stdTypeOf(argId))
+	end 'argCrossesTheFloatDomain'
+
+	// One argument: converted when `argCrossesTheFloatDomain` says it must, else the argument verbatim. The
+	// conversion REUSES `lowerUnaryOp`, so the op construction and its guard stay in the one place that owns
+	// them, and every conversion this picks genuinely crosses the domain — which is what keeps
+	// `assertConversionCrossesDomain` satisfied in both directions.
 	//
 	// ⭐⭐ **WHICH CONVERSION IS NOT THE SAME QUESTION AS WHETHER (A4o).** An ordinary integer WIDENS
 	// (`promoteToFloat` → `siToFp`); a FLOAT-BACKED ENUM's i64 is already the double's IEEE-754 encoding and
@@ -2745,18 +2783,29 @@ type MaxonToStdLowering
 	// own header states the same split for the widening). The enum identity survives to here only because
 	// the parser publishes `valueTags`/`valueNameIds` on the `IrFunction` — by the Std tier itself, a
 	// float-backed enum and an `int` are both `i64`.
-	function floatWidenedArg(argId ValueId, paramType MaxonType, dstBlock IrBlock) returns ValueId
-		if not stdTypeIsFloat(maxonTypeToStdType(paramType)) or stdTypeIsFloat(self.stdTypeOf(argId)) 'noWiden'
+	function floatDomainCrossedArg(argId ValueId, paramType MaxonType, dstBlock IrBlock) returns ValueId
+		if not self.argCrossesTheFloatDomain(argId, paramType: paramType) 'alreadyInItsDomain'
 			return argId
-		end 'noWiden'
+		end 'alreadyInItsDomain'
 
-		let conversion = MaxonUnaryOp.bitsToFloat if self.argIsFloatBackedEnum(argId) else MaxonUnaryOp.promoteToFloat
 		let converted = self.mintStdValueId()
-		self.lowerUnaryOp(converted, operand: argId, op: conversion, dstBlock: dstBlock)
+		self.lowerUnaryOp(converted, operand: argId, op: self.floatDomainCrossingOp(argId, paramType: paramType), dstBlock: dstBlock)
 		return converted
-	end 'floatWidenedArg'
+	end 'floatDomainCrossedArg'
 
-	// Is `value` a FLOAT-BACKED enum's — the question `floatWidenedArg` picks its conversion by. The
+	// WHICH conversion the crossing above is. The opaque-word direction is a REINTERPRETATION and not a
+	// narrowing: the slot holds the f64's 64 bits, so `floatToBits` in and `bitsToFloat` out
+	// (`Parser.emitCall`'s inverse half) round-trip every value including NaNs and the two zeros — the same
+	// pairing `Parser.containerElementWord` states at the element boundary.
+	function floatDomainCrossingOp(argId ValueId, paramType MaxonType) returns MaxonUnaryOp
+		if maxonTypeTag(paramType) == ValueTypeTag.typeParameter 'intoTheOpaqueWord'
+			return MaxonUnaryOp.floatToBits
+		end 'intoTheOpaqueWord'
+
+		return MaxonUnaryOp.bitsToFloat if self.argIsFloatBackedEnum(argId) else MaxonUnaryOp.promoteToFloat
+	end 'floatDomainCrossingOp'
+
+	// Is `value` a FLOAT-BACKED enum's — the question `floatDomainCrossingOp` picks its conversion by. The
 	// Maxon-tier twin of `Parser.valueIsFloatBackedEnum`, reading the very columns that parser published,
 	// so the two tiers cannot come to disagree about which values carry an encoded double.
 	//
@@ -2788,12 +2837,12 @@ type MaxonToStdLowering
 	// parameter is float, function, or neither), and widening preserves the arg count, so the env append's
 	// per-position scan stays aligned with the signature.
 	function finalizeCallArgs(argIds ValueIdArray, sig FuncSignature, dstBlock IrBlock) returns ValueIdArray
-		return self.appendCalleeEnvArgs(self.widenIntArgsToFloatParams(argIds, paramTypes: sig.paramTypes, dstBlock: dstBlock), sig: sig, dstBlock: dstBlock)
+		return self.appendCalleeEnvArgs(self.crossFloatDomainArgs(argIds, paramTypes: sig.paramTypes, dstBlock: dstBlock), sig: sig, dstBlock: dstBlock)
 	end 'finalizeCallArgs'
 
 	function appendCalleeEnvArgs(argIds ValueIdArray, sig FuncSignature, dstBlock IrBlock) returns ValueIdArray
 		// FAST PATH: almost no callee takes a function parameter, so a signature with none returns its
-		// arguments verbatim — no array built, no op emitted (the shape `widenIntArgsToFloatParams` uses).
+		// arguments verbatim — no array built, no op emitted (the shape `crossFloatDomainArgs` uses).
 		if not signatureHasFunctionParam(sig) 'noFunctionParam'
 			return argIds
 		end 'noFunctionParam'

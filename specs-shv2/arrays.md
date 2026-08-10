@@ -2262,6 +2262,56 @@ end 'main'
 7
 ```
 
+<!-- test: a-float-element-keeps-every-bit-of-its-slot -->
+### A float element is REINTERPRETED, so every bit of the slot survives the round trip
+`trunc` reads only an element's integer part, so every case above would pass identically over a
+value that had been NUMERICALLY converted on its way into the slot rather than reinterpreted. These
+three distinguish the two: `-0.0`'s entire content is its sign bit, `0.1` has no integer domain to
+convert through, and `f64.max` overflows one. The write half (`containerElementWord`) and the read
+half (`containerSlotValueType`'s float arm) are the two ends of one round trip, and this is the case
+that says so — for the LITERAL element today, and for the same element through
+`ArrayIterator.current()`'s opaque 8-byte word the day `stdlib/Array.maxon` is listed.
+```maxon
+function main() returns ExitCode
+	var a = [0.1, 2.5]
+	try a.set(1, value: -0.0) otherwise panic("test invariant: set OOB")
+	a.push(1.7976931348623157e308)
+	for x in a 'each'
+		print("{x}\n")
+	end 'each'
+	return a.count() as ExitCode
+end 'main'
+```
+```exitcode
+3
+```
+```stdout
+0.1
+-0.0
+179769313486231570000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000.0
+```
+
+<!-- test: a-float-elements-buffer-is-an-ordinary-eight-byte-stride -->
+### The buffer under a float element answers the managed surface like any other
+The element's register file is the CALLER's question, never the buffer's: what the stride holds is
+64 bits whatever they decode to, which is the whole reason a float element needs no wider slot and
+no second storage path. The managed surface is where that claim is checkable from source.
+```maxon
+function main() returns ExitCode
+	let a = [1.5, 2.5, 3.5]
+	print("{a.managed.length()}\n")
+	print("{a.managed.elementSize()}\n")
+	return trunc(try a.get(2) otherwise 0.0)
+end 'main'
+```
+```exitcode
+3
+```
+```stdout
+3
+8
+```
+
 <!-- test: a-float-element-survives-a-clone -->
 ### A cloned float array carries its elements' bits
 ```maxon

@@ -10003,6 +10003,27 @@ export type ProgramSignatures
 		return MaxonType.function(typeNameIdOf(t))
 	end 'functionAliasResolved'
 
+	// ⭐ **A RANGED FLOAT ALIAS SUBSTITUTED IN AS A TYPE ARGUMENT IS A `float` PLACE, AND IT ARRIVES AS A
+	// `named` LEAF** — `functionAliasResolved`'s twin one line up, for the identical reason and reached
+	// through the identical chain. `substitutedInstanceArg` answers the argument AS INTERNED, and `named`
+	// reads as an INTEGER everywhere (`tagIsIntegral`, whose own header says why it cannot do otherwise), so
+	// `Array with Real`'s element read `int`. Handed to the scalar coercion rule unresolved,
+	// `a.growFilled(4, value: 2.5)` was refused **E3009 *"cannot implicitly convert 'float' to 'int'"*** —
+	// a lossy-narrowing diagnostic about a program in which nothing narrows — while the BARE spelling of the
+	// same element (`[1.5, 2.5]`, whose instance argument IS `float`) passed the check.
+	//
+	// ⚠ **AN INT ALIAS IS DELIBERATELY LEFT ALONE, which is why this is not `canonicalizeRangedAlias`.** That
+	// door erases BOTH domains to their underlying primitive, and an int alias's NAME is what carries the
+	// range the argument check reads (`checkArgAgainstDeclaredTag` is handed the substituted type for exactly
+	// that). A FLOAT alias is the one `named` type whose VALUE lives in a different register file — see
+	// `isFloatAlias` — so it is the one that may not stay overloaded.
+	export function floatAliasResolved(t MaxonType) returns MaxonType
+		if maxonTypeTag(t) != ValueTypeTag.named 'notANamedLeaf'
+			return t
+		end 'notANamedLeaf'
+		return MaxonType.float if self.isFloatAlias(self.nameOfId(typeNameIdOf(t))) else t
+	end 'floatAliasResolved'
+
 	// The struct type `name` denotes, declared in ANY file — `aliasOf`'s twin, and the door the
 	// PARSER asks every struct question through: is this name a `type`? how big is its box? which
 	// slot is `x`?
