@@ -2867,6 +2867,72 @@ end 'MapEntryArgs'
 // existed and is a wrong sentence now. The runnable oracle refuses the empty literal here too.
 let EmptyConstArrayLiteralMessage = "an empty array literal `[]` as a top-level initializer — its element type cannot be inferred; name it with a generic alias and its factory instead (`typealias Ints = Array with Integer` + `var xs = Ints.create()`)"
 
+// ⭐⭐ **THE SENTENCE TABLE FOR A TOP-LEVEL FACTORY WHOSE RETURN CANNOT BE HELD** — one entry per refusing
+// `GlobalFactoryReturn` arm, each forking on WHERE the call was written. `Parser.requireFactoryReturnsARecord`
+// makes the DECISION, once, over one match; everything here only says it.
+//
+// ⭐ **THAT SPLIT IS THE WHOLE POINT: the decision MUST NOT be able to differ by position and the sentence
+// MUST.** Every reason the slot position gives is about the `.data` slot — the image, its width, its load
+// and its store — and an argument has no slot at all, so a message trying to be true of both would be true
+// of neither. But two independent DECISIONS would let someone later admit an arm in one position only, and
+// in the nested→admitted direction that is a panic three passes later, which is exactly what the
+// `unbridgedRecord` arm exists to prevent. Hence: one match up there, two sentences down here.
+//
+// ⛔ **THE SLOT SENTENCES ARE PINNED VERBATIM** by `specs-shv2/top-level-factory-globals.md` — the
+// `unbridgedRecord` one by BOTH `error.factory-returning-a-generic-alias` and
+// `error.factory-returning-a-boxed-union`, which reach the same text through different `{typeName}`s.
+// Rewording, reflowing or re-punctuating one fails those cases on TEXT rather than on behaviour.
+
+// The anchor every refusal on this walk shares: the METHOD the author wrote. Stated once so five sentences
+// cannot come to disagree about which token a top-level factory's diagnostic points at.
+function factoryReturnRefusal(methodTok Token, message String) returns ConstEvalError
+	return ConstEvalError.defective(ParseError.unsupported(message, line: methodTok.line, column: methodTok.column))
+end 'factoryReturnRefusal'
+
+// Unreachable in both positions through `atConstFactoryCall`, which admits the form only for a declared
+// callee — worded rather than assumed, because the two doors are asked of the same name.
+function factoryUndeclaredRefusal(typeTok Token, methodTok Token, nested bool) returns ConstEvalError
+	if nested 'argumentPosition'
+		return factoryReturnRefusal(methodTok, message: "`{String.from(typeTok.value)}.{String.from(methodTok.value)}` as an argument in a top-level initializer — no file declares it")
+	end 'argumentPosition'
+
+	return factoryReturnRefusal(methodTok, message: "`{String.from(typeTok.value)}.{String.from(methodTok.value)}` as a top-level initializer — no file declares it")
+end 'factoryUndeclaredRefusal'
+
+function factoryScalarRefusal(typeTok Token, methodTok Token, typeName String, nested bool) returns ConstEvalError
+	if nested 'argumentPosition'
+		return nestedFactoryReturnRefusal(typeTok, methodTok: methodTok, returns: "'{typeName}', which is a scalar")
+	end 'argumentPosition'
+
+	return factoryReturnRefusal(methodTok, message: "`{String.from(typeTok.value)}.{String.from(methodTok.value)}` as a top-level initializer — it returns '{typeName}', and a global holding a scalar has its value written into the `.data` image, which happens before any code can run. A factory-built global must return a record (a struct, a String or a container)")
+end 'factoryScalarRefusal'
+
+function factoryUnbridgedRefusal(typeTok Token, methodTok Token, typeName String, nested bool) returns ConstEvalError
+	if nested 'argumentPosition'
+		return nestedFactoryReturnRefusal(typeTok, methodTok: methodTok, returns: "'{typeName}', which IS a record but keeps the bare type NAME as its type — a boxed union and a generic alias both do")
+	end 'argumentPosition'
+
+	return factoryReturnRefusal(methodTok, message: "`{String.from(typeTok.value)}.{String.from(methodTok.value)}` as a top-level initializer — it returns '{typeName}', which IS a record but is not one `__module_init` can access a `.data` slot through. A boxed union and a generic alias keep the bare type NAME as their type — a union's is what a `match` reads it by — and the synthesized initializer and cleanup carry that name straight onto the slot's load and store, where there is no width to give it. A struct, a tuple, a String, a Character and a builtin container all resolve to a concrete type and are legal here. Build it inside a function instead")
+end 'factoryUnbridgedRefusal'
+
+function factoryVoidRefusal(typeTok Token, methodTok Token, nested bool) returns ConstEvalError
+	if nested 'argumentPosition'
+		return nestedFactoryReturnRefusal(typeTok, methodTok: methodTok, returns: "nothing")
+	end 'argumentPosition'
+
+	return factoryReturnRefusal(methodTok, message: "`{String.from(typeTok.value)}.{String.from(methodTok.value)}` as a top-level initializer — it returns nothing, so there is no value for the binding to hold")
+end 'factoryVoidRefusal'
+
+// ⭐ **THE ARGUMENT POSITION'S ONE SENTENCE, with the callee's answer slotted in** — three of the four
+// refusing arms share it, because at this position they share their CONSEQUENCE. `__module_init` mints a
+// nested call's result at that callee's declared return type, hands it to the enclosing factory, and —
+// unless that factory CONSUMED it — drops it through the record's own drop callee
+// (`ProgramSignatures.recordArgumentCleanup`). All three steps need a value with a concrete record type, so
+// a scalar, a `void` and an unbridged record fail for one reason and differ only in WHAT was returned.
+function nestedFactoryReturnRefusal(typeTok Token, methodTok Token, returns String) returns ConstEvalError
+	return factoryReturnRefusal(methodTok, message: "a nested factory call `{String.from(typeTok.value)}.{String.from(methodTok.value)}(…)` in a top-level initializer — it returns {returns}, and `__module_init` passes a nested call's result to the enclosing factory as an owned RECORD, dropping it afterwards through that record's own drop callee unless the factory consumed it. A nested call must return a record with a concrete type — a struct, a tuple, a String, a Character or a builtin container. Build the value inside the enclosing factory instead")
+end 'nestedFactoryReturnRefusal'
+
 // The result of resolving a `<sized>.min` / `<sized>.max` bound. A union, so the
 // caller can tell the two REJECTIONS apart and name the actual gap in its diagnostic
 // (a float bound is a missing FEATURE; an unknown name is a typo).
@@ -48588,7 +48654,7 @@ export type Parser
 	// true while every initializer was a folded constant, and it expired the moment a top-level FACTORY
 	// CALL landed: such a global's type is the callee's DECLARED return type, which is a bare `named` for
 	// every boxed union, tuple alias and generic alias. What keeps this line correct today is a REFUSAL,
-	// not an inference — `Parser.requireGlobalFactoryReturnsARecord` rejects exactly those return types
+	// not an inference — `Parser.requireFactoryReturnsARecord` rejects exactly those return types
 	// (`GlobalFactoryReturn.unbridgedRecord`), so every type that reaches here is concrete and needs no
 	// bridge. ⇒ **If that refusal is ever lifted, this pair is one of the doors that must start asking
 	// `fieldStorageType`** — the split every other slot in the language already makes — alongside
@@ -48798,6 +48864,22 @@ export type Parser
 	// empty container. What a factory BODY does is not bounded here, and `specs/static-variables.md` does
 	// not bound it in any compiler in the tree.
 	function evalConstFactoryCall(stack TopLevelDeclIndexArray) returns ConstInitializerValue throws ConstEvalError
+		var calls = ConstFactoryCallArray.create()
+		let root = try self.evalConstFactoryCallInto(calls, stack: stack, nested: false)
+
+		return ConstInitializerValue.factoryCall(calls, root: root)
+	end 'evalConstFactoryCall'
+
+	// ⭐⭐ **WALK ONE CALL INTO THE ARENA AND ANSWER WHICH ENTRY IT BECAME** — the recursion, and the whole of
+	// what admitting a nested call costs. Its ARGUMENTS are walked first, so an inner call has already taken
+	// its slot by the time this one takes its own; the id handed back is therefore stable the moment it is
+	// minted, and nothing ever rewrites an entry.
+	//
+	// ⚠ **`nested` DECIDES WHICH RETURN RULE APPLIES, AND ONLY THAT.** Both positions demand a record and
+	// neither demands anything else — the visibility of the type, the visibility of the method and the
+	// E3062 name recording below are the same three checks wherever the call is written, which is why they
+	// are asked here once rather than by two callers.
+	function evalConstFactoryCallInto(calls ConstFactoryCallArray, stack TopLevelDeclIndexArray, nested bool) returns InitializerCallId throws ConstEvalError
 		let typeTok = try self.consumeConst(TokenKind.identifier)
 		// The type name is a USE of it, recorded for the same reason and at the same point the container
 		// factory's alias is: this walk is the only reader of a top-level initializer's tokens, so it is the
@@ -48820,56 +48902,72 @@ export type Parser
 			throw ConstEvalError.defective(err)
 		end 'hiddenFactoryMethod'
 
-		try self.requireGlobalFactoryReturnsARecord(callee, typeTok: typeTok, methodTok: methodTok)
+		try self.requireFactoryReturnsARecord(callee, typeTok: typeTok, methodTok: methodTok, nested: nested)
 
 		try self.consumeConstToken(TokenKind.leftParen)
 		var args = ConstFactoryArgumentArray.create()
 		if not self.at(TokenKind.rightParen) 'hasArguments'
-			args.push(try self.evalConstFactoryArgument(stack))
+			args.push(try self.evalConstFactoryArgument(calls, stack: stack))
 			while self.at(TokenKind.comma) 'moreArguments'
 				try self.consumeConstToken(TokenKind.comma)
-				args.push(try self.evalConstFactoryArgument(stack))
+				args.push(try self.evalConstFactoryArgument(calls, stack: stack))
 			end 'moreArguments'
 		end 'hasArguments'
 		try self.consumeConstToken(TokenKind.rightParen)
 
-		return ConstInitializerValue.factoryCall(callee, args: args)
-	end 'evalConstFactoryCall'
+		// The slot this call is about to occupy. Read BEFORE the push and AFTER the arguments, which is what
+		// makes it this call's own index: every nested call the walk above found has already appended itself.
+		let id = calls.count()
+		calls.push(ConstFactoryCall.create(callee, args: args))
 
-	// ⭐ **A TOP-LEVEL FACTORY MUST HAND BACK A RECORD.** A `.data` slot holds either a baked VALUE or a
-	// POINTER filled before `main`, and only the second can be the result of a call: a scalar global's
-	// number is written into the image, which happens strictly before anything runs. So a factory returning
-	// `int`/`bool`/`float` — or returning nothing at all — is refused here with a sentence naming what it
-	// returns, rather than reaching `globalStdType`'s width table with a tag it has no slot shape for.
-	function requireGlobalFactoryReturnsARecord(callee ByteArray, typeTok Token, methodTok Token) throws ConstEvalError
+		return id
+	end 'evalConstFactoryCallInto'
+
+	// ⭐⭐ **A TOP-LEVEL FACTORY MUST HAND BACK A RECORD, WHEREVER THE CALL WAS WRITTEN — ONE MATCH, TWO
+	// SENTENCE TABLES.** A `.data` slot holds either a baked VALUE or a POINTER filled before `main`, and only
+	// the second can be the result of a call: a scalar global's number is written into the image, which
+	// happens strictly before anything runs. So a factory returning `int`/`bool`/`float` — or returning
+	// nothing at all — is refused here, rather than reaching `globalStdType`'s width table with a tag it has
+	// no slot shape for. A NESTED call is refused on the same five arms for a reason of its own, which the
+	// sentence table carries (`nestedFactoryReturnRefusal`).
+	//
+	// ⭐ **`nested` REACHES THE MESSAGE AND NEVER THE VERDICT, and that is the invariant this shape ENFORCES
+	// rather than asserts.** The admitted set cannot differ by position because there is only one place that
+	// decides — this match — and it cannot see `nested` at all; the flag is passed straight through to the
+	// wording. It was two matches for one commit, and the failure that shape invited is not a sixth arm (that
+	// breaks both loudly) but someone admitting an existing arm in ONE position: nested→admitted is a panic
+	// three passes later, which is precisely what `unbridgedRecord` exists to prevent.
+	function requireFactoryReturnsARecord(callee ByteArray, typeTok Token, methodTok Token, nested bool) throws ConstEvalError
 		match self.signatures.globalFactoryReturn(callee) 'returns'
 			record then return
-			// Unreachable through `atConstFactoryCall`, which admits the form only for a declared callee —
-			// stated as a case rather than assumed, because the two doors are asked of the same name.
-			undeclared then throw ConstEvalError.defective(ParseError.unsupported("`{String.from(typeTok.value)}.{String.from(methodTok.value)}` as a top-level initializer — no file declares it", line: methodTok.line, column: methodTok.column))
-			scalar(typeName) then throw ConstEvalError.defective(ParseError.unsupported("`{String.from(typeTok.value)}.{String.from(methodTok.value)}` as a top-level initializer — it returns '{typeName}', and a global holding a scalar has its value written into the `.data` image, which happens before any code can run. A factory-built global must return a record (a struct, a String or a container)", line: methodTok.line, column: methodTok.column))
-			unbridgedRecord(typeName) then throw ConstEvalError.defective(ParseError.unsupported("`{String.from(typeTok.value)}.{String.from(methodTok.value)}` as a top-level initializer — it returns '{typeName}', which IS a record but is not one `__module_init` can access a `.data` slot through. A boxed union and a generic alias keep the bare type NAME as their type — a union's is what a `match` reads it by — and the synthesized initializer and cleanup carry that name straight onto the slot's load and store, where there is no width to give it. A struct, a tuple, a String, a Character and a builtin container all resolve to a concrete type and are legal here. Build it inside a function instead", line: methodTok.line, column: methodTok.column))
-			void then throw ConstEvalError.defective(ParseError.unsupported("`{String.from(typeTok.value)}.{String.from(methodTok.value)}` as a top-level initializer — it returns nothing, so there is no value for the binding to hold", line: methodTok.line, column: methodTok.column))
+			undeclared then throw factoryUndeclaredRefusal(typeTok, methodTok: methodTok, nested: nested)
+			scalar(typeName) then throw factoryScalarRefusal(typeTok, methodTok: methodTok, typeName: typeName, nested: nested)
+			unbridgedRecord(typeName) then throw factoryUnbridgedRefusal(typeTok, methodTok: methodTok, typeName: typeName, nested: nested)
+			void then throw factoryVoidRefusal(typeTok, methodTok: methodTok, nested: nested)
 		end 'returns'
-	end 'requireGlobalFactoryReturnsARecord'
+	end 'requireFactoryReturnsARecord'
 
 	// ⭐ **ONE ARGUMENT OF A TOP-LEVEL FACTORY CALL — its optional `name:` LABEL and a value that is anything
-	// an initializer may be EXCEPT another call.** The admitted set is not a list written here: it is
-	// `evalConstFoldedValue`, the very walk the initializer itself goes through.
+	// an initializer may be, INCLUDING another call.** Neither admitted set is a list written here: the
+	// folded half is `evalConstFoldedValue`, the very walk the initializer itself goes through, and the call
+	// half is `evalConstFactoryCallInto`, the very walk the initializer's own call goes through — so an
+	// argument is admitted by the same two doors that admit a whole initializer, and neither can drift from
+	// what a top-level `var` accepts.
 	//
-	// ⛔ **A NESTED FACTORY CALL IS REFUSED, AND THE GAP IS THE TYPE SYSTEM'S RATHER THAN THIS WALK'S.** An
-	// argument that could itself be a call makes the folded-value union RECURSIVE, and Maxon forbids a
-	// recursive type outright (E4014, `type 'X' contains a reference cycle`) — so admitting it needs the
-	// call tree flattened into an arena with indices, which is a mechanism and not a line. The refusal says
-	// so at the argument the author wrote.
-	function evalConstFactoryArgument(stack TopLevelDeclIndexArray) returns ConstFactoryArgument throws ConstEvalError
+	// ⭐⭐ **A NESTED CALL IS AN ARENA ENTRY, NOT A VALUE, AND THAT IS THE WHOLE MECHANISM** (spec-port
+	// `module-level-struct-var`). It used to be refused here, because an argument that could itself be a call
+	// makes the folded-value union RECURSIVE and Maxon forbids a recursive type outright (E4014, `type 'X'
+	// contains a reference cycle`). The tree is now held FLAT — the inner call appends itself to the
+	// initializer's `ConstFactoryCallArray` and this argument keeps only its INDEX — and an integer names a
+	// call without the type naming itself. The recursion that remains is the WALK's, which the language has
+	// never had a problem with; only the TYPE had to be flattened.
+	function evalConstFactoryArgument(calls ConstFactoryCallArray, stack TopLevelDeclIndexArray) returns ConstFactoryArgument throws ConstEvalError
 		let label = self.consumeConstArgumentLabel()
-		let argTok = self.current()
 		if self.atConstFactoryCall() 'nestedCall'
-			throw ConstEvalError.defective(ParseError.unsupported("a nested factory call `{String.from(argTok.value)}.{String.from(self.tokenAt(self.pos + 2).value)}(…)` as an argument in a top-level initializer — an argument is a constant, a literal or an empty container, and nesting one call inside another needs the folded call tree held out of line. Build the inner value in the factory instead", line: argTok.line, column: argTok.column))
+			return ConstFactoryArgument.create(label, value: ConstFactoryArgumentValue.call(try self.evalConstFactoryCallInto(calls, stack: stack, nested: true)))
 		end 'nestedCall'
 
-		return ConstFactoryArgument.create(label, value: try self.evalConstFoldedValue(stack))
+		return ConstFactoryArgument.create(label, value: ConstFactoryArgumentValue.folded(try self.evalConstFoldedValue(stack)))
 	end 'evalConstFactoryArgument'
 
 	// The `name:` an argument was written with, or the EMPTY bytes that mean "positional" — the same "no

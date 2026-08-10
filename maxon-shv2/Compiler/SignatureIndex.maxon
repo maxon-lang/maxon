@@ -608,13 +608,15 @@ export union TopLevelConstant
 	containerValue(giid GenericInstanceId)
 	// ⭐ **IT EVALUATED TO A USER STATIC FACTORY CALL — `var db = Database.create(…)`** (spec-port
 	// `map-struct-bytearray`). Its own arm because it is the one outcome whose value the compiler does not
-	// KNOW: the other stored arms carry a record's contents, this one carries the CALL that produces them.
-	// `returnType` is the callee's declared return type, resolved in this index's own interner when the
-	// outcome is settled — it is what types the `.data` slot and what routes the cleanup's drop.
+	// KNOW: the other stored arms carry a record's contents, this one carries the CALL TREE that produces
+	// them — flat, with `root` naming the outermost call, exactly as `ConstInitializerValue.factoryCall`
+	// carries it and for the reason stated there. `returnType` is the ROOT callee's declared return type,
+	// resolved in this index's own interner when the outcome is settled — it is what types the `.data` slot
+	// and what routes the cleanup's drop.
 	//
 	// ⚠ APPENDED AT THE END, for `managedValue`'s reason: every range arm over this union then EXCLUDES it
 	// and fails to compile until it has been visited and decided.
-	factoryValue(callee ByteArray, args ConstFactoryArgumentArray, returnType MaxonType)
+	factoryValue(calls ConstFactoryCallArray, root InitializerCallId, returnType MaxonType)
 end 'TopLevelConstant'
 
 // ⭐⭐ **DOES A TOP-LEVEL DECLARATION'S INITIALIZER RUN THE PROGRAM'S OWN CODE, AND WHOSE?** — ONE
@@ -727,23 +729,28 @@ export union ManagedGlobalInitializer
 	// A record `__module_init` builds itself, out of folded constants and nothing else.
 	record(build ManagedGlobalRecord)
 	// ⭐ **A USER STATIC FACTORY — `var db = Database.create(EntryMap.create(), sourcePaths: …)`** (spec-port
-	// `map-struct-bytearray`). The slot's occupant is whatever `callee` RETURNS, so `__module_init`
+	// `map-struct-bytearray`). The slot's occupant is whatever the ROOT call RETURNS, so `__module_init`
 	// materializes each argument and then CALLS it: this is the one initializer form that runs user code
-	// before `main`. `callee` is the mangled `Type.method` name (`qualifiedMethodName`), which is the same
-	// key a call site emits and the signature registry files the declaration under — so the argument
-	// reordering `LowerMaxonToStd.lowerCall` does for a labelled call happens here for free.
-	factoryCall(callee ByteArray, args GlobalInitArgumentArray)
+	// before `main`.
+	//
+	// ⭐ **AND AN ARGUMENT MAY ITSELF BE A CALL** (spec-port `module-level-struct-var`), which is why this
+	// carries a flat ARENA and a root id rather than one callee and one argument list. It is the fold tier's
+	// `ConstInitializerValue.factoryCall` resolved entry-for-entry, so an id names the same call on both
+	// sides and the flattening is stated once — see there for why the tree cannot be held as a tree.
+	factoryCall(calls GlobalInitCallArray, root InitializerCallId)
 end 'ManagedGlobalInitializer'
 
-// ⭐ **A RECORD `__module_init` BUILDS WITHOUT RUNNING USER CODE** — exactly the constructions a global's own
-// slot may start life holding AND, exactly, the ones a factory ARGUMENT may be. Each arm differs in whether
-// the literal's own materialization is ALREADY the owned record the slot must hold, which is a fact about
-// the record formats rather than a choice `ModuleInit` makes.
+// ⭐ **A RECORD `__module_init` BUILDS WITHOUT RUNNING USER CODE** — exactly the MATERIALIZED constructions a
+// global's own slot may start life holding, and exactly the materialized ones a factory ARGUMENT may be. Each
+// arm differs in whether the literal's own materialization is ALREADY the owned record the slot must hold,
+// which is a fact about the record formats rather than a choice `ModuleInit` makes.
 //
 // ⚠ **IT IS ITS OWN UNION BECAUSE MAXON FORBIDS A RECURSIVE TYPE (E4014).** A factory call carries arguments
-// and an argument may be any of these, so one union holding both arms would name itself. The split is not a
-// workaround for that rule — it STATES the rule the admitted argument set obeys: an argument is anything a
-// top-level initializer may be except another call.
+// and an argument may be any of these, so one union holding both arms would name itself. The split therefore
+// STATES what this union is: everything `__module_init` can build for itself. A CALL is the other way a slot
+// or an argument comes to hold a record, and it is not an arm here — it is an entry in
+// `ManagedGlobalInitializer.factoryCall`'s flat arena, reached by an INDEX, which is the same E4014 breaking
+// the same cycle one tier up (spec-port `module-level-struct-var`).
 export union ManagedGlobalRecord
 	// A `String` literal is a WHOLLY immortal `.rdata` record shared by every read of those bytes, so the
 	// slot's occupant is a CLONE of it — the `(box) -> newBox` dual of the `__str_decref` the cleanup drops
@@ -778,6 +785,30 @@ end 'GlobalInitArgument'
 
 export typealias GlobalInitArgumentArray = Array with GlobalInitArgument
 
+// ⭐ **ONE CALL OF A FACTORY-CALL GLOBAL'S FLATTENED CALL TREE, RESOLVED FOR THE SYNTHESIS** — the fold
+// tier's `ConstFactoryCall` with every argument turned into a materialization instruction. `callee` is the
+// mangled `Type.method` name (`qualifiedMethodName`), which is the same key a body's call site emits and
+// the signature registry files the declaration under — so the argument reordering `LowerMaxonToStd.lowerCall`
+// does for a labelled call happens here for free.
+//
+// It carries no return type for `ConstFactoryCall`'s reason: the receiver of the result already holds it.
+export type GlobalInitCall
+	export let callee as ByteArray
+	export let args as GlobalInitArgumentArray
+
+	export static function create(callee ByteArray, args GlobalInitArgumentArray) returns GlobalInitCall
+		return Self{callee: callee, args: args}
+	end 'create'
+end 'GlobalInitCall'
+
+export typealias GlobalInitCallArray = Array with GlobalInitCall
+
+// `factoryCallAt`'s twin over the resolved arena, and the reason the two arenas are built entry-for-entry:
+// one id, one miss message, whichever tier is holding the array.
+export function globalInitCallAt(calls GlobalInitCallArray, id InitializerCallId) returns GlobalInitCall
+	return try calls.get(id) otherwise panic("globalInitCallAt: no call {id} in a resolved arena of {calls.count()} — it is built entry-for-entry from the fold arena the ids were minted in")
+end 'globalInitCallAt'
+
 // ⭐⭐ **WHO FREES A FACTORY ARGUMENT'S RECORD — the ownership fact `__module_init` has no statement to end
 // in.** A body's call site materializes an argument as an owned TEMP (`Parser.trackOwnedTemp`) and drops it
 // at the end of the statement unless the callee consumed it; the synthesis has no statement and no temp
@@ -797,13 +828,18 @@ export union GlobalInitArgumentCleanup
 	dropAfterCall(callee ByteArray)
 end 'GlobalInitArgumentCleanup'
 
-// What ONE factory argument evaluates to — a folded number, or one of the records above. The two are
-// different instructions to the emitter (a `literal` op versus a record construction), which is the whole
-// of the distinction.
+// What ONE factory argument evaluates to — a folded number, one of the records above, or another CALL.
+// The three are different instructions to the emitter (a `literal` op, a record construction, a `call`),
+// which is the whole of the distinction.
 export union GlobalInitArgumentValue
 	// A folded number: an integer, a bool's 0/1 (TypeRules' `BoolTrueValue`) or a float's IEEE bit pattern.
 	scalar(payload ParsedInt)
 	record(build ManagedGlobalRecord)
+	// ⭐ **A NESTED FACTORY CALL** (spec-port `module-level-struct-var`), by its position in the same arena
+	// this argument's own call lives in. `__module_init` emits it before the call that takes it; the record
+	// it returns is owned by that frame exactly as a materialized one is, so `cleanup` above answers for it
+	// through the identical consume-bit rule.
+	call(id InitializerCallId)
 end 'GlobalInitArgumentValue'
 
 // A record construction and the TYPE its value is minted at — the two facts `ProgramSignatures.globalRecordOf`
@@ -1083,16 +1119,60 @@ export union ConstInitializerValue
 	// ARGUMENT may be.
 	direct(value ConstFoldedValue)
 	// ⭐ **A USER STATIC FACTORY CALL — `Database.create(EntryMap.create(), sourcePaths: …)`** (spec-port
-	// `map-struct-bytearray`). Nothing is folded: what this answer carries is WHICH function to call and
-	// WHAT to pass it, and the record itself is built before `main` by `__module_init`. `callee` is the
-	// mangled `Type.method` name; the return TYPE is resolved on the index's side, where the interner the
-	// global's drop callee is routed against lives.
-	factoryCall(callee ByteArray, args ConstFactoryArgumentArray)
+	// `map-struct-bytearray`). Nothing is folded: what this answer carries is WHICH functions to call and
+	// WHAT to pass them, and the record itself is built before `main` by `__module_init`. The return TYPE is
+	// resolved on the index's side, where the interner the global's drop callee is routed against lives.
+	//
+	// ⭐⭐ **THE CALL TREE IS FLAT, AND THAT IS WHAT LETS A CALL NEST INSIDE A CALL** (spec-port
+	// `module-level-struct-var`). `calls` is the initializer's whole tree — `Outer.create(Inner.create(0))`
+	// is two entries — and `root` names the OUTERMOST one, the call whose result the slot holds. Every
+	// other entry is reached from an argument that names it by INDEX, which is an integer and therefore
+	// not a type naming itself (see `ConstFactoryArgumentValue`).
+	//
+	// ⚠ **`root` IS STATED, NOT DERIVED.** The parser happens to append each call once its arguments are
+	// walked, which puts the outermost one last — but that is a property of a recursive descent, not a
+	// contract, and a reader computing `count() - 1` would be depending on it. One integer, written down by
+	// the only walk that knows.
+	factoryCall(calls ConstFactoryCallArray, root InitializerCallId)
 end 'ConstInitializerValue'
 
+// ⭐ **ONE CALL OF A TOP-LEVEL INITIALIZER'S FLATTENED CALL TREE** — the mangled `Type.method` name
+// (`qualifiedMethodName`, which is the same key a body's call site emits and the signature registry files
+// the declaration under) and the arguments the author wrote, in SOURCE order.
+//
+// It carries no return TYPE, and that absence is deliberate: a call's result type is a fact its RECEIVER
+// already holds — `ManagedGlobal.valueType` for the root, `GlobalInitArgument.valueType` for a nested one —
+// so recording it here too would be the same type written down twice, on two paths that could drift.
+export type ConstFactoryCall
+	export let callee as ByteArray
+	export let args as ConstFactoryArgumentArray
+
+	export static function create(callee ByteArray, args ConstFactoryArgumentArray) returns ConstFactoryCall
+		return Self{callee: callee, args: args}
+	end 'create'
+end 'ConstFactoryCall'
+
+export typealias ConstFactoryCallArray = Array with ConstFactoryCall
+
+// ⭐ **WHICH CALL OF A TOP-LEVEL INITIALIZER'S FLATTENED TREE** — the purpose, which is neither tier's, and
+// that is deliberately what the name says. It indexes `ConstFactoryCallArray` on the fold side AND the
+// `GlobalInitCallArray` the index tier resolves from it entry-for-entry, so ONE id names the same call on
+// both sides. A per-tier `…FactoryCallId` / `GlobalInitCallId` pair would be one fact written twice, and
+// nothing would then catch the two drifting apart — the ids the emitter reads are the ids the evaluator
+// minted, unchanged.
+export typealias InitializerCallId = int(0 to u64.max)
+
+// The one get-or-panic over a fold-tier call arena. An id is minted by the walk that pushed the call it
+// names (`Parser.evalConstFactoryCallInto`) and travels only inside the arena it was minted from, so a miss
+// is an arena the walk and its readers disagree about rather than anything a program can write.
+export function factoryCallAt(calls ConstFactoryCallArray, id InitializerCallId) returns ConstFactoryCall
+	return try calls.get(id) otherwise panic("factoryCallAt: no call {id} in an initializer arena of {calls.count()} — every id is the index the evaluator pushed that call at")
+end 'factoryCallAt'
+
 // What a top-level initializer folds to when it does NOT call. Its own union for `ManagedGlobalRecord`'s
-// reason — Maxon forbids a recursive type (E4014), and a factory's arguments are these — and the two say
-// the same thing at the two tiers: this is the admitted argument set, stated once on each side of the fold.
+// reason — Maxon forbids a recursive type (E4014) — and the two say the same thing at the two tiers: this
+// is everything an initializer can be WITHOUT running user code, stated once on each side of the fold.
+// A call is not an arm here; it is an arena entry an argument names by index.
 export union ConstFoldedValue
 	scalar(value ConstValue)
 	managed(bytes ByteArray, kind ManagedConstKind)
@@ -1106,19 +1186,35 @@ export union ConstFoldedValue
 	containerCreate(giid GenericInstanceId)
 end 'ConstFoldedValue'
 
-// ONE argument of a top-level factory call, as the evaluator folded it: the source-level `name:` LABEL
+// ONE argument of a top-level factory call, as the evaluator walked it: the source-level `name:` LABEL
 // (empty for a positional argument) and the value. The `GlobalInitArgument` this becomes carries a TYPE as
 // well, resolved on the index's side against its own interner.
 export type ConstFactoryArgument
 	export let label as ByteArray
-	export let value as ConstFoldedValue
+	export let value as ConstFactoryArgumentValue
 
-	export static function create(label ByteArray, value ConstFoldedValue) returns ConstFactoryArgument
+	export static function create(label ByteArray, value ConstFactoryArgumentValue) returns ConstFactoryArgument
 		return Self{label: label, value: value}
 	end 'create'
 end 'ConstFactoryArgument'
 
 export typealias ConstFactoryArgumentArray = Array with ConstFactoryArgument
+
+// ⭐⭐ **WHAT ONE ARGUMENT OF A TOP-LEVEL FACTORY CALL IS — a value the compiler FOLDED, or another CALL.**
+// The second arm is what `module-level-struct-var`'s `Outer.create(Inner.create(0))` needs, and it carries
+// an INDEX rather than the call itself for the reason the whole arena exists: a `ConstFactoryCall` holds
+// these arguments, so an arm holding a `ConstFactoryCall` would close a reference cycle and Maxon forbids
+// one outright (E4014, `type 'X' contains a reference cycle`). An integer is not a cycle, so the tree is
+// held flat in `ConstInitializerValue.factoryCall`'s arena and every edge of it is one of these ids.
+export union ConstFactoryArgumentValue
+	// A constant, a literal or an empty container — anything `evalConstFoldedValue` produces, which is
+	// exactly everything an initializer can be without running user code.
+	folded(value ConstFoldedValue)
+	// A NESTED factory call, by its position in the enclosing initializer's arena. `__module_init` emits it
+	// BEFORE the call that takes it, and the result is an owned record this argument then answers for
+	// (`GlobalInitArgumentCleanup`) exactly as a materialized one does.
+	call(id InitializerCallId)
+end 'ConstFactoryArgumentValue'
 
 // The result of asking the evaluator for a constant's value. `failed` is not an error to report — the
 // diagnostic is already recorded on the decl that owns it — it is the instruction to STOP.
@@ -5495,7 +5591,7 @@ export enum RecordedReturnTypeRule
 	// re-tags a call RESULT, which is why `let p = Outer.build()` inside a function body has always worked.
 	// A TOP-LEVEL initializer has no such door: `evaluateInitializers` copies the recorded return type
 	// straight into the declaration's outcome, and the two readers of that copy then disagreed —
-	// `Parser.requireGlobalFactoryReturnsARecord` asked `slotTypeIsManaged`, which is TRUE for a
+	// `Parser.requireFactoryReturnsARecord` asked `slotTypeIsManaged`, which is TRUE for a
 	// struct-denoting `named` and ADMITTED the program, and `globalStdType` then met a tag its width table
 	// has no case for and PANICKED, with a sentence written for its other caller (a scalar global's ranged
 	// alias) claiming a `var` was *"tagged 'int'"* in a program containing no int.
@@ -8061,7 +8157,7 @@ export type ProgramSignatures
 			// because it must live in THIS index's interner: the drop callee the cleanup emits is routed
 			// against `self.typeNames`, and a type adopted into a file's artifact interner would name an id
 			// this side cannot resolve.
-			factoryCall(callee, args) then return self.settleStoredRecordValue(decl, outcome: TopLevelConstant.factoryValue(callee, args: args, returnType: self.declaredReturnValueType(callee, name: decl.name)))
+			factoryCall(calls, root) then return self.settleStoredRecordValue(decl, outcome: TopLevelConstant.factoryValue(calls, root: root, returnType: self.declaredReturnValueType(factoryCallAt(calls, id: root).callee, name: decl.name)))
 		end 'kind'
 	end 'walkConstInitializer'
 
@@ -8401,29 +8497,45 @@ export type ProgramSignatures
 		match decl.outcome 'state'
 			pending to arrayValue then return TopLevelInitializerCall.none
 			containerValue(giid) then return self.containerInitializerCall(giid)
-			factoryValue(callee, args, _) then return TopLevelInitializerCall.calls(self.factoryInitializerCallees(callee, args: args))
+			factoryValue(calls, _, _) then return TopLevelInitializerCall.calls(self.factoryInitializerCallees(calls))
 		end 'state'
 	end 'declInitializerCall'
 
-	// ⭐ **A FACTORY CALLS ITSELF AND EVERY DECLARED GENERIC AMONG ITS ARGUMENTS (W41)** — the calls
-	// `ModuleInit.calledFactoryRecord` emits, in the order it emits them: each argument is materialized first,
-	// in source order, and then the factory itself. The list is built from the SAME folded values
-	// `globalInitArguments` resolves into records, so what is rooted and what is emitted are two readings of
-	// one outcome rather than two walks that could disagree.
+	// ⭐ **EVERY FACTORY IN THE TREE AND EVERY DECLARED GENERIC AMONG THEIR ARGUMENTS (W41)** — the calls
+	// `ModuleInit.calledFactoryRecord` emits. The list is built from the SAME arena `globalInitCalls` resolves
+	// into materialization instructions, so what is rooted and what is emitted are two readings of one outcome
+	// rather than two walks that could disagree.
 	//
-	// A range arm over every non-container argument kind, ending at the current last variant, so an arm
-	// appended past `containerCreate` FAILS TO COMPILE here rather than being silently filed as "calls nothing".
-	function factoryInitializerCallees(callee ByteArray, args ConstFactoryArgumentArray) returns ByteArrayArray
+	// ⭐ **A FLAT LOOP, AND THAT IS THE ARENA EARNING ITS KEEP** (spec-port `module-level-struct-var`). A
+	// NESTED factory is a call like any other and must be rooted like any other — its body is reached only
+	// from `__module_init`, which does not exist when the reachability walk runs — and because the tree is
+	// held flat, "every callee in this initializer" is one pass over `calls` rather than a recursive descent
+	// that a later arm could forget to make. The `call` argument arm therefore contributes NOTHING here: the
+	// call it names is its own entry, and pushing it again would root one name twice.
+	function factoryInitializerCallees(calls ConstFactoryCallArray) returns ByteArrayArray
 		var callees = ByteArrayArray.create()
-		callees.push(callee)
-		for arg in args 'eachArgument'
-			match arg.value 'value'
-				scalar to arrayLiteral then continue
-				containerCreate(giid) then self.appendDeclaredInstanceCreateCallee(callees, giid: giid)
-			end 'value'
-		end 'eachArgument'
+		for call in calls 'eachCall'
+			callees.push(call.callee)
+			for arg in call.args 'eachArgument'
+				match arg.value 'value'
+					call then continue
+					folded(folded) then self.appendFoldedArgumentCallee(callees, folded: folded)
+				end 'value'
+			end 'eachArgument'
+		end 'eachCall'
 		return callees
 	end 'factoryInitializerCallees'
+
+	// The callee a FOLDED argument contributes, which is one only for a declared generic's empty container.
+	//
+	// A range arm over every non-container folded kind, ending at the current last variant, so an arm
+	// appended past `containerCreate` FAILS TO COMPILE here rather than being silently filed as "calls nothing".
+	function appendFoldedArgumentCallee(callees ByteArrayArray, folded ConstFoldedValue)
+		match folded 'value'
+			scalar to arrayLiteral then return
+			containerCreate(giid) then self.appendDeclaredInstanceCreateCallee(callees, giid: giid)
+		end 'value'
+	end 'appendFoldedArgumentCallee'
 
 	// ⭐ **A CONTAINER GLOBAL CALLS IFF ITS `create` IS DECLARED CODE (W41)** — a BUILTIN container's record is
 	// compiler-synthesized allocation with no source body to reach and no user-visible effect, which is why
@@ -8541,7 +8653,7 @@ export type ProgramSignatures
 	// `(value, witness)`, so its `.data` slot is TWO words. It is unreachable today for a reason that is
 	// an ORDERING accident and not a rule — a swept interface annotation is still a bare `named` when
 	// `evaluateInitializers` runs, so `slotTypeIsManaged` reads it as a scalar and
-	// `requireGlobalFactoryReturnsARecord` refuses it with an E2015 first — which is precisely why the
+	// `requireFactoryReturnsARecord` refuses it with an E2015 first — which is precisely why the
 	// case is stated here rather than assumed away.
 	function recordPointerSlotType(valueType MaxonType, name ByteArray) returns StdType
 		let tag = maxonTypeTag(valueType)
@@ -8554,12 +8666,12 @@ export type ProgramSignatures
 		// the eight bytes and would leave that refusal to a panic three passes later, which is the shape
 		// this whole door exists to end.
 		if tag == ValueTypeTag.named 'noConcreteSlotAccess'
-			panic("recordPointerSlotType: top-level var '{String.from(name)}' is built by a factory whose return type is still the bare name '{maxonTypeName(valueType, typeNames: self.typeNames)}' — `Parser.requireGlobalFactoryReturnsARecord` refuses that at the declaration, so reaching here means a record was admitted without a concrete slot type")
+			panic("recordPointerSlotType: top-level var '{String.from(name)}' is built by a factory whose return type is still the bare name '{maxonTypeName(valueType, typeNames: self.typeNames)}' — `Parser.requireFactoryReturnsARecord` refuses that at the declaration, so reaching here means a record was admitted without a concrete slot type")
 		end 'noConcreteSlotAccess'
 		// Asked through the very predicate that ADMITTED the declaration, so the slot cannot be typed for a
 		// shape the admission did not pass. A scalar reaching here is a classification drift, not a program.
 		if not self.slotTypeIsManaged(valueType) 'ownsNoHeap'
-			panic("recordPointerSlotType: top-level var '{String.from(name)}' is typed '{maxonTypeName(valueType, typeNames: self.typeNames)}', which owns no heap — a record global's slot holds a POINTER, and every caller classifies the value a record first (`Parser.requireGlobalFactoryReturnsARecord` for a factory, `foldedValueType` for a literal)")
+			panic("recordPointerSlotType: top-level var '{String.from(name)}' is typed '{maxonTypeName(valueType, typeNames: self.typeNames)}', which owns no heap — a record global's slot holds a POINTER, and every caller classifies the value a record first (`Parser.requireFactoryReturnsARecord` for a factory, `foldedValueType` for a literal)")
 		end 'ownsNoHeap'
 
 		return valueTagToStdType(tag)
@@ -8595,7 +8707,7 @@ export type ProgramSignatures
 				managedValue to containerValue then entries.push(self.recordGlobalOf(decl))
 				// ⭐ A FACTORY-CALL GLOBAL's slot holds whatever the callee returns, so its construction is the
 				// CALL and its type is the callee's declared return type — settled when the outcome was.
-				factoryValue(callee, args, returnType) then entries.push(self.managedGlobalEntry(decl, initializer: ManagedGlobalInitializer.factoryCall(callee, args: self.globalInitArguments(args, callee: callee, elementFilePath: decl.declFilePath)), valueType: returnType))
+				factoryValue(calls, root, returnType) then entries.push(self.managedGlobalEntry(decl, initializer: ManagedGlobalInitializer.factoryCall(self.globalInitCalls(calls, declName: decl.name, elementFilePath: decl.declFilePath), root: root), valueType: returnType))
 				pending to evaluating then panic("ProgramSignatures.managedGlobals: '{String.from(decl.name)}' is unevaluated — `evaluateInitializers` runs to completion inside `queryProgramSignatures`")
 			end 'state'
 		end 'each'
@@ -8617,24 +8729,45 @@ export type ProgramSignatures
 		return self.managedGlobalEntry(decl, initializer: ManagedGlobalInitializer.record(record.build), valueType: record.valueType)
 	end 'recordGlobalOf'
 
-	// ⭐ **EVERY ARGUMENT OF A FACTORY-CALL GLOBAL, RESOLVED FOR THE SYNTHESIS.** Each folded argument becomes
-	// either a number to materialize as a `literal` or one of the record constructions `globalRecordOf`
-	// resolves — the same door the global's own slot goes through, which is what makes "an argument is
-	// anything an initializer may be except another call" true of the EMITTED code and not only of the
-	// grammar. The LABEL rides through untouched: `LowerMaxonToStd.lowerCall` reorders a labelled call
-	// against the callee's declared parameter names, so the synthesis emits the arguments in SOURCE order
-	// exactly as a body's call site does.
+	// ⭐ **A FACTORY-CALL GLOBAL'S WHOLE CALL TREE, RESOLVED FOR THE SYNTHESIS** — the fold arena mapped
+	// ENTRY-FOR-ENTRY, which is what lets the ids the evaluator minted travel into the emitter unchanged.
+	// Re-numbering here (say, by walking from the root) would be a second identity for the same call, and the
+	// `root` the outcome carries would then name a different entry on each side.
+	function globalInitCalls(calls ConstFactoryCallArray, declName ByteArray, elementFilePath FilePath) returns GlobalInitCallArray
+		var resolved = GlobalInitCallArray.create()
+		for call in calls 'eachCall'
+			resolved.push(GlobalInitCall.create(call.callee, args: self.globalInitArguments(call.args, callee: call.callee, calls: calls, declName: declName, elementFilePath: elementFilePath)))
+		end 'eachCall'
+
+		// ⚠ **THE MAPPING IS ONE-TO-ONE, AND A FILTER HERE WOULD BE A WRONG ANSWER RATHER THAN A CRASH.** Every
+		// id already minted — `root`, and every `call(id)` argument — indexes BOTH arenas, so dropping or
+		// merging an entry would silently make each one name a different call and `__module_init` would build
+		// the wrong tree. This cannot see a REORDER, which nothing here does; it pins the half a later filter
+		// would break, at the one point both counts are in hand.
+		if resolved.count() != calls.count() 'notEntryForEntry'
+			panic("ProgramSignatures.globalInitCalls: resolved {resolved.count()} of {calls.count()} calls for '{String.from(declName)}' — the two arenas are indexed by ONE set of ids, so this loop must map entry-for-entry and may not filter")
+		end 'notEntryForEntry'
+
+		return resolved
+	end 'globalInitCalls'
+
+	// ⭐ **EVERY ARGUMENT OF ONE CALL, RESOLVED FOR THE SYNTHESIS.** Each folded argument becomes either a
+	// number to materialize as a `literal` or one of the record constructions `globalRecordOf` resolves — the
+	// same door the global's own slot goes through — and a NESTED call rides through as the id it already is.
+	// The LABEL rides through untouched: `LowerMaxonToStd.lowerCall` reorders a labelled call against the
+	// callee's declared parameter names, so the synthesis emits the arguments in SOURCE order exactly as a
+	// body's call site does.
 	//
 	// ⭐ **THE CALLEE'S CONSUME FACTS ARE ASKED ONCE, HERE, AND SLOTTED PER ARGUMENT** — the shape
 	// `Parser.applyCallerConsume` uses at a body's call site, over the same `consumeOf` entry and the same
 	// `argSlotPosition` label→position mapping, so "did the callee take this one?" has one answer whichever
 	// position the call was written in.
-	function globalInitArguments(args ConstFactoryArgumentArray, callee ByteArray, elementFilePath FilePath) returns GlobalInitArgumentArray
+	function globalInitArguments(args ConstFactoryArgumentArray, callee ByteArray, calls ConstFactoryCallArray, declName ByteArray, elementFilePath FilePath) returns GlobalInitArgumentArray
 		let consume = self.consumeOf(callee)
 		var resolved = GlobalInitArgumentArray.create()
 		for i in 0 upto args.count() 'eachArgument'
 			let arg = try args.get(i) otherwise panic("ProgramSignatures.globalInitArguments: args.get OOB at {i} below count {args.count()}")
-			resolved.push(self.globalInitArgument(arg, consume: consume, argIndex: i, elementFilePath: elementFilePath))
+			resolved.push(self.globalInitArgument(arg, consume: consume, argIndex: i, calls: calls, declName: declName, elementFilePath: elementFilePath))
 		end 'eachArgument'
 		return resolved
 	end 'globalInitArguments'
@@ -8644,21 +8777,49 @@ export type ProgramSignatures
 	// of the three names a type). The call site's DECLARED parameter type is deliberately not consulted:
 	// `LowerMaxonToStd.lowerCall` slots the argument against the signature exactly as it does for a body's
 	// call, so a second reading of the declaration here could only ever disagree with the one that matters.
-	// A scalar owns nothing, so it needs no cleanup; a RECORD's is the question below.
-	function globalInitArgument(arg ConstFactoryArgument, consume CalleeConsume, argIndex ParamCount, elementFilePath FilePath) returns GlobalInitArgument
-		match arg.value 'value'
-			scalar(folded) then return GlobalInitArgument.create(arg.label, value: GlobalInitArgumentValue.scalar(folded.payload), valueType: maxonTypeOfTag(folded.tag, nameId: UnnamedTypeId), cleanup: GlobalInitArgumentCleanup.none)
-			managed to containerCreate then break 'value'
+	// A scalar owns nothing, so it needs no cleanup; a RECORD's and a nested CALL's is the question below.
+	//
+	// ⭐ **A NESTED CALL'S TYPE IS ITS CALLEE'S DECLARED RETURN, resolved through the very door the ROOT
+	// call's is** (`declaredReturnValueType`) — so the type `__module_init` mints the inner result at and the
+	// type a global of the same factory would be slotted as are one derivation. The evaluator has already
+	// established it is a record (`Parser.requireFactoryReturnsARecord`, at the nested position), which is what
+	// makes the cleanup router below answerable for it.
+	function globalInitArgument(arg ConstFactoryArgument, consume CalleeConsume, argIndex ParamCount, calls ConstFactoryCallArray, declName ByteArray, elementFilePath FilePath) returns GlobalInitArgument
+		return match arg.value 'value'
+			call(id) gives self.ownedRecordArgument(arg, consume: consume, argIndex: argIndex, valueType: self.declaredReturnValueType(factoryCallAt(calls, id: id).callee, name: declName), value: GlobalInitArgumentValue.call(id))
+			folded(folded) gives self.foldedInitArgument(arg, consume: consume, argIndex: argIndex, folded: folded, elementFilePath: elementFilePath)
 		end 'value'
-
-		let record = self.globalRecordOf(arg.value, elementFilePath: elementFilePath)
-		return GlobalInitArgument.create(arg.label, value: GlobalInitArgumentValue.record(record.build), valueType: record.valueType, cleanup: self.recordArgumentCleanup(consume, argIndex: argIndex, label: arg.label, valueType: record.valueType))
 	end 'globalInitArgument'
+
+	// The scalar/record fork over an argument the compiler MATERIALIZES — the walk this side has always had,
+	// now reached through one arm of the union above so each union is matched exactly once.
+	function foldedInitArgument(arg ConstFactoryArgument, consume CalleeConsume, argIndex ParamCount, folded ConstFoldedValue, elementFilePath FilePath) returns GlobalInitArgument
+		match folded 'kind'
+			scalar(value) then return GlobalInitArgument.create(arg.label, value: GlobalInitArgumentValue.scalar(value.payload), valueType: maxonTypeOfTag(value.tag, nameId: UnnamedTypeId), cleanup: GlobalInitArgumentCleanup.none)
+			managed to containerCreate then break 'kind'
+		end 'kind'
+
+		let record = self.globalRecordOf(folded, elementFilePath: elementFilePath)
+		return self.ownedRecordArgument(arg, consume: consume, argIndex: argIndex, valueType: record.valueType, value: GlobalInitArgumentValue.record(record.build))
+	end 'foldedInitArgument'
+
+	// An argument whose value is an owned RECORD — materialized here or returned by a nested call — paired
+	// with the answer to who frees it. ONE assembly point, so the two producers cannot come to ask the
+	// ownership question differently: a record is a record however it came to exist.
+	function ownedRecordArgument(arg ConstFactoryArgument, consume CalleeConsume, argIndex ParamCount, valueType MaxonType, value GlobalInitArgumentValue) returns GlobalInitArgument
+		return GlobalInitArgument.create(arg.label, value: value, valueType: valueType, cleanup: self.recordArgumentCleanup(consume, argIndex: argIndex, label: arg.label, valueType: valueType))
+	end 'ownedRecordArgument'
 
 	// ⭐ **WHO FREES THIS RECORD ARGUMENT?** A CONSUMED parameter is the callee's — it stored the record, and
 	// dropping it here would be a double-free — so nothing is emitted. Everything else is still
 	// `__module_init`'s, and its drop is the very callee `__maxon_global_cleanup` would use for a global of
 	// that type, off the one router (`managedFieldDropCallee`) rather than a second reading of the type.
+	//
+	// ⭐ **A NESTED CALL'S RESULT IS ASKED THE SAME QUESTION** (spec-port `module-level-struct-var`). Where
+	// the record came from is not the question — `Outer.create(Inner.create(0))` leaves `__module_init` sole
+	// owner of the `Inner` the inner call returned, exactly as `Counter.create(Bytes.create())` leaves it
+	// sole owner of a materialized one — so the only thing that decides is whether the enclosing factory took
+	// it. That is why this takes a TYPE and a consume answer and never asks how the value was produced.
 	//
 	// ⚠ **THE DEFAULT IS TO DROP, and that direction is the load-bearing one.** `consumeOf` answers
 	// `borrowsAll` for a callee with no recorded entry — the overwhelming majority — so a callee whose
@@ -8934,14 +9095,16 @@ export type ProgramSignatures
 			// with the instance stated outright instead of inferred from an element kind. There are no
 			// elements to leave out.
 			containerValue(giid) then return mixBytes(mixBytes(mix(keyed, value: ConstShapeContainerValue), bytes: self.mangleGenericInstance(giid)), bytes: decl.dataLabel)
-			// ⭐ **A FACTORY-CALL GLOBAL MIXES ITS CALLEE AND ITS LABEL, AND NOT ITS ARGUMENTS** — the
+			// ⭐ **A FACTORY-CALL GLOBAL MIXES ITS ROOT CALLEE AND ITS LABEL, AND NOT ITS ARGUMENTS** — the
 			// array-literal arm's rule, applied to the one initializer that calls. Every reader emits
 			// `globalAddr <label>` + `loadIndirect`, byte-identical whichever arguments the call passes, so
 			// the arguments reach only `__module_init`, which is rebuilt from this arena whenever this query
-			// misses. What a reader DOES depend on is the CALLEE — it fixes the slot's type, and swapping
-			// `Database.create` for `Database.empty` can retype every use — and the LABEL, which is the slot
-			// the emitted `globalAddr` names.
-			factoryValue(callee, _, _) then return mixBytes(mixBytes(mix(keyed, value: ConstShapeFactoryValue), bytes: callee), bytes: decl.dataLabel)
+			// misses. That covers a NESTED call too: it is an argument, and no reader's bytes move when
+			// `Outer.create(Inner.create(0))` becomes `Outer.create(Inner.create(1))`. What a reader DOES
+			// depend on is the ROOT CALLEE — it fixes the slot's type, and swapping `Database.create` for
+			// `Database.empty` can retype every use — and the LABEL, which is the slot the emitted
+			// `globalAddr` names.
+			factoryValue(calls, root, _) then return mixBytes(mixBytes(mix(keyed, value: ConstShapeFactoryValue), bytes: factoryCallAt(calls, id: root).callee), bytes: decl.dataLabel)
 			// A constant with no value bakes no number into a reader, so every failure hashes alike —
 			// but it must still hash differently from every VALUE, or `let X = compute()` becoming
 			// `let X = 0` would leave a reader's memo valid. The failure's DETAILS are deliberately not

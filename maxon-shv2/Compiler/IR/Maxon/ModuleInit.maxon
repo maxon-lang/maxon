@@ -108,7 +108,7 @@ end 'buildModuleInit'
 function initialRecordOf(fn SynthesizedFunction, global ManagedGlobal) returns ValueId
 	return match global.initializer 'initializer'
 		record(build) gives builtRecord(fn, build: build, valueType: global.valueType, range: global.range)
-		factoryCall(callee, args) gives calledFactoryRecord(fn, callee: callee, args: args, valueType: global.valueType, range: global.range)
+		factoryCall(calls, root) gives calledFactoryRecord(fn, calls: calls, id: root, valueType: global.valueType, range: global.range)
 	end 'initializer'
 end 'initialRecordOf'
 
@@ -229,16 +229,25 @@ end 'containerStampValue'
 // this frame owns them; a body's call site hands that job to the statement's own temp list
 // (`Parser.trackOwnedTemp`) and `__module_init` has no statement to end. So each one is dropped right after
 // the call, on the decision the index already made per argument (`GlobalInitArgumentCleanup`).
-function calledFactoryRecord(fn SynthesizedFunction, callee ByteArray, args GlobalInitArgumentArray, valueType MaxonType, range SourceRange) returns ValueId
+//
+// ⭐⭐ **AN ARGUMENT MAY BE ANOTHER CALL, AND THEN THIS IS THE RECURSION** (spec-port
+// `module-level-struct-var`) — `var state = Outer.create(Inner.create(0))`. `id` names the entry to emit in
+// the initializer's flat arena; a nested argument names another entry, and materializing it comes back here.
+// The emitted order is exactly a body's: depth-first, left to right, so the inner call and the drops of
+// ITS borrowed arguments are complete before the outer call is made. `valueType` is supplied by whoever
+// RECEIVES the result — the global's slot for the root, the argument for a nested one — which is why no
+// arena entry carries a return type of its own.
+function calledFactoryRecord(fn SynthesizedFunction, calls GlobalInitCallArray, id InitializerCallId, valueType MaxonType, range SourceRange) returns ValueId
+	let call = globalInitCallAt(calls, id: id)
 	var values = ValueIdArray.create()
 	var labels = ByteArrayArray.create()
-	for arg in args 'eachArgument'
-		values.push(factoryArgumentValue(fn, arg: arg, range: range))
+	for arg in call.args 'eachArgument'
+		values.push(factoryArgumentValue(fn, arg: arg, calls: calls, range: range))
 		labels.push(arg.label)
 	end 'eachArgument'
 
-	let record = fn.emitCall(callee, args: values, argLabels: labels, resultTag: maxonTypeTag(valueType), resultNameId: typeNameIdOf(valueType), range: range)
-	dropBorrowedArguments(fn, args: args, values: values, range: range)
+	let record = fn.emitCall(call.callee, args: values, argLabels: labels, resultTag: maxonTypeTag(valueType), resultNameId: typeNameIdOf(valueType), range: range)
+	dropBorrowedArguments(fn, args: call.args, values: values, range: range)
 	return record
 end 'calledFactoryRecord'
 
@@ -255,14 +264,20 @@ function dropBorrowedArguments(fn SynthesizedFunction, args GlobalInitArgumentAr
 	end 'eachArgument'
 end 'dropBorrowedArguments'
 
-// ONE argument, materialized. A scalar is a `literal` at its own folded type; everything else is a record,
-// built through the very producer a global's own slot goes through — which is what makes "an argument is
-// anything an initializer may be except another call" a fact about the emitted code and not only about the
-// grammar.
-function factoryArgumentValue(fn SynthesizedFunction, arg GlobalInitArgument, range SourceRange) returns ValueId
+// ONE argument, materialized. A scalar is a `literal` at its own folded type; a record is built through the
+// very producer a global's own slot goes through; and a nested CALL is made through the very producer the
+// enclosing call is made through — which is what makes "an argument is anything an initializer may be" a
+// fact about the emitted code and not only about the grammar.
+//
+// ⚠ **ALL THREE HAND BACK A VALUE THIS FRAME OWNS, and `arg.cleanup` answers for it identically.** A record
+// the callee borrows is dropped after the call whether `__module_init` materialized it or a nested factory
+// returned it (`ProgramSignatures.recordArgumentCleanup`), so nothing downstream of here has to know which
+// arm produced the value.
+function factoryArgumentValue(fn SynthesizedFunction, arg GlobalInitArgument, calls GlobalInitCallArray, range SourceRange) returns ValueId
 	return match arg.value 'value'
 		scalar(payload) gives fn.emitTypedLiteral(payload, valueType: arg.valueType, range: range)
 		record(build) gives builtRecord(fn, build: build, valueType: arg.valueType, range: range)
+		call(id) gives calledFactoryRecord(fn, calls: calls, id: id, valueType: arg.valueType, range: range)
 	end 'value'
 end 'factoryArgumentValue'
 
