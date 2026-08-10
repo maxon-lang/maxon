@@ -3362,11 +3362,13 @@ end 'builtinErrorConformance'
 // inlined at `Parser.enumOrdinalFieldAt` so the member's spelling and the rule that decides it cannot
 // come apart.
 //
-// ⚠ Its two INSTANCE siblings `.name` and `.rawValue` are NOT here and are not implemented: both READ a
-// case's raw value off a VALUE at run time, which needs a tag→case mapping `.ordinal` avoids by being the
-// tag itself. The DECLARATION-side half they were once blocked behind is built — the four backings are
-// parsed and `EnumLayout.caseRawValues` records what each case was written as — so what is left for them is
-// the runtime read, not the declaration.
+// ⚠ Its two INSTANCE siblings `.name` and `.rawValue` are NOT here and are not implemented. What they need
+// is a tag→PAYLOAD mapping — a String per case, or a raw value in whatever domain the backing declares —
+// which is a different mechanism from the tag→INDEX arithmetic `.ordinal` computes
+// (`Parser.emitEnumOrdinalLookup`): an index is a number the compare chain can sum, a name is a value that
+// has to be materialized on the selected edge. The DECLARATION-side half they were once blocked behind is
+// built — the four backings are parsed and `EnumLayout.caseRawValues` records what each case was written as
+// — so what is left for them is the runtime read, not the declaration.
 export let EnumOrdinalMemberName = b"ordinal"
 
 // ⭐ **`<Enum>.allCaseNames` — THE CASE NAMES, IN DECLARATION ORDER, AS AN `Array with String`.** A STATIC
@@ -3613,11 +3615,18 @@ export type EnumLayout
 	// DECLARATION INDEX — the bootstrap answers `2` for the third case however it is numbered. The two
 	// coincide for an enum that numbers nothing (`idle`/`running`/`done` ⇒ tags 0,1,2), and they do not
 	// for one that does (`ok = 5` ⇒ tag 5 at index 0). Where they coincide the accessor is the value
-	// itself and costs no instruction; where they do not it needs a tag→index mapping at runtime, which
-	// is `Parser.parseEnumOrdinal`'s stated refusal rather than a wrong answer.
+	// itself and costs no instruction; where they do not it is computed by the branchless tag→index sum
+	// `Parser.emitEnumOrdinalLookup` emits. This predicate is what picks between those two routes, and
+	// nothing else reads it — so it is a COST question, not a support question.
+	//
+	// ⚠⚠ **IT ANSWERS ONLY WHETHER A TAG IS ITS INDEX — NEVER WHERE THE TAG IS, AND READING IT AS BOTH IS A
+	// MEASURED WRONG ANSWER.** "An enum value IS its tag" above is true of a SCALAR enum and false of a
+	// BOXED union, whose value is the box pointer; a boxed union's tags are `0,1,2,…` so this answers true
+	// for one, and `.ordinal` used that as permission to skip the tag load and add zero to an address. Ask
+	// `isBoxed` for where the tag lives and this for what the tag means — see `Parser.parseEnumOrdinal`.
 	//
 	// A FLOAT-backed enum answers false unless its bit patterns happen to be 0,1,2,… — which no float
-	// backing produces — so the refusal covers it without naming it.
+	// backing produces — so it always takes the computed route, without being named here.
 	export function tagsAreDeclarationIndices() returns bool
 		for i in 0 upto self.caseTags.count() 'each'
 			let tag = try self.caseTags.get(i) otherwise panic("EnumLayout.tagsAreDeclarationIndices: caseTags.get OOB at {i} for `{self.kindWord()} {String.from(self.name)}`, which declares {self.caseCount()} cases")

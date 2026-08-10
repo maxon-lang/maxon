@@ -1396,12 +1396,29 @@ export function immutableMutatingCallMessage(blamed String, paramName String, fu
 end 'immutableMutatingCallMessage'
 
 // ⭐ **WHAT SEPARATES AN UNNUMBERED ENUM'S TAG FROM ITS ORDINAL — nothing, and this constant IS that
-// claim.** `Parser.parseEnumOrdinal` reaches its emit only on `EnumLayout.tagsAreDeclarationIndices`,
-// which proves `caseTags[i] == i` for every case; the offset the accessor then adds is therefore zero by
-// PROOF rather than by luck. It is named so the `+ 0` in the emit reads as the identity it was shown to
-// be, instead of as a literal a reader has to re-derive — and so the day a tag→index mapping lands, the
-// thing that changes is this expression and not a bare `0` nobody can search for.
+// claim.** `Parser.parseEnumOrdinal` adds this offset only past `EnumLayout.tagsAreDeclarationIndices`,
+// which proves `caseTags[i] == i` for every case; the offset is therefore zero by PROOF rather than by
+// luck. It is named so the `+ 0` in the emit reads as the identity it was shown to be, instead of as a
+// literal a reader has to re-derive.
+//
+// ⚠ It is the offset from a TAG to an ordinal, and says nothing about where that tag was found — the
+// accessor answers that first, and a BOXED union's tag is a load rather than the value (see there).
 let EnumOrdinalTagOffset = 0 as ParsedInt
+
+// ⭐ **THE ORDINAL OF THE FIRST DECLARED CASE, AND THE SEED OF THE TAG→INDEX SUM** — a DIFFERENT fact from
+// the offset above, which is why it is a second constant and not a second use of the first. The renumbered
+// accessor computes `Σᵢ i × (tag == tagᵢ)` (`Parser.emitEnumOrdinalLookup`), and case 0's term is
+// `0 × (tag == tag₀)` — identically zero whichever case the value is, so it is elided and the running sum
+// STARTS at it. The loop therefore runs from 1, and this names the term it starts from rather than leaving a
+// bare `0` whose relationship to that bound a reader has to reconstruct.
+let FirstCaseOrdinal = 0 as ParsedInt
+
+// The first case the tag→index sum emits a TERM for. `FirstCaseOrdinal`'s own term is identically zero and
+// is folded into the seed, so the chain starts at the case AFTER it — the same quantity as
+// `FirstCaseOrdinal + 1`, and spelled separately rather than computed because the two live in different
+// domains: the seed is the `ParsedInt` a `literal` op carries, this is the `CaseIndex` the loop counts and
+// `EnumLayout.tagOfIndex` is indexed by.
+let FirstSummedCaseIndex = 1 as CaseIndex
 
 // Every type NAME one file writes in a type position (P1.9). See `Parser.usedTypeNames`.
 export typealias UsedTypeNameSet = Set with ByteArray
@@ -29826,15 +29843,20 @@ export type Parser
 			end 'eachCase'
 		end 'initEnumCoverage'
 
-		// The DISPATCH SUBJECT — what each arm's tag compare reads. A scalar enum's value IS its tag;
-		// a boxed union's value is a heap POINTER, so its i64 tag is loaded ONCE here (into the first
-		// test block, which dominates every arm) from offset 0. The scrutinee `scrut` itself stays the
-		// BOX, which is what a payload binding reads its slots out of. Mirrors v1's
-		// `matchDispatchSubject`.
+		// The DISPATCH SUBJECT — what each arm's tag compare reads — through `emitEnumTagOf`, the one place
+		// that answers where an enum value's tag lives (`.ordinal` reads the same door; see there for the
+		// wrong answer their separate copies of this decision produced). For a boxed union that is a load
+		// emitted ONCE here, into the first test block, which dominates every arm; for a scalar enum it is
+		// the scrutinee itself and nothing is emitted. The scrutinee `scrut` stays the BOX either way, which
+		// is what a payload binding reads its slots out of. Mirrors v1's `matchDispatchSubject`.
+		//
+		// The `isEnumMatch` guard stays HERE and is not the helper's: it is a question about the SCRUTINEE
+		// (does this value belong to a declared enum at all?), where the helper's is about the LAYOUT. A
+		// scalar match has no layout to ask.
 		var dispatchSubject = scrut
-		if isEnumMatch and requireEnumLayout(enumMatch).isBoxed() 'boxedDispatch'
-			dispatchSubject = self.emitUnionTagLoad(scrut, range: SourceRange.ofToken(matchTok))
-		end 'boxedDispatch'
+		if isEnumMatch 'enumDispatchSubject'
+			dispatchSubject = self.emitEnumTagOf(scrut, layout: requireEnumLayout(enumMatch), range: SourceRange.ofToken(matchTok))
+		end 'enumDispatchSubject'
 
 		// ⭐ **MATCH-CONSUME BOOKKEEPING (P1.3 slice 2).** A managed payload BINDING takes its field out of
 		// the box, and `scrutOwned` decides HOW: an OWNED local is MOVED out of, a BORROWED one (a
@@ -31764,7 +31786,7 @@ export type Parser
 	end 'markEnumCovered'
 
 	// ⭐ **COMPARE A SCALAR AGAINST AN INTEGER LITERAL** — `subject <op> literal`, emitting `MaxonOp.compare`
-	// DIRECTLY rather than through `emitCompare`, and that bypass is load-bearing three times over.
+	// DIRECTLY rather than through `emitCompare`, and that bypass is load-bearing four times over.
 	//
 	//   • **The MATCH DISPATCH** — a point leaf's `==`, a range leaf's `>=`/`<=`, an internal node's `<`
 	//     pivot. `emitCompare` refuses a `union` operand (E3066), and a PAYLOAD-FREE union match dispatches
@@ -31775,6 +31797,17 @@ export type Parser
 	//   • **AN `Ordering` VERDICT** (`emitOrderingVerdict`) — the tag test that turns a `compare` result into
 	//     an ordering operator's bool. Its subject is a `named(Ordering)` value, which `emitCompare` would
 	//     hand to the same `valueIsUnion` gate the match dispatch dodges.
+	//   • **A RENUMBERED ENUM'S `.ordinal`** (`emitEnumOrdinalLookup`) — one `tag == tagᵢ` term of the
+	//     branchless tag→index sum. Its subject is the same `named(<Enum>)` (or loaded i64) tag the match
+	//     dispatch tests, for the same E3066 reason, which is why the two read this one door.
+	//
+	// ⚠ **THE FOURTH CALLER IS THE FIRST WHOSE 0/1 IS NOT CONSUMED BY A BRANCH, AND THAT IS A REAL
+	// DIFFERENCE.** The three above feed the result to a `condBranch`, where a `boolean` mint is exactly
+	// right and the backends need never materialize it at all (x64 fuses the `cmp` into the `jcc`). The
+	// ordinal sum feeds it to a MULTIPLY, as a number — so it materializes, and its mint type becomes an
+	// arithmetic operand type. That caller re-records the result `integer` at its own site rather than
+	// changing this door's mint, which would move the other three (see `retypeValue`'s header, where the
+	// safety of that re-record is argued).
 	//
 	// ⚠ **THE PARAMETER IS `literal`, NOT `tag`.** It was `tag` while the match dispatch was its only caller,
 	// which named that caller's USE of the operand rather than the operand — and a flag test passing
@@ -32627,8 +32660,31 @@ export type Parser
 	// try fork minted as `integer` for its zero test; a boxed `(e)` binding re-records it as
 	// its UNION type so `match e` dispatches through the box (`enumMatchFor`) and its scope-exit drop routes
 	// to `__destruct_<U>` (`decrefCalleeFor`), both of which read the value TAG. Only the two type columns
-	// move — the value's Std width is unchanged (`valueTagToStdType` collapses both `integer` and `named` to
-	// i64), so the already-emitted `flag != 0` compare and the `tryCall`'s flag register are unaffected.
+	// move.
+	//
+	// ⚠⚠ **AND THE Std WIDTH MOVES WITH THEM — THIS HEADER USED TO SAY IT COULD NOT, AND THAT WAS A CLAIM
+	// ABOUT THE CALLERS RATHER THAN ABOUT THE DOOR.** Every caller but one stays inside the i64 family
+	// (`valueTagToStdType` collapses `integer`, `named`, `structRef`, `string` alike), so for those the
+	// already-emitted ops are provably unaffected — the `flag != 0` compare and the `tryCall`'s flag
+	// register above are the worked example. That is a property of WHERE it is called, not of what it does:
+	// the columns it writes are exactly the columns `valueTagToStdType` reads, so a re-record ACROSS width
+	// families is a width change, and a caller may not assume otherwise.
+	//
+	// ⭐ **THE ONE CALLER THAT CROSSES A WIDTH FAMILY IS `emitEnumOrdinalLookup`, `boolean` → `integer`
+	// (i1 → i64), and it is safe for two reasons that belong here rather than only at the call site.** It
+	// re-records a `compare` result so the multiply that consumes it reads an i64 operand type:
+	//
+	//   • **NO EMITTED OP DEPENDS ON THAT VALUE'S OWN WIDTH.** `lowerCompare` takes the Std `cmp`'s
+	//     `operandType` from its `lhs` — the two things being compared — never from its result, and the
+	//     result is re-recorded one line after it is minted, before anything else can read it.
+	//   • **THE BACKENDS TYPE A COMPARE'S RESULT FROM THE OP, NOT FROM THIS COLUMN.** wasm's valtype table
+	//     records `cmp` as i32 whatever the Std type says, and widens at the consuming op
+	//     (`coerceOnStack`); x64 materializes with `setcc` + a REX.W `movzx` and arm64 with `cset`, both
+	//     full-width. So the widened claim is one all three already satisfy.
+	//
+	// ⇒ A NEW caller crossing a width family owes those same two questions about ITS value. Crossing into or
+	// out of `float` (f64) or `boolean` (i1) is the case to think hardest about; within the i64 family there
+	// is nothing to ask.
 	function retypeValue(value ValueId, valueType MaxonType)
 		try self.valueTags.set(value, value: maxonTypeTag(valueType)) otherwise panic("retypeValue: v{value} has no type slot — every SSA value is minted through mintValue")
 		try self.valueNameIds.set(value, value: typeNameIdOf(valueType)) otherwise panic("retypeValue: v{value} has no type-name slot — the two type columns are filled in lockstep")
@@ -38761,6 +38817,34 @@ export type Parser
 	function emitUnionTagLoad(box ValueId, range SourceRange) returns ValueId
 		return self.emitIndirectLoad(MaxonType.integer, box: box, offset: UnionTagOffset, storageType: MaxonType.integer, range: range)
 	end 'emitUnionTagLoad'
+
+	// ⭐⭐ **WHERE AN ENUM VALUE'S TAG LIVES — THE ONE ANSWER, read by the `match` DISPATCH and by `.ordinal`.**
+	// A SCALAR enum's value IS its tag (`parseEnumLiteral` emits the tag as the value), so the tag is the
+	// value and this emits nothing. A BOXED union's value is a heap POINTER, so its i64 tag is LOADED from
+	// offset 0 through `emitUnionTagLoad` above.
+	//
+	// ⚠⚠ **IT IS ONE FUNCTION BECAUSE THE DECISION DRIFTS, NOT ONLY THE OFFSET — AND THE DRIFT IS MEASURED.**
+	// Both readers already shared `emitUnionTagLoad`, so they could never disagree about WHERE in the box a
+	// tag sits; they each carried their own copy of WHETHER to look there, and that is the copy that came
+	// apart. `.ordinal` did not have one at all: it read `tagsAreDeclarationIndices` (true for a boxed
+	// union, whose tags are `0,1,2,…`) as permission to treat the value as the tag, so
+	// `Container.value(7).ordinal` printed 7077912 and `Container.empty.ordinal` printed 7078078 against the
+	// oracle's 1 and 0 — box addresses, which moved between runs. Reunited here, a reader that forgets the
+	// question cannot be written: there is nowhere to ask it.
+	//
+	// ⚠ **EVERY CASE OF A BOXED UNION IS BOXED, PAYLOAD-FREE ONES INCLUDED** — `isBoxed` decides per UNION
+	// (`maxPayloadArity() > 0`), not per case, so `empty` beside a `value(n)` is a bare tag in a box and its
+	// value is a pointer too. That is why the predicate here is the layout's and never the case's.
+	//
+	// A caller that has not already established the value IS an enum keeps that guard at its own site — the
+	// `match` dispatch's `isEnumMatch`, which is a question about the SCRUTINEE and not about the layout.
+	function emitEnumTagOf(value ValueId, layout EnumLayout, range SourceRange) returns ValueId
+		if not layout.isBoxed() 'theValueIsTheTag'
+			return value
+		end 'theValueIsTheTag'
+
+		return self.emitUnionTagLoad(value, range: range)
+	end 'emitEnumTagOf'
 
 	// Load a payload field out of the box at `8 + slot*8` — the `emitFieldLoad` split, one op further.
 	// A SCALAR is minted at the field's DECLARED type (so a nested `match dir` sees a `Direction`, and the
@@ -54990,7 +55074,33 @@ export type Parser
 	// Guarded by `enumOrdinalFieldAt`, so the base is a local binding whose value belongs to a declared
 	// enum; this consumes `<base> . ordinal` and answers.
 	//
-	// ⭐⭐ **IT IS SPELLED `<enum> + 0`, AND THAT IS THE MEANING RATHER THAN A TRICK FOR PRODUCING IT.**
+	// ⭐⭐ **IT ASKS TWO INDEPENDENT QUESTIONS, IN THIS ORDER, AND THEY MUST NEVER BE FUSED INTO ONE.**
+	//
+	//   1. **WHERE IS THE TAG?** Not asked here at all — delegated to `emitEnumTagOf`, the ONE function that
+	//      answers it, which the `match` dispatch reads too. So the accessor and the `match` agree about
+	//      where a union keeps its tag by construction, and — the part that matters — about WHETHER to go
+	//      looking, which is the half they each used to decide for themselves.
+	//   2. **IS THAT TAG THE ORDINAL, OR ONLY A KEY TO IT?** Where the tag column is `0,1,2,…` the ordinal
+	//      is the tag and the accessor costs no instruction; where the author renumbered the cases it is a
+	//      different number and the mapping has to be computed (`emitEnumOrdinalLookup` below).
+	//   3. **IS THE ANSWER ALREADY AN `integer`-TYPED VALUE?** A loaded tag is; an unboxed enum's value is
+	//      `named(<Enum>)` and needs the `+ 0` below. Asked of the value's TYPE COLUMN, not re-derived from
+	//      question 1 — see the call site.
+	//
+	// ⚠ **THEY ARE INDEPENDENT EVEN THOUGH ONE COMBINATION IS UNREACHABLE TODAY.** A boxed union cannot
+	// currently declare raw values, so "boxed AND renumbered" never arrives — but that is a fact about what
+	// the case reader admits this month, not a law about ordinals, and a single fused condition would answer
+	// the day it changes by silently taking the wrong route. Each question is asked where it is decided.
+	//
+	// ⚠⚠ **QUESTION 1 WENT UNASKED UNTIL IT WAS MEASURED, AND EVERY BOXED UNION'S `.ordinal` WAS A BOX
+	// POINTER** — `Container.value(7).ordinal` printed 7077912 and `Container.empty.ordinal` printed 7078078
+	// against the oracle's 1 and 0, and the numbers MOVED between runs because they were addresses. Both arms
+	// of the union, not only the payload-bearing one (see `emitEnumTagOf`). `tagsAreDeclarationIndices` was
+	// true for such a union, so it took the `+ 0` route and added zero to an address. This is why the
+	// questions are separate: that one predicate was answering all three, and it is only ever an answer to
+	// the second.
+	//
+	// ⭐⭐ **PAST BOTH QUESTIONS, AN UNBOXED ENUM'S ANSWER IS SPELLED `<enum> + 0`, AND THAT IS THE MEANING RATHER THAN A TRICK FOR PRODUCING IT.**
 	// An enum value IS its tag (`parseEnumLiteral`), so under this function's guard the ordinal and the
 	// value are the same 64 bits — and `s + 0` is already a legal Maxon expression whose result the
 	// language types `integer` (`TypeRules.arithResultTag`, a `named` operand being `TypeClass.numeric`).
@@ -55006,11 +55116,6 @@ export type Parser
 	// the `match s` two lines later. (`s as Integer` does not help for the same reason: shv2's `as` inside
 	// one numeric domain leaves the tag alone, so it is refused identically.)
 	//
-	// ⚠ **A RENUMBERED ENUM IS REFUSED, NOT ANSWERED WRONG.** `enum Code { ok = 5 }` has ordinal 0 and tag
-	// 5, and reading the value would answer 5 — a silent wrong answer, which is the one outcome forbidden
-	// here. The mapping it needs is a runtime tag→index dispatch; the refusal carries what is missing, in
-	// the same `unsupported` idiom every other scoped mechanism in this parser reports with.
-	//
 	// It takes no `IrFunction`: the emitters it calls append to `self.currentBlock`, exactly as the
 	// `.managed` field door's do. A parameter kept for symmetry would be an unused one (E3012).
 	function parseEnumOrdinal() returns ValueId throws ParseError
@@ -55025,15 +55130,92 @@ export type Parser
 		try self.requireBindingLive(baseBinding, nameTok: baseTok)
 
 		let layout = requireEnumLayout(self.enumMatchFor(baseBinding.boundValue))
+		let range = SourceRange.between(baseTok, last: memberTok)
+
+		// QUESTION 1 — where the tag is, asked through the door the `match` dispatch asks it through.
+		let tag = self.emitEnumTagOf(baseBinding.boundValue, layout: layout, range: range)
+
+		// QUESTION 2 — whether that tag is already the answer. The lookup reads the tag as a bare i64, which
+		// both forms of it are, so it needs to know nothing about question 1.
 		if not layout.tagsAreDeclarationIndices() 'renumberedCases'
-			throw ParseError.unsupported("'.{String.from(memberTok.value)}' on '{String.from(layout.name)}', whose cases declare explicit raw values — an ordinal is the DECLARATION INDEX and not the value, so reading it needs a runtime tag-to-index mapping; it arrives with the rung that lands the `.rawValue`/`.name` accessors", line: memberTok.line, column: memberTok.column)
+			return try self.emitEnumOrdinalLookup(layout, tag: tag, anchor: memberTok, range: range)
 		end 'renumberedCases'
 
-		let range = SourceRange.between(baseTok, last: memberTok)
+		// QUESTION 3, and it is a third question rather than question 1 re-read: the tag IS the ordinal here,
+		// so all that is left is handing it back as a NUMBER rather than as a value of the enum's type. That
+		// asks what this value is TYPED, which is the predicate spelled — a LOADED tag is already `integer`
+		// and is returned as it stands, and the `+ 0` below is the same obligation where it is not. Reading
+		// `isBoxed` for this would be right only while `emitEnumTagOf`'s load happens to mint `integer`; the
+		// type column is what the answer actually turns on, so it is what is asked.
+		if self.tagOf(tag) == ValueTypeTag.integer 'tagIsAlreadyANumber'
+			return tag
+		end 'tagIsAlreadyANumber'
+
 		let zero = self.emitLiteral(EnumOrdinalTagOffset, valueType: MaxonType.integer, range: range)
 
-		return try self.emitBinOp(baseBinding.boundValue, rhs: zero, op: MaxonBinOp.add, opTok: memberTok)
+		return try self.emitBinOp(tag, rhs: zero, op: MaxonBinOp.add, opTok: memberTok)
 	end 'parseEnumOrdinal'
+
+	// ⭐⭐ **THE TAG→INDEX MAPPING A RENUMBERED ENUM'S `.ordinal` NEEDS — `Σᵢ i × (tag == tagᵢ)`, BRANCHLESS.**
+	// `enum Code { ok = 5 }` has ordinal 0 and tag 5, so on this route the tag is NOT the answer and the
+	// answer has to be computed from it. Exactly one of the comparisons holds — an enum value is one of the
+	// declared tags, the same closure `match`'s exhaustiveness rests on (nothing in the language mints an enum
+	// value except a case construct, a match binding, or a value that came from one) — so the sum is that
+	// case's index and every other term is zero.
+	//
+	// It takes the TAG, not the receiver: `parseEnumOrdinal` has already answered where the tag lives (the
+	// value itself, or a load out of a boxed union's offset 0), and both forms are the bare i64 the compares
+	// below read. So this function needs to know nothing about boxing, and cannot get that question wrong.
+	//
+	// ⭐ **STRAIGHT-LINE, NOT A COMPARE/BRANCH CHAIN, AND THAT IS WHY IT CAN LIVE IN AN EXPRESSION AT ALL.**
+	// A branch chain would have to fork mid-expression and merge n arms through a phi (`finalizeMatchMerge`'s
+	// machinery), which is the apparatus a `match` EXPRESSION pays for because its arms run user code. Here
+	// every arm is a constant, so the selection is arithmetic: a compare materializes its own 0/1
+	// (x64 `setcc`+`movzx`, arm64 `cset`, wasm's i32 result zero-extended by `coerceOnStack`), one `mul`
+	// scales it by the index, one `add` accumulates. Three ops per case, no blocks, no merge, and the whole
+	// thing is an ordinary operand wherever `s.ordinal` was written.
+	//
+	// ⚠ **IT IS LINEAR IN THE CASE COUNT, PER READ, AND THAT IS THE ACCEPTED COST.** It is the shape v1 emits
+	// (`LowerMaxonToStd.lowerEnumOrdinalLookup`) and the one `EnumLayout.indexOfCase` already argues for —
+	// case counts are tiny — and the alternative shapes each buy less than they cost: a per-enum helper
+	// FUNCTION trades n compares for a call/ret whose prologue outweighs the work at these sizes (the
+	// argument `CheckedDivisionRuntime`'s header makes for expanding a checked divide in place), and a table
+	// lookup keyed by TAG cannot be indexed by one — `200`/`404`/`500` is exactly the case that reaches here.
+	//
+	// ⭐⭐ **THE COMPARE IS THE i64 IDENTITY COMPARE ON THE TAG FOR EVERY BACKING, INCLUDING FLOAT — A
+	// DELIBERATE DEPARTURE FROM v1, WHICH USES `cmpF64Eq` THERE.** `.ordinal` asks WHICH CASE this is, and
+	// shv2 answers that question in exactly one way everywhere else: an i64 compare against the tag column
+	// (`EnumLayout`'s header — a float-backed case's tag is its IEEE-754 bit pattern, and `match` dispatches
+	// on it with no float register class). Routing this through the same `emitCompareAgainstLiteral` the match
+	// dispatch uses is what makes the accessor and the `match` unable to disagree about which case a value is.
+	// It is also strictly the more correct compare: IEEE equality identifies `+0.0` with `-0.0`, which are two
+	// DISTINCT declarable cases here (`rawValueCollidesAt` compares tags, so it admits both) — under an f64
+	// compare `low = 0.0  negLow = -0.0` answers ordinal 1 for BOTH, and under the tag compare each answers
+	// its own index.
+	function emitEnumOrdinalLookup(layout EnumLayout, tag ValueId, anchor Token, range SourceRange) returns ValueId throws ParseError
+		var ordinal = self.emitLiteral(FirstCaseOrdinal, valueType: MaxonType.integer, range: range)
+
+		for i in FirstSummedCaseIndex upto layout.caseCount() 'eachLaterCase'
+			// ⚠ **THE COMPARE'S RESULT IS RE-RECORDED AS A NUMBER, AND THE WIDTH CHANGE IS THE POINT.** The
+			// mint types it `boolean` (i1 at Std) because that is what every other caller of that door feeds a
+			// branch with; here the 0/1 is an arithmetic OPERAND. Left `boolean` it does not reach the machine
+			// at all — `bool` is its own `TypeClass` and not `numeric`, so `requireBinOpOperands` refuses the
+			// multiply outright — and past that gate `appendStdBinOp` would take the multiply's operand type
+			// from this very value and ask for an i1 one. `integer` is the value's true type on this path
+			// (`TypeRules.BoolTrueValue` is 1), it is minted one line above so no other reader can hold the
+			// old claim, and the three backends each hand back a zero-extended machine word (see the header),
+			// so the widened claim is one they already satisfy.
+			let isThisCase = self.emitCompareAgainstLiteral(tag, literal: layout.tagOfIndex(i), op: MaxonCmpOp.eq, opTok: anchor)
+			self.retypeValue(isThisCase, valueType: MaxonType.integer)
+
+			let caseOrdinal = self.emitLiteral(i as ParsedInt, valueType: MaxonType.integer, range: range)
+			let contribution = try self.emitBinOp(isThisCase, rhs: caseOrdinal, op: MaxonBinOp.mul, opTok: anchor)
+
+			ordinal = try self.emitBinOp(ordinal, rhs: contribution, op: MaxonBinOp.add, opTok: anchor)
+		end 'eachLaterCase'
+
+		return ordinal
+	end 'emitEnumOrdinalLookup'
 
 	// ⭐ **`<arrayBinding> . managed . <member>(` — the CHAINED spelling, for the two positions where a bare
 	// `arr.managed` denotes nothing a program can want.** A STATEMENT of it would build a buffer reference and
