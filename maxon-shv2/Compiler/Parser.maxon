@@ -1312,6 +1312,23 @@ end 'asyncReturnTypeTag'
 // both references' convention, so it is recorded here rather than taken unilaterally.
 export let SelfParamName = b"__self"
 
+// ⭐ **THE RECEIVER'S SOURCE SPELLING, WHICH IS NOT ITS KEY.** `borrowSubjectBindingOf` must be given
+// `__self` to resolve the receiver out of `Scope`, and no source ever writes that — so an E3070 that
+// blamed the key would point the reader at a name absent from their file. `self` is the spelling they
+// wrote, or (for the BARE call that wrote no receiver at all) the one they would.
+let SelfBlameName = b"self"
+
+// The name an E3070 blames for a write, given the name its subject RESOLVES under. They differ for
+// exactly one storage — see `SelfBlameName` — and the translation is here, at the one place that knows
+// both, rather than at the message, which is `BorrowCheck`'s and cannot see the parameter convention.
+function borrowSubjectBlameName(subjectName ByteArray) returns ByteArray
+	if subjectName.equals(SelfParamName) 'theReceiverParameter'
+		return SelfBlameName
+	end 'theReceiverParameter'
+
+	return subjectName
+end 'borrowSubjectBlameName'
+
 // The name the HIDDEN binding of a destructuring `let (x, y) = …` takes, ahead of its source position
 // (P1.10) — `__destructure_12_3`. The position is what makes it unique per declaration; the `__` prefix is
 // what keeps it out of the source's reach, since `requireUnreservedName` refuses (E2051) every declaration
@@ -20087,7 +20104,7 @@ export type Parser
 		// (`BorrowCheckPass.cs:129-132`); shv2 takes no reference there, so killing the borrow would be
 		// unsound and the only two answers left are retain-on-get or refuse. This rung IS the refusal.
 		if self.functionHoldsABorrow(func) 'mayConflictWithABorrow'
-			self.noteBorrowSubjectWrite(func, subjectName: self.borrowSubjectNameAt(nameIndex), display: ReassignMutationDisplay, anchor: nameTok, mutatesSubject: true)
+			self.noteBorrowSubjectRebind(func, subjectName: self.borrowSubjectNameAt(nameIndex), anchor: nameTok)
 		end 'mayConflictWithABorrow'
 
 		let rhsStart = self.pos
@@ -20356,7 +20373,7 @@ export type Parser
 		// `g = StringArray.create()` + `print("{s}")`. The subject comes through `borrowSubjectNameAt` like
 		// every other door's, off the target's own token — the derivation, not the token's text.
 		if self.functionHoldsABorrow(func) 'mayConflictWithABorrow'
-			self.noteBorrowSubjectWrite(func, subjectName: self.borrowSubjectNameAt(nameIndex), display: ReassignMutationDisplay, anchor: nameTok, mutatesSubject: true)
+			self.noteBorrowSubjectRebind(func, subjectName: self.borrowSubjectNameAt(nameIndex), anchor: nameTok)
 		end 'mayConflictWithABorrow'
 
 		try self.emitCheckedGlobalStore(func, block: block, nameTok: nameTok, label: label, valueType: valueType)
@@ -27751,6 +27768,33 @@ export type Parser
 	//
 	// Every asker of "which storage is this?" comes through here — the subject id, the storage mask, and
 	// the iteration lock — so a third kind of storage taught to one of them is taught to all three.
+	// ⭐⭐ **THE STORAGE A RECEIVER'S ELEMENT BORROW AND ITS WRITE BOTH KEY ON (W61).** A receiver that names a
+	// binding answers with that name. One that names NOTHING and IS the enclosing `self` answers `self`,
+	// because a record-collapsed `Array` keeps its elements in its OWN storage: a bare `get(0)` borrows out of
+	// the very thing a bare `set(0, …)` writes, and with no name between them neither door could say so.
+	// MEASURED `0xC0000005` on `get`/`set` spelled bare inside `type Array`'s own body, with every prefixed
+	// spelling of that same program already refused — and `stdlib/Array.maxon` writes the bare spelling
+	// throughout.
+	//
+	// ⚠ **ONE DERIVATION, TWO ASKERS, ON PURPOSE** — the mint (`emitContainerElementAccessor`) and the write
+	// (`noteReceiverBorrowSubjects`). Answered separately they would be two opinions about which storage this
+	// is, and a borrow filed under one key against a write filed under another is a use-after-free with
+	// nothing anywhere left to report it. The empty name WAS that disagreement, spelled as an absence.
+	//
+	// ⚠ Inside a CLOSURE `self` is a capture rather than a `Scope` binding, and `receiverIsEnclosingSelf`
+	// answers false there — so this yields no subject and the closure body is left exactly as it was.
+	function receiverBorrowSubjectName(subjectName ByteArray, receiver ValueId) returns ByteArray
+		if not subjectName.isEmpty() 'namesABinding'
+			return subjectName
+		end 'namesABinding'
+
+		if not self.receiverIsEnclosingSelf(receiver) 'namesNoStorageThisBodyCanKey'
+			return EmptySourceText
+		end 'namesNoStorageThisBodyCanKey'
+
+		return SelfParamName
+	end 'receiverBorrowSubjectName'
+
 	function borrowSubjectBindingOf(subjectName ByteArray) returns VarInfo
 		if self.scope.contains(subjectName) 'bindingOfThisFrame'
 			return self.scope.getInfo(subjectName)
@@ -27993,17 +28037,63 @@ export type Parser
 	// can never conflict — the resolver would reject it on `activationToken > site.token` — so a function that
 	// has not yet completed a borrow records nothing, allocates nothing, and leaves its facts at the shared
 	// empty. That is the same reading `bindingIsIterationLocked`'s own empty check states, and the same reason.
-	function noteBorrowSubjectWrite(func IrFunction, subjectName ByteArray, display ByteArray, anchor Token, mutatesSubject bool)
-		if not mutatesSubject or subjectName.isEmpty() 'notAWriteThroughANamedBinding'
+	//
+	// ⭐⭐ **THE RECEIVER IS PASSED, BECAUSE THE SUBJECT NAME ALONE CANNOT SPEAK FOR THE BARE SPELLING (W61).**
+	// A container method on the enclosing `self` — `set(0, value: b)` inside `type Array`'s own body — names
+	// no storage at all, so this door used to return on the empty name and the write went unrecorded. The
+	// `managed.`-prefixed spelling of the identical program was refused while the bare one **SEGFAULTED**
+	// (measured `0xC0000005`, and `stdlib/Array.maxon` writes the bare spelling throughout). The receiver
+	// answers it: `self` stands for every self-field storage of the enclosing receiver, which is the rule
+	// `noteReceiverBorrowSubjects` already held for the CALL-ARGUMENT door and now holds for both.
+	function noteBorrowSubjectWrite(func IrFunction, receiver ValueId, subjectName ByteArray, display ByteArray, anchor Token, mutatesSubject bool)
+		if not mutatesSubject 'notAWrite'
 			return
-		end 'notAWriteThroughANamedBinding'
+		end 'notAWrite'
 
 		if not self.functionHoldsABorrow(func) 'nothingBorrowedYet'
 			return
 		end 'nothingBorrowedYet'
 
-		func.borrowFacts.mutations.push(MutationSite.createContainerWrite(self.borrowSubjectIdOf(func, subjectName: subjectName), subjectName: subjectName, token: self.pos, line: anchor.line, column: anchor.column, display: display))
+		self.noteReceiverBorrowSubjects(func, callee: EmptySourceText, display: display, anchor: anchor, argColumn: 0, id: receiver, subjectName: subjectName)
 	end 'noteBorrowSubjectWrite'
+
+	// ⭐ **THE REBIND DOOR — `arr = other`, `self.items = other`, and a top-level `var`'s store.** Separate
+	// from the container door above because a rebind has no RECEIVER to stand for a storage: its target
+	// names one or there is nothing to record, so there is no fan-out to ask for. The write's token is the
+	// same derivation either way (`containerWriteToken`, reached through the shared recorder), and its
+	// answer for a rebind is the cursor itself unless the RHS opens with a group — which is the RHS the
+	// write still happens after, so the later token is right there too.
+	function noteBorrowSubjectRebind(func IrFunction, subjectName ByteArray, anchor Token)
+		if subjectName.isEmpty() 'notAWriteThroughANamedBinding'
+			return
+		end 'notAWriteThroughANamedBinding'
+
+		self.recordContainerMutationSite(func, subjectName: subjectName, display: ReassignMutationDisplay, anchor: anchor)
+	end 'noteBorrowSubjectRebind'
+
+	// ⭐⭐ **THE TOKEN A CONTAINER WRITE HAPPENS AT IS THE CLOSING `)` OF ITS ARGUMENT LIST, NOT THE METHOD
+	// NAME (W61)** — and the difference is a whole class of correct programs. `xs.set(w, value: v)` evaluates
+	// `v` and only THEN writes, and every borrowed value a container write ACCEPTS has its reference taken
+	// before the call: `moveManagedValueInto` promotes a borrowed String to an owned copy,
+	// `referenceBorrowedOpaqueElement` retains a borrowed opaque `T` through `retainFunc@64`, and a borrowed
+	// struct is refused outright. So a borrow whose LAST USE is the write's own argument cannot be read after
+	// the write, and the record the write displaces is not the one it stores.
+	//
+	// Recorded at the method name instead, such a borrow read as LIVE and `let v = try managed.get(i) …` +
+	// `try managed.set(w, value: v) …` — the move-an-element-down step every one of
+	// `stdlib/helpers/sort/`'s partition and merge bodies is built from — was refused with no sound program
+	// to replace it.
+	//
+	// ⚠ **THE CALL-ARGUMENT DOOR ALREADY RECORDED THE LATER TOKEN** (`recordCallArgMutationSite` runs from
+	// `parseCallArgs`, past the argument), so this is the two doors agreeing on when a write happens rather
+	// than a new rule — and their disagreement was the odd one out.
+	function containerWriteToken() returns TokenIndex
+		if not self.at(TokenKind.leftParen) 'noArgumentList'
+			return self.pos
+		end 'noArgumentList'
+
+		return self.matchingRightParenOf(self.pos)
+	end 'containerWriteToken'
 
 	// ⭐ **THE CALL-ARGUMENT DOOR: a borrow subject handed to a CALLEE.** `grow(arr)` destroys the element the caller
 	// borrowed exactly as `arr.clear()` does (measured: the oracle reports E3070 and shv2 segfaulted), and it
@@ -28045,6 +28135,53 @@ export type Parser
 		self.recordCallArgMutationSite(func, callee: callee, anchor: anchor, argColumn: argColumn, argLabel: argLabel, subjectName: self.borrowSubjectNameAt(valueStart))
 	end 'noteBorrowSubjectCallArg'
 
+	// ⭐ **THE CONTAINER-WRITE RECORDER — the site shape whose write the PARSER already settled**, so it
+	// carries no callee and `mutationSiteWrites` waves it straight through. The `functionHoldsABorrow` gate
+	// is repeated here for `recordCallArgMutationSite`'s reason: this is the authority, and each caller's own
+	// test is the cost gate that keeps a `Scope` walk off the hot statement path.
+	function recordContainerMutationSite(func IrFunction, subjectName ByteArray, display ByteArray, anchor Token)
+		if subjectName.isEmpty() 'namesNoStorage'
+			return
+		end 'namesNoStorage'
+
+		if not self.functionHoldsABorrow(func) 'nothingBorrowedYet'
+			return
+		end 'nothingBorrowedYet'
+
+		self.pushMutationSiteInTokenOrder(func, site: MutationSite.createContainerWrite(self.borrowSubjectIdOf(func, subjectName: subjectName), subjectName: borrowSubjectBlameName(subjectName), token: self.containerWriteToken(), line: anchor.line, column: anchor.column, display: display))
+	end 'recordContainerMutationSite'
+
+	// ⭐⭐ **THE SITES ARE KEPT IN TOKEN ORDER, AND SINCE W61 THAT IS NO LONGER THE ORDER THEY ARRIVE IN.** A
+	// container write's token is the closing `)` of its argument list (`containerWriteToken`), so an OUTER
+	// write is recorded first and happens LAST: `xs.set(0, value: try ys.pop() otherwise "")` files `xs` at
+	// the outer `)` and then `ys` at the inner one, which is a DECREASE. The resolver's walk is linear only
+	// because the sites are non-decreasing, and it panics on a decrease rather than silently stopping to
+	// report conflicts (`checkFunctionBorrowConflicts`) — so the order is restored at the ONE push instead
+	// of being sorted out later or asserted away.
+	//
+	// The scan is backwards from the end, so a site that already belongs last — every site of a body with no
+	// nested container write, which is nearly all of them — costs one comparison. Equal tokens keep arrival
+	// order, which is what a receiver fan-out's several sites want.
+	function pushMutationSiteInTokenOrder(func IrFunction, site MutationSite)
+		var facts = func.borrowFacts
+		var at = facts.mutations.count()
+		while at > 0 'findTheInsertionPoint'
+			let previousToken = (try facts.mutations.get(at - 1) otherwise panic("pushMutationSiteInTokenOrder: mutations.get OOB at {at - 1} inside count()")).token
+			if previousToken <= site.token 'belongsHere'
+				break
+			end 'belongsHere'
+
+			at = at - 1
+		end 'findTheInsertionPoint'
+
+		if at == facts.mutations.count() 'appends'
+			facts.mutations.push(site)
+			return
+		end 'appends'
+
+		facts.mutations.insert(at, value: site)
+	end 'pushMutationSiteInTokenOrder'
+
 	// The recorder every call-ARGUMENT door shares, taking the subject ALREADY RESOLVED — which is the whole
 	// difference from `noteBorrowSubjectCallArg` above, and why it is a separate function rather than an
 	// overload: the SOURCE's arguments have to be shape-tested to find a subject, while the prepended
@@ -28063,7 +28200,7 @@ export type Parser
 			return
 		end 'nothingBorrowedYet'
 
-		func.borrowFacts.mutations.push(MutationSite.createCallArgWrite(self.borrowSubjectIdOf(func, subjectName: subjectName), subjectName: subjectName, token: self.pos, line: anchor.line, column: anchor.column, callee: callee, argColumn: argColumn, argLabel: argLabel))
+		self.pushMutationSiteInTokenOrder(func, site: MutationSite.createCallArgWrite(self.borrowSubjectIdOf(func, subjectName: subjectName), subjectName: borrowSubjectBlameName(subjectName), token: self.pos, line: anchor.line, column: anchor.column, callee: callee, argColumn: argColumn, argLabel: argLabel))
 	end 'recordCallArgMutationSite'
 
 	// The index of the `end` token that closes the block statement opening at `startIndex`,
@@ -43085,7 +43222,7 @@ export type Parser
 		// ⭐ A write through the receiver invalidates every borrow outstanding on it — `removeFirst` FREES the
 		// node whose element a `first()` borrow still names, so the E3070 door is taken with the same answer
 		// the immutable-binding rule above just read.
-		self.noteBorrowSubjectWrite(func, subjectName: borrowSubjectName, display: methodTok.value, anchor: methodTok, mutatesSubject: listMethodMutatesReceiver(methodTok.value))
+		self.noteBorrowSubjectWrite(func, receiver: list, subjectName: borrowSubjectName, display: methodTok.value, anchor: methodTok, mutatesSubject: listMethodMutatesReceiver(methodTok.value))
 
 		if methodTok.value.equals(CountMethod) 'count'
 			try self.consumeEmptyArgList()
@@ -43180,7 +43317,7 @@ export type Parser
 
 		if methodTok.value.equals(RemoveMethod) 'remove'
 			let node = try self.parseManagedListNodeArg(func, giid: giid)
-			self.noteBorrowSubjectWrite(func, subjectName: borrowSubjectName, display: methodTok.value, anchor: methodTok, mutatesSubject: freesANode)
+			self.noteBorrowSubjectWrite(func, receiver: list, subjectName: borrowSubjectName, display: methodTok.value, anchor: methodTok, mutatesSubject: freesANode)
 			// The element is MOVED OUT — the caller owns it, and a statement-position `remove` drops it at
 			// the statement's end like every other unbound owned temporary. Emitted through the ONE element
 			// accessor, so its ownership, its result type and its buffer-surface mark are the array's answers.
@@ -43190,7 +43327,7 @@ export type Parser
 		if methodTok.value.equals(ClearMethod) 'clear'
 			try self.requireVoidMethodIsStatement(resultUsed, methodTok: methodTok)
 			try self.consumeEmptyArgList()
-			self.noteBorrowSubjectWrite(func, subjectName: borrowSubjectName, display: methodTok.value, anchor: methodTok, mutatesSubject: freesANode)
+			self.noteBorrowSubjectWrite(func, receiver: list, subjectName: borrowSubjectName, display: methodTok.value, anchor: methodTok, mutatesSubject: freesANode)
 			_ = self.emitRuntimeCall(ListClearName, args: singletonArgs(list), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
 			return list
 		end 'clear'
@@ -43475,7 +43612,7 @@ export type Parser
 		let mutates = vectorMethodMutatesReceiver(methodTok.value)
 
 		try self.noteReceiverWrite(func, immutableReceiverName: immutableReceiverName, receiverOwner: receiverOwner, receiverStorage: receiverStorage, methodTok: methodTok, mutatesReceiver: mutates)
-		self.noteBorrowSubjectWrite(func, subjectName: borrowSubjectName, display: methodTok.value, anchor: methodTok, mutatesSubject: mutates)
+		self.noteBorrowSubjectWrite(func, receiver: vec, subjectName: borrowSubjectName, display: methodTok.value, anchor: methodTok, mutatesSubject: mutates)
 
 		if methodTok.value.equals(CountMethod) 'count'
 			try self.consumeEmptyArgList()
@@ -44698,7 +44835,7 @@ export type Parser
 		// ⭐ E3070's container door — the SAME `mutatesReceiver` answer, read once, asked of the SAME receiver at
 		// the same instant. The rule above refuses a write through an immutable binding; this one records the
 		// write it permits, against the borrows still outstanding on that storage (`noteBorrowSubjectWrite`).
-		self.noteBorrowSubjectWrite(func, subjectName: borrowSubjectName, display: methodTok.value, anchor: methodTok, mutatesSubject: mutatesReceiver)
+		self.noteBorrowSubjectWrite(func, receiver: arr, subjectName: borrowSubjectName, display: methodTok.value, anchor: methodTok, mutatesSubject: mutatesReceiver)
 
 		// ⭐⭐ **`.managed` IS AN IDENTITY AT EVERY ELEMENT TYPE (R4.1, ungated by R4.4).**
 		// `stdlib/Array.maxon:106` declares `export var managed as ElementMemory` — `__ManagedMemory with
@@ -45732,11 +45869,31 @@ export type Parser
 	// `bindingIsIterationLocked`'s ⚠⚠ block, which is what this closes, and `attachPendingBorrows`'s
 	// `liveUntil` for why the loop element's borrow is LEXICAL rather than last-use.
 	//
-	// ⚠ **AN OPAQUE `T` ELEMENT MINTS NO BORROW**, deliberately: a shared generic body is compiled ONCE, so it
-	// cannot know whether the instantiation's element owns heap, and a trivial one (`Array with Integer`) hands
-	// back a raw word that no mutation can dangle. Refusing there would reject a program the oracle — which
-	// monomorphizes — accepts. The managed instantiation's hazard is real and unclosed; it is the same
-	// descriptor-gated question `finishValueTry`'s opaque try-merge already defers.
+	// ⭐⭐ **AN OPAQUE `T` ELEMENT MINTS A BORROW LIKE ANY OTHER, AND FOR THREE RUNGS IT DID NOT (W61).** This
+	// block used to read *"an opaque `T` element mints no borrow, deliberately: a shared generic body cannot
+	// know whether the instantiation's element owns heap … the managed instantiation's hazard is real and
+	// unclosed"*. It was, and it was a **USE-AFTER-FREE THE WHOLE SUITE WAS GREEN OVER** — found by hand, not by
+	// a test. `containerElementIsManaged` answering FALSE for a `typeParameter` is a LOSSY PROJECTION: in a
+	// shared body it means *"no static answer"*, never *"owns nothing"*, and read as the latter it hid every
+	// write through an opaque container from the one rule that guards this hazard. Measured `0xC0000005` on
+	// `let a = managed.get(0)` + `let b = managed.get(1)` + `set(0, value: b)` + `set(1, value: a)` over
+	// `Array with String`, and `stdlib/helpers/sort/smallSort.maxon:24-32` names that exact program as the
+	// reason `swap` routes through the raw `managed.swap` builtin. The refusal is that comment enforced;
+	// `specs-shv2/generic-opaque-element-borrow-liveness.md` is its corpus.
+	//
+	// ⚠ **THE COST THE OLD NOTE NAMED IS REAL AND IS PAID DELIBERATELY: the TRIVIAL instantiation of a body
+	// this refuses is refused with it.** A shared body is compiled ONCE, so the refusal cannot be conditioned on
+	// the element a caller chose, and the oracle — which monomorphizes — accepts what this rejects. That is the
+	// same conservatism `referenceBorrowedOpaqueElement` already applies to a concrete-typed value in a shared
+	// body, taken in the same direction, and the alternative is a body that is a use-after-free for one
+	// instantiation with nothing anywhere saying so.
+	//
+	// ⚠ **AND RETAINING AT THE READ IS NOT THE CHEAPER ANSWER — IT IS A DIFFERENT PROGRAM.** The reference an
+	// opaque value takes is `retainFunc@64`, which for a byte record is `__str_clone`, a DEEP CLONE rather than
+	// an incref (`SignatureIndex.retainCalleeForProtocol`, and its reason is that a literal's record is immortal
+	// `.rdata`). So a retain here would copy the record on every element read and hand the reader a DIFFERENT
+	// record from the one the slot holds. The USER RULING two paragraphs down settled the same question for the
+	// container's own lifetime: it is the BASE that is promoted, not the element that is retained.
 	function emitContainerElementAccessor(func IrFunction, callee ByteArray, container ValueId, args ValueIdArray, giid GenericInstanceId, owned bool, borrowSubjectName ByteArray, range SourceRange) returns ValueId
 		// A TRIVIAL CONCRETE element (int / Byte / ranged-int / bool) is a bare inline word that owns nothing, so
 		// it is NEVER tracked owned, read or moved out (a decref of an integer would corrupt the count). An
@@ -45806,8 +45963,16 @@ export type Parser
 			// and holding the container is inert for a trivial one and necessary for a managed one.
 			self.giveTemporaryScopeLifetime(container, name: BorrowSourceBindingName)
 
-			if not borrowSubjectName.isEmpty() and self.signatures.containerElementIsManaged(giid) 'borrowsANamedSourcesElement'
-				self.mintPendingBorrow(func, subjectName: borrowSubjectName, borrowValue: result, range: range)
+			// ⭐ **NO ELEMENT TEST HERE, BECAUSE THE ARM ABOVE ALREADY MADE IT.** The trivial arm returns unless
+			// the element is managed OR opaque, so everything reaching this line is one or the other — and both
+			// borrow (see this function's ⭐⭐ block on the opaque half). A second `containerElementIsManaged`
+			// test here would be that one question asked twice, and its second answer was the wrong one.
+			//
+			// ⭐ The subject comes through `receiverBorrowSubjectName`, the SAME derivation the write door
+			// reads, so a bare `get(0)` on the enclosing `self` and a bare `set(0, …)` on it key alike.
+			let elementSubject = self.receiverBorrowSubjectName(borrowSubjectName, receiver: container)
+			if not elementSubject.isEmpty() 'borrowsANamedSourcesElement'
+				self.mintPendingBorrow(func, subjectName: elementSubject, borrowValue: result, range: range)
 			end 'borrowsANamedSourcesElement'
 		end 'borrowsInPlace'
 		return result
@@ -47049,7 +47214,7 @@ export type Parser
 		// `fieldTok` IS that token in both spellings. The `isSelfField` test is only for a store reached outside
 		// an instance method, where no alias is in scope and no borrow could have named one.
 		if self.functionHoldsABorrow(func) 'mayConflictWithABorrow'
-			self.noteBorrowSubjectWrite(func, subjectName: fieldTok.value if self.scope.isSelfField(fieldTok.value) else EmptySourceText, display: ReassignMutationDisplay, anchor: fieldTok, mutatesSubject: true)
+			self.noteBorrowSubjectRebind(func, subjectName: fieldTok.value if self.scope.isSelfField(fieldTok.value) else EmptySourceText, anchor: fieldTok)
 		end 'mayConflictWithABorrow'
 
 		// ⭐ **AND IT IS A WRITE OF THE RECEIVER'S STORAGE, WHICH A CALLER CAN SEE** — `items = <fresh>` inside
@@ -52249,7 +52414,7 @@ export type Parser
 	// would name the wrong column. Recorded BEFORE the push, so `args.count()` is this argument's own index
 	// — the identical rule `parseCallArgs` states for the source's arguments.
 	function prependReceiverArg(func IrFunction, callee ByteArray, anchor Token, id ValueId, immutableName ByteArray, subjectName ByteArray, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, argImmutableNames ByteArrayArray) throws ParseError
-		self.noteReceiverBorrowSubjects(func, callee: callee, anchor: anchor, argColumn: args.count(), id: id, subjectName: subjectName)
+		self.noteReceiverBorrowSubjects(func, callee: callee, display: EmptySourceText, anchor: anchor, argColumn: args.count(), id: id, subjectName: subjectName)
 		pushCallArg(args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, value: id, label: EmptySourceText, range: SourceRange.ofToken(anchor), immutableName: immutableName)
 	end 'prependReceiverArg'
 
@@ -52266,27 +52431,57 @@ export type Parser
 	// callee that writes nothing is still filtered by the summary at the resolver, so a read-only sibling
 	// call stays legal. All the sites share one token, which the resolver's ordering check permits (it
 	// refuses a DECREASE, not a repeat).
-	function noteReceiverBorrowSubjects(func IrFunction, callee ByteArray, anchor Token, argColumn ParamCount, id ValueId, subjectName ByteArray)
+	//
+	// ⭐⭐ **BOTH WRITE-THROUGH-A-RECEIVER DOORS COME THROUGH IT, AND THE SITE SHAPE IS THE ONLY THING THEY
+	// DIFFER BY (W61).** A CONTAINER METHOD's write is settled by the parser, so an empty `callee` records a
+	// container site whose `display` names the method; a CALL ARGUMENT's is not, so a named callee records a
+	// call-arg site the whole-program summary settles. The RULE — which storages the receiver reaches — is
+	// ONE question, and the second copy of it is exactly what was missing: `dispatchArrayMethod` asked only
+	// "did the receiver name a storage?", so `self.set(0, value: b)` inside `type Array`'s own body recorded
+	// NOTHING and segfaulted, while `managed.set(0, value: b)` — the same write, one spelling over — was
+	// refused. `stdlib/Array.maxon` writes the bare spelling throughout.
+	function noteReceiverBorrowSubjects(func IrFunction, callee ByteArray, display ByteArray, anchor Token, argColumn ParamCount, id ValueId, subjectName ByteArray)
 		if not subjectName.isEmpty() 'denotesOneNamedStorage'
-			self.recordCallArgMutationSite(func, callee: callee, anchor: anchor, argColumn: argColumn, argLabel: EmptySourceText, subjectName: subjectName)
+			self.recordReceiverMutationSite(func, callee: callee, display: display, anchor: anchor, argColumn: argColumn, subjectName: subjectName)
 			return
 		end 'denotesOneNamedStorage'
 
-		if not self.receiverIsEnclosingSelf(id) 'denotesNoStorageThisBodyCanName'
+		// ⭐ **THE RECEIVER'S OWN STORAGE, THROUGH THE ONE DERIVATION** (`receiverBorrowSubjectName`): an
+		// unnamed receiver that IS the enclosing `self` keys on `self`, which is the subject a bare element
+		// read out of that same receiver minted. Recorded BESIDE the self-field sites and not instead of
+		// them — a record-collapsed `Array` borrows out of `self`, a struct with an array field borrows out
+		// of the field, and a bare sibling call reaches both.
+		let ownStorage = self.receiverBorrowSubjectName(subjectName, receiver: id)
+		if ownStorage.isEmpty() 'denotesNoStorageThisBodyCanName'
 			return
 		end 'denotesNoStorageThisBodyCanName'
 
-		// The count is taken FIRST: `recordCallArgMutationSite` resolves each name back through
-		// `borrowSubjectIdOf`, which appends to this very list for a name it has not seen — and every name
-		// here is one it has, so it cannot grow, but reading the bound once says so rather than relying on it.
+		self.recordReceiverMutationSite(func, callee: callee, display: display, anchor: anchor, argColumn: argColumn, subjectName: ownStorage)
+
+		// The count is taken FIRST: the recorder resolves each name back through `borrowSubjectIdOf`, which
+		// appends to this very list for a name it has not seen — and every name here is one it has, so it
+		// cannot grow, but reading the bound once says so rather than relying on it.
 		let subjectCount = func.borrowFacts.subjects.count()
 		for k in 0 upto subjectCount 'eachSubjectOfThisBody'
 			let subject = try func.borrowFacts.subjects.get(k) otherwise panic("noteReceiverBorrowSubjects: subjects.get OOB at {k} inside count()")
 			if subject.isSelfField 'fieldOfTheEnclosingReceiver'
-				self.recordCallArgMutationSite(func, callee: callee, anchor: anchor, argColumn: argColumn, argLabel: EmptySourceText, subjectName: subject.name)
+				self.recordReceiverMutationSite(func, callee: callee, display: display, anchor: anchor, argColumn: argColumn, subjectName: subject.name)
 			end 'fieldOfTheEnclosingReceiver'
 		end 'eachSubjectOfThisBody'
 	end 'noteReceiverBorrowSubjects'
+
+	// Which of the two site shapes a receiver's write takes — the ONE fork, so the fan-out above states its
+	// rule once for both doors. An EMPTY callee means the parser already settled that this is a write (a
+	// container method); a named one means only the callee's own body can say, and the site carries what
+	// `mutationSiteWrites` needs to ask it.
+	function recordReceiverMutationSite(func IrFunction, callee ByteArray, display ByteArray, anchor Token, argColumn ParamCount, subjectName ByteArray)
+		if callee.isEmpty() 'settledAtTheParse'
+			self.recordContainerMutationSite(func, subjectName: subjectName, display: display, anchor: anchor)
+			return
+		end 'settledAtTheParse'
+
+		self.recordCallArgMutationSite(func, callee: callee, anchor: anchor, argColumn: argColumn, argLabel: EmptySourceText, subjectName: subjectName)
+	end 'recordReceiverMutationSite'
 
 	// Is this receiver value the ENCLOSING function's own `self` parameter? Derived from the binding rather
 	// than assumed of a token, so both spellings answer alike: `self.reset()` resolves `self` to that value

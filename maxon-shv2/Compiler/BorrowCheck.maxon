@@ -299,8 +299,17 @@ function checkFunctionBorrowConflicts(project Project, func IrFunction, mutation
 	for s in 0 upto facts.mutations.count() 'eachSite'
 		let site = try facts.mutations.get(s) otherwise panic("checkFunctionBorrowConflicts: mutations.get OOB at {s}")
 		// The other half of the same invariant, and it carries the same consequence — see the borrow loop.
+		//
+		// ⚠ **BUT NOT THE SAME CAUSE, AND IT STOPPED BEING THE SAME AT W61.** A borrow's activation is the
+		// parse cursor, so a decrease there means the cursor rewound. A SITE's token is the closing `)` of
+		// its argument list (`Parser.containerWriteToken`), which is NOT the order the sites are recorded in:
+		// a container write nested inside another's arguments is recorded second and happens FIRST. So this
+		// order is a POSTCONDITION of `Parser.pushMutationSiteInTokenOrder`, which restores it at the one
+		// push, and a decrease here means that recorder is broken rather than the cursor.
+		// MEASURED, with the ordered insert removed: `xs.set(1, value: try ys.pop() otherwise "z")` under a
+		// live borrow of `xs` panicked here — site 1 at token 55 below its predecessor's 58.
 		if site.token < previousSiteToken 'sitesOutOfTokenOrder'
-			panic("checkFunctionBorrowConflicts: mutation site {s} is at token {site.token}, below its predecessor's {previousSiteToken} — the parse cursor rewound inside a function body and the live-borrow walk's cursor no longer holds")
+			panic("checkFunctionBorrowConflicts: mutation site {s} is at token {site.token}, below its predecessor's {previousSiteToken} — `Parser.pushMutationSiteInTokenOrder` did not keep the sites non-decreasing, and the live-borrow walk's cursor no longer holds")
 		end 'sitesOutOfTokenOrder'
 		previousSiteToken = site.token
 
