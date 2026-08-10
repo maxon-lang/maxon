@@ -190,6 +190,12 @@ end 'main'
 `Inner` is left alone and the argument meets the declaration view it always did. The refusal is
 positioned; the C# bootstrap accepts the same program silently and dies in the assembler
 (`E9001: Unresolved label: Inner.first`).
+
+⚠ The `otherwise` is DIVERGING, and it has to be for this case to keep testing its own subject. A VALUE
+fallback merges with the try's success value through one owned phi, and since P1.7 slice 3b-vi-a a
+`returns U` hand-off is an owned `+1` even when `U` is unbound — so `otherwise 0` is a second, perfectly
+correct refusal (`E3059`, an `int` fallback against a `type parameter` result) that fires during the parse
+and hides the semantic one this case is about.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -223,7 +229,7 @@ function main() returns ExitCode
 	a.push(7)
 	let o = O.create(a)
 	let w = o.wrap()
-	return (try w.first() otherwise 0) as ExitCode
+	return (try w.first() otherwise panic("Inner binds nothing")) as ExitCode
 end 'main'
 ```
 ```maxoncstderr

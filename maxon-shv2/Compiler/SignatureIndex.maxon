@@ -14988,6 +14988,42 @@ export type ProgramSignatures
 	// Instance `id`'s concrete type argument at type-parameter `position` (P1.6-B2) — what a `T`-typed field
 	// read on a concrete receiver retypes to. `adoptType` re-interns it into the caller's interner. Arity was
 	// checked at instantiation (E2056), so a type-parameter field's position indexes the args in range.
+	// ⭐⭐ **ARE THIS INSTANCE'S TYPE ARGUMENTS A CONTIGUOUS, IN-ORDER RUN OF SOME GENERIC'S OWN PARAMETERS?**
+	// `Cell with T` written inside `type Holder uses T` is one — argument 0 is the parameter at `uses`-list
+	// position 0 — and so is `Cell with U` inside `Holder uses T, U`, whose run starts at position 1. It is the
+	// exact condition under which a descriptor for this instance can be FORWARDED rather than built
+	// (`MaxonToStdLowering.instanceLayoutArg`): a descriptor is a run of per-parameter blocks, so one base
+	// address serves the callee only while the caller's blocks line up with the callee's from some offset on.
+	//
+	// A PERMUTATION (`Slot with (V, K)`) and a MIXED list (`Pair with (Integer, T)`) both answer no. Neither
+	// has a single base — the first would need the blocks re-ordered and the second has no block at all for
+	// its concrete half — and answering yes for either would hand a callee a descriptor whose words describe
+	// other types, which is a wrong destructor rather than a diagnostic.
+	export function genericInstanceArgsAreACallerParameterRun(gid GenericInstanceId) returns bool
+		let count = self.genericInstanceArgCount(gid)
+		if count == 0 'noArguments'
+			return false
+		end 'noArguments'
+
+		let base = self.substitutedInstanceArg(gid, position: 0)
+		if maxonTypeTag(base) != ValueTypeTag.typeParameter 'firstArgumentIsAType'
+			return false
+		end 'firstArgumentIsAType'
+
+		let start = self.opaqueTypeParamPosition(base)
+		for position in 1 upto count 'eachFurtherArg'
+			let arg = self.substitutedInstanceArg(gid, position: position)
+			if maxonTypeTag(arg) != ValueTypeTag.typeParameter 'concreteArgument'
+				return false
+			end 'concreteArgument'
+			if self.opaqueTypeParamPosition(arg) != start + position 'notTheNextBlock'
+				return false
+			end 'notTheNextBlock'
+		end 'eachFurtherArg'
+
+		return true
+	end 'genericInstanceArgsAreACallerParameterRun'
+
 	export function substitutedInstanceArg(id GenericInstanceId, position TypeParamPosition) returns MaxonType
 		let args = self.genericInstances.instanceArgs(id)
 		return try args.get(position) otherwise panic("ProgramSignatures.substitutedInstanceArg: type-parameter position {position} out of range for instance {id}'s {args.count()} argument(s) — arity was checked at instantiation (E2056)")
@@ -16802,6 +16838,28 @@ export type ProgramSignatures
 			value(inner) then return maxonTypeTag(inner) == ValueTypeTag.structRef and self.nameOfId(typeNameIdOf(inner)).equals(typeName)
 		end 'declared'
 	end 'declaredReturnNamesStruct'
+
+	// ⭐⭐ **DOES `callee` DECLARE A BARE TYPE-PARAMETER RETURN — a `returns T` whose value the shared body
+	// compiling it cannot classify (P1.7 slice 3b-vi-a)?** The descriptor-need seed for the RETURN door: such a
+	// body hands the caller a `+1` like every other managed return, and when the value it returns is a BORROW
+	// it takes that reference through the enclosing instance's `retainFunc@64`, so the method needs the
+	// parameter carrying the descriptor.
+	//
+	// ⚠ **ASKED OF THE RESOLVED DECLARED TYPE RATHER THAN OF THE TOKENS, because both token answers are
+	// wrong in a different direction.** An inner alias may NAME the parameter (`typealias Held = Element`), so
+	// a token test misses the reservation and the emitted retain then has no descriptor; and a parameter's own
+	// function type spells `returns Element` inside the parameter list, so a token test reserves for methods
+	// that return nothing of the kind. The index has the resolved type by the time
+	// `Queries.foldDescriptorNeeds` runs (after `allFilesFolded`), which is what makes one reading serve both.
+	//
+	// Allocation-free for `declaredReturnNamesStruct`'s reason: the answer is a TAG, so no type crosses out of
+	// this index's own interner.
+	export function calleeReturnsBareTypeParameter(callee ByteArray) returns bool
+		match try self.returnTypes.get(callee) otherwise return false 'declared'
+			void then return false
+			value(inner) then return maxonTypeTag(inner) == ValueTypeTag.typeParameter
+		end 'declared'
+	end 'calleeReturnsBareTypeParameter'
 
 	// Does ANY file declare a function under `callee` — the `bool` half of `returnTypeOf`, and its twin
 	// in the sense `containsEnum` is `enumOf`'s: a caller that only needs "does this name resolve to a

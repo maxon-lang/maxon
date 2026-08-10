@@ -6233,36 +6233,6 @@ function requireThrowingWitnessTryTarget(methodName ByteArray, throwsClause Thro
 	end 'nonThrowing'
 end 'requireThrowingWitnessTryTarget'
 
-// ⭐⭐ **WHERE THE CALLER TOOK ITS OWN REFERENCE TO A SUBSTITUTED `T` RESULT, AND THE ONE QUESTION A `try`
-// HAS TO ASK OF IT.** A shared generic body cannot classify its `T` return, so it hands the value back as a
-// BORROW and the CALLER promotes it (`coOwnSubstitutedCallResult`) — necessarily AFTER the call op, because
-// that is where the value exists. The promotion is then the LAST op the expression emitted, and
-// `rewriteLastCallToTryCall` claims exactly the last op: an expression-form `try` over such a call rewrote
-// the compiler's own `__mm_retain` (E3055, *"this builtin call cannot fail"*, about a method that plainly
-// declares `throws`) or, for a String substitution whose promotion COPIES, its interpolation op (E2015,
-// *"the expression after `try` is not a call"*). This record is what lets the two `try` doors LIFT the
-// promotion off the block the fork splits and hand it to the OK EDGE, which is the only edge the `tryCall`
-// wrote the result register on.
-//
-// ⚠ **THE `at` ARM IS MINTED ONLY WHERE A SUBSTITUTED MANAGED RESULT IS ACTUALLY PROMOTED**, which is a
-// generic instance over a managed type argument and nothing else — a trivial instantiation promotes nothing
-// and records nothing. So a Maxon union's per-value heap object (see `ManagedReceiverBinding` for the
-// measurement that makes a per-CALL-SITE union worth avoiding) is paid once per such call, not per call.
-union SubstitutedCoOwn
-	// `promotionFloor` is `module.ops.count()` read BEFORE the promotion emitted, `blockId` / `opRefMark` the
-	// block it emitted into and that block's `opRefs` height at the same instant, and `owned` the value it
-	// minted. The two marks together name the promotion's ops as a suffix of one block's `opRefs`, which is
-	// what makes the lift a slice rather than a search.
-	at(promotionFloor OpIndex, blockId BlockId, opRefMark ElementCount, owned ValueId)
-	// No substituted co-own has promoted anything yet in this file's parse.
-	none
-	// The promotion's ops, LIFTED off the fork's entry block by `liftSubstitutedCoOwnForOkEdge` and waiting
-	// for the door that caused the lift to re-attach them at the head of its ok edge
-	// (`attachSubstitutedCoOwnToOkEdge`). Declared LAST so `at to none` is one range arm for "nothing is in
-	// flight" — the question every reader but the two lift/attach doors asks.
-	liftedForOkEdge(opRefs OpIndexArray)
-end 'SubstitutedCoOwn'
-
 // The result of `captureEnclosing` (P1.5-A2b): a name that resolved into an enclosing frame yields
 // `captured` with the value read out of the env block; any other name is `notCaptured` and resolves
 // through the ordinary top-level path.
@@ -7835,22 +7805,6 @@ export type Parser
 	// old value, set true, emit, restore. It is never left set across a statement. Same per-function reset
 	// and per-closure save/restore as `tryBlocks` above (see that field's lifetime rule).
 	var tryBlockRoutingSuppressed as bool
-	// ⭐ **THE MOST RECENT CO-OWN OF A SUBSTITUTED `T` CALL RESULT** — read by `parseTryCallTarget`, which
-	// LIFTS the promotion onto the ok edge when the `try` is about to fork on the call that produced it (see
-	// `SubstitutedCoOwn` for the whole argument).
-	//
-	// ⚠ **IT DELIBERATELY DOES *NOT* JOIN THE PER-FUNCTION RESET / PER-CLOSURE SAVE-RESTORE DISCIPLINE ABOVE**,
-	// and that is a property of what it holds rather than an omission: its `promotionFloor` is a
-	// `module.ops` index, which is unique for the WHOLE file parse, and every reader gates on it. A stale
-	// record therefore answers "not this target" by construction — where a value-keyed mark would have had to
-	// be cleared in three places and restored in one, which is the exact shape of the bug the review of this
-	// batch found in the closure save/restore.
-	//
-	// ⚠ **THE `liftedForOkEdge` STATE IS THE ONE THING HERE THAT IS NOT SELF-EXPIRING, AND IT IS SPENT WITHIN
-	// THE SAME `try`.** Between the lift and the re-attach the parser mints a flag, rewrites the call, tests
-	// the callee's `throws` clause and opens one block; none of that can reach `emitCall`, so no second co-own
-	// can overwrite an unspent lift. `coOwnSubstitutedCallResult` panics rather than trusting that by memory.
-	var lastSubstitutedCoOwn as SubstitutedCoOwn
 	// The enclosing match STATEMENTS, innermost last — the other half of the break-target stack (see
 	// `MatchContext` for why `break` needs its own rather than sharing `loops`). `continue` never reads
 	// it. Reset per function AND per closure exactly as `loops` is: without the closure reset, a `break`
@@ -8872,7 +8826,6 @@ export type Parser
 			loops: LoopContextArray.create(),
 			tryBlocks: TryBlockContextArray.create(),
 			tryBlockRoutingSuppressed: false,
-			lastSubstitutedCoOwn: SubstitutedCoOwn.none,
 			matches: MatchContextArray.create(),
 			iterationLockedBindings: sharedEmptyIterationLocks,
 			lastBlockBodyEnd: 0,
@@ -10264,6 +10217,33 @@ export type Parser
 				// (`staticLayoutNeedsSelfReturn`). A static that stores a borrowed opaque value is refused with
 				// a position instead (`requireDescriptorForOpaqueStores`).
 				let buildsRecordFromOpaqueSource = scan.buildsRecord and instantiated and not self.functionDeclIsStatic(q)
+				// ⭐⭐ **A METHOD DECLARED `returns <its own type parameter>` HANDS THE CALLER A `+1`, AND THE
+				// SHAPE IT CANNOT DISCHARGE STATICALLY IS A BORROW (P1.7 slice 3b-vi-a).** `return self.value`,
+				// `return v` for a borrowed `T` parameter — the reference is taken through `retainFunc@64`
+				// (`emitOwnedValueReturn` → `coOwnBorrowedOpaque`), so the method needs the descriptor.
+				//
+				// ⚠ **THE RETURN TYPE IS THE ONLY HALF THIS CAN SEE, AND THAT IS THE SIBLING SIGNALS'
+				// DISCIPLINE.** Whether a given `return` yields a borrow or a value the body already owns is a
+				// fact about an EXPRESSION, and this scan runs before any body is parsed. Over-reserving for a
+				// body whose every return is owned costs one ignored parameter; missing one refuses a legal
+				// program with `requireDescriptorForOpaqueStores`.
+				//
+				// ⛔⛔ **AND IT CARRIES NO `instantiated` GATE, WHICH EVERY SIBLING OPAQUE SIGNAL DOES — because
+				// this signal's EMISSION side cannot ask that question and get the same answer.** The registry
+				// this scan reads holds the instances a top-level `typealias X = G with A` declared; an instance
+				// minted by an EXPRESSION (`{1: "a"}`, or a bare generic name retyped through a call result) is
+				// interned by the parse that meets it, which is strictly later. So `stdlib/Map.maxon`'s
+				// `get(key Key) returns Value` reads NOT INSTANTIATED here and INSTANTIATED when its body is
+				// parsed — MEASURED: gated, the reservation declined, the retain was emitted anyway, and 38
+				// `map/*` cases died on `requireDescriptorForOpaqueStores`. A declaration-level signal must be
+				// answerable from the declaration alone, so this one is, and the retain in
+				// `emitOwnedValueReturn` is ungated to match. A type no `with` ever names reserves a parameter
+				// nobody passes, which is the sibling signals' stated asymmetry and costs one ignored slot.
+				//
+				// `not isStatic` mirrors those siblings: the corpus declares no `static function` with a bare
+				// type-parameter return at all, and one that did would have no receiver to source a descriptor
+				// from — `staticLayoutNeedsSelfReturn` says so with a position.
+				let returnsBorrowableOpaque = self.signatures.calleeReturnsBareTypeParameter(qualified) and not self.functionDeclIsStatic(q)
 				// ⭐⭐ **TWO DECLARATIONS CAN WEAR ONE QUALIFIED NAME, AND THE MERGE IS A UNION — NOT THE LAST
 				// ONE IN (found at review).** The columns are keyed by `Type.method` and nothing above this
 				// line guarantees that key is unique: a type body may declare `slotSize()` twice (shv2 keeps
@@ -10281,7 +10261,7 @@ export type Parser
 				// answer that must be wrong is wrong upwards, and `solveDescriptorNeeds`' claim that same-named
 				// methods "share one answer" is made true here rather than assumed.
 				let alreadyContributed = directSeeds.contains(qualified)
-				var directlyNeeded = scan.direct or dropsFeed or movesOutArrayElement or reassignsOpaqueManagedField or copiesArrayElement or buildsRecordFromOpaqueSource
+				var directlyNeeded = scan.direct or dropsFeed or movesOutArrayElement or reassignsOpaqueManagedField or copiesArrayElement or buildsRecordFromOpaqueSource or returnsBorrowableOpaque
 				var edges = self.qualifiedSelfCallees(site.typeName, callees: scan.callees)
 				// ⭐ A `Self{…}` CALLS this type's field-default helpers, so it is a call edge like any other
 				// (W43b). See `fieldDefaultHelperNamesOf` for why every helper is named rather than only the
@@ -21160,19 +21140,39 @@ export type Parser
 			returned = try self.promoteBorrowedToOwned(returned, door: BorrowLaunderDoor.returned, range: SourceRange.ofToken(anchor))
 		end 'promoteBorrowed'
 
-		// ⭐ **REJECT RETURNING AN OWNED OPAQUE type-parameter value (P1.7 slice 3b-vi-a).** `pop`/`remove` on an
-		// opaque `Array with <type parameter>` field now hand back an OWNED `typeParameter` element, dropped in
-		// the method body through the descriptor-gated `__drop_type_param`. Handing it back through the return
-		// register would make the CALLER its owner — but a generic method's opaque `typeParameter` return type is
-		// NOT resolved to the instantiation's concrete type at the call site, so the caller neither adopts nor
-		// drops it and the moved-out element LEAKS (exit 101, confirmed by probe). Returning an opaque `T` is a
-		// distinct future slice, symmetric to the opaque try-merge deferral (`finishValueTry`); until it lands,
-		// DROP the moved-out element in the method body or move it back into the array with `push` — both
-		// supported. A BORROWED opaque return (`return item` for a borrowed `Element` parameter) owns nothing, so
-		// `valueIsOpaqueOwned` is false and it is unaffected.
-		if self.valueIsOpaqueOwned(returned) 'ownedOpaqueReturn'
-			throw ParseError.unsupported("returning an OWNED opaque type-parameter value — an element moved out of an `Array with <type parameter>` field by `pop`/`remove` inside a generic body. The caller cannot resolve the opaque `T` return to the instantiation's concrete type, so it would neither adopt nor drop the moved-out element and the value would leak. Returning an opaque `T` is a distinct future slice; drop the moved-out element in the method body, or move it back into the array with `push` (P1.7 slice 3b-vi-a).", line: anchor.line, column: anchor.column)
-		end 'ownedOpaqueReturn'
+		// ⭐⭐ **THE SAME PROMOTION FOR THE ONE TYPE THE BODY CANNOT NAME (P1.7 slice 3b-vi-a).** A shared
+		// generic body's `returns T` obeys the convention above unchanged — hand the caller a `+1` — and the
+		// door directly above declines for it, because `valueIsManagedHeap` reads the TAG and `typeParameter` is
+		// neither a byte record nor an aggregate. So a BORROWED opaque `T` takes its reference the only way a
+		// body compiled once for every instantiation can: through the enclosing instance's descriptor, whose
+		// `retainFunc@64` is `__str_clone` for a byte record, `__mm_retain` for a managed aggregate and 0 — a
+		// no-op — for an instantiation that owns nothing. An ALREADY-OWNED opaque value (an element `pop` moved
+		// out of an `Array with T` field) passes straight through and is moved out of the drop sets below,
+		// exactly as an owned String does.
+		//
+		// ⛔⛔ **THIS WAS A CLEAN `E2015` UNTIL THIS SLICE, AND THE REFUSAL'S OWN REASONING NAMED THE WRONG
+		// PARTY.** It said the caller "neither adopts nor drops" an opaque return, which was true — the caller
+		// took its own reference instead, on the premise that a shared body hands one back UNREFERENCED. That
+		// premise is read off the DECLARED type and the obligation belongs to the RETURNED VALUE, so a body
+		// returning a value it already owned handed over a real `+1` that the caller's own `+1` then leaked:
+		// `return fresh()` through a `returns Element` printed the right answer and exited 101, with no `pop`,
+		// no array and no function alias anywhere in it. There is no convention under which the CALLER can take
+		// the reference — a body that returns a value it CREATED has nowhere to put the one it holds, and
+		// releasing it before the `ret` frees the record the caller is about to retain — so the callee
+		// discharges the hand-off for every shape and the caller simply adopts (`enrolOwnedCallTemp`). It is
+		// also what v1 does: `planReturnedBorrowRetains` / `planReturnIncrefs` retain a returned borrow in the
+		// CALLEE, through `mm_retain_type_param(value, layout)`.
+		//
+		// ⚠ **IT IS UNGATED, AND `moveOpaqueValueInto`'s SIBLING STORE IS NOT — the two doors are reserved by
+		// different signals and each is written to match its own.** A store's reservation
+		// (`buildsRecordFromOpaqueSource`) is a body-shape guess and declines for a type no `with` ever names,
+		// so the store asks `typeParamOwnerIsInstantiated` and declines with it. A RETURN's reservation is read
+		// off the DECLARATION (`calleeReturnsBareTypeParameter`) and declines for nothing, because an
+		// instantiation the pre-scan cannot see is one the body's own parse can — see `scanDescriptorNeedsInto`
+		// for the 38 `map/*` cases that measured exactly that disagreement.
+		if self.tagOf(returned) == ValueTypeTag.typeParameter and not self.valueIsOwnedHeap(returned) 'borrowedOpaqueReturn'
+			returned = self.coOwnBorrowedOpaque(returned, range: SourceRange.ofToken(anchor))
+		end 'borrowedOpaqueReturn'
 
 		self.emitHandoffExitDrops(returned, anchor: anchor)
 
@@ -21493,7 +21493,7 @@ export type Parser
 		// desugars into a fork and the outer call lands in the merge block, so a per-block count would be
 		// measured against a block that is no longer current.
 		let targetOpFloor = self.artifact.module.ops.count()
-		let result = try self.parseTryCallTarget(func, targetOpFloor: targetOpFloor)
+		let result = try self.parseTryCallTarget(func)
 		let flag = self.mintValue(ValueTypeTag.integer, nameId: UnnamedTypeId)
 		let target = try self.rewriteLastCallToTryCall(func, flag: flag, tryTok: tryTok, targetOpFloor: targetOpFloor)
 
@@ -21553,57 +21553,23 @@ export type Parser
 	// `try` it. That is what a bare `h()` gets everywhere else in the language today; the block form does not
 	// make it worse, it simply does not yet make it better.
 	//
-	// ⛔ **AND IT IS ALSO WHERE THE SUBSTITUTED CO-OWN IS LIFTED ONTO THE OK EDGE, FOR THE SAME "BOTH FORMS
-	// FUNNEL HERE" REASON THE SUPPRESSION IS.** The two doors — `parseTry` and `parseCatchingCondition` —
-	// both take the target's VALUE and both hand the last op to `rewriteLastCallToTryCall`, so both are
-	// broken by a promotion trailing the call and both need the identical repair. `targetOpFloor` is
-	// threaded in rather than re-derived because each caller already holds it, and because the floor is only
-	// meaningful where the caller reads it: taken HERE it would be measured after whatever the `try`
-	// keyword's own consumption emitted, which is not the same question.
-	function parseTryCallTarget(func IrFunction, targetOpFloor OpIndex) returns ValueId throws ParseError
+	function parseTryCallTarget(func IrFunction) returns ValueId throws ParseError
 		let savedRoutingSuppressed = self.tryBlockRoutingSuppressed
 		self.tryBlockRoutingSuppressed = true
 		let target = try self.parseTryTargetExpression(func)
 		self.tryBlockRoutingSuppressed = savedRoutingSuppressed
-
-		self.liftSubstitutedCoOwnForOkEdge(target, targetOpFloor: targetOpFloor)
 		return target
 	end 'parseTryCallTarget'
 
-	// ⭐⭐ **A `try` WHOSE VALUE IS THE CALLER'S OWN REFERENCE TO A SUBSTITUTED `T` RESULT TAKES THAT
-	// REFERENCE ON THE OK EDGE — SO THE PROMOTION'S OPS COME OFF THE BLOCK THE FORK SPLITS.** The reference
-	// has to be taken AFTER the call returns (`coOwnSubstitutedCallResult` — a shared generic body cannot
-	// classify `T`, so it hands back a borrow), while the `try` splits on the error flag at exactly that
-	// point. Left where it was emitted it is BOTH the op `rewriteLastCallToTryCall` claims — the author is
-	// told about the compiler's own `__mm_retain` — and, once the rewrite is pointed past it, a `+1` on the
-	// error edge, where the result register the throw zeroed would be increfed. Lifted here and re-attached
-	// by the fork, it is neither.
+	// ⭐⭐ **TAKE THE OPS A BLOCK HAS GAINED SINCE `mark` OFF IT, AND HAND THEM BACK.** A ternary's TRUE ARM is
+	// parsed onto the unconditional path before the `if` announces the form (`parseTernaryExpression`), and is
+	// then re-attached inside a block only ONE edge reaches. The ops keep their `module.ops` indices — only the
+	// block referencing them changes.
 	//
-	// ⭐ **THE SHAPE THIS PRODUCES IS THE BLOCK FORM'S, WHICH HAS ALWAYS BEEN RIGHT** — `call → flag →
-	// condBranch → retain as the first op of the ok block`
-	// (`generic-managed-return-routed-through-a-try-block`). There the ordering falls out for free, because
-	// `routeBareThrowingCallToTryBlock` forks at emission time, AHEAD of the co-own. The expression and
-	// condition forms fork after it, so what is free there is a MOVE here — the same move
-	// `parseTernaryExpression` makes on a true arm parsed onto the unconditional path before the form
-	// announced itself. The ops keep their `module.ops` indices; only the block referencing them changes.
-	//
-	// ⚠ **THE ORACLE IS NOT THE ARBITER HERE.** MEASURED on the bootstrap: the same program compiles, prints
-	// its value, and then dies with `mm_decref: refcount underflow (already zero)` — it takes no reference
-	// and over-releases. So this derives its ownership from the rule and from the block form's shape, not
-	// from what the reference compiler happens to emit.
-	function liftSubstitutedCoOwnForOkEdge(target ValueId, targetOpFloor OpIndex)
-		match self.lastSubstitutedCoOwn 'record'
-			at(promotionFloor, blockId, opRefMark, owned) then self.liftPromotionOpsForOkEdge(promotionFloor, blockId: blockId, opRefMark: opRefMark, owned: owned, target: target, targetOpFloor: targetOpFloor)
-			none then break 'record'
-			liftedForOkEdge then panic("liftSubstitutedCoOwnForOkEdge: a promotion lifted for an earlier `try`'s ok edge was never re-attached — every lift is spent by the fork that caused it, before that fork can parse another call")
-		end 'record'
-	end 'liftSubstitutedCoOwnForOkEdge'
-
-	// ⭐⭐ **TAKE THE OPS A BLOCK HAS GAINED SINCE `mark` OFF IT, AND HAND THEM BACK — the half the parser's TWO
-	// relocations share.** A ternary's TRUE ARM is parsed onto the unconditional path before the `if` announces
-	// the form (`parseTernaryExpression`), and a substituted `T` result's co-own is emitted onto the block a
-	// `try` is about to fork (`liftPromotionOpsForOkEdge`); both then re-attach the ops inside a block only ONE
-	// edge reaches. The ops keep their `module.ops` indices — only the block referencing them changes.
+	// ⚠ It had a SECOND caller until the opaque-`T` return convention moved the `+1` into the callee: a
+	// substituted `T` result's caller-side co-own was emitted onto the block a `try` was about to fork, and had
+	// to be lifted onto the ok edge. Nothing is emitted after such a call any more, so there is nothing to lift
+	// — see `emitOwnedValueReturn` for where the reference is taken now.
 	//
 	// ⚠ **COLLECT AND TRUNCATE ARE ONE OPERATION, WHICH IS WHY THEY ARE ONE FUNCTION.** A collect without the
 	// truncate leaves the ops running on the path that was supposed to lose them — a `+1` (or a whole arm) on
@@ -21619,69 +21585,6 @@ export type Parser
 
 		return detached
 	end 'detachOpRefsAbove'
-
-	// ⭐ **WHETHER THIS RECORD IS THE TARGET'S OWN PROMOTION — TWO HALVES, AND NEITHER IMPLIES THE OTHER:**
-	//
-	//   • the VALUE identity says the promotion is the TARGET'S OWN trailing op rather than one taken for an
-	//     ARGUMENT of it. `try consume(bx.fetch())` co-owns too, but that promotion is emitted BEFORE
-	//     `consume`'s call and belongs on the unconditional path: the value it takes a reference to is one
-	//     `consume` is handed, not one the ok edge produces, and moving it past `consume`'s own fork would
-	//     hand the callee the borrow the `+1` exists to replace.
-	//   • the OP FLOOR says the record was minted during THIS target's parse. `module.ops` is append-only for
-	//     the whole file and nothing truncates it, so an index below the floor cannot belong to the target —
-	//     which is also what lets this record live with NO per-function reset and NO closure save/restore,
-	//     unlike every value-keyed mark beside it. ValueIds are numbered from zero again in each function and
-	//     each closure body (`mintValue`), so identity ALONE would let a stale record from one function move
-	//     ops out from under an unrelated `try` in the next.
-	//
-	// Past that gate, the promotion's ops are the tail of its block's `opRefs` since the mark — nothing else
-	// emits between a call's own co-own and the end of the target's parse — so the lift is a SLICE and needs
-	// no search.
-	function liftPromotionOpsForOkEdge(promotionFloor OpIndex, blockId BlockId, opRefMark ElementCount, owned ValueId, target ValueId, targetOpFloor OpIndex)
-		if owned != target or promotionFloor < targetOpFloor 'notThisTargetsOwnPromotion'
-			return
-		end 'notThisTargetsOwnPromotion'
-
-		// A promotion mints a value distinct from its source, so it always emitted at least one op; and it
-		// emitted them into the block the parse is still in, because a value-producing construct is the only
-		// thing that moves `currentBlock` and the target produced no value after this one. Both are the
-		// premises the slice below rests on, so both are asserted rather than assumed.
-		if blockId != self.currentBlock.id 'promotionLeftItsBlock'
-			panic("liftPromotionOpsForOkEdge: the promotion for v{owned} emitted into block {blockId} but the target's parse ended in block {self.currentBlock.id} — the lift moves a SUFFIX of one block's opRefs, so a promotion the parse has since left cannot be the target's own trailing op")
-		end 'promotionLeftItsBlock'
-
-		let lifted = self.detachOpRefsAbove(self.currentBlock, mark: opRefMark)
-		if lifted.count() == 0 'promotionEmittedNothing'
-			panic("liftPromotionOpsForOkEdge: the promotion for v{owned} left no ops above the mark {opRefMark} — `promoteBorrowedToOwned` mints a value distinct from its source, so it always emits")
-		end 'promotionEmittedNothing'
-
-		self.lastSubstitutedCoOwn = SubstitutedCoOwn.liftedForOkEdge(lifted)
-	end 'liftPromotionOpsForOkEdge'
-
-	// ⭐ **SPEND A LIFTED PROMOTION AT THE HEAD OF THE FORK'S OK EDGE.** Both doors call it on a block they
-	// have just minted and not yet emitted into, so the promotion lands FIRST — ahead of the fork's own
-	// temporary drops, which matters when the value it takes a reference to is read out of one of them
-	// (`try make().fetch()` releases the receiver on both edges at the fork). The two ok edges are
-	// `desugarTry`'s `tryok` and the catching `if`'s THEN block, which is the ok edge because
-	// `parseCatchingCondition` tests `flag == 0`.
-	function attachSubstitutedCoOwnToOkEdge(okBlock IrBlock)
-		match self.lastSubstitutedCoOwn 'record'
-			at to none then break 'record'
-			liftedForOkEdge(opRefs) then self.placeLiftedCoOwnAtHeadOf(okBlock, opRefs: opRefs)
-		end 'record'
-	end 'attachSubstitutedCoOwnToOkEdge'
-
-	function placeLiftedCoOwnAtHeadOf(okBlock IrBlock, opRefs OpIndexArray)
-		if okBlock.opRefs.count() != 0 'okEdgeAlreadyEmittedInto'
-			panic("placeLiftedCoOwnAtHeadOf: block {okBlock.id} already holds {okBlock.opRefs.count()} op(s) — a lifted promotion must be the FIRST thing on the ok edge, ahead of the fork's own drops")
-		end 'okEdgeAlreadyEmittedInto'
-
-		// Written through a `var` alias of the same record, the `poisonValueAliases` idiom: the block is a
-		// heap `type`, so this is the block the fork will go on emitting into.
-		var edge = okBlock
-		edge.opRefs = opRefs
-		self.lastSubstitutedCoOwn = SubstitutedCoOwn.none
-	end 'placeLiftedCoOwnAtHeadOf'
 
 	// The target's GRAMMAR, split from the state above so the flag brackets every path through it.
 	function parseTryTargetExpression(func IrFunction) returns ValueId throws ParseError
@@ -22127,12 +22030,6 @@ export type Parser
 		let isErr = try self.emitCompare(flag, rhs: noError, op: MaxonCmpOp.ne, opTok: tryTok)
 
 		var okBlock = self.newBlock(func, label: b"tryok", line: tryTok.line)
-		// ⭐ **THE CALLER'S `+1` FOR A SUBSTITUTED `T` RESULT LANDS HERE, FIRST.** `parseTryCallTarget` lifted
-		// it off `entryBlock` because that block is what the branch below splits, and on the error edge the
-		// result register was never written. Nothing has emitted into `okBlock` yet, so the promotion is
-		// ahead of the fork's own temporary drops — which matters when the promoted value is read out of one
-		// of them.
-		self.attachSubstitutedCoOwnToOkEdge(okBlock)
 		let errBlock = self.newBlock(func, label: b"tryerr", line: tryTok.line)
 		self.emitCondBranch(entryBlock, cond: isErr, thenId: errBlock.id, elseId: okBlock.id, ifTok: tryTok)
 
@@ -24788,14 +24685,18 @@ export type Parser
 	// the condition and dominates then, else and continuation alike, so one release there is one release on
 	// every path.
 	//
-	// ⛔ **A CATCHING CONDITION BREAKS THE PREMISE THAT RULE RESTS ON — that nothing past the fork still READS
-	// a temporary.** Its ok edge owes the caller's `+1` for a substituted `T` result
-	// (`attachSubstitutedCoOwnToOkEdge`), and that `+1` takes its reference OUT OF one of these temporaries:
-	// for `if let x = try make().fetch()` the receiver `make()` is a temporary whose destructor decrefs the
-	// very record the retain is about. Released in `entry` it runs BEFORE the branch and therefore before the
-	// retain, and the then branch reads `0x3F3F…` poison — MEASURED, `ok=4557430888798830399`. Handed back
-	// here instead, they are released once per EDGE, at the head of each and BEHIND the co-own, which is
-	// precisely what `desugarTry` already does for `tryok`/`tryerr`. The two try forks now say it once.
+	// ⛔ **A CATCHING CONDITION IS THE SAME FORK `desugarTry` BUILDS, AND IT OWES THE SAME PLACEMENT.** That
+	// fork releases its condition's temporaries at the HEAD OF EACH EDGE and then parses the handler against a
+	// FRESH list, because the two edges merge in the continuation and one release there is one release too few
+	// on the other path. A catching `if` forks the identical way — its handler is the else branch — so the two
+	// try forks say it once, through `emitTempDropsInto`.
+	//
+	// ⚠ **AND THE HEAD OF AN EDGE IS WHERE A COMPILER EMITS THINGS THAT READ A TEMPORARY.** MEASURED when the
+	// caller still took a substituted `T` result's `+1` itself: that retain landed at the head of the ok edge
+	// and read out of one of these very temporaries — `if let x = try make().fetch()` released the receiver in
+	// `entry`, ahead of the branch, and the then branch read `0x3F3F…` poison (`ok=4557430888798830399`). The
+	// `+1` has since moved into the callee (`emitOwnedValueReturn`), so that particular reader is gone; the
+	// placement stays because it is the one an edge-head emission cannot invalidate.
 	function takeCatchingForkTemps(cond IfCondition, floor TempDropMark, anchor Token) returns ValueIdArray
 		if not ifConditionCatches(cond) 'plainCondition'
 			self.drainPendingTemps(floor, anchor: anchor)
@@ -24815,15 +24716,14 @@ export type Parser
 		return carried
 	end 'takeCatchingForkTemps'
 
-	// ⭐ **OPEN A CATCHING `if`'s OK EDGE — the same two things `desugarTry` puts at the head of `tryok`, in
-	// the same order.** The co-own the caller owes a substituted `T` result goes first (it reads out of the
-	// temporaries), the fork's releases second. A plain `if` has neither and this is inert for it.
+	// ⭐ **OPEN A CATCHING `if`'s OK EDGE — the fork's condition temporaries are released at its head, exactly
+	// as `desugarTry` releases them at the head of `tryok`.** A plain `if` carries none (`takeCatchingForkTemps`
+	// drained them into the entry block, where a single path makes that right) and this is inert for it.
 	function openCatchingOkEdge(cond IfCondition, okBlock IrBlock, temps ValueIdArray, anchor Token)
 		if not ifConditionCatches(cond) 'plainCondition'
 			return
 		end 'plainCondition'
 
-		self.attachSubstitutedCoOwnToOkEdge(okBlock)
 		self.emitTempDropsInto(okBlock, temps: temps, anchor: anchor)
 	end 'openCatchingOkEdge'
 
@@ -25412,7 +25312,7 @@ export type Parser
 		let tryTok = try self.consume(TokenKind.try)
 
 		let targetOpFloor = self.artifact.module.ops.count()
-		let result = try self.parseTryCallTarget(func, targetOpFloor: targetOpFloor)
+		let result = try self.parseTryCallTarget(func)
 		let flag = self.mintValue(ValueTypeTag.integer, nameId: UnnamedTypeId)
 		let target = try self.rewriteLastCallToTryCall(func, flag: flag, tryTok: tryTok, targetOpFloor: targetOpFloor)
 		try self.requireThrowingTryTarget(target, tryTok: tryTok)
@@ -37110,7 +37010,7 @@ export type Parser
 		// the one line that takes the reference, which is what makes the store half and the drop half one act
 		// rather than two that agree.
 		self.markRecordOwningOpaqueSlots(owner)
-		return self.coOwnBorrowedOpaqueForConsume(arg, range: range)
+		return self.coOwnBorrowedOpaque(arg, range: range)
 	end 'moveOpaqueValueInto'
 
 	// ⭐⭐ **BECOME A SECOND OWNER OF A BORROWED OPAQUE `T`, THROUGH THE ENCLOSING INSTANCE'S DESCRIPTOR
@@ -37119,20 +37019,27 @@ export type Parser
 	// byte-record argument, `__mm_retain` for an aggregate, and nothing at all for a trivial one, whose word is
 	// 0. `lowerRuntimeCall` prepends the descriptor, exactly as it does for the drop twin.
 	//
-	// ⚠ **THE RESULT IS WHAT THE CALLER STORES AND NEVER `value`** — the byte-record arm hands back a DIFFERENT
+	// **TWO DOORS OWE THIS REFERENCE, AND THEY OWE THE SAME ONE.** A STORE into a durable slot
+	// (`moveOpaqueValueInto`) and a RETURN out of the body (`emitOwnedValueReturn`, P1.7 slice 3b-vi-a) each
+	// hand a borrowed `T` to an owner that will release it, and neither can name the protocol. Written twice
+	// they would be two answers to one question about a reference count — a leak on one side and a double free
+	// on the other.
+	//
+	// ⚠ **THE RESULT IS WHAT THE CALLER USES AND NEVER `value`** — the byte-record arm hands back a DIFFERENT
 	// record, which is the identical trap `coOwnBorrowedForConsume`'s existential arm measured as an access
-	// violation plus a leaked clone. This frame marks the result neither owned nor pending, for that door's
-	// reason: the new owner is a SLOT in another record, whose destructor releases exactly this reference.
+	// violation plus a leaked clone. This frame marks the result neither owned nor pending, and that is right
+	// for both doors: the new owner is a SLOT in another record whose destructor releases exactly this
+	// reference, or the CALLER, which adopts it (`enrolOwnedCallTemp`).
 	//
 	// ⚠ It records a missing descriptor rather than emitting a call the lowering can only abort on — the W10
 	// arrangement `emitDecref` already has for the drop, so `parseFunction` refuses it with a position.
-	function coOwnBorrowedOpaqueForConsume(value ValueId, range SourceRange) returns ValueId
+	function coOwnBorrowedOpaque(value ValueId, range SourceRange) returns ValueId
 		if not self.functionCarriesLayoutParam 'noDescriptorToRetainThrough'
 			self.functionStoredOpaqueWithoutDescriptor = true
 		end 'noDescriptorToRetainThrough'
 
 		return self.emitRuntimeCall(RetainTypeParamName, args: singletonArgs(value), resultTag: self.tagOf(value), resultNameId: self.valueNameId(value), range: range)
-	end 'coOwnBorrowedOpaqueForConsume'
+	end 'coOwnBorrowedOpaque'
 
 	// ⭐ **MOVE AN ALREADY-CLASSIFIED-MANAGED VALUE INTO DURABLE STORAGE** — the core of `moveInPayload`,
 	// factored out so a struct field / union payload (`moveInPayload`) and an ARRAY element (P1.7 slice 3,
@@ -51484,11 +51391,6 @@ export type Parser
 	// minted through `mintCallResult`, which can REFUSE (a void call in value position), so nothing
 	// is emitted for a call the program is not allowed to make.
 	//
-	// ⚠ **WHAT IT RETURNS IS NOT ALWAYS THE OP'S RESULT.** A substituted BARE-`T` return is a borrow the shared
-	// body handed back, and the value the expression goes on to use is the caller's own reference to it
-	// (`coOwnSubstitutedCallResult`) — a different ValueId, deliberately, so a later re-borrow of the source
-	// cannot `poisonMoveSource`-match it. The op still defines the borrow.
-	//
 	// `spelling` says whether those callee bytes are the AUTHOR'S or the COMPILER'S, which is the one
 	// question the reserved-space door cannot answer from the name — see `CalleeMint`.
 	function emitCall(callee ByteArray, anchor Token, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, argImmutableNames ByteArrayArray, rparenTok Token, resultUsed bool, constructorInstance ConstructorInstance, mint CalleeMint) returns ValueId throws ParseError
@@ -51501,7 +51403,7 @@ export type Parser
 		// it with no change to any of them.
 		let argDefaultSlots = try self.fillOmittedArgDefaults(callee, anchor: anchor, args: args, argLabels: argLabels, argRanges: argRanges)
 		let result = try self.mintCallResult(callee, anchor: anchor, resultUsed: resultUsed)
-		let handedBackABorrow = self.retypeOpaqueMethodResult(result, callee: callee, args: args)
+		self.retypeOpaqueMethodResult(result, callee: callee, args: args)
 		// ⭐⭐ **THE DROP ENROLMENT COMES AFTER THE RETYPE, AND THAT ORDER IS THE WHOLE OF A5o.** It used to sit
 		// in the mint's own tail, where the tag was still the opaque `T` — and an opaque tag ALWAYS answers "owns
 		// nothing" (`valueIsManagedHeap` tests byte-record and aggregate tags, and `typeParameter` is neither).
@@ -51510,20 +51412,17 @@ export type Parser
 		// a value whose type the instance fixes. Asked HERE the tag is the concrete one, so the two halves agree.
 		// See `enrolOwnedCallTemp` for why re-ordering it can only ADD enrolments.
 		//
-		// ⛔⛔ **AN OPAQUE SUBSTITUTED RESULT IS THE ONE KIND THE CALLEE DID NOT CO-OWN, SO IT IS NOT ADOPTED
-		// HERE.** Adoption assumes the `+1` a `returns <managed>` callee hands back (`emitOwnedValueReturn`
-		// retains before the `ret` — MEASURED: a concrete `Holder.get` returning `self.value` emits
-		// `__mm_retain`). A SHARED generic body emits none for a BARE `T`, because it cannot classify one, so
-		// that return is a BORROW. Adopting it drops a reference nobody took: MEASURED, `back.a` on a
-		// `Box with Alpha` round trip read `4557430888798830399` — `0x3F3F…`, the free poison — with the box
-		// then freed twice. The caller takes its own reference instead, below (`coOwnSubstitutedCallResult`).
-		//
-		// ⚠ **THE TEST IS THE OPAQUE RETURN, NOT THE SUBSTITUTION** — a substituted return of a CONCRETE
-		// managed record (a tuple, an instance) IS referenced by the body and is adopted here like any other.
-		// See `retypeOpaqueReturnValue`, where the two questions come apart and W41 measured the leak.
-		if not handedBackABorrow 'calleeAlreadyCoOwnedIt'
-			self.enrolOwnedCallTemp(result)
-		end 'calleeAlreadyCoOwnedIt'
+		// ⭐⭐ **EVERY CALL RESULT IS ADOPTED, INCLUDING A SUBSTITUTED BARE-`T` ONE (P1.7 slice 3b-vi-a).** The
+		// caller used to take its OWN reference to a bare-`T` result instead, on the premise that a shared
+		// generic body cannot classify one and so hands it back UNREFERENCED. That premise is a property of the
+		// DECLARED type and the obligation is a property of the RETURNED VALUE, and the two came apart the
+		// moment a body returned something it already owned: `return fresh()` through a `returns T` handed over
+		// a real `+1`, the caller minted a second, and one record leaked per call (exit 101, no wrong answer).
+		// There is no convention under which the caller can take that reference — a body that returns a value
+		// it created has nowhere to put the one it holds — so the callee takes it for every shape instead, in
+		// `emitOwnedValueReturn`, through the enclosing instance's descriptor for the one shape it cannot
+		// classify. A `returns T` is now an ordinary `+1` hand-off and is adopted here like every other.
+		self.enrolOwnedCallTemp(result)
 		// ⭐ **A CALLEE THAT DECLARED `returns __ManagedMemory` YIELDS THE BUFFER SURFACE (A2j).** Read HERE
 		// rather than inside the mint chain because the mint's tail (`mintOwnedCallResult`) is handed a
 		// `MaxonType` and not the callee name — and the name is the only thing that still knows the spelling,
@@ -51541,85 +51440,12 @@ export type Parser
 		// spelled (free, method, static), so a bare call to a declared throwing function inside such a body
 		// reaches the shared handler. `result` rides along because an ADOPTED managed one is already enrolled
 		// as an owned temp by `enrolOwnedCallTemp` above, and it must not be dropped on the error edge — see
-		// `routeBareThrowingCallToTryBlock`. An OPAQUE substituted one is not enrolled at all when this runs, so
-		// that function's test simply answers no and the co-ownership below lands on the ok continuation, which
-		// is the only edge the `tryCall` wrote the result register on.
+		// `routeBareThrowingCallToTryBlock`. An opaque `T` result is enrolled on the same terms, so the two ask
+		// one question.
 		self.routeBareThrowingCallToTryBlock(callee, opIdx: opIdx, result: result)
-		if handedBackABorrow 'sharedBodyHandedBackABorrow'
-			return try self.coOwnSubstitutedCallResult(result, callee: callee, range: SourceRange.between(anchor, last: rparenTok))
-		end 'sharedBodyHandedBackABorrow'
 
 		return result
 	end 'emitCall'
-
-	// ⭐⭐ **THE REFERENCE A SHARED GENERIC BODY COULD NOT TAKE, TAKEN BY THE ONE PARTY THAT CAN (A5o).**
-	// `Box.get`'s `return self.value` hands back a `T` it cannot classify: the body is compiled ONCE for every
-	// instantiation, so an unconditional `__mm_retain` there would fault on a trivial instantiation's raw
-	// scalar — the same bound `finishValueTry` states for an opaque `try` merge. The CALLER has no such
-	// problem: the receiver's alias fixes `T`, `retypeOpaqueMethodResult` has just substituted it, and the
-	// question is now a static one. So the hand-off the callee owed is performed here.
-	//
-	// It is the SAME `promoteBorrowedToOwned` a `return` spends, through the SAME `returned` door, because it
-	// is literally that return one frame later: a String COPIES (an immortal `.rdata` literal cannot be
-	// increfed, which is why a bare `emitIncref` would be wrong here), a trivial tuple gets its own record,
-	// an aggregate INCREFS the shared box so the alias a field write shows through is preserved. The
-	// immutable-global refusal that door also carries cannot fire on a value minted by a `call` op.
-	//
-	// A TRIVIAL instantiation owns no heap, so this is a no-op for `Box with Integer` and the emitted code is
-	// unchanged for it.
-	//
-	// ⛔⛔ **IT IS REACHED FOR A BARE `T` AND FOR NOTHING ELSE, AND THAT GATE IS THE WHOLE OF W41.** The
-	// premise above — *the body could not classify it, so it took no reference* — is true of an OPAQUE return
-	// and false of every CONCRETE managed record a generic method can hand back. A `returns Pair`
-	// (`Pair = (T, T)`) substitutes exactly as a bare `T` does, but a tuple is a `structRef` on every
-	// instantiation, so the body DID classify it and `emitOwnedValueReturn` already discharged the hand-off.
-	// Reached on one of those, this function mints a SECOND reference to a record that already had exactly one
-	// owner, drops that one, and leaks the body's. See `retypeOpaqueReturnValue`, which is where the two
-	// questions are told apart.
-	//
-	// ⚠ **IT IS ALSO THE ONE WRITER OF `lastSubstitutedCoOwn`, AND THE EARLY RETURN ABOVE IS WHAT MAKES THAT
-	// RECORD EXACT.** The `try` lift that reads it must fire for a managed result and must NOT fire for a
-	// trivial one — which is precisely the split this function already makes, so recording it HERE keeps the
-	// lift's condition and the promotion's condition one fact instead of two that can drift.
-	function coOwnSubstitutedCallResult(result ValueId, callee ByteArray, range SourceRange) returns ValueId throws ParseError
-		if not self.valueIsManagedHeap(result) 'trivialInstantiation'
-			return result
-		end 'trivialInstantiation'
-
-		// Read BEFORE the promotion: the module-op floor and the block-local `opRefs` height are what
-		// `liftSubstitutedCoOwnForOkEdge` measures against the try target's own floor and slices the
-		// promotion's ops out of.
-		let promotionFloor = self.artifact.module.ops.count()
-		let promotionBlock = self.currentBlock
-		let opRefMark = promotionBlock.opRefs.count()
-		let owned = try self.promoteBorrowedToOwned(result, door: BorrowLaunderDoor.returned, range: range)
-
-		// ⚠ **NORMALIZED, THE WAY `promoteBorrowedMergeEdge` NORMALIZES IT THE OTHER WAY.** The promotion's
-		// arms disagree about the STATEMENT's obligation, and each is right for its own first caller: a String
-		// copy is minted through `emitStringInterp`, which enrols it, while an aggregate retain sets the
-		// owned-heap bit ALONE because `promoteBorrowedToOwned` is written for a value a BINDING will drop. A
-		// call result may reach no binding at all (`over(b.get())`), so it owes the statement too — and asking
-		// first is what keeps the String arm off the list twice, which would be a double free rather than a
-		// leak.
-		if not self.pendingTempsContain(owned) 'statementStillOwesTheDrop'
-			self.trackOwnedTemp(owned)
-		end 'statementStillOwesTheDrop'
-
-		self.requireNoUnspentSubstitutedCoOwnLift(callee)
-		self.lastSubstitutedCoOwn = SubstitutedCoOwn.at(promotionFloor, blockId: promotionBlock.id, opRefMark: opRefMark, owned: owned)
-		return owned
-	end 'coOwnSubstitutedCallResult'
-
-	// A lift is spent by the fork that caused it before that fork parses anything else, so a second co-own
-	// can never overwrite one in flight. Asserted rather than remembered: overwriting a lift would DELETE the
-	// earlier promotion's ops from the module's block graph — a `+1` that silently stops being taken, which
-	// is a use-after-free at the far end and nothing at all at this one.
-	function requireNoUnspentSubstitutedCoOwnLift(callee ByteArray)
-		match self.lastSubstitutedCoOwn 'record'
-			at to none then break 'record'
-			liftedForOkEdge then panic("coOwnSubstitutedCallResult: co-owning '{String.from(callee)}'s substituted result would overwrite a promotion already lifted for a `try`'s ok edge and not yet re-attached")
-		end 'record'
-	end 'requireNoUnspentSubstitutedCoOwnLift'
 
 	// ⭐ **SUPPLY EVERY ARGUMENT THE CALL OMITTED AND THE DECLARATION DEFAULTS** (BATCH2 slice 4) — each one
 	// becomes a call to the declaration's synthesized helper, appended with the parameter's own NAME as its
@@ -51724,48 +51550,39 @@ export type Parser
 	// The gate is ordered cheapest-first: almost every call in a program has a non-generic first argument, and
 	// that test is one array read. Only past it is the callee's return type looked up.
 	//
-	// ⭐ **WHAT IT REPORTS IS AN OWNERSHIP FACT, NOT "DID THE RETYPE FIRE".** `emitCall` needs exactly one bit
-	// — *did the shared body hand this back without taking a reference for it?* — to tell the two hand-offs
-	// apart (`coOwnSubstitutedCallResult`), and it is answered here because this is where the callee's
-	// DECLARED return type is already in hand; re-deriving it in `emitCall` would cost a second
-	// `returnTypeOf` lookup on the hottest path in the parser.
-	//
-	// ⛔ **THE TWO WERE ONE ANSWER UNTIL W25 AND HAVE NOT BEEN SINCE.** While the gate below was
-	// `typeParameter`-only they coincided; widening it to `returns Items` / `returns Pair` made "substituted"
-	// strictly broader than "unreferenced", and the bit went on being read as the latter — one leaked record
-	// per call, measured. `retypeOpaqueReturnValue` derives the ownership half from the declared type and
-	// carries the argument in full.
-	function retypeOpaqueMethodResult(result ValueId, callee ByteArray, args ValueIdArray) returns bool
+	// ⚠ **IT REPORTS NOTHING, AND IT USED TO REPORT AN OWNERSHIP BIT.** `emitCall` asked it *"did the shared
+	// body hand this back without taking a reference for it?"* to choose between adopting the result and
+	// co-owning it. That question is answered from the DECLARED return type and the obligation belongs to the
+	// RETURNED VALUE, so the two could disagree — and did, for every body that returned a value it already
+	// owned. The callee now discharges the hand-off for every shape (`emitOwnedValueReturn`), so there is one
+	// convention, no bit, and nothing here for a caller to read back.
+	function retypeOpaqueMethodResult(result ValueId, callee ByteArray, args ValueIdArray)
 		if args.isEmpty() 'noReceiver'
-			return false
+			return
 		end 'noReceiver'
 
 		let receiver = try args.get(0) otherwise panic("retypeOpaqueMethodResult: args.get(0) failed on a non-empty list")
 		if self.tagOf(receiver) != ValueTypeTag.genericInstance 'concreteReceiverOnly'
-			return false
+			return
 		end 'concreteReceiverOnly'
 
 		// The callee must be a method OF the receiver's own generic base, or `T` names a different type's
 		// parameter and the substitution would be against the wrong binding.
 		if not isQualifiedUnderTypeName(callee, typeName: self.signatures.genericInstanceBaseName(self.valueNameId(receiver))) 'notItsOwnMethod'
-			return false
+			return
 		end 'notItsOwnMethod'
 
 		match self.signatures.returnTypeOf(callee, into: self.artifact.typeNames) 'declared'
-			declared(returnType) then return self.retypeOpaqueReturn(result, receiver: receiver, returnType: returnType)
+			declared(returnType) then self.retypeOpaqueReturn(result, receiver: receiver, returnType: returnType)
 			undeclared then break 'declared'
 		end 'declared'
-
-		return false
 	end 'retypeOpaqueMethodResult'
 
-	function retypeOpaqueReturn(result ValueId, receiver ValueId, returnType MaxonReturnType) returns bool
+	function retypeOpaqueReturn(result ValueId, receiver ValueId, returnType MaxonReturnType)
 		match returnType 'r'
-			value(inner) then return self.retypeOpaqueReturnValue(result, receiver: receiver, inner: inner)
+			value(inner) then self.retypeOpaqueReturnValue(result, receiver: receiver, inner: inner)
 			void then break 'r'
 		end 'r'
-
-		return false
 	end 'retypeOpaqueReturn'
 
 	// ⛔ **THERE IS NO MANAGED/TRIVIAL SPLIT HERE ANY MORE, AND ITS REMOVAL IS A5o.** A `managedConcrete`
@@ -51790,37 +51607,23 @@ export type Parser
 	// ⚠ **AND ITS OWN `typeParameter`-ONLY GATE IS GONE WITH W25**, for the reason the read door's was: a method
 	// declared `returns Items` inside `type HoldA uses T` hands back an `Array with T` that the receiver has
 	// already fixed to `Array with Num`, and a gate keyed on the bare opaque tag cannot see it.
-	function retypeOpaqueReturnValue(result ValueId, receiver ValueId, inner MaxonType) returns bool
+	//
+	// ⚠⚠ **IT USED TO ANSWER A SECOND QUESTION — *does the caller owe this result a reference?* — AND W41's
+	// MEASUREMENT IS WHY THAT QUESTION IS GONE RATHER THAN NARROWED.** The two were ONE answer while the gate
+	// was `typeParameter`-only; W25 widened the gate to `returns Items` / `returns Pair` and the bit went on
+	// being read as *"the body took no reference"*, so a caller minted a SECOND reference to a record the body
+	// had just built — `MapIterator.current()`'s `Entry = (Key, Value)` walked by `for (_, value) in m`, one
+	// leaked record per call, five cases at exit 101 with every answer still correct. Narrowing the bit back to
+	// the bare-`T` arm cured that instance and left the shape: a caller reading a DECLARED type to decide what
+	// a RETURNED VALUE owes. The callee now owes the `+1` on every shape (`emitOwnedValueReturn`) and there is
+	// no bit to narrow.
+	function retypeOpaqueReturnValue(result ValueId, receiver ValueId, inner MaxonType)
 		let fixedByTheInstance = self.slotTypeThroughReceiver(receiver, declared: inner)
 		if maxonTypesDenoteSame(fixedByTheInstance, b: inner) 'theInstanceFixesNothingHere'
-			return false
+			return
 		end 'theInstanceFixesNothingHere'
 
 		self.retypeValue(result, valueType: fixedByTheInstance)
-
-		// ⭐⭐ **THE RETYPE FIRED — WHETHER THE CALLER OWES A REFERENCE IS A SECOND QUESTION, AND IT IS ASKED OF
-		// THE DECLARED TYPE (W41).** The two were ONE answer while this gate was `typeParameter`-only, and W25
-		// widened the gate without revisiting what rode on it: a method declared `returns Items` / `returns Pair`
-		// substitutes just as a bare `T` does, so "the substitution fired" stopped meaning "the body took no
-		// reference" and every such result was co-owned as if it were a borrow.
-		//
-		// ⛔ **The premise belongs to the OPAQUE return alone.** A shared body cannot classify a bare `T` — an
-		// unconditional retain would fault on a trivial instantiation's raw scalar — so `emitOwnedValueReturn`'s
-		// promotion declines (`valueIsManagedHeap` is false for a `typeParameter` tag) and the value leaves
-		// UNREFERENCED. A CONCRETE managed record is a shape the body knows whichever type `T` is: a tuple is a
-		// `structRef` on every instantiation, so that same promotion classifies it, copies-or-increfs a borrowed
-		// one, passes an already-owned one through, and hands the caller a real `+1` exactly as a non-generic
-		// callee does. There is nothing left for the caller to take.
-		//
-		// ⛔⛔ **MEASURED (W41): taking it anyway LEAKS ONE RECORD PER CALL, and only the leak gate can see it.**
-		// `MapIterator.current()`'s `Entry = (Key, Value)` is the reaching program — `for (_, value) in m` walked
-		// `current()`, the caller minted a second reference to the pair the body had just built (a whole fresh
-		// record through `copyTupleValue` for a trivial tuple, an `__mm_retain` for a managed-element one),
-		// destructured THAT and dropped THAT, and the body's own record was adopted by nobody. Every answer
-		// stayed correct; five cases exited 101. `generic-type-substitution.md`'s two
-		// `substituted-return-of-…-is-already-owned` cases pin both arms with no loop, iterator or `Map` in
-		// sight, which is what localizes the defect to this line rather than to the traversal protocol.
-		return maxonTypeTag(inner) == ValueTypeTag.typeParameter
 	end 'retypeOpaqueReturnValue'
 
 	// ⭐ **A CALL ARGUMENT MEETS THE PARAMETER'S DECLARED RANGE (P1.9), and this is the door that used to
@@ -52254,7 +52057,7 @@ export type Parser
 			return argValue
 		end 'noInstantiationToReference'
 
-		return self.coOwnBorrowedOpaqueForConsume(argValue, range: SourceRange.ofToken(anchor))
+		return self.coOwnBorrowedOpaque(argValue, range: SourceRange.ofToken(anchor))
 	end 'handleEscapingBorrowFeed'
 
 	// ⭐ **TAKE THE SECOND REFERENCE A BORROWED CONCRETE AGGREGATE OWES ITS DURABLE SINK** — the one act both
@@ -52456,11 +52259,13 @@ export type Parser
 	// void / unresolved result owns no heap and is enrolled in nothing, so a call door with nothing to
 	// classify may ask unconditionally.
 	//
-	// ⛔ **THE ONE RESULT THAT IS NOT ADOPTED is a substituted BARE-`T` return** — a shared generic body cannot
-	// classify one, so it takes no reference, there is no `+1` to adopt, and the caller mints its own instead
-	// (`coOwnSubstitutedCallResult`). That is the single gate on this call, at the single door that can reach
-	// one; the witness and indirect doors have no substitution and ask unconditionally. A substituted return of
-	// a CONCRETE managed record carries a real `+1` and IS adopted here — see `retypeOpaqueReturnValue` (W41).
+	// ⭐⭐ **AN OPAQUE `T` RESULT IS ADOPTED TOO, AND ITS DROP IS THE DESCRIPTOR-GATED ONE (P1.7 slice
+	// 3b-vi-a).** A `returns T` callee hands back a `+1` like every other managed return — it retains a borrow
+	// through `retainFunc@64` on its way out (`emitOwnedValueReturn`) — so a result the receiver did NOT fix to
+	// a concrete type (a `self.get()` relayed inside another shared body) still owes a release. `tagIsManaged`
+	// cannot see it: `valueIsManagedHeap` tests byte-record and aggregate tags and `typeParameter` is neither,
+	// which is exactly why the tag is named here. `decrefCalleeFor` routes it to `__drop_type_param`, inert on a
+	// trivial instantiation whose `destroyFunc@40` is 0.
 	//
 	// ⛔⛔ **IT IS ASKED ONCE PER CALL DOOR, AND IT MUST BE ASKED OF THE FINAL TAG.** `valueIsManagedHeap`
 	// reads the value's TAG, and an OPAQUE tag is none of `string` / `character` / `structRef` /
@@ -52484,7 +52289,7 @@ export type Parser
 	// appended* — and takes the result back off the pending list while it builds the error edge, because the
 	// `tryCall` never wrote that register on a throw.
 	function enrolOwnedCallTemp(result ValueId)
-		if self.valueIsManagedHeap(result) 'adoptsHeapBox'
+		if self.valueIsManagedHeap(result) or self.tagOf(result) == ValueTypeTag.typeParameter 'adoptsHeapBox'
 			self.trackOwnedTemp(result)
 		end 'adoptsHeapBox'
 	end 'enrolOwnedCallTemp'

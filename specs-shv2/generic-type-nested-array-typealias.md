@@ -814,17 +814,16 @@ end 'main'
 error E2015: <fragment>:19:11: Unsupported: a `try` on an opaque type-parameter array accessor (`get`/`first`/`last`/`pop`/`remove` on an `Array with <type parameter>` field) with a VALUE `otherwise <expr>` — reconciling the borrowed/moved-out element with the fallback at the `try` continuation needs a descriptor-gated incref/copy the shared body cannot pick statically (the element is a raw scalar for a trivial instantiation and a managed pointer for another), a distinct future slice. Use a DIVERGING `otherwise` (`otherwise return`/`throw`/`panic`) instead — the plain borrow (`get`/`first`/`last`) and move-out (`pop`/`remove`) are supported that way (P1.7 slice 3b-vi-a).
 ```
 
-### Returning an OWNED moved-out opaque element is rejected
+### Returning an OWNED moved-out opaque element transfers it to the caller
 
-`pop`/`remove` hand back an OWNED opaque element the method body drops through the descriptor-gated
-`__drop_type_param`. RETURNING that owned element out of the generic method would make the CALLER its owner, but
-a generic method's opaque `typeParameter` return type is not resolved to the instantiation's concrete type at
-the call site, so the caller neither adopts nor drops it and the moved-out element LEAKS. Returning an opaque
-`T` is a distinct future slice (symmetric to the opaque value-`otherwise` deferral); until it lands the owned
-move-out must be dropped in the body or moved back into the array (`push`), so returning it is a clean E2015.
-(A BORROWED opaque return — `return item` for a borrowed `Element` parameter — owns nothing and is unaffected.)
+`pop`/`remove` hand back an OWNED opaque element. RETURNING it out of the generic method makes the CALLER its
+owner, which is the same `+1` hand-off a `returns String` method makes: the body moves the element out of its
+own drop sets and the caller's binding releases it at scope exit. This was a clean `E2015` until P1.7 slice
+3b-vi-a, on the premise that a caller cannot resolve an opaque `T` return — it resolved it perfectly well and
+then took a SECOND reference to it, which is the leak the refusal was standing in front of. The exit-0 run says
+the element is released exactly once: a missed release is exit 101 and a doubled one faults on the poison.
 
-<!-- test: return-owned-opaque-element-rejected -->
+<!-- test: return-owned-opaque-element-transfers-to-the-caller -->
 ```maxon
 typealias ExitCode = int(0 to 125)
 
@@ -855,8 +854,8 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E2015: <fragment>:18:3: Unsupported: returning an OWNED opaque type-parameter value — an element moved out of an `Array with <type parameter>` field by `pop`/`remove` inside a generic body. The caller cannot resolve the opaque `T` return to the instantiation's concrete type, so it would neither adopt nor drop the moved-out element and the value would leak. Returning an opaque `T` is a distinct future slice; drop the moved-out element in the method body, or move it back into the array with `push` (P1.7 slice 3b-vi-a).
+```exitcode
+0
 ```
 
 ### Clone a managed opaque array field (deep, source freed)
