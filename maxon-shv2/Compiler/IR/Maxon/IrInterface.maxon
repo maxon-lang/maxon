@@ -550,7 +550,21 @@ export function renderDeclaredTypeName(t MaxonType, declarationName ByteArray, t
 		return try typeParamNames.get(position) otherwise panic("renderDeclaredTypeName: typeParamNames.get OOB at {position}, a position `typeParamPositionIn` just read out of the same list")
 	end 'typeParameterType'
 
+	// ⭐⭐ **THE DECLARATION'S OWN INSTANCE IS `Self`, SO IT RENDERS AS THE DECLARATION (W57)** — the
+	// generic-instance twin of the type-parameter arm above, and the same idea: a type is re-spelled against
+	// the names of the declaration whose signature is being read. Since `Parser.enclosingSelfType` gives a
+	// container whose record the compiler owns the INSTANCE rather than the base `structRef`, a `returns Self`
+	// on `stdlib/Array.maxon`'s `clone`/`init`/`equals` arrives here as `Array with Array.Element`, and the
+	// mangled `Array_Te3315404e8d3fd14` matched no requirement — **MEASURED, three simultaneous `E3016`s
+	// against `Cloneable`, `Equatable` and `BuiltinArrayLiteral`, each one of them a `Self` the declaration
+	// plainly wrote.** `ConformanceCheck.substituteSelf` puts the bare declaration name on the EXPECTED side,
+	// so this is the spelling the two sides have to meet at; it also keeps the mangled name out of the
+	// DIAGNOSTIC, where it named a type no author can write.
 	if tag == ValueTypeTag.genericInstance 'genericInstanceType'
+		if signatures.instanceIsDeclarationSelf(typeNameIdOf(t), declarationName: declarationName, paramNames: typeParamNames) 'theDeclarationsOwnInstance'
+			return declarationName
+		end 'theDeclarationsOwnInstance'
+
 		return signatures.canonicalInstanceName(typeNameIdOf(t))
 	end 'genericInstanceType'
 

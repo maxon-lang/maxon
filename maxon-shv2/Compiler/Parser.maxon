@@ -10459,6 +10459,15 @@ export type Parser
 			if kind == TokenKind.identifier and self.opaqueArrayConstructionAt(q) 'opaqueArrayConstruction'
 				direct = true
 			end 'opaqueArrayConstruction'
+			// ⭐⭐ **`Self{}` IS A THIRD SPELLING OF THAT SAME CONSTRUCTION (W57)**, and it is here for the
+			// reason the header above records the literal form being added for: the parser grew a producer and
+			// this scan did not, so `appendOpaqueArrayCreate` met a function with no descriptor reserved and
+			// **PANICKED — measured, on `Array.create`'s own `return Self{}`.** Inside `type Array` the
+			// enclosing instance is `Array with <its own parameter>`, so the create stamps `element_destroy@40`
+			// from the threaded descriptor exactly as `ElementArray{}` does one arm up.
+			if kind == TokenKind.selfType and self.opaqueSelfArrayConstructionAt(q) 'opaqueSelfArrayConstruction'
+				direct = true
+			end 'opaqueSelfArrayConstruction'
 			// A `.pop()`/`.remove(i)` array MOVE-OUT hands back an OWNED element dropped at scope exit; when the
 			// element is an opaque `typeParameter` that drop routes through the descriptor-gated
 			// `__drop_type_param`, so — like `sizeof(T)` and an opaque `X.create()` — the method needs the
@@ -10699,6 +10708,28 @@ export type Parser
 		let giid = self.signatures.genericAliasInstanceFrom(qualified, readerFilePath: self.filePath)
 		return self.signatures.isArrayInstance(giid) and self.signatures.containerElementIsOpaque(giid)
 	end 'opaqueArrayConstructionAt'
+
+	// ⭐ **THE `Self{…}` SPELLING OF THE CONSTRUCTION ABOVE (W57)** — a separate shape test because `Self` is a
+	// KEYWORD and names no alias, so there is no qualified name to look an instance up by; the instance is the
+	// enclosing declaration's own (`ProgramSignatures.ownRecordSelfInstance`). The opacity is read through the
+	// SAME `containerElementIsOpaque` the sibling asks and `emitArrayCreateOp` branches on, so the reserved
+	// slot and the emitted read still decide off one fact.
+	//
+	// ⚠ It deliberately does not require the literal to be EMPTY, though only the empty one creates
+	// (`parseStructLiteral`'s `theEmptyContainer` arm; `Self{managed: m}` is the identity and needs no
+	// descriptor). A `{` may be followed by a newline before its fields, so a token test for emptiness would
+	// have to re-derive the field reader's whitespace rule — and the asymmetry the sibling signals state
+	// applies here too: over-reserving costs one ignored parameter, missing one aborts the compiler.
+	function opaqueSelfArrayConstructionAt(selfPos TokenIndex) returns bool
+		if self.kindAt(selfPos + 1) != TokenKind.leftBrace 'notALiteral'
+			return false
+		end 'notALiteral'
+		if not self.arrayNameIsItsOwnRecord(self.enclosingType) 'notTheOwnRecordArray'
+			return false
+		end 'notTheOwnRecordArray'
+
+		return self.signatures.containerElementIsOpaque(self.signatures.ownRecordSelfInstance(self.enclosingType))
+	end 'opaqueSelfArrayConstructionAt'
 
 	// The two TOKEN SHAPES that construct the container an alias at `aliasPos` names: the static call
 	// `X` `.` `create` `(` and the literal `X` `{` (S2i). Read by the descriptor-need pre-scan, which runs
@@ -18405,6 +18436,16 @@ export type Parser
 			return maxonTypeOfTag(byteRecord, nameId: UnnamedTypeId)
 		end 'theBuiltinByteRecord'
 
+		// ⭐⭐ **THE GENERIC TWIN OF THE ARM ABOVE (W57): `Self` INSIDE `type Array` IS THE INSTANCE.** A
+		// non-generic byte record answers with its TAG for the reason `ProgramSignatures.ownRecordSelfInstance`
+		// states in full — a value of it is the compiler's own record, not a box built from declared fields —
+		// and `Array` is that same fact with a type parameter on it. The base `structRef` below is right only
+		// for a declaration that HAS a base box; `Array with T` is its `__ManagedMemory with T`, so a
+		// `structRef(Array)` would give `clone()`'s result a struct cascade over the buffer record.
+		if self.arrayNameIsItsOwnRecord(name) 'theCompilersOwnGenericRecord'
+			return MaxonType.genericInstance(self.signatures.ownRecordSelfInstance(name))
+		end 'theCompilersOwnGenericRecord'
+
 		let id = self.artifact.typeNames.intern(name)
 		return MaxonType.named(id) if self.enclosingTypeIsEnum else MaxonType.structRef(id)
 	end 'enclosingSelfType'
@@ -18789,12 +18830,32 @@ export type Parser
 	// (`retypeGenericAliasConstructorResult`) the caller reads the layout descriptor off. Compared by interned
 	// id in `self.artifact.typeNames` — the interner both the resolved return type and `self.enclosingType`
 	// live in — so no `nameOf` round-trip is needed.
+	//
+	// ⭐⭐ **AND A `Self` THAT RESOLVED TO AN INSTANCE ANSWERS TRUE TOO (W57).** `enclosingSelfType` gives a
+	// container whose record the compiler owns the INSTANCE over its own parameters rather than the base
+	// `structRef`, so `stdlib/Array.maxon`'s `static function from(source) returns Self` arrived here as a
+	// `genericInstance` and was told a static returning `Self` has no descriptor source — a refusal naming
+	// the very cure the declaration already wrote. The question this asks is unchanged; only the two
+	// spellings `Self` can now take have to be read, and an ORDINARY generic still cannot reach the second
+	// one, so nothing else's answer moves.
 	function returnsEnclosingType(returnType MaxonReturnType) returns bool
 		return match returnType 'r'
 			void gives false
-			value(inner) gives maxonTypeTag(inner) == ValueTypeTag.structRef and typeNameIdOf(inner) == self.artifact.typeNames.intern(self.enclosingType)
+			value(inner) gives self.typeIsEnclosingType(inner)
 		end 'r'
 	end 'returnsEnclosingType'
+
+	// The two spellings of "this type IS the enclosing declaration", split out so the `match` above stays one
+	// expression per arm. The instance half compares BASE NAMES: a `genericInstance` id lives in the
+	// signature index's own space, not in `self.artifact.typeNames`, so there is no id to compare.
+	function typeIsEnclosingType(t MaxonType) returns bool
+		let tag = maxonTypeTag(t)
+		if tag == ValueTypeTag.structRef 'theBaseBox'
+			return typeNameIdOf(t) == self.artifact.typeNames.intern(self.enclosingType)
+		end 'theBaseBox'
+
+		return tag == ValueTypeTag.genericInstance and self.signatures.genericInstanceBaseName(typeNameIdOf(t)).equals(self.enclosingType)
+	end 'typeIsEnclosingType'
 
 	// Statement list until the closing `end`, emitting into `block`. Returns the block
 	// the LAST statement left control in — the same `block` for straight-line code, but
@@ -35809,6 +35870,21 @@ export type Parser
 		// the two apart, and this order is the one that keeps the two fills independent passes over the same
 		// two columns rather than one interleaved walk.
 		try self.applyFieldDefaults(layout, fieldValues: fieldValues, filled: filled, anchor: typeTok)
+
+		// ⭐⭐ **`Self{}` INSIDE `type Array` IS THE EMPTY CONTAINER (W57)** — the very answer `<InnerAlias>{}`
+		// gets one door down (S2i, `parseInnerAliasLiteral`), and for the same reason: `Array`'s sole field IS
+		// its record, so an empty literal leaves no slot unwritten — it names the empty buffer, which is what
+		// `Array.create()` builds. `stdlib/Array.maxon` opens both `create()` and `from(source)` with it.
+		//
+		// ⚠ It is an arm here rather than a field DEFAULT in the corpus, and the difference is not style: a
+		// default is source the OTHER two compilers read as well, and it would cost a `coOwnAggregateAsTemp`
+		// retain on a record the default had just built. The NON-empty spelling (`Self{managed: m}`) keeps the
+		// ordinary path and reaches `emitFusedWrapperLiteral`'s identity arm, so the two forms stay the two
+		// statics they mirror — `create()` and `init(managed)`.
+		if self.arrayNameIsItsOwnRecord(layout.name) and not (try filled.get(0) otherwise panic("parseStructLiteral: filled.get OOB at 0 — `arrayNameIsItsOwnRecord` established a sole field and the column is sized to the layout's field count")) 'theEmptyContainer'
+			return try self.emitOwnedContainerCreate(self.signatures.ownRecordSelfInstance(layout.name), aliasTok: typeTok, aliasName: layout.name, range: SourceRange.between(typeTok, last: rbraceTok))
+		end 'theEmptyContainer'
+
 		try self.requireAllFieldsInitialized(layout, filled: filled, anchor: typeTok)
 
 		return try self.emitStructLiteral(layout, fieldValues: fieldValues, fieldBareLocal: fieldBareLocal, anchor: typeTok, range: SourceRange.between(typeTok, last: rbraceTok))
@@ -36442,12 +36518,29 @@ export type Parser
 	// which is exactly `__str_from_bytes`. Two producers, chosen by whether the declaration HAS the field,
 	// rather than one producer with a sentinel meaning "scan it yourself".
 	//
-	// ⚠ **`BuiltinArrayLiteral` IS REFUSED RATHER THAN GUESSED.** It is the third marker and its conformer
-	// is `stdlib/Array.maxon`, which is unlisted and which shv2 serves through a synthesized surface with a
-	// different record (`ArrayRuntime`'s `element_destroy@40` where a String keeps its flag). Producing a
-	// `string`-tagged value for it would be a silent wrong answer at the one slot the two records disagree
-	// on; listing that module is its own rung and this is the door it will come through.
+	// ⭐⭐⭐ **`BuiltinArrayLiteral` NEEDS NO PRODUCER AT ALL, WHICH IS WHY IT IS AN ARM AND NOT A THIRD
+	// `__str_*` ENTRY (W57).** The two `String` producers exist because a `String` record is BUILT from its
+	// buffer: `__str_from_bytes` classifies the bytes and writes its own answer at `@40`, `__str_of_buffer`
+	// writes the flag it was handed there. An `Array` record has nothing of the sort to write — since the
+	// envelope collapse `Array with T` and `__ManagedMemory with T` are ONE `GenericInstanceId`
+	// (`SignatureIndex.canonicalGenericBaseName`), so `Array{managed: m}` is not a construction but an
+	// IDENTITY on the record, and the only work left is the pair `parseArrayInitStatic` already does for the
+	// same identity written as a static call: a FRESH `ValueId` (which is what flips the surface, since the
+	// ARRAY surface is the ABSENCE of `markBufferSurface`) and a refcount that balances.
+	//
+	// ⚠ **AND THE REFUSAL BELOW STILL COVERS EVERY OTHER `BuiltinArrayLiteral` CONFORMER, BECAUSE THE HAZARD
+	// IT NAMES IS REAL FOR THEM AND VACUOUS HERE.** That hazard is that construction DISCARDS every declared
+	// field the fused record has no slot for. `stdlib/Array.maxon:104-106` declares exactly ONE field and it
+	// IS the record, so there is nothing to discard — which is precisely what `arrayLayoutIsItsOwnRecord`
+	// tests, structurally, rather than trusting the name alone. A conformer that declares a second field
+	// meets the unchanged sentence, because for it the sentence is still true.
 	function emitFusedWrapperLiteral(layout StructLayout, fieldValues ValueIdArray, anchor Token, range SourceRange) returns ValueId throws ParseError
+		if self.signatures.isArrayBaseName(layout.name) 'theArrayRecord'
+			try self.requireArrayIsItsOwnRecord(layout, anchor: anchor)
+			let buffer = try fieldValues.get(0) otherwise panic("emitFusedWrapperLiteral: fieldValues.get OOB at 0 — `requireArrayIsItsOwnRecord` established a sole field and the column is sized to the layout's field count")
+			return self.coOwnAggregateAsTemp(buffer, range: range)
+		end 'theArrayRecord'
+
 		let tag = try self.requireFusedWrapperTag(layout, anchor: anchor)
 
 		let managedIndex = layout.inlineManagedFieldIndex()
@@ -36479,6 +36572,40 @@ export type Parser
 		return UnnamedTypeId
 	end 'fusedWrapperNameId'
 
+	// ⭐⭐ **IS THIS DECLARATION THE `Array` WHOSE RECORD IT ALREADY IS? (W57)** — the admission test for
+	// `emitFusedWrapperLiteral`'s identity arm, and it is TWO facts because either alone is a wrong answer.
+	//   • **THE NAME**, because the identity rests on `Array with T` and `__ManagedMemory with T` being one
+	//     `GenericInstanceId`, which is a fact about that base name and no other. Keying on the MARKER alone
+	//     is the original defect `requireFusedWrapperTag` documents at length.
+	//   • **THE SHAPE**, because the name is not the compiler's to reserve (`Array` is deliberately absent
+	//     from `TypeResolution.isCompilerOwnedTypeName`, exactly as `Map` is, so a user program declaring its
+	//     own container gets its own). A user `type Array` carrying a second field would have that field
+	//     silently discarded by the identity — the very hazard the refusal names — so it is the SOLE-FIELD
+	//     structure that admits, and anything else meets the unchanged sentence.
+	// ⭐ **THE POSITIONED HALF OF THE PREDICATE BELOW — A REFUSAL WHOSE NOUN IS THE SHAPE, NOT THE NAME.**
+	// `requireFusedWrapperTag`'s sentence is about which NAMES the compiler owns a record for, and it would
+	// be actively misleading here: the name is right and the DECLARATION is what disagrees. A conformer named
+	// `Array` that declares a second field would have that field discarded by the identity — the very hazard
+	// the sibling sentence names — so it is refused with the field it is about.
+	function requireArrayIsItsOwnRecord(layout StructLayout, anchor Token) throws ParseError
+		if self.arrayNameIsItsOwnRecord(layout.name) 'itsOwnRecord'
+			return
+		end 'itsOwnRecord'
+
+		throw ParseError.unsupported("`{String.from(layout.name)}` implements `{String.from(layout.requireBuiltinManagedWrapperInterfaceName())}`, and an `{String.from(ArrayBuiltinBaseName)}` IS its `{String.from(ManagedMemoryTypeName)}` — one record under two names — so its literal is an identity on the buffer its sole field names. This declaration has {layout.fieldCount()} field(s), and every one past the buffer would be silently dropped at construction and then read back past the record's end when the value is cloned or destroyed. Declare the buffer alone, or give the type a name the compiler owns no record for", line: anchor.line, column: anchor.column)
+	end 'requireArrayIsItsOwnRecord'
+
+	function arrayNameIsItsOwnRecord(name ByteArray) returns bool
+		if not self.signatures.isArrayBaseName(name) 'notTheArrayName'
+			return false
+		end 'notTheArrayName'
+
+		return match self.signatures.structOf(name) 'declaration'
+			declared(layout) gives layout.fieldCount() == 1 and layout.inlineManagedFieldIndex() == 0
+			undeclared gives false
+		end 'declaration'
+	end 'arrayNameIsItsOwnRecord'
+
 	// ⭐⭐ **WHICH TAG A FUSED LITERAL PRODUCES — DECIDED BY THE TYPE'S NAME, AND A NAME THE COMPILER DOES NOT
 	// OWN THE RECORD FOR IS REFUSED OUTRIGHT.** The marker cannot decide it: keying on the marker alone gave
 	// EVERY `BuiltinStringLiteral` conformer the `string` tag, so a type of any other name got a `string`-tagged
@@ -36500,12 +36627,13 @@ export type Parser
 	//     `__str_decref`: **0xC0000005**.
 	//   * **The CLONE is `__clone_<T>`**, built from the identical list, and faults identically.
 	// There is no tag that fixes this: the value is one record and two descriptions of it. The DECLARATION
-	// stays legal (its layout is a real answer, which is what `sizeof` reports) and the CONSTRUCTION is refused,
-	// which is exactly the arrangement `BuiltinArrayLiteral` has always had here — its own arm is GONE, folded
-	// into this one, because it was the same refusal for a narrower reason. (`BuiltinArrayLiteral`'s record
-	// disagrees one slot further still: it keeps a per-element destructor at @40 where a String keeps its
-	// grapheme flag, and shv2 serves `Array` through a synthesized surface rather than from
-	// `stdlib/Array.maxon`, which is unlisted.)
+	// stays legal (its layout is a real answer, which is what `sizeof` reports) and the CONSTRUCTION is refused.
+	//
+	// ⚠ **THIS IS NOW REACHED ONLY BY A CONFORMER THE IDENTITY ARM DID NOT TAKE (W57).** The corpus's own
+	// `type Array` no longer arrives here at all: its record needs no producer, so it is served one door up by
+	// `arrayLayoutIsItsOwnRecord`. What still arrives is every OTHER `BuiltinArrayLiteral` conformer — a user
+	// type of another name, or an `Array` declaring a second field — and for each of those the three
+	// consequences above hold unchanged, so the sentence they meet is unchanged too.
 	//
 	// ⇒ Only the two names the compiler already owns denote a builtin byte record: `String` and `Character`
 	// are on `TypeResolution.isCompilerOwnedTypeName`, which is what guarantees no USER file can mint one, so a
@@ -43735,6 +43863,16 @@ export type Parser
 	// `E2015 … 'equals' — shv2 provides charIndex/bytePos; that list IS the surface`** about a method the
 	// program plainly has. The two accessors keep their arms (roster wins, for the field-load reason
 	// `dispatchStringIndexMethod` states); everything else the corpus declares is served from source.
+	// ⛔⛔ **THE `Array` SURFACE IS DELIBERATELY NOT A THIRD ASKER YET, AND THE REASON IS MEASURED (W57).** The
+	// arm itself is one line — `isArrayInstanceAt(recv.tag, nameId: recv.nameId)` and NOT
+	// `valueIsBufferSurface(recv.value)`, the mark being the only thing that separates an `Array with T` from
+	// its `__ManagedMemory with T`, since the two are one type. But admitting a member here routes it to
+	// `structBaseOfReceiver`, and `ProgramSignatures.genericInstanceHasBaseLayout` answers FALSE for every
+	// BUILTIN generic base whatever any file declares — so a declared `Array.size()` got as far as
+	// `missingBaseLayout` and was refused *"a field access … `Array` is a BUILTIN whose runtime record shv2
+	// synthesizes"*, about a METHOD, which is a WORSE sentence than the roster's. The corpus fall-through and
+	// that gate are ONE change: the gate also decides the FIELD WALK the drop cascade reads, so moving it is
+	// the retirement rung's, where a corpus `Array` body exists to be served and the cascade can be measured.
 	function memberBelongsToTheCorpus(recv MethodReceiver) returns bool
 		if tagIsByteRecord(recv.tag) 'aByteRecord'
 			return self.corpusServesMemberOffRoster(byteRecordSurface(recv.tag), typeName: self.byteRecordLayoutName(recv.tag))
@@ -47335,6 +47473,25 @@ export type Parser
 		// `TrivialDestructor`. It improved anyway (5.5x -> 3.35x) because `sliceBytes` asks `byteLength()`,
 		// which the cure made cheap. See `fusedManagedMemberTakesTheRecord` for the full `@40` census.
 		if layout.conformsToBuiltinManagedWrapper() and index == layout.inlineManagedFieldIndex() 'inlineManagedIsTheReceiver'
+			// ⭐⭐⭐ **AN `Array`'s BUFFER IS THE `Array`, SO THERE IS NO VIEW TO MINT (W57)** — the same
+			// answer `bufferSurfaceOf` gives for the SPELLED `arr.managed`, reached here by the implicit-`self`
+			// read inside `type Array`'s own body. It is not an optimization of the line below; that line is
+			// **WRONG** for this wrapper in two independent ways, and both are silent:
+			//   • **THE ELEMENT.** `internSynthesizedByteInstance` is the BYTE buffer, which is exactly right
+			//     for `String` and `Character` — their record IS a byte buffer — and is a stride lie for an
+			//     `Array with Element`, whose slots are 8 bytes wide. `__str_bytes_view` mints a record
+			//     stamped `element_size@24 = 1`.
+			//   • **THE TYPE PARAMETER.** With the element read back as a concrete byte, the copy lowering
+			//     asks which of the enclosing declaration's `uses` names that element is and there is no
+			//     answer — **MEASURED as `panic … opaqueTypeParamPosition: asked for the `uses`-list position
+			//     of a `int`, which names no type parameter`** on a `clone()` whose body is
+			//     `managed.slice(0, len)`.
+			// One record with two surfaces is the whole of this wrapper, so the read is the surface flip and
+			// nothing else — which also means it allocates nothing where the String path allocates a record.
+			if self.arrayNameIsItsOwnRecord(layout.name) 'theRecordISTheBuffer'
+				return self.bufferSurfaceOf(box, range: range)
+			end 'theRecordISTheBuffer'
+
 			let view = self.emitOwnedRuntimeResult(StrBytesViewName, args: singletonArgs(box), resultTag: ValueTypeTag.genericInstance, resultNameId: self.signatures.internSynthesizedByteInstance(), range: range)
 			self.markBufferSurface(view)
 			return view

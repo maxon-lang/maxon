@@ -11275,13 +11275,70 @@ export type ProgramSignatures
 			return ScopedGenericInstance.notInScope
 		end 'notBoundByThisScope'
 
+		return ScopedGenericInstance.instance(self.instanceOverScopeParams(name, scopeOwner: declaringTypeName, params: baseParams))
+	end 'scopedGenericInstanceOf'
+
+	// The mint the door above ends in, and the one below IS. `params` are the BASE's own `uses` names and
+	// `scopeOwner` is whose parameters they cite — see the door's header for why those are two arguments and
+	// not one, and why a positional pairing would be a silently wrong type.
+	function instanceOverScopeParams(name ByteArray, scopeOwner ByteArray, params ByteArrayArray) returns GenericInstanceId
 		var args = MaxonTypeArray.create()
-		for paramName in baseParams 'eachParam'
-			args.push(MaxonType.typeParameter(typeParamTokenFor(declaringTypeName, paramName: paramName)))
+		for paramName in params 'eachParam'
+			args.push(MaxonType.typeParameter(typeParamTokenFor(scopeOwner, paramName: paramName)))
 		end 'eachParam'
 
-		return ScopedGenericInstance.instance(self.genericInstances.intern(self.typeNames.intern(name), args: args))
-	end 'scopedGenericInstanceOf'
+		return self.genericInstances.intern(self.typeNames.intern(name), args: args)
+	end 'instanceOverScopeParams'
+
+	// ⭐⭐ **WHAT `Self` DENOTES INSIDE A GENERIC CONTAINER WHOSE RECORD THE COMPILER ALREADY OWNS (W57)** —
+	// the instance over the declaration's OWN parameters, which is exactly what the door above refuses to
+	// build at its `ownNameMeansSelf` guard.
+	//
+	// ⚠ **THAT GUARD IS NOT BEING WEAKENED; ITS PREMISE SIMPLY DOES NOT HOLD FOR THIS ONE SHAPE.** The guard
+	// says the type's own name in its own body means `Self`, and `Parser.enclosingSelfType` answers `Self`
+	// with the base `structRef` — correct for an ordinary generic, whose body is compiled ONCE over the base
+	// and whose results are retyped at the call site (`retypeGenericAliasConstructorResult`). A container the
+	// compiler owns the RECORD of has no base box to be a `structRef` to: `Array with T` and
+	// `__ManagedMemory with T` are one `GenericInstanceId` (`canonicalGenericBaseName`), so a value of it
+	// inside the body is the buffer record, dropped by `__arr_decref` and not by any struct cascade. Answering
+	// `structRef` there would be the byte-record defect `Parser.requireFusedWrapperTag` documents, one
+	// genericity up: bytes of one record, identity of another.
+	//
+	// Precondition: `Parser.arrayNameIsItsOwnRecord`, which is what establishes that the name is declared and
+	// generic — so `structTypeParamsOf` is non-empty here and the instance has the arity its base was checked at.
+	export function ownRecordSelfInstance(name ByteArray) returns GenericInstanceId
+		return self.instanceOverScopeParams(name, scopeOwner: name, params: self.structTypeParamsOf(name))
+	end 'ownRecordSelfInstance'
+
+	// ⭐⭐ **IS `id` THE INSTANCE `declarationName` MAKES OVER ITS OWN PARAMETERS — i.e. what `Self` denotes
+	// inside it? (W57)** The RECOGNIZER for what `ownRecordSelfInstance` MINTS, and it is a separate function
+	// because its caller may not intern: `IrInterface.renderDeclaredTypeName` runs inside the conformance
+	// check and re-spells a type against a declaration's own names rather than looking one up, exactly as its
+	// `typeParameter` arm already does. Minting there to compare would put a write on a read path.
+	//
+	// ⚠ **THE ARGUMENTS ARE CHECKED AND NOT ONLY THE BASE NAME.** `type Array uses Element` may perfectly
+	// well mention an `Array with Byte`, which is NOT `Self` — rendering that as the bare declaration name
+	// would make a genuinely different signature compare equal, a wrong ACCEPTANCE with nothing to report it.
+	export function instanceIsDeclarationSelf(id GenericInstanceId, declarationName ByteArray, paramNames ByteArrayArray) returns bool
+		if not self.genericInstanceBaseName(id).equals(declarationName) 'anotherBase'
+			return false
+		end 'anotherBase'
+
+		let args = self.genericInstances.instanceArgs(id)
+		if args.count() != paramNames.count() 'anotherArity'
+			return false
+		end 'anotherArity'
+
+		for i in 0 upto paramNames.count() 'eachArg'
+			let arg = try args.get(i) otherwise panic("ProgramSignatures.instanceIsDeclarationSelf: instanceArgs.get OOB at {i} — the count was just compared")
+			let paramName = try paramNames.get(i) otherwise panic("ProgramSignatures.instanceIsDeclarationSelf: paramNames.get OOB at {i} — the count was just compared")
+			if maxonTypeTag(arg) != ValueTypeTag.typeParameter or typeNameIdOf(arg) != typeParamTokenFor(declarationName, paramName: paramName) 'notItsOwnParameter'
+				return false
+			end 'notItsOwnParameter'
+		end 'eachArg'
+
+		return true
+	end 'instanceIsDeclarationSelf'
 
 	// --- The `Array` builtin generic (P1.7 slice 1) ---
 	//
