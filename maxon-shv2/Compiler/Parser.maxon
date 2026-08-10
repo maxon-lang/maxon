@@ -44967,9 +44967,10 @@ export type Parser
 	// program plainly has. The two accessors keep their arms (roster wins, for the field-load reason
 	// `dispatchStringIndexMethod` states); everything else the corpus declares is served from source.
 	// ⭐⭐⭐ **AND THE `Array` SURFACE IS THE THIRD ASKER (W59), WHICH TOOK A SECOND DOOR TO BECOME ONE.** The
-	// arm is one line — `isArrayInstanceAt(recv.tag, nameId: recv.nameId)` and NOT
-	// `valueIsBufferSurface(recv.value)`, the mark being the only thing that separates an `Array with T` from
-	// its `__ManagedMemory with T`, since the two are one type. On its own it moved the refusal rather than
+	// instance test is `isArrayInstanceAt(recv.tag, nameId: recv.nameId)` — a question about the TYPE, which
+	// is all that ADMITTING an `Array` needs, since `Array with T` and its `__ManagedMemory with T` ARE one
+	// type (which surface a receiver denotes is a further question, and the ⛔ block below is what it cost to
+	// leave unasked). On its own it moved the refusal rather than
 	// removing it: admitting a member routes it to `structBaseOfReceiver`, and
 	// `ProgramSignatures.genericInstanceHasBaseLayout` answers FALSE for every BUILTIN generic base whatever
 	// any file declares — so a declared `Array.size()` got as far as `missingBaseLayout` and was refused
@@ -44981,6 +44982,37 @@ export type Parser
 	// `ProgramSignatures.arrayNameIsItsOwnRecord` for why either alone is a wrong answer. A declaration that
 	// fails it is a record this compiler does NOT own, and its members must keep meeting the roster sentence
 	// rather than being dispatched against a layout the value does not have.
+	//
+	// ⛔⛔ **AND THE INSTANCE TEST ALONE PICKED THE WRONG SURFACE, BECAUSE IT IS THE TYPE THAT IS SHARED AND
+	// THE SURFACE THAT IS NOT.** Being an `Array` instance is exactly as true of a receiver denoting the
+	// BUFFER, so this door asked the **`Array`** roster about `__ManagedMemory`'s members — and the two
+	// rosters are DELIBERATELY different lists. Every buffer member off the `Array` roster
+	// (`swap`, `elementSize`, `grow`, `setLength`, `shiftLeft`, …) therefore fell through to
+	// `declaresCallee("Array.<m>")` and was handed to the ENCLOSING RECORD's same-named method:
+	//   • **MEASURED as a SILENT WRONG ANSWER** — a `type Array` declaring an `elementSize()` of its own got
+	//     that method's value back from `managed.elementSize()`, compiled, linked and RAN, returning 99 where
+	//     the buffer's answer is 8. No diagnostic anywhere.
+	//   • **MEASURED as a wrong DIAGNOSTIC** — `stdlib/helpers/sort/smallSort.maxon:32`'s
+	//     `try managed.swap(i, j: j)`, inside an `export extension Array` declaring its own `swap`, was
+	//     `E3055 … 'Array.swap' does not throw`, about a call whose real target throws. The routing was
+	//     unbounded recursion; only the throws-mismatch made it visible, which is the accident that found
+	//     the whole defect.
+	//
+	// ⇒ **SO THE MARK IS ASKED HERE, AND IT IS THE SAME ONE `dispatchArrayMethod` DECIDES ON** — one fact,
+	// read by both doors, rather than a second answer to "which of the two surfaces is this?". The buffer
+	// surface is the COMPILER's own and no file declares a member on `__ManagedMemory`, so a buffer receiver
+	// has nothing for the corpus to serve: it falls to `false` and reaches `dispatchArrayMethod`, where the
+	// BUFFER roster gates it and a name that surface lacks is refused in the buffer's own sentence.
+	//
+	// ⚠ `dispatchArrayMethod` spells the same question `viaManagedField or valueIsBufferSurface(arr)`, and
+	// the extra disjunct is not missing here: the two call sites that pass `viaManagedField: true` reach that
+	// dispatcher DIRECTLY (`dispatchMethodOnBinding`'s fused arm and the re-entry inside the dispatcher
+	// itself), so every receiver arriving at this door came by a route that passes `false`.
+	//
+	// ⚠ **ONLY THE THREE SPELLINGS WITHOUT A PRE-DOOR WERE AFFECTED, WHICH IS WHY IT SURVIVED**: a STATEMENT
+	// or `try`-TARGET `<base>.managed.<m>(…)` is claimed ahead of this by `arrayManagedMemberCallAt` and was
+	// always right, so `try arr.managed.swap(…)` worked while the bare `managed.swap(…)` two lines away did
+	// not. A defect reachable by three routes and masked on a fourth reads as a spelling quirk.
 	function memberBelongsToTheCorpus(recv MethodReceiver) returns bool
 		if tagIsByteRecord(recv.tag) 'aByteRecord'
 			return self.corpusServesMemberOffRoster(byteRecordSurface(recv.tag), typeName: self.byteRecordLayoutName(recv.tag))
@@ -44988,9 +45020,9 @@ export type Parser
 		if self.isStringIndexType(recv.tag, nameId: recv.nameId) 'aStringIndex'
 			return self.corpusServesMemberOffRoster(MemberSurface.stringIndex, typeName: StringIndexTypeName)
 		end 'aStringIndex'
-		if self.signatures.isArrayInstanceAt(recv.tag, nameId: recv.nameId) and self.signatures.arrayNameIsItsOwnRecord(ArrayBuiltinBaseName) 'anArrayThatIsItsOwnRecord'
+		if self.signatures.isArrayInstanceAt(recv.tag, nameId: recv.nameId) and not self.valueIsBufferSurface(recv.value) and self.signatures.arrayNameIsItsOwnRecord(ArrayBuiltinBaseName) 'anArraySurfaceThatIsItsOwnRecord'
 			return self.corpusServesMemberOffRoster(MemberSurface.array, typeName: ArrayBuiltinBaseName)
-		end 'anArrayThatIsItsOwnRecord'
+		end 'anArraySurfaceThatIsItsOwnRecord'
 
 		return false
 	end 'memberBelongsToTheCorpus'

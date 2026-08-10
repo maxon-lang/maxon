@@ -714,3 +714,168 @@ end 'main'
 ```exitcode
 0
 ```
+
+<!-- test: a-buffer-member-keeps-its-meaning-when-the-record-declares-the-name -->
+⭐⭐ **`managed.<m>()` MEANS THE BUFFER'S `<m>`, EVEN WHEN THE RECORD AROUND IT DECLARES ONE TOO.**
+`Array with T` and `__ManagedMemory with T` are ONE record with TWO surfaces, so nothing about the
+receiver's TYPE tells them apart — only the buffer mark does. The corpus door read the type alone and
+so asked the **`Array`** roster about a receiver denoting the **buffer**: `elementSize` is off the
+`Array` roster and the record declares one, so the call was handed to the record's own method. It
+compiled, it linked and it RAN, returning **99** where the buffer's answer is **8** — a silent wrong
+answer with no diagnostic anywhere, which is why this case pins a VALUE rather than a refusal.
+
+**Both directions are pinned, because the cure must not swap the collision round.** The three
+buffer-denoting spellings (bare `managed.`, `self.managed.`, and `a.managed.` from outside) all mean
+the BUFFER; the three record-denoting spellings (bare `elementSize()`, `self.elementSize()` and
+`a.elementSize()`) all mean the RECORD. Declaring the name on the record changes neither: this
+program prints exactly what the same program prints with the record's method renamed.
+```maxon
+typealias Slot = int(0 to u64.max)
+
+type Array uses Element implements BuiltinArrayLiteral
+	typealias ElementMemory = __ManagedMemory with Element
+	export var managed as ElementMemory
+
+	export static function init(managed ElementMemory) returns Self
+		return Self{managed: managed}
+	end 'init'
+
+	export static function create() returns Self
+		return Self{}
+	end 'create'
+
+	// A name the BUFFER surface also has. It is off the `Array` roster, so it is the corpus door's own.
+	export function elementSize() returns Slot
+		return 99
+	end 'elementSize'
+
+	// The buffer, reached bare — the spelling `stdlib/Array.maxon` writes throughout.
+	export function bufferBare() returns Slot
+		return managed.elementSize()
+	end 'bufferBare'
+
+	// The buffer, reached through the explicit `self.` — the same receiver, one token longer.
+	export function bufferViaSelf() returns Slot
+		return self.managed.elementSize()
+	end 'bufferViaSelf'
+
+	// THE REVERSE DIRECTION: a bare sibling call still means the RECORD's own method.
+	export function ownBare() returns Slot
+		return elementSize()
+	end 'ownBare'
+
+	// And so does the `self.` spelling of it.
+	export function ownViaSelf() returns Slot
+		return self.elementSize()
+	end 'ownViaSelf'
+end 'Array'
+
+typealias StrArray = Array with String
+
+function main() returns ExitCode
+	var a = StrArray.create()
+	a.push("alpha")
+
+	// The third buffer spelling, from OUTSIDE the declaration, and the third record one beside it.
+	let outsideBuffer = a.managed.elementSize()
+	let outsideOwn = a.elementSize()
+
+	print("{a.bufferBare()} {a.bufferViaSelf()} {outsideBuffer} {a.ownBare()} {a.ownViaSelf()} {outsideOwn}")
+	return 0 as ExitCode
+end 'main'
+```
+```stdout
+8 8 8 99 99 99
+```
+```exitcode
+0
+```
+
+<!-- test: a-managed-swap-through-the-buffer-is-not-the-records-own -->
+⭐⭐ **THE SAME COLLISION ON A THROWING MEMBER, WHICH IS WHERE IT WAS FOUND.**
+`stdlib/helpers/sort/smallSort.maxon:32` is `try managed.swap(i, j: j)` inside an `export extension
+Array` that declares a `swap` of its own — so the bare call resolved to the extension's own method and
+the build stopped at **`E3055 … 'Array.swap' does not throw`**, about a call whose real target throws.
+`swap` is off the `Array` roster and on the buffer's, exactly as `elementSize` is; the only thing the
+throws-mismatch added was a diagnostic where the case above got silence.
+
+**The element is a `String`, so the ownership is exercised and not merely the routing.** A buffer
+`swap` MOVES ownership between slots with refcounts unchanged — the reason it may not be built from
+`get`+`set` — so a swap that took one reference too many or too few faults or exits **101** rather
+than printing. Fifty-one reversals run it 102 times over four managed elements, and the exit code is
+pinned because a leak lands after the last `print`.
+```maxon
+typealias Slot = int(0 to u64.max)
+
+type Array uses Element implements BuiltinArrayLiteral
+	typealias ElementMemory = __ManagedMemory with Element
+	export var managed as ElementMemory
+
+	export static function init(managed ElementMemory) returns Self
+		return Self{managed: managed}
+	end 'init'
+
+	export static function create() returns Self
+		return Self{}
+	end 'create'
+
+	// `smallSort.maxon`'s own body: the record declares `swap`, and its `swap` calls the BUFFER's.
+	// Resolving the inner call to THIS method would be unbounded recursion, which is what the
+	// throws-mismatch was really reporting.
+	export function swap(i Slot, j Slot)
+		try managed.swap(i, j: j) otherwise panic("swap: the caller pre-bounded i and j")
+	end 'swap'
+
+	// THE REVERSE DIRECTION, through `self.`: the record's own `swap` above, not the buffer's.
+	export function reverseRange(lo Slot, hi Slot)
+		if hi <= lo + 1 'trivial'
+			return
+		end 'trivial'
+		var i = lo
+		var j = hi - 1
+		while i < j 'loop'
+			self.swap(i, j: j)
+			i = i + 1
+			j = j - 1
+		end 'loop'
+	end 'reverseRange'
+
+	// THE REVERSE DIRECTION, bare: a sibling call to a name the buffer also has still means the record.
+	export function swapEnds()
+		swap(0 as Slot, j: (count() - 1) as Slot)
+	end 'swapEnds'
+
+	export function reverseAll()
+		reverseRange(0 as Slot, hi: count() as Slot)
+	end 'reverseAll'
+end 'Array'
+
+typealias StrArray = Array with String
+
+function main() returns ExitCode
+	var a = StrArray.create()
+	a.push("alpha")
+	a.push("beta")
+	a.push("gamma")
+	a.push("delta")
+
+	for _ in 0 upto 51 'rounds'
+		a.reverseAll()
+	end 'rounds'
+
+	a.swapEnds()
+
+	let w = try a.get(0) otherwise panic("0 is in range")
+	let x = try a.get(1) otherwise panic("1 is in range")
+	let y = try a.get(2) otherwise panic("2 is in range")
+	let z = try a.get(3) otherwise panic("3 is in range")
+	print("{w} {x} {y} {z} {a.count()}")
+	return 0 as ExitCode
+end 'main'
+```
+```stdout
+alpha gamma beta delta 4
+```
+```exitcode
+0
+```
