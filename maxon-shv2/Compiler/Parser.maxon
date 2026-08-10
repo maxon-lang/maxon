@@ -81,6 +81,38 @@ function envSlotOffset(slot EnvSlotIndex) returns ByteOffset
 	return (slot * EnvSlotBytes) as ByteOffset
 end 'envSlotOffset'
 
+// ⭐⭐ **ONE INHERITED WITNESS (W58): env slot `slot` of the closure now being lifted carries the ENCLOSING
+// context's witness table for `where` constraint `constraintIndex`.** The pair exists because the two halves
+// of a witness capture are learned in DIFFERENT parse contexts and cannot be recorded in one act: the slot is
+// claimed while the CLOSURE's body is being parsed, and the value that fills it is one only the ENCLOSING
+// function can produce — a hidden parameter it already holds, or, one level out, a load it must emit into its
+// OWN block, which is current again only after `parseClosureExpression`'s restore. So the claim is recorded
+// here and closed by `fillInheritedWitnessCaptures`, its one reader.
+type InheritedWitnessCapture
+	export let constraintIndex as WitnessSlotIndex
+	export let slot as EnvSlotIndex
+
+	static function create(constraintIndex WitnessSlotIndex, slot EnvSlotIndex) returns InheritedWitnessCapture
+		return Self{constraintIndex: constraintIndex, slot: slot}
+	end 'create'
+end 'InheritedWitnessCapture'
+
+typealias InheritedWitnessCaptureArray = Array with InheritedWitnessCapture
+
+// The synthetic capture NAME an inherited witness occupies its env slot under. `$` is unwritable in a Maxon
+// identifier — the same property `parseClosureExpression` mints its lifted names on — so this can collide
+// with no user binding the body captures, and the constraint index makes one name per constraint. It is a
+// name only because the capture columns are keyed by one; nothing resolves it.
+function witnessCaptureName(constraintIndex WitnessSlotIndex) returns ByteArray
+	return "$witness_{constraintIndex}".toByteArray()
+end 'witnessCaptureName'
+
+// The value `inheritedWitnessSlotFor` parks in the capture column until `fillInheritedWitnessCaptures`
+// overwrites it. It is never READ as a value: every slot that carries it is entered in
+// `inheritedWitnessCaptures` at the same instant, and that list is drained before `buildClosureEnv` reads the
+// column. Named rather than written `0` so the placeholder cannot be mistaken for a resolved ValueId.
+let UnfilledInheritedWitness = 0 as ValueId
+
 // The shared tail of every E3099 (capturing-closure-escapes) message: WHY the closure may not escape. The
 // route-specific prefix ("cannot return …", "cannot store … in field …") is built at each site; this is the
 // ONE copy of the reason. ⚠ The wording ("by reference") follows the ported golden and the reference
@@ -8407,6 +8439,13 @@ export type Parser
 	var captureNames as ByteArrayArray
 	var captureValues as ValueIdArray
 	var captureTypes as MaxonTypeArray
+	// ⭐ **WHICH OF THOSE SLOTS CARRY AN INHERITED WITNESS RATHER THAN A NAMED BINDING (W58)** — the subset
+	// whose `captureValues` entry is still `UnfilledInheritedWitness` and is closed by
+	// `fillInheritedWitnessCaptures` after the restore. It is the AUTHORITY on which constraint owns which
+	// slot: `captureSlotFor`'s name dedup would answer the same question, but only this list also carries the
+	// pending fill, and one list answering both cannot drift from the other. Swapped across a nested closure
+	// body exactly like the three columns above, so each closure closes its own hop.
+	var inheritedWitnessCaptures as InheritedWitnessCaptureArray
 	var closureEnvParamId as ValueId
 	// ⭐ **THE RANGE-CHECK SITES OF THE FUNCTION CURRENTLY BEING PARSED (P1.9).** Three accumulators
 	// plus the two names the function's own SIGNATURE fixes:
@@ -8520,15 +8559,31 @@ export type Parser
 	// `recordScannedType` are the writers); points at `sharedEmptyWhereConstraints` for an unconstrained
 	// type, so a non-generic (or unconstrained-generic) type declaration allocates nothing here.
 	var enclosingWhereConstraints as WhereConstraintArray
-	// ⭐ **WHERE THE CURRENT FUNCTION'S HIDDEN WITNESS PARAMETERS START, AND HOW MANY (P1.7a slice 2a; a
+	// ⭐ **WHERE THE DECLARING FUNCTION'S HIDDEN WITNESS PARAMETERS START, AND HOW MANY (P1.7a slice 2a; a
 	// PARSER fact since P1.7a-existentials slice 1).** `parseFunction` reserves them — one per `where`
 	// constraint of the enclosing type, trailing after the layout slot — and a witness dispatch in the body
 	// has to name the one its constraint uses. The parser is what reserved them, so the parser is what
 	// resolves them (`witnessParamValueId`); the lowering used to re-derive the count whole-program and
 	// cross-check it with a panic, which is one fact written twice with the answer already in hand here.
-	// Both are 0 in a function that reserves none (every free function, every static, every lifted closure).
-	var currentWitnessParamBase as ValueId
-	var currentWitnessParamCount as ParamCount
+	// Both are 0 in a function that reserves none (every free function, every static, every default helper).
+	//
+	// ⭐⭐ **"DECLARING", NOT "CURRENT" — A LIFTED CLOSURE DOES NOT DISPLACE THEM, AND THAT IS THE ONE PLACE
+	// THIS PAIR DEPARTS FROM EVERY SIBLING PER-FUNCTION COLUMN (W58).** They were named `current*` and RESET to
+	// 0 for a closure body, on the reading that a lifted closure reserves no witness parameters — which is
+	// true of its ABI and useless to its body: `function(x Element) gives x.compare(y)` written inside
+	// `extension Array where Element is Comparable` has to reach the enclosing extension's table, and zeroing
+	// the pair left `witnessParamValueId` with nothing to name and a PANIC as the whole answer (measured on
+	// `stdlib/Array.maxon`'s `sort()`). A closure body does not change WHICH FUNCTION DECLARED the witnesses,
+	// so the pair keeps describing that function and `witnessValueForConstraint` — the one door — decides
+	// whether the body may name the parameter directly (it is that function's own body) or must inherit the
+	// table through its environment (it is a lifted closure's).
+	//
+	// ⇒ **They are deliberately absent from `parseClosureExpression`'s save/reset/restore triple.** Nothing
+	// inside a closure body writes them (only `parseFunction` and `parseDefaultHelperBody` do, and neither is
+	// reachable from an expression), so there is nothing to save; a reset is what the defect WAS. See the note
+	// at that reset block.
+	var declaringWitnessParamBase as ValueId
+	var declaringWitnessParamCount as ParamCount
 	// ⭐ The transitive witness SLOT LIST of each interface this file dispatches through, memoized off its
 	// shared empty anchor — see `sharedEmptyWitnessSlots` for the quadratic that put it here.
 	var witnessSlotsByInterface as WitnessSlotsByInterfaceMap
@@ -9026,6 +9081,7 @@ export type Parser
 			captureNames: ByteArrayArray.create(),
 			captureValues: ValueIdArray.create(),
 			captureTypes: MaxonTypeArray.create(),
+			inheritedWitnessCaptures: InheritedWitnessCaptureArray.create(),
 			closureEnvParamId: 0,
 			rangeCheckSites: RangeCheckSiteArray.create(),
 			rangeCheckArgSites: RangeCheckArgSiteArray.create(),
@@ -9038,8 +9094,8 @@ export type Parser
 			enclosingTypeIsEnum: false,
 			enclosingTypeParams: ByteArrayArray.create(),
 			enclosingWhereConstraints: sharedEmptyWhereConstraints,
-			currentWitnessParamBase: 0,
-			currentWitnessParamCount: 0,
+			declaringWitnessParamBase: 0,
+			declaringWitnessParamCount: 0,
 			witnessSlotsByInterface: sharedEmptyWitnessSlots,
 			lastWitnessDispatchIndex: 0,
 			pendingRequirementParamInterface: EmptySourceText,
@@ -16857,8 +16913,8 @@ export type Parser
 		// above, which is load-bearing: a reset written before them would be zeroed by the block it sits in.
 		// A dispatch through a `where` constraint resolves to a parameter ValueId through exactly these two
 		// numbers (`witnessParamValueId`).
-		self.currentWitnessParamBase = (paramCount - witnessParamCount) as ValueId
-		self.currentWitnessParamCount = witnessParamCount
+		self.declaringWitnessParamBase = (paramCount - witnessParamCount) as ValueId
+		self.declaringWitnessParamCount = witnessParamCount
 		// Per-function, like the sibling value columns: a value's per-instance alias provenance names an id
 		// in THIS function's SSA space (P1.6-C). Points at the SHARED empty until the function constructs an
 		// instance (`recordValueInstanceAlias` copy-on-writes), so a generics-free function allocates nothing.
@@ -17016,7 +17072,7 @@ export type Parser
 			// so the block it RETURNS — not `entry` — is the one control falls out of.
 			var bodyEnd = try self.parseStatements(func, block: entry)
 			try self.closeFunctionBody(func, bodyEnd: bodyEnd, nameTok: nameTok)
-			try self.requireDescriptorForOpaqueDrops(nameTok)
+			try self.requireDescriptorForOpaqueDrops(nameTok.value, line: nameTok.line, column: nameTok.column)
 			// ⚠ The BARE name off the token, not `sourceName` and not `name`: the interface-requirement waiver
 			// matches against the requirement an `interface` body spells, which is the method name alone.
 			// `sourceName` is already qualified for a method (`Silent.greet` — `declaredMethodName`) and `name`
@@ -17070,12 +17126,12 @@ export type Parser
 	//
 	// So the message states the FACT it is certain of — a drop with no descriptor to drop through — and offers the
 	// causes as causes.
-	function requireDescriptorForOpaqueDrops(nameTok Token) throws ParseError
-		try self.requireDescriptorForOpaqueStores(nameTok)
+	function requireDescriptorForOpaqueDrops(owner ByteArray, line LineNumber, column ColumnNumber) throws ParseError
+		try self.requireDescriptorForOpaqueStores(owner, line: line, column: column)
 		if not self.functionDroppedOpaqueWithoutDescriptor 'nothingOwed'
 			return
 		end 'nothingOwed'
-		throw ParseError.unsupported("'{String.from(nameTok.value)}' owns an opaque type-parameter value it must release on some path, but the method reserves no layout descriptor to release it through — the shared generic body compiles once for every instantiation, so the value's destructor is read from the enclosing instance's descriptor at run time, and the parameter carrying it is reserved only for the method shapes that are known ahead of the body to need one. Three shapes reach this: a type-parameter argument handed to a `push`/`set`/`insert` on something that is NOT an `Array` and so never takes ownership of it (move it into an `Array with <type parameter>` or a type-parameter field instead); a `pop`/`remove` of an opaque element in a `static function` (do it on an instance method, which can source the descriptor from `self`); a `for … in` over a value held at a PARAMETERIZED interface, whose element is the enclosing type's own parameter and is owned per trip (store it into an `Array with <type parameter>`, which reserves the descriptor, or iterate in a method of a concrete instantiation)", line: nameTok.line, column: nameTok.column)
+		throw ParseError.unsupported("'{String.from(owner)}' owns an opaque type-parameter value it must release on some path, but the method reserves no layout descriptor to release it through — the shared generic body compiles once for every instantiation, so the value's destructor is read from the enclosing instance's descriptor at run time, and the parameter carrying it is reserved only for the method shapes that are known ahead of the body to need one. Three shapes reach this: a type-parameter argument handed to a `push`/`set`/`insert` on something that is NOT an `Array` and so never takes ownership of it (move it into an `Array with <type parameter>` or a type-parameter field instead); a `pop`/`remove` of an opaque element in a `static function` (do it on an instance method, which can source the descriptor from `self`); a `for … in` over a value held at a PARAMETERIZED interface, whose element is the enclosing type's own parameter and is owned per trip (store it into an `Array with <type parameter>`, which reserves the descriptor, or iterate in a method of a concrete instantiation); and a CLOSURE written inside any of them, whose lifted body is a function of its own and reserves no descriptor however well served the method around it is (do the owning work in the method and hand the closure a value it need not release)", line: line, column: column)
 	end 'requireDescriptorForOpaqueDrops'
 
 	// ⛔ **A BODY THAT STORES A BORROWED OPAQUE `T` MUST CARRY THE DESCRIPTOR THAT REFERENCE IS TAKEN THROUGH
@@ -17104,11 +17160,11 @@ export type Parser
 	// forward (the value is an expression, not a parameter, so the feed-edge scanner does not record it
 	// either). Measured corpus reach: ZERO — the suite is 4771/0 and every case builds the whitelisted stdlib.
 	// The MESSAGE therefore names both shapes rather than asserting the `static` one as the cause.
-	function requireDescriptorForOpaqueStores(nameTok Token) throws ParseError
+	function requireDescriptorForOpaqueStores(owner ByteArray, line LineNumber, column ColumnNumber) throws ParseError
 		if not self.functionStoredOpaqueWithoutDescriptor 'nothingOwed'
 			return
 		end 'nothingOwed'
-		throw ParseError.unsupported("'{String.from(nameTok.value)}' takes a reference to a borrowed type-parameter value, but the method reserves no layout descriptor to take that reference through — the shared generic body compiles once for every instantiation, so how a `T` is referenced (a copy for a `String`, an incref for a struct, nothing for an `int`) is read from the enclosing instance's descriptor at run time, and the parameter carrying it is reserved only for the method shapes that are known ahead of the body to need one. Two shapes reach this: a `static function` that builds a record out of a borrowed `T`, which has no `self` to source the descriptor from (build the record in an instance method instead); and a method that FORWARDS a borrowed `T` — a `get`/`first`/`last`, a `for` element, an opaque field read — to a sibling that moves it into durable storage, which is not built yet (read the value in the sibling itself, or pass it a value this method owns)", line: nameTok.line, column: nameTok.column)
+		throw ParseError.unsupported("'{String.from(owner)}' takes a reference to a borrowed type-parameter value, but the method reserves no layout descriptor to take that reference through — the shared generic body compiles once for every instantiation, so how a `T` is referenced (a copy for a `String`, an incref for a struct, nothing for an `int`) is read from the enclosing instance's descriptor at run time, and the parameter carrying it is reserved only for the method shapes that are known ahead of the body to need one. Two shapes reach this: a `static function` that builds a record out of a borrowed `T`, which has no `self` to source the descriptor from (build the record in an instance method instead); and a method that FORWARDS a borrowed `T` — a `get`/`first`/`last`, a `for` element, an opaque field read — to a sibling that moves it into durable storage, which is not built yet (read the value in the sibling itself, or pass it a value this method owns); and a CLOSURE written inside any method at all, whose lifted body reserves no descriptor of its own (take the reference in the method and hand the closure the result)", line: line, column: column)
 	end 'requireDescriptorForOpaqueStores'
 
 	// Commit this function's accumulated range-check sites to the artifact (P1.9), keyed by `name`.
@@ -17925,10 +17981,12 @@ export type Parser
 		self.valueIsCapturingClosure = BoolArray.create()
 		self.valueClosureEnv = ValueIdArray.create()
 		self.valueWitnessIds = ValueIdArray.create()
-		// A synthesized helper / lifted closure reserves no witness parameters, so a dispatch inside one has
-		// none to name — `witnessParamValueId` says so loudly rather than indexing past the parameter block.
-		self.currentWitnessParamBase = 0
-		self.currentWitnessParamCount = 0
+		// A synthesized helper is a real function of its own and reserves no witness parameters, so a dispatch
+		// inside one has none to name — `witnessParamValueId` says so loudly rather than indexing past the
+		// parameter block. ⚠ A LIFTED CLOSURE is NOT this case and its body deliberately leaves the pair
+		// standing (W58); see `parseClosureExpression`'s reset block.
+		self.declaringWitnessParamBase = 0
+		self.declaringWitnessParamCount = 0
 		self.valueInstanceAlias = sharedEmptyInstanceAliasMap
 		self.valueExistentialInstance = sharedEmptyExistentialInstanceMap
 		self.valueDeclaredAlias = sharedEmptyDeclaredAliasMap
@@ -39768,8 +39826,14 @@ export type Parser
 	// `staticLayoutNeedsSelfReturn` NAMES:** threading the dictionary from a static CALL SITE's alias
 	// (`H.digestOf(41)` knows `H = Holder with Integer`). Until that exists, both columns want the same source
 	// and this refuses the same shape in the same words rather than aborting the compiler.
+	// ⚠ **IT ASKS `emittingFunctionCarriesWitnessParams`, NOT the declaring function's COUNT, and the difference
+	// is a LIFTED CLOSURE (W58).** Forwarding copies the caller's hidden witness PARAMETERS into the callee's,
+	// by position (`LowerMaxonToStd.forwardCallerWitness`) — so the question is what the function being EMITTED
+	// carries, and a lifted closure carries none however constrained the method that wrote it is. Asked of the
+	// declaring count instead, a closure inside a constrained instance method would take the early return here
+	// and forward parameter slots its own ABI never reserved: not a panic, a WRONG TABLE.
 	function requireWitnessSourceForForwarding(base StructBase, callee ByteArray, memberTok Token) throws ParseError
-		if self.currentWitnessParamCount != 0 'hasThemToForward'
+		if self.emittingFunctionCarriesWitnessParams() 'hasThemToForward'
 			return
 		end 'hasThemToForward'
 		if self.tagOf(base.box) != ValueTypeTag.structRef or not base.layout.name.equals(self.enclosingType) 'notSameTypeValue'
@@ -44259,11 +44323,109 @@ export type Parser
 			end 'otherParam'
 
 			let iface = try self.requireInterfaceForParse(constraint.interfaceName, methodTok: errorTok)
-			self.appendInterfaceDispatchCandidates(candidates, iface: iface, witness: self.witnessParamValueId(i), methodName: methodName)
+			// ⚠ The witness is resolved for EVERY constraint on this receiver, ahead of knowing which one
+			// declares `methodName` — a constraint that declares none contributes no candidate, and inside a
+			// closure it has already claimed an env slot and emitted a load nothing reads. That costs one
+			// machine word and one dead op on the rare `where T is A and B` where only one of the two is being
+			// dispatched, and it buys the property this file spends most on: ONE candidate builder, reached
+			// identically by both receiver kinds (see `appendInterfaceDispatchCandidates`). Splitting the
+			// witness out to resolve it lazily would give the constraint route its own copy of the slot walk.
+			self.appendInterfaceDispatchCandidates(candidates, iface: iface, witness: try self.witnessValueForConstraint(i, anchor: errorTok), methodName: methodName)
 		end 'eachConstraint'
 
 		return candidates
 	end 'findWitnessDispatchCandidates'
+
+	// ⭐⭐ **THE VALUE HOLDING `where` CONSTRAINT `constraintIndex`'s TABLE, IN THE FUNCTION BEING EMITTED
+	// (W58).** The ONE door every witness dispatch through a constrained type parameter goes through, and it
+	// has two answers because two kinds of body can ask:
+	//
+	//   • the DECLARING function's own body — the hidden witness PARAMETER `parseFunction` reserved
+	//     (`witnessParamValueId`). No op at all: the table is already in a register.
+	//   • a LIFTED CLOSURE's body — the table is NOT a parameter of the lifted function and cannot become one:
+	//     a closure is reached through the uniform `(userargs, env)` INDIRECT shape, which has exactly one
+	//     hidden slot and it is the environment, and the call site (`cmp(a, b)` inside a sort helper) knows
+	//     nothing of the closure's origin, let alone its constraints. So the witness travels as an ORDINARY
+	//     CAPTURE — one env slot holding one machine word, stored where the closure is BUILT (inside the
+	//     constrained method, which holds the table) and read back with the same `loadIndirect` every other
+	//     capture is read with.
+	//
+	// ⭐ **SO A WITNESS IS A CAPTURED VALUE, NOT A SECOND CHANNEL — and that is forced, not preferred.** It
+	// also costs nothing new downstream: `StdOp.witnessCall` takes a `witnessAddr` VALUE and resolves nothing
+	// (`LowerMaxonToStd.appendWitnessCall`), so a table that arrived through an env slot is indistinguishable
+	// from one that arrived in a parameter — which is the property P1.7a-existentials bought when it turned the
+	// op's `constraintIndex` into a ValueId, and this is the third receiver route to spend it.
+	//
+	// ⚠ **NESTED CLOSURES INHERIT BY CHAINING, ONE HOP PER LEVEL — which is why this works where an ordinary
+	// nested capture is REFUSED** (`captureScopeOf`'s non-immediate-frame reject, whose problem is that there
+	// is no env chain to walk). Each level captures from its own IMMEDIATE enclosing context, so a witness
+	// reaches depth 2 as a capture of a capture, and every hop is a hop the existing env machinery already
+	// makes. `fillInheritedWitnessCaptures` re-enters here, one context out, to close each one.
+	//
+	// The refusal is the shape `requireWitnessSourceForForwarding` refuses one door over, for its reason: a
+	// `static function` (or a synthesized default helper) reserves no witness parameters, so there is no table
+	// anywhere in the chain for the closure to inherit.
+	function witnessValueForConstraint(constraintIndex WitnessSlotIndex, anchor Token) returns ValueId throws ParseError
+		if self.closureCaptureScopes.isEmpty() 'theDeclaringFunctionsOwnBody'
+			return self.witnessParamValueId(constraintIndex)
+		end 'theDeclaringFunctionsOwnBody'
+
+		if constraintIndex >= self.declaringWitnessParamCount 'nothingToInherit'
+			throw ParseError.unsupported("a closure that dispatches through the type's `where` constraints, written inside a `static function` (or a field-default helper) that carries no witness tables of its own — the closure inherits its table through its environment from the function that built it, and a static has no receiver to source one from. Write the closure in an instance method, or take the operation as a function parameter", line: anchor.line, column: anchor.column)
+		end 'nothingToInherit'
+
+		let slot = self.inheritedWitnessSlotFor(constraintIndex)
+		// The read side of the env slot pair, derived through the SAME `envSlotStorageType` the store side
+		// (`buildClosureEnv`) asks — see `emitCaptureRead`, whose loads this deliberately mirrors rather than
+		// re-deriving a width. A witness table is a plain machine word, so the declared type IS the storage
+		// type; going through the shared door anyway is what keeps that true if either ever changes.
+		return self.emitIndirectLoad(MaxonType.integer, box: self.closureEnvParamId, offset: envSlotOffset(slot), storageType: self.envSlotStorageType(MaxonType.integer), range: SourceRange.ofToken(anchor))
+	end 'witnessValueForConstraint'
+
+	// The env slot carrying constraint `constraintIndex`'s inherited witness in the closure now being parsed,
+	// claiming a fresh one on first sight — `captureSlotFor`'s dedup, keyed by a name no source can write, so a
+	// constraint dispatched five times in one body occupies one slot and stores once.
+	//
+	// ⚠ The value parked in the capture column is `UnfilledInheritedWitness` and is never read as a value: this
+	// is the ONLY producer of those slots and it enters every one of them in `inheritedWitnessCaptures`, which
+	// `fillInheritedWitnessCaptures` drains before `buildClosureEnv` reads the column. It cannot be filled now
+	// — the value belongs to the enclosing function's block, which is not current until the restore.
+	function inheritedWitnessSlotFor(constraintIndex WitnessSlotIndex) returns EnvSlotIndex
+		for i in 0 upto self.inheritedWitnessCaptures.count() 'existing'
+			let seen = try self.inheritedWitnessCaptures.get(i) otherwise panic("inheritedWitnessSlotFor: inheritedWitnessCaptures.get OOB at {i} below count {self.inheritedWitnessCaptures.count()}")
+			if seen.constraintIndex == constraintIndex 'reuse'
+				return seen.slot
+			end 'reuse'
+		end 'existing'
+
+		let slot = self.captureSlotFor(witnessCaptureName(constraintIndex), enclosingValue: UnfilledInheritedWitness, captureType: MaxonType.integer)
+		self.inheritedWitnessCaptures.push(InheritedWitnessCapture.create(constraintIndex, slot: slot))
+		return slot
+	end 'inheritedWitnessSlotFor'
+
+	// ⭐ **CLOSE EACH INHERITED WITNESS'S ONE HOP, IN THE ENCLOSING CONTEXT (W58)** — called by
+	// `parseClosureExpression` after the restore, which is the first moment the enclosing function's block and
+	// SSA space are current again, and before `buildClosureEnv` reads the value column it fills.
+	//
+	// `witnessValueForConstraint` re-entering IS the chain: for a closure written directly in the constrained
+	// method it answers with that method's hidden parameter and emits nothing; for a closure nested in another
+	// closure it claims a slot in the ENCLOSING closure's environment and emits that closure's own load, which
+	// this same routine then fills one level further out. The recursion terminates at the declaring function,
+	// which is the only context with no environment above it.
+	function fillInheritedWitnessCaptures(inherited InheritedWitnessCaptureArray, capturedValues ValueIdArray, anchor Token) throws ParseError
+		for entry in inherited 'eachInheritedWitness'
+			let enclosingWitness = try self.witnessValueForConstraint(entry.constraintIndex, anchor: anchor)
+			try capturedValues.set(entry.slot, value: enclosingWitness) otherwise panic("fillInheritedWitnessCaptures: env slot {entry.slot} is past the {capturedValues.count()} capture(s) this closure collected — every slot here came from `captureSlotFor`, which fills all three columns in lockstep")
+		end 'eachInheritedWitness'
+	end 'fillInheritedWitnessCaptures'
+
+	// Does the function whose body is being EMITTED right now carry the declaring type's hidden witness
+	// parameters? Not the same question as "did the declaring function reserve any" the moment a lifted closure
+	// is being parsed: the closure's ABI has no room for them (see `witnessValueForConstraint`), so it carries
+	// none however constrained its author was. The one door for "may I forward my own witness slots".
+	function emittingFunctionCarriesWitnessParams() returns bool
+		return self.declaringWitnessParamCount != 0 and self.closureCaptureScopes.isEmpty()
+	end 'emittingFunctionCarriesWitnessParams'
 
 	// ⭐ **THE HIDDEN WITNESS PARAMETER THAT CARRIES CONSTRAINT `constraintIndex`'s TABLE (P1.7a slice 2a).**
 	// The parser RESERVED these slots (`parseFunction`, `[user][env][existentialWitness][layout][witness_0..k]`),
@@ -44271,12 +44433,17 @@ export type Parser
 	// It PANICS on a function that reserved none, which is what the lowering's cross-check used to catch: a
 	// dispatch through a constraint can only be emitted inside an instance method of the constrained type, and
 	// that is exactly the shape `witnessParamCountFor` reserves for.
+	//
+	// ⚠ **ITS PRECONDITION IS "NOT INSIDE A LIFTED CLOSURE", AND `witnessValueForConstraint` IS WHAT HOLDS IT**
+	// (W58) — a closure body's dispatch has no parameter to name and inherits instead, so reaching this from
+	// one would return a ValueId in the DECLARING function's numbering, read inside a body with its own dense
+	// SSA space. That is why the routing decision sits in one door above and not in each caller.
 	function witnessParamValueId(constraintIndex WitnessSlotIndex) returns ValueId
-		if self.currentWitnessParamCount == 0 'reservesNoWitnessParameter'
+		if self.declaringWitnessParamCount == 0 'reservesNoWitnessParameter'
 			panic("Parser.witnessParamValueId: a dispatch through `where` constraint {constraintIndex} inside a function that reserved no witness parameters — `witnessParamCountFor` reserves them for an INSTANCE method of a constrained type, so a dispatch reaching here was resolved against constraints the current function does not carry")
 		end 'reservesNoWitnessParameter'
 
-		return (self.currentWitnessParamBase + constraintIndex) as ValueId
+		return (self.declaringWitnessParamBase + constraintIndex) as ValueId
 	end 'witnessParamValueId'
 
 	// ⭐ **EVERY REQUIREMENT OF `iface` (TRANSITIVELY) NAMED `methodName`, AS A DISPATCH TARGET THROUGH
@@ -49915,11 +50082,19 @@ export type Parser
 		//     `releaseIterationSource` with a panic when it is empty. Emptied by a closure, the enclosing
 		//     loop's own release had nothing to pop — MEASURED: `for x in a` with ANY closure in the body,
 		//     *"the iteration lock stack is empty"*.
-		//   • `currentWitnessParamBase`/`Count` say where the enclosing function's `where`-constraint witness
-		//     parameters sit. Zeroed by a closure, the first witness dispatch AFTER it found none — MEASURED
-		//     inside `type Holder uses T where T is Named`: a closure then `self.item.label()` panicked in
-		//     `witnessParamValueId`, while the SAME two statements in the other order compile and print 42.
-		//     The ORDER being the whole of it is what kept this invisible.
+		//   • `declaringWitnessParamBase`/`Count` (then spelled `current*`) say where the enclosing function's
+		//     `where`-constraint witness parameters sit. Zeroed by a closure, the first witness dispatch AFTER
+		//     it found none — MEASURED inside `type Holder uses T where T is Named`: a closure then
+		//     `self.item.label()` panicked in `witnessParamValueId`, while the SAME two statements in the other
+		//     order compile and print 42. The ORDER being the whole of it is what kept this invisible.
+		//
+		//     ⭐⭐ **THAT PAIR HAS SINCE LEFT THIS TRIPLE ENTIRELY (W58), and the SECOND fix is the interesting
+		//     one: adding them here cured the dispatch AFTER a closure and left the dispatch INSIDE one still
+		//     panicking, because a reset is the wrong answer to "what witnesses does a closure body see?".
+		//     They now describe the DECLARING function throughout, are written only where one begins
+		//     (`parseFunction` / `parseDefaultHelperBody`), and a closure body inherits its table through its
+		//     ENVIRONMENT instead (`witnessValueForConstraint`). Nothing reachable from an expression writes
+		//     them, so there is nothing here to save. See the reset block below, and the field header.**
 		//
 		// ⚠ **AND THE ROOT CAUSE IS THAT THIS LIST IS WRITTEN THREE TIMES.** The columns that make up one
 		// function's parse context are spelled in the `Parser.create` initializer, in `parseFunction`'s reset,
@@ -49927,8 +50102,6 @@ export type Parser
 		// that makes them agree. Every miss is silent at the compiler's own build and shows up only as a
 		// panic or a wrong answer on a user program, which is how three of them shipped at once.
 		let savedIterationLockedBindings = self.iterationLockedBindings
-		let savedWitnessParamBase = self.currentWitnessParamBase
-		let savedWitnessParamCount = self.currentWitnessParamCount
 		let savedImmutableGlobalReads = self.immutableGlobalReads
 		let savedMergeImmutableBlame = self.mergeImmutableBlame
 		let savedRebindableSlotReads = self.rebindableSlotReads
@@ -49940,6 +50113,24 @@ export type Parser
 		let savedCaptureNames = self.captureNames
 		let savedCaptureValues = self.captureValues
 		let savedCaptureTypes = self.captureTypes
+		let savedInheritedWitnessCaptures = self.inheritedWitnessCaptures
+		// ⛔⛔ **THE LAYOUT-DESCRIPTOR TRIPLE WAS IN NONE OF THE THREE LISTS, AND THAT WAS A COMPILER PANIC
+		// (W58).** `functionCarriesLayoutParam` is "does the function being EMITTED carry the hidden
+		// `sizeof(T)` descriptor parameter" — the layout twin of the witness question one door over — and it
+		// stood at the ENCLOSING method's answer for the whole of a closure body. A lifted closure reserves no
+		// descriptor whatever its author reserved, so `coOwnBorrowedOpaque` and `emitDecref` skipped the W10
+		// disagreement they exist to record and emitted `__retain_type_param` / `__drop_type_param` into a body
+		// with no descriptor to read.
+		// **MEASURED: `panic at LowerMaxonToStd.maxon:2163: appendTypeParamDescriptor: `__retain_type_param` in
+		// 'Box.pick$closure_0' but the function carries no layout descriptor parameter`**, on a `pick()` whose
+		// only sin was reading `sizeof(T)` (which is what reserves the descriptor) beside
+		// `function(v T) gives v`. Without the `sizeof` the SAME program is refused with a position, so the
+		// enclosing method being BETTER served is what turned the refusal into a crash.
+		// The two accumulator flags swap with it because they are its answer: they are per-function facts read
+		// at a function's end, and the closure now asks its own question at its own end (below).
+		let savedCarriesLayoutParam = self.functionCarriesLayoutParam
+		let savedDroppedOpaqueWithoutDescriptor = self.functionDroppedOpaqueWithoutDescriptor
+		let savedStoredOpaqueWithoutDescriptor = self.functionStoredOpaqueWithoutDescriptor
 		let savedClosureEnvParamId = self.closureEnvParamId
 		// ⭐⭐ **THE RANGE-CHECK ACCUMULATORS SWAP TOO, AND THEY DID NOT UNTIL THE P1.9 REVIEW.** They are
 		// per-function for the reason every column above is: a site names a ValueId AND a BlockId in the
@@ -50018,10 +50209,18 @@ export type Parser
 		self.valueIsCapturingClosure = BoolArray.create()
 		self.valueClosureEnv = ValueIdArray.create()
 		self.valueWitnessIds = ValueIdArray.create()
-		// A synthesized helper / lifted closure reserves no witness parameters, so a dispatch inside one has
-		// none to name — `witnessParamValueId` says so loudly rather than indexing past the parameter block.
-		self.currentWitnessParamBase = 0
-		self.currentWitnessParamCount = 0
+		// ⛔⛔ **`declaringWitnessParamBase`/`Count` ARE DELIBERATELY NOT RESET HERE, AND THIS COMMENT IS WHERE
+		// A SWEEP WOULD PUT THEM BACK (W58).** They were reset — "a lifted closure reserves no witness
+		// parameters, so a dispatch inside one has none to name" — which is true of the closure's ABI and is
+		// the wrong answer to the question its BODY asks. `function(x Element) gives x.compare(y)` inside
+		// `extension Array where Element is Comparable` has to reach the extension's table, and with the pair
+		// zeroed `witnessParamValueId` had nothing to name and PANICKED (measured on `stdlib/Array.maxon`'s
+		// `sort()`, which is what W58 exists to compile). The pair names the DECLARING function throughout
+		// now; a closure body reaches that function's table through its ENVIRONMENT instead, and
+		// `witnessValueForConstraint` is the one door that tells the two routes apart. Re-adding a reset here
+		// re-breaks every closure that dispatches, silently, because the parameter route would simply stop
+		// being reachable. Nothing inside a closure body writes the pair, so the SAVE block above has nothing
+		// to save either — the pair is absent from all three lists, on purpose.
 		self.valueInstanceAlias = sharedEmptyInstanceAliasMap
 		self.valueExistentialInstance = sharedEmptyExistentialInstanceMap
 		self.valueDeclaredAlias = sharedEmptyDeclaredAliasMap
@@ -50038,6 +50237,13 @@ export type Parser
 		self.captureNames = ByteArrayArray.create()
 		self.captureValues = ValueIdArray.create()
 		self.captureTypes = MaxonTypeArray.create()
+		self.inheritedWitnessCaptures = InheritedWitnessCaptureArray.create()
+		// A lifted closure's ABI reserves no layout-descriptor parameter, so its body carries none however the
+		// enclosing method was served — see the save block for the panic this line replaces. The two
+		// accumulators start clean so what they hold at the closure's `end` is the CLOSURE's own answer.
+		self.functionCarriesLayoutParam = false
+		self.functionDroppedOpaqueWithoutDescriptor = false
+		self.functionStoredOpaqueWithoutDescriptor = false
 		self.closureEnvParamId = paramCount
 		self.inMatchArmBody = false
 		// Fresh per-closure range-check accumulators, exactly as `parseFunction` re-creates them — see the
@@ -50101,11 +50307,22 @@ export type Parser
 		// drain is what would otherwise reach `witnessOfValue` on it.
 		try self.requireFunctionValueReturnHasRoom(MaxonReturnType.value(bodyType), tok: givesTok)
 		try self.emitOwnedValueReturn(bodyValue, anchor: givesTok)
+		// ⭐ **THE CLOSURE ASKS W10's QUESTION OF ITSELF (W58)** — same moment in its life `parseFunction` asks
+		// it (the whole body emitted, so "was a drop emitted" is answerable), same pair of accumulators, and it
+		// must ask because it is a function of its own with its own empty descriptor reservation. It quotes the
+		// LIFTED name and points at the `function` keyword, so a refusal names the closure rather than blaming
+		// the method around it, which may be perfectly well served.
+		try self.requireDescriptorForOpaqueDrops(closureName, line: functionTok.line, column: functionTok.column)
 
-		// Did the body capture? Snapshot the collected set before it is restored away.
+		// Did the body capture? Snapshot the collected set before it is restored away. The inherited-witness
+		// column is snapshotted with them because it names slots IN this set, and both are read after the
+		// restore (W58) — the values half of it is still unfilled at this point, on purpose.
 		let captureCount = self.captureNames.count()
-		let capturedValuesSnapshot = self.captureValues
+		// `var`, because `fillInheritedWitnessCaptures` WRITES into it (E3019) — the inherited-witness slots are
+		// claimed during the body parse and can only be valued after the restore.
+		var capturedValuesSnapshot = self.captureValues
 		let capturedTypesSnapshot = self.captureTypes
+		let inheritedWitnessSnapshot = self.inheritedWitnessCaptures
 		// ⭐ **PROMOTE THE RESERVED `__env` SLOT TO A REAL TRAILING PARAMETER — ALWAYS (P1.5-A2b-2).** Under the
 		// uniform `(userargs, env)` ABI EVERY function value is called through the SAME indirect signature, so a
 		// lifted closure's own type must be `(userargs, __env) -> R` whether or not it captures — on wasm the
@@ -50200,8 +50417,6 @@ export type Parser
 		self.charLiteralOps = savedCharLiteralOps
 		self.stringBytesViewOps = savedStringBytesViewOps
 		self.iterationLockedBindings = savedIterationLockedBindings
-		self.currentWitnessParamBase = savedWitnessParamBase
-		self.currentWitnessParamCount = savedWitnessParamCount
 		self.immutableGlobalReads = savedImmutableGlobalReads
 		self.mergeImmutableBlame = savedMergeImmutableBlame
 		self.rebindableSlotReads = savedRebindableSlotReads
@@ -50213,6 +50428,10 @@ export type Parser
 		self.captureNames = savedCaptureNames
 		self.captureValues = savedCaptureValues
 		self.captureTypes = savedCaptureTypes
+		self.inheritedWitnessCaptures = savedInheritedWitnessCaptures
+		self.functionCarriesLayoutParam = savedCarriesLayoutParam
+		self.functionDroppedOpaqueWithoutDescriptor = savedDroppedOpaqueWithoutDescriptor
+		self.functionStoredOpaqueWithoutDescriptor = savedStoredOpaqueWithoutDescriptor
 		self.closureEnvParamId = savedClosureEnvParamId
 		self.rangeCheckSites = savedRangeCheckSites
 		self.rangeCheckArgSites = savedRangeCheckArgSites
@@ -50229,6 +50448,11 @@ export type Parser
 		// additionally allocates its environment here in the ENCLOSING frame and marks the value, so every
 		// in-frame call reads `valueClosureEnv` and passes the env as the trailing `__env` arg.
 		if captureCount > 0 'buildEnv'
+			// ⭐ **THE INHERITED WITNESSES ARE FILLED FIRST, AND THE ORDER IS LOAD-BEARING (W58):** one hop out,
+			// closing a hop EMITS a load into the block `buildClosureEnv` is about to append its stores to, so
+			// the load has to be there before the store that reads it. It sits inside this branch because a
+			// witness capture IS a capture — a closure with one has `captureCount > 0` by construction.
+			try self.fillInheritedWitnessCaptures(inheritedWitnessSnapshot, capturedValues: capturedValuesSnapshot, anchor: functionTok)
 			self.buildClosureEnv(result, captureCount: captureCount, capturedValues: capturedValuesSnapshot, capturedTypes: capturedTypesSnapshot, anchor: functionTok)
 		end 'buildEnv'
 
