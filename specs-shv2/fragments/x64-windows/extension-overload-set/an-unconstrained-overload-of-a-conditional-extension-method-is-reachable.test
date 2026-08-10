@@ -1,0 +1,211 @@
+// Test: an-unconstrained-overload-of-a-conditional-extension-method-is-reachable
+typealias Integer = int(i64.min to i64.max)
+
+type Opaque
+	export static function create() returns Self
+		return Self{}
+	end 'create'
+end 'Opaque'
+
+type Holder uses Element
+	export var value as Element
+
+	export static function create(v Element) returns Self
+		return Self{value: v}
+	end 'create'
+end 'Holder'
+
+export extension Holder where Element is Comparable
+	export function beats(other Element) returns bool
+		return self.value.compare(other) == Ordering.greaterThan
+	end 'beats'
+end 'Holder'
+
+export extension Holder
+	export function beats(assumed bool) returns bool
+		return assumed
+	end 'beats'
+end 'Holder'
+
+typealias IntHolder = Holder with Integer
+typealias OpaqueHolder = Holder with Opaque
+
+function main() returns ExitCode
+	let h = IntHolder.create(7)
+	let o = OpaqueHolder.create(Opaque.create())
+	var n = 0
+	if h.beats(3) 'cmp'
+		n = n + 1
+	end 'cmp'
+	if o.beats(true) 'fb'
+		n = n + 10
+	end 'fb'
+	return n
+end 'main'
+---
+ExitCode: 11
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @Opaque.create {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Holder.create {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Holder.beats {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, rax
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
+    x64.callMem [rbx + 24]
+    x64.cmpRegImm32 r8, 2
+    x64.setccReg equal, r8
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Holder.beats#bool {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegReg r8, rdx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.movRegImm32 rcx, 7
+    x64.callDirect Holder.create
+    x64.movRegReg rbx, r8
+    x64.callDirect Opaque.create
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_incref
+    x64.movRegReg rcx, r12
+    x64.callDirect Holder.create
+    x64.movRegReg r13, r8
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_decref
+    x64.movRegImm32 r12, 0
+    x64.movRegImm32 rdx, 3
+    x64.leaRegRdata rax, [rip + __witness_int.Comparable]
+    x64.movRegReg rcx, rbx
+    x64.callDirect Holder.beats
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, cmp
+    x64.jmp critsplit
+  cmp:
+    x64.leaRegRegImm32 r12, r12, 1
+    x64.jmp ifcont
+  critsplit:
+    x64.jmp ifcont
+  ifcont:
+    x64.movRegImm32 rdx, 1
+    x64.movRegReg rcx, r13
+    x64.callDirect Holder.beats#bool
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, fb
+    x64.jmp critsplit
+  fb:
+    x64.leaRegRegImm32 r12, r12, 10
+    x64.jmp ifcont
+  critsplit:
+    x64.jmp ifcont
+  ifcont:
+    x64.movRegReg rcx, r13
+    x64.callDirect __destruct_Holder_Opaque
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_decref
+    x64.cmpRegImm32 r12, 0
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r12, rax
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_22]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.movRegReg r8, r12
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @int.compare {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.cmpRegReg rcx, rdx
+    x64.jcc less, less
+    x64.jmp notLess
+  less:
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+  notLess:
+    x64.cmpRegReg rcx, rdx
+    x64.jcc greater, greater
+    x64.jmp equal
+  greater:
+    x64.movRegImm32 r8, 2
+    x64.popReg rbp
+    x64.ret
+  equal:
+    x64.movRegImm32 r8, 1
+    x64.popReg rbp
+    x64.ret
+}

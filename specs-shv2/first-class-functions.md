@@ -1826,6 +1826,121 @@ end 'main'
 error E3099: specs/fragments/first-class-functions/first-class-function.capturing-closure-returned-by-callee-errors.test:13:10: cannot pass a closure that captures to 'identity', which stores or returns it: captures are taken by reference to the enclosing function's frame, so a closure that captures cannot outlive that frame. Use a function reference, or a closure that captures nothing
 ```
 
+<!-- test: first-class-function.capturing-closure-through-a-chain-that-only-calls -->
+The interprocedural summary is TRANSITIVE (W58), so a capturing closure survives an arbitrarily deep
+pass-DOWN chain that never persists it. `ping` hands `f` to `pong`, which hands it back to `ping`, which
+eventually CALLS it — a mutually recursive pass-through, which is the shape `stdlib/Array.maxon`'s sort cone
+is written in (`sort()` → `driftsortRange` → `createRun` → `stableQuicksortRange` → `smallSortRange`, all of
+them only calling the comparator).
+
+It is a RUN and not a compile: the answer proves the environment travelled the whole chain, which is what
+`LowerMaxonToStd.appendCalleeEnvArgs` threads at each hop and `Parser.bindClosureEnvParams` receives. Until
+W58 the summary marked a parameter escaping merely for being passed on, so this was
+`E3099: cannot pass a closure that captures to 'ping', which stores or returns it` — about two functions that
+do neither.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias UnaryOp = function(Integer) returns Integer
+
+function ping(f UnaryOp, n Integer) returns Integer
+	if n <= 0 'done'
+		return f(n)
+	end 'done'
+	return pong(f, n: n - 1)
+end 'ping'
+
+function pong(f UnaryOp, n Integer) returns Integer
+	return ping(f, n: n - 1)
+end 'pong'
+
+function main() returns ExitCode
+	let bump = 20
+	return ping(function(n Integer) gives n + bump, n: 5) as ExitCode
+end 'main'
+```
+```exitcode
+19
+```
+
+<!-- test: first-class-function.capturing-closure-through-a-chain-that-stores-errors -->
+The other half of the transitive summary, and the one that keeps it SOUND: three hops of pure pass-down
+ending in a callee that STORES the parameter. `Handler.create` persists it, so `hop3` does, so `hop2` does,
+so `hop1` does — the least fixpoint carries the escape back up the chain and the closure is refused at the
+call the author wrote. Under the pre-W58 one-hop rule this was refused too, for the weaker reason that
+`hop1` passed its parameter on at all; it is pinned here because the rule that replaced that one has to keep
+answering the same way, and nothing else in this file would notice if it stopped.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias UnaryOp = function(Integer) returns Integer
+
+type Handler
+	export var op as UnaryOp
+
+	export static function create(op UnaryOp) returns Self
+		return Self{op: op}
+	end 'create'
+end 'Handler'
+
+function hop3(f UnaryOp) returns Handler
+	return Handler.create(f)
+end 'hop3'
+
+function hop2(f UnaryOp) returns Handler
+	return hop3(f)
+end 'hop2'
+
+function hop1(f UnaryOp) returns Handler
+	return hop2(f)
+end 'hop1'
+
+function main() returns ExitCode
+	let bump = 20
+	let h = hop1(function(n Integer) gives n + bump)
+	return h.op(21) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3099: specs/fragments/first-class-functions/first-class-function.capturing-closure-through-a-chain-that-stores-errors.test:27:10: cannot pass a closure that captures to 'hop1', which stores or returns it: captures are taken by reference to the enclosing function's frame, so a closure that captures cannot outlive that frame. Use a function reference, or a closure that captures nothing
+```
+
+<!-- test: first-class-function.capturing-closure-through-a-cycle-that-stores-errors -->
+A CYCLE whose escape is inside it. `ping` and `pong` call each other and `ping` also hands `f` to a
+constructor that stores it — so the escaping set is reached only by going round the loop, which is exactly
+what a least fixpoint over the call graph does and what a depth-first "ask the callee" walk would not
+terminate on. The refusal is reported at `pong`, the call the author wrote.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias UnaryOp = function(Integer) returns Integer
+
+type Holder
+	export var op as UnaryOp
+
+	export static function create(op UnaryOp) returns Self
+		return Self{op: op}
+	end 'create'
+end 'Holder'
+
+function ping(f UnaryOp, n Integer) returns Holder
+	if n <= 0 'done'
+		return Holder.create(f)
+	end 'done'
+	return pong(f, n: n - 1)
+end 'ping'
+
+function pong(f UnaryOp, n Integer) returns Holder
+	return ping(f, n: n - 1)
+end 'pong'
+
+function main() returns ExitCode
+	let bump = 20
+	let h = pong(function(n Integer) gives n + bump, n: 5)
+	return h.op(21) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3099: specs/fragments/first-class-functions/first-class-function.capturing-closure-through-a-cycle-that-stores-errors.test:26:10: cannot pass a closure that captures to 'pong', which stores or returns it: captures are taken by reference to the enclosing function's frame, so a closure that captures cannot outlive that frame. Use a function reference, or a closure that captures nothing
+```
+
 <!-- test: first-class-function.capturing-closure-called-from-nested-block -->
 The same closure, called from a DIFFERENT block of the same frame. This is not an escape and
 must not be confused with one: the call happens inside `main`, the frame is alive, and nothing

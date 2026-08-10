@@ -144,7 +144,7 @@ export typealias BorrowRecordArray = Array with BorrowRecord
 // already holds at least one completed borrow — a write above every borrow's activation can never
 // conflict, so recording one would be work with no question attached.
 //
-// ⚠ A record `type` rather than the dense scalar columns `MutationEdges` and `SourceRangeTable`
+// ⚠ A record `type` rather than the dense scalar columns `CallParamEdges` and `SourceRangeTable`
 // insist on, and the gate above is exactly why: those two are built over EVERY call / EVERY op in
 // the program, where a heap box per entry is a per-op allocation. This list is empty in every
 // function that borrows nothing, which is almost all of them.
@@ -344,7 +344,7 @@ function mutationSiteWrites(project Project, site MutationSite, mutationSummary 
 	// ARRAY dispatcher records BOTH masks for a parameter receiver, so a plain mutating callee carries its
 	// bit in each. Do not restate this as containment; the `String`/`Set` rows go the other way.
 	let mask = mutationSummary.storageMaskOf(site.callee)
-	if mask == NoMutatedParams 'writesNoParameter'
+	if mask == NoParamPositions 'writesNoParameter'
 		return false
 	end 'writesNoParameter'
 
@@ -352,7 +352,7 @@ function mutationSiteWrites(project Project, site MutationSite, mutationSummary 
 	// second diagnostic to add here.
 	let sig = try project.funcSignatures.get(site.callee) otherwise return false
 	let pos = argSlotPosition(sig.paramNames, argIndex: site.argColumn, label: site.argLabel)
-	return pos < sig.paramCount() and paramIsMutated(mask, param: pos)
+	return pos < sig.paramCount() and maskHasParam(mask, param: pos)
 end 'mutationSiteWrites'
 
 // Report the FIRST borrow of this site's subject that is already active and not yet dead, and stop —

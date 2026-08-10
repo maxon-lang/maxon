@@ -786,6 +786,36 @@ export function typeConformsTo(declared DeclaredConformanceMap, interfaces IrInt
 	return typeDeclaresInterface(declared, interfaces: interfaces, typeName: typeName, interfaceName: interfaceName)
 end 'typeConformsTo'
 
+// Which of a conditional TYPE extension's constraints a concrete receiver instance FAILS, or `met`. It names
+// the interface and the offending type argument because those are the two nouns the refusal quotes.
+export union ExtensionConstraintOnReceiver
+	met
+	unmet(interfaceName ByteArray, argDisplayName ByteArray)
+end 'ExtensionConstraintOnReceiver'
+
+// ⭐ **DOES A CONCRETE GENERIC INSTANCE SATISFY A CONDITIONAL TYPE EXTENSION'S CLAUSE?** — asked at the two
+// points a call to such a method can be judged, and written ONCE because a refusal that fires at one and not
+// the other is either a false refusal or a witness table built for a conformance nothing validated:
+//
+//   • `Parser.requireReceiverSatisfiesExtensionConstraints`, at the member token, which is where the
+//     diagnostic reads best and is the only decider while the callee names ONE declaration;
+//   • `SemanticCheck.checkResolvedExtensionConstraints`, on the RESOLVED overload member, which is the only
+//     decider once the name is an overload SET — there the parser cannot know which declaration the call
+//     means, so it defers (see `ProgramSignatures.hasUnconstrainedExtensionDeclaration`).
+export function receiverMeetsExtensionConstraints(signatures ProgramSignatures, gid GenericInstanceId, constraints WhereConstraintArray) returns ExtensionConstraintOnReceiver
+	for i in 0 upto constraints.count() 'eachConstraint'
+		let constraint = try constraints.get(i) otherwise panic("receiverMeetsExtensionConstraints: constraints.get OOB at {i} below count {constraints.count()}")
+		// The CANONICAL conformer name is what the conformance answer and the `__witness_<conformer>.*`
+		// label are both filed under (`conformerTypeArgName`); the MESSAGE prints the source spelling, which
+		// is `checkOneInstantiation`'s split applied at the other end of the same mechanism.
+		let conformer = signatures.conformerTypeArgName(gid, position: constraint.typeParamIndex).toByteArray()
+		if not typeConformsTo(signatures.sweptConformanceIndex(), interfaces: signatures.interfaceMap(), typeName: conformer, interfaceName: constraint.interfaceName) 'violates'
+			return ExtensionConstraintOnReceiver.unmet(constraint.interfaceName, argDisplayName: signatures.instanceArgDisplayName(gid, position: constraint.typeParamIndex))
+		end 'violates'
+	end 'eachConstraint'
+	return ExtensionConstraintOnReceiver.met
+end 'receiverMeetsExtensionConstraints'
+
 // ⭐⭐ **HOW AN OPAQUE TYPE PARAMETER DISCHARGES A CONSTRAINT — the ONE answer, read by the CHECK that
 // accepts the program and by the LOWERING that supplies the witness pointer (W41).**
 //

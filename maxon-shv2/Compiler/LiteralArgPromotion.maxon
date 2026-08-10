@@ -130,16 +130,16 @@ function callsAWritingCallee(module MaxonModule, func IrFunction, mutationSummar
 	return false
 end 'callsAWritingCallee'
 
-// The per-op arm of the gate. `collectMutationEdgesAt`'s arm list, asked of the same two variants for the
+// The per-op arm of the gate. `collectCallParamEdgesAt`'s arm list, asked of the same two variants for the
 // same reason — its `asyncCall` exclusion included: shv2 refuses a managed `async` argument outright
 // (`requireAsyncScalarParams`), so no spawn can carry a String record at all. The non-call bands range to
 // `false`, so a newly appended op fails to compile here rather than silently dropping out of the gate
 // (the band-append invariant).
 function opCallsAWritingCallee(op MaxonOp, mutationSummary ParamMutationSummary) returns bool
 	return match op 'op'
-		call(_, callee, _, _, _, _, _, _) gives mutationSummary.maskOf(callee) != NoMutatedParams
+		call(_, callee, _, _, _, _, _, _) gives mutationSummary.maskOf(callee) != NoParamPositions
 		literal to stringLiteral gives false
-		tryCall(_, _, callee, _, _, _, _, _, _) gives mutationSummary.maskOf(callee) != NoMutatedParams
+		tryCall(_, _, callee, _, _, _, _, _, _) gives mutationSummary.maskOf(callee) != NoParamPositions
 		throwError to indirectCall gives false
 		asyncCall gives false
 		await to tryAwait gives false
@@ -210,7 +210,7 @@ type ArgProvenance
 	// deriving "defined by no op" instead would also admit a PARAMETER, which must not be promoted here.
 	//
 	// ⭐ **AND A PARAMETER NEEDS NO PROMOTION, BY THE TWO ROUTES IT CAN REACH A WRITE.** Handed to a written
-	// slot DIRECTLY (`outer(t String)` doing `grow(t)`), `addMutationEdges` records the edge off exactly that
+	// slot DIRECTLY (`outer(t String)` doing `grow(t)`), `addCallParamEdges` records the edge off exactly that
 	// "the argument IS one of my parameters" test, so the fixpoint marks `outer`'s own slot and every call
 	// site's literal was already promoted one frame up — the record is heap by the time the callee sees it.
 	// Reaching a written slot through a MERGE, the argument at that slot is the PHI and not the parameter, so
@@ -309,14 +309,14 @@ end 'promoteCallAt'
 // The shared body of the two call arms: decide which argument positions need a writable record, emit the
 // promotions ahead of the call, rewrite the op's argument list, and emit the releases behind it.
 //
-// A callee with NO signature is left alone for `addMutationEdges`' reason — it is compiler-internal
+// A callee with NO signature is left alone for `addCallParamEdges`' reason — it is compiler-internal
 // (`__arr_append` and friends, whose receiver writes the parser recorded directly) or undeclared, which
 // is E3004 and so cannot reach a pass that runs only on an error-free project.
 function promoteArgsOf(project Project, module MaxonModule, op MaxonOp, opIdx OpIndex, func IrFunction, funcIndex FuncIndex, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, provenance ArgProvenance, minter PromotedValueMinter, mutationSummary ParamMutationSummary, newRefs OpIndexArray) returns bool
 	let mask = mutationSummary.maskOf(callee)
 	// Short-circuited, so the second lookup is paid only by the handful of calls whose callee writes
 	// anything at all.
-	if mask == NoMutatedParams or not project.funcSignatures.contains(callee) 'noWrittenPositionToFill'
+	if mask == NoParamPositions or not project.funcSignatures.contains(callee) 'noWrittenPositionToFill'
 		newRefs.push(opIdx)
 		return false
 	end 'noWrittenPositionToFill'
@@ -378,7 +378,7 @@ end 'promoteArgsOf'
 
 // Does ANY of this call's arguments need a writable record? The plan loop's own predicate, asked over the
 // whole argument list first — one question, two askers, so the cheap gate cannot drift from what it gates.
-function anyArgNeedsAWritableRecord(sig FuncSignature, mask MutatedParamMask, args ValueIdArray, argLabels ByteArrayArray, provenance ArgProvenance) returns bool
+function anyArgNeedsAWritableRecord(sig FuncSignature, mask ParamPositionMask, args ValueIdArray, argLabels ByteArrayArray, provenance ArgProvenance) returns bool
 	for i in 0 upto args.count() 'eachArg'
 		if promotionAtWrittenPosition(sig, mask: mask, argIndex: i, argId: try args.get(i) otherwise panic("anyArgNeedsAWritableRecord: args.get OOB at {i}"), argLabels: argLabels, provenance: provenance) != WritableRecordPromotion.none 'needsOne'
 			return true
@@ -395,14 +395,14 @@ end 'anyArgNeedsAWritableRecord'
 // while the mask is indexed by DECLARATION position, and `grow(1, dest: "x")` writes parameter 1 with the
 // offending argument at source position 1 only by coincidence. Inverting the permutation by hand would be
 // a second slotting.
-function promotionAtWrittenPosition(sig FuncSignature, mask MutatedParamMask, argIndex ParamCount, argId ValueId, argLabels ByteArrayArray, provenance ArgProvenance) returns WritableRecordPromotion
+function promotionAtWrittenPosition(sig FuncSignature, mask ParamPositionMask, argIndex ParamCount, argId ValueId, argLabels ByteArrayArray, provenance ArgProvenance) returns WritableRecordPromotion
 	let promotion = provenance.promotionFor(argId)
 	if promotion == WritableRecordPromotion.none 'alreadyWritable'
 		return promotion
 	end 'alreadyWritable'
 
 	let pos = argSlotPosition(sig.paramNames, argIndex: argIndex, label: try argLabels.get(argIndex) otherwise panic("promotionAtWrittenPosition: argLabels.get OOB at {argIndex} — a call's argument columns are parallel by construction"))
-	if pos >= sig.paramCount() or not paramIsMutated(mask, param: pos) 'notAWrittenPosition'
+	if pos >= sig.paramCount() or not maskHasParam(mask, param: pos) 'notAWrittenPosition'
 		return WritableRecordPromotion.none
 	end 'notAWrittenPosition'
 

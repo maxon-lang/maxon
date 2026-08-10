@@ -1369,9 +1369,9 @@ end 'borrowSubjectBlameName'
 // reason: the two compilers' IR should read the same way to anyone who has read either.
 let DestructureTempPrefix = "__destructure_"
 
-// The empty `MutatedParamMask` — this function writes none of its parameters, which is the overwhelmingly
+// The empty `ParamPositionMask` — this function writes none of its parameters, which is the overwhelmingly
 // common answer and the initial value of every function's mask.
-export let NoMutatedParams = 0 as MutatedParamMask
+export let NoParamPositions = 0 as ParamPositionMask
 
 // **THE SOURCE SPELLING OF THE RECEIVER PARAMETER.** `__self` is the IR's name for it; `self` is the
 // KEYWORD the user actually wrote, and the only one a diagnostic may quote back at them — a message
@@ -2181,9 +2181,9 @@ type MethodReceiver
 	// E3070's parallel fact — the STORAGE this receiver denotes, empty when it denotes none. A DIFFERENT
 	// string from `immutableName`; see `StructBase`, which carries the same pair on to the call.
 	export let subjectName as ByteArray
-	// Which PARAMETER's storage this receiver is, for the call-site half of E3019. `NoMutatedParams` for
+	// Which PARAMETER's storage this receiver is, for the call-site half of E3019. `NoParamPositions` for
 	// anything that is not a parameter's record.
-	export let owner as MutatedParamMask
+	export let owner as ParamPositionMask
 	// The FIELD NAME when this receiver was materialized out of a SELF-FIELD ALIAS, empty otherwise — the
 	// fact the struct fallthrough names in its refusal (`structBaseOfReceiver`, and
 	// `specs-shv2/self-field-struct-typed.md` for why). Every builtin arm serves such a receiver happily
@@ -2195,7 +2195,7 @@ type MethodReceiver
 	// constructible one — `type Outer`'s `var inner as Inner` — is dispatched on.
 	export let selfFieldName as ByteArray
 
-	export static function create(value ValueId, tag ValueTypeTag, nameId TypeNameId, anchor Token, immutableName ByteArray, subjectName ByteArray, owner MutatedParamMask, selfFieldName ByteArray) returns MethodReceiver
+	export static function create(value ValueId, tag ValueTypeTag, nameId TypeNameId, anchor Token, immutableName ByteArray, subjectName ByteArray, owner ParamPositionMask, selfFieldName ByteArray) returns MethodReceiver
 		return Self{value: value, tag: tag, nameId: nameId, anchor: anchor, immutableName: immutableName, subjectName: subjectName, owner: owner, selfFieldName: selfFieldName}
 	end 'create'
 end 'MethodReceiver'
@@ -9748,7 +9748,7 @@ export type Parser
 	// the worst case one full scan where it used to be one per probe, and the best case unchanged.
 	//
 	// Returns a bitmask rather than a struct because a struct literal is constructible only inside its own
-	// type (E3076) and this needs no identity — the same reason `MutatedParamMask`/`ArgFloatMask` are masks.
+	// type (E3076) and this needs no identity — the same reason `ParamPositionMask`/`ArgFloatMask` are masks.
 	function fileNamesProducerMask() returns ProducerMask
 		let resume = self.pos
 		self.pos = 0
@@ -13056,15 +13056,21 @@ export type Parser
 	// type. Reading this early return as "no witnesses" is exactly the mistake that made the body reserve zero
 	// argument registers while its callers filled two.
 	function noteTypeExtensionWitnessConstraints(index ProgramSignatures, header ExtensionHeader, conformer ByteArray, methodName ByteArray)
-		if header.constraints.isEmpty() 'unconditional'
-			return
-		end 'unconditional'
-
 		match header.target 'target'
 			interfaceExtension then return
 			undeclaredTarget then return
-			typeExtension then index.recordExtensionMethodConstraints(qualifiedMethodName(conformer, methodName: methodName), constraints: header.constraints)
+			typeExtension then break 'target'
 		end 'target'
+
+		// ⭐ An UNCONDITIONAL declaration files no constraint and is still a FACT about the name: it says the
+		// call-site gate is not the only reading of it. See `ProgramSignatures.hasUnconstrainedExtensionDeclaration`.
+		let qualified = qualifiedMethodName(conformer, methodName: methodName)
+		if header.constraints.isEmpty() 'unconditional'
+			index.noteUnconstrainedExtensionMethod(qualified)
+			return
+		end 'unconditional'
+
+		index.recordExtensionMethodConstraints(qualified, constraints: header.constraints)
 	end 'noteTypeExtensionWitnessConstraints'
 
 	// ⭐ **PUBLISH THE EXTENSION METHOD, OR READ IT AND THROW THE SIGNATURE AWAY (W43).** A SHADOWED method is
@@ -39078,7 +39084,7 @@ export type Parser
 	// The anchor is the `.` — a temporary has no token of its own, and the dot is where the member access
 	// the diagnostic is about begins.
 	function valueReceiver(value ValueId, immutableName ByteArray, subjectName ByteArray) returns MethodReceiver
-		return MethodReceiver.create(value, tag: self.tagOf(value), nameId: self.valueNameId(value), anchor: self.current(), immutableName: immutableName, subjectName: subjectName, owner: NoMutatedParams, selfFieldName: EmptySourceText)
+		return MethodReceiver.create(value, tag: self.tagOf(value), nameId: self.valueNameId(value), anchor: self.current(), immutableName: immutableName, subjectName: subjectName, owner: NoParamPositions, selfFieldName: EmptySourceText)
 	end 'valueReceiver'
 
 	// ⭐⭐ **THE ONE TAG SWITCH A `.member` ROUTES THROUGH — cursor ON the `.`.** Both spellings of a
@@ -39688,7 +39694,7 @@ export type Parser
 			return
 		end 'notAConditionalTypeExtensionMethod'
 
-		let clause = renderWhereConstraints(constraints, paramNames: self.structTypeParamNames(typeName))
+		let clause = self.signatures.renderExtensionClause(typeName, constraints: constraints)
 		if self.tagOf(receiver) != ValueTypeTag.genericInstance 'opaqueReceiver'
 			if whereConstraintsMatch(self.enclosingWhereConstraints, other: self.signatures.witnessConstraintsOfMethod(callee)) 'callerCarriesThem'
 				return
@@ -39697,29 +39703,28 @@ export type Parser
 			throw ParseError.unsupported("'{String.from(typeName)}.{String.from(memberTok.value)}' is a conditional extension method ({clause}), and this receiver's type argument is not known here — the enclosing function carries no witness for that constraint to forward. Call it on a concrete instance, or declare the same `where` clause on the function's own extension", line: memberTok.line, column: memberTok.column)
 		end 'opaqueReceiver'
 
-		let gid = self.valueNameId(receiver)
-		for i in 0 upto constraints.count() 'eachConstraint'
-			let constraint = try constraints.get(i) otherwise panic("requireReceiverSatisfiesExtensionConstraints: constraints.get OOB at {i} below count {constraints.count()}")
-			// The CANONICAL conformer name is what the conformance answer and the `__witness_<conformer>.*`
-			// label are both filed under (`conformerTypeArgName`); the MESSAGE prints the source spelling, which
-			// is `checkOneInstantiation`'s split applied at the other end of the same mechanism.
-			let conformer = self.signatures.conformerTypeArgName(gid, position: constraint.typeParamIndex).toByteArray()
-			if not typeConformsTo(self.signatures.sweptConformanceIndex(), interfaces: self.signatures.interfaceMap(), typeName: conformer, interfaceName: constraint.interfaceName) 'violates'
-				let argName = self.signatures.instanceArgDisplayName(gid, position: constraint.typeParamIndex)
-				throw ParseError.conditionalExtensionWithheld(String.from(typeName), methodName: String.from(memberTok.value), clause: clause, unmetInterfaceName: String.from(constraint.interfaceName), bindingName: String.from(argName), line: memberTok.line, column: memberTok.column)
-			end 'violates'
-		end 'eachConstraint'
-	end 'requireReceiverSatisfiesExtensionConstraints'
+		// ⛔ **A NAME AN UNCONDITIONAL EXTENSION ALSO DECLARES IS NOT THIS GATE'S TO REFUSE.** The callee is a
+		// bare `<Type>.<method>` and the arguments have not been read, so which of the two declarations the
+		// call means is not knowable here — and refusing on the conditional one's clause refuses the other one
+		// too. `SemanticCheck.checkResolvedExtensionConstraints` asks the SAME question of the member overload
+		// resolution picked, which is the earliest point the answer exists. See
+		// `ProgramSignatures.hasUnconstrainedExtensionDeclaration` for the measurement.
+		//
+		// ⚠ **IT DEFERS ONLY THE CONCRETE-INSTANCE ARM, WHICH IS WHY IT SITS BELOW THE OPAQUE ONE.** The
+		// post-resolution decider judges a `genericInstance` receiver and declines an opaque one — that arm
+		// is about the CALLER's witness list, not about the receiver's type argument. Deferring it too would
+		// hand an unforwardable witness to the lowering, and the lowering PANICS rather than failing. So an
+		// opaque receiver keeps the stricter answer: over-refused for a call that meant the unconstrained
+		// overload, never miscompiled.
+		if self.signatures.hasUnconstrainedExtensionDeclaration(callee) 'anotherDeclarationOfThisNameHasNoClause'
+			return
+		end 'anotherDeclarationOfThisNameHasNoClause'
 
-	// The `uses` parameter names of a declared type — the list a `WhereConstraint.typeParamIndex` is a
-	// position in, for rendering a clause back. An undeclared type has none, and a constraint against one is
-	// unreachable: the constraints came off a method published for that very type.
-	function structTypeParamNames(typeName ByteArray) returns ByteArrayArray
-		match self.signatures.structOf(typeName) 'layout'
-			declared(layout) then return layout.typeParamNames
-			undeclared then panic("Parser.structTypeParamNames: '{String.from(typeName)}' carries conditional-extension constraints but is in no struct registry — the constraints were filed under a method of that type")
-		end 'layout'
-	end 'structTypeParamNames'
+		match receiverMeetsExtensionConstraints(self.signatures, gid: self.valueNameId(receiver), constraints: constraints) 'constraint'
+			met then break 'constraint'
+			unmet(interfaceName, argDisplayName) then throw ParseError.conditionalExtensionWithheld(String.from(typeName), methodName: String.from(memberTok.value), clause: clause, unmetInterfaceName: String.from(interfaceName), bindingName: String.from(argDisplayName), line: memberTok.line, column: memberTok.column)
+		end 'constraint'
+	end 'requireReceiverSatisfiesExtensionConstraints'
 
 	// ⚠⚠ **A MANAGED FIELD READ OUT OF A TEMPORARY HOLDS THAT TEMPORARY TO THE SCOPE'S EXIT — the read is a
 	// BORROW, and the box that owns what it borrows would otherwise die at the end of THIS statement.**
@@ -42918,7 +42923,7 @@ export type Parser
 	// the parser passes only `[set, elem]`. The set's key type (`giid`, off the receiver's name-id) gates the key
 	// argument's type and decides ownership: `insert` MOVES a managed key in (`consume: true`), while
 	// `contains`/`remove` BORROW it (`consume: false`).
-	function dispatchSetMethod(func IrFunction, set ValueId, resultUsed bool, immutableReceiverName ByteArray, receiverOwner MutatedParamMask) returns ValueId throws ParseError
+	function dispatchSetMethod(func IrFunction, set ValueId, resultUsed bool, immutableReceiverName ByteArray, receiverOwner ParamPositionMask) returns ValueId throws ParseError
 		let methodTok = try self.consume(TokenKind.identifier)
 		let range = SourceRange.ofToken(methodTok)
 		let giid = self.valueNameId(set)
@@ -42926,9 +42931,9 @@ export type Parser
 		// A `let`-bound set is not writable either — the same rule, through the same home the `String` and
 		// `Array` receivers ask (`noteReceiverWrite`). This dispatcher carried NO such guard, which
 		// accepted `let s = IntSet.create()` / `s.insert(1)` where the oracle raises E3019.
-		// `receiverStorage: NoMutatedParams` for the reason the `String` dispatcher states: a `Set` write
+		// `receiverStorage: NoParamPositions` for the reason the `String` dispatcher states: a `Set` write
 		// cannot free an ARRAY element, which is the only borrow E3070 tracks.
-		try self.noteReceiverWrite(func, immutableReceiverName: immutableReceiverName, receiverOwner: receiverOwner, receiverStorage: NoMutatedParams, methodTok: methodTok, mutatesReceiver: setMethodMutatesReceiver(methodTok.value))
+		try self.noteReceiverWrite(func, immutableReceiverName: immutableReceiverName, receiverOwner: receiverOwner, receiverStorage: NoParamPositions, methodTok: methodTok, mutatesReceiver: setMethodMutatesReceiver(methodTok.value))
 
 		if methodTok.value.equals(CountMethod) 'count'
 			try self.consumeEmptyArgList()
@@ -43367,15 +43372,15 @@ export type Parser
 	// ⭐ **THE ROSTER GATE IS ASKED FIRST**, as it is on the five surfaces that already carry one: it is the
 	// question every other refusal about the call presupposes, and it is what stopped the old hand-written
 	// sentence — which still said this dispatch served six names — from having to be edited by hand here.
-	function dispatchMapMethod(func IrFunction, map ValueId, resultUsed bool, immutableReceiverName ByteArray, receiverOwner MutatedParamMask) returns ValueId throws ParseError
+	function dispatchMapMethod(func IrFunction, map ValueId, resultUsed bool, immutableReceiverName ByteArray, receiverOwner ParamPositionMask) returns ValueId throws ParseError
 		let methodTok = try self.consume(TokenKind.identifier)
 		let roster = try self.requireSurfaceMember(MemberSurface.map, methodTok: methodTok)
 		let range = SourceRange.ofToken(methodTok)
 		let giid = self.valueNameId(map)
 
-		// `receiverStorage: NoMutatedParams` for the reason the `String` and `Set` dispatchers state: a map
+		// `receiverStorage: NoParamPositions` for the reason the `String` and `Set` dispatchers state: a map
 		// write cannot free an ARRAY element, which is the only borrow E3070 tracks.
-		try self.noteReceiverWrite(func, immutableReceiverName: immutableReceiverName, receiverOwner: receiverOwner, receiverStorage: NoMutatedParams, methodTok: methodTok, mutatesReceiver: mapMethodMutatesReceiver(methodTok.value))
+		try self.noteReceiverWrite(func, immutableReceiverName: immutableReceiverName, receiverOwner: receiverOwner, receiverStorage: NoParamPositions, methodTok: methodTok, mutatesReceiver: mapMethodMutatesReceiver(methodTok.value))
 
 		if methodTok.value.equals(CountMethod) 'count'
 			try self.consumeEmptyArgList()
@@ -43538,14 +43543,14 @@ export type Parser
 	// `first`/`get` hand back a BORROW and `removeFirst` a value MOVED OUT, both through
 	// `emitContainerElementAccessor`'s `owned` flag. Not one of those doors needed a `List` arm — see that
 	// function's header for why they were container doors all along.
-	function dispatchListMethod(func IrFunction, list ValueId, resultUsed bool, immutableReceiverName ByteArray, borrowSubjectName ByteArray, receiverOwner MutatedParamMask) returns ValueId throws ParseError
+	function dispatchListMethod(func IrFunction, list ValueId, resultUsed bool, immutableReceiverName ByteArray, borrowSubjectName ByteArray, receiverOwner ParamPositionMask) returns ValueId throws ParseError
 		let methodTok = try self.consume(TokenKind.identifier)
 		let range = SourceRange.ofToken(methodTok)
 		let giid = self.valueNameId(list)
 
-		// `receiverStorage: NoMutatedParams` for the reason the `String`, `Set` and `Map` dispatchers state: a
+		// `receiverStorage: NoParamPositions` for the reason the `String`, `Set` and `Map` dispatchers state: a
 		// list write cannot free an ARRAY element, which is the only borrow E3070 tracks.
-		try self.noteReceiverWrite(func, immutableReceiverName: immutableReceiverName, receiverOwner: receiverOwner, receiverStorage: NoMutatedParams, methodTok: methodTok, mutatesReceiver: listMethodMutatesReceiver(methodTok.value))
+		try self.noteReceiverWrite(func, immutableReceiverName: immutableReceiverName, receiverOwner: receiverOwner, receiverStorage: NoParamPositions, methodTok: methodTok, mutatesReceiver: listMethodMutatesReceiver(methodTok.value))
 
 		// ⭐ A write through the receiver invalidates every borrow outstanding on it — `removeFirst` FREES the
 		// node whose element a `first()` borrow still names, so the E3070 door is taken with the same answer
@@ -43614,7 +43619,7 @@ export type Parser
 	// (`/specs/ownership.md:managed-list-remove-decref`). Recorded after, the same rule does exactly the
 	// right thing in both directions: a handle whose last use IS the argument is dead at the write and the
 	// call is legal, and a handle read AGAIN afterwards is live at the write and the read is refused.
-	function dispatchManagedListMethod(func IrFunction, list ValueId, resultUsed bool, immutableReceiverName ByteArray, borrowSubjectName ByteArray, receiverOwner MutatedParamMask) returns ValueId throws ParseError
+	function dispatchManagedListMethod(func IrFunction, list ValueId, resultUsed bool, immutableReceiverName ByteArray, borrowSubjectName ByteArray, receiverOwner ParamPositionMask) returns ValueId throws ParseError
 		let methodTok = try self.consume(TokenKind.identifier)
 		let range = SourceRange.ofToken(methodTok)
 		let giid = self.valueNameId(list)
@@ -43626,9 +43631,9 @@ export type Parser
 		// hoisted `noteBorrowSubjectWrite` could not be in two places at once.
 		let freesANode = managedListMethodFreesANode(methodTok.value)
 
-		// `receiverStorage: NoMutatedParams` for the reason the `String`, `Set`, `Map` and `List` dispatchers
+		// `receiverStorage: NoParamPositions` for the reason the `String`, `Set`, `Map` and `List` dispatchers
 		// state: a chain write cannot free an ARRAY element, which is the only borrow E3070 tracks there.
-		try self.noteReceiverWrite(func, immutableReceiverName: immutableReceiverName, receiverOwner: receiverOwner, receiverStorage: NoMutatedParams, methodTok: methodTok, mutatesReceiver: mutates)
+		try self.noteReceiverWrite(func, immutableReceiverName: immutableReceiverName, receiverOwner: receiverOwner, receiverStorage: NoParamPositions, methodTok: methodTok, mutatesReceiver: mutates)
 
 		if methodTok.value.equals(CountMethod) 'count'
 			try self.consumeEmptyArgList()
@@ -43933,7 +43938,7 @@ export type Parser
 	//
 	// ⚠ The roster is refused in full rather than per-member: a fixed-size container deliberately has no
 	// `push`/`pop`/`append`/`resize`/`clear`, and that absence is the whole content of "fixed size".
-	function dispatchVectorMethod(func IrFunction, vec ValueId, resultUsed bool, immutableReceiverName ByteArray, borrowSubjectName ByteArray, receiverOwner MutatedParamMask, receiverStorage MutatedParamMask) returns ValueId throws ParseError
+	function dispatchVectorMethod(func IrFunction, vec ValueId, resultUsed bool, immutableReceiverName ByteArray, borrowSubjectName ByteArray, receiverOwner ParamPositionMask, receiverStorage ParamPositionMask) returns ValueId throws ParseError
 		let methodTok = try self.consume(TokenKind.identifier)
 		let range = SourceRange.ofToken(methodTok)
 		let giid = self.valueNameId(vec)
@@ -45291,7 +45296,7 @@ export type Parser
 	// deep-clones a direct-clonable managed one, so it never duplicates a managed pointer and double-frees it —
 	// unless the instantiation's element is a managed type this rung cannot single-function-clone, which
 	// `requireOpaqueArrayCopyable` rejects.
-	function dispatchArrayMethod(func IrFunction, arr ValueId, giid GenericInstanceId, resultUsed bool, immutableReceiverName ByteArray, borrowSubjectName ByteArray, receiverOwner MutatedParamMask, receiverStorage MutatedParamMask, viaManagedField bool) returns ValueId throws ParseError
+	function dispatchArrayMethod(func IrFunction, arr ValueId, giid GenericInstanceId, resultUsed bool, immutableReceiverName ByteArray, borrowSubjectName ByteArray, receiverOwner ParamPositionMask, receiverStorage ParamPositionMask, viaManagedField bool) returns ValueId throws ParseError
 		let methodTok = try self.consume(TokenKind.identifier)
 		let range = SourceRange.ofToken(methodTok)
 
@@ -45933,7 +45938,7 @@ export type Parser
 	// what this parameter points at?", YES for the same write). Both are decided about the SAME receiver at
 	// the SAME instant off the SAME `mutatesReceiver` answer, which is why they are recorded together rather
 	// than by two passes that would then have to agree for ever.
-	function noteReceiverWrite(func IrFunction, immutableReceiverName ByteArray, receiverOwner MutatedParamMask, receiverStorage MutatedParamMask, methodTok Token, mutatesReceiver bool) throws ParseError
+	function noteReceiverWrite(func IrFunction, immutableReceiverName ByteArray, receiverOwner ParamPositionMask, receiverStorage ParamPositionMask, methodTok Token, mutatesReceiver bool) throws ParseError
 		if not mutatesReceiver 'readOnlyMethod'
 			return
 		end 'readOnlyMethod'
@@ -46018,7 +46023,7 @@ export type Parser
 	// that is a parameter: a String write frees no ARRAY element, and an array element is the only borrow
 	// E3070 tracks. `borrow-liveness:method-writing-a-string-or-set-field-is-not-a-conflict` is the case
 	// that fails the instant the two are fused, and it was watched green before, during and after this arm.
-	function receiverOwnerMask(func IrFunction, binding VarInfo, baseTok Token) returns MutatedParamMask throws ParseError
+	function receiverOwnerMask(func IrFunction, binding VarInfo, baseTok Token) returns ParamPositionMask throws ParseError
 		if binding.isSelfField 'ownedByTheTypeNotTheCaller'
 			// ⛔ **BOUND FIRST, NEVER `if try …` — MEASURED, AND IT IS A SILENT WRONG ANSWER.** Written as
 			// `if try self.selfFieldIsInlineManaged(…) 'label'` this arm fired for `type Bag`'s plain
@@ -46032,7 +46037,7 @@ export type Parser
 				return self.enclosingSelfParamMask(func)
 			end 'theFieldIsTheReceiversOwnRecord'
 
-			return NoMutatedParams
+			return NoParamPositions
 		end 'ownedByTheTypeNotTheCaller'
 
 		return paramMaskOfValue(func, value: binding.boundValue)
@@ -46043,7 +46048,7 @@ export type Parser
 	// parameter INDEX is DERIVED (`self` resolved through the scope) rather than assumed to be 0: the
 	// convention that binds it there lives in `bindParameters`, and restating it here would be a second copy
 	// of it.
-	function enclosingSelfParamMask(func IrFunction) returns MutatedParamMask
+	function enclosingSelfParamMask(func IrFunction) returns ParamPositionMask
 		return paramMaskOfValue(func, value: try self.scope.lookupValue(SelfParamName) otherwise panic("enclosingSelfParamMask: a self-field alias is in scope but `self` is not — `declareSelfFieldAliases` and `bindParameters` both run at method entry before a body token is read, and neither other path can hold an alias in THIS scope without a receiver (a closure body gets a FRESH scope carrying no alias — a bare self-field name inside one resolves through the CAPTURE path instead, off the enclosing scope; a `static function` installs no alias at all)"))
 	end 'enclosingSelfParamMask'
 
@@ -46059,7 +46064,7 @@ export type Parser
 	//
 	// The receiver's parameter index is DERIVED rather than assumed to be 0 — see `enclosingSelfParamMask`,
 	// the one home that lookup and its panic now have.
-	function receiverStorageMask(func IrFunction, binding VarInfo) returns MutatedParamMask
+	function receiverStorageMask(func IrFunction, binding VarInfo) returns ParamPositionMask
 		if binding.isSelfField 'fieldOfTheEnclosingReceiver'
 			return self.enclosingSelfParamMask(func)
 		end 'fieldOfTheEnclosingReceiver'
@@ -46071,7 +46076,7 @@ export type Parser
 		// the value test would mark parameter 0's storage written off that coincidence and refuse every
 		// call handing it on: a false rejection with no compile error. See `VarInfo.namesModuleStorage`.
 		if binding.namesModuleStorage 'moduleStorageNotTheCallers'
-			return NoMutatedParams
+			return NoParamPositions
 		end 'moduleStorageNotTheCallers'
 
 		return paramMaskOfValue(func, value: binding.boundValue)
@@ -46081,12 +46086,12 @@ export type Parser
 	// parameter at all. The parameter-ValueId convention (`bindParameters` reserves 0..paramCount-1) is what
 	// makes the test a comparison rather than a lookup — see `receiverOwnerMask`'s ⚠ block for why this is
 	// a question about the VALUE and `VarInfo.isParameter` is a different one about the BINDING.
-	function paramMaskOfValue(func IrFunction, value ValueId) returns MutatedParamMask
+	function paramMaskOfValue(func IrFunction, value ValueId) returns ParamPositionMask
 		if value >= func.paramCount 'notAParameter'
-			return NoMutatedParams
+			return NoParamPositions
 		end 'notAParameter'
 
-		return withMutatedParam(NoMutatedParams, param: value)
+		return maskWithParam(NoParamPositions, param: value)
 	end 'paramMaskOfValue'
 
 	// ⭐ **THE E3070 STORAGE MASK FOR A WRITE NAMED BY ITS SUBJECT** — the same answer `receiverStorageMask`
@@ -46094,9 +46099,9 @@ export type Parser
 	// P1.8 iteration lock already share. It is what lets an array method reached through a FIELD CHAIN
 	// (`bag.items.clear()` inside `function wipe(bag Bag)`) record the write against `bag`, which the
 	// receiver-value path has no binding to find.
-	function subjectStorageMask(func IrFunction, subjectName ByteArray) returns MutatedParamMask
+	function subjectStorageMask(func IrFunction, subjectName ByteArray) returns ParamPositionMask
 		if subjectName.isEmpty() 'noNamedStorage'
-			return NoMutatedParams
+			return NoParamPositions
 		end 'noNamedStorage'
 
 		return self.receiverStorageMask(func, binding: self.borrowSubjectBindingOf(subjectName))
@@ -47755,7 +47760,7 @@ export type Parser
 		// `self-keyword.md:self-with-params` pins (see `IrFunction`'s table).
 		//
 		// ⚠ **GATED ON THE FIELD BEING AN ARRAY, which is E3070's SCOPE and the SAME line the String and Set
-		// dispatchers draw** (`noteReceiverWrite`'s two `receiverStorage: NoMutatedParams` call sites): only an
+		// dispatchers draw** (`noteReceiverWrite`'s two `receiverStorage: NoParamPositions` call sites): only an
 		// ARRAY write can free an array element, and an array element is the only thing E3070 tracks. Ungated,
 		// `total = total + v` marked its whole receiver written, and a caller holding `let s = try
 		// b.items.get(0) otherwise ""` was refused `b.add(42)` — a legal program the oracle compiles and runs
@@ -51911,7 +51916,7 @@ export type Parser
 	// anchor is the callee token, which is what a diagnostic inside the arm points at.
 	function implicitSelfRosterReceiver(calleeTok Token, tag ValueTypeTag, nameId TypeNameId) returns MethodReceiver throws ParseError
 		let value = try self.requireReceiverValue(calleeTok)
-		return MethodReceiver.create(value, tag: tag, nameId: nameId, anchor: calleeTok, immutableName: EmptySourceText, subjectName: EmptySourceText, owner: NoMutatedParams, selfFieldName: EmptySourceText)
+		return MethodReceiver.create(value, tag: tag, nameId: nameId, anchor: calleeTok, immutableName: EmptySourceText, subjectName: EmptySourceText, owner: NoParamPositions, selfFieldName: EmptySourceText)
 	end 'implicitSelfRosterReceiver'
 
 	// The receiver a bare call to the sibling `name` carries. An INSTANCE method gets the enclosing `self`

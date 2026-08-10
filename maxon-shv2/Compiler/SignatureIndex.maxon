@@ -6158,6 +6158,10 @@ export type ProgramSignatures
 	// the same fold, in the same act that publishes the method's signature, so a method cannot be published
 	// with one witness count and called with another.
 	var extensionMethodConstraints as ExtensionMethodConstraintMap
+	// ⭐ **THE `<Conformer>.<method>` NAMES AN UNCONDITIONAL TYPE EXTENSION ALSO DECLARES** — the fact the
+	// call-site constraint gate needs to know it is NOT the only decider. See
+	// `hasUnconstrainedExtensionDeclaration`.
+	var unconstrainedExtensionMethods as ExtensionMethodNameSet
 	// The interner every `named` id in `returnTypes` belongs to. PRIVATE, and it has to be: an id
 	// may not leave this type. `returnTypeOf` re-interns it into the caller's own table.
 	var typeNames as TypeNameInterner
@@ -6502,7 +6506,7 @@ export type ProgramSignatures
 	// Every index, empty. Split out of `create` only so the seed stamping above reads as the two steps it
 	// is; this is its one caller.
 	static function freshIndexes(os Os) returns ProgramSignatures
-		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(os), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), structNamesInDeclOrder: ByteArrayArray.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), instanceDisplayNames: InstanceDisplayNameMap.create(), canonicalInstanceNameIndex: CanonicalInstanceNameIndex.create(), canonicalNamesIndexedThrough: 0, tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleElementTokens: TupleElementTokenMap.create(), tupleElementTokenOwners: TupleElementTokenOwnerMap.create(), typeParamOwners: TypeParamOwnerMap.create(), tupleAliases: TupleCanonicalNameMap.create(), sawAggregateArrayLiteral: false, sawListFromConstruction: false, genericAliases: GenericAliasMap.create(), contestedGenericAliases: sharedEmptyGenericAliasContests, multiplyDeclaredGenericAliases: sharedEmptyDisagreeingAliasNames, divergedGenericAliasDecl: AliasCycleResult.none, nameableGenericAliases: sharedEmptyNameableGenericAliases, genericAliasSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), extensionInnerAliasMembers: ExtensionInnerAliasNameSet.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceNamesInDeclOrder: builtinInterfaceNames(), interfaceDeclIndexByName: builtinInterfaceDeclIndices(), interfaceDeclSites: InterfaceDeclSiteArray.create(), extensionDeclSites: ExtensionDeclSiteArray.create(), descriptorScanSites: DescriptorScanSiteArray.create(), descriptorNeeds: sharedEmptyDescriptorNeeds, conditionalExtensionSkips: ConditionalExtensionSkipMap.create(), associatedTypeHoldings: AssociatedTypeHoldingMap.create(), sweptConformances: DeclaredConformanceMap.create(), sweptConformancesBuilt: false, extensionMethodConstraints: ExtensionMethodConstraintMap.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcThrows: FuncThrowsMap.create(), funcParamDefaults: ParamDefaultMap.create(), collidingParamDefaults: CollidingParamDefaultNameSet.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), funcReturnDeclFiles: FuncReturnDeclFileMap.create(), funcDeclSites: FunctionDeclSiteMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), bufferSurfaceAliases: BufferElementAliasNameSet.create(), extensionPublishedMethods: ExtensionMethodNameSet.create(), extensionShadowedMethods: ExtensionMethodNameSet.create(), extensionMethodDeclFiles: ExtensionMethodDeclFileMap.create(), contestedExtensionMethods: ExtensionMethodNameSet.create(), hash: fnvOffsetBasis(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, allFilesFolded: false, rootIsUnderStdlibDirectory: false, constInitializerTypeNames: ConstInitializerTypeNameSet.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false, bareTypeParamReturnerNames: MethodNameSet.create(), bareTypeParamReturnerNamesComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibShadowRenames: StdlibShadowRenameMap.create(), fileModuleDirectories: FileModuleDirectoryMap.create(), namespaceQualifiedFunctions: NamespaceQualifiedFunctionSet.create(), freeFunctionDirectories: FreeFunctionDirectoryMap.create(), contestedFreeFunctions: ContestedFreeFunctionMap.create(), contestedRegistrationNames: ContestedRegistrationNameSet.create()}
+		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(os), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), structNamesInDeclOrder: ByteArrayArray.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), instanceDisplayNames: InstanceDisplayNameMap.create(), canonicalInstanceNameIndex: CanonicalInstanceNameIndex.create(), canonicalNamesIndexedThrough: 0, tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleElementTokens: TupleElementTokenMap.create(), tupleElementTokenOwners: TupleElementTokenOwnerMap.create(), typeParamOwners: TypeParamOwnerMap.create(), tupleAliases: TupleCanonicalNameMap.create(), sawAggregateArrayLiteral: false, sawListFromConstruction: false, genericAliases: GenericAliasMap.create(), contestedGenericAliases: sharedEmptyGenericAliasContests, multiplyDeclaredGenericAliases: sharedEmptyDisagreeingAliasNames, divergedGenericAliasDecl: AliasCycleResult.none, nameableGenericAliases: sharedEmptyNameableGenericAliases, genericAliasSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), extensionInnerAliasMembers: ExtensionInnerAliasNameSet.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceNamesInDeclOrder: builtinInterfaceNames(), interfaceDeclIndexByName: builtinInterfaceDeclIndices(), interfaceDeclSites: InterfaceDeclSiteArray.create(), extensionDeclSites: ExtensionDeclSiteArray.create(), descriptorScanSites: DescriptorScanSiteArray.create(), descriptorNeeds: sharedEmptyDescriptorNeeds, conditionalExtensionSkips: ConditionalExtensionSkipMap.create(), associatedTypeHoldings: AssociatedTypeHoldingMap.create(), sweptConformances: DeclaredConformanceMap.create(), sweptConformancesBuilt: false, extensionMethodConstraints: ExtensionMethodConstraintMap.create(), unconstrainedExtensionMethods: ExtensionMethodNameSet.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcThrows: FuncThrowsMap.create(), funcParamDefaults: ParamDefaultMap.create(), collidingParamDefaults: CollidingParamDefaultNameSet.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), funcReturnDeclFiles: FuncReturnDeclFileMap.create(), funcDeclSites: FunctionDeclSiteMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), bufferSurfaceAliases: BufferElementAliasNameSet.create(), extensionPublishedMethods: ExtensionMethodNameSet.create(), extensionShadowedMethods: ExtensionMethodNameSet.create(), extensionMethodDeclFiles: ExtensionMethodDeclFileMap.create(), contestedExtensionMethods: ExtensionMethodNameSet.create(), hash: fnvOffsetBasis(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, allFilesFolded: false, rootIsUnderStdlibDirectory: false, constInitializerTypeNames: ConstInitializerTypeNameSet.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false, bareTypeParamReturnerNames: MethodNameSet.create(), bareTypeParamReturnerNamesComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibShadowRenames: StdlibShadowRenameMap.create(), fileModuleDirectories: FileModuleDirectoryMap.create(), namespaceQualifiedFunctions: NamespaceQualifiedFunctionSet.create(), freeFunctionDirectories: FreeFunctionDirectoryMap.create(), contestedFreeFunctions: ContestedFreeFunctionMap.create(), contestedRegistrationNames: ContestedRegistrationNameSet.create()}
 	end 'freshIndexes'
 
 	// --- MODULE DIRECTORIES and the ONE visibility decision (N1a) ---
@@ -10281,6 +10285,46 @@ export type ProgramSignatures
 	export function recordExtensionMethodConstraints(callee ByteArray, constraints WhereConstraintArray)
 		self.extensionMethodConstraints.upsert(callee, value: constraints)
 	end 'recordExtensionMethodConstraints'
+
+	// ⭐ **THE `where` CLAUSE A CONDITIONAL TYPE EXTENSION'S REFUSAL QUOTES**, rendered against the OWNER
+	// type's own `uses` list — which is the list a `WhereConstraint.typeParamIndex` is a position in. Written
+	// here rather than at either refusal site because both of them (`Parser.requireReceiverSatisfiesExtensionConstraints`
+	// and `SemanticCheck.checkResolvedExtensionConstraints`) quote the same sentence about the same clause,
+	// and a second spelling of the lookup is a second chance to render a different one.
+	//
+	// A type carrying constraints but absent from the struct registry is unreachable: the constraints were
+	// filed under a method OF that type (`Parser.noteTypeExtensionWitnessConstraints`).
+	export function renderExtensionClause(typeName ByteArray, constraints WhereConstraintArray) returns String
+		match self.structOf(typeName) 'layout'
+			declared(layout) then return renderWhereConstraints(constraints, paramNames: layout.typeParamNames)
+			undeclared then panic("ProgramSignatures.renderExtensionClause: '{String.from(typeName)}' carries conditional-extension constraints but is in no struct registry — the constraints were filed under a method of that type")
+		end 'layout'
+	end 'renderExtensionClause'
+
+	// Note that an UNCONDITIONAL type extension declares `callee` — the write side of the test below.
+	export function noteUnconstrainedExtensionMethod(callee ByteArray)
+		self.unconstrainedExtensionMethods.insert(callee)
+	end 'noteUnconstrainedExtensionMethod'
+
+	// ⭐⭐ **IS THIS `<Conformer>.<method>` ALSO DECLARED BY AN EXTENSION WITH NO `where` CLAUSE?** One name,
+	// two declarations, only one of them conditional — which `stdlib/Array.maxon` is built out of:
+	// `extension Array where Element is Comparable` declares `sort()` and a second, UNCONSTRAINED
+	// `extension Array` declares `sort(cmp)`.
+	//
+	// ⛔ **IT MATTERS BECAUSE THE PARSE-TIME GATE IS KEYED ON THE NAME AND THE CONSTRAINTS ARE TOO.** A call
+	// is dispatched before its arguments are read, so the parser holds the BARE name and cannot know which
+	// member it means; `extensionMethodConstraintsOf` answers with the CONDITIONAL declaration's clause,
+	// because an unconditional one files none. MEASURED with `stdlib/Array.maxon` listed:
+	// **`E4006: Type 'Array' has no field named 'sort' ('sort' is available as a conditional extension where
+	// Element is Comparable, but 'String' does not implement 'Comparable')`** — refusing
+	// `a.sort(byLength)`, a call to the overload that has no clause at all.
+	//
+	// So when this answers TRUE the parse-time gate DEFERS and `SemanticCheck.checkResolvedExtensionConstraints`
+	// decides instead, on the member overload resolution actually picked. It is a set membership costing
+	// nothing on a program with no conditional extension: `Set.contains` returns at its `capacity == 0` test.
+	export function hasUnconstrainedExtensionDeclaration(callee ByteArray) returns bool
+		return self.unconstrainedExtensionMethods.contains(callee)
+	end 'hasUnconstrainedExtensionDeclaration'
 
 	// File one conditional extension method withheld from one conformer — see `ConditionalExtensionSkip`.
 	// FIRST-WINS: two extensions withholding a same-named method from one type leave the first reason, which

@@ -46,14 +46,21 @@ export function semanticCheck(project Project, module MaxonModule, signatures Pr
 	// from the merged module and read at every call site to decide whether a plain call needs a `try`
 	// (E3057). The parser handled the mirror rule (E3055, `try` on a non-throwing call) at the `try` token.
 	let throwsMap = buildThrowsMap(funcNames)
-	// The interprocedural closure-escape summary (P1.5-A2b-2) — built once, read at every call site to refuse
-	// a capturing closure passed to a callee that persists the parameter.
-	let escapeSummary = buildEscapeSummary(module, funcNames: funcNames, funcSignatures: project.funcSignatures)
+	// ⭐ **ONE CALL-GRAPH EDGE SET, THREE CLOSED-OVER FACTS.** Edge `k` says "function A passes its own
+	// parameter p as the argument filling parameter q of function B" — which is the whole of what both
+	// interprocedural summaries below propagate, differing only in their SEED. Built here rather than inside
+	// either builder because a second walk over every call in the program, to derive the same relation, is the
+	// duplication `buildParamMutationSummary`'s header refuses.
+	let callEdges = collectCallParamEdges(project, module: module, funcIndexByName: funcNames.byName)
+	let edgesByCallee = callEdges.byCallee(funcNames.functions.count())
+	// The interprocedural closure-escape summary (P1.5-A2b-2, W58) — built once, read at every call site to
+	// refuse a capturing closure passed to a callee that persists the parameter.
+	let escapeSummary = buildEscapeSummary(module, funcNames: funcNames, funcSignatures: project.funcSignatures, edges: callEdges, byCallee: edgesByCallee)
 	// The interprocedural PARAMETER-MUTATION summary (E3019, the call-site half) — built once, read at every
 	// call site to refuse an immutable binding handed to a parameter the callee writes. It reads the same
 	// index the two summaries above do; a duplicate function name was refused where that index was BUILT,
 	// which is now before this pass runs at all (`PassPipeline.run`, A2l) rather than in the middle of it.
-	let mutationSummary = buildParamMutationSummary(project, module: module, funcNames: funcNames)
+	let mutationSummary = buildParamMutationSummary(funcNames, edges: callEdges, byCallee: edgesByCallee)
 	checkCalls(project, module: module, signatures: signatures, funcNames: funcNames, throwsMap: throwsMap, escapeSummary: escapeSummary, mutationSummary: mutationSummary)
 	// The RETURN half of the interface-widening rule (P1.7a slice 2). After `checkCalls` so a program with
 	// both a bad argument and a bad return reports the argument first, in the order the reader meets them.
@@ -357,28 +364,53 @@ end 'OverloadFit'
 // `slotCallArgs` — which is simultaneously the label test and the arity test — and then each slotted argument
 // is measured against its parameter by the SAME coercion rule `checkOneArgType` reports against, so a
 // candidate this function accepts cannot then be rejected by the argument check downstream.
+//
+// ⚠ **AND THE PROMISE HAS TO HOLD IN THE OTHER DIRECTION TOO, WHICH IS WHERE IT WAS BROKEN (W58).** A
+// candidate this function REFUSES that `checkArgTypes` would have accepted is not a harmless extra strictness:
+// with no candidate fitting, `leaveUnmatchedCallOnFirstCandidate` points the call at the FIRST member and the
+// program is refused against a signature it was never written against. The `result` is threaded down for
+// exactly that reason — see `overloadArgTypeFit`'s own header.
 function overloadCandidateScore(project Project, func IrFunction, op MaxonOp, candidate ByteArray) returns OverloadFit
 	let sig = try project.funcSignatures.get(candidate) otherwise panic("overloadCandidateScore: candidate '{String.from(candidate)}' is not in funcSignatures — `overloadCandidates` filtered on exactly that")
+	let result = match maxonOpResultValue(op) 'result'
+		value(id) gives id
+		none panic("overloadCandidateScore: asked of an op that defines no value — `maxonOpCalleeKind` answers `direct` only for the three CALL ops, and every one of them defines its result")
+	end 'result'
 	match overloadCallArgs(op) 'args'
-		supplied(args, argLabels, defaultSlots) then return overloadSlottedFit(project, func: func, sig: sig, args: args, argLabels: argLabels, defaultSlots: defaultSlots)
+		supplied(args, argLabels, defaultSlots) then return overloadSlottedFit(project, func: func, sig: sig, result: result, args: args, argLabels: argLabels, defaultSlots: defaultSlots)
 		default panic("overloadCandidateScore: asked of an op that supplies no argument list — `maxonOpCalleeKind` answers `direct` for exactly the three ops `overloadCallArgs` covers")
 	end 'args'
 end 'overloadCandidateScore'
 
-function overloadSlottedFit(project Project, func IrFunction, sig FuncSignature, args ValueIdArray, argLabels ByteArrayArray, defaultSlots ParamCountArray) returns OverloadFit
+function overloadSlottedFit(project Project, func IrFunction, sig FuncSignature, result ValueId, args ValueIdArray, argLabels ByteArrayArray, defaultSlots ParamCountArray) returns OverloadFit
 	match slotCallArgs(sig.paramNames, args: args, argLabels: argLabels, argDefaultSlots: defaultSlots) 'slot'
-		ordered(argIds) then return overloadArgTypeFit(project, func: func, sig: sig, argIds: argIds)
+		ordered(argIds) then return overloadArgTypeFit(project, func: func, sig: sig, result: result, argIds: argIds)
 		// An arity mismatch, a label naming no parameter, or two arguments at one parameter: this candidate is
 		// not what the call was written against.
 		arityMismatch to duplicateArg then return OverloadFit.incompatible
 	end 'slot'
 end 'overloadSlottedFit'
 
-function overloadArgTypeFit(project Project, func IrFunction, sig FuncSignature, argIds ValueIdArray) returns OverloadFit
+// ⛔⛔ **IT JUDGES EACH PARAMETER THROUGH THE CALL'S INSTANCE, AND UNTIL W58 IT DID NOT — WHICH MADE EVERY
+// OVERLOAD SET ON A GENERIC TYPE'S EXTENSION UNRESOLVABLE.** `checkArgTypes` resolves a parameter's
+// declaration-view type against the instance the call is actually made at (`paramTypeThroughCallInstance`,
+// W25) precisely because a shared generic body spells `__self` at the base `Array with <T>`. This scorer read
+// the raw signature instead, so the RECEIVER of `a.sort(cmp)` on an `Array with Integer` was compared
+// nominally against `Array_T<gid>` and every candidate scored `incompatible`. MEASURED against
+// `stdlib/Array.maxon` listed: **`E3036: 'Array.sort' expects 1 argument(s) but 2 were provided`** — the
+// arity of the OTHER overload, reported because nothing fit and the call fell back to the first member. It was
+// order-dependent and silent: swapping the two `extension Array` blocks moved the error to
+// `expects 2 argument(s) but 1 were provided`.
+//
+// So the subject is read HERE the same way `checkArgTypes` reads it — one `callInstanceSubject` per candidate,
+// off that candidate's own signature, because whether the receiver IS the subject depends on
+// `sig.takesReceiver()` and the candidates of one set need not agree about that.
+function overloadArgTypeFit(project Project, func IrFunction, sig FuncSignature, result ValueId, argIds ValueIdArray) returns OverloadFit
+	let instanceSubject = callInstanceSubject(sig, result: result, argIds: argIds)
 	var score = NoCompatibleOverloadScore
 	for i in 0 upto argIds.count() 'eachArg'
 		let argId = try argIds.get(i) otherwise panic("overloadArgTypeFit: argIds.get OOB at {i} inside its own count()")
-		let paramType = try sig.paramTypes.get(i) otherwise panic("overloadArgTypeFit: paramTypes.get OOB at {i} — `slotCallArgs` answered `ordered`, so the counts agree")
+		let paramType = paramTypeThroughCallInstance(project, func: func, subject: instanceSubject, paramType: try sig.paramTypes.get(i) otherwise panic("overloadArgTypeFit: paramTypes.get OOB at {i} — `slotCallArgs` answered `ordered`, so the counts agree"))
 		let argTag = try func.valueTags.get(argId) otherwise panic("overloadArgTypeFit: value v{argId} of '{String.from(func.name)}' has no recorded type — every SSA value is minted through Parser.mintValue")
 		let paramTag = maxonTypeTag(paramType)
 		if checkDeclaredType(argTag, declared: paramTag) != DeclaredTypeMatch.ok 'refused'
@@ -812,27 +844,62 @@ end 'buildThrowsMap'
 // re-close now that pass-DOWN is allowed).
 //
 // A parameter is SAFE iff its ValueId is used ONLY as the callee of an indirect call (`f(x)` — the env
-// travels as a synchronous companion argument, valid for the call). Every other use — stored, returned,
-// passed as an argument — is treated as an ESCAPE. Passing it on is treated as escaping WITHOUT consulting
-// the target (the conservative default the transitive case wants): it may over-refuse an exotic
-// pass-through-that-only-calls chain, sound and with no corpus coverage. A function absent from the map has
-// no escaping parameter — the same "absence is the answer" `buildThrowsMap` uses, so the overwhelming
-// first-order function costs no entry.
-typealias ParamEscapeSummary = Map with (ByteArray, BoolArray)
+// travels as a synchronous companion argument, valid for the call) or handed DOWN a synchronous call to a
+// parameter that is itself safe. Every other use — stored, returned, merged through a phi, spawned into a
+// green thread, handed to a runtime entry or to a witness dispatch — is an ESCAPE. A function absent from
+// the map has no escaping parameter — the same "absence is the answer" `buildThrowsMap` uses, so the
+// overwhelming first-order function costs no entry.
+//
+// ⭐⭐ **PASSING IT ON IS AN EDGE, NOT AN ESCAPE — AND UNTIL W58 IT WAS AN ESCAPE, WHICH BLOCKED
+// `arr.sort()`.** This function's own header used to say the conservative answer "may over-refuse an exotic
+// pass-through-that-only-calls chain, sound and with no corpus coverage". The corpus has coverage now, and
+// the chain is not exotic: it is how a sort is written. `stdlib/Array.maxon`'s `sort()` hands the comparator
+// to `Array.driftsortRange`, which hands it to `createRun` / `stableQuicksortRange` / `mergeAdaptive` /
+// `smallSortRange`, none of which does anything with it but CALL it — and `sort()`'s comparator is a
+// capturing closure (it captures the enclosing extension's `where Element is Comparable` witness through the
+// closure env), so the one-hop answer refused it: **`E3099: cannot pass a closure that captures to
+// 'Array.driftsortRange', which stores or returns it`** — about a function that does neither. MEASURED
+// against `stdlib/Array.maxon` listed; it is `specs-shv2/array-sort.md`'s whole suite.
+//
+// The RUNTIME had no such limit and never did: `LowerMaxonToStd.appendCalleeEnvArgs` threads a function
+// argument's environment as a companion at every direct call, and `Parser.bindClosureEnvParams` gives a
+// function-typed PARAMETER its own companion, so `valueClosureEnv` is non-zero for a parameter too and the
+// environment rides an arbitrarily deep pass-DOWN chain. The refusal was the analysis being unable to say
+// what the lowering already did.
+//
+// ⭐ **SO IT IS A FIXPOINT, over the SAME call-graph edges, CSR and worklist the parameter-MUTATION summary
+// closes over** (`collectCallParamEdges` / `propagateParamMasks`): a caller's parameter escapes if the callee
+// parameter it fills escapes. Same shape, different SEED — and a third idiom for "close a per-function fact
+// under the call graph" is exactly what `buildParamMutationSummary`'s header forbids. Termination is the same
+// argument: a mask only ever GAINS bits and a function has at most `MaxAbiArgs` of them.
+//
+// ⚠ **THE ESCAPING SET IS A LEAST FIXPOINT, so seeding every parameter SAFE and growing the escaping set is
+// SOUND rather than optimistic.** "Escapes" is reachability from a real escape SITE, so a parameter that
+// never reaches one does not escape however the recursion is shaped — which matters, because the sort cone is
+// mutually recursive (`driftsortRange` → `createRun` → `stableQuicksortRange` → `driftsortRange`) and a
+// depth-first "ask the callee" walk would not terminate on it.
+typealias ParamEscapeSummary = Map with (ByteArray, ParamPositionMask)
 
 // Keyed by name and read at every call site, so it is built from the CHECKED index for `buildThrowsMap`'s
-// reason (A2l); `module` still travels because the per-function escape scan reads the module's OPS.
-function buildEscapeSummary(module MaxonModule, funcNames FunctionNameIndex, funcSignatures FuncSignatureMap) returns ParamEscapeSummary
+// reason (A2l); `module` still travels because the per-function escape scan reads the module's OPS, and the
+// edges travel because the closure over them is the caller's (`semanticCheck` builds them once for both
+// summaries).
+function buildEscapeSummary(module MaxonModule, funcNames FunctionNameIndex, funcSignatures FuncSignatureMap, edges CallParamEdges, byCallee CsrGraph) returns ParamEscapeSummary
+	var masks = ParamPositionMaskArray.create()
+	for func in funcNames.functions 'seed'
+		masks.push(directlyEscapingParams(func, module: module, funcSignatures: funcSignatures))
+	end 'seed'
+	propagateParamMasks(masks, edges: edges, byCallee: byCallee)
+
 	var summary = ParamEscapeSummary.create()
-	for func in funcNames.functions 'eachFunc'
-		if not functionHasFunctionParam(func) 'noFunctionParam'
+	for i in 0 upto masks.count() 'publish'
+		let mask = try masks.get(i) otherwise panic("buildEscapeSummary: masks.get OOB at {i} — one mask was pushed per function of the index")
+		if mask == NoParamPositions 'nothingEscapes'
 			continue
-		end 'noFunctionParam'
-		let bits = escapingParamBits(func, module: module, funcSignatures: funcSignatures)
-		if boolArrayAny(bits) 'hasEscape'
-			summary.upsert(func.name, value: bits)
-		end 'hasEscape'
-	end 'eachFunc'
+		end 'nothingEscapes'
+		let func = try funcNames.functions.get(i) otherwise panic("buildEscapeSummary: functions.get OOB at {i} — the mask column is built over this array")
+		summary.upsert(func.name, value: mask)
+	end 'publish'
 	return summary
 end 'buildEscapeSummary'
 
@@ -848,8 +915,8 @@ function isFunctionTypedParam(func IrFunction, param ValueId) returns bool
 	return param < func.valueTags.count() and (try func.valueTags.get(param) otherwise panic("isFunctionTypedParam: valueTags.get OOB at {param} inside its own count()")) == ValueTypeTag.function
 end 'isFunctionTypedParam'
 
-// Does `func` take at least one `function`-typed parameter? The cheap gate that keeps the escape scan (and
-// its per-function `BoolArray`) off the overwhelming first-order function — a bounded tag check, no allocation.
+// Does `func` take at least one `function`-typed parameter? The cheap gate that keeps the escape scan off
+// the overwhelming first-order function — a bounded tag check, no allocation.
 function functionHasFunctionParam(func IrFunction) returns bool
 	for i in 0 upto func.paramCount 'eachParam'
 		if isFunctionTypedParam(func, param: i as ValueId) 'isFunction'
@@ -859,30 +926,42 @@ function functionHasFunctionParam(func IrFunction) returns bool
 	return false
 end 'functionHasFunctionParam'
 
-// The per-parameter escape bits — true only for a `function`-typed parameter the body persists. A non-function
-// parameter is never `true` (no closure targets it, so its escape is irrelevant), which keeps the map keyed on
-// what a call site can actually refuse.
-function escapingParamBits(func IrFunction, module MaxonModule, funcSignatures FuncSignatureMap) returns BoolArray
-	var bits = BoolArray.create()
+// ⭐ **THE SEED: the `function`-typed parameters this body lets escape ON ITS OWN**, before the call graph is
+// closed over. A non-function parameter is never in it (no closure targets it, so its escape is irrelevant),
+// which keeps the published summary keyed on what a call site can actually refuse.
+//
+// "On its own" is the whole distinction this rung turns on: a parameter handed DOWN a synchronous call to a
+// named callee is NOT here, because that is an EDGE `propagateParamMasks` closes over — see
+// `syncCallArgEscapes`, which is the one place that decision lives for both of this scan's subjects.
+function directlyEscapingParams(func IrFunction, module MaxonModule, funcSignatures FuncSignatureMap) returns ParamPositionMask
+	if not functionHasFunctionParam(func) 'noFunctionParam'
+		return NoParamPositions
+	end 'noFunctionParam'
+
+	var mask = NoParamPositions
 	for i in 0 upto func.paramCount 'eachParam'
 		let param = i as ValueId
-		bits.push(isFunctionTypedParam(func, param: param) and escapeSiteFound(valueEscapeSite(func, module: module, subject: EscapeScanSubject.oneParameter(param), funcSignatures: funcSignatures)))
+		if isFunctionTypedParam(func, param: param) and escapeSiteFound(valueEscapeSite(func, module: module, subject: EscapeScanSubject.oneParameter(param), funcSignatures: funcSignatures)) 'escapes'
+			mask = maskWithParam(mask, param: i)
+		end 'escapes'
 	end 'eachParam'
-	return bits
-end 'escapingParamBits'
+	return mask
+end 'directlyEscapingParams'
 
-// ⭐ **WHICH VALUES THE ESCAPE SCAN TRACKS — and the ONE slot on which the two rules differ.**
+// ⭐ **WHICH VALUES THE ESCAPE SCAN TRACKS — and the ONE slot on which the two rules still differ.**
 // A function-typed PARAMETER and a capturing-closure LITERAL leave a frame through exactly the same slots
-// (a store, a return, a phi edge, an indirect call's ARGUMENT), with one exception: a DIRECT call's argument.
+// (a store, a return, a phi edge, an indirect call's ARGUMENT), and since W58 they answer a SYNCHRONOUS
+// direct call's argument the same way too: neither escapes there, because each has a decider that runs later
+// and knows the callee — the parameter's is `propagateParamMasks` over the call graph, the closure's is
+// `checkCapturingClosureEscape` at the call site. Both are one hop of the same fact, which is what keeps
+// `apply(function(n) gives n + c, x)` — a pass DOWN to a callee that only CALLS it — green, and what now
+// keeps `arr.sort()` green through the four-deep sort cone.
 //
-//   • For a PARAMETER, passing it on IS an escape. The summary being built is keyed on the parameter, and
-//     nothing propagates "this parameter is only called" through a second hop, so the conservative answer is
-//     the only sound one (see `ParamEscapeSummary`).
-//   • For a capturing-closure LITERAL, a direct call's argument is `checkCapturingClosureEscape`'s question
-//     and ITS ALONE: that check holds the callee's summary and refuses only a parameter the callee actually
-//     persists, which is what keeps `apply(function(n) gives n + c, x)` — a pass DOWN to a callee that only
-//     CALLS it — green. Re-deciding it here would be one fact decided twice by two rules that would then
-//     have to agree for ever.
+// ⚠ **THE EXCEPTION IS AN `async` SPAWN, and the difference is REAL rather than an omission.** A green
+// thread outlives the frame that spawned it, so an argument crossing into one is not "handed down" — it is
+// gone. There is deliberately no call-graph EDGE for a spawn (`collectCallParamEdgesAt`'s `asyncCall` arm
+// states the exclusion), so for the PARAMETER subject a spawn argument must escape HERE or nothing will ever
+// say it does. The closure subject keeps its existing call-site delegation there, untouched.
 //
 // ⭐⭐ **AND IT IS ALSO HOW MANY VALUES ONE PASS TRACKS, WHICH IS WHAT KEEPS THE CLOSURE RULE LINEAR.**
 // The parameter summary asks about ONE value at a time, and can: a function declares a handful of parameters.
@@ -928,9 +1007,10 @@ function isMarkedCapturingClosure(value ValueId, func IrFunction) returns bool
 	return value < func.valueIsCapturingClosure.count() and (try func.valueIsCapturingClosure.get(value) otherwise panic("isMarkedCapturingClosure: valueIsCapturingClosure.get OOB at {value} inside its own count()"))
 end 'isMarkedCapturingClosure'
 
-// Does this scan track capturing closures rather than one parameter? Asked at exactly ONE slot — the direct
-// call argument in `directCallArgEscapes`, the only place the two rules disagree. A predicate rather than a
-// `==`, because two arms carry a payload and a union has no equality to compare a constructed value against.
+// Does this scan track capturing closures rather than one parameter? Asked at exactly ONE slot — an `async`
+// SPAWN's argument in `spawnArgEscapes`, the only place the two rules still disagree (see
+// `EscapeScanSubject`). A predicate rather than a `==`, because two arms carry a payload and a union has no
+// equality to compare a constructed value against.
 function subjectTracksCapturingClosures(subject EscapeScanSubject) returns bool
 	return match subject 'subject'
 		oneParameter gives false
@@ -1047,23 +1127,24 @@ end 'trackedValueAt'
 // exist yet.
 function opEscapesValue(op MaxonOp, subject EscapeScanSubject, func IrFunction, funcSignatures FuncSignatureMap) returns bool
 	match op 'op'
-		call(_, callee, args, _, _, _, _, _) then return directCallArgEscapes(callee, args: args, subject: subject, func: func, funcSignatures: funcSignatures)
+		call(_, callee, args, _, _, _, _, _) then return syncCallArgEscapes(callee, args: args, subject: subject, func: func, funcSignatures: funcSignatures)
 		literal to loadIndirect then break 'op'
 		storeIndirect(_, _, stored, _) then return isTrackedValue(stored, subject: subject, func: func)
 		stringLiteral then break 'op'
-		tryCall(_, _, callee, args, _, _, _, _, _) then return directCallArgEscapes(callee, args: args, subject: subject, func: func, funcSignatures: funcSignatures)
+		tryCall(_, _, callee, args, _, _, _, _, _) then return syncCallArgEscapes(callee, args: args, subject: subject, func: func, funcSignatures: funcSignatures)
 		throwError to functionRef then break 'op'
 		indirectCall(_, _, args) then return trackedValueInArray(args, subject: subject, func: func)
-		// P1.5-B1a: an async spawn's arguments cross into a green thread (an escape route like a call
-		// argument); an `await`/`try await`'s operand is a runtime promise handle, not a persisted value.
-		asyncCall(_, callee, args, _, _, _, _) then return directCallArgEscapes(callee, args: args, subject: subject, func: func, funcSignatures: funcSignatures)
+		// P1.5-B1a: an async spawn's arguments cross into a green thread, which OUTLIVES this frame — so it is
+		// not the pass-DOWN the two arms above are (`spawnArgEscapes`). An `await`/`try await`'s operand is a
+		// runtime promise handle, not a persisted value.
+		asyncCall(_, callee, args, _, _, _, _) then return spawnArgEscapes(callee, args: args, subject: subject, func: func, funcSignatures: funcSignatures)
 		await to tryAwait then break 'op'
 		sizeofType then break 'op'
 		constArrayLiteral then break 'op'
 		// The jump table branches on its index — it persists no value, so it escapes nothing.
 		switch then break 'op'
 		// ⭐ A WITNESS DISPATCH IS A CALL WITH NO CALLEE NAME, so it escapes for BOTH subjects — see
-		// `directCallArgEscapes` for why the capturing-closure delegation stops here (P1.7a slice 2a).
+		// `syncCallArgEscapes` for why the delegation stops here (P1.7a slice 2a).
 		// Its receiver + user args are all in `args`.
 		witnessDispatch(_, args, _, _, _, _, _) then return trackedValueInArray(args, subject: subject, func: func)
 		witnessTryDispatch(_, _, args, _, _, _, _) then return trackedValueInArray(args, subject: subject, func: func)
@@ -1074,34 +1155,52 @@ function opEscapesValue(op MaxonOp, subject EscapeScanSubject, func IrFunction, 
 	return false
 end 'opEscapesValue'
 
-// ⭐ **A DIRECT CALL'S ARGUMENT — DELEGATED, BUT ONLY WHERE THE DELEGATE ACTUALLY RUNS.**
+// ⭐ **A SYNCHRONOUS DIRECT CALL'S ARGUMENT — DELEGATED, BUT ONLY WHERE A DELEGATE ACTUALLY RUNS.**
 //
-// For a function-typed PARAMETER, passing it on is an escape outright (`EscapeScanSubject`). For a
-// capturing-closure LITERAL the question belongs to `checkCapturingClosureEscape`, which decides it from the
-// callee's own escape summary — and that is the right answer wherever that check RUNS. It does not run
-// everywhere: `validateCall` returns before it for a callee with NO DECLARED SIGNATURE, which therefore has
-// no summary to consult. So a capturing closure handed to a runtime entry is refused HERE —
-// `a.push(function(n) gives n + c)` puts a bare code pointer into a heap Array that outlives the frame,
-// exactly the escape E3099 exists to forbid, and it compiled clean before this arm.
+// The callee's own frame is nested inside this one, so an argument handed down it is not out of reach — a
+// LATER decider that knows the callee says whether it stays reachable, and BOTH subjects have one:
 //
-// Delegating a slot the delegate never sees is not "one decider", it is NO decider — which is the shape of
-// the hole this rung closes, and the same reason `witnessDispatch` (whose callee is chosen at runtime by the
-// witness table, so no name keys a summary) escapes unconditionally above.
+//   • a function-typed PARAMETER is closed over the call graph by `propagateParamMasks`, which inherits the
+//     callee parameter's own verdict through the edge `collectCallParamEdges` recorded for this argument;
+//   • a capturing-closure LITERAL is `checkCapturingClosureEscape`'s question at the call site, which reads
+//     that same finished summary.
+//
+// Neither delegate runs everywhere, and they stop at the SAME place: `validateCall` returns before the
+// call-site check for a callee with NO DECLARED SIGNATURE, and `addCallParamEdges` records no edge for one
+// either — it has no `paramNames` to slot the argument against. So a value handed to a runtime entry is
+// refused HERE, for both subjects: `a.push(function(n) gives n + c)` puts a bare code pointer into a heap
+// Array that outlives the frame, exactly the escape E3099 exists to forbid.
+//
+// Delegating a slot the delegate never sees is not "one decider", it is NO decider — the same reason
+// `witnessDispatch` (whose callee is chosen at runtime by the witness table, so no name keys a summary)
+// escapes unconditionally above.
 //
 // ⚠ **"NO DECLARED SIGNATURE" IS WHY THIS READS `isSignaturelessCompilerCallee` AND NOT THE `__` PREFIX
 // (A1r).** The two must name the same set as `validateCall`'s early return, because this arm exists precisely
 // to cover the slots that return skips — and since A1r a `__` callee may be a DECLARED function
 // (`stdlib/Builtins.maxon`'s own), for which the delegate does run and holds the better answer. Keyed on the
 // prefix, both would fire and the stricter one would win, refusing a closure the callee's summary permits.
-// `funcSignatures` is threaded down the whole scan for this one slot, which is the same slot `subject` is
-// consulted at: the parameter subject reads neither.
-function directCallArgEscapes(callee ByteArray, args ValueIdArray, subject EscapeScanSubject, func IrFunction, funcSignatures FuncSignatureMap) returns bool
-	if subjectTracksCapturingClosures(subject) and not isSignaturelessCompilerCallee(callee, funcSignatures: funcSignatures) 'ownedByCallSiteCheck'
+function syncCallArgEscapes(callee ByteArray, args ValueIdArray, subject EscapeScanSubject, func IrFunction, funcSignatures FuncSignatureMap) returns bool
+	if not isSignaturelessCompilerCallee(callee, funcSignatures: funcSignatures) 'ownedByTheCalleeDecider'
 		return false
+	end 'ownedByTheCalleeDecider'
+
+	return trackedValueInArray(args, subject: subject, func: func)
+end 'syncCallArgEscapes'
+
+// ⭐ **AN `async` SPAWN'S ARGUMENT — THE ONE SLOT THE TWO SUBJECTS STILL ANSWER DIFFERENTLY.** A green thread
+// runs past its spawner's frame, so an argument crossing into one is not handed DOWN, it is handed AWAY:
+// there is deliberately no call-graph edge for a spawn (`collectCallParamEdgesAt`'s `asyncCall` arm), so a
+// function-typed PARAMETER must escape here or nothing downstream will ever say it does. A capturing-closure
+// LITERAL keeps the call-site delegation it has always had, which is the arrangement `checkCapturingClosureEscape`
+// owns and this rung deliberately leaves alone.
+function spawnArgEscapes(callee ByteArray, args ValueIdArray, subject EscapeScanSubject, func IrFunction, funcSignatures FuncSignatureMap) returns bool
+	if subjectTracksCapturingClosures(subject) 'ownedByCallSiteCheck'
+		return syncCallArgEscapes(callee, args: args, subject: subject, func: func, funcSignatures: funcSignatures)
 	end 'ownedByCallSiteCheck'
 
 	return trackedValueInArray(args, subject: subject, func: func)
-end 'directCallArgEscapes'
+end 'spawnArgEscapes'
 
 // Does the TERMINATOR `term` persist a value `subject` tracks? Only a `ret` of the bare value does — a
 // `condBranch` condition is a bool, a `branch`/`retVoid` carries no value, and an error terminator carries an
@@ -1150,7 +1249,7 @@ end 'trackedValueInArray'
 //
 // ⭐ **IT IS THE SAME WORKLIST SHAPE `Queries.foldDescriptorNeeds` AND THE TRANSITIVE-CONSUME FIXPOINT USE**,
 // deliberately — a third idiom for "close a per-function fact under the call graph" would be one concept
-// with three spellings. Termination is monotone-and-bounded: a mask only ever GAINS bits (`withMutatedParam`
+// with three spellings. Termination is monotone-and-bounded: a mask only ever GAINS bits (`maskWithParam`
 // never clears one) and a function has at most `MaxAbiArgs` of them, so a caller is re-enqueued only on a
 // real change and the total number of enqueues is bounded by the program's parameter count.
 //
@@ -1178,25 +1277,25 @@ end 'trackedValueInArray'
 // answer a question the first one already answers.
 export type ParamMutationSummary
 	// One mask per function of the merged module, by function index. Zero for the overwhelming majority.
-	export let masks as MutatedParamMaskArray
+	export let masks as ParamPositionMaskArray
 	// ⭐⭐ **THE SECOND COLUMN, ANSWERING THE SECOND QUESTION** — see `IrFunction`'s table, where the pair is
 	// defined and the ruling that separates them is cited. Same index space, same edges, same fixpoint; only
 	// the SEED differs, and it differs in exactly one case (a method writing a field of its own receiver).
 	// Two columns and one index rather than two summaries, for the reason the first one is a dense column
 	// and not a map: the name resolution is already paid for.
-	export let storageMasks as MutatedParamMaskArray
+	export let storageMasks as ParamPositionMaskArray
 	// Function NAME → its index in that column. A call site holds a name; every other consumer holds an index.
 	export let funcIndexByName as FuncIndexByName
 
-	export static function create(masks MutatedParamMaskArray, storageMasks MutatedParamMaskArray, funcIndexByName FuncIndexByName) returns ParamMutationSummary
+	export static function create(masks ParamPositionMaskArray, storageMasks ParamPositionMaskArray, funcIndexByName FuncIndexByName) returns ParamMutationSummary
 		return Self{masks: masks, storageMasks: storageMasks, funcIndexByName: funcIndexByName}
 	end 'create'
 
-	// Which parameters a call to `callee` writes. `NoMutatedParams` for a name the module does not declare —
+	// Which parameters a call to `callee` writes. `NoParamPositions` for a name the module does not declare —
 	// a compiler-internal runtime entry, or an undeclared callee `validateCall` has already reported as
 	// E3004 — the same "absence is the answer" `buildThrowsMap` uses, and the reason no caller needs a
 	// membership test first.
-	export function maskOf(callee ByteArray) returns MutatedParamMask
+	export function maskOf(callee ByteArray) returns ParamPositionMask
 		return self.maskAt(self.masks, callee: callee)
 	end 'maskOf'
 
@@ -1204,16 +1303,16 @@ export type ParamMutationSummary
 	// ⚠ NOT a superset of `maskOf` above and not a subset: the two diverge in FOUR places, in both
 	// directions, and `IrFunction`'s table enumerates them. Reading one where the other is meant is a wrong
 	// answer with no compile error, which is why they are two named accessors and not one with a flag.
-	export function storageMaskOf(callee ByteArray) returns MutatedParamMask
+	export function storageMaskOf(callee ByteArray) returns ParamPositionMask
 		return self.maskAt(self.storageMasks, callee: callee)
 	end 'storageMaskOf'
 
-	// The one indexed read both columns share. `NoMutatedParams` for a name the module does not declare — a
+	// The one indexed read both columns share. `NoParamPositions` for a name the module does not declare — a
 	// compiler-internal runtime entry, or an undeclared callee `validateCall` has already reported as E3004
 	// — the same "absence is the answer" `buildThrowsMap` uses, and the reason no caller needs a membership
 	// test first.
-	function maskAt(column MutatedParamMaskArray, callee ByteArray) returns MutatedParamMask
-		let index = try self.funcIndexByName.get(callee) otherwise return NoMutatedParams
+	function maskAt(column ParamPositionMaskArray, callee ByteArray) returns ParamPositionMask
+		let index = try self.funcIndexByName.get(callee) otherwise return NoParamPositions
 		return try column.get(index) otherwise panic("ParamMutationSummary.maskAt: function index {index} for '{String.from(callee)}' is outside the mask column — both are built over `module.functions` in one pass")
 	end 'maskAt'
 end 'ParamMutationSummary'
@@ -1226,13 +1325,13 @@ end 'ParamMutationSummary'
 // Dense columns rather than an `Array with <a record>`: a `type` has reference semantics, so an array of
 // them is an array of POINTERS to heap-boxed records — one live allocation per edge, on a pass that runs
 // over every call in the program. The same discipline `SourceRangeTable` and `ValueOriginTable` state.
-type MutationEdges
+type CallParamEdges
 	export var calleeIndices as CsrColumn
 	export var callerIndices as FuncIndexArray
 	export var callerParams as ParamCountArray
 	export var calleeParams as ParamCountArray
 
-	export static function create() returns MutationEdges
+	export static function create() returns CallParamEdges
 		return Self{calleeIndices: CsrColumn.create(), callerIndices: FuncIndexArray.create(), callerParams: ParamCountArray.create(), calleeParams: ParamCountArray.create()}
 	end 'create'
 
@@ -1259,7 +1358,7 @@ type MutationEdges
 		end 'eachEdge'
 		return buildCsr(self.calleeIndices, to: rows, nodeCount: funcCount)
 	end 'byCallee'
-end 'MutationEdges'
+end 'CallParamEdges'
 
 // ⭐ **THERE IS NO TIE-BREAK HERE ANY MORE, AND THAT REPLACES AN ARGUMENT THAT HAD ALREADY BEEN WRONG
 // TWICE (A1w).** This index was built FIRST-wins, on a comment asserting that a duplicate belonged to an
@@ -1272,64 +1371,64 @@ end 'MutationEdges'
 // backend emits code, so the tie-break could change which body was summarised but not what any program MEANT
 // — which is a fine argument for the answer being harmless and no argument at all for it being made
 // silently. `FunctionNameIndex` refuses the duplicate instead, so there is nothing left to break a tie over.
-function buildParamMutationSummary(project Project, module MaxonModule, funcNames FunctionNameIndex) returns ParamMutationSummary
+function buildParamMutationSummary(funcNames FunctionNameIndex, edges CallParamEdges, byCallee CsrGraph) returns ParamMutationSummary
 	let funcIndexByName = funcNames.byName
 
-	// ⭐⭐ **TWO SEEDS, ONE GRAPH, ONE FIXPOINT RUN TWICE.** The parser records both per-function facts at the
-	// same doors (`Parser.noteReceiverWrite`, `Parser.emitCheckedSelfFieldStore`); the CLOSURE is identical
-	// for both — "a callee that writes what it was handed makes its caller write what IT was handed" is one
-	// statement about one call graph — so the edges and the CSR are built ONCE and drained twice. That is
-	// also what makes the transitive case work without a second rule: `wipe()` calling a `reset()` that
-	// clears the receiver's field inherits the bit through the very same edge E3019's column travels.
+	// ⭐⭐ **TWO SEEDS, ONE GRAPH, ONE FIXPOINT RUN TWICE — and since W58 the graph serves a THIRD seed one
+	// caller up.** The parser records both per-function facts at the same doors (`Parser.noteReceiverWrite`,
+	// `Parser.emitCheckedSelfFieldStore`); the CLOSURE is identical for all of them — "a callee that does X to
+	// what it was handed makes its caller do X to what IT was handed" is one statement about one call graph —
+	// so the edges and the CSR are built ONCE, by `semanticCheck`, and drained here twice and in
+	// `buildEscapeSummary` a third time. That is also what makes the transitive case work without a second
+	// rule: `wipe()` calling a `reset()` that clears the receiver's field inherits the bit through the very
+	// same edge E3019's column travels.
 	// Seeded from the INDEX's own array, not the module's, and the two are the same array: the masks are
 	// addressed by POSITION and `funcIndexByName` resolves a name TO that position, so a seed walk over any
 	// other array would leave every edge pointing at the wrong function's mask (A2l — the staleness
 	// `FunctionNameIndex`'s header describes, made unspellable by taking the array off the index).
-	var masks = MutatedParamMaskArray.create()
-	var storageMasks = MutatedParamMaskArray.create()
+	var masks = ParamPositionMaskArray.create()
+	var storageMasks = ParamPositionMaskArray.create()
 	for func in funcNames.functions 'seed'
 		masks.push(func.writtenParamMask)
 		storageMasks.push(func.storageWrittenParamMask)
 	end 'seed'
 
-	let edges = collectMutationEdges(project, module: module, funcIndexByName: funcIndexByName)
-	let byCallee = edges.byCallee(funcNames.functions.count())
-	propagateMutationMasks(masks, edges: edges, byCallee: byCallee)
-	propagateMutationMasks(storageMasks, edges: edges, byCallee: byCallee)
+	propagateParamMasks(masks, edges: edges, byCallee: byCallee)
+	propagateParamMasks(storageMasks, edges: edges, byCallee: byCallee)
 	return ParamMutationSummary.create(masks, storageMasks: storageMasks, funcIndexByName: funcIndexByName)
 end 'buildParamMutationSummary'
 
 // Walk every call in the program and record one edge per argument that IS one of the caller's own
 // parameters. A caller with no parameters contributes none (nothing of its own can be passed on), which is
 // the cheap gate that keeps `main` and every top-level driver out of the graph entirely.
-function collectMutationEdges(project Project, module MaxonModule, funcIndexByName FuncIndexByName) returns MutationEdges
-	var edges = MutationEdges.create()
+function collectCallParamEdges(project Project, module MaxonModule, funcIndexByName FuncIndexByName) returns CallParamEdges
+	var edges = CallParamEdges.create()
 	for i in 0 upto module.functions.count() 'eachFunc'
-		let func = try module.functions.get(i) otherwise panic("collectMutationEdges: functions.get OOB at {i}")
+		let func = try module.functions.get(i) otherwise panic("collectCallParamEdges: functions.get OOB at {i}")
 		if func.paramCount == 0 'passesNothingOfItsOwn'
 			continue
 		end 'passesNothingOfItsOwn'
 
 		for blockRef in func.blockRefs 'eachBlock'
-			let block = try module.blocks.get(blockRef) otherwise panic("collectMutationEdges: blockRef from func.blockRefs not in module.blocks")
+			let block = try module.blocks.get(blockRef) otherwise panic("collectCallParamEdges: blockRef from func.blockRefs not in module.blocks")
 			for opIdx in block.opRefs 'eachOp'
-				collectMutationEdgesAt(project, op: try module.ops.get(opIdx) otherwise panic("collectMutationEdges: opIdx {opIdx} not in module.ops"), func: func, callerIndex: i, funcIndexByName: funcIndexByName, edges: edges)
+				collectCallParamEdgesAt(project, op: try module.ops.get(opIdx) otherwise panic("collectCallParamEdges: opIdx {opIdx} not in module.ops"), func: func, callerIndex: i, funcIndexByName: funcIndexByName, edges: edges)
 			end 'eachOp'
 		end 'eachBlock'
 	end 'eachFunc'
 	return edges
-end 'collectMutationEdges'
+end 'collectCallParamEdges'
 
 // The per-op arm of the edge walk. Only a call with a callee NAME can propagate: an `indirectCall` chooses
 // its callee at run time and a `witnessDispatch` chooses it from a witness table, so neither has a summary
 // to reach — see `checkImmutableArgToMutatingParam` for what that costs and why it is not refused instead.
 // The non-call bands range to `break`, so a newly appended op fails to compile here rather than silently
 // dropping out of the call graph (the band-append invariant).
-function collectMutationEdgesAt(project Project, op MaxonOp, func IrFunction, callerIndex FuncIndex, funcIndexByName FuncIndexByName, edges MutationEdges)
+function collectCallParamEdgesAt(project Project, op MaxonOp, func IrFunction, callerIndex FuncIndex, funcIndexByName FuncIndexByName, edges CallParamEdges)
 	match op 'op'
-		call(_, callee, args, argLabels, _, _, _, _) then addMutationEdges(project, callee: callee, args: args, argLabels: argLabels, func: func, callerIndex: callerIndex, funcIndexByName: funcIndexByName, edges: edges)
+		call(_, callee, args, argLabels, _, _, _, _) then addCallParamEdges(project, callee: callee, args: args, argLabels: argLabels, func: func, callerIndex: callerIndex, funcIndexByName: funcIndexByName, edges: edges)
 		literal to stringLiteral then break 'op'
-		tryCall(_, _, callee, args, argLabels, _, _, _, _) then addMutationEdges(project, callee: callee, args: args, argLabels: argLabels, func: func, callerIndex: callerIndex, funcIndexByName: funcIndexByName, edges: edges)
+		tryCall(_, _, callee, args, argLabels, _, _, _, _) then addCallParamEdges(project, callee: callee, args: args, argLabels: argLabels, func: func, callerIndex: callerIndex, funcIndexByName: funcIndexByName, edges: edges)
 		throwError to indirectCall then break 'op'
 		// An `async` spawn runs CONCURRENTLY with its caller, so a write it makes is not ordered against the
 		// caller's own use of the value. shv2 refuses a managed `async` argument outright
@@ -1345,7 +1444,7 @@ function collectMutationEdgesAt(project Project, op MaxonOp, func IrFunction, ca
 		// A panic calls no user function, so it carries no mutation edge.
 		panicAbortValue then break 'op'
 	end 'op'
-end 'collectMutationEdgesAt'
+end 'collectCallParamEdgesAt'
 
 // Record the edges of ONE call: for each argument that is one of the caller's own parameters, the callee
 // parameter position it fills. Slotted through the shared `argSlotPosition`, the same mapping
@@ -1356,62 +1455,62 @@ end 'collectMutationEdgesAt'
 // receiver writes the parser already recorded directly) or undeclared (E3004, reported by `checkCalls`).
 // A label naming no parameter slots out of range and is skipped for the same reason — `slotCallArgs`
 // reports it.
-function addMutationEdges(project Project, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, func IrFunction, callerIndex FuncIndex, funcIndexByName FuncIndexByName, edges MutationEdges)
+function addCallParamEdges(project Project, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, func IrFunction, callerIndex FuncIndex, funcIndexByName FuncIndexByName, edges CallParamEdges)
 	let sig = try project.funcSignatures.get(callee) otherwise return
 	let calleeIndex = try funcIndexByName.get(callee) otherwise return
 	for i in 0 upto args.count() 'eachArg'
-		let argId = try args.get(i) otherwise panic("addMutationEdges: args.get OOB at {i}")
+		let argId = try args.get(i) otherwise panic("addCallParamEdges: args.get OOB at {i}")
 		if argId >= func.paramCount 'notOneOfOurParameters'
 			continue
 		end 'notOneOfOurParameters'
 
-		let pos = argSlotPosition(sig.paramNames, argIndex: i, label: try argLabels.get(i) otherwise panic("addMutationEdges: argLabels.get OOB at {i} — a call's argument columns are parallel by construction"))
+		let pos = argSlotPosition(sig.paramNames, argIndex: i, label: try argLabels.get(i) otherwise panic("addCallParamEdges: argLabels.get OOB at {i} — a call's argument columns are parallel by construction"))
 		if pos >= sig.paramCount() 'unslottable'
 			continue
 		end 'unslottable'
 
 		edges.record(calleeIndex, callerIndex: callerIndex, callerParam: argId, calleeParam: pos)
 	end 'eachArg'
-end 'addMutationEdges'
+end 'addCallParamEdges'
 
 // The least-fixpoint sweep. Seeded with every function that already writes something, it pulls a callee off
 // the worklist, propagates its mask across its incoming edges, and re-enqueues a caller only when a bit
 // actually changed — which is what bounds the total work and makes a recursive or mutually recursive graph
 // terminate rather than spin. No hashing: the CSR is keyed by function index throughout.
-function propagateMutationMasks(masks MutatedParamMaskArray, edges MutationEdges, byCallee CsrGraph)
+function propagateParamMasks(masks ParamPositionMaskArray, edges CallParamEdges, byCallee CsrGraph)
 	var worklist = FuncIndexArray.create()
 	var queued = BoolArray.create()
 	for i in 0 upto masks.count() 'seedWorklist'
-		let mask = try masks.get(i) otherwise panic("propagateMutationMasks: masks.get OOB at {i}")
-		queued.push(mask != NoMutatedParams)
-		if mask != NoMutatedParams 'writesSomething'
+		let mask = try masks.get(i) otherwise panic("propagateParamMasks: masks.get OOB at {i}")
+		queued.push(mask != NoParamPositions)
+		if mask != NoParamPositions 'writesSomething'
 			worklist.push(i)
 		end 'writesSomething'
 	end 'seedWorklist'
 
 	var head = 0 as CsrIndex
 	while head < worklist.count() 'drain'
-		let calleeIndex = try worklist.get(head) otherwise panic("propagateMutationMasks: worklist.get OOB at {head}")
+		let calleeIndex = try worklist.get(head) otherwise panic("propagateParamMasks: worklist.get OOB at {head}")
 		head = head + 1
-		try queued.set(calleeIndex, value: false) otherwise panic("propagateMutationMasks: queued.set OOB at {calleeIndex}")
+		try queued.set(calleeIndex, value: false) otherwise panic("propagateParamMasks: queued.set OOB at {calleeIndex}")
 		propagateAcrossEdges(byCallee, masks: masks, edges: edges, calleeIndex: calleeIndex, worklist: worklist, queued: queued)
 	end 'drain'
-end 'propagateMutationMasks'
+end 'propagateParamMasks'
 
 // Propagate one callee's mask across every edge that reaches it, enqueueing each caller whose own mask grew.
-function propagateAcrossEdges(byCallee CsrGraph, masks MutatedParamMaskArray, edges MutationEdges, calleeIndex FuncIndex, worklist FuncIndexArray, queued BoolArray)
+function propagateAcrossEdges(byCallee CsrGraph, masks ParamPositionMaskArray, edges CallParamEdges, calleeIndex FuncIndex, worklist FuncIndexArray, queued BoolArray)
 	let calleeMask = try masks.get(calleeIndex) otherwise panic("propagateAcrossEdges: masks.get OOB at {calleeIndex}")
 	for k in 0 upto byCallee.degree(calleeIndex) 'eachEdge'
 		let row = byCallee.neighbour(calleeIndex, k: k)
 		let calleeParam = try edges.calleeParams.get(row) otherwise panic("propagateAcrossEdges: calleeParams.get OOB at {row}")
-		if not paramIsMutated(calleeMask, param: calleeParam) 'calleeDoesNotWriteThisOne'
+		if not maskHasParam(calleeMask, param: calleeParam) 'calleeDoesNotWriteThisOne'
 			continue
 		end 'calleeDoesNotWriteThisOne'
 
 		let callerIndex = try edges.callerIndices.get(row) otherwise panic("propagateAcrossEdges: callerIndices.get OOB at {row}")
 		let callerParam = try edges.callerParams.get(row) otherwise panic("propagateAcrossEdges: callerParams.get OOB at {row}")
 		let before = try masks.get(callerIndex) otherwise panic("propagateAcrossEdges: masks.get OOB at {callerIndex}")
-		let after = withMutatedParam(before, param: callerParam)
+		let after = maskWithParam(before, param: callerParam)
 		if after == before 'nothingNew'
 			continue
 		end 'nothingNew'
@@ -1427,8 +1526,8 @@ function propagateAcrossEdges(byCallee CsrGraph, masks MutatedParamMaskArray, ed
 	end 'eachEdge'
 end 'propagateAcrossEdges'
 
-// True iff any bit is set — the "does this function persist any parameter?" test that decides whether it earns
-// a map entry.
+// True iff any bit is set — the "does this function mint a capturing closure at all?" gate that keeps the
+// derived use-invariant scan off every closure-free function.
 function boolArrayAny(bits BoolArray) returns bool
 	for b in bits 'each'
 		if b 'set'
@@ -2860,7 +2959,59 @@ function checkSlottedCall(project Project, func IrFunction, result ValueId, call
 	checkPerInstanceArgs(project, func: func, callee: callee, sig: sig, argIds: argIds, callRange: callRange, filePath: filePath)
 	checkCapturingClosureEscape(project, func: func, callee: callee, argIds: argIds, escapeSummary: escapeSummary, callRange: callRange, filePath: filePath)
 	checkImmutableArgToMutatingParam(project, func: func, callee: callee, sig: sig, args: args, argLabels: argLabels, argImmutableNames: argImmutableNames, mutationSummary: mutationSummary, callRange: callRange, filePath: filePath)
+	checkResolvedExtensionConstraints(project, func: func, callee: callee, sig: sig, argIds: argIds, callRange: callRange, filePath: filePath)
 end 'checkSlottedCall'
+
+// ⭐⭐ **THE CONDITIONAL-EXTENSION REFUSAL ASKED OF THE RESOLVED OVERLOAD MEMBER (E4006).** The parse-time
+// gate (`Parser.requireMethodNotWithheldByConstraint`) owns this question wherever the name has ONE reading,
+// and it words it better — at the member token, before anything is built. It CANNOT own it where a
+// `<Conformer>.<method>` is declared by a conditional extension AND by an unconditional one, because a call
+// is dispatched before its arguments are read: there the parser defers
+// (`ProgramSignatures.hasUnconstrainedExtensionDeclaration`) and this is the decider, on the member
+// `resolveOverloadedCalls` actually chose.
+//
+// ⚠ **IT IS NOT A SECOND RULE.** The predicate is `receiverMeetsExtensionConstraints` and the sentence is
+// `conditionalExtensionWithheldMessage`, both shared verbatim with the parse-time gate — what differs is only
+// WHICH callee is asked about, which is the entire reason two askers exist.
+//
+// Allocation-free on every program that declares no conditional type extension: `extensionMethodConstraintsOf`
+// misses an empty map and returns the shared empty list.
+function checkResolvedExtensionConstraints(project Project, func IrFunction, callee ByteArray, sig FuncSignature, argIds ValueIdArray, callRange SourceRange, filePath FilePath)
+	var signatures = programSignaturesIn(project, asker: "checkResolvedExtensionConstraints")
+	let constraints = signatures.extensionMethodConstraintsOf(callee)
+	if constraints.isEmpty() 'notAConditionalTypeExtensionMethod'
+		return
+	end 'notAConditionalTypeExtensionMethod'
+
+	if not sig.takesReceiver() or argIds.count() == 0 'noReceiverToJudge'
+		return
+	end 'noReceiverToJudge'
+
+	let receiverId = try argIds.get(0) otherwise panic("checkResolvedExtensionConstraints: argIds.count() > 0 but get(0) failed")
+	let receiverTag = try func.valueTags.get(receiverId) otherwise panic("checkResolvedExtensionConstraints: value v{receiverId} of '{String.from(func.name)}' has no recorded type — every SSA value is minted through Parser.mintValue")
+	// An OPAQUE receiver (a generic body's own `self`, a value of its type parameter) forwards its witnesses
+	// from the caller and is the parse-time gate's other arm, which the deferral above does not disturb: that
+	// arm fires before the name is even looked at as an overload set.
+	if receiverTag != ValueTypeTag.genericInstance 'notAConcreteInstance'
+		return
+	end 'notAConcreteInstance'
+
+	let gid = try func.valueNameIds.get(receiverId) otherwise panic("checkResolvedExtensionConstraints: value v{receiverId} of '{String.from(func.name)}' has no recorded type name — the two type columns are minted in lockstep")
+	match receiverMeetsExtensionConstraints(signatures, gid: gid, constraints: constraints) 'constraint'
+		met then break 'constraint'
+		unmet(interfaceName, argDisplayName) then reportConditionalExtensionWithheld(project, signatures: signatures, callee: callee, constraints: constraints, interfaceName: interfaceName, argDisplayName: argDisplayName, callRange: callRange, filePath: filePath)
+	end 'constraint'
+end 'checkResolvedExtensionConstraints'
+
+// The refusal itself, split out so the arm above stays one line: the callee is a
+// `<Conformer>.<member>` (the fold files constraints under no other shape), possibly wearing an overload
+// suffix, and the message names the two halves separately.
+function reportConditionalExtensionWithheld(project Project, signatures ProgramSignatures, callee ByteArray, constraints WhereConstraintArray, interfaceName ByteArray, argDisplayName ByteArray, callRange SourceRange, filePath FilePath)
+	match splitQualifiedName(overloadRegistrationBaseName(callee)) 'q'
+		parts(typeName, member) then reportPositioned(project, code: ErrorCode.invalidFieldAccess, message: conditionalExtensionWithheldMessage(String.from(typeName), methodName: String.from(member), clause: signatures.renderExtensionClause(typeName, constraints: constraints), unmetInterfaceName: String.from(interfaceName), bindingName: String.from(argDisplayName)), line: callRange.line, column: callRange.column, filePath: filePath)
+		notQualified then panic("reportConditionalExtensionWithheld: '{String.from(callee)}' carries extension constraints but is not a qualified method name — `Parser.noteTypeExtensionWitnessConstraints` files them under `<Conformer>.<member>` only")
+	end 'q'
+end 'reportConditionalExtensionWithheld'
 
 // ⭐⭐ **E3019, THE CALL-SITE HALF: AN IMMUTABLE BINDING MAY NOT FILL A PARAMETER THE CALLEE WRITES.**
 // The receiver half — `let a = [1,2,3]` then `a.push(9)` — is the PARSER's (`Parser.noteReceiverWrite`),
@@ -2882,11 +3033,11 @@ end 'checkSlottedCall'
 // break agreement on a legal program rather than close a hole. `parameter-mutation.md` pins the acceptance
 // so the gap is visible instead of assumed.
 function checkImmutableArgToMutatingParam(project Project, func IrFunction, callee ByteArray, sig FuncSignature, args ValueIdArray, argLabels ByteArrayArray, argImmutableNames ByteArrayArray, mutationSummary ParamMutationSummary, callRange SourceRange, filePath FilePath)
-	// ONE name resolution and one dense read — `maskOf` answers `NoMutatedParams` for a callee the module
+	// ONE name resolution and one dense read — `maskOf` answers `NoParamPositions` for a callee the module
 	// does not declare, so the overwhelming majority of calls leave here after a single hash and an i64
 	// compare, with no membership probe in front of it.
 	let mask = mutationSummary.maskOf(callee)
-	if mask == NoMutatedParams 'writesNoParameter'
+	if mask == NoParamPositions 'writesNoParameter'
 		return
 	end 'writesNoParameter'
 
@@ -2897,7 +3048,7 @@ function checkImmutableArgToMutatingParam(project Project, func IrFunction, call
 		end 'writableArgument'
 
 		let pos = argSlotPosition(sig.paramNames, argIndex: i, label: try argLabels.get(i) otherwise panic("checkImmutableArgToMutatingParam: argLabels.get OOB at {i} — a call's argument columns are parallel by construction"))
-		if pos >= sig.paramCount() or not paramIsMutated(mask, param: pos) 'notAWrittenPosition'
+		if pos >= sig.paramCount() or not maskHasParam(mask, param: pos) 'notAWrittenPosition'
 			continue
 		end 'notAWrittenPosition'
 
@@ -3194,15 +3345,16 @@ end 'receiverInstanceAlias'
 // `field-*` cases stay green; a capturing closure passed to a parameter that is only CALLED
 // (`apply(f, x) → f(x)`) is not in the summary and passes freely, keeping the pass-DOWN accepts green.
 function checkCapturingClosureEscape(project Project, func IrFunction, callee ByteArray, argIds ValueIdArray, escapeSummary ParamEscapeSummary, callRange SourceRange, filePath FilePath)
-	let escapeBits = try escapeSummary.get(callee) otherwise return
+	let escapingParams = try escapeSummary.get(callee) otherwise return
+	// `argIds` is SLOTTED, so index `i` is the callee's declaration position — the same space the mask is in.
 	for i in 0 upto argIds.count() 'eachArg'
-		if i >= escapeBits.count() or not (try escapeBits.get(i) otherwise false) 'paramSafe'
+		if not maskHasParam(escapingParams, param: i) 'paramSafe'
 			continue
 		end 'paramSafe'
 		let argId = try argIds.get(i) otherwise panic("checkCapturingClosureEscape: argIds.get OOB at {i}")
 		// ⭐ THE SAME `isMarkedCapturingClosure` the derived rule asks — not a second reading of the mark
 		// column. These two checks are the arrangement's two halves (this one owns the direct-call argument
-		// slot the derived scan delegates to it, in `directCallArgEscapes`), so "which values are capturing
+		// slot the derived scan delegates to it, in `syncCallArgEscapes`), so "which values are capturing
 		// closures" is exactly the fact they must never come to answer differently.
 		if isMarkedCapturingClosure(argId, func: func) 'capturingEscapes'
 			reportPositioned(project, code: ErrorCode.capturingClosureEscapes, message: "cannot pass a closure that captures to '{String.from(callee)}', which stores or returns it: {CapturingClosureEscapeSuffix}", line: callRange.line, column: callRange.column, filePath: filePath)

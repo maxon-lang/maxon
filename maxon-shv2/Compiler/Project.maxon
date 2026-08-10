@@ -2758,6 +2758,15 @@ end 'whereConstraintListReserves'
 //
 // `paramNames` is the declaration the indices are positions in — a type's `uses` list, or an interface's
 // associated-type names.
+// ⭐ **THE E4006 A CONDITIONAL TYPE EXTENSION'S UNMET CLAUSE EARNS — written once because TWO parties now
+// render it.** `Queries.reportParseError` renders the parser's `conditionalExtensionWithheld` arm and
+// `SemanticCheck.checkResolvedExtensionConstraints` renders the post-resolution one; they are the same
+// refusal asked at two points (see `ConformanceCheck.receiverMeetsExtensionConstraints`), so the sentence
+// lives beside `renderWhereConstraints`, which builds the `clause` both of them quote.
+export function conditionalExtensionWithheldMessage(typeName String, methodName String, clause String, unmetInterfaceName String, bindingName String) returns String
+	return "Type '{typeName}' has no field named '{methodName}' ('{methodName}' is available as a conditional extension {clause}, but '{bindingName}' does not implement '{unmetInterfaceName}')"
+end 'conditionalExtensionWithheldMessage'
+
 export function renderWhereConstraints(constraints WhereConstraintArray, paramNames ByteArrayArray) returns String
 	var text = "where "
 	var previousParam = 0 as FieldIndex
@@ -4658,7 +4667,7 @@ end 'indexOfParamIn'
 // argument (a call whose labels do not resolve is reported by `slotCallArgs`, not by the summary).
 //
 // It is factored out because the mutation summary needs the mapping WITHOUT the slotted array
-// (`SemanticCheck.addMutationEdges` asks "which parameter does source argument `i` fill?" for a handful
+// (`SemanticCheck.addCallParamEdges` asks "which parameter does source argument `i` fill?" for a handful
 // of arguments and would otherwise pay `slotCallArgs`'s two per-call buffers for every call in the
 // program) — and because a second hand-written copy of `label.isEmpty() ? i : indexOfParamIn(label)` is
 // exactly the drift that would let a call be summarised against one slotting and checked against another.
@@ -4666,7 +4675,7 @@ end 'indexOfParamIn'
 // KEEPS A CALL LINEAR IN ITS ARGUMENT COUNT.** `indexOfParamIn` is a scan of the whole name list, so a
 // call written `f(a, b: b, c: c)` — Maxon's own spelling, labels in declaration order — costs
 // `1 + 2 + … + P` comparisons, i.e. **O(P²) per call**, and this mapping is asked once per argument by
-// `slotCallArgs`, again by `SemanticCheck.addMutationEdges`, and again by
+// `slotCallArgs`, again by `SemanticCheck.addCallParamEdges`, and again by
 // `checkImmutableArgToMutatingParam`. One equality test against `paramNames[argIndex]` collapses the
 // common case to **O(P) per call** and costs one comparison in the reordered case that still falls
 // through to the scan.

@@ -455,3 +455,158 @@ end 'main'
 ```maxoncstderr
 error E3006: <fragment>:27:18: duplicate definition of function 'Five.pick#bool' — 'Five.pick' is declared by an `extension` in more than one FILE, so every one of those declarations is registered under its parameter-type spelling, and two of them spell the same parameters. Give the overloads distinct parameter types, or distinct names
 ```
+
+<!-- test: an-overload-set-on-a-generic-types-extension-resolves-at-the-instance -->
+The control above is a NON-generic conformer, and that is the only shape the resolver could handle (W58). A
+shared generic body spells its receiver at the base `Holder with <T>`, and the overload scorer read the raw
+signature — so scoring `h.rank(40)` on a `Holder with Integer` compared `Holder_T<gid>` against
+`Holder_Integer` at position 0, called EVERY candidate incompatible, and fell back to the first member:
+**`E3036: 'Holder.rank' expects 1 argument(s) but 2 were provided`**, the arity of the overload the call was
+not written against. It was order-dependent and silent — swapping the two `extension` blocks moved the error
+to `expects 2 argument(s) but 1 were provided`. The scorer now resolves each parameter through the call's
+instance, which is what `checkArgTypes` has always done one pass later.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Holder uses Element
+	export var value as Element
+
+	export static function create(v Element) returns Self
+		return Self{value: v}
+	end 'create'
+end 'Holder'
+
+export extension Holder
+	export function rank() returns Integer
+		return 1
+	end 'rank'
+end 'Holder'
+
+export extension Holder
+	export function rank(bonus Integer) returns Integer
+		return 1 + bonus
+	end 'rank'
+end 'Holder'
+
+typealias IntHolder = Holder with Integer
+
+function main() returns ExitCode
+	let h = IntHolder.create(7)
+	return h.rank() + h.rank(40)
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: an-unconstrained-overload-of-a-conditional-extension-method-is-reachable -->
+The two extensions declaring one name need not agree about their `where` clause, and `stdlib/Array.maxon` is
+built that way: `extension Array where Element is Comparable` declares `sort()` and a second, UNCONSTRAINED
+`extension Array` declares `sort(cmp)`.
+
+⛔ **The conditional-extension gate is keyed on the NAME, and a call is dispatched before its arguments are
+read** — so it refused the UNCONSTRAINED overload with the constrained one's clause:
+`E4006: Type 'Holder' has no field named 'beats' ('beats' is available as a conditional extension where
+Element is Comparable, but 'Opaque' does not implement 'Comparable')`, about a call to an overload that has
+no clause at all. The parse-time gate now DEFERS when an unconditional declaration of the name exists, and
+`SemanticCheck.checkResolvedExtensionConstraints` decides on the member overload resolution picked — which is
+the earliest point at which the question has an answer. Both readings are exercised here: the CONFORMING
+instance still reaches the conditional overload, and the non-conforming one reaches the unconstrained one.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Opaque
+	export static function create() returns Self
+		return Self{}
+	end 'create'
+end 'Opaque'
+
+type Holder uses Element
+	export var value as Element
+
+	export static function create(v Element) returns Self
+		return Self{value: v}
+	end 'create'
+end 'Holder'
+
+export extension Holder where Element is Comparable
+	export function beats(other Element) returns bool
+		return self.value.compare(other) == Ordering.greaterThan
+	end 'beats'
+end 'Holder'
+
+export extension Holder
+	export function beats(assumed bool) returns bool
+		return assumed
+	end 'beats'
+end 'Holder'
+
+typealias IntHolder = Holder with Integer
+typealias OpaqueHolder = Holder with Opaque
+
+function main() returns ExitCode
+	let h = IntHolder.create(7)
+	let o = OpaqueHolder.create(Opaque.create())
+	var n = 0
+	if h.beats(3) 'cmp'
+		n = n + 1
+	end 'cmp'
+	if o.beats(true) 'fb'
+		n = n + 10
+	end 'fb'
+	return n
+end 'main'
+```
+```exitcode
+11
+```
+
+<!-- test: error.the-conditional-overload-of-a-contested-name-is-still-refused -->
+The other half of that deferral, and the half that keeps it SOUND. The same two declarations, and a call
+whose ARGUMENT can only mean the CONDITIONAL one — on an instance whose element does not conform. Nothing
+would refuse it if the deferral were the end of the story, and the program would reach
+`LowerMaxonToStd.ensureWitnessTable` for a conformance nothing validated, which PANICS rather than failing.
+The post-resolution decider asks the same predicate the parse-time gate asks
+(`ConformanceCheck.receiverMeetsExtensionConstraints`) and quotes the same sentence
+(`conditionalExtensionWithheldMessage`), so the refusal a reader sees does not depend on which of the two
+answered.
+```maxon
+type Opaque
+	export static function create() returns Self
+		return Self{}
+	end 'create'
+end 'Opaque'
+
+type Holder uses Element
+	export var value as Element
+
+	export static function create(v Element) returns Self
+		return Self{value: v}
+	end 'create'
+end 'Holder'
+
+export extension Holder where Element is Comparable
+	export function beats(other Element) returns bool
+		return self.value.compare(other) == Ordering.greaterThan
+	end 'beats'
+end 'Holder'
+
+export extension Holder
+	export function beats(assumed bool) returns bool
+		return assumed
+	end 'beats'
+end 'Holder'
+
+typealias OpaqueHolder = Holder with Opaque
+
+function main() returns ExitCode
+	let o = OpaqueHolder.create(Opaque.create())
+	if o.beats(Opaque.create()) 'cmp'
+		return 1
+	end 'cmp'
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E4006: <fragment>:32:7: Type 'Holder' has no field named 'beats' ('beats' is available as a conditional extension where Element is Comparable, but 'Opaque' does not implement 'Comparable')
+```

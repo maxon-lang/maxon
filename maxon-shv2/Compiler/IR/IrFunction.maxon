@@ -116,32 +116,38 @@ export let sharedEmptyExistentialInstanceMap = ValueExistentialInstanceMap.creat
 // the ranged-type convention rather than pinned to a false ceiling.
 export typealias ClosureSubIndex = int(0 to u64.max)
 
-// ⭐ **WHICH PARAMETERS A FUNCTION WRITES — one bit per parameter position, 0 for the overwhelming
-// majority that write none** (the E3019 call-site rule, `SemanticCheck.buildParamMutationSummary`).
+// ⭐ **A SET OF PARAMETER POSITIONS — one bit per position, 0 for the overwhelming majority that name
+// none.** It carries three facts of one shape, and the vocabulary is deliberately neutral because a
+// name that said "mutated" would be wrong at two of the three: `IrFunction.writtenParamMask` (which
+// parameters a body WRITES, the E3019 seed), `IrFunction.storageWrittenParamMask` (the E3070 seed), and
+// `SemanticCheck.buildEscapeSummary`'s masks (which parameters a body lets ESCAPE, the E3099 seed).
+// All three close over the SAME call graph through the SAME fixpoint — see
+// `SemanticCheck.propagateParamMasks` — so a second mask vocabulary would be one concept with two
+// spellings free to disagree about which bit is which.
 //
-// A BITMASK and not a `BoolArray`, for the reason `ArgFloatMask` is one: this field is on EVERY
-// `IrFunction` in the program, and a per-function array would be one live heap object each for a fact
-// that is a single machine word — with `0` (no parameter is written) being both the common case and the
-// literal truth rather than a sentinel. Its width is `MaxAbiArgs`, the same ceiling `ArgFloatMask`
+// A BITMASK and not a `BoolArray`, for the reason `ArgFloatMask` is one: two of these are fields on
+// EVERY `IrFunction` in the program, and a per-function array would be one live heap object each for a
+// fact that is a single machine word — with `0` (no parameter is named) being both the common case and
+// the literal truth rather than a sentinel. Its width is `MaxAbiArgs`, the same ceiling `ArgFloatMask`
 // states and `Parser.requireAbiParamCount` diagnoses, so `1 shl param` always lands inside the word.
-export typealias MutatedParamMask = int(0 to u64.max)
+export typealias ParamPositionMask = int(0 to u64.max)
 
-// One mask per function of the module, indexed by function INDEX — the working state of the
-// parameter-mutation fixpoint (`SemanticCheck.buildParamMutationSummary`), before it is published as the
-// name-keyed summary a call site reads.
-export typealias MutatedParamMaskArray = Array with MutatedParamMask
+// One mask per function of the module, indexed by function INDEX — the working state of a per-parameter
+// fixpoint (`SemanticCheck.buildParamMutationSummary`, `SemanticCheck.buildEscapeSummary`), before it is
+// published as the name-keyed summary a call site reads.
+export typealias ParamPositionMaskArray = Array with ParamPositionMask
 
-// Does `mask` say parameter `param` is written? The ONE reader of the bit order — the parser sets bits
-// and SemanticCheck's fixpoint both propagates and tests them, and a second spelling of the shift is a
+// Is parameter `param` in `mask`? The ONE reader of the bit order — the parser sets bits and
+// SemanticCheck's fixpoint both propagates and tests them, and a second spelling of the shift is a
 // second chance for the two ends to disagree about which bit is which.
-export function paramIsMutated(mask MutatedParamMask, param ParamCount) returns bool
+export function maskHasParam(mask ParamPositionMask, param ParamCount) returns bool
 	return ((mask shr param) and 1) != 0
-end 'paramIsMutated'
+end 'maskHasParam'
 
 // `mask` with parameter `param`'s bit set — the ONE writer, paired with the reader above.
-export function withMutatedParam(mask MutatedParamMask, param ParamCount) returns MutatedParamMask
+export function maskWithParam(mask ParamPositionMask, param ParamCount) returns ParamPositionMask
 	return mask or (1 shl param)
-end 'withMutatedParam'
+end 'maskWithParam'
 
 export type IrFunction
 	// --- Common fields (all phases) ---
@@ -375,7 +381,7 @@ export type IrFunction
 	// names. SemanticCheck then closes it under the call graph (`buildParamMutationSummary`) — a callee
 	// that writes what it was handed makes its caller write what IT was handed — and the closure is what
 	// the call-site check reads. Zero for a Std-phase function: the tier that reads it is upstream.
-	export var writtenParamMask as MutatedParamMask
+	export var writtenParamMask as ParamPositionMask
 
 	// ⭐ **THE PARAMETERS WHOSE ARRAY STORAGE THIS BODY WRITES (E3070's half)** — bit `i` set iff the body
 	// writes an ARRAY reachable through parameter `i`, a field of its own receiver included. It is NOT a
@@ -388,7 +394,7 @@ export type IrFunction
 	// (`buildParamMutationSummary`), so `wipe()` calling a `reset()` that clears the field inherits the bit.
 	// Read only by `BorrowCheck.mutationSiteWrites`, to answer "does handing this borrowed array — as an
 	// argument or as a RECEIVER — reach a write of it?". Zero for a Std-phase function.
-	export var storageWrittenParamMask as MutatedParamMask
+	export var storageWrittenParamMask as ParamPositionMask
 
 	// ⭐ **THE E3070 BORROW FACTS THIS BODY RECORDED (`BorrowCheck`)** — which storages it borrowed an
 	// element out of, which binding took each borrow, and every write it saw go through one. It rides
