@@ -850,7 +850,15 @@ export enum ErrorCode
 	// It fires only where the associated type REACHES a call, and only where a call is actually made. A program
 	// whose every call is statically resolved has no shared body and no witness table to be wrong about:
 	// MEASURED, two conformers of different classes with every call direct ran correctly (51) and must not be
-	// refused. shv2 is whole-program, so which interfaces are dispatched is read off the emitted ops.
+	// refused. shv2 is whole-program, so which slots are dispatched is read off the emitted ops.
+	// ⚠ THE UNIT IS THE DISPATCHED SLOT, NOT THE DISPATCHED INTERFACE NAME, AND THIS ENTRY SAID "a requirement
+	// the program actually DISPATCHES" WHILE THE CODE ASKED ONLY WHETHER THE INTERFACE WAS. The fold has
+	// exactly two consumers and both are keyed on the op's own `(interfaceDeclIndex, methodIndex)` pair:
+	// `LowerMaxonToStd.witnessFormalType` resolves the FORMALS of the requirement a `witnessCall` names, and
+	// the parser types that same requirement's RESULT. A slot no call jumps through has neither, so it
+	// constrains nothing. MEASURED: `interface Tally { take(e Element) returns Integer; label() returns
+	// Integer }` with two conformers binding `Element` differently and `label()` as the program's only
+	// dispatch was REFUSED, and runs correctly (51) once the gate is the slot.
 	associatedTypeAbiDisagreement = "E3119"
 	// An associated type reaches the calling convention of a requirement the program DISPATCHES, and its
 	// conformers bind it to something a witness call cannot carry there. TWO clauses, and they fail in

@@ -98,14 +98,31 @@ end 'checkConformance'
 // E3119/E3120 are about a shared BODY, which only a dispatch compiles, while a holding's is about a nested
 // TABLE, which a WIDENING mints. So the dispatch test moved DOWN, onto the branch it is true of — and the
 // early return this function opened with, which skipped the whole walk when nothing was dispatched, had to go
-// with it. What that costs is one map probe per associated position of each declared interface, on a program
+// with it. What that costs is one map probe per declared interface that has `uses` names at all, on a program
 // that dispatches nothing; what it bought is that `checkHeldAssociatedTypeBindings` runs at all.
+//
+// ⭐⭐ **THE GATE IS THE DISPATCHED SLOT, NOT THE DISPATCHED INTERFACE NAME, AND THE WIDER ONE WAS A FALSE
+// REJECT.** Both refusals exist because ONE consumer reads the fold: `LowerMaxonToStd.witnessFormalType`
+// resolves an associated FORMAL of the requirement a `witnessCall` names, and the parser types an associated
+// RESULT of that same requirement. Both are asked per `(interfaceDeclIndex, methodIndex)` — never of the
+// interface's other slots — so a requirement nothing dispatches has no consumer and constrains nothing. Asked
+// of the interface NAME instead, `interface Iterator { current() returns Element; advance() }` was refused for
+// `Element` on a program whose only dispatch is `advance()`, which cannot see `Element` at all. That is the
+// same shape as the dispatch gate itself: two conformers are in tension only where a SHARED BODY is compiled
+// against both, and no body is compiled for a slot no call reaches.
 function checkAssociatedTypeAbiAgreement(project Project, module MaxonModule, signatures ProgramSignatures)
-	let dispatched = dispatchedInterfaceNames(module, signatures: signatures)
+	let dispatched = dispatchedRequirementSlots(module, signatures: signatures)
 	for (_, iface) in signatures.interfaceMap() 'eachInterface'
+		// An interface with no `uses` names has neither refusal to answer for and no holding to check, so it
+		// pays neither the slot walk below nor a position loop that would iterate zero times anyway.
+		if iface.associatedTypeNames.count() == 0 'noAssociatedTypes'
+			continue
+		end 'noAssociatedTypes'
+
+		let written = dispatchedAssociatedNamesOf(project.interfaces, dispatched: dispatched, iface: iface)
 		for position in 0 upto iface.associatedTypeNames.count() 'eachAssociatedType'
 			let name = try iface.associatedTypeNames.get(position) otherwise panic("checkAssociatedTypeAbiAgreement: associatedTypeNames.get OOB at {position} below count {iface.associatedTypeNames.count()}")
-			checkOneAssociatedPosition(project, signatures: signatures, dispatched: dispatched, iface: iface, name: name, position: position)
+			checkOneAssociatedPosition(project, signatures: signatures, written: written, iface: iface, name: name, position: position)
 		end 'eachAssociatedType'
 	end 'eachInterface'
 end 'checkAssociatedTypeAbiAgreement'
@@ -114,64 +131,170 @@ end 'checkAssociatedTypeAbiAgreement'
 // position answers to `checkOneHeldPosition` and to nothing else; every other position answers to E3119/E3120
 // behind the dispatch gate. One walk decides it, because the two paths need the same three facts and asking
 // twice is what let the gates drift apart in the first place.
-function checkOneAssociatedPosition(project Project, signatures ProgramSignatures, dispatched InterfaceNameSet, iface IrInterface, name ByteArray, position ElementCount)
+function checkOneAssociatedPosition(project Project, signatures ProgramSignatures, written DispatchedAssociatedNames, iface IrInterface, name ByteArray, position ElementCount)
 	if let held = try signatures.associatedTypeHeldAt(iface.name, position: position) 'heldAtAnInterface'
 		checkHeldAssociatedTypeBindings(project, signatures: signatures, iface: iface, name: name, position: position, heldAt: held)
 		return
 	end 'heldAtAnInterface'
 
-	if not dispatched.contains(iface.name) 'neverDispatched'
+	if not written.inAnAbiPosition.contains(name) 'noDispatchedRequirementCarriesIt'
 		return
-	end 'neverDispatched'
+	end 'noDispatchedRequirementCarriesIt'
 
-	checkOneAssociatedType(project, signatures: signatures, iface: iface, name: name, position: position)
+	checkOneAssociatedType(project, signatures: signatures, iface: iface, name: name, position: position, isDispatchedResult: written.inAResult.contains(name))
 end 'checkOneAssociatedPosition'
 
 // The two verdicts for ONE associated type of one dispatched, unheld interface position. Split out so the
-// walk above reads as the gates it is, and so the ABI-position test is asked once for both refusals.
-function checkOneAssociatedType(project Project, signatures ProgramSignatures, iface IrInterface, name ByteArray, position ElementCount)
-	if not requirementWritesTypeInAbiPosition(project.interfaces, iface: iface, name: name) 'reachesNoCallingConvention'
-		return
-	end 'reachesNoCallingConvention'
-
+// walk above reads as the gates it is. `isDispatchedResult` travels rather than being re-derived: it is the
+// same slot walk the caller's gate already ran, and a second one is a second chance to disagree with it about
+// which requirements this program dispatches.
+function checkOneAssociatedType(project Project, signatures ProgramSignatures, iface IrInterface, name ByteArray, position ElementCount, isDispatchedResult bool)
 	match associatedAbiBindingOf(project.conformances, interfaceName: iface.name, position: position) 'binding'
-		agreed(conformer, binding, _) then checkAgreedBindingIsCarryable(project, signatures: signatures, iface: iface, name: name, conformer: conformer, binding: binding)
+		agreed(conformer, binding, _) then checkAgreedBindingIsCarryable(project, signatures: signatures, iface: iface, name: name, conformer: conformer, binding: binding, isDispatchedResult: isDispatchedResult)
 		unconformed then break 'binding'
 		disagreed(first, firstBinding, second, secondBinding) then reportAssociatedTypeBindingDisagreement(project, signatures: signatures, iface: iface, name: name, first: first, firstBinding: firstBinding, second: second, secondBinding: secondBinding)
 	end 'binding'
 end 'checkOneAssociatedType'
 
-// ⭐ **EVERY INTERFACE THE PROGRAM ACTUALLY DISPATCHES THROUGH**, read off the two witness-dispatch ops the
-// parser emits. Each carries the `interfaceDeclIndex` its `methodIndex` is numbered against — the same handle
-// `LowerMaxonToStd` resolves the requirement through — so this asks the identical question the emission asks
-// and cannot come to a different answer about which tables are live.
+// The witness slots this program dispatches, per interface — an interface NAME to the set of slot indices
+// some call actually jumps through. A `Set` per interface rather than a flat pair key because the consumer
+// asks it once per interface, walking that interface's own slot list.
+typealias DispatchedSlotSet = Set with WitnessMethodIndex
+typealias DispatchedSlotMap = Map with (ByteArray, DispatchedSlotSet)
+
+typealias AssociatedTypeNameSet = Set with ByteArray
+
+// The associated-type NAMES one interface's DISPATCHED requirements write where a witness call carries them,
+// split by the two positions E3119 and E3120 gate on. `inAResult` is a subset of `inAnAbiPosition`; they are
+// two sets rather than one tagged one because a name can be a parameter of one dispatched requirement and the
+// result of another, and a single verdict per name could not hold both facts.
+type DispatchedAssociatedNames
+	export let inAnAbiPosition as AssociatedTypeNameSet
+	export let inAResult as AssociatedTypeNameSet
+
+	export static function create(inAnAbiPosition AssociatedTypeNameSet, inAResult AssociatedTypeNameSet) returns DispatchedAssociatedNames
+		return Self{inAnAbiPosition: inAnAbiPosition, inAResult: inAResult}
+	end 'create'
+end 'DispatchedAssociatedNames'
+
+// The answer for an interface no call dispatches — shared, never mutated, so a program whose interfaces are
+// all statically resolved allocates nothing per interface for the two empty sets it would otherwise mint.
+let sharedEmptyDispatchedAssociatedNames = DispatchedAssociatedNames.create(AssociatedTypeNameSet.create(), inAResult: AssociatedTypeNameSet.create())
+
+// ⭐ **EVERY WITNESS SLOT THE PROGRAM ACTUALLY DISPATCHES THROUGH**, read off the two witness-dispatch ops the
+// parser emits. Each carries the `(interfaceDeclIndex, methodIndex)` pair `LowerMaxonToStd` resolves the
+// requirement through — so this asks the identical question the emission asks and cannot come to a different
+// answer about which slots are live.
 //
 // A program that dispatches nothing (the whole corpus but the interface families) walks its ops once and
-// returns an empty set, and the caller then does nothing at all.
-function dispatchedInterfaceNames(module MaxonModule, signatures ProgramSignatures) returns InterfaceNameSet
-	var names = InterfaceNameSet.create()
+// returns an empty map, and every interface then reads the shared empty answer above.
+function dispatchedRequirementSlots(module MaxonModule, signatures ProgramSignatures) returns DispatchedSlotMap
+	var slots = DispatchedSlotMap.create()
 	for func in module.functions 'eachFunc'
 		for blockRef in func.blockRefs 'eachBlock'
-			let block = try module.blocks.get(blockRef) otherwise panic("dispatchedInterfaceNames: blockRef {blockRef} not in module.blocks")
+			let block = try module.blocks.get(blockRef) otherwise panic("dispatchedRequirementSlots: blockRef {blockRef} not in module.blocks")
 			for opIdx in block.opRefs 'eachOp'
-				noteDispatchedInterface(try module.ops.get(opIdx) otherwise panic("dispatchedInterfaceNames: opIdx {opIdx} not in module.ops"), names: names, signatures: signatures)
+				noteDispatchedSlot(try module.ops.get(opIdx) otherwise panic("dispatchedRequirementSlots: opIdx {opIdx} not in module.ops"), slots: slots, signatures: signatures)
 			end 'eachOp'
 		end 'eachBlock'
 	end 'eachFunc'
-	return names
-end 'dispatchedInterfaceNames'
+	return slots
+end 'dispatchedRequirementSlots'
 
-// Record the interface one op dispatches through, if it dispatches at all. It RANGES over the whole `MaxonOp`
+// Record the slot one op dispatches through, if it dispatches at all. It RANGES over the whole `MaxonOp`
 // union so a newly-appended op FAILS TO COMPILE here rather than being silently swept into an ignore arm (the
 // band-append invariant) — which for this walk would mean a dispatch form that quietly escapes both refusals.
-function noteDispatchedInterface(op MaxonOp, names InterfaceNameSet, signatures ProgramSignatures)
+function noteDispatchedSlot(op MaxonOp, slots DispatchedSlotMap, signatures ProgramSignatures)
 	match op 'op'
 		call to switch then break 'op'
-		witnessDispatch(_, _, _, _, interfaceDeclIndex, _, _) then names.insert(signatures.interfaceNameAtDeclIndex(interfaceDeclIndex))
-		witnessTryDispatch(_, _, _, _, _, interfaceDeclIndex, _) then names.insert(signatures.interfaceNameAtDeclIndex(interfaceDeclIndex))
+		witnessDispatch(_, _, _, methodIndex, interfaceDeclIndex, _, _) then recordDispatchedSlot(slots, interfaceName: signatures.interfaceNameAtDeclIndex(interfaceDeclIndex), methodIndex: methodIndex)
+		witnessTryDispatch(_, _, _, _, methodIndex, interfaceDeclIndex, _) then recordDispatchedSlot(slots, interfaceName: signatures.interfaceNameAtDeclIndex(interfaceDeclIndex), methodIndex: methodIndex)
 		panicAbortValue then break 'op'
 	end 'op'
-end 'noteDispatchedInterface'
+end 'noteDispatchedSlot'
+
+// ⚠ **THE SET IS REBUILT RATHER THAN ADDED TO, BECAUSE A VALUE FETCHED OUT OF A `Map` BORROWS THE MAP** — an
+// `insert` on it is E3019 and an `upsert` while that borrow is live is E3070 (`buildDeclaredConformanceMap`'s
+// header records the same constraint from the other side). The rebuild is paid ONCE PER DISTINCT
+// `(interface, slot)` pair, which is bounded by the program's requirement count and not by its op count:
+// every repeat of an already-recorded slot — the common case, since one requirement is called from many
+// sites — leaves through the membership probe having allocated nothing.
+function recordDispatchedSlot(slots DispatchedSlotMap, interfaceName ByteArray, methodIndex WitnessMethodIndex)
+	if slotAlreadyRecorded(slots, interfaceName: interfaceName, methodIndex: methodIndex) 'nothingNew'
+		return
+	end 'nothingNew'
+
+	var widened = DispatchedSlotSet.create()
+	copyRecordedSlots(slots, interfaceName: interfaceName, into: widened)
+	widened.insert(methodIndex)
+	slots.upsert(interfaceName, value: widened)
+end 'recordDispatchedSlot'
+
+// The probe half of the rebuild above, split out so the borrow of `slots` ENDS before the `upsert` — which is
+// the whole reason the set is rebuilt rather than added to.
+function slotAlreadyRecorded(slots DispatchedSlotMap, interfaceName ByteArray, methodIndex WitnessMethodIndex) returns bool
+	if let recorded = try slots.get(interfaceName) 'thisInterfaceHasSlotsAlready'
+		return recorded.contains(methodIndex)
+	end 'thisInterfaceHasSlotsAlready'
+
+	return false
+end 'slotAlreadyRecorded'
+
+// The copy half, split for its sibling's reason. An interface with no slots yet copies nothing.
+function copyRecordedSlots(slots DispatchedSlotMap, interfaceName ByteArray, into DispatchedSlotSet)
+	if let recorded = try slots.get(interfaceName) 'thisInterfaceHasSlotsAlready'
+		for slot in recorded 'eachRecorded'
+			into.insert(slot)
+		end 'eachRecorded'
+	end 'thisInterfaceHasSlotsAlready'
+end 'copyRecordedSlots'
+
+// ⭐ **WHAT ONE INTERFACE'S DISPATCHED REQUIREMENTS DO WITH ITS ASSOCIATED TYPES — one walk of the transitive
+// slot list, for both refusals.** E3119 asks whether a name reaches a witness call's calling convention at
+// all and E3120 asks whether it reaches the RESULT; deriving them together is what stops the two gates from
+// drifting apart on which slots this program dispatches.
+//
+// ⚠⚠ **THE LIST IS THE TRANSITIVE ONE (`interfaceWitnessSlots`), AND `iface.methods` WAS A MEASURED ESCAPE.**
+// A witness table's slots are the transitive requirement list, so `interface Derived extends Base` dispatches
+// `Base`'s requirements through `Derived`'s table — and a scan of `Derived.methods` sees nothing write
+// `Element`, returns early, and lets a disagreement through. MEASURED: two conformers of `Derived` binding
+// `Element` to `Integer` and to `float`, dispatched through a `Derived` existential, compiled and answered
+// **31 on x64 where the program computes 51**, while wasm trapped. It is also the slot numbering the op's
+// `methodIndex` is against, so one list answers both halves of this walk.
+//
+// ⚠ **A `throws` CLAUSE IS A THIRD POSITION AN ASSOCIATED TYPE CAN REACH, AND IT IS DELIBERATELY NOT ONE OF
+// THESE.** `substituteAssociatedTypes` substitutes into it, so `function next() throws Element` is
+// well-formed. It does not reach the ABI: the error travels through the dual-register flag, the error VALUE is
+// an enum ordinal in a machine word whatever the clause names, and the clause is compared by NAME
+// (`requireSameErrorType`) rather than lowered. MEASURED green on both targets. If a throwing witness call
+// ever carries the error's own type in its signature, this walk is where that becomes a third set.
+function dispatchedAssociatedNamesOf(interfaces IrInterfaceMap, dispatched DispatchedSlotMap, iface IrInterface) returns DispatchedAssociatedNames
+	let slots = try dispatched.get(iface.name) otherwise 'neverDispatched'
+		return sharedEmptyDispatchedAssociatedNames
+	end 'neverDispatched'
+
+	var inAnAbiPosition = AssociatedTypeNameSet.create()
+	var inAResult = AssociatedTypeNameSet.create()
+	let requirements = interfaceWitnessSlots(interfaces, iface: iface)
+	for methodIndex in 0 upto requirements.count() 'eachRequirement'
+		if not slots.contains(methodIndex) 'noCallJumpsThroughThisSlot'
+			continue
+		end 'noCallJumpsThroughThisSlot'
+
+		let method = (try requirements.get(methodIndex) otherwise panic("dispatchedAssociatedNamesOf: requirements.get OOB at {methodIndex} below count {requirements.count()} — the loop bounds it by that same list")).method
+		if namesInclude(iface.associatedTypeNames, name: method.returnTypeName) 'anAssociatedResult'
+			inAResult.insert(method.returnTypeName)
+			inAnAbiPosition.insert(method.returnTypeName)
+		end 'anAssociatedResult'
+
+		for paramTypeName in method.paramTypeNames 'eachFormal'
+			if namesInclude(iface.associatedTypeNames, name: paramTypeName) 'anAssociatedFormal'
+				inAnAbiPosition.insert(paramTypeName)
+			end 'anAssociatedFormal'
+		end 'eachFormal'
+	end 'eachRequirement'
+	return DispatchedAssociatedNames.create(inAnAbiPosition, inAResult: inAResult)
+end 'dispatchedAssociatedNamesOf'
 
 // ⭐⭐ **WHAT A HOLDING OWES, AND WHY IT REPLACES E3119/E3120 RATHER THAN JOINING THEM: every conformer's
 // binding must be widenable into the interface the position is held at.** E3119's rule is forced by there
@@ -242,13 +365,13 @@ end 'checkOneHeldBinding'
 // they fail in different POSITIONS: a fat pointer cannot be carried anywhere at all, while a managed or
 // non-machine-word value is fine as a PARAMETER (the lowering resolves it and coerces the actual) and only
 // breaks as a RESULT, where the front end has to type it.
-function checkAgreedBindingIsCarryable(project Project, signatures ProgramSignatures, iface IrInterface, name ByteArray, conformer ConformanceDecl, binding ByteArray)
+function checkAgreedBindingIsCarryable(project Project, signatures ProgramSignatures, iface IrInterface, name ByteArray, conformer ConformanceDecl, binding ByteArray, isDispatchedResult bool)
 	if signatures.declaredNameIsFatPointer(binding) 'twoWordsThroughAOneWordSlot'
 		reportPositioned(project, code: ErrorCode.associatedTypeReturnNotMachineWord, message: "'{String.from(conformer.typeName)}' binds '{String.from(iface.name)}'s associated type '{String.from(name)}' to the interface type '{String.from(binding)}', and '{String.from(name)}' reaches the calling convention of a requirement this program DISPATCHES — {ExistentialIsFatPointerReason}, and a witness call carries one machine word per argument and one per result — so the second word is dropped and the impl reads a witness that was never passed. Bind the associated type to a concrete type", line: conformer.nameLine, column: conformer.nameColumn, filePath: conformer.filePath)
 		return
 	end 'twoWordsThroughAOneWordSlot'
 
-	checkAssociatedReturnIsUnmanagedMachineWord(project, signatures: signatures, iface: iface, name: name, conformer: conformer, binding: binding)
+	checkAssociatedReturnIsUnmanagedMachineWord(project, signatures: signatures, iface: iface, name: name, conformer: conformer, binding: binding, isDispatchedResult: isDispatchedResult)
 end 'checkAgreedBindingIsCarryable'
 
 // ⭐⭐ **REFUSE AN ASSOCIATED RETURN BOUND TO ANYTHING BUT AN UNMANAGED MACHINE WORD (E3120), AND "MACHINE
@@ -262,14 +385,14 @@ end 'checkAgreedBindingIsCarryable'
 //
 // The admitted set is therefore "an unmanaged machine word", asked of the BINDING NAME because the resolved
 // type has already collapsed a struct and a ranged alias to the same `integer` (`renderedTypeNameAbiType`).
-function checkAssociatedReturnIsUnmanagedMachineWord(project Project, signatures ProgramSignatures, iface IrInterface, name ByteArray, conformer ConformanceDecl, binding ByteArray)
+function checkAssociatedReturnIsUnmanagedMachineWord(project Project, signatures ProgramSignatures, iface IrInterface, name ByteArray, conformer ConformanceDecl, binding ByteArray, isDispatchedResult bool)
 	if bindingIsUnmanagedMachineWord(signatures, binding: binding) 'travelsAsAPlainWord'
 		return
 	end 'travelsAsAPlainWord'
 
-	if not requirementReturnsType(project.interfaces, iface: iface, name: name) 'notAResultAnywhere'
+	if not isDispatchedResult 'neverADispatchedResult'
 		return
-	end 'notAResultAnywhere'
+	end 'neverADispatchedResult'
 
 	// The AUTHOR's spelling: a generic-instance binding reaches here as `Box_Integer`, the canonical mint, and
 	// the author wrote `IntBox`. Its two sibling refusals above print an INTERFACE name — `declaredNameIsFatPointer`
@@ -314,43 +437,12 @@ function reportAssociatedTypeBindingDisagreement(project Project, signatures Pro
 	reportPositioned(project, code: ErrorCode.associatedTypeAbiDisagreement, message: "'{String.from(second.typeName)}' binds '{String.from(iface.name)}'s associated type '{String.from(name)}' to '{String.from(signatures.displaySpellingOfDeclaredName(secondBinding))}', but '{String.from(first.typeName)}' binds it to '{String.from(signatures.displaySpellingOfDeclaredName(firstBinding))}' — and '{String.from(name)}' is written as a parameter or return type of a requirement this program DISPATCHES. A witness dispatch is compiled ONCE for every conformer, with no per-conformer specialization, so the shared body would be compiled against one of those two types and hand the other conformer's impl bits it reads as something else. Bind the associated type to the same type in both conformances, or give the two conformers different interfaces", line: second.nameLine, column: second.nameColumn, filePath: second.filePath)
 end 'reportAssociatedTypeBindingDisagreement'
 
-// Does any requirement of `iface` write `name` where it reaches a witness call's calling convention — a
-// PARAMETER or the RETURN? The list is the TRANSITIVE one a witness table actually holds — see
-// `requirementReturnsType` for the escape that asking only the interface's own requirements opened.
-//
-// ⚠ **A `throws` CLAUSE IS A THIRD POSITION AN ASSOCIATED TYPE CAN REACH, AND IT IS DELIBERATELY NOT ONE OF
-// THESE.** `substituteAssociatedTypes` substitutes into it, so `function next() throws Element` is
-// well-formed. It does not reach the ABI: the error travels through the dual-register flag, the error VALUE is
-// an enum ordinal in a machine word whatever the clause names, and the clause is compared by NAME
-// (`requireSameErrorType`) rather than lowered. MEASURED green on both targets. If a throwing witness call
-// ever carries the error's own type in its signature, this predicate is where that becomes a third arm.
-function requirementWritesTypeInAbiPosition(interfaces IrInterfaceMap, iface IrInterface, name ByteArray) returns bool
-	return requirementReturnsType(interfaces, iface: iface, name: name) or requirementTakesType(interfaces, iface: iface, name: name)
-end 'requirementWritesTypeInAbiPosition'
-
-// Is `name` the RETURN type of any requirement `iface` DISPATCHES — its own AND every one projected in
-// through `extends`? The half E3120 asks alone.
-//
-// ⚠⚠ **`iface.methods` IS THE WRONG LIST, AND ASKING IT WAS AN ESCAPE.** A witness table's slots are the
-// TRANSITIVE requirement list (`interfaceWitnessSlots`), so `interface Derived extends Base` dispatches
-// `Base`'s requirements through `Derived`'s table — and a scan of `Derived.methods` sees nothing write
-// `Element`, returns early, and lets a disagreement through. MEASURED: two conformers of `Derived` binding
-// `Element` to `Integer` and to `float`, dispatched through a `Derived` existential, compiled and answered
-// **31 on x64 where the program computes 51**, while wasm trapped. The same disagreement declared on the
-// CHILD fired correctly, which is what isolated the gap to the projected requirements.
-// Asking `interfaceWitnessSlots` is also the duplication fix: it is the one home of "which requirements does
-// this interface have", with the `visited` set that already handles diamonds and cycles.
-function requirementReturnsType(interfaces IrInterfaceMap, iface IrInterface, name ByteArray) returns bool
-	for slot in interfaceWitnessSlots(interfaces, iface: iface) 'eachRequirement'
-		if slot.method.returnTypeName.equals(name) 'inTheResult'
-			return true
-		end 'inTheResult'
-	end 'eachRequirement'
-	return false
-end 'requirementReturnsType'
-
-// Is `name` a PARAMETER type of any requirement `iface` dispatches? `requirementReturnsType`'s twin, over the
-// same transitive list and for the same reason.
+// Is `name` a PARAMETER type of ANY of `iface`'s requirements — its own AND every one projected in through
+// `extends`? The one caller is `Parser.requireHeldAssociatedTypeIsOnlyReturned`, and it wants EVERY
+// requirement rather than the dispatched ones `dispatchedAssociatedNamesOf` narrows to: that refusal is taken
+// mid-parse, where no module of ops exists to read a dispatch off, and the holding it guards is minted by a
+// WIDENING rather than by a call. Asking the transitive list is load-bearing there for the same measured
+// reason it is in that walk — a parameter projected in from a parent is one `iface.methods` cannot see.
 export function requirementTakesType(interfaces IrInterfaceMap, iface IrInterface, name ByteArray) returns bool
 	for slot in interfaceWitnessSlots(interfaces, iface: iface) 'eachRequirement'
 		for paramTypeName in slot.method.paramTypeNames 'eachFormal'

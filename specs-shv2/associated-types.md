@@ -1905,6 +1905,170 @@ end 'main'
 51
 ```
 
+<!-- test: error.dispatched-associated-type-bound-to-a-string-beside-an-int -->
+⭐⭐ **E3119's SECOND RECORDED FAILURE, PINNED BY A CASE RATHER THAN BY ITS OWN HEADER.** `String`
+beside `Integer` is the pair the entry calls the worst of the three: both are one ABI class and one machine
+word, so no width rule and no register-file rule can separate them, and the shared body compiled against
+`Integer` hands `TextRunner.take` the literal `20` to read as a String pointer. **RE-MEASURED with the
+refusal lifted, x64-windows: SEGFAULT, exit 139.** The refusal is the only thing between this program and
+that fault, and the case that would have caught the refusal being lifted did not exist.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Taker uses Element
+	function take(e Element) returns Integer
+end 'Taker'
+
+type IntRunner implements Taker with Integer
+	let base as Integer
+
+	function take(e Integer) returns Integer
+		return base + e
+	end 'take'
+
+	static function create(base Integer) returns Self
+		return Self{base: base}
+	end 'create'
+end 'IntRunner'
+
+type TextRunner implements Taker with String
+	let base as Integer
+
+	function take(e String) returns Integer
+		return base + e.byteLength()
+	end 'take'
+
+	static function create(base Integer) returns Self
+		return Self{base: base}
+	end 'create'
+end 'TextRunner'
+
+function useIt(t Taker) returns Integer
+	return t.take(20)
+end 'useIt'
+
+function main() returns ExitCode
+	return (useIt(IntRunner.create(0)) + useIt(TextRunner.create(11))) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3119: specs/fragments/associated-types/error.dispatched-associated-type-bound-to-a-string-beside-an-int.test:20:6: 'TextRunner' binds 'Taker's associated type 'Element' to 'String', but 'IntRunner' binds it to 'Integer' — and 'Element' is written as a parameter or return type of a requirement this program DISPATCHES. A witness dispatch is compiled ONCE for every conformer, with no per-conformer specialization, so the shared body would be compiled against one of those two types and hand the other conformer's impl bits it reads as something else. Bind the associated type to the same type in both conformances, or give the two conformers different interfaces
+```
+
+<!-- test: error.dispatched-associated-type-bound-to-a-float-beside-an-int -->
+⭐⭐ **E3119's FIRST RECORDED FAILURE, IN THE PLAIN SHAPE THE ENTRY DESCRIBES.** The `float`-beside-
+`Integer` pair was pinned only through an `extends` projection, which is a case about the TRANSITIVE slot
+list; the direct disagreement it was measured on had no case at all. **RE-MEASURED with the refusal lifted,
+x64-windows: the program compiles clean and answers 31 where it computes 51** — `FloatRunner.take` reads
+its `e` out of xmm0 while the shared body, compiled against `Integer`, passed it in a general-purpose
+register. It is the twin of `associated-types.conformers-disagree-but-nothing-dispatches` two cases up,
+differing in exactly the fact that gates the rule: there every call is direct, here one is a dispatch.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Taker uses Element
+	function take(e Element) returns Integer
+end 'Taker'
+
+type IntRunner implements Taker with Integer
+	let base as Integer
+
+	function take(e Integer) returns Integer
+		return base + e
+	end 'take'
+
+	static function create(base Integer) returns Self
+		return Self{base: base}
+	end 'create'
+end 'IntRunner'
+
+type FloatRunner implements Taker with float
+	let base as Integer
+
+	function take(e float) returns Integer
+		return base + (20 if e > 19.0 else 0)
+	end 'take'
+
+	static function create(base Integer) returns Self
+		return Self{base: base}
+	end 'create'
+end 'FloatRunner'
+
+function useIt(t Taker) returns Integer
+	return t.take(20)
+end 'useIt'
+
+function main() returns ExitCode
+	return (useIt(IntRunner.create(11)) + useIt(FloatRunner.create(0))) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3119: specs/fragments/associated-types/error.dispatched-associated-type-bound-to-a-float-beside-an-int.test:20:6: 'FloatRunner' binds 'Taker's associated type 'Element' to 'float', but 'IntRunner' binds it to 'Integer' — and 'Element' is written as a parameter or return type of a requirement this program DISPATCHES. A witness dispatch is compiled ONCE for every conformer, with no per-conformer specialization, so the shared body would be compiled against one of those two types and hand the other conformer's impl bits it reads as something else. Bind the associated type to the same type in both conformances, or give the two conformers different interfaces
+```
+
+<!-- test: associated-types.disagreement-in-a-requirement-no-dispatch-reaches -->
+⭐⭐ **THE GATE IS THE DISPATCHED SLOT, NOT THE DISPATCHED INTERFACE NAME.** `Tally` declares two
+requirements: `take`, which writes `Element` in a parameter, and `label`, which writes nothing associated.
+The only dispatch in the program jumps through `label`. There is therefore no shared body compiled against
+either binding of `Element` — the two `take`s are reached by DIRECT calls, each against its own conformer's
+declared parameter type — and the E3119 hazard has no site to occur at. Read off the interface NAME the rule
+refused this program anyway, for a requirement no witness call reaches. **MEASURED: it runs and answers 51**
+(`20 + 11 + 20`). Both consumers of the whole-program fold are keyed on `(interfaceDeclIndex, methodIndex)` —
+`LowerMaxonToStd.witnessFormalType` resolves the formals of the requirement a `witnessCall` names, and the
+parser types that same requirement's result — so a slot nothing dispatches has no consumer to be wrong.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Score = int(0 to 100)
+
+interface Tally uses Element
+	function take(e Element) returns Integer
+	function label() returns Integer
+end 'Tally'
+
+type Wide implements Tally with Integer
+	let base as Integer
+
+	function take(e Integer) returns Integer
+		return base + e
+	end 'take'
+
+	function label() returns Integer
+		return base
+	end 'label'
+
+	static function create(base Integer) returns Self
+		return Self{base: base}
+	end 'create'
+end 'Wide'
+
+type Narrow implements Tally with Score
+	let base as Integer
+
+	function take(e Score) returns Integer
+		return base + e
+	end 'take'
+
+	function label() returns Integer
+		return base
+	end 'label'
+
+	static function create(base Integer) returns Self
+		return Self{base: base}
+	end 'create'
+end 'Narrow'
+
+function useIt(t Tally) returns Integer
+	return t.label()
+end 'useIt'
+
+function main() returns ExitCode
+	return (useIt(Wide.create(20)) + useIt(Narrow.create(11)) + Wide.create(0).take(20)) as ExitCode
+end 'main'
+```
+```exitcode
+51
+```
+
 <!-- test: error.associated-return-bound-to-a-managed-type -->
 ⭐⭐ **"MACHINE WORD" WAS THE WRONG PREDICATE FOR E3120, AND WHAT IT LET THROUGH LEAKED.** A `String`
 binding IS a machine word — a pointer — so the first cut of this rule admitted it. The parser types
