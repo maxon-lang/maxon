@@ -9790,6 +9790,10 @@ export type Parser
 		// function`), so the tier is read one token further back when it is present; asking `visibilityBefore`
 		// at the `function` token would answer `file` for every exported method in the program.
 		let visibility = self.declaredFunctionVisibility(hasStaticModifier)
+		// ⭐ Whether the declaration takes a receiver decides where its own parameters sit in a CALL's
+		// argument list, so it is read here, once, and shared by the three facts below that are recorded
+		// CALL-ALIGNED (the default scan, the consume scan) or that state the alignment itself (the entry).
+		let takesReceiver = self.declarationTakesReceiver(hasStaticModifier)
 		self.advance()
 		// The parameter list's `(` is captured before the skip so the param NAMES can be read back out of it
 		// (`paramNamesIn`) — the CONSUME scan needs them, and `skipBalancedParens` only advances past them.
@@ -9804,7 +9808,7 @@ export type Parser
 		let declaredSurface = self.returnDeclaredSurface()
 		let returnType = try self.parseOptionalReturnType() otherwise return
 		let funcName = self.declaredMethodName(nameTok)
-		entries.push(FuncReturnTypeEntry.create(funcName, returnType: returnType, declaredSurface: declaredSurface, visibility: visibility))
+		entries.push(FuncReturnTypeEntry.create(funcName, returnType: returnType, declaredSurface: declaredSurface, visibility: visibility, takesReceiver: takesReceiver))
 		// ⭐⭐ **EVERY FREE FUNCTION'S BARE NAME (N1b's qualified-spelling record, re-cut by N1c)** — recorded
 		// here, from the SAME token walk that records its return type, because it answers two questions only
 		// the whole-program index can: is `utils.helper(…)` a directory-qualified free call or a static on a
@@ -9830,10 +9834,6 @@ export type Parser
 		if self.enclosingType.isEmpty() and not funcName.equals(MainFunctionName) 'aFreeFunction'
 			freeFunctionNameOut.push(funcName)
 		end 'aFreeFunction'
-		// ⭐ Whether the declaration takes a receiver decides where its own parameters sit in a CALL's
-		// argument list, so it is read here, once, and shared by the default scan below and the consume scan
-		// at the end of this routine — the two facts that are recorded CALL-ALIGNED.
-		let takesReceiver = self.declarationTakesReceiver(hasStaticModifier)
 		// ⭐ **PARAMETER DEFAULTS (BATCH2 slice 4)** — recorded from the SAME token walk, and the ONLY place
 		// the whole program learns that a call may legally omit an argument. It also publishes each
 		// synthesized helper's RETURN TYPE into `entries`, which is what lets a call site in another file
@@ -10964,9 +10964,6 @@ export type Parser
 		end 'notReassignShape'
 		return self.signatures.isManagedOpaqueTypeParamField(self.enclosingType, fieldName: self.tokenAt(selfPos + 2).value)
 	end 'opaqueFieldReassignAt'
-
-
-
 
 	// Is the `sizeof` at `sizeofPos` a `sizeof(<typeParam>)` — the 4 contiguous tokens `sizeof ( ident )`
 	// whose identifier names an enclosing type parameter? `parseSizeof` consumes exactly this shape with no
@@ -15397,9 +15394,11 @@ export type Parser
 			self.enterTypeScope(conformer, isEnum: false)
 			self.openExtensionBodyScope(header, conformer: conformer, index: self.signatures)
 			// Where the sibling-receiver walk begins for a bare call in these bodies — the EXTENSION's member
-			// list, not the conformer's, because a bare call here may name a sibling extension method. The
-			// interface's own requirements are added to that map by `ensureSiblingReceivers`, which is what
-			// makes `tag()` resolve; see `extensionInterfaceName`.
+			// list, not the conformer's, because a bare call here may name a sibling extension method. What
+			// the conformer itself declares is NOT on this walk and comes from the whole-program index
+			// (`isImplicitSelfMethod`); the extended interface's own requirements are added to the map by
+			// `ensureSiblingReceivers`, which is what makes a bare `tag()` resolve against a REQUIREMENT the
+			// index files under no conformer. See `extensionInterfaceName`.
 			self.enclosingTypeBodyStart = bodyStart
 			self.extensionInterfaceName = self.extendedInterfaceName(header)
 
@@ -15467,8 +15466,16 @@ export type Parser
 	end 'skipPastExtensionMember'
 
 	// The interface whose REQUIREMENTS are siblings of this body's methods — see `ensureSiblingReceivers`.
-	// Empty for a TYPE extension, and that is the point: `extension Box` extends a type, whose own members the
-	// sibling walk already finds by reading its body, and there is no requirement list to add.
+	// Empty for a TYPE extension, and that is the point: a type has no requirement list to add.
+	//
+	// ⚠ **IT IS NOT EMPTY BECAUSE THE WALK ALREADY FINDS A TYPE'S OWN MEMBERS — IT DOES NOT, AND THIS COMMENT
+	// SAID IT DID.** The walk starts at the EXTENSION's member list (`enclosingTypeBodyStart` is set to the
+	// extension's body, one line above the assignment of this field), so `extension Box`'s bare `tag()` never
+	// saw `type Box`'s `tag` at all. The conformer's own methods come from the whole-program index instead,
+	// which is where they are for an INTERFACE extension's conformer too — see `isImplicitSelfMethod`. What a
+	// requirement list adds on top is the one thing the index cannot: an interface's requirement is not filed
+	// under the conformer, so a conformer that has not yet been reached by any declaration of it still
+	// resolves `tag()` here.
 	function extendedInterfaceName(header ExtensionHeader) returns ByteArray
 		match header.target 'target'
 			interfaceExtension then return header.nameTok.value
@@ -44326,6 +44333,16 @@ export type Parser
 	// surface and which type name they mean — and getting that ORDER wrong in one of them is exactly the
 	// drift this whole arrangement exists to prevent.
 	//
+	// ⛔⛔ **"DECLARES IT" MEANS *ANY* DECLARATION, AND IT USED TO MEAN "IN THE TYPE'S OWN BODY".** It asked
+	// `conformerDeclaresOwnMethod`, whose whole point is to EXCLUDE what an `extension` published — a
+	// distinction the extension fold needs and this door must not inherit. A published method is the
+	// conformer's at every other call site, so the exclusion made this one refuse it: **MEASURED, `"hello".
+	// filter(…)` — `stdlib/Interfaces.maxon`'s `extension Iterable` publishes `filter` onto `String`, which
+	// `implements Iterable` — reported `E2015 … 'filter' — shv2 provides hash/equals; that list IS the
+	// surface`, which is exactly the sentence this door exists to retire, about a method the program has.
+	// `Array.sort` and `sortUnstable` live in `export extension Array` and would have been refused for the
+	// identical reason.
+	//
 	// ⚠ It PEEKS: the cursor sits on the member name — the `.` is already consumed and no arm has read it —
 	// because the caller hands that token to the dispatcher, which consumes it. `tokenCanBeAName` guards a
 	// measured hazard rather than a hypothetical one: a literal carries its CONTENT in `.value`, so
@@ -44339,7 +44356,7 @@ export type Parser
 			return false
 		end 'theSynthesizedSurfaceServesIt'
 
-		return self.signatures.conformerDeclaresOwnMethod(qualifiedMethodName(typeName, methodName: memberTok.value))
+		return self.signatures.declaresCallee(qualifiedMethodName(typeName, methodName: memberTok.value))
 	end 'corpusServesMemberOffRoster'
 
 	// ⭐⭐⭐ **THE STATIC TWIN OF THE DOOR ABOVE IS GONE (W55), AND WHAT REPLACED IT IS `parseQualifiedCall`
@@ -50901,12 +50918,37 @@ export type Parser
 	// to the sibling method `name` rather than a free function — and the method WINS when a free function of the
 	// same name also exists (oracle-verified), which is why the free-call path asks this FIRST. False at file
 	// scope, where there is no enclosing type and every call is free.
+	//
+	// ⭐⭐⭐ **A SIBLING IS ANY METHOD THE ENCLOSING TYPE HAS, AND A TOKEN WALK CANNOT SEE THEM ALL.**
+	// `ensureSiblingReceivers` reads ONE declaration's member list, which is the right list only when every
+	// method of the type is written in it. An `extension` breaks that in both directions, and both were
+	// MEASURED as `E3004 call to undefined function` on programs whose `self.<name>()` spelling compiled:
+	//
+	//   • inside an `extension` body the walk starts at the EXTENSION's members, so the CONFORMER's own
+	//     methods are invisible — a different declaration, possibly in a different file;
+	//   • inside the TYPE's own body the walk sees only what the type wrote, so a method an `extension`
+	//     published onto it is invisible the other way round.
+	//
+	// ⇒ the walk's miss falls through to the whole-program index, which is the only reader that has every
+	// declaration under one `<Type>.<method>` key however many declarations contributed them. The walk keeps
+	// its PRIORITY: it answers for the declaration the author is looking at, and it is the one that can tell
+	// an interface REQUIREMENT (which the index does not file under the conformer at all) from a method.
+	//
+	// ⚠ **THE PROBE IS ON THE MISS PATH ONLY**, and that is a cost decision rather than a semantic one: this
+	// is asked at every bare call in the program, the join `qualifiedMethodName` allocates, and inside a type
+	// body the overwhelming majority of bare calls hit the walk. A miss is a call to a free function, which
+	// then pays one join and one map probe — linear in call sites, and the answer it buys is the difference
+	// between resolving and E3004.
 	function isImplicitSelfMethod(name ByteArray) returns bool
 		if self.enclosingType.isEmpty() 'notInType'
 			return false
 		end 'notInType'
 		self.ensureSiblingReceivers()
-		return self.siblingReceivers.contains(name)
+		if self.siblingReceivers.contains(name) 'declaredInTheBodyBeingParsed'
+			return true
+		end 'declaredInTheBodyBeingParsed'
+
+		return self.signatures.declaresCallee(qualifiedMethodName(self.enclosingType, methodName: name))
 	end 'isImplicitSelfMethod'
 
 	// Is this bare call a member of the roster the enclosing declaration's OWN record serves? See `parseCall`'s
@@ -50972,7 +51014,7 @@ export type Parser
 	// is built and this `ensureSiblingReceivers` is a memo hit.
 	function implicitSelfReceiver(name ByteArray, anchor Token) returns ReceiverArg throws ParseError
 		self.ensureSiblingReceivers()
-		if not (try self.siblingReceivers.get(name) otherwise false) 'staticSibling'
+		if not self.siblingTakesReceiver(name) 'staticSibling'
 			return ReceiverArg.none
 		end 'staticSibling'
 		// `self` is a PARAMETER — a borrowed reference to the caller's record — so it is writable and has no
@@ -50996,13 +51038,30 @@ export type Parser
 		return ReceiverArg.value(try self.requireReceiverValue(anchor), immutableName: EmptySourceText, subjectName: EmptySourceText, anchor: anchor)
 	end 'implicitSelfReceiver'
 
-	// Populate `siblingReceivers` (the enclosing type's member methods, bare name -> takesReceiver) unless it is
-	// already built for this type. LAZY so a type whose methods make no calls — the whole scale corpus — never
-	// builds it and allocates nothing (the field keeps its `sharedEmptySiblingReceivers` placeholder). A
-	// file-local token walk of the type body, so it sees every sibling regardless of declaration order: a
-	// forward reference resolves exactly as a backward one, and recursion sees the method itself. It is the ONE
-	// source of both "is this a sibling?" (`contains`) and "does it take a receiver?" (the value), so those two
-	// facts cannot drift apart.
+	// Does the sibling `name` carry a hidden `self`? — the receiver half of the resolution `isImplicitSelfMethod`
+	// admitted, and it answers from the SAME two sources in the SAME priority, which is the whole reason it is
+	// written here rather than inline: an admission that came from the index and a receiver read off the walk
+	// would be two readings of one declaration, and the pair that disagreed would call a `static` on an instance.
+	// The caller has already established that one of the two answers exists.
+	function siblingTakesReceiver(name ByteArray) returns bool
+		if let takesReceiver = try self.siblingReceivers.get(name) 'declaredInTheBodyBeingParsed'
+			return takesReceiver
+		end 'declaredInTheBodyBeingParsed'
+
+		return self.signatures.declaredMethodTakesReceiver(qualifiedMethodName(self.enclosingType, methodName: name))
+	end 'siblingTakesReceiver'
+
+	// Populate `siblingReceivers` (the members of the DECLARATION BEING PARSED, bare name -> takesReceiver)
+	// unless it is already built for this type. It is not the whole sibling set — a method declared by another
+	// declaration of the same type is reached through the index instead (`isImplicitSelfMethod`) — because a
+	// token walk can only read the body it is standing in. LAZY so a type whose methods make no calls — the
+	// whole scale corpus — never builds it and allocates nothing (the field keeps its
+	// `sharedEmptySiblingReceivers` placeholder). A file-local token walk of the type body, so it sees every
+	// sibling regardless of declaration order: a forward reference resolves exactly as a backward one, and
+	// recursion sees the method itself. It is the ONE source of both "is this a sibling?" (`contains`) and
+	// "does it take a receiver?" (the value) FOR THE MEMBERS IT CARRIES, so those two facts cannot drift
+	// apart — and the index behind it is asked for both in the same one place (`siblingTakesReceiver`), for
+	// that same reason.
 	//
 	// ⚠⚠ **AN `enum`/`union` BODY'S MEMBER LIST IS NOT BLOCK STRUCTURE, AND A CASE MAY BE SPELLED WITH A
 	// KEYWORD (D1).** `enum … end  while  if …` declares three cases, and `opensBlockAt`/`closesBlockAt`

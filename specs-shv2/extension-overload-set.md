@@ -400,3 +400,58 @@ end 'main'
 ```maxoncstderr
 error E3006: <fragment>:27:18: duplicate definition of function 'Five.pick#bool' — 'Five.pick' is declared by an `extension` in more than one FILE, so every one of those declarations is registered under its parameter-type spelling, and two of them spell the same parameters. Give the overloads distinct parameter types, or distinct names
 ```
+
+<!-- test: error.one-signature-declared-by-two-extensions-in-the-OTHER-fold-order -->
+⭐ **THE SAME PROGRAM WITH THE TWO EXTENSIONS SWAPPED BETWEEN THE FILES — the refusal must not depend on
+which one folds first.** The extension fold walks the program's `extension` declarations in source-path
+order, so the file each body sits in decides the order they are published in; only a pair of cases can
+say whether the verdict does.
+
+⚠ **WHAT MAKES IT ORDER-INDEPENDENT IS ONE EXCLUSION, and its absence is a SILENT ACCEPTANCE rather than
+a different diagnostic.** By the time the second declaration folds, the first has already put
+`Five.pick` in the whole-program index — so "a signature already exists under this name" cannot tell the
+conformer's own declaration from an earlier extension's. Read as the conformer's, the second declaration
+is judged SHADOWED, withheld without a word, and the program compiles and returns an answer. The verdict
+therefore asks only about declarations an extension did NOT publish.
+```maxon
+// --- file: a.maxon
+typealias Integer = int(i64.min to i64.max)
+
+export interface Tagged
+	function tag() returns Integer
+end 'Tagged'
+
+export extension Tagged
+	export function pick(flag bool) returns bool
+		return not flag
+	end 'pick'
+end 'Tagged'
+
+export type Five implements Tagged
+	export static function make() returns Self
+		return Self{}
+	end 'make'
+
+	export function tag() returns Integer
+		return 5
+	end 'tag'
+end 'Five'
+
+// --- file: b.maxon
+export extension Tagged
+	export function pick(flag bool) returns bool
+		return flag and tag() > 0
+	end 'pick'
+end 'Tagged'
+
+function main() returns ExitCode
+	let f = Five.make()
+	if f.pick(true) 'yes'
+		return 1
+	end 'yes'
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3006: <fragment>:27:18: duplicate definition of function 'Five.pick#bool' — 'Five.pick' is declared by an `extension` in more than one FILE, so every one of those declarations is registered under its parameter-type spelling, and two of them spell the same parameters. Give the overloads distinct parameter types, or distinct names
+```

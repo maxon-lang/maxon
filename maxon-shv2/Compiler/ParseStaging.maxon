@@ -71,20 +71,30 @@ let sharedEmptyOverloadSets = OverloadSetMap.create()
 // file it already receives, so the tier and the file a visibility question needs are written together and
 // cannot come to describe two declarations.
 //
-// ⚠ **IT DEFAULTS, AND THE DEFAULT IS FOR THE `Project.funcReturnTypes` REGISTRY'S THREE PRODUCERS ONLY.**
+// ⭐⭐ **`takesReceiver` IS WHETHER THE DECLARATION CARRIES A HIDDEN `self`, AND IT RIDES HERE FOR
+// `visibility`'S REASON** — a third fact about the SAME declaration, applied by `ProgramSignatures.record`
+// in the same act. It is what makes a bare sibling call inside an `extension` body resolvable at all: the
+// conformer's own methods are declared in another declaration and possibly another file, so no token walk
+// can reach them, and knowing one EXISTS is not enough to call it — a `static` handed a receiver fails an
+// arity check on a parameter nobody wrote, and an instance method denied one is called on nothing.
+//
+// ⚠ **IT DEFAULTS, AND THE DEFAULTS ARE FOR THE `Project.funcReturnTypes` REGISTRY'S THREE PRODUCERS ONLY.**
 // This record serves two registries: the pre-parse SWEEP (which folds into `ProgramSignatures` and is the
-// only reader of this field) and the real parse's per-file contribution (`ParseArtifact.recordFuncReturnType`
+// only reader of these fields) and the real parse's per-file contribution (`ParseArtifact.recordFuncReturnType`
 // — a declared function, a parameter-default helper and a lifted closure shim). The latter three never reach
 // `ProgramSignatures.record`, and two of them are functions no file wrote, so there is no author tier for
-// them to state; `file` is the narrowest one and states nothing wider than the truth.
+// them to state; `file` is the narrowest one and states nothing wider than the truth. The two SYNTHESIZED
+// helpers the sweep itself publishes (a parameter default's, a field default's) take the receiverless
+// default and mean it: each is a plain function the emitter calls with no instance.
 export type FuncReturnTypeEntry
 	export var name as ByteArray
 	export var returnType as MaxonReturnType
 	export var declaredSurface as DeclaredSurface
 	export var visibility as Visibility
+	export var takesReceiver as bool
 
-	export static function create(name ByteArray, returnType MaxonReturnType, declaredSurface DeclaredSurface, visibility Visibility = Visibility.file) returns FuncReturnTypeEntry
-		return Self{name: name, returnType: returnType, declaredSurface: declaredSurface, visibility: visibility}
+	export static function create(name ByteArray, returnType MaxonReturnType, declaredSurface DeclaredSurface, visibility Visibility = Visibility.file, takesReceiver bool = false) returns FuncReturnTypeEntry
+		return Self{name: name, returnType: returnType, declaredSurface: declaredSurface, visibility: visibility, takesReceiver: takesReceiver}
 	end 'create'
 end 'FuncReturnTypeEntry'
 

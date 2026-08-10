@@ -378,15 +378,22 @@ let DeclShapeInterfaceMethod = 52 as ContentHash
 // declaration in the program.
 let DeclShapeInterfaceParent = 60 as ContentHash
 
-// One interface requirement's RECEIVER KIND (A2w review) — a PRESENCE PAIR for `mixThrowsClause`'s reason and
-// not a marker on the `static` arm alone: both kinds are possible in this position, so a hash that mixed
-// nothing for the instance arm would let a requirement GAIN or LOSE `static` without any reader's memo moving.
-// It rides because a PARSE reads it: `Parser.requireWitnessDispatchCandidates` REFUSES a dispatch whose
-// requirements are all `static` (E3116) and `IrInterface.witnessTargetIsProtocol` refuses a `static` look-alike
-// as `Equatable`/`Comparable` (E3005), so flipping the keyword in file A decides whether file B compiles at all
-// while file B's own bytes stay put — this hash's stated rule, exactly.
-let MethodShapeStatic = 61 as ContentHash
-let MethodShapeInstance = 62 as ContentHash
+// Does a declaration carry a hidden `self`? — a PRESENCE PAIR for `mixThrowsClause`'s reason and not a
+// marker on the receiverless arm alone: both kinds are possible in every position that mixes it, so a hash
+// that mixed nothing for the instance arm would let a declaration GAIN or LOSE `static` without any reader's
+// memo moving. ONE pair for both positions that ask it, because it is one distinction:
+//
+//   • an INTERFACE REQUIREMENT's (A2w review). It rides because a PARSE reads it:
+//     `Parser.requireWitnessDispatchCandidates` REFUSES a dispatch whose requirements are all `static`
+//     (E3116) and `IrInterface.witnessTargetIsProtocol` refuses a `static` look-alike as
+//     `Equatable`/`Comparable` (E3005), so flipping the keyword in file A decides whether file B compiles at
+//     all while file B's own bytes stay put — this hash's stated rule, exactly.
+//   • a DECLARATION's, through `mixDeclaration` — see there for the bare-sibling-call reader that spends it.
+//
+// The receiverless arm covers a top-level free function as well as a `static` method, which is why the pair
+// is named for the RECEIVER rather than for the keyword.
+let ReceiverShapeAbsent = 61 as ContentHash
+let ReceiverShapePresent = 62 as ContentHash
 
 // ⭐ A function's PER-PARAMETER DEFAULTS (BATCH2 slice 4), mixed into the hash beside its name for
 // `DeclShapeParamConsume`'s reason and with the identical PRESENCE-PAIR shape. What rides is what a CALL
@@ -3633,6 +3640,7 @@ export let CursorPeekParamName = b"ahead"
 // `SliceMethod` are unprefixed for the same reason: the buffer and the `Array` both spell `slice`.
 export let ArraySetMethod = b"set"
 export let AppendMethod = b"append"
+
 // ⭐ **`appendMemory(source)` — APPEND ENTERED THROUGH THE MEMORY RATHER THAN THE ARRAY.** It is
 // `stdlib/Array.maxon:272`'s member and `append`'s whole body (`:262` is `appendMemory(other.managed)`), so
 // the two are ONE emission under two names — `length`/`count`'s arrangement, one member over. Since the
@@ -3654,11 +3662,13 @@ export let ArrayLastMethod = b"last"
 export let ArrayPopMethod = b"pop"
 export let RemoveMethod = b"remove"
 export let SliceMethod = b"slice"
+
 // ⚠ **`insert` JOINED THIS BLOCK WHEN `Map.insert` WAS BUILT**, for the block's own reason: it is the second
 // throwing entry point a `Map` has, so `MapRuntime.mapSourceMethodName` must be able to name the very byte
 // string the parser's dispatch matched. `Array`, `Set` and `Map` all spell it, which is why it carries no
 // family prefix — the rule `set`/`append`/`slice`/`remove` above it already state.
 export let InsertMethod = b"insert"
+
 // ⚠ **`byteAt` JOINED THIS BLOCK WHEN `String.byteAt` WAS BUILT (BATCH2 slice 6), AND IT WAS SPELLED
 // `ManagedMemoryByteAtMethod` ONE SURFACE ABOVE UNTIL THEN.** It belongs here for the same reason `set`,
 // `append` and `slice` do — the buffer and the `String` spell it identically and the parser dispatches both
@@ -3698,11 +3708,13 @@ export let ManagedMemoryNewLengthParamName = b"newLength"
 export let ManagedMemoryNewCapacityParamName = b"newCapacity"
 export let ManagedMemoryOffsetParamName = b"offset"
 export let ManagedMemoryIndexParamName = b"index"
+
 // ⚠ `Array.append`'s parameter carries this SAME label, so both append doors reach this one constant (through
 // `Parser.appendArgParamName`) rather than minting a second `b"other"` — one label, one spelling. It is in
 // this block because the buffer surface is where the label was first written down, not because the `Array`
 // surface has another.
 export let ManagedMemoryOtherParamName = b"other"
+
 // ⭐ **`appendMemory`'s PARAMETER, AND THE ONE THING THE `append` FOLD MUST NOT LOSE.** The two spellings
 // share an emission and an argument RULE, but the corpus declares two names for the one operation —
 // `append(other Self)` at `stdlib/Array.maxon:261`, `appendMemory(source ElementMemory)` at `:272` — and the
@@ -5208,7 +5220,6 @@ export function maxonTypesDenoteSame(a MaxonType, b MaxonType) returns bool
 	return maxonTypeTag(a) == maxonTypeTag(b) and typeNameIdOf(a) == typeNameIdOf(b)
 end 'maxonTypesDenoteSame'
 
-
 // ⭐ **AN INTERFACE'S POSITION IN DECLARATION ORDER — the whole-program, interner-FREE handle a
 // `witnessDispatch` names its requirement's interface by.** See `ProgramSignatures.interfaceNamesInDeclOrder`
 // for why an index and not a name or an interner id. The range is the machine word rather than a tight
@@ -5508,16 +5519,27 @@ typealias ModuleDirectorySet = Set with String
 // concrete and there is no name left in it for a later reader to resolve as ITS file means.
 typealias FuncReturnDeclFileMap = Map with (ByteArray, FilePath)
 
-// ⭐⭐ **WHERE A FUNCTION WAS DECLARED AND AT WHAT TIER — the two facts `isVisibleFrom` needs, as a pair.**
-// They travel together because they are one question's inputs: a tier alone cannot say who may name the
-// declaration, and a file alone cannot say whether anyone but itself may. Filed for EVERY declaration, so a
-// name with no entry means no file declares it rather than "declared, tier unknown".
+// ⭐⭐ **WHAT THE WHOLE PROGRAM KNOWS ABOUT ONE DECLARATION, BEYOND ITS TYPES.** Filed for EVERY
+// declaration, so a name with no entry means no file declares it rather than "declared, details unknown" —
+// which is the property every reader here rests on.
+//
+// `visibility` and `declFilePath` are one question's inputs and travel together for that reason: a tier
+// alone cannot say who may name the declaration (`isVisibleFrom`), and a file alone cannot say whether
+// anyone but itself may.
+//
+// ⭐⭐ **`takesReceiver` IS A THIRD FACT AND NOT A REFINEMENT OF THOSE TWO** — it joins them because the
+// alternative is a second table keyed identically to this one, which two writers would then have to keep in
+// lockstep. It answers the half of "may this bare call resolve to `<Type>.<name>`?" that existence cannot:
+// a `static` handed the enclosing `self` fails an arity check on a parameter its author never wrote, and an
+// instance method denied one is called on nothing. `Parser.ensureSiblingReceivers` reads the same fact off
+// a TOKEN walk for a declaration whose body it can see; this is the answer for one it cannot.
 export type FunctionDeclSite
 	export let visibility as Visibility
 	export let declFilePath as FilePath
+	export let takesReceiver as bool
 
-	export static function create(visibility Visibility, declFilePath FilePath) returns FunctionDeclSite
-		return Self{visibility: visibility, declFilePath: declFilePath}
+	export static function create(visibility Visibility, declFilePath FilePath, takesReceiver bool) returns FunctionDeclSite
+		return Self{visibility: visibility, declFilePath: declFilePath, takesReceiver: takesReceiver}
 	end 'create'
 end 'FunctionDeclSite'
 
@@ -6701,9 +6723,9 @@ export type ProgramSignatures
 				// has nothing left to move. This file's own entries are moved at the end of the fold, where
 				// they exist.
 				alreadyContested then continue
-					// `everyFact`: exactly one declaration of this name has folded, so every entry at the bare
-					// key is the incumbent's — see `StatedSweepFacts.everyFact`.
-					newlyContested(incumbentRegistrationName) then self.refileContestedFreeFunction(bareName, registrationName: incumbentRegistrationName, stating: StatedSweepFacts.everyFact())
+				// `everyFact`: exactly one declaration of this name has folded, so every entry at the bare
+				// key is the incumbent's — see `StatedSweepFacts.everyFact`.
+				newlyContested(incumbentRegistrationName) then self.refileContestedFreeFunction(bareName, registrationName: incumbentRegistrationName, stating: StatedSweepFacts.everyFact())
 			end 'contest'
 		end 'eachFreeFunction'
 
@@ -6837,11 +6859,11 @@ export type ProgramSignatures
 		// `MM leak: 7 allocation(s) remain` on every build, exit 101). Recorded in OPEN.md.
 		if remap.isIdentity 'idsUnchanged'
 			for entry in scanned 'eachUnmapped'
-				self.record(entry.name, returnType: entry.returnType, declaredSurface: entry.declaredSurface, visibility: entry.visibility, declFilePath: filePath)
+				self.record(entry.name, returnType: entry.returnType, declaredSurface: entry.declaredSurface, visibility: entry.visibility, declFilePath: filePath, takesReceiver: entry.takesReceiver)
 			end 'eachUnmapped'
 		end 'idsUnchanged' else 'idsMoved'
 			for entry in scanned 'eachRemapped'
-				self.record(entry.name, returnType: remapMaxonReturnType(entry.returnType, remap: remap), declaredSurface: entry.declaredSurface, visibility: entry.visibility, declFilePath: filePath)
+				self.record(entry.name, returnType: remapMaxonReturnType(entry.returnType, remap: remap), declaredSurface: entry.declaredSurface, visibility: entry.visibility, declFilePath: filePath, takesReceiver: entry.takesReceiver)
 			end 'eachRemapped'
 		end 'idsMoved'
 
@@ -6891,7 +6913,7 @@ export type ProgramSignatures
 	//
 	// So `declaredReturnSurface` is exact for every name that reaches a call: a name with no entry names the
 	// buffer in no declaration anywhere, and a name with one is either unique or already refused.
-	function record(name ByteArray, returnType MaxonReturnType, declaredSurface DeclaredSurface, visibility Visibility, declFilePath FilePath)
+	function record(name ByteArray, returnType MaxonReturnType, declaredSurface DeclaredSurface, visibility Visibility, declFilePath FilePath, takesReceiver bool)
 		self.returnTypes.upsert(name, value: returnType)
 		if not surfaceIsPlain(declaredSurface) 'namesTheBufferAlias'
 			self.declaredReturnSurfaces.upsert(name, value: declaredSurface)
@@ -6899,9 +6921,9 @@ export type ProgramSignatures
 		if returnTypeNamesAType(returnType) 'aNameThisFileMustBeAbleToResolveLaterOn'
 			self.funcReturnDeclFiles.upsert(name, value: declFilePath)
 		end 'aNameThisFileMustBeAbleToResolveLaterOn'
-		self.funcDeclSites.upsert(name, value: FunctionDeclSite.create(visibility, declFilePath: declFilePath))
+		self.funcDeclSites.upsert(name, value: FunctionDeclSite.create(visibility, declFilePath: declFilePath, takesReceiver: takesReceiver))
 
-		self.hash = self.mixDeclaration(self.hash, name: name, returnType: returnType, declaredSurface: declaredSurface, visibility: visibility)
+		self.hash = self.mixDeclaration(self.hash, name: name, returnType: returnType, declaredSurface: declaredSurface, visibility: visibility, takesReceiver: takesReceiver)
 	end 'record'
 
 	// The surface already recorded for `name`, or the plain one. Split out because `Map.get` is a `try` and a
@@ -7056,9 +7078,34 @@ export type ProgramSignatures
 	// ⚠ **A SIGNATURE AN EXTENSION PUBLISHED DOES NOT COUNT**, which is what keeps the verdict independent of
 	// FOLD ORDER: two extensions publishing one `<Conformer>.<method>` are a genuine duplicate definition and
 	// stay E3006 whichever folds first, because neither of them is the conformer's own declaration.
+	// `specs-shv2/extension-overload-set.md` pins that in BOTH orders, because the failure the exclusion
+	// prevents is a SILENT acceptance of whichever declaration folded second, not a different diagnostic.
+	//
+	// ⛔⛔ **THIS IS NOT THE PREDICATE FOR "DOES `<Type>.<method>` EXIST?", AND IT WAS USED AS ONE.** The
+	// exclusion above is what makes the two questions different, and every method an `extension` publishes is
+	// where they part: it IS a method of the conformer, at every call site, and this answers `false` for it.
+	// Asked as an existence test by the corpus fall-through (`Parser.corpusServesMemberOffRoster`), it refused
+	// `"…".filter(…)` — published onto `String` by `stdlib/Interfaces.maxon`'s `extension Iterable` — with the
+	// roster sentence that door exists to retire, and it would have refused `Array.sort` for the identical
+	// reason once `stdlib/Array.maxon` is listed. **Existence is `declaresCallee`**; this has exactly one
+	// caller and it is the fold.
 	export function conformerDeclaresOwnMethod(qualified ByteArray) returns bool
 		return self.funcDeclSites.contains(qualified) and not self.extensionPublishedMethods.contains(qualified)
 	end 'conformerDeclaresOwnMethod'
+
+	// ⭐⭐ **DOES `qualified` CARRY A HIDDEN `self`?** — the receiver half of resolving a bare sibling call to a
+	// declaration whose body the parser cannot see (`Parser.isImplicitSelfMethod`). Wherever the parser CAN see
+	// the body it reads the same fact off the tokens (`functionDeclIsStatic`), and both answers come from that
+	// one test: the sweep captures it at the declaration and files it here.
+	//
+	// ⚠ **A NAME NOTHING DECLARES PANICS RATHER THAN ANSWERING "receiverless"** — the caller has already
+	// established that the declaration exists (`declaresCallee`), because a name with no declaration is not a
+	// sibling at all and takes a different door entirely. Answering `false` for it would be a sentinel: a typo
+	// would silently become a receiver-less call and be reported against its ARGUMENTS.
+	export function declaredMethodTakesReceiver(qualified ByteArray) returns bool
+		let site = try self.funcDeclSites.get(qualified) otherwise panic("ProgramSignatures.declaredMethodTakesReceiver: nothing declares '{String.from(qualified)}' — the caller establishes that through `declaresCallee` first, and the two registries are written by one act (`record`)")
+		return site.takesReceiver
+	end 'declaredMethodTakesReceiver'
 
 	// Note that the `extension` declared in `declFilePath` published `qualified` onto a conformer — the write
 	// side of the test above, AND the write that discovers a cross-file contest (X-contains).
@@ -7382,7 +7429,7 @@ export type ProgramSignatures
 			self.hash = mixBytes(mixBytes(mix(self.hash, value: DeclShapeInterfaceMethod), bytes: method.name), bytes: method.returnTypeName)
 			self.hash = mixInterfaceFormals(self.hash, names: method.paramNames, types: method.paramTypeNames)
 			self.hash = mixThrowsClause(self.hash, clause: method.throwsClause)
-			self.hash = mix(self.hash, value: MethodShapeStatic if method.isStatic else MethodShapeInstance)
+			self.hash = mix(self.hash, value: ReceiverShapeAbsent if method.isStatic else ReceiverShapePresent)
 		end 'eachMethod'
 	end 'recordInterfaceDeclaration'
 
@@ -17562,9 +17609,15 @@ export type ProgramSignatures
 	// compiles at all (`Parser.evalConstFactoryCall`), and that decision is baked into that file's memoized
 	// parse. The whole ORDINAL rather than an exported bit, exactly as `recordAlias` states: `module` is a
 	// third answer a user can write, and a fourth tier would ride automatically.
-	function mixDeclaration(state ContentHash, name ByteArray, returnType MaxonReturnType, declaredSurface DeclaredSurface, visibility Visibility) returns ContentHash
+	//
+	// ⚠ **THE RECEIVER BIT MUST RIDE, for the visibility tier's reason exactly.** Adding or removing `static`
+	// on a method decides whether a bare `helper()` in ANOTHER file's `extension` body resolves — and, when it
+	// does, whether the call carries the enclosing `self` — so the answer is baked into that file's memoized
+	// parse and the key that memo is validated against has to move with it.
+	function mixDeclaration(state ContentHash, name ByteArray, returnType MaxonReturnType, declaredSurface DeclaredSurface, visibility Visibility, takesReceiver bool) returns ContentHash
 		let named = self.mixReturnType(mixBytes(state, bytes: name), returnType: returnType)
-		return mix(mixSurface(mix(named, value: ReturnShapeSurface), surface: declaredSurface), value: tierOrdinal(visibility) as ContentHash)
+		let tiered = mix(mixSurface(mix(named, value: ReturnShapeSurface), surface: declaredSurface), value: tierOrdinal(visibility) as ContentHash)
+		return mix(tiered, value: ReceiverShapePresent if takesReceiver else ReceiverShapeAbsent)
 	end 'mixDeclaration'
 
 	function mixReturnType(state ContentHash, returnType MaxonReturnType) returns ContentHash

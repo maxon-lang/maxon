@@ -327,7 +327,7 @@ let GlobalValueEditAfter = "var warmRebuildProbeGlobal = 8"
 // which is exactly the rule `recordInterfaceDeclaration` states and exactly what its hash must carry.
 //
 // Measured, not argued (2026-08-01, in A2w's review): with `recordInterfaceDeclaration`'s
-// `MethodShapeStatic`/`MethodShapeInstance` mix absent — which is how A2w shipped — this probe reported
+// `ReceiverShapeAbsent`/`ReceiverShapePresent` mix absent — which is how A2w shipped — this probe reported
 // **1** re-parse (the edited file's own bytes) where the property demands `fileCount`, measured at **8**,
 // while the spec suite reported 3091/0 and every other probe here still passed. None of them can see it:
 // the four edits above all move a NAME or a VALUE, and a key that mixes those moves on all four. Only an
@@ -335,6 +335,22 @@ let GlobalValueEditAfter = "var warmRebuildProbeGlobal = 8"
 // key that carries the flag from one that does not.
 let ReceiverKindEditBefore = "interface WarmRebuildProbeInterface\n\tfunction warmRebuildProbeRequirement() returns bool\nend 'WarmRebuildProbeInterface'"
 let ReceiverKindEditAfter = "interface WarmRebuildProbeInterface\n\tstatic function warmRebuildProbeRequirement() returns bool\nend 'WarmRebuildProbeInterface'"
+
+// ⭐ **AND THE SAME FLAG ON AN ORDINARY METHOD, WHICH IS A DIFFERENT POSITION IN THE HASH.** The probe above
+// moves an interface REQUIREMENT's keyword, which rides through `recordInterfaceDeclaration`; a `type`'s or an
+// `extension`'s method rides through `ProgramSignatures.mixDeclaration`, and a probe over one says nothing
+// about the other — the pair of discriminators is shared, the two mix sites are not.
+//
+// It became a fact a PARSE reads when a bare sibling call learned to resolve against the whole-program index
+// (`Parser.isImplicitSelfMethod`): `function of()` becoming `static function of()` decides whether ANOTHER
+// file's `extension` body prepends the enclosing `self` to its bare `of()`, or calls it with none — a wrong
+// answer or a wrong refusal, while that file's own bytes and every name in the program stay put.
+//
+// ⚠ **THE BODY AND THE SIGNATURE ARE HELD FIXED ON PURPOSE, INCLUDING THE ABSENCE OF PARAMETERS.** A method
+// that takes one moves this hash anyway through its CALL-ALIGNED consume and default facts, which prepend
+// `SelfParamName` and would make the probe pass on a key that carries nothing of the flag itself.
+let MethodReceiverKindEditBefore = "type WarmRebuildProbeHost\n\texport function warmRebuildProbeMethod() returns bool\n\t\treturn true\n\tend 'warmRebuildProbeMethod'\nend 'WarmRebuildProbeHost'"
+let MethodReceiverKindEditAfter = "type WarmRebuildProbeHost\n\texport static function warmRebuildProbeMethod() returns bool\n\t\treturn true\n\tend 'warmRebuildProbeMethod'\nend 'WarmRebuildProbeHost'"
 
 // The fewest source files on which the INVALIDATION property says anything at all. TWO, and the
 // reason is arithmetic rather than taste: the property's halves assert "a declaration edit
@@ -427,6 +443,15 @@ function verifyInvalidation(inputPath FilePath, target Target) returns bool thro
 	fileChanged(project, path: editedPath, content: "{original}\n{ReceiverKindEditAfter}\n")
 	let receiverKindEditMisses = try parseMissesOnRequery(project)
 
+	// Seat the METHOD receiver-kind probe at its BEFORE value — a declaration edit, discarded for the same
+	// reason the three above are.
+	fileChanged(project, path: editedPath, content: "{original}\n{MethodReceiverKindEditBefore}\n")
+	_ = try parseMissesOnRequery(project)
+
+	// The measurement: same type, same method, same result, no parameters — only `static` moved.
+	fileChanged(project, path: editedPath, content: "{original}\n{MethodReceiverKindEditAfter}\n")
+	let methodReceiverKindEditMisses = try parseMissesOnRequery(project)
+
 	// A synthetic edit that stopped the program parsing would make BOTH assertions pass for the
 	// wrong reason — a failed parse is never cached, so it re-misses forever. Refuse to report on a
 	// probe whose premise broke.
@@ -444,10 +469,11 @@ function verifyInvalidation(inputPath FilePath, target Target) returns bool thro
 	let globalValueEditIsLocal = assertCounterMove("a top-level VAR's value edit re-parses only the edited file (parseMisses)", before: NoCounterMove, after: globalValueEditMisses, expectedDelta: OneQuery)
 
 	let receiverKindEditInvalidatesEveryFile = assertCounterMove("an interface requirement's `static` FLAG edit re-parses EVERY file (parseMisses)", before: NoCounterMove, after: receiverKindEditMisses, expectedDelta: fileCount)
+	let methodReceiverKindEditInvalidatesEveryFile = assertCounterMove("a method's `static` FLAG edit re-parses EVERY file (parseMisses)", before: NoCounterMove, after: methodReceiverKindEditMisses, expectedDelta: fileCount)
 
-	let allOk = bytesEditIsLocal and declarationEditInvalidatesEveryFile and constantValueEditInvalidatesEveryFile and globalValueEditIsLocal and receiverKindEditInvalidatesEveryFile
+	let allOk = bytesEditIsLocal and declarationEditInvalidatesEveryFile and constantValueEditInvalidatesEveryFile and globalValueEditIsLocal and receiverKindEditInvalidatesEveryFile and methodReceiverKindEditInvalidatesEveryFile
 	if allOk 'passed'
-		print("PASS invalidation: bytes-only edit re-parsed 1 file; declaration edit re-parsed all {fileCount}; constant-value edit re-parsed all {fileCount}; var-value edit re-parsed 1 file; `static`-flag edit re-parsed all {fileCount}\n")
+		print("PASS invalidation: bytes-only edit re-parsed 1 file; declaration edit re-parsed all {fileCount}; constant-value edit re-parsed all {fileCount}; var-value edit re-parsed 1 file; a requirement's and a method's `static`-flag edits each re-parsed all {fileCount}\n")
 		return true
 	end 'passed'
 
