@@ -592,3 +592,89 @@ end 'main'
 ```maxoncstderr
 error E3114: <fragment>:35:2: 'current' taking 0 argument(s) is provided by both Derived.current() returns Integer and Base.current() returns Integer through interface 'Derived' — a witness dispatch binds ONE table slot, and these are two, so there is nothing to choose by. Rename one requirement, or drop one of the constraints
 ```
+
+<!-- test: existential.merge-phi-two-conformers -->
+⭐ **THE DISPATCH IS GENUINELY DYNAMIC, and this is the case that proves it.** `s` is a merge PHI over two
+DIFFERENT conformers, so no static reading of the source can say which `current`/`advance` a trip will
+reach — the witness half travelling with the value is the only thing that decides, and the two answers
+differ. `pairInterfaceWitness`'s own list of producers names a merge phi; this is that producer, walked.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Seq
+	function current() returns Integer
+	function advance() throws IterationError
+end 'Seq'
+
+type Upto implements Seq
+	var pos as Integer
+	let limit as Integer
+
+	export static function create(limit Integer) returns Self
+		return Self{pos: 1, limit: limit}
+	end 'create'
+
+	export function current() returns Integer
+		return self.pos
+	end 'current'
+
+	export function advance() throws IterationError
+		if self.pos >= self.limit 'atTheLast'
+			throw IterationError.exhausted
+		end 'atTheLast'
+		self.pos = self.pos + 1
+	end 'advance'
+end 'Upto'
+
+type Down implements Seq
+	var pos as Integer
+
+	export static function create(start Integer) returns Self
+		return Self{pos: start}
+	end 'create'
+
+	export function current() returns Integer
+		return self.pos
+	end 'current'
+
+	export function advance() throws IterationError
+		if self.pos <= 1 'atTheLast'
+			throw IterationError.exhausted
+		end 'atTheLast'
+		self.pos = self.pos - 1
+	end 'advance'
+end 'Down'
+
+function makeUp() returns Seq
+	return Upto.create(4)
+end 'makeUp'
+
+function makeDown() returns Seq
+	return Down.create(3)
+end 'makeDown'
+
+function pick(up bool) returns Integer
+	var s = makeUp()
+	if not up 'other'
+		s = makeDown()
+	end 'other'
+	var sum = 0 as Integer
+	for item in s 'walk'
+		sum = sum + item
+	end 'walk'
+	return sum
+end 'pick'
+
+function main() returns ExitCode
+	print("{pick(true)}\n")
+	print("{pick(false)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+10
+6
+```
