@@ -875,6 +875,26 @@ export enum CalleeMint
 	// cannot read "the compiler owns this `__` name" off the name, and a diagnostic quoting the callee would
 	// name a symbol absent from the program (`Project.fieldDefaultCalleeSpelling` is the decode).
 	fieldDefaultHelper
+	// ⭐⭐ **THE QUALIFIER IS THE COMPILER'S AND THE MEMBER IS THE AUTHOR'S — `p.toString()` ⇒
+	// `FilePath.toString` (F31). APPENDED at the end of the enum, per the band-append invariant.**
+	//
+	// The four arms above all say *"the author wrote NO call like this at all"*. This one says something
+	// weaker and it is the weaker fact that is needed: a method dispatch spells its callee's HEAD out of the
+	// receiver's RESOLVED TYPE, which is a name that need not appear at the call site — or anywhere in the
+	// author's file.
+	//
+	// ⚠ **IT MATTERS ONLY WHERE THAT RESOLVED NAME IS ONE *THIS COMPILE* MINTED**, which is the stdlib/user
+	// shadow rename: under a user `type FilePath`, `Directory.currentPath().join(…)` dispatches on
+	// `__FilePath.join`, and the reserved-CALL door read that `__` as the author reaching for a compiler
+	// intrinsic (**E3004**, measured) about a callee no author wrote and a function the program declares.
+	// The head's provenance is the one fact that tells it from a written-out `__FilePath.join(p, …)`, which
+	// stays refused — see `Parser.requireCalleeIsNotReservedName` and `stdlib-user-shadows.md`.
+	//
+	// ⛔ **IT IS THEREFORE NOT "THE COMPILER SPELLED THIS CALLEE", AND ITS READERS MAY NOT TREAT IT AS THE
+	// OTHER FOUR.** `SemanticCheck.calleeVisibleFrom` exempts a minted callee from the export rule because
+	// the author named nothing; here the author named the MEMBER, so visibility (E3008) still answers for it,
+	// and that reader asks a roster rather than `!= notMinted`.
+	resolvedTypeQualifier
 end 'CalleeMint'
 
 export union MaxonOp

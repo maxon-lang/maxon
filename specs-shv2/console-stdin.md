@@ -57,9 +57,17 @@ MEASURED on the same program under both, which is the only reason this is stated
 than as shv2's behaviour. (The two spell the subject differently — the bootstrap qualifies it
 `stdlib.Stdin.eof` — which is a namespace-rendering difference, not a disagreement about the rule.)
 
-⇒ **So `eof()` is not directly pinnable from a spec case, and no case below pretends to be pinning
-it.** What the public surface CAN reach, it reaches through `readLine()`'s throw: the state machine
-under it is exercised, and its observable consequence is asserted.
+⇒ **So `eof()`'s BEHAVIOUR is not directly pinnable from a spec case, and no case below pretends to
+be pinning it.** What the public surface CAN reach, it reaches through `readLine()`'s throw: the
+state machine under it is exercised, and its observable consequence is asserted.
+
+**The REFUSAL is pinnable, though, and it is now pinned** (`error.a-non-exported-method-is-refused`),
+because it is the only case in the suite that asks the visibility question of an INSTANCE METHOD.
+Every other E3008 case names a free function or a static, and those reach the check by a different
+door: a method dispatch's callee head is the RECEIVER'S RESOLVED TYPE, so it carries
+`CalleeMint.resolvedTypeQualifier` (F31) and `SemanticCheck.mintSpellsTheWholeCallee` is what keeps
+it answerable — a minted callee is otherwise exempt from the export rule, and read as "minted,
+therefore the compiler's" that arm would have exempted every method call in every program.
 
 ### `eof()` is not "has the stream ended", it is "is there nothing left"
 
@@ -103,6 +111,23 @@ end 'main'
 ```
 ```exitcode
 9
+```
+
+<!-- test: console-stdin.error.a-non-exported-method-is-refused -->
+<!-- targets: x64-windows -->
+⭐ **THE ONE CASE IN THE SUITE THAT ASKS VISIBILITY OF AN INSTANCE METHOD.** `eof()` carries no
+`export`, and a user program holding a `Stdin` value is refused it — the fact the section above
+MEASURED under both compilers and left unpinned. It is pinned here because the method-dispatch door
+is a different route into `SemanticCheck.calleeVisibleFrom` than the free function and static every
+other E3008 case takes, and nothing else would notice if that route stopped asking.
+```maxon
+function main() returns ExitCode
+	var stdin = Console.stdin()
+	return 3 if stdin.eof() else 4
+end 'main'
+```
+```maxoncstderr
+error E3008: <fragment>:4:20: function 'Stdin.eof' is not exported
 ```
 
 <!-- test: console-stdin.a-second-reader-also-sees-eof -->

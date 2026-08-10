@@ -2124,6 +2124,12 @@ function callDiagnosticNoun(callee ByteArray, mint CalleeMint) returns ByteArray
 		// ⭐ A field default's helper (S2f): the author wrote a struct literal that OMITTED the field, so
 		// the nearest thing they wrote is the field itself — `Bag.items`.
 		fieldDefaultHelper then return fieldDefaultCalleeSpelling(callee)
+		// ⭐ A method dispatch (F31): the author wrote the MEMBER and a receiver, and `<Type>.<member>` is
+		// the noun every method diagnostic in this compiler already uses for that — `p.join(1, 2)` reports
+		// `'FilePath.join'`, naming the type off the receiver exactly as this callee does. So the mangled
+		// name IS the spelling to quote, and this arm exists to SAY that rather than to inherit it from
+		// `notMinted`.
+		resolvedTypeQualifier then return callee
 	end 'm'
 end 'callDiagnosticNoun'
 
@@ -2380,7 +2386,7 @@ function calleeVisibleFrom(signatures ProgramSignatures, funcNames FunctionNameI
 	// a file may NAME, and a minted callee is one the compiler spelled out of something else the author
 	// wrote (`int.fromString` ⇒ `__int_fromString`, an omitted argument ⇒ its default helper,
 	// `FilePath from "…"` ⇒ `FilePath.init`). Each mint's own header says the call is the compiler's.
-	if mint != CalleeMint.notMinted 'theCompilersOwnSpelling'
+	if mintSpellsTheWholeCallee(mint) 'theCompilersOwnSpelling'
 		return true
 	end 'theCompilersOwnSpelling'
 
@@ -2415,6 +2421,27 @@ function calleeVisibleFrom(signatures ProgramSignatures, funcNames FunctionNameI
 
 	return signatures.isVisibleFrom(declared.visibility, declFilePath: declared.sourceFilePath, readerFilePath: readerFilePath)
 end 'calleeVisibleFrom'
+
+// ⭐⭐ **DID THE MINT SPELL THE WHOLE CALLEE, OR ONLY ITS QUALIFIER? (F31)** — the exemption above turns on
+// the WHOLE of it, because visibility governs what a file may NAME and a file that named nothing cannot be
+// refused a name.
+//
+// ⛔ **IT IS A ROSTER RATHER THAN `mint != notMinted`, AND THE DIFFERENCE IS A HOLE THAT WOULD HAVE OPENED
+// SILENTLY.** `resolvedTypeQualifier` is the first arm where the author DID name something — the member of
+// `p.toString()` — with only the head resolved for them. Read as "minted, therefore the compiler's", it
+// would have exempted EVERY method call in every program from E3008, so a non-exported method would have
+// become callable from any file with a value in hand, and no test in the suite asks that question of a
+// method. A `match` also makes the next arm a compile error here rather than a default it inherits.
+function mintSpellsTheWholeCallee(mint CalleeMint) returns bool
+	return match mint 'm'
+		notMinted gives false
+		primitiveStatic gives true
+		paramDefaultHelper gives true
+		stringLiteralInit gives true
+		fieldDefaultHelper gives true
+		resolvedTypeQualifier gives false
+	end 'm'
+end 'mintSpellsTheWholeCallee'
 
 // ⭐⭐ **E3095 — A BARE CALL THAT COULD MEAN MORE THAN ONE DIRECTORY'S DECLARATION (N1c).** Answers whether
 // it reported, so `validateCall` can suppress the "no such function" it would otherwise give the same call.

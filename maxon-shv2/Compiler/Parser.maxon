@@ -3953,14 +3953,33 @@ function requireCalleeIsNotReservedName(callee ByteArray, anchor Token, fileDecl
 	// load-bearing for A1r's stated reason: the mint says the compiler owns the head, and `declaresCallee`
 	// says the program actually has that function — a mint-only door would admit `__Clock.whatever`.
 	//
-	// ⚠⚠ **AND STDLIB SOURCE IS THE THIRD CLAUSE, FOR `requireUnreservedName`'s REASON (A1s wave 2 review).**
-	// The mint is written into STDLIB tokens only, so a `__Clock.nowMs()` reaching this door from a USER file
-	// was typed by the author — and the rule this whole mechanism states is that the moved name is one "no
-	// user program can reach". MEASURED without this clause: a user program declaring `type Clock` and calling
-	// `__Clock.nowMs()` COMPILED AND RAN, returning the stdlib clock, while the identical call in a program
-	// with no shadow was correctly refused. A reserved call whose legality turns on an unrelated declaration
-	// elsewhere in the program is exactly the reachability this rung is supposed to close.
-	if isStdlibSource and signatures.isMintedStdlibShadowCallee(callee) and signatures.declaresCallee(callee) 'theCompilersOwnMint'
+	// ⚠⚠ **AND THE THIRD CLAUSE IS THAT THE HEAD IS NOT BYTES THE AUTHOR TYPED, FOR `requireUnreservedName`'s
+	// REASON (A1s wave 2 review).** A `__Clock.nowMs()` the author wrote out in a USER file is the author
+	// reaching into the reserved space, and the rule this whole mechanism states is that the moved name is
+	// one "no user program can reach" by NAME. MEASURED without any such clause: a user program declaring
+	// `type Clock` and calling `__Clock.nowMs()` COMPILED AND RAN, returning the stdlib clock, while the
+	// identical call in a program with no shadow was correctly refused
+	// (`stdlib-user-shadows.error.the-mint-is-not-reachable-from-user-code` holds that shut).
+	//
+	// ⭐⭐ **BUT "THE AUTHOR TYPED IT" IS NOT "THE FILE IS A USER FILE", AND READ AS IF IT WERE, THIS CLAUSE
+	// MADE THE MOVED DECLARATION UNUSABLE (F31).** The contest's soundness argument is about NAME
+	// reachability (`Queries.contestStdlibDeclarationsAgainstUserNames`) — and a VALUE crosses the same file
+	// boundary a name does not. `stdlib/Directory.maxon`'s `currentPath()` hands user code a `FilePath`,
+	// which under a user `type FilePath` is a `__FilePath`, and a method call on it spells its callee out of
+	// that resolved TYPE: **`E3004 … '__FilePath.join': the '__' prefix names a compiler intrinsic`**, about
+	// a callee no author wrote and a function the program declares. Two different meanings on one spelling —
+	// the `__` the compiler RESERVED and the `__` this compile MINTED.
+	//
+	// ⇒ The clause is the PROVENANCE OF THE HEAD, of which the stdlib file test is one case: a stdlib file's
+	// identifier tokens were rewritten by the contest before this parse saw them, so nothing it spells is the
+	// author's. The other is `CalleeMint.resolvedTypeQualifier`, stated by the doors that join a resolved
+	// type name to a written member, whichever file they stand in. It is a per-SITE fact for
+	// `CalleeMint`'s standing reason: the two spellings build the identical callee bytes, so no name-keyed
+	// rule can tell them apart.
+	//
+	// The disjunction is first because both halves are single compares while `isMintedStdlibShadowCallee` is
+	// the allocating table scan this function's own header keeps off the common path.
+	if (isStdlibSource or mint == CalleeMint.resolvedTypeQualifier) and signatures.isMintedStdlibShadowCallee(callee) and signatures.declaresCallee(callee) 'theCompilersOwnMint'
 		return
 	end 'theCompilersOwnMint'
 
@@ -14547,7 +14566,7 @@ export type Parser
 		// `canonicalGenericBaseName`. The SPELLING is kept only as `baseIsBuffer`, which decides the member
 		// surface every declared position naming this alias takes.
 		let baseIsBuffer = baseTok.value.equals(ManagedMemoryTypeName)
-		let baseName = canonicalGenericBaseName(baseTok.value)
+		let baseName = self.canonicalGenericBaseNameInThisFile(baseTok.value)
 		var args = GenericArgNodeArray.create()
 		let argsStart = self.pos
 		let argCount = try self.parseGenericArgNodes(args, inlineElement: self.baseStoresArgumentsInline(baseName), bareCommaList: true, slot: self.genericArgSlotOf(baseName))
@@ -14608,6 +14627,31 @@ export type Parser
 	function baseStoresArgumentsInline(name ByteArray) returns bool
 		return self.signatures.isVectorBaseName(name) or self.signatures.isArrayBaseName(name)
 	end 'baseStoresArgumentsInline'
+
+	// ⭐⭐ **`__ManagedMemory`'s FOLD TARGET IS THE NAME *THIS FILE* SPELLS `Array` UNDER (F31).**
+	// `canonicalGenericBaseName` mints `Array` from a CONSTANT, which makes it the one identifier in a stdlib
+	// file that `shadowRenamedTokens` never reached — it was never a token, so the contest's "uniform over
+	// stdlib source" argument does not cover it.
+	//
+	// ⛔ **AND THAT GAP UNDOES THE VERY BINDING THE FOLD EXISTS FOR.** Under a user `type Array` the corpus
+	// declaration is `__Array`, so `stdlib/String.maxon`'s `typealias ByteBuffer = __ManagedMemory with Byte`
+	// folded to a bare `Array with Byte` — the USER's container — while the same file's
+	// `ByteArray = Array with Byte` had been rewritten to `__Array with Byte`. MEASURED: **`E3005
+	// stdlib/String.maxon:160:20: argument type mismatch for 'managed': expected '__ManagedMemory with Byte',
+	// got 'ByteBuffer'`**, i.e. one record with two ids, which is exactly what `canonicalGenericBaseName`'s
+	// header says the fold is there to prevent.
+	//
+	// ⚠ A USER file is untouched, because its TOKENS are untouched: there `Array` means the user's own
+	// declaration and the constant already names it. And the rename is applied only when the fold actually
+	// fired — every other base name arrived as a token and has already been through the rewrite.
+	function canonicalGenericBaseNameInThisFile(baseName ByteArray) returns ByteArray
+		let canonical = canonicalGenericBaseName(baseName)
+		if not self.isStdlibSource or canonical.equals(baseName) 'noNameWasSynthesized'
+			return canonical
+		end 'noNameWasSynthesized'
+
+		return self.signatures.stdlibShadowRenameOf(canonical)
+	end 'canonicalGenericBaseNameInThisFile'
 
 	function readSizedBaseElementCount(baseTok Token) returns FixedElementCount throws ParseError
 		if not self.signatures.isVectorBaseName(baseTok.value) 'unsizedBase'
@@ -14770,7 +14814,7 @@ export type Parser
 			let subSize = try self.readSizedBaseElementCount(baseTok)
 			// The canonical base, for the top-level arm's reason (W43): a nested `__ManagedMemory with T` must
 			// intern to the same instance a nested `Array with T` does, or one record has two ids.
-			let subBaseName = canonicalGenericBaseName(baseTok.value)
+			let subBaseName = self.canonicalGenericBaseNameInThisFile(baseTok.value)
 			var subNodes = GenericArgNodeArray.create()
 			let subCount = try self.parseGenericArgNodes(subNodes, inlineElement: self.baseStoresArgumentsInline(subBaseName), bareCommaList: false, slot: self.genericArgSlotOf(subBaseName))
 			self.checkGenericInstance(baseTok, argCount: subCount)
@@ -14984,7 +15028,7 @@ export type Parser
 		// ⭐ **ASKED ABOUT THE CANONICAL BASE AND BLAMED ON THE WRITTEN ONE (W43)** — `__ManagedMemory with T`
 		// is an `Array` instance (`canonicalGenericBaseName`), so it must be checked against `Array`'s arity;
 		// the sentence still quotes the spelling the author actually wrote, because that is the word to change.
-		let baseName = canonicalGenericBaseName(baseTok.value)
+		let baseName = self.canonicalGenericBaseNameInThisFile(baseTok.value)
 		if self.signatures.isBuiltinGenericBaseName(baseName) 'builtinGeneric'
 			let expected = self.signatures.builtinGenericTypeParamCount(baseName)
 			if argCount != expected 'wrongArity'
@@ -27246,9 +27290,11 @@ export type Parser
 	// the call site had already fixed. A plain-struct receiver supplies `none` and substitutes nothing, so
 	// every non-generic iterable emits exactly what it emitted before.
 	//
-	// `CalleeMint.notMinted` because both halves of the name are the AUTHOR'S — the type is one they declared
-	// and the method is one they wrote, joined the way `declaredMethodName` already joined them when the
-	// signature was published. Nothing here is in the reserved space.
+	// `CalleeMint.resolvedTypeQualifier` because the HEAD is the surface's declaring type — resolved from the
+	// receiver, not read from this call site — while the member is the protocol's. The method half is joined
+	// the way `declaredMethodName` already joined it when the signature was published; what the mint records
+	// is that no token here spells the type, so a moved stdlib declaration's protocol call is the compiler's
+	// own name and not an author reaching into the reserved space (F31).
 	//
 	// ⭐⭐ **AN EXISTENTIAL SOURCE TAKES THE OTHER FORK, AND IT IS A DIFFERENT OP RATHER THAN A DIFFERENT
 	// NAME.** There is no callee to name: the conformer is unknown in this body, so the protocol call is a
@@ -27275,7 +27321,7 @@ export type Parser
 		var args = singletonArgs(source)
 		var argLabels = emptyArgLabels(args)
 		var argRanges = uniformArgRanges(args, range: SourceRange.ofToken(anchor))
-		let result = try self.emitCall(qualifiedMethodName(typeName, methodName: methodName), anchor: anchor, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: NoImmutableArgNames, rparenTok: anchor, resultUsed: resultUsed, constructorInstance: self.receiverConstructorInstance(source), mint: CalleeMint.notMinted)
+		let result = try self.emitCall(qualifiedMethodName(typeName, methodName: methodName), anchor: anchor, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: NoImmutableArgNames, rparenTok: anchor, resultUsed: resultUsed, constructorInstance: self.receiverConstructorInstance(source), mint: CalleeMint.resolvedTypeQualifier)
 		self.retypeInstanceMethodResult(result, receiver: source)
 		return result
 	end 'emitDeclaredProtocolCall'
@@ -34901,7 +34947,9 @@ export type Parser
 		var argLabels = emptyArgLabels(args)
 		var argRanges = uniformArgRanges(args, range: range)
 
-		let equal = try self.emitCall(callee, anchor: opTok, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: NoImmutableArgNames, rparenTok: opTok, resultUsed: true, constructorInstance: ConstructorInstance.none, mint: CalleeMint.notMinted)
+		// `resolvedTypeQualifier`: the author wrote an OPERATOR, so not one byte of this callee's head is at
+		// the call site — it is the left operand's resolved type name (F31).
+		let equal = try self.emitCall(callee, anchor: opTok, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: NoImmutableArgNames, rparenTok: opTok, resultUsed: true, constructorInstance: ConstructorInstance.none, mint: CalleeMint.resolvedTypeQualifier)
 
 		// The RESULT is asked of the emitted call rather than of the declaration, because `emitCall` has
 		// already resolved the callee's real return type and a second lookup would be a second answer. A
@@ -36463,9 +36511,10 @@ export type Parser
 		argLabels.push(EmptySourceText)
 		var argRanges = SourceRangeArray.create()
 		argRanges.push(range)
-		// `written`: the callee is `<the author's own type name>.toString`, so the reserved-space door must
-		// judge it exactly as it judges the same call spelled out (`p.toString()`) — see `CalleeMint`.
-		let result = try self.emitCall(callee, anchor: exprTok, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: NoImmutableArgNames, rparenTok: exprTok, resultUsed: true, constructorInstance: ConstructorInstance.none, mint: CalleeMint.notMinted)
+		// `resolvedTypeQualifier`: the reserved-space door must judge this exactly as it judges the same call
+		// spelled out (`p.toString()`), and that is the same mint the written form takes — the head is the
+		// interpolated value's resolved type, and here the author wrote no member name either (F31).
+		let result = try self.emitCall(callee, anchor: exprTok, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: NoImmutableArgNames, rparenTok: exprTok, resultUsed: true, constructorInstance: ConstructorInstance.none, mint: CalleeMint.resolvedTypeQualifier)
 		self.materializeStringRecordPart(result, partBufs: partBufs, partLens: partLens, range: range)
 	end 'materializeStructToStringPart'
 
@@ -39220,7 +39269,7 @@ export type Parser
 		// The enum's name comes from the receiver's TYPE, never from the anchor token: the anchor is a
 		// variable's name (`d`), a `.` for a temporary, and `self` is not even an identifier.
 		let memberTok = self.current()
-		return try self.parseCallNamed(func, callee: qualifiedMethodName(self.internedName(recv.nameId), methodName: memberTok.value), anchor: memberTok, receiver: ReceiverArg.value(recv.value, immutableName: recv.immutableName, subjectName: recv.subjectName, anchor: recv.anchor), resultUsed: resultUsed, constructorInstance: ConstructorInstance.none, mint: CalleeMint.notMinted)
+		return try self.parseCallNamed(func, callee: qualifiedMethodName(self.internedName(recv.nameId), methodName: memberTok.value), anchor: memberTok, receiver: ReceiverArg.value(recv.value, immutableName: recv.immutableName, subjectName: recv.subjectName, anchor: recv.anchor), resultUsed: resultUsed, constructorInstance: ConstructorInstance.none, mint: CalleeMint.resolvedTypeQualifier)
 	end 'dispatchEnumMethod'
 
 	// ⭐⭐ **THE BINDING A METHOD DISPATCH ACTS ON — and a SELF-FIELD ALIAS is the one that has to be
@@ -39506,7 +39555,9 @@ export type Parser
 		// `ParseError` out of the arguments aborts the file's parse, so a hint left set reaches no later closure.
 		let savedHint = self.closureParamHint
 		self.closureParamHint = self.extensionElementTransformHint(base.box, methodName: memberTok.value, callee: callee)
-		let result = try self.parseCallNamed(func, callee: callee, anchor: memberTok, receiver: ReceiverArg.value(base.box, immutableName: base.immutableName, subjectName: base.subjectName, anchor: baseTok), resultUsed: resultUsed, constructorInstance: self.receiverConstructorInstance(base.box), mint: CalleeMint.notMinted)
+		// `resolvedTypeQualifier`: the author wrote the MEMBER and a receiver; the head above came from
+		// `base.layout`, so no token at this call site spells it (F31).
+		let result = try self.parseCallNamed(func, callee: callee, anchor: memberTok, receiver: ReceiverArg.value(base.box, immutableName: base.immutableName, subjectName: base.subjectName, anchor: baseTok), resultUsed: resultUsed, constructorInstance: self.receiverConstructorInstance(base.box), mint: CalleeMint.resolvedTypeQualifier)
 		self.closureParamHint = savedHint
 		self.retypeInstanceMethodResult(result, receiver: base.box)
 
@@ -51994,9 +52045,11 @@ export type Parser
 			return try self.dispatchArrayMethod(func, arr: recv.value, giid: recv.nameId, resultUsed: resultUsed, immutableReceiverName: recv.immutableName, borrowSubjectName: recv.subjectName, receiverOwner: recv.owner, receiverStorage: self.subjectStorageMask(func, subjectName: recv.subjectName), viaManagedField: false)
 		end 'arrayRosterMember'
 
+		// `resolvedTypeQualifier`: the author wrote the bare member and NO qualifier at all — the head is the
+		// enclosing declaration's name, which under a stdlib/user shadow is this compile's own mint (F31).
 		if self.isImplicitSelfMethod(calleeTok.value) 'implicitSelfMethod'
 			let receiver = try self.implicitSelfReceiver(calleeTok.value, anchor: calleeTok)
-			return try self.parseCallNamed(func, callee: qualifiedMethodName(self.enclosingType, methodName: calleeTok.value), anchor: calleeTok, receiver: receiver, resultUsed: resultUsed, constructorInstance: ConstructorInstance.none, mint: CalleeMint.notMinted)
+			return try self.parseCallNamed(func, callee: qualifiedMethodName(self.enclosingType, methodName: calleeTok.value), anchor: calleeTok, receiver: receiver, resultUsed: resultUsed, constructorInstance: ConstructorInstance.none, mint: CalleeMint.resolvedTypeQualifier)
 		end 'implicitSelfMethod'
 
 		// A free call has no receiver and constructs no generic instance: there is no value to its left, and

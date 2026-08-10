@@ -11800,8 +11800,36 @@ export type ProgramSignatures
 	// `fieldCount·8`. The one home of "is this instance an `Array`?" so no site respells the base name.
 
 	// Is `name` the builtin `Array` type — the base of every array instance.
+	//
+	// ⭐⭐ **A CONTESTED `Array` MOVED INTO THE RESERVED SPACE IS STILL THAT BASE NAME (F31).** When a user
+	// program declares its own `type Array`, `contestStdlibTypeName` renames the CORPUS declaration to
+	// `__Array` so the user's spelling wins the bare name — and this predicate, keyed on the spelling alone,
+	// then answered FALSE about `stdlib/Array.maxon`'s own declaration. MEASURED: **`E2015 … '__Array'
+	// implements 'BuiltinArrayLiteral' … shv2 mints that record only for the two names it owns the record FOR`**
+	// at `stdlib/Array.maxon:114`, i.e. the compiler refusing the very file whose record it owns, in 21 cases.
+	//
+	// ⚠ **THE SPELLING MOVED; THE IDENTITY DID NOT, AND THE IDENTITY IS WHAT THIS ANSWERS.** It rests on
+	// `Array with T` and `__ManagedMemory with T` being one `GenericInstanceId`, a fact about the DECLARATION
+	// rather than about the six bytes it currently goes by. Both names answer true at once and must: the
+	// user's `Array` is a container it declared, and `arrayNameIsItsOwnRecord` tells the two apart by SHAPE,
+	// exactly as it already had to for a user `Array` with no contest at all.
+	//
+	// ⚠ **`Array` IS THE ONE CONTESTED NAME THIS BITES, WHICH IS WHY ITS SIBLINGS TAKE NO SUCH ARM.**
+	// `isMapBaseName` answers FALSE the moment the corpus declares a `Map`, because a corpus `Map` is an
+	// ordinary declared generic and nothing about it is served by name. An `Array` never stops being
+	// compiler-owned — its record IS its buffer — so its surface is served by name for as long as it exists.
 	export function isArrayBaseName(name ByteArray) returns bool
-		return name.equals(ArrayBuiltinBaseName)
+		if name.equals(ArrayBuiltinBaseName) 'theBareName'
+			return true
+		end 'theBareName'
+
+		// The shape test first, for `Parser.requireUnreservedName`'s measured reason: this predicate sits on
+		// every array question in the program, the table lookup is not free, and no ordinary name can reach it.
+		if not bytesStartWith(name, prefix: ReservedTypeNamePrefix) 'notAMintedName'
+			return false
+		end 'notAMintedName'
+
+		return name.equals(self.stdlibShadowRenameOf(ArrayBuiltinBaseName))
 	end 'isArrayBaseName'
 
 	// Is generic instance `id` an `Array with T`? (Reads the base NAME, which needs no base struct.)

@@ -82,6 +82,33 @@ disagree about one name. Both shapes are token-shaped (an identifier PRECEDED by
 `:`), so the contest detects them and refuses the program with **E3112** rather than risking it. Nothing in
 `stdlib/` does this today; the refusal is what makes that a checked fact rather than an assumption.
 
+### ⭐⭐ What the rename must still leave WORKING: the moved declaration's own members
+
+The soundness argument above is about NAMES — *"only the cross-file reachability of the bare name moves"* —
+and a name is not the only thing that crosses that file boundary. A **VALUE** does too. A listed module
+whose signature mentions the contested type keeps handing user code values of it: `stdlib/Directory.maxon`'s
+`Directory.currentPath()` returns a `FilePath`, and under a user `type FilePath` that result is a
+`__FilePath`. The value is fine; what broke was every operation on it whose callee the compiler spells out
+of the value's own TYPE.
+
+**A method call is exactly that.** `p.toString()` is dispatched by joining the receiver's resolved type name
+to the member — `__FilePath.toString` — and the reserved-CALL door then read the `__` as *"the author reached
+for a compiler intrinsic"* and refused with **E3004**, about a callee no author wrote and about a function
+the program plainly declares. Those are two different meanings sharing one spelling: the `__` of
+`__mm_alloc` is a PREFIX THE COMPILER RESERVED, and the `__` of `__FilePath` is a NAME THIS COMPILE MINTED.
+
+⚠ **A FIELD read never had the problem, and the difference is what pins the diagnosis.** `info.isDirectory`
+on a `__FileInfo` reads the value's own layout and names nothing — MEASURED working throughout, and pinned
+below beside the method case. So the defect was never *"a renamed declaration is broken"*; it was precisely
+*"a callee the compiler mints out of a renamed type is refused"*.
+
+⇒ The exemption keys on the **MINT**, which is the fact the name's shape cannot carry
+(`Parser.requireCalleeIsNotReservedName`, `CalleeMint.resolvedTypeQualifier`). It is deliberately NOT a
+widening of the reserved space: the head must be one THIS COMPILE minted, some file must DECLARE the
+callee, and the head must not be bytes a user file's author typed — which is why
+`error.the-mint-is-not-reachable-from-user-code` below is unchanged. `__Clock.nowMs()` written out in a user
+file is still refused; `c.nowMs()` on a value of the moved declaration is not.
+
 ### What the rule must NOT do
 
 - **A collision between two STDLIB declarations stays a collision.** Two listed modules declaring one type
@@ -222,15 +249,96 @@ end 'main'
 11
 ```
 
+<!-- test: stdlib-user-shadows.a-method-on-a-value-of-the-moved-declaration -->
+⭐ **THE VALUE CROSSES THE FILE BOUNDARY THE NAME DOES NOT.** `Directory.currentPath()` hands user code a
+`FilePath` — a `__FilePath` under this shadow — and `join`/`filename` are ordinary declared methods of that
+moved declaration. Before this they were `E3004 … call to undefined function '__FilePath.join': the '__'
+prefix names a compiler intrinsic`, about a callee the author never wrote. `"alpha.txt"` is 9 bytes, and
+the user's own `FilePath` supplies the other 4.
+```maxon
+type FilePath
+	export var tag as int
+
+	static function make() returns FilePath
+		return FilePath{tag: 4}
+	end 'make'
+end 'FilePath'
+
+function main() returns ExitCode
+	let child = Directory.currentPath().join("alpha.txt")
+	return (FilePath.make().tag + child.filename().byteLength()) as ExitCode
+end 'main'
+```
+```exitcode
+13
+```
+
+<!-- test: stdlib-user-shadows.both-declarations-serve-one-member-name-at-once -->
+⭐⭐ **BOTH DIRECTIONS IN ONE PROGRAM, WHICH IS THE ONLY WAY TO OBSERVE THAT NEITHER DISPLACED THE OTHER.**
+`filename()` is declared by the user's `FilePath` AND by the moved corpus one, and each receiver reaches its
+own: the user's answers 7, the corpus's answers `"alpha.txt"`. A rule that resolved one name to one
+declaration program-wide could not produce 16.
+```maxon
+type FilePath
+	export var tag as int
+
+	static function make() returns FilePath
+		return FilePath{tag: 2}
+	end 'make'
+
+	export function filename() returns ExitCode
+		return 7
+	end 'filename'
+end 'FilePath'
+
+function main() returns ExitCode
+	let mine = FilePath.make()
+	let child = Directory.currentPath().join("alpha.txt")
+	return (mine.filename() + child.filename().byteLength()) as ExitCode
+end 'main'
+```
+```exitcode
+16
+```
+
+<!-- test: stdlib-user-shadows.a-field-of-a-value-of-the-moved-declaration -->
+⚠ **THE CONTRAST THAT PINS THE DIAGNOSIS.** A FIELD read on a value of the moved declaration reads the
+value's own layout and names nothing, so it worked while the method call did not — MEASURED before the fix,
+and pinned here so a future cure that reaches the method by disturbing the value's layout is caught. The cwd
+is a directory, so `isDirectory` adds 1 to the user's own 5.
+```maxon
+type FileInfo
+	export var tag as int
+
+	static function make() returns FileInfo
+		return FileInfo{tag: 5}
+	end 'make'
+end 'FileInfo'
+
+function main() returns ExitCode
+	let info = try File.info(Directory.currentPath()) otherwise 'missing'
+		return 90 as ExitCode
+	end 'missing'
+	return (FileInfo.make().tag + (1 if info.isDirectory else 0)) as ExitCode
+end 'main'
+```
+```exitcode
+6
+```
+
 <!-- test: stdlib-user-shadows.error.the-mint-is-not-reachable-from-user-code -->
-⭐ **THE MINTED NAME IS NOT A NAME USER CODE MAY CALL, AND THAT IS THE WHOLE SAFETY ARGUMENT FOR MOVING THE
-STDLIB DECLARATION INTO THE RESERVED SPACE.** `stdlib/Clock.maxon`'s `Clock.nowMs()` becomes
-`__Clock.nowMs()` under this shadow, and the reserved-CALL door has to admit that callee inside stdlib
-source — so the exemption is scoped to stdlib source rather than to the name. MEASURED before it was: this
-program COMPILED AND RAN, returning the stdlib monotonic clock, while the identical call in a program with
-no shadow was correctly refused. The diagnostic below is, position aside, the very one a program with no
-shadow gets, which is the point: whether `__Clock.nowMs` is callable must not depend on an unrelated declaration
-elsewhere in the program.
+⭐ **THE MINTED NAME IS NOT A NAME USER CODE MAY *WRITE* IN A CALL, AND THAT IS THE WHOLE SAFETY ARGUMENT
+FOR MOVING THE STDLIB DECLARATION INTO THE RESERVED SPACE.** `stdlib/Clock.maxon`'s `Clock.nowMs()` becomes
+`__Clock.nowMs()` under this shadow, and the reserved-CALL door has to admit that callee wherever the
+COMPILER put those bytes there — so the exemption is scoped to the head's PROVENANCE rather than to the
+name: a stdlib file (whose identifier tokens the contest rewrote) or a `CalleeMint.resolvedTypeQualifier`
+dispatch (whose head is a resolved type). This program is neither — the author typed `__Clock` — and it
+stays refused. MEASURED before any such scoping: it COMPILED AND RAN, returning the stdlib monotonic clock,
+while the identical call in a program with no shadow was correctly refused. The diagnostic below is,
+position aside, the very one a program with no shadow gets, which is the point: whether a user may WRITE
+`__Clock.nowMs` must not depend on an unrelated declaration elsewhere in the program.
+⚠ The sibling cases above reach that same function through a VALUE, which is not this — see
+`a-method-on-a-value-of-the-moved-declaration`.
 ```maxon
 type Clock
 	export var y as int
