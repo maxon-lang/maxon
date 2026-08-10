@@ -597,25 +597,47 @@ end 'foldInterfaceDeclarations'
 //
 // The sites arrive grouped by file, so the grouping is a WALK — `foldInterfaceDeclarations`' shape, for its
 // reason (one `Parser` per file, not per site).
+//
+// ⚠⚠ **IT IS TWO PASSES OVER THE SAME SITES, AND THE FIRST ONE IS WHAT MAKES THE SECOND ORDER-INDEPENDENT
+// (F10).** The fold below RESOLVES the type names in each body's signatures while it fills the alias
+// registries those names resolve against, so a nested `typealias` declared in one `extension` body and spelled
+// BARE from another's — `stdlib/helpers/sort/`, six files over one `extension Array` — would mean one thing in
+// a body folded first and another in a body folded later. `publishExtensionInnerAliasNames` takes the member
+// NAMES from the tokens alone, for every site, before the first body is read; see it, and
+// `ProgramSignatures.extensionInnerAliasMembers`, for why names are enough and why they cannot be taken at
+// the per-file sweep instead.
 function foldExtensionDeclarations(project Project, signatures ProgramSignatures) throws CompileError
+	try walkExtensionSitesPerFile(project, signatures: signatures, namesOnly: true)
+	try walkExtensionSitesPerFile(project, signatures: signatures, namesOnly: false)
+end 'foldExtensionDeclarations'
+
+// One pass of the walk above — the two differ ONLY in what they do at each site, so the grouping, the reader
+// construction and the OOB sentences are written once. Two copies of this loop would be two chances for the
+// passes to disagree about which sites they visit, which is the one thing that would make the pre-pass a
+// weaker guarantee than the fold it precedes.
+function walkExtensionSitesPerFile(project Project, signatures ProgramSignatures, namesOnly bool) throws CompileError
 	let sites = signatures.extensionDeclSites
 	var i = 0 as ElementCount
 	while i < sites.count() 'eachFile'
-		let path = (try sites.get(i) otherwise panic("foldExtensionDeclarations: sites.get OOB at {i} below count {sites.count()}")).path
+		let path = (try sites.get(i) otherwise panic("walkExtensionSitesPerFile: sites.get OOB at {i} below count {sites.count()}")).path
 		let tokens = try queryActiveTokens(project, path: path)
 		var reader = fileReader(project, signatures: signatures, path: path, tokens: tokens, isStdlibSource: isStdlibSourceFile(project, path: path), buildsBodies: true)
 
 		while i < sites.count() 'eachSiteInFile'
-			let site = try sites.get(i) otherwise panic("foldExtensionDeclarations: sites.get OOB at {i} below count {sites.count()}")
+			let site = try sites.get(i) otherwise panic("walkExtensionSitesPerFile: sites.get OOB at {i} below count {sites.count()}")
 			if not site.path.equals(path) 'nextFile'
 				break
 			end 'nextFile'
 
-			reader.foldExtensionDeclarationInto(signatures, site: site)
+			if namesOnly 'thePrePass'
+				reader.publishExtensionInnerAliasNames(signatures, site: site)
+			end 'thePrePass' else 'theFold'
+				reader.foldExtensionDeclarationInto(signatures, site: site)
+			end 'theFold'
 			i = i + 1
 		end 'eachSiteInFile'
 	end 'eachFile'
-end 'foldExtensionDeclarations'
+end 'walkExtensionSitesPerFile'
 
 // ⭐⭐ **WHICH METHODS CARRY THE HIDDEN LAYOUT-DESCRIPTOR PARAMETER — solved ONCE, over the whole program
 // (P1.6-B1, W23c).** A generic type's methods are declared in two places that need not share a file: its own

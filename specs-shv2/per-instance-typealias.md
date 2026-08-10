@@ -426,3 +426,317 @@ end 'main'
 ```exitcode
 0
 ```
+
+## A nested typealias is a MEMBER of its type, and every `extension` over that type may spell it
+
+A nested `typealias` is keyed `<Type>.<member>` (`Parser.qualifiedInnerGenericAlias`), which is a
+statement about WHOSE member it is and not about which file it was written in. So an `extension Foo`
+in one file may spell a member `type Foo` — or another `extension Foo` — declared somewhere else,
+exactly as it may call a method declared somewhere else.
+
+`stdlib/helpers/sort/` is the case this exists for. Six files each write `export extension Array`;
+`insertionSort.maxon:14-15` declares `SortIndex` and `SortComparator`, `mergeSort.maxon:25` declares
+`MergeScratchArray`, and the other five spell all three BARE from their own bodies.
+
+⛔ **BOTH REFERENCE COMPILERS ANSWER THIS BY MAKING THE NAME FLAT AND PROGRAM-WIDE, AND shv2
+DELIBERATELY DOES NOT.** The bootstrap writes an extension's `typealias` into `module.TypeDefs` under
+its bare name (`0-Compiler.cs:1199`), keeping an `OwnerTypeName` it never puts in any key; v1 stores it
+on `Array.innerAliases` but keeps three bare-name global fallbacks over it, one of whose comments
+records the assumption outright — *"inner-alias names are unique across the stdlib … no ambiguity"*.
+Neither can diagnose two types declaring one member name. Here the widening is the ENCLOSING TYPE's
+own members and nothing else: a member of `Holder` reaches an `extension Holder` in any file, and it
+reaches nothing else anywhere. The third case below is the half that says so.
+
+⚠ **THE TYPE'S OWN BODY IS NOT GIVEN THIS.** A `type` body's signatures are read during the per-file
+declaration sweep, which runs before any `extension` has been folded, so granting it would make the
+sweep and the real parse record one written name under two spellings. An `extension` body is read only
+by passes that both run after every extension's members are known
+(`Queries.foldExtensionDeclarations` makes two, and the first one exists for this).
+
+### A ranged member declared in another file's extension body
+
+<!-- test: cross-file-extension-declares-the-ranged-member -->
+`a.maxon`'s `extension Holder` declares `Idx`; `b.maxon`'s `extension Holder` names it bare in a
+parameter. Before this rule the second file answered `E3011 Unknown type 'Idx'`.
+```maxon
+// --- file: a.maxon
+typealias Num = int(0 to 200)
+
+export type Holder
+	export var v as Num
+
+	export static function create(v Num) returns Holder
+		return Holder{v: v}
+	end 'create'
+end 'Holder'
+
+extension Holder
+	typealias Idx = int(0 to 100)
+
+	export function fromA(i Idx) returns Num
+		return self.v + i
+	end 'fromA'
+end 'Holder'
+
+// --- file: b.maxon
+extension Holder
+	export function fromB(i Idx) returns Num
+		return self.v + i
+	end 'fromB'
+end 'Holder'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	let h = Holder.create(1)
+	let total = h.fromA(3) + h.fromB(30)
+	if total == 35 'ok'
+		return 0
+	end 'ok'
+	return 1
+end 'main'
+```
+```exitcode
+0
+```
+
+### A generic-instance member declared in another file's extension body
+
+<!-- test: cross-file-extension-declares-the-generic-instance-member -->
+`MergeScratchArray = Array with Element` is `stdlib/helpers/sort/mergeSort.maxon:25`'s shape, spelled
+from five sibling files. Here `Bag = Array with Num` is declared in `a.maxon`'s extension body and
+named from `b.maxon`'s — a different registry from the ranged case above
+(`genericAliases`, not `innerAliases`), which is why it is its own case.
+```maxon
+// --- file: a.maxon
+typealias Num = int(0 to 200)
+
+export type Holder
+	export var v as Num
+
+	export static function create(v Num) returns Holder
+		return Holder{v: v}
+	end 'create'
+end 'Holder'
+
+extension Holder
+	typealias Bag = Array with Num
+
+	export function fill() returns Bag
+		var b = Bag.create()
+		b.push(self.v)
+		b.push(self.v)
+		return b
+	end 'fill'
+end 'Holder'
+
+// --- file: b.maxon
+extension Holder
+	export function firstOf(b Bag) returns Num
+		return try b.get(0) otherwise 0
+	end 'firstOf'
+end 'Holder'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	let h = Holder.create(20)
+	let b = h.fill()
+	if h.firstOf(b) == 20 'ok'
+		return 0
+	end 'ok'
+	return 1
+end 'main'
+```
+```exitcode
+0
+```
+
+### The member is the ENCLOSING TYPE's, and an extension over ANOTHER type does not see it
+
+<!-- test: error.a-nested-member-does-not-leak-to-another-types-extension -->
+The whole point of the `<Type>.<member>` key, and the control the widening above owes: `Idx` is a
+member of `Holder`, so an `extension Other` naming it bare is still refused. Under either reference
+compiler's flat bare-name table this program compiles.
+```maxon
+// --- file: a.maxon
+typealias Num = int(0 to 200)
+
+export type Holder
+	export var v as Num
+end 'Holder'
+
+export type Other
+	export var w as Num
+end 'Other'
+
+extension Holder
+	typealias Idx = int(0 to 100)
+
+	export function fromA(i Idx) returns Num
+		return self.v + i
+	end 'fromA'
+end 'Holder'
+
+// --- file: b.maxon
+extension Other
+	export function fromB(i Idx) returns Num
+		return self.w + i
+	end 'fromB'
+end 'Other'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3011: Unknown type 'Idx'
+```
+
+### A member declared in the TYPE's own body is spelled from an extension in another file
+
+<!-- test: extension-spells-a-member-the-type-body-declares -->
+The other direction of one rule: `stdlib/Map.maxon` declares `typealias Entry` on its first body line,
+and an `extension Map` elsewhere may name it. This direction is order-independent for a different
+reason — a `type` body's nested aliases are folded with their own file, before any extension is read —
+and it is pinned so the two directions cannot come apart.
+```maxon
+// --- file: a.maxon
+typealias Num = int(0 to 200)
+
+export type Holder
+	typealias Idx = int(0 to 100)
+
+	export var v as Num
+
+	export static function create(v Num) returns Holder
+		return Holder{v: v}
+	end 'create'
+end 'Holder'
+
+// --- file: b.maxon
+extension Holder
+	export function fromB(i Idx) returns Num
+		return self.v + i
+	end 'fromB'
+end 'Holder'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	let h = Holder.create(4)
+	if h.fromB(3) == 7 'ok'
+		return 0
+	end 'ok'
+	return 1
+end 'main'
+```
+```exitcode
+0
+```
+
+## An extension body's inner alias is PER-INSTANCE too
+
+Everything above is about which bodies may SPELL a member. This is the other half: what the name then
+MEANS. A nested `typealias` of a generic type is per-instance — `WrapperA.Idx` and `WrapperB.Idx` are
+distinct types, which is what `wrong-instance-error` pins for a member declared in the `type` body.
+
+⚠ **AN `extension` BODY'S MEMBER WAS NOT, AND THAT WAS TRUE OF THE SAME-FILE FORM BEFORE IT WAS TRUE OF
+THE CROSS-FILE ONE.** The per-instance argument check reads `ProgramSignatures.methodInnerAliasParams`,
+recorded by `recordScannedSignature` — which asked the BODY WALK's live alias set both for whether to
+look at all and for whether a given parameter names a member. The same-file case therefore recorded
+nothing whenever the method sat in an `extension` body other than the one that declared the alias, and
+the cross-file case recorded nothing at all. Both doors now ask `namesInnerAliasHere`, the one home of
+"does this written name denote an inner alias here", so the check and the DENOTATION cannot disagree.
+
+<!-- test: error.an-extension-bodys-inner-alias-is-per-instance -->
+The alias and its user are in ONE file, in two `extension` bodies. This program compiled and returned
+1 before the two doors were made one.
+```maxon
+// --- file: a.maxon
+typealias Integer = int(i64.min to i64.max)
+
+export type Wrapper uses T
+	export var value as T
+	export var tag as Integer
+
+	export static function create(value T, tag Integer) returns Self
+		return Self{value: value, tag: tag}
+	end 'create'
+end 'Wrapper'
+
+extension Wrapper
+	typealias Idx = int(0 to 100)
+
+	export function getTag() returns Idx
+		return 1
+	end 'getTag'
+end 'Wrapper'
+
+extension Wrapper
+	export function useTag(t Idx) returns Integer
+		return t
+	end 'useTag'
+end 'Wrapper'
+
+// --- file: main.maxon
+typealias Num = int(0 to 200)
+typealias WA = Wrapper with Integer
+typealias WB = Wrapper with Num
+
+function main() returns ExitCode
+	let a = WA.create(1, tag: 1)
+	let b = WB.create(2, tag: 2)
+	let fromA = a.getTag()
+	return b.useTag(fromA) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:37:11: argument type mismatch for 't': expected 'WB.Idx', got 'WA.Idx'
+```
+
+<!-- test: error.a-cross-file-extension-inner-alias-is-per-instance -->
+The same program with the second `extension Wrapper` moved to its own file — the shape
+`stdlib/helpers/sort/` has six times over. It is the construct the cross-file rule above admits, so it
+owes the same refusal: admitting the SPELLING must not quietly admit the wrong instance's value with it.
+```maxon
+// --- file: a.maxon
+typealias Integer = int(i64.min to i64.max)
+
+export type Wrapper uses T
+	export var value as T
+	export var tag as Integer
+
+	export static function create(value T, tag Integer) returns Self
+		return Self{value: value, tag: tag}
+	end 'create'
+end 'Wrapper'
+
+extension Wrapper
+	typealias Idx = int(0 to 100)
+
+	export function getTag() returns Idx
+		return 1
+	end 'getTag'
+end 'Wrapper'
+
+// --- file: b.maxon
+extension Wrapper
+	export function useTag(t Idx) returns Integer
+		return t
+	end 'useTag'
+end 'Wrapper'
+
+// --- file: main.maxon
+typealias Num = int(0 to 200)
+typealias WA = Wrapper with Integer
+typealias WB = Wrapper with Num
+
+function main() returns ExitCode
+	let a = WA.create(1, tag: 1)
+	let b = WB.create(2, tag: 2)
+	let fromA = a.getTag()
+	return b.useTag(fromA) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:38:11: argument type mismatch for 't': expected 'WB.Idx', got 'WA.Idx'
+```

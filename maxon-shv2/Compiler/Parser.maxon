@@ -9767,7 +9767,17 @@ export type Parser
 		// inside a generic type that declares inner aliases, and only a method/factory that HAS such a parameter
 		// gets an entry (the common case costs none). This is the ONE place the whole-program index learns a
 		// method's inner-alias parameters — the return-type read above SKIPS the parameter list.
-		if self.enclosingInnerAliases.count() != 0 'maybeInnerAliasParams'
+		//
+		// ⚠⚠ **THE GATE IS THE DENOTATION DOOR'S OWN CONDITION, NOT THE BODY WALK'S SET, AND THE DIFFERENCE WAS
+		// A MISSING REFUSAL (F10).** In an `extension` body a bare member resolves against the whole program
+		// (`namesInnerAliasHere`), so the set below is EMPTY for a method that names a member some OTHER body
+		// declared — and this gate then skipped the walk, the index learned no inner-alias parameter, and the
+		// per-instance check had nothing to compare. **MEASURED, both spellings, on a program the type-body form
+		// refuses: `WA.Idx` handed to a `WB` method compiled clean and returned 1** where the identical program
+		// with the alias in `type Wrapper`'s own body is `E3005 … expected 'WB.Idx', got 'WA.Idx'`. It was
+		// already true of TWO `extension` bodies in ONE file, so it is older than the cross-file rule that made
+		// it reachable a second way. Both cases are `error.*-inner-alias-is-per-instance`.
+		if self.enclosingInnerAliases.count() != 0 or self.innerAliasesFromIndex 'maybeInnerAliasParams'
 			let innerAliasInfo = self.innerAliasParamsIn(paramsStart)
 			if innerAliasInfo.hasInnerAliasMember() 'hasInnerAliasParam'
 				methodInnerAliasParamOut.push(MethodInnerAliasParamEntry.create(funcName, info: innerAliasInfo))
@@ -11382,11 +11392,17 @@ export type Parser
 	end 'innerAliasParamsIn'
 
 	// The bare inner-alias MEMBER a parameter type spanning `[typeStart, typeEnd)` names (P1.6-C), or
-	// `EmptySourceText`. A SINGLE identifier (`typeEnd == typeStart + 1`) in `enclosingInnerAliases` is a bare
-	// inner alias (`Idx`); anything else — a `T`, a plain alias, a qualified `Inst.Idx`, a `function(…)` — is
-	// not one and reads as empty.
+	// `EmptySourceText`. A SINGLE identifier (`typeEnd == typeStart + 1`) that denotes an inner alias here is a
+	// bare inner alias (`Idx`); anything else — a `T`, a plain alias, a qualified `Inst.Idx`, a `function(…)` —
+	// is not one and reads as empty.
+	//
+	// ⚠ **THE TEST IS `namesInnerAliasHere`, THE ONE HOME OF THAT QUESTION, AND NOT THE BODY WALK'S SET
+	// DIRECTLY (F10).** It used to be the set, which made this door and `parseTypeReference`'s inner-alias arm
+	// two answers to one written name: in an `extension` body the arm resolved a member declared elsewhere and
+	// this door did not, so the parameter carried the per-instance TYPE while the index carried no per-instance
+	// ENTRY for it. See the gate in `recordScannedSignature` for the measured missing refusal.
 	function innerAliasMemberOfParamType(typeStart TokenIndex, typeEnd TokenIndex) returns ByteArray
-		if typeEnd == typeStart + 1 and self.kindAt(typeStart) == TokenKind.identifier and self.enclosingInnerAliases.contains(self.tokenAt(typeStart).value) 'innerAlias'
+		if typeEnd == typeStart + 1 and self.kindAt(typeStart) == TokenKind.identifier and self.namesInnerAliasHere(self.tokenAt(typeStart).value) 'innerAlias'
 			return self.tokenAt(typeStart).value
 		end 'innerAlias'
 		return EmptySourceText
@@ -12241,6 +12257,47 @@ export type Parser
 		end 'walk'
 	end 'skipPastBlockEnd'
 
+	// ⭐⭐ **WHICH NESTED `typealias` MEMBERS THIS EXTENSION BODY DECLARES, PUBLISHED ONTO EVERY CONFORMER — AND
+	// NOTHING ELSE (F10).** The first of the two passes `Queries.foldExtensionDeclarations` makes over the same
+	// sites, and it exists because the second one RESOLVES type names while it fills the alias registries: six
+	// files write `export extension Array`, `stdlib/helpers/sort/insertionSort.maxon:14` declares `SortIndex`
+	// and the other five spell it bare, so whichever body the fold reached first would resolve that name
+	// differently from the ones it reached later — a written name meaning what the directory walk says, which
+	// `StdlibLoader`'s header rules out. Names, taken from the tokens alone, are the smallest thing that has to
+	// be known ahead of the whole fold for the answer to be a property of the program.
+	//
+	// ⚠ **IT READS THE HEADER RATHER THAN CARRYING THE CONFORMERS ON THE SITE**, because the conformer list is
+	// `extensionTargetConformers`' and both later passes take it from there (`foldExtensionDeclarationInto`'s
+	// own ⚠ says why the three must share one answer). A second copy travelling on the site would be that list
+	// derived twice, and it could not be derived at the SWEEP in any case: an interface extension's conformers
+	// are not known until every file has folded.
+	//
+	// TOLERANT, exactly as every other sweep entry point: a header it cannot read publishes nothing and leaves
+	// the positioned diagnostic to the real parse.
+	export function publishExtensionInnerAliasNames(index ProgramSignatures, site ExtensionDeclSite)
+		self.pos = site.tokenPos
+		let header = try self.readExtensionHeader() otherwise return
+
+		var members = ByteArrayArray.create()
+		self.collectNestedAliasMembersInBody(members)
+		if members.isEmpty() 'declaresNone'
+			return
+		end 'declaresNone'
+
+		// ⚠ Published for EVERY conformer, including one a CONDITIONAL extension withholds its methods from.
+		// That is deliberate and it is the one place this pass may not follow `foldExtensionDeclarationInto`'s
+		// withheld rule: the verdict is what decides whether these declarations are that conformer's, and it is
+		// taken per (extension, conformer) by the fold — which is the pass that then declines to publish them.
+		// A set that had already applied the verdict would be answering a question this pass cannot yet ask,
+		// and the cost of not applying it is bounded: `declaresInnerAlias` reports a name whose declaration the
+		// fold withheld, in a body that receives no methods and emits nothing.
+		for conformer in extensionTargetConformers(header.target) 'eachConformer'
+			for member in members 'eachMember'
+				index.recordExtensionInnerAliasMember(joinQualifiedName(conformer, member: member))
+			end 'eachMember'
+		end 'eachConformer'
+	end 'publishExtensionInnerAliasNames'
+
 	// ⭐⭐ **PUBLISH THE `extension` AT `tokenPos` ONTO EVERY CONFORMER, IN THE WHOLE-PROGRAM INDEX.** The
 	// second half of `recordScannedExtension`, driven by `Queries.foldExtensionDeclarations` once every file
 	// has folded — which is the whole point of the split.
@@ -12536,6 +12593,12 @@ export type Parser
 	// at the assignment below for why the two are not the same fact, and for the two things that break
 	// without it.
 	function openExtensionBodyScope(header ExtensionHeader, conformer ByteArray, index ProgramSignatures)
+		// ⭐⭐ **AN EXTENSION BODY RESOLVES A BARE NESTED-ALIAS MEMBER AGAINST THE WHOLE PROGRAM, NOT AGAINST ITS
+		// OWN BODY WALK (F10)** — set FIRST, ahead of the `undeclaredTarget` return, because it is a property of
+		// being an extension body and not of which kind of target the extension has. See `namesInnerAliasHere`
+		// for the rule and for why the type's OWN body deliberately does not get it.
+		self.innerAliasesFromIndex = true
+
 		match header.target 'target'
 			interfaceExtension then break 'target'
 			undeclaredTarget then return
@@ -13964,6 +14027,32 @@ export type Parser
 		end 'declaresNoConformance'
 
 		let resume = self.pos
+		var members = ByteArrayArray.create()
+		self.collectNestedAliasMembersInBody(members)
+		self.pos = resume
+
+		for member in members 'eachMember'
+			self.recordInnerAliasName(member)
+		end 'eachMember'
+	end 'openConformanceClauseAliasScope'
+
+	// ⭐⭐ **THE PER-INSTANCE NESTED `typealias` MEMBERS DECLARED AT THE TOP LEVEL OF THE BLOCK THE CURSOR IS
+	// CURRENTLY INSIDE** — a PEEK-shaped walk that reads names and resolves nothing, shared by the two passes
+	// that need the scope before the declarations (`openConformanceClauseAliasScope`, which needs it for the
+	// `implements` clause written ABOVE the body, and `publishExtensionInnerAliasNames`, which needs it for
+	// every OTHER FILE's `extension` body over the same type). It leaves the cursor just past the block's own
+	// `end`; a caller that must resume where it started saves and restores `self.pos` itself.
+	//
+	// The extent rule is `skipPastBlockEnd`'s, to the token, and for its reason: a NAMED `function` opens a
+	// block `blockDepthAfter` does not count, the closer test is taken BEFORE the counter moves, and a closer
+	// is asked through `closesBlockAt` because a member may be NAMED `end` (D8). `depth` starts at 1 because
+	// both callers enter INSIDE exactly one open block.
+	//
+	// ⚠ **THE FUNCTION FORM IS EXCLUDED HERE AND NOT AT THE CALLERS**, because both callers want the same
+	// answer and for the same reason: a nested `typealias Fn = function(…)` is a file-scope name written
+	// inside a body and never enters the per-instance scope (`readNestedTypeAlias`'s own arm says why). The
+	// test is the one token `readTypeAliasDeclaration` discriminates the form on, asked of the same position.
+	function collectNestedAliasMembersInBody(into ByteArrayArray)
 		var depth = 1 as BlockDepth
 		while not self.isEof() 'walk'
 			if self.functionDeclarationAt(self.pos) 'opensAMethod'
@@ -13973,21 +14062,39 @@ export type Parser
 			end 'opensAMethod'
 
 			let member = self.nestedAliasNameAt(self.pos)
-			if depth == 1 and not member.isEmpty() 'nestedAlias'
-				self.recordInnerAliasName(member)
-			end 'nestedAlias'
+			if depth == 1 and not member.isEmpty() and not self.nestedAliasAtIsFunctionForm(self.pos) 'perInstanceNestedAlias'
+				into.push(member)
+			end 'perInstanceNestedAlias'
 
-			// The extent rule is `skipPastBlockEnd`'s, to the token: the closer test is taken BEFORE the
-			// counter moves, and it is asked through `closesBlockAt` because a member may be NAMED `end` (D8).
 			let closes = self.closesBlockAt(self.pos)
 			depth = self.blockDepthAfter(depth)
 			self.advance()
 			if closes and depth == 0 'closesTheDeclaration'
-				break
+				return
 			end 'closesTheDeclaration'
 		end 'walk'
-		self.pos = resume
-	end 'openConformanceClauseAliasScope'
+	end 'collectNestedAliasMembersInBody'
+
+	// Does the nested `typealias` declaration starting at `index` — one `nestedAliasNameAt` has already
+	// recognized — have a `function(…)` right-hand side? A PEEK, walking the same header shape that reader
+	// walks (an optional visibility modifier, `typealias`, the member name) and then the `=`.
+	//
+	// ⚠ It reads the ONE token `readTypeAliasDeclaration` discriminates the function form on, at the position
+	// that reader would read it, so the two cannot disagree about which declarations are per-instance.
+	function nestedAliasAtIsFunctionForm(index TokenIndex) returns bool
+		var at = index
+		if self.kindAt(at) == TokenKind.export or self.moduleModifierAt(at) 'visibilityModifier'
+			at = at + 1
+		end 'visibilityModifier'
+
+		// `typealias` at `at`, the member name at `at + 1`, and the `=` at `at + 2` — a malformed declaration
+		// that lacks the `=` simply is not the function form, and the real parse reports it with a position.
+		if self.kindAt((at + 2) as TokenIndex) != TokenKind.equals 'noRightHandSide'
+			return false
+		end 'noRightHandSide'
+
+		return self.kindAt((at + 3) as TokenIndex) == TokenKind.function
+	end 'nestedAliasAtIsFunctionForm'
 
 	// Put the shared empty set back after the clause — see the door above for why the pre-scanned names are
 	// deliberately NOT left in scope for the body.
@@ -18522,13 +18629,37 @@ export type Parser
 			return false
 		end 'typeParam'
 
-		// Inside a drained DEFAULT expression the set below no longer exists — the body walk that built it
-		// closed with its declaration — so the identical question is asked of the whole-program registries
-		// the walk folded into. Keyed `<Type>.<member>`, so it answers about exactly those declarations and
-		// widens nothing. See `restoreDeclaringTypeScope`.
-		if self.innerAliasesFromIndex 'drainedDefaultExpression'
-			return self.signatures.declaresInnerAlias(joinQualifiedName(self.enclosingType, member: name))
-		end 'drainedDefaultExpression'
+		// ⭐⭐ **TWO POSITIONS ANSWER FROM THE WHOLE-PROGRAM REGISTRIES INSTEAD OF FROM THIS BODY'S OWN WALK, AND
+		// THEY ARE ONE MECHANISM (F10).** Both ask the identical `<Type>.<member>` question, so they widen
+		// nothing: `declaresInnerAlias` is keyed by the enclosing type, and it answers about exactly the
+		// declarations a body walk would have recorded.
+		//   • A drained DEFAULT expression — the set below no longer exists, because the body walk that built it
+		//     closed with its declaration (`restoreDeclaringTypeScope`).
+		//   • An EXTENSION body — the set below holds only what THIS body declared, and a nested `typealias` is a
+		//     MEMBER of the extended type, so every `extension` over that type may spell it whatever file it
+		//     lives in. `stdlib/helpers/sort/` is the case: six files write `export extension Array`,
+		//     `insertionSort.maxon:14` declares `SortIndex` and the other five spell it bare.
+		//
+		// ⛔ **BOTH REFERENCE COMPILERS MAKE THESE NAMES FLAT AND PROGRAM-WIDE, AND shv2 DELIBERATELY DOES NOT.**
+		// The bootstrap writes an extension's `typealias` into `module.TypeDefs` under its BARE name
+		// (`0-Compiler.cs:1199`, `2-Parser.cs:5325` keeping an `OwnerTypeName` it never puts in a key), so
+		// `SortIndex` is nameable from any file at file scope; v1 stores it on `Array.innerAliases` but then
+		// keeps three bare-name global fallbacks over it (`Project.structInnerAliasNames`,
+		// `functionInnerAliasCache`, `TypeResolution.tryAnyStructInnerAlias`, whose own comment records the
+		// assumption *"inner-alias names are unique across the stdlib … no ambiguity"*). Neither can diagnose
+		// two types declaring one member name. shv2 keys `<Type>.<member>` for exactly that reason
+		// (`qualifiedInnerGenericAlias`), and the whole of this widening is the ENCLOSING TYPE's own members —
+		// so `Array.SortIndex` reaches an `extension Array` in any file and reaches nothing else anywhere.
+		//
+		// ⚠ **THE TYPE'S OWN BODY IS NOT GIVEN THIS, AND THAT IS THE PASS STRUCTURE RATHER THAN A PREFERENCE.**
+		// A `type` body's signatures are read during the per-file declaration sweep, which runs BEFORE
+		// `Queries.foldExtensionDeclarations` publishes any extension's members — so a `type Foo` body granted
+		// the probe would resolve a written name one way in the sweep and another in the real parse, which is
+		// one declaration recorded under two spellings. An extension body is read only by the two passes that
+		// both run after the pre-pass, so for it the two readings agree by construction.
+		if self.innerAliasesFromIndex and self.signatures.declaresInnerAlias(joinQualifiedName(self.enclosingType, member: name)) 'aMemberDeclaredElsewhere'
+			return true
+		end 'aMemberDeclaredElsewhere'
 
 		return self.enclosingInnerAliases.contains(name)
 	end 'namesInnerAliasHere'
