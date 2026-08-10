@@ -11397,11 +11397,37 @@ export type ProgramSignatures
 	// `structRef` there would be the byte-record defect `Parser.requireFusedWrapperTag` documents, one
 	// genericity up: bytes of one record, identity of another.
 	//
-	// Precondition: `Parser.arrayNameIsItsOwnRecord`, which is what establishes that the name is declared and
+	// Precondition: `arrayNameIsItsOwnRecord` below, which is what establishes that the name is declared and
 	// generic — so `structTypeParamsOf` is non-empty here and the instance has the arity its base was checked at.
 	export function ownRecordSelfInstance(name ByteArray) returns GenericInstanceId
 		return self.instanceOverScopeParams(name, scopeOwner: name, params: self.structTypeParamsOf(name))
 	end 'ownRecordSelfInstance'
+
+	// ⭐⭐ **IS `name` THE `Array` WHOSE RECORD THIS COMPILER ALREADY OWNS (W57)?** — TWO facts, because either
+	// alone is a wrong answer.
+	//   • **THE NAME**, because the identity rests on `Array with T` and `__ManagedMemory with T` being one
+	//     `GenericInstanceId`, which is a fact about that base name and no other.
+	//   • **THE SHAPE**, because the name is not the compiler's to reserve (`Array` is deliberately absent from
+	//     `TypeResolution.isCompilerOwnedTypeName`, exactly as `Map` is), so a user program may declare its own
+	//     container under it. Only the SOLE-FIELD-AND-THAT-FIELD-THE-BUFFER declaration is the record; anything
+	//     else is an ordinary struct that merely shares the name, and admitting it is the measured miscompile
+	//     `Parser.structLayoutOfType`'s header carries.
+	//
+	// ⚠ **IT LIVES HERE, NOT IN THE PARSER, BECAUSE THE INDEX ITSELF HAS TO ASK IT (W59).** It began as
+	// `Parser.arrayNameIsItsOwnRecord`, serving the construction doors; `typeParamOwnershipProtocol` then needed
+	// the same fact to decide whether a DESCRIPTOR carries ownership words, and a second spelling of "is this
+	// declaration the record?" is exactly how the construction door and the descriptor stamp would come to
+	// disagree about one type — with the disagreement spending itself as a double free rather than a diagnostic.
+	export function arrayNameIsItsOwnRecord(name ByteArray) returns bool
+		if not self.isArrayBaseName(name) 'notTheArrayName'
+			return false
+		end 'notTheArrayName'
+
+		return match self.structOf(name) 'declaration'
+			declared(layout) gives layout.fieldCount() == 1 and layout.inlineManagedFieldIndex() == 0
+			undeclared gives false
+		end 'declaration'
+	end 'arrayNameIsItsOwnRecord'
 
 	// ⭐⭐ **IS `id` THE INSTANCE `declarationName` MAKES OVER ITS OWN PARAMETERS — i.e. what `Self` denotes
 	// inside it? (W57)** The RECOGNIZER for what `ownRecordSelfInstance` MINTS, and it is a separate function
@@ -16477,15 +16503,28 @@ export type ProgramSignatures
 	//
 	// ⛔ **A BUILTIN CONTAINER'S DESCRIPTOR CARRIES NEITHER, BECAUSE NO SHARED BODY READS ONE OUT OF IT.**
 	// These two words are consumed only by `__retain_type_param` / `__drop_type_param`, which are handed the
-	// block of the ENCLOSING GENERIC INSTANCE the compiled-once body belongs to — and only a DECLARED generic
-	// has such a body; an `Array`/`Set`/`Map` record is served by the runtime off its own stamps. Stamping them
+	// block of the ENCLOSING GENERIC INSTANCE the compiled-once body belongs to — and a SYNTHESIZED
+	// `Array`/`Set`/`Map` record has no such body: it is served by the runtime off its own stamps. Stamping them
 	// on an `Array with String` would bake relocations nothing loads, and the callee they name is a HEAP one,
 	// so `MmRuntime.rootManagedOpaqueArrayElementDrops` would then set `usesHeap` for programs that allocate
 	// nothing: MEASURED at review, `function main() returns ExitCode return 7 end` grew 1,592 → **1,672** bytes
-	// on exactly that. `genericInstanceHasBaseLayout` is the same guard `managedOpaqueArrayElementOf` opens
-	// with, for the same reason and against the same undeclared-base case.
+	// on exactly that.
+	//
+	// ⭐⭐⭐ **BUT "AN `Array` HAS NO SHARED BODY" STOPPED BEING TRUE, AND THE GAP WAS A DOUBLE FREE (W59).** The
+	// gate used to be `genericInstanceHasBaseLayout` alone, on the premise quoted above that only a declared
+	// NON-builtin generic is compiled once per instantiation. A record-collapsed `type Array uses Element` is
+	// both at once: the record is the compiler's, and the METHODS are a shared body the corpus declares — so
+	// `Array.at`'s `return try managed.get(i)` emitted `__retain_type_param(descriptor, element)`, read a ZERO
+	// `retainFunc@64`, and handed the caller a BORROW where the hand-off convention promises a `+1`.
+	// **MEASURED: `let head = a.at(0)` over an `Array with String` printed the right answer and then took a
+	// SEGFAULT at teardown** — `main`'s `__str_decref` and the array's own element walk freeing one record
+	// twice. `emitOwnedValueReturn`'s opaque arm was doing its job; the word it dispatches through was 0.
+	//
+	// ⇒ The gate is "does a shared body read this block?", and a record-collapsed conformer answers yes. The
+	// size argument above is untouched: a program that does not DECLARE `type Array` gets `undeclared` from
+	// `arrayNameIsItsOwnRecord` and the same zero words it always had.
 	function typeParamOwnershipProtocol(id GenericInstanceId, position TypeParamPosition) returns ExistentialOwnershipProtocol
-		if not self.genericInstanceHasBaseLayout(id) 'noSharedBodyReadsThisBlock'
+		if not (self.genericInstanceHasBaseLayout(id) or self.arrayNameIsItsOwnRecord(self.genericInstanceBaseName(id))) 'noSharedBodyReadsThisBlock'
 			return ExistentialOwnershipProtocol.none
 		end 'noSharedBodyReadsThisBlock'
 

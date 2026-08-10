@@ -10833,7 +10833,7 @@ export type Parser
 		if self.kindAt(selfPos + 1) != TokenKind.leftBrace 'notALiteral'
 			return false
 		end 'notALiteral'
-		if not self.arrayNameIsItsOwnRecord(self.enclosingType) 'notTheOwnRecordArray'
+		if not self.signatures.arrayNameIsItsOwnRecord(self.enclosingType) 'notTheOwnRecordArray'
 			return false
 		end 'notTheOwnRecordArray'
 
@@ -18572,7 +18572,7 @@ export type Parser
 		// and `Array` is that same fact with a type parameter on it. The base `structRef` below is right only
 		// for a declaration that HAS a base box; `Array with T` is its `__ManagedMemory with T`, so a
 		// `structRef(Array)` would give `clone()`'s result a struct cascade over the buffer record.
-		if self.arrayNameIsItsOwnRecord(name) 'theCompilersOwnGenericRecord'
+		if self.signatures.arrayNameIsItsOwnRecord(name) 'theCompilersOwnGenericRecord'
 			return MaxonType.genericInstance(self.signatures.ownRecordSelfInstance(name))
 		end 'theCompilersOwnGenericRecord'
 
@@ -36271,7 +36271,7 @@ export type Parser
 		// retain on a record the default had just built. The NON-empty spelling (`Self{managed: m}`) keeps the
 		// ordinary path and reaches `emitFusedWrapperLiteral`'s identity arm, so the two forms stay the two
 		// statics they mirror — `create()` and `init(managed)`.
-		if self.arrayNameIsItsOwnRecord(layout.name) and not (try filled.get(0) otherwise panic("parseStructLiteral: filled.get OOB at 0 — `arrayNameIsItsOwnRecord` established a sole field and the column is sized to the layout's field count")) 'theEmptyContainer'
+		if self.signatures.arrayNameIsItsOwnRecord(layout.name) and not (try filled.get(0) otherwise panic("parseStructLiteral: filled.get OOB at 0 — `arrayNameIsItsOwnRecord` established a sole field and the column is sized to the layout's field count")) 'theEmptyContainer'
 			return try self.emitOwnedContainerCreate(self.signatures.ownRecordSelfInstance(layout.name), aliasTok: typeTok, aliasName: layout.name, range: SourceRange.between(typeTok, last: rbraceTok))
 		end 'theEmptyContainer'
 
@@ -36963,38 +36963,21 @@ export type Parser
 	end 'fusedWrapperNameId'
 
 	// ⭐⭐ **IS THIS DECLARATION THE `Array` WHOSE RECORD IT ALREADY IS? (W57)** — the admission test for
-	// `emitFusedWrapperLiteral`'s identity arm, and it is TWO facts because either alone is a wrong answer.
-	//   • **THE NAME**, because the identity rests on `Array with T` and `__ManagedMemory with T` being one
-	//     `GenericInstanceId`, which is a fact about that base name and no other. Keying on the MARKER alone
-	//     is the original defect `requireFusedWrapperTag` documents at length.
-	//   • **THE SHAPE**, because the name is not the compiler's to reserve (`Array` is deliberately absent
-	//     from `TypeResolution.isCompilerOwnedTypeName`, exactly as `Map` is, so a user program declaring its
-	//     own container gets its own). A user `type Array` carrying a second field would have that field
-	//     silently discarded by the identity — the very hazard the refusal names — so it is the SOLE-FIELD
-	//     structure that admits, and anything else meets the unchanged sentence.
-	// ⭐ **THE POSITIONED HALF OF THE PREDICATE BELOW — A REFUSAL WHOSE NOUN IS THE SHAPE, NOT THE NAME.**
+	// `emitFusedWrapperLiteral`'s identity arm. The predicate is TWO facts and its argument is written once, at
+	// its one home: `ProgramSignatures.arrayNameIsItsOwnRecord`.
+	//
+	// ⭐ **THIS IS ITS POSITIONED HALF — A REFUSAL WHOSE NOUN IS THE SHAPE, NOT THE NAME.**
 	// `requireFusedWrapperTag`'s sentence is about which NAMES the compiler owns a record for, and it would
 	// be actively misleading here: the name is right and the DECLARATION is what disagrees. A conformer named
 	// `Array` that declares a second field would have that field discarded by the identity — the very hazard
 	// the sibling sentence names — so it is refused with the field it is about.
 	function requireArrayIsItsOwnRecord(layout StructLayout, anchor Token) throws ParseError
-		if self.arrayNameIsItsOwnRecord(layout.name) 'itsOwnRecord'
+		if self.signatures.arrayNameIsItsOwnRecord(layout.name) 'itsOwnRecord'
 			return
 		end 'itsOwnRecord'
 
 		throw ParseError.unsupported("`{String.from(layout.name)}` implements `{String.from(layout.requireBuiltinManagedWrapperInterfaceName())}`, and an `{String.from(ArrayBuiltinBaseName)}` IS its `{String.from(ManagedMemoryTypeName)}` — one record under two names — so its literal is an identity on the buffer its sole field names. This declaration has {layout.fieldCount()} field(s), and every one past the buffer would be silently dropped at construction and then read back past the record's end when the value is cloned or destroyed. Declare the buffer alone, or give the type a name the compiler owns no record for", line: anchor.line, column: anchor.column)
 	end 'requireArrayIsItsOwnRecord'
-
-	function arrayNameIsItsOwnRecord(name ByteArray) returns bool
-		if not self.signatures.isArrayBaseName(name) 'notTheArrayName'
-			return false
-		end 'notTheArrayName'
-
-		return match self.signatures.structOf(name) 'declaration'
-			declared(layout) gives layout.fieldCount() == 1 and layout.inlineManagedFieldIndex() == 0
-			undeclared gives false
-		end 'declaration'
-	end 'arrayNameIsItsOwnRecord'
 
 	// ⭐⭐ **WHICH TAG A FUSED LITERAL PRODUCES — DECIDED BY THE TYPE'S NAME, AND A NAME THE COMPILER DOES NOT
 	// OWN THE RECORD FOR IS REFUSED OUTRIGHT.** The marker cannot decide it: keying on the marker alone gave
@@ -44260,16 +44243,21 @@ export type Parser
 	// `E2015 … 'equals' — shv2 provides charIndex/bytePos; that list IS the surface`** about a method the
 	// program plainly has. The two accessors keep their arms (roster wins, for the field-load reason
 	// `dispatchStringIndexMethod` states); everything else the corpus declares is served from source.
-	// ⛔⛔ **THE `Array` SURFACE IS DELIBERATELY NOT A THIRD ASKER YET, AND THE REASON IS MEASURED (W57).** The
-	// arm itself is one line — `isArrayInstanceAt(recv.tag, nameId: recv.nameId)` and NOT
+	// ⭐⭐⭐ **AND THE `Array` SURFACE IS THE THIRD ASKER (W59), WHICH TOOK A SECOND DOOR TO BECOME ONE.** The
+	// arm is one line — `isArrayInstanceAt(recv.tag, nameId: recv.nameId)` and NOT
 	// `valueIsBufferSurface(recv.value)`, the mark being the only thing that separates an `Array with T` from
-	// its `__ManagedMemory with T`, since the two are one type. But admitting a member here routes it to
-	// `structBaseOfReceiver`, and `ProgramSignatures.genericInstanceHasBaseLayout` answers FALSE for every
-	// BUILTIN generic base whatever any file declares — so a declared `Array.size()` got as far as
-	// `missingBaseLayout` and was refused *"a field access … `Array` is a BUILTIN whose runtime record shv2
-	// synthesizes"*, about a METHOD, which is a WORSE sentence than the roster's. The corpus fall-through and
-	// that gate are ONE change: the gate also decides the FIELD WALK the drop cascade reads, so moving it is
-	// the retirement rung's, where a corpus `Array` body exists to be served and the cascade can be measured.
+	// its `__ManagedMemory with T`, since the two are one type. On its own it moved the refusal rather than
+	// removing it: admitting a member routes it to `structBaseOfReceiver`, and
+	// `ProgramSignatures.genericInstanceHasBaseLayout` answers FALSE for every BUILTIN generic base whatever
+	// any file declares — so a declared `Array.size()` got as far as `missingBaseLayout` and was refused
+	// *"a field access … `Array` is a BUILTIN whose runtime record shv2 synthesizes"*, about a METHOD, which
+	// is a WORSE sentence than the roster's. What admits it is `structLayoutOfType`'s own
+	// `arrayNameIsItsOwnRecord` arm — read that header for why the FIELD WALK's gate stays where it is.
+	//
+	// ⚠ The SHAPE is asked as well as the instance, and the two are not the same test — see
+	// `ProgramSignatures.arrayNameIsItsOwnRecord` for why either alone is a wrong answer. A declaration that
+	// fails it is a record this compiler does NOT own, and its members must keep meeting the roster sentence
+	// rather than being dispatched against a layout the value does not have.
 	function memberBelongsToTheCorpus(recv MethodReceiver) returns bool
 		if tagIsByteRecord(recv.tag) 'aByteRecord'
 			return self.corpusServesMemberOffRoster(byteRecordSurface(recv.tag), typeName: self.byteRecordLayoutName(recv.tag))
@@ -44277,6 +44265,9 @@ export type Parser
 		if self.isStringIndexType(recv.tag, nameId: recv.nameId) 'aStringIndex'
 			return self.corpusServesMemberOffRoster(MemberSurface.stringIndex, typeName: StringIndexTypeName)
 		end 'aStringIndex'
+		if self.signatures.isArrayInstanceAt(recv.tag, nameId: recv.nameId) and self.signatures.arrayNameIsItsOwnRecord(ArrayBuiltinBaseName) 'anArrayThatIsItsOwnRecord'
+			return self.corpusServesMemberOffRoster(MemberSurface.array, typeName: ArrayBuiltinBaseName)
+		end 'anArrayThatIsItsOwnRecord'
 
 		return false
 	end 'memberBelongsToTheCorpus'
@@ -47635,7 +47626,31 @@ export type Parser
 		//
 		// So the walk gate is the ONE door here too, exactly as it is at the four `SignatureIndex` walks: an
 		// instance whose base has no layout OF ITS OWN never reads fields, whoever else declares the name.
-		if tag == ValueTypeTag.genericInstance and not self.signatures.genericInstanceHasBaseLayout(nameId) 'noBaseLayout'
+		//
+		// ⭐⭐⭐ **EXCEPT FOR THE ONE SHAPE WHERE THE DECLARATION *IS* THE RECORD, AND THAT IS NOT A WEAKENING —
+		// IT IS THE OTHER HALF OF THE SAME ARGUMENT (W59).** The paragraph above refuses a declared `Array`
+		// because `structOf` hands back a field table the VALUE does not have. `arrayNameIsItsOwnRecord` is
+		// exactly the test for the case where it does: the base is `Array`, the declaration has ONE field, and
+		// that field is the buffer — so field 0 at offset 0 IS the record, which is why `emitFieldLoad`'s
+		// inline-`managed` arm already answers it with the surface flip rather than a load. A second field is
+		// what makes the two disagree, and that declaration is refused at construction
+		// (`requireArrayIsItsOwnRecord`) rather than admitted here.
+		//
+		// ⚠⚠ **THIS DELIBERATELY DOES *NOT* MOVE `genericInstanceHasBaseLayout` ITSELF, AND THAT CHOICE WAS
+		// MEASURED RATHER THAN ARGUED.** The rung was briefed on the belief that the corpus fall-through and
+		// that gate are ONE change, because the gate also decides the FIELD WALK the drop cascade reads. It is
+		// not: widening the gate to admit a declared `Array` base — the whole prescription, applied on this
+		// tree — was **INERT**, 551 `--filter=array` cases, 0 failures. The reason is that the walk it opens
+		// would enumerate exactly ONE field, the buffer, whose drop callee is `__arr_decref` — the very callee
+		// `genericInstanceBoxDropCallee` already gives the record itself — and both cascade readers filter a
+		// non-`__destruct_` leaf out (`MmRuntime.addNestedInstanceDestructors`, `declareInstanceFieldDropNeeds`).
+		//
+		// ⇒ So the gate is not what was refusing the member, and moving it buys nothing to offset its REACH: it
+		// is read by four `SignatureIndex` field walks and by every caller of this function, including the
+		// WRITE path and the field-chain walk. The two are the preconditions of two different queries — a
+		// layout to NAME a member, and a layout to ENUMERATE fields — exactly as that gate's own header says of
+		// its neighbour, so the admission is spent at the one door that needs it and nowhere else.
+		if tag == ValueTypeTag.genericInstance and not (self.signatures.genericInstanceHasBaseLayout(nameId) or self.signatures.arrayNameIsItsOwnRecord(typeName)) 'noBaseLayout'
 			throw self.missingBaseLayout(typeName, baseTok: baseTok)
 		end 'noBaseLayout'
 
@@ -47917,7 +47932,7 @@ export type Parser
 			//     `managed.slice(0, len)`.
 			// One record with two surfaces is the whole of this wrapper, so the read is the surface flip and
 			// nothing else — which also means it allocates nothing where the String path allocates a record.
-			if self.arrayNameIsItsOwnRecord(layout.name) 'theRecordISTheBuffer'
+			if self.signatures.arrayNameIsItsOwnRecord(layout.name) 'theRecordISTheBuffer'
 				return self.bufferSurfaceOf(box, range: range)
 			end 'theRecordISTheBuffer'
 
@@ -50824,6 +50839,53 @@ export type Parser
 		return self.siblingReceivers.contains(name)
 	end 'isImplicitSelfMethod'
 
+	// Is this bare call a member of the roster the enclosing declaration's OWN record serves? See `parseCall`'s
+	// arm for why it outranks the implicit-self resolution. It must decide WITHOUT resolving anything: a name
+	// the roster does not carry answers no, and only then is a receiver materialized.
+	//
+	// ⚠ **THE RECEIVER TEST IS PART OF THE QUESTION AND NOT AN OPTIMISATION.** A `static` method of `type
+	// String` writing a bare `byteLength()` has no instance to dispatch on, and the answer there is the arity
+	// error the ordinary resolution words, not a dispatch on nothing.
+	//
+	// Written once because the two surfaces below differ only in WHICH roster the enclosing type names — and
+	// a second copy of "self is in scope and the roster carries it" is exactly how one of them comes to admit
+	// a member the other refuses.
+	function implicitSelfTakesTheRoster(surface MemberSurface, calleeTok Token) returns bool
+		if not (self.scope.contains(SelfParamName) or self.captureBinds(SelfParamName)) 'noReceiver'
+			return false
+		end 'noReceiver'
+		return namesInclude(self.surfaceMemberNames(surface), name: calleeTok.value)
+	end 'implicitSelfTakesTheRoster'
+
+	// The BYTE RECORD half of the test above — `String` and `Character`, told from every other enclosing type
+	// by the tag their name denotes.
+	function implicitSelfTakesTheByteRecordRoster(calleeTok Token) returns bool
+		let enclosing = byteRecordTagOfTypeName(self.enclosingType)
+		if enclosing == ValueTypeTag.unresolved 'notInsideAByteRecord'
+			return false
+		end 'notInsideAByteRecord'
+		return self.implicitSelfTakesTheRoster(byteRecordSurface(enclosing), calleeTok: calleeTok)
+	end 'implicitSelfTakesTheByteRecordRoster'
+
+	// ⭐⭐ **THE `Array` HALF (W59) — THE SAME RULE ONE GENERICITY UP.** The enclosing declaration is told from
+	// every other by the SHAPE that makes its record the compiler's (`arrayNameIsItsOwnRecord`), never by the
+	// name alone: `Array` is not a name the compiler reserves, and a user container of that name declaring
+	// anything else has no synthesized roster to win with.
+	function implicitSelfTakesTheArrayRoster(calleeTok Token) returns bool
+		if not self.signatures.arrayNameIsItsOwnRecord(self.enclosingType) 'notInsideTheOwnRecordArray'
+			return false
+		end 'notInsideTheOwnRecordArray'
+		return self.implicitSelfTakesTheRoster(MemberSurface.array, calleeTok: calleeTok)
+	end 'implicitSelfTakesTheArrayRoster'
+
+	// `self`, shaped as the receiver the roster dispatchers take. It carries no immutable name and no borrow
+	// subject for `implicitSelfReceiver`'s stated reason — a bare sibling call names no ONE storage — and the
+	// anchor is the callee token, which is what a diagnostic inside the arm points at.
+	function implicitSelfRosterReceiver(calleeTok Token, tag ValueTypeTag, nameId TypeNameId) returns MethodReceiver throws ParseError
+		let value = try self.requireReceiverValue(calleeTok)
+		return MethodReceiver.create(value, tag: tag, nameId: nameId, anchor: calleeTok, immutableName: EmptySourceText, subjectName: EmptySourceText, owner: NoMutatedParams, selfFieldName: EmptySourceText)
+	end 'implicitSelfRosterReceiver'
+
 	// The receiver a bare call to the sibling `name` carries. An INSTANCE method gets the enclosing `self`
 	// prepended at parameter 0 — resolved EXACTLY as an explicit `self.name(…)` resolves it, so the two spellings
 	// emit byte-identical calls in every context. A `static` sibling gets none. Two contexts make the self
@@ -50838,29 +50900,6 @@ export type Parser
 	//     HERE, it is the answer, and the arity check words it in terms of the call the author actually wrote.
 	// The caller (`parseCall`) has already established `name` IS a sibling (`isImplicitSelfMethod`), so the map
 	// is built and this `ensureSiblingReceivers` is a memo hit.
-	// Is this bare call a byte record's own roster member? See `parseCall`'s arm for why it outranks the
-	// implicit-self resolution. It must decide WITHOUT resolving anything: an enclosing type that is not
-	// `String`/`Character` and a name the roster does not carry both answer no, and only then is a receiver
-	// materialized.
-	function implicitSelfTakesTheByteRecordRoster(calleeTok Token) returns bool
-		let enclosing = byteRecordTagOfTypeName(self.enclosingType)
-		if enclosing == ValueTypeTag.unresolved 'notInsideAByteRecord'
-			return false
-		end 'notInsideAByteRecord'
-		if not (self.scope.contains(SelfParamName) or self.captureBinds(SelfParamName)) 'noReceiver'
-			return false
-		end 'noReceiver'
-		return namesInclude(self.surfaceMemberNames(byteRecordSurface(enclosing)), name: calleeTok.value)
-	end 'implicitSelfTakesTheByteRecordRoster'
-
-	// `self`, shaped as the receiver the roster dispatchers take. It carries no immutable name and no borrow
-	// subject for `implicitSelfReceiver`'s stated reason — a bare sibling call names no ONE storage — and the
-	// anchor is the callee token, which is what a diagnostic inside the arm points at.
-	function implicitSelfByteRecordReceiver(calleeTok Token) returns MethodReceiver throws ParseError
-		let value = try self.requireReceiverValue(calleeTok)
-		return MethodReceiver.create(value, tag: byteRecordTagOfTypeName(self.enclosingType), nameId: UnnamedTypeId, anchor: calleeTok, immutableName: EmptySourceText, subjectName: EmptySourceText, owner: NoMutatedParams, selfFieldName: EmptySourceText)
-	end 'implicitSelfByteRecordReceiver'
-
 	function implicitSelfReceiver(name ByteArray, anchor Token) returns ReceiverArg throws ParseError
 		self.ensureSiblingReceivers()
 		if not (try self.siblingReceivers.get(name) otherwise false) 'staticSibling'
@@ -51016,12 +51055,26 @@ export type Parser
 		// falls through and reaches the corpus exactly as it should — the same split
 		// `memberBelongsToTheCorpus` makes one door over, from the other side.
 		if self.implicitSelfTakesTheByteRecordRoster(calleeTok) 'byteRecordRosterMember'
-			let recv = try self.implicitSelfByteRecordReceiver(calleeTok)
+			let recv = try self.implicitSelfRosterReceiver(calleeTok, tag: byteRecordTagOfTypeName(self.enclosingType), nameId: UnnamedTypeId)
 			if recv.tag == ValueTypeTag.character 'aCharacter'
 				return try self.dispatchCharacterMethod(recv)
 			end 'aCharacter'
 			return try self.dispatchStringMethod(func, recv: recv)
 		end 'byteRecordRosterMember'
+
+		// ⭐⭐⭐ **AND THE SAME RULE FOR AN `Array` WHOSE RECORD THIS COMPILER OWNS (W59).** Everything the
+		// header above argues for `String` is true here one genericity up, and it was measured in two places
+		// at once. Inside `type Array`'s own body the bare spelling reached the DECLARATION while
+		// `self.get(i)` reached the synthesized arm, so one member meant two different bodies depending on
+		// how it was written. Inside an `extension Array` body it reached NOTHING — the sibling walk sees
+		// only the extension's own methods, so `stdlib/Array.maxon`'s `contains(sequence)` was
+		// `E3004 call to undefined function 'get'`, a diagnostic no reader ever saw: the untyped result then
+		// raised a THROWN `E3005` about the `!=` two lines later, and a thrown `ParseError` discards the
+		// file's recorded diagnostics (`abortedParseArtifact`). The visible complaint named the comparison.
+		if self.implicitSelfTakesTheArrayRoster(calleeTok) 'arrayRosterMember'
+			let recv = try self.implicitSelfRosterReceiver(calleeTok, tag: ValueTypeTag.genericInstance, nameId: self.signatures.ownRecordSelfInstance(self.enclosingType))
+			return try self.dispatchArrayMethod(func, arr: recv.value, giid: recv.nameId, resultUsed: resultUsed, immutableReceiverName: recv.immutableName, borrowSubjectName: recv.subjectName, receiverOwner: recv.owner, receiverStorage: self.subjectStorageMask(func, subjectName: recv.subjectName), viaManagedField: false)
+		end 'arrayRosterMember'
 
 		if self.isImplicitSelfMethod(calleeTok.value) 'implicitSelfMethod'
 			let receiver = try self.implicitSelfReceiver(calleeTok.value, anchor: calleeTok)

@@ -74,13 +74,26 @@ fused record has no slot for, and the drop and clone cascades then read past the
 
 The declaration is admitted and its record, its `Self`, its literals, its statics and its
 conformances are correct — measured here on a user-written one, because the corpus module is not yet
-loadable. What still blocks the listing is four mechanisms this spec does not exercise, each named
-by its own wall in `stdlib/Array.maxon`: `for … in` over an interface EXISTENTIAL (`from`), an
-opaque type-parameter value written into N slots inside a loop (`growFilled`, `refill`), an
-extension method OWNING an opaque type-parameter parameter with no descriptor reserved (`contains`),
-and the corpus fall-through for a declared member, which is one change with
-`ProgramSignatures.genericInstanceHasBaseLayout` because that gate also decides the FIELD WALK the
-drop cascade reads.
+loadable. The **MEMBERS** are served too, as of the cases at the end of this file: a name the roster
+carries is the synthesized arm's in both spellings, and a name only the declaration carries is an
+ordinary call to an ordinary declared function.
+
+⛔ **AND THAT WAS *NOT* ONE CHANGE WITH `ProgramSignatures.genericInstanceHasBaseLayout`, WHICH THIS
+SECTION USED TO SAY IT WAS.** The reasoning was that the gate also decides the FIELD WALK the drop
+cascade reads, so the two had to move together. **MEASURED on this tree by widening exactly that gate
+to admit a declared `Array` base: 551 `--filter=array` cases, 0 failures — INERT.** The walk it opens
+enumerates one field, the buffer, whose drop callee is `__arr_decref`, which is already the callee
+`genericInstanceBoxDropCallee` gives the record; both cascade readers filter a non-`__destruct_` leaf
+out. The door that was actually refusing the member is `Parser.structLayoutOfType`, which reads that
+gate as one of its inputs, so the admission is spent there — a layout to NAME a member is not a layout
+to ENUMERATE fields.
+
+What still blocks the listing is three mechanisms this spec does not exercise, each named by its own
+wall in `stdlib/Array.maxon`: `for … in` over an interface EXISTENTIAL (`from`, line 132), an opaque
+type-parameter value moved into a slot from a BORROW (`appendMemory`, line 281 — the first wall left
+once the member walls fell, and reached identically by the `self.push(borrowed)` spelling the roster
+has always served), and an extension method OWNING an opaque type-parameter parameter with no
+descriptor reserved (`contains`).
 
 ## Tests
 
@@ -367,4 +380,337 @@ end 'main'
 ```
 ```maxoncstderr
 error E2015: <fragment>:6:10: Unsupported: `Holder` implements `BuiltinArrayLiteral`, one of `stdlib/Builtins.maxon`'s literal markers, so its record would be the compiler's own fused byte record rather than the fields it declares. shv2 mints that record only for the two names it owns the record FOR — `String` and `Character` — because a conformer of any other name gets a VALUE whose bytes are a byte record's and whose IDENTITY is a struct's: every declared field the fused record has no slot for is discarded at construction, and the struct cascade that later drops or clones it reads past the record's end
+```
+
+<!-- test: a-declared-member-off-the-roster-is-served-from-the-corpus -->
+⭐ **A MEMBER THE DECLARATION CARRIES AND THE ROSTER DOES NOT IS AN ORDINARY CALL TO AN ORDINARY DECLARED
+FUNCTION.** `at` is not one of the members shv2 synthesizes, so before this the call was
+`E2015 … 'Array' member 'at' — P1.7 provides managed/get/set/…; that list IS the surface` — about a
+method the program plainly has, sitting in the very declaration whose record the compiler owns.
+```maxon
+typealias Num = int(0 to 1000)
+
+type Array uses Element implements BuiltinArrayLiteral
+	typealias ElementMemory = __ManagedMemory with Element
+
+	export var managed as ElementMemory
+
+	export static function init(managed ElementMemory) returns Self
+		return Self{managed: managed}
+	end 'init'
+
+	export static function create() returns Self
+		return Self{}
+	end 'create'
+
+	export function at(i Num) returns Element
+		return try managed.get(i) otherwise panic("at: the caller checked the bound")
+	end 'at'
+end 'Array'
+
+typealias NumArray = Array with Num
+
+function main() returns ExitCode
+	var a = NumArray.create()
+	a.push(17 as Num)
+	a.push(25 as Num)
+	return (a.at(0) + a.at(1)) as ExitCode
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: the-self-spelling-of-a-corpus-served-member-reaches-the-same-body -->
+The `self.` spelling of the call above, made from inside the declaration's own body. It is the spelling
+that reaches `dispatchMethodOnReceiver`, and it was refused by the same roster sentence — so the two
+spellings of one member disagreed about whether the member existed at all.
+```maxon
+typealias Num = int(0 to 1000)
+
+type Array uses Element implements BuiltinArrayLiteral
+	typealias ElementMemory = __ManagedMemory with Element
+
+	export var managed as ElementMemory
+
+	export static function init(managed ElementMemory) returns Self
+		return Self{managed: managed}
+	end 'init'
+
+	export static function create() returns Self
+		return Self{}
+	end 'create'
+
+	export function at(i Num) returns Num
+		return try managed.get(i) otherwise panic("at: the caller checked the bound")
+	end 'at'
+
+	export function headPlusTail() returns Num
+		return self.at(0) + self.at(1)
+	end 'headPlusTail'
+end 'Array'
+
+typealias NumArray = Array with Num
+
+function main() returns ExitCode
+	var a = NumArray.create()
+	a.push(30 as Num)
+	a.push(12 as Num)
+	return a.headPlusTail()
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: a-bare-call-to-a-roster-member-takes-the-roster -->
+⭐⭐ **THE ROSTER-WINS ORDER APPLIES TO THE BARE SPELLING TOO — W17's RULE, SECOND SURFACE.** `self.get(i)`
+has always reached the synthesized arm; a BARE `get(i)` in the same body reached the declaration instead,
+so one member had two meanings depending on how it was written. The two bodies are made to DISAGREE on
+purpose — the declared `count` answers 99 and the buffer holds 3 — so the case reports WHICH one the bare
+call took rather than merely that it compiled. `count` is the discriminator and `get` is not, because the
+roster's `get` hands back the ELEMENT, which in the shared generic body is an opaque `Element` no concrete
+return type can be compared against.
+```maxon
+typealias Num = int(0 to 1000)
+
+type Array uses Element implements BuiltinArrayLiteral
+	typealias ElementMemory = __ManagedMemory with Element
+
+	export var managed as ElementMemory
+
+	export static function init(managed ElementMemory) returns Self
+		return Self{managed: managed}
+	end 'init'
+
+	export static function create() returns Self
+		return Self{}
+	end 'create'
+
+	export function count() returns Num
+		return 99 as Num
+	end 'count'
+
+	export function bareCount() returns Num
+		return count()
+	end 'bareCount'
+end 'Array'
+
+typealias NumArray = Array with Num
+
+function main() returns ExitCode
+	var a = NumArray.create()
+	a.push(41 as Num)
+	a.push(42 as Num)
+	a.push(43 as Num)
+	return a.bareCount()
+end 'main'
+```
+```exitcode
+3
+```
+
+<!-- test: a-bare-roster-member-inside-an-extension-body-resolves -->
+An `extension` body's bare `count()` / `get(i)` is the same rule one declaration over, and it is what
+`stdlib/Array.maxon`'s `contains(sequence)` is written in. The sibling walk cannot see them — they belong
+to the type's OWN body — so the call was `E3004 call to undefined function 'get'`, a diagnostic no reader
+ever saw because the `E3005` the untyped result then caused is THROWN and discards the file's recorded
+diagnostics. The extension member is not called: shv2 compiles every declared body, so the compile IS the
+assertion, and `main` reports through the roster.
+```maxon
+typealias Num = int(0 to 1000)
+
+type Array uses Element implements BuiltinArrayLiteral
+	typealias ElementMemory = __ManagedMemory with Element
+
+	export var managed as ElementMemory
+
+	export static function init(managed ElementMemory) returns Self
+		return Self{managed: managed}
+	end 'init'
+
+	export static function create() returns Self
+		return Self{}
+	end 'create'
+end 'Array'
+
+export extension Array
+	export function total() returns Num
+		let slots = count()
+		var sum = 0 as Num
+		for i in 0 upto slots 'eachSlot'
+			sum = sum + (try get(i) otherwise 0 as Num)
+		end 'eachSlot'
+		return sum
+	end 'total'
+end 'Array'
+
+typealias NumArray = Array with Num
+
+function main() returns ExitCode
+	var a = NumArray.create()
+	a.push(19 as Num)
+	a.push(23 as Num)
+	return a.count() as ExitCode
+end 'main'
+```
+```exitcode
+2
+```
+
+<!-- test: a-managed-element-through-a-corpus-served-member-balances -->
+⭐⭐ **THE OWNERSHIP HALF, AND IT PINS THE EXIT CODE BECAUSE THE PRINT ALONE COULD NOT SEE THE BUG.** The
+corpus-served member hands back a MANAGED element, which is a `+1` the CALLEE owes
+(`Parser.emitOwnedValueReturn`'s opaque arm) and takes through the enclosing instance's descriptor
+`retainFunc@64`. That word was stamped ZERO for an `Array with String`, because the gate deciding whether a
+descriptor carries ownership words asked `genericInstanceHasBaseLayout` — i.e. *"is there a shared body that
+reads this block?"* — and answered no for every `Array`. A record-collapsed `type Array` is the case where
+the record is the compiler's AND the methods are a shared body, so the caller was handed a BORROW it then
+released: **this program printed `alpha beta 2` and SEGFAULTED at teardown.**
+
+⛔ **AND THE FIRST VERSION OF THIS CASE PINNED ONLY `stdout`, SO IT PASSED WHILE DOING EXACTLY THAT.** An
+unpinned exit code asserts nothing (`SpecTestRunner.runAssertions` says so deliberately, for the ported
+`/specs` cases that pin only what a program prints) — so a fault or a **101** AFTER the last `print` is
+invisible to a stdout-only case. Any authored case whose subject is OWNERSHIP must pin the exit code too.
+```maxon
+typealias Slot = int(0 to 1000)
+
+type Array uses Element implements BuiltinArrayLiteral
+	typealias ElementMemory = __ManagedMemory with Element
+
+	export var managed as ElementMemory
+
+	export static function init(managed ElementMemory) returns Self
+		return Self{managed: managed}
+	end 'init'
+
+	export static function create() returns Self
+		return Self{}
+	end 'create'
+
+	export function at(i Slot) returns Element
+		return try managed.get(i) otherwise panic("at: the caller checked the bound")
+	end 'at'
+end 'Array'
+
+typealias StrArray = Array with String
+
+function main() returns ExitCode
+	var a = StrArray.create()
+	a.push("alpha")
+	a.push("beta")
+	let head = a.at(0)
+	let tail = a.at(1)
+	print("{head} {tail} {a.count()}")
+	return 0 as ExitCode
+end 'main'
+```
+```stdout
+alpha beta 2
+```
+```exitcode
+0
+```
+
+<!-- test: error.a-member-no-declaration-carries-is-still-refused -->
+⛔ **THE FALL-THROUGH MAY NOT BECOME A SILENT NO-OP.** The corpus door admits only a name the declaration
+actually carries; anything else meets the roster sentence unchanged, which is the answer for a member that
+exists nowhere.
+```maxon
+typealias Num = int(0 to 1000)
+
+type Array uses Element implements BuiltinArrayLiteral
+	typealias ElementMemory = __ManagedMemory with Element
+
+	export var managed as ElementMemory
+
+	export static function init(managed ElementMemory) returns Self
+		return Self{managed: managed}
+	end 'init'
+
+	export static function create() returns Self
+		return Self{}
+	end 'create'
+end 'Array'
+
+typealias NumArray = Array with Num
+
+function main() returns ExitCode
+	var a = NumArray.create()
+	return a.nosuch() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:22:11: Unsupported: `Array` member 'nosuch' — P1.7 provides managed/get/set/first/last/pop/remove/slice/count/capacity/isEmpty/clone/push/reserve/resize/clear/insert/append/appendMemory/map/contains/hash/equals; that list IS the surface, so nothing else is served here
+```
+
+<!-- test: a-corpus-served-managed-element-balances-across-a-loop -->
+⭐ **THE SAME ARITHMETIC, FIFTY TIMES OVER, WITH A CLONE IN THE MIDDLE.** One call can be one reference
+wrong and still look right; a loop cannot. Every round takes an element out through the corpus door in
+BOTH spellings — `b.at(0)` and, inside `lastOne`, `self.at(…)` over a BARE `count()` — and drops a clone,
+so a miscount is 50 chances to fault or to exit **101**. The exit code is pinned for the reason the case
+above it records.
+```maxon
+typealias Slot = int(0 to 1000)
+
+// The record-collapsed `Array`, exercised through a CORPUS-SERVED member that hands back a managed
+// element, in a loop, alongside a clone. Any reference taken one too few or one too many times exits 101.
+type Array uses Element implements BuiltinArrayLiteral, Cloneable
+	typealias ElementMemory = __ManagedMemory with Element
+
+	export var managed as ElementMemory
+
+	export static function init(managed ElementMemory) returns Self
+		return Self{managed: managed}
+	end 'init'
+
+	export static function create() returns Self
+		return Self{}
+	end 'create'
+
+	export function clone() returns Self
+		let len = managed.length()
+		let copy = try managed.slice(0, len) otherwise panic("clone: 0..len is always in range")
+		return Self{managed: copy}
+	end 'clone'
+
+	// Off the roster, so this is the corpus door's own path.
+	export function at(i Slot) returns Element
+		return try managed.get(i) otherwise panic("at: the caller checked the bound")
+	end 'at'
+
+	// The `self.` spelling of the same, plus a BARE roster call in the same body.
+	export function lastOne() returns Element
+		return self.at((count() - 1) as Slot)
+	end 'lastOne'
+end 'Array'
+
+typealias StrArray = Array with String
+
+function main() returns ExitCode
+	var a = StrArray.create()
+	a.push("alpha")
+	a.push("beta")
+	a.push("gamma")
+
+	var seen = 0 as Slot
+	for _ in 0 upto 50 'rounds'
+		var b = a.clone()
+		b.push("delta")
+		let head = b.at(0)
+		let tail = b.lastOne()
+		if head.byteLength() + tail.byteLength() > 0 'nonEmpty'
+			seen = (seen + 1) as Slot
+		end 'nonEmpty'
+	end 'rounds'
+
+	print("{seen} {a.count()} {a.lastOne()} {a.at(0)}")
+	return 0 as ExitCode
+end 'main'
+```
+```stdout
+50 3 gamma alpha
+```
+```exitcode
+0
 ```
