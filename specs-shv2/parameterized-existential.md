@@ -26,14 +26,14 @@ would be one fact written twice with nothing keeping the copies honest.
 `Element` to `Integer` is admitted; `Seq with Text` against those same conformers is **E3125**, naming both
 bindings and the conformer that settled the program's.
 
-⛔ **AN ASSOCIATED TYPE HELD AT AN INTERFACE IS NOT YET CARRYABLE.** `Bag with (Integer, SomeCursor)` where
-`SomeCursor` is itself an interface asks a requirement to hand back a value at an interface type — two words,
-and a witness call carries one machine word per result, so the cursor would arrive with no table to dispatch
-through. Supplying it needs a SECOND witness table travelling with the first, which shv2 does not carry yet.
-It is its own `DeclaredStoragePosition` (`associatedTypeBinding`) rather than the `containerElement` sentence
-the same reader gives every other type argument, because a parameterized interface has no element slot and
-being told it has one names a container the program does not have. It is the wall `stdlib/Array.maxon`'s
-`Iterable with (Element, ElementIterator)` stands at.
+⭐ **AN ASSOCIATED TYPE HELD AT AN INTERFACE IS CARRIED, AND IT IS THE ONE `with` ARGUMENT THAT IS NOT A
+RESTATEMENT.** `Bag with (Integer, SomeCursor)` where `SomeCursor` is itself an interface asks a requirement
+to hand back a value at an interface type — two words, where a witness call carries one machine word per
+result. The second word comes from a SLOT of the conformer's own witness table, appended past the method
+slots, holding the nested table for whatever THAT conformer bound the position to; see
+`specs-shv2/associated-type-held-at-an-interface.md` for the mechanism, for why only a RESULT can be supplied
+this way, and for what every conformer then owes. The remaining half of `associatedTypeBinding`'s refusal is
+an associated type a requirement TAKES.
 
 ## Tests
 
@@ -470,11 +470,11 @@ end 'main'
 error E3125: <fragment>:30:11: this use of 'Seq' binds its associated type 'Element' to 'Text', but 'Upto' binds it to 'Integer' — an interface this program DISPATCHES through has exactly one binding per associated type (E3119's rule), so a use site does not choose one, it states the one the conformances already settled. Write the binding the conformers declare, or give the two readings different interfaces
 ```
 
-<!-- test: error.associated-type-held-at-an-interface -->
-⛔ **THE SECOND TABLE shv2 DOES NOT CARRY.** `Iter` is bound to an INTERFACE, so `createIterator()` would have
-to hand back a value plus the table to walk it through — two words out of a call that returns one. This is
-the wall `stdlib/Array.maxon`'s `Iterable with (Element, ElementIterator)` stands at, refused where the
-binding is written rather than as a wrong noun further down.
+<!-- test: parameterized.associated-type-held-at-an-interface -->
+⭐ **THE WALL THIS FILE USED TO END AT.** `Iter` is bound to an INTERFACE, so `createIterator()` hands back a
+value plus the table to walk it through — two words out of a call that returns one. The second travels in the
+FIRST table (`specs-shv2/associated-type-held-at-an-interface.md`), and this case is kept here, in the file
+that recorded the refusal, so the two readings of one program sit in one history.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -539,8 +539,11 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E2015: <fragment>:49:43: Unsupported: an interface instance's associated-type binding declared at the interface type 'Cursor' — a value held at an interface type is a two-word fat pointer `(value, witness)`, and a witness call carries one machine word per result, so the value a requirement returned would arrive with no table to dispatch through — and the table differs per conformer, so it would have to travel beside the one the existential already carries. Bind the associated type to a concrete conformer, and hold values of it at that type
+```exitcode
+0
+```
+```stdout
+10
 ```
 
 <!-- test: error.associated-type-bound-to-an-existential-alias -->

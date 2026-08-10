@@ -79,6 +79,61 @@ end 'PendingRdataReloc'
 
 export typealias PendingRdataRelocArray = Array with PendingRdataReloc
 
+// ⭐⭐ **THE DATA→**DATA** SIBLING, AND THE ONE THAT NEEDS NO WRITER AT ALL.** A slot inside a `.rdata` blob
+// must hold the location of ANOTHER `.rdata` blob — today exactly one thing wants that, a witness table's
+// associated slot naming the nested table `__witness_<binding>.<heldAt>` (see
+// `IrInterface.witnessAssociatedSlotOffset`).
+//
+// ⚠ **IT HOLDS A DISTANCE, NOT AN ADDRESS, AND THAT IS WHAT MAKES IT FORMAT-FREE.** The `.text` channel
+// above is format-specific in three incompatible ways — an absolute VA on fixed-base PE/ELF
+// (`bakeFuncAbs64Relocs`), a funcref-TABLE INDEX on wasm (`StdToWasm.bakeFuncTableIndexRelocs`), and a dyld
+// CHAINED-FIXUP REBASE on Mach-O (`MachOWriter.writeMachoRdataRebases`) — so a fourth spelling of "an
+// absolute `.rdata` VA" would have been a fourth entry in each of those three, plus a PE base relocation and
+// an ELF `R_X86_64_RELATIVE` this compiler emits for nothing today. Two labels in ONE section are a
+// different question: their DISTANCE is fixed the moment the image is concatenated, it is the same number
+// under a fixed base and under PIE, and on wasm it is the same number again because the blob is one run of
+// linear memory. So the reader adds the slot to the table address it already holds, and nothing anywhere has
+// to know which format it is being loaded by.
+//
+// ⇒ it is baked in `rdataImage`, which is the ONE place the section is assembled and therefore the only
+// place that cannot be forgotten by a writer. `targetLabel` and `rdataLabel` are both labels this table
+// minted; the value written is `rdataOffsetOf(targetLabel) - rdataOffsetOf(rdataLabel)`, the distance from
+// the blob's OWN base — so the reader, which already holds that base as the address it loaded the slot
+// through, adds once.
+//
+// ⚠ **THE DISTANCE IS SIGNED AND BOTH DIRECTIONS GENUINELY OCCUR, so it is written as a 64-bit two's
+// complement and the reader's add WRAPS.** Which blob is registered first is a fact about mint ORDER, not
+// about the program: a nested table minted by this very call lands after its referrer, and one an earlier
+// conformance already minted lands before it. Forcing the order was considered and cannot be done — two
+// interfaces may hold each other's positions, and the mint's own memo (which is what stops that recursing
+// forever) is exactly what leaves the second reference pointing forward.
+export type PendingRdataSelfRelReloc
+	export let targetLabel as String
+	export let rdataLabel as String
+	export let offsetInLabel as ByteOffset
+
+	export static function create(targetLabel String, rdataLabel String, offsetInLabel ByteOffset) returns PendingRdataSelfRelReloc
+		return Self{targetLabel: targetLabel, rdataLabel: rdataLabel, offsetInLabel: offsetInLabel}
+	end 'create'
+end 'PendingRdataSelfRelReloc'
+
+export typealias PendingRdataSelfRelRelocArray = Array with PendingRdataSelfRelReloc
+
+// `to - from` as the 64-bit pattern a WRAPPING add reproduces — the backward case written as its two's
+// complement, because `ByteOffset` is `int(0 to u64.max)` and cannot hold a negative at all. `to == from`
+// cannot occur (two distinct labels never share an offset) but is answered anyway, as 0, rather than being
+// asserted about: the identity `from + result == to` (mod 2^64) is what every reader depends on, and it holds
+// for all three cases without a special one.
+function twosComplementDistance(to ByteOffset, from ByteOffset) returns MachineWord
+	if to >= from 'forward'
+		return to - from
+	end 'forward'
+
+	// `(u64.max - d) + 1` rather than `0 - d`, which the range would refuse. `d >= 1` here, so the sum is at
+	// most `u64.max` and the addition cannot overflow either.
+	return (u64.max - (from - to)) + 1
+end 'twosComplementDistance'
+
 // The rdata payloads themselves — one raw byte blob per registered global.
 export typealias ByteArrayArray = Array with ByteArray
 
@@ -160,9 +215,11 @@ export type GlobalDataTable
 	// `destroyFunc@40`/`copyFunc@32`. See PendingRdataReloc. Empty for a program that conforms nothing to an
 	// interface and holds no managed-opaque-`T` array (all but the P1.7-generics corpus).
 	export var pendingRdataRelocs as PendingRdataRelocArray
+	// Every  slot holding a distance to ANOTHER  blob — see PendingRdataSelfRelReloc.
+	export var pendingRdataSelfRelRelocs as PendingRdataSelfRelRelocArray
 
 	export static function create() returns GlobalDataTable
-		return Self{names: StringArray.create(), values: ByteArrayArray.create(), nextStringId: 0, nameIndex: GlobalNameIndexMap.create(), valueDedup: GlobalDedupMap.create(), dataSection: DataSectionEntryArray.create(), dataIndex: DataSectionIndexMap.create(), rdataOffsets: RdataOffsetMap.create(), rdataSizeSoFar: 0, stringBufferFixups: StringBufferFixupArray.create(), pendingRdataRelocs: PendingRdataRelocArray.create()}
+		return Self{names: StringArray.create(), values: ByteArrayArray.create(), nextStringId: 0, nameIndex: GlobalNameIndexMap.create(), valueDedup: GlobalDedupMap.create(), dataSection: DataSectionEntryArray.create(), dataIndex: DataSectionIndexMap.create(), rdataOffsets: RdataOffsetMap.create(), rdataSizeSoFar: 0, stringBufferFixups: StringBufferFixupArray.create(), pendingRdataRelocs: PendingRdataRelocArray.create(), pendingRdataSelfRelRelocs: PendingRdataSelfRelRelocArray.create()}
 	end 'create'
 
 	// ⭐ REGISTER a read-only constant payload, returning the label that names it — the `.rdata`
@@ -290,7 +347,19 @@ export type GlobalDataTable
 		self.pendingRdataRelocs.push(PendingRdataReloc.create(funcName, rdataLabel: rdataLabel, offsetInLabel: offsetInLabel))
 	end 'recordFuncAbs64InRdata'
 
-	// The byte image of `.rdata` — the payloads concatenated in registration order.
+	// Record that `rdataLabel`'s slot at `offsetInLabel` must be patched with `targetLabel`'s distance from
+	// `rdataLabel`'s own base — see PendingRdataSelfRelReloc. Both are `.rdata` labels this table minted, and
+	// neither offset need be known yet: the bake runs when the section is assembled.
+	export function recordRdataBlobRelativeOffset(targetLabel String, rdataLabel String, offsetInLabel ByteOffset)
+		self.pendingRdataSelfRelRelocs.push(PendingRdataSelfRelReloc.create(targetLabel, rdataLabel: rdataLabel, offsetInLabel: offsetInLabel))
+	end 'recordRdataBlobRelativeOffset'
+
+	// The byte image of `.rdata` — the payloads concatenated in registration order, with every
+	// BLOB-RELATIVE slot baked (see `PendingRdataSelfRelReloc`). That bake lives here, and not in each
+	// writer beside the three format-specific ones, precisely because it is NOT format-specific: a distance
+	// within one section is the same number under every image format and every base, so giving each writer
+	// its own copy would be one fact written four times with nothing keeping them honest — and a wrong copy
+	// would be 8 opaque bytes in a witness table on ONE target, with no diagnostic anywhere.
 	//
 	// The `dataSectionImage` twin, including its drift assert and for the same reason: an entry
 	// whose recorded offset disagrees with the running position means the offsets a relocation
@@ -309,8 +378,21 @@ export type GlobalDataTable
 			end 'drift'
 			image.append(payload)
 		end 'each'
+
+		self.bakeBlobRelativeOffsets(image)
 		return image
 	end 'rdataImage'
+
+	// Write each blob-relative slot's distance into the assembled image. IDEMPOTENT — it writes an absolute
+	// distance rather than adjusting one — so a second `rdataImage()` (the wasm backend builds its own image
+	// beside the native one) produces the identical bytes.
+	function bakeBlobRelativeOffsets(image ByteArray)
+		for reloc in self.pendingRdataSelfRelRelocs 'each'
+			let base = self.rdataOffsetOf(reloc.rdataLabel)
+			let target = self.rdataOffsetOf(reloc.targetLabel)
+			patchQword(image, offset: base + reloc.offsetInLabel, value: twosComplementDistance(target, from: base))
+		end 'each'
+	end 'bakeBlobRelativeOffsets'
 
 	// The byte offset of `label`'s payload within `.rdata` — the door the x64 relocation resolver
 	// asks through, and the exact mirror of `dataSectionOffsetOf`. A miss is an invariant break,

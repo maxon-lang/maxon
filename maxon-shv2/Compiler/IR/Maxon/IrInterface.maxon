@@ -122,6 +122,27 @@ export function witnessMethodSlotOffset(index WitnessMethodIndex) returns ByteOf
 	return WitnessTableHeaderBytes + WitnessSlotBytes * index
 end 'witnessMethodSlotOffset'
 
+// ⭐⭐ **THE SECOND TABLE A HELD ASSOCIATED TYPE NEEDS, AND WHERE IT RIDES.** An interface with an
+// associated position the program HOLDS AT AN INTERFACE carries one further slot per associated position,
+// APPENDED past the method slots — `witnessMethodSlotOffset`'s twin, and the only place the two blocks'
+// arithmetic meets. Slot `methodCount + position` holds the nested table for whatever THIS conformer bound
+// that position to, which is what makes "conformers bind `Iter` differently" work: each conformer's table
+// names its own.
+//
+// ⭐ **THE WHOLE BLOCK IS ALLOCATED, NOT JUST THE HELD POSITIONS, AND THAT IS DELIBERATE.** A dense
+// held-position index would be a SECOND numbering beside `associatedTypeNames`, computed at the mint and
+// re-computed at every load, and the two would be free to disagree about a slot that is 8 opaque bytes to
+// every reader. `position` is the interface's own, so there is one numbering. An interface with NO held
+// position gets no block at all (`associatedSlotCount` is 0), so every witness table in a program that does
+// not use the feature is byte-identical to what it was.
+//
+// ⚠ **THE SLOT HOLDS A SELF-RELATIVE BYTE OFFSET, NOT AN ADDRESS** — see
+// `GlobalDataTable.recordRdataSelfRelativeOffset` for why `.rdata` cannot point at itself with any
+// relocation this compiler has, and why a distance can.
+export function witnessAssociatedSlotOffset(methodCount WitnessMethodIndex, position ElementCount) returns ByteOffset
+	return WitnessTableHeaderBytes + WitnessSlotBytes * (methodCount + position)
+end 'witnessAssociatedSlotOffset'
+
 // ⭐⭐ **THE SEPARATOR THE WITNESS LABEL JOINS ITS TWO NAMES WITH, AND THE CHARACTER CLASS *IS* THE
 // INJECTIVITY ARGUMENT.** The label identifies a `(conformer, interface)` PAIR, so a separator that a
 // name may itself contain does not identify one: `_` is a legal identifier byte (`Lexer.isAlphaNum`), so
@@ -737,6 +758,49 @@ export function associatedAbiBindingOf(conformances ConformanceDeclArray, interf
 
 	return AssociatedAbiBinding.agreed(seenDecl, binding: seenBinding, declaredType: renderedTypeNameAbiType(seenBinding))
 end 'associatedAbiBindingOf'
+
+// ⭐ **WHAT *ONE NAMED CONFORMER* BINDS `interfaceName`'s associated type at `position` to — the per-conformer
+// read the FOLD above deliberately cannot give.** `associatedAbiBindingOf` answers for the program, because
+// its two callers are checking that the program agrees; a HELD position is the one place the program is
+// allowed to disagree, and there the answer that matters is this conformer's, since it is this conformer's
+// table being stamped and its own binding whose nested table goes in the slot.
+//
+// A miss — no such conformance, or one that bound too few arguments — is `MapError.keyNotFound` rather than
+// an empty name: both are E3016's to report, and a caller must not stamp a slot naming a type nobody bound.
+export function conformerAssociatedBinding(conformances ConformanceDeclArray, typeName ByteArray, interfaceName ByteArray, position ElementCount) returns ByteArray throws MapError
+	for decl in conformances 'eachDeclaringType'
+		if not decl.typeName.equals(typeName) 'anotherType'
+			continue
+		end 'anotherType'
+
+		return try declAssociatedBinding(decl, interfaceName: interfaceName, position: position)
+	end 'eachDeclaringType'
+
+	throw MapError.keyNotFound
+end 'conformerAssociatedBinding'
+
+// ⭐ **THE SAME READ WHEN THE CALLER ALREADY HOLDS THE DECLARATION**, which is what a WALK of the conformance
+// list holds. Split from the name-keyed door above rather than left inside it because the difference is a
+// COST, not a spelling: a walk that asked by name for each declaration it was already standing on would scan
+// the whole list per element — the quadratic this project's ladder exists to find — and the first cut of
+// `checkHeldAssociatedTypeBindings` did exactly that.
+export function declAssociatedBinding(decl ConformanceDecl, interfaceName ByteArray, position ElementCount) returns ByteArray throws MapError
+	for entry in decl.interfaces 'eachInterface'
+		if not entry.interfaceName.equals(interfaceName) 'otherInterface'
+			continue
+		end 'otherInterface'
+
+		// A conformance that bound FEWER arguments than the interface declares is E3016's to report; it names
+		// nothing here, exactly as it constrains nothing in `associatedAbiBindingOf`.
+		if position >= entry.withArgs.count() 'boundNothingAtThisPosition'
+			continue
+		end 'boundNothingAtThisPosition'
+
+		return try entry.withArgs.get(position) otherwise panic("declAssociatedBinding: withArgs.get OOB at {position}, which the guard above excludes")
+	end 'eachInterface'
+
+	throw MapError.keyNotFound
+end 'declAssociatedBinding'
 
 export typealias IrInterfaceMap = Map with (ByteArray, IrInterface)
 

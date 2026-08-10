@@ -1509,14 +1509,21 @@ type MaxonToStdLowering
 		let iface = self.resolveWitnessInterface(interfaceName)
 		let slots = interfaceWitnessSlots(self.interfaces, iface: iface)
 		let methodCount = slots.count()
+		let associatedCount = self.heldAssociatedSlotCount(interfaceName, iface: iface)
 
-		// `methodCount@0`, then zero-fill through the header (`destroyFunc@8`, `flags@16`) and every method
-		// slot — the writer patches the slots via the relocations below. `scalarImage` is the SAME little-endian
-		// serializer the `.data`/`.rdata` images use, so the header word matches every other integer this backend
-		// writes.
+		// `methodCount@0`, then zero-fill through the header (`destroyFunc@8`, `flags@16`), every method
+		// slot and — where this interface holds an associated position at an interface — the associated
+		// block past them. The writer patches the slots via the relocations below. `scalarImage` is the SAME
+		// little-endian serializer the `.data`/`.rdata` images use, so the header word matches every other
+		// integer this backend writes.
+		//
+		// ⚠ **`methodCount@0` COUNTS THE METHOD SLOTS AND NOT THE BLOB'S SLOTS**, which is why it is written
+		// from `methodCount` and not from the sum below. It is the length of the list a dispatch's
+		// `methodIndex` indexes; the associated block is addressed from that same count and is not part of
+		// it, so widening this word would move every reader's idea of where the methods end.
 		var blob = ByteArray.create()
 		blob.append(scalarImage(methodCount as ParsedInt, byteCount: WitnessSlotBytes as ByteCount))
-		blob.growFilled((WitnessTableHeaderBytes + WitnessSlotBytes * methodCount) as ElementCount, value: 0)
+		blob.growFilled((WitnessTableHeaderBytes + WitnessSlotBytes * (methodCount + associatedCount)) as ElementCount, value: 0)
 		_ = self.globalData.registerRdataConstantLabeled(label, bytes: blob)
 
 		// ⭐ **`destroyFunc@8` — HOW AN OWNED EXISTENTIAL OF THIS CONFORMER IS RELEASED — and `retainFunc@16`,
@@ -1534,8 +1541,54 @@ type MaxonToStdLowering
 			self.globalData.recordFuncAbs64InRdata(self.witnessSlotImpl(typeName, interfaceName: slot.sourceInterfaceName, method: slot.method), rdataLabel: label, offsetInLabel: witnessMethodSlotOffset(i))
 		end 'eachMethod'
 
+		self.stampAssociatedWitnessSlots(typeName, interfaceName: interfaceName, label: label, methodCount: methodCount, associatedCount: associatedCount)
 		return label
 	end 'ensureWitnessTable'
+
+	// How many slots this table's ASSOCIATED block occupies — the interface's full associated-type count when
+	// the program holds any of its positions at an interface, and 0 otherwise.
+	//
+	// ⇒ a program that never writes an interface as a `with` argument reserves nothing and mints exactly the
+	// bytes it always did.
+	//
+	// ⚠ **THE LOAD SIDE DOES NOT ASK THIS, AND DOES NOT NEED TO.** `Parser.heldAssociatedReturnIn` reaches
+	// `witnessAssociatedSlotOffset` only for a position `associatedTypeHeldAt` ANSWERED for, which is exactly
+	// the condition that makes this return non-zero — so the block it addresses into is present by the same
+	// fact rather than by a second agreement. What the two ends genuinely share is the OFFSET function and its
+	// `methodCount` base, which is where a disagreement could still be written and therefore where the
+	// arithmetic lives.
+	function heldAssociatedSlotCount(interfaceName ByteArray, iface IrInterface) returns ElementCount
+		if not self.signatures.interfaceHoldsAnAssociatedType(interfaceName) 'holdsNothing'
+			return 0
+		end 'holdsNothing'
+
+		return iface.associatedTypeNames.count()
+	end 'heldAssociatedSlotCount'
+
+	// ⭐⭐ **THE NESTED TABLE, ONE SLOT PER HELD POSITION.** `createIterator()` hands back a value at the
+	// interface `Iter` is held at, and the witness half of that fat pointer cannot ride the call — a witness
+	// call carries one machine word per result. It does not have to: THIS conformer's binding for the
+	// position is a compile-time fact of THIS conformance, so the table it would be widened through is a
+	// compile-time constant and lives here, in the conformer's own table, where a dispatch site that has the
+	// receiver's witness can load it.
+	//
+	// ⚠ **IT IS THE CONFORMER'S OWN BINDING AND NOT THE FOLD'S** (`conformerAssociatedBinding`, not
+	// `associatedAbiBindingOf`): a held position is the one place two conformers are ALLOWED to bind
+	// differently, which is the whole point — `UpBag` names `__witness_UpCursor.Cursor` here and `DownBag`
+	// names `__witness_DownCursor.Cursor`, and a dispatch through either lands in the right one without the
+	// call site knowing which.
+	//
+	// A conformance that bound nothing at this position is E3016's to report and stamps nothing: leaving the
+	// zero-fill is right, because nothing will read a slot for a position that has no binding to widen.
+	function stampAssociatedWitnessSlots(typeName ByteArray, interfaceName ByteArray, label String, methodCount WitnessMethodIndex, associatedCount ElementCount)
+		for position in 0 upto associatedCount 'eachAssociatedType'
+			if let held = try self.signatures.associatedTypeHeldAt(interfaceName, position: position) 'heldAtAnInterface'
+				if let binding = try conformerAssociatedBinding(self.conformances, typeName: typeName, interfaceName: interfaceName, position: position) 'thisConformerBoundIt'
+					self.globalData.recordRdataBlobRelativeOffset(self.ensureWitnessTable(binding, interfaceName: held), rdataLabel: label, offsetInLabel: witnessAssociatedSlotOffset(methodCount, position: position))
+				end 'thisConformerBoundIt'
+			end 'heldAtAnInterface'
+		end 'eachAssociatedType'
+	end 'stampAssociatedWitnessSlots'
 
 	// Stamp ONE ownership word of a `.rdata` blob with the `funcAbs64InRdata` reloc the witness method slots
 	// take. An EMPTY callee leaves the zero-fill in place, which is the encoding every runtime entry that reads

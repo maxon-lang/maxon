@@ -7215,17 +7215,50 @@ enum DeclaredStoragePosition
 	// takes a value of whatever `make` returns. Same ABI, same reason, so it shares both clauses; a separate
 	// position only because the subject sentence has to be honest about there being no declaration.
 	functionValueReturnType
-	// ⭐⭐ **AN INTERFACE INSTANCE'S ASSOCIATED-TYPE BINDING** — the second argument of
-	// `Bag with (Integer, IntegerCursor)`. It reaches the SAME reader a container's element does
+	// ⭐⭐ **AN INTERFACE INSTANCE'S ASSOCIATED-TYPE BINDING WHOSE ASSOCIATED TYPE REACHES A REQUIREMENT'S
+	// PARAMETER** — the second argument of `Bag with (Integer, IntegerCursor)`, where `Iter` is written as
+	// something a requirement TAKES. It reaches the SAME reader a container's element does
 	// (`parseGenericArgNode`, which sees only an argument), and it is a different absence with a different
-	// remedy: the binding is not a SLOT that is one word too narrow, it is a requirement whose result would
-	// arrive with no table to dispatch through. Sent the `containerElement` sentence, the author is told a
-	// parameterized interface has "an element slot", which names a container the program does not have.
+	// remedy: the binding is not a SLOT that is one word too narrow, it is an argument whose table would have
+	// to come from the caller. Sent the `containerElement` sentence, the author is told a parameterized
+	// interface has "an element slot", which names a container the program does not have.
+	//
+	// ⚠ **IT USED TO COVER THE RESULT POSITION TOO, AND THAT HALF IS NOW SUPPLIED RATHER THAN REFUSED.** A
+	// requirement's RESULT is produced by the impl, whose own conformance pins the concrete type statically,
+	// so the table to widen it through is a compile-time constant and rides in the conformer's own witness
+	// table (`IrInterface.witnessAssociatedSlotOffset`). An ARGUMENT's table is the CALLER's — a different
+	// conformer at every call site — so no slot of the callee's table can be right about it, and this is
+	// what is left.
+	//
 	// Appended at the END, past `functionValueReturnType`, per the band-append rule the `containerElement`
 	// arm's own note relies on — and past the `functionTypeReturnType to functionValueReturnType` range,
 	// which would otherwise have swallowed it.
 	associatedTypeBinding
 end 'DeclaredStoragePosition'
+
+// ⭐⭐ **WHAT A `Base with Args` ARGUMENT IS, FOR THE ONE CHECK THAT HAS TO TELL THEM APART.** A `type`
+// base's argument is a container ELEMENT; an `interface` base's is an associated-type BINDING, and the
+// binding arm carries the interface NAME because its check is about the associated type at that position —
+// which requirement writes it, and whether in the result or in an argument. See
+// `Parser.genericArgSlotOf`, which decides it once from the base.
+union GenericArgSlot
+	containerElement
+	associatedTypeBinding(interfaceName ByteArray)
+end 'GenericArgSlot'
+
+// ⭐ **WHAT A DISPATCH NEEDS TO KNOW TO BUILD THE FAT POINTER ITS RESULT IS** — the interface the associated
+// type is held at (which TYPES the value) and the witness-table byte offset its nested table's distance sits
+// at (which finds the second word). The two are derived from ONE lookup of the associated position, so they
+// travel together rather than being asked for separately by a caller that could pair position `p`'s offset
+// with position `q`'s interface. See `Parser.heldAssociatedReturnOf`.
+type HeldAssociatedReturn
+	export let heldAt as ByteArray
+	export let slotOffset as ByteOffset
+
+	export static function create(heldAt ByteArray, slotOffset ByteOffset) returns HeldAssociatedReturn
+		return Self{heldAt: heldAt, slotOffset: slotOffset}
+	end 'create'
+end 'HeldAssociatedReturn'
 
 // ⭐⭐ **THE ONE SENTENCE EVERY INTERFACE-TYPED-POSITION REFUSAL IS BUILT FROM.** Each of the places
 // `DeclaredStoragePosition` names has no room for an existential's second word, and each says so with the
@@ -7263,7 +7296,7 @@ function storagePositionRemedy(position DeclaredStoragePosition) returns String
 		// It does NOT offer "take the interface as a PARAMETER", which every other storage position can: the
 		// binding already IS on an existential parameter, and the value that cannot travel is the one a
 		// REQUIREMENT hands back. Moving the outer type changes nothing about that.
-		associatedTypeBinding then return "Bind the associated type to a concrete conformer, and hold values of it at that type"
+		associatedTypeBinding then return "Hold the associated type at an interface only where every requirement that writes it RETURNS it, or bind it to a concrete conformer"
 	end 'which'
 end 'storagePositionRemedy'
 
@@ -7343,11 +7376,12 @@ function storagePositionRoom(position DeclaredStoragePosition) returns String
 		functionTypeReturnType then return functionValueReturnAbiRoom()
 		interfaceRequirementReturnType then return "a requirement is dispatched through a witness-table slot whose signature is rebuilt from the requirement's rendered return-type NAME, a spelling no interface has — so the second register is never read and the witness half is dropped"
 		functionValueReturnType then return functionValueReturnAbiRoom()
-		// ⭐⭐ **THE ONE POSITION IN THIS FAMILY WHOSE ABSENCE IS A SECOND TABLE RATHER THAN A NARROW SLOT.**
-		// The binding types what a REQUIREMENT hands back, and the conformers bind it to their own concrete
-		// cursors — so the table to walk the result through differs per conformer and can only travel with the
-		// existential the call was dispatched on. shv2's fat pointer carries exactly one.
-		associatedTypeBinding then return "a witness call carries one machine word per result, so the value a requirement returned would arrive with no table to dispatch through — and the table differs per conformer, so it would have to travel beside the one the existential already carries"
+		// ⭐⭐ **THE ONE POSITION IN THIS FAMILY WHOSE ABSENCE IS A SECOND TABLE RATHER THAN A NARROW SLOT —
+		// AND THE ONLY DIRECTION IN WHICH NO TABLE CAN BE SUPPLIED.** A held binding's second table rides in
+		// the conformer's own witness table when the requirement RETURNS it, because the impl that produces
+		// the value pins its concrete type; an ARGUMENT is handed IN by the caller, whose conformer differs
+		// per call site, so there is no compile-time table to put anywhere.
+		associatedTypeBinding then return "a witness call carries one machine word per argument, so an argument's witness half is dropped — and unlike a result, whose conformer the impl that produces it pins statically, an argument's table is the CALLER's and differs per call site, so no slot of the callee's table can supply it"
 	end 'which'
 end 'storagePositionRoom'
 
@@ -14413,7 +14447,7 @@ export type Parser
 		let baseName = canonicalGenericBaseName(baseTok.value)
 		var args = GenericArgNodeArray.create()
 		let argsStart = self.pos
-		let argCount = try self.parseGenericArgNodes(args, inlineElement: self.baseStoresArgumentsInline(baseName), bareCommaList: true, position: self.genericArgStoragePosition(baseName))
+		let argCount = try self.parseGenericArgNodes(args, inlineElement: self.baseStoresArgumentsInline(baseName), bareCommaList: true, slot: self.genericArgSlotOf(baseName))
 		let selfRef = self.selfNamingArgToken(aliasTok, argsStart: argsStart)
 		genericOut.push(GenericAliasEntry.create(aliasTok.value, baseName: baseName, argCount: argCount, args: args, elementIsBuffer: elementIsBuffer, baseIsBuffer: baseIsBuffer, nameLine: aliasTok.line, nameColumn: aliasTok.column, filePath: self.filePath, visibility: visibility, fixedSize: fixedSize, selfRefLine: selfRef.line, selfRefColumn: selfRef.column))
 		self.checkGenericInstance(baseTok, argCount: argCount)
@@ -14544,9 +14578,9 @@ export type Parser
 	// the BASE, so it is passed down from the base that was read rather than re-derived per argument, and a
 	// NESTED instance recomputes it from its own base (a `Vector with 2 (Box with Real)` puts `Real` in a
 	// declared generic's slot, not in a buffer).
-	function parseGenericArgNodes(nodes GenericArgNodeArray, inlineElement bool, bareCommaList bool, position DeclaredStoragePosition) returns FieldIndex throws ParseError
+	function parseGenericArgNodes(nodes GenericArgNodeArray, inlineElement bool, bareCommaList bool, slot GenericArgSlot) returns FieldIndex throws ParseError
 		if not self.at(TokenKind.leftParen) 'unparenthesized'
-			try self.parseGenericArgNode(nodes, inlineElement: inlineElement, position: position)
+			try self.parseGenericArgNode(nodes, inlineElement: inlineElement, slot: slot, position: 0)
 
 			// ⭐⭐ **`Map with String, UnaryOp` IS THE SAME LIST `Map with (String, UnaryOp)` SPELLS, AND
 			// `/specs/map.md:function-valued.dispatch` WRITES IT WITHOUT THE PARENS.** The parenthesized form
@@ -14568,7 +14602,7 @@ export type Parser
 			var bareCount = 1 as FieldIndex
 			while self.at(TokenKind.comma) 'moreBareArgs'
 				try self.consume(TokenKind.comma)
-				try self.parseGenericArgNode(nodes, inlineElement: inlineElement, position: position)
+				try self.parseGenericArgNode(nodes, inlineElement: inlineElement, slot: slot, position: bareCount)
 				bareCount = bareCount + 1
 			end 'moreBareArgs'
 			return bareCount
@@ -14576,7 +14610,7 @@ export type Parser
 		try self.consume(TokenKind.leftParen)
 		var count = 0 as FieldIndex
 		while true 'argLoop'
-			try self.parseGenericArgNode(nodes, inlineElement: inlineElement, position: position)
+			try self.parseGenericArgNode(nodes, inlineElement: inlineElement, slot: slot, position: count)
 			count = count + 1
 			if not self.at(TokenKind.comma) 'doneArgs'
 				break
@@ -14594,17 +14628,23 @@ export type Parser
 	// as `inlineElement` does — and for the same reason: it is a fact about the base, and re-deriving it per
 	// argument would be the same lookup done N times.
 	//
+	// ⚠ **IT CARRIES THE INTERFACE NAME AND NOT MERELY THE FACT, because the binding arm's refusal is about
+	// the ASSOCIATED TYPE at that position** — which requirement writes it, and where. A bare
+	// `DeclaredStoragePosition` said only "this is a binding", so the one thing the check needs to look the
+	// associated type up had to be re-derived at the argument or not asked at all; it was not asked, and every
+	// interface-typed binding was refused alike.
+	//
 	// ⚠ **THE `allFilesFolded` GATE IS THE ONE `parseTypeReference`'s interface arm carries**, and it costs
 	// this door nothing: during the declaration SWEEP the interface registry is EMPTY, so the sweep answers
 	// `containerElement` — and it cannot refuse on that answer either, because an interface-typed argument
 	// resolves to a bare `named` in the sweep and never reaches the existential test at all.
-	function genericArgStoragePosition(baseName ByteArray) returns DeclaredStoragePosition
+	function genericArgSlotOf(baseName ByteArray) returns GenericArgSlot
 		if self.signatures.allFilesFolded and isInterfaceName(self.signatures.interfaceMap(), name: baseName) 'anInterfaceInstance'
-			return DeclaredStoragePosition.associatedTypeBinding
+			return GenericArgSlot.associatedTypeBinding(baseName)
 		end 'anInterfaceInstance'
 
-		return DeclaredStoragePosition.containerElement
-	end 'genericArgStoragePosition'
+		return GenericArgSlot.containerElement
+	end 'genericArgSlotOf'
 
 	// ⭐ **ONE generic-instance argument (P1.6-A/B2)** — a LEAF type reference (`Integer`, `Point`,
 	// `String`), or a NESTED instance `Inner with (…)` now that managed instances are owned and dropped. A
@@ -14614,7 +14654,7 @@ export type Parser
 	// diagnosed with the tolerant sweep's index-complete answer, exactly as the outer instance is
 	// (`checkGenericInstance` records, never throws). The header is pushed BEFORE its sub-args (parsed into a
 	// temp so the header's count is known), preserving pre-order.
-	function parseGenericArgNode(nodes GenericArgNodeArray, inlineElement bool, position DeclaredStoragePosition) throws ParseError
+	function parseGenericArgNode(nodes GenericArgNodeArray, inlineElement bool, slot GenericArgSlot, position FieldIndex) throws ParseError
 		if self.at(TokenKind.identifier) and self.kindAt(self.pos + 1) == TokenKind.with 'nested'
 			let baseTok = try self.consume(TokenKind.identifier)
 			try self.consume(TokenKind.with)
@@ -14629,7 +14669,7 @@ export type Parser
 			// intern to the same instance a nested `Array with T` does, or one record has two ids.
 			let subBaseName = canonicalGenericBaseName(baseTok.value)
 			var subNodes = GenericArgNodeArray.create()
-			let subCount = try self.parseGenericArgNodes(subNodes, inlineElement: self.baseStoresArgumentsInline(subBaseName), bareCommaList: false, position: self.genericArgStoragePosition(subBaseName))
+			let subCount = try self.parseGenericArgNodes(subNodes, inlineElement: self.baseStoresArgumentsInline(subBaseName), bareCommaList: false, slot: self.genericArgSlotOf(subBaseName))
 			self.checkGenericInstance(baseTok, argCount: subCount)
 			nodes.push(GenericArgNode.instanceHeader(subBaseName, argCount: subCount, fixedSize: subSize))
 			nodes.append(subNodes)
@@ -14638,7 +14678,7 @@ export type Parser
 
 		let argTok = self.current()
 		let argType = try self.parseTypeReference()
-		try self.requireStorableDeclaredType(argType, position: position, line: argTok.line, column: argTok.column)
+		try self.requireCarryableGenericArg(argType, slot: slot, position: position, argTok: argTok)
 		self.checkGenericArgType(argType, argTok: argTok, inlineElement: inlineElement)
 		nodes.push(GenericArgNode.leaf(argType))
 	end 'parseGenericArgNode'
@@ -20734,6 +20774,60 @@ export type Parser
 
 		throw ParseError.unsupported(interfaceStoragePositionMessage(position, interfaceName: self.internedName(typeNameIdOf(declared))), line: line, column: column)
 	end 'requireStorableDeclaredType'
+
+	// ⭐⭐ **WHAT ONE `Base with Args` ARGUMENT MAY BE — the two-armed door `parseGenericArgNode` asks, and
+	// the ONE place a fat pointer is admitted rather than refused.**
+	//
+	// A CONTAINER ELEMENT is the ordinary storage question, unchanged: an element slot is one machine word.
+	//
+	// An ASSOCIATED-TYPE BINDING naming an interface is something else entirely — it is not a value being
+	// stored anywhere, it is the program DECLARING that it holds that associated position existentially
+	// (`ProgramSignatures.settleAssociatedTypeHoldings`). Admitted where the associated type is only ever a
+	// requirement's RESULT, because the second table then rides in each conformer's own witness table; refused
+	// where a requirement TAKES it, because there the table would have to come from the caller and no static
+	// slot can be right about it.
+	//
+	// ⚠ **THE ARITY GUARDS ARE `checkGenericInstance`'s AND E3016's, NOT THIS DOOR'S** — an argument past the
+	// interface's `uses` names, and an interface no file declares readably, both ADMIT here and are reported
+	// where they belong. Refusing on them would report an arity mistake as an ABI one.
+	function requireCarryableGenericArg(argType MaxonType, slot GenericArgSlot, position FieldIndex, argTok Token) throws ParseError
+		match slot 'which'
+			containerElement then try self.requireStorableDeclaredType(argType, position: DeclaredStoragePosition.containerElement, line: argTok.line, column: argTok.column)
+			associatedTypeBinding(interfaceName) then try self.requireCarryableAssociatedBinding(argType, interfaceName: interfaceName, position: position, argTok: argTok)
+		end 'which'
+	end 'requireCarryableGenericArg'
+
+	// The binding arm of the door above. A CONCRETE argument is not this check's business at all — it is a
+	// claim the conformances settle (E3125) — so only an interface-typed one is looked at.
+	function requireCarryableAssociatedBinding(argType MaxonType, interfaceName ByteArray, position FieldIndex, argTok Token) throws ParseError
+		if maxonTypeTag(argType) != ValueTypeTag.interfaceRef 'aConcreteBinding'
+			return
+		end 'aConcreteBinding'
+
+		match lookupInterface(self.signatures.interfaceMap(), name: interfaceName) 'base'
+			notFound then return
+			found(iface) then try self.requireHeldAssociatedTypeIsOnlyReturned(iface, position: position, heldAt: self.internedName(typeNameIdOf(argType)), argTok: argTok)
+		end 'base'
+	end 'requireCarryableAssociatedBinding'
+
+	// Refuse a holding whose associated type reaches a requirement's PARAMETER — see
+	// `DeclaredStoragePosition.associatedTypeBinding` for why that direction alone is unsupplyable.
+	//
+	// ⚠ **IT IS ASKED OF THE TRANSITIVE REQUIREMENT LIST** (`requirementTakesType`, the same door E3119/E3120
+	// read), so a parameter projected in through `extends` is refused too. A scan of `iface.methods` alone was
+	// a measured escape there and would be the identical one here.
+	function requireHeldAssociatedTypeIsOnlyReturned(iface IrInterface, position FieldIndex, heldAt ByteArray, argTok Token) throws ParseError
+		if position >= iface.associatedTypeNames.count() 'pastThisInterfacesUsesNames'
+			return
+		end 'pastThisInterfacesUsesNames'
+
+		let associated = try iface.associatedTypeNames.get(position) otherwise panic("requireHeldAssociatedTypeIsOnlyReturned: associatedTypeNames.get OOB at {position} below count {iface.associatedTypeNames.count()} — the guard above excludes it")
+		if not requirementTakesType(self.signatures.interfaceMap(), iface: iface, name: associated) 'onlyEverAResult'
+			return
+		end 'onlyEverAResult'
+
+		throw ParseError.unsupported(interfaceStoragePositionMessage(DeclaredStoragePosition.associatedTypeBinding, interfaceName: heldAt), line: argTok.line, column: argTok.column)
+	end 'requireHeldAssociatedTypeIsOnlyReturned'
 
 	// The interned NAME behind a `named`/`structRef` id, from THIS file's interner — where every id a
 	// type check sees was minted: the value during this parse, a declared return/field/binding type
@@ -44044,22 +44138,81 @@ export type Parser
 			return self.mintValue(ValueTypeTag.void, nameId: UnnamedTypeId)
 		end 'voidReturn'
 
-		let result = self.witnessDispatchValueResult(target, receiver: receiver)
+		let result = try self.witnessDispatchValueResult(target, receiver: receiver, methodTok: methodTok)
 		self.enrolOwnedCallTemp(result)
 		return result
 	end 'mintWitnessDispatchResult'
 
-	// The two spellings a NON-void interface return has, split from the door above so the drop enrolment is
-	// written once across both arms rather than once per arm — the same one-rule-one-site reason
+	// The three spellings a NON-void interface return has, split from the door above so the drop enrolment is
+	// written once across all three rather than once per arm — the same one-rule-one-site reason
 	// `enrolOwnedCallTemp` exists at all.
-	function witnessDispatchValueResult(target WitnessDispatchTarget, receiver ValueId) returns ValueId
+	function witnessDispatchValueResult(target WitnessDispatchTarget, receiver ValueId, methodTok Token) returns ValueId throws ParseError
 		// A `Self` return is the receiver's own type (the shared body cannot know the concrete one).
 		if target.returnTypeName.equals(InterfaceSelfTypeName) 'selfReturn'
 			return self.mintSelfReturnedWitnessResult(receiver)
 		end 'selfReturn'
 
+		if let held = try self.heldAssociatedReturnOf(target) 'heldAtAnInterface'
+			return try self.mintHeldAssociatedWitnessResult(target, held: held, methodTok: methodTok)
+		end 'heldAtAnInterface'
+
 		return self.mintOwnedCallResult(self.interfaceReturnMaxonType(target.returnTypeName))
 	end 'witnessDispatchValueResult'
+
+	// ⭐⭐ **IS THIS DISPATCH'S RESULT AN ASSOCIATED TYPE THE PROGRAM HOLDS AT AN INTERFACE?** — the position
+	// within the DISPATCHED interface's own `uses` names, plus the interface it is held at, or
+	// `MapError.keyNotFound` for every ordinary return (which is every return in a program that writes no
+	// interface as a `with` argument, so the common path is one map probe on a name).
+	//
+	// ⚠⚠ **THE REQUIREMENT'S DECLARING INTERFACE MUST BE THE DISPATCHED ONE, AND CHECKING THAT IS NOT
+	// PEDANTRY.** `methodIndex` is numbered against the DISPATCHED interface's transitive slot list, so a
+	// requirement declared on a PARENT is dispatched through the CHILD's table — while the associated type it
+	// names is the parent's, at a position in the PARENT's `uses` list. Associated types do not project
+	// through `extends` (`checkOneInterfaceConformance` records `Sub` with an empty `associatedTypeNames`),
+	// so the two lists are unrelated and a same-spelled name at the same index in both would load the child's
+	// slot for the parent's position — a witness for the wrong conformance, silently. Refused rather than
+	// guessed: the answer is `notHeld`, which leaves the return typed exactly as it was before this rung.
+	function heldAssociatedReturnOf(target WitnessDispatchTarget) returns HeldAssociatedReturn throws MapError
+		let dispatched = self.signatures.interfaceNameAtDeclIndex(target.interfaceDeclIndex)
+		if not target.declaringInterfaceName.equals(dispatched) 'aProjectedParentRequirement'
+			throw MapError.keyNotFound
+		end 'aProjectedParentRequirement'
+
+		match lookupInterface(self.signatures.interfaceMap(), name: dispatched) 'base'
+			notFound then throw MapError.keyNotFound
+			found(iface) then return try self.heldAssociatedReturnIn(iface, returnTypeName: target.returnTypeName)
+		end 'base'
+	end 'heldAssociatedReturnOf'
+
+	// The two lookups the answer above is, over a resolved interface — split out because the `found` arm of a
+	// `lookupInterface` match is a call in every reader of this file, never a body.
+	function heldAssociatedReturnIn(iface IrInterface, returnTypeName ByteArray) returns HeldAssociatedReturn throws MapError
+		let position = try associatedTypePositionOf(iface.associatedTypeNames, name: returnTypeName)
+		return HeldAssociatedReturn.create(try self.signatures.associatedTypeHeldAt(iface.name, position: position), slotOffset: witnessAssociatedSlotOffset(self.witnessSlotsOf(iface).count(), position: position))
+	end 'heldAssociatedReturnIn'
+
+	// ⭐⭐ **THE VALUE HALF COMES FROM THE CALL AND THE WITNESS HALF FROM THE TABLE THE CALL WAS DISPATCHED
+	// THROUGH.** The impl returns its own concrete cursor in the one result register a witness call has; the
+	// table to widen that cursor into an existential is a fact about the RECEIVER'S conformer, and the
+	// receiver's own witness table is where its mint put it (`LowerMaxonToStd.stampAssociatedWitnessSlots`).
+	// So the second word is a load plus an add, and nothing about the call's ABI changes.
+	//
+	// ⚠ The slot holds a distance from the table's own base, not an address — see
+	// `GlobalDataTable.PendingRdataSelfRelReloc` for why `.rdata` cannot point at itself, and why the add is a
+	// WRAPPING machine-word add (the distance is signed).
+	//
+	// ⚠ **`target.witnessValue` AND NOT `witnessOfValue(receiver)`**: the receiver of a witness dispatch is
+	// either an existential or a value of a CONSTRAINED TYPE PARAMETER, and only the first has a paired
+	// witness half. The table address is what this needs and `witnessValue` is it for both, which is the whole
+	// reason `WitnessDispatchTarget` names a value rather than a constraint.
+	function mintHeldAssociatedWitnessResult(target WitnessDispatchTarget, held HeldAssociatedReturn, methodTok Token) returns ValueId throws ParseError
+		let range = SourceRange.ofToken(methodTok)
+		let distance = self.emitIndirectLoad(MaxonType.integer, box: target.witnessValue, offset: held.slotOffset, storageType: MaxonType.integer, range: range)
+		let nested = self.emitMachineWordAdd(target.witnessValue, rhs: distance, range: range)
+		let result = self.mintOwnedCallResult(MaxonType.interfaceRef(self.artifact.typeNames.intern(held.heldAt)))
+		self.pairInterfaceWitness(result, witness: nested)
+		return result
+	end 'mintHeldAssociatedWitnessResult'
 
 	// ⭐ **A `Self`-RETURNING REQUIREMENT HANDS BACK THE RECEIVER'S OWN TYPE, AND EACH RECEIVER SPELLS THAT
 	// DIFFERENTLY (P1.7a-existentials slice 1).**

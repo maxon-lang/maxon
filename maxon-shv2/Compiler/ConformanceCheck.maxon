@@ -92,26 +92,43 @@ end 'checkConformance'
 // ⚠ **BOTH ARE REFUSED ON EVERY TARGET, AND THE REGISTER TARGETS ARE WHY.** wasm traps `indirect call type
 // mismatch`, which is loud; x64-windows compiled every one of these clean and answered 1 for 51, 20 for 51,
 // 35 for 31, leaked (exit 101), or SEGFAULTED. A wasm-only guard would have left the silent half shipping.
+//
+// ⚠⚠ **A HELD POSITION TAKES THE OTHER ROUTE OUT OF THIS WALK, AND ITS GATE IS NOT THIS ONE — see
+// `checkHeldAssociatedTypeBindings`.** The two obligations look alike and are triggered by different acts:
+// E3119/E3120 are about a shared BODY, which only a dispatch compiles, while a holding's is about a nested
+// TABLE, which a WIDENING mints. So the dispatch test moved DOWN, onto the branch it is true of — and the
+// early return this function opened with, which skipped the whole walk when nothing was dispatched, had to go
+// with it. What that costs is one map probe per associated position of each declared interface, on a program
+// that dispatches nothing; what it bought is that `checkHeldAssociatedTypeBindings` runs at all.
 function checkAssociatedTypeAbiAgreement(project Project, module MaxonModule, signatures ProgramSignatures)
 	let dispatched = dispatchedInterfaceNames(module, signatures: signatures)
-	if dispatched.count() == 0 'nothingDispatchesThroughAWitnessTable'
-		return
-	end 'nothingDispatchesThroughAWitnessTable'
-
 	for (_, iface) in signatures.interfaceMap() 'eachInterface'
-		if not dispatched.contains(iface.name) 'neverDispatched'
-			continue
-		end 'neverDispatched'
-
 		for position in 0 upto iface.associatedTypeNames.count() 'eachAssociatedType'
 			let name = try iface.associatedTypeNames.get(position) otherwise panic("checkAssociatedTypeAbiAgreement: associatedTypeNames.get OOB at {position} below count {iface.associatedTypeNames.count()}")
-			checkOneAssociatedType(project, signatures: signatures, iface: iface, name: name, position: position)
+			checkOneAssociatedPosition(project, signatures: signatures, dispatched: dispatched, iface: iface, name: name, position: position)
 		end 'eachAssociatedType'
 	end 'eachInterface'
 end 'checkAssociatedTypeAbiAgreement'
 
-// The two verdicts for ONE associated type of one dispatched interface. Split out so the walk above reads as
-// the three gates it is, and so the ABI-position test is asked once for both refusals.
+// ⭐⭐ **WHICH OBLIGATION ONE ASSOCIATED POSITION CARRIES — and they are alternatives, not a sequence.** A HELD
+// position answers to `checkOneHeldPosition` and to nothing else; every other position answers to E3119/E3120
+// behind the dispatch gate. One walk decides it, because the two paths need the same three facts and asking
+// twice is what let the gates drift apart in the first place.
+function checkOneAssociatedPosition(project Project, signatures ProgramSignatures, dispatched InterfaceNameSet, iface IrInterface, name ByteArray, position ElementCount)
+	if let held = try signatures.associatedTypeHeldAt(iface.name, position: position) 'heldAtAnInterface'
+		checkHeldAssociatedTypeBindings(project, signatures: signatures, iface: iface, name: name, position: position, heldAt: held)
+		return
+	end 'heldAtAnInterface'
+
+	if not dispatched.contains(iface.name) 'neverDispatched'
+		return
+	end 'neverDispatched'
+
+	checkOneAssociatedType(project, signatures: signatures, iface: iface, name: name, position: position)
+end 'checkOneAssociatedPosition'
+
+// The two verdicts for ONE associated type of one dispatched, unheld interface position. Split out so the
+// walk above reads as the gates it is, and so the ABI-position test is asked once for both refusals.
 function checkOneAssociatedType(project Project, signatures ProgramSignatures, iface IrInterface, name ByteArray, position ElementCount)
 	if not requirementWritesTypeInAbiPosition(project.interfaces, iface: iface, name: name) 'reachesNoCallingConvention'
 		return
@@ -155,6 +172,61 @@ function noteDispatchedInterface(op MaxonOp, names InterfaceNameSet, signatures 
 		panicAbortValue then break 'op'
 	end 'op'
 end 'noteDispatchedInterface'
+
+// ⭐⭐ **WHAT A HOLDING OWES, AND WHY IT REPLACES E3119/E3120 RATHER THAN JOINING THEM: every conformer's
+// binding must be widenable into the interface the position is held at.** E3119's rule is forced by there
+// being ONE compiled body per requirement; a holding does not break that, it satisfies it a level up — the
+// shared body is compiled against the EXISTENTIAL, so every conformer's result travels as the same two words
+// whatever concrete cursor it bound, and the differing halves are the nested TABLES, one per conformer, in
+// their own witness tables. E3120's managed-return clause lifts for the reason it was written: its stated
+// cause is that the parser must type the result while the interface is only a NAME, and a holding is exactly
+// that missing type — known program-wide, off the interface name, before any file parses.
+//
+// ⚠⚠ **AND IT IS GATED ON NEITHER OF THEIR GATES, WHICH IS THE WHOLE DIFFERENCE.** Not on DISPATCH: the
+// obligation is that `__witness_<binding>.<heldAt>` can be MINTED, and `stampAssociatedWitnessSlots` mints it
+// for every table this conformer gets — which a WIDENING alone is enough to demand. MEASURED as a COMPILER
+// PANIC while it was behind that gate (`witnessSlotImpl: no conformance selected a member for slot
+// 'Tally.Cursor.current'`), on a program that widened a non-conforming conformer into a held existential and
+// never called anything on it. Not on `requirementWritesTypeInAbiPosition` either: the slot is stamped from
+// the HOLDING, so a position no requirement writes still names a nested table.
+//
+// Asked PER CONFORMER rather than of the fold, because a held position is precisely where the fold's one
+// answer is the wrong question.
+//
+// The declared-conformance index is built once for the whole project and memoized, so asking it here costs
+// one map probe per conformer of one interface; the walk itself is the conformance list, the same one
+// `associatedAbiBindingOf` folds, and it runs only for a position some use site actually holds.
+function checkHeldAssociatedTypeBindings(project Project, signatures ProgramSignatures, iface IrInterface, name ByteArray, position ElementCount, heldAt ByteArray)
+	let declared = declaredConformanceIndex(project)
+	for conformance in project.conformances 'eachDecl'
+		if let binding = try declAssociatedBinding(conformance, interfaceName: iface.name, position: position) 'bindsThisPosition'
+			checkOneHeldBinding(project, signatures: signatures, declared: declared, iface: iface, name: name, conformer: conformance, binding: binding, heldAt: heldAt)
+		end 'bindsThisPosition'
+	end 'eachDecl'
+end 'checkHeldAssociatedTypeBindings'
+
+// One conformer's binding against the holding. TWO refusals, and the order is load-bearing: a binding that is
+// ITSELF an interface fails both tests and only the first says the true thing. It is not "does not conform" —
+// an existential conforms to whatever its interface does — it is that the IMPL would have to hand back two
+// machine words out of a call that returns one.
+//
+// ⚠ **THAT CLAUSE IS E3120's, AND IT IS WORDED HERE RATHER THAN SHARED WITH `checkAgreedBindingIsCarryable`,
+// BECAUSE THE OTHER ROUTE'S SENTENCE WOULD BE FALSE ON THIS ONE.** That one says the associated type "reaches
+// the calling convention of a requirement this program DISPATCHES", which is the fact its gate established; a
+// holding is not gated on dispatch, so on this path the sentence would assert something nothing checked.
+// One code, two clauses, each true where it fires — the split E3120 already has between its own two.
+function checkOneHeldBinding(project Project, signatures ProgramSignatures, declared DeclaredConformanceMap, iface IrInterface, name ByteArray, conformer ConformanceDecl, binding ByteArray, heldAt ByteArray)
+	if signatures.declaredNameIsFatPointer(binding) 'twoWordsOutOfAOneWordResult'
+		reportPositioned(project, code: ErrorCode.associatedTypeReturnNotMachineWord, message: "'{String.from(conformer.typeName)}' binds '{String.from(iface.name)}'s associated type '{String.from(name)}' to the interface type '{String.from(binding)}', and this program holds '{String.from(name)}' at the interface type '{String.from(heldAt)}' — {ExistentialIsFatPointerReason}, so the impl would have to hand BOTH words back out of a witness call that returns one. A holding supplies the second word for a CONCRETE binding, from a slot naming that conformer's own nested table; there is nothing left to supply when the binding is already an interface. Bind the associated type to a concrete conformer", line: conformer.nameLine, column: conformer.nameColumn, filePath: conformer.filePath)
+		return
+	end 'twoWordsOutOfAOneWordResult'
+
+	if typeConformsTo(declared, interfaces: project.interfaces, typeName: binding, interfaceName: heldAt) 'widensIntoTheHolding'
+		return
+	end 'widensIntoTheHolding'
+
+	reportPositioned(project, code: ErrorCode.heldAssociatedTypeBindingNotConforming, message: "'{String.from(conformer.typeName)}' binds '{String.from(iface.name)}'s associated type '{String.from(name)}' to '{String.from(binding)}', and this program holds '{String.from(name)}' at the interface type '{String.from(heldAt)}' — every value of a held associated type is widened into that existential, so every conformer's binding must conform to it, and '{String.from(binding)}' does not implement '{String.from(heldAt)}'. Declare the conformance, or hold the associated type at an interface every conformer implements", line: conformer.nameLine, column: conformer.nameColumn, filePath: conformer.filePath)
+end 'checkOneHeldBinding'
 
 // The two things a dispatch cannot carry, asked of one agreed binding. They are separate clauses because
 // they fail in different POSITIONS: a fat pointer cannot be carried anywhere at all, while a managed or
@@ -263,7 +335,7 @@ end 'requirementReturnsType'
 
 // Is `name` a PARAMETER type of any requirement `iface` dispatches? `requirementReturnsType`'s twin, over the
 // same transitive list and for the same reason.
-function requirementTakesType(interfaces IrInterfaceMap, iface IrInterface, name ByteArray) returns bool
+export function requirementTakesType(interfaces IrInterfaceMap, iface IrInterface, name ByteArray) returns bool
 	for slot in interfaceWitnessSlots(interfaces, iface: iface) 'eachRequirement'
 		for paramTypeName in slot.method.paramTypeNames 'eachFormal'
 			if paramTypeName.equals(name) 'inAnArgument'
@@ -401,12 +473,41 @@ end 'checkInterfaceInstantiationBindings'
 // existential, so nothing constrains the spelling; `disagreed` is E3119's, reported against both conformers
 // with their own positions, and a second sentence here would blame the use site for the conformers' quarrel.
 function checkOneAssociatedBinding(project Project, signatures ProgramSignatures, site GenericInstantiationSite, iface IrInterface, position ElementCount)
+	// ⭐⭐ **A HELD POSITION'S ARGUMENT IS NOT A RESTATEMENT OF A CONFORMER'S BINDING, SO IT IS NOT COMPARED
+	// WITH ONE.** It NAMES the holding — `Bag with (Integer, IntegerCursor)` where the conformers bind
+	// `UpCursor` and `DownCursor` is exactly right, and the raw comparison below would report the
+	// single-conformer spelling of it (`agreed`, `UpCursor` ≠ `IntegerCursor`) as a contradiction. What it
+	// must agree with is the holding the program SETTLED, which is the check one function down; the
+	// conformers' side of the same claim is `checkHeldAssociatedTypeBindings`, against every one of them
+	// rather than against the fold's single answer.
+	if let held = try signatures.associatedTypeHeldAt(iface.name, position: position) 'heldAtAnInterface'
+		requireWrittenBindingNamesTheHolding(project, signatures: signatures, site: site, iface: iface, position: position, heldAt: held)
+		return
+	end 'heldAtAnInterface'
+
 	match associatedAbiBindingOf(project.conformances, interfaceName: iface.name, position: position) 'binding'
 		unconformed then break 'binding'
 		disagreed then break 'binding'
 		agreed(conformer, binding, _) then requireWrittenBindingMatchesConformers(project, signatures: signatures, site: site, iface: iface, position: position, conformer: conformer, binding: binding)
 	end 'binding'
 end 'checkOneAssociatedBinding'
+
+// ⭐ **A SECOND USE SITE MAY NOT HOLD ONE POSITION AT A DIFFERENT INTERFACE — nor at a concrete type once
+// another site has held it.** The holding is that position's ABI binding, and it is unique for E3119's exact
+// reason one level up: the requirement's shared body is compiled once, against the interface the position is
+// held at, and every dispatch through it reads the nested table out of a slot laid out for that one holding.
+// The settle records the FIRST site's answer, so a contradicting one is refused here rather than silently
+// losing — which is what "a use site restates a settled fact" means when the fact is a holding.
+function requireWrittenBindingNamesTheHolding(project Project, signatures ProgramSignatures, site GenericInstantiationSite, iface IrInterface, position ElementCount, heldAt ByteArray)
+	if let written = try signatures.instanceArgHeldInterfaceName(site.gid, position: position) 'namesAnInterface'
+		if written.equals(heldAt) 'namesTheSettledHolding'
+			return
+		end 'namesTheSettledHolding'
+	end 'namesAnInterface'
+
+	let name = try iface.associatedTypeNames.get(position) otherwise panic("requireWrittenBindingNamesTheHolding: associatedTypeNames.get OOB at {position} below count {iface.associatedTypeNames.count()} — the caller's loop bounds this position by that same list")
+	reportPositioned(project, code: ErrorCode.interfaceInstantiationBindingDisagreement, message: "this use of '{String.from(iface.name)}' binds its associated type '{String.from(name)}' to '{String.from(signatures.instanceArgDisplayName(site.gid, position: position))}', but this program HOLDS '{String.from(name)}' at the interface type '{String.from(heldAt)}' — a held position has exactly one holding, because the requirement's shared body is compiled once against it and every dispatch reads the nested table from a slot laid out for that one interface. Write '{String.from(heldAt)}', or give the two readings different interfaces", line: site.nameLine, column: site.nameColumn, filePath: site.filePath)
+end 'requireWrittenBindingNamesTheHolding'
 
 function requireWrittenBindingMatchesConformers(project Project, signatures ProgramSignatures, site GenericInstantiationSite, iface IrInterface, position ElementCount, conformer ConformanceDecl, binding ByteArray)
 	// The SOURCE spelling, which is the side a conformance's `withArgs` is also recorded in — comparing the

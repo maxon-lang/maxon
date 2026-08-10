@@ -307,6 +307,13 @@ export function queryProgramSignatures(project Project) returns ProgramSignature
 	// Normalizing here — once, with every declaration in and no file yet parsed — makes `interfaceRef` the
 	// single spelling everything downstream sees. See `normalizeSweptInterfaceTypes`.
 	signatures.normalizeSweptInterfaceTypes()
+	// ⭐⭐ **AND WHICH ASSOCIATED POSITIONS THE PROGRAM HOLDS AT AN INTERFACE.** STRICTLY AFTER the two lines
+	// above: the interface fold is what fills the registry this reads a `with` argument against, and the
+	// normalization settles the one spelling an argument arrives in. BEFORE the parse, and that is the whole
+	// reason it is a fold step rather than a check — the parse TYPES a dispatch whose result is a held
+	// associated type as an existential, and no later pass can retype a value. See
+	// `settleAssociatedTypeHoldings`.
+	signatures.settleAssociatedTypeHoldings()
 	// ⭐⭐ **AND ONLY NOW CAN A SWEPT `named` BE TOLD FROM A BARE GENERIC NAME.** `var cell as Cell` inside
 	// `type Holder uses T` means `Cell with Holder.T`, and `scopedGenericInstanceOf` is gated on
 	// `allFilesFolded` for the reason the line above is gated on the interface fold: the struct registry is

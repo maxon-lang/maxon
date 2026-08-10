@@ -1,0 +1,47 @@
+// Test: error.a-non-conforming-binding-that-is-never-dispatched
+typealias Integer = int(i64.min to i64.max)
+
+interface Cursor
+	function current() returns Integer
+	function advance() throws IterationError
+end 'Cursor'
+
+interface Bag uses Iter
+	function createIterator() returns Iter throws IterationError
+end 'Bag'
+
+type Tally
+	var pos as Integer
+
+	export static function create() returns Self
+		return Self{pos: 3}
+	end 'create'
+end 'Tally'
+
+type OddBag implements Bag with Tally
+	let seed as Integer
+
+	export static function create(seed Integer) returns Self
+		return Self{seed: seed}
+	end 'create'
+
+	export function createIterator() returns Tally throws IterationError
+		return Tally.create()
+	end 'createIterator'
+end 'OddBag'
+
+typealias CursorBag = Bag with Cursor
+
+function neverDispatches(source CursorBag) returns Integer
+	let held = source
+	_ = held
+	return 7
+end 'neverDispatches'
+
+function main() returns ExitCode
+	print("{neverDispatches(OddBag.create(1))}\n")
+	return 0
+end 'main'
+---
+CompilerError:
+error E3126: <fragment>:21:6: 'OddBag' binds 'Bag's associated type 'Iter' to 'Tally', and this program holds 'Iter' at the interface type 'Cursor' — every value of a held associated type is widened into that existential, so every conformer's binding must conform to it, and 'Tally' does not implement 'Cursor'. Declare the conformance, or hold the associated type at an interface every conformer implements
