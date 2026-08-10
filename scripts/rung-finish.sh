@@ -474,9 +474,9 @@ if [ -n "$(git status --porcelain)" ]; then
 fi
 
 git merge --ff-only --quiet origin/main || die "main cannot fast-forward to origin/main — resolve by hand"
-git merge --ff-only --quiet "$BRANCH" || die "FAST-FORWARD MERGE REFUSED. merge.ff=only is configured,
-     so this errors rather than making a merge commit. The branch must sit directly on top of main —
-     re-run, which rebases it."
+git merge --ff-only --quiet "$BRANCH" || die "FAST-FORWARD MERGE REFUSED. The --ff-only above is passed
+     EXPLICITLY, so this errors rather than making a merge commit whatever the config says. The branch
+     must sit directly on top of main — re-run, which rebases it."
 ok "main fast-forwarded to $BRANCH ($(git log --oneline -1 --format=%h))"
 
 # ⭐ THIS RUNG'S TIP IS THE NEXT RUNG'S BASE, and it was measured minutes ago on this exact tree. Write
