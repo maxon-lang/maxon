@@ -2899,6 +2899,43 @@ export let IterationErrorTypeName = b"IterationError"
 export let IterationErrorExhaustedCaseName = b"exhausted"
 export let IterationErrorAtStartCaseName = b"atStart"
 
+// ⭐⭐ **DOES A DECLARED `throws` CLAUSE NAME `IterationError` — the ONE error type the traversal protocol's
+// two fallible declarations may carry?** The loop absorbs what `advance()` and `createIterator()` throw
+// WITHOUT binding it, which is sound for a compiler-owned payload-free enum and would leak for one carrying
+// managed heap, so pinning the clause is what makes the absorption sound by construction.
+//
+// ⚠ **IT IS ASKED OF A CLAUSE, NOT OF A CALLEE NAME, BECAUSE THE TWO STORES THAT HOLD ONE ARE DIFFERENT
+// STORES.** A struct source's protocol method is a DECLARED CALLEE (`ProgramSignatures.throwsOf`); an
+// existential's is an interface REQUIREMENT, which is in no signature registry at all — its clause travels
+// on the resolved `WitnessDispatchTarget`. One rule over the clause is what stops the two receiver kinds
+// coming to accept different error types.
+export function throwsClauseIsIterationError(clause ThrowsClause) returns bool
+	let thrown = try throwsClauseName(clause) otherwise return false
+	return thrown.toByteArray().equals(IterationErrorTypeName)
+end 'throwsClauseIsIterationError'
+
+// ⭐⭐ **WHICH PREHEADER A `createIterator()` DECLARATION BUYS, read off its `throws` clause alone.** The
+// three answers are separate because the loop emits three different preheaders: an INFALLIBLE factory seeds
+// the header's error flag with a literal 0; a THROWING one seeds it with the call's own flag, so an empty
+// collection — which `stdlib/Interfaces.maxon:132-134` says the constructor reports by throwing `exhausted`
+// — runs zero trips through the very test that ends the walk; and a factory throwing anything ELSE is a real
+// declaration the loop cannot use, so it is its own answer rather than being folded into `notDeclared`.
+//
+// Split from `ProgramSignatures.iterableFactory` at the same door `throwsClauseIsIterationError` was, and for
+// the same reason: the EXISTENCE half differs per store (a declared callee against an interface requirement)
+// while the classification is one rule.
+export function iterableFactoryFromClause(clause ThrowsClause) returns IterableFactory
+	if not throwsClauseIsThrowing(clause) 'infallible'
+		return IterableFactory.infallible
+	end 'infallible'
+
+	if not throwsClauseIsIterationError(clause) 'someOtherError'
+		return IterableFactory.throwsSomethingElse(try throwsClauseName(clause) otherwise panic("iterableFactoryFromClause: a clause answered `throwing` to `throwsClauseIsThrowing` and `none` to `throwsClauseName` — one union, two readings"))
+	end 'someOtherError'
+
+	return IterableFactory.throwsIterationError
+end 'iterableFactoryFromClause'
+
 // The `element_size@24` of a MANAGED-element array (P1.7 slice 3) — a managed element (String / struct /
 // union / instance / nested Array) is a HEAP BOX addressed by a POINTER, so a slot holds the 8-byte pointer,
 // NOT the element's full logical size. A trivial element is stored inline and strides by its own size (an
@@ -17192,8 +17229,13 @@ export type ProgramSignatures
 	// ⭐⭐ **DOES `typeName` SUPPLY THE CURSOR PROTOCOL A `for … in` OVER A USER TYPE LOWERS TO?**
 	// (conditional extensions) — `current()`, which yields the element the trip is positioned on, and a
 	// THROWING `advance()`, whose throw is how the walk ends. Both must be declared on the type itself:
-	// shv2 dispatches statically, so the loop emits `<typeName>.current` / `<typeName>.advance` as direct
-	// calls and the declarations ARE what makes the loop expressible.
+	// a DIRECT-CALL source dispatches statically, so the loop emits `<typeName>.current` /
+	// `<typeName>.advance` and the declarations ARE what makes the loop expressible.
+	//
+	// ⚠ **IT ANSWERS FOR ONE OF THE TWO RECEIVER KINDS, and the other is `Parser.surfaceDeclaresCursorProtocol`'s
+	// existential arm.** An interface value's protocol is a REQUIREMENT, which no callee registry holds, so
+	// that arm reads the transitive slot list instead. The RULE is the same on both sides and is written once
+	// where it can be: `throwsClauseIsIterationError` below.
 	//
 	// ⭐⭐ **STRUCTURAL, NOT A CONFORMANCE — and that is a DEPARTURE FROM v1, taken against the runnable
 	// oracle.** v1 requires the source to conform to an interface that itself declares `current` + `advance`
@@ -17221,50 +17263,28 @@ export type ProgramSignatures
 			return false
 		end 'noAdvance'
 
-		return self.throwsIterationError(advance)
+		return throwsClauseIsIterationError(self.throwsOf(advance))
 	end 'declaresCursorProtocol'
 
 	// ⭐⭐ **DOES `typeName` SUPPLY THE `Iterable` HALF OF THE TRAVERSAL PROTOCOL (W3)?** — a
 	// `createIterator()` a `for … in` can call once, in the preheader, to obtain the cursor it then walks
 	// through `declaresCursorProtocol`'s two names. `declaresCursorProtocol`'s twin, and STRUCTURAL for its
-	// exact reason: shv2 dispatches statically, so what the loop needs is the declaration, and the runnable
-	// oracle accepts a `createIterator` on a type carrying no `implements` clause at all.
+	// exact reason: a direct-call source dispatches statically, so what the loop needs is the declaration, and
+	// the runnable oracle accepts a `createIterator` on a type carrying no `implements` clause at all. The
+	// existential's half is `Parser.surfaceIterableFactory`, split from this the same way and for the same
+	// reason.
 	//
-	// ⚠ **THE THREE ANSWERS ARE SEPARATE BECAUSE THE LOOP EMITS THREE DIFFERENT PREHEADERS.** An INFALLIBLE
-	// factory seeds the header's error flag with a literal 0; a THROWING one seeds it with the call's own
-	// error flag, so an empty collection — which `stdlib/Interfaces.maxon:132-134` says the constructor
-	// reports by throwing `exhausted` — runs zero trips through the very test that ends the walk. That is
-	// also why the error TYPE is pinned exactly as `advance`'s is: the loop ABSORBS the thrown value without
-	// binding it, which is sound for the payload-free `IterationError` and would leak for anything carrying a
-	// managed payload. A factory throwing something else is a real declaration the loop cannot use, so it is
-	// its own answer rather than being folded into `notDeclared` — `Parser.materializeIterableIterationSource`
-	// refuses it by name instead of reporting that the type has no `createIterator`.
+	// The EXISTENCE half is this store's; the classification of what the declaration THROWS is
+	// `iterableFactoryFromClause`'s, shared with the existential door that reads the same fact off an
+	// interface requirement instead of off a declared callee.
 	export function iterableFactory(typeName ByteArray) returns IterableFactory
 		let create = qualifiedMethodName(typeName, methodName: CreateIteratorMethodName)
 		if not self.declaresCallee(create) 'noFactory'
 			return IterableFactory.notDeclared
 		end 'noFactory'
 
-		let clause = self.throwsOf(create)
-		if not throwsClauseIsThrowing(clause) 'infallible'
-			return IterableFactory.infallible
-		end 'infallible'
-
-		if not self.throwsIterationError(create) 'someOtherError'
-			return IterableFactory.throwsSomethingElse(try throwsClauseName(clause) otherwise panic("ProgramSignatures.iterableFactory: `{String.from(create)}`'s clause answered `throwing` to `throwsClauseIsThrowing` and `none` to `throwsClauseName` — one union, two readings"))
-		end 'someOtherError'
-
-		return IterableFactory.throwsIterationError
+		return iterableFactoryFromClause(self.throwsOf(create))
 	end 'iterableFactory'
-
-	// Does `callee`'s declared `throws` clause name `IterationError` — the ONE error type the traversal
-	// protocol's two fallible declarations may carry, because the loop absorbs what they throw without
-	// binding it. Both askers above need exactly this test, and it is written once so `advance` and
-	// `createIterator` cannot come to accept different error types.
-	function throwsIterationError(callee ByteArray) returns bool
-		let thrown = try throwsClauseName(self.throwsOf(callee)) otherwise return false
-		return thrown.toByteArray().equals(IterationErrorTypeName)
-	end 'throwsIterationError'
 
 	// ⭐⭐ **DOES `written` RESOLVE AS A DIRECTORY-QUALIFIED FREE CALL — THE WHOLE RULE, IN ONE PLACE (N1b)?**
 	// It is asked of the WHOLE assembled dotted name (`utils.helper`, `lib.inner.deepHelper`), never of its

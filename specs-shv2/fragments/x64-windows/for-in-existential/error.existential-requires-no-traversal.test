@@ -1,0 +1,43 @@
+// Test: error.existential-requires-no-traversal
+typealias Integer = int(i64.min to i64.max)
+
+interface Labelled
+	function label() returns Integer
+end 'Labelled'
+
+type Widget implements Labelled
+	let id as Integer
+
+	export static function create(id Integer) returns Self
+		return Self{id: id}
+	end 'create'
+
+	export function label() returns Integer
+		return self.id
+	end 'label'
+
+	export function current() returns Integer
+		return self.id
+	end 'current'
+
+	export function advance() throws IterationError
+		throw IterationError.exhausted
+	end 'advance'
+end 'Widget'
+
+function total(source Labelled) returns Integer
+	var sum = 0 as Integer
+	for item in source 'walk'
+		sum = sum + item
+	end 'walk'
+	return sum
+end 'total'
+
+function main() returns ExitCode
+	let w = Widget.create(3)
+	print("{total(w)}\n")
+	return 0
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:30:2: Unsupported: `for … in` over a value held at interface 'Labelled', which requires neither the cursor protocol `current()` + `advance() throws IterationError` nor a `createIterator()` factory — an existential is walked through the witness table the value carries, so the traversal has to be one the INTERFACE requires; a conformer declaring it supplies no slot to dispatch through
